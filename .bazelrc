@@ -1,0 +1,8 @@
+test --test_output=errors --enable_runfiles
+common --enable_bzlmod --nolegacy_external_runfiles --enable_platform_specific_config --experimental_cpp_modules
+# common --cxxopt
+
+# Register toolchains
+build:windows --build_python_zip=false --enable_runfiles --extra_toolchains=//bazel/toolchain:cc_windows_x86_64_clang_toolchain
+
+startup --windows_enable_symlinks

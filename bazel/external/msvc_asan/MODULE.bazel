@@ -1,0 +1,2 @@
+"""MSVC ASan Module"""
+module(name = "msvc_asan", version = "0.0.1", compatibility_level = 1)

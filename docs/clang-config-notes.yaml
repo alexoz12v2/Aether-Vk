@@ -1,0 +1,62 @@
+# to be split among toolchain files and common setup
+All:
+  - fvisibility-hidden
+  - fno-fast-math
+  - mno-daz-ftz # x86 / x86_64 only
+  - faddrsig # only on ELF targets, emit address significance table (https://man.archlinux.org/man/llvm-readelf.1.en#addrsig)
+  - fstrict-aliasing # access to addresses must be strictly typed
+  # unix only (linux/macos)
+  - pthread
+  # no cuda/hip
+  - nogpuinc
+  - nocpulib
+  # only for desktop which is x86_64
+  - march=x86_64-v3 # Assumes support for AVX, AVX2
+  - stdlib=libc++
+  - fstack-protector-all
+  # only for arm desktop
+  - maltivec
+  - mcmse
+  
+Debug:
+  # sanitizers
+  # ftest-coverage # later
+  - fsanitize=address # AddressSanitizer, a memory error detector.
+  - fsanitize=thread # ThreadSanitizer, a data race detector.
+  - fsanitize=memory # MemorySanitizer, a detector of uninitialized reads. Requires instrumentation of all program code.
+  - fsanitize=undefined # UndefinedBehaviorSanitizer, a fast and compatible undefined behavior checker.
+  - fsanitize=type # TypeSanitizer, a detector for strict aliasing violations.
+  - fsanitize=dataflow # DataFlowSanitizer, a general data flow analysis.
+  - fsanitize=cfi # control flow integrity checks. Requires -flto.
+  - fsanitize=kcfi # kernel indirect call forward-edge control flow integrity.
+  - fsanitize=safe-stack # safe stack protection against stack-based memory corruption errors.
+  - fsanitize=realtime # RealtimeSanitizer, a real-time safety checke
+  - g
+  - O0
+
+RelMinSize:
+  - Os
+  - freroll-loops
+
+RelWithDebInfo:
+  # profile guided optimization (https://clang.llvm.org/docs/UsersManual.html#using-sampling-profilers)
+  # -fdebug-info-for-profiling
+  # -funique-internal-linkage-names
+  # profiling with instrumentation (2 compilations + 1 execution = https://clang.llvm.org/docs/UsersManual.html#profiling-with-instrumentation)
+  - g
+  - flto
+  - fwhole-program-vtables
+  - O2
+
+release:
+  # -ffast-math only if necessary
+  - flto
+  - fwhole-program-vtables
+  - O2
+
+localTargetOptions:
+  # `#pragma clang system_header` when including a system header (external stuff) prevents warning from being generated
+  - Wall
+  - Wextra
+  - pedantic
+  - Werror # maybe
