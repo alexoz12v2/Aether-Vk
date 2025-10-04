@@ -1,0 +1,21 @@
+"""Aether Vulkan Module"""
+module(name = "aether-vk", version = "0.1.0", compatibility_level = 1)
+
+# Dependencies
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
+bazel_dep(name = "rules_cc", version = "0.2.9")
+
+# Local
+bazel_dep(name = "msvc_asan", version = "local")
+
+# initialized by some script outside of bazel
+local_path_override(
+    module_name = "msvc_asan",
+    path = "bazel/external/msvc_asan",
+)
+
+# C++ toolchain
+register_toolchains(
+    "//bazel/toolchain:cc_windows_x86_64_clang_toolchain",
+)

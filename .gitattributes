@@ -1,0 +1,236 @@
+* text=auto
+
+###### Git
+.gitattributes text
+.gitignore text
+.gitconfig text
+.gitmodules text
+
+##### Windows
+*.bat text eol=crlf
+*.exe binary
+*.dll binary
+
+##### Linux
+*.sh text eol=lf
+*.so binary
+
+##### Global
+# Documents
+*.sql text eol=lf
+*.md text eol=lf
+*.adoc text eol=lf
+*.textile text eol=lf
+*.mustache text eol=lf
+*.csv text eol=lf
+*.tab text eol=lf
+*.tsv text eol=lf
+*.coffee text eol=lf
+*.css text eol=lf
+*.htm text eol=lf
+*.html text eol=lf
+*.xhtml text eol=lf
+*.inc text eol=lf
+*.js text eol=lf
+*.jsx text eol=lf
+*.less text eol=lf
+*.od text eol=lf
+*.onlydata text eol=lf
+*.sass text eol=lf
+*.scm text eol=lf
+*.log text eol=lf
+*.properties text eol=lf
+*.scss text eol=lf
+*.styl text eol=lf
+*.tag text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.dockerignore text eol=lf
+Dockerfile text eol=lf
+*.markdown text eol=lf
+*.kt text eol=lf
+gradlew text eol=lf
+*.toml text eol=lf
+*.kts text eol=lf
+*.mdwn text eol=lf
+*.mdown text eol=lf
+*.mkd text eol=lf
+*.mkdn text eol=lf
+*.mdtxt text eol=lf
+*.mdtext text eol=lf
+*.txt text eol=lf
+AUTHORS text eol=lf
+CHANGELOG text eol=lf
+CHANGES text eol=lf
+CONTRIBUTING text eol=lf
+COPYING text eol=lf
+copyright text eol=lf
+*COPYRIGHT* text eol=lf
+INSTALL text eol=lf
+license text eol=lf
+LICENSE text eol=lf
+NEWS text eol=lf
+readme text eol=lf
+*README* text eol=lf
+TODO text eol=lf
+# Configuration
+*.cnf text eol=lf
+*.cfg text eol=lf
+*.conf text eol=lf
+*.config text eol=lf
+*.ini text eol=lf
+*.json text eol=lf
+*.xml text eol=lf
+*.bowerrc text eol=lf
+.browserslistrc text eol=lf
+.editorconfig text eol=lf
+*.npmignore text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+browserslist text eol=lf
+Makefile text eol=lf
+makefile text eol=lf
+Procfile text eol=lf
+.slugignore text eol=lf
+# Linters
+.csslintrc text eol=lf
+.eslintrc text eol=lf
+.htmlhintrc text eol=lf
+.jscsrc text eol=lf
+.jshintrc text eol=lf
+.jshintignore text eol=lf
+.stylelintrc text eol=lf
+# Video
+*.3gpp binary
+*.3gp binary
+*.as binary
+*.asf binary
+*.asx binary
+*.fla binary
+*.flv binary
+*.m4v binary
+*.mng binary
+*.mov binary
+*.mp4 binary
+*.mpeg binary
+*.mpg binary
+*.ogv binary
+*.swc binary
+*.swf binary
+*.webm binary
+# Audio
+*.kar binary
+*.m4a binary
+*.mid binary
+*.midi binary
+*.mp3 binary
+*.ogg binary
+*.ra binary
+# Graphics
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.tif binary
+*.tiff binary
+*.ico binary
+*.eps binary
+*.ai binary
+*.bmp binary
+*.jng binary
+*.jp2 binary
+*.jpx binary
+*.jxr binary
+*.pdf binary
+*.psb binary
+*.psd binary
+*.svg text eol=lf
+*.svgz binary
+*.wbmp binary
+*.webp binary
+# Archives
+*.7z binary
+*.gz binary
+*.jar binary
+*.rar binary
+*.tar binary
+*.zip binary
+# Fonts
+*.ttf binary
+*.eot binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+# Executables
+*.pyc binary
+# Objects
+*.o binary
+
+##### IDE/Editor
+# Visual Studio
+*.sln text eol=crlf
+*.csproj text eol=crlf
+*.vbproj text eol=crlf
+*.vcxproj text eol=crlf
+*.vcproj text eol=crlf
+*.dbproj text eol=crlf
+*.fsproj text eol=crlf
+*.lsproj text eol=crlf
+*.wixproj text eol=crlf
+*.modelproj text eol=crlf
+*.sqlproj text eol=crlf
+*.wmaproj text eol=crlf
+*.xproj text eol=crlf
+*.props text eol=crlf
+*.filters text eol=crlf
+*.vcxitems text eol=crlf
+# Eclipse
+*.project text
+*.classpath text
+*.prefs
+
+##### Language
+# CUDA
+*.cu text eol=lf
+*.cuh text eol=lf
+# C/C++
+*.c text eol=lf
+*.cc text eol=lf
+*.cxx text eol=lf
+*.cpp text eol=lf
+*.c++ text eol=lf
+*.hpp text eol=lf
+*.cppm text eol=lf
+*.h text eol=lf
+*.h++ text eol=lf
+*.hh text eol=lf
+*.slo binary
+*.lo binary
+*.o binary
+*.obj binary
+*.gch binary
+*.pch binary
+*.so binary
+*.dylib binary
+*.dll binary
+*.lai binary
+*.la binary
+*.a binary
+*.lib binary
+*.exe binary
+*.out binary
+*.app binary
+
+# LaTex: Source Files
+*.tex     text diff=tex
+*.bib     text diff=tex
+*.cls     text diff=tex
+*.sty     text diff=tex
+
+# LaTex: Binary Files (should be ignored)
+*.aux     binary
+*.log     binary
+*.out     binary
+*.toc     binary
+*.fls     binary
+*.fdb_latexmk binary
