@@ -1,13 +1,9 @@
 # For more information about using CMake with Android Studio, read the
 # documentation: https://d.android.com/studio/projects/add-native-code.html
 
-cmake_minimum_required(VERSION 3.22.1)
-
-project("aethervk")
-
 # Creates your game shared library. The name must be the same as the
 # one used for loading in your Kotlin/Java or AndroidManifest.txt files.
-add_library(aethervk SHARED
+add_library(avk-android-launcher SHARED
         main.cpp
         AndroidOut.cpp
         Renderer.cpp
@@ -23,7 +19,7 @@ set(CMAKE_SHARED_LINKER_FLAGS
         "${CMAKE_SHARED_LINKER_FLAGS} -u Java_com_google_androidgamesdk_GameActivity_initializeNativeCode")
 
 # Configure libraries CMake uses to link your target library.
-target_link_libraries(aethervk
+target_link_libraries(avk-android-launcher
         # The game activity
         game-activity::game-activity_static
 
@@ -34,3 +30,7 @@ target_link_libraries(aethervk
         jnigraphics
         android
         log)
+
+target_compile_definitions(avk-android-launcher
+  PRIVATE 
+    "AVK_OS_${AVK_OS}" "AVK_COMPILER_${AVK_COMPILER}" "AVK_ARCH_${AVK_ARCH}")

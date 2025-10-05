@@ -2,13 +2,13 @@ cmake_minimum_required(VERSION 3.25)
 include_guard()
 
 function(avk_detect_platform)
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)")
         set(AVK_ARCH X86_64)
-    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|x86)$")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|x86)")
         set(AVK_ARCH X86)
-    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(armv7|arm)$")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(armv7|arm)")
         set(AVK_ARCH ARMv7A)
-    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)")
         set(AVK_ARCH ARMv8A)
     else()
         set(AVK_ARCH UNKNOWN)
@@ -57,8 +57,12 @@ macro(avk_cxx_flags)
         # arch specific
         if(AVK_ARCH STREQUAL "X86_64")
             string(APPEND CMAKE_CXX_FLAGS " -march=x86-64-v3")
-        elseif(AVK_ARCH STREQUAL "ARMv8A" OR AVK_ARCH STREQUAL "ARMv7A")
-            string(APPEND CMAKE_CXX_FLAGS " -maltivec -mcmse")
+        elseif(AVK_ARCH STREQUAL "ARMv7A")
+            # you need to also check at runtime if you support neon
+            string(APPEND CMAKE_CXX_FLAGS " -mfpu=neon")
+        elseif(AVK_ARCH STREQUAL "ARMv8A")
+            # Usually nothing needed for AArch64, NEON is baseline
+            # If targeting AArch32 (32-bit), you might add: -mfpu=neon
         endif()
 
         # debug only
