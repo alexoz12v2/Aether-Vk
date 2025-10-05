@@ -17,6 +17,8 @@ cmake .. -DCMAKE_TOOLCHAIN_FILE="..\cmake\Windows.Clang.toolchain.cmake" -G Ninj
 ### Android
 
 - Targeted version: Android 11 "R" (API 30) (Minimum to use `GameActivity`)
+- Note: We don't support Bazel as a build system for Android, as it is still in early
+  stages [Issues Link](https://github.com/bazelbuild/rules_android/issues)
 
 ## C++20 Modules Support And C++ Version
 
