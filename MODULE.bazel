@@ -1,10 +1,31 @@
 """Aether Vulkan Module"""
 module(name = "aether-vk", version = "0.1.0", compatibility_level = 1)
 
-# Dependencies
+# Dependencies (search for modules in the bazel central registry by default: https://github.com/bazelbuild/bazel-central-registry/tree/main/modules)
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
 bazel_dep(name = "rules_cc", version = "0.2.9")
+
+# compile commands?
+# Hedron's Compile Commands Extractor for Bazel
+# https://github.com/hedronvision/bazel-compile-commands-extractor
+# bazel run @hedron_compile_commands//:refresh_all
+# Doesn't work on me because it assumes SUBSYSTEM:CONSOLE and no sanitizers
+bazel_dep(name = "hedron_compile_commands", dev_dependency = True)
+git_override(
+    module_name = "hedron_compile_commands",
+    remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
+    commit = "abb61a688167623088f8768cc9264798df6a9d10",
+)
+
+# rules vulkan downloads the sdk from the internet! (slooooow if you frequently use bazel clean)
+# Furthermore, this will be used only on builds different than Android
+bazel_dep(name = "rules_vulkan", version = "0.6.1")
+
+vulkan_sdk = use_extension("@rules_vulkan//vulkan:extensions.bzl", "vulkan_sdk")
+vulkan_sdk.toolchain(version = "1.4.321.0", name = "vulkan_sdk_repo")
+
+use_repo(vulkan_sdk, "vulkan_sdk_repo")
 
 # Local
 # Load extension definition
@@ -17,7 +38,9 @@ windows_cc.exec()
 use_repo(windows_cc, "cc_windows_x86_64_clang_config")
 
 # C++ toolchain
-# this is registered only on windows, hence moved on .bazelrc build:windows
-# register_toolchains(
-#     "//bazel/toolchain:cc_windows_x86_64_clang_toolchain",
-# )
+register_toolchains(
+    # this is registered only on windows, hence moved on .bazelrc build:windows
+    # "//bazel/toolchain:cc_windows_x86_64_clang_toolchain",
+    # https://github.com/mxpv/rules_vulkan/blob/main/vulkan/private/template.BUILD vulkan_sdk_{os}_toolchain
+    "@vulkan_sdk_repo//:all"
+)
