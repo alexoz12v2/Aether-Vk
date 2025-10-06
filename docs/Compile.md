@@ -38,3 +38,17 @@ C:\PROGRA~1\MICROS~1\2022\COMMUN~1\VC\Tools\Llvm\x64\bin\CLANG_~1.EXE
   -o src\\launcher\\windows\\CMakeFiles\\avk-windows-launcher.dir\\main.cpp.obj 
   -c Y:\\Aether-Vk\\src\\launcher\\windows\\main.cpp
 ```
+
+## Tools in repo
+
+slangc, bazel
+
+```sh
+bazel run //:slangc -- <arguments>
+```
+
+slangc, cmake (after the configure step, assume directory used called `cmake-build`)
+
+```sh
+./cmake-build/vulkan-sdk/slangc <arguments>
+```

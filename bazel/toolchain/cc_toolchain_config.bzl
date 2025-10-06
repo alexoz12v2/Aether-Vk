@@ -545,19 +545,12 @@ def _cc_toolchain_config_impl(ctx):
                         flags = [
                             "/NOLOGO",
                             "/MACHINE:X64", # ABI fixed
-                            "User32.lib", # LINK WINDOWS
+                            "User32.lib", # LINK WINDOWS TODO: under feature windows (CreateSolidBrush)
+                            "Shell32.lib",
+                            "Gdi32.lib",
                             "Ole32.lib",
                             "Kernel32.lib",
                         ],
-                        #flags = [
-                        #    "/DEBUG", # CTX.CONFIG?
-                        #    "/SUBSYSTEM:WINDOWS",
-                        #    "/MACHINE:X64", # MAYBE MACHINE?
-                        #    "/INCREMENTAL:NO",
-                        #    "User32.lib", # LINK WINDOWS?
-                        #    "Ole32.lib",
-                        #    "Kernel32.lib",
-                        #] 
                     ),
                 ],
             ),
@@ -714,20 +707,41 @@ def _cc_toolchain_config_impl(ctx):
                             "-nogpuinc", "-nogpulib",
                             "-fstack-protector-all",
                             "-march=x86-64-v3",
-                            "-fsanitize=address", "-fsanitize=undefined",
-                            "-flto", "-fsanitize=cfi",
-                            "-Wall", "-Wextra", "-pedantic",
-                            #"/DNOMINMAX",
-                            #"/D_WIN32_WINNT=0x0601",
-                            #"/D_CRT_SECURE_NO_DEPRECATE",
-                            #"/D_CRT_SECURE_NO_WARNINGS",
-                            #"/bigobj",
-                            #"/Zm500",
-                            #"/EHsc",
-                            #"/wd4351",
-                            #"/wd4291",
-                            #"/wd4250",
-                            #"/wd4996",
+                            "-flto", "-Wall", "-Wextra", "-pedantic",
+                            #"/DNOMINMAX", "/D_WIN32_WINNT=0x0601", "/D_CRT_SECURE_NO_DEPRECATE",
+                            #"/D_CRT_SECURE_NO_WARNINGS", "/bigobj", "/Zm500", "/EHsc", "/wd4351",
+                            #"/wd4291", "/wd4250", "/wd4996",
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    asan_ubsan_feature = feature(
+        name = "asan_ubsan",
+        enabled = False,
+        flag_sets = [
+            flag_set(
+                actions = [
+                    ACTION_NAMES.assemble,
+                    ACTION_NAMES.preprocess_assemble,
+                    ACTION_NAMES.linkstamp_compile,
+                    ACTION_NAMES.c_compile,
+                    ACTION_NAMES.cpp_compile,
+                    ACTION_NAMES.cpp_header_parsing,
+                    ACTION_NAMES.cpp_module_compile,
+                    ACTION_NAMES.cpp_module_codegen,
+                    ACTION_NAMES.cpp_module_deps_scanning,
+                    ACTION_NAMES.cpp20_module_compile,
+                    ACTION_NAMES.cpp20_module_codegen,
+                    ACTION_NAMES.lto_backend,
+                    ACTION_NAMES.clif_match,
+                ],
+                flag_groups = [
+                    flag_group(
+                        flags = [
+                            "-fsanitize=address", "-fsanitize=undefined", "-fsanitize=cfi", # cfi requires lto
                         ],
                     ),
                 ],
@@ -1010,12 +1024,30 @@ def _cc_toolchain_config_impl(ctx):
         implies = [_FEATURE_NAMES.OPTIONS.COPY_DYNAMIC_LIBRARIES_TO_BINARY],
     )
 
-    linker_subsystem_flag_feature = feature(
-        name = _FEATURE_NAMES.LINK.LINKER_SUBSYSTEM_FLAG,
+    win_linker_subsystem_flag_feature = feature(
+        name = "link_windows_gui",
+        enabled = False,
         flag_sets = [
             flag_set(
                 actions = all_link_actions,
                 flag_groups = [flag_group(flags = ["/SUBSYSTEM:WINDOWS"])],
+                with_features = [
+                    with_feature_set(not_features = [_FEATURE_NAMES.LINK.LINKER_SUBSYSTEM_FLAG])
+                ],
+            ),
+        ],
+    )
+
+    linker_subsystem_flag_feature = feature(
+        name = _FEATURE_NAMES.LINK.LINKER_SUBSYSTEM_FLAG,
+        enabled = True,
+        flag_sets = [
+            flag_set(
+                actions = all_link_actions,
+                flag_groups = [flag_group(flags = ["/SUBSYSTEM:CONSOLE"])],
+                with_features = [
+                    with_feature_set(not_features = ["link_windows_gui"])
+                ],
             ),
         ],
     )
@@ -1034,7 +1066,9 @@ def _cc_toolchain_config_impl(ctx):
         name = _FEATURE_NAMES.COMPILE.COMPILER_OUTPUT_FLAGS,
         flag_sets = [
             flag_set(
-                actions = [ACTION_NAMES.assemble],
+                actions = [
+                    ACTION_NAMES.assemble
+                ],
                 flag_groups = [
                     flag_group(
                         flag_groups = [
@@ -1214,6 +1248,7 @@ def _cc_toolchain_config_impl(ctx):
         copy_dynamic_libraries_to_binary_feature,
         default_cpp_std_feature,
         default_compile_flags_feature,
+        asan_ubsan_feature,
         msvc_env_feature,
         msvc_compile_env_feature,
         msvc_link_env_feature,
@@ -1231,6 +1266,7 @@ def _cc_toolchain_config_impl(ctx):
         archiver_flags_feature,
         input_param_flags_feature,
         linker_subsystem_flag_feature,
+        win_linker_subsystem_flag_feature,
         user_link_flags_feature,
         default_link_flags_feature,
         linker_param_file_feature,
