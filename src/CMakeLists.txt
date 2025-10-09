@@ -7,3 +7,7 @@ endif()
 if(AVK_OS STREQUAL "ANDROID")
     add_subdirectory(launcher/android/app/src/main/cpp)
 endif()
+
+if(AVK_OS STREQUAL "MACOS")
+    add_subdirectory(launcher/macos)
+endif()
