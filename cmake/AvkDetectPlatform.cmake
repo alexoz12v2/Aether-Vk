@@ -56,7 +56,8 @@ macro(avk_cxx_flags)
 
         # arch specific
         if(AVK_ARCH STREQUAL "X86_64")
-            string(APPEND CMAKE_CXX_FLAGS " -march=x86-64-v3")
+            #string(APPEND CMAKE_CXX_FLAGS " -march=x86-64-v3")
+            string(APPEND CMAKE_CXX_FLAGS "")
         elseif(AVK_ARCH STREQUAL "ARMv7A")
             # you need to also check at runtime if you support neon
             string(APPEND CMAKE_CXX_FLAGS " -mfpu=neon")

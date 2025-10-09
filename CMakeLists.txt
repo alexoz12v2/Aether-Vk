@@ -16,6 +16,8 @@ option(AVK_USE_SANITIZERS "Use sanitizers during non-release compilations with L
 project(AetherVk
   VERSION 0.0.1) 
 
+enable_language(ASM)
+
 include(cmake/AvkDetectPlatform.cmake)
 
 # detect used architecture and setup variable

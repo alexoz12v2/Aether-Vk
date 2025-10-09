@@ -4,6 +4,7 @@
 #include <Windowsx.h>  // GET_X_LPARAM
 #include <basetsd.h>
 #include <errhandlingapi.h>
+#include <wingdi.h>
 #include <winspool.h>
 #include <winuser.h>
 
@@ -80,32 +81,51 @@ static LRESULT standardWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
 
     // Basic paint function
     case WM_PAINT: {
+      // Double buffering: Create an off-screen HDC
       PAINTSTRUCT ps{};
       HDC hdc = BeginPaint(hWnd, &ps);
 
       RECT rect{};
-      GetClientRect(hWnd, &rect);  // note: client area, not the whole thing
+      GetClientRect(hWnd, &rect);  // note: client area, not the whole thing (WS_POPUP, so it's fine)
 
-      // Draw top bar
+      // create offscreen buffer
+      HDC memDC = CreateCompatibleDC(hdc);
+      HBITMAP memBmp = CreateCompatibleBitmap(hdc, rect.right, rect.bottom);
+      HGDIOBJ oldBmp = SelectObject(memDC, memBmp);
+
+      // background
+      HBRUSH bg = CreateSolidBrush(RGB(30, 30, 30));
+      FillRect(memDC, &rect, bg);
+
+      // titlebar
       RECT titleBar = {0, 0, rect.right, 30};
-      HBRUSH hBrush = CreateSolidBrush(RGB(45, 45, 45));
-      FillRect(hdc, &titleBar, hBrush);
+      HBRUSH bar = CreateSolidBrush(RGB(45, 45, 45));
+      FillRect(memDC, &titleBar, bar);
 
-      // TODO better: Draw buttons (min, max, close)
+      // Draw buttons (min, max, close)
       int btnWidth = 45;
       RECT btnClose = {rect.right - btnWidth, 0, rect.right, 30};
       RECT btnMax = {rect.right - 2 * btnWidth, 0, rect.right - btnWidth, 30};
       RECT btnMin = {rect.right - 3 * btnWidth, 0, rect.right - 2 * btnWidth,
                      30};
+      FillRect(memDC, &btnClose, (HBRUSH)(COLOR_3DFACE + 1));
+      FillRect(memDC, &btnMax, (HBRUSH)(COLOR_3DFACE + 1));
+      FillRect(memDC, &btnMin, (HBRUSH)(COLOR_3DFACE + 1));
 
-      FillRect(hdc, &btnClose, (HBRUSH)(COLOR_3DFACE + 1));
-      FillRect(hdc, &btnMax, (HBRUSH)(COLOR_3DFACE + 1));
-      FillRect(hdc, &btnMin, (HBRUSH)(COLOR_3DFACE + 1));
-
-      DrawTextW(hdc, L"-", -1, &btnMin, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-      DrawTextW(hdc, L"□", -1, &btnMax, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-      DrawTextW(hdc, L"✕", -1, &btnClose,
+      DrawTextW(memDC, L"-", -1, &btnMin, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+      DrawTextW(memDC, L"□", -1, &btnMax, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+      DrawTextW(memDC, L"✕", -1, &btnClose,
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+      // Swap buffers
+      BitBlt(hdc, 0, 0, rect.right, rect.bottom, memDC, 0, 0, SRCCOPY);
+
+      // cleanup
+      SelectObject(memDC, oldBmp);
+      DeleteObject(memBmp);
+      DeleteDC(memDC);
+      DeleteObject(bar);
+      DeleteObject(bg);
 
       EndPaint(hWnd, &ps);
       return 0;
@@ -128,6 +148,12 @@ static LRESULT standardWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
           ShowWindow(hWnd, SW_MINIMIZE);
         }
       }
+      return 0;
+    }
+
+    case WM_SIZE: {
+      // generate manually a WM_PAINT
+      InvalidateRect(hWnd, nullptr, TRUE);
       return 0;
     }
 
