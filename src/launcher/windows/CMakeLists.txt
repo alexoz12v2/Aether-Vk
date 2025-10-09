@@ -6,4 +6,7 @@ target_compile_definitions(avk-windows-launcher
     "UNICODE" "WIN32_LEAN_AND_MEAN" "NOMINMAX")
 target_compile_options(avk-windows-launcher PRIVATE ${AVK_CXX_TARGET_COMPILE_FLAGS})
 target_link_libraries(avk-windows-launcher PRIVATE Vulkan::Vulkan)
-target_sources(avk-windows-launcher PRIVATE main.cpp)
+target_sources(avk-windows-launcher 
+  PRIVATE 
+    main.cpp
+)
