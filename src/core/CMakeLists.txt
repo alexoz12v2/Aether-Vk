@@ -1,7 +1,7 @@
 add_executable(avk-test-fibers)
 target_compile_definitions(avk-test-fibers
   PRIVATE 
-    "AVK_OS_${AVK_OS}" "AVK_COMPILER_${AVK_COMPILER}" "AVK_ARCH_${AVK_ARCH}"
+    "AVK_OS_${AVK_OS}" "AVK_COMPILER_${AVK_COMPILER}" "AVK_ARCH_${AVK_ARCH}" "AVK_${AVK_BUILD_FRAGMENT}"
     "UNICODE" "WIN32_LEAN_AND_MEAN" "NOMINMAX")
 target_compile_options(avk-test-fibers PRIVATE ${AVK_CXX_TARGET_COMPILE_FLAGS})
 target_sources(avk-test-fibers 
@@ -13,9 +13,9 @@ target_sources(avk-test-fibers
 )
 
 if((AVK_OS STREQUAL "WINDOWS") AND (CMAKE_BUILD_TYPE STREQUAL "Debug") AND ${AVK_USE_SANITIZERS})
-  target_link_libraries(avk-test-fibers PRIVATE Boost::context win-asan-dynamic)
+  target_link_libraries(avk-test-fibers PRIVATE Boost::fiber win-asan-dynamic)
 else()
-  target_link_libraries(avk-test-fibers PRIVATE Boost::context)
+  target_link_libraries(avk-test-fibers PRIVATE Boost::fiber)
 endif()
 
 if(AVK_OS STREQUAL "WINDOWS")

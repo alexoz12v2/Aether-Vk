@@ -24,9 +24,13 @@ include(cmake/AvkDetectPlatform.cmake)
 avk_detect_platform()
 message(STATUS "Arch=${AVK_ARCH} OS=${AVK_OS} Compiler=${AVK_COMPILER}")
 
+# define AVK_DEBUG if necessary
+string(TOUPPER ${CMAKE_BUILD_TYPE} AVK_BUILD_FRAGMENT)
+set("AVK_${AVK_BUILD_FRAGMENT}" ON)
+
 if((AVK_OS STREQUAL "MACOS") OR (AVK_OS STREQUAL "IOS")) # IOS still TODO
-    enable_language(OBJC)
-    enable_language(OBJCXX)
+  enable_language(OBJC)
+  enable_language(OBJCXX)
 endif()
 
 # TODO check for android

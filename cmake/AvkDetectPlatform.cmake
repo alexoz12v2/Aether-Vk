@@ -181,8 +181,21 @@ endmacro()
 
 
 function(avk_setup_dependencies)
-    if(NOT TARGET Boost::context)
-        find_package(Boost REQUIRED COMPONENTS context)
+    if(NOT TARGET Boost::fiber)
+        find_package(Boost REQUIRED COMPONENTS fiber)
+        if(WIN32 AND ${AVK_USE_SANITIZERS})
+            message(WARNING "Remapping Debug Boost to Release to avoid ASan vs ucrtbased.dll conflict")
+            avk_release_is_debug_for_imported(Boost::fiber)
+            # must do it for all fiber dependencies too
+            set(deps assert config context core intrusive predef smart_ptr)
+            foreach(dep ${deps})
+                if(TARGET "Boost::${dep}")
+                    avk_release_is_debug_for_imported("Boost::${dep}")
+                else()
+                    message(WARNING "Boost::${dep}")
+                endif()
+            endforeach()
+        endif()
     endif()
     message(WARNING "define environment variable before build: VCPKG_ROOT = \"${VCPKG_ROOT}\"")
 endfunction()
@@ -244,3 +257,29 @@ function(avk_setup_vcpkg)
     return(PROPAGATE VCPKG_TOOLCHAIN_FILE VCPKG_COMMAND VCPKG_ROOT)
 endfunction()
 
+
+function(avk_release_is_debug_for_imported target)
+    if(NOT TARGET ${target})
+        message(FATAL_ERROR "Target ${target} does not exist.")
+    endif()
+
+    # Get the existing release import locations
+    get_target_property(_implib_release ${target} IMPORTED_IMPLIB_RELEASE)
+    get_target_property(_location_release ${target} IMPORTED_LOCATION_RELEASE)
+
+    if(NOT _implib_release AND NOT _location_release)
+        message(WARNING "Target ${target} has no IMPORTED_RELEASE properties.")
+        return()
+    endif()
+
+    # Mirror release to debug
+    if(_implib_release)
+        set_target_properties(${target} PROPERTIES IMPORTED_IMPLIB_DEBUG "${_implib_release}")
+    endif()
+
+    if(_location_release)
+        set_target_properties(${target} PROPERTIES IMPORTED_LOCATION_DEBUG "${_location_release}")
+    endif()
+
+    message(STATUS "Mapped ${target} release import libs to debug configuration.")
+endfunction()
