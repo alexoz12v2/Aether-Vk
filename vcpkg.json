@@ -3,6 +3,7 @@
     "name": "aether-vk",
     "version": "0.0.1",
     "dependencies": [
-        "boost-context"
+        "boost-context",
+        "boost-fiber"
     ]
 }
