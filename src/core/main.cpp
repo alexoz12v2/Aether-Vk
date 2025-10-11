@@ -1,23 +1,18 @@
-
 #include <atomic>
-#include <cassert>
-#include <cstdint>
+#include <boost/context/continuation.hpp>
+#include <boost/context/fiber.hpp>
+#include <boost/context/fixedsize_stack.hpp>
+#include <condition_variable>
 #include <iostream>
+#include <memory>
 #include <mutex>
-#include <new>
 #include <thread>
-#include <unordered_map>
-#include <vector>
+#include <utility>
 
-// ---- externs: platform-specific, implemented in assembly per-ABI ----
-extern "C" void* make_fcontext(void* stack_top, size_t stack_size,
-                               void (*fn)(void*));
-extern "C" intptr_t jump_fcontext(void* to_context, void* from_context_storage,
-                                  intptr_t arg, int preserve_fpu);
+#include "fiber/mpmc.h"
 
 // ---- types ----
 class Scheduler;
-using fcontext_t = void*;
 using JobId = uint64_t;
 using JobFunc = /*extern "C"*/ void (*)(void* userData);
 
@@ -33,481 +28,538 @@ inline JobId makeJobId(const char* name) {
   return h ? h : 1;  // avoid zero id
 }
 
-// --- Vyukov bounded MPMC queue (template)
-// https://www.1024cores.net/home/lock-free-algorithms/queues/bounded-mpmc-queue
-// ---
-template <typename T>
-class MPMCQueue {
- public:
-  explicit MPMCQueue(size_t capacity_pow2)
-      : m_buffer(nullptr),
-        m_capacity(capacity_pow2),
-        m_mask(capacity_pow2 - 1) {
-    assert((capacity_pow2 & (capacity_pow2 - 1)) == 0);
-    m_buffer = reinterpret_cast<Cell*>(
-        ::operator new[](sizeof(Cell) * m_capacity, std::nothrow));
-    assert(m_buffer);
-    for (size_t i = 0; i < m_capacity; ++i) {
-      new (&m_buffer[i]) Cell();
-      m_buffer[i].seq.store(i, std::memory_order_relaxed);
-    }
-    m_enqueuePos.store(0);
-    m_dequeuePos.store(0);
-  }
-  MPMCQueue(MPMCQueue const&) = delete;
-  MPMCQueue(MPMCQueue&&) noexcept = delete;
-  MPMCQueue& operator=(MPMCQueue const&) = delete;
-  MPMCQueue& operator=(MPMCQueue&&) noexcept = delete;
-  ~MPMCQueue() noexcept {
-    for (size_t i = 0; i < m_capacity; ++i) {
-      m_buffer[i].~Cell();
-    }
-    ::operator delete[](m_buffer);
-  }
-
-  bool push(const T& v) {
-    Cell* cell = nullptr;
-    size_t pos = m_enqueuePos.load(std::memory_order_relaxed);
-    for (;;) {
-      cell = &m_buffer[pos & m_mask];
-      size_t const seq = cell->seq.load(std::memory_order_acquire);
-      intptr_t const dif =
-          static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos);
-      if (dif == 0) {
-        if (m_enqueuePos.compare_exchange_weak(pos, pos + 1,
-                                               std::memory_order_relaxed))
-          break;
-      } else if (dif < 0) {
-        return false;  // full
-      } else {
-        pos = m_enqueuePos.load(std::memory_order_relaxed);
-      }
-    }
-    cell->value = v;
-    cell->seq.store(pos + 1, std::memory_order_release);
-    return true;
-  }
-
-  bool pop(T& out) {
-    Cell* cell = nullptr;
-    size_t pos = m_dequeuePos.load(std::memory_order_relaxed);
-    for (;;) {
-      cell = &m_buffer[pos & m_mask];
-      size_t const seq = cell->seq.load(std::memory_order_acquire);
-      intptr_t const dif =
-          static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos + 1);
-      if (dif == 0) {
-        if (m_dequeuePos.compare_exchange_weak(pos, pos + 1,
-                                               std::memory_order_relaxed))
-          break;
-      } else if (dif < 0) {
-        return false;  // empty
-      } else {
-        pos = m_dequeuePos.load(std::memory_order_relaxed);
-      }
-    }
-    out = cell->value;
-    cell->seq.store(pos + m_capacity, std::memory_order_release);
-    return true;
-  }
-
- private:
-  struct Cell {
-    std::atomic<size_t> seq;
-    T value;
-    Cell() : seq(0), value() {}
-  };
-
-  Cell* m_buffer;
-  size_t m_capacity;
-  size_t m_mask;
-  std::atomic<size_t> m_enqueuePos;
-  std::atomic<size_t> m_dequeuePos;
-};
-
-// ---- Job Representation ----
-struct Job {
-  JobId id = 0;
-  JobFunc func = nullptr;
-  void* userData = nullptr;
-  // 0 = free/invalid, 1 = queued, 2 = running, 3= waiting, 4 = completed
-  std::atomic<uint32_t> state{0};
-  // support multiple waiters or repeated runs
-  std::atomic<uint32_t> completionCount{0};
-
-  Job() = default;
-  Job(JobId id, JobFunc func, void* user)
-      : id(id), func(func), userData(user) {}
-
-  // Define Move Semantics (Required for a "shallow" transfer/pop-and-push)
-  // Move Constructor
-  Job(Job&& other) noexcept
-      : id{other.id},
-        func{other.func},
-        userData{other.userData},
-        // std::atomic is non-copyable but *can* be constructed from a temporary
-        // or a moved value via its load() and store() methods or direct access
-        // to its underlying value during move construction. The standard
-        // library guarantees that a simple load/store transfer is a valid
-        // "move" for atomic types.
-        state{other.state.load()},
-        completionCount{other.completionCount.load()} {
-    // Standard practice for move source cleanup: Reset the moved-from object's
-    // state so it's in a valid, but default-constructed/empty, state.
-    // For a Job, setting state to 0 (free/invalid) is appropriate.
-    other.state.store(0);
-    other.completionCount.store(0);
-  }
-
-  // Move Assignment Operator
-  Job& operator=(Job&& other) noexcept {
-    if (this != &other) {
-      // Transfer non-atomic members
-      id = other.id;
-      func = other.func;
-      userData = other.userData;
-
-      // Transfer atomic members via load/store
-      state.store(other.state.load());
-      completionCount.store(other.completionCount.load());
-
-      // Cleanup the source object
-      other.state.store(0);
-      other.completionCount.store(0);
-      other.id = 0;              // Optional: Also clear the ID
-      other.func = nullptr;      // Optional: Also clear the function pointer
-      other.userData = nullptr;  // Optional: Also clear the user data pointer
-    }
-    return *this;
-  }
-};
-
-// Forward declaration
-class Scheduler;
-
-// ---- Fiber Representation ----
-struct Fiber {
-  Scheduler* scheduler = nullptr;
-  fcontext_t ctx = nullptr;
-  void* ctx_storage = nullptr;
-  uint8_t* stack = nullptr;
-  size_t stack_size = 0;
-  std::atomic<int> state{0};  // 0=idle, 1=ready, 2=running, 3=waiting
-  JobId currentJob = 0;
-  void* scratch = nullptr;
-};
-
-// ---- External trampoline ----
-extern "C" void fiberEntryTrampoline(void* arg);
-
-// ---- Scheduler ----
+// --- Scheduler class ---
 class Scheduler {
  public:
-  Scheduler(size_t numThreads = std::thread::hardware_concurrency(),
-            size_t fibersPerThread = 16, size_t queueCapacity = 1024)
-      : m_numThreads(numThreads),
-        m_totalFibers(numThreads * fibersPerThread),
-        m_jobQueue{queueCapacity},
-        m_stopFlag(false) {
-    m_fibers.reserve(m_totalFibers);
-    for (size_t i = 0; i < m_totalFibers; ++i) {
-      m_fibers.emplace_back(std::make_unique<Fiber>());
-      m_fibers.back()->scheduler = this;
+  using JobId = uint64_t;
+  using JobFunc = void (*)(void*);
+
+  struct JobEntry {
+    //
+    // 1. Constructors and Destructor
+    //
+
+    // Default Constructor (Provided)
+    JobEntry() = default;
+
+    // Custom Move Constructor (Provided, slightly refined)
+    JobEntry(JobEntry&& other) noexcept
+        : fn(std::exchange(other.fn, nullptr)),
+          userData(std::exchange(other.userData, nullptr)),
+          id(std::exchange(other.id, 0)) {
+      // Note: done_cv and done_mtx are implicitly moved/default-constructed.
+      // For std::mutex and std::condition_variable_any, this is fine;
+      // they are move-enabled in C++11/C++14 onwards by being trivial or
+      // non-copyable.
+      valid.store(other.valid);
+      done.store(other.done);
     }
-    for (size_t i = 0; i < m_numThreads; ++i) {
-      m_workers.emplace_back([this, i]() { workerMain(i); });
+
+    // Destructor (Default is fine as members handle their own cleanup)
+    ~JobEntry() = default;
+
+    // 2. Move-Only Control (Key for std::vector)
+
+    // Move Assignment Operator (Essential for move-only types in vector)
+    JobEntry& operator=(JobEntry&& other) noexcept {
+      if (this != &other) {
+        // Move the trivial/atomic members
+        fn = std::exchange(other.fn, nullptr);
+        userData = std::exchange(other.userData, nullptr);
+        id = std::exchange(other.id, 0);
+        valid.store(other.valid);
+        done.store(other.done);
+
+        // Note: done_cv and done_mtx are *not* moved or assigned here.
+        // C++ standard containers (like std::vector) will use the move
+        // constructor followed by a destructor during operations like resize,
+        // which is why the move constructor is the primary concern.
+        // However, a complete move assignment is good practice.
+        // std::mutex and std::condition_variable_any are *not* assignable
+        // (even via move), so we leave them untouched.
+        // This is generally acceptable for this use-case since you
+        // typically only rely on the move constructor for container operations.
+      }
+      return *this;
     }
+
+    // Explicitly delete Copy Constructor (Makes it move-only)
+    JobEntry(const JobEntry& other) = delete;
+
+    // Explicitly delete Copy Assignment Operator (Makes it move-only)
+    JobEntry& operator=(const JobEntry& other) = delete;
+
+    // 3. Member Variables
+    JobFunc fn = nullptr;
+    void* userData = nullptr;
+    JobId id = 0;
+    std::atomic<bool> valid{false};
+    std::atomic<bool> done{false};
+    std::condition_variable_any done_cv;
+    std::mutex done_mtx;
+  };
+
+  // Fiber is placed (via placement-new) into reserved top-of-stack space.
+  // It contains the continuation 'ctx' and runtime state.
+  struct Fiber {
+    boost::context::continuation ctx;  // created in placement-new via callcc
+    Scheduler* sched = nullptr;
+    JobEntry* currentJob = nullptr;
+    bool waiting = false;
+    JobId waitingFor = 0;
+
+    // Keep the stack_context and allocator pointer so we can deallocate later
+    boost::context::stack_context sctx;
+    boost::context::fixedsize_stack salloc;
+
+    // Constructor called by placement-new; create the continuation here.
+    Fiber(void* sp, std::size_t size, boost::context::stack_context sctx_in,
+          boost::context::fixedsize_stack&& salloc, Scheduler* S)
+        : ctx(),
+          sched(S),
+          currentJob(nullptr),
+          waiting(false),
+          waitingFor(0),
+          sctx(sctx_in),
+          salloc(salloc) {
+      // create captured continuation using the preallocated area which contains
+      // *this*
+      ctx = boost::context::callcc(  //
+          std::allocator_arg, boost::context::preallocated(sp, size, sctx),
+          salloc,
+          [this](boost::context::continuation&& caller)
+              -> boost::context::continuation {
+            // set TLS so Scheduler::fiberYield() works
+            Scheduler::tls_in_fiber = true;
+            Scheduler::tls_fiber_yield = [&caller]() {
+              caller = caller.resume();
+            };
+
+            // run per-fiber loop
+            this->fiberLoop(std::move(caller));
+
+            // clear TLS
+            Scheduler::tls_fiber_yield = nullptr;
+            Scheduler::tls_in_fiber = false;
+            return std::move(caller);
+          });
+    }
+
+    ~Fiber() = default;
+
+    // fiber loop: job execution loop - runs **inside** the fiber stack/context
+    void fiberLoop(boost::context::continuation&& caller) {
+      // 'caller' is the scheduler continuation. To yield to scheduler we set
+      // caller = caller.resume();
+      for (;;) {
+        // If shutdown requested, exit fiberLoop and allow continuation to
+        // return
+        if (sched->m_shutdown.load(std::memory_order_acquire)) break;
+
+        if (!currentJob) {
+          // no job assigned: yield back to scheduler and wait for assignment
+          caller = caller.resume();
+          continue;
+        }
+
+        // Execute the job (user function)
+        JobEntry* e = currentJob;
+        if (e->fn) e->fn(e->userData);
+
+        // mark done & notify
+        e->done.store(true, std::memory_order_release);
+        {
+          std::unique_lock<std::mutex> lk(e->done_mtx);
+          e->done_cv.notify_all();
+        }
+
+        // decrement inflight count and notify if zero
+        if (sched->m_inflightJobs.fetch_sub(1, std::memory_order_seq_cst) ==
+            1) {
+          std::unique_lock<std::mutex> lk(sched->m_all_done_mtx);
+          sched->m_all_done_cv.notify_all();
+        }
+
+        e->valid.store(false, std::memory_order_release);
+
+        // clear currentJob and yield back to scheduler (caller)
+        currentJob = nullptr;
+        caller = caller.resume();
+      }
+    }
+  };
+
+  // ctor: jobs[] (preallocated array), jobPoolCount, stacksBuffer (contiguous),
+  // stackSize, fiberCount, jobQueue reference, workerCount
+  Scheduler(JobEntry* jobs, size_t jobPoolCount, size_t stackSize,
+            size_t fiberCount, avk::MPMCQueue<uint32_t>& jobQueue,
+            unsigned workerCount = std::thread::hardware_concurrency())
+      : m_jobs(jobs),
+        m_jobPoolCount(jobPoolCount),
+        m_stackSize(stackSize),
+        m_fiberCount(fiberCount),
+        m_workerCount(workerCount ? workerCount : 1),
+        m_jobQueue(jobQueue) {
+    assert(jobs && jobPoolCount > 0 && fiberCount > 0);
+    // initialize job pool
+    for (size_t i = 0; i < m_jobPoolCount; ++i) {
+      m_jobs[i].valid.store(false, std::memory_order_relaxed);
+      m_jobs[i].done.store(false, std::memory_order_relaxed);
+    }
+
+    // Prepare fibers: for each fiber, allocate a stack_context and
+    // placement-new a Fiber at top
+    m_fiberPtrs.resize(m_fiberCount, nullptr);
+
+    // We'll use a local fixedsize_stack allocator object for each allocation,
+    // because it carries any size info the implementation needs.
+    for (size_t i = 0; i < m_fiberCount; ++i) {
+      // create an allocator with the desired stack size:
+      boost::context::fixedsize_stack salloc(m_stackSize);
+
+      // allocate a stack_context using the allocator
+      boost::context::stack_context sctx = salloc.allocate();
+
+      // Reserve space for our Fiber object at top of stack (aligned)
+      void* sp = static_cast<char*>(sctx.sp) -
+                 static_cast<std::ptrdiff_t>(sizeof(Fiber));
+      std::size_t usable_size = sctx.size - sizeof(Fiber);
+
+      // placement-new the Fiber object into the reserved space (the object will
+      // call callcc to create ctx)
+      Fiber* f = new (sp) Fiber(sp, usable_size, sctx, std::move(salloc), this);
+
+      // store pointer so scheduler can resume it
+      m_fiberPtrs[i] = f;
+      // We do NOT call salloc.deallocate(); the stack remains valid for the
+      // lifetime of the fiber. Note: salloc is a temporary, but callcc captured
+      // the needed allocator state internally.
+    }
+
+    m_freeJobIndex.store(0, std::memory_order_relaxed);
+    m_nextFiberIndex.store(0, std::memory_order_relaxed);
   }
 
   ~Scheduler() {
-    m_stopFlag.store(true);
-    for (auto& w : m_workers)
-      if (w.joinable()) w.join();
-    for (auto& f : m_fibers) delete[] f->stack;
+    shutdown();
+
+    for (size_t i = 0; i < m_fiberPtrs.size(); ++i) {
+      Fiber* f = m_fiberPtrs[i];
+      if (f) {
+        // Save allocator + stack info before destroying Fiber (since destructor
+        // is trivial)
+        auto sctx = f->sctx;
+        auto salloc = f->salloc;
+
+        // Explicitly destroy the placement-new Fiber
+        f->~Fiber();
+
+        // Now it’s safe to free the stack memory
+        try {
+          salloc.deallocate(sctx);
+        } catch (...) {
+          // ignore
+        }
+
+        m_fiberPtrs[i] = nullptr;
+      }
+    }
   }
 
-  bool submitJob(JobFunc func, void* userData, const char* name) {
-    JobId jid = makeJobId(name);
-    Job j{jid, func, userData};
-    {
-      std::lock_guard<std::mutex> lk(m_jobStoreMutex);
-      j.state = 1;  // QUEUED
-      auto [it, ok] = m_jobStore.try_emplace(jid, std::move(j));
-      if (!ok) return false;
-    }
-    m_jobQueue.push(jid);
-    return true;
+  // submit job; returns job-slot index or UINT32_MAX on failure
+  uint32_t submit(JobFunc fn, void* userData, JobId id = 0) {
+    uint32_t idx = m_freeJobIndex.fetch_add(1, std::memory_order_acq_rel);
+    if (idx >= m_jobPoolCount) return UINT32_MAX;
+    JobEntry& entry = m_jobs[idx];
+    entry.fn = fn;
+    entry.userData = userData;
+    entry.id = id;
+    entry.valid.store(true, std::memory_order_release);
+    entry.done.store(false, std::memory_order_release);
+
+    // push job index to queue (spin until succeeds)
+    while (!m_jobQueue.push(idx)) std::this_thread::yield();
+
+    m_inflightJobs.fetch_add(1, std::memory_order_acq_rel);
+    return idx;
   }
 
-  void fiberYield() {
-    Fiber* self = s_tls.currentFiber;
-    assert(self);
-
-    self->state.store(1, std::memory_order_release);
-
-    Fiber* next = nullptr;
-    while (!(next = nextFiberForThread())) {
-      std::this_thread::yield();
+  void start() {
+    for (unsigned i = 0; i < m_workerCount; ++i) {
+      m_threads.emplace_back([this]() { workerMain(); });
     }
-
-    s_tls.currentFiber = next;
-
-    if (!next->ctx) {
-      next->stack = new uint8_t[DefaultStackSize];
-      next->stack_size = DefaultStackSize;
-      void* top = next->stack + next->stack_size;
-      next->ctx = make_fcontext(top, next->stack_size, &fiberEntryTrampoline);
-    }
-
-    jump_fcontext(next->ctx, self->ctx_storage,
-                  reinterpret_cast<intptr_t>(next), 1);
   }
 
-  void fiberWaitFor(JobId jid) {
-    Fiber* self = s_tls.currentFiber;
-    assert(self);
+  void shutdown() {
+    if (m_shutdown.exchange(true, std::memory_order_acq_rel)) return;
 
-    self->state.store(3, std::memory_order_release);
-    self->currentJob = jid;
-
-    {
-      std::lock_guard<std::mutex> lk(m_waitMapMutex);
-      m_waitMap.emplace(jid, self);
+    // join threads
+    for (auto& t : m_threads) {
+      if (t.joinable()) t.join();
     }
+    m_threads.clear();
+  }
 
-    Fiber* next = nullptr;
-    while (!(next = nextFiberForThread())) {
-      std::this_thread::yield();
+  void pause() { m_paused.store(true, std::memory_order_release); }
+  void resume() {
+    m_paused.store(false, std::memory_order_release);
+    // no CV used for worker blocking in this simple example
+  }
+
+  void waitUntilAllJobsDone() {
+    std::unique_lock<std::mutex> lk(m_all_done_mtx);
+    m_all_done_cv.wait(lk, [this] {
+      return m_inflightJobs.load(std::memory_order_acquire) == 0;
+    });
+  }
+
+  // wait for all job slots with JobId id to complete
+  void waitForJob(JobId id) {
+    if (id == 0) return;
+    if (!tls_in_fiber) {
+      // owner thread: block on per-job condition variables
+      for (;;) {
+        bool found = false;
+        for (size_t i = 0; i < m_jobPoolCount; ++i) {
+          JobEntry& e = m_jobs[i];
+          if (e.valid.load(std::memory_order_acquire) && e.id == id) {
+            found = true;
+            std::unique_lock<std::mutex> lk(e.done_mtx);
+            e.done_cv.wait(
+                lk, [&e] { return e.done.load(std::memory_order_acquire); });
+            break;  // re-scan in case multiple slots with same id exist
+          }
+        }
+        if (!found) break;
+      }
+    } else {
+      // fiber: cooperative yield loop
+      for (;;) {
+        bool any = false;
+        for (size_t i = 0; i < m_jobPoolCount; ++i) {
+          JobEntry& e = m_jobs[i];
+          if (e.valid.load(std::memory_order_acquire) && e.id == id) {
+            any = true;
+            break;
+          }
+        }
+        if (!any) break;
+        fiberYield();
+      }
     }
+  }
 
-    s_tls.currentFiber = next;
-
-    if (!next->ctx) {
-      next->stack = new uint8_t[DefaultStackSize];
-      next->stack_size = DefaultStackSize;
-      void* top = next->stack + next->stack_size;
-      next->ctx = make_fcontext(top, next->stack_size, &fiberEntryTrampoline);
-    }
-
-    jump_fcontext(next->ctx, self->ctx_storage,
-                  reinterpret_cast<intptr_t>(next), 1);
+  // fiber-only cooperative yield
+  static void fiberYield() {
+    if (tls_fiber_yield) tls_fiber_yield();
   }
 
  private:
-  static constexpr size_t DefaultStackSize = 64 * 1024;
-
-  size_t m_numThreads;
-  size_t m_totalFibers;
-
-  std::vector<std::unique_ptr<Fiber>> m_fibers;
-  std::vector<std::thread> m_workers;
-
-  std::mutex m_jobStoreMutex;
-  std::unordered_map<JobId, Job> m_jobStore;
-
-  std::mutex m_waitMapMutex;
-  std::unordered_multimap<JobId, Fiber*> m_waitMap;
-
-  MPMCQueue<JobId> m_jobQueue;
-  std::atomic<bool> m_stopFlag;
-
-  struct PerThread {
-    size_t workerIndex = 0;
-    Fiber* currentFiber = nullptr;
-    size_t lastFiberIndex = 0;
-  };
-  static thread_local PerThread s_tls;
-
-  Fiber* nextFiberForThread() {
-    size_t total = m_fibers.size();
-    size_t start = s_tls.lastFiberIndex;
-
-    for (size_t offset = 1; offset <= total; ++offset) {
-      size_t idx = (start + offset) % total;
-      auto& f = *m_fibers[idx];
-      int expected = f.state.load(std::memory_order_acquire);
-      if (expected == 0 || expected == 1) {
-        if (f.state.compare_exchange_strong(expected, 2,
-                                            std::memory_order_acq_rel)) {
-          s_tls.lastFiberIndex = idx;
-          if (!f.currentJob) {
-            JobId jid;
-            if (m_jobQueue.pop(jid)) f.currentJob = jid;
-          }
-          return &f;
-        }
-      }
-    }
-    return nullptr;
-  }
-
-  void workerMain(size_t workerIndex) {
-    s_tls.workerIndex = workerIndex;
-    s_tls.currentFiber = nullptr;
-    s_tls.lastFiberIndex = 0;
-
-    while (!m_stopFlag.load()) {
-      Fiber* next = nextFiberForThread();
-      if (!next) {
+  // worker thread main loop
+  void workerMain() {
+    while (!m_shutdown.load(std::memory_order_acquire)) {
+      if (m_paused.load(std::memory_order_acquire)) {
         std::this_thread::yield();
         continue;
       }
 
-      s_tls.currentFiber = next;
-
-      if (!next->ctx) {
-        next->stack = new uint8_t[DefaultStackSize];
-        next->stack_size = DefaultStackSize;
-        void* top = next->stack + next->stack_size;
-        next->ctx = make_fcontext(top, next->stack_size, &fiberEntryTrampoline);
-        next->scheduler = this;
-      }
-
-      jump_fcontext(next->ctx, nullptr, reinterpret_cast<intptr_t>(next), 1);
-    }
-  }
-
-  friend void fiberEntryTrampoline(void* arg);
-};
-
-// TLS
-thread_local Scheduler::PerThread Scheduler::s_tls;
-
-// ---- Fiber trampoline ----
-extern "C" void fiberEntryTrampoline(void* arg) {
-  Fiber* f = reinterpret_cast<Fiber*>(arg);
-  Scheduler* sched = f->scheduler;
-  while (true) {
-    if (!f->currentJob) {
-      sched->fiberYield();
-      continue;
-    }
-
-    Job* j = nullptr;
-    {
-      std::lock_guard<std::mutex> lk(sched->m_jobStoreMutex);
-      auto it = sched->m_jobStore.find(f->currentJob);
-      if (it != sched->m_jobStore.end()) {
-        j = &it->second;
-        it->second.state.store(2, std::memory_order_release);
-      } else {
-        f->currentJob = 0;
-        sched->fiberYield();
+      uint32_t jobIndex = 0;
+      if (!m_jobQueue.pop(jobIndex)) {
+        // nothing to do
+        std::this_thread::yield();
         continue;
       }
-    }
 
-    j->func(j->userData);
-
-    {
-      std::lock_guard<std::mutex> lk(sched->m_jobStoreMutex);
-      auto it = sched->m_jobStore.find(j->id);
-      if (it != sched->m_jobStore.end()) {
-        it->second.state.store(4, std::memory_order_release);
-        it->second.completionCount.fetch_add(1, std::memory_order_relaxed);
+      if (jobIndex == UINT32_MAX) {
+        // sentinel (not used here) - ignore
+        continue;
       }
-    }
 
-    {
-      std::lock_guard<std::mutex> lk(sched->m_waitMapMutex);
-      auto range = sched->m_waitMap.equal_range(j->id);
-      for (auto itw = range.first; itw != range.second; ++itw) {
-        itw->second->state.store(1, std::memory_order_release);
-      }
-      sched->m_waitMap.erase(range.first, range.second);
-    }
+      // pick a fiber (round-robin)
+      size_t fidx = m_nextFiberIndex.fetch_add(1, std::memory_order_relaxed) %
+                    m_fiberPtrs.size();
+      Fiber* f = m_fiberPtrs[fidx];
+      assert(f);
 
-    f->currentJob = 0;
-    f->state.store(0, std::memory_order_release);
-    sched->fiberYield();
+      // assign job to fiber and resume it
+      f->currentJob = &m_jobs[jobIndex];
+
+      // resume fiber by calling its continuation
+      // the resume() returns a continuation we can ignore; conventionally we
+      // can write:
+      f->ctx = f->ctx.resume();
+      // after the fiber yields/finishes, control returns here and loop
+      // continues
+    }
   }
-}
 
-struct SharedData {
-  int value{0};
-  std::mutex coutMtx;
+  JobEntry* m_jobs;
+  size_t m_jobPoolCount;
+
+  size_t m_stackSize;
+  size_t m_fiberCount;
+
+  unsigned m_workerCount;
+  std::vector<std::thread> m_threads;
+
+  std::atomic<bool> m_shutdown{false};
+  std::atomic<bool> m_paused{false};
+
+  std::atomic<uint32_t> m_inflightJobs{0};
+  std::mutex m_all_done_mtx;
+  std::condition_variable m_all_done_cv;
+
+  std::atomic<uint32_t> m_freeJobIndex{0};
+
+  // pointers to Fiber objects that live inside each fiber's stack top
+  std::vector<Fiber*> m_fiberPtrs;
+
+  std::atomic<uint32_t> m_nextFiberIndex{0};
+
+  // job queue (user-provided)
+  avk::MPMCQueue<uint32_t>& m_jobQueue;
+
+  // TLS helpers for fiber yield
+  static thread_local std::function<void()> tls_fiber_yield;
+  static thread_local bool tls_in_fiber;
 };
 
-template <typename T>
+// thread_local init
+thread_local std::function<void()> Scheduler::tls_fiber_yield = nullptr;
+thread_local bool Scheduler::tls_in_fiber = false;
+
 struct JobData {
-  Scheduler* sheduler;
-  T val;
+  Scheduler* sched;
+  double value;
+  double result;
+  JobData* jobValues;
 };
 
-extern "C" void jobWrite(void* user) {
-  SharedData* data = &reinterpret_cast<JobData<SharedData>*>(user)->val;
-  Scheduler* sched = reinterpret_cast<JobData<SharedData>*>(user)->sheduler;
-  {
-    std::lock_guard<std::mutex> lk{data->coutMtx};
-    std::cout << "[JobWrite] Writing 42\n";
-  }
-
-  data->value = 42;
-
-  // simulate some work
-  sched->fiberYield();
-
-  {
-    std::lock_guard<std::mutex> lk{data->coutMtx};
-    std::cout << "[JobWrite] Done\n";
-  }
-}
-
-extern "C" void jobRead(void* user) {
-  SharedData* data = &reinterpret_cast<JobData<SharedData>*>(user)->val;
-  Scheduler* sched = reinterpret_cast<JobData<SharedData>*>(user)->sheduler;
-
-  // Wait until jobWrite completes
-  JobId writeJobId = makeJobId("writeJob");
-  {
-    std::lock_guard<std::mutex> lk{data->coutMtx};
-    std::cout << "[JobRead] Waiting for writeJob to complete\n";
-  }
-  sched->fiberWaitFor(writeJobId);  // this yields until writeJob finishes
-
-  int val = data->value;
-  {
-    std::lock_guard<std::mutex> lk{data->coutMtx};
-    std::cout << "[JobRead] Read value: " << val << "\n";
-  }
-
-  sched->fiberYield();
-
-  {
-    std::lock_guard<std::mutex> lk{data->coutMtx};
-    std::cout << "[JobRead] Done\n";
-  }
-}
-
-extern "C" void jobIncrement(void* user) {
-  SharedData* data = &reinterpret_cast<JobData<SharedData>*>(user)->val;
-  Scheduler* sched = reinterpret_cast<JobData<SharedData>*>(user)->sheduler;
-
-  // Wait for writeJob as well
-  JobId writeJobId = makeJobId("writeJob");
-  sched->fiberWaitFor(writeJobId);
-
-  data->value += 10;
-  {
-    std::lock_guard<std::mutex> lk{data->coutMtx};
-    std::cout << "[JobIncrement] Added 10, new value: " << data->value << "\n";
-  }
-}
+void jobFunc(void* ptr) {
+  JobData* data = reinterpret_cast<JobData*>(ptr);
+  // simulate heavy computation
+  std::this_thread::sleep_for(std::chrono::milliseconds(50 + rand() % 50));
+  data->result = std::sqrt(data->value) * 3.1415;
+  std::cout << "Job finished: input=" << data->value
+            << " result=" << data->result << "\n";
+};
 
 int main() {
-  Scheduler sched(2, 8, 128);  // 2 threads, 8 fibers each
+  constexpr size_t jobPoolSize = 1024;
+  std::vector<Scheduler::JobEntry> jobs;
+  jobs.reserve(jobPoolSize);
+  for (size_t i = 0; i < jobs.capacity(); ++i) {
+    jobs.emplace_back();
+  }
 
-  SharedData shared;
-  std::cout << "Starting Fiber Test: " << shared.value << "\n";
+  constexpr size_t queueSize = 1024;
+  avk::MPMCQueue<uint32_t> jobQueue(queueSize);
 
-  // submit jobs
-  sched.submitJob(jobWrite, &shared, "writeJob");
-  sched.submitJob(jobRead, &shared, "readJob");
-  sched.submitJob(jobIncrement, &shared, "incrementJob");
+  constexpr size_t fiberCount = 128;
+  constexpr size_t stackSize = 256 * 1024;  // 256 KB per fiber
+  // uint8_t* stackBuffer = reinterpret_cast<uint8_t*>(operator new( fiberCount
+  // * stackSize, std::align_val_t(16)));
 
-  // give the scheduler time to run fibers
-  std::this_thread::sleep_for(std::chrono::seconds(2));
+  std::unique_ptr<Scheduler> sched = std::make_unique<Scheduler>(
+      jobs.data(), jobPoolSize, stackSize, fiberCount, jobQueue, 1);
+  sched->start();
 
-  std::cout << "Final value: " << shared.value << "\n";
+  // Simulate a graph of dependent jobs:
+  //   A -> B -> C
+  //   D -> E
+  //   F -> G -> H -> I
+
+  JobData jobValues[10];
+  for (auto& j : jobValues) {
+    j.sched = sched.get();
+    j.jobValues = jobValues;
+  }
+
+  // Job functions
+  // Submit independent jobs first
+  jobValues[0].value = 10.0;  // A
+  [[maybe_unused]] uint32_t jobA =
+      sched->submit(jobFunc, &jobValues[0], makeJobId("A"));
+
+  jobValues[3].value = 7.0;  // D
+  [[maybe_unused]] uint32_t jobD =
+      sched->submit(jobFunc, &jobValues[3], makeJobId("D"));
+
+  jobValues[5].value = 20.0;  // F
+  [[maybe_unused]] uint32_t jobF =
+      sched->submit(jobFunc, &jobValues[5], makeJobId("F"));
+
+  // Submit dependent jobs
+  // B depends on A
+  jobValues[1].value = 0.0;  // will compute after A
+  [[maybe_unused]] uint32_t jobB = sched->submit(
+      [](void* ptr) {
+        JobData* data = reinterpret_cast<JobData*>(ptr);
+        data->sched->waitForJob(makeJobId("A"));
+        data->value = data->jobValues[0].result + 5.0;
+        jobFunc(data);
+      },
+      &jobValues[1], makeJobId("B"));
+
+  // C depends on B
+  jobValues[2].value = 0.0;
+  [[maybe_unused]] uint32_t jobC = sched->submit(
+      [](void* ptr) {
+        JobData* data = reinterpret_cast<JobData*>(ptr);
+        data->sched->waitForJob(makeJobId("B"));
+        data->value = data->jobValues[1].result + 2.0;
+        jobFunc(data);
+      },
+      &jobValues[2], makeJobId("C"));
+
+  // E depends on D
+  jobValues[4].value = 0.0;
+  [[maybe_unused]] uint32_t jobE = sched->submit(
+      [](void* ptr) {
+        JobData* data = reinterpret_cast<JobData*>(ptr);
+        data->sched->waitForJob(makeJobId("D"));
+        data->value = data->jobValues[3].result + 1.0;
+        jobFunc(data);
+      },
+      &jobValues[4], makeJobId("E"));
+
+  // G depends on F
+  jobValues[6].value = 0.0;
+  [[maybe_unused]] uint32_t jobG = sched->submit(
+      [](void* ptr) {
+        JobData* data = reinterpret_cast<JobData*>(ptr);
+        data->sched->waitForJob(makeJobId("F"));
+        data->value = data->jobValues[5].result * 2.0;
+        jobFunc(data);
+      },
+      &jobValues[6], makeJobId("G"));
+
+  // H depends on G
+  jobValues[7].value = 0.0;
+  [[maybe_unused]] uint32_t jobH = sched->submit(
+      [](void* ptr) {
+        JobData* data = reinterpret_cast<JobData*>(ptr);
+        data->sched->waitForJob(makeJobId("G"));
+        data->value = data->jobValues[6].result + 3.0;
+        jobFunc(data);
+      },
+      &jobValues[7], makeJobId("H"));
+
+  // I depends on H
+  jobValues[8].value = 0.0;
+  [[maybe_unused]] uint32_t jobI = sched->submit(
+      [](void* ptr) {
+        JobData* data = reinterpret_cast<JobData*>(ptr);
+        data->sched->waitForJob(makeJobId("H"));
+        data->value = data->jobValues[7].result - 1.0;
+        jobFunc(data);
+      },
+      &jobValues[8], makeJobId("I"));
+
+  // Wait for all jobs to finish
+  sched->waitUntilAllJobsDone();
+  std::cout << "All jobs finished!\n";
+
+  sched->shutdown();
   return 0;
 }

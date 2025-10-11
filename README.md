@@ -1,5 +1,11 @@
 # Aether-Vk
 
+## Dependencies
+
+- Vulkan SDK >= 1.4 (actually, any version with a slang compiler)
+- [Boost library](https://www.boost.org/doc/user-guide/getting-started.html)
+  - Possibility of removal if the developer manages to work out Internal Fibers implementation for our supported ABIs
+
 ## Build
 
 ### Windows

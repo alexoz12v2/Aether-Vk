@@ -587,25 +587,61 @@ def _cc_toolchain_config_impl(ctx):
         name = _FEATURE_NAMES.LINK.DYNAMIC_LINK_MSVCRT,
         enabled = True,
         flag_sets = [
-            flag_set(
+            flag_set( # Normal Release (/MD)
                 actions = [ACTION_NAMES.c_compile, ACTION_NAMES.cpp_compile],
                 flag_groups = [flag_group(flags = ["-D_MT", "-D_DLL"])],
-                with_features = [with_feature_set(not_features = [_FEATURE_NAMES.OPTIONS.DBG, _FEATURE_NAMES.LINK.STATIC_LINK_MSVCRT])],
+                with_features = [with_feature_set(
+                    not_features = [
+                        _FEATURE_NAMES.OPTIONS.DBG,
+                        _FEATURE_NAMES.LINK.STATIC_LINK_MSVCRT,
+                    ],
+                )],
             ),
-            flag_set(
+            flag_set( # Normal Debug (/MDd)
                 actions = [ACTION_NAMES.c_compile, ACTION_NAMES.cpp_compile],
-                flag_groups = [flag_group(flags = ["-D_MD", "-D_DLL", "-D_DEBUG"])],
-                with_features = [with_feature_set(features = [_FEATURE_NAMES.OPTIONS.DBG], not_features = [_FEATURE_NAMES.LINK.STATIC_LINK_MSVCRT])],
+                flag_groups = [flag_group(flags = ["-D_MT", "-D_DLL", "-D_DEBUG"])],
+                with_features = [with_feature_set(
+                    features = [_FEATURE_NAMES.OPTIONS.DBG],
+                    not_features = [
+                        _FEATURE_NAMES.LINK.STATIC_LINK_MSVCRT,
+                        "asan_ubsan",  # exclude ASan Debug
+                    ],
+                )],
             ),
-            flag_set(
+            flag_set( # ASan/UBSan build (force release CRT, even in Debug, no _DEBUG)
+                actions = [ACTION_NAMES.c_compile, ACTION_NAMES.cpp_compile],
+                flag_groups = [flag_group(flags = ["-D_MT", "-D_DLL", "-DASAN_BUILD"])],
+                with_features = [with_feature_set(
+                    features = ["asan_ubsan"],
+                )],
+            ),
+            flag_set( # Linker flags — Release
                 actions = all_link_actions,
                 flag_groups = [flag_group(flags = ["/DEFAULTLIB:msvcrt.lib"])],
-                with_features = [with_feature_set(not_features = [_FEATURE_NAMES.OPTIONS.DBG, _FEATURE_NAMES.LINK.STATIC_LINK_MSVCRT])],
+                with_features = [with_feature_set(
+                    not_features = [
+                        _FEATURE_NAMES.OPTIONS.DBG,
+                        _FEATURE_NAMES.LINK.STATIC_LINK_MSVCRT,
+                    ],
+                )],
             ),
-            flag_set(
+            flag_set( # Linker flags — Debug
                 actions = all_link_actions,
                 flag_groups = [flag_group(flags = ["/DEFAULTLIB:msvcrtd.lib"])],
-                with_features = [with_feature_set(features = [_FEATURE_NAMES.OPTIONS.DBG], not_features = [_FEATURE_NAMES.LINK.STATIC_LINK_MSVCRT])],
+                with_features = [with_feature_set(
+                    features = [_FEATURE_NAMES.OPTIONS.DBG],
+                    not_features = [
+                        _FEATURE_NAMES.LINK.STATIC_LINK_MSVCRT,
+                        "asan_ubsan",  # exclude ASan
+                    ],
+                )],
+            ),
+            flag_set( # Linker flags — ASan Debug (force release CRT)
+                actions = all_link_actions,
+                flag_groups = [flag_group(flags = ["/DEFAULTLIB:msvcrt.lib"])],
+                with_features = [with_feature_set(
+                    features = ["asan_ubsan"],
+                )],
             ),
         ],
     )

@@ -32,6 +32,11 @@ endif()
 # TODO check for android
 avk_setup_vulkan()
 
+# dependencies
+avk_setup_vcpkg()
+include(${VCPKG_TOOLCHAIN_FILE})
+avk_setup_dependencies()
+
 # set CXX flags and define per target (warning) flags
 avk_cxx_flags()
 
