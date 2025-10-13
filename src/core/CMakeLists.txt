@@ -26,3 +26,26 @@ if(AVK_OS STREQUAL "WINDOWS")
 endif()
 
 install(TARGETS avk-test-fibers FILE_SET avk_text_fibers_headers)
+
+add_library(avk-core)
+target_compile_definitions(avk-core 
+  PRIVATE 
+    "AVK_OS_${AVK_OS}" "AVK_COMPILER_${AVK_COMPILER}" "AVK_ARCH_${AVK_ARCH}" "AVK_${AVK_BUILD_FRAGMENT}"
+    "UNICODE" "WIN32_LEAN_AND_MEAN" "NOMINMAX")
+target_compile_options(avk-core PUBLIC ${AVK_CXX_TARGET_COMPILE_FLAGS})
+target_link_libraries(avk-core PUBLIC Boost::fiber)
+target_sources(avk-core
+  PUBLIC FILE_SET avk_core_headers TYPE HEADERS BASE_DIRS public/ FILES
+    public/fiber/mpmc.h public/fiber/jobs.h
+  PRIVATE
+    private/fiber/jobs.cpp
+)
+
+target_include_directories(avk-core
+  PUBLIC 
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/public>
+    $<INSTALL_INTERFACE:include>
+)
+
+add_library(avk::core ALIAS avk-core)
+install(TARGETS avk-core FILE_SET avk_core_headers)
