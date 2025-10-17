@@ -3,6 +3,7 @@
 #include <boost/fiber/all.hpp>
 #include <boost/fiber/operations.hpp>
 #include <condition_variable>
+#include <shared_mutex>
 #include <mutex>
 #include <thread>
 
@@ -26,14 +27,19 @@ struct Job {
   Job(size_t initialCap = 16);
 
   void addDepencency(Job* job);
+  void reset();
 
  private:
   std::vector<Job*> m_continuations;
   std::atomic<int> m_remainingDependencies{0};
 
+  // waitable state for scheduler's waitFor
   std::atomic_bool m_done = false;
   std::mutex m_doneMutex;
   std::condition_variable m_doneCV;
+
+  // synchronize access to continuations
+  mutable std::shared_mutex m_continuationsMutex;
 };
 
 class Scheduler {
@@ -47,7 +53,8 @@ class Scheduler {
 
   void start();
   void shutdown();
-  void submitTask(Job* task);
+  bool trySubmitTask(Job* task);
+  void safeSubmitTask(Job* task);
 
 #ifdef AVK_DEBUG
   inline std::string getTaskName(Job* task) const {
@@ -63,7 +70,7 @@ class Scheduler {
   void waitUntilAllTasksDone();
 
  private:
-  void pushTask(Job* task, JobPriority prio);
+  bool pushTask(Job* task, JobPriority prio);
   Job* popTask();
   void workerMain();
   void fiberLoop();
@@ -84,6 +91,7 @@ class Scheduler {
 #ifdef AVK_DEBUG
 #define AVK_JOB(jobPtr, fnPtr, dataPtr, prio, nameStr) \
   do {                                                 \
+    (jobPtr)->reset();                                 \
     (jobPtr)->fn = (fnPtr);                            \
     (jobPtr)->data = (dataPtr);                        \
     (jobPtr)->priority = (prio);                       \
@@ -92,6 +100,7 @@ class Scheduler {
 #else
 #define AVK_JOB(jobPtr, fnPtr, dataPtr, prio, nameStr) \
   do {                                                 \
+    (jobPtr)->reset();                                 \
     (jobPtr)->fn = (fnPtr);                            \
     (jobPtr)->data = (dataPtr);                        \
     (jobPtr)->priority = (prio);                       \

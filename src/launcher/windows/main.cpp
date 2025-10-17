@@ -13,8 +13,10 @@
 
 #include <climits>
 #include <memory>
+#include <mutex>
 #include <ratio>
 #include <thread>
+#include <type_traits>
 
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <vulkan/vulkan.h>
@@ -36,6 +38,14 @@ static void printError() {
   LocalFree(messageBuffer);
 }
 
+// TODO better
+template <typename F>
+static void syncLog(F&& f) {
+  static std::mutex coutMtx;
+  std::lock_guard<std::mutex> lk{coutMtx};
+  f();
+}
+
 // -------------------------------------------------------
 
 static std::atomic<bool> g_quit{false};
@@ -47,7 +57,7 @@ struct Payload {
 };
 
 void physicsStep(void* userData, [[maybe_unused]] std::string const& name) {
-  std::cout << "Started Physics Job" << std::endl;
+  syncLog([]() { std::cout << "Started Physics Job" << std::endl; });
   Payload* p = reinterpret_cast<Payload*>(userData);
   // simulate CPU work
   std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -56,13 +66,28 @@ void physicsStep(void* userData, [[maybe_unused]] std::string const& name) {
 
 void renderPrep(void* userData, [[maybe_unused]] std::string const& name) {
   [[maybe_unused]] Payload* p = reinterpret_cast<Payload*>(userData);
-  std::cout << "Started Render Job" << std::endl;
+  syncLog([]() { std::cout << "Started Render Job" << std::endl; });
   // simulate command buffer recording cost
   std::this_thread::sleep_for(std::chrono::milliseconds(3));
 }
 
+// Blender's window style:
+//  DWORD style = parent_window ?
+//                    WS_POPUPWINDOW | WS_CAPTION | WS_MAXIMIZEBOX |
+//                    WS_MINIMIZEBOX | WS_SIZEBOX : WS_OVERLAPPEDWINDOW;
+//
+//  /* Forces owned windows onto taskbar and allows minimization. */
+//  DWORD extended_style = parent_window ? WS_EX_APPWINDOW : 0;
+//
+//  if (dialog) {
+//    /* When we are ready to make windows of this type:
+//     * style = WS_POPUPWINDOW | WS_CAPTION
+//     * extended_style = WS_EX_DLGMODALFRAME | WS_EX_TOPMOST
+//     */
+//  }
+
 void messageThreadProc() {
-  std::cout << "Started UI Thread" << std::endl;
+  syncLog([] { std::cout << "Started UI Thread" << std::endl; });
 
   // MessageBoxW(nullptr, L"Hello, World!", L"Aether-Vk", MB_OK);
   // return 0;
@@ -191,46 +216,49 @@ void messageThreadProc() {
   }
 }
 
-void frameProducer(avk::Scheduler* sched, HWND hMainWindow, int frames,
-                   int chunksPerFrame) {
+void frameProducer(avk::Scheduler* sched, [[maybe_unused]] HWND hMainWindow,
+                   int jobBufferSize) {
   std::cout << "Started Render Thread" << std::endl;
   auto* p = new Payload();
-  avk::Job* phys = new avk::Job[chunksPerFrame]();
-  avk::Job* render = new avk::Job[chunksPerFrame]();
-  for (int f = 0; f < frames && !g_quit.load(); ++f) {
-    std::cout << "FFFFFFStarted Render Thread" << std::endl;
+  avk::Job* phys = new avk::Job[jobBufferSize]();
+  avk::Job* render = new avk::Job[jobBufferSize]();
+  uint32_t jobIdx = 0;
+  while (!g_quit.load()) {
+    uint32_t const nextJobIdx = (jobIdx + 1) % jobBufferSize;
+    uint32_t const prevJobIdx = jobIdx == 0 ? 0 : jobIdx - 1;
     // create payloads and submit jobs in a burst (simulates a frame)
-    for (int c = 0; c < chunksPerFrame; ++c) {
-      std::cout << "CCCCCCCCCCCCCCCCCCCCCCCCCCFFFFFFStarted Render Thread"
-                << std::endl;
-      p->value = f * 100 + c;
-      p->id = f * 1000 + c;
+    p->value = 100;
+    p->id = 1000;
 
-      AVK_JOB(&phys[c], physicsStep, p, avk::JobPriority::Medium,
-              "PhysicsChunk");
-      AVK_JOB(&render[c], physicsStep, p, avk::JobPriority::Low, "RenderPrep");
+    AVK_JOB(&phys[jobIdx], physicsStep, p, avk::JobPriority::Medium,
+            "PhysicsChunk");
+    AVK_JOB(&render[jobIdx], physicsStep, p, avk::JobPriority::Low,
+            "RenderPrep");
 
-      // render depends on physics
-      if (c != 0) {
-        phys[c].addDepencency(&phys[c - 1]);
-        render[c].addDepencency(&render[c - 1]);
-      }
-      render[c].addDepencency(&phys[c]);
-
-      // submit bot (only the top of the DAG)
-      std::cout << "[RT] Work" << std::endl;
-      sched->submitTask(&phys[c]);
-      sched->submitTask(&render[c]);
+    // render depends on physics
+    if (jobIdx != 0) {
+      phys[jobIdx].addDepencency(&phys[prevJobIdx - 1]);
+      // unless you recycle stuff from the previous frame, this is not necessary
+      // render[jobIdx].addDepencency(&render[prevJobIdx]);
     }
-    sched->waitFor(&render[chunksPerFrame - 1]);
-    // throttle frame rate a bit
-    PostMessageW(hMainWindow, WM_APP, 0, 0);
-  }
+    render[jobIdx].addDepencency(&phys[jobIdx]);
 
-  // signal quit after producing frmes
+    // submit bot (only the top of the DAG)
+    sched->safeSubmitTask(&phys[jobIdx]);
+    sched->safeSubmitTask(&render[jobIdx]);
+
+    if (nextJobIdx < jobIdx) {
+      sched->waitFor(&render[nextJobIdx]);
+      // we'll recycle the job objects in the next loop iteration, therefore you
+      // need to be sure that the job mutex is not locked somewhere for any job!
+      // WARNING: Assuming continuations are zeroed out, remaining dependencies
+      // are at 0
+    }
+  }
+  sched->waitUntilAllTasksDone();
+
   delete[] phys;
   delete[] render;
-  PostMessageW(hMainWindow, WM_QUIT, 0, 0);
 }
 
 static LRESULT standardWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
@@ -248,7 +276,7 @@ static LRESULT standardWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
       return 0;
 
     case WM_APP:  // custom message from worker threads
-      InvalidateRect(hWnd, nullptr, TRUE);
+      // InvalidateRect(hWnd, nullptr, TRUE);
       return 0;
 
     // if you don't use WS_THICKFRAME, then you need to implement your own logic
@@ -410,10 +438,8 @@ int WINAPI wWinMain([[maybe_unused]] HINSTANCE hInstance,
   }
 
   // frame producer on its own thread (could be main thread in real app)
-  const int framesToProduce = 120;
   const int chunksPerFrame = 8;
-  std::thread producer(frameProducer, &sched, g_window.load(), framesToProduce,
-                       chunksPerFrame);
+  std::thread producer(frameProducer, &sched, g_window.load(), chunksPerFrame);
 
   producer.join();
   sched.waitUntilAllTasksDone();

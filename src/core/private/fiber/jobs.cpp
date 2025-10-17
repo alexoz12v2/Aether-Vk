@@ -3,6 +3,8 @@
 #include <atomic>
 #include <boost/fiber/operations.hpp>
 #include <mutex>
+#include <shared_mutex>
+#include <vector>
 
 namespace avk {
 Job::Job(size_t initialCap) : m_continuations() {
@@ -10,8 +12,48 @@ Job::Job(size_t initialCap) : m_continuations() {
 }
 
 void Job::addDepencency(Job* job) {
-  job->m_continuations.push_back(this);
+  {
+    std::unique_lock<std::shared_mutex> ul(m_continuationsMutex);
+    job->m_continuations.push_back(this);
+  }
+
   m_remainingDependencies.fetch_add(1, std::memory_order_acq_rel);
+}
+
+void Job::reset() {
+  // 1) Ensure exclusive access to continuations, waiting for any readers to
+  // finish.
+  {
+    std::unique_lock<std::shared_mutex> ul(m_continuationsMutex);
+    // safe to clear now — no readers running that depend on previous storage
+    m_continuations.clear();
+    // after clear, leave this scope to release the shared_mutex
+  }
+
+  // 2) Reset dependency & done state under done-mutex (not strictly required to
+  // hold both
+  //    locks simultaneously, but we ensure done state changes are
+  //    synchronized).
+  {
+    std::lock_guard<std::mutex> lk(m_doneMutex);
+    // Ensure no dangling waiters: notify any possible waiters that job is
+    // 'done' (This mirrors behavior of waitFor; caller should normally
+    // guarantee they waited).
+    m_done.store(true, std::memory_order_release);
+    m_doneCV.notify_all();
+
+    // Now set to fresh state for reuse
+    m_done.store(false, std::memory_order_relaxed);
+    m_remainingDependencies.store(0, std::memory_order_relaxed);
+  }
+
+  // 3) Reset public fields (safe now)
+  fn = nullptr;
+  data = nullptr;
+  priority = JobPriority::Medium;
+#ifdef AVK_DEBUG
+  debugName.clear();
+#endif
 }
 
 // ------------------------ Scheduler -----------------------------------------
@@ -46,10 +88,26 @@ void Scheduler::shutdown() {
   m_threads.clear();
 }
 
-void Scheduler::submitTask(Job* task) {
+bool Scheduler::trySubmitTask(Job* task) {
   // push only if no deps
   if (task->m_remainingDependencies.load(std::memory_order_acquire) == 0) {
-    pushTask(task, task->priority);
+    return pushTask(task, task->priority);
+  }
+  return false;
+}
+
+void Scheduler::safeSubmitTask(Job* task) {
+  bool const isFiber =
+      boost::this_fiber::get_id() != boost::fibers::fiber::id();
+  if (task &&
+      task->m_remainingDependencies.load(std::memory_order_acquire) == 0) {
+    while (!pushTask(task, task->priority)) {
+      if (isFiber) {
+        boost::this_fiber::yield();
+      } else {
+        std::this_thread::yield();
+      }
+    }
   }
 }
 
@@ -58,25 +116,13 @@ void Scheduler::waitUntilAllTasksDone() {
   m_doneCV.wait(lk, [this]() { return m_inflightTasks.load() == 0; });
 }
 
-void Scheduler::pushTask(Job* task, JobPriority prio) {
-  std::cout << "------------------------------------------------" << std::endl;
+bool Scheduler::pushTask(Job* task, JobPriority prio) {
   if (task && task != reinterpret_cast<Job*>(Sentinel)) {
     m_inflightTasks.fetch_add(1, std::memory_order_acq_rel);
+    const size_t idx = static_cast<size_t>(prio);
+    return m_queues[idx]->push(task);
   }
-  std::cout << "+++++++++++++++++++++++++++++++++++++++++++++++++" << std::endl;
-
-  const size_t idx = static_cast<size_t>(prio);
-  // Keep trying until push succeeds; avoid busy spin by yielding
-  while (true) {
-  std::cout << "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" << std::endl;
-    if (m_queues[idx]->push(task)) {
-      std::cout << "[pushTask] pushed task=" << task << " prio=" << idx
-                << " inflight=" << m_inflightTasks.load() << std::endl;
-      return;
-    }
-    // queue full — yield CPU to other threads/fibers
-    std::this_thread::yield();
-  }
+  return false;
 }
 
 Job* Scheduler::popTask() {
@@ -98,13 +144,7 @@ void Scheduler::workerMain() {
   std::vector<boost::fibers::fiber> localFibers;
   localFibers.reserve(fibersPerWorker);
 
-  std::cout << "worker thread=" << std::this_thread::get_id()
-            << " totalFibers=" << m_totalFibers
-            << " workerCount=" << m_workerCount << std::endl;
-
   for (size_t f = 0; f < fibersPerWorker; ++f) {
-    std::cout << "[fiber] created on thread " << std::this_thread::get_id()
-              << std::endl;
     localFibers.emplace_back([this] { fiberLoop(); });
   }
 
@@ -138,6 +178,9 @@ void Scheduler::waitFor(Job* job) {
 }
 
 void Scheduler::fiberLoop() {
+  std::vector<Job*> copy;
+  copy.reserve(64);
+
   while (true) {
     Job* task = popTask();
     if (!task) {
@@ -160,15 +203,25 @@ void Scheduler::fiberLoop() {
     }
 
     // trigger continuation jobs
-    for (auto* cont : task->m_continuations) {
-      // fetch_sub returns the previous value; if previous == 1 then we became
-      // zero now.
-      int prev =
-          cont->m_remainingDependencies.fetch_sub(1, std::memory_order_acq_rel);
-      if (prev == 1) {
-        // now zero -> ready to run
-        pushTask(cont, cont->priority);
+    {
+      std::shared_lock<std::shared_mutex> sl(task->m_continuationsMutex);
+      if (!task->m_continuations.empty()) {
+        copy = task->m_continuations;
       }
+    }
+
+    if (!copy.empty()) {
+      for (auto* cont : copy) {
+        // fetch_sub returns the previous value; if previous == 1 then we became
+        // zero now.
+        int prev = cont->m_remainingDependencies.fetch_sub(
+            1, std::memory_order_acq_rel);
+        if (prev == 1) {
+          // now zero -> ready to run
+          pushTask(cont, cont->priority);
+        }
+      }
+      copy.clear();
     }
 
     if (m_inflightTasks.fetch_sub(1, std::memory_order_acq_rel) == 1) {
