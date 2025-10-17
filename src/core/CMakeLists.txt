@@ -33,7 +33,7 @@ target_compile_definitions(avk-core
     "AVK_OS_${AVK_OS}" "AVK_COMPILER_${AVK_COMPILER}" "AVK_ARCH_${AVK_ARCH}" "AVK_${AVK_BUILD_FRAGMENT}"
     "UNICODE" "WIN32_LEAN_AND_MEAN" "NOMINMAX")
 target_compile_options(avk-core PUBLIC ${AVK_CXX_TARGET_COMPILE_FLAGS})
-target_link_libraries(avk-core PUBLIC Boost::fiber)
+target_link_libraries(avk-core PUBLIC Boost::fiber Vulkan::Vulkan)
 target_sources(avk-core
   PUBLIC FILE_SET avk_core_headers TYPE HEADERS BASE_DIRS public/ FILES
     public/fiber/mpmc.h public/fiber/jobs.h
