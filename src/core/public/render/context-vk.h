@@ -1,5 +1,10 @@
 #pragma once
 
+#include <functional>
+#include <map>
+#include <mutex>
+#include <type_traits>
+
 #ifdef AVK_OS_WINDOWS
 #define VK_USE_PLATFORM_WIN32_KHR
 #elif defined(AVK_OS_MACOS)  // TODO: also iOS and iPadOS
@@ -16,6 +21,9 @@
 #error "ADD SUPPORT"
 #endif
 
+#define VK_NO_PROTOTYPES
+#include <Volk/volk.h>
+#include <vma/vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
@@ -23,6 +31,7 @@
 #include <memory>
 #include <string_view>
 #include <vector>
+
 
 #ifdef AVK_OS_WINDOWS
 #include <WinDef.h>
@@ -36,6 +45,8 @@
 #error "ADD SUPPORT"
 #endif
 
+struct VmaVulkanFunctions;
+
 namespace avk {
 
 struct WindowHDRInfo {
@@ -48,6 +59,7 @@ struct WindowHDRInfo {
 struct ContextVkParams {
   // TODO add more
   WindowHDRInfo hdrInfo;
+  bool useHDR = false;
 #ifdef AVK_OS_WINDOWS
   HWND window;
 #elif defined(AVK_OS_MACOS)
@@ -162,10 +174,6 @@ struct SwapchainDataVk {
   VkImage image = VK_NULL_HANDLE;
   // format of the swapchain
   VkSurfaceFormatKHR format = {};
-  // color space of the swapchain
-  VkColorSpaceKHR colorSpace = {};
-  // presentation mode of the swapchain
-  VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
   // resolution of the image
   VkExtent2D extent = {};
   // semaphore to wait before updating the image
@@ -175,11 +183,7 @@ struct SwapchainDataVk {
   // Fence to signal after the image has been updated
   VkFence submissionFence = VK_NULL_HANDLE;
   // factor to scale SDR content on HDR display
-  float sdrWhiteLevel = 0.0f;
-};
-
-struct InstanceVkExtensionTable {
-  // TODO add extension specific function pointers which need to be cached
+  float sdrWhiteLevel = 1.0f;
 };
 
 struct InstanceVk {
@@ -188,26 +192,19 @@ struct InstanceVk {
   VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
 #endif
   Extensions extensions;
-  std::unique_ptr<InstanceVkExtensionTable> extensionTable = nullptr;
-};
-
-struct DeviceVkExtensionTable {
-  // TODO add extension specific function pointers which need to be cached
-  PFN_vkCreateSwapchainKHR vkCreateSwapchainKHR = nullptr;
-  PFN_vkDestroySwapchainKHR vkDestroySwapchainKHR = nullptr;
-  PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR vkGetPhysicalDeviceSurfaceCapabilities2KHR = nullptr;
-  PFN_vkGetPhysicalDeviceSurfacePresentModesKHR vkGetPhysicalDeviceSurfacePresentModesKHR = nullptr;
 };
 
 struct DeviceVk {
   static uint32_t constexpr InvalidQueueFamilyIndex = UINT32_MAX;
   static uint32_t constexpr QueueFamilyIndicesCount = 4;
 
+  VmaAllocator vmaAllocator = VK_NULL_HANDLE;
+  std::mutex queueMutex;
+
   VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
   VkDevice device = VK_NULL_HANDLE;
   Extensions extensions;
   std::unique_ptr<DevicePropertiesFeatures> propertiesFeatures = nullptr;
-  std::unique_ptr<DeviceVkExtensionTable> extensionTable = nullptr;
 
   // Vulkan specification mandates that at least one queue family must support
   // graphics and compute
@@ -232,6 +229,43 @@ struct DeviceVk {
 
   // some bools for optional device extensions
   bool extSwapchainMaintenance1 = false;
+  bool extSwapchainColorspace = false;
+};
+
+// discard mechanism inspired by blender's GHOST
+struct FrameDiscard {
+  std::vector<VkSwapchainKHR> swapchains;
+  std::vector<VkSemaphore> semaphores;
+
+  FrameDiscard() {
+    swapchains.reserve(16);
+    semaphores.reserve(16);
+  }
+
+  void destroy(DeviceVk const& device);
+};
+
+// A command pool needs to be created per frame per thread
+struct Frame {
+  // TODO: multiple frames in flight support
+  // fence signaled when previous use of the frame has finished rendering,
+  // meaning we can acquire a new image and semaphores can be reused
+  VkFence submissionFence = VK_NULL_HANDLE;
+  // semaphore to acquire a image. being signaled when image is ready to be
+  // updated
+  VkSemaphore acquireSemaphore = VK_NULL_HANDLE;
+
+  FrameDiscard discard;
+
+  void destroy(DeviceVk const& device);
+};
+
+struct SwapchainImage {
+  VkImage image = VK_NULL_HANDLE;
+  // signaled when image is ready to be presented
+  VkSemaphore presentSemaphore = VK_NULL_HANDLE;
+
+  void destroy(DeviceVk const& device);
 };
 
 class ContextVk {
@@ -246,6 +280,15 @@ class ContextVk {
   ContextResult initializeDrawingContext();
   ContextResult recreateSwapchain(bool useHDR);
 
+  VkFence getFence();
+  ContextResult swapBufferRelease();
+  ContextResult swapBufferAcquire();
+  void setSwapBufferCallbacks(
+      std::function<void(const SwapchainDataVk*)> drawCallback,
+      std::function<void(void)> acquireCallback);
+
+  inline VmaAllocator getAllocator() const { return m_vmaAllocator; }
+
  private:
   bool initInstanceExtensions();
   bool createInstance(uint32_t vulkanApiVersion);
@@ -257,6 +300,14 @@ class ContextVk {
   bool selectPhysicalDevice(
       std::vector<std::string_view> const& requiredExtensions);
   bool createDevice(std::vector<std::string_view> const& requiredExtensions);
+
+  bool initializeFrameData();
+  void destroySwapchainPresentFences(VkSwapchainKHR swapchain);
+  bool destroySwapchain();
+
+  void setPresentFence(VkSwapchainKHR swapchain, VkFence presentFence);
+
+  static uint32_t constexpr InvalidSwapchainImageIndex = UINT32_MAX;
 
 #ifdef AVK_OS_WINDOWS
   HWND m_hWindow;
@@ -273,11 +324,30 @@ class ContextVk {
   // Instance level data
   InstanceVk m_instance;
   DeviceVk m_device;
+  VmaVulkanFunctions* m_vmaVulkanFunctions = nullptr;
+  VmaAllocator m_vmaAllocator;
 
   // Display data
   VkSurfaceKHR m_surface = VK_NULL_HANDLE;
   VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
-  SwapchainDataVk m_swapchainData;
+  std::vector<Frame> m_frameData;
+  std::vector<SwapchainImage> m_swapchainImages;
+  std::vector<VkImage> m_vkImages;  // temp storage for swapchain images
+  uint32_t m_acquiredSwapchainImageIndex = InvalidSwapchainImageIndex;
+  std::unique_ptr<WindowHDRInfo> m_hdrInfo = nullptr;
+  bool m_hdrEnabled;
+  VkExtent2D m_currentExtent;
+  VkSurfaceFormatKHR m_surfaceFormat;
+
+  // callbacks to customize rendering procedure
+  std::function<void(const SwapchainDataVk*)> m_swapBufferDrawCallback;
+  std::function<void(void)> m_swapBufferAcquiredCallback;
+
+  std::map<VkSwapchainKHR, std::vector<VkFence>> m_presentFences;
+  std::vector<VkFence> m_fencePile;
+
+  uint64_t m_renderFrame = 0;
+  uint64_t m_imageCount = 0;
 };
 
 }  // namespace avk
