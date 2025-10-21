@@ -36,9 +36,11 @@ target_compile_options(avk-core PUBLIC ${AVK_CXX_TARGET_COMPILE_FLAGS})
 target_link_libraries(avk-core PUBLIC Boost::fiber Vulkan::Vulkan)
 target_sources(avk-core
   PUBLIC FILE_SET avk_core_headers TYPE HEADERS BASE_DIRS public/ FILES
-    public/fiber/mpmc.h public/fiber/jobs.h
+    public/fiber/mpmc.h public/fiber/jobs.h 
+    public/render/context-vk.h public/render/pipeline-vk.h public/render/utils-vk.h
   PRIVATE
     private/fiber/jobs.cpp
+    private/render/context-vk.cpp private/render/pipeline-vk.cpp private/render/utils-vk.cpp
 )
 
 target_include_directories(avk-core
