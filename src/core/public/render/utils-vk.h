@@ -6,6 +6,9 @@
 #include <vector>
 
 #include "render/context-vk.h"
+#include "utils/mixins.h"
+
+// TODO: split all classes here in different files
 
 namespace avk {
 
@@ -52,9 +55,11 @@ class DescriptorPoolsVk {
 // invariant: timeline values should always be sorted (except for wrap around)
 template <typename Item>
 class TimelineResources : public std::vector<std::pair<uint64_t, Item>> {
+  using Base = std::vector<std::pair<uint64_t, Item>>;
+
  public:
   void appendTimeline(uint64_t timeline, Item item) {
-    append(std::make_pair(timeline, item));
+    Base::emplace_back(timeline, item);
   }
 
   void updateTimeline(uint64_t timeline) {
@@ -76,7 +81,7 @@ class TimelineResources : public std::vector<std::pair<uint64_t, Item>> {
     }
 
     if (firstIndexToKeep > 0) {
-      erase(begin(), begin() + firstIndexToKeep);
+      Base::erase(Base::begin(), Base::begin() + firstIndexToKeep);
     }
   }
 };
@@ -114,5 +119,84 @@ class DiscardPoolVk {
   std::mutex m_mutex;
   uint64_t m_timeline = UINT64_MAX;
 };
+
+class BufferVk : public NonCopyable {
+ public:
+  BufferVk() = default;
+#ifdef AVK_DEBUG
+  ~BufferVk() noexcept;
+#endif
+
+  inline VkBuffer buffer() const { return m_buffer; }
+
+  inline bool isAllocated() const {
+    return m_buffer != VK_NULL_HANDLE && m_allocation != VK_NULL_HANDLE;
+  }
+  inline bool isMapped() const { return m_mappedMemory != nullptr; }
+
+  // TODO see if export memory is worth it
+  bool create(ContextVk const& context, size_t size, VkBufferUsageFlags usage,
+              VkMemoryPropertyFlags requiredFlags,
+              VkMemoryPropertyFlags preferredFlags,
+              VmaAllocationCreateFlags vmaAllocFlags, float priority,
+              bool exportMemory, uint32_t queueFamilyCount,
+              uint32_t* queueFamilies);
+  void updateImmediately(void const* data) const;
+  void updateSubImmediately(size_t startOffset, size_t size,
+                            void const* data) const;
+  void flush(ContextVk const& context) const;
+  void flushToHostAsync(ContextVk const& context);
+  void readSync(ContextVk const& context, void* data) const;
+  void readAsync(ContextVk const& context, void* data);
+
+  VkDeviceMemory getExportMemory(ContextVk const& context, size_t& memorySize);
+
+  bool map(ContextVk const& context);
+  void unmap(ContextVk const& context);
+
+  // WARNING: necessary to be called before going out of scope
+  void free(ContextVk const& context, DiscardPoolVk& discardPool);
+  void freeImmediately(ContextVk const& context);
+
+ private:
+  size_t m_bytes = 0;
+  size_t m_allocBytes = 0;
+  VkBuffer m_buffer = VK_NULL_HANDLE;
+  VmaAllocation m_allocation = VK_NULL_HANDLE;
+  VkMemoryPropertyFlags m_memoryPropertyFlags = 0;
+  uint64_t m_asyncTimeline = 0;
+
+  // previous allocation failed: will skip reallocations
+  bool m_allocationFailed = false;
+
+  // pointer to device mapped memory
+  void* m_mappedMemory = nullptr;
+
+  // TODO requires feature/extension
+  VkDeviceAddress m_deviceAddress = 0;
+};
+
+// TODO remove in favour of a class supporting image samplers, push constants,
+// descriptor sets and specialization constants
+// plus, write a shader library and analysis on SPIR-V
+VkShaderModule finalizeShaderModule(ContextVk const& context,
+                                    uint32_t const* pCode, size_t codeSize);
+
+// TODO organize in a better way (maybe in context?)
+VkFormat basicDepthStencilFormat(VkPhysicalDevice physicalDevice);
+
+// TODO organize in a better way
+// TODO now it supports GPU local image only
+// https://gpuopen-librariesandsdks.github.io/VulkanMemoryAllocator/html/usage_patterns.html
+struct SingleImage2DSpecVk {
+  uint32_t width;
+  uint32_t height;
+  VkFormat format;
+  VkImageTiling imageTiling;
+  VkImageUsageFlags usage;
+  VkSampleCountFlagBits samples;
+};
+bool createImage(ContextVk const& context, SingleImage2DSpecVk const& spec,
+                 VkImage& image, VmaAllocation& allocation);
 
 }  // namespace avk

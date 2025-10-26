@@ -27,6 +27,16 @@ endif()
 
 install(TARGETS avk-test-fibers FILE_SET avk_text_fibers_headers)
 
+# Automatically collect headers and sources
+file(GLOB_RECURSE AVK_CORE_PUBLIC_HEADERS CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/public/*.h"
+  "${CMAKE_CURRENT_SOURCE_DIR}/public/*.hpp"
+)
+file(GLOB_RECURSE AVK_CORE_PRIVATE_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/private/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/private/*.cxx"
+)
+
 add_library(avk-core)
 target_compile_definitions(avk-core 
   PRIVATE 
@@ -36,11 +46,9 @@ target_compile_options(avk-core PUBLIC ${AVK_CXX_TARGET_COMPILE_FLAGS})
 target_link_libraries(avk-core PUBLIC Boost::fiber Vulkan::Vulkan)
 target_sources(avk-core
   PUBLIC FILE_SET avk_core_headers TYPE HEADERS BASE_DIRS public/ FILES
-    public/fiber/mpmc.h public/fiber/jobs.h 
-    public/render/context-vk.h public/render/pipeline-vk.h public/render/utils-vk.h
+    ${AVK_CORE_PUBLIC_HEADERS}
   PRIVATE
-    private/fiber/jobs.cpp
-    private/render/context-vk.cpp private/render/pipeline-vk.cpp private/render/utils-vk.cpp
+    ${AVK_CORE_PRIVATE_SOURCES}
 )
 
 target_include_directories(avk-core

@@ -1,7 +1,11 @@
 #include "render/utils-vk.h"
 
 #include <cassert>
+#include <iostream>
 #include <mutex>
+
+#include "render/context-vk.h"
+#include "utils/bits.h"
 
 namespace avk {
 
@@ -209,6 +213,260 @@ void DiscardPoolVk::destroyDiscardedResources(DeviceVk const& device,
       [&](std::pair<VkDescriptorPool, DescriptorPoolsVk*> const& pair) {
         pair.second->recycle(device, pair.first);
       });
+}
+
+// ----------------- BufferVk --------------------------------
+
+#ifdef AVK_DEBUG
+BufferVk::~BufferVk() noexcept {
+  // externally managed (free requires context)
+  // actually move should be fine since VK_NULL_HANDLE
+  if (!isAllocated()) {
+    // TODO add object tag
+    std::cerr << "Buffer Not Deallocated " << this
+              << ", (if this is caused by a move constructor/assignment, this "
+                 "is fine)"
+              << std::endl;
+  }
+}
+#endif
+
+bool BufferVk::create(ContextVk const& context, size_t size,
+                      VkBufferUsageFlags usage,
+                      VkMemoryPropertyFlags requiredFlags,
+                      VkMemoryPropertyFlags preferredFlags,
+                      VmaAllocationCreateFlags vmaAllocFlags, float priority,
+                      bool exportMemory, uint32_t queueFamilyCount,
+                      uint32_t* queueFamilies) {
+  assert(!isAllocated() && !isMapped());
+  if (m_allocationFailed) {
+    return false;
+  }
+
+  bool const share = queueFamilyCount > 1 && queueFamilies;
+
+  m_bytes = size;
+  // go to next multiple of 16 bytes
+  m_allocBytes = nextMultipleOf<16>(size);
+  // TODO: if maintenance4 extension active, check maxBufferSize
+  // TODO if uage is VK_BUFFER_USAGE_VIDEO_DECODE or encode, you need a
+  // VkVideoProfileList
+
+  // core from 1.1 https://docs.vulkan.org/guide/latest/extensions/external.html
+  VkExternalMemoryBufferCreateInfo externalInfo{};
+  externalInfo.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
+
+  VmaAllocator allocator = context.getAllocator();
+  VkBufferCreateInfo createInfo{};
+  createInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  createInfo.flags = 0;
+  createInfo.size = m_allocBytes;
+  createInfo.usage = usage;
+  // needed if buffer accessed in different queues
+  createInfo.sharingMode =
+      share ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
+  if (share) {
+    createInfo.queueFamilyIndexCount = queueFamilyCount;
+    createInfo.pQueueFamilyIndices = queueFamilies;
+  }
+
+  VmaAllocationCreateInfo allocCreateInfo{};
+  allocCreateInfo.flags = vmaAllocFlags;
+  allocCreateInfo.priority = priority;
+  allocCreateInfo.requiredFlags = requiredFlags;
+  allocCreateInfo.preferredFlags = preferredFlags;
+  allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+
+  // External Memory -> Either External Image or Pixel Buffer
+  // this is a buffer -> pixel buffer pool
+  if (exportMemory) {
+    externalInfo.handleTypes = externalMemoryVkFlags();
+    createInfo.pNext = &externalInfo;  // TODO
+
+    // dedicated allocation to ensure zero offset
+    allocCreateInfo.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+    // TODO create a external memory VmaPool per deivce
+    // allocCreateInfo.pool
+  }
+
+  bool const useDescriptorBuffer = context.device().extensions.isEnabled(
+      VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME);
+  if (useDescriptorBuffer) {
+    createInfo.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+  }
+
+  VkResult result = vmaCreateBuffer(allocator, &createInfo, &allocCreateInfo,
+                                    &m_buffer, &m_allocation, nullptr);
+  if (result != VK_SUCCESS) {
+    m_allocationFailed = true;
+    m_bytes = 0;
+    m_allocBytes = 0;
+    return false;
+  }
+
+  // TODO add buffer to tracked resources of the device
+  if (useDescriptorBuffer) {
+    VkBufferDeviceAddressInfo bufferDeviceAddrInfo{};
+    bufferDeviceAddrInfo.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+    bufferDeviceAddrInfo.buffer = m_buffer;
+    m_deviceAddress = vkGetBufferDeviceAddress(context.device().device,
+                                               &bufferDeviceAddrInfo);
+  }
+
+  vmaGetAllocationMemoryProperties(allocator, m_allocation,
+                                   &m_memoryPropertyFlags);
+  if (m_memoryPropertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+    return map(context);
+  }
+
+  return true;
+}
+
+void BufferVk::updateImmediately(void const* data) const {
+  updateSubImmediately(0, m_bytes, data);
+}
+
+void BufferVk::updateSubImmediately(size_t startOffset, size_t size,
+                                    void const* data) const {
+  assert(isMapped() && isAllocated());
+  memcpy(static_cast<uint8_t*>(m_mappedMemory) + startOffset, data, size);
+}
+
+void BufferVk::flush(ContextVk const& context) const {
+  vmaFlushAllocation(context.getAllocator(), m_allocation, 0, m_bytes);
+}
+
+void BufferVk::flushToHostAsync([[maybe_unused]] ContextVk const& context) {
+  assert(m_asyncTimeline == 0);
+  // TODO wait for rendering end
+  // TODO set current async timeline
+}
+
+void BufferVk::readSync([[maybe_unused]] ContextVk const& context,
+                        void* data) const {
+  assert(isMapped());
+  assert(m_asyncTimeline == 0);
+  // TODO: wait rendering end if context is rendering
+  memcpy(data, m_mappedMemory, m_bytes);
+}
+
+void BufferVk::readAsync(ContextVk const& context, void* data) {
+  assert(isMapped());
+  if (m_asyncTimeline == 0) {
+    flushToHostAsync(context);
+  }
+  // TODO wait for timeline
+  m_asyncTimeline = 0;
+  memcpy(data, m_mappedMemory, m_bytes);
+}
+
+void BufferVk::free(ContextVk const& context, DiscardPoolVk& discardPool) {
+  if (isMapped()) {
+    unmap(context);
+  }
+  discardPool.discardBuffer(m_buffer, m_allocation);
+  m_allocation = VK_NULL_HANDLE;
+  m_buffer = VK_NULL_HANDLE;
+}
+
+void BufferVk::freeImmediately(ContextVk const& context) {
+  assert(isAllocated());
+  if (isMapped()) {
+    unmap(context);
+  }
+  // TODO remove from resource tracker if inserted in device context
+  vmaDestroyBuffer(context.getAllocator(), m_buffer, m_allocation);
+  m_buffer = VK_NULL_HANDLE;
+  m_allocation = VK_NULL_HANDLE;
+}
+
+VkDeviceMemory BufferVk::getExportMemory(ContextVk const& context,
+                                         size_t& memorySize) {
+  assert(isAllocated());
+  VmaAllocationInfo info = {};
+  vmaGetAllocationInfo(context.getAllocator(), m_allocation, &info);
+  // VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT ensures 0 offset
+  if (info.offset == 0) {
+    assert(false &&
+           "Failed to get zero offset export memory for vulkan buffer");
+    return nullptr;
+  }
+  memorySize = info.size;
+  return info.deviceMemory;
+}
+
+bool BufferVk::map(ContextVk const& context) {
+  assert(!isMapped() && isAllocated());
+  VkResult const res =
+      vmaMapMemory(context.getAllocator(), m_allocation, &m_mappedMemory);
+  return res == VK_SUCCESS;
+}
+
+void BufferVk::unmap(ContextVk const& context) {
+  assert(isMapped() && isAllocated());
+  vmaUnmapMemory(context.getAllocator(), m_allocation);
+  m_mappedMemory = nullptr;
+}
+
+VkShaderModule finalizeShaderModule(ContextVk const& context,
+                                    uint32_t const* pCode, size_t codeSize) {
+  VkShaderModuleCreateInfo createInfo{};
+  createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  createInfo.pCode = pCode;
+  createInfo.codeSize = codeSize;
+  VkShaderModule shaderModule = VK_NULL_HANDLE;
+  vkCheck(vkCreateShaderModule(context.device().device, &createInfo, nullptr,
+                               &shaderModule));
+  return shaderModule;
+}
+
+VkFormat basicDepthStencilFormat(VkPhysicalDevice physicalDevice) {
+  // assuming we want VK_IMAGE_TILING_OPTIMAL and not linear
+  VkFormatProperties formatProperties{};
+  // at least one of D24/S8 or D32/S8 are supported per specification
+  vkGetPhysicalDeviceFormatProperties(
+      physicalDevice, VK_FORMAT_D24_UNORM_S8_UINT, &formatProperties);
+  if (formatProperties.optimalTilingFeatures &
+      VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+    return VK_FORMAT_D24_UNORM_S8_UINT;
+  }
+  vkGetPhysicalDeviceFormatProperties(
+      physicalDevice, VK_FORMAT_D32_SFLOAT_S8_UINT, &formatProperties);
+  if (formatProperties.optimalTilingFeatures &
+      VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+    return VK_FORMAT_D32_SFLOAT_S8_UINT;
+  }
+  // unreachable
+  return VK_FORMAT_UNDEFINED;
+}
+
+bool createImage(ContextVk const& context, SingleImage2DSpecVk const& spec,
+                 VkImage& image, VmaAllocation& allocation) {
+  VkImageCreateInfo createInfo{};
+  createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  createInfo.imageType = VK_IMAGE_TYPE_2D;
+  createInfo.extent.width = spec.width;
+  createInfo.extent.height = spec.height;
+  createInfo.extent.depth = 1;  // TODO + mips
+  createInfo.mipLevels = 1;
+  createInfo.arrayLayers = 1;
+  createInfo.format = spec.format;
+  createInfo.tiling = spec.imageTiling;
+  createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  createInfo.usage = spec.usage;
+  createInfo.samples = spec.samples;
+
+  VmaAllocationCreateInfo allocInfo{};
+  allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+  // TODO better -> leave this for external memory only
+  allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+  allocInfo.priority = 1.f;
+
+  if (VK_SUCCESS != vmaCreateImage(context.getAllocator(), &createInfo,
+                                   &allocInfo, &image, &allocation, nullptr)) {
+    return false;
+  }
+  return true;
 }
 
 }  // namespace avk

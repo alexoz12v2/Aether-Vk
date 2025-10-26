@@ -3,11 +3,12 @@
 #include <boost/fiber/all.hpp>
 #include <boost/fiber/operations.hpp>
 #include <condition_variable>
-#include <shared_mutex>
 #include <mutex>
+#include <shared_mutex>
 #include <thread>
 
 #include "fiber/mpmc.h"
+
 
 namespace avk {
 
@@ -17,7 +18,7 @@ struct Job {
   friend class Scheduler;
 
  public:
-  void (*fn)(void* data, std::string const& name) = nullptr;
+  void (*fn)(void* data, std::string const& name, uint32_t threadIndex, uint32_t fiberIndex) = nullptr;
   void* data = nullptr;
   JobPriority priority = JobPriority::Medium;
 #ifdef AVK_DEBUG
@@ -48,13 +49,16 @@ class Scheduler {
  public:
   Scheduler(size_t fiberCount, avk::MPMCQueue<Job*>* highP,
             avk::MPMCQueue<Job*>* medP, avk::MPMCQueue<Job*>* lowP,
-            unsigned workerCount = std::thread::hardware_concurrency());
+            uint32_t workerCount = std::thread::hardware_concurrency());
   ~Scheduler();
 
   void start();
   void shutdown();
   bool trySubmitTask(Job* task);
   void safeSubmitTask(Job* task);
+  inline uint32_t threadCount() const {
+    return static_cast<uint32_t>(m_threads.size());
+  }
 
 #ifdef AVK_DEBUG
   inline std::string getTaskName(Job* task) const {
@@ -72,8 +76,8 @@ class Scheduler {
  private:
   bool pushTask(Job* task, JobPriority prio);
   Job* popTask();
-  void workerMain();
-  void fiberLoop();
+  void workerMain(uint32_t threadIndex);
+  void fiberLoop(uint32_t threadIndex, uint32_t fiberIndex);
 
  private:
   size_t m_totalFibers;

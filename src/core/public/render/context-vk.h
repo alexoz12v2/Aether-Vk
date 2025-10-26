@@ -5,6 +5,8 @@
 #include <mutex>
 #include <type_traits>
 
+#include "utils/mixins.h"
+
 #ifdef AVK_OS_WINDOWS
 #define VK_USE_PLATFORM_WIN32_KHR
 #elif defined(AVK_OS_MACOS)  // TODO: also iOS and iPadOS
@@ -32,7 +34,6 @@
 #include <string_view>
 #include <vector>
 
-
 #ifdef AVK_OS_WINDOWS
 #include <WinDef.h>
 #elif defined(AVK_OS_MACOS)
@@ -49,6 +50,31 @@ struct VmaVulkanFunctions;
 
 namespace avk {
 
+inline bool vkCheck(VkResult res) {
+  if (res != ::VK_SUCCESS) {
+    // TODO
+    return false;
+  }
+  return true;
+}
+
+inline VkExternalMemoryHandleTypeFlagBits externalMemoryVkFlags() {
+#ifdef AVK_OS_WINDOWS
+  return VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+#elif AVK_OS_ANDROID
+  return VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT |
+         VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+#elif AVK_OS_MACOS
+  // TODO insert metal handles
+  return VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+#elif AVK_OS_LINUX
+  return VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT |
+         VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+#else
+  return 0;
+#endif
+}
+
 struct WindowHDRInfo {
   bool hdrEnabled = false;
   bool wideGamutEnabled = false;
@@ -61,7 +87,7 @@ struct ContextVkParams {
   WindowHDRInfo hdrInfo;
   bool useHDR = false;
 #ifdef AVK_OS_WINDOWS
-  HWND window;
+  HWND window = nullptr;
 #elif defined(AVK_OS_MACOS)
 #error "TODO"
 #elif defined(AVK_OS_ANDROID)
@@ -153,7 +179,21 @@ struct Extensions {
   inline bool enable(StrIt&& beg, StrIt&& end) {
     bool failure = false;
     for (auto it = beg; it != end; ++it) {
-      char const* name = *it;
+      const char* name = nullptr;
+      const auto& val = *it;
+
+      if constexpr (std::is_same_v<std::decay_t<decltype(val)>, const char*>) {
+        name = val;
+      } else if constexpr (std::is_same_v<std::decay_t<decltype(val)>,
+                                          std::string>) {
+        name = val.c_str();
+      } else if constexpr (std::is_same_v<std::decay_t<decltype(val)>,
+                                          std::string_view>) {
+        name = val.data();
+      } else {
+        static_assert(sizeof(val) == 0, "Unsupported string type");
+      }
+
       failure |= !enable(name);
     }
     return !failure;
@@ -184,6 +224,10 @@ struct SwapchainDataVk {
   VkFence submissionFence = VK_NULL_HANDLE;
   // factor to scale SDR content on HDR display
   float sdrWhiteLevel = 1.0f;
+  // index of current swapchain image
+  uint32_t imageIndex = 0;
+
+  inline operator bool() { return image != VK_NULL_HANDLE; }
 };
 
 struct InstanceVk {
@@ -194,7 +238,15 @@ struct InstanceVk {
   Extensions extensions;
 };
 
-struct DeviceVk {
+// TODO VmaMemoryPool for external memory for images and for external memory
+// for buffers
+
+struct DeviceVk : public NonCopyable {
+  DeviceVk() = default;
+  // rember to update these
+  DeviceVk(DeviceVk&&) noexcept;
+  DeviceVk& operator=(DeviceVk&&) noexcept;
+
   static uint32_t constexpr InvalidQueueFamilyIndex = UINT32_MAX;
   static uint32_t constexpr QueueFamilyIndicesCount = 4;
 
@@ -206,25 +258,31 @@ struct DeviceVk {
   Extensions extensions;
   std::unique_ptr<DevicePropertiesFeatures> propertiesFeatures = nullptr;
 
+  union Families {
+    struct FamiliesStruct {
+      uint32_t graphicsCompute;
+      uint32_t computeAsync;
+      uint32_t transfer;
+      uint32_t present;
+    } family;
+    uint32_t families[4];
+  } queueIndices;
+
   // Vulkan specification mandates that at least one queue family must support
   // graphics and compute
-  uint32_t graphicsComputeQueueFamily = InvalidQueueFamilyIndex;
   VkQueue graphicsComputeQueue = VK_NULL_HANDLE;
 
   // A compute, not graphics queue family signals that there's GPU hardware
   // which can work in parallel with a graphics/ray tracing pipeline on a
   // graphics queue family
-  uint32_t computeAsyncQueueFamily = InvalidQueueFamilyIndex;
   VkQueue computeAsyncQueue = VK_NULL_HANDLE;
 
   // Transfer only queue to separate transfer and computation/graphics work
-  uint32_t transferQueueFamily = InvalidQueueFamilyIndex;
   VkQueue transferQueue = VK_NULL_HANDLE;
 
   // presentation queue family, might be the same as graphicsComputeQueueFamily,
   // but we explicitly avoid using a compute only or transfer queue family for
   // presentation unless necessary
-  uint32_t presentQueueFamily = InvalidQueueFamilyIndex;
   VkQueue presentQueue = VK_NULL_HANDLE;
 
   // some bools for optional device extensions
@@ -246,7 +304,8 @@ struct FrameDiscard {
 };
 
 // A command pool needs to be created per frame per thread
-struct Frame {
+struct Frame : public NonCopyable {
+  Frame() = default;
   // TODO: multiple frames in flight support
   // fence signaled when previous use of the frame has finished rendering,
   // meaning we can acquire a new image and semaphores can be reused
@@ -268,13 +327,9 @@ struct SwapchainImage {
   void destroy(DeviceVk const& device);
 };
 
-class ContextVk {
+class ContextVk : public NonMoveable {
  public:
   ContextVk(ContextVkParams const& params);
-  ContextVk(ContextVk const&) = delete;
-  ContextVk(ContextVk&&) noexcept = delete;
-  ContextVk& operator=(ContextVk const&) = delete;
-  ContextVk& operator=(ContextVk&&) noexcept = delete;
   ~ContextVk() noexcept;
 
   ContextResult initializeDrawingContext();
@@ -285,9 +340,17 @@ class ContextVk {
   ContextResult swapBufferAcquire();
   void setSwapBufferCallbacks(
       std::function<void(const SwapchainDataVk*)> drawCallback,
-      std::function<void(void)> acquireCallback);
+      std::function<void(void)> acquireCallback,
+      std::function<void(VkImage const*, uint32_t, VkFormat, VkExtent2D)>
+          recreationCallback);
 
   inline VmaAllocator getAllocator() const { return m_vmaAllocator; }
+  inline InstanceVk const& instance() const { return m_instance; }
+  inline DeviceVk const& device() const { return m_device; }
+  inline InstanceVk& instance() { return m_instance; }
+  inline DeviceVk& device() { return m_device; }
+
+  SwapchainDataVk getSwapchainData() const;
 
  private:
   bool initInstanceExtensions();
@@ -342,6 +405,10 @@ class ContextVk {
   // callbacks to customize rendering procedure
   std::function<void(const SwapchainDataVk*)> m_swapBufferDrawCallback;
   std::function<void(void)> m_swapBufferAcquiredCallback;
+  std::function<void(VkImage const* /*images*/, uint32_t /*num images*/,
+                     VkFormat /*format*/, VkExtent2D /*image extent*/)>
+      m_swapchainRecreationCallback =
+          [](VkImage const*, uint32_t, VkFormat, VkExtent2D) {};
 
   std::map<VkSwapchainKHR, std::vector<VkFence>> m_presentFences;
   std::vector<VkFence> m_fencePile;

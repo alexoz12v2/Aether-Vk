@@ -22,3 +22,9 @@ if(AVK_OS STREQUAL "WINDOWS")
     COMMAND_EXPAND_LISTS
   )
 endif()
+
+add_custom_target(avk-copy-static-shaders ALL 
+  COMMAND ${CMAKE_COMMAND} -E copy ${avk_shader_file_list} ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_dependencies(avk-windows-launcher avk-copy-static-shaders)

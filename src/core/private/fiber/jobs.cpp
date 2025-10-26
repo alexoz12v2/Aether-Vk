@@ -60,7 +60,7 @@ void Job::reset() {
 
 Scheduler::Scheduler(size_t fiberCount, avk::MPMCQueue<Job*>* highP,
                      avk::MPMCQueue<Job*>* medP, avk::MPMCQueue<Job*>* lowP,
-                     unsigned workerCount)
+                     uint32_t workerCount)
     : m_totalFibers(fiberCount),
       m_workerCount(workerCount ? workerCount : 1),
       m_shutdownRequest(false) {
@@ -72,8 +72,8 @@ Scheduler::Scheduler(size_t fiberCount, avk::MPMCQueue<Job*>* highP,
 Scheduler::~Scheduler() { shutdown(); }
 
 void Scheduler::start() {
-  for (unsigned i = 0; i < m_workerCount; ++i) {
-    m_threads.emplace_back([this]() { workerMain(); });
+  for (uint32_t i = 0; i < m_workerCount; ++i) {
+    m_threads.emplace_back([this, i]() { workerMain(i); });
   }
 }
 
@@ -136,7 +136,7 @@ Job* Scheduler::popTask() {
   return nullptr;
 }
 
-void Scheduler::workerMain() {
+void Scheduler::workerMain(uint32_t threadIndex) {
   boost::fibers::use_scheduling_algorithm<boost::fibers::algo::round_robin>();
   size_t fibersPerWorker = m_totalFibers / m_workerCount;
   if (fibersPerWorker == 0) fibersPerWorker = 1;
@@ -145,7 +145,7 @@ void Scheduler::workerMain() {
   localFibers.reserve(fibersPerWorker);
 
   for (size_t f = 0; f < fibersPerWorker; ++f) {
-    localFibers.emplace_back([this] { fiberLoop(); });
+    localFibers.emplace_back([this, threadIndex, f] { fiberLoop(threadIndex, f); });
   }
 
   while (!m_shutdownRequest.load(std::memory_order_acquire)) {
@@ -177,7 +177,7 @@ void Scheduler::waitFor(Job* job) {
   }
 }
 
-void Scheduler::fiberLoop() {
+void Scheduler::fiberLoop(uint32_t threadIndex, uint32_t fiberIndex) {
   std::vector<Job*> copy;
   copy.reserve(64);
 
@@ -193,7 +193,7 @@ void Scheduler::fiberLoop() {
 
     std::cout << "[fiberLoop] running on thread " << std::this_thread::get_id()
               << " with task" << getTaskName(task) << std::endl;
-    if (task->fn) task->fn(task->data, getTaskName(task));
+    if (task->fn) task->fn(task->data, getTaskName(task), threadIndex, fiberIndex);
 
     // signal that the job is finished
     {

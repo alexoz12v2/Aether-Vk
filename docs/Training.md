@@ -235,9 +235,134 @@ di capire molto di piu della semplice proiezione bidimensionale
 5. Analisi della similitudine tra il modello generato e l'immagine del telescopio
 
     - la soluzione piu' semplice e' caricare l'immagine del telescopio in sovraimpressione e lavorare sulla trasparenza con uno slider
-      e muoverti per vedere la corrispondenza 
+      e muoverti per vedere la corrispondenza
 
 Possibilita
 
 - software permette di inserire un range di parametri e comparare in visualizzazione piu modelli
 - simulazione code = cornet-toolbox.com
+
+## Training Parte 2
+
+### Visualizzazione Aether
+
+Schermo iniziale:
+
+- Viewport con camera ortogonale
+
+1. parti dall'immagine telescopica che puoi prendere da file system (o internet?)
+
+    - formato: vedere quali formati leggere, colorspace eccetera
+    - una volta caricata, mostrata in sovraimpressione (probabilmente manovrabile, ruota zoom)
+
+    - immagine di una cometa con nucleo e emissione di polveri, che escono da alcuni punti del nucleo sferico e, ad un certo punto, piegano
+      all'indietro e viaggiano in un certo percorso
+
+Steps
+
+1. Capire le dimensioni, scala, del software che stiamo inquadrando. Quindi che dimensioni ha il nostro campo inquadrato. 3 parametri
+
+    - dimensioni immagine originale in pixels
+    - risoluzione immagine arcsec/pixel, ovvero quale angolo prende ciascun pixel
+    - distanza in unita astronomiche (formule nel file Excel) -> "Delta", eg. distanza terra sole, eg 0.8
+
+    - una volta compilate, le formule possono calcolare l
+
+        - risoluzione in kilometri risoluzione del lato orizzontale del campo inquadrato
+        - dimensione in kilometri del verticale
+
+        - critico perche il modello deve avere le stesse dimensioni
+
+2. Import automatico da sito della NASA dei parametri che ci servono per far girare il software
+
+    - coordinate posizione della cometa, dove si trova il sole, distanza del sole, distanza "Delta", STO angle, ...
+
+3. Parametri che definiscono la posizione del sole e l'asse della cometa
+
+    - dati della cometa
+        - angolo spin axis inclination, rotazione rispetto al nord
+        - angolo di inclinazione rispetto al piano dello schermo
+
+        - i dati da inserire sono le coordinate celesti in cui
+
+            - ascenzione retta -> 271.5
+            - dec -> 21.6
+
+    - dati del sole
+
+        - sto
+        - inclianzione
+
+    - dunque bisogna generare mediante input automatico o manuale posizione e parametri cometa e sole
+
+    - freccia verde -> asse di rotazione, dove il polo nord e' la punta della freccia
+    - vettore giallo indica la direzione da cui proviene il sole
+    - si vede quale parte e' illuminato e quale no
+
+4. secondo passo: determinare parametri di geometria e disegnare la sfera come viene vista dalla terra
+
+Nella finestra principale si svilupa il modello, che in realta e' puntiforme, quindi c'e' anche una piccola finestra che mostra la
+geometria della cometa dall' origine
+
+### feature
+
+c'e' un elemento UI che permette di andare avanti giorno per giorno, e la cometa evolve
+non avendo autopopolazione del sole, cambia soltanto i parametri della cometa ora, ma in realta' cambiano anche i parametri del sole
+
+**la morfologia delle polveri emesse dipendono da dove sono localizzate le emissioni di polvere sul nucleo, perche escono dal nucleo solo
+quando sono illuminate dal sole, quindi a seconda di dove sono sono attive o si disattivano**
+
+variando nel tempo la morfologia cambia l'orientamento delle sorgenti attive e dunque l'insolazione del nucleo. QUindi immagini prese a distanza
+di tempo ci aspettiamo immagini diverse
+
+altro motivo per cui e' importante avere un periodo di osservazione e' che la morfologia che osserviamo si fa nel giro di giorni/settimane,
+perche il percorso che le polveri fanno e' nella scala di decine di migliaia di kilometri
+
+- Dunque bisogna supportare piu periodi per la rotazione del nucleo. Dunque se servono 8 gg per fare 24 rotazioni, cambiano le condizioni
+
+  - osservazione
+  - orientamento del nucleo
+  - possibilita: mettendo una finestra di timeline si potrebbe inserire una animazione della cometa
+
+### Dopo definizione situazione geometrica
+
+Bisogna Definire i parametri per le emissioni di polvere per riprodurre al meglio cio che l'immagine produce
+
+Quindi vogliamo capire, dall'immagine che abbiamo, da dove sul nucleo potrebbero uscire queste particelle e con quale velocita. Il fatto che le
+polveri escano radialmente e sono soggette a due forze
+
+- propulsione della velocita di emissione
+- propulsione/repulsione a seconda di direzione -> pressione solare
+
+quindi le polveri escono con una certa velocita, e data la pressione solare, a una certa distanza dal nucleo, vince la velocita di emissione, dunque
+le rallenta e le spinge in una direzione diversa
+
+Dunque **Definizione e Marcatura dei getti**
+
+- velocita iniziale
+- latitudine
+- longitudine
+- parametri di diffusione
+- dimensione e densita delle polveri (per getto o globale?)
+- albedo -> la polvere cometaria e' nera, quindi riflette solo del 4% -> albedo 0.04, corregge **l'effetto della pressione di radiazione**
+
+### definizione parametri di simulazione
+
+- in qunato tempo fa una rotazione -> Periodo
+- Quante rotazioni volgio far fare alla simulazione
+- rateo di emissione (ogni quanto generare nuove particelle)
+- numero di punti per ogni emissione
+
+- da questi parametri possiamo calcolare l'accelerazione
+
+la goemetria varia nel tempo e dunque puo variare cio' che osservi alla fine
+
+Cosa succede al modello se mettiamo esempio i parametri per 10 gg dopo
+
+- il risultato della simulazione e' variato di molto, e non hai piu alcuna corrispondenza
+- dunque anche il periodo di osservazione che scegli e' importante per la corrispondenza del modello, perche le condizioni geometriche variano
+nel tempo
+
+La mancata corrispondenza esatta del modello e' dovuta
+
+un modello statico risente della variazione della situazione geometrica
