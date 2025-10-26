@@ -11,17 +11,36 @@
 // ExtractIconExW
 #include <shellapi.h>
 
+#include <algorithm>
+#include <atomic>
 #include <climits>
+#include <filesystem>
+#include <fstream>
+#include <ios>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <ratio>
 #include <thread>
 #include <type_traits>
 
+#include "os/filesystem.h"
+#include "render/context-vk.h"
+#include "render/pipeline-vk.h"
+#include "render/utils-vk.h"
+#include "utils/mixins.h"
+
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <vulkan/vulkan.h>
 
 #include "fiber/jobs.h"
+
+struct PerFrameData {
+  VkImage depthImage;
+  VmaAllocation depthImageAlloc;
+  VkImageView swapchainImageView;
+  VkImageView depthImageView;
+};
 
 static LRESULT standardWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                                   LPARAM lParam);
@@ -49,14 +68,97 @@ static void syncLog(F&& f) {
 // -------------------------------------------------------
 
 static std::atomic<bool> g_quit{false};
+static std::atomic<bool> g_presentReady{false};
 static std::atomic<HWND> g_window(nullptr);
+
+struct RenderJobTLS {
+  VkCommandPool commandPool;
+};
 
 struct Payload {
   int value;
   int id;
 };
 
-void physicsStep(void* userData, [[maybe_unused]] std::string const& name) {
+struct Vertex {
+  float position[2];
+  float color[3];
+};
+
+void onSwapBuffer([[maybe_unused]] avk::ContextVk const& contextVk,
+                  [[maybe_unused]] avk::SwapchainDataVk const& pData) {}
+
+void onAcquire([[maybe_unused]] avk::ContextVk const& contextVk) {}
+
+void onSwapchainRecreation(avk::ContextVk const& contextVk,
+                           avk::DiscardPoolVk& discardPool,
+                           VkImage const* images, uint32_t numImages,
+                           VkFormat format, VkExtent2D imageExtent,
+                           VkFormat depthFormat,
+                           std::vector<PerFrameData>& perFrameData) {
+  // TODO add timeline
+  // 1. add all resources in the vector into the discard pool
+  for (auto const& data : perFrameData) {
+    discardPool.discardImageView(data.swapchainImageView);
+    discardPool.discardImageView(data.depthImageView);
+    discardPool.discardImage(data.depthImage, data.depthImageAlloc);
+  }
+  // 2. create new resources
+  perFrameData.clear();
+  perFrameData.resize(numImages);
+  uint32_t index = 0;
+  for (auto& data : perFrameData) {
+    uint32_t const current = index++;
+
+    // 2.1 create depth image
+    avk::SingleImage2DSpecVk depthSpec{};
+    depthSpec.imageTiling = VK_IMAGE_TILING_OPTIMAL;
+    depthSpec.format = depthFormat;
+    depthSpec.samples =
+        VK_SAMPLE_COUNT_1_BIT;  // TODO can depth buffering use multisampling?
+    depthSpec.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    depthSpec.width = imageExtent.width;
+    depthSpec.height = imageExtent.height;
+    if (!avk::createImage(contextVk, depthSpec, data.depthImage,
+                          data.depthImageAlloc)) {
+      data.depthImageView = VK_NULL_HANDLE;
+    } else {
+      // create depth image views
+      VkImageViewCreateInfo createInfo{};
+      createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+      createInfo.image = data.depthImage;
+      createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+      createInfo.format = depthFormat;
+      createInfo.subresourceRange.aspectMask =
+          VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+      createInfo.subresourceRange.baseArrayLayer = 0;
+      createInfo.subresourceRange.layerCount = 1;
+      createInfo.subresourceRange.baseMipLevel = 0;
+      createInfo.subresourceRange.levelCount = 1;
+      avk::vkCheck(vkCreateImageView(contextVk.device().device, &createInfo,
+                                     nullptr, &data.depthImageView));
+    }
+
+    // 2.2 swapchain image views
+    data.swapchainImageView = VK_NULL_HANDLE;
+    VkImageViewCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    createInfo.image = images[current];
+    createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    createInfo.format = format;
+    createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    createInfo.subresourceRange.baseArrayLayer = 0;
+    createInfo.subresourceRange.layerCount = 1;
+    createInfo.subresourceRange.baseMipLevel = 0;
+    createInfo.subresourceRange.levelCount = 1;
+    avk::vkCheck(vkCreateImageView(contextVk.device().device, &createInfo,
+                                   nullptr, &data.swapchainImageView));
+  }
+}
+
+void physicsStep(void* userData, [[maybe_unused]] std::string const& name,
+                 [[maybe_unused]] uint32_t threadIndex,
+                 [[maybe_unused]] uint32_t fiberIndex) {
   syncLog([]() { std::cout << "Started Physics Job" << std::endl; });
   Payload* p = reinterpret_cast<Payload*>(userData);
   // simulate CPU work
@@ -64,7 +166,9 @@ void physicsStep(void* userData, [[maybe_unused]] std::string const& name) {
   p->value = p->value * 2 + 1;
 }
 
-void renderPrep(void* userData, [[maybe_unused]] std::string const& name) {
+void renderStep(void* userData, [[maybe_unused]] std::string const& name,
+                [[maybe_unused]] uint32_t threadIndex,
+                [[maybe_unused]] uint32_t fiberIndex) {
   [[maybe_unused]] Payload* p = reinterpret_cast<Payload*>(userData);
   syncLog([]() { std::cout << "Started Render Job" << std::endl; });
   // simulate command buffer recording cost
@@ -216,59 +320,374 @@ void messageThreadProc() {
   }
 }
 
-void frameProducer(avk::Scheduler* sched, [[maybe_unused]] HWND hMainWindow,
-                   int jobBufferSize) {
+struct FrameProducerPayload {
+  HWND hMainWindow;
+  avk::ContextVk* context;
+  int jobBufferSize;
+};
+
+VkImageMemoryBarrier2 imageMemoryBarrier(
+    VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
+    VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask,
+    VkPipelineStageFlags2 srcStage, VkPipelineStageFlags2 dstStage,
+    uint32_t srcIndex = VK_QUEUE_FAMILY_IGNORED,
+    uint32_t dstIndex = VK_QUEUE_FAMILY_IGNORED) {
+  // initialize struct
+  VkImageMemoryBarrier2 imageBarrier{};
+  imageBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+
+  // stecify the pipelines stages and access masks for the barrier
+  imageBarrier.srcStageMask = srcStage;
+  imageBarrier.srcAccessMask = srcAccessMask;
+  imageBarrier.dstStageMask = dstStage;
+  imageBarrier.dstAccessMask = dstAccessMask;
+
+  // specify the old and new layouts of the image
+  imageBarrier.oldLayout = oldLayout;
+  imageBarrier.newLayout = newLayout;
+
+  // we can change the ownership between queues (case graphics != present)
+  imageBarrier.srcQueueFamilyIndex = srcIndex;
+  imageBarrier.dstQueueFamilyIndex = dstIndex;
+
+  // specify the image to be affected by this barrier
+  imageBarrier.image = image;
+
+  // define subrange of the image
+  imageBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  imageBarrier.subresourceRange.baseMipLevel = 0;
+  imageBarrier.subresourceRange.levelCount = 1;
+  imageBarrier.subresourceRange.baseArrayLayer = 0;
+  imageBarrier.subresourceRange.layerCount = 1;
+  return imageBarrier;
+}
+
+void transitionImageLayout(VkCommandBuffer cmd,
+                           VkImageMemoryBarrier2 const* imageBarriers,
+                           uint32_t imageBarrierCount) {
+  // initialize dependency info
+  VkDependencyInfo dependencyInfo{};
+  dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+  dependencyInfo.dependencyFlags = 0;
+  dependencyInfo.imageMemoryBarrierCount = imageBarrierCount;
+  dependencyInfo.pImageMemoryBarriers = imageBarriers;
+
+  // record pipeline barrier into command buffer
+  vkCmdPipelineBarrier2(cmd, &dependencyInfo);
+}
+
+std::vector<uint32_t> openSpirV(std::filesystem::path const& path) {
+  std::vector<uint32_t> shaderCode;
+  std::ifstream file{path, std::ios::binary};
+  if (!file) {
+    return shaderCode;
+  }
+  shaderCode.reserve(64);
+  std::copy(std::istreambuf_iterator<char>(file),
+            std::istreambuf_iterator<char>(), std::back_inserter(shaderCode));
+  return shaderCode;
+}
+
+void fillTriangleGraphicsInfo(avk::ContextVk const& context,
+                              avk::GraphicsInfo& graphicsInfo) {
+  graphicsInfo.vertexIn.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+  // 1 binding, 2 attributes
+  VkVertexInputBindingDescription bindingDesc{};
+  bindingDesc.binding = 0;
+  bindingDesc.stride = sizeof(Vertex);
+  bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+  graphicsInfo.vertexIn.bindings.push_back(bindingDesc);
+
+  VkVertexInputAttributeDescription attrDesc{};
+  attrDesc.binding = 0;
+  attrDesc.format = VK_FORMAT_R32G32_SFLOAT;  // position float2
+  attrDesc.offset = offsetof(Vertex, position);
+  attrDesc.location = 0;
+  graphicsInfo.vertexIn.attributes.push_back(attrDesc);
+
+  attrDesc.location = 1;
+  attrDesc.offset = offsetof(Vertex, color);
+  attrDesc.format = VK_FORMAT_R32G32B32_SFLOAT;  // color float3
+  graphicsInfo.vertexIn.attributes.push_back(attrDesc);
+  auto const execPath = avk::getExecutablePath();
+  auto const vertCode = openSpirV(execPath / "triangle.vert.slang.spv");
+  auto const fragCode = openSpirV(execPath / "triangle.frag.slang.spv");
+  assert(!vertCode.empty() && !fragCode.empty());
+  // TODO add them to the cleanup somehow (eg device resource tracker)
+  VkShaderModule vertModule =
+      avk::finalizeShaderModule(context, vertCode.data(), vertCode.size() / 4);
+  VkShaderModule fragModule =
+      avk::finalizeShaderModule(context, fragCode.data(), fragCode.size() / 4);
+
+  graphicsInfo.preRasterization.vertexModule = vertModule;
+  graphicsInfo.preRasterization.geometryModule = VK_NULL_HANDLE;
+  graphicsInfo.fragmentShader.fragmentModule = fragModule;
+  // viewport and scissor are using dynamic state without count, hence only size
+  // of vector matters
+  graphicsInfo.fragmentShader.viewports.resize(1);
+  graphicsInfo.fragmentShader.scissors.resize(1);
+
+  graphicsInfo.fragmentOut.colorAttachmentCount = 1;
+  graphicsInfo.fragmentOut.depthAttachmentFormat = VK_FORMAT_UNDEFINED;
+  graphicsInfo.fragmentOut.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
+}
+
+void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
   std::cout << "Started Render Thread" << std::endl;
   auto* p = new Payload();
-  avk::Job* phys = new avk::Job[jobBufferSize]();
-  avk::Job* render = new avk::Job[jobBufferSize]();
-  uint32_t jobIdx = 0;
+  avk::Job* phys = new avk::Job[payload->jobBufferSize]();
+  avk::Job* render = new avk::Job[payload->jobBufferSize]();
+  avk::ContextVk& contextVk = *payload->context;
+
+  avk::DiscardPoolVk discardPool;
+  avk::VkPipelinePool pipelinePool;
+  avk::GraphicsInfo graphicsInfo;
+  fillTriangleGraphicsInfo(contextVk, graphicsInfo);
+
+  VkPipeline pipeline = pipelinePool.getOrCreateGraphicsPipeline(
+      contextVk, graphicsInfo, true, VK_NULL_HANDLE);
+  // TODO create TLS Command Pool
+  VkCommandPool commandPool = VK_NULL_HANDLE;
+  // TODO allocate command buffer
+  VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+
+  // Create initial Vertex Buffer
+  const std::vector<Vertex> vertices = {
+      {{0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},  // Vertex 1: Red
+      {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},   // Vertex 2: Green
+      {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}   // Vertex 3: Blue
+  };
+  avk::BufferVk vertexBuffer;
+  // TODO create 2 buffers, 1 device visible and not host visible, the other
+  // host visible such that you can create a staging buffer
+  if (!vertexBuffer.create(contextVk, sizeof(vertices[0]) * vertices.size(),
+                           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           0, 0, 1.f, false, 4,
+                           contextVk.device().queueIndices.families)) {
+    std::cerr << "Couldn't allocate Vertex Buffer Host Visible" << std::endl;
+  }
+  vertexBuffer.updateImmediately(vertices.data());
+
+  // per frame data to update every swapchain recreation
+  std::vector<PerFrameData> perFrameData;
+  perFrameData.reserve(64);
+
+  VkFormat depthFormat =
+      avk::basicDepthStencilFormat(contextVk.device().physicalDevice);
+
+  contextVk.setSwapBufferCallbacks(
+      [&contextVk](const avk::SwapchainDataVk* pData) {
+        onSwapBuffer(contextVk, *pData);
+      },
+      [&contextVk]() { onAcquire(contextVk); },
+      [&contextVk, &discardPool, &perFrameData, depthFormat](
+          VkImage const* images, uint32_t numImages, VkFormat format,
+          VkExtent2D extent) {
+        onSwapchainRecreation(contextVk, discardPool, images, numImages, format,
+                              extent, depthFormat, perFrameData);
+      });
+  contextVk.recreateSwapchain(false);
+
+  // uint32_t jobIdx = 0;
+  std::vector<VkSubmitInfo> submitInfos;
+  submitInfos.reserve(16);
   while (!g_quit.load()) {
-    uint32_t const nextJobIdx = (jobIdx + 1) % jobBufferSize;
-    uint32_t const prevJobIdx = jobIdx == 0 ? 0 : jobIdx - 1;
+    submitInfos.clear();
+    // uint32_t const nextJobIdx = (jobIdx + 1) % payload->jobBufferSize;
+    // uint32_t const prevJobIdx = jobIdx == 0 ? 0 : jobIdx - 1;
     // create payloads and submit jobs in a burst (simulates a frame)
     p->value = 100;
     p->id = 1000;
 
-    AVK_JOB(&phys[jobIdx], physicsStep, p, avk::JobPriority::Medium,
-            "PhysicsChunk");
-    AVK_JOB(&render[jobIdx], physicsStep, p, avk::JobPriority::Low,
-            "RenderPrep");
+    contextVk.swapBufferAcquire();
+    avk::SwapchainDataVk swapchainData = contextVk.getSwapchainData();
+    auto const& frame = perFrameData[swapchainData.imageIndex];
 
-    // render depends on physics
-    if (jobIdx != 0) {
-      phys[jobIdx].addDepencency(&phys[prevJobIdx - 1]);
-      // unless you recycle stuff from the previous frame, this is not necessary
-      // render[jobIdx].addDepencency(&render[prevJobIdx]);
-    }
-    render[jobIdx].addDepencency(&phys[jobIdx]);
+    // AVK_JOB(&phys[jobIdx], physicsStep, p, avk::JobPriority::Medium,
+    //         "PhysicsChunk");
 
-    // submit bot (only the top of the DAG)
-    sched->safeSubmitTask(&phys[jobIdx]);
-    sched->safeSubmitTask(&render[jobIdx]);
+    // TODO if necessary vkQueueWaitIdle on graphics Queue?
+    // if you wait for the queue to be idle, you can delete immediately command
+    // buffer, otherwise, discard it and delete it when you pass to another
+    // timeline
+    // TODO see better timeline semaphores
 
-    if (nextJobIdx < jobIdx) {
-      sched->waitFor(&render[nextJobIdx]);
-      // we'll recycle the job objects in the next loop iteration, therefore you
-      // need to be sure that the job mutex is not locked somewhere for any job!
-      // WARNING: Assuming continuations are zeroed out, remaining dependencies
-      // are at 0
-    }
+    // TODO multithreaded command buffer recording and multithreaded data
+    // transfer AVK_JOB(&render[jobIdx], renderStep, p, avk::JobPriority::Low,
+    //         "RenderPrep");
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;  // one time
+
+    avk::vkCheck(vkBeginCommandBuffer(commandBuffer, &beginInfo));
+
+    // before rendering, transition current image to COLOR_ATTACHMENT_OPTIMAL
+    VkImageMemoryBarrier2 imageBarriers[2];
+    uint32_t const imageBarrierCount = 2;
+    imageBarriers[0] =
+        imageMemoryBarrier(swapchainData.image, VK_IMAGE_LAYOUT_UNDEFINED,
+                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                           0 /*no need to wait previous operation */,
+                           VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                           VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                           VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+    imageBarriers[1] =
+        imageMemoryBarrier(frame.depthImage, VK_IMAGE_LAYOUT_UNDEFINED,
+                           VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                           VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                           VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                           VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                           VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT);
+    transitionImageLayout(commandBuffer, imageBarriers, imageBarrierCount);
+
+    VkClearValue clearValue{{{0.01f, 0.01f, 0.033f, 1.0f}}};
+    // rendering attachment info and begin rendering
+    // TODO attachment info for depth/stencil if necessary
+    VkRenderingAttachmentInfo colorAttachment{};
+    colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    colorAttachment.imageView = frame.swapchainImageView;
+    colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.clearValue = clearValue;
+
+    VkRenderingInfo renderingInfo{};
+    renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    // TODO extent actual swapchain extent
+    renderingInfo.renderArea = {{0, 0}, swapchainData.extent};
+    renderingInfo.layerCount = 1;
+    renderingInfo.colorAttachmentCount = 1;  // TODO graphicsInfo?
+    renderingInfo.pColorAttachments = &colorAttachment;
+
+    vkCmdBeginRendering(commandBuffer, &renderingInfo);
+
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+
+    // set dynamic states
+    VkViewport vp{};
+    vp.height = swapchainData.extent.width;
+    vp.width = swapchainData.extent.height;
+    vp.minDepth = 0.f;
+    vp.maxDepth = 1.f;
+    vkCmdSetViewport(commandBuffer, 0, 1, &vp);
+
+    VkRect2D scissor{};
+    scissor.extent.width = swapchainData.extent.width;
+    scissor.extent.height = swapchainData.extent.height;
+    vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+    // bind vertex buffer
+    VkBuffer vBuf = vertexBuffer.buffer();
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vBuf, 0);
+
+    // issue draw call
+    uint32_t const vertexCount = static_cast<uint32_t>(vertices.size());
+    vkCmdDraw(commandBuffer, vertexCount, 1, 0, 0);
+
+    // complete rendering
+    vkCmdEndRendering(commandBuffer);
+
+    // after rendering, transition to PRESENT_SRC layout
+    imageBarriers[0] = imageMemoryBarrier(
+        swapchainData.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+        0 /* no access */, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+    transitionImageLayout(commandBuffer, imageBarriers, imageBarrierCount);
+
+    // complete recording of the command buffer
+    avk::vkCheck(vkEndCommandBuffer(commandBuffer));
+
+    // TODO submit to queue
+    VkPipelineStageFlags waitStage{VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT};
+    submitInfos.push_back({});
+
+    VkSubmitInfo submitInfo = submitInfos.back();
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.waitSemaphoreCount = 1;
+    submitInfo.pWaitSemaphores = &swapchainData.acquireSemaphore;
+    submitInfo.pWaitDstStageMask = &waitStage;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &commandBuffer;
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = &swapchainData.presentSemaphore;
+
+    avk::vkCheck(vkQueueSubmit(contextVk.device().graphicsComputeQueue,
+                               static_cast<uint32_t>(submitInfos.size()),
+                               submitInfos.data(),
+                               swapchainData.submissionFence));
+
+    // // render depends on physics
+    // if (jobIdx != 0) {
+    //   phys[jobIdx].addDepencency(&phys[prevJobIdx - 1]);
+    //   // unless you recycle stuff from the previous frame, this is not
+    //   necessary
+    //   // render[jobIdx].addDepencency(&render[prevJobIdx]);
+    // }
+    // render[jobIdx].addDepencency(&phys[jobIdx]);
+
+    // // submit bot (only the top of the DAG)
+    // sched->safeSubmitTask(&phys[jobIdx]);
+    // sched->safeSubmitTask(&render[jobIdx]);
+
+    // if (nextJobIdx < jobIdx) {
+    //   sched->waitFor(&render[nextJobIdx]);
+    //   // we'll recycle the job objects in the next loop iteration, therefore
+    //   you
+    //   // need to be sure that the job mutex is not locked somewhere for any
+    //   job!
+    //   // WARNING: Assuming continuations are zeroed out, remaining
+    //   dependencies
+    //   // are at 0
+    // }
+
+    // TODO better
+    // present ready might be false if user holds resize window and doesn't
+    // release it Does it work like this though? TODO verify for now, don't
+    // present images
+    // bool expected = false;
+    // if (g_presentReady.compare_exchange_weak(expected, true,
+    //                                          std::memory_order_release)) {
+    //   InvalidateRect(payload->hMainWindow, nullptr, false);
+    // }
+    contextVk.swapBufferRelease();
   }
   sched->waitUntilAllTasksDone();
 
+  // cleanup residual
+  vertexBuffer.freeImmediately(contextVk);
   delete[] phys;
   delete[] render;
 }
 
+struct WindowPayload {
+  avk::ContextVk* contextVk;
+};
+
 static LRESULT standardWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                                   LPARAM lParam) {
-  switch (uMsg) {
-    case WM_CREATE:
-      // Animate window appearing: slide from left to right
-      AnimateWindow(hWnd, 300, AW_SLIDE | AW_ACTIVATE | AW_HOR_POSITIVE);
-      return 0;
+  avk::ContextVk* context = nullptr;
 
+  if (uMsg == WM_CREATE) {
+    // Animate window appearing: slide from left to right
+    AnimateWindow(hWnd, 300, AW_SLIDE | AW_ACTIVATE | AW_HOR_POSITIVE);
+
+    // get creation parameters and store their address (reference must live
+    // beyond the window)
+    CREATESTRUCT* createStruct = reinterpret_cast<CREATESTRUCT*>(lParam);
+    context = reinterpret_cast<WindowPayload*>(createStruct->lpCreateParams)
+                  ->contextVk;
+    SetWindowLongPtrW(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(context));
+
+    return 0;
+  }
+  // retrieve context for all other messages
+  context =
+      reinterpret_cast<avk::ContextVk*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+
+  switch (uMsg) {
     case WM_CLOSE:
       // Animate window disappearing: slide out to the right
       AnimateWindow(hWnd, 300, AW_SLIDE | AW_HIDE | AW_HOR_POSITIVE);
@@ -318,82 +737,23 @@ static LRESULT standardWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
 
     // Basic paint function
     case WM_PAINT: {
-      // Double buffering: Create an off-screen HDC
-      PAINTSTRUCT ps{};
-      HDC hdc = BeginPaint(hWnd, &ps);
-
-      RECT rect{};
-      GetClientRect(hWnd, &rect);  // note: client area, not the whole thing
-                                   // (WS_POPUP, so it's fine)
-
-      // create offscreen buffer
-      HDC memDC = CreateCompatibleDC(hdc);
-      HBITMAP memBmp = CreateCompatibleBitmap(hdc, rect.right, rect.bottom);
-      HGDIOBJ oldBmp = SelectObject(memDC, memBmp);
-
-      // background
-      HBRUSH bg = CreateSolidBrush(RGB(30, 30, 30));
-      FillRect(memDC, &rect, bg);
-
-      // titlebar
-      RECT titleBar = {0, 0, rect.right, 30};
-      HBRUSH bar = CreateSolidBrush(RGB(45, 45, 45));
-      FillRect(memDC, &titleBar, bar);
-
-      // Draw buttons (min, max, close)
-      int btnWidth = 45;
-      RECT btnClose = {rect.right - btnWidth, 0, rect.right, 30};
-      RECT btnMax = {rect.right - 2 * btnWidth, 0, rect.right - btnWidth, 30};
-      RECT btnMin = {rect.right - 3 * btnWidth, 0, rect.right - 2 * btnWidth,
-                     30};
-      FillRect(memDC, &btnClose, (HBRUSH)(COLOR_3DFACE + 1));
-      FillRect(memDC, &btnMax, (HBRUSH)(COLOR_3DFACE + 1));
-      FillRect(memDC, &btnMin, (HBRUSH)(COLOR_3DFACE + 1));
-
-      DrawTextW(memDC, L"-", -1, &btnMin,
-                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-      DrawTextW(memDC, L"□", -1, &btnMax,
-                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-      DrawTextW(memDC, L"✕", -1, &btnClose,
-                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-      // Swap buffers
-      BitBlt(hdc, 0, 0, rect.right, rect.bottom, memDC, 0, 0, SRCCOPY);
-
-      // cleanup
-      SelectObject(memDC, oldBmp);
-      DeleteObject(memBmp);
-      DeleteDC(memDC);
-      DeleteObject(bar);
-      DeleteObject(bg);
-
-      EndPaint(hWnd, &ps);
+      // unreliable
+      // if (g_presentReady.load(std::memory_order_acquire)) {
+      //   context->swapBufferRelease();
+      //   g_presentReady.store(false, std::memory_order_release);
+      // }
       return 0;
     }
 
     // TODO BETTER: ASSUMES BUTTON POSITION
     case WM_LBUTTONDOWN: {
-      int x = GET_X_LPARAM(lParam);
-      int y = GET_Y_LPARAM(lParam);
-      RECT rect;
-      GetClientRect(hWnd, &rect);
-      int btnWidth = 45;
-
-      if (y <= 30) {
-        if (x >= rect.right - btnWidth) {
-          PostMessageW(hWnd, WM_CLOSE, 0, 0);
-        } else if (x >= rect.right - 2 * btnWidth) {
-          ShowWindow(hWnd, IsZoomed(hWnd) ? SW_RESTORE : SW_MAXIMIZE);
-        } else if (x >= rect.right - 3 * btnWidth) {
-          ShowWindow(hWnd, SW_MINIMIZE);
-        }
-      }
       return 0;
     }
 
     case WM_SIZE: {
-      // generate manually a WM_PAINT
-      InvalidateRect(hWnd, nullptr, TRUE);
+      // Handled by Vulkan
+      // // generate manually a WM_PAINT
+      // InvalidateRect(hWnd, nullptr, false);
       return 0;
     }
 
@@ -418,8 +778,20 @@ int WINAPI wWinMain([[maybe_unused]] HINSTANCE hInstance,
   std::ios::sync_with_stdio();
 #endif
 
-  std::cout << "Created window" << std::endl;
+  // start Win32 message thread (dedicated)
+  std::thread msgThread(messageThreadProc);
+  while (!g_window.load()) {
+    std::this_thread::yield();
+  }
 
+  // Initialize Vulkan
+  std::cout << "Time to Initialize Vulkan" << std::endl;
+  avk::ContextVkParams params;
+  params.window = g_window.load();
+  avk::ContextVk contextVk{params};
+  contextVk.initializeDrawingContext();
+
+  // frame producer on its own thread (could be main thread in real app)
   constexpr size_t jobPoolSize = 1024;
   constexpr size_t fiberCount = 64;
   avk::MPMCQueue<avk::Job*> highQ(jobPoolSize);
@@ -430,14 +802,6 @@ int WINAPI wWinMain([[maybe_unused]] HINSTANCE hInstance,
   unsigned const workerCount = hw > 3 ? hw - 3 : 1;
   avk::Scheduler sched(fiberCount, &highQ, &medQ, &lowQ, workerCount);
   sched.start();
-
-  // start Win32 message thread (dedicated)
-  std::thread msgThread(messageThreadProc);
-  while (!g_window.load()) {
-    std::this_thread::yield();
-  }
-
-  // frame producer on its own thread (could be main thread in real app)
   const int chunksPerFrame = 8;
   std::thread producer(frameProducer, &sched, g_window.load(), chunksPerFrame);
 

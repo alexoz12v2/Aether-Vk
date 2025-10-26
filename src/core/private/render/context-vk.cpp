@@ -1,5 +1,7 @@
 #include "render/context-vk.h"
 
+#include <utility>
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnullability-extension"
 
@@ -30,17 +32,7 @@
 #error "ADD SUPPORT"
 #endif
 
-static inline bool vkCheck(VkResult res) {
-  if (res != ::VK_SUCCESS) {
-    // TODO
-    return false;
-  }
-  return true;
-}
-
 // TODO better logging
-// TODO all device functions on table
-
 #ifdef AVK_DEBUG
 static VkBool32 VKAPI_PTR
 debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -94,6 +86,65 @@ static void VKAPI_PTR freeDeviceMemoryCallback(
 }
 
 namespace avk {
+
+DeviceVk::DeviceVk(DeviceVk&& other) noexcept {
+  std::lock_guard<std::mutex> lk{other.queueMutex};
+  vmaAllocator = std::exchange(vmaAllocator, other.vmaAllocator);
+  physicalDevice = std::exchange(physicalDevice, other.physicalDevice);
+  device = std::exchange(device, other.device);
+  extensions = std::exchange(extensions, other.extensions);
+  propertiesFeatures = std::move(other.propertiesFeatures);
+  queueIndices.family.graphicsCompute =
+      std::exchange(queueIndices.family.graphicsCompute,
+                    other.queueIndices.family.graphicsCompute);
+  graphicsComputeQueue =
+      std::exchange(graphicsComputeQueue, other.graphicsComputeQueue);
+  queueIndices.family.computeAsync = std::exchange(
+      queueIndices.family.computeAsync, other.queueIndices.family.computeAsync);
+  computeAsyncQueue = std::exchange(computeAsyncQueue, other.computeAsyncQueue);
+  queueIndices.family.transfer = std::exchange(
+      queueIndices.family.transfer, other.queueIndices.family.transfer);
+  transferQueue = std::exchange(transferQueue, other.transferQueue);
+  queueIndices.family.present = std::exchange(
+      queueIndices.family.present, other.queueIndices.family.present);
+  presentQueue = std::exchange(presentQueue, other.presentQueue);
+  extSwapchainMaintenance1 =
+      std::exchange(extSwapchainMaintenance1, other.extSwapchainMaintenance1);
+  extSwapchainColorspace =
+      std::exchange(extSwapchainColorspace, other.extSwapchainColorspace);
+}
+
+DeviceVk& DeviceVk::operator=(DeviceVk&& other) noexcept {
+  // Note: We are not destroying the allocator and the device
+  std::lock_guard<std::mutex> lk{other.queueMutex};
+  vmaAllocator = std::exchange(vmaAllocator, other.vmaAllocator);
+  physicalDevice = std::exchange(physicalDevice, other.physicalDevice);
+  device = std::exchange(device, other.device);
+  extensions = std::exchange(extensions, other.extensions);
+  propertiesFeatures.release();
+  propertiesFeatures = std::move(other.propertiesFeatures);
+  queueIndices.family.graphicsCompute =
+      std::exchange(queueIndices.family.graphicsCompute,
+                    other.queueIndices.family.graphicsCompute);
+  graphicsComputeQueue =
+      std::exchange(graphicsComputeQueue, other.graphicsComputeQueue);
+  queueIndices.family.computeAsync = std::exchange(
+      queueIndices.family.computeAsync, other.queueIndices.family.computeAsync);
+  computeAsyncQueue = std::exchange(computeAsyncQueue, other.computeAsyncQueue);
+  queueIndices.family.transfer = std::exchange(
+      queueIndices.family.transfer, other.queueIndices.family.transfer);
+  transferQueue = std::exchange(transferQueue, other.transferQueue);
+  queueIndices.family.present = std::exchange(
+      queueIndices.family.present, other.queueIndices.family.present);
+  presentQueue = std::exchange(presentQueue, other.presentQueue);
+  extSwapchainMaintenance1 =
+      std::exchange(extSwapchainMaintenance1, other.extSwapchainMaintenance1);
+  extSwapchainColorspace =
+      std::exchange(extSwapchainColorspace, other.extSwapchainColorspace);
+
+  return *this;
+}
+
 // ---------------------------- FRAME -----------------------------
 
 void FrameDiscard::destroy(DeviceVk const& device) {
@@ -610,22 +661,30 @@ static void initializeGenericQueueFamilies(VkInstance instance,
         VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR;
   }
 
+  device.queueIndices.family.graphicsCompute =
+      DeviceVk::InvalidQueueFamilyIndex;
+  device.queueIndices.family.computeAsync = DeviceVk::InvalidQueueFamilyIndex;
+  device.queueIndices.family.transfer = DeviceVk::InvalidQueueFamilyIndex;
+  device.queueIndices.family.present = DeviceVk::InvalidQueueFamilyIndex;
+
   vkGetPhysicalDeviceQueueFamilyProperties2(
       device.physicalDevice, &queueFamilyCount, queueFamilies.data());
-  if (device.graphicsComputeQueueFamily == DeviceVk::InvalidQueueFamilyIndex) {
+  if (device.queueIndices.family.graphicsCompute ==
+      DeviceVk::InvalidQueueFamilyIndex) {
     // look for a queue that supports graphics and compute
     for (uint32_t i = 0; i < queueFamilyCount; ++i) {
       if ((queueFamilies[i].queueFamilyProperties.queueFlags &
            VK_QUEUE_GRAPHICS_BIT) != 0 &&
           (queueFamilies[i].queueFamilyProperties.queueFlags &
            VK_QUEUE_COMPUTE_BIT) != 0) {
-        device.graphicsComputeQueueFamily = i;
+        device.queueIndices.family.graphicsCompute = i;
         break;
       }
     }
   }
 
-  if (device.computeAsyncQueueFamily == DeviceVk::InvalidQueueFamilyIndex) {
+  if (device.queueIndices.family.computeAsync ==
+      DeviceVk::InvalidQueueFamilyIndex) {
     // try to look for a queue that supports compute but not graphics, if not
     // found, default to graphicsComputeQueueFamily
     for (uint32_t i = 0; i < queueFamilyCount; ++i) {
@@ -633,16 +692,19 @@ static void initializeGenericQueueFamilies(VkInstance instance,
            VK_QUEUE_COMPUTE_BIT) != 0 &&
           (queueFamilies[i].queueFamilyProperties.queueFlags &
            VK_QUEUE_GRAPHICS_BIT) == 0) {
-        device.computeAsyncQueueFamily = i;
+        device.queueIndices.family.computeAsync = i;
         break;
       }
     }
-    if (device.computeAsyncQueueFamily == DeviceVk::InvalidQueueFamilyIndex) {
-      device.computeAsyncQueueFamily = device.graphicsComputeQueueFamily;
+    if (device.queueIndices.family.computeAsync ==
+        DeviceVk::InvalidQueueFamilyIndex) {
+      device.queueIndices.family.computeAsync =
+          device.queueIndices.family.computeAsync;
     }
   }
 
-  if (device.transferQueueFamily == DeviceVk::InvalidQueueFamilyIndex) {
+  if (device.queueIndices.family.transfer ==
+      DeviceVk::InvalidQueueFamilyIndex) {
     // try to look for a queue that supports transfer but not graphics and
     // compute, if not found, default to graphicsComputeQueueFamily
     for (uint32_t i = 0; i < queueFamilyCount; ++i) {
@@ -652,28 +714,24 @@ static void initializeGenericQueueFamilies(VkInstance instance,
            VK_QUEUE_GRAPHICS_BIT) == 0 &&
           (queueFamilies[i].queueFamilyProperties.queueFlags &
            VK_QUEUE_COMPUTE_BIT) == 0) {
-        device.transferQueueFamily = i;
+        device.queueIndices.family.transfer = i;
         break;
       }
     }
-    if (device.transferQueueFamily == DeviceVk::InvalidQueueFamilyIndex) {
+    if (device.queueIndices.family.transfer ==
+        DeviceVk::InvalidQueueFamilyIndex) {
       for (uint32_t i = 0; i < queueFamilyCount; ++i) {
         if ((queueFamilies[i].queueFamilyProperties.queueFlags &
              VK_QUEUE_TRANSFER_BIT) != 0) {
-          device.transferQueueFamily = i;
+          device.queueIndices.family.transfer = i;
           break;
         }
       }
     }
   }
 
-  assert(device.graphicsComputeQueueFamily !=
-         DeviceVk::InvalidQueueFamilyIndex);
-  assert(device.computeAsyncQueueFamily != DeviceVk::InvalidQueueFamilyIndex);
-  assert(device.transferQueueFamily != DeviceVk::InvalidQueueFamilyIndex);
-
   if (surface != VK_NULL_HANDLE &&
-      device.presentQueueFamily == DeviceVk::InvalidQueueFamilyIndex) {
+      device.queueIndices.family.present == DeviceVk::InvalidQueueFamilyIndex) {
     auto const vkGetPhysicalDeviceSurfaceSupportKHR =
         reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(
             vkGetInstanceProcAddr(instance,
@@ -684,13 +742,20 @@ static void initializeGenericQueueFamilies(VkInstance instance,
       vkGetPhysicalDeviceSurfaceSupportKHR(device.physicalDevice, i, surface,
                                            &presentSupport);
       if (presentSupport == VK_TRUE) {
-        device.presentQueueFamily = i;
+        device.queueIndices.family.present = i;
         break;
       }
     }
   }
 
-  assert(device.presentQueueFamily != DeviceVk::InvalidQueueFamilyIndex);
+  assert(device.queueIndices.family.graphicsCompute !=
+         DeviceVk::InvalidQueueFamilyIndex);
+  assert(device.queueIndices.family.computeAsync !=
+         DeviceVk::InvalidQueueFamilyIndex);
+  assert(device.queueIndices.family.transfer !=
+         DeviceVk::InvalidQueueFamilyIndex);
+  assert(device.queueIndices.family.present !=
+         DeviceVk::InvalidQueueFamilyIndex);
 }
 
 bool ContextVk::createDevice(
@@ -713,10 +778,10 @@ bool ContextVk::createDevice(
   std::vector<VkDeviceQueueCreateInfo> queueCreateInfos(
       DeviceVk::QueueFamilyIndicesCount);
   std::vector<uint32_t> queueFamilyIndices(DeviceVk::QueueFamilyIndicesCount);
-  queueFamilyIndices[0] = m_device.graphicsComputeQueueFamily;
-  queueFamilyIndices[1] = m_device.computeAsyncQueueFamily;
-  queueFamilyIndices[2] = m_device.transferQueueFamily;
-  queueFamilyIndices[3] = m_device.presentQueueFamily;
+  queueFamilyIndices[0] = m_device.queueIndices.family.graphicsCompute;
+  queueFamilyIndices[1] = m_device.queueIndices.family.computeAsync;
+  queueFamilyIndices[2] = m_device.queueIndices.family.transfer;
+  queueFamilyIndices[3] = m_device.queueIndices.family.present;
 
   float queuePriority = 1.0f;
 
@@ -746,13 +811,14 @@ bool ContextVk::createDevice(
   }
 
   // if you use a pNext or flag on create info, use vkGetDeviceQueue2
-  vkGetDeviceQueue(m_device.device, m_device.graphicsComputeQueueFamily, 0,
+  vkGetDeviceQueue(m_device.device,
+                   m_device.queueIndices.family.graphicsCompute, 0,
                    &m_device.graphicsComputeQueue);
-  vkGetDeviceQueue(m_device.device, m_device.computeAsyncQueueFamily, 0,
-                   &m_device.computeAsyncQueue);
-  vkGetDeviceQueue(m_device.device, m_device.transferQueueFamily, 0,
+  vkGetDeviceQueue(m_device.device, m_device.queueIndices.family.computeAsync,
+                   0, &m_device.computeAsyncQueue);
+  vkGetDeviceQueue(m_device.device, m_device.queueIndices.family.transfer, 0,
                    &m_device.transferQueue);
-  vkGetDeviceQueue(m_device.device, m_device.presentQueueFamily, 0,
+  vkGetDeviceQueue(m_device.device, m_device.queueIndices.family.present, 0,
                    &m_device.presentQueue);
 
   // populate extension function pointers to save one dispatch from the vulkan
@@ -777,11 +843,13 @@ bool ContextVk::createDevice(
   vmaAllocatorCreateInfo.pDeviceMemoryCallbacks = &vmaMemoryCallbacks;
 
   // fill vmaAllocatorCreateInfo.pVulkanFunctions
-  if (!vkCheck(vmaImportVulkanFunctionsFromVolk(&vmaAllocatorCreateInfo, m_vmaVulkanFunctions)) {
+  if (!vkCheck(vmaImportVulkanFunctionsFromVolk(&vmaAllocatorCreateInfo,
+                                                m_vmaVulkanFunctions))) {
     return false;
   }
   vmaAllocatorCreateInfo.pVulkanFunctions = m_vmaVulkanFunctions;
-  if (!vkCheck(vmaCreateAllocator(&vmaAllocatorCreateInfo, &m_device.vmaAllocator))) {
+  if (!vkCheck(vmaCreateAllocator(&vmaAllocatorCreateInfo,
+                                  &m_device.vmaAllocator))) {
     return false;
   }
 
@@ -822,6 +890,7 @@ static bool selectSurfaceFormat(DeviceVk const& device, VkSurfaceKHR surface,
   // Select the best format (from blender)
   static VkSurfaceFormatKHR constexpr preferredFormats[] = {
       {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT},
+      {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
       {VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_HDR10_ST2084_EXT},
       {VK_FORMAT_A2B10G10R10_UNORM_PACK32,
        VK_COLOR_SPACE_EXTENDED_SRGB_NONLINEAR_EXT},
@@ -1021,6 +1090,7 @@ ContextResult ContextVk::recreateSwapchain(bool useHDR) {
   createInfo.presentMode = presentMode;
   createInfo.clipped = VK_TRUE;
   createInfo.oldSwapchain = oldSwapchain;
+  // TODO better if graphics and present are different
   createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
   createInfo.queueFamilyIndexCount = 0;
   createInfo.pQueueFamilyIndices = nullptr;
@@ -1059,6 +1129,12 @@ ContextResult ContextVk::recreateSwapchain(bool useHDR) {
   initializeFrameData();
 
   m_imageCount = actualImageCount;
+
+  // callback (recreate depth images, recreate swapchain image views)
+  m_swapchainRecreationCallback(m_vkImages.data(),
+                                static_cast<uint32_t>(m_vkImages.size()),
+                                m_surfaceFormat.format, m_currentExtent);
+
   return ContextResult::Success;
 }
 
@@ -1169,9 +1245,29 @@ VkFence ContextVk::getFence() {
 
 void ContextVk::setSwapBufferCallbacks(
     std::function<void(const SwapchainDataVk*)> drawCallback,
-    std::function<void(void)> acquireCallback) {
-  m_swapBufferDrawCallback = drawCallback;
-  m_swapBufferAcquiredCallback = acquireCallback;
+    std::function<void(void)> acquireCallback,
+    std::function<void(VkImage const*, uint32_t, VkFormat, VkExtent2D)>
+        recreationCallback) {
+  if (drawCallback) m_swapBufferDrawCallback = drawCallback;
+  if (acquireCallback) m_swapBufferAcquiredCallback = acquireCallback;
+  if (recreationCallback) m_swapchainRecreationCallback = recreationCallback;
+}
+
+SwapchainDataVk ContextVk::getSwapchainData() const {
+  SwapchainImage const& swapchainImage =
+      m_swapchainImages[m_acquiredSwapchainImageIndex];
+  Frame const& submissionFrame = m_frameData[m_renderFrame];
+
+  SwapchainDataVk swapchainData;
+  swapchainData.image = swapchainImage.image;
+  swapchainData.format = m_surfaceFormat;
+  swapchainData.extent = m_currentExtent;
+  swapchainData.submissionFence = submissionFrame.submissionFence;
+  swapchainData.acquireSemaphore = submissionFrame.acquireSemaphore;
+  swapchainData.presentSemaphore = swapchainImage.presentSemaphore;
+  swapchainData.sdrWhiteLevel = m_hdrInfo ? m_hdrInfo->sdrWhiteLevel : 1.f;
+  swapchainData.imageIndex = m_renderFrame;
+  return swapchainData;
 }
 
 ContextResult ContextVk::swapBufferRelease() {
@@ -1203,6 +1299,7 @@ ContextResult ContextVk::swapBufferRelease() {
   swapchainData.acquireSemaphore = submissionFrame.acquireSemaphore;
   swapchainData.presentSemaphore = swapchainImage.presentSemaphore;
   swapchainData.sdrWhiteLevel = m_hdrInfo ? m_hdrInfo->sdrWhiteLevel : 1.f;
+  swapchainData.imageIndex = m_renderFrame;
 
   vkResetFences(m_device.device, 1, &submissionFrame.submissionFence);
   if (m_swapBufferDrawCallback) {
@@ -1272,6 +1369,7 @@ ContextResult ContextVk::swapBufferAcquire() {
   if (submissionFrameData.submissionFence != VK_NULL_HANDLE) {
     vkWaitForFences(m_device.device, 1, &submissionFrameData.submissionFence,
                     true, UINT64_MAX);
+    // TODO not resetting? is it correct? if Submit signals this?
   }
   for (VkSwapchainKHR swapchain : submissionFrameData.discard.swapchains) {
     destroySwapchainPresentFences(swapchain);

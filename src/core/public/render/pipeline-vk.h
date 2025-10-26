@@ -3,6 +3,7 @@
 #include <numeric>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "render/utils-vk.h"
@@ -17,6 +18,8 @@ class ShaderModuleVk {
 
   void destroy(DiscardPoolVk& discardPool);
 };
+
+// -- Compute Pipeline Parameters --
 
 // struct to identify compute pipeline
 struct ComputeInfo {
@@ -70,16 +73,86 @@ struct VectorHash {
   }
 };
 
+enum class EPipelineFlags : uint32_t {
+  eDepthBias = 1u << 0,
+  eCull = 1u << 1,
+  eCullFront = 1u << 2 | eCull,
+  eCullBack = 0u << 2 | eCull,
+  eInvertFrontFace = 1u << 3,
+  eNoDepthWrite = 1u << 4,
+  eStencilEnable = 1u << 5,
+  eAll = eDepthBias | eCull | eInvertFrontFace | eCullFront | eNoDepthWrite |
+         eStencilEnable,
+};
+
+inline bool operator&(EPipelineFlags a, EPipelineFlags b) {
+  return static_cast<std::underlying_type_t<EPipelineFlags>>(a) &
+         static_cast<std::underlying_type_t<EPipelineFlags>>(b);
+}
+
+inline bool operator|(EPipelineFlags a, EPipelineFlags b) {
+  return static_cast<std::underlying_type_t<EPipelineFlags>>(a) |
+         static_cast<std::underlying_type_t<EPipelineFlags>>(b);
+}
+
+inline EPipelineFlags& operator&=(EPipelineFlags& a, EPipelineFlags b) {
+  *reinterpret_cast<std::underlying_type_t<EPipelineFlags>*>(&a) &=
+      static_cast<std::underlying_type_t<EPipelineFlags>>(b);
+  return a;
+}
+
+inline EPipelineFlags& operator|=(EPipelineFlags& a, EPipelineFlags b) {
+  *reinterpret_cast<std::underlying_type_t<EPipelineFlags>*>(&a) |=
+      static_cast<std::underlying_type_t<EPipelineFlags>>(b);
+  return a;
+}
+
+inline EPipelineFlags operator~(EPipelineFlags a) {
+  return static_cast<EPipelineFlags>(
+      ~static_cast<std::underlying_type_t<EPipelineFlags>>(a));
+}
+
+enum class EStencilCompareOp : uint32_t {
+  eNone = 0,
+  eEqual,
+  eNotEqual,
+  eAlways,
+};
+
+enum class EStencilLogicOp : uint32_t {
+  // synonym for KEEP in both back and front always
+  eNone = 0,
+  // replace on pass (visibility mask and identification of visible objects)
+  eReplace,
+  // depth pass for z-pass shadow volume counting (from blender's codebase)
+  // decrement on front, increment on back
+  // -> used to count volume crossing on depth pass
+  eCountDepthPass,
+  // depth pass for Carmack's reverse algorithm
+  // count crossings on depth test fail. inc/dec -> front/back
+  // https://developer.nvidia.com/gpugems/gpugems3/part-ii-light-and-shadows/chapter-11-efficient-and-robust-shadow-volumes-using
+  eCountDepthFail
+};
+
+// -- Graphics Pipeline Parameters --
+
 // struct to identify graphics pipeline dividing it into
 // 'VK_EXT_graphics_pipeline_library' vertex_in, pre_rasterization,
 // fragment_shader, fragment_out
 struct GraphicsInfo {
   struct VertexIn {
+    // adjacency require geometryShader feature,
+    // patch requires tessellationShader
     VkPrimitiveTopology topology;
+    // defined what's inside each binding, which can be split in multiple
+    // locations (globally unique, monotonically increasing) if you need multple
+    // pieces of data having a VkFormat
     std::vector<VkVertexInputAttributeDescription> attributes;
+    // define how big a single vertex binding or a single instance binding and
+    // how it's stepped through memory. *no information of what's inside it*
     std::vector<VkVertexInputBindingDescription> bindings;
 
-    bool operator==(VertexIn const& other) const {
+    inline bool operator==(VertexIn const& other) const {
       auto constexpr attributeEqual =
           [](VkVertexInputAttributeDescription const& a,
              VkVertexInputAttributeDescription const& b) {
@@ -107,6 +180,10 @@ struct GraphicsInfo {
       return topology == other.topology && attributesEqual && bindingsEqual;
     }
 
+    inline bool operator!=(VertexIn const& other) const {
+      return !((*this) == other);
+    }
+
     uint64_t hash() const {
       uint64_t hash = static_cast<uint64_t>(topology);
       hash = hash * 33 ^
@@ -127,23 +204,28 @@ struct GraphicsInfo {
     VkShaderModule vertexModule;
     VkShaderModule geometryModule;
 
-    bool operator==(PreRasterization const& other) const {
+    inline bool operator==(PreRasterization const& other) const {
       return vertexModule == other.vertexModule &&
              geometryModule == other.geometryModule;
     }
+    inline bool operator!=(PreRasterization const& other) const {
+      return !((*this) == other);
+    }
 
     uint64_t hash() const {
-      uint64_t hash = 33 ^ reinterpret_cast<uint64_t>(vertexModule);
-      hash = hash * 33 ^ reinterpret_cast<uint64_t>(geometryModule);
+      uint64_t hash = 33 ^ reinterpret_cast<uintptr_t>(vertexModule);
+      hash = hash * 33 ^ reinterpret_cast<uintptr_t>(geometryModule);
       return hash;
     }
   };
   struct FragmentShader {
     VkShaderModule fragmentModule;
+    // If dynamic states contains viewport, we care only about size. if dynamic
+    // state contains viewport with count, this is unused (same for scissor)
     std::vector<VkViewport> viewports;
     std::vector<VkRect2D> scissors;
 
-    bool operator==(FragmentShader const& f) const {
+    inline bool operator==(FragmentShader const& f) const {
       auto constexpr equalityViewports = [](VkViewport const& a,
                                             VkViewport const& b) {
         return a.height == b.height && a.width == b.width && a.x == b.x &&
@@ -171,6 +253,9 @@ struct GraphicsInfo {
       return fragmentModule == f.fragmentModule && viewportsEqual &&
              scissorsEqual;
     }
+    inline bool operator!=(FragmentShader const& f) const {
+      return !((*this) == f);
+    }
 
     uint64_t hash() const {
       uint64_t hash = reinterpret_cast<uint64_t>(fragmentModule);
@@ -180,14 +265,16 @@ struct GraphicsInfo {
     }
   };
   struct FragmentOut {
-    uint32_t colorAttachmentSize;
-    // stuff for dynamic rendering
+    // for blend state
+    uint32_t colorAttachmentCount;
+    // stuff for dynamic rendering and depth stencil
     VkFormat depthAttachmentFormat;
     VkFormat stencilAttachmentFormat;
     std::vector<VkFormat> colorAttachmentFormats;
 
-    bool operator==(FragmentOut const& other) const {
-      if (depthAttachmentFormat != other.depthAttachmentFormat ||
+    inline bool operator==(FragmentOut const& other) const {
+      if (colorAttachmentCount != other.colorAttachmentCount ||
+          depthAttachmentFormat != other.depthAttachmentFormat ||
           stencilAttachmentFormat != other.stencilAttachmentFormat ||
           colorAttachmentFormats.size() !=
               other.colorAttachmentFormats.size()) {
@@ -201,13 +288,57 @@ struct GraphicsInfo {
       }
       return true;
     }
+    inline bool operator!=(FragmentOut const& other) const {
+      return !((*this) == other);
+    }
 
     uint64_t hash() const {
       uint64_t hash = depthAttachmentFormat;
       hash = hash * 33 ^ stencilAttachmentFormat;
+      hash = hash * 33 ^ colorAttachmentCount;
       hash = hash * 33 ^
              VectorHash<VkFormat>{}(colorAttachmentFormats,
                                     [](VkFormat format) { return format; });
+      return hash;
+    }
+  };
+  struct PipelineOpts {
+    EPipelineFlags flags;
+    VkPolygonMode rasterizationPolygonMode;
+    EStencilCompareOp stencilCompareOp;
+    EStencilLogicOp stencilLogicalOp;
+    uint32_t stencilReference;
+    uint32_t stencilCompareMask;
+    uint32_t stencilWriteMask;
+
+    inline bool operator==(PipelineOpts const& other) const {
+      if (flags != other.flags ||
+          rasterizationPolygonMode != other.rasterizationPolygonMode ||
+          stencilCompareOp != other.stencilCompareOp ||
+          stencilLogicalOp != other.stencilLogicalOp ||
+          stencilReference != other.stencilReference ||
+          stencilCompareMask != other.stencilCompareMask ||
+          stencilWriteMask != other.stencilWriteMask) {
+        return false;
+      }
+      return true;
+    }
+    inline bool operator!=(PipelineOpts const& other) const {
+      return !((*this) == other);
+    }
+
+    uint64_t hash() const {
+      uint64_t hash =
+          uint64_t(0) ^
+          static_cast<std::underlying_type_t<EPipelineFlags>>(flags);
+      hash = hash * 33 ^ rasterizationPolygonMode;
+      hash = hash * 33 ^ static_cast<std::underlying_type_t<EStencilCompareOp>>(
+                             stencilCompareOp);
+      hash = hash * 33 ^ stencilReference;
+      hash = hash * 33 ^ static_cast<std::underlying_type_t<EStencilLogicOp>>(
+                             stencilLogicalOp);
+      hash = hash * 33 ^ stencilCompareMask;
+      hash = hash * 33 ^ stencilWriteMask;
       return hash;
     }
   };
@@ -218,9 +349,19 @@ struct GraphicsInfo {
   FragmentOut fragmentOut;
 
   // add GPU state?
+  PipelineOpts opts;
   VkPipelineLayout pipelineLayout;
   // TODO add specialization constants
 };
+
+inline bool operator==(GraphicsInfo const& a, GraphicsInfo const& b) {
+  if (a.vertexIn != b.vertexIn || a.preRasterization != b.preRasterization ||
+      a.fragmentShader != b.fragmentShader ||
+      a.pipelineLayout != b.pipelineLayout || a.opts != b.opts) {
+    return false;
+  }
+  return true;
+}
 
 }  // namespace avk
 
@@ -231,7 +372,8 @@ struct std::hash<avk::GraphicsInfo> {
     hash = hash * 33 ^ graphicsInfo.preRasterization.hash();
     hash = hash * 33 ^ graphicsInfo.fragmentShader.hash();
     hash = hash * 33 ^ graphicsInfo.fragmentOut.hash();
-    hash = hash * 33 ^ reinterpret_cast<uint64_t>(graphicsInfo.pipelineLayout);
+    hash = hash * 33 ^ reinterpret_cast<uintptr_t>(graphicsInfo.pipelineLayout);
+    hash = hash * 33 ^ graphicsInfo.opts.hash();
     return hash;
   }
 };
@@ -246,20 +388,31 @@ class VkPipelinePool {
   VkPipelinePool& operator=(VkPipelinePool const&) = delete;
   VkPipelinePool& operator=(VkPipelinePool&&) noexcept = delete;
 
-  VkPipeline getOrCreateComputePipeline(ComputeInfo& computeInfo,
+  VkPipeline getOrCreateComputePipeline(ContextVk const& context,
+                                        ComputeInfo& computeInfo,
                                         bool isStaticShader,
                                         VkPipeline pipelineBase);
-  VkPipeline getOrCreateGraphicsPipeline(GraphicsInfo& graphicsInfo,
+  VkPipeline getOrCreateGraphicsPipeline(ContextVk const& context,
+                                         GraphicsInfo& graphicsInfo,
                                          bool isStaticShader,
                                          VkPipeline pipelineBase);
 
+  // erase pipelines from the maps and inserts them in the discard pool, such
+  // that they can live there until they are no longer in use
+  // context must be the same used to create the pipelines
+  // TODO possible: hash function for context, such that we can filter by
+  // context
+  // WARNING: calling this won't discard Vulkan Handles inside
+  // the info structs. only VkPipelines
   void discardAllPipelines(DiscardPoolVk& discardPool,
                            VkPipelineLayout pipelineLayout);
 
   void readStaticCacheFromDisk();
   void writeStaticCacheToDisk();
 
-  void destroyAllPipelines();
+  // WARNING: calling this won't destroy Vulkan Handles inside
+  // the info structs. only VkPipelines
+  void destroyAllPipelines(ContextVk const& context);
 
  private:
   std::unordered_map<GraphicsInfo, VkPipeline> m_graphicsPipelines;
@@ -267,22 +420,27 @@ class VkPipelinePool {
   // partially initialized structure to reuse
   VkComputePipelineCreateInfo m_computePipelineCreateInfo;
 
+  static uint32_t constexpr ShaderStageCount = 3;
+
   VkGraphicsPipelineCreateInfo m_graphicsPipelineCreateInfo;
   VkPipelineRenderingCreateInfo m_pipelineRenderingCreateInfo;
-  VkPipelineShaderStageCreateInfo m_pipelineShaderStageCreateInfo[3];
+  VkPipelineShaderStageCreateInfo
+      m_pipelineShaderStageCreateInfos[ShaderStageCount];
   VkPipelineInputAssemblyStateCreateInfo m_pipelineInputAssemblyStateCreateInfo;
   VkPipelineVertexInputStateCreateInfo m_pipelineVertexInputStateCreateInfo;
 
   VkPipelineRasterizationStateCreateInfo m_pipelineRasterizationStateCreateInfo;
 
   // no provoking vertex info
-  std::vector<VkDynamicState> m_dynamicState;
+  std::vector<VkDynamicState> m_dynamicStates;
   VkPipelineDynamicStateCreateInfo m_pipelineDynamicStateCreateInfo;
 
   VkPipelineViewportStateCreateInfo m_pipelineViewportStateCreateInfo;
   VkPipelineDepthStencilStateCreateInfo m_pipelineDepthStencilStateCreateInfo;
 
-  VkPipelineMultisampleStateCreateInfo pipelineMultisampleStateCreateInfo;
+  std::vector<VkSampleMask> m_sampleMasks;  // TODO in GraphicsInfo?
+  VkPipelineMultisampleStateCreateInfo m_pipelineMultisampleStateCreateInfo;
+  VkPipelineTessellationStateCreateInfo m_pipelineTessellationStateCreateInfo;
 
   std::vector<VkPipelineColorBlendAttachmentState>
       m_pipelineColorBlendAttachmentStates;
@@ -290,13 +448,13 @@ class VkPipelinePool {
   VkPipelineColorBlendAttachmentState
       m_pipelineColorBlendAttachmentStateTemplate;
 
-  VkSpecializationInfo m_specializationInfo;
-  std::vector<VkSpecializationMapEntry> m_specializationMapEntries;
-  VkPushConstantRange m_pushConstantRange;
+  // VkSpecializationInfo m_specializationInfo;
+  // std::vector<VkSpecializationMapEntry> m_specializationMapEntries;
+  // VkPushConstantRange m_pushConstantRange;
+  // VkPipelineCache m_pipelineCacheStatic;
+  // VkPipelineCache m_pipelineCacheNonStatic;
 
-  VkPipelineCache m_pipelineCacheStatic;
-  VkPipelineCache m_pipelineCacheNonStatic;
-
+  // mutex to be acquired whenever getting/creating a pipeline
   std::mutex m_mutex;
 };
 
