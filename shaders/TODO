@@ -1,0 +1,6 @@
+- create static shaders for experimentation here and later see if swe need something
+more dynamic
+
+Compilation Command
+
+slangc -lang slang -matrix-layout-column-major -restrictive-capability-check -target spirv -std 2018 --
