@@ -199,4 +199,15 @@ struct SingleImage2DSpecVk {
 bool createImage(ContextVk const& context, SingleImage2DSpecVk const& spec,
                  VkImage& image, VmaAllocation& allocation);
 
+// TODO better
+// TODO see if VkDataGraphProcessingEngineCreateInfoARM is necessary for ARM
+// devices
+// TODO see if protectedMemory Feature is necessary
+VkCommandPool createCommandPool(ContextVk const& context, bool resettable,
+                                uint32_t queueFamilyIndex);
+
+// TODO better
+bool allocPrimaryCommandBuffers(ContextVk const& context,
+                                VkCommandPool commandPool, uint32_t count,
+                                VkCommandBuffer* commandBuffers);
 }  // namespace avk

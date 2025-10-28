@@ -469,4 +469,32 @@ bool createImage(ContextVk const& context, SingleImage2DSpecVk const& spec,
   return true;
 }
 
+VkCommandPool createCommandPool(ContextVk const& context, bool resettable,
+                                uint32_t queueFamilyIndex) {
+  VkCommandPool commandPool = VK_NULL_HANDLE;
+  VkCommandPoolCreateInfo createInfo{};
+  createInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+  if (resettable) {
+    createInfo.flags |= VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+  }
+  createInfo.queueFamilyIndex = queueFamilyIndex;
+  vkCheck(vkCreateCommandPool(context.device().device, &createInfo, nullptr,
+                              &commandPool));
+  return commandPool;
+}
+
+bool allocPrimaryCommandBuffers(ContextVk const& context,
+                                VkCommandPool commandPool, uint32_t count,
+                                VkCommandBuffer* commandBuffers) {
+  VkCommandBufferAllocateInfo allocateInfo{};
+  allocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  allocateInfo.commandPool = commandPool;
+  allocateInfo.commandBufferCount = count;
+  allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+
+  VkResult const res = vkAllocateCommandBuffers(context.device().device,
+                                                &allocateInfo, commandBuffers);
+  return VK_SUCCESS == res;
+}
+
 }  // namespace avk

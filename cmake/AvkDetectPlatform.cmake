@@ -17,7 +17,7 @@ function(avk_detect_platform)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         set(AVK_OS LINUX)
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-        set(AVK_OS MACOS)
+        set(AVK_OS MACOS) # TODO check iOS and iPadOS
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
         set(AVK_OS WINDOWS)
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
@@ -45,6 +45,8 @@ endfunction()
 # - AVK_CXX_TARGET_COMPILE_FLAGS space separated list of compile flags (warnings and such)
 # TODO: When using sanitizers, add -fno-optimize-sibling-calls and -fno-omit-frame-pointers
 # TODO: When using sanitizers, use dsymutils on MachO Executable to stuff debug information inside it
+# TODO: When using sanitizers (cfi), volk breaks
+# TODO: Add no-lto and no-sanitizer-cfi cmake cache variables
 macro(avk_cxx_flags)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
     if(AVK_COMPILER STREQUAL "CLANG")
@@ -72,6 +74,7 @@ macro(avk_cxx_flags)
         # debug only
         if(CMAKE_BUILD_TYPE STREQUAL "Debug")
             if(${AVK_USE_SANITIZERS})
+                string(APPEND CMAKE_CXX_FLAGS " -fsanitize-ignorelist=${CMAKE_SOURCE_DIR}/blacklist.sanitizers")
                 # On Windows, you cannot safely mix AddressSanitizer with the MSVC debug CRT.
                 # The debug CRT has its own heap instrumentation, so ASan double-hooks the allocator and immediately crashes.
                 # set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL") # already done at beg
@@ -84,7 +87,11 @@ macro(avk_cxx_flags)
                     string(APPEND CMAKE_CXX_FLAGS " -fsanitize=thread -fsanitize=leak")
                 endif()
                 string(APPEND CMAKE_CXX_FLAGS " -fsanitize=address -fsanitize=undefined")
-                string(APPEND CMAKE_CXX_FLAGS " -flto -fsanitize=cfi") 
+                # Control Flow Integrity Requires LTO -> (Windows, clang 21) LLVM ERROR: Associative COMDAT symbol '___asan_gen_anon_global' is not a key for its COMDAT.
+                # -fsanitize=cfi-vcall -> CRASH
+                # -fsanitize=cfi-mfcall -> doesn't exist on windows
+                # string(APPEND CMAKE_CXX_FLAGS " -flto -fsanitize=cfi") 
+                string(APPEND CMAKE_CXX_FLAGS " -flto -fsanitize=cfi-cast-strict -fsanitize=cfi-nvcall -fsanitize=cfi-icall -fsanitize=cfi-derived-cast -fsanitize=cfi-unrelated-cast")
 
                 if(AVK_OS STREQUAL "WINDOWS")
                     # Windows needs to declare the sanitizers DLL if we link against dynamically
@@ -152,7 +159,11 @@ macro(avk_setup_vulkan)
     endif()
 
     # Note: Should we rely on installed SDK or download it like we do with bazel?
-    find_package(Vulkan REQUIRED) # Imported Target: Vulkan::Vulkan
+    if(AVK_OS STREQUAL "MACOS")
+        find_package(Vulkan REQUIRED COMPONENTS MoltenVK)
+    else()
+        find_package(Vulkan REQUIRED)
+    endif()
     set(SLANGC_COMMAND "${Vulkan_GLSLC_EXECUTABLE}")
 
     if(WIN32)
@@ -177,10 +188,13 @@ macro(avk_setup_vulkan)
     endif()
     unset(VULKAN_SYMLINK_RES)
     unset(VULKAN_BIN_PATH)
+    # prevent header overrides by vcpkg creating a target alias
+    add_library(VulkanSDK::Headers ALIAS Vulkan::Headers)
 endmacro()
 
 
 function(avk_setup_dependencies)
+    message(WARNING "define environment variable before build: VCPKG_ROOT = \"${VCPKG_ROOT}\"")
     if(NOT TARGET Boost::fiber)
         find_package(Boost REQUIRED COMPONENTS fiber)
         if(WIN32 AND ${AVK_USE_SANITIZERS})
@@ -197,7 +211,17 @@ function(avk_setup_dependencies)
             endforeach()
         endif()
     endif()
-    message(WARNING "define environment variable before build: VCPKG_ROOT = \"${VCPKG_ROOT}\"")
+
+    if(NOT TARGET volk::volk)
+        find_package(volk CONFIG REQUIRED)
+    endif()
+
+    if(NOT TARGET GPUOpen::VulkanMemoryAllocator)
+        if(NOT DEFINED Vulkan_LIBRARY)
+            message(FATAL_ERROR "Must use FindVulkan.cmake before VulkanMemoryAllocator")
+        endif()
+        find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+    endif()
 endfunction()
 
 
@@ -282,4 +306,24 @@ function(avk_release_is_debug_for_imported target)
     endif()
 
     message(STATUS "Mapped ${target} release import libs to debug configuration.")
+endfunction()
+
+
+function(avk_create_vulkan_sdk_library_targets)
+    if(NOT DEFINED Vulkan_LIBRARY)
+        message(FATAL_ERROR "Must use FindVulkan.cmake before calling `avk_create_vulkan_sdk_library_targets`")
+    endif()
+    # static volk library
+    # if(WIN32)
+    #     set(VOLK_NAME "volk.lib")
+    # else()
+    #     message(FATAL_ERROR "TODO volk")
+    # endif()
+    # cmake_path(REPLACE_FILENAME Vulkan_LIBRARY "${VOLK_NAME}" OUTPUT_VARIABLE VK_VOLK_LIB_PATH)
+    # # we won't set include directory as we assume you are including Vulkan::Vulkan
+    # add_library(vk-volk STATIC IMPORTED)
+    # set_target_properties(vk-volk PROPERTIES
+    #   IMPORTED_LOCATION "${VK_VOLK_LIB_PATH}"
+    # )
+    # add_library(vk::volk ALIAS vk-volk)
 endfunction()

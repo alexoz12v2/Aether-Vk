@@ -1,0 +1,7 @@
+# blacklist.sanitizers
+# https://clang.llvm.org/docs/SanitizerSpecialCaseList.html
+fun:vkEnumerateInstanceExtensionProperties
+fun:vkCreateInstance
+fun:vkGetInstanceProcAddr
+fun:vkCreateDevice
+src:vulkan-1.dll
