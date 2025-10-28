@@ -20,26 +20,24 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
-#include <ratio>
 #include <thread>
-#include <type_traits>
 
+#include "fiber/jobs.h"
 #include "os/filesystem.h"
 #include "render/context-vk.h"
 #include "render/pipeline-vk.h"
 #include "render/utils-vk.h"
-#include "utils/mixins.h"
-
-#define VK_USE_PLATFORM_WIN32_KHR
-#include <vulkan/vulkan.h>
-
-#include "fiber/jobs.h"
 
 struct PerFrameData {
   VkImage depthImage;
   VmaAllocation depthImageAlloc;
   VkImageView swapchainImageView;
   VkImageView depthImageView;
+  VkCommandBuffer commandBuffer;  // TODO better (using timeline semaphores)
+};
+
+struct WindowPayload {
+  avk::ContextVk* contextVk;
 };
 
 static LRESULT standardWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
@@ -68,7 +66,7 @@ static void syncLog(F&& f) {
 // -------------------------------------------------------
 
 static std::atomic<bool> g_quit{false};
-static std::atomic<bool> g_presentReady{false};
+// static std::atomic<bool> g_presentReady{false};
 static std::atomic<HWND> g_window(nullptr);
 
 struct RenderJobTLS {
@@ -92,20 +90,44 @@ void onAcquire([[maybe_unused]] avk::ContextVk const& contextVk) {}
 
 void onSwapchainRecreation(avk::ContextVk const& contextVk,
                            avk::DiscardPoolVk& discardPool,
-                           VkImage const* images, uint32_t numImages,
-                           VkFormat format, VkExtent2D imageExtent,
-                           VkFormat depthFormat,
+                           VkCommandPool commandPool, VkImage const* images,
+                           uint32_t numImages, VkFormat format,
+                           VkExtent2D imageExtent, VkFormat depthFormat,
                            std::vector<PerFrameData>& perFrameData) {
   // TODO add timeline
   // 1. add all resources in the vector into the discard pool
+  std::vector<VkCommandBuffer> commandBuffers;
+  commandBuffers.reserve(64);
   for (auto const& data : perFrameData) {
     discardPool.discardImageView(data.swapchainImageView);
     discardPool.discardImageView(data.depthImageView);
     discardPool.discardImage(data.depthImage, data.depthImageAlloc);
+    // TODO handle discarding command buffers better
+    commandBuffers.push_back(data.commandBuffer);
   }
-  // 2. create new resources
+
   perFrameData.clear();
   perFrameData.resize(numImages);
+
+  // 1.1 create new command buffers/reuse old ones
+  // TODO better
+  if (commandBuffers.size() < perFrameData.size()) {
+    // create missing command buffers
+    size_t const offset = commandBuffers.size();
+    size_t const count = perFrameData.size() - commandBuffers.size();
+    commandBuffers.resize(perFrameData.size());
+    avk::allocPrimaryCommandBuffers(contextVk, commandPool, count,
+                                    commandBuffers.data() + offset);
+  } else if (commandBuffers.size() > perFrameData.size()) {
+    // handle excess command buffers
+    size_t const offset = perFrameData.size();
+    size_t const count = commandBuffers.size() - perFrameData.size();
+    vkFreeCommandBuffers(contextVk.device().device, commandPool, count,
+                         commandBuffers.data() + offset);
+    commandBuffers.resize(perFrameData.size());
+  }
+
+  // 2. create new resources
   uint32_t index = 0;
   for (auto& data : perFrameData) {
     uint32_t const current = index++;
@@ -190,7 +212,7 @@ void renderStep(void* userData, [[maybe_unused]] std::string const& name,
 //     */
 //  }
 
-void messageThreadProc() {
+void messageThreadProc(WindowPayload* windowPayload) {
   syncLog([] { std::cout << "Started UI Thread" << std::endl; });
 
   // MessageBoxW(nullptr, L"Hello, World!", L"Aether-Vk", MB_OK);
@@ -218,22 +240,22 @@ void messageThreadProc() {
 
   // Menu definition (probably we will rmove it if we can't style the part
   // outside the client area)
-  static int constexpr ID_FILE_OPEN = 1;
-  HMENU hMenu = CreateMenu();  // DestroyMenu
-  if (!hMenu) {
-    printError();
-  }
-  HMENU hFileSubMenu = CreatePopupMenu();  // DestroyPopupMenu
-  if (!hFileSubMenu) {
-    printError();
-  }
-  if (!AppendMenuW(hFileSubMenu, MF_STRING, ID_FILE_OPEN, L"Open")) {
-    printError();
-  }
-  if (!AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hFileSubMenu,
-                   L"File")) {
-    printError();
-  }
+  // static int constexpr ID_FILE_OPEN = 1;
+  // HMENU hMenu = CreateMenu();  // DestroyMenu
+  // if (!hMenu) {
+  //   printError();
+  // }
+  // HMENU hFileSubMenu = CreatePopupMenu();  // DestroyPopupMenu
+  // if (!hFileSubMenu) {
+  //   printError();
+  // }
+  // if (!AppendMenuW(hFileSubMenu, MF_STRING, ID_FILE_OPEN, L"Open")) {
+  //   printError();
+  // }
+  // if (!AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hFileSubMenu,
+  //                  L"File")) {
+  //   printError();
+  // }
 
   WNDCLASSEXW standardWindowSpec{};
   standardWindowSpec.cbSize = sizeof(WNDCLASSEXW);
@@ -261,8 +283,8 @@ void messageThreadProc() {
   // rendered on vulkan, see how it works on mac and linux)
   int winX = 100, winY = 100, winW = 1024, winH = 768;  // TODO better
   g_window.store(CreateWindowExW(0, L"Standard Window", L"Aether VK", WS_POPUP,
-                                 winX, winY, winW, winH, nullptr, hMenu,
-                                 nullptr, nullptr));
+                                 winX, winY, winW, winH, nullptr,
+                                 nullptr /*hMenu*/, nullptr, windowPayload));
   if (!g_window.load()) {
     printError();
     g_quit.store(true);
@@ -377,14 +399,22 @@ void transitionImageLayout(VkCommandBuffer cmd,
 }
 
 std::vector<uint32_t> openSpirV(std::filesystem::path const& path) {
-  std::vector<uint32_t> shaderCode;
-  std::ifstream file{path, std::ios::binary};
+  syncLog([&]() { std::wcout << L"Shader Path: " << path << std::endl; });
+
+  std::ifstream file(path, std::ios::ate | std::ios::binary);
   if (!file) {
-    return shaderCode;
+    throw std::runtime_error("Failed to open SPIR-V file: " + path.string());
   }
-  shaderCode.reserve(64);
-  std::copy(std::istreambuf_iterator<char>(file),
-            std::istreambuf_iterator<char>(), std::back_inserter(shaderCode));
+
+  size_t fileSize = static_cast<size_t>(file.tellg());
+  if (fileSize % 4 != 0) {
+    return {};
+  }
+
+  std::vector<uint32_t> shaderCode(fileSize / 4);
+  file.seekg(0);
+  file.read(reinterpret_cast<char*>(shaderCode.data()), fileSize);
+
   return shaderCode;
 }
 
@@ -409,15 +439,15 @@ void fillTriangleGraphicsInfo(avk::ContextVk const& context,
   attrDesc.offset = offsetof(Vertex, color);
   attrDesc.format = VK_FORMAT_R32G32B32_SFLOAT;  // color float3
   graphicsInfo.vertexIn.attributes.push_back(attrDesc);
-  auto const execPath = avk::getExecutablePath();
+  auto const execPath = avk::getExecutablePath().parent_path();
   auto const vertCode = openSpirV(execPath / "triangle.vert.slang.spv");
   auto const fragCode = openSpirV(execPath / "triangle.frag.slang.spv");
   assert(!vertCode.empty() && !fragCode.empty());
   // TODO add them to the cleanup somehow (eg device resource tracker)
-  VkShaderModule vertModule =
-      avk::finalizeShaderModule(context, vertCode.data(), vertCode.size() / 4);
-  VkShaderModule fragModule =
-      avk::finalizeShaderModule(context, fragCode.data(), fragCode.size() / 4);
+  VkShaderModule vertModule = avk::finalizeShaderModule(
+      context, vertCode.data(), vertCode.size() * sizeof(uint32_t));
+  VkShaderModule fragModule = avk::finalizeShaderModule(
+      context, fragCode.data(), fragCode.size() * sizeof(uint32_t));
 
   graphicsInfo.preRasterization.vertexModule = vertModule;
   graphicsInfo.preRasterization.geometryModule = VK_NULL_HANDLE;
@@ -427,9 +457,10 @@ void fillTriangleGraphicsInfo(avk::ContextVk const& context,
   graphicsInfo.fragmentShader.viewports.resize(1);
   graphicsInfo.fragmentShader.scissors.resize(1);
 
-  graphicsInfo.fragmentOut.colorAttachmentCount = 1;
-  graphicsInfo.fragmentOut.depthAttachmentFormat = VK_FORMAT_UNDEFINED;
-  graphicsInfo.fragmentOut.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
+  graphicsInfo.fragmentOut.depthAttachmentFormat =
+      avk::basicDepthStencilFormat(context.device().physicalDevice);
+  graphicsInfo.fragmentOut.stencilAttachmentFormat =
+      avk::basicDepthStencilFormat(context.device().physicalDevice);
 }
 
 void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
@@ -447,9 +478,8 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
   VkPipeline pipeline = pipelinePool.getOrCreateGraphicsPipeline(
       contextVk, graphicsInfo, true, VK_NULL_HANDLE);
   // TODO create TLS Command Pool
-  VkCommandPool commandPool = VK_NULL_HANDLE;
-  // TODO allocate command buffer
-  VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+  VkCommandPool commandPool = avk::createCommandPool(
+      contextVk, true, contextVk.device().queueIndices.family.graphicsCompute);
 
   // Create initial Vertex Buffer
   const std::vector<Vertex> vertices = {
@@ -482,11 +512,12 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
         onSwapBuffer(contextVk, *pData);
       },
       [&contextVk]() { onAcquire(contextVk); },
-      [&contextVk, &discardPool, &perFrameData, depthFormat](
+      [&contextVk, &discardPool, &perFrameData, depthFormat, commandPool](
           VkImage const* images, uint32_t numImages, VkFormat format,
           VkExtent2D extent) {
-        onSwapchainRecreation(contextVk, discardPool, images, numImages, format,
-                              extent, depthFormat, perFrameData);
+        onSwapchainRecreation(contextVk, discardPool, commandPool, images,
+                              numImages, format, extent, depthFormat,
+                              perFrameData);
       });
   contextVk.recreateSwapchain(false);
 
@@ -517,6 +548,9 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
     // TODO multithreaded command buffer recording and multithreaded data
     // transfer AVK_JOB(&render[jobIdx], renderStep, p, avk::JobPriority::Low,
     //         "RenderPrep");
+
+    VkCommandBuffer commandBuffer = frame.commandBuffer;
+
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;  // one time
@@ -661,11 +695,6 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
   delete[] phys;
   delete[] render;
 }
-
-struct WindowPayload {
-  avk::ContextVk* contextVk;
-};
-
 static LRESULT standardWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                                   LPARAM lParam) {
   avk::ContextVk* context = nullptr;
@@ -778,8 +807,12 @@ int WINAPI wWinMain([[maybe_unused]] HINSTANCE hInstance,
   std::ios::sync_with_stdio();
 #endif
 
+  avk::ContextVk contextVk{};
+  std::unique_ptr<WindowPayload> windowPayload =
+      std::make_unique<WindowPayload>();
+  windowPayload->contextVk = &contextVk;
   // start Win32 message thread (dedicated)
-  std::thread msgThread(messageThreadProc);
+  std::thread msgThread(messageThreadProc, windowPayload.get());
   while (!g_window.load()) {
     std::this_thread::yield();
   }
@@ -788,8 +821,12 @@ int WINAPI wWinMain([[maybe_unused]] HINSTANCE hInstance,
   std::cout << "Time to Initialize Vulkan" << std::endl;
   avk::ContextVkParams params;
   params.window = g_window.load();
-  avk::ContextVk contextVk{params};
-  contextVk.initializeDrawingContext();
+  if (contextVk.initializeDrawingContext(params) !=
+      avk::ContextResult::Success) {
+    MessageBoxW(params.window, L"Error, Couldn't initialize Vulkan",
+                L"Fatal Error", MB_OK | MB_ICONEXCLAMATION);
+    return 1;
+  }
 
   // frame producer on its own thread (could be main thread in real app)
   constexpr size_t jobPoolSize = 1024;
@@ -802,8 +839,12 @@ int WINAPI wWinMain([[maybe_unused]] HINSTANCE hInstance,
   unsigned const workerCount = hw > 3 ? hw - 3 : 1;
   avk::Scheduler sched(fiberCount, &highQ, &medQ, &lowQ, workerCount);
   sched.start();
-  const int chunksPerFrame = 8;
-  std::thread producer(frameProducer, &sched, g_window.load(), chunksPerFrame);
+  // const int chunksPerFrame = 8;
+  FrameProducerPayload producerPayload{};
+  producerPayload.context = &contextVk;
+  producerPayload.hMainWindow = params.window;
+  producerPayload.jobBufferSize = 256;
+  std::thread producer(frameProducer, &sched, &producerPayload);
 
   producer.join();
   sched.waitUntilAllTasksDone();

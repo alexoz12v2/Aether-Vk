@@ -1,6 +1,7 @@
 #include "render/pipeline-vk.h"
 
 #include <slang/slang.h>
+#include <vulkan/vulkan_core.h>
 
 #include <cassert>
 
@@ -474,6 +475,10 @@ VkPipeline VkPipelinePool::getOrCreateGraphicsPipeline(
   // TODO if necessary, more operators in color blend
 
   // -- Graphics Pipeline: Dynamic States --
+  m_pipelineDynamicStateCreateInfo = {};
+  m_pipelineDynamicStateCreateInfo.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+
   // line width is the last as we exclude it in non line topologies
   if (graphicsInfo.vertexIn.topology == VK_PRIMITIVE_TOPOLOGY_LINE_LIST ||
       graphicsInfo.vertexIn.topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP ||
@@ -491,10 +496,18 @@ VkPipeline VkPipelinePool::getOrCreateGraphicsPipeline(
   m_pipelineDynamicStateCreateInfo.pDynamicStates = m_dynamicStates.data();
 
   // -- Graphics Pipeline: Extension "VK_KHR_dynamic_rendering" --
-  m_pipelineRenderingCreateInfo.colorAttachmentCount =
-      graphicsInfo.fragmentOut.colorAttachmentCount;
-  m_pipelineRenderingCreateInfo.pColorAttachmentFormats =
-      graphicsInfo.fragmentOut.colorAttachmentFormats.data();
+  VkFormat colorFallbackFormat = context.surfaceFormat().format;
+  if (uint32_t num = static_cast<uint32_t>(
+          graphicsInfo.fragmentOut.colorAttachmentFormats.size());
+      num > 0) {
+    m_pipelineRenderingCreateInfo.colorAttachmentCount = num;
+    m_pipelineRenderingCreateInfo.pColorAttachmentFormats =
+        graphicsInfo.fragmentOut.colorAttachmentFormats.data();
+  } else {
+    m_pipelineRenderingCreateInfo.colorAttachmentCount = 1;
+    m_pipelineRenderingCreateInfo.pColorAttachmentFormats =
+        &colorFallbackFormat;
+  }
   m_pipelineRenderingCreateInfo.depthAttachmentFormat =
       graphicsInfo.fragmentOut.depthAttachmentFormat;
   m_pipelineRenderingCreateInfo.stencilAttachmentFormat =

@@ -1,9 +1,12 @@
 #pragma once
 
+#include <vulkan/vulkan_core.h>
+
 #include <functional>
 #include <map>
 #include <mutex>
 #include <type_traits>
+#include <unordered_map>
 
 #include "utils/mixins.h"
 
@@ -23,10 +26,12 @@
 #error "ADD SUPPORT"
 #endif
 
-#define VK_NO_PROTOTYPES
-#include <Volk/volk.h>
+#ifndef VK_NO_PROTOTYPES
+#error "IF you are using volk, define VK_NO_PROTOTYPES"
+#endif
+
 #include <vma/vk_mem_alloc.h>
-#include <vulkan/vulkan.h>
+#include <volk.h>
 
 #include <cstdint>
 #include <cstring>
@@ -178,6 +183,9 @@ struct Extensions {
   template <typename StrIt>
   inline bool enable(StrIt&& beg, StrIt&& end) {
     bool failure = false;
+    if (beg == end) {
+      return true;
+    }
     for (auto it = beg; it != end; ++it) {
       const char* name = nullptr;
       const auto& val = *it;
@@ -244,14 +252,15 @@ struct InstanceVk {
 struct DeviceVk : public NonCopyable {
   DeviceVk() = default;
   // rember to update these
-  DeviceVk(DeviceVk&&) noexcept;
-  DeviceVk& operator=(DeviceVk&&) noexcept;
+  // DeviceVk(DeviceVk&&) noexcept;
+  // DeviceVk& operator=(DeviceVk&&) noexcept;
 
   static uint32_t constexpr InvalidQueueFamilyIndex = UINT32_MAX;
   static uint32_t constexpr QueueFamilyIndicesCount = 4;
 
   VmaAllocator vmaAllocator = VK_NULL_HANDLE;
-  std::mutex queueMutex;
+  // TODO Queues should they be externally synchronized?
+  // std::mutex queueMutex;
 
   VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
   VkDevice device = VK_NULL_HANDLE;
@@ -267,6 +276,12 @@ struct DeviceVk : public NonCopyable {
     } family;
     uint32_t families[4];
   } queueIndices;
+
+  // TODO substitute all device submit usages with this
+  bool getQueueUsage(VkQueue queue);
+  bool freeQueueUsage(VkQueue queue);
+
+  std::unordered_map<VkQueue, std::atomic<int32_t>> queuesStateMap;
 
   // Vulkan specification mandates that at least one queue family must support
   // graphics and compute
@@ -329,10 +344,10 @@ struct SwapchainImage {
 
 class ContextVk : public NonMoveable {
  public:
-  ContextVk(ContextVkParams const& params);
+  ContextVk();
   ~ContextVk() noexcept;
 
-  ContextResult initializeDrawingContext();
+  ContextResult initializeDrawingContext(ContextVkParams const& params);
   ContextResult recreateSwapchain(bool useHDR);
 
   VkFence getFence();
@@ -349,6 +364,7 @@ class ContextVk : public NonMoveable {
   inline DeviceVk const& device() const { return m_device; }
   inline InstanceVk& instance() { return m_instance; }
   inline DeviceVk& device() { return m_device; }
+  inline VkSurfaceFormatKHR surfaceFormat() const { return m_surfaceFormat; }
 
   SwapchainDataVk getSwapchainData() const;
 

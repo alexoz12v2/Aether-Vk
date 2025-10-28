@@ -1,7 +1,5 @@
 #pragma once
 
-#include <numeric>
-#include <optional>
 #include <string>
 #include <type_traits>
 #include <vector>

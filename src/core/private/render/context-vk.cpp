@@ -1,13 +1,20 @@
-#include "render/context-vk.h"
+
+// TODO only if sanitizers are enabled (only on clang), then ignore them
+// TODO Apply per function -> Every function calling vulkan must not use cfi
+#include <atomic>
+#pragma clang attribute push(__attribute__((no_sanitize("cfi"))), \
+                             apply_to = function)
+
+#include <vulkan/vulkan_core.h>
 
 #include <utility>
 
+#include "render/context-vk.h"
+
+// TODO support for MSVC maybe?
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnullability-extension"
 
-#ifndef VOLK_HEADER_VERSION
-#define VOLK_HEADER_VERSION
-#endif
 #define VMA_IMPLEMENTATION
 #include <vma/vk_mem_alloc.h>
 
@@ -87,6 +94,7 @@ static void VKAPI_PTR freeDeviceMemoryCallback(
 
 namespace avk {
 
+#if 0
 DeviceVk::DeviceVk(DeviceVk&& other) noexcept {
   std::lock_guard<std::mutex> lk{other.queueMutex};
   vmaAllocator = std::exchange(vmaAllocator, other.vmaAllocator);
@@ -143,6 +151,41 @@ DeviceVk& DeviceVk::operator=(DeviceVk&& other) noexcept {
       std::exchange(extSwapchainColorspace, other.extSwapchainColorspace);
 
   return *this;
+}
+#endif
+
+bool DeviceVk::getQueueUsage(VkQueue queue) {
+  int32_t expectFree = 0;
+  auto it = queuesStateMap.find(queue);
+  if (it == queuesStateMap.end()) {
+    assert(false);
+    return false;
+  }
+  std::atomic<int32_t>& state = it->second;
+  while (true) {
+    if (!state.compare_exchange_weak(expectFree, 1,
+                                     std::memory_order_relaxed) &&
+        !expectFree) {
+      // TODO maybe. add boost dependency and add yield?
+      std::this_thread::yield();
+      continue;
+    }
+    state.store(1, std::memory_order_acquire);
+    break;
+  }
+  return true;
+}
+
+bool DeviceVk::freeQueueUsage(VkQueue queue) {
+  int32_t expectUsed = 1;
+  auto it = queuesStateMap.find(queue);
+  if (it == queuesStateMap.end()) {
+    assert(false);
+    return false;
+  }
+  std::atomic<int32_t>& state = it->second;
+  return state.compare_exchange_strong(expectUsed, 0,
+                                       std::memory_order_release);
 }
 
 // ---------------------------- FRAME -----------------------------
@@ -218,25 +261,11 @@ ContextVk::~ContextVk() noexcept {
   }
 }
 
-ContextVk::ContextVk(ContextVkParams const& params)
-    :
-#ifdef AVK_OS_WINDOWS
-      m_hWindow(params.window),
-#elif defined(AVK_OS_MACOS)
-#error "TODO"
-#elif defined(AVK_OS_ANDROID)
-#error "TODO"
-#elif defined(AVK_OS_LINUX)
-#error "TODO X11 and Wayland"
-#else
-#error "ADD SUPPORT"
-#endif
-      m_hdrInfo(std::make_unique<WindowHDRInfo>(params.hdrInfo)) {
-
+ContextVk::ContextVk() {
   m_frameData.reserve(16);
   m_swapchainImages.reserve(16);
   m_vkImages.reserve(16);
-  initInstanceExtensions();
+
   // TODO: Initialize VkAllocationCallbacks to integrate eventual Host Memory
   // allocation strategy
 }
@@ -250,10 +279,6 @@ bool ContextVk::initInstanceExtensions() {
 }
 
 bool ContextVk::createInstance(uint32_t vulkanApiVersion) {
-  if (!volkInitialize()) {
-    return false;
-  }
-
   // instance extensions to enable: portabilty, surface, platform surface
   // - (PORTABILITY) Vulkan will consider devices that aren’t fully conformant
   //   such as MoltenVk to be identified as a conformant implementation. When
@@ -284,7 +309,7 @@ bool ContextVk::createInstance(uint32_t vulkanApiVersion) {
 
   // 2 extensions used in swapchain recreation
   if (!m_instance.extensions.enable(
-          VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME)) {
+          VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME)) {
     return false;
   }
   if (!m_instance.extensions.enable(
@@ -489,13 +514,16 @@ std::vector<std::string_view> ContextVk::anyMissingCapabilities(
   VkPhysicalDeviceFeatures2 features2{};
   VkPhysicalDeviceVulkan11Features features11{};
   VkPhysicalDeviceVulkan12Features features12{};
+  VkPhysicalDeviceVulkan13Features features13{};
 
   features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
   features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
   features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+  features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
 
   features2.pNext = &features11;
   features11.pNext = &features12;
+  features12.pNext = &features13;
 
   // we require the same device features from Blender's initialization, which
   // are the common one
@@ -526,6 +554,9 @@ std::vector<std::string_view> ContextVk::anyMissingCapabilities(
     missing.push_back("timeline semaphores");
   if (features12.bufferDeviceAddress == VK_FALSE)
     missing.push_back("buffer device address");
+  if (features13.dynamicRendering == VK_FALSE) {
+    missing.push_back("dynamic rendering");
+  }
 
   // device extensions: swapchain, dynamic rendering
   uint32_t vkExtensionCount = 0;
@@ -641,21 +672,16 @@ static void initializeGenericQueueFamilies(VkInstance instance,
                                            DeviceVk& device,
                                            VkSurfaceKHR surface) {
   uint32_t queueFamilyCount = 0;
+  assert(vkGetPhysicalDeviceQueueFamilyProperties2);
   vkGetPhysicalDeviceQueueFamilyProperties2(device.physicalDevice,
                                             &queueFamilyCount, nullptr);
   std::vector<VkQueueFamilyProperties2> queueFamilies(queueFamilyCount);
-  // family ownership and video properties are possible future uses
-  std::vector<VkQueueFamilyOwnershipTransferPropertiesKHR>
-      queueFamiliesTransferOwnership(queueFamilyCount);
+  // video properties are possible future uses
   std::vector<VkQueueFamilyVideoPropertiesKHR> queueFamiliesVideo(
       queueFamilyCount);
   for (uint32_t i = 0; i < queueFamilyCount; ++i) {
     queueFamilies[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
-    queueFamilies[i].pNext = &queueFamiliesTransferOwnership[i];
-
-    queueFamiliesTransferOwnership[i].sType =
-        VK_STRUCTURE_TYPE_QUEUE_FAMILY_OWNERSHIP_TRANSFER_PROPERTIES_KHR;
-    queueFamiliesTransferOwnership[i].pNext = &queueFamiliesVideo[i];
+    queueFamilies[i].pNext = &queueFamiliesVideo[i];
 
     queueFamiliesVideo[i].sType =
         VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR;
@@ -763,8 +789,9 @@ bool ContextVk::createDevice(
   // to call vkCreateDevice: 1) extensions 2) features 3) queues
   initializeGenericQueueFamilies(m_instance.instance, m_device, m_surface);
 
-  if (m_device.extensions.enable(requiredExtensions.begin(),
-                                 requiredExtensions.end())) {
+  assert(requiredExtensions.size() > 0 && "No Device Extensions?");
+  if (!m_device.extensions.enable(requiredExtensions.begin(),
+                                  requiredExtensions.end())) {
     return false;
   }
 
@@ -775,29 +802,53 @@ bool ContextVk::createDevice(
   }
 
   // how many queues we'll request: 1 per family for now
-  std::vector<VkDeviceQueueCreateInfo> queueCreateInfos(
-      DeviceVk::QueueFamilyIndicesCount);
-  std::vector<uint32_t> queueFamilyIndices(DeviceVk::QueueFamilyIndicesCount);
-  queueFamilyIndices[0] = m_device.queueIndices.family.graphicsCompute;
-  queueFamilyIndices[1] = m_device.queueIndices.family.computeAsync;
-  queueFamilyIndices[2] = m_device.queueIndices.family.transfer;
-  queueFamilyIndices[3] = m_device.queueIndices.family.present;
+  std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
 
   float queuePriority = 1.0f;
+  std::unordered_set<uint32_t> const uniqueQueueFamilies{
+      m_device.queueIndices.family.graphicsCompute,
+      m_device.queueIndices.family.computeAsync,
+      m_device.queueIndices.family.transfer,
+      m_device.queueIndices.family.present};
+  queueCreateInfos.resize(uniqueQueueFamilies.size());
 
-  for (size_t i = 0; i < queueCreateInfos.size(); ++i) {
+  uint32_t index = 0;
+  for (uint32_t queueFamily : uniqueQueueFamilies) {
+    uint32_t const i = index++;
     queueCreateInfos[i].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
     queueCreateInfos[i].pNext = nullptr;
     queueCreateInfos[i].flags = 0;
     queueCreateInfos[i].queueCount = 1;  // TODO Maybe more?
     queueCreateInfos[i].pQueuePriorities = &queuePriority;
-    queueCreateInfos[i].queueFamilyIndex = queueFamilyIndices[i];
+    queueCreateInfos[i].queueFamilyIndex = queueFamily;
   }
+  m_device.queuesStateMap.reserve(index);
+
+  // create features (the ones we use here have been tested)
+  VkPhysicalDeviceFeatures2 featuresBase{};
+  featuresBase.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+  VkPhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeature{};
+  dynamicRenderingFeature.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
+  VkPhysicalDeviceVulkan12Features features12{};
+  features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+
+  featuresBase.pNext = &dynamicRenderingFeature;
+  dynamicRenderingFeature.pNext = &features12;
+
+  // list of used features (TODO: synchronization2, textureCompression,
+  // sparseResidency, pipelineStatisticsQuery)
+  featuresBase.features.geometryShader = VK_TRUE;
+  featuresBase.features.tessellationShader = VK_TRUE;
+  featuresBase.features.fillModeNonSolid = VK_TRUE;  // wireframe rendering
+  dynamicRenderingFeature.dynamicRendering = VK_TRUE;
+  features12.bufferDeviceAddress = VK_TRUE;
 
   // features we require are checked by physicalDeviceSupport and
   // anyMissingCapabilities and in device creation it's deprecated
   VkDeviceCreateInfo createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+  createInfo.pNext = &featuresBase;
   createInfo.queueCreateInfoCount =
       static_cast<uint32_t>(queueCreateInfos.size());
   createInfo.pQueueCreateInfos = queueCreateInfos.data();
@@ -821,9 +872,16 @@ bool ContextVk::createDevice(
   vkGetDeviceQueue(m_device.device, m_device.queueIndices.family.present, 0,
                    &m_device.presentQueue);
 
+  m_device.queuesStateMap.try_emplace(m_device.graphicsComputeQueue, 1);
+  m_device.queuesStateMap.try_emplace(m_device.computeAsyncQueue, 1);
+  m_device.queuesStateMap.try_emplace(m_device.transferQueue, 1);
+  m_device.queuesStateMap.try_emplace(m_device.presentQueue, 1);
+
   // populate extension function pointers to save one dispatch from the vulkan
   // loader
+  assert(m_device.device != VK_NULL_HANDLE);
   volkLoadDevice(m_device.device);
+  std::cout << "VOLK LOAD DEVICE " << std::endl;
 
   // create instance of VmaVulkanFunctions
   VmaDeviceMemoryCallbacks vmaMemoryCallbacks{};
@@ -856,12 +914,53 @@ bool ContextVk::createDevice(
   return true;
 }
 
-ContextResult ContextVk::initializeDrawingContext() {
+ContextResult ContextVk::initializeDrawingContext(
+    ContextVkParams const& params) {
+  // params
+#ifdef AVK_OS_WINDOWS
+  m_hWindow = params.window;
+#elif defined(AVK_OS_MACOS)
+#error "TODO"
+#elif defined(AVK_OS_ANDROID)
+#error "TODO"
+#elif defined(AVK_OS_LINUX)
+#error "TODO X11 and Wayland"
+#else
+#error "ADD SUPPORT"
+#endif
+  // TODO REMOVE LOGGING AND DO IT PROPERLY (Controlled by both macro and
+  // runtime or just runtime)
+  m_hdrInfo = std::make_unique<WindowHDRInfo>(params.hdrInfo);
+
+  // find vulkan loader
+  std::cout << "vkGetInstanceProcAddr: " << (void*)vkGetInstanceProcAddr
+            << "\n";
+  std::cout << "vkEnumerateInstanceExtensionProperties: "
+            << (void*)vkEnumerateInstanceExtensionProperties << "\n";
+  if (volkInitialize() != VK_SUCCESS) {
+    std::cerr << "Couldn't Initialize Volk" << std::endl;
+    return ContextResult::Error;
+  }
+  // TODO remove
+  std::cout << "vkGetInstanceProcAddr: " << (void*)vkGetInstanceProcAddr
+            << "\n";
+  std::cout << "vkEnumerateInstanceExtensionProperties: "
+            << (void*)vkEnumerateInstanceExtensionProperties << "\n";
+  HMODULE h = GetModuleHandleA("vulkan-1.dll");
+  auto fp = (PFN_vkEnumerateInstanceExtensionProperties)GetProcAddress(
+      h, "vkEnumerateInstanceExtensionProperties");
+  std::cout << "GetProcAddress -> " << (void*)fp << std::endl;
+
+  initInstanceExtensions();
+
+  // instance and surface
   uint32_t vulkanApiVersion = VK_API_VERSION_1_3;
   if (!createInstance(vulkanApiVersion)) {
+    std::cerr << "Couldn't Initialize Instance" << std::endl;
     return ContextResult::Error;
   }
   if (!createSurface()) {
+    std::cerr << "Couldn't Initialize Surface" << std::endl;
     return ContextResult::Error;
   }
 
@@ -869,10 +968,14 @@ ContextResult ContextVk::initializeDrawingContext() {
   std::vector<std::string_view> requiredExtensions;
   requiredExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
   requiredExtensions.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
+  // added in createDevice
+  // requiredExtensions.push_back(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
   if (!selectPhysicalDevice(requiredExtensions)) {
+    std::cerr << "Couldn't Select proper VkPhysicalDevice" << std::endl;
     return ContextResult::Error;
   }
   if (!createDevice(requiredExtensions)) {
+    std::cerr << "Couldn't Create proper VkDevice" << std::endl;
     return ContextResult::Error;
   }
   return ContextResult::Success;
@@ -963,15 +1066,15 @@ ContextResult ContextVk::recreateSwapchain(bool useHDR) {
   }
 
   // 1. query surface capabilities for the given present mode on the surface
-  VkSurfacePresentScalingCapabilitiesKHR scalingCapabilities{};
+  VkSurfacePresentScalingCapabilitiesEXT scalingCapabilities{};
   scalingCapabilities.sType =
-      VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_KHR;
+      VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_EXT;
   VkSurfaceCapabilities2KHR surfaceCapabilities2{};
   surfaceCapabilities2.sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR;
   surfaceCapabilities2.pNext = &scalingCapabilities;
 
-  VkSurfacePresentModeKHR presentModeInfo{};
-  presentModeInfo.sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_KHR;
+  VkSurfacePresentModeEXT presentModeInfo{};
+  presentModeInfo.sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_EXT;
   presentModeInfo.presentMode = presentMode;
   VkPhysicalDeviceSurfaceInfo2KHR surfaceInfo2{};
   surfaceInfo2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR;
@@ -1048,29 +1151,29 @@ ContextResult ContextVk::recreateSwapchain(bool useHDR) {
 
   // on first frame size may be incorrect. Stretch on first swapchain creation,
   // then uniform scaling
-  VkPresentScalingFlagBitsKHR const presentScaling =
-      oldSwapchain == VK_NULL_HANDLE ? VK_PRESENT_SCALING_STRETCH_BIT_KHR
-                                     : VK_PRESENT_SCALING_ONE_TO_ONE_BIT_KHR;
-  VkSwapchainPresentModesCreateInfoKHR presentModesCreateInfo{};
+  VkPresentScalingFlagBitsEXT const presentScaling =
+      oldSwapchain == VK_NULL_HANDLE ? VK_PRESENT_SCALING_STRETCH_BIT_EXT
+                                     : VK_PRESENT_SCALING_ONE_TO_ONE_BIT_EXT;
+  VkSwapchainPresentModesCreateInfoEXT presentModesCreateInfo{};
   presentModesCreateInfo.sType =
-      VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_KHR;
+      VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_EXT;
   presentModesCreateInfo.pNext = nullptr;
   presentModesCreateInfo.presentModeCount = 1;
   presentModesCreateInfo.pPresentModes = &presentMode;
 
-  VkSwapchainPresentScalingCreateInfoKHR presentScalingCreateInfo{};
+  VkSwapchainPresentScalingCreateInfoEXT presentScalingCreateInfo{};
   presentScalingCreateInfo.sType =
-      VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_SCALING_CREATE_INFO_KHR;
+      VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_SCALING_CREATE_INFO_EXT;
   presentScalingCreateInfo.pNext = &presentModesCreateInfo;
   // scale from top left (min, max)
   presentScalingCreateInfo.scalingBehavior =
       scalingCapabilities.supportedPresentScaling & presentScaling;
   presentScalingCreateInfo.presentGravityX =
       scalingCapabilities.supportedPresentGravityX &
-      VK_PRESENT_GRAVITY_MIN_BIT_KHR;
+      VK_PRESENT_GRAVITY_MIN_BIT_EXT;
   presentScalingCreateInfo.presentGravityY =
       scalingCapabilities.supportedPresentGravityY &
-      VK_PRESENT_GRAVITY_MAX_BIT_KHR;
+      VK_PRESENT_GRAVITY_MAX_BIT_EXT;
 
   VkSwapchainCreateInfoKHR createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -1317,9 +1420,10 @@ ContextResult ContextVk::swapBufferRelease() {
 
   VkResult presentResult = VK_SUCCESS;
   {
-    std::scoped_lock<std::mutex> lock{m_device.queueMutex};
-    VkSwapchainPresentFenceInfoKHR fenceInfo{};
-    fenceInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_KHR;
+    // TODO
+    // std::scoped_lock<std::mutex> lock{m_device.queueMutex};
+    VkSwapchainPresentFenceInfoEXT fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT;
     VkFence presentFence = VK_NULL_HANDLE;
     if (m_device.extSwapchainMaintenance1) {
       presentFence = getFence();
@@ -1433,3 +1537,5 @@ ContextResult ContextVk::swapBufferAcquire() {
 }
 
 }  // namespace avk
+
+#pragma clang attribute pop

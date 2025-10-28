@@ -2,8 +2,15 @@
     "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
     "name": "aether-vk",
     "version": "0.0.1",
+    "builtin-baseline": "271a5b8850aa50f9a40269cbf3cf414b36e333d6",
     "dependencies": [
         "boost-context",
-        "boost-fiber"
+        "boost-fiber",
+        {
+            "name": "vulkan-headers",
+            "version>=": "1.4.309.0"
+        },
+        "volk",
+        "vulkan-memory-allocator"
     ]
 }
