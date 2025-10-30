@@ -1,15 +1,14 @@
 
 // TODO only if sanitizers are enabled (only on clang), then ignore them
 // TODO Apply per function -> Every function calling vulkan must not use cfi
-#include <atomic>
-#pragma clang attribute push(__attribute__((no_sanitize("cfi"))), \
-                             apply_to = function)
+#include "render/context-vk.h"
 
 #include <vulkan/vulkan_core.h>
 
+#include <atomic>
 #include <utility>
 
-#include "render/context-vk.h"
+#include "utils/integer.h"
 
 // TODO support for MSVC maybe?
 #pragma GCC diagnostic push
@@ -29,6 +28,8 @@
 
 #ifdef AVK_OS_WINDOWS
 #include <Windows.h>
+// https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute
+#include <dwmapi.h>
 #elif defined(AVK_OS_MACOS)
 #error "TODO"
 #elif defined(AVK_OS_ANDROID)
@@ -492,17 +493,6 @@ bool ContextVk::physicalDeviceSupport(DeviceVk& physicalDevice) const {
     return false;
   }
 
-  if (!physicalDevice.propertiesFeatures) {
-    physicalDevice.propertiesFeatures =
-        std::make_unique<DevicePropertiesFeatures>();
-  }
-
-  physicalDevice.propertiesFeatures->properties2 = properties;
-  physicalDevice.propertiesFeatures->properties11 = properties11;
-  physicalDevice.propertiesFeatures->properties12 = properties12;
-  physicalDevice.propertiesFeatures->properties13 = properties13;
-  physicalDevice.propertiesFeatures->driverProperties = driverProperties;
-
   return true;
 }
 
@@ -515,19 +505,27 @@ std::vector<std::string_view> ContextVk::anyMissingCapabilities(
   VkPhysicalDeviceVulkan11Features features11{};
   VkPhysicalDeviceVulkan12Features features12{};
   VkPhysicalDeviceVulkan13Features features13{};
+  VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT
+      featuresSwapchainMaintenance1{};
 
   features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
   features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
   features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
   features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+  featuresSwapchainMaintenance1.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
 
   features2.pNext = &features11;
   features11.pNext = &features12;
   features12.pNext = &features13;
+  features13.pNext = &featuresSwapchainMaintenance1;
 
   // we require the same device features from Blender's initialization, which
   // are the common one
   vkGetPhysicalDeviceFeatures2(physicalDevice.physicalDevice, &features2);
+  features13.pNext = nullptr;
+
+  // WARNING: Keep this in sync with device creation function
   if (features2.features.geometryShader == VK_FALSE)
     missing.push_back("geometryShader");
   if (features2.features.tessellationShader == VK_FALSE)
@@ -557,6 +555,20 @@ std::vector<std::string_view> ContextVk::anyMissingCapabilities(
   if (features13.dynamicRendering == VK_FALSE) {
     missing.push_back("dynamic rendering");
   }
+  if (features2.features.depthBiasClamp == VK_FALSE) {
+    missing.push_back("depth bias clamp");
+  }
+  if (features13.synchronization2 == VK_FALSE) {
+    missing.push_back("synchronization 2");
+  }
+  // TODO maybe remove if not supported (especially on mobile)
+  if (features2.features.sampleRateShading == VK_FALSE) {
+    missing.push_back("sample rate shading");
+  }
+
+  if (featuresSwapchainMaintenance1.swapchainMaintenance1 == VK_TRUE) {
+    physicalDevice.extSwapchainMaintenance1 = true;
+  }
 
   // device extensions: swapchain, dynamic rendering
   uint32_t vkExtensionCount = 0;
@@ -575,15 +587,6 @@ std::vector<std::string_view> ContextVk::anyMissingCapabilities(
   if (extensions.find(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME) ==
       extensions.end())
     missing.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
-
-  if (!physicalDevice.propertiesFeatures) {
-    physicalDevice.propertiesFeatures =
-        std::make_unique<DevicePropertiesFeatures>();
-  }
-
-  physicalDevice.propertiesFeatures->features2 = features2;
-  physicalDevice.propertiesFeatures->features11 = features11;
-  physicalDevice.propertiesFeatures->features12 = features12;
 
   return missing;
 }
@@ -638,9 +641,11 @@ bool ContextVk::selectPhysicalDevice(
       continue;
     }
 
-    assert(currentDevice.propertiesFeatures);
-    switch (
-        currentDevice.propertiesFeatures->properties2.properties.deviceType) {
+    VkPhysicalDeviceProperties2 props{};
+    props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    vkGetPhysicalDeviceProperties2(currentDevice.physicalDevice, &props);
+
+    switch (props.properties.deviceType) {
       case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
         score += 400;
         break;
@@ -796,9 +801,11 @@ bool ContextVk::createDevice(
   }
 
   // Desktop devices should be fine. Android only from Android 14 onwards
-  if (m_device.extensions.enable(
+  // m_device.extSwapchainMaintenance1 feature checked by anyMissingCapabilities
+  if (!m_device.extSwapchainMaintenance1 ||
+      !m_device.extensions.enable(
           VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)) {
-    m_device.extSwapchainMaintenance1 = true;
+    m_device.extSwapchainMaintenance1 = false;
   }
 
   // how many queues we'll request: 1 per family for now
@@ -832,17 +839,32 @@ bool ContextVk::createDevice(
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
   VkPhysicalDeviceVulkan12Features features12{};
   features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+  VkPhysicalDeviceSynchronization2FeaturesKHR sync2Features{};
+  sync2Features.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR;
+  VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT
+      swapchainMaintenance1Feature{};
+  swapchainMaintenance1Feature.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
 
   featuresBase.pNext = &dynamicRenderingFeature;
   dynamicRenderingFeature.pNext = &features12;
+  features12.pNext = &sync2Features;
+  sync2Features.pNext = &swapchainMaintenance1Feature;
 
   // list of used features (TODO: synchronization2, textureCompression,
   // sparseResidency, pipelineStatisticsQuery)
   featuresBase.features.geometryShader = VK_TRUE;
   featuresBase.features.tessellationShader = VK_TRUE;
   featuresBase.features.fillModeNonSolid = VK_TRUE;  // wireframe rendering
+  featuresBase.features.depthBiasClamp = VK_TRUE;
+  featuresBase.features.sampleRateShading = VK_TRUE;
   dynamicRenderingFeature.dynamicRendering = VK_TRUE;
   features12.bufferDeviceAddress = VK_TRUE;
+  sync2Features.synchronization2 = VK_TRUE;
+  if (m_device.extSwapchainMaintenance1) {
+    swapchainMaintenance1Feature.swapchainMaintenance1 = VK_TRUE;
+  }
 
   // features we require are checked by physicalDeviceSupport and
   // anyMissingCapabilities and in device creation it's deprecated
@@ -903,11 +925,16 @@ bool ContextVk::createDevice(
   // fill vmaAllocatorCreateInfo.pVulkanFunctions
   if (!vkCheck(vmaImportVulkanFunctionsFromVolk(&vmaAllocatorCreateInfo,
                                                 m_vmaVulkanFunctions))) {
+    std::cerr
+        << "\033[31m------ FAILURE -- vmaImportVulkanFunctionsFromVolk\033[0m"
+        << std::endl;
     return false;
   }
   vmaAllocatorCreateInfo.pVulkanFunctions = m_vmaVulkanFunctions;
   if (!vkCheck(vmaCreateAllocator(&vmaAllocatorCreateInfo,
                                   &m_device.vmaAllocator))) {
+    std::cerr << "\033[31m------ FAILURE -- vmaCreateAllocator\033[0m"
+              << std::endl;
     return false;
   }
 
@@ -1054,7 +1081,48 @@ static bool selectPresentMode(bool vsyncOff, DeviceVk const& device,
   return true;
 }
 
-ContextResult ContextVk::recreateSwapchain(bool useHDR) {
+#ifdef _WIN32
+static VkExtent2D getWindowExtent(HWND hWnd) {
+  VkExtent2D extent{};
+
+  // Check window style to decide how to query size
+  LONG_PTR style = GetWindowLongPtrW(hWnd, GWL_STYLE);
+  bool isPopup = (style & WS_POPUP) && !(style & WS_OVERLAPPEDWINDOW);
+
+  RECT client{}, window{}, dwm{};
+  GetClientRect(hWnd, &client);
+  GetWindowRect(hWnd, &window);
+
+  if (isPopup && SUCCEEDED(DwmGetWindowAttribute(
+                     hWnd, DWMWA_EXTENDED_FRAME_BOUNDS, &dwm, sizeof(dwm)))) {
+    // True visible rectangle on screen (DWM composition area)
+    UINT dwmW = dwm.right - dwm.left;
+    UINT dwmH = dwm.bottom - dwm.top;
+
+    // Account for hidden margins DWM still applies
+    int borderX = (window.right - window.left) - (client.right - client.left);
+    int borderY = (window.bottom - window.top) - (client.bottom - client.top);
+    borderX = std::max(borderX, 0);
+    borderY = std::max(borderY, 0);
+
+    extent.width = std::max<int>(dwmW - borderX, 1);
+    extent.height = std::max<int>(dwmH - borderY, 1);
+  } else {
+    std::cerr << "\033[31m" << "OVERLAPPED/NON POPUP!" << "\033[0m"
+              << std::endl;
+    // Standard window path (client area only)
+    extent.width = std::max<int>(client.right - client.left, 1);
+    extent.height = std::max<int>(client.bottom - client.top, 1);
+  }
+
+  return extent;
+}
+#endif
+
+ContextResult ContextVk::recreateSwapchain(bool useHDR,
+                                           VkExtent2D const* overrideExtent) {
+  // TODO remove
+  vkDeviceWaitIdle(m_device.device);
   // VkSurfaceCapabilitiesKHR.currentTransform=VkSwapchainCreateInfoKHR.preTransform
   if (!selectSurfaceFormat(m_device, m_surface, useHDR, m_surfaceFormat)) {
     return ContextResult::Error;
@@ -1092,46 +1160,64 @@ ContextResult ContextVk::recreateSwapchain(bool useHDR) {
   }
 
   m_hdrEnabled = useHDR;
-  m_currentExtent = capabilities.currentExtent;
-  if (m_currentExtent.width == UINT32_MAX) {
+  if (overrideExtent) {
+    m_currentExtent = *overrideExtent;
+  } else {
+    m_currentExtent = capabilities.currentExtent;
+// TODO see if not necessary
+#ifdef VK_USE_PLATFORM_WIN32_KHR
+    m_currentExtent = getWindowExtent(m_hWindow);
+#endif
+    if (m_currentExtent.width == UINT32_MAX) {
 #ifndef VK_USE_PLATFORM_WAYLAND_KHR
-    // special value that means that the size is determined by the extent of
-    // the surface
-    m_currentExtent.width = 1280;
-    m_currentExtent.height = 720;
+      // special value that means that the size is determined by the extent of
+      // the surface
+      m_currentExtent.width = 1280;
+      m_currentExtent.height = 720;
 #else
 #error \
     "TODO Wayland surface extent handling taking it from the wayland window info"
 #endif
-  }
-
-  if (capabilities.minImageExtent.width > m_currentExtent.width) {
-    m_currentExtent.width = capabilities.minImageExtent.width;
-  }
-  if (capabilities.minImageExtent.height > m_currentExtent.height) {
-    m_currentExtent.height = capabilities.minImageExtent.height;
-  }
-
-  if (m_device.extSwapchainMaintenance1) {
-    if (scalingCapabilities.minScaledImageExtent.width >
-        m_currentExtent.width) {
-      m_currentExtent.width = scalingCapabilities.minScaledImageExtent.width;
     }
-    if (scalingCapabilities.minScaledImageExtent.height >
-        m_currentExtent.height) {
-      m_currentExtent.height = scalingCapabilities.minScaledImageExtent.height;
+    std::cout << "[SWAPCHAIN RECREATION, BEFORE CLAMP]: "
+              << m_currentExtent.width << "x" << m_currentExtent.height
+              << std::endl;
+
+    if (capabilities.minImageExtent.width > m_currentExtent.width) {
+      m_currentExtent.width = capabilities.minImageExtent.width;
+    }
+    if (capabilities.minImageExtent.height > m_currentExtent.height) {
+      m_currentExtent.height = capabilities.minImageExtent.height;
+    }
+
+    if (m_device.extSwapchainMaintenance1) {
+      if (scalingCapabilities.minScaledImageExtent.width >
+          m_currentExtent.width) {
+        m_currentExtent.width = scalingCapabilities.minScaledImageExtent.width;
+      }
+      if (scalingCapabilities.minScaledImageExtent.height >
+          m_currentExtent.height) {
+        m_currentExtent.height =
+            scalingCapabilities.minScaledImageExtent.height;
+      }
     }
   }
 
   assert(m_currentExtent.width > 0);
   assert(m_currentExtent.height > 0);
+  std::cout << "[SWAPCHAIN RECREATION, AFTER CLAMP]: " << m_currentExtent.width
+            << "x" << m_currentExtent.height << std::endl;
 
   // 2. Mark for discard swapchain resources (wait on semaphores and discard
   // old images, to be discarded on the next frame usage)
-  FrameDiscard& currentDiscard = m_frameData[m_renderFrame].discard;
-  for (SwapchainImage& swapchainImage : m_swapchainImages) {
-    currentDiscard.semaphores.push_back(swapchainImage.presentSemaphore);
-    swapchainImage.presentSemaphore = VK_NULL_HANDLE;
+  // TODO try to remove this if costs a lot (shouldn't, cause it's false once)
+  FrameDiscard* currentDiscard = nullptr;
+  if (m_frameData.size() > m_renderFrame) {
+    currentDiscard = &m_frameData[m_renderFrame].discard;
+    for (SwapchainImage& swapchainImage : m_swapchainImages) {
+      currentDiscard->semaphores.push_back(swapchainImage.presentSemaphore);
+      swapchainImage.presentSemaphore = VK_NULL_HANDLE;
+    }
   }
 
   // double buffering on FIFO or other, triple buffering on MAILBOX
@@ -1186,8 +1272,13 @@ ContextResult ContextVk::recreateSwapchain(bool useHDR) {
   createInfo.imageColorSpace = m_surfaceFormat.colorSpace;
   createInfo.imageExtent = m_currentExtent;
   createInfo.imageArrayLayers = 1;
+  // TODO remove other usages, cause we should write to swapchain image only at
+  // the end by copying from another image (more compositing)
+  // createInfo.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+  //                         (useHDR ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
   createInfo.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                          (useHDR ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
+                          (useHDR ? VK_IMAGE_USAGE_STORAGE_BIT : 0) |
+                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
   createInfo.preTransform = capabilities.currentTransform;
   createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
   createInfo.presentMode = presentMode;
@@ -1200,8 +1291,13 @@ ContextResult ContextVk::recreateSwapchain(bool useHDR) {
 
   if (!vkCheck(vkCreateSwapchainKHR(m_device.device, &createInfo, nullptr,
                                     &m_swapchain))) {
+    std::cerr << "\033[31mvkCreateSwapchainKHR\033[0m" << std::endl;
     return ContextResult::Error;
   }
+  std::cout << "\033[31m"
+               "vkCreateSwapchainKHR -> "
+            << m_currentExtent.width << "x" << m_currentExtent.height
+            << "\033[0m" << std::endl;
 
   uint32_t actualImageCount = 0;
   vkGetSwapchainImagesKHR(m_device.device, m_swapchain, &actualImageCount,
@@ -1221,12 +1317,14 @@ ContextResult ContextVk::recreateSwapchain(bool useHDR) {
   // new semaphores if needed (image count may be increased)
   for (Frame& frame : m_frameData) {
     if (frame.acquireSemaphore != VK_NULL_HANDLE) {
-      currentDiscard.semaphores.push_back(frame.acquireSemaphore);
+      assert(currentDiscard);
+      currentDiscard->semaphores.push_back(frame.acquireSemaphore);
     }
     frame.acquireSemaphore = VK_NULL_HANDLE;
   }
   if (oldSwapchain != VK_NULL_HANDLE) {
-    currentDiscard.swapchains.push_back(oldSwapchain);
+    assert(currentDiscard);
+    currentDiscard->swapchains.push_back(oldSwapchain);
   }
 
   initializeFrameData();
@@ -1314,7 +1412,7 @@ bool ContextVk::destroySwapchain() {
 
 void ContextVk::setPresentFence(VkSwapchainKHR swapchain,
                                 VkFence presentFence) {
-  if (presentFence) {
+  if (presentFence == VK_NULL_HANDLE) {
     return;
   }
   m_presentFences[swapchain].push_back(presentFence);
@@ -1322,6 +1420,12 @@ void ContextVk::setPresentFence(VkSwapchainKHR swapchain,
   for (auto& [otherSwapchain, fences] : m_presentFences) {
     auto it = std::remove_if(
         fences.begin(), fences.end(), [this](const VkFence fence) {
+          // TODO remove if not worth it
+          if (fence == VK_NULL_HANDLE) {
+            assert(false &&
+                   "There shouldn't be any null fences on present fences");
+            return true;
+          }
           if (vkGetFenceStatus(m_device.device, fence) == VK_NOT_READY) {
             return false;
           }
@@ -1369,7 +1473,7 @@ SwapchainDataVk ContextVk::getSwapchainData() const {
   swapchainData.acquireSemaphore = submissionFrame.acquireSemaphore;
   swapchainData.presentSemaphore = swapchainImage.presentSemaphore;
   swapchainData.sdrWhiteLevel = m_hdrInfo ? m_hdrInfo->sdrWhiteLevel : 1.f;
-  swapchainData.imageIndex = m_renderFrame;
+  swapchainData.imageIndex = m_acquiredSwapchainImageIndex;
   return swapchainData;
 }
 
@@ -1402,7 +1506,7 @@ ContextResult ContextVk::swapBufferRelease() {
   swapchainData.acquireSemaphore = submissionFrame.acquireSemaphore;
   swapchainData.presentSemaphore = swapchainImage.presentSemaphore;
   swapchainData.sdrWhiteLevel = m_hdrInfo ? m_hdrInfo->sdrWhiteLevel : 1.f;
-  swapchainData.imageIndex = m_renderFrame;
+  swapchainData.imageIndex = m_acquiredSwapchainImageIndex;
 
   vkResetFences(m_device.device, 1, &submissionFrame.submissionFence);
   if (m_swapBufferDrawCallback) {
@@ -1438,6 +1542,30 @@ ContextResult ContextVk::swapBufferRelease() {
 
   if (presentResult == VK_ERROR_OUT_OF_DATE_KHR ||
       presentResult == VK_SUBOPTIMAL_KHR) {
+    if (presentResult == VK_ERROR_OUT_OF_DATE_KHR) {
+      std::cout << "\033[81m"
+                << (presentResult == VK_ERROR_OUT_OF_DATE_KHR
+                        ? "VK_ERROR_OUT_OF_DATE_KHR"
+                        : "VK_SUBOPTIMAL_KHR")
+                << "\033[0m" << std::endl;
+    }
+    if (presentResult == VK_SUBOPTIMAL_KHR) {
+#ifdef VK_USE_PLATFORM_WIN32_KHR
+      // surface allows variable; use window size converted to pixels
+      RECT dwmBounds;
+      if (SUCCEEDED(DwmGetWindowAttribute(m_hWindow,
+                                          DWMWA_EXTENDED_FRAME_BOUNDS,
+                                          &dwmBounds, sizeof(dwmBounds)))) {
+        uint32_t visibleW = dwmBounds.right - dwmBounds.left;
+        uint32_t visibleH = dwmBounds.bottom - dwmBounds.top;
+        if (m_currentExtent.width == visibleW &&
+            m_currentExtent.height == visibleH) {
+          // std::cout << "Suboptimal is a lie!" << std::endl;
+          return ContextResult::Success;
+        }
+      }
+#endif
+    }
     recreateSwapchain(useHDRSwapchain);
     return ContextResult::Success;
   }
@@ -1537,5 +1665,3 @@ ContextResult ContextVk::swapBufferAcquire() {
 }
 
 }  // namespace avk
-
-#pragma clang attribute pop

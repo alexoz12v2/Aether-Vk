@@ -1,15 +1,6 @@
 #pragma once
 
-#include <vulkan/vulkan_core.h>
-
-#include <functional>
-#include <map>
-#include <mutex>
-#include <type_traits>
-#include <unordered_map>
-
-#include "utils/mixins.h"
-
+// TODO maybe: move to cmake/bazel
 #ifdef AVK_OS_WINDOWS
 #define VK_USE_PLATFORM_WIN32_KHR
 #elif defined(AVK_OS_MACOS)  // TODO: also iOS and iPadOS
@@ -30,13 +21,22 @@
 #error "IF you are using volk, define VK_NO_PROTOTYPES"
 #endif
 
+// TODO better see if works
+#pragma clang attribute push(__attribute__((no_sanitize("cfi"))), \
+                             apply_to = any(function, variable(is_global)))
 #include <vma/vk_mem_alloc.h>
 #include <volk.h>
+#pragma clang attribute pop
 
+#include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <functional>
+#include <map>
 #include <memory>
+#include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #ifdef AVK_OS_WINDOWS
@@ -50,6 +50,8 @@
 #else
 #error "ADD SUPPORT"
 #endif
+
+#include "utils/mixins.h"
 
 struct VmaVulkanFunctions;
 
@@ -249,6 +251,13 @@ struct InstanceVk {
 // TODO VmaMemoryPool for external memory for images and for external memory
 // for buffers
 
+// TODO Break DeviceVk and ContextVk into multiple classes
+// - surface with its own swapchain
+// - device (with shared pointer to instance) with its own tracked resources and
+// discard pool and allocator
+//  and queue references, which you should take as weak pointers or manually
+//  managed
+
 struct DeviceVk : public NonCopyable {
   DeviceVk() = default;
   // rember to update these
@@ -265,7 +274,6 @@ struct DeviceVk : public NonCopyable {
   VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
   VkDevice device = VK_NULL_HANDLE;
   Extensions extensions;
-  std::unique_ptr<DevicePropertiesFeatures> propertiesFeatures = nullptr;
 
   union Families {
     struct FamiliesStruct {
@@ -281,6 +289,7 @@ struct DeviceVk : public NonCopyable {
   bool getQueueUsage(VkQueue queue);
   bool freeQueueUsage(VkQueue queue);
 
+  // WARNING: This shouldn't be copied!
   std::unordered_map<VkQueue, std::atomic<int32_t>> queuesStateMap;
 
   // Vulkan specification mandates that at least one queue family must support
@@ -348,7 +357,8 @@ class ContextVk : public NonMoveable {
   ~ContextVk() noexcept;
 
   ContextResult initializeDrawingContext(ContextVkParams const& params);
-  ContextResult recreateSwapchain(bool useHDR);
+  ContextResult recreateSwapchain(bool useHDR,
+                                  VkExtent2D const* overrideExtent = nullptr);
 
   VkFence getFence();
   ContextResult swapBufferRelease();
@@ -359,12 +369,14 @@ class ContextVk : public NonMoveable {
       std::function<void(VkImage const*, uint32_t, VkFormat, VkExtent2D)>
           recreationCallback);
 
-  inline VmaAllocator getAllocator() const { return m_vmaAllocator; }
+  inline VmaAllocator getAllocator() const { return m_device.vmaAllocator; }
   inline InstanceVk const& instance() const { return m_instance; }
   inline DeviceVk const& device() const { return m_device; }
   inline InstanceVk& instance() { return m_instance; }
   inline DeviceVk& device() { return m_device; }
   inline VkSurfaceFormatKHR surfaceFormat() const { return m_surfaceFormat; }
+  // TODO remove or sync
+  inline VkExtent2D surfaceExtent() const { return m_currentExtent; }
 
   SwapchainDataVk getSwapchainData() const;
 
@@ -404,7 +416,6 @@ class ContextVk : public NonMoveable {
   InstanceVk m_instance;
   DeviceVk m_device;
   VmaVulkanFunctions* m_vmaVulkanFunctions = nullptr;
-  VmaAllocator m_vmaAllocator;
 
   // Display data
   VkSurfaceKHR m_surface = VK_NULL_HANDLE;
