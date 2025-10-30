@@ -11,9 +11,9 @@ target_sources(avk-windows-launcher
 )
 
 if((AVK_OS STREQUAL "WINDOWS") AND (CMAKE_BUILD_TYPE STREQUAL "Debug") AND ${AVK_USE_SANITIZERS})
-  target_link_libraries(avk-windows-launcher PRIVATE avk::core win-asan-dynamic)
+  target_link_libraries(avk-windows-launcher PRIVATE avk::core win-asan-dynamic dwmapi)
 else()
-  target_link_libraries(avk-windows-launcher PRIVATE avk::core)
+  target_link_libraries(avk-windows-launcher PRIVATE avk::core dwmapi)
 endif()
 
 if(AVK_OS STREQUAL "WINDOWS")

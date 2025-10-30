@@ -14,3 +14,31 @@
 | **`VK_EXT_surface_maintenance1`**                                                                                                                                          | *Instance extension* | Adds quality-of-life improvements and fixes for surface/swapchain behavior across platforms (introduced 2023–2024).                                  |
 | **`VK_KHR_get_surface_capabilities2`**                                                                                                                                     | *Instance extension* | Adds extended surface capability queries, necessary for modern swapchain and surface features.                                                       |
 | **`VK_EXT_swapchain_maintenance1`**                                                                                                                                        | *Device extension*   | Extends `VK_KHR_swapchain` with maintenance and bugfix features for better frame management (e.g., rect scaling, suboptimal surface handling, etc.). |
+
+## Random Notes
+
+How to perform multisampling:
+
+```cpp
+VkRenderingAttachmentInfo colorAttachment = {
+    .imageView = multisampleColorView,
+    .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+    .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+    .resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT,
+    .resolveImageView = swapchainImageView, // single-sample resolve target
+    .resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+};
+```
+
+apparently, when using aero snap, i've arrived at this situation: 
+
+```sh
+GetClientRect: 1936x1056 
+GetWindowRect: 976x1056 
+GetMonitorInfoW: 1920x1040 
+```
+
+And hence the swapchain is incorrect, as it follows the client info
+
+TODO fancy zones

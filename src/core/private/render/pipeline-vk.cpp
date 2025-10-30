@@ -56,6 +56,8 @@ VkPipelinePool::VkPipelinePool() {
       &m_pipelineDepthStencilStateCreateInfo;
   m_graphicsPipelineCreateInfo.pColorBlendState =
       &m_pipelineColorBlendStateCreateInfo;
+  m_graphicsPipelineCreateInfo.pRasterizationState =
+      &m_pipelineRasterizationStateCreateInfo;
   m_graphicsPipelineCreateInfo.pDynamicState =
       &m_pipelineDynamicStateCreateInfo;
   m_graphicsPipelineCreateInfo.layout =
@@ -176,9 +178,10 @@ VkPipelinePool::VkPipelinePool() {
       VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
   m_pipelineMultisampleStateCreateInfo.pNext = nullptr;
   m_pipelineMultisampleStateCreateInfo.flags = 0;
-  // TODO: scheme configurable per pipeline
+  // TODO: scheme configurable per pipeline and reactivate
   m_pipelineMultisampleStateCreateInfo.rasterizationSamples =
-      VK_SAMPLE_COUNT_4_BIT;      // MSAA
+      // VK_SAMPLE_COUNT_4_BIT;      // MSAA
+      VK_SAMPLE_COUNT_1_BIT;
   m_sampleMasks.resize(1);        // max(4 / 32, 1)
   m_sampleMasks[0] = UINT32_MAX;  // count all (default)
   // TODO: sample shading dynamic
@@ -356,7 +359,10 @@ VkPipeline VkPipelinePool::getOrCreateGraphicsPipeline(
   // nothing
 
   // -- Graphics Pipeline: Viewport State --
-  // nothing
+  m_pipelineViewportStateCreateInfo.viewportCount =
+      static_cast<uint32_t>(graphicsInfo.fragmentShader.viewports.size());
+  m_pipelineViewportStateCreateInfo.scissorCount =
+      static_cast<uint32_t>(graphicsInfo.fragmentShader.scissors.size());
 
   // -- Graphics Pipeline: Rasterization State --
   if (graphicsInfo.opts.flags & EPipelineFlags::eDepthBias) {
@@ -461,14 +467,19 @@ VkPipeline VkPipelinePool::getOrCreateGraphicsPipeline(
   }
 
   // -- Graphics Pipeline: Color Blend --
-  m_pipelineColorBlendAttachmentStates.reserve(
-      graphicsInfo.fragmentOut.colorAttachmentCount);
-  for (uint32_t i = 0; i < graphicsInfo.fragmentOut.colorAttachmentCount; ++i) {
+  uint32_t const colorAttachmentNum = static_cast<uint32_t>(
+      graphicsInfo.fragmentOut.colorAttachmentFormats.size() > 0
+          ? graphicsInfo.fragmentOut.colorAttachmentFormats.size()
+          : 1);
+  m_pipelineColorBlendAttachmentStates.reserve(colorAttachmentNum);
+  for (uint32_t i = 0; i < colorAttachmentNum; ++i) {
     m_pipelineColorBlendAttachmentStates.push_back(
         m_pipelineColorBlendAttachmentStateTemplate);
   }
-  m_pipelineColorBlendStateCreateInfo.attachmentCount =
-      graphicsInfo.fragmentOut.colorAttachmentCount;
+  // VUID-VkGraphicsPipelineCreateInfo-renderPass-06055:
+  // pCreateInfos[0].pNext<VkPipelineRenderingCreateInfo>.colorAttachmentCount
+  // == pCreateInfos[0].pColorBlendState->attachmentCount
+  m_pipelineColorBlendStateCreateInfo.attachmentCount = colorAttachmentNum;
   m_pipelineColorBlendStateCreateInfo.pAttachments =
       m_pipelineColorBlendAttachmentStates.data();
 
@@ -497,6 +508,7 @@ VkPipeline VkPipelinePool::getOrCreateGraphicsPipeline(
 
   // -- Graphics Pipeline: Extension "VK_KHR_dynamic_rendering" --
   VkFormat colorFallbackFormat = context.surfaceFormat().format;
+  assert(colorFallbackFormat != VK_FORMAT_UNDEFINED);
   if (uint32_t num = static_cast<uint32_t>(
           graphicsInfo.fragmentOut.colorAttachmentFormats.size());
       num > 0) {
@@ -514,6 +526,7 @@ VkPipeline VkPipelinePool::getOrCreateGraphicsPipeline(
       graphicsInfo.fragmentOut.stencilAttachmentFormat;
 
   // -- Common Values --
+  assert(graphicsInfo.pipelineLayout != VK_NULL_HANDLE);
   m_graphicsPipelineCreateInfo.layout = graphicsInfo.pipelineLayout;
   // assume, if base is given, that you want a pipeline derivative
   if (pipelineBase != VK_NULL_HANDLE) {
@@ -557,7 +570,9 @@ VkPipeline VkPipelinePool::getOrCreateGraphicsPipeline(
   // nothing
 
   // -- Graphics Pipeline: Viewport State --
-  // nothing
+  // TODO if add support of with count dynamic state, then reset everything
+  m_pipelineViewportStateCreateInfo.viewportCount = 0;
+  m_pipelineViewportStateCreateInfo.scissorCount = 0;
 
   // -- Graphics Pipeline: Rasterization State --
   m_pipelineRasterizationStateCreateInfo.frontFace =

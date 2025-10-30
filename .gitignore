@@ -122,6 +122,9 @@ CMakeUserPresets.json
 
 # Log file
 
+# nsight graphics project
+nsight/
+
 # BlueJ files
 *.ctxt
 

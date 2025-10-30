@@ -210,4 +210,12 @@ VkCommandPool createCommandPool(ContextVk const& context, bool resettable,
 bool allocPrimaryCommandBuffers(ContextVk const& context,
                                 VkCommandPool commandPool, uint32_t count,
                                 VkCommandBuffer* commandBuffers);
+
+// TODO better
+VkPipelineLayout createPipelineLayout(
+    ContextVk const& context,
+    VkDescriptorSetLayout const* pDescriptorSetLayouts = nullptr,
+    uint32_t descriptorSetLayoutCount = 0,
+    VkPushConstantRange const* pPushConstantRanges = nullptr,
+    uint32_t pushConstantRangeCount = 0);
 }  // namespace avk

@@ -4,12 +4,15 @@
 #include <Windowsx.h>  // GET_X_LPARAM
 #include <basetsd.h>
 #include <errhandlingapi.h>
+#include <vulkan/vulkan_core.h>
 #include <wingdi.h>
 #include <winspool.h>
 #include <winuser.h>
 
 // ExtractIconExW
 #include <shellapi.h>
+// https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute
+#include <dwmapi.h>
 
 #include <algorithm>
 #include <atomic>
@@ -36,8 +39,18 @@ struct PerFrameData {
   VkCommandBuffer commandBuffer;  // TODO better (using timeline semaphores)
 };
 
+// inline static uint32_t constexpr style = WS_POPUP |  WS_THICKFRAME |
+//                                          WS_MINIMIZEBOX | WS_MAXIMIZEBOX |
+//                                          WS_SYSMENU | WS_CAPTION;
+inline static uint32_t constexpr style = WS_OVERLAPPEDWINDOW;
+
 struct WindowPayload {
+  VkExtent2D lastClientExtent;
   avk::ContextVk* contextVk;
+  WINDOWPLACEMENT windowedPlacement;
+  bool isFullscreen;
+  std::atomic<bool> framebufferResized;
+  bool deferResizeHandling;
 };
 
 static LRESULT standardWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
@@ -83,8 +96,18 @@ struct Vertex {
   float color[3];
 };
 
-void onSwapBuffer([[maybe_unused]] avk::ContextVk const& contextVk,
-                  [[maybe_unused]] avk::SwapchainDataVk const& pData) {}
+static std::atomic<bool> g_isResizing = false;
+
+void onSwapBuffer(avk::ContextVk const& contextVk,
+                  std::vector<VkSubmitInfo>& submitInfos,
+                  avk::SwapchainDataVk const& swapchainData) {
+  if (submitInfos.size() > 0) {
+    avk::vkCheck(vkQueueSubmit(contextVk.device().graphicsComputeQueue,
+                               static_cast<uint32_t>(submitInfos.size()),
+                               submitInfos.data(),
+                               swapchainData.submissionFence));
+  }
+}
 
 void onAcquire([[maybe_unused]] avk::ContextVk const& contextVk) {}
 
@@ -94,6 +117,9 @@ void onSwapchainRecreation(avk::ContextVk const& contextVk,
                            uint32_t numImages, VkFormat format,
                            VkExtent2D imageExtent, VkFormat depthFormat,
                            std::vector<PerFrameData>& perFrameData) {
+  while (g_isResizing.load(std::memory_order_relaxed)) {
+    // wait
+  }
   // TODO add timeline
   // 1. add all resources in the vector into the discard pool
   std::vector<VkCommandBuffer> commandBuffers;
@@ -105,6 +131,9 @@ void onSwapchainRecreation(avk::ContextVk const& contextVk,
     // TODO handle discarding command buffers better
     commandBuffers.push_back(data.commandBuffer);
   }
+  // TODO handle synchronization? how? TODO remove this
+  vkDeviceWaitIdle(contextVk.device().device);
+  discardPool.destroyDiscardedResources(contextVk.device());
 
   perFrameData.clear();
   perFrameData.resize(numImages);
@@ -115,9 +144,13 @@ void onSwapchainRecreation(avk::ContextVk const& contextVk,
     // create missing command buffers
     size_t const offset = commandBuffers.size();
     size_t const count = perFrameData.size() - commandBuffers.size();
-    commandBuffers.resize(perFrameData.size());
+    commandBuffers.resize(count);
     avk::allocPrimaryCommandBuffers(contextVk, commandPool, count,
                                     commandBuffers.data() + offset);
+    // assign the newly created
+    for (size_t i = 0; i < perFrameData.size(); ++i) {
+      perFrameData[i].commandBuffer = commandBuffers[i];
+    }
   } else if (commandBuffers.size() > perFrameData.size()) {
     // handle excess command buffers
     size_t const offset = perFrameData.size();
@@ -125,6 +158,17 @@ void onSwapchainRecreation(avk::ContextVk const& contextVk,
     vkFreeCommandBuffers(contextVk.device().device, commandPool, count,
                          commandBuffers.data() + offset);
     commandBuffers.resize(perFrameData.size());
+
+    // reassign to perFrameData
+    for (size_t i = 0; i < perFrameData.size(); ++i) {
+      perFrameData[i].commandBuffer = commandBuffers[i];
+    }
+  }
+  // 3) equal sizes — just reassign existing command buffers
+  else {
+    for (size_t i = 0; i < perFrameData.size(); ++i) {
+      perFrameData[i].commandBuffer = commandBuffers[i];
+    }
   }
 
   // 2. create new resources
@@ -199,9 +243,8 @@ void renderStep(void* userData, [[maybe_unused]] std::string const& name,
 
 // Blender's window style:
 //  DWORD style = parent_window ?
-//                    WS_POPUPWINDOW | WS_CAPTION | WS_MAXIMIZEBOX |
-//                    WS_MINIMIZEBOX | WS_SIZEBOX : WS_OVERLAPPEDWINDOW;
-//
+//  WS_POPUPWINDOW | WS_CAPTION | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SIZEBOX
+//  : WS_OVERLAPPEDWINDOW;
 //  /* Forces owned windows onto taskbar and allows minimization. */
 //  DWORD extended_style = parent_window ? WS_EX_APPWINDOW : 0;
 //
@@ -214,6 +257,12 @@ void renderStep(void* userData, [[maybe_unused]] std::string const& name,
 
 void messageThreadProc(WindowPayload* windowPayload) {
   syncLog([] { std::cout << "Started UI Thread" << std::endl; });
+
+  // Important: Set DPI Awareness (alternative TODO -> In manifest)
+  // Windows 10+ recommended:
+  SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+  // Fallback (older Windows 8.1+):
+  // HRESULT hr = SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
 
   // MessageBoxW(nullptr, L"Hello, World!", L"Aether-Vk", MB_OK);
   // return 0;
@@ -281,10 +330,17 @@ void messageThreadProc(WindowPayload* windowPayload) {
   // WS_POPUP needs an explicit size
   // TODO WS_POPUP doesn't support HMENU! (either use WS_EX_OVERLAPPED or window
   // rendered on vulkan, see how it works on mac and linux)
+
+  // use caption and thickframe to get normal window behaviour, but suppress
+  // drawing of non client area with VM_NCCALCSIZE
+  uint32_t extendedStyle = WS_EX_APPWINDOW;
   int winX = 100, winY = 100, winW = 1024, winH = 768;  // TODO better
-  g_window.store(CreateWindowExW(0, L"Standard Window", L"Aether VK", WS_POPUP,
-                                 winX, winY, winW, winH, nullptr,
-                                 nullptr /*hMenu*/, nullptr, windowPayload));
+  assert(windowPayload);
+  g_window.store(CreateWindowExW(
+      extendedStyle, L"Standard Window", L"Aether VK", style, winX, winY, winW,
+      winH, nullptr, nullptr /*hMenu*/, nullptr, windowPayload));
+  SetWindowPos(g_window.load(), NULL, 0, 0, 0, 0,
+               SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE);
   if (!g_window.load()) {
     printError();
     g_quit.store(true);
@@ -352,7 +408,7 @@ VkImageMemoryBarrier2 imageMemoryBarrier(
     VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
     VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask,
     VkPipelineStageFlags2 srcStage, VkPipelineStageFlags2 dstStage,
-    uint32_t srcIndex = VK_QUEUE_FAMILY_IGNORED,
+    VkImageAspectFlags aspectMask, uint32_t srcIndex = VK_QUEUE_FAMILY_IGNORED,
     uint32_t dstIndex = VK_QUEUE_FAMILY_IGNORED) {
   // initialize struct
   VkImageMemoryBarrier2 imageBarrier{};
@@ -376,7 +432,7 @@ VkImageMemoryBarrier2 imageMemoryBarrier(
   imageBarrier.image = image;
 
   // define subrange of the image
-  imageBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  imageBarrier.subresourceRange.aspectMask = aspectMask;
   imageBarrier.subresourceRange.baseMipLevel = 0;
   imageBarrier.subresourceRange.levelCount = 1;
   imageBarrier.subresourceRange.baseArrayLayer = 0;
@@ -419,7 +475,10 @@ std::vector<uint32_t> openSpirV(std::filesystem::path const& path) {
 }
 
 void fillTriangleGraphicsInfo(avk::ContextVk const& context,
-                              avk::GraphicsInfo& graphicsInfo) {
+                              avk::GraphicsInfo& graphicsInfo,
+                              VkPipelineLayout pipelineLayout) {
+  graphicsInfo.pipelineLayout = pipelineLayout;
+
   graphicsInfo.vertexIn.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
   // 1 binding, 2 attributes
   VkVertexInputBindingDescription bindingDesc{};
@@ -461,6 +520,17 @@ void fillTriangleGraphicsInfo(avk::ContextVk const& context,
       avk::basicDepthStencilFormat(context.device().physicalDevice);
   graphicsInfo.fragmentOut.stencilAttachmentFormat =
       avk::basicDepthStencilFormat(context.device().physicalDevice);
+
+  graphicsInfo.opts.rasterizationPolygonMode = VK_POLYGON_MODE_FILL;
+}
+
+std::vector<uint32_t> uniqueElements(uint32_t const* elems, uint32_t count) {
+  std::vector<uint32_t> vElems(count);
+  std::copy_n(elems, count, vElems.begin());
+  std::sort(vElems.begin(), vElems.end());
+  auto it = std::unique(vElems.begin(), vElems.end());
+  vElems.resize(std::distance(vElems.begin(), it));
+  return vElems;
 }
 
 void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
@@ -470,36 +540,6 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
   avk::Job* render = new avk::Job[payload->jobBufferSize]();
   avk::ContextVk& contextVk = *payload->context;
 
-  avk::DiscardPoolVk discardPool;
-  avk::VkPipelinePool pipelinePool;
-  avk::GraphicsInfo graphicsInfo;
-  fillTriangleGraphicsInfo(contextVk, graphicsInfo);
-
-  VkPipeline pipeline = pipelinePool.getOrCreateGraphicsPipeline(
-      contextVk, graphicsInfo, true, VK_NULL_HANDLE);
-  // TODO create TLS Command Pool
-  VkCommandPool commandPool = avk::createCommandPool(
-      contextVk, true, contextVk.device().queueIndices.family.graphicsCompute);
-
-  // Create initial Vertex Buffer
-  const std::vector<Vertex> vertices = {
-      {{0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},  // Vertex 1: Red
-      {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},   // Vertex 2: Green
-      {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}   // Vertex 3: Blue
-  };
-  avk::BufferVk vertexBuffer;
-  // TODO create 2 buffers, 1 device visible and not host visible, the other
-  // host visible such that you can create a staging buffer
-  if (!vertexBuffer.create(contextVk, sizeof(vertices[0]) * vertices.size(),
-                           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                           0, 0, 1.f, false, 4,
-                           contextVk.device().queueIndices.families)) {
-    std::cerr << "Couldn't allocate Vertex Buffer Host Visible" << std::endl;
-  }
-  vertexBuffer.updateImmediately(vertices.data());
-
   // per frame data to update every swapchain recreation
   std::vector<PerFrameData> perFrameData;
   perFrameData.reserve(64);
@@ -507,9 +547,16 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
   VkFormat depthFormat =
       avk::basicDepthStencilFormat(contextVk.device().physicalDevice);
 
+  avk::DiscardPoolVk discardPool;
+
+  // TODO create TLS Command Pool
+  VkCommandPool commandPool = avk::createCommandPool(
+      contextVk, true, contextVk.device().queueIndices.family.graphicsCompute);
+
+  std::vector<VkSubmitInfo> submitInfos;
   contextVk.setSwapBufferCallbacks(
-      [&contextVk](const avk::SwapchainDataVk* pData) {
-        onSwapBuffer(contextVk, *pData);
+      [&contextVk, &submitInfos](const avk::SwapchainDataVk* pData) {
+        onSwapBuffer(contextVk, submitInfos, *pData);
       },
       [&contextVk]() { onAcquire(contextVk); },
       [&contextVk, &discardPool, &perFrameData, depthFormat, commandPool](
@@ -519,10 +566,49 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
                               numImages, format, extent, depthFormat,
                               perFrameData);
       });
+  // must do before pipeline creation as it populates the surface format
+  // TODO decouple classes
   contextVk.recreateSwapchain(false);
 
+  avk::VkPipelinePool pipelinePool;
+  avk::GraphicsInfo graphicsInfo;
+
+  VkPipelineLayout pipelineLayout = avk::createPipelineLayout(contextVk);
+
+  fillTriangleGraphicsInfo(contextVk, graphicsInfo, pipelineLayout);
+
+  VkPipeline pipeline = pipelinePool.getOrCreateGraphicsPipeline(
+      contextVk, graphicsInfo, true, VK_NULL_HANDLE);
+
+  // Create initial Vertex Buffer
+  const std::vector<Vertex> vertices = {
+      {{0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},  // Vertex 1: Red
+      {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},   // Vertex 2: Green
+      {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}   // Vertex 3: Blue
+  };
+  std::vector<uint32_t> uniqueQueueFamilies =
+      uniqueElements(contextVk.device().queueIndices.families,
+                     avk::DeviceVk::QueueFamilyIndicesCount);
+  assert(uniqueQueueFamilies.size() > 0);
+  avk::BufferVk vertexBuffer;
+  VmaAllocationCreateFlags dynamicBufferFlags =
+      VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+      VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT |
+      VMA_ALLOCATION_CREATE_MAPPED_BIT;
+  // TODO create 2 buffers, 1 device visible and not host visible, the other
+  // host visible such that you can create a staging buffer
+  if (!vertexBuffer.create(contextVk, sizeof(vertices[0]) * vertices.size(),
+                           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           0, dynamicBufferFlags, 1.f, false,
+                           static_cast<uint32_t>(uniqueQueueFamilies.size()),
+                           uniqueQueueFamilies.data())) {
+    std::cerr << "Couldn't allocate Vertex Buffer Host Visible" << std::endl;
+  }
+  vertexBuffer.updateImmediately(vertices.data());
+
   // uint32_t jobIdx = 0;
-  std::vector<VkSubmitInfo> submitInfos;
   submitInfos.reserve(16);
   while (!g_quit.load()) {
     submitInfos.clear();
@@ -535,6 +621,8 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
     contextVk.swapBufferAcquire();
     avk::SwapchainDataVk swapchainData = contextVk.getSwapchainData();
     auto const& frame = perFrameData[swapchainData.imageIndex];
+    // vkResetFences(contextVk.device().device, 1,
+    // &swapchainData.submissionFence);
 
     // AVK_JOB(&phys[jobIdx], physicsStep, p, avk::JobPriority::Medium,
     //         "PhysicsChunk");
@@ -550,6 +638,7 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
     //         "RenderPrep");
 
     VkCommandBuffer commandBuffer = frame.commandBuffer;
+    assert(commandBuffer && "Invalid command buffer from frame data");
 
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -566,19 +655,22 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
                            0 /*no need to wait previous operation */,
                            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                           VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
-    imageBarriers[1] =
-        imageMemoryBarrier(frame.depthImage, VK_IMAGE_LAYOUT_UNDEFINED,
-                           VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                           VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                           VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
-                           VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                           VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT);
+                           VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                           VK_IMAGE_ASPECT_COLOR_BIT);
+    imageBarriers[1] = imageMemoryBarrier(
+        frame.depthImage, VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+        VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+        VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
     transitionImageLayout(commandBuffer, imageBarriers, imageBarrierCount);
 
     VkClearValue clearValue{{{0.01f, 0.01f, 0.033f, 1.0f}}};
     // rendering attachment info and begin rendering
     // TODO attachment info for depth/stencil if necessary
+    // TODO populate resolve fields for multisampling.
     VkRenderingAttachmentInfo colorAttachment{};
     colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     colorAttachment.imageView = frame.swapchainImageView;
@@ -601,20 +693,20 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
 
     // set dynamic states
     VkViewport vp{};
-    vp.height = swapchainData.extent.width;
-    vp.width = swapchainData.extent.height;
+    vp.height = static_cast<float>(swapchainData.extent.height);
+    vp.width = static_cast<float>(swapchainData.extent.width);
     vp.minDepth = 0.f;
     vp.maxDepth = 1.f;
     vkCmdSetViewport(commandBuffer, 0, 1, &vp);
 
     VkRect2D scissor{};
-    scissor.extent.width = swapchainData.extent.width;
-    scissor.extent.height = swapchainData.extent.height;
+    scissor.extent = swapchainData.extent;
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
     // bind vertex buffer
     VkBuffer vBuf = vertexBuffer.buffer();
-    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vBuf, 0);
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vBuf, &offset);
 
     // issue draw call
     uint32_t const vertexCount = static_cast<uint32_t>(vertices.size());
@@ -628,17 +720,17 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
         swapchainData.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
         0 /* no access */, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-        VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+        VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
     transitionImageLayout(commandBuffer, imageBarriers, imageBarrierCount);
 
     // complete recording of the command buffer
     avk::vkCheck(vkEndCommandBuffer(commandBuffer));
 
-    // TODO submit to queue
     VkPipelineStageFlags waitStage{VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT};
+    submitInfos.clear();
     submitInfos.push_back({});
 
-    VkSubmitInfo submitInfo = submitInfos.back();
+    VkSubmitInfo& submitInfo = submitInfos.back();
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.waitSemaphoreCount = 1;
     submitInfo.pWaitSemaphores = &swapchainData.acquireSemaphore;
@@ -648,44 +740,6 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = &swapchainData.presentSemaphore;
 
-    avk::vkCheck(vkQueueSubmit(contextVk.device().graphicsComputeQueue,
-                               static_cast<uint32_t>(submitInfos.size()),
-                               submitInfos.data(),
-                               swapchainData.submissionFence));
-
-    // // render depends on physics
-    // if (jobIdx != 0) {
-    //   phys[jobIdx].addDepencency(&phys[prevJobIdx - 1]);
-    //   // unless you recycle stuff from the previous frame, this is not
-    //   necessary
-    //   // render[jobIdx].addDepencency(&render[prevJobIdx]);
-    // }
-    // render[jobIdx].addDepencency(&phys[jobIdx]);
-
-    // // submit bot (only the top of the DAG)
-    // sched->safeSubmitTask(&phys[jobIdx]);
-    // sched->safeSubmitTask(&render[jobIdx]);
-
-    // if (nextJobIdx < jobIdx) {
-    //   sched->waitFor(&render[nextJobIdx]);
-    //   // we'll recycle the job objects in the next loop iteration, therefore
-    //   you
-    //   // need to be sure that the job mutex is not locked somewhere for any
-    //   job!
-    //   // WARNING: Assuming continuations are zeroed out, remaining
-    //   dependencies
-    //   // are at 0
-    // }
-
-    // TODO better
-    // present ready might be false if user holds resize window and doesn't
-    // release it Does it work like this though? TODO verify for now, don't
-    // present images
-    // bool expected = false;
-    // if (g_presentReady.compare_exchange_weak(expected, true,
-    //                                          std::memory_order_release)) {
-    //   InvalidateRect(payload->hMainWindow, nullptr, false);
-    // }
     contextVk.swapBufferRelease();
   }
   sched->waitUntilAllTasksDone();
@@ -695,37 +749,137 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
   delete[] phys;
   delete[] render;
 }
+
 static LRESULT standardWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                                   LPARAM lParam) {
-  avk::ContextVk* context = nullptr;
+  DWORD windowedStyle = style;
 
-  if (uMsg == WM_CREATE) {
-    // Animate window appearing: slide from left to right
-    AnimateWindow(hWnd, 300, AW_SLIDE | AW_ACTIVATE | AW_HOR_POSITIVE);
-
-    // get creation parameters and store their address (reference must live
-    // beyond the window)
-    CREATESTRUCT* createStruct = reinterpret_cast<CREATESTRUCT*>(lParam);
-    context = reinterpret_cast<WindowPayload*>(createStruct->lpCreateParams)
-                  ->contextVk;
-    SetWindowLongPtrW(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(context));
-
-    return 0;
+  // handle messages that can arrive before WM_CREATE
+  if (uMsg == WM_NCCREATE) {
+    CREATESTRUCTW* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
+    if (cs && cs->lpCreateParams) {
+      WindowPayload* payload =
+          reinterpret_cast<WindowPayload*>(cs->lpCreateParams);
+      SetWindowLongPtrW(hWnd, GWLP_USERDATA,
+                        reinterpret_cast<LONG_PTR>(payload));
+      // initialize windowedPlacement etc. here if you want
+      payload->isFullscreen = false;
+      payload->windowedPlacement = {};
+      payload->windowedPlacement.length = sizeof(payload->windowedPlacement);
+      payload->framebufferResized = false;
+      payload->lastClientExtent = {};
+    }
+    return DefWindowProcW(hWnd, uMsg, wParam, lParam);
   }
   // retrieve context for all other messages
-  context =
-      reinterpret_cast<avk::ContextVk*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+  // avk::ContextVk& context = *payload->contextVk;
+
+  constexpr UINT WM_APP_RECREATE_SWAPCHAIN = WM_APP + 1;
+  constexpr UINT TIMER_DEFER_SIZECHECK = 42;
 
   switch (uMsg) {
-    case WM_CLOSE:
+    case WM_CLOSE: {
       // Animate window disappearing: slide out to the right
       AnimateWindow(hWnd, 300, AW_SLIDE | AW_HIDE | AW_HOR_POSITIVE);
       DestroyWindow(hWnd);
       return 0;
+    }
 
-    case WM_APP:  // custom message from worker threads
+    case WM_APP_RECREATE_SWAPCHAIN: {
       // InvalidateRect(hWnd, nullptr, TRUE);
       return 0;
+    }
+
+      // --- Disable double-click maximize on the non-client area
+    case WM_NCLBUTTONDBLCLK:
+      // Do nothing (prevents default double-click maximize).
+      // Must return 0 to indicate we handled it.
+      return 0;
+
+    // --- Prevent Windows from drawing the non-client area (titlebar) when we
+    // hide it
+    case WM_NCPAINT:
+      // We draw no non-client area (we already made client full-window in
+      // WM_NCCALCSIZE). Returning 0 prevents the default caption rendering that
+      // sometimes reappears.
+      return 0;
+
+    case WM_NCACTIVATE:
+      // Prevent Windows from toggling non-client active visuals. Returning 0
+      // suppresses default painting. But preserve return semantics: If wParam
+      // == TRUE and we want to keep it active, return 1 to indicate handled;
+      // returning 0 prevents the default caption draw which we want hidden.
+      return 0;
+
+    // DPI awareness code
+    case WM_WINDOWPOSCHANGED: {
+      WINDOWPOS* wp = reinterpret_cast<WINDOWPOS*>(lParam);
+      WindowPayload* payload = reinterpret_cast<WindowPayload*>(
+          GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+      if (!payload) break;
+
+      // Ignore changes that don't affect size
+      if (wp->flags & SWP_NOSIZE) break;
+
+      // When going fullscreen or snapping, let Windows settle
+      bool isFrameChange = (wp->flags & SWP_FRAMECHANGED);
+      bool isDeferNeeded = payload->isFullscreen || isFrameChange;
+
+      if (isDeferNeeded) {
+        // Defer size check to next frame so GetClientRect matches DWM area
+        KillTimer(hWnd, TIMER_DEFER_SIZECHECK);
+        SetTimer(hWnd, TIMER_DEFER_SIZECHECK, 50, nullptr);
+        return 0;
+      }
+
+      RECT rc;
+      GetClientRect(hWnd, &rc);
+      uint32_t w = rc.right - rc.left;
+      uint32_t h = rc.bottom - rc.top;
+
+      if (w && h &&
+          (w != payload->lastClientExtent.width ||
+           h != payload->lastClientExtent.height)) {
+        payload->lastClientExtent = {w, h};
+        payload->framebufferResized = true;
+        PostMessageW(hWnd, WM_APP_RECREATE_SWAPCHAIN, 0, 0);
+      }
+      return 0;
+    }
+
+    case WM_DPICHANGED: {
+      // lParam points to suggested RECT in pixels for the new DPI.
+      RECT* suggested = reinterpret_cast<RECT*>(lParam);
+      WindowPayload* payload = reinterpret_cast<WindowPayload*>(
+          GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+      if (payload && suggested) {
+        uint32_t w = static_cast<uint32_t>(suggested->right - suggested->left);
+        uint32_t h = static_cast<uint32_t>(suggested->bottom - suggested->top);
+        payload->lastClientExtent.width = w;
+        payload->lastClientExtent.height = h;
+        payload->framebufferResized = true;
+
+        // apply recommended pos/size so Windows doesn't scale the window
+        // visually
+        std::cout << "WM_DPICHANGED: " << payload->lastClientExtent.width << "x"
+                  << payload->lastClientExtent.height << std::endl;
+        SetWindowPos(hWnd, nullptr, suggested->left, suggested->top, w, h,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        PostMessageW(hWnd, WM_APP_RECREATE_SWAPCHAIN, 0, 0);
+      }
+      return 0;
+    }
+
+    // before style changes
+    case WM_STYLECHANGING: {
+      WindowPayload* payload = reinterpret_cast<WindowPayload*>(
+          GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+      if (payload) {
+        payload->deferResizeHandling = true;
+        return 0;
+      }
+      break;
+    }
 
     // if you don't use WS_THICKFRAME, then you need to implement your own logic
     // for border detection
@@ -735,47 +889,164 @@ static LRESULT standardWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     // If you want to set custom cursors manually, handle WM_SETCURSOR after
     // checking WM_NCHITTEST.
     case WM_NCHITTEST: {
-      const LONG border = 6;  // TODO better: width of resize area in pixel
-      RECT winRect{};
-      GetWindowRect(hWnd, &winRect);
-      int const x = GET_X_LPARAM(lParam);
-      int const y = GET_Y_LPARAM(lParam);
-      bool const resizeWidth =
-          (x >= winRect.left && x < winRect.left + border) ||
-          (x < winRect.right && x >= winRect.right - border);
-      bool const resizeHeight =
-          (y >= winRect.top && y < winRect.top + border) ||
-          (y < winRect.bottom && y >= winRect.bottom - border);
-      if (resizeWidth && resizeHeight) {  // corners
-        if (x < winRect.left + border && y < winRect.top + border)
-          return HTTOPLEFT;
-        if (x >= winRect.right - border && y < winRect.top + border)
-          return HTTOPRIGHT;
-        if (x < winRect.left + border && y >= winRect.bottom - border)
-          return HTBOTTOMLEFT;
-        else
-          return HTBOTTOMRIGHT;
-      } else if (resizeWidth) {
-        return (x < winRect.left + border) ? HTLEFT : HTRIGHT;
-      } else if (resizeHeight) {
-        return (y < winRect.top + border) ? HTTOP : HTBOTTOM;
+      WindowPayload* payload = reinterpret_cast<WindowPayload*>(
+          GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+      if (payload && payload->isFullscreen) {
+        return HTCLIENT;
       }
-      // dragging?
-      return HTCAPTION;
+
+      // Use system metrics so OS and scaling agree
+      const int border = GetSystemMetrics(SM_CXSIZEFRAME) +
+                         GetSystemMetrics(SM_CXPADDEDBORDER);
+      const int caption = GetSystemMetrics(SM_CYCAPTION);
+
+      POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+      RECT wr;
+      GetWindowRect(hWnd, &wr);
+
+      // Convert to window-local coords
+      int x = pt.x - wr.left;
+      int y = pt.y - wr.top;
+      int w = wr.right - wr.left;
+      int h = wr.bottom - wr.top;
+
+      bool left = x < border;
+      bool right = x >= (w - border);
+      bool top = y < border;
+      bool bottom = y >= (h - border);
+
+      if (top && left) return HTTOPLEFT;
+      if (top && right) return HTTOPRIGHT;
+      if (bottom && left) return HTBOTTOMLEFT;
+      if (bottom && right) return HTBOTTOMRIGHT;
+      if (left) return HTLEFT;
+      if (right) return HTRIGHT;
+      if (top) return HTTOP;
+      if (bottom) return HTBOTTOM;
+
+      // Small strip at the top acts like a titlebar for dragging &
+      // snap/Win+Arrows. Slightly enlarge with the border so snap works
+      // reliably with invisible frame.
+      if (y < caption + border) return HTCAPTION;
+
+      return HTCLIENT;
     }
 
-    // Basic paint function
-    case WM_PAINT: {
-      // unreliable
-      // if (g_presentReady.load(std::memory_order_acquire)) {
-      //   context->swapBufferRelease();
-      //   g_presentReady.store(false, std::memory_order_release);
-      // }
+    case WM_TIMER: {
+      WindowPayload* payload = reinterpret_cast<WindowPayload*>(
+          GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+      if (wParam == TIMER_DEFER_SIZECHECK) {
+        KillTimer(hWnd, TIMER_DEFER_SIZECHECK);
+
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        uint32_t w = rc.right - rc.left;
+        uint32_t h = rc.bottom - rc.top;
+
+        if (payload && w && h &&
+            (w != payload->lastClientExtent.width ||
+             h != payload->lastClientExtent.height)) {
+          payload->lastClientExtent = {w, h};
+          std::cout << "DEFERRED EXTENT: " << w << "x" << h << std::endl;
+          PostMessageW(hWnd, WM_APP_RECREATE_SWAPCHAIN, 0, 0);
+        }
+      }
       return 0;
     }
 
-    // TODO BETTER: ASSUMES BUTTON POSITION
-    case WM_LBUTTONDOWN: {
+    case WM_SYSKEYDOWN:
+    case WM_KEYDOWN: {
+      WindowPayload* payload = reinterpret_cast<WindowPayload*>(
+          GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+      // TODO remove debug
+      ///////////////////////////////////////////////////////////////
+      if (wParam == 0x57 /*W*/) {
+        RECT rc{};
+        GetClientRect(hWnd, &rc);
+        std::cout << "GetClientRect: " << rc.right - rc.left << "x"
+                  << rc.bottom - rc.top << std::endl;
+
+        GetWindowRect(hWnd, &rc);
+        std::cout << "GetWindowRect: " << rc.right - rc.left << "x"
+                  << rc.bottom - rc.top << std::endl;
+
+        HMONITOR hMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi = {};
+        mi.cbSize = sizeof(mi);
+        GetMonitorInfoW(hMonitor, &mi);
+        std::cout << "GetMonitorInfoW: " << mi.rcWork.right - mi.rcWork.left
+                  << "x" << mi.rcWork.bottom - mi.rcWork.top << std::endl;
+
+        RECT dwmBounds;
+        if (SUCCEEDED(DwmGetWindowAttribute(hWnd, DWMWA_EXTENDED_FRAME_BOUNDS,
+                                            &dwmBounds, sizeof(dwmBounds)))) {
+          uint32_t visibleW = dwmBounds.right - dwmBounds.left;
+          uint32_t visibleH = dwmBounds.bottom - dwmBounds.top;
+          std::cout << "DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS): "
+                    << visibleW << "x" << visibleH << std::endl;
+        }
+
+        VkExtent2D ext = payload->contextVk->surfaceExtent();
+        std::cout << "VkExtent Swapchain: " << ext.width << "x" << ext.height
+                  << std::endl;
+      }
+      ///////////////////////////////////////////////////////////////
+
+      if (payload && (wParam == VK_RETURN) && (GetKeyState(VK_MENU) & 0x8000)) {
+        // ALT+ENTER detected → toggle fullscreen
+        payload->isFullscreen = !payload->isFullscreen;
+
+        // DWORD style = GetWindowLongW(hWnd, GWL_STYLE);
+        // DWORD exStyle = GetWindowLongW(hWnd, GWL_EXSTYLE);
+
+        if (payload->isFullscreen) {
+          // Enter fullscreen
+          GetWindowPlacement(hWnd, &payload->windowedPlacement);
+
+          HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+          MONITORINFO mi = {};
+          mi.cbSize = sizeof(mi);
+          GetMonitorInfoW(hMon, &mi);
+          RECT mon = mi.rcMonitor;
+          uint32_t monW = static_cast<uint32_t>(mon.right - mon.left);
+          uint32_t monH = static_cast<uint32_t>(mon.bottom - mon.top);
+
+          SetWindowLongW(hWnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+          SetWindowPos(hWnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
+                       mi.rcMonitor.right - mi.rcMonitor.left,
+                       mi.rcMonitor.bottom - mi.rcMonitor.top,
+                       SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
+          VkExtent2D override = {monW, monH};
+          payload->contextVk->recreateSwapchain(
+              true /*useHDR?*/,
+              &override);  // or false as needed
+        } else {
+          // Restore normal window
+          SetWindowLongW(hWnd, GWL_STYLE, windowedStyle);
+          SetWindowLongW(hWnd, GWL_EXSTYLE, WS_EX_APPWINDOW | WS_EX_WINDOWEDGE);
+          SetWindowPlacement(hWnd, &payload->windowedPlacement);
+          SetWindowPos(hWnd, nullptr, 0, 0, 0, 0,
+                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                           SWP_NOOWNERZORDER | SWP_FRAMECHANGED |
+                           SWP_SHOWWINDOW);
+          RedrawWindow(
+              hWnd, nullptr, nullptr,
+              RDW_INVALIDATE | RDW_UPDATENOW | RDW_FRAME | RDW_ALLCHILDREN);
+        }
+
+        // Duplicate Swapchain recreation incorrect?
+        // RECT rect;
+        // GetClientRect(hWnd, &rect);
+        // SendMessage(hWnd, WM_SIZE, SIZE_RESTORED,
+        //             MAKELPARAM(rect.right, rect.bottom));
+        PostMessageW(hWnd, WM_APP_RECREATE_SWAPCHAIN, 0, 0);
+
+        return 0;
+      }
+
+      // You can also support other shortcuts here:
+      // e.g. ALT+F4 → close (already handled by WM_CLOSE)
+      // CTRL+R → refresh / resize logic
       return 0;
     }
 
@@ -783,16 +1054,101 @@ static LRESULT standardWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
       // Handled by Vulkan
       // // generate manually a WM_PAINT
       // InvalidateRect(hWnd, nullptr, false);
+      if (wParam == SIZE_MINIMIZED) {
+        // TODO handled in loop with IsIconic()
+        std::cout << "WM_SIZE: MINIMIEZE" << std::endl;
+      } else {
+        // TODO remove: check if aero snap
+        // pulls different extents after some time
+        // std::cout << "WM_SIZE: posting timer" << std::endl;
+        // KillTimer(hWnd, TIMER_DEFER_SIZECHECK);
+        // SetTimer(hWnd, TIMER_DEFER_SIZECHECK, 50,
+        //          nullptr);  // 50–100 ms works well
+
+        // WindowPayload* payload = reinterpret_cast<WindowPayload*>(
+        //     GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+        // if (payload) {
+        //   payload->framebufferResized = true;
+        //   PostMessageW(hWnd, WM_APP_RECREATE_SWAPCHAIN, 0, 0);
+        // }
+      }
       return 0;
     }
 
-    case WM_DESTROY:
+    case WM_ENTERSIZEMOVE: {
+      g_isResizing.store(true, std::memory_order_relaxed);
+      return 0;
+    }
+
+    case WM_EXITSIZEMOVE: {
+      g_isResizing.store(false, std::memory_order_relaxed);
+      PostMessageW(hWnd, WM_APP_RECREATE_SWAPCHAIN, 0, 0);
+      return 0;
+    }
+
+    case WM_NCCALCSIZE: {
+      if (wParam) {
+        // Remove the standard frame — make the client area full window
+        NCCALCSIZE_PARAMS* sz = (NCCALCSIZE_PARAMS*)lParam;
+        sz->rgrc[0] = sz->rgrc[1];
+        return 0;
+      }
+      break;
+    }
+
+    // since we removed manually part the window (outside the client area),
+    // the window minemsions query should be properly handled manually
+    case WM_GETMINMAXINFO: {
+      WindowPayload* payload = reinterpret_cast<WindowPayload*>(
+          GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+      MINMAXINFO* mmi = (MINMAXINFO*)lParam;
+      HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+      MONITORINFO mi = {};
+      mi.cbSize = sizeof(mi);
+      if (GetMonitorInfoW(hMon, &mi)) {
+        if (payload && payload->isFullscreen) {
+          // Use the *full monitor area*, not work area
+          RECT monitor = mi.rcMonitor;
+          mmi->ptMaxPosition.x = monitor.left;
+          mmi->ptMaxPosition.y = monitor.top;
+          mmi->ptMaxSize.x = monitor.right - monitor.left;
+          mmi->ptMaxSize.y = monitor.bottom - monitor.top;
+        } else {
+          // Normal behavior (respect taskbar)
+          RECT work = mi.rcWork;
+          RECT monitor = mi.rcMonitor;
+          mmi->ptMaxPosition.x = work.left - monitor.left;
+          mmi->ptMaxPosition.y = work.top - monitor.top;
+          mmi->ptMaxSize.x = work.right - work.left;
+          mmi->ptMaxSize.y = work.bottom - work.top;
+          mmi->ptMinTrackSize.x = 200;
+          mmi->ptMinTrackSize.y = 150;
+        }
+      }
+
+      return 0;
+    }
+
+    case WM_SYSCOMMAND: {
+      // Allow system move/resize from keyboard (Alt+Space, etc.)
+      return DefWindowProcW(hWnd, uMsg, wParam, lParam);
+    }
+
+    case WM_DESTROY: {
       PostQuitMessage(0);
       return 0;
-    default:
-      return DefWindowProcW(hWnd, uMsg, wParam, lParam);
+    }
   }
+  return DefWindowProcW(hWnd, uMsg, wParam, lParam);
 }
+
+// Guide to activate Virtual Terminal processing: (Windows 10 and above)
+//  HANDLE handleOut = GetStdHandle(STD_OUTPUT_HANDLE);
+//  DWORD consoleMode;
+//  GetConsoleMode( handleOut , &consoleMode);
+//  consoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+//  consoleMode |= DISABLE_NEWLINE_AUTO_RETURN;
+//  SetConsoleMode( handleOut , consoleMode );
 
 int WINAPI wWinMain([[maybe_unused]] HINSTANCE hInstance,
                     [[maybe_unused]] HINSTANCE hPrevInstance,
@@ -805,6 +1161,15 @@ int WINAPI wWinMain([[maybe_unused]] HINSTANCE hInstance,
   freopen_s(&fDummy, "CONOUT$", "w", stdout);
   freopen_s(&fDummy, "CONOUT$", "w", stderr);
   std::ios::sync_with_stdio();
+  {
+    HANDLE handleOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD consoleMode;
+    GetConsoleMode(handleOut, &consoleMode);
+    consoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+    consoleMode |= DISABLE_NEWLINE_AUTO_RETURN;
+    SetConsoleMode(handleOut, consoleMode);
+  }
+
 #endif
 
   avk::ContextVk contextVk{};

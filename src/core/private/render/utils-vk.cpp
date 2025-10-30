@@ -257,6 +257,7 @@ bool BufferVk::create(ContextVk const& context, size_t size,
   externalInfo.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
 
   VmaAllocator allocator = context.getAllocator();
+  assert(allocator && "VmaAllocator not valid");
   VkBufferCreateInfo createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   createInfo.flags = 0;
@@ -275,8 +276,14 @@ bool BufferVk::create(ContextVk const& context, size_t size,
   allocCreateInfo.priority = priority;
   allocCreateInfo.requiredFlags = requiredFlags;
   allocCreateInfo.preferredFlags = preferredFlags;
-  allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+  allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+  // example dynamic buffer:
+  // allocCreateInfo.flags =
+  // VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+  //   VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT |
+  //   VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
+  // TODO parametrize based on usage
   // External Memory -> Either External Image or Pixel Buffer
   // this is a buffer -> pixel buffer pool
   if (exportMemory) {
@@ -315,7 +322,12 @@ bool BufferVk::create(ContextVk const& context, size_t size,
 
   vmaGetAllocationMemoryProperties(allocator, m_allocation,
                                    &m_memoryPropertyFlags);
-  if (m_memoryPropertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+  // If in commadn buffer you use vmaCopyMemoryToAllocation no need to map
+  if ((m_memoryPropertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+      (allocCreateInfo.flags &
+       (VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT |
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT))) {
     return map(context);
   }
 
@@ -495,6 +507,29 @@ bool allocPrimaryCommandBuffers(ContextVk const& context,
   VkResult const res = vkAllocateCommandBuffers(context.device().device,
                                                 &allocateInfo, commandBuffers);
   return VK_SUCCESS == res;
+}
+
+VkPipelineLayout createPipelineLayout(
+    ContextVk const& context,
+    VkDescriptorSetLayout const* pDescriptorSetLayouts,
+    uint32_t descriptorSetLayoutCount,
+    VkPushConstantRange const* pPushConstantRanges,
+    uint32_t pushConstantRangeCount) {
+  // TODO check setLayoutCount must be less than or equal to
+  // VkPhysicalDeviceLimits::maxBoundDescriptorSets
+  // TODO Any two elements of pPushConstantRanges must not include the same
+  // stage in stageFlags
+  VkPipelineLayoutCreateInfo createInfo{};
+  createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  createInfo.setLayoutCount = descriptorSetLayoutCount;
+  createInfo.pSetLayouts = pDescriptorSetLayouts;
+  createInfo.pushConstantRangeCount = pushConstantRangeCount;
+  createInfo.pPushConstantRanges = pPushConstantRanges;
+
+  VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+  vkCheck(vkCreatePipelineLayout(context.device().device, &createInfo, nullptr,
+                                 &pipelineLayout));
+  return pipelineLayout;
 }
 
 }  // namespace avk
