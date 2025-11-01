@@ -41,3 +41,7 @@ C++20 Modules are not used because, while Desktop Builds with CMake version >= 3
 - Android NDK doesn't support C++20 Modules yet
 
   - [NDK Issue](https://github.com/android/ndk/issues/1855)
+
+## Known Bugs
+
+- Windows x86_64: first resize scales the content (it shouldn't)

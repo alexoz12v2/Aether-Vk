@@ -1,0 +1,716 @@
+// clang-format off
+#include <Windows.h>
+#include "avk-comutils.h"
+#include "avk-win32-window.h"
+// clang-format on
+
+// WARNING: not supported on lld-link, hence you need to dynamically load user32
+// when using versioned symbols
+//
+// #pragma comment(linker, "/DELAYLOAD:user32.dll")
+#pragma comment(lib, "user32.lib")  // TODO move to cmake/bazel
+
+#include <Windowsx.h>
+#include <shellapi.h>  // ExtractIconExW
+
+// _beginthreadex
+#include <process.h>
+
+// https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute
+#include <dwmapi.h>
+
+// https://www.gaijin.at/en/infos/windows-version-numbers
+#include <VersionHelpers.h>
+
+// Older DPI APIs (Windows 8 )
+#include <shellscalingapi.h>
+#pragma comment(lib, "Shcore.lib")  // TODO move to cmake/bazel
+
+// Component Object Model
+// https://www.221bluestreet.com/offensive-security/windows-components-object-model/demystifying-windows-component-object-model-com#what-is-a-com-object
+#include <Objbase.h>
+#pragma comment(lib, "Ole32.lib")  // TODO move to cmake/bazel
+
+#include <atomic>
+#include <cassert>
+#include <iostream>
+
+// TODO handle WS_EX_ACCEPTFILES to support drag & drop
+// TODO multilingual support
+
+namespace avk {
+
+// ------------------------ Static Functions ---------------------------------
+
+static void enqueueMessageCOM(COMPayload& payload, const std::wstring& type,
+                              const std::wstring& title,
+                              const std::wstring& body, HWND window = nullptr) {
+  // Acquire exclusive modification rights
+  WaitForSingleObject(payload.hCanWrite, INFINITE);
+
+  payload.messages.push_back({type + L";-;" + title, body, window});
+
+  // Release write access
+  SetEvent(payload.hCanWrite);
+
+  // Signal COM thread that there's work
+  SetEvent(payload.hHasWork);
+}
+
+static HRESULT disableNCRendering(HWND hWnd) {
+  HRESULT hr = S_OK;
+
+  DWMNCRENDERINGPOLICY ncrp = DWMNCRP_DISABLED;
+
+  // Disable non-client area rendering on the window.
+  hr = ::DwmSetWindowAttribute(hWnd, DWMWA_NCRENDERING_POLICY, &ncrp,
+                               sizeof(ncrp));
+
+  if (SUCCEEDED(hr)) {
+    // ...
+  }
+
+  return hr;
+}
+
+static void enableDPIAwareness() {
+  // https://learn.microsoft.com/en-us/windows/win32/hidpi/dpi-awareness-context
+  // TODO: recover manifest and check if DPI awareness is enabled. If yes skip
+  std::cout << "\033[93m"
+            << "DPI Awareness should be enabled by the"
+               " application manifest if you target Windows 10 or newer"
+            << "\033[0m" << std::endl;
+  static auto const pSetProcessDpiAwarenessContext =
+      reinterpret_cast<decltype(SetProcessDpiAwarenessContext)*>(GetProcAddress(
+          GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext"));
+  // load library, not get module handle, cause it might be that I remove the
+  // pragma lib
+  static auto const pSetProcessDpiAwareness =
+      reinterpret_cast<decltype(SetProcessDpiAwareness)*>(GetProcAddress(
+          LoadLibraryW(L"Shcore.dll"), "SetProcessDpiAwareness"));
+
+  // Windows 10+ API: enables full per-monitor V2 awareness.
+  // Must be called before any window is created.
+  // only in Windows 10, version 1703
+  if (IsWindowsVersionOrGreater(10, 0, 15063) &&
+      pSetProcessDpiAwarenessContext) {
+    if (pSetProcessDpiAwarenessContext(
+            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
+      return;
+  }
+  // Fallback for older Windows 8.1 APIs
+  if (IsWindowsVersionOrGreater(8, 1, 0) && pSetProcessDpiAwareness) {
+    HRESULT hr = pSetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+    if (SUCCEEDED(hr)) return;
+  }
+
+  // Fallback for very old systems (Vista/7)
+  SetProcessDPIAware();
+}
+
+// TODO management of dynamically loaded modules
+static uint32_t getDpiForHwnd(HWND hwnd) {
+  // Windows 10+ API
+  // user32 is linked at load time, no need for runtime check
+  // HMODULE user32 = LoadLibraryW(L"user32.dll"); + GetProcAddress
+  // Windows 10, version 1607
+  static auto const pGetDpiForWindow =
+      reinterpret_cast<decltype(GetDpiForWindow)*>(
+          GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow"));
+  if (IsWindowsVersionOrGreater(10, 0, 14393) && pGetDpiForWindow) {
+    if (uint32_t dpi = pGetDpiForWindow(hwnd); dpi > 0) return dpi;
+  }
+
+  UINT dpiX = 96, dpiY = 96;
+  // Fallback for Win8.1
+  HMODULE shcore = LoadLibraryW(L"Shcore.dll");
+  static auto const pGetDpiForMonitor =
+      reinterpret_cast<decltype(GetDpiForMonitor)*>(
+          GetProcAddress(shcore, "GetDpiForMonitor"));
+  if (IsWindowsVersionOrGreater(8, 1, 0) && pGetDpiForMonitor) {
+    HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    pGetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY);
+  }
+
+  FreeLibrary(shcore);  // TODO
+  return dpiX;
+}
+
+// WARNING: Assumes primary window doesn't have a menu
+static RECT computeWindowRectForClient(HWND hWnd, RECT clientRect, DWORD style,
+                                       DWORD exStyle) {
+  // 1. compute dpi
+  uint32_t const dpi = getDpiForHwnd(hWnd);
+
+  // 2. adjust window rect
+  RECT windowRect = clientRect;
+  static auto const pAdjustWindowRectExForDpi =
+      reinterpret_cast<decltype(AdjustWindowRectExForDpi)*>(GetProcAddress(
+          GetModuleHandleW(L"user32.dll"), "AdjustWindowRectExForDpi"));
+  if (IsWindowsVersionOrGreater(10, 0, 14393) && pAdjustWindowRectExForDpi) {
+    if (pAdjustWindowRectExForDpi(&windowRect, style, false, exStyle, dpi)) {
+      return windowRect;
+    }
+  }
+
+  // 3. fallback: AdjustWindowRectEx with manual scaling
+  if (AdjustWindowRectEx(&windowRect, style, false, exStyle) && dpi != 96) {
+    // scale by current DPI ratio
+    LONG width = windowRect.right - windowRect.left;
+    LONG height = windowRect.bottom - windowRect.top;
+    width = MulDiv(width, dpi, 96);
+    height = MulDiv(height, dpi, 96);
+    windowRect.right = windowRect.left + width;
+    windowRect.bottom = windowRect.top + height;
+  }
+
+  return windowRect;
+}
+
+// -------------- Window Procedure Helpers ---------------
+
+static void primaryWindowToggleFullscreen(HWND& hWnd, bool isFullscreen,
+                                          WINDOWPLACEMENT* inOutPlacement) {
+  if (isFullscreen) {
+    // Enter fullscreen
+    GetWindowPlacement(hWnd, inOutPlacement);
+
+    HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    GetMonitorInfoW(hMon, &mi);
+
+    RECT desiredClient = mi.rcMonitor;
+    RECT windowRect = computeWindowRectForClient(
+        hWnd, desiredClient, primaryWindowFullscreenStyle, 0);
+
+    SetWindowLongW(hWnd, GWL_STYLE, primaryWindowFullscreenStyle);
+    SetWindowLongW(hWnd, GWL_EXSTYLE, 0);
+
+    // resize window, refresh style, place on top, and fire WM_NCCALCSIZE
+    // @alexoz12v2: Note: Why Do you need to call it twice?
+    SetWindowPos(hWnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
+                 windowRect.right - windowRect.left,
+                 windowRect.bottom - windowRect.top,
+                 SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
+    SetWindowPos(hWnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
+                 windowRect.right - windowRect.left,
+                 windowRect.bottom - windowRect.top,
+                 SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
+
+  } else {
+    // Restore normal window
+    SetWindowLongW(hWnd, GWL_STYLE, primaryWindowWindowedStyle);
+    SetWindowLongW(hWnd, GWL_EXSTYLE, primaryWindowExtendedStyle);
+    SetWindowPlacement(hWnd, inOutPlacement);
+    RECT rc = inOutPlacement->rcNormalPosition;
+    SetWindowPos(
+        hWnd, nullptr, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top,
+        SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+  }
+}
+
+// TODO remove
+static void debugPrintPrimaryWindowStats(HWND hWnd,
+                                         WindowPayload const* payload) {
+  std::cout << "/////////////////////////////////////" << std::endl;
+  DWORD hwndStyle = GetWindowLongW(hWnd, GWL_STYLE);
+  if (hwndStyle & WS_MAXIMIZE) {
+    std::cout << "\033[71m" << "Window Maximized" << "\033[0m" << std::endl;
+  }
+  RECT rc{};
+  GetClientRect(hWnd, &rc);
+  std::cout << "GetClientRect: " << rc.right - rc.left << "x"
+            << rc.bottom - rc.top << std::endl;
+
+  GetWindowRect(hWnd, &rc);
+  std::cout << "GetWindowRect: " << rc.right - rc.left << "x"
+            << rc.bottom - rc.top << std::endl;
+
+  HMONITOR hMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO mi = {};
+  mi.cbSize = sizeof(mi);
+  GetMonitorInfoW(hMonitor, &mi);
+  std::cout << "GetMonitorInfoW: " << mi.rcWork.right - mi.rcWork.left << "x"
+            << mi.rcWork.bottom - mi.rcWork.top << std::endl;
+
+  RECT dwmBounds;
+  if (SUCCEEDED(DwmGetWindowAttribute(hWnd, DWMWA_EXTENDED_FRAME_BOUNDS,
+                                      &dwmBounds, sizeof(dwmBounds)))) {
+    uint32_t visibleW = dwmBounds.right - dwmBounds.left;
+    uint32_t visibleH = dwmBounds.bottom - dwmBounds.top;
+    std::cout << "DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS): "
+              << visibleW << "x" << visibleH << std::endl;
+  }
+
+  VkExtent2D ext = payload->contextVk->surfaceExtent();
+  std::cout << "VkExtent Swapchain: " << ext.width << "x" << ext.height
+            << std::endl;
+  std::cout << "/////////////////////////////////////" << std::endl;
+}
+
+// ------------------------ Translation Unit Impl ----------------------------
+
+LRESULT primaryWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+  // handle messages that can arrive before WM_CREATE
+  if (uMsg == WM_NCCREATE) {
+    CREATESTRUCTW* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
+    // If this is the creation of this window (cs->hwndParent == nullptr)
+    if (cs && cs->lpCreateParams && cs->hwndParent == nullptr) {
+      WindowPayload* payload =
+          reinterpret_cast<WindowPayload*>(cs->lpCreateParams);
+      SetWindowLongPtrW(hWnd, GWLP_USERDATA,
+                        reinterpret_cast<LONG_PTR>(payload));
+      // initialize windowedPlacement etc. here if you want
+      payload->isFullscreen = false;
+      payload->windowedPlacement = {};
+      payload->windowedPlacement.length = sizeof(payload->windowedPlacement);
+      payload->framebufferResized = false;
+      payload->lastClientExtent = {};
+    }
+    return DefWindowProcW(hWnd, uMsg, wParam, lParam);
+  }
+
+  // might be null for some early messages
+  WindowPayload* payload =
+      reinterpret_cast<WindowPayload*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+
+  switch (uMsg) {
+    case WM_ACTIVATE: {
+      // active
+      if (wParam & (WA_ACTIVE | WA_CLICKACTIVE)) {
+        if (payload && payload->isFullscreen) {
+          // revert to top
+          SetWindowPos(hWnd, HWND_TOP, 0, 0, 0, 0,
+                       SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE |
+                           SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        }
+      }
+      // we still want the default processing
+      break;
+    }
+    case WM_CLOSE: {
+      PostQuitMessage(0);
+      // Suppress default window closing
+      return 0;
+    }
+
+    // --- Disable double-click maximize on the non-client area
+    case WM_NCLBUTTONDBLCLK:
+      // Do nothing (prevents default double-click maximize).
+      // Must return 0 to indicate we handled it.
+      return 0;
+
+    // --- Prevent Windows from drawing the non-client area (titlebar) when we
+    // hide it
+    case WM_NCPAINT:
+      // We draw no non-client area (we already made client full-window in
+      // WM_NCCALCSIZE). Returning 0 prevents the default caption rendering that
+      // sometimes reappears.
+      return 0;
+
+    case WM_WINDOWPOSCHANGED: {
+      break;
+    }
+
+    // DPI awareness code
+    case WM_DPICHANGED: {
+      // UINT newDpi = HIWORD(wParam);
+      RECT* const suggestedRect = (RECT*)lParam;
+
+      // Resize your window to the suggested rectangle
+      SetWindowPos(hWnd, nullptr, suggestedRect->left, suggestedRect->top,
+                   suggestedRect->right - suggestedRect->left,
+                   suggestedRect->bottom - suggestedRect->top,
+                   SWP_NOZORDER | SWP_NOACTIVATE);
+
+      return 0;
+    }
+
+    // before style changes
+    // TODO remove?
+    case WM_STYLECHANGING: {
+      if (payload) {
+        payload->deferResizeHandling = true;
+        return 0;
+      }
+      break;
+    }
+
+    // if you don't use WS_THICKFRAME, then you need to implement your own logic
+    // for border detection
+    // Petzold, CH7 "Hit-Test Message"
+    // Returning HTLEFT, HTTOPRIGHT, etc., enables automatic resizing.
+    // Returning HTCAPTION allows window dragging.
+    // If you want to set custom cursors manually, handle WM_SETCURSOR after
+    // checking WM_NCHITTEST.
+    case WM_NCHITTEST: {
+      if (payload && payload->isFullscreen) {
+        return HTCLIENT;
+      }
+
+      // Use system metrics so OS and scaling agree
+      const int border = GetSystemMetrics(SM_CXSIZEFRAME) +
+                         GetSystemMetrics(SM_CXPADDEDBORDER);
+      const int caption = GetSystemMetrics(SM_CYCAPTION);
+
+      POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+      RECT wr;
+      GetWindowRect(hWnd, &wr);
+
+      // Convert to window-local coords
+      int x = pt.x - wr.left;
+      int y = pt.y - wr.top;
+      int w = wr.right - wr.left;
+      int h = wr.bottom - wr.top;
+
+      bool left = x < border;
+      bool right = x >= (w - border);
+      bool top = y < border;
+      bool bottom = y >= (h - border);
+
+      if (top && left) return HTTOPLEFT;
+      if (top && right) return HTTOPRIGHT;
+      if (bottom && left) return HTBOTTOMLEFT;
+      if (bottom && right) return HTBOTTOMRIGHT;
+      if (left) return HTLEFT;
+      if (right) return HTRIGHT;
+      if (top) return HTTOP;
+      if (bottom) return HTBOTTOM;
+
+      // Small strip at the top acts like a titlebar for dragging &
+      // snap/Win+Arrows. Slightly enlarge with the border so snap works
+      // reliably with invisible frame.
+      if (y < caption + border) return HTCAPTION;
+
+      return HTCLIENT;
+    }
+
+    // suppress the beep on Alt+Enter
+    case WM_SYSCHAR: {
+      if (wParam == VK_RETURN) {
+        return 0;  // suppress system beep on Alt+Enter
+      }
+      break;
+    }
+
+    case WM_SYSKEYDOWN:
+    case WM_KEYDOWN: {
+      const bool winKey =
+          GetKeyState(VK_LWIN) & 0x8000 || GetKeyState(VK_RWIN) & 0x8000;
+      const bool ctrlKey = GetKeyState(VK_CONTROL) & 0x8000;
+      const bool altKey = GetKeyState(VK_MENU) & 0x8000;
+
+      static constexpr uint32_t WKey = 0x57;
+      static constexpr uint32_t EKey = 0x45;
+      static constexpr uint32_t FKey = 0x46;
+      static constexpr uint32_t GKey = 0x47;
+
+      // TODO remove debug
+      if (wParam == EKey && !winKey && !ctrlKey && !altKey) {
+        enqueueMessageCOM(payload->comPayload, L"NOTIFICATION", L"Test Toast",
+                          L"This is a notification");
+      }
+
+      // TODO remove debug
+      if (wParam == WKey && !winKey && !ctrlKey && !altKey) {
+        debugPrintPrimaryWindowStats(hWnd, payload);
+        return 0;
+      }
+
+      // TODO remove debug
+      if (wParam == FKey && !winKey && !ctrlKey && !altKey) {
+        enqueueMessageCOM(payload->comPayload, L"OPENFILE", L"", L"", hWnd);
+      }
+
+      // TODO remove debug
+      if (wParam == GKey && !winKey && !ctrlKey && !altKey) {
+        enqueueMessageCOM(payload->comPayload, L"OPENFOLDER", L"", L"", hWnd);
+      }
+
+      if (wParam == VK_RETURN && altKey && !winKey && !ctrlKey) {
+        // ALT+ENTER detected → toggle fullscreen
+        payload->isFullscreen = !payload->isFullscreen;
+        primaryWindowToggleFullscreen(hWnd, payload->isFullscreen,
+                                      &payload->windowedPlacement);
+        return 0;
+      }
+
+      break;
+    }
+
+    case WM_SIZE: {
+      if (wParam == SIZE_MINIMIZED) {
+        std::cout << "WM_SIZE: MINIMIEZE" << std::endl;
+      } else {
+      }
+      return 0;
+    }
+
+    case WM_ENTERSIZEMOVE: {
+      if (payload && payload->contextVk) {
+        payload->contextVk->isResizing.store(true, std::memory_order_relaxed);
+      }
+      return 0;
+    }
+
+    case WM_EXITSIZEMOVE: {
+      if (payload && payload->contextVk) {
+        payload->contextVk->isResizing.store(false, std::memory_order_relaxed);
+      }
+      return 0;
+    }
+
+    // https://learn.microsoft.com/en-us/windows/win32/dwm/customframe
+    case WM_NCCALCSIZE: {
+      if (wParam) {
+        // Remove the standard frame — make the client area full window
+        NCCALCSIZE_PARAMS* sz = (NCCALCSIZE_PARAMS*)lParam;
+        sz->rgrc[0] = sz->rgrc[1];
+        return 0;
+      }
+      break;
+    }
+
+    // since we removed manually part the window (outside the client area),
+    // the window minemsions query should be properly handled manually
+    case WM_GETMINMAXINFO: {
+      MINMAXINFO* mmi = (MINMAXINFO*)lParam;
+      HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+      MONITORINFO mi = {};
+      mi.cbSize = sizeof(mi);
+      if (GetMonitorInfoW(hMon, &mi)) {
+        if (payload && payload->isFullscreen) {
+          // FULL monitor area, no constraints
+          RECT monitor = mi.rcMonitor;
+          mmi->ptMaxPosition.x = monitor.left;
+          mmi->ptMaxPosition.y = monitor.top;
+          mmi->ptMaxSize.x = monitor.right - monitor.left;
+          mmi->ptMaxSize.y = monitor.bottom - monitor.top;
+
+          // Prevent Windows from clamping window size
+          mmi->ptMaxTrackSize = mmi->ptMaxSize;
+          mmi->ptMinTrackSize = mmi->ptMaxSize;
+        } else {
+          // Normal behavior (respect taskbar)
+          RECT work = mi.rcWork;
+          RECT monitor = mi.rcMonitor;
+          mmi->ptMaxPosition.x = work.left - monitor.left;
+          mmi->ptMaxPosition.y = work.top - monitor.top;
+          mmi->ptMaxSize.x = work.right - work.left;
+          mmi->ptMaxSize.y = work.bottom - work.top;
+          mmi->ptMinTrackSize.x = 200;
+          mmi->ptMinTrackSize.y = 150;
+        }
+
+        return 0;
+      }
+
+      break;
+    }
+
+    case WM_DESTROY: {
+      PostQuitMessage(0);
+      return 0;
+    }
+  }
+  return DefWindowProcW(hWnd, uMsg, wParam, lParam);
+}
+
+static uint32_t __stdcall comThreadEntrypoint(void* args) {
+  std::cout << "[COM Thread] Thread ID: " << GetCurrentThreadId() << std::endl;
+  std::cout << "[COM Thread] Successfully got in the Entrypoint!" << std::endl;
+  avkComThread(reinterpret_cast<COMPayload*>(args));
+  _endthreadex(0);
+  return 0;
+}
+
+HWND createPrimaryWindow(WindowPayload* payload) {
+  std::cout << "[UI Thread] Thread ID: " << GetCurrentThreadId() << std::endl;
+  assert(payload);
+  enableDPIAwareness();
+
+  // UI COM Objects from WinRT Require a Single Threaded Apartment inside the
+  // Thread which owns the Window (we are assuming that createPrimaryWindow and
+  // primaryWindowEntrypoint are called from the same thread)
+  avkInitApartmentSingleThreaded();
+
+  BOOL compositionEnabled = FALSE;
+  DwmIsCompositionEnabled(&compositionEnabled);
+  if (!compositionEnabled) {
+    std::cout << "\033[93m"
+              << "WARNING: DWM composition not enabled"
+              << "\033[0m" << std::endl;
+  }
+
+  // Enable COM object creation on a dedicated thread
+  payload->comPayload.messages.reserve(64);
+  payload->comPayload.messages.clear();
+  payload->comPayload.shutdown.store(false);
+  payload->comPayload.hCanWrite = CreateEventW(nullptr, FALSE, TRUE, nullptr);
+  payload->comPayload.hHasWork = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+
+  payload->hComThread = (HANDLE)_beginthreadex(nullptr, 0, comThreadEntrypoint,
+                                               &payload->comPayload, 0, 0);
+
+  DWORD opRes = 0;
+
+  // TODO image from somewhere, for now steal it from explorer.exe
+  HICON hIconLarge = nullptr;
+  HICON hIconSmall = nullptr;
+  opRes = ExtractIconExW(L"explorer.exe", 0, &hIconLarge, &hIconSmall, 1);
+  if (opRes == UINT_MAX) {
+    return nullptr;
+  }
+
+  // TODO More Cursors?
+  HCURSOR standardCursor = LoadCursorW(nullptr, IDC_ARROW);
+  if (!standardCursor) {
+    return nullptr;
+  }
+
+  // background color (DeleteObject(hbrBackground)) when you are finished
+  HBRUSH hbrBackground = CreateSolidBrush(RGB(30, 30, 30));
+  if (!hbrBackground) {
+    return nullptr;
+  }
+
+  WNDCLASSEXW standardWindowSpec{};
+  standardWindowSpec.cbSize = sizeof(WNDCLASSEXW);
+  standardWindowSpec.style = 0;  // TODO class styles
+  standardWindowSpec.lpfnWndProc = avk::primaryWindowProc;
+  standardWindowSpec.cbClsExtra = 0;  // TODO see how extra bytes can be used
+  standardWindowSpec.cbWndExtra = 0;  // TODO see how extra bytes can be used
+  standardWindowSpec.hInstance = GetModuleHandleW(nullptr);
+  standardWindowSpec.hIcon = hIconLarge;
+  standardWindowSpec.hCursor = standardCursor;
+  standardWindowSpec.hbrBackground = hbrBackground;
+  standardWindowSpec.lpszMenuName = nullptr;  // HMENU passed explicitly
+  standardWindowSpec.lpszClassName = primaryWindowClass;
+  standardWindowSpec.hIconSm = hIconSmall;
+
+  // TODO UnregisterClassEx() when you are finished
+  ATOM standardWindowAtom = RegisterClassExW(&standardWindowSpec);
+  if (!standardWindowAtom) {
+    return nullptr;
+  }
+
+  // use caption and thickframe to get normal window behaviour, but suppress
+  // drawing of non client area with VM_NCCALCSIZE
+  int winW = 1024, winH = 768;  // TODO better
+  HWND window = CreateWindowExW(primaryWindowExtendedStyle, primaryWindowClass,
+                                L"Aether VK", primaryWindowWindowedStyle,
+                                CW_USEDEFAULT, CW_USEDEFAULT, winW, winH,
+                                nullptr, nullptr /*hMenu*/, nullptr, payload);
+  if (!window) {
+    return window;
+  }
+
+  disableNCRendering(window);
+
+  // Force window style refresh and fire WM_NCCALCSIZE
+  SetWindowPos(window, NULL, 0, 0, 0, 0,
+               SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE);
+  return window;
+}
+
+// TODO remove: trying Windows Events
+#if 0
+static void CALLBACK winEventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd,
+                                  LONG idObject, LONG idChild,
+                                  DWORD eventThread, DWORD msEventTime) {
+  std::cout << "EVENT: hook " << hook << " event " << event << " hwnd " << hwnd
+            << " idObject " << idObject << " idChild " << idChild
+            << " msEventTime " << msEventTime << " eventThread " << eventThread
+            << std::endl;
+}
+
+static void initDebugHook() {
+  HWINEVENTHOOK hook = SetWinEventHook(
+      EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr,
+      winEventProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+
+  if (!hook)
+    MessageBoxW(nullptr, L"SetWinEventHook failed", L"Hook Error",
+                MB_ICONERROR);
+  else
+    std::cout << "Debug hook installed (EVENT_OBJECT_LOCATIONCHANGE)\n";
+}
+#endif
+
+void primaryWindowMessageLoop(HWND window, WindowPayload* payload,
+                              std::atomic<bool>& shouldQuit) {
+  MSG message{};
+  BOOL getMessageRet = false;
+
+  // TODO Do something useful with windows events
+  // initDebugHook();
+
+  // TODO handle modeless (=non blocking) dialog boxes (Modal -> DialogBox,
+  // Modeless -> CreateDialog)
+  HWND hCurrentModelessDialog = nullptr;
+
+  // TODO: Mate an accelerator table (IE Mapping between shortcuts and
+  // actions, eg CTRL + S -> Save) (LoadAccelerators)
+  HACCEL hAccel = nullptr;
+
+  // rounded corners (for windows 11 Build 22000)
+  if (IsWindowsVersionOrGreater(10, 0, 22000)) {
+    DWM_WINDOW_CORNER_PREFERENCE const cornerPreference = DWMWCP_ROUND;
+    uint32_t const bytes = static_cast<uint32_t>(sizeof(cornerPreference));
+    DwmSetWindowAttribute(window, DWMWA_WINDOW_CORNER_PREFERENCE,
+                          &cornerPreference, bytes);
+  }
+
+  ShowWindow(window, SW_SHOWDEFAULT);
+
+  while (!shouldQuit.load()) {
+    // WindowPayload* payload = reinterpret_cast<WindowPayload*>(
+    //     GetWindowLongPtrW(window, GWLP_USERDATA));
+    // NOTE: Use PeekMessage if you want to interrupt a lengthy sync operation
+    // with PM_REMOVE post message in the thread's message queue
+    getMessageRet = GetMessageW(&message, nullptr, 0, 0);
+    if (getMessageRet == -1) {
+      break;
+    }
+
+    // modeless dialog messages have been already processed
+    if (hCurrentModelessDialog != nullptr &&
+        IsDialogMessageW(hCurrentModelessDialog, &message)) {
+      continue;
+    }
+    // TODO accelerator message are handled by accelerator
+    if (hAccel != nullptr && TranslateAcceleratorW(window, hAccel, &message)) {
+      continue;
+    }
+
+    if (message.message == WM_QUIT) {
+      break;
+    }
+
+    // (TODO: Handle Dialog box and Translate Accelerators for menus)
+    TranslateMessage(&message);
+    // dispatch to window procedure
+    DispatchMessageW(&message);
+  }
+
+  // cleanup and join COM thread
+  shouldQuit.store(true);
+  // wake up COM thread so it can exit, then wait for it
+  payload->comPayload.shutdown.store(true);
+  if (payload->comPayload.hHasWork) {
+    SetEvent(payload->comPayload.hHasWork);
+  }
+  WaitForSingleObject(payload->hComThread, INFINITE);
+  CloseHandle(payload->hComThread);
+  CloseHandle(payload->comPayload.hCanWrite);
+  CloseHandle(payload->comPayload.hHasWork);
+
+  // Animate window disappearing after all threads have died:
+  // slide out to the right
+  AnimateWindow(window, 300, AW_SLIDE | AW_HIDE | AW_HOR_POSITIVE);
+  DestroyWindow(window);
+  UnregisterClassW(primaryWindowClass, nullptr);
+}
+
+}  // namespace avk

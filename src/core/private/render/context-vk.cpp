@@ -221,7 +221,7 @@ void SwapchainImage::destroy(DeviceVk const& device) {
   vkDestroySemaphore(device.device, presentSemaphore, nullptr);
   presentSemaphore = VK_NULL_HANDLE;
   assert(image != VK_NULL_HANDLE);
-  vkDestroyImage(device.device, image, nullptr);
+  // Swapchain Images are destroyed with VkDestroySwapchainKHR
   image = VK_NULL_HANDLE;
 }
 
@@ -252,6 +252,10 @@ ContextVk::~ContextVk() noexcept {
       vkDestroySurfaceKHR(m_instance.instance, m_surface, nullptr);
       m_surface = VK_NULL_HANDLE;
     }
+#ifdef AVK_DEBUG
+    vkDestroyDebugUtilsMessengerEXT(m_instance.instance,
+                                    m_instance.debugMessenger, nullptr);
+#endif
 
     vkDestroyInstance(m_instance.instance, nullptr);
     m_instance.instance = VK_NULL_HANDLE;
@@ -501,6 +505,8 @@ std::vector<std::string_view> ContextVk::anyMissingCapabilities(
   std::vector<std::string_view> missing;
   missing.reserve(64);
 
+  // TODO: avoid queries using Vulkan Versioned feature structs. Stick to those from
+  // either extensions or 1.0
   VkPhysicalDeviceFeatures2 features2{};
   VkPhysicalDeviceVulkan11Features features11{};
   VkPhysicalDeviceVulkan12Features features12{};
@@ -530,45 +536,33 @@ std::vector<std::string_view> ContextVk::anyMissingCapabilities(
     missing.push_back("geometryShader");
   if (features2.features.tessellationShader == VK_FALSE)
     missing.push_back("tessellationShader");
-  if (features2.features.logicOp == VK_FALSE)
-    missing.push_back("logical operations");
-  if (features2.features.dualSrcBlend == VK_FALSE)
-    missing.push_back("dual source blending");
-  if (features2.features.imageCubeArray == VK_FALSE)
-    missing.push_back("image cube array");
-  if (features2.features.multiDrawIndirect == VK_FALSE)
-    missing.push_back("multi draw indirect");
-  if (features2.features.multiViewport == VK_FALSE)
-    missing.push_back("multi viewport");
-  if (features2.features.shaderClipDistance == VK_FALSE)
-    missing.push_back("shader clip distance");
-  if (features2.features.drawIndirectFirstInstance == VK_FALSE)
-    missing.push_back("draw indirect first instance");
-  if (features2.features.fragmentStoresAndAtomics == VK_FALSE)
-    missing.push_back("fragment stores and atomics");
-  if (features11.shaderDrawParameters == VK_FALSE)
-    missing.push_back("shader draw parameters");
+  if (features2.features.depthBiasClamp == VK_FALSE)
+    missing.push_back("depth bias clamp");
   if (features12.timelineSemaphore == VK_FALSE)
     missing.push_back("timeline semaphores");
   if (features12.bufferDeviceAddress == VK_FALSE)
     missing.push_back("buffer device address");
-  if (features13.dynamicRendering == VK_FALSE) {
-    missing.push_back("dynamic rendering");
-  }
-  if (features2.features.depthBiasClamp == VK_FALSE) {
-    missing.push_back("depth bias clamp");
-  }
-  if (features13.synchronization2 == VK_FALSE) {
-    missing.push_back("synchronization 2");
-  }
-  // TODO maybe remove if not supported (especially on mobile)
-  if (features2.features.sampleRateShading == VK_FALSE) {
+  if (features2.features.imageCubeArray == VK_FALSE)
+    missing.push_back("image cube array");
+  if (features2.features.drawIndirectFirstInstance == VK_FALSE)
+    missing.push_back("draw indirect first instance");
+  if (features11.shaderDrawParameters == VK_FALSE)
+    missing.push_back("shader draw parameters");
+  if (features2.features.sampleRateShading == VK_FALSE) 
     missing.push_back("sample rate shading");
-  }
-
-  if (featuresSwapchainMaintenance1.swapchainMaintenance1 == VK_TRUE) {
+  if (features2.features.fragmentStoresAndAtomics == VK_FALSE)
+    missing.push_back("fragment stores and atomics");
+  // Note: No Shader Clip (ClipDistance decorator) or Shader Cull (CullDistance decorator)
+  // capability for SPIR-V Shaders
+  
+  // TODO these two are optional
+  if (features13.dynamicRendering == VK_FALSE)
+    missing.push_back("dynamic rendering");
+  if (features13.synchronization2 == VK_FALSE)
+    missing.push_back("synchronization 2");
+  if (featuresSwapchainMaintenance1.swapchainMaintenance1 == VK_TRUE) 
     physicalDevice.extSwapchainMaintenance1 = true;
-  }
+  
 
   // device extensions: swapchain, dynamic rendering
   uint32_t vkExtensionCount = 0;
@@ -1085,42 +1079,33 @@ static bool selectPresentMode(bool vsyncOff, DeviceVk const& device,
 static VkExtent2D getWindowExtent(HWND hWnd) {
   VkExtent2D extent{};
 
-  // Check window style to decide how to query size
-  LONG_PTR style = GetWindowLongPtrW(hWnd, GWL_STYLE);
-  bool isPopup = (style & WS_POPUP) && !(style & WS_OVERLAPPEDWINDOW);
-
-  RECT client{}, window{}, dwm{};
+  RECT client{}, dwm{};
   GetClientRect(hWnd, &client);
-  GetWindowRect(hWnd, &window);
 
-  if (isPopup && SUCCEEDED(DwmGetWindowAttribute(
-                     hWnd, DWMWA_EXTENDED_FRAME_BOUNDS, &dwm, sizeof(dwm)))) {
+  if (SUCCEEDED(DwmGetWindowAttribute(hWnd, DWMWA_EXTENDED_FRAME_BOUNDS, &dwm,
+                                      sizeof(dwm)))) {
     // True visible rectangle on screen (DWM composition area)
-    UINT dwmW = dwm.right - dwm.left;
-    UINT dwmH = dwm.bottom - dwm.top;
-
-    // Account for hidden margins DWM still applies
-    int borderX = (window.right - window.left) - (client.right - client.left);
-    int borderY = (window.bottom - window.top) - (client.bottom - client.top);
-    borderX = std::max(borderX, 0);
-    borderY = std::max(borderY, 0);
-
-    extent.width = std::max<int>(dwmW - borderX, 1);
-    extent.height = std::max<int>(dwmH - borderY, 1);
+    extent.width =
+        std::max<uint32_t>(static_cast<uint32_t>(dwm.right - dwm.left), 1);
+    extent.height =
+        std::max<uint32_t>(static_cast<uint32_t>(dwm.bottom - dwm.top), 1);
   } else {
-    std::cerr << "\033[31m" << "OVERLAPPED/NON POPUP!" << "\033[0m"
-              << std::endl;
     // Standard window path (client area only)
-    extent.width = std::max<int>(client.right - client.left, 1);
-    extent.height = std::max<int>(client.bottom - client.top, 1);
+    extent.width = std::max<uint32_t>(client.right - client.left, 1);
+    extent.height = std::max<uint32_t>(client.bottom - client.top, 1);
   }
 
+  std::cout << "\033[31m" << "getWindowExtent: " << extent.width << "x"
+            << extent.height << "\033[0m" << std::endl;
   return extent;
 }
 #endif
 
 ContextResult ContextVk::recreateSwapchain(bool useHDR,
                                            VkExtent2D const* overrideExtent) {
+  if (m_swapchainRecreationStarted) {
+    m_swapchainRecreationStarted();
+  }
   // TODO remove
   vkDeviceWaitIdle(m_device.device);
   // VkSurfaceCapabilitiesKHR.currentTransform=VkSwapchainCreateInfoKHR.preTransform
@@ -1164,24 +1149,20 @@ ContextResult ContextVk::recreateSwapchain(bool useHDR,
     m_currentExtent = *overrideExtent;
   } else {
     m_currentExtent = capabilities.currentExtent;
-// TODO see if not necessary
-#ifdef VK_USE_PLATFORM_WIN32_KHR
-    m_currentExtent = getWindowExtent(m_hWindow);
-#endif
+    // TODO see if not necessary
     if (m_currentExtent.width == UINT32_MAX) {
-#ifndef VK_USE_PLATFORM_WAYLAND_KHR
+#ifdef VK_USE_PLATFORM_WIN32_KHR
+      m_currentExtent = getWindowExtent(m_hWindow);
+#elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
+#error "TODO Wayland surface extent wayland window info"
       // special value that means that the size is determined by the extent of
       // the surface
       m_currentExtent.width = 1280;
       m_currentExtent.height = 720;
 #else
-#error \
-    "TODO Wayland surface extent handling taking it from the wayland window info"
+#error "TODO Other platforms grab surface information"
 #endif
     }
-    std::cout << "[SWAPCHAIN RECREATION, BEFORE CLAMP]: "
-              << m_currentExtent.width << "x" << m_currentExtent.height
-              << std::endl;
 
     if (capabilities.minImageExtent.width > m_currentExtent.width) {
       m_currentExtent.width = capabilities.minImageExtent.width;
@@ -1205,8 +1186,6 @@ ContextResult ContextVk::recreateSwapchain(bool useHDR,
 
   assert(m_currentExtent.width > 0);
   assert(m_currentExtent.height > 0);
-  std::cout << "[SWAPCHAIN RECREATION, AFTER CLAMP]: " << m_currentExtent.width
-            << "x" << m_currentExtent.height << std::endl;
 
   // 2. Mark for discard swapchain resources (wait on semaphores and discard
   // old images, to be discarded on the next frame usage)
@@ -1272,19 +1251,15 @@ ContextResult ContextVk::recreateSwapchain(bool useHDR,
   createInfo.imageColorSpace = m_surfaceFormat.colorSpace;
   createInfo.imageExtent = m_currentExtent;
   createInfo.imageArrayLayers = 1;
-  // TODO remove other usages, cause we should write to swapchain image only at
-  // the end by copying from another image (more compositing)
-  // createInfo.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-  //                         (useHDR ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
   createInfo.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                          (useHDR ? VK_IMAGE_USAGE_STORAGE_BIT : 0) |
-                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+                          (useHDR ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
   createInfo.preTransform = capabilities.currentTransform;
   createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
   createInfo.presentMode = presentMode;
   createInfo.clipped = VK_TRUE;
   createInfo.oldSwapchain = oldSwapchain;
   // TODO better if graphics and present are different
+  // CORRECTION: not necessary if swapchain images are transfer destination
   createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
   createInfo.queueFamilyIndexCount = 0;
   createInfo.pQueueFamilyIndices = nullptr;
@@ -1454,10 +1429,13 @@ void ContextVk::setSwapBufferCallbacks(
     std::function<void(const SwapchainDataVk*)> drawCallback,
     std::function<void(void)> acquireCallback,
     std::function<void(VkImage const*, uint32_t, VkFormat, VkExtent2D)>
-        recreationCallback) {
+        recreationCallback,
+    std::function<void()> swapchainRecreationStarted) {
   if (drawCallback) m_swapBufferDrawCallback = drawCallback;
   if (acquireCallback) m_swapBufferAcquiredCallback = acquireCallback;
   if (recreationCallback) m_swapchainRecreationCallback = recreationCallback;
+  if (swapchainRecreationStarted)
+    m_swapchainRecreationStarted = swapchainRecreationStarted;
 }
 
 SwapchainDataVk ContextVk::getSwapchainData() const {
@@ -1542,34 +1520,16 @@ ContextResult ContextVk::swapBufferRelease() {
 
   if (presentResult == VK_ERROR_OUT_OF_DATE_KHR ||
       presentResult == VK_SUBOPTIMAL_KHR) {
-    if (presentResult == VK_ERROR_OUT_OF_DATE_KHR) {
-      std::cout << "\033[81m"
-                << (presentResult == VK_ERROR_OUT_OF_DATE_KHR
-                        ? "VK_ERROR_OUT_OF_DATE_KHR"
-                        : "VK_SUBOPTIMAL_KHR")
-                << "\033[0m" << std::endl;
-    }
-    if (presentResult == VK_SUBOPTIMAL_KHR) {
-#ifdef VK_USE_PLATFORM_WIN32_KHR
-      // surface allows variable; use window size converted to pixels
-      RECT dwmBounds;
-      if (SUCCEEDED(DwmGetWindowAttribute(m_hWindow,
-                                          DWMWA_EXTENDED_FRAME_BOUNDS,
-                                          &dwmBounds, sizeof(dwmBounds)))) {
-        uint32_t visibleW = dwmBounds.right - dwmBounds.left;
-        uint32_t visibleH = dwmBounds.bottom - dwmBounds.top;
-        if (m_currentExtent.width == visibleW &&
-            m_currentExtent.height == visibleH) {
-          // std::cout << "Suboptimal is a lie!" << std::endl;
-          return ContextResult::Success;
-        }
-      }
-#endif
-    }
+    std::cout << "\033[81m"
+              << (presentResult == VK_ERROR_OUT_OF_DATE_KHR
+                      ? "VK_ERROR_OUT_OF_DATE_KHR"
+                      : "VK_SUBOPTIMAL_KHR")
+              << "\033[0m" << std::endl;
     recreateSwapchain(useHDRSwapchain);
     return ContextResult::Success;
   }
-  if (presentResult != VK_SUCCESS) {
+
+  if (presentResult != VK_SUCCESS && presentResult != VK_SUBOPTIMAL_KHR) {
     // TODO log error
     return ContextResult::Error;
   }
