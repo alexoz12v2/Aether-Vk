@@ -367,7 +367,8 @@ class ContextVk : public NonMoveable {
       std::function<void(const SwapchainDataVk*)> drawCallback,
       std::function<void(void)> acquireCallback,
       std::function<void(VkImage const*, uint32_t, VkFormat, VkExtent2D)>
-          recreationCallback);
+          recreationCallback,
+      std::function<void()> swapchainRecreationStarted);
 
   inline VmaAllocator getAllocator() const { return m_device.vmaAllocator; }
   inline InstanceVk const& instance() const { return m_instance; }
@@ -379,6 +380,8 @@ class ContextVk : public NonMoveable {
   inline VkExtent2D surfaceExtent() const { return m_currentExtent; }
 
   SwapchainDataVk getSwapchainData() const;
+
+  std::atomic<bool> isResizing = false;
 
  private:
   bool initInstanceExtensions();
@@ -430,6 +433,7 @@ class ContextVk : public NonMoveable {
   VkSurfaceFormatKHR m_surfaceFormat;
 
   // callbacks to customize rendering procedure
+  std::function<void()> m_swapchainRecreationStarted;
   std::function<void(const SwapchainDataVk*)> m_swapBufferDrawCallback;
   std::function<void(void)> m_swapBufferAcquiredCallback;
   std::function<void(VkImage const* /*images*/, uint32_t /*num images*/,

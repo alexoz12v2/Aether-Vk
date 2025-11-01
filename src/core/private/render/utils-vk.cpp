@@ -182,6 +182,9 @@ void DiscardPoolVk::destroyDiscardedResources(DeviceVk const& device,
   m_images.removeOld(
       currentTimeline, [&](std::pair<VkImage, VmaAllocation> const& pair) {
         // TODO remove from rendergraph resource state tracker
+        std::cout << "\033[33m" << "[removeImage] Created VkImage 0x"
+                  << std::hex << pair.first << std::dec << "\033[0m"
+                  << std::endl;
         vmaDestroyImage(device.vmaAllocator, pair.first, pair.second);
       });
 
@@ -478,6 +481,10 @@ bool createImage(ContextVk const& context, SingleImage2DSpecVk const& spec,
                                    &allocInfo, &image, &allocation, nullptr)) {
     return false;
   }
+
+  // TODO remove
+  std::cout << "\033[33m" << "[createImage] Created VkImage 0x" << std::hex
+            << image << std::dec << "\033[0m" << std::endl;
   return true;
 }
 

@@ -1,3 +1,14 @@
+# Automatically collect headers and sources
+file(GLOB_RECURSE AVK_WINDOWS_LAUNCHER_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/*.cxx"
+)
+
+# Exclude files in avk-winlib
+list(FILTER AVK_WINDOWS_LAUNCHER_SOURCES EXCLUDE REGEX ".*/avk-winlib/.*")
+
+# WinRT C++20 wrapper
+add_subdirectory(avk-winlib)
 
 add_executable(avk-windows-launcher WIN32)
 target_compile_definitions(avk-windows-launcher
@@ -7,18 +18,24 @@ target_compile_definitions(avk-windows-launcher
 target_compile_options(avk-windows-launcher PRIVATE ${AVK_CXX_TARGET_COMPILE_FLAGS})
 target_sources(avk-windows-launcher 
   PRIVATE 
-    main.cpp
+    ${AVK_WINDOWS_LAUNCHER_SOURCES}
+)
+target_include_directories(avk-windows-launcher PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+set_target_properties(avk-windows-launcher PROPERTIES 
+  OUTPUT_NAME "avk-gui"
+  SUFFIX ".exe"
 )
 
 if((AVK_OS STREQUAL "WINDOWS") AND (CMAKE_BUILD_TYPE STREQUAL "Debug") AND ${AVK_USE_SANITIZERS})
-  target_link_libraries(avk-windows-launcher PRIVATE avk::core win-asan-dynamic dwmapi)
+  target_link_libraries(avk-windows-launcher PRIVATE avk::win-comutils avk::core win-asan-dynamic dwmapi)
 else()
-  target_link_libraries(avk-windows-launcher PRIVATE avk::core dwmapi)
+  target_link_libraries(avk-windows-launcher PRIVATE avk::win-comutils avk::core dwmapi)
 endif()
 
 if(AVK_OS STREQUAL "WINDOWS")
   add_custom_command(TARGET avk-windows-launcher POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:avk-windows-launcher> $<TARGET_FILE_DIR:avk-windows-launcher>
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_RUNTIME_DLLS:avk-windows-launcher> $<TARGET_FILE_DIR:avk-windows-launcher>
     COMMAND_EXPAND_LISTS
   )
 endif()
