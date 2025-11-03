@@ -95,7 +95,7 @@ void DescriptorPoolsVk::ensurePool(DeviceVk const& device) {
 // -------------------------------------------------------------------
 
 void DiscardPoolVk::deinit(DeviceVk& device) {
-  destroyDiscardedResources(device);
+  destroyDiscardedResources(device, true);
 }
 
 void DiscardPoolVk::discardImage(VkImage image, VmaAllocation allocation) {
@@ -172,7 +172,7 @@ void DiscardPoolVk::destroyDiscardedResources(DeviceVk const& device,
   std::scoped_lock<std::mutex> lk{m_mutex};
   // TODO add timeline semaphores
   uint64_t const currentTimeline =
-      force ? UINT64_MAX
+      force ? m_timeline 
             : UINT64_MAX;  // device.getSubmissionFinishedTimeline();
 
   m_imageViews.removeOld(currentTimeline, [&](VkImageView imageView) {

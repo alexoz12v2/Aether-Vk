@@ -107,7 +107,22 @@ Promoted version to the left
       - to transition to exclusive fullscreen, use `vkAcquireFullScreenExclusiveModeEXT`
       - to exit from exclusive fullscreen, use `vkReleaseFullScreenExclusiveModeEXT`
 
-## Random Notes
+## Descriptors
+
+- Reference Link: <https://docs.vulkan.org/tutorial/latest/05_Uniform_buffers/00_Descriptor_set_layout_and_buffer.html>
+
+## Windows Notes
+
+- TODO fancy zones
+
+### Links
+
+- [GDI/Graphics](https://learn.microsoft.com/en-us/windows/win32/gdi/nonclient-area)
+- [Desktop Window Manager](https://learn.microsoft.com/en-us/windows/win32/dwm/desktop-window-manager-overviews)
+- [HWND Handling](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-styles)
+- [Modern Window Guide](https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/ui/apply-snap-layout-menu)
+
+## Snippets
 
 How to perform multisampling:
 
@@ -122,30 +137,6 @@ VkRenderingAttachmentInfo colorAttachment = {
     .resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
 };
 ```
-
-apparently, when using aero snap, i've arrived at this situation:
-
-```sh
-GetClientRect: 1936x1056 
-GetWindowRect: 976x1056 
-GetMonitorInfoW: 1920x1040 
-```
-
-And hence the swapchain is incorrect, as it follows the client info
-
-- TODO fancy zones
-- TODO COM objects integration for file/folder opening -> `Windows.Storage.Pickers` runtime classes (see *OleViewDotNet*)
-
-## Windows Notes
-
-### Links
-
-- [GDI/Graphics](https://learn.microsoft.com/en-us/windows/win32/gdi/nonclient-area)
-- [Desktop Window Manager](https://learn.microsoft.com/en-us/windows/win32/dwm/desktop-window-manager-overviews)
-- [HWND Handling](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-styles)
-- [Modern Window Guide](https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/ui/apply-snap-layout-menu)
-
-### Snippets
 
 Refresh window style
 
@@ -230,3 +221,47 @@ SetConsoleMode( handleOut , consoleMode );
   ```powershell
   Get-Startapps | Sort-Object name | Where-Object { $_.Name -like "A*" }
   ```
+
+A Timeline semaphore would exhaust its 64-bit values in years. That said, if you do want
+to recreate it, destroy all objects depending on it and wait device idle
+
+```cpp
+void Renderer::resetTimelineSemaphore() {
+  vkDeviceWaitIdle(device);  // optional if you track GPU completion precisely
+
+  vkDestroySemaphore(device, m_timelineSemaphore, nullptr);
+
+  VkSemaphoreTypeCreateInfo timelineInfo{
+    VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO, nullptr,
+    VK_SEMAPHORE_TYPE_TIMELINE, 0
+  };
+  VkSemaphoreCreateInfo semInfo{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+  semInfo.pNext = &timelineInfo;
+  vkCreateSemaphore(device, &semInfo, nullptr, &m_timelineSemaphore);
+
+  nextSignalValue = 1;
+  lastCompletedValue = 0;
+}
+```
+
+How to ensure a Dispatch of a compute pipeline covers exacly an image, provided
+the shader performs a bound check. Approximate by excess (ceilDiv)
+
+```cpp
+uint32_t groupSizeX = 16;
+uint32_t groupSizeY = 16;
+
+// Assume you know image width/height
+uint32_t imageWidth  = textureWidth;
+uint32_t imageHeight = textureHeight;
+
+// Round up: ensure we cover all pixels
+uint32_t dispatchX = (imageWidth  + groupSizeX - 1) / groupSizeX;
+uint32_t dispatchY = (imageHeight + groupSizeY - 1) / groupSizeY;
+
+// Dispatch
+vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
+vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                        pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
+vkCmdDispatch(cmd, dispatchX, dispatchY, 1);
+```

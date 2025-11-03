@@ -275,6 +275,10 @@ struct DeviceVk : public NonCopyable {
   VkDevice device = VK_NULL_HANDLE;
   Extensions extensions;
 
+  // TODO test reset timeline value
+  uint64_t nextTimelineValue = 1;
+  VkSemaphore timelineSemaphore = VK_NULL_HANDLE;
+
   union Families {
     struct FamiliesStruct {
       uint32_t graphicsCompute;
@@ -330,16 +334,19 @@ struct FrameDiscard {
 // A command pool needs to be created per frame per thread
 struct Frame : public NonCopyable {
   Frame() = default;
-  // TODO: multiple frames in flight support
   // fence signaled when previous use of the frame has finished rendering,
   // meaning we can acquire a new image and semaphores can be reused
   VkFence submissionFence = VK_NULL_HANDLE;
+
   // semaphore to acquire a image. being signaled when image is ready to be
   // updated
   VkSemaphore acquireSemaphore = VK_NULL_HANDLE;
 
+  // mechanism to handle delayed out of date swapchain destruction
   FrameDiscard discard;
 
+  // to be called once the frame on which there was a resize is acquired again
+  // (after destroying present fences if in use)
   void destroy(DeviceVk const& device);
 };
 
@@ -349,6 +356,23 @@ struct SwapchainImage {
   VkSemaphore presentSemaphore = VK_NULL_HANDLE;
 
   void destroy(DeviceVk const& device);
+};
+
+class ContextVk;
+
+class ISwapchainCallbacks {
+ public:
+  virtual void onSwapchainRecreationStarted(ContextVk const& context) = 0;
+  virtual void onSwapBufferDrawCallback(
+      ContextVk const& context, const SwapchainDataVk* swapchainData) = 0;
+  virtual void onSwapBufferAcquiredCallback(ContextVk const& context) = 0;
+  virtual void onSwapchainRecreationCallback(ContextVk const& context,
+                                             VkImage const* images,
+                                             uint32_t numImages,
+                                             VkFormat format,
+                                             VkExtent2D imageExtent) = 0;
+
+  virtual ~ISwapchainCallbacks() noexcept {};
 };
 
 class ContextVk : public NonMoveable {
@@ -363,12 +387,10 @@ class ContextVk : public NonMoveable {
   VkFence getFence();
   ContextResult swapBufferRelease();
   ContextResult swapBufferAcquire();
-  void setSwapBufferCallbacks(
-      std::function<void(const SwapchainDataVk*)> drawCallback,
-      std::function<void(void)> acquireCallback,
-      std::function<void(VkImage const*, uint32_t, VkFormat, VkExtent2D)>
-          recreationCallback,
-      std::function<void()> swapchainRecreationStarted);
+  inline void setSwapBufferCallbacks(ISwapchainCallbacks* callbacks) {
+    m_callbacks = callbacks;
+  }
+  inline void unsetSwapBufferCallbacks() { m_callbacks = nullptr; }
 
   inline VmaAllocator getAllocator() const { return m_device.vmaAllocator; }
   inline InstanceVk const& instance() const { return m_instance; }
@@ -433,13 +455,7 @@ class ContextVk : public NonMoveable {
   VkSurfaceFormatKHR m_surfaceFormat;
 
   // callbacks to customize rendering procedure
-  std::function<void()> m_swapchainRecreationStarted;
-  std::function<void(const SwapchainDataVk*)> m_swapBufferDrawCallback;
-  std::function<void(void)> m_swapBufferAcquiredCallback;
-  std::function<void(VkImage const* /*images*/, uint32_t /*num images*/,
-                     VkFormat /*format*/, VkExtent2D /*image extent*/)>
-      m_swapchainRecreationCallback =
-          [](VkImage const*, uint32_t, VkFormat, VkExtent2D) {};
+  ISwapchainCallbacks* m_callbacks = nullptr;
 
   std::map<VkSwapchainKHR, std::vector<VkFence>> m_presentFences;
   std::vector<VkFence> m_fencePile;

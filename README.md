@@ -45,3 +45,9 @@ C++20 Modules are not used because, while Desktop Builds with CMake version >= 3
 ## Known Bugs
 
 - Windows x86_64: first resize scales the content (it shouldn't)
+
+## TO-REMOVE Dependencies
+
+- `Boost::Fiber` (not supported on windows on arm)
+- `Boost::Context` is fine! (supported on everything except UWP and Emscripten)
+- `ktx`: doesn't work on x86 (32-bit), which is an android ABI (despite it being unusable)

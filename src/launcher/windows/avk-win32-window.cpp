@@ -249,6 +249,54 @@ static void debugPrintPrimaryWindowStats(HWND hWnd,
   std::cout << "/////////////////////////////////////" << std::endl;
 }
 
+static void primaryWindowKeyDown(HWND hWnd, WPARAM wParam,
+                                 WindowPayload* payload) {
+  // TODO better with raw input
+  const bool winKey =
+      GetKeyState(VK_LWIN) & 0x8000 || GetKeyState(VK_RWIN) & 0x8000;
+  const bool ctrlKey = GetKeyState(VK_CONTROL) & 0x8000;
+  const bool altKey = GetKeyState(VK_MENU) & 0x8000;
+
+  static constexpr uint32_t WKey = 0x57;
+  static constexpr uint32_t EKey = 0x45;
+  static constexpr uint32_t FKey = 0x46;
+  static constexpr uint32_t GKey = 0x47;
+
+  // priority: The more combinations, the better
+  if (winKey && ctrlKey && altKey) {
+    // TODO nothing
+  } else if (winKey && ctrlKey) {
+    // TODO nothing
+  } else if (winKey && altKey) {
+    // TODO nothing
+  } else if (ctrlKey && altKey) {
+    // TODO nothing
+  } else if (winKey) {
+    // TODO nothing
+  } else if (altKey) {
+    if (wParam == VK_RETURN) {
+      // ALT+ENTER detected → toggle fullscreen
+      payload->isFullscreen = !payload->isFullscreen;
+      primaryWindowToggleFullscreen(hWnd, payload->isFullscreen,
+                                    &payload->windowedPlacement);
+    }
+  } else if (ctrlKey) {
+    // TODO nothing
+  } else {
+    // TODO remove debug
+    if (wParam == EKey) {
+      enqueueMessageCOM(payload->comPayload, L"NOTIFICATION", L"Test Toast",
+                        L"This is a notification");
+    } else if (wParam == WKey) {
+      debugPrintPrimaryWindowStats(hWnd, payload);
+    } else if (wParam == FKey) {
+      enqueueMessageCOM(payload->comPayload, L"OPENFILE", L"", L"", hWnd);
+    } else if (wParam == GKey) {
+      enqueueMessageCOM(payload->comPayload, L"OPENFOLDER", L"", L"", hWnd);
+    }
+  }
+}
+
 // ------------------------ Translation Unit Impl ----------------------------
 
 LRESULT primaryWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -394,49 +442,14 @@ LRESULT primaryWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
       break;
     }
 
-    case WM_SYSKEYDOWN:
-    case WM_KEYDOWN: {
-      const bool winKey =
-          GetKeyState(VK_LWIN) & 0x8000 || GetKeyState(VK_RWIN) & 0x8000;
-      const bool ctrlKey = GetKeyState(VK_CONTROL) & 0x8000;
-      const bool altKey = GetKeyState(VK_MENU) & 0x8000;
-
-      static constexpr uint32_t WKey = 0x57;
-      static constexpr uint32_t EKey = 0x45;
-      static constexpr uint32_t FKey = 0x46;
-      static constexpr uint32_t GKey = 0x47;
-
-      // TODO remove debug
-      if (wParam == EKey && !winKey && !ctrlKey && !altKey) {
-        enqueueMessageCOM(payload->comPayload, L"NOTIFICATION", L"Test Toast",
-                          L"This is a notification");
-      }
-
-      // TODO remove debug
-      if (wParam == WKey && !winKey && !ctrlKey && !altKey) {
-        debugPrintPrimaryWindowStats(hWnd, payload);
-        return 0;
-      }
-
-      // TODO remove debug
-      if (wParam == FKey && !winKey && !ctrlKey && !altKey) {
-        enqueueMessageCOM(payload->comPayload, L"OPENFILE", L"", L"", hWnd);
-      }
-
-      // TODO remove debug
-      if (wParam == GKey && !winKey && !ctrlKey && !altKey) {
-        enqueueMessageCOM(payload->comPayload, L"OPENFOLDER", L"", L"", hWnd);
-      }
-
-      if (wParam == VK_RETURN && altKey && !winKey && !ctrlKey) {
-        // ALT+ENTER detected → toggle fullscreen
-        payload->isFullscreen = !payload->isFullscreen;
-        primaryWindowToggleFullscreen(hWnd, payload->isFullscreen,
-                                      &payload->windowedPlacement);
-        return 0;
-      }
-
+    case WM_SYSKEYDOWN: {
+      primaryWindowKeyDown(hWnd, wParam, payload);
       break;
+    }
+
+    case WM_KEYDOWN: {
+      primaryWindowKeyDown(hWnd, wParam, payload);
+      return 0;
     }
 
     case WM_SIZE: {

@@ -10,8 +10,9 @@ file(GLOB_RECURSE AVK_CORE_PRIVATE_SOURCES CONFIGURE_DEPENDS
 
 set(avk_core_libraries_public
   Boost::fiber Vulkan::Headers GPUOpen::VulkanMemoryAllocator volk::volk volk::volk_headers
+  glm::glm-header-only
 )
-set(avk_core_libraries_private "")
+set(avk_core_libraries_private PNG::PNG)
 if(AVK_OS STREQUAL "MACOS")
   list(APPEND avk_core_libraries_public Vulkan::MoltenVK)
 endif()
@@ -41,6 +42,9 @@ target_include_directories(avk-core
   PUBLIC 
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/public>
     $<INSTALL_INTERFACE:include>
+  PRIVATE
+    ${Stb_INCLUDE_DIR}
+    ${AVK_TINYGLTF_INCLUDE_DIR}
 )
 
 add_library(avk::core ALIAS avk-core)

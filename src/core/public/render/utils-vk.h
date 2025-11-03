@@ -104,6 +104,14 @@ class DiscardPoolVk {
   void moveData(DiscardPoolVk& srcPool, uint64_t timeline);
   inline std::mutex& getMutex() { return m_mutex; }
   void destroyDiscardedResources(DeviceVk const& device, bool force = false);
+  inline void updateTimeline(uint64_t value = 1) {
+    std::lock_guard<std::mutex> lk{m_mutex};
+    m_timeline += value;
+  }
+  inline uint64_t getTimeline() {
+    std::lock_guard<std::mutex> lk{m_mutex};
+    return m_timeline;
+  }
 
  private:
   TimelineResources<std::pair<VkImage, VmaAllocation>> m_images;
@@ -117,7 +125,7 @@ class DiscardPoolVk {
       m_descriptorPools;
 
   std::mutex m_mutex;
-  uint64_t m_timeline = UINT64_MAX;
+  uint64_t m_timeline = 0;
 };
 
 class BufferVk : public NonCopyable {
