@@ -505,8 +505,8 @@ std::vector<std::string_view> ContextVk::anyMissingCapabilities(
   std::vector<std::string_view> missing;
   missing.reserve(64);
 
-  // TODO: avoid queries using Vulkan Versioned feature structs. Stick to those from
-  // either extensions or 1.0
+  // TODO: avoid queries using Vulkan Versioned feature structs. Stick to those
+  // from either extensions or 1.0
   VkPhysicalDeviceFeatures2 features2{};
   VkPhysicalDeviceVulkan11Features features11{};
   VkPhysicalDeviceVulkan12Features features12{};
@@ -548,21 +548,22 @@ std::vector<std::string_view> ContextVk::anyMissingCapabilities(
     missing.push_back("draw indirect first instance");
   if (features11.shaderDrawParameters == VK_FALSE)
     missing.push_back("shader draw parameters");
-  if (features2.features.sampleRateShading == VK_FALSE) 
+  if (features2.features.sampleRateShading == VK_FALSE)
     missing.push_back("sample rate shading");
   if (features2.features.fragmentStoresAndAtomics == VK_FALSE)
     missing.push_back("fragment stores and atomics");
-  // Note: No Shader Clip (ClipDistance decorator) or Shader Cull (CullDistance decorator)
-  // capability for SPIR-V Shaders
-  
+  if (features12.timelineSemaphore == VK_FALSE)
+    missing.push_back("Timeline Semaphores");
+  // Note: No Shader Clip (ClipDistance decorator) or Shader Cull (CullDistance
+  // decorator) capability for SPIR-V Shaders
+
   // TODO these two are optional
   if (features13.dynamicRendering == VK_FALSE)
     missing.push_back("dynamic rendering");
   if (features13.synchronization2 == VK_FALSE)
     missing.push_back("synchronization 2");
-  if (featuresSwapchainMaintenance1.swapchainMaintenance1 == VK_TRUE) 
+  if (featuresSwapchainMaintenance1.swapchainMaintenance1 == VK_TRUE)
     physicalDevice.extSwapchainMaintenance1 = true;
-  
 
   // device extensions: swapchain, dynamic rendering
   uint32_t vkExtensionCount = 0;
@@ -855,6 +856,7 @@ bool ContextVk::createDevice(
   featuresBase.features.sampleRateShading = VK_TRUE;
   dynamicRenderingFeature.dynamicRendering = VK_TRUE;
   features12.bufferDeviceAddress = VK_TRUE;
+  features12.timelineSemaphore = VK_TRUE;
   sync2Features.synchronization2 = VK_TRUE;
   if (m_device.extSwapchainMaintenance1) {
     swapchainMaintenance1Feature.swapchainMaintenance1 = VK_TRUE;
@@ -878,6 +880,10 @@ bool ContextVk::createDevice(
   }
 
   // if you use a pNext or flag on create info, use vkGetDeviceQueue2
+  // TODO handle queues better: make an effort into having the present queue
+  // different from all the rest (hence store number of queues for each queue
+  // family, and if family of presentation) is the same for others, then write
+  // it out
   vkGetDeviceQueue(m_device.device,
                    m_device.queueIndices.family.graphicsCompute, 0,
                    &m_device.graphicsComputeQueue);
@@ -954,23 +960,10 @@ ContextResult ContextVk::initializeDrawingContext(
   m_hdrInfo = std::make_unique<WindowHDRInfo>(params.hdrInfo);
 
   // find vulkan loader
-  std::cout << "vkGetInstanceProcAddr: " << (void*)vkGetInstanceProcAddr
-            << "\n";
-  std::cout << "vkEnumerateInstanceExtensionProperties: "
-            << (void*)vkEnumerateInstanceExtensionProperties << "\n";
   if (volkInitialize() != VK_SUCCESS) {
     std::cerr << "Couldn't Initialize Volk" << std::endl;
     return ContextResult::Error;
   }
-  // TODO remove
-  std::cout << "vkGetInstanceProcAddr: " << (void*)vkGetInstanceProcAddr
-            << "\n";
-  std::cout << "vkEnumerateInstanceExtensionProperties: "
-            << (void*)vkEnumerateInstanceExtensionProperties << "\n";
-  HMODULE h = GetModuleHandleA("vulkan-1.dll");
-  auto fp = (PFN_vkEnumerateInstanceExtensionProperties)GetProcAddress(
-      h, "vkEnumerateInstanceExtensionProperties");
-  std::cout << "GetProcAddress -> " << (void*)fp << std::endl;
 
   initInstanceExtensions();
 
@@ -1103,11 +1096,21 @@ static VkExtent2D getWindowExtent(HWND hWnd) {
 
 ContextResult ContextVk::recreateSwapchain(bool useHDR,
                                            VkExtent2D const* overrideExtent) {
-  if (m_swapchainRecreationStarted) {
-    m_swapchainRecreationStarted();
+  // Don't bother resizing until the user finishes resizing the window
+  while (isResizing.load(std::memory_order_relaxed)) {
+    // wait (no yield processor cause this is part of the render loop)
   }
-  // TODO remove
-  vkDeviceWaitIdle(m_device.device);
+
+  if (m_callbacks) {
+    m_callbacks->onSwapchainRecreationStarted(*this);
+  }
+
+  // Notice: No waiting here, because we are pushing the swapchain
+  // onto the frame's discard buffer
+  // frame's discard buffer is flushed the next time you try to acquire the
+  // frame
+
+  // TODO synchronization with timeline semaphore and/or present fences
   // VkSurfaceCapabilitiesKHR.currentTransform=VkSwapchainCreateInfoKHR.preTransform
   if (!selectSurfaceFormat(m_device, m_surface, useHDR, m_surfaceFormat)) {
     return ContextResult::Error;
@@ -1189,7 +1192,6 @@ ContextResult ContextVk::recreateSwapchain(bool useHDR,
 
   // 2. Mark for discard swapchain resources (wait on semaphores and discard
   // old images, to be discarded on the next frame usage)
-  // TODO try to remove this if costs a lot (shouldn't, cause it's false once)
   FrameDiscard* currentDiscard = nullptr;
   if (m_frameData.size() > m_renderFrame) {
     currentDiscard = &m_frameData[m_renderFrame].discard;
@@ -1307,9 +1309,11 @@ ContextResult ContextVk::recreateSwapchain(bool useHDR,
   m_imageCount = actualImageCount;
 
   // callback (recreate depth images, recreate swapchain image views)
-  m_swapchainRecreationCallback(m_vkImages.data(),
-                                static_cast<uint32_t>(m_vkImages.size()),
-                                m_surfaceFormat.format, m_currentExtent);
+  if (m_callbacks) {
+    m_callbacks->onSwapchainRecreationCallback(
+        *this, m_vkImages.data(), static_cast<uint32_t>(m_vkImages.size()),
+        m_surfaceFormat.format, m_currentExtent);
+  }
 
   return ContextResult::Success;
 }
@@ -1425,19 +1429,6 @@ VkFence ContextVk::getFence() {
   return fence;
 }
 
-void ContextVk::setSwapBufferCallbacks(
-    std::function<void(const SwapchainDataVk*)> drawCallback,
-    std::function<void(void)> acquireCallback,
-    std::function<void(VkImage const*, uint32_t, VkFormat, VkExtent2D)>
-        recreationCallback,
-    std::function<void()> swapchainRecreationStarted) {
-  if (drawCallback) m_swapBufferDrawCallback = drawCallback;
-  if (acquireCallback) m_swapBufferAcquiredCallback = acquireCallback;
-  if (recreationCallback) m_swapchainRecreationCallback = recreationCallback;
-  if (swapchainRecreationStarted)
-    m_swapchainRecreationStarted = swapchainRecreationStarted;
-}
-
 SwapchainDataVk ContextVk::getSwapchainData() const {
   SwapchainImage const& swapchainImage =
       m_swapchainImages[m_acquiredSwapchainImageIndex];
@@ -1460,8 +1451,8 @@ ContextResult ContextVk::swapBufferRelease() {
   // callback with empty data
   if (m_swapchain == VK_NULL_HANDLE) {
     SwapchainDataVk data{};
-    if (m_swapBufferDrawCallback) {
-      m_swapBufferDrawCallback(&data);
+    if (m_callbacks) {
+      m_callbacks->onSwapBufferDrawCallback(*this, &data);
     }
     return ContextResult::Success;
   }
@@ -1487,8 +1478,8 @@ ContextResult ContextVk::swapBufferRelease() {
   swapchainData.imageIndex = m_acquiredSwapchainImageIndex;
 
   vkResetFences(m_device.device, 1, &submissionFrame.submissionFence);
-  if (m_swapBufferDrawCallback) {
-    m_swapBufferDrawCallback(&swapchainData);
+  if (m_callbacks) {
+    m_callbacks->onSwapBufferDrawCallback(*this, &swapchainData);
   }
 
   VkPresentInfoKHR presentInfo{};
@@ -1611,8 +1602,8 @@ ContextResult ContextVk::swapBufferAcquire() {
 
   // called even if swapchain discarded on minimized window, such that we can
   // free up resources
-  if (m_swapBufferAcquiredCallback) {
-    m_swapBufferAcquiredCallback();
+  if (m_callbacks) {
+    m_callbacks->onSwapBufferAcquiredCallback(*this);
   }
 
   if (m_swapchain == VK_NULL_HANDLE) {

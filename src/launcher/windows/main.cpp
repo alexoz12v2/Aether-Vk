@@ -15,6 +15,7 @@
 #include <dwmapi.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -31,6 +32,14 @@
 #include "render/context-vk.h"
 #include "render/pipeline-vk.h"
 #include "render/utils-vk.h"
+#include "utils/mixins.h"
+
+// GLM
+#include <glm/common.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/mat4x4.hpp>
+
+// TODO add Ctrl + C handler
 
 struct PerFrameData {
   VkImage resolveColorImage;
@@ -40,6 +49,14 @@ struct PerFrameData {
   VkImageView resolveColorImageView;
   VkImageView depthImageView;
   VkCommandBuffer commandBuffer;  // TODO better (using timeline semaphores)
+  uint64_t timeline;
+  VkDescriptorSet uboDescriptorSet;
+};
+
+struct ModelViewProj {
+  glm::mat4 model;
+  glm::mat4 view;
+  glm::mat4 proj;
 };
 
 static void printError() {
@@ -69,101 +86,119 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<HWND> g_window(nullptr);
 
 struct Vertex {
-  float position[2];
+  float position[3];
   float color[3];
 };
 
-void onSwapchainRecreationStarted(avk::ContextVk const& contextVk) {
-  while (contextVk.isResizing.load(std::memory_order_relaxed)) {
-    // wait
+class BasicSwapchainCallbacks : public avk::ISwapchainCallbacks,
+                                public avk::NonCopyable {
+ public:
+  void onSwapchainRecreationStarted(avk::ContextVk const& context) override;
+  void onSwapBufferDrawCallback(
+      avk::ContextVk const& context,
+      const avk::SwapchainDataVk* swapchainData) override;
+  void onSwapBufferAcquiredCallback(avk::ContextVk const& context) override;
+  void onSwapchainRecreationCallback(avk::ContextVk const& context,
+                                     VkImage const* images, uint32_t numImages,
+                                     VkFormat format,
+                                     VkExtent2D imageExtent) override;
+
+  void discardEverything(avk::ContextVk const& context);
+
+  // non owning reference to needed data
+  VkFormat DepthFormat;
+  std::vector<VkSubmitInfo>* SubmitInfos;
+  std::vector<PerFrameData>* PerFrameData;
+  VkCommandPool CommandPool;
+  avk::DiscardPoolVk* DiscardPool;
+  VkSemaphore TimelineSemaphore;
+  VkDescriptorPool DescriptorPool;
+  VkDescriptorSetLayout DescriptorSetLayout;
+  avk::BufferVk* ConstantUniformBufferMVP;
+
+ private:
+  std::vector<VkDescriptorSetLayout> m_tempSetLayouts;
+  std::vector<VkDescriptorSet> m_tempSets;
+};
+
+void BasicSwapchainCallbacks::onSwapchainRecreationStarted(
+    [[maybe_unused]] avk::ContextVk const& context) {}
+
+void BasicSwapchainCallbacks::onSwapBufferDrawCallback(
+    avk::ContextVk const& context, const avk::SwapchainDataVk* swapchainData) {
+  if (SubmitInfos->size() > 0) {
+    avk::vkCheck(vkQueueSubmit(context.device().graphicsComputeQueue,
+                               static_cast<uint32_t>(SubmitInfos->size()),
+                               SubmitInfos->data(),
+                               swapchainData->submissionFence));
+
+    DiscardPool->updateTimeline();
   }
 }
 
-void onSwapBuffer(avk::ContextVk const& contextVk,
-                  std::vector<VkSubmitInfo>& submitInfos,
-                  avk::SwapchainDataVk const& swapchainData) {
-  if (submitInfos.size() > 0) {
-    avk::vkCheck(vkQueueSubmit(contextVk.device().graphicsComputeQueue,
-                               static_cast<uint32_t>(submitInfos.size()),
-                               submitInfos.data(),
-                               swapchainData.submissionFence));
-  }
-}
+void BasicSwapchainCallbacks::onSwapBufferAcquiredCallback(
+    [[maybe_unused]] avk::ContextVk const& context) {}
 
-void onAcquire([[maybe_unused]] avk::ContextVk const& contextVk) {}
+void BasicSwapchainCallbacks::onSwapchainRecreationCallback(
+    avk::ContextVk const& context, [[maybe_unused]] VkImage const* images,
+    uint32_t numImages, VkFormat format, VkExtent2D imageExtent) {
+  uint64_t const timeline = DiscardPool->getTimeline();
+  m_tempSetLayouts.clear();
+  m_tempSets.clear();
 
-void discardEverything(avk::ContextVk const& contextVk,
-                       avk::DiscardPoolVk& discardPool,
-                       VkCommandPool* commandPool,
-                       std::vector<PerFrameData>& perFrameData) {
-  for (auto const& data : perFrameData) {
-    discardPool.discardImageView(data.depthImageView);
-    discardPool.discardImageView(data.resolveColorImageView);
-    discardPool.discardImage(data.depthImage, data.depthImageAlloc);
-    discardPool.discardImage(data.resolveColorImage, data.resolveColorAlloc);
-    vkFreeCommandBuffers(contextVk.device().device, *commandPool, 1,
-                         &data.commandBuffer);
-  }
-  vkDestroyCommandPool(contextVk.device().device, *commandPool, nullptr);
-  *commandPool = VK_NULL_HANDLE;
-}
+  // TODO remove debug
+  uint64_t actualSem = 0;
+  vkGetSemaphoreCounterValue(context.device().device, TimelineSemaphore,
+                             &actualSem);
+  std::cout << "\033[33m" << "Actual Timeline:  " << actualSem
+            << "\nDiscard Timeline: " << timeline << "\033[0m" << std::endl;
+  // reset frames descriptor sets inside the frame pool
+  vkResetDescriptorPool(context.device().device, DescriptorPool, 0);
 
-void onSwapchainRecreation(avk::ContextVk const& contextVk,
-                           avk::DiscardPoolVk& discardPool,
-                           VkCommandPool commandPool,
-                           [[maybe_unused]] VkImage const* images,
-                           uint32_t numImages, VkFormat format,
-                           VkExtent2D imageExtent, VkFormat depthFormat,
-                           std::vector<PerFrameData>& perFrameData) {
-  // TODO add timeline
   // 1. add all resources in the vector into the discard pool
   std::vector<VkCommandBuffer> commandBuffers;
   commandBuffers.reserve(64);
-  for (auto const& data : perFrameData) {
-    discardPool.discardImageView(data.depthImageView);
-    discardPool.discardImageView(data.resolveColorImageView);
-    discardPool.discardImage(data.depthImage, data.depthImageAlloc);
-    discardPool.discardImage(data.resolveColorImage, data.resolveColorAlloc);
+  for (auto const& data : (*PerFrameData)) {
+    DiscardPool->discardImageView(data.depthImageView);
+    DiscardPool->discardImageView(data.resolveColorImageView);
+    DiscardPool->discardImage(data.depthImage, data.depthImageAlloc);
+    DiscardPool->discardImage(data.resolveColorImage, data.resolveColorAlloc);
     // TODO handle discarding command buffers better
     commandBuffers.push_back(data.commandBuffer);
   }
-  // TODO handle synchronization? how? TODO remove this
-  vkDeviceWaitIdle(contextVk.device().device);
-  discardPool.destroyDiscardedResources(contextVk.device());
 
-  perFrameData.clear();
-  perFrameData.resize(numImages);
+  DiscardPool->destroyDiscardedResources(context.device());
+  PerFrameData->clear();
+  PerFrameData->resize(numImages);
 
   // 1.1 create new command buffers/reuse old ones
   // TODO better
-  if (commandBuffers.size() < perFrameData.size()) {
+  if (commandBuffers.size() < PerFrameData->size()) {
     // create missing command buffers
     size_t const offset = commandBuffers.size();
-    size_t const count = perFrameData.size() - commandBuffers.size();
+    size_t const count = PerFrameData->size() - commandBuffers.size();
     commandBuffers.resize(count);
-    avk::allocPrimaryCommandBuffers(contextVk, commandPool, count,
+    avk::allocPrimaryCommandBuffers(context, CommandPool, count,
                                     commandBuffers.data() + offset);
     // assign the newly created
-    for (size_t i = 0; i < perFrameData.size(); ++i) {
-      perFrameData[i].commandBuffer = commandBuffers[i];
+    for (size_t i = 0; i < PerFrameData->size(); ++i) {
+      (*PerFrameData)[i].commandBuffer = commandBuffers[i];
     }
-  } else if (commandBuffers.size() > perFrameData.size()) {
+  } else if (commandBuffers.size() > PerFrameData->size()) {
     // handle excess command buffers
-    size_t const offset = perFrameData.size();
-    size_t const count = commandBuffers.size() - perFrameData.size();
-    vkFreeCommandBuffers(contextVk.device().device, commandPool, count,
+    size_t const offset = PerFrameData->size();
+    size_t const count = commandBuffers.size() - PerFrameData->size();
+    vkFreeCommandBuffers(context.device().device, CommandPool, count,
                          commandBuffers.data() + offset);
-    commandBuffers.resize(perFrameData.size());
+    commandBuffers.resize(PerFrameData->size());
 
     // reassign to perFrameData
-    for (size_t i = 0; i < perFrameData.size(); ++i) {
-      perFrameData[i].commandBuffer = commandBuffers[i];
+    for (size_t i = 0; i < PerFrameData->size(); ++i) {
+      (*PerFrameData)[i].commandBuffer = commandBuffers[i];
     }
-  }
-  // 3) equal sizes — just reassign existing command buffers
-  else {
-    for (size_t i = 0; i < perFrameData.size(); ++i) {
-      perFrameData[i].commandBuffer = commandBuffers[i];
+  } else {  // 3) equal sizes — just reassign existing command buffers
+    for (size_t i = 0; i < PerFrameData->size(); ++i) {
+      (*PerFrameData)[i].commandBuffer = commandBuffers[i];
     }
   }
 
@@ -171,7 +206,7 @@ void onSwapchainRecreation(avk::ContextVk const& contextVk,
   VkImageViewCreateInfo depthViewsCreateInfo{};
   depthViewsCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
   depthViewsCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-  depthViewsCreateInfo.format = depthFormat;
+  depthViewsCreateInfo.format = DepthFormat;
   depthViewsCreateInfo.subresourceRange.aspectMask =
       VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
   depthViewsCreateInfo.subresourceRange.baseArrayLayer = 0;
@@ -192,7 +227,7 @@ void onSwapchainRecreation(avk::ContextVk const& contextVk,
 
   avk::SingleImage2DSpecVk depthSpec{};
   depthSpec.imageTiling = VK_IMAGE_TILING_OPTIMAL;
-  depthSpec.format = depthFormat;
+  depthSpec.format = DepthFormat;
   // TODO can depth buffering use multisampling?
   depthSpec.samples = VK_SAMPLE_COUNT_1_BIT;
   depthSpec.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
@@ -209,31 +244,91 @@ void onSwapchainRecreation(avk::ContextVk const& contextVk,
       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
   resolveColorSpec.samples = VK_SAMPLE_COUNT_1_BIT;
 
-  for (auto& data : perFrameData) {
+  // allocate descriptor sets
+  VkDescriptorSetAllocateInfo descAllocInfo{};
+  descAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  descAllocInfo.descriptorPool = DescriptorPool;
+  // If you want more, you duplicate the set layout, even if it's the same
+  m_tempSetLayouts.resize(PerFrameData->size());
+  m_tempSets.resize(PerFrameData->size());
+  std::fill_n(m_tempSetLayouts.begin(), PerFrameData->size(),
+              DescriptorSetLayout);
+  descAllocInfo.descriptorSetCount =
+      static_cast<uint32_t>(PerFrameData->size());
+  descAllocInfo.pSetLayouts = m_tempSetLayouts.data();
+  // TODO better if fails crash
+  vkAllocateDescriptorSets(context.device().device, &descAllocInfo,
+                           m_tempSets.data());
+
+  uint32_t index = 0;
+  for (auto& data : (*PerFrameData)) {
+    uint32_t const i = index;
+    data.timeline = timeline + index++;
+
     // 2.1 create depth image
     // TODO: this is a complete failure, crash the application
-    if (!avk::createImage(contextVk, depthSpec, data.depthImage,
+    if (!avk::createImage(context, depthSpec, data.depthImage,
                           data.depthImageAlloc)) {
       data.depthImageView = VK_NULL_HANDLE;
     } else {
       depthViewsCreateInfo.image = data.depthImage;
       // create depth image views
-      avk::vkCheck(vkCreateImageView(contextVk.device().device,
+      avk::vkCheck(vkCreateImageView(context.device().device,
                                      &depthViewsCreateInfo, nullptr,
                                      &data.depthImageView));
     }
 
     // 3 color attachment images
     // TODO: this is a complete failure, crash the application
-    if (!avk::createImage(contextVk, resolveColorSpec, data.resolveColorImage,
+    if (!avk::createImage(context, resolveColorSpec, data.resolveColorImage,
                           data.resolveColorAlloc)) {
       data.resolveColorImage = VK_NULL_HANDLE;
     } else {
       resolveColorViewCreateInfo.image = data.resolveColorImage;
-      vkCreateImageView(contextVk.device().device, &resolveColorViewCreateInfo,
+      vkCreateImageView(context.device().device, &resolveColorViewCreateInfo,
                         nullptr, &data.resolveColorImageView);
     }
+
+    // assign its descriptor set and write it
+    // without writing a descriptor set only gives you an empty container, not a
+    // point to the buffer or image memory. to actually create that association
+    // you need a call to vkUpdateDescriptorSets or vkWriteDescriptorSet
+    data.uboDescriptorSet = m_tempSets[i];
+
+    VkDescriptorBufferInfo descBufferInfo{};
+    descBufferInfo.buffer = ConstantUniformBufferMVP->buffer();
+    descBufferInfo.offset = 0;
+    descBufferInfo.range = sizeof(ModelViewProj);
+
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptorWrite.dstSet = data.uboDescriptorSet;
+    descriptorWrite.dstBinding = 0;  // same as layout
+    // only if descriptor set describes an array
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pBufferInfo = &descBufferInfo;
+
+    vkUpdateDescriptorSets(context.device().device, 1, &descriptorWrite, 0,
+                           nullptr);
   }
+}
+
+void discardEverything(avk::ContextVk const& contextVk,
+                       avk::DiscardPoolVk& discardPool,
+                       VkCommandPool* commandPool,
+                       std::vector<PerFrameData>& perFrameData) {
+  for (auto const& data : perFrameData) {
+    discardPool.discardImageView(data.depthImageView);
+    discardPool.discardImageView(data.resolveColorImageView);
+    discardPool.discardImage(data.depthImage, data.depthImageAlloc);
+    discardPool.discardImage(data.resolveColorImage, data.resolveColorAlloc);
+    vkFreeCommandBuffers(contextVk.device().device, *commandPool, 1,
+                         &data.commandBuffer);
+  }
+  vkDestroyCommandPool(contextVk.device().device, *commandPool, nullptr);
+  *commandPool = VK_NULL_HANDLE;
 }
 
 // TODO manifest
@@ -404,28 +499,121 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
   VkCommandPool commandPool = avk::createCommandPool(
       contextVk, true, contextVk.device().queueIndices.family.graphicsCompute);
 
+  // Timeline Semaphore to keep track of frame index, hence discard when
+  // appropriate
+  VkSemaphore timelineSemaphore = VK_NULL_HANDLE;
+  {
+    VkSemaphoreTypeCreateInfoKHR semTimelineCreateInfo{};
+    semTimelineCreateInfo.sType =
+        VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO_KHR;
+    semTimelineCreateInfo.initialValue = 0;
+    semTimelineCreateInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE_KHR;
+
+    VkSemaphoreCreateInfo semCreateInfo{};
+    semCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    semCreateInfo.pNext = &semTimelineCreateInfo;
+    if (!avk::vkCheck(vkCreateSemaphore(contextVk.device().device,
+                                        &semCreateInfo, nullptr,
+                                        &timelineSemaphore))) {
+      std::cerr << "\033[31m"
+                << "Failed to create frame index global timeline semaphore"
+                << "\033[0m" << std::endl;
+      g_quit.store(true);
+    }
+  }
+
+  VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
+  {
+    // maximum numbers of descriptor sets that can be created depend on the type
+    // TODO add type limit check
+    VkDescriptorPoolSize uboSize{};
+    uboSize.descriptorCount = 15;
+    uboSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+
+    VkDescriptorPoolCreateInfo poolCreateInfo{};
+    poolCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolCreateInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    poolCreateInfo.maxSets = 15;
+    poolCreateInfo.poolSizeCount = 1;
+    poolCreateInfo.pPoolSizes = &uboSize;
+
+    // TODO if fail crash
+    vkCreateDescriptorPool(contextVk.device().device, &poolCreateInfo, nullptr,
+                           &descriptorPool);
+  }
+
+  VkDescriptorSetLayout uboSetLayout = VK_NULL_HANDLE;
+  {
+    VkDescriptorSetLayoutBinding uboBinding{};
+    uboBinding.binding = 0;  // first number of [[vk::binding(0,0)]]
+    uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    // if descriptorCount bigger than 1, then the object is accessed as an array
+    // on the shader
+    uboBinding.descriptorCount = 1;
+
+    VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo{};
+    setLayoutCreateInfo.sType =
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    setLayoutCreateInfo.bindingCount = 1;
+    setLayoutCreateInfo.pBindings = &uboBinding;
+
+    vkCreateDescriptorSetLayout(contextVk.device().device, &setLayoutCreateInfo,
+                                nullptr, &uboSetLayout);
+  }
+
+  // ----- Pipeline Layout and Descriptors
+  ModelViewProj mvp;
+  mvp.model = glm::translate(glm::mat4(1.f), {1.f, 0, 0});
+  mvp.view = glm::mat4(1.f);
+  mvp.proj = glm::mat4(1.f);
+
+  VmaAllocationCreateFlags stagingVmaFlags =
+      VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+      VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+  avk::BufferVk uniformBufferUBO;
+  if (!uniformBufferUBO.create(contextVk, sizeof(mvp),
+                               VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                   VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                               0, stagingVmaFlags, 1.f, false, 0, nullptr)) {
+    // TODO crash better
+    assert(false);
+  }
+  uniformBufferUBO.updateImmediately(&mvp);
+
+  // TODO better
   std::vector<VkSubmitInfo> submitInfos;
-  contextVk.setSwapBufferCallbacks(
-      [&contextVk, &submitInfos](const avk::SwapchainDataVk* pData) {
-        onSwapBuffer(contextVk, submitInfos, *pData);
-      },
-      [&contextVk]() { onAcquire(contextVk); },
-      [&contextVk, &discardPool, &perFrameData, depthFormat, commandPool](
-          VkImage const* images, uint32_t numImages, VkFormat format,
-          VkExtent2D extent) {
-        onSwapchainRecreation(contextVk, discardPool, commandPool, images,
-                              numImages, format, extent, depthFormat,
-                              perFrameData);
-      },
-      [&contextVk]() { onSwapchainRecreationStarted(contextVk); });
-  // must do before pipeline creation as it populates the surface format
-  // TODO decouple classes
-  contextVk.recreateSwapchain(false);
+  std::vector<VkTimelineSemaphoreSubmitInfoKHR> timelineSubmitInfos;
+  std::vector<std::array<VkSemaphore, 2>> submitSignalSemaphores;
+  std::vector<std::array<uint64_t, 2>> submitSignalSemaphoresValues;
+  submitInfos.reserve(16);
+  timelineSubmitInfos.reserve(16);
+  submitSignalSemaphores.reserve(16);
+  submitSignalSemaphoresValues.reserve(16);
+
+  BasicSwapchainCallbacks callbacks;
+  callbacks.SubmitInfos = &submitInfos;
+  callbacks.PerFrameData = &perFrameData;
+  callbacks.DiscardPool = &discardPool;
+  callbacks.CommandPool = commandPool;
+  callbacks.DepthFormat = depthFormat;
+  callbacks.TimelineSemaphore = timelineSemaphore;
+  callbacks.DescriptorPool = descriptorPool;
+  callbacks.DescriptorSetLayout = uboSetLayout;
+  callbacks.ConstantUniformBufferMVP = &uniformBufferUBO;
+
+  contextVk.setSwapBufferCallbacks(&callbacks);
 
   avk::VkPipelinePool pipelinePool;
   avk::GraphicsInfo graphicsInfo;
+  VkPipelineLayout pipelineLayout =
+      avk::createPipelineLayout(contextVk, &uboSetLayout, 1);
 
-  VkPipelineLayout pipelineLayout = avk::createPipelineLayout(contextVk);
+  // must do before pipeline creation as it populates the surface format
+  // TODO decouple classes
+  contextVk.recreateSwapchain(false);
 
   fillTriangleGraphicsInfo(contextVk, graphicsInfo, pipelineLayout);
 
@@ -434,15 +622,18 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
 
   // Create initial Vertex Buffer
   const std::vector<Vertex> vertices = {
-      {{0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},  // Vertex 1: Red
-      {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},   // Vertex 2: Green
-      {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}   // Vertex 3: Blue
+      {{0.5f, -0.5f, 0}, {1.0f, 0.0f, 0.0f}},  // RT Vertex 0: Red
+      {{-0.5f, 0.5f, 0}, {0.0f, 1.0f, 0.0f}},  // LB Vertex 1: Green
+      {{0.5f, 0.5f, 0}, {0.0f, 0.0f, 1.0f}},   // RB Vertex 2: Blue
+      {{-0.5f, -0.5f, 0}, {1.0f, 0.0f, 1.0f}}  // LT Vertex 3: Magenta
   };
+  const std::vector<std::array<uint32_t, 3>> indices = {{0, 1, 2}, {0, 3, 1}};
   std::vector<uint32_t> uniqueQueueFamilies =
       uniqueElements(contextVk.device().queueIndices.families,
                      avk::DeviceVk::QueueFamilyIndicesCount);
   assert(uniqueQueueFamilies.size() > 0);
   avk::BufferVk vertexBuffer;
+  avk::BufferVk indexBuffer;
   VmaAllocationCreateFlags dynamicBufferFlags =
       VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
       VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT |
@@ -458,15 +649,28 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
                            uniqueQueueFamilies.data())) {
     std::cerr << "Couldn't allocate Vertex Buffer Host Visible" << std::endl;
   }
-  vertexBuffer.updateImmediately(vertices.data());
+  if (!indexBuffer.create(contextVk, sizeof(indices[0]) * indices.size(),
+                          VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                          0, dynamicBufferFlags, 1.f, false,
+                          static_cast<uint32_t>(uniqueQueueFamilies.size()),
+                          uniqueQueueFamilies.data())) {
+    std::cerr << "Couldn't allocate Index Buffer Host Visible" << std::endl;
+  }
 
-  // uint32_t jobIdx = 0;
-  submitInfos.reserve(16);
+  vertexBuffer.updateImmediately(vertices.data());
+  indexBuffer.updateImmediately(indices.data());
+
   while (!g_quit.load()) {
     submitInfos.clear();
 
     contextVk.swapBufferAcquire();
     avk::SwapchainDataVk swapchainData = contextVk.getSwapchainData();
+    {  // update timeline
+      auto& frame = perFrameData[swapchainData.imageIndex];
+      frame.timeline += perFrameData.size();
+    }
     auto const& frame = perFrameData[swapchainData.imageIndex];
     // TODO if necessary vkQueueWaitIdle on graphics Queue?
     // if you wait for the queue to be idle, you can delete immediately command
@@ -525,6 +729,10 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
     renderingInfo.colorAttachmentCount = 1;  // TODO graphicsInfo?
     renderingInfo.pColorAttachments = &colorAttachment;
 
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            pipelineLayout, 0, 1, &frame.uboDescriptorSet, 0,
+                            nullptr);
+
     vkCmdBeginRendering(commandBuffer, &renderingInfo);
 
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
@@ -545,10 +753,13 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
     VkBuffer vBuf = vertexBuffer.buffer();
     VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vBuf, &offset);
+    vkCmdBindIndexBuffer(commandBuffer, indexBuffer.buffer(), 0,
+                         VK_INDEX_TYPE_UINT32);
 
     // issue draw call
-    uint32_t const vertexCount = static_cast<uint32_t>(vertices.size());
-    vkCmdDraw(commandBuffer, vertexCount, 1, 0, 0);
+    uint32_t const indexCount =
+        static_cast<uint32_t>(indices[0].size() * indices.size());
+    vkCmdDrawIndexed(commandBuffer, indexCount, 1, 0, 0, 0);
 
     // complete rendering
     vkCmdEndRendering(commandBuffer);
@@ -601,25 +812,59 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
     // complete recording of the command buffer
     avk::vkCheck(vkEndCommandBuffer(commandBuffer));
 
-    VkPipelineStageFlags waitStage{VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT};
+    timelineSubmitInfos.clear();
+    timelineSubmitInfos.push_back({});
     submitInfos.clear();
     submitInfos.push_back({});
+    submitSignalSemaphores.clear();
+    submitSignalSemaphores.push_back({});
+    submitSignalSemaphoresValues.clear();
+    submitSignalSemaphoresValues.push_back({});
+
+    VkPipelineStageFlags waitStage{VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT};
+    submitSignalSemaphoresValues[0][1] = frame.timeline;
+    submitSignalSemaphores[0][0] = swapchainData.presentSemaphore;
+    submitSignalSemaphores[0][1] = timelineSemaphore;
+
+    // TODO better later
+    VkTimelineSemaphoreSubmitInfoKHR& timelineSubmitInfo =
+        timelineSubmitInfos.back();
+    timelineSubmitInfo.sType =
+        VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO_KHR;
+    timelineSubmitInfo.signalSemaphoreValueCount =
+        static_cast<uint32_t>(submitSignalSemaphores[0].size());
+    timelineSubmitInfo.pSignalSemaphoreValues =
+        submitSignalSemaphoresValues[0].data();
 
     VkSubmitInfo& submitInfo = submitInfos.back();
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.pNext = &timelineSubmitInfo;
     submitInfo.waitSemaphoreCount = 1;
     submitInfo.pWaitSemaphores = &swapchainData.acquireSemaphore;
     submitInfo.pWaitDstStageMask = &waitStage;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &commandBuffer;
-    submitInfo.signalSemaphoreCount = 1;
-    submitInfo.pSignalSemaphores = &swapchainData.presentSemaphore;
+    submitInfo.signalSemaphoreCount =
+        static_cast<uint32_t>(submitSignalSemaphores[0].size());
+    submitInfo.pSignalSemaphores = submitSignalSemaphores[0].data();
+
+    // TODO remove debug
+    // uint64_t actualSem = 0;
+    // vkGetSemaphoreCounterValue(contextVk.device().device, timelineSemaphore,
+    //                            &actualSem);
+    // syncLog([&]() {
+    //   std::cout << "\033[33m" << "Actual Timeline:  " << actualSem <<
+    //   "\033[0m"
+    //             << std::endl;
+    // });
 
     contextVk.swapBufferRelease();
   }
   sched->waitUntilAllTasksDone();
+  contextVk.unsetSwapBufferCallbacks();
 
   vkDeviceWaitIdle(contextVk.device().device);
+  vkDestroySemaphore(contextVk.device().device, timelineSemaphore, nullptr);
   discardEverything(contextVk, discardPool, &commandPool, perFrameData);
   pipelinePool.discardAllPipelines(discardPool, pipelineLayout);
   discardPool.discardShaderModule(graphicsInfo.preRasterization.vertexModule);
@@ -627,10 +872,15 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
   discardPool.discardPipelineLayout(pipelineLayout);
   std::cout << "\033[93m" << "[Render Thread] Preparing to deinit discard pool"
             << std::endl;
+  vkDestroyDescriptorSetLayout(contextVk.device().device, uboSetLayout,
+                               nullptr);
+  vkDestroyDescriptorPool(contextVk.device().device, descriptorPool, nullptr);
   discardPool.deinit(contextVk.device());
 
   // cleanup residual
   vertexBuffer.freeImmediately(contextVk);
+  indexBuffer.freeImmediately(contextVk);
+  uniformBufferUBO.freeImmediately(contextVk);
 }
 
 int WINAPI wWinMain([[maybe_unused]] HINSTANCE hInstance,

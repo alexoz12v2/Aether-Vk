@@ -1,0 +1,3 @@
+# GLTF Notes
+
+- library: `tinygltf`
