@@ -6,38 +6,29 @@
 #include <vulkan/vulkan_core.h>
 
 #include <atomic>
-#include <utility>
-
-#include "utils/integer.h"
-
-// TODO support for MSVC maybe?
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wnullability-extension"
-
-#define VMA_IMPLEMENTATION
-#include <vma/vk_mem_alloc.h>
-
-#pragma GCC diagnostic pop
-
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <mutex>
 #include <unordered_set>
+#include <utility>
+
+#include "utils/integer.h"
+
 
 #ifdef AVK_OS_WINDOWS
-#include <Windows.h>
+#  include <Windows.h>
 // https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute
-#include <dwmapi.h>
+#  include <dwmapi.h>
 #elif defined(AVK_OS_MACOS)
-#error "TODO"
+#  error "TODO"
 #elif defined(AVK_OS_ANDROID)
-#error "TODO"
+#  error "TODO"
 #elif defined(AVK_OS_LINUX)
-#error "TODO X11 and Wayland"
+#  error "TODO X11 and Wayland"
 #else
-#error "ADD SUPPORT"
+#  error "ADD SUPPORT"
 #endif
 
 // TODO better logging
@@ -191,7 +182,7 @@ bool DeviceVk::freeQueueUsage(VkQueue queue) {
 
 // ---------------------------- FRAME -----------------------------
 
-void FrameDiscard::destroy(DeviceVk const& device) {
+void FrameDiscard::destroy(DeviceVk const& device) AVK_NO_CFI {
   while (!swapchains.empty()) {
     VkSwapchainKHR swapchain = swapchains.back();
     assert(swapchain != VK_NULL_HANDLE);
@@ -206,7 +197,7 @@ void FrameDiscard::destroy(DeviceVk const& device) {
   }
 }
 
-void Frame::destroy(DeviceVk const& device) {
+void Frame::destroy(DeviceVk const& device) AVK_NO_CFI {
   assert(submissionFence != VK_NULL_HANDLE);
   vkDestroyFence(device.device, submissionFence, nullptr);
   submissionFence = VK_NULL_HANDLE;
@@ -216,7 +207,7 @@ void Frame::destroy(DeviceVk const& device) {
   discard.destroy(device);
 }
 
-void SwapchainImage::destroy(DeviceVk const& device) {
+void SwapchainImage::destroy(DeviceVk const& device) AVK_NO_CFI {
   assert(presentSemaphore != VK_NULL_HANDLE);
   vkDestroySemaphore(device.device, presentSemaphore, nullptr);
   presentSemaphore = VK_NULL_HANDLE;
@@ -227,7 +218,7 @@ void SwapchainImage::destroy(DeviceVk const& device) {
 
 // ---------------------------- CONTEXT -----------------------------
 
-ContextVk::~ContextVk() noexcept {
+ContextVk::~ContextVk() noexcept AVK_NO_CFI {
   if (m_instance.instance != VK_NULL_HANDLE) {
     vkDeviceWaitIdle(m_device.device);
     for (VkFence fence : m_fencePile) {
@@ -275,7 +266,7 @@ ContextVk::ContextVk() {
   // allocation strategy
 }
 
-bool ContextVk::initInstanceExtensions() {
+bool ContextVk::initInstanceExtensions() AVK_NO_CFI {
   uint32_t count = 0;
   vkCheck(vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr));
   m_instance.extensions.extensions.resize(count);
@@ -283,7 +274,7 @@ bool ContextVk::initInstanceExtensions() {
       nullptr, &count, m_instance.extensions.extensions.data()));
 }
 
-bool ContextVk::createInstance(uint32_t vulkanApiVersion) {
+bool ContextVk::createInstance(uint32_t vulkanApiVersion) AVK_NO_CFI {
   // instance extensions to enable: portabilty, surface, platform surface
   // - (PORTABILITY) Vulkan will consider devices that aren’t fully conformant
   //   such as MoltenVk to be identified as a conformant implementation. When
@@ -330,11 +321,11 @@ bool ContextVk::createInstance(uint32_t vulkanApiVersion) {
     return false;
   }
 #elif defined(AVK_OS_ANDROID)
-#error "TODO"
+#  error "TODO"
 #elif defined(AVK_OS_LINUX)
-#error "TODO X11 and Wayland"
+#  error "TODO X11 and Wayland"
 #else
-#error "ADD SUPPORT"
+#  error "ADD SUPPORT"
 #endif
 
   // validation layers
@@ -439,7 +430,7 @@ bool ContextVk::createInstance(uint32_t vulkanApiVersion) {
   return res;
 }
 
-bool ContextVk::createSurface() {
+bool ContextVk::createSurface() AVK_NO_CFI {
 #ifdef VK_USE_PLATFORM_WIN32_KHR
   VkWin32SurfaceCreateInfoKHR createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
@@ -456,11 +447,12 @@ bool ContextVk::createSurface() {
 #elif defined(VK_USE_PLATFORM_XCB_KHR)
 #elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
 #else
-#error "ADD SUPPORT"
+#  error "ADD SUPPORT"
 #endif
 }
 
-bool ContextVk::physicalDeviceSupport(DeviceVk& physicalDevice) const {
+bool ContextVk::physicalDeviceSupport(DeviceVk& physicalDevice) const
+    AVK_NO_CFI {
   // TODO add buffer device address extension
   // inspiration from
   // https://github.com/blender/blender/blob/main/source/blender/gpu/vulkan/vk_backend.cc#L48
@@ -501,7 +493,7 @@ bool ContextVk::physicalDeviceSupport(DeviceVk& physicalDevice) const {
 }
 
 std::vector<std::string_view> ContextVk::anyMissingCapabilities(
-    DeviceVk& physicalDevice) const {
+    DeviceVk& physicalDevice) const AVK_NO_CFI {
   std::vector<std::string_view> missing;
   missing.reserve(64);
 
@@ -588,7 +580,7 @@ std::vector<std::string_view> ContextVk::anyMissingCapabilities(
 
 bool static deviceExtensionSupported(
     DeviceVk& physicalDevice,
-    std::vector<std::string_view> const& requiredExtensions) {
+    std::vector<std::string_view> const& requiredExtensions) AVK_NO_CFI {
   uint32_t vkExtensionCount = 0;
   vkEnumerateDeviceExtensionProperties(physicalDevice.physicalDevice, nullptr,
                                        &vkExtensionCount, nullptr);
@@ -612,7 +604,7 @@ bool static deviceExtensionSupported(
 }
 
 bool ContextVk::selectPhysicalDevice(
-    std::vector<std::string_view> const& requiredExtensions) {
+    std::vector<std::string_view> const& requiredExtensions) AVK_NO_CFI {
   int32_t bestScore = 0;
   int32_t bestIndex = -1;
 
@@ -670,7 +662,7 @@ bool ContextVk::selectPhysicalDevice(
 
 static void initializeGenericQueueFamilies(VkInstance instance,
                                            DeviceVk& device,
-                                           VkSurfaceKHR surface) {
+                                           VkSurfaceKHR surface) AVK_NO_CFI {
   uint32_t queueFamilyCount = 0;
   assert(vkGetPhysicalDeviceQueueFamilyProperties2);
   vkGetPhysicalDeviceQueueFamilyProperties2(device.physicalDevice,
@@ -785,7 +777,7 @@ static void initializeGenericQueueFamilies(VkInstance instance,
 }
 
 bool ContextVk::createDevice(
-    std::vector<std::string_view> const& requiredExtensions) {
+    std::vector<std::string_view> const& requiredExtensions) AVK_NO_CFI {
   // to call vkCreateDevice: 1) extensions 2) features 3) queues
   initializeGenericQueueFamilies(m_instance.instance, m_device, m_surface);
 
@@ -941,19 +933,19 @@ bool ContextVk::createDevice(
   return true;
 }
 
-ContextResult ContextVk::initializeDrawingContext(
-    ContextVkParams const& params) {
+ContextResult ContextVk::initializeDrawingContext(ContextVkParams const& params)
+    AVK_NO_CFI {
   // params
 #ifdef AVK_OS_WINDOWS
   m_hWindow = params.window;
 #elif defined(AVK_OS_MACOS)
-#error "TODO"
+#  error "TODO"
 #elif defined(AVK_OS_ANDROID)
-#error "TODO"
+#  error "TODO"
 #elif defined(AVK_OS_LINUX)
-#error "TODO X11 and Wayland"
+#  error "TODO X11 and Wayland"
 #else
-#error "ADD SUPPORT"
+#  error "ADD SUPPORT"
 #endif
   // TODO REMOVE LOGGING AND DO IT PROPERLY (Controlled by both macro and
   // runtime or just runtime)
@@ -996,7 +988,8 @@ ContextResult ContextVk::initializeDrawingContext(
 }
 
 static bool selectSurfaceFormat(DeviceVk const& device, VkSurfaceKHR surface,
-                                bool useHDR, VkSurfaceFormatKHR& outFormat) {
+                                bool useHDR,
+                                VkSurfaceFormatKHR& outFormat) AVK_NO_CFI {
   uint32_t formatCount = 0;
   vkGetPhysicalDeviceSurfaceFormatsKHR(device.physicalDevice, surface,
                                        &formatCount, nullptr);
@@ -1038,7 +1031,7 @@ static bool selectSurfaceFormat(DeviceVk const& device, VkSurfaceKHR surface,
 
 static bool selectPresentMode(bool vsyncOff, DeviceVk const& device,
                               VkSurfaceKHR surface,
-                              VkPresentModeKHR& outPresentMode) {
+                              VkPresentModeKHR& outPresentMode) AVK_NO_CFI {
   uint32_t presentModeCount = 0;
 
   vkGetPhysicalDeviceSurfacePresentModesKHR(device.physicalDevice, surface,
@@ -1094,8 +1087,8 @@ static VkExtent2D getWindowExtent(HWND hWnd) {
 }
 #endif
 
-ContextResult ContextVk::recreateSwapchain(bool useHDR,
-                                           VkExtent2D const* overrideExtent) {
+ContextResult ContextVk::recreateSwapchain(
+    bool useHDR, VkExtent2D const* overrideExtent) AVK_NO_CFI {
   // Don't bother resizing until the user finishes resizing the window
   while (isResizing.load(std::memory_order_relaxed)) {
     // wait (no yield processor cause this is part of the render loop)
@@ -1157,13 +1150,13 @@ ContextResult ContextVk::recreateSwapchain(bool useHDR,
 #ifdef VK_USE_PLATFORM_WIN32_KHR
       m_currentExtent = getWindowExtent(m_hWindow);
 #elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
-#error "TODO Wayland surface extent wayland window info"
+#  error "TODO Wayland surface extent wayland window info"
       // special value that means that the size is determined by the extent of
       // the surface
       m_currentExtent.width = 1280;
       m_currentExtent.height = 720;
 #else
-#error "TODO Other platforms grab surface information"
+#  error "TODO Other platforms grab surface information"
 #endif
     }
 
@@ -1319,7 +1312,7 @@ ContextResult ContextVk::recreateSwapchain(bool useHDR,
 }
 
 // TODO multiple frames in flight
-bool ContextVk::initializeFrameData() {
+bool ContextVk::initializeFrameData() AVK_NO_CFI {
   // create semaphores for presenting swapchain images
   VkSemaphoreCreateInfo semaphoreCreateInfo{};
   semaphoreCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -1357,7 +1350,8 @@ bool ContextVk::initializeFrameData() {
   return true;
 }
 
-void ContextVk::destroySwapchainPresentFences(VkSwapchainKHR swapchain) {
+void ContextVk::destroySwapchainPresentFences(VkSwapchainKHR swapchain)
+    AVK_NO_CFI {
   std::vector<VkFence> const& fences = m_presentFences[swapchain];
   if (!fences.empty()) {
     vkWaitForFences(m_device.device, static_cast<uint32_t>(fences.size()),
@@ -1369,7 +1363,7 @@ void ContextVk::destroySwapchainPresentFences(VkSwapchainKHR swapchain) {
   m_presentFences.erase(swapchain);
 }
 
-bool ContextVk::destroySwapchain() {
+bool ContextVk::destroySwapchain() AVK_NO_CFI {
   if (m_swapchain != VK_NULL_HANDLE) {
     destroySwapchainPresentFences(m_swapchain);
     vkDestroySwapchainKHR(m_device.device, m_swapchain, nullptr);
@@ -1390,7 +1384,7 @@ bool ContextVk::destroySwapchain() {
 }
 
 void ContextVk::setPresentFence(VkSwapchainKHR swapchain,
-                                VkFence presentFence) {
+                                VkFence presentFence) AVK_NO_CFI {
   if (presentFence == VK_NULL_HANDLE) {
     return;
   }
@@ -1398,7 +1392,7 @@ void ContextVk::setPresentFence(VkSwapchainKHR swapchain,
   // recycle signaled fences
   for (auto& [otherSwapchain, fences] : m_presentFences) {
     auto it = std::remove_if(
-        fences.begin(), fences.end(), [this](const VkFence fence) {
+        fences.begin(), fences.end(), [this](const VkFence fence) AVK_NO_CFI {
           // TODO remove if not worth it
           if (fence == VK_NULL_HANDLE) {
             assert(false &&
@@ -1416,7 +1410,7 @@ void ContextVk::setPresentFence(VkSwapchainKHR swapchain,
   }
 }
 
-VkFence ContextVk::getFence() {
+VkFence ContextVk::getFence() AVK_NO_CFI {
   if (!m_fencePile.empty()) {
     VkFence fence = m_fencePile.back();
     m_fencePile.pop_back();
@@ -1429,7 +1423,7 @@ VkFence ContextVk::getFence() {
   return fence;
 }
 
-SwapchainDataVk ContextVk::getSwapchainData() const {
+SwapchainDataVk ContextVk::getSwapchainData() const AVK_NO_CFI {
   SwapchainImage const& swapchainImage =
       m_swapchainImages[m_acquiredSwapchainImageIndex];
   Frame const& submissionFrame = m_frameData[m_renderFrame];
@@ -1446,7 +1440,7 @@ SwapchainDataVk ContextVk::getSwapchainData() const {
   return swapchainData;
 }
 
-ContextResult ContextVk::swapBufferRelease() {
+ContextResult ContextVk::swapBufferRelease() AVK_NO_CFI {
   // minimized window doesn't have a swapchain and swapchain image. in this case
   // callback with empty data
   if (m_swapchain == VK_NULL_HANDLE) {
@@ -1528,7 +1522,7 @@ ContextResult ContextVk::swapBufferRelease() {
   return ContextResult::Success;
 }
 
-ContextResult ContextVk::swapBufferAcquire() {
+ContextResult ContextVk::swapBufferAcquire() AVK_NO_CFI {
   if (m_acquiredSwapchainImageIndex != ContextVk::InvalidSwapchainImageIndex) {
     assert(false);
     return ContextResult::Error;
@@ -1569,7 +1563,7 @@ ContextResult ContextVk::swapBufferAcquire() {
 // Wayland doesn't provide WSI with windowing, hence cannot detect whether
 // size changed unless you do that directiy:
 // https://docs.vulkan.org/spec/latest/chapters/VK_KHR_surface/wsi.html#platformCreateSurface_wayland
-#error "TODO"
+#  error "TODO"
   if (recreateSwapchain) {
     recreateSwapchain(useHDRSwapchain);
   }

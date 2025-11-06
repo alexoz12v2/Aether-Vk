@@ -17,7 +17,7 @@ if(AVK_OS STREQUAL "MACOS")
   list(APPEND avk_core_libraries_public Vulkan::MoltenVK)
 endif()
 if(AVK_OS STREQUAL "WINDOWS")
-  list(APPEND avk_core_libraries_private dwmapi)
+  list(APPEND avk_core_libraries_private dwmapi Dbghelp)
 endif()
 
 add_library(avk-core)

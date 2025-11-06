@@ -316,7 +316,7 @@ VkPipeline VkPipelinePool::getOrCreateComputePipeline(
 
 VkPipeline VkPipelinePool::getOrCreateGraphicsPipeline(
     ContextVk const& context, GraphicsInfo& graphicsInfo,
-    [[maybe_unused]] bool isStaticShader, VkPipeline pipelineBase) {
+    [[maybe_unused]] bool isStaticShader, VkPipeline pipelineBase) AVK_NO_CFI {
   std::lock_guard<std::mutex> lk{m_mutex};
   if (auto it = m_graphicsPipelines.find(graphicsInfo);
       it != m_graphicsPipelines.end()) {
@@ -507,7 +507,7 @@ VkPipeline VkPipelinePool::getOrCreateGraphicsPipeline(
   m_pipelineDynamicStateCreateInfo.pDynamicStates = m_dynamicStates.data();
 
   // -- Graphics Pipeline: Extension "VK_KHR_dynamic_rendering" --
-  VkFormat colorFallbackFormat = context.surfaceFormat().format;
+  VkFormat colorFallbackFormat = context.surfaceFormat().format;  // TODO subtle
   assert(colorFallbackFormat != VK_FORMAT_UNDEFINED);
   if (uint32_t num = static_cast<uint32_t>(
           graphicsInfo.fragmentOut.colorAttachmentFormats.size());
@@ -639,15 +639,15 @@ void VkPipelinePool::discardAllPipelines(DiscardPoolVk& discardPool,
   }
 }
 
-void VkPipelinePool::readStaticCacheFromDisk() {
+void VkPipelinePool::readStaticCacheFromDisk() AVK_NO_CFI {
   // TODO static pipeline cache from disk
 }
 
-void VkPipelinePool::writeStaticCacheToDisk() {
+void VkPipelinePool::writeStaticCacheToDisk() AVK_NO_CFI {
   // TODO write static pipeline cache to disk
 }
 
-void VkPipelinePool::destroyAllPipelines(ContextVk const& context) {
+void VkPipelinePool::destroyAllPipelines(ContextVk const& context) AVK_NO_CFI {
   std::lock_guard<std::mutex> lk{m_mutex};
   for (auto& [info, pipeline] : m_computePipelines) {
     // TODO host allocation callbacks in context

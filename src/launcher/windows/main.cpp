@@ -32,12 +32,15 @@
 #include "render/context-vk.h"
 #include "render/pipeline-vk.h"
 #include "render/utils-vk.h"
+#include "render/vk/common-vk.h"
 #include "utils/mixins.h"
 
 // GLM
 #include <glm/common.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/mat4x4.hpp>
+
+#include "os/stackstrace.h"
 
 // TODO add Ctrl + C handler
 
@@ -57,6 +60,11 @@ struct ModelViewProj {
   glm::mat4 model;
   glm::mat4 view;
   glm::mat4 proj;
+};
+
+struct PushConstant {
+  float scaleFactor;
+  float colorAdd;
 };
 
 static void printError() {
@@ -125,7 +133,7 @@ void BasicSwapchainCallbacks::onSwapchainRecreationStarted(
     [[maybe_unused]] avk::ContextVk const& context) {}
 
 void BasicSwapchainCallbacks::onSwapBufferDrawCallback(
-    avk::ContextVk const& context, const avk::SwapchainDataVk* swapchainData) {
+    avk::ContextVk const& context, const avk::SwapchainDataVk* swapchainData) AVK_NO_CFI {
   if (SubmitInfos->size() > 0) {
     avk::vkCheck(vkQueueSubmit(context.device().graphicsComputeQueue,
                                static_cast<uint32_t>(SubmitInfos->size()),
@@ -141,7 +149,7 @@ void BasicSwapchainCallbacks::onSwapBufferAcquiredCallback(
 
 void BasicSwapchainCallbacks::onSwapchainRecreationCallback(
     avk::ContextVk const& context, [[maybe_unused]] VkImage const* images,
-    uint32_t numImages, VkFormat format, VkExtent2D imageExtent) {
+    uint32_t numImages, VkFormat format, VkExtent2D imageExtent) AVK_NO_CFI {
   uint64_t const timeline = DiscardPool->getTimeline();
   m_tempSetLayouts.clear();
   m_tempSets.clear();
@@ -318,7 +326,7 @@ void BasicSwapchainCallbacks::onSwapchainRecreationCallback(
 void discardEverything(avk::ContextVk const& contextVk,
                        avk::DiscardPoolVk& discardPool,
                        VkCommandPool* commandPool,
-                       std::vector<PerFrameData>& perFrameData) {
+                       std::vector<PerFrameData>& perFrameData) AVK_NO_CFI {
   for (auto const& data : perFrameData) {
     discardPool.discardImageView(data.depthImageView);
     discardPool.discardImageView(data.resolveColorImageView);
@@ -391,7 +399,7 @@ VkImageMemoryBarrier2 imageMemoryBarrier(
 
 void transitionImageLayout(VkCommandBuffer cmd,
                            VkImageMemoryBarrier2 const* imageBarriers,
-                           uint32_t imageBarrierCount) {
+                           uint32_t imageBarrierCount) AVK_NO_CFI {
   // initialize dependency info
   VkDependencyInfo dependencyInfo{};
   dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
@@ -471,6 +479,14 @@ void fillTriangleGraphicsInfo(avk::ContextVk const& context,
       avk::basicDepthStencilFormat(context.device().physicalDevice);
 
   graphicsInfo.opts.rasterizationPolygonMode = VK_POLYGON_MODE_FILL;
+
+  // write stencil
+  graphicsInfo.opts.flags |= avk::EPipelineFlags::eStencilEnable;
+  graphicsInfo.opts.stencilCompareOp = avk::EStencilCompareOp::eAlways;
+  graphicsInfo.opts.stencilLogicalOp = avk::EStencilLogicOp::eReplace;
+  graphicsInfo.opts.stencilReference = 1;
+  graphicsInfo.opts.stencilCompareMask = 0xFF;
+  graphicsInfo.opts.stencilWriteMask = 0xFF;
 }
 
 std::vector<uint32_t> uniqueElements(uint32_t const* elems, uint32_t count) {
@@ -482,9 +498,10 @@ std::vector<uint32_t> uniqueElements(uint32_t const* elems, uint32_t count) {
   return vElems;
 }
 
-void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
+void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) AVK_NO_CFI {
   std::cout << "Started Render Thread" << std::endl;
   avk::ContextVk& contextVk = *payload->context;
+  std::cout << avk::dumpStackTrace() << std::endl;
 
   // per frame data to update every swapchain recreation
   std::vector<PerFrameData> perFrameData;
@@ -562,6 +579,12 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
                                 nullptr, &uboSetLayout);
   }
 
+  VkPushConstantRange pushRange{};
+  pushRange.stageFlags =
+      VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT;
+  pushRange.offset = 0;
+  pushRange.size = sizeof(PushConstant);
+
   // ----- Pipeline Layout and Descriptors
   ModelViewProj mvp;
   mvp.model = glm::translate(glm::mat4(1.f), {1.f, 0, 0});
@@ -609,7 +632,7 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
   avk::VkPipelinePool pipelinePool;
   avk::GraphicsInfo graphicsInfo;
   VkPipelineLayout pipelineLayout =
-      avk::createPipelineLayout(contextVk, &uboSetLayout, 1);
+      avk::createPipelineLayout(contextVk, &uboSetLayout, 1, &pushRange, 1);
 
   // must do before pipeline creation as it populates the surface format
   // TODO decouple classes
@@ -619,6 +642,20 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
 
   VkPipeline pipeline = pipelinePool.getOrCreateGraphicsPipeline(
       contextVk, graphicsInfo, true, VK_NULL_HANDLE);
+
+  avk::GraphicsInfo outlineInfo = graphicsInfo;
+  outlineInfo.opts.stencilCompareOp = avk::EStencilCompareOp::eNotEqual;
+  outlineInfo.opts.stencilLogicalOp =
+      avk::EStencilLogicOp::eNone;  // Don't modify stencil
+  outlineInfo.opts.stencilReference = 1;
+  outlineInfo.opts.stencilCompareMask = 0xFF;
+  outlineInfo.opts.stencilWriteMask = 0x00;  // Don't write new stencil values
+  outlineInfo.opts.flags |= avk::EPipelineFlags::eStencilEnable;
+  // outlineInfo.opts.rasterizationPolygonMode =
+  //     VK_POLYGON_MODE_LINE;  // Outline mode
+
+  VkPipeline outlinePipeline = pipelinePool.getOrCreateGraphicsPipeline(
+      contextVk, outlineInfo, true, VK_NULL_HANDLE);
 
   // Create initial Vertex Buffer
   const std::vector<Vertex> vertices = {
@@ -704,8 +741,8 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
         VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
-        VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
         VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+        VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
         VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
     transitionImageLayout(commandBuffer, imageBarriers, imageBarrierCount);
 
@@ -721,13 +758,23 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
     colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachment.clearValue = clearValue;
 
+    VkRenderingAttachmentInfo depthAttachment{};
+    depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depthAttachment.imageView = frame.depthImageView;
+    depthAttachment.imageLayout =
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depthAttachment.clearValue.depthStencil = {1.0f, 0};
+
     VkRenderingInfo renderingInfo{};
     renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    // TODO extent actual swapchain extent
     renderingInfo.renderArea = {{0, 0}, swapchainData.extent};
     renderingInfo.layerCount = 1;
     renderingInfo.colorAttachmentCount = 1;  // TODO graphicsInfo?
     renderingInfo.pColorAttachments = &colorAttachment;
+    renderingInfo.pDepthAttachment = &depthAttachment;
+    renderingInfo.pStencilAttachment = &depthAttachment;
 
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             pipelineLayout, 0, 1, &frame.uboDescriptorSet, 0,
@@ -735,7 +782,16 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
 
     vkCmdBeginRendering(commandBuffer, &renderingInfo);
 
+    PushConstant thePushConstant;
+    thePushConstant.colorAdd = 0;
+    thePushConstant.scaleFactor = 1.f;
+
+    // PASS 1: Write stencil + normal quad
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdPushConstants(
+        commandBuffer, pipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+        sizeof(PushConstant), &thePushConstant);
 
     // set dynamic states
     VkViewport vp{};
@@ -759,6 +815,17 @@ void frameProducer(avk::Scheduler* sched, FrameProducerPayload const* payload) {
     // issue draw call
     uint32_t const indexCount =
         static_cast<uint32_t>(indices[0].size() * indices.size());
+    vkCmdDrawIndexed(commandBuffer, indexCount, 1, 0, 0, 0);
+
+    // PASS 2: Draw outline
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      outlinePipeline);
+    thePushConstant.colorAdd = 1.f;
+    thePushConstant.scaleFactor = 1.25f;
+    vkCmdPushConstants(
+        commandBuffer, pipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+        sizeof(PushConstant), &thePushConstant);
     vkCmdDrawIndexed(commandBuffer, indexCount, 1, 0, 0, 0);
 
     // complete rendering

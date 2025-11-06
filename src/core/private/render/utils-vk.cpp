@@ -10,7 +10,7 @@
 namespace avk {
 
 // -------------------------------------------------------------------
-void DescriptorPoolsVk::destroy(DeviceVk const& device) {
+void DescriptorPoolsVk::destroy(DeviceVk const& device) AVK_NO_CFI {
   for (VkDescriptorPool const descriptorPool : m_recycledPools) {
     vkDestroyDescriptorPool(device.device, descriptorPool, nullptr);
   }
@@ -25,7 +25,7 @@ void DescriptorPoolsVk::init(DeviceVk const& device) { ensurePool(device); }
 
 VkDescriptorSet DescriptorPoolsVk::allocate(
     DeviceVk const& device, DiscardPoolVk& discardPool,
-    VkDescriptorSetLayout const& descriptorSetLayout) {
+    VkDescriptorSetLayout const& descriptorSetLayout) AVK_NO_CFI {
   assert(m_activeDescriptorPool != VK_NULL_HANDLE);
   assert(descriptorSetLayout != VK_NULL_HANDLE);
 
@@ -49,7 +49,7 @@ VkDescriptorSet DescriptorPoolsVk::allocate(
 }
 
 void DescriptorPoolsVk::recycle(DeviceVk const& device,
-                                VkDescriptorPool descriptorPool) {
+                                VkDescriptorPool descriptorPool) AVK_NO_CFI {
   vkResetDescriptorPool(device.device, descriptorPool, 0);
   std::scoped_lock<std::mutex> lock(m_mutex);
   m_recycledPools.push_back(descriptorPool);
@@ -60,7 +60,7 @@ void DescriptorPoolsVk::discardActivePool(DiscardPoolVk& discardPool) {
   m_activeDescriptorPool = VK_NULL_HANDLE;
 }
 
-void DescriptorPoolsVk::ensurePool(DeviceVk const& device) {
+void DescriptorPoolsVk::ensurePool(DeviceVk const& device) AVK_NO_CFI {
   if (m_activeDescriptorPool != VK_NULL_HANDLE) {
     return;
   }
@@ -168,19 +168,21 @@ void DiscardPoolVk::moveData(DiscardPoolVk& srcPool, uint64_t timeline) {
 }
 
 void DiscardPoolVk::destroyDiscardedResources(DeviceVk const& device,
-                                              bool force) {
+                                              bool force) AVK_NO_CFI {
   std::scoped_lock<std::mutex> lk{m_mutex};
   // TODO add timeline semaphores
   uint64_t const currentTimeline =
-      force ? m_timeline 
+      force ? m_timeline
             : UINT64_MAX;  // device.getSubmissionFinishedTimeline();
 
-  m_imageViews.removeOld(currentTimeline, [&](VkImageView imageView) {
-    vkDestroyImageView(device.device, imageView, nullptr);
-  });
+  m_imageViews.removeOld(
+      currentTimeline, [&](VkImageView imageView) AVK_NO_CFI {
+        vkDestroyImageView(device.device, imageView, nullptr);
+      });
 
   m_images.removeOld(
-      currentTimeline, [&](std::pair<VkImage, VmaAllocation> const& pair) {
+      currentTimeline,
+      [&](std::pair<VkImage, VmaAllocation> const& pair) AVK_NO_CFI {
         // TODO remove from rendergraph resource state tracker
         std::cout << "\033[33m" << "[removeImage] Created VkImage 0x"
                   << std::hex << pair.first << std::dec << "\033[0m"
@@ -188,34 +190,36 @@ void DiscardPoolVk::destroyDiscardedResources(DeviceVk const& device,
         vmaDestroyImage(device.vmaAllocator, pair.first, pair.second);
       });
 
-  m_bufferViews.removeOld(currentTimeline, [&](VkBufferView bufferView) {
-    vkDestroyBufferView(device.device, bufferView, nullptr);
-  });
+  m_bufferViews.removeOld(
+      currentTimeline, [&](VkBufferView bufferView) AVK_NO_CFI {
+        vkDestroyBufferView(device.device, bufferView, nullptr);
+      });
 
   m_buffers.removeOld(
-      currentTimeline, [&](std::pair<VkBuffer, VmaAllocation> const& pair) {
+      currentTimeline,
+      [&](std::pair<VkBuffer, VmaAllocation> const& pair) AVK_NO_CFI {
         // TODO remove from rendergraph resource state tracker
         vmaDestroyBuffer(device.vmaAllocator, pair.first, pair.second);
       });
 
-  m_pipelines.removeOld(currentTimeline, [&](VkPipeline pipeline) {
+  m_pipelines.removeOld(currentTimeline, [&](VkPipeline pipeline) AVK_NO_CFI {
     vkDestroyPipeline(device.device, pipeline, nullptr);
   });
 
   m_pipelineLayouts.removeOld(
-      currentTimeline, [&](VkPipelineLayout pipelineLayout) {
+      currentTimeline, [&](VkPipelineLayout pipelineLayout) AVK_NO_CFI {
         vkDestroyPipelineLayout(device.device, pipelineLayout, nullptr);
       });
 
-  m_shaderModules.removeOld(currentTimeline, [&](VkShaderModule shaderModule) {
-    vkDestroyShaderModule(device.device, shaderModule, nullptr);
-  });
+  m_shaderModules.removeOld(
+      currentTimeline, [&](VkShaderModule shaderModule) AVK_NO_CFI {
+        vkDestroyShaderModule(device.device, shaderModule, nullptr);
+      });
 
   m_descriptorPools.removeOld(
       currentTimeline,
-      [&](std::pair<VkDescriptorPool, DescriptorPoolsVk*> const& pair) {
-        pair.second->recycle(device, pair.first);
-      });
+      [&](std::pair<VkDescriptorPool, DescriptorPoolsVk*> const& pair)
+          AVK_NO_CFI { pair.second->recycle(device, pair.first); });
 }
 
 // ----------------- BufferVk --------------------------------
@@ -240,7 +244,7 @@ bool BufferVk::create(ContextVk const& context, size_t size,
                       VkMemoryPropertyFlags preferredFlags,
                       VmaAllocationCreateFlags vmaAllocFlags, float priority,
                       bool exportMemory, uint32_t queueFamilyCount,
-                      uint32_t* queueFamilies) {
+                      uint32_t* queueFamilies) AVK_NO_CFI {
   assert(!isAllocated() && !isMapped());
   if (m_allocationFailed) {
     return false;
@@ -347,7 +351,7 @@ void BufferVk::updateSubImmediately(size_t startOffset, size_t size,
   memcpy(static_cast<uint8_t*>(m_mappedMemory) + startOffset, data, size);
 }
 
-void BufferVk::flush(ContextVk const& context) const {
+void BufferVk::flush(ContextVk const& context) const AVK_NO_CFI {
   vmaFlushAllocation(context.getAllocator(), m_allocation, 0, m_bytes);
 }
 
@@ -384,7 +388,7 @@ void BufferVk::free(ContextVk const& context, DiscardPoolVk& discardPool) {
   m_buffer = VK_NULL_HANDLE;
 }
 
-void BufferVk::freeImmediately(ContextVk const& context) {
+void BufferVk::freeImmediately(ContextVk const& context) AVK_NO_CFI {
   assert(isAllocated());
   if (isMapped()) {
     unmap(context);
@@ -396,7 +400,7 @@ void BufferVk::freeImmediately(ContextVk const& context) {
 }
 
 VkDeviceMemory BufferVk::getExportMemory(ContextVk const& context,
-                                         size_t& memorySize) {
+                                         size_t& memorySize) AVK_NO_CFI {
   assert(isAllocated());
   VmaAllocationInfo info = {};
   vmaGetAllocationInfo(context.getAllocator(), m_allocation, &info);
@@ -410,21 +414,22 @@ VkDeviceMemory BufferVk::getExportMemory(ContextVk const& context,
   return info.deviceMemory;
 }
 
-bool BufferVk::map(ContextVk const& context) {
+bool BufferVk::map(ContextVk const& context) AVK_NO_CFI {
   assert(!isMapped() && isAllocated());
   VkResult const res =
       vmaMapMemory(context.getAllocator(), m_allocation, &m_mappedMemory);
   return res == VK_SUCCESS;
 }
 
-void BufferVk::unmap(ContextVk const& context) {
+void BufferVk::unmap(ContextVk const& context) AVK_NO_CFI {
   assert(isMapped() && isAllocated());
   vmaUnmapMemory(context.getAllocator(), m_allocation);
   m_mappedMemory = nullptr;
 }
 
 VkShaderModule finalizeShaderModule(ContextVk const& context,
-                                    uint32_t const* pCode, size_t codeSize) {
+                                    uint32_t const* pCode,
+                                    size_t codeSize) AVK_NO_CFI {
   VkShaderModuleCreateInfo createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
   createInfo.pCode = pCode;
@@ -435,7 +440,7 @@ VkShaderModule finalizeShaderModule(ContextVk const& context,
   return shaderModule;
 }
 
-VkFormat basicDepthStencilFormat(VkPhysicalDevice physicalDevice) {
+VkFormat basicDepthStencilFormat(VkPhysicalDevice physicalDevice) AVK_NO_CFI {
   // assuming we want VK_IMAGE_TILING_OPTIMAL and not linear
   VkFormatProperties formatProperties{};
   // at least one of D24/S8 or D32/S8 are supported per specification
@@ -456,7 +461,7 @@ VkFormat basicDepthStencilFormat(VkPhysicalDevice physicalDevice) {
 }
 
 bool createImage(ContextVk const& context, SingleImage2DSpecVk const& spec,
-                 VkImage& image, VmaAllocation& allocation) {
+                 VkImage& image, VmaAllocation& allocation) AVK_NO_CFI {
   VkImageCreateInfo createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
   createInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -489,7 +494,7 @@ bool createImage(ContextVk const& context, SingleImage2DSpecVk const& spec,
 }
 
 VkCommandPool createCommandPool(ContextVk const& context, bool resettable,
-                                uint32_t queueFamilyIndex) {
+                                uint32_t queueFamilyIndex) AVK_NO_CFI {
   VkCommandPool commandPool = VK_NULL_HANDLE;
   VkCommandPoolCreateInfo createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -504,7 +509,7 @@ VkCommandPool createCommandPool(ContextVk const& context, bool resettable,
 
 bool allocPrimaryCommandBuffers(ContextVk const& context,
                                 VkCommandPool commandPool, uint32_t count,
-                                VkCommandBuffer* commandBuffers) {
+                                VkCommandBuffer* commandBuffers) AVK_NO_CFI {
   VkCommandBufferAllocateInfo allocateInfo{};
   allocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
   allocateInfo.commandPool = commandPool;
@@ -521,7 +526,7 @@ VkPipelineLayout createPipelineLayout(
     VkDescriptorSetLayout const* pDescriptorSetLayouts,
     uint32_t descriptorSetLayoutCount,
     VkPushConstantRange const* pPushConstantRanges,
-    uint32_t pushConstantRangeCount) {
+    uint32_t pushConstantRangeCount) AVK_NO_CFI {
   // TODO check setLayoutCount must be less than or equal to
   // VkPhysicalDeviceLimits::maxBoundDescriptorSets
   // TODO Any two elements of pPushConstantRanges must not include the same

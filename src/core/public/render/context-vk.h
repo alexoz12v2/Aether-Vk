@@ -1,56 +1,28 @@
 #pragma once
 
-// TODO maybe: move to cmake/bazel
-#ifdef AVK_OS_WINDOWS
-#define VK_USE_PLATFORM_WIN32_KHR
-#elif defined(AVK_OS_MACOS)  // TODO: also iOS and iPadOS
-#define VK_USE_PLATFORM_METAL_EXT
-#elif defined(AVK_OS_ANDROID)
-#define VK_USE_PLATFORM_ANDROID_KHR
-#elif defined(AVK_OS_LINUX)
-#if defined(AVK_USE_XCB)
-#define VK_USE_PLATFORM_XCB_KHR
-#else
-#define VK_USE_PLATFORM_WAYLAND_KHR
-#endif
-#else
-#error "ADD SUPPORT"
-#endif
-
-#ifndef VK_NO_PROTOTYPES
-#error "IF you are using volk, define VK_NO_PROTOTYPES"
-#endif
-
-// TODO better see if works
-#pragma clang attribute push(__attribute__((no_sanitize("cfi"))), \
-                             apply_to = any(function, variable(is_global)))
-#include <vma/vk_mem_alloc.h>
-#include <volk.h>
-#pragma clang attribute pop
-
 #include <atomic>
 #include <cstdint>
-#include <cstring>
-#include <functional>
 #include <map>
 #include <memory>
-#include <string>
 #include <string_view>
-#include <type_traits>
+#include <unordered_map>
 #include <vector>
 
+#include "vk/common-vk.h"
+
 #ifdef AVK_OS_WINDOWS
-#include <WinDef.h>
+#  include <WinDef.h>
 #elif defined(AVK_OS_MACOS)
-#error "TODO"
+#  error "TODO"
 #elif defined(AVK_OS_ANDROID)
-#error "TODO"
+#  error "TODO"
 #elif defined(AVK_OS_LINUX)
-#error "TODO X11 and Wayland"
+#  error "TODO X11 and Wayland"
 #else
-#error "ADD SUPPORT"
+#  error "ADD SUPPORT"
 #endif
 
+#include "os/avk-core-macros.h"
 #include "utils/mixins.h"
 
 struct VmaVulkanFunctions;
@@ -63,23 +35,6 @@ inline bool vkCheck(VkResult res) {
     return false;
   }
   return true;
-}
-
-inline VkExternalMemoryHandleTypeFlagBits externalMemoryVkFlags() {
-#ifdef AVK_OS_WINDOWS
-  return VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-#elif AVK_OS_ANDROID
-  return VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT |
-         VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
-#elif AVK_OS_MACOS
-  // TODO insert metal handles
-  return VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
-#elif AVK_OS_LINUX
-  return VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT |
-         VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
-#else
-  return 0;
-#endif
 }
 
 struct WindowHDRInfo {
@@ -96,13 +51,13 @@ struct ContextVkParams {
 #ifdef AVK_OS_WINDOWS
   HWND window = nullptr;
 #elif defined(AVK_OS_MACOS)
-#error "TODO"
+#  error "TODO"
 #elif defined(AVK_OS_ANDROID)
-#error "TODO"
+#  error "TODO"
 #elif defined(AVK_OS_LINUX)
-#error "TODO X11 and Wayland"
+#  error "TODO X11 and Wayland"
 #else
-#error "ADD SUPPORT"
+#  error "ADD SUPPORT"
 #endif
 };
 
@@ -147,77 +102,6 @@ struct DevicePropertiesFeatures {
 //   uint32_t maxSubgroupSize;
 //   uint32_t maxComputeWorkgroupSubgroups;
 // };
-
-struct Extensions {
-  std::vector<VkExtensionProperties> extensions;
-  std::vector<char const*> enabled;
-
-  inline bool isSupported(char const* name) const {
-    for (VkExtensionProperties const& ext : extensions) {
-      if (strcmp(ext.extensionName, name) == 0) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  template <typename StrIt>
-  inline bool isSupported(StrIt&& beg, StrIt&& end) const {
-    for (auto it = beg; it != end; ++it) {
-      if (!isSupported(*it)) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  inline bool enable(char const* name) {
-    bool supported = isSupported(name);
-    if (supported) {
-      enabled.push_back(name);
-      // TODO add logging
-      return true;
-    }
-    // TODO add logging
-    return false;
-  }
-
-  template <typename StrIt>
-  inline bool enable(StrIt&& beg, StrIt&& end) {
-    bool failure = false;
-    if (beg == end) {
-      return true;
-    }
-    for (auto it = beg; it != end; ++it) {
-      const char* name = nullptr;
-      const auto& val = *it;
-
-      if constexpr (std::is_same_v<std::decay_t<decltype(val)>, const char*>) {
-        name = val;
-      } else if constexpr (std::is_same_v<std::decay_t<decltype(val)>,
-                                          std::string>) {
-        name = val.c_str();
-      } else if constexpr (std::is_same_v<std::decay_t<decltype(val)>,
-                                          std::string_view>) {
-        name = val.data();
-      } else {
-        static_assert(sizeof(val) == 0, "Unsupported string type");
-      }
-
-      failure |= !enable(name);
-    }
-    return !failure;
-  }
-
-  inline bool isEnabled(char const* name) const {
-    for (char const* enabledName : enabled) {
-      if (strcmp(enabledName, name) == 0) {
-        return true;
-      }
-    }
-    return false;
-  }
-};
 
 struct SwapchainDataVk {
   // handle to image presented to the user
@@ -428,13 +312,13 @@ class ContextVk : public NonMoveable {
 #ifdef AVK_OS_WINDOWS
   HWND m_hWindow;
 #elif defined(AVK_OS_MACOS)
-#error "TODO"
+#  error "TODO"
 #elif defined(AVK_OS_ANDROID)
-#error "TODO"
+#  error "TODO"
 #elif defined(AVK_OS_LINUX)
-#error "TODO X11 and Wayland"
+#  error "TODO X11 and Wayland"
 #else
-#error "ADD SUPPORT"
+#  error "ADD SUPPORT"
 #endif
 
   // Instance level data

@@ -1,5 +1,15 @@
 # Ideas
 
+## Code Style
+
+- Use `clang-format` for uniform formatting
+- Use `gtest` and similiar with `-fcoverage` for testing
+- Use [powershell verbs](https://learn.microsoft.com/en-us/powershell/scripting/developer/cmdlet/approved-verbs-for-windows-powershell-commands?view=powershell-7.5) to name functions
+
+## Vulkan Upgrades
+
+- `VK_KHR_incremental_present` to present only panels which changed
+
 ## Client-Server Architecture
 
 While the main client application is responsible for rendering and physics simulation,
