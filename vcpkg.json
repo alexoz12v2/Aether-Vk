@@ -10,6 +10,11 @@
             "name": "vulkan-headers",
             "version>=": "1.4.309.0"
         },
+        {
+            "name": "spirv-cross",
+            "version>=": "1.4.309.0"
+        },
+        "ktx",
         "volk",
         "vulkan-memory-allocator",
         {

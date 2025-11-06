@@ -1,5 +1,7 @@
 #include "avk-comutils.h"
 
+#pragma clang attribute push(__attribute__((no_sanitize("cfi"))), \
+                             apply_to = any(function))
 #include <Windows.h>
 
 // more windows (shell object)
@@ -45,10 +47,11 @@
 // WinRT -> Storage.Pickers
 #include <winrt/windows.storage.h>
 #include <winrt/windows.storage.pickers.h>
+#pragma clang attribute pop
 
 // check C++20
 #if __cplusplus < 202002L
-#error "WinRT expects C++20"
+#  error "WinRT expects C++20"
 #endif
 
 #include <filesystem>
