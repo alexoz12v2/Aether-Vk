@@ -408,7 +408,7 @@ VkDeviceMemory BufferVk::getExportMemory(ContextVk const& context,
   if (info.offset == 0) {
     assert(false &&
            "Failed to get zero offset export memory for vulkan buffer");
-    return nullptr;
+    return 0;
   }
   memorySize = info.size;
   return info.deviceMemory;

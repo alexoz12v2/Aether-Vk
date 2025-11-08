@@ -1,8 +1,5 @@
 #include "render/pipeline-vk.h"
 
-#include <slang/slang.h>
-#include <vulkan/vulkan_core.h>
-
 #include <cassert>
 
 namespace avk {

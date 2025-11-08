@@ -14,7 +14,7 @@ option(AVK_USE_SANITIZERS "Use sanitizers during non-release compilations with L
 # project declaration
 # default enabled languages: C and CXX, if toolchain doesn't define them https://cmake.org/cmake/help/latest/manual/cmake-toolchains.7.html#variables-and-properties, automatic
 project(AetherVk
-  VERSION 0.0.1) 
+  VERSION 0.0.1)
 
 enable_language(ASM)
 
@@ -24,14 +24,22 @@ include(cmake/AvkDetectPlatform.cmake)
 avk_detect_platform()
 message(STATUS "Arch=${AVK_ARCH} OS=${AVK_OS} Compiler=${AVK_COMPILER}")
 
+# convenience symlink for android
+if (AVK_OS STREQUAL "ANDROID" AND DEFINED ANDROID_NDK)
+  execute_process(
+    COMMAND ${CMAKE_COMMAND} -E create_symlink ${ANDROID_NDK} ${CMAKE_SOURCE_DIR}/build-ndk-symlink
+    COMMAND ${CMAKE_COMMAND} -E create_symlink ${ANDROID_NDK} ${CMAKE_SOURCE_DIR}/src/launcher/android/build-ndk-symlink
+  )
+endif ()
+
 # define AVK_DEBUG if necessary
 string(TOUPPER ${CMAKE_BUILD_TYPE} AVK_BUILD_FRAGMENT)
 set("AVK_${AVK_BUILD_FRAGMENT}" ON)
 
-if((AVK_OS STREQUAL "MACOS") OR (AVK_OS STREQUAL "IOS")) # IOS still TODO
+if ((AVK_OS STREQUAL "MACOS") OR (AVK_OS STREQUAL "IOS"))
   enable_language(OBJC)
   enable_language(OBJCXX)
-endif()
+endif ()
 
 # TODO check for android
 avk_setup_vulkan()

@@ -902,3 +902,8 @@ FodyWeavers.xsd
 # Additional files built by Visual Studio
 
 # End of https://www.toptal.com/developers/gitignore/api/androidstudio,macos,c++,android,bazel,cmake,kotlin,gradle,visualstudio,visualstudiocode,python,powershell
+
+# stuff created by scripts/android
+vulkan-sdk
+build-ndk-symlink
+avk__*

@@ -51,7 +51,7 @@ debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
 Instance::Instance() AVK_NO_CFI {
   static uint32_t constexpr BaselineVulkanVersion = VK_API_VERSION_1_1;
 
-  AVK_EXT_CHECK(volkInitialize());
+  VK_CHECK(volkInitialize());
 
   // 1. initialize instance extensions
   Extensions extensions;
@@ -72,6 +72,7 @@ Instance::Instance() AVK_NO_CFI {
   // VK_KHR_get_surface_capabilities2 for extensible queries on surfaces
   AVK_EXT_CHECK(
       extensions.enable(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME));
+  // TODO Android: If it's not supported, show an error message "Update to Android 14 or higher"
   // VK_EXT_surface_maintenance1 for pNext present mode and scaling caps
   AVK_EXT_CHECK(extensions.enable(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME));
 #ifdef AVK_DEBUG
@@ -184,6 +185,7 @@ Instance::~Instance() noexcept AVK_NO_CFI {
   }
 
   vkDestroyInstance(m_instance, nullptr);
+  volkFinalize();
 }
 
 }  // namespace avk::vk

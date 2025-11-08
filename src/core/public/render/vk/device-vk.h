@@ -43,6 +43,8 @@ class Device : public NonMoveable {
   /// Selects a physical device with baseline features and extension support,
   /// creates a device and takes its first queue supporting
   /// - graphics, compute, transfer, presentation
+  /// TODO: Decouple surface for desktop, and don't take it for mobile (android and metal mandate
+  ///  that each graphics queue family is present capable)
   Device(Instance* instance, Surface* surface);
   ~Device() noexcept;
 

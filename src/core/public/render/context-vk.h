@@ -15,7 +15,6 @@
 #elif defined(AVK_OS_MACOS)
 #  error "TODO"
 #elif defined(AVK_OS_ANDROID)
-#  error "TODO"
 #elif defined(AVK_OS_LINUX)
 #  error "TODO X11 and Wayland"
 #else
@@ -53,7 +52,6 @@ struct ContextVkParams {
 #elif defined(AVK_OS_MACOS)
 #  error "TODO"
 #elif defined(AVK_OS_ANDROID)
-#  error "TODO"
 #elif defined(AVK_OS_LINUX)
 #  error "TODO X11 and Wayland"
 #else
@@ -314,7 +312,6 @@ class ContextVk : public NonMoveable {
 #elif defined(AVK_OS_MACOS)
 #  error "TODO"
 #elif defined(AVK_OS_ANDROID)
-#  error "TODO"
 #elif defined(AVK_OS_LINUX)
 #  error "TODO X11 and Wayland"
 #else

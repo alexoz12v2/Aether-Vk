@@ -63,7 +63,7 @@ static void fillRequiredExtensions(
 #if defined(__ANDROID__)
   requiredExtensions.push_back(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME);
   requiredExtensions.push_back(
-      VK_ANDROID_EXTERNAL_MEMORY_HARDWARE_BUFFER_EXTENSION_NAME);
+      VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME);
 #endif
 #if defined(_WIN32)
   requiredExtensions.push_back(VK_KHR_EXTERNAL_FENCE_WIN32_EXTENSION_NAME);
@@ -565,9 +565,9 @@ Device::~Device() noexcept AVK_NO_CFI {
     return;
   }
 
-  vkDeviceWaitIdle(m_device);
+  m_table->vkDeviceWaitIdle(m_device);
   vmaDestroyAllocator(m_vmaAllocator);
-  vkDestroyDevice(m_device, nullptr);
+  m_table->vkDestroyDevice(m_device, nullptr);
 }
 
 }  // namespace avk::vk

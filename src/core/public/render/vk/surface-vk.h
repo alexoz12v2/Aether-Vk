@@ -3,6 +3,8 @@
 #include "render/vk/instance-vk.h"
 #include "utils/mixins.h"
 
+struct ANativeWindow;
+
 namespace avk::vk {
 
 struct SurfaceSpec {
@@ -10,7 +12,7 @@ struct SurfaceSpec {
   HWND window;
   HINSTANCE instance;
 #elif defined(VK_USE_PLATFORM_ANDROID_KHR)
-  struct ANAtiveWindow* window;
+  ANativeWindow* window;
 #elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
   struct wl_display* display;
   struct wl_surface* surface;

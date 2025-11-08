@@ -31,7 +31,7 @@
 #include <volk.h>
 #define VMA_STATIC_VULKAN_FUNCTIONS 0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
-#include <vma/vk_mem_alloc.h>
+#include <vk_mem_alloc.h>
 #pragma clang attribute pop
 #pragma GCC diagnostic pop
 // clang-format on
@@ -40,6 +40,8 @@
 #include <string>
 #include <vector>
 
+// our stuff
+#include "os/avk-log.h"
 #include "os/stackstrace.h"
 #include "utils/mixins.h"
 
@@ -48,15 +50,15 @@
     a crashing error, so this should be used only in points in which a failure
     is a non recoverable error).
     TODO insert a logging macro? */
-#define VK_CHECK(vkres)                                                    \
-  do {                                                                     \
-    if (VkResult var = (vkres); var < 0) {                                 \
-      std::string err = "[Vulkan Error]: ";                                \
-      err.append(::avk::vkResToString(var));                               \
-      ::std::cerr << "\033[31m" << err << '\n';                            \
-      ::std::cerr << ::avk::dumpStackTrace() << "\033[0m\n" << std::flush; \
-      ::avk::showErrorScreenAndExit(err.c_str());                          \
-    }                                                                      \
+#define VK_CHECK(vkres)                                             \
+  do {                                                              \
+    if (VkResult var = (vkres); var < 0) {                          \
+      std::string err = "[Vulkan Error]: ";                         \
+      err.append(::avk::vkResToString(var));                        \
+      LOGE << AVK_LOG_RED << err << '\n';                           \
+      LOGE << ::avk::dumpStackTrace() << AVK_LOG_RST << std::flush; \
+      ::avk::showErrorScreenAndExit(err.c_str());                   \
+    }                                                               \
   } while (0)
 
 /// Macro to check whether a boolean is true, otherwise crash.
@@ -73,7 +75,7 @@ namespace avk {
 std::string vkResToString(VkResult res);
 
 /// Function used when we want to export our memory outside of vulkan
-inline VkExternalMemoryHandleTypeFlagBits externalMemoryVkFlags() {
+inline VkExternalMemoryHandleTypeFlags externalMemoryVkFlags() {
 #ifdef AVK_OS_WINDOWS
   return VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
 #elif AVK_OS_ANDROID
