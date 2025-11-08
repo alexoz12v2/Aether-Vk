@@ -13,3 +13,5 @@
 .externalNativeBuild
 .cxx
 local.properties
+/avk__core/
+/build-ndk-symlink/

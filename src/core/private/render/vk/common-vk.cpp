@@ -5,7 +5,7 @@
 #pragma clang attribute push(__attribute__((no_sanitize("cfi"))), \
                              apply_to = any(function))
 #define VMA_IMPLEMENTATION
-#include <vma/vk_mem_alloc.h>
+#include <vk_mem_alloc.h>
 #pragma clang attribute pop
 #pragma GCC diagnostic pop
 

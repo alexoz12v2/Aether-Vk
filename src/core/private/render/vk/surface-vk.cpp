@@ -12,27 +12,34 @@ Surface::Surface(Instance* instance, SurfaceSpec const& spec) AVK_NO_CFI
   createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
   createInfo.hinstance = spec.instance;
   createInfo.hwnd = spec.window;
-  
-  VK_CHECK(vkCreateWin32SurfaceKHR(instance->handle(), &createInfo, nullptr, &m_surface));
+
+  VK_CHECK(vkCreateWin32SurfaceKHR(instance->handle(), &createInfo, nullptr,
+                                   &m_surface));
 #elif defined(VK_USE_PLATFORM_ANDROID_KHR)
   VkAndroidSurfaceCreateInfoKHR createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
   createInfo.window = spec.window;
-
-  VK_CHECK(vkCreateAndroidSurfaceKHR(instance->handle(), &createInfo, nullptr, &m_surface));
+  auto* pfnCreateAndroidSurfaceKHR =
+      reinterpret_cast<PFN_vkCreateAndroidSurfaceKHR>(vkGetInstanceProcAddr(
+          instance->handle(), "vkCreateAndroidSurfaceKHR"));
+  AVK_EXT_CHECK(pfnCreateAndroidSurfaceKHR);
+  VK_CHECK(pfnCreateAndroidSurfaceKHR(instance->handle(), &createInfo, nullptr,
+                                     &m_surface));
 #elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
-  VkWaylandSurfaceCreateInfoKHR createInfo{};      
+  VkWaylandSurfaceCreateInfoKHR createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
   createInfo.display = spec.display;
   createInfo.surface = spec.surface;
 
-  VK_CHECK(vkCreateWaylandSurfaceKHR(instance->handle(), &createInfo, nullptr, &m_surface));
+  VK_CHECK(vkCreateWaylandSurfaceKHR(instance->handle(), &createInfo, nullptr,
+                                     &m_surface));
 #elif defined(VK_USE_PLATFORM_METAL_EXT)
   VkMetalSurfaceCreateInfoEXT createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
   createInfo.pLayer = spec.layer;
 
-  VK_CHECK(vkCreateMetalSurfaceEXT(instance->handle(), &createInfo, nullptr, &m_surface));
+  VK_CHECK(vkCreateMetalSurfaceEXT(instance->handle(), &createInfo, nullptr,
+                                   &m_surface));
 #else
 #  error "Add support for this WSI platform"
 #endif

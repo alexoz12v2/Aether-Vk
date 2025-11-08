@@ -16,7 +16,6 @@
 
 #include "utils/integer.h"
 
-
 #ifdef AVK_OS_WINDOWS
 #  include <Windows.h>
 // https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute
@@ -24,7 +23,7 @@
 #elif defined(AVK_OS_MACOS)
 #  error "TODO"
 #elif defined(AVK_OS_ANDROID)
-#  error "TODO"
+#  include <sched.h>
 #elif defined(AVK_OS_LINUX)
 #  error "TODO X11 and Wayland"
 #else
@@ -86,66 +85,6 @@ static void VKAPI_PTR freeDeviceMemoryCallback(
 
 namespace avk {
 
-#if 0
-DeviceVk::DeviceVk(DeviceVk&& other) noexcept {
-  std::lock_guard<std::mutex> lk{other.queueMutex};
-  vmaAllocator = std::exchange(vmaAllocator, other.vmaAllocator);
-  physicalDevice = std::exchange(physicalDevice, other.physicalDevice);
-  device = std::exchange(device, other.device);
-  extensions = std::exchange(extensions, other.extensions);
-  propertiesFeatures = std::move(other.propertiesFeatures);
-  queueIndices.family.graphicsCompute =
-      std::exchange(queueIndices.family.graphicsCompute,
-                    other.queueIndices.family.graphicsCompute);
-  graphicsComputeQueue =
-      std::exchange(graphicsComputeQueue, other.graphicsComputeQueue);
-  queueIndices.family.computeAsync = std::exchange(
-      queueIndices.family.computeAsync, other.queueIndices.family.computeAsync);
-  computeAsyncQueue = std::exchange(computeAsyncQueue, other.computeAsyncQueue);
-  queueIndices.family.transfer = std::exchange(
-      queueIndices.family.transfer, other.queueIndices.family.transfer);
-  transferQueue = std::exchange(transferQueue, other.transferQueue);
-  queueIndices.family.present = std::exchange(
-      queueIndices.family.present, other.queueIndices.family.present);
-  presentQueue = std::exchange(presentQueue, other.presentQueue);
-  extSwapchainMaintenance1 =
-      std::exchange(extSwapchainMaintenance1, other.extSwapchainMaintenance1);
-  extSwapchainColorspace =
-      std::exchange(extSwapchainColorspace, other.extSwapchainColorspace);
-}
-
-DeviceVk& DeviceVk::operator=(DeviceVk&& other) noexcept {
-  // Note: We are not destroying the allocator and the device
-  std::lock_guard<std::mutex> lk{other.queueMutex};
-  vmaAllocator = std::exchange(vmaAllocator, other.vmaAllocator);
-  physicalDevice = std::exchange(physicalDevice, other.physicalDevice);
-  device = std::exchange(device, other.device);
-  extensions = std::exchange(extensions, other.extensions);
-  propertiesFeatures.release();
-  propertiesFeatures = std::move(other.propertiesFeatures);
-  queueIndices.family.graphicsCompute =
-      std::exchange(queueIndices.family.graphicsCompute,
-                    other.queueIndices.family.graphicsCompute);
-  graphicsComputeQueue =
-      std::exchange(graphicsComputeQueue, other.graphicsComputeQueue);
-  queueIndices.family.computeAsync = std::exchange(
-      queueIndices.family.computeAsync, other.queueIndices.family.computeAsync);
-  computeAsyncQueue = std::exchange(computeAsyncQueue, other.computeAsyncQueue);
-  queueIndices.family.transfer = std::exchange(
-      queueIndices.family.transfer, other.queueIndices.family.transfer);
-  transferQueue = std::exchange(transferQueue, other.transferQueue);
-  queueIndices.family.present = std::exchange(
-      queueIndices.family.present, other.queueIndices.family.present);
-  presentQueue = std::exchange(presentQueue, other.presentQueue);
-  extSwapchainMaintenance1 =
-      std::exchange(extSwapchainMaintenance1, other.extSwapchainMaintenance1);
-  extSwapchainColorspace =
-      std::exchange(extSwapchainColorspace, other.extSwapchainColorspace);
-
-  return *this;
-}
-#endif
-
 bool DeviceVk::getQueueUsage(VkQueue queue) {
   int32_t expectFree = 0;
   auto it = queuesStateMap.find(queue);
@@ -159,10 +98,14 @@ bool DeviceVk::getQueueUsage(VkQueue queue) {
                                      std::memory_order_relaxed) &&
         !expectFree) {
       // TODO maybe. add boost dependency and add yield?
+#ifndef AVK_OS_ANDROID
       std::this_thread::yield();
+#else
+      sched_yield();
+#endif
       continue;
     }
-    state.store(1, std::memory_order_acquire);
+    state.store(1, std::memory_order_release);
     break;
   }
   return true;
@@ -321,7 +264,6 @@ bool ContextVk::createInstance(uint32_t vulkanApiVersion) AVK_NO_CFI {
     return false;
   }
 #elif defined(AVK_OS_ANDROID)
-#  error "TODO"
 #elif defined(AVK_OS_LINUX)
 #  error "TODO X11 and Wayland"
 #else
@@ -449,6 +391,7 @@ bool ContextVk::createSurface() AVK_NO_CFI {
 #else
 #  error "ADD SUPPORT"
 #endif
+  return false;
 }
 
 bool ContextVk::physicalDeviceSupport(DeviceVk& physicalDevice) const
@@ -941,7 +884,6 @@ ContextResult ContextVk::initializeDrawingContext(ContextVkParams const& params)
 #elif defined(AVK_OS_MACOS)
 #  error "TODO"
 #elif defined(AVK_OS_ANDROID)
-#  error "TODO"
 #elif defined(AVK_OS_LINUX)
 #  error "TODO X11 and Wayland"
 #else
@@ -1156,7 +1098,6 @@ ContextResult ContextVk::recreateSwapchain(
       m_currentExtent.width = 1280;
       m_currentExtent.height = 720;
 #else
-#  error "TODO Other platforms grab surface information"
 #endif
     }
 

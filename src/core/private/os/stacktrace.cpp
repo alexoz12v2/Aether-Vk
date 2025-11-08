@@ -1,4 +1,7 @@
 #include "os/filesystem.h"
+
+// out stuff
+#include "os/avk-log.h"
 #include "os/stackstrace.h"
 
 #if defined(_WIN32)
@@ -9,7 +12,7 @@
 #include <dbghelp.h>
 // clang-format on
 
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(__ANDROID__)
 #  include <cxxabi.h>
 #  include <execinfo.h>
 
@@ -24,9 +27,19 @@
 #    include <unwind.h>
 #  endif
 #elif defined(__ANDROID__)
+// Note how we are assuming clang
+#  include <cxxabi.h>
+// backtace is available from API Level 33 (Android 13) (we are on minSdk 30,
+// Android 11)
+#  if __BIONIC_AVAILABILITY_GUARD(33)
+#    error "TODO: Not Managing API 33 execinfo (backtrace)"
+#    include <execinfo.h>
+#  else
+#    include <unwind.h>
+#  endif
 #  include <cxxabi.h>
 #  include <dlfcn.h>
-#  include <unwind.h>
+#  include <unistd.h>
 #endif
 
 #include <iostream>
@@ -46,7 +59,7 @@ static inline void ensureDbgHelpInitialized() {
     if (!SymInitializeW(process,
                         L"srv*.;https://msdl.microsoft.com/download/symbols",
                         TRUE)) {
-      std::cerr << "Couldn't load debug symbols from executable" << std::endl;
+      LOGE << "Couldn't load debug symbols from executable" << std::endl;
     }
 
     // load symbols for current HMODULE explicitly
@@ -63,9 +76,9 @@ static inline void ensureDbgHelpInitialized() {
     baseAddr = SymLoadModuleExW(process, nullptr, exepath.c_str(), nullptr,
                                 baseAddr, size, nullptr, 0);
     if (baseAddr == 0) {
-      std::cerr << "SymLoadModuleEx failed: " << GetLastError() << std::endl;
+      LOGE << "SymLoadModuleEx failed: " << GetLastError() << std::endl;
     } else {
-      std::cout << "Correctly Initialized DbgHelp" << std::endl;
+      LOGI << "Correctly Initialized DbgHelp" << std::endl;
     }
 
     IMAGEHLP_MODULEW64 moduleInfo;
@@ -137,7 +150,8 @@ std::string dumpStackTrace([[maybe_unused]] uint32_t maxFrames) {
     }
   }
 
-#  elif defined(__linux__) || (defined(__APPLE__) && !TARGET_OS_IOS)
+#  elif (defined(__linux__) && !defined(__ANDROID__)) || \
+      (defined(__APPLE__) && !TARGET_OS_IOS)
 
   // --- POSIX (Linux/macOS) implementation ---
   std::vector<void*> buffer(maxFrames);
@@ -164,45 +178,48 @@ std::string dumpStackTrace([[maybe_unused]] uint32_t maxFrames) {
 
   free(symbols);
 
-#  elif defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
+#  elif defined(__ANDROID__)
 
-  // --- Mobile (Android / iOS) fallback ---
   struct BacktraceState {
     void** current;
     void** end;
   };
-
-  auto unwindCallback = [](_Unwind_Context* context,
-                           void* arg) -> _Unwind_Reason_Code {
-    BacktraceState* state = (BacktraceState*)arg;
-    uintptr_t pc = _Unwind_GetIP(context);
-    if (pc) {
-      if (state->current == state->end) return _URC_END_OF_STACK;
-      *state->current++ = (void*)pc;
-    }
-    return _URC_NO_REASON;
-  };
-
-  void* buffer[128];
-  BacktraceState state = {buffer, buffer + maxFrames};
-  _Unwind_Backtrace(unwindCallback, &state);
-  size_t count = state.current - buffer;
-
-  for (size_t i = 1; i < count; i++) {
+  std::unique_ptr<void*[]> frames = std::make_unique<void*[]>(maxFrames);
+  BacktraceState state{frames.get(), frames.get() + maxFrames};
+  _Unwind_Backtrace(
+      [](struct _Unwind_Context* context, void* arg) -> _Unwind_Reason_Code {
+        auto* state = reinterpret_cast<BacktraceState*>(arg);
+        uintptr_t pc = _Unwind_GetIP(context);
+        if (pc) {
+          if (state->current == state->end) {
+            return _URC_END_OF_STACK;
+          } else {
+            *state->current++ = reinterpret_cast<void*>(pc);
+          }
+        }
+        return _URC_NO_REASON;
+      },
+      &state);
+  ptrdiff_t const count = state.current - frames.get();
+  for (int i = 0; i < count; ++i) {
     Dl_info info;
-    if (dladdr(buffer[i], &info) && info.dli_sname) {
+    if (dladdr(frames[i], &info) && info.dli_sname) {
       int status = 0;
       char* demangled =
           abi::__cxa_demangle(info.dli_sname, nullptr, nullptr, &status);
-      oss << "  [" << i << "] "
-          << (status == 0 && demangled ? demangled : info.dli_sname) << " - "
-          << info.dli_fname << "\n";
-      free(demangled);
+      char const* name =
+          (status == 0 && demangled) ? demangled : info.dli_sname;
+      oss << "  [" << i << "] ox" << std::hex << info.dli_saddr << std::dec
+          << name << '\n';
+      if (demangled) free(demangled);
     } else {
-      oss << "  [" << i << "] 0x" << std::hex << buffer[i] << std::dec << "\n";
+      oss << "  [" << i << "] ox" << std::hex << frames[i] << std::dec
+          << "???\n";
     }
   }
 
+#  elif (defined(__APPLE__) && TARGET_OS_IOS)
+#    error "TODO"
 #  else
   oss << "  (stack tracing not supported on this platform)\n";
 #  endif
@@ -215,9 +232,10 @@ void showErrorScreenAndExit(char const* msg) {
   MessageBoxA(NULL, msg, "Fatal Error", MB_OK | MB_ICONERROR);
   abort();
 #elif defined(__ANDROID__)
-  __android_log_print(ANDROID_LOG_ERROR, "Fatal Error", "%s", msg);
-#  error "TODO
-  show_error_activity(env, activity, msg);
+  LOGE << "Fatal Error: " << msg << std::endl;
+  abort();
+  // TODO
+  // show_error_activity(env, activity, msg);
 #elif defined(__APPLE__) && !defined(TARGET_OS_IOS)
 #  error "TODO
   ShowErrorScreen(msg);

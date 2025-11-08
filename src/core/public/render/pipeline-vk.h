@@ -36,8 +36,8 @@ inline bool operator==(ComputeInfo const& a, ComputeInfo const& b) {
 template <>
 struct std::hash<avk::ComputeInfo> {
   size_t operator()(avk::ComputeInfo const& computeInfo) const noexcept {
-    size_t hash = reinterpret_cast<size_t>(computeInfo.shaderModule);
-    hash = hash * 33 ^ reinterpret_cast<size_t>(computeInfo.pipelineLayout);
+    size_t hash = reinterpret_cast<uint64_t>(computeInfo.shaderModule);
+    hash = hash * 33 ^ reinterpret_cast<uint64_t>(computeInfo.pipelineLayout);
     return hash;
   }
 };
@@ -211,8 +211,8 @@ struct GraphicsInfo {
     }
 
     uint64_t hash() const {
-      uint64_t hash = 33 ^ reinterpret_cast<uintptr_t>(vertexModule);
-      hash = hash * 33 ^ reinterpret_cast<uintptr_t>(geometryModule);
+      uint64_t hash = 33 ^ reinterpret_cast<uint64_t>(vertexModule);
+      hash = hash * 33 ^ reinterpret_cast<uint64_t>(geometryModule);
       return hash;
     }
   };
@@ -370,7 +370,7 @@ struct std::hash<avk::GraphicsInfo> {
     hash = hash * 33 ^ graphicsInfo.preRasterization.hash();
     hash = hash * 33 ^ graphicsInfo.fragmentShader.hash();
     hash = hash * 33 ^ graphicsInfo.fragmentOut.hash();
-    hash = hash * 33 ^ reinterpret_cast<uintptr_t>(graphicsInfo.pipelineLayout);
+    hash = hash * 33 ^ reinterpret_cast<uint64_t>(graphicsInfo.pipelineLayout);
     hash = hash * 33 ^ graphicsInfo.opts.hash();
     return hash;
   }
