@@ -47,7 +47,7 @@ endforeach ()
 ############################################################################
 
 set(avk_core_libraries_public
-  Boost::fiber Vulkan::Headers GPUOpen::VulkanMemoryAllocator volk::volk volk::volk_headers
+  Boost::fiber Vulkan::Headers GPUOpen::VulkanMemoryAllocator volk::volk_headers
   glm::glm-header-only
 )
 set(avk_core_libraries_private PNG::PNG)

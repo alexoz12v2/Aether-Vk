@@ -17,9 +17,11 @@ static avk::AndroidOut s_mlogiBufavk{"main.cpp", ANDROID_LOG_INFO};
 static std::ostream s_mlogi{&s_mlogiBufavk};
 
 static void onAppCmd([[maybe_unused]] struct android_app* app, int32_t cmd) {
+  auto* appManager = reinterpret_cast<avk::AndroidApp*>(app->userData);
   switch (cmd) {
     case APP_CMD_INIT_WINDOW: {
       s_mlogi << "APP_CMD_INIT_WINDOW" << std::endl;
+      appManager->onWindowInit();
       break;
     }
     case APP_CMD_TERM_WINDOW: {
@@ -37,11 +39,15 @@ static void onAppCmd([[maybe_unused]] struct android_app* app, int32_t cmd) {
     case APP_CMD_CONTENT_RECT_CHANGED: {
       s_mlogi << "APP_CMD_CONTENT_RECT_CHANGED: Request Swapchain Creation"
               << std::endl;
-      [[maybe_unused]] int32_t const width = app->contentRect.right - app->contentRect.bottom;
-      [[maybe_unused]] int32_t const height = app->contentRect.bottom - app->contentRect.top;
+      [[maybe_unused]] int32_t const width =
+          app->contentRect.right - app->contentRect.bottom;
+      [[maybe_unused]] int32_t const height =
+          app->contentRect.bottom - app->contentRect.top;
       // TODO request resize
       break;
     }
+    // APP_CMD_RESUME -> vkDeviceWaitIdle, recreate Swapchain
+    // APP_CMD_PAUSE -> destroy swapchain/discard swapchain (or just stop rendering)
     default:
       break;
   }

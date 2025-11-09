@@ -167,3 +167,18 @@ struct Extensions {
 };
 
 }  // namespace avk
+
+namespace avk::vk {
+
+/// Helper type to define Vulkan Device Operations which
+/// Shouldn't be necessarily fatal
+template <typename H>
+struct Expected {
+  H handle;
+  VkResult result;
+
+  inline operator bool() const { return result >= 0; }
+  inline void crashIfErr() const { VK_CHECK(result); }
+};
+
+}  // namespace avk::vk

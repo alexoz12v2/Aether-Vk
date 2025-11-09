@@ -4,6 +4,8 @@
 #pragma GCC diagnostic ignored "-Wnullability-extension"
 #pragma clang attribute push(__attribute__((no_sanitize("cfi"))), \
                              apply_to = any(function))
+#define VOLK_IMPLEMENTATION
+#include <volk.h>
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
 #pragma clang attribute pop

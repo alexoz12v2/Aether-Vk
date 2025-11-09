@@ -53,6 +53,22 @@ Instance::Instance() AVK_NO_CFI {
 
   VK_CHECK(volkInitialize());
 
+  uint32_t apiVersion;
+  VkResult res =
+      vkEnumerateInstanceVersion(&apiVersion);  // Vulkan 1.1+ function
+  if (res < 0) {
+    LOGE << "[Instance] Couldn't query max instance version vulkan"
+         << std::endl;
+    AVK_EXT_CHECK(false);
+  }
+  LOGI << "Vulkan instance version Supported: " << VK_VERSION_MAJOR(apiVersion)
+       << '.' << VK_VERSION_MINOR(apiVersion) << '.'
+       << VK_VERSION_PATCH(apiVersion) << std::endl;
+  if (apiVersion < BaselineVulkanVersion) {
+    LOGE << "[Instance] API version lower than baseline, aborting" << std::endl;
+    AVK_EXT_CHECK(false);
+  }
+
   // 1. initialize instance extensions
   Extensions extensions;
   uint32_t count = 0;
@@ -72,8 +88,9 @@ Instance::Instance() AVK_NO_CFI {
   // VK_KHR_get_surface_capabilities2 for extensible queries on surfaces
   AVK_EXT_CHECK(
       extensions.enable(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME));
-  // TODO Android: If it's not supported, show an error message "Update to Android 14 or higher"
-  // VK_EXT_surface_maintenance1 for pNext present mode and scaling caps
+  // TODO Android: If it's not supported, show an error message "Update to
+  // Android 14 or higher" VK_EXT_surface_maintenance1 for pNext present mode
+  // and scaling caps
   AVK_EXT_CHECK(extensions.enable(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME));
 #ifdef AVK_DEBUG
   // opt: VK_EXT_debug_utils for messenger callbacks
@@ -173,6 +190,10 @@ Instance::Instance() AVK_NO_CFI {
 #endif
 
   volkLoadInstanceOnly(m_instance);
+  LOGI << "[Instance] Correctly created Vulkan Instance Version "
+       << VK_VERSION_MAJOR(BaselineVulkanVersion) << '.'
+       << VK_VERSION_MINOR(BaselineVulkanVersion) << '.'
+       << VK_VERSION_PATCH(BaselineVulkanVersion) << std::endl;
 }
 
 Instance::~Instance() noexcept AVK_NO_CFI {

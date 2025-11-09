@@ -34,6 +34,8 @@ class Surface : public NonMoveable {
   inline VkSurfaceKHR handle() const { return m_surface; }
   inline operator bool() const { return m_surface != VK_NULL_HANDLE; }
 
+  VkExtent2D internalExtent() const;
+
 #if defined(VK_USE_PLATFORM_WAYLAND_KHR)
   inline struct wl_display* display() const { return m_internal.display; }
 #endif
