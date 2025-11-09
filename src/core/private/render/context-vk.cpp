@@ -1252,7 +1252,6 @@ ContextResult ContextVk::recreateSwapchain(
   return ContextResult::Success;
 }
 
-// TODO multiple frames in flight
 bool ContextVk::initializeFrameData() AVK_NO_CFI {
   // create semaphores for presenting swapchain images
   VkSemaphoreCreateInfo semaphoreCreateInfo{};

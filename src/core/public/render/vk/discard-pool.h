@@ -1,0 +1,95 @@
+#pragma once
+
+#include <render/vk/common-vk.h>
+#include <render/vk/device-vk.h>
+
+// standard library
+#include <vector>
+
+namespace avk::vk::utils {
+
+// vector of pair timestamp, value
+// invariant: timeline values should always be sorted (except for wrap around)
+template <typename Item>
+class TimelineResources : public std::vector<std::pair<uint64_t, Item>> {
+  using Base = std::vector<std::pair<uint64_t, Item>>;
+
+ public:
+  void appendTimeline(uint64_t timeline, Item item) {
+    Base::emplace_back(timeline, item);
+  }
+
+  void updateTimeline(uint64_t timeline) {
+    for (std::pair<uint64_t, Item>& pair : *this) {
+      pair.first = timeline;
+    }
+  }
+
+  template <typename Deleter,
+            typename V = std::enable_if_t<std::is_invocable_v<Deleter, Item>>>
+  void removeOld(uint64_t currentTimeline, Deleter&& deleter) {
+    int64_t firstIndexToKeep = 0;
+    for (std::pair<uint64_t, Item>& item : *this) {
+      if (item.first > currentTimeline) {
+        break;
+      }
+      deleter(item.second);
+      ++firstIndexToKeep;
+    }
+
+    if (firstIndexToKeep > 0) {
+      Base::erase(Base::begin(), Base::begin() + firstIndexToKeep);
+    }
+  }
+};
+
+}  // namespace avk::vk::utils
+
+namespace avk::vk {
+
+class DiscardPool : public NonMoveable {
+ public:
+  DiscardPool(Device* device);
+  /// Assumes its timeline Semaphore is *NOT* being used by a queue
+  ~DiscardPool();
+
+  /// will call `vkGetSemaphoreCounterValueKHR` to extract the `value`
+  /// parameter for all "discard*" methods
+  uint64_t queryTime() const;
+
+  void discardImage(VkImage image, VmaAllocation allocation, uint64_t value);
+  void discardImageView(VkImageView imageView, uint64_t value);
+  void discardBuffer(VkBuffer buffer, VmaAllocation allocation, uint64_t value);
+  void discardBufferView(VkBufferView bufferView, uint64_t value);
+  void discardShaderModule(VkShaderModule shaderModule, uint64_t value);
+  void discardPipeline(VkPipeline pipeline, uint64_t value);
+  void discardPipelineLayout(VkPipelineLayout pipelineLayout, uint64_t value);
+  // TODO
+
+  void destroyDiscardedResources(bool force = false);
+  inline VkSemaphore timelineSemaphore() const { return m_timeline; }
+  inline operator bool() const { return m_timeline != VK_NULL_HANDLE; }
+
+ private:
+  // dependencies which must outlive this object
+  struct Deps {
+    Device* device;
+  } m_deps;
+
+  utils::TimelineResources<std::pair<VkImage, VmaAllocation>> m_images;
+  utils::TimelineResources<std::pair<VkBuffer, VmaAllocation>> m_buffers;
+  utils::TimelineResources<VkImageView> m_imageViews;
+  utils::TimelineResources<VkBufferView> m_bufferViews;
+  utils::TimelineResources<VkShaderModule> m_shaderModules;
+  utils::TimelineResources<VkPipeline> m_pipelines;
+  utils::TimelineResources<VkPipelineLayout> m_pipelineLayouts;
+  // TODO add descriptor pools
+
+  // maintain the timeline inside it
+  VkSemaphore m_timeline = VK_NULL_HANDLE;
+
+  // synchronization for multithreaded usage
+  std::mutex m_mtx;
+};
+
+}  // namespace avk::vk

@@ -1,6 +1,13 @@
 #include "render/vk/surface-vk.h"
 
 // TODO vsync and dpi support from native APIs
+#ifdef VK_USE_PLATFORM_WIN32_KHR
+#  include <Windows.h>
+#  include <dwmapi.h>
+#endif
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
+#  include <android/native_window.h>
+#endif
 
 namespace avk::vk {
 
@@ -24,7 +31,7 @@ Surface::Surface(Instance* instance, SurfaceSpec const& spec) AVK_NO_CFI
           instance->handle(), "vkCreateAndroidSurfaceKHR"));
   AVK_EXT_CHECK(pfnCreateAndroidSurfaceKHR);
   VK_CHECK(pfnCreateAndroidSurfaceKHR(instance->handle(), &createInfo, nullptr,
-                                     &m_surface));
+                                      &m_surface));
 #elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
   VkWaylandSurfaceCreateInfoKHR createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
@@ -49,6 +56,41 @@ Surface::~Surface() noexcept AVK_NO_CFI {
   if (*this) {
     vkDestroySurfaceKHR(m_deps.instance->handle(), m_surface, nullptr);
   }
+}
+
+// TODO: Instead of querying for extent at swapchain recreation, we could
+// store it proactively at message/event callback
+VkExtent2D Surface::internalExtent() const {
+  VkExtent2D extent{};
+#ifdef VK_USE_PLATFORM_WIN32_KHR
+  RECT extendedFrameBounds{};
+  // if window styles and procedure are properly setup, these 2 values
+  // (dwm and client) should always be equal (assuming WM_NCCALCSIZE cancels
+  // non-client area)
+  if (!SUCCEEDED(DwmGetWindowAttribute(
+          m_deps.internal.window, DWMWA_EXTENDED_FRAME_BOUNDS,
+          &extendedFrameBounds, sizeof(extendedFrameBounds)))) {
+    GetClientRect(m_deps.internal.window, &extendedFrameBounds);
+  }
+  extent.width = extendedFrameBounds.right - extendedFrameBounds.left;
+  extent.height = extendedFrameBounds.bottom - extendedFrameBounds.top;
+#elif defined(VK_USE_PLATFORM_ANDROID_KHR)
+  LOGI << "[Surface::internalExtent] computing ANativeWindow extent"
+       << std::endl;
+  int32_t aWidth = ANativeWindow_getWidth(m_deps.internal.window);
+  int32_t aHeight = ANativeWindow_getHeight(m_deps.internal.window);
+  AVK_EXT_CHECK(aWidth > 0 && aHeight > 0);
+  extent.width = static_cast<uint32_t>(aWidth);
+  extent.height = static_cast<uint32_t>(aHeight);
+  LOGI << "[Surface::internalExtent] computed ANativeWindow extent: " << aWidth
+       << 'x' << aHeight << std::endl;
+#elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
+#  error "TODO"
+#elif defined(VK_USE_PLATFORM_METAL_EXT)
+#  error "TODO"
+#else
+#endif
+  return extent;
 }
 
 }  // namespace avk::vk

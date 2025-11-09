@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cassert>
 #include <memory>
+#include <unordered_set>
 #include <vector>
 
 using namespace avk;
@@ -49,6 +50,16 @@ struct OptionalFeatures {
 };
 
 // ---------------------------------------------------------------------------
+
+static void debugPrintDeviceExtensions(
+    std::vector<char const*> const& extensions) {
+#define PREFIX "[Device::createDevice::debugPrintDeviceExtensions] "
+  LOGI << PREFIX "Enabled Extensions: " << extensions.size() << std::endl;
+  for (char const* extName : extensions) {
+    LOGI << PREFIX "  " << extName << std::endl;
+  }
+#undef PREFIX
+}
 
 static void fillRequiredExtensions(
     std::vector<char const*>& requiredExtensions) {
@@ -88,14 +99,14 @@ static void fillRequiredExtensions(
 
 static bool anyRequiredFeaturesMissing(VkPhysicalDevice dev) AVK_NO_CFI {
   // Prepare Structs to query Necessary Features
-  VkPhysicalDeviceFeatures2KHR features{};
+  VkPhysicalDeviceFeatures2 features{};
   VkPhysicalDeviceVulkanMemoryModelFeaturesKHR vulkanMemoryModel{};
   VkPhysicalDeviceUniformBufferStandardLayoutFeaturesKHR ubStandardLayout{};
   VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timelineSemaphoreFeat{};
   VkPhysicalDeviceBufferDeviceAddressFeaturesKHR bufferDeviceAddressFeat{};
   VkPhysicalDeviceInlineUniformBlockFeaturesEXT inlineUniformFeat{};
 
-  features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2_KHR;
+  features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
   vulkanMemoryModel.sType =
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES_KHR;
   ubStandardLayout.sType =
@@ -113,35 +124,35 @@ static bool anyRequiredFeaturesMissing(VkPhysicalDevice dev) AVK_NO_CFI {
   timelineSemaphoreFeat.pNext = &bufferDeviceAddressFeat;
   bufferDeviceAddressFeat.pNext = &inlineUniformFeat;
 
-  vkGetPhysicalDeviceFeatures2KHR(dev, &features);
+  vkGetPhysicalDeviceFeatures2(dev, &features);
 
   if (!vulkanMemoryModel.vulkanMemoryModel) {
-    return false;
+    return true;
   } else if (!ubStandardLayout.uniformBufferStandardLayout) {
-    return false;
+    return true;
   } else if (!bufferDeviceAddressFeat.bufferDeviceAddress) {
-    return false;
+    return true;
   } else if (!timelineSemaphoreFeat.timelineSemaphore) {
-    return false;
+    return true;
   } else if (!inlineUniformFeat.inlineUniformBlock) {
-    return false;
+    return true;
   }
 
-  return true;
+  return false;
 }
 
 static void setOptionalFeaturesForDevice(
     VkPhysicalDevice dev, OptionalFeatures& outOptFeatures) AVK_NO_CFI {
-  VkPhysicalDeviceFeatures2KHR features{};
+  VkPhysicalDeviceFeatures2 features{};
   VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT swapMain1Feat{};
 
-  features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2_KHR;
+  features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
   swapMain1Feat.sType =
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
 
   features.pNext = &swapMain1Feat;
 
-  vkGetPhysicalDeviceFeatures2KHR(dev, &features);
+  vkGetPhysicalDeviceFeatures2(dev, &features);
 
   outOptFeatures.swapchainMaintenance1 = swapMain1Feat.swapchainMaintenance1;
   outOptFeatures.textureCompressionASTC_LDR =
@@ -188,6 +199,7 @@ static bool isSoC(VkPhysicalDevice dev, VkPhysicalDeviceType deviceType) {
 static void setCompressedFormats(
     VkPhysicalDevice chosen, OptionalFeatures& outOptFeatures,
     utils::SampledImageCompressedFormats& comprFormats) AVK_NO_CFI {
+  LOGI << "[Device::choosePhysicalDevice::setCompressedFormats]" << std::endl;
   VkFormat proposedLinear = VK_FORMAT_UNDEFINED;
   VkFormat proposedsRGB = VK_FORMAT_UNDEFINED;
   VkFormatProperties2KHR linearFormatProperties{};
@@ -215,10 +227,10 @@ static void setCompressedFormats(
 
   if (proposedLinear != VK_FORMAT_UNDEFINED &&
       proposedsRGB != VK_FORMAT_UNDEFINED) {
-    vkGetPhysicalDeviceFormatProperties2KHR(chosen, proposedLinear,
-                                            &linearFormatProperties);
-    vkGetPhysicalDeviceFormatProperties2KHR(chosen, proposedsRGB,
-                                            &sRGBFormatProperties);
+    vkGetPhysicalDeviceFormatProperties2(chosen, proposedLinear,
+                                         &linearFormatProperties);
+    vkGetPhysicalDeviceFormatProperties2(chosen, proposedsRGB,
+                                         &sRGBFormatProperties);
     if ((linearFormatProperties.formatProperties.linearTilingFeatures &
          sampled_BlitSrc_Transfer) &&
         (linearFormatProperties.formatProperties.optimalTilingFeatures &
@@ -227,7 +239,7 @@ static void setCompressedFormats(
       if (proposedLinear != VK_FORMAT_EAC_R11_UNORM_BLOCK) {  // special case
         comprFormats.linear_RGB = proposedLinear;
       } else {
-        vkGetPhysicalDeviceFormatProperties2KHR(
+        vkGetPhysicalDeviceFormatProperties2(
             chosen, VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK, &linearFormatProperties);
         if ((linearFormatProperties.formatProperties.linearTilingFeatures &
              sampled_BlitSrc_Transfer) &&
@@ -251,10 +263,7 @@ static void setCompressedFormats(
     Instance* instance, Extensions& outExtensions,
     OptionalFeatures& outOptFeatures,
     utils::SampledImageCompressedFormats& comprFormats) AVK_NO_CFI {
-  if (instance != VK_NULL_HANDLE) {
-    return VK_NULL_HANDLE;
-  }
-
+  assert(instance);
   uint32_t physicalDeviceCount = 0;
   VK_CHECK(vkEnumeratePhysicalDevices(instance->handle(), &physicalDeviceCount,
                                       nullptr));
@@ -262,6 +271,8 @@ static void setCompressedFormats(
   std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
   VK_CHECK(vkEnumeratePhysicalDevices(instance->handle(), &physicalDeviceCount,
                                       physicalDevices.data()));
+  LOGI << "[Device::choosePhysicalDevice] Enumerated " << physicalDeviceCount
+       << " Vulkan Capable Devices" << std::endl;
 
   VkPhysicalDevice chosen = VK_NULL_HANDLE;
   uint32_t maxScoreSoFar = 0;
@@ -276,6 +287,8 @@ static void setCompressedFormats(
   extensionProperties.reserve(256);
 
   for (VkPhysicalDevice dev : physicalDevices) {
+    LOGI << "[Device::choosePhysicalDevice] Examining Physical Device "
+         << std::hex << dev << std::dec << std::endl;
     // check if required extensions are supported
     uint32_t score = 0;
     uint32_t devExtCount = 0;
@@ -296,11 +309,15 @@ static void setCompressedFormats(
         continue;
       }
     }
+    LOGI << "[Device::choosePhysicalDevice] Physical Device " << std::hex << dev
+         << std::dec << " Supports all required extensions" << std::endl;
 
     // check if required features are supported
     if (anyRequiredFeaturesMissing(dev)) {
       continue;
     }
+    LOGI << "[Device::choosePhysicalDevice] Physical Device " << std::hex << dev
+         << std::dec << " Supports all required Features " << std::endl;
 
     // evaluate device type
     VkPhysicalDeviceProperties2 props{};
@@ -309,9 +326,15 @@ static void setCompressedFormats(
 
     switch (props.properties.deviceType) {
       case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+        LOGI << "[Device::choosePhysicalDevice] Physical Device " << std::hex
+             << dev << std::dec << " VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU"
+             << std::endl;
         score += 400;
         break;
       case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+        LOGI << "[Device::choosePhysicalDevice] Physical Device " << std::hex
+             << dev << std::dec << " VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU"
+             << std::endl;
         score += 300;
         break;
       case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
@@ -327,6 +350,9 @@ static void setCompressedFormats(
 
     // if valid device, compare its score
     if (score > maxScoreSoFar) {
+      LOGI << "[Device::choosePhysicalDevice] Physical Device " << std::hex
+           << dev << std::dec << " Highest Score" << std::endl;
+      chosen = dev;
       setOptionalFeaturesForDevice(dev, outOptFeatures);
       outOptFeatures.isSoC = isSoC(dev, props.properties.deviceType);
     }
@@ -350,18 +376,29 @@ static void setCompressedFormats(
         outExtensions.enable(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME));
   }
 
+  LOGI << "[Device::choosePhysicalDevice] Physical Device " << std::hex
+       << chosen << std::dec << " chosen" << std::endl;
   return chosen;
 }
 
 static bool getPresentationSupport(
+    [[maybe_unused]] VkInstance instance,
     [[maybe_unused]] VkPhysicalDevice physicalDevice,
     [[maybe_unused]] uint32_t index,
     [[maybe_unused]] Surface const* surface) AVK_NO_CFI {
 #ifdef VK_USE_PLATFORM_WIN32_KHR
-  return vkGetPhysicalDeviceWin32PresentationSupportKHR(physicalDevice, index);
+  auto* pfnGetPhysicalDeviceWin32PresentationSupportKHR =
+      reinterpret_cast<PFN_vkGetPhysicalDeviceWin32PresentationSupportKHR>(
+          vkGetInstanceProcAddr(
+              instance, "vkGetPhysicalDeviceWin32PresentationSupportKHR"));
+  return pfnGetPhysicalDeviceWin32PresentationSupportKHR(physicalDevice, index);
 #elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
-  return vkGetPhysicalDeviceWaylandPresentationSupportKHR(physicalDevice, index,
-                                                          surface->display());
+  auto* pfnGetPhysicalDeviceWaylandPresentationSupportKHR =
+      reinterpret_cast<PFN_vkGetPhysicalDeviceWaylandPresentationSupportKHR>(
+          vkGetInstanceProcAddr(
+              instance, "vkGetPhysicalDeviceWaylandPresentationSupportKHR"));
+  return pfnGetPhysicalDeviceWaylandPresentationSupportKHR(
+      physicalDevice, index, surface->display());
 #elif defined(VK_USE_PLATFORM_METAL_EXT) || defined(VK_USE_PLATFORM_ANDROID_KHR)
   return true;
 #else
@@ -373,7 +410,8 @@ static bool getPresentationSupport(
 /// presentation
 /// Note: Queue Priorities on each element still to populate
 static std::vector<VkDeviceQueueCreateInfo> newDeviceQueuesCreateInfos(
-    VkPhysicalDevice physicalDevice, Surface const* surface,
+    VkInstance instance, VkPhysicalDevice physicalDevice,
+    Surface const* surface,
     utils::QueueFamilyMap& outQueueFamilies) AVK_NO_CFI {
   std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
   queueCreateInfos.reserve(4);
@@ -383,20 +421,20 @@ static std::vector<VkDeviceQueueCreateInfo> newDeviceQueuesCreateInfos(
   createInfo.queueCount = 1;
 
   uint32_t count = 0;
-  vkGetPhysicalDeviceQueueFamilyProperties2KHR(physicalDevice, &count, nullptr);
+  vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, &count, nullptr);
   std::vector<VkQueueFamilyProperties2> queueProperties{count};
   for (VkQueueFamilyProperties2& prop : queueProperties) {
     prop.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2_KHR;
   }
-  vkGetPhysicalDeviceQueueFamilyProperties2KHR(physicalDevice, &count,
-                                               queueProperties.data());
+  vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, &count,
+                                            queueProperties.data());
 
   uint32_t familyIndex = 0;
   for (VkQueueFamilyProperties2 const& props : queueProperties) {
     // TODO add per WSI type surface support check
     uint32_t const index = familyIndex++;
     bool const supportsPresent =
-        getPresentationSupport(physicalDevice, index, surface);
+        getPresentationSupport(instance, physicalDevice, index, surface);
     bool const graphicsComputeTransfer =
         props.queueFamilyProperties.queueFlags &
         (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT);
@@ -412,7 +450,8 @@ static std::vector<VkDeviceQueueCreateInfo> newDeviceQueuesCreateInfos(
   return queueCreateInfos;
 }
 
-static VkDevice createDevice(VkPhysicalDevice physicalDevice,
+static VkDevice createDevice(VkInstance instance,
+                             VkPhysicalDevice physicalDevice,
                              Extensions const& extensions,
                              OptionalFeatures const& optFeatures,
                              Surface const* surface,
@@ -480,7 +519,8 @@ static VkDevice createDevice(VkPhysicalDevice physicalDevice,
 
   // Create the device::Queues (single)
   std::vector<VkDeviceQueueCreateInfo> queueCreateInfos =
-      newDeviceQueuesCreateInfos(physicalDevice, surface, queueFamilies);
+      newDeviceQueuesCreateInfos(instance, physicalDevice, surface,
+                                 queueFamilies);
   float const highestPriority = 1.0f;
   for (VkDeviceQueueCreateInfo& queueCreateInfo : queueCreateInfos) {
     queueCreateInfo.queueCount = 1;
@@ -492,6 +532,7 @@ static VkDevice createDevice(VkPhysicalDevice physicalDevice,
   createInfo.pQueueCreateInfos = queueCreateInfos.data();
 
   VK_CHECK(vkCreateDevice(physicalDevice, &createInfo, nullptr, &device));
+  debugPrintDeviceExtensions(extensions.enabled);
   return device;
 }
 
@@ -530,7 +571,7 @@ namespace avk::vk {
 
 Device::Device(Instance* instance, Surface* surface) AVK_NO_CFI
     : m_deps({instance, surface}) {
-  assert(instance);
+  assert(instance && surface);
   Extensions extensions;
   OptionalFeatures optFeatures{};
 
@@ -542,19 +583,29 @@ Device::Device(Instance* instance, Surface* surface) AVK_NO_CFI
 
   // 2. Device creation, extract graphics/compute/transfer/present queue, load
   // table
-  m_device = createDevice(m_physicalDevice, extensions, optFeatures,
-                          m_deps.surface, m_queueFamilies);
+  LOGI << "[Device] Creating Device" << std::endl;
+  m_device =
+      createDevice(m_deps.instance->handle(), m_physicalDevice, extensions,
+                   optFeatures, m_deps.surface, m_queueFamilies);
+  LOGI << "[Device] Created Device " << std::hex << m_device << std::dec
+       << " | Selected GRAPHICS Queue Family as "
+       << m_queueFamilies.universalGraphics << std::endl;
+  LOGI << "[Device] Allocating Volk Device Function Table" << std::endl;
+  m_table = std::make_unique<VolkDeviceTable>();
+  AVK_EXT_CHECK(m_table);
+  memset(m_table.get(), 0, sizeof(VolkDeviceTable));
+  volkLoadDeviceTable(m_table.get(), m_device);
+  LOGI << "[Device] Getting Queue 0 From GRAPHICS" << std::endl;
   VkDeviceQueueInfo2 queueInfo{};
   queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2;
   queueInfo.queueFamilyIndex = m_queueFamilies.universalGraphics;
   queueInfo.queueIndex = 0;
-  vkGetDeviceQueue2(m_device, &queueInfo, &m_queue);
-  m_table = std::make_unique<VolkDeviceTable>();
-  AVK_EXT_CHECK(m_table);
-  volkLoadDeviceTable(m_table.get(), m_device);
+  m_table->vkGetDeviceQueue2(m_device, &queueInfo, &m_queue);
 
-  // 3. create allocator and pool
+  // 3. create allocator and eventually pool
+  LOGI << "[Device] Creating VMA Allocator" << std::endl;
   m_vmaVulkanFunctions = std::make_unique<VmaVulkanFunctions>();
+  memset(m_vmaVulkanFunctions.get(), 0, sizeof(VmaVulkanFunctions));
   m_vmaAllocator =
       newVmaAllocator(instance->handle(), instance->vulkanApiVersion(),
                       m_physicalDevice, m_device, m_vmaVulkanFunctions.get());
