@@ -1,24 +1,11 @@
 #pragma once
 
-#include <string>
-#include <type_traits>
-#include <vector>
-
-#include "render/utils-vk.h"
+#include "render/vk/common-vk.h"
 #include "utils/bits.h"
 
-namespace avk {
+namespace avk::vk {
 
-class ShaderModuleVk {
- public:
-  std::string combinedSlangSrc;
-  std::vector<uint32_t> spirvBinary;
-  VkShaderModule shaderModule = VK_NULL_HANDLE;
-
-  void destroy(DiscardPoolVk& discardPool);
-};
-
-// -- Compute Pipeline Parameters --
+// ---------------- COMPUTE PIPELINE HASH ------------------------------------
 
 // struct to identify compute pipeline
 struct ComputeInfo {
@@ -32,18 +19,20 @@ inline bool operator==(ComputeInfo const& a, ComputeInfo const& b) {
          a.pipelineLayout == b.pipelineLayout;
 }
 
-}  // namespace avk
+}  // namespace avk::vk
 
 template <>
-struct std::hash<avk::ComputeInfo> {
-  size_t operator()(avk::ComputeInfo const& computeInfo) const noexcept {
+struct std::hash<avk::vk::ComputeInfo> {
+  size_t operator()(avk::vk::ComputeInfo const& computeInfo) const noexcept {
     size_t hash = reinterpret_cast<uint64_t>(computeInfo.shaderModule);
     hash = hash * 33 ^ reinterpret_cast<uint64_t>(computeInfo.pipelineLayout);
     return hash;
   }
 };
 
-namespace avk {
+// ---------------- GRAPHICS PIPELINE HASH -----------------------------------
+
+namespace avk::vk {
 
 enum class EPipelineFlags : uint32_t {
   eDepthBias = 1u << 0,
@@ -317,6 +306,8 @@ struct GraphicsInfo {
   PreRasterization preRasterization;
   FragmentShader fragmentShader;
   FragmentOut fragmentOut;
+  VkRenderPass renderPass;
+  uint32_t subpass;
 
   // add GPU state?
   PipelineOpts opts;
@@ -327,105 +318,40 @@ struct GraphicsInfo {
 inline bool operator==(GraphicsInfo const& a, GraphicsInfo const& b) {
   if (a.vertexIn != b.vertexIn || a.preRasterization != b.preRasterization ||
       a.fragmentShader != b.fragmentShader ||
-      a.pipelineLayout != b.pipelineLayout || a.opts != b.opts) {
+      a.pipelineLayout != b.pipelineLayout || a.opts != b.opts ||
+      a.renderPass != b.renderPass || a.subpass != b.subpass) {
     return false;
   }
   return true;
 }
 
-}  // namespace avk
+}  // namespace avk::vk
 
 template <>
-struct std::hash<avk::GraphicsInfo> {
-  size_t operator()(avk::GraphicsInfo const& graphicsInfo) const {
+struct std::hash<avk::vk::GraphicsInfo> {
+  size_t operator()(avk::vk::GraphicsInfo const& graphicsInfo) const {
     uint64_t hash = 33 ^ graphicsInfo.vertexIn.hash();
     hash = hash * 33 ^ graphicsInfo.preRasterization.hash();
     hash = hash * 33 ^ graphicsInfo.fragmentShader.hash();
     hash = hash * 33 ^ graphicsInfo.fragmentOut.hash();
     hash = hash * 33 ^ reinterpret_cast<uint64_t>(graphicsInfo.pipelineLayout);
     hash = hash * 33 ^ graphicsInfo.opts.hash();
+    hash = hash * 33 ^ reinterpret_cast<uint64_t>(graphicsInfo.renderPass);
+    hash = hash * 33 ^ graphicsInfo.subpass;
     return hash;
   }
 };
 
-namespace avk {
+// ------------------- Factory Methods for quick graphics info ---------------
 
-class VkPipelinePool {
- public:
-  VkPipelinePool();
-  VkPipelinePool(VkPipelinePool const&) = delete;
-  VkPipelinePool(VkPipelinePool&&) noexcept = delete;
-  VkPipelinePool& operator=(VkPipelinePool const&) = delete;
-  VkPipelinePool& operator=(VkPipelinePool&&) noexcept = delete;
+namespace avk::vk {
+class Device;
 
-  VkPipeline getOrCreateComputePipeline(ContextVk const& context,
-                                        ComputeInfo& computeInfo,
-                                        bool isStaticShader,
-                                        VkPipeline pipelineBase);
-  VkPipeline getOrCreateGraphicsPipeline(ContextVk const& context,
-                                         GraphicsInfo& graphicsInfo,
-                                         bool isStaticShader,
-                                         VkPipeline pipelineBase);
+VkPipelineLayout createPipelineLayout(
+    Device* device,
+    VkDescriptorSetLayout const* pDescriptorSetLayouts = nullptr,
+    uint32_t descriptorSetLayoutCount = 0,
+    VkPushConstantRange const* pPushConstantRanges = nullptr,
+    uint32_t pushConstantRangeCount = 0);
 
-  // erase pipelines from the maps and inserts them in the discard pool, such
-  // that they can live there until they are no longer in use
-  // context must be the same used to create the pipelines
-  // TODO possible: hash function for context, such that we can filter by
-  // context
-  // WARNING: calling this won't discard Vulkan Handles inside
-  // the info structs. only VkPipelines
-  void discardAllPipelines(DiscardPoolVk& discardPool,
-                           VkPipelineLayout pipelineLayout);
-
-  void readStaticCacheFromDisk();
-  void writeStaticCacheToDisk();
-
-  // WARNING: calling this won't destroy Vulkan Handles inside
-  // the info structs. only VkPipelines
-  void destroyAllPipelines(ContextVk const& context);
-
- private:
-  std::unordered_map<GraphicsInfo, VkPipeline> m_graphicsPipelines;
-  std::unordered_map<ComputeInfo, VkPipeline> m_computePipelines;
-  // partially initialized structure to reuse
-  VkComputePipelineCreateInfo m_computePipelineCreateInfo;
-
-  static uint32_t constexpr ShaderStageCount = 3;
-
-  VkGraphicsPipelineCreateInfo m_graphicsPipelineCreateInfo;
-  VkPipelineRenderingCreateInfo m_pipelineRenderingCreateInfo;
-  VkPipelineShaderStageCreateInfo
-      m_pipelineShaderStageCreateInfos[ShaderStageCount];
-  VkPipelineInputAssemblyStateCreateInfo m_pipelineInputAssemblyStateCreateInfo;
-  VkPipelineVertexInputStateCreateInfo m_pipelineVertexInputStateCreateInfo;
-
-  VkPipelineRasterizationStateCreateInfo m_pipelineRasterizationStateCreateInfo;
-
-  // no provoking vertex info
-  std::vector<VkDynamicState> m_dynamicStates;
-  VkPipelineDynamicStateCreateInfo m_pipelineDynamicStateCreateInfo;
-
-  VkPipelineViewportStateCreateInfo m_pipelineViewportStateCreateInfo;
-  VkPipelineDepthStencilStateCreateInfo m_pipelineDepthStencilStateCreateInfo;
-
-  std::vector<VkSampleMask> m_sampleMasks;  // TODO in GraphicsInfo?
-  VkPipelineMultisampleStateCreateInfo m_pipelineMultisampleStateCreateInfo;
-  VkPipelineTessellationStateCreateInfo m_pipelineTessellationStateCreateInfo;
-
-  std::vector<VkPipelineColorBlendAttachmentState>
-      m_pipelineColorBlendAttachmentStates;
-  VkPipelineColorBlendStateCreateInfo m_pipelineColorBlendStateCreateInfo;
-  VkPipelineColorBlendAttachmentState
-      m_pipelineColorBlendAttachmentStateTemplate;
-
-  // VkSpecializationInfo m_specializationInfo;
-  // std::vector<VkSpecializationMapEntry> m_specializationMapEntries;
-  // VkPushConstantRange m_pushConstantRange;
-  // VkPipelineCache m_pipelineCacheStatic;
-  // VkPipelineCache m_pipelineCacheNonStatic;
-
-  // mutex to be acquired whenever getting/creating a pipeline
-  std::mutex m_mutex;
-};
-
-}  // namespace avk
+}  // namespace avk::vk

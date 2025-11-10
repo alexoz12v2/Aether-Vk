@@ -30,10 +30,12 @@ static void onAppCmd([[maybe_unused]] struct android_app* app, int32_t cmd) {
     }
     case APP_CMD_GAINED_FOCUS: {
       s_mlogi << "APP_CMD_GAINED_FOCUS" << std::endl;
+      appManager->resumeRendering();
       break;
     }
     case APP_CMD_LOST_FOCUS: {
       s_mlogi << "APP_CMD_LOST_FOCUS" << std::endl;
+      appManager->pauseRendering();
       break;
     }
     case APP_CMD_CONTENT_RECT_CHANGED: {
@@ -46,8 +48,12 @@ static void onAppCmd([[maybe_unused]] struct android_app* app, int32_t cmd) {
       // TODO request resize
       break;
     }
-    // APP_CMD_RESUME -> vkDeviceWaitIdle, recreate Swapchain
-    // APP_CMD_PAUSE -> destroy swapchain/discard swapchain (or just stop rendering)
+    case APP_CMD_RESUME:
+      // TODO -> vkDeviceWaitIdle, recreate Swapchain
+      appManager->resumeRendering();
+    case APP_CMD_PAUSE:
+      // TODO -> destroy swapchain/discard swapchain (or just stop rendering)
+      appManager->pauseRendering();
     default:
       break;
   }
@@ -132,13 +138,11 @@ static void handleInputEvents([[maybe_unused]] struct android_app* app,
   }
 }
 
+// TODO see if stuff allocated in android_main is correctly
+// destructed even if you exit from a android lifecycle
 extern "C" void android_main(struct android_app* app) {
   // log something
   s_mlogi << "Hello Android World" << std::endl;
-
-  // attach current thread to JNI (TODO see later)
-  JNIEnv* jniEnv = nullptr;
-  app->activity->vm->AttachCurrentThread(&jniEnv, nullptr);
 
   // TODO should retore state?
   if (app->savedState != nullptr) {
@@ -180,8 +184,4 @@ extern "C" void android_main(struct android_app* app) {
   app->userData = nullptr;
 
   s_mlogi << "Detaching current thread from JNI" << std::endl;
-  if (jniEnv) {
-    app->activity->vm->DetachCurrentThread();
-    jniEnv = nullptr;
-  }
 }

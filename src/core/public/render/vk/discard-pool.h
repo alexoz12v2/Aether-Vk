@@ -4,6 +4,7 @@
 #include <render/vk/device-vk.h>
 
 // standard library
+#include <thread>
 #include <vector>
 
 namespace avk::vk::utils {
@@ -47,6 +48,10 @@ class TimelineResources : public std::vector<std::pair<uint64_t, Item>> {
 
 namespace avk::vk {
 
+// should outlive the discard pool!
+class DescriptorPools;
+class CommandPools;
+
 class DiscardPool : public NonMoveable {
  public:
   DiscardPool(Device* device);
@@ -64,7 +69,14 @@ class DiscardPool : public NonMoveable {
   void discardShaderModule(VkShaderModule shaderModule, uint64_t value);
   void discardPipeline(VkPipeline pipeline, uint64_t value);
   void discardPipelineLayout(VkPipelineLayout pipelineLayout, uint64_t value);
-  // TODO
+  void discardDescriptorPoolForReuse(VkDescriptorPool descriptorPool,
+                                     DescriptorPools* pools, uint64_t value);
+  void discardCommandPoolForReuse(VkCommandPool commandPool,
+                                  CommandPools* pools, std::thread::id tid,
+                                  uint64_t value);
+  // stuff from renderpasses (to see if needed)
+  void discardRenderPass(VkRenderPass renderPass, uint64_t value);
+  void discardFramebuffer(VkFramebuffer framebuffer, uint64_t value);
 
   void destroyDiscardedResources(bool force = false);
   inline VkSemaphore timelineSemaphore() const { return m_timeline; }
@@ -83,7 +95,20 @@ class DiscardPool : public NonMoveable {
   utils::TimelineResources<VkShaderModule> m_shaderModules;
   utils::TimelineResources<VkPipeline> m_pipelines;
   utils::TimelineResources<VkPipelineLayout> m_pipelineLayouts;
-  // TODO add descriptor pools
+
+  utils::TimelineResources<std::pair<VkDescriptorPool, DescriptorPools*>>
+      m_descriptorPools;
+
+  struct CmdDiscard {
+    VkCommandPool pool;
+    std::thread::id tid;
+    CommandPools* manager;
+  };
+  utils::TimelineResources<CmdDiscard> m_commandPools;
+
+  // stuff from renderpasses (to see if needed)
+  utils::TimelieResources<VkRenderPass> m_renderPasses;
+  utils::TimelineResources<VkFramebuffer> m_framebuffers;
 
   // maintain the timeline inside it
   VkSemaphore m_timeline = VK_NULL_HANDLE;

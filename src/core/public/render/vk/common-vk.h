@@ -179,6 +179,10 @@ struct Expected {
 
   inline operator bool() const { return result >= 0; }
   inline void crashIfErr() const { VK_CHECK(result); }
+  inline H get() const {
+    VK_CHECK(result);
+    return handle;
+  }
 };
 
 }  // namespace avk::vk

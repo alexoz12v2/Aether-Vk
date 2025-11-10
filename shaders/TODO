@@ -4,3 +4,61 @@ more dynamic
 Compilation Command
 
 slangc -lang slang -matrix-layout-column-major -restrictive-capability-check -target spirv -std 2018 --
+
+To enable some extension slang compiler exposes capabilities
+
+slangc -lang slang -matrix-layout-column-major -restrictive-capability-check -capability spvVulkanMemoryModelKHR -target spirv -std 2018 -o .\triangle.vert.slang.spv -- .\triangle.vert.slang
+
+Example to compile multiple shader stages from a single file, specifying a shader model (which slangc calls "profile")
+
+```
+slangc -profile glsl_450 -entry fragmentEntry -matrix-layout-column-major -restrictive-capability-check -capability spvVulkanMemoryModelKHR -stage fragment -target spirv -std 2018 -o .\basic-triangle.frag.spv -- .\basic-triangle.slang
+slangc -profile glsl_450 -entry vertexEntry -matrix-layout-column-major -restrictive-capability-check -capability spvVulkanMemoryModelKHR -stage vertex -target spirv -std 2018 -o .\basic-triangle.vert.spv -- .\basic-triangle.slang
+```
+Warning: By default, even if you define an arbitrary name for a shader entry point so that slang doesn't give you an
+error when packing multiple entry points together, the resulting SPIR-V binaries still use "main" as `OpEntryPoint`
+
+```
+PS Y:\Aether-Vk\shaders> spirv-dis .\basic-triangle.vert.spv
+; SPIR-V
+; Version: 1.3
+; Generator: Khronos Slang Compiler; 0
+; Bound: 35
+; Schema: 0
+               OpCapability Shader
+               OpCapability VulkanMemoryModel
+               OpExtension "SPV_KHR_vulkan_memory_model"
+               OpMemoryModel Logical Vulkan
+               OpEntryPoint Vertex %vertexEntry "main" %gl_Position %entryPointParam_vertexEntry_Color %input_Position %input_Color
+               OpSource Slang 1
+               OpName %input_Position "input.Position"
+               OpName %input_Color "input.Color"
+               OpName %entryPointParam_vertexEntry_Color "entryPointParam_vertexEntry.Color"
+               OpName %vertexEntry "vertexEntry"
+               OpDecorate %input_Position Location 0
+               OpDecorate %input_Color Location 1
+               OpDecorate %gl_Position BuiltIn Position
+               OpDecorate %entryPointParam_vertexEntry_Color Location 0
+       %void = OpTypeVoid
+          %3 = OpTypeFunction %void
+      %float = OpTypeFloat 32
+    %v4float = OpTypeVector %float 4
+    %v3float = OpTypeVector %float 3
+%_ptr_Input_v3float = OpTypePointer Input %v3float
+    %float_1 = OpConstant %float 1
+%_ptr_Output_v4float = OpTypePointer Output %v4float
+%_ptr_Output_v3float = OpTypePointer Output %v3float
+%input_Position = OpVariable %_ptr_Input_v3float Input
+%input_Color = OpVariable %_ptr_Input_v3float Input
+%gl_Position = OpVariable %_ptr_Output_v4float Output
+%entryPointParam_vertexEntry_Color = OpVariable %_ptr_Output_v3float Output
+%vertexEntry = OpFunction %void None %3
+          %4 = OpLabel
+         %11 = OpLoad %v3float %input_Position
+         %14 = OpLoad %v3float %input_Color
+         %20 = OpCompositeConstruct %v4float %11 %float_1
+               OpStore %gl_Position %20
+               OpStore %entryPointParam_vertexEntry_Color %14
+               OpReturn
+               OpFunctionEnd
+```
