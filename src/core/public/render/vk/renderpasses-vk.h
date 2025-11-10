@@ -5,6 +5,8 @@
 
 namespace avk::vk {
 
+VkFormat basicDepthStencilFormat(VkPhysicalDevice physicalDevice);
+
 /// Creates a `VkRenderPass` with Color and Depth Attachment
 /// (without multisampling)
 Expected<VkRenderPass> basicRenderPass(Device const* device, VkFormat colorFmt,

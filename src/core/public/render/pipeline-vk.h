@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "render/utils-vk.h"
+#include "utils/bits.h"
 
 namespace avk {
 
@@ -43,33 +44,6 @@ struct std::hash<avk::ComputeInfo> {
 };
 
 namespace avk {
-
-// Combines two hash values into one (from Boost's hash_combine)
-inline void hashCombine(std::size_t& seed, std::size_t value) {
-  seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-}
-
-// Generic hash functor for std::vector<T>
-template <typename T>
-struct VectorHash {
-  std::size_t operator()(const std::vector<T>& v) const {
-    std::size_t seed = v.size();
-    std::hash<T> hasher;
-    for (const auto& elem : v) {
-      hashCombine(seed, hasher(elem));
-    }
-    return seed;
-  }
-
-  template <typename F>
-  std::size_t operator()(const std::vector<T>& v, F&& f) const {
-    std::size_t seed = v.size();
-    for (const auto& elem : v) {
-      hashCombine(seed, f(elem));
-    }
-    return seed;
-  }
-};
 
 enum class EPipelineFlags : uint32_t {
   eDepthBias = 1u << 0,
@@ -185,16 +159,15 @@ struct GraphicsInfo {
     uint64_t hash() const {
       uint64_t hash = static_cast<uint64_t>(topology);
       hash = hash * 33 ^
-             VectorHash<VkVertexInputAttributeDescription>{}(
+             vectorHash(
                  attributes, [](VkVertexInputAttributeDescription const& x) {
                    return ((x.binding * 33 ^ x.location) * 33 ^ x.offset) * 33 ^
                           x.format;
                  });
       hash = hash * 33 ^
-             VectorHash<VkVertexInputBindingDescription>{}(
-                 bindings, [](VkVertexInputBindingDescription const& x) {
-                   return (x.binding * 33 ^ x.stride) * 33 ^ x.inputRate;
-                 });
+             vectorHash(bindings, [](VkVertexInputBindingDescription const& x) {
+               return (x.binding * 33 ^ x.stride) * 33 ^ x.inputRate;
+             });
       return hash;
     }
   };
@@ -294,8 +267,7 @@ struct GraphicsInfo {
       uint64_t hash = depthAttachmentFormat;
       hash = hash * 33 ^ stencilAttachmentFormat;
       hash = hash * 33 ^ colorAttachmentCount;
-      hash = hash * 33 ^
-             VectorHash<VkFormat>{}(colorAttachmentFormats,
+      hash = hash * 33 ^ vectorHash(colorAttachmentFormats,
                                     [](VkFormat format) { return format; });
       return hash;
     }

@@ -138,6 +138,13 @@ class Swapchain : public NonMoveable {
 
   utils::SurfacePreRotation preRotationQuat() const;
 
+  inline VkImage imageAt(size_t index) const {
+    return index < m_images.size() ? m_images[index].image : VK_NULL_HANDLE;
+  }
+  inline VkImageView imageViewAt(size_t index) const {
+    return index < m_images.size() ? m_images[index].imageView : VK_NULL_HANDLE;
+  }
+
  private:
   // dependencies which must outlive this object
   struct Deps {

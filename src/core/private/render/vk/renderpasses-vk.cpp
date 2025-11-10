@@ -5,6 +5,26 @@
 
 namespace avk::vk {
 
+VkFormat basicDepthStencilFormat(VkPhysicalDevice physicalDevice) {
+  // assuming we want VK_IMAGE_TILING_OPTIMAL and not linear
+  VkFormatProperties formatProperties{};
+  // at least one of D24/S8 or D32/S8 are supported per specification
+  vkGetPhysicalDeviceFormatProperties(
+      physicalDevice, VK_FORMAT_D24_UNORM_S8_UINT, &formatProperties);
+  if (formatProperties.optimalTilingFeatures &
+      VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+    return VK_FORMAT_D24_UNORM_S8_UINT;
+  }
+  vkGetPhysicalDeviceFormatProperties(
+      physicalDevice, VK_FORMAT_D32_SFLOAT_S8_UINT, &formatProperties);
+  if (formatProperties.optimalTilingFeatures &
+      VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+    return VK_FORMAT_D32_SFLOAT_S8_UINT;
+  }
+  // unreachable
+  return VK_FORMAT_UNDEFINED;
+}
+
 Expected<VkRenderPass> basicRenderPass(Device const* device, VkFormat colorFmt,
                                        VkFormat depthFmt) AVK_NO_CFI {
   auto const* const vkDevApi = device->table();

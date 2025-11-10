@@ -8,13 +8,24 @@
 
 namespace avk::vk {
 
+class DiscardPool;
+
 class DescriptorPools : public NonMoveable {
  public:
-    DescriptorPools(Device* device);
-    ~DescriptorPools();
+  DescriptorPools(Device* device);
+  ~DescriptorPools();
 
-    VkDescriptorSet allocate(VkDescriptorSetLayout descriptorSetLayout);
-    void recycle(VkDescriptorPool pool);
+  /// allocates descriptor set with desired layout
+  /// discard pool and timeline semaphore value used when
+  /// we fail allocation due to pool exhaustion, hence discard it
+  VkDescriptorSet allocate(VkDescriptorSetLayout descriptorSetLayout,
+                           DiscardPool* discardPool, uint64_t value);
+  void ensureActivePool();
+  /// called by allocate in case of out of memory or fragmented
+  void discardActivePool(DiscardPool* discardPool, uint64_t value);
+
+  /// called by DiscardPool
+  void recycle(VkDescriptorPool pool);
 
  private:
   // dependencies which must outlive the object
@@ -28,7 +39,8 @@ class DescriptorPools : public NonMoveable {
   std::vector<VkDescriptorPool> m_recycledPools;
   VkDescriptorPool m_activePool = VK_NULL_HANDLE;
 
-  // synchronization
+  // synchronization: either maintain a pool per thread or mutex
+  // we use the latter
   std::mutex m_mtx;
 };
 

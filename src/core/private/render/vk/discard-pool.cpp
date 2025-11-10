@@ -1,5 +1,8 @@
 #include "render/vk/discard-pool.h"
 
+#include "render/vk/command-pools.h"
+#include "render/vk/descriptor-pools.h"
+
 namespace avk::vk {
 
 DiscardPool::DiscardPool(Device* device) AVK_NO_CFI : m_deps{device} {
@@ -27,6 +30,10 @@ DiscardPool::DiscardPool(Device* device) AVK_NO_CFI : m_deps{device} {
   m_shaderModules.reserve(64);
   m_pipelines.reserve(64);
   m_pipelineLayouts.reserve(64);
+  m_descriptorPools.reserve(64);
+  m_commandPools.reserve(64);
+  m_renderPasses.reserve(64);
+  m_framebuffers.reserve(64);
 }
 
 DiscardPool::~DiscardPool() AVK_NO_CFI {
@@ -80,6 +87,33 @@ void DiscardPool::discardPipelineLayout(VkPipelineLayout pipelineLayout,
   m_pipelineLayouts.appendTimeline(value, pipelineLayout);
 }
 
+void DiscardPool::discardDescriptorPoolForReuse(VkDescriptorPool descriptorPool,
+                                                DescriptorPools* pools,
+                                                uint64_t value) {
+  std::lock_guard lk{m_mtx};
+  m_descriptorPools.appendTimeline(value,
+                                   std::make_pair(descriptorPool, pools));
+}
+
+void DiscardPool::discardCommandPoolForReuse(VkCommandPool commandPool,
+                                             CommandPools* pools,
+                                             std::thread::id tid,
+                                             uint64_t value) {
+  std::lock_guard lk{m_mtx};
+  m_commandPools.appendTimeline(value, {commandPool, tid, pools});
+}
+
+void DiscardPool::discardRenderPass(VkRenderPass renderPass, uint64_t value) {
+  std::lock_guard lk{m_mtx};
+  m_renderPasses.appendTimeline(value, renderPass);
+}
+
+void DiscardPool::discardFramebuffer(VkFramebuffer framebuffer,
+                                     uint64_t value) {
+  std::lock_guard lk{m_mtx};
+  m_framebuffers.appendTimeline(value, framebuffer);
+}
+
 void DiscardPool::destroyDiscardedResources(bool force) AVK_NO_CFI {
   std::lock_guard lk{m_mtx};
   auto const* const vkDevApi = m_deps.device->table();
@@ -95,9 +129,9 @@ void DiscardPool::destroyDiscardedResources(bool force) AVK_NO_CFI {
         vkDevApi->vkDestroyImageView(dev, imageView, nullptr);
       });
   m_images.removeOld(
-      timeline, [device = m_deps.device](
+      timeline, [vmaAllocator = m_deps.device->vmaAllocator()](
                     std::pair<VkImage, VmaAllocation> const& pair) AVK_NO_CFI {
-        vmaDestroyImage(device->vmaAllocator(), pair.first, pair.second);
+        vmaDestroyImage(vmaAllocator, pair.first, pair.second);
       });
   // buffer and buffer views
   m_bufferViews.removeOld(
@@ -121,6 +155,23 @@ void DiscardPool::destroyDiscardedResources(bool force) AVK_NO_CFI {
   m_shaderModules.removeOld(
       timeline, [dev, vkDevApi](VkShaderModule shaderModule) AVK_NO_CFI {
         vkDevApi->vkDestroyShaderModule(dev, shaderModule, nullptr);
+      });
+  // descriptor pools and command pools (TODO)
+  m_descriptorPools.removeOld(
+      timeline, [](std::pair<VkDescriptorPool, DescriptorPools*> const& pair) {
+        pair.second->recycle(pair.first);
+      });
+  m_commandPools.removeOld(timeline, [](CmdDiscard const& cmdDiscard) {
+    cmdDiscard.manager->recycle(cmdDiscard.pool, cmdDiscard.tid);
+  });
+  // renderpasses and framebuffers
+  m_renderPasses.removeOld(
+      timeline, [vkDevApi, dev](VkRenderPass renderPass) AVK_NO_CFI {
+        vkDevApi->vkDestroyRenderPass(dev, renderPass, nullptr);
+      });
+  m_framebuffers.removeOld(
+      timeline, [vkDevApi, dev](VkFramebuffer framebuffer) AVK_NO_CFI {
+        vkDevApi->vkDestroyFramebuffer(dev, framebuffer, nullptr);
       });
 }
 
