@@ -277,13 +277,23 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
   AVK_EXT_CHECK(compositeAlpha != VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR);
   createInfo.compositeAlpha = compositeAlpha;
 #else
-  createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+  if (surfCaps.surfaceCapabilities.supportedCompositeAlpha &
+      VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) {
+    createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+  } else if (surfCaps.surfaceCapabilities.supportedCompositeAlpha &
+             VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) {
+    createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+  } else {
+    showErrorScreenAndExit("No Alpha Composition mode supported");
+  }
 #endif
   // some pixels from the swapchain may be written over by OS specific
   // more generally, docs suggest setting to true unless you read back
   // from image
   createInfo.clipped = VK_TRUE;
   createInfo.oldSwapchain = m_swapchain;
+  createInfo.preTransform = transform;
+  createInfo.presentMode = presentMode;
 
   // 5. Create and formally decommission. Note: Presentation of acquired images
   // for a decommissioned swapchain go through, but fail, so make sure to NOT
@@ -428,14 +438,16 @@ Swapchain::~Swapchain() noexcept AVK_NO_CFI {
   m_frames.clear();
 }
 
+void Swapchain::signalNextFrame() {
+  // tick next image/frame indices
+  m_frameIndex = (m_frameIndex + 1) % m_frames.size();
+}
+
 VkResult Swapchain::acquireNextImage(VkFence acquireFence) AVK_NO_CFI {
   auto const* const vkDevApi = m_deps.device->table();
   VkDevice const dev = m_deps.device->device();
   uint32_t const frameIndex = m_frameIndex;
   uint64_t const timeout = acquireFence != VK_NULL_HANDLE ? 0 : UINT64_MAX;
-
-  // tick next image/frame indices
-  m_frameIndex = (m_frameIndex + 1) % m_frames.size();
 
   // wait for previous submission: When using Multiple Frames in Flight
   // we need to make sure to not break frame-dependant data

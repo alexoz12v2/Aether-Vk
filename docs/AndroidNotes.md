@@ -70,3 +70,9 @@ hence 10 touches
   - you cannot easily change the application id with `applicationidSuffix = ".debug"` when
     JNI is involved, because it relies on some paths to automatically load the library
     (TODO: See how to edit the search path behaviour based on build type)
+
+## Warning for ELF native libraries on android
+
+They should have 16 KB support <https://developer.android.com/guide/practices/page-sizes#cmake>
+
+Vulkan Validation Layers Don't have that!

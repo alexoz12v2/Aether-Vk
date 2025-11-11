@@ -107,7 +107,7 @@ class DiscardPool : public NonMoveable {
   utils::TimelineResources<CmdDiscard> m_commandPools;
 
   // stuff from renderpasses (to see if needed)
-  utils::TimelieResources<VkRenderPass> m_renderPasses;
+  utils::TimelineResources<VkRenderPass> m_renderPasses;
   utils::TimelineResources<VkFramebuffer> m_framebuffers;
 
   // maintain the timeline inside it

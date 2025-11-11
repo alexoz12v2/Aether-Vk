@@ -34,7 +34,7 @@ class AndroidApp : public NonMoveable {
     m_shouldRender.store(false, std::memory_order_relaxed);
   }
   inline void resumeRendering() {
-    m_shouldRender.store(false, std::memory_order_relaxed);
+    m_shouldRender.store(true, std::memory_order_relaxed);
   }
 
   inline vk::Instance* vkInstance() { return m_vkInstance.get(); }
@@ -62,9 +62,11 @@ class AndroidApp : public NonMoveable {
   VmaAllocation m_vertexAlloc = VK_NULL_HANDLE;
   // variable on resize
   std::vector<VkFramebuffer> m_framebuffers;
+  std::vector<uint64_t> m_commandBufferIds;
   VkPipeline m_graphicsPipeline = VK_NULL_HANDLE;
   VkImage m_depthImage = VK_NULL_HANDLE;
   VmaAllocation m_depthAlloc = VK_NULL_HANDLE;
+  VkImageView m_depthView = VK_NULL_HANDLE;
 
   void createConstantVulkanResources();
   void destroyConstantVulkanResources();

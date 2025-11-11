@@ -48,3 +48,9 @@ target_compile_definitions(avk-android-launcher
 set_target_properties(avk-android-launcher PROPERTIES
   OUTPUT_NAME "aethervk"
 )
+
+# add validation layers on a debug build
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+  message(STATUS "Android Debug Build: Bundling Vulkan Validation Layers into APK")
+  # https://arm-software.github.io/vulkan-sdk/_validation_layer.html
+endif ()

@@ -178,7 +178,7 @@ extern "C" void android_main(struct android_app* app) {
     // TODO
 
     // 4. Render
-    // TODO
+    application.onRender();
   }
 
   app->userData = nullptr;

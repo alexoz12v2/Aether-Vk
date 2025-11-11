@@ -141,11 +141,15 @@ Instance::Instance() AVK_NO_CFI {
   validationLayers.reserve(16);
   char const* const desiredLayer = "VK_LAYER_KHRONOS_validation";
   VK_CHECK(vkEnumerateInstanceLayerProperties(&layerCount, nullptr));
+  LOGI << "[Instance] Found " << layerCount << " Validation Layers"
+       << std::endl;
   std::vector<VkLayerProperties> layerProperties(layerCount);
   VK_CHECK(
       vkEnumerateInstanceLayerProperties(&layerCount, layerProperties.data()));
   for (const auto& layerProp : layerProperties) {
-    if (strcmp(layerProp.layerName, desiredLayer)) {
+    LOGI << "[Instance]  - " << layerProp.layerName << std::endl;
+    if (strcmp(layerProp.layerName, desiredLayer) == 0) {
+      LOGI << "[Instance]  - ADDED " << layerProp.layerName << std::endl;
       validationLayers.push_back(layerProp.layerName);
     }
   }
@@ -176,6 +180,7 @@ Instance::Instance() AVK_NO_CFI {
   createInfo.enabledExtensionCount =
       static_cast<uint32_t>(extensions.enabled.size());
   createInfo.ppEnabledExtensionNames = extensions.enabled.data();
+  createInfo.pApplicationInfo = &appInfo;
 
   VK_CHECK(vkCreateInstance(&createInfo, nullptr, &m_instance));
 
@@ -194,6 +199,12 @@ Instance::Instance() AVK_NO_CFI {
        << VK_VERSION_MAJOR(BaselineVulkanVersion) << '.'
        << VK_VERSION_MINOR(BaselineVulkanVersion) << '.'
        << VK_VERSION_PATCH(BaselineVulkanVersion) << std::endl;
+  uint32_t instanceVersion = 0;
+  vkEnumerateInstanceVersion(&instanceVersion);
+  LOGI << "Effective instance version: "
+       << VK_VERSION_MAJOR(instanceVersion) << "."
+       << VK_VERSION_MINOR(instanceVersion) << "."
+       << VK_VERSION_PATCH(instanceVersion) << std::endl;
 }
 
 Instance::~Instance() noexcept AVK_NO_CFI {

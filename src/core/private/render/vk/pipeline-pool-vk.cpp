@@ -97,7 +97,7 @@ static inline void ctorRasterizationStateCreateInfo(
   // TODO configure depth bias for 3D (UI doesn't need that)
   rasterizationState.depthBiasEnable = VK_FALSE;
   rasterizationState.depthBiasConstantFactor = 1.f;
-  rasterizationState.depthBiasClamp = 1.f;
+  rasterizationState.depthBiasClamp = 0.f;  // TODO handle better
   rasterizationState.depthBiasSlopeFactor = 1.f;
   // dynamic state -> vkCmdSetLineWidth
   rasterizationState.lineWidth = 1.f;
@@ -156,7 +156,7 @@ static inline void ctorDepthStencilStateCreateInfo(
 
 static inline void ctorColorBlendStateCreateInfo(
     VkPipelineColorBlendStateCreateInfo& colorBlendState,
-    VkPipelineColorBlendAttachmentState blendAttachmentTemplate) {
+    VkPipelineColorBlendAttachmentState& blendAttachmentTemplate) {
   // configuration to use the over operator
   colorBlendState = {};
   colorBlendState.sType =
@@ -621,9 +621,10 @@ VkPipeline PipelinePool::getOrCreateGraphicsPipeline(
 
   VkPipeline pipeline = VK_NULL_HANDLE;
   // TODO pipeline cache
-  VK_CHECK(vkDevApi->vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1,
-                                               &m_graphicsPipelineCreateInfo,
-                                               nullptr, &pipeline));
+  VkResult const res = vkDevApi->vkCreateGraphicsPipelines(
+      dev, VK_NULL_HANDLE, 1, &m_graphicsPipelineCreateInfo, nullptr,
+      &pipeline);
+  VK_CHECK(res);
   m_graphicsPipelines.try_emplace(graphicsInfo, pipeline);
 
   // cleanup create info
