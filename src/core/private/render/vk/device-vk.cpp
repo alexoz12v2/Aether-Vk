@@ -88,6 +88,7 @@ static void fillRequiredExtensions(
 #endif
   requiredExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
   requiredExtensions.push_back(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
+  requiredExtensions.push_back(VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME);
   requiredExtensions.push_back(VK_KHR_SPIRV_1_4_EXTENSION_NAME);
   requiredExtensions.push_back(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
   requiredExtensions.push_back(
@@ -596,11 +597,10 @@ Device::Device(Instance* instance, Surface* surface) AVK_NO_CFI
   memset(m_table.get(), 0, sizeof(VolkDeviceTable));
   volkLoadDeviceTable(m_table.get(), m_device);
   LOGI << "[Device] Getting Queue 0 From GRAPHICS" << std::endl;
-  VkDeviceQueueInfo2 queueInfo{};
-  queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2;
-  queueInfo.queueFamilyIndex = m_queueFamilies.universalGraphics;
-  queueInfo.queueIndex = 0;
-  m_table->vkGetDeviceQueue2(m_device, &queueInfo, &m_queue);
+  // on my device, Xiaomi 22126RN91Y, Mali-G62 MC2, vkGetDeviceQueue2 returns 0
+  m_table->vkGetDeviceQueue(m_device, m_queueFamilies.universalGraphics, 0,
+                            &m_queue);
+  LOGI << "[Device] Got Queue " << std::hex << m_queue << std::dec << std::endl;
 
   // 3. create allocator and eventually pool
   LOGI << "[Device] Creating VMA Allocator" << std::endl;

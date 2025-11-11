@@ -1,5 +1,8 @@
 import org.jetbrains.kotlin.compose.compiler.gradle.ComposeFeatureFlag
 import org.jetbrains.kotlin.gradle.fus.internal.isJenkins
+import java.net.URI
+import java.net.URL
+import java.util.zip.ZipInputStream
 
 plugins {
   alias(libs.plugins.android.application)
@@ -22,9 +25,18 @@ composeCompiler {
   featureFlags = setOf(ComposeFeatureFlag.StrongSkipping)
 }
 
+// Directory for JNI Libraries debug, exposed through a different
+// source set configuration https://developer.android.com/build/build-variants
+// the main source set is created by default by AGP and inserted into all build types
+val jniLibsDir = layout.buildDirectory.dir("debug-jniLibs")
+
 android {
   namespace = "org.aethervkproj.aethervk"
   compileSdk = 36
+
+  sourceSets.getByName("debug") {
+    jniLibs.srcDir(jniLibsDir)
+  }
 
   defaultConfig {
     ndkVersion = "28.2.13676358"
@@ -89,6 +101,8 @@ android {
   }
 }
 
+// Copy Task for shaders
+
 val copyShaders by tasks.registering(Copy::class) {
   from("../../../../shaders") // from Proj/shaders ...
   include("**/*.spv") // ... copy SPIR-V files ...
@@ -99,6 +113,91 @@ val copyShaders by tasks.registering(Copy::class) {
     path = relativePath.pathString
   }
   includeEmptyDirs = false
+}
+
+// Custom Task to download vulkan validation layers only on debug builds
+// --- Property configurable with -DvulkanValidationVersion on command line of from properties file ---
+val vulkanValidationVersion =
+  project.findProperty("vulkanValidationVersion")?.toString() ?: "1.4.309.0"
+val abiList = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+
+// === Derived URLs & paths ===
+val validationBaseUrl = "https://github.com/KhronosGroup/Vulkan-ValidationLayers/releases/download"
+val validationZipName = "android-binaries-$vulkanValidationVersion.zip"
+val validationUrl = "$validationBaseUrl/vulkan-sdk-$vulkanValidationVersion/$validationZipName"
+
+val validationDownloadDirectory =
+  layout.buildDirectory.dir("downloaded-vulkan-validation-layers/$vulkanValidationVersion")
+val validationZipFile = validationDownloadDirectory.map { it.file(validationZipName) }
+
+// helper to check if all vulkan layer validation shared libs are present
+fun hasValidationLayers(): Boolean {
+  return abiList.all { abi ->
+    jniLibsDir.get().dir(abi).file("libVkLayer_khronos_validation.so").asFile.exists()
+  }
+}
+
+// task to download from GitHub validation layers android release (if link is broken or filename is wrong, this will break)
+val downloadVulkanValidation by tasks.registering {
+  outputs.file(validationZipFile)
+  onlyIf { !validationZipFile.get().asFile.exists() }
+  doLast {
+    println("Downloading Vulkan Validation Layers $vulkanValidationVersion from $validationUrl ...")
+    validationDownloadDirectory.get().asFile.mkdirs()
+    // Note to self: .use is the equivalent of try-with-resources in Java
+    URI(validationUrl).toURL().openStream().use { input ->
+      validationZipFile.get().asFile.outputStream().use { output ->
+        input.copyTo(output)
+      }
+    }
+    println("Download of Vulkan Validation Layers Completed")
+  }
+}
+
+// task to unzip validation layers
+val unzipVulkanValidation by tasks.registering {
+  dependsOn(downloadVulkanValidation)
+  inputs.file(validationZipFile)
+  outputs.dir(jniLibsDir) // TODO track individial lib file if more libs needed
+  onlyIf { !hasValidationLayers() }
+  doLast {
+    println("Extracting Vulkan-ValidationLayers into ${jniLibsDir.get()} ...")
+    ZipInputStream(validationZipFile.get().asFile.inputStream()).use { zip ->
+      var entry = zip.nextEntry
+      while (entry != null) {
+        // next entry returns paths like
+        // - android-binaries-1.4.309.0/
+        // - android-binaries-1.4.309.0/arm64-v8a/
+        // - android-binaries-1.4.309.0/arm64-v8a/file.so
+        // hence we want to skip everything which is not a file and doesn't have a Android ABI
+        // in one of its path components. Copy them inside jniLibs
+        if (!entry.isDirectory && entry.name.endsWith(".so")) {
+          val parts = entry.name.split('/')
+          val abi = parts.find { it in abiList }
+          if (abi != null) {
+            val destDir = jniLibsDir.get().dir(abi).asFile
+            destDir.mkdirs()
+            val destFile = File(destDir, parts.last())
+            // copy current opened entry
+            destFile.outputStream().use { zip.copyTo(it) }
+          }
+        }
+
+        // advance
+        zip.closeEntry()
+        entry = zip.nextEntry
+      }
+    }
+  }
+}
+
+// hook the extract dependency into every debug task
+androidComponents {
+  onVariants(selector().withBuildType("debug")) {
+    tasks.named("preBuild").configure {
+      dependsOn(unzipVulkanValidation)
+    }
+  }
 }
 
 // run this TaskProvider before building this module ...

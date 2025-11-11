@@ -124,15 +124,18 @@ class Swapchain : public NonMoveable {
   inline VkSurfaceFormatKHR surfaceFormat() const { return m_surfaceFormat; }
   inline VkExtent2D extent() const { return m_extent; }
   inline size_t imageCount() const { return m_images.size(); }
+  inline size_t frameCount() const { return m_frames.size(); }
 
   static uint32_t constexpr InvalidIndex = -1;
-  // subtract one because indices point to the next frame/image to acquire
   /// Get the index of the last successfully acquired image
   /// Note: May be the index from a decommissioned swapchain if you didn't call
   /// acquireNextImage after a recreation
   /// Note: If you don't wait for fence after acquisition, this is wrong
   inline uint32_t imageIndex() const { return m_imageIndex; }
-  inline uint32_t frameIndex() const { return m_frameIndex - 1; }
+  inline uint32_t frameIndex() const { return m_frameIndex; }
+  /// While Image Index is updated by vkAcquireNextImageKHR, frame index is
+  /// tracked by us, and should be called at the *End* of the frame
+  void signalNextFrame();
   /// To be called after waiting for image acquisition
   utils::SwapchainData swapchainData() const;
 

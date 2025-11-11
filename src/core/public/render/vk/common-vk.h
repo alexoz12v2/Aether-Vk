@@ -52,10 +52,11 @@
     TODO insert a logging macro? */
 #define VK_CHECK(vkres)                                             \
   do {                                                              \
-    if (VkResult var = (vkres); var < 0) {                          \
+    VkResult const var = (vkres);                                   \
+    if (var < 0) {                                                  \
       std::string err = "[Vulkan Error]: ";                         \
       err.append(::avk::vkResToString(var));                        \
-      LOGE << AVK_LOG_RED << err << '\n';                           \
+      LOGE << AVK_LOG_RED << err << std::endl;                      \
       LOGE << ::avk::dumpStackTrace() << AVK_LOG_RST << std::flush; \
       ::avk::showErrorScreenAndExit(err.c_str());                   \
     }                                                               \

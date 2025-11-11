@@ -14,15 +14,19 @@ bool createImage(Device* device, SingleImage2DSpecVk const& spec,
   VmaAllocator const allocator = device->vmaAllocator();
   VkImageCreateInfo createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  createInfo.imageType = VK_IMAGE_TYPE_2D;
   createInfo.extent.width = spec.width;
   createInfo.extent.height = spec.height;
   createInfo.extent.depth = 1;
   createInfo.mipLevels = 1;
   createInfo.arrayLayers = 1;
+  // note: format cannot be undefined unless you export this memory
+  // which is signaled by a OS-specific pNext
   createInfo.format = spec.format;
   createInfo.tiling = spec.imageTiling;
   createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
   createInfo.usage = spec.usage;
+  createInfo.samples = spec.samples;
 
   VmaAllocationCreateInfo allocInfo{};
   allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
