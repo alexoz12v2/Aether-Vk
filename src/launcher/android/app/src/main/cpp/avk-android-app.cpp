@@ -41,7 +41,7 @@ AndroidApp::AndroidApp(android_app* app) : m_app(app) {
 
 AndroidApp::~AndroidApp() noexcept {
   LOGI << "[AndroidApp] Destructor Running ..." << std::endl;
-  if (windowInitialized()) {
+  if (windowInitializedOnce()) {
     // resources
     cleanupVulkanResources();
     destroyConstantVulkanResources();
@@ -239,6 +239,7 @@ void AndroidApp::RTdoOnWindowInit() {
 }
 
 void AndroidApp::RTdoOnResize() {
+  LOGI << "[AndroidApp] Resize callback on derived class" << std::endl;
   cleanupVulkanResources();
   createVulkanResources();
 }
@@ -337,6 +338,7 @@ void AndroidApp::RTdoLateSurfaceRegained() {
   // could survive, but who cares)
   createVulkanResources();
 }
+
 void AndroidApp::doOnSaveState() {
   // nothing (TODO pipeline cache and simulation state)
   // pipeline cache -> base class

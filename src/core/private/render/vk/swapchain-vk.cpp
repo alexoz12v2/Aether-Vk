@@ -4,6 +4,11 @@
 #include "utils/integer.h"
 
 // os specific
+#ifdef AVK_OS_WINDOWS
+#  include <Windows.h>
+#else
+#  include <sched.h>
+#endif
 
 // standard
 #include <algorithm>
@@ -305,9 +310,21 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
   // for a decommissioned swapchain go through, but fail, so make sure to NOT
   // acquire images from decommissioned swapchain
   // - before calling recreate, wait on the two atomic flags
-  waitAtomicCpuIntensive(m_stillResizing, false);
-  LOGI << PREFIX "About to create Swapchain (TODO Discard Pool)" << std::endl;
-  // - TODO before calling recreate, signal device's discard pool
+  LOGI << PREFIX "About to create Swapchain Before atomic polling" << std::endl;
+  // Busy wait until it's ok to recreate after resize
+  while (true) {
+    bool const val = m_stillResizing.load(std::memory_order_relaxed);
+    if (val) {
+#ifdef AVK_OS_WINDOWS
+      YieldProcessor();
+#else
+      sched_yield();
+#endif
+    } else if (!m_stillResizing.load(std::memory_order_acquire)) {
+      break;
+    }
+  }
+  LOGI << PREFIX "About to create Swapchain After atomic polling" << std::endl;
 
   VkSwapchainKHR swapchain = VK_NULL_HANDLE;
 
@@ -315,8 +332,6 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
       vkDevApi->vkCreateSwapchainKHR(dev, &createInfo, nullptr, &swapchain);
   VK_CHECK(res);
   LOGI << PREFIX "Just Created Pool" << std::endl;
-  m_forceResize.store(false, std::memory_order_relaxed);
-  LOGI << PREFIX "Reset Atomic" << std::endl;
 
   // 6. bookkeeping and cleanup
   m_surfaceFormat = surfaceFormat;
@@ -490,7 +505,7 @@ utils::SwapchainData Swapchain::swapchainData() const {
   return data;
 }
 
-utils::SurfacePreRotation Swapchain::preRotationQuat() const {
+utils::SurfacePreRotation Swapchain::preRotation() const {
   utils::SurfacePreRotation result;
   float angleDeg = 0.f;
   bool mirrorX = false;
