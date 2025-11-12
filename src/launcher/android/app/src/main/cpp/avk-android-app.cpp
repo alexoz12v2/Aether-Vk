@@ -9,16 +9,11 @@
 
 // our stuff
 #include "os/avk-log.h"
+#include "render/experimental/avk-basic-graphics-info.h"
 #include "render/vk/buffers/buffer-vk.h"
 #include "render/vk/images/image-vk.h"
 #include "render/vk/renderpasses-vk.h"
 #include "render/vk/shader-vk.h"
-
-// TODO remove or move
-struct Vertex {
-  glm::vec3 position;
-  glm::vec3 color;
-};
 
 // TODO elsewhere
 static std::vector<uint32_t> spirvFromAsset(AAssetManager* assetMgr,
@@ -97,21 +92,13 @@ void AndroidApp::createVulkanResources() AVK_NO_CFI {
   imgSpec.samples = VK_SAMPLE_COUNT_1_BIT;
   imgSpec.format = depthFmt;
   bool res = vk::createImage(vkDevice(), imgSpec, &m_depthImage, &m_depthAlloc);
-  assert(res && "failed allocating depth image");
-  VkImageViewCreateInfo depthViewInfo{};
-  depthViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-  depthViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-  depthViewInfo.image = m_depthImage;
-  depthViewInfo.format = depthFmt;
-  depthViewInfo.subresourceRange.aspectMask =
-      VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-  depthViewInfo.subresourceRange.levelCount = 1;
-  depthViewInfo.subresourceRange.layerCount = 1;
-  depthViewInfo.subresourceRange.baseArrayLayer = 0;
-  depthViewInfo.subresourceRange.levelCount = 1;
-  depthViewInfo.subresourceRange.baseMipLevel = 0;
-  VK_CHECK(
-      vkDevApi->vkCreateImageView(dev, &depthViewInfo, nullptr, &m_depthView));
+  if (!res){
+    showErrorScreenAndExit("Couldn't create Depth image");
+  }
+  m_depthView = vk::depthStencilImageView(
+                    vkDevice(), m_depthImage,
+                    vk::basicDepthStencilFormat(vkPhysicalDeviceHandle()))
+                    .get();
   // framebuffers
   m_framebuffers.resize(vkSwapchain()->imageCount());
   VkFramebufferCreateInfo createInfo{};
@@ -142,6 +129,7 @@ void AndroidApp::createVulkanResources() AVK_NO_CFI {
 
 void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
   // vertex buffer
+  using avk::experimental::Vertex;
   std::vector<Vertex> const vertices = {
       {{0.5f, -0.5f, 0}, {1.0f, 0.0f, 0.0f}},  // RT Vertex 0: Red
       {{-0.5f, 0.5f, 0}, {0.0f, 1.0f, 0.0f}},  // LB Vertex 1: Green
@@ -166,67 +154,20 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
   auto const fragCode = spirvFromAsset(m_app->activity->assetManager,
                                        "shaders/basic-triangle.frag.spv");
   // shaders
-  m_graphicsInfo.preRasterization.vertexModule =
-      vk::createShaderModule(vkDevice(), vertCode.data(), vertCode.size() << 2);
-  m_graphicsInfo.fragmentShader.fragmentModule =
-      vk::createShaderModule(vkDevice(), fragCode.data(), fragCode.size() << 2);
-  m_graphicsInfo.preRasterization.geometryModule = VK_NULL_HANDLE;
-  // attribute descriptions: 1 binding, 2 attributes
-  VkVertexInputBindingDescription binding{};
-  binding.binding = 0;
-  binding.stride = sizeof(Vertex);
-  binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-  m_graphicsInfo.vertexIn.bindings.push_back(binding);
-  VkVertexInputAttributeDescription attribute{};
-  attribute.binding = 0;
-  attribute.location = 0;
-  attribute.format = VK_FORMAT_R32G32B32_SFLOAT;  // position float3
-  attribute.offset = offsetof(Vertex, position);
-  m_graphicsInfo.vertexIn.attributes.push_back(attribute);
-  attribute.binding = 0;
-  attribute.location = 1;
-  attribute.format = VK_FORMAT_R32G32B32_SFLOAT;  // position float3
-  attribute.offset = offsetof(Vertex, color);
-  m_graphicsInfo.vertexIn.attributes.push_back(attribute);
-  m_graphicsInfo.vertexIn.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-  m_graphicsInfo.fragmentShader.viewports.resize(1);
-  m_graphicsInfo.fragmentShader.scissors.resize(1);
-  // fragment shader and output attachments
-  m_graphicsInfo.fragmentOut.depthAttachmentFormat =
-      vk::basicDepthStencilFormat(vkDevice()->physicalDevice());
-  m_graphicsInfo.fragmentOut.stencilAttachmentFormat =
-      m_graphicsInfo.fragmentOut.depthAttachmentFormat;
-  m_graphicsInfo.opts.rasterizationPolygonMode = VK_POLYGON_MODE_FILL;
-  // stencil options
-  m_graphicsInfo.opts.flags |= vk::EPipelineFlags::eStencilEnable;
-  m_graphicsInfo.opts.stencilCompareOp = vk::EStencilCompareOp::eAlways;
-  m_graphicsInfo.opts.stencilLogicalOp = vk::EStencilLogicOp::eReplace;
-  m_graphicsInfo.opts.stencilReference = 1;
-  m_graphicsInfo.opts.stencilCompareMask = 0xFF;
-  m_graphicsInfo.opts.stencilWriteMask = 0xFF;
-
-  // Pipeline Layout
-  m_graphicsInfo.pipelineLayout = vk::createPipelineLayout(vkDevice());
-  // Renderpass and subpass
-  m_graphicsInfo.subpass = 0;
-  // RnderPass on variable resources
+  VkShaderModule modules[2] = {
+      vk::createShaderModule(vkDevice(), vertCode.data(), vertCode.size() << 2),
+      vk::createShaderModule(vkDevice(), fragCode.data(),
+                             fragCode.size() << 2)};
+  m_graphicsInfo = experimental::basicGraphicsInfo(
+      vk::createPipelineLayout(vkDevice()), modules,
+      vk::basicDepthStencilFormat(vkDevice()->physicalDevice()));
 }
 
 void AndroidApp::destroyConstantVulkanResources() AVK_NO_CFI {
   // vertex buffer
   vkDiscardPool()->discardBuffer(m_vertexBuffer, m_vertexAlloc, timeline());
-  // TODO refactor on a function to discard graphics info
-  vkDiscardPool()->discardShaderModule(
-      m_graphicsInfo.preRasterization.vertexModule, timeline());
-  vkDiscardPool()->discardShaderModule(
-      m_graphicsInfo.fragmentShader.fragmentModule, timeline());
-  m_graphicsInfo.preRasterization.vertexModule = VK_NULL_HANDLE;
-  m_graphicsInfo.fragmentShader.fragmentModule = VK_NULL_HANDLE;
-
-  // TODO: this is to be recreated if descriptor set layouts change
-  vkDiscardPool()->discardPipelineLayout(m_graphicsInfo.pipelineLayout,
-                                         timeline());
+  experimental::discardGraphicsInfo(vkDiscardPool(), timeline(),
+                                    m_graphicsInfo);
 }
 
 void AndroidApp::RTdoOnWindowInit() {

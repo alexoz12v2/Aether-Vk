@@ -186,4 +186,13 @@ struct Expected {
   }
 };
 
+/// Helper type for handles allocated by VMA
+template <typename H>
+struct VMAResource {
+  VMAResource() = default;
+  VMAResource(H handle, VmaAllocation alloc) : handle(handle), alloc(alloc) {}
+  H handle;
+  VmaAllocation alloc;
+};
+
 }  // namespace avk::vk

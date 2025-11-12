@@ -39,4 +39,28 @@ bool createImage(Device* device, SingleImage2DSpecVk const& spec,
   return res >= 0;
 }
 
+Expected<VkImageView> depthStencilImageView(Device* device, VkImage image,
+                                            VkFormat fmt) {
+  assert(device && *device);
+  auto const* const vkDevApi = device->table();
+  VkDevice const dev = device->device();
+
+  VkImageViewCreateInfo createInfo{};
+  createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  createInfo.image = image;
+  createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  createInfo.format = fmt;
+  createInfo.subresourceRange.aspectMask =
+      VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+  createInfo.subresourceRange.baseArrayLayer = 0;
+  createInfo.subresourceRange.layerCount = 1;
+  createInfo.subresourceRange.baseMipLevel = 0;
+  createInfo.subresourceRange.levelCount = 1;
+
+  VkImageView view = VK_NULL_HANDLE;
+  VkResult const res =
+      vkDevApi->vkCreateImageView(dev, &createInfo, nullptr, &view);
+  return {view, res};
+}
+
 }  // namespace avk::vk

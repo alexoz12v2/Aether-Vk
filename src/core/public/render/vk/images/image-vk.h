@@ -22,4 +22,7 @@ struct SingleImage2DSpecVk {
 bool createImage(Device* device, SingleImage2DSpecVk const& spec,
                  VkImage* image, VmaAllocation* allocation);
 
+/// helper for a simple, single level, single mip (0), 2D depth image view
+Expected<VkImageView> depthStencilImageView(Device* device, VkImage image,
+                                            VkFormat fmt);
 }  // namespace avk::vk
