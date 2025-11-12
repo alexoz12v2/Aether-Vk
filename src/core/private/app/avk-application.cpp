@@ -42,12 +42,20 @@ void ApplicationBase::onWindowInit() AVK_NO_CFI {
 }
 
 void ApplicationBase::onResize() {
+  // since you check for resizes on `vkAcquireNextImageKHR` and on
+  // `vkQueuePresentKHR`, command buffers should already be either clean or
+  // already submitted. In the latter case we would need to wait for the signal
+  // semaphore of their `vkQueueSubmit`. Therefore, to be sure, we discard the
+  // command pool
+  m_vkCommandPools.get()->discardActivePool(m_vkDiscardPool.get(), m_timeline);
   m_vkSwapchain.get()->recreateSwapchain();
   RTdoOnResize();
 }
 
 void ApplicationBase::onSurfaceLost() {
   m_renderCoordinator.surfaceLost.store(true, std::memory_order_release);
+  // wake the render thread up such that it can see that the surface was lost
+  m_renderCoordinator.cv.notify_all();
 }
 
 void ApplicationBase::RTonRender() AVK_NO_CFI {
@@ -64,6 +72,7 @@ void ApplicationBase::RTonRender() AVK_NO_CFI {
   // acquire a swapchain image (handle resize pt.1)
   VkResult res = m_vkSwapchain.get()->acquireNextImage();
   if (res == VK_SUBOPTIMAL_KHR || res == VK_ERROR_OUT_OF_DATE_KHR) {
+    LOGI << "[RT Render] onResize from acquire" << std::endl;
     onResize();
     return;
   }
@@ -77,8 +86,11 @@ void ApplicationBase::RTonRender() AVK_NO_CFI {
   res = RTdoOnRender(swapchainData);
   if (res == VK_ERROR_DEVICE_LOST) {
     RThandleDeviceLost();
+    return;
   }
   VK_CHECK(res);
+  // increment timeline on successful submit
+  m_timeline++;
 
   // queue present
   VkSwapchainKHR const swapchain = m_vkSwapchain.get()->handle();
@@ -93,17 +105,21 @@ void ApplicationBase::RTonRender() AVK_NO_CFI {
 
   res = vkDevApi->vkQueuePresentKHR(m_vkDevice.get()->queue(), &presentInfo);
   if (res == VK_SUBOPTIMAL_KHR || res == VK_ERROR_OUT_OF_DATE_KHR) {
+    LOGI << "[RT Render] onResize from presentation" << std::endl;
     onResize();
+    LOGI << "[RT Render] AFTER onResize from presentation" << std::endl;
   } else if (res == VK_ERROR_DEVICE_LOST) {
     RThandleDeviceLost();
+    return;
   } else if (res == VK_ERROR_SURFACE_LOST_KHR) {
     RThandleSurfaceLost();
+    return;
   } else {  // TODO VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT
     VK_CHECK(res);
   }
 
+  // increment frame index only after successful presentation or out of date
   m_vkSwapchain.get()->signalNextFrame();
-  m_timeline++;
 }
 
 void ApplicationBase::onSaveState() { doOnSaveState(); }
@@ -115,9 +131,12 @@ void ApplicationBase::RThandleDeviceLost() {
   m_vkCommandPools.get()->threadShutdown();
   m_vkDiscardPool.get()->destroyDiscardedResources(true);
   RTdestroyDeviceAndDependencies();
+  // crash if physical device is lost
   RTcreateDeviceAndDependencies();
   // if we are still alive, then the device was regained
   RTdoOnDeviceRegained();
+  // reset the timeline when the device is reacquired!
+  m_timeline = 0;
 }
 
 void ApplicationBase::RTdestroyDeviceAndDependencies() {
@@ -138,6 +157,8 @@ void ApplicationBase::RTcreateDeviceAndDependencies() {
 #define PREFIX "[ApplicationBase::RTcreateDeviceAndDependencies] "
   m_vkDevice.create(m_vkInstance.get(), m_vkSurface.get());
   LOGI << PREFIX "Vulkan Device Created" << std::endl;
+  // note: the initial create swapchain might get a surface lost
+  // if you quickly exit from the application after entering. We don't care.
   m_vkSwapchain.create(m_vkInstance.get(), m_vkSurface.get(), m_vkDevice.get());
   LOGI << PREFIX "Vulkan Swapchain Created" << std::endl;
 

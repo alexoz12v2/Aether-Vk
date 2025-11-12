@@ -35,6 +35,8 @@ class AndroidApp : public ApplicationBase {
   AndroidApp(android_app* app);
   ~AndroidApp() noexcept override;
 
+  pthread_t RenderThread = 0;
+
  protected:
   void RTdoOnWindowInit() override;
   VkResult RTdoOnRender(vk::utils::SwapchainData const& swapchainData) override;

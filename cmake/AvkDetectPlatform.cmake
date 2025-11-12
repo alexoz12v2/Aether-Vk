@@ -17,17 +17,78 @@ function(avk_detect_platform)
   # https://cmake.org/cmake/help/latest/variable/CMAKE_SYSTEM_NAME.html#variable:CMAKE_SYSTEM_NAME
   if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(AVK_OS "LINUX")
+    set(AVK_POSIX ON)
   elseif (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set(AVK_OS "MACOS")
+    set(AVK_POSIX ON)
   elseif (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(AVK_OS "IOS")
+    set(AVK_POSIX ON)
   elseif (CMAKE_SYSTEM_NAME STREQUAL "Windows")
     set(AVK_OS "WINDOWS")
+    set(AVK_POSIX OFF)
   elseif (CMAKE_SYSTEM_NAME STREQUAL "Android")
     set(AVK_OS "ANDROID")
+    set(AVK_POSIX ON)
   else ()
     set(AVK_OS UNKNOWN)
+    set(AVK_POSIX OFF)
   endif ()
+
+  # TODO: detect features with cmake -p (wrapped in cmake shipped modules). Example
+  #######################################################################
+  # --- Step 2: Use built-in CMake modules to check for features ---
+  # include(CheckIncludeFile)
+  # include(CheckIncludeFiles)
+  # include(CheckFunctionExists)
+  # include(CheckSymbolExists)
+  # include(CheckTypeSize)
+  #
+  # # These will set HAVE_xxx variables automatically
+  # check_include_file("unistd.h" HAVE_UNISTD_H)
+  # check_include_file("pthread.h" HAVE_PTHREAD_H)
+  # check_include_file("sys/mman.h" HAVE_SYS_MMAN_H)
+  # check_include_file("signal.h" HAVE_SIGNAL_H)
+  #
+  # check_function_exists(mmap HAVE_MMAP)
+  # check_function_exists(sigaction HAVE_SIGACTION)
+  # check_function_exists(clock_gettime HAVE_CLOCK_GETTIME)
+  # check_function_exists(gettimeofday HAVE_GETTIMEOFDAY)
+  # check_function_exists(pthread_create HAVE_PTHREAD_CREATE)
+  # check_function_exists(fork HAVE_FORK)
+  #
+  # # --- Step 3: Generate a configuration header from a template ---
+  # # Create a template file: platform_config.h.in
+  # configure_file(
+  #   ${CMAKE_CURRENT_SOURCE_DIR}/platform_config.h.in
+  #   ${CMAKE_CURRENT_BINARY_DIR}/platform_config.h
+  # )
+  ## where the configuration file has this form: ---------------
+  # #pragma once
+  #
+  #/* OS identifiers */
+  ##define AVK_OS "@AVK_OS@"
+  #
+  #/* POSIX flag */
+  ##cmakedefine AVK_POSIX 1
+  #
+  #/* Feature availability (checked by CMake) */
+  ##cmakedefine HAVE_UNISTD_H 1
+  ##cmakedefine HAVE_PTHREAD_H 1
+  ##cmakedefine HAVE_SYS_MMAN_H 1
+  ##cmakedefine HAVE_SIGNAL_H 1
+  #
+  ##cmakedefine HAVE_MMAP 1
+  ##cmakedefine HAVE_SIGACTION 1
+  ##cmakedefine HAVE_CLOCK_GETTIME 1
+  ##cmakedefine HAVE_GETTIMEOFDAY 1
+  ##cmakedefine HAVE_PTHREAD_CREATE 1
+  ##cmakedefine HAVE_FORK 1
+  ## ----------------------------
+  # # --- Step 4: Add your target and include the generated config ---
+  # add_executable(example main.cpp)
+  # target_include_directories(example PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+  #######################################################################
 
   if ((CMAKE_C_COMPILER_ID STREQUAL "Clang") OR (CMAKE_C_COMPILER_ID STREQUAL "AppleClang"))
     set(AVK_COMPILER CLANG)
@@ -39,7 +100,7 @@ function(avk_detect_platform)
     set(AVK_COMPILER UNKNOWN)
   endif ()
 
-  return(PROPAGATE AVK_ARCH AVK_OS AVK_COMPILER)
+  return(PROPAGATE AVK_ARCH AVK_OS AVK_COMPILER AVK_POSIX)
 endfunction()
 
 

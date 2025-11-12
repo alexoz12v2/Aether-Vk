@@ -16,6 +16,16 @@
 static avk::AndroidOut s_mlogiBufavk{"main.cpp", ANDROID_LOG_INFO};
 static std::ostream s_mlogi{&s_mlogiBufavk};
 
+static int isThreadAlive(pthread_t tid) {
+  int const rc = pthread_kill(tid, 0);
+  if (rc == ESRCH)
+    return 0;  // thread doesn't exist
+  else if (rc == 0)
+    return 1;  // thread exists (might be running, might be paused)
+  else
+    return -1;  // other error
+}
+
 static void onAppCmd([[maybe_unused]] struct android_app* app, int32_t cmd) {
   auto* appManager = reinterpret_cast<avk::AndroidApp*>(app->userData);
   switch (cmd) {
@@ -45,12 +55,23 @@ static void onAppCmd([[maybe_unused]] struct android_app* app, int32_t cmd) {
       s_mlogi << "[Activity Lifecycle] There's a resize here" << std::endl;
       break;
     }
-    case APP_CMD_RESUME:
+    case APP_CMD_RESUME: {
       s_mlogi << "APP_CMD_RESUME" << std::endl;
       appManager->onRestoreState();
-    case APP_CMD_PAUSE:
+      if (appManager->windowInitializedOnce()) {
+        if (isThreadAlive(appManager->RenderThread)) {
+          s_mlogi << "Render Thread is alive" << std::endl;
+        } else {
+          s_mlogi << "Render Thread is Dead!" << std::endl;
+        }
+      }
+      break;
+    }
+    case APP_CMD_PAUSE: {
       s_mlogi << "APP_CMD_PAUSE" << std::endl;
       appManager->onSaveState();
+      break;
+    }
     default:
       break;
   }
@@ -158,7 +179,9 @@ static void* renderThreadFunc(void* arg) {
       app->RTonRender();
     } else {
       // if CAS failed or nothing to render, fallthrough and wait
+      __android_log_print(ANDROID_LOG_INFO, "AVK Render Thread", "NO UPDATE, GOING TO WAIT");
       app->RTwaitForNextRound();
+      __android_log_print(ANDROID_LOG_INFO, "AVK Render Thread", "WOKE UP");
     }
   }
   s_mlogi << "[RenderThread] exiting via pthread_exit" << std::endl;
@@ -182,8 +205,7 @@ extern "C" void android_main(struct android_app* app) {
   app->userData = &application;
   app->onAppCmd = onAppCmd;
 
-  pthread_t render_thread;
-  if (pthread_create(&render_thread, nullptr, &renderThreadFunc,
+  if (pthread_create(&application.RenderThread, nullptr, &renderThreadFunc,
                      &application) != 0) {
     s_mlogi << "Failed to create render thread!" << std::endl;
     return;
@@ -222,7 +244,7 @@ extern "C" void android_main(struct android_app* app) {
   s_mlogi << "[main] signaling render thread to stop" << std::endl;
   application.signalStopRendering();
   void* retval = nullptr;
-  if (pthread_join(render_thread, &retval) != 0) {
+  if (pthread_join(application.RenderThread, &retval) != 0) {
     s_mlogi << "[main] failed to join render thread" << std::endl;
   } else {
     s_mlogi << "[main] render thread joined" << std::endl;

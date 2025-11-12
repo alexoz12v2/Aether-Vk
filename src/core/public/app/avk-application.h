@@ -95,6 +95,18 @@ class ApplicationBase : public NonMoveable {
   /// needs to restore its state
   void onRestoreState();
 
+  /// Desktop method to signal to swapchain to defer recreation unti resize
+  /// exited
+  void onEnterResize() {
+    assert(*m_vkSwapchain.get());
+    m_vkSwapchain.get()->lockResize();
+  }
+
+  void onExitResize() {
+    assert(*m_vkSwapchain.get());
+    m_vkSwapchain.get()->unlockResize();
+  }
+
   inline void pauseRendering() {
     LOGI << "[Application] Paused Rendering" << std::endl;
     m_shouldRender.store(false, std::memory_order_relaxed);
@@ -114,6 +126,12 @@ class ApplicationBase : public NonMoveable {
   inline void signalStateUpdated() {
     m_renderCoordinator.stateVersion.fetch_add(1, std::memory_order_release);
     m_renderCoordinator.cv.notify_all();
+  }
+
+  /// whether primary window initalization happened. Useful on
+  /// derived classes destrouctor
+  inline bool windowInitializedOnce() const {
+    return m_windowInit.load(std::memory_order_relaxed);
   }
 
   /// Called by the render thread to know when it's time to initialize itself
@@ -147,9 +165,11 @@ class ApplicationBase : public NonMoveable {
     m_renderCoordinator.cv.wait_for(
         lk, std::chrono::milliseconds(RenderCoordinator::MaxWaitMillis),
         [coord = &m_renderCoordinator]() {
-          return !coord->renderRunning.load(std::memory_order_acquire) ||
-                 coord->stateVersion.load(std::memory_order_acquire) >
-                     coord->consumedVersion.load(std::memory_order_acquire);
+          // if surface lost wake up and handle that before being killed!
+          return coord->surfaceLost.load(std::memory_order_relaxed) ||
+                 (!coord->renderRunning.load(std::memory_order_acquire) ||
+                  coord->stateVersion.load(std::memory_order_acquire) >
+                      coord->consumedVersion.load(std::memory_order_acquire));
         });
   }
 
@@ -161,12 +181,18 @@ class ApplicationBase : public NonMoveable {
   }
 
   inline void RTsurfaceLost() {
+    assert(m_renderCoordinator.surfaceLost.load(std::memory_order_relaxed));
     LOGI << "[RenderThread::surfaceLost]" << std::endl;
+    static constexpr uint32_t TimeoutWakeupMillis = 256;
     RTdoOnSurfaceLost();
-    std::unique_lock lk{m_renderCoordinator.mtx};
-    m_renderCoordinator.cv.wait(lk, [coord = &m_renderCoordinator]() {
-      return !coord->surfaceLost.load(std::memory_order_acquire);
-    });
+    while (m_renderCoordinator.surfaceLost.load(std::memory_order_acquire)) {
+      std::unique_lock lk{m_renderCoordinator.mtx};
+      m_renderCoordinator.cv.wait_for(
+          lk, std::chrono::milliseconds(TimeoutWakeupMillis),
+          [coord = &m_renderCoordinator]() {
+            return !coord->surfaceLost.load(std::memory_order_acquire);
+          });
+    }
     LOGI << "[RenderThread::surfaceLost] Surface regained" << std::endl;
     // only after surface was regained, recreate everything
     RThandleSurfaceLost();
@@ -227,11 +253,6 @@ class ApplicationBase : public NonMoveable {
     return m_vkDevice.get()->physicalDevice();
   }
   inline VkDevice vkDeviceHandle() const { return m_vkDevice.get()->device(); }
-  /// whether primary window initalization happened. Useful on
-  /// derived classes destrouctor
-  inline bool windowInitialized() const {
-    return m_windowInit.load(std::memory_order_relaxed);
-  }
   inline uint64_t timeline() const { return m_timeline; }
   inline vk::Instance* vkInstance() { return m_vkInstance.get(); };
   inline vk::Device* vkDevice() { return m_vkDevice.get(); };

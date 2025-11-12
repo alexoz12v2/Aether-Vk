@@ -116,14 +116,12 @@ class Swapchain : public NonMoveable {
   VkResult acquireNextImage(VkFence acquireFence = VK_NULL_HANDLE);
 
   inline operator bool() const { return m_swapchain != VK_NULL_HANDLE; }
+  // TODO move to application and rendering coordinator
   inline void unlockResize() {
     m_stillResizing.store(false, std::memory_order_release);
   }
   inline void lockResize() {
     m_stillResizing.store(true, std::memory_order_release);
-  }
-  inline void shouldResize() {
-    m_forceResize.store(true, std::memory_order_relaxed);
   }
 
   inline VkSwapchainKHR handle() const { return m_swapchain; }
@@ -148,7 +146,7 @@ class Swapchain : public NonMoveable {
   /// To be called after waiting for image acquisition
   utils::SwapchainData swapchainData() const;
 
-  utils::SurfacePreRotation preRotationQuat() const;
+  utils::SurfacePreRotation preRotation() const;
 
   inline VkImage imageAt(size_t index) const {
     return index < m_images.size() ? m_images[index].image : VK_NULL_HANDLE;
@@ -182,7 +180,6 @@ class Swapchain : public NonMoveable {
 
   // handle control over when we should resize
   std::atomic_bool m_stillResizing = false;
-  std::atomic_bool m_forceResize = false;
 
   // temp storage for images
   std::vector<VkImage> m_tmpImages;
