@@ -134,6 +134,16 @@ void FrameDiscard::destroy(const Device* device) AVK_NO_CFI {
   }
 }
 
+void FrameDiscard::discardSwapchainImages(
+    std::vector<utils::SwapchainImage>& images) {
+  for (utils::SwapchainImage& swapchainImage : images) {
+    assert(swapchainImage.presentSemaphore && swapchainImage.imageView);
+    semaphores.push_back(swapchainImage.presentSemaphore);
+    imageViews.push_back(swapchainImage.imageView);
+    swapchainImage.presentSemaphore = VK_NULL_HANDLE;
+  }
+}
+
 void Frame::destroy(const Device* device) AVK_NO_CFI {
   auto const* vkDevApi = device->table();
   VkDevice const dev = device->device();
@@ -228,14 +238,10 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
   // them
   // TODO: recycle semaphores if present fences?
   utils::FrameDiscard* frameDiscard = nullptr;
-  if (currentFrame <= m_frames.size()) {
+  if (currentFrame <= m_frames.size() && m_images.size() > 0) {
     frameDiscard = &m_frames[currentFrame].discard;
     // sweep semaphores (swapchain done after creation)
-    for (utils::SwapchainImage& swapchainImage : m_images) {
-      frameDiscard->semaphores.push_back(swapchainImage.presentSemaphore);
-      frameDiscard->imageViews.push_back(swapchainImage.imageView);
-      swapchainImage.presentSemaphore = VK_NULL_HANDLE;
-    }
+    frameDiscard->discardSwapchainImages(m_images);
   }
 
   // 4. Create Info
@@ -516,6 +522,19 @@ utils::SurfacePreRotation Swapchain::preRotationQuat() const {
   }
 
   return result;
+}
+
+void Swapchain::forceDiscardToCurrentFrame() {
+  if (m_frameIndex < m_frames.size()) {
+    if (!m_images.empty()) {
+      m_frames[m_frameIndex].discard.discardSwapchainImages(m_images);
+      m_images.clear();
+    }
+    if (m_swapchain) {
+      m_frames[m_frameIndex].discard.swapchains.push_back(m_swapchain);
+      m_swapchain = VK_NULL_HANDLE;
+    }
+  };
 }
 
 }  // namespace avk::vk

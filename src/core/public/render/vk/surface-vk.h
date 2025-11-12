@@ -34,6 +34,9 @@ class Surface : public NonMoveable {
   inline VkSurfaceKHR handle() const { return m_surface; }
   inline operator bool() const { return m_surface != VK_NULL_HANDLE; }
 
+  /// to be invoked on surface lost after discarding the handle
+  inline void reset() { m_surface = VK_NULL_HANDLE; }
+
   VkExtent2D internalExtent() const;
 
 #if defined(VK_USE_PLATFORM_WAYLAND_KHR)

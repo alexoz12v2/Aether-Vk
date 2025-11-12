@@ -37,34 +37,15 @@ namespace avk {
 AndroidApp::AndroidApp(android_app* app) : m_app(app) {
   // attach current thread to JNI to get java objects (`jobject`)
   app->activity->vm->AttachCurrentThread(&m_jniEnv, nullptr);
-  m_vkInstance.create();
-  LOGI << "[AndroidApp] Vulkan Instance " << std::hex
-       << m_vkInstance.get()->handle() << std::dec << " Created" << std::endl;
-  AVK_EXT_CHECK(*m_vkInstance.get());
 }
 
 AndroidApp::~AndroidApp() noexcept {
-  if (m_windowInit) {
-    auto const* const vkDevApi = m_vkDevice.get()->table();
-    vkDevApi->vkDeviceWaitIdle(m_vkDevice.get()->device());
-
+  LOGI << "[AndroidApp] Destructor Running ..." << std::endl;
+  if (windowInitialized()) {
     // resources
     cleanupVulkanResources();
     destroyConstantVulkanResources();
-
-    // resource handling mechanisms
-    m_vkPipelines.destroy();
-    m_vkCommandPools.destroy();
-    m_vkDescriptorPools.destroy();
-    // last before main 3
-    m_vkDiscardPool.destroy();
-
-    // main 3 handles
-    m_vkSwapchain.destroy();
-    m_vkDevice.destroy();
-    m_vkSurface.destroy();
   }
-  m_vkInstance.destroy();
   if (m_jniEnv) {
     m_app->activity->vm->DetachCurrentThread();
     m_jniEnv = nullptr;
@@ -73,51 +54,49 @@ AndroidApp::~AndroidApp() noexcept {
 
 void AndroidApp::cleanupVulkanResources() AVK_NO_CFI {
   // render pass
-  m_vkDiscardPool.get()->discardRenderPass(m_graphicsInfo.renderPass,
-                                           m_timeline);
+  vkDiscardPool()->discardRenderPass(m_graphicsInfo.renderPass, timeline());
   m_graphicsInfo.renderPass = VK_NULL_HANDLE;
   // graphics pipeline
-  m_vkPipelines.get()->discardAllPipelines(
-      m_vkDiscardPool.get(), m_graphicsInfo.pipelineLayout, m_timeline);
+  vkPipelines()->discardAllPipelines(vkDiscardPool(),
+                                     m_graphicsInfo.pipelineLayout, timeline());
   m_graphicsPipeline = VK_NULL_HANDLE;
   // depth image
-  m_vkDiscardPool.get()->discardImageView(m_depthView, m_timeline);
+  vkDiscardPool()->discardImageView(m_depthView, timeline());
   m_depthView = VK_NULL_HANDLE;
-  m_vkDiscardPool.get()->discardImage(m_depthImage, m_depthAlloc, m_timeline);
+  vkDiscardPool()->discardImage(m_depthImage, m_depthAlloc, timeline());
   m_depthImage = VK_NULL_HANDLE;
   m_depthAlloc = VK_NULL_HANDLE;
   // framebuffer
   for (VkFramebuffer framebuffer : m_framebuffers) {
-    m_vkDiscardPool.get()->discardFramebuffer(framebuffer, m_timeline);
+    vkDiscardPool()->discardFramebuffer(framebuffer, timeline());
   }
   // command buffer bookkeeping
   m_commandBufferIds.clear();
 }
 
 void AndroidApp::createVulkanResources() AVK_NO_CFI {
-  auto const* const vkDevApi = m_vkDevice.get()->table();
-  VkDevice const dev = m_vkDevice.get()->device();
+  auto const* const vkDevApi = vkDevTable();
+  VkDevice const dev = vkDeviceHandle();
   // renderPass
   VkFormat const depthFmt =
-      vk::basicDepthStencilFormat(m_vkDevice.get()->physicalDevice());
+      vk::basicDepthStencilFormat(vkPhysicalDeviceHandle());
   m_graphicsInfo.renderPass =
-      vk::basicRenderPass(m_vkDevice.get(),
-                          m_vkSwapchain.get()->surfaceFormat().format, depthFmt)
+      vk::basicRenderPass(vkDevice(), vkSwapchain()->surfaceFormat().format,
+                          depthFmt)
           .get();
   // graphics pipeline
-  m_graphicsPipeline = m_vkPipelines.get()->getOrCreateGraphicsPipeline(
+  m_graphicsPipeline = vkPipelines()->getOrCreateGraphicsPipeline(
       m_graphicsInfo, true, VK_NULL_HANDLE);
   // depth image
   vk::SingleImage2DSpecVk imgSpec{};
   imgSpec.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                   VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
-  imgSpec.width = m_vkSwapchain.get()->extent().width;
-  imgSpec.height = m_vkSwapchain.get()->extent().height;
+  imgSpec.width = vkSwapchain()->extent().width;
+  imgSpec.height = vkSwapchain()->extent().height;
   imgSpec.imageTiling = VK_IMAGE_TILING_OPTIMAL;
   imgSpec.samples = VK_SAMPLE_COUNT_1_BIT;
   imgSpec.format = depthFmt;
-  bool res =
-      vk::createImage(m_vkDevice.get(), imgSpec, &m_depthImage, &m_depthAlloc);
+  bool res = vk::createImage(vkDevice(), imgSpec, &m_depthImage, &m_depthAlloc);
   assert(res && "failed allocating depth image");
   VkImageViewCreateInfo depthViewInfo{};
   depthViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -134,13 +113,13 @@ void AndroidApp::createVulkanResources() AVK_NO_CFI {
   VK_CHECK(
       vkDevApi->vkCreateImageView(dev, &depthViewInfo, nullptr, &m_depthView));
   // framebuffers
-  m_framebuffers.resize(m_vkSwapchain.get()->imageCount());
+  m_framebuffers.resize(vkSwapchain()->imageCount());
   VkFramebufferCreateInfo createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
   createInfo.renderPass = m_graphicsInfo.renderPass;
   createInfo.attachmentCount = 2;
-  createInfo.width = m_vkSwapchain.get()->extent().width;
-  createInfo.height = m_vkSwapchain.get()->extent().height;
+  createInfo.width = vkSwapchain()->extent().width;
+  createInfo.height = vkSwapchain()->extent().height;
   createInfo.layers = 1;
   VkImageView attachments[2]{};
   createInfo.pAttachments = attachments;
@@ -148,13 +127,13 @@ void AndroidApp::createVulkanResources() AVK_NO_CFI {
   uint32_t index = 0;
   for (VkFramebuffer& framebuffer : m_framebuffers) {
     uint32_t const i = index++;
-    attachments[0] = m_vkSwapchain.get()->imageViewAt(i);
+    attachments[0] = vkSwapchain()->imageViewAt(i);
     VK_CHECK(
         vkDevApi->vkCreateFramebuffer(dev, &createInfo, nullptr, &framebuffer));
   }
 
   // bookkeeping for command buffers: 1 ID per Frame in Flight
-  m_commandBufferIds.resize(m_vkSwapchain.get()->frameCount());
+  m_commandBufferIds.resize(vkSwapchain()->frameCount());
   // note: SBO allocated Strings
   for (size_t i = 0; i < m_commandBufferIds.size(); ++i) {
     m_commandBufferIds[i] = fnv1aHash("Prim" + std::to_string(i));
@@ -171,11 +150,11 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
   };
   size_t const vertexBytes = sizeof(Vertex) * vertices.size();
   bool status = vk::createBuffer(
-      m_vkDevice.get(), sizeof(Vertex) * vertices.size(),
+      vkDevice(), sizeof(Vertex) * vertices.size(),
       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vk::HostVisibleCoherent, 0,
       vk::DynamicBufferVmaFlags, &m_vertexBuffer, &m_vertexAlloc);
   assert(status && "Failed to allocate vertex buffer");
-  VK_CHECK(vmaCopyMemoryToAllocation(m_vkDevice.get()->vmaAllocator(),
+  VK_CHECK(vmaCopyMemoryToAllocation(vkDevice()->vmaAllocator(),
                                      vertices.data(), m_vertexAlloc, 0,
                                      vertexBytes));
   // graphicsInfo
@@ -187,10 +166,10 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
   auto const fragCode = spirvFromAsset(m_app->activity->assetManager,
                                        "shaders/basic-triangle.frag.spv");
   // shaders
-  m_graphicsInfo.preRasterization.vertexModule = vk::createShaderModule(
-      m_vkDevice.get(), vertCode.data(), vertCode.size() << 2);
-  m_graphicsInfo.fragmentShader.fragmentModule = vk::createShaderModule(
-      m_vkDevice.get(), fragCode.data(), fragCode.size() << 2);
+  m_graphicsInfo.preRasterization.vertexModule =
+      vk::createShaderModule(vkDevice(), vertCode.data(), vertCode.size() << 2);
+  m_graphicsInfo.fragmentShader.fragmentModule =
+      vk::createShaderModule(vkDevice(), fragCode.data(), fragCode.size() << 2);
   m_graphicsInfo.preRasterization.geometryModule = VK_NULL_HANDLE;
   // attribute descriptions: 1 binding, 2 attributes
   VkVertexInputBindingDescription binding{};
@@ -215,7 +194,7 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
   m_graphicsInfo.fragmentShader.scissors.resize(1);
   // fragment shader and output attachments
   m_graphicsInfo.fragmentOut.depthAttachmentFormat =
-      vk::basicDepthStencilFormat(m_vkDevice.get()->physicalDevice());
+      vk::basicDepthStencilFormat(vkDevice()->physicalDevice());
   m_graphicsInfo.fragmentOut.stencilAttachmentFormat =
       m_graphicsInfo.fragmentOut.depthAttachmentFormat;
   m_graphicsInfo.opts.rasterizationPolygonMode = VK_POLYGON_MODE_FILL;
@@ -228,7 +207,7 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
   m_graphicsInfo.opts.stencilWriteMask = 0xFF;
 
   // Pipeline Layout
-  m_graphicsInfo.pipelineLayout = vk::createPipelineLayout(m_vkDevice.get());
+  m_graphicsInfo.pipelineLayout = vk::createPipelineLayout(vkDevice());
   // Renderpass and subpass
   m_graphicsInfo.subpass = 0;
   // RnderPass on variable resources
@@ -236,87 +215,45 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
 
 void AndroidApp::destroyConstantVulkanResources() AVK_NO_CFI {
   // vertex buffer
-  m_vkDiscardPool.get()->discardBuffer(m_vertexBuffer, m_vertexAlloc,
-                                       m_timeline);
+  vkDiscardPool()->discardBuffer(m_vertexBuffer, m_vertexAlloc, timeline());
   // TODO refactor on a function to discard graphics info
-  m_vkDiscardPool.get()->discardShaderModule(
-      m_graphicsInfo.preRasterization.vertexModule, m_timeline);
-  m_vkDiscardPool.get()->discardShaderModule(
-      m_graphicsInfo.fragmentShader.fragmentModule, m_timeline);
+  vkDiscardPool()->discardShaderModule(
+      m_graphicsInfo.preRasterization.vertexModule, timeline());
+  vkDiscardPool()->discardShaderModule(
+      m_graphicsInfo.fragmentShader.fragmentModule, timeline());
   m_graphicsInfo.preRasterization.vertexModule = VK_NULL_HANDLE;
   m_graphicsInfo.fragmentShader.fragmentModule = VK_NULL_HANDLE;
 
   // TODO: this is to be recreated if descriptor set layouts change
-  m_vkDiscardPool.get()->discardPipelineLayout(m_graphicsInfo.pipelineLayout,
-                                               m_timeline);
+  vkDiscardPool()->discardPipelineLayout(m_graphicsInfo.pipelineLayout,
+                                         timeline());
 }
 
-void AndroidApp::onWindowInit() {
+void AndroidApp::RTdoOnWindowInit() {
 #define PREFIX "[AndroidApp::onWindowInit] "
-  vk::SurfaceSpec surfSpec{};
-  surfSpec.window = m_app->window;
-  m_vkSurface.create(m_vkInstance.get(), surfSpec);
-  AVK_EXT_CHECK(*m_vkSurface.get());
-  LOGI << PREFIX "Vulkan Surface " << std::hex << m_vkSurface.get()->handle()
-       << std::dec << " Created" << std::endl;
-  m_vkDevice.create(m_vkInstance.get(), m_vkSurface.get());
-  LOGI << PREFIX "Vulkan Device Created" << std::endl;
-  m_vkSwapchain.create(m_vkInstance.get(), m_vkSurface.get(), m_vkDevice.get());
-  LOGI << PREFIX "Vulkan Swapchain Created" << std::endl;
-
-  m_vkDiscardPool.create(m_vkDevice.get());
-  LOGI << PREFIX "Discard Pool Created" << std::endl;
-  m_vkCommandPools.create(
-      m_vkDevice.get(), m_vkDevice.get()->universalGraphicsQueueFamilyIndex());
-  LOGI << PREFIX "Command Pools Created" << std::endl;
-  m_vkDescriptorPools.create(m_vkDevice.get());
-  LOGI << PREFIX "Descriptor Pools Created" << std::endl;
-  m_vkPipelines.create(m_vkDevice.get());
-  LOGI << PREFIX "Pipeline Pool Created" << std::endl;
-
   createConstantVulkanResources();
   LOGI << PREFIX "Constant Resources Created" << std::endl;
   createVulkanResources();
   LOGI << PREFIX "Resources Created" << std::endl;
-
-  m_windowInit = true;
 #undef PREFIX
 }
 
-void AndroidApp::onResize() {
-  m_vkSwapchain.get()->recreateSwapchain();
+void AndroidApp::RTdoOnResize() {
   cleanupVulkanResources();
   createVulkanResources();
 }
 
-void AndroidApp::onRender() AVK_NO_CFI {
-  using namespace literals;
-  auto const* const vkDevApi = m_vkDevice.get()->table();
-  VkDevice const dev = m_vkDevice.get()->device();
+VkResult AndroidApp::RTdoOnRender(vk::utils::SwapchainData const& swapchainData)
+    AVK_NO_CFI {
+  auto const* const vkDevApi = vkDevTable();
 
-  if (!m_shouldRender.load(std::memory_order_relaxed)) {
-    return;
-  }
-
-  // acquire a swapchain image (handle resize pt.1)
-  VkResult res = m_vkSwapchain.get()->acquireNextImage();
-  if (res == VK_SUBOPTIMAL_KHR || res == VK_ERROR_OUT_OF_DATE_KHR) {
-    onResize();
-    return;
-  }
-  auto const swapchainData = m_vkSwapchain.get()->swapchainData();
-  if (swapchainData.submissionFence != VK_NULL_HANDLE) {
-    VK_CHECK(vkDevApi->vkWaitForFences(dev, 1, &swapchainData.submissionFence,
-                                       VK_TRUE, UINT64_MAX));
-    VK_CHECK(vkDevApi->vkResetFences(dev, 1, &swapchainData.submissionFence));
-  }
   // acquire a command buffer
-  VkCommandBuffer const cmd = m_vkCommandPools.get()->allocatePrimary(
-      m_commandBufferIds[m_vkSwapchain.get()->frameIndex()]);
+  VkCommandBuffer const cmd = vkCommandPools()->allocatePrimary(
+      m_commandBufferIds[vkSwapchain()->frameIndex()]);
   // begin command buffer
   VkClearValue clear[2]{};
   VkRect2D rect{};
-  rect.extent = m_vkSwapchain.get()->extent();
+  rect.extent = vkSwapchain()->extent();
   VkCommandBufferBeginInfo beginInfo{};
   beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   VK_CHECK(vkDevApi->vkBeginCommandBuffer(cmd, &beginInfo));
@@ -327,7 +264,7 @@ void AndroidApp::onRender() AVK_NO_CFI {
   renderBegin.clearValueCount = 2;  // always match number of attachments
   renderBegin.pClearValues = clear;
   renderBegin.renderArea = rect;
-  renderBegin.framebuffer = m_framebuffers[m_vkSwapchain.get()->imageIndex()];
+  renderBegin.framebuffer = m_framebuffers[vkSwapchain()->imageIndex()];
 
   VkSubpassBeginInfoKHR subpassBegin{};
   subpassBegin.sType = VK_STRUCTURE_TYPE_SUBPASS_BEGIN_INFO_KHR;
@@ -354,8 +291,8 @@ void AndroidApp::onRender() AVK_NO_CFI {
   VK_CHECK(vkDevApi->vkEndCommandBuffer(cmd));
   // queue submit command buffer
   VkSemaphore submitSignalSems[2]{swapchainData.presentSemaphore,
-                                  m_vkDiscardPool.get()->timelineSemaphore()};
-  uint64_t values[2]{0, m_timeline + 1};
+                                  vkDiscardPool()->timelineSemaphore()};
+  uint64_t values[2]{0, timeline() + 1};
   VkTimelineSemaphoreSubmitInfoKHR timelineSubmit{};
   timelineSubmit.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO_KHR;
   timelineSubmit.signalSemaphoreValueCount = 2;
@@ -375,29 +312,50 @@ void AndroidApp::onRender() AVK_NO_CFI {
   submitInfo.pWaitSemaphores = &swapchainData.acquireSemaphore;
   // same as wait semaphores
   submitInfo.pWaitDstStageMask = &waitPresentationStage;
-  VK_CHECK(vkDevApi->vkQueueSubmit(m_vkDevice.get()->queue(), 1, &submitInfo,
-                                   swapchainData.submissionFence));
+  return vkDevApi->vkQueueSubmit(vkDevice()->queue(), 1, &submitInfo,
+                                 swapchainData.submissionFence);
+}
 
-  // queue present
-  VkSwapchainKHR const swapchain = m_vkSwapchain.get()->handle();
-  uint32_t const imageIndex = m_vkSwapchain.get()->imageIndex();
-  VkPresentInfoKHR presentInfo{};
-  presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-  presentInfo.swapchainCount = 1;
-  presentInfo.pSwapchains = &swapchain;
-  presentInfo.pImageIndices = &imageIndex;
-  presentInfo.waitSemaphoreCount = 1;
-  presentInfo.pWaitSemaphores = &swapchainData.presentSemaphore;
+vk::SurfaceSpec AndroidApp::doSurfaceSpec() {
+  vk::SurfaceSpec spec{};
+  spec.window = m_app->window;
+  return spec;
+}
 
-  res = vkDevApi->vkQueuePresentKHR(m_vkDevice.get()->queue(), &presentInfo);
-  if (res == VK_SUBOPTIMAL_KHR || res == VK_ERROR_OUT_OF_DATE_KHR) {
-    onResize();
-  } else {
-    VK_CHECK(res);
-  }
+void AndroidApp::RTdoOnSurfaceLost() {
+  // nothing for now
+}
 
-  m_vkSwapchain.get()->signalNextFrame();
-  m_timeline++;
+void AndroidApp::RTdoEarlySurfaceRegained() {
+  // discard everything related to surface and swapchain (depth/stencil image
+  // could survive, but who cares)
+  cleanupVulkanResources();
+}
+
+void AndroidApp::RTdoLateSurfaceRegained() {
+  // recreate everything related to surface and swapchain (depth/stencil image
+  // could survive, but who cares)
+  createVulkanResources();
+}
+void AndroidApp::doOnSaveState() {
+  // nothing (TODO pipeline cache and simulation state)
+  // pipeline cache -> base class
+  // simulation state -> middle class among all platforms
+  // OS Specific -> final subclass
+}
+
+void AndroidApp::doOnRestoreState() {
+  // nothing (TODO pipeline cache and simulation state)
+}
+
+void AndroidApp::RTdoOnDeviceLost() {
+  cleanupVulkanResources();
+  destroyConstantVulkanResources();
+}
+
+void AndroidApp::RTdoOnDeviceRegained() {
+  createConstantVulkanResources();
+  createVulkanResources();
 }
 
 }  // namespace avk

@@ -76,3 +76,6 @@ hence 10 touches
 They should have 16 KB support <https://developer.android.com/guide/practices/page-sizes#cmake>
 
 Vulkan Validation Layers Don't have that!
+
+- TODO: Need to integrate extension `VK_GOOGLE_display_timing`
+- Use AStorageManager (Scoped Storage) or app->activity->internalDataPath to save files.

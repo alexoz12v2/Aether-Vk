@@ -28,6 +28,8 @@ struct SwapchainData {
   VkSemaphore presentSemaphore;
 };
 
+struct SwapchainImage;
+
 /// Swapchain/Present Semaphore discard mechanism inspired by
 /// blender's GHOST:
 /// - when recreating the swapchain
@@ -41,6 +43,8 @@ struct FrameDiscard {
     semaphores.reserve(16);
     imageViews.reserve(16);
   }
+
+  void discardSwapchainImages(std::vector<utils::SwapchainImage>& images);
 
   void destroy(Device const* device);
 };
@@ -99,6 +103,11 @@ class Swapchain : public NonMoveable {
   /// if a 90 or 270 rotation occurred (mirrored or not), camera should be
   /// rotated
   void recreateSwapchain();
+
+  /// Force swapchain discard (response to a surface lost)
+  /// This is externally synchronized with respect to the other functions
+  /// such as `recreateSwapchain` and `acquireNextImage`
+  void forceDiscardToCurrentFrame();
 
   /// vkAcquireNextImageKHR. If a non null fence is given, timeout is zero
   /// and you should wait for this fence before submitting the renderPass
