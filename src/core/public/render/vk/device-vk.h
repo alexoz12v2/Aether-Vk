@@ -67,6 +67,8 @@ class Device : public NonMoveable {
     return m_device && m_table && m_vmaAllocator && m_queue;
   }
 
+  inline bool isSoC() const { return m_isSoC; }
+
  private:
   // dependencies which must outlive this object
   struct Deps {

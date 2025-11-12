@@ -59,7 +59,7 @@ uint64_t DiscardPool::queryTime() const {
 void DiscardPool::discardImage(VkImage image, VmaAllocation allocation,
                                uint64_t value) {
   std::lock_guard lk{m_mtx};
-  m_images.appendTimeline(value, std::make_pair(image, allocation));
+  m_images.appendTimeline(value, {image, allocation});
 }
 void DiscardPool::discardImageView(VkImageView imageView, uint64_t value) {
   std::lock_guard lk{m_mtx};
@@ -68,7 +68,7 @@ void DiscardPool::discardImageView(VkImageView imageView, uint64_t value) {
 void DiscardPool::discardBuffer(VkBuffer buffer, VmaAllocation allocation,
                                 uint64_t value) {
   std::lock_guard lk{m_mtx};
-  m_buffers.appendTimeline(value, std::make_pair(buffer, allocation));
+  m_buffers.appendTimeline(value, {buffer, allocation});
 }
 void DiscardPool::discardBufferView(VkBufferView bufferView, uint64_t value) {
   std::lock_guard lk{m_mtx};
@@ -135,20 +135,20 @@ void DiscardPool::destroyDiscardedResources(bool force) AVK_NO_CFI {
       timeline, [dev, vkDevApi](VkImageView imageView) AVK_NO_CFI {
         vkDevApi->vkDestroyImageView(dev, imageView, nullptr);
       });
-  m_images.removeOld(
-      timeline, [vmaAllocator = m_deps.device->vmaAllocator()](
-                    std::pair<VkImage, VmaAllocation> const& pair) AVK_NO_CFI {
-        vmaDestroyImage(vmaAllocator, pair.first, pair.second);
-      });
+  m_images.removeOld(timeline,
+                     [vmaAllocator = m_deps.device->vmaAllocator()](
+                         VMAResource<VkImage> const& pair) AVK_NO_CFI {
+                       vmaDestroyImage(vmaAllocator, pair.handle, pair.alloc);
+                     });
   // buffer and buffer views
   m_bufferViews.removeOld(
       timeline, [dev, vkDevApi](VkBufferView bufferView) AVK_NO_CFI {
         vkDevApi->vkDestroyBufferView(dev, bufferView, nullptr);
       });
   m_buffers.removeOld(
-      timeline, [device = m_deps.device](
-                    std::pair<VkBuffer, VmaAllocation> const& pair) AVK_NO_CFI {
-        vmaDestroyBuffer(device->vmaAllocator(), pair.first, pair.second);
+      timeline,
+      [device = m_deps.device](VMAResource<VkBuffer> const& pair) AVK_NO_CFI {
+        vmaDestroyBuffer(device->vmaAllocator(), pair.handle, pair.alloc);
       });
   // pipeline, pipeline layouts, shader modules
   m_pipelines.removeOld(timeline,

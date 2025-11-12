@@ -92,8 +92,8 @@ class DiscardPool : public NonMoveable {
     Device* device;
   } m_deps;
 
-  utils::TimelineResources<std::pair<VkImage, VmaAllocation>> m_images;
-  utils::TimelineResources<std::pair<VkBuffer, VmaAllocation>> m_buffers;
+  utils::TimelineResources<VMAResource<VkImage>> m_images;
+  utils::TimelineResources<VMAResource<VkBuffer>> m_buffers;
   utils::TimelineResources<VkImageView> m_imageViews;
   utils::TimelineResources<VkBufferView> m_bufferViews;
   utils::TimelineResources<VkShaderModule> m_shaderModules;

@@ -100,6 +100,8 @@ static inline void ensureDbgHelpInitialized() {
 
 #endif
 
+// TODO doesn't work on android at all
+
 std::string dumpStackTrace([[maybe_unused]] uint32_t maxFrames) {
 #if defined(AVK_NO_RDYNAMIC)
   return "<stacktrace disabled>";
