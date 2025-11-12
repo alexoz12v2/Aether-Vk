@@ -14,48 +14,43 @@
 #include "render/vk/surface-vk.h"
 #include "render/vk/swapchain-vk.h"
 
+// application
+#include "app/avk-application.h"
+
 // JNI/Android stuff
 #include <jni.h>
+
+// library
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 
 struct android_app;
 
 namespace avk {
 
-class AndroidApp : public NonMoveable {
+class AndroidApp : public ApplicationBase {
  public:
   AndroidApp(android_app* app);
-  ~AndroidApp() noexcept;
+  ~AndroidApp() noexcept override;
 
-  void onWindowInit();
-  void onRender();
-  void onResize();
-
-  inline void pauseRendering() {
-    m_shouldRender.store(false, std::memory_order_relaxed);
-  }
-  inline void resumeRendering() {
-    m_shouldRender.store(true, std::memory_order_relaxed);
-  }
-
-  inline vk::Instance* vkInstance() { return m_vkInstance.get(); }
-  inline vk::Surface* vkSurface() { return m_vkSurface.get(); }
-  inline vk::Device* vkDevice() { return m_vkDevice.get(); }
-  inline vk::Swapchain* vkSwapchain() { return m_vkSwapchain.get(); }
-  inline bool windowInitialized() { return m_windowInit; }
+ protected:
+  void RTdoOnWindowInit() override;
+  VkResult RTdoOnRender(vk::utils::SwapchainData const& swapchainData) override;
+  void RTdoOnResize() override;
+  void RTdoOnSurfaceLost() override;
+  void RTdoEarlySurfaceRegained() override;
+  void RTdoLateSurfaceRegained() override;
+  vk::SurfaceSpec doSurfaceSpec() override;
+  void doOnSaveState() override;
+  void doOnRestoreState() override;
+  void RTdoOnDeviceLost() override;
+  void RTdoOnDeviceRegained() override;
 
  private:
-  // vulkan stuff
-  DelayedConstruct<vk::Instance> m_vkInstance;
-  DelayedConstruct<vk::Device> m_vkDevice;
-  // on android, there's only one of these, hence we integrate it here
-  DelayedConstruct<vk::Surface> m_vkSurface;
-  DelayedConstruct<vk::Swapchain> m_vkSwapchain;
-  DelayedConstruct<vk::DiscardPool> m_vkDiscardPool;
-  DelayedConstruct<vk::CommandPools> m_vkCommandPools;
-  DelayedConstruct<vk::DescriptorPools> m_vkDescriptorPools;
-  DelayedConstruct<vk::PipelinePool> m_vkPipelines;
-
   // stuff to refactor
+
   // constant on resize
   vk::GraphicsInfo m_graphicsInfo;
   VkBuffer m_vertexBuffer = VK_NULL_HANDLE;
@@ -76,11 +71,6 @@ class AndroidApp : public NonMoveable {
   // app state
   const android_app* m_app = nullptr;
   JNIEnv* m_jniEnv = nullptr;
-
-  // useless state
-  uint64_t m_timeline = 0;
-  bool m_windowInit = false;
-  std::atomic_bool m_shouldRender = false;
 };
 
 }  // namespace avk

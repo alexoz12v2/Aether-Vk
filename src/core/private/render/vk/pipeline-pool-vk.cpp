@@ -291,7 +291,7 @@ void PipelinePool::clearGraphicsPipelineStates() {
   m_pipelineRasterizationStateCreateInfo.cullMode = VK_CULL_MODE_BACK_BIT;
   m_pipelineRasterizationStateCreateInfo.depthBiasEnable = VK_FALSE;
   m_pipelineRasterizationStateCreateInfo.depthBiasConstantFactor = 1.f;
-  m_pipelineRasterizationStateCreateInfo.depthBiasClamp = 1.f;
+  m_pipelineRasterizationStateCreateInfo.depthBiasClamp = 0.f;  // TODO 1.f;
   m_pipelineRasterizationStateCreateInfo.depthBiasSlopeFactor = 1.f;
   m_pipelineRasterizationStateCreateInfo.lineWidth = 1.f;
 

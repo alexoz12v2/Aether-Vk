@@ -26,6 +26,7 @@ static void onAppCmd([[maybe_unused]] struct android_app* app, int32_t cmd) {
     }
     case APP_CMD_TERM_WINDOW: {
       s_mlogi << "APP_CMD_TERM_WINDOW" << std::endl;
+      appManager->onSurfaceLost();
       break;
     }
     case APP_CMD_GAINED_FOCUS: {
@@ -38,22 +39,18 @@ static void onAppCmd([[maybe_unused]] struct android_app* app, int32_t cmd) {
       appManager->pauseRendering();
       break;
     }
-    case APP_CMD_CONTENT_RECT_CHANGED: {
-      s_mlogi << "APP_CMD_CONTENT_RECT_CHANGED: Request Swapchain Creation"
-              << std::endl;
-      [[maybe_unused]] int32_t const width =
-          app->contentRect.right - app->contentRect.bottom;
-      [[maybe_unused]] int32_t const height =
-          app->contentRect.bottom - app->contentRect.top;
-      // TODO request resize
+    case APP_CMD_CONTENT_RECT_CHANGED:
+    case APP_CMD_CONFIG_CHANGED:
+    case APP_CMD_WINDOW_RESIZED: {
+      s_mlogi << "[Activity Lifecycle] There's a resize here" << std::endl;
       break;
     }
     case APP_CMD_RESUME:
-      // TODO -> vkDeviceWaitIdle, recreate Swapchain
-      appManager->resumeRendering();
+      s_mlogi << "APP_CMD_RESUME" << std::endl;
+      appManager->onRestoreState();
     case APP_CMD_PAUSE:
-      // TODO -> destroy swapchain/discard swapchain (or just stop rendering)
-      appManager->pauseRendering();
+      s_mlogi << "APP_CMD_PAUSE" << std::endl;
+      appManager->onSaveState();
     default:
       break;
   }
@@ -138,8 +135,37 @@ static void handleInputEvents([[maybe_unused]] struct android_app* app,
   }
 }
 
-// TODO see if stuff allocated in android_main is correctly
-// destructed even if you exit from a android lifecycle
+// pthread signature
+static void* renderThreadFunc(void* arg) {
+  auto* app = reinterpret_cast<avk::AndroidApp*>(arg);
+  s_mlogi << "[RenderThread] started" << std::endl;
+
+  // wait for first initialization
+  while (!app->RTreadyForInit()) {
+    sched_yield();
+  }
+  app->RTwindowInit();
+  s_mlogi << "[RenderThread] rendering started" << std::endl;
+  // keep running while rendering
+  while (app->RTshouldRun()) {
+    if (app->RTsurfaceWasLost()) {
+      app->RTsurfaceLost();
+    }
+    // this shouldn't return `true` if the application is
+    // currently in the pause state
+    if (app->RTshouldUpdate()) {
+      // successfully claimed state: render it
+      app->RTonRender();
+    } else {
+      // if CAS failed or nothing to render, fallthrough and wait
+      app->RTwaitForNextRound();
+    }
+  }
+  s_mlogi << "[RenderThread] exiting via pthread_exit" << std::endl;
+  pthread_exit(nullptr);
+  return nullptr;
+}
+
 extern "C" void android_main(struct android_app* app) {
   // log something
   s_mlogi << "Hello Android World" << std::endl;
@@ -155,6 +181,16 @@ extern "C" void android_main(struct android_app* app) {
   // setup app commands callback
   app->userData = &application;
   app->onAppCmd = onAppCmd;
+
+  pthread_t render_thread;
+  if (pthread_create(&render_thread, nullptr, &renderThreadFunc,
+                     &application) != 0) {
+    s_mlogi << "Failed to create render thread!" << std::endl;
+    return;
+    return;
+  } else {
+    s_mlogi << "Render thread created." << std::endl;
+  }
 
   while (!app->destroyRequested) {
     // 1. Poll Lifecycle Events
@@ -176,12 +212,23 @@ extern "C" void android_main(struct android_app* app) {
 
     // 3. Update State
     // TODO
+    application.signalStateUpdated();
 
-    // 4. Render
-    application.onRender();
+    // 4. Render (should be on Render thread)
+    // application.RTonRender();
   }
 
-  app->userData = nullptr;
+  // join render thread
+  s_mlogi << "[main] signaling render thread to stop" << std::endl;
+  application.signalStopRendering();
+  void* retval = nullptr;
+  if (pthread_join(render_thread, &retval) != 0) {
+    s_mlogi << "[main] failed to join render thread" << std::endl;
+  } else {
+    s_mlogi << "[main] render thread joined" << std::endl;
+  };
 
+  // final clean
+  app->userData = nullptr;
   s_mlogi << "Detaching current thread from JNI" << std::endl;
 }
