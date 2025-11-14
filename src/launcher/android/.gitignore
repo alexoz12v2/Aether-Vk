@@ -15,3 +15,5 @@
 local.properties
 /avk__core/
 /build-ndk-symlink/
+.clang-format
+.clang-tidy
