@@ -17,14 +17,20 @@ class Instance : public NonMoveable {
   inline bool portabilityEnumeration() const {
     return m_portabilityEnumeration;
   }
-  inline bool debugUtils() const { return m_debugUtils; }
+#ifdef AVK_DEBUG
+  inline bool debugReport() const { return m_debugReport; }
+#else
+  inline bool debugReport() const { return false; }
+#endif
   inline uint32_t vulkanApiVersion() const { return VK_API_VERSION_1_1; }
 
  private:
   VkInstance m_instance = VK_NULL_HANDLE;
-  VkDebugUtilsMessengerEXT m_messenger = VK_NULL_HANDLE;
   bool m_portabilityEnumeration = false;
-  bool m_debugUtils = false;
+#ifdef AVK_DEBUG
+  bool m_debugReport = false;
+  VkDebugReportCallbackEXT m_debugCallback = VK_NULL_HANDLE;
+#endif
 };
 
 }  // namespace avk::vk

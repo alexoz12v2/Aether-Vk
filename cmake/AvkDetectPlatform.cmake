@@ -111,6 +111,7 @@ endfunction()
 # TODO: When using sanitizers, use dsymutils on MachO Executable to stuff debug information inside it
 # TODO: When using sanitizers (cfi), volk breaks
 # TODO: Add no-lto and no-sanitizer-cfi cmake cache variables
+# TODO: Make this per target?
 macro(avk_cxx_flags)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
   if (AVK_COMPILER STREQUAL "CLANG")
@@ -138,7 +139,6 @@ macro(avk_cxx_flags)
     # debug only
     if (CMAKE_BUILD_TYPE STREQUAL "Debug")
       if (${AVK_USE_SANITIZERS})
-        string(APPEND CMAKE_CXX_FLAGS " -fsanitize-ignorelist=${CMAKE_SOURCE_DIR}/blacklist.sanitizers")
         # On Windows, you cannot safely mix AddressSanitizer with the MSVC debug CRT.
         # The debug CRT has its own heap instrumentation, so ASan double-hooks the allocator and immediately crashes.
         # set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL") # already done at beg
@@ -150,13 +150,19 @@ macro(avk_cxx_flags)
         elseif (AVK_OS STREQUAL "MACOS")
           string(APPEND CMAKE_CXX_FLAGS " -fsanitize=thread -fsanitize=leak")
         endif ()
-        string(APPEND CMAKE_CXX_FLAGS " -fsanitize=address -fsanitize=undefined")
-        # Control Flow Integrity Requires LTO -> (Windows, clang 21) LLVM ERROR: Associative COMDAT symbol '___asan_gen_anon_global' is not a key for its COMDAT.
-        # -fsanitize=cfi-vcall -> CRASH
-        # -fsanitize=cfi-mfcall -> doesn't exist on windows
-        # string(APPEND CMAKE_CXX_FLAGS " -flto -fsanitize=cfi")
-        string(APPEND CMAKE_CXX_FLAGS " -flto -fsanitize=cfi-cast-strict -fsanitize=cfi-nvcall -fsanitize=cfi-icall -fsanitize=cfi-derived-cast -fsanitize=cfi-unrelated-cast")
 
+        # Common sanitizers which should work (on desktop at least)
+        if (NOT (AVK_OS STREQUAL "ANDROID") AND NOT (AVK_OS STREQUAL "IOS"))
+          string(APPEND CMAKE_CXX_FLAGS " -fsanitize-ignorelist=${CMAKE_SOURCE_DIR}/blacklist.sanitizers")
+          string(APPEND CMAKE_CXX_FLAGS " -fsanitize=address -fsanitize=undefined")
+          # Control Flow Integrity Requires LTO -> (Windows, clang 21) LLVM ERROR: Associative COMDAT symbol '___asan_gen_anon_global' is not a key for its COMDAT.
+          # -fsanitize=cfi-vcall -> CRASH
+          # -fsanitize=cfi-mfcall -> doesn't exist on windows
+          # string(APPEND CMAKE_CXX_FLAGS " -flto -fsanitize=cfi")
+          string(APPEND CMAKE_CXX_FLAGS " -flto -fsanitize=cfi-cast-strict -fsanitize=cfi-nvcall -fsanitize=cfi-icall -fsanitize=cfi-derived-cast -fsanitize=cfi-unrelated-cast")
+        endif ()
+
+        # windows has to copy the DLLs as usual
         if (AVK_OS STREQUAL "WINDOWS")
           # Windows needs to declare the sanitizers DLL if we link against dynamically
           # Take CMAKE_CXX_COMPILER, which is clang, assume it is a fullpath, go up one level and add \lib\clang

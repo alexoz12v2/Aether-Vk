@@ -24,7 +24,7 @@ using namespace avk::vk;
 
 inline constexpr VkImageUsageFlags s_SwapchainImageUsage =
     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-    VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
 // ---------------------------------------------------------------------------
 static VkSurfaceFormatKHR selectSurfaceFormat(VkPhysicalDevice physicalDevice,
@@ -44,13 +44,13 @@ static VkSurfaceFormatKHR selectSurfaceFormat(VkPhysicalDevice physicalDevice,
       physicalDevice, surface, &formatCount, surfaceFormats.data()));
 
   uint32_t index = 0;
-  for (auto const& formt : preferredFormats) {
+  for (auto const &formt : preferredFormats) {
     bool const found =
         surfaceFormats.cend() !=
-        std::find_if(surfaceFormats.cbegin(), surfaceFormats.cend(),
-                     [formt](VkSurfaceFormatKHR const& surfFmr) {
-                       return formt == surfFmr.format;
-                     });
+            std::find_if(surfaceFormats.cbegin(), surfaceFormats.cend(),
+                         [formt](VkSurfaceFormatKHR const &surfFmr) {
+                           return formt == surfFmr.format;
+                         });
     if (found) {
       break;
     }
@@ -99,14 +99,14 @@ static VkExtent2D extentVkClamp(VkExtent2D extentCurr, VkExtent2D extentMin,
                                 VkExtent2D extentMax) {
   VkExtent2D result{};
   result.width = extentCurr.width > extentMax.width
-                     ? extentMax.width
-                     : (extentCurr.width < extentMin.width ? extentMin.width
-                                                           : extentCurr.width);
+                 ? extentMax.width
+                 : (extentCurr.width < extentMin.width ? extentMin.width
+                                                       : extentCurr.width);
   result.height =
       extentCurr.height > extentMax.height
-          ? extentMax.height
-          : (extentCurr.height < extentMin.height ? extentMin.height
-                                                  : extentCurr.height);
+      ? extentMax.height
+      : (extentCurr.height < extentMin.height ? extentMin.height
+                                              : extentCurr.height);
   return result;
 }
 
@@ -119,13 +119,19 @@ static inline bool extentVkSpecialValue(VkExtent2D extent) {
 
 namespace avk::vk::utils {
 
-void FrameDiscard::destroy(const Device* device) AVK_NO_CFI {
-  auto const* const vkDevApi = device->table();
+void FrameDiscard::destroy(const Device *device,
+                           VkInstance instance) AVK_NO_CFI {
+  auto const *const vkDevApi = device->table();
   VkDevice const dev = device->device();
   while (!swapchains.empty()) {
     VkSwapchainKHR handle = swapchains.back();
     swapchains.pop_back();
     vkDevApi->vkDestroySwapchainKHR(dev, handle, nullptr);
+  }
+  while (!surfaces.empty()) {
+    VkSurfaceKHR surface = surfaces.back();
+    surfaces.pop_back();
+    vkDestroySurfaceKHR(instance, surface, nullptr);
   }
   while (!semaphores.empty()) {
     VkSemaphore handle = semaphores.back();
@@ -140,8 +146,8 @@ void FrameDiscard::destroy(const Device* device) AVK_NO_CFI {
 }
 
 void FrameDiscard::discardSwapchainImages(
-    std::vector<utils::SwapchainImage>& images) {
-  for (utils::SwapchainImage& swapchainImage : images) {
+    std::vector<utils::SwapchainImage> &images) {
+  for (utils::SwapchainImage &swapchainImage : images) {
     assert(swapchainImage.presentSemaphore && swapchainImage.imageView);
     semaphores.push_back(swapchainImage.presentSemaphore);
     imageViews.push_back(swapchainImage.imageView);
@@ -149,8 +155,8 @@ void FrameDiscard::discardSwapchainImages(
   }
 }
 
-void Frame::destroy(const Device* device) AVK_NO_CFI {
-  auto const* vkDevApi = device->table();
+void Frame::destroy(const Device *device, VkInstance instance) AVK_NO_CFI {
+  auto const *vkDevApi = device->table();
   VkDevice const dev = device->device();
   if (submissionFence != VK_NULL_HANDLE) {
     vkDevApi->vkDestroyFence(dev, submissionFence, nullptr);
@@ -160,7 +166,7 @@ void Frame::destroy(const Device* device) AVK_NO_CFI {
     vkDevApi->vkDestroySemaphore(dev, acquireSemaphore, nullptr);
     acquireSemaphore = VK_NULL_HANDLE;
   }
-  discard.destroy(device);
+  discard.destroy(device, instance);
 }
 
 }  // namespace avk::vk::utils
@@ -169,7 +175,7 @@ namespace avk::vk {
 
 void Swapchain::recreateSwapchain() AVK_NO_CFI {
 #define PREFIX "[Swapchain::recreateSwapchain] "
-  auto const* const vkDevApi = m_deps.device->table();
+  auto const *const vkDevApi = m_deps.device->table();
   VkDevice const dev = m_deps.device->device();
   uint32_t const currentFrame = frameIndex();
 
@@ -218,10 +224,10 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
     case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR:
     case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
     case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR:
-      std::swap(extent.width, extent.height);
+      std::swap(extent.width,
+                extent.height);
       break;
-    default:
-      break;
+    default:break;
   }
 
   // get image count (3 -> vsync, 2 -> no vsync)
@@ -232,7 +238,7 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
       surfCaps.surfaceCapabilities.minImageCount)  // min >= 1 by spec
     imageCount = surfCaps.surfaceCapabilities.minImageCount;
   else if (uint32_t max = surfCaps.surfaceCapabilities.maxImageCount;
-           max && imageCount > max)  // max = 0 if no limit by spec
+      max && imageCount > max)  // max = 0 if no limit by spec
     imageCount = surfCaps.surfaceCapabilities.maxImageCount;
 
   LOGI << PREFIX "Computed Extent: " << extent.width << 'x' << extent.height
@@ -242,7 +248,7 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
   // next round in which the current frame is examined, it is safe to destroy
   // them
   // TODO: recycle semaphores if present fences?
-  utils::FrameDiscard* frameDiscard = nullptr;
+  utils::FrameDiscard *frameDiscard = nullptr;
   if (currentFrame <= m_frames.size() && m_images.size() > 0) {
     frameDiscard = &m_frames[currentFrame].discard;
     // sweep semaphores (swapchain done after creation)
@@ -264,10 +270,10 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
   // check image flags (color attachment is mandatory by standard)
   AVK_EXT_CHECK(
       surfCaps.surfaceCapabilities.supportedUsageFlags &
-      (VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
+          (VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
   createInfo.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                          VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+      VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 #ifdef AVK_WINDOW_TRANSPARENCY
   // check for either pre multiplied or post multiplied and inherit
   VkCompositeAlphaFlagBitsKHR compositeAlpha =
@@ -292,7 +298,7 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
       VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) {
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
   } else if (surfCaps.surfaceCapabilities.supportedCompositeAlpha &
-             VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) {
+      VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) {
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
   } else {
     showErrorScreenAndExit("No Alpha Composition mode supported");
@@ -384,11 +390,11 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
   }
   m_tmpImages.clear();
   LOGI << PREFIX
-      "Created Image Views and Present Semaphores for swapchain images"
+          "Created Image Views and Present Semaphores for swapchain images"
        << std::endl;
 
   // discard all frame acquire semaphores and swapchain itself
-  for (utils::Frame& frame : m_frames) {
+  for (utils::Frame &frame : m_frames) {
     if (frame.acquireSemaphore != VK_NULL_HANDLE && frameDiscard) {
       frameDiscard->semaphores.push_back(frame.acquireSemaphore);
       frame.acquireSemaphore = VK_NULL_HANDLE;
@@ -406,7 +412,7 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
   VkFenceCreateInfo fenceCreateInfo{};
   fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
   fenceCreateInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-  for (utils::Frame& frame : m_frames) {
+  for (utils::Frame &frame : m_frames) {
     // semaphores for old frames have been discarded, recreate them (+ new ones)
     if (frame.acquireSemaphore == VK_NULL_HANDLE) {
       VK_CHECK(vkDevApi->vkCreateSemaphore(dev, &semCreateInfo, nullptr,
@@ -419,14 +425,14 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
     }
   }
   LOGI << PREFIX
-      "Created submission Fence and acquire semaphore for each frame in flight "
-      "("
+          "Created submission Fence and acquire semaphore for each frame in flight "
+          "("
        << m_frames.size() << ')' << std::endl;
 #undef PREFIX
 };
 
-Swapchain::Swapchain(Instance* instance, Surface* surface,
-                     Device* device) AVK_NO_CFI
+Swapchain::Swapchain(Instance *instance, Surface *surface,
+                     Device *device) AVK_NO_CFI
     : m_deps({instance, surface, device}) {
   recreateSwapchain();
 }
@@ -435,11 +441,11 @@ Swapchain::~Swapchain() noexcept AVK_NO_CFI {
   if (!*this) {
     return;
   }
-  auto const* vkDevApi = m_deps.device->table();
+  auto const *vkDevApi = m_deps.device->table();
   VkDevice const dev = m_deps.device->device();
   // 1. Destroy Present Semaphores (assumes no images are acquired/presenting)
   m_tmpImages.clear();
-  for (utils::SwapchainImage& image : m_images) {
+  for (utils::SwapchainImage &image : m_images) {
     // WARNING: Supposes that presentation has finished (wait idle or present
     // fence in place)
     if (image.presentSemaphore != VK_NULL_HANDLE) {
@@ -453,8 +459,8 @@ Swapchain::~Swapchain() noexcept AVK_NO_CFI {
   // 2. Destroy current swapchain
   vkDevApi->vkDestroySwapchainKHR(dev, m_swapchain, nullptr);
   // 3. Destroy Frames (synchronization primitives and decommissioned handles)
-  for (utils::Frame& frame : m_frames) {
-    frame.destroy(m_deps.device);
+  for (utils::Frame &frame : m_frames) {
+    frame.destroy(m_deps.device, m_deps.instance->handle());
   }
   m_frames.clear();
 }
@@ -465,7 +471,7 @@ void Swapchain::signalNextFrame() {
 }
 
 VkResult Swapchain::acquireNextImage(VkFence acquireFence) AVK_NO_CFI {
-  auto const* const vkDevApi = m_deps.device->table();
+  auto const *const vkDevApi = m_deps.device->table();
   VkDevice const dev = m_deps.device->device();
   uint32_t const frameIndex = m_frameIndex;
   uint64_t const timeout = acquireFence != VK_NULL_HANDLE ? 0 : UINT64_MAX;
@@ -473,12 +479,16 @@ VkResult Swapchain::acquireNextImage(VkFence acquireFence) AVK_NO_CFI {
   // wait for previous submission: When using Multiple Frames in Flight
   // we need to make sure to not break frame-dependant data
   VkResult res = VK_SUCCESS;
-  do {
-    res = vkDevApi->vkWaitForFences(
-        dev, 1, &m_frames[frameIndex].submissionFence, VK_TRUE, UINT64_MAX);
-    // timeout is actually a success code (>0), hence check won't catch that
-    VK_CHECK(res);
-  } while (res == VK_TIMEOUT);
+  if (m_frames[frameIndex].submissionFence != VK_NULL_HANDLE) {
+    do {
+      res = vkDevApi->vkWaitForFences(
+          dev, 1, &m_frames[frameIndex].submissionFence, VK_TRUE, UINT64_MAX);
+      // timeout is actually a success code (>0), hence check won't catch that
+      VK_CHECK(res);
+    } while (res == VK_TIMEOUT);
+    VK_CHECK(vkDevApi->vkResetFences(
+        dev, 1, &m_frames[frameIndex].submissionFence));
+  }
 
   // TODO: HDR Support: check if display changed its color space.
   // recreate the swapchain if it did
@@ -513,17 +523,14 @@ utils::SurfacePreRotation Swapchain::preRotation() const {
     case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR:
       mirrorX = true;
       [[fallthrough]];
-    case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
-      angleDeg = 90.0f;
+    case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:angleDeg = 90.0f;
       break;
     case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR:
       mirrorX = true;
       [[fallthrough]];
-    case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
-      angleDeg = 270.0f;
+    case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:angleDeg = 270.0f;
       break;
-    default:
-      angleDeg = 0.0f;
+    default:angleDeg = 0.0f;
       break;
   }
   float const angleRad = glm::radians(angleDeg);
@@ -539,7 +546,7 @@ utils::SurfacePreRotation Swapchain::preRotation() const {
   return result;
 }
 
-void Swapchain::forceDiscardToCurrentFrame() {
+void Swapchain::forceDiscardToCurrentFrame(VkSurfaceKHR lostSurface) {
   if (m_frameIndex < m_frames.size()) {
     if (!m_images.empty()) {
       m_frames[m_frameIndex].discard.discardSwapchainImages(m_images);
@@ -548,6 +555,9 @@ void Swapchain::forceDiscardToCurrentFrame() {
     if (m_swapchain) {
       m_frames[m_frameIndex].discard.swapchains.push_back(m_swapchain);
       m_swapchain = VK_NULL_HANDLE;
+      if (lostSurface) {
+        m_frames[m_frameIndex].discard.surfaces.push_back(lostSurface);
+      }
     }
   };
 }

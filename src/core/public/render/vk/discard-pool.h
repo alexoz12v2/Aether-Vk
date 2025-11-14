@@ -44,6 +44,8 @@ class TimelineResources : public std::vector<std::pair<uint64_t, Item>> {
   }
 };
 
+struct Frame;
+
 }  // namespace avk::vk::utils
 
 namespace avk::vk {
@@ -76,7 +78,6 @@ class DiscardPool : public NonMoveable {
   void discardCommandPoolForReuse(VkCommandPool commandPool,
                                   CommandPools* pools, std::thread::id tid,
                                   uint64_t value);
-  void discardSurface(VkSurfaceKHR surface, uint64_t value);
   // stuff from renderpasses (to see if needed)
   void discardRenderPass(VkRenderPass renderPass, uint64_t value);
   void discardFramebuffer(VkFramebuffer framebuffer, uint64_t value);
@@ -109,10 +110,6 @@ class DiscardPool : public NonMoveable {
     CommandPools* manager;
   };
   utils::TimelineResources<CmdDiscard> m_commandPools;
-
-  // in the rare case of a surface lost on mobile, or when closing
-  // secondary windows on desktop
-  utils::TimelineResources<VkSurfaceKHR> m_surfaces;
 
   // stuff from renderPasses (to see if needed)
   utils::TimelineResources<VkRenderPass> m_renderPasses;

@@ -45,6 +45,7 @@ struct OptionalFeatures {
   bool textureCompressionETC2;
 
   bool swapchainMaintenance1;
+  bool memoryBudget;
 
   bool isSoC;
 };
@@ -52,17 +53,17 @@ struct OptionalFeatures {
 // ---------------------------------------------------------------------------
 
 static void debugPrintDeviceExtensions(
-    std::vector<char const*> const& extensions) {
+    std::vector<char const *> const &extensions) {
 #define PREFIX "[Device::createDevice::debugPrintDeviceExtensions] "
   LOGI << PREFIX "Enabled Extensions: " << extensions.size() << std::endl;
-  for (char const* extName : extensions) {
+  for (char const *extName : extensions) {
     LOGI << PREFIX "  " << extName << std::endl;
   }
 #undef PREFIX
 }
 
 static void fillRequiredExtensions(
-    std::vector<char const*>& requiredExtensions) {
+    std::vector<char const *> &requiredExtensions) {
 #if defined(__linux__) || defined(__ANDROID__)
   requiredExtensions.push_back(VK_KHR_EXTERNAL_FENCE_FD_EXTENSION_NAME);
   requiredExtensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
@@ -90,15 +91,22 @@ static void fillRequiredExtensions(
   requiredExtensions.push_back(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
   requiredExtensions.push_back(VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME);
   requiredExtensions.push_back(VK_KHR_SPIRV_1_4_EXTENSION_NAME);
-  requiredExtensions.push_back(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
+  // see anyFeatureMissing for more information. Basically, if you have a
+  // RENDERDOC Vulkan Layer present and bufferDeviceAddressCaptureReplay is
+  // not a supported feature, bufferAddress will be filtered out
+  // requiredExtensions.push_back(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
   requiredExtensions.push_back(
       VK_KHR_UNIFORM_BUFFER_STANDARD_LAYOUT_EXTENSION_NAME);
   requiredExtensions.push_back(VK_KHR_VULKAN_MEMORY_MODEL_EXTENSION_NAME);
   requiredExtensions.push_back(VK_EXT_INLINE_UNIFORM_BLOCK_EXTENSION_NAME);
   requiredExtensions.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+  requiredExtensions.push_back(
+      VK_KHR_DESCRIPTOR_UPDATE_TEMPLATE_EXTENSION_NAME);
 }
 
-static bool anyRequiredFeaturesMissing(VkPhysicalDevice dev) AVK_NO_CFI {
+static std::vector<std::string> anyRequiredFeaturesMissing(VkPhysicalDevice dev) AVK_NO_CFI {
+  std::vector<std::string> missing;
+  missing.reserve(16);
   // Prepare Structs to query Necessary Features
   VkPhysicalDeviceFeatures2 features{};
   VkPhysicalDeviceVulkanMemoryModelFeaturesKHR vulkanMemoryModel{};
@@ -106,6 +114,7 @@ static bool anyRequiredFeaturesMissing(VkPhysicalDevice dev) AVK_NO_CFI {
   VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timelineSemaphoreFeat{};
   VkPhysicalDeviceBufferDeviceAddressFeaturesKHR bufferDeviceAddressFeat{};
   VkPhysicalDeviceInlineUniformBlockFeaturesEXT inlineUniformFeat{};
+  VkPhysicalDeviceShaderDrawParametersFeatures shaderDrawFeat{};
 
   features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
   vulkanMemoryModel.sType =
@@ -118,32 +127,46 @@ static bool anyRequiredFeaturesMissing(VkPhysicalDevice dev) AVK_NO_CFI {
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_KHR;
   inlineUniformFeat.sType =
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_FEATURES_EXT;
+  shaderDrawFeat.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES;
 
   features.pNext = &vulkanMemoryModel;
   vulkanMemoryModel.pNext = &ubStandardLayout;
   ubStandardLayout.pNext = &timelineSemaphoreFeat;
   timelineSemaphoreFeat.pNext = &bufferDeviceAddressFeat;
   bufferDeviceAddressFeat.pNext = &inlineUniformFeat;
+  inlineUniformFeat.pNext = &shaderDrawFeat;
 
   vkGetPhysicalDeviceFeatures2(dev, &features);
 
-  if (!vulkanMemoryModel.vulkanMemoryModel) {
-    return true;
-  } else if (!ubStandardLayout.uniformBufferStandardLayout) {
-    return true;
-  } else if (!bufferDeviceAddressFeat.bufferDeviceAddress) {
-    return true;
-  } else if (!timelineSemaphoreFeat.timelineSemaphore) {
-    return true;
-  } else if (!inlineUniformFeat.inlineUniformBlock) {
-    return true;
-  }
+  if (!vulkanMemoryModel.vulkanMemoryModel)
+    missing.push_back("vulkanMemoryModel");
+  if (!ubStandardLayout.uniformBufferStandardLayout)
+    missing.push_back("uniformBufferStandardLayout");
+  if (!timelineSemaphoreFeat.timelineSemaphore)
+    missing.push_back("timelineSemaphore");
+  if (!inlineUniformFeat.inlineUniformBlock)
+    missing.push_back("inlineUniformBlock");
+  if (!shaderDrawFeat.shaderDrawParameters)
+    missing.push_back("shaderDrawParameters");
 
-  return false;
+  // While bufferDeviceAddress is useful when you are doing GPU-driven
+  // rendering or complex setups on compute shaders, as it allows you to work
+  // with raw pointers to GPU memory instead of relying on indexing schemes,
+  // If you have a RENDERDOC implicit Vulkan Layer active in the current
+  // session, it disables this feature if bufferDeviceAddressCaptureReplay is
+  // not supported, altering the "normal" result of
+  // `vkGetPhysicalDeviceFeatures2`. Since my Xiaomi 22126RN91Y, Android 14,
+  // doesn't support bufferDeviceAddressCaptureReplay, we'll try to avoid
+  // this extension
+  // if (!bufferDeviceAddressFeat.bufferDeviceAddress)
+  //   missing.push_back("bufferDeviceAddress");
+
+  return missing;
 }
 
 static void setOptionalFeaturesForDevice(
-    VkPhysicalDevice dev, OptionalFeatures& outOptFeatures) AVK_NO_CFI {
+    VkPhysicalDevice dev, OptionalFeatures &outOptFeatures) AVK_NO_CFI {
   VkPhysicalDeviceFeatures2 features{};
   VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT swapMain1Feat{};
 
@@ -163,7 +186,6 @@ static void setOptionalFeaturesForDevice(
       features.features.textureCompressionETC2;
 }
 
-// TODO later: test on a integrated (laptop) and see whether not using staging
 // buffers there too can be beneficial
 static bool isSoC(VkPhysicalDevice dev, VkPhysicalDeviceType deviceType) {
   // assumes gpu is integrated. We say that it's a SoC chip if
@@ -185,7 +207,7 @@ static bool isSoC(VkPhysicalDevice dev, VkPhysicalDeviceType deviceType) {
   // - if all heaps are device local
   for (uint32_t heapIndex = 0; heapIndex < props.memoryHeapCount; ++heapIndex) {
     if (!(props.memoryHeaps[heapIndex].flags &
-          VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) {
+        VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) {
       return false;
     }
     if (props.memoryHeaps[heapIndex].flags &
@@ -198,8 +220,8 @@ static bool isSoC(VkPhysicalDevice dev, VkPhysicalDeviceType deviceType) {
 }
 
 static void setCompressedFormats(
-    VkPhysicalDevice chosen, OptionalFeatures& outOptFeatures,
-    utils::SampledImageCompressedFormats& comprFormats) AVK_NO_CFI {
+    VkPhysicalDevice chosen, OptionalFeatures &outOptFeatures,
+    utils::SampledImageCompressedFormats &comprFormats) AVK_NO_CFI {
   LOGI << "[Device::choosePhysicalDevice::setCompressedFormats]" << std::endl;
   VkFormat proposedLinear = VK_FORMAT_UNDEFINED;
   VkFormat proposedsRGB = VK_FORMAT_UNDEFINED;
@@ -210,7 +232,8 @@ static void setCompressedFormats(
 
   VkFormatFeatureFlags const sampled_BlitSrc_Transfer =
       VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
-      VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+          VK_FORMAT_FEATURE_TRANSFER_SRC_BIT
+          | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
   // now set extensions to be used on create info and populate comporession
   // formats
   if (outOptFeatures.textureCompressionASTC_LDR) {
@@ -233,9 +256,9 @@ static void setCompressedFormats(
     vkGetPhysicalDeviceFormatProperties2(chosen, proposedsRGB,
                                          &sRGBFormatProperties);
     if ((linearFormatProperties.formatProperties.linearTilingFeatures &
-         sampled_BlitSrc_Transfer) &&
+        sampled_BlitSrc_Transfer) &&
         (linearFormatProperties.formatProperties.optimalTilingFeatures &
-         sampled_BlitSrc_Transfer)) {
+            sampled_BlitSrc_Transfer)) {
       comprFormats.linear_R = proposedLinear;
       if (proposedLinear != VK_FORMAT_EAC_R11_UNORM_BLOCK) {  // special case
         comprFormats.linear_RGB = proposedLinear;
@@ -243,27 +266,27 @@ static void setCompressedFormats(
         vkGetPhysicalDeviceFormatProperties2(
             chosen, VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK, &linearFormatProperties);
         if ((linearFormatProperties.formatProperties.linearTilingFeatures &
-             sampled_BlitSrc_Transfer) &&
+            sampled_BlitSrc_Transfer) &&
             (linearFormatProperties.formatProperties.optimalTilingFeatures &
-             sampled_BlitSrc_Transfer)) {
+                sampled_BlitSrc_Transfer)) {
           comprFormats.linear_RGB = VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK;
         }
       }
     }
 
     if ((sRGBFormatProperties.formatProperties.linearTilingFeatures &
-         sampled_BlitSrc_Transfer) &&
+        sampled_BlitSrc_Transfer) &&
         (sRGBFormatProperties.formatProperties.optimalTilingFeatures &
-         sampled_BlitSrc_Transfer)) {
+            sampled_BlitSrc_Transfer)) {
       comprFormats.sRGB_RGBA = VK_FORMAT_BC7_SRGB_BLOCK;
     }
   }
 }
 
 [[nodiscard]] static VkPhysicalDevice choosePhysicalDevice(
-    Instance* instance, Extensions& outExtensions,
-    OptionalFeatures& outOptFeatures,
-    utils::SampledImageCompressedFormats& comprFormats) AVK_NO_CFI {
+    Instance *instance, Extensions &outExtensions,
+    OptionalFeatures &outOptFeatures,
+    utils::SampledImageCompressedFormats &comprFormats) AVK_NO_CFI {
   assert(instance);
   uint32_t physicalDeviceCount = 0;
   VK_CHECK(vkEnumeratePhysicalDevices(instance->handle(), &physicalDeviceCount,
@@ -281,7 +304,7 @@ static void setCompressedFormats(
   // prepare list of required extensions. We'll note the ones which we will use,
   // but won't activate explicitly since we are on Vulkan 1.1 and have been
   // promoted
-  std::vector<char const*> requiredExtensions;
+  std::vector<char const *> requiredExtensions;
   requiredExtensions.reserve(64);
   fillRequiredExtensions(requiredExtensions);
   std::vector<VkExtensionProperties> extensionProperties;
@@ -299,10 +322,10 @@ static void setCompressedFormats(
     extensionProperties.resize(devExtCount);
     VK_CHECK(vkEnumerateDeviceExtensionProperties(dev, nullptr, &devExtCount,
                                                   extensionProperties.data()));
-    for (char const* requiredExtName : requiredExtensions) {
+    for (char const *requiredExtName : requiredExtensions) {
       auto const it =
           std::find_if(extensionProperties.cbegin(), extensionProperties.cend(),
-                       [requiredExtName](VkExtensionProperties const& prop) {
+                       [requiredExtName](VkExtensionProperties const &prop) {
                          return strncmp(prop.extensionName, requiredExtName,
                                         VK_MAX_EXTENSION_NAME_SIZE) == 0;
                        });
@@ -314,7 +337,13 @@ static void setCompressedFormats(
          << std::dec << " Supports all required extensions" << std::endl;
 
     // check if required features are supported
-    if (anyRequiredFeaturesMissing(dev)) {
+    if (auto missing = anyRequiredFeaturesMissing(dev); !missing.empty()) {
+      LOGW << "[Device::choosePhysicalDevice] device " << std::hex << dev
+           << std::dec << "Misses features: ";
+      for (std::string const &feat : missing) {
+        LOGW << "\n\t" << feat << '\n';
+      }
+      LOGW << std::flush;
       continue;
     }
     LOGI << "[Device::choosePhysicalDevice] Physical Device " << std::hex << dev
@@ -326,26 +355,23 @@ static void setCompressedFormats(
     vkGetPhysicalDeviceProperties2(dev, &props);
 
     switch (props.properties.deviceType) {
-      case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
-        LOGI << "[Device::choosePhysicalDevice] Physical Device " << std::hex
-             << dev << std::dec << " VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU"
-             << std::endl;
+      case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:LOGI
+            << "[Device::choosePhysicalDevice] Physical Device " << std::hex
+            << dev << std::dec << " VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU"
+            << std::endl;
         score += 400;
         break;
-      case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
-        LOGI << "[Device::choosePhysicalDevice] Physical Device " << std::hex
-             << dev << std::dec << " VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU"
-             << std::endl;
+      case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:LOGI
+            << "[Device::choosePhysicalDevice] Physical Device " << std::hex
+            << dev << std::dec << " VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU"
+            << std::endl;
         score += 300;
         break;
-      case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
-        score += 200;
+      case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:score += 200;
         break;
-      case VK_PHYSICAL_DEVICE_TYPE_CPU:
-        continue;  // reject CPUs
+      case VK_PHYSICAL_DEVICE_TYPE_CPU:continue;  // reject CPUs
         break;
-      default:
-        continue;  // shouldn't reach here
+      default:continue;  // shouldn't reach here
         break;
     }
 
@@ -369,12 +395,31 @@ static void setCompressedFormats(
   outExtensions.extensions.resize(devExtCount);
   VK_CHECK(vkEnumerateDeviceExtensionProperties(
       chosen, nullptr, &devExtCount, outExtensions.extensions.data()));
-  for (char const* extName : requiredExtensions) {
-    AVK_EXT_CHECK(outExtensions.enable(extName));
+  for (char const *extName : requiredExtensions) {
+    if (!outExtensions.enable(extName)) {
+      LOGE << "[Device::CreateDevice from chosen] Extension '" << extName
+           << "' is missing" << std::endl;
+      AVK_EXT_CHECK(false);
+    }
   }
+  // if you can have present fences, then enable them
   if (outOptFeatures.swapchainMaintenance1) {
-    AVK_EXT_CHECK(
-        outExtensions.enable(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME));
+    if (!outExtensions.enable(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)) {
+      LOGE << "[Device::CreateDevice from chosen] swapchainMaintenance1 "
+              "feature enabled but extension not found"
+           << std::endl;
+      AVK_EXT_CHECK(false);
+    }
+  }
+  // VK_EXT_memory_budget allows VMA library to be more precise when estimating
+  // memory budget
+  if (outExtensions.isSupported(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) {
+    outExtensions.enable(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+    outOptFeatures.memoryBudget = true;
+    LOGI << "[Device::choosePhysicalDevice] VK_EXT_memory_budget supported, "
+            "creating VMA Allocator with "
+            "VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT"
+         << std::endl;
   }
 
   LOGI << "[Device::choosePhysicalDevice] Physical Device " << std::hex
@@ -386,7 +431,7 @@ static bool getPresentationSupport(
     [[maybe_unused]] VkInstance instance,
     [[maybe_unused]] VkPhysicalDevice physicalDevice,
     [[maybe_unused]] uint32_t index,
-    [[maybe_unused]] Surface const* surface) AVK_NO_CFI {
+    [[maybe_unused]] Surface const *surface) AVK_NO_CFI {
 #ifdef VK_USE_PLATFORM_WIN32_KHR
   auto* pfnGetPhysicalDeviceWin32PresentationSupportKHR =
       reinterpret_cast<PFN_vkGetPhysicalDeviceWin32PresentationSupportKHR>(
@@ -412,33 +457,33 @@ static bool getPresentationSupport(
 /// Note: Queue Priorities on each element still to populate
 static std::vector<VkDeviceQueueCreateInfo> newDeviceQueuesCreateInfos(
     VkInstance instance, VkPhysicalDevice physicalDevice,
-    Surface const* surface,
-    utils::QueueFamilyMap& outQueueFamilies) AVK_NO_CFI {
+    Surface const *surface,
+    utils::QueueFamilyMap &outQueueFamilies) AVK_NO_CFI {
   std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
   queueCreateInfos.reserve(4);
   queueCreateInfos.push_back({});
-  VkDeviceQueueCreateInfo& createInfo = queueCreateInfos.back();
+  VkDeviceQueueCreateInfo &createInfo = queueCreateInfos.back();
   createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
   createInfo.queueCount = 1;
 
   uint32_t count = 0;
   vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, &count, nullptr);
   std::vector<VkQueueFamilyProperties2> queueProperties{count};
-  for (VkQueueFamilyProperties2& prop : queueProperties) {
+  for (VkQueueFamilyProperties2 &prop : queueProperties) {
     prop.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2_KHR;
   }
   vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, &count,
                                             queueProperties.data());
 
   uint32_t familyIndex = 0;
-  for (VkQueueFamilyProperties2 const& props : queueProperties) {
-    // TODO add per WSI type surface support check
+  for (VkQueueFamilyProperties2 const &props : queueProperties) {
     uint32_t const index = familyIndex++;
     bool const supportsPresent =
         getPresentationSupport(instance, physicalDevice, index, surface);
     bool const graphicsComputeTransfer =
         props.queueFamilyProperties.queueFlags &
-        (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT);
+            (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT
+                | VK_QUEUE_TRANSFER_BIT);
     if (supportsPresent && graphicsComputeTransfer) {
       outQueueFamilies.universalGraphics = index;
       familyIndex = index;
@@ -453,10 +498,10 @@ static std::vector<VkDeviceQueueCreateInfo> newDeviceQueuesCreateInfos(
 
 static VkDevice createDevice(VkInstance instance,
                              VkPhysicalDevice physicalDevice,
-                             Extensions const& extensions,
-                             OptionalFeatures const& optFeatures,
-                             Surface const* surface,
-                             utils::QueueFamilyMap& queueFamilies) AVK_NO_CFI {
+                             Extensions const &extensions,
+                             OptionalFeatures const &optFeatures,
+                             Surface const *surface,
+                             utils::QueueFamilyMap &queueFamilies) AVK_NO_CFI {
   // enable all the necessary features
   VkPhysicalDeviceFeatures2KHR features{};
   VkPhysicalDeviceVulkanMemoryModelFeaturesKHR vulkanMemoryModel{};
@@ -464,6 +509,7 @@ static VkDevice createDevice(VkInstance instance,
   VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timelineSemaphoreFeat{};
   VkPhysicalDeviceBufferDeviceAddressFeaturesKHR bufferDeviceAddressFeat{};
   VkPhysicalDeviceInlineUniformBlockFeaturesEXT inlineUniformFeat{};
+  VkPhysicalDeviceShaderDrawParametersFeatures shaderDrawFeat{};
   VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT swapchainMaintenance1Feat{};
 
   features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2_KHR;
@@ -477,6 +523,8 @@ static VkDevice createDevice(VkInstance instance,
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_KHR;
   inlineUniformFeat.sType =
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_FEATURES_EXT;
+  shaderDrawFeat.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES;
   swapchainMaintenance1Feat.sType =
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
 
@@ -485,8 +533,9 @@ static VkDevice createDevice(VkInstance instance,
   ubStandardLayout.pNext = &timelineSemaphoreFeat;
   timelineSemaphoreFeat.pNext = &bufferDeviceAddressFeat;
   bufferDeviceAddressFeat.pNext = &inlineUniformFeat;
+  inlineUniformFeat.pNext = &shaderDrawFeat;
   if (optFeatures.swapchainMaintenance1) {
-    inlineUniformFeat.pNext = &swapchainMaintenance1Feat;
+    shaderDrawFeat.pNext = &swapchainMaintenance1Feat;
   }
 
   // WARNING: Keep in sync with functions
@@ -496,6 +545,7 @@ static VkDevice createDevice(VkInstance instance,
   bufferDeviceAddressFeat.bufferDeviceAddress = VK_TRUE;
   timelineSemaphoreFeat.timelineSemaphore = VK_TRUE;
   inlineUniformFeat.inlineUniformBlock = VK_TRUE;
+  shaderDrawFeat.shaderDrawParameters = VK_TRUE;
   if (optFeatures.swapchainMaintenance1) {
     swapchainMaintenance1Feat.swapchainMaintenance1 = VK_TRUE;
   }
@@ -523,7 +573,7 @@ static VkDevice createDevice(VkInstance instance,
       newDeviceQueuesCreateInfos(instance, physicalDevice, surface,
                                  queueFamilies);
   float const highestPriority = 1.0f;
-  for (VkDeviceQueueCreateInfo& queueCreateInfo : queueCreateInfos) {
+  for (VkDeviceQueueCreateInfo &queueCreateInfo : queueCreateInfos) {
     queueCreateInfo.queueCount = 1;
     queueCreateInfo.pQueuePriorities = &highestPriority;
   }
@@ -532,26 +582,36 @@ static VkDevice createDevice(VkInstance instance,
       static_cast<uint32_t>(queueCreateInfos.size());
   createInfo.pQueueCreateInfos = queueCreateInfos.data();
 
+  // TODO: If bufferDeviceAddress and bufferDeviceAddressCaptureReplay are
+  // both supported features, add that as an optional extension
+  // (just for renderdoc though, not to be used in code)
+
   VK_CHECK(vkCreateDevice(physicalDevice, &createInfo, nullptr, &device));
   debugPrintDeviceExtensions(extensions.enabled);
   return device;
 }
 
-static VmaAllocator newVmaAllocator(
-    VkInstance instance, uint32_t vulkanApiVersion,
-    VkPhysicalDevice physicalDevice, VkDevice device,
-    VmaVulkanFunctions* vmaVulkanFunctions) AVK_NO_CFI {
+static VmaAllocator newVmaAllocator(VkInstance instance,
+                                    uint32_t vulkanApiVersion,
+                                    VkPhysicalDevice physicalDevice,
+                                    VkDevice device,
+                                    VmaVulkanFunctions *vmaVulkanFunctions,
+                                    bool memoryBudget) AVK_NO_CFI {
   assert(vulkanApiVersion >= VK_API_VERSION_1_1);
   VmaAllocatorCreateInfo allocatorCreateInfo{};
   // `VK_KHR_dedicated_allocation` promoted from 1.1
   allocatorCreateInfo.flags |=
       VMA_ALLOCATOR_CREATE_KHR_DEDICATED_ALLOCATION_BIT;
   // `VK_KHR_buffer_device_address` in use
-  allocatorCreateInfo.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+  // (TODO better with proper extension detection or leave it like this)
+  // allocatorCreateInfo.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
   // `VK_KHR_bind_memory2` promoted from 1.1
   allocatorCreateInfo.flags |= VMA_ALLOCATOR_CREATE_KHR_BIND_MEMORY2_BIT;
   // `VK_KHR_EXTERNAL_MEMORY_WIN32` is the only exporting extension supported by
   // VMA, so, for consistency, I'd rather handle it myself
+  if (memoryBudget) {
+    allocatorCreateInfo.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
+  }
   allocatorCreateInfo.instance = instance;
   allocatorCreateInfo.device = device;
   allocatorCreateInfo.physicalDevice = physicalDevice;
@@ -570,7 +630,7 @@ static VmaAllocator newVmaAllocator(
 
 namespace avk::vk {
 
-Device::Device(Instance* instance, Surface* surface) AVK_NO_CFI
+Device::Device(Instance *instance, Surface *surface) AVK_NO_CFI
     : m_deps({instance, surface}) {
   assert(instance && surface);
   Extensions extensions;
@@ -602,13 +662,22 @@ Device::Device(Instance* instance, Surface* surface) AVK_NO_CFI
                             &m_queue);
   LOGI << "[Device] Got Queue " << std::hex << m_queue << std::dec << std::endl;
 
+  // memory heap information for VMA (Memory Budget Tracking)
+  VkPhysicalDeviceMemoryProperties2 memoryProperties{};
+  memoryProperties.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+  vkGetPhysicalDeviceMemoryProperties2(m_physicalDevice, &memoryProperties);
+  m_heapBudgets.resize(memoryProperties.memoryProperties.memoryHeapCount);
+  memset(m_heapBudgets.data(), 0,
+         sizeof(VmaBudget) * memoryProperties.memoryProperties.memoryHeapCount);
+
   // 3. create allocator and eventually pool
   LOGI << "[Device] Creating VMA Allocator" << std::endl;
   m_vmaVulkanFunctions = std::make_unique<VmaVulkanFunctions>();
   memset(m_vmaVulkanFunctions.get(), 0, sizeof(VmaVulkanFunctions));
-  m_vmaAllocator =
-      newVmaAllocator(instance->handle(), instance->vulkanApiVersion(),
-                      m_physicalDevice, m_device, m_vmaVulkanFunctions.get());
+  m_vmaAllocator = newVmaAllocator(
+      instance->handle(), instance->vulkanApiVersion(), m_physicalDevice,
+      m_device, m_vmaVulkanFunctions.get(), optFeatures.memoryBudget);
 }
 
 Device::~Device() noexcept AVK_NO_CFI {
@@ -619,6 +688,11 @@ Device::~Device() noexcept AVK_NO_CFI {
   m_table->vkDeviceWaitIdle(m_device);
   vmaDestroyAllocator(m_vmaAllocator);
   m_table->vkDestroyDevice(m_device, nullptr);
+}
+
+void Device::refreshMemoryBudgets(uint32_t frameIndex) {
+  vmaSetCurrentFrameIndex(m_vmaAllocator, frameIndex);
+  vmaGetHeapBudgets(m_vmaAllocator, m_heapBudgets.data());
 }
 
 }  // namespace avk::vk

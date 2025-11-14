@@ -29,6 +29,10 @@
             <meta-data
                 android:name="android.app.lib_name"
                 android:value="aethervk" />
+            <!-- https://developer.android.com/ndk/guides/graphics/validation-layer#enable-debugging -->
+            <meta-data
+                android:name="com.android.graphics.injectLayers.enable"
+                android:value="${injectLayersEnabled}" />
         </activity>
     </application>
 
