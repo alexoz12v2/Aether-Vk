@@ -79,3 +79,25 @@ Vulkan Validation Layers Don't have that!
 
 - TODO: Need to integrate extension `VK_GOOGLE_display_timing`
 - Use AStorageManager (Scoped Storage) or app->activity->internalDataPath to save files.
+
+## Debugging
+
+You have two possible Options: Google's AGI or ARM's performance studio shipped RenderDoc.
+
+If you accidentally tried to run AGI even if it reported that
+you android phone was not supported, the Vulkan Application might be waiting for the AGI server to connect indefinitely with logs like
+
+```sh
+GAPII awiting connection on pipe gapii (abstract)
+```
+
+a possible solution might be to disable all vulkan layers related
+property with the `getprop` and `setprop` android shell commands,
+
+and then make sure to uninstall with `pm` any google packages
+related to it, and if necessary, restart the device
+
+```sh
+adb shell pm uninstall com.google.android.gapid.arm64v8a
+adb reboot
+```

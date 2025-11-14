@@ -1,8 +1,43 @@
+import com.android.build.api.dsl.Packaging
 import org.jetbrains.kotlin.compose.compiler.gradle.ComposeFeatureFlag
 import org.jetbrains.kotlin.gradle.fus.internal.isJenkins
 import java.net.URI
 import java.net.URL
 import java.util.zip.ZipInputStream
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Directory for JNI Libraries debug, exposed through a different
+// source set configuration https://developer.android.com/build/build-variants
+// the main source set is created by default by AGP and inserted into all build types
+val jniLibsDir = layout.buildDirectory.dir("debug-jniLibs")
+
+// --- Property configurable with -DvulkanValidationVersion on command line of from properties file ---
+val vulkanValidationVersion =
+  project.findProperty("vulkanValidationVersion")?.toString() ?: "1.4.309.0"
+val abiList = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+
+// === Derived URLs & paths ===
+val validationBaseUrl = "https://github.com/KhronosGroup/Vulkan-ValidationLayers/releases/download"
+val validationZipName = "android-binaries-$vulkanValidationVersion.zip"
+val validationUrl = "$validationBaseUrl/vulkan-sdk-$vulkanValidationVersion/$validationZipName"
+
+val validationDownloadDirectory =
+  layout.buildDirectory.dir("downloaded-vulkan-validation-layers/$vulkanValidationVersion")
+val validationZipFile = validationDownloadDirectory.map { it.file(validationZipName) }
+
+// assuming version of clang in the NDK is 19 (WARNING)
+val clangVersion = "19"
+// Define mapping from ASAN Dynamic Library filename to ABI folders (WARNING: Assumes names are fixed)
+val asanFiles = mapOf(
+  "libclang_rt.asan-aarch64-android.so" to "arm64-v8a",
+  "libclang_rt.asan-arm-android.so" to "armeabi-v7a",
+  "libclang_rt.asan-i686-android.so" to "x86",
+  "libclang_rt.asan-x86_64-android.so" to "x86_64"
+)
+val debugAsanJniLibsDir = layout.buildDirectory.dir("debug-asan/jniLibs")
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////
 
 plugins {
   alias(libs.plugins.android.application)
@@ -25,32 +60,37 @@ composeCompiler {
   featureFlags = setOf(ComposeFeatureFlag.StrongSkipping)
 }
 
-// Directory for JNI Libraries debug, exposed through a different
-// source set configuration https://developer.android.com/build/build-variants
-// the main source set is created by default by AGP and inserted into all build types
-val jniLibsDir = layout.buildDirectory.dir("debug-jniLibs")
-
 android {
   namespace = "org.aethervkproj.aethervk"
   compileSdk = 36
 
+  // Debug Additional resources: Vulkan Validation Layers, HWAsan starter script for arm64-v8 abi
+  // requires necessary configuration below on buildTypes
   sourceSets.getByName("debug") {
     jniLibs.srcDir(jniLibsDir)
+    jniLibs.srcDir(debugAsanJniLibsDir)
   }
 
   defaultConfig {
     ndkVersion = "28.2.13676358"
     applicationId = "org.aethervkproj.aethervk"
-    minSdk = 30 // Minimum for GameActivity
+    minSdk = 34 // Android 14
     targetSdk = 36
     versionCode = 1
     versionName = "1.0"
 
+    // do not enable injection of external .so libraries (external vulkan validation layers eg. renderdoc)
+    // by default
+    manifestPlaceholders["injectLayersEnabled"] = "false"
+
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    @Suppress("UnstableApiUsage")
     externalNativeBuild {
       cmake {
-        // cppFlags += "-std=c++17"
-        arguments.add("-DANDROID_USE_LEGACY_TOOLCHAIN_FILE=OFF")
+        // https://developer.android.com/ndk/guides/hwasan#cmake-gradle-kotlin
+        arguments += "-DANDROID_STL=c++_shared"
+        arguments += "-DANDROID_ARM_MODE=arm"
+        // arguments += "-DANDROID_USE_LEGACY_TOOLCHAIN_FILE=OFF"
       }
     }
   }
@@ -59,17 +99,38 @@ android {
   buildTypes {
     // https://developer.android.com/studio/debug
     debug {
+      // necessary for wrap.sh and remote debugging
       isDebuggable = true
+      isJniDebuggable = true
+      manifestPlaceholders["injectLayersEnabled"] = "true"
       // applicationIdSuffix = ".debug"
+
+      // the wrap script needs legacy packaging
+      packaging {
+        jniLibs {
+          useLegacyPackaging = true
+        }
+      }
+
       ndk {
         isDebuggable = true
         isJniDebuggable = true
         debugSymbolLevel = "FULL"
       }
+      @Suppress("UnstableApiUsage")
+      externalNativeBuild {
+        cmake {
+          // https://developer.android.com/ndk/guides/hwasan#cmake-gradle-kotlin
+          // arguments += "-DANDROID_SANITIZE=hwaddress"
+          // ^^ Added from cmake cause hwaddress is supported only on arm64-v8a
+          // hence rollback to old address sanitizer on other
+          arguments += "-DAVK_USE_SANITIZERS=ON"
+        }
+      }
     }
     release {
-      isDebuggable = true
-      isMinifyEnabled = false
+      // isDebuggable = true
+      isMinifyEnabled = true
       proguardFiles(
         getDefaultProguardFile("proguard-android-optimize.txt"),
         "proguard-rules.pro"
@@ -108,6 +169,11 @@ val copyShaders by tasks.registering(Copy::class) {
   include("**/*.spv") // ... copy SPIR-V files ...
   into("$projectDir/src/main/assets/shaders") // ... into assets/shaders
 
+  println("Copying Shaders");
+
+  // force copy of shaders always
+  outputs.upToDateWhen { false }
+
   // Optional: preserve folder structure relative to shaders/
   eachFile {
     path = relativePath.pathString
@@ -116,19 +182,6 @@ val copyShaders by tasks.registering(Copy::class) {
 }
 
 // Custom Task to download vulkan validation layers only on debug builds
-// --- Property configurable with -DvulkanValidationVersion on command line of from properties file ---
-val vulkanValidationVersion =
-  project.findProperty("vulkanValidationVersion")?.toString() ?: "1.4.309.0"
-val abiList = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
-
-// === Derived URLs & paths ===
-val validationBaseUrl = "https://github.com/KhronosGroup/Vulkan-ValidationLayers/releases/download"
-val validationZipName = "android-binaries-$vulkanValidationVersion.zip"
-val validationUrl = "$validationBaseUrl/vulkan-sdk-$vulkanValidationVersion/$validationZipName"
-
-val validationDownloadDirectory =
-  layout.buildDirectory.dir("downloaded-vulkan-validation-layers/$vulkanValidationVersion")
-val validationZipFile = validationDownloadDirectory.map { it.file(validationZipName) }
 
 // helper to check if all vulkan layer validation shared libs are present
 fun hasValidationLayers(): Boolean {
@@ -191,11 +244,37 @@ val unzipVulkanValidation by tasks.registering {
   }
 }
 
+// task to copy asan files into the build directory
+val copyASanSoFilesDebug by tasks.registering(Copy::class) {
+  // determine host abi  (done here because specifying ndkVersion under android plugin changes its result!)
+  val hostTag =
+    File(android.ndkDirectory, "toolchains/llvm/prebuilt").listFiles()
+      ?.firstOrNull { it.isDirectory }?.name
+      ?: throw GradleException("No prebuilt host folder found under NDK")
+  asanFiles.forEach { (fileName, abiFolder) ->
+    val sourceFile = File(
+      android.ndkDirectory,
+      "toolchains/llvm/prebuilt/$hostTag/lib/clang/$clangVersion/lib/linux/$fileName"
+    )
+    val targetDir = debugAsanJniLibsDir.get().dir(abiFolder).asFile
+    targetDir.mkdirs()
+    if (!sourceFile.exists()) {
+      throw GradleException("$sourceFile doesn't exist")
+    }
+    from(sourceFile) {
+      // relative subfolder from the "global" into
+      into(abiFolder)
+    }
+  }
+  // "global" into: Specify root of destination files
+  into(debugAsanJniLibsDir)
+}
+
 // hook the extract dependency into every debug task
 androidComponents {
   onVariants(selector().withBuildType("debug")) {
     tasks.named("preBuild").configure {
-      dependsOn(unzipVulkanValidation)
+      dependsOn(unzipVulkanValidation, copyASanSoFilesDebug)
     }
   }
 }

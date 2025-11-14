@@ -2,11 +2,16 @@
 
 #include "render/vk/command-pools.h"
 #include "render/vk/descriptor-pools.h"
+#include "render/vk/swapchain-vk.h"
+
+// library
+#include <cassert>
 
 namespace avk::vk {
 
 DiscardPool::DiscardPool(Instance* instance, Device* device) AVK_NO_CFI
     : m_deps{instance, device} {
+  assert(instance && device);
   // create timeline semaphore
   auto const* const vkDevApi = m_deps.device->table();
   VkDevice const dev = m_deps.device->device();
@@ -35,7 +40,6 @@ DiscardPool::DiscardPool(Instance* instance, Device* device) AVK_NO_CFI
   m_commandPools.reserve(64);
   m_renderPasses.reserve(64);
   m_framebuffers.reserve(64);
-  m_surfaces.reserve(64);
 }
 
 DiscardPool::~DiscardPool() AVK_NO_CFI {
@@ -105,11 +109,6 @@ void DiscardPool::discardCommandPoolForReuse(VkCommandPool commandPool,
   m_commandPools.appendTimeline(value, {commandPool, tid, pools});
 }
 
-void DiscardPool::discardSurface(VkSurfaceKHR surface, uint64_t value) {
-  std::lock_guard lk{m_mtx};
-  m_surfaces.appendTimeline(value, surface);
-}
-
 void DiscardPool::discardRenderPass(VkRenderPass renderPass, uint64_t value) {
   std::lock_guard lk{m_mtx};
   m_renderPasses.appendTimeline(value, renderPass);
@@ -171,10 +170,6 @@ void DiscardPool::destroyDiscardedResources(bool force) AVK_NO_CFI {
   m_commandPools.removeOld(timeline, [](CmdDiscard const& cmdDiscard) {
     cmdDiscard.manager->recycle(cmdDiscard.pool, cmdDiscard.tid);
   });
-  m_surfaces.removeOld(
-      timeline,
-      [inst = m_deps.instance->handle()](VkSurfaceKHR surface)
-          AVK_NO_CFI { vkDestroySurfaceKHR(inst, surface, nullptr); });
   // renderpasses and framebuffers
   m_renderPasses.removeOld(
       timeline, [vkDevApi, dev](VkRenderPass renderPass) AVK_NO_CFI {

@@ -43,10 +43,20 @@ class Device : public NonMoveable {
   /// Selects a physical device with baseline features and extension support,
   /// creates a device and takes its first queue supporting
   /// - graphics, compute, transfer, presentation
-  /// TODO: Decouple surface for desktop, and don't take it for mobile (android and metal mandate
+  /// TODO: Decouple surface for desktop, and don't take it for mobile (android
+  /// and metal mandate
   ///  that each graphics queue family is present capable)
   Device(Instance* instance, Surface* surface);
+  /// `vkDeviceWaitIdle`, `vmaDestroyAllocator`, `vkDestroyDevice`
   ~Device() noexcept;
+
+  /// Recomputes `vmaGetHeapBudgets` to update memory usage and budget for
+  /// each memory heap in the system. When the `VmaAllocator` is used by
+  /// multiple threads, such information gets outdated quickly
+  void refreshMemoryBudgets(uint32_t frameIndex);
+  inline std::vector<VmaBudget> const& heapBudgets() const {
+    return m_heapBudgets;
+  }
 
   inline VkPhysicalDevice physicalDevice() const { return m_physicalDevice; }
   inline VkDevice device() const { return m_device; }
@@ -82,6 +92,9 @@ class Device : public NonMoveable {
   // TODO Memory pools when work size becomes known after experimentation
   // VmaPool m_pool = VK_NULL_HANDLE;
   VmaAllocator m_vmaAllocator = VK_NULL_HANDLE;
+
+  /// VMA memory budget for each memory heap. Must be refreshed every frame
+  std::vector<VmaBudget> m_heapBudgets;
 
   // TODO: do we need to keep `VmaVulkanFunctions`?
   std::unique_ptr<VolkDeviceTable> m_table = nullptr;

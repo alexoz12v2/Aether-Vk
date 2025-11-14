@@ -30,7 +30,9 @@ BufferManager::BufferManager(vk::Device* device, size_t cap) : m_deps{device} {
 }
 
 int32_t BufferManager::createBufferGPUOnly(uint64_t id, size_t bytes,
-                                           VkBufferCreateFlags usage) {
+                                           VkBufferCreateFlags usage,
+                                           bool forceWithinBudget,
+                                           bool forceNoAllocation) AVK_NO_CFI {
   assert(m_deps.device && m_deps.device->device());
   VmaAllocator const allocator = m_deps.device->vmaAllocator();
   bool const isSoC = m_deps.device->isSoC();
@@ -38,8 +40,17 @@ int32_t BufferManager::createBufferGPUOnly(uint64_t id, size_t bytes,
   VmaAllocationCreateInfo allocInfo{};
   allocInfo.usage =
       isSoC ? VMA_MEMORY_USAGE_AUTO : VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-  allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+  allocInfo.preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+  if (isSoC) {
+    allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+  }
   allocInfo.priority = 1.f;
+  if (forceWithinBudget) {
+    allocInfo.flags |= VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+  }
+  if (forceNoAllocation) {
+    allocInfo.flags |= VMA_ALLOCATION_CREATE_NEVER_ALLOCATE_BIT;
+  }
 
   VkBuffer buffer = VK_NULL_HANDLE;
   VmaAllocation alloc = VK_NULL_HANDLE;
@@ -60,7 +71,9 @@ int32_t BufferManager::createBufferGPUOnly(uint64_t id, size_t bytes,
   return Success;
 }
 
-int32_t BufferManager::createBufferStaging(uint64_t id, size_t bytes) {
+int32_t BufferManager::createBufferStaging(uint64_t id, size_t bytes,
+                                           bool forceWithinBudget,
+                                           bool forceNoAllocation) AVK_NO_CFI {
   assert(m_deps.device && m_deps.device->device());
   assert(!m_deps.device->isSoC() && "Integrated graphics/SoC -> no staging");
   VmaAllocator const allocator = m_deps.device->vmaAllocator();
@@ -75,6 +88,12 @@ int32_t BufferManager::createBufferStaging(uint64_t id, size_t bytes) {
       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
   allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                     VMA_ALLOCATION_CREATE_MAPPED_BIT;
+  if (forceWithinBudget) {
+    allocInfo.flags |= VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+  }
+  if (forceNoAllocation) {
+    allocInfo.flags |= VMA_ALLOCATION_CREATE_NEVER_ALLOCATE_BIT;
+  }
 
   VkBuffer buffer = VK_NULL_HANDLE;
   VmaAllocation alloc = VK_NULL_HANDLE;
@@ -96,7 +115,9 @@ int32_t BufferManager::createBufferStaging(uint64_t id, size_t bytes) {
   return Success;
 }
 
-int32_t BufferManager::createBufferReadback(uint64_t id, size_t bytes) {
+int32_t BufferManager::createBufferReadback(uint64_t id, size_t bytes,
+                                            bool forceWithinBudget,
+                                            bool forceNoAllocation) AVK_NO_CFI {
   assert(m_deps.device && m_deps.device->device());
   assert(!m_deps.device->isSoC() && "Integrated graphics/SoC -> no staging");
   VmaAllocator const allocator = m_deps.device->vmaAllocator();
@@ -111,6 +132,12 @@ int32_t BufferManager::createBufferReadback(uint64_t id, size_t bytes) {
       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
   allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
                     VMA_ALLOCATION_CREATE_MAPPED_BIT;
+  if (forceWithinBudget) {
+    allocInfo.flags |= VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+  }
+  if (forceNoAllocation) {
+    allocInfo.flags |= VMA_ALLOCATION_CREATE_NEVER_ALLOCATE_BIT;
+  }
 
   VkBuffer buffer = VK_NULL_HANDLE;
   VmaAllocation alloc = VK_NULL_HANDLE;
@@ -132,8 +159,9 @@ int32_t BufferManager::createBufferReadback(uint64_t id, size_t bytes) {
   return Success;
 }
 
-int32_t BufferManager::createBufferStreaming(uint64_t id, size_t bytes,
-                                             VkBufferUsageFlags usage) {
+int32_t BufferManager::createBufferStreaming(
+    uint64_t id, size_t bytes, VkBufferUsageFlags usage, bool forceWithinBudget,
+    bool forceNoAllocation) AVK_NO_CFI {
   assert(m_deps.device && m_deps.device->device());
   VmaAllocator const allocator = m_deps.device->vmaAllocator();
 
@@ -145,6 +173,12 @@ int32_t BufferManager::createBufferStreaming(uint64_t id, size_t bytes,
       VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT |
       VMA_ALLOCATION_CREATE_MAPPED_BIT;
   allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+  if (forceWithinBudget) {
+    allocInfo.flags |= VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+  }
+  if (forceNoAllocation) {
+    allocInfo.flags |= VMA_ALLOCATION_CREATE_NEVER_ALLOCATE_BIT;
+  }
 
   VkBuffer buffer = VK_NULL_HANDLE;
   VmaAllocation alloc = VK_NULL_HANDLE;

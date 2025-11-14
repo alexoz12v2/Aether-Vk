@@ -26,12 +26,11 @@ Surface::Surface(Instance* instance, SurfaceSpec const& spec) AVK_NO_CFI
   VkAndroidSurfaceCreateInfoKHR createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
   createInfo.window = spec.window;
-  auto* pfnCreateAndroidSurfaceKHR =
-      reinterpret_cast<PFN_vkCreateAndroidSurfaceKHR>(vkGetInstanceProcAddr(
-          instance->handle(), "vkCreateAndroidSurfaceKHR"));
-  AVK_EXT_CHECK(pfnCreateAndroidSurfaceKHR);
-  VK_CHECK(pfnCreateAndroidSurfaceKHR(instance->handle(), &createInfo, nullptr,
-                                      &m_surface));
+  if (!spec.window) { // TODO make it an assert
+    showErrorScreenAndExit("Invalid ANativeWindow");
+  }
+  VK_CHECK(vkCreateAndroidSurfaceKHR(instance->handle(), &createInfo, nullptr,
+                                     &m_surface));
 #elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
   VkWaylandSurfaceCreateInfoKHR createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;

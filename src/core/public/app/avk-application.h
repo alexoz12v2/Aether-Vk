@@ -12,6 +12,10 @@
 #include "render/vk/surface-vk.h"
 #include "render/vk/swapchain-vk.h"
 
+// rendering stuff which might change
+#include "render/experimental/avk-basic-buffer-manager.h"
+#include "render/experimental/avk-basic-image-manager.h"
+
 // library
 #include <atomic>
 #include <chrono>
@@ -23,6 +27,14 @@ namespace avk {
 
 struct RenderCoordinator : public NonMoveable {
   RenderCoordinator() = default;
+#ifdef AVK_DEBUG
+  inline ~RenderCoordinator() noexcept {
+    LOGI
+        << "------------------------------ RenderCoordinator Destructor -------------------------------------------"
+        << std::endl;
+  }
+#endif
+
   static constexpr uint32_t MaxWaitMillis = 16;
 
   /// Variable to notify the Render thread it's ok to start
@@ -30,7 +42,7 @@ struct RenderCoordinator : public NonMoveable {
   /// example:
   ///  - Windows -> `HWND` + COM Apartment created on UI Thread
   ///  - Android -> `APP_CMD_INIT_WINDOW` received for the first time
-  std::atomic_bool shouldInitialize = false;
+  std::unique_ptr<size_t> shouldInitialize = std::make_unique<size_t>(0);
 
   /// Variable to notify the render thread the primary window was
   /// lost, hence it should handle that
@@ -52,7 +64,7 @@ struct RenderCoordinator : public NonMoveable {
 
   /// mutex and condition variable are to be signaled when the producer of the
   /// new state is finished and will be waited for on the render thread
-  std::mutex mtx;
+  mutable std::mutex mtx;
 
   /// mutex and condition variable are to be signaled when the producer of the
   /// new state is finished and will be waited for on the render thread
@@ -63,6 +75,11 @@ class ApplicationBase : public NonMoveable {
  public:
   ApplicationBase();
   virtual ~ApplicationBase() noexcept;
+
+  void DBGPRINT_SHOULD_INIT() {
+    LOGW << "----------------- DBG: " << *m_renderCoordinator.shouldInitialize
+         << std::endl;
+  }
 
   void onWindowInit();
   void onResize();
@@ -135,10 +152,18 @@ class ApplicationBase : public NonMoveable {
   }
 
   /// Called by the render thread to know when it's time to initialize itself
-  inline bool RTreadyForInit() const {
-    return m_renderCoordinator.shouldInitialize.load(std::memory_order_acquire);
+  inline void RTwaitReadyForInit() {
+    std::unique_lock lk{m_renderCoordinator.mtx};
+    m_renderCoordinator.cv.wait(lk, [this]() {
+      bool const ready = *m_renderCoordinator.shouldInitialize == 1;
+      return ready;
+    });
+    LOGI << "[RT WOKE UP] Woke up: " << *m_renderCoordinator.shouldInitialize
+         << std::endl;
   }
+
   void RTwindowInit();
+
   inline bool RTshouldRun() const {
     return m_renderCoordinator.renderRunning.load(std::memory_order_acquire);
   }
@@ -167,7 +192,7 @@ class ApplicationBase : public NonMoveable {
         [coord = &m_renderCoordinator]() {
           // if surface lost wake up and handle that before being killed!
           return coord->surfaceLost.load(std::memory_order_relaxed) ||
-                 (!coord->renderRunning.load(std::memory_order_acquire) ||
+              (!coord->renderRunning.load(std::memory_order_acquire) ||
                   coord->stateVersion.load(std::memory_order_acquire) >
                       coord->consumedVersion.load(std::memory_order_acquire));
         });
@@ -221,7 +246,7 @@ class ApplicationBase : public NonMoveable {
   /// first failed submission as it will handle checking for
   /// `VK_ERROR_DEVICE_LOST` and call the callback
   virtual VkResult RTdoOnRender(
-      vk::utils::SwapchainData const& swapchainData) = 0;
+      vk::utils::SwapchainData const &swapchainData) = 0;
 
   /// Function to react on a resize/rotation of the screen
   virtual void RTdoOnResize() = 0;
@@ -246,29 +271,39 @@ class ApplicationBase : public NonMoveable {
   virtual vk::SurfaceSpec doSurfaceSpec() = 0;
 
  protected:  // getters for subclasses
-  inline VolkDeviceTable const* vkDevTable() const {
+  inline VolkDeviceTable const *vkDevTable() const {
     return m_vkDevice.get()->table();
   }
   inline VkPhysicalDevice vkPhysicalDeviceHandle() const {
     return m_vkDevice.get()->physicalDevice();
   }
+  inline VmaAllocator vmaAllocator() const {
+    return m_vkDevice.get()->vmaAllocator();
+  }
   inline VkDevice vkDeviceHandle() const { return m_vkDevice.get()->device(); }
   inline uint64_t timeline() const { return m_timeline; }
-  inline vk::Instance* vkInstance() { return m_vkInstance.get(); };
-  inline vk::Device* vkDevice() { return m_vkDevice.get(); };
-  inline vk::Surface* vkSurface() { return m_vkSurface.get(); };
-  inline vk::Swapchain* vkSwapchain() { return m_vkSwapchain.get(); };
-  inline vk::DiscardPool* vkDiscardPool() { return m_vkDiscardPool.get(); };
-  inline vk::DiscardPoolMonitor* vkDiscardPoolMonitor() {
+  inline vk::Instance *vkInstance() { return m_vkInstance.get(); };
+  inline vk::Device *vkDevice() { return m_vkDevice.get(); };
+  inline vk::Surface *vkSurface() { return m_vkSurface.get(); };
+  inline vk::Swapchain *vkSwapchain() { return m_vkSwapchain.get(); };
+  inline vk::DiscardPool *vkDiscardPool() { return m_vkDiscardPool.get(); };
+  inline vk::DiscardPoolMonitor *vkDiscardPoolMonitor() {
     return m_vkDiscardPoolMonitor.get();
   };
-  inline vk::CommandPools* vkCommandPools() { return m_vkCommandPools.get(); };
-  inline vk::DescriptorPools* vkDescriptorPools() {
+  inline vk::CommandPools *vkCommandPools() { return m_vkCommandPools.get(); };
+  inline vk::DescriptorPools *vkDescriptorPools() {
     return m_vkDescriptorPools.get();
   };
-  inline vk::PipelinePool* vkPipelines() { return m_vkPipelines.get(); };
+  inline vk::PipelinePool *vkPipelines() { return m_vkPipelines.get(); };
 
-  inline RenderCoordinator& renderCoordinator() { return m_renderCoordinator; }
+  inline experimental::BufferManager *bufferManager() {
+    return m_bufferManager.get();
+  }
+  inline experimental::ImageManager *imageManager() {
+    return m_imageManager.get();
+  }
+
+  inline RenderCoordinator &renderCoordinator() { return m_renderCoordinator; }
 
  private:
   void RThandleSurfaceLost();
@@ -306,6 +341,10 @@ class ApplicationBase : public NonMoveable {
   /// manager for `VkPipeline` and `VkPipelineCache` objects for compute
   /// pipelines and graphics pipelines
   DelayedConstruct<vk::PipelinePool> m_vkPipelines;
+
+  // ----------- Vulkan: Resource Management --------------
+  DelayedConstruct<experimental::BufferManager> m_bufferManager;
+  DelayedConstruct<experimental::ImageManager> m_imageManager;
 
   // ------------ Render Thread - Main Thread -------------
   /// A bunch of synchronization primitives to facilitate signaling

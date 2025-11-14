@@ -37,16 +37,20 @@ struct FrameDiscard {
   std::vector<VkSwapchainKHR> swapchains;
   std::vector<VkSemaphore> semaphores;
   std::vector<VkImageView> imageViews;
+  /// should be used for lost surfaces, which should be destroyed after their
+  /// swapchain
+  std::vector<VkSurfaceKHR> surfaces;
 
   FrameDiscard() {
     swapchains.reserve(16);
     semaphores.reserve(16);
     imageViews.reserve(16);
+    surfaces.reserve(16);
   }
 
   void discardSwapchainImages(std::vector<utils::SwapchainImage>& images);
 
-  void destroy(Device const* device);
+  void destroy(Device const* device, VkInstance instance);
 };
 
 // A command pool needs to be created per frame per thread
@@ -65,7 +69,7 @@ struct Frame : public NonCopyable {
 
   // to be called once the frame on which there was a resize is acquired again
   // (after destroying present fences if in use)
-  void destroy(Device const* device);
+  void destroy(Device const* device, VkInstance instance);
 };
 
 struct SwapchainImage {
@@ -107,7 +111,7 @@ class Swapchain : public NonMoveable {
   /// Force swapchain discard (response to a surface lost)
   /// This is externally synchronized with respect to the other functions
   /// such as `recreateSwapchain` and `acquireNextImage`
-  void forceDiscardToCurrentFrame();
+  void forceDiscardToCurrentFrame(VkSurfaceKHR lostSurface = VK_NULL_HANDLE);
 
   /// vkAcquireNextImageKHR. If a non null fence is given, timeout is zero
   /// and you should wait for this fence before submitting the renderPass

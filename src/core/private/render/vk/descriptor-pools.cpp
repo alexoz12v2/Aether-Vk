@@ -114,6 +114,7 @@ void DescriptorPools::ensureActivePool() AVK_NO_CFI {
   VkDescriptorPoolCreateInfo createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
   createInfo.maxSets = MAX_DESCRIPTOR_SETS;
+  createInfo.poolSizeCount = POOL_SIZES;
   createInfo.pPoolSizes = poolSizes;
   VK_CHECK(vkDevApi->vkCreateDescriptorPool(dev, &createInfo, nullptr,
                                             &m_activePool));

@@ -14,6 +14,8 @@
 namespace avk::experimental {
 
 // TODO VMA_MEMORY_USAGE_GPU_LAZILY_ALLOCATED when using transient images
+// TODO VMA_ALLCOATION_CREATE_WITHIN_BUDGET_BIT
+// TODO VMA_ALLOCATION_CREATE_NEVER_ALLOCATE_BIT
 
 /// Builder/Manager class which helps into creating different categories of
 /// buffers prefilling the necessary flags for `vk::createBuffer`.
@@ -41,8 +43,20 @@ class BufferManager : public NonMoveable {
   /// They are resources which are either large or recreated frequently,
   /// eg attachments. Why for frequent things? If they are too frequent,
   /// the resulting fragmentation outweighs the memory allocation overhead
+  /// If the device is a SoC, then
+  /// `VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT` will be added
+  /// such that the buffer becomes mappable from host
+  /// \param forceWithinBudget if true,
+  /// `VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT` used, meaning VMA rejects
+  /// allocations exceeding the budget for its first VK memory type choice
+  /// (default is find next eligible memory type)
+  /// \param forceNoAllocation if true,
+  /// `VMA_ALLOCATION_CREATE_NEVER_ALLOCATE_BIT` used, meaning VMA only uses
+  /// pre-existing memory blocks, otherwise return error
+  /// \return 0 on success
   int32_t createBufferGPUOnly(uint64_t id, size_t bytes,
-                              VkBufferCreateFlags usage);
+                              VkBufferCreateFlags usage, bool forceWithinBudget,
+                              bool forceNoAllocation);
 
   /// Creates a HOST_VISIBLE buffer (use preferred for host coherent)
   /// uses VMA_ALLOCATION_CREATE_MAPPED_BIT. Should be used to
@@ -57,7 +71,8 @@ class BufferManager : public NonMoveable {
   /// Note: Makes this buffer persistently mapped
   /// `VMA_ALLOCATION_CREATE_MAPPED_BIT`,
   ///  hence no need to call `vmaMapMemory` or `vmaUnmapMemory`
-  int32_t createBufferStaging(uint64_t id, size_t bytes);
+  int32_t createBufferStaging(uint64_t id, size_t bytes, bool forceWithinBudget,
+                              bool forceNoAllocation);
 
   /// buffer which should receive data from the result of a computation to
   /// be read back into main memory. As staging buffers, they are useful
@@ -65,7 +80,8 @@ class BufferManager : public NonMoveable {
   /// Differences from staging:
   /// - `VK_BUFFER_USAGE_TRANSFER_DST_BIT` (not `SRC`)
   /// - `VMA_ALLOCATION_CRAETE_HOST_ACCESS_RANDOM_BIT` (not sequential)
-  int32_t createBufferReadback(uint64_t id, size_t bytes);
+  int32_t createBufferReadback(uint64_t id, size_t bytes,
+                               bool forceWithinBudget, bool forceNoAllocation);
 
   /// Buffers frequently written by the CPU and frequently written by the GPU
   /// meaning it is one of
@@ -91,17 +107,20 @@ class BufferManager : public NonMoveable {
   /// \returns `Transfer` value to allow user to know in advance it it needs to
   /// prepare a staging buffer
   int32_t createBufferStreaming(uint64_t id, size_t bytes,
-                                VkBufferUsageFlags usage);
+                                VkBufferUsageFlags usage,
+                                bool forceWithinBudget, bool forceNoAllocation);
 
   /// false if it doesn't find anything
   bool get(uint64_t id, VkBuffer& outBuffer, VmaAllocation& outAlloc);
 
   /// removes the discarded buffer from the hash table. False if not found
+  /// \warning assumes `discardPool` is on the same `vk::Device`
   bool discardById(vk::DiscardPool* discardPool, uint64_t id,
                    uint64_t timeline);
 
   /// To be called only on program shutdown, because each thread should discard
   /// it own buffers
+  /// \warning assumes `discardPool` is on the same `vk::Device`
   void discardEverything(vk::DiscardPool* discard, uint64_t timeline);
 
  private:
@@ -112,7 +131,7 @@ class BufferManager : public NonMoveable {
   /// hash table of buffers. Meaning is given by user
   std::unordered_map<uint64_t, vk::VMAResource<VkBuffer>> m_bufferMap;
   /// synchronization for map modifications/reads
-  std::shared_mutex m_mtx;
+  mutable std::shared_mutex m_mtx;
 };
 
 }  // namespace avk::experimental

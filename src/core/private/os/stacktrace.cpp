@@ -29,14 +29,11 @@
 #elif defined(__ANDROID__)
 // Note how we are assuming clang
 #  include <cxxabi.h>
-// backtace is available from API Level 33 (Android 13) (we are on minSdk 30,
-// Android 11)
-#  if __BIONIC_AVAILABILITY_GUARD(33)
+// backtace is available from API Level 33 (Android 13)
+#  if !__BIONIC_AVAILABILITY_GUARD(33)
 #    error "TODO: Not Managing API 33 execinfo (backtrace)"
-#    include <execinfo.h>
-#  else
-#    include <unwind.h>
 #  endif
+#  include <execinfo.h>
 #  include <cxxabi.h>
 #  include <dlfcn.h>
 #  include <unistd.h>
@@ -181,35 +178,16 @@ std::string dumpStackTrace([[maybe_unused]] uint32_t maxFrames) {
   free(symbols);
 
 #  elif defined(__ANDROID__)
-
-  struct BacktraceState {
-    void** current;
-    void** end;
-  };
-  std::unique_ptr<void*[]> frames = std::make_unique<void*[]>(maxFrames);
-  BacktraceState state{frames.get(), frames.get() + maxFrames};
-  _Unwind_Backtrace(
-      [](struct _Unwind_Context* context, void* arg) -> _Unwind_Reason_Code {
-        auto* state = reinterpret_cast<BacktraceState*>(arg);
-        uintptr_t pc = _Unwind_GetIP(context);
-        if (pc) {
-          if (state->current == state->end) {
-            return _URC_END_OF_STACK;
-          } else {
-            *state->current++ = reinterpret_cast<void*>(pc);
-          }
-        }
-        return _URC_NO_REASON;
-      },
-      &state);
-  ptrdiff_t const count = state.current - frames.get();
+  // TODO
+  int const count = 0;
+  void *frames[] = {(void *) &count};
   for (int i = 0; i < count; ++i) {
     Dl_info info;
     if (dladdr(frames[i], &info) && info.dli_sname) {
       int status = 0;
-      char* demangled =
+      char *demangled =
           abi::__cxa_demangle(info.dli_sname, nullptr, nullptr, &status);
-      char const* name =
+      char const *name =
           (status == 0 && demangled) ? demangled : info.dli_sname;
       oss << "  [" << i << "] ox" << std::hex << info.dli_saddr << std::dec
           << name << '\n';
@@ -229,7 +207,7 @@ std::string dumpStackTrace([[maybe_unused]] uint32_t maxFrames) {
 #endif
 }
 
-void showErrorScreenAndExit(char const* msg) {
+void showErrorScreenAndExit(char const *msg) {
 #if defined(_WIN32)
   MessageBoxA(NULL, msg, "Fatal Error", MB_OK | MB_ICONERROR);
   abort();

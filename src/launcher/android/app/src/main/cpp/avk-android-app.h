@@ -20,7 +20,10 @@
 // JNI/Android stuff
 #include <jni.h>
 
-// library
+// libraries
+#include <glm/glm.hpp>
+
+// standard library
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
@@ -30,16 +33,21 @@ struct android_app;
 
 namespace avk {
 
+struct Camera {
+  glm::mat4 view;
+  glm::mat4 proj;
+};
+
 class AndroidApp : public ApplicationBase {
  public:
-  AndroidApp(android_app* app);
+  AndroidApp(android_app *app, JNIEnv *jniEnv);
   ~AndroidApp() noexcept override;
 
   pthread_t RenderThread = 0;
 
  protected:
   void RTdoOnWindowInit() override;
-  VkResult RTdoOnRender(vk::utils::SwapchainData const& swapchainData) override;
+  VkResult RTdoOnRender(vk::utils::SwapchainData const &swapchainData) override;
   void RTdoOnResize() override;
   void RTdoOnSurfaceLost() override;
   void RTdoEarlySurfaceRegained() override;
@@ -52,17 +60,17 @@ class AndroidApp : public ApplicationBase {
 
  private:
   // stuff to refactor
+  Camera m_camera;
+  VkDescriptorSet m_cubeDescriptorSet = VK_NULL_HANDLE;
+  VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
+  VkDescriptorUpdateTemplateKHR m_descriptorUpdateTemplate = VK_NULL_HANDLE;
 
   // constant on resize
   vk::GraphicsInfo m_graphicsInfo;
-  VkBuffer m_vertexBuffer = VK_NULL_HANDLE;
-  VmaAllocation m_vertexAlloc = VK_NULL_HANDLE;
   // variable on resize
   std::vector<VkFramebuffer> m_framebuffers;
   std::vector<uint64_t> m_commandBufferIds;
   VkPipeline m_graphicsPipeline = VK_NULL_HANDLE;
-  VkImage m_depthImage = VK_NULL_HANDLE;
-  VmaAllocation m_depthAlloc = VK_NULL_HANDLE;
   VkImageView m_depthView = VK_NULL_HANDLE;
 
   void createConstantVulkanResources();
@@ -71,8 +79,8 @@ class AndroidApp : public ApplicationBase {
   void createVulkanResources();
 
   // app state
-  const android_app* m_app = nullptr;
-  JNIEnv* m_jniEnv = nullptr;
+  const android_app *m_app = nullptr;
+  JNIEnv *m_jniEnv = nullptr;
 };
 
 }  // namespace avk
