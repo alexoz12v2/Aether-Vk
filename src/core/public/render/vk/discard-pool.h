@@ -6,6 +6,7 @@
 // standard library
 #include <thread>
 #include <vector>
+#include <mutex>
 
 namespace avk::vk::utils {
 

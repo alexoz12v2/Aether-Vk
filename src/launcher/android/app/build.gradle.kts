@@ -27,7 +27,8 @@ val validationDownloadDirectory =
 val validationZipFile = validationDownloadDirectory.map { it.file(validationZipName) }
 
 // assuming version of clang in the NDK is 19 (WARNING)
-val clangVersion = "19"
+val clangVersion =
+  project.property("ndkClangVersion") ?: throw GradleException("Define DndkClangVersion={whatever}")
 // Define mapping from ASAN Dynamic Library filename to ABI folders (WARNING: Assumes names are fixed)
 val asanFiles = mapOf(
   "libclang_rt.asan-aarch64-android.so" to "arm64-v8a",
@@ -129,7 +130,7 @@ android {
       }
     }
     release {
-      // isDebuggable = true
+      isDebuggable = false
       isMinifyEnabled = true
       proguardFiles(
         getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -139,6 +140,7 @@ android {
     create("RelWithDbg") {
       initWith(getByName("release"))
       isDebuggable = true
+      isMinifyEnabled = false
     }
   }
   compileOptions {

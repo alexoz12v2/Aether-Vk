@@ -7,6 +7,7 @@
 // libraries and stuff
 #include <unordered_map>
 #include <vector>
+#include <mutex>
 
 namespace avk::vk {
 

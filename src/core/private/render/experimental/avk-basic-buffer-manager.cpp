@@ -25,18 +25,20 @@ static VkBufferCreateInfo startCreateInfo(size_t size,
 
 namespace avk::experimental {
 
-BufferManager::BufferManager(vk::Device* device, size_t cap) : m_deps{device} {
+BufferManager::BufferManager(vk::Device *device, size_t cap) : m_deps{device} {
   m_bufferMap.reserve(cap);
 }
 
 int32_t BufferManager::createBufferGPUOnly(uint64_t id, size_t bytes,
                                            VkBufferCreateFlags usage,
-                                           bool forceWithinBudget,
-                                           bool forceNoAllocation) AVK_NO_CFI {
+                                           [[maybe_unused]] bool forceWithinBudget,
+                                           [[maybe_unused]] bool forceNoAllocation) AVK_NO_CFI {
   assert(m_deps.device && m_deps.device->device());
   VmaAllocator const allocator = m_deps.device->vmaAllocator();
   bool const isSoC = m_deps.device->isSoC();
-  VkBufferCreateInfo createInfo = startCreateInfo(bytes, usage);
+  // GPU only buffer is probably filled in by someone if not mapped (not SoC)
+  VkBufferCreateInfo createInfo =
+      startCreateInfo(bytes, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
   VmaAllocationCreateInfo allocInfo{};
   allocInfo.usage =
       isSoC ? VMA_MEMORY_USAGE_AUTO : VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
@@ -59,6 +61,17 @@ int32_t BufferManager::createBufferGPUOnly(uint64_t id, size_t bytes,
   if (res < 0) {
     return VulkanError;
   }
+
+#ifdef AVK_DEBUG
+  // on SoC this should be both DEVICE_LOCAL and HOST_VISIBLE
+  if (isSoC) {
+    VkMemoryPropertyFlags memFlags = 0;
+    vmaGetAllocationMemoryProperties(allocator, alloc, &memFlags);
+    assert((memFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
+               && (memFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
+  }
+#endif
+
   bool wasInserted = false;
   {
     std::unique_lock wlock{m_mtx};
@@ -87,7 +100,7 @@ int32_t BufferManager::createBufferStaging(uint64_t id, size_t bytes,
   allocInfo.preferredFlags =
       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
   allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                    VMA_ALLOCATION_CREATE_MAPPED_BIT;
+      VMA_ALLOCATION_CREATE_MAPPED_BIT;
   if (forceWithinBudget) {
     allocInfo.flags |= VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
   }
@@ -131,7 +144,7 @@ int32_t BufferManager::createBufferReadback(uint64_t id, size_t bytes,
   allocInfo.preferredFlags =
       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
   allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-                    VMA_ALLOCATION_CREATE_MAPPED_BIT;
+      VMA_ALLOCATION_CREATE_MAPPED_BIT;
   if (forceWithinBudget) {
     allocInfo.flags |= VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
   }
@@ -170,8 +183,8 @@ int32_t BufferManager::createBufferStreaming(
   VmaAllocationCreateInfo allocInfo{};
   allocInfo.flags =
       VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-      VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT |
-      VMA_ALLOCATION_CREATE_MAPPED_BIT;
+          VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT |
+          VMA_ALLOCATION_CREATE_MAPPED_BIT;
   allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
   if (forceWithinBudget) {
     allocInfo.flags |= VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
@@ -208,8 +221,8 @@ int32_t BufferManager::createBufferStreaming(
   }
 }
 
-bool BufferManager::get(uint64_t id, VkBuffer& outBuffer,
-                        VmaAllocation& outAlloc) {
+bool BufferManager::get(uint64_t id, VkBuffer &outBuffer,
+                        VmaAllocation &outAlloc) {
   std::shared_lock rlock{m_mtx};
   auto it = m_bufferMap.find(id);
   if (it == m_bufferMap.end()) {
@@ -220,7 +233,7 @@ bool BufferManager::get(uint64_t id, VkBuffer& outBuffer,
   return true;
 }
 
-bool BufferManager::discardById(vk::DiscardPool* discardPool, uint64_t id,
+bool BufferManager::discardById(vk::DiscardPool *discardPool, uint64_t id,
                                 uint64_t timeline) {
   {
     std::shared_lock rlock{m_mtx};
@@ -239,10 +252,10 @@ bool BufferManager::discardById(vk::DiscardPool* discardPool, uint64_t id,
   return true;
 }
 
-void BufferManager::discardEverything(vk::DiscardPool* discard,
+void BufferManager::discardEverything(vk::DiscardPool *discard,
                                       uint64_t timeline) {
   std::unique_lock wlock{m_mtx};
-  for (auto const& [id, pair] : m_bufferMap) {
+  for (auto const &[id, pair] : m_bufferMap) {
     discard->discardBuffer(pair.handle, pair.alloc, timeline);
   }
   m_bufferMap.clear();

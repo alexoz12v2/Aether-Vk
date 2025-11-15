@@ -2,6 +2,7 @@
 #include <Windows.h>
 #include "avk-comutils.h"
 #include "avk-win32-window.h"
+#include "avk-windows-application.h"
 // clang-format on
 
 // WARNING: not supported on lld-link, hence you need to dynamically load user32
@@ -211,8 +212,7 @@ static void primaryWindowToggleFullscreen(HWND& hWnd, bool isFullscreen,
 }
 
 // TODO remove
-static void debugPrintPrimaryWindowStats(HWND hWnd,
-                                         WindowPayload const* payload) {
+static void debugPrintPrimaryWindowStats(HWND hWnd) {
   std::cout << "/////////////////////////////////////" << std::endl;
   DWORD hwndStyle = GetWindowLongW(hWnd, GWL_STYLE);
   if (hwndStyle & WS_MAXIMIZE) {
@@ -242,10 +242,6 @@ static void debugPrintPrimaryWindowStats(HWND hWnd,
     std::cout << "DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS): "
               << visibleW << "x" << visibleH << std::endl;
   }
-
-  VkExtent2D ext = payload->contextVk->surfaceExtent();
-  std::cout << "VkExtent Swapchain: " << ext.width << "x" << ext.height
-            << std::endl;
   std::cout << "/////////////////////////////////////" << std::endl;
 }
 
@@ -288,7 +284,7 @@ static void primaryWindowKeyDown(HWND hWnd, WPARAM wParam,
       enqueueMessageCOM(payload->comPayload, L"NOTIFICATION", L"Test Toast",
                         L"This is a notification");
     } else if (wParam == WKey) {
-      debugPrintPrimaryWindowStats(hWnd, payload);
+      debugPrintPrimaryWindowStats(hWnd);
     } else if (wParam == FKey) {
       enqueueMessageCOM(payload->comPayload, L"OPENFILE", L"", L"", hWnd);
     } else if (wParam == GKey) {
@@ -305,28 +301,40 @@ LRESULT primaryWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     CREATESTRUCTW* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
     // If this is the creation of this window (cs->hwndParent == nullptr)
     if (cs && cs->lpCreateParams && cs->hwndParent == nullptr) {
-      WindowPayload* payload =
-          reinterpret_cast<WindowPayload*>(cs->lpCreateParams);
-      SetWindowLongPtrW(hWnd, GWLP_USERDATA,
-                        reinterpret_cast<LONG_PTR>(payload));
+      auto* app = static_cast<WindowsApplication*>(cs->lpCreateParams);
+      SetWindowLongPtrW(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(app));
       // initialize windowedPlacement etc. here if you want
-      payload->isFullscreen = false;
-      payload->windowedPlacement = {};
-      payload->windowedPlacement.length = sizeof(payload->windowedPlacement);
-      payload->framebufferResized = false;
-      payload->lastClientExtent = {};
+      app->WindowPayload.isFullscreen = false;
+      app->WindowPayload.windowedPlacement = {};
+      app->WindowPayload.windowedPlacement.length =
+          sizeof(app->WindowPayload.windowedPlacement);
+      app->WindowPayload.framebufferResized = false;
+      app->WindowPayload.lastClientExtent = {};
     }
     return DefWindowProcW(hWnd, uMsg, wParam, lParam);
   }
 
   // might be null for some early messages
-  WindowPayload* payload =
-      reinterpret_cast<WindowPayload*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+  auto* app = reinterpret_cast<WindowsApplication*>(
+      GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+  auto* payload = app ? &app->WindowPayload : nullptr;
 
   switch (uMsg) {
+    default:
+      break;
+    case WM_CREATE: {
+      LOGI << "[UI::PrimaryWindow] WM_CREATE" << std::endl;
+      if (app) {
+        app->resumeRendering();
+      }
+      break;
+    }
     case WM_ACTIVATE: {
       // active
       if (wParam & (WA_ACTIVE | WA_CLICKACTIVE)) {
+        if (app) {
+          app->resumeRendering();
+        }
         if (payload && payload->isFullscreen) {
           // revert to top
           SetWindowPos(hWnd, HWND_TOP, 0, 0, 0, 0,
@@ -334,6 +342,12 @@ LRESULT primaryWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
                            SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
         }
       }
+      // TODO somehow it clears the surface?
+      // if (wParam == WA_INACTIVE) {
+      //   if (app) {
+      //     app->pauseRendering();
+      //   }
+      // }
       // we still want the default processing
       break;
     }
@@ -364,15 +378,16 @@ LRESULT primaryWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     // DPI awareness code
     case WM_DPICHANGED: {
       // UINT newDpi = HIWORD(wParam);
-      RECT* const suggestedRect = (RECT*)lParam;
+      if (lParam) {
+        const auto* const suggestedRect = reinterpret_cast<RECT*>(lParam);
 
-      // Resize your window to the suggested rectangle
-      SetWindowPos(hWnd, nullptr, suggestedRect->left, suggestedRect->top,
-                   suggestedRect->right - suggestedRect->left,
-                   suggestedRect->bottom - suggestedRect->top,
-                   SWP_NOZORDER | SWP_NOACTIVATE);
-
-      return 0;
+        // Resize your window to the suggested rectangle
+        SetWindowPos(hWnd, nullptr, suggestedRect->left, suggestedRect->top,
+                     suggestedRect->right - suggestedRect->left,
+                     suggestedRect->bottom - suggestedRect->top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        return 0;
+      }
     }
 
     // before style changes
@@ -402,20 +417,20 @@ LRESULT primaryWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
                          GetSystemMetrics(SM_CXPADDEDBORDER);
       const int caption = GetSystemMetrics(SM_CYCAPTION);
 
-      POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+      POINT const pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
       RECT wr;
       GetWindowRect(hWnd, &wr);
 
       // Convert to window-local coords
-      int x = pt.x - wr.left;
-      int y = pt.y - wr.top;
-      int w = wr.right - wr.left;
-      int h = wr.bottom - wr.top;
+      int const x = pt.x - wr.left;
+      int const y = pt.y - wr.top;
+      int const w = wr.right - wr.left;
+      int const h = wr.bottom - wr.top;
 
-      bool left = x < border;
-      bool right = x >= (w - border);
-      bool top = y < border;
-      bool bottom = y >= (h - border);
+      bool const left = x < border;
+      bool const right = x >= (w - border);
+      bool const top = y < border;
+      bool const bottom = y >= (h - border);
 
       if (top && left) return HTTOPLEFT;
       if (top && right) return HTTOPRIGHT;
@@ -461,24 +476,24 @@ LRESULT primaryWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     }
 
     case WM_ENTERSIZEMOVE: {
-      if (payload && payload->contextVk) {
-        payload->contextVk->isResizing.store(true, std::memory_order_relaxed);
+      if (app) {
+        app->pauseRendering();
       }
       return 0;
     }
 
     case WM_EXITSIZEMOVE: {
-      if (payload && payload->contextVk) {
-        payload->contextVk->isResizing.store(false, std::memory_order_relaxed);
+      if (app) {
+        app->resumeRendering();
       }
       return 0;
     }
 
     // https://learn.microsoft.com/en-us/windows/win32/dwm/customframe
     case WM_NCCALCSIZE: {
-      if (wParam) {
+      if (wParam && lParam) {  // TODO why both?
         // Remove the standard frame — make the client area full window
-        NCCALCSIZE_PARAMS* sz = (NCCALCSIZE_PARAMS*)lParam;
+        auto* sz = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
         sz->rgrc[0] = sz->rgrc[1];
         return 0;
       }
@@ -488,30 +503,33 @@ LRESULT primaryWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     // since we removed manually part the window (outside the client area),
     // the window minemsions query should be properly handled manually
     case WM_GETMINMAXINFO: {
-      MINMAXINFO* mmi = (MINMAXINFO*)lParam;
-      HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+      auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
+      if (!mmi) {
+        break;
+      }
+      HMONITOR const hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
       MONITORINFO mi = {};
       mi.cbSize = sizeof(mi);
       if (GetMonitorInfoW(hMon, &mi)) {
         if (payload && payload->isFullscreen) {
           // FULL monitor area, no constraints
-          RECT monitor = mi.rcMonitor;
-          mmi->ptMaxPosition.x = monitor.left;
-          mmi->ptMaxPosition.y = monitor.top;
-          mmi->ptMaxSize.x = monitor.right - monitor.left;
-          mmi->ptMaxSize.y = monitor.bottom - monitor.top;
+          const auto [left, top, right, bottom] = mi.rcMonitor;
+          mmi->ptMaxPosition.x = left;
+          mmi->ptMaxPosition.y = top;
+          mmi->ptMaxSize.x = right - left;
+          mmi->ptMaxSize.y = bottom - top;
 
           // Prevent Windows from clamping window size
           mmi->ptMaxTrackSize = mmi->ptMaxSize;
           mmi->ptMinTrackSize = mmi->ptMaxSize;
         } else {
           // Normal behavior (respect taskbar)
-          RECT work = mi.rcWork;
-          RECT monitor = mi.rcMonitor;
-          mmi->ptMaxPosition.x = work.left - monitor.left;
-          mmi->ptMaxPosition.y = work.top - monitor.top;
-          mmi->ptMaxSize.x = work.right - work.left;
-          mmi->ptMaxSize.y = work.bottom - work.top;
+          auto const [left, top, right, bottom] = mi.rcWork;
+          const RECT monitor = mi.rcMonitor;
+          mmi->ptMaxPosition.x = left - monitor.left;
+          mmi->ptMaxPosition.y = top - monitor.top;
+          mmi->ptMaxSize.x = right - left;
+          mmi->ptMaxSize.y = bottom - top;
           mmi->ptMinTrackSize.x = 200;
           mmi->ptMinTrackSize.y = 150;
         }
@@ -538,9 +556,9 @@ static uint32_t __stdcall comThreadEntrypoint(void* args) {
   return 0;
 }
 
-HWND createPrimaryWindow(WindowPayload* payload) {
+HWND createPrimaryWindow(WindowsApplication* app) {
   std::cout << "[UI Thread] Thread ID: " << GetCurrentThreadId() << std::endl;
-  assert(payload);
+  assert(app);
   enableDPIAwareness();
 
   // UI COM Objects from WinRT Require a Single Threaded Apartment inside the
@@ -549,22 +567,26 @@ HWND createPrimaryWindow(WindowPayload* payload) {
   avkInitApartmentSingleThreaded();
 
   BOOL compositionEnabled = FALSE;
-  DwmIsCompositionEnabled(&compositionEnabled);
-  if (!compositionEnabled) {
-    std::cout << "\033[93m"
-              << "WARNING: DWM composition not enabled"
-              << "\033[0m" << std::endl;
+  if (FAILED(DwmIsCompositionEnabled(&compositionEnabled) ||
+             !compositionEnabled)) {
+    LOGW << AVK_LOG_YLW "WARNING: DWM composition not enabled" AVK_LOG_RST
+         << std::endl;
   }
 
   // Enable COM object creation on a dedicated thread
-  payload->comPayload.messages.reserve(64);
-  payload->comPayload.messages.clear();
-  payload->comPayload.shutdown.store(false);
-  payload->comPayload.hCanWrite = CreateEventW(nullptr, FALSE, TRUE, nullptr);
-  payload->comPayload.hHasWork = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  app->WindowPayload.comPayload.messages.reserve(64);
+  app->WindowPayload.comPayload.messages.clear();
+  app->WindowPayload.comPayload.shutdown.store(false);
+  app->WindowPayload.comPayload.hCanWrite =
+      CreateEventW(nullptr, FALSE, TRUE, nullptr);
+  app->WindowPayload.comPayload.hHasWork =
+      CreateEventW(nullptr, TRUE, FALSE, nullptr);
 
-  payload->hComThread = (HANDLE)_beginthreadex(nullptr, 0, comThreadEntrypoint,
-                                               &payload->comPayload, 0, 0);
+  app->WindowPayload.hComThread = reinterpret_cast<HANDLE>(
+      _beginthreadex(nullptr, 0, comThreadEntrypoint,
+                     &app->WindowPayload.comPayload, 0, nullptr));
+  if (!app->WindowPayload.hComThread)
+    showErrorScreenAndExit("Coudldn't Create COM thread");
 
   DWORD opRes = 0;
 
@@ -603,28 +625,29 @@ HWND createPrimaryWindow(WindowPayload* payload) {
   standardWindowSpec.hIconSm = hIconSmall;
 
   // TODO UnregisterClassEx() when you are finished
-  ATOM standardWindowAtom = RegisterClassExW(&standardWindowSpec);
-  if (!standardWindowAtom) {
+  if (const ATOM standardWindowAtom = RegisterClassExW(&standardWindowSpec);
+      !standardWindowAtom) {
     return nullptr;
   }
 
   // use caption and thickframe to get normal window behaviour, but suppress
   // drawing of non client area with VM_NCCALCSIZE
-  int winW = 1024, winH = 768;  // TODO better
-  HWND window = CreateWindowExW(primaryWindowExtendedStyle, primaryWindowClass,
-                                L"Aether VK", primaryWindowWindowedStyle,
-                                CW_USEDEFAULT, CW_USEDEFAULT, winW, winH,
-                                nullptr, nullptr /*hMenu*/, nullptr, payload);
-  if (!window) {
-    return window;
+  constexpr int winW = 1024;  // TODO better
+  constexpr int winH = 768;
+  app->PrimaryWindow = CreateWindowExW(
+      primaryWindowExtendedStyle, primaryWindowClass, L"Aether VK",
+      primaryWindowWindowedStyle, CW_USEDEFAULT, CW_USEDEFAULT, winW, winH,
+      nullptr, nullptr /*hMenu*/, nullptr, app);
+  if (!app->PrimaryWindow) {
+    return nullptr;
   }
 
-  disableNCRendering(window);
+  disableNCRendering(app->PrimaryWindow);
 
   // Force window style refresh and fire WM_NCCALCSIZE
-  SetWindowPos(window, NULL, 0, 0, 0, 0,
+  SetWindowPos(app->PrimaryWindow, nullptr, 0, 0, 0, 0,
                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE);
-  return window;
+  return app->PrimaryWindow;
 }
 
 // TODO remove: trying Windows Events
@@ -651,11 +674,8 @@ static void initDebugHook() {
 }
 #endif
 
-void primaryWindowMessageLoop(HWND window, WindowPayload* payload,
-                              std::atomic<bool>& shouldQuit) {
-  MSG message{};
-  BOOL getMessageRet = false;
-
+void primaryWindowMessageLoop(WindowsApplication* app) {
+  assert(app && app->PrimaryWindow);
   // TODO Do something useful with windows events
   // initDebugHook();
 
@@ -667,17 +687,26 @@ void primaryWindowMessageLoop(HWND window, WindowPayload* payload,
   // actions, eg CTRL + S -> Save) (LoadAccelerators)
   HACCEL hAccel = nullptr;
 
-  // rounded corners (for windows 11 Build 22000)
+  // rounded corners (for Windows 11 Build 22000)
   if (IsWindowsVersionOrGreater(10, 0, 22000)) {
     DWM_WINDOW_CORNER_PREFERENCE const cornerPreference = DWMWCP_ROUND;
-    uint32_t const bytes = static_cast<uint32_t>(sizeof(cornerPreference));
-    DwmSetWindowAttribute(window, DWMWA_WINDOW_CORNER_PREFERENCE,
-                          &cornerPreference, bytes);
+    constexpr uint32_t bytes = static_cast<uint32_t>(sizeof(cornerPreference));
+    if (FAILED(DwmSetWindowAttribute(app->PrimaryWindow,
+                                     DWMWA_WINDOW_CORNER_PREFERENCE,
+                                     &cornerPreference, bytes))) {
+      LOGW << AVK_LOG_YLW
+          "[UI::Warning] Coulnd't get rounded corners" AVK_LOG_RST
+           << std::endl;
+    };
   }
 
-  ShowWindow(window, SW_SHOWDEFAULT);
+  ShowWindow(app->PrimaryWindow, SW_SHOWDEFAULT);
 
-  while (!shouldQuit.load()) {
+  LOGI << "[UI] Begin Message Loop" << std::endl;
+  MSG message{};
+#if 0  // TODO move signaling to render thraed to update thread
+  BOOL getMessageRet = false;
+  while (true) {
     // WindowPayload* payload = reinterpret_cast<WindowPayload*>(
     //     GetWindowLongPtrW(window, GWLP_USERDATA));
     // NOTE: Use PeekMessage if you want to interrupt a lengthy sync operation
@@ -693,7 +722,8 @@ void primaryWindowMessageLoop(HWND window, WindowPayload* payload,
       continue;
     }
     // TODO accelerator message are handled by accelerator
-    if (hAccel != nullptr && TranslateAcceleratorW(window, hAccel, &message)) {
+    if (hAccel != nullptr &&
+        TranslateAcceleratorW(app->PrimaryWindow, hAccel, &message)) {
       continue;
     }
 
@@ -705,25 +735,82 @@ void primaryWindowMessageLoop(HWND window, WindowPayload* payload,
     TranslateMessage(&message);
     // dispatch to window procedure
     DispatchMessageW(&message);
+
+    // TODO better
+    app->signalStateUpdated();
+  }
+#else
+  while (true) {
+    // Non-blocking message check
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+      // Modeless dialog processing
+      if (hCurrentModelessDialog != nullptr &&
+          IsDialogMessageW(hCurrentModelessDialog, &message)) {
+        continue;
+      }
+
+      // Accelerator processing
+      if (hAccel != nullptr &&
+          TranslateAcceleratorW(app->PrimaryWindow, hAccel, &message)) {
+        continue;
+      }
+
+      if (message.message == WM_QUIT) {
+        goto exit_loop;
+      }
+
+      TranslateMessage(&message);
+      DispatchMessageW(&message);
+    }
+
+    // Always call signalStateUpdated, even if no messages
+    app->signalStateUpdated();
+
+    // Optional: sleep a tiny bit to avoid 100% CPU spin
+    Sleep(1);
+  }
+exit_loop:
+#endif
+
+  // join with render thread
+  // note: if a _beginthreadex exits by calling _endthread, which is the default
+  // when it returns, you don't need to call CloseHandle. If wait fails, kill it
+  app->signalStopRendering();
+  DWORD constexpr waitMilliseconds = 10000;
+  if (WaitForSingleObject(app->RenderThread, waitMilliseconds) !=
+      WAIT_OBJECT_0) {
+    LOGW << AVK_LOG_YLW
+        "[Warning] Terminating Render thread manually" AVK_LOG_RST
+         << std::endl;
+    TerminateThread(app->RenderThread, 1);
+    CloseHandle(app->RenderThread);
+    app->RenderThread = INVALID_HANDLE_VALUE;
   }
 
   // cleanup and join COM thread
-  shouldQuit.store(true);
   // wake up COM thread so it can exit, then wait for it
-  payload->comPayload.shutdown.store(true);
-  if (payload->comPayload.hHasWork) {
-    SetEvent(payload->comPayload.hHasWork);
+  app->WindowPayload.comPayload.shutdown.store(true);
+  if (app->WindowPayload.comPayload.hHasWork) {
+    SetEvent(app->WindowPayload.comPayload.hHasWork);
   }
-  WaitForSingleObject(payload->hComThread, INFINITE);
-  CloseHandle(payload->hComThread);
-  CloseHandle(payload->comPayload.hCanWrite);
-  CloseHandle(payload->comPayload.hHasWork);
+  if (WaitForSingleObject(app->WindowPayload.hComThread, waitMilliseconds) !=
+      WAIT_OBJECT_0) {
+    LOGW << AVK_LOG_YLW
+        "[Warning] Terminating Render thread manually" AVK_LOG_RST
+         << std::endl;
+    TerminateThread(app->WindowPayload.hComThread, 1);
+    CloseHandle(app->WindowPayload.hComThread);
+    app->WindowPayload.hComThread = INVALID_HANDLE_VALUE;
+  }
+  CloseHandle(app->WindowPayload.comPayload.hCanWrite);
+  CloseHandle(app->WindowPayload.comPayload.hHasWork);
 
   // Animate window disappearing after all threads have died:
   // slide out to the right
-  AnimateWindow(window, 300, AW_SLIDE | AW_HIDE | AW_HOR_POSITIVE);
-  DestroyWindow(window);
+  AnimateWindow(app->PrimaryWindow, 300, AW_SLIDE | AW_HIDE | AW_HOR_POSITIVE);
+  DestroyWindow(app->PrimaryWindow);
   UnregisterClassW(primaryWindowClass, nullptr);
+  app->PrimaryWindow = nullptr;
 }
 
 }  // namespace avk

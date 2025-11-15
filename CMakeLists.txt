@@ -54,8 +54,7 @@ avk_setup_dependencies()
 avk_cxx_flags()
 
 # static shaders target
-file(GLOB_RECURSE avk_shader_file_list FOLLOW_SYMLINKS RELATIVE ${CMAKE_SOURCE_DIR}/shaders "*.spv")
-list(TRANSFORM avk_shader_file_list PREPEND "${CMAKE_SOURCE_DIR}/shaders/")
+file(GLOB_RECURSE avk_shader_file_list "${CMAKE_SOURCE_DIR}/shaders/*.spv")
 # TODO better
 # add_custom_target(avk-copy-static-shaders ALL 
 #   COMMAND ${CMAKE_COMMAND} -E copy ${avk_shader_file_list} ${CMAKE_BINARY_DIR}
