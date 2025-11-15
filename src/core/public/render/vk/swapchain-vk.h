@@ -48,9 +48,9 @@ struct FrameDiscard {
     surfaces.reserve(16);
   }
 
-  void discardSwapchainImages(std::vector<utils::SwapchainImage>& images);
+  void discardSwapchainImages(std::vector<utils::SwapchainImage> &images);
 
-  void destroy(Device const* device, VkInstance instance);
+  void destroy(Device const *device, VkInstance instance);
 };
 
 // A command pool needs to be created per frame per thread
@@ -69,7 +69,7 @@ struct Frame : public NonCopyable {
 
   // to be called once the frame on which there was a resize is acquired again
   // (after destroying present fences if in use)
-  void destroy(Device const* device, VkInstance instance);
+  void destroy(Device const *device, VkInstance instance);
 };
 
 struct SwapchainImage {
@@ -80,15 +80,7 @@ struct SwapchainImage {
 };
 
 struct SurfacePreRotation {
-  /// Rotation to apply to camera to account for screen orientation
-  /// \example:
-  ///   glm::mat4 view = glm::mat4_cast(preRot.cameraRotation) * baseView;
-  /// \note see if it is correct or if I should take complex conjugate
-  glm::quat cameraRotation;
-  /// Projection matrix adjustment to account for mirroring
-  /// \example:
-  ///    glm::mat4 proj = preRot.projectionAdjust * baseProjection;
-  glm::mat4 projectionAdjust;
+  glm::mat4 preRotate;
 };
 
 }  // namespace avk::vk::utils
@@ -97,7 +89,7 @@ namespace avk::vk {
 
 class Swapchain : public NonMoveable {
  public:
-  Swapchain(Instance* instance, Surface* surface, Device* device);
+  Swapchain(Instance *instance, Surface *surface, Device *device);
   /// WARN: Externally synchronized
   ~Swapchain() noexcept;
 
@@ -162,9 +154,9 @@ class Swapchain : public NonMoveable {
  private:
   // dependencies which must outlive this object
   struct Deps {
-    Instance* instance;
-    Surface* surface;
-    Device* device;
+    Instance *instance;
+    Surface *surface;
+    Device *device;
   } m_deps;
 
   // handles and objects

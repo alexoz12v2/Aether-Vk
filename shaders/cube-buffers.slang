@@ -14,7 +14,6 @@ struct PSOutput {
 }
 
 // types for buffers
-
 struct CubeFaceColorMappingUBO {
   uint FaceMap[8][12];
   float3 Colors[6];
@@ -29,27 +28,30 @@ struct CameraPushConstant {
   float4x4 Projection;
 }
 
-// [vk::binding(0, 0)]
-// ConstantBuffer<CubeFaceColorMappingUBO> cbCubeFaceColorMappingUBO;
-//
-// [vk::binding(1, 0)]
-// ConstantBuffer<ModelMatrix> cbModelMatrix;
-//
-// [vk::push_constant]
-// ConstantBuffer<CameraPushConstant> pcCameraPushConstant;
+[vk::binding(0, 0)]
+ConstantBuffer<CubeFaceColorMappingUBO> cbCubeFaceColorMappingUBO;
+
+[vk::binding(1, 0)]
+ConstantBuffer<ModelMatrix> cbModelMatrix;
+
+[vk::push_constant]
+ConstantBuffer<CameraPushConstant> pcCameraPushConstant;
+
+// SV_StartVertexLocation -> First Vertex of the Draw call
+// SV_StartInstanceLocation -> Always zero on non-instanced draw calls
+// SV_PrimitiveID -> Available only on fragment (Geo and Tess)
 
 [shader("vertex")]
-VSOutput vertexEntry(VSInput input, uint baseVertex: SV_StartVertexLocation, uint baseInstance : SV_StartInstanceLocation) {
+VSOutput vertexEntry(VSInput input) {
   VSOutput output;
   // careful on buffer access. Out-of-bounds is a very common source of NO_BUFFER_AVAILABLE / GPU hangs.
-  output.Color = {.7,.7,.7}; // cbCubeFaceColorMappingUBO.Colors[cbCubeFaceColorMappingUBO.FaceMap[baseVertex % 8][baseInstance % 12]];
-  output.Position = {input.Position, 1}; // mul(pcCameraPushConstant.Projection, mul(pcCameraPushConstant.View, mul(cbModelMatrix.Model, float4(input.Position, 1))));
+  output.Position = mul(pcCameraPushConstant.Projection, mul(pcCameraPushConstant.View, mul(cbModelMatrix.Model, float4(input.Position, 1))));
   return output;
 }
 
 [shader("fragment")]
-PSOutput fragmentEntry(VSOutput input) {
+PSOutput fragmentEntry(VSOutput input, uint primitiveID : SV_PrimitiveID) {
  PSOutput output;
- output.Color = {input.Color, 1};
+ output.Color = {cbCubeFaceColorMappingUBO.Colors[(primitiveID / 2) % 6], 1};
  return output;
 }

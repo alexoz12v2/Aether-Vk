@@ -60,6 +60,7 @@ class AndroidApp : public ApplicationBase {
 
  private:
   // stuff to refactor
+  [[maybe_unused]] std::vector<Camera> m_pushCameras;// STABLE, FIF
   [[maybe_unused]] Camera m_camera;
   [[maybe_unused]] VkDescriptorSet m_cubeDescriptorSet = VK_NULL_HANDLE;
   [[maybe_unused]] VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;

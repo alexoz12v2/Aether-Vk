@@ -44,6 +44,10 @@ AndroidApp::AndroidApp(android_app *app, JNIEnv *jniEnv)
 AndroidApp::~AndroidApp() noexcept {
   LOGI << "[AndroidApp] Destructor Running ..." << std::endl;
   if (windowInitializedOnce()) {
+    // It's contained in base class, but we want to ensure that the host storage
+    // used in here is not locked in some GPU submitted operations
+    vkDevTable()->vkDeviceWaitIdle(vkDeviceHandle());
+
     // resources
     cleanupVulkanResources();
     destroyConstantVulkanResources();
@@ -79,6 +83,11 @@ void AndroidApp::createVulkanResources() AVK_NO_CFI {
   using namespace avk::literals;
   auto const *const vkDevApi = vkDevTable();
   VkDevice const dev = vkDeviceHandle();
+  // how many frames do we have -> maintain that many push const memory
+  if (vkSwapchain()->frameCount() > m_pushCameras.size()) {
+    m_pushCameras.resize(vkSwapchain()->frameCount());
+  }
+  assert(vkSwapchain()->frameCount() == m_pushCameras.size());
   // renderPass
   VkFormat const depthFmt =
       vk::basicDepthStencilFormat(vkPhysicalDeviceHandle());
@@ -134,27 +143,27 @@ void AndroidApp::createVulkanResources() AVK_NO_CFI {
   }
 
   // projection matrix (resolution dependent)
-  float const fovy = glm::radians(90.f);  // TODO vary portrait vs landscape
-  float const aspect = static_cast<float>(vkSwapchain()->extent().width) /
-      vkSwapchain()->extent().height;
-  m_camera.proj = glm::perspective(fovy, aspect, 0.0001f, 100.f);
+  // TODO refactor, this is the same as initial
+  float fov = glm::radians(60.0f);
+#if 0
+  float aspect = vkSwapchain()->extent().width /
+      static_cast<float>(vkSwapchain()->extent().height);
+#else
+  int w = ANativeWindow_getWidth(m_app->window);
+  int h = ANativeWindow_getHeight(m_app->window);
+  float aspect = float(w) / float(h);
+#endif
 
-  // apply prerotation
+  glm::mat4 proj = glm::perspectiveRH_ZO(fov, aspect, 0.1f, 100.0f);
+  // Vulkan wants Y flipped vs OpenGL
+  proj[1][1] *= -1;
+
+  // Now apply surface pre-rotation
+  // Compose left-multiply projection with rotation
   vk::utils::SurfacePreRotation const preRot = vkSwapchain()->preRotation();
-  if (vkSwapchain()->transform() == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR
-      || vkSwapchain()->transform() == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR
-      || vkSwapchain()->transform()
-          == VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR
-      || vkSwapchain()->transform()
-          == VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR) {
-    m_camera.view = glm::toMat4(preRot.cameraRotation) * m_camera.view;
-  }
-  if (vkSwapchain()->transform()
-      == VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR
-      || vkSwapchain()->transform()
-          == VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR) {
-    m_camera.proj = preRot.projectionAdjust * m_camera.proj;
-  }
+  proj = preRot.preRotate * proj;
+
+  m_camera.proj = proj;
 }
 
 namespace hashes {
@@ -163,19 +172,63 @@ using namespace avk::literals;
 inline constexpr uint64_t Vertex = "Vertex"_hash;
 inline constexpr uint64_t Index = "Index"_hash;
 inline constexpr uint64_t Model = "Model"_hash;
-inline constexpr uint64_t Camera = "Camera"_hash;
 inline constexpr uint64_t Cube = "Cube"_hash;
 
 }  // namespace hashes
 
+// TODO render/basic-types.h
+struct alignas(16) float3 {
+  glm::vec3 v;
+};
+
+// stride 16 uint (note: this has been observed with disassembler)
+struct alignas(16) uintArray12 {
+  uint32_t i;
+};
+
+// outer array has 192 stride
+struct uintArrayArray8 {
+  uintArray12 is[12];
+};
+static_assert(sizeof(uintArrayArray8) == 192);
+
+struct CubeFaceMapping {
+  uintArrayArray8 faceMap[8];
+  float3 colors[6];
+
+  CubeFaceMapping(std::array<std::array<uint32_t, 12>, 8> const &_faceMap,
+                  std::array<glm::vec4, 6> const &_colors)
+      : faceMap{} {
+    for (uint32_t i = 0; i < 8; i++) {
+      for (uint32_t j = 0; j < 12; j++) {
+        faceMap[i].is[j].i = _faceMap[i][j];
+      }
+    }
+    for (uint32_t i = 0; i < 6; ++i) {
+      colors[i].v = _colors[i];
+    }
+  }
+};
+
 void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
-#if 0
-  std::array<glm::vec3, 3> triangle{
-      glm::vec3{-.5, .5, .5}, // left below
-      {.5, .5, .5}, // right below
-      {0, -.5, .5} // top center
-  };
-#endif
+  // reserve enough space such that, on swapchain recreation, the host memory
+  // holding the source for our push constants is never reallocated.
+  m_pushCameras.reserve(64);
+
+  // setup initial camera
+  {
+    m_camera.view = glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f),  // eye position
+                                glm::vec3(0.0f, 1.0f, -1.f),  // cube target
+                                glm::vec3(0.0f, 0.0f, 1.0f)   // up direction
+    );
+    float fov = glm::radians(60.0f);
+    float aspect = vkSwapchain()->extent().width /
+        static_cast<float>(vkSwapchain()->extent().height);
+
+    m_camera.proj = glm::perspectiveRH_ZO(fov, aspect, 0.1f, 100.0f);
+    // Vulkan wants Y flipped vs OpenGL
+    m_camera.proj[1][1] *= -1;
+  }
 
   // buffers
   [[maybe_unused]] std::array<glm::vec3, 8> vertexBuffer;
@@ -209,6 +262,19 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
   VK_CHECK(vmaCopyMemoryToAllocation(
       vmaAllocator(), indexBuffer.data(), alloc, 0, sizeof(indexBuffer)));
 
+  // -- shaders --
+  // apparently gameActivity already loads it from java?
+  // AAssetManager* assetMgr = AAssetManager_fromJava(m_jniEnv,
+  // m_app->activity->assetManager);
+  auto const vertCode = spirvFromAsset(m_app->activity->assetManager,
+                                       "shaders/cube-buffers.vert.spv");
+  auto const fragCode = spirvFromAsset(m_app->activity->assetManager,
+                                       "shaders/cube-buffers.frag.spv");
+
+  VkShaderModule modules[2] = {
+      vk::createShaderModule(vkDevice(), vertCode.data(), vertCode.size() << 2),
+      vk::createShaderModule(vkDevice(), fragCode.data(),
+                             fragCode.size() << 2)};
 #if 0
   {
     glm::mat4 model =
@@ -231,62 +297,7 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
     }
   }
 
-  int bufRes = bufferManager()->createBufferGPUOnly(
-      hashes::Vertex, vertexBuffer.size() * sizeof(glm::vec3),
-      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true, false);
-  if (bufRes) {
-    showErrorScreenAndExit("Couldn't Allocate Vertex Buffer");
-  }
-  bufRes = bufferManager()->createBufferGPUOnly(
-      hashes::Index, indexBuffer.size() * sizeof(glm::uvec3),
-      VK_BUFFER_USAGE_INDEX_BUFFER_BIT, true, false);
-  if (bufRes) {
-    showErrorScreenAndExit("Couldn't Allocate Index Buffer");
-  }
-
-  // 1.1 Copy data into vertex and index buffer
-  // Note: there is no need to put a pipeline barrier after
-  // `1vmaCopyMemoryToAllocation` cause when we get to recording, this copy will
-  // be finished
-  if (!bufferManager()->get(hashes::Vertex, buffer, alloc))
-    showErrorScreenAndExit("Couldn't get Vertex Buffer");
-  // TODO remove
-  static_assert(sizeof(triangle) == 3 * 12);
-  VK_CHECK(vmaCopyMemoryToAllocation(
-      vmaAllocator(), triangle.data(), alloc, 0, sizeof(triangle)));
-  if (!bufferManager()->get(hashes::Index, buffer, alloc))
-    showErrorScreenAndExit("Couldn't get Index Buffer");
-  VK_CHECK(vmaCopyMemoryToAllocation(
-      vmaAllocator(), indexBuffer.data(), alloc, 0, sizeof(indexBuffer)));
-  // 2. Camera definition
-  m_camera.view = glm::lookAt(glm::vec3(0, 0, 0), glm::vec3(0, 1, -0.6f),
-                              glm::vec3(0, 0, 1));
-
-  // 3. Cube vert/index -> face mapping table
-  bufRes = bufferManager()->createBufferGPUOnly(
-      hashes::Cube, cubeStructBytes, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true,
-      false);
-  if (bufRes)
-    showErrorScreenAndExit("Couldn't allocate buffer for face mapping");
-  if (!bufferManager()->get(hashes::Cube, buffer, alloc))
-    showErrorScreenAndExit("Couldn't retrieve buffer for face mapping");
-  VK_CHECK(vmaCopyMemoryToAllocation(vmaAllocator(), faceMap.data(), alloc, 0,
-                                     sizeof(faceMap)));
-  VK_CHECK(vmaCopyMemoryToAllocation(vmaAllocator(),
-                                     glm::value_ptr(*colors.data()), alloc,
-                                     sizeof(faceMap), sizeof(colors)));
-
-  // 4. model matrix (TODO: Inline Uniform Buffer)
-  glm::mat4 const cubeModel =
-      glm::translate(glm::mat4(1.f), glm::vec3(0, 1, -1));
-  bufRes = bufferManager()->createBufferGPUOnly(
-      hashes::Model, sizeof(glm::mat4), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-      true, false);
-  if (bufRes) showErrorScreenAndExit("Couldn't allocate model matrix UBO");
-  if (!bufferManager()->get(hashes::Model, buffer, alloc))
-    showErrorScreenAndExit("Couldn't retrieve model matrix UBO");
-  VK_CHECK(vmaCopyMemoryToAllocation(vmaAllocator(), glm::value_ptr(cubeModel),
-                                     alloc, 0, sizeof(glm::mat4)));
+#endif
 
   // pipeline layout specification step 1: descriptor set layouts
   {
@@ -294,7 +305,7 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
     binding[0].binding = 0;
     binding[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     binding[0].descriptorCount = 1;
-    binding[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    binding[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     binding[1].binding = 1;
     binding[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -311,58 +322,37 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
         &m_descriptorSetLayout));
   }
 
-  // now create descriptor set for model and mapping
-  m_cubeDescriptorSet = vkDescriptorPools()->allocate(
-      m_descriptorSetLayout, vkDiscardPool(), timeline());
-
   // push constant definition (pipeline layout below)
   VkPushConstantRange pushConstantRange{};
   pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
   pushConstantRange.offset = 0;
   pushConstantRange.size = static_cast<uint32_t>(sizeof(Camera));
-#endif
 
-  // graphicsInfo
-  // apparently gameActivity already loads it from java?
-  // AAssetManager* assetMgr = AAssetManager_fromJava(m_jniEnv,
-  // m_app->activity->assetManager);
-  auto const vertCode = spirvFromAsset(m_app->activity->assetManager,
-                                       "shaders/cube-buffers.vert.spv");
-  auto const fragCode = spirvFromAsset(m_app->activity->assetManager,
-                                       "shaders/cube-buffers.frag.spv");
-
-  // shaders
-  VkShaderModule modules[2] = {
-      vk::createShaderModule(vkDevice(), vertCode.data(), vertCode.size() << 2),
-      vk::createShaderModule(vkDevice(), fragCode.data(),
-                             fragCode.size() << 2)};
   m_graphicsInfo = experimental::basicGraphicsInfo(
-      // TODO pipeline layout
-#if 0
       vk::createPipelineLayout(vkDevice(), &m_descriptorSetLayout, 1,
                                &pushConstantRange, 1),
-#else
-      vk::createPipelineLayout(vkDevice()),
-#endif
       modules, vk::basicDepthStencilFormat(vkDevice()->physicalDevice()));
 
-#if 0
+  // now create descriptor set for model and mapping
+  m_cubeDescriptorSet = vkDescriptorPools()->allocate(
+      m_descriptorSetLayout, vkDiscardPool(), timeline());
+
   // update template creation
   {
     VkDescriptorUpdateTemplateEntryKHR entries[2]{};
     entries[0].dstBinding = 0;
-    entries[0].dstArrayElement = 0;  // start byte offset
-    entries[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    entries[0].dstArrayElement = 0;
     entries[0].descriptorCount = 1;
-    entries[0].offset = 0;
-    entries[0].stride = cubeStructBytes;
+    entries[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    entries[0].offset = 0;  // start of pData -> bufferInfos[0]
+    entries[0].stride = sizeof(VkDescriptorBufferInfo);  // not UBO size
 
     entries[1].dstBinding = 1;
     entries[1].dstArrayElement = 0;
-    entries[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     entries[1].descriptorCount = 1;
-    entries[1].offset = 0;
-    entries[1].stride = sizeof(glm::mat4);
+    entries[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    entries[1].offset = sizeof(VkDescriptorBufferInfo);  // pData + bufferInfo
+    entries[1].stride = sizeof(VkDescriptorBufferInfo);
 
     VkDescriptorUpdateTemplateCreateInfoKHR createInfo{};
     createInfo.sType =
@@ -372,20 +362,18 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
     createInfo.templateType =
         VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET_KHR;
     createInfo.descriptorSetLayout = m_descriptorSetLayout;
-    createInfo.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    createInfo.pipelineLayout = m_graphicsInfo.pipelineLayout;
-    createInfo.set = 0;
 
     VK_CHECK(vkDevTable()->vkCreateDescriptorUpdateTemplateKHR(
         vkDeviceHandle(), &createInfo, nullptr, &m_descriptorUpdateTemplate));
   }
 
+#if 0
   // link descriptors to their buffers
   VkDescriptorBufferInfo bufferInfos[2]{};
   bufferManager()->get(hashes::Cube, buffer, alloc);
   bufferInfos[0].buffer = buffer;
   bufferInfos[0].offset = 0;
-  bufferInfos[0].range = cubeStructBytes;
+  bufferInfos[0].range = sizeof(faceMap) + sizeof(colors);
 
   bufferManager()->get(hashes::Model, buffer, alloc);
   bufferInfos[1].buffer = buffer;
@@ -396,6 +384,33 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
       vkDeviceHandle(), m_cubeDescriptorSet, m_descriptorUpdateTemplate,
       bufferInfos);
 #endif
+
+  // allocate GPU side buffers for descriptors
+  // - Cube vert/index -> face mapping table
+  bufRes = bufferManager()->createBufferGPUOnly(
+      hashes::Cube, sizeof(CubeFaceMapping),
+      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true, false);
+  if (bufRes)
+    showErrorScreenAndExit("Couldn't allocate buffer for face mapping");
+  if (!bufferManager()->get(hashes::Cube, buffer, alloc))
+    showErrorScreenAndExit("Couldn't retrieve buffer for face mapping");
+
+  CubeFaceMapping hostCubeFaceMapping{faceMap, colors};
+  VK_CHECK(vmaCopyMemoryToAllocation(
+      vmaAllocator(), &hostCubeFaceMapping,
+      alloc, 0, sizeof(hostCubeFaceMapping)));
+
+  // - model matrix (TODO: Inline Uniform Buffer)
+  glm::mat4 const cubeModel =
+      glm::translate(glm::mat4(1.f), glm::vec3(0, 1, -1));
+  bufRes = bufferManager()->createBufferGPUOnly(
+      hashes::Model, sizeof(glm::mat4), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+      true, false);
+  if (bufRes) showErrorScreenAndExit("Couldn't allocate model matrix UBO");
+  if (!bufferManager()->get(hashes::Model, buffer, alloc))
+    showErrorScreenAndExit("Couldn't retrieve model matrix UBO");
+  VK_CHECK(vmaCopyMemoryToAllocation(vmaAllocator(), glm::value_ptr(cubeModel),
+                                     alloc, 0, sizeof(glm::mat4)));
 }
 
 void AndroidApp::destroyConstantVulkanResources() AVK_NO_CFI {
@@ -411,8 +426,11 @@ void AndroidApp::destroyConstantVulkanResources() AVK_NO_CFI {
     m_descriptorSetLayout = VK_NULL_HANDLE;
   }
 
-  // buffers
+  // index/vertex buffers + uniform buffers
+  bufferManager()->discardById(vkDiscardPool(), hashes::Cube, timeline());
+  bufferManager()->discardById(vkDiscardPool(), hashes::Model, timeline());
   bufferManager()->discardById(vkDiscardPool(), hashes::Vertex, timeline());
+  bufferManager()->discardById(vkDiscardPool(), hashes::Index, timeline());
 
   // graphics info handles
   experimental::discardGraphicsInfo(
@@ -460,6 +478,29 @@ AVK_NO_CFI {
   renderBegin.renderArea = rect;
   renderBegin.framebuffer = m_framebuffers[vkSwapchain()->imageIndex()];
 
+  if (timeline() == 0) {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VmaAllocation alloc = VK_NULL_HANDLE;
+
+    // link descriptors to their buffers
+    VkDescriptorBufferInfo bufferInfos[2]{};
+    bufferManager()->get(hashes::Cube, buffer, alloc);
+    assert(buffer);
+    bufferInfos[0].buffer = buffer;
+    bufferInfos[0].offset = 0;
+    bufferInfos[0].range = sizeof(CubeFaceMapping);
+
+    bufferManager()->get(hashes::Model, buffer, alloc);
+    assert(buffer);
+    bufferInfos[1].buffer = buffer;
+    bufferInfos[1].offset = 0;
+    bufferInfos[1].range = sizeof(glm::mat4);
+
+    vkDevTable()->vkUpdateDescriptorSetWithTemplateKHR(
+        vkDeviceHandle(), m_cubeDescriptorSet, m_descriptorUpdateTemplate,
+        bufferInfos);
+  }
+
   VkSubpassBeginInfoKHR subpassBegin{};
   subpassBegin.sType = VK_STRUCTURE_TYPE_SUBPASS_BEGIN_INFO_KHR;
 
@@ -480,19 +521,15 @@ AVK_NO_CFI {
   assert(buffer != VK_NULL_HANDLE);
   vkDevApi->vkCmdBindIndexBuffer(cmd, buffer, 0, VK_INDEX_TYPE_UINT32);
 
-#if 0
-  vkDevApi->vkCmdBindVertexBuffers(cmd, 0, 1, &buffer, &offset);
-
-  buffer = VK_NULL_HANDLE;
-
   // descriptor set and push constant
   vkDevApi->vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     m_graphicsInfo.pipelineLayout, 0, 1,
                                     &m_cubeDescriptorSet, 0, nullptr);
+  auto &pushConst = m_pushCameras[vkSwapchain()->frameIndex()];
+  pushConst = m_camera;
   vkDevApi->vkCmdPushConstants(cmd, m_graphicsInfo.pipelineLayout,
                                VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Camera),
-                               &m_camera);
-#endif
+                               &pushConst);
 
   // set scissor and viewport
   vkDevApi->vkCmdSetScissor(cmd, 0, 1, &rect);

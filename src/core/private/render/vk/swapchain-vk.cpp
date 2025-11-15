@@ -516,31 +516,33 @@ utils::SwapchainData Swapchain::swapchainData() const {
 }
 
 utils::SurfacePreRotation Swapchain::preRotation() const {
-  utils::SurfacePreRotation result;
-  float angleDeg = 0.f;
-  bool mirrorX = false;
-  switch (m_currentTransform) {
-    case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR:
-      mirrorX = true;
-      [[fallthrough]];
-    case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:angleDeg = 90.0f;
-      break;
-    case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR:
-      mirrorX = true;
-      [[fallthrough]];
-    case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:angleDeg = 270.0f;
-      break;
-    default:angleDeg = 0.0f;
-      break;
-  }
-  float const angleRad = glm::radians(angleDeg);
-  glm::vec3 zAxis = glm::vec3(0, 0, 1);
-  result.cameraRotation = glm::angleAxis(angleRad, zAxis);
+  utils::SurfacePreRotation result{};
 
-  if (mirrorX) {
-    result.projectionAdjust = glm::scale(glm::mat4(1.f), glm::vec3(-1, 1, 1));
-  } else {
-    result.projectionAdjust = glm::mat4(1.f);
+  switch (m_currentTransform) {
+    case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
+    case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR:
+      result.preRotate = glm::rotate(glm::mat4(1.f),
+                                     glm::radians(90.f),
+                                     glm::vec3(0, 0, 1));
+      break;
+
+    case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
+    case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_180_BIT_KHR:
+      result.preRotate = glm::rotate(glm::mat4(1.f),
+                                     glm::radians(180.f),
+                                     glm::vec3(0, 0, 1));
+      break;
+
+    case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
+    case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR:
+      result.preRotate = glm::rotate(glm::mat4(1.f),
+                                     glm::radians(270.f),
+                                     glm::vec3(0, 0, 1));
+      break;
+    case VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR:
+    default:result.preRotate = glm::mat4(1.f);
+      break;
+
   }
 
   return result;
