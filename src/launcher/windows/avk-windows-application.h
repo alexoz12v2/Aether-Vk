@@ -9,6 +9,7 @@
 
 namespace avk {
 
+// TODO check max push constant size is 256
 // TODO refactor
 struct Camera {
   glm::mat4 view;
@@ -53,7 +54,12 @@ class WindowsApplication : public ApplicationBase {
   std::vector<VkFramebuffer> m_framebuffers;
   std::vector<uint64_t> m_commandBufferIds;
 
+  // stuff to refactor
   Camera m_camera;
+  std::vector<Camera> m_pushCameras;  // STABLE, FIF
+  VkDescriptorSet m_cubeDescriptorSet = VK_NULL_HANDLE;
+  VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
+  VkDescriptorUpdateTemplateKHR m_descriptorUpdateTemplate = VK_NULL_HANDLE;
 };
 
 }  // namespace avk
