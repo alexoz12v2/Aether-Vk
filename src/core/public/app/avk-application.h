@@ -135,7 +135,7 @@ class ApplicationBase : public NonMoveable {
 
   /// Signal to render thread it's time to stop rendering for good
   inline void signalStopRendering() {
-    m_renderCoordinator.renderRunning.store(false, std::memory_order_release);
+    m_renderCoordinator.renderRunning.store(false, std::memory_order_seq_cst);
     m_renderCoordinator.cv.notify_all();
   }
   /// Signal to render thread the next state is ready
@@ -167,6 +167,17 @@ class ApplicationBase : public NonMoveable {
   inline bool RTshouldRun() const {
     return m_renderCoordinator.renderRunning.load(std::memory_order_acquire);
   }
+
+  /// Android's bionic libc++ doesn't have pthread_timedjoin_np,
+  /// hence render pthread about to exit acknowledges the termination request
+  inline void RTsignalExit() {
+    m_renderCoordinator.renderRunning.store(true, std::memory_order_release);
+  }
+
+  inline bool checkRTAck() const {
+    return m_renderCoordinator.renderRunning.load(std::memory_order_acquire);
+  }
+
   inline bool RTshouldUpdate() {
     uint64_t const lastConsumed =
         m_renderCoordinator.consumedVersion.load(std::memory_order_acquire);

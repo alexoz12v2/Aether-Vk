@@ -74,6 +74,12 @@ class BufferManager : public NonMoveable {
   int32_t createBufferStaging(uint64_t id, size_t bytes, bool forceWithinBudget,
                               bool forceNoAllocation);
 
+  /// Since, if you don't use VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT`,
+  /// VMA will try to use allocated blocks, sometimes it's more convenient
+  /// to create staging buffers on the spot
+  /// see `createBufferStaging` for details on staging buffer in general
+  /// TODO: Support for preexisting buffer binding
+
   /// buffer which should receive data from the result of a computation to
   /// be read back into main memory. As staging buffers, they are useful
   /// for Dedicated GPU setups. Read `createBufferStaging` for more

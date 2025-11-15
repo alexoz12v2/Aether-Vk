@@ -168,56 +168,48 @@ inline constexpr uint64_t Cube = "Cube"_hash;
 
 }  // namespace hashes
 
-static VkBuffer s_vBuffer = VK_NULL_HANDLE;
-static VmaAllocation s_vAllocation = VK_NULL_HANDLE;
-
 void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
+#if 0
   std::array<glm::vec3, 3> triangle{
       glm::vec3{-.5, .5, .5}, // left below
       {.5, .5, .5}, // right below
       {0, -.5, .5} // top center
   };
-  VkBufferCreateInfo createInfo{};
-  createInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-  createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-  createInfo.size = nextMultipleOf<16>(sizeof(triangle));
-  createInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-  VmaAllocationCreateInfo allocInfo{};
-  allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
-  allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-      | VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
-  allocInfo.preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#endif
 
-  VK_CHECK(vmaCreateBuffer(
-      vmaAllocator(),
-      &createInfo,
-      &allocInfo,
-      &s_vBuffer,
-      &s_vAllocation,
-      nullptr));
-  VK_CHECK(vmaCopyMemoryToAllocation(
-      vmaAllocator(),
-      glm::value_ptr(triangle[0]),
-      s_vAllocation,
-      0,
-      sizeof(triangle)));
   // buffers
-#if 0
-  std::array<glm::vec3, 8> vertexBuffer;
-  std::array<glm::uvec3, 12> indexBuffer;
-  std::array<std::array<uint32_t, 12>, 8> faceMap;
-  // vec4 not 3 because of HLSL like alignment
-  std::array<glm::vec4, 6>
-      colors{glm::vec4(.5, .5, .5, 0), {.4, .1, .4, 0},
-             {.1, .2, .6, 0}, {.6, .1, .0, 0},
-             {.1, .5, .2, 0}, {0, 1, .1, 0}};
-  size_t const cubeStructBytes = sizeof(faceMap) + sizeof(colors);
+  [[maybe_unused]] std::array<glm::vec3, 8> vertexBuffer;
+  [[maybe_unused]] std::array<glm::uvec3, 12> indexBuffer;
+  [[maybe_unused]] std::array<std::array<uint32_t, 12>, 8> faceMap;
+  [[maybe_unused]] std::array<glm::vec4, 6> colors;
+  test::cubeColors(colors);
   test::cubePrimitive(vertexBuffer, indexBuffer, faceMap);
 
   VkBuffer buffer = VK_NULL_HANDLE;
   VmaAllocation alloc = VK_NULL_HANDLE;
 
-  // TODO remove
+  // 1. Allocate vertex and index buffers
+  int bufRes = bufferManager()->createBufferGPUOnly(
+      hashes::Vertex, sizeof(vertexBuffer),
+      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true, false);
+  if (bufRes)
+    showErrorScreenAndExit("Couldn't Allocate Vertex Buffer");
+  if (!bufferManager()->get(hashes::Vertex, buffer, alloc))
+    showErrorScreenAndExit("Couldn't Retrieve Vertex Buffer");
+  VK_CHECK(vmaCopyMemoryToAllocation(
+      vmaAllocator(), vertexBuffer.data(), alloc, 0, sizeof(vertexBuffer)));
+
+  bufRes = bufferManager()->createBufferGPUOnly(
+      hashes::Index, sizeof(indexBuffer),
+      VK_BUFFER_USAGE_INDEX_BUFFER_BIT, true, false);
+  if (bufRes)
+    showErrorScreenAndExit("Couldn't Allocate Index Buffer");
+  if (!bufferManager()->get(hashes::Index, buffer, alloc))
+    showErrorScreenAndExit("Couldn't Retrieve Index Buffer");
+  VK_CHECK(vmaCopyMemoryToAllocation(
+      vmaAllocator(), indexBuffer.data(), alloc, 0, sizeof(indexBuffer)));
+
+#if 0
   {
     glm::mat4 model =
         glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -0.25f, 0.0f)) *
@@ -239,7 +231,6 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
     }
   }
 
-  // 1. Allocate vertex and index buffers
   int bufRes = bufferManager()->createBufferGPUOnly(
       hashes::Vertex, vertexBuffer.size() * sizeof(glm::vec3),
       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true, false);
@@ -409,13 +400,6 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
 
 void AndroidApp::destroyConstantVulkanResources() AVK_NO_CFI {
   using namespace avk::literals;
-  // vertex buffer
-#if 0 // TODO
-  bufferManager()->discardById(vkDiscardPool(), "VertexTriangle"_hash,
-                               timeline());
-#endif
-  experimental::discardGraphicsInfo(vkDiscardPool(), timeline(),
-                                    m_graphicsInfo);
   if (m_descriptorUpdateTemplate != VK_NULL_HANDLE) {
     vkDevTable()->vkDestroyDescriptorUpdateTemplateKHR(
         vkDeviceHandle(), m_descriptorUpdateTemplate, nullptr);
@@ -426,6 +410,13 @@ void AndroidApp::destroyConstantVulkanResources() AVK_NO_CFI {
                                                m_descriptorSetLayout, nullptr);
     m_descriptorSetLayout = VK_NULL_HANDLE;
   }
+
+  // buffers
+  bufferManager()->discardById(vkDiscardPool(), hashes::Vertex, timeline());
+
+  // graphics info handles
+  experimental::discardGraphicsInfo(
+      vkDiscardPool(), timeline(), m_graphicsInfo);
 }
 
 void AndroidApp::RTdoOnWindowInit() {
@@ -478,9 +469,6 @@ AVK_NO_CFI {
                               m_graphicsPipeline);
   // bind vertex and index buffer
   VkDeviceSize offset = 0;
-#if 1
-  vkDevApi->vkCmdBindVertexBuffers(cmd, 0, 1, &s_vBuffer, &offset);
-#else
   VkBuffer buffer = VK_NULL_HANDLE;
   VmaAllocation alloc = VK_NULL_HANDLE;
 
@@ -488,10 +476,14 @@ AVK_NO_CFI {
   assert(buffer != VK_NULL_HANDLE);
   vkDevApi->vkCmdBindVertexBuffers(cmd, 0, 1, &buffer, &offset);
 
-  buffer = VK_NULL_HANDLE;
   bufferManager()->get(hashes::Index, buffer, alloc);
   assert(buffer != VK_NULL_HANDLE);
   vkDevApi->vkCmdBindIndexBuffer(cmd, buffer, 0, VK_INDEX_TYPE_UINT32);
+
+#if 0
+  vkDevApi->vkCmdBindVertexBuffers(cmd, 0, 1, &buffer, &offset);
+
+  buffer = VK_NULL_HANDLE;
 
   // descriptor set and push constant
   vkDevApi->vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -510,12 +502,8 @@ AVK_NO_CFI {
   viewport.maxDepth = 1.f;
   vkDevApi->vkCmdSetViewport(cmd, 0, 1, &viewport);
 
-#if 0
   // draw call
   vkDevApi->vkCmdDrawIndexed(cmd, 36, 1, 0, 0, 0);
-#else
-  vkDevApi->vkCmdDraw(cmd, 3, 1, 0, 0);
-#endif
 
   // end render pass (transition to present layout)
   VkSubpassEndInfoKHR subEnd{};
