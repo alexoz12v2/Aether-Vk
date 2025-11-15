@@ -8,6 +8,9 @@
 #include <volk.h>
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
+
+#include "render/vk/device-vk.h"
+#include "utils/bits.h"
 #pragma clang attribute pop
 #pragma GCC diagnostic pop
 
@@ -71,3 +74,27 @@ std::string vkResToString(VkResult res) {
 }
 
 }  // namespace avk
+
+namespace avk::vk {
+
+bool isAllocHostVisible(VmaAllocator allocator, VmaAllocation allocation) {
+  assert(allocator);
+  VkMemoryPropertyFlags memFlags = 0;
+  vmaGetAllocationMemoryProperties(allocator, allocation, &memFlags);
+  return memFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+}
+
+Expected<VkBuffer> newUnboundStagingBufferHandle(Device *device,
+                                                 size_t size) {
+  VkBufferCreateInfo createInfo{};
+  createInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  createInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  createInfo.size = nextMultipleOf<16>(size);
+  VkBuffer buffer = VK_NULL_HANDLE;
+  VkResult const res = device->table()->vkCreateBuffer(
+      device->device(), &createInfo, nullptr, &buffer);
+  return {buffer, res};
+}
+
+}  // namespace avk::vk

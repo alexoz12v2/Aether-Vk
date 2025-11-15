@@ -171,6 +171,8 @@ struct Extensions {
 
 namespace avk::vk {
 
+class Device;
+
 /// Helper type to define Vulkan Device Operations which
 /// Shouldn't be necessarily fatal
 template <typename H>
@@ -195,4 +197,13 @@ struct VMAResource {
   VmaAllocation alloc;
 };
 
+/// Helper function for Discrete GPU paths to see whether a device local
+/// allocation is also host visible, hence can be mapped, or whether it
+/// requires a staging buffer and a copy operation
+bool isAllocHostVisible(VmaAllocator allocator, VmaAllocation allocation);
+
+/// Used to create the handle for a staging buffer of a given size
+/// to be bound multiple times with different memory handles with VMA
+/// \warning assumes exclusive queue ownership
+Expected<VkBuffer> newUnboundStagingBufferHandle(Device* device, size_t size);
 }  // namespace avk::vk
