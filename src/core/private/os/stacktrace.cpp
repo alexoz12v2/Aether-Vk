@@ -33,9 +33,9 @@
 #  if !__BIONIC_AVAILABILITY_GUARD(33)
 #    error "TODO: Not Managing API 33 execinfo (backtrace)"
 #  endif
-#  include <execinfo.h>
 #  include <cxxabi.h>
 #  include <dlfcn.h>
+#  include <execinfo.h>
 #  include <unistd.h>
 #endif
 
@@ -66,8 +66,8 @@ static inline void ensureDbgHelpInitialized() {
     HMODULE hMod = GetModuleHandleW(nullptr);
     MODULEINFO mi = {};
     GetModuleInformation(process, hMod, &mi, sizeof(mi));
-    DWORD64 baseAddr = (DWORD64)hMod;  // BaseOfDll
-    DWORD size = mi.SizeOfImage;       // SizeOfDll
+    DWORD64 baseAddr = reinterpret_cast<DWORD64>(hMod);  // BaseOfDll
+    const DWORD size = mi.SizeOfImage;                   // SizeOfDll
 
     // Load symbols with the correct runtime address
     baseAddr = SymLoadModuleExW(process, nullptr, exepath.c_str(), nullptr,
@@ -111,37 +111,49 @@ std::string dumpStackTrace([[maybe_unused]] uint32_t maxFrames) {
   // --- Windows implementation ---
 
   // clamp to a sane upper bound to avoid huge allocations
-  const size_t kMaxAllowedFrames = 1024;
-  if (maxFrames > kMaxAllowedFrames) maxFrames = kMaxAllowedFrames;
+  if (constexpr size_t kMaxAllowedFrames = 1024; maxFrames > kMaxAllowedFrames)
+    maxFrames = kMaxAllowedFrames;
 
   // Move frame buffer to the heap
-  std::vector<void*> frameBuffer;
+  std::vector<void *> frameBuffer;
   frameBuffer.resize(maxFrames);
 
   // Make sure DbgHelp is initialized once, thread-safely
   ensureDbgHelpInitialized();
-  HANDLE process = GetCurrentProcess();
+  const HANDLE process = GetCurrentProcess();
 
   // CaptureStackBackTrace expects a DWORD count
-  WORD frames = CaptureStackBackTrace(0, static_cast<DWORD>(maxFrames),
-                                      frameBuffer.data(), nullptr);
+  const WORD frames = CaptureStackBackTrace(0, static_cast<DWORD>(maxFrames),
+                                            frameBuffer.data(), nullptr);
 
   // Prepare a heap-allocated symbol buffer big enough for long names
-  const size_t symBufSize = sizeof(SYMBOL_INFOW) + MAX_SYM_NAME * sizeof(TCHAR);
+  constexpr size_t symBufSize =
+      sizeof(SYMBOL_INFOW) + MAX_SYM_NAME * sizeof(TCHAR);
 
-  std::unique_ptr<char[]> symBuf(new char[symBufSize]);
-  SYMBOL_INFOW* symbol = reinterpret_cast<SYMBOL_INFOW*>(symBuf.get());
+  const std::unique_ptr<char[]> symBuf(new char[symBufSize]);
+  const auto symbol = reinterpret_cast<SYMBOL_INFOW *>(symBuf.get());
   ZeroMemory(symbol, symBufSize);
   symbol->SizeOfStruct = sizeof(SYMBOL_INFOW);
   symbol->MaxNameLen = MAX_SYM_NAME;
 
   for (WORD i = 1; i < frames; ++i) {
-    DWORD64 address = reinterpret_cast<DWORD64>(frameBuffer[i]);
-    if (SymFromAddrW(process, address, nullptr, symbol)) {
+    if (const DWORD64 address = reinterpret_cast<DWORD64>(frameBuffer[i]);
+        SymFromAddrW(process, address, nullptr, symbol)) {
       std::wstring wname(symbol->Name);
       std::string name(wname.begin(), wname.end());
       oss << "  [" << i << "] " << name << " - 0x" << std::hex
           << symbol->Address << std::dec << "\n";
+      // Try to get line info
+      IMAGEHLP_LINEW64 line;
+      DWORD displacement = 0;
+      ZeroMemory(&line, sizeof(line));
+      line.SizeOfStruct = sizeof(line);
+
+      if (SymGetLineFromAddrW64(process, address, &displacement, &line)) {
+        std::wstring wfile(line.FileName);
+        std::string file(wfile.begin(), wfile.end());
+        oss << "        at " << file << ":" << line.LineNumber << "\n";
+      }
     } else {
       // Fallback: unresolved symbol
       oss << "  [" << i << "] (unknown) - 0x" << std::hex
@@ -180,7 +192,7 @@ std::string dumpStackTrace([[maybe_unused]] uint32_t maxFrames) {
 #  elif defined(__ANDROID__)
   // TODO
   int const count = 0;
-  void *frames[] = {(void *) &count};
+  void *frames[] = {(void *)&count};
   for (int i = 0; i < count; ++i) {
     Dl_info info;
     if (dladdr(frames[i], &info) && info.dli_sname) {

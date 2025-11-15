@@ -12,7 +12,7 @@
 #include <atomic>
 
 #include "avk-comutils.h"
-#include "render/context-vk.h"
+#include "render/vk/common-vk.h"
 
 namespace avk {
 
@@ -29,7 +29,6 @@ inline constexpr wchar_t const* primaryWindowClass = L"Standard Window";
 
 struct WindowPayload {
   VkExtent2D lastClientExtent;
-  avk::ContextVk* contextVk;
   WINDOWPLACEMENT windowedPlacement;
   std::atomic<bool> isFullscreen;
   std::atomic<bool> framebufferResized;
@@ -42,9 +41,9 @@ struct WindowPayload {
 
 LRESULT primaryWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
-HWND createPrimaryWindow(WindowPayload* payload);
+class WindowsApplication;
+HWND createPrimaryWindow(WindowsApplication* payload);
 
-void primaryWindowMessageLoop(HWND window, WindowPayload* payload,
-                              std::atomic<bool>& shouldQuit);
+void primaryWindowMessageLoop(WindowsApplication* payload);
 
 }  // namespace avk

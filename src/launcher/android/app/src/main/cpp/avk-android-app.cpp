@@ -141,8 +141,20 @@ void AndroidApp::createVulkanResources() AVK_NO_CFI {
 
   // apply prerotation
   vk::utils::SurfacePreRotation const preRot = vkSwapchain()->preRotation();
-  m_camera.view = glm::toMat4(preRot.cameraRotation) * m_camera.view;
-  m_camera.proj = preRot.projectionAdjust * m_camera.proj;
+  if (vkSwapchain()->transform() == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR
+      || vkSwapchain()->transform() == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR
+      || vkSwapchain()->transform()
+          == VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR
+      || vkSwapchain()->transform()
+          == VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR) {
+    m_camera.view = glm::toMat4(preRot.cameraRotation) * m_camera.view;
+  }
+  if (vkSwapchain()->transform()
+      == VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR
+      || vkSwapchain()->transform()
+          == VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR) {
+    m_camera.proj = preRot.projectionAdjust * m_camera.proj;
+  }
 }
 
 namespace hashes {
@@ -156,13 +168,46 @@ inline constexpr uint64_t Cube = "Cube"_hash;
 
 }  // namespace hashes
 
+static VkBuffer s_vBuffer = VK_NULL_HANDLE;
+static VmaAllocation s_vAllocation = VK_NULL_HANDLE;
+
 void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
+  std::array<glm::vec3, 3> triangle{
+      glm::vec3{-.5, .5, .5}, // left below
+      {.5, .5, .5}, // right below
+      {0, -.5, .5} // top center
+  };
+  VkBufferCreateInfo createInfo{};
+  createInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  createInfo.size = nextMultipleOf<16>(sizeof(triangle));
+  createInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+  VmaAllocationCreateInfo allocInfo{};
+  allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+  allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+      | VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+  allocInfo.preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+
+  VK_CHECK(vmaCreateBuffer(
+      vmaAllocator(),
+      &createInfo,
+      &allocInfo,
+      &s_vBuffer,
+      &s_vAllocation,
+      nullptr));
+  VK_CHECK(vmaCopyMemoryToAllocation(
+      vmaAllocator(),
+      glm::value_ptr(triangle[0]),
+      s_vAllocation,
+      0,
+      sizeof(triangle)));
   // buffers
-  alignas(16) std::array<glm::vec3, 8> vertexBuffer;
-  alignas(16) std::array<glm::uvec3, 12> indexBuffer;
-  alignas(16) std::array<std::array<uint32_t, 12>, 8> faceMap;
+#if 0
+  std::array<glm::vec3, 8> vertexBuffer;
+  std::array<glm::uvec3, 12> indexBuffer;
+  std::array<std::array<uint32_t, 12>, 8> faceMap;
   // vec4 not 3 because of HLSL like alignment
-  alignas(16) std::array<glm::vec4, 6>
+  std::array<glm::vec4, 6>
       colors{glm::vec4(.5, .5, .5, 0), {.4, .1, .4, 0},
              {.1, .2, .6, 0}, {.6, .1, .0, 0},
              {.1, .5, .2, 0}, {0, 1, .1, 0}};
@@ -171,6 +216,28 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
 
   VkBuffer buffer = VK_NULL_HANDLE;
   VmaAllocation alloc = VK_NULL_HANDLE;
+
+  // TODO remove
+  {
+    glm::mat4 model =
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -0.25f, 0.0f)) *
+            glm::scale(glm::mat4(1.0f), glm::vec3(1.5f));
+    glm::mat4 view =
+        glm::lookAt(
+            glm::vec3(0.0f, 0.0f, 3.0f),   // eye position
+            glm::vec3(0.0f, 0.0f, 0.0f),   // look at origin
+            glm::vec3(0.0f, 1.0f, 0.0f)    // up direction
+        );
+    float fov = glm::radians(60.0f);
+    float aspect =
+        vkSwapchain()->extent().width / float(vkSwapchain()->extent().height);
+
+    glm::mat4 proj =
+        glm::perspectiveRH_ZO(fov, aspect, 0.1f, 100.0f);
+    for (auto &vert : vertexBuffer) {
+      vert = (proj * view * model * glm::vec4(vert, 1));
+    }
+  }
 
   // 1. Allocate vertex and index buffers
   int bufRes = bufferManager()->createBufferGPUOnly(
@@ -192,14 +259,14 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
   // be finished
   if (!bufferManager()->get(hashes::Vertex, buffer, alloc))
     showErrorScreenAndExit("Couldn't get Vertex Buffer");
-  VK_CHECK(vmaCopyMemoryToAllocation(vmaAllocator(), vertexBuffer.data(), alloc,
-                                     0,
-                                     vertexBuffer.size() * sizeof(glm::vec3)));
+  // TODO remove
+  static_assert(sizeof(triangle) == 3 * 12);
+  VK_CHECK(vmaCopyMemoryToAllocation(
+      vmaAllocator(), triangle.data(), alloc, 0, sizeof(triangle)));
   if (!bufferManager()->get(hashes::Index, buffer, alloc))
     showErrorScreenAndExit("Couldn't get Index Buffer");
-  VK_CHECK(vmaCopyMemoryToAllocation(vmaAllocator(), indexBuffer.data(), alloc,
-                                     0,
-                                     indexBuffer.size() * sizeof(glm::uvec3)));
+  VK_CHECK(vmaCopyMemoryToAllocation(
+      vmaAllocator(), indexBuffer.data(), alloc, 0, sizeof(indexBuffer)));
   // 2. Camera definition
   m_camera.view = glm::lookAt(glm::vec3(0, 0, 0), glm::vec3(0, 1, -0.6f),
                               glm::vec3(0, 0, 1));
@@ -229,15 +296,6 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
     showErrorScreenAndExit("Couldn't retrieve model matrix UBO");
   VK_CHECK(vmaCopyMemoryToAllocation(vmaAllocator(), glm::value_ptr(cubeModel),
                                      alloc, 0, sizeof(glm::mat4)));
-
-  // graphicsInfo
-  // apparently gameActivity already loads it from java?
-  // AAssetManager* assetMgr = AAssetManager_fromJava(m_jniEnv,
-  // m_app->activity->assetManager);
-  auto const vertCode = spirvFromAsset(m_app->activity->assetManager,
-                                       "shaders/cube-buffers.vert.spv");
-  auto const fragCode = spirvFromAsset(m_app->activity->assetManager,
-                                       "shaders/cube-buffers.frag.spv");
 
   // pipeline layout specification step 1: descriptor set layouts
   {
@@ -271,6 +329,16 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
   pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
   pushConstantRange.offset = 0;
   pushConstantRange.size = static_cast<uint32_t>(sizeof(Camera));
+#endif
+
+  // graphicsInfo
+  // apparently gameActivity already loads it from java?
+  // AAssetManager* assetMgr = AAssetManager_fromJava(m_jniEnv,
+  // m_app->activity->assetManager);
+  auto const vertCode = spirvFromAsset(m_app->activity->assetManager,
+                                       "shaders/cube-buffers.vert.spv");
+  auto const fragCode = spirvFromAsset(m_app->activity->assetManager,
+                                       "shaders/cube-buffers.frag.spv");
 
   // shaders
   VkShaderModule modules[2] = {
@@ -278,10 +346,16 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
       vk::createShaderModule(vkDevice(), fragCode.data(),
                              fragCode.size() << 2)};
   m_graphicsInfo = experimental::basicGraphicsInfo(
+      // TODO pipeline layout
+#if 0
       vk::createPipelineLayout(vkDevice(), &m_descriptorSetLayout, 1,
                                &pushConstantRange, 1),
+#else
+      vk::createPipelineLayout(vkDevice()),
+#endif
       modules, vk::basicDepthStencilFormat(vkDevice()->physicalDevice()));
 
+#if 0
   // update template creation
   {
     VkDescriptorUpdateTemplateEntryKHR entries[2]{};
@@ -330,20 +404,28 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
   vkDevTable()->vkUpdateDescriptorSetWithTemplateKHR(
       vkDeviceHandle(), m_cubeDescriptorSet, m_descriptorUpdateTemplate,
       bufferInfos);
+#endif
 }
 
 void AndroidApp::destroyConstantVulkanResources() AVK_NO_CFI {
   using namespace avk::literals;
   // vertex buffer
+#if 0 // TODO
   bufferManager()->discardById(vkDiscardPool(), "VertexTriangle"_hash,
                                timeline());
+#endif
   experimental::discardGraphicsInfo(vkDiscardPool(), timeline(),
                                     m_graphicsInfo);
-  vkDevTable()->vkDestroyDescriptorUpdateTemplateKHR(
-      vkDeviceHandle(), m_descriptorUpdateTemplate, nullptr);
-  vkDevTable()->vkDestroyDescriptorSetLayout(vkDeviceHandle(),
-                                             m_descriptorSetLayout, nullptr);
-  m_descriptorSetLayout = VK_NULL_HANDLE;
+  if (m_descriptorUpdateTemplate != VK_NULL_HANDLE) {
+    vkDevTable()->vkDestroyDescriptorUpdateTemplateKHR(
+        vkDeviceHandle(), m_descriptorUpdateTemplate, nullptr);
+    m_descriptorUpdateTemplate = VK_NULL_HANDLE;
+  }
+  if (m_descriptorSetLayout != VK_NULL_HANDLE) {
+    vkDevTable()->vkDestroyDescriptorSetLayout(vkDeviceHandle(),
+                                               m_descriptorSetLayout, nullptr);
+    m_descriptorSetLayout = VK_NULL_HANDLE;
+  }
 }
 
 void AndroidApp::RTdoOnWindowInit() {
@@ -371,6 +453,8 @@ AVK_NO_CFI {
       m_commandBufferIds[vkSwapchain()->frameIndex()]);
   // begin command buffer
   VkClearValue clear[2]{};
+  clear[1].depthStencil.depth = 1.f;
+  clear[1].depthStencil.stencil = 0.f;
   VkRect2D rect{};
   rect.extent = vkSwapchain()->extent();
   VkCommandBufferBeginInfo beginInfo{};
@@ -394,13 +478,19 @@ AVK_NO_CFI {
                               m_graphicsPipeline);
   // bind vertex and index buffer
   VkDeviceSize offset = 0;
+#if 1
+  vkDevApi->vkCmdBindVertexBuffers(cmd, 0, 1, &s_vBuffer, &offset);
+#else
   VkBuffer buffer = VK_NULL_HANDLE;
   VmaAllocation alloc = VK_NULL_HANDLE;
 
   bufferManager()->get(hashes::Vertex, buffer, alloc);
+  assert(buffer != VK_NULL_HANDLE);
   vkDevApi->vkCmdBindVertexBuffers(cmd, 0, 1, &buffer, &offset);
 
+  buffer = VK_NULL_HANDLE;
   bufferManager()->get(hashes::Index, buffer, alloc);
+  assert(buffer != VK_NULL_HANDLE);
   vkDevApi->vkCmdBindIndexBuffer(cmd, buffer, 0, VK_INDEX_TYPE_UINT32);
 
   // descriptor set and push constant
@@ -410,6 +500,7 @@ AVK_NO_CFI {
   vkDevApi->vkCmdPushConstants(cmd, m_graphicsInfo.pipelineLayout,
                                VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Camera),
                                &m_camera);
+#endif
 
   // set scissor and viewport
   vkDevApi->vkCmdSetScissor(cmd, 0, 1, &rect);
@@ -418,8 +509,14 @@ AVK_NO_CFI {
   viewport.height = rect.extent.height;
   viewport.maxDepth = 1.f;
   vkDevApi->vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+#if 0
   // draw call
   vkDevApi->vkCmdDrawIndexed(cmd, 36, 1, 0, 0, 0);
+#else
+  vkDevApi->vkCmdDraw(cmd, 3, 1, 0, 0);
+#endif
+
   // end render pass (transition to present layout)
   VkSubpassEndInfoKHR subEnd{};
   subEnd.sType = VK_STRUCTURE_TYPE_SUBPASS_END_INFO_KHR;

@@ -60,10 +60,10 @@ class AndroidApp : public ApplicationBase {
 
  private:
   // stuff to refactor
-  Camera m_camera;
-  VkDescriptorSet m_cubeDescriptorSet = VK_NULL_HANDLE;
-  VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
-  VkDescriptorUpdateTemplateKHR m_descriptorUpdateTemplate = VK_NULL_HANDLE;
+  [[maybe_unused]] Camera m_camera;
+  [[maybe_unused]] VkDescriptorSet m_cubeDescriptorSet = VK_NULL_HANDLE;
+  [[maybe_unused]] VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
+  [[maybe_unused]] VkDescriptorUpdateTemplateKHR m_descriptorUpdateTemplate = VK_NULL_HANDLE;
 
   // constant on resize
   vk::GraphicsInfo m_graphicsInfo;

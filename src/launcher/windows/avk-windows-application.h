@@ -5,11 +5,24 @@
 // os specific
 #include <Windef.h>
 
+#include "avk-win32-window.h"
+
 namespace avk {
+
+// TODO refactor
+struct Camera {
+  glm::mat4 view;
+  glm::mat4 proj;
+};
 
 class WindowsApplication : public ApplicationBase {
  public:
-  explicit WindowsApplication(HWND primaryWindow);
+  WindowsApplication() = default;
+  ~WindowsApplication() noexcept override;
+
+  WindowPayload WindowPayload;
+  HWND PrimaryWindow = nullptr;
+  HANDLE RenderThread = INVALID_HANDLE_VALUE;
 
  protected:
   void doOnSaveState() override;
@@ -26,9 +39,21 @@ class WindowsApplication : public ApplicationBase {
   void RTdoLateSurfaceRegained() override;
 
  private:
-  /// windows related handles. This class doesn't own it, as the UI/Main
-  /// thread is responsible for handling its message pump
-  HWND m_primaryHwnd;
+  void createConstantVulkanResources();
+  void destroyConstantVulkanResources();
+  void cleanupVulkanResources();
+  void createVulkanResources();
+
+  // TODO refactor
+  vk::GraphicsInfo m_graphicsInfo;
+  VkPipeline m_graphicsPipeline = VK_NULL_HANDLE;
+
+  VkImageView m_depthView = VK_NULL_HANDLE;
+
+  std::vector<VkFramebuffer> m_framebuffers;
+  std::vector<uint64_t> m_commandBufferIds;
+
+  Camera m_camera;
 };
 
 }  // namespace avk

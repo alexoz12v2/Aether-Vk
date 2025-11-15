@@ -5,13 +5,15 @@
 #include "render/vk/common-vk.h"
 
 // std
+#include <algorithm>
 #include <unordered_set>
 
 namespace avk::vk {
 
 // ------------------------- Static Functions --------------------------------
-// some older devices don't have VK_EXT_debug_utils, and we can't reliably detect it (see below), hence we prefer
-// enabling VK_EXT_debug_report and pray that it works 👌
+// some older devices don't have VK_EXT_debug_utils, and we can't reliably
+// detect it (see below), hence we prefer enabling VK_EXT_debug_report and pray
+// that it works 👌
 #ifdef AVK_DEBUG
 #  if 0
 static VkBool32 VKAPI_PTR
@@ -46,7 +48,7 @@ debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
   }
   return VK_FALSE;
 }
-#endif
+#  endif
 
 static VkBool32 VKAPI_PTR debugReportCallback(
     VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType,
@@ -244,8 +246,8 @@ Instance::Instance() AVK_NO_CFI {
   VkInstanceCreateInfo createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
   createInfo.flags = m_portabilityEnumeration
-                     ? VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
-                     : 0;
+                         ? VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
+                         : 0;
 #ifdef AVK_DEBUG
   // define validation layers
   uint32_t layerCount = 0;
@@ -257,9 +259,12 @@ Instance::Instance() AVK_NO_CFI {
   std::vector<VkLayerProperties> layerProperties(layerCount);
   VK_CHECK(
       vkEnumerateInstanceLayerProperties(&layerCount, layerProperties.data()));
+  // Desktop might have lots of layers causing error VK_ERROR_OUT_OF_HOST_MEMORY
+  // if all enabled
+#  define AVK_DEBUG_VALIDATION_LAYER_ONLY
 #  ifdef AVK_DEBUG_VALIDATION_LAYER_ONLY
-  char const* const desiredLayer = "VK_LAYER_KHRONOS_validation";
-  for (const auto& layerProp : layerProperties) {
+  char const *const desiredLayer = "VK_LAYER_KHRONOS_validation";
+  for (const auto &layerProp : layerProperties) {
     LOGI << "[Instance]  - " << layerProp.layerName << std::endl;
     if (strcmp(layerProp.layerName, desiredLayer) == 0) {
       LOGI << "[Instance]  - ADDED " << layerProp.layerName << std::endl;
@@ -277,16 +282,17 @@ Instance::Instance() AVK_NO_CFI {
   createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
   createInfo.ppEnabledLayerNames = validationLayers.data();
 
-  // TODO add check for AGI (need newer phone though) and NVIDIA Insight Graphics
+  // TODO add check for AGI (need newer phone though) and NVIDIA Insight
+  // Graphics
   bool hasRenderdoc = std::any_of(
       validationLayers.cbegin(), validationLayers.cend(),
       [](const char *layer) {
         return std::string(layer).find("RENDERDOC") != std::string::npos;
       });
   if (hasRenderdoc) {
-    LOGW
-        << "[Instance::CreateInstance] Since renderdoc was detected, do not add any debugging extension"
-        << std::endl;
+    LOGW << "[Instance::CreateInstance] Since renderdoc was detected, do not "
+            "add any debugging extension"
+         << std::endl;
     m_debugReport = false;
   }
 
@@ -296,11 +302,12 @@ Instance::Instance() AVK_NO_CFI {
     debugInfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT;
     debugInfo.flags =
         VK_DEBUG_REPORT_INFORMATION_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT |
-            VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT |
-            VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_DEBUG_BIT_EXT;
+        VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT |
+        VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_DEBUG_BIT_EXT;
     debugInfo.pfnCallback = debugReportCallback;
     debugInfo.pUserData = nullptr;
 
+    // crash, why?
     createInfo.pNext = &debugInfo;
   }
 #endif
@@ -313,9 +320,20 @@ Instance::Instance() AVK_NO_CFI {
   VK_CHECK(vkCreateInstance(&createInfo, nullptr, &m_instance));
 
 #ifdef AVK_DEBUG
+  auto *const pfnCreateDebugReportCallbackEXT =
+      reinterpret_cast<PFN_vkCreateDebugReportCallbackEXT>(
+          vkGetInstanceProcAddr(m_instance, "vkCreateDebugReportCallbackEXT"));
+  if (!pfnCreateDebugReportCallbackEXT) {
+    LOGW << "[Instance::CreateInstance] While this device should support"
+            " VK_EXT_debug_report, 'vkCreateDebugReportCallbackEXT' was found "
+            "to be NULL"
+         << std::endl;
+    m_debugReport = false;
+  }
   if (m_debugReport) {
-    VK_CHECK(vkCreateDebugReportCallbackEXT(m_instance, &debugInfo, nullptr,
-                                            &m_debugCallback));
+    // this is before volkLoadInstanceOnly, so PFN
+    VK_CHECK(pfnCreateDebugReportCallbackEXT(m_instance, &debugInfo, nullptr,
+                                             &m_debugCallback));
   }
 #endif
 

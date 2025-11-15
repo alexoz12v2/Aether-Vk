@@ -171,7 +171,6 @@ static void handleInputEvents([[maybe_unused]] struct android_app *app,
 }
 
 // pthread signature
-[[maybe_unused]]
 static void *renderThreadFunc(void *arg) {
   auto *app = reinterpret_cast<avk::AndroidApp *>(arg);
   s_mlogi << "[RenderThread] started" << std::endl;
