@@ -8,7 +8,7 @@ ApplicationBase::ApplicationBase() {
        << m_vkInstance.get()->handle() << std::dec << " Created" << std::endl;
 }
 
-ApplicationBase::~ApplicationBase() noexcept {
+ApplicationBase::~ApplicationBase() noexcept AVK_NO_CFI {
   LOGI << "[ApplicationBase] Destructor Running ..." << std::endl;
   if (m_windowInit) {
     auto const *const vkDevApi = m_vkDevice.get()->table();
