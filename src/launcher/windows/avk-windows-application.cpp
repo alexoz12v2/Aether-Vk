@@ -126,7 +126,7 @@ void WindowsApplication::RTdoOnDeviceRegained() {
   showErrorScreenAndExit("Desktop should never lose device");
 }
 
-WindowsApplication::~WindowsApplication() noexcept {
+WindowsApplication::~WindowsApplication() noexcept AVK_NO_CFI {
   LOGI << "[WindowsApplication] Detructor Running" << std::endl;
   if (windowInitializedOnce()) {
     // It's contained in base class, but we want to ensure that the host storage
@@ -466,115 +466,35 @@ VkResult WindowsApplication::RTdoOnRender(
   static uint64_t constexpr StagingIndex = "StagingIndex"_hash;
 
   if (timeline() == 0) {
-    VmaAllocation stagingAlloc = VK_NULL_HANDLE;
-    VkBuffer stagingBuf = VK_NULL_HANDLE;
-    // TODO better
-    std::vector<VkBufferMemoryBarrier> beforeVertexInput;
-    std::vector<VkBufferMemoryBarrier> beforeVertexShader;
-    beforeVertexInput.reserve(4);
-    beforeVertexShader.reserve(4);
-
     // TODO not duplicate
-    [[maybe_unused]] std::array<glm::vec3, 8> vertexBuffer;
-    [[maybe_unused]] std::array<glm::uvec3, 12> indexBuffer;
-    [[maybe_unused]] std::array<std::array<uint32_t, 12>, 8> faceMap;
-    [[maybe_unused]] std::array<glm::vec4, 6> colors;
+    std::array<glm::vec3, 8> vertexBuffer;
+    std::array<glm::uvec3, 12> indexBuffer;
+    std::array<std::array<uint32_t, 12>, 8> faceMap;
+    std::array<glm::vec4, 6> colors;
+    glm::mat4 const cubeModel =
+        glm::translate(glm::mat4(1.f), glm::vec3(0, 1, -1));
     test::cubeColors(colors);
     test::cubePrimitive(vertexBuffer, indexBuffer, faceMap);
+    CubeFaceMapping hostCubeFaceMapping{faceMap, colors};
     LOGI << "[WindowsApplication::onRender] First Timeline: Upload staging"
          << std::endl;
     assert(vertBuf && indexBuf);
-    // m_staging.refresh(cmd, bufferManager(), vkDevTable(), vkDiscardPool(),
-    //                   vmaAllocator(), timeline());
-    int bufRes = 0;
+    m_staging.refresh(cmd, bufferManager(), vkDevice(), vkDiscardPool(),
+                      timeline());
     if (!vkDevice()->isSoC() &&
         !vk::isAllocHostVisible(vmaAllocator(), vertAlloc)) {
-      bufRes = bufferManager()->createBufferStaging(
-          StagingVert, sizeof(vertexBuffer), true, false);
-      if (bufRes)
-        showErrorScreenAndExit("Couldn't allocate staging buffer for vertex");
-      if (!bufferManager()->get(StagingVert, stagingBuf, stagingAlloc))
-        showErrorScreenAndExit("Couldn't get staging buffer for vertex");
-      VK_CHECK(vmaCopyMemoryToAllocation(vmaAllocator(), vertexBuffer.data(),
-                                         stagingAlloc, 0,
-                                         sizeof(vertexBuffer)));
-      // insert memory barrier from host stage to make sure mmapped write ends
-      VkBufferMemoryBarrier hostBarrier{};
-      hostBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-      hostBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-      hostBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-      hostBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;  // host
-      hostBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;  // don't care
-      hostBarrier.buffer = stagingBuf;
-      hostBarrier.offset = 0;
-      hostBarrier.size = VK_WHOLE_SIZE;
-      vkDevApi->vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
-                                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
-                                     nullptr, 1, &hostBarrier, 0, nullptr);
-      // then safely transfer operation
-      VkBufferCopy bufCopy{};
-      bufCopy.srcOffset = 0;
-      bufCopy.dstOffset = 0;
-      bufCopy.size = sizeof(vertexBuffer);
-      vkDevApi->vkCmdCopyBuffer(cmd, stagingBuf, vertBuf, 1, &bufCopy);
-
-      // push a buffer barrier into the beforeVertex
-      VkBufferMemoryBarrier transferBarrier{};
-      transferBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-      transferBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-      transferBarrier.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-      transferBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;  // same
-      transferBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;  // same
-      transferBarrier.buffer = vertBuf;
-      transferBarrier.offset = 0;
-      transferBarrier.size = VK_WHOLE_SIZE;
-      beforeVertexInput.push_back(transferBarrier);
-
-      // discard staging after this timeline
-      bufferManager()->discardById(vkDiscardPool(), StagingVert, timeline());
+      m_staging.enqueue({vertBuf, vertAlloc, vertexBuffer.data(),
+                         sizeof(vertexBuffer), StagingVert,
+                         VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                         VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT});
     }
 
     if (!vkDevice()->isSoC() &&
         !vk::isAllocHostVisible(vmaAllocator(), indexAlloc)) {
-      bufRes = bufferManager()->createBufferStaging(
-          StagingIndex, sizeof(indexBuffer), true, false);
-      if (bufRes)
-        showErrorScreenAndExit("Couldn't allocate staging buffer for index");
-      if (!bufferManager()->get(StagingIndex, stagingBuf, stagingAlloc))
-        showErrorScreenAndExit("Couldn't get staging buffer for index");
-      VK_CHECK(vmaCopyMemoryToAllocation(vmaAllocator(), indexBuffer.data(),
-                                         stagingAlloc, 0, sizeof(indexBuffer)));
-      // host memory barrier so transfer on queue starts after mmapped copy
-      VkBufferMemoryBarrier hostBarrier{};
-      hostBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-      hostBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-      hostBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-      hostBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;  // from host
-      hostBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;  // don't care
-      hostBarrier.buffer = stagingBuf;
-      hostBarrier.offset = 0;
-      hostBarrier.size = VK_WHOLE_SIZE;
-      vkDevApi->vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
-                                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
-                                     nullptr, 1, &hostBarrier, 0, nullptr);
-      // then record the transfer operation
-      VkBufferCopy bufCopy{};
-      bufCopy.srcOffset = 0;
-      bufCopy.dstOffset = 0;
-      bufCopy.size = sizeof(indexBuffer);
-      vkDevApi->vkCmdCopyBuffer(cmd, stagingBuf, indexBuf, 1, &bufCopy);
-
-      // push beforeVertex memory barrier
-      VkBufferMemoryBarrier transferBarrier{};
-      transferBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-      transferBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-      transferBarrier.dstAccessMask = VK_ACCESS_INDEX_READ_BIT;
-      transferBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;  // same
-      transferBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;  // same
-      transferBarrier.buffer = indexBuf;
-      transferBarrier.offset = 0;
-      transferBarrier.size = VK_WHOLE_SIZE;
-      beforeVertexInput.push_back(transferBarrier);
+      m_staging.enqueue({indexBuf, indexAlloc, indexBuffer.data(),
+                         sizeof(indexBuffer), StagingIndex,
+                         VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                         VK_ACCESS_INDEX_READ_BIT});
     }
 
     // setup GPU only buffer for "cube" uniform buffer
@@ -585,54 +505,11 @@ VkResult WindowsApplication::RTdoOnRender(
       assert(buffer);
       if (!vkDevice()->isSoC() &&
           !vk::isAllocHostVisible(vmaAllocator(), alloc)) {
-        // allocate staging buffer and copy stuff there
-        bufRes = bufferManager()->createBufferStaging(
-            "StagingCube"_hash, sizeof(CubeFaceMapping), true, false);
-        if (bufRes)
-          showErrorScreenAndExit("Couldn't allcoate staging for cube UBO");
-        if (!bufferManager()->get("StagingCube"_hash, stagingBuf, stagingAlloc))
-          showErrorScreenAndExit("Couldn't get staging for cube UBO");
-        CubeFaceMapping hostCubeFaceMapping{faceMap, colors};
-
-        VK_CHECK(vmaCopyMemoryToAllocation(vmaAllocator(), &hostCubeFaceMapping,
-                                           stagingAlloc, 0,
-                                           sizeof(hostCubeFaceMapping)));
-        // pipeline barrier so host copy finishes before transfer cmd
-        VkBufferMemoryBarrier hostBarrier{};
-        hostBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        hostBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-        hostBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        hostBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;  // host
-        hostBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;  // dont care
-        hostBarrier.buffer = stagingBuf;
-        hostBarrier.offset = 0;
-        hostBarrier.size = VK_WHOLE_SIZE;
-        vkDevApi->vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
-                                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
-                                       nullptr, 1, &hostBarrier, 0, nullptr);
-        // then do a transfer operation
-        VkBufferCopy bufCopy{};
-        bufCopy.srcOffset = 0;
-        bufCopy.dstOffset = 0;
-        bufCopy.size = sizeof(CubeFaceMapping);
-        vkDevApi->vkCmdCopyBuffer(cmd, stagingBuf, buffer, 1, &bufCopy);
-
-        // push back another barrier for the beforeVertex pipeline barrier
-        // TODO this barrier can come before fragment
-        VkBufferMemoryBarrier transferBarrier{};
-        transferBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        transferBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        transferBarrier.dstAccessMask = VK_ACCESS_UNIFORM_READ_BIT;
-        transferBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;  // same
-        transferBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;  // same
-        transferBarrier.buffer = buffer;
-        transferBarrier.offset = 0;
-        transferBarrier.size = VK_WHOLE_SIZE;
-        beforeVertexShader.push_back(transferBarrier);
-
-        // discard staging, won't be needed after this timeline
-        bufferManager()->discardById(vkDiscardPool(), "StagingCube"_hash,
-                                     timeline());
+        // allocate staging buffer and copy stuff there, then discard staging
+        m_staging.enqueue({buffer, alloc, &hostCubeFaceMapping,
+                           sizeof(hostCubeFaceMapping), "StagingCube"_hash,
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                           VK_ACCESS_UNIFORM_READ_BIT});
       }
     }
 
@@ -644,54 +521,11 @@ VkResult WindowsApplication::RTdoOnRender(
       assert(buffer);
       if (!vkDevice()->isSoC() &&
           !vk::isAllocHostVisible(vmaAllocator(), alloc)) {
-        // create a staging buffer for the transfer
-        bufRes = bufferManager()->createBufferStaging(
-            "StagingModel"_hash, sizeof(glm::mat4), true, false);
-        if (bufRes)
-          showErrorScreenAndExit("Couldn't allocate staging for model UBO");
-        if (!bufferManager()->get("StagingModel"_hash, stagingBuf,
-                                  stagingAlloc))
-          showErrorScreenAndExit("Couldn't get staging for model UBO");
-        // transfer to staging and barrier such that host copy can finish
-        // before queue transfer begins
-        glm::mat4 const cubeModel =
-            glm::translate(glm::mat4(1.f), glm::vec3(0, 1, -1));
-        VK_CHECK(vmaCopyMemoryToAllocation(vmaAllocator(),
-                                           glm::value_ptr(cubeModel),
-                                           stagingAlloc, 0, sizeof(cubeModel)));
-        VkBufferMemoryBarrier hostBarrier{};
-        hostBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        hostBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-        hostBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        hostBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;  // host
-        hostBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;  // dont care
-        hostBarrier.buffer = stagingBuf;
-        hostBarrier.offset = 0;
-        hostBarrier.size = VK_WHOLE_SIZE;
-        vkDevApi->vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
-                                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
-                                       nullptr, 1, &hostBarrier, 0, nullptr);
-        // then we can perform the transfer operation
-        VkBufferCopy bufferCopy{};
-        bufferCopy.srcOffset = 0;
-        bufferCopy.dstOffset = 0;
-        bufferCopy.size = sizeof(glm::mat4);
-        vkDevApi->vkCmdCopyBuffer(cmd, stagingBuf, buffer, 1, &bufferCopy);
-        // finally add a pipeline barrier so that transfer finishes before
-        // vertex shader stage
-        VkBufferMemoryBarrier transferBarrier{};
-        transferBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        transferBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        transferBarrier.dstAccessMask = VK_ACCESS_UNIFORM_READ_BIT;
-        transferBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;  // same
-        transferBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;  // same
-        transferBarrier.buffer = buffer;
-        transferBarrier.offset = 0;
-        transferBarrier.size = VK_WHOLE_SIZE;
-        beforeVertexShader.push_back(transferBarrier);
-        // discard staging
-        bufferManager()->discardById(vkDiscardPool(), "StagingModel"_hash,
-                                     timeline());
+        // create a staging buffer for the transfer, then discard it
+        m_staging.enqueue({buffer, alloc, glm::value_ptr(cubeModel),
+                           sizeof(cubeModel), "StagingModel"_hash,
+                           VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+                           VK_ACCESS_UNIFORM_READ_BIT});
       }
     }
 
@@ -724,24 +558,7 @@ VkResult WindowsApplication::RTdoOnRender(
     }
 
     // after everything staged, insert necessary pipeline barrier
-    if (!beforeVertexInput.empty()) {
-      // note: Shader stage as destination is wrong
-      vkDevApi->vkCmdPipelineBarrier(
-          cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-          VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 0, nullptr,
-          static_cast<uint32_t>(beforeVertexInput.size()),
-          beforeVertexInput.data(), 0, nullptr);
-      beforeVertexInput.clear();
-    }
-    if (!beforeVertexShader.empty()) {
-      // note: Shader stage as destination is wrong
-      vkDevApi->vkCmdPipelineBarrier(
-          cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-          VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0, 0, nullptr,
-          static_cast<uint32_t>(beforeVertexShader.size()),
-          beforeVertexShader.data(), 0, nullptr);
-      beforeVertexShader.clear();
-    }
+    m_staging.flush();
   }
 
   // begin render pass (transition to optimal layout)

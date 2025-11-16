@@ -33,19 +33,20 @@ class StagingTransientManager : public NonMoveable {
   StagingTransientManager();
 
   void enqueue(StagingOperation const& op);
+  /// \warning all host side data enqueued must still be alive when calling
+  /// flush
   void flush();
   void refresh(VkCommandBuffer cmd, BufferManager* bufferManager,
-               VolkDeviceTable const* vkDevApi, vk::DiscardPool* discardPool,
-               VmaAllocator allocator, uint64_t timeline);
+               vk::Device* device, vk::DiscardPool* discardPool,
+               uint64_t timeline);
 
  private:
   // transient resources
   struct Transient {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
-    VolkDeviceTable const* vkDevApi = nullptr;
+    vk::Device* device = nullptr;
     vk::DiscardPool* discardPool = nullptr;
     BufferManager* bufferManager = nullptr;
-    VmaAllocator allocator = VK_NULL_HANDLE;
     uint64_t timeline = -1;
   } m_tmp;
 

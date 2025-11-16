@@ -46,7 +46,7 @@ void StagingTransientManager::enqueue(StagingOperation const& op) {
 }
 
 // TODO possibly handle out of budget gracefully
-void StagingTransientManager::flush() {
+void StagingTransientManager::flush() AVK_NO_CFI {
   assert(refreshed);
   for (auto const& op : m_stagingOps) {
     VkBuffer stagingBuf = VK_NULL_HANDLE;
@@ -54,15 +54,11 @@ void StagingTransientManager::flush() {
     int res = m_tmp.bufferManager->createBufferStaging(
         op.stagingId, op.srcBytes, true, false);
     if (res)
-      showErrorScreenAndExit(("Couldn't allocate staging buffer for id " +
-                              std::to_string(op.stagingId))
-                                 .c_str());
+      showErrorScreenAndExit(("Couldn't allocate staging buffer for id "));
     if (!m_tmp.bufferManager->get(op.stagingId, stagingBuf, stagingAlloc))
-      showErrorScreenAndExit(
-          ("Couldn't get staging buffer for id " + std::to_string(op.stagingId))
-              .c_str());
+      showErrorScreenAndExit(("Couldn't get staging buffer for id "));
     // copy host data
-    VK_CHECK(vmaCopyMemoryToAllocation(m_tmp.allocator, op.srcData,
+    VK_CHECK(vmaCopyMemoryToAllocation(m_tmp.device->vmaAllocator(), op.srcData,
                                        stagingAlloc, 0, op.srcBytes));
 
     // host -> transfer barrier (cannot be grouped as it needs to affect
@@ -77,16 +73,16 @@ void StagingTransientManager::flush() {
     barrier.offset = 0;
     barrier.size = op.srcBytes;  // VK_WHOLE_SIZE equivalent
 
-    m_tmp.vkDevApi->vkCmdPipelineBarrier(m_tmp.cmd, VK_PIPELINE_STAGE_HOST_BIT,
-                                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
-                                         nullptr, 1, &barrier, 0, nullptr);
+    m_tmp.device->table()->vkCmdPipelineBarrier(
+        m_tmp.cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, nullptr, 1, &barrier, 0, nullptr);
     // copy staging -> destination buffer
     VkBufferCopy copy{};
     copy.srcOffset = 0;
     copy.dstOffset = 0;
     copy.size = op.srcBytes;
-    m_tmp.vkDevApi->vkCmdCopyBuffer(m_tmp.cmd, stagingBuf, op.dstBuffer, 1,
-                                    &copy);
+    m_tmp.device->table()->vkCmdCopyBuffer(m_tmp.cmd, stagingBuf, op.dstBuffer,
+                                           1, &copy);
     // transfer -> destination stage pipeline barrier
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = op.dstAccess;
@@ -105,7 +101,7 @@ void StagingTransientManager::flush() {
 
   for (auto& [stage, barriers] : m_barriersPerStage) {
     if (barriers.empty()) continue;
-    m_tmp.vkDevApi->vkCmdPipelineBarrier(
+    m_tmp.device->table()->vkCmdPipelineBarrier(
         m_tmp.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, stage, 0, 0, nullptr,
         static_cast<uint32_t>(barriers.size()), barriers.data(), 0, nullptr);
 
@@ -115,25 +111,22 @@ void StagingTransientManager::flush() {
   // reset everything
   m_tmp.cmd = VK_NULL_HANDLE;
   m_tmp.bufferManager = nullptr;
-  m_tmp.vkDevApi = nullptr;
+  m_tmp.device = nullptr;
   m_tmp.discardPool = nullptr;
-  m_tmp.allocator = VK_NULL_HANDLE;
   m_tmp.timeline = -1;
   refreshed = false;
 }
 
 void StagingTransientManager::refresh(VkCommandBuffer cmd,
                                       BufferManager* bufferManager,
-                                      VolkDeviceTable const* vkDevApi,
+                                      vk::Device* device,
                                       vk::DiscardPool* discardPool,
-                                      VmaAllocator allocator,
                                       uint64_t timeline) {
   assert(!refreshed);
   m_tmp.cmd = cmd;
-  m_tmp.vkDevApi = vkDevApi;
+  m_tmp.device = device;
   m_tmp.discardPool = discardPool;
   m_tmp.bufferManager = bufferManager;
-  m_tmp.allocator = allocator;
   m_tmp.timeline = timeline;
   refreshed = true;
 }
