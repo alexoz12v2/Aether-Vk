@@ -5,7 +5,7 @@
 
 namespace avk::vk {
 
-VkFormat basicDepthStencilFormat(VkPhysicalDevice physicalDevice) {
+VkFormat basicDepthStencilFormat(VkPhysicalDevice physicalDevice) AVK_NO_CFI {
   // assuming we want VK_IMAGE_TILING_OPTIMAL and not linear
   VkFormatProperties formatProperties{};
   // at least one of D24/S8 or D32/S8 are supported per specification

@@ -1,16 +1,17 @@
 # For more information about using CMake with Android Studio, read the
 # documentation: https://d.android.com/studio/projects/add-native-code.html
 
+# removed because Android Studio has a view that lets me see everything, and it interfears with clion
 # create convenience symlink to the currently used libraries
 # - avk::core
-set(AVK_ANDROID_DEPENDENCIES avk::core)
-foreach (elem ${AVK_ANDROID_DEPENDENCIES})
-  get_target_property(SRC_DIR ${elem} SOURCE_DIR)
-  string(REGEX REPLACE "[:?*/\"\\!']" "_" name ${elem})
-  execute_process(
-    COMMAND ${CMAKE_COMMAND} -E create_symlink ${SRC_DIR} ${CMAKE_SOURCE_DIR}/src/launcher/android/${name}
-  )
-endforeach ()
+# set(AVK_ANDROID_DEPENDENCIES avk::core)
+# foreach (elem ${AVK_ANDROID_DEPENDENCIES})
+#   get_target_property(SRC_DIR ${elem} SOURCE_DIR)
+#   string(REGEX REPLACE "[:?*/\"\\!']" "_" name ${elem})
+#   execute_process(
+#     COMMAND ${CMAKE_COMMAND} -E create_symlink ${SRC_DIR} ${CMAKE_SOURCE_DIR}/src/launcher/android/${name}
+#   )
+# endforeach ()
 
 # Symlink .clang-tidy and .clang-format from source dir
 execute_process(

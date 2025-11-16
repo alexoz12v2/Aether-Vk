@@ -704,7 +704,7 @@ void primaryWindowMessageLoop(WindowsApplication* app) {
 
   LOGI << "[UI] Begin Message Loop" << std::endl;
   MSG message{};
-#if 0  // TODO move signaling to render thraed to update thread
+#if 1  // TODO move signaling to render thraed to update thread
   BOOL getMessageRet = false;
   while (true) {
     // WindowPayload* payload = reinterpret_cast<WindowPayload*>(
@@ -735,9 +735,6 @@ void primaryWindowMessageLoop(WindowsApplication* app) {
     TranslateMessage(&message);
     // dispatch to window procedure
     DispatchMessageW(&message);
-
-    // TODO better
-    app->signalStateUpdated();
   }
 #else
   while (true) {
@@ -777,6 +774,8 @@ exit_loop:
   // when it returns, you don't need to call CloseHandle. If wait fails, kill it
   app->signalStopRendering();
   DWORD constexpr waitMilliseconds = 10000;
+  assert(app->RenderThread != INVALID_HANDLE_VALUE &&
+         app->UpdateThread != INVALID_HANDLE_VALUE);
   if (WaitForSingleObject(app->RenderThread, waitMilliseconds) !=
       WAIT_OBJECT_0) {
     LOGW << AVK_LOG_YLW
@@ -785,6 +784,17 @@ exit_loop:
     TerminateThread(app->RenderThread, 1);
     CloseHandle(app->RenderThread);
     app->RenderThread = INVALID_HANDLE_VALUE;
+  }
+
+  app->signalStopUpdating();
+  if (WaitForSingleObject(app->UpdateThread, waitMilliseconds) !=
+      WAIT_OBJECT_0) {
+    LOGW << AVK_LOG_YLW
+        "[Warning] Terminating Update thread manually" AVK_LOG_RST
+         << std::endl;
+    TerminateThread(app->UpdateThread, 1);
+    CloseHandle(app->UpdateThread);
+    app->UpdateThread = INVALID_HANDLE_VALUE;
   }
 
   // cleanup and join COM thread

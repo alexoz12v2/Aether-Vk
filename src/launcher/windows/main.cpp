@@ -25,6 +25,26 @@
 
 // TODO add Ctrl + C handler
 // TODO manifest
+// TODO: package main loops of each thread into shared static applicaiton
+// functions, such that more functionality (eg time updates) can be made private
+static unsigned __stdcall updateThreadFunc(void *arg) {
+  auto *app = static_cast<avk::WindowsApplication *>(arg);
+  assert(app);
+  LOGI << "[UpdateThread] Started Update Thread" << std::endl;
+  app->UTonInit();
+  while (app->UTshouldRun()) {
+    // update timings from last frame
+    app->Time.UTupdate();
+    while (app->Time.needsFixedUpdate()) {
+      app->Time.UTfixedUpdate();
+      app->UTonFixedUpdate();
+    }
+    app->UTonUpdate();
+  }
+  LOGI << "[UpdateThread] Exiting Update Thread" << std::endl;
+  return 0u;
+}
+
 static unsigned __stdcall renderThreadFunc(void *arg) {
   auto *app = static_cast<avk::WindowsApplication *>(arg);
   LOGI << "[RenderThread] started with window ready" << std::endl;
@@ -49,6 +69,18 @@ static unsigned __stdcall renderThreadFunc(void *arg) {
   }
   LOGI << "[RenderThread] exiting via pthread_exit" << std::endl;
   return 0u;
+}
+
+static HANDLE createThreadOrCrash(_beginthreadex_proc_type proc, void *args) {
+  uintptr_t const res = _beginthreadex(nullptr, 0, proc, args, 0, nullptr);
+  if (!res) {
+    unsigned long error = 0;
+    _get_doserrno(&error);
+    std::string const errorStr =
+        "Couldn't create render thread with error " + std::to_string(error);
+    avk::showErrorScreenAndExit(errorStr.c_str());
+  }
+  return reinterpret_cast<HANDLE>(res);
 }
 
 int WINAPI wWinMain([[maybe_unused]] HINSTANCE hInstance,
@@ -84,22 +116,19 @@ int WINAPI wWinMain([[maybe_unused]] HINSTANCE hInstance,
        << std::endl;
 
   // create application class and primary window
-  avk::WindowsApplication app;
-  if (!avk::createPrimaryWindow(&app)) {
-    avk::showErrorScreenAndExit("Couldn't create application window");
-  }
-  // spin render thread
-  uintptr_t const res =
-      _beginthreadex(nullptr, 0, renderThreadFunc, &app, 0, nullptr);
-  if (!res) {
-    unsigned long error = 0;
-    _get_doserrno(&error);
-    std::string const errorStr =
-        "Couldn't create render thread with error " + std::to_string(error);
-    avk::showErrorScreenAndExit(errorStr.c_str());
-  }
-  app.RenderThread = reinterpret_cast<HANDLE>(res);
+  {
+    avk::WindowsApplication app;
+    if (!avk::createPrimaryWindow(&app)) {
+      avk::showErrorScreenAndExit("Couldn't create application window");
+    }
+    // spin render thread
+    app.RenderThread = createThreadOrCrash(renderThreadFunc, &app);
+    app.UpdateThread = createThreadOrCrash(updateThreadFunc, &app);
 
-  // run primary HWND message loop (handles render thread termination)
-  avk::primaryWindowMessageLoop(&app);
+    // run primary HWND message loop (handles render thread termination)
+    avk::primaryWindowMessageLoop(&app);
+    LOGI << "[Main Thread] Destroy Application" << std::endl;
+  }
+
+  LOGI << "[Main Thread] Exiting Application" << std::endl;
 }

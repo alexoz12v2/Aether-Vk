@@ -59,6 +59,65 @@ void WindowsApplication::RTdoLateSurfaceRegained() {
       " primary HWND get destroyed?");
 }
 
+void WindowsApplication::UTdoOnFixedUpdate() {}
+
+void WindowsApplication::UTdoOnUpdate() {
+  // rotate camera, then copy to RT
+  // deltatime is int64_t in microseconds. convert it to seconcds
+  float const dt = static_cast<float>(Time.current().DeltaTime) * 1e-6f;
+
+  // Rotation speed (radians per second) — very slow rotation
+  float const rotationSpeed = glm::radians(100.0f);
+
+  // Accumulate angle over time
+  m_angle += rotationSpeed * dt;
+  // keep angle small (avoid sin/cos precision loss)
+  m_angle = glm::mod(m_angle, glm::two_pi<float>());
+  glm::vec3 cubeCenter = glm::vec3(0, 1, -1);
+  float radius = 3.0f;
+
+  // Orbit in XY plane (since +Y is forward)
+  glm::vec3 eye;
+  eye.x = cubeCenter.x + radius * cos(m_angle);
+  eye.y = cubeCenter.y + radius * sin(m_angle);
+  eye.z = cubeCenter.z + 1.f;  // keep same height (Z+ is up)
+
+  // --- Compute stable camera basis (prevents flipping) ---
+
+  // 1. forward direction
+  glm::vec3 forward = glm::normalize(cubeCenter - eye);
+
+  // 2. world-up (Z+ in our coordinate system)
+  glm::vec3 worldUp(0, 0, 1);
+
+  // 3. right vector (orthogonal to forward & worldUp)
+  glm::vec3 right = glm::normalize(glm::cross(worldUp, forward));
+
+  // If forward almost parallel to worldUp, fallback:
+  if (glm::length(right) < 0.001f) {
+    // Use X+ as alternative up reference
+    worldUp = glm::vec3(1, 0, 0);
+    right = glm::normalize(glm::cross(worldUp, forward));
+  }
+
+  // 4. final camera-up
+  glm::vec3 up = glm::cross(forward, right);
+  // Recompute camera view matrix
+  m_UTcamera = glm::lookAt(eye, cubeCenter, up);
+  {
+    std::unique_lock wLock{m_swapState};
+    m_RTcamera.view = m_UTcamera;
+  }
+}
+
+void WindowsApplication::UTdoOnInit() {
+  // setup initial camera
+  m_UTcamera = glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f),  // eye position
+                           glm::vec3(0.0f, 1.0f, -1.f),  // cube target
+                           glm::vec3(0.0f, 0.0f, 1.0f)   // up direction
+  );
+}
+
 void WindowsApplication::RTdoOnDeviceLost() {
   showErrorScreenAndExit("Desktop should never lose device");
 }
@@ -66,17 +125,6 @@ void WindowsApplication::RTdoOnDeviceLost() {
 void WindowsApplication::RTdoOnDeviceRegained() {
   showErrorScreenAndExit("Desktop should never lose device");
 }
-
-namespace hashes {
-
-using namespace avk::literals;
-inline constexpr uint64_t Vertex = "Vertex"_hash;
-inline constexpr uint64_t Index = "Index"_hash;
-inline constexpr uint64_t Model = "Model"_hash;
-inline constexpr uint64_t Cube = "Cube"_hash;
-inline constexpr uint64_t Staging = "Staging"_hash;
-
-}  // namespace hashes
 
 WindowsApplication::~WindowsApplication() noexcept {
   LOGI << "[WindowsApplication] Detructor Running" << std::endl;
@@ -89,58 +137,24 @@ WindowsApplication::~WindowsApplication() noexcept {
   }
 }
 
-// TODO render/basic-types.h
-struct alignas(16) float3 {
-  glm::vec3 v;
-};
-
-// stride 16 uint (note: this has been observed with disassembler)
-struct alignas(16) uintArray12 {
-  uint32_t i;
-};
-
-// outer array has 192 stride
-struct uintArrayArray8 {
-  uintArray12 is[12];
-};
-static_assert(sizeof(uintArrayArray8) == 192);
-
-struct CubeFaceMapping {
-  uintArrayArray8 faceMap[8];
-  float3 colors[6];
-
-  CubeFaceMapping(std::array<std::array<uint32_t, 12>, 8> const& _faceMap,
-                  std::array<glm::vec4, 6> const& _colors)
-      : faceMap{} {
-    for (uint32_t i = 0; i < 8; i++) {
-      for (uint32_t j = 0; j < 12; j++) {
-        faceMap[i].is[j].i = _faceMap[i][j];
-      }
-    }
-    for (uint32_t i = 0; i < 6; ++i) {
-      colors[i].v = _colors[i];
-    }
-  }
-};
-
 void WindowsApplication::createConstantVulkanResources() AVK_NO_CFI {
   // reserve enough space such that, on swapchain recreation, the host memory
   // holding the source for our push constants is never reallocated.
   m_pushCameras.reserve(64);
-
   // setup initial camera
   {
-    m_camera.view = glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f),  // eye position
-                                glm::vec3(0.0f, 1.0f, -1.f),  // cube target
-                                glm::vec3(0.0f, 0.0f, 1.0f)   // up direction
+    // useless, overridden by update thread initialization
+    m_RTcamera.view = glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f),  // eye position
+                                  glm::vec3(0.0f, 1.0f, -1.f),  // cube target
+                                  glm::vec3(0.0f, 0.0f, 1.0f)   // up direction
     );
     float fov = glm::radians(60.0f);
     float aspect = vkSwapchain()->extent().width /
                    static_cast<float>(vkSwapchain()->extent().height);
 
-    m_camera.proj = glm::perspectiveRH_ZO(fov, aspect, 0.1f, 100.0f);
+    m_RTcamera.proj = glm::perspectiveRH_ZO(fov, aspect, 0.1f, 100.0f);
     // Vulkan wants Y flipped vs OpenGL
-    m_camera.proj[1][1] *= -1;
+    m_RTcamera.proj[1][1] *= -1;
   }
 
   // index/vertex buffers
@@ -405,9 +419,9 @@ void WindowsApplication::createVulkanResources() AVK_NO_CFI {
   float aspect = vkSwapchain()->extent().width /
                  static_cast<float>(vkSwapchain()->extent().height);
 
-  m_camera.proj = glm::perspectiveRH_ZO(fov, aspect, 0.1f, 100.0f);
+  m_RTcamera.proj = glm::perspectiveRH_ZO(fov, aspect, 0.1f, 100.0f);
   // Vulkan wants Y flipped vs OpenGL
-  m_camera.proj[1][1] *= -1;
+  m_RTcamera.proj[1][1] *= -1;
 }
 
 void WindowsApplication::doOnSaveState() {}
@@ -470,6 +484,8 @@ VkResult WindowsApplication::RTdoOnRender(
     LOGI << "[WindowsApplication::onRender] First Timeline: Upload staging"
          << std::endl;
     assert(vertBuf && indexBuf);
+    // m_staging.refresh(cmd, bufferManager(), vkDevTable(), vkDiscardPool(),
+    //                   vmaAllocator(), timeline());
     int bufRes = 0;
     if (!vkDevice()->isSoC() &&
         !vk::isAllocHostVisible(vmaAllocator(), vertAlloc)) {
@@ -756,7 +772,10 @@ VkResult WindowsApplication::RTdoOnRender(
                                     m_graphicsInfo.pipelineLayout, 0, 1,
                                     &m_cubeDescriptorSet, 0, nullptr);
   auto& pushConst = m_pushCameras[vkSwapchain()->frameIndex()];
-  pushConst = m_camera;
+  {
+    std::shared_lock rLock{m_swapState};
+    pushConst = m_RTcamera;
+  }
   vkDevApi->vkCmdPushConstants(cmd, m_graphicsInfo.pipelineLayout,
                                VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Camera),
                                &pushConst);

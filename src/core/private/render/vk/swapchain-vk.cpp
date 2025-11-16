@@ -24,7 +24,7 @@ using namespace avk::vk;
 
 inline constexpr VkImageUsageFlags s_SwapchainImageUsage =
     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-        VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
 // ---------------------------------------------------------------------------
 static VkSurfaceFormatKHR selectSurfaceFormat(VkPhysicalDevice physicalDevice,
@@ -47,10 +47,10 @@ static VkSurfaceFormatKHR selectSurfaceFormat(VkPhysicalDevice physicalDevice,
   for (auto const &formt : preferredFormats) {
     bool const found =
         surfaceFormats.cend() !=
-            std::find_if(surfaceFormats.cbegin(), surfaceFormats.cend(),
-                         [formt](VkSurfaceFormatKHR const &surfFmr) {
-                           return formt == surfFmr.format;
-                         });
+        std::find_if(surfaceFormats.cbegin(), surfaceFormats.cend(),
+                     [formt](VkSurfaceFormatKHR const &surfFmr) {
+                       return formt == surfFmr.format;
+                     });
     if (found) {
       break;
     }
@@ -66,7 +66,8 @@ static VkSurfaceFormatKHR selectSurfaceFormat(VkPhysicalDevice physicalDevice,
 }
 
 static VkPresentModeKHR selectPresentMode(VkPhysicalDevice physicalDevice,
-                                          VkSurfaceKHR surface, bool vsync) {
+                                          VkSurfaceKHR surface,
+                                          bool vsync) AVK_NO_CFI {
   uint32_t presentModeCount = 0;
   VK_CHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(
       physicalDevice, surface, &presentModeCount, nullptr));
@@ -99,14 +100,14 @@ static VkExtent2D extentVkClamp(VkExtent2D extentCurr, VkExtent2D extentMin,
                                 VkExtent2D extentMax) {
   VkExtent2D result{};
   result.width = extentCurr.width > extentMax.width
-                 ? extentMax.width
-                 : (extentCurr.width < extentMin.width ? extentMin.width
-                                                       : extentCurr.width);
+                     ? extentMax.width
+                     : (extentCurr.width < extentMin.width ? extentMin.width
+                                                           : extentCurr.width);
   result.height =
       extentCurr.height > extentMax.height
-      ? extentMax.height
-      : (extentCurr.height < extentMin.height ? extentMin.height
-                                              : extentCurr.height);
+          ? extentMax.height
+          : (extentCurr.height < extentMin.height ? extentMin.height
+                                                  : extentCurr.height);
   return result;
 }
 
@@ -224,10 +225,10 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
     case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR:
     case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
     case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR:
-      std::swap(extent.width,
-                extent.height);
+      std::swap(extent.width, extent.height);
       break;
-    default:break;
+    default:
+      break;
   }
 
   // get image count (3 -> vsync, 2 -> no vsync)
@@ -238,7 +239,7 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
       surfCaps.surfaceCapabilities.minImageCount)  // min >= 1 by spec
     imageCount = surfCaps.surfaceCapabilities.minImageCount;
   else if (uint32_t max = surfCaps.surfaceCapabilities.maxImageCount;
-      max && imageCount > max)  // max = 0 if no limit by spec
+           max && imageCount > max)  // max = 0 if no limit by spec
     imageCount = surfCaps.surfaceCapabilities.maxImageCount;
 
   LOGI << PREFIX "Computed Extent: " << extent.width << 'x' << extent.height
@@ -270,10 +271,10 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
   // check image flags (color attachment is mandatory by standard)
   AVK_EXT_CHECK(
       surfCaps.surfaceCapabilities.supportedUsageFlags &
-          (VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
+      (VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
   createInfo.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-      VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+                          VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 #ifdef AVK_WINDOW_TRANSPARENCY
   // check for either pre multiplied or post multiplied and inherit
   VkCompositeAlphaFlagBitsKHR compositeAlpha =
@@ -298,7 +299,7 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
       VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) {
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
   } else if (surfCaps.surfaceCapabilities.supportedCompositeAlpha &
-      VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) {
+             VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) {
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
   } else {
     showErrorScreenAndExit("No Alpha Composition mode supported");
@@ -390,7 +391,7 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
   }
   m_tmpImages.clear();
   LOGI << PREFIX
-          "Created Image Views and Present Semaphores for swapchain images"
+      "Created Image Views and Present Semaphores for swapchain images"
        << std::endl;
 
   // discard all frame acquire semaphores and swapchain itself
@@ -425,8 +426,8 @@ void Swapchain::recreateSwapchain() AVK_NO_CFI {
     }
   }
   LOGI << PREFIX
-          "Created submission Fence and acquire semaphore for each frame in flight "
-          "("
+      "Created submission Fence and acquire semaphore for each frame in flight "
+      "("
        << m_frames.size() << ')' << std::endl;
 #undef PREFIX
 };
@@ -486,8 +487,8 @@ VkResult Swapchain::acquireNextImage(VkFence acquireFence) AVK_NO_CFI {
       // timeout is actually a success code (>0), hence check won't catch that
       VK_CHECK(res);
     } while (res == VK_TIMEOUT);
-    VK_CHECK(vkDevApi->vkResetFences(
-        dev, 1, &m_frames[frameIndex].submissionFence));
+    VK_CHECK(
+        vkDevApi->vkResetFences(dev, 1, &m_frames[frameIndex].submissionFence));
   }
 
   // TODO: HDR Support: check if display changed its color space.
@@ -521,28 +522,25 @@ utils::SurfacePreRotation Swapchain::preRotation() const {
   switch (m_currentTransform) {
     case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
     case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR:
-      result.preRotate = glm::rotate(glm::mat4(1.f),
-                                     glm::radians(90.f),
-                                     glm::vec3(0, 0, 1));
+      result.preRotate =
+          glm::rotate(glm::mat4(1.f), glm::radians(90.f), glm::vec3(0, 0, 1));
       break;
 
     case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
     case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_180_BIT_KHR:
-      result.preRotate = glm::rotate(glm::mat4(1.f),
-                                     glm::radians(180.f),
-                                     glm::vec3(0, 0, 1));
+      result.preRotate =
+          glm::rotate(glm::mat4(1.f), glm::radians(180.f), glm::vec3(0, 0, 1));
       break;
 
     case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
     case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR:
-      result.preRotate = glm::rotate(glm::mat4(1.f),
-                                     glm::radians(270.f),
-                                     glm::vec3(0, 0, 1));
+      result.preRotate =
+          glm::rotate(glm::mat4(1.f), glm::radians(270.f), glm::vec3(0, 0, 1));
       break;
     case VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR:
-    default:result.preRotate = glm::mat4(1.f);
+    default:
+      result.preRotate = glm::mat4(1.f);
       break;
-
   }
 
   return result;
