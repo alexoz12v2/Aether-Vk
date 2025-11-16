@@ -1,10 +1,16 @@
 #pragma once
 
+// AVK Core
 #include "app/avk-application.h"
+#include "render/experimental/avk-staging-transient-manager.h"
+
+// library
+#include <shared_mutex>
 
 // os specific
 #include <Windef.h>
 
+// from this module
 #include "avk-win32-window.h"
 
 namespace avk {
@@ -24,6 +30,7 @@ class WindowsApplication : public ApplicationBase {
   WindowPayload WindowPayload;
   HWND PrimaryWindow = nullptr;
   HANDLE RenderThread = INVALID_HANDLE_VALUE;
+  HANDLE UpdateThread = INVALID_HANDLE_VALUE;
 
  protected:
   void doOnSaveState() override;
@@ -39,12 +46,17 @@ class WindowsApplication : public ApplicationBase {
   void RTdoEarlySurfaceRegained() override;
   void RTdoLateSurfaceRegained() override;
 
+  void UTdoOnFixedUpdate() override;
+  void UTdoOnUpdate() override;
+  void UTdoOnInit() override;
+
  private:
   void createConstantVulkanResources();
   void destroyConstantVulkanResources();
   void cleanupVulkanResources();
   void createVulkanResources();
 
+ private:
   // TODO refactor
   vk::GraphicsInfo m_graphicsInfo;
   VkPipeline m_graphicsPipeline = VK_NULL_HANDLE;
@@ -54,8 +66,14 @@ class WindowsApplication : public ApplicationBase {
   std::vector<VkFramebuffer> m_framebuffers;
   std::vector<uint64_t> m_commandBufferIds;
 
+  // TODO move to base if works well
+  experimental::StagingTransientManager m_staging;
+
   // stuff to refactor
-  Camera m_camera;
+  std::shared_mutex m_swapState;
+  float m_angle = 0.f;
+  Camera m_RTcamera{};
+  glm::mat4 m_UTcamera{};  // Update thread only has view. proj owned by render
   std::vector<Camera> m_pushCameras;  // STABLE, FIF
   VkDescriptorSet m_cubeDescriptorSet = VK_NULL_HANDLE;
   VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;

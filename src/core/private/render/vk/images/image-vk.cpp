@@ -40,7 +40,7 @@ bool createImage(Device* device, SingleImage2DSpecVk const& spec,
 }
 
 Expected<VkImageView> depthStencilImageView(Device* device, VkImage image,
-                                            VkFormat fmt) {
+                                            VkFormat fmt) AVK_NO_CFI {
   assert(device && *device);
   auto const* const vkDevApi = device->table();
   VkDevice const dev = device->device();

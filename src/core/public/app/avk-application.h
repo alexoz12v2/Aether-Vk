@@ -23,15 +23,17 @@
 #include <mutex>
 #include <thread>
 
+#include "os/avk-time.h"
+
 namespace avk {
 
 struct RenderCoordinator : public NonMoveable {
   RenderCoordinator() = default;
 #ifdef AVK_DEBUG
   inline ~RenderCoordinator() noexcept {
-    LOGI
-        << "------------------------------ RenderCoordinator Destructor -------------------------------------------"
-        << std::endl;
+    LOGI << "------------------------------ RenderCoordinator Destructor "
+            "-------------------------------------------"
+         << std::endl;
   }
 #endif
 
@@ -71,16 +73,44 @@ struct RenderCoordinator : public NonMoveable {
   std::condition_variable cv;
 };
 
+struct UpdateCoordinator : public NonMoveable {
+  UpdateCoordinator() = default;
+
+  std::atomic_bool updateShouldRun = true;
+};
+
 class ApplicationBase : public NonMoveable {
+ public:
+  /// Initialized to have fixed update for 60 PFS, max delta of 24 FPS, 1 scale
+  /// \warning should never be reassigned
+  os::TimeInfo Time{16'667, 41'666, 1.f};
+
  public:
   ApplicationBase();
   virtual ~ApplicationBase() noexcept;
 
-  void DBGPRINT_SHOULD_INIT() {
-    LOGW << "----------------- DBG: " << *m_renderCoordinator.shouldInitialize
-         << std::endl;
+  // -------------------- Update Thread - Main Thread Coordination -------
+  inline bool UTshouldRun() const {
+    return m_updateCoordinator.updateShouldRun.load(std::memory_order_acquire);
   }
 
+  inline void signalStopUpdating() {
+    m_updateCoordinator.updateShouldRun.store(false, std::memory_order_release);
+  }
+
+  inline void UTonFixedUpdate() { UTdoOnFixedUpdate(); }
+
+  inline void UTonInit() {
+    UTdoOnInit();
+  }
+
+  inline void UTonUpdate() {
+    UTdoOnUpdate();
+    signalStateUpdated();
+    // TODO frameRate Governing if necessary
+  }
+
+  // -------------------- Main Thread Events ------------------------------
   void onWindowInit();
   void onResize();
 
@@ -203,7 +233,7 @@ class ApplicationBase : public NonMoveable {
         [coord = &m_renderCoordinator]() {
           // if surface lost wake up and handle that before being killed!
           return coord->surfaceLost.load(std::memory_order_relaxed) ||
-              (!coord->renderRunning.load(std::memory_order_acquire) ||
+                 (!coord->renderRunning.load(std::memory_order_acquire) ||
                   coord->stateVersion.load(std::memory_order_acquire) >
                       coord->consumedVersion.load(std::memory_order_acquire));
         });
@@ -235,9 +265,16 @@ class ApplicationBase : public NonMoveable {
   }
 
  protected:  // virtual interface
+  // ----------------- Main Thread Interface -----------------------------
   virtual void doOnSaveState() = 0;
   virtual void doOnRestoreState() = 0;
 
+  // --------------- Update Thread Interface -----------------------------
+  virtual void UTdoOnFixedUpdate() = 0;
+  virtual void UTdoOnUpdate() = 0;
+  virtual void UTdoOnInit() = 0;
+
+  // --------------- Render Thread Interface -----------------------------
   /// called when `vkQueueSubmit` or `vkQueuePresentKHR` returns
   /// `VK_ERROR_DEVICE_LOST` it should cleanup any resources used by the
   /// application *before* the default behaviour kicks in, which is destroy
@@ -281,7 +318,8 @@ class ApplicationBase : public NonMoveable {
   virtual void RTdoLateSurfaceRegained() = 0;
   virtual vk::SurfaceSpec doSurfaceSpec() = 0;
 
- protected:  // getters for subclasses
+ protected:
+  // --------------- getters for subclasses ----------------------------
   inline VolkDeviceTable const *vkDevTable() const {
     return m_vkDevice.get()->table();
   }
@@ -315,6 +353,7 @@ class ApplicationBase : public NonMoveable {
   }
 
   inline RenderCoordinator &renderCoordinator() { return m_renderCoordinator; }
+  inline UpdateCoordinator &updateCoordinator() { return m_updateCoordinator; }
 
  private:
   void RThandleSurfaceLost();
@@ -361,6 +400,9 @@ class ApplicationBase : public NonMoveable {
   /// A bunch of synchronization primitives to facilitate signaling
   /// between the main(Window/UI) thread and Render Thread
   RenderCoordinator m_renderCoordinator;
+
+  // ------------ Update Thread - Main Thread --------------
+  UpdateCoordinator m_updateCoordinator;
 
   // ------- basic state ------------------------
   /// timeline value for the current frame being rendered

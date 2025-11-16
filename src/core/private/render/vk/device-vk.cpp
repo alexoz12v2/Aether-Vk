@@ -19,9 +19,8 @@
 using namespace avk;
 using namespace avk::vk;
 
-// TODO insert logging macro
-// TODO insert presentation queue query
-// TODO insert optional support for `VK_EXT_memory_budget` W/ VMA
+// TODO prefer debug_utils on anything different from Android,
+// TODO insert optional support for debug names in object creation
 
 // -- Used Device Extensions Deprecation State --
 // (1.1) `VK_KHR_maintenance1`

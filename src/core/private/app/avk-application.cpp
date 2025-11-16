@@ -36,9 +36,9 @@ void ApplicationBase::onWindowInit() AVK_NO_CFI {
   if (m_windowInit.load(std::memory_order_acquire)) {
     m_renderCoordinator.surfaceLost.store(false, std::memory_order_release);
   } else {
-    // why is this a heap allocated size_t and not a atomic? Because I've tried with it,
-    // and it was fine until I added the global/implicit Vulkan layers from RENDERDOC.
-    // how is this correlated? No Idea🤪
+    // why is this a heap allocated size_t and not a atomic? Because I've tried
+    // with it, and it was fine until I added the global/implicit Vulkan layers
+    // from RENDERDOC. how is this correlated? No Idea🤪
     {
       std::lock_guard lk{m_renderCoordinator.mtx};
       *m_renderCoordinator.shouldInitialize = 1;
@@ -89,7 +89,7 @@ void ApplicationBase::RTonRender() AVK_NO_CFI {
     return;
   }
   auto const swapchainData = m_vkSwapchain.get()->swapchainData();
-#if 0 // done by acquisition TODO remove
+#if 0  // done by acquisition TODO remove
   if (swapchainData.submissionFence != VK_NULL_HANDLE) {
     VK_CHECK(vkDevApi->vkWaitForFences(dev, 1, &swapchainData.submissionFence,
                                        VK_TRUE, UINT64_MAX));
@@ -101,7 +101,7 @@ void ApplicationBase::RTonRender() AVK_NO_CFI {
   m_vkDevice.get()->refreshMemoryBudgets(m_vkSwapchain.get()->frameIndex());
   [[maybe_unused]] auto const &memoryBudgets = m_vkDevice.get()->heapBudgets();
 #ifdef AVK_DEBUG
-  if ((m_timeline % 300) == 0) {
+  if ((m_timeline % 30000) == 0) {
     uint32_t heapIndex = 0;
     for (VmaBudget const &heapBudget : memoryBudgets) {
       uint32_t const heap = heapIndex++;
