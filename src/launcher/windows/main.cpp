@@ -25,49 +25,15 @@
 
 // TODO add Ctrl + C handler
 // TODO manifest
-// TODO: package main loops of each thread into shared static applicaiton
-// functions, such that more functionality (eg time updates) can be made private
 static unsigned __stdcall updateThreadFunc(void *arg) {
   auto *app = static_cast<avk::WindowsApplication *>(arg);
-  assert(app);
-  LOGI << "[UpdateThread] Started Update Thread" << std::endl;
-  app->UTonInit();
-  while (app->UTshouldRun()) {
-    // update timings from last frame
-    app->Time.UTupdate();
-    while (app->Time.needsFixedUpdate()) {
-      app->Time.UTfixedUpdate();
-      app->UTonFixedUpdate();
-    }
-    app->UTonUpdate();
-  }
-  LOGI << "[UpdateThread] Exiting Update Thread" << std::endl;
+  avk::ApplicationBase::UTmain(app);
   return 0u;
 }
 
 static unsigned __stdcall renderThreadFunc(void *arg) {
   auto *app = static_cast<avk::WindowsApplication *>(arg);
-  LOGI << "[RenderThread] started with window ready" << std::endl;
-  app->RTwindowInit();
-  LOGI << "[RenderThread] rendering started" << std::endl;
-  // keep running while rendering
-  while (app->RTshouldRun()) {
-    if (app->RTsurfaceWasLost()) {
-      app->RTsurfaceLost();
-    }
-    // this shouldn't return `true` if the application is
-    // currently in the pause state
-    if (app->RTshouldUpdate()) {
-      // successfully claimed state: render it
-      app->RTonRender();
-    } else {
-      // if CAS failed or nothing to render, fallthrough and wait
-      // LOGI << "AVK Render Thread NO UPDATE, GOING TO WAIT" << std::endl;
-      app->RTwaitForNextRound();
-      // LOGI << "AVK Render Thread WOKE UP" << std::endl;
-    }
-  }
-  LOGI << "[RenderThread] exiting via pthread_exit" << std::endl;
+  avk::ApplicationBase::RTmain(app);
   return 0u;
 }
 
@@ -131,4 +97,9 @@ int WINAPI wWinMain([[maybe_unused]] HINSTANCE hInstance,
   }
 
   LOGI << "[Main Thread] Exiting Application" << std::endl;
+#ifdef AVK_DEBUG  // do not close to inspect graceful termination
+  while (true) {
+    std::this_thread::yield();
+  }
+#endif
 }

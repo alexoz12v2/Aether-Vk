@@ -87,7 +87,7 @@ void AndroidApp::createVulkanResources() AVK_NO_CFI {
   if (vkSwapchain()->frameCount() > m_pushCameras.size()) {
     m_pushCameras.resize(vkSwapchain()->frameCount());
   }
-  assert(vkSwapchain()->frameCount() == m_pushCameras.size());
+  assert(vkSwapchain()->frameCount() <= m_pushCameras.size());
   // renderPass
   VkFormat const depthFmt =
       vk::basicDepthStencilFormat(vkPhysicalDeviceHandle());
@@ -163,52 +163,8 @@ void AndroidApp::createVulkanResources() AVK_NO_CFI {
   vk::utils::SurfacePreRotation const preRot = vkSwapchain()->preRotation();
   proj = preRot.preRotate * proj;
 
-  m_camera.proj = proj;
+  m_RTcamera.proj = proj;
 }
-
-namespace hashes {
-
-using namespace avk::literals;
-inline constexpr uint64_t Vertex = "Vertex"_hash;
-inline constexpr uint64_t Index = "Index"_hash;
-inline constexpr uint64_t Model = "Model"_hash;
-inline constexpr uint64_t Cube = "Cube"_hash;
-
-}  // namespace hashes
-
-// TODO render/basic-types.h
-struct alignas(16) float3 {
-  glm::vec3 v;
-};
-
-// stride 16 uint (note: this has been observed with disassembler)
-struct alignas(16) uintArray12 {
-  uint32_t i;
-};
-
-// outer array has 192 stride
-struct uintArrayArray8 {
-  uintArray12 is[12];
-};
-static_assert(sizeof(uintArrayArray8) == 192);
-
-struct CubeFaceMapping {
-  uintArrayArray8 faceMap[8];
-  float3 colors[6];
-
-  CubeFaceMapping(std::array<std::array<uint32_t, 12>, 8> const &_faceMap,
-                  std::array<glm::vec4, 6> const &_colors)
-      : faceMap{} {
-    for (uint32_t i = 0; i < 8; i++) {
-      for (uint32_t j = 0; j < 12; j++) {
-        faceMap[i].is[j].i = _faceMap[i][j];
-      }
-    }
-    for (uint32_t i = 0; i < 6; ++i) {
-      colors[i].v = _colors[i];
-    }
-  }
-};
 
 void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
   // reserve enough space such that, on swapchain recreation, the host memory
@@ -217,17 +173,18 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
 
   // setup initial camera
   {
-    m_camera.view = glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f),  // eye position
-                                glm::vec3(0.0f, 1.0f, -1.f),  // cube target
-                                glm::vec3(0.0f, 0.0f, 1.0f)   // up direction
+    // useless, overridden by update thread initialization
+    m_RTcamera.view = glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f),  // eye position
+                                  glm::vec3(0.0f, 1.0f, -1.f),  // cube target
+                                  glm::vec3(0.0f, 0.0f, 1.0f)   // up direction
     );
     float fov = glm::radians(60.0f);
     float aspect = vkSwapchain()->extent().width /
         static_cast<float>(vkSwapchain()->extent().height);
 
-    m_camera.proj = glm::perspectiveRH_ZO(fov, aspect, 0.1f, 100.0f);
+    m_RTcamera.proj = glm::perspectiveRH_ZO(fov, aspect, 0.1f, 100.0f);
     // Vulkan wants Y flipped vs OpenGL
-    m_camera.proj[1][1] *= -1;
+    m_RTcamera.proj[1][1] *= -1;
   }
 
   // buffers
@@ -275,29 +232,6 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
       vk::createShaderModule(vkDevice(), vertCode.data(), vertCode.size() << 2),
       vk::createShaderModule(vkDevice(), fragCode.data(),
                              fragCode.size() << 2)};
-#if 0
-  {
-    glm::mat4 model =
-        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -0.25f, 0.0f)) *
-            glm::scale(glm::mat4(1.0f), glm::vec3(1.5f));
-    glm::mat4 view =
-        glm::lookAt(
-            glm::vec3(0.0f, 0.0f, 3.0f),   // eye position
-            glm::vec3(0.0f, 0.0f, 0.0f),   // look at origin
-            glm::vec3(0.0f, 1.0f, 0.0f)    // up direction
-        );
-    float fov = glm::radians(60.0f);
-    float aspect =
-        vkSwapchain()->extent().width / float(vkSwapchain()->extent().height);
-
-    glm::mat4 proj =
-        glm::perspectiveRH_ZO(fov, aspect, 0.1f, 100.0f);
-    for (auto &vert : vertexBuffer) {
-      vert = (proj * view * model * glm::vec4(vert, 1));
-    }
-  }
-
-#endif
 
   // pipeline layout specification step 1: descriptor set layouts
   {
@@ -366,24 +300,6 @@ void AndroidApp::createConstantVulkanResources() AVK_NO_CFI {
     VK_CHECK(vkDevTable()->vkCreateDescriptorUpdateTemplateKHR(
         vkDeviceHandle(), &createInfo, nullptr, &m_descriptorUpdateTemplate));
   }
-
-#if 0
-  // link descriptors to their buffers
-  VkDescriptorBufferInfo bufferInfos[2]{};
-  bufferManager()->get(hashes::Cube, buffer, alloc);
-  bufferInfos[0].buffer = buffer;
-  bufferInfos[0].offset = 0;
-  bufferInfos[0].range = sizeof(faceMap) + sizeof(colors);
-
-  bufferManager()->get(hashes::Model, buffer, alloc);
-  bufferInfos[1].buffer = buffer;
-  bufferInfos[1].offset = 0;
-  bufferInfos[1].range = sizeof(glm::mat4);
-
-  vkDevTable()->vkUpdateDescriptorSetWithTemplateKHR(
-      vkDeviceHandle(), m_cubeDescriptorSet, m_descriptorUpdateTemplate,
-      bufferInfos);
-#endif
 
   // allocate GPU side buffers for descriptors
   // - Cube vert/index -> face mapping table
@@ -526,7 +442,10 @@ AVK_NO_CFI {
                                     m_graphicsInfo.pipelineLayout, 0, 1,
                                     &m_cubeDescriptorSet, 0, nullptr);
   auto &pushConst = m_pushCameras[vkSwapchain()->frameIndex()];
-  pushConst = m_camera;
+  {
+    std::shared_lock rLock{m_swapState};
+    pushConst = m_RTcamera;
+  }
   vkDevApi->vkCmdPushConstants(cmd, m_graphicsInfo.pipelineLayout,
                                VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Camera),
                                &pushConst);
@@ -615,6 +534,68 @@ void AndroidApp::RTdoOnDeviceLost() {
 void AndroidApp::RTdoOnDeviceRegained() {
   createConstantVulkanResources();
   createVulkanResources();
+}
+
+void AndroidApp::UTdoOnFixedUpdate() {
+
+}
+
+void AndroidApp::UTdoOnUpdate() {
+  // rotate camera, then copy to RT
+  // deltatime is int64_t in microseconds. convert it to seconcds
+  float const dt = static_cast<float>(Time.current().DeltaTime) * 1e-6f;
+
+  // Rotation speed (radians per second) — very slow rotation
+  float const rotationSpeed = glm::radians(100.0f);
+
+  // Accumulate angle over time
+  m_angle += rotationSpeed * dt;
+  // keep angle small (avoid sin/cos precision loss)
+  m_angle = glm::mod(m_angle, glm::two_pi<float>());
+  glm::vec3 cubeCenter = glm::vec3(0, 1, -1);
+  float radius = 3.0f;
+
+  // Orbit in XY plane (since +Y is forward)
+  glm::vec3 eye;
+  eye.x = cubeCenter.x + radius * cos(m_angle);
+  eye.y = cubeCenter.y + radius * sin(m_angle);
+  eye.z = cubeCenter.z + 1.f;  // keep same height (Z+ is up)
+
+  // --- Compute stable camera basis (prevents flipping) ---
+
+  // 1. forward direction
+  glm::vec3 forward = glm::normalize(cubeCenter - eye);
+
+  // 2. world-up (Z+ in our coordinate system)
+  glm::vec3 worldUp(0, 0, 1);
+
+  // 3. right vector (orthogonal to forward & worldUp)
+  glm::vec3 right = glm::normalize(glm::cross(worldUp, forward));
+
+  // If forward almost parallel to worldUp, fallback:
+  if (glm::length(right) < 0.001f) {
+    // Use X+ as alternative up reference
+    worldUp = glm::vec3(1, 0, 0);
+    right = glm::normalize(glm::cross(worldUp, forward));
+  }
+
+  // 4. final camera-up
+  glm::vec3 up = glm::cross(forward, right);
+  // Recompute camera view matrix
+  m_UTcamera = glm::lookAt(eye, cubeCenter, up);
+  {
+    std::unique_lock wLock{m_swapState};
+    m_RTcamera.view = m_UTcamera;
+
+  }
+}
+
+void AndroidApp::UTdoOnInit() {
+  // setup initial camera
+  m_UTcamera = glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f),  // eye position
+                           glm::vec3(0.0f, 1.0f, -1.f),  // cube target
+                           glm::vec3(0.0f, 0.0f, 1.0f)   // up direction
+  );
 }
 
 }  // namespace avk

@@ -88,7 +88,7 @@ class TimeInfo {
 
   /// Windows QPC function returns its value in CPU cycles,
   /// hence the need to know the CPU frequency
-  int64_t m_frequency = 0;
+  [[maybe_unused]] int64_t m_frequency = 0;
 
   /// CPU monotonic time at class instantiation. It represents the
   /// "zero" in the `Time` method "coordinate system"

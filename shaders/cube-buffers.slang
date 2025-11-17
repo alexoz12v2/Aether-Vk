@@ -49,6 +49,7 @@ VSOutput vertexEntry(VSInput input) {
   return output;
 }
 
+// TODO: fragment using SV_PrimitiveID requires OpCapability Geometry, hence remove this thing and go with textures
 [shader("fragment")]
 PSOutput fragmentEntry(VSOutput input, uint primitiveID : SV_PrimitiveID) {
  PSOutput output;

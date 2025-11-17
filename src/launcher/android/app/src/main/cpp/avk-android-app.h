@@ -3,7 +3,7 @@
 // our utils
 #include "utils/mixins.h"
 
-// our render (TODO add a vk/all.h)
+// our render
 #include "render/vk/command-pools.h"
 #include "render/vk/descriptor-pools.h"
 #include "render/vk/device-vk.h"
@@ -13,6 +13,7 @@
 #include "render/vk/pipeline-pool-vk.h"
 #include "render/vk/surface-vk.h"
 #include "render/vk/swapchain-vk.h"
+#include "render/testing/avk-primitives.h"
 
 // application
 #include "app/avk-application.h"
@@ -33,17 +34,13 @@ struct android_app;
 
 namespace avk {
 
-struct Camera {
-  glm::mat4 view;
-  glm::mat4 proj;
-};
-
 class AndroidApp : public ApplicationBase {
  public:
   AndroidApp(android_app *app, JNIEnv *jniEnv);
   ~AndroidApp() noexcept override;
 
   pthread_t RenderThread = 0;
+  pthread_t UpdateThread = 0;
 
  protected:
   void RTdoOnWindowInit() override;
@@ -57,14 +54,22 @@ class AndroidApp : public ApplicationBase {
   void doOnRestoreState() override;
   void RTdoOnDeviceLost() override;
   void RTdoOnDeviceRegained() override;
+  void UTdoOnFixedUpdate() override;
+  void UTdoOnUpdate() override;
+  void UTdoOnInit() override;
 
  private:
   // stuff to refactor
-  [[maybe_unused]] std::vector<Camera> m_pushCameras;// STABLE, FIF
-  [[maybe_unused]] Camera m_camera;
-  [[maybe_unused]] VkDescriptorSet m_cubeDescriptorSet = VK_NULL_HANDLE;
-  [[maybe_unused]] VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
-  [[maybe_unused]] VkDescriptorUpdateTemplateKHR m_descriptorUpdateTemplate = VK_NULL_HANDLE;
+  std::shared_mutex m_swapState;
+  float m_angle = 0.f;
+  Camera m_RTcamera{};
+  glm::mat4 m_UTcamera{};  // Update thread only has view. proj owned by render
+  std::vector<Camera> m_pushCameras;  // STABLE, FIF
+
+  VkDescriptorSet m_cubeDescriptorSet = VK_NULL_HANDLE;
+  VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
+  VkDescriptorUpdateTemplateKHR
+      m_descriptorUpdateTemplate = VK_NULL_HANDLE;
 
   // constant on resize
   vk::GraphicsInfo m_graphicsInfo;

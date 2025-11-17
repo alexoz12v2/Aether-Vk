@@ -80,6 +80,10 @@ struct UpdateCoordinator : public NonMoveable {
 };
 
 class ApplicationBase : public NonMoveable {
+ public:  // Threads Starting Procedures
+  static void RTmain(ApplicationBase *app);
+  static void UTmain(ApplicationBase *app);
+
  public:
   /// Initialized to have fixed update for 60 PFS, max delta of 24 FPS, 1 scale
   /// \warning should never be reassigned
@@ -100,9 +104,7 @@ class ApplicationBase : public NonMoveable {
 
   inline void UTonFixedUpdate() { UTdoOnFixedUpdate(); }
 
-  inline void UTonInit() {
-    UTdoOnInit();
-  }
+  inline void UTonInit() { UTdoOnInit(); }
 
   inline void UTonUpdate() {
     UTdoOnUpdate();
