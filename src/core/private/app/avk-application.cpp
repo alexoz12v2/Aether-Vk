@@ -2,6 +2,51 @@
 
 namespace avk {
 
+// ----------------------------- Entry Points ----------------------------
+
+void ApplicationBase::RTmain(ApplicationBase *app) {
+  LOGI << "[RenderThread] started with window ready" << std::endl;
+  app->RTwindowInit();
+  LOGI << "[RenderThread] rendering started" << std::endl;
+  // keep running while rendering
+  while (app->RTshouldRun()) {
+    if (app->RTsurfaceWasLost()) {
+      app->RTsurfaceLost();
+    }
+    // this shouldn't return `true` if the application is
+    // currently in the pause state
+    if (app->RTshouldUpdate()) {
+      // successfully claimed state: render it
+      app->RTonRender();
+    } else {
+      // if CAS failed or nothing to render, fallthrough and wait
+      // LOGI << "AVK Render Thread NO UPDATE, GOING TO WAIT" << std::endl;
+      app->RTwaitForNextRound();
+      // LOGI << "AVK Render Thread WOKE UP" << std::endl;
+    }
+  }
+  app->RTsignalExit();
+  LOGI << "[RenderThread] exiting" << std::endl;
+}
+
+void ApplicationBase::UTmain(ApplicationBase *app) {
+  assert(app);
+  LOGI << "[UpdateThread] Started Update Thread" << std::endl;
+  app->UTonInit();
+  while (app->UTshouldRun()) {
+    // update timings from last frame
+    app->Time.UTupdate();
+    while (app->Time.needsFixedUpdate()) {
+      app->Time.UTfixedUpdate();
+      app->UTonFixedUpdate();
+    }
+    app->UTonUpdate();
+  }
+  LOGI << "[UpdateThread] Exiting Update Thread" << std::endl;
+}
+
+// ---------------------------- Class Implementation -------------------------
+
 ApplicationBase::ApplicationBase() {
   m_vkInstance.create();
   LOGI << "[ApplicationBase] Vulkan Instance " << std::hex

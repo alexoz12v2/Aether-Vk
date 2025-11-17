@@ -3,6 +3,7 @@
 // AVK Core
 #include "app/avk-application.h"
 #include "render/experimental/avk-staging-transient-manager.h"
+#include "render/testing/avk-primitives.h"
 
 // library
 #include <shared_mutex>
@@ -14,13 +15,6 @@
 #include "avk-win32-window.h"
 
 namespace avk {
-
-// TODO check max push constant size is 256
-// TODO refactor
-struct Camera {
-  glm::mat4 view;
-  glm::mat4 proj;
-};
 
 class WindowsApplication : public ApplicationBase {
  public:

@@ -28,57 +28,93 @@ static int isThreadAlive(pthread_t tid) {
 }
 
 /// to be called after `app->signalStopRendering`
-static void timedJoinRenderThread(avk::AndroidApp *app) {
+static void timedJoinThreads(avk::AndroidApp *app) {
   void *retval = nullptr;
   s_mlogi << "[main] still alive 1 " << std::endl;
 
   constexpr int timeout_ms = 20;
   constexpr int interval_ms = 5;      // check every 5ms
-  int waited = 0;
+  app->signalStopRendering();
+  {// timed kill render thread (cause join hanged on a old version)
+    int waited = 0;
 
-  bool ready = false;
-  s_mlogi << "[main] still alive 2 " << std::endl;
+    bool ready = false;
+    s_mlogi << "[main] still alive 2 " << std::endl;
 
-  // Measure real time using CLOCK_MONOTONIC
-  timespec start{}, now{};
-  clock_gettime(CLOCK_MONOTONIC, &start);
-  while (waited < timeout_ms) {
-    s_mlogi << "[main] still alive loop " << std::endl;
-    // poll RT acknowledgement
-    if (app->checkRTAck()) {
-      ready = true;
-      break;
+    // Measure real time using CLOCK_MONOTONIC
+    timespec start{}, now{};
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    while (waited < timeout_ms) {
+      s_mlogi << "[main] still alive loop " << std::endl;
+      // poll RT acknowledgement
+      if (app->checkRTAck()) {
+        ready = true;
+        break;
+      }
+      s_mlogi << "[main] still alive BEFORE sleep" << std::endl;
+
+      // sleep a little so we don’t burn CPU
+      usleep(interval_ms * 1000);
+      s_mlogi << "[main] still alive sleep" << std::endl;
+
+      // recompute elapsed real time
+      clock_gettime(CLOCK_MONOTONIC, &now);
+      waited = (int) ((now.tv_sec - start.tv_sec) * 1000
+          + (now.tv_nsec - start.tv_nsec) / 1000000);
     }
-    s_mlogi << "[main] still alive BEFORE sleep" << std::endl;
+    s_mlogi << "[main] still alive 3" << std::endl;
 
-    // sleep a little so we don’t burn CPU
-    usleep(interval_ms * 1000);
-    s_mlogi << "[main] still alive sleep" << std::endl;
-
-    // recompute elapsed real time
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    waited = (int) ((now.tv_sec - start.tv_sec) * 1000
-        + (now.tv_nsec - start.tv_nsec) / 1000000);
-  }
-  s_mlogi << "[main] still alive 3" << std::endl;
-
-  // If the worker signaled it's ready, try to join.
-  s_mlogi << "[main] is render thread ready to die? " << ready << std::endl;
-  if (ready) {
-    int r = pthread_join(app->RenderThread, &retval);
-    if (r != 0) {
-      s_mlogi << "[main] failed to join render thread: " << strerror(r)
+    // If the worker signaled it's ready, try to join.
+    s_mlogi << "[main] is render thread ready to die? " << ready << std::endl;
+    if (ready) {
+      int r = pthread_join(app->RenderThread, &retval);
+      if (r != 0) {
+        s_mlogi << "[main] failed to join render thread: " << strerror(r)
+                << std::endl;
+        pthread_kill(app->RenderThread, SIGTERM);
+      } else {
+        s_mlogi << "[main] render thread joined" << std::endl;
+      }
+    } else {
+      s_mlogi << "[main] timeout waiting for ack, killing render thread"
               << std::endl;
       pthread_kill(app->RenderThread, SIGTERM);
-    } else {
-      s_mlogi << "[main] render thread joined" << std::endl;
     }
-  } else {
-    s_mlogi << "[main] timeout waiting for ack, killing render thread"
-            << std::endl;
-    pthread_kill(app->RenderThread, SIGTERM);
+    app->RenderThread = 0;
   }
-  app->RenderThread = 0;
+  // TODO check if this hangs
+  app->signalStopUpdating();
+  pthread_join(app->UpdateThread, &retval);
+  app->UpdateThread = 0;
+
+  s_mlogi << "[main] killed all threads" << std::endl;
+}
+
+// TODO move to posix path
+static pthread_t createThreadOrExit(void *(*proc)(void *),
+                                    void *__restrict arg) {
+  pthread_t thread = 0;
+  if (pthread_create(&thread, nullptr, proc, arg)) {
+    s_mlogi << "Failed to create render thread!" << std::endl;
+    avk::showErrorScreenAndExit("Failed to create Thread");
+  } else {
+    s_mlogi << "Render thread created." << std::endl;
+  }
+  return thread;
+}
+
+static void *renderThreadFunc(void *arg) {
+  auto *app = reinterpret_cast<avk::AndroidApp *>(arg);
+  avk::ApplicationBase::RTmain(app);
+  pthread_exit(nullptr);
+  return nullptr;
+}
+
+static void *updateThreadFunc(void *arg) {
+  auto *app = reinterpret_cast<avk::AndroidApp *>(arg);
+  avk::ApplicationBase::UTmain(app);
+  pthread_exit(nullptr);
+  return nullptr;
 }
 
 // TODO on low memory
@@ -90,33 +126,35 @@ static void onAppCmd(android_app *app, int32_t cmd) {
          << std::this_thread::get_id() << std::dec << std::endl;
     return;
   }
-  auto *appManager =
-      static_cast<avk::DelayedConstruct<avk::AndroidApp> *>(app->userData);
-  assert(appManager);
-// #if 0
-  appManager->get()->DBGPRINT_SHOULD_INIT();
-// #endif
+  auto *application =
+      static_cast<avk::DelayedConstruct<avk::AndroidApp> *>(app->userData)->get();
   switch (cmd) {
-// #if 0
     case APP_CMD_INIT_WINDOW: {
       s_mlogi << "APP_CMD_INIT_WINDOW" << std::endl;
-      appManager->get()->onWindowInit();
+      bool const firstInit = !application->windowInitializedOnce();
+      application->onWindowInit();
+      if (firstInit) {
+        s_mlogi << "FIRST APP_CMD_INIT_WINDOW" << std::endl;
+        application->RenderThread =
+            createThreadOrExit(renderThreadFunc, application);
+        application->UpdateThread =
+            createThreadOrExit(updateThreadFunc, application);
+      }
       break;
     }
-// #endif
     case APP_CMD_TERM_WINDOW: {
       s_mlogi << "APP_CMD_TERM_WINDOW" << std::endl;
-      appManager->get()->onSurfaceLost();
+      application->onSurfaceLost();
       break;
     }
     case APP_CMD_GAINED_FOCUS: {
       s_mlogi << "APP_CMD_GAINED_FOCUS" << std::endl;
-      appManager->get()->resumeRendering();
+      application->resumeRendering();
       break;
     }
     case APP_CMD_LOST_FOCUS: {
       s_mlogi << "APP_CMD_LOST_FOCUS" << std::endl;
-      appManager->get()->pauseRendering();
+      application->pauseRendering();
       break;
     }
     case APP_CMD_CONTENT_RECT_CHANGED:
@@ -127,9 +165,9 @@ static void onAppCmd(android_app *app, int32_t cmd) {
     }
     case APP_CMD_RESUME: {
       s_mlogi << "APP_CMD_RESUME" << std::endl;
-      appManager->get()->onRestoreState();
-      if (appManager->get()->windowInitializedOnce()) {
-        if (isThreadAlive(appManager->get()->RenderThread)) {
+      application->onRestoreState();
+      if (application->windowInitializedOnce()) {
+        if (isThreadAlive(application->RenderThread)) {
           s_mlogi << "Render Thread is alive" << std::endl;
         } else {
           s_mlogi << "Render Thread is Dead!" << std::endl;
@@ -142,17 +180,16 @@ static void onAppCmd(android_app *app, int32_t cmd) {
     }
     case APP_CMD_PAUSE: {
       s_mlogi << "APP_CMD_PAUSE" << std::endl;
-      appManager->get()->onSaveState();
+      application->onSaveState();
       break;
     }
     case APP_CMD_DESTROY: {
       s_mlogi << "APP_CMD_DESTROY" << std::endl;
       // join render thread
-      s_mlogi << "[main] signaling render thread to stop" << std::endl;
-      appManager->get()->signalStopRendering();
-      timedJoinRenderThread(appManager->get());
+      timedJoinThreads(application);
       // final clean
-      appManager->destroy();
+      application = nullptr;
+      static_cast<avk::DelayedConstruct<avk::AndroidApp> *>(app->userData)->destroy();
       destroyRequested = true;
       break;
     }
@@ -239,42 +276,6 @@ static void handleInputEvents([[maybe_unused]] struct android_app *app,
   }
 }
 
-// pthread signature
-static void *renderThreadFunc(void *arg) {
-  auto *app = reinterpret_cast<avk::AndroidApp *>(arg);
-  s_mlogi << "[RenderThread] started" << std::endl;
-
-  // wait for first native window initialization
-  app->RTwaitReadyForInit();
-
-  s_mlogi << "[RenderThread] woke up" << std::endl;
-  app->RTwindowInit();
-  s_mlogi << "[RenderThread] rendering started" << std::endl;
-  // keep running while rendering
-  while (app->RTshouldRun()) {
-    if (app->RTsurfaceWasLost()) {
-      app->RTsurfaceLost();
-    }
-    // this shouldn't return `true` if the application is
-    // currently in the pause state
-    if (app->RTshouldUpdate()) {
-      // successfully claimed state: render it
-      app->RTonRender();
-    } else {
-      // if CAS failed or nothing to render, fallthrough and wait
-      __android_log_print(ANDROID_LOG_INFO,
-                          "AVK Render Thread",
-                          "NO UPDATE, GOING TO WAIT");
-      app->RTwaitForNextRound();
-      __android_log_print(ANDROID_LOG_INFO, "AVK Render Thread", "WOKE UP");
-    }
-  }
-  app->RTsignalExit();
-  s_mlogi << "[RenderThread] exiting via pthread_exit" << std::endl;
-  pthread_exit(nullptr);
-  return nullptr;
-}
-
 extern "C" void android_main(android_app *app) {
   // log something
   s_mlogi << "Hello Android World TID: " << std::hex
@@ -290,8 +291,9 @@ extern "C" void android_main(android_app *app) {
   JNIEnv *jniEnv = nullptr;
   app->activity->vm->AttachCurrentThread(&jniEnv, nullptr);
 
-  // initialization code (why is it on the heap:
-  // stack triggers Address Sanitizers (and some nasty bugs))
+  // initialization code: Object placed in DelayedConstruct
+  // such that in can be on the stack while being constructed here and
+  // destroyed on Activity Destroy
   avk::DelayedConstruct<avk::AndroidApp> application;
   application.create(app, jniEnv);
   jniEnv = nullptr; // managed by class
@@ -300,17 +302,6 @@ extern "C" void android_main(android_app *app) {
   app->userData = &application;
   app->onAppCmd = onAppCmd;
   // Wait for debugger in debug builds
-
-// #if 0
-  if (pthread_create(
-      &application.get()->RenderThread, nullptr,
-      &renderThreadFunc, application.get()) != 0) {
-    s_mlogi << "Failed to create render thread!" << std::endl;
-    return;
-  } else {
-    s_mlogi << "Render thread created." << std::endl;
-  }
-// #endif
 
   while (!app->destroyRequested) {
     // 1. Poll Lifecycle Events
@@ -331,14 +322,9 @@ extern "C" void android_main(android_app *app) {
       android_app_clear_key_events(input);
       android_app_clear_motion_events(input);
     }
-
-    // 3. Update State
-    // TODO
-    application.get()->signalStateUpdated();
-
-    // 4. Render (should be on Render thread)
-    // application.RTonRender();
   }
+
+  // Here `application` was already destroyed
 
   app->userData = nullptr;
 }

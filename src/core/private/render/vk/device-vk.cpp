@@ -90,8 +90,8 @@ static void fillRequiredExtensions(
   requiredExtensions.push_back(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
   requiredExtensions.push_back(VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME);
   requiredExtensions.push_back(VK_KHR_SPIRV_1_4_EXTENSION_NAME);
-  // see anyFeatureMissing for more information. Basically, if you have a
-  // RENDERDOC Vulkan Layer present and bufferDeviceAddressCaptureReplay is
+  // see anyRequiredFeatureMissing for more information. Basically, if you have
+  // a RENDERDOC Vulkan Layer present and bufferDeviceAddressCaptureReplay is
   // not a supported feature, bufferAddress will be filtered out
   // requiredExtensions.push_back(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
   requiredExtensions.push_back(
@@ -103,7 +103,8 @@ static void fillRequiredExtensions(
       VK_KHR_DESCRIPTOR_UPDATE_TEMPLATE_EXTENSION_NAME);
 }
 
-static std::vector<std::string> anyRequiredFeaturesMissing(VkPhysicalDevice dev) AVK_NO_CFI {
+static std::vector<std::string> anyRequiredFeaturesMissing(VkPhysicalDevice dev)
+    AVK_NO_CFI {
   std::vector<std::string> missing;
   missing.reserve(16);
   // Prepare Structs to query Necessary Features
@@ -148,6 +149,8 @@ static std::vector<std::string> anyRequiredFeaturesMissing(VkPhysicalDevice dev)
     missing.push_back("inlineUniformBlock");
   if (!shaderDrawFeat.shaderDrawParameters)
     missing.push_back("shaderDrawParameters");
+  // TODO remove
+  if (!features.features.geometryShader) missing.push_back("geometryShader");
 
   // While bufferDeviceAddress is useful when you are doing GPU-driven
   // rendering or complex setups on compute shaders, as it allows you to work
@@ -206,7 +209,7 @@ static bool isSoC(VkPhysicalDevice dev, VkPhysicalDeviceType deviceType) {
   // - if all heaps are device local
   for (uint32_t heapIndex = 0; heapIndex < props.memoryHeapCount; ++heapIndex) {
     if (!(props.memoryHeaps[heapIndex].flags &
-        VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) {
+          VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) {
       return false;
     }
     if (props.memoryHeaps[heapIndex].flags &
@@ -231,8 +234,7 @@ static void setCompressedFormats(
 
   VkFormatFeatureFlags const sampled_BlitSrc_Transfer =
       VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
-          VK_FORMAT_FEATURE_TRANSFER_SRC_BIT
-          | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+      VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
   // now set extensions to be used on create info and populate comporession
   // formats
   if (outOptFeatures.textureCompressionASTC_LDR) {
@@ -255,9 +257,9 @@ static void setCompressedFormats(
     vkGetPhysicalDeviceFormatProperties2(chosen, proposedsRGB,
                                          &sRGBFormatProperties);
     if ((linearFormatProperties.formatProperties.linearTilingFeatures &
-        sampled_BlitSrc_Transfer) &&
+         sampled_BlitSrc_Transfer) &&
         (linearFormatProperties.formatProperties.optimalTilingFeatures &
-            sampled_BlitSrc_Transfer)) {
+         sampled_BlitSrc_Transfer)) {
       comprFormats.linear_R = proposedLinear;
       if (proposedLinear != VK_FORMAT_EAC_R11_UNORM_BLOCK) {  // special case
         comprFormats.linear_RGB = proposedLinear;
@@ -265,18 +267,18 @@ static void setCompressedFormats(
         vkGetPhysicalDeviceFormatProperties2(
             chosen, VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK, &linearFormatProperties);
         if ((linearFormatProperties.formatProperties.linearTilingFeatures &
-            sampled_BlitSrc_Transfer) &&
+             sampled_BlitSrc_Transfer) &&
             (linearFormatProperties.formatProperties.optimalTilingFeatures &
-                sampled_BlitSrc_Transfer)) {
+             sampled_BlitSrc_Transfer)) {
           comprFormats.linear_RGB = VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK;
         }
       }
     }
 
     if ((sRGBFormatProperties.formatProperties.linearTilingFeatures &
-        sampled_BlitSrc_Transfer) &&
+         sampled_BlitSrc_Transfer) &&
         (sRGBFormatProperties.formatProperties.optimalTilingFeatures &
-            sampled_BlitSrc_Transfer)) {
+         sampled_BlitSrc_Transfer)) {
       comprFormats.sRGB_RGBA = VK_FORMAT_BC7_SRGB_BLOCK;
     }
   }
@@ -354,23 +356,26 @@ static void setCompressedFormats(
     vkGetPhysicalDeviceProperties2(dev, &props);
 
     switch (props.properties.deviceType) {
-      case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:LOGI
-            << "[Device::choosePhysicalDevice] Physical Device " << std::hex
-            << dev << std::dec << " VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU"
-            << std::endl;
+      case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+        LOGI << "[Device::choosePhysicalDevice] Physical Device " << std::hex
+             << dev << std::dec << " VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU"
+             << std::endl;
         score += 400;
         break;
-      case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:LOGI
-            << "[Device::choosePhysicalDevice] Physical Device " << std::hex
-            << dev << std::dec << " VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU"
-            << std::endl;
+      case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+        LOGI << "[Device::choosePhysicalDevice] Physical Device " << std::hex
+             << dev << std::dec << " VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU"
+             << std::endl;
         score += 300;
         break;
-      case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:score += 200;
+      case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+        score += 200;
         break;
-      case VK_PHYSICAL_DEVICE_TYPE_CPU:continue;  // reject CPUs
+      case VK_PHYSICAL_DEVICE_TYPE_CPU:
+        continue;  // reject CPUs
         break;
-      default:continue;  // shouldn't reach here
+      default:
+        continue;  // shouldn't reach here
         break;
     }
 
@@ -432,13 +437,13 @@ static bool getPresentationSupport(
     [[maybe_unused]] uint32_t index,
     [[maybe_unused]] Surface const *surface) AVK_NO_CFI {
 #ifdef VK_USE_PLATFORM_WIN32_KHR
-  auto* pfnGetPhysicalDeviceWin32PresentationSupportKHR =
+  auto *pfnGetPhysicalDeviceWin32PresentationSupportKHR =
       reinterpret_cast<PFN_vkGetPhysicalDeviceWin32PresentationSupportKHR>(
           vkGetInstanceProcAddr(
               instance, "vkGetPhysicalDeviceWin32PresentationSupportKHR"));
   return pfnGetPhysicalDeviceWin32PresentationSupportKHR(physicalDevice, index);
 #elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
-  auto* pfnGetPhysicalDeviceWaylandPresentationSupportKHR =
+  auto *pfnGetPhysicalDeviceWaylandPresentationSupportKHR =
       reinterpret_cast<PFN_vkGetPhysicalDeviceWaylandPresentationSupportKHR>(
           vkGetInstanceProcAddr(
               instance, "vkGetPhysicalDeviceWaylandPresentationSupportKHR"));
@@ -481,8 +486,7 @@ static std::vector<VkDeviceQueueCreateInfo> newDeviceQueuesCreateInfos(
         getPresentationSupport(instance, physicalDevice, index, surface);
     bool const graphicsComputeTransfer =
         props.queueFamilyProperties.queueFlags &
-            (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT
-                | VK_QUEUE_TRANSFER_BIT);
+        (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT);
     if (supportsPresent && graphicsComputeTransfer) {
       outQueueFamilies.universalGraphics = index;
       familyIndex = index;
@@ -557,6 +561,8 @@ static VkDevice createDevice(VkInstance instance,
   if (optFeatures.textureCompressionETC2) {
     features.features.textureCompressionETC2 = VK_TRUE;
   }
+  // TODO remove
+  features.features.geometryShader = VK_TRUE;
 
   // Create the device::General Setup
   VkDevice device = VK_NULL_HANDLE;
@@ -603,8 +609,9 @@ static VmaAllocator newVmaAllocator(VkInstance instance,
       VMA_ALLOCATOR_CREATE_KHR_DEDICATED_ALLOCATION_BIT;
   // `VK_KHR_buffer_device_address` in use
   // (TODO better with proper extension detection or leave it like this)
-  // allocatorCreateInfo.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
-  // `VK_KHR_bind_memory2` promoted from 1.1
+  // allocatorCreateInfo.flags |=
+  // VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT; `VK_KHR_bind_memory2`
+  // promoted from 1.1
   allocatorCreateInfo.flags |= VMA_ALLOCATOR_CREATE_KHR_BIND_MEMORY2_BIT;
   // `VK_KHR_EXTERNAL_MEMORY_WIN32` is the only exporting extension supported by
   // VMA, so, for consistency, I'd rather handle it myself

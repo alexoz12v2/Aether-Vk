@@ -358,7 +358,7 @@ void WindowsApplication::createVulkanResources() AVK_NO_CFI {
   if (vkSwapchain()->frameCount() > m_pushCameras.size()) {
     m_pushCameras.resize(vkSwapchain()->frameCount());
   }
-  assert(vkSwapchain()->frameCount() == m_pushCameras.size());
+  assert(vkSwapchain()->frameCount() <= m_pushCameras.size());
   // renderPass
   VkFormat const depthFmt =
       vk::basicDepthStencilFormat(vkPhysicalDeviceHandle());
