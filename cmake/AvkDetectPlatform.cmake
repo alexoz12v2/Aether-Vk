@@ -316,11 +316,53 @@ function(avk_setup_dependencies)
   # PNG: libpng
   if (NOT TARGET PNG::PNG)
     find_package(PNG REQUIRED)
+    if (WIN32 AND ${AVK_USE_SANITIZERS})
+      avk_release_is_debug_for_imported(PNG::PNG)
+    endif ()
+  endif ()
+
+  if (NOT TARGET KTX::ktx)
+    find_package(ktx CONFIG REQUIRED)
+    if (WIN32 AND ${AVK_USE_SANITIZERS})
+      avk_release_is_debug_for_imported(KTX::ktx)
+    endif ()
   endif ()
 
   # -- scene format: GLTF --
   if (NOT DEFINED AVK_TINYGLTF_INCLUDE_DIR)
     set(AVK_TINYGLTF_INCLUDE_DIR "${AVK_VCPKG_INSTALL_DIR}/include")
+  endif ()
+
+  # when using sanitizers, we cannot link against the debug MSVC C Runtime, otherwise, whenever we call something
+  # from it, we should note it with no_sanitize. No. prefer linking against the release runtime
+  if (WIN32 AND ${AVK_USE_SANITIZERS} AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+    # KTX 4.3.2 adds as an interface definition:  $<$<CONFIG:Debug>:_DEBUG;DEBUG>
+    # Loop over all targets and remove _DEBUG from interface defs
+    foreach (t KTX::ktx PNG::PNG Boost::fiber)
+      message(STATUS "FIXING DEBUG FLAGS/DEFINITIONS For Target ${t}")
+      get_target_property(defs ${t} INTERFACE_COMPILE_DEFINITIONS)
+      message(STATUS "  ${defs}")
+      if (defs)
+        string(REGEX REPLACE "\\$<\\$<CONFIG:Debug>:_DEBUG;DEBUG>" "$<$<CONFIG:Debug>:DEBUG>" defs "${defs}")
+        list(FILTER defs EXCLUDE REGEX "^\\$<\\$<CONFIG:Debug>:_DEBUG>")
+        list(FILTER defs EXCLUDE REGEX "_DEBUG")
+        message(STATUS "  LIST AFTER ${defs}")
+        set_target_properties(${t} PROPERTIES
+          INTERFACE_COMPILE_DEFINITIONS "${defs}"
+        )
+        get_target_property(defs ${t} INTERFACE_COMPILE_DEFINITIONS)
+        message(STATUS "  AFTER: ${defs}")
+      endif ()
+      get_target_property(defs ${t} INTERFACE_COMPILE_OPTIONS)
+      message(STATUS "  ${defs}")
+      if (defs)
+        list(REMOVE_ITEM defs "-MTd")
+        list(REMOVE_ITEM defs "-MDd")
+        set_target_properties(${t} PROPERTIES
+          INTERFACE_COMPILE_OPTIONS "${defs}"
+        )
+      endif ()
+    endforeach ()
   endif ()
 
   # Note: they are actually the same, just to be sure include both

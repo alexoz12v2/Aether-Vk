@@ -234,3 +234,9 @@ Procfile text eol=lf
 *.toc     binary
 *.fls     binary
 *.fdb_latexmk binary
+
+# KTX2 Textues
+# *.ktx2 binary diff=ktx-compare (script which forwards to ktx compare command)
+# to do ^^^ we expect a local script to be run, meaning it is necessary to call
+# `git config --local include.path <script path>`
+*.ktx2 binary
