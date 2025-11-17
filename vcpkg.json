@@ -14,7 +14,13 @@
       "name": "spirv-cross",
       "version>=": "1.4.309.0"
     },
-    "ktx",
+    {
+      "name": "ktx",
+      "version>=": "4.3.2",
+      "features": [
+        "vulkan"
+      ]
+    },
     {
       "name": "volk",
       "version>=": "1.4.309.0"
