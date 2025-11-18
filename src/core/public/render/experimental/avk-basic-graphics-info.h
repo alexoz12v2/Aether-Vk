@@ -14,6 +14,8 @@ struct Vertex {
   glm::vec3 color;
 };
 
+enum class StencilEqualityMode { eReplacing = 0, eZeroExpected };
+
 /// Utility Method to crete a `GraphicsInfo` struct (for pipeline creation)
 /// Assuming it uses a simple Vertex Structure, a vertex shader and fragment
 /// shader where shaders use 1 binding and 2 locations (0 = position, 1 = color)
@@ -26,14 +28,17 @@ struct Vertex {
 /// Note: The ownership of the given objects is user defined, as they are simply
 /// copied to the struct
 vk::GraphicsInfo basicGraphicsInfo(VkPipelineLayout pipelineLayout,
-                                   VkShaderModule modules[2],
-                                   VkFormat depthStencilFmt);
+                                   VkShaderModule const* modules,
+                                   VkFormat depthStencilFmt,
+                                   StencilEqualityMode, bool disableDepthWrite);
 
 /// helper handles discard of all vulkan handles inside the graphics info
-/// bool controls whether we should discard variable members, such as the renderPass
-/// where variable means that it is recreated after swapchain is recreated
+/// bool controls whether we should discard variable members, such as the
+/// renderPass where variable means that it is recreated after swapchain is
+/// recreated
 /// TODO: pipelineLayout might become dynamic if descriptors change
 void discardGraphicsInfo(vk::DiscardPool* discardPool, uint64_t timeline,
-                         vk::GraphicsInfo& inOutGraphicsInfo, bool discardDynamic = false);
+                         vk::GraphicsInfo& inOutGraphicsInfo,
+                         bool discardDynamic = false);
 
 }  // namespace avk::experimental

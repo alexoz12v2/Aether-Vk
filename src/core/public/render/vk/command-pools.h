@@ -141,7 +141,7 @@ class CommandPools : public NonMoveable {
   ThreadPools* threadPoolsForOwner(std::thread::id tid);
 
   // called only by owner. access to registry not synchronized
-  VkCommandPool createCommandPool(ThreadPools* tp);
+  VkCommandPool createCommandPool(ThreadPools* tp) const;
   VkCommandBuffer allocateForLevel(uint64_t id, VkCommandBufferLevel level);
 };
 
