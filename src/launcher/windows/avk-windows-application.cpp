@@ -14,6 +14,7 @@
 // my stuff
 #include "os/filesystem.h"
 #include "render/experimental/avk-basic-graphics-info.h"
+#include "render/experimental/avk-ktx2-textures.h"
 #include "render/testing/avk-primitives.h"
 #include "render/vk/images/image-vk.h"
 #include "render/vk/renderpasses-vk.h"
@@ -138,10 +139,22 @@ WindowsApplication::~WindowsApplication() noexcept AVK_NO_CFI {
 }
 
 void WindowsApplication::createConstantVulkanResources() AVK_NO_CFI {
-  // reserve enough space such that, on swapchain recreation, the host memory
-  // holding the source for our push constants is never reallocated.
+  using namespace avk::literals;
+
+  // texture loader
+  m_textureLoader.create(vkInstance(), vkDevice());
+
+  // cubemap texture (TODO cleanup)
+  auto const path =
+      getExecutablePath().parent_path() / "assets" / "starry-night-uastc.ktx2";
+  m_textureLoader.get()->loadTexture(
+      "Tex"_hash, path.string(), VK_IMAGE_USAGE_SAMPLED_BIT,
+      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_cubeTexInfo);
+
+  // reserve enough space such that, on swapchain recreation, the host
+  // memory holding the source for our push constants is never reallocated.
   m_pushCameras.reserve(64);
-  // setup initial camera
+  // ---------------------- setup initial camera ----------------------------
   {
     // useless, overridden by update thread initialization
     m_RTcamera.view = glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f),  // eye position
@@ -157,7 +170,9 @@ void WindowsApplication::createConstantVulkanResources() AVK_NO_CFI {
     m_RTcamera.proj[1][1] *= -1;
   }
 
-  // index/vertex buffers
+  // TODO: move first copy for SoC to timeline 0
+
+  // --------------------- index/vertex buffers Main --------------------------
   [[maybe_unused]] std::array<glm::vec3, 8> vertexBuffer;
   [[maybe_unused]] std::array<glm::uvec3, 12> indexBuffer;
   [[maybe_unused]] std::array<std::array<uint32_t, 12>, 8> faceMap;
@@ -196,84 +211,229 @@ void WindowsApplication::createConstantVulkanResources() AVK_NO_CFI {
                                        alloc, 0, sizeof(indexBuffer)));
   }  // if not, copy done on first timeline with staging buffer
 
+  // --------------------- index/vertex buffers Skybox ------------------------
+  // 1. Allocate vertex and index buffers
+  bufRes = bufferManager()->createBufferGPUOnly(
+      "SkyboxVertex"_hash, sizeof(vertexBuffer),
+      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true, false);
+  if (bufRes) showErrorScreenAndExit("Couldn't Allocate Vertex Buffer");
+
+  bufRes = bufferManager()->createBufferGPUOnly(
+      "SkyboxIndex"_hash, sizeof(indexBuffer), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+      true, false);
+  if (bufRes) showErrorScreenAndExit("Couldn't Allocate Index Buffer");
+
+  // 2. copy if not discrete GPU
+  if (!bufferManager()->get("SkyboxVertex"_hash, buffer, alloc))
+    showErrorScreenAndExit("Couldn't Retrieve Vertex Buffer");
+  // TODO Macro for this. mobile is always true
+  if (vkDevice()->isSoC() || vk::isAllocHostVisible(vmaAllocator(), alloc)) {
+    VK_CHECK(vmaCopyMemoryToAllocation(vmaAllocator(), vertexBuffer.data(),
+                                       alloc, 0, sizeof(vertexBuffer)));
+  }  // if not, copy done on first timeline with staging buffer
+
+  if (!bufferManager()->get("SkyboxIndex"_hash, buffer, alloc))
+    showErrorScreenAndExit("Couldn't Retrieve Index Buffer");
+  if (vkDevice()->isSoC() || vk::isAllocHostVisible(vmaAllocator(), alloc)) {
+    VK_CHECK(vmaCopyMemoryToAllocation(vmaAllocator(), indexBuffer.data(),
+                                       alloc, 0, sizeof(indexBuffer)));
+  }  // if not, copy done on first timeline with staging buffer
+
+  // ------------------------- shaders and push constant (shared) --------------
   // shaders
   std::filesystem::path const exeDir = getExecutablePath().parent_path();
-  auto const vertCode = openSpirV(exeDir / "cube-buffers.vert.spv");
-  auto const fragCode = openSpirV(exeDir / "cube-buffers.frag.spv");
-  VkShaderModule modules[2]{
-      vk::createShaderModule(vkDevice(), vertCode.data(), vertCode.size() << 2),
-      vk::createShaderModule(vkDevice(), fragCode.data(),
-                             fragCode.size() << 2)};
-
-  // descriptor set layout
-  {
-    VkDescriptorSetLayoutBinding binding[2]{};
-    binding[0].binding = 0;
-    binding[0].descriptorCount = 1;
-    binding[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    binding[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    binding[1].binding = 1;
-    binding[1].descriptorCount = 1;
-    binding[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    binding[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-
-    VkDescriptorSetLayoutCreateInfo desLayoutCreateInfo{};
-    desLayoutCreateInfo.sType =
-        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    desLayoutCreateInfo.bindingCount = 2;
-    desLayoutCreateInfo.pBindings = binding;
-
-    VK_CHECK(vkDevTable()->vkCreateDescriptorSetLayout(
-        vkDeviceHandle(), &desLayoutCreateInfo, nullptr,
-        &m_descriptorSetLayout));
-  }
 
   VkPushConstantRange pushConstantRange{};
   pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
   pushConstantRange.offset = 0;
   pushConstantRange.size = static_cast<uint32_t>(sizeof(Camera));
 
-  // this doesn't fill in the render pass
-  m_graphicsInfo = experimental::basicGraphicsInfo(
-      vk::createPipelineLayout(vkDevice(), &m_descriptorSetLayout, 1,
-                               &pushConstantRange, 1),
-      modules, vk::basicDepthStencilFormat(vkPhysicalDeviceHandle()));
+  VkFormat const depthFmt =
+      vk::basicDepthStencilFormat(vkPhysicalDeviceHandle());
 
-  // allocate the descriptor set and its update template
-  m_cubeDescriptorSet = vkDescriptorPools()->allocate(
-      m_descriptorSetLayout, vkDiscardPool(), timeline());
-
+  // --------------------------- Main Graphics Pipeline --------------------
   {
-    VkDescriptorUpdateTemplateEntryKHR entries[2]{};
-    entries[0].dstBinding = 0;
-    entries[0].dstArrayElement = 0;
-    entries[0].descriptorCount = 1;
-    entries[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    entries[0].offset = 0;  // start of pData -> bufferInfos[0]
-    entries[0].stride = sizeof(VkDescriptorBufferInfo);  // not UBO size
+    // descriptor set layout
+    {
+      VkDescriptorSetLayoutBinding binding[2]{};
+      binding[0].binding = 0;
+      binding[0].descriptorCount = 1;
+      binding[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+      binding[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    entries[1].dstBinding = 1;
-    entries[1].dstArrayElement = 0;
-    entries[1].descriptorCount = 1;
-    entries[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    entries[1].offset = sizeof(VkDescriptorBufferInfo);  // pData + bufferInfo
-    entries[1].stride = sizeof(VkDescriptorBufferInfo);
+      binding[1].binding = 1;
+      binding[1].descriptorCount = 1;
+      binding[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+      binding[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-    VkDescriptorUpdateTemplateCreateInfoKHR createInfo{};
-    createInfo.sType =
-        VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO_KHR;
-    createInfo.descriptorUpdateEntryCount = 2;
-    createInfo.pDescriptorUpdateEntries = entries;
-    createInfo.templateType =
-        VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET_KHR;
-    createInfo.descriptorSetLayout = m_descriptorSetLayout;
+      VkDescriptorSetLayoutCreateInfo desLayoutCreateInfo{};
+      desLayoutCreateInfo.sType =
+          VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+      desLayoutCreateInfo.bindingCount = 2;
+      desLayoutCreateInfo.pBindings = binding;
 
-    VK_CHECK(vkDevTable()->vkCreateDescriptorUpdateTemplateKHR(
-        vkDeviceHandle(), &createInfo, nullptr, &m_descriptorUpdateTemplate));
+      VK_CHECK(vkDevTable()->vkCreateDescriptorSetLayout(
+          vkDeviceHandle(), &desLayoutCreateInfo, nullptr,
+          &m_descriptorSetLayout));
+    }
+    // shaders
+    auto const vertCode = openSpirV(exeDir / "cube-buffers.vert.spv");
+    auto const fragCode = openSpirV(exeDir / "cube-buffers.frag.spv");
+    VkShaderModule const modules[2]{
+        vk::createShaderModule(vkDevice(), vertCode.data(),
+                               vertCode.size() << 2),
+        vk::createShaderModule(vkDevice(), fragCode.data(),
+                               fragCode.size() << 2)};
+    // this doesn't fill in the render pass
+    m_graphicsInfo = experimental::basicGraphicsInfo(
+        vk::createPipelineLayout(vkDevice(), &m_descriptorSetLayout, 1,
+                                 &pushConstantRange, 1),
+        modules, depthFmt, experimental::StencilEqualityMode::eReplacing,
+        false);
+
+    // allocate the descriptor set and its update template
+    m_cubeDescriptorSet = vkDescriptorPools()->allocate(
+        m_descriptorSetLayout, vkDiscardPool(), timeline());
+
+    {
+      VkDescriptorUpdateTemplateEntryKHR entries[2]{};
+      entries[0].dstBinding = 0;
+      entries[0].dstArrayElement = 0;
+      entries[0].descriptorCount = 1;
+      entries[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+      entries[0].offset = 0;  // start of pData -> bufferInfos[0]
+      entries[0].stride = sizeof(VkDescriptorBufferInfo);  // not UBO size
+
+      entries[1].dstBinding = 1;
+      entries[1].dstArrayElement = 0;
+      entries[1].descriptorCount = 1;
+      entries[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+      entries[1].offset = sizeof(VkDescriptorBufferInfo);  // pData + bufferInfo
+      entries[1].stride = sizeof(VkDescriptorBufferInfo);
+
+      VkDescriptorUpdateTemplateCreateInfoKHR createInfo{};
+      createInfo.sType =
+          VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO_KHR;
+      createInfo.descriptorUpdateEntryCount = 2;
+      createInfo.pDescriptorUpdateEntries = entries;
+      createInfo.templateType =
+          VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET_KHR;
+      createInfo.descriptorSetLayout = m_descriptorSetLayout;
+
+      VK_CHECK(vkDevTable()->vkCreateDescriptorUpdateTemplateKHR(
+          vkDeviceHandle(), &createInfo, nullptr, &m_descriptorUpdateTemplate));
+    }
   }
 
-  // allocate GPU side buffers
+  // ------------------------- Skybox Graphics Pipeline --------------------
+  {
+    // Create Image View for the skybox texture info
+    {
+      VkImageViewCreateInfo createInfo{};
+      createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+      createInfo.image = m_cubeTexInfo.image;
+      createInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+      createInfo.format = m_cubeTexInfo.format;
+      createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      createInfo.subresourceRange.baseArrayLayer = 0;
+      createInfo.subresourceRange.layerCount = 6;  // cube = 6 faces
+      createInfo.subresourceRange.baseMipLevel = 0;
+      createInfo.subresourceRange.levelCount = 1;
+      VK_CHECK(vkDevTable()->vkCreateImageView(
+          vkDeviceHandle(), &createInfo, nullptr, &m_cubeTexInfo.imageView));
+    }
+    // create separate sampler
+    {
+      VkSamplerCreateInfo createInfo{};
+      createInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+      createInfo.magFilter = VK_FILTER_LINEAR;
+      createInfo.minFilter = VK_FILTER_LINEAR;
+      createInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+      createInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+      createInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+      createInfo.minLod = 0.f;
+      createInfo.maxLod = m_cubeTexInfo.mipLevels;  // TODO now it's 1
+      VK_CHECK(vkDevTable()->vkCreateSampler(vkDeviceHandle(), &createInfo,
+                                             nullptr, &m_cubeSampler));
+    }
+    // create descriptor set layout
+    {
+      VkDescriptorSetLayoutBinding binding[2]{};  // 0 = tex, 1 = sampler
+      binding[0].binding = 0;
+      binding[0].descriptorCount = 1;
+      binding[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+      binding[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+      binding[1].binding = 1;
+      binding[1].descriptorCount = 1;
+      binding[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+      binding[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+      VkDescriptorSetLayoutCreateInfo createInfo{};
+      createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+      createInfo.bindingCount = 2;
+      createInfo.pBindings = binding;
+      VK_CHECK(vkDevTable()->vkCreateDescriptorSetLayout(
+          vkDeviceHandle(), &createInfo, nullptr,
+          &m_skyboxDescriptorSetLayout));
+    }
+    // graphics Info
+    {
+      auto const skyboxVertCode = openSpirV(exeDir / "skybox.vert.spv");
+      auto const skyboxFragCode = openSpirV(exeDir / "skybox.frag.spv");
+      VkShaderModule skyboxModules[2]{
+          vk::createShaderModule(vkDevice(), skyboxVertCode.data(),
+                                 skyboxVertCode.size() << 2),
+          vk::createShaderModule(vkDevice(), skyboxFragCode.data(),
+                                 skyboxFragCode.size() << 2)};
+      // TODO VkPipelineLayout with descriptor
+      // TODO: If the sampler's parameters never change, we can bake it into
+      // the pipeline layout by using pImmutableSamplers. In that case, you
+      // don't need an entry in the descriptor update template
+      m_skyboxGraphicsInfo = experimental::basicGraphicsInfo(
+          vk::createPipelineLayout(vkDevice(), &m_skyboxDescriptorSetLayout, 1,
+                                   &pushConstantRange, 1),
+          skyboxModules, depthFmt,
+          experimental::StencilEqualityMode::eZeroExpected, true);
+    }
+    // descriptor update template for skybox (1 image, 1 sampler)
+    {
+      VkDescriptorUpdateTemplateEntryKHR entries[2];
+      entries[0].dstBinding = 0;
+      entries[0].dstArrayElement = 0;
+      entries[0].descriptorCount = 1;
+      entries[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+      entries[0].offset = 0;
+      entries[0].stride = sizeof(VkDescriptorImageInfo);
+
+      entries[1].dstBinding = 1;
+      entries[1].dstArrayElement = 0;
+      entries[1].descriptorCount = 1;
+      entries[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+      entries[1].offset = sizeof(VkDescriptorImageInfo);
+      entries[1].stride = sizeof(VkDescriptorImageInfo);
+
+      VkDescriptorUpdateTemplateCreateInfoKHR createInfo{};
+      createInfo.sType =
+          VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO_KHR;
+      createInfo.descriptorUpdateEntryCount = 2;
+      createInfo.pDescriptorUpdateEntries = entries;
+      createInfo.templateType =
+          VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET_KHR;
+      createInfo.descriptorSetLayout = m_skyboxDescriptorSetLayout;
+
+      VK_CHECK(vkDevTable()->vkCreateDescriptorUpdateTemplateKHR(
+          vkDeviceHandle(), &createInfo, nullptr,
+          &m_skyboxDescriptorUpdateTemplate));
+    }
+    // create its descriptor set
+    {
+      m_skyboxDescriptorSet = vkDescriptorPools()->allocate(
+          m_skyboxDescriptorSetLayout, vkDiscardPool(), timeline());
+    }
+  }
+
+  // ------------------ allocate GPU side buffers ----------------------------
   // - Cube vert/index -> face mapping table
   bufRes = bufferManager()->createBufferGPUOnly(
       hashes::Cube, sizeof(CubeFaceMapping), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -312,6 +472,20 @@ void WindowsApplication::destroyConstantVulkanResources() AVK_NO_CFI {
         vkDeviceHandle(), m_descriptorUpdateTemplate, nullptr);
     m_descriptorUpdateTemplate = VK_NULL_HANDLE;
   }
+  if (m_skyboxDescriptorUpdateTemplate != VK_NULL_HANDLE) {
+    vkDevTable()->vkDestroyDescriptorUpdateTemplateKHR(
+        vkDeviceHandle(), m_skyboxDescriptorUpdateTemplate, nullptr);
+    m_skyboxDescriptorUpdateTemplate = VK_NULL_HANDLE;
+  }
+
+  // skybox related resources
+  if (m_cubeSampler != VK_NULL_HANDLE) {
+    vkDevTable()->vkDestroySampler(vkDeviceHandle(), m_cubeSampler, nullptr);
+    m_cubeSampler = VK_NULL_HANDLE;
+  }
+  experimental::discardGraphicsInfo(vkDiscardPool(), timeline(),
+                                    m_skyboxGraphicsInfo);
+
   // graphics info handles
   experimental::discardGraphicsInfo(vkDiscardPool(), timeline(),
                                     m_graphicsInfo);
@@ -326,18 +500,37 @@ void WindowsApplication::destroyConstantVulkanResources() AVK_NO_CFI {
   if (m_descriptorSetLayout != VK_NULL_HANDLE) {
     vkDevTable()->vkDestroyDescriptorSetLayout(vkDeviceHandle(),
                                                m_descriptorSetLayout, nullptr);
+    m_descriptorSetLayout = VK_NULL_HANDLE;
   }
+  if (m_skyboxDescriptorSetLayout != VK_NULL_HANDLE) {
+    vkDevTable()->vkDestroyDescriptorSetLayout(
+        vkDeviceHandle(), m_skyboxDescriptorSetLayout, nullptr);
+    m_skyboxDescriptorSetLayout = VK_NULL_HANDLE;
+  }
+  // discard KTX texture
+  using namespace avk::literals;
+  m_textureLoader.get()->discardById(vkDiscardPool(), "Tex"_hash, m_cubeTexInfo,
+                                     timeline());
+
+  // KTX2 texture manager (TODO move)
+  m_textureLoader.destroy();
 }
 
 void WindowsApplication::cleanupVulkanResources() AVK_NO_CFI {
   using namespace avk::literals;
-  // render pass
+  // render pass (common on both pipelines, same subpass)
   vkDiscardPool()->discardRenderPass(m_graphicsInfo.renderPass, timeline());
   m_graphicsInfo.renderPass = VK_NULL_HANDLE;
-  // graphics pipeline
+  m_skyboxGraphicsInfo.renderPass = VK_NULL_HANDLE;
+  // graphics pipelines
+  // -- main pipeline
   vkPipelines()->discardAllPipelines(vkDiscardPool(),
                                      m_graphicsInfo.pipelineLayout, timeline());
   m_graphicsPipeline = VK_NULL_HANDLE;
+  // -- skybox pipeline
+  vkPipelines()->discardAllPipelines(
+      vkDiscardPool(), m_skyboxGraphicsInfo.pipelineLayout, timeline());
+  m_skyboxPipeline = VK_NULL_HANDLE;
   // depth image
   vkDiscardPool()->discardImageView(m_depthView, timeline());
   m_depthView = VK_NULL_HANDLE;
@@ -366,9 +559,15 @@ void WindowsApplication::createVulkanResources() AVK_NO_CFI {
       vk::basicRenderPass(vkDevice(), vkSwapchain()->surfaceFormat().format,
                           depthFmt)
           .get();
-  // graphics pipeline
+  m_skyboxGraphicsInfo.renderPass = m_graphicsInfo.renderPass;
+  // graphics pipelines (main and skybox)
+  // TODO study about pipeline derivatives and pipeline cache
+  // -- main pipeline
   m_graphicsPipeline = vkPipelines()->getOrCreateGraphicsPipeline(
       m_graphicsInfo, true, VK_NULL_HANDLE);
+  // -- skybox pipeline
+  m_skyboxPipeline = vkPipelines()->getOrCreateGraphicsPipeline(
+      m_skyboxGraphicsInfo, true, VK_NULL_HANDLE);
   // depth image
   int32_t res = imageManager()->createTransientAttachment(
       "depth"_hash, vkSwapchain()->extent(), depthFmt,
@@ -456,11 +655,6 @@ VkResult WindowsApplication::RTdoOnRender(
   VK_CHECK(vkDevApi->vkBeginCommandBuffer(cmd, &beginInfo));
 
   // if first timeline, stage all resources to GPU local memory
-  VkBuffer vertBuf = VK_NULL_HANDLE, indexBuf = VK_NULL_HANDLE;
-  VmaAllocation vertAlloc = VK_NULL_HANDLE, indexAlloc = VK_NULL_HANDLE;
-  bufferManager()->get(hashes::Index, indexBuf, indexAlloc);
-  bufferManager()->get(hashes::Vertex, vertBuf, vertAlloc);
-
   using namespace avk::literals;
   static uint64_t constexpr StagingVert = "StagingVert"_hash;
   static uint64_t constexpr StagingIndex = "StagingIndex"_hash;
@@ -478,25 +672,52 @@ VkResult WindowsApplication::RTdoOnRender(
     CubeFaceMapping hostCubeFaceMapping{faceMap, colors};
     LOGI << "[WindowsApplication::onRender] First Timeline: Upload staging"
          << std::endl;
-    assert(vertBuf && indexBuf);
+    // prepare staging manager with our main vulkan handles
     m_staging.refresh(cmd, bufferManager(), vkDevice(), vkDiscardPool(),
                       timeline());
-    if (!vkDevice()->isSoC() &&
-        !vk::isAllocHostVisible(vmaAllocator(), vertAlloc)) {
-      m_staging.enqueue({vertBuf, vertAlloc, vertexBuffer.data(),
-                         sizeof(vertexBuffer), StagingVert,
-                         VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
-                         VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT});
-    }
 
-    if (!vkDevice()->isSoC() &&
-        !vk::isAllocHostVisible(vmaAllocator(), indexAlloc)) {
-      m_staging.enqueue({indexBuf, indexAlloc, indexBuffer.data(),
-                         sizeof(indexBuffer), StagingIndex,
-                         VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
-                         VK_ACCESS_INDEX_READ_BIT});
-    }
+    // ----------------- vertex/index main ----------------------------------
+    {
+      VkBuffer vertBuf = VK_NULL_HANDLE, indexBuf = VK_NULL_HANDLE;
+      VmaAllocation vertAlloc = VK_NULL_HANDLE, indexAlloc = VK_NULL_HANDLE;
 
+      bufferManager()->get(hashes::Index, indexBuf, indexAlloc);
+      bufferManager()->get(hashes::Vertex, vertBuf, vertAlloc);
+      assert(vertBuf && indexBuf);
+
+      if (!vkDevice()->isSoC() &&
+          !vk::isAllocHostVisible(vmaAllocator(), vertAlloc)) {
+        m_staging.enqueue({vertBuf, vertAlloc, vertexBuffer.data(),
+                           sizeof(vertexBuffer), StagingVert,
+                           VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                           VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT});
+      }
+      if (!vkDevice()->isSoC() &&
+          !vk::isAllocHostVisible(vmaAllocator(), indexAlloc)) {
+        m_staging.enqueue({indexBuf, indexAlloc, indexBuffer.data(),
+                           sizeof(indexBuffer), StagingIndex,
+                           VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                           VK_ACCESS_INDEX_READ_BIT});
+      }
+      // ----------------- vertex/index skybox --------------------------------
+      bufferManager()->get("SkyboxIndex"_hash, indexBuf, indexAlloc);
+      bufferManager()->get("SkyboxVertex"_hash, vertBuf, vertAlloc);
+      assert(vertBuf && indexBuf);
+      if (!vkDevice()->isSoC() &&
+          !vk::isAllocHostVisible(vmaAllocator(), vertAlloc)) {
+        m_staging.enqueue({vertBuf, vertAlloc, vertexBuffer.data(),
+                           sizeof(vertexBuffer), "SkyboxStagingVert"_hash,
+                           VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                           VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT});
+      }
+      if (!vkDevice()->isSoC() &&
+          !vk::isAllocHostVisible(vmaAllocator(), indexAlloc)) {
+        m_staging.enqueue(
+            {indexBuf, indexAlloc, indexBuffer.data(), sizeof(indexBuffer),
+             VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, VK_ACCESS_INDEX_READ_BIT});
+      }
+    }
+    // --------------------- The rest ---------------------------------------
     // setup GPU only buffer for "cube" uniform buffer
     {
       VkBuffer buffer = VK_NULL_HANDLE;
@@ -557,6 +778,19 @@ VkResult WindowsApplication::RTdoOnRender(
           bufferInfos);
     }
 
+    // now update the image descriptor with the template
+    {
+      VkDescriptorImageInfo imageInfos[2]{};
+      imageInfos[0].imageView = m_cubeTexInfo.imageView;
+      imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+      imageInfos[1].sampler = m_cubeSampler;
+
+      vkDevTable()->vkUpdateDescriptorSetWithTemplateKHR(
+          vkDeviceHandle(), m_skyboxDescriptorSet,
+          m_skyboxDescriptorUpdateTemplate, imageInfos);
+    }
+
     // after everything staged, insert necessary pipeline barrier
     m_staging.flush();
   }
@@ -574,11 +808,20 @@ VkResult WindowsApplication::RTdoOnRender(
   subpassBegin.sType = VK_STRUCTURE_TYPE_SUBPASS_BEGIN_INFO_KHR;
 
   vkDevApi->vkCmdBeginRenderPass2KHR(cmd, &renderBegin, &subpassBegin);
+
+  // -------------------------- Main ---------------------------------------
   // bind pipeline and vertex buffer
   vkDevApi->vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                               m_graphicsPipeline);
   // bind vertex and index buffer
   VkDeviceSize offset = 0;
+
+  VkBuffer vertBuf = VK_NULL_HANDLE, indexBuf = VK_NULL_HANDLE;
+  VmaAllocation vertAlloc = VK_NULL_HANDLE, indexAlloc = VK_NULL_HANDLE;
+
+  bufferManager()->get(hashes::Vertex, vertBuf, vertAlloc);
+  bufferManager()->get(hashes::Index, indexBuf, indexAlloc);
+  assert(vertBuf && indexBuf);
 
   vkDevApi->vkCmdBindVertexBuffers(cmd, 0, 1, &vertBuf, &offset);
 
@@ -605,6 +848,25 @@ VkResult WindowsApplication::RTdoOnRender(
   viewport.maxDepth = 1.f;
   vkDevApi->vkCmdSetViewport(cmd, 0, 1, &viewport);
 
+  vkDevApi->vkCmdDrawIndexed(cmd, 36, 1, 0, 0, 0);
+
+  // ------------------- The skybox ---------------------------------------
+  // same viewport, scissor
+  bufferManager()->get("SkyboxVertex"_hash, vertBuf, vertAlloc);
+  bufferManager()->get("SkyboxIndex"_hash, indexBuf, indexAlloc);
+  assert(vertBuf && indexBuf);
+  vkDevApi->vkCmdBindVertexBuffers(cmd, 0, 1, &vertBuf, &offset);
+  vkDevApi->vkCmdBindIndexBuffer(cmd, indexBuf, 0, VK_INDEX_TYPE_UINT32);
+  vkDevApi->vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    m_skyboxGraphicsInfo.pipelineLayout, 0, 1,
+                                    &m_skyboxDescriptorSet, 0, nullptr);
+  vkDevApi->vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              m_skyboxPipeline);
+  // remove camera position from view matrix (skybox follows you)
+  pushConst.view[3] = glm::vec4(0, 0, 0, pushConst.view[3].w);
+  vkDevApi->vkCmdPushConstants(cmd, m_skyboxGraphicsInfo.pipelineLayout,
+                               VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Camera),
+                               &pushConst);
   vkDevApi->vkCmdDrawIndexed(cmd, 36, 1, 0, 0, 0);
 
   // end render pass (transition to present layout)

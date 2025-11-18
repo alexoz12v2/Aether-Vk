@@ -2,6 +2,7 @@
 
 // AVK Core
 #include "app/avk-application.h"
+#include "render/experimental/avk-ktx2-textures.h"
 #include "render/experimental/avk-staging-transient-manager.h"
 #include "render/testing/avk-primitives.h"
 
@@ -21,7 +22,7 @@ class WindowsApplication : public ApplicationBase {
   WindowsApplication() = default;
   ~WindowsApplication() noexcept override;
 
-  WindowPayload WindowPayload;
+  WindowPayload WindowPayload{};
   HWND PrimaryWindow = nullptr;
   HANDLE RenderThread = INVALID_HANDLE_VALUE;
   HANDLE UpdateThread = INVALID_HANDLE_VALUE;
@@ -52,10 +53,15 @@ class WindowsApplication : public ApplicationBase {
 
  private:
   // TODO refactor
-  vk::GraphicsInfo m_graphicsInfo;
+  vk::GraphicsInfo m_graphicsInfo{};
+  vk::GraphicsInfo m_skyboxGraphicsInfo{};
   VkPipeline m_graphicsPipeline = VK_NULL_HANDLE;
+  VkPipeline m_skyboxPipeline = VK_NULL_HANDLE;
+  DelayedConstruct<experimental::TextureLoaderKTX2> m_textureLoader;
 
   VkImageView m_depthView = VK_NULL_HANDLE;
+  experimental::TextureInfo m_cubeTexInfo{};
+  VkSampler m_cubeSampler = VK_NULL_HANDLE;
 
   std::vector<VkFramebuffer> m_framebuffers;
   std::vector<uint64_t> m_commandBufferIds;
@@ -69,9 +75,18 @@ class WindowsApplication : public ApplicationBase {
   Camera m_RTcamera{};
   glm::mat4 m_UTcamera{};  // Update thread only has view. proj owned by render
   std::vector<Camera> m_pushCameras;  // STABLE, FIF
+
+  // TODO better descriptor set management
+  // -- main graphics pipeline
   VkDescriptorSet m_cubeDescriptorSet = VK_NULL_HANDLE;
   VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
   VkDescriptorUpdateTemplateKHR m_descriptorUpdateTemplate = VK_NULL_HANDLE;
+
+  // -- skybox
+  VkDescriptorSet m_skyboxDescriptorSet = VK_NULL_HANDLE;
+  VkDescriptorSetLayout m_skyboxDescriptorSetLayout = VK_NULL_HANDLE;
+  VkDescriptorUpdateTemplateKHR m_skyboxDescriptorUpdateTemplate =
+      VK_NULL_HANDLE;
 };
 
 }  // namespace avk

@@ -129,7 +129,7 @@ void DiscardPool::destroyDiscardedResources(bool force) AVK_NO_CFI {
     VK_CHECK(
         vkDevApi->vkGetSemaphoreCounterValueKHR(dev, m_timeline, &timeline));
   }
-  // image and image views
+  // image and image views (Note: View first)
   m_imageViews.removeOld(
       timeline, [dev, vkDevApi](VkImageView imageView) AVK_NO_CFI {
         vkDevApi->vkDestroyImageView(dev, imageView, nullptr);
@@ -139,7 +139,7 @@ void DiscardPool::destroyDiscardedResources(bool force) AVK_NO_CFI {
                          VMAResource<VkImage> const& pair) AVK_NO_CFI {
                        vmaDestroyImage(vmaAllocator, pair.handle, pair.alloc);
                      });
-  // buffer and buffer views
+  // buffer and buffer views (Note: View first)
   m_bufferViews.removeOld(
       timeline, [dev, vkDevApi](VkBufferView bufferView) AVK_NO_CFI {
         vkDevApi->vkDestroyBufferView(dev, bufferView, nullptr);

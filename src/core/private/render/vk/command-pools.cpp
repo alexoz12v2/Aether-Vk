@@ -40,8 +40,8 @@ CommandPools::ThreadPools* CommandPools::threadPoolsForOwner(
   return it != m_registry.end() ? it->second.get() : nullptr;
 }
 
-VkCommandPool CommandPools::createCommandPool([[maybe_unused]] ThreadPools* tp)
-    AVK_NO_CFI {
+VkCommandPool CommandPools::createCommandPool(
+    [[maybe_unused]] ThreadPools* tp) const AVK_NO_CFI {
   auto const* const vkDevApi = m_deps.device->table();
   VkDevice const dev = m_deps.device->device();
   VkCommandPoolCreateInfo createInfo{};

@@ -1,10 +1,12 @@
 #include "render/experimental/avk-basic-graphics-info.h"
 
 namespace avk::experimental {
-
+// assumes modules are 2
 vk::GraphicsInfo basicGraphicsInfo(VkPipelineLayout pipelineLayout,
-                                   VkShaderModule modules[2],
-                                   VkFormat depthStencilFmt) {
+                                   VkShaderModule const *modules,
+                                   VkFormat depthStencilFmt,
+                                   StencilEqualityMode stencil,
+                                   bool disableDepthWrite) {
   vk::GraphicsInfo graphicsInfo{};
   graphicsInfo.preRasterization.vertexModule = modules[0];
   graphicsInfo.fragmentShader.fragmentModule = modules[1];
@@ -57,16 +59,28 @@ vk::GraphicsInfo basicGraphicsInfo(VkPipelineLayout pipelineLayout,
   // TODO Cull
   // stencil options
   graphicsInfo.opts.flags |= vk::EPipelineFlags::eStencilEnable;
-  graphicsInfo.opts.stencilCompareOp = vk::EStencilCompareOp::eAlways;
-  graphicsInfo.opts.stencilLogicalOp = vk::EStencilLogicOp::eReplace;
-  graphicsInfo.opts.stencilReference = 1;
   graphicsInfo.opts.stencilCompareMask = 0xFF;
   graphicsInfo.opts.stencilWriteMask = 0xFF;
+  if (stencil == StencilEqualityMode::eReplacing) {
+    graphicsInfo.opts.stencilCompareOp = vk::EStencilCompareOp::eAlways;
+    graphicsInfo.opts.stencilLogicalOp = vk::EStencilLogicOp::eReplace;
+    graphicsInfo.opts.stencilReference = 1;
+  } else if (stencil == StencilEqualityMode::eZeroExpected) {
+    graphicsInfo.opts.stencilCompareOp = vk::EStencilCompareOp::eEqual;
+    graphicsInfo.opts.stencilLogicalOp = vk::EStencilLogicOp::eNone;
+    graphicsInfo.opts.stencilReference = 0;
+  }
 
   // Pipeline Layout
   graphicsInfo.pipelineLayout = pipelineLayout;
   // Renderpass and subpass
   graphicsInfo.subpass = 0;
+  graphicsInfo.renderPass = VK_NULL_HANDLE;
+
+  if (disableDepthWrite) {
+    graphicsInfo.opts.flags |= vk::EPipelineFlags::eNoDepthWrite;
+  }
+
   // Note: RenderPass filled by user
   return graphicsInfo;
 }
