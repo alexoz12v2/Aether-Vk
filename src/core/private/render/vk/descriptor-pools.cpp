@@ -13,10 +13,12 @@
 inline uint32_t constexpr POOL_SIZE_STORAGE_BUFFER = 210;
 inline uint32_t constexpr POOL_SIZE_STORAGE_IMAGE = 126;
 inline uint32_t constexpr POOL_SIZE_COMBINED_IMAGE_SAMPLER = 250;  // much less
+inline uint32_t constexpr POOL_SIZE_SAMPLER = 32;
+inline uint32_t constexpr POOL_SIZE_SAMPLED_IMAGE = 250;
 inline uint32_t constexpr POOL_SIZE_UNIFORM_BUFFER = 216;
 inline uint32_t constexpr POOL_SIZE_UNIFORM_TEXEL_BUFFER = 32;
 inline uint32_t constexpr POOL_SIZE_INPUT_ATTACHMENT = 9;
-inline uint32_t constexpr POOL_SIZES = 6;
+inline uint32_t constexpr POOL_SIZES = 8;
 
 inline uint32_t constexpr MAX_DESCRIPTOR_SETS = 256;
 
@@ -109,7 +111,10 @@ void DescriptorPools::ensureActivePool() AVK_NO_CFI {
        POOL_SIZE_COMBINED_IMAGE_SAMPLER},
       {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, POOL_SIZE_UNIFORM_BUFFER},
       {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, POOL_SIZE_UNIFORM_TEXEL_BUFFER},
-      {VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, POOL_SIZE_INPUT_ATTACHMENT}};
+      {VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, POOL_SIZE_INPUT_ATTACHMENT},
+      {VK_DESCRIPTOR_TYPE_SAMPLER, POOL_SIZE_SAMPLER},
+      {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, POOL_SIZE_SAMPLED_IMAGE},
+  };
   // TODO Inline uniform buffer
   VkDescriptorPoolCreateInfo createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
