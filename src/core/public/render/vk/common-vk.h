@@ -26,11 +26,25 @@
 #endif
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnullability-extension"
+#ifdef AVK_DEBUG
+#pragma GCC diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
+#endif
 #pragma clang attribute push(__attribute__((no_sanitize("cfi"))), \
                              apply_to = any(function))
 #include <volk.h>
 #define VMA_STATIC_VULKAN_FUNCTIONS 0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+
+#ifdef AVK_DEBUG
+#define VMA_DEBUG_LOG avk::printfWithStacktrace
+#define VMA_DEBUG_LOG_FORMAT(format, ...) \
+printf("VMA DEBUG: " format "\n", ## __VA_ARGS__)
+
+#define VMA_DEBUG_DETECT_CORRUPTION 1
+#define VMA_DEBUG_INITIALIZE_ALLOCATIONS 1
+#define VMA_DEBUG_MARGIN 64
+#endif
+
 #include <vk_mem_alloc.h>
 #pragma clang attribute pop
 #pragma GCC diagnostic pop

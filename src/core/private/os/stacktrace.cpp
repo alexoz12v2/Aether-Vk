@@ -4,6 +4,10 @@
 #include "os/avk-log.h"
 #include "os/stackstrace.h"
 
+// library
+#include <cstdarg>
+#include <cstdio>
+
 #if defined(_WIN32)
 // clang-format off
 #define DBGHELP_TRANSLATE_TCHAR // ensure UNICODE on dbghelp library
@@ -219,7 +223,7 @@ std::string dumpStackTrace([[maybe_unused]] uint32_t maxFrames) {
 #endif
 }
 
-void showErrorScreenAndExit(char const *msg) {
+void showErrorScreenAndExit(char const* msg) {
 #if defined(_WIN32)
   MessageBoxA(NULL, msg, "Fatal Error", MB_OK | MB_ICONERROR);
   abort();
@@ -242,6 +246,17 @@ void showErrorScreenAndExit(char const *msg) {
   fprintf(stderr, "Fatal Error: %s\n", msg);
   abort();
 #endif
+}
+
+void printfWithStacktrace(char const* format, ...) {
+  va_list args;
+  va_start(args, format);
+
+  LOGI << "\n\n" << dumpStackTrace() << "\t" << std::endl;
+  vprintf(format, args);
+  LOGI << "\n" << std::endl;
+
+  va_end(args);
 }
 
 }  // namespace avk

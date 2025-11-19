@@ -41,9 +41,16 @@ struct KtxThreadLocalAlloc : public NonMoveable {
       // You shouldn't get to the cleanup with some pending allocations
       assert(allocations.empty());
       for (auto const& [id, alloc] : allocations) {
+        LOGI << "[Global KTX2 Texture Manager] destroy alloc " << (void*)alloc
+             << std::endl;
         vmaFreeMemory(device->vmaAllocator(), alloc);
       }
+      LOGW << AVK_LOG_YLW
+          "[Global KTX2 Texture Manager] cleaned all VmaAllocation "
+          "Objects" AVK_LOG_RST
+           << std::endl;
       allocations.clear();
+      device = nullptr;
     }
   }
 
@@ -176,6 +183,9 @@ static uint64_t ktxAllocMem(VkMemoryAllocateInfo* allocInfo,
   if (res != VK_SUCCESS) {
     return 0;  // KTX interprets 0 as "allocation failed"
   }
+  LOGI << "[KTX Alloc Mem] --------------"
+          "-------------- Memory: "
+       << (void*)allocation << std::endl;
 
   uint64_t const id = gKtxAllocManager->nextId++;
   gKtxAllocManager->allocations.try_emplace(id, allocation);
@@ -247,9 +257,16 @@ static void ktxFreeMem(uint64_t allocId) AVK_NO_CFI {
   KTX_CALL_PREAMBLE;
 
   auto const it = gKtxAllocManager->allocations.find(allocId);
-  if (it == gKtxAllocManager->allocations.end()) return;
+  if (it == gKtxAllocManager->allocations.end()) {
+    LOGE << AVK_LOG_RED "[KTX Free Mem] Something not found (id)" << allocId
+         << std::endl;
+    return;
+  }
   VmaAllocation const alloc = it->second;
   gKtxAllocManager->allocations.erase(it);
+  LOGI << "[KTX Free Mem] --------------"
+          "-------------- free: "
+       << (void*)alloc << std::endl;
   vmaFreeMemory(device->vmaAllocator(), alloc);
 }
 
@@ -282,15 +299,15 @@ class TextureLoaderKTX2::Impl : public NonMoveable {
  private:
   void initialize();
   void cleanup();
-  ktx_transcode_fmt_e selectTranscodeFormat() const;
+  [[nodiscard]] ktx_transcode_fmt_e selectTranscodeFormat() const;
 
   // dependencies which should outlive this object and are not owned by it
   struct Deps {
     vk::Instance* instance;
     vk::Device* device;
   } m_deps;
-  ktxVulkanDeviceInfo m_ktxDevInfo;
-  ktxVulkanTexture_subAllocatorCallbacks m_allocCallbacks;
+  ktxVulkanDeviceInfo m_ktxDevInfo{};
+  ktxVulkanTexture_subAllocatorCallbacks m_allocCallbacks{};
   std::unordered_map<uint64_t, ktxVulkanTexture> m_loadedTextures;
   VkCommandPool m_commandPool = VK_NULL_HANDLE;
 };
@@ -375,8 +392,9 @@ bool TextureLoaderKTX2::Impl::loadTexture(uint64_t id,
 void TextureLoaderKTX2::Impl::discardById(vk::DiscardPool* discardPool,
                                           uint64_t id, TextureInfo& inOutInfo,
                                           uint64_t timeline) {
-  if (gKtxAllocManager.has_value()) {
-    showErrorScreenAndExit("There should only be one Texture Loader");
+  if (!gKtxAllocManager.has_value()) {
+    showErrorScreenAndExit(
+        "To discard a texture there should be a global manager");
   }
   auto const it = m_loadedTextures.find(id);
   assert(it != m_loadedTextures.end());
@@ -388,6 +406,7 @@ void TextureLoaderKTX2::Impl::discardById(vk::DiscardPool* discardPool,
   {
     // get the allocation object from the global map
     std::lock_guard lk{gKtxAllocManager->mtx};
+    LOGI << "Fjkdlfjdslfjdlsajfldk _> " << it->second.allocationId << std::endl;
     auto const allocIt =
         gKtxAllocManager->allocations.find(it->second.allocationId);
     assert(allocIt != gKtxAllocManager->allocations.end());
@@ -396,6 +415,9 @@ void TextureLoaderKTX2::Impl::discardById(vk::DiscardPool* discardPool,
     assert(alloc != VK_NULL_HANDLE);
   }
   m_loadedTextures.erase(it);
+  LOGI << "[KTX Discard] --------------"
+          "-------------- discarding: "
+       << (void*)alloc << std::endl;
 
   // now discard
   discardPool->discardImageView(inOutInfo.imageView, timeline);
@@ -432,6 +454,12 @@ void TextureLoaderKTX2::Impl::initialize() AVK_NO_CFI {
 void TextureLoaderKTX2::Impl::cleanup() AVK_NO_CFI {
   // cleanup all loaded textures. Doesn't discard them because we are at
   // destruction
+  if (!m_loadedTextures.empty()) {
+    LOGE << AVK_LOG_RED
+        "[TextureLoaderKTX2::Impl::cleanup()] there are textures still "
+        "alive" AVK_LOG_RST
+         << std::endl;
+  }
   for (auto& [id, vkTex] : m_loadedTextures) {
     KTX_CHECK(ktxVulkanTexture_Destruct_WithSuballocator(
         &vkTex, m_deps.device->device(), nullptr, &m_allocCallbacks));

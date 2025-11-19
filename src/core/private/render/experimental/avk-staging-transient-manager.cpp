@@ -42,6 +42,9 @@ StagingTransientManager::StagingTransientManager() {
 
 void StagingTransientManager::enqueue(StagingOperation const& op) {
   assert(refreshed);
+  if (op.dstStage == VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT) {
+    LOGE << "WHAT" << std::endl;
+  }
   m_stagingOps.push_back(op);
 }
 

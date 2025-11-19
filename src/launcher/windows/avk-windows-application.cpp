@@ -135,6 +135,8 @@ WindowsApplication::~WindowsApplication() noexcept AVK_NO_CFI {
     vkDevTable()->vkDeviceWaitIdle(vkDeviceHandle());
     cleanupVulkanResources();
     destroyConstantVulkanResources();
+
+    vkDiscardPool()->destroyDiscardedResources(true);
   }
 }
 
@@ -490,6 +492,11 @@ void WindowsApplication::destroyConstantVulkanResources() AVK_NO_CFI {
   experimental::discardGraphicsInfo(vkDiscardPool(), timeline(),
                                     m_graphicsInfo);
   // index/vertex buffers + uniform buffers
+  using namespace avk::literals;
+  bufferManager()->discardById(vkDiscardPool(), "SkyboxVertex"_hash,
+                               timeline());
+  bufferManager()->discardById(vkDiscardPool(), "SkyboxIndex"_hash,
+                               timeline());
   bufferManager()->discardById(vkDiscardPool(), hashes::Cube, timeline());
   bufferManager()->discardById(vkDiscardPool(), hashes::Model, timeline());
   bufferManager()->discardById(vkDiscardPool(), hashes::Vertex, timeline());
@@ -712,9 +719,10 @@ VkResult WindowsApplication::RTdoOnRender(
       }
       if (!vkDevice()->isSoC() &&
           !vk::isAllocHostVisible(vmaAllocator(), indexAlloc)) {
-        m_staging.enqueue(
-            {indexBuf, indexAlloc, indexBuffer.data(), sizeof(indexBuffer),
-             VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, VK_ACCESS_INDEX_READ_BIT});
+        m_staging.enqueue({indexBuf, indexAlloc, indexBuffer.data(),
+                           sizeof(indexBuffer), "SkyboxStagingIndex"_hash,
+                           VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                           VK_ACCESS_INDEX_READ_BIT});
       }
     }
     // --------------------- The rest ---------------------------------------

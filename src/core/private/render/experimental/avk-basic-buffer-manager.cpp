@@ -29,10 +29,10 @@ BufferManager::BufferManager(vk::Device *device, size_t cap) : m_deps{device} {
   m_bufferMap.reserve(cap);
 }
 
-int32_t BufferManager::createBufferGPUOnly(uint64_t id, size_t bytes,
-                                           VkBufferCreateFlags usage,
-                                           [[maybe_unused]] bool forceWithinBudget,
-                                           [[maybe_unused]] bool forceNoAllocation) AVK_NO_CFI {
+int32_t BufferManager::createBufferGPUOnly(
+    uint64_t id, size_t bytes, VkBufferCreateFlags usage,
+    [[maybe_unused]] bool forceWithinBudget,
+    [[maybe_unused]] bool forceNoAllocation) AVK_NO_CFI {
   assert(m_deps.device && m_deps.device->device());
   VmaAllocator const allocator = m_deps.device->vmaAllocator();
   bool const isSoC = m_deps.device->isSoC();
@@ -67,8 +67,8 @@ int32_t BufferManager::createBufferGPUOnly(uint64_t id, size_t bytes,
   if (isSoC) {
     VkMemoryPropertyFlags memFlags = 0;
     vmaGetAllocationMemoryProperties(allocator, alloc, &memFlags);
-    assert((memFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
-               && (memFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
+    assert((memFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+           (memFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
   }
 #endif
 
@@ -100,7 +100,7 @@ int32_t BufferManager::createBufferStaging(uint64_t id, size_t bytes,
   allocInfo.preferredFlags =
       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
   allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-      VMA_ALLOCATION_CREATE_MAPPED_BIT;
+                    VMA_ALLOCATION_CREATE_MAPPED_BIT;
   if (forceWithinBudget) {
     allocInfo.flags |= VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
   }
@@ -144,7 +144,7 @@ int32_t BufferManager::createBufferReadback(uint64_t id, size_t bytes,
   allocInfo.preferredFlags =
       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
   allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-      VMA_ALLOCATION_CREATE_MAPPED_BIT;
+                    VMA_ALLOCATION_CREATE_MAPPED_BIT;
   if (forceWithinBudget) {
     allocInfo.flags |= VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
   }
@@ -183,8 +183,8 @@ int32_t BufferManager::createBufferStreaming(
   VmaAllocationCreateInfo allocInfo{};
   allocInfo.flags =
       VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-          VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT |
-          VMA_ALLOCATION_CREATE_MAPPED_BIT;
+      VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT |
+      VMA_ALLOCATION_CREATE_MAPPED_BIT;
   allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
   if (forceWithinBudget) {
     allocInfo.flags |= VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
@@ -239,12 +239,14 @@ bool BufferManager::discardById(vk::DiscardPool *discardPool, uint64_t id,
     std::shared_lock rlock{m_mtx};
     auto it = m_bufferMap.find(id);
     if (it == m_bufferMap.end()) {
+      showErrorScreenAndExit("Tried to discard a nonexisting buffer");
       return false;
     }
   }
   std::unique_lock wlock{m_mtx};
   auto it = m_bufferMap.find(id);
   if (it == m_bufferMap.end()) {
+    showErrorScreenAndExit("Tried to discard a nonexisting buffer");
     return false;
   }
   discardPool->discardBuffer(it->second.handle, it->second.alloc, timeline);
