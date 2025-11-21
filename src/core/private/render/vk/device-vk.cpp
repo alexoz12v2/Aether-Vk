@@ -84,7 +84,7 @@ static void fillRequiredExtensions(
 #endif
 #if defined(__APPLE__)
   requiredExtensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
-  requiredExtensions.push_back(VK_EXT_EXTERNAL_MEMORY_METAL);
+  requiredExtensions.push_back(VK_EXT_EXTERNAL_MEMORY_METAL_EXTENSION_NAME);
 #endif
   requiredExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
   requiredExtensions.push_back(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);

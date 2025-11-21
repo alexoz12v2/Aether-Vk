@@ -2,11 +2,27 @@
 # Automatically collect headers and sources
 function(collect_os_specific_files VAR_NAME SRC_DIR OS PUBLIC_OR_PRIVATE)
   # Recurse all files in the given folder
+  if (PUBLIC_OR_PRIVATE STREQUAL "public")
   file(GLOB_RECURSE ALL_FILES CONFIGURE_DEPENDS
     "${SRC_DIR}/${PUBLIC_OR_PRIVATE}/*.h"
     "${SRC_DIR}/${PUBLIC_OR_PRIVATE}/*.hpp"
-    "${SRC_DIR}/${PUBLIC_OR_PRIVATE}/*.cpp"
   )
+  elseif (PUBLIC_OR_PRIVATE STREQUAL "private")
+    set(FILESPECS
+      "${SRC_DIR}/${PUBLIC_OR_PRIVATE}/*.cpp"
+      "${SRC_DIR}/${PUBLIC_OR_PRIVATE}/*.cc"
+      "${SRC_DIR}/${PUBLIC_OR_PRIVATE}/*.cxx"
+    )
+    if (AVK_OS STREQUAL "MACOS" OR AVK_OS STREQUAL "IOS")
+      list(APPEND FILESPECS
+        "${SRC_DIR}/${PUBLIC_OR_PRIVATE}/*.m"
+        "${SRC_DIR}/${PUBLIC_OR_PRIVATE}/*.mm"
+      )
+    endif ()
+    file(GLOB_RECURSE ALL_FILES CONFIGURE_DEPENDS ${FILESPECS})
+  else ()
+    message(FATAL_ERROR "Unexpected folder name")
+  endif ()
 
   # Separate OS-specific files
   set(OS_FILES ${ALL_FILES})
@@ -53,6 +69,7 @@ set(avk_core_libraries_public
 set(avk_core_libraries_private KTX::ktx)
 if ((AVK_OS STREQUAL "MACOS") OR (AVK_OS STREQUAL "IOS"))
   list(APPEND avk_core_libraries_public Vulkan::MoltenVK)
+  list(APPEND avk_core_libraries_private "-framework Cocoa" "-framework QuartzCore")
 endif ()
 if (AVK_OS STREQUAL "WINDOWS")
   list(APPEND avk_core_libraries_private dwmapi Dbghelp)

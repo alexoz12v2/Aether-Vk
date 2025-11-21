@@ -8,6 +8,9 @@
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
 #  include <android/native_window.h>
 #endif
+#ifdef VK_USE_PLATFORM_METAL_EXT
+#include "avk-metal-helpers.h"
+#endif
 
 namespace avk::vk {
 
@@ -86,7 +89,7 @@ VkExtent2D Surface::internalExtent() const {
 #elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
 #  error "TODO"
 #elif defined(VK_USE_PLATFORM_METAL_EXT)
-#  error "TODO"
+  extent = avkGetDrawableExtent(m_deps.internal.layer);
 #else
 #endif
   return extent;
