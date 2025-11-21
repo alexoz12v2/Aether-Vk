@@ -103,6 +103,7 @@ static pthread_t createThreadOrExit(void *(*proc)(void *),
   return thread;
 }
 
+// TODO refector for all pthread platforms
 static void *renderThreadFunc(void *arg) {
   auto *app = reinterpret_cast<avk::AndroidApp *>(arg);
   avk::ApplicationBase::RTmain(app);

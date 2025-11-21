@@ -108,7 +108,8 @@ class ApplicationBase : public NonMoveable {
 
   inline void UTonUpdate() {
     UTdoOnUpdate();
-    signalStateUpdated();
+    // Signal to render thread handled by derived classes to insert governing
+    // signalStateUpdated();
     // TODO frameRate Governing if necessary
   }
 

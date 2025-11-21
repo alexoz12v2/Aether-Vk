@@ -22,6 +22,7 @@
 
 namespace avk {
 
+// TODO move in desktop shared path
 static std::vector<uint32_t> openSpirV(std::filesystem::path const& path) {
   std::ifstream file(path, std::ios::ate | std::ios::binary);
   if (!file) {
@@ -109,6 +110,9 @@ void WindowsApplication::UTdoOnUpdate() {
     std::unique_lock wLock{m_swapState};
     m_RTcamera.view = m_UTcamera;
   }
+
+  // after update, signal render thread ready to render
+  signalStateUpdated();
 }
 
 void WindowsApplication::UTdoOnInit() {

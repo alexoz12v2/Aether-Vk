@@ -3,10 +3,10 @@
 function(collect_os_specific_files VAR_NAME SRC_DIR OS PUBLIC_OR_PRIVATE)
   # Recurse all files in the given folder
   if (PUBLIC_OR_PRIVATE STREQUAL "public")
-  file(GLOB_RECURSE ALL_FILES CONFIGURE_DEPENDS
-    "${SRC_DIR}/${PUBLIC_OR_PRIVATE}/*.h"
-    "${SRC_DIR}/${PUBLIC_OR_PRIVATE}/*.hpp"
-  )
+    file(GLOB_RECURSE ALL_FILES CONFIGURE_DEPENDS
+      "${SRC_DIR}/${PUBLIC_OR_PRIVATE}/*.h"
+      "${SRC_DIR}/${PUBLIC_OR_PRIVATE}/*.hpp"
+    )
   elseif (PUBLIC_OR_PRIVATE STREQUAL "private")
     set(FILESPECS
       "${SRC_DIR}/${PUBLIC_OR_PRIVATE}/*.cpp"
@@ -33,7 +33,7 @@ function(collect_os_specific_files VAR_NAME SRC_DIR OS PUBLIC_OR_PRIVATE)
   elseif (${OS} STREQUAL "LINUX")
     list(FILTER OS_FILES INCLUDE REGEX "/${PUBLIC_OR_PRIVATE}/os(/linux|/posix)?/.*\\.(h|hpp|cpp)$")
   elseif (${OS} STREQUAL "MACOS")
-    list(FILTER OS_FILES INCLUDE REGEX "/${PUBLIC_OR_PRIVATE}/os(/macos|/apple|/posix)?/.*\\.(h|hpp|cpp)$")
+    list(FILTER OS_FILES INCLUDE REGEX "/${PUBLIC_OR_PRIVATE}/os(/macos|/apple|/posix)?/.*\\.(h|hpp|cpp|m|mm)$")
   elseif (${OS} STREQUAL "ANDROID")
     list(FILTER OS_FILES INCLUDE REGEX "/${PUBLIC_OR_PRIVATE}/os(/android|/posix)/.*\\.(h|hpp|cpp)$")
   elseif (${OS} STREQUAL "IOS")
@@ -68,8 +68,19 @@ set(avk_core_libraries_public
 )
 set(avk_core_libraries_private KTX::ktx)
 if ((AVK_OS STREQUAL "MACOS") OR (AVK_OS STREQUAL "IOS"))
-  list(APPEND avk_core_libraries_public Vulkan::MoltenVK)
-  list(APPEND avk_core_libraries_private "-framework Cocoa" "-framework QuartzCore")
+  # list(APPEND avk_core_libraries_public avk::Vulkan::MoltenVK)
+  list(APPEND avk_core_libraries_private
+    ${MVK_FRAMEWORK} # add MoltenVK framework path
+    "-framework MoltenVK"
+    "-framework Cocoa"
+    "-framework Foundation"
+    "-framework Metal"
+    "-framework QuartzCore"
+    "-framework IOSurface"
+    "-framework IOKit"
+    "-framework CoreGraphics"
+    "-framework CoreServices"
+  )
 endif ()
 if (AVK_OS STREQUAL "WINDOWS")
   list(APPEND avk_core_libraries_private dwmapi Dbghelp)
