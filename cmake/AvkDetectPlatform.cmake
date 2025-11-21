@@ -128,10 +128,10 @@ macro(avk_cxx_flags)
     if (AVK_ARCH STREQUAL "X86_64")
       #string(APPEND CMAKE_CXX_FLAGS " -march=x86-64-v3")
       string(APPEND CMAKE_CXX_FLAGS "")
-    elseif (AVK_ARCH STREQUAL "ARMv7A")
+    elseif (AVK_ARCH STREQUAL "ARM")
       # you need to also check at runtime if you support neon
       string(APPEND CMAKE_CXX_FLAGS " -mfpu=neon")
-    elseif (AVK_ARCH STREQUAL "ARMv8A")
+    elseif (AVK_ARCH STREQUAL "ARM64")
       # Usually nothing needed for AArch64, NEON is baseline
       # If targeting AArch32 (32-bit), you might add: -mfpu=neon
     endif ()
@@ -215,6 +215,26 @@ macro(avk_cxx_flags)
       string(APPEND CMAKE_CXX_FLAGS " -flto -fwhole-program-vtables -O2")
     endif ()
 
+    # if we are on macOS, account for the fact we are not using Apple Clang,
+    # but Homebrew clang, who doesn't know where system headers are even on a
+    # non cross-compilation build
+    # Note: If CMAKE_OSX_ARCHITECTURES has more than one element, you are
+    # using Apple Clang, so in that case it's not needed
+    if (AVK_OS STREQUAL "MACOS")
+      execute_process(
+        COMMAND xcrun --sdk macosx --show-sdk-path
+        OUTPUT_VARIABLE MACOS_SDK
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+      )
+      message(STATUS "[MACOS PATH] found SDK on path ${MACOS_SDK}")
+      string(APPEND CMAKE_CXX_FLAGS " -isysroot ${MACOS_SDK}")
+      string(APPEND CMAKE_OBJC_FLAGS " -isysroot ${MACOS_SDK}")
+      string(APPEND CMAKE_OBJCXX_FLAGS " -isysroot ${MACOS_SDK}")
+    endif ()
+
+    string(APPEND CMAKE_OBJC_FLAGS " -fobjc-arc")
+    string(APPEND CMAKE_OBJCXX_FLAGS " -fobjc-arc")
+
     # return target specific flags
     set(AVK_CXX_TARGET_COMPILE_FLAGS "-Wall;-Wextra;-pedantic;-Werror")
   else ()
@@ -272,9 +292,104 @@ function(avk_setup_dependencies)
   message(STATUS "To use vcpkg, define environment variable before build: VCPKG_ROOT = \"${VCPKG_ROOT}\" (or use target)")
   add_custom_target(avk-vcpkg COMMAND ${VCKPG_COMMAND})
 
+  if (NOT ${VCPKG_MANIFEST_INSTALL})
+    # TODO iOS
+    if (NOT AVK_OS STREQUAL "MACOS")
+      message(FATAL_ERROR "Custom Manual vcpkg install of deps should happen only for macOS (Universal binary management with lipo)")
+    endif ()
+    # unset the target triplet for safety
+    unset(VCPKG_TARGET_TRIPLET)
+    function(avk_vcpkg_macos_install_deps_for_abi abi)
+      get_filename_component(avk_installed_path "${CMAKE_BINARY_DIR}/vcpkg-installed-${abi}" REALPATH)
+      if (NOT EXISTS avk_installed_path)
+        execute_process(
+          COMMAND "${VCPKG_COMMAND}" install
+          --triplet ${abi}-osx
+          --vcpkg-root "${Z_VCPKG_ROOT_DIR}" # should be a cache var
+          "--x-wait-for-lock"
+          "--x-manifest-root=${CMAKE_SOURCE_DIR}"
+          "--x-install-root=${CMAKE_BINARY_DIR}/vcpkg-installed-${abi}"
+          COMMAND_ECHO STDOUT
+          ECHO_OUTPUT_VARIABLE
+          ECHO_ERROR_VARIABLE
+          COMMAND_ERROR_IS_FATAL ANY
+        )
+      else ()
+        message(STATUS "Skipping installation for macOS ${abi} vcpkg dependencies, the directory already exists")
+      endif ()
+    endfunction()
+
+    # vcpkg install for arm64-osx
+    avk_vcpkg_macos_install_deps_for_abi(arm64)
+    # vcpkg install for x64-osx
+    avk_vcpkg_macos_install_deps_for_abi(x64)
+
+    # now we need to somehow use a hack to reproduce a vcpkg structure with
+    # universal binaries
+
+    # copy the vcpkg downloaded cmake scripts from the host
+    if (AVK_ARCH STREQUAL "X86_64")
+      set(avk_vcpkg_host_abi x64)
+    elseif (AVK_ARCH STREQUAL "ARM64")
+      set(avk_vcpkg_host_abi arm64)
+    else ()
+      message(FATAL_ERROR "Unknown macOS Architecture")
+    endif ()
+
+    execute_process(
+      # prepare base vcpkg universal directory
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/vcpkg-installed-universal"
+      # copy shared (scripts) and tools (executables) for host
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${CMAKE_BINARY_DIR}/vcpkg-installed-${avk_vcpkg_host_abi}/${avk_vcpkg_host_abi}-osx/share"
+      "${CMAKE_BINARY_DIR}/vcpkg-installed-universal/share"
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${CMAKE_BINARY_DIR}/vcpkg-installed-${avk_vcpkg_host_abi}/${avk_vcpkg_host_abi}-osx/tools"
+      "${CMAKE_BINARY_DIR}/vcpkg-installed-universal/tools"
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${CMAKE_BINARY_DIR}/vcpkg-installed-${avk_vcpkg_host_abi}/${avk_vcpkg_host_abi}-osx/include"
+      "${CMAKE_BINARY_DIR}/vcpkg-installed-universal/include"
+      COMMAND "${CMAKE_SOURCE_DIR}/scripts/macos-lipo-vcpkg-produce-universal-libraries.sh"
+      "${CMAKE_BINARY_DIR}/vcpkg-installed-arm64/arm64-osx"
+      "${CMAKE_BINARY_DIR}/vcpkg-installed-x64/x64-osx"
+      "${CMAKE_BINARY_DIR}/vcpkg-installed-universal"
+      COMMAND_ECHO STDOUT
+      COMMAND_ERROR_IS_FATAL ANY
+    )
+    # now add all subdirectories of vcpkg-installed-universal/share inside CMAKE_PREFIX_PATH
+    set(VCPKG_SHARE_DIR "${CMAKE_BINARY_DIR}/vcpkg-installed-universal/share")
+    file(GLOB VCPKG_PACKAGE_DIRS "${VCPKG_SHARE_DIR}/*")
+    foreach (PKG_DIR ${VCPKG_PACKAGE_DIRS})
+      if (IS_DIRECTORY "${PKG_DIR}")
+        # match case insensitive (should already be by default in macOS and windows,
+        # even if filesystem is case-sensitive, but just in case)
+        file(GLOB CONFIG_FILES
+          "${PKG_DIR}/*Config.cmake"
+          "${PKG_DIR}/*config.cmake"
+        )
+        if (CONFIG_FILES)
+          # add prefix path
+          list(APPEND CMAKE_PREFIX_PATH "${PKG_DIR}")
+        endif ()
+        file(GLOB FIND_FILES
+          "${PKG_DIR}/Find*.cmake"
+        )
+        if (FIND_FILES)
+          list(APPEND CMAKE_MODULE_PATH "${PKG_DIR}")
+        endif ()
+      endif ()
+    endforeach ()
+
+    # apparently, we need a manual set to Stb include path
+    list(APPEND CMAKE_INCLUDE_PATH "${CMAKE_BINARY_DIR}/vcpkg-installed-universal/include")
+    set(Stb_INCLUDE_DIR "${CMAKE_BINARY_DIR}/vcpkg-installed-universal/include")
+
+    # manual set for the library path? Not necessary apparently
+  endif ()
+
   # Begin Dependencies Setup: Boost
   if (NOT TARGET Boost::fiber)
-    find_package(Boost REQUIRED COMPONENTS fiber)
+    find_package(Boost CONFIG REQUIRED COMPONENTS fiber)
     if (WIN32 AND ${AVK_USE_SANITIZERS})
       message(WARNING "Remapping Debug Boost to Release to avoid ASan vs ucrtbased.dll conflict")
       avk_release_is_debug_for_imported(Boost::fiber)
@@ -315,14 +430,15 @@ function(avk_setup_dependencies)
 
   # PNG: libpng
   if (NOT TARGET PNG::PNG)
-    find_package(PNG REQUIRED)
+    find_package(PNG CONFIG REQUIRED)
     if (WIN32 AND ${AVK_USE_SANITIZERS})
       avk_release_is_debug_for_imported(PNG::PNG)
     endif ()
   endif ()
 
   if (NOT TARGET KTX::ktx)
-    find_package(ktx CONFIG REQUIRED)
+    # note: windows is case insensitive, but ktx config file is actually capitalized on macos
+    find_package(Ktx CONFIG REQUIRED)
     if (WIN32 AND ${AVK_USE_SANITIZERS})
       avk_release_is_debug_for_imported(KTX::ktx)
     endif ()
@@ -371,43 +487,44 @@ endfunction()
 
 
 function(avk_setup_vcpkg)
+  if (DEFINED Z_VCPKG_ROOT_DIR)
+    set(VCPKG_ROOT "${Z_VCPKG_ROOT_DIR}")
+  elseif (IS_DIRECTORY "${CMAKE_BINARY_DIR}/vcpkg")
+    set(Z_VCPKG_ROOT_DIR "${CMAKE_BINARY_DIR}/vcpkg")
+    set(VCPKG_ROOT "${Z_VCPKG_ROOT_DIR}")
+  endif ()
+  if (EXISTS "${VCPKG_ROOT}" AND NOT DEFINED VCPKG_COMMAND)
+    set(VCPKG_COMMAND "${VCPKG_ROOT}/vcpkg")
+  endif ()
+
   if (DEFINED VCPKG_COMMAND AND DEFINED VCPKG_ROOT)
     execute_process(
       COMMAND ${VCPKG_COMMAND} help
-      RESULT_VARIABLE RES
+      COMMAND_ERROR_IS_FATAL ANY
     )
-    if (NOT RES EQUAL 0)
-      message(FATAL_ERROR "repository vcpkg installation invalid. delete the build/vkpkg and build/vcpkg_installed dirs")
-    endif ()
   else ()
     message(STATUS "Fetching vcpkg...")
     execute_process(
       COMMAND git clone https://github.com/microsoft/vcpkg.git
       WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-      RESULT_VARIABLE RES
       ECHO_OUTPUT_VARIABLE
+      COMMAND_ERROR_IS_FATAL ANY
     )
-    if (NOT RES EQUAL 0)
-      message(FATAL_ERROR "Could not clone vcpkg")
-    endif ()
 
     if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
       execute_process(
         COMMAND cmd /c ${CMAKE_BINARY_DIR}/vcpkg/bootstrap-vcpkg.bat
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/vcpkg
-        RESULT_VARIABLE RES
         ECHO_OUTPUT_VARIABLE
+        COMMAND_ERROR_IS_FATAL ANY
       )
     else ()
       execute_process(
         COMMAND ${CMAKE_BINARY_DIR}/vcpkg/bootstrap-vcpkg.sh
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/vcpkg
-        RESULT_VARIABLE RES
         ECHO_OUTPUT_VARIABLE
+        COMMAND_ERROR_IS_FATAL
       )
-    endif ()
-    if (NOT RES EQUAL 0)
-      message(FATAL_ERROR "Couldn't download vcpkg executable")
     endif ()
 
     set(VCPKG_ROOT "${CMAKE_BINARY_DIR}/vcpkg" CACHE STRING "env var for vcpkg" FORCE)
@@ -417,12 +534,12 @@ function(avk_setup_vcpkg)
     else ()
       set(VCPKG_COMMAND ${CMAKE_BINARY_DIR}/vcpkg/vcpkg CACHE STRING "vcpkg executable" FORCE)
     endif ()
-
-    # to include outside of a function context such that dependencies from vcpkg can be handled
-    # VCPKG_CHAINLOAD_TOOLCHAIN_FILE is used as a cache variable to propagate information to main build
-    # so use another name
-    set(VCPKG_TOOLCHAIN_FILE "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "toolchain file" FORCE)
   endif ()
+
+  # to include outside of a function context such that dependencies from vcpkg can be handled
+  # VCPKG_CHAINLOAD_TOOLCHAIN_FILE is used as a cache variable to propagate information to main build
+  # so use another name
+  set(VCPKG_TOOLCHAIN_FILE "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "toolchain file" FORCE)
 
   # <vcpkg root>/buildsystems/vcpkg.cmake assumes, on windows, that we are not cross compiling. wrong.
   if (AVK_OS STREQUAL "ANDROID")

@@ -23,6 +23,12 @@ include(cmake/AvkDetectPlatform.cmake)
 # detect used architecture and setup variable
 avk_detect_platform()
 message(STATUS "Arch=${AVK_ARCH} OS=${AVK_OS} Compiler=${AVK_COMPILER}")
+# iOS/macOS abis manually declared here
+if ((AVK_OS STREQUAL "MACOS" OR AVK_OS STREQUAL "IOS") AND NOT DEFINED CMAKE_OSX_ARCHITECTURES)
+  # set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Target ABIs for iOS/macOS")
+  message(FATAL_ERROR "You need to set properly the 'CMAKE_OSX_ARCHITECTURES' variable")
+endif ()
+
 
 # convenience symlink for android
 if (AVK_OS STREQUAL "ANDROID" AND DEFINED ANDROID_NDK)
@@ -47,7 +53,25 @@ avk_create_vulkan_sdk_library_targets()
 
 # dependencies
 avk_setup_vcpkg()
-include(${VCPKG_TOOLCHAIN_FILE})
+if (AVK_OS STREQUAL "MACOS")
+  list(LENGTH CMAKE_OSX_ARCHITECTURES osx_list_length)
+  if (osx_list_length GREATER 1)
+    message(STATUS "Assuming you are building macOS Universal Binaries")
+    execute_process(
+      COMMAND sh -c "${CMAKE_CXX_COMPILER} --version | awk 'FNR <= 1 {print $1}'"
+      OUTPUT_VARIABLE AVK_CompilerVendor
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      COMMAND_ERROR_IS_FATAL ANY
+    )
+    if (NOT AVK_CompilerVendor STREQUAL "Apple")
+      message(FATAL_ERROR "For a Universal Binary compilation, Apple Clang is the only thing that works. Found: ${AVK_CompilerVendor}")
+    endif ()
+    set(VCPKG_MANIFEST_INSTALL OFF CACHE BOOL "vkpkg call install on toolchain" FORCE)
+  else ()
+    set(VCPKG_MANIFEST_INSTALL ON CACHE BOOL "vkpkg call install on toolchain" FORCE)
+  endif ()
+endif ()
+include("${VCPKG_TOOLCHAIN_FILE}")
 avk_setup_dependencies()
 
 # set CXX flags and define per target (warning) flags

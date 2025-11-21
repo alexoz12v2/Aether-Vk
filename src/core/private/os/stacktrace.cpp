@@ -43,6 +43,10 @@
 #  include <unistd.h>
 #endif
 
+#ifdef AVK_OS_MACOS
+#include "avk-cocoa-helpers.h"
+#endif
+
 #include <iostream>
 #include <mutex>
 #include <sstream>
@@ -232,10 +236,9 @@ void showErrorScreenAndExit(char const* msg) {
   abort();
   // TODO
   // show_error_activity(env, activity, msg);
-#elif defined(__APPLE__) && !defined(TARGET_OS_IOS)
-#  error "TODO
-  ShowErrorScreen(msg);
-#elif defined(__APPLE__) && defined(TARGET_OS_IOS)
+#elif defined(__APPLE__) && !TARGET_OS_IOS
+  avkShowNSAlertAndAbort(msg);
+#elif defined(__APPLE__) && TARGET_OS_IOS
 #  error "TODO
 #elif defined(__linux__)
   fprintf(stderr, "Fatal Error: %s\n", msg);
