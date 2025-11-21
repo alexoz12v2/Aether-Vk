@@ -2,7 +2,7 @@
 
 #import "avk-primary-window.h"
 
-@implementation AvkApplicationDelegate {
+@implementation AVKApplicationDelegate {
   avk::MacosApplication* ivar_app;
   NSWindow* ivar_window;
 }
@@ -10,7 +10,7 @@
 @synthesize window = ivar_window;
 @synthesize app = ivar_app;
 
-- (instancetype) init {
+- (instancetype)init {
   self = [super init];
   if (self) {
     ivar_app = new avk::MacosApplication;
@@ -28,8 +28,11 @@
   return YES;
 }
 
--(void)applicationWillTerminate:(NSNotification*)notification {
-  // Kill Render thread and update thread
+- (void)applicationWillTerminate:(NSNotification*)notification {
+  // destroy application class (render and update thread already joined on
+  // primary window termination)
+  delete ivar_app;
+  ivar_app = nullptr;
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification*)notification {
@@ -37,20 +40,25 @@
 
   // now create main window
   NSRect frame = NSMakeRect(100, 100, 800, 600);
-  ivar_window = [[AVKPrimaryWindow alloc]
+  ivar_window = [[NSWindow alloc]
       initWithContentRect:frame
                 styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                            NSWindowStyleMaskResizable)
                   backing:NSBackingStoreBuffered
                     defer:NO];
   [ivar_window setTitle:@"Window (To Be localized)"];
+  // create controller and set as content
+  _viewController = [[AVKVulkanViewController alloc] initWithApp:ivar_app
+                                                        andFrame:frame];
+  ivar_window.contentViewController = _viewController;
+
+  // set key window and main window as primary window
+  [ivar_window makeMainWindow];
   [ivar_window makeKeyAndOrderFront:nil];
 
   // (not needed since it's not a scoped variable anymore) Keep a reference
   // -> if this is not retain, ARC frees it
-  // objc_setAssociatedObject([NSApplication sharedApplication], @"mainWindow", window, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-  // now initialize vulkan application (start Render Thread an update thread)
-  // create pthreads, which are to be pthread_timed_kill_np at close?
+  // objc_setAssociatedObject([NSApplication sharedApplication], @"mainWindow",
+  // window, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 @end

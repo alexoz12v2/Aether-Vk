@@ -84,6 +84,15 @@ message(STATUS "${avk_shader_file_list}")
 # add_custom_target(avk-copy-static-shaders ALL 
 #   COMMAND ${CMAKE_COMMAND} -E copy ${avk_shader_file_list} ${CMAKE_BINARY_DIR}
 # )
+# TODO better
+add_custom_target(avk-copy-static-shaders ALL
+  COMMAND ${CMAKE_COMMAND} -E copy ${avk_shader_file_list} ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_custom_target(avk-copy-assets ALL
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/assets
+  COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/assets ${CMAKE_CURRENT_BINARY_DIR}/assets
+)
 
 # code
 add_subdirectory(src)

@@ -243,44 +243,100 @@ macro(avk_cxx_flags)
 endmacro()
 
 
-macro(avk_setup_vulkan)
-  if (NOT DEFINED ENV{VULKAN_SDK})
-    message(FATAL_ERROR "VULKAN_SDK Environment Variable not defined. Please install Vulkan SDK >= 1.4 and define that")
+function(avk_setup_vulkan)
+  set(RET_VALUES "")
+  if (AVK_OS STREQUAL "MACOS" OR AVK_OS STREQUAL "IOS")
+    set(MoltenVk_Tar "${CMAKE_BINARY_DIR}/MoltenVk-all.tar")
+    set(MoltenVk_Dir "${CMAKE_BINARY_DIR}/MoltenVK")
+    # make sure you have the MoltenVk Library here
+    if (NOT IS_DIRECTORY "${MoltenVk_Dir}")
+      if (NOT EXISTS "${MoltenVk_Tar}")
+        # contains universal binaries for macOS
+        set(link_molten https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.0/MoltenVK-all.tar)
+        execute_process(
+          COMMAND curl -L -f ${link_molten} -o "${MoltenVk_Tar}"
+          COMMAND tar -xvzf "${MoltenVk_Tar}" -C "${CMAKE_BINARY_DIR}"
+          COMMAND_ERROR_IS_FATAL ANY
+          COMMAND_ECHO STDOUT
+        )
+      else ()
+        execute_process(
+          COMMAND tar -xvzf "${MoltenVk_Tar}" -C "${CMAKE_BINARY_DIR}"
+          COMMAND_ERROR_IS_FATAL ANY
+          COMMAND_ECHO STDOUT
+        )
+      endif ()
+    endif ()
+
+    # MoltenVk Comes with standard vulkan headers. Extract only those
+    # which are needed through a symlink
+    set(MoltenVK_INCLUDE_DIR "${CMAKE_BINARY_DIR}/include_MoltenVK")
+    execute_process(
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${MoltenVK_INCLUDE_DIR}"
+      COMMAND ${CMAKE_COMMAND} -E create_symlink "${MoltenVk_Dir}/MoltenVK/include/MoltenVK" "${MoltenVK_INCLUDE_DIR}/MoltenVK"
+      COMMAND_ECHO STDOUT
+      COMMAND_ERROR_IS_FATAL ANY
+    )
+
+    # prepare imported target to link against static MoltenVk
+    if (AVK_OS STREQUAL "MACOS")
+      # With Volk a static library causes collisions
+      # add_library(MoltenVK STATIC IMPORTED)
+      # set_target_properties(MoltenVK PROPERTIES
+      #   IMPORTED_LOCATION "${MoltenVk_Dir}/MoltenVK/static/MoltenVK.xcframework/macos-arm64_x86_64/libMoltenVK.a"
+      #   INTERFACE_INCLUDE_DIRECTORIES "${MoltenVK_INCLUDE_DIR}"
+      # )
+      # add_library(avk::Vulkan::MoltenVK ALIAS MoltenVK)
+      set(MVK_FRAMEWORK "${MoltenVk_Dir}/MoltenVK/dynamic/MoltenVK.xcframework/macos-arm64_x86_64/MoltenVK.framework")
+      list(APPEND RET_VALUES MVK_FRAMEWORK)
+    else ()
+      message(FATAL_ERROR "TODO")
+    endif ()
+  endif ()
+  return(PROPAGATE ${RET_VALUES})
+endfunction()
+
+
+function(check_vcpkg_universal)
+  set(options)
+  set(oneValueArgs UNIVERSAL_DIR)
+  set(multiValueArgs)
+  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+  if (NOT ARG_UNIVERSAL_DIR)
+    message(FATAL_ERROR "check_vcpkg_universal: UNIVERSAL_DIR argument is required")
   endif ()
 
-  # Note: Should we rely on installed SDK or download it like we do with bazel?
-  if (AVK_OS STREQUAL "MACOS")
-    find_package(Vulkan REQUIRED COMPONENTS MoltenVK)
+  set(UNIVERSAL_DIR "${ARG_UNIVERSAL_DIR}")
+  set(UNIVERSAL_LIB_DIR "${UNIVERSAL_DIR}/lib")
+
+  # Default: need universal merge
+  set(NEED_UNIVERSAL TRUE)
+
+  if (EXISTS "${UNIVERSAL_LIB_DIR}")
+    file(GLOB SOME_LIB "${UNIVERSAL_LIB_DIR}/*.a")
+    if (SOME_LIB)
+      list(GET SOME_LIB 0 TEST_LIB)
+
+      # Check if the library is a universal binary
+      execute_process(
+        COMMAND lipo -info "${TEST_LIB}"
+        OUTPUT_VARIABLE LIPO_INFO
+        ERROR_QUIET
+      )
+      string(STRIP "${LIPO_INFO}" LIPO_INFO)
+      if (LIPO_INFO MATCHES "arm64" AND LIPO_INFO MATCHES "x86_64")
+        set(NEED_UNIVERSAL FALSE)
+      endif ()
+    endif ()
+  endif ()
+
+  if (NEED_UNIVERSAL)
+    set(AVK_LIPO_REQUIRED ON PARENT_SCOPE)
   else ()
-    find_package(Vulkan REQUIRED)
+    set(AVK_LIPO_REQUIRED OFF PARENT_SCOPE)
   endif ()
-  set(SLANGC_COMMAND "${Vulkan_GLSLC_EXECUTABLE}")
-
-  if (WIN32)
-    cmake_path(REPLACE_FILENAME SLANGC_COMMAND "slangc.exe")
-  else ()
-    cmake_path(REPLACE_FILENAME SLANGC_COMMAND "slangc")
-  endif ()
-
-  execute_process(COMMAND ${SLANGC_COMMAND} "--help" RESULT_VARIABLE SLANG_RES OUTPUT_QUIET ERROR_QUIET)
-  if (NOT SLANG_RES EQUAL 0)
-    message(FATAL_ERROR "Couldn't find slangc executable at \"${SLANGC_COMMAND}\", check Vulkan"
-      " SDK Version and possibly upgrade it.")
-  endif ()
-  unset(SLANG_RES)
-
-  cmake_path(REMOVE_FILENAME SLANGC_COMMAND OUTPUT_VARIABLE VULKAN_BIN_PATH)
-  execute_process(
-    COMMAND ${CMAKE_COMMAND} -E create_symlink "${VULKAN_BIN_PATH}" "${CMAKE_SOURCE_DIR}/vulkan-sdk"
-    RESULT_VARIABLE VULKAN_SYMLINK_RES)
-  if (NOT VULKAN_SYMLINK_RES EQUAL 0)
-    message(FATAL_ERROR "Failed to create Symlink to Vulkan SDK bin directory inside the current directory")
-  endif ()
-  unset(VULKAN_SYMLINK_RES)
-  unset(VULKAN_BIN_PATH)
-  # prevent header overrides by vcpkg creating a target alias
-  add_library(VulkanSDK::Headers ALIAS Vulkan::Headers)
-endmacro()
+endfunction()
 
 
 function(avk_setup_dependencies)
@@ -336,26 +392,31 @@ function(avk_setup_dependencies)
       message(FATAL_ERROR "Unknown macOS Architecture")
     endif ()
 
-    execute_process(
-      # prepare base vcpkg universal directory
-      COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/vcpkg-installed-universal"
-      # copy shared (scripts) and tools (executables) for host
-      COMMAND ${CMAKE_COMMAND} -E copy_directory
-      "${CMAKE_BINARY_DIR}/vcpkg-installed-${avk_vcpkg_host_abi}/${avk_vcpkg_host_abi}-osx/share"
-      "${CMAKE_BINARY_DIR}/vcpkg-installed-universal/share"
-      COMMAND ${CMAKE_COMMAND} -E copy_directory
-      "${CMAKE_BINARY_DIR}/vcpkg-installed-${avk_vcpkg_host_abi}/${avk_vcpkg_host_abi}-osx/tools"
-      "${CMAKE_BINARY_DIR}/vcpkg-installed-universal/tools"
-      COMMAND ${CMAKE_COMMAND} -E copy_directory
-      "${CMAKE_BINARY_DIR}/vcpkg-installed-${avk_vcpkg_host_abi}/${avk_vcpkg_host_abi}-osx/include"
-      "${CMAKE_BINARY_DIR}/vcpkg-installed-universal/include"
-      COMMAND "${CMAKE_SOURCE_DIR}/scripts/macos-lipo-vcpkg-produce-universal-libraries.sh"
-      "${CMAKE_BINARY_DIR}/vcpkg-installed-arm64/arm64-osx"
-      "${CMAKE_BINARY_DIR}/vcpkg-installed-x64/x64-osx"
-      "${CMAKE_BINARY_DIR}/vcpkg-installed-universal"
-      COMMAND_ECHO STDOUT
-      COMMAND_ERROR_IS_FATAL ANY
-    )
+    check_vcpkg_universal(UNIVERSAL_DIR "${CMAKE_BINARY_DIR}/vcpkg-installed-universal")
+    if (AVK_LIPO_REQUIRED)
+      execute_process(
+        # prepare base vcpkg universal directory
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/vcpkg-installed-universal"
+        # copy shared (scripts) and tools (executables) for host
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_BINARY_DIR}/vcpkg-installed-${avk_vcpkg_host_abi}/${avk_vcpkg_host_abi}-osx/share"
+        "${CMAKE_BINARY_DIR}/vcpkg-installed-universal/share"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_BINARY_DIR}/vcpkg-installed-${avk_vcpkg_host_abi}/${avk_vcpkg_host_abi}-osx/tools"
+        "${CMAKE_BINARY_DIR}/vcpkg-installed-universal/tools"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_BINARY_DIR}/vcpkg-installed-${avk_vcpkg_host_abi}/${avk_vcpkg_host_abi}-osx/include"
+        "${CMAKE_BINARY_DIR}/vcpkg-installed-universal/include"
+        COMMAND "${CMAKE_SOURCE_DIR}/scripts/macos-lipo-vcpkg-produce-universal-libraries.sh"
+        "${CMAKE_BINARY_DIR}/vcpkg-installed-arm64/arm64-osx"
+        "${CMAKE_BINARY_DIR}/vcpkg-installed-x64/x64-osx"
+        "${CMAKE_BINARY_DIR}/vcpkg-installed-universal"
+        COMMAND_ECHO STDOUT
+        COMMAND_ERROR_IS_FATAL ANY
+      )
+    else ()
+      message(STATUS "Skipping lipo based production of universal binaries")
+    endif ()
     # now add all subdirectories of vcpkg-installed-universal/share inside CMAKE_PREFIX_PATH
     set(VCPKG_SHARE_DIR "${CMAKE_BINARY_DIR}/vcpkg-installed-universal/share")
     file(GLOB VCPKG_PACKAGE_DIRS "${VCPKG_SHARE_DIR}/*")

@@ -10,7 +10,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char const *argv[]) {
     [NSApplication sharedApplication];
 
     // Set up delegate (similar to windows procedure handing)
-    [NSApp setDelegate:[[AvkApplicationDelegate alloc] init]];
+    [NSApp setDelegate:[[AVKApplicationDelegate alloc] init]];
 
     // run main event loop (similiar to WinMain message loop)
     [NSApp run];
