@@ -331,8 +331,8 @@ void MacosApplication::createConstantVulkanResources() AVK_NO_CFI {
     }
     // shaders
     auto const shadersPath = getResourcePath() / "shaders";
-    auto const vertCode = openSpirV(shadersPath / "cube-buffers.vert.spv");
-    auto const fragCode = openSpirV(shadersPath / "cube-buffers.frag.spv");
+    auto const vertCode = openSpirV(shadersPath / "cube-buffers-no-colors.vert.spv");
+    auto const fragCode = openSpirV(shadersPath / "cube-buffers-no-colors.frag.spv");
     VkShaderModule const modules[2]{
         vk::createShaderModule(vkDevice(), vertCode.data(),
                                vertCode.size() << 2),

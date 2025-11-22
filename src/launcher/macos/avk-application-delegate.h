@@ -10,7 +10,6 @@
 @interface AVKApplicationDelegate : NSObject <NSApplicationDelegate>
 // We are using ARC, hence retain shouldn't be necessary. stong is default
 @property(nonatomic, readonly) NSWindow* window;
-@property(assign, nonatomic, readonly) avk::MacosApplication* app;
 @property(nonatomic, readonly) AVKVulkanViewController* viewController;
 // init methods (instancetype is more type safe than id)
 - (instancetype)init NS_DESIGNATED_INITIALIZER;

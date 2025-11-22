@@ -3,12 +3,13 @@
 // framework
 #import <Cocoa/Cocoa.h>
 #import <Metal/Metal.h>
+#import <QuartzCore/CADisplayLink.h>
 #import <QuartzCore/CAMetalLayer.h>
 
 // --------------------------------------------------------------------------
 
 @interface AVKVulkanMetalView () {
-  id _displayLink;
+  CADisplayLink *_displayLink;
   NSTrackingArea *ivar_trackingArea;
 }
 @end
@@ -32,6 +33,10 @@
   }
 }
 
+// TODO:
+// - (void)viewWillStartLiveResize;
+// - (void)viewDidEndLiveResize;
+
 // called in init
 - (void)setupTrackingArea {
   if (ivar_trackingArea) [self removeTrackingArea:ivar_trackingArea];
@@ -52,10 +57,11 @@
   _displayLink = [self displayLinkWithTarget:weakSelf
                                     selector:@selector(displayLinkDidFire:)];
   // start it
-  [_displayLink start];
+  [_displayLink addToRunLoop:[NSRunLoop currentRunLoop]
+                     forMode:NSDefaultRunLoopMode];
 }
 
-- (void)displayLinkDidFire {
+- (void)displayLinkDidFire:(CADisplayLink *)displayLink {
   if ([self.delegate respondsToSelector:@selector(metalViewDrawRequest:)]) {
     [self.delegate metalViewDrawRequest:self];
   }
@@ -71,6 +77,21 @@
 - (BOOL)acceptsFirstResponder {
   return YES;
 }
+
+- (BOOL)becomeFirstResponder {
+  if ([self.delegate respondsToSelector:@selector(viewBecameFirstResponder:)]) {
+    [self.delegate viewBecameFirstResponder:self];
+  }
+  return YES;
+}
+- (BOOL)resignFirstResponder {
+  if ([self.delegate
+          respondsToSelector:@selector(viewResignedFirstResponder:)]) {
+    [self.delegate viewResignedFirstResponder:self];
+  }
+  return YES;
+}
+
 - (CALayer *)makeBackingLayer {
   return [CAMetalLayer layer];
 }
@@ -153,9 +174,20 @@
 }
 - (void)metalView:(AVKVulkanMetalView *)view
     drawableSizeDidChange:(CGSize)size {
+  NSLog(@"-------------- RESIZE -------------------");
   _app->onEnterResize();
-  _app->onResize();
+  // this is detected by render thread
+  // _app->onResize();
   _app->onExitResize();
+}
+
+// Focus
+- (void)viewBecameFirstResponder:(AVKVulkanMetalView *)view {
+  _app->resumeRendering();
+}
+
+- (void)viewResignedFirstResponder:(AVKVulkanMetalView *)view {
+  _app->pauseRendering();
 }
 
 // Rendering
@@ -229,6 +261,7 @@ static pthread_t createThreadOrExit(void *(*proc)(void *),
 
 @implementation AVKVulkanViewController {
   NSRect ivar_frame;
+  avk::MacosApplication *_app;
 }
 - (instancetype)initWithApp:(avk::MacosApplication *)app
                    andFrame:(NSRect)frame {
@@ -276,6 +309,7 @@ static pthread_t createThreadOrExit(void *(*proc)(void *),
   [super viewDidDisappear];
   [_metalView stopDisplayLink];
   // now join both threads
+  _app->pauseRendering();
   _app->signalStopRendering();
   timedJoinOrKill(&_app->RenderThread);
   _app->signalStopUpdating();

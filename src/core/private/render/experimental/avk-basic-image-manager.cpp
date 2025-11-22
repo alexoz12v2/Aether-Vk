@@ -62,6 +62,9 @@ int32_t ImageManager::createTransientAttachment(
 
   if (res == VK_ERROR_OUT_OF_DEVICE_MEMORY && m_deps.device->isSoC()) {
     allocInfo.flags &= ~VMA_ALLOCATION_CREATE_NEVER_ALLOCATE_BIT;
+    LOGW << AVK_LOG_YLW
+        "Failed never allocate lazy allocation. retry without it" AVK_LOG_RST
+         << std::endl;
     res = vmaCreateImage(allocator, &createInfo, &allocInfo, &image, &alloc,
                          nullptr);
   }

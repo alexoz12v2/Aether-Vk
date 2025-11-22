@@ -148,13 +148,17 @@ class ApplicationBase : public NonMoveable {
   /// Desktop method to signal to swapchain to defer recreation unti resize
   /// exited
   void onEnterResize() {
-    assert(*m_vkSwapchain.get());
-    m_vkSwapchain.get()->lockResize();
+    if (windowInitializedOnce()) {
+      assert(*m_vkSwapchain.get());
+      m_vkSwapchain.get()->lockResize();
+    }
   }
 
   void onExitResize() {
-    assert(*m_vkSwapchain.get());
-    m_vkSwapchain.get()->unlockResize();
+    if (windowInitializedOnce()) {
+      assert(*m_vkSwapchain.get());
+      m_vkSwapchain.get()->unlockResize();
+    }
   }
 
   inline void pauseRendering() {
@@ -324,18 +328,18 @@ class ApplicationBase : public NonMoveable {
  protected:
   // --------------- getters for subclasses ----------------------------
   inline VolkDeviceTable const *vkDevTable() const {
-    return m_vkDevice.get()->table();
+    return m_vkDevice->table();
   }
   inline VkPhysicalDevice vkPhysicalDeviceHandle() const {
-    return m_vkDevice.get()->physicalDevice();
+    return m_vkDevice->physicalDevice();
   }
   inline VmaAllocator vmaAllocator() const {
-    return m_vkDevice.get()->vmaAllocator();
+    return m_vkDevice->vmaAllocator();
   }
-  inline VkDevice vkDeviceHandle() const { return m_vkDevice.get()->device(); }
+  inline VkDevice vkDeviceHandle() const { return m_vkDevice->device(); }
   inline uint64_t timeline() const { return m_timeline; }
   inline vk::Instance *vkInstance() { return m_vkInstance.get(); };
-  inline vk::Device *vkDevice() { return m_vkDevice.get(); };
+  inline vk::Device *vkDevice() { return &*m_vkDevice; };
   inline vk::Surface *vkSurface() { return m_vkSurface.get(); };
   inline vk::Swapchain *vkSwapchain() { return m_vkSwapchain.get(); };
   inline vk::DiscardPool *vkDiscardPool() { return m_vkDiscardPool.get(); };
@@ -365,12 +369,15 @@ class ApplicationBase : public NonMoveable {
   void RTcreateDeviceAndDependencies();
 
  private:
+  inline vk::Device *vkDevicePrivate() { return &*m_vkDevice; };
+
   // ----------- Vulkan Basic State -------------
   /// Basic RAII wrapper for VkInstance (using volk)
   DelayedConstruct<vk::Instance> m_vkInstance;
   /// Basic RAII wrapper for VkDevice and VmaAllocator
   /// depends on: `m_vkInstance`, `m_vkSurface`
   DelayedConstruct<vk::Device> m_vkDevice;
+  // std::optional<vk::Device> m_vkDevice;
   /// Basic RAII wrapper for VkSurface
   /// depends on: `m_vkInstance`
   DelayedConstruct<vk::Surface> m_vkSurface;

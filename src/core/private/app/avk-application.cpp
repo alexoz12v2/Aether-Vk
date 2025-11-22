@@ -56,8 +56,8 @@ ApplicationBase::ApplicationBase() {
 ApplicationBase::~ApplicationBase() noexcept AVK_NO_CFI {
   LOGI << "[ApplicationBase] Destructor Running ..." << std::endl;
   if (m_windowInit) {
-    auto const *const vkDevApi = m_vkDevice.get()->table();
-    vkDevApi->vkDeviceWaitIdle(m_vkDevice.get()->device());
+    auto const *const vkDevApi = m_vkDevice->table();
+    vkDevApi->vkDeviceWaitIdle(m_vkDevice->device());
 
     // resource handling mechanisms
     RTdestroyDeviceAndDependencies();
@@ -95,14 +95,17 @@ void ApplicationBase::onWindowInit() AVK_NO_CFI {
 }
 
 void ApplicationBase::onResize() {
-  // since you check for resizes on `vkAcquireNextImageKHR` and on
-  // `vkQueuePresentKHR`, command buffers should already be either clean or
-  // already submitted. In the latter case we would need to wait for the signal
-  // semaphore of their `vkQueueSubmit`. Therefore, to be sure, we discard the
-  // command pool
-  m_vkCommandPools.get()->discardActivePool(m_vkDiscardPool.get(), m_timeline);
-  m_vkSwapchain.get()->recreateSwapchain();
-  RTdoOnResize();
+  if (windowInitializedOnce()) {
+    // since you check for resizes on `vkAcquireNextImageKHR` and on
+    // `vkQueuePresentKHR`, command buffers should already be either clean or
+    // already submitted. In the latter case we would need to wait for the
+    // signal semaphore of their `vkQueueSubmit`. Therefore, to be sure, we
+    // discard the command pool
+    m_vkCommandPools.get()->discardActivePool(m_vkDiscardPool.get(),
+                                              m_timeline);
+    m_vkSwapchain.get()->recreateSwapchain();
+    RTdoOnResize();
+  }
 }
 
 void ApplicationBase::onSurfaceLost() {
@@ -112,7 +115,7 @@ void ApplicationBase::onSurfaceLost() {
 }
 
 void ApplicationBase::RTonRender() AVK_NO_CFI {
-  auto const *const vkDevApi = m_vkDevice.get()->table();
+  auto const *const vkDevApi = m_vkDevice->table();
 
   // TODO per panel refresh flags
   if (!m_shouldRender.load(std::memory_order_relaxed)) {
@@ -143,8 +146,8 @@ void ApplicationBase::RTonRender() AVK_NO_CFI {
 #endif
 
   // prepare VMA for querying memory budget
-  m_vkDevice.get()->refreshMemoryBudgets(m_vkSwapchain.get()->frameIndex());
-  [[maybe_unused]] auto const &memoryBudgets = m_vkDevice.get()->heapBudgets();
+  m_vkDevice->refreshMemoryBudgets(m_vkSwapchain.get()->frameIndex());
+  [[maybe_unused]] auto const &memoryBudgets = m_vkDevice->heapBudgets();
 #ifdef AVK_DEBUG
   if ((m_timeline % 30000) == 0) {
     uint32_t heapIndex = 0;
@@ -183,7 +186,7 @@ void ApplicationBase::RTonRender() AVK_NO_CFI {
   presentInfo.waitSemaphoreCount = 1;
   presentInfo.pWaitSemaphores = &swapchainData.presentSemaphore;
 
-  res = vkDevApi->vkQueuePresentKHR(m_vkDevice.get()->queue(), &presentInfo);
+  res = vkDevApi->vkQueuePresentKHR(m_vkDevice->queue(), &presentInfo);
   if (res == VK_SUBOPTIMAL_KHR || res == VK_ERROR_OUT_OF_DATE_KHR) {
     LOGI << "[RT Render] onResize from presentation" << std::endl;
     onResize();
@@ -236,30 +239,41 @@ void ApplicationBase::RTdestroyDeviceAndDependencies() {
 
   // main 3 handles
   m_vkSwapchain.destroy();
-  m_vkDevice.destroy();
+  m_vkDevice.reset();
 }
 
 void ApplicationBase::RTcreateDeviceAndDependencies() {
 #define PREFIX "[ApplicationBase::RTcreateDeviceAndDependencies] "
-  m_vkDevice.create(m_vkInstance.get(), m_vkSurface.get());
+  m_vkDevice.emplace(m_vkInstance.get(), m_vkSurface.get());
   LOGI << PREFIX "Vulkan Device Created" << std::endl;
+
+  // if you use a non-standard layout class directly stored in memory, the derived
+  // class won't see it properly (neither will protected/public getters)
+  // leave this so that if errors of such kind happen, you know the cause
+  LOGI << PREFIX
+      "Want to see some magic?:\n\t"
+      "Direct Access    = 0x"
+       << (void *)&*m_vkDevice << "\n\tProtected Getter = 0x"
+       << (void *)vkDevice() << "\n\tPrivate Getter   = 0x"
+       << (void *)vkDevicePrivate() << std::endl;
+
   // note: the initial create swapchain might get a surface lost
   // if you quickly exit from the application after entering. We don't care.
-  m_vkSwapchain.create(m_vkInstance.get(), m_vkSurface.get(), m_vkDevice.get());
+  m_vkSwapchain.create(m_vkInstance.get(), m_vkSurface.get(), vkDevice());
   LOGI << PREFIX "Vulkan Swapchain Created" << std::endl;
 
-  m_vkDiscardPool.create(m_vkInstance.get(), m_vkDevice.get());
+  m_vkDiscardPool.create(m_vkInstance.get(), vkDevice());
   m_vkDiscardPoolMonitor.create(m_vkDiscardPool.get());
   LOGI << PREFIX "Discard Pool Created" << std::endl;
-  m_vkCommandPools.create(
-      m_vkDevice.get(), m_vkDevice.get()->universalGraphicsQueueFamilyIndex());
+  m_vkCommandPools.create(vkDevice(),
+                          m_vkDevice->universalGraphicsQueueFamilyIndex());
   LOGI << PREFIX "Command Pools Created" << std::endl;
-  m_vkDescriptorPools.create(m_vkDevice.get());
+  m_vkDescriptorPools.create(vkDevice());
   LOGI << PREFIX "Descriptor Pools Created" << std::endl;
-  m_vkPipelines.create(m_vkDevice.get());
+  m_vkPipelines.create(vkDevice());
   LOGI << PREFIX "Pipeline Pool Created" << std::endl;
-  m_bufferManager.create(m_vkDevice.get());
-  m_imageManager.create(m_vkDevice.get());
+  m_bufferManager.create(vkDevice());
+  m_imageManager.create(vkDevice());
   LOGI << PREFIX "[Experimental] Buffer/Image Manager created" << std::endl;
 #undef PREFIX
 }
@@ -278,7 +292,7 @@ void ApplicationBase::RThandleSurfaceLost() {
   m_vkSurface.destroy();
   vk::SurfaceSpec surfSpec = doSurfaceSpec();
   m_vkSurface.create(m_vkInstance.get(), surfSpec);
-  m_vkSwapchain.create(m_vkInstance.get(), m_vkSurface.get(), m_vkDevice.get());
+  m_vkSwapchain.create(m_vkInstance.get(), m_vkSurface.get(), vkDevice());
   LOGI << PREFIX "Swapchain And Surface Recreated" << std::endl;
   RTdoLateSurfaceRegained();
 #undef PREFIX

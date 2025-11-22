@@ -147,9 +147,12 @@ macro(avk_cxx_flags)
           if ((AVK_ARCH STREQUAL "X86") OR (AVK_ARCH STREQUAL "X86_64"))
             string(APPEND CMAKE_CXX_FLAGS " -fsanitize=safe-stack")
           endif ()
-        elseif (AVK_OS STREQUAL "MACOS")
-          string(APPEND CMAKE_CXX_FLAGS " -fsanitize=thread -fsanitize=leak")
         endif ()
+        # "clang++: error: unsupported option '-fsanitize=leak' for target 'arm64-apple-darwin25.0.0'"
+        # "clang++: error: invalid argument '-fsanitize=address' not allowed with '-fsanitize=thread'"
+        #elseif (AVK_OS STREQUAL "MACOS")
+        #  string(APPEND CMAKE_CXX_FLAGS " -fsanitize=thread -fsanitize=leak")
+        #endif ()
 
         # Common sanitizers which should work (on desktop at least)
         if (NOT (AVK_OS STREQUAL "ANDROID") AND NOT (AVK_OS STREQUAL "IOS"))
@@ -159,7 +162,12 @@ macro(avk_cxx_flags)
           # -fsanitize=cfi-vcall -> CRASH
           # -fsanitize=cfi-mfcall -> doesn't exist on windows
           # string(APPEND CMAKE_CXX_FLAGS " -flto -fsanitize=cfi")
-          string(APPEND CMAKE_CXX_FLAGS " -flto -fsanitize=cfi-cast-strict -fsanitize=cfi-nvcall -fsanitize=cfi-icall -fsanitize=cfi-derived-cast -fsanitize=cfi-unrelated-cast")
+          if (NOT AVK_OS STREQUAL "MACOS")
+            # Apparently, I can debug only Objective-C code when using LTO
+            string(APPEND CMAKE_CXX_FLAGS " -flto -fsanitize=cfi-cast-strict -fsanitize=cfi-nvcall -fsanitize=cfi-icall -fsanitize=cfi-derived-cast -fsanitize=cfi-unrelated-cast")
+          else ()
+            string(APPEND CMAKE_CXX_FLAGS " -fno-omit-frame-pointer")
+          endif ()
         endif ()
 
         # windows has to copy the DLLs as usual
@@ -201,10 +209,16 @@ macro(avk_cxx_flags)
         endif ()
       else ()
         set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDebugDLL")
-        string(APPEND CMAKE_CXX_FLAGS " -flto")
+        # Why is LTO on a debug build?
+        # string(APPEND CMAKE_CXX_FLAGS " -flto")
       endif ()
 
       string(APPEND CMAKE_CXX_FLAGS " -g -O0")
+      if (AVK_OS STREQUAL "MACOS" OR AVK_OS STREQUAL "IOS")
+        string(APPEND CMAKE_CXX_FLAGS " -gdwarf")
+        string(APPEND CMAKE_OBJC_FLAGS " -gdwarf")
+        string(APPEND CMAKE_OBJCXX_FLAGS " -gdwarf")
+      endif ()
     elseif (CMAKE_BUILD_TYPE STREQUAL "Release")
       string(APPEND CMAKE_CXX_FLAGS " -flto -fwhole-program-vtables -O2")
     elseif (CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
@@ -255,17 +269,15 @@ function(avk_setup_vulkan)
         set(link_molten https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.0/MoltenVK-all.tar)
         execute_process(
           COMMAND curl -L -f ${link_molten} -o "${MoltenVk_Tar}"
-          COMMAND tar -xvzf "${MoltenVk_Tar}" -C "${CMAKE_BINARY_DIR}"
-          COMMAND_ERROR_IS_FATAL ANY
-          COMMAND_ECHO STDOUT
-        )
-      else ()
-        execute_process(
-          COMMAND tar -xvzf "${MoltenVk_Tar}" -C "${CMAKE_BINARY_DIR}"
           COMMAND_ERROR_IS_FATAL ANY
           COMMAND_ECHO STDOUT
         )
       endif ()
+      execute_process(
+        COMMAND tar -xvzf "${MoltenVk_Tar}" -C "${CMAKE_BINARY_DIR}"
+        COMMAND_ERROR_IS_FATAL ANY
+        COMMAND_ECHO STDOUT
+      )
     endif ()
 
     # MoltenVk Comes with standard vulkan headers. Extract only those
@@ -273,6 +285,10 @@ function(avk_setup_vulkan)
     set(MoltenVK_INCLUDE_DIR "${CMAKE_BINARY_DIR}/include_MoltenVK")
     execute_process(
       COMMAND ${CMAKE_COMMAND} -E make_directory "${MoltenVK_INCLUDE_DIR}"
+      COMMAND_ECHO STDOUT
+      COMMAND_ERROR_IS_FATAL ANY
+    )
+    execute_process(
       COMMAND ${CMAKE_COMMAND} -E create_symlink "${MoltenVk_Dir}/MoltenVK/include/MoltenVK" "${MoltenVK_INCLUDE_DIR}/MoltenVK"
       COMMAND_ECHO STDOUT
       COMMAND_ERROR_IS_FATAL ANY
@@ -288,7 +304,9 @@ function(avk_setup_vulkan)
       # )
       # add_library(avk::Vulkan::MoltenVK ALIAS MoltenVK)
       set(MVK_FRAMEWORK "${MoltenVk_Dir}/MoltenVK/dynamic/MoltenVK.xcframework/macos-arm64_x86_64/MoltenVK.framework")
-      list(APPEND RET_VALUES MVK_FRAMEWORK)
+      set(MVK_DYLIB "${MoltenVk_Dir}/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib")
+      set(MVK_ICD_JSON "${MoltenVk_Dir}/MoltenVK/dynamic/dylib/macOS/MoltenVK_icd.json")
+      list(APPEND RET_VALUES MVK_FRAMEWORK MVK_DYLIB MVK_ICD_JSON)
     else ()
       message(FATAL_ERROR "TODO")
     endif ()
@@ -584,7 +602,7 @@ function(avk_setup_vcpkg)
         COMMAND ${CMAKE_BINARY_DIR}/vcpkg/bootstrap-vcpkg.sh
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/vcpkg
         ECHO_OUTPUT_VARIABLE
-        COMMAND_ERROR_IS_FATAL
+        COMMAND_ERROR_IS_FATAL ANY
       )
     endif ()
 
@@ -675,20 +693,4 @@ endfunction()
 
 
 function(avk_create_vulkan_sdk_library_targets)
-  if (NOT DEFINED Vulkan_LIBRARY)
-    message(FATAL_ERROR "Must use FindVulkan.cmake before calling `avk_create_vulkan_sdk_library_targets`")
-  endif ()
-  # static volk library
-  # if(WIN32)
-  #     set(VOLK_NAME "volk.lib")
-  # else()
-  #     message(FATAL_ERROR "TODO volk")
-  # endif()
-  # cmake_path(REPLACE_FILENAME Vulkan_LIBRARY "${VOLK_NAME}" OUTPUT_VARIABLE VK_VOLK_LIB_PATH)
-  # # we won't set include directory as we assume you are including Vulkan::Vulkan
-  # add_library(vk-volk STATIC IMPORTED)
-  # set_target_properties(vk-volk PROPERTIES
-  #   IMPORTED_LOCATION "${VK_VOLK_LIB_PATH}"
-  # )
-  # add_library(vk::volk ALIAS vk-volk)
 endfunction()

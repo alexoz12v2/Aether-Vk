@@ -8,7 +8,6 @@
 }
 // declare memory backings for properties
 @synthesize window = ivar_window;
-@synthesize app = ivar_app;
 
 - (instancetype)init {
   self = [super init];
@@ -53,7 +52,10 @@
   ivar_window.contentViewController = _viewController;
 
   // set key window and main window as primary window
-  [ivar_window makeMainWindow];
+  //--  *** Assertion failure in -[NSWindow _changeJustMain], NSWindow.m:14794
+  //--  An uncaught exception was raised
+  //--  Invalid parameter not satisfying: [self canBecomeMainWindow]
+  // [ivar_window makeMainWindow];
   [ivar_window makeKeyAndOrderFront:nil];
 
   // (not needed since it's not a scoped variable anymore) Keep a reference

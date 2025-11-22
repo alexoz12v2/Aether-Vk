@@ -194,10 +194,11 @@ Instance::Instance() AVK_NO_CFI {
   // opt: VK_KHR_portability_enumeration
   // Instance extension to support instances over a translation layer
   // (Metal on Apple devices)
-  if (extensions.isSupported(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
-    extensions.enable(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
-    m_portabilityEnumeration = true;
-  }
+#if defined(VK_USE_PLATFORM_METAL_EXT)
+  // Skip check because it's a portability instance extension
+  extensions.enabled.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+  m_portabilityEnumeration = true;
+#endif
   // VK_KHR_get_surface_capabilities2 for extensible queries on surfaces
   AVK_EXT_CHECK(
       extensions.enable(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME));
@@ -206,7 +207,7 @@ Instance::Instance() AVK_NO_CFI {
   // and scaling caps
   AVK_EXT_CHECK(extensions.enable(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME));
 #ifdef AVK_DEBUG
-  // opt: VK_EXT_debug_utils for messenger callbacks
+  // TODO: VK_EXT_debug_utils for messenger callbacks required for debug desktop
   if (extensions.isSupported(VK_EXT_DEBUG_REPORT_EXTENSION_NAME)) {
     LOGI << "[Instance::CreateInstance] Found VK_EXT_debug_report" << std::endl;
     extensions.enable(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
