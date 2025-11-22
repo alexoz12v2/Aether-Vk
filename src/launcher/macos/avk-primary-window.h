@@ -31,6 +31,8 @@
 // Lifecycle
 - (void)metalViewDidMoveToWindow:(AVKVulkanMetalView*)view;
 - (void)metalView:(AVKVulkanMetalView*)view drawableSizeDidChange:(CGSize)size;
+- (void)metalViewWillStartLiveResize:(AVKVulkanMetalView*)view;
+- (void)metalViewDidEndLiveResize:(AVKVulkanMetalView*)view;
 
 // Focus
 - (void)viewBecameFirstResponder:(AVKVulkanMetalView*)view;

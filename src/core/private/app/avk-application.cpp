@@ -144,6 +144,10 @@ void ApplicationBase::RTonRender() AVK_NO_CFI {
     VK_CHECK(vkDevApi->vkResetFences(dev, 1, &swapchainData.submissionFence));
   }
 #endif
+  // reset the fence only after a successful acquisition, avoiding fence freeze
+  // when reacquiring for the same frame after a resize
+  VK_CHECK(vkDevApi->vkResetFences(m_vkDevice->device(), 1,
+                                   &swapchainData.submissionFence));
 
   // prepare VMA for querying memory budget
   m_vkDevice->refreshMemoryBudgets(m_vkSwapchain.get()->frameIndex());
@@ -175,6 +179,10 @@ void ApplicationBase::RTonRender() AVK_NO_CFI {
   // increment timeline on successful submit
   m_timeline++;
 
+  // increment frame index after submission (fence is what we care about)
+  // NOT presentation (otherwise might deadlock on submission fence)
+  m_vkSwapchain.get()->signalNextFrame();
+
   // queue present
   VkSwapchainKHR const swapchain = m_vkSwapchain.get()->handle();
   uint32_t const imageIndex = m_vkSwapchain.get()->imageIndex();
@@ -200,9 +208,6 @@ void ApplicationBase::RTonRender() AVK_NO_CFI {
   } else {  // TODO VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT
     VK_CHECK(res);
   }
-
-  // increment frame index only after successful presentation or out of date
-  m_vkSwapchain.get()->signalNextFrame();
 }
 
 void ApplicationBase::onSaveState() { doOnSaveState(); }
@@ -247,8 +252,8 @@ void ApplicationBase::RTcreateDeviceAndDependencies() {
   m_vkDevice.emplace(m_vkInstance.get(), m_vkSurface.get());
   LOGI << PREFIX "Vulkan Device Created" << std::endl;
 
-  // if you use a non-standard layout class directly stored in memory, the derived
-  // class won't see it properly (neither will protected/public getters)
+  // if you use a non-standard layout class directly stored in memory, the
+  // derived class won't see it properly (neither will protected/public getters)
   // leave this so that if errors of such kind happen, you know the cause
   LOGI << PREFIX
       "Want to see some magic?:\n\t"

@@ -134,11 +134,17 @@ void DiscardPool::destroyDiscardedResources(bool force) AVK_NO_CFI {
       timeline, [dev, vkDevApi](VkImageView imageView) AVK_NO_CFI {
         vkDevApi->vkDestroyImageView(dev, imageView, nullptr);
       });
-  m_images.removeOld(timeline,
-                     [vmaAllocator = m_deps.device->vmaAllocator()](
-                         VMAResource<VkImage> const& pair) AVK_NO_CFI {
-                       vmaDestroyImage(vmaAllocator, pair.handle, pair.alloc);
-                     });
+  m_images.removeOld(
+      timeline, [vmaAllocator = m_deps.device->vmaAllocator(), vkDevApi,
+                 dev](VMAResource<VkImage> const& pair) AVK_NO_CFI {
+        if (pair.handle != VK_NULL_HANDLE && pair.alloc != VK_NULL_HANDLE) {
+          vmaDestroyImage(vmaAllocator, pair.handle, pair.alloc);
+        } else if (pair.handle != VK_NULL_HANDLE) {
+          vkDevApi->vkDestroyImage(dev, pair.handle, nullptr);
+        } else {
+          vmaFreeMemory(vmaAllocator, pair.alloc);
+        }
+      });
   // buffer and buffer views (Note: View first)
   m_bufferViews.removeOld(
       timeline, [dev, vkDevApi](VkBufferView bufferView) AVK_NO_CFI {

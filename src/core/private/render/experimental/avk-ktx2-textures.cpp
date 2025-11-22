@@ -421,7 +421,8 @@ void TextureLoaderKTX2::Impl::discardById(vk::DiscardPool* discardPool,
 
   // now discard
   discardPool->discardImageView(inOutInfo.imageView, timeline);
-  discardPool->discardImage(image, alloc, timeline);
+  discardPool->discardImage(image, VK_NULL_HANDLE, timeline);
+  discardPool->discardImage(VK_NULL_HANDLE, alloc, timeline);
 
   // clean caller's object
   inOutInfo.imageView = VK_NULL_HANDLE;

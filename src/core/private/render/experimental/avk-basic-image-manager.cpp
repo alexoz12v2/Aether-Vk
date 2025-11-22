@@ -46,7 +46,9 @@ int32_t ImageManager::createTransientAttachment(
   } else {
     // WARN: This is experimental and it may fail if there's no lazily allocated
     // memory type
-    allocInfo.flags = VMA_ALLOCATION_CREATE_NEVER_ALLOCATE_BIT;
+    // WARN UPDATE: When an allocation fails, VMA will silently leak metadata
+    // and VMA will think that we are leaking something
+    // allocInfo.flags = VMA_ALLOCATION_CREATE_NEVER_ALLOCATE_BIT;
   }
   allocInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;  // not needed?
   allocInfo.priority = 1.f;
