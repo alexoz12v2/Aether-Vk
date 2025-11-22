@@ -68,10 +68,9 @@ set(avk_core_libraries_public
 )
 set(avk_core_libraries_private KTX::ktx)
 if ((AVK_OS STREQUAL "MACOS") OR (AVK_OS STREQUAL "IOS"))
-  # list(APPEND avk_core_libraries_public avk::Vulkan::MoltenVK)
+  # Volk loads MoltenVK at runtime! Just bundle it.
+  # list(APPEND avk_core_libraries_public "${MVK_DYLIB}")
   list(APPEND avk_core_libraries_private
-    ${MVK_FRAMEWORK} # add MoltenVK framework path
-    "-framework MoltenVK"
     "-framework Cocoa"
     "-framework Foundation"
     "-framework Metal"

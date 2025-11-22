@@ -1,9 +1,10 @@
 #pragma once
 
-#include "avk-macos-application.h"
-
 // Frameworks
 #import <Cocoa/Cocoa.h>
+#import <QuartzCore/CAMetalLayer.h>
+
+#import "avk-macos-application.h"
 
 // --------------------------------------------------------------------------
 
@@ -17,7 +18,6 @@
 
 @interface AVKVulkanViewController : NSViewController
 @property(nonatomic, readonly) AVKVulkanMetalView* metalView;
-@property(nonatomic, readonly) avk::MacosApplication* app;
 @property(nonatomic, readonly) id<AVKVulkanMetalViewDelegate> bridge;
 
 - (instancetype)initWithApp:(avk::MacosApplication*)app andFrame:(NSRect)frame;
@@ -31,6 +31,10 @@
 // Lifecycle
 - (void)metalViewDidMoveToWindow:(AVKVulkanMetalView*)view;
 - (void)metalView:(AVKVulkanMetalView*)view drawableSizeDidChange:(CGSize)size;
+
+// Focus
+- (void)viewBecameFirstResponder:(AVKVulkanMetalView*)view;
+- (void)viewResignedFirstResponder:(AVKVulkanMetalView*)view;
 
 // Rendering
 - (void)metalViewDrawRequest:(AVKVulkanMetalView*)view;

@@ -7,6 +7,7 @@ cmake_minimum_required(VERSION 4.1.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_MACOSX_RPATH ON)
 
 # cache variables
 option(AVK_USE_SANITIZERS "Use sanitizers during non-release compilations with LLVM toolchain")

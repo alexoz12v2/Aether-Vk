@@ -83,7 +83,7 @@ static void fillRequiredExtensions(
   requiredExtensions.push_back(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME);
 #endif
 #if defined(__APPLE__)
-  requiredExtensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+  requiredExtensions.push_back("VK_KHR_portability_subset");
   requiredExtensions.push_back(VK_EXT_EXTERNAL_MEMORY_METAL_EXTENSION_NAME);
 #endif
   requiredExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
@@ -149,8 +149,6 @@ static std::vector<std::string> anyRequiredFeaturesMissing(VkPhysicalDevice dev)
     missing.push_back("inlineUniformBlock");
   if (!shaderDrawFeat.shaderDrawParameters)
     missing.push_back("shaderDrawParameters");
-  // TODO remove
-  if (!features.features.geometryShader) missing.push_back("geometryShader");
 
   // While bufferDeviceAddress is useful when you are doing GPU-driven
   // rendering or complex setups on compute shaders, as it allows you to work
@@ -561,8 +559,6 @@ static VkDevice createDevice(VkInstance instance,
   if (optFeatures.textureCompressionETC2) {
     features.features.textureCompressionETC2 = VK_TRUE;
   }
-  // TODO remove
-  features.features.geometryShader = VK_TRUE;
 
   // Create the device::General Setup
   VkDevice device = VK_NULL_HANDLE;
