@@ -487,8 +487,6 @@ VkResult Swapchain::acquireNextImage(VkFence acquireFence) AVK_NO_CFI {
       // timeout is actually a success code (>0), hence check won't catch that
       VK_CHECK(res);
     } while (res == VK_TIMEOUT);
-    VK_CHECK(
-        vkDevApi->vkResetFences(dev, 1, &m_frames[frameIndex].submissionFence));
   }
 
   // TODO: HDR Support: check if display changed its color space.

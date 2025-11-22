@@ -33,9 +33,19 @@
   }
 }
 
-// TODO:
-// - (void)viewWillStartLiveResize;
-// - (void)viewDidEndLiveResize;
+- (void)viewWillStartLiveResize {
+  if ([self.delegate
+          respondsToSelector:@selector(metalViewWillStartLiveResize:)]) {
+    [self.delegate metalViewWillStartLiveResize:self];
+  }
+}
+
+- (void)viewDidEndLiveResize {
+  if ([self.delegate
+          respondsToSelector:@selector(metalViewDidEndLiveResize:)]) {
+    [self.delegate metalViewDidEndLiveResize:self];
+  }
+}
 
 // called in init
 - (void)setupTrackingArea {
@@ -174,10 +184,15 @@
 }
 - (void)metalView:(AVKVulkanMetalView *)view
     drawableSizeDidChange:(CGSize)size {
-  NSLog(@"-------------- RESIZE -------------------");
-  _app->onEnterResize();
   // this is detected by render thread
   // _app->onResize();
+}
+
+- (void)metalViewWillStartLiveResize:(AVKVulkanMetalView *)view {
+  _app->onEnterResize();
+}
+
+- (void)metalViewDidEndLiveResize:(AVKVulkanMetalView *)view {
   _app->onExitResize();
 }
 
@@ -229,21 +244,6 @@ static void *updateThreadFunc(void *arg) {
   avk::ApplicationBase::UTmain(app);
   pthread_exit(nullptr);
   return nullptr;
-}
-
-static void timedJoinOrKill(pthread_t *thread) {
-  uint64_t const startMicro = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000;
-  uint64_t endMicro = startMicro;
-  pthread_t tid = *thread;
-  *thread = nullptr;
-  while (endMicro - startMicro < 10'000) {
-    if (pthread_kill(tid, 0) == ESRCH) {
-      pthread_join(tid, nullptr);
-      return;
-    }
-    endMicro = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000;
-  }
-  pthread_kill(tid, SIGKILL);
 }
 
 // TODO move to posix path
@@ -311,9 +311,11 @@ static pthread_t createThreadOrExit(void *(*proc)(void *),
   // now join both threads
   _app->pauseRendering();
   _app->signalStopRendering();
-  timedJoinOrKill(&_app->RenderThread);
+  pthread_join(_app->RenderThread, nullptr);
+  _app->RenderThread = nullptr;
   _app->signalStopUpdating();
-  timedJoinOrKill(&_app->UpdateThread);
+  pthread_join(_app->UpdateThread, nullptr);
+  _app->UpdateThread = nullptr;
 }
 
 @end
