@@ -4,6 +4,8 @@
 
 namespace avk {
 
+using id_t = uint64_t;
+
 template <typename T>
 inline constexpr T max(T t0, T t1) {
   return t0 > t1 ? t0 : t1;
