@@ -196,11 +196,13 @@ static void setDepthStencilStateCreateInfo(
   // TODO handle transparency and more depth modes if necessary
   // TODO if necessary, add disable depth on VK_FORMAT_UNDEFINED
   using namespace avk::vk;
-  if (graphicsInfo.opts.flags & EPipelineFlags::eNoDepthWrite) {
+  if (static_cast<bool>(graphicsInfo.opts.flags &
+                        EPipelineFlags::eNoDepthWrite)) {
     depthStencilState.depthWriteEnable = VK_FALSE;
   }
 
-  if (graphicsInfo.opts.flags & EPipelineFlags::eStencilEnable &&
+  if (static_cast<bool>(graphicsInfo.opts.flags &
+                        EPipelineFlags::eStencilEnable) &&
       graphicsInfo.fragmentOut.stencilAttachmentFormat != VK_FORMAT_UNDEFINED) {
     depthStencilState.stencilTestEnable = VK_TRUE;
     switch (graphicsInfo.opts.stencilCompareOp) {
@@ -532,7 +534,7 @@ VkPipeline PipelinePool::getOrCreateGraphicsPipeline(
       static_cast<uint32_t>(graphicsInfo.fragmentShader.scissors.size());
 
   // -- Graphics Pipeline: Rasterization State --
-  if (graphicsInfo.opts.flags & EPipelineFlags::eDepthBias) {
+  if (static_cast<bool>(graphicsInfo.opts.flags & EPipelineFlags::eDepthBias)) {
     // VUID-VkGraphicsPipelineCreateInfo-pDynamicStates-00754
     // if depthBias and no depthBiasClamp feature enabled (TODO) then 0
     m_pipelineRasterizationStateCreateInfo.depthBiasEnable = VK_TRUE;
@@ -544,13 +546,15 @@ VkPipeline PipelinePool::getOrCreateGraphicsPipeline(
   // TODO: check polygon mode support
   m_pipelineRasterizationStateCreateInfo.polygonMode =
       graphicsInfo.opts.rasterizationPolygonMode;
-  if (graphicsInfo.opts.flags & ~EPipelineFlags::eCull) {
+  if (static_cast<bool>(graphicsInfo.opts.flags & ~EPipelineFlags::eCull)) {
     m_pipelineRasterizationStateCreateInfo.cullMode = VK_CULL_MODE_NONE;
-  } else if (graphicsInfo.opts.flags & EPipelineFlags::eCullFront) {
+  } else if (static_cast<bool>(graphicsInfo.opts.flags &
+                               EPipelineFlags::eCullFront)) {
     m_pipelineRasterizationStateCreateInfo.cullMode = VK_CULL_MODE_FRONT_BIT;
   }  // else default: cull back face
 
-  if (graphicsInfo.opts.flags & EPipelineFlags::eInvertFrontFace) {
+  if (static_cast<bool>(graphicsInfo.opts.flags &
+                        EPipelineFlags::eInvertFrontFace)) {
     m_pipelineRasterizationStateCreateInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
   }
   // TODO maybe provoking vertex
