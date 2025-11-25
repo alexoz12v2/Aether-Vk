@@ -23,6 +23,7 @@
 #include <mutex>
 #include <thread>
 
+#include "event/system.h"
 #include "os/avk-time.h"
 
 namespace avk {
@@ -93,6 +94,10 @@ class ApplicationBase : public NonMoveable {
   ApplicationBase();
   virtual ~ApplicationBase() noexcept;
 
+  /// Public method to register platform events from Window callbacks. Objects
+  /// should have access to the event system itself instead
+  void publishPlatformEvent(Event const& ev);
+
   // -------------------- Update Thread - Main Thread Coordination -------
   inline bool UTshouldRun() const {
     return m_updateCoordinator.updateShouldRun.load(std::memory_order_acquire);
@@ -107,6 +112,9 @@ class ApplicationBase : public NonMoveable {
   inline void UTonInit() { UTdoOnInit(); }
 
   inline void UTonUpdate() {
+    // first process events
+    m_eventSystem.UTprocessEvents();
+    // then updates
     UTdoOnUpdate();
     // Signal to render thread handled by derived classes to insert governing
     // signalStateUpdated();
@@ -327,6 +335,8 @@ class ApplicationBase : public NonMoveable {
 
  protected:
   // --------------- getters for subclasses ----------------------------
+  inline EventSystem* eventSystem() { return &m_eventSystem; }
+
   inline VolkDeviceTable const *vkDevTable() const {
     return m_vkDevice->table();
   }
@@ -425,6 +435,9 @@ class ApplicationBase : public NonMoveable {
   /// if this is `false`, the `RTonRender` function returns immediately without
   /// calling the `RTdoOnRender` function, and doesn't increment the timeline
   std::atomic_bool m_shouldRender = false;
+
+  // -- Event System: publish from any thread, process on UT ------
+  EventSystem m_eventSystem;
 };
 
 }  // namespace avk

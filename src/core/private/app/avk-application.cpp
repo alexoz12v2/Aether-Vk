@@ -2,6 +2,41 @@
 
 namespace avk {
 
+// --------------------------- Static impl details ------------------------
+static void addPlatformEvents(avk::EventSystem *eventSystem) {
+#if defined(AVK_OS_ANDROID) || defined(AVK_OS_IOS)
+  eventSystem->addEvent(events::EvTouchBegin);
+  eventSystem->addEvent(events::EvTouchEnd);
+  eventSystem->addEvent(events::EvTouchMove);
+  eventSystem->addEvent(events::EvTouchCancel);
+  eventSystem->addEvent(events::EvAppPause);
+  eventSystem->addEvent(events::EvAppResume);
+  eventSystem->addEvent(events::EvAppLowMemory);
+#elif defined(AVK_OS_WINDOWS) || defined(AVK_OS_LINUX) || defined(AVK_OS_MACOS)
+  eventSystem->addEvent(events::EvKeyDown);
+  eventSystem->addEvent(events::EvKeyUp);
+  eventSystem->addEvent(events::EvKeyRepeat);
+  eventSystem->addEvent(events::EvMouseButtonDown);
+  eventSystem->addEvent(events::EvMouseButtonUp);
+  eventSystem->addEvent(events::EvMouseMove);
+  eventSystem->addEvent(events::EvMouseScrollUp);
+  eventSystem->addEvent(events::EvMouseScrollDown);
+  eventSystem->addEvent(events::EvMouseEnter);
+  eventSystem->addEvent(events::EvMouseLeave);
+#else
+#  error "Unrecognized OS platoform"
+#endif
+  // common events
+  eventSystem->addEvent(events::EvTextInput);
+  eventSystem->addEvent(events::EvWindowResize);
+  eventSystem->addEvent(events::EvWindowClose);
+  eventSystem->addEvent(events::EvWindowFocus);
+  eventSystem->addEvent(events::EvWindowLostFocus);
+  eventSystem->addEvent(events::EvWindowMinimize);
+  eventSystem->addEvent(events::EvWindowMaximize);
+  eventSystem->addEvent(events::EvWindowRestore);
+}
+
 // ----------------------------- Entry Points ----------------------------
 
 void ApplicationBase::RTmain(ApplicationBase *app) {
@@ -48,9 +83,12 @@ void ApplicationBase::UTmain(ApplicationBase *app) {
 // ---------------------------- Class Implementation -------------------------
 
 ApplicationBase::ApplicationBase() {
+  // Vulkan State Initialization
   m_vkInstance.create();
   LOGI << "[ApplicationBase] Vulkan Instance " << std::hex
        << m_vkInstance.get()->handle() << std::dec << " Created" << std::endl;
+  // Event System Initialization
+  addPlatformEvents(&m_eventSystem);
 }
 
 ApplicationBase::~ApplicationBase() noexcept AVK_NO_CFI {
@@ -317,6 +355,11 @@ void ApplicationBase::RTwindowInit() {
   m_windowInit.store(true, std::memory_order_release);
   m_renderCoordinator.renderRunning.store(true, std::memory_order_release);
 }
+
+void ApplicationBase::publishPlatformEvent(const Event &ev) {
+  m_eventSystem.publish(ev);
+}
+
 #undef PREFIX
 
 }  // namespace avk

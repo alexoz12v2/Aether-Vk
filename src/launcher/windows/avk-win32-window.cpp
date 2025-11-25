@@ -25,12 +25,12 @@
 
 // Older DPI APIs (Windows 8 )
 #include <shellscalingapi.h>
-#pragma comment(lib, "Shcore.lib")  // TODO move to cmake/bazel
+#pragma comment(lib, "Shcore.lib")
 
 // Component Object Model
 // https://www.221bluestreet.com/offensive-security/windows-components-object-model/demystifying-windows-component-object-model-com#what-is-a-com-object
 #include <Objbase.h>
-#pragma comment(lib, "Ole32.lib")  // TODO move to cmake/bazel
+#pragma comment(lib, "Ole32.lib")
 
 #include <atomic>
 #include <cassert>
@@ -42,6 +42,140 @@
 namespace avk {
 
 // ------------------------ Static Functions ---------------------------------
+
+// clang-format off
+static KeyCode eventKeyFromVirtualKey(UINT vk) {
+  switch (vk) {
+    case 0x41: return KeyCode::A; case 0x42: return KeyCode::B; case 0x43: return KeyCode::C;
+    case 0x44: return KeyCode::D; case 0x45: return KeyCode::E; case 0x46: return KeyCode::F;
+    case 0x47: return KeyCode::G; case 0x48: return KeyCode::H; case 0x49: return KeyCode::I;
+    case 0x4A: return KeyCode::J; case 0x4B: return KeyCode::K; case 0x4C: return KeyCode::L;
+    case 0x4D: return KeyCode::M; case 0x4E: return KeyCode::N; case 0x4F: return KeyCode::O;
+    case 0x50: return KeyCode::P; case 0x51: return KeyCode::Q; case 0x52: return KeyCode::R;
+    case 0x53: return KeyCode::S; case 0x54: return KeyCode::T; case 0x55: return KeyCode::U;
+    case 0x56: return KeyCode::V; case 0x57: return KeyCode::W; case 0x58: return KeyCode::X;
+    case 0x59: return KeyCode::Y; case 0x5A: return KeyCode::Z;
+    // Numbers
+    case 0x30: return KeyCode::Num0; case 0x31: return KeyCode::Num1; case 0x32: return KeyCode::Num2;
+    case 0x33: return KeyCode::Num3; case 0x34: return KeyCode::Num4; case 0x35: return KeyCode::Num5;
+    case 0x36: return KeyCode::Num6; case 0x37: return KeyCode::Num7; case 0x38: return KeyCode::Num8;
+    case 0x39: return KeyCode::Num9;
+    // Function Keys
+    case VK_F1: return KeyCode::F1; case VK_F2: return KeyCode::F2; case VK_F3: return KeyCode::F3;
+    case VK_F4: return KeyCode::F4; case VK_F5: return KeyCode::F5; case VK_F6: return KeyCode::F6;
+    case VK_F7: return KeyCode::F7; case VK_F8: return KeyCode::F8; case VK_F9: return KeyCode::F9;
+    case VK_F10: return KeyCode::F10; case VK_F11: return KeyCode::F11; case VK_F12: return KeyCode::F12;
+    // Control Keys
+    case VK_ESCAPE: return KeyCode::Escape;
+    case VK_TAB: return KeyCode::Tab;
+    case VK_CAPITAL: return KeyCode::CapsLock;
+    case VK_LSHIFT: case VK_RSHIFT: case VK_SHIFT: return KeyCode::Shift;
+    case VK_LCONTROL: case VK_RCONTROL: case VK_CONTROL: return KeyCode::Control;
+    case VK_LMENU: case VK_RMENU: case VK_MENU: return KeyCode::Alt;
+    case VK_SPACE: return KeyCode::Space;
+    case VK_RETURN: return KeyCode::Enter;
+    case VK_BACK: return KeyCode::Backspace;
+    case VK_LWIN: case VK_RWIN: return KeyCode::Command;
+    // Arrow Keys
+    case VK_LEFT: return KeyCode::Left; case VK_RIGHT: return KeyCode::Right;
+    case VK_UP: return KeyCode::Up; case VK_DOWN: return KeyCode::Down;
+    // Editing / Navigation
+    case VK_INSERT: return KeyCode::Insert;
+    case VK_DELETE: return KeyCode::Delete;
+    case VK_HOME: return KeyCode::Home;
+    case VK_END: return KeyCode::End;
+    case VK_NEXT: return KeyCode::PageUp;
+    case VK_PRIOR: return KeyCode::PageDown;
+    // Symbols / Punctuation
+    // TODO check without shift
+    case VK_SUBTRACT: case VK_OEM_MINUS: return KeyCode::Minus;
+    // TODO check without shift
+    case VK_OEM_PLUS: return KeyCode::Equal;
+    // can vary on the keyboard
+    case VK_OEM_4: return KeyCode::LeftBracket;
+    case VK_OEM_6: return KeyCode::RightBracket;
+    case VK_OEM_5: return KeyCode::Backslash; // TODO also pipe if shift
+    case VK_OEM_1: return KeyCode::Semicolon; // TODO check shift for colon
+    case VK_OEM_7: return KeyCode::Apostrophe;
+    // TODO case VK_OEM_1: return KeyCode::Comma;
+    case VK_OEM_PERIOD: return KeyCode::Period;
+    case VK_OEM_2: return KeyCode::Slash;
+    case VK_OEM_3: return KeyCode::GraveAccent;
+    // Numpad
+    case VK_NUMPAD0: return KeyCode::NumPad0;
+    case VK_NUMPAD1: return KeyCode::NumPad1;
+    case VK_NUMPAD2: return KeyCode::NumPad2;
+    case VK_NUMPAD3: return KeyCode::NumPad3;
+    case VK_NUMPAD4: return KeyCode::NumPad4;
+    case VK_NUMPAD5: return KeyCode::NumPad5;
+    case VK_NUMPAD6: return KeyCode::NumPad6;
+    case VK_NUMPAD7: return KeyCode::NumPad7;
+    case VK_NUMPAD8: return KeyCode::NumPad8;
+    case VK_NUMPAD9: return KeyCode::NumPad9;
+    case VK_DECIMAL: return KeyCode::NumPadDecimal;
+    // TODO KeyCode::NumPadDivide;
+    // TODO KeyCode::NumPadMultiply;
+    // TODO KeyCode::NumPadSubtract;
+    // TODO KeyCode::NumPadAdd;
+    // TODO KeyCode::NumPadEnter;
+    // Misc / Media
+    case VK_SNAPSHOT: return KeyCode::PrintScreen;
+    case VK_SCROLL: return KeyCode::ScrollLock;
+    case VK_PAUSE: return KeyCode::Pause;
+    case VK_NUMLOCK: return KeyCode::NumLock;
+    case VK_VOLUME_UP: return KeyCode::VolumeUp;
+    case VK_VOLUME_DOWN: return KeyCode::VolumeDown;
+    case VK_VOLUME_MUTE: return KeyCode::Mute;
+    case VK_MEDIA_NEXT_TRACK: return KeyCode::MediaNext;
+    case VK_MEDIA_PREV_TRACK: return KeyCode::MediaPrev;
+    case VK_MEDIA_STOP: return KeyCode::MediaStop;
+    case VK_MEDIA_PLAY_PAUSE: return KeyCode::MediaPlayPause;
+    default:
+      return KeyCode::Unknown;
+  }
+}
+// clang-format on
+
+/// https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input
+// TODO: Move this to RAW input such that we can take the USB HID scan codes
+static Event makeKeyEventFromWndMsg(WindowsApplication* app, UINT msg,
+                                    WPARAM wParam, LPARAM lp) {
+  Event event{};
+
+  // extract params from message
+  UINT vk = wParam;
+  UINT const repeatCount = lp & 0xffff;
+  UINT const scanCode = (lp >> 16) & 0xFF;
+  bool const isExtended = (lp >> 24) & 1;
+  bool const prevDown = (lp >> 30) & 1;
+  bool const isRelease = (lp >> 31) & 1;
+
+  // this is not ALT. True also for stuff like F10
+  // bool const contextAlt = (lp >> 29) & 1;
+
+  // distinguish between right/left for ctrl/shift/alt
+  if (vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU) {
+    // Map scan code to extended vk
+    UINT const vkEx = MapVirtualKeyW(scanCode | (isExtended ? 0xE000 : 0),
+                                     MAPVK_VSC_TO_VK_EX);
+    if (vkEx != 0) vk = vkEx;
+  }
+
+  if ((msg == WM_KEYUP || msg == WM_SYSKEYUP) && isRelease) {
+    event.type = events::EvKeyUp;
+  } else {
+    if (repeatCount > 0 && prevDown) {
+      event.type = events::EvKeyRepeat;
+      event.u.key.isRepeat = true;
+    } else {
+      event.type = events::EvKeyUp;
+    }
+  }
+  event.simTime = app->Time.current().Time;
+  event.emitterId = reinterpret_cast<uintptr_t>(app->PrimaryWindow);
+  event.u.key.key = eventKeyFromVirtualKey(vk);
+  return event;
+}
 
 static void enqueueMessageCOM(COMPayload& payload, const std::wstring& type,
                               const std::wstring& title,
@@ -270,7 +404,7 @@ static void primaryWindowKeyDown(HWND hWnd, WPARAM wParam,
   } else if (winKey) {
     // TODO nothing
   } else if (altKey) {
-    if (wParam == VK_RETURN) {
+    if (wParam == VK_RETURN && payload) {
       // ALT+ENTER detected → toggle fullscreen
       payload->isFullscreen = !payload->isFullscreen;
       primaryWindowToggleFullscreen(hWnd, payload->isFullscreen,
@@ -278,7 +412,7 @@ static void primaryWindowKeyDown(HWND hWnd, WPARAM wParam,
     }
   } else if (ctrlKey) {
     // TODO nothing
-  } else {
+  } else if (payload) {
     // TODO remove debug
     if (wParam == EKey) {
       enqueueMessageCOM(payload->comPayload, L"NOTIFICATION", L"Test Toast",
@@ -457,14 +591,24 @@ LRESULT primaryWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
       break;
     }
 
-    case WM_SYSKEYDOWN: {
-      primaryWindowKeyDown(hWnd, wParam, payload);
-      break;
-    }
-
+    case WM_SYSKEYUP:
+    case WM_KEYUP:
+    case WM_SYSKEYDOWN:
     case WM_KEYDOWN: {
-      primaryWindowKeyDown(hWnd, wParam, payload);
-      return 0;
+      if (app) {
+        // Event system hook up
+        Event keyEvent = makeKeyEventFromWndMsg(app, uMsg, wParam, lParam);
+      }
+
+      // TODO remove debug
+      if (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) {
+        primaryWindowKeyDown(hWnd, wParam, payload);
+      }
+      if (uMsg != WM_SYSKEYDOWN && uMsg != WM_SYSKEYUP) {
+        return 0;
+      } else {
+        break;
+      }
     }
 
     case WM_SIZE: {
@@ -562,8 +706,8 @@ HWND createPrimaryWindow(WindowsApplication* app) {
   enableDPIAwareness();
 
   // UI COM Objects from WinRT Require a Single Threaded Apartment inside the
-  // Thread which owns the Window (we are assuming that createPrimaryWindow and
-  // primaryWindowEntrypoint are called from the same thread)
+  // Thread which owns the Window (we are assuming that createPrimaryWindow
+  // and primaryWindowEntrypoint are called from the same thread)
   avkInitApartmentSingleThreaded();
 
   BOOL compositionEnabled = FALSE;
@@ -770,8 +914,9 @@ exit_loop:
 #endif
 
   // join with render thread
-  // note: if a _beginthreadex exits by calling _endthread, which is the default
-  // when it returns, you don't need to call CloseHandle. If wait fails, kill it
+  // note: if a _beginthreadex exits by calling _endthread, which is the
+  // default when it returns, you don't need to call CloseHandle. If wait
+  // fails, kill it
   app->signalStopRendering();
   DWORD constexpr waitMilliseconds = 10000;
   assert(app->RenderThread != INVALID_HANDLE_VALUE &&

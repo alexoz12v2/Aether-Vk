@@ -1,5 +1,7 @@
 #include "event/system.h"
 
+#include <thread>
+
 namespace avk {
 
 EventSystem::EventSystem(size_t cap) : m_queue(cap) {
@@ -31,7 +33,11 @@ void EventSystem::unsubscribe(ev_t evType, IEventListener *listener) {
   }
 }
 
-void EventSystem::publish(const Event &ev) {}
+void EventSystem::publish(const Event &ev) {
+  while (!m_queue.push(ev)) {
+    std::this_thread::yield();
+  }
+}
 
 void EventSystem::UTprocessEvents() {
   Event e{};
