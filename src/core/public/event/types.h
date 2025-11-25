@@ -10,6 +10,7 @@
 namespace avk {
 
 inline int32_t constexpr MAX_POINTERS = 10;
+inline int32_t constexpr MAX_CUSTOM_DATA = 128 / sizeof(uint64_t);
 
 struct Event {
   ev_t type;
@@ -54,7 +55,8 @@ struct Event {
 
     // Custom user-defined events
     struct {
-      uint64_t data;
+      // 8 byte alignment, hence it should be fine for almost anything
+      uint64_t data[MAX_CUSTOM_DATA];
     } custom;
   } u;
 };

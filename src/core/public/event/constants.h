@@ -17,7 +17,7 @@ enum class KeyCode : uint16_t {
   // Function Keys
   F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
   // Control Keys
-  Escape, Tab, CapsLock, Shift, Control, Alt, Super, Menu, Space, Enter, Backspace,
+  Escape, Tab, CapsLock, Shift, Control, Alt, Space, Enter, Backspace, Command,
   // Arrow Keys
   Left, Right, Up, Down,
   // Editing / Navigation
