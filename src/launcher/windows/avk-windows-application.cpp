@@ -134,6 +134,7 @@ void WindowsApplication::RTdoOnDeviceRegained() {
 WindowsApplication::~WindowsApplication() noexcept AVK_NO_CFI {
   LOGI << "[WindowsApplication] Detructor Running" << std::endl;
   if (windowInitializedOnce()) {
+    eventSystem()->unsubscribe(events::EvKeyDown, &m_evLogger);
     // It's contained in base class, but we want to ensure that the host storage
     // used in here is not locked in some GPU submitted operations
     vkDevTable()->vkDeviceWaitIdle(vkDeviceHandle());
@@ -499,8 +500,7 @@ void WindowsApplication::destroyConstantVulkanResources() AVK_NO_CFI {
   using namespace avk::literals;
   bufferManager()->discardById(vkDiscardPool(), "SkyboxVertex"_hash,
                                timeline());
-  bufferManager()->discardById(vkDiscardPool(), "SkyboxIndex"_hash,
-                               timeline());
+  bufferManager()->discardById(vkDiscardPool(), "SkyboxIndex"_hash, timeline());
   bufferManager()->discardById(vkDiscardPool(), hashes::Cube, timeline());
   bufferManager()->discardById(vkDiscardPool(), hashes::Model, timeline());
   bufferManager()->discardById(vkDiscardPool(), hashes::Vertex, timeline());
@@ -640,6 +640,7 @@ void WindowsApplication::doOnRestoreState() {}
 
 void WindowsApplication::RTdoOnWindowInit() AVK_NO_CFI {
 #define PREFIX "[WindowsApplication::onWindowInit] "
+  eventSystem()->subscribe(events::EvKeyDown, &m_evLogger);
   createConstantVulkanResources();
   LOGI << PREFIX "Constant Resources Created" << std::endl;
   createVulkanResources();

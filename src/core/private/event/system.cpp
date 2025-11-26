@@ -1,5 +1,6 @@
 #include "event/system.h"
 
+// lib
 #include <thread>
 
 namespace avk {
@@ -42,7 +43,7 @@ void EventSystem::publish(const Event &ev) {
 void EventSystem::UTprocessEvents() {
   Event e{};
   while (m_queue.pop(e)) {
-    std::shared_lock rLock{m_mapMtx};
+   std::shared_lock rLock{m_mapMtx};
     auto it = m_listenerMap.find(e.type);
     if (it != m_listenerMap.end()) {
       for (auto lit = it->second.begin(); lit != it->second.end(); /*inside*/) {

@@ -87,8 +87,6 @@ ApplicationBase::ApplicationBase() {
   m_vkInstance.create();
   LOGI << "[ApplicationBase] Vulkan Instance " << std::hex
        << m_vkInstance.get()->handle() << std::dec << " Created" << std::endl;
-  // Event System Initialization
-  addPlatformEvents(&m_eventSystem);
 }
 
 ApplicationBase::~ApplicationBase() noexcept AVK_NO_CFI {
@@ -119,6 +117,14 @@ void ApplicationBase::onWindowInit() AVK_NO_CFI {
   if (m_windowInit.load(std::memory_order_acquire)) {
     m_renderCoordinator.surfaceLost.store(false, std::memory_order_release);
   } else {
+    // Event System Initialization
+    // ensure render thread and update thread, when started, can register events
+    addPlatformEvents(&m_eventSystem);
+
+    // start update thread only after the events from the platform have been
+    // added
+    m_updateCoordinator.updateShouldRun.store(true, std::memory_order_release);
+
     // why is this a heap allocated size_t and not a atomic? Because I've tried
     // with it, and it was fine until I added the global/implicit Vulkan layers
     // from RENDERDOC. how is this correlated? No Idea🤪

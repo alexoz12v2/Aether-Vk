@@ -42,6 +42,29 @@
 namespace avk {
 
 // ------------------------ Static Functions ---------------------------------
+static unsigned __stdcall updateThreadFunc(void* arg) {
+  auto* app = static_cast<avk::WindowsApplication*>(arg);
+  avk::ApplicationBase::UTmain(app);
+  return 0u;
+}
+
+static unsigned __stdcall renderThreadFunc(void* arg) {
+  auto* app = static_cast<avk::WindowsApplication*>(arg);
+  avk::ApplicationBase::RTmain(app);
+  return 0u;
+}
+
+static HANDLE createThreadOrCrash(_beginthreadex_proc_type proc, void* args) {
+  uintptr_t const res = _beginthreadex(nullptr, 0, proc, args, 0, nullptr);
+  if (!res) {
+    unsigned long error = 0;
+    _get_doserrno(&error);
+    std::string const errorStr =
+        "Couldn't create render thread with error " + std::to_string(error);
+    avk::showErrorScreenAndExit(errorStr.c_str());
+  }
+  return reinterpret_cast<HANDLE>(res);
+}
 
 // clang-format off
 static KeyCode eventKeyFromVirtualKey(UINT vk) {
@@ -164,11 +187,11 @@ static Event makeKeyEventFromWndMsg(WindowsApplication* app, UINT msg,
   if ((msg == WM_KEYUP || msg == WM_SYSKEYUP) && isRelease) {
     event.type = events::EvKeyUp;
   } else {
-    if (repeatCount > 0 && prevDown) {
+    if (repeatCount > 1 && prevDown) {
       event.type = events::EvKeyRepeat;
       event.u.key.isRepeat = true;
     } else {
-      event.type = events::EvKeyUp;
+      event.type = events::EvKeyDown;
     }
   }
   event.simTime = app->Time.current().Time;
@@ -459,8 +482,15 @@ LRESULT primaryWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     case WM_CREATE: {
       LOGI << "[UI::PrimaryWindow] WM_CREATE" << std::endl;
       if (app) {
+        // must come before threads
+        app->onWindowInit();
+        // spin threads
+        app->RenderThread = createThreadOrCrash(renderThreadFunc, app);
+        app->UpdateThread = createThreadOrCrash(updateThreadFunc, app);
+
         app->resumeRendering();
       }
+      assert(app);
       break;
     }
     case WM_ACTIVATE: {
@@ -598,12 +628,15 @@ LRESULT primaryWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
       if (app) {
         // Event system hook up
         Event keyEvent = makeKeyEventFromWndMsg(app, uMsg, wParam, lParam);
+        app->publishPlatformEvent(keyEvent);
       }
 
       // TODO remove debug
       if (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) {
         primaryWindowKeyDown(hWnd, wParam, payload);
       }
+
+      // propagate do default if system
       if (uMsg != WM_SYSKEYDOWN && uMsg != WM_SYSKEYUP) {
         return 0;
       } else {

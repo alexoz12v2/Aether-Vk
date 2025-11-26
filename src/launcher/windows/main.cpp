@@ -25,29 +25,6 @@
 
 // TODO add Ctrl + C handler
 // TODO manifest
-static unsigned __stdcall updateThreadFunc(void *arg) {
-  auto *app = static_cast<avk::WindowsApplication *>(arg);
-  avk::ApplicationBase::UTmain(app);
-  return 0u;
-}
-
-static unsigned __stdcall renderThreadFunc(void *arg) {
-  auto *app = static_cast<avk::WindowsApplication *>(arg);
-  avk::ApplicationBase::RTmain(app);
-  return 0u;
-}
-
-static HANDLE createThreadOrCrash(_beginthreadex_proc_type proc, void *args) {
-  uintptr_t const res = _beginthreadex(nullptr, 0, proc, args, 0, nullptr);
-  if (!res) {
-    unsigned long error = 0;
-    _get_doserrno(&error);
-    std::string const errorStr =
-        "Couldn't create render thread with error " + std::to_string(error);
-    avk::showErrorScreenAndExit(errorStr.c_str());
-  }
-  return reinterpret_cast<HANDLE>(res);
-}
 
 int WINAPI wWinMain([[maybe_unused]] HINSTANCE hInstance,
                     [[maybe_unused]] HINSTANCE hPrevInstance,
@@ -87,9 +64,6 @@ int WINAPI wWinMain([[maybe_unused]] HINSTANCE hInstance,
     if (!avk::createPrimaryWindow(&app)) {
       avk::showErrorScreenAndExit("Couldn't create application window");
     }
-    // spin render thread
-    app.RenderThread = createThreadOrCrash(renderThreadFunc, &app);
-    app.UpdateThread = createThreadOrCrash(updateThreadFunc, &app);
 
     // run primary HWND message loop (handles render thread termination)
     avk::primaryWindowMessageLoop(&app);

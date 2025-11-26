@@ -77,7 +77,7 @@ struct RenderCoordinator : public NonMoveable {
 struct UpdateCoordinator : public NonMoveable {
   UpdateCoordinator() = default;
 
-  std::atomic_bool updateShouldRun = true;
+  std::atomic_bool updateShouldRun = false;
 };
 
 class ApplicationBase : public NonMoveable {
