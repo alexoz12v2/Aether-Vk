@@ -97,3 +97,8 @@ add_custom_target(avk-copy-assets ALL
 
 # code
 add_subdirectory(src)
+
+set(AVK_ENABLE_TESTS OFF CACHE BOOL "Include test directory in the cmake generation step")
+if (AVK_ENABLE_TESTS)
+  add_subdirectory(test)
+endif ()

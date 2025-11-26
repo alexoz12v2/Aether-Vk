@@ -488,6 +488,10 @@ function(avk_setup_dependencies)
     find_package(volk CONFIG REQUIRED)
   endif ()
 
+  if (NOT TARGET Vulkan::Headers)
+    find_package(VulkanHeaders CONFIG)
+  endif ()
+
   if (NOT TARGET GPUOpen::VulkanMemoryAllocator)
     if (NOT DEFINED Vulkan_LIBRARY)
       message(FATAL_ERROR "Must use FindVulkan.cmake before VulkanMemoryAllocator")

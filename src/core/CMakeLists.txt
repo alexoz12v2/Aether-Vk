@@ -108,12 +108,10 @@ target_sources(avk-core
 
 target_include_directories(avk-core
   PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/public>
-  $<INSTALL_INTERFACE:include>
+  CMAKE_CURRENT_SOURCE_DIR}/public
   PRIVATE
   ${Stb_INCLUDE_DIR}
   ${AVK_TINYGLTF_INCLUDE_DIR}
 )
 
 add_library(avk::core ALIAS avk-core)
-install(TARGETS avk-core FILE_SET avk_core_headers)
