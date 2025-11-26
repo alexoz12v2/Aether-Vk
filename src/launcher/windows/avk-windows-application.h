@@ -14,6 +14,7 @@
 
 // from this module
 #include "avk-win32-window.h"
+#include "event/debug.h"
 
 namespace avk {
 
@@ -53,6 +54,7 @@ class WindowsApplication : public ApplicationBase {
 
  private:
   // TODO refactor
+  EventLogger m_evLogger;
   vk::GraphicsInfo m_graphicsInfo{};
   vk::GraphicsInfo m_skyboxGraphicsInfo{};
   VkPipeline m_graphicsPipeline = VK_NULL_HANDLE;
