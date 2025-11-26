@@ -26,7 +26,7 @@ target_sources(avk-win-comutils
 )
 # we don't care about the install interface, since this is not an installable library
 target_include_directories(avk-win-comutils
-  INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/public>
+  INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/public
   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/public"
 )
 # no need to install the header set, since this is not an installable library
