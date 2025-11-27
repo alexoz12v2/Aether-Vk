@@ -162,7 +162,7 @@ macro(avk_cxx_flags)
           # -fsanitize=cfi-vcall -> CRASH
           # -fsanitize=cfi-mfcall -> doesn't exist on windows
           # string(APPEND CMAKE_CXX_FLAGS " -flto -fsanitize=cfi")
-          if (NOT AVK_OS STREQUAL "MACOS")
+          if (NOT AVK_OS STREQUAL "MACOS" AND AVK_USE_CFI_SANITIZERS)
             # Apparently, I can debug only Objective-C code when using LTO
             string(APPEND CMAKE_CXX_FLAGS " -flto -fsanitize=cfi-cast-strict -fsanitize=cfi-nvcall -fsanitize=cfi-icall -fsanitize=cfi-derived-cast -fsanitize=cfi-unrelated-cast")
           else ()

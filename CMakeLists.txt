@@ -10,7 +10,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_MACOSX_RPATH ON)
 
 # cache variables
-option(AVK_USE_SANITIZERS "Use sanitizers during non-release compilations with LLVM toolchain")
+option(AVK_USE_SANITIZERS "Use sanitizers during debug compilations with LLVM toolchain")
+option(AVK_USE_CFI_SANITIZERS "Use cfi sanitizers in debug compilations. It implies `lto`, hence might hinder debugging")
 
 # project declaration
 # default enabled languages: C and CXX, if toolchain doesn't define them https://cmake.org/cmake/help/latest/manual/cmake-toolchains.7.html#variables-and-properties, automatic
@@ -72,6 +73,12 @@ if (AVK_OS STREQUAL "MACOS")
     set(VCPKG_MANIFEST_INSTALL ON CACHE BOOL "vkpkg call install on toolchain" FORCE)
   endif ()
 endif ()
+
+# force toolchain file as chain file for VCPKG
+if (CMAKE_TOOLCHAIN_FILE)
+  set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE "${CMAKE_TOOLCHAIN_FILE}")
+endif ()
+
 include("${VCPKG_TOOLCHAIN_FILE}")
 avk_setup_dependencies()
 
