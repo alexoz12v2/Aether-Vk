@@ -66,7 +66,7 @@ set(avk_core_libraries_public
   Boost::fiber Vulkan::Headers GPUOpen::VulkanMemoryAllocator volk::volk_headers
   glm::glm-header-only
 )
-set(avk_core_libraries_private KTX::ktx)
+set(avk_core_libraries_private KTX::ktx imageinfo::imageinfo)
 if ((AVK_OS STREQUAL "MACOS") OR (AVK_OS STREQUAL "IOS"))
   # Volk loads MoltenVK at runtime! Just bundle it.
   # list(APPEND avk_core_libraries_public "${MVK_DYLIB}")
