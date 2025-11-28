@@ -514,8 +514,16 @@ function(avk_setup_dependencies)
   # PNG: libpng
   if (NOT TARGET PNG::PNG)
     find_package(PNG CONFIG REQUIRED)
+    # TODO: does vckpg use clang with toolchain file chaining?
     if (WIN32 AND ${AVK_USE_SANITIZERS})
       avk_release_is_debug_for_imported(PNG::PNG)
+    endif ()
+  endif ()
+
+  if (NOT TARGET imageinfo::imageinfo)
+    find_package(imageinfo CONFIG REQUIRED)
+    if (WIN32 AND ${AVK_USE_SANITIZERS})
+      avk_release_is_debug_for_imported(imageinfo::imageinfo)
     endif ()
   endif ()
 

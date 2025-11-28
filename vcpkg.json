@@ -35,6 +35,7 @@
       "name": "tinygltf",
       "version>=": "2.9.6"
     },
-    "libpng"
+    "libpng",
+    "imageinfo"
   ]
 }

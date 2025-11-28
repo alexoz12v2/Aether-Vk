@@ -1,9 +1,11 @@
 #pragma once
 
+#include <glm/vec3.hpp>
+
 namespace avk {
 
 struct SphericalBB {
-  float Center[3];
+  glm::vec3 Center;
   float Radius;
 };
 
