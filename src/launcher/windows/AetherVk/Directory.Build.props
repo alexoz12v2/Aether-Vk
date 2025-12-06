@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>13.0</LangVersion>
+    
+    <!-- Enable latest "warning wave" https://docs.microsoft.com/en-us/dotnet/csharp/language-reference/compiler-messages/warning-waves -->
+    <AnalysisLevel>7</AnalysisLevel>
+    
+    <!-- Import global config from code style package -->
+    <AnalysisLevelstyle>7-all</AnalysisLevelstyle>
+
+    <!-- Enable Compiler strict mode https://www.meziantou.net/csharp-compiler-strict-mode.htm -->
+    <Features>strict</Features>
+  </PropertyGroup>
+</Project>

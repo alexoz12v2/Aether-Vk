@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>AetherVk</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -41,6 +41,11 @@
 
   <ItemGroup>
     <None Remove="DetailWindow.xaml" />
+    <None Remove="Pages\PanelHostPage.xaml" />
+    <None Remove="Pages\ShellPage.xaml" />
+    <None Remove="Resources\Glyph.xaml" />
+    <None Remove="Resources\Spacing.xaml" />
+    <None Remove="UserControls\ShellPage\SplitContainerControl.xaml" />
   </ItemGroup>
 
   <ItemGroup>
@@ -67,19 +72,51 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Labs.WinUI.DependencyPropertyGenerator" Version="0.1.251030-build.2370" />
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.Primitives" Version="8.2.250402" />
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.Sizers" Version="8.2.250402" />
+    <PackageReference Include="CommunityToolkit.WinUI.Extensions" Version="8.2.250402" />
+    <PackageReference Include="CommunityToolkit.WinUI.Media" Version="8.2.250402" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.7175" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.251106002" />
     <PackageReference Include="WinUIEx" Version="2.9.0" />
+
+    <ProjectReference Include="..\AetherVk.Core\AetherVk.Core.csproj" />
   </ItemGroup>
+  
+  <ItemGroup>
+    <Folder Include="TemplatedControls\" />
+    <Folder Include="UserControls\Shared\" />
+  </ItemGroup>
+    
   <ItemGroup>
     <Page Update="DetailWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
     </Page>
   </ItemGroup>
+  
   <ItemGroup>
-    <Folder Include="TemplatedControls\" />
-    <Folder Include="UserControls\" />
-    <Folder Include="Pages\" />
+    <Page Update="Pages\ShellPage.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Update="Pages\PanelHostPage.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+  </ItemGroup>
+  
+  <ItemGroup>
+    <Page Update="UserControls\ShellPage\SplitContainerControl.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+  </ItemGroup>
+  
+  <ItemGroup>
+    <Page Update="Resources\Glyph.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Update="Resources\Spacing.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
   </ItemGroup>
 
   <!--
@@ -100,5 +137,6 @@
     <PublishTrimmed Condition="'$(Configuration)' == 'Debug'">False</PublishTrimmed>
     <PublishTrimmed Condition="'$(Configuration)' != 'Debug'">True</PublishTrimmed>
     <PackageCertificateThumbprint>97AB98365F2EC2295BD2AF1D7E1E1553A709C8BD</PackageCertificateThumbprint>
+    <AssemblyName>AetherVk.App</AssemblyName>
   </PropertyGroup>
 </Project>

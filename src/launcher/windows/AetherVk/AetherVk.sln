@@ -1,9 +1,16 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
-VisualStudioVersion = 18.3.11222.16 d18.3
+VisualStudioVersion = 18.3.11222.16
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AetherVk.App", "AetherVk.App\AetherVk.App.csproj", "{E36B370D-C1DE-432B-96CB-9DFD13B1F7EB}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{39CED924-15A5-4F4E-BDD3-EE929E911F07}"
+	ProjectSection(SolutionItems) = preProject
+		Directory.Build.props = Directory.Build.props
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AetherVk.Core", "AetherVk.Core\AetherVk.Core.csproj", "{CF953CF4-A3FF-4A59-8BB3-84E6320097B0}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -33,8 +40,23 @@ Global
 		{E36B370D-C1DE-432B-96CB-9DFD13B1F7EB}.Release|x86.ActiveCfg = Release|x86
 		{E36B370D-C1DE-432B-96CB-9DFD13B1F7EB}.Release|x86.Build.0 = Release|x86
 		{E36B370D-C1DE-432B-96CB-9DFD13B1F7EB}.Release|x86.Deploy.0 = Release|x86
+		{CF953CF4-A3FF-4A59-8BB3-84E6320097B0}.Debug|ARM64.ActiveCfg = Debug|Any CPU
+		{CF953CF4-A3FF-4A59-8BB3-84E6320097B0}.Debug|ARM64.Build.0 = Debug|Any CPU
+		{CF953CF4-A3FF-4A59-8BB3-84E6320097B0}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{CF953CF4-A3FF-4A59-8BB3-84E6320097B0}.Debug|x64.Build.0 = Debug|Any CPU
+		{CF953CF4-A3FF-4A59-8BB3-84E6320097B0}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{CF953CF4-A3FF-4A59-8BB3-84E6320097B0}.Debug|x86.Build.0 = Debug|Any CPU
+		{CF953CF4-A3FF-4A59-8BB3-84E6320097B0}.Release|ARM64.ActiveCfg = Release|Any CPU
+		{CF953CF4-A3FF-4A59-8BB3-84E6320097B0}.Release|ARM64.Build.0 = Release|Any CPU
+		{CF953CF4-A3FF-4A59-8BB3-84E6320097B0}.Release|x64.ActiveCfg = Release|Any CPU
+		{CF953CF4-A3FF-4A59-8BB3-84E6320097B0}.Release|x64.Build.0 = Release|Any CPU
+		{CF953CF4-A3FF-4A59-8BB3-84E6320097B0}.Release|x86.ActiveCfg = Release|Any CPU
+		{CF953CF4-A3FF-4A59-8BB3-84E6320097B0}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {63A957EE-B5E3-416E-AEA2-DDF705C170EF}
 	EndGlobalSection
 EndGlobal
