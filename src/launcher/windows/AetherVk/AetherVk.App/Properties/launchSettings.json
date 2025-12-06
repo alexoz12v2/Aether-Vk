@@ -1,0 +1,18 @@
+{
+  "profiles": {
+    "AetherVk (Package)": {
+      "commandName": "MsixPackage",
+      "commandLineArgs": "",
+      "alwaysReinstallApp": false,
+      "remoteDebugEnabled": false,
+      "allowLocalNetworkLoopbackProperty": true,
+      "authenticationMode": "Windows",
+      "doNotLaunchApp": false,
+      "remoteDebugMachine": "",
+      "nativeDebugging": true 
+    },
+    "AetherVk (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

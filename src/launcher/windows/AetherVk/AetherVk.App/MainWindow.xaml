@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<winuiex:WindowEx
+    xmlns:winuiex="using:WinUIEx"
+    x:Class="AetherVk.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AetherVk.App"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Width="1024"
+    Height="720"
+    Title="AetherVk.App">
+    <Window.SystemBackdrop>
+        <winuiex:TransparentTintBackdrop TintColor="#F01E1E1E" />
+    </Window.SystemBackdrop>
+    <StackPanel Orientation="Vertical">
+        <TitleBar 
+            IsBackButtonEnabled="False"
+            IsPaneToggleButtonVisible="False">
+            <TitleBar.LeftHeader>
+                <StackPanel Orientation="Horizontal">
+                    <ImageIcon Source="/Assets/StoreLogo.png" Width="23" Margin="10,0,0,0"/>
+                    <MenuBar>
+                        <MenuBarItem Title="File">
+                            <MenuFlyoutSubItem Text="New">
+                                <MenuFlyoutItem Text="My File 1" />
+                                <MenuFlyoutItem Text="My File 1" />
+                                <MenuFlyoutItem Text="My File 1" />
+                                <MenuFlyoutItem Text="My File 1" />
+                            </MenuFlyoutSubItem>
+                            <MenuFlyoutItem Text="Open..." />
+                            <MenuFlyoutItem Text="Save" />
+                            <MenuFlyoutSeparator />
+                            <MenuFlyoutItem Text="Exit" />
+                        </MenuBarItem>
+                        <MenuBarItem Title="Edit">
+                            <MenuFlyoutItem Text="Undo" />
+                            <MenuFlyoutItem Text="Cut" />
+                            <MenuFlyoutItem Text="Copy" />
+                            <MenuFlyoutItem Text="Paste" />
+                        </MenuBarItem>
+                    </MenuBar>
+                </StackPanel>
+            </TitleBar.LeftHeader>
+            <TitleBar.RightHeader>
+                <PersonPicture Width="30" Height="30" Initials="AT" />
+            </TitleBar.RightHeader>
+        </TitleBar>
+        <StackPanel Orientation="Vertical" Margin="0,5,0,0">
+            <CommandBar HorizontalAlignment="Left"  Background="Transparent" IsOpen="False">
+                <AppBarButton Icon="OpenFile" Label="File" AccessKey="F" Click="Button_Click" />
+                <CommandBar.SecondaryCommands>
+                    <AppBarButton Icon="Edit" Label="Something" />
+                </CommandBar.SecondaryCommands>
+            </CommandBar>
+            <Grid Margin="10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="200" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="200" />
+                    <RowDefinition Height="200" />
+                    <RowDefinition Height="200" />
+                    <RowDefinition Height="200" />
+                    <RowDefinition Height="200" />
+                    <RowDefinition Height="200" />
+                </Grid.RowDefinitions>
+                
+                <Button Grid.Column="0" Grid.Row="0" Click="Button_Click" Margin="0, 10, 0, 0">
+                    <Button.Background>
+                        <SolidColorBrush Color="LightBlue"/>
+                    </Button.Background>
+                    <Button.Content>
+                        Whatever you want
+                    </Button.Content>
+                </Button>
+                <ComboBox Grid.Column="0" Grid.Row="1"  Header="Theme" PlaceholderText="Pick a Theme" Width="150">
+                    <x:String>qualcosa</x:String>
+                </ComboBox>
+                <TextBox Grid.Column="0" Grid.Row="2" Width="150" Height="40" Margin="0, 10, 0, 0" FontSize="20" PlaceholderText="First Name"/>
+                <Button Grid.Column="0" Grid.Row="3" Content="Open Dialog" Click="Button_OpenDialog" />
+                <Button Grid.Column="0" Grid.Row="4" Content="New Window" Click="Button_OpenWindow" />
+                
+                <!-- The window needs to fit inside the second grid column! -->
+            </Grid>
+        </StackPanel>
+    </StackPanel>
+</winuiex:WindowEx>
