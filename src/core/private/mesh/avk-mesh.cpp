@@ -27,6 +27,7 @@
 
 // lib
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <shared_mutex>
@@ -175,6 +176,15 @@ struct MaterialEntry : public Entry {
   glm::vec3 emissiveFactor;
 };
 
+/// Utility struct to keep track of processed GLTF textures (ignoring sampler)
+struct TexSpec {
+  int imageIndex;  // index of image used
+  int texCoord;    // index of uv map used
+  float scale;     // normal and occlusion use this
+  id_t MaterialEntry::* field;
+  std::string_view name;  // logging
+};
+
 static std::vector<id_t> texturesFromMaterialEntry(
     MaterialEntry const& materialEntry) {
   std::vector<id_t> res;
@@ -302,12 +312,18 @@ class MaterialRegistry {
   /// resources are taken
   bool materialInsert(id_t matId, MaterialEntry&& materialEntry);
 
+  bool materialRemoveIfNotUsedAndDecreaseTexRefCounts(id_t matId);
+
+  void materialRemoveAllUnused();
+
   /// \warning doesn't check that the contained texture if of the format
   /// the caller expects
   /// TODO add consistency and pixel format check
   bool textureLookupIncreaseRefCountIfFound(id_t texId);
 
   bool textureDecreaseRefCountIfPresent(id_t texId);
+
+  void textureRemoveAllUnused();
 
   // TODO Android AAsset
   // TODO specify target channels and pixel format
@@ -356,12 +372,62 @@ bool MaterialRegistry::materialInsert(id_t matId,
   return wasInserted;
 }
 
+bool MaterialRegistry::materialRemoveIfNotUsedAndDecreaseTexRefCounts(
+    id_t matId) {
+  {
+    std::shared_lock rLock{m_matMapMtx};
+    auto const it = m_matMap.find(matId);
+    if (it == m_matMap.cend() ||
+        it->second.refCount.load(std::memory_order_acquire) > 0)
+      return false;
+  }
+  {
+    std::lock_guard wLock{m_matMapMtx};
+    auto const it = m_matMap.find(matId);
+    if (it == m_matMap.cend() ||
+        it->second.refCount.load(std::memory_order_acquire) > 0)
+      return false;
+    std::vector<id_t> const textures = texturesFromMaterialEntry(it->second);
+    for (id_t tex : textures) {
+      textureDecreaseRefCountIfPresent(tex);
+    }
+    m_matMap.erase(it);
+    return true;
+  }
+}
+
+void MaterialRegistry::materialRemoveAllUnused() {
+  std::lock_guard wLock{m_matMapMtx};
+  for (auto it = m_matMap.begin(); it != m_matMap.end(); /*inside*/) {
+    if (it->second.refCount.load(std::memory_order_acquire) > 0) {
+      ++it;
+    } else {
+      std::vector<id_t> const textures = texturesFromMaterialEntry(it->second);
+      for (id_t tex : textures) {
+        textureDecreaseRefCountIfPresent(tex);
+      }
+      it = m_matMap.erase(it);
+    }
+  }
+}
+
 bool MaterialRegistry::textureLookupIncreaseRefCountIfFound(id_t texId) {
   return lookupIncreaseRefCountIfFound(texId, m_texMap, m_texMapMtx);
 }
 
 bool MaterialRegistry::textureDecreaseRefCountIfPresent(id_t texId) {
   return lookupDecreaseRefCountIfFound(texId, m_texMap, m_texMapMtx);
+}
+
+void MaterialRegistry::textureRemoveAllUnused() {
+  std::lock_guard wLock{m_texMapMtx};
+  for (auto it = m_texMap.begin(); it != m_texMap.end(); /*inside*/) {
+    if (it->second.refCount.load(std::memory_order_acquire) > 0) {
+      ++it;
+    } else {
+      it = m_texMap.erase(it);
+    }
+  }
 }
 
 // TODO support more file formats and pixel formats
@@ -440,6 +506,11 @@ class MeshSystemImpl {
   std::unordered_map<std::string, id_t> loadMeshesFromScene(
       const std::filesystem::path& path, const SceneImportOptions& opts,
       MaterialRegistry& matReg);
+
+  bool acquireMesh(id_t meshId);
+  bool releaseMesh(id_t meshId);
+  bool unloadMeshIfUnusedCascading(id_t meshId, MaterialRegistry& matReg);
+  void gcUnusedResources(MaterialRegistry& matReg);
 
  private:
   std::unordered_map<std::string, id_t> traverseScene(
@@ -666,6 +737,113 @@ static bool anyAnimations(tinygltf::Model const& model) {
   return !model.animations.empty();
 }
 
+// ----------------------- Helpers ------------------------------------------
+/// \warning:Works only if vector element type matches in size the element in
+/// buffer (when tightly packed, ie byteStride = 0)
+template <typename T,
+          typename V = std::enable_if_t<std::is_standard_layout_v<T>, void>>
+static bool copyAttributeVector(std::vector<T>& out,
+                                tinygltf::Model const& model,
+                                tinygltf::Accessor const& accessor) {
+  if (accessor.bufferView < 0) return false;
+
+  tinygltf::BufferView const& bufferView =
+      model.bufferViews[accessor.bufferView];
+  tinygltf::Buffer const& buffer = model.buffers[bufferView.buffer];
+
+  size_t const count = accessor.count;
+  out.resize(count);
+
+  // TODO stride may be 0 meaning tightly packed; fallback to sizeof(T) for now
+  size_t const stride =
+      (bufferView.byteStride == 0) ? sizeof(T) : bufferView.byteStride;
+  size_t const baseOffset = bufferView.byteOffset + accessor.byteOffset;
+
+  // bounds check
+  if (baseOffset + (count - 1) * stride + sizeof(T) > buffer.data.size())
+    return false;
+
+  // copy: not using memcpy as this is more debuggable
+  for (size_t i = 0; i < count; ++i) {
+    size_t const srcOffset = baseOffset + i * stride;
+    out[i] = *reinterpret_cast<T const*>(&buffer.data[srcOffset]);
+  }
+  return true;
+}
+
+static inline bool copyIndices(std::vector<uint32_t>& out,
+                               tinygltf::Model const& model,
+                               tinygltf::Accessor const& accessor) {
+  if (accessor.bufferView < 0) return false;
+  assert(accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT);
+  return copyAttributeVector(out, model, accessor);
+}
+
+static inline void printWarningList(std::vector<std::string> const& msgs,
+                                    std::string_view meshName) {
+  LOGW << AVK_LOG_YLW "[GLTF Loader] mesh name " << meshName << ':'
+       << std::flush;
+  for (auto const& m : msgs) LOGW << "\n\t" << m;
+  LOGW << AVK_LOG_RST << std::endl;
+}
+
+// texture loader helper that centralizes lookup/loading/logging
+// TODO handle Android AAsset
+// TODO handle normal texture scale
+// 0 -> nothing
+inline static id_t loadTextureMaybe(MaterialRegistry& matReg,
+                                    std::filesystem::path const& gltfPath,
+                                    id_t texId, tinygltf::Image const& image,
+                                    std::string_view meshName) {
+  if (matReg.textureLookupIncreaseRefCountIfFound(texId)) return texId;
+  if (matReg.textureLoad(gltfPath, texId, image)) return texId;
+  LOGE << AVK_LOG_RED << "[GLTF Loader] Couldn't load image " << image.uri
+       << " for mesh " << meshName << ", skipping it" AVK_LOG_RST << std::endl;
+  return 0;
+}
+
+/// \warning populates only non-texture fields and refCount to 1
+inline static MaterialEntry makeMaterialEntryFromTinyGLTF(
+    tinygltf::Material const& material,
+    tinygltf::PbrMetallicRoughness const& pbr) {
+  // note: we are relying on tinygltf default values for properties
+  // which are absent on the glTF file. Example: emissiveFactor is
+  // additive, hence tinygltf default it at 0,0,0
+  // while, baseColorFactor, which is multiplicative factors, are
+  // defaulted to 1 by tinygltf (metallicFactor, roughnessFactor 1 too)
+  MaterialEntry me{};
+  me.refCount.store(1, std::memory_order_relaxed);
+  me.albedoFactor = floatGlm4VecFromDoubleArray(pbr.baseColorFactor);
+  me.emissiveFactor = floatGlm3VecFromDoubleArray(material.emissiveFactor);
+  me.metallicFactor = pbr.metallicFactor;
+  me.roughnessFactor = pbr.roughnessFactor;
+  return me;
+}
+
+/// RAII rollback for material/texture refCounts on failure
+struct MaterialRefJanitor : public NonMoveable {
+  MaterialRegistry& matReg;
+  std::vector<id_t> materialIds;  // materials to decrement (cascading textures)
+  std::vector<id_t> textureIds;   // textures to decrement
+  bool active = true;
+
+  MaterialRefJanitor(MaterialRegistry& r, std::vector<id_t> mats,
+                     std::vector<id_t> texs)
+      : matReg(r), materialIds(std::move(mats)), textureIds(std::move(texs)) {}
+
+  inline void dismiss() { active = false; }
+
+  ~MaterialRefJanitor() noexcept {
+    if (!active) return;
+    for (id_t mat : materialIds)
+      matReg.materialDecreaseRefCountsCascadingIfPresent(mat);
+    for (id_t tex : textureIds)  //
+      matReg.textureDecreaseRefCountIfPresent(tex);
+  }
+};
+
+// ----------------------- Mesh System Impl ---------------------------------
+
 MeshSystemImpl::MeshSystemImpl() { m_meshMap.reserve(128); }
 
 bool MeshSystemImpl::insertMesh(id_t meshId, MeshEntry&& meshEntry) {
@@ -708,8 +886,12 @@ std::unordered_map<std::string, id_t> MeshSystemImpl::traverseScene(
       return insertedMeshes;
     }
   } else {
-    // traverse the mesh list and process the original mesh (add new materials,
-    // ...)
+    // local variables as shortcuts
+    auto const& accessors = model.accessors;
+    auto const& textures = model.textures;
+    auto const& images = model.images;
+
+    // traverse the mesh list and process the original mesh
     for (auto const& mesh : model.meshes) {
       id_t const meshId = fnv1aHash(gltfPath.string() + mesh.name);
       MeshEntry entry{};
@@ -723,26 +905,17 @@ std::unordered_map<std::string, id_t> MeshSystemImpl::traverseScene(
 
       if (auto msgs = anyPrimitivesMissingOrInvalidFields(mesh);
           !msgs.empty()) {
-        LOGW << AVK_LOG_YLW "[GLTF Loader] mesh name " << mesh.name << ':'
-             << std::flush;
-        for (auto const& msg : msgs) LOGW << "\n\t" << msg;
-        LOGW << AVK_LOG_RST << std::endl;
+        printWarningList(msgs, mesh.name);
         continue;
       }
       if (auto msgs = anyPrimitiveWithInvalidAccessors(mesh, model.accessors);
           !msgs.empty()) {
-        LOGW << AVK_LOG_YLW "[GLTF Loader] mesh name " << mesh.name << ':'
-             << std::flush;
-        for (auto const& msg : msgs) LOGW << "\n\t" << msg;
-        LOGW << AVK_LOG_RST << std::endl;
+        printWarningList(msgs, mesh.name);
         continue;
       }
       // TODO attribute generation
       if (auto msgs = anyPrimitiveMissingAttributes(mesh); !msgs.empty()) {
-        LOGW << AVK_LOG_YLW "[GLTF Loader] mesh name " << mesh.name << ':'
-             << std::flush;
-        for (auto const& msg : msgs) LOGW << "\n\t" << msg;
-        LOGW << AVK_LOG_RST << std::endl;
+        printWarningList(msgs, mesh.name);
         continue;
       }
       // now fill in mesh data
@@ -750,142 +923,87 @@ std::unordered_map<std::string, id_t> MeshSystemImpl::traverseScene(
       for (tinygltf::Primitive const& prim : mesh.primitives) {
         // TODO
         emitWarningIfMultipleTexCoord(prim);
-        // take vertex data
+        // take vertex data accessors
+        // (throws if not present, as previous checks should ensure presence)
         int const positionAccessorIndex = prim.attributes.at("POSITION");
         int const normalAccessorIndex = prim.attributes.at("NORMAL");
         int const tangentAccessorIndex = prim.attributes.at("TANGENT");
         int const uvAccessorIndex = prim.attributes.at("TEXCOORD_0");
-
-        tinygltf::Accessor const& positionAccessor =
-            model.accessors[positionAccessorIndex];
-        assert(positionAccessor.type == TINYGLTF_TYPE_VEC3 &&
-               positionAccessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT);
-        int const positionBufferViewIndex = positionAccessor.bufferView;
-        size_t const positionCount = positionAccessor.count;
-
-        tinygltf::Accessor const& normalAccessor =
-            model.accessors[normalAccessorIndex];
-        assert(normalAccessor.type == TINYGLTF_TYPE_VEC3 &&
-               normalAccessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT);
-        int const normalBufferViewIndex = normalAccessor.bufferView;
-        size_t const normalCount = normalAccessor.count;
-
-        tinygltf::Accessor const& tangentAccessor =
-            model.accessors[tangentAccessorIndex];
-        assert(tangentAccessor.type == TINYGLTF_TYPE_VEC3 &&
-               tangentAccessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT);
-        int const tangentBufferViewIndex = tangentAccessor.bufferView;
-        size_t const tangentCount = tangentAccessor.count;
-
-        tinygltf::Accessor const& uvAccessor = model.accessors[uvAccessorIndex];
-        assert(uvAccessor.type == TINYGLTF_TYPE_VEC2 &&
-               uvAccessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT);
-        int const uvBufferViewIndex = uvAccessor.bufferView;
-        size_t const uvCount = uvAccessor.count;
-        assert(positionCount == normalCount && normalCount == tangentCount &&
-               tangentCount == uvCount);
-
-        // take index data
         int const indicesAccessorIndex = prim.indices;
-        tinygltf::Accessor const& indicesAccessor =
-            model.accessors[indicesAccessorIndex];
-        assert(indicesAccessor.type == TINYGLTF_TYPE_SCALAR &&
-               indicesAccessor.componentType ==
-                   TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT);
-        int const indicesBufferViewIndex = indicesAccessor.bufferView;
-        size_t const indicesCount = indicesAccessor.count;
 
-        entry.primitives.emplace_back(positionCount, indicesCount, true);
+        auto const& positionAccessor = accessors[positionAccessorIndex];
+        auto const& normalAccessor = accessors[normalAccessorIndex];
+        auto const& tangentAccessor = accessors[tangentAccessorIndex];
+        auto const& uvAccessor = accessors[uvAccessorIndex];
+        auto const& indicesAccessor = accessors[indicesAccessorIndex];
+
+        // clang-format off
+        assert(positionAccessor.type == TINYGLTF_TYPE_VEC3 && positionAccessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT);
+        assert(normalAccessor.type == TINYGLTF_TYPE_VEC3 && normalAccessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT);
+        assert(tangentAccessor.type == TINYGLTF_TYPE_VEC3 && tangentAccessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT);
+        assert(uvAccessor.type == TINYGLTF_TYPE_VEC2 && uvAccessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT);
+        assert(indicesAccessor.type == TINYGLTF_TYPE_SCALAR && indicesAccessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT);
+        assert(positionAccessor.count == normalAccessor.count && normalAccessor.count == tangentAccessor.count && tangentAccessor.count == uvAccessor.count);
+        // clang-format on
+
+        // copy index data
+        size_t const dstPrimIdx = entry.primitives.size();
+        entry.primitives.emplace_back(positionAccessor.count,
+                                      indicesAccessor.count, true);
+        auto& dstPrim = entry.primitives.back();
         // - positions
-        {
-          tinygltf::BufferView bufferView =
-              model.bufferViews[positionBufferViewIndex];
-          tinygltf::Buffer const& buffer = model.buffers[bufferView.buffer];
-          for (size_t posIdx = 0; posIdx < positionCount; ++posIdx) {
-            size_t const offset = posIdx * bufferView.byteStride +
-                                  bufferView.byteOffset +
-                                  positionAccessor.byteOffset;
-            assert(offset < buffer.data.size() &&
-                   offset < (bufferView.byteOffset + bufferView.byteLength));
-
-            auto const* elemPtr =
-                reinterpret_cast<glm::vec3 const*>(&buffer.data[offset]);
-            entry.primitives.back().positions[posIdx] = *elemPtr;
-          }
+        if (!copyAttributeVector(dstPrim.positions, model, positionAccessor)) {
+          LOGE << AVK_LOG_RED "[GLTF Loader] Failed to copy positions for mesh "
+               << mesh.name << ", primitive " << dstPrimIdx
+               << ", skipping primitive" AVK_LOG_RST << std::endl;
+          continue;
         }
         // - index (note: no accessor byte offset)
-        {
-          tinygltf::BufferView const& bufferView =
-              model.bufferViews[indicesBufferViewIndex];
-          tinygltf::Buffer const& buffer = model.buffers[bufferView.buffer];
-          for (size_t indicesIdx = 0; indicesIdx < indicesCount; ++indicesIdx) {
-            size_t const offset =
-                indicesIdx * bufferView.byteStride + bufferView.byteOffset;
-            assert(offset < buffer.data.size() &&
-                   offset < (bufferView.byteOffset + bufferView.byteLength));
-
-            auto const* elemPtr =
-                reinterpret_cast<uint32_t const*>(&buffer.data[offset]);
-            entry.primitives.back().indices[indicesIdx] = *elemPtr;
-          }
+        if (!copyIndices(dstPrim.indices, model, indicesAccessor)) {
+          LOGE << AVK_LOG_RED "[GLTF Loader] Failed to copy indices for mesh "
+               << mesh.name << ", primitive " << dstPrimIdx
+               << ", skipping primitive" AVK_LOG_RST << std::endl;
+          continue;
         }
         // - other attributes: normal, tangent, uv
-        {
-          tinygltf::BufferView const& bufferView =
-              model.bufferViews[normalBufferViewIndex];
-          tinygltf::Buffer const& buffer = model.buffers[bufferView.buffer];
-          for (size_t normalIdx = 0; normalIdx < normalCount; ++normalIdx) {
-            size_t const offset = normalIdx * bufferView.byteStride +
-                                  bufferView.byteOffset +
-                                  normalAccessor.byteOffset;
-            assert(offset < buffer.data.size() &&
-                   offset < (bufferView.byteOffset + bufferView.byteLength));
-
-            auto const* elemPtr =
-                reinterpret_cast<glm::vec3 const*>(&buffer.data[offset]);
-            entry.primitives.back().attrs[normalIdx].normal = *elemPtr;
-            auto& n = entry.primitives.back().attrs[normalIdx].normal;
-            if (glm::epsilonNotEqual(glm::length2(n), 1.f, 1e-5f)) {
-              n = glm::normalize(n);
-            }
-          }
+        // for simplicity, first use temporary vectors, then copy into dest
+        std::vector<glm::vec3> normals, tangents;
+        std::vector<glm::vec2> uvs;
+        normals.reserve(normalAccessor.count);
+        tangents.reserve(tangentAccessor.count);
+        uvs.reserve(uvAccessor.count);
+        if (!copyAttributeVector(normals, model, normalAccessor)) {
+          LOGE << AVK_LOG_RED "[GLTF Loader] Failed to copy normals for mesh "
+               << mesh.name << ", primitive " << dstPrimIdx
+               << ", skipping primitive" AVK_LOG_RST << std::endl;
+          continue;
         }
-        {
-          tinygltf::BufferView const& bufferView =
-              model.bufferViews[tangentBufferViewIndex];
-          tinygltf::Buffer const& buffer = model.buffers[bufferView.buffer];
-          for (size_t tangentIdx = 0; tangentIdx < tangentCount; ++tangentIdx) {
-            size_t const offset = tangentIdx * bufferView.byteStride +
-                                  bufferView.byteOffset +
-                                  tangentAccessor.byteOffset;
-            assert(offset < buffer.data.size() &&
-                   offset < (bufferView.byteOffset + bufferView.byteLength));
-
-            auto const* elemPtr =
-                reinterpret_cast<glm::vec3 const*>(&buffer.data[offset]);
-            entry.primitives.back().attrs[tangentIdx].tangent = *elemPtr;
-            auto& t = entry.primitives.back().attrs[tangentIdx].tangent;
-            if (glm::epsilonNotEqual(glm::length2(t), 1.f, 1e-5f)) {
-              t = glm::normalize(t);
-              // tangent should also be perpendicular to its normal, we are
-              // not checking for that
-            }
-          }
+        if (!copyAttributeVector(tangents, model, tangentAccessor)) {
+          LOGE << AVK_LOG_RED "[GLTF Loader] Failed to copy tangents for mesh "
+               << mesh.name << ", primitive " << dstPrimIdx
+               << ", skipping primitive" AVK_LOG_RST << std::endl;
+          continue;
         }
-        {
-          tinygltf::BufferView const& bufferView =
-              model.bufferViews[uvBufferViewIndex];
-          tinygltf::Buffer const& buffer = model.buffers[bufferView.buffer];
-          for (size_t uvIdx = 0; uvIdx < uvCount; ++uvIdx) {
-            size_t const offset = uvIdx * bufferView.byteStride +
-                                  bufferView.byteOffset + uvAccessor.byteOffset;
-            assert(offset < buffer.data.size() &&
-                   offset < (bufferView.byteOffset + bufferView.byteLength));
-
-            auto const* elemPtr =
-                reinterpret_cast<glm::vec2 const*>(&buffer.data[offset]);
-            entry.primitives.back().attrs[uvIdx].uv = *elemPtr;
-          }
+        if (!copyAttributeVector(uvs, model, uvAccessor)) {
+          LOGE << AVK_LOG_RED "[GLTF Loader] Failed to copy uvs for mesh "
+               << mesh.name << ", primitive " << dstPrimIdx
+               << ", skipping primitive" AVK_LOG_RST << std::endl;
+          continue;
+        }
+        assert(normals.size() == tangents.size() &&
+               tangents.size() == uvs.size() &&
+               uvs.size() == dstPrim.attrs.size());
+        for (size_t i = 0; i < dstPrim.attrs.size(); ++i) {
+          dstPrim.attrs[i].uv = uvs[i];
+          dstPrim.attrs[i].normal = normals[i];
+          dstPrim.attrs[i].tangent = tangents[i];
+          // normalization (maybe not necessary)
+          auto& n = dstPrim.attrs[i].normal;
+          auto& t = dstPrim.attrs[i].tangent;
+          if (glm::epsilonNotEqual(glm::length2(n), 1.f, 1e-5f))
+            n = glm::normalize(n);
+          if (glm::epsilonNotEqual(glm::length2(n), 1.f, 1e-5f))
+            t = glm::normalize(t);
         }
         // - create material for the primitive
         tinygltf::Material const& material = model.materials[prim.material];
@@ -893,103 +1011,40 @@ std::unordered_map<std::string, id_t> MeshSystemImpl::traverseScene(
 
         // -- if the material is already present, then skip
         if (!matReg.materialLookupIncreaseRefCountIfFound(materialId)) {
-          tinygltf::PbrMetallicRoughness const& pbr =
-              material.pbrMetallicRoughness;
+          auto const& pbr = material.pbrMetallicRoughness;
           // note: mesh starts with ref count 1 until component. material starts
           // at 1 because at least this mesh uses it
-          MaterialEntry materialEntry{};
-          materialEntry.refCount.store(1, std::memory_order_relaxed);
-          // note: we are relying on tinygltf default values for properties
-          // which are absent on the glTF file. Example: emissiveFactor is
-          // additive, hence tinygltf default it at 0,0,0
-          // while, baseColorFactor, which is multiplicative factors, are
-          // defaulted to 1 by tinygltf (metallicFactor, roughnessFactor 1 too)
-          materialEntry.albedoFactor =
-              floatGlm4VecFromDoubleArray(pbr.baseColorFactor);
-          materialEntry.emissiveFactor =
-              floatGlm3VecFromDoubleArray(material.emissiveFactor);
-          materialEntry.metallicFactor = pbr.metallicFactor;
-          materialEntry.roughnessFactor = pbr.roughnessFactor;
-          // now check each of the 4 textures for existence and create if not
-          // - albedo (RGBA|RGB|BC|ETC2)
-          if (pbr.baseColorTexture.index >= 0) {
-            assert(pbr.baseColorTexture.texCoord == 0);
-            tinygltf::Image const& image =
-                model.images[model.textures[pbr.baseColorTexture.index].source];
-            id_t const albedoId = fnv1aHash(
-                gltfPath.string() + std::to_string(pbr.baseColorTexture.index) +
-                image.uri);
-            if (matReg.textureLookupIncreaseRefCountIfFound(albedoId)) {
-              materialEntry.albedoTex = albedoId;
-            } else if (matReg.textureLoad(gltfPath, albedoId, image)) {
-              materialEntry.albedoTex = albedoId;
-            } else {
-              LOGE << AVK_LOG_RED "[GLTF Loader] Couldn't load image "
-                   << image.uri << " for mesh " << mesh.name
-                   << ", skipping it" AVK_LOG_RST << std::endl;
-            }
-          }
-          // - metalRough (RGBA|RGB|BC|ETC2), RG channels matter
-          if (pbr.metallicRoughnessTexture.index >= 0) {
-            assert(pbr.metallicRoughnessTexture.texCoord == 0);
-            tinygltf::Image const& image =
-                model.images[model.textures[pbr.metallicRoughnessTexture.index]
-                                 .source];
-            id_t const metalRoughId = fnv1aHash(
-                gltfPath.string() +
-                std::to_string(pbr.metallicRoughnessTexture.index) + image.uri);
-            if (matReg.textureLookupIncreaseRefCountIfFound(metalRoughId)) {
-              materialEntry.metalRoughnessTex = metalRoughId;
-            } else if (matReg.textureLoad(gltfPath, metalRoughId, image)) {
-              materialEntry.metalRoughnessTex = metalRoughId;
-            } else {
-              LOGE << AVK_LOG_RED "[GLTF Loader] Couldn't load image "
-                   << image.uri << " for mesh " << mesh.name
-                   << ", skipping it" AVK_LOG_RST << std::endl;
-            }
-          }
-          // - normal (RGB|BC|ETC2)
-          if (material.normalTexture.index >= 0) {
-            assert(material.normalTexture.texCoord == 0);
-            tinygltf::Image const& image =
-                model.images[model.textures[material.normalTexture.index]
-                                 .source];
-            id_t const normalId = fnv1aHash(
-                gltfPath.string() +
-                std::to_string(material.normalTexture.index) + image.uri);
-            if (matReg.textureLookupIncreaseRefCountIfFound(normalId)) {
-              materialEntry.normalTex = normalId;
-            } else if (matReg.textureLoad(gltfPath, normalId, image)) {
-              materialEntry.normalTex = normalId;
-            } else {
-              LOGE << AVK_LOG_RED "[GLTF Loader] Couldn't load image "
-                   << image.uri << " for mesh " << mesh.name
-                   << ", skipping it" AVK_LOG_RST << std::endl;
-            }
-          }
-          // - emissive (RGB|BC|ETC2)
-          if (material.emissiveTexture.index >= 0) {
-            assert(material.emissiveTexture.texCoord == 0);
-            tinygltf::Image const& image =
-                model.images[model.textures[material.emissiveTexture.index]
-                                 .source];
-            id_t const emissiveId = fnv1aHash(
-                gltfPath.string() +
-                std::to_string(material.emissiveTexture.index) + image.uri);
-            if (matReg.textureLookupIncreaseRefCountIfFound(emissiveId)) {
-              materialEntry.emissiveTex = emissiveId;
-            } else if (matReg.textureLoad(gltfPath, emissiveId, image)) {
-              materialEntry.emissiveTex = emissiveId;
-            } else {
-              LOGE << AVK_LOG_RED "[GLTF Loader] Couldn't load image "
-                   << image.uri << " for mesh " << mesh.name
-                   << ", skipping it" AVK_LOG_RST << std::endl;
-            }
-          }
+          auto materialEntry = makeMaterialEntryFromTinyGLTF(material, pbr);
+          // load textures with rollback of reference counts on failure
+          std::vector<id_t> savedTextureIds;
+          savedTextureIds.reserve(8);
+          // clang-format off
+          std::array<TexSpec, 4> specs{{
+              {pbr.baseColorTexture.index,         pbr.baseColorTexture.texCoord,         0.f,                                        &MaterialEntry::albedoTex,         "baseColor"},
+              {pbr.metallicRoughnessTexture.index, pbr.metallicRoughnessTexture.texCoord, 0.f,                                        &MaterialEntry::metalRoughnessTex, "metallicRoughness"},
+              {material.normalTexture.index,       material.normalTexture.texCoord, static_cast<float>(material.normalTexture.scale), &MaterialEntry::normalTex,         "normal"},
+              {material.emissiveTexture.index,     material.emissiveTexture.texCoord,     0.f,                                        &MaterialEntry::emissiveTex,       "emissive"}
+          }};
+          // clang-format on
 
-          // save texture ids so that we can tick down ref counters for
-          // textures after `materialEntry` goes in the moved from state
-          std::vector<id_t> textures = texturesFromMaterialEntry(materialEntry);
+          // - albedo (RGBA|RGB|BC|ETC2)
+          // - metalRough (RGBA|RGB|BC|ETC2), RG channels matter
+          // - normal (RGB|BC|ETC2)
+          // - emissive (RGB|BC|ETC2)
+          for (auto const& s : specs) {
+            if (s.imageIndex < 0) continue;
+            tinygltf::Texture const& tex = textures[s.imageIndex];
+            tinygltf::Image const& image = images[tex.source];
+
+            id_t const texId = fnv1aHash(
+                gltfPath.string() + std::to_string(s.imageIndex) + image.uri);
+            if (id_t loaded =
+                    loadTextureMaybe(matReg, gltfPath, texId, image, mesh.name);
+                loaded == texId) {
+              materialEntry.*(s.field) = loaded;
+              savedTextureIds.push_back(loaded);
+            }
+          }
 
           // finally, insert the material in the registry
           if (!matReg.materialInsert(materialId, std::move(materialEntry))) {
@@ -1000,18 +1055,27 @@ std::unordered_map<std::string, id_t> MeshSystemImpl::traverseScene(
                     "artifacts) (Textures are NOT deallocated)" AVK_LOG_RST
                  << std::endl;
             // tick down ref counters for all textures
-            for (id_t tex : textures) {
+            for (id_t tex : savedTextureIds) {
               matReg.textureDecreaseRefCountIfPresent(tex);
             }
           }
 
-          entry.primitives.back().material = materialId;
+          dstPrim.material = materialId;
+
+          // Compute Spherical Bounds
+          {
+            auto const& acc = model.accessors[prim.attributes.at("POSITION")];
+            glm::vec3 const min = floatGlm3VecFromDoubleArray(acc.minValues);
+            glm::vec3 const max = floatGlm3VecFromDoubleArray(acc.maxValues);
+            dstPrim.bounds.Center = (min + max) * 0.5f;
+            dstPrim.bounds.Radius = glm::length(max - dstPrim.bounds.Center);
+          }
         }  // end if (!matReg.materialLookupIncreaseRefCountIfFound(materialId))
       }  // for (tinygltf::Primitive const& prim : mesh.primitives)
 
       // prepare material ids so that, if insertion fails, we can decrease
       // material ref counts and texture ref counts
-      std::vector<id_t> materials = materialsFromMeshEntry(entry);
+      std::vector<id_t> materialsVec = materialsFromMeshEntry(entry);
 
       // insert the current mesh entry
       if (!insertMesh(meshId, std::move(entry))) {
@@ -1019,7 +1083,7 @@ std::unordered_map<std::string, id_t> MeshSystemImpl::traverseScene(
              << " inside the Mesh System. Skipping it (textures and materials "
                 "are NOT Deallocated)" AVK_LOG_RST
              << std::endl;
-        for (id_t mat : materials) {
+        for (id_t mat : materialsVec) {
           matReg.materialDecreaseRefCountsCascadingIfPresent(mat);
         }
       } else {
@@ -1100,6 +1164,72 @@ std::unordered_map<std::string, id_t> MeshSystemImpl::loadMeshesFromScene(
   return traverseScene(model, path, opts, matReg);
 }
 
+// --------------- Mesh System API Implementation ---------------------------
+
+bool MeshSystemImpl::acquireMesh(id_t meshId) {
+  return lookupIncreaseRefCountIfFound(meshId, m_meshMap, m_meshMapMtx);
+}
+
+bool MeshSystemImpl::releaseMesh(id_t meshId) {
+  std::shared_lock rLock{m_meshMapMtx};
+  auto it = m_meshMap.find(meshId);
+  if (it == m_meshMap.cend()) return false;
+
+  int const old = it->second.refCount.fetch_sub(1, std::memory_order_acq_rel);
+  assert(old >= 1);
+  // doesn't cascade to materials even if new count is zero, because mesh
+  // is still there
+  return true;
+}
+
+bool MeshSystemImpl::unloadMeshIfUnusedCascading(id_t meshId,
+                                                 MaterialRegistry& matReg) {
+  {
+    std::shared_lock rLock{m_meshMapMtx};
+    auto it = m_meshMap.find(meshId);
+    if (it == m_meshMap.end() ||
+        it->second.refCount.load(std::memory_order_acquire) > 0)
+      return false;
+  }
+  {
+    std::unique_lock wLock{m_meshMapMtx};
+    auto it = m_meshMap.find(meshId);
+    if (it == m_meshMap.end() ||
+        it->second.refCount.load(std::memory_order_acquire) > 0)
+      return false;
+
+    // note: not removing materials. call GC method for that
+    for (auto const& prim : it->second.primitives) {
+      matReg.materialDecreaseRefCountsCascadingIfPresent(prim.material);
+    }
+    m_meshMap.erase(it);
+    return true;
+  }
+}
+
+// mesh first, then materials, then textures, so that reference counters can
+// be inspected at their lowest possible value
+void MeshSystemImpl::gcUnusedResources(MaterialRegistry& matReg) {
+  // cleanup meshes
+  {
+    std::lock_guard rLock{m_meshMapMtx};
+    for (auto it = m_meshMap.begin(); it != m_meshMap.end(); /*inside*/) {
+      if (it->second.refCount.load(std::memory_order_acquire) > 0) {
+        ++it;
+      } else {
+        for (auto const& prim : it->second.primitives) {
+          matReg.materialDecreaseRefCountsCascadingIfPresent(prim.material);
+        }
+        it = m_meshMap.erase(it);
+      }
+    }
+  }
+  // cleanup materials
+  matReg.materialRemoveAllUnused();
+  // cleanup textures
+  matReg.textureRemoveAllUnused();
+}
+
 // ------------------------- Interface --------------------------------------
 
 MeshSystem::MeshSystem()
@@ -1109,6 +1239,22 @@ MeshSystem::MeshSystem()
 std::unordered_map<std::string, id_t> MeshSystem::loadScene(
     const std::filesystem::path& path, const SceneImportOptions& opts) {
   return m_impl->loadMeshesFromScene(path, opts, *m_matReg);
+}
+
+bool MeshSystem::acquireMesh(id_t meshId) {
+  return m_impl->acquireMesh(meshId);
+}
+
+bool MeshSystem::releaseMesh(id_t meshId) {
+  return m_impl->releaseMesh(meshId);
+}
+
+bool MeshSystem::unloadMeshIfUnusedCascading(id_t meshId) {
+  return m_impl->unloadMeshIfUnusedCascading(meshId, *m_matReg);
+}
+
+void MeshSystem::gcUnusedResources() {
+  return m_impl->gcUnusedResources(*m_matReg);
 }
 
 }  // namespace avk

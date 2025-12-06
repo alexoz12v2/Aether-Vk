@@ -16,23 +16,6 @@
 
 namespace avk {
 
-// TODO possible: Store a importance metric on the rendering
-//   required: Bitmask for storing when frustum culling passed,screen space area
-// TODO Component Container must track the reference count for each component
-struct MeshComponent {
-  /// Hash of the container object
-  id_t Object;
-  /// Hash of the referenced mesh
-  /// \warning There can be multiple mesh components having same mesh id
-  id_t Mesh;
-  /// Bounding Box of this mesh in Model Space.
-  /// - Once mesh loaded, this is constant and used to spawn `RenderComponent`
-  ///   instance, whose bounds vary with the transform
-  /// \warning a copy from the mash asset in the system class
-  SphericalBB Bounds;
-};
-static_assert(std::is_standard_layout_v<MeshComponent>);
-
 struct SceneImportOptions {
   bool applySceneTransform;
 };
@@ -45,6 +28,19 @@ class MeshSystem : public NonMoveable {
   // TODO integrate with Android AAsset
   [[nodiscard]] std::unordered_map<std::string, id_t> loadScene(
       std::filesystem::path const& path, SceneImportOptions const& opts);
+
+  /// increases mesh refCount if found, and returns true if that's the case
+  bool acquireMesh(id_t meshId);
+
+  /// decreases refCount of mesh
+  /// \warning caller should release only when it actually acquired the mesh
+  bool releaseMesh(id_t meshId);
+
+  /// unloads mesh only if refCount == 0 and decrease materials ref count
+  bool unloadMeshIfUnusedCascading(id_t meshId);
+
+  /// removes unused mesh/materials/textures
+  void gcUnusedResources();
 
  private:
   std::unique_ptr<MeshSystemImpl> m_impl;
