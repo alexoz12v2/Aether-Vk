@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="AetherVk.App.Pages.ShellPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+    xmlns:core="using:AetherVk.Core.ViewModels" 
+    xmlns:cu="using:CommunityToolkit.WinUI.Controls" 
+    xmlns:avk="using:AetherVk.UserControls"
+    mc:Ignorable="d">
+    <Page.Resources>
+        <core:ShellPageViewModel x:Key="ViewModel" />
+    </Page.Resources>
+
+    <Grid RowDefinitions="Auto,*" DataContext="{StaticResource ViewModel}">
+        <!-- VisualStateManager: Listen for certain events to change the appearence of some controls
+         example: Responsiveness-->
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup>
+                <VisualState>
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="{StaticResource PageBreakpoint1920}"/>
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <!-- TODO Set Styles and Setters for maximum window class -->
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState>
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="{StaticResource PageBreakpoint1260}" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <!-- TODO Set Styles and Setters for window class -->
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState>
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="{StaticResource PageBreakpoint920}" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <!-- TODO Set Styles and Setters for window class -->
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+            <!-- TODO Other Groups for Trigger for user settings -->
+        </VisualStateManager.VisualStateGroups>
+
+        <!-- Title Bar on top of the main page -->
+        <TitleBar Grid.Row="0"
+            VerticalAlignment="Top"
+            IsBackButtonEnabled="False" IsPaneToggleButtonVisible="False">
+            <TitleBar.LeftHeader>
+                <StackPanel Orientation="Horizontal">
+                    <Image Source="/Assets/SplashScreen.png" Width="23" Margin="10,0,0,0" />
+                    <MenuBar>
+                        <MenuBarItem Title="File">
+                            <MenuFlyoutItem Text="New" />
+                            <MenuFlyoutItem Text="Open" />
+                            <MenuFlyoutItem Text="Save" />
+                            <MenuFlyoutSeparator />
+                            <MenuFlyoutItem Text="Exit" />
+                        </MenuBarItem>
+                        <MenuBarItem Title="Edit">
+                            <MenuFlyoutItem Text="Undo" />
+                            <MenuFlyoutItem Text="Redo" />
+                            <MenuFlyoutItem Text="Cut" />
+                            <MenuFlyoutItem Text="Copy" />
+                            <MenuFlyoutItem Text="Paste" />
+                        </MenuBarItem>
+                    </MenuBar>
+                </StackPanel>
+            </TitleBar.LeftHeader>
+        </TitleBar>
+
+        <!-- Dynamic Grid Content -->
+        <avk:SplitContainerControl Grid.Row="1"/>
+    </Grid>
+</Page>

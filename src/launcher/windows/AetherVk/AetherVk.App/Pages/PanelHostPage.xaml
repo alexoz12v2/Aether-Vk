@@ -1,0 +1,50 @@
+<Page
+    x:Class="AetherVk.Pages.PanelHostPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AetherVk.Pages"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:ui="using:CommunityToolkit.WinUI"
+    xmlns:media="using:CommunityToolkit.WinUI.Media"
+    xmlns:controls="using:CommunityToolkit.WinUI.Controls"
+    mc:Ignorable="d">
+    <Border Margin="{StaticResource SpacingControl}" Opacity="0.5" CornerRadius="12">
+        <Grid ColumnDefinitions="48,auto" RowDefinitions="48,auto" Background="{StaticResource AcrylicBrushBlurred}">
+            <!-- Community Toolkit Effect Setup -->
+            <media:UIElementExtensions.VisualFactory>
+                <media:PipelineVisualFactory Source="{media:BackdropSource}">
+                    <media:BlurEffect Amount="15" />
+                </media:PipelineVisualFactory>
+            </media:UIElementExtensions.VisualFactory>
+            
+            <!-- Icon from Community Toolkit Extension -->
+            <StackPanel Grid.Column="0" Grid.Row="0" Orientation="Horizontal">
+                <StackPanel.Resources>
+                    <Style x:Key="BaseAppBarButtonStyle" TargetType="AppBarButton" BasedOn="{StaticResource DefaultAppBarButtonStyle}">
+                        <Setter Property="MaxWidth" Value="24"/>
+                        <Setter Property="VerticalAlignment" Value="Center" />
+                    </Style>
+                    <Style TargetType="AppBarButton" BasedOn="{StaticResource BaseAppBarButtonStyle}"/>
+                    <Style x:Key="MainAppBarButtonStyle" TargetType="AppBarButton" BasedOn="{StaticResource BaseAppBarButtonStyle}">
+                        <Setter Property="MaxWidth" Value="32"/>
+                    </Style>
+                </StackPanel.Resources>
+
+                <Button Style="{StaticResource MainAppBarButtonStyle}">
+                    <Button.Content>
+                        <FontIcon Glyph="&#xE70D;" />
+                    </Button.Content>
+                    <!-- When Chevron Opened, show flyout with all buttons -->
+                    <Button.Flyout>
+                        <Flyout>
+                            <controls:UniformGrid>
+                                <AppBarButton Icon="{ui:FontIcon Glyph=&#xE729;}" Label="Splash Screen"/>
+                            </controls:UniformGrid>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Page>
