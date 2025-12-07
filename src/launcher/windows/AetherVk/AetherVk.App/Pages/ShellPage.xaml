@@ -5,12 +5,12 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
-    xmlns:core="using:AetherVk.Core.ViewModels" 
+    xmlns:vm="using:AetherVk.Core.ViewModels" 
     xmlns:cu="using:CommunityToolkit.WinUI.Controls" 
     xmlns:avk="using:AetherVk.UserControls"
     mc:Ignorable="d">
     <Page.Resources>
-        <core:ShellPageViewModel x:Key="ViewModel" />
+        <vm:ShellPageViewModel x:Key="ViewModel" />
     </Page.Resources>
 
     <Grid RowDefinitions="Auto,*" DataContext="{StaticResource ViewModel}">
