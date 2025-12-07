@@ -3,6 +3,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:AetherVk.Pages"
+    xmlns:vm="using:AetherVk.Core.ViewModels"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:ui="using:CommunityToolkit.WinUI"
@@ -10,6 +11,33 @@
     xmlns:controls="using:CommunityToolkit.WinUI.Controls"
     mc:Ignorable="d">
     <Page.MinWidth>256</Page.MinWidth>
+    <Page.Resources>
+        <vm:PanelHostPageViewModel x:Key="ViewModel" />
+        
+        <Storyboard x:Key="ChevronRotateUp">
+            <DoubleAnimation Storyboard.TargetName="ChevronRotate"
+                             Storyboard.TargetProperty="Angle"
+                             To="180"
+                             Duration="0:0:0.15"
+                             EnableDependentAnimation="True">
+                <DoubleAnimation.EasingFunction>
+                    <QuadraticEase EasingMode="EaseInOut" />
+                </DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+        </Storyboard>
+        <Storyboard x:Key="ChevronRotateDown">
+            <DoubleAnimation Storyboard.TargetName="ChevronRotate"
+                             Storyboard.TargetProperty="Angle"
+                             To="0"
+                             Duration="0:0:0.15"
+                             EnableDependentAnimation="True">
+                <DoubleAnimation.EasingFunction>
+                    <QuadraticEase EasingMode="EaseInOut" />
+                </DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+        </Storyboard>
+    </Page.Resources>
+
     <Border Margin="{StaticResource SpacingControl}" CornerRadius="12" Background="Transparent">
         <media:UIElementExtensions.VisualFactory>
             <media:PipelineVisualFactory Source="{media:BackdropSource}">
@@ -31,7 +59,7 @@
                 </Style>
                 <SolidColorBrush x:Key="TabColor" Color="#770E0E0E"/>
             </Grid.Resources>
-            
+
             <!-- Local Responsive States -->
             <VisualStateManager.VisualStateGroups>
                 <VisualStateGroup x:Name="ResponsiveStates">
@@ -77,21 +105,44 @@
                     Padding="{StaticResource ButtonPadding}"
                     HorizontalAlignment="Left"
                     VerticalAlignment="Stretch">
-                <Button Style="{StaticResource MainButtonStyle}" Background="Transparent">
+                <Button Style="{StaticResource MainButtonStyle}" 
+                        HorizontalContentAlignment="Center"
+                        Background="Transparent">
                     <Button.Content>
-                        <FontIcon x:Name="HeaderIcon" Glyph="{StaticResource GlyphChevronDown}" />
+                        <Canvas Width="24" Height="24" Scale="0.7,0.7,0.7">
+                            <!-- https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/shapes#path -->
+                            <Path Stroke="White"
+                                  StrokeThickness="2"
+                                  StrokeEndLineCap="Round"
+                                  StrokeStartLineCap="Round"
+                                  Data="M 0 0 L 12 12 L 24 0">
+                                <Path.RenderTransform>
+                                    <RotateTransform x:Name="ChevronRotate" CenterX="12" CenterY="6" />
+                                </Path.RenderTransform>
+                            </Path>
+                        </Canvas>
                     </Button.Content>
                     <!-- When Chevron Opened, show flyout with all buttons -->
                     <Button.Flyout>
                         <Flyout x:Name="HeaderFlyout" Opened="HeaderFlyout_Opened" Closed="HeaderFlyout_Closed" >
                             <controls:UniformGrid>
-                                <AppBarButton Icon="{ui:FontIcon FontSize={StaticResource CaptionTextBlockFontSize}, Glyph={StaticResource GlyphChevronDown}}" Label="Splash Screen"/>
+                                <AppBarButton Icon="{ui:FontIcon FontSize={StaticResource CaptionTextBlockFontSize}, Glyph={StaticResource GlyphHome}}" Label="Splash Screen"/>
                             </controls:UniformGrid>
                         </Flyout>
                     </Button.Flyout>
                 </Button>
             </Border>
-            <Border CornerRadius="12"  Grid.Row="1" Background="{StaticResource TabColor}" />
+            <Border 
+                x:Name="OuterBorder"
+                CornerRadius="12"  
+                Grid.Row="1"
+                PointerMoved="OuterBorder_PointerMoved"
+                PointerExited="OuterBorder_PointerExited"
+                BorderThickness="{StaticResource PaddingItem}"
+                BorderBrush="{StaticResource TabColor}"
+                Background="{StaticResource TabColor}">
+                <Rectangle Fill="Aqua" />
+            </Border>
         </Grid>
     </Border>
 </Page>
