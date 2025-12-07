@@ -9,42 +9,89 @@
     xmlns:media="using:CommunityToolkit.WinUI.Media"
     xmlns:controls="using:CommunityToolkit.WinUI.Controls"
     mc:Ignorable="d">
-    <Border Margin="{StaticResource SpacingControl}" Opacity="0.5" CornerRadius="12">
-        <Grid ColumnDefinitions="48,auto" RowDefinitions="48,auto" Background="{StaticResource AcrylicBrushBlurred}">
-            <!-- Community Toolkit Effect Setup -->
-            <media:UIElementExtensions.VisualFactory>
-                <media:PipelineVisualFactory Source="{media:BackdropSource}">
-                    <media:BlurEffect Amount="15" />
-                </media:PipelineVisualFactory>
-            </media:UIElementExtensions.VisualFactory>
-            
-            <!-- Icon from Community Toolkit Extension -->
-            <StackPanel Grid.Column="0" Grid.Row="0" Orientation="Horizontal">
-                <StackPanel.Resources>
-                    <Style x:Key="BaseAppBarButtonStyle" TargetType="AppBarButton" BasedOn="{StaticResource DefaultAppBarButtonStyle}">
-                        <Setter Property="MaxWidth" Value="24"/>
-                        <Setter Property="VerticalAlignment" Value="Center" />
-                    </Style>
-                    <Style TargetType="AppBarButton" BasedOn="{StaticResource BaseAppBarButtonStyle}"/>
-                    <Style x:Key="MainAppBarButtonStyle" TargetType="AppBarButton" BasedOn="{StaticResource BaseAppBarButtonStyle}">
-                        <Setter Property="MaxWidth" Value="32"/>
-                    </Style>
-                </StackPanel.Resources>
+    <Page.MinWidth>256</Page.MinWidth>
+    <Border Margin="{StaticResource SpacingControl}" CornerRadius="12" Background="Transparent">
+        <media:UIElementExtensions.VisualFactory>
+            <media:PipelineVisualFactory Source="{media:BackdropSource}">
+                <media:BlurEffect Amount="15" />
+            </media:PipelineVisualFactory>
+        </media:UIElementExtensions.VisualFactory>
 
-                <Button Style="{StaticResource MainAppBarButtonStyle}">
+        <Grid RowDefinitions="32,*" Background="Transparent" RowSpacing="0">
+            <!-- Local Control Resources -->
+            <Grid.Resources>
+                <Style x:Key="BaseButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+                    <Setter Property="MaxWidth" Value="24"/>
+                    <Setter Property="VerticalAlignment" Value="Center" />
+                </Style>
+                <Style TargetType="Button" BasedOn="{StaticResource BaseButtonStyle}"/>
+                <Style x:Key="MainButtonStyle" TargetType="Button" BasedOn="{StaticResource BaseButtonStyle}">
+                    <Setter Property="MaxWidth" Value="48"/>
+                    <Setter Property="BorderThickness" Value="0" />
+                </Style>
+                <SolidColorBrush x:Key="TabColor" Color="#770E0E0E"/>
+            </Grid.Resources>
+            
+            <!-- Local Responsive States -->
+            <VisualStateManager.VisualStateGroups>
+                <VisualStateGroup x:Name="ResponsiveStates">
+                    <!-- Wide Layout-->
+                    <VisualState x:Name="WideState">
+                        <VisualState.StateTriggers>
+                            <AdaptiveTrigger MinWindowWidth="{StaticResource PageBreakpoint620}" />
+                        </VisualState.StateTriggers>
+                        <VisualState.Setters>
+                            <!-- HeaderBorder: Header Margin -->
+                            <Setter Target="HeaderBorder.Margin" Value="24,0,0,0" />
+                            <!-- HeaderBorder: Corner Radius TODO: Left/Right DependencyProperty -->
+                            <Setter Target="HeaderBorder.CornerRadius" Value="12,12,0,0" />
+                            <!-- HeaderIcon: Icon Scale -->
+                            <Setter Target="HeaderIcon.FontSize" Value="20" />
+                        </VisualState.Setters>
+                    </VisualState>
+                    <!-- Narrow Layout -->
+                    <VisualState x:Name="NarrowState">
+                        <VisualState.StateTriggers>
+                            <AdaptiveTrigger MinWindowWidth="0" />
+                        </VisualState.StateTriggers>
+                        <VisualState.Setters>
+                            <!-- HeaderBorder: Remove Header Margin -->
+                            <Setter Target="HeaderBorder.Margin" Value="0" />
+                            <!-- HeaderBorder: only left corner radius. TODO: Left/Right DependencyProperty -->
+                            <Setter Target="HeaderBorder.CornerRadius" Value="12,0,0,0" />
+                            <!-- HeaderIcon: Smaller Icon Scale -->
+                            <Setter Target="HeaderIcon.FontSize" Value="14" />
+                        </VisualState.Setters>
+                    </VisualState>
+                </VisualStateGroup>
+            </VisualStateManager.VisualStateGroups>
+
+            <!-- {StaticResource AcrylicBrushBlurred} -->
+            <!-- Header "Folder Tab" -->
+            <Border x:Name="HeaderBorder"
+                    Grid.Row="0" 
+                    Margin="24,0,0,0"
+                    CornerRadius="12,12,0,0"
+                    Width="192"
+                    Background="{StaticResource TabColor}" 
+                    Padding="{StaticResource ButtonPadding}"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Stretch">
+                <Button Style="{StaticResource MainButtonStyle}" Background="Transparent">
                     <Button.Content>
-                        <FontIcon Glyph="&#xE70D;" />
+                        <FontIcon x:Name="HeaderIcon" Glyph="{StaticResource GlyphChevronDown}" />
                     </Button.Content>
                     <!-- When Chevron Opened, show flyout with all buttons -->
                     <Button.Flyout>
-                        <Flyout>
+                        <Flyout x:Name="HeaderFlyout" Opened="HeaderFlyout_Opened" Closed="HeaderFlyout_Closed" >
                             <controls:UniformGrid>
-                                <AppBarButton Icon="{ui:FontIcon Glyph=&#xE729;}" Label="Splash Screen"/>
+                                <AppBarButton Icon="{ui:FontIcon FontSize={StaticResource CaptionTextBlockFontSize}, Glyph={StaticResource GlyphChevronDown}}" Label="Splash Screen"/>
                             </controls:UniformGrid>
                         </Flyout>
                     </Button.Flyout>
                 </Button>
-            </StackPanel>
+            </Border>
+            <Border CornerRadius="12"  Grid.Row="1" Background="{StaticResource TabColor}" />
         </Grid>
     </Border>
 </Page>
