@@ -80,8 +80,8 @@ namespace AetherVk.Pages
                 // set initial size to actual size (will update on size changed)
                 _BorderVisual.Size = new System.Numerics.Vector2((float)border.ActualWidth, (float)border.ActualHeight);
 
-                // initial gray brush
-                _BorderVisual.Brush = _Compositor.CreateColorBrush(Microsoft.UI.Colors.Gray);
+                // initial brush
+                _BorderVisual.Brush = _Compositor.CreateColorBrush(((SolidColorBrush)Resources["TabColor"]).Color);
 
                 // attach the visual to the Border
                 ElementCompositionPreview.SetElementChildVisual(border, _BorderVisual);
@@ -106,14 +106,12 @@ namespace AetherVk.Pages
             // animate value as a function of time
             CompositionPropertySet clock = _Compositor.CreatePropertySet();
             clock.InsertScalar("Time", 0);
+            clock.InsertScalar("Alpha", ((SolidColorBrush)Resources["TabColor"]).Color.A);
             System.Diagnostics.Stopwatch stopwatch = new();
 
-            // expression:
-            // Hue = fmod( Clock.Time * 60.0, 360.0 )         -> cycles hue at 60 deg/sec
-            // Sat = 1.0                                      -> full saturation
-            // Lightness = 0.5 + 0.25 * sin(Clock.Time*2.0)   -> gentle pulsation between 0.25..0.75
-            // Note: we use fmod (not %) and sin(), and reference Clock.Time
-            string expr = "ColorHsl(Mod(Clock.Time * 60.0, 360.0), 1.0, 0.5 + 0.25 * Sin(Clock.Time * 2.0))";
+            string sinVal = "Clamp((Sin(Clock.Time / 10000) + 1) * 127.5, 0, 255)";
+            string expr = $"ColorRGB(Clock.Alpha, {sinVal}, {sinVal}, {sinVal})";
+
             _HsvAnimation = _Compositor.CreateExpressionAnimation(expr);
             _HsvAnimation.SetReferenceParameter("Clock", clock);
 
@@ -148,7 +146,7 @@ namespace AetherVk.Pages
             if (_BorderVisual?.Brush is CompositionColorBrush colorBrush)
             {
                 colorBrush.StopAnimation(nameof(CompositionColorBrush.Color));
-                colorBrush.Color = Microsoft.UI.Colors.Gray;
+                colorBrush.Color = ((SolidColorBrush)Resources["TabColor"]).Color;
             }
 
             _HsvAnimation = null;
