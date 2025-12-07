@@ -36,6 +36,8 @@
                 </DoubleAnimation.EasingFunction>
             </DoubleAnimation>
         </Storyboard>
+
+        <SolidColorBrush x:Key="TabColor" Color="#770E0E0E"/>
     </Page.Resources>
 
     <Border Margin="{StaticResource SpacingControl}" CornerRadius="12" Background="Transparent">
@@ -57,7 +59,6 @@
                     <Setter Property="MaxWidth" Value="48"/>
                     <Setter Property="BorderThickness" Value="0" />
                 </Style>
-                <SolidColorBrush x:Key="TabColor" Color="#770E0E0E"/>
             </Grid.Resources>
 
             <!-- Local Responsive States -->
