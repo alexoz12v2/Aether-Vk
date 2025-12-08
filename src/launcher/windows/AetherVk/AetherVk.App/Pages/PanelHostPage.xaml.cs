@@ -109,7 +109,9 @@ namespace AetherVk.Pages
             clock.InsertScalar("Alpha", ((SolidColorBrush)Resources["TabColor"]).Color.A);
             System.Diagnostics.Stopwatch stopwatch = new();
 
-            string sinVal = "Clamp((Sin(Clock.Time / 10000) + 1) * 127.5, 0, 255)";
+            float frequency = 0.5f * 2f * float.Pi;
+            float target = 64;
+            string sinVal = $"Clamp((Sin(Clock.Time * {frequency}) + 1) * {target / 2}, 0, {target})";
             string expr = $"ColorRGB(Clock.Alpha, {sinVal}, {sinVal}, {sinVal})";
 
             _HsvAnimation = _Compositor.CreateExpressionAnimation(expr);
@@ -123,7 +125,8 @@ namespace AetherVk.Pages
                 // tick the clock
                 _RenderingHandler = (sender, e) =>
                 {
-                    clock.InsertScalar("Time", stopwatch.ElapsedMilliseconds);
+                    float seconds = (float)stopwatch.ElapsedMilliseconds / 1000;
+                    clock.InsertScalar("Time", seconds);
                 };
                 CompositionTarget.Rendering += _RenderingHandler;
             }

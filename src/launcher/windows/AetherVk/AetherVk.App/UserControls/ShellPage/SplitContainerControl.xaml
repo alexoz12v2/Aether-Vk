@@ -13,7 +13,7 @@
     <UserControl.Resources>
         <vm:SplitContainerControlViewModel x:Key="ViewModel" />
     </UserControl.Resources>
-
+    <!--
     <Grid x:Name="Container">
         <Grid.ColumnDefinitions>
             <ColumnDefinition MinWidth="128" />
@@ -32,5 +32,16 @@
 
         <cu:GridSplitter Grid.Column="1" Grid.Row="0" Grid.RowSpan="3" ResizeBehavior="BasedOnAlignment" ResizeDirection="Columns" Background="Transparent"/>
         <cu:GridSplitter Grid.Column="2" Grid.Row="1" Grid.ColumnSpan="2" ResizeBehavior="BasedOnAlignment" ResizeDirection="Rows" Background="Transparent"/>
+    </Grid>
+    -->
+    
+    
+    
+    <Grid x:Name="Container">
+        <!-- Templated controls instanced dynamically need a prepared template in the control they need to be
+              instantiated it-->
+        <Grid.Resources>
+            <cu:GridSplitter x:Key="TemplateSplitter" ResizeBehavior="BasedOnAlignment" />
+        </Grid.Resources>
     </Grid>
 </UserControl>
