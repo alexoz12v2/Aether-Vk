@@ -1,15 +1,18 @@
 using AetherVk.Core.ViewModels;
 using AetherVk.Pages;
+using AetherVk.UserControls.Shared;
+using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.WinUI.Controls;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Markup;
-using Microsoft.UI.Xaml.Media;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Input;
 
 // the RegisterPropertyChangedCallback method.
 // This enables application code to register for change notifications when the specified dependency property is changed
@@ -140,6 +143,8 @@ namespace AetherVk.UserControls
                     thePage.SetValue(Grid.RowSpanProperty, pageVm.RowSpan);
                     thePage.SetValue(Grid.ColumnSpanProperty, pageVm.ColumnSpan);
 
+                    AttachDependencyProperties(thePage);
+
                     ContainerPages.Add(pageVm.Id, thePage);
                     Container.Children.Add(thePage);
                 }
@@ -169,6 +174,17 @@ namespace AetherVk.UserControls
             }
         }
 
+        private static void AttachDependencyProperties(PanelHostPage thePage)
+        {
+            // set attached dependency property
+            // TODO: set the true command
+            ICommand debugCommand = new RelayCommand<string>(theString =>
+            {
+                Debug.WriteLine($"Hello There From the splitter! {theString}");
+            });
+            SplitActions.SetRequestSplit(thePage, debugCommand);
+        }
+
         private void RebuildSplitters(IReadOnlyList<GridElementViewModel> splitters)
         {
             // 1) Remove splitters that are no longer present
@@ -189,7 +205,7 @@ namespace AetherVk.UserControls
             {
                 if (!ContainerSplitters.TryGetValue(sVm.Id, out GridSplitter? existingSplitter))
                 {
-                    // Why XAML: https://stackoverflow.com/questions/5755455/how-to-set-control-template-in-code
+                    // Why XAML 😡: https://stackoverflow.com/questions/5755455/how-to-set-control-template-in-code
                     // Basically, Templated Controls have no template by default, hence you give it to them
                     string splitterXaml =
                         "<cu:GridSplitter xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'"
