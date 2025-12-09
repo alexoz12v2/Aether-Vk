@@ -86,7 +86,6 @@
   
   <ItemGroup>
     <Folder Include="TemplatedControls\" />
-    <Folder Include="UserControls\Shared\" />
   </ItemGroup>
     
   <ItemGroup>

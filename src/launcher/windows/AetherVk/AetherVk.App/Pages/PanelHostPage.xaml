@@ -2,7 +2,8 @@
     x:Class="AetherVk.Pages.PanelHostPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:AetherVk.Pages"
+    xmlns:avkpages="using:AetherVk.Pages"
+    xmlns:avkctrls="using:AetherVk.UserControls"
     xmlns:vm="using:AetherVk.Core.ViewModels"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -13,7 +14,7 @@
     <Page.MinWidth>256</Page.MinWidth>
     <Page.Resources>
         <vm:PanelHostPageViewModel x:Key="ViewModel" />
-        
+
         <Storyboard x:Key="ChevronRotateUp">
             <DoubleAnimation Storyboard.TargetName="ChevronRotate"
                              Storyboard.TargetProperty="Angle"
@@ -142,7 +143,12 @@
                 BorderThickness="{StaticResource PaddingItem}"
                 BorderBrush="{StaticResource TabColor}"
                 Background="{StaticResource TabColor}">
-                <Rectangle Fill="Aqua" />
+
+                <StackPanel Orientation="Vertical">
+                    <Rectangle Fill="Aqua" />
+                    <Button Content="Split" 
+                            x:Name="TheButton"/>
+                </StackPanel>
             </Border>
         </Grid>
     </Border>

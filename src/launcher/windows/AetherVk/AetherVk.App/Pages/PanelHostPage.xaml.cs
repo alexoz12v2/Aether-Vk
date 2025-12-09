@@ -1,3 +1,5 @@
+using AetherVk.UserControls.Shared;
+using CommunityToolkit.WinUI;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
@@ -6,6 +8,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using System;
 using System.Diagnostics;
+using System.Windows.Input;
 
 namespace AetherVk.Pages
 {
@@ -15,7 +18,43 @@ namespace AetherVk.Pages
         {
             InitializeComponent();
 
-            OuterBorder.Loaded += (sender, e) => { InitializeBorderVisual(OuterBorder); };
+            // the attached property
+            _ = RegisterPropertyChangedCallback(SplitActions.RequestSplitDependencyProperty, (self, dp) =>
+            {
+                // Retrieve the attached command
+                ICommand cmd = SplitActions.GetRequestSplit(this);
+
+                if (cmd != null)
+                {
+                    // Assign it directly to the button
+                    TheButton.Command = cmd;
+                    TheButton.CommandParameter = "Vertical";
+
+                    Debug.WriteLine("Attached command assigned to button.");
+                }
+                else
+                {
+                    // Optional: disable button if command is null
+                    TheButton.Command = null;
+                    TheButton.IsEnabled = false;
+
+                    Debug.WriteLine("Attached command cleared or not set yet.");
+                }
+            });
+
+            // Optional: initial check in case parent already set it
+            ICommand initialCmd = SplitActions.GetRequestSplit(this);
+            if (initialCmd != null)
+            {
+                TheButton.Command = initialCmd;
+                TheButton.CommandParameter = "Vertical";
+            }
+
+            // visual changes once XAML template loaded
+            OuterBorder.Loaded += (sender, e) =>
+            {
+                InitializeBorderVisual(OuterBorder);
+            };
         }
 
         private void HeaderFlyout_Opened(object sender, object e)

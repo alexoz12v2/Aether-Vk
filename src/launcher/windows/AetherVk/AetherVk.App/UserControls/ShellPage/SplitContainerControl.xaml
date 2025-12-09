@@ -1,4 +1,3 @@
-<?xml version="1.0" encoding="utf-8"?>
 <UserControl
     x:Class="AetherVk.UserControls.SplitContainerControl"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -13,30 +12,7 @@
     <UserControl.Resources>
         <vm:SplitContainerControlViewModel x:Key="ViewModel" />
     </UserControl.Resources>
-    <!--
-    <Grid x:Name="Container">
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition MinWidth="128" />
-            <ColumnDefinition Width="8"/>
-            <ColumnDefinition MinWidth="128" />
-        </Grid.ColumnDefinitions>
-        <Grid.RowDefinitions>
-            <RowDefinition MinHeight="128" />
-            <RowDefinition Height="8"/>
-            <RowDefinition MinHeight="128" />
-        </Grid.RowDefinitions>
-        
-        <pages:PanelHostPage Grid.Column="0" Grid.Row="0" Grid.RowSpan="3" />
-        <pages:PanelHostPage Grid.Column="2" Grid.Row="0" Grid.RowSpan="1" />
-        <pages:PanelHostPage Grid.Column="2" Grid.Row="2" Grid.RowSpan="1" />
 
-        <cu:GridSplitter Grid.Column="1" Grid.Row="0" Grid.RowSpan="3" ResizeBehavior="BasedOnAlignment" ResizeDirection="Columns" Background="Transparent"/>
-        <cu:GridSplitter Grid.Column="2" Grid.Row="1" Grid.ColumnSpan="2" ResizeBehavior="BasedOnAlignment" ResizeDirection="Rows" Background="Transparent"/>
-    </Grid>
-    -->
-    
-    
-    
     <Grid x:Name="Container">
         <!-- Templated controls instanced dynamically need a prepared template in the control they need to be
               instantiated it-->
