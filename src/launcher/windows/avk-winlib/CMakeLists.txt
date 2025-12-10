@@ -31,7 +31,13 @@ target_include_directories(avk-win-comutils
 )
 # no need to install the header set, since this is not an installable library
 # install()
-target_link_libraries(avk-win-comutils PUBLIC avk-core)
+target_link_directories(avk-win-comutils PRIVATE "${CLANG_RESOURCE_DIR}\\lib\\windows")
+target_link_libraries(avk-win-comutils 
+  PUBLIC 
+    avk-core ucrt vcruntime
+  PRIVATE
+    clang_rt.builtins-x86_64
+)
 set_target_properties(avk-win-comutils PROPERTIES
   # name of the interface .lib
   ARCHIVE_OUTPUT_NAME avkcomutils

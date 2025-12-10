@@ -1,9 +1,8 @@
 #pragma once
 
-// TODO maybe: move to cmake/bazel
 #ifdef AVK_OS_WINDOWS
 #  define VK_USE_PLATFORM_WIN32_KHR
-#elif defined(AVK_OS_MACOS)  // TODO: also iOS and iPadOS
+#elif defined(AVK_OS_MACOS)
 #  define VK_USE_PLATFORM_METAL_EXT
 #elif defined(AVK_OS_ANDROID)
 #  define VK_USE_PLATFORM_ANDROID_KHR
@@ -29,8 +28,7 @@
 #ifdef AVK_DEBUG
 #pragma GCC diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
 #endif
-#pragma clang attribute push(__attribute__((no_sanitize("cfi"))), \
-                             apply_to = any(function))
+
 #include <volk.h>
 #define VMA_STATIC_VULKAN_FUNCTIONS 0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
@@ -46,7 +44,6 @@ printf("VMA DEBUG: " format "\n", ## __VA_ARGS__)
 #endif
 
 #include <vk_mem_alloc.h>
-#pragma clang attribute pop
 #pragma GCC diagnostic pop
 // clang-format on
 
