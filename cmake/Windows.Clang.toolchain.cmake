@@ -218,8 +218,23 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL ARM)
     set(CMAKE_CXX_FLAGS_INIT "${CMAKE_CXX_FLAGS_INIT} /EHsc")
 endif()
 
+# Top-level CMakeLists.txt or toolchain file (run this BEFORE project() or before adding targets)
+execute_process(
+  COMMAND "${CMAKE_CXX_COMPILER}" --print-resource-dir
+  OUTPUT_VARIABLE CLANG_RESOURCE_DIR
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+if (CLANG_RESOURCE_DIR)
+  set(CLANG_RESOURCE_DIR "${CLANG_RESOURCE_DIR}" CACHE STRING "Resource directory for the clang compiler")
+else()
+  message(FATAL_ERROR "Could not obtain clang resource dir")
+endif()
+
 # Compiler
+# https://cmake.org/cmake/help/latest/variable/CMAKE_LANG_STANDARD_INCLUDE_DIRECTORIES.html
 foreach(LANG C CXX RC)
+    list(APPEND CMAKE_${LANG}_STANDARD_INCLUDE_DIRECTORIES "${CLANG_RESOURCE_DIR}/include")
     list(APPEND CMAKE_${LANG}_STANDARD_INCLUDE_DIRECTORIES "${VS_TOOLSET_PATH}/ATLMFC/include")
     list(APPEND CMAKE_${LANG}_STANDARD_INCLUDE_DIRECTORIES "${VS_TOOLSET_PATH}/include")
 endforeach()

@@ -125,9 +125,9 @@ macro(avk_cxx_flags)
     endif ()
 
     # arch specific
-    if (AVK_ARCH STREQUAL "X86_64")
+    if (AVK_ARCH STREQUAL "X86_64" OR AVK_ARCH STREQUAL "X86")
       #string(APPEND CMAKE_CXX_FLAGS " -march=x86-64-v3")
-      string(APPEND CMAKE_CXX_FLAGS "")
+      string(APPEND CMAKE_CXX_FLAGS " -msse2")
     elseif (AVK_ARCH STREQUAL "ARM")
       # you need to also check at runtime if you support neon
       string(APPEND CMAKE_CXX_FLAGS " -mfpu=neon")
@@ -172,6 +172,8 @@ macro(avk_cxx_flags)
 
         # windows has to copy the DLLs as usual
         if (AVK_OS STREQUAL "WINDOWS")
+          # Enable compatibility with Visual C++
+          string(APPEND CMAKE_CXX_FLAGS " -fms-compatibility")
           # Windows needs to declare the sanitizers DLL if we link against dynamically
           # Take CMAKE_CXX_COMPILER, which is clang, assume it is a fullpath, go up one level and add \lib\clang
           cmake_path(SET AVK_WIN_ASAN_PATH "${CMAKE_CXX_COMPILER}")
