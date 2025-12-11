@@ -1,5 +1,6 @@
 <Page
     x:Class="AetherVk.Pages.PanelHostPage"
+    x:Name="RootPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:avkpages="using:AetherVk.Pages"
@@ -10,6 +11,7 @@
     xmlns:ui="using:CommunityToolkit.WinUI"
     xmlns:media="using:CommunityToolkit.WinUI.Media"
     xmlns:controls="using:CommunityToolkit.WinUI.Controls"
+    xmlns:avktypes="using:AetherVk.Core.Types"
     mc:Ignorable="d">
     <Page.MinWidth>256</Page.MinWidth>
     <Page.Resources>
@@ -40,6 +42,10 @@
 
         <SolidColorBrush x:Key="TabColor" Color="#770E0E0E"/>
     </Page.Resources>
+
+    <Page.DataContext>
+        <StaticResource ResourceKey="ViewModel" />
+    </Page.DataContext>
 
     <Border Margin="{StaticResource SpacingControl}" CornerRadius="12" Background="Transparent">
         <media:UIElementExtensions.VisualFactory>
@@ -127,9 +133,29 @@
                     <!-- When Chevron Opened, show flyout with all buttons -->
                     <Button.Flyout>
                         <Flyout x:Name="HeaderFlyout" Opened="HeaderFlyout_Opened" Closed="HeaderFlyout_Closed" >
-                            <controls:UniformGrid>
-                                <AppBarButton Icon="{ui:FontIcon FontSize={StaticResource CaptionTextBlockFontSize}, Glyph={StaticResource GlyphHome}}" Label="Splash Screen"/>
-                            </controls:UniformGrid>
+                            <ItemsRepeaterScrollHost>
+                                <ScrollViewer>
+                                    <ItemsRepeater ItemsSource="{x:Bind ViewModel.Editors, Mode=OneWay}">
+                                        <ItemsRepeater.Layout>
+                                            <!-- TODO: Probably change the number of columns on the VisualStateGroup -->
+                                            <UniformGridLayout MaximumRowsOrColumns="3" />
+                                        </ItemsRepeater.Layout>
+
+                                        <ItemsRepeater.ItemTemplate>
+                                            <DataTemplate x:DataType="avktypes:EditorDescriptor">
+                                                <AppBarButton
+                                                    Label="{x:Bind Label, Mode=OneWay}"
+                                                    Command="{x:Bind Command, Mode=OneWay}"
+                                                    CommandParameter="{x:Bind PageType}">
+                                                    
+                                                </AppBarButton>
+                                            </DataTemplate>
+                                         </ItemsRepeater.ItemTemplate>
+
+                                        <!-- FontSize={StaticResource CaptionTextBlockFontSize} -->
+                                    </ItemsRepeater>
+                                </ScrollViewer>
+                            </ItemsRepeaterScrollHost>
                         </Flyout>
                     </Button.Flyout>
                 </Button>
@@ -143,12 +169,7 @@
                 BorderThickness="{StaticResource PaddingItem}"
                 BorderBrush="{StaticResource TabColor}"
                 Background="{StaticResource TabColor}">
-
-                <StackPanel Orientation="Vertical">
-                    <Rectangle Fill="Aqua" />
-                    <Button Content="Split" 
-                            x:Name="TheButton"/>
-                </StackPanel>
+                <Frame x:Name="EditorFrame" />
             </Border>
         </Grid>
     </Border>

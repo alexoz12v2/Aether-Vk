@@ -41,6 +41,7 @@
 
   <ItemGroup>
     <None Remove="DetailWindow.xaml" />
+    <None Remove="Pages\EditorPageSplashScreen.xaml" />
     <None Remove="Pages\PanelHostPage.xaml" />
     <None Remove="Pages\ShellPage.xaml" />
     <None Remove="Resources\Glyph.xaml" />
@@ -86,6 +87,12 @@
   
   <ItemGroup>
     <Folder Include="TemplatedControls\" />
+  </ItemGroup>
+  
+  <ItemGroup>
+    <Page Update="Pages\EditorPageSplashScreen.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
   </ItemGroup>
     
   <ItemGroup>
