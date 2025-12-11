@@ -1,6 +1,8 @@
+using AetherVk.Core.ViewModels;
 using AetherVk.UserControls.Shared;
 using CommunityToolkit.WinUI;
 using Microsoft.UI.Composition;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Input;
@@ -14,6 +16,9 @@ namespace AetherVk.Pages
 {
     internal sealed partial class PanelHostPage : Page
     {
+        [GeneratedDependencyProperty]
+        public partial Type EditorType { get; set; }
+
         public PanelHostPage()
         {
             InitializeComponent();
@@ -26,18 +31,10 @@ namespace AetherVk.Pages
 
                 if (cmd != null)
                 {
-                    // Assign it directly to the button
-                    TheButton.Command = cmd;
-                    TheButton.CommandParameter = "Vertical";
-
-                    Debug.WriteLine("Attached command assigned to button.");
+                    Debug.WriteLine("Attached command.");
                 }
                 else
                 {
-                    // Optional: disable button if command is null
-                    TheButton.Command = null;
-                    TheButton.IsEnabled = false;
-
                     Debug.WriteLine("Attached command cleared or not set yet.");
                 }
             });
@@ -46,15 +43,43 @@ namespace AetherVk.Pages
             ICommand initialCmd = SplitActions.GetRequestSplit(this);
             if (initialCmd != null)
             {
-                TheButton.Command = initialCmd;
-                TheButton.CommandParameter = "Vertical";
+                Debug.WriteLine("Attached command.");
+            }
+
+            // If content dependency property was not initialized, go to splash screen by default
+            if (EditorType == null)
+            {
+                EditorType = typeof(EditorPageSplashScreen);
             }
 
             // visual changes once XAML template loaded
-            OuterBorder.Loaded += (sender, e) =>
+            OuterBorder.Loaded += OuterBorder_Loaded;
+
+            // once the whole page has been loaded, it's safe to act on the template, in particular,
+            // we can navigate to our initial page
+            Loaded += PanelHostPage_OnLoaded;
+        }
+
+        private void PanelHostPage_OnLoaded(object sender, RoutedEventArgs e)
+        {
+            if (EditorFrame.Content == null && EditorType != null)
             {
-                InitializeBorderVisual(OuterBorder);
-            };
+                _ = EditorFrame.Navigate(EditorType);
+            }
+        }
+
+        private void OuterBorder_Loaded(object sender, RoutedEventArgs e)
+        {
+            InitializeBorderVisual(OuterBorder);
+        }
+
+        private static void OnEditorTypeChanged(DependencyObject self, DependencyPropertyChangedEventArgs args)
+        {
+            PanelHostPage thePage = (PanelHostPage)self;
+            if (args.NewValue is Type t && thePage.EditorFrame != null)
+            {
+                _ = thePage.EditorFrame.Navigate(t);
+            }
         }
 
         private void HeaderFlyout_Opened(object sender, object e)
@@ -194,6 +219,8 @@ namespace AetherVk.Pages
             _HsvAnimation = null;
         }
 
+        // View Model
+        private PanelHostPageViewModel ViewModel => (PanelHostPageViewModel)Resources["ViewModel"];
         // Border Hovering Event Tracking 
         private bool IsHovering => _HsvAnimation != null;
 

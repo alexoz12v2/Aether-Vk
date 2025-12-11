@@ -15,6 +15,7 @@
     </Filter>
   </ItemGroup>
 
+  <!-- 
   <ItemGroup>
     <ClInclude Include="framework.h">
       <Filter>Header Files</Filter>
@@ -31,4 +32,5 @@
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
+  -->
 </Project>
