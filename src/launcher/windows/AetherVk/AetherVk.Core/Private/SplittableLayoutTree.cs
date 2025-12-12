@@ -132,6 +132,11 @@ namespace AetherVk.Core.Private
         public IList<LayoutElementSpecification> Splitters { get; } = [];
     }
 
+    internal enum TreeChangedAction
+    {
+        Add, Remove, RatioChanged
+    }
+
     internal sealed class LayoutTree(LeafNode initialRoot) : IDisposable
     {
         public Rect Bounds { get; set; } = new Rect(0, 0, 1, 1);
@@ -140,7 +145,13 @@ namespace AetherVk.Core.Private
         private readonly ReaderWriterLockSlim _Lock = new();
 
         // Fired every time the tree structure changed
-        public event Action? TreeChanged;
+        public event Action<TreeChangedAction, Node?>? TreeChanged;
+
+        // Ugly workaround such that you can react with the event at first node
+        public void PostConstructionTreeChanged()
+        {
+            TreeChanged?.Invoke(TreeChangedAction.Add, _Root);
+        }
 
         public Node? FindNode(Func<Node, bool> predicate)
         {
@@ -189,7 +200,7 @@ namespace AetherVk.Core.Private
                 finally { _Lock.ExitWriteLock(); }
 
                 // notify
-                TreeChanged?.Invoke();
+                TreeChanged?.Invoke(TreeChangedAction.Add, newLeaf);
                 return split;
             }
             finally { _Lock.ExitUpgradeableReadLock(); }
@@ -211,7 +222,7 @@ namespace AetherVk.Core.Private
                 }
                 finally { _Lock.ExitWriteLock(); }
 
-                TreeChanged?.Invoke();
+                TreeChanged?.Invoke(TreeChangedAction.RatioChanged, null);
             }
             finally { _Lock.ExitUpgradeableReadLock(); }
         }
@@ -250,7 +261,7 @@ namespace AetherVk.Core.Private
                 }
                 finally { _Lock.ExitWriteLock(); }
 
-                TreeChanged?.Invoke();
+                TreeChanged?.Invoke(TreeChangedAction.Remove, leaf);
             }
             finally { _Lock.ExitUpgradeableReadLock(); }
         }

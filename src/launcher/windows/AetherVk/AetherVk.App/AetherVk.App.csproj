@@ -15,6 +15,10 @@
 
     <!-- use the WinUI 3, which adds generation build steps -->
     <UseWinUI>true</UseWinUI>
+    
+    <!-- Disable App.g.i.cs generated Main function to handle proper dependency injection -->
+    <DefineConstants Condition="'$(DefineConstants)' != ''">$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <DefineConstants Condition="'$(DefineConstants)' == ''">DISABLE_XAML_GENERATED_MAIN</DefineConstants>
 
     <!-- Properties for Packaging the Application -->
     <AppxPackageSigningEnabled>True</AppxPackageSigningEnabled>
@@ -41,6 +45,7 @@
 
   <ItemGroup>
     <None Remove="DetailWindow.xaml" />
+    <None Remove="Pages\EditorPageConsole.xaml" />
     <None Remove="Pages\EditorPageSplashScreen.xaml" />
     <None Remove="Pages\PanelHostPage.xaml" />
     <None Remove="Pages\ShellPage.xaml" />
@@ -78,6 +83,8 @@
     <PackageReference Include="CommunityToolkit.WinUI.Controls.Sizers" Version="8.2.250402" />
     <PackageReference Include="CommunityToolkit.WinUI.Extensions" Version="8.2.250402" />
     <PackageReference Include="CommunityToolkit.WinUI.Media" Version="8.2.250402" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.1" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.7175" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.251106002" />
     <PackageReference Include="WinUIEx" Version="2.9.0" />
@@ -87,6 +94,12 @@
   
   <ItemGroup>
     <Folder Include="TemplatedControls\" />
+  </ItemGroup>
+  
+  <ItemGroup>
+    <Page Update="Pages\EditorPageConsole.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
   </ItemGroup>
   
   <ItemGroup>

@@ -1,8 +1,9 @@
-
 using AetherVk.Core.Private;
 using AetherVk.Core.Types;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
+using System.Collections.Specialized;
 
 namespace AetherVk.Core.ViewModels
 {
@@ -30,7 +31,7 @@ namespace AetherVk.Core.ViewModels
         public Orientation Orientation { get; } = orientation;
     }
 
-    public sealed partial class SplitContainerControlViewModel : ObservableObject
+    public sealed partial class SplitContainerControlViewModel : ObservableRecipient
     {
         private readonly LayoutTree _LayoutTree;
 
@@ -43,16 +44,48 @@ namespace AetherVk.Core.ViewModels
         [ObservableProperty]
         public partial IReadOnlyList<GridElementViewModel> Splitters { get; set; } = [];
 
-        public SplitContainerControlViewModel()
+        // Messenger for split view to communicate with its panels (observable recipient gives it)
+        // public StrongReferenceMessenger Messanger { get; }
+
+        // ViewModels of child components are managed here for controlled DI
+        public ObservableDictionary<Guid, PanelHostPageViewModel> Children { get; }
+
+        public SplitContainerControlViewModel() : base(new StrongReferenceMessenger())
         {
+            // Create child related objectsw
+            Children = [];
+            // Messanger = new();
+
             // initial layout with single leaf
             _LayoutTree = new LayoutTree(new LeafNode());
 
             // register for changes 
             _LayoutTree.TreeChanged += OnTreeChanged;
+            Children.CollectionChanging += (sender, eventArgs) =>
+            {
+                // recompute layout _before_ a removal
+                if (eventArgs.Action == NotifyCollectionChangedAction.Remove)
+                {
+                    RecomputeLayout();
+                }
+            };
+            Children.CollectionChanged += (sender, eventArgs) =>
+            {
+                // recompute layout _after_ an addition
+                if (eventArgs.Action == NotifyCollectionChangedAction.Add)
+                {
+                    RecomputeLayout();
+                }
+            };
 
             // manually recompute the initial layout
-            RecomputeLayout();
+            _LayoutTree.PostConstructionTreeChanged();
+        }
+
+        // TODO: To be used when messages are written
+        public void UnregisterChildFromMessenger<TMessage>(object recipient) where TMessage : class
+        {
+            Messenger.Unregister<TMessage>(recipient);
         }
 
         // TODO add more customization to command
@@ -66,9 +99,22 @@ namespace AetherVk.Core.ViewModels
                 : throw new InvalidOperationException("Couldn't find requested Node");
         }
 
-        private void OnTreeChanged()
+        private void OnTreeChanged(TreeChangedAction action, Node? node)
         {
-            RecomputeLayout();
+            switch (action)
+            {
+                case TreeChangedAction.Add:
+                    Children.Add(node!.Id.Id, new(Messenger));
+                    break;
+                case TreeChangedAction.Remove:
+                    _ = Children.Remove(node!.Id.Id);
+                    break;
+                case TreeChangedAction.RatioChanged:
+                    RecomputeLayout();
+                    break;
+                default:
+                    break;
+            }
         }
 
         private void RecomputeLayout()

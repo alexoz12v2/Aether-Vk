@@ -13,6 +13,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
+using Windows.UI.ViewManagement;
 
 // the RegisterPropertyChangedCallback method.
 // This enables application code to register for change notifications when the specified dependency property is changed
@@ -24,6 +25,8 @@ namespace AetherVk.UserControls
 {
     public sealed partial class SplitContainerControl : UserControl
     {
+        private SplitContainerControlViewModel ViewModel => (SplitContainerControlViewModel)Resources["ViewModel"];
+
         // an input or output is a dependency property, which you can set with GeneratedDependencyGenerator
         public SplitContainerControl()
         {
@@ -35,51 +38,50 @@ namespace AetherVk.UserControls
 
         private void SplitContainerControl_OnLoaded(object sender, RoutedEventArgs e)
         {
-            RebuildColumns(SplitContainerControlViewModel.ColumnDefinitions);
-            RebuildRows(SplitContainerControlViewModel.RowDefinitions);
+            RebuildColumns(ViewModel.ColumnDefinitions);
+            RebuildRows(ViewModel.RowDefinitions);
             // we start with one page, useless to rebuild
-            if (SplitContainerControlViewModel.Pages.Count != 1 && Container.Children.Count != 0) { throw new InvalidOperationException("dead"); }
-            Container.Children.Add(new PanelHostPage());
-            ContainerPages.Add(SplitContainerControlViewModel.Pages[0].Id, Container.Children[0]);
+            if (ViewModel.Pages.Count != 1 && Container.Children.Count != 0) { throw new InvalidOperationException("dead"); }
+            PanelHostPageViewModel childViewModel = ViewModel.Children[ViewModel.Pages[0].Id];
+            Container.Children.Add(new PanelHostPage(childViewModel));
+            ContainerPages.Add(ViewModel.Pages[0].Id, Container.Children[0]);
 
-            SplitContainerControlViewModel.PropertyChanged += (s, ev) =>
+            ViewModel.PropertyChanged += (s, ev) =>
             {
-                if (ev.PropertyName == nameof(SplitContainerControlViewModel.ColumnDefinitions))
+                if (ev.PropertyName == nameof(ViewModel.ColumnDefinitions))
                 {
-                    RebuildColumns(SplitContainerControlViewModel.ColumnDefinitions);
+                    RebuildColumns(ViewModel.ColumnDefinitions);
                 }
-                if (ev.PropertyName == nameof(SplitContainerControlViewModel.RowDefinitions))
+                if (ev.PropertyName == nameof(ViewModel.RowDefinitions))
                 {
-                    RebuildRows(SplitContainerControlViewModel.RowDefinitions);
+                    RebuildRows(ViewModel.RowDefinitions);
                 }
-                if (ev.PropertyName == nameof(SplitContainerControlViewModel.Pages))
+                if (ev.PropertyName == nameof(ViewModel.Pages))
                 {
-                    RebuildPages(SplitContainerControlViewModel.Pages);
+                    RebuildPages(ViewModel.Pages);
                 }
-                if (ev.PropertyName == nameof(SplitContainerControlViewModel.Splitters))
+                if (ev.PropertyName == nameof(ViewModel.Splitters))
                 {
-                    RebuildSplitters(SplitContainerControlViewModel.Splitters);
+                    RebuildSplitters(ViewModel.Splitters);
                 }
             };
 
             // TODO REMOVE: Insert a new panel after ~5 of runtime, and remove it after 5 seconds. Loop this
             PeriodicTimer timer = new(TimeSpan.FromSeconds(5));
-            GridElementViewModel first = SplitContainerControlViewModel.Pages[0];
+            GridElementViewModel first = ViewModel.Pages[0];
             _ = Task.Run(async () =>
             {
                 while (await timer.WaitForNextTickAsync())
                 {
                     _ = DispatcherQueue.TryEnqueue(() =>
                     {
-                        SplitContainerControlViewModel.SplitCommand.Execute(new SplitCommandData(
+                        ViewModel.SplitCommand.Execute(new SplitCommandData(
                             page: first, ratio: 0.5f, orientation: Core.Types.Orientation.Vertical));
                     });
                     return;
                 }
             });
         }
-
-        private SplitContainerControlViewModel SplitContainerControlViewModel => (SplitContainerControlViewModel)Resources["ViewModel"];
 
         #region GridDefinitions
         private readonly Dictionary<Guid, UIElement> ContainerPages = [];
@@ -126,6 +128,7 @@ namespace AetherVk.UserControls
             {
                 if (ContainerPages.TryGetValue(id, out UIElement? element))
                 {
+                    // TODO: This is the place in which you unregister messages
                     _ = Container.Children.Remove(element);
                     _ = ContainerPages.Remove(id);
                 }
@@ -137,7 +140,8 @@ namespace AetherVk.UserControls
                 if (!ContainerPages.TryGetValue(pageVm.Id, out UIElement? pageElement))
                 {
                     // create and add
-                    PanelHostPage thePage = new();
+                    PanelHostPageViewModel childViewModel = ViewModel.Children[pageVm.Id];
+                    PanelHostPage thePage = new(childViewModel);
                     thePage.SetValue(Grid.RowProperty, pageVm.Row);
                     thePage.SetValue(Grid.ColumnProperty, pageVm.Column);
                     thePage.SetValue(Grid.RowSpanProperty, pageVm.RowSpan);
@@ -195,6 +199,7 @@ namespace AetherVk.UserControls
             {
                 if (ContainerSplitters.TryGetValue(id, out GridSplitter? splitter))
                 {
+                    // TODO: This is the place in which you unregister messages
                     _ = Container.Children.Remove(splitter);
                     _ = ContainerSplitters.Remove(id);
                 }

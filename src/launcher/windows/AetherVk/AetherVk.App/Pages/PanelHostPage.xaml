@@ -15,8 +15,7 @@
     mc:Ignorable="d">
     <Page.MinWidth>256</Page.MinWidth>
     <Page.Resources>
-        <vm:PanelHostPageViewModel x:Key="ViewModel" />
-
+        <!-- Page Animations -->
         <Storyboard x:Key="ChevronRotateUp">
             <DoubleAnimation Storyboard.TargetName="ChevronRotate"
                              Storyboard.TargetProperty="Angle"
@@ -40,12 +39,12 @@
             </DoubleAnimation>
         </Storyboard>
 
+        <!-- Helper Classes -->
+        <avkpages:EditorToIconConverter x:Key="EditorToIconConverter" />
+
+        <!-- Page Brushes -->
         <SolidColorBrush x:Key="TabColor" Color="#770E0E0E"/>
     </Page.Resources>
-
-    <Page.DataContext>
-        <StaticResource ResourceKey="ViewModel" />
-    </Page.DataContext>
 
     <Border Margin="{StaticResource SpacingControl}" CornerRadius="12" Background="Transparent">
         <media:UIElementExtensions.VisualFactory>
@@ -144,13 +143,12 @@
                                         <ItemsRepeater.ItemTemplate>
                                             <DataTemplate x:DataType="avktypes:EditorDescriptor">
                                                 <AppBarButton
-                                                    Label="{x:Bind Label, Mode=OneWay}"
-                                                    Command="{x:Bind Command, Mode=OneWay}"
-                                                    CommandParameter="{x:Bind PageType}">
-                                                    
-                                                </AppBarButton>
+                                                    Label="{x:Bind Label, Mode=OneTime}"
+                                                    Command="{x:Bind Command, Mode=OneTime}"
+                                                    CommandParameter="{x:Bind PageType}"
+                                                    Icon="{x:Bind Converter={StaticResource EditorToIconConverter}}"/>
                                             </DataTemplate>
-                                         </ItemsRepeater.ItemTemplate>
+                                        </ItemsRepeater.ItemTemplate>
 
                                         <!-- FontSize={StaticResource CaptionTextBlockFontSize} -->
                                     </ItemsRepeater>
@@ -169,7 +167,15 @@
                 BorderThickness="{StaticResource PaddingItem}"
                 BorderBrush="{StaticResource TabColor}"
                 Background="{StaticResource TabColor}">
-                <Frame x:Name="EditorFrame" />
+                <Frame x:Name="EditorFrame">
+                    <Frame.ContentTransitions>
+                        <!-- Define Transition collection such the opacity changes -->
+                        <TransitionCollection>
+                            <!-- Fade-in Animation -->
+                            <ContentThemeTransition />
+                        </TransitionCollection>
+                    </Frame.ContentTransitions>
+                </Frame>
             </Border>
         </Grid>
     </Border>
