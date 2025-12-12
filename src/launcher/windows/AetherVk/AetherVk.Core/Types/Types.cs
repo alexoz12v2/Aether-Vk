@@ -12,7 +12,8 @@ namespace AetherVk.Core.Types
     // Used by PanelHostPageViewModel
     public enum EditorType
     {
-        SplashScreen
+        SplashScreen,
+        Console
     }
 
     public class EditorDescriptor(string label, EditorType pageType, ICommand command)

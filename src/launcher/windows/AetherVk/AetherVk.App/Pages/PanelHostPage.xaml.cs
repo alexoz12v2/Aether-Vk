@@ -1,26 +1,67 @@
+using AetherVk.Core.Types;
 using AetherVk.Core.ViewModels;
 using AetherVk.UserControls.Shared;
-using CommunityToolkit.WinUI;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Markup;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
+using Microsoft.UI.Xaml.Media.Imaging;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Windows.Input;
 
 namespace AetherVk.Pages
 {
+    internal sealed class EditorToIconConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, string language)
+        {
+            if (value is not EditorDescriptor ed)
+            {
+                return null!;
+            }
+            if (!string.IsNullOrWhiteSpace(ed.Glyph))
+            {
+                return new FontIcon { Glyph = ed.Glyph };
+            }
+            if (!string.IsNullOrWhiteSpace(ed.ImagePath))
+            {
+                return new ImageIcon { Source = new BitmapImage(new Uri(ed.ImagePath, UriKind.RelativeOrAbsolute)) };
+            }
+            if (!string.IsNullOrWhiteSpace(ed.VectorData))
+            {
+                // https://stackoverflow.com/questions/34880793/is-there-a-way-to-parse-a-vector-path-geometry-in-uwp-in-code-behind
+                return new PathIcon { Data = (Geometry)XamlBindingHelper.ConvertValue(typeof(Geometry), ed.VectorData) };
+            }
+            return null!;
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, string language)
+        {
+            throw new NotSupportedException(nameof(ConvertBack));
+        }
+    }
+
     internal sealed partial class PanelHostPage : Page
     {
-        [GeneratedDependencyProperty]
-        public partial Type EditorType { get; set; }
-
-        public PanelHostPage()
+        private static readonly Dictionary<EditorType, Type> _EditorsMap = new()
         {
+            { EditorType.SplashScreen, typeof(EditorPageSplashScreen) },
+            { EditorType.Console, typeof(EditorPageConsole) },
+        };
+
+        // View Model
+        public PanelHostPageViewModel ViewModel { get; }
+
+        public PanelHostPage(PanelHostPageViewModel viewModel)
+        {
+            ViewModel = viewModel;
             InitializeComponent();
 
             // the attached property
@@ -46,12 +87,6 @@ namespace AetherVk.Pages
                 Debug.WriteLine("Attached command.");
             }
 
-            // If content dependency property was not initialized, go to splash screen by default
-            if (EditorType == null)
-            {
-                EditorType = typeof(EditorPageSplashScreen);
-            }
-
             // visual changes once XAML template loaded
             OuterBorder.Loaded += OuterBorder_Loaded;
 
@@ -62,24 +97,25 @@ namespace AetherVk.Pages
 
         private void PanelHostPage_OnLoaded(object sender, RoutedEventArgs e)
         {
-            if (EditorFrame.Content == null && EditorType != null)
+            if (EditorFrame.Content == null)
             {
-                _ = EditorFrame.Navigate(EditorType);
+                _ = EditorFrame.Navigate(_EditorsMap.GetValueOrDefault(ViewModel.SelectedEditor, typeof(EditorPageSplashScreen)));
+            }
+
+            ViewModel.PropertyChanged += ViewModel_PropertyChanged;
+        }
+
+        private void ViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(ViewModel.SelectedEditor))
+            {
+                _ = EditorFrame.Navigate(_EditorsMap.GetValueOrDefault(ViewModel.SelectedEditor, typeof(EditorPageSplashScreen)));
             }
         }
 
         private void OuterBorder_Loaded(object sender, RoutedEventArgs e)
         {
             InitializeBorderVisual(OuterBorder);
-        }
-
-        private static void OnEditorTypeChanged(DependencyObject self, DependencyPropertyChangedEventArgs args)
-        {
-            PanelHostPage thePage = (PanelHostPage)self;
-            if (args.NewValue is Type t && thePage.EditorFrame != null)
-            {
-                _ = thePage.EditorFrame.Navigate(t);
-            }
         }
 
         private void HeaderFlyout_Opened(object sender, object e)
@@ -116,7 +152,7 @@ namespace AetherVk.Pages
         private void OuterBorder_PointerExited(object sender, PointerRoutedEventArgs e)
         {
             Border border = (Border)sender;
-            Windows.Foundation.Point pos = e.GetCurrentPoint(border).Position;
+            _ = e.GetCurrentPoint(border).Position;
             if (IsHovering)
             {
                 StopHoverAnimation();
@@ -219,8 +255,6 @@ namespace AetherVk.Pages
             _HsvAnimation = null;
         }
 
-        // View Model
-        private PanelHostPageViewModel ViewModel => (PanelHostPageViewModel)Resources["ViewModel"];
         // Border Hovering Event Tracking 
         private bool IsHovering => _HsvAnimation != null;
 
