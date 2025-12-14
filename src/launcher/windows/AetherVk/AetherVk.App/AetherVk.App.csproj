@@ -15,7 +15,7 @@
 
     <!-- use the WinUI 3, which adds generation build steps -->
     <UseWinUI>true</UseWinUI>
-    
+
     <!-- Disable App.g.i.cs generated Main function to handle proper dependency injection -->
     <DefineConstants Condition="'$(DefineConstants)' != ''">$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <DefineConstants Condition="'$(DefineConstants)' == ''">DISABLE_XAML_GENERATED_MAIN</DefineConstants>
@@ -79,6 +79,7 @@
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Labs.WinUI.DependencyPropertyGenerator" Version="0.1.251030-build.2370" />
+    <PackageReference Include="CommunityToolkit.WinUI.Collections" Version="8.2.250402" />
     <PackageReference Include="CommunityToolkit.WinUI.Controls.Primitives" Version="8.2.250402" />
     <PackageReference Include="CommunityToolkit.WinUI.Controls.Sizers" Version="8.2.250402" />
     <PackageReference Include="CommunityToolkit.WinUI.Extensions" Version="8.2.250402" />
@@ -87,33 +88,35 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.1" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.7175" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.251106002" />
+    <PackageReference Include="Serilog.Extensions.Hosting" Version="10.0.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageReference Include="WinUIEx" Version="2.9.0" />
 
     <ProjectReference Include="..\AetherVk.Core\AetherVk.Core.csproj" />
   </ItemGroup>
-  
+
   <ItemGroup>
     <Folder Include="TemplatedControls\" />
   </ItemGroup>
-  
+
   <ItemGroup>
     <Page Update="Pages\EditorPageConsole.xaml">
       <Generator>MSBuild:Compile</Generator>
     </Page>
   </ItemGroup>
-  
+
   <ItemGroup>
     <Page Update="Pages\EditorPageSplashScreen.xaml">
       <Generator>MSBuild:Compile</Generator>
     </Page>
   </ItemGroup>
-    
+
   <ItemGroup>
     <Page Update="DetailWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
     </Page>
   </ItemGroup>
-  
+
   <ItemGroup>
     <Page Update="Pages\ShellPage.xaml">
       <Generator>MSBuild:Compile</Generator>
@@ -122,13 +125,13 @@
       <Generator>MSBuild:Compile</Generator>
     </Page>
   </ItemGroup>
-  
+
   <ItemGroup>
     <Page Update="UserControls\ShellPage\SplitContainerControl.xaml">
       <Generator>MSBuild:Compile</Generator>
     </Page>
   </ItemGroup>
-  
+
   <ItemGroup>
     <Page Update="Resources\Glyph.xaml">
       <Generator>MSBuild:Compile</Generator>

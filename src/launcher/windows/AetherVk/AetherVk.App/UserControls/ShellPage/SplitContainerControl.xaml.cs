@@ -1,3 +1,4 @@
+using AetherVk.Core.Types;
 using AetherVk.Core.ViewModels;
 using AetherVk.Pages;
 using AetherVk.UserControls.Shared;
@@ -8,12 +9,10 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Markup;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Windows.Input;
-using Windows.UI.ViewManagement;
 
 // the RegisterPropertyChangedCallback method.
 // This enables application code to register for change notifications when the specified dependency property is changed
@@ -25,76 +24,63 @@ namespace AetherVk.UserControls
 {
     public sealed partial class SplitContainerControl : UserControl
     {
-        private SplitContainerControlViewModel ViewModel => (SplitContainerControlViewModel)Resources["ViewModel"];
+        private SplitContainerControlViewModel ViewModel => (SplitContainerControlViewModel)DataContext;
+
+        private readonly Dictionary<Guid, UIElement> ContainerPages = [];
+        private readonly Dictionary<Guid, GridSplitter> ContainerSplitters = [];
 
         // an input or output is a dependency property, which you can set with GeneratedDependencyGenerator
         public SplitContainerControl()
         {
             InitializeComponent();
-
-            // initialize dependency properties
             Loaded += SplitContainerControl_OnLoaded;
+            Unloaded += SplitContainerControl_OnUnloaded;
+        }
+
+        private void SplitContainerControl_OnUnloaded(object sender, RoutedEventArgs e)
+        {
+            ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
         }
 
         private void SplitContainerControl_OnLoaded(object sender, RoutedEventArgs e)
         {
             RebuildColumns(ViewModel.ColumnDefinitions);
             RebuildRows(ViewModel.RowDefinitions);
-            // we start with one page, useless to rebuild
-            if (ViewModel.Pages.Count != 1 && Container.Children.Count != 0) { throw new InvalidOperationException("dead"); }
-            PanelHostPageViewModel childViewModel = ViewModel.Children[ViewModel.Pages[0].Id];
-            Container.Children.Add(new PanelHostPage(childViewModel));
-            ContainerPages.Add(ViewModel.Pages[0].Id, Container.Children[0]);
+            RebuildPages(ViewModel.Pages);
+            RebuildSplitters(ViewModel.Splitters);
 
-            ViewModel.PropertyChanged += (s, ev) =>
-            {
-                if (ev.PropertyName == nameof(ViewModel.ColumnDefinitions))
-                {
-                    RebuildColumns(ViewModel.ColumnDefinitions);
-                }
-                if (ev.PropertyName == nameof(ViewModel.RowDefinitions))
-                {
-                    RebuildRows(ViewModel.RowDefinitions);
-                }
-                if (ev.PropertyName == nameof(ViewModel.Pages))
-                {
-                    RebuildPages(ViewModel.Pages);
-                }
-                if (ev.PropertyName == nameof(ViewModel.Splitters))
-                {
-                    RebuildSplitters(ViewModel.Splitters);
-                }
-            };
-
-            // TODO REMOVE: Insert a new panel after ~5 of runtime, and remove it after 5 seconds. Loop this
-            PeriodicTimer timer = new(TimeSpan.FromSeconds(5));
-            GridElementViewModel first = ViewModel.Pages[0];
-            _ = Task.Run(async () =>
-            {
-                while (await timer.WaitForNextTickAsync())
-                {
-                    _ = DispatcherQueue.TryEnqueue(() =>
-                    {
-                        ViewModel.SplitCommand.Execute(new SplitCommandData(
-                            page: first, ratio: 0.5f, orientation: Core.Types.Orientation.Vertical));
-                    });
-                    return;
-                }
-            });
+            ViewModel.PropertyChanged += OnViewModelPropertyChanged;
         }
 
-        #region GridDefinitions
-        private readonly Dictionary<Guid, UIElement> ContainerPages = [];
-        private readonly Dictionary<Guid, GridSplitter> ContainerSplitters = [];
+        private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs ev)
+        {
+            switch (ev.PropertyName)
+            {
+                case nameof(ViewModel.ColumnDefinitions):
+                    RebuildColumns(ViewModel.ColumnDefinitions);
+                    break;
+                case nameof(ViewModel.RowDefinitions):
+                    RebuildRows(ViewModel.RowDefinitions);
+                    break;
+                case nameof(ViewModel.Pages):
+                    RebuildPages(ViewModel.Pages);
+                    break;
+                case nameof(ViewModel.Splitters):
+                    RebuildSplitters(ViewModel.Splitters);
+                    break;
+                default:
+                    break;
+            }
+        }
 
-        // Grid.ColumnDefinitions and Grid.RowDefinitions are not DepenencyProperty, meaning we can't bind to them to
+        // Grid.ColumnDefinitions and Grid.RowDefinitions are not DependencyProperty, meaning we can't bind to them to
         // modify them dynamically directly.
         // Instead, since our ViewModel stores the current layout, we can react to changes in the layout inside our view model,
         // and manually modify the Grid's properties as we need them
-        private void RebuildColumns(IReadOnlyList<GridDefinitionViewModel> cols)
+        private void RebuildColumns(IReadOnlyList<GridDefinitionData> cols)
         {
             Container.ColumnDefinitions.Clear();
-            foreach (GridDefinitionViewModel c in cols)
+            foreach (GridDefinitionData c in cols)
             {
                 Container.ColumnDefinitions.Add(new ColumnDefinition
                 {
@@ -104,10 +90,10 @@ namespace AetherVk.UserControls
             }
         }
 
-        private void RebuildRows(IReadOnlyList<GridDefinitionViewModel> rows)
+        private void RebuildRows(IReadOnlyList<GridDefinitionData> rows)
         {
             Container.RowDefinitions.Clear();
-            foreach (GridDefinitionViewModel r in rows)
+            foreach (GridDefinitionData r in rows)
             {
                 Container.RowDefinitions.Add(new RowDefinition
                 {
@@ -116,80 +102,67 @@ namespace AetherVk.UserControls
                 });
             }
         }
-        #endregion
-        #region GridContent
-        private void RebuildPages(IReadOnlyList<GridElementViewModel> pages)
-        {
-            // 1) Remove visuals for pages that no longer exist
-            HashSet<Guid> pageIdsToKeep = [.. pages.Select(p => p.Id)];
-            List<Guid> keysToRemove = [.. ContainerPages.Keys.Where(k => !pageIdsToKeep.Contains(k))];
 
-            foreach (Guid id in keysToRemove)
+        private void RebuildPages(IReadOnlyList<GridElementData> pages)
+        {
+            HashSet<Guid> keep = [.. pages.Select(p => p.Id)];
+
+            foreach (Guid id in ContainerPages.Keys.Where(id => !keep.Contains(id)))
             {
-                if (ContainerPages.TryGetValue(id, out UIElement? element))
-                {
-                    // TODO: This is the place in which you unregister messages
-                    _ = Container.Children.Remove(element);
-                    _ = ContainerPages.Remove(id);
-                }
+                // TODO: This is the place in which you unregister messages
+                _ = Container.Children.Remove(ContainerPages[id]);
+                _ = ContainerPages.Remove(id);
+
             }
 
             // 2) Add new pages or update existing pages (row/col/span)
-            foreach (GridElementViewModel pageVm in pages)
+            foreach (GridElementData pageVm in pages)
             {
                 if (!ContainerPages.TryGetValue(pageVm.Id, out UIElement? pageElement))
                 {
-                    // create and add
-                    PanelHostPageViewModel childViewModel = ViewModel.Children[pageVm.Id];
-                    PanelHostPage thePage = new(childViewModel);
-                    thePage.SetValue(Grid.RowProperty, pageVm.Row);
-                    thePage.SetValue(Grid.ColumnProperty, pageVm.Column);
-                    thePage.SetValue(Grid.RowSpanProperty, pageVm.RowSpan);
-                    thePage.SetValue(Grid.ColumnSpanProperty, pageVm.ColumnSpan);
+                    // PanelHostPage thePage = _ChildPanelFactory.Create(childViewModel);
+                    ContentPresenter presenter = new()
+                    {
+                        ContentTemplate = (DataTemplate)Resources["ContentPresenterDataTemplate"],
+                        Content = ViewModel.Children[pageVm.Id]
+                    };
 
-                    AttachDependencyProperties(thePage);
+                    SetGrid(presenter, pageVm);
 
-                    ContainerPages.Add(pageVm.Id, thePage);
-                    Container.Children.Add(thePage);
+                    // AttachDependencyProperties(thePage);
+
+                    ContainerPages.Add(pageVm.Id, presenter);
+                    Container.Children.Add(presenter);
                 }
                 else
                 {
-                    // update the existing element's Grid attached properties if they changed
-                    if ((int)pageElement.GetValue(Grid.RowProperty) != pageVm.Row)
-                    {
-                        pageElement.SetValue(Grid.RowProperty, pageVm.Row);
-                    }
-
-                    if ((int)pageElement.GetValue(Grid.ColumnProperty) != pageVm.Column)
-                    {
-                        pageElement.SetValue(Grid.ColumnProperty, pageVm.Column);
-                    }
-
-                    if ((int)pageElement.GetValue(Grid.RowSpanProperty) != pageVm.RowSpan)
-                    {
-                        pageElement.SetValue(Grid.RowSpanProperty, pageVm.RowSpan);
-                    }
-
-                    if ((int)pageElement.GetValue(Grid.ColumnSpanProperty) != pageVm.ColumnSpan)
-                    {
-                        pageElement.SetValue(Grid.ColumnSpanProperty, pageVm.ColumnSpan);
-                    }
+                    SetGrid(pageElement, pageVm);
                 }
             }
         }
 
-        private static void AttachDependencyProperties(PanelHostPage thePage)
+        // TODO Existance check
+        private static void SetGrid(UIElement element, GridElementData data)
         {
-            // set attached dependency property
-            // TODO: set the true command
-            ICommand debugCommand = new RelayCommand<string>(theString =>
-            {
-                Debug.WriteLine($"Hello There From the splitter! {theString}");
-            });
-            SplitActions.SetRequestSplit(thePage, debugCommand);
+            element.SetValue(Grid.RowProperty, data.Row);
+            element.SetValue(Grid.ColumnProperty, data.Column);
+            element.SetValue(Grid.RowSpanProperty, data.RowSpan);
+            element.SetValue(Grid.ColumnSpanProperty, data.ColumnSpan);
         }
 
-        private void RebuildSplitters(IReadOnlyList<GridElementViewModel> splitters)
+        // TODO probably to remove in favour of templated controls and view model messaging
+        // private static void AttachDependencyProperties(PanelHostPage thePage)
+        // {
+        //     // set attached dependency property
+        //     // TODO: set the true command
+        //     ICommand debugCommand = new RelayCommand<string>(theString =>
+        //     {
+        //         Debug.WriteLine($"Hello There From the splitter! {theString}");
+        //     });
+        //     SplitActions.SetRequestSplit(thePage, debugCommand);
+        // }
+
+        private void RebuildSplitters(IReadOnlyList<GridElementData> splitters)
         {
             // 1) Remove splitters that are no longer present
             HashSet<Guid> splitterIdsToKeep = [.. splitters.Select(s => s.Id)];
@@ -206,7 +179,7 @@ namespace AetherVk.UserControls
             }
 
             // 2) Add new splitters or update existing ones
-            foreach (GridElementViewModel sVm in splitters)
+            foreach (GridElementData sVm in splitters)
             {
                 if (!ContainerSplitters.TryGetValue(sVm.Id, out GridSplitter? existingSplitter))
                 {
@@ -226,11 +199,7 @@ namespace AetherVk.UserControls
 
                     GridSplitter splitter = (GridSplitter)XamlReader.LoadWithInitialTemplateValidation(splitterXaml);
 
-                    // Set Grid attached properties dynamically
-                    splitter.SetValue(Grid.RowProperty, sVm.Row);
-                    splitter.SetValue(Grid.ColumnProperty, sVm.Column);
-                    splitter.SetValue(Grid.RowSpanProperty, sVm.RowSpan);
-                    splitter.SetValue(Grid.ColumnSpanProperty, sVm.ColumnSpan);
+                    SetGrid(splitter, sVm);
 
                     ContainerSplitters.Add(sVm.Id, splitter);
                     Container.Children.Add(splitter);
@@ -238,25 +207,7 @@ namespace AetherVk.UserControls
                 else
                 {
                     // update existing splitter attached properties if needed
-                    if ((int)existingSplitter.GetValue(Grid.RowProperty) != sVm.Row)
-                    {
-                        existingSplitter.SetValue(Grid.RowProperty, sVm.Row);
-                    }
-
-                    if ((int)existingSplitter.GetValue(Grid.ColumnProperty) != sVm.Column)
-                    {
-                        existingSplitter.SetValue(Grid.ColumnProperty, sVm.Column);
-                    }
-
-                    if ((int)existingSplitter.GetValue(Grid.RowSpanProperty) != sVm.RowSpan)
-                    {
-                        existingSplitter.SetValue(Grid.RowSpanProperty, sVm.RowSpan);
-                    }
-
-                    if ((int)existingSplitter.GetValue(Grid.ColumnSpanProperty) != sVm.ColumnSpan)
-                    {
-                        existingSplitter.SetValue(Grid.ColumnSpanProperty, sVm.ColumnSpan);
-                    }
+                    SetGrid(existingSplitter, sVm);
 
                     // if orientation changed, update ResizeDirection
                     GridSplitter.GridResizeDirection newDirection = sVm.Orientation == AetherVk.Core.Types.Orientation.Horizontal
@@ -270,6 +221,5 @@ namespace AetherVk.UserControls
                 }
             }
         }
-        #endregion
     }
 }

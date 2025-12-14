@@ -1,31 +1,37 @@
+using AetherVk.Core.Types;
+using AetherVk.Core.ViewModels;
+using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Controls.Primitives;
-using Microsoft.UI.Xaml.Data;
-using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Navigation;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Runtime.InteropServices.WindowsRuntime;
-using Windows.Foundation;
-using Windows.Foundation.Collections;
-
-// To learn more about WinUI, the WinUI project structure,
-// and more about our project templates, see: http://aka.ms/winui-project-info.
+using System.Threading.Tasks;
 
 namespace AetherVk.Pages
 {
-    /// <summary>
-    /// An empty page that can be used on its own or navigated to within a Frame.
-    /// </summary>
-    public sealed partial class EditorPageConsole : Page
+    internal sealed partial class EditorPageConsole : Page
     {
+        private EditorPageConsoleViewModel ViewModel => (EditorPageConsoleViewModel)DataContext;
+
         public EditorPageConsole()
         {
             InitializeComponent();
+
+            Loaded += EditorPageConsole_OnLoaded;
+        }
+
+        private void EditorPageConsole_OnLoaded(object sender, RoutedEventArgs e)
+        {
+            _ = DispatcherQueue.TryEnqueue(() => _ = AddText());
+        }
+
+        private async Task AddText()
+        {
+            await Task.Delay(2000);
+            Paragraph paragraph = new();
+            paragraph.Inlines.Add(new Run { Text = "The beautiful Text", Foreground = new SolidColorBrush(Colors.Green) });
+            ConsoleContent.Blocks.Add(paragraph);
+            _ = DispatcherQueue.TryEnqueue(() => _ = AddText());
         }
     }
 }

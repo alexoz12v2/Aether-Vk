@@ -7,51 +7,32 @@ using System.Collections.Specialized;
 
 namespace AetherVk.Core.ViewModels
 {
-    public sealed class GridElementViewModel(Guid id, int row, int col, int rowSpan, int colSpan)
-    {
-        public Guid Id { get; init; } = id;
-        public int Row { get; init; } = row;
-        public int Column { get; init; } = col;
-        public int RowSpan { get; init; } = rowSpan;
-        public int ColumnSpan { get; init; } = colSpan;
-        public bool IsSplitter { get; init; } = false;
-        // has meaning only if splitter
-        public Orientation Orientation { get; init; } = Orientation.Horizontal;
-    }
-
-    public sealed class GridDefinitionViewModel
-    {
-        public bool IsSplitter { get; init; } = false;
-    }
-
-    public sealed class SplitCommandData(GridElementViewModel page, float ratio, Orientation orientation)
-    {
-        public GridElementViewModel Page { get; } = page ?? throw new ArgumentNullException(nameof(page));
-        public float Ratio { get; } = ratio is <= 1 and >= 0 ? ratio : throw new ArgumentOutOfRangeException(nameof(ratio));
-        public Orientation Orientation { get; } = orientation;
-    }
-
     public sealed partial class SplitContainerControlViewModel : ObservableRecipient
     {
         private readonly LayoutTree _LayoutTree;
+        private readonly IAbstractParamFactory<PanelHostPageViewModel, IMessenger> _ChildViewModelFactory;
 
         [ObservableProperty]
-        public partial IReadOnlyList<GridDefinitionViewModel> RowDefinitions { get; set; } = [];
+        public partial IReadOnlyList<GridDefinitionData> RowDefinitions { get; set; } = [];
         [ObservableProperty]
-        public partial IReadOnlyList<GridDefinitionViewModel> ColumnDefinitions { get; set; } = [];
+        public partial IReadOnlyList<GridDefinitionData> ColumnDefinitions { get; set; } = [];
         [ObservableProperty]
-        public partial IReadOnlyList<GridElementViewModel> Pages { get; set; } = [];
+        public partial IReadOnlyList<GridElementData> Pages { get; set; } = [];
         [ObservableProperty]
-        public partial IReadOnlyList<GridElementViewModel> Splitters { get; set; } = [];
+        public partial IReadOnlyList<GridElementData> Splitters { get; set; } = [];
 
         // Messenger for split view to communicate with its panels (observable recipient gives it)
         // public StrongReferenceMessenger Messanger { get; }
 
         // ViewModels of child components are managed here for controlled DI
         public ObservableDictionary<Guid, PanelHostPageViewModel> Children { get; }
+        private readonly Dictionary<object, Guid> _ChildReferenceToGuidMapping = [];
 
-        public SplitContainerControlViewModel() : base(new StrongReferenceMessenger())
+        public SplitContainerControlViewModel(
+            IAbstractParamFactory<PanelHostPageViewModel, IMessenger> childViewModelFactory) : base(new StrongReferenceMessenger())
         {
+            _ChildViewModelFactory = childViewModelFactory;
+
             // Create child related objectsw
             Children = [];
             // Messanger = new();
@@ -75,6 +56,41 @@ namespace AetherVk.Core.ViewModels
                 if (eventArgs.Action == NotifyCollectionChangedAction.Add)
                 {
                     RecomputeLayout();
+                }
+                switch (eventArgs.Action)
+                {
+                    case NotifyCollectionChangedAction.Add:
+                        {
+                            if (eventArgs?.NewItems?[0] is KeyValuePair<Guid, PanelHostPageViewModel> kv)
+                            {
+                                _ChildReferenceToGuidMapping.Add(kv.Value, kv.Key);
+                            }
+                        }
+                        break;
+                    case NotifyCollectionChangedAction.Remove:
+                        {
+                            if (eventArgs?.OldItems?[0] is KeyValuePair<Guid, PanelHostPageViewModel> kv)
+                            {
+                                _ = _ChildReferenceToGuidMapping.Remove(kv.Value);
+                            }
+                        }
+                        break;
+                    case NotifyCollectionChangedAction.Reset:
+                        _ChildReferenceToGuidMapping.Clear();
+                        break;
+                    case NotifyCollectionChangedAction.Replace:
+                        {
+                            if (eventArgs?.NewItems?[0] is KeyValuePair<Guid, PanelHostPageViewModel> kvNew &&
+                                eventArgs?.OldItems?[0] is KeyValuePair<Guid, PanelHostPageViewModel> kvOld)
+                            {
+                                _ = _ChildReferenceToGuidMapping.Remove(kvOld.Value);
+                                _ChildReferenceToGuidMapping.Add(kvNew.Value, kvNew.Key);
+                            }
+                        }
+                        break;
+                    case NotifyCollectionChangedAction.Move:
+                    default:
+                        break;
                 }
             };
 
@@ -104,7 +120,7 @@ namespace AetherVk.Core.ViewModels
             switch (action)
             {
                 case TreeChangedAction.Add:
-                    Children.Add(node!.Id.Id, new(Messenger));
+                    Children.Add(node!.Id.Id, _ChildViewModelFactory.Create(Messenger));
                     break;
                 case TreeChangedAction.Remove:
                     _ = Children.Remove(node!.Id.Id);
@@ -121,11 +137,11 @@ namespace AetherVk.Core.ViewModels
         {
             Layout layout = _LayoutTree.ComputeLayout();
 
-            RowDefinitions = [.. layout.RowsDef.Select(r => new GridDefinitionViewModel { IsSplitter = r.IsSplitter })];
-            ColumnDefinitions = [.. layout.ColumnsDef.Select(c => new GridDefinitionViewModel { IsSplitter = c.IsSplitter })];
-            Pages = [.. layout.Pages.Select(p => new GridElementViewModel(
+            RowDefinitions = [.. layout.RowsDef.Select(r => new GridDefinitionData { IsSplitter = r.IsSplitter })];
+            ColumnDefinitions = [.. layout.ColumnsDef.Select(c => new GridDefinitionData { IsSplitter = c.IsSplitter })];
+            Pages = [.. layout.Pages.Select(p => new GridElementData(
                 id: p.Id, row: p.Row, col: p.Column, rowSpan: p.RowSpan, colSpan: p.ColumnSpan))];
-            Splitters = [.. layout.Splitters.Select(s => new GridElementViewModel(
+            Splitters = [.. layout.Splitters.Select(s => new GridElementData(
                 id: s.Id, row: s.Row, col: s.Column, rowSpan: s.RowSpan, colSpan: s.ColumnSpan) { IsSplitter = true, Orientation = s.Orientation })];
         }
     }

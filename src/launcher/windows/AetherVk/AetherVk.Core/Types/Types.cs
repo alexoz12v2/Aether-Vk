@@ -2,14 +2,39 @@ using System.Windows.Input;
 
 namespace AetherVk.Core.Types
 {
-    // Used by SplitContainerControlViewModel
+    #region SplitContainerControlViewModel
     public enum Orientation
     {
         Horizontal, // children side-by-side (left/right)
         Vertical
     }
 
-    // Used by PanelHostPageViewModel
+    public sealed class GridElementData(Guid id, int row, int col, int rowSpan, int colSpan)
+    {
+        public Guid Id { get; init; } = id;
+        public int Row { get; init; } = row;
+        public int Column { get; init; } = col;
+        public int RowSpan { get; init; } = rowSpan;
+        public int ColumnSpan { get; init; } = colSpan;
+        public bool IsSplitter { get; init; } = false;
+        // has meaning only if splitter
+        public Orientation Orientation { get; init; } = Orientation.Horizontal;
+    }
+
+    public sealed class GridDefinitionData
+    {
+        public bool IsSplitter { get; init; } = false;
+    }
+
+    public sealed class SplitCommandData(GridElementData page, float ratio, Orientation orientation)
+    {
+        public GridElementData Page { get; } = page ?? throw new ArgumentNullException(nameof(page));
+        public float Ratio { get; } = ratio is <= 1 and >= 0 ? ratio : throw new ArgumentOutOfRangeException(nameof(ratio));
+        public Orientation Orientation { get; } = orientation;
+    }
+    #endregion
+
+    #region PanelHostPageViewModel
     public enum EditorType
     {
         SplashScreen,
@@ -49,4 +74,27 @@ namespace AetherVk.Core.Types
             }
         }
     }
+    #endregion
+    #region MessagesModel
+
+    public readonly record struct Point(double X, double Y);
+
+    public enum SplitPreviewKind
+    {
+        None,
+        ValidSplit,
+        Coalesce,
+        Invalid
+    }
+
+    public readonly record struct SplitPreview(
+        SplitPreviewKind Kind,
+        Orientation Orientation,
+        float Ratio
+    );
+
+    public record SplitPreviewChanged(object Sender, SplitPreview Preview);
+    public record SplitSessionEnded(object Sender);
+
+    #endregion
 }

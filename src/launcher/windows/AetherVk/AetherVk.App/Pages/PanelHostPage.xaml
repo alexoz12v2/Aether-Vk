@@ -162,8 +162,11 @@
                 x:Name="OuterBorder"
                 CornerRadius="12"  
                 Grid.Row="1"
+                PointerPressed="OuterBorder_PointerPressed"
                 PointerMoved="OuterBorder_PointerMoved"
                 PointerExited="OuterBorder_PointerExited"
+                PointerReleased="OuterBorder_PointerReleased"
+                PointerCanceled="OuterBorder_PointerCanceled"
                 BorderThickness="{StaticResource PaddingItem}"
                 BorderBrush="{StaticResource TabColor}"
                 Background="{StaticResource TabColor}">
