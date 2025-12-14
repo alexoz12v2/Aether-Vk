@@ -1,7 +1,7 @@
 using AetherVk.Core.Types;
 using AetherVk.Core.ViewModels;
-using AetherVk.UserControls.Shared;
 using Microsoft.UI.Composition;
+using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Data;
@@ -14,11 +14,11 @@ using Microsoft.UI.Xaml.Media.Imaging;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Windows.Input;
+using System.Reflection;
 
 namespace AetherVk.Pages
 {
-    internal sealed class EditorToIconConverter : IValueConverter
+    internal sealed partial class EditorToIconConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, string language)
         {
@@ -48,7 +48,9 @@ namespace AetherVk.Pages
         }
     }
 
-    internal sealed partial class PanelHostPage : Page
+    // TODO put internal and frient assembly core (needed to use it as type parameter for interfaces coming from core)
+    // I tried, it didnt' work (from <AssemblyAttribute> in csproj. I have MSBuild)
+    public sealed partial class PanelHostPage : Page
     {
         private static readonly Dictionary<EditorType, Type> _EditorsMap = new()
         {
@@ -57,35 +59,11 @@ namespace AetherVk.Pages
         };
 
         // View Model
-        public PanelHostPageViewModel ViewModel { get; }
+        public PanelHostPageViewModel ViewModel => (PanelHostPageViewModel)DataContext;
 
-        public PanelHostPage(PanelHostPageViewModel viewModel)
+        public PanelHostPage()
         {
-            ViewModel = viewModel;
             InitializeComponent();
-
-            // the attached property
-            _ = RegisterPropertyChangedCallback(SplitActions.RequestSplitDependencyProperty, (self, dp) =>
-            {
-                // Retrieve the attached command
-                ICommand cmd = SplitActions.GetRequestSplit(this);
-
-                if (cmd != null)
-                {
-                    Debug.WriteLine("Attached command.");
-                }
-                else
-                {
-                    Debug.WriteLine("Attached command cleared or not set yet.");
-                }
-            });
-
-            // Optional: initial check in case parent already set it
-            ICommand initialCmd = SplitActions.GetRequestSplit(this);
-            if (initialCmd != null)
-            {
-                Debug.WriteLine("Attached command.");
-            }
 
             // visual changes once XAML template loaded
             OuterBorder.Loaded += OuterBorder_Loaded;
@@ -130,34 +108,80 @@ namespace AetherVk.Pages
             sb.Begin();
         }
 
+        private bool _IsDragging = false;
+        private uint _ActivePointerId = uint.MaxValue;
+        private bool IsDragging => _IsDragging && _ActivePointerId != uint.MaxValue;
+
         private void OuterBorder_PointerMoved(object sender, PointerRoutedEventArgs e)
         {
-            Border border = (Border)sender;
-            Windows.Foundation.Point pos = e.GetCurrentPoint(border).Position;
+            if (!IsDragging)
+            {
 
-            bool withinBorder = IsWithingBorder(pos, border);
-            if (withinBorder && !IsHovering)
-            {
-                StartHoverAnimation();
-                Debug.WriteLine("Do Something OuterBorder_PointerMoved");
+                Border border = (Border)sender;
+                Windows.Foundation.Point pos = e.GetCurrentPoint(border).Position;
+
+                bool withinBorder = IsWithingBorder(pos, border);
+                if (withinBorder && !IsHovering)
+                {
+                    StartHoverAnimation();
+                }
+                else if (!withinBorder && IsHovering)
+                {
+                    StopHoverAnimation();
+                }
             }
-            else if (!withinBorder && IsHovering)
+            else
             {
-                StopHoverAnimation();
-                Debug.WriteLine("Do Something Else OuterBorder_PointerMoved");
+                PointerPoint point = e.GetCurrentPoint((UIElement)Parent);
+                if (point.PointerId != _ActivePointerId) { return; }
+                ViewModel.UpdateSplitSession(ToCorePoint(point.Position));
             }
         }
 
         // TODO: When Resizing, you shouldn't track borders (dep prop)
         private void OuterBorder_PointerExited(object sender, PointerRoutedEventArgs e)
         {
-            Border border = (Border)sender;
-            _ = e.GetCurrentPoint(border).Position;
             if (IsHovering)
             {
                 StopHoverAnimation();
-                Debug.WriteLine("Do Something Else OuterBorder_PointerMoved");
             }
+        }
+
+        private void OuterBorder_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            if (!IsHovering) { return; }
+
+            PointerPoint point = e.GetCurrentPoint((UIElement)Parent);
+            if (!point.Properties.IsLeftButtonPressed) { return; }
+
+            Border border = (Border)sender;
+            _IsDragging = true;
+            _ActivePointerId = point.PointerId;
+
+            _ = border.CapturePointer(e.Pointer);
+            StopHoverAnimation();
+
+            ViewModel.BeginSplitSession(ToCorePoint(point.Position));
+        }
+        private void OuterBorder_PointerReleased(object sender, PointerRoutedEventArgs e)
+        {
+            if (!IsDragging) { return; }
+            PointerPoint point = e.GetCurrentPoint((UIElement)Parent);
+            if (point.PointerId != _ActivePointerId) { return; }
+            // TODO Customize cancel action
+            bool cancel = point.Properties.IsRightButtonPressed;
+
+            Border border = (Border)sender;
+            border.ReleasePointerCapture(e.Pointer);
+            _IsDragging = false;
+            _ActivePointerId = uint.MaxValue;
+
+            ViewModel.EndSplitSession(ToCorePoint(point.Position), cancel);
+        }
+
+        private static Core.Types.Point ToCorePoint(Windows.Foundation.Point position)
+        {
+            return new Point { X = position.X, Y = position.Y };
         }
 
         private static bool IsWithingBorder(Windows.Foundation.Point pos, Border border)
@@ -263,5 +287,17 @@ namespace AetherVk.Pages
         private SpriteVisual? _BorderVisual;
         private ExpressionAnimation? _HsvAnimation = null;
         private EventHandler<object>? _RenderingHandler;
+
+        private void OuterBorder_PointerCanceled(object sender, PointerRoutedEventArgs e)
+        {
+            if (!IsDragging) { return; }
+            Border border = (Border)sender;
+            border.ReleasePointerCapture(e.Pointer);
+
+            _IsDragging = false;
+            _ActivePointerId = uint.MaxValue;
+
+            ViewModel.EndSplitSession(default, true);
+        }
     }
 }

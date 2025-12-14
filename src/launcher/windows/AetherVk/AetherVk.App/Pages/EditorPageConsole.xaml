@@ -1,4 +1,3 @@
-<?xml version="1.0" encoding="utf-8"?>
 <Page
     x:Class="AetherVk.Pages.EditorPageConsole"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -6,9 +5,23 @@
     xmlns:local="using:AetherVk.Pages"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    mc:Ignorable="d">
+    mc:Ignorable="d"
+    DataContext="{Binding EditorPageConsoleViewModel, Source={StaticResource Locator}}">
+    <!-- Grid Should Stretch to fill the whole page size -->
+    <Grid Background="Transparent" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Height="auto">
+        <!-- TODO: Respond to scroll action to reduce font size?-->
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <!-- TODO constants for form input sizes-->
+            <RowDefinition Height="30" />
+        </Grid.RowDefinitions>
 
-    <Grid>
-        <TextBlock Text="Some Ugly Thing 😡" />
+        <!-- TODO add older windows compatibility componhents -->
+        <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
+            <!-- TODO Substitute with IncrementalLoadingCCollection -->
+            <RichTextBlock x:Name="ConsoleContent" IsTextSelectionEnabled="True"/>
+        </ScrollViewer>
+        <!-- TODO better for responsiveness -->
+        <TextBox Grid.Row="1" x:Name="ConsolePrompt" MaxHeight="30" MinHeight="30"/>
     </Grid>
 </Page>

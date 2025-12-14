@@ -8,11 +8,21 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:cu="using:CommunityToolkit.WinUI.Controls"
-    mc:Ignorable="d">
+    mc:Ignorable="d"
+    DataContext="{Binding SplitContainerControlViewModel, Source={StaticResource Locator}}">
     <UserControl.Resources>
-        <vm:SplitContainerControlViewModel x:Key="ViewModel" />
+        <!-- Removed DataType property, which is not supported in UWP/WinUI XAML -->
+        <DataTemplate x:Key="ContentPresenterDataTemplate" x:DataType="vm:PanelHostPageViewModel">
+            <pages:PanelHostPage />
+        </DataTemplate>
     </UserControl.Resources>
-
+    <!--
+        This Grid is manipulated entirely from code-behind.
+        This is OK because:
+        - GridDefinitions are not bindable
+        - Layout is dynamic and structural
+        - The ViewModel remains UI-agnostic
+    -->
     <Grid x:Name="Container">
         <!-- Templated controls instanced dynamically need a prepared template in the control they need to be
               instantiated it-->
