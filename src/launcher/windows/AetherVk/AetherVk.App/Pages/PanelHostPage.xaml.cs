@@ -15,7 +15,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
-using System.Reflection;
 
 namespace AetherVk.Pages
 {
@@ -61,6 +60,10 @@ namespace AetherVk.Pages
 
         // View Model
         public PanelHostPageViewModel ViewModel => (PanelHostPageViewModel)DataContext;
+
+        // Ugly. Set after the page loaded. Since this is created from the code-behind of the control which owns the container
+        // through a C# created content presenter and a data template matching the view model, Parent = null. We need it
+        public Grid? Container { get; set; }
 
         public PanelHostPage()
         {
@@ -151,6 +154,7 @@ namespace AetherVk.Pages
         private void OuterBorder_PointerPressed(object sender, PointerRoutedEventArgs e)
         {
             if (!IsHovering) { return; }
+            Debug.Assert(Container is not null);
 
             PointerPoint point = e.GetCurrentPoint((UIElement)Parent);
             if (!point.Properties.IsLeftButtonPressed) { return; }
@@ -162,7 +166,8 @@ namespace AetherVk.Pages
             _ = border.CapturePointer(e.Pointer);
             StopHoverAnimation();
 
-            ViewModel.BeginSplitSession(ToCorePoint(point.Position), ToCoreBounds(point.Position, ActualSize));
+            Windows.Foundation.Point origin = TransformToVisual(Container!).TransformPoint(new(0, 0));
+            ViewModel.BeginSplitSession(ToCorePoint(point.Position), ToCoreBounds(origin, ActualSize));
         }
 
         private void OuterBorder_PointerReleased(object sender, PointerRoutedEventArgs e)
@@ -223,8 +228,6 @@ namespace AetherVk.Pages
                     _BorderVisual.Size = new System.Numerics.Vector2((float)border.ActualWidth, (float)border.ActualHeight);
                 };
             }
-
-
         }
 
         private void StartHoverAnimation()

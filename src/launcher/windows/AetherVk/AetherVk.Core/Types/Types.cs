@@ -85,6 +85,11 @@ namespace AetherVk.Core.Types
         public double Right => X + Width;
         public double Top => Y;
         public double Bottom => Y + Height;
+
+        public override string ToString()
+        {
+            return $"(RectD){{ Left: {Left} Right: {Right} Top: {Top} Bottom: {Bottom} }}";
+        }
     }
 
     public sealed class SplitSessionBegin(object sender, Point start, RectD bounds)
