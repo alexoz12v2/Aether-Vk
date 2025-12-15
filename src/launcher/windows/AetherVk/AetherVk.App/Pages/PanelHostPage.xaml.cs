@@ -52,11 +52,7 @@ namespace AetherVk.Pages
     // I tried, it didnt' work (from <AssemblyAttribute> in csproj. I have MSBuild)
     public sealed partial class PanelHostPage : Page
     {
-        private static readonly Dictionary<EditorType, Type> _EditorsMap = new()
-        {
-            { EditorType.SplashScreen, typeof(EditorPageSplashScreen) },
-            { EditorType.Console, typeof(EditorPageConsole) },
-        };
+        private IReadOnlyDictionary<string, Type> _EditorsMap;
 
         // View Model
         public PanelHostPageViewModel ViewModel => (PanelHostPageViewModel)DataContext;
@@ -79,6 +75,7 @@ namespace AetherVk.Pages
 
         private void PanelHostPage_OnLoaded(object sender, RoutedEventArgs e)
         {
+            _EditorsMap = ViewModel.GetEditorPages();
             if (EditorFrame.Content == null)
             {
                 _ = EditorFrame.Navigate(_EditorsMap.GetValueOrDefault(ViewModel.SelectedEditor, typeof(EditorPageSplashScreen)));

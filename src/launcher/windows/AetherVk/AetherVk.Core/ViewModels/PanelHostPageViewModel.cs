@@ -1,9 +1,11 @@
+using AetherVk.Core.Interfaces;
 using AetherVk.Core.Private;
 using AetherVk.Core.Types;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
 using System.Collections.ObjectModel;
+using System.ComponentModel.Design;
 using System.Diagnostics;
 
 // Idle
@@ -31,32 +33,33 @@ namespace AetherVk.Core.ViewModels
 {
     public sealed partial class PanelHostPageViewModel : ObservableRecipient
     {
-        public ReadOnlyCollection<EditorDescriptor> Editors { get; set; }
+        public ReadOnlyCollection<EditorDescriptor> Editors { get; private set; }
 
         [ObservableProperty]
-        public partial EditorType SelectedEditor { get; set; } = EditorType.SplashScreen;
+        public partial string SelectedEditor { get; set; }
 
-        public PanelHostPageViewModel(IMessenger splitLayoutMessenger) : base(splitLayoutMessenger)
+        private readonly IEditorDictionaryService _DictionaryService;
+
+        public PanelHostPageViewModel(IMessenger splitLayoutMessenger, IEditorDictionaryService dictionaryService) : base(splitLayoutMessenger)
         {
             Debug.Assert(ReferenceEquals(Messenger, splitLayoutMessenger));
+            _DictionaryService = dictionaryService;
+            Editors = [.. dictionaryService.GetEditors().Select(info => new EditorDescriptor(info, SelectEditorCommand))];
+            SelectedEditor = Editors[0].PageType;
+        }
 
-            Editors = [
-                new EditorDescriptor(label: "Splash Screen", pageType: EditorType.SplashScreen, SelectEditorCommand) {
-                    Glyph = "\uE80F" // Home glyph
-                }.EnsureValid(),
-                new EditorDescriptor(label: "Console", pageType: EditorType.Console, SelectEditorCommand) {
-                    Glyph = "\uE756" // commandPrompt glyph
-                }.EnsureValid()
-            ];
+        public IReadOnlyDictionary<string, Type> GetEditorPages()
+        {
+            return _DictionaryService.GetEditorTypes();
         }
 
         [RelayCommand]
-        private void SelectEditor(EditorType? editorType)
+        private void SelectEditor(string editorType)
         {
-            if (editorType.HasValue && SelectedEditor != editorType.Value)
+            if (SelectedEditor != editorType)
             {
-                Debug.WriteLine($"Changing Selected Editor From {SelectedEditor} to {editorType.Value}");
-                SelectedEditor = editorType.Value;
+                Debug.WriteLine($"Changing Selected Editor From {SelectedEditor} to {editorType}");
+                SelectedEditor = editorType;
             }
         }
 

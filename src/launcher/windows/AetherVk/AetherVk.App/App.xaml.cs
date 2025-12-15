@@ -1,9 +1,8 @@
 using AetherVk.Core.Interfaces;
 using AetherVk.Core.Types;
 using AetherVk.Core.ViewModels;
-using AetherVk.Launch;
 using AetherVk.Pages;
-using AetherVk.UserControls;
+using AetherVk.Services;
 using CommunityToolkit.Mvvm.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -121,6 +120,7 @@ namespace AetherVk.App
 
             // -------------- Service Registration ------------------
             _ = builder.Services.AddSingleton<IUIDispatcher, UIDispatcher>();
+            _ = builder.Services.AddSingleton<IEditorDictionaryService, EditorDictionaryService>();
 
             // factory for host page view model and for host page
             // TODO use scope
@@ -129,8 +129,8 @@ namespace AetherVk.App
                     (messenger) =>
                     {
                         // resolve other dependencies here
-                        // var someService = sp.GetRequiredService<ISomeService>();
-                        return new PanelHostPageViewModel(messenger);
+                        IEditorDictionaryService dictionaryService = sp.GetRequiredService<IEditorDictionaryService>();
+                        return new PanelHostPageViewModel(messenger, dictionaryService);
                     }));
 
             // view model and page for grid splitter
