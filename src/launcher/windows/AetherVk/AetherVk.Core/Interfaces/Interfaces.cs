@@ -1,4 +1,7 @@
 
+using AetherVk.Core.Types;
+using System.Collections.ObjectModel;
+
 namespace AetherVk.Core.Interfaces
 {
     public interface IApp
@@ -10,5 +13,12 @@ namespace AetherVk.Core.Interfaces
     public interface IUIDispatcher
     {
         void Enqueue(Action action);
+    }
+
+    public interface IEditorDictionaryService
+    {
+        IReadOnlyCollection<string> GetEditorNames();
+        IReadOnlyCollection<EditorInfo> GetEditors();
+        IReadOnlyDictionary<string, Type> GetEditorTypes();
     }
 }

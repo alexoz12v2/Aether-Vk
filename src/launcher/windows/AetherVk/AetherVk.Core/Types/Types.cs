@@ -35,27 +35,16 @@ namespace AetherVk.Core.Types
     #endregion
 
     #region PanelHostPageViewModel
-    public enum EditorType
+
+    public class EditorInfo(string label, string pageType)
     {
-        SplashScreen,
-        Console
-    }
-
-    public class EditorDescriptor(string label, EditorType pageType, ICommand command)
-    {
-        public string Label { get; } = !string.IsNullOrWhiteSpace(label) ? label : throw new ArgumentNullException(nameof(Label));
-
-        // should be child of Page (Cannot be checked from core, but you can check wtith typeof().IsAssignableFrom
-        public EditorType PageType { get; } = pageType;
-        public ICommand Command { get; } = command;
-
-        // only one of these should be set on the init. not all of them can be unset
         public string? Glyph { get; set; }
         public string? ImagePath { get; set; }
         public string? VectorData { get; set; }
-
+        public string Label { get; } = label;
+        public string PageType { get; } = pageType;
         // to be Called after init block
-        public EditorDescriptor EnsureValid()
+        public EditorInfo EnsureValid()
         {
             Validate();
             return this;
@@ -73,6 +62,20 @@ namespace AetherVk.Core.Types
                 throw new InvalidOperationException("Only one of Glyph, ImagePath, VectorData should be specified");
             }
         }
+    }
+
+    public class EditorDescriptor(EditorInfo info, ICommand command)
+    {
+        public string Label { get; } = !string.IsNullOrWhiteSpace(info.Label) ? info.Label : throw new ArgumentNullException(nameof(Label));
+
+        // should be child of Page (Cannot be checked from core, but you can check wtith typeof().IsAssignableFrom
+        public string PageType { get; } = info.PageType;
+        public ICommand Command { get; } = command;
+
+        // only one of these should be set on the init. not all of them can be unset
+        public string? Glyph { get; set; } = info.Glyph;
+        public string? ImagePath { get; set; } = info.ImagePath;
+        public string? VectorData { get; set; } = info.VectorData;
     }
     #endregion
     #region MessagesModel

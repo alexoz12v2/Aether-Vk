@@ -446,18 +446,6 @@ namespace AetherVk.Core.ViewModels
             }
         }
 
-        // see if first ancenstor is common, if yes get the parent
-        private static SplitNode? FindDirectSplit(LeafNode a, LeafNode b)
-        {
-            Node? cur = a.Parent;
-            if (cur is SplitNode split)
-            {
-                if (split.First == a && split.Second == b) { return split; }
-                if (split.First == b && split.Second == a) { return split; }
-            }
-            return null;
-        }
-
         // throwing function to get a leaf out of the tree from Id, used when we are sure of its existance
         private LeafNode GetLeaf(Guid id)
         {
