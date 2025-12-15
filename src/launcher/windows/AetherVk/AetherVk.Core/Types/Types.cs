@@ -79,6 +79,34 @@ namespace AetherVk.Core.Types
 
     public readonly record struct Point(double X, double Y);
 
+    public readonly struct RectD(double X, double Y, double Width, double Height)
+    {
+        public double Left => X;
+        public double Right => X + Width;
+        public double Top => Y;
+        public double Bottom => Y + Height;
+    }
+
+    public sealed class SplitSessionBegin(object sender, Point start, RectD bounds)
+    {
+        public object Sender { get; } = sender;
+        public Point Start { get; } = start;
+        public RectD Bounds { get; } = bounds;
+    }
+
+    public sealed class SplitSessionUpdate(object sender, Point current)
+    {
+        public object Sender { get; } = sender;
+        public Point Current { get; } = current;
+    }
+
+    public sealed class SplitSessionEnd(object sender, Point end, bool cancelled)
+    {
+        public object Sender { get; } = sender;
+        public Point End { get; } = end;
+        public bool Cancelled { get; } = cancelled;
+    }
+
     public enum SplitPreviewKind
     {
         None,
@@ -90,11 +118,18 @@ namespace AetherVk.Core.Types
     public readonly record struct SplitPreview(
         SplitPreviewKind Kind,
         Orientation Orientation,
-        float Ratio
+        float Ratio,
+        object? SnapTarget = null // if not null, then this is the coalesce target bounds
     );
 
-    public record SplitPreviewChanged(object Sender, SplitPreview Preview);
-    public record SplitSessionEnded(object Sender);
-
+    public sealed record SplitSessionState
+    (
+        object Source,
+        Point Start,
+        Point Current,
+        RectD Bounds,
+        SplitPreview Preview,
+        Guid? CoalesceTarget = null
+    );
     #endregion
 }

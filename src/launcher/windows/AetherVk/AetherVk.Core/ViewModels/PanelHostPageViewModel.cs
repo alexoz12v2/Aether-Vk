@@ -36,11 +36,9 @@ namespace AetherVk.Core.ViewModels
         [ObservableProperty]
         public partial EditorType SelectedEditor { get; set; } = EditorType.SplashScreen;
 
-        private readonly IMessenger _SplitLayoutMessenger;
-
         public PanelHostPageViewModel(IMessenger splitLayoutMessenger) : base(splitLayoutMessenger)
         {
-            _SplitLayoutMessenger = splitLayoutMessenger;
+            Debug.Assert(ReferenceEquals(Messenger, splitLayoutMessenger));
 
             Editors = [
                 new EditorDescriptor(label: "Splash Screen", pageType: EditorType.SplashScreen, SelectEditorCommand) {
@@ -61,19 +59,22 @@ namespace AetherVk.Core.ViewModels
                 SelectedEditor = editorType.Value;
             }
         }
-        public void BeginSplitSession(Point start)
+
+        #region SplitMessages
+        public void BeginSplitSession(Point start, RectD bounds)
         {
-            Debug.WriteLine($"[BeginSplitSession] The Point: {start}");
+            _ = Messenger.Send(new SplitSessionBegin(this, start, bounds));
         }
 
         public void UpdateSplitSession(Point current)
         {
-            Debug.WriteLine($"[UpdateSplitSession] The point: {current}");
+            _ = Messenger.Send(new SplitSessionUpdate(this, current));
         }
 
         public void EndSplitSession(Point end, bool cancelled)
         {
-            Debug.WriteLine($"[EndSplitSession] the Point: {end}, cancelled: {cancelled}");
+            _ = Messenger.Send(new SplitSessionEnd(this, end, cancelled));
         }
+        #endregion
     }
 }
