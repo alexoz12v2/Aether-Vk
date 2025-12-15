@@ -42,6 +42,7 @@ namespace AetherVk.App
         // TODO remove
         public static EditorPageSplashScreenViewModel EditorPageSplashScreenViewModel => Program.Services.GetRequiredService<EditorPageSplashScreenViewModel>();
         public static EditorPageConsoleViewModel EditorPageConsole => Program.Services.GetRequiredService<EditorPageConsoleViewModel>();
+        public static EditorPageSettingsViewModel EditorPageSettings => Program.Services.GetRequiredService<EditorPageSettingsViewModel>();
     }
 
 
@@ -139,6 +140,7 @@ namespace AetherVk.App
             // view models and page for editor panels
             _ = builder.Services.AddTransient<EditorPageSplashScreenViewModel>();
             _ = builder.Services.AddTransient<EditorPageConsoleViewModel>();
+            _ = builder.Services.AddTransient<EditorPageSettingsViewModel>();
 
             // Singleton App and Main window
             // https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection#service-lifetimes
@@ -161,6 +163,9 @@ namespace AetherVk.App
         {
             await Program.AppHost!.StartAsync();
             Log.Information("Application Started");
+            // to do with ILogger:
+            // - using(_logger.BeginScope(new Dictionary<string, object> { ["DevOnly"] = true })) => multi line logs
+            // - _logger.LogInformation("fdfsdfds f{DevOnly}", true)
             Log.ForContext("DevOnly", true).Information("Application Started Dev only");
 
             MainWindow theMainWindow = Program.Services.GetRequiredService<MainWindow>();
