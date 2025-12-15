@@ -14,6 +14,7 @@ using Microsoft.UI.Xaml.Media.Imaging;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Numerics;
 using System.Reflection;
 
 namespace AetherVk.Pages
@@ -161,8 +162,9 @@ namespace AetherVk.Pages
             _ = border.CapturePointer(e.Pointer);
             StopHoverAnimation();
 
-            ViewModel.BeginSplitSession(ToCorePoint(point.Position));
+            ViewModel.BeginSplitSession(ToCorePoint(point.Position), ToCoreBounds(point.Position, ActualSize));
         }
+
         private void OuterBorder_PointerReleased(object sender, PointerRoutedEventArgs e)
         {
             if (!IsDragging) { return; }
@@ -182,6 +184,11 @@ namespace AetherVk.Pages
         private static Core.Types.Point ToCorePoint(Windows.Foundation.Point position)
         {
             return new Point { X = position.X, Y = position.Y };
+        }
+
+        private RectD ToCoreBounds(Windows.Foundation.Point position, Vector2 actualSize)
+        {
+            return new RectD(X: position.X, Y: position.Y, Width: actualSize.X, Height: actualSize.Y);
         }
 
         private static bool IsWithingBorder(Windows.Foundation.Point pos, Border border)

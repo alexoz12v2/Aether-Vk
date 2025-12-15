@@ -497,6 +497,7 @@ namespace AetherVk.Core.Private
             return null;
         }
 
+        // TODO proper dispose function
         public void Dispose()
         {
             _Lock.Dispose();
