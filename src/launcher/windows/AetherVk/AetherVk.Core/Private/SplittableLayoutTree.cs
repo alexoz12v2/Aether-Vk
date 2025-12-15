@@ -163,6 +163,22 @@ namespace AetherVk.Core.Private
             finally { _Lock.ExitReadLock(); }
         }
 
+        public bool IsSingleton
+        {
+            get
+            {
+                _Lock.EnterReadLock();
+                try
+                {
+                    return _Root is not SplitNode;
+                }
+                finally
+                {
+                    _Lock.ExitReadLock();
+                }
+            }
+        }
+
         // split a leaf into two leaves by inserting a split node in place of the leaf. Returns the newly create.
         // TODO: Event on split
         public SplitNode SplitLeaf(LeafNode leaf, Orientation orientation, double firstRatio, LeafNode newLeaf)
@@ -266,6 +282,70 @@ namespace AetherVk.Core.Private
             finally { _Lock.ExitUpgradeableReadLock(); }
         }
 
+        private void AssignRects(Node node, Layout layout, int row, int col, int rowSpan, int colSpan)
+        {
+            if (node is LeafNode leaf)
+            {
+                layout.Pages.Add(new LayoutElementSpecification(
+                    id: leaf.Id.Id,
+                    row: row,
+                    column: col,
+                    rowSpan: rowSpan,
+                    columnSpan: colSpan));
+                return;
+            }
+
+            SplitNode split = (SplitNode)node;
+
+            if (split.Orientation == Orientation.Vertical)
+            {
+                // left | splitter | right
+                Span first = ComputeSpans(split.First);
+                Span second = ComputeSpans(split.Second);
+
+                int splitterCol = col + first.Cols;
+
+                // splitter occupies full height
+                layout.ColumnsDef[splitterCol] = new() { IsSplitter = true };
+                layout.Splitters.Add(new LayoutElementSpecification(
+                    id: split.Id.Id,
+                    row: row,
+                    column: splitterCol,
+                    rowSpan: rowSpan,
+                    columnSpan: 1)
+                { Orientation = split.Orientation });
+
+                // left child
+                AssignRects(split.First, layout, row, col, rowSpan, first.Cols);
+
+                // right child
+                AssignRects(split.Second, layout, row, splitterCol + 1, rowSpan, second.Cols);
+            }
+            else
+            {
+                // top / splitter / bottom
+                Span first = ComputeSpans(split.First);
+                Span second = ComputeSpans(split.Second);
+
+                int splitterRow = row + first.Rows;
+
+                layout.RowsDef[splitterRow] = new() { IsSplitter = true };
+                layout.Splitters.Add(new LayoutElementSpecification(
+                    id: split.Id.Id,
+                    row: splitterRow,
+                    column: col,
+                    rowSpan: 1,
+                    columnSpan: colSpan)
+                { Orientation = split.Orientation });
+
+                // top child
+                AssignRects(split.First, layout, row, col, first.Rows, colSpan);
+
+                // bottom child
+                AssignRects(split.Second, layout, splitterRow + 1, col, second.Rows, colSpan);
+            }
+        }
+
         public Layout ComputeLayout()
         {
             Layout layout = new();
@@ -273,26 +353,30 @@ namespace AetherVk.Core.Private
             _Lock.EnterReadLock();
             try
             {
-                // DEBUG: Sanity Check: No shared nodes
                 EnsureNotShared(_Root);
 
-                // Compute Spans with splitter cells
                 Span span = ComputeSpans(_Root);
 
-                // Initialize row/column definition
-                for (int r = 0; r < span.Rows; r++) { layout.RowsDef.Add(new LayoutElementDefinition()); }
-                for (int c = 0; c < span.Cols; c++) { layout.ColumnsDef.Add(new LayoutElementDefinition()); }
+                for (int r = 0; r < span.Rows; r++)
+                {
+                    layout.RowsDef.Add(new LayoutElementDefinition());
+                }
 
-                // Assign Positions
-                AssignPositions(_Root, layout, 0, 0);
+                for (int c = 0; c < span.Cols; c++)
+                {
+                    layout.ColumnsDef.Add(new LayoutElementDefinition());
+                }
 
-                // Expand leaf spans upward
-                ExpandLeafSpans(layout);
+                AssignRects(_Root, layout, 0, 0, span.Rows, span.Cols);
             }
-            finally { _Lock.ExitReadLock(); }
+            finally
+            {
+                _Lock.ExitReadLock();
+            }
 
             return layout;
         }
+
 
         // Debug Helper: Remove when properly tested ---------------------------------------------------------
         private static void EnsureNotShared(Node root)
@@ -316,6 +400,7 @@ namespace AetherVk.Core.Private
             public int Rows { get; } = rows;
             public int Cols { get; } = cols;
         }
+
         // - Each subtree describes a rectangle of rowSpan ✖ columnSpan grid cells. (leaf ➡ 1 x 1)
         // - split vertical   ➡ children side-by-side, merge widths, add 1 splitter column
         // - split horizontal ➡ children stacked, merge heights, add 1 splitter row
@@ -396,62 +481,6 @@ namespace AetherVk.Core.Private
 
                 AssignPositions(split.First, layout, startRow, startCol);
                 AssignPositions(split.Second, layout, splitterRow + 1, startCol);
-            }
-        }
-
-        private void ExpandLeafSpans(Layout layout)
-        {
-            // map from grid coordinates ➡ leaf node
-            IDictionary<(int row, int col), LeafNode> leafMap = new Dictionary<(int col, int row), LeafNode>();
-            BuildLeafPositionMap(_Root, 0, 0, leafMap);
-
-            // now recompute spans for each leaf entry
-            List<LayoutElementSpecification> updatedList = new(capacity: layout.Pages.Count);
-
-            foreach (LayoutElementSpecification page in layout.Pages)
-            {
-                // ensure a page coordinate maps to a leaf
-                if (!leafMap.TryGetValue((page.Row, page.Column), out LeafNode? leaf)) { throw new InvalidOperationException($"No leaf mapped at {page.Row}, {page.Column}"); }
-
-                // start assuming the leaf has its own cell and is the deepest in the tree
-                int rowSpan = 1;
-                int colSpan = 1;
-
-                Node child = leaf;
-                Node? cur = leaf.Parent;
-
-                // if the parent has a split, then we need to account for spans
-                while (cur is SplitNode split)
-                {
-                    bool isFirst = split.First == child;
-                    Span other = isFirst ? ComputeSpans(split.Second) : ComputeSpans(split.First);
-
-                    if (split.Orientation == Orientation.Horizontal)
-                    {
-                        // The number of rows the leaf should occupy at the ancestor level
-                        rowSpan = Math.Max(rowSpan, other.Rows);
-                    }
-                    else // Vertical
-                    {
-                        colSpan = Math.Max(colSpan, other.Cols);
-                    }
-
-                    child = cur;
-                    cur = cur.Parent;
-                }
-
-                updatedList.Add(new LayoutElementSpecification(
-                    id: leaf.Id.Id,
-                    row: page.Row,
-                    column: page.Column,
-                    rowSpan: rowSpan,
-                    columnSpan: colSpan));
-            }
-
-            layout.Pages.Clear();
-            foreach (LayoutElementSpecification up in updatedList)
-            {
-                layout.Pages.Add(up);
             }
         }
 

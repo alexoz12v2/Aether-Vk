@@ -3,10 +3,12 @@ using AetherVk.Core.ViewModels;
 using AetherVk.Pages;
 using AetherVk.UserControls.Shared;
 using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.WinUI;
 using CommunityToolkit.WinUI.Controls;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Markup;
+using Microsoft.UI.Xaml.Media;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -48,6 +50,7 @@ namespace AetherVk.UserControls
             RebuildRows(ViewModel.RowDefinitions);
             RebuildPages(ViewModel.Pages);
             RebuildSplitters(ViewModel.Splitters);
+            RecomputeContainerLayout();
 
             ViewModel.PropertyChanged += OnViewModelPropertyChanged;
         }
@@ -67,10 +70,18 @@ namespace AetherVk.UserControls
                     break;
                 case nameof(ViewModel.Splitters):
                     RebuildSplitters(ViewModel.Splitters);
+                    // splitters are the last one to be updated. It's ugly
+                    RecomputeContainerLayout();
                     break;
                 default:
                     break;
             }
+        }
+
+        private void RecomputeContainerLayout()
+        {
+            Container.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+            Container.Arrange(new Windows.Foundation.Rect(0, 0, Container.DesiredSize.Width, Container.DesiredSize.Height));
         }
 
         // Grid.ColumnDefinitions and Grid.RowDefinitions are not DependencyProperty, meaning we can't bind to them to
@@ -120,11 +131,21 @@ namespace AetherVk.UserControls
             {
                 if (!ContainerPages.TryGetValue(pageVm.Id, out UIElement? pageElement))
                 {
-                    // PanelHostPage thePage = _ChildPanelFactory.Create(childViewModel);
                     ContentPresenter presenter = new()
                     {
                         ContentTemplate = (DataTemplate)Resources["ContentPresenterDataTemplate"],
                         Content = ViewModel.Children[pageVm.Id]
+                    };
+                    // 🦢 Ugly workaroud to have the parent available through a content presenter with data template
+                    presenter.Loaded += (s, e) =>
+                    {
+                        if (VisualTreeHelper.GetChildrenCount(presenter) == 0)
+                        {
+                            throw new InvalidOperationException(nameof(presenter));
+                        }
+
+                        PanelHostPage root = (VisualTreeHelper.GetChild(presenter, 0) as PanelHostPage)!;
+                        root.Container = Container;
                     };
 
                     SetGrid(presenter, pageVm);
@@ -149,18 +170,6 @@ namespace AetherVk.UserControls
             element.SetValue(Grid.RowSpanProperty, data.RowSpan);
             element.SetValue(Grid.ColumnSpanProperty, data.ColumnSpan);
         }
-
-        // TODO probably to remove in favour of templated controls and view model messaging
-        // private static void AttachDependencyProperties(PanelHostPage thePage)
-        // {
-        //     // set attached dependency property
-        //     // TODO: set the true command
-        //     ICommand debugCommand = new RelayCommand<string>(theString =>
-        //     {
-        //         Debug.WriteLine($"Hello There From the splitter! {theString}");
-        //     });
-        //     SplitActions.SetRequestSplit(thePage, debugCommand);
-        // }
 
         private void RebuildSplitters(IReadOnlyList<GridElementData> splitters)
         {
@@ -190,7 +199,7 @@ namespace AetherVk.UserControls
                         + " xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'"
                         + " xmlns:cu='using:CommunityToolkit.WinUI.Controls'"
                         + " ResizeBehavior='BasedOnAlignment'"
-                        + " ResizeDirection='Columns'"
+                        + " ResizeDirection='" + (sVm.Orientation == Core.Types.Orientation.Vertical ? "Columns" : "Rows") + "'"
                         + " Background='Red'"
                         + " HorizontalAlignment='Stretch'"
                         + " VerticalAlignment='Stretch'"

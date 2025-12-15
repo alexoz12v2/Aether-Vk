@@ -3,13 +3,9 @@ using AetherVk.Core.Types;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
-using Microsoft.Extensions.Options;
-using Serilog;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Reflection.Emit;
-using System.Security.Cryptography;
 
 #region Coalescing Notes
 // | Concern                    | Owner |
@@ -154,7 +150,6 @@ namespace AetherVk.Core.ViewModels
             if (_ActivePageId is null) { return; }
             if (!_ChildReferenceToGuidMapping.TryGetValue(msg.Sender, out Guid pageId)) { return; }
 
-            Debug.WriteLine($"[UpdateSplitSession] The point: {msg.Current}");
             SplitPreview updatedPreview = EvaluatePreview(ActiveSplitSession!.Start, msg.Current, ActiveSplitSession.Bounds, pageId);
             ActiveSplitSession = ActiveSplitSession with
             {
@@ -182,6 +177,7 @@ namespace AetherVk.Core.ViewModels
 
         // Coalescing behaviour configuration
         private Guid? _ActiveCoalesceTarget = null;
+        private SplitNode? _ActiveCoalesceSplitNode = null;
         private Orientation? _ActiveCoalesceOrientation = null;
         private double _CoalesceExitDistance = 0; // hysteresis accumulator
         private Point _CoalesceReentryPoint;
@@ -202,10 +198,12 @@ namespace AetherVk.Core.ViewModels
         //     else → valid split
         private SplitPreview EvaluatePreview(Point start, Point current, RectD bounds, Guid sourceId)
         {
+            Debug.WriteLine($"[EvaluatePreview] Bounds: {bounds} current: {current}");
             double dx = Math.Abs(current.X - start.X);
             double dy = Math.Abs(current.Y - start.Y);
             if (Math.Max(dx, dy) < _SplitThreshold)
             {
+                Debug.WriteLine("[EvaluatePreview] Resetting Splitting Mode: Too near to Starting point");
                 ResetCoalesceState();
                 return new(SplitPreviewKind.None, Orientation.Horizontal, 0);
             }
@@ -217,54 +215,56 @@ namespace AetherVk.Core.ViewModels
             bool vertical = orientation == Orientation.Vertical;
 
             double outside = DistanceOutsideBounds(current, bounds, orientation);
+            Debug.WriteLine($"[EvaluatePreview] OUTSIDE --------------------------------->> {outside}");
 
-            if (_ActiveCoalesceTarget is not null && _ActiveCoalesceOrientation == orientation)
+            if (_ActiveCoalesceTarget is not null)
             {
+                Debug.WriteLine($"[EvaluatePreview] We have a coalesce Target, outside: {outside}");
                 if (outside > 0)
                 {
                     // still coalescing in the same state. Stay that way
-                    return new(
-                        SplitPreviewKind.Coalesce,
-                        orientation,
-                        0,
-                        Children[_ActiveCoalesceTarget.Value]);
+                    return new(SplitPreviewKind.Coalesce, orientation, 0, Children[_ActiveCoalesceTarget.Value]);
                 }
                 // inside bounds but you were coalescing: accumulate exit hysteresis
-                // TODO: you should accumulate from the point in which you reentered, not the start
                 _CoalesceExitDistance += vertical
                     ? Math.Abs(current.X - _CoalesceReentryPoint.X)
                     : Math.Abs(current.Y - _CoalesceReentryPoint.Y);
+                Debug.WriteLine($"[EvaluatePreview] Coalescing Exit Distance Accumulation {_CoalesceExitDistance}");
                 if (_CoalesceExitDistance < _CoalesceExitThreshold)
                 {
                     // you didn't travel far enough inside the bounds, still coalescing
-                    return new(
-                        SplitPreviewKind.Coalesce,
-                        orientation,
-                        0,
-                        Children[_ActiveCoalesceTarget.Value]);
+                    return new(SplitPreviewKind.Coalesce, orientation, 0, Children[_ActiveCoalesceTarget.Value]);
                 }
+                Debug.WriteLine("[EvaluatePreview] Coalescing: Exiting Coalescing State");
                 // Exit coalesce
                 ResetCoalesceState();
             }
 
             if (outside > _CoalescingEnterThreshold)
             {
-                // you travelled far enough outside bounds: enter coalesce state
-                Guid? target = FindNearestCoalesceTarget(sourceId, orientation, start, current);
-                if (target is not null)
+                if (_LayoutTree.IsSingleton)
                 {
-                    _ActiveCoalesceTarget = target;
-                    _ActiveCoalesceOrientation = orientation;
-                    _CoalesceExitDistance = 0;
-                    _CoalesceReentryPoint = current;
-                    return new(
-                        SplitPreviewKind.Coalesce,
-                        orientation,
-                        0,
-                        Children[_ActiveCoalesceTarget.Value]);
+                    Debug.WriteLine("[EvaluatePreview] Outside bounds but singleton node. Resetting Splitting mode");
+                    ResetCoalesceState();
+                    return new(SplitPreviewKind.None, Orientation.Horizontal, 0);
                 }
+                else
+                {
+                    // you travelled far enough outside bounds: enter coalesce state
+                    Guid? target = FindNearestCoalesceTarget(sourceId, orientation, start, current);
+                    if (target is not null)
+                    {
+                        Debug.WriteLine("[EvaluatePreview] Entering Coalescing State");
+                        _ActiveCoalesceTarget = target;
+                        _ActiveCoalesceOrientation = orientation;
+                        _CoalesceExitDistance = 0;
+                        _CoalesceReentryPoint = current;
+                        return new(SplitPreviewKind.Coalesce, orientation, 0, Children[_ActiveCoalesceTarget.Value]);
+                    }
 
-                return new(SplitPreviewKind.Invalid, orientation, 0);
+                    Debug.Assert(false);
+                    return new(SplitPreviewKind.Invalid, orientation, 0);
+                }
             }
 
             // if you get here, then it's a split
@@ -275,12 +275,9 @@ namespace AetherVk.Core.ViewModels
                 0.1, 0.9);
             Debug.Assert(float.IsFinite(ratio));
 
+            Debug.WriteLine("[EvaluatePreview] We are in the Splitting State");
             ResetCoalesceState();
-
-            return new SplitPreview(
-                SplitPreviewKind.ValidSplit,
-                orientation,
-                ratio);
+            return new SplitPreview(SplitPreviewKind.ValidSplit, orientation, ratio);
         }
 
         private Guid? FindNearestCoalesceTarget(Guid sourceId, Orientation orientation, Point start, Point current)
@@ -348,14 +345,8 @@ namespace AetherVk.Core.ViewModels
         private void CommitCoalesce(SplitSessionState session)
         {
             if (!_ChildReferenceToGuidMapping.TryGetValue(session.Source, out Guid sourceId)) { Debug.Assert(false); return; }
-            if (session.Preview.SnapTarget is not object targetRef || !_ChildReferenceToGuidMapping.TryGetValue(targetRef, out Guid targetId)) { return; }
 
             LeafNode sourceLeaf = GetLeaf(sourceId);
-            LeafNode targetLeaf = GetLeaf(targetId);
-
-            // ensure they are siblings
-            SplitNode? split = FindDirectSplit(sourceLeaf, targetLeaf);
-            if (split is null) { return; } // the tree changed during drag! Abort operation
 
             // perform coalesce by removing source (or target?)
             _LayoutTree.RemoveLeaf(sourceLeaf);
@@ -415,22 +406,44 @@ namespace AetherVk.Core.ViewModels
         private void ResetCoalesceState()
         {
             _ActiveCoalesceTarget = null;
+            _ActiveCoalesceSplitNode = null;
             _ActiveCoalesceOrientation = null;
             _CoalesceExitDistance = 0;
         }
 
         private static double DistanceOutsideBounds(Point p, RectD b, Orientation o)
         {
-            return o switch
+            switch (o)
             {
-                Orientation.Horizontal =>
-                    p.X < b.Left ? b.Left - p.X :
-                    p.X > b.Right ? p.X - b.Right : 0,
-                Orientation.Vertical =>
-                    p.Y < b.Top ? b.Top - p.Y :
-                    p.Y > b.Bottom ? p.Y - b.Bottom : 0,
-                _ => throw new InvalidEnumArgumentException(nameof(Orientation)),
-            };
+                case Orientation.Horizontal: // horizontal split → check Y axis
+                    if (p.Y < Math.Min(b.Top, b.Bottom))
+                    {
+                        return Math.Min(b.Top, b.Bottom) - p.Y;
+                    }
+
+                    if (p.Y > Math.Max(b.Top, b.Bottom))
+                    {
+                        return p.Y - Math.Max(b.Top, b.Bottom);
+                    }
+
+                    return 0;
+
+                case Orientation.Vertical: // vertical split → check X axis
+                    if (p.X < Math.Min(b.Left, b.Right))
+                    {
+                        return Math.Min(b.Left, b.Right) - p.X;
+                    }
+
+                    if (p.X > Math.Max(b.Left, b.Right))
+                    {
+                        return p.X - Math.Max(b.Left, b.Right);
+                    }
+
+                    return 0;
+
+                default:
+                    throw new InvalidEnumArgumentException(nameof(o));
+            }
         }
 
         // see if first ancenstor is common, if yes get the parent
@@ -440,7 +453,7 @@ namespace AetherVk.Core.ViewModels
             if (cur is SplitNode split)
             {
                 if (split.First == a && split.Second == b) { return split; }
-                if (split.First == a && split.Second == a) { return split; }
+                if (split.First == b && split.Second == a) { return split; }
             }
             return null;
         }
