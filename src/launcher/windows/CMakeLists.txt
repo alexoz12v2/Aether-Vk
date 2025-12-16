@@ -4,11 +4,15 @@ file(GLOB_RECURSE AVK_WINDOWS_LAUNCHER_SOURCES CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/*.cxx"
 )
 
-# Exclude files in avk-winlib
-list(FILTER AVK_WINDOWS_LAUNCHER_SOURCES EXCLUDE REGEX ".*/avk-winlib/.*")
+# Exclude files in suddirectories
+list(FILTER AVK_WINDOWS_LAUNCHER_SOURCES EXCLUDE REGEX "${CMAKE_CURRENT_SOURCE_DIR}/avk-winlib/.*")
+list(FILTER AVK_WINDOWS_LAUNCHER_SOURCES EXCLUDE REGEX "${CMAKE_CURRENT_SOURCE_DIR}/avk-winruntime/.*")
+list(FILTER AVK_WINDOWS_LAUNCHER_SOURCES EXCLUDE REGEX "${CMAKE_CURRENT_SOURCE_DIR}/AetherVk/.*")
 
+# TODO remove
 # WinRT C++20 wrapper
 add_subdirectory(avk-winlib)
+add_subdirectory(avk-winruntime)
 
 add_executable(avk-windows-launcher WIN32)
 target_compile_definitions(avk-windows-launcher

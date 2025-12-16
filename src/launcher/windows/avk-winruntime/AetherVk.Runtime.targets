@@ -1,0 +1,8 @@
+<Project>
+  <ItemGroup>
+    <!-- TODO Windows on ARM (64) support -->
+    <NativeCopyLocalItems Include="$(MSBuildThisFileDirectory)..\..\runtimes\win-x64\native\AetherVk.Runtime.dll" />
+    <!-- TODO: Add this only in debug build where debug symbols do exist! -->
+    <NativeCopyLocalItems Include="$(MSBuildThisFileDirectory)..\..\runtimes\win-x64\native\AetherVk.Runtime.pdb" />
+  </ItemGroup>
+</Project>

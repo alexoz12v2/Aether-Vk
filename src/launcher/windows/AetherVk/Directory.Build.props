@@ -10,5 +10,7 @@
 
     <!-- Enable Compiler strict mode https://www.meziantou.net/csharp-compiler-strict-mode.htm -->
     <Features>strict</Features>
+
+    <RestoreSources>$(RestoreSources);$(MSBuildThisFileDirectory)\AetherVk.Runtime\nuget\$(Configuration)\AetherVk.Runtime.nuget</RestoreSources>
   </PropertyGroup>
 </Project>

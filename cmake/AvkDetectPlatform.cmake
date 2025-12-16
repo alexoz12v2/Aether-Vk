@@ -123,6 +123,10 @@ macro(avk_cxx_flags)
     if (AVK_OS STREQUAL "LINUX" OR AVK_OS STREQUAL "MACOS")
       string(APPEND CMAKE_CXX_FLAGS " -pthread -stdlib=libc++")
     endif ()
+    if (AVK_OS STREQUAL "WINDOWS")
+      # produce deterministic binaries (needed also -Wl,/Brepro as linking options!
+      string(APPEND CMAKE_CXX_FLAGS " -ffile-prefix-map=${CMAKE_SOURCE_DIR}=SRC_ROOT")
+    endif ()
 
     # arch specific
     if (AVK_ARCH STREQUAL "X86_64" OR AVK_ARCH STREQUAL "X86")
@@ -172,6 +176,8 @@ macro(avk_cxx_flags)
 
         # windows has to copy the DLLs as usual
         if (AVK_OS STREQUAL "WINDOWS")
+          # Since we are using clang, -gcodeview ensures PDB compatible with Visual Studio
+          string(APPEND CMAKE_CXX_FLAGS " -gcodeview")
           # Enable compatibility with Visual C++
           string(APPEND CMAKE_CXX_FLAGS " -fms-compatibility")
           # Windows needs to declare the sanitizers DLL if we link against dynamically
@@ -197,6 +203,7 @@ macro(avk_cxx_flags)
           endif ()
           unset(RES)
           unset(ERR)
+          string(REGEX REPLACE "\\\\" "/" AVK_WIN_ASAN_PATH "${AVK_WIN_ASAN_PATH}")
           message(STATUS "Found Path to ASan/UbSan on windows at ${AVK_WIN_ASAN_PATH}")
           # DLL: clang_rt.asan_dynamic-x86_64.dll
           # interface lib: clang_rt.asan_dynamic-x86_64.lib
