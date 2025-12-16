@@ -1,4 +1,5 @@
 using AetherVk.Core.Interfaces;
+using AetherVk.Core.PInvoke;
 using AetherVk.Core.Types;
 using AetherVk.Core.ViewModels;
 using AetherVk.Pages;
@@ -12,6 +13,8 @@ using Microsoft.UI.Xaml;
 using Serilog;
 using Serilog.Filters;
 using System;
+using System.Diagnostics;
+using System.IO;
 
 namespace AetherVk.App
 {
@@ -157,6 +160,7 @@ namespace AetherVk.App
         public App()
         {
             this.InitializeComponent();
+            AvkRuntime.SomeFunc();
         }
 
         protected override async void OnLaunched(LaunchActivatedEventArgs args)

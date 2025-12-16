@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<package>
+  <metadata>
+    <id>AetherVk.Runtime</id>
+    <version>1.0.0</version>
+    <authors>alexoz12v2</authors>
+    <description>Native Windows Runtime for AetherVk.App</description>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+  </metadata>
+</package>
