@@ -15,7 +15,7 @@
 namespace avk {
 
 /// Necessary condition to have a pure data object. The only exception
-/// to this constraints is `IScriptComponent`
+/// to these constraints is `IScriptComponent`
 template <typename T>
 struct is_component {
   static bool constexpr value = std::is_standard_layout_v<T> &&
