@@ -44,8 +44,8 @@ namespace AetherVk.App
         // one view model for each editor. Note: there is no view model for the panel host cause it's created via DI
         // TODO remove
         public static EditorPageSplashScreenViewModel EditorPageSplashScreenViewModel => Program.Services.GetRequiredService<EditorPageSplashScreenViewModel>();
-        public static EditorPageConsoleViewModel EditorPageConsole => Program.Services.GetRequiredService<EditorPageConsoleViewModel>();
-        public static EditorPageSettingsViewModel EditorPageSettings => Program.Services.GetRequiredService<EditorPageSettingsViewModel>();
+        public static EditorPageConsoleViewModel EditorPageConsoleViewModel => Program.Services.GetRequiredService<EditorPageConsoleViewModel>();
+        public static EditorPageSettingsViewModel EditorPageSettingsViewModel => Program.Services.GetRequiredService<EditorPageSettingsViewModel>();
     }
 
 

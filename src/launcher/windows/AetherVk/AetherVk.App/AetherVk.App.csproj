@@ -97,10 +97,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="TemplatedControls\" />
-  </ItemGroup>
-
-  <ItemGroup>
     <Page Update="Pages\EditorPageSettings.xaml">
       <Generator>MSBuild:Compile</Generator>
     </Page>

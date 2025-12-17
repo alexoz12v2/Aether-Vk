@@ -7,6 +7,8 @@ BOOL WINAPI DllMain([[maybe_unused]] HINSTANCE hInstDll, DWORD fdwReason,
   switch (fdwReason) {
     case DLL_PROCESS_ATTACH:
       // the DLL is being mapped into the process address space
+      // if uncommented, the THREAD_ATTACH and DETACH won't be called
+      // DisableThreadLibraryCalls(hInstDll);
       break;
     case DLL_THREAD_ATTACH:
       // a thread is being created
