@@ -1,0 +1,30 @@
+[package]
+name = "aethervk-oshal-rlib"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "aethervk_oshal_rlib"
+crate-type = ["rlib"]
+
+[features]
+default = []
+std = []
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = ">=0.59, <= 0.62", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_Globalization",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
+windows-strings = { version = "0.5", default-features = false }
+wchar = "0.11"
+
+# settings to strip and optimize release
+# in rlib we don't care of how panic is handled
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

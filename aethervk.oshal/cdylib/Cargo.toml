@@ -1,0 +1,54 @@
+[package]
+name = "aethervk-oshal-cdylib"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "aethervk_oshal_cdylib"
+crate-type = ["cdylib"]
+
+[features]
+default = []
+std = []
+
+[dev-dependencies]
+aethervk-oshal-rlib = { path = "../rlib", features = ["std"]}
+
+[dependencies]
+# something which implements `Sync` for static variables
+spin = { version = "0.10", features = ["once"] }
+aethervk-oshal-rlib = { path = "../rlib" }
+
+[target.'cfg(not(windows))'.dependencies]
+ctor_bare = { version = "0.2" }
+
+# crates necessary to avoid std
+# core, alloc → `rustc` already has them
+# - global allocator
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.5"
+
+[target.'cfg(target_env = "msvc")'.dependencies] # if necessary, "secure" in debug
+mimalloc = { version = "0.1", features = ["v3"] }
+
+# operating system specific
+[target.'cfg(windows)'.dependencies]
+windows = { version = ">=0.59, <= 0.62", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_Globalization",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
+windows-strings = { version = "0.5", default-features = false }
+wchar = "0.11"
+
+[profile.dev]
+panic = "abort"
+
+# settings to strip and optimize release
+[profile.release]
+lto = true
+panic = "abort"
+codegen-units = 1
+strip = true
