@@ -1,6 +1,10 @@
 // disable std only for non tests
 #![cfg_attr(all(not(test), not(feature = "std")), no_std)]
 
+// crash compilation on 32 bit machines
+#[cfg(not(target_pointer_width = "64"))]
+compile_error!("Target Must be a 64-bit machine");
+
 #[cfg(any(test, feature = "std"))]
 extern crate std;
 
@@ -26,10 +30,12 @@ pub fn panic_handler_impl() -> ! {
       let _ = TerminateProcess(handle, exit_code);
     }
   }
-  #[cfg(not(windows))]
+  #[cfg(target_family = "unix")]
   {
-    todo!();
+    unsafe { libc::exit(libc::EXIT_FAILURE) };
   }
+
+  #[allow(unreachable_code)]
   loop {}
 }
 
@@ -60,6 +66,9 @@ const AVX_MASK: u32 = 1 << 6;
 const AVX2_MASK: u32 = 1 << 7;
 #[cfg(target_arch = "x86_64")]
 const FMA_MASK: u32 = 1 << 8;
+
+#[cfg(target_arch = "aarch64")]
+const NEON_MASK: u32 = 1 << 0;
 
 // -------------------- Initialization Impl ------------------------
 impl AvkSystemInfo {
@@ -120,7 +129,18 @@ impl AvkSystemInfo {
     }
     #[cfg(target_arch = "aarch64")]
     {
-      todo!();
+      let mut arch_features: u32 = 0;
+      // aarch64 = alias for ARMv8-A 64-bit, for which NEON support is mandatory
+      // - macOS terminal: `sysctl "hw.optional.neon"`. For more, `sysctl "hw.optional"`
+      arch_features |= NEON_MASK;
+
+      // Apple Silicon (M1 - M4) doesn't support SVE extensions, while on linux it relies on either
+      // - reading register `ID_AA64PFR_EL1`, which is only accessible in EL1 (which is kernel mode, while EL0 is user mode)
+      //   - linux kernel 4.something should detect you want to read SIMD features, hence traps to kernel and returns to you the value, but sketchy.
+      // - linux API: either parse pseudofile `/proc/self/auxv` or use `getauxval`
+      // TODO: Linux
+
+      AvkSystemInfo { arch_features }
     }
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
@@ -129,40 +149,55 @@ impl AvkSystemInfo {
   }
 
   #[inline]
+  #[cfg(target_arch = "x86_64")]
   pub fn has_sse(&self) -> bool {
     self.arch_features & SSE_MASK != 0
   }
   #[inline]
+  #[cfg(target_arch = "x86_64")]
   pub fn has_sse2(&self) -> bool {
     self.arch_features & SSE2_MASK != 0
   }
   #[inline]
+  #[cfg(target_arch = "x86_64")]
   pub fn has_sse3(&self) -> bool {
     self.arch_features & SSE3_MASK != 0
   }
   #[inline]
+  #[cfg(target_arch = "x86_64")]
   pub fn has_ssse3(&self) -> bool {
     self.arch_features & SSSE3_MASK != 0
   }
   #[inline]
+  #[cfg(target_arch = "x86_64")]
   pub fn has_sse4_1(&self) -> bool {
     self.arch_features & SSE4_1_MASK != 0
   }
   #[inline]
+  #[cfg(target_arch = "x86_64")]
   pub fn has_sse4_2(&self) -> bool {
     self.arch_features & SSE4_2_MASK != 0
   }
   #[inline]
+  #[cfg(target_arch = "x86_64")]
   pub fn has_fma(&self) -> bool {
     self.arch_features & FMA_MASK != 0
   }
   #[inline]
+  #[cfg(target_arch = "x86_64")]
   pub fn has_avx(&self) -> bool {
     self.arch_features & AVX_MASK != 0
   }
   #[inline]
+  #[cfg(target_arch = "x86_64")]
   pub fn has_avx2(&self) -> bool {
     self.arch_features & AVX2_MASK != 0
+  }
+
+  #[inline]
+  #[cfg(target_arch = "aarch64")]
+  pub fn has_neon(&self) -> bool {
+    self.arch_features & NEON_MASK != 0
   }
 }
 
@@ -201,6 +236,10 @@ mod tests {
         (&system_info).has_avx(),
         (&system_info).has_avx2()
       );
+    }
+    #[cfg(all(target_arch = "aarch64", not(target_os = "none")))]
+    {
+      println!("Compare the following with sysctl on macOS:\n  feat: {:x}\n NEON: {}", system_info.arch_features, system_info.has_neon());
     }
   }
 }

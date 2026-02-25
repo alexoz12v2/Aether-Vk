@@ -8,18 +8,12 @@ use ash::{
   Entry, vk::{self, PFN_vkGetInstanceProcAddr}
 };
 
-use windows::{
-  Win32::System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32},
-  core::PCSTR,
-};
 #[cfg(windows)]
 use windows::{
   core::{w, s},
-  Win32::System::LibraryLoader::{LoadLibraryExW},
+  Win32::System::LibraryLoader::{LoadLibraryExW, GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32},
+  core::PCSTR,
 };
-#[cfg(all(debug_assertions
-
-))]
 
 // -------------------------------- Debug essenger --------------------------
 // TODO: copy from mac
@@ -37,8 +31,9 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(_messag
   {
     todo!();
   }
+
   // don't abort Vulkan call
-  return vk::FALSE;
+  vk::FALSE
 }
 
 // -------------------------------- Startup Functions --------------------------
