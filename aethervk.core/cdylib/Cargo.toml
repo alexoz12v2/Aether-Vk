@@ -11,8 +11,10 @@ crate-type = ["cdylib"]
 default = []
 std = []
 
-[dev-dependencies]
-aethervk-core-rlib = { path = "../rlib", features = ["std"] }
+[build-dependencies]
+anyhow = { version = "1.0"}
+serde_json = "1.0"
+glob = "0.3"
 
 [dependencies]
 aethervk-core-rlib = { path = "../rlib", features = [] }

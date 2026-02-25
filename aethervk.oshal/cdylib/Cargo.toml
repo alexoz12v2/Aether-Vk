@@ -11,9 +11,6 @@ crate-type = ["cdylib"]
 default = []
 std = []
 
-[dev-dependencies]
-aethervk-oshal-rlib = { path = "../rlib", features = ["std"]}
-
 [dependencies]
 # something which implements `Sync` for static variables
 spin = { version = "0.10", features = ["once"] }

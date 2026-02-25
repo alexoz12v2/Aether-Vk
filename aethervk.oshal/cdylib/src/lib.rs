@@ -9,7 +9,7 @@ pub use r#impl::{AvkSystemInfo};
 extern crate core;
 extern crate alloc;
 
-use core::{panic::PanicInfo, ptr, mem};
+use core::{ptr, mem};
 
 #[cfg(not(windows))]
 use ctor_bare::{register_ctor};
@@ -36,7 +36,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 // ----------------- Panic Handler ----------------------------------
 #[panic_handler]
 #[cfg(all(not(test), feature = "std"))]
-fn the_panic(_info: &PanicInfo) -> ! {
+fn the_panic(_info: &core::panic::PanicInfo) -> ! {
   r#impl::panic_handler_impl();
 }
 
