@@ -1,11 +1,18 @@
 extern crate core;
 extern crate alloc;
 
-use core::{ffi::{CStr, c_void}, mem, ptr};
-use alloc::{vec, string};
+use core::{
+  ffi::{CStr, c_void},
+  mem, ptr,
+};
+use alloc::{
+  string::{self, ToString},
+  vec,
+};
 
 use ash::{
-  Entry, vk::{self, PFN_vkGetInstanceProcAddr}
+  Entry,
+  vk::{self, PFN_vkGetInstanceProcAddr},
 };
 
 #[cfg(windows)]
@@ -15,21 +22,30 @@ use windows::{
   core::PCSTR,
 };
 
+use crate::types::GpuError;
+
 // -------------------------------- Debug essenger --------------------------
 // TODO: copy from mac
 // TODO: Printer
 #[cfg(debug_assertions)]
-pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(_message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,  _message_types: vk::DebugUtilsMessageTypeFlagsEXT, p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>, _p_user_data: *mut c_void) -> vk::Bool32 {
+pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
+  _message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+  _message_types: vk::DebugUtilsMessageTypeFlagsEXT,
+  p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
+  _p_user_data: *mut c_void,
+) -> vk::Bool32 {
   #[cfg(windows)]
   {
-    use windows::Win32::System::Console::{ GetStdHandle, STD_OUTPUT_HANDLE };
+    use windows::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE};
 
-    let h_stdout=  unsafe { GetStdHandle(STD_OUTPUT_HANDLE) }.unwrap();
-
+    let h_stdout = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) }.unwrap();
+    // TODO: convert to wide and print
   }
-  #[cfg(not(windows))]
+  #[cfg(target_family = "unix")]
   {
-    todo!();
+    let p_msg = unsafe { (*p_callback_data).p_message };
+    let count = unsafe { libc::strlen(p_msg) };
+    unsafe { libc::write(libc::STDOUT_FILENO, p_msg.cast(), count) };
   }
 
   // don't abort Vulkan call
@@ -37,6 +53,14 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(_messag
 }
 
 // -------------------------------- Startup Functions --------------------------
+pub(super) fn is_vk_entry_valid(entry: &Entry) -> bool {
+  let value = unsafe {
+    core::mem::transmute_copy::<PFN_vkGetInstanceProcAddr, usize>(
+      &entry.static_fn().get_instance_proc_addr,
+    )
+  };
+  value != 0
+}
 
 // TODO Runtime Callback on crash
 /// ## Safety:
@@ -56,9 +80,6 @@ pub(super) unsafe fn vk_entry() -> &'static Entry {
           unsafe { GetProcAddress(h_vulkan, VK_GET_INSTANCE_PROC_ADDR_NAME) }
             .expect("vkGetInstanceProcAddr not found");
         get_instance_proc_addr = unsafe { mem::transmute(vk_get_instance_proc_addr) };
-        ash::StaticFn {
-          get_instance_proc_addr,
-        }
       }
       #[cfg(target_os = "linux")]
       {
@@ -66,7 +87,65 @@ pub(super) unsafe fn vk_entry() -> &'static Entry {
       }
       #[cfg(target_os = "macos")]
       {
-        todo!()
+        static ZERO: isize = 0;
+        // find the current cdylib directory, assuming the packaged vulkan stuff is in there.
+        // how: take this function and query which shared module is it contained in
+        let mut info = unsafe { core::mem::zeroed::<libc::Dl_info>() };
+        let func_addr = vk_entry as *const core::ffi::c_void;
+        get_instance_proc_addr =
+          if unsafe { libc::dladdr(func_addr, &mut info) } != 0 && !info.dli_fname.is_null() {
+            Some(unsafe { core::ffi::CStr::from_ptr(info.dli_fname.cast::<i8>()) })
+          } else {
+            None
+          }
+          .map(|base_path| {
+            // TODO: path and stuff outside in oshal?
+            // 1. `VK_LAYER_PATH`, `VK_DRIVER_FILES` to "${this_dll}/vulkan/explicit_layer" and "${this_dll}/vulkan/icd" respectively
+            let path_constructor = |appended: &[u8]| {
+              let mut bytes_vec = alloc::vec::Vec::with_capacity(256);
+              // copy everything
+              bytes_vec.extend_from_slice(base_path.to_bytes());
+              // remove from end up to first slash (excluded)
+              if let Some(slash_pos) = bytes_vec.iter().rposition(|&b| b == b'/') {
+                bytes_vec.truncate(slash_pos + 1);
+              } // TODO crash in debug if None?
+              // append 'explicit_layer'
+              bytes_vec.extend_from_slice(appended);
+              // nul terminator handled from the `CString::new`
+              let the_string = alloc::ffi::CString::new(bytes_vec).unwrap();
+
+              the_string
+            };
+            let vk_layer_path = path_constructor(b"explicit_layer");
+            let vk_icd_path = path_constructor(b"icd");
+
+            unsafe {
+              libc::setenv(
+                b"VK_LAYER_PATH".as_ptr().cast(),
+                (&vk_layer_path).as_ptr(),
+                1,
+              )
+            };
+            unsafe {
+              libc::setenv(
+                b"VK_DRIVER_FILES".as_ptr().cast(),
+                (&vk_icd_path).as_ptr(),
+                1,
+              )
+            };
+            // 2. Load vulkan function
+            let vk_loader_path = path_constructor(b"lib/libvulkan.dylib");
+            unsafe { libc::dlopen(vk_loader_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) }
+          })
+          .map(|module_ptr| unsafe {
+            libc::dlsym(module_ptr, b"vkGetInstanceProcAddr\0".as_ptr().cast())
+          })
+          .map(|func_addr| unsafe { core::mem::transmute(func_addr) })
+          .unwrap_or(unsafe { core::mem::transmute(ZERO) });
+      }
+
+      ash::StaticFn {
+        get_instance_proc_addr,
       }
     };
 
@@ -81,6 +160,7 @@ pub(super) fn required_instance_extensions() -> &'static vec::Vec<&'static CStr>
     #[cfg(debug_assertions)]
     {
       the_vec.push(ash::ext::debug_utils::NAME);
+      the_vec.push(ash::ext::layer_settings::NAME);
     }
     // surface
     the_vec.push(ash::khr::surface::NAME);
@@ -89,7 +169,12 @@ pub(super) fn required_instance_extensions() -> &'static vec::Vec<&'static CStr>
     {
       the_vec.push(ash::khr::win32_surface::NAME);
     }
-    #[cfg(not(windows))]
+    #[cfg(all(target_vendor = "apple", target_family = "unix"))]
+    {
+      the_vec.push(ash::khr::portability_enumeration::NAME);
+      the_vec.push(ash::ext::metal_surface::NAME);
+    }
+    #[cfg(target_os = "linux")]
     {
       todo!();
     }
@@ -124,7 +209,13 @@ pub(super) fn required_device_extensions() -> &'static vec::Vec<&'static CStr> {
       // TODO: keyed mutex?
       // TODO: if not Windows 11, need fullscreen exclusive extension
     }
-    #[cfg(not(windows))]
+    #[cfg(all(target_vendor = "apple", target_family = "unix"))]
+    {
+      // Metal is not 100% Vulkan Spec conformant
+      the_vec.push(ash::khr::portability_subset::NAME);
+      the_vec.push(ash::ext::metal_objects::NAME);
+    }
+    #[cfg(target_os = "linux")]
     {
       todo!();
     }
@@ -141,6 +232,22 @@ pub(super) fn required_device_extensions() -> &'static vec::Vec<&'static CStr> {
 
     the_vec
   })
+}
+
+// -------------------------------- Extensions Handling ------------------------
+pub(super) fn first_unsupported_extension<'a>(
+  desired_names: &'a [&'_ CStr],
+  properties: &'a [vk::ExtensionProperties],
+) -> Option<&'a CStr> {
+  for desired_name in desired_names {
+    if let None = properties
+      .iter()
+      .find(|&prop| *desired_name == prop.extension_name_as_c_str().unwrap())
+    {
+      return Some(desired_name);
+    }
+  }
+  None
 }
 
 // -------------------------------- Device Features Handling -------------------
@@ -193,7 +300,24 @@ impl RequiredFeatures<'_> {
       the_vec.push("timeline_semaphore".to_string());
     }
 
-    if the_vec.is_empty() { None } else { Some(the_vec) }
+    if the_vec.is_empty() {
+      None
+    } else {
+      Some(the_vec)
+    }
+  }
+}
+
+// -------------------------------- Extension: Result Mapping ------------------
+
+impl From<vk::Result> for GpuError {
+  fn from(err: vk::Result) -> Self {
+    match err {
+      vk::Result::ERROR_DEVICE_LOST => GpuError::DeviceLost,
+      vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => GpuError::OutOfMemory,
+      // TODO more as needed
+      _ => GpuError::BackendSpecific(err.to_string()),
+    }
   }
 }
 
@@ -215,6 +339,7 @@ mod tests {
       )
     };
     assert!(!proc_addr_value.is_null());
+    assert!(is_vk_entry_valid(&the_ptr));
     assert!(unsafe { the_ptr.enumerate_instance_layer_properties() }.is_ok());
   }
 }

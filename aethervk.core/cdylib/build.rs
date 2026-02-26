@@ -50,7 +50,6 @@ fn process_vulkan_sdk(sdk_path: &Path) {
   {
     // directory structure (just for debug builds, `xtask` for avalonia packaging later)
     // copy vulkan loader and molten vk inside lib
-    let target_dylib = src_lib_dir.join("libvulkan.dylib");
     let search_path = src_lib_dir
       .join("libvulkan*.dylib")
       .into_os_string()
@@ -66,22 +65,31 @@ fn process_vulkan_sdk(sdk_path: &Path) {
       {
         // read symlink target and recreate it relative to result
         let target = fs::read_link(&path).unwrap();
-        println!("Symlink: {:?} -> {:?}", &path, &target);
-        if (&dest_path).exists() {
+        println!(
+          "Symlink: {:?} -> {:?}",
+          &dest_path,
+          (&target).file_name().unwrap()
+        );
+        if (&dest_path).exists() || fs::symlink_metadata(&dest_path).is_ok() {
+          println!("this is to be removed: {}", dest_path.display());
           fs::remove_file(&dest_path).unwrap();
+        } else {
+          println!("Apparently, this doesn't exist: {}", dest_path.display());
         }
-        std::os::unix::fs::symlink(&target_dylib, &dest_path).unwrap();
+        std::os::unix::fs::symlink((&target).file_name().unwrap(), &dest_path).unwrap();
       } else {
         println!("Copying {:?}", &path);
         fs::copy(&path, &dest_path).unwrap();
       }
     }
 
-    fs::copy(
-      src_lib_dir.join("libMoltenVK.dylib"),
-      lib_dir.join("libMoltenVK.dylib"),
-    )
-    .unwrap();
+    // check whether you have libvulkan. If not, crash
+    if !lib_dir.join("libvulkan.dylib").exists() {
+      panic!("libvulkan.dylib doens't exist. Does your VULKAN_SDK path contain it? At {}", src_lib_dir.display());
+    }
+
+    const MOLTENVK_NAME: &str = "libMoltenVK.dylib";
+    fs::copy(src_lib_dir.join(MOLTENVK_NAME), lib_dir.join(MOLTENVK_NAME)).unwrap();
 
     // copy ICD file inside and rename "library_path" to "../lib/MoltenVK.dylib"
     let icd_file = sdk_path
@@ -94,7 +102,7 @@ fn process_vulkan_sdk(sdk_path: &Path) {
     }
     let dst_icd = icd_dir.join("MoltenVK_icd.json");
     fs::copy(&icd_file, &dst_icd).unwrap();
-    fixup_icd(&dst_icd, "ICD", "libMoltenVk.dylib");
+    fixup_icd(&dst_icd, "ICD", MOLTENVK_NAME);
   }
   // if debug: copy validation layers inside the build under ${dll_dir}/vulkan/*
   if is_debug {

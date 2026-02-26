@@ -17,6 +17,7 @@ aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", features = ["std"] }
 [dependencies]
 aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib" }
 spin = { version = "0.10", features = ["once"] }
+thiserror = { version = "2", default-features = false }
 
 [target.'cfg(all(not(target_arch = "wasm32"), any( target_os = "windows", target_os = "linux", target_os = "macos", target_os = "android", target_os = "ios")))'.dependencies]
 ash = { version = "0.38", default-features = false, features = ["debug"] }
@@ -27,6 +28,9 @@ windows = { version = ">=0.59, <=0.62", default-features = false, features = [
     "Win32_System_Console",
     "Win32_System_LibraryLoader",
 ] }
+
+[target.'cfg(target_family = "unix")'.dependencies]
+libc = { version = "0.2", default-features = false, features = [ "extra_traits" ]  }
 
 # settings to strip and optimize release
 # in rlib we don't care of how panic is handled

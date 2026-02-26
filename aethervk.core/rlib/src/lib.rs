@@ -11,4 +11,9 @@ extern crate alloc;
 // publish panic_handler for our own cdylib
 pub use aethervk_oshal_rlib::panic_handler_impl;
 
+mod types;
+mod traits;
+
+// TODO: declare GPU frontend
 mod gpu_backends;
+
