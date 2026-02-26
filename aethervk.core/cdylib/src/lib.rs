@@ -35,3 +35,12 @@ static GLOBAL: MiMalloc = MiMalloc;
 fn the_panic(_info: &PanicInfo) -> ! {
   r#impl::panic_handler_impl();
 }
+
+// -------------------- Linker Functions ----------------------------
+// -------------------- Necessary Evilness --------------------------
+// `liballoc` expects some symbols for unwinding panic even though we specified abort.
+// 2 fixes: 1) enable thin LTO in debug (no.) 2) dummy symbol (this one)
+#[cfg(debug_assertions)]
+#[cfg(target_arch = "aarch64")] // I observed this only on my Apple Silicon
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_eh_personality() {}

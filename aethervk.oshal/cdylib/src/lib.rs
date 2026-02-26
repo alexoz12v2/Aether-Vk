@@ -11,8 +11,6 @@ extern crate alloc;
 
 use core::{ptr, mem};
 
-#[cfg(not(windows))]
-use ctor_bare::{register_ctor};
 use spin::once;
 
 // ----------- Allocator Setup --------------------------------------
@@ -35,7 +33,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 // ----------------- Panic Handler ----------------------------------
 #[panic_handler]
-#[cfg(all(not(test), feature = "std"))]
+#[cfg(all(not(test), not(feature = "std")))]
 fn the_panic(_info: &core::panic::PanicInfo) -> ! {
   r#impl::panic_handler_impl();
 }
@@ -56,6 +54,17 @@ pub unsafe extern "C" fn avkSystemInfo_get(system_info: *mut AvkSystemInfo) {
       );
     }
   }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+#[cfg(all(target_arch = "aarch64", not(target_os = "none")))]
+pub unsafe extern "C" fn avkSystemInfo_hasNEON(system_info: *const AvkSystemInfo) -> bool {
+  if system_info.is_null() {
+    return false;
+  }
+
+  unsafe { *system_info }.has_neon()
 }
 
 #[unsafe(no_mangle)]
@@ -157,11 +166,28 @@ pub unsafe extern "C" fn avkSystemInfo_hasAVX2(system_info: *const AvkSystemInfo
   unsafe { *system_info }.has_avx2()
 }
 
+// -------------------- Necessary Evilness --------------------------
+// `liballoc` expects some symbols for unwinding panic even though we specified abort.
+// 2 fixes: 1) enable thin LTO in debug (no.) 2) dummy symbol (this one)
+#[cfg(debug_assertions)]
+#[cfg(target_arch = "aarch64")] // I observed this only on my Apple Silicon
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_eh_personality() {}
+
 // -------------------- Linker Functions ----------------------------
+// https://stackoverflow.com/questions/30700596/with-mach-o-is-there-a-way-to-register-a-function-that-will-run-before-main
 #[used]
+#[cfg(all(not(windows), target_family = "unix", target_vendor = "apple"))]
+#[unsafe(link_section = "__DATA,__mod_init_func")]
+static MACH_O_CONSTRUCTOR: fn() = on_load;
+
+#[used]
+#[cfg(all(not(windows), target_family = "unix", not(target_vendor = "apple")))]
+#[unsafe(link_section = ".init_array")]
+static ELF64_CONSTRUCTOR: fn() = on_load;
+
 #[cfg(not(windows))]
-#[register_ctor]
-unsafe fn on_load() {
+fn on_load() {
   unsafe { load() };
 }
 

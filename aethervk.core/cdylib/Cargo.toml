@@ -19,9 +19,6 @@ glob = "0.3"
 [dependencies]
 aethervk-core-rlib = { path = "../rlib", features = [] }
 
-[target.'cfg(not(windows))'.dependencies]
-ctor_bare = { version = "0.2" }
-
 # crates necessary to avoid std
 # core, alloc → `rustc` already has them
 # - global allocator

@@ -3,6 +3,11 @@ name = "aethervk-oshal-cdylib"
 version = "0.1.0"
 edition = "2024"
 
+# if linker optimized stuff, this is the way inside .cargo
+# [build]
+# rustflags = ["-C", "link-arg=-z", "link-arg=nostart-stop-gc"]
+# rustdocflags = ["-C", "link-arg=-z", "-C", "link-arg=nostart-stop-gc"]
+
 [lib]
 name = "aethervk_oshal_cdylib"
 crate-type = ["cdylib"]
@@ -15,9 +20,6 @@ std = []
 # something which implements `Sync` for static variables
 spin = { version = "0.10", features = ["once"] }
 aethervk-oshal-rlib = { path = "../rlib" }
-
-[target.'cfg(not(windows))'.dependencies]
-ctor_bare = { version = "0.2" }
 
 # crates necessary to avoid std
 # core, alloc → `rustc` already has them
