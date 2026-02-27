@@ -9,3 +9,5 @@
   )
 ))]
 pub(super) mod vulkan;
+
+pub(self) const MAX_DEVICES: usize = 8;

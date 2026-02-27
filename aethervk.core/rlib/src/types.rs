@@ -1,12 +1,16 @@
-
-use alloc::{ string::String };
+use alloc::{string::String};
 
 use thiserror::Error;
+
+
+pub struct RuntimeParams {
+  // TODO add logging stuff
+}
 
 // ---------------------------- Error Types -----------------------------------
 
 #[derive(Error, Debug)]
-pub(super) enum EngineError {
+pub enum EngineError {
   #[error("GPU Error: {0}")]
   Gpu(#[from] GpuError),
 
@@ -20,12 +24,12 @@ pub(super) enum EngineError {
   InvalidOperation(&'static str),
 }
 
-pub(super) type EngineResult<T> = core::result::Result<T, EngineError>;
+pub type EngineResult<T> = core::result::Result<T, EngineError>;
 
 // TODO: These will evolve as development progresses
 
 #[derive(Debug, Error)]
-pub(super) enum GpuError {
+pub enum GpuError {
   #[error("Device lost")]
   DeviceLost,
 
@@ -45,18 +49,14 @@ pub(super) enum GpuError {
   BackendSpecific(String),
 }
 
-pub(super) type GpuResult<T> = core::result::Result<T, GpuError>;
+pub type GpuResult<T> = core::result::Result<T, GpuError>;
 
 #[derive(Debug, Error)]
-pub(super) enum IoError {
-  
-}
+pub enum IoError {}
 
-pub(super) type IoResult<T> = core::result::Result<T, IoError>;
+pub type IoResult<T> = core::result::Result<T, IoError>;
 
 #[derive(Debug, Error)]
-pub(super) enum MathError {
+pub enum MathError {}
 
-}
-
-pub(super) type MathResult<T> = core::result::Result<T, MathError>;
+pub type MathResult<T> = core::result::Result<T, MathError>;

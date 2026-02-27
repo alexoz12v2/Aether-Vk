@@ -1,6 +1,3 @@
-extern crate core;
-extern crate alloc;
-
 use core::{
   ffi::{CStr, c_void},
   mem, ptr,
@@ -14,6 +11,7 @@ use ash::{
   Entry,
   vk::{self, PFN_vkGetInstanceProcAddr},
 };
+use bitflags::bitflags;
 
 #[cfg(windows)]
 use windows::{
@@ -24,7 +22,105 @@ use windows::{
 
 use crate::types::GpuError;
 
-// -------------------------------- Debug essenger --------------------------
+// -------------------------------- Helper Types -----------------------------
+bitflags! {
+  #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+  pub(super) struct OptionalExtensionSupportFlags: u64 {
+    const NONE = 0;
+    // TODO
+    const SOME_EXTENSION = 1 << 0;
+  }
+}
+
+pub(super) struct PhysicalDeviceQueryInput {
+  #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
+  wl_display: core::ptr::NonNull<vk::wl_display>,
+  #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+  xcb_connection: core::ptr::NonNull<vk::xcb_connection_t>,
+  #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+  xcb_visualid: vk::xcb_visualid_t,
+  #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+  dpy: core::ptr::NonNull<vk::Display>,
+  #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+  visual_id: vk::VisualID,
+}
+
+impl PhysicalDeviceQueryInput {
+  pub(super) fn supports_presentation(
+    &self,
+    _entry: &ash::Entry,
+    _physical_device: vk::PhysicalDevice,
+    _instance: vk::Instance,
+    _queue_family_index: u32,
+  ) -> bool {
+    let mut _supported = false;
+
+    #[cfg(any(target_os = "android", target_vendor = "apple"))]
+    {
+      _supported = true;
+    }
+
+    #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
+    unsafe {
+      _supported = ash::khr::wayland_surface::Instance::new(_entry, &_instance)
+        .get_physical_device_wayland_presentation_support(
+          _physical_device,
+          _queue_family_index,
+          self.wl_display,
+        )
+        == vk::TRUE;
+    }
+
+    #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+    unsafe {
+      _supported = ash::khr::xcb_surface::Instance::new(_entry, &_instance)
+        .get_physical_device_xcb_presentation_support(
+          _physical_device,
+          _queue_family_index,
+          self.xcb_connection,
+          self.xcb_visualid,
+        )
+        == vk::TRUE;
+    }
+
+    #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+    unsafe {
+      _supported = ash::khr::xlib_surface::Instance::new(_entry, &_instance)
+        .get_physical_device_xlib_presentation_support(
+          _physical_device,
+          _queue_family_index,
+          self.dpy,
+          self.visual_id,
+        )
+        == vk::TRUE;
+    }
+
+    #[cfg(windows)]
+    unsafe {
+      _supported = ash::khr::win32_surface::Instance::new(_entry, &_instance)
+        .get_physical_device_win32_presentation_support(_physical_device, _queue_family_index)
+        == vk::TRUE;
+    }
+
+    _supported
+  }
+}
+
+pub(super) struct PhysicalDeviceQueryResult {
+  pub optional_extensions: OptionalExtensionSupportFlags,
+  pub graphics_queue_family_index: u32,
+  pub compute_queue_family_index: u32,
+  pub transfer_queue_family_index: u32,
+  pub score: i32,
+}
+
+impl PhysicalDeviceQueryResult {
+  pub(super) fn has_valid_score(&self) -> bool {
+    self.score > 0
+  }
+}
+
+// -------------------------------- Debug Messenger --------------------------
 // TODO: copy from mac
 // TODO: Printer
 #[cfg(debug_assertions)]
@@ -322,10 +418,6 @@ impl From<vk::Result> for GpuError {
 }
 
 // -------------------------------- Unit Testing -------------------------------
-
-#[cfg(test)]
-extern crate std;
-
 #[cfg(test)]
 mod tests {
   use super::*;
