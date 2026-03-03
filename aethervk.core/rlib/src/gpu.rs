@@ -1,10 +1,21 @@
-// Note: This doesn't import `gpu_backends`
+use crate::types::{EngineResult, GpuResult};
+
+// Re-export what is necessary from backends
+pub use super::gpu_backends::new_render_frontend;
+pub use super::gpu_backends::{
+  vulkan::constants,
+};
+
+use alloc::boxed::Box;
 #[cfg(debug_assertions)]
 use alloc::string::String;
 
-use crate::types::GpuResult;
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+pub struct RenderBackendId(u64);
+pub const NULL_RENDER_BACEKND: RenderBackendId = RenderBackendId(0);
+pub const VULKAN_RENDER_BACKEND: RenderBackendId = RenderBackendId(1);
 
-pub trait RenderDevice {
+pub trait RenderDevice: Send + Sync {
   #[cfg(debug_assertions)]
   fn print_info(&self) -> String;
 
@@ -17,11 +28,43 @@ pub struct RenderDeviceHandle {
 }
 
 pub trait RenderContext: Send + Sync {
+  fn backend_id(&self) -> RenderBackendId;
+
   fn init_device(&self, index: usize) -> GpuResult<RenderDeviceHandle>;
 
   fn deref_device_and(
-    &mut self,
+    &self,
     dev_handle: RenderDeviceHandle,
     f: &mut dyn FnMut(&dyn RenderDevice) -> GpuResult<()>,
   ) -> Option<GpuResult<()>>;
+}
+
+// NOTE: This is a box like type, so we don't need to box it when returning it to cdylib,
+// we can instead use the ManualDrop mechanism
+pub struct RenderFrontend<'a> {
+  backend: spin::RwLock<Box<dyn RenderContext + 'a>>,
+}
+
+impl<'a> RenderFrontend<'a> {
+  pub fn take_and<T>(
+    &self,
+    f: impl FnOnce(&dyn RenderContext) -> EngineResult<T>,
+  ) -> Option<EngineResult<T>> {
+    match self.backend.try_read() {
+      Some(guard) => Some(f(guard.as_ref())),
+      None => None,
+    }
+  }
+}
+
+// Boxing mechanism used by factory method in `gpu_backends` `new_render_frontend`
+impl<'a, T> From<T> for RenderFrontend<'a>
+where
+  T: RenderContext + 'a,
+{
+  fn from(value: T) -> Self {
+    RenderFrontend {
+      backend: spin::RwLock::new(Box::new(value)),
+    }
+  }
 }

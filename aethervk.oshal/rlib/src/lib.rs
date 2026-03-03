@@ -201,6 +201,9 @@ impl AvkSystemInfo {
   }
 }
 
+// -------------------- Modules ------------------------
+pub mod os;
+
 // -------------------- Unit Testing Implementation ------------------------
 #[cfg(test)]
 mod tests {

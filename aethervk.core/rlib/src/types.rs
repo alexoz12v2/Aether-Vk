@@ -1,10 +1,15 @@
 use alloc::{string::String};
 
+use heapless::index_map::FnvIndexMap;
 use thiserror::Error;
 
+pub const RUNTIME_PARAMS_MAX_COUNT: usize = 16;
+pub(super) type RuntimeParamsIndex = u32;
 
 pub struct RuntimeParams {
   // TODO add logging stuff
+  // backend specific additional parameters (each backend root file defined `RUNTIME_PARAM_<NAME>_*`)
+  pub render_backend_params: FnvIndexMap<RuntimeParamsIndex, String, RUNTIME_PARAMS_MAX_COUNT>,
 }
 
 // ---------------------------- Error Types -----------------------------------
