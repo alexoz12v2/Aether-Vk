@@ -4,6 +4,7 @@ use core::{
 };
 use alloc::{
   string::{self, ToString},
+  sync::{Arc, Weak},
   vec,
 };
 
@@ -20,7 +21,7 @@ use windows::{
   core::PCSTR,
 };
 
-use crate::types::GpuError;
+use crate::types::{GpuError, GpuResult};
 
 // -------------------------------- Helper Types -----------------------------
 bitflags! {
@@ -149,26 +150,31 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
 }
 
 // -------------------------------- Startup Functions --------------------------
-pub(super) fn is_vk_entry_valid(entry: &Entry) -> bool {
-  let value = unsafe {
-    core::mem::transmute_copy::<PFN_vkGetInstanceProcAddr, usize>(
-      &entry.static_fn().get_instance_proc_addr,
-    )
-  };
-  value != 0
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) struct VkLibHandle(pub ptr::NonNull<c_void>);
+// safety: Ensure thread safety on this, achieved through checking ref count in Drop
+unsafe impl Send for VkLibHandle {}
+unsafe impl Sync for VkLibHandle {}
+
+#[derive(Clone)]
+pub(super) struct EntryWrapper {
+  vk_entry: Arc<ash::Entry>,
+  vulkan_loader_module: VkLibHandle,
 }
 
-// TODO Runtime Callback on crash
-/// ## Safety:
-/// - as long as we can guarantee that the vulkan loader exists and its loaded counterpart is not tampered with, the returned pointer is non null and working entry
-pub(super) unsafe fn vk_entry() -> &'static Entry {
-  static ENTRY: spin::Once<Entry> = spin::Once::new();
-  ENTRY.call_once(|| {
+impl EntryWrapper {
+  pub(super) fn weak_entry(&self) -> Weak<ash::Entry> {
+    Arc::downgrade(&self.vk_entry)
+  }
+
+  pub(super) fn new(base_path_override: Option<&CStr>) -> GpuResult<Self> {
+    let mut vulkan_loader_module = ptr::NonNull::dangling();
     let static_fn: ash::StaticFn = {
       let get_instance_proc_addr: PFN_vkGetInstanceProcAddr;
       #[cfg(windows)]
       {
         const VK_GET_INSTANCE_PROC_ADDR_NAME: PCSTR = s!("vkGetInstanceProcAddr");
+        todo!(); // GetModuleHandleExW with GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT
         let h_vulkan =
           unsafe { LoadLibraryExW(w!("vulkan-1.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) }
             .unwrap();
@@ -176,6 +182,7 @@ pub(super) unsafe fn vk_entry() -> &'static Entry {
           unsafe { GetProcAddress(h_vulkan, VK_GET_INSTANCE_PROC_ADDR_NAME) }
             .expect("vkGetInstanceProcAddr not found");
         get_instance_proc_addr = unsafe { mem::transmute(vk_get_instance_proc_addr) };
+        vulkan_loader_module = h_vulkan.0;
       }
       #[cfg(target_os = "linux")]
       {
@@ -187,57 +194,72 @@ pub(super) unsafe fn vk_entry() -> &'static Entry {
         // find the current cdylib directory, assuming the packaged vulkan stuff is in there.
         // how: take this function and query which shared module is it contained in
         let mut info = unsafe { core::mem::zeroed::<libc::Dl_info>() };
-        let func_addr = vk_entry as *const core::ffi::c_void;
-        get_instance_proc_addr =
-          if unsafe { libc::dladdr(func_addr, &mut info) } != 0 && !info.dli_fname.is_null() {
-            Some(unsafe { core::ffi::CStr::from_ptr(info.dli_fname.cast::<i8>()) })
-          } else {
-            None
+        let func_addr = Self::new as *const core::ffi::c_void;
+        get_instance_proc_addr = if let Some(path) = base_path_override {
+          // TODO check if exists?
+          Some(path)
+        } else if unsafe { libc::dladdr(func_addr, &mut info) } != 0 && !info.dli_fname.is_null() {
+          // TODO: move elsewhere and see how to fix the addition of "vulkan"
+          let cstr_name_ref = unsafe { core::ffi::CStr::from_ptr(info.dli_fname.cast::<i8>()) };
+          Some(cstr_name_ref)
+        } else {
+          None
+        }
+        .and_then(|base_path| {
+          // TODO: path and stuff outside in oshal?
+          // 1. `VK_LAYER_PATH`, `VK_DRIVER_FILES` to "${this_dll}/vulkan/explicit_layer" and "${this_dll}/vulkan/icd" respectively
+          let path_constructor = |appended: &[u8]| {
+            let mut bytes_vec = alloc::vec::Vec::with_capacity(256);
+            // copy everything
+            bytes_vec.extend_from_slice(base_path.to_bytes());
+            // remove from end up to first slash (excluded)
+            if let Some(slash_pos) = bytes_vec.iter().rposition(|&b| b == b'/') {
+              bytes_vec.truncate(slash_pos + 1);
+            } // TODO crash in debug if None?
+            // append 'explicit_layer'
+            bytes_vec.extend_from_slice(appended);
+            // nul terminator handled from the `CString::new`
+            let the_string = alloc::ffi::CString::new(bytes_vec).unwrap();
+
+            the_string
+          };
+          let vk_layer_path = path_constructor(b"vulkan/explicit_layer");
+          let vk_icd_path = path_constructor(b"vulkan/icd");
+
+          unsafe {
+            libc::setenv(
+              b"VK_LAYER_PATH".as_ptr().cast(),
+              (&vk_layer_path).as_ptr(),
+              1,
+            )
+          };
+          unsafe {
+            libc::setenv(
+              b"VK_DRIVER_FILES".as_ptr().cast(),
+              (&vk_icd_path).as_ptr(),
+              1,
+            )
+          };
+          // 2. Load vulkan function
+          let vk_loader_path = path_constructor(b"vulkan/lib/libvulkan.dylib");
+          // first try to open it without loading it from disk (i.e. check if already loaded)
+          let mut lib =
+            unsafe { libc::dlopen(vk_loader_path.as_ptr(), libc::RTLD_LAZY | libc::RTLD_NOLOAD) };
+          if lib.is_null() {
+            lib =
+              unsafe { libc::dlopen(vk_loader_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) };
           }
-          .map(|base_path| {
-            // TODO: path and stuff outside in oshal?
-            // 1. `VK_LAYER_PATH`, `VK_DRIVER_FILES` to "${this_dll}/vulkan/explicit_layer" and "${this_dll}/vulkan/icd" respectively
-            let path_constructor = |appended: &[u8]| {
-              let mut bytes_vec = alloc::vec::Vec::with_capacity(256);
-              // copy everything
-              bytes_vec.extend_from_slice(base_path.to_bytes());
-              // remove from end up to first slash (excluded)
-              if let Some(slash_pos) = bytes_vec.iter().rposition(|&b| b == b'/') {
-                bytes_vec.truncate(slash_pos + 1);
-              } // TODO crash in debug if None?
-              // append 'explicit_layer'
-              bytes_vec.extend_from_slice(appended);
-              // nul terminator handled from the `CString::new`
-              let the_string = alloc::ffi::CString::new(bytes_vec).unwrap();
-
-              the_string
-            };
-            let vk_layer_path = path_constructor(b"explicit_layer");
-            let vk_icd_path = path_constructor(b"icd");
-
-            unsafe {
-              libc::setenv(
-                b"VK_LAYER_PATH".as_ptr().cast(),
-                (&vk_layer_path).as_ptr(),
-                1,
-              )
-            };
-            unsafe {
-              libc::setenv(
-                b"VK_DRIVER_FILES".as_ptr().cast(),
-                (&vk_icd_path).as_ptr(),
-                1,
-              )
-            };
-            // 2. Load vulkan function
-            let vk_loader_path = path_constructor(b"lib/libvulkan.dylib");
-            unsafe { libc::dlopen(vk_loader_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) }
-          })
-          .map(|module_ptr| unsafe {
-            libc::dlsym(module_ptr, b"vkGetInstanceProcAddr\0".as_ptr().cast())
-          })
-          .map(|func_addr| unsafe { core::mem::transmute(func_addr) })
-          .unwrap_or(unsafe { core::mem::transmute(ZERO) });
+          ptr::NonNull::new(lib)
+        })
+        .and_then(|module_ptr| unsafe {
+          vulkan_loader_module = module_ptr;
+          ptr::NonNull::new(libc::dlsym(
+            module_ptr.as_ptr(),
+            b"vkGetInstanceProcAddr\0".as_ptr().cast(),
+          ))
+        })
+        .map(|func_addr| unsafe { core::mem::transmute(func_addr) })
+        .unwrap_or(unsafe { core::mem::transmute(ZERO) });
       }
 
       ash::StaticFn {
@@ -245,8 +267,34 @@ pub(super) unsafe fn vk_entry() -> &'static Entry {
       }
     };
 
-    unsafe { Entry::from_static_fn(static_fn) }
-  })
+    let vk_entry = if 0usize == unsafe { mem::transmute(static_fn.get_instance_proc_addr) } {
+      Err(GpuError::BackendSpecific(
+        "vulkan loader couldn't be loaded".to_string(),
+      ))
+    } else {
+      Ok(unsafe { Entry::from_static_fn(static_fn) })
+    }?;
+
+    Ok(Self {
+      vk_entry: Arc::new(vk_entry),
+      vulkan_loader_module: VkLibHandle(vulkan_loader_module),
+    })
+  }
+}
+
+impl Drop for EntryWrapper {
+  fn drop(&mut self) {
+    if 1 == Arc::strong_count(&self.vk_entry) {
+      #[cfg(windows)]
+      {
+        unsafe { FreeLibrary(HMODULE(self.vulkan_loader_module.as_ptr())) };
+      }
+      #[cfg(target_family = "unix")]
+      {
+        unsafe { libc::dlclose(self.vulkan_loader_module.0.as_ptr()) };
+      }
+    }
+  }
 }
 
 pub(super) fn required_instance_extensions() -> &'static vec::Vec<&'static CStr> {
@@ -421,17 +469,5 @@ impl From<vk::Result> for GpuError {
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  #[test]
-  fn test_vulkan_entry() {
-    let the_ptr = unsafe { vk_entry() };
-    let proc_addr_value = unsafe {
-      mem::transmute::<PFN_vkGetInstanceProcAddr, *const core::ffi::c_void>(
-        (&the_ptr).static_fn().get_instance_proc_addr,
-      )
-    };
-    assert!(!proc_addr_value.is_null());
-    assert!(is_vk_entry_valid(&the_ptr));
-    assert!(unsafe { the_ptr.enumerate_instance_layer_properties() }.is_ok());
-  }
+  // TODO: Test that vulkan loader library is dropped only when arc count is zero
 }

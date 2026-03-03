@@ -11,6 +11,9 @@ crate-type = ["rlib"]
 default = []
 std = []
 
+[dependencies]
+heapless = { version = "0.9"}
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = ">=0.59, <= 0.62", default-features = false, features = [
     "Win32_Foundation",

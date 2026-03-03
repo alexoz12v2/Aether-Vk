@@ -1,14 +1,40 @@
-use aethervk_core_rlib as lib;
+use aethervk_core_rlib::{self as lib, gpu::constants };
+use heapless::index_map::FnvIndexMap;
+
+extern crate std;
 
 fn main() {
-  let hello_msg = "Hello\n";
-  unsafe {
-    libc::write(
-      libc::STDOUT_FILENO,
-      hello_msg.as_ptr().cast(),
-      hello_msg.len(),
-    )
-  };
+  println!("Hello std");
+  let path = {
+    let mut p = std::env::current_exe().unwrap();
+    for _ in 1..6 {
+      let b = p.pop();
+      assert!(b);
+    }
+    p.push("cdylib/target/");
+    p.push(if cfg!(debug_assertions) { "debug" } else { "release" });
+    p.push("vulkan");
 
-  unsafe { lib::gpu_backends::vulkan::instance::Instance::new() }.unwrap();
+    p
+  };
+  if !path.is_dir() {
+    panic!("{} doesn't exist", path.display());
+  }
+
+  let params = lib::types::RuntimeParams {
+    render_backend_params: {
+      let mut the_map = FnvIndexMap::new();
+      let mut the_str = path.display().to_string();
+      the_map.insert(constants::RUNTIME_PARAM_VULKAN_ENTRY_BASE_DIR, the_str);
+
+      the_map
+    },
+  };
+  let render_frontend = lib::gpu::new_render_frontend(lib::gpu::VULKAN_RENDER_BACKEND, &params)
+    .expect("Couldn't create Vulkan Instance");
+
+  render_frontend.take_and(|render_backend| {
+    println!("Created Vulkan Instance");
+    Ok(())
+  });
 }

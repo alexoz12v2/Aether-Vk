@@ -14,18 +14,20 @@ pub(super) struct Instance {
   pub instance: ash::Instance,
   #[cfg(debug_assertions)]
   debug_messenger: vk::DebugUtilsMessengerEXT,
+
+  entry_wrapper: utils::EntryWrapper,
 }
 
 impl Instance {
   /// ## Safety
   /// See `utils::vk_entry` and `ash::Entry::create_instance`
-  pub(super) unsafe fn new() -> GpuResult<Self> {
-    let vk_entry = unsafe { utils::vk_entry() };
-    if !utils::is_vk_entry_valid(&vk_entry) {
-      return Err(GpuError::BackendSpecific(
-        "Invalid Vulkan Loader".to_string(),
-      ));
-    }
+  pub(super) unsafe fn new(base_path_override: Option<&CStr>) -> GpuResult<Self> {
+    let entry_wrapper = utils::EntryWrapper::new(base_path_override)?;
+    let vk_entry = entry_wrapper
+      .weak_entry()
+      .upgrade()
+      .ok_or(GpuError::UnsupportedFeature)?;
+
     // 1. Declare extensions, layer and settings and debug messenger if debug
     let app_info = vk::ApplicationInfo::default()
       .application_name(c"AetherVk")
@@ -144,12 +146,13 @@ impl Instance {
     #[cfg(debug_assertions)]
     {
       // fetch PFN_vkCreateDebugUtilsMessengerEXT
-      let dbg_instance = ash::ext::debug_utils::Instance::new(vk_entry, &instance);
+      let dbg_instance = ash::ext::debug_utils::Instance::new(vk_entry.as_ref(), &instance);
       let debug_messenger =
         unsafe { dbg_instance.create_debug_utils_messenger(&msg_create_info, None) }?;
       Ok(Self {
         instance,
         debug_messenger,
+        entry_wrapper,
       })
     }
     #[cfg(not(debug_assertions))]
@@ -162,6 +165,11 @@ impl Instance {
     &self,
     query_input: &utils::PhysicalDeviceQueryInput,
   ) -> GpuResult<Vec<utils::PhysicalDeviceQueryResult>> {
+    let entry = self
+      .entry_wrapper
+      .weak_entry()
+      .upgrade()
+      .ok_or(GpuError::DeviceLost)?;
     // 1. enumerate vulkan capable devices
     let physical_devices = unsafe { self.instance.enumerate_physical_devices() }?;
     if physical_devices.is_empty() {
@@ -206,7 +214,7 @@ impl Instance {
               .queue_flags
               .contains(vk::QueueFlags::GRAPHICS)
               && query_input.supports_presentation(
-                unsafe { utils::vk_entry() },
+                entry.as_ref(),
                 physical_device,
                 self.instance.handle(),
                 queue_family_index as u32,
@@ -231,8 +239,7 @@ impl Instance {
 
         let transfer_queue_family_index = queue_family_properties
           .iter()
-          .enumerate()
-          .position(|(queue_family_index, queue_props)| {
+          .position(|queue_props| {
             // try to find a dedicated DMA engine (no graphics, no compute)
             let flags = queue_props.queue_family_properties.queue_flags;
             flags.contains(vk::QueueFlags::TRANSFER)
@@ -240,22 +247,18 @@ impl Instance {
               && !flags.contains(vk::QueueFlags::COMPUTE)
           })
           .or_else(|| {
-            queue_family_properties.iter().enumerate().position(
-              |(queue_family_index, queue_props)| {
-                // otherwise compute and transfer is fine
-                let flags = queue_props.queue_family_properties.queue_flags;
-                flags.contains(vk::QueueFlags::TRANSFER) && flags.contains(vk::QueueFlags::COMPUTE)
-              },
-            )
+            queue_family_properties.iter().position(|queue_props| {
+              // otherwise compute and transfer is fine
+              let flags = queue_props.queue_family_properties.queue_flags;
+              flags.contains(vk::QueueFlags::TRANSFER) && flags.contains(vk::QueueFlags::COMPUTE)
+            })
           })
           .or_else(|| {
-            queue_family_properties.iter().enumerate().position(
-              |(queue_family_index, queue_props)| {
-                // otherwise any transfer is fine
-                let flags = queue_props.queue_family_properties.queue_flags;
-                flags.contains(vk::QueueFlags::TRANSFER)
-              },
-            )
+            queue_family_properties.iter().position(|queue_props| {
+              // otherwise any transfer is fine
+              let flags = queue_props.queue_family_properties.queue_flags;
+              flags.contains(vk::QueueFlags::TRANSFER)
+            })
           })? as u32;
 
         // c. required device extensions and optional device extensions (TODO)
@@ -321,11 +324,10 @@ impl Instance {
 
 impl Drop for Instance {
   fn drop(&mut self) {
-    let vk_entry = unsafe { utils::vk_entry() };
-    assert!(utils::is_vk_entry_valid(vk_entry));
+    let vk_entry = self.entry_wrapper.weak_entry().upgrade().unwrap();
     #[cfg(debug_assertions)]
     {
-      let dbg_instance = ash::ext::debug_utils::Instance::new(vk_entry, &self.instance);
+      let dbg_instance = ash::ext::debug_utils::Instance::new(vk_entry.as_ref(), &self.instance);
       unsafe { dbg_instance.destroy_debug_utils_messenger(self.debug_messenger, None) };
     }
     unsafe { self.instance.destroy_instance(None) };
