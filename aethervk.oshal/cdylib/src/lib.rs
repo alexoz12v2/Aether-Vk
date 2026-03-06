@@ -39,7 +39,7 @@ fn the_panic(_info: &core::panic::PanicInfo) -> ! {
 }
 
 // -------------------- Static Storage ------------------------------
-static SYSTEM_INFO: once::Once<AvkSystemInfo> = once::Once::new();
+use r#impl::{ SYSTEM_INFO };
 
 // -------------------- C Exposed API -------------------------------
 #[unsafe(no_mangle)]

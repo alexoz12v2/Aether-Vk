@@ -12,6 +12,8 @@ extern crate std;
 extern crate core;
 extern crate alloc;
 
+use spin::once;
+
 #[cfg(windows)]
 use windows::{
   Win32::Foundation::HANDLE,
@@ -39,7 +41,10 @@ pub fn panic_handler_impl() -> ! {
   loop {}
 }
 
-// -------------------- Runtime Struct ------------------------------
+// -------------------- Static Storage ------------------------------
+pub static SYSTEM_INFO: once::Once<AvkSystemInfo> = once::Once::new();
+
+pub mod math;
 
 // -------------------- Initialization Types ------------------------
 #[repr(C)]

@@ -1,8 +1,0 @@
-<Solution>
-  <Folder Name="/aethervk.ui.app/">
-    <Project Path="aethervk.ui.app/AetherVk.csproj" />
-  </Folder>
-  <Folder Name="/aethervk.ui.logic/">
-    <Project Path="aethervk.ui.logic/AetherVk.Logic.csproj" />
-  </Folder>
-</Solution>

@@ -21,6 +21,7 @@ version = "0.1.0"
 dependencies = [
  "heapless",
  "libc",
+ "spin",
  "wchar",
  "windows",
  "windows-strings",
