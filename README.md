@@ -1,5 +1,10 @@
 # Aether-Vk
 
+## Setup
+
+- `git submodule init`
+- switch for submodule `external/vk-mem` to branch `0.5-expose-ffi`
+
 ## Dependencies
 
 - Vulkan SDK >= 1.4 (actually, any version with a slang compiler)

@@ -1,11 +1,11 @@
 use core::{
-  ffi::{CStr, c_void},
+  ffi::{CStr, c_char, c_void},
   mem, ptr,
 };
 use alloc::{
   string::{self, ToString},
   sync::{Arc, Weak},
-  vec,
+  vec::Vec,
 };
 
 use ash::{
@@ -14,6 +14,7 @@ use ash::{
 };
 use bitflags::bitflags;
 
+use itertools::Itertools;
 #[cfg(windows)]
 use windows::{
   core::{w, s},
@@ -21,7 +22,10 @@ use windows::{
   core::PCSTR,
 };
 
-use crate::types::{GpuError, GpuResult};
+use crate::{
+  gpu::DeviceAdditionalParams,
+  types::{GpuError, GpuResult},
+};
 
 // -------------------------------- Helper Types -----------------------------
 bitflags! {
@@ -33,6 +37,7 @@ bitflags! {
   }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct PhysicalDeviceQueryInput {
   #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
   wl_display: core::ptr::NonNull<vk::wl_display>,
@@ -45,8 +50,40 @@ pub(super) struct PhysicalDeviceQueryInput {
   #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
   visual_id: vk::VisualID,
 }
-
 impl PhysicalDeviceQueryInput {
+  pub(super) fn from_params(_value: &DeviceAdditionalParams) -> Option<Self> {
+    #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
+    let wl_display: ptr::NonNull<vk::wl_display> = _value
+      .get(&super::DEVICE_ADDIDITIONAL_PARAM_WL_DISPLAY)
+      .and_then(|intptr| ptr::NonNull::new((*intptr) as *mut _))?;
+    #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+    let xcb_connection: ptr::NonNull<vk::xcb_connection_t> = _value
+      .get(&super::DEVICE_ADDIDITIONAL_PARAM_XCB_CONNECTION)
+      .and_then(|intptr| ptr::NonNull::new((*intptr) as *mut _))?;
+    #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+    let xcb_visualid: vk::xcb_visualid_t =
+      *_value.get(&super::DEVICE_ADDIDITIONAL_PARAM_XCB_VISUALID)? as _;
+    #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+    let dpy: ptr::NonNull<vk::Display> = _value
+      .get(&super::DEVICE_ADDIDITIONAL_PARAM_DPY)
+      .and_then(|intptr| ptr::NonNull::new((*intptr) as *mut _))?;
+    #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+    let visual_id: vk::VisualID = *_value.get(&super::DEVICE_ADDIDITIONAL_PARAM_VISUAL_ID)? as _;
+
+    Some(Self {
+      #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
+      wl_display,
+      #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+      xcb_connection,
+      #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+      xcb_visualid,
+      #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+      dpy,
+      #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+      visual_id,
+    })
+  }
+
   pub(super) fn supports_presentation(
     &self,
     _entry: &ash::Entry,
@@ -107,7 +144,9 @@ impl PhysicalDeviceQueryInput {
   }
 }
 
+#[derive(Debug)]
 pub(super) struct PhysicalDeviceQueryResult {
+  pub physical_device: vk::PhysicalDevice,
   pub optional_extensions: OptionalExtensionSupportFlags,
   pub graphics_queue_family_index: u32,
   pub compute_queue_family_index: u32,
@@ -118,6 +157,27 @@ pub(super) struct PhysicalDeviceQueryResult {
 impl PhysicalDeviceQueryResult {
   pub(super) fn has_valid_score(&self) -> bool {
     self.score > 0
+  }
+
+  pub(super) fn family_count(&self) -> usize {
+    let mut families = [
+      self.graphics_queue_family_index,
+      self.compute_queue_family_index,
+      self.transfer_queue_family_index,
+    ];
+
+    families.sort_unstable();
+    families.into_iter().dedup().count()
+  }
+
+  pub(super) fn enabled_extension_names(&self) -> Vec<*const c_char> {
+    let the_vec = required_device_extensions()
+      .iter()
+      .map(|cstr| cstr.as_ptr())
+      .collect();
+    // TODO optional extensions if needed
+
+    the_vec
   }
 }
 
@@ -228,14 +288,14 @@ impl EntryWrapper {
 
           unsafe {
             libc::setenv(
-              b"VK_LAYER_PATH".as_ptr().cast(),
+              b"VK_LAYER_PATH\0".as_ptr().cast(),
               (&vk_layer_path).as_ptr(),
               1,
             )
           };
           unsafe {
             libc::setenv(
-              b"VK_DRIVER_FILES".as_ptr().cast(),
+              b"VK_DRIVER_FILES\0".as_ptr().cast(),
               (&vk_icd_path).as_ptr(),
               1,
             )
@@ -297,10 +357,10 @@ impl Drop for EntryWrapper {
   }
 }
 
-pub(super) fn required_instance_extensions() -> &'static vec::Vec<&'static CStr> {
-  static INSTANCE_EXTENSIONS: spin::Once<vec::Vec<&'static CStr>> = spin::Once::new();
+pub(super) fn required_instance_extensions() -> &'static Vec<&'static CStr> {
+  static INSTANCE_EXTENSIONS: spin::Once<Vec<&'static CStr>> = spin::Once::new();
   INSTANCE_EXTENSIONS.call_once(|| {
-    let mut the_vec = vec::Vec::with_capacity(64);
+    let mut the_vec = Vec::with_capacity(64);
     #[cfg(debug_assertions)]
     {
       the_vec.push(ash::ext::debug_utils::NAME);
@@ -329,10 +389,10 @@ pub(super) fn required_instance_extensions() -> &'static vec::Vec<&'static CStr>
   })
 }
 
-pub(super) fn required_device_extensions() -> &'static vec::Vec<&'static CStr> {
-  static DEVICE_EXTENSIONS: spin::Once<vec::Vec<&'static CStr>> = spin::Once::new();
+pub(super) fn required_device_extensions() -> &'static Vec<&'static CStr> {
+  static DEVICE_EXTENSIONS: spin::Once<Vec<&'static CStr>> = spin::Once::new();
   DEVICE_EXTENSIONS.call_once(|| {
-    let mut the_vec = vec::Vec::with_capacity(64);
+    let mut the_vec = Vec::with_capacity(64);
     // basic and shader stuff
     the_vec.push(ash::khr::timeline_semaphore::NAME);
     the_vec.push(ash::khr::buffer_device_address::NAME);
@@ -431,9 +491,9 @@ impl RequiredFeatures<'_> {
     self
   }
 
-  pub fn any_missing(&self) -> Option<vec::Vec<string::String>> {
+  pub fn any_missing(&self) -> Option<Vec<string::String>> {
     use string::ToString;
-    let mut the_vec = vec::Vec::with_capacity(64);
+    let mut the_vec = Vec::with_capacity(64);
     if self.buffer_device_address.buffer_device_address != vk::TRUE {
       the_vec.push("buffer_device_address".to_string());
     }

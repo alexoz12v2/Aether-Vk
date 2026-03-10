@@ -6,12 +6,13 @@ pub use super::gpu_backends::{
   vulkan::constants,
 };
 
+use heapless::index_map::FnvIndexMap;
 use alloc::boxed::Box;
 #[cfg(debug_assertions)]
 use alloc::string::String;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub struct RenderBackendId(u64);
+pub struct RenderBackendId(pub u64);
 pub const NULL_RENDER_BACEKND: RenderBackendId = RenderBackendId(0);
 pub const VULKAN_RENDER_BACKEND: RenderBackendId = RenderBackendId(1);
 
@@ -27,10 +28,14 @@ pub struct RenderDeviceHandle {
   context_id: u64,
 }
 
+/// backend specific additional device init parameters
+pub type DeviceAdditionalParams = FnvIndexMap<u64, usize, 8>;
+
 pub trait RenderContext: Send + Sync {
+
   fn backend_id(&self) -> RenderBackendId;
 
-  fn init_device(&self, index: usize) -> GpuResult<RenderDeviceHandle>;
+  fn init_device(&mut self, index: usize, additional_params: &DeviceAdditionalParams) -> GpuResult<RenderDeviceHandle>;
 
   fn deref_device_and(
     &self,

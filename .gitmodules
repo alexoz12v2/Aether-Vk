@@ -1,0 +1,3 @@
+[submodule "external/vk-mem"]
+	path = external/vk-mem
+	url = https://github.com/alexoz12v2/vk-mem-rs.git

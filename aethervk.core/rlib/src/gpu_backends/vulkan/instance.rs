@@ -87,16 +87,19 @@ impl Instance {
     let mut layer_settings_create_info = vk::LayerSettingsCreateInfoEXT::default();
     #[cfg(debug_assertions)]
     let validation_layer_enables_values =
-      c"VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT".to_bytes_with_nul();
+      [c"VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT".as_ptr()];
     #[cfg(debug_assertions)]
     if has_khronos_validation && has_layer_settings {
-      layer_settings.push(
-        vk::LayerSettingEXT::default()
+      layer_settings.push({
+        let mut l = vk::LayerSettingEXT::default()
           .layer_name(c"VK_LAYER_KHRONOS_validation")
           .setting_name(c"enables")
-          .ty(vk::LayerSettingTypeEXT::STRING)
-          .values(&validation_layer_enables_values),
-      );
+          .ty(vk::LayerSettingTypeEXT::STRING);
+        l.value_count = validation_layer_enables_values.len() as u32;
+        l.p_values = validation_layer_enables_values.as_ptr().cast();
+
+        l
+      });
 
       layer_settings_create_info = layer_settings_create_info.settings(&layer_settings);
     }
@@ -159,6 +162,11 @@ impl Instance {
     {
       Ok(Self { instance })
     }
+  }
+
+  pub(super) fn api_version(&self) -> u32 {
+    // TODO if changed
+    vk::API_VERSION_1_1
   }
 
   pub(super) fn get_eligible_devices(
@@ -294,7 +302,6 @@ impl Instance {
           return None;
         }
 
-        // TODO: user choice?
         // e. device is valid, compute its score
         let score: i32 = match props.properties.device_type {
           vk::PhysicalDeviceType::DISCRETE_GPU => 100,
@@ -303,7 +310,10 @@ impl Instance {
           _ => 1,
         };
 
+        // f. TODO: optional extension and features bookkeeping and score increase/decrease
+
         Some(utils::PhysicalDeviceQueryResult {
+          physical_device,
           optional_extensions: utils::OptionalExtensionSupportFlags::NONE, // TODO
           graphics_queue_family_index,
           compute_queue_family_index,

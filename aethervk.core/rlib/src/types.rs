@@ -35,6 +35,9 @@ pub type EngineResult<T> = core::result::Result<T, EngineError>;
 
 #[derive(Debug, Error)]
 pub enum GpuError {
+  #[error("Invalid Input Argument")]
+  InvalidArgument,
+
   #[error("Device lost")]
   DeviceLost,
 

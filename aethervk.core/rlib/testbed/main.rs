@@ -1,4 +1,4 @@
-use aethervk_core_rlib::{self as lib, gpu::constants };
+use aethervk_core_rlib::{self as lib, gpu::{DeviceAdditionalParams, constants}};
 use heapless::index_map::FnvIndexMap;
 
 extern crate std;
@@ -12,7 +12,11 @@ fn main() {
       assert!(b);
     }
     p.push("cdylib/target/");
-    p.push(if cfg!(debug_assertions) { "debug" } else { "release" });
+    p.push(if cfg!(debug_assertions) {
+      "debug"
+    } else {
+      "release"
+    });
     p.push("vulkan");
 
     p
@@ -35,6 +39,14 @@ fn main() {
 
   render_frontend.take_and(|render_backend| {
     println!("Created Vulkan Instance");
+
+    let add_params = DeviceAdditionalParams::new();
+    let device_handle = render_backend.init_device(0, &add_params).unwrap();
+    println!("Vulkan Device {:?} selected", device_handle);
+    render_backend.deref_device_and(device_handle, |render_device| {
+      //println!("Device Deref: {:?}", &render_device);
+      Ok(())
+    });
     Ok(())
   });
 }

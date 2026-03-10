@@ -1,0 +1,74 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ResourceDictionary.ThemeDictionaries>
+
+        <ResourceDictionary x:Key="Light">
+            <!-- Neutral Foundation -->
+            <SolidColorBrush x:Key="Bg.Canvas" Color="#F6F8FB" />
+            <SolidColorBrush x:Key="Bg.Surface" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="Bg.Subtle" Color="#EEF2F8" />
+            <SolidColorBrush x:Key="Bg.Hover" Color="#E6ECF5" />
+            <SolidColorBrush x:Key="Bg.Default" Color="#D6DEEA" />
+            <SolidColorBrush x:Key="Bg.Outline" Color="#E3E9F2" />
+
+            <!-- Brand Accent -->
+            <SolidColorBrush x:Key="Accent.Primary" Color="#EB6CFF" />
+            <SolidColorBrush x:Key="Accent.Hover" Color="#4A5AF0" />
+            <SolidColorBrush x:Key="Accent.Active" Color="#3E4DD9" />
+            <SolidColorBrush x:Key="Accent.Subtle" Color="#E7E9FF" />
+            <SolidColorBrush x:Key="Accent.Focus-Ring" Color="#7C89FF" />
+
+            <!-- Secondary Accent -->
+            <SolidColorBrush x:Key="Accent.Secondary" Color="#2AD4C5" />
+            <SolidColorBrush x:Key="Accent.Secondary.Subtle" Color="#E3FBF8" />
+
+            <!-- Text Colors -->
+            <SolidColorBrush x:Key="Text.Primary" Color="#1A1F2B" />
+            <SolidColorBrush x:Key="Text.Secondary" Color="#4A5568" />
+            <SolidColorBrush x:Key="Text.Tertiary" Color="#6B728B" />
+            <SolidColorBrush x:Key="Text.Disabled" Color="#A0AEC0" />
+            <SolidColorBrush x:Key="Text.On-Accent" Color="#FFFFFF" />
+
+            <!-- Semantic Colors -->
+            <SolidColorBrush x:Key="Sem.Success" Color="#16A34A" />
+            <SolidColorBrush x:Key="Sem.Warning" Color="#F59E0B" />
+            <SolidColorBrush x:Key="Sem.Error" Color="#DC2626" />
+            <SolidColorBrush x:Key="Sem.Info" Color="#2563EB" />
+        </ResourceDictionary>
+
+        <ResourceDictionary x:Key="Dark">
+            <!-- Neutral Foundation -->
+            <SolidColorBrush x:Key="Bg.Canvas" Color="#0F1117" />
+            <SolidColorBrush x:Key="Bg.Surface" Color="#161A23" />
+            <SolidColorBrush x:Key="Bg.Subtle" Color="#1D2230" />
+            <SolidColorBrush x:Key="Bg.Hover" Color="#242A3A" />
+            <SolidColorBrush x:Key="Bg.Default" Color="#2B3245" />
+            <SolidColorBrush x:Key="Bg.Outline" Color="#222838" />
+
+            <!-- Brand Accent -->
+            <SolidColorBrush x:Key="Accent.Primary" Color="#7C89FF" />
+            <SolidColorBrush x:Key="Accent.Hover" Color="#93A0FF" />
+            <SolidColorBrush x:Key="Accent.Active" Color="#5F6DFF" />
+            <SolidColorBrush x:Key="Accent.Subtle" Color="#2A2F52" />
+            <SolidColorBrush x:Key="Accent.Focus-Ring" Color="#A5B0FF" />
+
+            <!-- Secondary Accent -->
+            <SolidColorBrush x:Key="Accent.Secondary" Color="#39E6D8" />
+            <SolidColorBrush x:Key="Accent.Secondary.Subtle" Color="#163F3B" />
+
+            <!-- Text Colors -->
+            <SolidColorBrush x:Key="Text.Primary" Color="#F3F6FF" />
+            <SolidColorBrush x:Key="Text.Secondary" Color="#C9D1E5" />
+            <SolidColorBrush x:Key="Text.Tertiary" Color="#98A2B3" />
+            <SolidColorBrush x:Key="Text.Disabled" Color="#5E6A82" />
+            <SolidColorBrush x:Key="Text.On-Accent" Color="#0F1117" />
+
+            <!-- Semantic Colors -->
+            <SolidColorBrush x:Key="Sem.Success" Color="#22C55E" />
+            <SolidColorBrush x:Key="Sem.Warning" Color="#FBBF24" />
+            <SolidColorBrush x:Key="Sem.Error" Color="#F87171" />
+            <SolidColorBrush x:Key="Sem.Info" Color="#60A5FA" />
+        </ResourceDictionary>
+
+    </ResourceDictionary.ThemeDictionaries>
+</ResourceDictionary>
