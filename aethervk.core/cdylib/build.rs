@@ -35,6 +35,7 @@ fn process_vulkan_sdk(sdk_path: &Path) {
   let icd_dir = binary_root.join("vulkan").join("icd");
   let is_debug = env::var("PROFILE").unwrap() == "debug";
 
+  // TODO: copy VMA library (actually, vk_mem statically links it, so we'll see)
   if cfg!(target_os = "macos") || is_debug {
     fs::create_dir_all(&lib_dir).unwrap();
     fs::create_dir_all(&icd_dir).unwrap();
@@ -190,10 +191,11 @@ fn validation_layer_json_to_dylib(json_file_name: &str) -> String {
   } else {
     ""
   };
-  let mut the_string = json_file_name.replace("json$", DYNAMIC_LIBRARY_EXTENSION);
+  let mut the_string = json_file_name.replace("json", DYNAMIC_LIBRARY_EXTENSION);
   if !prefix.is_empty() {
     the_string.insert_str(0, prefix);
   }
+
   the_string
 }
 

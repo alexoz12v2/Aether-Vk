@@ -1,8 +1,11 @@
-use core::{ffi::CStr, str::FromStr};
+use core::{str::FromStr};
 
 use crate::{
-  gpu::{RenderBackendId, RenderContext, RenderDevice, RenderDeviceHandle, VULKAN_RENDER_BACKEND},
-  gpu_backends::MAX_DEVICES,
+  gpu::{
+    DeviceAdditionalParams, RenderBackendId, RenderContext, RenderDevice, RenderDeviceHandle,
+    VULKAN_RENDER_BACKEND,
+  },
+  gpu_backends::{MAX_DEVICES, vulkan::utils::PhysicalDeviceQueryInput},
   traits::InitWithRuntime,
   types::{EngineResult, GpuError, GpuResult, RuntimeParams, RuntimeParamsIndex},
 };
@@ -20,9 +23,12 @@ pub mod constants {
 }
 
 // ---------------------------- Context Interface -------------------------
+#[ouroboros::self_referencing]
 pub(super) struct VulkanRenderContext {
   instance: instance::Instance,
-  live_devices: FnvIndexMap<RenderDeviceHandle, device::Device, MAX_DEVICES>,
+  #[borrows(instance)]
+  #[covariant]
+  live_devices: FnvIndexMap<RenderDeviceHandle, device::Device<'this>, MAX_DEVICES>,
 }
 
 impl VulkanRenderContext {
@@ -46,25 +52,55 @@ impl InitWithRuntime<VulkanRenderContext> for VulkanRenderContext {
     let instance = unsafe { instance::Instance::new(base_override_path.as_deref()) }?;
     let live_devices = FnvIndexMap::new();
 
-    Ok(Self {
-      instance,
-      live_devices,
-    })
+    Ok(
+      VulkanRenderContextBuilder {
+        instance,
+        live_devices_builder: |_| live_devices,
+      }
+      .build(),
+    )
   }
 }
+
+// reference utils/PhysicalDeviceQueryInput
+#[allow(unused)]
+pub const DEVICE_ADDIDITIONAL_PARAM_WL_DISPLAY: u64 = 0;
+#[allow(unused)]
+pub const DEVICE_ADDIDITIONAL_PARAM_XCB_CONNECTION: u64 = 1;
+#[allow(unused)]
+pub const DEVICE_ADDIDITIONAL_PARAM_XCB_VISUALID: u64 = 2;
+#[allow(unused)]
+pub const DEVICE_ADDIDITIONAL_PARAM_DPY: u64 = 3;
+#[allow(unused)]
+pub const DEVICE_ADDIDITIONAL_PARAM_VISUAL_ID: u64 = 4;
 
 impl RenderContext for VulkanRenderContext {
   fn backend_id(&self) -> RenderBackendId {
     VULKAN_RENDER_BACKEND
   }
 
-  fn init_device(&self, index: usize) -> GpuResult<RenderDeviceHandle> {
+  fn init_device(
+    &mut self,
+    index: usize,
+    additional_params: &DeviceAdditionalParams,
+  ) -> GpuResult<RenderDeviceHandle> {
     let handle = self.device_id_from_index(index);
-    if !self.live_devices.contains_key(&handle) {
-      todo!()
-    } else {
+    let query_input =
+      PhysicalDeviceQueryInput::from_params(additional_params).ok_or(GpuError::InvalidArgument)?;
+
+    self.with_mut(|fields| {
+      if !fields.live_devices.contains_key(&handle) {
+        let device = device::Device::new(fields.instance, index, &query_input)?;
+        unsafe {
+          fields
+            .live_devices
+            .insert(handle, device)
+            .unwrap_unchecked();
+        }
+      }
+
       Ok(handle)
-    }
+    })
   }
 
   fn deref_device_and(
@@ -72,6 +108,6 @@ impl RenderContext for VulkanRenderContext {
     dev_handle: RenderDeviceHandle,
     f: &mut dyn FnMut(&dyn RenderDevice) -> GpuResult<()>,
   ) -> Option<GpuResult<()>> {
-    self.live_devices.get(&dev_handle).map(|device| f(device))
+    self.with_live_devices(|live_devices| live_devices.get(&dev_handle).map(|device| f(device)))
   }
 }
