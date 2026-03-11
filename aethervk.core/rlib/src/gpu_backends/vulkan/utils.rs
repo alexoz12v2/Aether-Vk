@@ -144,9 +144,11 @@ impl PhysicalDeviceQueryInput {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(super) struct PhysicalDeviceQueryResult {
   pub physical_device: vk::PhysicalDevice,
+  pub physical_device_properties: vk::PhysicalDeviceProperties,
+  pub family_count: usize,
   pub optional_extensions: OptionalExtensionSupportFlags,
   pub graphics_queue_family_index: u32,
   pub compute_queue_family_index: u32,
@@ -160,6 +162,10 @@ impl PhysicalDeviceQueryResult {
   }
 
   pub(super) fn family_count(&self) -> usize {
+    self.family_count
+  }
+
+  pub(super) fn used_family_count(&self) -> usize {
     let mut families = [
       self.graphics_queue_family_index,
       self.compute_queue_family_index,
