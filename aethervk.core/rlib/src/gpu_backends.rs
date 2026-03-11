@@ -16,7 +16,7 @@ use crate::{
 ))]
 pub(super) mod vulkan;
 
-pub(self) const MAX_DEVICES: usize = 8;
+pub(self) const MAX_DEVICES: usize = 4;
 
 pub fn new_render_frontend(
   ty: RenderBackendId,

@@ -1,10 +1,10 @@
+use core::ffi;
+
 use crate::types::{EngineResult, GpuResult};
 
 // Re-export what is necessary from backends
 pub use super::gpu_backends::new_render_frontend;
-pub use super::gpu_backends::{
-  vulkan::constants,
-};
+pub use super::gpu_backends::{vulkan::constants};
 
 use heapless::index_map::FnvIndexMap;
 use alloc::boxed::Box;
@@ -24,23 +24,25 @@ pub trait RenderDevice: Send + Sync {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct RenderDeviceHandle {
-  context_id: u64,
-}
+pub struct RenderDeviceHandle(pub u64);
 
 /// backend specific additional device init parameters
 pub type DeviceAdditionalParams = FnvIndexMap<u64, usize, 8>;
 
 pub trait RenderContext: Send + Sync {
-
   fn backend_id(&self) -> RenderBackendId;
 
-  fn init_device(&mut self, index: usize, additional_params: &DeviceAdditionalParams) -> GpuResult<RenderDeviceHandle>;
+  fn init_device(
+    &mut self,
+    index: usize,
+    additional_params: &DeviceAdditionalParams,
+  ) -> GpuResult<RenderDeviceHandle>;
 
   fn deref_device_and(
     &self,
     dev_handle: RenderDeviceHandle,
-    f: &mut dyn FnMut(&dyn RenderDevice) -> GpuResult<()>,
+    p_user_data: *mut ffi::c_void,
+    f: fn(dev: &dyn RenderDevice, p_user_data: *mut ffi::c_void) -> GpuResult<()>,
   ) -> Option<GpuResult<()>>;
 }
 
@@ -57,6 +59,16 @@ impl<'a> RenderFrontend<'a> {
   ) -> Option<EngineResult<T>> {
     match self.backend.try_read() {
       Some(guard) => Some(f(guard.as_ref())),
+      None => None,
+    }
+  }
+
+  pub fn take_mut_and<T>(
+    &mut self,
+    f: impl FnOnce(&mut dyn RenderContext) -> EngineResult<T>,
+  ) -> Option<EngineResult<T>> {
+    match self.backend.try_write() {
+      Some(mut guard) => Some(f(guard.as_mut())),
       None => None,
     }
   }

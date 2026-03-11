@@ -1,4 +1,4 @@
-use core::{str::FromStr};
+use core::{str::FromStr, ffi};
 
 use crate::{
   gpu::{
@@ -33,7 +33,7 @@ pub(super) struct VulkanRenderContext {
 
 impl VulkanRenderContext {
   fn device_id_from_index(&self, dev_idx: usize) -> RenderDeviceHandle {
-    todo!()
+    RenderDeviceHandle((dev_idx as u64) + 1)
   }
 }
 
@@ -90,12 +90,25 @@ impl RenderContext for VulkanRenderContext {
 
     self.with_mut(|fields| {
       if !fields.live_devices.contains_key(&handle) {
-        let device = device::Device::new(fields.instance, index, &query_input)?;
+        // 1. We need to reserve space in the heapless map.
+        // Since heapless doesn't have an 'entry' API for uninitialized memory,
+        // we insert a "dummy" (zeroed) value first.
+        // To avoid 1.5KB of zeros on the stack, we use unsafe to bit-copy an uninit value.
         unsafe {
+          #[allow(invalid_value)]
+          let uninit_val = core::mem::MaybeUninit::<device::Device>::uninit().assume_init();
           fields
             .live_devices
-            .insert(handle, device)
+            .insert(handle, uninit_val)
             .unwrap_unchecked();
+        }
+
+        // 2. Get a mutable pointer to the slot we just created in the heap-resident map.
+        let dst_ptr = fields.live_devices.get_mut(&handle).unwrap() as *mut device::Device;
+
+        // 3. Construct the device directly into that heap location.
+        unsafe {
+          device::Device::init_at_ptr(dst_ptr, fields.instance, index, &query_input)?;
         }
       }
 
@@ -106,8 +119,13 @@ impl RenderContext for VulkanRenderContext {
   fn deref_device_and(
     &self,
     dev_handle: RenderDeviceHandle,
-    f: &mut dyn FnMut(&dyn RenderDevice) -> GpuResult<()>,
+    p_user_data: *mut ffi::c_void,
+    f: fn(dev: &dyn RenderDevice, p_user_data: *mut ffi::c_void) -> GpuResult<()>,
   ) -> Option<GpuResult<()>> {
-    self.with_live_devices(|live_devices| live_devices.get(&dev_handle).map(|device| f(device)))
+    self.with_live_devices(|live_devices| {
+      live_devices
+        .get(&dev_handle)
+        .map(|device| f(device, p_user_data))
+    })
   }
 }

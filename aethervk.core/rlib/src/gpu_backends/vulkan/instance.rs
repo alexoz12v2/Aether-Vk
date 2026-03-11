@@ -314,6 +314,8 @@ impl Instance {
 
         Some(utils::PhysicalDeviceQueryResult {
           physical_device,
+          physical_device_properties: props.properties,
+          family_count: queue_family_properties_len,
           optional_extensions: utils::OptionalExtensionSupportFlags::NONE, // TODO
           graphics_queue_family_index,
           compute_queue_family_index,

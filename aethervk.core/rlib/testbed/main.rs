@@ -1,3 +1,5 @@
+use std::ptr;
+
 use aethervk_core_rlib::{self as lib, gpu::{DeviceAdditionalParams, constants}};
 use heapless::index_map::FnvIndexMap;
 
@@ -34,17 +36,17 @@ fn main() {
       the_map
     },
   };
-  let render_frontend = lib::gpu::new_render_frontend(lib::gpu::VULKAN_RENDER_BACKEND, &params)
+  let mut render_frontend = lib::gpu::new_render_frontend(lib::gpu::VULKAN_RENDER_BACKEND, &params)
     .expect("Couldn't create Vulkan Instance");
 
-  render_frontend.take_and(|render_backend| {
+  render_frontend.take_mut_and(|render_backend| {
     println!("Created Vulkan Instance");
 
     let add_params = DeviceAdditionalParams::new();
     let device_handle = render_backend.init_device(0, &add_params).unwrap();
     println!("Vulkan Device {:?} selected", device_handle);
-    render_backend.deref_device_and(device_handle, |render_device| {
-      //println!("Device Deref: {:?}", &render_device);
+    render_backend.deref_device_and(device_handle, ptr::null_mut(), |render_device, _| {
+      println!("{}", render_device.print_info());
       Ok(())
     });
     Ok(())
