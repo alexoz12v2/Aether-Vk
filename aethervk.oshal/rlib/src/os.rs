@@ -4,6 +4,7 @@
 //   fs.rs
 
 pub mod fs;
+pub mod thread;
 
 #[cfg(test)]
 mod tests {

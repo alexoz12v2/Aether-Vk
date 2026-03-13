@@ -1,4 +1,6 @@
-use alloc::{string::String};
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 use heapless::index_map::FnvIndexMap;
 use thiserror::Error;
@@ -38,6 +40,9 @@ pub enum GpuError {
   #[error("Invalid Input Argument")]
   InvalidArgument,
 
+  #[error("Invalid Object State")]
+  InvalidState,
+
   #[error("Device lost")]
   DeviceLost,
 
@@ -68,3 +73,57 @@ pub type IoResult<T> = core::result::Result<T, IoError>;
 pub enum MathError {}
 
 pub type MathResult<T> = core::result::Result<T, MathError>;
+
+// ---------------------------- Generic Data Structures -----------------------
+pub struct SpscQueue<T> {
+  buffer: Box<[Option<T>]>,
+  mask: usize,
+  head: AtomicUsize,
+  tail: AtomicUsize,
+}
+
+impl<T: Copy> SpscQueue<T> {
+  pub fn new(cap_pow2: usize) -> Self {
+    debug_assert!(cap_pow2 >= 2 && (cap_pow2 & (cap_pow2 - 1)) == 0);
+    let mut storage = Vec::with_capacity(cap_pow2);
+    for _ in 0..cap_pow2 { storage.push(None); }
+
+    Self {
+      buffer: storage.into_boxed_slice(),
+      mask: cap_pow2 - 1,
+      head: AtomicUsize::new(0),
+      tail: AtomicUsize::new(0),
+    }
+  }
+
+  pub fn try_push(&self, item: T) -> bool {
+    let tail = self.tail.load(Ordering::Relaxed);
+    let head = self.head.load(Ordering::Acquire); // see latest head memory
+
+    if ((tail + 1) & self.mask) == (head & self.mask) {
+      return false; // Full queue
+    }
+
+    // Safety: we own this slot based on SPSC logic
+    let slot_ptr = unsafe {
+      let ptr = self.buffer.as_ptr() as *mut Option<T>;
+      ptr.add(tail & self.mask)
+    };
+    unsafe { *slot_ptr = Some(item); };
+    self.tail.store(tail + 1, Ordering::Release); // publish memory write
+    true
+  }
+
+  pub fn try_pop(&self) -> Option<T> {
+    let head = self.head.load(Ordering::Relaxed);
+    let tail = self.tail.load(Ordering::Acquire); // see latest head memory
+
+    if (head & self.mask) == (tail & self.mask) {
+      return None; // empty queue
+    }
+
+    let item = self.buffer[head & self.mask];
+    self.head.store(head + 1, Ordering::Release); // release memory edits
+    item
+  }
+}

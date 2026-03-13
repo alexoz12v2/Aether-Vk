@@ -1,4 +1,7 @@
-use core::{str::FromStr, ffi};
+use core::{
+  str::FromStr,
+  ffi::{self, CStr},
+};
 
 use crate::{
   gpu::{
@@ -10,25 +13,55 @@ use crate::{
   types::{EngineResult, GpuError, GpuResult, RuntimeParams, RuntimeParamsIndex},
 };
 
-use alloc::{ffi::CString, string::ToString};
+use alloc::{ffi::CString, string::ToString, sync };
 use heapless::index_map::FnvIndexMap;
 
 pub(super) mod device;
 pub(super) mod instance;
 pub(super) mod utils;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ResourceHandle {
+  index: u32,
+  generation: u32,
+}
+
 // ---------------------------- Runtime Params ----------------------------
 pub mod constants {
   pub const RUNTIME_PARAM_VULKAN_ENTRY_BASE_DIR: super::RuntimeParamsIndex = 1000;
 }
 
-// ---------------------------- Context Interface -------------------------
+/// Structure containing main vulkan handles. Shared by both Runtime Interface and compute interface
+/// - Massive in size, supposed to be heap allocated and constructed on the heap in-place
 #[ouroboros::self_referencing]
-pub(super) struct VulkanRenderContext {
+pub(super) struct VulkanCore {
   instance: instance::Instance,
   #[borrows(instance)]
   #[covariant]
   live_devices: FnvIndexMap<RenderDeviceHandle, device::Device<'this>, MAX_DEVICES>,
+}
+
+static S_VULKAN_CORE: spin::Mutex<sync::Weak<spin::RwLock<VulkanCore>>> =
+  spin::Mutex::new(sync::Weak::new());
+
+pub(super) struct VulkanRenderContext {
+  core: sync::Arc<spin::RwLock<VulkanCore>>,
+  // graphics specific members
+}
+
+impl VulkanCore {
+  fn from_path(base_override_path: Option<&CStr>) -> GpuResult<Self> {
+    let instance = unsafe { instance::Instance::new(base_override_path) }?;
+    let live_devices = FnvIndexMap::new();
+
+    Ok(
+      VulkanCoreBuilder {
+        instance,
+        live_devices_builder: |_| live_devices,
+      }
+      .build(),
+    )
+  }
 }
 
 impl VulkanRenderContext {
@@ -49,16 +82,18 @@ impl InitWithRuntime<VulkanRenderContext> for VulkanRenderContext {
         GpuError::BackendSpecific("Invalid RUNTIME_PARAM_VULKAN_ENTRY_BASE_DIR".to_string())
       })?;
 
-    let instance = unsafe { instance::Instance::new(base_override_path.as_deref()) }?;
-    let live_devices = FnvIndexMap::new();
+    let mut s_core = S_VULKAN_CORE.lock();
+    let core = if let Some(core) = s_core.upgrade() {
+      core
+    } else {
+      let new_core = sync::Arc::new(spin::RwLock::new(VulkanCore::from_path(
+        base_override_path.as_deref(),
+      )?));
+      *s_core = sync::Arc::downgrade(&new_core);
+      new_core
+    };
 
-    Ok(
-      VulkanRenderContextBuilder {
-        instance,
-        live_devices_builder: |_| live_devices,
-      }
-      .build(),
-    )
+    Ok(Self { core })
   }
 }
 
@@ -88,7 +123,7 @@ impl RenderContext for VulkanRenderContext {
     let query_input =
       PhysicalDeviceQueryInput::from_params(additional_params).ok_or(GpuError::InvalidArgument)?;
 
-    self.with_mut(|fields| {
+    self.core.write().with_mut(|fields| {
       if !fields.live_devices.contains_key(&handle) {
         // 1. We need to reserve space in the heapless map.
         // Since heapless doesn't have an 'entry' API for uninitialized memory,
@@ -122,7 +157,7 @@ impl RenderContext for VulkanRenderContext {
     p_user_data: *mut ffi::c_void,
     f: fn(dev: &dyn RenderDevice, p_user_data: *mut ffi::c_void) -> GpuResult<()>,
   ) -> Option<GpuResult<()>> {
-    self.with_live_devices(|live_devices| {
+    self.core.read().with_live_devices(|live_devices| {
       live_devices
         .get(&dev_handle)
         .map(|device| f(device, p_user_data))

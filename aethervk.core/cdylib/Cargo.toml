@@ -18,7 +18,7 @@ serde_json = "1.0"
 glob = "0.3"
 
 [dependencies]
-aethervk-core-rlib = { path = "../rlib", features = [] }
+aethervk-core-rlib = { path = "../rlib", default-features = false, features = [] }
 
 # crates necessary to avoid std
 # core, alloc → `rustc` already has them
@@ -31,7 +31,7 @@ mimalloc = { version = "0.1", features = ["v3"] }
 
 # vulkan available only on an OS
 [target.'cfg(all(not(target_arch = "wasm32"), any( target_os = "windows", target_os = "linux", target_os = "macos", target_os = "android", target_os = "ios")))'.dependencies]
-ash = { version = "0.38", default-features = false }
+ash = { version = "0.38", default-features = false, features = ["debug"]}
 
 [profile.dev]
 panic = "abort"

@@ -18,4 +18,3 @@ pub mod types;
 pub mod traits;
 pub mod simulation;
 pub mod gpu;
-

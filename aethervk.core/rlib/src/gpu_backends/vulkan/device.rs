@@ -9,15 +9,127 @@ use super::utils;
 
 use alloc::{boxed::Box, format, vec::Vec};
 use ash::{vk};
+use heapless::{index_map::FnvIndexMap, index_set::FnvIndexSet};
+
+// companion classes inside Device
+mod commands;
+mod descriptors;
+mod pipelines;
+mod resources;
+mod shaders;
+
+struct DeviceResources {
+  allocator: GlobalDeviceAllocator,
+  discard_pool: resources::DiscardPool,
+  command_pools: heapless::Vec<commands::CommandPools, { utils::MAX_QUEUE_FAMILY_COUNT }>,
+  timeline_semaphore: vk::Semaphore,
+}
 
 pub(super) struct Device<'a> {
   query_result: utils::PhysicalDeviceQueryResult,
   pub device: ash::Device,
+  queues: Queues,
 
-  // manually dropped stuff
-  global_device_allocator: Option<GlobalDeviceAllocator>,
+  res: Option<DeviceResources>,
 
   _instance: PhantomData<&'a vulkan::instance::Instance>,
+}
+
+const MAX_QUEUE_COUNT: usize = 4;
+
+/// internal queue indicator for `Queues` struct to reference a given queue. Metadata is still held by QueryResult
+/// These values are used as shift amounts for bitmasks
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum QueueId {
+  GRAPHICS = 1,
+  COMPUTE = 2,
+  TRANSFER = 3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Queue {
+  handle: vk::Queue,
+  index: u32,
+  family_index: u32,
+}
+
+// ~28 bytes per queue. total for `MAX_QUEUE_COUNT` = 4 at 96 bytes
+#[ouroboros::self_referencing]
+struct Queues {
+  queue_buffer: heapless::Vec<Queue, MAX_QUEUE_COUNT>,
+  #[borrows(queue_buffer)]
+  #[covariant]
+  queue_ref_map: FnvIndexMap<QueueId, &'this Queue, MAX_QUEUE_COUNT>,
+}
+
+impl Queues {
+  fn from_device(device: &ash::Device, query_result: &utils::PhysicalDeviceQueryResult) -> Self {
+    let unique_queue_families = query_result.unique_family_indices_set();
+    let mut queue_buffer: heapless::Vec<Queue, MAX_QUEUE_COUNT> = heapless::Vec::new();
+    for &family_index in unique_queue_families.iter() {
+      let queue_info = vk::DeviceQueueInfo2::default()
+        .queue_family_index(family_index)
+        .queue_index(0);
+      let handle = unsafe { device.get_device_queue2(&queue_info) };
+      unsafe {
+        queue_buffer.push_unchecked(Queue {
+          handle,
+          index: 0,
+          family_index,
+        })
+      };
+    }
+
+    QueuesBuilder {
+      queue_buffer,
+      queue_ref_map_builder: |queue_buffer: &heapless::Vec<_, _>| {
+        let mut queue_ref_map: FnvIndexMap<QueueId, &Queue, MAX_QUEUE_COUNT> = FnvIndexMap::new();
+        let mut queue_type_inserted: u32 = 0;
+        for i in 0..queue_buffer.len() {
+          if (queue_type_inserted & (1u32 << QueueId::GRAPHICS as u32)) == 0
+            && query_result.graphics_queue_family_index as usize == i
+          {
+            queue_ref_map
+              .insert(QueueId::GRAPHICS, unsafe { queue_buffer.get_unchecked(i) })
+              .unwrap();
+            queue_type_inserted |= 1u32 << QueueId::GRAPHICS as u32;
+          }
+          if (queue_type_inserted & (1u32 << QueueId::COMPUTE as u32)) == 0
+            && query_result.compute_queue_family_index as usize == i
+          {
+            queue_ref_map
+              .insert(QueueId::COMPUTE, unsafe { queue_buffer.get_unchecked(i) })
+              .unwrap();
+            queue_type_inserted |= 1u32 << QueueId::COMPUTE as u32;
+          }
+          if (queue_type_inserted & (1u32 << QueueId::TRANSFER as u32)) == 0
+            && query_result.transfer_queue_family_index as usize == i
+          {
+            queue_ref_map
+              .insert(QueueId::TRANSFER, unsafe { queue_buffer.get_unchecked(i) })
+              .unwrap();
+            queue_type_inserted |= 1u32 << QueueId::TRANSFER as u32;
+          }
+        }
+
+        queue_ref_map
+      },
+    }
+    .build()
+  }
+
+  fn get_graphics_queue(&self) -> Queue {
+    self.with_queue_ref_map(|queue_ref_map| **queue_ref_map.get(&QueueId::GRAPHICS).unwrap())
+  }
+
+  fn get_compute_queue(&self) -> Queue {
+    self.with_queue_ref_map(|queue_ref_map| **queue_ref_map.get(&QueueId::COMPUTE).unwrap())
+  }
+
+  fn get_transfer_queue(&self) -> Queue {
+    self.with_queue_ref_map(|queue_ref_map| **queue_ref_map.get(&QueueId::TRANSFER).unwrap())
+  }
 }
 
 impl<'a> Device<'a> {
@@ -81,19 +193,45 @@ impl<'a> Device<'a> {
     }?;
 
     // 4. Global VMA Allocator creation, Queue handles, Global Discard Pool, Command Buffer Pool
-    let global_device_allocator = Some(unsafe {
+    let global_device_allocator = unsafe {
       GlobalDeviceAllocator::new(
         &instance.instance,
         &device,
         physical_device,
         instance.api_version(),
       )
-    }?);
+    }?;
+
+    // - Timeline Semaphore
+    let mut sem_type_info = vk::SemaphoreTypeCreateInfo::default()
+      .initial_value(0)
+      .semaphore_type(vk::SemaphoreType::TIMELINE);
+    let sem_create_info = vk::SemaphoreCreateInfo::default().push_next(&mut sem_type_info);
+    let timeline_semaphore = unsafe { device.create_semaphore(&sem_create_info, None) }?;
+    // - Queues
+    let queues = Queues::from_device(&device, chosen_physical_device_query_result);
+    // - Discard Pool
+    let discard_pool =
+      unsafe { resources::DiscardPool::new(&device, &global_device_allocator.allocator, 64) };
+    // - Command Pools
+    let mut command_pools = heapless::Vec::new();
+    let unique_queue_families = chosen_physical_device_query_result.unique_family_indices_set();
+    for &queue_family_index in unique_queue_families.iter() {
+      unsafe {
+        command_pools.push_unchecked(commands::CommandPools::new(&device, queue_family_index))
+      };
+    }
 
     Ok(Self {
       query_result: *chosen_physical_device_query_result,
       device,
-      global_device_allocator,
+      queues,
+      res: Some(DeviceResources {
+        timeline_semaphore,
+        allocator: global_device_allocator,
+        discard_pool,
+        command_pools,
+      }),
       _instance: PhantomData,
     })
   }
@@ -103,7 +241,7 @@ impl<'a> Device<'a> {
   }
 
   pub(super) fn with_device_allocator<T>(&self, f: impl FnOnce(&GlobalDeviceAllocator) -> T) -> T {
-    let dalloc = self.global_device_allocator.as_ref().unwrap();
+    let dalloc = &self.res.as_ref().unwrap().allocator;
     f(dalloc)
   }
 
@@ -111,18 +249,28 @@ impl<'a> Device<'a> {
     &mut self,
     f: impl FnOnce(&mut GlobalDeviceAllocator) -> T,
   ) -> T {
-    let mut dalloc = self.global_device_allocator.as_mut().unwrap();
+    let dalloc = &mut self.res.as_mut().unwrap().allocator;
     f(dalloc)
   }
 }
 
 impl<'a> Drop for Device<'a> {
   fn drop(&mut self) {
-    // TODO log error
     unsafe { self.device.device_wait_idle().unwrap_unchecked() };
 
-    // TODO Destroy allocator, queue handles, global discard pool, ... (ManuallyDrop or take from Option)
-    drop(self.global_device_allocator.take());
+    if let Some(DeviceResources {
+      allocator,
+      discard_pool,
+      command_pools,
+      timeline_semaphore,
+    }) = self.res.take()
+    {
+      unsafe { self.device.destroy_semaphore(timeline_semaphore, None) };
+
+      drop(discard_pool);
+      drop(command_pools);
+      drop(allocator);
+    }
 
     // in the end, destroy the device
     unsafe { self.device.destroy_device(None) };

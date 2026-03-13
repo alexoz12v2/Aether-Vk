@@ -2,7 +2,31 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
              mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
              x:Class="AetherVk.Views.HomePageView">
-    <TextBlock>Welcome to Avalonia!</TextBlock>
+    <Design.DataContext>
+        <vm:HomePageViewModel />
+    </Design.DataContext>
+    <!-- TODO: flexible layout-->
+    <StackPanel Orientation="Horizontal" VerticalAlignment="Stretch">
+        <!-- Some Settings-->
+        <StackPanel Orientation="Vertical">
+
+            <Expander IsExpanded="True">
+                <Expander.Header>
+                    <TextBlock Text="Hello"/>
+                </Expander.Header>
+                <StackPanel Orientation="Vertical">
+                    <Grid ColumnDefinitions="*,1.5*">
+                        <TextBlock Grid.Column="0">Distance (AU)</TextBlock>
+                        <TextBox Grid.Column="1" />
+                    </Grid>
+                </StackPanel>
+            </Expander>
+
+        </StackPanel>
+        <StackPanel Orientation="Vertical"></StackPanel>
+        <StackPanel Orientation="Vertical"></StackPanel>
+    </StackPanel>
 </UserControl>
