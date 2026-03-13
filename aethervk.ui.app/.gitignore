@@ -1,0 +1,14 @@
+# ignore folder with Debug launch settings for this project
+#######
+# {
+#   "profiles": {
+#     "AetherVk": {
+#       "commandName": "Project",
+#       "environmentVariables": {
+#         "DOTNET_ROOT": "/Volumes/ExtData/alessioext/.asdf/installs/dotnet-core/10.0.103"
+#       }
+#     }
+#   }
+# }
+#######
+Properties/**

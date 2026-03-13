@@ -1,4 +1,5 @@
 use core::{
+  char::MAX,
   ffi::{CStr, c_char, c_void},
   mem, ptr,
 };
@@ -144,6 +145,10 @@ impl PhysicalDeviceQueryInput {
   }
 }
 
+/// queue families we are interested in: GRAPHICS, COMPUTE, TRANSFER.
+/// best case, they are all different
+pub(super) const MAX_QUEUE_FAMILY_COUNT: usize = 4;
+
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PhysicalDeviceQueryResult {
   pub physical_device: vk::PhysicalDevice,
@@ -163,6 +168,23 @@ impl PhysicalDeviceQueryResult {
 
   pub(super) fn family_count(&self) -> usize {
     self.family_count
+  }
+
+  pub(super) fn unique_family_indices_set(
+    &self,
+  ) -> heapless::index_set::FnvIndexSet<u32, MAX_QUEUE_FAMILY_COUNT> {
+    let mut unique_queue_families = heapless::index_set::FnvIndexSet::new();
+    unique_queue_families
+      .insert(self.graphics_queue_family_index)
+      .unwrap();
+    unique_queue_families
+      .insert(self.compute_queue_family_index)
+      .unwrap();
+    unique_queue_families
+      .insert(self.transfer_queue_family_index)
+      .unwrap();
+
+    unique_queue_families
   }
 
   pub(super) fn used_family_count(&self) -> usize {

@@ -1,0 +1,7 @@
+aethervk.core/**
+aethervk.oshal/**
+OLD/**
+.cargo/**
+.config/**
+.vscode/**
+.idea/**
