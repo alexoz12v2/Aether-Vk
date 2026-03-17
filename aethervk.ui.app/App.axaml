@@ -1,10 +1,22 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:utils="using:AetherVk.Utils"
+
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             xmlns:views="using:AetherVk.Views"
+
+             Name="AetherVk"
              x:Class="AetherVk.App"
              RequestedThemeVariant="Default">
     <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
     <Application.DataTemplates>
+        <DataTemplate DataType="{x:Type vm:TabGroupNodeViewModel}">
+            <views:TabGroupNodeView />
+        </DataTemplate>
+
+        <DataTemplate DataType="{x:Type vm:SplitNodeViewModel}">
+            <views:SplitNodeView />
+        </DataTemplate>
         <utils:ViewLocator />
     </Application.DataTemplates>
 
@@ -12,10 +24,18 @@
         <FluentTheme />
     </Application.Styles>
 
+    <!-- MacOS Entries shared by all windowses, under MacOS icon -->
+    <NativeMenu.Menu>
+        <NativeMenu>
+            <NativeMenuItem Header="About My Application..." />
+            <NativeMenuItem Header="Preferences" />
+        </NativeMenu>
+    </NativeMenu.Menu>
+
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <MergeResourceInclude Source="/Styles/Colors.axaml" />
+                <MergeResourceInclude Source="avares://AetherVk/Styles/Colors.axaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>

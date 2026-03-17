@@ -1,14 +1,15 @@
-use core::{arch::asm, cmp, ops::{self, Index, IndexMut}};
+use core::{
+  arch::asm,
+  cmp,
+  ops,
+};
 
 use crate::math::floating::{BitsStorage, FloatBits};
-
-pub mod floating;
-
 // target_pointer_width = "64" assumed, as done in lib.rs
 
-// ------------------------------------------ Utils -------------------------------------------
 /// Helper function to find the minimum between two PartialOrd elements by reference
-pub(super) fn min_two<'a, T: PartialOrd + ?Sized>(a: &'a T, b: &'a T) -> &'a T {
+#[inline]
+pub fn min_two<'a, T: PartialOrd + ?Sized>(a: &'a T, b: &'a T) -> &'a T {
   match a.partial_cmp(b) {
     Some(cmp::Ordering::Less) => a,
     _ => b,
@@ -16,7 +17,8 @@ pub(super) fn min_two<'a, T: PartialOrd + ?Sized>(a: &'a T, b: &'a T) -> &'a T {
 }
 
 /// Helper function to find the maximum between two PartialOrd elements by reference
-pub(super) fn max_two<'a, T: PartialOrd + ?Sized>(a: &'a T, b: &'a T) -> &'a T {
+#[inline]
+pub fn max_two<'a, T: PartialOrd + ?Sized>(a: &'a T, b: &'a T) -> &'a T {
   match a.partial_cmp(b) {
     Some(cmp::Ordering::Greater) => a,
     _ => b,
@@ -53,8 +55,15 @@ macro_rules! v_max {
   }
 }
 
-// ------------------------------------------ Traits ------------------------------------------
-pub(super) trait MulAddIdentity {
+pub mod floating;
+
+pub mod extra;
+pub mod interval;
+pub mod matrix;
+pub mod quaternion;
+pub mod vector;
+
+pub trait MulAddIdentity {
   const ONE: Self;
   const ZERO: Self;
 }
@@ -68,29 +77,39 @@ macro_rules! impl_mul_add_identity {
     )*
   };
 }
-impl_mul_add_identity!(i8, i16, i32, i64, i128, u8, u32, u64, u128, f32, f64);
+// left out unsigned values cause they are not scalars
+impl_mul_add_identity!(i8, i16, i32, i64, i128, f32, f64);
 
-pub(super) trait Fma {
+pub trait Fma {
   fn fma(self, b: Self, c: Self) -> Self
-  where Self: Sized + ops::Mul<Output = Self> + ops::Add<Output = Self> {
+  where
+    Self: Sized + ops::Mul<Output = Self> + ops::Add<Output = Self>,
+  {
     self * b + c
   }
 }
 
-pub(super) trait FmaAssign {
-  fn fma_assign(&mut self, a: Self, b: Self) 
-  where Self: Sized + ops::Mul<Output = Self> + ops::Add<Output = Self> + Copy {
+pub trait FmaAssign {
+  fn fma_assign(&mut self, a: Self, b: Self)
+  where
+    Self: Sized + ops::Mul<Output = Self> + ops::Add<Output = Self> + Copy,
+  {
     *self = (*self) * a + b;
   }
 }
 
 // TODO: swap for inline assembly implementation
-impl Fma for f32 {}
-impl FmaAssign for f32 {}
-impl Fma for f64 {}
-impl FmaAssign for f64 {}
+macro_rules! impl_fma_fma_assign {
+  ($($t:ty),*) => {
+    $(
+      impl Fma for $t {}
+      impl FmaAssign for $t {}
+    )*
+  };
+}
+impl_fma_fma_assign!(f32, f64, i8, i16, i32, i64, i128);
 
-pub(super) trait Scalar:
+pub trait Scalar:
   Copy
   + Sized
   + MulAddIdentity
@@ -110,8 +129,7 @@ pub(super) trait Scalar:
 {
 }
 
-impl<T> Scalar for T
-where
+impl<T> Scalar for T where
   T: Copy
     + Sized
     + MulAddIdentity
@@ -127,7 +145,7 @@ where
     + Fma
     + FmaAssign
     + PartialEq
-    + PartialOrd,
+    + PartialOrd
 {
 }
 
@@ -139,12 +157,18 @@ pub trait FloatLike: Scalar + Copy {
   fn is_finite(self) -> bool;
   fn is_subnormal(self) -> bool;
   fn is_normal(self) -> bool;
+  fn from_f32(num: f32) -> Self;
 
   fn sqrt(self) -> Self; // TODO Option? See Arch's manual for sqrt behavior and tag unsafe
+  fn squared(self) -> Self;
+  fn cos(self) -> Self;
+  fn sin(self) -> Self;
+  fn tan(self) -> Self;
+  fn reciprocal(self) -> Self;
 }
 macro_rules! impl_float_like {
   // Match a type, followed by zero or more items (Functions, ecc)
-  ($t:ty, $($body:item)*) => {
+  ($t:ty, { $($body:item)* }) => {
       impl FloatLike for $t {
         // shared ops alredy implemented in the `core` crate
         #[inline] fn is_nan(self) -> bool { <$t>::is_nan(self) }
@@ -161,8 +185,7 @@ macro_rules! impl_float_like {
 }
 
 // TODO: all these intrinsics need to be enriched every time we add a new arch backend, eg CUDA, Vulkan's SPIR-V, ...
-impl_float_like!(
-  f32,
+impl_float_like!(f32, {
   fn sqrt(self) -> Self {
     let out: f32;
     #[cfg(target_arch = "x86_64")]
@@ -186,9 +209,58 @@ impl_float_like!(
 
     out
   }
-);
-impl_float_like!(
-  f64,
+
+  fn squared(self) -> Self {
+    self * self
+  }
+
+  fn from_f32(num: f32) -> Self {
+    num
+  }
+
+  fn cos(self) -> Self {
+    libm::cosf(self)
+  }
+
+  fn tan(self) -> Self {
+    libm::tanf(self)
+  }
+
+  fn sin(self) -> Self {
+    libm::sinf(self)
+  }
+
+  fn reciprocal(self) -> Self {
+    let out: f32;
+    #[cfg(target_arch = "x86_64")]
+    {
+      unsafe {
+        asm!(
+          "rcpss {0}, {1}", // fast reciprocal approximation
+          "mulss {0}, {1}, {0}", // Newton-Raphson to refine reciprocal
+          out(xmm_reg) out,
+          in(xmm_reg) self,
+          options(pure, nomem, nostack)
+        );
+      }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+      unsafe {
+        asm!(
+          "vrecpe.f32 {out:s}, {num:s}", // fast reciprocal approximation
+          "vrecps.f32 {out:s}, {out:s}, {num:s}", // newton-raphson refinement step
+          out = lateout(vreg) out,
+          num = in(vreg) self,
+          options(pure, nomem, nostack)
+        );
+      }
+    }
+
+    out
+  }
+});
+impl_float_like!(f64, {
   fn sqrt(self) -> Self {
     let out: f64;
     #[cfg(target_arch = "x86_64")]
@@ -212,13 +284,54 @@ impl_float_like!(
 
     out
   }
-);
 
-// -------------------------------- Scalar Types ----------------------------------------------
-pub mod interval;
+  fn squared(self) -> Self {
+    self * self
+  }
 
-// ----------------------------------- Vector Types -------------------------------------------
+  fn from_f32(num: f32) -> Self {
+    num as _
+  }
 
-// ---------------------------------- Matrix Types --------------------------------------------
+  fn cos(self) -> Self {
+    libm::cos(self)
+  }
 
-// ---------------------------------- Quaterion -----------------------------------------------
+  fn tan(self) -> Self {
+    libm::tan(self)
+  }
+
+  fn sin(self) -> Self {
+    libm::sin(self)
+  }
+
+  fn reciprocal(self) -> Self {
+    let out: f64;
+    #[cfg(target_arch = "x86_64")]
+    {
+      unsafe {
+        asm!(
+          "rcpsd {0}, {1}", // fast reciprocal approximation
+          "mulsd {0}, {1}, {0}", // Newton-Raphson refinement
+          out(xmm_reg) out,
+          in(xmm_reg) self,
+          options(pure, nomem, nostack)
+        );
+      }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+      unsafe {
+        asm!(
+          "vrecpe.f64 {out:d}, {num:d}", // fast reciprocal approximation
+          "vrecps.f64 {out:d}, {out:d}, {num:d}", // Newton-Raphson refinement
+          out = lateout(vreg) out,
+          num = in(vreg) self,
+          options(pure, nomem, nostack)
+        );
+      }
+    }
+
+    out
+  }
+});

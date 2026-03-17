@@ -1,7 +1,7 @@
 use core::{cmp, ops};
 
 use crate::math::{
-  Fma, FmaAssign, MulAddIdentity, Scalar,
+  FloatLike, Fma, FmaAssign, MulAddIdentity, Scalar,
   floating::{BitsStorage, FloatBits, FloatOps},
 };
 
@@ -266,17 +266,6 @@ where
     }
   }
 }
-macro_rules! impl_mul_add_identity_for_float_interval {
-  ($($t:ty),*) => {
-    $(
-      impl MulAddIdentity for FloatInterval<$t> {
-        const ONE: Self = Self { low: 1 as $t, high: 1 as $t };
-        const ZERO: Self = Self { low: 0 as $t, high: 1 as $t };
-      }
-    )*
-  };
-}
-impl_mul_add_identity_for_float_interval!(f32, f64);
 
 impl<T> Interval<T> for FloatInterval<T>
 where
@@ -360,6 +349,82 @@ where
   #[inline]
   fn rdiv_scalar(v: T, i: &Self) -> Self {
     Self::from_scalar(v) / *i
+  }
+}
+
+impl<T> MulAddIdentity for FloatInterval<T>
+where
+  T: FloatBits + FloatOps,
+{
+  const ONE: Self = Self {
+    low: T::ZERO,
+    high: T::ZERO,
+  };
+  const ZERO: Self = Self {
+    low: T::ONE,
+    high: T::ONE,
+  };
+}
+
+impl<T> FloatLike for FloatInterval<T>
+where
+  T: FloatBits + FloatOps,
+  <T as BitsStorage>::Bits: MulAddIdentity,
+{
+  fn is_nan(self) -> bool {
+    self.high.is_nan() || self.low.is_nan()
+  }
+
+  fn is_infinite(self) -> bool {
+    self.high.is_infinite() || self.low.is_infinite()
+  }
+
+  fn is_sign_negative(self) -> bool {
+    self.high.is_sign_negative()
+  }
+
+  fn is_sign_positive(self) -> bool {
+    self.low.is_sign_positive()
+  }
+
+  fn is_finite(self) -> bool {
+    self.low.is_finite() && self.high.is_finite()
+  }
+
+  fn is_subnormal(self) -> bool {
+    self.low.is_subnormal() || self.high.is_subnormal()
+  }
+
+  fn is_normal(self) -> bool {
+    self.low.is_normal() && self.high.is_normal()
+  }
+
+  fn from_f32(num: f32) -> Self {
+    <Self as Interval<T>>::from_scalar(<T as FloatLike>::from_f32(num))
+  }
+
+  fn squared(self) -> Self {
+    self * self
+  }
+
+  fn sqrt(self) -> Self {
+    todo!()
+  }
+
+  fn cos(self) -> Self {
+    todo!()
+  }
+
+  fn sin(self) -> Self {
+    todo!()
+  }
+
+  fn reciprocal(self) -> Self {
+    Self::from_scalar(T::from_i32(1)) / self
+  }
+
+  fn tan(self) -> Self {
+    todo!()
   }
 }
 

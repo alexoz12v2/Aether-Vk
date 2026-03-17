@@ -1,10 +1,9 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 
-namespace AetherVk.Logic.ViewModels
+namespace AetherVk.Logic.ViewModels;
+
+public partial class HomePageViewModel : ViewModelBase
 {
-  public partial class HomePageViewModel : ObservableRecipient
-  {
-    [ObservableProperty]
-    private string? name;
-  }
+  [ObservableProperty]
+  private string? name;
 }

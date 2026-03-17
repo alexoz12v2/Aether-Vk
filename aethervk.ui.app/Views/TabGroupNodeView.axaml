@@ -1,0 +1,43 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+             x:DataType="vm:TabGroupNodeViewModel"
+             x:Class="AetherVk.Views.TabGroupNodeView"
+             DragDrop.AllowDrop="True"
+             DragDrop.DragOver="OnDragOver"
+             DragDrop.DragLeave="OnDragLeave"
+             DragDrop.Drop="OnDrop">
+    <Border BorderBrush="{DynamicResource Border.Default}" BorderThickness="1" Margin="2">
+        <Grid>
+            <TabControl ItemsSource="{Binding Tabs}"
+                        SelectedItem="{Binding SelectedTab}">
+                <TabControl.ItemTemplate> <!-- Tab Header -->
+                <DataTemplate x:DataType="vm:TabItemViewModel">
+                    <Border Background="Transparent" PointerPressed="OnTabPointerPressed">
+                        <TextBlock Text="{Binding Title}" Padding="8,4" />
+                    </Border>
+                </DataTemplate>
+                </TabControl.ItemTemplate>
+                <TabControl.ContentTemplate> <!-- Tab Content -->
+                <DataTemplate x:DataType="vm:TabItemViewModel">
+                    <TextBlock Text="{Binding Title}" HorizontalAlignment="Center"/>
+                </DataTemplate>
+                </TabControl.ContentTemplate>
+            </TabControl>
+
+            <Grid x:Name="PreviewOverlay" IsHitTestVisible="False" Opacity="0.5">
+                <Border x:Name="PreviewBox" Background="{DynamicResource Accent.Hover}" IsVisible="False" BorderThickness="2">
+                    <Border.Transitions>
+                        <Transitions>
+                            <DoubleTransition Property="Width" Duration="0:0:0.1" />
+                            <DoubleTransition Property="Height" Duration="0:0:0.1" />
+                        </Transitions>
+                    </Border.Transitions>
+                </Border>
+            </Grid>
+        </Grid>
+    </Border>
+</UserControl>

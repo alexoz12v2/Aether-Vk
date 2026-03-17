@@ -3,12 +3,43 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:views="using:AetherVk.Views"
+        xmlns:vm="using:AetherVk.Logic.ViewModels"
+        x:DataType="vm:MainWindowViewModel"
         mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
         x:Class="AetherVk.MainWindow"
         Title="AetherVk">
-    <StackPanel Orientation="Vertical">
-        <DockPanel>
-            <Menu DockPanel.Dock="Top" x:Name="MainMenu">
+    <Design.DataContext>
+        <vm:MainWindowViewModel />
+    </Design.DataContext>
+
+    <NativeMenu.Menu>
+        <NativeMenu>
+            <NativeMenuItem Header="File">
+                <NativeMenuItem.Menu>
+                    <NativeMenu>
+                        <NativeMenuItem Header="Open"/>
+                        <NativeMenuItem Header="Save"/>
+                        <NativeMenuItemSeparator/>
+                        <NativeMenuItem Header="Exit"/>
+                    </NativeMenu>
+                </NativeMenuItem.Menu>
+            </NativeMenuItem>
+
+            <NativeMenuItem Header="Edit">
+                <NativeMenuItem.Menu>
+                    <NativeMenu>
+                        <NativeMenuItem Header="Copy"/>
+                        <NativeMenuItem Header="Paste"/>
+                    </NativeMenu>
+                </NativeMenuItem.Menu>
+            </NativeMenuItem>
+        </NativeMenu>
+    </NativeMenu.Menu>
+    <!-- TODO: NativeDock property for MacOS when right clicking the icon on dock -->
+
+    <Grid RowDefinitions="Auto, *" Background="{DynamicResource Bg.Canvas}">
+        <DockPanel Grid.Row="0" IsVisible="{OnPlatform Default=True, macOS=False}">
+            <Menu DockPanel.Dock="Top">
                 <MenuItem Header="File">
                     <MenuItem Header="Open" />
                     <MenuItem Header="Save" />
@@ -22,8 +53,8 @@
                 </MenuItem>
             </Menu>
         </DockPanel>
-        <Border>
-            <views:HomePageView />
+        <Border Grid.Row="1">
+            <views:DockingManagerView DataContext="{Binding DockingManager}"/>
         </Border>
-    </StackPanel>
+    </Grid>
 </Window>
