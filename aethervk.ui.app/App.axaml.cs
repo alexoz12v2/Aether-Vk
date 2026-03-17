@@ -1,9 +1,9 @@
-using AetherVk.Utils;
+using System.Linq;
+using AetherVk.Logic.ViewModels;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Data.Core.Plugins;
 using Avalonia.Markup.Xaml;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 namespace AetherVk;
@@ -20,11 +20,17 @@ public partial class App : Application
   public override void OnFrameworkInitializationCompleted()
   {
     // CommunityToolkit has its own data validation. we don't need data validation from Avalonia Too
-    BindingPlugins.DataValidators.RemoveAt(0);
+    var dataValidationPluginsToRemove = BindingPlugins
+      .DataValidators.OfType<DataAnnotationsValidationPlugin>()
+      .ToArray();
+    foreach (var plugin in dataValidationPluginsToRemove)
+    {
+      BindingPlugins.DataValidators.Remove(plugin);
+    }
 
     if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
     {
-      desktop.MainWindow = new MainWindow();
+      desktop.MainWindow = new MainWindow { DataContext = new MainWindowViewModel() };
     }
 
     base.OnFrameworkInitializationCompleted();

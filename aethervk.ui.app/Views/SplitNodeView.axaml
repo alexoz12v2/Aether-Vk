@@ -1,0 +1,42 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             xmlns:local="using:AetherVk.Views"
+             xmlns:dvm="using:AetherVk.Logic.ViewModels.Design"
+             x:DataType="vm:SplitNodeViewModel"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+             x:Class="AetherVk.Views.SplitNodeView">
+    <Design.DataContext>
+        <dvm:SplitNodeViewModelDesign />
+    </Design.DataContext>
+    <UserControl.Resources>
+        <local:EnumToBoolConverter x:Key="EnumToBoolConverter" />
+    </UserControl.Resources>
+    <Grid>
+        <Grid IsVisible="{Binding Orientation, Converter={StaticResource EnumToBoolConverter}, ConverterParameter={x:Static vm:SplitOrientation.Horizontal}}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <!-- TODO: 2 way binding for splitRatio with converter -->
+            <ContentControl Grid.Column="0" Content="{Binding FirstChild}" />
+            <GridSplitter Grid.Column="1" Background="{DynamicResource Bg.Outline}" ResizeDirection="Columns" />
+            <ContentControl Grid.Column="2" Content="{Binding SecondChild}" />
+        </Grid>
+
+        <Grid IsVisible="{Binding Orientation, Converter={StaticResource EnumToBoolConverter}, ConverterParameter={x:Static vm:SplitOrientation.Vertical}}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <!-- TODO: 2 way binding for splitRatio with converter -->
+            <ContentControl Grid.Row="0" Content="{Binding FirstChild}" />
+            <GridSplitter Grid.Row="1" Background="{DynamicResource Bg.Outline}" ResizeDirection="Rows" />
+            <ContentControl Grid.Row="2" Content="{Binding SecondChild}" />
+        </Grid>
+    </Grid>
+</UserControl>

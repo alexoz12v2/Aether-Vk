@@ -2,7 +2,7 @@ use core::{ops, f32, f64};
 
 use crate::math::{FloatLike, MulAddIdentity};
 
-pub(super) trait BitsStorage: Sized + Copy {
+pub trait BitsStorage: Sized + Copy {
   type Bits: Sized
     + ops::Add<Output = Self::Bits>
     + ops::Sub<Output = Self::Bits>
@@ -32,7 +32,7 @@ impl BitsStorage for f64 {
   const SIGN_BIT_MASK: Self::Bits = 0x8000_0000_0000_0000;
 }
 
-pub(super) trait FloatBits: super::FloatLike + Sized + BitsStorage {
+pub trait FloatBits: super::FloatLike + Sized + BitsStorage {
   fn to_bits(self) -> Self::Bits;
   fn from_bits(bits: Self::Bits) -> Self;
 }
@@ -53,7 +53,7 @@ macro_rules! impl_float_bits {
 }
 impl_float_bits!(f32, f64);
 
-pub(super) trait FloatOps: Sized + super::FloatLike {
+pub trait FloatOps: Sized + super::FloatLike {
   // ----------------------------- Constants -----------------------------
   const NEGATIVE_ZERO: Self; // used for branch cuts
   const PI: Self;
