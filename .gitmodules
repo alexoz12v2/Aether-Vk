@@ -1,3 +1,9 @@
 [submodule "external/vk-mem"]
 	path = external/vk-mem
 	url = https://github.com/alexoz12v2/vk-mem-rs.git
+[submodule "external/gltf"]
+	path = external/gltf
+	url = https://github.com/alexoz12v2/gltf-nostd.git
+[submodule "external/spirv-reflect"]
+	path = external/spirv-reflect
+	url = https://github.com/alexoz12v2/spirv-reflect-rs-no_std.git

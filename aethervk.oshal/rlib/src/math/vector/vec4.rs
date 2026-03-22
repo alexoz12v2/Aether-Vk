@@ -9,7 +9,10 @@ use crate::math::{min_two, max_two};
 
 use core::ops;
 
-use crate::math::vector::{Vector, Vector4};
+use crate::math::{
+  quaternion::Quaternion,
+  vector::{Vector, Vector4, vec3::Vec3f32},
+};
 
 // TODO for all other scalars too
 
@@ -540,6 +543,74 @@ impl ops::IndexMut<usize> for Vec4f32 {
     unsafe {
       let ptr = &mut self.simd as *mut float32x4_t as *mut f32;
       ptr.add(index).as_mut().unwrap_unchecked()
+    }
+  }
+}
+
+impl Vec4f32 {
+  #[inline(always)]
+  #[cfg(target_arch = "aarch64")]
+  pub(crate) fn from_neon(v: float32x4_t) -> Self {
+    Self { simd: v }
+  }
+
+  #[inline(always)]
+  #[cfg(target_arch = "x86_64")]
+  pub(crate) fn from_sse(v: __m128) -> Self {
+    Self { simd: v }
+  }
+
+  #[inline(always)]
+  #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+  pub(crate) fn from_array(v: [f32; 4]) -> Self {
+    Self { data: v }
+  }
+}
+
+impl Quaternion for Vec4f32 {
+  type Scalar = f32;
+  type Vector = Vec3f32;
+  #[inline]
+  fn from_vector_and_scalar(vector: Self::Vector, scalar: Self::Scalar) -> Self {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+      let dest_lane: u8 = 3;
+      let src_lane: u8 = 0;
+      Self::from_sse(_mm_insert_ps(
+        vector.0.simd,
+        _mm_set_ss(scalar),
+        (dest_lane << 6) | (src_lane << 4),
+      ))
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+      Self::from_neon(vsetq_lane_f32::<3>(scalar, vector.0.simd))
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+      Self::from_array([ vector[0], vector[1], vector[2], scalar ])
+    }
+  }
+
+  #[inline]
+  fn vector_part(self) -> Self::Vector {
+    Vec3f32(self)
+  }
+
+  #[inline]
+  fn scalar_part(self) -> Self::Scalar {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+      // _mm_extract_ps requires SSE4.1
+      _mm_extract_ps::<3>(self.simd)
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+      vgetq_lane_f32::<3>(self.simd)
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+      self.data[3]
     }
   }
 }

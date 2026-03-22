@@ -38,6 +38,19 @@ heapless = { version = "0.9" }
 itertools = { version = "0.14", default-features = false }
 ouroboros = { version = "0.18" }
 slotmap = { version = "1.1.1", default-features = false }
+hashbrown = { version = "0.16" }
+# Model Loading
+gltf = { version = "1.4.0", path = "../../external/gltf" }
+# cannot enable gltf feature cause it imports std
+polyhedral_mass_properties = "0.2.2"
+# Texture Loading
+png-decoder = { version = "0.2.0" }
+zune-jpeg = { version = "0.5.14", default-features = false, features = [
+    "x86",
+    "neon",
+] }
+zune-core = "0.5.1"
+ktx2 = { version = "0.4.0", default-features = false }
 
 [target.'cfg(all(not(target_arch = "wasm32"), any( target_os = "windows", target_os = "linux", target_os = "macos", target_os = "android", target_os = "ios")))'.dependencies]
 ash = { version = "0.38", default-features = false, features = ["debug"] }

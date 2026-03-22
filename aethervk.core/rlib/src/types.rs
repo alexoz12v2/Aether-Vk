@@ -29,6 +29,9 @@ pub enum EngineError {
 
   #[error("Invalid Operation: {0}")]
   InvalidOperation(&'static str),
+
+  #[error("null argument")]
+  InvalidNullArgument,
 }
 
 pub type EngineResult<T> = core::result::Result<T, EngineError>;
@@ -75,6 +78,7 @@ pub enum MathError {}
 pub type MathResult<T> = core::result::Result<T, MathError>;
 
 // ---------------------------- Generic Data Structures -----------------------
+#[derive(Debug)]
 pub struct SpscQueue<T> {
   buffer: Box<[Option<T>]>,
   mask: usize,

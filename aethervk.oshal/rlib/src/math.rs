@@ -58,21 +58,26 @@ macro_rules! v_max {
 pub mod floating;
 
 pub mod extra;
-pub mod interval;
+pub mod scalar_interval;
+pub mod vector_interval;
 pub mod matrix;
 pub mod quaternion;
 pub mod vector;
 
 pub trait MulAddIdentity {
-  const ONE: Self;
-  const ZERO: Self;
+  fn one() -> Self;
+  fn zero() -> Self;
 }
 macro_rules! impl_mul_add_identity {
   ($($t:ty),*) => {
     $(
       impl MulAddIdentity for $t {
-        const ONE: Self = 1 as $t;
-        const ZERO: Self = 0 as $t; // Note: Positive zero for floating points
+        fn one() -> Self {
+          1 as $t
+        }
+        fn zero() -> Self {
+          0 as $t
+        }
       }
     )*
   };
@@ -164,7 +169,11 @@ pub trait FloatLike: Scalar + Copy {
   fn cos(self) -> Self;
   fn sin(self) -> Self;
   fn tan(self) -> Self;
+  fn pow(self, v: Self) -> Self;
+  fn exp(self) -> Self;
+  fn ln(self) -> Self;
   fn reciprocal(self) -> Self;
+  fn floor(self) -> Self;
 }
 macro_rules! impl_float_like {
   // Match a type, followed by zero or more items (Functions, ecc)
@@ -224,6 +233,22 @@ impl_float_like!(f32, {
 
   fn tan(self) -> Self {
     libm::tanf(self)
+  }
+
+  fn exp(self) -> Self {
+    libm::expf(self)
+  }
+
+  fn ln(self) -> Self {
+    libm::logf(self)
+  }
+
+  fn floor(self) -> Self {
+    libm::floorf(self)
+  }
+
+  fn pow(self, v: f32) -> Self {
+    libm::powf(self, v) 
   }
 
   fn sin(self) -> Self {
@@ -303,6 +328,22 @@ impl_float_like!(f64, {
 
   fn sin(self) -> Self {
     libm::sin(self)
+  }
+
+  fn pow(self, v: Self) -> Self {
+    libm::pow(self, v)
+  }
+
+  fn exp(self) -> Self {
+    libm::exp(self)
+  }
+
+  fn ln(self) -> Self {
+    libm::log(self)
+  }
+
+  fn floor(self) -> Self {
+    libm::floor(self)
   }
 
   fn reciprocal(self) -> Self {

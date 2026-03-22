@@ -209,6 +209,58 @@ impl AvkSystemInfo {
 // -------------------- Modules ------------------------
 pub mod os;
 
+pub mod hash {
+  use core::hash::{ Hasher, Hash };
+  use core::marker;
+
+  pub struct FnvHasher {
+    hash: u64,
+  }
+
+  impl FnvHasher {
+    pub const fn new() -> Self {
+      Self {
+        hash: 0xcbf29ce484222325, // FNV offset basis
+      }
+    }
+  }
+
+  impl Hasher for FnvHasher {
+    fn write(&mut self, bytes: &[u8]) {
+      for b in bytes {
+        self.hash ^= *b as u64;
+        self.hash = self.hash.wrapping_mul(0x100000001b3);
+      }
+    }
+
+    fn finish(&self) -> u64 {
+      self.hash
+    }
+  }
+
+  pub struct Key<T>
+  where
+    T: Hash,
+  {
+    v: u64,
+    _marker: marker::PhantomData<T>,
+  }
+
+  impl<T> Key<T>
+  where
+    T: Hash,
+  {
+    fn new(value: &T) -> Self {
+      let mut hasher = FnvHasher::new();
+      value.hash(&mut hasher);
+      Self {
+        v: hasher.finish(),
+        _marker: marker::PhantomData,
+      }
+    }
+  }
+}
+
 // -------------------- Unit Testing Implementation ------------------------
 #[cfg(test)]
 mod tests {
@@ -247,7 +299,11 @@ mod tests {
     }
     #[cfg(all(target_arch = "aarch64", not(target_os = "none")))]
     {
-      println!("Compare the following with sysctl on macOS:\n  feat: {:x}\n NEON: {}", system_info.arch_features, system_info.has_neon());
+      println!(
+        "Compare the following with sysctl on macOS:\n  feat: {:x}\n NEON: {}",
+        system_info.arch_features,
+        system_info.has_neon()
+      );
     }
   }
 }

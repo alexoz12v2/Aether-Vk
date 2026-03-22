@@ -22,11 +22,11 @@ pub trait Quaternion:
   fn scalar_part(self) -> Self::Scalar;
 
   fn from_vector(vector: Self::Vector) -> Self {
-    Self::from_vector_and_scalar(vector, <Self::Scalar as MulAddIdentity>::ZERO)
+    Self::from_vector_and_scalar(vector, <Self::Scalar as MulAddIdentity>::zero())
   }
 
   fn identity() -> Self {
-    Self::from_vector_and_scalar(Self::Vector::zero(), Self::Scalar::ONE)
+    Self::from_vector_and_scalar(Self::Vector::zero(), Self::Scalar::one())
   }
 
   fn from_axis_angle(axis: Self::Vector, angle: Self::Scalar) -> Self {
@@ -86,5 +86,25 @@ pub trait Quaternion:
     T::from_columns(col0, col1, col2)
   }
 
-  fn slerp(a: Self, b: Self, t: Self::Scalar) -> Self;
+  fn pow(self, t: Self::Scalar) -> Self
+  where
+    Self::Scalar: FloatLike + ops::Mul<Self::Vector, Output = Self::Vector>,
+  {
+    // x^y = e^(y ln x)
+    let q = self * t.ln();
+    let (a, v) = (q.scalar_part(), q.vector_part());
+    let v_norm: Self::Scalar = v.length();
+    let a_exp = a.exp();
+    let scalar_part = a_exp * v_norm.cos();
+    let v_unit: Self::Vector = v / v_norm;
+    let vector_part: Self::Vector = a_exp * v_unit * v_norm.sin();
+    Self::from_vector_and_scalar(vector_part, scalar_part)
+  }
+
+  fn slerp(a: Self, b: Self, t: Self::Scalar) -> Self
+  where
+    Self::Scalar: FloatLike + ops::Mul<Self::Vector, Output = Self::Vector>,
+  {
+    (b * a.inverse()).conjugate().pow(t) * a
+  }
 }

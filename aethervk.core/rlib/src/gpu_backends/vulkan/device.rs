@@ -1,38 +1,175 @@
 use core::{marker::PhantomData, ptr};
+use alloc::{format, string::ToString, sync, vec::Vec};
 
 use crate::{
-  gpu::RenderDevice,
-  gpu_backends::vulkan,
+  gpu::{GpuResourceHandle, PresentationEngineHandle, RenderDevice, RenderableInstanceId},
+  gpu_backends::vulkan::{
+    self,
+    device::{
+      memory::GlobalDeviceAllocator,
+      pipelines::{
+        FragmentOut, FragmentShader, GraphicsInfo, PipelineFlags, PreRasterization,
+        StencilCompareOp, StencilLogicOp, VertexIn,
+      },
+    },
+    instance,
+    utils::NonZeroHandle,
+  },
+  scene::{EntityId, PhysicalMeshComponent, TransformComponent},
   types::{GpuError, GpuResult},
 };
 use super::utils;
 
-use alloc::{boxed::Box, format, vec::Vec};
-use ash::{vk};
-use heapless::{index_map::FnvIndexMap, index_set::FnvIndexSet};
+use ash::vk;
+use heapless::{index_map::FnvIndexMap};
 
-// companion classes inside Device
+// companion classes inside Device. Each of these structs implement a given api
+// taking as parameters devices and instances, and export a trait which reiterates
+// the same interface without device and instance, implemented by `Device`
 mod commands;
 mod descriptors;
+mod memory;
 mod pipelines;
 mod resources;
 mod shaders;
+mod swapchain;
 
+trait DeviceResource {
+  /// Cleanup function to facilitate hierarchical manual Drop of resources
+  /// without having to propagate through `Arc` or other means a reference
+  /// to device handle and its function pointers
+  /// Note: This function is not responsible to setup the proper state for cleanup (eg synchronization)
+  fn cleanup(&mut self, device: &ash::Device);
+}
+
+/// Device Resources. Each member here implements `DeviceResources` trait and is either
+/// - implementing `Sync` and `Send`
+/// - Wrapped into a RwLock/Mutex
+/// - Native Vulkan Handle, externally synchronized
 struct DeviceResources {
-  allocator: GlobalDeviceAllocator,
+  allocator: memory::GlobalDeviceAllocator,
   discard_pool: resources::DiscardPool,
+  live_presentation_engines: spin::RwLock<
+    hashbrown::HashMap<PresentationEngineHandle, spin::RwLock<swapchain::PresentationState>>,
+  >,
   command_pools: heapless::Vec<commands::CommandPools, { utils::MAX_QUEUE_FAMILY_COUNT }>,
-  timeline_semaphore: vk::Semaphore,
+  descriptor_pool: Option<sync::Arc<descriptors::DescriptorPools>>,
+  pipeline_pool: spin::RwLock<pipelines::PipelinePool>,
+  timeline_semaphore: NonZeroHandle<vk::Semaphore>,
+}
+
+impl DeviceResource for DeviceResources {
+  /// cleanup in reverse order of declaration in the struct
+  fn cleanup(&mut self, device: &ash::Device) {
+    unsafe { device.destroy_semaphore(self.timeline_semaphore.get(), None) };
+
+    self.pipeline_pool.write().cleanup(device);
+
+    // Safety: If this is a properly constructed `DeviceResources`, then `descriptor_pool = Some(_)`
+    assert!(
+      sync::Arc::strong_count(unsafe { self.descriptor_pool.as_ref().unwrap_unchecked() }) == 1
+    );
+    let mut descriptor_pool: descriptors::DescriptorPools =
+      sync::Arc::try_unwrap(unsafe { self.descriptor_pool.take().unwrap_unchecked() }).unwrap();
+    descriptor_pool.cleanup(device);
+
+    for command_pool in self.command_pools.iter_mut() {
+      command_pool.cleanup(device);
+    }
+
+    for (_, presentation_state) in self.live_presentation_engines.write().drain() {
+      presentation_state.write().cleanup(device);
+    }
+
+    self.discard_pool.cleanup(device);
+
+    self.allocator.cleanup(device);
+  }
+}
+
+impl DeviceResources {
+  fn new<'a>(
+    instance: &instance::Instance,
+    physical_device: vk::PhysicalDevice,
+    device: &ash::Device,
+    unique_family_indices_iter: impl Iterator<Item = &'a u32>,
+  ) -> GpuResult<Self> {
+    // - VMA Device Allocator
+    let mut allocator = unsafe {
+      GlobalDeviceAllocator::new(
+        &instance.instance,
+        &device,
+        physical_device,
+        instance.api_version(),
+      )
+    }?;
+    // - Timeline Semaphore
+    let mut sem_type_info = vk::SemaphoreTypeCreateInfo::default()
+      .initial_value(0)
+      .semaphore_type(vk::SemaphoreType::TIMELINE);
+    let sem_create_info = vk::SemaphoreCreateInfo::default().push_next(&mut sem_type_info);
+    let timeline_semaphore = match unsafe { device.create_semaphore(&sem_create_info, None) } {
+      Ok(semaphore) => semaphore,
+      Err(e) => {
+        allocator.cleanup(device);
+        return Err(e.into());
+      }
+    };
+
+    // - Descriptor Pool
+    let mut descriptor_pool = match descriptors::DescriptorPools::new(device, 256) {
+      Ok(pool) => pool,
+      Err(e) => {
+        unsafe { device.destroy_semaphore(timeline_semaphore, None) };
+        allocator.cleanup(device);
+        return Err(e);
+      }
+    };
+
+    // - Pipeline Pool (TODO: cache data?)
+    let pipeline_pool = match pipelines::PipelinePool::new(device, None) {
+      Ok(pool) => spin::RwLock::new(pool),
+      Err(e) => {
+        let descriptor_pool =
+          unsafe { sync::Arc::get_mut(&mut descriptor_pool).unwrap_unchecked() };
+        descriptor_pool.cleanup(device);
+        unsafe { device.destroy_semaphore(timeline_semaphore, None) };
+        allocator.cleanup(device);
+        return Err(e);
+      }
+    };
+
+    // - Discard Pool
+    let discard_pool = unsafe { resources::DiscardPool::new(64) };
+    // - Command Pools
+    let mut command_pools = heapless::Vec::new();
+    for &queue_family_index in unique_family_indices_iter {
+      unsafe { command_pools.push_unchecked(commands::CommandPools::new(queue_family_index)) };
+    }
+    // - Swapchain hashmap
+    let live_presentation_engines = spin::RwLock::new(hashbrown::HashMap::new());
+    Ok(Self {
+      allocator,
+      command_pools,
+      discard_pool,
+      live_presentation_engines,
+      descriptor_pool: Some(descriptor_pool),
+      pipeline_pool,
+      timeline_semaphore: unsafe { NonZeroHandle::new_unchecked(timeline_semaphore) },
+    })
+  }
 }
 
 pub(super) struct Device<'a> {
   query_result: utils::PhysicalDeviceQueryResult,
   pub device: ash::Device,
   queues: Queues,
+  instance: &'a instance::Instance,
 
-  res: Option<DeviceResources>,
+  res: DeviceResources,
 
-  _instance: PhantomData<&'a vulkan::instance::Instance>,
+  // Some bookkeeping I don't know where to put
+  depth_stencil_format: vk::Format,
 }
 
 const MAX_QUEUE_COUNT: usize = 4;
@@ -167,7 +304,6 @@ impl<'a> Device<'a> {
     let mut features2 = required_features.as_features2();
 
     // 2. Setup queue create infos for necessary queues from query result
-    // TODO: right now we are assuming 1 queue per queue family.
     let queue_priorities = [1f32];
     let queue_infos_len = chosen_physical_device_query_result.family_count();
     let queue_infos: Vec<_> = (0..queue_infos_len)
@@ -192,47 +328,48 @@ impl<'a> Device<'a> {
         .create_device(physical_device, &device_create_info, None)
     }?;
 
-    // 4. Global VMA Allocator creation, Queue handles, Global Discard Pool, Command Buffer Pool
-    let global_device_allocator = unsafe {
-      GlobalDeviceAllocator::new(
-        &instance.instance,
-        &device,
-        physical_device,
-        instance.api_version(),
-      )
-    }?;
-
-    // - Timeline Semaphore
-    let mut sem_type_info = vk::SemaphoreTypeCreateInfo::default()
-      .initial_value(0)
-      .semaphore_type(vk::SemaphoreType::TIMELINE);
-    let sem_create_info = vk::SemaphoreCreateInfo::default().push_next(&mut sem_type_info);
-    let timeline_semaphore = unsafe { device.create_semaphore(&sem_create_info, None) }?;
-    // - Queues
     let queues = Queues::from_device(&device, chosen_physical_device_query_result);
-    // - Discard Pool
-    let discard_pool =
-      unsafe { resources::DiscardPool::new(&device, &global_device_allocator.allocator, 64) };
-    // - Command Pools
-    let mut command_pools = heapless::Vec::new();
-    let unique_queue_families = chosen_physical_device_query_result.unique_family_indices_set();
-    for &queue_family_index in unique_queue_families.iter() {
-      unsafe {
-        command_pools.push_unchecked(commands::CommandPools::new(&device, queue_family_index))
-      };
-    }
+    let res = DeviceResources::new(
+      instance,
+      physical_device,
+      &device,
+      chosen_physical_device_query_result
+        .unique_family_indices_set()
+        .iter(),
+    )?;
+
+    // bookkeeping data instantiation
+    let depth_stencil_format: vk::Format = 'block: {
+      // specification says that at least one of D24/S8 or D32/S8 must be supported
+      let mut props = vk::FormatProperties2::default();
+      for f in [
+        vk::Format::D24_UNORM_S8_UINT,
+        vk::Format::D32_SFLOAT_S8_UINT,
+      ] {
+        unsafe {
+          instance
+            .instance
+            .get_physical_device_format_properties2(physical_device, f, &mut props)
+        };
+        if props
+          .format_properties
+          .optimal_tiling_features
+          .contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
+        {
+          break 'block Ok(f);
+        }
+      }
+      // never reached
+      Err(GpuError::UnsupportedFeature)
+    }?;
 
     Ok(Self {
       query_result: *chosen_physical_device_query_result,
       device,
       queues,
-      res: Some(DeviceResources {
-        timeline_semaphore,
-        allocator: global_device_allocator,
-        discard_pool,
-        command_pools,
-      }),
-      _instance: PhantomData,
+      res,
+      instance,
+      depth_stencil_format,
     })
   }
 
@@ -241,7 +378,7 @@ impl<'a> Device<'a> {
   }
 
   pub(super) fn with_device_allocator<T>(&self, f: impl FnOnce(&GlobalDeviceAllocator) -> T) -> T {
-    let dalloc = &self.res.as_ref().unwrap().allocator;
+    let dalloc = &self.res.allocator;
     f(dalloc)
   }
 
@@ -249,8 +386,64 @@ impl<'a> Device<'a> {
     &mut self,
     f: impl FnOnce(&mut GlobalDeviceAllocator) -> T,
   ) -> T {
-    let dalloc = &mut self.res.as_mut().unwrap().allocator;
+    let dalloc = &mut self.res.allocator;
     f(dalloc)
+  }
+
+  fn get_physical_mesh_shader_modules(
+    &self,
+    physical_mesh_id: RenderableInstanceId,
+  ) -> GpuResult<(
+    NonZeroHandle<vk::ShaderModule>,
+    NonZeroHandle<vk::ShaderModule>,
+  )> {
+    todo!()
+  }
+
+  fn get_physical_mesh_attributes_bindings(
+    &self,
+    physical_mesh_id: RenderableInstanceId,
+  ) -> GpuResult<VertexIn> {
+    todo!()
+  }
+
+  fn get_physical_mesh_pipeline_layout(
+    &self,
+    physical_mesh_id: RenderableInstanceId,
+  ) -> GpuResult<NonZeroHandle<vk::PipelineLayout>> {
+    todo!()
+  }
+
+  fn get_physical_mesh_render_pass(
+    &self,
+    physical_mesh_id: RenderableInstanceId,
+    color_format: vk::Format,
+    depth_stencil_format: vk::Format,
+  ) -> GpuResult<NonZeroHandle<vk::RenderPass>> {
+    todo!()
+  }
+
+  fn get_or_create_physical_mesh_pipeline(
+    &self,
+    physical_mesh_id: RenderableInstanceId,
+    pipeline_graphics_info: &GraphicsInfo,
+  ) -> GpuResult<GpuResourceHandle> {
+    // NonZeroHandle<vk::Pipeline> is stored in an internal mapping hashed together with RenderableInstanceId,
+    // and yield frontend handle
+    todo!()
+  }
+
+  /// Allocates the following resources in the Backend Device
+  /// - Vertex Buffer and Index Buffer
+  /// - Copies transform component matrix as model and model view proj in a struct corresponding to the Push struct in `comet.rs`
+  /// and maps them to frontend handles. Returns only the handles needed for the interface
+  fn get_or_allocate_device_memory(
+    &self,
+    physical_mesh_id: RenderableInstanceId,
+    mesh_component: &PhysicalMeshComponent,
+    transform: &TransformComponent,
+  ) -> GpuResult<(GpuResourceHandle, GpuResourceHandle)> {
+    todo!()
   }
 }
 
@@ -258,19 +451,7 @@ impl<'a> Drop for Device<'a> {
   fn drop(&mut self) {
     unsafe { self.device.device_wait_idle().unwrap_unchecked() };
 
-    if let Some(DeviceResources {
-      allocator,
-      discard_pool,
-      command_pools,
-      timeline_semaphore,
-    }) = self.res.take()
-    {
-      unsafe { self.device.destroy_semaphore(timeline_semaphore, None) };
-
-      drop(discard_pool);
-      drop(command_pools);
-      drop(allocator);
-    }
+    self.res.cleanup(&self.device);
 
     // in the end, destroy the device
     unsafe { self.device.destroy_device(None) };
@@ -335,89 +516,187 @@ impl<'a> RenderDevice for Device<'a> {
   fn context_id(&self) -> u64 {
     vulkan::VULKAN_RENDER_BACKEND.0
   }
-}
 
-pub(super) struct GlobalDeviceAllocator {
-  allocator: vk_mem::Allocator,
-  memory_budgets: Box<[vk_mem::ffi::VmaBudget]>,
-}
-
-#[cfg(debug_assertions)]
-#[allow(unused)]
-unsafe extern "C" fn on_device_alloc(
-  allocator: vk_mem::ffi::VmaAllocator,
-  memory_type: u32,
-  memory: vk::DeviceMemory,
-  size: vk::DeviceSize,
-  p_user_data: *mut core::ffi::c_void,
-) {
-  // TODO logging
-  todo!()
-}
-#[cfg(debug_assertions)]
-#[allow(unused)]
-unsafe extern "C" fn on_device_free(
-  allocator: vk_mem::ffi::VmaAllocator,
-  memory_type: u32,
-  memory: vk::DeviceMemory,
-  size: vk::DeviceSize,
-  p_user_data: *mut core::ffi::c_void,
-) {
-  // TODO logging
-  todo!()
-}
-
-impl GlobalDeviceAllocator {
-  // safety: expects instance and device to have their function pointers already loaded
-  pub unsafe fn new(
-    instance: &ash::Instance,
-    device: &ash::Device,
-    physical_device: vk::PhysicalDevice,
-    api_version: u32,
-  ) -> GpuResult<Self> {
-    let mut allocator_create_info =
-      vk_mem::AllocatorCreateInfo::new(instance, device, physical_device);
-    allocator_create_info.vulkan_api_version = api_version;
-    allocator_create_info.flags = vk_mem::AllocatorCreateFlags::EXT_MEMORY_BUDGET
-      | vk_mem::AllocatorCreateFlags::KHR_DEDICATED_ALLOCATION;
-    #[cfg(debug_assertions)]
-    let callbacks = vk_mem::ffi::VmaDeviceMemoryCallbacks {
-      pfnAllocate: Some(on_device_alloc),
-      pfnFree: Some(on_device_free),
-      pUserData: ptr::null_mut(),
-    };
-    #[cfg(debug_assertions)]
-    {
-      allocator_create_info.device_memory_callbacks = Some(&callbacks);
-    }
-
-    let allocator = unsafe { vk_mem::Allocator::new(allocator_create_info) }?;
-
-    let mut memory_properties = vk::PhysicalDeviceMemoryProperties2::default();
-    unsafe {
-      instance.get_physical_device_memory_properties2(physical_device, &mut memory_properties)
-    };
-    let heap_count = memory_properties.memory_properties.memory_heap_count as _;
-
-    Ok(Self {
-      allocator,
-      memory_budgets: unsafe { Box::new_zeroed_slice(heap_count).assume_init() },
-    })
-  }
-
-  pub fn refresh_vma_budgets(&mut self) {
-    unsafe {
+  fn create_presentation_engine(
+    &self,
+    params: &crate::gpu::PresentationEngineParams,
+  ) -> GpuResult<crate::gpu::PresentationEngineHandle> {
+    let entry =
       self
-        .allocator
-        .get_heap_budgets_cached(&mut self.memory_budgets)
-    };
+        .instance
+        .entry_wrapper
+        .weak_entry()
+        .upgrade()
+        .ok_or(GpuError::BackendSpecific(
+          "Vulkan Entry wasn't loaded".to_string(),
+        ))?;
+    let physical_device_handle = unsafe { NonZeroHandle::new_unchecked(self.physical_device()) };
+    let presentation_state = swapchain::PresentationState::new(
+      &entry,
+      &self.instance.instance,
+      &self.device,
+      physical_device_handle,
+      params,
+    )?;
+
+    static NEXT_HANDLE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
+    let handle =
+      PresentationEngineHandle(NEXT_HANDLE.fetch_add(1, core::sync::atomic::Ordering::Relaxed));
+
+    self
+      .res
+      .live_presentation_engines
+      .write()
+      .insert(handle, spin::RwLock::new(presentation_state));
+
+    Ok(handle)
   }
 
-  pub fn set_current_frame_index(&self, frame_index: u32) {
-    unsafe {
-      self.allocator.set_current_frame_index(frame_index);
-    };
+  fn resize_presentation_engine(
+    &self,
+    handle: crate::gpu::PresentationEngineHandle,
+    width: u32,
+    height: u32,
+  ) -> GpuResult<()> {
+    if let Some(engine) = self.res.live_presentation_engines.read().get(&handle) {
+      let entry =
+        self
+          .instance
+          .entry_wrapper
+          .weak_entry()
+          .upgrade()
+          .ok_or(GpuError::BackendSpecific(
+            "Vulkan Entry wasn't loaded".to_string(),
+          ))?;
+      let physical_device_handle = unsafe { NonZeroHandle::new_unchecked(self.physical_device()) };
+      engine.write().resize(
+        &entry,
+        &self.instance.instance,
+        &self.device,
+        physical_device_handle,
+        width,
+        height,
+      )
+    } else {
+      Err(GpuError::InvalidArgument)
+    }
   }
 
-  // TODO: allocate buffer, image, ...
+  fn acquire_next_image(
+    &self,
+    handle: crate::gpu::PresentationEngineHandle,
+  ) -> GpuResult<crate::gpu::AcquireResult> {
+    if let Some(engine) = self.res.live_presentation_engines.read().get(&handle) {
+      engine.write().acquire_next_image(&self.device)
+    } else {
+      Err(GpuError::InvalidArgument)
+    }
+  }
+
+  fn present(
+    &self,
+    handle: crate::gpu::PresentationEngineHandle,
+    image_index: usize,
+    frame_index: usize,
+  ) -> GpuResult<crate::gpu::SwapchainStatus> {
+    if let Some(engine) = self.res.live_presentation_engines.read().get(&handle) {
+      let graphics_queue = self.queues.get_graphics_queue().handle;
+      unsafe {
+        engine
+          .write()
+          .submit_image(graphics_queue, image_index as u32, frame_index as u32)
+      }
+    } else {
+      Err(GpuError::InvalidArgument)
+    }
+  }
+
+  /// TODO: expose as parameters the following specialization constants
+  /// - layout(constant_id = 0) const float BASE_ALBEDO_R = 0.04;
+  /// - layout(constant_id = 1) const float BASE_ALBEDO_G = 0.04;
+  /// - layout(constant_id = 2) const float BASE_ALBEDO_B = 0.04;
+  /// - layout(constant_id = 3) const float BASE_ROUGHNESS = 0.9;
+  /// - layout(constant_id = 4) const float BASE_AO = 1.0;
+  fn get_or_create_physical_mesh_resources(
+    &self,
+    entity_id: EntityId,
+    component: &PhysicalMeshComponent,
+    transform: &TransformComponent,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<(GpuResourceHandle, GpuResourceHandle, GpuResourceHandle)> {
+    let presentation_engines_read = self.res.live_presentation_engines.read();
+    let presentation_engine = presentation_engines_read
+      .get(&handle)
+      .ok_or(GpuError::InvalidArgument)?;
+    let presentation_engine_state = presentation_engine.read();
+    let (width, height) = presentation_engine_state.extent();
+
+    let physical_mesh_id = RenderableInstanceId::from_physical_mesh(entity_id, component);
+    let (vertex_shader_module, fragment_shader_module) =
+      self.get_physical_mesh_shader_modules(physical_mesh_id)?;
+
+    // TODO add_specialization_constant_u32
+    let pipeline_graphics_info = GraphicsInfo::default()
+      .with_vertex_in(self.get_physical_mesh_attributes_bindings(physical_mesh_id)?)
+      .with_pre_rasterization(
+        PreRasterization::default()
+          .with_vertex_module(vertex_shader_module.get())
+          .clone(),
+      )
+      .with_fragment_shader(
+        FragmentShader::default()
+          .with_fragment_module(fragment_shader_module.get())
+          .add_viewport(vk::Viewport {
+            width: width as _,
+            height: height as _,
+            x: 0.0,
+            y: 0.0,
+            min_depth: 0.0,
+            max_depth: 1.0,
+          })
+          .add_scissors(vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: vk::Extent2D { width, height },
+          })
+          .clone(),
+      )
+      .with_fragment_out(
+        FragmentOut::default()
+          .add_color_attachment_format(presentation_engine_state.format())
+          .with_depth_attachment_format(self.depth_stencil_format)
+          .with_stencil_attachment_format(self.depth_stencil_format)
+          .clone(),
+      )
+      .with_pipeline_layout(
+        // This has the side effect to create descriptor sets and push constants
+        self
+          .get_physical_mesh_pipeline_layout(physical_mesh_id)?
+          .get(),
+      )
+      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
+      .with_render_pass(
+        self
+          .get_physical_mesh_render_pass(
+            physical_mesh_id,
+            presentation_engine_state.format(),
+            self.depth_stencil_format,
+          )?
+          .get(),
+      )
+      .with_subpass(0)
+      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+      .with_stencil_compare_op(StencilCompareOp::None)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(255)
+      .with_stencil_compare_mask(0)
+      .with_stencil_write_mask(u32::MAX)
+      .clone();
+
+    let pipeline: GpuResourceHandle =
+      self.get_or_create_physical_mesh_pipeline(physical_mesh_id, &pipeline_graphics_info)?;
+    let (vertex_buffer, index_buffer) =
+      self.get_or_allocate_device_memory(physical_mesh_id, &component, &transform)?;
+
+    Ok((pipeline, vertex_buffer, index_buffer))
+  }
 }

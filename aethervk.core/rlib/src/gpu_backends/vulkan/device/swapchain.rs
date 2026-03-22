@@ -1,0 +1,955 @@
+use core::{mem, ptr, usize};
+
+use alloc::string::ToString;
+use ash::vk::{self, Handle};
+
+use crate::{
+  gpu::{AcquireResult, OpaqueNativeHandleInfo, PresentationEngineParams, SwapchainStatus},
+  gpu_backends::vulkan::{device::DeviceResource, utils::NonZeroHandle},
+  types::{GpuError, GpuResult},
+};
+
+const MAX_FRAMES_IN_FLIGHT: usize = 8;
+const SWAPCHAIN_FRAME_DISCARDS_BEFORE_SWEEP: usize = 3;
+
+/// Handles and data relative to an image acquired through a swapchain
+/// These data are ephimeral and are associated to a swapchain. Initially, there's
+/// a one to one mapping. When swapchain is recreated, the current frame index
+/// will be associated to image index 0
+struct SwapchainImage {
+  /// Image Handle. Automatically freed when the swapchain is freed
+  pub image: NonZeroHandle<vk::Image>,
+  /// Image View for the whole swapchain image
+  pub image_view: NonZeroHandle<vk::ImageView>,
+  /// fence which is signaled when render command is submitted. Owned by this
+  /// structure. Once a frame is submitted, Ownership is transferred to associated
+  /// associated SwapchainFrame. Starts at null. populated on first submission
+  /// can be reused when recreating the swapchain
+  pub submission_fence: Option<NonZeroHandle<vk::Fence>>,
+  /// semaphore which is waited when submitting, signaled on acquire
+  /// Once an image has been acquired, Ownership is transferred to associated
+  /// SwapchainFrame. Starts at null. Populated on first submission
+  /// associated to the image you acquire. cannot be reused
+  pub acquire_semaphore: Option<NonZeroHandle<vk::Semaphore>>,
+  /// semaphore which is waited when presenting, signaled when submitting
+  pub present_semaphore: NonZeroHandle<vk::Semaphore>,
+}
+
+/// Mechanism to handle delayed (on next acquire attempt after N discards)
+#[derive(Clone)]
+struct FrameDiscard {
+  discarded_swapchains:
+    heapless::Vec<NonZeroHandle<vk::SwapchainKHR>, { SWAPCHAIN_FRAME_DISCARDS_BEFORE_SWEEP + 1 }>,
+  discarded_semaphores: heapless::Vec<
+    NonZeroHandle<vk::Semaphore>,
+    { 2 * (SWAPCHAIN_FRAME_DISCARDS_BEFORE_SWEEP + 1) },
+  >,
+  discarded_image_views:
+    heapless::Vec<NonZeroHandle<vk::ImageView>, { SWAPCHAIN_FRAME_DISCARDS_BEFORE_SWEEP + 1 }>,
+}
+
+#[derive(Clone)]
+struct SwapchainFrame {
+  /// fence which is signaled when submission operation has finished for current frame, waited on
+  /// for image acquisition. Transfer of ownership happens when acquiring next image
+  pub submission_fence: Option<NonZeroHandle<vk::Fence>>,
+  /// semaphore which will be waited when submitting, signaled when transferred.
+  /// Transfer of ownership happens at image acquisition
+  pub acquire_semaphore: Option<NonZeroHandle<vk::Semaphore>>,
+}
+
+pub(super) struct PresentationState {
+  surface_instance: ash::khr::surface::Instance,
+  surface_capabilities: ash::khr::get_surface_capabilities2::Instance,
+  surface: NonZeroHandle<vk::SurfaceKHR>,
+
+  swapchain_device: ash::khr::swapchain::Device,
+  swapchain: NonZeroHandle<vk::SwapchainKHR>,
+
+  images: heapless::Vec<SwapchainImage, MAX_FRAMES_IN_FLIGHT>,
+  next_image: usize,
+  frames: heapless::Vec<SwapchainFrame, MAX_FRAMES_IN_FLIGHT>,
+  frame_discards: heapless::Vec<FrameDiscard, MAX_FRAMES_IN_FLIGHT>,
+  current_frame: usize,
+
+  width: u32,
+  height: u32,
+  pre_transform: vk::SurfaceTransformFlagsKHR,
+  surface_format: vk::SurfaceFormatKHR,
+  vsync: bool,
+  native_handle: OpaqueNativeHandleInfo,
+}
+
+trait SwapchainCleanable {
+  fn cleanup(&mut self, swapchain_device: &ash::khr::swapchain::Device, device: &ash::Device);
+}
+
+struct SwapchainWrapper<'a, T>
+where
+  T: SwapchainCleanable,
+{
+  swapchain_device: &'a ash::khr::swapchain::Device,
+  wrapped: &'a mut T,
+}
+
+impl<'a, T> DeviceResource for SwapchainWrapper<'a, T>
+where
+  T: SwapchainCleanable,
+{
+  fn cleanup(&mut self, device: &ash::Device) {
+    self.wrapped.cleanup(self.swapchain_device, device);
+  }
+}
+
+impl DeviceResource for SwapchainImage {
+  fn cleanup(&mut self, device: &ash::Device) {
+    unsafe { device.destroy_semaphore(self.present_semaphore.get(), None) };
+    if let Some(sem) = self.acquire_semaphore {
+      unsafe { device.destroy_semaphore(sem.get(), None) };
+    }
+    if let Some(fence) = self.submission_fence {
+      unsafe { device.destroy_fence(fence.get(), None) };
+    }
+    unsafe { device.destroy_image_view(self.image_view.get(), None) };
+  }
+}
+
+impl SwapchainCleanable for FrameDiscard {
+  fn cleanup(&mut self, swapchain_device: &ash::khr::swapchain::Device, device: &ash::Device) {
+    for &swapchain in self.discarded_swapchains.iter() {
+      unsafe { swapchain_device.destroy_swapchain(swapchain.get(), None) };
+    }
+    for &sem in self.discarded_semaphores.iter() {
+      unsafe { device.destroy_semaphore(sem.get(), None) };
+    }
+    for &image_view in self.discarded_image_views.iter() {
+      unsafe { device.destroy_image_view(image_view.get(), None) };
+    }
+  }
+}
+
+impl SwapchainCleanable for SwapchainFrame {
+  fn cleanup(&mut self, swapchain_device: &ash::khr::swapchain::Device, device: &ash::Device) {
+    if let Some(fence) = self.submission_fence {
+      unsafe { device.destroy_fence(fence.get(), None) };
+    }
+    if let Some(sem) = self.acquire_semaphore {
+      unsafe { device.destroy_semaphore(sem.get(), None) };
+    }
+  }
+}
+
+impl DeviceResource for PresentationState {
+  fn cleanup(&mut self, device: &ash::Device) {
+    for frame_discard in &mut self.frame_discards {
+      frame_discard.cleanup(&self.swapchain_device, device);
+    }
+    for frame in &mut self.frames {
+      frame.cleanup(&self.swapchain_device, device);
+    }
+    for image in &mut self.images {
+      image.cleanup(device);
+    }
+    unsafe {
+      self
+        .swapchain_device
+        .destroy_swapchain(self.swapchain.get(), None)
+    };
+    unsafe {
+      self
+        .surface_instance
+        .destroy_surface(self.surface.get(), None)
+    };
+  }
+}
+
+unsafe impl Send for PresentationState {}
+unsafe impl Sync for PresentationState {}
+
+impl PresentationState {
+  pub(super) fn resize(
+    &mut self,
+    entry: &ash::Entry,
+    instance: &ash::Instance,
+    device: &ash::Device,
+    physical_device: NonZeroHandle<vk::PhysicalDevice>,
+    width: u32,
+    height: u32,
+  ) -> GpuResult<()> {
+    // 1. Destroy old surface
+    unsafe {
+      self
+        .surface_instance
+        .destroy_surface(self.surface.get(), None);
+    }
+
+    // 2. Create new surface
+    let new_surface = Self::create_surface(entry, instance, self.native_handle)?;
+    self.surface = unsafe { NonZeroHandle::new_unchecked(new_surface) };
+
+    // 3. Update width and height
+    self.width = width;
+    self.height = height;
+
+    // 4. Recreate swapchain
+    self.recreate_swapchain(device, true, physical_device)
+  }
+
+  pub(super) fn extent(&self) -> (u32, u32) {
+    (self.width, self.height)
+  }
+
+  pub(super) fn format(&self) -> vk::Format {
+    self.surface_format.format
+  }
+
+  pub fn new(
+    entry: &ash::Entry,
+    instance: &ash::Instance,
+    device: &ash::Device,
+    physical_device: NonZeroHandle<vk::PhysicalDevice>,
+    params: &PresentationEngineParams,
+  ) -> GpuResult<Self> {
+    let surface_instance = ash::khr::surface::Instance::new(entry, instance);
+    let native_handle = params.window_info;
+    let surface = Self::create_surface(&entry, &instance, native_handle)?;
+    let swapchain_device = ash::khr::swapchain::Device::new(&instance, &device);
+    let surface_capabilities =
+      ash::khr::get_surface_capabilities2::Instance::new(&entry, &instance);
+    let mut this = Self {
+      surface_instance,
+      surface_capabilities,
+      surface: unsafe { NonZeroHandle::new_unchecked(surface) },
+      swapchain_device,
+      swapchain: NonZeroHandle::dangling(), // will be well-formed if recreate_swapchain goes through
+      images: heapless::Vec::new(),
+      next_image: 0,
+      frames: heapless::Vec::new(),
+      frame_discards: heapless::Vec::new(),
+      current_frame: 0,
+      width: params.width as _,
+      height: params.height as _,
+      surface_format: vk::SurfaceFormatKHR::default(),
+      pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
+      vsync: params.vsync,
+      native_handle,
+    };
+
+    this.recreate_swapchain(device, false, physical_device)?;
+
+    Ok(this)
+  }
+
+  // Assumes that user resizing has finished
+  fn recreate_swapchain(
+    &mut self,
+    device: &ash::Device,
+    use_old_swapchain: bool,
+    physical_device: NonZeroHandle<vk::PhysicalDevice>,
+  ) -> GpuResult<()> {
+    debug_assert!(
+      self.frame_discards.len() == self.frames.len()
+        && self.frame_discards.len() >= self.images.len()
+    );
+    // transaction like behaviour: everything that can fail happens before mutations
+    // - BEGIN
+    let (mut swapchain, extent, transform, surface_format, _) =
+      self.create_swapchain_internal(physical_device, use_old_swapchain)?;
+    let swapchain_images =
+      self.recreate_swapchain_images(device, swapchain, surface_format.format)?;
+    let (frame_semaphores, frame_fences) =
+      self.recreate_swapchain_frame_resources(device, swapchain_images.len())?;
+    // - END
+
+    // bookkeping
+    self.next_image = 0;
+    mem::swap(&mut swapchain, &mut self.swapchain);
+    self.update_metadata(extent, transform, surface_format);
+
+    if self.frames.len() > self.current_frame {
+      let frame_discard = &mut self.frame_discards[self.current_frame];
+      // flush frame discard
+      frame_discard.flush(&self.swapchain_device, &device);
+      // discard image resources
+      if !self.images.is_empty() {
+        unsafe { frame_discard.discard_swapchain_images(&mut self.images) };
+        self.images.clear();
+      }
+      // discard decommissioned swapchain
+      unsafe { frame_discard.discard_decommissioned_swapchain(swapchain) };
+      // discard all frame acquire semaphores
+      unsafe {
+        frame_discard.discard_swapchain_frame_keep_fences(&mut self.frames);
+      }
+    }
+    // refresh image and frame data
+    self.images = swapchain_images;
+    if self.images.len() > self.frames.len() {
+      let _ = self.frames.resize_default(self.images.len());
+      let _ = self.frame_discards.resize_default(self.images.len());
+    }
+    for i in 0..self.frames.len() {
+      unsafe {
+        let frame = self.frames.get_unchecked_mut(i);
+        frame.acquire_semaphore = Some(*frame_semaphores.get_unchecked(i));
+        if frame.submission_fence.is_none() {
+          let fence = *frame_fences.get_unchecked(i);
+          debug_assert!(!fence.is_null());
+          frame.submission_fence = Some(NonZeroHandle::new_unchecked(fence));
+        }
+      }
+    }
+
+    debug_assert!(
+      self.frame_discards.len() == self.frames.len()
+        && self.frame_discards.len() >= self.images.len()
+    );
+    Ok(())
+  }
+
+  fn recreate_swapchain_images(
+    &self,
+    device: &ash::Device,
+    swapchain: NonZeroHandle<vk::SwapchainKHR>,
+    format: vk::Format,
+  ) -> GpuResult<heapless::Vec<SwapchainImage, MAX_FRAMES_IN_FLIGHT>> {
+    let mut images = heapless::Vec::<vk::Image, MAX_FRAMES_IN_FLIGHT>::new();
+    let mut count: u32 = unsafe {
+      let mut v = 0u32;
+      (self.swapchain_device.fp().get_swapchain_images_khr)(
+        self.swapchain_device.device(),
+        swapchain.get(),
+        ptr::from_mut(&mut v),
+        ptr::null_mut(),
+      )
+      .result_with_success(v)
+    }?;
+    images.resize(count as _, vk::Image::null()).map_err(|_| {
+      GpuError::UnsupportedFeatureNamed(
+        "Too many images from swapchain. Increase Limit".to_string(),
+      )
+    })?;
+    unsafe {
+      (self.swapchain_device.fp().get_swapchain_images_khr)(
+        self.swapchain_device.device(),
+        swapchain.get(),
+        ptr::from_mut(&mut count),
+        images.as_mut_ptr(),
+      )
+      .result()
+    }?;
+
+    let sem_create_info = vk::SemaphoreCreateInfo::default();
+    let img_view_create_info = vk::ImageViewCreateInfo::default()
+      .view_type(vk::ImageViewType::TYPE_2D)
+      .format(format)
+      .subresource_range(
+        vk::ImageSubresourceRange::default()
+          .aspect_mask(vk::ImageAspectFlags::COLOR)
+          .base_array_layer(0)
+          .base_mip_level(0)
+          .layer_count(1)
+          .level_count(1),
+      );
+
+    let mut result = heapless::Vec::<SwapchainImage, MAX_FRAMES_IN_FLIGHT>::new();
+    for i in 0..count {
+      unsafe {
+        let image_view =
+          NonZeroHandle::new_unchecked(device.create_image_view(&img_view_create_info, None)?);
+        let present_semaphore =
+          NonZeroHandle::new_unchecked(device.create_semaphore(&sem_create_info, None)?);
+
+        result.push_unchecked(SwapchainImage {
+          image: NonZeroHandle::new_unchecked(*images.get_unchecked(i as usize)),
+          image_view,
+          submission_fence: None,
+          acquire_semaphore: None,
+          present_semaphore,
+        })
+      }
+    }
+    Ok(result)
+  }
+
+  fn can_swapchain_image_be_transfer(surf_caps: &vk::SurfaceCapabilities2KHR) -> GpuResult<()> {
+    let flags = surf_caps.surface_capabilities.supported_usage_flags;
+    if flags.contains(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC) {
+      Ok(())
+    } else {
+      Err(GpuError::UnsupportedFeature)
+    }
+  }
+
+  // assumes you discarded all previous acquire semaphores
+  fn recreate_swapchain_frame_resources(
+    &self,
+    device: &ash::Device,
+    count: usize,
+  ) -> GpuResult<(
+    heapless::Vec<NonZeroHandle<vk::Semaphore>, MAX_FRAMES_IN_FLIGHT>,
+    heapless::Vec<vk::Fence, MAX_FRAMES_IN_FLIGHT>,
+  )> {
+    let mut semaphores = heapless::Vec::<NonZeroHandle<vk::Semaphore>, MAX_FRAMES_IN_FLIGHT>::new();
+    let mut fences = heapless::Vec::<vk::Fence, MAX_FRAMES_IN_FLIGHT>::new();
+    let sem_create_info = vk::SemaphoreCreateInfo::default();
+    let fence_create_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+    for i in 0..count {
+      unsafe {
+        fences.push_unchecked(if i < self.frames.len() {
+          let frame = self.frames.get_unchecked(i);
+          debug_assert!(frame.acquire_semaphore.is_none());
+          if frame.submission_fence.is_none() {
+            device.create_fence(&fence_create_info, None)?
+          } else {
+            vk::Fence::null()
+          }
+        } else {
+          vk::Fence::null()
+        });
+        semaphores.push_unchecked(NonZeroHandle::new_unchecked(
+          device.create_semaphore(&sem_create_info, None)?,
+        ));
+      }
+    }
+
+    Ok((semaphores, fences))
+  }
+
+  // note: immutable self
+  fn create_swapchain_internal(
+    &self,
+    physical_device: NonZeroHandle<vk::PhysicalDevice>,
+    use_old_swapchain: bool,
+  ) -> GpuResult<(
+    NonZeroHandle<vk::SwapchainKHR>,
+    vk::Extent2D,
+    vk::SurfaceTransformFlagsKHR,
+    vk::SurfaceFormatKHR,
+    vk::PresentModeKHR,
+  )> {
+    // Surface capabilities
+    let surface_format = self.select_surface_format(physical_device)?;
+    let present_mode = self.select_present_mode(physical_device)?;
+
+    let mut present_mode_ext = vk::SurfacePresentModeEXT::default().present_mode(present_mode);
+    let surf_info = vk::PhysicalDeviceSurfaceInfo2KHR::default()
+      .surface(self.surface.get())
+      .push_next(&mut present_mode_ext);
+    let mut surf_caps = vk::SurfaceCapabilities2KHR::default();
+    unsafe {
+      self
+        .surface_capabilities
+        .get_physical_device_surface_capabilities2(
+          physical_device.get(),
+          &surf_info,
+          &mut surf_caps,
+        )
+    }?;
+    let (extent, transform, image_count) =
+      self.extent_transform_imagecount(&surf_caps, present_mode);
+    let composite_alpha = Self::get_supported_composite_alpha(&surf_caps)?;
+
+    Self::can_swapchain_image_be_transfer(&surf_caps)?;
+
+    // create swapchain
+    let create_info = vk::SwapchainCreateInfoKHR::default()
+      .surface(self.surface.get())
+      .min_image_count(image_count)
+      .image_format(surface_format.format)
+      .image_array_layers(1)
+      .image_color_space(surface_format.color_space)
+      .image_extent(extent)
+      .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+      .image_usage(
+        vk::ImageUsageFlags::COLOR_ATTACHMENT
+          | vk::ImageUsageFlags::TRANSFER_SRC
+          | vk::ImageUsageFlags::TRANSFER_DST,
+      )
+      .composite_alpha(composite_alpha)
+      .clipped(true) // pixels can be written from OS outside vulkan. Unless you read back this image, we don't care
+      .old_swapchain(if use_old_swapchain {
+        self.swapchain.get()
+      } else {
+        vk::SwapchainKHR::null()
+      })
+      .pre_transform(transform)
+      .present_mode(present_mode);
+
+    let swapchain = unsafe {
+      NonZeroHandle::new_unchecked(self.swapchain_device.create_swapchain(&create_info, None)?)
+    };
+
+    Ok((swapchain, extent, transform, surface_format, present_mode))
+  }
+
+  fn update_metadata(
+    &mut self,
+    extent: vk::Extent2D,
+    transform: vk::SurfaceTransformFlagsKHR,
+    surface_format: vk::SurfaceFormatKHR,
+  ) {
+    self.width = extent.width;
+    self.height = extent.height;
+    self.pre_transform = transform;
+    self.surface_format = surface_format;
+  }
+
+  fn get_supported_composite_alpha(
+    surf_caps: &vk::SurfaceCapabilities2KHR,
+  ) -> GpuResult<vk::CompositeAlphaFlagsKHR> {
+    let composite_alpha = surf_caps.surface_capabilities.supported_composite_alpha;
+    let has_transparency = composite_alpha.contains(vk::CompositeAlphaFlagsKHR::INHERIT)
+      && composite_alpha != vk::CompositeAlphaFlagsKHR::INHERIT;
+    let has_opaque = composite_alpha.contains(vk::CompositeAlphaFlagsKHR::OPAQUE);
+    if !has_transparency && !has_opaque {
+      Err(GpuError::UnsupportedFeature)
+    } else if has_transparency {
+      if composite_alpha.contains(vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED) {
+        Ok(vk::CompositeAlphaFlagsKHR::INHERIT | vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED)
+      } else if composite_alpha.contains(vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED) {
+        Ok(vk::CompositeAlphaFlagsKHR::INHERIT | vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED)
+      } else {
+        Err(GpuError::UnsupportedFeature)
+      }
+    } else {
+      Ok(vk::CompositeAlphaFlagsKHR::OPAQUE)
+    }
+  }
+
+  fn extent_transform_imagecount(
+    &self,
+    surf_caps: &vk::SurfaceCapabilities2KHR,
+    present_mode: vk::PresentModeKHR,
+  ) -> (vk::Extent2D, vk::SurfaceTransformFlagsKHR, u32) {
+    let transform = surf_caps.surface_capabilities.current_transform;
+    let extent: vk::Extent2D = {
+      let mut width = if surf_caps.surface_capabilities.current_extent.width == u32::MAX {
+        self.width as u32
+      } else {
+        surf_caps.surface_capabilities.current_extent.width
+      };
+      let mut height = if surf_caps.surface_capabilities.current_extent.height == u32::MAX {
+        self.height as u32
+      } else {
+        surf_caps.surface_capabilities.current_extent.height
+      };
+      if width < surf_caps.surface_capabilities.min_image_extent.width {
+        width = surf_caps.surface_capabilities.min_image_extent.width;
+      } else if width > surf_caps.surface_capabilities.max_image_extent.width {
+        width = surf_caps.surface_capabilities.max_image_extent.width;
+      }
+      if height < surf_caps.surface_capabilities.min_image_extent.height {
+        height = surf_caps.surface_capabilities.min_image_extent.height;
+      } else if height > surf_caps.surface_capabilities.max_image_extent.height {
+        height = surf_caps.surface_capabilities.max_image_extent.height;
+      }
+      match transform {
+        vk::SurfaceTransformFlagsKHR::ROTATE_90
+        | vk::SurfaceTransformFlagsKHR::ROTATE_270
+        | vk::SurfaceTransformFlagsKHR::HORIZONTAL_MIRROR_ROTATE_90
+        | vk::SurfaceTransformFlagsKHR::HORIZONTAL_MIRROR_ROTATE_270 => {
+          mem::swap(&mut width, &mut height);
+        }
+        _ => {}
+      }
+      vk::Extent2D { width, height }
+    };
+    let image_count = {
+      // start with 3 if vsync, 2 if not. then check against min, which is >= 1 by spec, and max,
+      // Note: if max is 0, then there's no limit
+      let mut value = if present_mode == vk::PresentModeKHR::IMMEDIATE {
+        2
+      } else {
+        3
+      } as u32;
+      if value < surf_caps.surface_capabilities.min_image_count {
+        value = surf_caps.surface_capabilities.min_image_count;
+      } else if surf_caps.surface_capabilities.max_image_count != 0
+        && value > surf_caps.surface_capabilities.max_image_count
+      {
+        value = surf_caps.surface_capabilities.max_image_count;
+      }
+      value
+    };
+    (extent, transform, image_count)
+  }
+
+  fn select_surface_format(
+    &self,
+    physical_device: NonZeroHandle<vk::PhysicalDevice>,
+  ) -> ash::prelude::VkResult<vk::SurfaceFormatKHR> {
+    let formats = unsafe {
+      self
+        .surface_instance
+        .get_physical_device_surface_formats(physical_device.get(), self.surface.get())
+    }?;
+    if formats.is_empty() {
+      return Err(ash::vk::Result::ERROR_FORMAT_NOT_SUPPORTED);
+    }
+    let desired_formats = [
+      vk::Format::B8G8R8A8_UNORM,
+      vk::Format::R8G8B8A8_UNORM,
+      vk::Format::A8B8G8R8_UNORM_PACK32,
+    ];
+    for format in desired_formats {
+      for surface_format in formats.iter() {
+        if surface_format.format == format {
+          return Ok(*surface_format);
+        }
+      }
+    }
+    Ok(if formats[0].format == vk::Format::UNDEFINED {
+      vk::SurfaceFormatKHR {
+        format: vk::Format::B8G8R8A8_UNORM,
+        color_space: formats[0].color_space,
+      }
+    } else {
+      formats[0]
+    })
+  }
+
+  fn select_present_mode(
+    &self,
+    physical_device: NonZeroHandle<vk::PhysicalDevice>,
+  ) -> ash::prelude::VkResult<vk::PresentModeKHR> {
+    let present_modes = unsafe {
+      self
+        .surface_instance
+        .get_physical_device_surface_present_modes(physical_device.get(), self.surface.get())
+    }?;
+    let desired_present_mode = if self.vsync {
+      vk::PresentModeKHR::MAILBOX
+    } else {
+      vk::PresentModeKHR::IMMEDIATE
+    };
+    if present_modes.contains(&desired_present_mode) {
+      Ok(desired_present_mode)
+    } else {
+      // supported by specification
+      Ok(vk::PresentModeKHR::FIFO)
+    }
+  }
+
+  fn create_surface(
+    entry: &ash::Entry,
+    instance: &ash::Instance,
+    native_handle: OpaqueNativeHandleInfo,
+  ) -> ash::prelude::VkResult<vk::SurfaceKHR> {
+    #[cfg(windows)]
+    {
+      let win32_instance = ash::khr::win32_surface::Instance::new(entry, instance);
+      let create_info = vk::Win32SurfaceCreateInfoKHR::default()
+        .hinstance(native_handle.ptr0 as _)
+        .hwnd(native_handle.ptr1 as _);
+      unsafe { win32_instance.create_win32_surface(&create_info, None) }
+    }
+    #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
+    {
+      let wayland_instance = ash::khr::wayland_surface::Instance::new(entry, instance);
+      let create_info = vk::WaylandSurfaceCreateInfoKHR::default()
+        .display(native_handle.ptr0 as _)
+        .surface(native_handle.ptr1 as _);
+      unsafe { wayland_instance.create_wayland_surface(&create_info, None) }
+    }
+    #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+    {
+      let xcb_instance = ash::khr::xcb_surface::Instance::new(entry, instance);
+      let create_info = vk::XcbSurfaceCreateInfoKHR::default()
+        .connection(native_handle.ptr0 as _)
+        .window(native_handle.ptr1 as _);
+      unsafe { xcb_instance.create_xcb_surface(&create_info, None) }
+    }
+    #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+    {
+      let xlib_instance = ash::khr::xlib_surface::Instance::new(entry, instance);
+      let create_info = vk::XlibSurfaceCreateInfoKHR::default()
+        .dpy(native_handle.ptr0 as _)
+        .window(native_handle.ptr1 as _);
+      unsafe { xlib_instance.create_xlib_surface(&create_info, None) }
+    }
+    #[cfg(target_os = "macos")]
+    {
+      let metal_instance = ash::ext::metal_surface::Instance::new(entry, instance);
+      let create_info = vk::MetalSurfaceCreateInfoEXT::default().layer(native_handle.ptr0 as _);
+      unsafe { metal_instance.create_metal_surface(&create_info, None) }
+    }
+  }
+
+  /// Note:
+  /// - When it returns Ok(AcquireResult) with SwapchainStatus::Optimal -> increments `next_image` when successful and makes frame at `current_frame` eligible for submission
+  /// - AcquireResult::image_available_semaphore is not used. State tracked internally by presentation engine
+  pub fn acquire_next_image(&mut self, device: &ash::Device) -> GpuResult<AcquireResult> {
+    const FIRST_ATTEMPT_TIMEOUT_NS: u64 = 167;
+    let images_count = self.images.len();
+    let frame_count = self.frames.len();
+    let swapchain_image = &mut self.images[self.next_image];
+    if !swapchain_image.eligible_for_acquisition()
+      || !self.frames[self.current_frame].eligible_for_steal()
+    {
+      return Err(GpuError::InvalidState);
+    }
+    let fences: &[vk::Fence] = unsafe {
+      core::slice::from_ref(&swapchain_image.submission_fence.as_ref().unwrap_unchecked())
+    };
+
+    // 1. Wait for previous rendering operation on the same frame
+    let mut timeout = FIRST_ATTEMPT_TIMEOUT_NS;
+    loop {
+      let result = unsafe { device.wait_for_fences(fences, false, timeout) };
+      if let Err(vk_result) = result {
+        if vk_result == vk::Result::TIMEOUT {
+          timeout = u64::MAX;
+        } else {
+          return Err(vk_result.into());
+        }
+      } else {
+        break;
+      }
+    }
+
+    // 2. Reset submission hence
+    unsafe { device.reset_fences(fences) }?;
+
+    let (image_index, vk_result) = unsafe {
+      let mut index = 0u32;
+      let vk_result = (self.swapchain_device.fp().acquire_next_image_khr)(
+        self.swapchain_device.device(),
+        self.swapchain.get(),
+        u64::MAX,
+        swapchain_image.acquire_semaphore.unwrap_unchecked().get(),
+        vk::Fence::null(),
+        ptr::from_mut(&mut index),
+      );
+      (index, vk_result)
+    };
+    debug_assert!(image_index as usize == self.next_image);
+    match vk_result {
+      vk::Result::SUCCESS => {
+        unsafe { self.frames[self.current_frame].steal_from_swapchain_image(swapchain_image) };
+        // this is the only arm in which status is changed
+        self.next_image += 1 % images_count;
+        self.current_frame += 1 % frame_count;
+        Ok(AcquireResult {
+          image_index,
+          status: SwapchainStatus::Optimal,
+          frame_index: self.current_frame as u64,
+        })
+      }
+      vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR => Ok(AcquireResult {
+        image_index,
+        status: SwapchainStatus::NeedsRecreation,
+        frame_index: self.current_frame as u64,
+      }),
+      _ => {
+        return Err(vk_result.into());
+      }
+    }
+  }
+
+  /// get SwapchainFrame synchronization resources at frames[index]
+  /// Notes:
+  /// - `submission_fence`: signaled in a vkQueueSubmit operation
+  /// - `acquire_semaphore`: waited in a vkQueueSubmit operation, signaled in a vkAcquireNextImageKHR operation
+  /// Safety:
+  /// - index < frames.len()
+  /// - `swapchain_frame` at index should be !eligible_for_steal
+  /// - returned handles should not be freed by caller
+  pub unsafe fn get_frame_resources(
+    &self,
+    index: usize,
+  ) -> (NonZeroHandle<vk::Semaphore>, NonZeroHandle<vk::Fence>) {
+    debug_assert!(self.frames.len() > index);
+    let frame = &self.frames[index];
+    debug_assert!(!frame.eligible_for_steal());
+    unsafe {
+      (
+        frame.acquire_semaphore.unwrap_unchecked(),
+        frame.submission_fence.unwrap_unchecked(),
+      )
+    }
+  }
+
+  /// get SwapchainImage synchronization and image handles at images[index]
+  /// Notes:
+  /// - `image_view`: used as output color attachment for a subpass
+  /// - `present_semaphore`: signaled in a vkQueueSubmit operation, waited in a vkQueuePresentKHR operation
+  /// Safety:
+  /// - index < images.len()
+  /// - `swapchain_image` at index should be !eligible_for_acquisition
+  /// - returned handles should not be freed by caller
+  pub unsafe fn get_image_resources(
+    &self,
+    index: usize,
+  ) -> (
+    NonZeroHandle<vk::Image>,
+    NonZeroHandle<vk::ImageView>,
+    NonZeroHandle<vk::Semaphore>,
+  ) {
+    debug_assert!(self.images.len() > index);
+    let image = &self.images[index];
+    debug_assert!(!image.eligible_for_acquisition());
+    (image.image, image.image_view, image.present_semaphore)
+  }
+
+  /// Safety
+  /// - `image_index` and `frame_index` should be obtained by `acquire_next_image` without any `recreate_swapchain` or `submit_image` call in between
+  /// - handles acquired from `get_image_resources` and `get_frame_resources` shouldn't be used after calling this function, regardless of the result
+  /// - `graphics_queue` should be from a GRAPHICS queue family which supports presentation
+  pub unsafe fn submit_image(
+    &mut self,
+    graphics_queue: vk::Queue,
+    image_index: u32,
+    frame_index: u32,
+  ) -> GpuResult<SwapchainStatus> {
+    let image = &mut self.images[image_index as usize];
+    let frame = &mut self.frames[frame_index as usize];
+    if image.eligible_for_acquisition() || frame.eligible_for_steal() {
+      return Err(GpuError::InvalidState);
+    }
+
+    let wait_semaphores = [image.present_semaphore.get()];
+    let swapchains = [self.swapchain.get()];
+    let image_indices = [image_index];
+
+    let present_info = vk::PresentInfoKHR::default()
+      .wait_semaphores(&wait_semaphores)
+      .swapchains(&swapchains)
+      .image_indices(&image_indices);
+
+    let result = unsafe {
+      self
+        .swapchain_device
+        .queue_present(graphics_queue, &present_info)
+    };
+
+    match result {
+      Ok(suboptimal) if suboptimal => Ok(SwapchainStatus::Suboptimal),
+      Ok(_) => {
+        unsafe { image.reclaim_from_swapchain_frame(frame) };
+        Ok(SwapchainStatus::Optimal)
+      }
+      Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => Ok(SwapchainStatus::NeedsRecreation),
+      Err(e) => Err(e.into()),
+    }
+  }
+}
+
+impl FrameDiscard {
+  /// Safety: regular draining must be guaranteed to never let the heapless buffers be full
+  unsafe fn discard_swapchain_images(&mut self, swapchain_images: &mut [SwapchainImage]) {
+    debug_assert!(!self.discarded_swapchains.is_full());
+    debug_assert!(!self.discarded_semaphores.is_full());
+    debug_assert!(!self.discarded_image_views.is_full());
+    for swapchain_image in swapchain_images {
+      unsafe {
+        self
+          .discarded_image_views
+          .push_unchecked(swapchain_image.image_view);
+        self
+          .discarded_semaphores
+          .push_unchecked(swapchain_image.present_semaphore);
+        // Safety: This should be called only when
+        // - presentation failed/suboptimal
+        // - next image acquisition failed
+        // hence `submission_fence` and `acquire_semaphore` are now None, owned
+        // by the associated frame struct
+        debug_assert!(swapchain_image.acquire_semaphore.is_none());
+        debug_assert!(swapchain_image.submission_fence.is_none());
+      };
+    }
+  }
+
+  /// Safety: regular draining must be guaranteed to never let the heapless buffers be full
+  unsafe fn discard_swapchain_frame_keep_fences(
+    &mut self,
+    swapchain_frames: &mut [SwapchainFrame],
+  ) {
+    debug_assert!(!self.discarded_swapchains.is_full());
+    debug_assert!(!self.discarded_semaphores.is_full());
+    debug_assert!(!self.discarded_image_views.is_full());
+    for swapchain_frame in swapchain_frames {
+      unsafe {
+        // Safety: This should be called only when
+        // - presentation failed/suboptimal
+        // - next image acquisition failed
+        // hence `submission_fence` and `acquire_semaphore` are now None, owned
+        // by the associated frame struct
+        debug_assert!(swapchain_frame.acquire_semaphore.is_some());
+        debug_assert!(swapchain_frame.submission_fence.is_some());
+
+        self
+          .discarded_semaphores
+          .push_unchecked(swapchain_frame.acquire_semaphore.unwrap_unchecked());
+      }
+    }
+  }
+
+  /// Safety: regular draining must be guaranteed to never let the heapless buffers be full
+  unsafe fn discard_decommissioned_swapchain(
+    &mut self,
+    swapchain: NonZeroHandle<vk::SwapchainKHR>,
+  ) {
+    debug_assert!(self.discarded_swapchains.is_full());
+    unsafe {
+      self.discarded_swapchains.push_unchecked(swapchain);
+    }
+  }
+
+  fn flush(&mut self, swapchain_device: &ash::khr::swapchain::Device, device: &ash::Device) {
+    if self.discarded_swapchains.len() >= SWAPCHAIN_FRAME_DISCARDS_BEFORE_SWEEP {
+      self.cleanup(swapchain_device, device);
+    }
+  }
+}
+
+impl Default for SwapchainFrame {
+  fn default() -> Self {
+    Self {
+      submission_fence: None,
+      acquire_semaphore: None,
+    }
+  }
+}
+
+impl Default for FrameDiscard {
+  fn default() -> Self {
+    Self {
+      discarded_swapchains: Default::default(),
+      discarded_semaphores: Default::default(),
+      discarded_image_views: Default::default(),
+    }
+  }
+}
+
+impl SwapchainImage {
+  fn eligible_for_acquisition(&self) -> bool {
+    self.submission_fence.is_some() && self.acquire_semaphore.is_some()
+  }
+
+  /// Safety:
+  /// - swapchain_image should not be eligible for image acquisition
+  /// - vkQueuePresentKHR should have been already called and it should have returned SUCCESS or SUBOPTIMAL
+  /// - swapchain_frame should not be eligible for steal
+  unsafe fn reclaim_from_swapchain_frame(&mut self, frame: &mut SwapchainFrame) {
+    debug_assert!(!self.eligible_for_acquisition() && !frame.eligible_for_steal());
+    self.submission_fence = frame.submission_fence.take();
+    self.acquire_semaphore = frame.acquire_semaphore.take();
+  }
+}
+
+impl SwapchainFrame {
+  fn eligible_for_steal(&self) -> bool {
+    self.submission_fence.is_none() && self.acquire_semaphore.is_none()
+  }
+
+  /// Safety:
+  /// - swapchain_image should be eligible for image acquisition
+  /// - vkAcquireNextImageKHR should have been already called
+  /// - swapchain_frame should be eligible for steal
+  unsafe fn steal_from_swapchain_image(&mut self, swapchain_image: &mut SwapchainImage) {
+    debug_assert!(swapchain_image.eligible_for_acquisition() && self.eligible_for_steal());
+    self.acquire_semaphore = swapchain_image.acquire_semaphore.take();
+    self.submission_fence = swapchain_image.submission_fence.take();
+  }
+}

@@ -111,8 +111,8 @@ where
     // vector's `normalize` requires the scalar to be float-like
     Self::Scalar: FloatLike,
   {
-    let _0 = <Self::Scalar as MulAddIdentity>::ZERO;
-    let _1 = <Self::Scalar as MulAddIdentity>::ONE;
+    let _0 = <Self::Scalar as MulAddIdentity>::zero();
+    let _1 = <Self::Scalar as MulAddIdentity>::one();
 
     // forward given by target (center) - start (eye), cross with up to get side, and adjust up
     let f = (center - eye).normalize();
@@ -139,8 +139,8 @@ where
   where
     Self::Scalar: FloatLike,
   {
-    let _0 = <Self::Scalar as MulAddIdentity>::ZERO;
-    let _1 = <Self::Scalar as MulAddIdentity>::ONE;
+    let _0 = <Self::Scalar as MulAddIdentity>::zero();
+    let _1 = <Self::Scalar as MulAddIdentity>::one();
     let _2 = <Self::Scalar as FloatLike>::from_f32(2.0);
 
     let c0 = Self::Vector::from_components(_2 / (right - left), _0, _0, _0);
