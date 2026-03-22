@@ -1,7 +1,7 @@
 use core::{
   char::MAX,
   ffi::{CStr, c_char, c_void},
-  mem, ptr,
+  mem, ops, ptr,
 };
 use alloc::{
   string::{self, ToString},
@@ -24,8 +24,8 @@ use windows::{
 };
 
 use crate::{
-  gpu::DeviceAdditionalParams,
-  types::{GpuError, GpuResult},
+  gpu::{DeviceAdditionalParams, OpaqueNativeHandleInfo},
+  types::{EngineError, EngineResult, GpuError, GpuResult},
 };
 
 // -------------------------------- Helper Types -----------------------------
@@ -355,7 +355,10 @@ impl EntryWrapper {
       }
     };
 
-    let vk_entry = if 0usize == unsafe { mem::transmute(static_fn.get_instance_proc_addr) } {
+    let vk_entry = if 0usize
+      == unsafe {
+        mem::transmute::<PFN_vkGetInstanceProcAddr, usize>(static_fn.get_instance_proc_addr)
+      } {
       Err(GpuError::BackendSpecific(
         "vulkan loader couldn't be loaded".to_string(),
       ))
@@ -550,6 +553,71 @@ impl From<vk::Result> for GpuError {
       // TODO more as needed
       _ => GpuError::BackendSpecific(err.to_string()),
     }
+  }
+}
+
+/// Necessary wrapper struct as `ptr::NonNull` cannot be used with ash's
+/// implementation of Vulkan's non dispatchable handles
+pub(super) struct NonZeroHandle<T>
+where
+  T: ash::vk::Handle + Copy,
+{
+  handle: T,
+}
+
+impl<T> NonZeroHandle<T>
+where
+  T: ash::vk::Handle + Copy,
+{
+  #[inline(always)]
+  pub(super) unsafe fn new_unchecked(value: T) -> Self {
+    Self { handle: value }
+  }
+
+  #[inline(always)]
+  pub(super) fn dangling() -> Self {
+    Self {
+      handle: <T as ash::vk::Handle>::from_raw(u64::MAX),
+    }
+  }
+
+  #[inline(always)]
+  pub(super) fn new(value: T) -> Option<Self> {
+    if value.is_null() {
+      None
+    } else {
+      Some(unsafe { Self::new_unchecked(value) })
+    }
+  }
+
+  #[inline(always)]
+  pub(super) fn get(&self) -> T {
+    self.handle
+  }
+}
+
+impl<T> Clone for NonZeroHandle<T>
+where
+  T: ash::vk::Handle + Copy,
+{
+  fn clone(&self) -> Self {
+    Self {
+      handle: self.handle.clone(),
+    }
+  }
+}
+
+impl<T> Copy for NonZeroHandle<T> where T: ash::vk::Handle + Copy {}
+
+/// Allow compiler to implicitly coerce &NonZeroHandle<Handle> to &Handle
+impl<T> ops::Deref for NonZeroHandle<T>
+where
+  T: ash::vk::Handle + Copy,
+{
+  type Target = T;
+  #[inline(always)]
+  fn deref(&self) -> &Self::Target {
+    &self.handle
   }
 }
 

@@ -190,18 +190,10 @@ impl Matrix for Mat4x4f32 {
 
       // Move combinations to final rows
       Self {
-        x: Vec4f32 {
-          simd: _mm_movelh_ps(tmp0, tmp1),
-        },
-        y: Vec4f32 {
-          simd: _mm_movehl_ps(tmp1, tmp0),
-        },
-        z: Vec4f32 {
-          simd: _mm_movelh_ps(tmp2, tmp3),
-        },
-        w: Vec4f32 {
-          simd: _mm_movehl_ps(tmp3, tmp2),
-        },
+        x: Vec4f32::from_sse(_mm_movelh_ps(tmp0, tmp1)),
+        y: Vec4f32::from_sse(_mm_movehl_ps(tmp1, tmp0)),
+        z: Vec4f32::from_sse(_mm_movelh_ps(tmp2, tmp3)),
+        w: Vec4f32::from_sse(_mm_movehl_ps(tmp3, tmp2)),
       }
     }
     #[cfg(target_arch = "aarch64")]
@@ -214,67 +206,51 @@ impl Matrix for Mat4x4f32 {
 
       // Reinterpret as 64-bit to zip the larger blocks together
       Self {
-        x: Vec4f32 {
-          simd: vreinterpretq_f32_f64(vzip1q_f64(
-            vreinterpretq_f64_f32(zip0),
-            vreinterpretq_f64_f32(zip1),
-          )),
-        },
-        y: Vec4f32 {
-          simd: vreinterpretq_f32_f64(vzip2q_f64(
-            vreinterpretq_f64_f32(zip0),
-            vreinterpretq_f64_f32(zip1),
-          )),
-        },
-        z: Vec4f32 {
-          simd: vreinterpretq_f32_f64(vzip1q_f64(
-            vreinterpretq_f64_f32(zip2),
-            vreinterpretq_f64_f32(zip3),
-          )),
-        },
-        w: Vec4f32 {
-          simd: vreinterpretq_f32_f64(vzip2q_f64(
-            vreinterpretq_f64_f32(zip2),
-            vreinterpretq_f64_f32(zip3),
-          )),
-        },
+        x: Vec4f32::from_neon(vreinterpretq_f32_f64(vzip1q_f64(
+          vreinterpretq_f64_f32(zip0),
+          vreinterpretq_f64_f32(zip1),
+        ))),
+        y: Vec4f32::from_neon(vreinterpretq_f32_f64(vzip2q_f64(
+          vreinterpretq_f64_f32(zip0),
+          vreinterpretq_f64_f32(zip1),
+        ))),
+        z: Vec4f32::from_neon(vreinterpretq_f32_f64(vzip1q_f64(
+          vreinterpretq_f64_f32(zip2),
+          vreinterpretq_f64_f32(zip3),
+        ))),
+        w: Vec4f32::from_neon(vreinterpretq_f32_f64(vzip2q_f64(
+          vreinterpretq_f64_f32(zip2),
+          vreinterpretq_f64_f32(zip3),
+        ))),
       }
     }
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
       Self {
-        x: Vec4f32 {
-          data: [
-            self.x.data[0],
-            self.y.data[0],
-            self.z.data[0],
-            self.w.data[0],
-          ],
-        },
-        y: Vec4f32 {
-          data: [
-            self.x.data[1],
-            self.y.data[1],
-            self.z.data[1],
-            self.w.data[1],
-          ],
-        },
-        z: Vec4f32 {
-          data: [
-            self.x.data[2],
-            self.y.data[2],
-            self.z.data[2],
-            self.w.data[2],
-          ],
-        },
-        w: Vec4f32 {
-          data: [
-            self.x.data[3],
-            self.y.data[3],
-            self.z.data[3],
-            self.w.data[3],
-          ],
-        },
+        x: Vec4f32::from_array([
+          self.x.data[0],
+          self.y.data[0],
+          self.z.data[0],
+          self.w.data[0],
+        ]),
+        y: Vec4f32::from_array([
+          self.x.data[1],
+          self.y.data[1],
+          self.z.data[1],
+          self.w.data[1],
+        ]),
+        z: Vec4f32::from_array([
+          self.x.data[2],
+          self.y.data[2],
+          self.z.data[2],
+          self.w.data[2],
+        ]),
+        w: Vec4f32::from_array([
+          self.x.data[3],
+          self.y.data[3],
+          self.z.data[3],
+          self.w.data[3],
+        ]),
       }
     }
   }
@@ -292,14 +268,45 @@ impl SquareMatrix for Mat4x4f32 {
   }
 
   fn determinant(self) -> Self::Scalar {
-    todo!()
+    // SIMD appproach: compute 2x2 determinants in parallel with lots of shuffles.
+    // unless required, I won't do that now
+    self.scalar_determinant()
   }
 
   fn inverse(self) -> Option<Self>
   where
     Self::Scalar: crate::math::FloatLike,
   {
-    todo!()
+    let (det, adjugate) = self.scalar_det_and_adjugate();
+    if det.abs() <= 1e-8 {
+      return None;
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+      let inv_det = _mm_set1_ps(1.0f32 / det);
+      Some(Self {
+        x: Vec4f32::from_sse(_mm_mul_ps(adjugate.x.simd, inv_det)),
+        y: Vec4f32::from_sse(_mm_mul_ps(adjugate.y.simd, inv_det)),
+        z: Vec4f32::from_sse(_mm_mul_ps(adjugate.z.simd, inv_dev)),
+        w: Vec4f32::from_sse(_mm_mul_ps(adjugate.w.simd, inv_det)),
+      })
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+      let inv_det = vdupq_n_f32(1.0f32 / det);
+      Some(Self {
+        x: Vec4f32::from_neon(vmulq_f32(adjugate.x.simd, inv_det)),
+        y: Vec4f32::from_neon(vmulq_f32(adjugate.y.simd, inv_det)),
+        z: Vec4f32::from_neon(vmulq_f32(adjugate.z.simd, inv_det)),
+        w: Vec4f32::from_neon(vmulq_f32(adjugate.w.simd, inv_det)),
+      })
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+      let inv_dev = 1.0f32 / det;
+      Some(adjugate.scale_all(inv_det))
+    }
   }
 }
 
@@ -319,9 +326,7 @@ impl MatrixVectorMul for Mat4x4f32 {
       let m2 = _mm_mul_ps(self.z.simd, vz);
       let m3 = _mm_mul_ps(self.w.simd, vw);
 
-      Vec4f32 {
-        simd: _mm_add_ps(_mm_add_ps(m0, m1), _mm_add_ps(m2, m3)),
-      }
+      Vec4f32::from_sse(_mm_add_ps(_mm_add_ps(m0, m1), _mm_add_ps(m2, m3)))
     }
     #[cfg(target_arch = "aarch64")]
     unsafe {
@@ -334,26 +339,24 @@ impl MatrixVectorMul for Mat4x4f32 {
     }
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
-      Vec4f32 {
-        data: [
-          self.x.data[0] * v.data[0]
-            + self.y.data[0] * v.data[1]
-            + self.z.data[0] * v.data[2]
-            + self.w.data[0] * v.data[3],
-          self.x.data[1] * v.data[0]
-            + self.y.data[1] * v.data[1]
-            + self.z.data[1] * v.data[2]
-            + self.w.data[1] * v.data[3],
-          self.x.data[2] * v.data[0]
-            + self.y.data[2] * v.data[1]
-            + self.z.data[2] * v.data[2]
-            + self.w.data[2] * v.data[3],
-          self.x.data[3] * v.data[0]
-            + self.y.data[3] * v.data[1]
-            + self.z.data[3] * v.data[2]
-            + self.w.data[3] * v.data[3],
-        ],
-      }
+      Vec4f32::from_array([
+        self.x.data[0] * v.data[0]
+          + self.y.data[0] * v.data[1]
+          + self.z.data[0] * v.data[2]
+          + self.w.data[0] * v.data[3],
+        self.x.data[1] * v.data[0]
+          + self.y.data[1] * v.data[1]
+          + self.z.data[1] * v.data[2]
+          + self.w.data[1] * v.data[3],
+        self.x.data[2] * v.data[0]
+          + self.y.data[2] * v.data[1]
+          + self.z.data[2] * v.data[2]
+          + self.w.data[2] * v.data[3],
+        self.x.data[3] * v.data[0]
+          + self.y.data[3] * v.data[1]
+          + self.z.data[3] * v.data[2]
+          + self.w.data[3] * v.data[3],
+      ])
     }
   }
 }
@@ -385,10 +388,104 @@ impl Matrix4 for Mat4x4f32 {
 }
 
 impl Mat4x4f32 {
-  // Scalar helper to compute deternimante with laplace expansion
+  /// Helper: Scalar default 4x4 determinant with Laplace expansion
   #[inline]
   fn scalar_determinant(&self) -> f32 {
-    // elements for readability
-    let m00 = self
+    // elements for readability (row, column)
+    let (m00, m10, m20, m30) = (self[(0, 0)], self[(1, 0)], self[(2, 0)], self[(3, 0)]);
+    let (m01, m11, m21, m31) = (self[(0, 1)], self[(1, 1)], self[(2, 1)], self[(3, 1)]);
+    let (m02, m12, m22, m32) = (self[(0, 2)], self[(1, 2)], self[(2, 2)], self[(3, 2)]);
+    let (m03, m13, m23, m33) = (self[(0, 3)], self[(1, 3)], self[(2, 3)], self[(3, 3)]);
+
+    let coef00 = m22 * m33 - m23 * m32;
+    let coef20 = m21 * m33 - m23 * m31;
+    let coef30 = m21 * m32 - m22 * m31;
+    let coef40 = m12 * m33 - m13 * m32;
+    let coef60 = m11 * m33 - m13 * m31;
+    let coef70 = m11 * m32 - m12 * m31;
+    let coef80 = m12 * m23 - m13 * m22;
+    let coef10 = m11 * m23 - m13 * m21;
+    let coef11 = m11 * m22 - m12 * m21;
+
+    let fac0 = coef00 * m11 - coef20 * m12 + coef30 * m13;
+    let fac1 = coef00 * m01 - coef20 * m02 + coef30 * m03;
+    let fac2 = coef40 * m10 - coef60 * m02 + coef70 * m03;
+    let fac3 = coef80 * m10 - coef10 * m02 + coef11 * m03;
+
+    m00 * fac0 - m10 * fac1 + m20 * fac2 - m30 * fac3
+  }
+
+  /// Helper: computes the adjugate matrix (required for inverse) and the deternimant at same time
+  #[inline]
+  fn scalar_det_and_adjugate(&self) -> (f32, Self) {
+    let (x0, x1, x2, x3) = (self.x[0], self.x[1], self.x[2], self.x[3]);
+    let (y0, y1, y2, y3) = (self.y[0], self.y[1], self.y[2], self.y[3]);
+    let (z0, z1, z2, z3) = (self.z[0], self.z[1], self.z[2], self.z[3]);
+    let (w0, w1, w2, w3) = (self.w[0], self.w[1], self.w[2], self.w[3]);
+
+    // cofactors "c(row, column)" of pivot
+    let c00 = x0 * y1 - x1 * y0;
+    let c10 = x0 * y2 - x2 * y0;
+    let c20 = x0 * y3 - x3 * y0;
+    let c30 = x1 * y2 - x2 * y1;
+    let c40 = x1 * y3 - x3 * y1;
+    let c50 = x2 * y3 - x3 * y2;
+
+    let s00 = z0 * w1 - z1 * w0;
+    let s10 = z0 * w2 - z2 * w0;
+    let s20 = z0 * w3 - z3 * w0;
+    let s30 = z1 * w2 - z2 * w1;
+    let s40 = z1 * w3 - z3 * w1;
+    let s50 = z2 * w3 - z3 * w2;
+
+    // please let it be correct
+    let det = c00 * s50 - c10 * s40 + c20 * s30 + c30 * s20 - c40 * s10 + c50 * s00;
+    let adjugate = Self {
+      x: <Vec4f32 as Vector4>::from_components(
+        y1 * s50 - y2 * s40 + y3 * s30,
+        -x1 * s50 - x2 * s40 - x3 * s30,
+        w1 * c50 - w2 * c40 + w3 * c30,
+        -z1 * c50 + z2 * c40 - z3 * c30,
+      ),
+      y: <Vec4f32 as Vector4>::from_components(
+        -y0 * s50 + y2 * s20 - y3 * s10,
+        x0 * s50 - x2 * s20 + x3 * s10,
+        -w0 * c50 - w2 * c20 - w3 * c10,
+        z0 * c50 - z2 * c20 + z3 * c10,
+      ),
+      z: <Vec4f32 as Vector4>::from_components(
+        y0 * s40 - y1 * s20 + y3 * s00,
+        -x0 * s40 + x1 * s20 - x3 * s00,
+        w0 * c40 - w1 * c20 + w3 * c00,
+        -z0 * c40 + z1 * c20 - z3 * c00,
+      ),
+      w: <Vec4f32 as Vector4>::from_components(
+        -y0 * s30 + y1 * s10 - y2 * s00,
+        x0 * s30 - x1 * s10 + x2 * s00,
+        -w0 * c30 + w1 * c10 - w2 * c00,
+        z0 * c30 - z1 * c10 + z2 * c00,
+      ),
+    };
+    (det, adjugate)
+  }
+
+  /// Helper: scales all elements by a scalar
+  #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+  #[inline]
+  fn scale_all(self, s: f32) -> Self {
+    Self {
+      x: Vec4f32 {
+        data: [s * self.x[0], s * self.x[1], s * self.x[2], s * self.x[3]],
+      },
+      y: Vec4f32 {
+        data: [s * self.y[0], s * self.y[1], s * self.y[2], s * self.y[3]],
+      },
+      z: Vec4f32 {
+        data: [s * self.z[0], s * self.z[1], s * self.z[2], s * self.z[3]],
+      },
+      w: Vec4f32 {
+        data: [s * self.w[0], s * self.w[1], s * self.w[2], s * self.w[3]],
+      },
+    }
   }
 }

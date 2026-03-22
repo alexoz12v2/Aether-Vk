@@ -5,7 +5,7 @@ use crate::math::{
   floating::{BitsStorage, FloatBits, FloatOps},
 };
 
-pub(super) trait Interval<T: FloatOps + FloatBits>:
+pub trait Interval<T: FloatOps + FloatBits>:
   Scalar + ops::Index<usize, Output = T> + ops::IndexMut<usize, Output = T>
 {
   fn new(low: T, high: T) -> Self;
@@ -44,7 +44,7 @@ pub(super) trait Interval<T: FloatOps + FloatBits>:
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct FloatInterval<T: FloatOps + FloatBits> {
+pub struct FloatInterval<T: FloatOps + FloatBits> {
   pub low: T,
   pub high: T,
 }
@@ -356,14 +356,18 @@ impl<T> MulAddIdentity for FloatInterval<T>
 where
   T: FloatBits + FloatOps,
 {
-  const ONE: Self = Self {
-    low: T::ZERO,
-    high: T::ZERO,
-  };
-  const ZERO: Self = Self {
-    low: T::ONE,
-    high: T::ONE,
-  };
+  fn one() -> Self {
+    Self {
+      low: T::one(),
+      high: T::one(),
+    }
+  }
+  fn zero() -> Self {
+    Self {
+      low: T::zero(),
+      high: T::zero(),
+    }
+  }
 }
 
 impl<T> FloatLike for FloatInterval<T>
@@ -408,15 +412,43 @@ where
   }
 
   fn sqrt(self) -> Self {
-    todo!()
+    debug_assert!(self.low >= T::zero());
+    Self {
+      low: self.low.sqrt_round_down(false),
+      high: self.high.sqrt_round_up(false),
+    }
   }
 
   fn cos(self) -> Self {
-    todo!()
+    (self + Self::from_scalar(T::PI_OVER_2)).sin()
   }
 
   fn sin(self) -> Self {
-    todo!()
+    if self.low >= self.high {
+      return Self::from_scalar(self.low.sin());
+    }
+    if self.high - self.low >= T::from_i32(2) * T::PI {
+      return Self {
+        low: -T::one(),
+        high: T::one(),
+      };
+    }
+    let sin_low = self.low.sin();
+    let sin_high = self.high.sin();
+    let (mut min, mut max) = if sin_low > sin_high {
+        (sin_high, sin_low)
+    } else {
+        (sin_low, sin_high)
+    };
+
+    if (self.low / (T::from_i32(2) * T::PI) - T::from_f32(0.25)).floor() < (self.high / (T::from_i32(2) * T::PI) - T::from_f32(0.25)).floor() {
+        max = T::one();
+    }
+    if (self.low / (T::from_i32(2) * T::PI) - T::from_f32(0.75)).floor() < (self.high / (T::from_i32(2) * T::PI) - T::from_f32(0.75)).floor() {
+        min = -T::one();
+    }
+    
+    Self { low: min, high: max }
   }
 
   fn reciprocal(self) -> Self {
@@ -424,9 +456,36 @@ where
   }
 
   fn tan(self) -> Self {
-    todo!()
+    self.sin() / self.cos()
+  }
+
+  fn pow(self, v: Self) -> Self {
+    debug_assert!(self.low > T::zero());
+    (v * self.ln()).exp()
+  }
+
+  fn exp(self) -> Self {
+    Self {
+      low: self.low.exp_round_down(false),
+      high: self.high.exp_round_up(false),
+    }
+  }
+
+  fn ln(self) -> Self {
+    debug_assert!(self.low > T::zero());
+    Self {
+      low: self.low.ln_round_down(false),
+      high: self.high.ln_round_up(false),
+    }
+  }
+
+  fn floor(self) -> Self {
+    Self {
+        low: self.low.floor(),
+        high: self.high.floor(),
+    }
   }
 }
 
-pub(super) type Interval32 = FloatInterval<f32>;
-pub(super) type Interval64 = FloatInterval<f64>;
+pub type Interval32 = FloatInterval<f32>;
+pub type Interval64 = FloatInterval<f64>;

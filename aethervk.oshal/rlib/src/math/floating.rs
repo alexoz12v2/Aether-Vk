@@ -88,18 +88,18 @@ pub trait FloatOps: Sized + super::FloatLike {
       self
     } else {
       // -0 -> +0, such that increments goes to next subnormal
-      let val = if self == Self::ZERO && self.is_sign_negative() {
-        Self::ZERO
+      let val = if self == Self::zero() && self.is_sign_negative() {
+        Self::zero()
       } else {
         self
       };
 
       if allow_subnormal {
         let mut bits = val.to_bits();
-        if val >= Self::ZERO {
-          bits = bits + <<Self as BitsStorage>::Bits as MulAddIdentity>::ONE;
+        if val >= Self::zero() {
+          bits = bits + <<Self as BitsStorage>::Bits as MulAddIdentity>::one();
         } else {
-          bits = bits - <<Self as BitsStorage>::Bits as MulAddIdentity>::ONE;
+          bits = bits - <<Self as BitsStorage>::Bits as MulAddIdentity>::one();
         }
 
         Self::from_bits(bits)
@@ -126,17 +126,17 @@ pub trait FloatOps: Sized + super::FloatLike {
       self
     } else {
       // +0 -> -0, as decrementing zero requires it to be -0 first in standard IEEE 754
-      let val = if self == Self::ZERO {
+      let val = if self == Self::zero() {
         Self::NEGATIVE_ZERO
       } else {
         self
       };
       if allow_subnormal {
         let mut bits = val.to_bits();
-        if val > Self::ZERO {
-          bits = bits - <<Self as BitsStorage>::Bits as MulAddIdentity>::ONE;
+        if val > Self::zero() {
+          bits = bits - <<Self as BitsStorage>::Bits as MulAddIdentity>::one();
         } else {
-          bits = bits + <<Self as BitsStorage>::Bits as MulAddIdentity>::ONE;
+          bits = bits + <<Self as BitsStorage>::Bits as MulAddIdentity>::one();
         }
 
         Self::from_bits(bits)
@@ -225,7 +225,7 @@ pub trait FloatOps: Sized + super::FloatLike {
     self.fma(mult, added).next_float_up(allow_subnormal)
   }
 
-  fn fma_round_down(self, mult: Self, added: Self, allow_subnormal: bool) -> Self 
+  fn fma_round_down(self, mult: Self, added: Self, allow_subnormal: bool) -> Self
   where
     Self: FloatBits,
     <Self as BitsStorage>::Bits: MulAddIdentity,
@@ -233,11 +233,59 @@ pub trait FloatOps: Sized + super::FloatLike {
     self.fma(mult, added).next_float_down(allow_subnormal)
   }
 
+  fn sqrt_round_up(self, allow_subnormal: bool) -> Self
+  where
+    Self: FloatBits,
+    <Self as BitsStorage>::Bits: MulAddIdentity,
+  {
+    self.sqrt().next_float_up(allow_subnormal)
+  }
+
+  fn sqrt_round_down(self, allow_subnormal: bool) -> Self
+  where
+    Self: FloatBits,
+    <Self as BitsStorage>::Bits: MulAddIdentity,
+  {
+    self.sqrt().next_float_down(allow_subnormal)
+  }
+
+  fn exp_round_up(self, allow_subnormal: bool) -> Self
+  where
+    Self: FloatBits,
+    <Self as BitsStorage>::Bits: MulAddIdentity,
+  {
+    self.exp().next_float_up(allow_subnormal)
+  }
+
+  fn exp_round_down(self, allow_subnormal: bool) -> Self
+  where
+    Self: FloatBits,
+    <Self as BitsStorage>::Bits: MulAddIdentity,
+  {
+    self.exp().next_float_down(allow_subnormal)
+  }
+
+  fn ln_round_up(self, allow_subnormal: bool) -> Self
+  where
+    Self: FloatBits,
+    <Self as BitsStorage>::Bits: MulAddIdentity,
+  {
+    self.ln().next_float_up(allow_subnormal)
+  }
+
+  fn ln_round_down(self, allow_subnormal: bool) -> Self
+  where
+    Self: FloatBits,
+    <Self as BitsStorage>::Bits: MulAddIdentity,
+  {
+    self.ln().next_float_down(allow_subnormal)
+  }
+
   // --------------------- Helpers ---------------------------------------
   fn gamma(n: i32) -> Self {
     let n = Self::from_i32(n);
     let eps = Self::EPSILON;
-    (n * eps) / (Self::ONE - n * eps)
+    (n * eps) / (Self::one() - n * eps)
   }
 
   fn abs(self) -> Self
@@ -279,13 +327,13 @@ pub trait FloatOps: Sized + super::FloatLike {
   // TODO See Higham for better solution
   fn quadratic(a: Self, b: Self, c: Self) -> Option<(Self, Self)> {
     let discrim = b * b - Self::from_i32(4) * a * c;
-    if discrim < Self::ZERO {
+    if discrim < Self::zero() {
       return None;
     }
 
     let root = discrim.sqrt();
     // given b's sign, compute directly solution without cancellation
-    let q = if b < Self::ZERO {
+    let q = if b < Self::zero() {
       -Self::from_i32(1) * (b - root) * Self::from_i32(1) / Self::from_i32(2)
     } else {
       -Self::from_i32(1) * (b + root) * Self::from_i32(1) / Self::from_i32(2)

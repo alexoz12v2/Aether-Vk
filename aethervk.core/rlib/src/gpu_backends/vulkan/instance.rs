@@ -15,7 +15,7 @@ pub(super) struct Instance {
   #[cfg(debug_assertions)]
   debug_messenger: vk::DebugUtilsMessengerEXT,
 
-  entry_wrapper: utils::EntryWrapper,
+  pub entry_wrapper: utils::EntryWrapper,
 }
 
 impl Instance {

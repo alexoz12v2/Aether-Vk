@@ -1,0 +1,604 @@
+// this is a no_std module. if we need to use os-specific stuff, eg objc2-* libraries, windows crate, libc crate,
+// we can go through the oshal rlib, expose a function/struct, and then come back here.
+// since oshal and core are then exposed to cdylibs, each with their own instance of an Allocator,
+// we should never take ownership or return allocated stuff to cdylib interface.
+use alloc::vec::Vec;
+use aethervk_oshal_rlib::os::fs::{self, FileSystemObject, PathBuf};
+use bitflags::bitflags;
+use ktx2;
+use polyhedral_mass_properties::{MassProperties, TriangleContrib};
+use zune_core::bytestream::ZCursor;
+use zune_jpeg;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Vertex {
+  pub position: [f32; 3],
+  pub normal: [f32; 3],
+  pub uv: [f32; 2],
+  pub tangent: [f32; 4],
+}
+
+impl core::hash::Hash for Vertex {
+  fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+    self.position.iter().for_each(|f| f.to_bits().hash(state));
+    self.normal.iter().for_each(|f| f.to_bits().hash(state));
+    self.uv.iter().for_each(|f| f.to_bits().hash(state));
+    self.tangent.iter().for_each(|f| f.to_bits().hash(state));
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum TexelFormat {
+  // Basic formats
+  R8_UNORM,
+  R8G8_UNORM,
+  R8G8B8_UNORM,
+  R8G8B8A8_UNORM,
+  // Compressed
+  BC7_UNORM_BLOCK,
+  ETC2_R8G8B8_UNORM_BLOCK,
+  ASTC_4x4_UNORM_BLOCK,
+  // Catch-all for other formats
+  Unsupported(u32),
+  Undefined,
+}
+
+impl TexelFormat {
+  pub fn to_vk_format(self) -> ash::vk::Format {
+    use ash::vk;
+    match self {
+      TexelFormat::R8_UNORM => vk::Format::R8_UNORM,
+      TexelFormat::R8G8_UNORM => vk::Format::R8G8_UNORM,
+      TexelFormat::R8G8B8_UNORM => vk::Format::R8G8B8_UNORM,
+      TexelFormat::R8G8B8A8_UNORM => vk::Format::R8G8B8A8_UNORM,
+      TexelFormat::BC7_UNORM_BLOCK => vk::Format::BC7_UNORM_BLOCK,
+      TexelFormat::ETC2_R8G8B8_UNORM_BLOCK => vk::Format::ETC2_R8G8B8_UNORM_BLOCK,
+      TexelFormat::ASTC_4x4_UNORM_BLOCK => vk::Format::ASTC_4X4_UNORM_BLOCK,
+      TexelFormat::Unsupported(vk_format_val) => vk::Format::from_raw(vk_format_val as i32),
+      TexelFormat::Undefined => vk::Format::UNDEFINED,
+    }
+  }
+
+  pub fn from_vk_format(vk_format: u32) -> Self {
+    use ash::vk;
+    match vk::Format::from_raw(vk_format as i32) {
+      vk::Format::R8_UNORM => TexelFormat::R8_UNORM,
+      vk::Format::R8G8_UNORM => TexelFormat::R8G8_UNORM,
+      vk::Format::R8G8B8_UNORM => TexelFormat::R8G8B8_UNORM,
+      vk::Format::R8G8B8A8_UNORM => TexelFormat::R8G8B8A8_UNORM,
+      vk::Format::BC7_UNORM_BLOCK => TexelFormat::BC7_UNORM_BLOCK,
+      vk::Format::ETC2_R8G8B8_UNORM_BLOCK => TexelFormat::ETC2_R8G8B8_UNORM_BLOCK,
+      vk::Format::ASTC_4X4_UNORM_BLOCK => TexelFormat::ASTC_4x4_UNORM_BLOCK,
+      vk::Format::UNDEFINED => TexelFormat::Undefined,
+      _ => TexelFormat::Unsupported(vk_format),
+    }
+  }
+}
+
+pub struct Texture {
+  pub data: Vec<u8>,
+  pub format: TexelFormat,
+  pub width: u32,
+  pub height: u32,
+  pub has_mipmaps: bool,
+}
+
+pub struct Comet {
+  pub vertices: Vec<Vertex>,
+  pub indices: Vec<u32>,
+  pub albedo_map: Option<Texture>,
+  pub normal_map: Option<Texture>,
+  pub roughness_map: Option<Texture>,
+  pub ao_map: Option<Texture>,
+  /// mass, inertia_tensor, center_of_mass stored here as f64 (TODO Accessors)
+  /// from this field, all other accessors are computed, plus conversion
+  /// to any other scalar numeric format declared in oshal library, to support mixed precision simulation
+  mass_properties: MassProperties,
+}
+
+impl PartialEq for Comet {
+  fn eq(&self, other: &Self) -> bool {
+    self.vertices == other.vertices && self.indices == other.indices
+  }
+}
+
+impl core::fmt::Debug for Comet {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    f.debug_struct("Comet")
+      .field("vertices", &self.vertices.len())
+      .field("indices", &self.indices.len())
+      .finish()
+  }
+}
+
+#[derive(Debug)]
+pub enum CometLoadError {
+  PathNotFound,
+  TextureNotFound,
+  TooLarge,
+  AnimationsNotSupported,
+  MultipleMeshesNotSupported,
+  NotWatertight,
+  UnsupportedPrimitiveMode,
+  UnsupportedImageFormat,
+  ImageDecodingError,
+  UnsupportedNormalData,
+  GltfImportError(gltf::Error),
+  IoError,
+  MissingBuffer,
+}
+
+impl From<fs::FsError> for CometLoadError {
+  fn from(_: fs::FsError) -> Self {
+    CometLoadError::IoError
+  }
+}
+
+fn get_texture_data(
+  source: gltf::image::Source,
+  base_path: &PathBuf,
+  blob: Option<&[u8]>,
+) -> Result<Option<Texture>, CometLoadError> {
+  let (encoded_data, mime_type, uri_path) = match source {
+    gltf::image::Source::View { view, mime_type } => {
+      if view.buffer().index() != 0 {
+        return Ok(None); // We only support the main binary blob for embedded
+      }
+      let blob = blob.ok_or(CometLoadError::MissingBuffer)?;
+      let start = view.offset();
+      let end = start + view.length();
+      (blob[start..end].to_vec(), Some(mime_type), None)
+    }
+    gltf::image::Source::Uri { uri, mime_type } => {
+      let path = base_path.join(uri);
+      let data = fs::read(path.as_ref()).map_err(|_| CometLoadError::TextureNotFound)?;
+      (data, mime_type, Some(path))
+    }
+  };
+
+  let (decoded_data, format, width, height, has_mipmaps) = if let Some(mime) = mime_type {
+    match mime {
+      "image/jpeg" => {
+        let mut decoder = zune_jpeg::JpegDecoder::new(ZCursor::new(&encoded_data));
+        let info = decoder.info().ok_or(CometLoadError::ImageDecodingError)?;
+        let data = decoder
+          .decode()
+          .map_err(|_| CometLoadError::ImageDecodingError)?;
+        let format = match info.components {
+          1 => TexelFormat::R8_UNORM,
+          3 => TexelFormat::R8G8B8_UNORM,
+          4 => TexelFormat::R8G8B8A8_UNORM,
+          _ => return Err(CometLoadError::UnsupportedImageFormat),
+        };
+        (data, format, info.width as u32, info.height as u32, false)
+      }
+      "image/png" => {
+        let (header, image_data) =
+          png_decoder::decode(&encoded_data).map_err(|_| CometLoadError::ImageDecodingError)?;
+        if header.bit_depth != png_decoder::BitDepth::Eight
+          || (header.color_type != png_decoder::ColorType::RgbAlpha
+            && header.color_type != png_decoder::ColorType::Grayscale)
+          || header.interlace_method != png_decoder::InterlaceMethod::None
+        {
+          return Err(CometLoadError::UnsupportedImageFormat);
+        }
+
+        (
+          image_data.into_flattened(),
+          if header.color_type == png_decoder::ColorType::RgbAlpha {
+            TexelFormat::R8G8B8A8_UNORM
+          } else {
+            TexelFormat::R8_UNORM
+          },
+          header.width,
+          header.height,
+          false,
+        )
+      }
+      _ => return Err(CometLoadError::UnsupportedImageFormat),
+    }
+  } else if let Some(path) = uri_path {
+    if path
+      .extension()
+      .map(|s| s.as_ref() == "ktx2")
+      .unwrap_or(false)
+    {
+      let reader =
+        ktx2::Reader::new(&encoded_data).map_err(|_| CometLoadError::ImageDecodingError)?;
+      let header = reader.header();
+      let mip_level_count = reader.levels().len();
+      if mip_level_count != 1 {
+        return Err(CometLoadError::UnsupportedImageFormat);
+      }
+      let data = unsafe { reader.levels().take(1).next().unwrap_unchecked() }.data;
+
+      let vk_format = header.format.ok_or(CometLoadError::ImageDecodingError)?;
+      (
+        data.to_vec(),
+        TexelFormat::from_vk_format(vk_format.value()),
+        header.pixel_width,
+        header.pixel_height,
+        header.level_count > 1,
+      )
+    } else {
+      return Err(CometLoadError::UnsupportedImageFormat);
+    }
+  } else {
+    return Err(CometLoadError::UnsupportedImageFormat);
+  };
+
+  // TODO: watertight check, triangulated check, normal check, ...
+
+  Ok(Some(Texture {
+    data: decoded_data,
+    format,
+    width,
+    height,
+    has_mipmaps,
+  }))
+}
+
+fn calculate_mass_properties(
+  vertices: &[Vertex],
+  indices: &[u32],
+  total_mass: f32,
+) -> MassProperties {
+  let points: Vec<[f64; 3]> = vertices
+    .iter()
+    .map(|v| {
+      [
+        v.position[0] as f64,
+        v.position[1] as f64,
+        v.position[2] as f64,
+      ]
+    })
+    .collect();
+  let tris = indices.chunks_exact(3);
+
+  let contrib_sum = tris
+    .map(|tri| {
+      let p0 = points[tri[0] as usize];
+      let p1 = points[tri[1] as usize];
+      let p2 = points[tri[2] as usize];
+      TriangleContrib::new(p0, p1, p2)
+    })
+    .sum();
+
+  let unit_mass_properties = MassProperties::from_contrib_sum(contrib_sum).unwrap();
+  let volume = unit_mass_properties.volume();
+  let density = total_mass as f64 / volume;
+  unit_mass_properties.with_density(density)
+}
+
+pub fn load_comet_from_gltf(path: &str) -> Result<Comet, CometLoadError> {
+  let mut path_buf = PathBuf::new();
+  path_buf.push(path);
+
+  if !path_buf.is_file() {
+    return Err(CometLoadError::PathNotFound);
+  }
+
+  let base_path = path_buf.parent().unwrap_or_else(PathBuf::new);
+
+  let data = fs::read(path_buf.as_ref())?;
+  let gltf = gltf::Gltf::from_slice(&data).map_err(CometLoadError::GltfImportError)?;
+
+  // Validations
+  if gltf.animations().next().is_some() {
+    return Err(CometLoadError::AnimationsNotSupported);
+  }
+
+  if gltf.meshes().count() > 1 {
+    return Err(CometLoadError::MultipleMeshesNotSupported);
+  }
+
+  let mesh = gltf.meshes().next().ok_or(CometLoadError::PathNotFound)?; // No mesh found
+
+  let mut vertices = Vec::new();
+  let mut indices = Vec::new();
+
+  let mut albedo_map = None;
+  let mut normal_map = None;
+  let mut roughness_map = None;
+  let mut ao_map = None;
+
+  let blob = gltf.blob.as_deref();
+
+  for primitive in mesh.primitives() {
+    if primitive.mode() != gltf::json::mesh::Mode::Triangles {
+      return Err(CometLoadError::UnsupportedPrimitiveMode);
+    }
+
+    let reader = primitive.reader(|buffer| {
+      if buffer.index() == 0 {
+        blob
+      } else {
+        None // We only support one embedded buffer for now
+      }
+    });
+
+    if let (Some(positions), Some(normals), Some(uvs), Some(tangents)) = (
+      reader.read_positions(),
+      reader.read_normals(),
+      reader.read_tex_coords(0).map(|v| v.into_f32()),
+      reader.read_tangents(),
+    ) {
+      for ((position, normal), (uv, tangent)) in positions.zip(normals).zip(uvs.zip(tangents)) {
+        vertices.push(Vertex {
+          position,
+          normal,
+          uv,
+          tangent,
+        });
+      }
+    } else {
+      return Err(CometLoadError::UnsupportedNormalData);
+    }
+
+    if let Some(indices_iter) = reader.read_indices() {
+      indices.extend(indices_iter.into_u32());
+    }
+
+    let material = primitive.material();
+    let pbr = material.pbr_metallic_roughness();
+
+    if let Some(info) = pbr.base_color_texture() {
+      albedo_map = get_texture_data(info.texture().source().source(), &base_path, blob)?;
+    }
+
+    if let Some(info) = material.normal_texture() {
+      normal_map = get_texture_data(info.texture().source().source(), &base_path, blob)?;
+    }
+
+    if let Some(info) = pbr.metallic_roughness_texture() {
+      roughness_map = get_texture_data(info.texture().source().source(), &base_path, blob)?;
+    }
+
+    if let Some(info) = material.occlusion_texture() {
+      ao_map = get_texture_data(info.texture().source().source(), &base_path, blob)?;
+    }
+  }
+
+  let mass_properties = calculate_mass_properties(&vertices, &indices, 1.0); // Assuming total_mass = 1.0 for now
+
+  Ok(Comet {
+    vertices,
+    indices,
+    albedo_map,
+    normal_map,
+    roughness_map,
+    ao_map,
+    mass_properties,
+  })
+}
+
+bitflags! {
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    pub struct TextureFlags: u32 {
+        const ALBEDO    = 1 << 0;
+        const NORMAL    = 1 << 1;
+        const ROUGHNESS = 1 << 2;
+        const AO        = 1 << 3;
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct PushConstants {
+  pub model_view_proj: [[f32; 4]; 4],
+  pub model: [[f32; 4]; 4],
+  pub sun_dir: [f32; 3],
+  pub texture_flags: TextureFlags,
+  pub sun_color: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct CometSpecializationConstants {
+  pub base_albedo_r: f32,
+  pub base_albedo_g: f32,
+  pub base_albedo_b: f32,
+  pub base_roughness: f32,
+  pub base_ao: f32,
+}
+
+impl Default for CometSpecializationConstants {
+  fn default() -> Self {
+    Self {
+      base_albedo_r: 0.04,
+      base_albedo_g: 0.04,
+      base_albedo_b: 0.04,
+      base_roughness: 0.9,
+      base_ao: 1.0,
+    }
+  }
+}
+
+// this is a no_std module. if we need to use os-specific stuff, eg objc2-* libraries, windows crate, libc crate,
+// we can go through the oshal rlib, expose a function/struct, and then come back here.
+// since oshal and core are then exposed to cdylibs, each with their own instance of an Allocator,
+// we should never take ownership or return allocated stuff to cdylib interface.
+
+/*
+ *  Mesh reading:
+- take a gltf directory path
+- ensure path exists and that associated texture resources exist
+- reject file if
+
+-     1. Size mesh + textures too big
+-     2. Any animation/morph targets present
+-     3. More than one mesh present
+-     4. Mesh is not watertight
+-     4.1 Triangularization (or reject if not triangularized)
+-     5. Any geometric normal, whether for faces or for vertex, is converted by corner (meaning attributes are stored per domain like blender)
+-     textures should be associated to a given channel, which is remapped to a semantic meaning according to Oren Nayar model
+- compute, given dimension of spherical bounding box and total mass, per vertex mass and inertia tensor
+  - https://www.cs.upc.edu/~virtual/SGI/docs/3.%20Further%20Reading/Fast%20and%20accurate%20computation%20of%20polyhedral%20mass%20properties.pdf
+- diagonalize inertia tensor and transform object space accordingly
+
+We also need a Render pass abstraction to work with  frame+render path
+
+Render pass is created and cached given a render operation description. It doesn't match if an output attachment format (swapchain image) changes.
+Since we suppose that mesh fits as a whole, we can write a shared host side struct immediately shared by all render backends
+- Windows: IOCP via windows crate
+- Linux: libc + epoll / io_uring
+- MacOS: ?
+
+Once mesh parsing and transformation of object space is done, next is
+- Compute AABB and Bounding Volume Hierarchy in object space through the compute engine interface,
+  in such a way that each node stores the primitive span it references, such that, when the rigidbody is
+  transformed, we can cheaply recompute AABB for each node (or a better approach I'm not aware of)
+
+- the resulting struct is the "host side" backing, over which we'll compute VkBuffers and VkImages with their
+associated descriptor sets,
+- this means that there should be a trait "Renderable" which outputs an associated type which is the Backend specific
+- this means that both ComputeFrontend and RenderFrontend should have a AcceptRenderable trait/function to register/update their renderable state (eg transform or VkBuffer, or change texture)
+
+The following shaders will be used to render the rigidbody/comet body loaded through GLTF with this algorithm:
+// comet.vert
+#version 460
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec2 inUV;
+layout(location = 3) in vec4 inTangent; // Added for Normal Mapping (w is handedness)
+
+// Shared Push Constant block (Exactly 160 bytes)
+layout(push_constant) uniform Push {
+    mat4 modelViewProj; // 64 bytes
+    mat4 model;         // 64 bytes
+    vec3 sunDir;        // 12 bytes
+    uint textureFlags;  // 4 bytes (packs perfectly with vec3)
+    vec4 sunColor;      // 16 bytes
+} push;
+
+layout(location = 0) out vec3 outWorldPos;
+layout(location = 1) out vec2 outUV;
+layout(location = 2) out vec3 outNormal;
+layout(location = 3) out vec3 outTangent;
+layout(location = 4) out vec3 outBitangent;
+
+void main() {
+    vec4 worldPos = push.model * vec4(inPosition, 1.0);
+    outWorldPos = worldPos.xyz;
+    outUV = inUV;
+
+    // Construct the TBN vectors for normal mapping
+    mat3 normalMatrix = mat3(push.model); // Assuming uniform scaling
+    outNormal = normalMatrix * inNormal;
+    outTangent = normalMatrix * inTangent.xyz;
+
+    // Calculate bitangent using the normal, tangent, and handedness sign
+    outBitangent = cross(outNormal, outTangent) * inTangent.w;
+
+    gl_Position = push.modelViewProj * vec4(inPosition, 1.0);
+}
+
+// --- comet.frag ---
+#version 460
+layout(location = 0) in vec3 inWorldPos;
+layout(location = 1) in vec2 inUV;
+layout(location = 2) in vec3 inNormal;
+layout(location = 3) in vec3 inTangent;
+layout(location = 4) in vec3 inBitangent;
+
+layout(location = 0) out vec4 outColor;
+
+// Texture bindings
+layout(binding = 0) uniform sampler2D albedoMap;
+layout(binding = 1) uniform sampler2D normalMap;
+layout(binding = 2) uniform sampler2D roughnessMap;
+layout(binding = 3) uniform sampler2D aoMap;
+
+layout(push_constant) uniform Push {
+    mat4 modelViewProj;
+    mat4 model;
+    vec3 sunDir;
+    uint textureFlags;
+    vec4 sunColor;
+} push;
+
+// --- Specialization Constants ---
+// Note: GLSL requires these to be scalar types.
+layout(constant_id = 0) const float BASE_ALBEDO_R = 0.04;
+layout(constant_id = 1) const float BASE_ALBEDO_G = 0.04;
+layout(constant_id = 2) const float BASE_ALBEDO_B = 0.04;
+layout(constant_id = 3) const float BASE_ROUGHNESS = 0.9;
+layout(constant_id = 4) const float BASE_AO = 1.0;
+
+// Bitfield definitions
+const uint FLAG_ALBEDO    = 1u << 0;
+const uint FLAG_NORMAL    = 1u << 1;
+const uint FLAG_ROUGHNESS = 1u << 2;
+const uint FLAG_AO        = 1u << 3;
+
+// Oren-Nayar approximation
+vec3 orenNayar(vec3 viewDir, vec3 lightDir, vec3 normal, vec3 albedo, float roughness) {
+    float VdotN = max(dot(viewDir, normal), 0.0);
+    float LdotN = max(dot(lightDir, normal), 0.0);
+    float cosThetaI = LdotN;
+    float cosThetaR = VdotN;
+
+    float thetaI = acos(cosThetaI);
+    float thetaR = acos(cosThetaR);
+    float alpha = max(thetaI, thetaR);
+    float beta = min(thetaI, thetaR);
+
+    float roughness2 = roughness * roughness;
+    float A = 1.0 - 0.5 * (roughness2 / (roughness2 + 0.33));
+    float B = 0.45 * (roughness2 / (roughness2 + 0.09));
+
+    vec3 v_perp = normalize(viewDir - normal * VdotN);
+    vec3 l_perp = normalize(lightDir - normal * LdotN);
+    float cosPhi = max(dot(v_perp, l_perp), 0.0);
+
+    return albedo * (A + B * cosPhi * sin(alpha) * tan(beta)) / 3.14159;
+}
+
+void main() {
+    bool useAlbedo    = (push.textureFlags & FLAG_ALBEDO) != 0u;
+    bool useNormal    = (push.textureFlags & FLAG_NORMAL) != 0u;
+    bool useRoughness = (push.textureFlags & FLAG_ROUGHNESS) != 0u;
+    bool useAO        = (push.textureFlags & FLAG_AO) != 0u;
+
+    vec3 V = normalize(-inWorldPos);
+    vec3 lightDir = normalize(push.sunDir);
+    vec3 lightColor = push.sunColor.xyz;
+
+    // Construct base values from specialization constants
+    vec3 albedo = vec3(BASE_ALBEDO_R, BASE_ALBEDO_G, BASE_ALBEDO_B);
+    float roughness = BASE_ROUGHNESS;
+    float ao = BASE_AO;
+    vec3 N = normalize(inNormal);
+
+    if (useAlbedo) {
+        albedo = texture(albedoMap, inUV).rgb;
+    }
+
+    if (useNormal) {
+        vec3 T = normalize(inTangent);
+        vec3 B = normalize(inBitangent);
+        mat3 TBN = mat3(T, B, N);
+
+        vec3 sampledNormal = texture(normalMap, inUV).xyz;
+        sampledNormal = sampledNormal * 2.0 - 1.0;
+        N = normalize(TBN * sampledNormal);
+    }
+
+    if (useRoughness) {
+        roughness = texture(roughnessMap, inUV).r;
+    }
+
+    if (useAO) {
+        ao = texture(aoMap, inUV).r;
+    }
+
+    vec3 diffuse = orenNayar(V, lightDir, N, albedo, roughness);
+
+    outColor = vec4(diffuse * lightColor * ao, 1.0);
+
+GLTF -> Forked submodule in external/gltf
+}
+DO NOT DELETE THESE!
+ */

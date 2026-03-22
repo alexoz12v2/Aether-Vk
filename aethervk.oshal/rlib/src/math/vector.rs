@@ -83,7 +83,7 @@ where
   where
     Self::Scalar: FloatLike,
   {
-    if self.dot(normal) < <Self::Scalar as MulAddIdentity>::ZERO {
+    if self.dot(normal) < <Self::Scalar as MulAddIdentity>::zero() {
       -self
     } else {
       self

@@ -5,7 +5,7 @@ use alloc::{sync, vec::Vec};
 use core::{ptr};
 
 use crate::{
-  gpu_backends::vulkan::device::resources,
+  gpu_backends::vulkan::device::{DeviceResource, resources},
   types::{GpuError, GpuResult, SpscQueue},
 };
 
@@ -53,16 +53,14 @@ const POOL_SIZES: [vk::DescriptorPoolSize; 8] = [
   },
 ];
 
+#[derive(Debug)]
 struct DescriptorPoolsInner {
   recycled_pools: SpscQueue<vk::DescriptorPool>,
   active_pool: vk::DescriptorPool,
 }
 
+#[derive(Debug)]
 pub(super) struct DescriptorPools {
-  device: vk::Device,
-  allocate_descriptor_sets: PFN_vkAllocateDescriptorSets,
-  create_descriptor_pool: PFN_vkCreateDescriptorPool,
-  reset_descriptor_pool: PFN_vkResetDescriptorPool,
   inner: spin::RwLock<DescriptorPoolsInner>,
 }
 
@@ -75,10 +73,6 @@ impl DescriptorPools {
     fixed_capacity_pow2: usize,
   ) -> GpuResult<sync::Arc<Self>> {
     let s = sync::Arc::new(Self {
-      device: device.handle(),
-      allocate_descriptor_sets: device.fp_v1_0().allocate_descriptor_sets,
-      create_descriptor_pool: device.fp_v1_0().create_descriptor_pool,
-      reset_descriptor_pool: device.fp_v1_0().reset_descriptor_pool,
       inner: spin::RwLock::new(DescriptorPoolsInner {
         recycled_pools: SpscQueue::new(fixed_capacity_pow2),
         active_pool: vk::DescriptorPool::null(),
@@ -94,6 +88,7 @@ impl DescriptorPools {
 
   pub(super) fn allocate(
     self: &sync::Arc<Self>,
+    device: &ash::Device,
     layout: vk::DescriptorSetLayout,
     discard_pool: &resources::DiscardPool,
     timeline_value: u64,
@@ -112,8 +107,8 @@ impl DescriptorPools {
         .set_layouts(&layouts);
       match unsafe {
         let mut descriptor_set = vk::DescriptorSet::null();
-        let res = (self.allocate_descriptor_sets)(
-          self.device,
+        let res = (device.fp_v1_0().allocate_descriptor_sets)(
+          device.handle(),
           ptr::from_ref(&alloc_info),
           ptr::from_mut(&mut descriptor_set),
         );
@@ -121,10 +116,9 @@ impl DescriptorPools {
       } {
         Ok(sets) => return Ok(sets),
         Err(vk::Result::ERROR_OUT_OF_POOL_MEMORY | vk::Result::ERROR_FRAGMENTED_POOL) => {
-          drop(inner);
           let mut inner = self.inner.write();
           self.discard_active_pool(&mut inner, discard_pool, timeline_value);
-          inner.ensure_active_pool(self.device, self.create_descriptor_pool)?;
+          inner.ensure_active_pool(device.handle(), device.fp_v1_0().create_descriptor_pool)?;
           // Loop continues to try again with the pool
         }
         Err(e) => return Err(e.into()),
@@ -132,14 +126,18 @@ impl DescriptorPools {
     }
   }
 
-  pub(super) fn recycle(&self, pool: vk::DescriptorPool) {
+  pub(super) fn recycle(&self, device: &ash::Device, pool: vk::DescriptorPool) {
     if pool.is_null() {
       return;
     }
     // TODO: unsuccessful log
     if unsafe {
-      (self.reset_descriptor_pool)(self.device, pool, vk::DescriptorPoolResetFlags::empty())
-        .result()
+      (device.fp_v1_0().reset_descriptor_pool)(
+        device.handle(),
+        pool,
+        vk::DescriptorPoolResetFlags::empty(),
+      )
+      .result()
     }
     .is_ok()
     {
@@ -196,4 +194,21 @@ impl DescriptorPoolsInner {
     }?;
     Ok(())
   }
+}
+
+impl DeviceResource for DescriptorPools {
+  fn cleanup(&mut self, device: &ash::Device) {
+    let inner = self.inner.write();
+    if !inner.active_pool.is_null() {
+      unsafe { device.destroy_descriptor_pool(inner.active_pool, None) };
+    }
+    while let Some(recycled_pool) = inner.recycled_pools.try_pop() {
+      unsafe { device.destroy_descriptor_pool(recycled_pool, None) };
+    }
+  }
+}
+
+pub(super) trait DescriptorPoolsCaller {
+  fn allocate(&self, layout: vk::DescriptorSetLayout) -> GpuResult<vk::DescriptorSet>;
+  fn recycle(&self, pool: vk::DescriptorPool);
 }
