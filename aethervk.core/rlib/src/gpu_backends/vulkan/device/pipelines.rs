@@ -1,18 +1,18 @@
 use core::{
   ffi,
   hash::{Hash, Hasher},
-  marker, ptr,
+  ptr,
 };
-use aethervk_oshal_rlib::hash::{self, FnvHasher};
-use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
-
-use ash::vk::{self, GraphicsPipelineCreateInfo, Handle};
+use aethervk_oshal_rlib::hash::FnvHasher;
+use alloc::vec::Vec;
+use ash::vk;
 use bitflags::bitflags;
 use hashbrown::HashMap;
 
 use crate::{
+  gpu::{PipelineKey, PipelineKeyable},
   gpu_backends::vulkan::{
-    device::{self, DeviceResource},
+    device::{DeviceResource, resources::DiscardPool},
     utils::NonZeroHandle,
   },
   types::GpuResult,
@@ -203,11 +203,16 @@ impl VertexIn {
     self
   }
 
-  pub(super) fn add_binding(&mut self, binding: u32, stride: u32) -> &mut Self {
+  pub(super) fn add_binding(
+    &mut self,
+    binding: u32,
+    stride: u32,
+    input_rate: vk::VertexInputRate,
+  ) -> &mut Self {
     self.bindings.push(
       vk::VertexInputBindingDescription::default()
         .binding(binding)
-        .input_rate(vk::VertexInputRate::VERTEX)
+        .input_rate(input_rate)
         .stride(stride),
     );
     self
@@ -558,20 +563,6 @@ impl GraphicsInfo {
   }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
-pub struct PipelineKey(pub u64);
-
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
-pub struct ShaderModuleKey(pub u64);
-
-pub trait PipelineKeyable {
-  fn pipeline_key(&self) -> PipelineKey;
-}
-
-pub trait ShaderKeyable {
-  fn shader_key(&self) -> ShaderModuleKey;
-}
-
 impl PipelineKeyable for ComputeInfo {
   fn pipeline_key(&self) -> PipelineKey {
     let mut hasher = FnvHasher::new();
@@ -585,54 +576,6 @@ impl PipelineKeyable for GraphicsInfo {
     let mut hasher = FnvHasher::new();
     self.hash(&mut hasher);
     PipelineKey(hasher.finish())
-  }
-}
-
-/// To properly identify a shader, we'll use its stage and SPIR-V Bytes, not its module.
-impl ShaderKeyable for (vk::ShaderStageFlags, &[u32]) {
-  fn shader_key(&self) -> ShaderModuleKey {
-    let mut hasher = FnvHasher::new();
-    self.hash(&mut hasher);
-    ShaderModuleKey(hasher.finish())
-  }
-}
-
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
-pub struct PipelineLayoutKey(pub u64);
-
-impl PipelineLayoutKey {
-  /// Safety: well formed `ash::vk::PipelineLayoutCreateInfo`
-  pub unsafe fn new(layout_create_info: &vk::PipelineLayoutCreateInfo) -> Self {
-    let mut hasher = FnvHasher::new();
-    layout_create_info.set_layout_count.hash(&mut hasher);
-    layout_create_info
-      .push_constant_range_count
-      .hash(&mut hasher);
-    // TODO include possible pnexts
-    for i in 0..layout_create_info.set_layout_count {
-      let set_layout = unsafe {
-        layout_create_info
-          .p_set_layouts
-          .add(i as _)
-          .as_ref()
-          .unwrap_unchecked()
-      };
-      set_layout.as_raw().hash(&mut hasher);
-    }
-    for i in 0..layout_create_info.push_constant_range_count {
-      let push_constant_range = unsafe {
-        layout_create_info
-          .p_push_constant_ranges
-          .add(i as _)
-          .as_ref()
-          .unwrap_unchecked()
-      };
-      push_constant_range.offset.hash(&mut hasher);
-      push_constant_range.size.hash(&mut hasher);
-      push_constant_range.stage_flags.hash(&mut hasher);
-    }
-
-    Self(hasher.finish())
   }
 }
 
@@ -969,10 +912,6 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
 pub(super) struct PipelinePool {
   graphics_pipelines: HashMap<PipelineKey, NonZeroHandle<vk::Pipeline>>,
   compute_pipelines: HashMap<PipelineKey, NonZeroHandle<vk::Pipeline>>,
-  /// caches standard modules and SPIR-V linkin
-  shader_modules: HashMap<ShaderModuleKey, NonZeroHandle<vk::ShaderModule>>,
-  /// cached pipeline layouts
-  pipeline_layouts: HashMap<PipelineLayoutKey, NonZeroHandle<vk::PipelineLayout>>,
   /// underlying vulkan cache object to speed up driver-level compilations
   vk_pipeline_cache: NonZeroHandle<vk::PipelineCache>,
 }
@@ -990,53 +929,56 @@ impl PipelinePool {
     Ok(Self {
       graphics_pipelines: HashMap::with_capacity(16),
       compute_pipelines: HashMap::with_capacity(16),
-      shader_modules: HashMap::with_capacity(16),
-      pipeline_layouts: HashMap::with_capacity(16),
       vk_pipeline_cache,
     })
-  }
-
-  /// Retrieves or compiles a shader module (not owned by caller)
-  /// This supports SPIR-V linking modules (libraries with no entry point)
-  pub fn get_or_create_shader_module(
-    &mut self,
-    device: &ash::Device,
-    key: ShaderModuleKey,
-    spirv_code: &[u32],
-  ) -> GpuResult<NonZeroHandle<vk::ShaderModule>> {
-    if let Some(&module) = self.shader_modules.get(&key) {
-      return Ok(module);
-    }
-
-    let create_info = vk::ShaderModuleCreateInfo::default().code(spirv_code);
-    let module =
-      unsafe { NonZeroHandle::new_unchecked(device.create_shader_module(&create_info, None)?) };
-    unsafe { self.shader_modules.insert_unique_unchecked(key, module) };
-    Ok(module)
-  }
-
-  /// Retrieves or creates a pipeline layout. Returned handles are owned by this struct
-  /// Safety: well formed `ash::vk::PipelineLayoutCreateInfo`
-  pub unsafe fn get_or_create_pipeline_layout(
-    &mut self,
-    device: &ash::Device,
-    create_info: &vk::PipelineLayoutCreateInfo,
-  ) -> GpuResult<NonZeroHandle<vk::PipelineLayout>> {
-    let key = unsafe { PipelineLayoutKey::new(create_info) };
-    if let Some(&layout) = self.pipeline_layouts.get(&key) {
-      return Ok(layout);
-    }
-    let layout =
-      unsafe { NonZeroHandle::new_unchecked(device.create_pipeline_layout(&create_info, None)?) };
-    // Safety: already called `get` and failed
-    unsafe { self.pipeline_layouts.insert_unique_unchecked(key, layout) };
-    Ok(layout)
   }
 
   /// Extract the binary data from the Vulkan Pipeline Cache to save to disk
   pub fn get_cache_data(&self, device: &ash::Device) -> GpuResult<Vec<u8>> {
     let data = unsafe { device.get_pipeline_cache_data(self.vk_pipeline_cache.get()) }?;
     Ok(data)
+  }
+
+  pub fn get_graphics_pipeline(
+    &self,
+    pipeline_key: PipelineKey,
+  ) -> Option<NonZeroHandle<vk::Pipeline>> {
+    self.graphics_pipelines.get(&pipeline_key).copied()
+  }
+
+  pub fn get_compute_pipeline(
+    &self,
+    pipeline_key: PipelineKey,
+  ) -> Option<NonZeroHandle<vk::Pipeline>> {
+    self.compute_pipelines.get(&pipeline_key).copied()
+  }
+
+  pub fn discard_graphics_pipeline_if_present(
+    &mut self,
+    pipeline_key: PipelineKey,
+    discard_pool: &DiscardPool,
+    timeline: u64,
+  ) -> bool {
+    if let Some(pipeline) = self.graphics_pipelines.remove(&pipeline_key) {
+      discard_pool.discard_pipeline(pipeline.get(), timeline);
+      true
+    } else {
+      false
+    }
+  }
+
+  pub fn discard_compute_pipeline_if_present(
+    &mut self,
+    pipeline_key: PipelineKey,
+    discard_pool: &DiscardPool,
+    timeline: u64,
+  ) -> bool {
+    if let Some(pipeline) = self.compute_pipelines.remove(&pipeline_key) {
+      discard_pool.discard_pipeline(pipeline.get(), timeline);
+      true
+    } else {
+      false
+    }
   }
 
   pub fn get_or_create_compute_pipeline(
@@ -1115,34 +1057,7 @@ impl DeviceResource for PipelinePool {
       for (_, pipeline) in self.compute_pipelines.drain() {
         device.destroy_pipeline(pipeline.get(), None);
       }
-      for (_, layout) in self.pipeline_layouts.drain() {
-        device.destroy_pipeline_layout(layout.get(), None);
-      }
-      for (_, module) in self.shader_modules.drain() {
-        device.destroy_shader_module(module.get(), None);
-      }
       device.destroy_pipeline_cache(self.vk_pipeline_cache.get(), None);
     }
   }
-}
-
-pub(super) trait PipelinePoolCaller {
-  fn get_or_create_shader_module(
-    &mut self,
-    key: ShaderModuleKey,
-    spirv_code: &[u32],
-  ) -> GpuResult<NonZeroHandle<vk::ShaderModule>>;
-  fn get_or_create_pipeline_layout(
-    &mut self,
-    create_info: &vk::PipelineLayoutCreateInfo,
-  ) -> GpuResult<NonZeroHandle<vk::PipelineLayout>>;
-  fn get_or_create_compute_pipeline(
-    &mut self,
-    info: &ComputeInfo,
-  ) -> GpuResult<NonZeroHandle<vk::Pipeline>>;
-  fn get_or_create_graphics_pipeline(
-    &mut self,
-    info: &GraphicsInfo,
-  ) -> GpuResult<NonZeroHandle<vk::Pipeline>>;
-  fn get_cache_data(&self) -> GpuResult<Vec<u8>>;
 }

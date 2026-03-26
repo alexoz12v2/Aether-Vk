@@ -5,7 +5,10 @@ use alloc::{sync, vec::Vec};
 use core::{ptr};
 
 use crate::{
-  gpu_backends::vulkan::device::{DeviceResource, resources},
+  gpu_backends::vulkan::{
+    device::{DeviceResource, resources},
+    utils::NonZeroHandle,
+  },
   types::{GpuError, GpuResult, SpscQueue},
 };
 
@@ -92,7 +95,7 @@ impl DescriptorPools {
     layout: vk::DescriptorSetLayout,
     discard_pool: &resources::DiscardPool,
     timeline_value: u64,
-  ) -> GpuResult<vk::DescriptorSet> {
+  ) -> GpuResult<NonZeroHandle<vk::DescriptorSet>> {
     loop {
       let inner = self.inner.read();
       let pool = if inner.active_pool != vk::DescriptorPool::null() {
@@ -114,7 +117,7 @@ impl DescriptorPools {
         );
         res.result_with_success(descriptor_set)
       } {
-        Ok(sets) => return Ok(sets),
+        Ok(sets) => return Ok(unsafe { NonZeroHandle::new_unchecked(sets) }),
         Err(vk::Result::ERROR_OUT_OF_POOL_MEMORY | vk::Result::ERROR_FRAGMENTED_POOL) => {
           let mut inner = self.inner.write();
           self.discard_active_pool(&mut inner, discard_pool, timeline_value);

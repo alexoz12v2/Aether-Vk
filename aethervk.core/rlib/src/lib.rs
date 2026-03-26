@@ -4,6 +4,9 @@
 #[cfg(any(test, feature = "std"))]
 extern crate std;
 
+#[macro_use]
+extern crate static_assertions as sa;
+
 // panic_handler and global allocator declared for non tests at cdylib/FFI level
 extern crate core;
 extern crate alloc;

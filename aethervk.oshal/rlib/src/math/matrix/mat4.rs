@@ -21,6 +21,32 @@ pub struct Mat4x4f32 {
   pub w: Vec4f32,
 }
 
+impl Into<[f32; 16]> for Mat4x4f32 {
+  #[inline]
+  fn into(self) -> [f32; 16] {
+    let mut result: [f32; 16] = [0.0; 16];
+    (&mut result[0..3]).copy_from_slice(&Into::<[f32; 4]>::into(self.x));
+    (&mut result[4..7]).copy_from_slice(&Into::<[f32; 4]>::into(self.y));
+    (&mut result[8..11]).copy_from_slice(&Into::<[f32; 4]>::into(self.z));
+    (&mut result[12..15]).copy_from_slice(&Into::<[f32; 4]>::into(self.w));
+
+    result
+  }
+}
+
+impl Into<[[f32; 4]; 4]> for Mat4x4f32 {
+  #[inline]
+  fn into(self) -> [[f32; 4]; 4] {
+    let mut result: [[f32; 4]; 4] = [[0.0; 4]; 4];
+    result[0] = Into::<[f32; 4]>::into(self.x);
+    result[1] = Into::<[f32; 4]>::into(self.y);
+    result[2] = Into::<[f32; 4]>::into(self.z);
+    result[3] = Into::<[f32; 4]>::into(self.w);
+
+    result
+  }
+}
+
 impl ops::Add<Self> for Mat4x4f32 {
   type Output = Self;
   #[inline]

@@ -89,6 +89,13 @@ where
       self
     }
   }
+
+  fn to_vec4<V>(self, w: Self::Scalar) -> V
+  where
+    V: Vector4<Scalar = Self::Scalar>,
+  {
+    V::from_components(self.x(), self.y(), self.z(), w)
+  }
 }
 
 pub trait Vector4: Vector
@@ -102,5 +109,5 @@ where
   fn w(&self) -> Self::Scalar;
 }
 
-pub mod vec4;
 pub mod vec3;
+pub mod vec4;

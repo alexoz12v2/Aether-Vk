@@ -2,6 +2,7 @@ use core::ops;
 
 use crate::math::{
   FloatLike, MulAddIdentity, Scalar,
+  quaternion::Quaternion,
   vector::{Vector, Vector3, Vector4},
 };
 
@@ -154,6 +155,92 @@ where
     );
     Self::from_columns(c0, c1, c2, c3)
   }
+
+  fn from_mat3<M, V>(m: M) -> Self
+  where
+    M: Matrix3<Scalar = Self::Scalar, Vector = V>,
+    V: Vector3<Scalar = Self::Scalar>,
+  {
+    let _0 = <Self::Scalar as MulAddIdentity>::zero();
+    let _1 = <Self::Scalar as MulAddIdentity>::one();
+    unsafe {
+      let c0 = Self::Vector::from_components(
+        m.column_unchecked(0).x(),
+        m.column_unchecked(1).x(),
+        m.column_unchecked(2).x(),
+        _0,
+      );
+      let c1 = Self::Vector::from_components(
+        m.column_unchecked(0).y(),
+        m.column_unchecked(1).y(),
+        m.column_unchecked(2).y(),
+        _0,
+      );
+      let c2 = Self::Vector::from_components(
+        m.column_unchecked(0).z(),
+        m.column_unchecked(1).z(),
+        m.column_unchecked(2).z(),
+        _0,
+      );
+      let c3 = Self::Vector::from_components(_0, _0, _0, _1);
+      Self::from_columns(c0, c1, c2, c3)
+    }
+  }
+
+  fn from_quat<Q, V>(q: Q) -> Self
+  where
+    Q: Quaternion<Scalar = Self::Scalar, Vector = V>,
+    V: Vector3<Scalar = Self::Scalar>,
+  {
+    // A quaternion is composed of a scalar part 's' and a vector part 'v'.
+    let s = q.scalar_part();
+    let v = q.vector_part();
+    let x = v.x();
+    let y = v.y();
+    let z = v.z();
+
+    let x2 = x + x;
+    let y2 = y + y;
+    let z2 = z + z;
+
+    let xx = x * x2;
+    let xy = x * y2;
+    let xz = x * z2;
+
+    let yy = y * y2;
+    let yz = y * z2;
+    let zz = z * z2;
+
+    let wx = s * x2;
+    let wy = s * y2;
+    let wz = s * z2;
+
+    let one = Self::Scalar::one();
+    let zero = Self::Scalar::zero();
+
+    // Assumes a column-major Matrix4 and a constructor from 4 column vectors.
+    // This is a common convention in Rust 3D math libraries.
+    Self::from_columns(
+      Self::Vector::from_components(one - (yy + zz), xy + wz, xz - wy, zero),
+      Self::Vector::from_components(xy - wz, one - (xx + zz), yz + wx, zero),
+      Self::Vector::from_components(xz + wy, yz - wx, one - (xx + yy), zero),
+      Self::Vector::from_components(zero, zero, zero, one),
+    )
+  }
+
+  fn from_scale<V>(v: V) -> Self
+  where
+    V: Vector3<Scalar = Self::Scalar>,
+  {
+    let _0 = <Self::Scalar as MulAddIdentity>::zero();
+    let _1 = <Self::Scalar as MulAddIdentity>::one();
+    let c0 = Self::Vector::from_components(v.x(), _0, _0, _0);
+    let c1 = Self::Vector::from_components(_0, v.y(), _0, _0);
+    let c2 = Self::Vector::from_components(_0, _0, v.z(), _0);
+    let c3 = Self::Vector::from_components(_0, _0, _0, _1);
+    Self::from_columns(c0, c1, c2, c3)
+  }
 }
 
+pub mod mat3;
 pub mod mat4;

@@ -27,6 +27,31 @@ pub struct Vec4f32 {
   pub data: [f32; 4], // alignment to 16 like other branches
 }
 
+impl Into<[f32; 4]> for Vec4f32 {
+  #[inline]
+  fn into(self) -> [f32; 4] {
+    let mut result: [f32; 4] = [0.0,0.0,0.0,0.0];
+    #[cfg(target_arch = "x86_64")]
+    {
+      unsafe {
+        _mm_storeu_ps(result.as_mut_ptr(), self.simd);
+      }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+      unsafe {
+        vst1q_f32(result.as_mut_ptr(), self.simd);
+      }
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+      result = self.data;
+    }
+
+    result
+  }
+}
+
 impl PartialEq for Vec4f32 {
   #[inline]
   fn eq(&self, other: &Self) -> bool {

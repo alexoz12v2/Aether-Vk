@@ -13,13 +13,13 @@ use crate::{
   types::{EngineResult, GpuError, GpuResult, RuntimeParams, RuntimeParamsIndex},
 };
 
-use alloc::{ffi::CString, string::ToString, sync };
+use alloc::{ffi::CString, string::ToString, sync};
 use ash::vk;
 use heapless::index_map::FnvIndexMap;
 
-pub(super) mod device;
-pub(super) mod instance;
-pub(super) mod utils;
+mod device;
+mod instance;
+mod utils;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ResourceHandle {
@@ -41,6 +41,9 @@ pub(super) struct VulkanCore {
   #[covariant]
   live_devices: FnvIndexMap<RenderDeviceHandle, device::Device<'this>, MAX_DEVICES>,
 }
+
+unsafe impl Sync for VulkanCore {}
+unsafe impl Send for VulkanCore {}
 
 static S_VULKAN_CORE: spin::Mutex<sync::Weak<spin::RwLock<VulkanCore>>> =
   spin::Mutex::new(sync::Weak::new());

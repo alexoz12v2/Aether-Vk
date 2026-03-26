@@ -1,10 +1,5 @@
-use core::{
-  arch::asm,
-  cmp,
-  ops,
-};
+use core::{arch::asm, cmp, ops};
 
-use crate::math::floating::{BitsStorage, FloatBits};
 // target_pointer_width = "64" assumed, as done in lib.rs
 
 /// Helper function to find the minimum between two PartialOrd elements by reference
@@ -58,11 +53,11 @@ macro_rules! v_max {
 pub mod floating;
 
 pub mod extra;
-pub mod scalar_interval;
-pub mod vector_interval;
 pub mod matrix;
 pub mod quaternion;
+pub mod scalar_interval;
 pub mod vector;
+pub mod vector_interval;
 
 pub trait MulAddIdentity {
   fn one() -> Self;
@@ -248,7 +243,7 @@ impl_float_like!(f32, {
   }
 
   fn pow(self, v: f32) -> Self {
-    libm::powf(self, v) 
+    libm::powf(self, v)
   }
 
   fn sin(self) -> Self {
@@ -271,15 +266,15 @@ impl_float_like!(f32, {
     }
     #[cfg(target_arch = "aarch64")]
     {
-      unsafe {
-        asm!(
-          "vrecpe.f32 {out:s}, {num:s}", // fast reciprocal approximation
-          "vrecps.f32 {out:s}, {out:s}, {num:s}", // newton-raphson refinement step
-          out = lateout(vreg) out,
-          num = in(vreg) self,
-          options(pure, nomem, nostack)
-        );
-      }
+       unsafe {
+         asm!(
+           "vrecpe.f32 {out:s}, {num:s}", // fast reciprocal approximation
+           "vrecps.f32 {out:s}, {out:s}, {num:s}", // newton-raphson refinement step
+           out = lateout(vreg) out,
+           num = in(vreg) self,
+           options(pure, nomem, nostack)
+         );
+       }
     }
 
     out

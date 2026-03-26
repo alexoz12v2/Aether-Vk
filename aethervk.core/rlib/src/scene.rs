@@ -33,6 +33,7 @@ pub trait Component: 'static + Send + Sync {}
 // === Component Definitions ===
 
 /// Defines the position, rotation, and scale of an entity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransformComponent {
   pub position: Vec3f32,
   /// Stored as a quaternion.
@@ -68,23 +69,23 @@ impl Component for ImageBillboardComponent {}
 
 /// A particle emitter, defining the properties of particles to be spawned.
 pub struct ParticleEmitterComponent {
-    /// Number of particles to spawn per second.
-    pub rate: f32,
-    /// The lifetime of each particle, in seconds.
-    pub lifetime: f32,
-    /// Initial velocity of spawned particles.
-    pub initial_velocity: Vec3f32,
+  /// Number of particles to spawn per second.
+  pub rate: f32,
+  /// The lifetime of each particle, in seconds.
+  pub lifetime: f32,
+  /// Initial velocity of spawned particles.
+  pub initial_velocity: Vec3f32,
 }
 impl Component for ParticleEmitterComponent {}
 
 /// State of an individual particle in the simulation.
 pub struct ParticleStateComponent {
-    /// The simulation time when the particle was created.
-    pub created_at: f32,
-    /// The total lifetime of this particle.
-    pub lifetime: f32,
-    /// The current velocity of the particle.
-    pub velocity: Vec3f32,
+  /// The simulation time when the particle was created.
+  pub created_at: f32,
+  /// The total lifetime of this particle.
+  pub lifetime: f32,
+  /// The current velocity of the particle.
+  pub velocity: Vec3f32,
 }
 impl Component for ParticleStateComponent {}
 
@@ -92,6 +93,15 @@ impl Component for ParticleStateComponent {}
 pub enum RenderableDataRef<'a> {
   ImageBillboard(&'a ImageBillboardComponent),
   PhysicalMesh(&'a PhysicalMeshComponent),
+}
+
+impl<'a> RenderableDataRef<'a> {
+  pub fn index_count(&self) -> u32 {
+    match self {
+      RenderableDataRef::ImageBillboard(_) => 4,
+      RenderableDataRef::PhysicalMesh(mesh) => mesh.mesh.indices.len() as u32,
+    }
+  }
 }
 
 /// Information about a component for a specific entity.

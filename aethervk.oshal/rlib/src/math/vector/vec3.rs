@@ -12,6 +12,20 @@ use crate::math::vector::{Vector, Vector3, Vector4, vec4::Vec4f32};
 #[derive(Copy, Clone, PartialEq)]
 pub struct Vec3f32(pub Vec4f32);
 
+impl Vec3f32 {
+    #[inline]
+    pub fn from_array(data: [f32; 3]) -> Self {
+        Self(Vec4f32::from_components(data[0], data[1], data[2], 0.0))
+    }
+}
+
+impl Into<[f32; 3]> for Vec3f32 {
+    #[inline]
+    fn into(self) -> [f32; 3] {
+        [self.x(), self.y(), self.z()]
+    }
+}
+
 impl ops::Add for Vec3f32 {
   type Output = Self;
   #[inline]

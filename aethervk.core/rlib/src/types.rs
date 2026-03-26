@@ -68,7 +68,10 @@ pub enum GpuError {
 pub type GpuResult<T> = core::result::Result<T, GpuError>;
 
 #[derive(Debug, Error)]
-pub enum IoError {}
+pub enum IoError {
+  #[error("IO Error")]
+  Failed,
+}
 
 pub type IoResult<T> = core::result::Result<T, IoError>;
 
