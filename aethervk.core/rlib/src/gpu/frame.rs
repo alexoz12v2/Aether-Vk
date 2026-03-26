@@ -1,23 +1,48 @@
-use crate::gpu::{GpuResourceHandle, RenderDevice};
+use crate::gpu::{GpuResourceHandle, PipelineKey, PresentationEngineHandle, RenderDevice};
 use crate::scene::{CameraComponent, EntityId, RenderableDataRef, TransformComponent};
+use crate::simulation::comet::PushConstants;
 use crate::types::GpuResult;
 use alloc::vec::Vec;
+use aethervk_oshal_rlib::math::{
+  matrix::{Matrix4, mat4::Mat4x4f32},
+  vector::{Vector, Vector3, vec3::Vec3f32},
+  quaternion::Quaternion,
+};
 
-// ----------------------------------------------------------------------------
-//                     PER-FRAME RENDERING ABSTRACTION
-// ----------------------------------------------------------------------------
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ResourceUploadResult {
+  /// The pipeline to use for this draw call.
+  pub pipeline: PipelineKey,
+  /// The vertex buffer to bind.
+  pub buffers: GpuResourceHandle,
+}
 
 /// Represents a single draw call with all necessary information.
+#[derive(Clone)]
 pub struct DrawCall {
   /// The pipeline to use for this draw call.
-  pub pipeline: GpuResourceHandle,
+  pub pipeline: PipelineKey,
   /// The vertex buffer to bind.
-  pub vertex_buffer: GpuResourceHandle,
-  /// The index buffer to bind.
-  pub index_buffer: GpuResourceHandle,
-  /// Number of indices to draw.
+  pub buffers: GpuResourceHandle,
+  /// index count
   pub index_count: u32,
-  // In a real scenario, this would also contain descriptor sets for uniforms, textures, etc.
+  /// The transform of the object to draw.
+  pub transform: TransformComponent,
+}
+
+impl DrawCall {
+  fn from_handles_and_transform(
+    result: ResourceUploadResult,
+    index_count: u32,
+    transform: TransformComponent,
+  ) -> Self {
+    Self {
+      pipeline: result.pipeline,
+      buffers: result.buffers,
+      index_count,
+      transform,
+    }
+  }
 }
 
 /// A collection of all draw calls and resources for a single frame.
@@ -40,20 +65,21 @@ impl Frame {
     entity_id: EntityId,
     transform: &TransformComponent,
     renderable: RenderableDataRef,
+    presentation_engine_handle: PresentationEngineHandle,
   ) -> GpuResult<()> {
     self.draw_calls.push(match renderable {
-      RenderableDataRef::ImageBillboard(component) => {
+      RenderableDataRef::ImageBillboard(_component) => {
         todo!();
       }
       RenderableDataRef::PhysicalMesh(component) => {
-        let (pipeline, vertex_buffer, index_buffer) = todo!(); // device.get_or_create_physical_mesh_resources(&component, &transform)
+        let res: ResourceUploadResult = device.get_or_create_physical_mesh_resources(
+          entity_id,
+          &component,
+          &transform,
+          presentation_engine_handle,
+        )?;
         let index_count = component.mesh.indices.len() as u32;
-        DrawCall {
-          pipeline,
-          vertex_buffer,
-          index_buffer,
-          index_count,
-        }
+        DrawCall::from_handles_and_transform(res, index_count, *transform)
       }
     });
     Ok(())
@@ -70,8 +96,7 @@ pub trait RenderPath {
     device: &dyn RenderDevice,
     camera: (&TransformComponent, &CameraComponent),
     frame: &Frame,
-    render_pass: GpuResourceHandle, // Placeholder for render pass abstraction
-                                    // In a real implementation, this would take a command buffer handle.
+    timeline: u64,
   ) -> GpuResult<()>;
 }
 
@@ -84,20 +109,45 @@ impl RenderPath for ForwardRenderPath {
     device: &dyn RenderDevice,
     camera: (&TransformComponent, &CameraComponent),
     frame: &Frame,
-    render_pass: GpuResourceHandle,
+    timeline: u64,
   ) -> GpuResult<()> {
-    // 0. Query system for state for previous render operation, if finished. If not, then you'll wait here
-    todo!();
-    // 1. Begin the render pass.
-    todo!(); // device.renderpass_for_frame(() -> function executed for each frame internal's representation, gives a proxy
-    // after end of renderpass, if result ok, submit and present immediately. Problem: these are async operations. Solution: Next call the query system call will tell you if everything was fine or not
-    // 2. Iterate through the frame's draw calls.
-    // 3. For each draw call:
-    //    a. Bind the pipeline.
-    //    b. Bind vertex and index buffers.
-    //    c. Bind descriptor sets (for transforms, materials, etc.).
-    //    d. Issue a draw indexed command.
-    // 4. End the render pass.
-    todo!();
+    let cmd_buffer = device.get_command_buffer(timeline)?;
+
+    device.begin_render_pass(cmd_buffer)?;
+
+    for draw_call in &frame.draw_calls {
+      device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
+      device.bind_buffers(cmd_buffer, draw_call.pipeline, draw_call.buffers)?;
+
+      let view = Mat4x4f32::look_at(
+        camera.0.position,
+        camera.0.position + <Vec3f32 as Vector3>::from_components(0.0, 0.0, -1.0),
+        <Vec3f32 as Vector3>::from_components(0.0, 1.0, 0.0),
+      );
+      let proj = camera.1.projection;
+
+      let model = Mat4x4f32::translation(draw_call.transform.position.to_vec4(1.0))
+        * Mat4x4f32::from_quat(draw_call.transform.rotation)
+        * Mat4x4f32::from_scale(draw_call.transform.scale);
+
+      let mvp = proj * view * model;
+
+      let push_constants = PushConstants {
+        model_view_proj: mvp.into(),
+        model: model.into(),
+        sun_dir: [0.0, -1.0, 0.0],
+        texture_flags: Default::default(),
+        sun_color: [1.0, 1.0, 1.0, 1.0],
+      };
+
+      device.push_constants(cmd_buffer, &push_constants)?;
+
+      device.draw_indexed(cmd_buffer, draw_call.index_count)?;
+    }
+
+    device.end_render_pass(cmd_buffer)?;
+    device.submit_command_buffer(cmd_buffer)?;
+
+    Ok(())
   }
 }

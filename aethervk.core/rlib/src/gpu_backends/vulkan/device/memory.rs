@@ -7,8 +7,8 @@ use crate::{
   gpu_backends::{ vulkan::device::DeviceResource },
 };
 
-pub struct GlobalDeviceAllocator {
-  allocator: mem::ManuallyDrop<vk_mem::Allocator>,
+pub(super) struct GlobalDeviceAllocator {
+  pub allocator: mem::ManuallyDrop<vk_mem::Allocator>,
   memory_budgets: Box<[vk_mem::ffi::VmaBudget]>,
 }
 

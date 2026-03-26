@@ -1,6 +1,6 @@
 use crate::math::{
   Scalar,
-  vector::{Vector, Vector3},
+  vector::Vector3,
 };
 
 pub trait OrthonormalBasis: Vector3 {

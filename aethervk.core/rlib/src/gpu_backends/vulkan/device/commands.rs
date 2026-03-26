@@ -1,7 +1,7 @@
 use core::ptr;
 
 use crate::{gpu_backends::vulkan::device::DeviceResource, types::{GpuResult, SpscQueue}};
-use aethervk_oshal_rlib::os::thread::ThreadId;
+use aethervk_oshal_rlib::os::native::ThreadId;
 use alloc::{boxed::Box, collections::btree_map::BTreeMap};
 use ash::vk;
 

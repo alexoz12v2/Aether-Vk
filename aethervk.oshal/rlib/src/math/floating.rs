@@ -1,6 +1,6 @@
 use core::{ops, f32, f64};
 
-use crate::math::{FloatLike, MulAddIdentity};
+use crate::math::MulAddIdentity;
 
 pub trait BitsStorage: Sized + Copy {
   type Bits: Sized

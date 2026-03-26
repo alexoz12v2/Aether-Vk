@@ -16,6 +16,7 @@ use ash::{
 use bitflags::bitflags;
 
 use itertools::Itertools;
+use vk_mem::Alloc;
 #[cfg(windows)]
 use windows::{
   core::{w, s},
@@ -434,6 +435,7 @@ pub(super) fn required_device_extensions() -> &'static Vec<&'static CStr> {
     the_vec.push(ash::khr::spirv_1_4::NAME);
     // more fine grained synchronization stages. Also necessary for sync2 layer
     the_vec.push(ash::khr::synchronization2::NAME);
+    the_vec.push(ash::khr::create_renderpass2::NAME);
 
     #[cfg(windows)]
     {
@@ -619,6 +621,42 @@ where
   fn deref(&self) -> &Self::Target {
     &self.handle
   }
+}
+
+pub(super) fn create_transient_attachment(
+  allocator: &vk_mem::Allocator,
+  extent: vk::Extent2D,
+  format: vk::Format,
+  usage: vk::ImageUsageFlags,
+  samples: vk::SampleCountFlags,
+) -> GpuResult<(NonZeroHandle<vk::Image>, vk_mem::Allocation)> {
+  let image_create_info = vk::ImageCreateInfo::default()
+    .extent(vk::Extent3D {
+      width: extent.width,
+      height: extent.height,
+      depth: 1,
+    })
+    .format(format)
+    .image_type(vk::ImageType::TYPE_2D)
+    .mip_levels(1)
+    .array_layers(1)
+    .samples(samples)
+    .usage(usage | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT)
+    .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+  let allocation_info = {
+    let mut x = vk_mem::AllocationCreateInfo::default();
+    x.usage = vk_mem::MemoryUsage::AutoPreferDevice;
+    x.required_flags = vk::MemoryPropertyFlags::DEVICE_LOCAL;
+    // prefer lazily allocated (transient -> tile cacheable) on Tile GPUs
+    x.preferred_flags = vk::MemoryPropertyFlags::LAZILY_ALLOCATED;
+    x.priority = 1.0;
+    x
+  };
+
+  unsafe { allocator.create_image(&image_create_info, &allocation_info) }
+    .map(|(i, a)| (unsafe { NonZeroHandle::new_unchecked(i) }, a))
+    .map_err(|e| e.into())
 }
 
 // -------------------------------- Unit Testing -------------------------------

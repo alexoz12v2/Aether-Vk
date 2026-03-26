@@ -11,8 +11,6 @@ extern crate alloc;
 
 use core::{ptr, mem};
 
-use spin::once;
-
 // ----------- Allocator Setup --------------------------------------
 #[cfg(not(target_env = "msvc"))]
 #[cfg(not(feature = "std"))]

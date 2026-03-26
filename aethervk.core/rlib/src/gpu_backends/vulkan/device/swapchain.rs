@@ -9,7 +9,7 @@ use crate::{
   types::{GpuError, GpuResult},
 };
 
-const MAX_FRAMES_IN_FLIGHT: usize = 8;
+pub(super) const MAX_FRAMES_IN_FLIGHT: usize = 8;
 const SWAPCHAIN_FRAME_DISCARDS_BEFORE_SWEEP: usize = 3;
 
 /// Handles and data relative to an image acquired through a swapchain
@@ -78,6 +78,8 @@ pub(super) struct PresentationState {
   surface_format: vk::SurfaceFormatKHR,
   vsync: bool,
   native_handle: OpaqueNativeHandleInfo,
+
+  swapchain_generation: u64,
 }
 
 trait SwapchainCleanable {
@@ -233,6 +235,7 @@ impl PresentationState {
       pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
       vsync: params.vsync,
       native_handle,
+      swapchain_generation: 0,
     };
 
     this.recreate_swapchain(device, false, physical_device)?;
@@ -304,7 +307,12 @@ impl PresentationState {
       self.frame_discards.len() == self.frames.len()
         && self.frame_discards.len() >= self.images.len()
     );
+    self.swapchain_generation += 1;
     Ok(())
+  }
+
+  pub(super) fn swapchain_generation(&self) -> u64 {
+    self.swapchain_generation
   }
 
   fn recreate_swapchain_images(
@@ -370,6 +378,17 @@ impl PresentationState {
       }
     }
     Ok(result)
+  }
+
+  /// Function specifically designed for renderpasses to recreate its framebuffers
+  pub(super) fn for_each_swapchain_image(
+    &self,
+    mut f: impl FnMut(NonZeroHandle<vk::ImageView>) -> GpuResult<()>,
+  ) -> GpuResult<()> {
+    for image in &self.images {
+      (&mut f)(image.image_view)?;
+    }
+    Ok(())
   }
 
   fn can_swapchain_image_be_transfer(surf_caps: &vk::SurfaceCapabilities2KHR) -> GpuResult<()> {

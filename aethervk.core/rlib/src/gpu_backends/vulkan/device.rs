@@ -1,8 +1,18 @@
-use core::{marker::PhantomData, ptr};
-use alloc::{format, string::ToString, sync, vec::Vec};
+use core::{
+  ptr::{self, NonNull},
+  sync::atomic::{AtomicU64, Ordering},
+};
+use aethervk_oshal_rlib::os::{
+  fs::{self, PathBuf, Path},
+  memory::{MaxAlignedStorage, StackAllocator},
+};
+use alloc::{format, string::ToString, sync::Arc, vec::Vec};
 
 use crate::{
-  gpu::{GpuResourceHandle, PresentationEngineHandle, RenderDevice, RenderableInstanceId},
+  gpu::{
+    GpuResourceHandle, PipelineKeyable, PresentationEngineHandle, RenderDevice,
+    RenderableInstanceId, frame::ResourceUploadResult,
+  },
   gpu_backends::vulkan::{
     self,
     device::{
@@ -11,16 +21,20 @@ use crate::{
         FragmentOut, FragmentShader, GraphicsInfo, PipelineFlags, PreRasterization,
         StencilCompareOp, StencilLogicOp, VertexIn,
       },
+      resources::{
+        DiscardableResource, ForwardMeshRenderResource, ForwardMeshRenderResourceArchetype,
+      },
+      shader_manager::ShaderKey,
     },
     instance,
-    utils::NonZeroHandle,
+    utils::{self, NonZeroHandle},
   },
   scene::{EntityId, PhysicalMeshComponent, TransformComponent},
   types::{GpuError, GpuResult},
 };
-use super::utils;
 
 use ash::vk;
+use hashbrown::HashMap;
 use heapless::{index_map::FnvIndexMap};
 
 // companion classes inside Device. Each of these structs implement a given api
@@ -30,8 +44,9 @@ mod commands;
 mod descriptors;
 mod memory;
 mod pipelines;
+mod renderpasses;
 mod resources;
-mod shaders;
+mod shader_manager;
 mod swapchain;
 
 trait DeviceResource {
@@ -40,6 +55,100 @@ trait DeviceResource {
   /// to device handle and its function pointers
   /// Note: This function is not responsible to setup the proper state for cleanup (eg synchronization)
   fn cleanup(&mut self, device: &ash::Device);
+}
+
+struct FunctionalDeviceResource<H: ash::vk::Handle + Copy, F: FnOnce(H, &ash::Device)> {
+  handle: H,
+  cleanup: Option<F>,
+}
+
+impl<H: ash::vk::Handle + Copy, F: FnOnce(H, &ash::Device)> FunctionalDeviceResource<H, F> {
+  fn new(handle: H, cleanup: F) -> Self {
+    Self {
+      handle,
+      cleanup: Some(cleanup),
+    }
+  }
+}
+
+impl<H: ash::vk::Handle + Copy, F: FnOnce(H, &ash::Device)> DeviceResource
+  for FunctionalDeviceResource<H, F>
+{
+  fn cleanup(&mut self, device: &ash::Device) {
+    let h = self.handle;
+    if let Some(cleanup) = self.cleanup.take() {
+      cleanup(h, device);
+    }
+  }
+}
+
+struct DeviceResourceJanitor<'a, const N: usize> {
+  device: &'a ash::Device,
+  resources: heapless::Vec<NonNull<dyn DeviceResource + 'a>, N>,
+  allocator: StackAllocator,
+  storage: MaxAlignedStorage<N>,
+}
+
+impl<'a, const N: usize> DeviceResourceJanitor<'a, N> {
+  fn new(device: &'a ash::Device) -> Self {
+    Self {
+      device,
+      allocator: StackAllocator::new(),
+      resources: heapless::Vec::new(),
+      storage: MaxAlignedStorage([0; N]),
+    }
+  }
+
+  pub fn clear(&mut self) {
+    self.resources.clear();
+  }
+
+  pub fn push<T: DeviceResource + 'a>(&mut self, resource: T) -> Result<(), &'static str> {
+    unsafe {
+      let base_ptr = self.storage.0.as_mut_ptr();
+      // 1. allocate within local storage array
+      let ptr: *mut T = self.allocator.allocate(base_ptr, N, resource)?;
+
+      // 2. Coerce to a fat pointer (*mut dyn Trait)
+      let dyn_ptr: *mut (dyn DeviceResource + 'a) = ptr;
+
+      // 3. wrap in NonNull
+      let non_null = NonNull::new_unchecked(dyn_ptr);
+
+      // 4. store fat pointer in vec
+      self
+        .resources
+        .push(non_null)
+        .map_err(|_| "Janitor capacity exceeded")?;
+    }
+
+    Ok(())
+  }
+}
+
+impl<'a, const N: usize> Drop for DeviceResourceJanitor<'a, N> {
+  fn drop(&mut self) {
+    // destroy most recently allocated resources first
+    for resource in self.resources.iter_mut().rev() {
+      unsafe {
+        let resource = resource.as_mut();
+        resource.cleanup(self.device);
+
+        core::ptr::drop_in_place(ptr::from_mut(resource));
+      }
+    }
+  }
+}
+
+/// Safety: [`ForwardMeshRenderResourceArchetype`] should contain [`crate::gpu::PipelineKey`]
+unsafe fn physical_mesh_resource_backend_to_frontend(
+  value: &ForwardMeshRenderResource,
+  archetype: &ForwardMeshRenderResourceArchetype,
+) -> ResourceUploadResult {
+  ResourceUploadResult {
+    pipeline: unsafe { archetype.pipeline_key.unwrap_unchecked() },
+    buffers: GpuResourceHandle(value.buffers_hash()),
+  }
 }
 
 /// Device Resources. Each member here implements `DeviceResources` trait and is either
@@ -53,25 +162,41 @@ struct DeviceResources {
     hashbrown::HashMap<PresentationEngineHandle, spin::RwLock<swapchain::PresentationState>>,
   >,
   command_pools: heapless::Vec<commands::CommandPools, { utils::MAX_QUEUE_FAMILY_COUNT }>,
-  descriptor_pool: Option<sync::Arc<descriptors::DescriptorPools>>,
+  descriptor_pool: Option<Arc<descriptors::DescriptorPools>>,
   pipeline_pool: spin::RwLock<pipelines::PipelinePool>,
+  renderpasses: renderpasses::RenderPasses,
   timeline_semaphore: NonZeroHandle<vk::Semaphore>,
+  timeline_semaphore_cached_value: AtomicU64,
+
+  shader_manager: spin::RwLock<shader_manager::ShaderManager>,
+
+  physical_mesh_render_archetype: Option<ForwardMeshRenderResourceArchetype>,
+  /// why not slotmap? This is ephimeral. Each frame this is drained and repopulated
+  physical_mesh_resources:
+    spin::RwLock<Option<hashbrown::HashMap<RenderableInstanceId, ForwardMeshRenderResource>>>,
 }
 
 impl DeviceResource for DeviceResources {
   /// cleanup in reverse order of declaration in the struct
   fn cleanup(&mut self, device: &ash::Device) {
+    // all discardable resources should have been already discarded
+    if self.has_discardables() {
+      self.clear_discardables(&device);
+    }
+
     unsafe { device.destroy_semaphore(self.timeline_semaphore.get(), None) };
 
-    self.pipeline_pool.write().cleanup(device);
+    self.renderpasses.cleanup(device);
+
+    self.shader_manager.write().destroy(device);
 
     // Safety: If this is a properly constructed `DeviceResources`, then `descriptor_pool = Some(_)`
-    assert!(
-      sync::Arc::strong_count(unsafe { self.descriptor_pool.as_ref().unwrap_unchecked() }) == 1
-    );
+    assert!(Arc::strong_count(unsafe { self.descriptor_pool.as_ref().unwrap_unchecked() }) == 1);
     let mut descriptor_pool: descriptors::DescriptorPools =
-      sync::Arc::try_unwrap(unsafe { self.descriptor_pool.take().unwrap_unchecked() }).unwrap();
+      Arc::try_unwrap(unsafe { self.descriptor_pool.take().unwrap_unchecked() }).unwrap();
     descriptor_pool.cleanup(device);
+
+    self.pipeline_pool.write().cleanup(device);
 
     for command_pool in self.command_pools.iter_mut() {
       command_pool.cleanup(device);
@@ -88,6 +213,233 @@ impl DeviceResource for DeviceResources {
 }
 
 impl DeviceResources {
+  /// update [`pipelines::FragmentOut`] and [`vk::RenderPass`] inside [`pipelines::GraphicsInfo`]
+  /// disard old and create updated graphics [`vk::Pipeline`]
+  /// Note: Update is performed only if archetype initialized once
+  fn update_physical_mesh_archetype_for_presentation_engine(
+    &mut self,
+    device: &ash::Device,
+    presentation_engine_state: &swapchain::PresentationState,
+    timeline: u64,
+  ) -> GpuResult<()> {
+    if self.physical_mesh_render_archetype.is_none() {
+      return Err(GpuError::InvalidState);
+    }
+    let archetype = unsafe {
+      self
+        .physical_mesh_render_archetype
+        .as_mut()
+        .unwrap_unchecked()
+    };
+    if archetype.graphics_info.is_none() || archetype.pipeline_key.is_none() {
+      return Err(GpuError::InvalidState);
+    }
+    let pipeline_key = *unsafe { archetype.pipeline_key.as_ref().unwrap_unchecked() };
+    let mut write_pipeline = self.pipeline_pool.write();
+
+    let graphics_info = unsafe { archetype.graphics_info.as_mut().unwrap_unchecked() };
+    let depth_stencil_format = graphics_info
+      .fragment_out
+      .depth_attachment_format
+      .unwrap_or(vk::Format::UNDEFINED);
+
+    graphics_info.fragment_out.color_attachment_formats.clear();
+    graphics_info
+      .fragment_out
+      .color_attachment_formats
+      .push(presentation_engine_state.format());
+    graphics_info.render_pass = self
+      .renderpasses
+      .get_or_create_render_pass(
+        renderpasses::RenderPassSpecification::ColorDepthSingleSubpass {
+          color_format: presentation_engine_state.format(),
+          depth_stencil_format: depth_stencil_format,
+          swapchain: &presentation_engine_state,
+        },
+        device,
+        &self.allocator.allocator,
+        &self.discard_pool,
+        timeline,
+      )?
+      .get();
+    // Note: don't care about viewport and scissor cause they are dynamic state
+    write_pipeline.get_or_create_graphics_pipeline(device, graphics_info)?;
+    write_pipeline.discard_graphics_pipeline_if_present(pipeline_key, &self.discard_pool, timeline);
+
+    let pipeline_key = graphics_info.pipeline_key();
+    archetype.pipeline_key = Some(pipeline_key);
+
+    Ok(())
+  }
+
+  fn get_or_create_physical_mesh_archetype(
+    &mut self,
+    device: &ash::Device,
+    vertex_shader_key: ShaderKey,
+    fragment_shader_key: ShaderKey,
+    depth_stencil_format: vk::Format,
+    presentation_engine_state: &swapchain::PresentationState,
+    timeline: u64,
+  ) -> GpuResult<&'_ ForwardMeshRenderResourceArchetype> {
+    if self.physical_mesh_render_archetype.is_some() {
+      return Ok(unsafe {
+        self
+          .physical_mesh_render_archetype
+          .as_ref()
+          .unwrap_unchecked()
+      });
+    }
+    if self.descriptor_pool.is_none() {
+      return Err(GpuError::InvalidState);
+    }
+
+    let shader_manager = self.shader_manager.read();
+    let vertex_shader = shader_manager
+      .get(vertex_shader_key)
+      .ok_or(GpuError::InvalidShader)?;
+    if vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
+      return Err(GpuError::InvalidShader);
+    }
+    let fragment_shader = shader_manager
+      .get(fragment_shader_key)
+      .ok_or(GpuError::InvalidShader)?;
+    if fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
+      return Err(GpuError::InvalidShader);
+    }
+
+    // Create initial struct
+    let res = unsafe {
+      ForwardMeshRenderResourceArchetype::new(
+        self.descriptor_pool.as_ref().unwrap_unchecked(),
+        device,
+        &self.discard_pool,
+        &vertex_shader,
+        &fragment_shader,
+      )?
+    };
+    self.physical_mesh_render_archetype = Some(res);
+
+    // then populate graphics info and pipeline key
+    let pipeline_graphics_info = GraphicsInfo::default()
+      .with_vertex_in(
+        VertexIn::default()
+          .add_binding(0, 3 * size_of::<f32>() as u32, vk::VertexInputRate::VERTEX)
+          .add_binding(1, 9 * size_of::<f32>() as u32, vk::VertexInputRate::VERTEX)
+          .add_attribute(0, 0, vk::Format::R32G32B32_SFLOAT, 0) // inPosition
+          .add_attribute(1, 1, vk::Format::R32G32B32_SFLOAT, 0) // inNormal
+          .add_attribute(1, 2, vk::Format::R32G32_SFLOAT, 3 * size_of::<f32>() as u32) // inUV
+          .add_attribute(1, 2, vk::Format::R32G32B32A32_SFLOAT, 20) // inTangent
+          .clone(),
+      )
+      .with_pre_rasterization(
+        PreRasterization::default()
+          .with_vertex_module(vertex_shader.module.get())
+          .clone(),
+      )
+      .with_fragment_shader(
+        FragmentShader::default()
+          .with_fragment_module(fragment_shader.module.get())
+          .add_viewport(vk::Viewport {
+            width: presentation_engine_state.extent().0 as _,
+            height: presentation_engine_state.extent().1 as _,
+            x: 0.0,
+            y: 0.0,
+            min_depth: 0.0,
+            max_depth: 1.0,
+          })
+          .add_scissors(vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: vk::Extent2D {
+              width: presentation_engine_state.extent().0,
+              height: presentation_engine_state.extent().1,
+            },
+          })
+          .clone(),
+      )
+      .with_fragment_out(
+        FragmentOut::default()
+          .add_color_attachment_format(presentation_engine_state.format())
+          .with_depth_attachment_format(depth_stencil_format)
+          .with_stencil_attachment_format(depth_stencil_format)
+          .clone(),
+      )
+      .with_pipeline_layout(
+        unsafe {
+          self
+            .physical_mesh_render_archetype
+            .as_ref()
+            .unwrap_unchecked()
+        }
+        .pipeline_layout
+        .get(),
+      )
+      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
+      .with_render_pass(
+        self
+          .renderpasses
+          .get_or_create_render_pass(
+            renderpasses::RenderPassSpecification::ColorDepthSingleSubpass {
+              color_format: presentation_engine_state.format(),
+              depth_stencil_format,
+              swapchain: presentation_engine_state,
+            },
+            device,
+            &self.allocator.allocator,
+            &self.discard_pool,
+            timeline,
+          )?
+          .get(),
+      )
+      .with_subpass(0)
+      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+      .with_stencil_compare_op(StencilCompareOp::None)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(255)
+      .with_stencil_compare_mask(0)
+      .with_stencil_write_mask(u32::MAX)
+      .clone();
+    self
+      .pipeline_pool
+      .write()
+      .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
+
+    self.physical_mesh_render_archetype = Some(
+      unsafe {
+        self
+          .physical_mesh_render_archetype
+          .take()
+          .unwrap_unchecked()
+      }
+      .with_graphics_info(pipeline_graphics_info),
+    );
+    Ok(unsafe {
+      self
+        .physical_mesh_render_archetype
+        .as_ref()
+        .unwrap_unchecked()
+    })
+  }
+
+  fn has_discardables(&self) -> bool {
+    self.physical_mesh_render_archetype.is_some() && {
+      let resources = self.physical_mesh_resources.read();
+      !resources.is_none() && !unsafe { resources.as_ref().unwrap_unchecked() }.is_empty()
+    }
+  }
+
+  fn clear_discardables(&mut self, device: &ash::Device) {
+    debug_assert!(self.has_discardables());
+    if let Some(mut archetype) = self.physical_mesh_render_archetype.take() {
+      archetype.discard(device, &self.discard_pool, u64::MAX);
+    }
+    if let Some(mut resources) = self.physical_mesh_resources.write().take() {
+      for (_, mut resource) in resources.drain() {
+        resource.discard(device, &self.discard_pool, u64::MAX);
+      }
+    }
+    debug_assert!(!self.has_discardables());
+  }
+
   fn new<'a>(
     instance: &instance::Instance,
     physical_device: vk::PhysicalDevice,
@@ -126,12 +478,14 @@ impl DeviceResources {
       }
     };
 
+    let renderpasses =
+      renderpasses::RenderPasses::new(&instance.instance, &device, &allocator.allocator);
+
     // - Pipeline Pool (TODO: cache data?)
     let pipeline_pool = match pipelines::PipelinePool::new(device, None) {
       Ok(pool) => spin::RwLock::new(pool),
       Err(e) => {
-        let descriptor_pool =
-          unsafe { sync::Arc::get_mut(&mut descriptor_pool).unwrap_unchecked() };
+        let descriptor_pool = unsafe { Arc::get_mut(&mut descriptor_pool).unwrap_unchecked() };
         descriptor_pool.cleanup(device);
         unsafe { device.destroy_semaphore(timeline_semaphore, None) };
         allocator.cleanup(device);
@@ -155,8 +509,28 @@ impl DeviceResources {
       live_presentation_engines,
       descriptor_pool: Some(descriptor_pool),
       pipeline_pool,
+      renderpasses,
+      shader_manager: spin::RwLock::new(shader_manager::ShaderManager::new()),
       timeline_semaphore: unsafe { NonZeroHandle::new_unchecked(timeline_semaphore) },
+      timeline_semaphore_cached_value: AtomicU64::new(0),
+      physical_mesh_render_archetype: None,
+      physical_mesh_resources: spin::RwLock::new(None),
     })
+  }
+
+  fn get_timeline_semaphore_cached_value(&self) -> u64 {
+    self.timeline_semaphore_cached_value.load(Ordering::Relaxed)
+  }
+
+  fn refresh_timeline_semaphore_cached_value(
+    &self,
+    device: &ash::Device,
+  ) -> ash::prelude::VkResult<()> {
+    self.timeline_semaphore_cached_value.store(
+      unsafe { device.get_semaphore_counter_value(self.timeline_semaphore.get()) }?,
+      Ordering::Relaxed,
+    );
+    Ok(())
   }
 }
 
@@ -266,6 +640,27 @@ impl Queues {
 
   fn get_transfer_queue(&self) -> Queue {
     self.with_queue_ref_map(|queue_ref_map| **queue_ref_map.get(&QueueId::TRANSFER).unwrap())
+  }
+}
+
+fn reflect_to_vulkan_descriptor_type(
+  reflect_ty: spirv_reflect::types::ReflectDescriptorType,
+) -> vk::DescriptorType {
+  use spirv_reflect::types::ReflectDescriptorType as Rt;
+  match reflect_ty {
+    Rt::Sampler => vk::DescriptorType::SAMPLER,
+    Rt::CombinedImageSampler => vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+    Rt::SampledImage => vk::DescriptorType::SAMPLED_IMAGE,
+    Rt::StorageImage => vk::DescriptorType::STORAGE_IMAGE,
+    Rt::UniformTexelBuffer => vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
+    Rt::StorageTexelBuffer => vk::DescriptorType::STORAGE_TEXEL_BUFFER,
+    Rt::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
+    Rt::StorageBuffer => vk::DescriptorType::STORAGE_BUFFER,
+    Rt::UniformBufferDynamic => vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
+    Rt::StorageBufferDynamic => vk::DescriptorType::STORAGE_BUFFER_DYNAMIC,
+    Rt::InputAttachment => vk::DescriptorType::INPUT_ATTACHMENT,
+    Rt::AccelerationStructureKHR => vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+    _ => vk::DescriptorType::UNIFORM_BUFFER, // Fallback
   }
 }
 
@@ -390,60 +785,27 @@ impl<'a> Device<'a> {
     f(dalloc)
   }
 
-  fn get_physical_mesh_shader_modules(
-    &self,
-    physical_mesh_id: RenderableInstanceId,
-  ) -> GpuResult<(
-    NonZeroHandle<vk::ShaderModule>,
-    NonZeroHandle<vk::ShaderModule>,
-  )> {
-    todo!()
-  }
+  fn ensure_physical_mesh_shader_modules(&self) -> GpuResult<(ShaderKey, ShaderKey)> {
+    // TODO: proper path management
+    let vert_path = PathBuf::from("assets/physical_mesh.vert.spv");
+    let frag_path = PathBuf::from("assets/physical_mesh.frag.spv");
 
-  fn get_physical_mesh_attributes_bindings(
-    &self,
-    physical_mesh_id: RenderableInstanceId,
-  ) -> GpuResult<VertexIn> {
-    todo!()
-  }
+    let mut shader_manager = self.res.shader_manager.write();
 
-  fn get_physical_mesh_pipeline_layout(
-    &self,
-    physical_mesh_id: RenderableInstanceId,
-  ) -> GpuResult<NonZeroHandle<vk::PipelineLayout>> {
-    todo!()
-  }
+    let vert_key = shader_manager.get_or_load(
+      &self.device,
+      &vert_path,
+      "main",
+      spirv::ExecutionModel::Vertex,
+    )?;
+    let frag_key = shader_manager.get_or_load(
+      &self.device,
+      &frag_path,
+      "main",
+      spirv::ExecutionModel::Fragment,
+    )?;
 
-  fn get_physical_mesh_render_pass(
-    &self,
-    physical_mesh_id: RenderableInstanceId,
-    color_format: vk::Format,
-    depth_stencil_format: vk::Format,
-  ) -> GpuResult<NonZeroHandle<vk::RenderPass>> {
-    todo!()
-  }
-
-  fn get_or_create_physical_mesh_pipeline(
-    &self,
-    physical_mesh_id: RenderableInstanceId,
-    pipeline_graphics_info: &GraphicsInfo,
-  ) -> GpuResult<GpuResourceHandle> {
-    // NonZeroHandle<vk::Pipeline> is stored in an internal mapping hashed together with RenderableInstanceId,
-    // and yield frontend handle
-    todo!()
-  }
-
-  /// Allocates the following resources in the Backend Device
-  /// - Vertex Buffer and Index Buffer
-  /// - Copies transform component matrix as model and model view proj in a struct corresponding to the Push struct in `comet.rs`
-  /// and maps them to frontend handles. Returns only the handles needed for the interface
-  fn get_or_allocate_device_memory(
-    &self,
-    physical_mesh_id: RenderableInstanceId,
-    mesh_component: &PhysicalMeshComponent,
-    transform: &TransformComponent,
-  ) -> GpuResult<(GpuResourceHandle, GpuResourceHandle)> {
-    todo!()
+    Ok((vert_key, frag_key))
   }
 }
 
@@ -515,6 +877,13 @@ impl<'a> RenderDevice for Device<'a> {
 
   fn context_id(&self) -> u64 {
     vulkan::VULKAN_RENDER_BACKEND.0
+  }
+
+  fn start_frame(&self) -> GpuResult<()> {
+    self
+      .res
+      .refresh_timeline_semaphore_cached_value(&self.device)
+      .map_err(|e| e.into())
   }
 
   fn create_presentation_engine(
@@ -611,19 +980,32 @@ impl<'a> RenderDevice for Device<'a> {
     }
   }
 
-  /// TODO: expose as parameters the following specialization constants
-  /// - layout(constant_id = 0) const float BASE_ALBEDO_R = 0.04;
-  /// - layout(constant_id = 1) const float BASE_ALBEDO_G = 0.04;
-  /// - layout(constant_id = 2) const float BASE_ALBEDO_B = 0.04;
-  /// - layout(constant_id = 3) const float BASE_ROUGHNESS = 0.9;
-  /// - layout(constant_id = 4) const float BASE_AO = 1.0;
+  /// Note: This function may have the following side effects
+  /// - Creation of VkBuffer/VkMemory through VMA for vertex and index buffer associated with given mesh
+  /// - Creation of VkImage/VkMemory + VkImageView through VMA for each texture associated with given mesh
+  /// for each instance of physical mesh requested to render.
+  /// The following resources are instead for every physical mesh, and hence lazily initialized when the first
+  /// physical mesh is requested to be rendered
+  /// - VkPipeline, VkPipelineLayout, VkPushConstantRange, VkDescriptorSets
+  /// - VkRenderPass (and associated VkFramebuffer), which are linked to swapchain,
+  ///   hence possibly refreshed each time the swapchain is resized
+  /// What is not created by the following function
+  /// - VkCommandBuffer, which is instead created through the `record_commands` function from render_path
+  /// Note: it assumes that you are preparing for the next frame
   fn get_or_create_physical_mesh_resources(
     &self,
     entity_id: EntityId,
     component: &PhysicalMeshComponent,
     transform: &TransformComponent,
     handle: PresentationEngineHandle,
-  ) -> GpuResult<(GpuResourceHandle, GpuResourceHandle, GpuResourceHandle)> {
+  ) -> GpuResult<ResourceUploadResult> {
+    // WARNING: if state isn't properly maintained, this is a nightmare
+    let next_frame_timeline = self.res.get_timeline_semaphore_cached_value() + 1;
+
+    // create frame for next 
+    todo!();
+
+    // Input check: - presentation engine exists
     let presentation_engines_read = self.res.live_presentation_engines.read();
     let presentation_engine = presentation_engines_read
       .get(&handle)
@@ -631,72 +1013,88 @@ impl<'a> RenderDevice for Device<'a> {
     let presentation_engine_state = presentation_engine.read();
     let (width, height) = presentation_engine_state.extent();
 
+    // ensure that the archetype for physical meshes exists
+    let archetype = {
+      let (vkey, fkey) = self.ensure_physical_mesh_shader_modules()?;
+      self.res.get_or_create_physical_mesh_archetype(
+        &self.device,
+        vkey,
+        fkey,
+        self.depth_stencil_format,
+        &presentation_engine_state,
+        next_frame_timeline,
+      )?
+    };
+
+    // Get rendering system Internal Mesh Identifier
     let physical_mesh_id = RenderableInstanceId::from_physical_mesh(entity_id, component);
-    let (vertex_shader_module, fragment_shader_module) =
-      self.get_physical_mesh_shader_modules(physical_mesh_id)?;
 
-    // TODO add_specialization_constant_u32
-    let pipeline_graphics_info = GraphicsInfo::default()
-      .with_vertex_in(self.get_physical_mesh_attributes_bindings(physical_mesh_id)?)
-      .with_pre_rasterization(
-        PreRasterization::default()
-          .with_vertex_module(vertex_shader_module.get())
-          .clone(),
-      )
-      .with_fragment_shader(
-        FragmentShader::default()
-          .with_fragment_module(fragment_shader_module.get())
-          .add_viewport(vk::Viewport {
-            width: width as _,
-            height: height as _,
-            x: 0.0,
-            y: 0.0,
-            min_depth: 0.0,
-            max_depth: 1.0,
-          })
-          .add_scissors(vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D { width, height },
-          })
-          .clone(),
-      )
-      .with_fragment_out(
-        FragmentOut::default()
-          .add_color_attachment_format(presentation_engine_state.format())
-          .with_depth_attachment_format(self.depth_stencil_format)
-          .with_stencil_attachment_format(self.depth_stencil_format)
-          .clone(),
-      )
-      .with_pipeline_layout(
-        // This has the side effect to create descriptor sets and push constants
-        self
-          .get_physical_mesh_pipeline_layout(physical_mesh_id)?
-          .get(),
-      )
-      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
-      .with_render_pass(
-        self
-          .get_physical_mesh_render_pass(
-            physical_mesh_id,
-            presentation_engine_state.format(),
-            self.depth_stencil_format,
-          )?
-          .get(),
-      )
-      .with_subpass(0)
-      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
-      .with_stencil_compare_op(StencilCompareOp::None)
-      .with_stencil_logic_op(StencilLogicOp::Replace)
-      .with_stencil_reference(255)
-      .with_stencil_compare_mask(0)
-      .with_stencil_write_mask(u32::MAX)
-      .clone();
+    // Does the mesh already exist? If so, return cached resource
+    let read_resouces = self.res.physical_mesh_resources.read();
+    if let Some(resources) = read_resouces.as_ref() {
+      if let Some(resource) = resources.get(&physical_mesh_id) {
+        unsafe {
+          return Ok(physical_mesh_resource_backend_to_frontend(
+            &resource, &archetype,
+          ));
+        }
+      }
+    }
+    drop(read_resouces);
+    let mut write_resources = self.res.physical_mesh_resources.write();
+    if write_resources.is_none() {
+      *write_resources = Some(hashbrown::HashMap::new());
+    }
 
-    let pipeline: GpuResourceHandle =
-      self.get_or_create_physical_mesh_pipeline(physical_mesh_id, &pipeline_graphics_info)?;
-    let (vertex_buffer, index_buffer) =
-      self.get_or_allocate_device_memory(physical_mesh_id, &component, &transform)?;
+    Ok((pipeline, vertex_buffer, index_buffer, uniforms))
+  }
 
-    Ok((pipeline, vertex_buffer, index_buffer))
+  fn get_command_buffer(&self, timeline: u64) -> GpuResult<crate::gpu::CommandBufferHandle> {
+    todo!()
+  }
+
+  fn begin_render_pass(&self, cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {
+    todo!()
+  }
+
+  fn bind_pipeline(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    pipeline: crate::gpu::PipelineKey,
+  ) -> GpuResult<()> {
+    todo!()
+  }
+
+  fn bind_buffers(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    pipeline: crate::gpu::PipelineKey,
+    buffers: GpuResourceHandle,
+  ) -> GpuResult<()> {
+    todo!()
+  }
+
+  fn push_constants(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    push_constants: &crate::simulation::comet::PushConstants,
+  ) -> GpuResult<()> {
+    todo!()
+  }
+
+  fn draw_indexed(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    index_count: u32,
+  ) -> GpuResult<()> {
+    todo!()
+  }
+
+  fn end_render_pass(&self, cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {
+    todo!()
+  }
+
+  fn submit_command_buffer(&self, cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {
+    todo!()
   }
 }

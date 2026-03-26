@@ -4,7 +4,13 @@
 //   fs.rs
 
 pub mod fs;
-pub mod thread;
+pub mod native;
+pub mod time;
+pub mod memory;
+pub mod debug;
+pub mod pool;
+
+
 
 #[cfg(test)]
 mod tests {

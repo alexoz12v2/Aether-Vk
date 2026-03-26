@@ -1,10 +1,18 @@
-use core::ffi;
+use core::{
+  ffi,
+  hash::{Hash, Hasher},
+};
+use ahash::AHasher;
 
 // Note: this is a no_std environment
 // Do not add anything unrelated to gpu interface here. If you want to define components, scene,
 // and other modeling, create new files
 
-use crate::scene::{EntityId, PhysicalMeshComponent, TransformComponent};
+use crate::{
+  gpu::frame::ResourceUploadResult,
+  scene::{EntityId, PhysicalMeshComponent, TransformComponent},
+  simulation::comet::PushConstants,
+};
 use crate::types::{EngineResult, GpuResult};
 
 // Re-export what is necessary from backends
@@ -25,6 +33,15 @@ pub const VULKAN_RENDER_BACKEND: RenderBackendId = RenderBackendId(1);
 pub struct GpuResourceHandle(pub u64);
 pub const NULL_GPU_RESOURCE: GpuResourceHandle = GpuResourceHandle(0);
 
+impl GpuResourceHandle {
+  pub fn from_raw(raw: u64) -> Self {
+    Self(raw)
+  }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+pub struct CommandBufferHandle(pub u64);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RenderableInstanceId(pub u64);
 
@@ -33,8 +50,18 @@ impl RenderableInstanceId {
     entity_id: EntityId,
     physical_mesh_component: &PhysicalMeshComponent,
   ) -> Self {
-    todo!()
+    let mut hasher = AHasher::default();
+    entity_id.hash(&mut hasher);
+    (physical_mesh_component as *const _ as u64).hash(&mut hasher);
+    Self(hasher.finish())
   }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+pub struct PipelineKey(pub u64);
+
+pub trait PipelineKeyable {
+  fn pipeline_key(&self) -> PipelineKey;
 }
 
 pub trait RenderDevice: Send + Sync {
@@ -42,6 +69,11 @@ pub trait RenderDevice: Send + Sync {
   fn print_info(&self) -> String;
 
   fn context_id(&self) -> u64;
+
+  /// Prepare all the necessary state for a rendering operation. In particular
+  /// - Update frame index within device and (vulkan) refresh timeline semaphore value
+  /// - Refresh VMA memory budgets
+  fn start_frame(&self) -> GpuResult<()>;
 
   /// Creates the surface and initial swapchain
   fn create_presentation_engine(
@@ -68,7 +100,7 @@ pub trait RenderDevice: Send + Sync {
     component: &PhysicalMeshComponent,
     transform: &TransformComponent,
     handle: PresentationEngineHandle,
-  ) -> GpuResult<(GpuResourceHandle, GpuResourceHandle, GpuResourceHandle)>;
+  ) -> GpuResult<ResourceUploadResult>;
 
   /// Presents the image. Takes semaphore signaled by a rendering command buffer
   fn present(
@@ -77,6 +109,36 @@ pub trait RenderDevice: Send + Sync {
     image_index: usize,
     frame_index: usize,
   ) -> GpuResult<SwapchainStatus>;
+
+  /// Start for an interface to draw something on the screen. Gets a handle to store rendering
+  /// state setting commands
+  fn get_command_buffer(&self, timeline: u64) -> GpuResult<CommandBufferHandle>;
+
+  /// responsible to acquire an image and store it in the associated command buffer structure
+  fn begin_render_pass(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
+
+  /// alter internal state for current command buffer binding a new graphics pipeline
+  fn bind_pipeline(&self, cmd_buffer: CommandBufferHandle, pipeline: PipelineKey) -> GpuResult<()>;
+
+  /// alter internal state for current command buffer to use a specific set of buffers, coherent with pipeline
+  fn bind_buffers(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    pipeline: PipelineKey,
+    buffers: GpuResourceHandle,
+  ) -> GpuResult<()>;
+
+  fn push_constants(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    push_constants: &PushConstants,
+  ) -> GpuResult<()>;
+
+  fn draw_indexed(&self, cmd_buffer: CommandBufferHandle, index_count: u32) -> GpuResult<()>;
+
+  fn end_render_pass(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
+
+  fn submit_command_buffer(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
