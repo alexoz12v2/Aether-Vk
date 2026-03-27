@@ -75,7 +75,6 @@ impl Frame {
         let res: ResourceUploadResult = device.get_or_create_physical_mesh_resources(
           entity_id,
           &component,
-          &transform,
           presentation_engine_handle,
         )?;
         let index_count = component.mesh.indices.len() as u32;
@@ -96,7 +95,7 @@ pub trait RenderPath {
     device: &dyn RenderDevice,
     camera: (&TransformComponent, &CameraComponent),
     frame: &Frame,
-    timeline: u64,
+    presentation_engine: PresentationEngineHandle,
   ) -> GpuResult<()>;
 }
 
@@ -109,11 +108,11 @@ impl RenderPath for ForwardRenderPath {
     device: &dyn RenderDevice,
     camera: (&TransformComponent, &CameraComponent),
     frame: &Frame,
-    timeline: u64,
+    presentation_engine: PresentationEngineHandle,
   ) -> GpuResult<()> {
-    let cmd_buffer = device.get_command_buffer(timeline)?;
+    let cmd_buffer = device.get_command_buffer()?;
 
-    device.begin_render_pass(cmd_buffer)?;
+    device.begin_render_pass(cmd_buffer, presentation_engine)?;
 
     for draw_call in &frame.draw_calls {
       device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;

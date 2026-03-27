@@ -5,6 +5,7 @@ use ash::{khr::create_renderpass2, vk};
 use spin::RwLock;
 
 use crate::{
+  gpu::frame,
   gpu_backends::vulkan::{
     device::{
       DeviceResource,
@@ -71,6 +72,16 @@ pub(super) enum RenderPassSpecification<'a> {
     depth_stencil_format: vk::Format,
     swapchain: &'a PresentationState,
   },
+}
+
+impl<'a> RenderPassSpecification<'a> {
+  pub fn single_pass(presentation_engine: &'a PresentationState, d: vk::Format) -> Self {
+    Self::ColorDepthSingleSubpass {
+      color_format: presentation_engine.format(),
+      depth_stencil_format: d,
+      swapchain: presentation_engine,
+    }
+  }
 }
 
 pub(super) struct RenderPasses {
@@ -153,11 +164,15 @@ impl RenderPasses {
   pub fn get_or_create_render_pass(
     &self,
     ty: RenderPassSpecification,
+    frame_index: u32,
     device: &ash::Device,
     allocator: &vk_mem::Allocator,
     discard_pool: &DiscardPool,
     timeline: u64,
-  ) -> GpuResult<NonZeroHandle<vk::RenderPass>> {
+  ) -> GpuResult<(
+    NonZeroHandle<vk::RenderPass>,
+    NonZeroHandle<vk::Framebuffer>,
+  )> {
     match ty {
       RenderPassSpecification::ColorDepthSingleSubpass {
         color_format,
@@ -170,7 +185,7 @@ impl RenderPasses {
           .get(&RenderPassType::ColorDepthSingleSubpass)
         {
           if bundle.swapchain_generation == swapchain.swapchain_generation() {
-            return Ok(bundle.render_pass);
+            return Ok((bundle.render_pass, bundle.framebuffer[frame_index as usize]));
           }
         }
 
@@ -286,8 +301,15 @@ impl RenderPasses {
             let _ = write_render_passes.remove(&RenderPassType::ColorDepthSingleSubpass);
             Err(e)
           })?;
+        drop(write_render_passes);
+        let read_render_passes = self.render_passes.read();
+        let bundle = unsafe {
+          read_render_passes
+            .get(&RenderPassType::ColorDepthSingleSubpass)
+            .unwrap_unchecked()
+        };
 
-        Ok(render_pass)
+        Ok((bundle.render_pass, bundle.framebuffer[frame_index as usize]))
       }
     }
   }

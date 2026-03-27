@@ -1,6 +1,10 @@
 use core::ptr;
 
-use crate::{gpu_backends::vulkan::device::DeviceResource, types::{GpuResult, SpscQueue}};
+use crate::{
+  gpu::{CommandBufferHandle, GpuResourceHandle},
+  gpu_backends::vulkan::device::DeviceResource,
+  types::{GpuError, GpuResult, SpscQueue},
+};
 use aethervk_oshal_rlib::os::native::ThreadId;
 use alloc::{boxed::Box, collections::btree_map::BTreeMap};
 use ash::vk;
@@ -9,10 +13,16 @@ use ash::vk;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct CommandBufferId(pub u64);
 
+impl From<CommandBufferHandle> for CommandBufferId {
+  fn from(value: CommandBufferHandle) -> Self {
+    Self(value.0)
+  }
+}
+
 struct ThreadPools {
   recycled: SpscQueue<vk::CommandPool>,
   active: Option<vk::CommandPool>,
-  cmd_cache: BTreeMap<vk::CommandPool, BTreeMap<CommandBufferId, vk::CommandBuffer>>,
+  cmd_cache: BTreeMap<vk::CommandPool, BTreeMap<CommandBufferId, (vk::CommandBuffer, bool)>>,
 }
 
 /// alternative to avoid boxing: Use SlotMap. Drawback for alternative: you need to store
@@ -34,19 +44,6 @@ impl CommandPools {
       spsc_capacity: 64,
     }
   }
-  /// Centralized recycling: returns a pool from a discard thread to the owner
-  pub(super) fn recycle(&self, device: &ash::Device, pool: vk::CommandPool, owner: ThreadId) {
-    let registry = self.registry.read();
-    if let Some(tp) = registry.get(&owner) {
-      if !tp.recycled.try_push(pool) {
-        // Buffer full, destroy handle immediately to prevent leak
-        self.destroy_pool_internal(device, pool);
-      }
-    } else {
-      // Owner thread already shut down
-      self.destroy_pool_internal(device, pool);
-    }
-  }
 
   pub(super) fn allocate_primary(
     &self,
@@ -55,6 +52,41 @@ impl CommandPools {
     id: CommandBufferId,
   ) -> GpuResult<vk::CommandBuffer> {
     self.allocate_internal(device, tid, id, true)
+  }
+
+  pub fn recycle(
+    &self,
+    tid: ThreadId,
+    id: CommandBufferId,
+    cmd_buf: vk::CommandBuffer,
+  ) -> GpuResult<()> {
+    self.recycle_internal(tid, id, cmd_buf)
+  }
+
+  fn recycle_internal(
+    &self,
+    tid: ThreadId,
+    id: CommandBufferId,
+    cmd_buf: vk::CommandBuffer,
+  ) -> GpuResult<()> {
+    let mut registry = self.registry.write();
+    // Pseudo-TLS lookup/initialization
+    let tp = registry.get_mut(&tid).ok_or(GpuError::BackendSpecific(
+      "Command Buffer Registry for Thread not initialized".into(),
+    ))?;
+    // find pool whose buffer is same as this
+    let the_buffer = tp
+      .cmd_cache
+      .iter_mut()
+      .flat_map(|(_, map)| map.iter_mut())
+      .filter_map(|(the_id, pair)| if *the_id == id { Some(pair) } else { None })
+      .find(|(buffer, _)| *buffer == cmd_buf);
+    if let Some((_, used)) = the_buffer {
+      *used = false;
+      Ok(())
+    } else {
+      Err(GpuError::InvalidArgument)
+    }
   }
 
   fn allocate_internal(
@@ -82,26 +114,32 @@ impl CommandPools {
           Some(self.create_pool_internal(device)?)
         };
       }
-      let active_pool = unsafe { tp.active.unwrap_unchecked() };
+      let active_pool = unsafe { tp.active.as_mut().unwrap_unchecked() };
 
       // 2. Check cache
-      let pool_cache = tp.cmd_cache.entry(active_pool).or_default();
-      if let Some(&cmd) = pool_cache.get(&id) {
-        return Ok(cmd);
+      let pool_cache = tp.cmd_cache.entry(*active_pool).or_default();
+      if let Some(&cmd) = pool_cache.get(&id)
+        && !cmd.1
+      {
+        return Ok(cmd.0);
       }
 
       // 3. Allocate new buffer
       let allocate_info = vk::CommandBufferAllocateInfo::default()
         .command_buffer_count(1)
         .level(vk::CommandBufferLevel::PRIMARY)
-        .command_pool(active_pool);
+        .command_pool(*active_pool);
       let new_cmd = unsafe {
         let mut cmd: vk::CommandBuffer = vk::CommandBuffer::default();
-        let vk_res =
-          (device.fp_v1_0().allocate_command_buffers)(device.handle(), &allocate_info, ptr::from_mut(&mut cmd));
+        let vk_res = (device.fp_v1_0().allocate_command_buffers)(
+          device.handle(),
+          &allocate_info,
+          ptr::from_mut(&mut cmd),
+        );
         vk_res.result_with_success(cmd)
       }?;
-      pool_cache.insert(id, new_cmd);
+      // fails if there's already something, don't care
+      let _ = pool_cache.insert(id, (new_cmd, true));
 
       Ok(new_cmd)
     } else {
@@ -117,11 +155,7 @@ impl CommandPools {
     let create_info = vk::CommandPoolCreateInfo::default()
       .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
       .queue_family_index(self.queue_family_index);
-    unsafe {
-      device.create_command_pool(
-        &create_info,
-        None)
-    }
+    unsafe { device.create_command_pool(&create_info, None) }
   }
 }
 
@@ -141,9 +175,4 @@ impl DeviceResource for CommandPools {
       // their pool is freed.
     }
   }
-}
-
-pub(super) trait CommandPoolsCaller {
-  fn allocate_primary(&self, id: CommandBufferId) -> GpuResult<vk::CommandBuffer>;
-  fn recycle(&self, pool: vk::CommandPool, owner: ThreadId);
 }

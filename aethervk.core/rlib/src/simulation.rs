@@ -1,5 +1,5 @@
 use crate::gpu::{RenderDeviceHandle, RenderFrontend};
-use aethervk_oshal_rlib::os::{native::sleep_for, time::{TimeInfo, TimeReadings}};
+use aethervk_oshal_rlib::os::{native::this_thread, time::{TimeInfo, TimeReadings}};
 
 pub mod comet;
 
@@ -81,7 +81,7 @@ pub fn run<'a, S, SR, PE, U, F>(
         render_device_handle,
       );
     } else {
-      sleep_for(core::time::Duration::from_millis(16));
+      this_thread::sleep_for(core::time::Duration::from_millis(16));
     }
   }
 }

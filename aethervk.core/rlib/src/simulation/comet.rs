@@ -18,6 +18,12 @@ pub struct Vertex {
   pub tangent: [f32; 4],
 }
 
+pub const POSITION_COMPONENTS: u32 = 3;
+pub const NORMAL_COMPONENTS: u32 = 3;
+pub const UV_COMPONENTS: u32 = 2;
+pub const TANGENT_COMPONENTS: u32 = 4;
+pub const ATTRIBUTES_COMPONENTS: u32 = 9;
+
 impl core::hash::Hash for Vertex {
   fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
     self.position.iter().for_each(|f| f.to_bits().hash(state));
