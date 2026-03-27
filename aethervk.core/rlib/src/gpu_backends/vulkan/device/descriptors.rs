@@ -210,8 +210,3 @@ impl DeviceResource for DescriptorPools {
     }
   }
 }
-
-pub(super) trait DescriptorPoolsCaller {
-  fn allocate(&self, layout: vk::DescriptorSetLayout) -> GpuResult<vk::DescriptorSet>;
-  fn recycle(&self, pool: vk::DescriptorPool);
-}

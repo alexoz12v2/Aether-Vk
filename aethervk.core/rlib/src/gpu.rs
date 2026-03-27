@@ -57,6 +57,12 @@ impl RenderableInstanceId {
   }
 }
 
+impl From<RenderableInstanceId> for GpuResourceHandle {
+  fn from(value: RenderableInstanceId) -> Self {
+    Self(value.0)
+  }
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub struct PipelineKey(pub u64);
 
@@ -98,7 +104,6 @@ pub trait RenderDevice: Send + Sync {
     &self,
     entity_id: EntityId,
     component: &PhysicalMeshComponent,
-    transform: &TransformComponent,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult>;
 
@@ -112,10 +117,14 @@ pub trait RenderDevice: Send + Sync {
 
   /// Start for an interface to draw something on the screen. Gets a handle to store rendering
   /// state setting commands
-  fn get_command_buffer(&self, timeline: u64) -> GpuResult<CommandBufferHandle>;
+  fn get_command_buffer(&self) -> GpuResult<CommandBufferHandle>;
 
   /// responsible to acquire an image and store it in the associated command buffer structure
-  fn begin_render_pass(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
+  fn begin_render_pass(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    presentation_engine: PresentationEngineHandle,
+  ) -> GpuResult<()>;
 
   /// alter internal state for current command buffer binding a new graphics pipeline
   fn bind_pipeline(&self, cmd_buffer: CommandBufferHandle, pipeline: PipelineKey) -> GpuResult<()>;
@@ -216,6 +225,12 @@ pub enum SwapchainStatus {
   Suboptimal = 1,
   /// The surface changed drastically (resize) and the current frame must be discarded
   NeedsRecreation = 2,
+}
+
+impl SwapchainStatus {
+  pub fn needs_resize(self) -> bool {
+    self != Self::Optimal
+  }
 }
 
 #[derive(Debug, Clone, Copy)]

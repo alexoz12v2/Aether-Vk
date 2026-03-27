@@ -10,55 +10,59 @@ use libc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ThreadId(u64);
 
-pub fn current_id() -> ThreadId {
-  let id: ThreadId;
-  #[cfg(any(unix, target_os = "macos"))]
-  {
-    id = ThreadId(unsafe { libc::pthread_self() } as _);
-  }
-  #[cfg(windows)]
-  {
-    id = ThreadId(unsafe { GetCurrentThreadId() } as _);
-  }
+pub mod this_thread {
+  use super::*;
 
-  id
-}
-
-pub fn sleep_for(duration: Duration) {
-  #[cfg(windows)]
-  {
-    let ms = duration.as_millis();
-    if ms == 0 {
-      return;
+  pub fn id() -> ThreadId {
+    let id: ThreadId;
+    #[cfg(any(unix, target_os = "macos"))]
+    {
+      id = ThreadId(unsafe { libc::pthread_self() } as _);
     }
-    // Sleep takes a u32. Cap at u32::MAX.
-    let sleep_ms = if ms > u32::MAX as u128 {
-      u32::MAX
-    } else {
-      ms as u32
-    };
-    unsafe { Sleep(sleep_ms) };
+    #[cfg(windows)]
+    {
+      id = ThreadId(unsafe { GetCurrentThreadId() } as _);
+    }
+
+    id
   }
 
-  #[cfg(any(unix, target_os = "macos"))]
-  {
-    let mut req = libc::timespec {
-      tv_sec: duration.as_secs() as libc::time_t,
-      tv_nsec: duration.subsec_nanos() as libc::c_long,
-    };
-
-    // Loop until sleep is complete, as nanosleep can be interrupted.
-    loop {
-      let mut rem = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-      };
-      let ret = unsafe { libc::nanosleep(&req, &mut rem) };
-      if ret == 0 {
-        break; // Sleep completed.
+  pub fn sleep_for(duration: Duration) {
+    #[cfg(windows)]
+    {
+      let ms = duration.as_millis();
+      if ms == 0 {
+        return;
+      }
+      // Sleep takes a u32. Cap at u32::MAX.
+      let sleep_ms = if ms > u32::MAX as u128 {
+        u32::MAX
       } else {
-        // Interrupted, sleep for the remaining time.
-        req = rem;
+        ms as u32
+      };
+      unsafe { Sleep(sleep_ms) };
+    }
+
+    #[cfg(any(unix, target_os = "macos"))]
+    {
+      let mut req = libc::timespec {
+        tv_sec: duration.as_secs() as libc::time_t,
+        tv_nsec: duration.subsec_nanos() as libc::c_long,
+      };
+
+      // Loop until sleep is complete, as nanosleep can be interrupted.
+      loop {
+        let mut rem = libc::timespec {
+          tv_sec: 0,
+          tv_nsec: 0,
+        };
+        let ret = unsafe { libc::nanosleep(&req, &mut rem) };
+        if ret == 0 {
+          break; // Sleep completed.
+        } else {
+          // Interrupted, sleep for the remaining time.
+          req = rem;
+        }
       }
     }
   }

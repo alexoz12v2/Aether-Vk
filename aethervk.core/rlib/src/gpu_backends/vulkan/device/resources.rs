@@ -1,12 +1,16 @@
 use core::ptr;
 use core::hash::{Hash, Hasher};
 use aethervk_oshal_rlib::hash::FnvHasher;
+use aethervk_oshal_rlib::os::native::ThreadId;
+use ash::ext::nested_command_buffer;
 use ash::vk;
 use alloc::{boxed::Box, collections::VecDeque, sync, vec::Vec};
 use spirv_reflect::{ffi::SpvReflectResult_SPV_REFLECT_RESULT_SUCCESS, types::ReflectShaderStageFlags};
+use crate::simulation::comet::Texture;
 use vk_mem::Alloc;
 
 use crate::gpu::PipelineKeyable;
+use crate::gpu_backends::vulkan::device::commands::{self, CommandBufferId};
 use crate::gpu_backends::vulkan::device::pipelines::GraphicsInfo;
 use crate::{
   gpu::{PipelineKey, frame::Frame},
@@ -57,6 +61,7 @@ enum DiscardItem {
   ImageView(vk::ImageView),
   Pipeline(vk::Pipeline),
   DescriptorPool(vk::DescriptorPool, sync::Arc<descriptors::DescriptorPools>),
+  CommandPool(CmdBufDiscard),
   RenderPass(vk::RenderPass),
   Framebuffer(vk::Framebuffer),
   // TODO other types of resources as needed
@@ -73,6 +78,12 @@ struct ImageDiscard {
   image: vk::Image,
   alloc: vk_mem::Allocation,
   allocator: vk_mem::ffi::VmaAllocator, // non owning copy
+}
+struct CmdBufDiscard {
+  thread_id: ThreadId,
+  command_buffer: vk::CommandBuffer,
+  manager: sync::Arc<commands::CommandPools>,
+  id: CommandBufferId,
 }
 
 pub trait DiscardableResource {
@@ -126,6 +137,26 @@ impl DiscardPool {
         buffer,
         alloc,
         allocator,
+      }),
+    );
+  }
+
+  pub fn discard_command_buffer(
+    &self,
+    thread_id: ThreadId,
+    command_buffer_id: CommandBufferId,
+    command_buffer: vk::CommandBuffer,
+    manager: sync::Arc<commands::CommandPools>,
+    timeline: u64,
+  ) {
+    let mut q = self.items.lock();
+    q.push(
+      timeline,
+      DiscardItem::CommandPool(CmdBufDiscard {
+        thread_id,
+        command_buffer,
+        manager,
+        id: command_buffer_id,
       }),
     );
   }
@@ -207,6 +238,21 @@ impl DiscardPool {
         // return the pool to the manager for recycling
         manager.recycle(device, pool);
       }
+      DiscardItem::CommandPool(CmdBufDiscard {
+        thread_id,
+        command_buffer,
+        manager,
+        id,
+      }) => {
+        let _x = manager.recycle(thread_id, id, command_buffer);
+        // leaking if we didn't manage to find it!
+        #[cfg(debug_assertions)]
+        {
+          if _x.is_err() {
+            panic!("aaa");
+          }
+        }
+      }
       DiscardItem::ImageView(image_view) => unsafe {
         device.destroy_image_view(image_view, None);
       },
@@ -229,17 +275,6 @@ impl super::DeviceResource for DiscardPool {
   }
 }
 
-/// Note: Caller should also provide its own timeline value
-pub(super) trait DiscardPoolCaller {
-  fn discard_buffer(&self, buffer: vk::Buffer, alloc: vk_mem::Allocation);
-  fn discard_image(&self, image: vk::Image, alloc: vk_mem::Allocation);
-  fn discard_image_view(&self, image_view: vk::ImageView);
-  fn discard_pipeline(&self, pipeline: vk::Pipeline);
-  fn discard_descriptor_pool(&self, pool: vk::DescriptorPool);
-  fn destroy_discarded_resources(&self);
-  fn destroy_discarded_resources_all(&self);
-}
-
 pub(super) struct Buffer {
   buffer: NonZeroHandle<vk::Buffer>,
   allocation: vk_mem::Allocation,
@@ -253,7 +288,194 @@ impl Hash for Buffer {
 
 pub(super) struct Image {
   image: NonZeroHandle<vk::Image>,
+  image_view: NonZeroHandle<vk::ImageView>,
   allocation: vk_mem::Allocation,
+}
+
+impl Image {
+  pub fn to_descriptor_image_info(
+    &self,
+    sampler: NonZeroHandle<vk::Sampler>,
+  ) -> vk::DescriptorImageInfo {
+    vk::DescriptorImageInfo::default()
+      .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+      .image_view(self.image_view.get())
+      .sampler(sampler.get())
+  }
+
+  pub fn new_2d(
+    device: &ash::Device,
+    allocator: &vk_mem::Allocator,
+    command_buffer: vk::CommandBuffer,
+    discard_pool: &DiscardPool,
+    timeline: u64,
+    texture: &Texture,
+    usage: vk::ImageUsageFlags,
+  ) -> GpuResult<Self> {
+    let image_size = (texture.data.len()) as vk::DeviceSize;
+    if image_size == 0 {
+      return Err(GpuError::InvalidArgument);
+    }
+
+    let vma_allocator = allocator.get_raw();
+
+    // 1. Create staging buffer (CPU-visible) and copy data
+    let staging_buffer_info = vk::BufferCreateInfo::default()
+      .size(image_size)
+      .usage(vk::BufferUsageFlags::TRANSFER_SRC);
+    let staging_alloc_info = vk_mem::AllocationCreateInfo {
+      usage: vk_mem::MemoryUsage::Auto,
+      flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+        | vk_mem::AllocationCreateFlags::MAPPED,
+      required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE,
+      ..Default::default()
+    };
+    let (staging_buffer, staging_allocation, staging_alloc_info) =
+      unsafe { allocator.create_buffer_get_info(&staging_buffer_info, &staging_alloc_info) }?;
+
+    unsafe {
+      core::ptr::copy_nonoverlapping(
+        texture.data.as_ptr(),
+        staging_alloc_info.mapped_data as *mut u8,
+        texture.data.len(),
+      );
+    }
+
+    if !unsafe { allocator.get_allocation_memory_properties(&staging_allocation) }
+      .contains(vk::MemoryPropertyFlags::HOST_COHERENT)
+    {
+      allocator.flush_allocation(&staging_allocation, 0, vk::WHOLE_SIZE)?;
+    }
+
+    // 2. Create device image
+    let image_info = vk::ImageCreateInfo::default()
+      .image_type(vk::ImageType::TYPE_2D)
+      .extent(vk::Extent3D {
+        width: texture.width,
+        height: texture.height,
+        depth: 1,
+      })
+      .mip_levels(1)
+      .array_layers(1)
+      .format(texture.format.to_vk_format())
+      .tiling(vk::ImageTiling::OPTIMAL)
+      .initial_layout(vk::ImageLayout::UNDEFINED)
+      .usage(usage | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+      .sharing_mode(vk::SharingMode::EXCLUSIVE)
+      .samples(vk::SampleCountFlags::TYPE_1);
+
+    let mut allocation_create_info = vk_mem::AllocationCreateInfo::default();
+    allocation_create_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
+
+    let (image, mut alloc, _alloc_info) =
+      unsafe { allocator.create_image_with_alloc_info(&image_info, &allocation_create_info) }?;
+
+    // 2.1 Create Image View, then start recording upload data commands
+    let image_view_info = vk::ImageViewCreateInfo::default()
+      .image(image)
+      .view_type(vk::ImageViewType::TYPE_2D)
+      .format(texture.format.to_vk_format())
+      .components(vk::ComponentMapping::default())
+      .subresource_range(
+        vk::ImageSubresourceRange::default()
+          .aspect_mask(vk::ImageAspectFlags::COLOR)
+          .base_array_layer(0)
+          .layer_count(1)
+          .base_mip_level(0)
+          .level_count(1),
+      );
+    let image_view = unsafe {
+      let res = device.create_image_view(&image_view_info, None);
+      if res.is_err() {
+        allocator.destroy_image(image, &mut alloc);
+      }
+
+      res
+    }?;
+
+    // 3. Transition layout to TRANSFER_DST_OPTIMAL
+    let image_barrier_to_transfer = vk::ImageMemoryBarrier2::default()
+      .src_stage_mask(vk::PipelineStageFlags2::NONE)
+      .src_access_mask(vk::AccessFlags2::NONE)
+      .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+      .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+      .old_layout(vk::ImageLayout::UNDEFINED)
+      .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+      .image(image)
+      .subresource_range(vk::ImageSubresourceRange {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        base_mip_level: 0,
+        level_count: 1,
+        base_array_layer: 0,
+        layer_count: 1,
+      });
+
+    let dependency_info_to_transfer = vk::DependencyInfo::default()
+      .image_memory_barriers(core::slice::from_ref(&image_barrier_to_transfer));
+    unsafe {
+      device.cmd_pipeline_barrier2(command_buffer, &dependency_info_to_transfer);
+    }
+
+    // 4. Copy buffer to image
+    let buffer_image_copy = vk::BufferImageCopy::default()
+      .buffer_offset(0)
+      .buffer_row_length(0)
+      .buffer_image_height(0)
+      .image_subresource(vk::ImageSubresourceLayers {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        mip_level: 0,
+        base_array_layer: 0,
+        layer_count: 1,
+      })
+      .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+      .image_extent(vk::Extent3D {
+        width: texture.width,
+        height: texture.height,
+        depth: 1,
+      });
+
+    unsafe {
+      device.cmd_copy_buffer_to_image(
+        command_buffer,
+        staging_buffer,
+        image,
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        &[buffer_image_copy],
+      );
+    }
+
+    // 5. Transition layout to SHADER_READ_ONLY_OPTIMAL
+    let image_barrier_to_shader_read = vk::ImageMemoryBarrier2::default()
+      .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+      .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+      .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+      .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+      .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+      .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+      .image(image)
+      .subresource_range(vk::ImageSubresourceRange {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        base_mip_level: 0,
+        level_count: 1,
+        base_array_layer: 0,
+        layer_count: 1,
+      });
+
+    let dependency_info_to_shader_read = vk::DependencyInfo::default()
+      .image_memory_barriers(core::slice::from_ref(&image_barrier_to_shader_read));
+    unsafe {
+      device.cmd_pipeline_barrier2(command_buffer, &dependency_info_to_shader_read);
+    }
+
+    // 6. Schedule staging buffer for destruction.
+    discard_pool.discard_buffer(vma_allocator, staging_buffer, staging_allocation, timeline);
+
+    Ok(Self {
+      image: unsafe { NonZeroHandle::new_unchecked(image) },
+      image_view: unsafe { NonZeroHandle::new_unchecked(image_view) },
+      allocation: alloc,
+    })
+  }
 }
 
 impl Hash for Image {
@@ -341,6 +563,7 @@ impl DiscardableResource for ForwardMeshRenderResource {
         albedo_image.allocation,
         timeline,
       );
+      discard_pool.discard_image_view(albedo_image.image_view.get(), timeline);
     }
     if let Some(normal_image) = &self.normal_image {
       discard_pool.discard_image(
@@ -349,6 +572,7 @@ impl DiscardableResource for ForwardMeshRenderResource {
         normal_image.allocation,
         timeline,
       );
+      discard_pool.discard_image_view(normal_image.image_view.get(), timeline);
     }
     if let Some(roughness_image) = &self.roughness_image {
       discard_pool.discard_image(
@@ -357,6 +581,7 @@ impl DiscardableResource for ForwardMeshRenderResource {
         roughness_image.allocation,
         timeline,
       );
+      discard_pool.discard_image_view(roughness_image.image_view.get(), timeline);
     }
     if let Some(ao_image) = &self.ao_image {
       discard_pool.discard_image(
@@ -365,6 +590,7 @@ impl DiscardableResource for ForwardMeshRenderResource {
         ao_image.allocation,
         timeline,
       );
+      discard_pool.discard_image_view(ao_image.image_view.get(), timeline);
     }
   }
 }
