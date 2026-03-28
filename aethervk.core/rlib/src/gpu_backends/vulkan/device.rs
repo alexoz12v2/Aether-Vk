@@ -3,6 +3,7 @@ use core::{
   f32::consts::E,
   hash::{Hash, Hasher},
   num::NonZero,
+  ops::Index,
   ptr::{self, NonNull},
   sync::atomic::{AtomicU64, Ordering},
 };
@@ -33,6 +34,7 @@ use crate::{
       renderpasses::RenderPassSpecification,
       resources::{
         DiscardableResource, ForwardMeshRenderResource, ForwardMeshRenderResourceArchetype, Image,
+        TextureFlags,
       },
       shader_manager::ShaderKey,
     },
@@ -1302,6 +1304,7 @@ impl<'a> RenderDevice for Device<'a> {
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
     presentation_engine: PresentationEngineHandle,
+    acquire_result: &AcquireResult,
   ) -> GpuResult<()> {
     let res = self.res.read();
     let timeline = res.get_timeline_semaphore_cached_value();
@@ -1313,17 +1316,15 @@ impl<'a> RenderDevice for Device<'a> {
     if !presentation_engines.contains_key(&presentation_engine) {
       return Err(GpuError::InvalidArgument);
     }
-    let mut wpresentation_engine = unsafe {
+    let wpresentation_engine = unsafe {
       presentation_engines
         .get(&presentation_engine)
         .unwrap_unchecked()
     }
     .write();
-    let acquire_result = wpresentation_engine.acquire_next_image(&self.device)?;
     if acquire_result.status.needs_resize() {
-      // TODO discard all live graphics pipelines which depend on the renderpass
-      // renderpass, framebuffers, depth image discard themselves with swapchain generation
-      todo!();
+      // The caller should handle the resize.
+      return Err(GpuError::ResizeRequired);
     }
 
     let mut cmd_buffers = self.recording_command_buffers.write();
@@ -1333,7 +1334,7 @@ impl<'a> RenderDevice for Device<'a> {
         .unwrap_unchecked()
     };
     data.presentation = Some(RecordingCmdBufferDataPresentation {
-      acquire_result: acquire_result,
+      acquire_result: *acquire_result,
       presentation_engine: presentation_engine,
     });
     let (render_pass, framebuffer) = res.renderpasses.get_or_create_render_pass(
@@ -1412,10 +1413,100 @@ impl<'a> RenderDevice for Device<'a> {
   fn bind_buffers(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
-    pipeline: crate::gpu::PipelineKey,
+    _pipeline: crate::gpu::PipelineKey,
     buffers: GpuResourceHandle,
   ) -> GpuResult<()> {
-    todo!()
+    let res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers
+      .get(&(timeline, cmd_buffer))
+      .ok_or(GpuError::InvalidArgument)?;
+
+    let physical_mesh_id = RenderableInstanceId(buffers.0);
+    let physical_mesh_resources = res.physical_mesh_resources.read();
+    let resource = physical_mesh_resources
+      .as_ref()
+      .and_then(|map| map.get(&physical_mesh_id))
+      .ok_or(GpuError::InvalidArgument)?;
+
+    let archetype = res
+      .physical_mesh_render_archetype
+      .as_ref()
+      .ok_or(GpuError::InvalidState)?;
+
+    let cmd = data.command_buffer.get();
+
+    // Bind vertex buffers
+    unsafe {
+      self.device.cmd_bind_vertex_buffers(
+        cmd,
+        0,
+        &[
+          resource.position_vertex_buffer.buffer.get(),
+          resource.attributes_vertex_buffer.buffer.get(),
+        ],
+        &[0, 0],
+      );
+    }
+
+    // Bind index buffer
+    unsafe {
+      self.device.cmd_bind_index_buffer(
+        cmd,
+        resource.index_buffer.buffer.get(),
+        0,
+        vk::IndexType::UINT32,
+      );
+    }
+
+    // Update and bind descriptor sets
+    let mut image_infos = Vec::with_capacity(4);
+    if let Some(image) = &resource.albedo_image {
+      image_infos.push((0, image.to_descriptor_image_info(res.linear_sampler)));
+    }
+    if let Some(image) = &resource.normal_image {
+      image_infos.push((1, image.to_descriptor_image_info(res.linear_sampler)));
+    }
+    if let Some(image) = &resource.roughness_image {
+      image_infos.push((2, image.to_descriptor_image_info(res.linear_sampler)));
+    }
+    if let Some(image) = &resource.ao_image {
+      image_infos.push((3, image.to_descriptor_image_info(res.linear_sampler)));
+    }
+
+    let write_descriptor_sets: Vec<_> = image_infos
+      .iter()
+      .map(|(binding, info)| {
+        vk::WriteDescriptorSet::default()
+          .dst_set(archetype.descriptor_sets[0].get())
+          .dst_binding(*binding)
+          .dst_array_element(0)
+          .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+          .image_info(core::slice::from_ref(info))
+      })
+      .collect();
+
+    if !write_descriptor_sets.is_empty() {
+      unsafe {
+        self
+          .device
+          .update_descriptor_sets(&write_descriptor_sets, &[]);
+      }
+    }
+
+    unsafe {
+      self.device.cmd_bind_descriptor_sets(
+        cmd,
+        vk::PipelineBindPoint::GRAPHICS,
+        archetype.pipeline_layout.get(),
+        0,
+        &[archetype.descriptor_sets[0].get()],
+        &[],
+      );
+    }
+
+    Ok(())
   }
 
   fn push_constants(
@@ -1423,7 +1514,38 @@ impl<'a> RenderDevice for Device<'a> {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     push_constants: &crate::simulation::comet::PushConstants,
   ) -> GpuResult<()> {
-    todo!()
+    let res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers
+      .get(&(timeline, cmd_buffer))
+      .ok_or(GpuError::InvalidArgument)?;
+
+    let archetype = res
+      .physical_mesh_render_archetype
+      .as_ref()
+      .ok_or(GpuError::InvalidState)?;
+
+    let cmd = data.command_buffer.get();
+    let layout = archetype.pipeline_layout.get();
+
+    for range in &archetype.push_contant_ranges {
+      unsafe {
+        let push_constants_bytes = core::slice::from_raw_parts(
+          push_constants as *const _ as *const u8,
+          core::mem::size_of::<PushConstants>(),
+        );
+        self.device.cmd_push_constants(
+          cmd,
+          layout,
+          range.stage_flags,
+          range.offset,
+          &push_constants_bytes[range.offset as usize..(range.offset + range.size) as usize],
+        );
+      }
+    }
+
+    Ok(())
   }
 
   fn draw_indexed(
@@ -1431,15 +1553,114 @@ impl<'a> RenderDevice for Device<'a> {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     index_count: u32,
   ) -> GpuResult<()> {
-    todo!()
+    let res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers
+      .get(&(timeline, cmd_buffer))
+      .ok_or(GpuError::InvalidArgument)?;
+
+    let cmd = data.command_buffer.get();
+
+    unsafe {
+      self.device.cmd_draw_indexed(cmd, index_count, 1, 0, 0, 0);
+    }
+
+    Ok(())
   }
 
   fn end_render_pass(&self, cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {
-    todo!()
+    let res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers
+      .get(&(timeline, cmd_buffer))
+      .ok_or(GpuError::InvalidArgument)?;
+
+    let cmd = data.command_buffer.get();
+    let subpass_end_info = vk::SubpassEndInfo::default();
+
+    unsafe {
+      self
+        .create_renderpass2
+        .cmd_end_render_pass2(cmd, &subpass_end_info);
+    }
+
+    Ok(())
   }
 
   fn submit_command_buffer(&self, cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {
-    todo!()
+    let res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let mut cmd_buffers = self.recording_command_buffers.write();
+    let mut data = cmd_buffers
+      .remove(&(timeline, cmd_buffer))
+      .ok_or(GpuError::InvalidArgument)?;
+
+    unsafe {
+      self.device.end_command_buffer(data.command_buffer.get())?;
+    }
+
+    let presentation = data.presentation.ok_or(GpuError::InvalidState)?;
+    let presentation_engines = res.live_presentation_engines.read();
+    let presentation_engine = presentation_engines
+      .get(&presentation.presentation_engine)
+      .ok_or(GpuError::InvalidArgument)?;
+
+    let rpresentation_engine = presentation_engine.read();
+    let (wait_semaphore, submission_fence) = unsafe {
+      rpresentation_engine.get_frame_resources(presentation.acquire_result.frame_index as usize)
+    };
+    let (_, _, signal_semaphore) = unsafe {
+      rpresentation_engine.get_image_resources(presentation.acquire_result.image_index as usize)
+    };
+    let next_timeline_value = timeline + 1;
+
+    let timeline_values = [0, next_timeline_value];
+    let wait_semaphores = [wait_semaphore.get()];
+    let signal_semaphores = [signal_semaphore.get(), res.timeline_semaphore.get()];
+    let command_buffers = [data.command_buffer.get()];
+    let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
+      .wait_semaphore_values(&[0])
+      .signal_semaphore_values(&timeline_values);
+
+    let submit_info = vk::SubmitInfo::default()
+      .wait_semaphores(&wait_semaphores)
+      .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
+      .command_buffers(&command_buffers)
+      .signal_semaphores(&signal_semaphores)
+      .push_next(&mut timeline_info);
+
+    let graphics_queue = self.queues.get_graphics_queue();
+    unsafe {
+      self.device.queue_submit(
+        graphics_queue.handle,
+        &[submit_info],
+        submission_fence.get(),
+      )?;
+    }
+
+    self
+      .res
+      .read()
+      .timeline_semaphore_cached_value
+      .store(next_timeline_value, Ordering::Relaxed);
+
+    let cmd_pools = res
+      .command_pools
+      .get(graphics_queue.index as usize)
+      .and_then(|opt| opt.as_ref())
+      .cloned()
+      .ok_or(GpuError::InvalidState)?;
+
+    data.discard(
+      cmd_buffer.into(),
+      &res.discard_pool,
+      cmd_pools,
+      next_timeline_value,
+    );
+
+    Ok(())
   }
 }
 

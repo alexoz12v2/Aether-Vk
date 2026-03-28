@@ -33,7 +33,7 @@ pub trait Component: 'static + Send + Sync {}
 // === Component Definitions ===
 
 /// Defines the position, rotation, and scale of an entity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct TransformComponent {
   pub position: Vec3f32,
   /// Stored as a quaternion.
@@ -204,6 +204,45 @@ pub struct Scene {
   archetypes: RwLock<Vec<Archetype>>,
   component_meta: RwLock<HashMap<TypeId, ComponentMeta>>,
   // TODO: add a hierarchy of EntityIds. Challenge: consistency with entities SlotMap
+  hierarchy: RwLock<SceneHierarchy>,
+}
+
+#[derive(Default)]
+pub struct SceneHierarchy {
+  parents: HashMap<EntityId, EntityId>,
+  children: HashMap<EntityId, Vec<EntityId>>,
+}
+
+impl SceneHierarchy {
+  fn set_parent(&mut self, child: EntityId, parent: Option<EntityId>) {
+    // Remove from old parent's children list
+    if let Some(old_parent) = self.parents.remove(&child) {
+      if let Some(children) = self.children.get_mut(&old_parent) {
+        children.retain(|c| *c != child);
+      }
+    }
+
+    if let Some(new_parent) = parent {
+      self.parents.insert(child, new_parent);
+      self.children.entry(new_parent).or_default().push(child);
+    }
+  }
+
+  fn remove_entity(&mut self, entity: EntityId) {
+    // Remove from parent's children list
+    if let Some(parent) = self.parents.remove(&entity) {
+      if let Some(children) = self.children.get_mut(&parent) {
+        children.retain(|c| *c != entity);
+      }
+    }
+
+    // Remove entity as a parent from its children and recursively remove them
+    if let Some(children) = self.children.remove(&entity) {
+      for child in children {
+        self.remove_entity(child);
+      }
+    }
+  }
 }
 
 impl Scene {
@@ -218,6 +257,64 @@ impl Scene {
       entities: RwLock::new(SlotMap::with_key()),
       archetypes: RwLock::new(vec![empty_archetype]),
       component_meta: RwLock::new(HashMap::new()),
+      hierarchy: RwLock::new(SceneHierarchy::default()),
+    }
+  }
+
+  pub fn set_parent(&self, child: EntityId, parent: Option<EntityId>) {
+    // Ensure both entities exist.
+    let entities = self.entities.read();
+    if !entities.contains_key(child)
+      || (parent.is_some() && !entities.contains_key(parent.unwrap()))
+    {
+      return;
+    }
+
+    self.hierarchy.write().set_parent(child, parent);
+  }
+
+  pub fn traverse_dfs_pre_order<A, F, C>(
+    &self,
+    start_entity: EntityId,
+    accumulator: &mut A,
+    filter: &F,
+    callback: &mut C,
+  ) where
+    F: Fn(&Scene, EntityId) -> bool,
+    C: FnMut(&Scene, EntityId, &mut A) -> bool,
+  {
+    if !self.entities.read().contains_key(start_entity) {
+      return;
+    }
+    self.traverse_recursive(start_entity, accumulator, filter, callback);
+  }
+
+  fn traverse_recursive<A, F, C>(
+    &self,
+    current_entity: EntityId,
+    accumulator: &mut A,
+    filter: &F,
+    callback: &mut C,
+  ) where
+    F: Fn(&Scene, EntityId) -> bool,
+    C: FnMut(&Scene, EntityId, &mut A) -> bool,
+  {
+    if !filter(self, current_entity) {
+      return;
+    }
+
+    if !callback(self, current_entity, accumulator) {
+      return; // Stop traversal down this branch if callback returns false
+    }
+
+    let hierarchy = self.hierarchy.read();
+    if let Some(children) = hierarchy.children.get(&current_entity) {
+      // Must clone children to avoid holding lock during recursive call
+      let children_clone = children.clone();
+      drop(hierarchy); // Release lock before recursive calls
+      for &child in &children_clone {
+        self.traverse_recursive(child, accumulator, filter, callback);
+      }
     }
   }
 
@@ -402,37 +499,106 @@ impl Scene {
     entity_id
   }
 
-  /// Queries for information about all registered components for a given entity.
-  ///
-  /// This allows checking which components an entity has (is_present = true) versus
-  /// which are "filler" slots that could be added (is_present = false).
-  ///
-  /// Returns `None` if the `entity_id` is invalid.
-  pub fn get_entity_components_info(
-    &self,
-    entity_id: EntityId,
-  ) -> Option<Vec<EntityComponentInfo>> {
+  pub fn with_component<T: Component, F, R>(&self, entity_id: EntityId, f: F) -> Option<R>
+  where
+    F: FnOnce(&T) -> R,
+  {
     let entities = self.entities.read();
     let location = entities.get(entity_id)?;
 
     let archetypes = self.archetypes.read();
     let archetype = &archetypes[location.archetype_index];
-    let entity_component_types = &archetype.component_types;
 
-    let meta = self.component_meta.read();
-    let mut info_list = Vec::with_capacity(meta.len());
+    let components_lock = archetype.components.get(&TypeId::of::<T>())?.read();
+    let components = components_lock.as_any().downcast_ref::<Vec<T>>()?;
 
-    for (type_id, component_meta) in meta.iter() {
-      info_list.push(EntityComponentInfo {
-        type_name: component_meta.type_name,
-        is_present: entity_component_types.contains(type_id),
-      });
+    Some(f(&components[location.row_index]))
+  }
+
+  pub fn with_component_mut<T: Component, F, R>(&self, entity_id: EntityId, f: F) -> Option<R>
+  where
+    F: FnOnce(&mut T) -> R,
+  {
+    let entities = self.entities.read();
+    let location = entities.get(entity_id)?;
+
+    let archetypes = self.archetypes.read();
+    let archetype = &archetypes[location.archetype_index];
+
+    let mut components_lock = archetype.components.get(&TypeId::of::<T>())?.write();
+    let components = components_lock
+      .as_mut_any()
+      .downcast_mut::<Vec<T>>()?;
+
+    Some(f(&mut components[location.row_index]))
+  }
+
+  pub fn remove_component<T: Component>(&self, entity_id: EntityId) -> Result<(), &str> {
+    let type_id_to_remove = TypeId::of::<T>();
+    
+    let src_location = {
+        let entities = self.entities.read();
+        *entities.get(entity_id).ok_or("Entity not found")?
+    };
+
+    let target_archetype_index = {
+        let archetypes = self.archetypes.read();
+        let src_archetype = &archetypes[src_location.archetype_index];
+
+        if !src_archetype.component_types.contains(&type_id_to_remove) {
+            return Err("Component not found on entity");
+        }
+        
+        let mut target_component_types = src_archetype.component_types.clone();
+        target_component_types.remove(&type_id_to_remove);
+
+        archetypes.iter().position(|arch| arch.component_types == target_component_types)
+            .ok_or("Target archetype not found. This should not happen if an empty archetype always exists.")?
+    };
+
+    if src_location.archetype_index != target_archetype_index {
+      let mut entities = self.entities.write();
+      let mut archetypes = self.archetypes.write();
+
+      let (src_arch, target_arch) = if src_location.archetype_index < target_archetype_index {
+        let (left, right) = archetypes.split_at_mut(target_archetype_index);
+        (&mut left[src_location.archetype_index], &mut right[0])
+      } else {
+        let (left, right) = archetypes.split_at_mut(src_location.archetype_index);
+        (&mut right[0], &mut left[target_archetype_index])
+      };
+      
+      let moved_entity_id = src_arch.entities.swap_remove(src_location.row_index);
+      let swapped_entity_id_opt = src_arch.entities.get(src_location.row_index).copied();
+
+      // The component to be removed is handled separately to avoid moving it.
+      src_arch.components.get(&type_id_to_remove).unwrap().write().as_mut_any().downcast_mut::<Vec<T>>().unwrap().swap_remove(src_location.row_index);
+
+      for (type_id, src_storage_lock) in src_arch.components.iter() {
+          if *type_id == type_id_to_remove {
+              continue;
+          }
+          
+          if let Some(target_storage_lock) = target_arch.components.get(type_id) {
+              let mut src_storage = src_storage_lock.write();
+              let mut target_storage = target_storage_lock.write();
+              src_storage.swap_remove_and_push_to(src_location.row_index, &mut **target_storage);
+          }
+      }
+      
+      target_arch.entities.push(moved_entity_id);
+      let new_location = EntityLocation {
+        archetype_index: target_archetype_index,
+        row_index: target_arch.entities.len() - 1,
+      };
+
+      *entities.get_mut(moved_entity_id).unwrap() = new_location;
+      if let Some(swapped_id) = swapped_entity_id_opt {
+          entities.get_mut(swapped_id).unwrap().row_index = src_location.row_index;
+      }
     }
-
-    // For consistent ordering
-    info_list.sort_by_key(|info| info.type_name);
-
-    Some(info_list)
+    
+    Ok(())
   }
 
   pub fn query1<T: Component, F>(&self, mut f: F)

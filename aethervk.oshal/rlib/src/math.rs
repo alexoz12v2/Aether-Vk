@@ -266,15 +266,15 @@ impl_float_like!(f32, {
     }
     #[cfg(target_arch = "aarch64")]
     {
-       unsafe {
-         asm!(
-           "vrecpe.f32 {out:s}, {num:s}", // fast reciprocal approximation
-           "vrecps.f32 {out:s}, {out:s}, {num:s}", // newton-raphson refinement step
-           out = lateout(vreg) out,
-           num = in(vreg) self,
-           options(pure, nomem, nostack)
-         );
-       }
+      unsafe {
+        asm!(
+          "frecpe {out:s}, {num:s}", // fast reciprocal approximation
+          "frecps {out:s}, {out:s}, {num:s}", // newton-raphson refinement step
+          out = lateout(vreg) out,
+          num = in(vreg) self,
+          options(pure, nomem, nostack)
+        );
+      }
     }
 
     out
@@ -359,8 +359,8 @@ impl_float_like!(f64, {
     {
       unsafe {
         asm!(
-          "vrecpe.f64 {out:d}, {num:d}", // fast reciprocal approximation
-          "vrecps.f64 {out:d}, {out:d}, {num:d}", // Newton-Raphson refinement
+          "frecpe {out:d}, {num:d}", // fast reciprocal approximation
+          "frecps {out:d}, {out:d}, {num:d}", // Newton-Raphson refinement
           out = lateout(vreg) out,
           num = in(vreg) self,
           options(pure, nomem, nostack)
