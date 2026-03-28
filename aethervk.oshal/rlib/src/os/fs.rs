@@ -336,14 +336,16 @@ impl PathBuf {
 
   #[inline]
   fn pop_nul_if_present(&mut self) {
+    let nul_char = b'\0' as os_char;
+
     match &mut self.storage {
       PathStorage::Inline(vec_inner) => {
-        if *vec_inner.last().unwrap() == b'\0' as os_char {
+        if vec_inner.last() == Some(&nul_char) {
           vec_inner.pop();
         }
       }
       PathStorage::Heap(items) => {
-        if *items.last().unwrap() == b'\0' as os_char {
+        if items.last() == Some(&nul_char) {
           items.pop();
         }
       }
@@ -352,15 +354,19 @@ impl PathBuf {
 
   #[inline]
   fn ensure_nul_terminated(&mut self) {
+    let nul_char = b'\0' as os_char;
+
     match &mut self.storage {
       PathStorage::Inline(vec_inner) => {
-        if *vec_inner.last().unwrap() != b'\0' as os_char {
-          self.push_unit(b'\0' as os_char);
+        // If it's empty, or the last char is NOT null, push a null
+        if vec_inner.last() != Some(&nul_char) {
+          self.push_unit(nul_char);
         }
       }
       PathStorage::Heap(items) => {
-        if *items.last().unwrap() == b'\0' as os_char {
-          items.push(b'\0' as os_char);
+        // Fix: Changed '==' to '!=' to match the Inline logic
+        if items.last() != Some(&nul_char) {
+          items.push(nul_char);
         }
       }
     }
@@ -491,4 +497,3 @@ impl core::ops::Deref for PathBuf {
     Path::from_slice(strip_nul(self.as_slice()))
   }
 }
-  

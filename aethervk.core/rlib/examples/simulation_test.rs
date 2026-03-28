@@ -83,17 +83,35 @@ fn extract_native_handles(window: &Window) -> OpaqueNativeHandleInfo {
       let ns_view = w.ns_view.as_ptr() as *mut objc::runtime::Object;
       // we must use Objcetive-C to create a CAMetalLayer and attach it
       let layer: *mut ffi::c_void = unsafe {
-        // id layer = [CAMetalLayer layer];
+        // 1. Check if winit already gave the view a CAMetalLayer
         let metal_layer_class = class!(CAMetalLayer);
-        let layer: *mut objc::runtime::Object = msg_send![metal_layer_class, layer];
+        let current_layer: *mut objc::runtime::Object = msg_send![ns_view, layer];
+        let is_metal_layer = if current_layer.is_null() {
+          false
+        } else {
+          msg_send![current_layer, isKindOfClass: metal_layer_class]
+        };
 
-        // [view setWantsLayer: YES];
-        let () = msg_send![ns_view, setWantsLayer: true];
+        if is_metal_layer {
+          current_layer as *mut ffi::c_void
+        } else {
+          // 2. `id layer = [CAMetalLayer layer];` with this, layer doesn't get a +1 to its retail count
+          // that means we release the object as soon as Object's drop is called. Hence use new to prevent
+          // premature destruction of the Objective-C object
+          let new_layer: *mut objc::runtime::Object = msg_send![metal_layer_class, new];
 
-        // [view setLayer: layer];
-        let () = msg_send![ns_view, setLayer: layer];
+          // 3. Set the layer BEFORE wantsLayer to YES t ocreate a layer-hosting view
+          // [view setLayer: layer];
+          let () = msg_send![ns_view, setLayer: new_layer];
+          // [view setWantsLayer: YES];
+          let () = msg_send![ns_view, setWantsLayer: true];
 
-        layer as *mut ffi::c_void
+          // 4. Now the view retains the layer (+2 on retain count). We can release our manual `new`
+          // so that we don't leak memory
+          let () = msg_send![new_layer, release];
+
+          new_layer as *mut ffi::c_void
+        }
       };
 
       OpaqueNativeHandleInfo {
@@ -133,8 +151,7 @@ impl simulation::Pausable for AppState {
   }
 }
 
-#[test]
-fn test_simulation() {
+fn main() {
   // 1. Setup
   let event_loop = EventLoop::new().unwrap();
   let window = WindowBuilder::new()
@@ -176,8 +193,19 @@ fn test_simulation() {
         let mut closure_data = (&params, &mut handle_result);
 
         let closure = |device: &dyn RenderDevice, data: *mut core::ffi::c_void| {
-          let (params, handle_result) = unsafe { &mut *(data as *mut (_, &mut GpuResult<_>)) };
-          **handle_result = device.create_presentation_engine(params);
+          // 1. Explicitly define the exact tuple type (two references)
+          type ClosureData<'a> = (
+            &'a gpu::PresentationEngineParams,
+            &'a mut GpuResult<gpu::PresentationEngineHandle>,
+          );
+
+          let data_ptr = data as *mut ClosureData;
+
+          // 2. Destructure. Thanks to match ergonomics, `params_ref` is `&mut &PresentationEngineParams`
+          let (params_ref, handle_result) = unsafe { &mut *data_ptr };
+
+          // 3. Deref `params_ref` once so we pass `&PresentationEngineParams`
+          **handle_result = device.create_presentation_engine(*params_ref);
           Ok(())
         };
 
@@ -201,7 +229,7 @@ fn test_simulation() {
 
   let home_dir = {
     let mut home_dir = std::env::current_exe().unwrap();
-    for _ in 0..5 {
+    for _ in 0..6 {
       home_dir.pop();
     }
     home_dir

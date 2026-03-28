@@ -191,6 +191,9 @@ struct DeviceResources {
   /// FScene (almost, more like a registry of all known static meshes)
   physical_mesh_resources:
     spin::RwLock<Option<hashbrown::HashMap<RenderableInstanceId, ForwardMeshRenderResource>>>,
+
+  // not cleaned stuff
+  timeline_sem_device: ash::khr::timeline_semaphore::Device,
 }
 
 impl DeviceResource for DeviceResources {
@@ -548,6 +551,12 @@ impl DeviceResources {
       .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
       .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE);
     let linear_sampler = unsafe { device.create_sampler(&sampler_info, None) }?;
+
+    // timeline semaphore promoted to core after 1.2 (included)
+    debug_assert!(instance.api_version() < vk::API_VERSION_1_2);
+    let timeline_sem_device =
+      ash::khr::timeline_semaphore::Device::new(&instance.instance, &device);
+
     Ok(Self {
       allocator,
       command_pools,
@@ -562,6 +571,7 @@ impl DeviceResources {
       timeline_semaphore_cached_value: AtomicU64::new(0),
       physical_mesh_render_archetype: None,
       physical_mesh_resources: spin::RwLock::new(None),
+      timeline_sem_device,
     })
   }
 
@@ -571,10 +581,16 @@ impl DeviceResources {
 
   fn refresh_timeline_semaphore_cached_value(
     &self,
-    device: &ash::Device,
+    _device: &ash::Device,
   ) -> ash::prelude::VkResult<()> {
+    // Note: if you are not using Vulkan 1.2 you are not allowed to use the core function. you need
+    // the extension fetched function pointer
     self.timeline_semaphore_cached_value.store(
-      unsafe { device.get_semaphore_counter_value(self.timeline_semaphore.get()) }?,
+      unsafe {
+        self
+          .timeline_sem_device
+          .get_semaphore_counter_value(self.timeline_semaphore.get())
+      }?,
       Ordering::Relaxed,
     );
     Ok(())
