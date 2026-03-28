@@ -178,16 +178,17 @@ impl PresentationState {
     width: u32,
     height: u32,
   ) -> GpuResult<()> {
-    // 1. Destroy old surface
-    unsafe {
-      self
-        .surface_instance
-        .destroy_surface(self.surface.get(), None);
-    }
+    // Why are we recreating the surface?
+    // // 1. Destroy old surface
+    // unsafe {
+    //   self
+    //     .surface_instance
+    //     .destroy_surface(self.surface.get(), None);
+    // }
 
-    // 2. Create new surface
-    let new_surface = Self::create_surface(entry, instance, self.native_handle)?;
-    self.surface = unsafe { NonZeroHandle::new_unchecked(new_surface) };
+    // // 2. Create new surface
+    // let new_surface = Self::create_surface(entry, instance, self.native_handle)?;
+    // self.surface = unsafe { NonZeroHandle::new_unchecked(new_surface) };
 
     // 3. Update width and height
     self.width = width;
@@ -258,9 +259,9 @@ impl PresentationState {
     // - BEGIN
     let (mut swapchain, extent, transform, surface_format, _) =
       self.create_swapchain_internal(physical_device, use_old_swapchain)?;
-    let swapchain_images =
+    let mut swapchain_images =
       self.recreate_swapchain_images(device, swapchain, surface_format.format)?;
-    let (frame_semaphores, frame_fences) =
+    let (frame_semaphores, mut frame_fences) =
       self.recreate_swapchain_frame_resources(device, swapchain_images.len())?;
     // - END
 
@@ -275,7 +276,7 @@ impl PresentationState {
       frame_discard.flush(&self.swapchain_device, &device);
       // discard image resources
       if !self.images.is_empty() {
-        unsafe { frame_discard.discard_swapchain_images(&mut self.images) };
+        unsafe { frame_discard.discard_swapchain_images(&mut self.images, &mut frame_fences) };
         self.images.clear();
       }
       // discard decommissioned swapchain
@@ -286,20 +287,35 @@ impl PresentationState {
       }
     }
     // refresh image and frame data
-    self.images = swapchain_images;
+    core::mem::swap(&mut self.images, &mut swapchain_images);
+
     if self.images.len() > self.frames.len() {
       let _ = self.frames.resize_default(self.images.len());
       let _ = self.frame_discards.resize_default(self.images.len());
+    } else if self.images.len() < self.frames.len() {
+      // Clean up orphaned frames so we don't leak Vulkan handles
+      for i in self.images.len()..self.frames.len() {
+        let mut orphaned_frame = self.frames[i].clone();
+        orphaned_frame.cleanup(&self.swapchain_device, device);
+      }
+      self.frames.truncate(self.images.len());
+      self.frame_discards.truncate(self.images.len());
     }
-    for i in 0..self.frames.len() {
+
+    // Iterate up to the current image count
+    for i in 0..self.images.len() {
       unsafe {
-        let frame = self.frames.get_unchecked_mut(i);
-        frame.acquire_semaphore = Some(*frame_semaphores.get_unchecked(i));
-        if frame.submission_fence.is_none() {
-          let fence = *frame_fences.get_unchecked(i);
-          debug_assert!(!fence.is_null());
-          frame.submission_fence = Some(NonZeroHandle::new_unchecked(fence));
-        }
+        let image = self.images.get_unchecked_mut(i);
+        debug_assert!(image.acquire_semaphore.is_none() && image.submission_fence.is_none());
+        image.acquire_semaphore = Some(*frame_semaphores.get_unchecked(i));
+        let fence = *frame_fences.get_unchecked(i);
+        image.submission_fence = if fence.is_null() {
+          let frame = self.frames.get_unchecked_mut(i);
+          debug_assert!(frame.submission_fence.is_some_and(|f| !f.is_null()));
+          frame.submission_fence.take()
+        } else {
+          Some(NonZeroHandle::new_unchecked(fence))
+        };
       }
     }
 
@@ -362,9 +378,9 @@ impl PresentationState {
 
     let mut result = heapless::Vec::<SwapchainImage, MAX_FRAMES_IN_FLIGHT>::new();
     for i in 0..count {
+      let info = img_view_create_info.image(images[i as usize]);
       unsafe {
-        let image_view =
-          NonZeroHandle::new_unchecked(device.create_image_view(&img_view_create_info, None)?);
+        let image_view = NonZeroHandle::new_unchecked(device.create_image_view(&info, None)?);
         let present_semaphore =
           NonZeroHandle::new_unchecked(device.create_semaphore(&sem_create_info, None)?);
 
@@ -417,14 +433,16 @@ impl PresentationState {
       unsafe {
         fences.push_unchecked(if i < self.frames.len() {
           let frame = self.frames.get_unchecked(i);
+          let image = self.images.get_unchecked(i); // Safety: images_len <= frame_len
           debug_assert!(frame.acquire_semaphore.is_none());
-          if frame.submission_fence.is_none() {
+          if frame.submission_fence.is_none() && image.submission_fence.is_none() {
             device.create_fence(&fence_create_info, None)?
           } else {
             vk::Fence::null()
           }
         } else {
-          vk::Fence::null()
+          // new frame: create fence
+          device.create_fence(&fence_create_info, None)?
         });
         semaphores.push_unchecked(NonZeroHandle::new_unchecked(
           device.create_semaphore(&sem_create_info, None)?,
@@ -514,25 +532,36 @@ impl PresentationState {
     self.surface_format = surface_format;
   }
 
+  /// 1. pCreateInfo->compositeAlpha contains multiple members of VkCompositeAlphaFlagBitsKHR when only a single value is allowed
+  /// 2. compositeAlpha must be one of the bits present in the supportedCompositeAlpha member of the
+  /// VkSurfaceCapabilitiesKHR structure returned by vkGetPhysicalDeviceSurfaceCapabilitiesKHR for the surface
   fn get_supported_composite_alpha(
     surf_caps: &vk::SurfaceCapabilities2KHR,
   ) -> GpuResult<vk::CompositeAlphaFlagsKHR> {
-    let composite_alpha = surf_caps.surface_capabilities.supported_composite_alpha;
-    let has_transparency = composite_alpha.contains(vk::CompositeAlphaFlagsKHR::INHERIT)
-      && composite_alpha != vk::CompositeAlphaFlagsKHR::INHERIT;
-    let has_opaque = composite_alpha.contains(vk::CompositeAlphaFlagsKHR::OPAQUE);
-    if !has_transparency && !has_opaque {
-      Err(GpuError::UnsupportedFeature)
-    } else if has_transparency {
-      if composite_alpha.contains(vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED) {
-        Ok(vk::CompositeAlphaFlagsKHR::INHERIT | vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED)
-      } else if composite_alpha.contains(vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED) {
-        Ok(vk::CompositeAlphaFlagsKHR::INHERIT | vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED)
-      } else {
-        Err(GpuError::UnsupportedFeature)
-      }
-    } else {
+    let supported = surf_caps.surface_capabilities.supported_composite_alpha;
+
+    // 1. Pre-Multiplied: The gold standard for desktop compositing.
+    // Best for macOS Vibrancy, Windows Mica/Acrylic, and Wayland transparency.
+    if supported.contains(vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED) {
+      Ok(vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED)
+    }
+    // 2. Post-Multiplied: A solid fallback if Pre-Multiplied isn't supported,
+    // though you'll need to ensure your shaders output straight alpha.
+    else if supported.contains(vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED) {
+      Ok(vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED)
+    }
+    // 3. Inherit: Defers entirely to the OS window manager.
+    // Common requirement on Android, and sometimes older X11 setups.
+    else if supported.contains(vk::CompositeAlphaFlagsKHR::INHERIT) {
+      Ok(vk::CompositeAlphaFlagsKHR::INHERIT)
+    }
+    // 4. Opaque: The ultimate fallback. No desktop transparency for this window.
+    else if supported.contains(vk::CompositeAlphaFlagsKHR::OPAQUE) {
       Ok(vk::CompositeAlphaFlagsKHR::OPAQUE)
+    }
+    // 5. Unreachable in a spec-compliant Vulkan implementation, but handled for safety.
+    else {
+      Err(GpuError::UnsupportedFeature)
     }
   }
 
@@ -856,7 +885,11 @@ impl PresentationState {
 
 impl FrameDiscard {
   /// Safety: regular draining must be guaranteed to never let the heapless buffers be full
-  unsafe fn discard_swapchain_images(&mut self, swapchain_images: &mut [SwapchainImage]) {
+  unsafe fn discard_swapchain_images(
+    &mut self,
+    swapchain_images: &mut [SwapchainImage],
+    fences: &mut [vk::Fence],
+  ) {
     debug_assert!(!self.discarded_swapchains.is_full());
     debug_assert!(!self.discarded_semaphores.is_full());
     debug_assert!(!self.discarded_image_views.is_full());
@@ -868,13 +901,24 @@ impl FrameDiscard {
         self
           .discarded_semaphores
           .push_unchecked(swapchain_image.present_semaphore);
-        // Safety: This should be called only when
-        // - presentation failed/suboptimal
-        // - next image acquisition failed
-        // hence `submission_fence` and `acquire_semaphore` are now None, owned
-        // by the associated frame struct
-        debug_assert!(swapchain_image.acquire_semaphore.is_none());
-        debug_assert!(swapchain_image.submission_fence.is_none());
+        debug_assert!(
+          !(swapchain_image.submission_fence.is_some()
+            ^ swapchain_image.acquire_semaphore.is_some())
+        );
+        if swapchain_image.eligible_for_acquisition() {
+          // there must be only one frame and one frame only which is not eligible
+          // for steal. That frame is the one associated with the current image
+          self
+            .discarded_semaphores
+            .push_unchecked(swapchain_image.acquire_semaphore.unwrap_unchecked());
+          // find first non null fence and give your spot to it
+          let f = fences.iter_mut().find(|f| f.is_null());
+          *f.unwrap_unchecked() = swapchain_image
+            .submission_fence
+            .take()
+            .unwrap_unchecked()
+            .get();
+        }
       };
     }
   }
@@ -889,17 +933,14 @@ impl FrameDiscard {
     debug_assert!(!self.discarded_image_views.is_full());
     for swapchain_frame in swapchain_frames {
       unsafe {
-        // Safety: This should be called only when
-        // - presentation failed/suboptimal
-        // - next image acquisition failed
-        // hence `submission_fence` and `acquire_semaphore` are now None, owned
-        // by the associated frame struct
-        debug_assert!(swapchain_frame.acquire_semaphore.is_some());
-        debug_assert!(swapchain_frame.submission_fence.is_some());
+        debug_assert!(
+          !(swapchain_frame.acquire_semaphore.is_some()
+            ^ swapchain_frame.submission_fence.is_some())
+        );
 
-        self
-          .discarded_semaphores
-          .push_unchecked(swapchain_frame.acquire_semaphore.unwrap_unchecked());
+        if let Some(acquire_semaphore) = swapchain_frame.acquire_semaphore.take() {
+          self.discarded_semaphores.push_unchecked(acquire_semaphore);
+        }
       }
     }
   }
@@ -909,7 +950,7 @@ impl FrameDiscard {
     &mut self,
     swapchain: NonZeroHandle<vk::SwapchainKHR>,
   ) {
-    debug_assert!(self.discarded_swapchains.is_full());
+    debug_assert!(!self.discarded_swapchains.is_full());
     unsafe {
       self.discarded_swapchains.push_unchecked(swapchain);
     }

@@ -295,54 +295,105 @@ impl EntryWrapper {
           None
         }
         .and_then(|base_path| {
-          // TODO: path and stuff outside in oshal?
-          // 1. `VK_LAYER_PATH`, `VK_DRIVER_FILES` to "${this_dll}/vulkan/explicit_layer" and "${this_dll}/vulkan/icd" respectively
-          let path_constructor = |appended: &[u8]| {
-            let mut bytes_vec = alloc::vec::Vec::with_capacity(256);
-            // copy everything
-            bytes_vec.extend_from_slice(base_path.to_bytes());
-            // remove from end up to first slash (excluded)
-            if let Some(slash_pos) = bytes_vec.iter().rposition(|&b| b == b'/') {
-              bytes_vec.truncate(slash_pos + 1);
-            } // TODO crash in debug if None?
-            // append 'explicit_layer'
-            bytes_vec.extend_from_slice(appended);
-            // nul terminator handled from the `CString::new`
-            let the_string = alloc::ffi::CString::new(bytes_vec).unwrap();
+          use aethervk_oshal_rlib::os::fs::{FileSystemObject, Path};
 
-            the_string
+          // 1. Extract base directory bytes, retaining the trailing slash
+          let base_bytes = base_path.to_bytes();
+          let dir_bytes = match base_bytes.iter().rposition(|&b| b == b'/') {
+            Some(pos) => &base_bytes[..=pos],
+            None => base_bytes,
           };
-          let vk_layer_path = path_constructor(b"vulkan/explicit_layer");
-          let vk_icd_path = path_constructor(b"vulkan/icd");
 
+          // 2. Build local paths natively via slice concatenation
+          let local_layer =
+            alloc::ffi::CString::new([dir_bytes, b"vulkan/explicit_layer"].concat()).unwrap();
+          let local_icd = alloc::ffi::CString::new([dir_bytes, b"vulkan/icd"].concat()).unwrap();
+          let local_loader =
+            alloc::ffi::CString::new([dir_bytes, b"vulkan/lib/libvulkan.dylib"].concat()).unwrap();
+
+          let local_layer_obj = unsafe {
+            Path::from_slice(core::slice::from_raw_parts(
+              local_layer.as_ptr().cast::<core::ffi::c_char>(),
+              local_layer.as_bytes().len(),
+            ))
+          };
+
+          let local_icd_obj = unsafe {
+            Path::from_slice(core::slice::from_raw_parts(
+              local_icd.as_ptr().cast::<core::ffi::c_char>(),
+              local_icd.as_bytes().len(),
+            ))
+          };
+
+          // 3. Determine final paths (Bundle vs VULKAN_SDK Fallback)
+          let paths_opt = if local_layer_obj.is_dir() && local_icd_obj.is_dir() {
+            Some((local_layer, local_icd, local_loader))
+          } else {
+            #[cfg(debug_assertions)]
+            {
+              let env_ptr = unsafe { libc::getenv(b"VULKAN_SDK\0".as_ptr().cast()) };
+              core::ptr::NonNull::new(env_ptr).map(|ptr| {
+                let sdk_cstr = unsafe { core::ffi::CStr::from_ptr(ptr.as_ptr()) };
+                let sdk_bytes = sdk_cstr.to_bytes();
+
+                // Ensure single slash separation
+                let slash = if sdk_bytes.last() == Some(&b'/') {
+                  b"".as_slice()
+                } else {
+                  b"/".as_slice()
+                };
+
+                // Typical LunarG Vulkan SDK layout on macOS
+                let sdk_layer = alloc::ffi::CString::new(
+                  [sdk_bytes, slash, b"share/vulkan/explicit_layer.d"].concat(),
+                )
+                .unwrap();
+                let sdk_icd =
+                  alloc::ffi::CString::new([sdk_bytes, slash, b"share/vulkan/icd.d"].concat())
+                    .unwrap();
+                let sdk_loader =
+                  alloc::ffi::CString::new([sdk_bytes, slash, b"lib/libvulkan.dylib"].concat())
+                    .unwrap();
+
+                (sdk_layer, sdk_icd, sdk_loader)
+              })
+            }
+
+            #[cfg(not(debug_assertions))]
+            {
+              None
+            }
+          };
+
+          // Early out (return None from the .and_then closure) if neither paths exist
+          let (vk_layer_path, vk_icd_path, vk_loader_path) = paths_opt?;
+
+          // 4. Set environment variables
           unsafe {
             libc::setenv(
               b"VK_LAYER_PATH\0".as_ptr().cast(),
-              (&vk_layer_path).as_ptr(),
+              vk_layer_path.as_ptr(),
               1,
-            )
-          };
-          unsafe {
+            );
             libc::setenv(
               b"VK_DRIVER_FILES\0".as_ptr().cast(),
-              (&vk_icd_path).as_ptr(),
+              vk_icd_path.as_ptr(),
               1,
-            )
+            );
           };
-          // 2. Load vulkan function
-          let vk_loader_path = path_constructor(b"vulkan/lib/libvulkan.dylib");
-          // first try to open it without loading it from disk (i.e. check if already loaded)
+
+          // 5. Load vulkan function
           let mut lib =
             unsafe { libc::dlopen(vk_loader_path.as_ptr(), libc::RTLD_LAZY | libc::RTLD_NOLOAD) };
           if lib.is_null() {
             lib =
               unsafe { libc::dlopen(vk_loader_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) };
           }
-          ptr::NonNull::new(lib)
+          core::ptr::NonNull::new(lib)
         })
         .and_then(|module_ptr| unsafe {
           vulkan_loader_module = module_ptr;
-          ptr::NonNull::new(libc::dlsym(
+          core::ptr::NonNull::new(libc::dlsym(
             module_ptr.as_ptr(),
             b"vkGetInstanceProcAddr\0".as_ptr().cast(),
           ))
@@ -436,6 +487,8 @@ pub(super) fn required_device_extensions() -> &'static Vec<&'static CStr> {
     // more fine grained synchronization stages. Also necessary for sync2 layer
     the_vec.push(ash::khr::synchronization2::NAME);
     the_vec.push(ash::khr::create_renderpass2::NAME);
+
+    the_vec.push(ash::khr::swapchain::NAME);
 
     #[cfg(windows)]
     {

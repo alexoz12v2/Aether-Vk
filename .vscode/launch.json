@@ -17,9 +17,9 @@
             "cargo": {
                 "cwd": "${workspaceFolder}/aethervk.core/rlib",
                 "args": [
-                    "test",
-                    "--no-run",
-                    "--test=simulation_test"
+                    "build",
+                    "--example",
+                    "simulation_test"
                 ]
             },
             "program": "${cargo:program}",

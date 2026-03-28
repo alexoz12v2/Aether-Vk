@@ -3,7 +3,10 @@
 // since oshal and core are then exposed to cdylibs, each with their own instance of an Allocator,
 // we should never take ownership or return allocated stuff to cdylib interface.
 use alloc::vec::Vec;
-use aethervk_oshal_rlib::os::fs::{self, FileSystemObject, PathBuf};
+use aethervk_oshal_rlib as oshal;
+use oshal::os::{
+  fs::{self, FileSystemObject, PathBuf},
+};
 use bitflags::bitflags;
 use ktx2;
 use polyhedral_mass_properties::{MassProperties, TriangleContrib};
@@ -277,29 +280,56 @@ fn calculate_mass_properties(
   unit_mass_properties.with_density(density)
 }
 
+use alloc::collections::BTreeMap;
+// Assuming Vec, PathBuf, etc. are already in scope
+
+/// Function to load a GLTF/GLB file
+/// 1. Watertightness Check: A closed, physical (manifold) mesh must have every undirected edge shared by exactly two triangles. If an edge has only one triangle, there's a hole. If it has three or more, there's self-intersecting/non-manifold geometry.
+/// 2. Outward Normals Check: By calculating the signed volume of the mesh using the divergence theorem, we can verify winding order. If the volume is negative, the triangles are wound backwards, meaning your normals are pointing inward.
 pub fn load_comet_from_gltf(path: &str) -> Result<Comet, CometLoadError> {
+  oshal::log!("--- Starting GLTF load for: {} ---", path);
+
   let mut path_buf = PathBuf::new();
   path_buf.push(path);
 
   if !path_buf.is_file() {
+    oshal::log!("ERROR: File not found at path: {}", path);
     return Err(CometLoadError::PathNotFound);
   }
 
   let base_path = path_buf.parent().unwrap_or_else(PathBuf::new);
-
   let data = fs::read(path_buf.as_ref())?;
-  let gltf = gltf::Gltf::from_slice(&data).map_err(CometLoadError::GltfImportError)?;
+
+  oshal::log!(
+    "File read successfully ({} bytes). Parsing GLTF...",
+    data.len()
+  );
+  let gltf = gltf::Gltf::from_slice(&data).map_err(|e| {
+    oshal::log!("ERROR: GLTF Parse failed: {:?}", e);
+    CometLoadError::GltfImportError(e)
+  })?;
 
   // Validations
   if gltf.animations().next().is_some() {
+    oshal::log!("ERROR: Animations found, but are not supported.");
     return Err(CometLoadError::AnimationsNotSupported);
   }
 
-  if gltf.meshes().count() > 1 {
+  let mesh_count = gltf.meshes().count();
+  if mesh_count > 1 {
+    oshal::log!("ERROR: Found {} meshes. Only 1 is supported.", mesh_count);
     return Err(CometLoadError::MultipleMeshesNotSupported);
   }
 
-  let mesh = gltf.meshes().next().ok_or(CometLoadError::PathNotFound)?; // No mesh found
+  let mesh = gltf.meshes().next().ok_or_else(|| {
+    oshal::log!("ERROR: GLTF contains no meshes.");
+    CometLoadError::PathNotFound
+  })?;
+
+  oshal::log!(
+    "Mesh found: '{}'. Processing primitives...",
+    mesh.name().unwrap_or("Unnamed")
+  );
 
   let mut vertices = Vec::new();
   let mut indices = Vec::new();
@@ -311,62 +341,151 @@ pub fn load_comet_from_gltf(path: &str) -> Result<Comet, CometLoadError> {
 
   let blob = gltf.blob.as_deref();
 
-  for primitive in mesh.primitives() {
+  for (i, primitive) in mesh.primitives().enumerate() {
+    oshal::log!("  Processing primitive {}...", i);
+
     if primitive.mode() != gltf::json::mesh::Mode::Triangles {
+      oshal::log!(
+        "  ERROR: Primitive {} is not triangulated. Mode: {:?}",
+        i,
+        primitive.mode()
+      );
       return Err(CometLoadError::UnsupportedPrimitiveMode);
     }
 
-    let reader = primitive.reader(|buffer| {
-      if buffer.index() == 0 {
-        blob
-      } else {
-        None // We only support one embedded buffer for now
-      }
-    });
+    let reader = primitive.reader(|buffer| if buffer.index() == 0 { blob } else { None });
 
-    if let (Some(positions), Some(normals), Some(uvs), Some(tangents)) = (
-      reader.read_positions(),
-      reader.read_normals(),
-      reader.read_tex_coords(0).map(|v| v.into_f32()),
-      reader.read_tangents(),
-    ) {
-      for ((position, normal), (uv, tangent)) in positions.zip(normals).zip(uvs.zip(tangents)) {
-        vertices.push(Vertex {
-          position,
-          normal,
-          uv,
-          tangent,
-        });
-      }
-    } else {
-      return Err(CometLoadError::UnsupportedNormalData);
+    // Granular attribute checks
+    let positions = reader.read_positions().ok_or_else(|| {
+      oshal::log!("  ERROR: Primitive {} is missing POSITION data.", i);
+      CometLoadError::UnsupportedNormalData // Or a more specific error
+    })?;
+
+    let normals = reader.read_normals().ok_or_else(|| {
+      oshal::log!("  ERROR: Primitive {} is missing NORMAL data.", i);
+      CometLoadError::UnsupportedNormalData
+    })?;
+
+    let uvs = reader
+      .read_tex_coords(0)
+      .map(|v| v.into_f32())
+      .ok_or_else(|| {
+        oshal::log!("  ERROR: Primitive {} is missing TEXCOORD_0 (UV) data.", i);
+        CometLoadError::UnsupportedNormalData
+      })?;
+
+    let tangents = reader.read_tangents().ok_or_else(|| {
+      oshal::log!("  ERROR: Primitive {} is missing TANGENT data.", i);
+      CometLoadError::UnsupportedNormalData
+    })?;
+
+    oshal::log!("  All required vertex attributes found. Building vertices...");
+    let start_vertex_count = vertices.len();
+    for ((position, normal), (uv, tangent)) in positions.zip(normals).zip(uvs.zip(tangents)) {
+      vertices.push(Vertex {
+        position,
+        normal,
+        uv,
+        tangent,
+      });
     }
+    oshal::log!("  Added {} vertices.", vertices.len() - start_vertex_count);
 
     if let Some(indices_iter) = reader.read_indices() {
+      let start_index_count = indices.len();
       indices.extend(indices_iter.into_u32());
+      oshal::log!("  Added {} indices.", indices.len() - start_index_count);
+    } else {
+      oshal::log!("  ERROR: Primitive {} is missing index buffer data.", i);
+      // Depending on your architecture, you might want to auto-generate indices here,
+      // but if you strictly require them:
+      return Err(CometLoadError::UnsupportedNormalData); // Swap for MissingIndices error
     }
 
+    // Textures... (Assuming get_texture_data has its own logs or succeeds silently)
     let material = primitive.material();
     let pbr = material.pbr_metallic_roughness();
 
     if let Some(info) = pbr.base_color_texture() {
       albedo_map = get_texture_data(info.texture().source().source(), &base_path, blob)?;
     }
-
     if let Some(info) = material.normal_texture() {
       normal_map = get_texture_data(info.texture().source().source(), &base_path, blob)?;
     }
-
     if let Some(info) = pbr.metallic_roughness_texture() {
       roughness_map = get_texture_data(info.texture().source().source(), &base_path, blob)?;
     }
-
     if let Some(info) = material.occlusion_texture() {
       ao_map = get_texture_data(info.texture().source().source(), &base_path, blob)?;
     }
   }
 
-  let mass_properties = calculate_mass_properties(&vertices, &indices, 1.0); // Assuming total_mass = 1.0 for now
+  // --- TOPOLOGY VALIDATIONS ---
+  oshal::log!("Running geometric validations...");
+
+  // 1. Watertight Check
+  let mut edge_counts: BTreeMap<(u32, u32), u32> = BTreeMap::new();
+  for chunk in indices.chunks_exact(3) {
+    for i in 0..3 {
+      let u = chunk[i];
+      let v = chunk[(i + 1) % 3];
+      // Store undirected edge (smallest index first)
+      let edge = if u < v { (u, v) } else { (v, u) };
+      *edge_counts.entry(edge).or_insert(0) += 1;
+    }
+  }
+
+  let mut is_watertight = true;
+  for (edge, count) in &edge_counts {
+    if *count != 2 {
+      oshal::log!(
+        "  ERROR: Mesh is not watertight! Edge ({}, {}) is shared by {} triangles (expected 2).",
+        edge.0,
+        edge.1,
+        count
+      );
+      is_watertight = false;
+      // Depending on strictness, you might want to return an error here:
+      // return Err(CometLoadError::NotWatertight);
+    }
+  }
+  if is_watertight {
+    oshal::log!("  Watertight check passed.");
+  }
+
+  // 2. Outward Normals (Signed Volume Check)
+  let mut signed_volume = 0.0;
+  for chunk in indices.chunks_exact(3) {
+    let v0 = vertices[chunk[0] as usize].position;
+    let v1 = vertices[chunk[1] as usize].position;
+    let v2 = vertices[chunk[2] as usize].position;
+
+    // Cross product of v1 and v2
+    let cp_x = v1[1] * v2[2] - v1[2] * v2[1];
+    let cp_y = v1[2] * v2[0] - v1[0] * v2[2];
+    let cp_z = v1[0] * v2[1] - v1[1] * v2[0];
+
+    // Dot product with v0
+    signed_volume += v0[0] * cp_x + v0[1] * cp_y + v0[2] * cp_z;
+  }
+  signed_volume /= 6.0;
+
+  if signed_volume <= 0.0 {
+    oshal::log!(
+      "  ERROR: Signed volume is {} (<= 0). Winding order is inverted (normals point inwards) or mesh is degenerate.",
+      signed_volume
+    );
+    // return Err(CometLoadError::InvertedNormals);
+  } else {
+    oshal::log!(
+      "  Outward normals check passed (Volume: {}).",
+      signed_volume
+    );
+  }
+
+  oshal::log!("--- GLTF load successful! ---");
+
+  let mass_properties = calculate_mass_properties(&vertices, &indices, 1.0);
 
   Ok(Comet {
     vertices,
@@ -380,14 +499,14 @@ pub fn load_comet_from_gltf(path: &str) -> Result<Comet, CometLoadError> {
 }
 
 bitflags! {
-    #[repr(C)]
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-    pub struct TextureFlags: u32 {
-        const ALBEDO    = 1 << 0;
-        const NORMAL    = 1 << 1;
-        const ROUGHNESS = 1 << 2;
-        const AO        = 1 << 3;
-    }
+  #[repr(C)]
+  #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+  pub struct TextureFlags: u32 {
+    const ALBEDO    = 1 << 0;
+    const NORMAL    = 1 << 1;
+    const ROUGHNESS = 1 << 2;
+    const AO        = 1 << 3;
+  }
 }
 
 #[repr(C)]
