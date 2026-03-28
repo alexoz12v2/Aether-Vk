@@ -1,62 +1,127 @@
 use aethervk_core_rlib::{
-  gpu::{self, frame, RenderDevice, RenderDeviceHandle, RenderFrontend, SwapchainStatus},
-  scene::{self, PhysicalMeshComponent, Scene, TransformComponent},
+  gpu::{
+    self, OpaqueNativeHandleInfo, RenderDevice,
+    frame::{self, RenderPath},
+  },
+  scene::{self, CameraComponent, PhysicalMeshComponent, Scene, TransformComponent},
   simulation,
-  types::GpuResult,
+  types::{GpuResult, RuntimeParams},
 };
-use aethervk_oshal::os::time::TimeReadings;
 use aethervk_oshal_rlib::math::{
+  matrix::{mat4::Mat4x4f32, Matrix4, SquareMatrix},
   quaternion::Quaternion,
-  vector::vec3::{Vec3f32, self},
+  vector::{vec3::Vec3f32, vec4::Vec4f32, Vector3},
 };
+use heapless::index_map::FnvIndexMap;
+#[cfg(target_os = "macos")]
+use raw_window_handle::RawWindowHandle;
+#[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+use raw_window_handle::RawWindowHandle;
+#[cfg(target_os = "linux")]
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
+#[cfg(target_os = "linux")]
+use core::ffi;
+#[cfg(windows)]
+use raw_window_handle::RawWindowHandle;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use std::{env, ptr};
-use std::path::PathBuf;
-use winit::{
-  event::{Event, WindowEvent, DeviceEvent, ElementState, RawKeyEvent},
-  event_loop::{ControlFlow, EventLoop},
-  window::{WindowBuilder, Window},
-  keyboard::{Key, PhysicalKey, KeyCode},
+#[cfg(all(target_os = "linux", feature = "linux_wayland"))]
+use spirv::Op;
+#[cfg(windows)]
+use core::ffi;
+use std::{
+  collections::HashMap,
+  sync::{Arc, Mutex, atomic::Ordering},
 };
+use winit::{
+  event::{DeviceEvent, ElementState, Event, WindowEvent},
+  event_loop::{ControlFlow, EventLoop},
+  window::{Window, WindowBuilder},
+};
+
+fn extract_native_handles(window: &Window) -> OpaqueNativeHandleInfo {
+  // extract raw handles from winit window
+  let window_handle = window.window_handle().unwrap().as_raw();
+  let display_handle = window.display_handle().unwrap().as_raw();
+
+  match (window_handle, display_handle) {
+    #[cfg(windows)]
+    (RawWindowHandle::Win32(w), _) => OpaqueNativeHandleInfo {
+      ptr0: w.hinstance.map(|h| h.get()).unwrap_or(0) as *mut ffi::c_void,
+      ptr1: w.hwnd.get() as *mut ffi::c_void,
+    },
+
+    #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
+    (RawWindowHandle::Wayland(w), RawDisplayHandle::Wayland(d)) => OpaqueNativeHandleInfo {
+      ptr0: d.display.as_ptr() as *mut ffi::c_void,
+      ptr1: w.surface.as_ptr() as *mut ffi::c_void,
+    },
+
+    #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+    (RawWindowHandle::Xlib(w), RawDisplayHandle::Xlib(d)) => OpaqueNativeHandleInfo {
+      ptr0: d
+        .display
+        .map(|d| d.as_ptr())
+        .unwrap_or(std::ptr::null_mut()) as *mut ffi::c_void,
+      ptr1: w.window as usize as *mut ffi::c_void,
+    },
+
+    #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+    (RawWindowHandle::Xcb(w), RawDisplayHandle::Xcb(d)) => OpaqueNativeHandleInfo {
+      ptr0: d
+        .connection
+        .map(|c| c.as_ptr())
+        .unwrap_or(std::ptr::null_mut()) as *mut ffi::c_void,
+      ptr1: w.window.get() as usize as *mut ffi::c_void,
+    },
+
+    #[cfg(target_os = "macos")]
+    (RawWindowHandle::AppKit(w), _) => {
+      use core::ffi;
+
+      use objc::{class, msg_send, sel, sel_impl};
+      // raw-window-handle gives us a NSView
+      let ns_view = w.ns_view.as_ptr() as *mut objc::runtime::Object;
+      // we must use Objcetive-C to create a CAMetalLayer and attach it
+      let layer: *mut ffi::c_void = unsafe {
+        // id layer = [CAMetalLayer layer];
+        let metal_layer_class = class!(CAMetalLayer);
+        let layer: *mut objc::runtime::Object = msg_send![metal_layer_class, layer];
+
+        // [view setWantsLayer: YES];
+        let () = msg_send![ns_view, setWantsLayer: true];
+
+        // [view setLayer: layer];
+        let () = msg_send![ns_view, setLayer: layer];
+
+        layer as *mut ffi::c_void
+      };
+
+      OpaqueNativeHandleInfo {
+        ptr0: layer,
+        ptr1: std::ptr::null_mut(),
+      }
+    }
+
+    _ => panic!("unsupported platform or handle mismatch"),
+  }
+}
 
 struct AppState {
   scene: Scene,
   presentation_engine: gpu::PresentationEngineHandle,
-  paused: bool,
+  camera_entity: scene::EntityId,
+  is_paused: bool,
   time_scale: f32,
-  should_run: bool,
-  input_state: InputState,
-}
-
-struct InputState {
-  forward: bool,
-  backward: bool,
-  left: bool,
-  right: bool,
-  up: bool,
-  down: bool,
-}
-
-impl Default for InputState {
-  fn default() -> Self {
-    Self {
-      forward: false,
-      backward: false,
-      left: false,
-      right: false,
-      up: false,
-      down: false,
-    }
-  }
+  root_entity: scene::EntityId,
 }
 
 impl simulation::Pausable for AppState {
   fn is_paused(&self) -> bool {
-    self.paused
+    self.is_paused
   }
 
   fn set_paused(&mut self) {
-    self.paused = true;
+    self.is_paused = true;
   }
 
   fn time_scale(&self) -> f32 {
@@ -68,64 +133,62 @@ impl simulation::Pausable for AppState {
   }
 }
 
-fn handle_input(state: &mut AppState, event: &WindowEvent) {
-  if let WindowEvent::KeyboardInput { event, .. } = event {
-    if let PhysicalKey::Code(code) = event.physical_key {
-      let is_pressed = event.state == ElementState::Pressed;
-      match code {
-        KeyCode::KeyW => state.input_state.forward = is_pressed,
-        KeyCode::KeyS => state.input_state.backward = is_pressed,
-        KeyCode::KeyA => state.input_state.left = is_pressed,
-        KeyCode::KeyD => state.input_state.right = is_pressed,
-        KeyCode::Space => state.input_state.up = is_pressed,
-        KeyCode::ShiftLeft => state.input_state.down = is_pressed,
-        _ => {}
-      }
-    }
-  }
-}
-
 #[test]
 fn test_simulation() {
+  // 1. Setup
   let event_loop = EventLoop::new().unwrap();
   let window = WindowBuilder::new()
     .with_title("AetherVk Simulation")
     .build(&event_loop)
     .unwrap();
+  let native_handles = extract_native_handles(&window);
 
-  let mut render_frontend = gpu::new_render_frontend(gpu::VULKAN_RENDER_BACKEND).unwrap();
+  let runtime_params = Box::leak(Box::new(RuntimeParams {
+    render_backend_params: FnvIndexMap::new(),
+  }));
+  let mut render_frontend = Arc::new(Mutex::new(
+    gpu::new_render_frontend(gpu::VULKAN_RENDER_BACKEND, runtime_params).unwrap(),
+  ));
 
   let additional_params = gpu::DeviceAdditionalParams::new();
   let render_device_handle = render_frontend
-    .take_mut_and(|context| context.init_device(0, &additional_params))
+    .lock()
+    .unwrap()
+    .take_mut_and(|context| Ok(context.init_device(0, &additional_params)?))
     .unwrap()
     .unwrap();
 
   let presentation_engine = {
-    let display_handle = window.display_handle().unwrap().as_raw();
-    let window_handle = window.window_handle().unwrap().as_raw();
     let params = gpu::PresentationEngineParams {
       width: window.inner_size().width,
       height: window.inner_size().height,
       vsync: true,
-      window_info: gpu::OpaqueNativeHandleInfo {
-        ptr0: display_handle as *mut _,
-        ptr1: window_handle as *mut _,
-      },
+      window_info: native_handles,
     };
-
     render_frontend
+      .lock()
+      .unwrap()
       .take_and(|context| {
+        use aethervk_core_rlib::types::GpuError;
+
+        let mut handle_result: GpuResult<gpu::PresentationEngineHandle> =
+          Err(GpuError::InvalidState);
+        let mut closure_data = (&params, &mut handle_result);
+
+        let closure = |device: &dyn RenderDevice, data: *mut core::ffi::c_void| {
+          let (params, handle_result) = unsafe { &mut *(data as *mut (_, &mut GpuResult<_>)) };
+          **handle_result = device.create_presentation_engine(params);
+          Ok(())
+        };
+
         context
           .deref_device_and(
             render_device_handle,
-            &params as *const _ as *mut core::ffi::c_void,
-            |dev, params| {
-              let params = unsafe { &*(params as *const gpu::PresentationEngineParams) };
-              dev.create_presentation_engine(params)
-            },
+            &mut closure_data as *mut _ as *mut core::ffi::c_void,
+            closure,
           )
-          .unwrap()
+          .unwrap()?;
+        Ok(handle_result?)
       })
       .unwrap()
       .unwrap()
@@ -134,207 +197,337 @@ fn test_simulation() {
   let scene = Scene::new();
   scene.register_component::<TransformComponent>(&[]);
   scene.register_component::<PhysicalMeshComponent>(&[]);
+  scene.register_component::<CameraComponent>(&[]);
 
   let home_dir = {
     let mut home_dir = std::env::current_exe().unwrap();
-    for _ in 0..6 {
+    for _ in 0..5 {
       home_dir.pop();
-      assert!(home_dir);
     }
     home_dir
   };
-  let comet_path = home_dir.join();
-  let model_path = PathBuf::from(home_dir)
-    .join("model.gltf")
-    .to_str()
-    .unwrap()
-    .to_string();
+  let model_path = home_dir.join("assets/Comet.glb");
+  let comet = simulation::comet::load_comet_from_gltf(model_path.to_str().unwrap())
+    .expect("Failed to load comet");
 
-  let comet = simulation::comet::load_comet_from_gltf(&model_path).expect("Failed to load comet");
-
-  let entity = scene.spawn_entity();
+  let root_entity = scene.spawn_entity();
   scene
     .add_component(
-      entity,
+      root_entity,
       TransformComponent {
-        position: Vec3f32::new(0.0, 0.0, -5.0),
-        rotation: Quaternion::identity().into(),
-        scale: Vec3f32::new(1.0, 1.0, 1.0),
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: <Vec4f32 as Quaternion>::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    )
+    .unwrap();
+
+  let mesh_entity = scene.spawn_entity();
+  scene
+    .add_component(
+      mesh_entity,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: <Vec4f32 as Quaternion>::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
       },
     )
     .unwrap();
   scene
-    .add_component(entity, PhysicalMeshComponent { mesh: comet })
+    .add_component(mesh_entity, PhysicalMeshComponent { mesh: comet })
+    .unwrap();
+  scene.set_parent(mesh_entity, Some(root_entity));
+
+  let camera_entity = scene.spawn_entity();
+  scene
+    .add_component(
+      camera_entity,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, -5.0),
+        rotation: <Vec4f32 as Quaternion>::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    )
+    .unwrap();
+  scene
+    .add_component(
+      camera_entity,
+      CameraComponent {
+        projection: Mat4x4f32::identity(), // Will be updated on resize
+      },
+    )
     .unwrap();
 
-  let mut app_state = AppState {
+  // 2. Register renderable (implicitly handled by get_or_create_physical_mesh_resources)
+
+  let app_state = AppState {
     scene,
     presentation_engine,
-    paused: false,
+    camera_entity,
+    is_paused: false,
     time_scale: 1.0,
-    should_run: true,
-    input_state: InputState::default(),
+    root_entity,
   };
+
+  // 3. & 4. & 5. Loops
+  let render_frontend_renderer = Arc::clone(&render_frontend);
+  let render_closure = move |state: &mut AppState, _generation: u64| {
+    let render_payload =
+      |device: &dyn gpu::RenderDevice, user_data: *mut core::ffi::c_void| -> GpuResult<()> {
+        let state = unsafe { (user_data as *mut AppState).as_mut().unwrap() };
+
+        device.start_frame()?;
+        let acquire_result = device.acquire_next_image(state.presentation_engine)?;
+
+        if acquire_result.status.needs_resize() {
+          return Ok(()); // Main thread will handle resize
+        }
+
+        let mut frame = frame::Frame::new();
+
+        let mut global_transforms = HashMap::new();
+        let mut matrix_stack = vec![Mat4x4f32::identity()];
+
+        state.scene.traverse_dfs_pre_order(
+          state.root_entity,
+          &mut matrix_stack,
+          &|_, _| true,
+          &mut |scene, entity, stack: &mut Vec<Mat4x4f32>| {
+            let local_transform = scene
+              .with_component(entity, |c: &TransformComponent| {
+                Mat4x4f32::translation(c.position.to_vec4::<Vec4f32>(1.0))
+                  * Mat4x4f32::from_quat(c.rotation)
+                  * Mat4x4f32::from_scale(c.scale)
+              })
+              .unwrap_or(Mat4x4f32::identity());
+
+            let parent_transform = stack.last().unwrap();
+            let global_transform = *parent_transform * local_transform;
+
+            global_transforms.insert(entity, global_transform);
+
+            if scene
+              .with_component(entity, |_: &PhysicalMeshComponent| true)
+              .is_some()
+            {
+              scene
+                .with_component(entity, |c: &PhysicalMeshComponent| {
+                  frame
+                    .add_renderable(
+                      device,
+                      entity,
+                      global_transform,
+                      scene::RenderableDataRef::PhysicalMesh(c),
+                      state.presentation_engine,
+                    )
+                    .unwrap();
+                })
+                .unwrap();
+            }
+
+            stack.push(global_transform);
+            true
+          },
+        );
+
+        state
+          .scene
+          .with_component(
+            state.camera_entity,
+            |camera_transform: &TransformComponent| {
+              state
+                .scene
+                .with_component(state.camera_entity, |camera_component: &CameraComponent| {
+                  let render_path = frame::ForwardRenderPath;
+                  render_path.record_commands(
+                    device,
+                    (camera_transform, camera_component),
+                    &frame,
+                    state.presentation_engine,
+                    &acquire_result,
+                  )
+                })
+                .unwrap()
+            },
+          )
+          .unwrap()?;
+
+        device.present(
+          state.presentation_engine,
+          acquire_result.image_index as usize,
+          acquire_result.frame_index as usize,
+        )?;
+        Ok(())
+      };
+
+    let res = render_frontend_renderer
+      .lock()
+      .unwrap()
+      .take_and(|context| {
+        context
+          .deref_device_and(
+            render_device_handle,
+            state as *mut _ as *mut core::ffi::c_void,
+            render_payload,
+          )
+          .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
+      })
+      .unwrap();
+
+    if let Err(e) = res {
+      println!("Render error: {:?}", e);
+    }
+  };
+
+  let simulation_loop = simulation::run_multithreaded(app_state, render_closure);
+  let state = simulation_loop.state;
+  let generation = simulation_loop.generation;
+  let should_run = simulation_loop.should_run;
+  let mut render_thread = Some(simulation_loop.render_thread);
+
+  let mut right_mouse_button_down = false;
+  let camera_focus_point = Vec3f32::from_components(0.0, 0.0, 0.0);
+  let mut camera_distance = 5.0;
+
+  let render_frontend_events = Arc::clone(&render_frontend);
 
   event_loop.set_control_flow(ControlFlow::Poll);
-
-  let mut events_buffer = Vec::new();
-
   event_loop
-    .run(move |event, elwt| match event {
-      Event::WindowEvent { event, .. } => {
-        if event == WindowEvent::CloseRequested {
-          app_state.should_run = false;
-          elwt.exit();
-        } else {
-          events_buffer.push(event);
-        }
-      }
-      Event::AboutToWait => {
-        simulation::run(
-          app_state,
-          &render_frontend,
-          render_device_handle,
-          |s| s.should_run,
-          |s| {
-            for event in events_buffer.drain(..) {
-              handle_input(s, &event);
+    .run(move |event, elwt| {
+      match event {
+        Event::WindowEvent { event, .. } => match event {
+          WindowEvent::CloseRequested => {
+            should_run.store(false, Ordering::Relaxed);
+            if let Some(thread) = render_thread.take() {
+              thread.join();
             }
-          },
-          |s, time, render_frontend, render_device_handle| {
-            render(s, time, render_frontend, render_device_handle, &window);
-          },
-          |s, time, _render_frontend, _render_device_handle| {
-            update_transform(s, time);
-          },
-          16_667,
-          100_000,
-        );
-        app_state = app_state;
+            elwt.exit();
+          }
+          WindowEvent::Resized(physical_size) => {
+            let mut state = state.write();
+
+            struct ResizeData<'a> {
+              state: &'a mut AppState,
+              size: winit::dpi::PhysicalSize<u32>,
+            }
+
+            fn resize_callback(
+              device: &dyn RenderDevice,
+              data: *mut core::ffi::c_void,
+            ) -> GpuResult<()> {
+              let resize_data = unsafe { &mut *(data as *mut ResizeData) };
+              device.resize_presentation_engine(
+                resize_data.state.presentation_engine,
+                resize_data.size.width,
+                resize_data.size.height,
+              )
+            }
+
+            let mut resize_data = ResizeData {
+              state: &mut state,
+              size: physical_size,
+            };
+
+            let res = render_frontend_events.lock().unwrap().take_and(|context| {
+              Ok(
+                context
+                  .deref_device_and(
+                    render_device_handle,
+                    &mut resize_data as *mut _ as *mut core::ffi::c_void,
+                    resize_callback,
+                  )
+                  .unwrap()?,
+              )
+            });
+
+            if let Some(Ok(_)) = res {
+              state.scene.with_component_mut(
+                state.camera_entity,
+                |camera: &mut CameraComponent| {
+                  camera.projection = Mat4x4f32::perspective(
+                    45.0f32.to_radians(),
+                    physical_size.width as f32 / physical_size.height as f32,
+                    0.1,
+                    100.0,
+                  );
+                },
+              );
+            }
+            generation.fetch_add(1, Ordering::Relaxed);
+          }
+          WindowEvent::MouseInput {
+            state: element_state,
+            button: winit::event::MouseButton::Right,
+            ..
+          } => {
+            right_mouse_button_down = element_state == ElementState::Pressed;
+          }
+          _ => {}
+        },
+        Event::DeviceEvent {
+          event: DeviceEvent::MouseMotion { delta },
+          ..
+        } if right_mouse_button_down => {
+          let mut state = state.write();
+          state.scene.with_component_mut(
+            state.camera_entity,
+            |camera_transform: &mut TransformComponent| {
+              let rotation_speed = 0.005;
+              let yaw_delta = delta.0 as f32 * rotation_speed;
+              let pitch_delta = delta.1 as f32 * rotation_speed;
+
+              let rotation_y = <Vec4f32 as Quaternion>::from_axis_angle(
+                Vec3f32::from_components(0.0, 1.0, 0.0),
+                -yaw_delta,
+              );
+              let right: Vec4f32 = camera_transform.rotation
+                * Vec3f32::from_components(1.0, 0.0, 0.0).to_vec4::<Vec4f32>(0.0);
+              let rotation_x =
+                <Vec4f32 as Quaternion>::from_axis_angle(right.vector_part(), -pitch_delta);
+
+              let new_rotation = rotation_y * rotation_x * camera_transform.rotation;
+              camera_transform.rotation = new_rotation;
+
+              let new_forward: Vec4f32 =
+                new_rotation * Vec3f32::from_components(0.0, 0.0, -1.0).to_vec4::<Vec4f32>(0.0);
+              camera_transform.position =
+                camera_focus_point - new_forward.vector_part() * camera_distance;
+            },
+          );
+
+          generation.fetch_add(1, Ordering::Relaxed);
+        }
+        Event::DeviceEvent {
+          event: DeviceEvent::MouseWheel { delta, .. },
+          ..
+        } => {
+          let scroll_amount = match delta {
+            winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+            winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
+          };
+          camera_distance -= scroll_amount * 0.1;
+          if camera_distance < 1.0 {
+            camera_distance = 1.0;
+          }
+
+          let mut state = state.write();
+          state.scene.with_component_mut(
+            state.camera_entity,
+            |camera_transform: &mut TransformComponent| {
+              let forward: Vec4f32 = camera_transform.rotation
+                * Vec3f32::from_components(0.0, 0.0, -1.0).to_vec4::<Vec4f32>(0.0);
+              camera_transform.position =
+                camera_focus_point - forward.vector_part() * camera_distance;
+            },
+          );
+
+          generation.fetch_add(1, Ordering::Relaxed);
+        }
+        Event::AboutToWait => {
+          // This is where a fixed update would go if we had one
+        }
+        _ => (),
       }
-      _ => (),
     })
     .unwrap();
-}
-
-fn update_transform(state: &mut AppState, time: &TimeReadings) {
-  let rotation_speed = 0.5;
-  let translation_speed = 1.0;
-
-  state
-    .scene
-    .query1_mut(|_, transform: &mut TransformComponent| {
-      let mut rotation_delta = Quaternion::identity();
-      if state.input_state.left {
-        rotation_delta = rotation_delta
-          * Quaternion::from_axis_angle(
-            Vec3f32::new(0.0, 1.0, 0.0),
-            -rotation_speed * time.dt as f32,
-          );
-      }
-      if state.input_state.right {
-        rotation_delta = rotation_delta
-          * Quaternion::from_axis_angle(
-            Vec3f32::new(0.0, 1.0, 0.0),
-            rotation_speed * time.dt as f32,
-          );
-      }
-
-      let current_rotation = Quaternion::from(transform.rotation);
-      transform.rotation = (rotation_delta * current_rotation).into();
-
-      if state.input_state.forward {
-        transform.position.z += translation_speed * time.dt as f32;
-      }
-      if state.input_state.backward {
-        transform.position.z -= translation_speed * time.dt as f32;
-      }
-      if state.input_state.up {
-        transform.position.y += translation_speed * time.dt as f32;
-      }
-      if state.input_state.down {
-        transform.position.y -= translation_speed * time.dt as f32;
-      }
-    });
-}
-
-fn render(
-  state: &mut AppState,
-  time: &TimeReadings,
-  render_frontend: &RenderFrontend,
-  render_device_handle: RenderDeviceHandle,
-  window: &Window,
-) {
-  let res: GpuResult<()> = render_frontend
-    .take_and(|context| {
-      context
-        .deref_device_and(render_device_handle, ptr::from_mut(state).cast(), do_render)
-        .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
-    })
-    .unwrap()
-    .unwrap();
-
-  if let Err(e) = res {
-    println!("Render error: {:?}", e);
-  }
-}
-
-fn do_render(device: &dyn gpu::RenderDevice, user_data: *mut ffi::c_void) -> GpuResult<()> {
-  let state = unsafe { user_data.cast::<AppState>().as_mut().unwrap_unchecked() };
-  dev.start_frame()?;
-  let acquire_result = dev.acquire_next_image(state.presentation_engine)?;
-  if acquire_result.status == SwapchainStatus::NeedsRecreation {
-    let size = window.inner_size();
-    dev.resize_presentation_engine(state.presentation_engine, size.width, size.height)?;
-    return Ok(());
-  }
-
-  let mut frame = frame::Frame::new();
-  state.scene.query2(
-    |entity_id, transform: &TransformComponent, mesh: &PhysicalMeshComponent| {
-      frame
-        .add_renderable(
-          dev,
-          entity_id,
-          transform,
-          scene::RenderableDataRef::PhysicalMesh(mesh),
-          state.presentation_engine,
-        )
-        .unwrap();
-    },
-  );
-
-  let render_path = frame::ForwardRenderPath;
-  // We need a camera
-  // For now, let's just create a dummy one
-  let camera_transform = TransformComponent {
-    position: Vec3f32::new(0.0, 0.0, 0.0),
-    rotation: Quaternion::identity().into(),
-    scale: Vec3f32::new(1.0, 1.0, 1.0),
-  };
-  let camera_component = scene::CameraComponent {
-    projection: aethervk_oshal_rlib::math::matrix::mat4::perspective_vk(
-      45.0f32.to_radians(),
-      window.inner_size().width as f32 / window.inner_size().height as f32,
-      0.1,
-      100.0,
-    ),
-  };
-
-  render_path.record_commands(
-    dev,
-    (&camera_transform, &camera_component),
-    &frame,
-    // This is a placeholder for the render pass handle
-    // We will need to create a render pass in the device
-    gpu::GpuResourceHandle(acquire_result.image_index as u64),
-  )?;
-
-  dev.present(
-    state.presentation_engine,
-    acquire_result.image_index as usize,
-    acquire_result.frame_index as usize,
-  )?;
-
-  Ok(())
 }

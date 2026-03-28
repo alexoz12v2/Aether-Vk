@@ -124,6 +124,7 @@ pub trait RenderDevice: Send + Sync {
     &self,
     cmd_buffer: CommandBufferHandle,
     presentation_engine: PresentationEngineHandle,
+    acquire_result: &AcquireResult,
   ) -> GpuResult<()>;
 
   /// alter internal state for current command buffer binding a new graphics pipeline

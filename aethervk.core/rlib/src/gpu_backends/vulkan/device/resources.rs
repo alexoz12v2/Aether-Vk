@@ -276,8 +276,8 @@ impl super::DeviceResource for DiscardPool {
 }
 
 pub(super) struct Buffer {
-  buffer: NonZeroHandle<vk::Buffer>,
-  allocation: vk_mem::Allocation,
+  pub buffer: NonZeroHandle<vk::Buffer>,
+  pub allocation: vk_mem::Allocation,
 }
 
 impl Hash for Buffer {
@@ -287,9 +287,9 @@ impl Hash for Buffer {
 }
 
 pub(super) struct Image {
-  image: NonZeroHandle<vk::Image>,
-  image_view: NonZeroHandle<vk::ImageView>,
-  allocation: vk_mem::Allocation,
+  pub image: NonZeroHandle<vk::Image>,
+  pub image_view: NonZeroHandle<vk::ImageView>,
+  pub allocation: vk_mem::Allocation,
 }
 
 impl Image {
@@ -494,6 +494,12 @@ bitflags::bitflags! {
   }
 }
 
+impl TextureFlags {
+  pub fn count() -> usize {
+    4
+  }
+}
+
 #[repr(C)]
 pub(super) struct ForwardMeshRenderResourcePushData {
   model_view_projection: [f32; 16],
@@ -517,20 +523,20 @@ impl Default for ForwardMeshRenderResourcePushData {
 }
 
 pub(super) struct ForwardMeshRenderResource {
-  allocator: vk_mem::ffi::VmaAllocator, // necessary evil. TODO: Edit DeviceResource trait and remove this.
-  position_vertex_buffer: Buffer,
-  attributes_vertex_buffer: Buffer,
-  index_buffer: Buffer,
+  pub allocator: vk_mem::ffi::VmaAllocator, // necessary evil. TODO: Edit DeviceResource trait and remove this.
+  pub position_vertex_buffer: Buffer,
+  pub attributes_vertex_buffer: Buffer,
+  pub index_buffer: Buffer,
   /// Each frame, this is copied and then overwritten with [`crate::simulation::comet::PushConstants`]
   push_data: ForwardMeshRenderResourcePushData,
   /// layout(binding = 0) uniform sampler2D albedoMap;
-  albedo_image: Option<Image>,
+  pub albedo_image: Option<Image>,
   /// layout(binding = 1) uniform sampler2D normalMap;
-  normal_image: Option<Image>,
+  pub normal_image: Option<Image>,
   /// layout(binding = 2) uniform sampler2D roughnessMap;
-  roughness_image: Option<Image>,
+  pub roughness_image: Option<Image>,
   /// layout(binding = 3) uniform sampler2D aoMap;
-  ao_image: Option<Image>,
+  pub ao_image: Option<Image>,
 }
 
 unsafe impl Sync for ForwardMeshRenderResource {}

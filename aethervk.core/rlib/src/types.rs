@@ -61,6 +61,9 @@ pub enum GpuError {
   #[error("Unsupported feature: {0}")]
   UnsupportedFeatureNamed(String),
 
+  #[error("Presentation engine Resize Required")]
+  ResizeRequired,
+
   #[error("Backend error: {0}")]
   BackendSpecific(String),
 }

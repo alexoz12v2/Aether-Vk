@@ -1,5 +1,12 @@
 use crate::gpu::{RenderDeviceHandle, RenderFrontend};
-use aethervk_oshal_rlib::os::{native::this_thread, time::{TimeInfo, TimeReadings}};
+use aethervk_oshal_rlib::os::{
+  native::this_thread,
+  thread,
+  time::{TimeInfo, TimeReadings},
+};
+use alloc::sync::Arc;
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use spin::RwLock;
 
 pub mod comet;
 
@@ -12,6 +19,52 @@ pub trait Pausable {
   }
   fn time_scale(&self) -> f32;
   fn set_time_scale(&mut self, scale: f32);
+}
+
+pub struct MultithreadedLoop<S> {
+  pub state: Arc<RwLock<S>>,
+  pub generation: Arc<AtomicU64>,
+  pub should_run: Arc<AtomicBool>,
+  pub render_thread: thread::Thread,
+}
+
+pub fn run_multithreaded<S, R>(state: S, mut render_closure: R) -> MultithreadedLoop<S>
+where
+  S: Send + Sync + 'static,
+  R: FnMut(&mut S, u64) + Send + 'static,
+{
+  let state = Arc::new(RwLock::new(state));
+  let generation = Arc::new(AtomicU64::new(0));
+  let should_run = Arc::new(AtomicBool::new(true));
+
+  let render_state = state.clone();
+  let render_generation = generation.clone();
+  let render_should_run = should_run.clone();
+
+  let render_thread = thread::Builder::new()
+    .name("Render Thread".into())
+    .spawn(move || {
+      let mut last_rendered_generation = 0;
+      while render_should_run.load(Ordering::Relaxed) {
+        let current_generation = render_generation.load(Ordering::Relaxed);
+        if current_generation > last_rendered_generation {
+          let mut state_guard = render_state.write();
+          render_closure(&mut *state_guard, current_generation);
+          last_rendered_generation = current_generation;
+        } else {
+          // Yield or sleep to avoid busy-waiting
+          this_thread::sleep_for(core::time::Duration::from_millis(1));
+        }
+      }
+    })
+    .expect("Failed to spawn render thread");
+
+  MultithreadedLoop {
+    state,
+    generation,
+    should_run,
+    render_thread,
+  }
 }
 
 /// A generic update loop function.

@@ -36,6 +36,20 @@
                 "${workspaceFolder}/AetherVk.sln"
             ],
             "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "cargo-check",
+            "command": "cargo",
+            "type": "shell",
+            "args": [
+                "check"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/aethervk.core/rlib"
+            },
+            "problemMatcher": [
+                "$rustc"
+            ]
         }
     ]
 }

@@ -9,6 +9,22 @@
             "type": "dotnet",
             "request": "launch",
             "projectPath": "${workspaceFolder}/aethervk.ui.app/AetherVk.csproj",
+        },
+        {
+            "name": "Rust: AetherVk Core rlib simulation test",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "cwd": "${workspaceFolder}/aethervk.core/rlib",
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--test=simulation_test"
+                ]
+            },
+            "program": "${cargo:program}",
+            "cwd": "${workspaceFolder}/aethervk.core/rlib",
+            "preLaunchTask": "cargo-check"
         }
     ]
 }
