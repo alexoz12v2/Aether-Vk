@@ -1,8 +1,7 @@
 use core::ptr;
 use core::hash::{Hash, Hasher};
-use aethervk_oshal_rlib::hash::FnvHasher;
-use aethervk_oshal_rlib::os::native::ThreadId;
-use ash::ext::nested_command_buffer;
+use aethervk_oshal_rlib as oshal;
+use oshal::{hash::FnvHasher, os::native::ThreadId};
 use ash::vk;
 use alloc::{boxed::Box, collections::VecDeque, sync, vec::Vec};
 use spirv_reflect::{ffi::SpvReflectResult_SPV_REFLECT_RESULT_SUCCESS, types::ReflectShaderStageFlags};
@@ -305,6 +304,7 @@ impl Image {
 
   pub fn new_2d(
     device: &ash::Device,
+    synchronization2: &ash::khr::synchronization2::Device,
     allocator: &vk_mem::Allocator,
     command_buffer: vk::CommandBuffer,
     discard_pool: &DiscardPool,
@@ -413,7 +413,7 @@ impl Image {
     let dependency_info_to_transfer = vk::DependencyInfo::default()
       .image_memory_barriers(core::slice::from_ref(&image_barrier_to_transfer));
     unsafe {
-      device.cmd_pipeline_barrier2(command_buffer, &dependency_info_to_transfer);
+      synchronization2.cmd_pipeline_barrier2(command_buffer, &dependency_info_to_transfer);
     }
 
     // 4. Copy buffer to image
@@ -464,7 +464,7 @@ impl Image {
     let dependency_info_to_shader_read = vk::DependencyInfo::default()
       .image_memory_barriers(core::slice::from_ref(&image_barrier_to_shader_read));
     unsafe {
-      device.cmd_pipeline_barrier2(command_buffer, &dependency_info_to_shader_read);
+      synchronization2.cmd_pipeline_barrier2(command_buffer, &dependency_info_to_shader_read);
     }
 
     // 6. Schedule staging buffer for destruction.
@@ -527,8 +527,6 @@ pub(super) struct ForwardMeshRenderResource {
   pub position_vertex_buffer: Buffer,
   pub attributes_vertex_buffer: Buffer,
   pub index_buffer: Buffer,
-  /// Each frame, this is copied and then overwritten with [`crate::simulation::comet::PushConstants`]
-  push_data: ForwardMeshRenderResourcePushData,
   /// layout(binding = 0) uniform sampler2D albedoMap;
   pub albedo_image: Option<Image>,
   /// layout(binding = 1) uniform sampler2D normalMap;
@@ -843,7 +841,6 @@ impl ForwardMeshRenderResource {
       position_vertex_buffer,
       attributes_vertex_buffer,
       index_buffer,
-      push_data: Default::default(),
       albedo_image,
       normal_image,
       roughness_image,
@@ -905,7 +902,8 @@ impl ForwardMeshRenderResourceArchetype {
     fragment_shader: &Shader,
   ) -> GpuResult<Self> {
     const NEVER_DISCARD_TIMELINE: u64 = u64::MAX;
-    let mut janitor = DeviceResourceJanitor::<'_, 16>::new(device);
+    // TODO Implement a special value for the janitor which means "DYNAMIC_SIZE"
+    let mut janitor = DeviceResourceJanitor::<'_, 256>::new(device);
 
     if !vertex_shader
       .spv_module

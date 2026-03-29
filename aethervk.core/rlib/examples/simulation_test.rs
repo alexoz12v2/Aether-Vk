@@ -30,13 +30,23 @@ use spirv::Op;
 use core::ffi;
 use std::{
   collections::HashMap,
-  sync::{Arc, Mutex, atomic::Ordering},
+  sync::{
+    Arc, RwLock,
+    atomic::{self, AtomicU64},
+  },
+  time::Instant,
 };
 use winit::{
   event::{DeviceEvent, ElementState, Event, WindowEvent},
   event_loop::{ControlFlow, EventLoop},
   window::{Window, WindowBuilder},
 };
+use aethervk_core_rlib::scene::EntityId;
+
+struct RenderItem {
+  entity_id: EntityId,
+  model_matrix: Mat4x4f32,
+}
 
 fn extract_native_handles(window: &Window) -> OpaqueNativeHandleInfo {
   // extract raw handles from winit window
@@ -152,6 +162,9 @@ impl simulation::Pausable for AppState {
 }
 
 fn main() {
+  let start_time = Instant::now();
+  println!("[{:.2?}] Application starting.", start_time.elapsed());
+
   // 1. Setup
   let event_loop = EventLoop::new().unwrap();
   let window = WindowBuilder::new()
@@ -163,13 +176,13 @@ fn main() {
   let runtime_params = Box::leak(Box::new(RuntimeParams {
     render_backend_params: FnvIndexMap::new(),
   }));
-  let mut render_frontend = Arc::new(Mutex::new(
+  let render_frontend = Arc::new(RwLock::new(
     gpu::new_render_frontend(gpu::VULKAN_RENDER_BACKEND, runtime_params).unwrap(),
   ));
 
   let additional_params = gpu::DeviceAdditionalParams::new();
   let render_device_handle = render_frontend
-    .lock()
+    .write()
     .unwrap()
     .take_mut_and(|context| Ok(context.init_device(0, &additional_params)?))
     .unwrap()
@@ -183,7 +196,7 @@ fn main() {
       window_info: native_handles,
     };
     render_frontend
-      .lock()
+      .write()
       .unwrap()
       .take_and(|context| {
         use aethervk_core_rlib::types::GpuError;
@@ -221,6 +234,10 @@ fn main() {
       .unwrap()
       .unwrap()
   };
+  println!(
+    "[{:.2?}] GPU initialization complete.",
+    start_time.elapsed()
+  );
 
   let scene = Scene::new();
   scene.register_component::<TransformComponent>(&[]);
@@ -288,7 +305,7 @@ fn main() {
 
   // 2. Register renderable (implicitly handled by get_or_create_physical_mesh_resources)
 
-  let app_state = AppState {
+  let mut app_state = AppState {
     scene,
     presentation_engine,
     camera_entity,
@@ -298,124 +315,11 @@ fn main() {
   };
 
   // 3. & 4. & 5. Loops
-  let render_frontend_renderer = Arc::clone(&render_frontend);
-  let render_closure = move |state: &mut AppState, _generation: u64| {
-    let render_payload =
-      |device: &dyn gpu::RenderDevice, user_data: *mut core::ffi::c_void| -> GpuResult<()> {
-        let state = unsafe { (user_data as *mut AppState).as_mut().unwrap() };
-
-        device.start_frame()?;
-        let acquire_result = device.acquire_next_image(state.presentation_engine)?;
-
-        if acquire_result.status.needs_resize() {
-          return Ok(()); // Main thread will handle resize
-        }
-
-        let mut frame = frame::Frame::new();
-
-        let mut global_transforms = HashMap::new();
-        let mut matrix_stack = vec![Mat4x4f32::identity()];
-
-        state.scene.traverse_dfs_pre_order(
-          state.root_entity,
-          &mut matrix_stack,
-          &|_, _| true,
-          &mut |scene, entity, stack: &mut Vec<Mat4x4f32>| {
-            let local_transform = scene
-              .with_component(entity, |c: &TransformComponent| {
-                Mat4x4f32::translation(c.position.to_vec4::<Vec4f32>(1.0))
-                  * Mat4x4f32::from_quat(c.rotation)
-                  * Mat4x4f32::from_scale(c.scale)
-              })
-              .unwrap_or(Mat4x4f32::identity());
-
-            let parent_transform = stack.last().unwrap();
-            let global_transform = *parent_transform * local_transform;
-
-            global_transforms.insert(entity, global_transform);
-
-            if scene
-              .with_component(entity, |_: &PhysicalMeshComponent| true)
-              .is_some()
-            {
-              scene
-                .with_component(entity, |c: &PhysicalMeshComponent| {
-                  frame
-                    .add_renderable(
-                      device,
-                      entity,
-                      global_transform,
-                      scene::RenderableDataRef::PhysicalMesh(c),
-                      state.presentation_engine,
-                    )
-                    .unwrap();
-                })
-                .unwrap();
-            }
-
-            stack.push(global_transform);
-            true
-          },
-        );
-
-        state
-          .scene
-          .with_component(
-            state.camera_entity,
-            |camera_transform: &TransformComponent| {
-              state
-                .scene
-                .with_component(state.camera_entity, |camera_component: &CameraComponent| {
-                  let render_path = frame::ForwardRenderPath;
-                  render_path.record_commands(
-                    device,
-                    (camera_transform, camera_component),
-                    &frame,
-                    state.presentation_engine,
-                    &acquire_result,
-                  )
-                })
-                .unwrap()
-            },
-          )
-          .unwrap()?;
-
-        device.present(
-          state.presentation_engine,
-          acquire_result.image_index as usize,
-          acquire_result.frame_index as usize,
-        )?;
-        Ok(())
-      };
-
-    let res = render_frontend_renderer
-      .lock()
-      .unwrap()
-      .take_and(|context| {
-        context
-          .deref_device_and(
-            render_device_handle,
-            state as *mut _ as *mut core::ffi::c_void,
-            render_payload,
-          )
-          .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
-      })
-      .unwrap();
-
-    if let Err(e) = res {
-      println!("Render error: {:?}", e);
-    }
-  };
-
-  let simulation_loop = simulation::run_multithreaded(app_state, render_closure);
-  let state = simulation_loop.state;
-  let generation = simulation_loop.generation;
-  let should_run = simulation_loop.should_run;
-  let mut render_thread = Some(simulation_loop.render_thread);
-
   let mut right_mouse_button_down = false;
   let camera_focus_point = Vec3f32::from_components(0.0, 0.0, 0.0);
   let mut camera_distance = 5.0;
+  let generation = AtomicU64::new(0);
+  let mut last_log_time = Instant::now();
 
   let render_frontend_events = Arc::clone(&render_frontend);
 
@@ -423,16 +327,13 @@ fn main() {
   event_loop
     .run(move |event, elwt| {
       match event {
-        Event::WindowEvent { event, .. } => match event {
+        Event::WindowEvent { event, window_id } if window_id == window.id() => match event {
           WindowEvent::CloseRequested => {
-            should_run.store(false, Ordering::Relaxed);
-            if let Some(thread) = render_thread.take() {
-              thread.join();
-            }
             elwt.exit();
           }
           WindowEvent::Resized(physical_size) => {
-            let mut state = state.write();
+            println!("[{:.2?}] Handling Resized event.", start_time.elapsed());
+            let mut state = &mut app_state;
 
             struct ResizeData<'a> {
               state: &'a mut AppState,
@@ -456,7 +357,7 @@ fn main() {
               size: physical_size,
             };
 
-            let res = render_frontend_events.lock().unwrap().take_and(|context| {
+            let res = render_frontend_events.write().unwrap().take_and(|context| {
               Ok(
                 context
                   .deref_device_and(
@@ -481,7 +382,73 @@ fn main() {
                 },
               );
             }
-            generation.fetch_add(1, Ordering::Relaxed);
+            generation.fetch_add(1, atomic::Ordering::Relaxed);
+            window.request_redraw();
+            println!("[{:.2?}] Finished Resized event.", start_time.elapsed());
+          }
+          WindowEvent::RedrawRequested => {
+            println!(
+              "[{:.2?}] Handling RedrawRequested event.",
+              start_time.elapsed()
+            );
+
+            // --- 1. Data Collection Phase ---
+            // Traverse the scene to get all renderable items without holding any GPU locks.
+            let mut render_items = Vec::new();
+            let mut matrix_stack = vec![Mat4x4f32::identity()];
+
+            app_state.scene.traverse_with_hooks(
+              app_state.root_entity,
+              &mut matrix_stack,
+              &mut |stack, entity, transform_opt, mesh_opt| {
+                let local_transform = transform_opt
+                  .map(|c| {
+                    Mat4x4f32::translation(c.position.to_vec4::<Vec4f32>(1.0))
+                      * Mat4x4f32::from_quat(c.rotation)
+                      * Mat4x4f32::from_scale(c.scale)
+                  })
+                  .unwrap_or(Mat4x4f32::identity());
+
+                let parent_transform = stack.last().unwrap();
+                let global_transform = *parent_transform * local_transform;
+
+                if let Some(mesh) = mesh_opt {
+                  render_items.push(RenderItem {
+                    entity_id: entity,
+                    model_matrix: global_transform,
+                  });
+                }
+
+                stack.push(global_transform);
+                true // Continue traversal
+              },
+              &mut |stack, _| {
+                stack.pop();
+              },
+            );
+
+            let mut data: (&mut AppState, &mut Vec<RenderItem>) =
+              (&mut app_state, &mut render_items);
+
+            // --- 2. Resource Preparation & Command Recording Phase ---
+            // This all needs to happen inside a single lock to get access to the `device`.
+            let res = render_frontend.write().unwrap().take_and(|context| {
+              context
+                .deref_device_and(
+                  render_device_handle,
+                  &mut data as *mut _ as *mut core::ffi::c_void,
+                  render_payload,
+                )
+                .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
+            });
+
+            if let Some(Err(e)) = res {
+              println!("Render error: {:?}", e);
+            }
+            println!(
+              "[{:.2?}] Finished RedrawRequested event.",
+              start_time.elapsed()
+            );
           }
           WindowEvent::MouseInput {
             state: element_state,
@@ -496,7 +463,7 @@ fn main() {
           event: DeviceEvent::MouseMotion { delta },
           ..
         } if right_mouse_button_down => {
-          let mut state = state.write();
+          let state = &mut app_state;
           state.scene.with_component_mut(
             state.camera_entity,
             |camera_transform: &mut TransformComponent| {
@@ -523,7 +490,8 @@ fn main() {
             },
           );
 
-          generation.fetch_add(1, Ordering::Relaxed);
+          generation.fetch_add(1, atomic::Ordering::Relaxed);
+          window.request_redraw();
         }
         Event::DeviceEvent {
           event: DeviceEvent::MouseWheel { delta, .. },
@@ -538,7 +506,7 @@ fn main() {
             camera_distance = 1.0;
           }
 
-          let mut state = state.write();
+          let state = &mut app_state;
           state.scene.with_component_mut(
             state.camera_entity,
             |camera_transform: &mut TransformComponent| {
@@ -549,13 +517,82 @@ fn main() {
             },
           );
 
-          generation.fetch_add(1, Ordering::Relaxed);
+          generation.fetch_add(1, atomic::Ordering::Relaxed);
+          window.request_redraw();
         }
         Event::AboutToWait => {
-          // This is where a fixed update would go if we had one
+          if last_log_time.elapsed().as_secs() >= 5 {
+            println!("[{:.2?}] Liveliness: In AboutToWait.", start_time.elapsed());
+            last_log_time = Instant::now();
+          }
+          window.request_redraw();
         }
         _ => (),
       }
     })
     .unwrap();
+}
+
+fn render_payload(device: &dyn RenderDevice, user_data: *mut core::ffi::c_void) -> GpuResult<()> {
+  let (state, render_items) = unsafe {
+    (user_data as *mut (&mut AppState, &mut Vec<RenderItem>))
+      .as_mut()
+      .unwrap()
+  };
+
+  device.start_frame()?;
+  let acquire_result = device.acquire_next_image(state.presentation_engine)?;
+
+  if acquire_result.status.needs_resize() {
+    return Ok(()); // Main thread will handle resize
+  }
+  let mut frame = frame::Frame::new();
+
+  // Now that we have the device, add renderables to the frame.
+  // This is where the deadlock was happening.
+  for item in &mut **render_items {
+    state.scene.with_component(
+      item.entity_id,
+      |mesh_component: &PhysicalMeshComponent| -> GpuResult<()> {
+        frame.add_renderable(
+          device,
+          item.entity_id,
+          item.model_matrix,
+          scene::RenderableDataRef::PhysicalMesh(&mesh_component),
+          state.presentation_engine,
+        ).unwrap();
+        Ok(())
+      },
+    );
+  }
+
+  // Finally, record commands.
+  state
+    .scene
+    .with_component(
+      state.camera_entity,
+      |camera_transform: &TransformComponent| {
+        state
+          .scene
+          .with_component(state.camera_entity, |camera_component: &CameraComponent| {
+            let render_path = frame::ForwardRenderPath;
+            render_path.record_commands(
+              device,
+              (camera_transform, camera_component),
+              &frame,
+              state.presentation_engine,
+              &acquire_result,
+            )
+          })
+          .unwrap()
+      },
+    )
+    .unwrap()?;
+
+  device.present(
+    state.presentation_engine,
+    acquire_result.image_index as usize,
+    acquire_result.frame_index as usize,
+  )?;
+  Ok(())
 }

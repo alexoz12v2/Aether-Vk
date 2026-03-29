@@ -33,7 +33,7 @@ pub struct DrawCall {
 }
 
 impl DrawCall {
-  fn from_handles_and_matrix(
+  pub(crate) fn from_handles_and_matrix(
     result: ResourceUploadResult,
     index_count: u32,
     model_matrix: Mat4x4f32,
@@ -116,6 +116,7 @@ impl RenderPath for ForwardRenderPath {
   ) -> GpuResult<()> {
     let cmd_buffer = device.get_command_buffer()?;
 
+    device.begin_command_buffer(cmd_buffer)?;
     device.begin_render_pass(cmd_buffer, presentation_engine, acquire_result)?;
 
     for draw_call in &frame.draw_calls {

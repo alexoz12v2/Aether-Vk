@@ -391,7 +391,103 @@ pub enum FsError {
   CouldNotOpenFile,
   CouldNotReadFile,
   CouldNotGetFileSize,
+  CouldNotGetCurrentExe,
 }
+
+pub fn current_exe() -> Result<PathBuf, FsError> {
+  #[cfg(windows)]
+  {
+    use alloc::vec;
+    use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
+
+    const MAX_PATH_WIN: usize = 260;
+    let mut buffer: Vec<u16> = vec![0; MAX_PATH_WIN];
+    loop {
+      let written_len =
+        unsafe { GetModuleFileNameW(None, &mut buffer) } as usize;
+      if written_len == 0 {
+        return Err(FsError::CouldNotGetCurrentExe);
+      }
+      if written_len < buffer.len() {
+        buffer.truncate(written_len);
+        let mut path_buf = PathBuf::new();
+        path_buf.push_slice(&buffer);
+        return Ok(path_buf);
+      }
+      buffer.resize(buffer.len() * 2, 0);
+    }
+  }
+  #[cfg(target_os = "linux")]
+  {
+    use alloc::vec;
+
+    let mut buffer: Vec<u8> = vec![0; 260];
+    loop {
+      let result = unsafe {
+        libc::readlink(
+          b"/proc/self/exe\0".as_ptr() as *const i8,
+          buffer.as_mut_ptr() as *mut i8,
+          buffer.len(),
+        )
+      };
+
+      if result < 0 {
+        return Err(FsError::CouldNotGetCurrentExe);
+      }
+
+      let len = result as usize;
+      if len < buffer.len() {
+        buffer.truncate(len);
+        let s = unsafe { core::str::from_utf8_unchecked(&buffer) };
+        return Ok(PathBuf::from(s));
+      }
+      buffer.resize(buffer.len() * 2, 0);
+    }
+  }
+  #[cfg(target_os = "macos")]
+  {
+    use alloc::vec;
+    use libc::{c_char, c_uint};
+
+    let mut buf_size: c_uint = 0;
+    unsafe {
+      // This call will fail but will set buf_size to the required size.
+      // TODO: does the mach2 crate have an equivalent which is not deprecated? well there's a FIXME that says
+      // that maybe this function will get undeprecated
+      libc::_NSGetExecutablePath(core::ptr::null_mut(), &mut buf_size)
+    };
+
+    if buf_size == 0 {
+      return Err(FsError::CouldNotGetCurrentExe);
+    }
+
+    let mut buffer: Vec<c_char> = vec![0; buf_size as usize];
+    let result = unsafe { libc::_NSGetExecutablePath(buffer.as_mut_ptr(), &mut buf_size) };
+
+    if result != 0 {
+      return Err(FsError::CouldNotGetCurrentExe);
+    }
+
+    // Find the length of the string, it might not be null terminated if buffer is full
+    let len = buffer
+      .iter()
+      .position(|&c| c == 0)
+      .unwrap_or(buffer.len());
+
+    let s = unsafe {
+      core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+        buffer.as_ptr() as *const u8,
+        len,
+      ))
+    };
+    Ok(PathBuf::from(s))
+  }
+  #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+  {
+    Err(FsError::CouldNotGetCurrentExe) // Unsupported platform
+  }
+}
+
 
 pub fn read(path: &Path) -> Result<Vec<u8>, FsError> {
   #[cfg(windows)]

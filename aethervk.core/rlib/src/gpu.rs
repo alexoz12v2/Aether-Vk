@@ -119,6 +119,8 @@ pub trait RenderDevice: Send + Sync {
   /// state setting commands
   fn get_command_buffer(&self) -> GpuResult<CommandBufferHandle>;
 
+  fn begin_command_buffer(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
+
   /// responsible to acquire an image and store it in the associated command buffer structure
   fn begin_render_pass(
     &self,
