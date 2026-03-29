@@ -286,7 +286,8 @@ impl Scene {
     if !self.entities.read().contains_key(start_entity) {
       return;
     }
-    self.traverse_recursive(start_entity, accumulator, filter, callback);
+    let mut visited = HashSet::new();
+    self.traverse_recursive(start_entity, accumulator, filter, callback, &mut visited);
   }
 
   fn traverse_recursive<A, F, C>(
@@ -295,10 +296,15 @@ impl Scene {
     accumulator: &mut A,
     filter: &F,
     callback: &mut C,
+    visited: &mut HashSet<EntityId>,
   ) where
     F: Fn(&Scene, EntityId) -> bool,
     C: FnMut(&Scene, EntityId, &mut A) -> bool,
   {
+    if !visited.insert(current_entity) {
+      return; // Cycle detected
+    }
+
     if !filter(self, current_entity) {
       return;
     }
@@ -313,9 +319,92 @@ impl Scene {
       let children_clone = children.clone();
       drop(hierarchy); // Release lock before recursive calls
       for &child in &children_clone {
-        self.traverse_recursive(child, accumulator, filter, callback);
+        self.traverse_recursive(child, accumulator, filter, callback, visited);
       }
     }
+  }
+
+  pub fn traverse_with_hooks<A, Pre, Post>(
+    &self,
+    start_entity: EntityId,
+    accumulator: &mut A,
+    pre_visit: &mut Pre,
+    post_visit: &mut Post,
+  ) where
+    Pre: FnMut(
+      &mut A,
+      EntityId,
+      Option<TransformComponent>,
+      Option<&PhysicalMeshComponent>,
+    ) -> bool,
+    Post: FnMut(&mut A, EntityId),
+  {
+    if !self.entities.read().contains_key(start_entity) {
+      return;
+    }
+    let mut visited = HashSet::new();
+    self.traverse_with_hooks_recursive(
+      start_entity,
+      accumulator,
+      pre_visit,
+      post_visit,
+      &mut visited,
+    );
+  }
+
+  fn traverse_with_hooks_recursive<A, Pre, Post>(
+    &self,
+    current_entity: EntityId,
+    accumulator: &mut A,
+    pre_visit: &mut Pre,
+    post_visit: &mut Post,
+    visited: &mut HashSet<EntityId>,
+  ) where
+    Pre: FnMut(
+      &mut A,
+      EntityId,
+      Option<TransformComponent>,
+      Option<&PhysicalMeshComponent>,
+    ) -> bool,
+    Post: FnMut(&mut A, EntityId),
+  {
+    if !visited.insert(current_entity) {
+      return; // Cycle detected
+    }
+
+    let transform = self.with_component(current_entity, |c: &TransformComponent| *c);
+    // This is tricky. We can't return a reference from with_component due to lifetimes.
+    // So we get a pointer, and use it within an unsafe block. This is safe because
+    // we are single-threaded here and nothing will deallocate the component.
+    let mesh_ptr = self.with_component(current_entity, |c: &PhysicalMeshComponent| c as *const _);
+
+    let continue_traversal = unsafe {
+      let mesh_ref = if let Some(ptr) = mesh_ptr {
+        Some(&*ptr)
+      } else {
+        None
+      };
+      pre_visit(accumulator, current_entity, transform, mesh_ref)
+    };
+
+    if !continue_traversal {
+      // If pre_visit returns false, we still need to call post_visit to balance the stack.
+      post_visit(accumulator, current_entity);
+      return;
+    }
+
+    let children_clone = {
+      let hierarchy = self.hierarchy.read();
+      hierarchy.children.get(&current_entity).cloned()
+    };
+
+    if let Some(children) = children_clone {
+      for &child in &children {
+        self.traverse_with_hooks_recursive(child, accumulator, pre_visit, post_visit, visited);
+      }
+    }
+
+    post_visit(accumulator, current_entity);
   }
 
   /// Registers a component type, its dependencies, and its storage constructor.

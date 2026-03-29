@@ -4,8 +4,9 @@ use ash::vk;
 
 use crate::{
   types::{GpuResult},
-  gpu_backends::{ vulkan::device::DeviceResource },
+  gpu_backends::{vulkan::device::DeviceResource},
 };
+use aethervk_oshal_rlib as oshal;
 
 pub(super) struct GlobalDeviceAllocator {
   pub allocator: mem::ManuallyDrop<vk_mem::Allocator>,
@@ -21,8 +22,14 @@ unsafe extern "C" fn on_device_alloc(
   size: vk::DeviceSize,
   p_user_data: *mut core::ffi::c_void,
 ) {
-  // TODO logging
-  todo!()
+  use ash::vk::Handle;
+
+  oshal::log!(
+    "[VMA] Alloc: size: {} bytes, type: {}, mem: {:#X}",
+    size,
+    memory_type,
+    memory.as_raw()
+  );
 }
 #[cfg(debug_assertions)]
 #[allow(unused)]
@@ -33,8 +40,14 @@ unsafe extern "C" fn on_device_free(
   size: vk::DeviceSize,
   p_user_data: *mut core::ffi::c_void,
 ) {
-  // TODO logging
-  todo!()
+  use ash::vk::Handle;
+
+  oshal::log!(
+    "[VMA] Free:  size: {} bytes, type: {}, mem: {:#X}",
+    size,
+    memory_type,
+    memory.as_raw()
+  );
 }
 
 impl GlobalDeviceAllocator {

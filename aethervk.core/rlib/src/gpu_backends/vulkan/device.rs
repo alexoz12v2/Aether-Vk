@@ -1,21 +1,21 @@
 use core::{
-  cell::{Cell, RefCell},
-  f32::consts::E,
   hash::{Hash, Hasher},
-  num::NonZero,
-  ops::Index,
   ptr::{self, NonNull},
   sync::atomic::{AtomicU64, Ordering},
 };
-use aethervk_oshal_rlib::{
+use spin::Once;
+use aethervk_oshal_rlib as oshal;
+use oshal::{
   hash::FnvHasher,
   os::{
-    fs::{self, Path, PathBuf},
+    fs::{self, PathBuf},
     memory::{MaxAlignedStorage, StackAllocator},
     native::this_thread,
   },
 };
 use alloc::{format, string::ToString, sync::Arc, vec::Vec};
+#[cfg(debug_assertions)]
+use oshal::os::debug::{TrackedOption, DropTracker};
 
 use crate::{
   gpu::{
@@ -34,16 +34,16 @@ use crate::{
       renderpasses::RenderPassSpecification,
       resources::{
         DiscardableResource, ForwardMeshRenderResource, ForwardMeshRenderResourceArchetype, Image,
-        TextureFlags,
       },
       shader_manager::ShaderKey,
+      swapchain::PresentationState,
     },
     instance,
     utils::{self, NonZeroHandle},
   },
-  scene::{EntityId, PhysicalMeshComponent, TransformComponent},
+  scene::{EntityId, PhysicalMeshComponent},
   simulation::comet::{
-    Comet, NORMAL_COMPONENTS, POSITION_COMPONENTS, PushConstants, UV_COMPONENTS, Vertex,
+    Comet, NORMAL_COMPONENTS, POSITION_COMPONENTS, PushConstants, UV_COMPONENTS,
   },
   types::{GpuError, GpuResult},
 };
@@ -62,6 +62,9 @@ mod renderpasses;
 mod resources;
 mod shader_manager;
 mod swapchain;
+
+#[cfg(debug_assertions)]
+static ARCHETYPE_CREATED: spin::Once<spin::Mutex<bool>> = Once::new();
 
 trait DeviceResource {
   /// Cleanup function to facilitate hierarchical manual Drop of resources
@@ -187,6 +190,10 @@ struct DeviceResources {
 
   shader_manager: spin::RwLock<shader_manager::ShaderManager>,
 
+  #[cfg(debug_assertions)]
+  physical_mesh_render_archetype:
+    DropTracker<TrackedOption<ForwardMeshRenderResourceArchetype, 0>, 0>,
+  #[cfg(not(debug_assertions))]
   physical_mesh_render_archetype: Option<ForwardMeshRenderResourceArchetype>,
   /// FScene (almost, more like a registry of all known static meshes)
   physical_mesh_resources:
@@ -244,17 +251,29 @@ impl DeviceResources {
   fn update_physical_mesh_archetype_for_presentation_engine(
     &mut self,
     device: &ash::Device,
-    presentation_engine_state: &swapchain::PresentationState,
+    presentation_engine_handle: PresentationEngineHandle,
     timeline: u64,
   ) -> GpuResult<()> {
+    let presentation_engines = self.live_presentation_engines.read();
+    let presentation_engine_state_lock = presentation_engines
+      .get(&presentation_engine_handle)
+      .ok_or(GpuError::InvalidArgument)?;
+    let presentation_engine_state = presentation_engine_state_lock.read();
     if self.physical_mesh_render_archetype.is_none() {
       return Err(GpuError::InvalidState);
     }
     let archetype = unsafe {
-      self
-        .physical_mesh_render_archetype
-        .as_mut()
-        .unwrap_unchecked()
+      let mut_arch: Option<&mut _>;
+      #[cfg(debug_assertions)]
+      {
+        mut_arch = self.physical_mesh_render_archetype.as_mut().as_mut()
+      }
+      #[cfg(not(debug_assertions))]
+      {
+        mut_arch = self.physical_mesh_render_archetype.as_mut();
+      }
+
+      mut_arch.unwrap_unchecked()
     };
     if archetype.graphics_info.is_none() || archetype.pipeline_key.is_none() {
       return Err(GpuError::InvalidState);
@@ -296,7 +315,14 @@ impl DeviceResources {
   }
 
   fn get_physical_mesh_archetype(&self) -> Option<&'_ ForwardMeshRenderResourceArchetype> {
-    self.physical_mesh_render_archetype.as_ref()
+    #[cfg(debug_assertions)]
+    {
+      self.physical_mesh_render_archetype.as_ref().as_ref()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      self.physical_mesh_render_archetype.as_ref()
+    }
   }
 
   fn create_physical_mesh_archetype(
@@ -345,12 +371,20 @@ impl DeviceResources {
         &fragment_shader,
       )?
     };
-    self.physical_mesh_render_archetype = Some(res);
+    #[cfg(not(debug_assertions))]
+    {
+      self.physical_mesh_render_archetype = Some(res);
+    }
+    #[cfg(debug_assertions)]
+    {
+      self.physical_mesh_render_archetype = DropTracker::new(TrackedOption::some(res));
+    }
 
     // then populate graphics info and pipeline key
     let pipeline_graphics_info = GraphicsInfo::default()
       .with_vertex_in(
         VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::TRIANGLE_LIST)
           .add_binding(
             0,
             POSITION_COMPONENTS * size_of::<f32>() as u32,
@@ -367,7 +401,7 @@ impl DeviceResources {
           ) // inUV
           .add_attribute(
             1,
-            2,
+            3,
             vk::Format::R32G32B32A32_SFLOAT,
             (NORMAL_COMPONENTS + UV_COMPONENTS) * size_of::<f32>() as u32,
           ) // inTangent
@@ -407,10 +441,17 @@ impl DeviceResources {
       )
       .with_pipeline_layout(
         unsafe {
-          self
-            .physical_mesh_render_archetype
-            .as_ref()
-            .unwrap_unchecked()
+          let ref_arch: Option<&_>;
+          #[cfg(debug_assertions)]
+          {
+            ref_arch = self.physical_mesh_render_archetype.as_ref().as_ref();
+          }
+          #[cfg(not(debug_assertions))]
+          {
+            ref_arch = self.physical_mesh_render_archetype.as_ref();
+          }
+
+          ref_arch.unwrap_unchecked()
         }
         .pipeline_layout
         .get(),
@@ -443,15 +484,26 @@ impl DeviceResources {
       .write()
       .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
 
-    self.physical_mesh_render_archetype = Some(
-      unsafe {
+    {
+      let val = unsafe {
         self
           .physical_mesh_render_archetype
           .take()
           .unwrap_unchecked()
       }
-      .with_graphics_info(pipeline_graphics_info),
-    );
+      .with_graphics_info(pipeline_graphics_info);
+
+      #[cfg(not(debug_assertions))]
+      {
+        self.physical_mesh_render_archetype = Some(val);
+      }
+      #[cfg(debug_assertions)]
+      {
+        self.physical_mesh_render_archetype = DropTracker::new(TrackedOption::some(val));
+      }
+    }
+
+    debug_assert!(self.physical_mesh_render_archetype.is_some());
 
     Ok(())
   }
@@ -569,7 +621,16 @@ impl DeviceResources {
       linear_sampler: unsafe { NonZeroHandle::new_unchecked(linear_sampler) },
       timeline_semaphore: unsafe { NonZeroHandle::new_unchecked(timeline_semaphore) },
       timeline_semaphore_cached_value: AtomicU64::new(0),
-      physical_mesh_render_archetype: None,
+      physical_mesh_render_archetype: {
+        #[cfg(debug_assertions)]
+        {
+          DropTracker::new(TrackedOption::none())
+        }
+        #[cfg(not(debug_assertions))]
+        {
+          None
+        }
+      },
       physical_mesh_resources: spin::RwLock::new(None),
       timeline_sem_device,
     })
@@ -585,14 +646,14 @@ impl DeviceResources {
   ) -> ash::prelude::VkResult<()> {
     // Note: if you are not using Vulkan 1.2 you are not allowed to use the core function. you need
     // the extension fetched function pointer
-    self.timeline_semaphore_cached_value.store(
-      unsafe {
-        self
-          .timeline_sem_device
-          .get_semaphore_counter_value(self.timeline_semaphore.get())
-      }?,
-      Ordering::Relaxed,
-    );
+    let gpu_value = unsafe {
+      self
+        .timeline_sem_device
+        .get_semaphore_counter_value(self.timeline_semaphore.get())
+    }?;
+    self
+      .timeline_semaphore_cached_value
+      .fetch_max(gpu_value, Ordering::Relaxed);
     Ok(())
   }
 }
@@ -607,6 +668,7 @@ struct RecordingCmdBufferData {
   command_buffer: NonZeroHandle<vk::CommandBuffer>,
   bound_pipeline: Option<NonZeroHandle<vk::Pipeline>>,
   presentation: Option<RecordingCmdBufferDataPresentation>,
+  has_begun: bool,
 }
 
 impl RecordingCmdBufferData {
@@ -615,6 +677,7 @@ impl RecordingCmdBufferData {
       command_buffer,
       bound_pipeline: None,
       presentation: None,
+      has_begun: false,
     }
   }
 
@@ -631,16 +694,21 @@ impl RecordingCmdBufferData {
     timeline: u64,
   ) {
     let tid = this_thread::id();
-    if let Some(pipeline) = self.bound_pipeline {
-      discard_pool.discard_pipeline(pipeline.get(), timeline);
+    if self.has_begun {
+      if let Some(pipeline) = self.bound_pipeline {
+        discard_pool.discard_pipeline(pipeline.get(), timeline);
+      }
+      discard_pool.discard_command_buffer(
+        tid,
+        cmd_buf_id,
+        self.command_buffer.get(),
+        cmd_pools,
+        timeline,
+      );
+    } else {
+      // Not recorded, so just recycle it immediately.
+      let _ = cmd_pools.recycle(tid, cmd_buf_id, self.command_buffer.get());
     }
-    discard_pool.discard_command_buffer(
-      tid,
-      cmd_buf_id,
-      self.command_buffer.get(),
-      cmd_pools,
-      timeline,
-    );
   }
 }
 
@@ -650,7 +718,10 @@ pub(super) struct Device<'a> {
   queues: Queues,
   instance: &'a instance::Instance,
 
+  /// Note: Remove if API_VERSION_1_2
   create_renderpass2: ash::khr::create_renderpass2::Device,
+  /// Note: Remove if API_VERSION_1_3
+  synchronization2: ash::khr::synchronization2::Device,
 
   res: spin::RwLock<DeviceResources>,
 
@@ -874,10 +945,13 @@ impl<'a> Device<'a> {
     }?;
 
     let create_renderpass2 = ash::khr::create_renderpass2::Device::new(&instance.instance, &device);
+    let synchronization2 = ash::khr::synchronization2::Device::new(&instance.instance, &device);
+
     Ok(Self {
       query_result: *chosen_physical_device_query_result,
       device,
       create_renderpass2,
+      synchronization2,
       queues,
       res: res.into(),
       instance,
@@ -890,25 +964,45 @@ impl<'a> Device<'a> {
     self.query_result.physical_device
   }
 
-  pub(super) fn with_device_allocator<T>(&self, f: impl FnOnce(&GlobalDeviceAllocator) -> T) -> T {
-    let dalloc = &self.res.read().allocator;
-    f(dalloc)
-  }
+  fn ensure_physical_mesh_shader_modules(
+    &self,
+    res: &impl core::ops::Deref<Target = DeviceResources>,
+  ) -> GpuResult<(ShaderKey, ShaderKey)> {
+    let vert_path: PathBuf;
+    let frag_path: PathBuf;
 
-  pub(super) fn with_device_allocator_mut<T>(
-    &mut self,
-    f: impl FnOnce(&mut GlobalDeviceAllocator) -> T,
-  ) -> T {
-    let dalloc = &mut self.res.write().allocator;
-    f(dalloc)
-  }
-
-  fn ensure_physical_mesh_shader_modules(&self) -> GpuResult<(ShaderKey, ShaderKey)> {
     // TODO: proper path management
-    let vert_path = PathBuf::from("assets/physical_mesh.vert.spv");
-    let frag_path = PathBuf::from("assets/physical_mesh.frag.spv");
+    #[cfg(debug_assertions)]
+    {
+      let exe_path = fs::current_exe().map_err(|_| {
+        GpuError::BackendSpecific("Failed to get executable path for debug asset loading".into())
+      })?;
 
-    let res = self.res.read();
+      let mut path = exe_path.parent();
+      let mut assets_dir: Option<PathBuf> = None;
+
+      while let Some(p) = path {
+        use aethervk_oshal_rlib::os::fs::FileSystemObject;
+
+        let test_path = p.join("assets");
+        if test_path.is_dir() {
+          assets_dir = Some(test_path);
+          break;
+        }
+        path = p.parent();
+      }
+
+      let assets_dir =
+        assets_dir.expect("Could not find assets directory when searching from executable path");
+
+      vert_path = assets_dir.join("physical_mesh.vert.spv");
+      frag_path = assets_dir.join("physical_mesh.frag.spv");
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      todo!();
+    }
+
     let mut shader_manager = res.shader_manager.write();
 
     let vert_key = shader_manager.get_or_load(
@@ -1048,18 +1142,27 @@ impl<'a> RenderDevice for Device<'a> {
     width: u32,
     height: u32,
   ) -> GpuResult<()> {
-    let res = self.res.read();
-    if let Some(engine) = res.live_presentation_engines.read().get(&handle) {
-      let entry =
-        self
-          .instance
-          .entry_wrapper
-          .weak_entry()
-          .upgrade()
-          .ok_or(GpuError::BackendSpecific(
-            "Vulkan Entry wasn't loaded".to_string(),
-          ))?;
-      let physical_device_handle = unsafe { NonZeroHandle::new_unchecked(self.physical_device()) };
+    let entry =
+      self
+        .instance
+        .entry_wrapper
+        .weak_entry()
+        .upgrade()
+        .ok_or(GpuError::BackendSpecific(
+          "Vulkan Entry wasn't loaded".to_string(),
+        ))?;
+    let physical_device_handle = unsafe { NonZeroHandle::new_unchecked(self.physical_device()) };
+
+    // Acquire a single write lock to perform the entire resize operation atomically.
+    // This prevents deadlocks and satisfies the borrow checker.
+    let mut wres = self.res.write();
+    let timeline = wres.get_timeline_semaphore_cached_value();
+
+    // Get a mutable reference to the presentation engine to resize it.
+    // borrow checker enforces us to reacquire the lock after we call a mutating method
+    {
+      let engine_lock = wres.live_presentation_engines.read();
+      let engine = engine_lock.get(&handle).ok_or(GpuError::InvalidArgument)?;
       engine.write().resize(
         &entry,
         &self.instance.instance,
@@ -1067,10 +1170,15 @@ impl<'a> RenderDevice for Device<'a> {
         physical_device_handle,
         width,
         height,
-      )
-    } else {
-      Err(GpuError::InvalidArgument)
+      )?;
     }
+
+    // After resizing, update dependent resources like pipelines/renderpasses.
+    // `update_physical_mesh_archetype_for_presentation_engine` takes `&mut self` (for `wres`)
+    // and an immutable `&PresentationState` (for `engine`). This is a valid borrow pattern.
+    wres.update_physical_mesh_archetype_for_presentation_engine(&self.device, handle, timeline)?;
+
+    Ok(())
   }
 
   fn acquire_next_image(
@@ -1132,23 +1240,39 @@ impl<'a> RenderDevice for Device<'a> {
     component: &PhysicalMeshComponent,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
-    // WARNING: if state isn't properly maintained, this is a nightmare
     let next_frame_timeline = self.res.read().get_timeline_semaphore_cached_value() + 1;
     let current_frame_timeline = next_frame_timeline - 1;
 
     // ensure that the archetype for physical meshes exists
-    let exists = self.res.read().physical_mesh_render_archetype.is_some();
-    if !exists {
+    if self.res.read().physical_mesh_render_archetype.is_none() {
       let mut wres = self.res.write();
-      let (vkey, fkey) = self.ensure_physical_mesh_shader_modules()?;
-      wres.create_physical_mesh_archetype(
-        &self.device,
-        vkey,
-        fkey,
-        self.depth_stencil_format,
-        handle,
-        next_frame_timeline,
-      )?;
+      // Re-check condition after acquiring write lock
+      if wres.physical_mesh_render_archetype.is_none() {
+        #[cfg(debug_assertions)]
+        {
+          let initialized = ARCHETYPE_CREATED.call_once(|| spin::Mutex::new(false));
+          let mut guard = initialized.lock();
+          assert!(
+            !*guard,
+            "physical_mesh_render_archetype created more than once!"
+          );
+          *guard = true;
+        }
+        let (vkey, fkey) = self.ensure_physical_mesh_shader_modules(&wres)?;
+        wres.create_physical_mesh_archetype(
+          &self.device,
+          vkey,
+          fkey,
+          self.depth_stencil_format,
+          handle,
+          next_frame_timeline,
+        )?;
+        #[cfg(debug_assertions)]
+        {
+          oshal::log!("Created Physical Mesh Archetype");
+          oshal::os::debug::print_stacktrace();
+        }
+      }
     }
 
     let res = self.res.read();
@@ -1212,6 +1336,7 @@ impl<'a> RenderDevice for Device<'a> {
     let albedo_image = component.mesh.albedo_map.as_ref().and_then(|t| {
       Image::new_2d(
         &self.device,
+        &self.synchronization2,
         &res.allocator.allocator,
         command_buffer,
         &res.discard_pool,
@@ -1224,6 +1349,7 @@ impl<'a> RenderDevice for Device<'a> {
     let normal_image = component.mesh.normal_map.as_ref().and_then(|t| {
       Image::new_2d(
         &self.device,
+        &self.synchronization2,
         &res.allocator.allocator,
         command_buffer,
         &res.discard_pool,
@@ -1236,6 +1362,7 @@ impl<'a> RenderDevice for Device<'a> {
     let roughness_image = component.mesh.roughness_map.as_ref().and_then(|t| {
       Image::new_2d(
         &self.device,
+        &self.synchronization2,
         &res.allocator.allocator,
         command_buffer,
         &res.discard_pool,
@@ -1248,6 +1375,7 @@ impl<'a> RenderDevice for Device<'a> {
     let ao_image = component.mesh.ao_map.as_ref().and_then(|t| {
       Image::new_2d(
         &self.device,
+        &self.synchronization2,
         &res.allocator.allocator,
         command_buffer,
         &res.discard_pool,
@@ -1316,6 +1444,30 @@ impl<'a> RenderDevice for Device<'a> {
     Ok(cmd_buf_id)
   }
 
+  fn begin_command_buffer(&self, cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {
+    let res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let mut cmd_buffers = self.recording_command_buffers.write();
+    let data = cmd_buffers
+      .get_mut(&(timeline, cmd_buffer))
+      .ok_or(GpuError::InvalidArgument)?;
+
+    if data.has_begun {
+      return Ok(());
+    }
+
+    let begin_info =
+      vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+    unsafe {
+      self
+        .device
+        .begin_command_buffer(data.command_buffer.get(), &begin_info)?;
+    }
+    data.has_begun = true;
+
+    Ok(())
+  }
+
   fn begin_render_pass(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
@@ -1332,6 +1484,13 @@ impl<'a> RenderDevice for Device<'a> {
     if !presentation_engines.contains_key(&presentation_engine) {
       return Err(GpuError::InvalidArgument);
     }
+
+    let data = unsafe { cmd_buffers.get(&(timeline, cmd_buffer)).unwrap_unchecked() };
+
+    if !data.has_begun {
+      return Err(GpuError::InvalidState);
+    }
+
     let wpresentation_engine = unsafe {
       presentation_engines
         .get(&presentation_engine)
@@ -1342,6 +1501,7 @@ impl<'a> RenderDevice for Device<'a> {
       // The caller should handle the resize.
       return Err(GpuError::ResizeRequired);
     }
+    drop(cmd_buffers);
 
     let mut cmd_buffers = self.recording_command_buffers.write();
     let data = unsafe {
@@ -1363,7 +1523,7 @@ impl<'a> RenderDevice for Device<'a> {
     )?;
 
     let cmd = data.command_buffer.get();
-    let black = vk::ClearValue::default();
+    let black = [vk::ClearValue::default(), vk::ClearValue::default()]; // 2 attachments
 
     let render_pass_begin_info = vk::RenderPassBeginInfo::default()
       .render_pass(render_pass.get())
@@ -1375,7 +1535,7 @@ impl<'a> RenderDevice for Device<'a> {
           height: wpresentation_engine.extent().1,
         },
       })
-      .clear_values(core::slice::from_ref(&black));
+      .clear_values(&black);
     let subpass_begin_info = vk::SubpassBeginInfo::default().contents(vk::SubpassContents::INLINE);
 
     unsafe {
@@ -1446,10 +1606,16 @@ impl<'a> RenderDevice for Device<'a> {
       .and_then(|map| map.get(&physical_mesh_id))
       .ok_or(GpuError::InvalidArgument)?;
 
-    let archetype = res
-      .physical_mesh_render_archetype
-      .as_ref()
-      .ok_or(GpuError::InvalidState)?;
+    let arch_ref: Option<&_>;
+    #[cfg(debug_assertions)]
+    {
+      arch_ref = res.physical_mesh_render_archetype.as_ref().as_ref()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      arch_ref = res.physical_mesh_render_archetype.as_ref()
+    }
+    let archetype = arch_ref.ok_or(GpuError::InvalidState)?;
 
     let cmd = data.command_buffer.get();
 
@@ -1537,10 +1703,16 @@ impl<'a> RenderDevice for Device<'a> {
       .get(&(timeline, cmd_buffer))
       .ok_or(GpuError::InvalidArgument)?;
 
-    let archetype = res
-      .physical_mesh_render_archetype
-      .as_ref()
-      .ok_or(GpuError::InvalidState)?;
+    let arch_ref: Option<&_>;
+    #[cfg(debug_assertions)]
+    {
+      arch_ref = res.physical_mesh_render_archetype.as_ref().as_ref();
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      arch_ref = res.physical_mesh_render_archetype.as_ref();
+    }
+    let archetype = arch_ref.ok_or(GpuError::InvalidState)?;
 
     let cmd = data.command_buffer.get();
     let layout = archetype.pipeline_layout.get();

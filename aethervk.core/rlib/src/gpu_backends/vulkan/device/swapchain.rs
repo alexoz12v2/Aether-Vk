@@ -775,13 +775,14 @@ impl PresentationState {
     match vk_result {
       vk::Result::SUCCESS => {
         unsafe { self.frames[self.current_frame].steal_from_swapchain_image(swapchain_image) };
+        let frame_idx_for_submission = self.current_frame;
         // this is the only arm in which status is changed
-        self.next_image += 1 % images_count;
-        self.current_frame += 1 % frame_count;
+        self.next_image = (self.next_image + 1) % images_count;
+        self.current_frame = (self.current_frame + 1) % frame_count;
         Ok(AcquireResult {
           image_index,
           status: SwapchainStatus::Optimal,
-          frame_index: self.current_frame as u64,
+          frame_index: frame_idx_for_submission as u64,
         })
       }
       vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR => Ok(AcquireResult {

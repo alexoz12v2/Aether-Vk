@@ -331,6 +331,7 @@ impl EntryWrapper {
           } else {
             #[cfg(debug_assertions)]
             {
+              aethervk_oshal_rlib::log!("Trying to load vulkan from VULKAN_SDK");
               let env_ptr = unsafe { libc::getenv(b"VULKAN_SDK\0".as_ptr().cast()) };
               core::ptr::NonNull::new(env_ptr).map(|ptr| {
                 let sdk_cstr = unsafe { core::ffi::CStr::from_ptr(ptr.as_ptr()) };
@@ -364,6 +365,10 @@ impl EntryWrapper {
               None
             }
           };
+          #[cfg(debug_assertions)]
+          {
+            aethervk_oshal_rlib::log!("paths found {:?}", paths_opt);
+          }
 
           // Early out (return None from the .and_then closure) if neither paths exist
           let (vk_layer_path, vk_icd_path, vk_loader_path) = paths_opt?;
@@ -683,6 +688,7 @@ pub(super) fn create_transient_attachment(
   usage: vk::ImageUsageFlags,
   samples: vk::SampleCountFlags,
 ) -> GpuResult<(NonZeroHandle<vk::Image>, vk_mem::Allocation)> {
+  // Note: Trying transient on Apple gives `Metal validation error: residency sets do not support memoryless resources``
   let image_create_info = vk::ImageCreateInfo::default()
     .extent(vk::Extent3D {
       width: extent.width,
@@ -694,7 +700,14 @@ pub(super) fn create_transient_attachment(
     .mip_levels(1)
     .array_layers(1)
     .samples(samples)
-    .usage(usage | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT)
+    .usage(
+      usage
+        | if cfg!(not(target_os = "macos")) {
+          vk::ImageUsageFlags::TRANSIENT_ATTACHMENT
+        } else {
+          vk::ImageUsageFlags::empty()
+        },
+    )
     .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
   let allocation_info = {
@@ -702,7 +715,9 @@ pub(super) fn create_transient_attachment(
     x.usage = vk_mem::MemoryUsage::AutoPreferDevice;
     x.required_flags = vk::MemoryPropertyFlags::DEVICE_LOCAL;
     // prefer lazily allocated (transient -> tile cacheable) on Tile GPUs
-    x.preferred_flags = vk::MemoryPropertyFlags::LAZILY_ALLOCATED;
+    if cfg!(not(target_os = "macos")) {
+      x.preferred_flags = vk::MemoryPropertyFlags::LAZILY_ALLOCATED;
+    }
     x.priority = 1.0;
     x
   };

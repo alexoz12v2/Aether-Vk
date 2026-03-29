@@ -39,6 +39,9 @@ libc = { version = "0.2", default-features = false, features = [
     "extra_traits",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+mach2 = { version = "0.6" }
+
 # settings to strip and optimize release
 # in rlib we don't care of how panic is handled
 [profile.release]
