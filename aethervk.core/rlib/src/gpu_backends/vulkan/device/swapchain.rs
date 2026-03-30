@@ -9,6 +9,12 @@ use crate::{
   types::{GpuError, GpuResult},
 };
 
+// TODO:
+// - Add Support for swapchainless presentation engine (basically render to a set of VkImages),
+//   which are then exported for Avalonia consumption (an enum or something similiar, probably split into
+//   more internal classes to make it more manageable)
+// - Fix resize, right now it panics cause it fills the heapless vectors
+
 pub(super) const MAX_FRAMES_IN_FLIGHT: usize = 8;
 const SWAPCHAIN_FRAME_DISCARDS_BEFORE_SWEEP: usize = 3;
 

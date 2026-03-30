@@ -8,15 +8,6 @@ rust-version = "1.93"
 name = "aethervk_core_rlib"
 crate-type = ["rlib"]
 
-# thanks to required features, the command is:
-# `cargo test --test testbed --features --testbed`
-# `cargo test` will exclude this
-[[test]]
-name = "testbed"
-path = "testbed/main.rs"
-harness = false
-required-features = ["testbed"]
-
 [features]
 # Avalonia is X11 backed with XLib. There is some work for Avalonia 12 to have wayland though.
 default = ["linux_xlib"]
@@ -24,10 +15,8 @@ std = []
 linux_xlib = []
 linux_xcb = []
 linux_wayland = []
-testbed = []
 
 [dev-dependencies]
-aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", features = ["std"] }
 winit = { version = "0.29", features = ["rwh_06"] }
 raw-window-handle = "0.6"
 
@@ -35,14 +24,14 @@ raw-window-handle = "0.6"
 objc = { version = "0.2.7" }
 
 [dependencies]
-aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib" }
+aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false }
 static_assertions = "1.1.0"
 spin = { version = "0.10", features = ["once", "rwlock", "mutex"] }
 thiserror = { version = "2", default-features = false }
 bitflags = { version = "2.11", default-features = false }
 heapless = { version = "0.9" }
 itertools = { version = "0.14", default-features = false }
-ouroboros = { version = "0.18" }
+ouroboros = { version = "0.18", default-features = false }
 slotmap = { version = "1.1.1", default-features = false }
 hashbrown = { version = "0.16" }
 # Model Loading
@@ -80,10 +69,3 @@ windows = { version = ">=0.59, <=0.62", default-features = false, features = [
 libc = { version = "0.2", default-features = false, features = [
     "extra_traits",
 ] }
-
-# settings to strip and optimize release
-# in rlib we don't care of how panic is handled
-[profile.release]
-lto = true
-codegen-units = 1
-strip = true

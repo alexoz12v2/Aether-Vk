@@ -246,7 +246,7 @@ fn main() {
 
   let home_dir = {
     let mut home_dir = std::env::current_exe().unwrap();
-    for _ in 0..6 {
+    for _ in 0..3 {
       home_dir.pop();
     }
     home_dir
