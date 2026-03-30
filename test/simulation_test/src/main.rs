@@ -244,14 +244,31 @@ fn main() {
   scene.register_component::<PhysicalMeshComponent>(&[]);
   scene.register_component::<CameraComponent>(&[]);
 
-  let home_dir = {
-    let mut home_dir = std::env::current_exe().unwrap();
-    for _ in 0..3 {
-      home_dir.pop();
+  let model_path = {
+    let mut args = std::env::args();
+    println!("You passed {} arguments", args.len());
+    if args.len() > 1 {
+      let _ = args.next().unwrap(); // discard useless exe path
+      // interpret first argument as a custom asset path
+      std::path::PathBuf::from(args.next().unwrap()).join("Comet.glb")
+    } else {
+      let mut home_dir = std::env::current_exe().unwrap();
+      let mut iter: i32 = 0;
+      const MAX_ITER: i32 = 32;
+      while {
+        let d = home_dir.join("assets/Comet.glb");
+        println!("Checking path {:?}", d);
+        !d.is_file() && iter < MAX_ITER
+      } {
+        home_dir.pop();
+        iter += 1;
+        assert!(home_dir.is_dir());
+      }
+
+      home_dir.join("assets/Comet.glb")
     }
-    home_dir
   };
-  let model_path = home_dir.join("assets/Comet.glb");
+  println!("Searching for comet in `{:?}`", &model_path);
   let comet = simulation::comet::load_comet_from_gltf(model_path.to_str().unwrap())
     .expect("Failed to load comet");
 
@@ -554,13 +571,15 @@ fn render_payload(device: &dyn RenderDevice, user_data: *mut core::ffi::c_void) 
     state.scene.with_component(
       item.entity_id,
       |mesh_component: &PhysicalMeshComponent| -> GpuResult<()> {
-        frame.add_renderable(
-          device,
-          item.entity_id,
-          item.model_matrix,
-          scene::RenderableDataRef::PhysicalMesh(&mesh_component),
-          state.presentation_engine,
-        ).unwrap();
+        frame
+          .add_renderable(
+            device,
+            item.entity_id,
+            item.model_matrix,
+            scene::RenderableDataRef::PhysicalMesh(&mesh_component),
+            state.presentation_engine,
+          )
+          .unwrap();
         Ok(())
       },
     );
