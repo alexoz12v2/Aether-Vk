@@ -1014,26 +1014,45 @@ impl<'a> Device<'a> {
     // TODO: proper path management
     #[cfg(debug_assertions)]
     {
-      let exe_path = fs::current_exe().map_err(|_| {
-        GpuError::BackendSpecific("Failed to get executable path for debug asset loading".into())
-      })?;
-
-      let mut path = exe_path.parent();
-      let mut assets_dir: Option<PathBuf> = None;
-
-      while let Some(p) = path {
+      let assets_dir: PathBuf = {
+        use aethervk_oshal_rlib::os;
         use aethervk_oshal_rlib::os::fs::FileSystemObject;
 
-        let test_path = p.join("assets");
-        if test_path.is_dir() {
-          assets_dir = Some(test_path);
-          break;
-        }
-        path = p.parent();
-      }
+        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
+        if args.len() > 1 {
+          let p = PathBuf::from(&args[1]);
+          if !p.is_dir() {
+            return Err(GpuError::InvalidArgument);
+          }
 
-      let assets_dir =
-        assets_dir.expect("Could not find assets directory when searching from executable path");
+          p
+        } else {
+          let exe_path = fs::current_exe().map_err(|_| {
+            GpuError::BackendSpecific(
+              "Failed to get executable path for debug asset loading".into(),
+            )
+          })?;
+
+          let mut path = exe_path.parent();
+          let mut assets_dir: Option<PathBuf> = None;
+
+          while let Some(p) = path {
+            use aethervk_oshal_rlib::os::fs::FileSystemObject;
+
+            let test_path = p.join("assets");
+            if test_path.is_dir() {
+              assets_dir = Some(test_path);
+              break;
+            }
+            path = p.parent();
+          }
+
+          let assets_dir = assets_dir
+            .expect("Could not find assets directory when searching from executable path");
+
+          assets_dir
+        }
+      };
 
       vert_path = assets_dir.join("physical_mesh.vert.spv");
       frag_path = assets_dir.join("physical_mesh.frag.spv");

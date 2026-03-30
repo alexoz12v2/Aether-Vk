@@ -4,6 +4,7 @@ pub mod debug;
 pub mod fs;
 pub mod memory;
 pub mod native;
+pub mod env;
 pub mod pool;
 pub mod thread;
 pub mod time;
@@ -32,6 +33,9 @@ pub enum ThreadingError {
 
 #[derive(Debug, Error)]
 pub enum NativeError {
+  #[error("Unknown Error")]
+  UnknownError,
+
   #[error("Invalid Arguments")]
   InvalidArgument,
 
