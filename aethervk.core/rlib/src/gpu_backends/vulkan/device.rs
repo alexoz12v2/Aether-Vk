@@ -13,7 +13,7 @@ use oshal::{
     native::this_thread,
   },
 };
-use alloc::{format, string::ToString, sync::Arc, vec::Vec};
+use alloc::{format, string::ToString, sync::Arc, vec::Vec, boxed::Box};
 #[cfg(debug_assertions)]
 use oshal::os::debug::{TrackedOption, DropTracker};
 
@@ -102,6 +102,7 @@ impl<H: ash::vk::Handle + Copy, F: FnOnce(H, &ash::Device)> DeviceResource
 struct DeviceResourceJanitor<'a, const N: usize> {
   device: &'a ash::Device,
   resources: heapless::Vec<NonNull<dyn DeviceResource + 'a>, N>,
+  heap_resources: Vec<Box<dyn DeviceResource + 'a>>,
   allocator: StackAllocator,
   storage: MaxAlignedStorage<N>,
 }
@@ -112,31 +113,65 @@ impl<'a, const N: usize> DeviceResourceJanitor<'a, N> {
       device,
       allocator: StackAllocator::new(),
       resources: heapless::Vec::new(),
+      heap_resources: Vec::new(),
       storage: MaxAlignedStorage([0; N]),
     }
   }
 
   pub fn clear(&mut self) {
+    // The `drop` implementation will handle cleanup of existing resources.
+    // Here we just need to reset the state.
+    self.allocator = StackAllocator::new();
     self.resources.clear();
+    self.heap_resources.clear();
   }
 
   pub fn push<T: DeviceResource + 'a>(&mut self, resource: T) -> Result<(), &'static str> {
+    // Check if there's space in the inline allocator
+    let layout = core::alloc::Layout::new::<T>();
+    let start = self.allocator.offset.get();
+    let align_offset = unsafe {
+      self
+        .storage
+        .0
+        .as_ptr()
+        .add(start)
+        .align_offset(layout.align())
+    };
+
+    let aligned_start = match start.checked_add(align_offset) {
+      Some(s) => s,
+      None => {
+        // overflow, definitely no space
+        self.heap_resources.push(Box::new(resource));
+        return Ok(());
+      }
+    };
+    let end = match aligned_start.checked_add(layout.size()) {
+      Some(e) => e,
+      None => {
+        // overflow
+        self.heap_resources.push(Box::new(resource));
+        return Ok(());
+      }
+    };
+
+    if end > N || self.resources.is_full() {
+      // Inline storage is full, or the pointer vec is full. Fallback to heap.
+      self.heap_resources.push(Box::new(resource));
+      return Ok(());
+    }
+
+    // There is space, so we can safely allocate.
     unsafe {
       let base_ptr = self.storage.0.as_mut_ptr();
-      // 1. allocate within local storage array
       let ptr: *mut T = self.allocator.allocate(base_ptr, N, resource)?;
 
-      // 2. Coerce to a fat pointer (*mut dyn Trait)
       let dyn_ptr: *mut (dyn DeviceResource + 'a) = ptr;
-
-      // 3. wrap in NonNull
       let non_null = NonNull::new_unchecked(dyn_ptr);
 
-      // 4. store fat pointer in vec
-      self
-        .resources
-        .push(non_null)
-        .map_err(|_| "Janitor capacity exceeded")?;
+      // This push should not fail because we checked is_full()
+      self.resources.push(non_null).ok().unwrap();
     }
 
     Ok(())
@@ -145,7 +180,12 @@ impl<'a, const N: usize> DeviceResourceJanitor<'a, N> {
 
 impl<'a, const N: usize> Drop for DeviceResourceJanitor<'a, N> {
   fn drop(&mut self) {
-    // destroy most recently allocated resources first
+    // Destroy heap-allocated resources first, in reverse order of allocation
+    for mut resource_box in self.heap_resources.drain(..).rev() {
+      resource_box.cleanup(self.device);
+    }
+
+    // Destroy most recently allocated inline resources first
     for resource in self.resources.iter_mut().rev() {
       unsafe {
         let resource = resource.as_mut();
@@ -1298,111 +1338,130 @@ impl<'a> RenderDevice for Device<'a> {
     drop(read_resouces);
 
     // Otherwise, create it inside the resources registry
-    let mut write_resources = res.physical_mesh_resources.write();
-    if write_resources.is_none() {
-      *write_resources = Some(hashbrown::HashMap::new());
-    }
-
-    let command_buffer: vk::CommandBuffer = {
-      let cmd_buffer_handle = cmd_id_from_timeline_and_thread_id(current_frame_timeline);
-      if let Some(cmd_buf) = self
-        .recording_command_buffers
-        .read()
-        .get(&(current_frame_timeline, cmd_buffer_handle))
-        .map(|v| v.command_buffer.get())
-      {
-        Ok::<vk::CommandBuffer, GpuError>(cmd_buf)
-      } else {
-        let cmd = unsafe {
-          res
-            .command_pools
-            .get_unchecked(self.queues.get_graphics_queue().index as usize)
-            .as_ref()
-            .unwrap_unchecked()
-            .allocate_primary(&self.device, this_thread::id(), cmd_buffer_handle.into())
-        }?;
-        self.recording_command_buffers.write().insert(
-          (current_frame_timeline, cmd_buffer_handle),
-          RecordingCmdBufferData::new(unsafe { NonZeroHandle::new_unchecked(cmd) }),
-        );
-
-        Ok(cmd)
-      }
+    // Upload is a blocking operation, so we need to release the read lock on res
+    // and acquire it later.
+    let graphics_queue = self.queues.get_graphics_queue();
+    // Inefficient creation of one-shot command pool. Hopefully, mesh update is infrequent
+    let command_pool = {
+      let create_info = vk::CommandPoolCreateInfo::default()
+        .queue_family_index(graphics_queue.family_index)
+        .flags(vk::CommandPoolCreateFlags::TRANSIENT);
+      unsafe { self.device.create_command_pool(&create_info, None) }
     }?;
 
-    let position_data = extract_position_data(&component.mesh);
-    let attribute_data = extract_attribute_data(&component.mesh);
-    // TODO: log on error
-    let albedo_image = component.mesh.albedo_map.as_ref().and_then(|t| {
-      Image::new_2d(
-        &self.device,
-        &self.synchronization2,
-        &res.allocator.allocator,
-        command_buffer,
-        &res.discard_pool,
-        current_frame_timeline,
-        &t,
-        vk::ImageUsageFlags::SAMPLED,
-      )
-      .ok()
-    });
-    let normal_image = component.mesh.normal_map.as_ref().and_then(|t| {
-      Image::new_2d(
-        &self.device,
-        &self.synchronization2,
-        &res.allocator.allocator,
-        command_buffer,
-        &res.discard_pool,
-        current_frame_timeline,
-        &t,
-        vk::ImageUsageFlags::SAMPLED,
-      )
-      .ok()
-    });
-    let roughness_image = component.mesh.roughness_map.as_ref().and_then(|t| {
-      Image::new_2d(
-        &self.device,
-        &self.synchronization2,
-        &res.allocator.allocator,
-        command_buffer,
-        &res.discard_pool,
-        current_frame_timeline,
-        &t,
-        vk::ImageUsageFlags::SAMPLED,
-      )
-      .ok()
-    });
-    let ao_image = component.mesh.ao_map.as_ref().and_then(|t| {
-      Image::new_2d(
-        &self.device,
-        &self.synchronization2,
-        &res.allocator.allocator,
-        command_buffer,
-        &res.discard_pool,
-        current_frame_timeline,
-        &t,
-        vk::ImageUsageFlags::SAMPLED,
-      )
-      .ok()
-    });
+    let command_buffer = {
+      let alloc_info = vk::CommandBufferAllocateInfo::default()
+        .command_pool(command_pool)
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .command_buffer_count(1);
+      unsafe { self.device.allocate_command_buffers(&alloc_info) }?[0]
+    };
 
-    let resource = ForwardMeshRenderResource::new(
-      &self.device,
-      &res.allocator.allocator,
-      command_buffer,
-      &res.discard_pool,
-      current_frame_timeline,
-      &position_data,
-      &attribute_data,
-      &component.mesh.indices,
-      albedo_image,
-      normal_image,
-      roughness_image,
-      ao_image,
-    )?;
+    let resource = 'resource_creation: {
+      let begin_info =
+        vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+      unsafe {
+        self
+          .device
+          .begin_command_buffer(command_buffer, &begin_info)?
+      };
 
+      let res = self.res.read();
+      let position_data = extract_position_data(&component.mesh);
+      let attribute_data = extract_attribute_data(&component.mesh);
+      let albedo_image = component.mesh.albedo_map.as_ref().and_then(|t| {
+        Image::new_2d(
+          &self.device,
+          &self.synchronization2,
+          &res.allocator.allocator,
+          command_buffer,
+          &res.discard_pool,
+          current_frame_timeline,
+          &t,
+          vk::ImageUsageFlags::SAMPLED,
+        )
+        .ok()
+      });
+      let normal_image = component.mesh.normal_map.as_ref().and_then(|t| {
+        Image::new_2d(
+          &self.device,
+          &self.synchronization2,
+          &res.allocator.allocator,
+          command_buffer,
+          &res.discard_pool,
+          current_frame_timeline,
+          &t,
+          vk::ImageUsageFlags::SAMPLED,
+        )
+        .ok()
+      });
+      let roughness_image = component.mesh.roughness_map.as_ref().and_then(|t| {
+        Image::new_2d(
+          &self.device,
+          &self.synchronization2,
+          &res.allocator.allocator,
+          command_buffer,
+          &res.discard_pool,
+          current_frame_timeline,
+          &t,
+          vk::ImageUsageFlags::SAMPLED,
+        )
+        .ok()
+      });
+      let ao_image = component.mesh.ao_map.as_ref().and_then(|t| {
+        Image::new_2d(
+          &self.device,
+          &self.synchronization2,
+          &res.allocator.allocator,
+          command_buffer,
+          &res.discard_pool,
+          current_frame_timeline,
+          &t,
+          vk::ImageUsageFlags::SAMPLED,
+        )
+        .ok()
+      });
+
+      let resource = ForwardMeshRenderResource::new(
+        &self.device,
+        &res.allocator.allocator,
+        command_buffer,
+        &res.discard_pool,
+        current_frame_timeline,
+        &position_data,
+        &attribute_data,
+        &component.mesh.indices,
+        albedo_image,
+        normal_image,
+        roughness_image,
+        ao_image,
+      )?;
+
+      unsafe {
+        self.device.end_command_buffer(command_buffer)?;
+        let command_buffers = [command_buffer];
+        let submits = [vk::SubmitInfo::default().command_buffers(&command_buffers)];
+        self
+          .device
+          .queue_submit(graphics_queue.handle, &submits, vk::Fence::null())?;
+        // Less efficient than using the transfer queue and synchronizing with timeline semaphore and
+        // barriers, but much simpler
+        // TODO: improve?
+        self.device.queue_wait_idle(graphics_queue.handle)?;
+      };
+
+      break 'resource_creation resource;
+    };
+    unsafe {
+      self.device.destroy_command_pool(command_pool, None);
+    }
+
+    drop(res);
     let wres = self.res.write();
     let mut wresources = wres.physical_mesh_resources.write();
+    if wresources.is_none() {
+      *wresources = Some(hashbrown::HashMap::new());
+    }
     // Safety: already checked for existance above
     unsafe {
       wresources
@@ -1561,6 +1620,7 @@ impl<'a> RenderDevice for Device<'a> {
       return Err(GpuError::InvalidArgument);
     }
 
+    drop(cmd_buffers);
     let mut cmd_buffers = self.recording_command_buffers.write();
     let data = unsafe {
       cmd_buffers

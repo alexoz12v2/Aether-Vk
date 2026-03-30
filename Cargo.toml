@@ -1,0 +1,30 @@
+[workspace]
+members = ["aethervk.core/cdylib", "aethervk.core/rlib", "aethervk.oshal/rlib", "test/simulation_test"]
+resolver = "3"
+exclude = ["external/gltf", "external/vk-mem", "external/spirv-reflect"]
+
+# settings to strip and optimize release
+# in rlib we don't care of how panic is handled
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+panic = "abort"
+
+### # 2. Override for a specific workspace member
+### # NOTE: Use the actual package name (from the member's [package] block), 
+### # NOT the folder name!
+### [profile.dev.package.aethervk-oshal-rlib]
+### opt-level = 3
+### debug = false
+### 
+### # 3. You can override another member too
+### [profile.dev.package.aethervk-core-rlib]
+### opt-level = 2
+
+### uncomment if necessary
+## # Force all external crates (like ash, gltf, etc.) to be highly optimized
+## [profile.dev.package."*"]
+## opt-level = 3

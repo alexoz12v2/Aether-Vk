@@ -17,9 +17,9 @@ heapless = { version = "0.9" }
 spin = { version = "0.10", features = ["once", "rwlock"] }
 libm = { version = "0.2.11" }
 thiserror = { version = "2", default-features = false }
-bumpalo = { version = "3.20.0", features = ["boxed"] }
+# bumpalo = { version = "3.20.0", features = ["boxed"] }
 # dependency of bumpalo 3.20.2
-allocator-api2 = { version = "0.2.8", default-features = false }
+# allocator-api2 = { version = "0.2.8", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = ">=0.59, <= 0.62", default-features = false, features = [
@@ -40,11 +40,4 @@ libc = { version = "0.2", default-features = false, features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-mach2 = { version = "0.6" }
-
-# settings to strip and optimize release
-# in rlib we don't care of how panic is handled
-[profile.release]
-lto = true
-codegen-units = 1
-strip = true
+mach2 = { version = "0.6", default-features = false }

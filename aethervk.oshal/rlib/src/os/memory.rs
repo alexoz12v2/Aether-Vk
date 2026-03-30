@@ -96,7 +96,7 @@ pub struct MaxAlignedStorage<const N: usize>(pub [u8; N]);
 /// The bump allocator only tracks the offset. It takes the base pointer
 /// dynamically to prevent self-referencing struct issues.
 pub struct StackAllocator {
-  offset: Cell<usize>,
+  pub offset: Cell<usize>,
 }
 
 impl StackAllocator {
