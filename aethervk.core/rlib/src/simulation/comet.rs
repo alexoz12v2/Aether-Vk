@@ -106,6 +106,25 @@ pub struct Comet {
   mass_properties: MassProperties,
 }
 
+impl Comet {
+  pub fn texture_flags(&self) -> TextureFlags {
+    let mut flags = TextureFlags::empty();
+    if self.albedo_map.is_some() {
+      flags |= TextureFlags::ALBEDO;
+    }
+    if self.normal_map.is_some() {
+      flags |= TextureFlags::NORMAL;
+    }
+    if self.roughness_map.is_some() {
+      flags |= TextureFlags::ROUGHNESS;
+    }
+    if self.ao_map.is_some() {
+      flags |= TextureFlags::AO;
+    }
+    flags
+  }
+}
+
 impl PartialEq for Comet {
   fn eq(&self, other: &Self) -> bool {
     self.vertices == other.vertices && self.indices == other.indices

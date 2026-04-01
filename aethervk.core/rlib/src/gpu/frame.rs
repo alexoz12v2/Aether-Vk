@@ -2,7 +2,7 @@ use crate::gpu::{
   AcquireResult, GpuResourceHandle, PipelineKey, PresentationEngineHandle, RenderDevice,
 };
 use crate::scene::{CameraComponent, EntityId, RenderableDataRef, TransformComponent};
-use crate::simulation::comet::PushConstants;
+use crate::simulation::comet::{PushConstants, TextureFlags};
 use crate::types::GpuResult;
 use aethervk_oshal_rlib::math::{
   matrix::{mat4::Mat4x4f32, Matrix4},
@@ -17,6 +17,7 @@ pub struct ResourceUploadResult {
   pub pipeline: PipelineKey,
   /// The vertex buffer to bind.
   pub buffers: GpuResourceHandle,
+  pub texture_flags: TextureFlags,
 }
 
 /// Represents a single draw call with all necessary information.
@@ -30,6 +31,7 @@ pub struct DrawCall {
   pub index_count: u32,
   /// The model matrix of the object to draw.
   pub model_matrix: Mat4x4f32,
+  pub texture_flags: TextureFlags,
 }
 
 impl DrawCall {
@@ -43,6 +45,7 @@ impl DrawCall {
       buffers: result.buffers,
       index_count,
       model_matrix,
+      texture_flags: result.texture_flags,
     }
   }
 }
@@ -119,6 +122,26 @@ impl RenderPath for ForwardRenderPath {
     device.begin_command_buffer(cmd_buffer)?;
     device.begin_render_pass(cmd_buffer, presentation_engine, acquire_result)?;
 
+    let extent = device.get_presentation_engine_extent(presentation_engine)?;
+    device.set_viewport(
+      cmd_buffer,
+      &super::Viewport {
+        x: 0.0,
+        y: 0.0,
+        width: extent[0] as f32,
+        height: extent[1] as f32,
+        min_depth: 0.0,
+        max_depth: 1.0,
+      },
+    )?;
+    device.set_scissor(
+      cmd_buffer,
+      &super::Rect2D {
+        offset: [0, 0],
+        extent,
+      },
+    )?;
+
     for draw_call in &frame.draw_calls {
       let _ = do_draw_call(device, camera, cmd_buffer, draw_call);
     }
@@ -136,8 +159,12 @@ fn do_draw_call(
   cmd_buffer: super::CommandBufferHandle,
   draw_call: &DrawCall,
 ) -> Result<(), crate::types::GpuError> {
+
+  // 2. Bind pipeline and buffers
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
   device.bind_buffers(cmd_buffer, draw_call.pipeline, draw_call.buffers)?;
+
+  // 3. Math & Push constants
   let view = Mat4x4f32::look_at(
     camera.0.position,
     camera.0.position + <Vec3f32 as Vector3>::from_components(0.0, 0.0, -1.0),
@@ -150,7 +177,7 @@ fn do_draw_call(
     model_view_proj: mvp.into(),
     model: model.into(),
     sun_dir: [0.0, -1.0, 0.0],
-    texture_flags: Default::default(),
+    texture_flags: draw_call.texture_flags,
     sun_color: [1.0, 1.0, 1.0, 1.0],
   };
   device.push_constants(cmd_buffer, &push_constants)?;
