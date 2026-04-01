@@ -67,7 +67,7 @@ fn on_load() {
 
 // this is the /ENTRY for link.exe, so it shouldn't be elided even with LTO
 #[cfg(windows)] // this runs after link_section `.CRT$XCU.`, but it's fine
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 unsafe extern "system" fn DllMain(
   _hinst: *mut core::ffi::c_void,

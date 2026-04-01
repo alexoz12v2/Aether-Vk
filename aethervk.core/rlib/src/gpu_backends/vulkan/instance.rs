@@ -224,7 +224,7 @@ impl Instance {
               && query_input.supports_presentation(
                 entry.as_ref(),
                 physical_device,
-                self.instance.handle(),
+                &self.instance,
                 queue_family_index as u32,
               )
           },

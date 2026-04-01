@@ -3,15 +3,21 @@
 use alloc::boxed::Box;
 use alloc::string::String;
 use core::ffi::{c_void};
+
+#[cfg(any(unix, target_os = "macos"))]
 use core::ptr;
 
 #[cfg(any(unix, target_os = "macos"))]
 use libc;
 
 #[cfg(windows)]
-use windows::Win32::System::Threading::{CreateThread, WaitForSingleObject, WAIT_OBJECT_0};
-#[cfg(windows)]
-use windows::Win32::System::SystemServices::LPSECURITY_ATTRIBUTES;
+use windows::Win32::{
+  Security::SECURITY_ATTRIBUTES,
+  Foundation::{WAIT_OBJECT_0},
+  System::{
+    Threading::{CreateThread, WaitForSingleObject},
+  },
+};
 
 use crate::os::ThreadingResult;
 
@@ -32,7 +38,10 @@ impl Thread {
 
     #[cfg(windows)]
     unsafe {
-      let res = WaitForSingleObject(self.native, u32::MAX);
+      let res = WaitForSingleObject(
+        windows::Win32::Foundation::HANDLE(self.native as *mut _),
+        u32::MAX,
+      );
       assert_eq!(res, WAIT_OBJECT_0);
     }
   }
@@ -128,21 +137,24 @@ impl Builder {
       }
 
       // TODO: _beginthreadex
-      let native = CreateThread(
-        LPSECURITY_ATTRIBUTES::default(),
-        self.stack_size.unwrap_or(0),
-        Some(thread_start),
-        Some(Box::into_raw(main) as *mut c_void),
-        0,
-        None,
-      );
+      let native = unsafe {
+        let sa = SECURITY_ATTRIBUTES::default();
+        CreateThread(
+          Some(core::ptr::from_ref(&sa)),
+          self.stack_size.unwrap_or(0),
+          Some(thread_start),
+          Some(Box::into_raw(main) as *mut c_void),
+          windows::Win32::System::Threading::THREAD_CREATION_FLAGS::default(),
+          None,
+        )
+      };
 
       if let Ok(handle) = native {
         Ok(Thread {
           native: handle.0 as isize,
         })
       } else {
-        Err(io::Error::last_os_error())
+        Err(crate::os::ThreadingError::Unknown)
       }
     }
   }

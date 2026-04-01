@@ -21,5 +21,6 @@
     "**/.hg/store/**": true,
 
     "scripts/**": true
-  }
+  },
+  "dotnet.defaultSolution": "AetherVk.sln"
 }

@@ -90,7 +90,7 @@ impl PhysicalDeviceQueryInput {
     &self,
     _entry: &ash::Entry,
     _physical_device: vk::PhysicalDevice,
-    _instance: vk::Instance,
+    _instance: &ash::Instance,
     _queue_family_index: u32,
   ) -> bool {
     let mut _supported = false;
@@ -107,8 +107,7 @@ impl PhysicalDeviceQueryInput {
           _physical_device,
           _queue_family_index,
           self.wl_display,
-        )
-        == vk::TRUE;
+        );
     }
 
     #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
@@ -119,8 +118,7 @@ impl PhysicalDeviceQueryInput {
           _queue_family_index,
           self.xcb_connection,
           self.xcb_visualid,
-        )
-        == vk::TRUE;
+        );
     }
 
     #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
@@ -131,15 +129,13 @@ impl PhysicalDeviceQueryInput {
           _queue_family_index,
           self.dpy,
           self.visual_id,
-        )
-        == vk::TRUE;
+        );
     }
 
     #[cfg(windows)]
     unsafe {
       _supported = ash::khr::win32_surface::Instance::new(_entry, &_instance)
-        .get_physical_device_win32_presentation_support(_physical_device, _queue_family_index)
-        == vk::TRUE;
+        .get_physical_device_win32_presentation_support(_physical_device, _queue_family_index);
     }
 
     _supported
@@ -262,16 +258,48 @@ impl EntryWrapper {
       let get_instance_proc_addr: PFN_vkGetInstanceProcAddr;
       #[cfg(windows)]
       {
+        use windows::Win32::System::LibraryLoader::{
+          GetModuleHandleExW, GetProcAddress, LoadLibraryExW,
+          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, LOAD_LIBRARY_SEARCH_SYSTEM32,
+        };
+        use windows::Win32::Foundation::HMODULE;
+        use windows::core::{s, w, PCSTR, PCWSTR};
+
         const VK_GET_INSTANCE_PROC_ADDR_NAME: PCSTR = s!("vkGetInstanceProcAddr");
-        todo!(); // GetModuleHandleExW with GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT
-        let h_vulkan =
-          unsafe { LoadLibraryExW(w!("vulkan-1.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) }
-            .unwrap();
-        let vk_get_instance_proc_addr =
-          unsafe { GetProcAddress(h_vulkan, VK_GET_INSTANCE_PROC_ADDR_NAME) }
-            .expect("vkGetInstanceProcAddr not found");
-        get_instance_proc_addr = unsafe { mem::transmute(vk_get_instance_proc_addr) };
-        vulkan_loader_module = h_vulkan.0;
+        const VULKAN_DLL_NAME: PCWSTR = w!("vulkan-1.dll");
+
+        let mut h_vulkan = HMODULE::default();
+
+        // 1. Try to get the handle without incrementing the reference count if it's already loaded
+        let handle_exists = unsafe {
+          GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            VULKAN_DLL_NAME,
+            &mut h_vulkan,
+          )
+        };
+
+        // 2. If it's not already in the process, load it explicitly from System32
+        if !handle_exists.is_err() {
+          h_vulkan = unsafe { LoadLibraryExW(VULKAN_DLL_NAME, None, LOAD_LIBRARY_SEARCH_SYSTEM32) }
+            .map_err(|_| {
+              GpuError::BackendSpecific("Failed to load vulkan-1.dll from System32".into())
+            })?;
+        }
+
+        // 3. Extract the function pointer
+        let vk_get_instance_proc_addr_ptr =
+          unsafe { GetProcAddress(h_vulkan, VK_GET_INSTANCE_PROC_ADDR_NAME) }.ok_or(
+            GpuError::BackendSpecific("vkGetInstanceProcAddr not found in vulkan-1.dll".into()),
+          )?;
+
+        get_instance_proc_addr = unsafe { core::mem::transmute(vk_get_instance_proc_addr_ptr) };
+
+        // 4. Store the module handle as a NonNull pointer
+        // Note: The cast `as *mut core::ffi::c_void` handles the inner type of HMODULE (.0),
+        // which varies slightly depending on your exact `windows` crate version (isize vs *mut c_void).
+        vulkan_loader_module = core::ptr::NonNull::new(h_vulkan.0 as *mut core::ffi::c_void)
+          .expect("Vulkan module handle was null");
       }
       #[cfg(target_os = "linux")]
       {
@@ -435,7 +463,10 @@ impl Drop for EntryWrapper {
     if 1 == Arc::strong_count(&self.vk_entry) {
       #[cfg(windows)]
       {
-        unsafe { FreeLibrary(HMODULE(self.vulkan_loader_module.as_ptr())) };
+        unsafe {
+          use windows::Win32::Foundation::{FreeLibrary, HMODULE};
+          FreeLibrary(HMODULE(self.vulkan_loader_module.0.as_ptr()))
+        };
       }
       #[cfg(target_family = "unix")]
       {

@@ -223,12 +223,12 @@ impl Vector3 for Vec3f32 {
       let b = rhs.0.simd;
       let res = _mm_sub_ps(
         _mm_mul_ps(
-          _mm_shuffle_ps(a, a, _MM_SHUFFLE(3, 0, 2, 1)),
-          _mm_shuffle_ps(b, b, _MM_SHUFFLE(3, 1, 0, 2)),
+          _mm_shuffle_ps(a, a, super::_MM_SHUFFLE(3, 0, 2, 1)),
+          _mm_shuffle_ps(b, b, super::_MM_SHUFFLE(3, 1, 0, 2)),
         ),
         _mm_mul_ps(
-          _mm_shuffle_ps(a, a, _MM_SHUFFLE(3, 1, 0, 2)),
-          _mm_shuffle_ps(b, b, _MM_SHUFFLE(3, 0, 2, 1)),
+          _mm_shuffle_ps(a, a, super::_MM_SHUFFLE(3, 1, 0, 2)),
+          _mm_shuffle_ps(b, b, super::_MM_SHUFFLE(3, 0, 2, 1)),
         ),
       );
       Self(Vec4f32 { simd: res })

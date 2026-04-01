@@ -20,6 +20,9 @@ dependencies = [
  "mimalloc",
  "serde_json",
  "tikv-jemallocator",
+ "wchar",
+ "windows",
+ "windows-strings",
 ]
 
 [[package]]
