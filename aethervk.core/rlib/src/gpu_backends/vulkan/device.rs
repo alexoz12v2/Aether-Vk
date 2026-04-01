@@ -43,7 +43,7 @@ use crate::{
   },
   scene::{EntityId, PhysicalMeshComponent},
   simulation::comet::{
-    Comet, NORMAL_COMPONENTS, POSITION_COMPONENTS, PushConstants, UV_COMPONENTS,
+    Comet, NORMAL_COMPONENTS, POSITION_COMPONENTS, PushConstants, TextureFlags, UV_COMPONENTS,
   },
   types::{GpuError, GpuResult},
 };
@@ -205,6 +205,7 @@ unsafe fn physical_mesh_resource_backend_to_frontend(
   ResourceUploadResult {
     pipeline: unsafe { archetype.pipeline_key.unwrap_unchecked() },
     buffers: GpuResourceHandle(value.buffers_hash()),
+    texture_flags: value.frontend_texture_flags(),
   }
 }
 
@@ -371,6 +372,8 @@ impl DeviceResources {
     vertex_shader_key: ShaderKey,
     fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
+    synchronization2: &ash::khr::synchronization2::Device,
+    queue: &Queue,
     handle: PresentationEngineHandle,
     timeline: u64,
   ) -> GpuResult<()> {
@@ -404,13 +407,15 @@ impl DeviceResources {
     // Create initial struct
     let res = unsafe {
       ForwardMeshRenderResourceArchetype::new(
-        self.descriptor_pool.as_ref().unwrap_unchecked(),
         device,
-        &self.discard_pool,
         &vertex_shader,
         &fragment_shader,
-      )?
-    };
+        &synchronization2,
+        &self.allocator.allocator,
+        &self.discard_pool,
+        &queue,
+      )
+    }?;
     #[cfg(not(debug_assertions))]
     {
       self.physical_mesh_render_archetype = Some(res);
@@ -1323,6 +1328,8 @@ impl<'a> RenderDevice for Device<'a> {
           vkey,
           fkey,
           self.depth_stencil_format,
+          &self.synchronization2,
+          &self.queues.get_graphics_queue(),
           handle,
           next_frame_timeline,
         )?;
@@ -1376,7 +1383,7 @@ impl<'a> RenderDevice for Device<'a> {
       unsafe { self.device.allocate_command_buffers(&alloc_info) }?[0]
     };
 
-    let resource = 'resource_creation: {
+    let (resource, texture_flags) = 'resource_creation: {
       let begin_info =
         vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
       unsafe {
@@ -1388,7 +1395,9 @@ impl<'a> RenderDevice for Device<'a> {
       let res = self.res.read();
       let position_data = extract_position_data(&component.mesh);
       let attribute_data = extract_attribute_data(&component.mesh);
+      let mut texture_flags: TextureFlags = TextureFlags::empty();
       let albedo_image = component.mesh.albedo_map.as_ref().and_then(|t| {
+        texture_flags |= TextureFlags::ALBEDO;
         Image::new_2d(
           &self.device,
           &self.synchronization2,
@@ -1402,6 +1411,7 @@ impl<'a> RenderDevice for Device<'a> {
         .ok()
       });
       let normal_image = component.mesh.normal_map.as_ref().and_then(|t| {
+        texture_flags |= TextureFlags::NORMAL;
         Image::new_2d(
           &self.device,
           &self.synchronization2,
@@ -1415,6 +1425,7 @@ impl<'a> RenderDevice for Device<'a> {
         .ok()
       });
       let roughness_image = component.mesh.roughness_map.as_ref().and_then(|t| {
+        texture_flags |= TextureFlags::ROUGHNESS;
         Image::new_2d(
           &self.device,
           &self.synchronization2,
@@ -1428,6 +1439,7 @@ impl<'a> RenderDevice for Device<'a> {
         .ok()
       });
       let ao_image = component.mesh.ao_map.as_ref().and_then(|t| {
+        texture_flags |= TextureFlags::AO;
         Image::new_2d(
           &self.device,
           &self.synchronization2,
@@ -1441,20 +1453,31 @@ impl<'a> RenderDevice for Device<'a> {
         .ok()
       });
 
-      let resource = ForwardMeshRenderResource::new(
-        &self.device,
-        &res.allocator.allocator,
-        command_buffer,
-        &res.discard_pool,
-        current_frame_timeline,
-        &position_data,
-        &attribute_data,
-        &component.mesh.indices,
-        albedo_image,
-        normal_image,
-        roughness_image,
-        ao_image,
-      )?;
+      let resource = unsafe {
+        let descriptor_set = archetype.create_descriptor_set_from_layout_at_index(
+          &self.device,
+          res.descriptor_pool.as_ref().unwrap_unchecked(),
+          &res.discard_pool,
+          0,
+        )?;
+        ForwardMeshRenderResource::new(
+          &self.device,
+          &res.allocator.allocator,
+          command_buffer,
+          &res.discard_pool,
+          current_frame_timeline,
+          &position_data,
+          &attribute_data,
+          &component.mesh.indices,
+          albedo_image,
+          normal_image,
+          roughness_image,
+          ao_image,
+          res.linear_sampler,
+          descriptor_set,
+          &archetype.dummy_texture_handle,
+        )?
+      };
 
       unsafe {
         self.device.end_command_buffer(command_buffer)?;
@@ -1469,7 +1492,7 @@ impl<'a> RenderDevice for Device<'a> {
         self.device.queue_wait_idle(graphics_queue.handle)?;
       };
 
-      break 'resource_creation resource;
+      break 'resource_creation (resource, texture_flags);
     };
     unsafe {
       self.device.destroy_command_pool(command_pool, None);
@@ -1492,6 +1515,7 @@ impl<'a> RenderDevice for Device<'a> {
     Ok(ResourceUploadResult {
       pipeline: pipeline_key,
       buffers: physical_mesh_id.into(),
+      texture_flags,
     })
   }
 
@@ -1627,6 +1651,82 @@ impl<'a> RenderDevice for Device<'a> {
     Ok(())
   }
 
+  fn get_presentation_engine_extent(
+    &self,
+    handle: crate::gpu::PresentationEngineHandle,
+  ) -> GpuResult<[u32; 2]> {
+    if let Some(engine) = self
+      .res
+      .read()
+      .live_presentation_engines
+      .read()
+      .get(&handle)
+    {
+      let e = engine.read().extent();
+      Ok([e.0, e.1])
+    } else {
+      Err(GpuError::InvalidArgument)
+    }
+  }
+
+  fn set_viewport(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    viewport: &crate::gpu::Viewport,
+  ) -> GpuResult<()> {
+    let res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers
+      .get(&(timeline, cmd_buffer))
+      .ok_or(GpuError::InvalidArgument)?;
+
+    let cmd = data.command_buffer.get();
+    let vk_viewport = vk::Viewport {
+      x: viewport.x,
+      y: viewport.y,
+      width: viewport.width,
+      height: viewport.height,
+      min_depth: viewport.min_depth,
+      max_depth: viewport.max_depth,
+    };
+    unsafe {
+      self.device.cmd_set_viewport(cmd, 0, &[vk_viewport]);
+    }
+
+    Ok(())
+  }
+
+  fn set_scissor(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    scissor: &crate::gpu::Rect2D,
+  ) -> GpuResult<()> {
+    let res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers
+      .get(&(timeline, cmd_buffer))
+      .ok_or(GpuError::InvalidArgument)?;
+
+    let cmd = data.command_buffer.get();
+    let vk_scissor = vk::Rect2D {
+      offset: vk::Offset2D {
+        x: scissor.offset[0],
+        y: scissor.offset[1],
+      },
+      extent: vk::Extent2D {
+        width: scissor.extent[0],
+        height: scissor.extent[1],
+      },
+    };
+    unsafe {
+      self.device.cmd_set_scissor(cmd, 0, &[vk_scissor]);
+    }
+
+    Ok(())
+  }
+
   fn bind_pipeline(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
@@ -1722,47 +1822,14 @@ impl<'a> RenderDevice for Device<'a> {
     }
 
     // Update and bind descriptor sets
-    let mut image_infos = Vec::with_capacity(4);
-    if let Some(image) = &resource.albedo_image {
-      image_infos.push((0, image.to_descriptor_image_info(res.linear_sampler)));
-    }
-    if let Some(image) = &resource.normal_image {
-      image_infos.push((1, image.to_descriptor_image_info(res.linear_sampler)));
-    }
-    if let Some(image) = &resource.roughness_image {
-      image_infos.push((2, image.to_descriptor_image_info(res.linear_sampler)));
-    }
-    if let Some(image) = &resource.ao_image {
-      image_infos.push((3, image.to_descriptor_image_info(res.linear_sampler)));
-    }
-
-    let write_descriptor_sets: Vec<_> = image_infos
-      .iter()
-      .map(|(binding, info)| {
-        vk::WriteDescriptorSet::default()
-          .dst_set(archetype.descriptor_sets[0].get())
-          .dst_binding(*binding)
-          .dst_array_element(0)
-          .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-          .image_info(core::slice::from_ref(info))
-      })
-      .collect();
-
-    if !write_descriptor_sets.is_empty() {
-      unsafe {
-        self
-          .device
-          .update_descriptor_sets(&write_descriptor_sets, &[]);
-      }
-    }
-
+    // Errata: modifying a descriptor set while the GPU is executing (or about to execute) commands that use that set is a severe data race. Since multiple meshes share that one archetype set, Mesh B will overwrite Mesh A's descriptors before the GPU even gets a chance to render Mesh A
     unsafe {
       self.device.cmd_bind_descriptor_sets(
         cmd,
         vk::PipelineBindPoint::GRAPHICS,
         archetype.pipeline_layout.get(),
         0,
-        &[archetype.descriptor_sets[0].get()],
+        &[resource.descriptor_set.get()],
         &[],
       );
     }

@@ -561,6 +561,7 @@ fn render_payload(device: &dyn RenderDevice, user_data: *mut core::ffi::c_void) 
   let acquire_result = device.acquire_next_image(state.presentation_engine)?;
 
   if acquire_result.status.needs_resize() {
+    println!("Swapchain needs resize!");
     return Ok(()); // Main thread will handle resize
   }
   let mut frame = frame::Frame::new();

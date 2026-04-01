@@ -495,6 +495,13 @@ pub(super) fn required_device_extensions() -> &'static Vec<&'static CStr> {
 
     the_vec.push(ash::khr::swapchain::NAME);
 
+    // TODO: put this into an optional extension, as the `nullDescriptors` feature is not supported
+    // by everybody (namely, Apple M4)
+    // This extension also adds support for “null descriptors”, where VK_NULL_HANDLE can be used
+    // instead of a valid handle. Accesses to null descriptors have well-defined behavior, and do not rely on robustness.
+    // promoted to vk::API_VERSION_1_3
+    // the_vec.push(ash::ext::robustness2::NAME);
+
     #[cfg(windows)]
     {
       // external `HANDLE` stuff
@@ -551,6 +558,7 @@ pub(super) struct RequiredFeatures<'a> {
   pub buffer_device_address: vk::PhysicalDeviceBufferDeviceAddressFeatures<'a>,
   pub vulkan_memory_model: vk::PhysicalDeviceVulkanMemoryModelFeatures<'a>,
   pub timeline_semaphore: vk::PhysicalDeviceTimelineSemaphoreFeatures<'a>,
+  pub synchronization2: vk::PhysicalDeviceSynchronization2Features<'a>,
   // TODO add VK_KHR_variable_pointers (promoted to 1.1)
 }
 
@@ -559,11 +567,13 @@ impl RequiredFeatures<'_> {
     let buffer_device_address = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
     let vulkan_memory_model = vk::PhysicalDeviceVulkanMemoryModelFeatures::default();
     let timeline_semaphore = vk::PhysicalDeviceTimelineSemaphoreFeatures::default();
+    let synchronization2 = vk::PhysicalDeviceSynchronization2Features::default();
 
     Self {
       buffer_device_address,
       vulkan_memory_model,
       timeline_semaphore,
+      synchronization2,
     }
   }
 
@@ -572,12 +582,14 @@ impl RequiredFeatures<'_> {
       .push_next(&mut self.buffer_device_address)
       .push_next(&mut self.vulkan_memory_model)
       .push_next(&mut self.timeline_semaphore)
+      .push_next(&mut self.synchronization2)
   }
 
   pub fn populate(&mut self) -> &mut Self {
     self.buffer_device_address.buffer_device_address = vk::TRUE;
     self.vulkan_memory_model.vulkan_memory_model = vk::TRUE;
     self.timeline_semaphore.timeline_semaphore = vk::TRUE;
+    self.synchronization2.synchronization2 = vk::TRUE;
 
     self
   }
@@ -593,6 +605,9 @@ impl RequiredFeatures<'_> {
     }
     if self.timeline_semaphore.timeline_semaphore != vk::TRUE {
       the_vec.push("timeline_semaphore".to_string());
+    }
+    if self.synchronization2.synchronization2 != vk::TRUE {
+      the_vec.push("synchronization2".to_string());
     }
 
     if the_vec.is_empty() {

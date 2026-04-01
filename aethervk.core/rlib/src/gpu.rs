@@ -70,87 +70,109 @@ pub trait PipelineKeyable {
   fn pipeline_key(&self) -> PipelineKey;
 }
 
+#[derive(Default, Clone, Copy)]
+pub struct Rect2D {
+    pub offset: [i32; 2],
+    pub extent: [u32; 2],
+}
+
+#[derive(Clone, Copy)]
+pub struct Viewport {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub min_depth: f32,
+    pub max_depth: f32,
+}
+
 pub trait RenderDevice: Send + Sync {
-  #[cfg(debug_assertions)]
-  fn print_info(&self) -> String;
+    #[cfg(debug_assertions)]
+    fn print_info(&self) -> String;
 
-  fn context_id(&self) -> u64;
+    fn context_id(&self) -> u64;
 
-  /// Prepare all the necessary state for a rendering operation. In particular
-  /// - Update frame index within device and (vulkan) refresh timeline semaphore value
-  /// - Refresh VMA memory budgets
-  fn start_frame(&self) -> GpuResult<()>;
+    /// Prepare all the necessary state for a rendering operation. In particular
+    /// - Update frame index within device and (vulkan) refresh timeline semaphore value
+    /// - Refresh VMA memory budgets
+    fn start_frame(&self) -> GpuResult<()>;
 
-  /// Creates the surface and initial swapchain
-  fn create_presentation_engine(
-    &self,
-    params: &PresentationEngineParams,
-  ) -> GpuResult<PresentationEngineHandle>;
+    /// Creates the surface and initial swapchain
+    fn create_presentation_engine(
+        &self,
+        params: &PresentationEngineParams,
+    ) -> GpuResult<PresentationEngineHandle>;
 
-  /// Allows caller to explicitly trigger a resize/recreation
-  fn resize_presentation_engine(
-    &self,
-    handle: PresentationEngineHandle,
-    width: u32,
-    height: u32,
-  ) -> GpuResult<()>;
+    /// Allows caller to explicitly trigger a resize/recreation
+    fn resize_presentation_engine(
+        &self,
+        handle: PresentationEngineHandle,
+        width: u32,
+        height: u32,
+    ) -> GpuResult<()>;
 
-  /// Acquires the next image. If it returns NeedsRecreation, the caller should
-  /// discard the frame, call resize, and try again next frame
-  fn acquire_next_image(&self, handle: PresentationEngineHandle) -> GpuResult<AcquireResult>;
+    fn get_presentation_engine_extent(&self, handle: PresentationEngineHandle) -> GpuResult<[u32; 2]>;
 
-  /// Returns (pipeline, vertex_buffer, index_buffer)
-  fn get_or_create_physical_mesh_resources(
-    &self,
-    entity_id: EntityId,
-    component: &PhysicalMeshComponent,
-    handle: PresentationEngineHandle,
-  ) -> GpuResult<ResourceUploadResult>;
+    /// Acquires the next image. If it returns NeedsRecreation, the caller should
+    /// discard the frame, call resize, and try again next frame
+    fn acquire_next_image(&self, handle: PresentationEngineHandle) -> GpuResult<AcquireResult>;
 
-  /// Presents the image. Takes semaphore signaled by a rendering command buffer
-  fn present(
-    &self,
-    handle: PresentationEngineHandle,
-    image_index: usize,
-    frame_index: usize,
-  ) -> GpuResult<SwapchainStatus>;
+    /// Returns (pipeline, vertex_buffer, index_buffer)
+    fn get_or_create_physical_mesh_resources(
+        &self,
+        entity_id: EntityId,
+        component: &PhysicalMeshComponent,
+        handle: PresentationEngineHandle,
+    ) -> GpuResult<ResourceUploadResult>;
 
-  /// Start for an interface to draw something on the screen. Gets a handle to store rendering
-  /// state setting commands
-  fn get_command_buffer(&self) -> GpuResult<CommandBufferHandle>;
+    /// Presents the image. Takes semaphore signaled by a rendering command buffer
+    fn present(
+        &self,
+        handle: PresentationEngineHandle,
+        image_index: usize,
+        frame_index: usize,
+    ) -> GpuResult<SwapchainStatus>;
 
-  fn begin_command_buffer(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
+    /// Start for an interface to draw something on the screen. Gets a handle to store rendering
+    /// state setting commands
+    fn get_command_buffer(&self) -> GpuResult<CommandBufferHandle>;
 
-  /// responsible to acquire an image and store it in the associated command buffer structure
-  fn begin_render_pass(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    presentation_engine: PresentationEngineHandle,
-    acquire_result: &AcquireResult,
-  ) -> GpuResult<()>;
+    fn begin_command_buffer(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 
-  /// alter internal state for current command buffer binding a new graphics pipeline
-  fn bind_pipeline(&self, cmd_buffer: CommandBufferHandle, pipeline: PipelineKey) -> GpuResult<()>;
+    /// responsible to acquire an image and store it in the associated command buffer structure
+    fn begin_render_pass(
+        &self,
+        cmd_buffer: CommandBufferHandle,
+        presentation_engine: PresentationEngineHandle,
+        acquire_result: &AcquireResult,
+    ) -> GpuResult<()>;
 
-  /// alter internal state for current command buffer to use a specific set of buffers, coherent with pipeline
-  fn bind_buffers(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    pipeline: PipelineKey,
-    buffers: GpuResourceHandle,
-  ) -> GpuResult<()>;
+    fn set_viewport(&self, cmd_buffer: CommandBufferHandle, viewport: &Viewport) -> GpuResult<()>;
 
-  fn push_constants(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    push_constants: &PushConstants,
-  ) -> GpuResult<()>;
+    fn set_scissor(&self, cmd_buffer: CommandBufferHandle, scissor: &Rect2D) -> GpuResult<()>;
 
-  fn draw_indexed(&self, cmd_buffer: CommandBufferHandle, index_count: u32) -> GpuResult<()>;
+    /// alter internal state for current command buffer binding a new graphics pipeline
+    fn bind_pipeline(&self, cmd_buffer: CommandBufferHandle, pipeline: PipelineKey) -> GpuResult<()>;
 
-  fn end_render_pass(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
+    /// alter internal state for current command buffer to use a specific set of buffers, coherent with pipeline
+    fn bind_buffers(
+        &self,
+        cmd_buffer: CommandBufferHandle,
+        pipeline: PipelineKey,
+        buffers: GpuResourceHandle,
+    ) -> GpuResult<()>;
 
-  fn submit_command_buffer(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
+    fn push_constants(
+        &self,
+        cmd_buffer: CommandBufferHandle,
+        push_constants: &PushConstants,
+    ) -> GpuResult<()>;
+
+    fn draw_indexed(&self, cmd_buffer: CommandBufferHandle, index_count: u32) -> GpuResult<()>;
+
+    fn end_render_pass(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
+
+    fn submit_command_buffer(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]

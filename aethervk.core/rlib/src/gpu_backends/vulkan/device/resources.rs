@@ -1,6 +1,8 @@
+use core::fmt::write;
 use core::ptr;
 use core::hash::{Hash, Hasher};
 use aethervk_oshal_rlib as oshal;
+use ash::khr::dynamic_rendering;
 use oshal::{hash::FnvHasher, os::native::ThreadId};
 use ash::vk;
 use alloc::{boxed::Box, collections::VecDeque, sync, vec::Vec};
@@ -535,6 +537,8 @@ pub(super) struct ForwardMeshRenderResource {
   pub roughness_image: Option<Image>,
   /// layout(binding = 3) uniform sampler2D aoMap;
   pub ao_image: Option<Image>,
+  /// Note: Purposefully leaked! (TODO: if this creates problems, do better.)
+  pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
 }
 
 unsafe impl Sync for ForwardMeshRenderResource {}
@@ -600,6 +604,23 @@ impl DiscardableResource for ForwardMeshRenderResource {
 }
 
 impl ForwardMeshRenderResource {
+  pub fn frontend_texture_flags(&self) -> crate::simulation::comet::TextureFlags {
+    let mut flags = crate::simulation::comet::TextureFlags::empty();
+    if self.albedo_image.is_some() {
+      flags |= crate::simulation::comet::TextureFlags::ALBEDO;
+    }
+    if self.normal_image.is_some() {
+      flags |= crate::simulation::comet::TextureFlags::NORMAL;
+    }
+    if self.roughness_image.is_some() {
+      flags |= crate::simulation::comet::TextureFlags::ROUGHNESS;
+    }
+    if self.ao_image.is_some() {
+      flags |= crate::simulation::comet::TextureFlags::AO;
+    }
+    flags
+  }
+
   pub fn buffers_hash(&self) -> u64 {
     let mut hasher = FnvHasher::new();
     self.position_vertex_buffer.hash(&mut hasher);
@@ -608,8 +629,12 @@ impl ForwardMeshRenderResource {
     hasher.finish()
   }
 
+  /// Safety:
+  /// - `descriptor_set` should have been allocated with archetype descriptor set and
+  /// match the given arguments
+  /// - `sampler` should outlive this object
   #[allow(clippy::too_many_arguments)]
-  pub(super) fn new(
+  pub(super) unsafe fn new(
     device: &ash::Device,
     allocator: &vk_mem::Allocator,
     command_buffer: vk::CommandBuffer,
@@ -622,139 +647,10 @@ impl ForwardMeshRenderResource {
     normal_image: Option<Image>, //
     roughness_image: Option<Image>, //
     ao_image: Option<Image>,     //
+    sampler: NonZeroHandle<vk::Sampler>,
+    descriptor_set: NonZeroHandle<vk::DescriptorSet>,
+    dummy_texture: &Image,
   ) -> GpuResult<Self> {
-    // Reusable helper function to perform the explicit staging buffer upload pattern.
-    fn create_buffer_with_staging<T: Copy>(
-      device: &ash::Device,
-      allocator: &vk_mem::Allocator,
-      command_buffer: vk::CommandBuffer,
-      discard_pool: &DiscardPool,
-      timeline: u64,
-      data: &[T],
-      usage: vk::BufferUsageFlags,
-    ) -> GpuResult<Buffer> {
-      let buffer_size = (core::mem::size_of::<T>() * data.len()) as vk::DeviceSize;
-      if buffer_size == 0 {
-        return Err(GpuError::InvalidArgument);
-      }
-
-      let vma_allocator = allocator.get_raw();
-
-      // 1. Create staging buffer (CPU-visible)
-      let staging_buffer_info = vk::BufferCreateInfo::default()
-        .size(buffer_size)
-        .usage(vk::BufferUsageFlags::TRANSFER_SRC);
-      let staging_alloc_info = vk_mem::AllocationCreateInfo {
-        usage: vk_mem::MemoryUsage::Auto,
-        flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-          | vk_mem::AllocationCreateFlags::MAPPED,
-        required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE,
-        ..Default::default()
-      };
-      let (staging_buffer, staging_allocation, staging_alloc_info) =
-        unsafe { allocator.create_buffer_get_info(&staging_buffer_info, &staging_alloc_info) }?;
-
-      // 2. Create device buffer (GPU-local). In case of failure, we clean up the staging buffer.
-      let (device_buffer, device_allocation) = {
-        let device_buffer_info = vk::BufferCreateInfo::default()
-          .size(buffer_size)
-          .usage(usage | vk::BufferUsageFlags::TRANSFER_DST);
-        let device_alloc_info = vk_mem::AllocationCreateInfo {
-          usage: vk_mem::MemoryUsage::Auto,
-          flags: vk_mem::AllocationCreateFlags::DEDICATED_MEMORY,
-          preferred_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-          ..Default::default()
-        };
-        match unsafe { allocator.create_buffer(&device_buffer_info, &device_alloc_info) } {
-          Ok(result) => result,
-          Err(err) => {
-            unsafe {
-              vk_mem::ffi::vmaDestroyBuffer(
-                vma_allocator,
-                staging_buffer,
-                staging_allocation.get_raw(),
-              );
-            }
-            return Err(err.into());
-          }
-        }
-      };
-
-      // 3. Copy data to staging buffer
-      unsafe {
-        core::ptr::copy_nonoverlapping(
-          data.as_ptr(),
-          staging_alloc_info.mapped_data as *mut T,
-          data.len(),
-        );
-      }
-      if !unsafe { allocator.get_allocation_memory_properties(&staging_allocation) }
-        .contains(vk::MemoryPropertyFlags::HOST_COHERENT)
-      {
-        allocator.flush_allocation(&staging_allocation, 0, vk::WHOLE_SIZE)?;
-      }
-
-      // 4. Record copy command
-      let copy_region = vk::BufferCopy::default().size(buffer_size);
-      unsafe {
-        device.cmd_copy_buffer(
-          command_buffer,
-          staging_buffer,
-          device_buffer,
-          &[copy_region],
-        );
-      }
-
-      // 5. Insert a pipeline barrier to synchronize
-      let (dst_stage, dst_access) = if usage.contains(vk::BufferUsageFlags::VERTEX_BUFFER) {
-        (
-          vk::PipelineStageFlags::VERTEX_INPUT,
-          vk::AccessFlags::VERTEX_ATTRIBUTE_READ,
-        )
-      } else if usage.contains(vk::BufferUsageFlags::INDEX_BUFFER) {
-        (
-          vk::PipelineStageFlags::VERTEX_INPUT,
-          vk::AccessFlags::INDEX_READ,
-        )
-      } else {
-        (
-          vk::PipelineStageFlags::TOP_OF_PIPE,
-          vk::AccessFlags::empty(),
-        )
-      };
-
-      if dst_access != vk::AccessFlags::empty() {
-        let buffer_barrier = vk::BufferMemoryBarrier::default()
-          .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-          .dst_access_mask(dst_access)
-          .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-          .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-          .buffer(device_buffer)
-          .offset(0)
-          .size(buffer_size);
-
-        unsafe {
-          device.cmd_pipeline_barrier(
-            command_buffer,
-            vk::PipelineStageFlags::TRANSFER,
-            dst_stage,
-            vk::DependencyFlags::empty(),
-            &[],
-            &[buffer_barrier],
-            &[],
-          );
-        }
-      }
-
-      // 6. Schedule staging buffer for destruction.
-      discard_pool.discard_buffer(vma_allocator, staging_buffer, staging_allocation, timeline);
-
-      Ok(Buffer {
-        buffer: unsafe { NonZeroHandle::new_unchecked(device_buffer) },
-        allocation: device_allocation,
-      })
-    }
-
     let mut janitor = DeviceResourceJanitor::<'_, 7>::new(device);
     let vma_allocator = allocator.get_raw();
 
@@ -833,6 +729,57 @@ impl ForwardMeshRenderResource {
     }
     // ... repeat for other optional images ...
 
+    // Now create descriptor set for these images.
+    let mut image_infos = Vec::with_capacity(4);
+    let dummy_info = dummy_texture.to_descriptor_image_info(sampler);
+    image_infos.push((
+      0,
+      if let Some(image) = &albedo_image {
+        image.to_descriptor_image_info(sampler)
+      } else {
+        dummy_info
+      },
+    ));
+    image_infos.push((
+      1,
+      if let Some(image) = &normal_image {
+        image.to_descriptor_image_info(sampler)
+      } else {
+        dummy_info
+      },
+    ));
+    image_infos.push((
+      2,
+      if let Some(image) = &roughness_image {
+        image.to_descriptor_image_info(sampler)
+      } else {
+        dummy_info
+      },
+    ));
+    image_infos.push((
+      3,
+      if let Some(image) = &ao_image {
+        image.to_descriptor_image_info(sampler)
+      } else {
+        dummy_info
+      },
+    ));
+    let write_descriptor_sets: Vec<_> = image_infos
+      .iter()
+      .map(|(binding, info)| {
+        vk::WriteDescriptorSet::default()
+          .dst_set(descriptor_set.get())
+          .dst_binding(*binding)
+          .dst_array_element(0)
+          .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+          .image_info(core::slice::from_ref(info))
+      })
+      .collect();
+
+    unsafe {
+      device.update_descriptor_sets(&write_descriptor_sets, &[]);
+    }
+
     // Everything was created successfully. Defuse the janitor.
     janitor.clear();
 
@@ -845,6 +792,7 @@ impl ForwardMeshRenderResource {
       normal_image,
       roughness_image,
       ao_image,
+      descriptor_set,
     })
   }
 }
@@ -870,7 +818,6 @@ impl DiscardableResource for FrameResource {
 pub(super) struct ForwardMeshRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub descriptor_set_layouts: Vec<NonZeroHandle<vk::DescriptorSetLayout>>,
-  pub descriptor_sets: Vec<NonZeroHandle<vk::DescriptorSet>>,
   pub push_contant_ranges: Vec<vk::PushConstantRange>,
   // 0 = vertex, 1 = fragment
   pub specialization_constants: [Vec<vk::SpecializationMapEntry>; 2],
@@ -880,7 +827,14 @@ pub(super) struct ForwardMeshRenderResourceArchetype {
   pub graphics_info: Option<GraphicsInfo>,
   /// Populated after with_pipeline_key
   pub pipeline_key: Option<PipelineKey>,
+
+  pub dummy_texture_handle: Image,
+  /// Necessary evil for discard. assumes it outlives this object
+  allocator_raw: vk_mem::ffi::VmaAllocator,
 }
+
+unsafe impl Sync for ForwardMeshRenderResourceArchetype {}
+unsafe impl Send for ForwardMeshRenderResourceArchetype {}
 
 impl ForwardMeshRenderResourceArchetype {
   pub fn with_graphics_info(self, graphics_info: GraphicsInfo) -> Self {
@@ -895,11 +849,13 @@ impl ForwardMeshRenderResourceArchetype {
   /// Safety:
   /// - `pipeline_key` must refer to a pipeline created with `vertex_shader` and `fragment_shader`,
   pub unsafe fn new(
-    descriptor_pools: &sync::Arc<DescriptorPools>,
     device: &ash::Device,
-    discard_pool: &DiscardPool,
     vertex_shader: &Shader,
     fragment_shader: &Shader,
+    synchronization2: &ash::khr::synchronization2::Device,
+    allocator: &vk_mem::Allocator,
+    discard_pool: &DiscardPool,
+    queue: &super::Queue,
   ) -> GpuResult<Self> {
     const NEVER_DISCARD_TIMELINE: u64 = u64::MAX;
     // TODO Implement a special value for the janitor which means "DYNAMIC_SIZE"
@@ -1022,14 +978,6 @@ impl ForwardMeshRenderResourceArchetype {
       })
       .collect::<GpuResult<Vec<_>>>()?;
 
-    // no need for janitor as pool will be destroyed when discard pool is destroyed
-    let descriptor_sets = descriptor_set_layouts
-      .iter()
-      .map(|layout| {
-        descriptor_pools.allocate(device, *layout, discard_pool, NEVER_DISCARD_TIMELINE)
-      })
-      .collect::<GpuResult<Vec<_>>>()?;
-
     // --------------------------- 2. Push Constants --------------------------------------------
     let mut push_constant_ranges = Vec::<vk::PushConstantRange>::new();
     for shader in [vertex_shader, fragment_shader] {
@@ -1146,6 +1094,73 @@ impl ForwardMeshRenderResourceArchetype {
       }
     }
 
+    // create dummy 1x1 black texture
+    let dummy_texture_handle = {
+      let mut inner_janitor = DeviceResourceJanitor::<'_, 64>::new(device);
+
+      // create throwaway command pool and command buffer
+      let command_pool = {
+        let create_info = vk::CommandPoolCreateInfo::default()
+          .queue_family_index(queue.family_index)
+          .flags(vk::CommandPoolCreateFlags::TRANSIENT);
+        unsafe { device.create_command_pool(&create_info, None) }
+      }?;
+      inner_janitor
+        .push(FunctionalDeviceResource::new(command_pool, |h, d| unsafe {
+          d.destroy_command_pool(h, None)
+        }))
+        .map_err(|_| GpuError::InvalidState)?;
+
+      let command_buffer = {
+        let alloc_info = vk::CommandBufferAllocateInfo::default()
+          .command_pool(command_pool)
+          .level(vk::CommandBufferLevel::PRIMARY)
+          .command_buffer_count(1);
+        unsafe { device.allocate_command_buffers(&alloc_info) }?[0]
+      };
+
+      let dummy_texture = Texture {
+        data: {
+          let mut the_vec = Vec::with_capacity(1);
+          the_vec.push(0);
+          the_vec
+        },
+        format: crate::simulation::comet::TexelFormat::R8_UNORM,
+        width: 1,
+        height: 1,
+        has_mipmaps: false,
+      };
+
+      let begin_info = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+      unsafe {
+        device.begin_command_buffer(command_buffer, &begin_info)?;
+      };
+
+      let image = Image::new_2d(
+        device,
+        synchronization2,
+        allocator,
+        command_buffer,
+        discard_pool,
+        NEVER_DISCARD_TIMELINE,
+        &dummy_texture,
+        vk::ImageUsageFlags::SAMPLED,
+      );
+      if image.is_err() {
+        return Err(unsafe { image.unwrap_err_unchecked() });
+      }
+
+      unsafe {
+        device.end_command_buffer(command_buffer)?;
+        let command_buffers = [command_buffer];
+        let submits = [vk::SubmitInfo::default().command_buffers(&command_buffers)];
+        device.queue_submit(queue.handle, &submits, vk::Fence::null())?;
+        device.queue_wait_idle(queue.handle)?;
+      };
+
+      image
+    }?;
+
     janitor.clear();
     Ok(Self {
       pipeline_layout: NonZeroHandle::new(pipeline_layout).unwrap(),
@@ -1153,13 +1168,31 @@ impl ForwardMeshRenderResourceArchetype {
         .into_iter()
         .map(|l| NonZeroHandle::new(l).unwrap())
         .collect(),
-      descriptor_sets,
       push_contant_ranges: push_constant_ranges,
       specialization_constants,
       specialization_constants_values,
       pipeline_key: None,
       graphics_info: None,
+      dummy_texture_handle,
+      allocator_raw: allocator.get_raw(),
     })
+  }
+
+  pub fn create_descriptor_set_from_layout_at_index(
+    &self,
+    device: &ash::Device,
+    descriptor_pools: &sync::Arc<DescriptorPools>,
+    discard_pool: &DiscardPool,
+    index: usize,
+  ) -> GpuResult<NonZeroHandle<vk::DescriptorSet>> {
+    const NEVER_DISCARD_TIMELINE: u64 = u64::MAX;
+
+    let layout = self
+      .descriptor_set_layouts
+      .get(index)
+      .ok_or(GpuError::InvalidArgument)?
+      .get();
+    descriptor_pools.allocate(device, layout, discard_pool, NEVER_DISCARD_TIMELINE)
   }
 }
 
@@ -1172,6 +1205,14 @@ impl DiscardableResource for ForwardMeshRenderResourceArchetype {
           device.destroy_pipeline_layout(pipeline_layout, None);
         },
       ),
+      timeline,
+    );
+    // view discarded _before_ image
+    discard_pool.discard_image_view(self.dummy_texture_handle.image_view.get(), timeline);
+    discard_pool.discard_image(
+      self.allocator_raw,
+      self.dummy_texture_handle.image.get(),
+      self.dummy_texture_handle.allocation,
       timeline,
     );
     for layout in &self.descriptor_set_layouts {
@@ -1198,4 +1239,136 @@ impl DiscardableResource for FrameResourceArchetype {
       }
     }
   }
+}
+
+/// Reusable helper function to perform the explicit staging buffer upload pattern.
+fn create_buffer_with_staging<T: Copy>(
+  device: &ash::Device,
+  allocator: &vk_mem::Allocator,
+  command_buffer: vk::CommandBuffer,
+  discard_pool: &DiscardPool,
+  timeline: u64,
+  data: &[T],
+  usage: vk::BufferUsageFlags,
+) -> GpuResult<Buffer> {
+  let buffer_size = (core::mem::size_of::<T>() * data.len()) as vk::DeviceSize;
+  if buffer_size == 0 {
+    return Err(GpuError::InvalidArgument);
+  }
+
+  let vma_allocator = allocator.get_raw();
+
+  // 1. Create staging buffer (CPU-visible)
+  let staging_buffer_info = vk::BufferCreateInfo::default()
+    .size(buffer_size)
+    .usage(vk::BufferUsageFlags::TRANSFER_SRC);
+  let staging_alloc_info = vk_mem::AllocationCreateInfo {
+    usage: vk_mem::MemoryUsage::Auto,
+    flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+      | vk_mem::AllocationCreateFlags::MAPPED,
+    required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE,
+    ..Default::default()
+  };
+  let (staging_buffer, staging_allocation, staging_alloc_info) =
+    unsafe { allocator.create_buffer_get_info(&staging_buffer_info, &staging_alloc_info) }?;
+
+  // 2. Create device buffer (GPU-local). In case of failure, we clean up the staging buffer.
+  let (device_buffer, device_allocation) = {
+    let device_buffer_info = vk::BufferCreateInfo::default()
+      .size(buffer_size)
+      .usage(usage | vk::BufferUsageFlags::TRANSFER_DST);
+    let device_alloc_info = vk_mem::AllocationCreateInfo {
+      usage: vk_mem::MemoryUsage::Auto,
+      flags: vk_mem::AllocationCreateFlags::DEDICATED_MEMORY,
+      preferred_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+      ..Default::default()
+    };
+    match unsafe { allocator.create_buffer(&device_buffer_info, &device_alloc_info) } {
+      Ok(result) => result,
+      Err(err) => {
+        unsafe {
+          vk_mem::ffi::vmaDestroyBuffer(
+            vma_allocator,
+            staging_buffer,
+            staging_allocation.get_raw(),
+          );
+        }
+        return Err(err.into());
+      }
+    }
+  };
+
+  // 3. Copy data to staging buffer
+  unsafe {
+    core::ptr::copy_nonoverlapping(
+      data.as_ptr(),
+      staging_alloc_info.mapped_data as *mut T,
+      data.len(),
+    );
+  }
+  if !unsafe { allocator.get_allocation_memory_properties(&staging_allocation) }
+    .contains(vk::MemoryPropertyFlags::HOST_COHERENT)
+  {
+    allocator.flush_allocation(&staging_allocation, 0, vk::WHOLE_SIZE)?;
+  }
+
+  // 4. Record copy command
+  let copy_region = vk::BufferCopy::default().size(buffer_size);
+  unsafe {
+    device.cmd_copy_buffer(
+      command_buffer,
+      staging_buffer,
+      device_buffer,
+      &[copy_region],
+    );
+  }
+
+  // 5. Insert a pipeline barrier to synchronize
+  let (dst_stage, dst_access) = if usage.contains(vk::BufferUsageFlags::VERTEX_BUFFER) {
+    (
+      vk::PipelineStageFlags::VERTEX_INPUT,
+      vk::AccessFlags::VERTEX_ATTRIBUTE_READ,
+    )
+  } else if usage.contains(vk::BufferUsageFlags::INDEX_BUFFER) {
+    (
+      vk::PipelineStageFlags::VERTEX_INPUT,
+      vk::AccessFlags::INDEX_READ,
+    )
+  } else {
+    (
+      vk::PipelineStageFlags::TOP_OF_PIPE,
+      vk::AccessFlags::empty(),
+    )
+  };
+
+  if dst_access != vk::AccessFlags::empty() {
+    let buffer_barrier = vk::BufferMemoryBarrier::default()
+      .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+      .dst_access_mask(dst_access)
+      .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+      .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+      .buffer(device_buffer)
+      .offset(0)
+      .size(buffer_size);
+
+    unsafe {
+      device.cmd_pipeline_barrier(
+        command_buffer,
+        vk::PipelineStageFlags::TRANSFER,
+        dst_stage,
+        vk::DependencyFlags::empty(),
+        &[],
+        &[buffer_barrier],
+        &[],
+      );
+    }
+  }
+
+  // 6. Schedule staging buffer for destruction.
+  discard_pool.discard_buffer(vma_allocator, staging_buffer, staging_allocation, timeline);
+
+  Ok(Buffer {
+    buffer: unsafe { NonZeroHandle::new_unchecked(device_buffer) },
+    allocation: device_allocation,
+  })
 }
