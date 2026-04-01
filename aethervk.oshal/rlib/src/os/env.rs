@@ -8,6 +8,7 @@ pub fn args() -> NativeResult<Vec<String>> {
     use windows::Win32::Foundation::{LocalFree, HLOCAL};
     use windows::Win32::System::Environment::GetCommandLineW;
     use windows::Win32::UI::Shell::CommandLineToArgvW;
+    use crate::os::NativeError;
 
     unsafe {
       let cmd_line = GetCommandLineW();
@@ -38,7 +39,7 @@ pub fn args() -> NativeResult<Vec<String>> {
         args.push(String::from_utf16_lossy(utf16_slice));
       }
 
-      LocalFree(HLOCAL(argv as *mut core::ffi::c_void));
+      LocalFree(Some(HLOCAL(argv as *mut core::ffi::c_void)));
       Ok(args)
     }
   }

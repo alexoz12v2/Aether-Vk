@@ -30,7 +30,7 @@ pub struct Vec4f32 {
 impl Into<[f32; 4]> for Vec4f32 {
   #[inline]
   fn into(self) -> [f32; 4] {
-    let mut result: [f32; 4] = [0.0,0.0,0.0,0.0];
+    let mut result: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
     #[cfg(target_arch = "x86_64")]
     {
       unsafe {
@@ -169,7 +169,7 @@ impl ops::Mul<Vec4f32> for f32 {
     #[cfg(target_arch = "x86_64")]
     unsafe {
       Vec4f32 {
-        simd: _mm_mul_ps(_mm_set1_ps(self), rhs),
+        simd: _mm_mul_ps(_mm_set1_ps(self), rhs.simd),
       }
     }
     #[cfg(target_arch = "aarch64")]
@@ -599,12 +599,12 @@ impl Quaternion for Vec4f32 {
   fn from_vector_and_scalar(vector: Self::Vector, scalar: Self::Scalar) -> Self {
     #[cfg(target_arch = "x86_64")]
     unsafe {
-      let dest_lane: u8 = 3;
-      let src_lane: u8 = 0;
+      const DEST_LANE: i32 = 3;
+      const SRC_LANE: i32 = 0;
       Self::from_sse(_mm_insert_ps(
         vector.0.simd,
         _mm_set_ss(scalar),
-        (dest_lane << 6) | (src_lane << 4),
+        (DEST_LANE << 6) | (SRC_LANE << 4),
       ))
     }
     #[cfg(target_arch = "aarch64")]
@@ -613,7 +613,7 @@ impl Quaternion for Vec4f32 {
     }
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
-      Self::from_array([ vector[0], vector[1], vector[2], scalar ])
+      Self::from_array([vector[0], vector[1], vector[2], scalar])
     }
   }
 
@@ -627,7 +627,7 @@ impl Quaternion for Vec4f32 {
     #[cfg(target_arch = "x86_64")]
     unsafe {
       // _mm_extract_ps requires SSE4.1
-      _mm_extract_ps::<3>(self.simd)
+      f32::from_bits(_mm_extract_ps::<3>(self.simd) as u32)
     }
     #[cfg(target_arch = "aarch64")]
     unsafe {

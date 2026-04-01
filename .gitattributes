@@ -240,3 +240,6 @@ Procfile text eol=lf
 # to do ^^^ we expect a local script to be run, meaning it is necessary to call
 # `git config --local include.path <script path>`
 *.ktx2 binary
+
+# Rust
+Cargo.lock text eol=lf

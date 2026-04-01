@@ -191,183 +191,228 @@ macro_rules! impl_float_like {
 // TODO: all these intrinsics need to be enriched every time we add a new arch backend, eg CUDA, Vulkan's SPIR-V, ...
 impl_float_like!(f32, {
   fn sqrt(self) -> Self {
-    let out: f32;
     #[cfg(target_arch = "x86_64")]
-    unsafe {
-      asm!(
-        "sqrtss {0}, {1}", // TODO: See if VEX prefix usage is better (vsqrtss)
-        out(xmm_reg) out,
-        in(xmm_reg) self,
-        options(pure, nomem, nostack)
-      );
+    {
+      unsafe fn sse(val: f32) -> f32 {
+        let out: f32;
+        unsafe {
+          core::arch::asm!("sqrtss {0}, {1}", out(xmm_reg) out, in(xmm_reg) val, options(pure, nomem, nostack));
+        }
+        out
+      }
+
+      #[target_feature(enable = "avx")]
+      unsafe fn avx(val: f32) -> f32 {
+        let out: f32;
+        // vsqrtss technically takes 3 operands (dest, upper-bits-src, lower-bits-src)
+        unsafe {
+          core::arch::asm!("vsqrtss {0}, {1}, {1}", out(xmm_reg) out, in(xmm_reg) val, options(pure, nomem, nostack));
+        }
+        out
+      }
+
+      let can_vex = crate::SYSTEM_INFO
+        .get()
+        .as_ref()
+        .map(|s| s.has_avx())
+        .unwrap_or(false);
+      if can_vex {
+        unsafe { avx(self) }
+      } else {
+        unsafe { sse(self) }
+      }
     }
     #[cfg(target_arch = "aarch64")]
-    unsafe {
-      asm!(
-        "fsqrt {out:s}, {inp:s}", // NEON, which is assumed to be supported? (TODO check)
-        out = lateout(vreg) out,
-        inp = in(vreg) self,
-        options(pure, nomem, nostack)
-      );
+    {
+      let out: f32;
+      unsafe {
+        core::arch::asm!("fsqrt {out:s}, {inp:s}", out = lateout(vreg) out, inp = in(vreg) self, options(pure, nomem, nostack));
+      }
+      out
     }
-
-    out
   }
 
   fn squared(self) -> Self {
     self * self
   }
-
   fn from_f32(num: f32) -> Self {
     num
   }
-
   fn cos(self) -> Self {
     libm::cosf(self)
   }
-
   fn tan(self) -> Self {
     libm::tanf(self)
   }
-
   fn exp(self) -> Self {
     libm::expf(self)
   }
-
   fn ln(self) -> Self {
     libm::logf(self)
   }
-
   fn floor(self) -> Self {
     libm::floorf(self)
   }
-
   fn pow(self, v: f32) -> Self {
     libm::powf(self, v)
   }
-
   fn sin(self) -> Self {
     libm::sinf(self)
   }
 
   fn reciprocal(self) -> Self {
-    let out: f32;
     #[cfg(target_arch = "x86_64")]
     {
-      unsafe {
-        asm!(
-          "rcpss {0}, {1}", // fast reciprocal approximation
-          "mulss {0}, {1}, {0}", // Newton-Raphson to refine reciprocal
-          out(xmm_reg) out,
-          in(xmm_reg) self,
-          options(pure, nomem, nostack)
-        );
+      unsafe fn sse(val: f32) -> f32 {
+        let mut out = 1.0f32;
+        // divss dest, src -> dest = dest / src
+        unsafe {
+          core::arch::asm!("divss {0}, {1}", inout(xmm_reg) out, in(xmm_reg) val, options(pure, nomem, nostack));
+        }
+        out
+      }
+
+      #[target_feature(enable = "avx")]
+      unsafe fn avx(val: f32) -> f32 {
+        let out: f32;
+        // vdivss dest, src1, src2 -> dest = src1 / src2
+        unsafe {
+          core::arch::asm!("vdivss {0}, {1}, {2}", out(xmm_reg) out, in(xmm_reg) 1.0f32, in(xmm_reg) val, options(pure, nomem, nostack));
+        }
+        out
+      }
+
+      let can_vex = crate::SYSTEM_INFO
+        .get()
+        .as_ref()
+        .map(|s| s.has_avx())
+        .unwrap_or(false);
+      if can_vex {
+        unsafe { avx(self) }
+      } else {
+        unsafe { sse(self) }
       }
     }
     #[cfg(target_arch = "aarch64")]
     {
+      let out: f32;
       unsafe {
-        asm!(
-          "frecpe {out:s}, {num:s}", // fast reciprocal approximation
-          "frecps {out:s}, {out:s}, {num:s}", // newton-raphson refinement step
-          out = lateout(vreg) out,
-          num = in(vreg) self,
-          options(pure, nomem, nostack)
-        );
+        // Native precise division is preferred over frecpe/frecps manual stepping
+        core::arch::asm!("fdiv {out:s}, {one:s}, {num:s}", out = lateout(vreg) out, one = in(vreg) 1.0f32, num = in(vreg) self, options(pure, nomem, nostack));
       }
+      out
     }
-
-    out
   }
 });
+
 impl_float_like!(f64, {
   fn sqrt(self) -> Self {
-    let out: f64;
     #[cfg(target_arch = "x86_64")]
-    unsafe {
-      asm!(
-        "sqrtsd {0}, {1}",
-        out(xmm_reg) out,
-        in(xmm_reg) self,
-        options(pure, nomem, nostack)
-      );
+    {
+      unsafe fn sse(val: f64) -> f64 {
+        let out: f64;
+        unsafe {
+          core::arch::asm!("sqrtsd {0}, {1}", out(xmm_reg) out, in(xmm_reg) val, options(pure, nomem, nostack));
+        }
+        out
+      }
+
+      #[target_feature(enable = "avx")]
+      unsafe fn avx(val: f64) -> f64 {
+        let out: f64;
+        unsafe {
+          core::arch::asm!("vsqrtsd {0}, {1}, {1}", out(xmm_reg) out, in(xmm_reg) val, options(pure, nomem, nostack));
+        }
+        out
+      }
+
+      let can_vex = crate::SYSTEM_INFO
+        .get()
+        .as_ref()
+        .map(|s| s.has_avx())
+        .unwrap_or(false);
+      if can_vex {
+        unsafe { avx(self) }
+      } else {
+        unsafe { sse(self) }
+      }
     }
     #[cfg(target_arch = "aarch64")]
-    unsafe {
-      asm!(
-        "fsqrt {out:d}, {inp:d}", // NEON, which is assumed to be supported? (TODO check)
-        out = lateout(vreg) out,
-        inp = in(vreg) self,
-        options(pure, nomem, nostack)
-      );
+    {
+      let out: f64;
+      unsafe {
+        core::arch::asm!("fsqrt {out:d}, {inp:d}", out = lateout(vreg) out, inp = in(vreg) self, options(pure, nomem, nostack));
+      }
+      out
     }
-
-    out
   }
 
   fn squared(self) -> Self {
     self * self
   }
-
   fn from_f32(num: f32) -> Self {
-    num as _
+    num as f64
   }
-
   fn cos(self) -> Self {
     libm::cos(self)
   }
-
   fn tan(self) -> Self {
     libm::tan(self)
   }
-
   fn sin(self) -> Self {
     libm::sin(self)
   }
-
   fn pow(self, v: Self) -> Self {
     libm::pow(self, v)
   }
-
   fn exp(self) -> Self {
     libm::exp(self)
   }
-
   fn ln(self) -> Self {
     libm::log(self)
   }
-
   fn floor(self) -> Self {
     libm::floor(self)
   }
 
   fn reciprocal(self) -> Self {
-    let out: f64;
     #[cfg(target_arch = "x86_64")]
     {
-      unsafe {
-        asm!(
-          "rcpsd {0}, {1}", // fast reciprocal approximation
-          "mulsd {0}, {1}, {0}", // Newton-Raphson refinement
-          out(xmm_reg) out,
-          in(xmm_reg) self,
-          options(pure, nomem, nostack)
-        );
+      unsafe fn sse(val: f64) -> f64 {
+        let mut out = 1.0f64;
+        unsafe {
+          core::arch::asm!("divsd {0}, {1}", inout(xmm_reg) out, in(xmm_reg) val, options(pure, nomem, nostack));
+        }
+        out
+      }
+
+      #[target_feature(enable = "avx")]
+      unsafe fn avx(val: f64) -> f64 {
+        let out: f64;
+        unsafe {
+          core::arch::asm!("vdivsd {0}, {1}, {2}", out(xmm_reg) out, in(xmm_reg) 1.0f64, in(xmm_reg) val, options(pure, nomem, nostack));
+        }
+        out
+      }
+
+      let can_vex = crate::SYSTEM_INFO
+        .get()
+        .as_ref()
+        .map(|s| s.has_avx())
+        .unwrap_or(false);
+      if can_vex {
+        unsafe { avx(self) }
+      } else {
+        unsafe { sse(self) }
       }
     }
     #[cfg(target_arch = "aarch64")]
     {
+      let out: f64;
       unsafe {
-        asm!(
-          "frecpe {out:d}, {num:d}", // fast reciprocal approximation
-          "frecps {out:d}, {out:d}, {num:d}", // Newton-Raphson refinement
-          out = lateout(vreg) out,
-          num = in(vreg) self,
-          options(pure, nomem, nostack)
-        );
+        core::arch::asm!("fdiv {out:d}, {one:d}, {num:d}", out = lateout(vreg) out, one = in(vreg) 1.0f64, num = in(vreg) self, options(pure, nomem, nostack));
       }
+      out
     }
-
-    out
   }
 });

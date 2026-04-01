@@ -56,7 +56,7 @@ impl NativeError {
         | ERROR_OUTOFMEMORY
         | ERROR_NO_SYSTEM_RESOURCES
         | ERROR_NOT_ENOUGH_QUOTA => ThreadingError::NoResources,
-        ERROR_ACCESS_DENIED => ThreadingError::BadAccess,
+        ERROR_ACCESS_DENIED => ThreadingError::BadAddress,
         ERROR_INVALID_PARAMETER => ThreadingError::InvalidArg,
         ERROR_INVALID_ADDRESS => ThreadingError::BadAddress,
         ERROR_MAX_THRDS_REACHED | ERROR_NOT_ENOUGH_QUOTA => ThreadingError::NoResources,

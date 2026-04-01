@@ -314,7 +314,7 @@ impl SquareMatrix for Mat4x4f32 {
       Some(Self {
         x: Vec4f32::from_sse(_mm_mul_ps(adjugate.x.simd, inv_det)),
         y: Vec4f32::from_sse(_mm_mul_ps(adjugate.y.simd, inv_det)),
-        z: Vec4f32::from_sse(_mm_mul_ps(adjugate.z.simd, inv_dev)),
+        z: Vec4f32::from_sse(_mm_mul_ps(adjugate.z.simd, inv_det)),
         w: Vec4f32::from_sse(_mm_mul_ps(adjugate.w.simd, inv_det)),
       })
     }

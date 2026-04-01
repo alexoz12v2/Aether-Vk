@@ -4,6 +4,8 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::marker::{Send, Sync};
 
+use crate::os::NativeResult;
+
 /// A unit of work that can be executed by the thread pool.
 pub trait Workload: Send + Sync {
   /// Executes the workload.
@@ -16,49 +18,77 @@ pub trait Workload: Send + Sync {
 
 #[cfg(target_os = "windows")]
 mod windows_pool {
+  use crate::os::NativeError;
+
   use super::*;
   use windows::Win32::System::Threading::{
-    CloseThreadpool, CreateThreadpool, CreateThreadpoolWork, CloseThreadpoolWork,
-    SubmitThreadpoolWork, WaitForThreadpoolWorkCallbacks, PTP_POOL, PTP_WORK, TP_CALLBACK_ENVIRON,
-    PTP_CALLBACK_INSTANCE,
+    CloseThreadpool, CloseThreadpoolWork, CreateThreadpool, CreateThreadpoolWork,
+    PTP_CALLBACK_INSTANCE, PTP_POOL, PTP_WORK, SetThreadpoolThreadMaximum,
+    SetThreadpoolThreadMinimum, SubmitThreadpoolWork, TP_CALLBACK_ENVIRON_V3,
+    TP_CALLBACK_PRIORITY_NORMAL, WaitForThreadpoolWorkCallbacks,
   };
 
   /// A thread pool for executing workloads.
   pub struct ThreadPool {
     pool: PTP_POOL,
-    callback_environ: TP_CALLBACK_ENVIRON,
+    callback_environ: TP_CALLBACK_ENVIRON_V3,
     work_items: Vec<PTP_WORK>,
   }
 
   impl ThreadPool {
     /// Creates a new thread pool with the specified number of threads.
-    pub fn new(_num_threads: usize) -> Self {
-      let pool = unsafe { CreateThreadpool(core::ptr::null_mut()) };
-      // TODO: Set thread pool min and max threads
-      let callback_environ = TP_CALLBACK_ENVIRON::default();
-      // TODO: Initialize callback environ
-      Self {
+    pub fn new(num_threads: usize) -> NativeResult<Self> {
+      let pool = unsafe { CreateThreadpool(None) }
+        .map_err(|_| NativeError::OsThreadingError(crate::os::ThreadingError::Unknown))?;
+      // Set thread pool min and max threads
+      let threads_u32 = num_threads as u32;
+      unsafe {
+        SetThreadpoolThreadMinimum(pool, threads_u32)
+          .map_err(|_| NativeError::OsThreadingError(crate::os::ThreadingError::Unknown))?;
+        SetThreadpoolThreadMaximum(pool, threads_u32);
+      }
+
+      // Initialize callback environ
+      let mut callback_environ = TP_CALLBACK_ENVIRON_V3::default();
+      callback_environ.Version = 3;
+      callback_environ.CallbackPriority = TP_CALLBACK_PRIORITY_NORMAL;
+      callback_environ.Size = core::mem::size_of::<TP_CALLBACK_ENVIRON_V3>() as u32;
+
+      // bin environ to our custom pool so that tasks don't get sent to default pool
+      callback_environ.Pool = pool;
+
+      Ok(Self {
         pool,
         callback_environ,
         work_items: Vec::new(),
-      }
+      })
     }
 
     /// Scatters the given workloads among the threads in the pool.
-    pub fn scatter(&mut self, workloads: Vec<Box<dyn Workload>>) {
+    pub fn scatter(&mut self, workloads: Vec<Box<dyn Workload>>) -> NativeResult<()> {
       for workload in workloads {
+        // Double-box the trait object.
+        // Box::new creates a Box<Box<dyn Workload>>.
+        // Box::into_raw turns it into a *mut Box<dyn Workload>, which is a thin pointer!
+        let thin_ptr = Box::into_raw(Box::new(workload));
+
         let work = unsafe {
           CreateThreadpoolWork(
             Some(work_callback),
-            Box::into_raw(workload) as *mut c_void,
-            &self.callback_environ,
+            Some(thin_ptr as *mut core::ffi::c_void),
+            Some(core::ptr::from_ref(&self.callback_environ)),
           )
-        };
+        }
+        .map_err(|_| NativeError::OsThreadingError(crate::os::ThreadingError::Unknown))?;
+
         self.work_items.push(work);
+
         unsafe {
           SubmitThreadpoolWork(work);
         }
       }
+
+      Ok(())
     }
 
     /// Gathers the results of the scattered workloads.
@@ -81,11 +111,13 @@ mod windows_pool {
 
   unsafe extern "system" fn work_callback(
     _instance: PTP_CALLBACK_INSTANCE,
-    context: *mut c_void,
+    context: *mut core::ffi::c_void,
     _work: PTP_WORK,
   ) {
-    let workload: Box<dyn Workload> = Box::from_raw(context as *mut _);
+    // reconstruct box from thin pointer
+    let workload = unsafe { Box::from_raw(context as *mut Box<dyn Workload>) };
     workload.execute();
+    // since we casted row to Box, it is automatically dropped
   }
 }
 
@@ -114,7 +146,7 @@ mod pthread_pool {
 
   impl ThreadPool {
     /// Creates a new thread pool with the specified number of threads.
-    pub fn new(num_threads: usize) -> Self {
+    pub fn new(num_threads: usize) -> NativeResult<Self> {
       let state = Arc::new(ThreadPoolState {
         work_queue: Mutex::new(VecDeque::new()),
         shutdown: AtomicBool::new(false),
@@ -141,15 +173,17 @@ mod pthread_pool {
         }
       }
 
-      Self { threads, state }
+      Ok(Self { threads, state })
     }
 
     /// Scatters the given workloads among the threads in the pool.
-    pub fn scatter(&mut self, workloads: Vec<Box<dyn Workload>>) {
+    pub fn scatter(&mut self, workloads: Vec<Box<dyn Workload>>) -> NativeResult<()> {
       let mut queue = self.state.work_queue.lock();
       for workload in workloads {
         queue.push_back(workload);
       }
+
+      Ok(())
     }
 
     /// Gathers the results of the scattered workloads.

@@ -19,11 +19,11 @@ mod windows_debug {
   use windows::Win32::System::Diagnostics::Debug::OutputDebugStringW;
 
   pub fn log_message(args: fmt::Arguments) {
-    let msg = fmt::format(args);
+    let msg = alloc::fmt::format(args);
     let h_string = HSTRING::from(msg.as_str());
     unsafe {
       // sends a string to the debugger for display. no debugger = no op
-      // TODO: Better implementation
+      // TODO: Better implementation with WinDbg
       OutputDebugStringW(&h_string);
     }
   }

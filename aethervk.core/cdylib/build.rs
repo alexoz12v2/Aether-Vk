@@ -35,13 +35,18 @@ fn process_vulkan_sdk(sdk_path: &Path) {
   let icd_dir = binary_root.join("vulkan").join("icd");
   let is_debug = env::var("PROFILE").unwrap() == "debug";
 
-  // TODO: copy VMA library (actually, vk_mem statically links it, so we'll see)
   if cfg!(target_os = "macos") || is_debug {
     fs::create_dir_all(&lib_dir).unwrap();
     fs::create_dir_all(&icd_dir).unwrap();
   }
 
-  let src_lib_dir = sdk_path.to_path_buf().join("lib");
+  // Windows SDK keeps binaries in `Bin`, Unix variants use `lib`
+  let src_lib_dir = if cfg!(windows) {
+    sdk_path.join("Bin")
+  } else {
+    sdk_path.join("lib")
+  };
+
   if !src_lib_dir.exists() {
     panic!("{} doesn't exist", src_lib_dir.display());
   }
@@ -50,12 +55,12 @@ fn process_vulkan_sdk(sdk_path: &Path) {
   #[cfg(target_os = "macos")]
   {
     // directory structure (just for debug builds, `xtask` for avalonia packaging later)
-    // copy vulkan loader and molten vk inside lib
     let search_path = src_lib_dir
       .join("libvulkan*.dylib")
       .into_os_string()
       .into_string()
       .unwrap();
+
     for entry in glob::glob(&search_path).unwrap() {
       let path = entry.unwrap();
       let dest_path = lib_dir.join(path.file_name().unwrap());
@@ -64,7 +69,6 @@ fn process_vulkan_sdk(sdk_path: &Path) {
         .file_type()
         .is_symlink()
       {
-        // read symlink target and recreate it relative to result
         let target = fs::read_link(&path).unwrap();
         println!(
           "Symlink: {:?} -> {:?}",
@@ -72,10 +76,7 @@ fn process_vulkan_sdk(sdk_path: &Path) {
           (&target).file_name().unwrap()
         );
         if (&dest_path).exists() || fs::symlink_metadata(&dest_path).is_ok() {
-          println!("this is to be removed: {}", dest_path.display());
           fs::remove_file(&dest_path).unwrap();
-        } else {
-          println!("Apparently, this doesn't exist: {}", dest_path.display());
         }
         std::os::unix::fs::symlink((&target).file_name().unwrap(), &dest_path).unwrap();
       } else {
@@ -84,20 +85,22 @@ fn process_vulkan_sdk(sdk_path: &Path) {
       }
     }
 
-    // check whether you have libvulkan. If not, crash
     if !lib_dir.join("libvulkan.dylib").exists() {
-      panic!("libvulkan.dylib doens't exist. Does your VULKAN_SDK path contain it? At {}", src_lib_dir.display());
+      panic!(
+        "libvulkan.dylib doesn't exist. Does your VULKAN_SDK path contain it? At {}",
+        src_lib_dir.display()
+      );
     }
 
     const MOLTENVK_NAME: &str = "libMoltenVK.dylib";
     fs::copy(src_lib_dir.join(MOLTENVK_NAME), lib_dir.join(MOLTENVK_NAME)).unwrap();
 
-    // copy ICD file inside and rename "library_path" to "../lib/MoltenVK.dylib"
     let icd_file = sdk_path
       .join("share")
       .join("vulkan")
       .join("icd.d")
       .join("MoltenVK_icd.json");
+
     if !icd_file.exists() {
       panic!("{} doesn't exist", icd_file.display());
     }
@@ -105,26 +108,34 @@ fn process_vulkan_sdk(sdk_path: &Path) {
     fs::copy(&icd_file, &dst_icd).unwrap();
     fixup_icd(&dst_icd, "ICD", MOLTENVK_NAME);
   }
+
   // if debug: copy validation layers inside the build under ${dll_dir}/vulkan/*
   if is_debug {
-    let src_explicit_layer_dir = sdk_path
-      .join("share")
-      .join("vulkan")
-      .join("explicit_layer.d");
+    // Windows often keeps JSONs next to DLLs in Bin. Unix uses share/vulkan/explicit_layer.d
+    let src_explicit_layer_dir = if cfg!(windows) {
+      sdk_path.join("Bin")
+    } else {
+      sdk_path
+        .join("share")
+        .join("vulkan")
+        .join("explicit_layer.d")
+    };
+
     let explicit_layer_dir = binary_root.join("vulkan").join("explicit_layer");
     fs::create_dir_all(&explicit_layer_dir).unwrap();
 
-    // copy dylibs
+    // copy dynamic libraries
     let src_layer_libs = validation_layer_lib_names(&src_lib_dir);
-    if let Some(path) = src_layer_libs.iter().filter(|p| !p.exists()).next() {
+    if let Some(path) = src_layer_libs.iter().find(|p| !p.exists()) {
       panic!("{} missing", path.display());
     }
     for src in &src_layer_libs {
       fs::copy(src, lib_dir.join(src.file_name().unwrap())).unwrap();
     }
-    // copy layer json
+
+    // copy layer json files
     let src_layer_jsons = validation_layer_json_names(&src_explicit_layer_dir);
-    if let Some(path) = src_layer_jsons.iter().filter(|p| !p.exists()).next() {
+    if let Some(path) = src_layer_jsons.iter().find(|p| !p.exists()) {
       panic!("{} missing", path.display());
     }
     for src in &src_layer_jsons {
@@ -137,7 +148,7 @@ fn process_vulkan_sdk(sdk_path: &Path) {
   }
 }
 
-#[cfg(target_os = "macos")]
+// Removed #[cfg(target_os = "macos")] - this is now cross-platform.
 fn fixup_icd(dst_icd: &Path, key_name: &str, dylib_name: &str) {
   let json_bytes =
     fs::read(dst_icd).unwrap_or_else(|e| panic!("Failed to read {}: {e}", dst_icd.display()));
@@ -152,11 +163,9 @@ fn fixup_icd(dst_icd: &Path, key_name: &str, dylib_name: &str) {
     .expect("JSON at key should be an object")
     .get_mut("library_path")
     .expect("Key `${key}.library_path` doesn't exist");
-  let fixed_path = {
-    let mut s = "../lib/".to_string();
-    s.push_str(dylib_name);
-    s
-  };
+
+  let fixed_path = format!("../lib/{}", dylib_name);
+
   if library_path != fixed_path.as_str() {
     *library_path = serde_json::Value::String(fixed_path);
     let the_content = serde_json::to_string_pretty(&json).unwrap();
@@ -164,39 +173,33 @@ fn fixup_icd(dst_icd: &Path, key_name: &str, dylib_name: &str) {
   }
 }
 
-fn validation_layer_lib_names(lib_dir: &Path) -> [PathBuf; 2] {
-  #[cfg(target_os = "macos")]
-  {
-    [
-      lib_dir.join("libVkLayer_khronos_validation.dylib"),
-      lib_dir.join("libVkLayer_khronos_synchronization2.dylib"),
-    ]
-  }
-  #[cfg(not(target_os = "macos"))]
-  {
-    todo!();
-  }
+fn validation_layer_lib_names(lib_dir: &Path) -> Vec<PathBuf> {
+  let prefix = if cfg!(windows) { "" } else { "lib" };
+  vec![
+    lib_dir.join(format!(
+      "{}VkLayer_khronos_validation.{}",
+      prefix, DYNAMIC_LIBRARY_EXTENSION
+    )),
+    // Note: SDK versions 1.3.231+ merged synchronization2 into the main validation layer.
+    // If your SDK is newer, you might want to remove this second file to prevent panics.
+    lib_dir.join(format!(
+      "{}VkLayer_khronos_synchronization2.{}",
+      prefix, DYNAMIC_LIBRARY_EXTENSION
+    )),
+  ]
 }
 
-fn validation_layer_json_names(explicit_layer_dir: &Path) -> [PathBuf; 2] {
-  [
+fn validation_layer_json_names(explicit_layer_dir: &Path) -> Vec<PathBuf> {
+  vec![
     explicit_layer_dir.join("VkLayer_khronos_validation.json"),
     explicit_layer_dir.join("VkLayer_khronos_synchronization2.json"),
   ]
 }
 
 fn validation_layer_json_to_dylib(json_file_name: &str) -> String {
-  let prefix = if cfg!(any(target_os = "macos", target_os = "ios")) {
-    "lib"
-  } else {
-    ""
-  };
-  let mut the_string = json_file_name.replace("json", DYNAMIC_LIBRARY_EXTENSION);
-  if !prefix.is_empty() {
-    the_string.insert_str(0, prefix);
-  }
-
-  the_string
+  let prefix = if cfg!(windows) { "" } else { "lib" };
+  let base_name = json_file_name.replace(".json", "");
+  format!("{}{}.{}", prefix, base_name, DYNAMIC_LIBRARY_EXTENSION)
 }
 
 #[cfg(target_vendor = "apple")]

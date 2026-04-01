@@ -2,6 +2,13 @@ use core::{ops};
 
 use crate::math::{FloatLike, MulAddIdentity, Scalar, floating::FloatOps};
 
+// shuffle is unstable
+#[cfg(target_arch = "x86_64")]
+#[allow(non_snake_case)]
+pub(crate) const fn _MM_SHUFFLE(z: u32, y: u32, x: u32, w: u32) -> i32 {
+  ((z << 6) | (y << 4) | (x << 2) | w) as i32
+}
+
 // TODO: Boolean vector, boolean comparison, masked ops, ...
 
 // Note: Indexing is to be implemented by concrete types, not strictly required here

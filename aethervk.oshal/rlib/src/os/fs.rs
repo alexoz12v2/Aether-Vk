@@ -67,11 +67,10 @@ impl FileSystemObject for Path {
   fn is_valid(&self) -> bool {
     #[cfg(windows)]
     {
-      use windows::Win32::Storage::FileSystem::GetFileAttributesW;
-      use windows::Win32::Foundation::INVALID_FILE_ATTRIBUTES;
+      use windows::Win32::Storage::FileSystem::{GetFileAttributesW, INVALID_FILE_ATTRIBUTES};
 
       let mut path_buf = self.to_pathbuf();
-      let attrs = unsafe { GetFileAttributesW(windows::core::PCWSTR(path_buf.as_ptr())) };
+      let attrs = unsafe { GetFileAttributesW(windows::core::PCWSTR(path_buf.as_ptr_mut())) };
       attrs != INVALID_FILE_ATTRIBUTES
     }
     #[cfg(not(windows))]
@@ -86,11 +85,12 @@ impl FileSystemObject for Path {
   fn is_dir(&self) -> bool {
     #[cfg(windows)]
     {
-      use windows::Win32::Storage::FileSystem::{GetFileAttributesW, FILE_ATTRIBUTE_DIRECTORY};
-      use windows::Win32::Foundation::INVALID_FILE_ATTRIBUTES;
+      use windows::Win32::Storage::FileSystem::{
+        GetFileAttributesW, FILE_ATTRIBUTE_DIRECTORY, INVALID_FILE_ATTRIBUTES,
+      };
 
       let mut path_buf = self.to_pathbuf();
-      let attrs = unsafe { GetFileAttributesW(windows::core::PCWSTR(path_buf.as_ptr())) };
+      let attrs = unsafe { GetFileAttributesW(windows::core::PCWSTR(path_buf.as_ptr_mut())) };
       attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY.0) != 0
     }
     #[cfg(not(windows))]
@@ -108,11 +108,12 @@ impl FileSystemObject for Path {
   fn is_file(&self) -> bool {
     #[cfg(windows)]
     {
-      use windows::Win32::Storage::FileSystem::{GetFileAttributesW, FILE_ATTRIBUTE_DIRECTORY};
-      use windows::Win32::Foundation::INVALID_FILE_ATTRIBUTES;
+      use windows::Win32::Storage::FileSystem::{
+        GetFileAttributesW, FILE_ATTRIBUTE_DIRECTORY, INVALID_FILE_ATTRIBUTES,
+      };
 
       let mut path_buf = self.to_pathbuf();
-      let attrs = unsafe { GetFileAttributesW(windows::core::PCWSTR(path_buf.as_ptr())) };
+      let attrs = unsafe { GetFileAttributesW(windows::core::PCWSTR(path_buf.as_ptr_mut())) };
       attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY.0) == 0
     }
     #[cfg(not(windows))]
@@ -271,7 +272,7 @@ impl PathBuf {
         let s = unsafe {
           core::slice::from_raw_parts(slice.as_ptr().add(pos + 1), slice.len() - pos - 1)
         };
-        Some(String::from_utf16_lossy(s))
+        Some(alloc::string::String::from_utf16_lossy(s))
       }
       #[cfg(not(windows))]
       {
@@ -403,8 +404,7 @@ pub fn current_exe() -> Result<PathBuf, FsError> {
     const MAX_PATH_WIN: usize = 260;
     let mut buffer: Vec<u16> = vec![0; MAX_PATH_WIN];
     loop {
-      let written_len =
-        unsafe { GetModuleFileNameW(None, &mut buffer) } as usize;
+      let written_len = unsafe { GetModuleFileNameW(None, &mut buffer) } as usize;
       if written_len == 0 {
         return Err(FsError::CouldNotGetCurrentExe);
       }
@@ -469,10 +469,7 @@ pub fn current_exe() -> Result<PathBuf, FsError> {
     }
 
     // Find the length of the string, it might not be null terminated if buffer is full
-    let len = buffer
-      .iter()
-      .position(|&c| c == 0)
-      .unwrap_or(buffer.len());
+    let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
 
     let s = unsafe {
       core::str::from_utf8_unchecked(core::slice::from_raw_parts(
@@ -488,7 +485,6 @@ pub fn current_exe() -> Result<PathBuf, FsError> {
   }
 }
 
-
 pub fn read(path: &Path) -> Result<Vec<u8>, FsError> {
   #[cfg(windows)]
   {
@@ -496,27 +492,27 @@ pub fn read(path: &Path) -> Result<Vec<u8>, FsError> {
       CreateFileW, ReadFile, GetFileSizeEx, FILE_SHARE_READ, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
     };
     use windows::Win32::Foundation::{GENERIC_READ, CloseHandle, INVALID_HANDLE_VALUE};
-    use core::ptr;
 
     let mut path_buf = path.to_pathbuf();
     let handle = unsafe {
       CreateFileW(
-        windows::core::PCWSTR(path_buf.as_ptr()),
+        windows::core::PCWSTR(path_buf.as_ptr_mut()),
         GENERIC_READ.0,
         FILE_SHARE_READ,
-        ptr::null(),
+        None,
         OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL,
         None,
       )
-    };
+    }
+    .map_err(|_| FsError::CouldNotOpenFile)?;
 
     if handle == INVALID_HANDLE_VALUE {
       return Err(FsError::CouldNotOpenFile);
     }
 
     let mut size: i64 = 0;
-    if unsafe { GetFileSizeEx(handle, &mut size) }.as_bool() == false {
+    if unsafe { GetFileSizeEx(handle, &mut size) }.is_err() == false {
       unsafe { CloseHandle(handle) };
       return Err(FsError::CouldNotGetFileSize);
     }
@@ -524,26 +520,22 @@ pub fn read(path: &Path) -> Result<Vec<u8>, FsError> {
     let mut buffer = Vec::with_capacity(size as usize);
     let mut bytes_read: u32 = 0;
 
-    let result = unsafe {
+    unsafe {
       ReadFile(
         handle,
-        buffer.as_mut_ptr() as _,
-        size as u32,
-        &mut bytes_read,
-        ptr::null_mut(),
+        Some(&mut buffer),
+        Some(core::ptr::from_mut(&mut bytes_read)),
+        None,
       )
-    };
+    }
+    .map_err(|_| FsError::CouldNotReadFile)?;
 
     unsafe {
       buffer.set_len(bytes_read as usize);
       CloseHandle(handle);
     }
 
-    if result.as_bool() == false {
-      Err(FsError::CouldNotReadFile)
-    } else {
-      Ok(buffer)
-    }
+    Ok(buffer)
   }
   #[cfg(not(windows))]
   {
