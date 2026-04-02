@@ -7,6 +7,7 @@ use core::{
   ffi::CStr,
 };
 use alloc::{string::ToString, vec::Vec};
+use aethervk_oshal_rlib as oshal;
 
 // -------------------------------- Instance --------------------------------
 
@@ -28,81 +29,108 @@ impl Instance {
       .upgrade()
       .ok_or(GpuError::UnsupportedFeature)?;
 
-    // 1. Declare extensions, layer and settings and debug messenger if debug
     let app_info = vk::ApplicationInfo::default()
       .application_name(c"AetherVk")
       .application_version(vk::make_api_version(0, 1, 1, 0))
       .engine_version(vk::make_api_version(0, 1, 0, 0))
-      .api_version(vk::API_VERSION_1_1); // TODO check support to update to 1.3?
+      .api_version(vk::API_VERSION_1_1);
 
-    let mut desired_instance_extensions = Vec::<&CStr>::with_capacity(64);
-    desired_instance_extensions.extend_from_slice(utils::required_instance_extensions());
-    let instance_extensions_properties =
-      unsafe { vk_entry.enumerate_instance_extension_properties(None) }?;
-    utils::first_unsupported_extension(
-      &desired_instance_extensions,
-      &instance_extensions_properties,
-    )
-    .map_or(Ok(()), |unsupported| {
-      Err(GpuError::UnsupportedFeatureNamed(
-        unsupported.to_str().unwrap().to_string(),
-      ))
-    })?;
-    #[cfg(debug_assertions)]
-    let has_layer_settings = desired_instance_extensions
-      .iter()
-      .find(|&name| *name == ash::ext::layer_settings::NAME)
-      .is_some();
-
+    // =========================================================================
+    // 1. Resolve Layers First
+    // =========================================================================
     #[cfg(debug_assertions)]
     const LAYER_NAMES: [&CStr; 2] = [
       c"VK_LAYER_KHRONOS_validation",
       c"VK_LAYER_KHRONOS_synchronization2",
     ];
-    #[cfg(debug_assertions)]
-    let mut has_khronos_validation = false;
+
     let mut desired_layer_names: Vec<&CStr> = if cfg!(debug_assertions) {
       Vec::with_capacity(4)
     } else {
       Vec::new()
     };
+
     #[cfg(debug_assertions)]
-    let layer_properties = unsafe { vk_entry.enumerate_instance_layer_properties() }?;
+    let mut has_khronos_validation = false;
+
     #[cfg(debug_assertions)]
-    for desired_layer_name in &LAYER_NAMES {
-      if layer_properties
-        .iter()
-        .find(|&p| p.layer_name_as_c_str().unwrap() == *desired_layer_name)
-        .is_some()
-      {
-        desired_layer_names.push(desired_layer_name);
-        if *desired_layer_name == c"VK_LAYER_KHRONOS_validation" {
-          has_khronos_validation = true;
+    {
+      let layer_properties = unsafe { vk_entry.enumerate_instance_layer_properties() }?;
+      for desired_layer_name in &LAYER_NAMES {
+        if layer_properties
+          .iter()
+          .any(|p| p.layer_name_as_c_str().unwrap() == *desired_layer_name)
+        {
+          desired_layer_names.push(desired_layer_name);
+          if *desired_layer_name == c"VK_LAYER_KHRONOS_validation" {
+            has_khronos_validation = true;
+          }
         }
       }
     }
-    #[cfg(debug_assertions)]
-    let mut layer_settings = Vec::<vk::LayerSettingEXT>::with_capacity(16);
-    #[cfg(debug_assertions)]
-    let mut layer_settings_create_info = vk::LayerSettingsCreateInfoEXT::default();
-    #[cfg(debug_assertions)]
-    let validation_layer_enables_values =
-      [c"VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT".as_ptr()];
-    #[cfg(debug_assertions)]
-    if has_khronos_validation && has_layer_settings {
-      layer_settings.push({
-        let mut l = vk::LayerSettingEXT::default()
-          .layer_name(c"VK_LAYER_KHRONOS_validation")
-          .setting_name(c"enables")
-          .ty(vk::LayerSettingTypeEXT::STRING);
-        l.value_count = validation_layer_enables_values.len() as u32;
-        l.p_values = validation_layer_enables_values.as_ptr().cast();
 
-        l
-      });
+    // =========================================================================
+    // 2. Resolve and Validate Extensions
+    // =========================================================================
+    let mut desired_instance_extensions = Vec::<&CStr>::with_capacity(64);
+    desired_instance_extensions.extend_from_slice(utils::required_instance_extensions());
 
-      layer_settings_create_info = layer_settings_create_info.settings(&layer_settings);
+    // Get global extensions (None)
+    let mut available_extensions =
+      unsafe { vk_entry.enumerate_instance_extension_properties(None) }?;
+
+    // Get layer-specific extensions and pool them together
+    #[cfg(debug_assertions)]
+    {
+      for layer in &desired_layer_names {
+        if let Ok(layer_exts) =
+          unsafe { vk_entry.enumerate_instance_extension_properties(Some(*layer)) }
+        {
+          available_extensions.extend(layer_exts);
+        }
+      }
     }
+
+    // --- Dynamically check for Validation Features ---
+    #[cfg(debug_assertions)]
+    let mut has_validation_features = false;
+
+    #[cfg(debug_assertions)]
+    {
+      let features_ext = ash::ext::validation_features::NAME;
+      if has_khronos_validation
+        && available_extensions
+          .iter()
+          .any(|e| unsafe { CStr::from_ptr(e.extension_name.as_ptr()) } == features_ext)
+      {
+        desired_instance_extensions.push(features_ext);
+        has_validation_features = true;
+      } else {
+        // If we hit this, RenderDoc is likely hiding the extension.
+        // We log it and move on without crashing.
+        oshal::log!("VK_EXT_validation_features not found. Programmatic layer settings disabled.");
+      }
+    }
+
+    // Now check support against the merged pool
+    if let Some(unsupported) =
+      utils::first_unsupported_extension(&desired_instance_extensions, &available_extensions)
+    {
+      return Err(GpuError::UnsupportedFeatureNamed(
+        unsupported.to_str().unwrap().to_string(),
+      ));
+    }
+
+    // =========================================================================
+    // 3. Setup Validation Features & Debug Messenger
+    // =========================================================================
+    #[cfg(debug_assertions)]
+    let printf_features = [vk::ValidationFeatureEnableEXT::DEBUG_PRINTF];
+
+    #[cfg(debug_assertions)]
+    let mut validation_features =
+      vk::ValidationFeaturesEXT::default().enabled_validation_features(&printf_features);
+
     #[cfg(debug_assertions)]
     let mut msg_create_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
       .message_severity(
@@ -118,37 +146,44 @@ impl Instance {
       )
       .pfn_user_callback(Some(utils::debug_utils_messenger_user_callback));
 
+    // =========================================================================
+    // 4. Create Instance
+    // =========================================================================
     let instance_extensions = Vec::from_iter(
       desired_instance_extensions
         .iter()
         .map(|&c_str| c_str.as_ptr()),
     );
 
-    // Setup Instance
     let mut instance_create_info = vk::InstanceCreateInfo::default()
       .application_info(&app_info)
       .enabled_extension_names(&instance_extensions);
+
     #[cfg(target_vendor = "apple")]
     {
       instance_create_info =
         instance_create_info.flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR);
     }
+
     #[cfg(debug_assertions)]
     let enabled_layers = Vec::from_iter(desired_layer_names.iter().map(|&c_str| c_str.as_ptr()));
+
     #[cfg(debug_assertions)]
     {
       instance_create_info = instance_create_info
         .enabled_layer_names(&enabled_layers)
         .push_next(&mut msg_create_info);
-      if !layer_settings.is_empty() {
-        instance_create_info = instance_create_info.push_next(&mut layer_settings_create_info);
+
+      // Only attach the features struct if the extension is actually supported/visible
+      if has_validation_features {
+        instance_create_info = instance_create_info.push_next(&mut validation_features);
       }
     }
 
     let instance = unsafe { vk_entry.create_instance(&instance_create_info, None) }?;
+
     #[cfg(debug_assertions)]
     {
-      // fetch PFN_vkCreateDebugUtilsMessengerEXT
       let dbg_instance = ash::ext::debug_utils::Instance::new(vk_entry.as_ref(), &instance);
       let debug_messenger =
         unsafe { dbg_instance.create_debug_utils_messenger(&msg_create_info, None) }?;

@@ -5,6 +5,26 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug simulation_test",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=simulation_test",
+                    "--manifest-path=${workspaceFolder}/test/simulation_test/Cargo.toml"
+                ],
+                "filter": {
+                    "name": "simulation_test",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "${workspaceFolder}/assets"
+            ],
+            "cwd": "${workspaceFolder}/test/simulation_test"
+        },
+        {
             "name": "C#: AetherVk Debug",
             "type": "dotnet",
             "request": "launch",

@@ -16,7 +16,7 @@ use crate::{
 // - Fix resize, right now it panics cause it fills the heapless vectors
 
 pub(super) const MAX_FRAMES_IN_FLIGHT: usize = 8;
-const SWAPCHAIN_FRAME_DISCARDS_BEFORE_SWEEP: usize = 3;
+const SWAPCHAIN_FRAME_DISCARDS_BEFORE_SWEEP: usize = 3 * 3; // give 3 times the size as initially we might get resized without presenting
 
 /// Handles and data relative to an image acquired through a swapchain
 /// These data are ephimeral and are associated to a swapchain. Initially, there's

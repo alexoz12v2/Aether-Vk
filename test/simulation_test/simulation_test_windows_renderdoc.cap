@@ -1,0 +1,28 @@
+{
+    "rdocCaptureSettings": 1,
+    "settings": {
+        "autoStart": true,
+        "commandLine": "Y:\\Aether-Vk\\assets",
+        "environment": [
+        ],
+        "executable": "Y:\\Aether-Vk\\test\\simulation_test\\target\\debug\\simulation_test.exe",
+        "inject": false,
+        "numQueuedFrames": 3,
+        "options": {
+            "allowFullscreen": true,
+            "allowVSync": true,
+            "apiValidation": true,
+            "captureAllCmdLists": true,
+            "captureCallstacks": true,
+            "captureCallstacksOnlyDraws": false,
+            "debugOutputMute": true,
+            "delayForDebugger": 0,
+            "hookIntoChildren": false,
+            "refAllResources": true,
+            "softMemoryLimit": 0,
+            "verifyBufferAccess": true
+        },
+        "queuedFrameCap": 0,
+        "workingDir": ""
+    }
+}

@@ -18,8 +18,98 @@ mod windows_debug {
   use windows::core::HSTRING;
   use windows::Win32::System::Diagnostics::Debug::OutputDebugStringW;
 
+  #[cfg(feature = "console_log")]
+  use spin::Once;
+  #[cfg(feature = "console_log")]
+  use windows::core::w;
+  #[cfg(feature = "console_log")]
+  use windows::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+  #[cfg(feature = "console_log")]
+  use windows::Win32::Storage::FileSystem::{
+    CreateFileW, WriteFile, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+  };
+  #[cfg(feature = "console_log")]
+  use windows::Win32::System::Console::{
+    GetConsoleMode, SetConsoleMode, SetConsoleOutputCP, CONSOLE_MODE,
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+  };
+
+  #[cfg(feature = "console_log")]
+  struct SyncHandle(HANDLE);
+
+  #[cfg(feature = "console_log")]
+  unsafe impl Sync for SyncHandle {}
+  #[cfg(feature = "console_log")]
+  unsafe impl Send for SyncHandle {}
+  #[cfg(feature = "console_log")]
+  impl From<HANDLE> for SyncHandle {
+    fn from(value: HANDLE) -> Self {
+      Self(value)
+    }
+  }
+
+  #[cfg(feature = "console_log")]
+  static CONSOLE_HANDLE: Once<Option<SyncHandle>> = Once::new();
+
+  #[cfg(feature = "console_log")]
+  fn init_console() -> Option<SyncHandle> {
+    unsafe {
+      // Target the active console buffer explicitly, even if stdout is redirected
+      // Note: 0x80000000 | 0x40000000 equates to GENERIC_READ | GENERIC_WRITE.
+      // Using raw values prevents import hell across different windows crate versions.
+      let handle = CreateFileW(
+        w!("CONOUT$"),
+        0x80000000 | 0x40000000,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        None,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        None,
+      )
+      .unwrap_or(INVALID_HANDLE_VALUE);
+
+      if handle.is_invalid() {
+        return None;
+      }
+
+      // Set the output code page to UTF-8 (CP_UTF8 = 65001)
+      let _ = SetConsoleOutputCP(65001);
+
+      // Enable virtual terminal processing (ANSI escape sequences)
+      let mut mode = CONSOLE_MODE(0);
+      if GetConsoleMode(handle, &mut mode).is_ok() {
+        let _ = SetConsoleMode(
+          handle,
+          CONSOLE_MODE(mode.0 | ENABLE_VIRTUAL_TERMINAL_PROCESSING.0),
+        );
+      }
+
+      Some(handle.into())
+    }
+  }
+
   pub fn log_message(args: fmt::Arguments) {
-    let msg = alloc::fmt::format(args);
+    let msg = alloc::fmt::format(args) + "\r\n";
+
+    #[cfg(feature = "console_log")]
+    {
+      // Initializes the console on the first call, subsequent calls just fetch the Option<HANDLE>
+      let handle_opt = CONSOLE_HANDLE.call_once(init_console);
+
+      if let Some(handle) = handle_opt {
+        unsafe {
+          let mut bytes_written = 0;
+          // WriteFile expects a byte slice, so msg.as_bytes() maps perfectly to UTF-8 output
+          let _ = WriteFile(
+            handle.0,
+            Some(msg.as_bytes()),
+            Some(&mut bytes_written),
+            None,
+          );
+        }
+      }
+    }
+
     let h_string = HSTRING::from(msg.as_str());
     unsafe {
       // sends a string to the debugger for display. no debugger = no op
@@ -32,7 +122,7 @@ mod windows_debug {
     // Implementation for Windows stacktrace here
     // This is a complex topic and requires careful implementation.
     // For now, we'll just log a message.
-    log!("Stacktrace (Windows): Not yet implemented.");
+    crate::log!("Stacktrace (Windows): Not yet implemented.");
   }
 }
 

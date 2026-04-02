@@ -280,7 +280,7 @@ impl EntryWrapper {
         };
 
         // 2. If it's not already in the process, load it explicitly from System32
-        if !handle_exists.is_err() {
+        if handle_exists.is_err() {
           h_vulkan = unsafe { LoadLibraryExW(VULKAN_DLL_NAME, None, LOAD_LIBRARY_SEARCH_SYSTEM32) }
             .map_err(|_| {
               GpuError::BackendSpecific("Failed to load vulkan-1.dll from System32".into())
@@ -483,8 +483,10 @@ pub(super) fn required_instance_extensions() -> &'static Vec<&'static CStr> {
     #[cfg(debug_assertions)]
     {
       the_vec.push(ash::ext::debug_utils::NAME);
-      the_vec.push(ash::ext::layer_settings::NAME);
+      // Renderdoc intercepts this layer extension (from VVL) hence make it optional?
+      // the_vec.push(ash::ext::layer_settings::NAME);
     }
+
     // surface
     the_vec.push(ash::khr::surface::NAME);
     the_vec.push(ash::khr::get_surface_capabilities2::NAME);
@@ -525,6 +527,10 @@ pub(super) fn required_device_extensions() -> &'static Vec<&'static CStr> {
     the_vec.push(ash::khr::create_renderpass2::NAME);
 
     the_vec.push(ash::khr::swapchain::NAME);
+
+    // promoted to vk::API_VERSION_1_3
+    // This extension allows the use of the SPV_KHR_non_semantic_info extension in SPIR-V shader modules. (eg printf)
+    the_vec.push(ash::khr::shader_non_semantic_info::NAME);
 
     // TODO: put this into an optional extension, as the `nullDescriptors` feature is not supported
     // by everybody (namely, Apple M4)

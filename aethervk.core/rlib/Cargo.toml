@@ -20,7 +20,9 @@ linux_wayland = []
 objc = { version = "0.2.7" }
 
 [dependencies]
-aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false }
+aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = [
+    "console_log",
+] }
 static_assertions = "1.1.0"
 spin = { version = "0.10", features = ["once", "rwlock", "mutex"] }
 thiserror = { version = "2", default-features = false }

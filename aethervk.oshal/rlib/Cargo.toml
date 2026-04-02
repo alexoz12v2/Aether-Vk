@@ -9,8 +9,9 @@ name = "aethervk_oshal_rlib"
 crate-type = ["rlib"]
 
 [features]
-default = []
+default = ["console_log"]
 std = []
+console_log = []
 
 [dependencies]
 heapless = { version = "0.9" }
