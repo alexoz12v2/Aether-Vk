@@ -31,7 +31,7 @@ use crate::{
         FragmentOut, FragmentShader, GraphicsInfo, PipelineFlags, PreRasterization,
         StencilCompareOp, StencilLogicOp, VertexIn,
       },
-      renderpasses::RenderPassSpecification,
+      renderpasses::{RenderPassSpecification, RenderPassType},
       resources::{
         DiscardableResource, ForwardMeshRenderResource, ForwardMeshRenderResourceArchetype, Image,
       },
@@ -1625,7 +1625,8 @@ impl<'a> RenderDevice for Device<'a> {
     )?;
 
     let cmd = data.command_buffer.get();
-    let black = [vk::ClearValue::default(), vk::ClearValue::default()]; // 2 attachments
+    let mut black = [vk::ClearValue::default(), vk::ClearValue::default()]; // 2 attachments
+    res.renderpasses.get_clear_values_render_pass(RenderPassType::ColorDepthSingleSubpass, &mut black)?;
 
     let render_pass_begin_info = vk::RenderPassBeginInfo::default()
       .render_pass(render_pass.get())

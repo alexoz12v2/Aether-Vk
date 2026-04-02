@@ -47,8 +47,8 @@ const VK_SUBPASS_EXTERNAL: u32 = 0xFFFFFFFF;
 
 struct RenderPassBundle {
   render_pass: NonZeroHandle<vk::RenderPass>,
-  // VkRenderPassBeginInfo
-  clear_value: vk::ClearValue,
+  // VkRenderPassBeginInfo (first -> color, second -> depth)
+  clear_value: [vk::ClearValue; 2],
   // keep track of swapchain recreation
   swapchain_generation: u64,
   // VkFramebufferCreateInfo
@@ -161,6 +161,33 @@ impl RenderPasses {
     }
   }
 
+  pub fn get_clear_values_render_pass(
+    &self,
+    ty: RenderPassType,
+    out_values: &mut [vk::ClearValue],
+  ) -> GpuResult<()> {
+    match ty {
+      RenderPassType::ColorDepthSingleSubpass => {
+        let read_render_passes = self.render_passes.read();
+        if !read_render_passes.contains_key(&RenderPassType::ColorDepthSingleSubpass) {
+          return Err(crate::types::GpuError::InvalidState);
+        }
+        if out_values.len() != 2 {
+          return Err(crate::types::GpuError::InvalidArgument);
+        }
+        let bundle = unsafe {
+          read_render_passes
+            .get(&RenderPassType::ColorDepthSingleSubpass)
+            .unwrap_unchecked()
+        };
+        out_values[0] = bundle.clear_value[0];
+        out_values[1] = bundle.clear_value[1];
+
+        Ok(())
+      }
+    }
+  }
+
   pub fn get_or_create_render_pass(
     &self,
     ty: RenderPassSpecification,
@@ -208,16 +235,24 @@ impl RenderPasses {
         let (width, height) = swapchain.extent();
 
         // Safety: We removed everything with that key above.
+        let black_value = vk::ClearValue {
+          color: vk::ClearColorValue {
+            float32: [0.0, 0.0, 0.0, 1.0],
+          },
+        };
+        // TODO: zero our stencil
+        let white_value = vk::ClearValue {
+          depth_stencil: vk::ClearDepthStencilValue {
+            depth: 1.0,
+            stencil: 0,
+          },
+        };
         unsafe {
           write_render_passes.insert_unique_unchecked(
             RenderPassType::ColorDepthSingleSubpass,
             RenderPassBundle {
               render_pass,
-              clear_value: vk::ClearValue {
-                color: vk::ClearColorValue {
-                  float32: [0.0, 0.0, 0.0, 1.0],
-                },
-              },
+              clear_value: [black_value, white_value],
               swapchain_generation: swapchain.swapchain_generation(),
               framebuffer: heapless::Vec::new(),
               width,

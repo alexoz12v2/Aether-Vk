@@ -512,12 +512,16 @@ pub fn read(path: &Path) -> Result<Vec<u8>, FsError> {
     }
 
     let mut size: i64 = 0;
-    if unsafe { GetFileSizeEx(handle, &mut size) }.is_err() == false {
-      unsafe { CloseHandle(handle) };
+    if unsafe { GetFileSizeEx(handle, &mut size) }.is_err() {
+      unsafe { CloseHandle(handle) }.map_err(|_| FsError::CouldNotOpenFile)?;
       return Err(FsError::CouldNotGetFileSize);
     }
 
-    let mut buffer = Vec::with_capacity(size as usize);
+    let mut buffer = {
+      let mut the_vec = Vec::new();
+      the_vec.resize(size as _, 0);
+      the_vec
+    };
     let mut bytes_read: u32 = 0;
 
     unsafe {
@@ -532,8 +536,9 @@ pub fn read(path: &Path) -> Result<Vec<u8>, FsError> {
 
     unsafe {
       buffer.set_len(bytes_read as usize);
-      CloseHandle(handle);
+      CloseHandle(handle)
     }
+    .map_err(|_| FsError::CouldNotOpenFile)?;
 
     Ok(buffer)
   }

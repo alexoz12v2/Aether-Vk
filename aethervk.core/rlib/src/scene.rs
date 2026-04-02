@@ -43,6 +43,7 @@ pub struct TransformComponent {
 impl Component for TransformComponent {}
 
 /// Represents a camera in the scene.
+#[derive(Clone, Copy, PartialEq)]
 pub struct CameraComponent {
   pub projection: Mat4x4f32,
 }
