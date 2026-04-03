@@ -161,6 +161,10 @@ struct AppState {
   time_scale: f32,
   root_entity: scene::EntityId,
   window: Window,
+
+  // camera
+  pitch: f32,
+  yaw: f32,
 }
 
 impl simulation::Pausable for AppState {
@@ -277,7 +281,7 @@ fn main() {
     println!("You passed {} arguments", args.len());
     if args.len() > 1 {
       let _ = args.next().unwrap(); // discard useless exe path
-                                    // interpret first argument as a custom asset path
+      // interpret first argument as a custom asset path
       std::path::PathBuf::from(args.next().unwrap()).join("Comet.glb")
     } else {
       let mut home_dir = std::env::current_exe().unwrap();
@@ -359,6 +363,8 @@ fn main() {
     time_scale: 1.0,
     root_entity,
     window,
+    pitch: 0.0,
+    yaw: 0.0,
   };
 
   // --- 2: Spawn render thread and Semaphore channel
@@ -412,6 +418,7 @@ fn main() {
               let mut state = &mut app_state;
               let scene_guard = state.scene.read().unwrap();
 
+              // 1. Update your camera aspect ratio (Existing code)
               scene_guard.with_component_mut(
                 state.camera_entity,
                 |camera: &mut CameraComponent| {
@@ -423,6 +430,51 @@ fn main() {
                   );
                 },
               );
+
+              // 2. Update the CAMetalLayer bounds and scale (macOS specific)
+              #[cfg(target_os = "macos")]
+              {
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                use objc::{msg_send, sel, sel_impl};
+
+                if let Ok(handle) = state.window.window_handle() {
+                  if let RawWindowHandle::AppKit(w) = handle.as_raw() {
+                    let ns_view = w.ns_view.as_ptr() as *mut objc::runtime::Object;
+                    unsafe {
+                      // Fetch the CAMetalLayer we attached earlier
+                      let layer: *mut objc::runtime::Object = msg_send![ns_view, layer];
+
+                      if !layer.is_null() {
+                        let scale_factor = state.window.scale_factor();
+
+                        // AppKit bounds are in logical points, NOT physical pixels.
+                        let logical_width = physical_size.width as f64 / scale_factor;
+                        let logical_height = physical_size.height as f64 / scale_factor;
+
+                        // Define standard 64-bit CoreGraphics CGRect memory layout
+                        #[repr(C)]
+                        struct CGRect {
+                          x: f64,
+                          y: f64,
+                          width: f64,
+                          height: f64,
+                        }
+
+                        let bounds = CGRect {
+                          x: 0.0,
+                          y: 0.0,
+                          width: logical_width,
+                          height: logical_height,
+                        };
+
+                        // Apply the new bounds and Retina scale factor
+                        let _: () = msg_send![layer, setBounds: bounds];
+                        let _: () = msg_send![layer, setContentsScale: scale_factor as f64];
+                      }
+                    }
+                  }
+                }
+              }
 
               generation.fetch_add(1, atomic::Ordering::Relaxed);
               state.window.request_redraw();
@@ -510,24 +562,34 @@ fn main() {
           ..
         } if right_mouse_button_down => {
           let state = &mut app_state;
+
+          // Accumulate the raw angles (store these fields in AppState!)
+          let rotation_speed = 0.005;
+          state.yaw -= delta.0 as f32 * rotation_speed;
+          state.pitch -= delta.1 as f32 * rotation_speed;
+
+          // Optional: Clamp pitch to avoid gimbal lock (e.g., -89 to +89 degrees)
+          state.pitch = state.pitch.clamp(-1.55, 1.55);
+
           let scene_guard = state.scene.read().unwrap();
           scene_guard.with_component_mut(
             state.camera_entity,
             |camera_transform: &mut TransformComponent| {
-              let rotation_speed = 0.005;
-              let yaw_delta = delta.0 as f32 * rotation_speed;
-              let pitch_delta = delta.1 as f32 * rotation_speed;
-
+              // Rebuild the quaternion from scratch every frame to prevent drift and roll
               let rotation_y = <Vec4f32 as Quaternion>::from_axis_angle(
                 Vec3f32::from_components(0.0, 1.0, 0.0),
-                -yaw_delta,
+                state.yaw,
               );
-              let right: Vec4f32 = camera_transform.rotation
-                * Vec3f32::from_components(1.0, 0.0, 0.0).to_vec4::<Vec4f32>(0.0);
-              let rotation_x =
-                <Vec4f32 as Quaternion>::from_axis_angle(right.vector_part(), -pitch_delta);
+              let rotation_x = <Vec4f32 as Quaternion>::from_axis_angle(
+                Vec3f32::from_components(1.0, 0.0, 0.0), // Local right is simply global X before Y rotation
+                state.pitch,
+              );
 
-              let new_rotation = rotation_y * rotation_x * camera_transform.rotation;
+              // Apply Y first, then X
+              let new_rotation = rotation_y * rotation_x;
+
+              // Just to be completely safe, normalize it!
+              // camera_transform.rotation = new_rotation.normalized(); // use your math library's equivalent
               camera_transform.rotation = new_rotation;
 
               let new_forward: Vec4f32 =
