@@ -199,12 +199,13 @@ impl<'a, const N: usize> Drop for DeviceResourceJanitor<'a, N> {
 
 /// Safety: [`ForwardMeshRenderResourceArchetype`] should contain [`crate::gpu::PipelineKey`]
 unsafe fn physical_mesh_resource_backend_to_frontend(
+  handle: RenderableInstanceId,
   value: &ForwardMeshRenderResource,
   archetype: &ForwardMeshRenderResourceArchetype,
 ) -> ResourceUploadResult {
   ResourceUploadResult {
     pipeline: unsafe { archetype.pipeline_key.unwrap_unchecked() },
-    buffers: GpuResourceHandle(value.buffers_hash()),
+    buffers: handle.into(),
     texture_flags: value.frontend_texture_flags(),
   }
 }
@@ -1356,7 +1357,9 @@ impl<'a> RenderDevice for Device<'a> {
       if let Some(resource) = resources.get(&physical_mesh_id) {
         unsafe {
           return Ok(physical_mesh_resource_backend_to_frontend(
-            &resource, &archetype,
+            physical_mesh_id,
+            &resource,
+            &archetype,
           ));
         }
       }
@@ -1626,7 +1629,9 @@ impl<'a> RenderDevice for Device<'a> {
 
     let cmd = data.command_buffer.get();
     let mut black = [vk::ClearValue::default(), vk::ClearValue::default()]; // 2 attachments
-    res.renderpasses.get_clear_values_render_pass(RenderPassType::ColorDepthSingleSubpass, &mut black)?;
+    res
+      .renderpasses
+      .get_clear_values_render_pass(RenderPassType::ColorDepthSingleSubpass, &mut black)?;
 
     let render_pass_begin_info = vk::RenderPassBeginInfo::default()
       .render_pass(render_pass.get())
