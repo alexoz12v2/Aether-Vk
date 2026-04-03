@@ -77,13 +77,18 @@
             isEnabled = "YES">
          </EnvironmentVariable>
          <EnvironmentVariable
-            key = "VK_KHR_VALIDATION_LAYER"
+            key = "VULKAN_SDK"
+            value = "/Volumes/ExtData/alessioext/VulkanSDK/1.4.321.0/macOS"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "MVK_DEBUG"
             value = "1"
             isEnabled = "YES">
          </EnvironmentVariable>
          <EnvironmentVariable
-            key = "VULKAN_SDK"
-            value = "/Volumes/ExtData/alessioext/VulkanSDK/1.4.321.0/macOS"
+            key = "MVK_CONFIG_TRACE_VULKAN_CALLS"
+            value = "1"
             isEnabled = "YES">
          </EnvironmentVariable>
       </EnvironmentVariables>
