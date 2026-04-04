@@ -23,3 +23,5 @@ pub mod simulation;
 pub mod gpu;
 pub mod compute;
 pub mod scene;
+pub mod math;
+pub mod physics;

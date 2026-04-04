@@ -162,6 +162,7 @@ pub trait FloatLike: Scalar + Copy {
   fn sqrt(self) -> Self; // TODO Option? See Arch's manual for sqrt behavior and tag unsafe
   fn squared(self) -> Self;
   fn cos(self) -> Self;
+  fn acos(self) -> Self;
   fn sin(self) -> Self;
   fn tan(self) -> Self;
   fn pow(self, v: Self) -> Self;
@@ -238,6 +239,11 @@ impl_float_like!(f32, {
   fn from_f32(num: f32) -> Self {
     num
   }
+
+  fn acos(self) -> Self {
+    libm::acosf(self)
+  }
+
   fn cos(self) -> Self {
     libm::cosf(self)
   }
@@ -352,6 +358,9 @@ impl_float_like!(f64, {
   }
   fn from_f32(num: f32) -> Self {
     num as f64
+  }
+  fn acos(self) -> Self {
+    libm::acos(self)
   }
   fn cos(self) -> Self {
     libm::cos(self)

@@ -12,7 +12,7 @@ use crate::math::{
 };
 
 /// Column-Major, f32 storage for 4x4 matrices
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 #[repr(C)]
 pub struct Mat4x4f32 {
   pub x: Vec4f32,
@@ -25,10 +25,10 @@ impl Into<[f32; 16]> for Mat4x4f32 {
   #[inline]
   fn into(self) -> [f32; 16] {
     let mut result: [f32; 16] = [0.0; 16];
-    (&mut result[0..3]).copy_from_slice(&Into::<[f32; 4]>::into(self.x));
-    (&mut result[4..7]).copy_from_slice(&Into::<[f32; 4]>::into(self.y));
-    (&mut result[8..11]).copy_from_slice(&Into::<[f32; 4]>::into(self.z));
-    (&mut result[12..15]).copy_from_slice(&Into::<[f32; 4]>::into(self.w));
+    (&mut result[0..4]).copy_from_slice(&Into::<[f32; 4]>::into(self.x));
+    (&mut result[4..8]).copy_from_slice(&Into::<[f32; 4]>::into(self.y));
+    (&mut result[8..12]).copy_from_slice(&Into::<[f32; 4]>::into(self.z));
+    (&mut result[12..16]).copy_from_slice(&Into::<[f32; 4]>::into(self.w));
 
     result
   }
@@ -288,8 +288,8 @@ impl SquareMatrix for Mat4x4f32 {
     Self {
       x: <Self::Vector as Vector4>::from_components(1.0, 0.0, 0.0, 0.0),
       y: <Self::Vector as Vector4>::from_components(0.0, 1.0, 0.0, 0.0),
-      z: <Self::Vector as Vector4>::from_components(1.0, 0.0, 1.0, 0.0),
-      w: <Self::Vector as Vector4>::from_components(1.0, 0.0, 0.0, 1.0),
+      z: <Self::Vector as Vector4>::from_components(0.0, 0.0, 1.0, 0.0),
+      w: <Self::Vector as Vector4>::from_components(0.0, 0.0, 0.0, 1.0),
     }
   }
 
@@ -330,7 +330,7 @@ impl SquareMatrix for Mat4x4f32 {
     }
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
-      let inv_dev = 1.0f32 / det;
+      let inv_det = 1.0f32 / det;
       Some(adjugate.scale_all(inv_det))
     }
   }
@@ -417,81 +417,84 @@ impl Mat4x4f32 {
   /// Helper: Scalar default 4x4 determinant with Laplace expansion
   #[inline]
   fn scalar_determinant(&self) -> f32 {
-    // elements for readability (row, column)
-    let (m00, m10, m20, m30) = (self[(0, 0)], self[(1, 0)], self[(2, 0)], self[(3, 0)]);
-    let (m01, m11, m21, m31) = (self[(0, 1)], self[(1, 1)], self[(2, 1)], self[(3, 1)]);
-    let (m02, m12, m22, m32) = (self[(0, 2)], self[(1, 2)], self[(2, 2)], self[(3, 2)]);
-    let (m03, m13, m23, m33) = (self[(0, 3)], self[(1, 3)], self[(2, 3)], self[(3, 3)]);
+    let m = [
+      self.x[0], self.x[1], self.x[2], self.x[3],
+      self.y[0], self.y[1], self.y[2], self.y[3],
+      self.z[0], self.z[1], self.z[2], self.z[3],
+      self.w[0], self.w[1], self.w[2], self.w[3],
+    ];
 
-    let coef00 = m22 * m33 - m23 * m32;
-    let coef20 = m21 * m33 - m23 * m31;
-    let coef30 = m21 * m32 - m22 * m31;
-    let coef40 = m12 * m33 - m13 * m32;
-    let coef60 = m11 * m33 - m13 * m31;
-    let coef70 = m11 * m32 - m12 * m31;
-    let coef80 = m12 * m23 - m13 * m22;
-    let coef10 = m11 * m23 - m13 * m21;
-    let coef11 = m11 * m22 - m12 * m21;
+    let coef00 = m[10] * m[15] - m[14] * m[11];
+    let coef02 = m[6] * m[15] - m[14] * m[7];
+    let coef03 = m[6] * m[11] - m[10] * m[7];
+    let coef04 = m[2] * m[15] - m[14] * m[3];
+    let coef06 = m[2] * m[11] - m[10] * m[3];
+    let coef07 = m[2] * m[7] - m[6] * m[3];
+    
+    let fac0 = m[5] * coef00 - m[9] * coef02 + m[13] * coef03;
+    let fac1 = -(m[1] * coef00 - m[9] * coef04 + m[13] * coef06);
+    let fac2 = m[1] * coef02 - m[5] * coef04 + m[13] * coef07;
+    let fac3 = -(m[1] * coef03 - m[5] * coef06 + m[9] * coef07);
 
-    let fac0 = coef00 * m11 - coef20 * m12 + coef30 * m13;
-    let fac1 = coef00 * m01 - coef20 * m02 + coef30 * m03;
-    let fac2 = coef40 * m10 - coef60 * m02 + coef70 * m03;
-    let fac3 = coef80 * m10 - coef10 * m02 + coef11 * m03;
-
-    m00 * fac0 - m10 * fac1 + m20 * fac2 - m30 * fac3
+    m[0] * fac0 + m[4] * fac1 + m[8] * fac2 + m[12] * fac3
   }
 
   /// Helper: computes the adjugate matrix (required for inverse) and the deternimant at same time
   #[inline]
   fn scalar_det_and_adjugate(&self) -> (f32, Self) {
-    let (x0, x1, x2, x3) = (self.x[0], self.x[1], self.x[2], self.x[3]);
-    let (y0, y1, y2, y3) = (self.y[0], self.y[1], self.y[2], self.y[3]);
-    let (z0, z1, z2, z3) = (self.z[0], self.z[1], self.z[2], self.z[3]);
-    let (w0, w1, w2, w3) = (self.w[0], self.w[1], self.w[2], self.w[3]);
+    let m = [
+      self.x[0], self.x[1], self.x[2], self.x[3],
+      self.y[0], self.y[1], self.y[2], self.y[3],
+      self.z[0], self.z[1], self.z[2], self.z[3],
+      self.w[0], self.w[1], self.w[2], self.w[3],
+    ];
 
-    // cofactors "c(row, column)" of pivot
-    let c00 = x0 * y1 - x1 * y0;
-    let c10 = x0 * y2 - x2 * y0;
-    let c20 = x0 * y3 - x3 * y0;
-    let c30 = x1 * y2 - x2 * y1;
-    let c40 = x1 * y3 - x3 * y1;
-    let c50 = x2 * y3 - x3 * y2;
+    let coef00 = m[10] * m[15] - m[14] * m[11];
+    let coef02 = m[6] * m[15] - m[14] * m[7];
+    let coef03 = m[6] * m[11] - m[10] * m[7];
+    let coef04 = m[2] * m[15] - m[14] * m[3];
+    let coef06 = m[2] * m[11] - m[10] * m[3];
+    let coef07 = m[2] * m[7] - m[6] * m[3];
+    let coef08 = m[9] * m[15] - m[13] * m[11];
+    let coef10 = m[5] * m[15] - m[13] * m[7];
+    let coef11 = m[5] * m[11] - m[9] * m[7];
+    let coef12 = m[1] * m[15] - m[13] * m[3];
+    let coef14 = m[1] * m[11] - m[9] * m[3];
+    let coef15 = m[1] * m[7] - m[5] * m[3];
+    let coef16 = m[9] * m[14] - m[13] * m[10];
+    let coef18 = m[5] * m[14] - m[13] * m[6];
+    let coef19 = m[5] * m[10] - m[9] * m[6];
+    let coef20 = m[1] * m[14] - m[13] * m[2];
+    let coef22 = m[1] * m[10] - m[9] * m[2];
+    let coef23 = m[1] * m[6] - m[5] * m[2];
 
-    let s00 = z0 * w1 - z1 * w0;
-    let s10 = z0 * w2 - z2 * w0;
-    let s20 = z0 * w3 - z3 * w0;
-    let s30 = z1 * w2 - z2 * w1;
-    let s40 = z1 * w3 - z3 * w1;
-    let s50 = z2 * w3 - z3 * w2;
+    let fac0 = m[5] * coef00 - m[9] * coef02 + m[13] * coef03;
+    let fac1 = -(m[1] * coef00 - m[9] * coef04 + m[13] * coef06);
+    let fac2 = m[1] * coef02 - m[5] * coef04 + m[13] * coef07;
+    let fac3 = -(m[1] * coef03 - m[5] * coef06 + m[9] * coef07);
 
-    // please let it be correct
-    let det = c00 * s50 - c10 * s40 + c20 * s30 + c30 * s20 - c40 * s10 + c50 * s00;
+    let fac4 = -(m[4] * coef00 - m[8] * coef02 + m[12] * coef03);
+    let fac5 = m[0] * coef00 - m[8] * coef04 + m[12] * coef06;
+    let fac6 = -(m[0] * coef02 - m[4] * coef04 + m[12] * coef07);
+    let fac7 = m[0] * coef03 - m[4] * coef06 + m[8] * coef07;
+
+    let fac8 = m[4] * coef08 - m[8] * coef10 + m[12] * coef11;
+    let fac9 = -(m[0] * coef08 - m[8] * coef12 + m[12] * coef14);
+    let fac10 = m[0] * coef10 - m[4] * coef12 + m[12] * coef15;
+    let fac11 = -(m[0] * coef11 - m[4] * coef14 + m[8] * coef15);
+
+    let fac12 = -(m[4] * coef16 - m[8] * coef18 + m[12] * coef19);
+    let fac13 = m[0] * coef16 - m[8] * coef20 + m[12] * coef22;
+    let fac14 = -(m[0] * coef18 - m[4] * coef20 + m[12] * coef23);
+    let fac15 = m[0] * coef19 - m[4] * coef22 + m[8] * coef23;
+
     let adjugate = Self {
-      x: <Vec4f32 as Vector4>::from_components(
-        y1 * s50 - y2 * s40 + y3 * s30,
-        -x1 * s50 - x2 * s40 - x3 * s30,
-        w1 * c50 - w2 * c40 + w3 * c30,
-        -z1 * c50 + z2 * c40 - z3 * c30,
-      ),
-      y: <Vec4f32 as Vector4>::from_components(
-        -y0 * s50 + y2 * s20 - y3 * s10,
-        x0 * s50 - x2 * s20 + x3 * s10,
-        -w0 * c50 - w2 * c20 - w3 * c10,
-        z0 * c50 - z2 * c20 + z3 * c10,
-      ),
-      z: <Vec4f32 as Vector4>::from_components(
-        y0 * s40 - y1 * s20 + y3 * s00,
-        -x0 * s40 + x1 * s20 - x3 * s00,
-        w0 * c40 - w1 * c20 + w3 * c00,
-        -z0 * c40 + z1 * c20 - z3 * c00,
-      ),
-      w: <Vec4f32 as Vector4>::from_components(
-        -y0 * s30 + y1 * s10 - y2 * s00,
-        x0 * s30 - x1 * s10 + x2 * s00,
-        -w0 * c30 + w1 * c10 - w2 * c00,
-        z0 * c30 - z1 * c10 + z2 * c00,
-      ),
+      x: <Vec4f32 as Vector4>::from_components(fac0, fac1, fac2, fac3),
+      y: <Vec4f32 as Vector4>::from_components(fac4, fac5, fac6, fac7),
+      z: <Vec4f32 as Vector4>::from_components(fac8, fac9, fac10, fac11),
+      w: <Vec4f32 as Vector4>::from_components(fac12, fac13, fac14, fac15),
     };
+    let det = m[0] * fac0 + m[4] * fac1 + m[8] * fac2 + m[12] * fac3;
     (det, adjugate)
   }
 
@@ -513,5 +516,269 @@ impl Mat4x4f32 {
         data: [s * self.w[0], s * self.w[1], s * self.w[2], s * self.w[3]],
       },
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  extern crate std;
+  use super::*;
+
+  // Helper macro to easily define a column-major matrix
+  // TODO: probably this is to be exported
+  macro_rules! mat {
+    (
+            $c0x:expr, $c1x:expr, $c2x:expr, $c3x:expr,
+            $c0y:expr, $c1y:expr, $c2y:expr, $c3y:expr,
+            $c0z:expr, $c1z:expr, $c2z:expr, $c3z:expr,
+            $c0w:expr, $c1w:expr, $c2w:expr, $c3w:expr $(,)?
+        ) => {
+      Mat4x4f32 {
+        x: Vec4f32::from_components($c0x, $c0y, $c0z, $c0w),
+        y: Vec4f32::from_components($c1x, $c1y, $c2y, $c1w), // Fixed macro layout for columns
+        z: Vec4f32::from_components($c2x, $c2y, $c2z, $c2w),
+        w: Vec4f32::from_components($c3x, $c3y, $c3z, $c3w),
+      }
+    };
+  }
+
+  // Simpler helper to ensure exact column mapping
+  fn mat4_cols(c0: [f32; 4], c1: [f32; 4], c2: [f32; 4], c3: [f32; 4]) -> Mat4x4f32 {
+    Mat4x4f32 {
+      x: Vec4f32::from_components(c0[0], c0[1], c0[2], c0[3]),
+      y: Vec4f32::from_components(c1[0], c1[1], c1[2], c1[3]),
+      z: Vec4f32::from_components(c2[0], c2[1], c2[2], c2[3]),
+      w: Vec4f32::from_components(c3[0], c3[1], c3[2], c3[3]),
+    }
+  }
+
+  #[test]
+  fn test_identity() {
+    let id = Mat4x4f32::identity();
+
+    assert_eq!(id.x.x(), 1.0);
+    assert_eq!(id.y.y(), 1.0);
+    assert_eq!(id.z.z(), 1.0);
+    assert_eq!(id.w.w(), 1.0);
+
+    assert_eq!(id.x.y(), 0.0); // Check a few off-diagonals
+    assert_eq!(id.z.w(), 0.0);
+  }
+
+  #[test]
+  fn test_into_arrays() {
+    let m = mat4_cols(
+      [1.0, 2.0, 3.0, 4.0],
+      [5.0, 6.0, 7.0, 8.0],
+      [9.0, 10.0, 11.0, 12.0],
+      [13.0, 14.0, 15.0, 16.0],
+    );
+
+    // 1D Array Conversion (Column-Major Flat)
+    let arr1d: [f32; 16] = m.into();
+    assert_eq!(
+      arr1d,
+      [
+        1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0
+      ]
+    );
+
+    // 2D Array Conversion
+    let arr2d: [[f32; 4]; 4] = m.into();
+    assert_eq!(arr2d[0], [1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(arr2d[3], [13.0, 14.0, 15.0, 16.0]);
+  }
+
+  #[test]
+  fn test_indexing() {
+    let mut m = Mat4x4f32::identity();
+
+    // 1D (Column) Indexing
+    assert_eq!(m[0].x(), 1.0);
+    assert_eq!(m[1].y(), 1.0);
+
+    // 2D (Row, Col) Indexing
+    assert_eq!(m[(0, 0)], 1.0); // col 0, row 0
+    assert_eq!(m[(2, 3)], 0.0); // col 3, row 2
+
+    // Mutability
+    m[(1, 2)] = 5.0;
+    assert_eq!(m[(1, 2)], 5.0);
+  }
+
+  #[test]
+  fn test_addition_and_subtraction() {
+    let m1 = mat4_cols(
+      [1.0, 1.0, 1.0, 1.0],
+      [2.0, 2.0, 2.0, 2.0],
+      [3.0, 3.0, 3.0, 3.0],
+      [4.0, 4.0, 4.0, 4.0],
+    );
+    let m2 = mat4_cols(
+      [10.0, 10.0, 10.0, 10.0],
+      [20.0, 20.0, 20.0, 20.0],
+      [30.0, 30.0, 30.0, 30.0],
+      [40.0, 40.0, 40.0, 40.0],
+    );
+
+    let add = m1 + m2;
+    assert_eq!(add[0].x(), 11.0);
+    assert_eq!(add[3].w(), 44.0);
+
+    let sub = m2 - m1;
+    assert_eq!(sub[1].y(), 18.0);
+    assert_eq!(sub[2].z(), 27.0);
+  }
+
+  #[test]
+  fn test_scalar_multiplication() {
+    let m = mat4_cols(
+      [1.0, 2.0, 3.0, 4.0],
+      [1.0, 2.0, 3.0, 4.0],
+      [1.0, 2.0, 3.0, 4.0],
+      [1.0, 2.0, 3.0, 4.0],
+    );
+
+    let m_scaled1 = m * 2.0;
+    let m_scaled2 = 2.0 * m;
+
+    assert_eq!(m_scaled1[0].x(), 2.0);
+    assert_eq!(m_scaled1[0].y(), 4.0);
+    assert_eq!(m_scaled1, m_scaled2); // Should be commutative
+  }
+
+  #[test]
+  fn test_transpose() {
+    let m = mat4_cols(
+      [1.0, 2.0, 3.0, 4.0],
+      [5.0, 6.0, 7.0, 8.0],
+      [9.0, 10.0, 11.0, 12.0],
+      [13.0, 14.0, 15.0, 16.0],
+    );
+
+    let t = m.transpose();
+
+    // Row 0 of `m` becomes Col 0 of `t`
+    assert_eq!(t[0].x(), 1.0);
+    assert_eq!(t[0].y(), 5.0);
+    assert_eq!(t[0].z(), 9.0);
+    assert_eq!(t[0].w(), 13.0);
+
+    // Double transpose should yield the original matrix
+    assert_eq!(t.transpose(), m);
+  }
+
+  #[test]
+  fn test_matrix_vector_mul() {
+    let m = mat4_cols(
+      [1.0, 0.0, 0.0, 0.0],
+      [0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 1.0, 0.0],
+      [10.0, 20.0, 30.0, 1.0], // Translation vector in w column
+    );
+    let v = Vec4f32::from_components(5.0, 5.0, 5.0, 1.0); // A point
+
+    let result = m.mul_vector(v);
+
+    assert_eq!(result.x(), 15.0); // 5 + 10
+    assert_eq!(result.y(), 25.0); // 5 + 20
+    assert_eq!(result.z(), 35.0); // 5 + 30
+    assert_eq!(result.w(), 1.0);
+  }
+
+  #[test]
+  fn test_matrix_matrix_mul() {
+    let m = mat4_cols(
+      [1.0, 2.0, 3.0, 4.0],
+      [5.0, 6.0, 7.0, 8.0],
+      [9.0, 10.0, 11.0, 12.0],
+      [13.0, 14.0, 15.0, 16.0],
+    );
+    let id = Mat4x4f32::identity();
+
+    // M * I = M
+    assert_eq!(m * id, m);
+    // I * M = M
+    assert_eq!(id * m, m);
+
+    // Test with a translation matrix
+    let trans = mat4_cols(
+      [1.0, 0.0, 0.0, 0.0],
+      [0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 1.0, 0.0],
+      [10.0, 10.0, 10.0, 1.0],
+    );
+    let scale = mat4_cols(
+      [2.0, 0.0, 0.0, 0.0],
+      [0.0, 2.0, 0.0, 0.0],
+      [0.0, 0.0, 2.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0],
+    );
+
+    // Trans * Scale
+    let combined = trans * scale;
+    assert_eq!(combined[0].x(), 2.0); // Scale is applied
+    assert_eq!(combined[3].x(), 10.0); // Translation remains in col 3
+  }
+
+  #[test]
+  fn test_determinant() {
+    let id = Mat4x4f32::identity();
+    assert_eq!(id.determinant(), 1.0);
+
+    let m = mat4_cols(
+      [2.0, 0.0, 0.0, 0.0],
+      [0.0, 3.0, 0.0, 0.0],
+      [0.0, 0.0, 4.0, 0.0],
+      [0.0, 0.0, 0.0, 5.0],
+    );
+    // Determinant of diagonal matrix is product of diagonals
+    assert_eq!(m.determinant(), 120.0);
+  }
+
+  #[test]
+  fn test_inverse() {
+    // Simple scale + translate matrix, easy to invert
+    let m = mat4_cols(
+      [2.0, 0.0, 0.0, 0.0],
+      [0.0, 2.0, 0.0, 0.0],
+      [0.0, 0.0, 2.0, 0.0],
+      [10.0, 20.0, 30.0, 1.0],
+    );
+
+    let inv_opt = m.inverse();
+    assert!(inv_opt.is_some(), "Matrix should be invertible");
+
+    let inv = inv_opt.unwrap();
+
+    // M * M^-1 should equal Identity
+    let id_test = m * inv;
+    let id = Mat4x4f32::identity();
+
+    // Floating point comparisons after a matrix inverse might have tiny inaccuracies.
+    // We use a small epsilon to check if it practically resulted in the Identity matrix.
+    let epsilon = 1e-6;
+    for col in 0..4 {
+      for row in 0..4 {
+        let diff = (id_test[(row, col)] - id[(row, col)]).abs();
+        assert!(
+          diff < epsilon,
+          "Inverse failed at ({},{}). Expected {}, got {}",
+          row,
+          col,
+          id[(row, col)],
+          id_test[(row, col)]
+        );
+      }
+    }
+
+    // Test singular matrix (Determinant = 0)
+    let singular = mat4_cols(
+      [1.0, 1.0, 1.0, 1.0],
+      [1.0, 1.0, 1.0, 1.0],
+      [1.0, 1.0, 1.0, 1.0],
+      [1.0, 1.0, 1.0, 1.0],
+    );
+    assert!(singular.inverse().is_none());
   }
 }

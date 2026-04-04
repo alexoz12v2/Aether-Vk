@@ -405,4 +405,17 @@ where
     }
     Self { low, high }
   }
+
+  fn acos(self) -> Self {
+    let mut low = V::zero();
+    let mut high = V::zero();
+    for i in 0..V::DIM {
+      let a = unsafe { self.low.component_unchecked(i) };
+      let b = unsafe { self.high.component_unchecked(i) };
+      let result = (FloatInterval { low: a, high: b }).acos();
+      low.set_component(i, result.low);
+      high.set_component(i, result.high);
+    }
+    Self { low, high }
+  }
 }

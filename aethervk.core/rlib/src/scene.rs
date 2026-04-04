@@ -8,7 +8,7 @@
 //!   - This is a simplified implementation focusing on the core concepts.
 
 use crate::simulation::comet::Comet;
-use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
+use aethervk_oshal_rlib::math::{matrix::mat4::Mat4x4f32, vector::vec4::Quat};
 use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
 use aethervk_oshal_rlib::math::vector::vec4::Vec4f32;
 use slotmap::{new_key_type, SlotMap};
@@ -37,7 +37,7 @@ pub trait Component: 'static + Send + Sync {}
 pub struct TransformComponent {
   pub position: Vec3f32,
   /// Stored as a quaternion.
-  pub rotation: Vec4f32,
+  pub rotation: Quat,
   pub scale: Vec3f32,
 }
 impl Component for TransformComponent {}
@@ -332,12 +332,8 @@ impl Scene {
     pre_visit: &mut Pre,
     post_visit: &mut Post,
   ) where
-    Pre: FnMut(
-      &mut A,
-      EntityId,
-      Option<TransformComponent>,
-      Option<&PhysicalMeshComponent>,
-    ) -> bool,
+    Pre:
+      FnMut(&mut A, EntityId, Option<TransformComponent>, Option<&PhysicalMeshComponent>) -> bool,
     Post: FnMut(&mut A, EntityId),
   {
     if !self.entities.read().contains_key(start_entity) {
@@ -361,12 +357,8 @@ impl Scene {
     post_visit: &mut Post,
     visited: &mut HashSet<EntityId>,
   ) where
-    Pre: FnMut(
-      &mut A,
-      EntityId,
-      Option<TransformComponent>,
-      Option<&PhysicalMeshComponent>,
-    ) -> bool,
+    Pre:
+      FnMut(&mut A, EntityId, Option<TransformComponent>, Option<&PhysicalMeshComponent>) -> bool,
     Post: FnMut(&mut A, EntityId),
   {
     if !visited.insert(current_entity) {
@@ -616,34 +608,36 @@ impl Scene {
     let archetype = &archetypes[location.archetype_index];
 
     let mut components_lock = archetype.components.get(&TypeId::of::<T>())?.write();
-    let components = components_lock
-      .as_mut_any()
-      .downcast_mut::<Vec<T>>()?;
+    let components = components_lock.as_mut_any().downcast_mut::<Vec<T>>()?;
 
     Some(f(&mut components[location.row_index]))
   }
 
   pub fn remove_component<T: Component>(&self, entity_id: EntityId) -> Result<(), &str> {
     let type_id_to_remove = TypeId::of::<T>();
-    
+
     let src_location = {
-        let entities = self.entities.read();
-        *entities.get(entity_id).ok_or("Entity not found")?
+      let entities = self.entities.read();
+      *entities.get(entity_id).ok_or("Entity not found")?
     };
 
     let target_archetype_index = {
-        let archetypes = self.archetypes.read();
-        let src_archetype = &archetypes[src_location.archetype_index];
+      let archetypes = self.archetypes.read();
+      let src_archetype = &archetypes[src_location.archetype_index];
 
-        if !src_archetype.component_types.contains(&type_id_to_remove) {
-            return Err("Component not found on entity");
-        }
-        
-        let mut target_component_types = src_archetype.component_types.clone();
-        target_component_types.remove(&type_id_to_remove);
+      if !src_archetype.component_types.contains(&type_id_to_remove) {
+        return Err("Component not found on entity");
+      }
 
-        archetypes.iter().position(|arch| arch.component_types == target_component_types)
-            .ok_or("Target archetype not found. This should not happen if an empty archetype always exists.")?
+      let mut target_component_types = src_archetype.component_types.clone();
+      target_component_types.remove(&type_id_to_remove);
+
+      archetypes
+        .iter()
+        .position(|arch| arch.component_types == target_component_types)
+        .ok_or(
+          "Target archetype not found. This should not happen if an empty archetype always exists.",
+        )?
     };
 
     if src_location.archetype_index != target_archetype_index {
@@ -657,25 +651,33 @@ impl Scene {
         let (left, right) = archetypes.split_at_mut(src_location.archetype_index);
         (&mut right[0], &mut left[target_archetype_index])
       };
-      
+
       let moved_entity_id = src_arch.entities.swap_remove(src_location.row_index);
       let swapped_entity_id_opt = src_arch.entities.get(src_location.row_index).copied();
 
       // The component to be removed is handled separately to avoid moving it.
-      src_arch.components.get(&type_id_to_remove).unwrap().write().as_mut_any().downcast_mut::<Vec<T>>().unwrap().swap_remove(src_location.row_index);
+      src_arch
+        .components
+        .get(&type_id_to_remove)
+        .unwrap()
+        .write()
+        .as_mut_any()
+        .downcast_mut::<Vec<T>>()
+        .unwrap()
+        .swap_remove(src_location.row_index);
 
       for (type_id, src_storage_lock) in src_arch.components.iter() {
-          if *type_id == type_id_to_remove {
-              continue;
-          }
-          
-          if let Some(target_storage_lock) = target_arch.components.get(type_id) {
-              let mut src_storage = src_storage_lock.write();
-              let mut target_storage = target_storage_lock.write();
-              src_storage.swap_remove_and_push_to(src_location.row_index, &mut **target_storage);
-          }
+        if *type_id == type_id_to_remove {
+          continue;
+        }
+
+        if let Some(target_storage_lock) = target_arch.components.get(type_id) {
+          let mut src_storage = src_storage_lock.write();
+          let mut target_storage = target_storage_lock.write();
+          src_storage.swap_remove_and_push_to(src_location.row_index, &mut **target_storage);
+        }
       }
-      
+
       target_arch.entities.push(moved_entity_id);
       let new_location = EntityLocation {
         archetype_index: target_archetype_index,
@@ -684,10 +686,10 @@ impl Scene {
 
       *entities.get_mut(moved_entity_id).unwrap() = new_location;
       if let Some(swapped_id) = swapped_entity_id_opt {
-          entities.get_mut(swapped_id).unwrap().row_index = src_location.row_index;
+        entities.get_mut(swapped_id).unwrap().row_index = src_location.row_index;
       }
     }
-    
+
     Ok(())
   }
 
