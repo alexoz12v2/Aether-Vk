@@ -19,13 +19,15 @@ layout(push_constant) uniform Push { // std140
   vec3 sunDir;
   uint textureFlags;
   vec4 sunColor;
+  vec3 cameraPos;
+  uint _unused;
 } push;
 
 // --- Specialization Constants ---
 // Note: GLSL requires these to be scalar types.
-layout(constant_id = 0) const float BASE_ALBEDO_R = 0.04;
-layout(constant_id = 1) const float BASE_ALBEDO_G = 0.04;
-layout(constant_id = 2) const float BASE_ALBEDO_B = 0.04;
+layout(constant_id = 0) const float BASE_ALBEDO_R = 0.8;
+layout(constant_id = 1) const float BASE_ALBEDO_G = 0.8;
+layout(constant_id = 2) const float BASE_ALBEDO_B = 0.8;
 layout(constant_id = 3) const float BASE_ROUGHNESS = 0.9;
 layout(constant_id = 4) const float BASE_AO = 1.0;
 
@@ -35,27 +37,26 @@ const uint FLAG_NORMAL    = 1u << 1;
 const uint FLAG_ROUGHNESS = 1u << 2;
 const uint FLAG_AO        = 1u << 3;
 
-// Oren-Nayar approximation
+// Oren-Nayar Fujii approximation
 vec3 orenNayar(vec3 viewDir, vec3 lightDir, vec3 normal, vec3 albedo, float roughness) {
-  float VdotN = max(dot(viewDir, normal), 0.0);
   float LdotN = max(dot(lightDir, normal), 0.0);
-  float cosThetaI = LdotN;
-  float cosThetaR = VdotN;
+  float VdotN = max(dot(viewDir, normal), 0.0);
 
-  float thetaI = acos(cosThetaI);
-  float thetaR = acos(cosThetaR);
-  float alpha = max(thetaI, thetaR);
-  float beta = min(thetaI, thetaR);
+  // Early exit for the dark side of the mesh! No infinities.
+  if (LdotN <= 0.0) {
+    return vec3(0.0);
+  }
 
   float roughness2 = roughness * roughness;
   float A = 1.0 - 0.5 * (roughness2 / (roughness2 + 0.33));
   float B = 0.45 * (roughness2 / (roughness2 + 0.09));
 
-  vec3 v_perp = normalize(viewDir - normal * VdotN);
-  vec3 l_perp = normalize(lightDir - normal * LdotN);
-  float cosPhi = max(dot(v_perp, l_perp), 0.0);
+  // This block replaces all the acos(), tan(), and normalize() danger zones
+  float LdotV = dot(lightDir, viewDir);
+  float s = LdotV - LdotN * VdotN;
+  float t = mix(1.0, max(LdotN, VdotN), step(0.0, s));
 
-  return albedo * (A + B * cosPhi * sin(alpha) * tan(beta)) / 3.14159;
+  return albedo * LdotN * (A + B * s / t) / 3.14159;
 }
 
 void main() {
@@ -64,7 +65,7 @@ void main() {
   bool useRoughness = (push.textureFlags & FLAG_ROUGHNESS) != 0u;
   bool useAO        = (push.textureFlags & FLAG_AO) != 0u;
 
-  vec3 V = normalize(-inWorldPos);
+  vec3 V = normalize(push.cameraPos - inWorldPos);
   vec3 lightDir = normalize(push.sunDir);
   vec3 lightColor = push.sunColor.xyz;
 

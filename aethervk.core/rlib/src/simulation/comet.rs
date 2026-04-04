@@ -536,6 +536,8 @@ pub struct PushConstants {
   pub sun_dir: [f32; 3],
   pub texture_flags: TextureFlags,
   pub sun_color: [f32; 4],
+  pub camera_pos: [f32; 3],
+  pub _unused: u32
 }
 
 #[repr(C)]
