@@ -63,6 +63,8 @@ mod resources;
 mod shader_manager;
 mod swapchain;
 
+// TODO: diminish push constant from 160 bytes to 128 bytes
+
 #[cfg(debug_assertions)]
 static ARCHETYPE_CREATED: spin::Once<spin::Mutex<bool>> = Once::new();
 
@@ -1061,7 +1063,14 @@ impl<'a> Device<'a> {
       };
 
       vert_path = assets_dir.join("physical_mesh.vert.spv");
-      frag_path = assets_dir.join("physical_mesh.frag.spv");
+      #[cfg(feature = "physical_mesh_debug_normals")]
+      {
+        frag_path = assets_dir.join("physical_mesh_debug_normals.frag.spv");
+      }
+      #[cfg(not(feature = "physical_mesh_debug_normals"))]
+      {
+        frag_path = assets_dir.join("physical_mesh.frag.spv");
+      }
     }
     #[cfg(not(debug_assertions))]
     {
