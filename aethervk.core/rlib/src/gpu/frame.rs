@@ -159,7 +159,6 @@ fn do_draw_call(
   cmd_buffer: super::CommandBufferHandle,
   draw_call: &DrawCall,
 ) -> Result<(), crate::types::GpuError> {
-
   // 2. Bind pipeline and buffers
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
   device.bind_buffers(cmd_buffer, draw_call.pipeline, draw_call.buffers)?;
@@ -179,9 +178,10 @@ fn do_draw_call(
     sun_dir: [0.0, -1.0, 0.0],
     texture_flags: draw_call.texture_flags,
     sun_color: [1.0, 1.0, 1.0, 1.0],
+    camera_pos: camera.0.position.into(),
+    _unused: 0,
   };
   device.push_constants(cmd_buffer, &push_constants)?;
   device.draw_indexed(cmd_buffer, draw_call.index_count)?;
   Ok(())
 }
-

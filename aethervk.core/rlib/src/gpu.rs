@@ -85,7 +85,15 @@ pub struct Viewport {
   pub max_depth: f32,
 }
 
+#[repr(u32)]
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub enum NativeGpuProperty {
+  VulkanMetalDeviceId = 0,
+}
+
 pub trait RenderDevice: Send + Sync {
+  fn get_native_prop(&self, prop: NativeGpuProperty) -> Option<*mut core::ffi::c_void>;
+
   #[cfg(debug_assertions)]
   fn print_info(&self) -> String;
 

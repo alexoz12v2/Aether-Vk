@@ -74,7 +74,7 @@
          <EnvironmentVariable
             key = "MVK_CONFIG_DEBUG"
             value = "1"
-            isEnabled = "YES">
+            isEnabled = "NO">
          </EnvironmentVariable>
          <EnvironmentVariable
             key = "VULKAN_SDK"
@@ -84,12 +84,12 @@
          <EnvironmentVariable
             key = "MVK_DEBUG"
             value = "1"
-            isEnabled = "YES">
+            isEnabled = "NO">
          </EnvironmentVariable>
          <EnvironmentVariable
             key = "MVK_CONFIG_TRACE_VULKAN_CALLS"
             value = "1"
-            isEnabled = "YES">
+            isEnabled = "NO">
          </EnvironmentVariable>
       </EnvironmentVariables>
    </LaunchAction>
