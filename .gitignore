@@ -869,3 +869,6 @@ avk__*
 
 # utility to try stuff
 avk-ignored/
+
+# gemini config
+.gemini/

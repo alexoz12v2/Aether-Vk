@@ -436,19 +436,26 @@ where
     let sin_low = self.low.sin();
     let sin_high = self.high.sin();
     let (mut min, mut max) = if sin_low > sin_high {
-        (sin_high, sin_low)
+      (sin_high, sin_low)
     } else {
-        (sin_low, sin_high)
+      (sin_low, sin_high)
     };
 
-    if (self.low / (T::from_i32(2) * T::PI) - T::from_f32(0.25)).floor() < (self.high / (T::from_i32(2) * T::PI) - T::from_f32(0.25)).floor() {
-        max = T::one();
+    if (self.low / (T::from_i32(2) * T::PI) - T::from_f32(0.25)).floor()
+      < (self.high / (T::from_i32(2) * T::PI) - T::from_f32(0.25)).floor()
+    {
+      max = T::one();
     }
-    if (self.low / (T::from_i32(2) * T::PI) - T::from_f32(0.75)).floor() < (self.high / (T::from_i32(2) * T::PI) - T::from_f32(0.75)).floor() {
-        min = -T::one();
+    if (self.low / (T::from_i32(2) * T::PI) - T::from_f32(0.75)).floor()
+      < (self.high / (T::from_i32(2) * T::PI) - T::from_f32(0.75)).floor()
+    {
+      min = -T::one();
     }
-    
-    Self { low: min, high: max }
+
+    Self {
+      low: min,
+      high: max,
+    }
   }
 
   fn reciprocal(self) -> Self {
@@ -481,8 +488,15 @@ where
 
   fn floor(self) -> Self {
     Self {
-        low: self.low.floor(),
-        high: self.high.floor(),
+      low: self.low.floor(),
+      high: self.high.floor(),
+    }
+  }
+
+  fn acos(self) -> Self {
+    Self {
+      low: self.low.acos_round_down(false),
+      high: self.high.acos_round_up(false),
     }
   }
 }

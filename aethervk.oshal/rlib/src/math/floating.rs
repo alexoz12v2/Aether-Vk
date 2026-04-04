@@ -281,6 +281,22 @@ pub trait FloatOps: Sized + super::FloatLike {
     self.ln().next_float_down(allow_subnormal)
   }
 
+  fn acos_round_down(self, allow_subnormal: bool) -> Self
+  where
+    Self: FloatBits,
+    <Self as BitsStorage>::Bits: MulAddIdentity,
+  {
+    self.acos().next_float_down(allow_subnormal)
+  }
+
+  fn acos_round_up(self, allow_subnormal: bool) -> Self
+  where
+    Self: FloatBits,
+    <Self as BitsStorage>::Bits: MulAddIdentity,
+  {
+    self.acos().next_float_up(allow_subnormal)
+  }
+
   // --------------------- Helpers ---------------------------------------
   fn gamma(n: i32) -> Self {
     let n = Self::from_i32(n);

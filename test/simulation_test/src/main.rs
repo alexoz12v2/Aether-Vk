@@ -10,7 +10,11 @@ use aethervk_core_rlib::{
 use aethervk_oshal_rlib::math::{
   matrix::{mat4::Mat4x4f32, Matrix4, SquareMatrix},
   quaternion::Quaternion,
-  vector::{vec3::Vec3f32, vec4::Vec4f32, Vector3},
+  vector::{
+    vec3::Vec3f32,
+    vec4::{Vec4f32, Quat},
+    Vector, Vector3, Vector4,
+  },
 };
 use heapless::index_map::FnvIndexMap;
 #[cfg(target_os = "macos")]
@@ -281,7 +285,7 @@ fn main() {
     println!("You passed {} arguments", args.len());
     if args.len() > 1 {
       let _ = args.next().unwrap(); // discard useless exe path
-      // interpret first argument as a custom asset path
+                                    // interpret first argument as a custom asset path
       std::path::PathBuf::from(args.next().unwrap()).join("Comet.glb")
     } else {
       let mut home_dir = std::env::current_exe().unwrap();
@@ -310,7 +314,7 @@ fn main() {
       root_entity,
       TransformComponent {
         position: Vec3f32::from_components(0.0, 0.0, 0.0),
-        rotation: <Vec4f32 as Quaternion>::identity(),
+        rotation: Quat::identity(),
         scale: Vec3f32::from_components(1.0, 1.0, 1.0),
       },
     )
@@ -322,7 +326,7 @@ fn main() {
       mesh_entity,
       TransformComponent {
         position: Vec3f32::from_components(0.0, 0.0, 0.0),
-        rotation: <Vec4f32 as Quaternion>::identity(),
+        rotation: Quat::identity(),
         scale: Vec3f32::from_components(1.0, 1.0, 1.0),
       },
     )
@@ -338,7 +342,7 @@ fn main() {
       camera_entity,
       TransformComponent {
         position: Vec3f32::from_components(0.0, 0.0, 5.0),
-        rotation: <Vec4f32 as Quaternion>::identity(),
+        rotation: Quat::identity(),
         scale: Vec3f32::from_components(1.0, 1.0, 1.0),
       },
     )
@@ -481,10 +485,10 @@ fn main() {
               println!("[{:.2?}] Finished Resized event.", start_time.elapsed());
             }
             WindowEvent::RedrawRequested => {
-              println!(
-                "[{:.2?}] Handling RedrawRequested event.",
-                start_time.elapsed()
-              );
+              // println!(
+              //   "[{:.2?}] Handling RedrawRequested event.",
+              //   start_time.elapsed()
+              // );
 
               // --- 1. Data Collection Phase ---
               // Traverse the scene to get all renderable items without holding any GPU locks.
@@ -525,7 +529,7 @@ fn main() {
               // Fetch camera data
               let mut camera_transform = TransformComponent {
                 position: Vec3f32::from_components(0.0, 0.0, 0.0),
-                rotation: <Vec4f32 as Quaternion>::identity(),
+                rotation: Quat::identity(),
                 scale: Vec3f32::from_components(1.0, 1.0, 1.0),
               };
               let mut camera_component = CameraComponent {
@@ -563,39 +567,61 @@ fn main() {
         } if right_mouse_button_down => {
           let state = &mut app_state;
 
-          // Accumulate the raw angles (store these fields in AppState!)
+          // 1. Check raw delta. Extremely large numbers or NaNs here will poison everything else.
+          println!("[DIAGNOSTIC] Mouse delta: {:?}", delta);
+
           let rotation_speed = 0.005;
           state.yaw -= delta.0 as f32 * rotation_speed;
           state.pitch -= delta.1 as f32 * rotation_speed;
 
-          // Optional: Clamp pitch to avoid gimbal lock (e.g., -89 to +89 degrees)
           state.pitch = state.pitch.clamp(-1.55, 1.55);
+
+          // 2. Check the accumulated state. If yaw/pitch are NaN, the quaternions will be corrupted.
+          println!(
+            "[DIAGNOSTIC] Angles - yaw: {}, pitch: {}",
+            state.yaw, state.pitch
+          );
 
           let scene_guard = state.scene.read().unwrap();
           scene_guard.with_component_mut(
             state.camera_entity,
             |camera_transform: &mut TransformComponent| {
-              // Rebuild the quaternion from scratch every frame to prevent drift and roll
-              let rotation_y = <Vec4f32 as Quaternion>::from_axis_angle(
-                Vec3f32::from_components(0.0, 1.0, 0.0),
-                state.yaw,
-              );
-              let rotation_x = <Vec4f32 as Quaternion>::from_axis_angle(
-                Vec3f32::from_components(1.0, 0.0, 0.0), // Local right is simply global X before Y rotation
-                state.pitch,
-              );
+              let rotation_y =
+                Quat::from_axis_angle(Vec3f32::from_components(0.0, 1.0, 0.0), state.yaw);
+              let rotation_x =
+                Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
 
-              // Apply Y first, then X
+              // 3. Verify the individual quaternions. They should have a length of exactly 1.0.
+              println!("[DIAGNOSTIC] Quat Y: {:?}", rotation_y);
+              println!("[DIAGNOSTIC] Quat X: {:?}", rotation_x);
+
               let new_rotation = rotation_y * rotation_x;
 
-              // Just to be completely safe, normalize it!
-              // camera_transform.rotation = new_rotation.normalized(); // use your math library's equivalent
+              // 4. Verify combined quaternion. If quat_mul is flawed, this might be all zeros or NaNs.
+              println!("[DIAGNOSTIC] Combined Quat: {:?}", new_rotation);
+
               camera_transform.rotation = new_rotation;
 
-              let new_forward: Vec4f32 =
-                new_rotation * Vec3f32::from_components(0.0, 0.0, -1.0).to_vec4::<Vec4f32>(0.0);
-              camera_transform.position =
-                camera_focus_point - new_forward.vector_part() * camera_distance;
+              let forward = Vec3f32::from_components(0.0, 0.0, -1.0);
+              let new_forward = new_rotation.rotate_vector(forward);
+
+              // 5. Verify the rotated forward vector. Should be a normalized direction vector.
+              println!("[DIAGNOSTIC] New Forward: {:?}", new_forward);
+
+              // 6. Check external variables that aren't defined in this block.
+              // If distance is 0, or focus point is NaN, your position breaks.
+              println!(
+                "[DIAGNOSTIC] Focus Point: {:?}, Distance: {}",
+                camera_focus_point, camera_distance
+              );
+
+              camera_transform.position = camera_focus_point - new_forward * camera_distance;
+
+              // 7. Verify final position. If this is (0,0,0) and focus point is (0,0,0), your view matrix might look at itself.
+              println!(
+                "[DIAGNOSTIC] Final Camera Position: {:?}",
+                camera_transform.position
+              );
             },
           );
 
@@ -620,10 +646,9 @@ fn main() {
           scene_guard.with_component_mut(
             state.camera_entity,
             |camera_transform: &mut TransformComponent| {
-              let forward: Vec4f32 = camera_transform.rotation
-                * Vec3f32::from_components(0.0, 0.0, -1.0).to_vec4::<Vec4f32>(0.0);
-              camera_transform.position =
-                camera_focus_point - forward.vector_part() * camera_distance;
+              let forward = Vec3f32::from_components(0.0, 0.0, -1.0);
+              let new_forward = camera_transform.rotation.rotate_vector(forward);
+              camera_transform.position = camera_focus_point - new_forward * camera_distance;
             },
           );
 
