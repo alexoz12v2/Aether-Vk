@@ -267,11 +267,37 @@ impl Vector3 for Vec3f32 {
     unsafe {
       let a = self.0.simd;
       let b = rhs.0.simd;
-      let a_yzx = vextq_f32(a, a, 1);
-      let a_zxy = vextq_f32(a, a, 2);
-      let b_yzx = vextq_f32(b, b, 1);
-      let b_zxy = vextq_f32(b, b, 2);
-      let res = vsubq_f32(vmulq_f32(a_yzx, b_zxy), vmulq_f32(a_zxy, b_yzx));
+
+      // We map bytes to shuffle [x, y, z, w] into [y, z, x, w]
+      // Each f32 is 4 bytes.
+      let mask_yzxw: uint8x16_t = core::mem::transmute([
+        4u8, 5, 6, 7, // y
+        8, 9, 10, 11, // z
+        0, 1, 2, 3, // x
+        12, 13, 14, 15, // w
+      ]);
+
+      // We map bytes to shuffle [x, y, z, w] into [z, x, y, w]
+      let mask_zxyw: uint8x16_t = core::mem::transmute([
+        8u8, 9, 10, 11, // z
+        0, 1, 2, 3, // x
+        4, 5, 6, 7, // y
+        12, 13, 14, 15, // w
+      ]);
+
+      // Cast f32 vectors to u8 vectors for the table lookup
+      let a_bytes = vreinterpretq_u8_f32(a);
+      let b_bytes = vreinterpretq_u8_f32(b);
+
+      // Perform the shuffles
+      let a_yzxw = vreinterpretq_f32_u8(vqtbl1q_u8(a_bytes, mask_yzxw));
+      let b_zxyw = vreinterpretq_f32_u8(vqtbl1q_u8(b_bytes, mask_zxyw));
+
+      let a_zxyw = vreinterpretq_f32_u8(vqtbl1q_u8(a_bytes, mask_zxyw));
+      let b_yzxw = vreinterpretq_f32_u8(vqtbl1q_u8(b_bytes, mask_yzxw));
+
+      // Calculate cross product: (a_yzxw * b_zxyw) - (a_zxyw * b_yzxw)
+      let res = vsubq_f32(vmulq_f32(a_yzxw, b_zxyw), vmulq_f32(a_zxyw, b_yzxw));
 
       Self(Vec4f32 { simd: res })
     }

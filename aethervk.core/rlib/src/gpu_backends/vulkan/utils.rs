@@ -23,7 +23,6 @@ use windows::{
   Win32::System::LibraryLoader::{LoadLibraryExW, GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32},
   core::PCSTR,
 };
-
 use crate::{
   gpu::{DeviceAdditionalParams, OpaqueNativeHandleInfo},
   types::{EngineError, EngineResult, GpuError, GpuResult},
