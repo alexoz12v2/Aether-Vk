@@ -15,8 +15,9 @@ use crate::{
 //   more internal classes to make it more manageable)
 // - Fix resize, right now it panics cause it fills the heapless vectors
 
+use alloc::vec::Vec;
+
 pub(super) const MAX_FRAMES_IN_FLIGHT: usize = 8;
-const SWAPCHAIN_FRAME_DISCARDS_BEFORE_SWEEP: usize = 3 * 3; // give 3 times the size as initially we might get resized without presenting
 
 /// Handles and data relative to an image acquired through a swapchain
 /// These data are ephimeral and are associated to a swapchain. Initially, there's
@@ -44,14 +45,9 @@ struct SwapchainImage {
 /// Mechanism to handle delayed (on next acquire attempt after N discards)
 #[derive(Clone)]
 struct FrameDiscard {
-  discarded_swapchains:
-    heapless::Vec<NonZeroHandle<vk::SwapchainKHR>, { SWAPCHAIN_FRAME_DISCARDS_BEFORE_SWEEP + 1 }>,
-  discarded_semaphores: heapless::Vec<
-    NonZeroHandle<vk::Semaphore>,
-    { 2 * (SWAPCHAIN_FRAME_DISCARDS_BEFORE_SWEEP + 1) },
-  >,
-  discarded_image_views:
-    heapless::Vec<NonZeroHandle<vk::ImageView>, { SWAPCHAIN_FRAME_DISCARDS_BEFORE_SWEEP + 1 }>,
+  discarded_swapchains: Vec<NonZeroHandle<vk::SwapchainKHR>>,
+  discarded_semaphores: Vec<NonZeroHandle<vk::Semaphore>>,
+  discarded_image_views: Vec<NonZeroHandle<vk::ImageView>>,
 }
 
 #[derive(Clone)]
@@ -127,12 +123,15 @@ impl SwapchainCleanable for FrameDiscard {
     for &swapchain in self.discarded_swapchains.iter() {
       unsafe { swapchain_device.destroy_swapchain(swapchain.get(), None) };
     }
+    self.discarded_swapchains.clear();
     for &sem in self.discarded_semaphores.iter() {
       unsafe { device.destroy_semaphore(sem.get(), None) };
     }
+    self.discarded_semaphores.clear();
     for &image_view in self.discarded_image_views.iter() {
       unsafe { device.destroy_image_view(image_view.get(), None) };
     }
+    self.discarded_image_views.clear();
   }
 }
 
@@ -278,22 +277,18 @@ impl PresentationState {
 
     if self.frames.len() > self.current_frame {
       let frame_discard = &mut self.frame_discards[self.current_frame];
-      // flush frame discard
-      frame_discard.flush(&self.swapchain_device, &device);
       // discard image resources
       if !self.images.is_empty() {
-        unsafe { frame_discard.discard_swapchain_images(&mut self.images, &mut frame_fences) };
+        frame_discard.discard_swapchain_images(&mut self.images);
         self.images.clear();
       }
       // discard decommissioned swapchain
       unsafe { frame_discard.discard_decommissioned_swapchain(swapchain) };
       // discard all frame acquire semaphores
-      unsafe {
-        frame_discard.discard_swapchain_frame_keep_fences(&mut self.frames);
-      }
+      frame_discard.discard_swapchain_frame_keep_fences(&mut self.frames);
     }
     // refresh image and frame data
-    core::mem::swap(&mut self.images, &mut swapchain_images);
+    self.images = swapchain_images;
 
     if self.images.len() > self.frames.len() {
       let _ = self.frames.resize_default(self.images.len());
@@ -439,9 +434,7 @@ impl PresentationState {
       unsafe {
         fences.push_unchecked(if i < self.frames.len() {
           let frame = self.frames.get_unchecked(i);
-          let image = self.images.get_unchecked(i); // Safety: images_len <= frame_len
-          debug_assert!(frame.acquire_semaphore.is_none());
-          if frame.submission_fence.is_none() && image.submission_fence.is_none() {
+          if frame.submission_fence.is_none() {
             device.create_fence(&fence_create_info, None)?
           } else {
             vk::Fence::null()
@@ -762,6 +755,9 @@ impl PresentationState {
       }
     }
 
+    // Clean up discarded resources for this frame, since its previous submission is now fully complete
+    self.frame_discards[self.current_frame].cleanup(&self.swapchain_device, device);
+
     // 2. Reset submission hence
     unsafe { device.reset_fences(fences) }?;
 
@@ -891,23 +887,15 @@ impl PresentationState {
 }
 
 impl FrameDiscard {
-  /// Safety: regular draining must be guaranteed to never let the heapless buffers be full
-  unsafe fn discard_swapchain_images(
-    &mut self,
-    swapchain_images: &mut [SwapchainImage],
-    fences: &mut [vk::Fence],
-  ) {
-    debug_assert!(!self.discarded_swapchains.is_full());
-    debug_assert!(!self.discarded_semaphores.is_full());
-    debug_assert!(!self.discarded_image_views.is_full());
+  fn discard_swapchain_images(&mut self, swapchain_images: &mut [SwapchainImage]) {
     for swapchain_image in swapchain_images {
       unsafe {
         self
           .discarded_image_views
-          .push_unchecked(swapchain_image.image_view);
+          .push(swapchain_image.image_view);
         self
           .discarded_semaphores
-          .push_unchecked(swapchain_image.present_semaphore);
+          .push(swapchain_image.present_semaphore);
         debug_assert!(
           !(swapchain_image.submission_fence.is_some()
             ^ swapchain_image.acquire_semaphore.is_some())
@@ -917,27 +905,16 @@ impl FrameDiscard {
           // for steal. That frame is the one associated with the current image
           self
             .discarded_semaphores
-            .push_unchecked(swapchain_image.acquire_semaphore.unwrap_unchecked());
-          // find first non null fence and give your spot to it
-          let f = fences.iter_mut().find(|f| f.is_null());
-          *f.unwrap_unchecked() = swapchain_image
-            .submission_fence
-            .take()
-            .unwrap_unchecked()
-            .get();
+            .push(swapchain_image.acquire_semaphore.unwrap_unchecked());
         }
       };
     }
   }
 
-  /// Safety: regular draining must be guaranteed to never let the heapless buffers be full
-  unsafe fn discard_swapchain_frame_keep_fences(
+  fn discard_swapchain_frame_keep_fences(
     &mut self,
     swapchain_frames: &mut [SwapchainFrame],
   ) {
-    debug_assert!(!self.discarded_swapchains.is_full());
-    debug_assert!(!self.discarded_semaphores.is_full());
-    debug_assert!(!self.discarded_image_views.is_full());
     for swapchain_frame in swapchain_frames {
       unsafe {
         debug_assert!(
@@ -946,27 +923,17 @@ impl FrameDiscard {
         );
 
         if let Some(acquire_semaphore) = swapchain_frame.acquire_semaphore.take() {
-          self.discarded_semaphores.push_unchecked(acquire_semaphore);
+          self.discarded_semaphores.push(acquire_semaphore);
         }
       }
     }
   }
 
-  /// Safety: regular draining must be guaranteed to never let the heapless buffers be full
   unsafe fn discard_decommissioned_swapchain(
     &mut self,
     swapchain: NonZeroHandle<vk::SwapchainKHR>,
   ) {
-    debug_assert!(!self.discarded_swapchains.is_full());
-    unsafe {
-      self.discarded_swapchains.push_unchecked(swapchain);
-    }
-  }
-
-  fn flush(&mut self, swapchain_device: &ash::khr::swapchain::Device, device: &ash::Device) {
-    if self.discarded_swapchains.len() >= SWAPCHAIN_FRAME_DISCARDS_BEFORE_SWEEP {
-      self.cleanup(swapchain_device, device);
-    }
+    self.discarded_swapchains.push(swapchain);
   }
 }
 
@@ -982,9 +949,9 @@ impl Default for SwapchainFrame {
 impl Default for FrameDiscard {
   fn default() -> Self {
     Self {
-      discarded_swapchains: Default::default(),
-      discarded_semaphores: Default::default(),
-      discarded_image_views: Default::default(),
+      discarded_swapchains: Vec::new(),
+      discarded_semaphores: Vec::new(),
+      discarded_image_views: Vec::new(),
     }
   }
 }
