@@ -70,87 +70,147 @@ struct RenderPayloadData<'a> {
   scene: &'a Scene,
 }
 
+#[cfg(target_os = "macos")]
+unsafe fn setup_metal_layer(
+  window: &Window,
+  device: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>,
+) -> objc2::rc::Retained<objc2_quartz_core::CAMetalLayer> {
+  use objc2_app_kit::NSView;
+  use objc2_quartz_core::CAMetalLayer;
+  use objc2_metal::MTLPixelFormat;
+  use objc2_core_foundation::CGSize;
+
+  // 1. Get the NSView from winit
+  let raw_handle = window.window_handle().unwrap().as_raw();
+  let view_ptr = match raw_handle {
+    RawWindowHandle::AppKit(w) => w.ns_view.as_ptr(),
+    _ => panic!("Expected an AppKit window handle"),
+  };
+
+  // Cast the pointer to a objc2 NSView reference (not reatained)
+  let view: &NSView = unsafe { (view_ptr as *const NSView).as_ref() }.unwrap();
+
+  // 2. Create and configure the CAMetalLayer
+  let layer = CAMetalLayer::new();
+  layer.setDevice(Some(device));
+
+  // Set the pixel format explicitly
+  layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm_sRGB);
+  layer.setPresentsWithTransaction(false);
+
+  // Set initial drawable size exactly to window's
+  let size = window.inner_size();
+  layer.setDrawableSize(objc2_core_foundation::CGSize {
+    width: size.width as f64,
+    height: size.height as f64,
+  });
+
+  // set the contents to scale to support high-DPI Retina Displays
+  let scale_factor = window.scale_factor();
+  layer.setContentsScale(scale_factor);
+
+  // attach to NSView
+  // CAMetalLayer derefs to CALayer automatically
+  view.setLayer(Some(&layer));
+  view.setWantsLayer(true);
+
+  println!(
+    "Created CAMetalLayer at address {:?}",
+    AsRef::<objc2_quartz_core::CALayer>::as_ref(&layer)
+  );
+
+  layer
+}
+
+struct WindowPlatformData {
+  #[cfg(target_os = "macos")]
+  metal_layer: objc2::rc::Retained<objc2_quartz_core::CAMetalLayer>,
+}
+
+impl WindowPlatformData {
+  #[cfg(target_os = "macos")]
+  fn new_macos(metal_layer: objc2::rc::Retained<objc2_quartz_core::CAMetalLayer>) -> Self {
+    Self { metal_layer }
+  }
+}
+
+struct WindowExtractHandlesParams {
+  #[cfg(target_os = "macos")]
+  mtl_device: objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>>,
+}
+
+impl WindowExtractHandlesParams {
+  #[cfg(target_os = "macos")]
+  fn new_macos(
+    mtl_device: objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>>,
+  ) -> Self {
+    Self { mtl_device }
+  }
+}
+
 /// Utility to extract native handles from [`winit::Window`]
-fn extract_native_handles(window: &Window) -> OpaqueNativeHandleInfo {
+fn extract_native_handles(
+  window: &Window,
+  _params: &WindowExtractHandlesParams,
+) -> (OpaqueNativeHandleInfo, WindowPlatformData) {
   // extract raw handles from winit window
   let window_handle = window.window_handle().unwrap().as_raw();
   let display_handle = window.display_handle().unwrap().as_raw();
 
   match (window_handle, display_handle) {
     #[cfg(windows)]
-    (RawWindowHandle::Win32(w), _) => OpaqueNativeHandleInfo {
-      ptr0: w.hinstance.map(|h| h.get()).unwrap_or(0) as *mut ffi::c_void,
-      ptr1: w.hwnd.get() as *mut ffi::c_void,
-    },
+    (RawWindowHandle::Win32(w), _) => (
+      OpaqueNativeHandleInfo {
+        ptr0: w.hinstance.map(|h| h.get()).unwrap_or(0) as *mut ffi::c_void,
+        ptr1: w.hwnd.get() as *mut ffi::c_void,
+      },
+      WindowPlatformData,
+    ),
 
     #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
-    (RawWindowHandle::Wayland(w), RawDisplayHandle::Wayland(d)) => OpaqueNativeHandleInfo {
-      ptr0: d.display.as_ptr() as *mut ffi::c_void,
-      ptr1: w.surface.as_ptr() as *mut ffi::c_void,
-    },
+    (RawWindowHandle::Wayland(w), RawDisplayHandle::Wayland(d)) => (
+      OpaqueNativeHandleInfo {
+        ptr0: d.display.as_ptr() as *mut ffi::c_void,
+        ptr1: w.surface.as_ptr() as *mut ffi::c_void,
+      },
+      WindowPlatformData,
+    ),
 
     #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
-    (RawWindowHandle::Xlib(w), RawDisplayHandle::Xlib(d)) => OpaqueNativeHandleInfo {
-      ptr0: d
-        .display
-        .map(|d| d.as_ptr())
-        .unwrap_or(std::ptr::null_mut()) as *mut ffi::c_void,
-      ptr1: w.window as usize as *mut ffi::c_void,
-    },
+    (RawWindowHandle::Xlib(w), RawDisplayHandle::Xlib(d)) => (
+      OpaqueNativeHandleInfo {
+        ptr0: d
+          .display
+          .map(|d| d.as_ptr())
+          .unwrap_or(std::ptr::null_mut()) as *mut ffi::c_void,
+        ptr1: w.window as usize as *mut ffi::c_void,
+      },
+      WindowPlatformData,
+    ),
 
     #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
-    (RawWindowHandle::Xcb(w), RawDisplayHandle::Xcb(d)) => OpaqueNativeHandleInfo {
-      ptr0: d
-        .connection
-        .map(|c| c.as_ptr())
-        .unwrap_or(std::ptr::null_mut()) as *mut ffi::c_void,
-      ptr1: w.window.get() as usize as *mut ffi::c_void,
-    },
+    (RawWindowHandle::Xcb(w), RawDisplayHandle::Xcb(d)) => (
+      OpaqueNativeHandleInfo {
+        ptr0: d
+          .connection
+          .map(|c| c.as_ptr())
+          .unwrap_or(std::ptr::null_mut()) as *mut ffi::c_void,
+        ptr1: w.window.get() as usize as *mut ffi::c_void,
+      },
+      WindowPlatformData,
+    ),
 
     #[cfg(target_os = "macos")]
     (RawWindowHandle::AppKit(w), _) => {
-      use core::ffi;
+      let layer = unsafe { setup_metal_layer(window, &_params.mtl_device) };
 
-      use objc::{class, msg_send, sel, sel_impl};
-      // raw-window-handle gives us a NSView
-      let ns_view = w.ns_view.as_ptr() as *mut objc::runtime::Object;
-      // we must use Objcetive-C to create a CAMetalLayer and attach it
-      let layer: *mut ffi::c_void = unsafe {
-        // 1. Check if winit already gave the view a CAMetalLayer
-        let metal_layer_class = class!(CAMetalLayer);
-        let current_layer: *mut objc::runtime::Object = msg_send![ns_view, layer];
-        let is_metal_layer = if current_layer.is_null() {
-          false
-        } else {
-          msg_send![current_layer, isKindOfClass: metal_layer_class]
-        };
-
-        if is_metal_layer {
-          current_layer as *mut ffi::c_void
-        } else {
-          // 2. `id layer = [CAMetalLayer layer];` with this, layer doesn't get a +1 to its retail count
-          // that means we release the object as soon as Object's drop is called. Hence use new to prevent
-          // premature destruction of the Objective-C object
-          let new_layer: *mut objc::runtime::Object = msg_send![metal_layer_class, new];
-
-          // 3. Set the layer BEFORE wantsLayer to YES t ocreate a layer-hosting view
-          // [view setLayer: layer];
-          let () = msg_send![ns_view, setLayer: new_layer];
-          // [view setWantsLayer: YES];
-          let () = msg_send![ns_view, setWantsLayer: true];
-
-          // 4. Now the view retains the layer (+2 on retain count). We can release our manual `new`
-          // so that we don't leak memory
-          let () = msg_send![new_layer, release];
-
-          new_layer as *mut ffi::c_void
-        }
+      let info = OpaqueNativeHandleInfo {
+        ptr0: core::ptr::from_ref::<objc2_quartz_core::CALayer>(layer.as_ref())
+          as *mut core::ffi::c_void,
+        ptr1: std::ptr::null_mut(),
       };
 
-      OpaqueNativeHandleInfo {
-        ptr0: layer,
-        ptr1: std::ptr::null_mut(),
-      }
+      (info, WindowPlatformData::new_macos(layer))
     }
 
     _ => panic!("unsupported platform or handle mismatch"),
@@ -207,7 +267,6 @@ fn main() {
     .with_title("AetherVk Simulation")
     .build(&event_loop)
     .unwrap();
-  let native_handles = extract_native_handles(&window);
 
   let runtime_params = Box::leak(Box::new(RuntimeParams {
     render_backend_params: FnvIndexMap::new(),
@@ -223,6 +282,42 @@ fn main() {
     .take_mut_and(|context| Ok(context.init_device(0, &additional_params)?))
     .unwrap()
     .unwrap();
+  let params: WindowExtractHandlesParams;
+  #[cfg(not(target_os = "macos"))]
+  {
+    params = WindowExtractHandlesParams;
+  }
+  #[cfg(target_os = "macos")]
+  {
+    let mtl_device_id = render_frontend
+      .read()
+      .unwrap()
+      .take_and(|context| {
+        let mut mtl_device_id = core::ptr::null::<core::ffi::c_void>();
+        context.deref_device_and(
+          render_device_handle,
+          core::ptr::from_mut(&mut mtl_device_id) as *mut _,
+          |device, ptr_dev_id| {
+            let ptr = ptr_dev_id as *mut *const core::ffi::c_void;
+            unsafe {
+              *ptr = device
+                .get_native_prop(gpu::NativeGpuProperty::VulkanMetalDeviceId)
+                .unwrap();
+            };
+            Ok(())
+          },
+        );
+        let dev_ptr =
+          mtl_device_id as *mut objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>;
+        // Safely retain the object (drop of retained will ensure we don't leak it)
+        let metal_device = unsafe { objc2::rc::Retained::retain(dev_ptr).unwrap() };
+        Ok(metal_device)
+      })
+      .unwrap()
+      .unwrap();
+    params = WindowExtractHandlesParams::new_macos(mtl_device_id);
+  }
+  let (native_handles, window_info) = extract_native_handles(&window, &params);
 
   let presentation_engine = {
     let params = gpu::PresentationEngineParams {
@@ -285,7 +380,7 @@ fn main() {
     println!("You passed {} arguments", args.len());
     if args.len() > 1 {
       let _ = args.next().unwrap(); // discard useless exe path
-                                    // interpret first argument as a custom asset path
+      // interpret first argument as a custom asset path
       std::path::PathBuf::from(args.next().unwrap()).join("Comet.glb")
     } else {
       let mut home_dir = std::env::current_exe().unwrap();
@@ -438,51 +533,26 @@ fn main() {
               // 2. Update the CAMetalLayer bounds and scale (macOS specific)
               #[cfg(target_os = "macos")]
               {
-                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                use objc::{msg_send, sel, sel_impl};
-
-                if let Ok(handle) = state.window.window_handle() {
-                  if let RawWindowHandle::AppKit(w) = handle.as_raw() {
-                    let ns_view = w.ns_view.as_ptr() as *mut objc::runtime::Object;
-                    unsafe {
-                      // Fetch the CAMetalLayer we attached earlier
-                      let layer: *mut objc::runtime::Object = msg_send![ns_view, layer];
-
-                      if !layer.is_null() {
-                        let scale_factor = state.window.scale_factor();
-
-                        // AppKit bounds are in logical points, NOT physical pixels.
-                        let logical_width = physical_size.width as f64 / scale_factor;
-                        let logical_height = physical_size.height as f64 / scale_factor;
-
-                        // Define standard 64-bit CoreGraphics CGRect memory layout
-                        #[repr(C)]
-                        struct CGRect {
-                          x: f64,
-                          y: f64,
-                          width: f64,
-                          height: f64,
-                        }
-
-                        let bounds = CGRect {
-                          x: 0.0,
-                          y: 0.0,
-                          width: logical_width,
-                          height: logical_height,
-                        };
-
-                        // Apply the new bounds and Retina scale factor
-                        let _: () = msg_send![layer, setBounds: bounds];
-                        let _: () = msg_send![layer, setContentsScale: scale_factor as f64];
-                      }
-                    }
-                  }
-                }
+                window_info
+                  .metal_layer
+                  .setDrawableSize(objc2_core_foundation::CGSize {
+                    width: physical_size.width as f64,
+                    height: physical_size.height as f64,
+                  });
               }
 
               generation.fetch_add(1, atomic::Ordering::Relaxed);
               state.window.request_redraw();
               println!("[{:.2?}] Finished Resized event.", start_time.elapsed());
+            }
+            WindowEvent::ScaleFactorChanged {
+              scale_factor,
+              inner_size_writer,
+            } => {
+              #[cfg(target_os = "macos")]
+              {
+                window_info.metal_layer.setContentsScale(scale_factor);
+              }
             }
             WindowEvent::RedrawRequested => {
               // println!(
