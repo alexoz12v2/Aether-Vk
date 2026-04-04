@@ -1083,9 +1083,9 @@ impl ForwardMeshRenderResourceArchetype {
         };
 
         let default_value_bytes = match name {
-          "BASE_ALBEDO_R" => 0.04f32.to_ne_bytes(),
-          "BASE_ALBEDO_G" => 0.04f32.to_ne_bytes(),
-          "BASE_ALBEDO_B" => 0.04f32.to_ne_bytes(),
+          "BASE_ALBEDO_R" => 0.8f32.to_ne_bytes(),
+          "BASE_ALBEDO_G" => 0.8f32.to_ne_bytes(),
+          "BASE_ALBEDO_B" => 0.8f32.to_ne_bytes(),
           "BASE_ROUGHNESS" => 0.9f32.to_ne_bytes(),
           "BASE_AO" => 1.0f32.to_ne_bytes(),
           _ => [0u8; ASSUMED_SPEC_CONST_SIZE],

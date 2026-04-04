@@ -18,6 +18,8 @@ use aethervk_oshal_rlib::math::{
 };
 use heapless::index_map::FnvIndexMap;
 #[cfg(target_os = "macos")]
+use objc2_quartz_core::CAAutoresizingMask;
+#[cfg(target_os = "macos")]
 use raw_window_handle::RawWindowHandle;
 #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
 use raw_window_handle::RawWindowHandle;
@@ -80,44 +82,37 @@ unsafe fn setup_metal_layer(
   use objc2_metal::MTLPixelFormat;
   use objc2_core_foundation::CGSize;
 
-  // 1. Get the NSView from winit
   let raw_handle = window.window_handle().unwrap().as_raw();
   let view_ptr = match raw_handle {
     RawWindowHandle::AppKit(w) => w.ns_view.as_ptr(),
     _ => panic!("Expected an AppKit window handle"),
   };
 
-  // Cast the pointer to a objc2 NSView reference (not reatained)
   let view: &NSView = unsafe { (view_ptr as *const NSView).as_ref() }.unwrap();
 
-  // 2. Create and configure the CAMetalLayer
   let layer = CAMetalLayer::new();
   layer.setDevice(Some(device));
 
-  // Set the pixel format explicitly
-  layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm_sRGB);
+  // REMOVED: setPixelFormat and setDrawableSize. MoltenVK MUST own these.
   layer.setPresentsWithTransaction(false);
 
-  // Set initial drawable size exactly to window's
-  let size = window.inner_size();
-  layer.setDrawableSize(objc2_core_foundation::CGSize {
-    width: size.width as f64,
-    height: size.height as f64,
-  });
-
-  // set the contents to scale to support high-DPI Retina Displays
   let scale_factor = window.scale_factor();
   layer.setContentsScale(scale_factor);
 
-  // attach to NSView
-  // CAMetalLayer derefs to CALayer automatically
+  // --- THE FIX ---
+  // 1. Give the layer a physical UI dimension by matching the View's bounds
+  let view_bounds = view.bounds();
+  layer.setFrame(view_bounds);
+
+  // 2. Ensure the layer resizes when the window/view resizes
+  // CAAutoresizingMask: WidthSizable (1 << 1) | HeightSizable (1 << 4) = 18
+  layer.setAutoresizingMask(
+    CAAutoresizingMask::LayerHeightSizable | CAAutoresizingMask::LayerWidthSizable,
+  );
+
+  // Attach to NSView (creating a layer-hosting view)
   view.setLayer(Some(&layer));
   view.setWantsLayer(true);
-
-  println!(
-    "Created CAMetalLayer at address {:?}",
-    AsRef::<objc2_quartz_core::CALayer>::as_ref(&layer)
-  );
 
   layer
 }

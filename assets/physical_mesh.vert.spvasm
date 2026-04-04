@@ -18,6 +18,8 @@
                OpMemberName %Push 2 "sunDir"
                OpMemberName %Push 3 "textureFlags"
                OpMemberName %Push 4 "sunColor"
+               OpMemberName %Push 5 "cameraPos"
+               OpMemberName %Push 6 "_unused"
                OpName %push "push"
                OpName %inPosition "inPosition"
                OpName %outWorldPos "outWorldPos"
@@ -45,6 +47,8 @@
                OpMemberDecorate %Push 2 Offset 128
                OpMemberDecorate %Push 3 Offset 140
                OpMemberDecorate %Push 4 Offset 144
+               OpMemberDecorate %Push 5 Offset 160
+               OpMemberDecorate %Push 6 Offset 172
                OpDecorate %inPosition Location 0
                OpDecorate %outWorldPos Location 0
                OpDecorate %outUV Location 1
@@ -67,7 +71,7 @@
 %mat4v4float = OpTypeMatrix %v4float 4
     %v3float = OpTypeVector %float 3
        %uint = OpTypeInt 32 0
-       %Push = OpTypeStruct %mat4v4float %mat4v4float %v3float %uint %v4float
+       %Push = OpTypeStruct %mat4v4float %mat4v4float %v3float %uint %v4float %v3float %uint
 %_ptr_PushConstant_Push = OpTypePointer PushConstant %Push
        %push = OpVariable %_ptr_PushConstant_Push PushConstant
         %int = OpTypeInt 32 1
