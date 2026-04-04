@@ -160,9 +160,13 @@ impl Instance {
       .enabled_extension_names(&instance_extensions);
 
     #[cfg(target_vendor = "apple")]
+    let mut export_metal_objects = vk::ExportMetalObjectCreateInfoEXT::default()
+      .export_object_type(vk::ExportMetalObjectTypeFlagsEXT::METAL_DEVICE);
+    #[cfg(target_vendor = "apple")]
     {
-      instance_create_info =
-        instance_create_info.flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR);
+      instance_create_info = instance_create_info
+        .flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR)
+        .push_next(&mut export_metal_objects);
     }
 
     #[cfg(debug_assertions)]

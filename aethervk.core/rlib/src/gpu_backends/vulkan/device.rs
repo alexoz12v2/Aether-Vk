@@ -19,7 +19,7 @@ use oshal::os::debug::{TrackedOption, DropTracker};
 
 use crate::{
   gpu::{
-    AcquireResult, CommandBufferHandle, GpuResourceHandle, PipelineKeyable,
+    AcquireResult, CommandBufferHandle, GpuResourceHandle, NativeGpuProperty, PipelineKeyable,
     PresentationEngineHandle, RenderDevice, RenderableInstanceId, frame::ResourceUploadResult,
   },
   gpu_backends::vulkan::{
@@ -768,6 +768,8 @@ pub(super) struct Device<'a> {
   create_renderpass2: ash::khr::create_renderpass2::Device,
   /// Note: Remove if API_VERSION_1_3
   synchronization2: ash::khr::synchronization2::Device,
+  #[cfg(target_vendor = "apple")]
+  metal_objects: ash::ext::metal_objects::Device,
 
   res: spin::RwLock<DeviceResources>,
 
@@ -992,18 +994,36 @@ impl<'a> Device<'a> {
 
     let create_renderpass2 = ash::khr::create_renderpass2::Device::new(&instance.instance, &device);
     let synchronization2 = ash::khr::synchronization2::Device::new(&instance.instance, &device);
-
-    Ok(Self {
-      query_result: *chosen_physical_device_query_result,
-      device,
-      create_renderpass2,
-      synchronization2,
-      queues,
-      res: res.into(),
-      instance,
-      depth_stencil_format,
-      recording_command_buffers: spin::RwLock::new(hashbrown::HashMap::new()),
-    })
+    #[cfg(target_vendor = "apple")]
+    {
+      let metal_objects = ash::ext::metal_objects::Device::new(&instance.instance, &device);
+      Ok(Self {
+        query_result: *chosen_physical_device_query_result,
+        device,
+        create_renderpass2,
+        synchronization2,
+        metal_objects,
+        queues,
+        res: res.into(),
+        instance,
+        depth_stencil_format,
+        recording_command_buffers: spin::RwLock::new(hashbrown::HashMap::new()),
+      })
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    {
+      Ok(Self {
+        query_result: *chosen_physical_device_query_result,
+        device,
+        create_renderpass2,
+        synchronization2,
+        queues,
+        res: res.into(),
+        instance,
+        depth_stencil_format,
+        recording_command_buffers: spin::RwLock::new(hashbrown::HashMap::new()),
+      })
+    }
   }
 
   pub(super) fn physical_device(&self) -> vk::PhysicalDevice {
@@ -1099,6 +1119,27 @@ impl<'a> Drop for Device<'a> {
 }
 
 impl<'a> RenderDevice for Device<'a> {
+  fn get_native_prop(&self, prop: NativeGpuProperty) -> Option<*mut core::ffi::c_void> {
+    #[cfg(target_vendor = "apple")]
+    {
+      if prop == NativeGpuProperty::VulkanMetalDeviceId {
+        let mut metal_device_info = vk::ExportMetalDeviceInfoEXT::default();
+        let mut metal_objects_info =
+          vk::ExportMetalObjectsInfoEXT::default().push_next(&mut metal_device_info);
+        unsafe {
+          (self.metal_objects.fp().export_metal_objects_ext)(
+            self.device.handle(),
+            core::ptr::from_mut(&mut metal_objects_info),
+          );
+        };
+
+        return Some(metal_device_info.mtl_device);
+      }
+    }
+
+    None
+  }
+
   #[cfg(debug_assertions)]
   fn print_info(&self) -> alloc::string::String {
     use alloc::format;

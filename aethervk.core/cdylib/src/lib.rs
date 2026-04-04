@@ -48,6 +48,11 @@ pub use oshal::*;
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_eh_personality() {}
 
+// Link against `libSystem`, which brings in some macOS native functions needed for jemalloc
+#[cfg(target_os = "macos")]
+#[link(name = "System")]
+unsafe extern "C" {}
+
 // -------------------- Linker Functions ----------------------------
 // https://stackoverflow.com/questions/30700596/with-mach-o-is-there-a-way-to-register-a-function-that-will-run-before-main
 #[used]

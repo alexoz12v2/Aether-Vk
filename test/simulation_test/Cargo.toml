@@ -11,7 +11,24 @@ raw-window-handle = "0.6"
 winit = { version = "0.29", features = ["rwh_06"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc = { version = "0.2.7", default-features = false }
+objc2 = { version = "0.6.4", default-features = false }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
+] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+  "NSResponder",
+  "NSView",
+  "objc2-quartz-core", # set layer function
+] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
+  "CALayer",
+  "CAMetalLayer",
+  "objc2-metal",
+  "objc2-core-foundation", # setDrawableSize for layer
+] }
+objc2-foundation = { version = "0.3.2", default-features = false }
+objc2-metal = { version = "0.3.2", default-features = false, features = [
+  "MTLDevice",
+] }
 
 [features]
 linux_wayland = ["aethervk-core-rlib/linux_wayland"]
