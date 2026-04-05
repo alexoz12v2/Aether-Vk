@@ -18,6 +18,8 @@ use aethervk_oshal_rlib::math::{
 };
 use heapless::index_map::FnvIndexMap;
 #[cfg(target_os = "macos")]
+use objc2_app_kit::NSView;
+#[cfg(target_os = "macos")]
 use objc2_quartz_core::CAAutoresizingMask;
 #[cfg(target_os = "macos")]
 use raw_window_handle::RawWindowHandle;
@@ -45,7 +47,7 @@ use std::{
 };
 use winit::{
   event::{DeviceEvent, ElementState, Event, WindowEvent},
-  event_loop::{ControlFlow, EventLoop},
+  event_loop::{ControlFlow, EventLoop, EventLoopBuilder, EventLoopProxy},
   window::{Window, WindowBuilder},
 };
 use aethervk_core_rlib::scene::EntityId;
@@ -221,6 +223,9 @@ struct AppState {
   root_entity: scene::EntityId,
   window: Window,
 
+  // random state
+  is_resizing: bool,
+
   // camera
   pitch: f32,
   yaw: f32,
@@ -241,6 +246,126 @@ impl simulation::Pausable for AppState {
   }
 }
 
+/// Custom event type to handle resizing start and stop
+enum AppEvent {
+  ResizeStarted,
+  ResizeEnded,
+}
+
+#[cfg(windows)]
+fn setup_windows_resize_hook(
+  &window: &Window,
+  proxy_ptr: std::ptr::NonNull<EventLoopProxy<AppEvent>>,
+) {
+  todo!();
+}
+
+#[cfg(target_os = "macos")]
+use objc2::{ClassType, DeclaredClass, declare_class, msg_send, msg_send_id, rc::Retained, sel};
+#[cfg(target_os = "macos")]
+use objc2_foundation::{ns_string, NSNotification, NSNotificationCenter, NSObject};
+#[cfg(target_os = "macos")]
+use std::cell::Cell;
+
+#[cfg(target_os = "macos")]
+struct ResizeObserverIvars {
+  /// Objective-C methods take `&self`, so Cell to safely store raw proxy pointer
+  /// https://docs.rs/objc2/latest/objc2/topics/interior_mutability/index.html
+  proxy_ptr: Cell<std::ptr::NonNull<EventLoopProxy<AppEvent>>>,
+}
+
+#[cfg(target_os = "macos")]
+objc2::define_class!(
+  /// Observer to register in the default notification center for the window with Objective-C equivalent:
+  /// [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(windowWillStartLiveResize:) name:NSWindowWillStartLiveResizeNotification object:window];
+  #[unsafe(super(NSObject))]
+  #[ivars = ResizeObserverIvars]
+  struct ResizeObserver;
+
+  impl ResizeObserver {
+    #[unsafe(method(windowWillStartLiveResize:))]
+    fn will_start_resize(&self, _notif: &NSNotification) {
+      let ivars = self.ivars();
+      let ptr = ivars.proxy_ptr.get();
+      // TODO: log result error
+      let _ = unsafe { ptr.as_ref() }.send_event(AppEvent::ResizeStarted);
+    }
+
+    #[unsafe(method(windowDidEndLiveResize:))]
+    fn did_end_resize(&self, _notif: &NSNotification) {
+      let ivars = self.ivars();
+      let ptr = ivars.proxy_ptr.get();
+      // TODO: log result error
+      let _ = unsafe { ptr.as_ref() }.send_event(AppEvent::ResizeEnded);
+    }
+  }
+);
+
+#[cfg(target_os = "macos")]
+impl ResizeObserver {
+  fn new(proxy_ptr: std::ptr::NonNull<EventLoopProxy<AppEvent>>) -> Retained<Self> {
+    let this: Retained<Self> = unsafe {
+      let some = msg_send![Self::class(), alloc];
+      msg_send![some, init]
+    };
+    this.ivars().proxy_ptr.set(proxy_ptr);
+    this
+  }
+}
+
+/// if we assign a new `NSWindowDelegate`, `winit` will stop working. Instead, register an observer
+/// to `NSNotificationCenter` to listen for `NSWindowWillStartLiveResizeNotification` and
+/// `NSWindowDidEndLiveResizeNotification`
+#[cfg(target_os = "macos")]
+fn setup_macos_resize_hook(
+  window: &Window,
+  proxy_ptr: std::ptr::NonNull<EventLoopProxy<AppEvent>>,
+) {
+  let handle = window.window_handle().unwrap().as_raw();
+  if let RawWindowHandle::AppKit(appkit_handle) = handle {
+    // 1. Create the observer
+    let observer = ResizeObserver::new(proxy_ptr);
+    // 2. Intentionally leak it with a +1 retain count so it lives forever
+    let observer_raw = Retained::into_raw(observer);
+    unsafe {
+      let observer_ref = &*(observer_raw as *const NSObject);
+      let center = NSNotificationCenter::defaultCenter();
+      // 3. Get the `NSWindow` pointer so we only listen to notifications for this window
+      let view = appkit_handle.ns_view.cast::<NSView>();
+      let window_obj = unsafe { view.as_ref() }.window().unwrap();
+      // 4. Register for "Live Resize Started"
+      center.addObserver_selector_name_object(
+        unsafe { observer_raw.as_ref().unwrap_unchecked() },
+        sel!(windowWillStartLiveResize:),
+        Some(ns_string!("NSWindowWillStartLiveResizeNotification")),
+        Some(&window_obj),
+      );
+      // 5. Register for "Live Resize Ended"
+      center.addObserver_selector_name_object(
+        unsafe { observer_raw.as_ref().unwrap_unchecked() },
+        sel!(windowDidEndLiveResize:),
+        Some(ns_string!("NSWindowDidEndLiveResizeNotification")),
+        Some(&window_obj),
+      );
+    }
+  }
+}
+
+fn setup_resize_hook(window: &Window, proxy_ptr: std::ptr::NonNull<EventLoopProxy<AppEvent>>) {
+  #[cfg(windows)]
+  {
+    setup_windows_resize_hook(&window, proxy_ptr);
+  }
+  #[cfg(target_os = "macos")]
+  {
+    setup_macos_resize_hook(&window, proxy_ptr);
+  }
+  #[cfg(target_os = "linux")]
+  {
+    todo!();
+  }
+}
+
 fn main() {
   // 1. Override the default panic behavior
   std::panic::set_hook(Box::new(|panic_info| {
@@ -253,15 +378,24 @@ fn main() {
     let _ = std::io::stdin().read(&mut [0u8]);
   }));
 
+  // use winit's user event feature to setup and intercept a proxy for window messages/notifications
+  // about start and end of resizing
+  let event_loop = EventLoopBuilder::<AppEvent>::with_user_event()
+    .build()
+    .unwrap();
+  let proxy = event_loop.create_proxy();
+  // leak the proxy object such that it's kept around for the application's lifetime
+  let proxy_ptr = unsafe { std::ptr::NonNull::new_unchecked(Box::into_raw(Box::new(proxy))) };
+
   let start_time = Instant::now();
   println!("[{:.2?}] Application starting.", start_time.elapsed());
 
   // 1. Setup
-  let event_loop = EventLoop::new().unwrap();
   let window = WindowBuilder::new()
     .with_title("AetherVk Simulation")
     .build(&event_loop)
     .unwrap();
+  setup_resize_hook(&window, proxy_ptr);
 
   let runtime_params = Box::leak(Box::new(RuntimeParams {
     render_backend_params: FnvIndexMap::new(),
@@ -456,6 +590,7 @@ fn main() {
     is_paused: false,
     time_scale: 1.0,
     root_entity,
+    is_resizing: false,
     window,
     pitch: 0.0,
     yaw: 0.0,
@@ -493,7 +628,6 @@ fn main() {
   let mut right_mouse_button_down = false;
   let camera_focus_point = Vec3f32::from_components(0.0, 0.0, 0.0);
   let mut camera_distance = 5.0;
-  let generation = AtomicU64::new(0);
   let mut last_log_time = Instant::now();
 
   let render_frontend_events = Arc::clone(&render_frontend);
@@ -502,6 +636,18 @@ fn main() {
   event_loop
     .run(move |event, elwt| {
       match event {
+        // User Events
+        Event::UserEvent(app_event) => match app_event {
+          AppEvent::ResizeStarted => {
+            app_state.is_resizing = true;
+          }
+          AppEvent::ResizeEnded => {
+            app_state.is_resizing = false;
+            app_state.window.request_redraw();
+          }
+        },
+
+        // winit Builtin window event
         Event::WindowEvent { event, window_id } if window_id == app_state.window.id() => {
           match event {
             WindowEvent::CloseRequested => {
@@ -536,8 +682,6 @@ fn main() {
                   });
               }
 
-              generation.fetch_add(1, atomic::Ordering::Relaxed);
-              state.window.request_redraw();
               println!("[{:.2?}] Finished Resized event.", start_time.elapsed());
             }
             WindowEvent::ScaleFactorChanged {
@@ -550,10 +694,10 @@ fn main() {
               }
             }
             WindowEvent::RedrawRequested => {
-              // println!(
-              //   "[{:.2?}] Handling RedrawRequested event.",
-              //   start_time.elapsed()
-              // );
+              // Is this ok?
+              if app_state.is_resizing {
+                return;
+              }
 
               // --- 1. Data Collection Phase ---
               // Traverse the scene to get all renderable items without holding any GPU locks.
@@ -592,13 +736,15 @@ fn main() {
               );
 
               // Fetch camera data
+              let win_size = app_state.window.inner_size();
+              let ratio = win_size.width as f32 / win_size.height as f32;
               let mut camera_transform = TransformComponent {
                 position: Vec3f32::from_components(0.0, 0.0, 0.0),
                 rotation: Quat::identity(),
                 scale: Vec3f32::from_components(1.0, 1.0, 1.0),
               };
               let mut camera_component = CameraComponent {
-                projection: Mat4x4f32::perspective(45.0f32.to_radians(), 800.0 / 600.0, 0.1, 100.0),
+                projection: Mat4x4f32::perspective(45.0f32.to_radians(), ratio, 0.1, 100.0),
               };
 
               scene_guard.with_component(app_state.camera_entity, |c| camera_transform = *c);
@@ -690,7 +836,6 @@ fn main() {
             },
           );
 
-          generation.fetch_add(1, atomic::Ordering::Relaxed);
           state.window.request_redraw();
         }
         Event::DeviceEvent {
@@ -717,7 +862,6 @@ fn main() {
             },
           );
 
-          generation.fetch_add(1, atomic::Ordering::Relaxed);
           state.window.request_redraw();
         }
         Event::AboutToWait => {
@@ -725,8 +869,9 @@ fn main() {
             println!("[{:.2?}] Liveliness: In AboutToWait.", start_time.elapsed());
             last_log_time = Instant::now();
           }
-          let state = &mut app_state;
-          state.window.request_redraw();
+          if !app_state.is_resizing {
+            app_state.window.request_redraw();
+          }
         }
         _ => (),
       }
