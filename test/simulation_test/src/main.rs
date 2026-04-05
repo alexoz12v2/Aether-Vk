@@ -257,12 +257,58 @@ enum AppEvent {
   ResizeEnded,
 }
 
+/// We need to intercept `WM_ENTERSIZEMOVE` and `WM_EXITSIZEMOVE` so that we can pause and resume
+/// rendering during live resize on Windows. We cannot override the window procedure because `winit` relies on it
+/// Therefore we'll use `SetWindowSubclass` API from `comctl32.dll` to inject a hook in the message pump of our window
+/// and pass all the messages down to the original window procedure after intercepting the ones we care about
 #[cfg(windows)]
 fn setup_windows_resize_hook(
-  &window: &Window,
+  window: &Window,
   proxy_ptr: std::ptr::NonNull<EventLoopProxy<AppEvent>>,
 ) {
-  todo!();
+  use windows::Win32::{
+    Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+    UI::Shell::{SetWindowSubclass, DefSubclassProc},
+    UI::WindowsAndMessaging::{WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE},
+  };
+
+  unsafe extern "system" fn subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id_subclass: usize,
+    _ref_data: usize,
+  ) -> LRESULT {
+    match msg {
+      WM_ENTERSIZEMOVE => {
+        // Send ResizeStarted event to the main thread
+        let proxy =
+          unsafe { std::ptr::NonNull::new_unchecked(_ref_data as *mut EventLoopProxy<AppEvent>) };
+        let _ = unsafe { proxy.as_ref() }.send_event(AppEvent::ResizeStarted);
+      }
+      WM_EXITSIZEMOVE => {
+        // Send ResizeEnded event to the main thread
+        let proxy =
+          unsafe { std::ptr::NonNull::new_unchecked(_ref_data as *mut EventLoopProxy<AppEvent>) };
+        let _ = unsafe { proxy.as_ref() }.send_event(AppEvent::ResizeEnded);
+      }
+      _ => {}
+    }
+
+    // Call the original window procedure for default processing
+    unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+  }
+
+  let handle = window.window_handle().unwrap().as_raw();
+  if let RawWindowHandle::Win32(win32_handle) = handle {
+    unsafe {
+      let hwnd = HWND(win32_handle.hwnd.get() as *mut _);
+      // uid_subclass to any unique identifier within process, use 1
+      // TODO: log on error
+      let _ = SetWindowSubclass(hwnd, Some(subclass_proc), 1, proxy_ptr.as_ptr() as _);
+    }
+  }
 }
 
 #[cfg(target_os = "macos")]
