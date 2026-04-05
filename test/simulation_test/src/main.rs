@@ -3,17 +3,22 @@ use aethervk_core_rlib::{
     self, OpaqueNativeHandleInfo, RenderDevice,
     frame::{self, RenderPath},
   },
-  scene::{self, CameraComponent, PhysicalMeshComponent, Scene, TransformComponent},
+  scene::{
+    CameraComponent, CursorComponent, PhysicalMeshComponent, RenderableDataRef, Scene,
+    TransformComponent, EntityId,
+  },
   simulation,
   types::{GpuResult, RuntimeParams},
 };
 use aethervk_oshal_rlib::math::{
-  matrix::{mat4::Mat4x4f32, Matrix4, SquareMatrix},
+  FloatLike,
+  floating::FloatOps,
+  matrix::{Matrix4, SquareMatrix, mat4::Mat4x4f32},
   quaternion::Quaternion,
   vector::{
-    vec3::Vec3f32,
-    vec4::{Vec4f32, Quat},
     Vector, Vector3, Vector4,
+    vec3::Vec3f32,
+    vec4::{Quat, Vec4f32},
   },
 };
 use heapless::index_map::FnvIndexMap;
@@ -50,7 +55,6 @@ use winit::{
   event_loop::{ControlFlow, EventLoop, EventLoopBuilder, EventLoopProxy},
   window::{Window, WindowBuilder},
 };
-use aethervk_core_rlib::scene::EntityId;
 
 // ----------------------------------------------
 // Structures to cross FFI boundaries safely
@@ -72,6 +76,7 @@ struct RenderPayloadData<'a> {
   packet: &'a mut RenderPacket,
   presentation_engine: gpu::PresentationEngineHandle,
   scene: &'a Scene,
+  cursor_entity: EntityId,
 }
 
 #[cfg(target_os = "macos")]
@@ -217,10 +222,10 @@ fn extract_native_handles(
 struct AppState {
   scene: Arc<RwLock<Scene>>,
   presentation_engine: gpu::PresentationEngineHandle,
-  camera_entity: scene::EntityId,
+  camera_entity: EntityId,
   is_paused: bool,
   time_scale: f32,
-  root_entity: scene::EntityId,
+  root_entity: EntityId,
   window: Window,
 
   // random state
@@ -503,6 +508,7 @@ fn main() {
   scene.register_component::<TransformComponent>(&[]);
   scene.register_component::<PhysicalMeshComponent>(&[]);
   scene.register_component::<CameraComponent>(&[]);
+  scene.register_component::<CursorComponent>(&[]);
 
   let model_path = {
     let mut args = std::env::args();
@@ -560,6 +566,22 @@ fn main() {
     .unwrap();
   scene.set_parent(mesh_entity, Some(root_entity));
 
+  let cursor_entity = scene.spawn_entity();
+  scene
+    .add_component(
+      cursor_entity,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0), // render it in the origin
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    )
+    .unwrap();
+  scene
+    .add_component(cursor_entity, CursorComponent {})
+    .unwrap();
+  scene.set_parent(cursor_entity, Some(root_entity));
+
   let camera_entity = scene.spawn_entity();
   scene
     .add_component(
@@ -607,6 +629,7 @@ fn main() {
         packet: &mut packet,
         presentation_engine,
         scene: &scene_guard,
+        cursor_entity,
       };
 
       let res = render_frontend_clone.write().unwrap().take_and(|context| {
@@ -662,7 +685,7 @@ fn main() {
               scene_guard.with_component_mut(
                 state.camera_entity,
                 |camera: &mut CameraComponent| {
-                  camera.projection = Mat4x4f32::perspective(
+                  camera.projection = Mat4x4f32::perspective_vk(
                     45.0f32.to_radians(),
                     physical_size.width as f32 / physical_size.height as f32,
                     0.1,
@@ -708,10 +731,13 @@ fn main() {
               scene_guard.traverse_with_hooks(
                 app_state.root_entity,
                 &mut matrix_stack,
-                &mut |stack, entity, transform_opt, mesh_opt| {
+                &mut |stack: &mut Vec<Mat4x4f32>,
+                      entity,
+                      transform_opt: Option<TransformComponent>,
+                      mesh_opt: Option<&PhysicalMeshComponent>| {
                   let local_transform = transform_opt
                     .map(|c| {
-                      Mat4x4f32::translation(c.position.to_vec4::<Vec4f32>(1.0))
+                      Mat4x4f32::translation(c.position)
                         * Mat4x4f32::from_quat(c.rotation)
                         * Mat4x4f32::from_scale(c.scale)
                     })
@@ -744,7 +770,13 @@ fn main() {
                 scale: Vec3f32::from_components(1.0, 1.0, 1.0),
               };
               let mut camera_component = CameraComponent {
-                projection: Mat4x4f32::perspective(45.0f32.to_radians(), ratio, 0.1, 100.0),
+                projection: Mat4x4f32::perspective_vk(
+                  45.0f32.to_radians(),
+                  app_state.window.inner_size().width as f32 // TODO check against zero or other stuff
+                    / app_state.window.inner_size().height as f32,
+                  0.1,
+                  100.0,
+                ),
               };
 
               scene_guard.with_component(app_state.camera_entity, |c| camera_transform = *c);
@@ -782,9 +814,10 @@ fn main() {
           println!("[DIAGNOSTIC] Mouse delta: {:?}", delta);
 
           let rotation_speed = 0.005;
-          state.yaw -= delta.0 as f32 * rotation_speed;
+          state.yaw += delta.0 as f32 * rotation_speed; // TODO wrap around at 2*PI to prevent float precision issues?
           state.pitch -= delta.1 as f32 * rotation_speed;
 
+          state.yaw = state.yaw.fmod(<f32 as FloatOps>::PI * 2.0);
           state.pitch = state.pitch.clamp(-1.55, 1.55);
 
           // 2. Check the accumulated state. If yaw/pitch are NaN, the quaternions will be corrupted.
@@ -905,7 +938,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
             device,
             item.entity_id,
             item.model_matrix,
-            scene::RenderableDataRef::PhysicalMesh(mesh),
+            RenderableDataRef::PhysicalMesh(mesh),
             payload.presentation_engine,
           )
           .unwrap();
@@ -913,6 +946,27 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
       },
     );
   }
+
+  payload.scene.with_component(
+    payload.cursor_entity,
+    |cursor: &CursorComponent| -> GpuResult<()> {
+      let t = payload
+        .scene
+        .global_transform(payload.cursor_entity)
+        .unwrap();
+      // Render cursor as a simple colored triangle for demonstration
+      frame
+        .add_renderable(
+          device,
+          payload.cursor_entity,
+          t.to_mat4(),
+          RenderableDataRef::Cursor(&cursor),
+          payload.presentation_engine,
+        )
+        .unwrap();
+      Ok(())
+    },
+  );
 
   // Record commands
   let render_path = frame::ForwardRenderPath;
