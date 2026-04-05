@@ -418,4 +418,21 @@ where
     }
     Self { low, high }
   }
+
+  fn fmod(self, modulus: Self) -> Self {
+    let mut low = V::zero();
+    let mut high = V::zero();
+    for i in 0..V::DIM {
+      let a = unsafe { self.low.component_unchecked(i) };
+      let b = unsafe { self.high.component_unchecked(i) };
+      let m = FloatInterval {
+        low: unsafe { modulus.low.component_unchecked(i) },
+        high: unsafe { modulus.high.component_unchecked(i) },
+      };
+      let result = (FloatInterval { low: a, high: b }).fmod(m);
+      low.set_component(i, result.low);
+      high.set_component(i, result.high);
+    }
+    Self { low, high }
+  }
 }

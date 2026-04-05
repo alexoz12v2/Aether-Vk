@@ -45,6 +45,15 @@ pub struct CommandBufferHandle(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RenderableInstanceId(pub u64);
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct CursorPushConstants {
+  pub view: [f32; 16],
+  pub view_proj: [f32; 16],
+  pub cursor_pos: [f32; 3],
+  pub cursor_size: f32,
+}
+
 impl RenderableInstanceId {
   pub fn from_physical_mesh(
     entity_id: EntityId,
@@ -133,6 +142,12 @@ pub trait RenderDevice: Send + Sync {
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult>;
 
+  /// Returns resources for the cursor rendering
+  fn get_or_create_cursor_resources(
+    &self,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult>;
+
   /// Presents the image. Takes semaphore signaled by a rendering command buffer
   fn present(
     &self,
@@ -176,7 +191,15 @@ pub trait RenderDevice: Send + Sync {
     push_constants: &PushConstants,
   ) -> GpuResult<()>;
 
+  fn push_cursor_constants(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    push_constants: &CursorPushConstants,
+  ) -> GpuResult<()>;
+
   fn draw_indexed(&self, cmd_buffer: CommandBufferHandle, index_count: u32) -> GpuResult<()>;
+
+  fn draw(&self, cmd_buffer: CommandBufferHandle, vertex_count: u32) -> GpuResult<()>;
 
   fn end_render_pass(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 
