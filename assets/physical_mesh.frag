@@ -1,4 +1,8 @@
 #version 450 core
+
+// See Guide on Vulkan extensions for GLSL
+// https://github.com/KhronosGroup/GLSL/blob/main/extensions/khr/GL_KHR_vulkan_glsl.txt
+
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec2 inUV;
 layout(location = 2) in vec3 inNormal;

@@ -464,7 +464,8 @@ impl Drop for EntryWrapper {
       {
         unsafe {
           use windows::Win32::Foundation::{FreeLibrary, HMODULE};
-          FreeLibrary(HMODULE(self.vulkan_loader_module.0.as_ptr()))
+          // TODO: Debug logging on failure?
+          let _ = FreeLibrary(HMODULE(self.vulkan_loader_module.0.as_ptr()));
         };
       }
       #[cfg(target_family = "unix")]
@@ -526,6 +527,9 @@ pub(super) fn required_device_extensions() -> &'static Vec<&'static CStr> {
     the_vec.push(ash::khr::create_renderpass2::NAME);
 
     the_vec.push(ash::khr::swapchain::NAME);
+
+    // maintenance1 -> promoted to vk::API_VERSION_1_1
+    // allows for vk::Viewport negative height, flipping +Y axis to point upwards
 
     // promoted to vk::API_VERSION_1_3
     // This extension allows the use of the SPV_KHR_non_semantic_info extension in SPIR-V shader modules. (eg printf)

@@ -8,9 +8,12 @@
 //!   - This is a simplified implementation focusing on the core concepts.
 
 use crate::simulation::comet::Comet;
+use aethervk_oshal_rlib::math::{FloatLike};
+use aethervk_oshal_rlib::math::matrix::Matrix4;
+use aethervk_oshal_rlib::math::quaternion::Quaternion;
+use aethervk_oshal_rlib::math::vector::{Vector3, Vector4};
 use aethervk_oshal_rlib::math::{matrix::mat4::Mat4x4f32, vector::vec4::Quat};
 use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::vec4::Vec4f32;
 use slotmap::{new_key_type, SlotMap};
 use spin::RwLock;
 use alloc::boxed::Box;
@@ -41,6 +44,65 @@ pub struct TransformComponent {
   pub scale: Vec3f32,
 }
 impl Component for TransformComponent {}
+impl TransformComponent {
+  /// Constructs a 4x4 transformation matrix from the component's TRS
+  /// (Translation, Rotation, Scale) properties.
+  pub fn to_mat4<T>(&self) -> T
+  where
+    T: Matrix4,
+    T::Vector: Vector4, // Requires Vector4 to use `from_components`
+    T::Scalar: FloatLike,
+  {
+    let p = &self.position;
+    let q = &self.rotation;
+    let s = &self.scale;
+
+    // Precompute quaternion products to avoid redundant multiplications
+    let xx = q.0.x() * q.0.x();
+    let yy = q.0.y() * q.0.y();
+    let zz = q.0.z() * q.0.z();
+    let xy = q.0.x() * q.0.y();
+    let xz = q.0.x() * q.0.z();
+    let yz = q.0.y() * q.0.z();
+    let wx = q.0.w() * q.0.x();
+    let wy = q.0.w() * q.0.y();
+    let wz = q.0.w() * q.0.z();
+
+    // Column 0 (Rotated & Scaled X-axis)
+    let c0 = <T::Vector as Vector4>::from_components(
+      <T::Scalar as FloatLike>::from_f32((1.0 - 2.0 * (yy + zz)) * s.x()),
+      <T::Scalar as FloatLike>::from_f32((2.0 * (xy + wz)) * s.x()),
+      <T::Scalar as FloatLike>::from_f32((2.0 * (xz - wy)) * s.x()),
+      <T::Scalar as FloatLike>::from_f32(0.0),
+    );
+
+    // Column 1 (Rotated & Scaled Y-axis)
+    let c1 = <T::Vector as Vector4>::from_components(
+      <T::Scalar as FloatLike>::from_f32((2.0 * (xy - wz)) * s.y()),
+      <T::Scalar as FloatLike>::from_f32((1.0 - 2.0 * (xx + zz)) * s.y()),
+      <T::Scalar as FloatLike>::from_f32((2.0 * (yz + wx)) * s.y()),
+      <T::Scalar as FloatLike>::from_f32(0.0),
+    );
+
+    // Column 2 (Rotated & Scaled Z-axis)
+    let c2 = <T::Vector as Vector4>::from_components(
+      <T::Scalar as FloatLike>::from_f32((2.0 * (xz + wy)) * s.z()),
+      <T::Scalar as FloatLike>::from_f32((2.0 * (yz - wx)) * s.z()),
+      <T::Scalar as FloatLike>::from_f32((1.0 - 2.0 * (xx + yy)) * s.z()),
+      <T::Scalar as FloatLike>::from_f32(0.0),
+    );
+
+    // Column 3 (Translation)
+    let c3 = <T::Vector as Vector4>::from_components(
+      <T::Scalar as FloatLike>::from_f32(p.x()),
+      <T::Scalar as FloatLike>::from_f32(p.y()),
+      <T::Scalar as FloatLike>::from_f32(p.z()),
+      <T::Scalar as FloatLike>::from_f32(1.0),
+    );
+
+    T::from_columns(c0, c1, c2, c3)
+  }
+}
 
 /// Represents a camera in the scene.
 #[derive(Clone, Copy, PartialEq)]
@@ -48,6 +110,11 @@ pub struct CameraComponent {
   pub projection: Mat4x4f32,
 }
 impl Component for CameraComponent {}
+
+/// A marker component for entities that should be rendered as a cursor.
+#[derive(Debug, PartialEq)]
+pub struct CursorComponent {}
+impl Component for CursorComponent {}
 
 /// A physically-based mesh loaded from a glTF file.
 #[derive(Debug, PartialEq)]
@@ -94,6 +161,7 @@ impl Component for ParticleStateComponent {}
 pub enum RenderableDataRef<'a> {
   ImageBillboard(&'a ImageBillboardComponent),
   PhysicalMesh(&'a PhysicalMeshComponent),
+  Cursor(&'a CursorComponent),
 }
 
 impl<'a> RenderableDataRef<'a> {
@@ -101,6 +169,7 @@ impl<'a> RenderableDataRef<'a> {
     match self {
       RenderableDataRef::ImageBillboard(_) => 4,
       RenderableDataRef::PhysicalMesh(mesh) => mesh.mesh.indices.len() as u32,
+      RenderableDataRef::Cursor(_) => 4, // 4 vertices for the quad cursor
     }
   }
 }
@@ -325,16 +394,16 @@ impl Scene {
     }
   }
 
-  pub fn traverse_with_hooks<A, Pre, Post>(
+  pub fn traverse_with_hooks<A, Pre, Post, T>(
     &self,
     start_entity: EntityId,
     accumulator: &mut A,
     pre_visit: &mut Pre,
     post_visit: &mut Post,
   ) where
-    Pre:
-      FnMut(&mut A, EntityId, Option<TransformComponent>, Option<&PhysicalMeshComponent>) -> bool,
+    Pre: FnMut(&mut A, EntityId, Option<TransformComponent>, Option<&T>) -> bool,
     Post: FnMut(&mut A, EntityId),
+    T: Component,
   {
     if !self.entities.read().contains_key(start_entity) {
       return;
@@ -349,7 +418,7 @@ impl Scene {
     );
   }
 
-  fn traverse_with_hooks_recursive<A, Pre, Post>(
+  fn traverse_with_hooks_recursive<A, Pre, Post, T>(
     &self,
     current_entity: EntityId,
     accumulator: &mut A,
@@ -357,9 +426,9 @@ impl Scene {
     post_visit: &mut Post,
     visited: &mut HashSet<EntityId>,
   ) where
-    Pre:
-      FnMut(&mut A, EntityId, Option<TransformComponent>, Option<&PhysicalMeshComponent>) -> bool,
+    Pre: FnMut(&mut A, EntityId, Option<TransformComponent>, Option<&T>) -> bool,
     Post: FnMut(&mut A, EntityId),
+    T: Component,
   {
     if !visited.insert(current_entity) {
       return; // Cycle detected
@@ -369,7 +438,7 @@ impl Scene {
     // This is tricky. We can't return a reference from with_component due to lifetimes.
     // So we get a pointer, and use it within an unsafe block. This is safe because
     // we are single-threaded here and nothing will deallocate the component.
-    let mesh_ptr = self.with_component(current_entity, |c: &PhysicalMeshComponent| c as *const _);
+    let mesh_ptr = self.with_component(current_entity, |c: &T| c as *const _);
 
     let continue_traversal = unsafe {
       let mesh_ref = if let Some(ptr) = mesh_ptr {
@@ -398,6 +467,65 @@ impl Scene {
     }
 
     post_visit(accumulator, current_entity);
+  }
+
+  /// Computes the global transform of an entity by traversing up the hierarchy.
+  /// Returns `None` if the target entity does not have a `TransformComponent`.
+  /// Skips any ancestors that do not possess a `TransformComponent`.
+  pub fn global_transform(&self, entity_id: EntityId) -> Option<TransformComponent> {
+    // 1. Get the entity's local transform. If it doesn't have one, bail out.
+    let mut accumulated_transform = self.with_component(entity_id, |c: &TransformComponent| *c)?;
+
+    let mut current_entity = entity_id;
+
+    // 2. Traverse up the hierarchy
+    loop {
+      // Scope the hierarchy read lock tightly. We do NOT want to hold this
+      // while calling `with_component`, as that grabs `entities` and `archetypes`
+      // locks, which could lead to deadlocks if other threads lock in a different order.
+      let parent_opt = {
+        let hierarchy = self.hierarchy.read();
+        hierarchy.parents.get(&current_entity).copied()
+      };
+
+      if let Some(parent_id) = parent_opt {
+        // 3. If the parent has a transform, accumulate it. Otherwise, it simply skips.
+        if let Some(parent_transform) = self.with_component(parent_id, |c: &TransformComponent| *c)
+        {
+          accumulated_transform =
+            Self::combine_transforms(&parent_transform, &accumulated_transform);
+        }
+
+        // Move up to the next ancestor
+        current_entity = parent_id;
+      } else {
+        // No more parents, we've reached the root of this tree.
+        break;
+      }
+    }
+
+    Some(accumulated_transform)
+  }
+
+  /// Helper to combine a parent's transform with a child's transform.
+  /// TODO: Move elsewhere if needed
+  fn combine_transforms(
+    parent: &TransformComponent,
+    child: &TransformComponent,
+  ) -> TransformComponent {
+    // Typical TRS (Translation, Rotation, Scale) combination logic:
+    // Global Scale = Parent Scale * Child Scale (Component-wise)
+    // Global Rotation = Parent Rotation * Child Rotation
+    // Global Position = Parent Position + (Parent Rotation * (Parent Scale * Child Position))
+
+    TransformComponent {
+      scale: parent.scale * child.scale,
+      rotation: parent.rotation * child.rotation,
+      position: parent.position
+        + (parent
+          .rotation
+          .rotate_vector((parent.scale * child.position))),
+    }
   }
 
   /// Registers a component type, its dependencies, and its storage constructor.

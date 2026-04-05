@@ -220,6 +220,8 @@ Procfile text eol=lf
 *.exe binary
 *.out binary
 *.app binary
+# Rust
+*.rs text eol=lf
 
 # LaTex: Source Files
 *.tex     text diff=tex
@@ -243,3 +245,10 @@ Procfile text eol=lf
 
 # Rust
 Cargo.lock text eol=lf
+
+# shaders
+*.frag text eol=lf
+*.vert text eol=lf
+*.comp text eol=lf
+*.glsl text eol=lf
+*.spvasm text eol=lf

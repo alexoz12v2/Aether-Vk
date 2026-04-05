@@ -499,6 +499,13 @@ where
       high: self.high.acos_round_up(false),
     }
   }
+
+  fn fmod(self, modulus: Self) -> Self {
+    Self {
+      low: self.low.fmod_round_down(modulus.low, false),
+      high: self.high.fmod_round_up(modulus.high, false),
+    }
+  }
 }
 
 pub type Interval32 = FloatInterval<f32>;
