@@ -39,6 +39,7 @@ linux_wayland = ["aethervk-core-rlib/linux_wayland"]
 linux_xlib = ["aethervk-core-rlib/linux_xlib"]
 linux_xcb = ["aethervk-core-rlib/linux_xcb"]
 physical_mesh_debug_normals = ["aethervk-core-rlib/physical_mesh_debug_normals"]
+cursor_debug = ["aethervk-core-rlib/cursor_debug"]
 
 # When you exclude a crate from a workspace, Cargo effectively orphans it. If you open a 
 # terminal inside test/simulation_test and run cargo check, Cargo will traverse up the directory tree, 

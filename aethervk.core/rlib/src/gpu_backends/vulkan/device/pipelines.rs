@@ -120,6 +120,7 @@ bitflags! {
     const INVERT_FRONT_FACE = 0x1u32 << 3;
     const NO_DEPTH_WRITE = 0x1u32 << 4;
     const STENCIL_ENABLE = 0x1u32 << 5;
+    const NO_DEPTH_TEST = 0x1u32 << 6;
   }
 }
 
@@ -802,7 +803,11 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
       },
       depth_stencil_state_builder: |graphics_info: &_| {
         let mut info = vk::PipelineDepthStencilStateCreateInfo::default()
-          .depth_test_enable(true)
+          .depth_test_enable(
+            !graphics_info
+              .pipeline_flags
+              .contains(PipelineFlags::NO_DEPTH_TEST),
+          )
           .depth_write_enable(
             !graphics_info
               .pipeline_flags

@@ -61,6 +61,7 @@ enum DiscardItem {
   Image(ImageDiscard),
   ImageView(vk::ImageView),
   Pipeline(vk::Pipeline),
+  PipelineLayout(vk::PipelineLayout),
   DescriptorPool(vk::DescriptorPool, sync::Arc<descriptors::DescriptorPools>),
   CommandPool(CmdBufDiscard),
   RenderPass(vk::RenderPass),
@@ -200,6 +201,11 @@ impl DiscardPool {
     q.push(timeline, DiscardItem::Pipeline(pipeline));
   }
 
+  pub fn discard_pipeline_layout(&self, pipeline_layout: vk::PipelineLayout, timeline: u64) {
+    let mut q = self.items.lock();
+    q.push(timeline, DiscardItem::PipelineLayout(pipeline_layout));
+  }
+
   pub fn destroy_discarded_resources_all(&self, device: &ash::Device) {
     self.destroy_discarded_resources_internal(device, u64::MAX);
   }
@@ -234,6 +240,9 @@ impl DiscardPool {
       },
       DiscardItem::Pipeline(pipeline) => {
         unsafe { device.destroy_pipeline(pipeline, None) };
+      }
+      DiscardItem::PipelineLayout(pipeline_layout) => {
+        unsafe { device.destroy_pipeline_layout(pipeline_layout, None) };
       }
       DiscardItem::DescriptorPool(pool, manager) => {
         // return the pool to the manager for recycling
@@ -811,6 +820,59 @@ impl DiscardableResource for FrameResource {
         resource.discard(device, discard_pool, timeline);
       }
     }
+  }
+}
+
+pub(super) struct CursorRenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub push_contant_ranges: Vec<vk::PushConstantRange>,
+  pub graphics_info: Option<GraphicsInfo>,
+  pub pipeline_key: Option<PipelineKey>,
+}
+
+unsafe impl Sync for CursorRenderResourceArchetype {}
+unsafe impl Send for CursorRenderResourceArchetype {}
+
+impl CursorRenderResourceArchetype {
+  pub fn with_graphics_info(self, graphics_info: GraphicsInfo) -> Self {
+    let pipeline_key = graphics_info.pipeline_key();
+    Self {
+      graphics_info: Some(graphics_info),
+      pipeline_key: Some(pipeline_key),
+      ..self
+    }
+  }
+
+  pub unsafe fn new(
+    device: &ash::Device,
+    vertex_shader: &Shader,
+    fragment_shader: &Shader,
+  ) -> GpuResult<Self> {
+    let push_contant_ranges = alloc::vec![vk::PushConstantRange {
+      stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+      offset: 0,
+      size: core::mem::size_of::<crate::gpu::CursorPushConstants>() as u32,
+    }];
+
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo {
+      p_push_constant_ranges: push_contant_ranges.as_ptr(),
+      push_constant_range_count: push_contant_ranges.len() as u32,
+      ..Default::default()
+    };
+
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None)? };
+
+    Ok(Self {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      push_contant_ranges,
+      graphics_info: None,
+      pipeline_key: None,
+    })
+  }
+
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_pipeline_layout(layout, timeline);
   }
 }
 

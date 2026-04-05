@@ -62,7 +62,10 @@ where
   fn from_columns(c0: Self::Vector, c1: Self::Vector, c2: Self::Vector, c3: Self::Vector) -> Self;
 
   /// Creates a translation matrix.
-  fn translation(v: Self::Vector) -> Self {
+  fn translation<V3>(v: V3) -> Self
+  where
+    V3: Vector3<Scalar = Self::Scalar>,
+  {
     let id = Self::identity();
     // Safety: Matrix4 is guaranteed to be 4x4, so indices 0..3 are always valid
     unsafe {
@@ -70,7 +73,12 @@ where
         id.column_unchecked(0),
         id.column_unchecked(1),
         id.column_unchecked(2),
-        v, // the 4th column is the translation vector
+        <Self::Vector as Vector4>::from_components(
+          v.x(),
+          v.y(),
+          v.z(),
+          <Self::Scalar as MulAddIdentity>::one(),
+        ),
       )
     }
   }
@@ -78,7 +86,7 @@ where
   /// Creates a standard right-handed perspective projection matrix
   /// This is the general OpenGL column-major matrix formula from scratchapixel with
   /// special case left = -right, top = -bottom
-  fn perspective(
+  fn perspective_gl(
     fov: Self::Scalar,
     aspect: Self::Scalar,
     near: Self::Scalar,
@@ -98,8 +106,36 @@ where
 
     let c0 = Self::Vector::from_components(f / aspect, _0, _0, _0);
     let c1 = Self::Vector::from_components(_0, f, _0, _0);
+    // OpenGL: Map z from [near, far] to [-1, 1]
     let c2 = Self::Vector::from_components(_0, _0, (far + near) / neg_depth, -_1);
     let c3 = Self::Vector::from_components(_0, _0, _2 * far * near / neg_depth, _0);
+
+    Self::from_columns(c0, c1, c2, c3)
+  }
+
+  fn perspective_vk(
+    fov: Self::Scalar,
+    aspect: Self::Scalar,
+    near: Self::Scalar,
+    far: Self::Scalar,
+  ) -> Self
+  where
+    Self::Scalar: FloatLike,
+  {
+    let _0 = Self::Scalar::from_f32(0.0);
+    let _1 = Self::Scalar::from_f32(1.0);
+    let _2 = Self::Scalar::from_f32(2.0);
+
+    // f = 1.0 / tan(fov / 2.0)
+    let half_fov = fov / _2;
+    let f = half_fov.tan().reciprocal(); // cotangent
+    let neg_depth = near - far;
+
+    let c0 = Self::Vector::from_components(f / aspect, _0, _0, _0);
+    let c1 = Self::Vector::from_components(_0, f, _0, _0);
+    // Vulkan: Map z from [near, far] to [0, 1]
+    let c2 = Self::Vector::from_components(_0, _0, far / neg_depth, -_1);
+    let c3 = Self::Vector::from_components(_0, _0, far * near / neg_depth, _0);
 
     Self::from_columns(c0, c1, c2, c3)
   }

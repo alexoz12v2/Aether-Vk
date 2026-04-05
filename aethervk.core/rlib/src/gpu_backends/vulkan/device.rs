@@ -243,6 +243,12 @@ struct DeviceResources {
   physical_mesh_resources:
     spin::RwLock<Option<hashbrown::HashMap<RenderableInstanceId, ForwardMeshRenderResource>>>,
 
+  #[cfg(debug_assertions)]
+  cursor_render_archetype:
+    DropTracker<TrackedOption<resources::CursorRenderResourceArchetype, 1>, 1>,
+  #[cfg(not(debug_assertions))]
+  cursor_render_archetype: Option<resources::CursorRenderResourceArchetype>,
+
   // not cleaned stuff
   timeline_sem_device: ash::khr::timeline_semaphore::Device,
 }
@@ -315,6 +321,72 @@ impl DeviceResources {
       #[cfg(not(debug_assertions))]
       {
         mut_arch = self.physical_mesh_render_archetype.as_mut();
+      }
+
+      mut_arch.unwrap_unchecked()
+    };
+    if archetype.graphics_info.is_none() || archetype.pipeline_key.is_none() {
+      return Err(GpuError::InvalidState);
+    }
+    let pipeline_key = *unsafe { archetype.pipeline_key.as_ref().unwrap_unchecked() };
+    let mut write_pipeline = self.pipeline_pool.write();
+
+    let graphics_info = unsafe { archetype.graphics_info.as_mut().unwrap_unchecked() };
+    let depth_stencil_format = graphics_info
+      .fragment_out
+      .depth_attachment_format
+      .unwrap_or(vk::Format::UNDEFINED);
+
+    graphics_info.fragment_out.color_attachment_formats.clear();
+    graphics_info
+      .fragment_out
+      .color_attachment_formats
+      .push(presentation_engine_state.format());
+    graphics_info.render_pass = self
+      .renderpasses
+      .get_or_create_render_pass(
+        RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
+        0,
+        device,
+        &self.allocator.allocator,
+        &self.discard_pool,
+        timeline,
+      )?
+      .0
+      .get();
+    // Note: don't care about viewport and scissor cause they are dynamic state
+    write_pipeline.get_or_create_graphics_pipeline(device, graphics_info)?;
+    write_pipeline.discard_graphics_pipeline_if_present(pipeline_key, &self.discard_pool, timeline);
+
+    let pipeline_key = graphics_info.pipeline_key();
+    archetype.pipeline_key = Some(pipeline_key);
+
+    Ok(())
+  }
+
+  fn update_cursor_archetype_for_presentation_engine(
+    &mut self,
+    device: &ash::Device,
+    presentation_engine_handle: PresentationEngineHandle,
+    timeline: u64,
+  ) -> GpuResult<()> {
+    let presentation_engines = self.live_presentation_engines.read();
+    let presentation_engine_state_lock = presentation_engines
+      .get(&presentation_engine_handle)
+      .ok_or(GpuError::InvalidArgument)?;
+    let presentation_engine_state = presentation_engine_state_lock.read();
+    if self.cursor_render_archetype.is_none() {
+      return Err(GpuError::InvalidState);
+    }
+    let archetype = unsafe {
+      let mut_arch: Option<&mut _>;
+      #[cfg(debug_assertions)]
+      {
+        mut_arch = self.cursor_render_archetype.as_mut().as_mut()
+      }
+      #[cfg(not(debug_assertions))]
+      {
+        mut_arch = self.cursor_render_archetype.as_mut();
       }
 
       mut_arch.unwrap_unchecked()
@@ -465,7 +537,7 @@ impl DeviceResources {
           .with_fragment_module(fragment_shader.module.get())
           .add_viewport(vk::Viewport {
             width: presentation_engine_state.extent().0 as _,
-            height: presentation_engine_state.extent().1 as _,
+            height: -(presentation_engine_state.extent().1 as f32), // Y axis points downwards in Vulkan, so flip it
             x: 0.0,
             y: 0.0,
             min_depth: 0.0,
@@ -504,7 +576,8 @@ impl DeviceResources {
         .pipeline_layout
         .get(),
       )
-      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
+      // TODO remove inversion if mesh is proper
+      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::INVERT_FRONT_FACE)
       .with_render_pass(
         self
           .renderpasses
@@ -552,6 +625,165 @@ impl DeviceResources {
     }
 
     debug_assert!(self.physical_mesh_render_archetype.is_some());
+
+    Ok(())
+  }
+
+  fn get_cursor_archetype(&self) -> Option<&'_ resources::CursorRenderResourceArchetype> {
+    #[cfg(debug_assertions)]
+    {
+      self.cursor_render_archetype.as_ref().as_ref()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      self.cursor_render_archetype.as_ref()
+    }
+  }
+
+  fn create_cursor_archetype(
+    &mut self,
+    device: &ash::Device,
+    vertex_shader_key: ShaderKey,
+    fragment_shader_key: ShaderKey,
+    depth_stencil_format: vk::Format,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()> {
+    if self.cursor_render_archetype.is_some() {
+      return Err(GpuError::InvalidState);
+    }
+
+    let live_presentation_engines_lock = self.live_presentation_engines.read();
+    let presentation_engine_lock = live_presentation_engines_lock
+      .get(&handle)
+      .ok_or(GpuError::InvalidArgument)?;
+    let presentation_engine_state = presentation_engine_lock.read();
+
+    let shader_manager = self.shader_manager.read();
+    let vertex_shader = shader_manager
+      .get(vertex_shader_key)
+      .ok_or(GpuError::InvalidShader)?;
+    if vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
+      return Err(GpuError::InvalidShader);
+    }
+    let fragment_shader = shader_manager
+      .get(fragment_shader_key)
+      .ok_or(GpuError::InvalidShader)?;
+    if fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
+      return Err(GpuError::InvalidShader);
+    }
+
+    // Create initial struct
+    let res = unsafe {
+      resources::CursorRenderResourceArchetype::new(device, &vertex_shader, &fragment_shader)
+    }?;
+    #[cfg(not(debug_assertions))]
+    {
+      self.cursor_render_archetype = Some(res);
+    }
+    #[cfg(debug_assertions)]
+    {
+      self.cursor_render_archetype = DropTracker::new(TrackedOption::some(res));
+    }
+
+    // then populate graphics info and pipeline key
+    let pipeline_graphics_info = GraphicsInfo::default()
+      .with_vertex_in(
+        VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+          .clone(),
+      )
+      .with_pre_rasterization(
+        PreRasterization::default()
+          .with_vertex_module(vertex_shader.module.get())
+          .clone(),
+      )
+      .with_fragment_shader(
+        FragmentShader::default()
+          .with_fragment_module(fragment_shader.module.get())
+          .add_viewport(vk::Viewport {
+            width: presentation_engine_state.extent().0 as _,
+            height: -(presentation_engine_state.extent().1 as f32), // Y axis points downwards in Vulkan, so flip it
+            x: 0.0,
+            y: 0.0,
+            min_depth: 0.0,
+            max_depth: 1.0,
+          })
+          .add_scissors(vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: vk::Extent2D {
+              width: presentation_engine_state.extent().0,
+              height: presentation_engine_state.extent().1,
+            },
+          })
+          .clone(),
+      )
+      .with_fragment_out(
+        FragmentOut::default()
+          .add_color_attachment_format(presentation_engine_state.format())
+          .with_depth_attachment_format(depth_stencil_format)
+          .with_stencil_attachment_format(depth_stencil_format)
+          .clone(),
+      )
+      .with_pipeline_layout(
+        unsafe {
+          let ref_arch: Option<&_>;
+          #[cfg(debug_assertions)]
+          {
+            ref_arch = self.cursor_render_archetype.as_ref().as_ref();
+          }
+          #[cfg(not(debug_assertions))]
+          {
+            ref_arch = self.cursor_render_archetype.as_ref();
+          }
+
+          ref_arch.unwrap_unchecked()
+        }
+        .pipeline_layout
+        .get(),
+      )
+      .with_pipeline_flags(PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL) // NO Culling, NO Depth Test
+      .with_render_pass(
+        self
+          .renderpasses
+          .get_or_create_render_pass(
+            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
+            0,
+            device,
+            &self.allocator.allocator,
+            &self.discard_pool,
+            0,
+          )?
+          .0
+          .get(),
+      )
+      .with_subpass(0)
+      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+      .with_stencil_compare_op(StencilCompareOp::None)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(255)
+      .with_stencil_compare_mask(0)
+      .with_stencil_write_mask(u32::MAX)
+      .clone();
+    self
+      .pipeline_pool
+      .write()
+      .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
+
+    {
+      let val = unsafe { self.cursor_render_archetype.take().unwrap_unchecked() }
+        .with_graphics_info(pipeline_graphics_info);
+
+      #[cfg(not(debug_assertions))]
+      {
+        self.cursor_render_archetype = Some(val);
+      }
+      #[cfg(debug_assertions)]
+      {
+        self.cursor_render_archetype = DropTracker::new(TrackedOption::some(val));
+      }
+    }
+
+    debug_assert!(self.cursor_render_archetype.is_some());
 
     Ok(())
   }
@@ -680,6 +912,10 @@ impl DeviceResources {
         }
       },
       physical_mesh_resources: spin::RwLock::new(None),
+      #[cfg(debug_assertions)]
+      cursor_render_archetype: DropTracker::new(TrackedOption::none()),
+      #[cfg(not(debug_assertions))]
+      cursor_render_archetype: None,
       timeline_sem_device,
     })
   }
@@ -1114,6 +1350,88 @@ impl<'a> Device<'a> {
 
     Ok((vert_key, frag_key))
   }
+
+  fn ensure_cursor_shader_modules(
+    &self,
+    res: &impl core::ops::Deref<Target = DeviceResources>,
+  ) -> GpuResult<(ShaderKey, ShaderKey)> {
+    let vert_path: PathBuf;
+    let frag_path: PathBuf;
+
+    #[cfg(debug_assertions)]
+    {
+      let assets_dir: PathBuf = {
+        use aethervk_oshal_rlib::os;
+        use aethervk_oshal_rlib::os::fs::FileSystemObject;
+
+        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
+        if args.len() > 1 {
+          let p = PathBuf::from(&args[1]);
+          if !p.is_dir() {
+            return Err(GpuError::InvalidArgument);
+          }
+
+          p
+        } else {
+          let exe_path = fs::current_exe().map_err(|_| {
+            GpuError::BackendSpecific(
+              "Failed to get executable path for debug asset loading".into(),
+            )
+          })?;
+
+          let mut path = exe_path.parent();
+          let mut assets_dir: Option<PathBuf> = None;
+
+          while let Some(p) = path {
+            use aethervk_oshal_rlib::os::fs::FileSystemObject;
+
+            let test_path = p.join("assets");
+            if test_path.is_dir() {
+              assets_dir = Some(test_path);
+              break;
+            }
+            path = p.parent();
+          }
+
+          let assets_dir = assets_dir
+            .expect("Could not find assets directory when searching from executable path");
+
+          assets_dir
+        }
+      };
+
+      vert_path = assets_dir.join("cursor.vert.spv");
+      #[cfg(feature = "cursor_debug")]
+      {
+        frag_path = assets_dir.join("cursor_debug.frag.spv");
+      }
+      #[cfg(not(feature = "cursor_debug"))]
+      {
+        frag_path = assets_dir.join("cursor.frag.spv");
+      }
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      todo!();
+    }
+
+    let mut shader_manager = res.shader_manager.write();
+
+    let vert_key = shader_manager.get_or_load(
+      &self.device,
+      &vert_path,
+      "main",
+      spirv::ExecutionModel::Vertex,
+    )?;
+    let frag_key = shader_manager.get_or_load(
+      &self.device,
+      &frag_path,
+      "main",
+      spirv::ExecutionModel::Fragment,
+    )?;
+
+    Ok((vert_key, frag_key))
+  }
 }
 
 impl<'a> Drop for Device<'a> {
@@ -1292,6 +1610,7 @@ impl<'a> RenderDevice for Device<'a> {
     // `update_physical_mesh_archetype_for_presentation_engine` takes `&mut self` (for `wres`)
     // and an immutable `&PresentationState` (for `engine`). This is a valid borrow pattern.
     wres.update_physical_mesh_archetype_for_presentation_engine(&self.device, handle, timeline)?;
+    let _ = wres.update_cursor_archetype_for_presentation_engine(&self.device, handle, timeline);
 
     Ok(())
   }
@@ -1569,6 +1888,42 @@ impl<'a> RenderDevice for Device<'a> {
       pipeline: pipeline_key,
       buffers: physical_mesh_id.into(),
       texture_flags,
+    })
+  }
+
+  fn get_or_create_cursor_resources(
+    &self,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult> {
+    let next_frame_timeline = self.res.read().get_timeline_semaphore_cached_value() + 1;
+
+    // ensure that the archetype for cursors exists
+    if self.res.read().cursor_render_archetype.is_none() {
+      let mut wres = self.res.write();
+      // Re-check condition after acquiring write lock
+      if wres.cursor_render_archetype.is_none() {
+        let (vkey, fkey) = self.ensure_cursor_shader_modules(&wres)?;
+        wres.create_cursor_archetype(
+          &self.device,
+          vkey,
+          fkey,
+          self.depth_stencil_format,
+          handle,
+        )?;
+      }
+    }
+
+    let res = self.res.read();
+    let archetype = unsafe { res.get_cursor_archetype().unwrap_unchecked() };
+
+    // Safety: Archetype, once properly constructed, has everything populated
+    let pipeline_key = unsafe { archetype.pipeline_key.unwrap_unchecked() };
+
+    // the cursor doesn't have descriptor sets or vertex/index buffers
+    Ok(ResourceUploadResult {
+      pipeline: pipeline_key,
+      buffers: crate::gpu::NULL_GPU_RESOURCE, // no buffers
+      texture_flags: TextureFlags::empty(),
     })
   }
 
@@ -1938,6 +2293,51 @@ impl<'a> RenderDevice for Device<'a> {
     Ok(())
   }
 
+  fn push_cursor_constants(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    push_constants: &crate::gpu::CursorPushConstants,
+  ) -> GpuResult<()> {
+    let res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers
+      .get(&(timeline, cmd_buffer))
+      .ok_or(GpuError::InvalidArgument)?;
+
+    let arch_ref: Option<&_>;
+    #[cfg(debug_assertions)]
+    {
+      arch_ref = res.cursor_render_archetype.as_ref().as_ref();
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      arch_ref = res.cursor_render_archetype.as_ref();
+    }
+    let archetype = arch_ref.ok_or(GpuError::InvalidState)?;
+
+    let cmd = data.command_buffer.get();
+    let layout = archetype.pipeline_layout.get();
+
+    for range in &archetype.push_contant_ranges {
+      unsafe {
+        let push_constants_bytes = core::slice::from_raw_parts(
+          push_constants as *const _ as *const u8,
+          core::mem::size_of::<crate::gpu::CursorPushConstants>(),
+        );
+        self.device.cmd_push_constants(
+          cmd,
+          layout,
+          range.stage_flags,
+          range.offset,
+          &push_constants_bytes[range.offset as usize..(range.offset + range.size) as usize],
+        );
+      }
+    }
+
+    Ok(())
+  }
+
   fn draw_indexed(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
@@ -1954,6 +2354,23 @@ impl<'a> RenderDevice for Device<'a> {
 
     unsafe {
       self.device.cmd_draw_indexed(cmd, index_count, 1, 0, 0, 0);
+    }
+
+    Ok(())
+  }
+
+  fn draw(&self, cmd_buffer: crate::gpu::CommandBufferHandle, vertex_count: u32) -> GpuResult<()> {
+    let res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers
+      .get(&(timeline, cmd_buffer))
+      .ok_or(GpuError::InvalidArgument)?;
+
+    let cmd = data.command_buffer.get();
+
+    unsafe {
+      self.device.cmd_draw(cmd, vertex_count, 1, 0, 0);
     }
 
     Ok(())
