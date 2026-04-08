@@ -3,7 +3,7 @@
 // since oshal and core are then exposed to cdylibs, each with their own instance of an Allocator,
 // we should never take ownership or return allocated stuff to cdylib interface.
 use alloc::vec::Vec;
-use aethervk_oshal_rlib as oshal;
+use aethervk_oshal_rlib::{self as oshal, math::vector::{Vector, Vector3, vec3::Vec3f32}};
 use oshal::os::{
   fs::{self, FileSystemObject, PathBuf},
 };
@@ -106,6 +106,35 @@ pub struct Comet {
   mass_properties: MassProperties,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Triangle {
+  pub vertices: [Vec3f32; 3],
+}
+
+impl Triangle {
+  #[inline]
+  pub fn v0(&self) -> &Vec3f32 {
+    &self.vertices[0]
+  }
+  #[inline]
+  pub fn v1(&self) -> &Vec3f32 {
+    &self.vertices[1]
+  }
+  #[inline]
+  pub fn v2(&self) -> &Vec3f32 {
+    &self.vertices[2]
+  }
+  #[inline]
+  pub fn mean_vector(&self) -> Vec3f32 {
+    (*self.v0() + *self.v1() + *self.v2()) / 3.0
+  }
+
+  #[inline]
+  pub fn area(&self) -> f32 {
+    0.5 * (*self.v1() - *self.v0()).cross(*self.v2() - *self.v1()).length()
+  }
+}
+
 impl Comet {
   pub fn texture_flags(&self) -> TextureFlags {
     let mut flags = TextureFlags::empty();
@@ -122,6 +151,26 @@ impl Comet {
       flags |= TextureFlags::AO;
     }
     flags
+  }
+
+  /// Returns a zero-allocation, cloneable iterator over the mesh's triangles.
+  pub fn iter_triangles(&self) -> impl Iterator<Item = Triangle> + Clone + '_ {
+    // Iterate over indices in groups of 3
+    self.indices.chunks_exact(3).map(move |chunk| {
+      let i0 = chunk[0] as usize;
+      let i1 = chunk[1] as usize;
+      let i2 = chunk[2] as usize;
+
+      // Construct the Triangle on the fly
+      Triangle {
+        // Assuming your Vec3f32 has a from/into implementation for [f32; 3]
+        vertices: [
+          Vec3f32::from(self.vertices[i0].position),
+          Vec3f32::from(self.vertices[i1].position),
+          Vec3f32::from(self.vertices[i2].position),
+        ],
+      }
+    })
   }
 }
 
@@ -537,7 +586,7 @@ pub struct PushConstants {
   pub texture_flags: TextureFlags,
   pub sun_color: [f32; 4],
   pub camera_pos: [f32; 3],
-  pub _unused: u32
+  pub _unused: u32,
 }
 
 #[repr(C)]

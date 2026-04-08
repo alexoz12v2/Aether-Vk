@@ -544,6 +544,7 @@ impl Vector4 for Vec4f32 {
 impl ops::Index<usize> for Vec4f32 {
   type Output = f32;
 
+  #[inline]
   fn index(&self, index: usize) -> &Self::Output {
     debug_assert!(index < 4);
     #[cfg(target_arch = "x86_64")]
@@ -558,12 +559,13 @@ impl ops::Index<usize> for Vec4f32 {
     }
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
-      self.data[index]
+      &self.data[index]
     }
   }
 }
 
 impl ops::IndexMut<usize> for Vec4f32 {
+  #[inline]
   fn index_mut(&mut self, index: usize) -> &mut Self::Output {
     debug_assert!(index < 4);
     #[cfg(target_arch = "x86_64")]
@@ -600,6 +602,50 @@ impl Vec4f32 {
   #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
   pub(crate) fn from_array(v: [f32; 4]) -> Self {
     Self { data: v }
+  }
+}
+
+impl ops::Index<usize> for Quat {
+  type Output = f32;
+
+  #[inline]
+  fn index(&self, index: usize) -> &Self::Output {
+    debug_assert!(index < 4);
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+      let ptr = &self.0.simd as *const __m128 as *const f32;
+      ptr.add(index).as_ref().unwrap_unchecked()
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+      let ptr = &self.0.simd as *const float32x4_t as *const f32;
+      ptr.add(index).as_ref().unwrap_unchecked()
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+      &self.0.data[index]
+    }
+  }
+}
+
+impl ops::IndexMut<usize> for Quat {
+  #[inline]
+  fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+    debug_assert!(index < 4);
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+      let ptr = &mut self.0.simd as *mut __m128 as *mut f32;
+      ptr.add(index).as_mut().unwrap_unchecked()
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+      let ptr = &mut self.0.simd as *mut float32x4_t as *mut f32;
+      ptr.add(index).as_mut().unwrap_unchecked()
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+      &mut self.0.data[index]
+    }
   }
 }
 
@@ -915,6 +961,23 @@ mod tests {
     assert_eq!(v[2], 6.0);
 
     assert_eq!(v, vec(1.0, 5.0, 6.0, 4.0));
+  }
+
+  #[test]
+  fn test_quaternion_indexing() {
+    let mut q = Quat(vec(1.0, 2.0, 3.0, 4.0));
+
+    // Index
+    assert_eq!(q[0], 1.0);
+    assert_eq!(q[1], 2.0);
+    assert_eq!(q[2], 3.0);
+    assert_eq!(q[3], 4.0);
+
+    // IndexMut
+    q[1] = 5.0;
+    assert_eq!(q[1], 5.0);
+
+    assert_eq!(q.0, vec(1.0, 5.0, 3.0, 4.0));
   }
 
   #[test]

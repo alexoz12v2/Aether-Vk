@@ -68,6 +68,29 @@ pub trait Vector:
   fn max(self, other: Self) -> Self;
 }
 
+pub trait Vector2: Vector
+where
+  Self::Scalar: Scalar,
+{
+  fn from_components(x: Self::Scalar, y: Self::Scalar) -> Self;
+  fn x(&self) -> Self::Scalar;
+  fn y(&self) -> Self::Scalar;
+
+  fn to_vec3<V>(self, z: Self::Scalar) -> V
+  where
+    V: Vector3<Scalar = Self::Scalar>,
+  {
+    V::from_components(self.x(), self.y(), z)
+  }
+
+  fn to_vec4<V>(self, z: Self::Scalar, w: Self::Scalar) -> V
+  where
+    V: Vector4<Scalar = Self::Scalar>,
+  {
+    V::from_components(self.x(), self.y(), z, w)
+  }
+}
+
 pub trait Vector3: Vector
 where
   Self::Scalar: Scalar,
@@ -116,5 +139,6 @@ where
   fn w(&self) -> Self::Scalar;
 }
 
+pub mod vec2;
 pub mod vec3;
 pub mod vec4;

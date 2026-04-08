@@ -1,6 +1,7 @@
 use core::ops;
 
 use crate::math::{
+  floating::FloatOps,
   matrix::{Matrix, Matrix3, MatrixVectorMul, SquareMatrix},
   vector::{Vector, Vector3, vec3::Vec3f32},
 };
@@ -259,13 +260,22 @@ impl Matrix3 for Mat3f32 {
       z: c2,
     }
   }
+
+  #[inline]
+  fn from_array(x: &[Self::Scalar; 9]) -> Self {
+    Self {
+      x: Vec3f32::from_components(x[0], x[1], x[2]),
+      y: Vec3f32::from_components(x[3], x[4], x[5]),
+      z: Vec3f32::from_components(x[6], x[7], x[8]),
+    }
+  }
 }
 
 #[cfg(test)]
 mod tests {
   extern crate std;
   use super::*;
-  use crate::math::{FloatLike, vector::Vector3};
+  use crate::math::{vector::Vector3};
 
   // Helper macro to easily define a 3x3 column-major matrix
   // TODO: expose probably
