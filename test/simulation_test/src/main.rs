@@ -1,239 +1,44 @@
+mod logic_thread;
+mod render_thread;
+mod windowing;
+
 use aethervk_core_rlib::{
-  gpu::{
-    self, OpaqueNativeHandleInfo, RenderDevice,
-    frame::{self, RenderPath},
-  },
-  scene::{
-    CameraComponent, CursorComponent, PhysicalMeshComponent, RenderableDataRef, Scene,
-    TransformComponent, EntityId,
-  },
+  gpu::{self},
+  scene::{CameraComponent, CursorComponent, PhysicalMeshComponent, Scene, TransformComponent},
   simulation,
-  types::{GpuResult, RuntimeParams},
+  types::RuntimeParams,
 };
 use aethervk_oshal_rlib::math::{
-  FloatLike,
-  floating::FloatOps,
   matrix::{Matrix4, SquareMatrix, mat4::Mat4x4f32},
   quaternion::Quaternion,
-  vector::{
-    Vector, Vector3, Vector4,
-    vec3::Vec3f32,
-    vec4::{Quat, Vec4f32},
-  },
+  vector::{Vector3, vec3::Vec3f32, vec4::Quat},
 };
 use heapless::index_map::FnvIndexMap;
-#[cfg(target_os = "macos")]
-use objc2_app_kit::NSView;
-#[cfg(target_os = "macos")]
-use objc2_quartz_core::CAAutoresizingMask;
-#[cfg(target_os = "macos")]
-use raw_window_handle::RawWindowHandle;
-#[cfg(all(target_os = "linux", feature = "linux_xcb"))]
-use raw_window_handle::RawWindowHandle;
-#[cfg(target_os = "linux")]
-use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
-#[cfg(target_os = "linux")]
-use core::ffi;
-#[cfg(windows)]
-use raw_window_handle::RawWindowHandle;
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-#[cfg(all(target_os = "linux", feature = "linux_wayland"))]
-use spirv::Op;
-#[cfg(windows)]
-use core::ffi;
 use std::{
   io::Read,
-  collections::HashMap,
-  sync::{
-    Arc, RwLock, mpsc,
-    atomic::{self, AtomicU64},
-  },
+  sync::{Arc, RwLock, mpsc},
   time::Instant,
 };
 use winit::{
-  event::{DeviceEvent, ElementState, Event, WindowEvent},
-  event_loop::{ControlFlow, EventLoop, EventLoopBuilder, EventLoopProxy},
-  window::{Window, WindowBuilder},
+  event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent},
+  event_loop::{ControlFlow, EventLoopBuilder},
+  keyboard::{KeyCode, PhysicalKey},
+  window::WindowBuilder,
 };
 
-// ----------------------------------------------
-// Structures to cross FFI boundaries safely
-// ----------------------------------------------
-struct RenderItem {
-  entity_id: EntityId,
-  model_matrix: Mat4x4f32,
-}
-
-struct RenderPacket {
-  render_items: Vec<RenderItem>,
-  camera_transform: TransformComponent,
-  camera_component: CameraComponent,
-  window_size: winit::dpi::PhysicalSize<u32>,
-}
-
-#[repr(C)]
-struct RenderPayloadData<'a> {
-  packet: &'a mut RenderPacket,
-  presentation_engine: gpu::PresentationEngineHandle,
-  scene: &'a Scene,
-  cursor_entity: EntityId,
-}
-
-#[cfg(target_os = "macos")]
-unsafe fn setup_metal_layer(
-  window: &Window,
-  device: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>,
-) -> objc2::rc::Retained<objc2_quartz_core::CAMetalLayer> {
-  use objc2_app_kit::NSView;
-  use objc2_quartz_core::CAMetalLayer;
-  use objc2_metal::MTLPixelFormat;
-  use objc2_core_foundation::CGSize;
-
-  let raw_handle = window.window_handle().unwrap().as_raw();
-  let view_ptr = match raw_handle {
-    RawWindowHandle::AppKit(w) => w.ns_view.as_ptr(),
-    _ => panic!("Expected an AppKit window handle"),
-  };
-
-  let view: &NSView = unsafe { (view_ptr as *const NSView).as_ref() }.unwrap();
-
-  let layer = CAMetalLayer::new();
-  layer.setDevice(Some(device));
-
-  // REMOVED: setPixelFormat and setDrawableSize. MoltenVK MUST own these.
-  layer.setPresentsWithTransaction(false);
-
-  let scale_factor = window.scale_factor();
-  layer.setContentsScale(scale_factor);
-
-  // --- THE FIX ---
-  // 1. Give the layer a physical UI dimension by matching the View's bounds
-  let view_bounds = view.bounds();
-  layer.setFrame(view_bounds);
-
-  // 2. Ensure the layer resizes when the window/view resizes
-  // CAAutoresizingMask: WidthSizable (1 << 1) | HeightSizable (1 << 4) = 18
-  layer.setAutoresizingMask(
-    CAAutoresizingMask::LayerHeightSizable | CAAutoresizingMask::LayerWidthSizable,
-  );
-
-  // Attach to NSView (creating a layer-hosting view)
-  view.setLayer(Some(&layer));
-  view.setWantsLayer(true);
-
-  layer
-}
-
-struct WindowPlatformData {
-  #[cfg(target_os = "macos")]
-  metal_layer: objc2::rc::Retained<objc2_quartz_core::CAMetalLayer>,
-}
-
-impl WindowPlatformData {
-  #[cfg(target_os = "macos")]
-  fn new_macos(metal_layer: objc2::rc::Retained<objc2_quartz_core::CAMetalLayer>) -> Self {
-    Self { metal_layer }
-  }
-}
-
-struct WindowExtractHandlesParams {
-  #[cfg(target_os = "macos")]
-  mtl_device: objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>>,
-}
-
-impl WindowExtractHandlesParams {
-  #[cfg(target_os = "macos")]
-  fn new_macos(
-    mtl_device: objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>>,
-  ) -> Self {
-    Self { mtl_device }
-  }
-}
-
-/// Utility to extract native handles from [`winit::Window`]
-fn extract_native_handles(
-  window: &Window,
-  _params: &WindowExtractHandlesParams,
-) -> (OpaqueNativeHandleInfo, WindowPlatformData) {
-  // extract raw handles from winit window
-  let window_handle = window.window_handle().unwrap().as_raw();
-  let display_handle = window.display_handle().unwrap().as_raw();
-
-  match (window_handle, display_handle) {
-    #[cfg(windows)]
-    (RawWindowHandle::Win32(w), _) => (
-      OpaqueNativeHandleInfo {
-        ptr0: w.hinstance.map(|h| h.get()).unwrap_or(0) as *mut ffi::c_void,
-        ptr1: w.hwnd.get() as *mut ffi::c_void,
-      },
-      WindowPlatformData {},
-    ),
-
-    #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
-    (RawWindowHandle::Wayland(w), RawDisplayHandle::Wayland(d)) => (
-      OpaqueNativeHandleInfo {
-        ptr0: d.display.as_ptr() as *mut ffi::c_void,
-        ptr1: w.surface.as_ptr() as *mut ffi::c_void,
-      },
-      WindowPlatformData,
-    ),
-
-    #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
-    (RawWindowHandle::Xlib(w), RawDisplayHandle::Xlib(d)) => (
-      OpaqueNativeHandleInfo {
-        ptr0: d
-          .display
-          .map(|d| d.as_ptr())
-          .unwrap_or(std::ptr::null_mut()) as *mut ffi::c_void,
-        ptr1: w.window as usize as *mut ffi::c_void,
-      },
-      WindowPlatformData,
-    ),
-
-    #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
-    (RawWindowHandle::Xcb(w), RawDisplayHandle::Xcb(d)) => (
-      OpaqueNativeHandleInfo {
-        ptr0: d
-          .connection
-          .map(|c| c.as_ptr())
-          .unwrap_or(std::ptr::null_mut()) as *mut ffi::c_void,
-        ptr1: w.window.get() as usize as *mut ffi::c_void,
-      },
-      WindowPlatformData,
-    ),
-
-    #[cfg(target_os = "macos")]
-    (RawWindowHandle::AppKit(w), _) => {
-      let layer = unsafe { setup_metal_layer(window, &_params.mtl_device) };
-
-      let info = OpaqueNativeHandleInfo {
-        ptr0: core::ptr::from_ref::<objc2_quartz_core::CALayer>(layer.as_ref())
-          as *mut core::ffi::c_void,
-        ptr1: std::ptr::null_mut(),
-      };
-
-      (info, WindowPlatformData::new_macos(layer))
-    }
-
-    _ => panic!("unsupported platform or handle mismatch"),
-  }
-}
+use logic_thread::{start_logic_thread, LogicCommand};
+use render_thread::{RenderItem, RenderPacket, start_render_thread};
+use windowing::{AppEvent, WindowExtractHandlesParams, extract_native_handles, setup_resize_hook};
 
 struct AppState {
   scene: Arc<RwLock<Scene>>,
   presentation_engine: gpu::PresentationEngineHandle,
-  camera_entity: EntityId,
+  camera_entity: aethervk_core_rlib::scene::EntityId,
   is_paused: bool,
   time_scale: f32,
-  root_entity: EntityId,
-  window: Window,
-
-  // random state
+  root_entity: aethervk_core_rlib::scene::EntityId,
+  window: winit::window::Window,
   is_resizing: bool,
-
-  // camera
-  pitch: f32,
-  yaw: f32,
 }
 
 impl simulation::Pausable for AppState {
@@ -251,197 +56,22 @@ impl simulation::Pausable for AppState {
   }
 }
 
-/// Custom event type to handle resizing start and stop
-enum AppEvent {
-  ResizeStarted,
-  ResizeEnded,
-}
-
-/// We need to intercept `WM_ENTERSIZEMOVE` and `WM_EXITSIZEMOVE` so that we can pause and resume
-/// rendering during live resize on Windows. We cannot override the window procedure because `winit` relies on it
-/// Therefore we'll use `SetWindowSubclass` API from `comctl32.dll` to inject a hook in the message pump of our window
-/// and pass all the messages down to the original window procedure after intercepting the ones we care about
-#[cfg(windows)]
-fn setup_windows_resize_hook(
-  window: &Window,
-  proxy_ptr: std::ptr::NonNull<EventLoopProxy<AppEvent>>,
-) {
-  use windows::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, WPARAM},
-    UI::Shell::{SetWindowSubclass, DefSubclassProc},
-    UI::WindowsAndMessaging::{WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE},
-  };
-
-  unsafe extern "system" fn subclass_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-    _id_subclass: usize,
-    _ref_data: usize,
-  ) -> LRESULT {
-    match msg {
-      WM_ENTERSIZEMOVE => {
-        // Send ResizeStarted event to the main thread
-        let proxy =
-          unsafe { std::ptr::NonNull::new_unchecked(_ref_data as *mut EventLoopProxy<AppEvent>) };
-        let _ = unsafe { proxy.as_ref() }.send_event(AppEvent::ResizeStarted);
-      }
-      WM_EXITSIZEMOVE => {
-        // Send ResizeEnded event to the main thread
-        let proxy =
-          unsafe { std::ptr::NonNull::new_unchecked(_ref_data as *mut EventLoopProxy<AppEvent>) };
-        let _ = unsafe { proxy.as_ref() }.send_event(AppEvent::ResizeEnded);
-      }
-      _ => {}
-    }
-
-    // Call the original window procedure for default processing
-    unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
-  }
-
-  let handle = window.window_handle().unwrap().as_raw();
-  if let RawWindowHandle::Win32(win32_handle) = handle {
-    unsafe {
-      let hwnd = HWND(win32_handle.hwnd.get() as *mut _);
-      // uid_subclass to any unique identifier within process, use 1
-      // TODO: log on error
-      let _ = SetWindowSubclass(hwnd, Some(subclass_proc), 1, proxy_ptr.as_ptr() as _);
-    }
-  }
-}
-
-#[cfg(target_os = "macos")]
-use objc2::{ClassType, DeclaredClass, declare_class, msg_send, msg_send_id, rc::Retained, sel};
-#[cfg(target_os = "macos")]
-use objc2_foundation::{ns_string, NSNotification, NSNotificationCenter, NSObject};
-#[cfg(target_os = "macos")]
-use std::cell::Cell;
-
-#[cfg(target_os = "macos")]
-struct ResizeObserverIvars {
-  /// Objective-C methods take `&self`, so Cell to safely store raw proxy pointer
-  /// https://docs.rs/objc2/latest/objc2/topics/interior_mutability/index.html
-  proxy_ptr: Cell<std::ptr::NonNull<EventLoopProxy<AppEvent>>>,
-}
-
-#[cfg(target_os = "macos")]
-objc2::define_class!(
-  /// Observer to register in the default notification center for the window with Objective-C equivalent:
-  /// [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(windowWillStartLiveResize:) name:NSWindowWillStartLiveResizeNotification object:window];
-  #[unsafe(super(NSObject))]
-  #[ivars = ResizeObserverIvars]
-  struct ResizeObserver;
-
-  impl ResizeObserver {
-    #[unsafe(method(windowWillStartLiveResize:))]
-    fn will_start_resize(&self, _notif: &NSNotification) {
-      let ivars = self.ivars();
-      let ptr = ivars.proxy_ptr.get();
-      // TODO: log result error
-      let _ = unsafe { ptr.as_ref() }.send_event(AppEvent::ResizeStarted);
-    }
-
-    #[unsafe(method(windowDidEndLiveResize:))]
-    fn did_end_resize(&self, _notif: &NSNotification) {
-      let ivars = self.ivars();
-      let ptr = ivars.proxy_ptr.get();
-      // TODO: log result error
-      let _ = unsafe { ptr.as_ref() }.send_event(AppEvent::ResizeEnded);
-    }
-  }
-);
-
-#[cfg(target_os = "macos")]
-impl ResizeObserver {
-  fn new(proxy_ptr: std::ptr::NonNull<EventLoopProxy<AppEvent>>) -> Retained<Self> {
-    let this: Retained<Self> = unsafe {
-      let some = msg_send![Self::class(), alloc];
-      msg_send![some, init]
-    };
-    this.ivars().proxy_ptr.set(proxy_ptr);
-    this
-  }
-}
-
-/// if we assign a new `NSWindowDelegate`, `winit` will stop working. Instead, register an observer
-/// to `NSNotificationCenter` to listen for `NSWindowWillStartLiveResizeNotification` and
-/// `NSWindowDidEndLiveResizeNotification`
-#[cfg(target_os = "macos")]
-fn setup_macos_resize_hook(
-  window: &Window,
-  proxy_ptr: std::ptr::NonNull<EventLoopProxy<AppEvent>>,
-) {
-  let handle = window.window_handle().unwrap().as_raw();
-  if let RawWindowHandle::AppKit(appkit_handle) = handle {
-    // 1. Create the observer
-    let observer = ResizeObserver::new(proxy_ptr);
-    // 2. Intentionally leak it with a +1 retain count so it lives forever
-    let observer_raw = Retained::into_raw(observer);
-    unsafe {
-      let observer_ref = &*(observer_raw as *const NSObject);
-      let center = NSNotificationCenter::defaultCenter();
-      // 3. Get the `NSWindow` pointer so we only listen to notifications for this window
-      let view = appkit_handle.ns_view.cast::<NSView>();
-      let window_obj = unsafe { view.as_ref() }.window().unwrap();
-      // 4. Register for "Live Resize Started"
-      center.addObserver_selector_name_object(
-        unsafe { observer_raw.as_ref().unwrap_unchecked() },
-        sel!(windowWillStartLiveResize:),
-        Some(ns_string!("NSWindowWillStartLiveResizeNotification")),
-        Some(&window_obj),
-      );
-      // 5. Register for "Live Resize Ended"
-      center.addObserver_selector_name_object(
-        unsafe { observer_raw.as_ref().unwrap_unchecked() },
-        sel!(windowDidEndLiveResize:),
-        Some(ns_string!("NSWindowDidEndLiveResizeNotification")),
-        Some(&window_obj),
-      );
-    }
-  }
-}
-
-fn setup_resize_hook(window: &Window, proxy_ptr: std::ptr::NonNull<EventLoopProxy<AppEvent>>) {
-  #[cfg(windows)]
-  {
-    setup_windows_resize_hook(&window, proxy_ptr);
-  }
-  #[cfg(target_os = "macos")]
-  {
-    setup_macos_resize_hook(&window, proxy_ptr);
-  }
-  #[cfg(target_os = "linux")]
-  {
-    todo!();
-  }
-}
-
 fn main() {
-  // 1. Override the default panic behavior
   std::panic::set_hook(Box::new(|panic_info| {
-    // Print out the panic details so you know what went wrong
     println!("CRASH DETECTED: {}", panic_info);
-
-    // Wait for user input before allowing the program to exit.
-    // This keeps the RenderDoc window / terminal open!
     println!("Press Enter to close the application...");
     let _ = std::io::stdin().read(&mut [0u8]);
   }));
 
-  // use winit's user event feature to setup and intercept a proxy for window messages/notifications
-  // about start and end of resizing
   let event_loop = EventLoopBuilder::<AppEvent>::with_user_event()
     .build()
     .unwrap();
   let proxy = event_loop.create_proxy();
-  // leak the proxy object such that it's kept around for the application's lifetime
   let proxy_ptr = unsafe { std::ptr::NonNull::new_unchecked(Box::into_raw(Box::new(proxy))) };
 
   let start_time = Instant::now();
   println!("[{:.2?}] Application starting.", start_time.elapsed());
 
-  // 1. Setup
   let window = WindowBuilder::new()
     .with_title("AetherVk Simulation")
     .build(&event_loop)
@@ -462,6 +92,7 @@ fn main() {
     .take_mut_and(|context| Ok(context.init_device(0, &additional_params)?))
     .unwrap()
     .unwrap();
+
   let params: WindowExtractHandlesParams;
   #[cfg(not(target_os = "macos"))]
   {
@@ -489,7 +120,6 @@ fn main() {
         );
         let dev_ptr =
           mtl_device_id as *mut objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>;
-        // Safely retain the object (drop of retained will ensure we don't leak it)
         let metal_device = unsafe { objc2::rc::Retained::retain(dev_ptr).unwrap() };
         Ok(metal_device)
       })
@@ -512,23 +142,18 @@ fn main() {
       .take_and(|context| {
         use aethervk_core_rlib::types::GpuError;
 
-        let mut handle_result: GpuResult<gpu::PresentationEngineHandle> =
+        let mut handle_result: aethervk_core_rlib::types::GpuResult<gpu::PresentationEngineHandle> =
           Err(GpuError::InvalidState);
         let mut closure_data = (&params, &mut handle_result);
 
-        let closure = |device: &dyn RenderDevice, data: *mut core::ffi::c_void| {
-          // 1. Explicitly define the exact tuple type (two references)
+        let closure = |device: &dyn gpu::RenderDevice, data: *mut core::ffi::c_void| {
           type ClosureData<'a> = (
             &'a gpu::PresentationEngineParams,
-            &'a mut GpuResult<gpu::PresentationEngineHandle>,
+            &'a mut aethervk_core_rlib::types::GpuResult<gpu::PresentationEngineHandle>,
           );
 
           let data_ptr = data as *mut ClosureData;
-
-          // 2. Destructure. Thanks to match ergonomics, `params_ref` is `&mut &PresentationEngineParams`
           let (params_ref, handle_result) = unsafe { &mut *data_ptr };
-
-          // 3. Deref `params_ref` once so we pass `&PresentationEngineParams`
           **handle_result = device.create_presentation_engine(*params_ref);
           Ok(())
         };
@@ -558,10 +183,8 @@ fn main() {
 
   let model_path = {
     let mut args = std::env::args();
-    println!("You passed {} arguments", args.len());
     if args.len() > 1 {
-      let _ = args.next().unwrap(); // discard useless exe path
-      // interpret first argument as a custom asset path
+      let _ = args.next().unwrap();
       std::path::PathBuf::from(args.next().unwrap()).join("Comet.glb")
     } else {
       let mut home_dir = std::env::current_exe().unwrap();
@@ -569,18 +192,15 @@ fn main() {
       const MAX_ITER: i32 = 32;
       while {
         let d = home_dir.join("assets/Comet.glb");
-        println!("Checking path {:?}", d);
         !d.is_file() && iter < MAX_ITER
       } {
         home_dir.pop();
         iter += 1;
         assert!(home_dir.is_dir());
       }
-
       home_dir.join("assets/Comet.glb")
     }
   };
-  println!("Searching for comet in `{:?}`", &model_path);
   let comet = simulation::comet::load_comet_from_gltf(model_path.to_str().unwrap())
     .expect("Failed to load comet");
 
@@ -617,7 +237,7 @@ fn main() {
     .add_component(
       cursor_entity,
       TransformComponent {
-        position: Vec3f32::from_components(0.0, 0.0, 0.0), // render it in the origin
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
         rotation: Quat::identity(),
         scale: Vec3f32::from_components(1.0, 1.0, 1.0),
       },
@@ -643,7 +263,7 @@ fn main() {
     .add_component(
       camera_entity,
       CameraComponent {
-        projection: Mat4x4f32::identity(), // Will be updated on resize
+        projection: Mat4x4f32::identity(),
       },
     )
     .unwrap();
@@ -660,385 +280,271 @@ fn main() {
     root_entity,
     is_resizing: false,
     window,
-    pitch: 0.0,
-    yaw: 0.0,
   };
 
-  // --- 2: Spawn render thread and Semaphore channel
+  // --- Start Render Thread ---
   let (render_tx, render_rx) = mpsc::sync_channel::<RenderPacket>(1);
-  let render_frontend_clone = Arc::clone(&render_frontend);
-  let scene_render_clone = Arc::clone(&scene_shared);
-  std::thread::spawn(move || {
-    for mut packet in render_rx {
-      let scene_guard = scene_render_clone.read().unwrap();
-      let mut c_payload = RenderPayloadData {
-        packet: &mut packet,
-        presentation_engine,
-        scene: &scene_guard,
-        cursor_entity,
-      };
+  start_render_thread(
+    render_rx,
+    Arc::clone(&scene_shared),
+    Arc::clone(&render_frontend),
+    render_device_handle,
+    presentation_engine,
+    cursor_entity,
+  );
 
-      let res = render_frontend_clone.write().unwrap().take_and(|context| {
-        context
-          .deref_device_and(
-            render_device_handle,
-            &mut c_payload as *mut _ as *mut core::ffi::c_void,
-            render_payload_ffi,
-          )
-          .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
-      });
-      if let Some(Err(e)) = res {
-        println!("Render error: {:?}", e);
-      }
-    }
+  // --- Start Logic Thread ---
+  let (logic_tx, logic_rx) = mpsc::channel::<LogicCommand>();
+  start_logic_thread(
+    logic_rx,
+    Arc::clone(&scene_shared),
+    camera_entity,
+    cursor_entity,
+  );
+
+  // Update initial resize to trigger projection matrix update
+  let _ = logic_tx.send(LogicCommand::Resize {
+    width: app_state.window.inner_size().width,
+    height: app_state.window.inner_size().height,
   });
 
-  // --- 3. Main Event Loop
+  // --- Main Event Loop ---
   let mut right_mouse_button_down = false;
-  let camera_focus_point = Vec3f32::from_components(0.0, 0.0, 0.0);
-  let mut camera_distance = 5.0;
+  let mut middle_mouse_button_down = false;
+  let mut mouse_x = 0.0;
+  let mut mouse_y = 0.0;
   let mut last_log_time = Instant::now();
-
-  let render_frontend_events = Arc::clone(&render_frontend);
 
   event_loop.set_control_flow(ControlFlow::Poll);
   event_loop
-    .run(move |event, elwt| {
-      match event {
-        // User Events
-        Event::UserEvent(app_event) => match app_event {
-          AppEvent::ResizeStarted => {
-            app_state.is_resizing = true;
+    .run(move |event, elwt| match event {
+      Event::UserEvent(app_event) => match app_event {
+        AppEvent::ResizeStarted => {
+          app_state.is_resizing = true;
+        }
+        AppEvent::ResizeEnded => {
+          app_state.is_resizing = false;
+          app_state.window.request_redraw();
+        }
+      },
+
+      Event::WindowEvent { event, window_id } if window_id == app_state.window.id() => {
+        match event {
+          WindowEvent::CloseRequested => {
+            elwt.exit();
           }
-          AppEvent::ResizeEnded => {
-            app_state.is_resizing = false;
-            app_state.window.request_redraw();
+          WindowEvent::Resized(physical_size) => {
+            let _ = logic_tx.send(LogicCommand::Resize {
+              width: physical_size.width,
+              height: physical_size.height,
+            });
+
+            #[cfg(target_os = "macos")]
+            {
+              window_info
+                .metal_layer
+                .setDrawableSize(objc2_core_foundation::CGSize {
+                  width: physical_size.width as f64,
+                  height: physical_size.height as f64,
+                });
+            }
           }
-        },
-
-        // winit Builtin window event
-        Event::WindowEvent { event, window_id } if window_id == app_state.window.id() => {
-          match event {
-            WindowEvent::CloseRequested => {
-              elwt.exit();
+          WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+            #[cfg(target_os = "macos")]
+            {
+              window_info.metal_layer.setContentsScale(scale_factor);
             }
-            WindowEvent::Resized(physical_size) => {
-              println!("[{:.2?}] Handling Resized event.", start_time.elapsed());
-              let mut state = &mut app_state;
-              let scene_guard = state.scene.read().unwrap();
-
-              // 1. Update your camera aspect ratio (Existing code)
-              scene_guard.with_component_mut(
-                state.camera_entity,
-                |camera: &mut CameraComponent| {
-                  camera.projection = Mat4x4f32::perspective_vk(
-                    45.0f32.to_radians(),
-                    physical_size.width as f32 / physical_size.height as f32,
-                    0.1,
-                    100.0,
-                  );
-                },
-              );
-
-              // 2. Update the CAMetalLayer bounds and scale (macOS specific)
-              #[cfg(target_os = "macos")]
-              {
-                window_info
-                  .metal_layer
-                  .setDrawableSize(objc2_core_foundation::CGSize {
-                    width: physical_size.width as f64,
-                    height: physical_size.height as f64,
-                  });
-              }
-
-              println!("[{:.2?}] Finished Resized event.", start_time.elapsed());
+          }
+          WindowEvent::CursorMoved { position, .. } => {
+            mouse_x = position.x;
+            mouse_y = position.y;
+          }
+          WindowEvent::MouseInput {
+            state: element_state,
+            button,
+            ..
+          } => match button {
+            MouseButton::Right => right_mouse_button_down = element_state == ElementState::Pressed,
+            MouseButton::Middle => {
+              middle_mouse_button_down = element_state == ElementState::Pressed
             }
-            WindowEvent::ScaleFactorChanged {
-              scale_factor,
-              inner_size_writer,
-            } => {
-              #[cfg(target_os = "macos")]
-              {
-                window_info.metal_layer.setContentsScale(scale_factor);
+            MouseButton::Left => {
+              if element_state == ElementState::Pressed {
+                let size = app_state.window.inner_size();
+                if size.width > 0 && size.height > 0 {
+                  let ndc_x = (mouse_x as f32 / size.width as f32) * 2.0 - 1.0;
+                  let ndc_y = (mouse_y as f32 / size.height as f32) * 2.0 - 1.0;
+                  let _ = logic_tx.send(LogicCommand::RaycastCursor { ndc_x, ndc_y });
+                  app_state.window.request_redraw();
+                }
               }
-            }
-            WindowEvent::RedrawRequested => {
-              // Is this ok?
-              if app_state.is_resizing {
-                return;
-              }
-
-              // --- 1. Data Collection Phase ---
-              // Traverse the scene to get all renderable items without holding any GPU locks.
-              let mut render_items = Vec::new();
-              let mut matrix_stack = vec![Mat4x4f32::identity()];
-              let scene_guard = app_state.scene.read().unwrap();
-
-              scene_guard.traverse_with_hooks(
-                app_state.root_entity,
-                &mut matrix_stack,
-                &mut |stack: &mut Vec<Mat4x4f32>,
-                      entity,
-                      transform_opt: Option<TransformComponent>,
-                      mesh_opt: Option<&PhysicalMeshComponent>| {
-                  let local_transform = transform_opt
-                    .map(|c| {
-                      Mat4x4f32::translation(c.position)
-                        * Mat4x4f32::from_quat(c.rotation)
-                        * Mat4x4f32::from_scale(c.scale)
-                    })
-                    .unwrap_or(Mat4x4f32::identity());
-
-                  let parent_transform = stack.last().unwrap();
-                  let global_transform = *parent_transform * local_transform;
-
-                  if mesh_opt.is_some() {
-                    render_items.push(RenderItem {
-                      entity_id: entity,
-                      model_matrix: global_transform,
-                    });
-                  }
-
-                  stack.push(global_transform);
-                  true // Continue traversal
-                },
-                &mut |stack, _| {
-                  stack.pop();
-                },
-              );
-
-              // Fetch camera data
-              let win_size = app_state.window.inner_size();
-              let ratio = win_size.width as f32 / win_size.height as f32;
-              let mut camera_transform = TransformComponent {
-                position: Vec3f32::from_components(0.0, 0.0, 0.0),
-                rotation: Quat::identity(),
-                scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-              };
-              let mut camera_component = CameraComponent {
-                projection: Mat4x4f32::perspective_vk(
-                  45.0f32.to_radians(),
-                  app_state.window.inner_size().width as f32 // TODO check against zero or other stuff
-                    / app_state.window.inner_size().height as f32,
-                  0.1,
-                  100.0,
-                ),
-              };
-
-              scene_guard.with_component(app_state.camera_entity, |c| camera_transform = *c);
-              scene_guard.with_component(app_state.camera_entity, |c| camera_component = *c);
-
-              // Send packet. If the Render Thread is busy, This blocks, locking hte framerate to 16.67 ms
-              let packet = RenderPacket {
-                render_items,
-                camera_transform,
-                camera_component,
-                window_size: app_state.window.inner_size(),
-              };
-
-              if render_tx.send(packet).is_err() {
-                elwt.exit(); // Render thread panicked/died
-              }
-            }
-            WindowEvent::MouseInput {
-              state: element_state,
-              button: winit::event::MouseButton::Right,
-              ..
-            } => {
-              right_mouse_button_down = element_state == ElementState::Pressed;
             }
             _ => {}
+          },
+          WindowEvent::KeyboardInput { event, .. } => {
+            if event.state == ElementState::Pressed {
+              if let PhysicalKey::Code(keycode) = event.physical_key {
+                let speed = 0.5;
+                match keycode {
+                  KeyCode::ArrowUp => {
+                    let _ = logic_tx.send(LogicCommand::MoveCursor {
+                      axis: Vec3f32::from_components(0.0, 0.0, -1.0),
+                      amount: speed,
+                    });
+                    app_state.window.request_redraw();
+                  }
+                  KeyCode::ArrowDown => {
+                    let _ = logic_tx.send(LogicCommand::MoveCursor {
+                      axis: Vec3f32::from_components(0.0, 0.0, 1.0),
+                      amount: speed,
+                    });
+                    app_state.window.request_redraw();
+                  }
+                  KeyCode::ArrowLeft => {
+                    let _ = logic_tx.send(LogicCommand::MoveCursor {
+                      axis: Vec3f32::from_components(-1.0, 0.0, 0.0),
+                      amount: speed,
+                    });
+                    app_state.window.request_redraw();
+                  }
+                  KeyCode::ArrowRight => {
+                    let _ = logic_tx.send(LogicCommand::MoveCursor {
+                      axis: Vec3f32::from_components(1.0, 0.0, 0.0),
+                      amount: speed,
+                    });
+                    app_state.window.request_redraw();
+                  }
+                  KeyCode::KeyQ => {
+                    let _ = logic_tx.send(LogicCommand::MoveCursor {
+                      axis: Vec3f32::from_components(0.0, -1.0, 0.0),
+                      amount: speed,
+                    });
+                    app_state.window.request_redraw();
+                  }
+                  KeyCode::KeyE => {
+                    let _ = logic_tx.send(LogicCommand::MoveCursor {
+                      axis: Vec3f32::from_components(0.0, 1.0, 0.0),
+                      amount: speed,
+                    });
+                    app_state.window.request_redraw();
+                  }
+                  KeyCode::Digit0 | KeyCode::Numpad0 => {
+                    let _ = logic_tx.send(LogicCommand::ResetCursor);
+                    app_state.window.request_redraw();
+                  }
+                  _ => {}
+                }
+              }
+            }
           }
-        }
-        Event::DeviceEvent {
-          event: DeviceEvent::MouseMotion { delta },
-          ..
-        } if right_mouse_button_down => {
-          let state = &mut app_state;
+          WindowEvent::RedrawRequested => {
+            if app_state.is_resizing {
+              return;
+            }
 
-          // 1. Check raw delta. Extremely large numbers or NaNs here will poison everything else.
-          println!("[DIAGNOSTIC] Mouse delta: {:?}", delta);
+            let mut render_items = Vec::new();
+            let mut matrix_stack = vec![Mat4x4f32::identity()];
+            let scene_guard = app_state.scene.read().unwrap();
 
-          let rotation_speed = 0.005;
-          state.yaw += delta.0 as f32 * rotation_speed; // TODO wrap around at 2*PI to prevent float precision issues?
-          state.pitch -= delta.1 as f32 * rotation_speed;
+            scene_guard.traverse_with_hooks(
+              app_state.root_entity,
+              &mut matrix_stack,
+              &mut |stack: &mut Vec<Mat4x4f32>,
+                    entity,
+                    transform_opt: Option<TransformComponent>,
+                    mesh_opt: Option<&PhysicalMeshComponent>| {
+                let local_transform = transform_opt
+                  .map(|c| {
+                    Mat4x4f32::translation(c.position)
+                      * Mat4x4f32::from_quat(c.rotation)
+                      * Mat4x4f32::from_scale(c.scale)
+                  })
+                  .unwrap_or(Mat4x4f32::identity());
 
-          state.yaw = state.yaw.fmod(<f32 as FloatOps>::PI * 2.0);
-          state.pitch = state.pitch.clamp(-1.55, 1.55);
+                let parent_transform = stack.last().unwrap();
+                let global_transform = *parent_transform * local_transform;
 
-          // 2. Check the accumulated state. If yaw/pitch are NaN, the quaternions will be corrupted.
-          println!(
-            "[DIAGNOSTIC] Angles - yaw: {}, pitch: {}",
-            state.yaw, state.pitch
-          );
+                if mesh_opt.is_some() {
+                  render_items.push(RenderItem {
+                    entity_id: entity,
+                    model_matrix: global_transform,
+                  });
+                }
 
-          let scene_guard = state.scene.read().unwrap();
-          scene_guard.with_component_mut(
-            state.camera_entity,
-            |camera_transform: &mut TransformComponent| {
-              let rotation_y =
-                Quat::from_axis_angle(Vec3f32::from_components(0.0, 1.0, 0.0), state.yaw);
-              let rotation_x =
-                Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
+                stack.push(global_transform);
+                true
+              },
+              &mut |stack, _| {
+                stack.pop();
+              },
+            );
 
-              // 3. Verify the individual quaternions. They should have a length of exactly 1.0.
-              println!("[DIAGNOSTIC] Quat Y: {:?}", rotation_y);
-              println!("[DIAGNOSTIC] Quat X: {:?}", rotation_x);
+            let mut camera_transform = TransformComponent {
+              position: Vec3f32::from_components(0.0, 0.0, 0.0),
+              rotation: Quat::identity(),
+              scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+            };
+            let mut camera_component = CameraComponent {
+              projection: Mat4x4f32::identity(),
+            };
 
-              let new_rotation = rotation_y * rotation_x;
+            scene_guard.with_component(app_state.camera_entity, |c| camera_transform = *c);
+            scene_guard.with_component(app_state.camera_entity, |c| camera_component = *c);
 
-              // 4. Verify combined quaternion. If quat_mul is flawed, this might be all zeros or NaNs.
-              println!("[DIAGNOSTIC] Combined Quat: {:?}", new_rotation);
+            let packet = RenderPacket {
+              render_items,
+              camera_transform,
+              camera_component,
+              window_size: app_state.window.inner_size(),
+            };
 
-              camera_transform.rotation = new_rotation;
-
-              let forward = Vec3f32::from_components(0.0, 0.0, -1.0);
-              let new_forward = new_rotation.rotate_vector(forward);
-
-              // 5. Verify the rotated forward vector. Should be a normalized direction vector.
-              println!("[DIAGNOSTIC] New Forward: {:?}", new_forward);
-
-              // 6. Check external variables that aren't defined in this block.
-              // If distance is 0, or focus point is NaN, your position breaks.
-              println!(
-                "[DIAGNOSTIC] Focus Point: {:?}, Distance: {}",
-                camera_focus_point, camera_distance
-              );
-
-              camera_transform.position = camera_focus_point - new_forward * camera_distance;
-
-              // 7. Verify final position. If this is (0,0,0) and focus point is (0,0,0), your view matrix might look at itself.
-              println!(
-                "[DIAGNOSTIC] Final Camera Position: {:?}",
-                camera_transform.position
-              );
-            },
-          );
-
-          state.window.request_redraw();
-        }
-        Event::DeviceEvent {
-          event: DeviceEvent::MouseWheel { delta, .. },
-          ..
-        } => {
-          let scroll_amount = match delta {
-            winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-            winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
-          };
-          camera_distance -= scroll_amount * 0.1;
-          if camera_distance < 1.0 {
-            camera_distance = 1.0;
+            if render_tx.send(packet).is_err() {
+              elwt.exit();
+            }
           }
-
-          let state = &mut app_state;
-          let scene_guard = state.scene.read().unwrap();
-          scene_guard.with_component_mut(
-            state.camera_entity,
-            |camera_transform: &mut TransformComponent| {
-              let forward = Vec3f32::from_components(0.0, 0.0, -1.0);
-              let new_forward = camera_transform.rotation.rotate_vector(forward);
-              camera_transform.position = camera_focus_point - new_forward * camera_distance;
-            },
-          );
-
-          state.window.request_redraw();
+          _ => {}
         }
-        Event::AboutToWait => {
-          if last_log_time.elapsed().as_secs() >= 5 {
-            println!("[{:.2?}] Liveliness: In AboutToWait.", start_time.elapsed());
-            last_log_time = Instant::now();
-          }
-          if !app_state.is_resizing {
-            app_state.window.request_redraw();
-          }
-        }
-        _ => (),
       }
+      Event::DeviceEvent {
+        event: DeviceEvent::MouseMotion { delta },
+        ..
+      } => {
+        if right_mouse_button_down {
+          let _ = logic_tx.send(LogicCommand::RotateCamera {
+            delta_x: delta.0 as f32,
+            delta_y: delta.1 as f32,
+          });
+          app_state.window.request_redraw();
+        } else if middle_mouse_button_down {
+          let _ = logic_tx.send(LogicCommand::PanCursor {
+            delta_x: delta.0 as f32,
+            delta_y: delta.1 as f32,
+          });
+          app_state.window.request_redraw();
+        }
+      }
+      Event::DeviceEvent {
+        event: DeviceEvent::MouseWheel { delta, .. },
+        ..
+      } => {
+        let scroll_amount = match delta {
+          winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+          winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
+        };
+        let _ = logic_tx.send(LogicCommand::ZoomCamera {
+          amount: scroll_amount,
+        });
+        app_state.window.request_redraw();
+      }
+      Event::AboutToWait => {
+        if last_log_time.elapsed().as_secs() >= 5 {
+          last_log_time = Instant::now();
+        }
+        if !app_state.is_resizing {
+          app_state.window.request_redraw();
+        }
+      }
+      _ => (),
     })
     .unwrap();
-}
-
-// 4. Render payload executes on the render thtread wiht full type safety
-fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -> GpuResult<()> {
-  let payload = unsafe { &mut *(data as *mut RenderPayloadData) };
-
-  device.start_frame()?;
-  let acquire_result = device.acquire_next_image(payload.presentation_engine)?;
-  // handle resize
-  if acquire_result.status.needs_resize() {
-    device.resize_presentation_engine(
-      payload.presentation_engine,
-      payload.packet.window_size.width,
-      payload.packet.window_size.height,
-    )?;
-    return Ok(());
-  }
-
-  let mut frame = frame::Frame::new();
-  for item in &payload.packet.render_items {
-    payload.scene.with_component(
-      item.entity_id,
-      |mesh: &PhysicalMeshComponent| -> GpuResult<()> {
-        frame
-          .add_renderable(
-            device,
-            item.entity_id,
-            item.model_matrix,
-            RenderableDataRef::PhysicalMesh(mesh),
-            payload.presentation_engine,
-          )
-          .unwrap();
-        Ok(())
-      },
-    );
-  }
-
-  payload.scene.with_component(
-    payload.cursor_entity,
-    |cursor: &CursorComponent| -> GpuResult<()> {
-      let t = payload
-        .scene
-        .global_transform(payload.cursor_entity)
-        .unwrap();
-      // Render cursor as a simple colored triangle for demonstration
-      frame
-        .add_renderable(
-          device,
-          payload.cursor_entity,
-          t.to_mat4(),
-          RenderableDataRef::Cursor(&cursor),
-          payload.presentation_engine,
-        )
-        .unwrap();
-      Ok(())
-    },
-  );
-
-  // Record commands
-  let render_path = frame::ForwardRenderPath;
-  render_path.record_commands(
-    device,
-    (
-      &payload.packet.camera_transform,
-      &payload.packet.camera_component,
-    ),
-    &frame,
-    payload.presentation_engine,
-    &acquire_result,
-  )?;
-  // present
-  let present_status = device.present(
-    payload.presentation_engine,
-    acquire_result.image_index as usize,
-    acquire_result.frame_index as usize,
-  )?;
-  if present_status.needs_resize() {
-    device.resize_presentation_engine(
-      payload.presentation_engine,
-      payload.packet.window_size.width,
-      payload.packet.window_size.height,
-    )?;
-  }
-
-  Ok(())
 }

@@ -1,0 +1,149 @@
+; SPIR-V
+; Version: 1.4
+; Generator: Google Shaderc over Glslang; 11
+; Bound: 89
+; Schema: 0
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Vertex %main "main" %gl_VertexIndex %push %outNearPos %outFarPos %_
+               OpSource GLSL 450
+               OpSourceExtension "GL_GOOGLE_cpp_style_line_directive"
+               OpSourceExtension "GL_GOOGLE_include_directive"
+               OpName %main "main"
+               OpName %uv "uv"
+               OpName %gl_VertexIndex "gl_VertexIndex"
+               OpName %indexable "indexable"
+               OpName %invViewProj "invViewProj"
+               OpName %Push "Push"
+               OpMemberName %Push 0 "viewProj"
+               OpMemberName %Push 1 "cameraPos"
+               OpMemberName %Push 2 "nearPlane"
+               OpMemberName %Push 3 "farPlane"
+               OpMemberName %Push 4 "density"
+               OpMemberName %Push 5 "gridColor"
+               OpName %push "push"
+               OpName %unprojectedNear "unprojectedNear"
+               OpName %unprojectedFar "unprojectedFar"
+               OpName %outNearPos "outNearPos"
+               OpName %outFarPos "outFarPos"
+               OpName %gl_PerVertex "gl_PerVertex"
+               OpMemberName %gl_PerVertex 0 "gl_Position"
+               OpMemberName %gl_PerVertex 1 "gl_PointSize"
+               OpMemberName %gl_PerVertex 2 "gl_ClipDistance"
+               OpMemberName %gl_PerVertex 3 "gl_CullDistance"
+               OpName %_ ""
+               OpDecorate %gl_VertexIndex BuiltIn VertexIndex
+               OpDecorate %indexable NonWritable
+               OpDecorate %Push Block
+               OpMemberDecorate %Push 0 ColMajor
+               OpMemberDecorate %Push 0 MatrixStride 16
+               OpMemberDecorate %Push 0 Offset 0
+               OpMemberDecorate %Push 1 Offset 64
+               OpMemberDecorate %Push 2 Offset 76
+               OpMemberDecorate %Push 3 Offset 80
+               OpMemberDecorate %Push 4 Offset 84
+               OpMemberDecorate %Push 5 Offset 96
+               OpDecorate %outNearPos Location 0
+               OpDecorate %outFarPos Location 1
+               OpDecorate %gl_PerVertex Block
+               OpMemberDecorate %gl_PerVertex 0 BuiltIn Position
+               OpMemberDecorate %gl_PerVertex 1 BuiltIn PointSize
+               OpMemberDecorate %gl_PerVertex 2 BuiltIn ClipDistance
+               OpMemberDecorate %gl_PerVertex 3 BuiltIn CullDistance
+       %void = OpTypeVoid
+          %3 = OpTypeFunction %void
+      %float = OpTypeFloat 32
+    %v2float = OpTypeVector %float 2
+%_ptr_Function_v2float = OpTypePointer Function %v2float
+       %uint = OpTypeInt 32 0
+     %uint_4 = OpConstant %uint 4
+%_arr_v2float_uint_4 = OpTypeArray %v2float %uint_4
+   %float_n1 = OpConstant %float -1
+         %14 = OpConstantComposite %v2float %float_n1 %float_n1
+    %float_1 = OpConstant %float 1
+         %16 = OpConstantComposite %v2float %float_1 %float_n1
+         %17 = OpConstantComposite %v2float %float_n1 %float_1
+         %18 = OpConstantComposite %v2float %float_1 %float_1
+         %19 = OpConstantComposite %_arr_v2float_uint_4 %14 %16 %17 %18
+        %int = OpTypeInt 32 1
+%_ptr_Input_int = OpTypePointer Input %int
+%gl_VertexIndex = OpVariable %_ptr_Input_int Input
+%_ptr_Function__arr_v2float_uint_4 = OpTypePointer Function %_arr_v2float_uint_4
+    %v4float = OpTypeVector %float 4
+%mat4v4float = OpTypeMatrix %v4float 4
+%_ptr_Function_mat4v4float = OpTypePointer Function %mat4v4float
+    %v3float = OpTypeVector %float 3
+       %Push = OpTypeStruct %mat4v4float %v3float %float %float %float %v3float
+%_ptr_PushConstant_Push = OpTypePointer PushConstant %Push
+       %push = OpVariable %_ptr_PushConstant_Push PushConstant
+      %int_0 = OpConstant %int 0
+%_ptr_PushConstant_mat4v4float = OpTypePointer PushConstant %mat4v4float
+%_ptr_Function_v4float = OpTypePointer Function %v4float
+     %uint_0 = OpConstant %uint 0
+%_ptr_Function_float = OpTypePointer Function %float
+     %uint_1 = OpConstant %uint 1
+    %float_0 = OpConstant %float 0
+%_ptr_Output_v3float = OpTypePointer Output %v3float
+ %outNearPos = OpVariable %_ptr_Output_v3float Output
+     %uint_3 = OpConstant %uint 3
+  %outFarPos = OpVariable %_ptr_Output_v3float Output
+%_arr_float_uint_1 = OpTypeArray %float %uint_1
+%gl_PerVertex = OpTypeStruct %v4float %float %_arr_float_uint_1 %_arr_float_uint_1
+%_ptr_Output_gl_PerVertex = OpTypePointer Output %gl_PerVertex
+          %_ = OpVariable %_ptr_Output_gl_PerVertex Output
+%_ptr_Output_v4float = OpTypePointer Output %v4float
+       %main = OpFunction %void None %3
+          %5 = OpLabel
+         %uv = OpVariable %_ptr_Function_v2float Function
+  %indexable = OpVariable %_ptr_Function__arr_v2float_uint_4 Function %19
+%invViewProj = OpVariable %_ptr_Function_mat4v4float Function
+%unprojectedNear = OpVariable %_ptr_Function_v4float Function
+%unprojectedFar = OpVariable %_ptr_Function_v4float Function
+         %23 = OpLoad %int %gl_VertexIndex
+         %26 = OpAccessChain %_ptr_Function_v2float %indexable %23
+         %27 = OpLoad %v2float %26
+               OpStore %uv %27
+         %38 = OpAccessChain %_ptr_PushConstant_mat4v4float %push %int_0
+         %39 = OpLoad %mat4v4float %38
+         %40 = OpExtInst %mat4v4float %1 MatrixInverse %39
+               OpStore %invViewProj %40
+         %43 = OpLoad %mat4v4float %invViewProj
+         %46 = OpAccessChain %_ptr_Function_float %uv %uint_0
+         %47 = OpLoad %float %46
+         %49 = OpAccessChain %_ptr_Function_float %uv %uint_1
+         %50 = OpLoad %float %49
+         %52 = OpCompositeConstruct %v4float %47 %50 %float_0 %float_1
+         %53 = OpMatrixTimesVector %v4float %43 %52
+               OpStore %unprojectedNear %53
+         %55 = OpLoad %mat4v4float %invViewProj
+         %56 = OpAccessChain %_ptr_Function_float %uv %uint_0
+         %57 = OpLoad %float %56
+         %58 = OpAccessChain %_ptr_Function_float %uv %uint_1
+         %59 = OpLoad %float %58
+         %60 = OpCompositeConstruct %v4float %57 %59 %float_1 %float_1
+         %61 = OpMatrixTimesVector %v4float %55 %60
+               OpStore %unprojectedFar %61
+         %64 = OpLoad %v4float %unprojectedNear
+         %65 = OpVectorShuffle %v3float %64 %64 0 1 2
+         %67 = OpAccessChain %_ptr_Function_float %unprojectedNear %uint_3
+         %68 = OpLoad %float %67
+         %69 = OpCompositeConstruct %v3float %68 %68 %68
+         %70 = OpFDiv %v3float %65 %69
+               OpStore %outNearPos %70
+         %72 = OpLoad %v4float %unprojectedFar
+         %73 = OpVectorShuffle %v3float %72 %72 0 1 2
+         %74 = OpAccessChain %_ptr_Function_float %unprojectedFar %uint_3
+         %75 = OpLoad %float %74
+         %76 = OpCompositeConstruct %v3float %75 %75 %75
+         %77 = OpFDiv %v3float %73 %76
+               OpStore %outFarPos %77
+         %82 = OpAccessChain %_ptr_Function_float %uv %uint_0
+         %83 = OpLoad %float %82
+         %84 = OpAccessChain %_ptr_Function_float %uv %uint_1
+         %85 = OpLoad %float %84
+         %86 = OpCompositeConstruct %v4float %83 %85 %float_0 %float_1
+         %88 = OpAccessChain %_ptr_Output_v4float %_ %int_0
+               OpStore %88 %86
+               OpReturn
+               OpFunctionEnd

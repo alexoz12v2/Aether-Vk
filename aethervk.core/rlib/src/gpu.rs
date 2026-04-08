@@ -50,7 +50,7 @@ pub struct RenderableInstanceId(pub u64);
 pub struct CursorPushConstants {
   pub view: [f32; 16],
   pub view_proj: [f32; 16],
-  pub cursor_pos: [f32; 3],
+  pub model: [f32; 16],
   pub cursor_size: f32,
 }
 
