@@ -1,0 +1,167 @@
+// ============================================================
+// VULKAN EXTENSIONS
+// ============================================================
+// Physical Storage Buffer (64-bit pointers)
+// Vulkan Memory Model
+// Subgroup Intrinsics
+#extension GL_EXT_buffer_reference : enable
+#extension GL_EXT_scalar_block_layout : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#extension GL_KHR_shader_subgroup_basic : enable
+
+// ============================================================
+// WORKGROUP AND RESOURCES
+// ============================================================
+// 3D Workgroup size configured via specialization constants
+layout(local_size_x_id = 0, local_size_y_id = 1, local_size_z_id = 2) in;
+
+// Output 3D Volumetric Texture (rgba16f ideal for physically accurate HDR)
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image3D sunVolume;
+
+// Physical Buffer 64 (Pointer accessed via push constants)
+layout(buffer_reference, scalar, buffer_reference_align = 8) buffer SunParams {
+  float time;              // Animation time
+  float photosphereTemp;   // Surface Temp, typically ~5778K
+  float coronaTemp;        // Atmosphere Temp, typically ~1,000,000K
+  float radius;            // Normalized core radius (e.g., 0.6)
+  float scaleHeight;       // Scale height for density falloff
+  float noiseScale;        // Frequency of convection granulation
+};
+
+layout(push_constant) uniform Push {
+  SunParams params; // 64-bit address to the params buffer
+} push;
+
+// Noise Generation for Simulated Convection
+// Part 1: stateless hashing/rng
+float hash(vec3 p) {
+  p = fract(p * 0.3183099 + 0.1);
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+// Noise Generation for Simulated Convection
+// Part 2: 3D noise function with hermite curves
+float noise(vec3 x) {
+  vec3 i = floor(x);
+  vec3 f = fract(x);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hash(i + vec3(0,0,0)), hash(i + vec3(1,0,0)), f.x),
+                 mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+             mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x),
+                 mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
+}
+
+// Fractional Brownian Motion (FBM)
+// Used to simulate turbolent plasma convection cells (Granulation) and magnetic field perturbations
+float fbm(vec3 p) {
+  float value = 0.0;
+  float amplitude = 0.5;
+  float frequency = 1.0;
+  for (int i = 0; i < 5; i++) {
+    value += amplitude * noise(p * frequency);
+    p = p * 2.0 + vec3(100.0); // shift to break repetition
+    amplitude *= 0.5;
+    frequency *= 2.0;
+  }
+  return value;
+}
+
+// Barometric formula (Hydrostatic Equilibrium)
+// Calculates exponential density decay fof the solar atmosphere (corona)
+// Equation: ⍴(r) = ⍴₀ * exp(-(r - R) / H)
+float hydrostaticDensity(float r, float R, float H) {
+  if (r <= R) return 1.0; // Interior/Photosphere is fully dense
+  return exp(-(r - R) / H);
+}
+
+// Planck's Lay (Blackbody Radiation - Tanner Helland Approximation)
+// Converts Temperature to RGB Radiance
+// While we should also map to human cone responses to various radiance spectra,
+// it's an approximation for 1000K-40000K (hopefully?)
+vec3 blackbody(float tempK) {
+  vec3 color;
+  float t = clamp(tempK, 1000.0, 40000.0) / 100.0;
+
+  // Red
+  if (t <= 66.0) {
+    color.r = 255.0;
+  } else {
+    color.r = 329.698727446 * pow(t - 60.0, -0.1332047592);
+  }
+
+  // Green
+  if (t <= 60.0) {
+    color.g = 99.4708025861 * log(t) - 161.1195681661;
+  } else {
+    color.g = 288.1221695283 * pow(t - 60.0, -0.0755148492);
+  }
+
+  // Blue
+  if (t >= 66.0) {
+    color.b = 255.0;
+  } else if (t <= 19.0) {
+    color.b = 0.0;
+  } else {
+    color.b = 138.5177312231 * log(t - 10.0) - 305.0447927307;
+  }
+
+  return clamp(color / 255.0, 0.0, 1.0); // Normalize to [0,1]
+}
+
+void main() {
+  ivec3 texelCoord = ivec3(gl_GlobalInvocationID);
+  ivec3 size = imageSize(sunVolume);
+
+  if (any(greaterThanEqual(texelCoord, size))) {
+    return;
+  }
+
+  // Normalized coordinates from -1.0 to 1.0 (0,0,0 is the center of the sun)
+  vec3 uvw = (vec3(texelCoord) + 0.5) / vec3(size) * 2.0 - 1.0;
+  float distFromCenter = length(uvw);
+
+  // Load simulation parameters from the PHysicalStorageBuffer pointer
+  float time = push.params.time;
+  float rSun = push.params.radius;
+  float scaleHeight = push.params.scaleHeight;
+  float photoTemp = push.params.photosphereTemp;
+  float coronaTemp = push.params.coronaTemp;
+
+  // Subgroup Intrinsics Demonstration:
+  // Averaging distance across the subgroup footprint
+  // While physically arabitrary, it demonstates GL_KHR_shader_subgroup_arithmetic usage
+  // over non-uniform control flow execution
+  float subgroupAvgDist = subgroupAdd(distFromCenter) / float(gl_SubgroupSize);
+
+  // Animate turbolence: (Simulating solar rotation and convection currents)
+  // (Velocity towards v and w arbitrary, what feels right)
+  vec3 noisePos = uvw * push.params.noiseScale - vec3(0.0, time * 0.1, time * 0.05);
+  float turbolence = fbm(noisePos);
+
+  // Temperature Granulation: Creates Hot/Cold spots on the Photosphere
+  float localTemp = photoTemp + (turbolence - 0.5) * 600.0;
+
+  // Magnetohydrodynamics (MHD) Surface Perturbation:
+  // Simulates flares and prominences pulling matter outwards from the core radius
+  float effectiveRadius = distFromCenter - turbolence * 0.15 * max(0.0, distFromCenter - rSun + 0.1);
+
+  // Calculate density and atmospheric transition mask
+  float density = hydrostaticDensity(effectiveRadius, rSun, scaleHeight);
+  float transitionMask = smoothstep(rSun, rSun + 0.1, effectiveRadius);
+
+  // Mix core temperature and corona temperature based on distance
+  float finalTemp = mix(localTemp, coronaTemp, transitionMask);
+
+  // Calculate final HDR Emission
+  vec3 emissionColor = blackbody(finalTemp);
+
+  // Radiative Transfer: Simplified Volume rendering emission/absorption model
+  // RGB = Emission * Density (Glowing Plasma), Alpha = Density (Optical Depth / Opacity)
+  // we boost emission slightly by integrating our subgroup distance scalar for validation
+  float intrinsicValidation = clamp(subgroupAvgDist / max(distFromCenter, 0.001), 0.9, 1.1);
+  vec3 finalColor = emissionColor * density * 2.0 * intrinsicValidation;
+
+  // Write out volumetric representation
+  imageStore(sunVolume, texelCoord, vec4(finalColor, density));
+}
