@@ -411,6 +411,16 @@ impl Matrix4 for Mat4x4f32 {
       w: c3,
     }
   }
+
+  #[inline]
+  fn from_array(x: &[Self::Scalar; 16]) -> Self {
+    Self {
+      x: Vec4f32::from_components(x[0], x[1], x[2], x[3]),
+      y: Vec4f32::from_components(x[4], x[5], x[6], x[7]),
+      z: Vec4f32::from_components(x[8], x[9], x[10], x[11]),
+      w: Vec4f32::from_components(x[12], x[13], x[14], x[15]),
+    }
+  }
 }
 
 impl Mat4x4f32 {
@@ -418,10 +428,8 @@ impl Mat4x4f32 {
   #[inline]
   fn scalar_determinant(&self) -> f32 {
     let m = [
-      self.x[0], self.x[1], self.x[2], self.x[3],
-      self.y[0], self.y[1], self.y[2], self.y[3],
-      self.z[0], self.z[1], self.z[2], self.z[3],
-      self.w[0], self.w[1], self.w[2], self.w[3],
+      self.x[0], self.x[1], self.x[2], self.x[3], self.y[0], self.y[1], self.y[2], self.y[3],
+      self.z[0], self.z[1], self.z[2], self.z[3], self.w[0], self.w[1], self.w[2], self.w[3],
     ];
 
     let coef00 = m[10] * m[15] - m[14] * m[11];
@@ -430,7 +438,7 @@ impl Mat4x4f32 {
     let coef04 = m[2] * m[15] - m[14] * m[3];
     let coef06 = m[2] * m[11] - m[10] * m[3];
     let coef07 = m[2] * m[7] - m[6] * m[3];
-    
+
     let fac0 = m[5] * coef00 - m[9] * coef02 + m[13] * coef03;
     let fac1 = -(m[1] * coef00 - m[9] * coef04 + m[13] * coef06);
     let fac2 = m[1] * coef02 - m[5] * coef04 + m[13] * coef07;
@@ -443,10 +451,8 @@ impl Mat4x4f32 {
   #[inline]
   fn scalar_det_and_adjugate(&self) -> (f32, Self) {
     let m = [
-      self.x[0], self.x[1], self.x[2], self.x[3],
-      self.y[0], self.y[1], self.y[2], self.y[3],
-      self.z[0], self.z[1], self.z[2], self.z[3],
-      self.w[0], self.w[1], self.w[2], self.w[3],
+      self.x[0], self.x[1], self.x[2], self.x[3], self.y[0], self.y[1], self.y[2], self.y[3],
+      self.z[0], self.z[1], self.z[2], self.z[3], self.w[0], self.w[1], self.w[2], self.w[3],
     ];
 
     let coef00 = m[10] * m[15] - m[14] * m[11];

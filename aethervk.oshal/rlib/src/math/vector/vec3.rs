@@ -24,6 +24,12 @@ impl Vec3f32 {
   }
 }
 
+impl From<[f32; 3]> for Vec3f32 {
+  fn from(value: [f32; 3]) -> Self {
+    Self::from_array(value)
+  }
+}
+
 impl PartialEq for Vec3f32 {
   #[inline]
   fn eq(&self, other: &Self) -> bool {
@@ -159,6 +165,50 @@ impl ops::Neg for Vec3f32 {
   #[inline]
   fn neg(self) -> Self::Output {
     Self(-self.0)
+  }
+}
+
+impl ops::Index<usize> for Vec3f32 {
+  type Output = f32;
+
+  #[inline]
+  fn index(&self, index: usize) -> &Self::Output {
+    debug_assert!(index < 3);
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+      let ptr = &self.0.simd as *const __m128 as *const f32;
+      ptr.add(index).as_ref().unwrap_unchecked()
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+      let ptr = &self.0.simd as *const float32x4_t as *const f32;
+      ptr.add(index).as_ref().unwrap_unchecked()
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+      &self.0.data[index]
+    }
+  }
+}
+
+impl ops::IndexMut<usize> for Vec3f32 {
+  #[inline]
+  fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+    debug_assert!(index < 3);
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+      let ptr = &mut self.0.simd as *mut __m128 as *mut f32;
+      ptr.add(index).as_mut().unwrap_unchecked()
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+      let ptr = &mut self.0.simd as *mut float32x4_t as *mut f32;
+      ptr.add(index).as_mut().unwrap_unchecked()
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+      &mut self.0.data[index]
+    }
   }
 }
 
@@ -464,15 +514,28 @@ mod tests {
   }
 
   #[test]
-  fn test_components() {
+  fn test_indexing_and_components() {
     let mut v = vec3(1.0, 2.0, 3.0);
 
+    // Index
+    assert_eq!(v[0], 1.0);
+    assert_eq!(v[1], 2.0);
+    assert_eq!(v[2], 3.0);
+
+    // Component method
     assert_eq!(v.component(0), Some(1.0));
     assert_eq!(v.component(1), Some(2.0));
     assert_eq!(v.component(2), Some(3.0));
     assert_eq!(v.component(3), None); // Bounds check
 
-    v.set_component(1, 5.0);
-    assert_eq!(v.y(), 5.0);
+    // IndexMut
+    v[1] = 5.0;
+    assert_eq!(v[1], 5.0);
+
+    // Set component
+    v.set_component(2, 6.0);
+    assert_eq!(v.z(), 6.0);
+
+    assert_eq!(v, vec3(1.0, 5.0, 6.0));
   }
 }

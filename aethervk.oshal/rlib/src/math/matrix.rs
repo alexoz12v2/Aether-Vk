@@ -2,6 +2,7 @@ use core::ops;
 
 use crate::math::{
   FloatLike, MulAddIdentity, Scalar,
+  floating::{FloatBits, FloatOps},
   quaternion::Quaternion,
   vector::{Vector, Vector3, Vector4},
 };
@@ -49,6 +50,56 @@ where
   Self::Vector: Vector3,
 {
   fn from_columns(x: Self::Vector, y: Self::Vector, z: Self::Vector) -> Self;
+  /// column-major order
+  fn from_array(x: &[Self::Scalar; 9]) -> Self;
+
+  fn from_outer_product(v0: Self::Vector, v1: Self::Vector) -> Self {
+    Self::from_columns(v0 * v1.x(), v0 * v1.y(), v0 * v1.z())
+  }
+
+  fn from_outer_self(v: Self::Vector) -> Self {
+    Self::from_outer_product(v, v)
+  }
+
+  fn x(&self) -> Self::Vector {
+    unsafe { self.column_unchecked(0) }
+  }
+
+  fn y(&self) -> Self::Vector {
+    unsafe { self.column_unchecked(1) }
+  }
+
+  fn z(&self) -> Self::Vector {
+    unsafe { self.column_unchecked(2) }
+  }
+
+  /// Columns are orthonormal (unit length + perpendicular)
+  /// Determinant is +1 (not -1 → excludes reflections)
+  /// No scaling or shear
+  fn is_pure_rotation(&self) -> bool
+  where
+    Self::Scalar: FloatOps + FloatBits,
+  {
+    let eps = Self::Scalar::EPSILON;
+
+    let x = unsafe { self.column_unchecked(0) };
+    let y = unsafe { self.column_unchecked(1) };
+    let z = unsafe { self.column_unchecked(2) };
+
+    // 1. Unit length (||v|| ≈ 1)
+    let _1 = Self::Scalar::from_f32(1.0);
+    let unit =
+      (x.dot(x) - _1).abs() <= eps && (y.dot(y) - _1).abs() <= eps && (z.dot(z) - _1).abs() <= eps;
+
+    // 2. Orthogonality (dot ≈ 0)
+    let orthogonal = x.dot(y).abs() <= eps && x.dot(z).abs() <= eps && y.dot(z).abs() <= eps;
+
+    // 3. Right-handed (determinant ≈ +1)
+    let det = self.determinant();
+    let proper = (det - _1).abs() <= eps;
+
+    unit && orthogonal && proper
+  }
 }
 
 // 4x4 for affine transforms, projection matrices
@@ -60,6 +111,9 @@ where
 {
   /// Required Constructor: builds a 4x4 from 4 column vectors.
   fn from_columns(c0: Self::Vector, c1: Self::Vector, c2: Self::Vector, c3: Self::Vector) -> Self;
+
+  /// column-major order
+  fn from_array(x: &[Self::Scalar; 16]) -> Self;
 
   /// Creates a translation matrix.
   fn translation<V3>(v: V3) -> Self
