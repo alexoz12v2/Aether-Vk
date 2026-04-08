@@ -216,10 +216,7 @@ fn do_draw_cursor(
   let push_constants = crate::gpu::CursorPushConstants {
     view: view.into(),
     view_proj: view_proj.into(),
-    cursor_pos: {
-      let pos_arr: [f32; 4] = draw_call.model_matrix.w.into();
-      [pos_arr[0], pos_arr[1], pos_arr[2]]
-    }, // position is the 4th column of model matrix
+    model: draw_call.model_matrix.into(),
     cursor_size: 0.05, // TODO extract from draw call
   };
   device.push_cursor_constants(cmd_buffer, &push_constants)?;
