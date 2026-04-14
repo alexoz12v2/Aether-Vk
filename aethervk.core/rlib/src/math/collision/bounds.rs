@@ -44,6 +44,42 @@ where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
   V::Scalar: FloatLike,
 {
+  #[inline]
+  pub fn vertices(&self) -> [V; 8] {
+    [
+      V::from_components(self.min[0], self.min[1], self.min[2]), // Back Bottom Left
+      V::from_components(self.max[0], self.min[1], self.min[2]), // Back Bottom Right
+      V::from_components(self.min[0], self.max[1], self.min[2]), // Back Top Left
+      V::from_components(self.max[0], self.max[1], self.min[2]), // Back Top Right
+      V::from_components(self.min[0], self.min[1], self.max[2]), // Front Bottom Left
+      V::from_components(self.max[0], self.min[1], self.max[2]), // Front Bottom Right
+      V::from_components(self.min[0], self.max[1], self.max[2]), // Front Top Left
+      V::from_components(self.max[0], self.max[1], self.max[2]), // Front Top Right
+    ]
+  }
+
+  /// Relies on [AABB::vertices] order
+  #[inline]
+  pub fn edges() -> [[usize; 2]; 12] {
+    [
+      // --- X-Axis Edges (Left to Right) ---
+      [0, 1], // Back Bottom edge
+      [2, 3], // Back Top edge
+      [4, 5], // Front Bottom edge
+      [6, 7], // Front Top edge
+      // --- Y-Axis Edges (Bottom to Top) ---
+      [0, 2], // Back Left vertical
+      [1, 3], // Back Right vertical
+      [4, 6], // Front Left vertical
+      [5, 7], // Front Right vertical
+      // --- Z-Axis Edges (Back to Front) ---
+      [0, 4], // Bottom Left depth
+      [1, 5], // Bottom Right depth
+      [2, 6], // Top Left depth
+      [3, 7], // Top Right depth
+    ]
+  }
+
   pub fn new(min: V, max: V) -> Self {
     Self {
       min: min.into(),

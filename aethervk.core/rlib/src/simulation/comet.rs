@@ -128,6 +128,16 @@ impl Triangle {
   pub fn mean_vector(&self) -> Vec3f32 {
     (*self.v0() + *self.v1() + *self.v2()) / 3.0
   }
+  /// Warning: unnormalized
+  /// Warning: Formula correct if "outwards" is counter clockwise
+  #[inline]
+  pub fn normal_ccw_unnormalized(&self) -> Vec3f32 {
+    let v0 = self.vertices[0];
+    let v1 = self.vertices[1];
+    let v2 = self.vertices[2];
+
+    (v1 - v0).cross(v2 - v1)
+  }
 
   #[inline]
   pub fn area(&self) -> f32 {
