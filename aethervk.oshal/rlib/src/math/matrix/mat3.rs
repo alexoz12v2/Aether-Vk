@@ -271,6 +271,12 @@ impl Matrix3 for Mat3f32 {
   }
 }
 
+impl Mat3f32 {
+  pub fn identity() -> Self {
+    Mat3f32::from_array(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
+  }
+}
+
 #[cfg(test)]
 mod tests {
   extern crate std;

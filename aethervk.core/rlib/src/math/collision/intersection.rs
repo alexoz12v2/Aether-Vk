@@ -31,7 +31,7 @@ where
 pub fn intersect_sphere_sphere<V>(a: &BS<V>, b: &BS<V>) -> bool
 where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
-  V::Scalar: FloatLike + From<i32> + From<f32> + core::ops::Mul<V, Output = V>,
+  V::Scalar: FloatLike + From<f32> + core::ops::Mul<V, Output = V>,
 {
   let d = a.center() - b.center();
   let r_sum = a.radius() + b.radius();
@@ -351,7 +351,7 @@ where
     Vec2::from_components(v.x(), v.z())
   } else {
     // Normal points mostly towards Z Axis
-    Vec2::from_components(v.x(), v.z())
+    Vec2::from_components(v.x(), v.y())
   }
 }
 
@@ -448,7 +448,7 @@ where
 pub fn intersect_aabb_sphere<V>(aabb: &AABB<V>, bs: &BS<V>) -> bool
 where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
-  V::Scalar: FloatLike + From<i32> + From<f32> + core::ops::Mul<V, Output = V>,
+  V::Scalar: FloatLike + From<f32> + core::ops::Mul<V, Output = V>,
 {
   let c = bs.center();
   let min = aabb.min();
@@ -463,25 +463,193 @@ where
 // ----------------------------------------------------------------------------
 // Box vs Triangle
 // ----------------------------------------------------------------------------
-pub fn intersect_aabb_triangle<V>(_aabb: &AABB<V>, _tri: &Triangle) -> bool
+// TODO: obb_triangle by transforming the triangle itself into the OBB frame of reference,
+// so that we can treat it as a AABB
+/// AABB/Triangle SAT
+pub fn intersect_aabb_triangle<S, Vec3, Vec2>(aabb: &AABB<Vec3>, tri: &Triangle) -> bool
+where
+  Vec3: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
+  Vec2: Vector2<Scalar = S>,
+  S: FloatLike + FloatOps + FloatBits,
+{
+  let vs: [Vec3; 3] = [(*tri.v0()).into(), (*tri.v1()).into(), (*tri.v2()).into()];
+  let n: Vec3 = tri.normal_ccw_unnormalized().into();
+
+  // 1. Check if a vertex is in the box. If yes for at least one of then (all coords) then true
+  for v in vs {
+    if between_component_wise(v, aabb.min(), aabb.max()) {
+      return true;
+    }
+  }
+  // 2. Signed distances for each vertex of box to Triangle Plane
+  let aabb_vertices = aabb.vertices();
+  let aabb_segment_indices = AABB::<Vec3>::edges();
+  let aabb_signed_distances: [S; 8] = unsafe {
+    aabb_vertices
+      .iter()
+      .map(|&vert| n.dot(vert - vs[0]))
+      .collect_array()
+      .unwrap_unchecked()
+  };
+  //  If all boxes have signed distances of same sign, no intersection
+  if all_same_sign_fold(&aabb_signed_distances) {
+    return false;
+  }
+  //  Otherwise call segment-triangle intersection function and stop on first intersection
+  for segment in aabb_segment_indices {
+    if segment_intersects_triangle::<S, Vec3, Vec2>(
+      aabb_vertices[segment[0]],
+      aabb_vertices[segment[1]],
+      &vs,
+      n,
+    ) {
+      return true;
+    }
+  }
+  false
+}
+
+#[rustfmt::skip]
+fn between_component_wise<V>(v: V, min: V, max: V) -> bool
 where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
   V::Scalar: FloatLike,
 {
-  // TODO: AABB/Triangle SAT
-  false
+  v.x() >= min.x() && v.x() <= max.x()
+  && v.y() >= min.y() && v.y() <= max.y()
+  && v.z() >= min.z() && v.z() <= max.z()
+}
+
+fn all_same_sign_fold<S>(arr: &[S]) -> bool
+where
+  S: FloatLike,
+{
+  let _0 = S::zero();
+  if let Some(&first) = arr.first() {
+    let first_sign = first > _0;
+    arr
+      .iter()
+      // Fold starts with `true` and turns `false` if any sign mismatches
+      .fold(true, |acc, &x| acc && ((x > _0) == first_sign))
+  } else {
+    true
+  }
 }
 
 // ----------------------------------------------------------------------------
 // Sphere vs Triangle
 // ----------------------------------------------------------------------------
-pub fn intersect_sphere_triangle<V>(_bs: &BS<V>, _tri: &Triangle) -> bool
+pub fn intersect_sphere_triangle<Vec3>(sphere: &BS<Vec3>, tri: &Triangle) -> bool
 where
-  V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
-  V::Scalar: FloatLike + From<i32> + From<f32> + core::ops::Mul<V, Output = V>,
+  Vec3: Vector3 + From<Vec3f32> + From<[Vec3::Scalar; 3]> + Into<[Vec3::Scalar; 3]>,
+  Vec3::Scalar: FloatLike + FloatBits + FloatOps + From<f32> + core::ops::Mul<Vec3, Output = Vec3>,
 {
-  // TODO: Sphere/Triangle closest point
+  let vs: [Vec3; 3] = [(*tri.v0()).into(), (*tri.v1()).into(), (*tri.v2()).into()];
+  let n: Vec3 = tri.normal_ccw_unnormalized().normalize().into();
+  let c: Vec3 = sphere.center();
+  let r: Vec3::Scalar = sphere.radius();
+
+  // Using n.dot(vs[0]) directly to get the plane constant 'd'
+  let d_n: Vec3::Scalar = n.dot(vs[0]);
+  let dist_to_plane = n.dot(c) - d_n;
+
+  // 1. Triangle plane intersects sphere? If not, early exit false
+  if dist_to_plane.abs() > r {
+    return false;
+  }
+
+  let r_sq = r * r;
+
+  // 2. If at least a triangle vertex is inside the sphere, early exit true
+  for v in vs {
+    let diff = c - v;
+    // Using squared distance to avoid .sqrt()
+    if diff.dot(diff) <= r_sq {
+      return true;
+    }
+  }
+
+  // 3. Project sphere center onto triangle plane.
+  // Using the trait bound `Scalar: Mul<Vec3>` ensures we do `scalar * vector`
+  let projected_center = c - (dist_to_plane * n);
+
+  // If center inside triangle, early exit true.
+  // We test this by checking if the point is on the "inside" of all 3 edge planes using cross products.
+  let e0 = vs[1] - vs[0];
+  let e1 = vs[2] - vs[1];
+  let e2 = vs[0] - vs[2];
+
+  let zero = <Vec3::Scalar>::from(0.0f32);
+
+  let inside_0 = e0.cross(projected_center - vs[0]).dot(n) >= zero;
+  let inside_1 = e1.cross(projected_center - vs[1]).dot(n) >= zero;
+  let inside_2 = e2.cross(projected_center - vs[2]).dot(n) >= zero;
+
+  if inside_0 && inside_1 && inside_2 {
+    return true;
+  }
+
+  // 4. Line segment sphere intersection for each triangle edge with projected sphere
+  // We stay in 3D and test the distance from the sphere center to the 3D line segment.
+  if intersects_edge(vs[0], vs[1], c, r_sq) {
+    return true;
+  }
+  if intersects_edge(vs[1], vs[2], c, r_sq) {
+    return true;
+  }
+  if intersects_edge(vs[2], vs[0], c, r_sq) {
+    return true;
+  }
+
   false
+}
+
+fn intersects_edge<S, Vec3>(a: Vec3, b: Vec3, c: Vec3, r_sq: S) -> bool
+where
+  Vec3: Vector3<Scalar = S> + From<Vec3f32> + From<[Vec3::Scalar; 3]> + Into<[Vec3::Scalar; 3]>,
+  S: FloatLike + FloatBits + FloatOps + From<f32> + core::ops::Mul<Vec3, Output = Vec3>,
+{
+  let zero = <Vec3::Scalar>::from(0.0f32);
+  let one = <Vec3::Scalar>::from(1.0f32);
+
+  let ab = b - a;
+  let ac = c - a;
+
+  // Project center onto the line to find the parameterized distance 't'
+  let t = ac.dot(ab) / ab.dot(ab);
+
+  // IMPORTANT OPTIMIZATION:
+  // If t <= 0.0 or t >= 1.0, the closest point on the segment is a vertex.
+  // We ALREADY checked the vertices in Step 2!
+  // So we only need to do the math if the closest point is strictly inside the segment.
+  if t > zero && t < one {
+    let closest_point = a + (t * ab);
+    let diff = c - closest_point;
+    if diff.dot(diff) <= r_sq {
+      return true;
+    }
+  }
+  false
+}
+
+#[inline]
+fn point_in_sphere<S, Vec3>(p: Vec3, c: Vec3, r: S) -> bool
+where
+  Vec3: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
+  S: FloatLike + From<f32> + core::ops::Mul<Vec3, Output = Vec3>,
+{
+  (p - c).length_squared() <= r.squared()
+}
+
+#[inline]
+fn plane_constant<S, Vec3>(normal: Vec3, v0: Vec3) -> S
+where
+  Vec3: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
+  S: FloatLike + From<f32> + core::ops::Mul<Vec3, Output = Vec3>,
+{
+  // any vertex of a triangle can be used. Normal must be the proper unit vector
+  // The constant 'd' is the dot product of the normal and the point
+  normal.dot(v0)
 }
 
 // ----------------------------------------------------------------------------
@@ -490,7 +658,7 @@ where
 pub fn intersect_ray_sphere<V>(ray: &Ray<V>, bs: &BS<V>) -> bool
 where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
-  V::Scalar: FloatLike + From<i32> + From<f32> + core::ops::Mul<V, Output = V>,
+  V::Scalar: FloatLike + From<f32> + core::ops::Mul<V, Output = V>,
 {
   let m = ray.origin - bs.center();
   let b = m.dot(ray.direction);
@@ -517,23 +685,447 @@ where
 // ----------------------------------------------------------------------------
 // Ray vs Triangle
 // ----------------------------------------------------------------------------
-pub fn intersect_ray_triangle<V>(_ray: &Ray<V>, _tri: &Triangle) -> bool
+pub fn intersect_ray_triangle<V>(ray: &Ray<V>, tri: &Triangle) -> bool
 where
-  V: Vector3,
-  V::Scalar: FloatLike,
+  V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
+  V::Scalar: FloatLike + FloatOps + FloatBits + From<f32> + core::ops::Mul<V, Output = V>,
 {
-  // TODO: Möller–Trumbore or watertight
+  let epsilon = V::Scalar::from_f32(1e-6);
+  let v0: V = (*tri.v0()).into();
+  let v1: V = (*tri.v1()).into();
+  let v2: V = (*tri.v2()).into();
+
+  let edge1 = v1 - v0;
+  let edge2 = v2 - v0;
+  let h = ray.direction.cross(edge2);
+  let a = edge1.dot(h);
+
+  if a > -epsilon && a < epsilon {
+    return false;
+  }
+
+  let f = V::Scalar::from_f32(1.0) / a;
+  let s = ray.origin - v0;
+  let u = f * s.dot(h);
+
+  let _0 = V::Scalar::from_f32(0.0);
+  let _1 = V::Scalar::from_f32(1.0);
+
+  if u < _0 || u > _1 {
+    return false;
+  }
+
+  let q = s.cross(edge1);
+  let v = f * ray.direction.dot(q);
+
+  if v < _0 || u + v > _1 {
+    return false;
+  }
+
+  let t = f * edge2.dot(q);
+
+  if t > epsilon && t <= ray.length {
+    return true;
+  }
+
   false
 }
 
 // ----------------------------------------------------------------------------
 // Ray vs Box
 // ----------------------------------------------------------------------------
-pub fn intersect_ray_aabb<V>(_ray: &Ray<V>, _aabb: &AABB<V>) -> bool
+pub fn intersect_ray_aabb<V>(ray: &Ray<V>, aabb: &AABB<V>) -> bool
 where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
-  V::Scalar: FloatLike,
+  V::Scalar: FloatLike + FloatOps + FloatBits + From<f32>,
 {
-  // TODO: Slab method
-  false
+  let mut tmin = V::Scalar::from_f32(0.0);
+  let mut tmax = ray.length;
+
+  let min_val = aabb.min();
+  let max_val = aabb.max();
+
+  let dir_x = ray.direction.x();
+  let dir_y = ray.direction.y();
+  let dir_z = ray.direction.z();
+
+  let origin_x = ray.origin.x();
+  let origin_y = ray.origin.y();
+  let origin_z = ray.origin.z();
+
+  let epsilon = V::Scalar::from_f32(1e-6);
+
+  if dir_x.abs() < epsilon {
+    if origin_x < min_val.x() || origin_x > max_val.x() {
+      return false;
+    }
+  } else {
+    let ood = V::Scalar::from_f32(1.0) / dir_x;
+    let mut t1 = (min_val.x() - origin_x) * ood;
+    let mut t2 = (max_val.x() - origin_x) * ood;
+    if t1 > t2 {
+      core::mem::swap(&mut t1, &mut t2);
+    }
+    if t1 > tmin {
+      tmin = t1;
+    }
+    if t2 < tmax {
+      tmax = t2;
+    }
+    if tmin > tmax {
+      return false;
+    }
+  }
+
+  if dir_y.abs() < epsilon {
+    if origin_y < min_val.y() || origin_y > max_val.y() {
+      return false;
+    }
+  } else {
+    let ood = V::Scalar::from_f32(1.0) / dir_y;
+    let mut t1 = (min_val.y() - origin_y) * ood;
+    let mut t2 = (max_val.y() - origin_y) * ood;
+    if t1 > t2 {
+      core::mem::swap(&mut t1, &mut t2);
+    }
+    if t1 > tmin {
+      tmin = t1;
+    }
+    if t2 < tmax {
+      tmax = t2;
+    }
+    if tmin > tmax {
+      return false;
+    }
+  }
+
+  if dir_z.abs() < epsilon {
+    if origin_z < min_val.z() || origin_z > max_val.z() {
+      return false;
+    }
+  } else {
+    let ood = V::Scalar::from_f32(1.0) / dir_z;
+    let mut t1 = (min_val.z() - origin_z) * ood;
+    let mut t2 = (max_val.z() - origin_z) * ood;
+    if t1 > t2 {
+      core::mem::swap(&mut t1, &mut t2);
+    }
+    if t1 > tmin {
+      tmin = t1;
+    }
+    if t2 < tmax {
+      tmax = t2;
+    }
+    if tmin > tmax {
+      return false;
+    }
+  }
+
+  true
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+  use aethervk_oshal_rlib::math::vector::vec2::Vec2f32;
+  use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
+  use crate::math::collision::bounds::{AABB, BS, OBB};
+  use crate::simulation::comet::Triangle;
+
+  fn mk_vec(x: f32, y: f32, z: f32) -> Vec3f32 {
+    Vec3f32::from_components(x, y, z)
+  }
+
+  fn mk_tri(v0: Vec3f32, v1: Vec3f32, v2: Vec3f32) -> Triangle {
+    Triangle {
+      vertices: [v0, v1, v2],
+    }
+  }
+
+  // 1. intersect_sphere_sphere
+  #[test]
+  fn test_intersect_sphere_sphere() {
+    // Positive: overlapping
+    assert!(intersect_sphere_sphere(
+      &BS::new(mk_vec(0., 0., 0.), 2.0),
+      &BS::new(mk_vec(3., 0., 0.), 2.0)
+    ));
+    // Edge 1: touching
+    assert!(intersect_sphere_sphere(
+      &BS::new(mk_vec(0., 0., 0.), 2.0),
+      &BS::new(mk_vec(4., 0., 0.), 2.0)
+    ));
+    // Edge 2: one inside other
+    assert!(intersect_sphere_sphere(
+      &BS::new(mk_vec(0., 0., 0.), 5.0),
+      &BS::new(mk_vec(1., 0., 0.), 1.0)
+    ));
+    // Edge 3: disjoint
+    assert!(!intersect_sphere_sphere(
+      &BS::new(mk_vec(0., 0., 0.), 2.0),
+      &BS::new(mk_vec(5., 0., 0.), 2.0)
+    ));
+  }
+
+  // 2. intersect_aabb_aabb
+  #[test]
+  fn test_intersect_aabb_aabb() {
+    // Positive: overlapping
+    assert!(intersect_aabb_aabb(
+      &AABB::new(mk_vec(0., 0., 0.), mk_vec(2., 2., 2.)),
+      &AABB::new(mk_vec(1., 1., 1.), mk_vec(3., 3., 3.))
+    ));
+    // Edge 1: touching face
+    assert!(intersect_aabb_aabb(
+      &AABB::new(mk_vec(0., 0., 0.), mk_vec(2., 2., 2.)),
+      &AABB::new(mk_vec(2., 0., 0.), mk_vec(4., 2., 2.))
+    ));
+    // Edge 2: touching corner
+    assert!(intersect_aabb_aabb(
+      &AABB::new(mk_vec(0., 0., 0.), mk_vec(2., 2., 2.)),
+      &AABB::new(mk_vec(2., 2., 2.), mk_vec(4., 4., 4.))
+    ));
+    // Edge 3: disjoint
+    assert!(!intersect_aabb_aabb(
+      &AABB::new(mk_vec(0., 0., 0.), mk_vec(2., 2., 2.)),
+      &AABB::new(mk_vec(3., 0., 0.), mk_vec(4., 2., 2.))
+    ));
+  }
+
+  // 3. intersect_obb_obb
+  #[test]
+  fn test_intersect_obb_obb() {
+    let ident = Mat3f32::identity();
+    // Positive: overlapping
+    assert!(intersect_obb_obb(
+      &OBB::new(mk_vec(0., 0., 0.), ident, mk_vec(1., 1., 1.)),
+      &OBB::new(mk_vec(1., 0., 0.), ident, mk_vec(1., 1., 1.))
+    ));
+    // Edge 1: touching
+    assert!(intersect_obb_obb(
+      &OBB::new(mk_vec(0., 0., 0.), ident, mk_vec(1., 1., 1.)),
+      &OBB::new(mk_vec(2., 0., 0.), ident, mk_vec(1., 1., 1.))
+    ));
+    // Edge 2: rotated, touching
+    let rot = Mat3f32::from_array(&[0., -1., 0., 1., 0., 0., 0., 0., 1.]);
+    assert!(intersect_obb_obb(
+      &OBB::new(mk_vec(0., 0., 0.), ident, mk_vec(1., 1., 1.)),
+      &OBB::new(mk_vec(2., 0., 0.), rot, mk_vec(1., 1., 1.))
+    ));
+    // Edge 3: disjoint
+    assert!(!intersect_obb_obb(
+      &OBB::new(mk_vec(0., 0., 0.), ident, mk_vec(1., 1., 1.)),
+      &OBB::new(mk_vec(3., 0., 0.), ident, mk_vec(1., 1., 1.))
+    ));
+  }
+
+  // 4. intersect_triangle_triangle
+  #[test]
+  fn test_intersect_triangle_triangle() {
+    let t1 = mk_tri(mk_vec(0., 0., 0.), mk_vec(2., 0., 0.), mk_vec(0., 2., 0.));
+    // Positive: crossing
+    let t2 = mk_tri(
+      mk_vec(1., 1., -1.),
+      mk_vec(1., 1., 1.),
+      mk_vec(-1., -1., 0.),
+    );
+    assert!(intersect_triangle_triangle::<f32, Vec3f32, Vec2f32>(
+      &t1, &t2
+    ));
+    // Edge 1: coplanar overlapping
+    let t3 = mk_tri(mk_vec(1., 0., 0.), mk_vec(3., 0., 0.), mk_vec(1., 2., 0.));
+    assert!(intersect_triangle_triangle::<f32, Vec3f32, Vec2f32>(
+      &t1, &t3
+    ));
+    // Edge 2: coplanar disjoint
+    let t4 = mk_tri(mk_vec(3., 0., 0.), mk_vec(5., 0., 0.), mk_vec(3., 2., 0.));
+    assert!(!intersect_triangle_triangle::<f32, Vec3f32, Vec2f32>(
+      &t1, &t4
+    ));
+    // Edge 3: completely disjoint
+    let t5 = mk_tri(mk_vec(0., 0., 5.), mk_vec(2., 0., 5.), mk_vec(0., 2., 5.));
+    assert!(!intersect_triangle_triangle::<f32, Vec3f32, Vec2f32>(
+      &t1, &t5
+    ));
+  }
+
+  // 5. intersect_aabb_sphere
+  #[test]
+  fn test_intersect_aabb_sphere() {
+    let aabb = AABB::new(mk_vec(0., 0., 0.), mk_vec(2., 2., 2.));
+    // Positive: overlapping
+    assert!(intersect_aabb_sphere(
+      &aabb,
+      &BS::new(mk_vec(1., 1., 1.), 2.0)
+    ));
+    // Edge 1: touching face
+    assert!(intersect_aabb_sphere(
+      &aabb,
+      &BS::new(mk_vec(3., 1., 1.), 1.0)
+    ));
+    // Edge 2: touching corner
+    let corner_dist = (3.0_f32).sqrt();
+    assert!(intersect_aabb_sphere(
+      &aabb,
+      &BS::new(mk_vec(3., 3., 3.), corner_dist)
+    ));
+    // Edge 3: disjoint
+    assert!(!intersect_aabb_sphere(
+      &aabb,
+      &BS::new(mk_vec(4., 1., 1.), 1.0)
+    ));
+  }
+
+  // 6. intersect_aabb_triangle
+  #[test]
+  fn test_intersect_aabb_triangle() {
+    let aabb = AABB::new(mk_vec(0., 0., 0.), mk_vec(2., 2., 2.));
+    // Positive: inside
+    let t1 = mk_tri(
+      mk_vec(0.5, 0.5, 0.5),
+      mk_vec(1.5, 0.5, 0.5),
+      mk_vec(0.5, 1.5, 0.5),
+    );
+    assert!(intersect_aabb_triangle::<f32, Vec3f32, Vec2f32>(&aabb, &t1));
+    // Edge 1: crossing edge
+    let t2 = mk_tri(mk_vec(-1., 1., 1.), mk_vec(3., 1., 1.), mk_vec(1., 3., 1.));
+    assert!(intersect_aabb_triangle::<f32, Vec3f32, Vec2f32>(&aabb, &t2));
+    // Edge 2: touching corner exactly
+    let t3 = mk_tri(mk_vec(2., 2., 2.), mk_vec(3., 2., 2.), mk_vec(2., 3., 2.));
+    assert!(intersect_aabb_triangle::<f32, Vec3f32, Vec2f32>(&aabb, &t3));
+    // Edge 3: disjoint
+    let t4 = mk_tri(mk_vec(3., 3., 3.), mk_vec(4., 3., 3.), mk_vec(3., 4., 3.));
+    assert!(!intersect_aabb_triangle::<f32, Vec3f32, Vec2f32>(
+      &aabb, &t4
+    ));
+  }
+
+  // 7. intersect_sphere_triangle
+  #[test]
+  fn test_intersect_sphere_triangle() {
+    let s = BS::new(mk_vec(0., 0., 0.), 2.0);
+    // Positive: overlapping
+    let t1 = mk_tri(mk_vec(1., 0., 0.), mk_vec(3., 0., 0.), mk_vec(1., 2., 0.));
+    assert!(intersect_sphere_triangle(&s, &t1));
+    // Edge 1: touching vertex
+    let t2 = mk_tri(mk_vec(2., 0., 0.), mk_vec(4., 0., 0.), mk_vec(2., 2., 0.));
+    assert!(intersect_sphere_triangle(&s, &t2));
+    // Edge 2: completely inside sphere
+    let t3 = mk_tri(
+      mk_vec(0.1, 0., 0.),
+      mk_vec(0.5, 0., 0.),
+      mk_vec(0.1, 0.5, 0.),
+    );
+    assert!(intersect_sphere_triangle(&s, &t3));
+    // Edge 3: disjoint
+    let t4 = mk_tri(mk_vec(3., 0., 0.), mk_vec(5., 0., 0.), mk_vec(3., 2., 0.));
+    assert!(!intersect_sphere_triangle(&s, &t4));
+  }
+
+  // 8. intersect_ray_sphere
+  #[test]
+  fn test_intersect_ray_sphere() {
+    let s = BS::new(mk_vec(5., 0., 0.), 2.0);
+    // Positive: crossing center
+    let r1 = Ray {
+      origin: mk_vec(0., 0., 0.),
+      direction: mk_vec(1., 0., 0.),
+      length: 10.0,
+    };
+    assert!(intersect_ray_sphere(&r1, &s));
+    // Edge 1: tangent
+    let r2 = Ray {
+      origin: mk_vec(0., 2., 0.),
+      direction: mk_vec(1., 0., 0.),
+      length: 10.0,
+    };
+    assert!(intersect_ray_sphere(&r2, &s));
+    // Edge 2: origin inside
+    let r3 = Ray {
+      origin: mk_vec(4., 0., 0.),
+      direction: mk_vec(0., 1., 0.),
+      length: 10.0,
+    };
+    assert!(intersect_ray_sphere(&r3, &s));
+    // Edge 3: disjoint / wrong direction
+    let r4 = Ray {
+      origin: mk_vec(0., 0., 0.),
+      direction: mk_vec(-1., 0., 0.),
+      length: 10.0,
+    };
+    assert!(!intersect_ray_sphere(&r4, &s));
+  }
+
+  // 9. intersect_ray_triangle
+  #[test]
+  fn test_intersect_ray_triangle() {
+    let t = mk_tri(
+      mk_vec(-1., -1., 5.),
+      mk_vec(1., -1., 5.),
+      mk_vec(0., 1., 5.),
+    );
+    // Positive: piercing
+    let r1 = Ray {
+      origin: mk_vec(0., 0., 0.),
+      direction: mk_vec(0., 0., 1.),
+      length: 10.0,
+    };
+    assert!(intersect_ray_triangle(&r1, &t));
+    // Edge 1: missing triangle slightly
+    let r2 = Ray {
+      origin: mk_vec(0., 2., 0.),
+      direction: mk_vec(0., 0., 1.),
+      length: 10.0,
+    };
+    assert!(!intersect_ray_triangle(&r2, &t));
+    // Edge 2: hitting edge
+    let r3 = Ray {
+      origin: mk_vec(0., -1., 0.),
+      direction: mk_vec(0., 0., 1.),
+      length: 10.0,
+    };
+    assert!(intersect_ray_triangle(&r3, &t));
+    // Edge 3: too short
+    let r4 = Ray {
+      origin: mk_vec(0., 0., 0.),
+      direction: mk_vec(0., 0., 1.),
+      length: 4.0,
+    };
+    assert!(!intersect_ray_triangle(&r4, &t));
+  }
+
+  // 10. intersect_ray_aabb
+  #[test]
+  fn test_intersect_ray_aabb() {
+    let aabb = AABB::new(mk_vec(4., -1., -1.), mk_vec(6., 1., 1.));
+    // Positive: piercing
+    let r1 = Ray {
+      origin: mk_vec(0., 0., 0.),
+      direction: mk_vec(1., 0., 0.),
+      length: 10.0,
+    };
+    assert!(intersect_ray_aabb(&r1, &aabb));
+    // Edge 1: grazing face
+    let r2 = Ray {
+      origin: mk_vec(0., 1., 0.),
+      direction: mk_vec(1., 0., 0.),
+      length: 10.0,
+    };
+    assert!(intersect_ray_aabb(&r2, &aabb));
+    // Edge 2: origin inside
+    let r3 = Ray {
+      origin: mk_vec(5., 0., 0.),
+      direction: mk_vec(0., 1., 0.),
+      length: 10.0,
+    };
+    assert!(intersect_ray_aabb(&r3, &aabb));
+    // Edge 3: disjoint / short ray
+    let r4 = Ray {
+      origin: mk_vec(0., 0., 0.),
+      direction: mk_vec(1., 0., 0.),
+      length: 3.0,
+    };
+    assert!(!intersect_ray_aabb(&r4, &aabb));
+  }
 }
