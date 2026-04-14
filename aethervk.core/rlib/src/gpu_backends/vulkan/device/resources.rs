@@ -62,6 +62,7 @@ enum DiscardItem {
   ImageView(vk::ImageView),
   Pipeline(vk::Pipeline),
   PipelineLayout(vk::PipelineLayout),
+  DescriptorSetLayout(vk::DescriptorSetLayout),
   DescriptorPool(vk::DescriptorPool, sync::Arc<descriptors::DescriptorPools>),
   CommandPool(CmdBufDiscard),
   RenderPass(vk::RenderPass),
@@ -186,6 +187,11 @@ impl DiscardPool {
     q.push(timeline, DiscardItem::ImageView(image_view));
   }
 
+  pub fn discard_descriptor_set_layout(&self, layout: vk::DescriptorSetLayout, timeline: u64) {
+    let mut q = self.items.lock();
+    q.push(timeline, DiscardItem::DescriptorSetLayout(layout));
+  }
+
   pub fn discard_descriptor_pool(
     &self,
     pool: vk::DescriptorPool,
@@ -243,6 +249,9 @@ impl DiscardPool {
       }
       DiscardItem::PipelineLayout(pipeline_layout) => {
         unsafe { device.destroy_pipeline_layout(pipeline_layout, None) };
+      }
+      DiscardItem::DescriptorSetLayout(layout) => {
+        unsafe { device.destroy_descriptor_set_layout(layout, None) };
       }
       DiscardItem::DescriptorPool(pool, manager) => {
         // return the pool to the manager for recycling
@@ -311,6 +320,147 @@ impl Image {
       .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
       .image_view(self.image_view.get())
       .sampler(sampler.get())
+  }
+
+  pub fn new_storage_2d(
+    device: &ash::Device,
+    allocator: &vk_mem::Allocator,
+    width: u32,
+    height: u32,
+    format: vk::Format,
+    graphics_queue_family: u32,
+    compute_queue_family: u32,
+  ) -> GpuResult<Self> {
+    let mut sharing_mode = vk::SharingMode::EXCLUSIVE;
+    let mut queue_family_indices = [graphics_queue_family, compute_queue_family];
+    let queue_count = if graphics_queue_family != compute_queue_family {
+      sharing_mode = vk::SharingMode::CONCURRENT;
+      2
+    } else {
+      1
+    };
+
+    let image_info = vk::ImageCreateInfo::default()
+      .image_type(vk::ImageType::TYPE_2D)
+      .extent(vk::Extent3D {
+        width,
+        height,
+        depth: 1,
+      })
+      .mip_levels(1)
+      .array_layers(1)
+      .format(format)
+      .tiling(vk::ImageTiling::OPTIMAL)
+      .initial_layout(vk::ImageLayout::UNDEFINED)
+      .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED)
+      .sharing_mode(sharing_mode)
+      .queue_family_indices(&queue_family_indices[..queue_count])
+      .samples(vk::SampleCountFlags::TYPE_1);
+
+    let mut allocation_create_info = vk_mem::AllocationCreateInfo::default();
+    allocation_create_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
+
+    let (image, alloc, _alloc_info) =
+      unsafe { allocator.create_image_with_alloc_info(&image_info, &allocation_create_info) }?;
+
+    let image_view_info = vk::ImageViewCreateInfo::default()
+      .image(image)
+      .view_type(vk::ImageViewType::TYPE_2D)
+      .format(format)
+      .components(vk::ComponentMapping::default())
+      .subresource_range(
+        vk::ImageSubresourceRange::default()
+          .aspect_mask(vk::ImageAspectFlags::COLOR)
+          .base_array_layer(0)
+          .layer_count(1)
+          .base_mip_level(0)
+          .level_count(1),
+      );
+    let image_view = unsafe {
+      let res = device.create_image_view(&image_view_info, None);
+      if res.is_err() {
+        let mut mut_alloc = alloc;
+        allocator.destroy_image(image, &mut mut_alloc);
+      }
+      res
+    }?;
+
+    Ok(Self {
+      image: unsafe { NonZeroHandle::new_unchecked(image) },
+      image_view: unsafe { NonZeroHandle::new_unchecked(image_view) },
+      allocation: alloc,
+    })
+  }
+
+  pub fn new_storage_3d(
+    device: &ash::Device,
+    allocator: &vk_mem::Allocator,
+    width: u32,
+    height: u32,
+    depth: u32,
+    format: vk::Format,
+    graphics_queue_family: u32,
+    compute_queue_family: u32,
+  ) -> GpuResult<Self> {
+    let mut sharing_mode = vk::SharingMode::EXCLUSIVE;
+    let mut queue_family_indices = [graphics_queue_family, compute_queue_family];
+    let queue_count = if graphics_queue_family != compute_queue_family {
+      sharing_mode = vk::SharingMode::CONCURRENT;
+      2
+    } else {
+      1
+    };
+
+    let image_info = vk::ImageCreateInfo::default()
+      .image_type(vk::ImageType::TYPE_3D)
+      .extent(vk::Extent3D {
+        width,
+        height,
+        depth,
+      })
+      .mip_levels(1)
+      .array_layers(1)
+      .format(format)
+      .tiling(vk::ImageTiling::OPTIMAL)
+      .initial_layout(vk::ImageLayout::UNDEFINED)
+      .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED)
+      .sharing_mode(sharing_mode)
+      .queue_family_indices(&queue_family_indices[..queue_count])
+      .samples(vk::SampleCountFlags::TYPE_1);
+
+    let mut allocation_create_info = vk_mem::AllocationCreateInfo::default();
+    allocation_create_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
+
+    let (image, alloc, _alloc_info) =
+      unsafe { allocator.create_image_with_alloc_info(&image_info, &allocation_create_info) }?;
+
+    let image_view_info = vk::ImageViewCreateInfo::default()
+      .image(image)
+      .view_type(vk::ImageViewType::TYPE_3D)
+      .format(format)
+      .components(vk::ComponentMapping::default())
+      .subresource_range(
+        vk::ImageSubresourceRange::default()
+          .aspect_mask(vk::ImageAspectFlags::COLOR)
+          .base_array_layer(0)
+          .layer_count(1)
+          .base_mip_level(0)
+          .level_count(1),
+      );
+    let image_view = unsafe {
+      let res = device.create_image_view(&image_view_info, None);
+      if res.is_err() {
+        let mut mut_alloc = alloc;
+        allocator.destroy_image(image, &mut mut_alloc);
+      }
+      res
+    }?;
+
+    Ok(Self {
+      image: unsafe { NonZeroHandle::new_unchecked(image) },
+      image_view: unsafe { NonZeroHandle::new_unchecked(image_view) },
+      allocation: alloc,
+    })
   }
 
   pub fn new_2d(
@@ -515,7 +665,7 @@ impl TextureFlags {
 pub(super) struct ForwardMeshRenderResourcePushData {
   model_view_projection: [f32; 16],
   model: [f32; 16],
-  sun_dir: [f32; 3],
+  sun_pos: [f32; 3],
   texture_flags: TextureFlags,
   sun_color: [f32; 4],
 }
@@ -526,11 +676,18 @@ impl Default for ForwardMeshRenderResourcePushData {
     Self {
       model_view_projection: Default::default(),
       model: Default::default(),
-      sun_dir: Default::default(),
+      sun_pos: Default::default(),
       texture_flags: TextureFlags::empty(),
       sun_color: Default::default(),
     }
   }
+}
+
+pub(super) struct SunRenderResource {
+  pub resolution: (u32, u32, u32),
+  pub image: Option<Image>,
+  pub descriptor_set: Option<NonZeroHandle<vk::DescriptorSet>>,
+  pub is_generated: bool,
 }
 
 pub(super) struct ForwardMeshRenderResource {
@@ -546,6 +703,8 @@ pub(super) struct ForwardMeshRenderResource {
   pub roughness_image: Option<Image>,
   /// layout(binding = 3) uniform sampler2D aoMap;
   pub ao_image: Option<Image>,
+  /// layout(binding = 4) uniform sampler2D skyMap;
+  pub sky_image: Option<Image>,
   /// Note: Purposefully leaked! (TODO: if this creates problems, do better.)
   pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
 }
@@ -656,6 +815,7 @@ impl ForwardMeshRenderResource {
     normal_image: Option<Image>, //
     roughness_image: Option<Image>, //
     ao_image: Option<Image>,     //
+    sky_image: Option<Image>,    //
     sampler: NonZeroHandle<vk::Sampler>,
     descriptor_set: NonZeroHandle<vk::DescriptorSet>,
     dummy_texture: &Image,
@@ -739,7 +899,7 @@ impl ForwardMeshRenderResource {
     // ... repeat for other optional images ...
 
     // Now create descriptor set for these images.
-    let mut image_infos = Vec::with_capacity(4);
+    let mut image_infos = Vec::with_capacity(5);
     let dummy_info = dummy_texture.to_descriptor_image_info(sampler);
     image_infos.push((
       0,
@@ -773,6 +933,14 @@ impl ForwardMeshRenderResource {
         dummy_info
       },
     ));
+    image_infos.push((
+      4,
+      if let Some(image) = &sky_image {
+        image.to_descriptor_image_info(sampler)
+      } else {
+        dummy_info
+      },
+    ));
     let write_descriptor_sets: Vec<_> = image_infos
       .iter()
       .map(|(binding, info)| {
@@ -801,6 +969,7 @@ impl ForwardMeshRenderResource {
       normal_image,
       roughness_image,
       ao_image,
+      sky_image,
       descriptor_set,
     })
   }
@@ -873,6 +1042,71 @@ impl CursorRenderResourceArchetype {
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
+  }
+}
+
+pub(super) struct SunRenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub descriptor_set_layout: NonZeroHandle<vk::DescriptorSetLayout>,
+  pub push_contant_ranges: Vec<vk::PushConstantRange>,
+  pub graphics_info: Option<GraphicsInfo>,
+  pub pipeline_key: Option<PipelineKey>,
+}
+
+unsafe impl Sync for SunRenderResourceArchetype {}
+unsafe impl Send for SunRenderResourceArchetype {}
+
+impl SunRenderResourceArchetype {
+  pub fn with_graphics_info(self, graphics_info: GraphicsInfo) -> Self {
+    let pipeline_key = graphics_info.pipeline_key();
+    Self {
+      graphics_info: Some(graphics_info),
+      pipeline_key: Some(pipeline_key),
+      ..self
+    }
+  }
+
+  pub unsafe fn new(
+    device: &ash::Device,
+    vertex_shader: &Shader,
+    fragment_shader: &Shader,
+  ) -> GpuResult<Self> {
+    let push_contant_ranges = alloc::vec![vk::PushConstantRange {
+      stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+      offset: 0,
+      size: core::mem::size_of::<crate::gpu::SunPushConstants>() as u32,
+    }];
+
+    let bindings = [vk::DescriptorSetLayoutBinding::default()
+      .binding(0)
+      .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER) // Actually, the shader says sampler3D. So it's COMBINED_IMAGE_SAMPLER. Let's look at sun_volume.frag.
+      .descriptor_count(1)
+      .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+
+    let set_layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    let descriptor_set_layout =
+      unsafe { device.create_descriptor_set_layout(&set_layout_info, None) }?;
+
+    let set_layouts = [descriptor_set_layout];
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
+      .push_constant_ranges(&push_contant_ranges)
+      .set_layouts(&set_layouts);
+
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
+
+    Ok(Self {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      descriptor_set_layout: unsafe { NonZeroHandle::new_unchecked(descriptor_set_layout) },
+      push_contant_ranges,
+      graphics_info: None,
+      pipeline_key: None,
+    })
+  }
+
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_pipeline_layout(layout, timeline);
+    discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
   }
 }
 
@@ -1193,7 +1427,8 @@ impl ForwardMeshRenderResourceArchetype {
         has_mipmaps: false,
       };
 
-      let begin_info = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+      let begin_info =
+        vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
       unsafe {
         device.begin_command_buffer(command_buffer, &begin_info)?;
       };

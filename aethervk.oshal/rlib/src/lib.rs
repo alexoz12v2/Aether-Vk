@@ -210,7 +210,7 @@ impl AvkSystemInfo {
 pub mod os;
 
 pub mod hash {
-  use core::hash::{ Hasher, Hash };
+  use core::hash::{Hasher, Hash};
   use core::marker;
 
   pub struct FnvHasher {

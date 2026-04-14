@@ -10,7 +10,10 @@ fn main() {
     cargo_dir.push("vulkan");
 
     if !cargo_dir.is_dir() {
-      panic!("'{}' doensn't exist. Have you built cdylib?", cargo_dir.display());
+      panic!(
+        "'{}' doensn't exist. Have you built cdylib?",
+        cargo_dir.display()
+      );
     }
   }
 }

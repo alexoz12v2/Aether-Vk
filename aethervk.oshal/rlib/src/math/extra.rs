@@ -1,7 +1,4 @@
-use crate::math::{
-  Scalar,
-  vector::Vector3,
-};
+use crate::math::{Scalar, vector::Vector3};
 
 pub trait OrthonormalBasis: Vector3 {
   // TODO (blender or OLD)

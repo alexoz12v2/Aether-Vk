@@ -890,9 +890,7 @@ impl FrameDiscard {
   fn discard_swapchain_images(&mut self, swapchain_images: &mut [SwapchainImage]) {
     for swapchain_image in swapchain_images {
       unsafe {
-        self
-          .discarded_image_views
-          .push(swapchain_image.image_view);
+        self.discarded_image_views.push(swapchain_image.image_view);
         self
           .discarded_semaphores
           .push(swapchain_image.present_semaphore);
@@ -911,10 +909,7 @@ impl FrameDiscard {
     }
   }
 
-  fn discard_swapchain_frame_keep_fences(
-    &mut self,
-    swapchain_frames: &mut [SwapchainFrame],
-  ) {
+  fn discard_swapchain_frame_keep_fences(&mut self, swapchain_frames: &mut [SwapchainFrame]) {
     for swapchain_frame in swapchain_frames {
       unsafe {
         debug_assert!(

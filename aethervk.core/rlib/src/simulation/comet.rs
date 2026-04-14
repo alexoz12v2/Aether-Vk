@@ -3,7 +3,10 @@
 // since oshal and core are then exposed to cdylibs, each with their own instance of an Allocator,
 // we should never take ownership or return allocated stuff to cdylib interface.
 use alloc::vec::Vec;
-use aethervk_oshal_rlib::{self as oshal, math::vector::{Vector, Vector3, vec3::Vec3f32}};
+use aethervk_oshal_rlib::{
+  self as oshal,
+  math::vector::{Vector, Vector3, vec3::Vec3f32},
+};
 use oshal::os::{
   fs::{self, FileSystemObject, PathBuf},
 };
@@ -131,7 +134,10 @@ impl Triangle {
 
   #[inline]
   pub fn area(&self) -> f32 {
-    0.5 * (*self.v1() - *self.v0()).cross(*self.v2() - *self.v1()).length()
+    0.5
+      * (*self.v1() - *self.v0())
+        .cross(*self.v2() - *self.v1())
+        .length()
   }
 }
 
@@ -582,7 +588,7 @@ bitflags! {
 pub struct PushConstants {
   pub model_view_proj: [[f32; 4]; 4],
   pub model: [[f32; 4]; 4],
-  pub sun_dir: [f32; 3],
+  pub sun_pos: [f32; 3],
   pub texture_flags: TextureFlags,
   pub sun_color: [f32; 4],
   pub camera_pos: [f32; 3],

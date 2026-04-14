@@ -96,7 +96,9 @@ impl<T: Copy> SpscQueue<T> {
   pub fn new(cap_pow2: usize) -> Self {
     debug_assert!(cap_pow2 >= 2 && (cap_pow2 & (cap_pow2 - 1)) == 0);
     let mut storage = Vec::with_capacity(cap_pow2);
-    for _ in 0..cap_pow2 { storage.push(None); }
+    for _ in 0..cap_pow2 {
+      storage.push(None);
+    }
 
     Self {
       buffer: storage.into_boxed_slice(),
@@ -119,7 +121,9 @@ impl<T: Copy> SpscQueue<T> {
       let ptr = self.buffer.as_ptr() as *mut Option<T>;
       ptr.add(tail & self.mask)
     };
-    unsafe { *slot_ptr = Some(item); };
+    unsafe {
+      *slot_ptr = Some(item);
+    };
     self.tail.store(tail + 1, Ordering::Release); // publish memory write
     true
   }

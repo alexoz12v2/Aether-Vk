@@ -16,11 +16,12 @@ layout(binding = 0) uniform sampler2D albedoMap;
 layout(binding = 1) uniform sampler2D normalMap;
 layout(binding = 2) uniform sampler2D roughnessMap;
 layout(binding = 3) uniform sampler2D aoMap;
+layout(binding = 4) uniform sampler2D skyMap;
 
 layout(push_constant) uniform Push { // std140
   mat4 modelViewProj;
   mat4 model;
-  vec3 sunDir;
+  vec3 sunPos;
   uint textureFlags;
   vec4 sunColor;
   vec3 cameraPos;
@@ -63,6 +64,12 @@ vec3 orenNayar(vec3 viewDir, vec3 lightDir, vec3 normal, vec3 albedo, float roug
   return albedo * LdotN * (A + B * s / t) / 3.14159;
 }
 
+vec2 octEncode(vec3 v) {
+  v /= (abs(v.x) + abs(v.y) + abs(v.z));
+  vec2 uv = v.z >= 0.0 ? v.xy : (1.0 - abs(v.yx)) * sign(v.xy);
+  return uv * 0.5 + 0.5;
+}
+
 void main() {
   bool useAlbedo    = (push.textureFlags & FLAG_ALBEDO) != 0u;
   bool useNormal    = (push.textureFlags & FLAG_NORMAL) != 0u;
@@ -70,8 +77,17 @@ void main() {
   bool useAO        = (push.textureFlags & FLAG_AO) != 0u;
 
   vec3 V = normalize(push.cameraPos - inWorldPos);
-  vec3 lightDir = normalize(push.sunDir);
-  vec3 lightColor = push.sunColor.xyz;
+  
+  // Point light direction and distance
+  vec3 unnormalizedLightVector = push.sunPos - inWorldPos;
+  float distanceToSun = length(unnormalizedLightVector);
+  vec3 lightDir = unnormalizedLightVector / distanceToSun; // Normalized direction
+  
+  // Inverse square attenuation (preventing division by zero with a small epsilon)
+  float attenuation = 1.0 / max(distanceToSun * distanceToSun, 0.0001);
+  
+  // Final light color arriving at the fragment
+  vec3 lightColor = push.sunColor.xyz * attenuation;
 
   // Construct base values from specialization constants
   vec3 albedo = vec3(BASE_ALBEDO_R, BASE_ALBEDO_G, BASE_ALBEDO_B);
@@ -101,7 +117,30 @@ void main() {
     ao = texture(aoMap, inUV).r;
   }
 
+  // Direct lighting
   vec3 diffuse = orenNayar(V, lightDir, N, albedo, roughness);
 
-  outColor = vec4(diffuse * lightColor * ao, 1.0);
+  // Image Based Lighting (IBL)
+  vec3 R = reflect(-V, N);
+  
+  // Approximate Diffuse IBL (Irradiance) by sampling sky map at the normal direction
+  vec3 irradiance = texture(skyMap, octEncode(N)).rgb;
+  vec3 diffuseIBL = irradiance * albedo;
+  
+  // Approximate Specular IBL (Radiance) by sampling sky map at the reflection direction
+  // Note: we can blur this based on roughness if mipmaps were available, using LOD. 
+  // For now, doing a basic lookup:
+  vec3 radiance = texture(skyMap, octEncode(R)).rgb;
+  
+  // Fresnel
+  vec3 F0 = vec3(0.04);
+  vec3 F = F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - max(dot(N, V), 0.0), 0.0, 1.0), 5.0);
+  vec3 kS = F;
+  vec3 kD = 1.0 - kS;
+  
+  // Combine IBL
+  vec3 specularIBL = radiance * F; // Rough approximation for specular
+  vec3 ambient = (kD * diffuseIBL + specularIBL) * ao;
+
+  outColor = vec4(diffuse * lightColor * ao + ambient, 1.0);
 }

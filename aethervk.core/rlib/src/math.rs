@@ -333,4 +333,3 @@ pub fn solve_cubic<T: FloatLike>(a: T, b: T, c: T, d: T) -> Vec<T> {
 pub fn solve_cubic_f32(a: f32, b: f32, c: f32, d: f32) -> Vec<f32> {
   solve_cubic(a, b, c, d)
 }
-

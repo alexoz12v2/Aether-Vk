@@ -120,7 +120,7 @@ pub fn start_logic_thread(
               45.0f32.to_radians(),
               width as f32 / height as f32,
               0.1,
-              100.0,
+              10000.0,
             );
           });
         }

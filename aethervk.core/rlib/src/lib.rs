@@ -17,11 +17,11 @@ pub use aethervk_oshal_rlib::panic_handler_impl;
 // TODO organize pub
 mod gpu_backends;
 
-pub mod types;
-pub mod traits;
-pub mod simulation;
-pub mod gpu;
 pub mod compute;
-pub mod scene;
+pub mod gpu;
 pub mod math;
 pub mod physics;
+pub mod scene;
+pub mod simulation;
+pub mod traits;
+pub mod types;

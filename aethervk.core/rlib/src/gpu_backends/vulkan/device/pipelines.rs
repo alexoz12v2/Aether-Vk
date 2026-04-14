@@ -586,8 +586,9 @@ struct RawComputeInfo<'a> {
   compute_info: &'a ComputeInfo,
   // referenced structs
   specialization_info: vk::SpecializationInfo<'a>,
+  entry_name: alloc::ffi::CString,
   // main struct
-  #[borrows(specialization_info)]
+  #[borrows(specialization_info, entry_name)]
   #[covariant]
   compute_pipeline_create_info: vk::ComputePipelineCreateInfo<'this>,
 }
@@ -604,11 +605,13 @@ impl<'a> From<&'a ComputeInfo> for RawComputeInfo<'a> {
     RawComputeInfoBuilder {
       compute_info,
       specialization_info,
-      compute_pipeline_create_info_builder: |specialization_info: &_| {
+      entry_name: alloc::ffi::CString::new("main").unwrap(),
+      compute_pipeline_create_info_builder: |specialization_info: &_, entry_name: &_| {
         let stage = vk::PipelineShaderStageCreateInfo::default()
           .module(compute_info.shader_module)
           .stage(vk::ShaderStageFlags::COMPUTE)
-          .specialization_info(&specialization_info);
+          .name(entry_name)
+          .specialization_info(specialization_info);
 
         vk::ComputePipelineCreateInfo::default()
           .base_pipeline_handle(vk::Pipeline::null())

@@ -3,7 +3,7 @@ use crate::gpu::{
 };
 use crate::scene::{CameraComponent, EntityId, RenderableDataRef, TransformComponent};
 use crate::simulation::comet::{PushConstants, TextureFlags};
-use crate::types::GpuResult;
+use crate::types::{GpuError, GpuResult};
 use aethervk_oshal_rlib::math::{
   matrix::{mat4::Mat4x4f32, Matrix4},
   quaternion::Quaternion,
@@ -135,6 +135,11 @@ pub trait RenderPath {
     &self,
     device: &dyn RenderDevice,
     camera: (&TransformComponent, &CameraComponent),
+    sun: Option<(
+      crate::scene::EntityId,
+      &crate::scene::SunComponent,
+      &TransformComponent,
+    )>,
     frame: &Frame,
     presentation_engine: PresentationEngineHandle,
     acquire_result: &AcquireResult,
@@ -149,6 +154,11 @@ impl RenderPath for ForwardRenderPath {
     &self,
     device: &dyn RenderDevice,
     camera: (&TransformComponent, &CameraComponent),
+    sun: Option<(
+      crate::scene::EntityId,
+      &crate::scene::SunComponent,
+      &TransformComponent,
+    )>,
     frame: &Frame,
     presentation_engine: PresentationEngineHandle,
     acquire_result: &AcquireResult,
@@ -156,47 +166,68 @@ impl RenderPath for ForwardRenderPath {
     let cmd_buffer = device.get_command_buffer()?;
 
     device.begin_command_buffer(cmd_buffer)?;
-    device.begin_render_pass(cmd_buffer, presentation_engine, acquire_result)?;
 
-    let extent = device.get_presentation_engine_extent(presentation_engine)?;
-    device.set_viewport(
-      cmd_buffer,
-      &super::Viewport {
-        x: 0.0,
-        y: 0.0,
-        width: extent[0] as f32,
-        height: extent[1] as f32,
-        min_depth: 0.0,
-        max_depth: 1.0,
-      },
-    )?;
-    device.set_scissor(
-      cmd_buffer,
-      &super::Rect2D {
-        offset: [0, 0],
-        extent,
-      },
-    )?;
-    let view = Mat4x4f32::look_at(
-      camera.0.position,
-      camera.0.position
-        + camera
-          .0
-          .rotation
-          .rotate_vector(<Vec3f32 as Vector3>::from_components(0.0, 0.0, -1.0)),
-      <Vec3f32 as Vector3>::from_components(0.0, 1.0, 0.0),
-    );
-    let proj = camera.1.projection;
-    let view_proj = proj * view;
+    let _buf_result = {
+      device.begin_render_pass(cmd_buffer, presentation_engine, acquire_result)?;
 
-    for draw_call in &frame.draw_calls {
-      let _ = do_draw_call(device, view_proj, camera.0.position, cmd_buffer, draw_call);
-    }
-    for cursor_call in &frame.cursor_calls {
-      let _ = do_draw_cursor(device, view, view_proj, cmd_buffer, cursor_call);
-    }
+      let _render_pass_result = {
+        let extent = device.get_presentation_engine_extent(presentation_engine)?;
+        device.set_viewport(
+          cmd_buffer,
+          &super::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: extent[0] as f32,
+            height: extent[1] as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+          },
+        )?;
+        device.set_scissor(
+          cmd_buffer,
+          &super::Rect2D {
+            offset: [0, 0],
+            extent,
+          },
+        )?;
+        let view = Mat4x4f32::look_at(
+          camera.0.position,
+          camera.0.position
+            + camera
+              .0
+              .rotation
+              .rotate_vector(<Vec3f32 as Vector3>::from_components(0.0, 0.0, -1.0)),
+          <Vec3f32 as Vector3>::from_components(0.0, 1.0, 0.0),
+        );
+        let proj = camera.1.projection;
+        let view_proj = proj * view;
 
-    device.end_render_pass(cmd_buffer)?;
+        for draw_call in &frame.draw_calls {
+          let _ = do_draw_call(device, view_proj, camera.0.position, cmd_buffer, draw_call);
+        }
+        for cursor_call in &frame.cursor_calls {
+          let _ = do_draw_cursor(device, view, view_proj, cmd_buffer, cursor_call);
+        }
+
+        if let Some((sun_entity, sun_comp, sun_transform)) = sun {
+          device.render_sun(
+            cmd_buffer,
+            sun_entity,
+            sun_comp,
+            sun_transform,
+            view,
+            view_proj,
+          )?;
+        }
+
+        Ok::<(), GpuError>(())
+      };
+
+      device.end_render_pass(cmd_buffer)?;
+
+      Ok::<(), GpuError>(())
+    };
+
     device.submit_command_buffer(cmd_buffer)?;
 
     Ok(())
@@ -242,9 +273,9 @@ fn do_draw_call(
   let push_constants = PushConstants {
     model_view_proj: mvp.into(),
     model: model.into(),
-    sun_dir: [0.0, -1.0, 0.0],
+    sun_pos: [1000.0, 1000.0, 1000.0],
     texture_flags: draw_call.texture_flags,
-    sun_color: [1.0, 1.0, 1.0, 1.0],
+    sun_color: [1000000.0, 1000000.0, 1000000.0, 1.0],
     camera_pos: camera_pos.into(),
     _unused: 0,
   };

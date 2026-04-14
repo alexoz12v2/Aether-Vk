@@ -4,7 +4,10 @@ mod windowing;
 
 use aethervk_core_rlib::{
   gpu::{self},
-  scene::{CameraComponent, CursorComponent, PhysicalMeshComponent, Scene, TransformComponent},
+  scene::{
+    CameraComponent, CursorComponent, PhysicalMeshComponent, Scene, SunComponent,
+    TransformComponent,
+  },
   simulation,
   types::RuntimeParams,
 };
@@ -15,6 +18,7 @@ use aethervk_oshal_rlib::math::{
 };
 use heapless::index_map::FnvIndexMap;
 use std::{
+  any::TypeId,
   io::Read,
   sync::{Arc, RwLock, mpsc},
   time::Instant,
@@ -155,6 +159,11 @@ fn main() {
           let data_ptr = data as *mut ClosureData;
           let (params_ref, handle_result) = unsafe { &mut *data_ptr };
           **handle_result = device.create_presentation_engine(*params_ref);
+
+          device
+            .generate_sky()
+            .expect("Failed to generate background sky map!");
+
           Ok(())
         };
 
@@ -177,9 +186,10 @@ fn main() {
 
   let scene = Scene::new();
   scene.register_component::<TransformComponent>(&[]);
-  scene.register_component::<PhysicalMeshComponent>(&[]);
-  scene.register_component::<CameraComponent>(&[]);
-  scene.register_component::<CursorComponent>(&[]);
+  scene.register_component::<PhysicalMeshComponent>(&[TypeId::of::<TransformComponent>()]);
+  scene.register_component::<CameraComponent>(&[TypeId::of::<TransformComponent>()]);
+  scene.register_component::<CursorComponent>(&[TypeId::of::<TransformComponent>()]);
+  scene.register_component::<SunComponent>(&[TypeId::of::<TransformComponent>()]);
 
   let model_path = {
     let mut args = std::env::args();
@@ -269,6 +279,27 @@ fn main() {
     .unwrap();
   scene.set_parent(camera_entity, Some(root_entity));
 
+  let sun_entity = scene.spawn_entity();
+  scene
+    .add_component(
+      sun_entity,
+      TransformComponent {
+        position: Vec3f32::from_components(1000.0, 1000.0, 1000.0),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(100.0, 100.0, 100.0),
+      },
+    )
+    .unwrap();
+  scene
+    .add_component(
+      sun_entity,
+      aethervk_core_rlib::scene::SunComponent {
+        resolution: (128, 128, 128),
+      },
+    )
+    .unwrap();
+  scene.set_parent(sun_entity, Some(root_entity));
+
   let scene_shared = Arc::new(RwLock::new(scene));
 
   let mut app_state = AppState {
@@ -291,6 +322,7 @@ fn main() {
     render_device_handle,
     presentation_engine,
     cursor_entity,
+    sun_entity,
   );
 
   // --- Start Logic Thread ---
