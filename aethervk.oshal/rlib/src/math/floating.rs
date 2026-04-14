@@ -19,7 +19,8 @@ pub trait BitsStorage: Sized + Copy {
     + ops::BitXor<Output = Self::Bits>
     + ops::BitAndAssign
     + ops::BitOrAssign
-    + ops::BitXorAssign;
+    + ops::BitXorAssign
+    + ops::Not<Output = Self::Bits>;
 
   const SIGN_BIT_MASK: Self::Bits;
 }
@@ -324,7 +325,7 @@ pub trait FloatOps: Sized + super::FloatLike {
   where
     Self: FloatBits,
   {
-    Self::from_bits(self.to_bits() & <Self as BitsStorage>::SIGN_BIT_MASK)
+    Self::from_bits(self.to_bits() & !<Self as BitsStorage>::SIGN_BIT_MASK)
   }
   fn lerp(t: Self, a: Self, b: Self) -> Self {
     Self::fma(t, b - a, a)
