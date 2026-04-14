@@ -52,7 +52,7 @@ vec3 octDecode(vec2 uv) {
 
 void main() {
   ivec2 texelCoord = ivec2(gl_GlobalInvocationID.xy);
-  ivec2 size = imageSize(outOctMap);
+  ivec2 size = imageSize(octOutMap);
   if (texelCoord.x >= size.x || texelCoord.y >= size.y) return;
 
   // Convert texel coordinate to UV [0,1]
@@ -65,5 +65,5 @@ void main() {
   vec3 color = generateSpace(dir);
 
   // write to texture
-  imageStore(outOctMap, texelCoord, vec4(color, 1.0));
+  imageStore(octOutMap, texelCoord, vec4(color, 1.0));
 }

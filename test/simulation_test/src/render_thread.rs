@@ -30,6 +30,8 @@ struct RenderPayloadData<'a> {
   presentation_engine: gpu::PresentationEngineHandle,
   scene: &'a Scene,
   cursor_entity: EntityId,
+  sun_entity: EntityId,
+  // TODO sky_entity
 }
 
 pub fn start_render_thread(
@@ -39,6 +41,7 @@ pub fn start_render_thread(
   render_device_handle: gpu::RenderDeviceHandle,
   presentation_engine: gpu::PresentationEngineHandle,
   cursor_entity: EntityId,
+  sun_entity: EntityId,
 ) {
   std::thread::spawn(move || {
     for mut packet in render_rx {
@@ -48,6 +51,7 @@ pub fn start_render_thread(
         presentation_engine,
         scene: &scene_guard,
         cursor_entity,
+        sun_entity,
       };
 
       let res = render_frontend.write().unwrap().take_and(|context| {
@@ -119,6 +123,19 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
     },
   );
 
+  let mut sun_opt = None;
+  payload.scene.with_component(
+    payload.sun_entity,
+    |sun_comp: &aethervk_core_rlib::scene::SunComponent| {
+      sun_opt = Some(*sun_comp);
+    },
+  );
+  let sun_comp = sun_opt.unwrap();
+  let sun_transform = payload
+    .scene
+    .global_transform(payload.sun_entity)
+    .unwrap();
+
   let render_path = frame::ForwardRenderPath;
   render_path.record_commands(
     device,
@@ -126,6 +143,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
       &payload.packet.camera_transform,
       &payload.packet.camera_component,
     ),
+    Some((payload.sun_entity, &sun_comp, &sun_transform.into())),
     &frame,
     payload.presentation_engine,
     &acquire_result,

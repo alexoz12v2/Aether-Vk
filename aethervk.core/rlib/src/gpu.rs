@@ -47,6 +47,21 @@ pub struct RenderableInstanceId(pub u64);
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct SkyPushConstants {
+  pub inv_view_proj: [f32; 16],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SunPushConstants {
+  pub model_view_proj: [f32; 16],
+  pub model_inv: [f32; 16],
+  pub camera_world_pos: [f32; 3],
+  pub _unused: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct CursorPushConstants {
   pub view: [f32; 16],
   pub view_proj: [f32; 16],
@@ -142,6 +157,9 @@ pub trait RenderDevice: Send + Sync {
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult>;
 
+  /// Generates the background sky image using compute shader
+  fn generate_sky(&self) -> GpuResult<()>;
+
   /// Returns resources for the cursor rendering
   fn get_or_create_cursor_resources(
     &self,
@@ -191,6 +209,12 @@ pub trait RenderDevice: Send + Sync {
     push_constants: &PushConstants,
   ) -> GpuResult<()>;
 
+  fn push_sun_constants(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    push_constants: &SunPushConstants,
+  ) -> GpuResult<()>;
+
   fn push_cursor_constants(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -200,6 +224,16 @@ pub trait RenderDevice: Send + Sync {
   fn draw_indexed(&self, cmd_buffer: CommandBufferHandle, index_count: u32) -> GpuResult<()>;
 
   fn draw(&self, cmd_buffer: CommandBufferHandle, vertex_count: u32) -> GpuResult<()>;
+
+  fn render_sun(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    entity_id: crate::scene::EntityId,
+    component: &crate::scene::SunComponent,
+    transform: &crate::scene::TransformComponent,
+    view: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+    view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+  ) -> GpuResult<()>;
 
   fn end_render_pass(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 

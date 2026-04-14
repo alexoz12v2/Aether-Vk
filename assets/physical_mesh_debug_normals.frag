@@ -12,13 +12,16 @@ layout(binding = 0) uniform sampler2D albedoMap;
 layout(binding = 1) uniform sampler2D normalMap;
 layout(binding = 2) uniform sampler2D roughnessMap;
 layout(binding = 3) uniform sampler2D aoMap;
+layout(binding = 4) uniform sampler2D skyMap;
 
 layout(push_constant) uniform Push { // std140
   mat4 modelViewProj;
   mat4 model;
-  vec3 sunDir;
+  vec3 sunPos;
   uint textureFlags;
   vec4 sunColor;
+  vec3 cameraPos;
+  uint _unused;
 } push;
 
 // --- Specialization Constants ---

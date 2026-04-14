@@ -62,7 +62,8 @@ impl GlobalDeviceAllocator {
       vk_mem::AllocatorCreateInfo::new(instance, device, physical_device);
     allocator_create_info.vulkan_api_version = api_version;
     allocator_create_info.flags = vk_mem::AllocatorCreateFlags::EXT_MEMORY_BUDGET
-      | vk_mem::AllocatorCreateFlags::KHR_DEDICATED_ALLOCATION;
+      | vk_mem::AllocatorCreateFlags::KHR_DEDICATED_ALLOCATION
+      | vk_mem::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
     #[cfg(debug_assertions)]
     let callbacks = vk_mem::ffi::VmaDeviceMemoryCallbacks {
       pfnAllocate: Some(on_device_alloc),

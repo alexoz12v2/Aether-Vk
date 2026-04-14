@@ -9,10 +9,11 @@ layout(location = 2) in vec2 inUV;
 layout(location = 3) in vec4 inTangent; // Added for Normal Mapping (w is handedness)
 
 // Shared Push Constant block (Exactly 176 bytes TODO: move to inline unif?)
+// Note: cameraPos used for IBL view vector computation in fragment shader
 layout(push_constant) uniform Push { // std140
   mat4 modelViewProj; // 64 bytes
   mat4 model;         // 64 bytes
-  vec3 sunDir;        // 12 bytes
+  vec3 sunPos;        // 12 bytes
   uint textureFlags;  // 4 bytes (packs perfectly with vec3)
   vec4 sunColor;      // 16 bytes
   vec3 cameraPos;     // 12 bytes

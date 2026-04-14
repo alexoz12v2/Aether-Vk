@@ -37,11 +37,15 @@ pub fn execution_model_to_shader_flags(
   }
 }
 
-pub fn shader_flags_to_execution_model(stage_flags: vk::ShaderStageFlags) -> Option<spirv::ExecutionModel> {
+pub fn shader_flags_to_execution_model(
+  stage_flags: vk::ShaderStageFlags,
+) -> Option<spirv::ExecutionModel> {
   match stage_flags {
     vk::ShaderStageFlags::VERTEX => Some(spirv::ExecutionModel::Vertex),
     vk::ShaderStageFlags::TESSELLATION_CONTROL => Some(spirv::ExecutionModel::TessellationControl),
-    vk::ShaderStageFlags::TESSELLATION_EVALUATION => Some(spirv::ExecutionModel::TessellationEvaluation),
+    vk::ShaderStageFlags::TESSELLATION_EVALUATION => {
+      Some(spirv::ExecutionModel::TessellationEvaluation)
+    }
     vk::ShaderStageFlags::GEOMETRY => Some(spirv::ExecutionModel::Geometry),
     vk::ShaderStageFlags::FRAGMENT => Some(spirv::ExecutionModel::Fragment),
     vk::ShaderStageFlags::COMPUTE => Some(spirv::ExecutionModel::GLCompute),
