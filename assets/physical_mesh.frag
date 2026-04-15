@@ -141,6 +141,9 @@ void main() {
   // Combine IBL
   vec3 specularIBL = radiance * F; // Rough approximation for specular
   vec3 ambient = (kD * diffuseIBL + specularIBL) * ao;
+  
+  // Add a base background light to avoid pitch black meshes
+  ambient += vec3(0.05) * albedo * ao;
 
   outColor = vec4(diffuse * lightColor * ao + ambient, 1.0);
 }

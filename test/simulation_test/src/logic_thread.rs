@@ -1,4 +1,4 @@
-use aethervk_core_rlib::scene::{CameraComponent, EntityId, Scene, TransformComponent};
+use aethervk_core_rlib::scene::{CameraComponent, EntityId, Scene, SunComponent, TransformComponent};
 use aethervk_oshal_rlib::math::{
   FloatLike,
   floating::FloatOps,
@@ -16,6 +16,8 @@ pub enum LogicCommand {
   RaycastCursor { ndc_x: f32, ndc_y: f32 },
   ResetCursor,
   Resize { width: u32, height: u32 },
+  SnapCursorToSun,
+  SnapCameraToCursor,
 }
 
 pub struct LogicState {
@@ -26,10 +28,10 @@ pub struct LogicState {
 
 pub fn start_logic_thread(
   rx: mpsc::Receiver<LogicCommand>,
-  scene_shared: Arc<RwLock<Scene>>,
+  scene_shared: Arc<Scene>,
   camera_entity: EntityId,
   cursor_entity: EntityId,
-) {
+) -> std::thread::JoinHandle<()> {
   std::thread::spawn(move || {
     let mut state = LogicState {
       yaw: 0.0,
@@ -38,7 +40,7 @@ pub fn start_logic_thread(
     };
 
     for command in rx {
-      let mut scene_guard = scene_shared.write().unwrap();
+      let mut scene_guard = scene_shared.as_ref();
 
       // Update state based on command
       let mut cam_pos = Vec3f32::from_components(0.0, 0.0, 0.0);
@@ -128,17 +130,18 @@ pub fn start_logic_thread(
           let mut view_proj_inv = Mat4x4f32::identity();
           let mut cam_pos = Vec3f32::from_components(0.0, 0.0, 0.0);
 
+          let mut view = Mat4x4f32::identity();
           scene_guard.with_component(camera_entity, |c: &TransformComponent| {
             cam_pos = c.position;
             // The view matrix is the inverse of the camera transform
-            let view = Mat4x4f32::from_quat(c.rotation.conjugate())
+            view = Mat4x4f32::from_quat(c.rotation.conjugate())
               * Mat4x4f32::translation(c.position * -1.0);
+          });
 
-            scene_guard.with_component(camera_entity, |cam: &CameraComponent| {
-              let proj = cam.projection;
-              let view_proj = proj * view;
-              view_proj_inv = view_proj.inverse().unwrap_or(Mat4x4f32::identity());
-            });
+          scene_guard.with_component(camera_entity, |cam: &CameraComponent| {
+            let proj = cam.projection;
+            let view_proj = proj * view;
+            view_proj_inv = view_proj.inverse().unwrap_or(Mat4x4f32::identity());
           });
 
           // NDC ray
@@ -182,6 +185,30 @@ pub fn start_logic_thread(
             c.position = target_pos;
           });
         }
+        LogicCommand::SnapCursorToSun => {
+          let mut target_sun_id = None;
+          scene_guard.query1::<SunComponent, _>(|sun_id, _sun| {
+            target_sun_id = Some(sun_id);
+          });
+          
+          if let Some(sun_id) = target_sun_id {
+            if let Some(t) = scene_guard.global_transform(sun_id) {
+              scene_guard.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
+                c.position = t.position;
+              });
+            }
+          }
+        }
+        LogicCommand::SnapCameraToCursor => {
+          let offset = Vec3f32::from_components(0.0, 0.0, 5.0);
+          state.yaw = 0.0;
+          state.pitch = 0.0;
+          let new_rot = Quat::identity();
+          scene_guard.with_component_mut(camera_entity, |c: &mut TransformComponent| {
+            c.position = cursor_pos + offset;
+            c.rotation = new_rot;
+          });
+        }
       }
 
       // After applying commands, enforce constraints and update dependent transforms
@@ -196,5 +223,5 @@ pub fn start_logic_thread(
         c.scale = Vec3f32::from_components(scale_factor, scale_factor, scale_factor);
       });
     }
-  });
+  })
 }

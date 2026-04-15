@@ -140,6 +140,14 @@ pub trait RenderPath {
       &crate::scene::SunComponent,
       &TransformComponent,
     )>,
+    sky: Option<(
+      crate::scene::EntityId,
+      &crate::scene::SkyComponent,
+    )>,
+    grid: Option<(
+      crate::scene::EntityId,
+      &crate::scene::GridComponent,
+    )>,
     frame: &Frame,
     presentation_engine: PresentationEngineHandle,
     acquire_result: &AcquireResult,
@@ -159,6 +167,14 @@ impl RenderPath for ForwardRenderPath {
       &crate::scene::SunComponent,
       &TransformComponent,
     )>,
+    sky: Option<(
+      crate::scene::EntityId,
+      &crate::scene::SkyComponent,
+    )>,
+    grid: Option<(
+      crate::scene::EntityId,
+      &crate::scene::GridComponent,
+    )>,
     frame: &Frame,
     presentation_engine: PresentationEngineHandle,
     acquire_result: &AcquireResult,
@@ -168,6 +184,9 @@ impl RenderPath for ForwardRenderPath {
     device.begin_command_buffer(cmd_buffer)?;
 
     let _buf_result = {
+      if let Some((sun_entity, sun_comp, _)) = sun {
+        device.update_sun(cmd_buffer, sun_entity, sun_comp)?;
+      }
       device.begin_render_pass(cmd_buffer, presentation_engine, acquire_result)?;
 
       let _render_pass_result = {
@@ -190,23 +209,15 @@ impl RenderPath for ForwardRenderPath {
             extent,
           },
         )?;
-        let view = Mat4x4f32::look_at(
-          camera.0.position,
-          camera.0.position
-            + camera
-              .0
-              .rotation
-              .rotate_vector(<Vec3f32 as Vector3>::from_components(0.0, 0.0, -1.0)),
-          <Vec3f32 as Vector3>::from_components(0.0, 1.0, 0.0),
-        );
+        let view = Mat4x4f32::from_quat(camera.0.rotation.conjugate())
+          * Mat4x4f32::translation(camera.0.position * -1.0);
         let proj = camera.1.projection;
         let view_proj = proj * view;
 
-        for draw_call in &frame.draw_calls {
-          let _ = do_draw_call(device, view_proj, camera.0.position, cmd_buffer, draw_call);
-        }
-        for cursor_call in &frame.cursor_calls {
-          let _ = do_draw_cursor(device, view, view_proj, cmd_buffer, cursor_call);
+        if let Some((sky_entity, sky_comp)) = sky {
+          let sky_view = Mat4x4f32::from_quat(camera.0.rotation.conjugate());
+          let sky_view_proj = proj * sky_view;
+          device.render_sky(cmd_buffer, sky_entity, sky_comp, sky_view_proj)?;
         }
 
         if let Some((sun_entity, sun_comp, sun_transform)) = sun {
@@ -218,6 +229,18 @@ impl RenderPath for ForwardRenderPath {
             view,
             view_proj,
           )?;
+        }
+
+        for draw_call in &frame.draw_calls {
+          let _ = do_draw_call(device, view_proj, camera.0.position, cmd_buffer, draw_call);
+        }
+
+        if let Some((grid_entity, grid_comp)) = grid {
+          device.render_grid(cmd_buffer, grid_entity, grid_comp, view_proj, camera.0.position)?;
+        }
+
+        for cursor_call in &frame.cursor_calls {
+          let _ = do_draw_cursor(device, view, view_proj, cmd_buffer, cursor_call);
         }
 
         Ok::<(), GpuError>(())

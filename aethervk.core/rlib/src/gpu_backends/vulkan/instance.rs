@@ -199,7 +199,7 @@ impl Instance {
     }
     #[cfg(not(debug_assertions))]
     {
-      Ok(Self { instance })
+      Ok(Self { instance, entry_wrapper })
     }
   }
 

@@ -1,3 +1,0 @@
-# References
-
-- Game Engine Architecture

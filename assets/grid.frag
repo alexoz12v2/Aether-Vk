@@ -31,7 +31,7 @@ void main() {
   vec2 p = worldPos.xz * push.density;
   vec2 dp = fwidth(p);
   
-  float lineWidth = 0.03; 
+  float lineWidth = 0.003; 
   
   vec2 grid = smoothstep(lineWidth + dp, lineWidth - dp, abs(fract(p + 0.5) - 0.5));
   vec2 blend = smoothstep(0.1, 0.8, dp);
@@ -41,7 +41,7 @@ void main() {
   
   vec2 p10 = p * 0.1;
   vec2 dp10 = dp * 0.1;
-  float majorLineWidth = 0.01;
+  float majorLineWidth = 0.001;
   vec2 grid10 = smoothstep(majorLineWidth + dp10, majorLineWidth - dp10, abs(fract(p10 + 0.5) - 0.5));
   vec2 coverage10 = mix(grid10, vec2(majorLineWidth), smoothstep(0.1, 0.8, dp10));
   

@@ -688,6 +688,11 @@ pub(super) struct SunRenderResource {
   pub image: Option<Image>,
   pub descriptor_set: Option<NonZeroHandle<vk::DescriptorSet>>,
   pub is_generated: bool,
+  pub compute_descriptor_set: Option<vk::DescriptorSet>,
+  pub compute_pipeline: Option<crate::gpu_backends::vulkan::utils::NonZeroHandle<vk::Pipeline>>,
+  pub compute_pipeline_layout: Option<vk::PipelineLayout>,
+  pub params_buffer: Option<vk::Buffer>,
+  pub params_alloc: Option<vk_mem::Allocation>,
 }
 
 pub(super) struct ForwardMeshRenderResource {
@@ -1045,7 +1050,21 @@ impl CursorRenderResourceArchetype {
   }
 }
 
+
+pub(super) struct SkyRenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub pipeline_key: Option<PipelineKey>,
+  pub descriptor_set_layout: NonZeroHandle<vk::DescriptorSetLayout>,
+  pub descriptor_set: Option<NonZeroHandle<vk::DescriptorSet>>,
+}
+
+pub(super) struct GridRenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub pipeline_key: Option<PipelineKey>,
+}
+
 pub(super) struct SunRenderResourceArchetype {
+
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub descriptor_set_layout: NonZeroHandle<vk::DescriptorSetLayout>,
   pub push_contant_ranges: Vec<vk::PushConstantRange>,

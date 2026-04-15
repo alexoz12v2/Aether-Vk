@@ -261,6 +261,16 @@ struct DeviceResources {
   #[cfg(not(debug_assertions))]
   cursor_render_archetype: Option<resources::CursorRenderResourceArchetype>,
 
+  #[cfg(debug_assertions)]
+  sky_render_archetype: DropTracker<TrackedOption<resources::SkyRenderResourceArchetype, 3>, 3>,
+  #[cfg(not(debug_assertions))]
+  sky_render_archetype: Option<resources::SkyRenderResourceArchetype>,
+
+  #[cfg(debug_assertions)]
+  grid_render_archetype: DropTracker<TrackedOption<resources::GridRenderResourceArchetype, 4>, 4>,
+  #[cfg(not(debug_assertions))]
+  grid_render_archetype: Option<resources::GridRenderResourceArchetype>,
+
   sky_image: Option<resources::Image>,
 
   // not cleaned stuff
@@ -630,7 +640,7 @@ impl DeviceResources {
             width: presentation_engine_state.extent().0 as _,
             height: -(presentation_engine_state.extent().1 as f32), // Y axis points downwards in Vulkan, so flip it
             x: 0.0,
-            y: 0.0,
+            y: presentation_engine_state.extent().1 as f32,
             min_depth: 0.0,
             max_depth: 1.0,
           })
@@ -797,7 +807,7 @@ impl DeviceResources {
             width: presentation_engine_state.extent().0 as _,
             height: -(presentation_engine_state.extent().1 as f32), // Y axis points downwards in Vulkan, so flip it
             x: 0.0,
-            y: 0.0,
+            y: presentation_engine_state.extent().1 as f32,
             min_depth: 0.0,
             max_depth: 1.0,
           })
@@ -834,7 +844,7 @@ impl DeviceResources {
         .pipeline_layout
         .get(),
       )
-      .with_pipeline_flags(PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL) // No culling so we see it from inside and outside (yes, cull all means no culling)
+      .with_pipeline_flags(PipelineFlags::CULL_ALL) // No culling so we see it from inside and outside (yes, cull all means no culling)
       .with_render_pass(
         self
           .renderpasses
@@ -872,6 +882,234 @@ impl DeviceResources {
     }
 
     debug_assert!(self.sun_render_archetype.is_some());
+
+    Ok(())
+  }
+
+  fn create_sky_archetype(
+    &mut self,
+    device: &ash::Device,
+    vertex_shader_key: ShaderKey,
+    fragment_shader_key: ShaderKey,
+    depth_stencil_format: vk::Format,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()> {
+    if self.sky_render_archetype.is_some() {
+      return Err(GpuError::InvalidState);
+    }
+    let live_engines_lock = self.live_presentation_engines.read();
+    let presentation_engine_state = live_engines_lock.get(&handle).unwrap().read();
+    let shader_manager = self.shader_manager.read();
+    let vertex_shader = shader_manager.get(vertex_shader_key).unwrap();
+    let fragment_shader = shader_manager.get(fragment_shader_key).unwrap();
+
+    let bindings = [vk::DescriptorSetLayoutBinding::default()
+      .binding(0)
+      .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+      .descriptor_count(1)
+      .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+    let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    let set_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }?;
+    let set_layouts = [set_layout];
+
+    let push_constant_ranges = [vk::PushConstantRange::default()
+      .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+      .offset(0)
+      .size(64)];
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
+      .set_layouts(&set_layouts)
+      .push_constant_ranges(&push_constant_ranges);
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
+
+    let mut arch = resources::SkyRenderResourceArchetype {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      pipeline_key: None,
+      descriptor_set_layout: unsafe { NonZeroHandle::new_unchecked(set_layout) },
+      descriptor_set: None,
+    };
+
+    let pipeline_graphics_info = GraphicsInfo::default()
+      .with_vertex_in(
+        VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+          .clone(),
+      )
+      .with_pre_rasterization(
+        PreRasterization::default()
+          .with_vertex_module(vertex_shader.module.get())
+          .clone(),
+      )
+      .with_fragment_shader(
+        FragmentShader::default()
+          .with_fragment_module(fragment_shader.module.get())
+          .add_viewport(vk::Viewport {
+            width: presentation_engine_state.extent().0 as _,
+            height: -(presentation_engine_state.extent().1 as f32),
+            x: 0.0,
+            y: presentation_engine_state.extent().1 as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+          })
+          .add_scissors(vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: vk::Extent2D {
+              width: presentation_engine_state.extent().0,
+              height: presentation_engine_state.extent().1,
+            },
+          })
+          .clone(),
+      )
+      .with_fragment_out(
+        FragmentOut::default()
+          .add_color_attachment_format(presentation_engine_state.format())
+          .with_depth_attachment_format(depth_stencil_format)
+          .clone(),
+      )
+      .with_pipeline_layout(pipeline_layout)
+      .with_pipeline_flags(
+        PipelineFlags::CULL_ALL | PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST,
+      )
+      .with_render_pass(
+        self
+          .renderpasses
+          .get_or_create_render_pass(
+            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
+            0,
+            device,
+            &self.allocator.allocator,
+            &self.discard_pool,
+            0,
+          )?
+          .0
+          .get(),
+      )
+      .with_subpass(0)
+      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+      .clone();
+
+    let pipeline_key = pipeline_graphics_info.pipeline_key();
+    self
+      .pipeline_pool
+      .write()
+      .get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
+    arch.pipeline_key = Some(pipeline_key);
+
+    #[cfg(not(debug_assertions))]
+    {
+      self.sky_render_archetype = Some(arch);
+    }
+    #[cfg(debug_assertions)]
+    {
+      self.sky_render_archetype = DropTracker::new(TrackedOption::some(arch));
+    }
+
+    Ok(())
+  }
+
+  fn create_grid_archetype(
+    &mut self,
+    device: &ash::Device,
+    vertex_shader_key: ShaderKey,
+    fragment_shader_key: ShaderKey,
+    depth_stencil_format: vk::Format,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()> {
+    if self.grid_render_archetype.is_some() {
+      return Err(GpuError::InvalidState);
+    }
+    let live_engines_lock = self.live_presentation_engines.read();
+    let presentation_engine_state = live_engines_lock.get(&handle).unwrap().read();
+    let shader_manager = self.shader_manager.read();
+    let vertex_shader = shader_manager.get(vertex_shader_key).unwrap();
+    let fragment_shader = shader_manager.get(fragment_shader_key).unwrap();
+
+    let push_constant_ranges = [vk::PushConstantRange::default()
+      .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+      .offset(0)
+      .size(128)];
+    let pipeline_layout_info =
+      vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
+
+    let mut arch = resources::GridRenderResourceArchetype {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      pipeline_key: None,
+    };
+
+    let pipeline_graphics_info = GraphicsInfo::default()
+      .with_vertex_in(
+        VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+          .clone(),
+      )
+      .with_pre_rasterization(
+        PreRasterization::default()
+          .with_vertex_module(vertex_shader.module.get())
+          .clone(),
+      )
+      .with_fragment_shader(
+        FragmentShader::default()
+          .with_fragment_module(fragment_shader.module.get())
+          .add_viewport(vk::Viewport {
+            width: presentation_engine_state.extent().0 as _,
+            height: -(presentation_engine_state.extent().1 as f32),
+            x: 0.0,
+            y: presentation_engine_state.extent().1 as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+          })
+          .add_scissors(vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: vk::Extent2D {
+              width: presentation_engine_state.extent().0,
+              height: presentation_engine_state.extent().1,
+            },
+          })
+          .clone(),
+      )
+      .with_fragment_out(
+        FragmentOut::default()
+          .add_color_attachment_format(presentation_engine_state.format())
+          .with_depth_attachment_format(depth_stencil_format)
+          .clone(),
+      )
+      .with_pipeline_layout(pipeline_layout)
+      .with_pipeline_flags(
+        PipelineFlags::CULL_ALL | PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST,
+      )
+      .with_render_pass(
+        self
+          .renderpasses
+          .get_or_create_render_pass(
+            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
+            0,
+            device,
+            &self.allocator.allocator,
+            &self.discard_pool,
+            0,
+          )?
+          .0
+          .get(),
+      )
+      .with_subpass(0)
+      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+      .clone();
+
+    let pipeline_key = pipeline_graphics_info.pipeline_key();
+    self
+      .pipeline_pool
+      .write()
+      .get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
+    arch.pipeline_key = Some(pipeline_key);
+
+    #[cfg(not(debug_assertions))]
+    {
+      self.grid_render_archetype = Some(arch);
+    }
+    #[cfg(debug_assertions)]
+    {
+      self.grid_render_archetype = DropTracker::new(TrackedOption::some(arch));
+    }
 
     Ok(())
   }
@@ -951,7 +1189,7 @@ impl DeviceResources {
             width: presentation_engine_state.extent().0 as _,
             height: -(presentation_engine_state.extent().1 as f32), // Y axis points downwards in Vulkan, so flip it
             x: 0.0,
-            y: 0.0,
+            y: presentation_engine_state.extent().1 as f32,
             min_depth: 0.0,
             max_depth: 1.0,
           })
@@ -1191,6 +1429,14 @@ impl DeviceResources {
       cursor_render_archetype: DropTracker::new(TrackedOption::none()),
       #[cfg(not(debug_assertions))]
       cursor_render_archetype: None,
+      #[cfg(debug_assertions)]
+      sky_render_archetype: DropTracker::new(TrackedOption::none()),
+      #[cfg(not(debug_assertions))]
+      sky_render_archetype: None,
+      #[cfg(debug_assertions)]
+      grid_render_archetype: DropTracker::new(TrackedOption::none()),
+      #[cfg(not(debug_assertions))]
+      grid_render_archetype: None,
       sky_image: None,
       timeline_sem_device,
     })
@@ -1752,6 +1998,150 @@ impl<'a> Device<'a> {
     )?;
 
     Ok(comp_key)
+  }
+
+  fn ensure_grid_shader_modules(
+    &self,
+    res: &impl core::ops::Deref<Target = DeviceResources>,
+  ) -> GpuResult<(ShaderKey, ShaderKey)> {
+    let vert_path: PathBuf;
+    let frag_path: PathBuf;
+
+    #[cfg(debug_assertions)]
+    {
+      let assets_dir: PathBuf = {
+        use aethervk_oshal_rlib::os;
+        use aethervk_oshal_rlib::os::fs::FileSystemObject;
+
+        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
+        if args.len() > 1 {
+          let p = PathBuf::from(&args[1]);
+          if !p.is_dir() {
+            return Err(GpuError::InvalidArgument);
+          }
+          p
+        } else {
+          let exe_path = os::fs::current_exe().map_err(|_| {
+            GpuError::BackendSpecific(
+              "Failed to get executable path for debug asset loading".into(),
+            )
+          })?;
+
+          let mut path = exe_path.parent();
+          let mut assets_dir: Option<PathBuf> = None;
+          let mut iter: i32 = 0;
+          const MAX_ITER: i32 = 32;
+
+          while let Some(p) = path {
+            let test_path = p.join("assets");
+            if test_path.is_dir() {
+              assets_dir = Some(test_path);
+              break;
+            }
+            if iter >= MAX_ITER {
+              break;
+            }
+            path = p.parent();
+            iter += 1;
+          }
+          assets_dir.unwrap()
+        }
+      };
+      vert_path = assets_dir.join("grid.vert.spv");
+      frag_path = assets_dir.join("grid.frag.spv");
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      todo!();
+    }
+
+    let mut shader_manager = res.shader_manager.write();
+    let vkey = shader_manager.get_or_load(
+      &self.device,
+      &vert_path,
+      "main",
+      spirv::ExecutionModel::Vertex,
+    )?;
+    let fkey = shader_manager.get_or_load(
+      &self.device,
+      &frag_path,
+      "main",
+      spirv::ExecutionModel::Fragment,
+    )?;
+
+    Ok((vkey, fkey))
+  }
+
+  fn ensure_sky_shader_modules(
+    &self,
+    res: &impl core::ops::Deref<Target = DeviceResources>,
+  ) -> GpuResult<(ShaderKey, ShaderKey)> {
+    let vert_path: PathBuf;
+    let frag_path: PathBuf;
+
+    #[cfg(debug_assertions)]
+    {
+      let assets_dir: PathBuf = {
+        use aethervk_oshal_rlib::os;
+        use aethervk_oshal_rlib::os::fs::FileSystemObject;
+
+        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
+        if args.len() > 1 {
+          let p = PathBuf::from(&args[1]);
+          if !p.is_dir() {
+            return Err(GpuError::InvalidArgument);
+          }
+          p
+        } else {
+          let exe_path = os::fs::current_exe().map_err(|_| {
+            GpuError::BackendSpecific(
+              "Failed to get executable path for debug asset loading".into(),
+            )
+          })?;
+
+          let mut path = exe_path.parent();
+          let mut assets_dir: Option<PathBuf> = None;
+          let mut iter: i32 = 0;
+          const MAX_ITER: i32 = 32;
+
+          while let Some(p) = path {
+            let test_path = p.join("assets");
+            if test_path.is_dir() {
+              assets_dir = Some(test_path);
+              break;
+            }
+            if iter >= MAX_ITER {
+              break;
+            }
+            path = p.parent();
+            iter += 1;
+          }
+          assets_dir.unwrap()
+        }
+      };
+      vert_path = assets_dir.join("sky.vert.spv");
+      frag_path = assets_dir.join("sky.frag.spv");
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      todo!();
+    }
+
+    let mut shader_manager = res.shader_manager.write();
+    let vkey = shader_manager.get_or_load(
+      &self.device,
+      &vert_path,
+      "main",
+      spirv::ExecutionModel::Vertex,
+    )?;
+    let fkey = shader_manager.get_or_load(
+      &self.device,
+      &frag_path,
+      "main",
+      spirv::ExecutionModel::Fragment,
+    )?;
+
+    Ok((vkey, fkey))
   }
 
   fn ensure_sun_shader_modules(
@@ -2454,6 +2844,23 @@ impl<'a> RenderDevice for Device<'a> {
     compute_info.shader_module = shader_module;
     compute_info.pipeline_layout = pipeline_layout;
 
+    compute_info.add_specialization_constant_u32(
+      vk::SpecializationMapEntry {
+        constant_id: 0,
+        offset: 0,
+        size: 4,
+      },
+      16,
+    );
+    compute_info.add_specialization_constant_u32(
+      vk::SpecializationMapEntry {
+        constant_id: 1,
+        offset: 4,
+        size: 4,
+      },
+      16,
+    );
+
     let compute_pipeline = res
       .pipeline_pool
       .write()
@@ -2486,6 +2893,8 @@ impl<'a> RenderDevice for Device<'a> {
         .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
         .old_layout(vk::ImageLayout::UNDEFINED)
         .new_layout(vk::ImageLayout::GENERAL)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
         .image(sky_image.image.get())
         .subresource_range(
           vk::ImageSubresourceRange::default()
@@ -2523,8 +2932,8 @@ impl<'a> RenderDevice for Device<'a> {
       let mut barrier2 = vk::ImageMemoryBarrier2::default()
         .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
         .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-        .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+        .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .dst_access_mask(vk::AccessFlags2::MEMORY_READ)
         .old_layout(vk::ImageLayout::GENERAL)
         .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
         .image(sky_image.image.get())
@@ -2537,15 +2946,9 @@ impl<'a> RenderDevice for Device<'a> {
             .layer_count(1),
         );
 
-      if compute_queue.family_index != graphics_queue.family_index {
-        barrier2 = barrier2
-          .src_queue_family_index(compute_queue.family_index)
-          .dst_queue_family_index(graphics_queue.family_index);
-      } else {
-        barrier2 = barrier2
-          .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-          .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED);
-      }
+      barrier2 = barrier2
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED);
 
       let dep_info2 =
         vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&barrier2));
@@ -2567,64 +2970,6 @@ impl<'a> RenderDevice for Device<'a> {
       self.device.destroy_descriptor_pool(descriptor_pool, None);
       self.device.destroy_pipeline_layout(pipeline_layout, None);
       self.device.destroy_descriptor_set_layout(set_layout, None);
-    }
-
-    // Now we need the graphics queue transition if it's different
-    if compute_queue.family_index != graphics_queue.family_index {
-      unsafe {
-        let command_pool_info = vk::CommandPoolCreateInfo::default()
-          .queue_family_index(graphics_queue.family_index)
-          .flags(vk::CommandPoolCreateFlags::TRANSIENT);
-        let command_pool = self.device.create_command_pool(&command_pool_info, None)?;
-
-        let command_buffer_info = vk::CommandBufferAllocateInfo::default()
-          .command_pool(command_pool)
-          .level(vk::CommandBufferLevel::PRIMARY)
-          .command_buffer_count(1);
-        let command_buffer = self.device.allocate_command_buffers(&command_buffer_info)?[0];
-
-        let begin_info =
-          vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        self
-          .device
-          .begin_command_buffer(command_buffer, &begin_info)?;
-
-        let barrier3 = vk::ImageMemoryBarrier2::default()
-          .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-          .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
-          .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-          .dst_access_mask(vk::AccessFlags2::SHADER_READ)
-          .old_layout(vk::ImageLayout::GENERAL)
-          .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-          .src_queue_family_index(compute_queue.family_index)
-          .dst_queue_family_index(graphics_queue.family_index)
-          .image(sky_image.image.get())
-          .subresource_range(
-            vk::ImageSubresourceRange::default()
-              .aspect_mask(vk::ImageAspectFlags::COLOR)
-              .base_mip_level(0)
-              .level_count(1)
-              .base_array_layer(0)
-              .layer_count(1),
-          );
-
-        let dep_info3 =
-          vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&barrier3));
-        self
-          .synchronization2
-          .cmd_pipeline_barrier2(command_buffer, &dep_info3);
-
-        self.device.end_command_buffer(command_buffer)?;
-
-        let submit_info =
-          vk::SubmitInfo::default().command_buffers(core::slice::from_ref(&command_buffer));
-        self
-          .device
-          .queue_submit(graphics_queue.handle, &[submit_info], vk::Fence::null())?;
-        self.device.queue_wait_idle(graphics_queue.handle)?;
-
-        self.device.destroy_command_pool(command_pool, None);
-      }
     }
 
     drop(res);
@@ -3175,30 +3520,20 @@ impl<'a> RenderDevice for Device<'a> {
     Ok(())
   }
 
-  fn render_sun(
+  fn update_sun(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
     entity_id: crate::scene::EntityId,
     component: &crate::scene::SunComponent,
-    transform: &crate::scene::TransformComponent,
-    view: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
-    view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
   ) -> GpuResult<()> {
     let mut res = self.res.read();
     let timeline = res.get_timeline_semaphore_cached_value();
 
-    // ensure that the archetype for sun exists
     if res.sun_render_archetype.is_none() {
       drop(res);
       let mut wres = self.res.write();
-      // Re-check condition after acquiring write lock
       if wres.sun_render_archetype.is_none() {
         let (vkey, fkey) = self.ensure_sun_shader_modules(&wres)?;
-        // We need a handle. The render_sun function doesn't take one. We can get it from recording cmd buffers or presentation engines
-        // But sun_render_archetype uses depth_stencil_format which is global and presentation_engine_handle which gives us format.
-        // Actually, the presentation format is needed for the renderpass.
-        // For simplicity, let's just grab the first live presentation engine. In a multi-window setup this might be wrong,
-        // but it's a start. Or we can just use the swapchain format if we know it.
         let handle = wres.live_presentation_engines.read().keys().next().copied();
         if let Some(h) = handle {
           wres.create_sun_archetype(&self.device, vkey, fkey, self.depth_stencil_format, h)?;
@@ -3349,202 +3684,13 @@ impl<'a> RenderDevice for Device<'a> {
       unsafe {
         let ptr = alloc_info.mapped_data as *mut [f32; 6];
         *ptr = [
-          0.0,       // time
-          5778.0,    // photosphereTemp
-          1000000.0, // coronaTemp
-          0.6,       // radius
-          0.05,      // scaleHeight
-          15.0,      // noiseScale
+          timeline as f32 * 0.016, // time (TODO pass time)
+          5778.0,                  // photosphereTemp
+          1000000.0,               // coronaTemp
+          0.6,                     // radius
+          0.05,                    // scaleHeight
+          15.0,                    // noiseScale
         ];
-      }
-
-      let bda_info = vk::BufferDeviceAddressInfo::default().buffer(params_buffer);
-      let buffer_address = unsafe {
-        self
-          .buffer_device_address
-          .get_buffer_device_address(&bda_info)
-      };
-
-      unsafe {
-        let command_pool_info = vk::CommandPoolCreateInfo::default()
-          .queue_family_index(compute_queue.family_index)
-          .flags(vk::CommandPoolCreateFlags::TRANSIENT);
-        let command_pool = self.device.create_command_pool(&command_pool_info, None)?;
-
-        let command_buffer_info = vk::CommandBufferAllocateInfo::default()
-          .command_pool(command_pool)
-          .level(vk::CommandBufferLevel::PRIMARY)
-          .command_buffer_count(1);
-        let command_buffer = self.device.allocate_command_buffers(&command_buffer_info)?[0];
-
-        let begin_info =
-          vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        self
-          .device
-          .begin_command_buffer(command_buffer, &begin_info)?;
-
-        let barrier = vk::ImageMemoryBarrier2::default()
-          .src_stage_mask(vk::PipelineStageFlags2::NONE)
-          .src_access_mask(vk::AccessFlags2::NONE)
-          .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-          .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
-          .old_layout(vk::ImageLayout::UNDEFINED)
-          .new_layout(vk::ImageLayout::GENERAL)
-          .image(image.image.get())
-          .subresource_range(
-            vk::ImageSubresourceRange::default()
-              .aspect_mask(vk::ImageAspectFlags::COLOR)
-              .base_mip_level(0)
-              .level_count(1)
-              .base_array_layer(0)
-              .layer_count(1),
-          );
-        let dep_info =
-          vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&barrier));
-        self
-          .synchronization2
-          .cmd_pipeline_barrier2(command_buffer, &dep_info);
-
-        self.device.cmd_bind_pipeline(
-          command_buffer,
-          vk::PipelineBindPoint::COMPUTE,
-          compute_pipeline.get(),
-        );
-        self.device.cmd_bind_descriptor_sets(
-          command_buffer,
-          vk::PipelineBindPoint::COMPUTE,
-          pipeline_layout,
-          0,
-          &[descriptor_set],
-          &[],
-        );
-        let push_constants_bytes =
-          core::slice::from_raw_parts(&buffer_address as *const _ as *const u8, 8);
-        self.device.cmd_push_constants(
-          command_buffer,
-          pipeline_layout,
-          vk::ShaderStageFlags::COMPUTE,
-          0,
-          push_constants_bytes,
-        );
-
-        let group_count_x = (component.resolution.0 + 7) / 8;
-        let group_count_y = (component.resolution.1 + 7) / 8;
-        let group_count_z = (component.resolution.2 + 7) / 8;
-        self
-          .device
-          .cmd_dispatch(command_buffer, group_count_x, group_count_y, group_count_z);
-
-        let mut barrier2 = vk::ImageMemoryBarrier2::default()
-          .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-          .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
-          .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-          .dst_access_mask(vk::AccessFlags2::SHADER_READ)
-          .old_layout(vk::ImageLayout::GENERAL)
-          .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-          .image(image.image.get())
-          .subresource_range(
-            vk::ImageSubresourceRange::default()
-              .aspect_mask(vk::ImageAspectFlags::COLOR)
-              .base_mip_level(0)
-              .level_count(1)
-              .base_array_layer(0)
-              .layer_count(1),
-          );
-
-        if compute_queue.family_index != graphics_queue.family_index {
-          barrier2 = barrier2
-            .src_queue_family_index(compute_queue.family_index)
-            .dst_queue_family_index(graphics_queue.family_index);
-        } else {
-          barrier2 = barrier2
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED);
-        }
-
-        let dep_info2 =
-          vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&barrier2));
-        self
-          .synchronization2
-          .cmd_pipeline_barrier2(command_buffer, &dep_info2);
-
-        self.device.end_command_buffer(command_buffer)?;
-
-        let submit_info =
-          vk::SubmitInfo::default().command_buffers(core::slice::from_ref(&command_buffer));
-        self
-          .device
-          .queue_submit(compute_queue.handle, &[submit_info], vk::Fence::null())?;
-        self.device.queue_wait_idle(compute_queue.handle)?;
-
-        res
-          .allocator
-          .allocator
-          .destroy_buffer(params_buffer, &mut { params_alloc });
-
-        self.device.destroy_command_pool(command_pool, None);
-        self.device.destroy_descriptor_pool(descriptor_pool, None);
-        self.device.destroy_pipeline_layout(pipeline_layout, None);
-        self.device.destroy_descriptor_set_layout(set_layout, None);
-      }
-
-      // If queues are different, we need a release/acquire barrier on graphics queue.
-      // The release barrier was already dispatched in the compute queue.
-      if compute_queue.family_index != graphics_queue.family_index {
-        unsafe {
-          let command_pool_info = vk::CommandPoolCreateInfo::default()
-            .queue_family_index(graphics_queue.family_index)
-            .flags(vk::CommandPoolCreateFlags::TRANSIENT);
-          let command_pool = self.device.create_command_pool(&command_pool_info, None)?;
-
-          let command_buffer_info = vk::CommandBufferAllocateInfo::default()
-            .command_pool(command_pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1);
-          let transition_cmd = self.device.allocate_command_buffers(&command_buffer_info)?[0];
-
-          let begin_info = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-          self
-            .device
-            .begin_command_buffer(transition_cmd, &begin_info)?;
-
-          let barrier = vk::ImageMemoryBarrier2::default()
-            .src_stage_mask(vk::PipelineStageFlags2::NONE)
-            .src_access_mask(vk::AccessFlags2::NONE)
-            .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-            .dst_access_mask(vk::AccessFlags2::SHADER_READ)
-            .old_layout(vk::ImageLayout::GENERAL)
-            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image(image.image.get())
-            .subresource_range(
-              vk::ImageSubresourceRange::default()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .base_mip_level(0)
-                .level_count(1)
-                .base_array_layer(0)
-                .layer_count(1),
-            )
-            .src_queue_family_index(compute_queue.family_index)
-            .dst_queue_family_index(graphics_queue.family_index);
-
-          let dep_info =
-            vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&barrier));
-          self
-            .synchronization2
-            .cmd_pipeline_barrier2(transition_cmd, &dep_info);
-
-          self.device.end_command_buffer(transition_cmd)?;
-
-          let submit_info =
-            vk::SubmitInfo::default().command_buffers(core::slice::from_ref(&transition_cmd));
-          self
-            .device
-            .queue_submit(graphics_queue.handle, &[submit_info], vk::Fence::null())?;
-          self.device.queue_wait_idle(graphics_queue.handle)?;
-
-          self.device.destroy_command_pool(command_pool, None);
-        }
       }
 
       let arch_ref: Option<&_>;
@@ -3558,7 +3704,7 @@ impl<'a> RenderDevice for Device<'a> {
       }
       let archetype = arch_ref.ok_or(GpuError::InvalidState)?;
 
-      let descriptor_set = res
+      let graphics_descriptor_set = res
         .descriptor_pool
         .as_ref()
         .unwrap()
@@ -3570,13 +3716,13 @@ impl<'a> RenderDevice for Device<'a> {
         )?
         .get();
 
-      // Write descriptor set
+      // Write graphics descriptor set
       let image_info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL) // assuming it will be transitioned or is already
+        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
         .image_view(image.image_view.get())
         .sampler(res.linear_sampler.get());
       let write_descriptor_set = vk::WriteDescriptorSet::default()
-        .dst_set(descriptor_set)
+        .dst_set(graphics_descriptor_set)
         .dst_binding(0)
         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
         .image_info(core::slice::from_ref(&image_info));
@@ -3591,18 +3737,174 @@ impl<'a> RenderDevice for Device<'a> {
         resources::SunRenderResource {
           resolution: component.resolution,
           image: Some(image),
-          descriptor_set: Some(unsafe { NonZeroHandle::new_unchecked(descriptor_set) }),
-          is_generated: true,
+          descriptor_set: Some(unsafe { NonZeroHandle::new_unchecked(graphics_descriptor_set) }),
+          is_generated: false,
+          compute_descriptor_set: Some(descriptor_set),
+          compute_pipeline: Some(compute_pipeline),
+          compute_pipeline_layout: Some(pipeline_layout),
+          params_buffer: Some(params_buffer),
+          params_alloc: Some(params_alloc),
         },
       );
     }
 
-    let sun_resource = map.get(&entity_id).unwrap();
+    let sun_resource = map.get_mut(&entity_id).unwrap();
+    if sun_resource.compute_pipeline.is_none() {
+      return Ok(());
+    }
 
     let cmd_buffers = self.recording_command_buffers.read();
-    let data = cmd_buffers
-      .get(&(timeline, cmd_buffer))
-      .ok_or(GpuError::InvalidArgument)?;
+    let data = cmd_buffers.get(&(timeline, cmd_buffer)).unwrap();
+    let cmd = data.command_buffer.get();
+
+    unsafe {
+      let alloc_info = res
+        .allocator
+        .allocator
+        .get_allocation_info(sun_resource.params_alloc.as_ref().unwrap());
+      let ptr = alloc_info.mapped_data as *mut f32;
+      *ptr = timeline as f32 * 0.016;
+
+      let bda_info =
+        vk::BufferDeviceAddressInfo::default().buffer(sun_resource.params_buffer.unwrap());
+      let buffer_address = self
+        .buffer_device_address
+        .get_buffer_device_address(&bda_info);
+
+      let old_layout = if sun_resource.is_generated {
+        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+      } else {
+        vk::ImageLayout::UNDEFINED
+      };
+      let barrier = vk::ImageMemoryBarrier2::default()
+        .src_stage_mask(if sun_resource.is_generated {
+          vk::PipelineStageFlags2::FRAGMENT_SHADER
+        } else {
+          vk::PipelineStageFlags2::NONE
+        })
+        .src_access_mask(if sun_resource.is_generated {
+          vk::AccessFlags2::SHADER_READ
+        } else {
+          vk::AccessFlags2::NONE
+        })
+        .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+        .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+        .old_layout(old_layout)
+        .new_layout(vk::ImageLayout::GENERAL)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .image(sun_resource.image.as_ref().unwrap().image.get())
+        .subresource_range(
+          vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .base_mip_level(0)
+            .level_count(1)
+            .base_array_layer(0)
+            .layer_count(1),
+        );
+
+      let dep_info =
+        vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&barrier));
+      self.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info);
+
+      self.device.cmd_bind_pipeline(
+        cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        sun_resource.compute_pipeline.unwrap().get(),
+      );
+      self.device.cmd_bind_descriptor_sets(
+        cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        sun_resource.compute_pipeline_layout.unwrap(),
+        0,
+        &[sun_resource.compute_descriptor_set.unwrap()],
+        &[],
+      );
+      let push_constants_bytes =
+        core::slice::from_raw_parts(&buffer_address as *const _ as *const u8, 8);
+      self.device.cmd_push_constants(
+        cmd,
+        sun_resource.compute_pipeline_layout.unwrap(),
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        push_constants_bytes,
+      );
+
+      let group_count_x = (sun_resource.resolution.0 + 7) / 8;
+      let group_count_y = (sun_resource.resolution.1 + 7) / 8;
+      let group_count_z = (sun_resource.resolution.2 + 7) / 8;
+      self
+        .device
+        .cmd_dispatch(cmd, group_count_x, group_count_y, group_count_z);
+
+      let barrier2 = vk::ImageMemoryBarrier2::default()
+        .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+        .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+        .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+        .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+        .old_layout(vk::ImageLayout::GENERAL)
+        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .image(sun_resource.image.as_ref().unwrap().image.get())
+        .subresource_range(
+          vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .base_mip_level(0)
+            .level_count(1)
+            .base_array_layer(0)
+            .layer_count(1),
+        );
+
+      let dep_info2 =
+        vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&barrier2));
+      self.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info2);
+    }
+
+    sun_resource.is_generated = true;
+
+    Ok(())
+  }
+
+  fn render_sun(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    entity_id: crate::scene::EntityId,
+    component: &crate::scene::SunComponent,
+    transform: &crate::scene::TransformComponent,
+    view: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+    view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+  ) -> GpuResult<()> {
+    let mut res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+
+    // ensure that the archetype for sun exists
+    if res.sun_render_archetype.is_none() {
+      drop(res);
+      let mut wres = self.res.write();
+      // Re-check condition after acquiring write lock
+      if wres.sun_render_archetype.is_none() {
+        let (vkey, fkey) = self.ensure_sun_shader_modules(&wres)?;
+        // We need a handle. The render_sun function doesn't take one. We can get it from recording cmd buffers or presentation engines
+        // But sun_render_archetype uses depth_stencil_format which is global and presentation_engine_handle which gives us format.
+        // Actually, the presentation format is needed for the renderpass.
+        // For simplicity, let's just grab the first live presentation engine. In a multi-window setup this might be wrong,
+        // but it's a start. Or we can just use the swapchain format if we know it.
+        let handle = wres.live_presentation_engines.read().keys().next().copied();
+        if let Some(h) = handle {
+          wres.create_sun_archetype(&self.device, vkey, fkey, self.depth_stencil_format, h)?;
+        }
+      }
+      drop(wres);
+      res = self.res.read();
+    }
+
+    let map = res.sun_resources.read();
+    let sun_opt = map.as_ref().and_then(|m| m.get(&entity_id));
+    if sun_opt.is_none() {
+      return Ok(());
+    }
+    let sun_resource = sun_opt.unwrap();
 
     let arch_ref: Option<&_>;
     #[cfg(debug_assertions)]
@@ -3622,6 +3924,8 @@ impl<'a> RenderDevice for Device<'a> {
       .get_graphics_pipeline(pipeline_key)
       .ok_or(GpuError::InvalidState)?;
 
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers.get(&(timeline, cmd_buffer)).unwrap();
     let cmd = data.command_buffer.get();
     let layout = archetype.pipeline_layout.get();
 
@@ -3687,6 +3991,269 @@ impl<'a> RenderDevice for Device<'a> {
 
     // In a real implementation we would bind the raymarching pipeline,
     // bind the 3D texture, push constants for the sun raymarching and draw a cube.
+    Ok(())
+  }
+
+  fn render_sky(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    entity_id: crate::scene::EntityId,
+    component: &crate::scene::SkyComponent,
+    view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+  ) -> GpuResult<()> {
+    let mut res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+
+    if res.sky_render_archetype.is_none() {
+      drop(res);
+      let mut wres = self.res.write();
+      if wres.sky_render_archetype.is_none() {
+        let (vkey, fkey) = self.ensure_sky_shader_modules(&wres)?;
+        let handle = wres.live_presentation_engines.read().keys().next().copied();
+        if let Some(h) = handle {
+          wres.create_sky_archetype(&self.device, vkey, fkey, self.depth_stencil_format, h)?;
+        }
+      }
+      drop(wres);
+      res = self.res.read();
+    }
+
+    if res.sky_image.is_none() {
+      return Ok(());
+    }
+
+    let needs_desc = {
+      let arch_ref: Option<&_>;
+      #[cfg(debug_assertions)]
+      {
+        arch_ref = res.sky_render_archetype.as_ref().as_ref();
+      }
+      #[cfg(not(debug_assertions))]
+      {
+        arch_ref = res.sky_render_archetype.as_ref();
+      }
+      arch_ref.unwrap().descriptor_set.is_none()
+    };
+
+    if needs_desc {
+      drop(res);
+      let mut wres = self.res.write();
+
+      let mut do_alloc = false;
+      {
+        let mut w_arch_ref = None;
+        #[cfg(debug_assertions)]
+        {
+          w_arch_ref = wres.sky_render_archetype.as_mut().as_mut();
+        }
+        #[cfg(not(debug_assertions))]
+        {
+          w_arch_ref = wres.sky_render_archetype.as_mut();
+        }
+        if let Some(arch) = w_arch_ref {
+          if arch.descriptor_set.is_none() {
+            do_alloc = true;
+          }
+        }
+      }
+
+      if do_alloc {
+        let layout = {
+          let arch_ref: Option<&_>;
+          #[cfg(debug_assertions)]
+          {
+            arch_ref = wres.sky_render_archetype.as_ref().as_ref();
+          }
+          #[cfg(not(debug_assertions))]
+          {
+            arch_ref = wres.sky_render_archetype.as_ref();
+          }
+          arch_ref.unwrap().descriptor_set_layout.get()
+        };
+
+        let new_set = wres
+          .descriptor_pool
+          .as_ref()
+          .unwrap()
+          .allocate(&self.device, layout, &wres.discard_pool, timeline)?
+          .get();
+
+        let image_info = vk::DescriptorImageInfo::default()
+          .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+          .image_view(wres.sky_image.as_ref().unwrap().image_view.get())
+          .sampler(wres.linear_sampler.get());
+        let write_descriptor_set = vk::WriteDescriptorSet::default()
+          .dst_set(new_set)
+          .dst_binding(0)
+          .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+          .image_info(core::slice::from_ref(&image_info));
+        unsafe {
+          self
+            .device
+            .update_descriptor_sets(&[write_descriptor_set], &[])
+        };
+
+        let mut w_arch_ref = None;
+        #[cfg(debug_assertions)]
+        {
+          w_arch_ref = wres.sky_render_archetype.as_mut().as_mut();
+        }
+        #[cfg(not(debug_assertions))]
+        {
+          w_arch_ref = wres.sky_render_archetype.as_mut();
+        }
+        w_arch_ref.unwrap().descriptor_set = Some(unsafe { NonZeroHandle::new_unchecked(new_set) });
+      }
+
+      drop(wres);
+      res = self.res.read();
+    }
+
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers.get(&(timeline, cmd_buffer)).unwrap();
+
+    let arch_ref: Option<&_>;
+    #[cfg(debug_assertions)]
+    {
+      arch_ref = res.sky_render_archetype.as_ref().as_ref();
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      arch_ref = res.sky_render_archetype.as_ref();
+    }
+    let archetype = arch_ref.unwrap();
+
+    let pipeline_key = archetype.pipeline_key.unwrap();
+    let pipeline = res
+      .pipeline_pool
+      .read()
+      .get_graphics_pipeline(pipeline_key)
+      .unwrap();
+
+    let cmd = data.command_buffer.get();
+    let layout = archetype.pipeline_layout.get();
+
+    unsafe {
+      self
+        .device
+        .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
+
+      let descriptor_set = archetype.descriptor_set.unwrap().get();
+
+      self.device.cmd_bind_descriptor_sets(
+        cmd,
+        vk::PipelineBindPoint::GRAPHICS,
+        layout,
+        0,
+        &[descriptor_set],
+        &[],
+      );
+
+      let inv_view_proj_mat = view_proj.inverse().unwrap();
+      let inv_view_proj_arr: [f32; 16] = inv_view_proj_mat.into();
+      let push_constants_bytes =
+        core::slice::from_raw_parts(&inv_view_proj_arr as *const _ as *const u8, 64);
+      self.device.cmd_push_constants(
+        cmd,
+        layout,
+        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+        0,
+        push_constants_bytes,
+      );
+
+      self.device.cmd_draw(cmd, 3, 1, 0, 0);
+    }
+    Ok(())
+  }
+
+  fn render_grid(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    entity_id: crate::scene::EntityId,
+    component: &crate::scene::GridComponent,
+    view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+    camera_pos: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
+  ) -> GpuResult<()> {
+    let mut res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+
+    if res.grid_render_archetype.is_none() {
+      drop(res);
+      let mut wres = self.res.write();
+      if wres.grid_render_archetype.is_none() {
+        let (vkey, fkey) = self.ensure_grid_shader_modules(&wres)?;
+        let handle = wres.live_presentation_engines.read().keys().next().copied();
+        if let Some(h) = handle {
+          wres.create_grid_archetype(&self.device, vkey, fkey, self.depth_stencil_format, h)?;
+        }
+      }
+      drop(wres);
+      res = self.res.read();
+    }
+
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers.get(&(timeline, cmd_buffer)).unwrap();
+
+    let arch_ref: Option<&_>;
+    #[cfg(debug_assertions)]
+    {
+      arch_ref = res.grid_render_archetype.as_ref().as_ref();
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      arch_ref = res.grid_render_archetype.as_ref();
+    }
+    let archetype = arch_ref.unwrap();
+
+    let pipeline_key = archetype.pipeline_key.unwrap();
+    let pipeline = res
+      .pipeline_pool
+      .read()
+      .get_graphics_pipeline(pipeline_key)
+      .unwrap();
+
+    let cmd = data.command_buffer.get();
+    let layout = archetype.pipeline_layout.get();
+
+    #[repr(C)]
+    struct GridPush {
+      viewProj: [f32; 16],
+      cameraPos: [f32; 3],
+      nearPlane: f32,
+      farPlane: f32,
+      density: f32,
+      gridColor: [f32; 3],
+      _pad: f32,
+    }
+
+    let push = GridPush {
+      viewProj: view_proj.into(),
+      cameraPos: camera_pos.into(),
+      nearPlane: 0.1,
+      farPlane: 1000.0,
+      density: 1.0,
+      gridColor: [0.5, 0.5, 0.5],
+      _pad: 0.0,
+    };
+
+    unsafe {
+      self
+        .device
+        .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
+      let push_constants_bytes = core::slice::from_raw_parts(
+        &push as *const _ as *const u8,
+        core::mem::size_of::<GridPush>(),
+      );
+      self.device.cmd_push_constants(
+        cmd,
+        layout,
+        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+        0,
+        push_constants_bytes,
+      );
+
+      self.device.cmd_draw(cmd, 4, 1, 0, 0);
+    }
     Ok(())
   }
 
