@@ -1,0 +1,193 @@
+% per commentare una riga mettere % al suo inizio
+% per s-commentare una riga (ossia attivarla) togliere il % al suo inizio
+%
+\makeatletter
+\providecommand\IfPackageLoadedF[2]{\@ifpackageloaded{#1}{}{#2}}
+\makeatother
+\documentclass[cucitura%lascia margine per la rilegatura
+%,twoside% per stampa fronte-retro (fortemente consigliato per tesi voluminose, opzionale per le altre)
+%,12pt% font più grande (12pt) rispetto a quello normalmente usato (11pt)
+]{toptesi}
+%
+% Cambiare encoding a piacere; oppure non caricare nessun encoding se si usano
+% solo caratteri a 7 bit (ASCII) nei file d'entrata.
+%
+\usepackage[a-1b]{pdfx}% formato PDF/A, obbligatorio per l'archiviazione delle tesi di Polito
+\usepackage[utf8]{inputenc}% IMPORTANTE! usare codifica UTF-8 per le lettere accentate
+\usepackage[T1]{fontenc}
+\usepackage{csquotes}
+\usepackage{xurl}
+\def\UrlBreaks{\do\/\do-}
+%% Bibliography
+\usepackage[style=ieee]{biblatex}
+\addbibresource{bibliography.bib}
+%% Acronyms
+\usepackage[style=treegroup, acronym]{glossaries-extra}
+\setabbreviationstyle[acronym]{long-short}
+\makeglossaries
+
+%% topsep and itemsep are set to 0pt to avoid extra vertical space in itemize environments
+\usepackage{enumitem}
+
+% Commentare le righe seguenti se NON si è specificata l'opzione "pdfa"
+\hypersetup{%
+    pdfpagemode={UseOutlines},
+    bookmarksopen,
+    pdfstartview={FitH},
+    colorlinks,
+    breaklinks,
+    linkcolor={black},
+    citecolor={black},
+    urlcolor={black}
+  }
+% \documentclass[11pt,twoside,oldstyle,autoretitolo,classica,greek]{toptesi}
+% \usepackage[or]{teubner}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%
+% Esempio di composizione di tesi di laurea.
+%
+% Questo esempio e' stato preparato inizialmente 13-marzo-1989
+% e poi e' stato modificato via via che TOPtesi andava
+% arricchendosi di altre possibilita'.
+%
+% Nel seguito laurea "quinquennale" sta anche per "specialistica" o "magistrale"
+
+\input{commands.tex}
+
+\begin{document}
+\english
+
+\ateneo{Politecnico di Torino}
+
+%%% scegliere la propria facoltà (solo PRIMA dell'AA 2012-2013)
+%
+%\facolta[III]{Ingegneria dell'Informazione}
+%\facolta[IV]{Organizzazione d'Impresa\\e Ingegneria Gestionale}
+%\Materia{Remote sensing}% uso sconsigliato
+
+%\monografia{Gestione informatizzata di un magazzino ricambi}% per la laurea triennale
+\titolo{Insert title here}% per la laurea quinquennale e il dottorato
+%\sottotitolo{Metodo dei satelliti medicei}% NON obbligatorio, per la laurea quinquennale e il dottorato
+
+%%% scegliere il proprio corso
+%
+%\corsodilaurea{Ingegneria dell'Organizzazione d'Impresa}% per la laurea di primo e secondo livello
+%\corsodilaurea{Ingegneria Logistica e della Produzione}% per la laurea di primo e secondo livello
+%\corsodilaurea{Ingegneria Gestionale}% per la laurea di primo e secondo livello
+%\corsodilaurea{Ingegneria Informatica}% per la laurea di primo e secondo livello
+%\corsodidottorato{Meccanica}% per il dottorato
+%\renewcommand{\corsodilaurea}{\vspace*{35px} %\begin{center}\large Master's Degree Programme in Computer Engineering\end{center}}
+\corsodilaurea{}
+%\corsodilaurea{Ingegneria Informatica}% per la laurea di primo e secondo livello
+%\corsodidottorato{Meccanica}% per il dottorato
+%\vspace*{-85px} 
+
+\StrutturaDidattica{College of Computer Engineering, Cinema and Mechatronics}
+\TesiDiLaurea{Master’s Degree Thesis}
+
+\CandidateName{Candidate}
+\candidato{Alessio \textsc{Tanzi}}% per tutti i percorsi
+%\secondocandidato{Evangelista \textsc{Torricelli}}% per la laurea magistrale solamente
+%\direttore{prof. Albert Einstein}% per il dottorato
+%\coordinatore{prof. Albert Einstein}% per il dottorato
+\AdvisorName{Supervisors}
+\relatore{prof.\ Bartolomeo \textsc{Montrucchio}}% per la laurea e il dottorato
+\secondorelatore{dr. Antonio Costantino \textsc{Marceddu}}% per la laurea magistrale
+%\terzorelatore{{\tabular{@{}l}dott.\ Neil Armstrong\\prof. Maria Rossi\endtabular}}% per la laurea magistrale
+%\tutore{ing.~Karl Von Braun}% per il dottorato
+%\tutoreaziendale{dott.\ ing.\ Giovanni Giacosa} % solo per la laurea di secondo livello con tesi svolta in azienda
+%\NomeTutoreAziendale{Supervisore aziendale\\Centro Ricerche FIAT}
+%\sedutadilaurea{Agosto 1615}% per la laurea quinquennale
+%\esamedidottorato{Novembre 1610}% per il dottorato
+\sedutadilaurea{\textsc{Luglio} 2026}% per la laurea triennale
+%\sedutadilaurea{\textsc{Anno~accademico} 1615-1616}% per la laurea magistrale
+%\annoaccademico{1615-1616}% solo con l'opzione classica
+%\annoaccademico{2006-2007}% idem
+%\ciclodidottorato{XV}% per il dottorato
+\logosede[2.5cm]{logo_polito.png}
+%
+%\chapterbib %solo per vedere che cosa succede; e' preferibile comporre una sola bibliografia
+%\AdvisorName{Supervisors}
+%\newtheorem{osservazione}{Osservazione}% Standard LaTeX
+
+%\usepackage[a-1b]{pdfx}
+%\hypersetup{%
+%    pdfpagemode={UseOutlines},
+%    bookmarksopen,
+%    pdfstartview={FitH},
+%    colorlinks,
+%    linkcolor={blue},
+%    citecolor={green},
+%    urlcolor={blue}
+%  }
+
+%
+% per numerare e far comparire nell'indice anche le sezioni di quarto livello
+% SCONSIGLIATO! da usarsi solo in caso di estrema necessità
+%\setcounter{secnumdepth}{4}% section-numbering-depth
+%\setcounter{tocdepth}{4}% TOC-numbering-depth (TOC=Table-Of-Content)
+
+%\setbindingcorrection{3mm}
+\setcounter{page}{1}
+\pagenumbering{roman}
+
+\errorcontextlines=9
+
+\expandafter\ifx\csname StileTrieste\endcsname\relax
+    \frontespizio
+\else
+    \paginavuota
+    \begin{dedica}
+        A mio padre
+
+        \textdagger\ A mio nonno Pino
+    \end{dedica}
+    \tomo
+\fi
+
+\newpage
+\thispagestyle{empty}
+\mbox{}
+
+
+\setcounter{page}{1}
+\pagenumbering{roman}
+
+\chapter*{Abstract}
+\input{Abstract}
+
+\ringraziamenti
+\input{Acknowledgements}
+
+%\tablespagetrue % normalmente questa riga non serve ed e' commentata
+%\figurespagetrue % normalmente questa riga non serve ed e' commentata
+
+\tableofcontents
+\listoffigures
+\listoftables
+\input{Acronyms}
+\printglossary[type=\acronymtype]
+
+
+\mainmatter
+
+\setcounter{page}{1}
+\pagenumbering{arabic}
+
+\chapter{Scrivere testi complessi}
+\input{Chapter1}
+
+\chapter{La tesi di laurea magistrale}
+\input{Chapter2}
+
+\chapter{Progettazione}
+\input{Chapter3}
+
+\chapter{Foundations}
+\input{1_Foundations}
+
+\printbibliography[
+heading=bibintoc,
+]
+
+\end{document}

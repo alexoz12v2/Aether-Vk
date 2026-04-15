@@ -1,0 +1,19 @@
+# tex auxiliary
+*.acn
+*.aux
+*.bbl
+*.fls
+*.ist
+*.lof
+*.log
+*.lot
+*.nav
+*.out
+*.snm
+*.toc
+*.run.xml
+*.xmpi
+*.bcf
+*.glo
+*.fdb_latexmk
+*.bbl-SAVE-ERROR
