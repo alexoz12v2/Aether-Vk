@@ -1,5 +1,0 @@
-
-namespace AetherVk.Core.Types
-{
-
-}

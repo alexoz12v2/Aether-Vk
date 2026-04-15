@@ -36,16 +36,16 @@ struct RenderPayloadData<'a> {
 
 pub fn start_render_thread(
   render_rx: mpsc::Receiver<RenderPacket>,
-  scene_shared: Arc<RwLock<Scene>>,
+  scene_shared: Arc<Scene>,
   render_frontend: Arc<RwLock<aethervk_core_rlib::gpu::RenderFrontend<'static>>>,
   render_device_handle: gpu::RenderDeviceHandle,
   presentation_engine: gpu::PresentationEngineHandle,
   cursor_entity: EntityId,
   sun_entity: EntityId,
-) {
+) -> std::thread::JoinHandle<()> {
   std::thread::spawn(move || {
     for mut packet in render_rx {
-      let scene_guard = scene_shared.read().unwrap();
+      let scene_guard = scene_shared.as_ref();
       let mut c_payload = RenderPayloadData {
         packet: &mut packet,
         presentation_engine,
@@ -67,7 +67,7 @@ pub fn start_render_thread(
         println!("Render error: {:?}", e);
       }
     }
-  });
+  })
 }
 
 fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -> GpuResult<()> {
@@ -136,6 +136,16 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
     .global_transform(payload.sun_entity)
     .unwrap();
 
+  let mut sky_opt = None;
+  payload.scene.query1::<aethervk_core_rlib::scene::SkyComponent, _>(|id, comp| {
+    sky_opt = Some((id, *comp));
+  });
+
+  let mut grid_opt = None;
+  payload.scene.query1::<aethervk_core_rlib::scene::GridComponent, _>(|id, comp| {
+    grid_opt = Some((id, *comp));
+  });
+
   let render_path = frame::ForwardRenderPath;
   render_path.record_commands(
     device,
@@ -144,6 +154,8 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
       &payload.packet.camera_component,
     ),
     Some((payload.sun_entity, &sun_comp, &sun_transform.into())),
+    sky_opt.as_ref().map(|(id, comp)| (*id, comp)),
+    grid_opt.as_ref().map(|(id, comp)| (*id, comp)),
     &frame,
     payload.presentation_engine,
     &acquire_result,

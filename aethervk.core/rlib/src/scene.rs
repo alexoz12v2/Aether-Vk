@@ -138,12 +138,19 @@ impl Component for ImageBillboardComponent {}
 /// Tags an entity as a Renderable Sun
 #[derive(Clone, Copy)]
 pub struct SunComponent {
-  /// resolution of generated 3D texture from sun plasma compute shader/algorithm
-  /// If this entities' Transform Component doesn't scale this, then it's assumed to
-  /// be 1x1x1
   pub resolution: (u32, u32, u32),
 }
 impl Component for SunComponent {}
+
+/// A marker component for entities that should be rendered as a background sky.
+#[derive(Clone, Copy, PartialEq)]
+pub struct SkyComponent {}
+impl Component for SkyComponent {}
+
+/// A marker component for entities that should be rendered as an infinite grid.
+#[derive(Clone, Copy, PartialEq)]
+pub struct GridComponent {}
+impl Component for GridComponent {}
 
 /// A particle emitter, defining the properties of particles to be spawned.
 pub struct ParticleEmitterComponent {

@@ -5,8 +5,7 @@ mod windowing;
 use aethervk_core_rlib::{
   gpu::{self},
   scene::{
-    CameraComponent, CursorComponent, PhysicalMeshComponent, Scene, SunComponent,
-    TransformComponent,
+    CameraComponent, CursorComponent, GridComponent, PhysicalMeshComponent, Scene, SkyComponent, SunComponent, TransformComponent
   },
   simulation,
   types::RuntimeParams,
@@ -35,7 +34,7 @@ use render_thread::{RenderItem, RenderPacket, start_render_thread};
 use windowing::{AppEvent, WindowExtractHandlesParams, extract_native_handles, setup_resize_hook};
 
 struct AppState {
-  scene: Arc<RwLock<Scene>>,
+  scene: Arc<Scene>,
   presentation_engine: gpu::PresentationEngineHandle,
   camera_entity: aethervk_core_rlib::scene::EntityId,
   is_paused: bool,
@@ -190,6 +189,8 @@ fn main() {
   scene.register_component::<CameraComponent>(&[TypeId::of::<TransformComponent>()]);
   scene.register_component::<CursorComponent>(&[TypeId::of::<TransformComponent>()]);
   scene.register_component::<SunComponent>(&[TypeId::of::<TransformComponent>()]);
+  scene.register_component::<SkyComponent>(&[]);
+  scene.register_component::<GridComponent>(&[]);
 
   let model_path = {
     let mut args = std::env::args();
@@ -298,9 +299,15 @@ fn main() {
       },
     )
     .unwrap();
+
+  let sky_entity = scene.spawn_entity();
+  scene.add_component(sky_entity, aethervk_core_rlib::scene::SkyComponent {}).unwrap();
+
+  let grid_entity = scene.spawn_entity();
+  scene.add_component(grid_entity, aethervk_core_rlib::scene::GridComponent {}).unwrap();
   scene.set_parent(sun_entity, Some(root_entity));
 
-  let scene_shared = Arc::new(RwLock::new(scene));
+  let scene_shared = Arc::new(scene);
 
   let mut app_state = AppState {
     scene: Arc::clone(&scene_shared),
@@ -464,6 +471,14 @@ fn main() {
                     let _ = logic_tx.send(LogicCommand::ResetCursor);
                     app_state.window.request_redraw();
                   }
+                  KeyCode::Digit1 | KeyCode::Numpad1 => {
+                    let _ = logic_tx.send(LogicCommand::SnapCursorToSun);
+                    app_state.window.request_redraw();
+                  }
+                  KeyCode::Digit2 | KeyCode::Numpad2 => {
+                    let _ = logic_tx.send(LogicCommand::SnapCameraToCursor);
+                    app_state.window.request_redraw();
+                  }
                   _ => {}
                 }
               }
@@ -476,7 +491,7 @@ fn main() {
 
             let mut render_items = Vec::new();
             let mut matrix_stack = vec![Mat4x4f32::identity()];
-            let scene_guard = app_state.scene.read().unwrap();
+            let scene_guard = app_state.scene.as_ref();
 
             scene_guard.traverse_with_hooks(
               app_state.root_entity,
@@ -522,6 +537,8 @@ fn main() {
 
             scene_guard.with_component(app_state.camera_entity, |c| camera_transform = *c);
             scene_guard.with_component(app_state.camera_entity, |c| camera_component = *c);
+
+             // Free read lock before potentially blocking on full channel to avoid deadlocking with Logic Thread
 
             let packet = RenderPacket {
               render_items,

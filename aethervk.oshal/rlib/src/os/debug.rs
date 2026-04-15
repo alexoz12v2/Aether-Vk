@@ -302,6 +302,7 @@ impl<T, const V: i32> AsRef<T> for DropTracker<T, { V }> {
 }
 
 // Allows passing `&mut DropTracker<T>` to functions expecting `impl AsMut<T>`
+#[cfg(debug_assertions)]
 impl<T, const V: i32> AsMut<T> for DropTracker<T, { V }> {
   fn as_mut(&mut self) -> &mut T {
     &mut self.inner
@@ -309,6 +310,7 @@ impl<T, const V: i32> AsMut<T> for DropTracker<T, { V }> {
 }
 
 // Highly recommended for debugging: pass through Debug formatting if T supports it
+#[cfg(debug_assertions)]
 impl<T: core::fmt::Debug, const V: i32> core::fmt::Debug for DropTracker<T, { V }> {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     self.inner.fmt(f)

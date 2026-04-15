@@ -225,6 +225,13 @@ pub trait RenderDevice: Send + Sync {
 
   fn draw(&self, cmd_buffer: CommandBufferHandle, vertex_count: u32) -> GpuResult<()>;
 
+  fn update_sun(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    entity_id: crate::scene::EntityId,
+    component: &crate::scene::SunComponent,
+  ) -> GpuResult<()>;
+
   fn render_sun(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -233,6 +240,23 @@ pub trait RenderDevice: Send + Sync {
     transform: &crate::scene::TransformComponent,
     view: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
     view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+  ) -> GpuResult<()>;
+
+  fn render_sky(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    entity_id: crate::scene::EntityId,
+    component: &crate::scene::SkyComponent,
+    view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+  ) -> GpuResult<()>;
+
+  fn render_grid(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    entity_id: crate::scene::EntityId,
+    component: &crate::scene::GridComponent,
+    view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+    camera_pos: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
   ) -> GpuResult<()>;
 
   fn end_render_pass(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
