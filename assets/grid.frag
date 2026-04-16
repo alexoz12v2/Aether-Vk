@@ -47,6 +47,10 @@ void main() {
   
   alpha = max(alpha * 0.5, max(coverage10.x, coverage10.y) * 0.8);
   
+  float distFromCenter = max(abs(p10.x), abs(p10.y));
+  float gridFade = 1.0 - smoothstep(2.8, 3.0, distFromCenter);
+  alpha *= gridFade;
+  
   float fade = 1.0 - smoothstep(push.nearPlane + (push.farPlane - push.nearPlane) * 0.5, push.farPlane, linearDepth);
   alpha *= fade;
   

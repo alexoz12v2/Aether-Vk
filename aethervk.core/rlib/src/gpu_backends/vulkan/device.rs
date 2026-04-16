@@ -679,7 +679,7 @@ impl DeviceResources {
       )
       // TODO remove inversion if mesh is proper
       .with_pipeline_flags(
-        PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::INVERT_FRONT_FACE,
+        PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE,
       )
       .with_render_pass(
         self
@@ -1274,13 +1274,13 @@ impl DeviceResources {
   }
 
   fn has_discardables(&self) -> bool {
-    self.physical_mesh_render_archetype.is_some() && {
-      let resources = self.physical_mesh_resources.read();
-      !resources.is_none() && !unsafe { resources.as_ref().unwrap_unchecked() }.is_empty()
-    } || self.sun_render_archetype.is_some() && {
-      let resources = self.sun_resources.read();
-      !resources.is_none() && !unsafe { resources.as_ref().unwrap_unchecked() }.is_empty()
-    } || self.cursor_render_archetype.is_some()
+    self.physical_mesh_render_archetype.is_some()
+      || self.physical_mesh_resources.read().is_some()
+      || self.sun_render_archetype.is_some()
+      || self.sun_resources.read().is_some()
+      || self.cursor_render_archetype.is_some()
+      || self.sky_render_archetype.is_some()
+      || self.grid_render_archetype.is_some()
   }
 
   fn clear_discardables(&mut self, device: &ash::Device) {
@@ -1308,9 +1308,33 @@ impl DeviceResources {
             device.destroy_image_view(img.image_view.get(), None);
           }
         }
+        if let Some(buffer) = resource.params_buffer {
+          unsafe {
+            vk_mem::ffi::vmaDestroyBuffer(
+              self.allocator.allocator.get_raw(),
+              buffer,
+              resource.params_alloc.unwrap().get_raw(),
+            );
+          }
+        }
+        if let Some(layout) = resource.compute_pipeline_layout {
+          unsafe { device.destroy_pipeline_layout(layout, None) };
+        }
+        if let Some(pool) = resource.compute_descriptor_pool {
+          unsafe { device.destroy_descriptor_pool(pool, None) };
+        }
+        if let Some(layout) = resource.compute_descriptor_set_layout {
+          unsafe { device.destroy_descriptor_set_layout(layout, None) };
+        }
       }
     }
     if let Some(mut archetype) = self.cursor_render_archetype.take() {
+      archetype.discard(device, &self.discard_pool, u64::MAX);
+    }
+    if let Some(mut archetype) = self.sky_render_archetype.take() {
+      archetype.discard(device, &self.discard_pool, u64::MAX);
+    }
+    if let Some(mut archetype) = self.grid_render_archetype.take() {
       archetype.discard(device, &self.discard_pool, u64::MAX);
     }
     debug_assert!(!self.has_discardables());
@@ -1501,9 +1525,6 @@ impl RecordingCmdBufferData {
   ) {
     let tid = this_thread::id();
     if self.has_begun {
-      if let Some(pipeline) = self.bound_pipeline {
-        discard_pool.discard_pipeline(pipeline.get(), timeline);
-      }
       discard_pool.discard_command_buffer(
         tid,
         cmd_buf_id,
@@ -3739,6 +3760,8 @@ impl<'a> RenderDevice for Device<'a> {
           image: Some(image),
           descriptor_set: Some(unsafe { NonZeroHandle::new_unchecked(graphics_descriptor_set) }),
           is_generated: false,
+          compute_descriptor_pool: Some(descriptor_pool),
+          compute_descriptor_set_layout: Some(set_layout),
           compute_descriptor_set: Some(descriptor_set),
           compute_pipeline: Some(compute_pipeline),
           compute_pipeline_layout: Some(pipeline_layout),
@@ -4230,7 +4253,7 @@ impl<'a> RenderDevice for Device<'a> {
       viewProj: view_proj.into(),
       cameraPos: camera_pos.into(),
       nearPlane: 0.1,
-      farPlane: 1000.0,
+      farPlane: 20.0,
       density: 1.0,
       gridColor: [0.5, 0.5, 0.5],
       _pad: 0.0,

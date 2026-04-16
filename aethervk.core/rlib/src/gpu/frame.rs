@@ -209,7 +209,8 @@ impl RenderPath for ForwardRenderPath {
             extent,
           },
         )?;
-        let view = Mat4x4f32::from_quat(camera.0.rotation.conjugate())
+        let view = Mat4x4f32::from_scale(aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(1.0, -1.0, 1.0))
+          * Mat4x4f32::from_quat(camera.0.rotation.conjugate())
           * Mat4x4f32::translation(camera.0.position * -1.0);
         let proj = camera.1.projection;
         let view_proj = proj * view;

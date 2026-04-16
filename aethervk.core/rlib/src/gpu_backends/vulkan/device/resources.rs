@@ -72,6 +72,29 @@ enum DiscardItem {
   GenericHandle(Box<dyn DeviceResource>),
 }
 
+#[cfg(debug_assertions)]
+impl DiscardItem {
+  fn unique_id(&self) -> (u8, u64) {
+    use ash::vk::Handle;
+    match self {
+      Self::Buffer(b) => (0, b.buffer.as_raw()),
+      Self::Image(i) => (1, i.image.as_raw()),
+      Self::ImageView(v) => (2, v.as_raw()),
+      Self::Pipeline(p) => (3, p.as_raw()),
+      Self::PipelineLayout(l) => (4, l.as_raw()),
+      Self::DescriptorSetLayout(l) => (5, l.as_raw()),
+      Self::DescriptorPool(p, _) => (6, p.as_raw()),
+      Self::CommandPool(c) => (7, c.command_buffer.as_raw()),
+      Self::RenderPass(r) => (8, r.as_raw()),
+      Self::Framebuffer(f) => (9, f.as_raw()),
+      Self::GenericHandle(h) => {
+        let ptr: *const dyn DeviceResource = &**h;
+        (10, ptr as *const () as u64)
+      }
+    }
+  }
+}
+
 struct BufferDiscard {
   buffer: vk::Buffer,
   alloc: vk_mem::Allocation,
@@ -97,6 +120,8 @@ pub trait DiscardableResource {
 /// Note: this must not outlive device, hence don't expose it outside
 pub(super) struct DiscardPool {
   items: spin::Mutex<TimelineQueue<DiscardItem>>,
+  #[cfg(debug_assertions)]
+  queued_handles: spin::Mutex<hashbrown::HashSet<(u8, u64)>>,
 }
 
 unsafe impl Sync for DiscardPool {}
@@ -107,23 +132,35 @@ impl DiscardPool {
   pub unsafe fn new(cap: usize) -> Self {
     Self {
       items: spin::Mutex::new(TimelineQueue::with_capacity(cap)),
+      #[cfg(debug_assertions)]
+      queued_handles: spin::Mutex::new(hashbrown::HashSet::with_capacity(cap)),
     }
   }
 
-  pub fn discard_type_erased<T: DeviceResource + 'static>(&self, item: T, timeline: u64) {
+  fn push_item(&self, timeline: u64, item: DiscardItem) {
     let mut q = self.items.lock();
-    q.push(timeline, DiscardItem::GenericHandle(Box::new(item)));
+    #[cfg(debug_assertions)]
+    {
+      let handle = item.unique_id();
+      assert!(
+        self.queued_handles.lock().insert(handle),
+        "Resource discarded twice! Type: {}, Handle: {}", handle.0, handle.1
+      );
+    }
+    q.push(timeline, item);
+  }
+
+  pub fn discard_type_erased<T: DeviceResource + 'static>(&self, item: T, timeline: u64) {
+    self.push_item(timeline, DiscardItem::GenericHandle(Box::new(item)));
   }
 
   // TODO all other types of resources as needed
   pub fn discard_render_pass(&self, render_pass: vk::RenderPass, timeline: u64) {
-    let mut q = self.items.lock();
-    q.push(timeline, DiscardItem::RenderPass(render_pass));
+    self.push_item(timeline, DiscardItem::RenderPass(render_pass));
   }
 
   pub fn discard_framebuffer(&self, framebuffer: vk::Framebuffer, timeline: u64) {
-    let mut q = self.items.lock();
-    q.push(timeline, DiscardItem::Framebuffer(framebuffer));
+    self.push_item(timeline, DiscardItem::Framebuffer(framebuffer));
   }
 
   pub fn discard_buffer(
@@ -133,8 +170,7 @@ impl DiscardPool {
     alloc: vk_mem::Allocation,
     timeline: u64,
   ) {
-    let mut q = self.items.lock();
-    q.push(
+    self.push_item(
       timeline,
       DiscardItem::Buffer(BufferDiscard {
         buffer,
@@ -152,8 +188,7 @@ impl DiscardPool {
     manager: sync::Arc<commands::CommandPools>,
     timeline: u64,
   ) {
-    let mut q = self.items.lock();
-    q.push(
+    self.push_item(
       timeline,
       DiscardItem::CommandPool(CmdBufDiscard {
         thread_id,
@@ -171,8 +206,7 @@ impl DiscardPool {
     alloc: vk_mem::Allocation,
     timeline: u64,
   ) {
-    let mut q = self.items.lock();
-    q.push(
+    self.push_item(
       timeline,
       DiscardItem::Image(ImageDiscard {
         image,
@@ -183,13 +217,11 @@ impl DiscardPool {
   }
 
   pub fn discard_image_view(&self, image_view: vk::ImageView, timeline: u64) {
-    let mut q = self.items.lock();
-    q.push(timeline, DiscardItem::ImageView(image_view));
+    self.push_item(timeline, DiscardItem::ImageView(image_view));
   }
 
   pub fn discard_descriptor_set_layout(&self, layout: vk::DescriptorSetLayout, timeline: u64) {
-    let mut q = self.items.lock();
-    q.push(timeline, DiscardItem::DescriptorSetLayout(layout));
+    self.push_item(timeline, DiscardItem::DescriptorSetLayout(layout));
   }
 
   pub fn discard_descriptor_pool(
@@ -198,18 +230,15 @@ impl DiscardPool {
     manager: sync::Arc<descriptors::DescriptorPools>,
     timeline: u64,
   ) {
-    let mut q = self.items.lock();
-    q.push(timeline, DiscardItem::DescriptorPool(pool, manager));
+    self.push_item(timeline, DiscardItem::DescriptorPool(pool, manager));
   }
 
   pub fn discard_pipeline(&self, pipeline: vk::Pipeline, timeline: u64) {
-    let mut q = self.items.lock();
-    q.push(timeline, DiscardItem::Pipeline(pipeline));
+    self.push_item(timeline, DiscardItem::Pipeline(pipeline));
   }
 
   pub fn discard_pipeline_layout(&self, pipeline_layout: vk::PipelineLayout, timeline: u64) {
-    let mut q = self.items.lock();
-    q.push(timeline, DiscardItem::PipelineLayout(pipeline_layout));
+    self.push_item(timeline, DiscardItem::PipelineLayout(pipeline_layout));
   }
 
   pub fn destroy_discarded_resources_all(&self, device: &ash::Device) {
@@ -229,7 +258,15 @@ impl DiscardPool {
 
   fn destroy_discarded_resources_internal(&self, device: &ash::Device, timeline: u64) {
     let mut items = self.items.lock();
-    items.drain_ready(timeline, |item| match item {
+    #[cfg(debug_assertions)]
+    let mut queued_handles = self.queued_handles.lock();
+
+    items.drain_ready(timeline, |item| {
+      #[cfg(debug_assertions)]
+      {
+        queued_handles.remove(&item.unique_id());
+      }
+      match item {
       DiscardItem::Buffer(BufferDiscard {
         buffer,
         alloc,
@@ -283,6 +320,7 @@ impl DiscardPool {
       },
       DiscardItem::GenericHandle(mut handle) => {
         handle.cleanup(device);
+      }
       }
     });
   }
@@ -688,6 +726,8 @@ pub(super) struct SunRenderResource {
   pub image: Option<Image>,
   pub descriptor_set: Option<NonZeroHandle<vk::DescriptorSet>>,
   pub is_generated: bool,
+  pub compute_descriptor_pool: Option<vk::DescriptorPool>,
+  pub compute_descriptor_set_layout: Option<vk::DescriptorSetLayout>,
   pub compute_descriptor_set: Option<vk::DescriptorSet>,
   pub compute_pipeline: Option<crate::gpu_backends::vulkan::utils::NonZeroHandle<vk::Pipeline>>,
   pub compute_pipeline_layout: Option<vk::PipelineLayout>,
@@ -1058,9 +1098,24 @@ pub(super) struct SkyRenderResourceArchetype {
   pub descriptor_set: Option<NonZeroHandle<vk::DescriptorSet>>,
 }
 
+impl SkyRenderResourceArchetype {
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_pipeline_layout(layout, timeline);
+    discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
+  }
+}
+
 pub(super) struct GridRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub pipeline_key: Option<PipelineKey>,
+}
+
+impl GridRenderResourceArchetype {
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_pipeline_layout(layout, timeline);
+  }
 }
 
 pub(super) struct SunRenderResourceArchetype {
