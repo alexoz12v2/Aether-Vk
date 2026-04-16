@@ -16,8 +16,10 @@ pub enum LogicCommand {
   RaycastCursor { ndc_x: f32, ndc_y: f32 },
   ResetCursor,
   Resize { width: u32, height: u32 },
-  SnapCursorToSun,
   SnapCameraToCursor,
+  SnapCursorToSun,
+  ToggleGrid,
+  Exit,
 }
 
 pub struct LogicState {
@@ -31,6 +33,7 @@ pub fn start_logic_thread(
   scene_shared: Arc<Scene>,
   camera_entity: EntityId,
   cursor_entity: EntityId,
+  grid_entity: EntityId,
 ) -> std::thread::JoinHandle<()> {
   std::thread::spawn(move || {
     let mut state = LogicState {
@@ -40,8 +43,11 @@ pub fn start_logic_thread(
     };
 
     for command in rx {
-      let mut scene_guard = scene_shared.as_ref();
+      if let LogicCommand::Exit = command {
+        break;
+      }
 
+      let mut scene_guard = scene_shared.as_ref();
       // Update state based on command
       let mut cam_pos = Vec3f32::from_components(0.0, 0.0, 0.0);
       let mut cam_rot = Quat::identity();
@@ -57,9 +63,12 @@ pub fn start_logic_thread(
 
       let mut offset = cam_pos - cursor_pos;
       let mut dist = offset.length();
-      if dist < 0.1 { dist = 0.1; }
+      if dist < 0.1 {
+        dist = 0.1;
+      }
 
       match command {
+        LogicCommand::Exit => {} // handled above
         LogicCommand::RotateCamera { delta_x, delta_y } => {
           let rotation_speed = 0.005;
           state.yaw += delta_x * rotation_speed;
@@ -68,8 +77,10 @@ pub fn start_logic_thread(
           state.yaw = state.yaw.fmod(<f32 as FloatOps>::PI * 2.0);
           state.pitch = state.pitch.clamp(-1.55, 1.55);
 
-          let rotation_y = Quat::from_axis_angle(Vec3f32::from_components(0.0, 1.0, 0.0), state.yaw);
-          let rotation_x = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
+          let rotation_y =
+            Quat::from_axis_angle(Vec3f32::from_components(0.0, 1.0, 0.0), state.yaw);
+          let rotation_x =
+            Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
           let new_rot = rotation_y * rotation_x;
 
           let rot_delta = new_rot * cam_rot.conjugate();
@@ -134,7 +145,8 @@ pub fn start_logic_thread(
           scene_guard.with_component(camera_entity, |c: &TransformComponent| {
             cam_pos = c.position;
             // The view matrix is the inverse of the camera transform
-            view = Mat4x4f32::from_quat(c.rotation.conjugate())
+            view = Mat4x4f32::from_scale(Vec3f32::from_components(1.0, -1.0, 1.0))
+              * Mat4x4f32::from_quat(c.rotation.conjugate())
               * Mat4x4f32::translation(c.position * -1.0);
           });
 
@@ -190,7 +202,7 @@ pub fn start_logic_thread(
           scene_guard.query1::<SunComponent, _>(|sun_id, _sun| {
             target_sun_id = Some(sun_id);
           });
-          
+
           if let Some(sun_id) = target_sun_id {
             if let Some(t) = scene_guard.global_transform(sun_id) {
               scene_guard.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
@@ -209,15 +221,34 @@ pub fn start_logic_thread(
             c.rotation = new_rot;
           });
         }
+        LogicCommand::ToggleGrid => {
+          let has_grid = scene_guard
+            .with_component(
+              grid_entity,
+              |_c: &aethervk_core_rlib::scene::GridComponent| {},
+            )
+            .is_some();
+          if has_grid {
+            let _ =
+              scene_guard.remove_component::<aethervk_core_rlib::scene::GridComponent>(grid_entity);
+          } else {
+            let _ =
+              scene_guard.add_component(grid_entity, aethervk_core_rlib::scene::GridComponent {});
+          }
+        }
       }
 
       // After applying commands, enforce constraints and update dependent transforms
 
       // 1. Update cursor scale based on distance to ensure it's visible
-      let new_cam_pos = scene_guard.with_component(camera_entity, |c: &TransformComponent| c.position).unwrap();
-      let new_cursor_pos = scene_guard.with_component(cursor_entity, |c: &TransformComponent| c.position).unwrap();
+      let new_cam_pos = scene_guard
+        .with_component(camera_entity, |c: &TransformComponent| c.position)
+        .unwrap();
+      let new_cursor_pos = scene_guard
+        .with_component(cursor_entity, |c: &TransformComponent| c.position)
+        .unwrap();
       let new_dist = (new_cam_pos - new_cursor_pos).length();
-      
+
       let scale_factor = (new_dist * 0.01).clamp(0.02, 0.05);
       scene_guard.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
         c.scale = Vec3f32::from_components(scale_factor, scale_factor, scale_factor);

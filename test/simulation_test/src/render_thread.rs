@@ -35,7 +35,7 @@ struct RenderPayloadData<'a> {
 }
 
 pub fn start_render_thread(
-  render_rx: mpsc::Receiver<RenderPacket>,
+  render_rx: mpsc::Receiver<Option<RenderPacket>>,
   scene_shared: Arc<Scene>,
   render_frontend: Arc<RwLock<aethervk_core_rlib::gpu::RenderFrontend<'static>>>,
   render_device_handle: gpu::RenderDeviceHandle,
@@ -44,7 +44,7 @@ pub fn start_render_thread(
   sun_entity: EntityId,
 ) -> std::thread::JoinHandle<()> {
   std::thread::spawn(move || {
-    for mut packet in render_rx {
+    while let Ok(Some(mut packet)) = render_rx.recv() {
       let scene_guard = scene_shared.as_ref();
       let mut c_payload = RenderPayloadData {
         packet: &mut packet,

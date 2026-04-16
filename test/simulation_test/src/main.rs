@@ -5,7 +5,8 @@ mod windowing;
 use aethervk_core_rlib::{
   gpu::{self},
   scene::{
-    CameraComponent, CursorComponent, GridComponent, PhysicalMeshComponent, Scene, SkyComponent, SunComponent, TransformComponent
+    CameraComponent, CursorComponent, GridComponent, PhysicalMeshComponent, Scene, SkyComponent,
+    SunComponent, TransformComponent,
   },
   simulation,
   types::RuntimeParams,
@@ -285,7 +286,7 @@ fn main() {
     .add_component(
       sun_entity,
       TransformComponent {
-        position: Vec3f32::from_components(1000.0, 1000.0, 1000.0),
+        position: Vec3f32::from_components(1000.0, 1000.0, 1000.0), // TODO: Invert Y axis in persp projection
         rotation: Quat::identity(),
         scale: Vec3f32::from_components(100.0, 100.0, 100.0),
       },
@@ -301,10 +302,14 @@ fn main() {
     .unwrap();
 
   let sky_entity = scene.spawn_entity();
-  scene.add_component(sky_entity, aethervk_core_rlib::scene::SkyComponent {}).unwrap();
+  scene
+    .add_component(sky_entity, aethervk_core_rlib::scene::SkyComponent {})
+    .unwrap();
 
   let grid_entity = scene.spawn_entity();
-  scene.add_component(grid_entity, aethervk_core_rlib::scene::GridComponent {}).unwrap();
+  scene
+    .add_component(grid_entity, aethervk_core_rlib::scene::GridComponent {})
+    .unwrap();
   scene.set_parent(sun_entity, Some(root_entity));
 
   let scene_shared = Arc::new(scene);
@@ -321,8 +326,8 @@ fn main() {
   };
 
   // --- Start Render Thread ---
-  let (render_tx, render_rx) = mpsc::sync_channel::<RenderPacket>(1);
-  start_render_thread(
+  let (render_tx, render_rx) = mpsc::sync_channel::<Option<RenderPacket>>(1);
+  let mut render_thread_handle = Some(start_render_thread(
     render_rx,
     Arc::clone(&scene_shared),
     Arc::clone(&render_frontend),
@@ -330,16 +335,17 @@ fn main() {
     presentation_engine,
     cursor_entity,
     sun_entity,
-  );
+  ));
 
   // --- Start Logic Thread ---
   let (logic_tx, logic_rx) = mpsc::channel::<LogicCommand>();
-  start_logic_thread(
+  let mut logic_thread_handle = Some(start_logic_thread(
     logic_rx,
     Arc::clone(&scene_shared),
     camera_entity,
     cursor_entity,
-  );
+    grid_entity,
+  ));
 
   // Update initial resize to trigger projection matrix update
   let _ = logic_tx.send(LogicCommand::Resize {
@@ -370,6 +376,14 @@ fn main() {
       Event::WindowEvent { event, window_id } if window_id == app_state.window.id() => {
         match event {
           WindowEvent::CloseRequested => {
+            let _ = render_tx.send(None);
+            let _ = logic_tx.send(LogicCommand::Exit);
+            if let Some(handle) = render_thread_handle.take() {
+              let _ = handle.join();
+            }
+            if let Some(handle) = logic_thread_handle.take() {
+              let _ = handle.join();
+            }
             elwt.exit();
           }
           WindowEvent::Resized(physical_size) => {
@@ -467,6 +481,10 @@ fn main() {
                     });
                     app_state.window.request_redraw();
                   }
+                  KeyCode::KeyG => {
+                    let _ = logic_tx.send(LogicCommand::ToggleGrid);
+                    app_state.window.request_redraw();
+                  }
                   KeyCode::Digit0 | KeyCode::Numpad0 => {
                     let _ = logic_tx.send(LogicCommand::ResetCursor);
                     app_state.window.request_redraw();
@@ -538,7 +556,7 @@ fn main() {
             scene_guard.with_component(app_state.camera_entity, |c| camera_transform = *c);
             scene_guard.with_component(app_state.camera_entity, |c| camera_component = *c);
 
-             // Free read lock before potentially blocking on full channel to avoid deadlocking with Logic Thread
+            // Free read lock before potentially blocking on full channel to avoid deadlocking with Logic Thread
 
             let packet = RenderPacket {
               render_items,
@@ -547,7 +565,7 @@ fn main() {
               window_size: app_state.window.inner_size(),
             };
 
-            if render_tx.send(packet).is_err() {
+            if render_tx.send(Some(packet)).is_err() {
               elwt.exit();
             }
           }
