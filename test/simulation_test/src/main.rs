@@ -138,6 +138,7 @@ fn main() {
       width: window.inner_size().width,
       height: window.inner_size().height,
       vsync: true,
+      ty: gpu::PresentationEngineType::Window,
       window_info: native_handles,
     };
     render_frontend
@@ -159,6 +160,10 @@ fn main() {
           let data_ptr = data as *mut ClosureData;
           let (params_ref, handle_result) = unsafe { &mut *data_ptr };
           **handle_result = device.create_presentation_engine(*params_ref);
+          if let Err(e) = &**handle_result {
+            println!("Presentation Engine creation failed: {:?}", e);
+            return Ok(());
+          }
 
           device
             .generate_sky()

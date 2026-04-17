@@ -217,10 +217,11 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
 ) -> vk::Bool32 {
   #[cfg(windows)]
   {
-    use windows::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE};
+    use aethervk_oshal_rlib::log;
 
-    let h_stdout = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) }.unwrap();
-    // TODO: convert to wide and print
+    let p_msg = unsafe { (*p_callback_data).p_message };
+    let msg = unsafe { core::ffi::CStr::from_ptr(p_msg) };
+    log!("[Vulkan Messenger]: {:?}", msg);
   }
   #[cfg(target_family = "unix")]
   {

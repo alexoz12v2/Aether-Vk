@@ -19,6 +19,37 @@ Explicit methods iteratively compute the discrete state at the next forward time
     \item \textbf{Explicit Euler:} The simplest and most intuitive explicit method, conceptually derived from a first-order Taylor series expansion. It updates the state linearly as $\bm{y}_{k+1} = \bm{y}_k + h \bm{f}(t_k, \bm{y}_k)$. As a first-order method, its local truncation error is $\mathcal{O}(h^2)$ and its global error is $\mathcal{O}(h)$. Consequently, it often suffers from extremely poor accuracy and severe numerical instability, particularly when applied to stiff differential equations where small perturbations amplify rapidly.
     \item \textbf{Runge-Kutta Methods:} A broad family of higher-order iterative methods that significantly improve integration accuracy by strategically evaluating the vector field at multiple intermediate sample points within the interval $[t_k, t_{k+1}]$. The classic fourth-order Runge-Kutta (RK4) method is the workhorse of numerical integration, achieving a global accuracy of $\mathcal{O}(h^4)$. It does so by calculating a weighted average of four estimated slopes: the initial slope, two intermediate midpoint slopes, and a final slope at the end of the interval.
 \end{itemize}
+
+\begin{figure}[htbp]
+    \centering
+    \begin{tikzpicture}[foundation]
+        \begin{axis}[
+            width=10cm, height=6cm,
+            axis lines=middle,
+            xlabel={$t$}, ylabel={$y$},
+            xmin=0, xmax=3.5, ymin=0, ymax=4.5,
+            xtick={0, 1, 2, 3}, xticklabels={$t_0$, $t_1$, $t_2$, $t_3$},
+            ytick=\empty,
+            legend pos=north west,
+            legend style={draw=none, fill=none, font=\small\sffamily}
+        ]
+        % Exact curve
+        \addplot[exact_curve, domain=0:3.2, samples=100] {0.5*exp(0.7*x)};
+        \addlegendentry{Exact Solution}
+        
+        % Explicit Euler (linear steps)
+        \addplot[approx_curve, mark=*] coordinates {(0, 0.5) (1, 0.85) (2, 1.445) (3, 2.456)};
+        \addlegendentry{Explicit Euler}
+
+        % RK4 (closer to exact)
+        \addplot[symp_curve, mark=square*] coordinates {(0, 0.5) (1, 1.0) (2, 2.02) (3, 3.8)};
+        \addlegendentry{RK4}
+        \end{axis}
+    \end{tikzpicture}
+    \caption{Comparison of numerical integration methods. Explicit Euler unconditionally diverges for exponentially growing or stiff systems, while higher-order methods gracefully track the true continuous solution over short intervals.}
+    \label{fig:integration_methods}
+\end{figure}
+
 It is crucial to emphasize that the mathematical validity of these classical explicit methods relies intrinsically on the global vector space structure. They mathematically construct the subsequent state by linearly scaling and directly adding derivative vectors ($h \bm{f}$) to the current base state ($\bm{y}_k$). As will be detailed later, if the simulated state manifold does not constitute a valid vector space (for example, if the state is constrained to represent a valid 3D rotation), naively adding Euclidean components will immediately force the state off the valid geometric manifold, leading to corrupted, non-physical states.
 
 \subsection{Systems of ODEs and Higher-Order ODEs}
@@ -41,6 +72,35 @@ Two notable, highly efficient symplectic methods include:
     \item \textbf{Velocity Verlet:} A mathematically equivalent variation of the Leapfrog method that evaluates both positions and velocities at synchronized integer time steps. This formulation minimizes memory overhead and simplifies the integration with position-dependent forces, making it the de facto standard in molecular dynamics and complex rigid body physics engines.
 \end{itemize}
 
+\begin{figure}[htbp]
+    \centering
+    \begin{tikzpicture}[foundation]
+        \begin{axis}[
+            width=10cm, height=5cm,
+            axis lines=middle,
+            xlabel={Time $t$}, ylabel={Total Energy $E$},
+            xmin=0, xmax=10, ymin=0, ymax=2.5,
+            xtick=\empty, ytick={1}, yticklabels={$E_0$},
+            legend pos=north west,
+            legend style={draw=none, fill=none, font=\small\sffamily}
+        ]
+        % Exact energy
+        \addplot[exact_curve, domain=0:9.5] {1};
+        \addlegendentry{Exact (Constant)}
+        
+        % Explicit drift
+        \addplot[approx_curve, domain=0:9.5, samples=100] {1 + 0.05*x + 0.01*x^2};
+        \addlegendentry{Explicit (Drift)}
+        
+        % Symplectic oscillation
+        \addplot[symp_curve, domain=0:9.5, samples=200] {1 + 0.1*sin(deg(3*x))};
+        \addlegendentry{Symplectic (Bounded)}
+        \end{axis}
+    \end{tikzpicture}
+    \caption{Energy conservation in conservative systems. Symplectic methods exhibit strictly bounded oscillations tightly around the exact initial energy, elegantly avoiding the secular, non-physical drift characteristic of standard explicit methods over long durations.}
+    \label{fig:symplectic_energy}
+\end{figure}
+
 \section{Rigid Body Dynamics}
 Having established a robust framework of numerical techniques required to simulate generalized differential equations, we now turn our focus to the specific physical laws governing rigid body dynamics. A rigid body is a theoretical idealization of a solid macroscopic object in which the spatial distance between any two internal constituent points remains perfectly constant, regardless of the magnitude or direction of external forces and torques applied to it.
 
@@ -62,6 +122,38 @@ The rotational behavior of a rigid body introduces complex angular counterparts 
     \item \textbf{Torque ($\bm{\tau}$):} The rotational equivalent of a linear force, representing a twisting force that causes a change in angular momentum over time, governed by Euler's rotational equation: $\dot{\bm{L}} = \bm{\tau}_{\text{ext}}$. Expanded in the body frame, this yields the non-linear Euler equations $\bm{I}\dot{\bm{\omega}} + \bm{\omega} \times (\bm{I}\bm{\omega}) = \bm{\tau}_{\text{ext}}$.
     \item \textbf{Total Kinetic Energy:} The complete kinetic energy of an unconstrained rigid body is the scalar sum of its independent translational and rotational kinetic energies: $K_{\text{total}} = \frac{1}{2} m \|\bm{v}\|^2 + \frac{1}{2} \bm{\omega}^T \bm{I} \bm{\omega}$.
 \end{itemize}
+
+\begin{figure}[htbp]
+    \centering
+    \begin{tikzpicture}[foundation]
+        % Rigid body shape
+        \draw[thick, fill=blue!5] (0,0) ellipse (2cm and 1.2cm);
+        
+        % Center of mass
+        \node[particle] (com) at (0,0) {};
+        \node[below right] at (com) {CoM};
+        
+        % Translational velocity
+        \draw[velocity] (com) -- (1.5, 0.8) node[right] {$\bm{v}$};
+        
+        % Application point
+        \node[particle] (p) at (-1, 0.6) {};
+        \node[left] at (p) {$\bm{r}$};
+        \draw[dashed, thick] (com) -- (p);
+        
+        % Force
+        \draw[force] (p) -- (-0.5, 2) node[above] {$\bm{F}_{\text{ext}}$};
+        
+        % Rotation axis
+        \draw[axis, dashed] (-1, -1.5) -- (1.5, 2.25) node[right] {$\bm{\omega}$};
+        
+        % Rotation arrow
+        \draw[vector, ->] (0.8, 1.2) arc [start angle=50, end angle=150, radius=0.8cm];
+        \node[blue] at (0, 1.6) {$\bm{\tau}$};
+    \end{tikzpicture}
+    \caption{Kinematics and dynamics of a rigid body. An external force $\bm{F}_{\text{ext}}$ applied at relative position $\bm{r}$ induces both a linear acceleration of the Center of Mass (CoM) and a torque $\bm{\tau}$ modifying the angular velocity $\bm{\omega}$.}
+    \label{fig:rigid_body}
+\end{figure}
 
 \subsection{Inertia Tensor Computation}
 The inertia tensor $\bm{I}$ of a continuous rigid body is a symmetric $3 \times 3$ matrix that quantitatively describes its mass distribution and determines the torque required for a desired angular acceleration about a given rotational axis. For a continuous body with mass density $\rho(\bm{r})$ distributed over a volume $V$, the inertia tensor evaluated at the origin is rigorously defined by the volume integral:
@@ -110,6 +202,43 @@ An analogous, highly efficient exponential map exists for unit quaternions mappi
 \end{equation}
 where the update is performed using quaternion multiplication: $\bm{q}_{k+1} = \bm{q}_k \otimes \exp_{q}(\bm{\omega} h)$. This comprehensive methodology, broadly known as Lie Group Integration, geometrically guarantees the state remains exactly on the valid mathematical manifold at all times without requiring arbitrary, physically unmotivated artificial re-normalization steps.
 
+\begin{figure}[htbp]
+    \centering
+    \begin{tikzpicture}[foundation]
+        % Manifold surface
+        \draw[thick, fill=blue!5] (0,1) .. controls (2,-0.5) and (4,0) .. (6,2) .. controls (5,3.5) and (2,3) .. (0,2) -- cycle;
+        \node[blue!80!black] at (1.5, 2.2) {Lie Group $\mathcal{M}$};
+        
+        % Point R_k
+        \coordinate (Rk) at (2.5, 0.8);
+        \node[particle, label=below:$\bm{R}_k$] at (Rk) {};
+        
+        % Tangent plane (Lie Algebra)
+        \begin{scope}[shift={(Rk)}, rotate=15]
+            \draw[fill=red!5, opacity=0.7, densely dashed] (-1.5,-1) -- (2.5,-1) -- (3.5,1.5) -- (-0.5,1.5) -- cycle;
+            \node[red!80!black] at (-0.2, 1) {$\mathfrak{g}$ (Algebra)};
+        \end{scope}
+        
+        % Explicit step (in tangent plane)
+        \coordinate (Explicit) at (4.8, 1.8);
+        \node[particle, label=right:{$\bm{R}_k + \Delta$ (Off Manifold)}] at (Explicit) {};
+        \draw[arrow, red, thick] (Rk) -- (Explicit) node[midway, above left, font=\scriptsize] {Linear Update};
+        
+        % Projected point R_{k+1}
+        \coordinate (Rk1) at (4.2, 1.2);
+        \node[particle, label=below:$\bm{R}_{k+1}$] at (Rk1) {};
+        
+        % Curve on manifold
+        \draw[arrow, blue, thick] (Rk) to[bend right=15] node[midway, below right, font=\scriptsize] {$\exp(\widehat{\bm{\omega}} h)$} (Rk1);
+        
+        % Projection line
+        \draw[arrow, black, dotted] (Explicit) -- (Rk1) node[midway, right, font=\scriptsize] {Retraction};
+
+    \end{tikzpicture}
+    \caption{Lie Group Integration. Standard linear updates push the state off the curved manifold. Lie group methods utilize the local Lie algebra and the exponential map to seamlessly advance the state along the true geometric surface.}
+    \label{fig:lie_group_integration}
+\end{figure}
+
 \section{Implicit Integration Methods}
 
 \subsection{Root-Finding and Newton-Raphson}
@@ -126,6 +255,46 @@ For complex physical simulations where the analytical Jacobian is either mathema
     \bm{B}_{i+1} = \bm{B}_i + \frac{\Delta \bm{F} - \bm{B}_i \Delta \bm{y}}{\|\Delta \bm{y}\|^2} \Delta \bm{y}^T
 \end{equation}
 This approach sacrifices exact quadratic convergence for superlinear convergence, dramatically drastically reducing the per-iteration computational cost by eliminating the need to re-evaluate the full analytical Jacobian matrix.
+
+\begin{figure}[htbp]
+    \centering
+    \begin{tikzpicture}[foundation]
+        \begin{axis}[
+            width=10cm, height=6cm,
+            axis x line=middle, axis y line=left,
+            xlabel={$y$}, ylabel={$F(y)$},
+            xmin=0, xmax=3.5, ymin=-1.5, ymax=4,
+            xtick={1.414, 1.833, 3}, xticklabels={$y^*$, $y^{(i+1)}$, $y^{(i)}$},
+            ytick=\empty,
+            every axis x label/.style={at={(ticklabel* cs:1)},anchor=west},
+            every axis y label/.style={at={(ticklabel* cs:1)},anchor=south}
+        ]
+        % Function F(y) = 0.5*x^2 - 1
+        \addplot[exact_curve, domain=0.5:3.2, samples=100] {0.5*x^2 - 1};
+        \node[right] at (axis cs:3.2, 4) {$F(y)$};
+        
+        % Root
+        \node[particle] at (axis cs:1.414, 0) {};
+        
+        % Point at y(i)
+        \draw[dashed, gray] (axis cs:3, 0) -- (axis cs:3, 3.5);
+        \node[particle] (Pi) at (axis cs:3, 3.5) {};
+        
+        % Tangent from y(i)
+        \addplot[approx_curve, domain=1.5:3.2] {3*x - 5.5};
+        
+        % Point at y(i+1)
+        \draw[dashed, gray] (axis cs:1.833, 0) -- (axis cs:1.833, 0.68);
+        \node[particle] (Pip1) at (axis cs:1.833, 0.68) {};
+        
+        % Tangent from y(i+1)
+        \addplot[approx_curve, domain=1.2:2.2] {1.833*x - 2.68};
+
+        \end{axis}
+    \end{tikzpicture}
+    \caption{The Newton-Raphson method for root-finding. By iteratively evaluating the function and its local derivative (tangent line, dashed red), the sequence of estimates $y^{(i)}$ rapidly converges towards the true root $y^*$.}
+    \label{fig:newton_raphson}
+\end{figure}
 
 \subsection{Implicit Integration}
 Equipped with powerful numerical root-finding capabilities, we can successfully deploy advanced, highly robust implicit integrators. The Implicit Midpoint Rule serves as an exemplary gold standard for such methods:
@@ -199,6 +368,49 @@ Advance the particles to $t_{n+1}$ and complete the Velocity Verlet loop:
     \mathbf{v}_{n+1} &= \mathbf{v}_{n+1/2} + \frac{h}{2} \mathbf{M}_p^{-1} \mathbf{F}_p(\mathbf{q}_{n+1}, \mathbf{x}_{n+1}, \mathbf{R}_{n+1})
 \end{align}
 
+\begin{figure}[htbp]
+    \centering
+    \begin{tikzpicture}[foundation]
+        % Timeline axes
+        \draw[axis] (0, 0) -- (12, 0) node[right] {$t$};
+        \draw[axis] (0, -3) -- (12, -3) node[right] {$t$};
+        
+        \node[left, font=\bfseries] at (0, 0) {Particles};
+        \node[left, font=\bfseries] at (0, -3) {Rigid Body};
+        
+        % Time ticks
+        \foreach \x/\l in {1/$t_n$, 6/$t_{n+1/2}$, 11/$t_{n+1}$} {
+            \draw[thick] (\x, 0.1) -- (\x, -0.1) node[below] {\l};
+            \draw[thick] (\x, -2.9) -- (\x, -3.1) node[below] {\l};
+            \draw[dotted, gray] (\x, 0) -- (\x, -3);
+        }
+        
+        % Nodes
+        \node[block, text width=2.5cm] (kick1) at (3.5, 0) {Phase 1 \& 2\\Explicit Kick \& Drift};
+        \node[block, text width=2.5cm] (kick2) at (8.5, 0) {Phase 5\\Explicit Drift \& Kick};
+        
+        \node[implicit_block, text width=3.5cm] (implicit) at (6, -3) {Phase 3 \& 4\\Implicit Solve \& Update};
+        
+        % Arrows
+        \draw[arrow, blue] (1, 0) -- (kick1);
+        \draw[arrow, blue] (kick1) -- (6, 0);
+        \draw[arrow, blue] (6, 0) -- (kick2);
+        \draw[arrow, blue] (kick2) -- (11, 0);
+        
+        \draw[arrow, red, dashed, thick] (6, 0) -- (implicit) node[midway, right, font=\scriptsize] {$\mathbf{q}_{mid}$ frozen};
+        \draw[arrow, blue] (1, -3) -- (implicit);
+        \draw[arrow, blue] (implicit) -- (11, -3);
+        
+        \node[align=center, font=\scriptsize] at (3.5, 1.2) {$\mathbf{v}_{n+1/2}$\\$\mathbf{q}_{mid}$};
+        \node[align=center, font=\scriptsize] at (8.5, 1.2) {$\mathbf{q}_{n+1}$\\$\mathbf{v}_{n+1}$};
+        
+        \node[align=center, font=\scriptsize] at (6, -4.2) {Solve $\mathbf{G}(\mathbf{v}_{mid}, \boldsymbol{\omega}_{mid}) = \mathbf{0}$};
+        
+    \end{tikzpicture}
+    \caption{Partitioned Implicit-Explicit (IMEX) timeline. The particle system is explicitly stepped using a split Velocity Verlet scheme, which perfectly synchronizes the configuration exactly at the midpoint $t_{n+1/2}$. This intermediate state is locked to evaluate the computationally expensive implicit rigid body Newton-Euler solver before advancing both systems to $t_{n+1}$.}
+    \label{fig:imex_loop}
+\end{figure}
+
 \subsection{Proof of Exact Time-Reversibility}
 A numerical integrator is strictly time-reversible if starting from state $S_{n+1}$, negating the velocities, and taking a step of size $-h$ perfectly yields the original state $S_n$. This property bounds energy drift indefinitely.
 
@@ -215,7 +427,7 @@ Let's trace the algorithm backwards from $t_{n+1}$ with step $-h$:
     \item \textbf{Reverse Phases 4 \& 5:} By symmetry, applying $-h$ with the converged roots perfectly recovers $\mathbf{x}_n, \mathbf{R}_n, \mathbf{v}_{rb, n}, \boldsymbol{\omega}_n$, and $\mathbf{v}_n$.
 \end{itemize}
 
-\subsection{In-Depth Analytical Jacobian on Lie Group $\text{SO}(3)$}
+\subsection{In-Depth Analytical Jacobian on Lie Group \texorpdfstring{$\text{SO}(3)$}{SO(3)}}
 To solve Phase 3 in 2-3 iterations, we need the exact $6 \times 6$ Newton-Raphson block Jacobian $\mathcal{J} = \frac{\partial (\mathbf{G}_v, \mathbf{G}_\omega)}{\partial (\mathbf{v}_{mid}, \boldsymbol{\omega}_{mid})}$.
 Let the coupling force $\mathbf{F}_{world}$ apply at a constant body-frame attachment point $\mathbf{p}$. The body torque is $\boldsymbol{\tau}_{body} = \mathbf{p} \times (\mathbf{R}_{mid}^T \mathbf{F}_{world})$. Let $\mathbf{K} = \frac{\partial \mathbf{F}_{world}}{\partial \mathbf{x}_{world}}$ be the $3 \times 3$ translational stiffness matrix evaluated at the world point.
 

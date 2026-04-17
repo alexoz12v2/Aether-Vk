@@ -203,10 +203,26 @@ impl RenderPath for ForwardRenderPath {
         let view_proj = proj * view;
 
         for draw_call in &frame.draw_calls {
-          let _ = do_draw_call(device, view_proj, camera.0.position, cmd_buffer, draw_call);
+          if let Err(e) = do_draw_call(device, view_proj, camera.0.position, cmd_buffer, draw_call) {
+            aethervk_oshal_rlib::log!("do_draw_call error: {:?}", e);
+          }
         }
+
+        let mut view_no_trans = view;
+        view_no_trans.w.set_component(0, 0.0);
+        view_no_trans.w.set_component(1, 0.0);
+        view_no_trans.w.set_component(2, 0.0);
+        view_no_trans.w.set_component(3, 1.0);
+        let view_proj_no_trans = proj * view_no_trans;
+        let inv_view_proj = aethervk_oshal_rlib::math::matrix::SquareMatrix::inverse(view_proj_no_trans).unwrap_or(aethervk_oshal_rlib::math::matrix::SquareMatrix::identity());
+        if let Err(e) = device.render_sky(cmd_buffer, inv_view_proj) {
+            aethervk_oshal_rlib::log!("render_sky error: {:?}", e);
+        }
+
         for cursor_call in &frame.cursor_calls {
-          let _ = do_draw_cursor(device, view, view_proj, cmd_buffer, cursor_call);
+          if let Err(e) = do_draw_cursor(device, view, view_proj, cmd_buffer, cursor_call) {
+            aethervk_oshal_rlib::log!("do_draw_cursor error: {:?}", e);
+          }
         }
 
         if let Some((sun_entity, sun_comp, sun_transform)) = sun {

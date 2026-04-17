@@ -1110,6 +1110,98 @@ impl SunRenderResourceArchetype {
   }
 }
 
+pub(super) struct SkyRenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub descriptor_set_layout: NonZeroHandle<vk::DescriptorSetLayout>,
+  pub descriptor_pool: vk::DescriptorPool,
+  pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
+  pub graphics_info: Option<GraphicsInfo>,
+  pub pipeline_key: Option<PipelineKey>,
+}
+
+unsafe impl Sync for SkyRenderResourceArchetype {}
+unsafe impl Send for SkyRenderResourceArchetype {}
+
+impl SkyRenderResourceArchetype {
+  pub fn with_graphics_info(self, graphics_info: GraphicsInfo) -> Self {
+    let pipeline_key = graphics_info.pipeline_key();
+    Self {
+      graphics_info: Some(graphics_info),
+      pipeline_key: Some(pipeline_key),
+      ..self
+    }
+  }
+
+  pub unsafe fn new(
+    device: &ash::Device,
+    sky_image_view: vk::ImageView,
+    sampler: vk::Sampler,
+  ) -> GpuResult<Self> {
+    let push_constant_ranges = alloc::vec![vk::PushConstantRange {
+      stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+      offset: 0,
+      size: core::mem::size_of::<crate::gpu::SkyPushConstants>() as u32,
+    }];
+
+    let bindings = [vk::DescriptorSetLayoutBinding::default()
+      .binding(0)
+      .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+      .descriptor_count(1)
+      .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+
+    let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    let descriptor_set_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }?;
+
+    let layouts = [descriptor_set_layout];
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
+      .set_layouts(&layouts)
+      .push_constant_ranges(&push_constant_ranges);
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
+
+    let pool_sizes = [vk::DescriptorPoolSize::default()
+      .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+      .descriptor_count(1)];
+    let pool_info = vk::DescriptorPoolCreateInfo::default()
+      .pool_sizes(&pool_sizes)
+      .max_sets(1);
+    let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }?;
+
+    let alloc_info = vk::DescriptorSetAllocateInfo::default()
+      .descriptor_pool(descriptor_pool)
+      .set_layouts(&layouts);
+    let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?[0];
+
+    let image_info = vk::DescriptorImageInfo::default()
+      .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+      .image_view(sky_image_view)
+      .sampler(sampler);
+    let write_descriptor_set = vk::WriteDescriptorSet::default()
+      .dst_set(descriptor_set)
+      .dst_binding(0)
+      .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+      .image_info(core::slice::from_ref(&image_info));
+    unsafe { device.update_descriptor_sets(&[write_descriptor_set], &[]) };
+
+    Ok(Self {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      descriptor_set_layout: unsafe { NonZeroHandle::new_unchecked(descriptor_set_layout) },
+      descriptor_pool,
+      descriptor_set: unsafe { NonZeroHandle::new_unchecked(descriptor_set) },
+      graphics_info: None,
+      pipeline_key: None,
+    })
+  }
+}
+
+impl DiscardableResource for SkyRenderResourceArchetype {
+  fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_pipeline_layout(layout, timeline);
+    discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
+    unsafe { device.destroy_descriptor_pool(self.descriptor_pool, None) };
+  }
+}
+
 /// To be destroyed before descriptor pool
 pub(super) struct ForwardMeshRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
