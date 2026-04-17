@@ -60,7 +60,12 @@ struct SwapchainFrame {
   pub acquire_semaphore: Option<NonZeroHandle<vk::Semaphore>>,
 }
 
-pub(super) struct PresentationState {
+pub(super) enum PresentationState {
+  Windowed(WindowedPresentationState),
+  Windowless(WindowlessPresentationState),
+}
+
+pub(super) struct WindowedPresentationState {
   surface_instance: ash::khr::surface::Instance,
   surface_capabilities: ash::khr::get_surface_capabilities2::Instance,
   surface: NonZeroHandle<vk::SurfaceKHR>,
@@ -83,6 +88,7 @@ pub(super) struct PresentationState {
 
   swapchain_generation: u64,
 }
+
 
 trait SwapchainCleanable {
   fn cleanup(&mut self, swapchain_device: &ash::khr::swapchain::Device, device: &ash::Device);
@@ -148,6 +154,15 @@ impl SwapchainCleanable for SwapchainFrame {
 
 impl DeviceResource for PresentationState {
   fn cleanup(&mut self, device: &ash::Device) {
+    match self {
+      Self::Windowed(state) => state.cleanup(device),
+      Self::Windowless(state) => state.cleanup(device),
+    }
+  }
+}
+
+impl DeviceResource for WindowedPresentationState {
+  fn cleanup(&mut self, device: &ash::Device) {
     for frame_discard in &mut self.frame_discards {
       frame_discard.cleanup(&self.swapchain_device, device);
     }
@@ -176,30 +191,124 @@ unsafe impl Sync for PresentationState {}
 impl PresentationState {
   pub(super) fn resize(
     &mut self,
-    entry: &ash::Entry,
     instance: &ash::Instance,
     device: &ash::Device,
     physical_device: NonZeroHandle<vk::PhysicalDevice>,
     width: u32,
     height: u32,
   ) -> GpuResult<()> {
-    // Why are we recreating the surface?
-    // // 1. Destroy old surface
-    // unsafe {
-    //   self
-    //     .surface_instance
-    //     .destroy_surface(self.surface.get(), None);
-    // }
+    match self {
+      Self::Windowed(state) => state.resize(device, physical_device, width, height),
+      Self::Windowless(state) => state.resize(instance, device, physical_device, width, height),
+    }
+  }
 
-    // // 2. Create new surface
-    // let new_surface = Self::create_surface(entry, instance, self.native_handle)?;
-    // self.surface = unsafe { NonZeroHandle::new_unchecked(new_surface) };
+  pub(super) fn extent(&self) -> (u32, u32) {
+    match self {
+      Self::Windowed(state) => state.extent(),
+      Self::Windowless(state) => state.extent(),
+    }
+  }
 
-    // 3. Update width and height
+  pub(super) fn format(&self) -> vk::Format {
+    match self {
+      Self::Windowed(state) => state.format(),
+      Self::Windowless(state) => state.format(),
+    }
+  }
+
+  pub(super) fn swapchain_generation(&self) -> u64 {
+    match self {
+      Self::Windowed(state) => state.swapchain_generation(),
+      Self::Windowless(state) => state.swapchain_generation(),
+    }
+  }
+
+  pub(super) fn for_each_swapchain_image(
+    &self,
+    f: impl FnMut(NonZeroHandle<vk::ImageView>) -> GpuResult<()>,
+  ) -> GpuResult<()> {
+    match self {
+      Self::Windowed(state) => state.for_each_swapchain_image(f),
+      Self::Windowless(state) => state.for_each_swapchain_image(f),
+    }
+  }
+
+  pub fn acquire_next_image(&mut self, device: &ash::Device, graphics_queue: vk::Queue) -> GpuResult<AcquireResult> {
+    match self {
+      Self::Windowed(state) => state.acquire_next_image(device),
+      Self::Windowless(state) => state.acquire_next_image(device, graphics_queue),
+    }
+  }
+
+  pub unsafe fn get_frame_resources(
+    &self,
+    index: usize,
+  ) -> (NonZeroHandle<vk::Semaphore>, NonZeroHandle<vk::Fence>) {
+    match self {
+      Self::Windowed(state) => unsafe { state.get_frame_resources(index) },
+      Self::Windowless(state) => unsafe { state.get_frame_resources(index) },
+    }
+  }
+
+  pub unsafe fn get_image_resources(
+    &self,
+    index: usize,
+  ) -> (
+    NonZeroHandle<vk::Image>,
+    NonZeroHandle<vk::ImageView>,
+    Option<NonZeroHandle<vk::Semaphore>>,
+  ) {
+    match self {
+      Self::Windowed(state) => unsafe { state.get_image_resources(index) },
+      Self::Windowless(state) => unsafe { state.get_image_resources(index) },
+    }
+  }
+
+  pub unsafe fn submit_image(
+    &mut self,
+    graphics_queue: vk::Queue,
+    image_index: u32,
+    frame_index: u32,
+  ) -> GpuResult<SwapchainStatus> {
+    match self {
+      Self::Windowed(state) => unsafe { state.submit_image(graphics_queue, image_index, frame_index) },
+      Self::Windowless(state) => unsafe { state.submit_image(graphics_queue, image_index, frame_index) },
+    }
+  }
+
+  pub fn new(
+    entry: &ash::Entry,
+    instance: &ash::Instance,
+    device: &ash::Device,
+    physical_device: NonZeroHandle<vk::PhysicalDevice>,
+    params: &PresentationEngineParams,
+  ) -> GpuResult<Self> {
+    match params.ty {
+      crate::gpu::PresentationEngineType::Window => {
+        Ok(Self::Windowed(WindowedPresentationState::new(
+          entry, instance, device, physical_device, params,
+        )?))
+      }
+      crate::gpu::PresentationEngineType::WindowLess => {
+        Ok(Self::Windowless(WindowlessPresentationState::new(
+          instance, device, physical_device, params.width, params.height,
+        )?))
+      }
+    }
+  }
+}
+
+impl WindowedPresentationState {
+  pub(super) fn resize(
+    &mut self,
+    device: &ash::Device,
+    physical_device: NonZeroHandle<vk::PhysicalDevice>,
+    width: u32,
+    height: u32,
+  ) -> GpuResult<()> {
     self.width = width;
     self.height = height;
-
-    // 4. Recreate swapchain
     self.recreate_swapchain(device, true, physical_device)
   }
 
@@ -835,12 +944,12 @@ impl PresentationState {
   ) -> (
     NonZeroHandle<vk::Image>,
     NonZeroHandle<vk::ImageView>,
-    NonZeroHandle<vk::Semaphore>,
+    Option<NonZeroHandle<vk::Semaphore>>,
   ) {
     debug_assert!(self.images.len() > index);
     let image = &self.images[index];
     debug_assert!(!image.eligible_for_acquisition());
-    (image.image, image.image_view, image.present_semaphore)
+    (image.image, image.image_view, Some(image.present_semaphore))
   }
 
   /// Safety
@@ -980,5 +1089,310 @@ impl SwapchainFrame {
     debug_assert!(swapchain_image.eligible_for_acquisition() && self.eligible_for_steal());
     self.acquire_semaphore = swapchain_image.acquire_semaphore.take();
     self.submission_fence = swapchain_image.submission_fence.take();
+  }
+}
+
+pub(super) struct WindowlessPresentationState {
+  images: heapless::Vec<SwapchainImage, MAX_FRAMES_IN_FLIGHT>,
+  memories: heapless::Vec<NonZeroHandle<vk::DeviceMemory>, MAX_FRAMES_IN_FLIGHT>,
+  next_image: usize,
+  frames: heapless::Vec<SwapchainFrame, MAX_FRAMES_IN_FLIGHT>,
+  current_frame: usize,
+
+  width: u32,
+  height: u32,
+  format: vk::Format,
+
+  generation: u64,
+}
+
+impl DeviceResource for WindowlessPresentationState {
+  fn cleanup(&mut self, device: &ash::Device) {
+    for frame in &mut self.frames {
+      if let Some(fence) = frame.submission_fence {
+        unsafe { device.destroy_fence(fence.get(), None) };
+      }
+      if let Some(sem) = frame.acquire_semaphore {
+        unsafe { device.destroy_semaphore(sem.get(), None) };
+      }
+    }
+    for image in &mut self.images {
+      image.cleanup(device);
+      unsafe { device.destroy_image(image.image.get(), None) };
+    }
+    for mem in &mut self.memories {
+      unsafe { device.free_memory(mem.get(), None) };
+    }
+  }
+}
+
+impl WindowlessPresentationState {
+  pub fn new(
+    instance: &ash::Instance,
+    device: &ash::Device,
+    physical_device: NonZeroHandle<vk::PhysicalDevice>,
+    width: u32,
+    height: u32,
+  ) -> GpuResult<Self> {
+    let mut this = Self {
+      images: heapless::Vec::new(),
+      memories: heapless::Vec::new(),
+      next_image: 0,
+      frames: heapless::Vec::new(),
+      current_frame: 0,
+      width,
+      height,
+      format: vk::Format::R8G8B8A8_UNORM, // Changed from SRGB to UNORM for offscreen output maybe
+      generation: 0,
+    };
+    this.recreate(instance, device, physical_device, width, height)?;
+    Ok(this)
+  }
+
+  pub(super) fn resize(
+    &mut self,
+    instance: &ash::Instance,
+    device: &ash::Device,
+    physical_device: NonZeroHandle<vk::PhysicalDevice>,
+    width: u32,
+    height: u32,
+  ) -> GpuResult<()> {
+    self.recreate(instance, device, physical_device, width, height)
+  }
+
+  pub(super) fn extent(&self) -> (u32, u32) {
+    (self.width, self.height)
+  }
+
+  pub(super) fn format(&self) -> vk::Format {
+    self.format
+  }
+
+  pub(super) fn swapchain_generation(&self) -> u64 {
+    self.generation
+  }
+
+  pub(super) fn for_each_swapchain_image(
+    &self,
+    mut f: impl FnMut(NonZeroHandle<vk::ImageView>) -> GpuResult<()>,
+  ) -> GpuResult<()> {
+    for image in &self.images {
+      (&mut f)(image.image_view)?;
+    }
+    Ok(())
+  }
+
+  pub fn acquire_next_image(&mut self, device: &ash::Device, graphics_queue: vk::Queue) -> GpuResult<AcquireResult> {
+    let images_count = self.images.len();
+    let frame_count = self.frames.len();
+    let swapchain_image = &mut self.images[self.next_image];
+    if !swapchain_image.eligible_for_acquisition()
+      || !self.frames[self.current_frame].eligible_for_steal()
+    {
+      return Err(GpuError::InvalidState);
+    }
+    let fences: &[vk::Fence] = unsafe {
+      core::slice::from_ref(&swapchain_image.submission_fence.as_ref().unwrap_unchecked())
+    };
+
+    let mut timeout = 167;
+    loop {
+      let result = unsafe { device.wait_for_fences(fences, false, timeout) };
+      if let Err(vk_result) = result {
+        if vk_result == vk::Result::TIMEOUT {
+          timeout = u64::MAX;
+        } else {
+          return Err(vk_result.into());
+        }
+      } else {
+        break;
+      }
+    }
+
+    unsafe { device.reset_fences(fences) }?;
+
+    unsafe { self.frames[self.current_frame].steal_from_swapchain_image(swapchain_image) };
+    let frame_idx_for_submission = self.current_frame;
+    let image_index = self.next_image as u32;
+
+    // Signal the acquire semaphore manually since there's no vkAcquireNextImageKHR
+    // We can just submit an empty batch to the queue.
+    let sem_handle = unsafe { self.frames[self.current_frame].acquire_semaphore.as_ref().unwrap_unchecked().get() };
+    let signal_info = vk::SubmitInfo::default().signal_semaphores(core::slice::from_ref(&sem_handle));
+    unsafe { device.queue_submit(graphics_queue, &[signal_info], vk::Fence::null()) }?;
+
+    self.next_image = (self.next_image + 1) % images_count;
+    self.current_frame = (self.current_frame + 1) % frame_count;
+    Ok(AcquireResult {
+      image_index,
+      status: SwapchainStatus::Optimal,
+      frame_index: frame_idx_for_submission as u64,
+    })
+  }
+
+  pub unsafe fn get_frame_resources(
+    &self,
+    index: usize,
+  ) -> (NonZeroHandle<vk::Semaphore>, NonZeroHandle<vk::Fence>) {
+    debug_assert!(self.frames.len() > index);
+    let frame = &self.frames[index];
+    debug_assert!(!frame.eligible_for_steal());
+    unsafe {
+      (
+        frame.acquire_semaphore.unwrap_unchecked(),
+        frame.submission_fence.unwrap_unchecked(),
+      )
+    }
+  }
+
+  pub unsafe fn get_image_resources(
+    &self,
+    index: usize,
+  ) -> (
+    NonZeroHandle<vk::Image>,
+    NonZeroHandle<vk::ImageView>,
+    Option<NonZeroHandle<vk::Semaphore>>,
+  ) {
+    debug_assert!(self.images.len() > index);
+    let image = &self.images[index];
+    debug_assert!(!image.eligible_for_acquisition());
+    (image.image, image.image_view, None)
+  }
+
+  pub unsafe fn submit_image(
+    &mut self,
+    _graphics_queue: vk::Queue,
+    image_index: u32,
+    frame_index: u32,
+  ) -> GpuResult<SwapchainStatus> {
+    let image = &mut self.images[image_index as usize];
+    let frame = &mut self.frames[frame_index as usize];
+    if image.eligible_for_acquisition() || frame.eligible_for_steal() {
+      return Err(GpuError::InvalidState);
+    }
+    unsafe { image.reclaim_from_swapchain_frame(frame) };
+    Ok(SwapchainStatus::Optimal)
+  }
+
+  pub fn get_last_submitted_image(&self) -> GpuResult<NonZeroHandle<vk::Image>> {
+    if self.images.is_empty() {
+      return Err(GpuError::InvalidState);
+    }
+    let last_index = (self.next_image + self.images.len() - 1) % self.images.len();
+    Ok(self.images[last_index].image)
+  }
+
+  fn recreate(
+    &mut self,
+    instance: &ash::Instance,
+    device: &ash::Device,
+    physical_device: NonZeroHandle<vk::PhysicalDevice>,
+    width: u32,
+    height: u32,
+  ) -> GpuResult<()> {
+    self.width = width;
+    self.height = height;
+
+    self.cleanup(device);
+    self.images.clear();
+    self.memories.clear();
+    self.frames.clear();
+
+    self.next_image = 0;
+    self.current_frame = 0;
+
+    let image_count = 3;
+    let format = self.format;
+    let extent = vk::Extent3D { width, height, depth: 1 };
+
+    let image_info = vk::ImageCreateInfo::default()
+      .image_type(vk::ImageType::TYPE_2D)
+      .format(format)
+      .extent(extent)
+      .mip_levels(1)
+      .array_layers(1)
+      .samples(vk::SampleCountFlags::TYPE_1)
+      .tiling(vk::ImageTiling::OPTIMAL)
+      .usage(
+        vk::ImageUsageFlags::COLOR_ATTACHMENT
+          | vk::ImageUsageFlags::TRANSFER_SRC
+          | vk::ImageUsageFlags::TRANSFER_DST,
+      )
+      .sharing_mode(vk::SharingMode::EXCLUSIVE)
+      .initial_layout(vk::ImageLayout::UNDEFINED);
+
+    let img_view_create_info = vk::ImageViewCreateInfo::default()
+      .view_type(vk::ImageViewType::TYPE_2D)
+      .format(format)
+      .subresource_range(
+        vk::ImageSubresourceRange::default()
+          .aspect_mask(vk::ImageAspectFlags::COLOR)
+          .base_array_layer(0)
+          .base_mip_level(0)
+          .layer_count(1)
+          .level_count(1),
+      );
+
+    let sem_create_info = vk::SemaphoreCreateInfo::default();
+    let fence_create_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+
+    let mem_props = unsafe { instance.get_physical_device_memory_properties(physical_device.get()) };
+
+    for _ in 0..image_count {
+      let image = unsafe { NonZeroHandle::new_unchecked(device.create_image(&image_info, None)?) };
+      let mem_reqs = unsafe { device.get_image_memory_requirements(image.get()) };
+
+      let mut mem_type_index = 0;
+      let properties = vk::MemoryPropertyFlags::DEVICE_LOCAL;
+      for i in 0..mem_props.memory_type_count {
+        if (mem_reqs.memory_type_bits & (1 << i)) != 0
+          && (mem_props.memory_types[i as usize].property_flags & properties) == properties
+        {
+          mem_type_index = i;
+          break;
+        }
+      }
+
+      let alloc_info = vk::MemoryAllocateInfo::default()
+        .allocation_size(mem_reqs.size)
+        .memory_type_index(mem_type_index);
+
+      let memory = unsafe { NonZeroHandle::new_unchecked(device.allocate_memory(&alloc_info, None)?) };
+      unsafe { device.bind_image_memory(image.get(), memory.get(), 0)? };
+
+      let view_info = img_view_create_info.image(image.get());
+      let image_view =
+        unsafe { NonZeroHandle::new_unchecked(device.create_image_view(&view_info, None)?) };
+      let present_semaphore =
+        unsafe { NonZeroHandle::new_unchecked(device.create_semaphore(&sem_create_info, None)?) };
+
+      unsafe {
+        self.images.push_unchecked(SwapchainImage {
+          image,
+          image_view,
+          submission_fence: None,
+          acquire_semaphore: None,
+          present_semaphore,
+        });
+        self.memories.push_unchecked(memory);
+
+        self.frames.push_unchecked(SwapchainFrame {
+          submission_fence: None,
+          acquire_semaphore: None,
+        });
+      }
+    }
+
+    for i in 0..image_count {
+      let frame_fence =
+        unsafe { NonZeroHandle::new_unchecked(device.create_fence(&fence_create_info, None)?) };
+      let frame_sem =
+        unsafe { NonZeroHandle::new_unchecked(device.create_semaphore(&sem_create_info, None)?) };
+      self.images[i].acquire_semaphore = Some(frame_sem);
+      self.images[i].submission_fence = Some(frame_fence);
+    }
+
+    self.generation += 1;
+    Ok(())
   }
 }
