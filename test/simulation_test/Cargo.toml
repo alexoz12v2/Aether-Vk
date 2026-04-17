@@ -8,7 +8,7 @@ aethervk-core-rlib = { path = "../../aethervk.core/rlib", default-features = fal
 aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false }
 heapless = { version = "0.9" }
 raw-window-handle = "0.6"
-winit = { version = "0.29", features = ["rwh_06"] }
+winit = { version = "0.29.15", features = ["rwh_06"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = ">=0.59, <= 0.62", default-features = false, features = [

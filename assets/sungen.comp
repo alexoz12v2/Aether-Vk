@@ -1,3 +1,4 @@
+#version 450 core
 // ============================================================
 // VULKAN EXTENSIONS
 // ============================================================
@@ -12,8 +13,7 @@
 // ============================================================
 // WORKGROUP AND RESOURCES
 // ============================================================
-// 3D Workgroup size configured via specialization constants
-layout(local_size_x_id = 0, local_size_y_id = 1, local_size_z_id = 2) in;
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 // Output 3D Volumetric Texture (rgba16f ideal for physically accurate HDR)
 layout(set = 0, binding = 0, rgba16f) uniform writeonly image3D sunVolume;
@@ -136,7 +136,7 @@ void main() {
 
   // Animate turbolence: (Simulating solar rotation and convection currents)
   // (Velocity towards v and w arbitrary, what feels right)
-  vec3 noisePos = uvw * push.params.noiseScale - vec3(0.0, time * 0.1, time * 0.05);
+  vec3 noisePos = uvw * push.params.noiseScale - vec3(time * 0.2, time * 2.5, time * 1.5);
   float turbolence = fbm(noisePos);
 
   // Temperature Granulation: Creates Hot/Cold spots on the Photosphere

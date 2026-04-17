@@ -292,6 +292,7 @@ pub struct Scene {
   component_meta: RwLock<HashMap<TypeId, ComponentMeta>>,
   // TODO: add a hierarchy of EntityIds. Challenge: consistency with entities SlotMap
   hierarchy: RwLock<SceneHierarchy>,
+  names: RwLock<HashMap<EntityId, alloc::string::String>>,
 }
 
 #[derive(Default)]
@@ -345,6 +346,7 @@ impl Scene {
       archetypes: RwLock::new(vec![empty_archetype]),
       component_meta: RwLock::new(HashMap::new()),
       hierarchy: RwLock::new(SceneHierarchy::default()),
+      names: RwLock::new(HashMap::new()),
     }
   }
 
@@ -710,20 +712,33 @@ impl Scene {
     Ok(())
   }
 
-  pub fn spawn_entity(&self) -> EntityId {
-    let mut archetypes = self.archetypes.write();
-    let mut entities = self.entities.write();
+  pub fn spawn_entity(&self, name: impl Into<alloc::string::String>) -> EntityId {
+    let entity_id = {
+      let mut archetypes = self.archetypes.write();
+      let mut entities = self.entities.write();
 
-    let archetype = &mut archetypes[0];
-    let entity_location = EntityLocation {
-      archetype_index: 0,
-      row_index: archetype.entities.len(),
+      let archetype = &mut archetypes[0];
+      let entity_location = EntityLocation {
+        archetype_index: 0,
+        row_index: archetype.entities.len(),
+      };
+
+      let entity_id = entities.insert(entity_location);
+      archetype.entities.push(entity_id);
+      entity_id
     };
 
-    let entity_id = entities.insert(entity_location);
-    archetype.entities.push(entity_id);
+    self.names.write().insert(entity_id, name.into());
 
     entity_id
+  }
+
+  pub fn get_name(&self, entity: EntityId) -> Option<alloc::string::String> {
+    self.names.read().get(&entity).cloned()
+  }
+
+  pub fn set_name(&self, entity: EntityId, name: impl Into<alloc::string::String>) {
+    self.names.write().insert(entity, name.into());
   }
 
   pub fn with_component<T: Component, F, R>(&self, entity_id: EntityId, f: F) -> Option<R>

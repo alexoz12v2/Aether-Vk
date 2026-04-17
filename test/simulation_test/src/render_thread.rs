@@ -96,6 +96,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
             item.model_matrix,
             RenderableDataRef::PhysicalMesh(mesh),
             payload.presentation_engine,
+            "Comet",
           )
           .unwrap();
         Ok(())
@@ -117,6 +118,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
           t.to_mat4(),
           RenderableDataRef::Cursor(cursor),
           payload.presentation_engine,
+          "Cursor",
         )
         .unwrap();
       Ok(())
@@ -131,20 +133,21 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
     },
   );
   let sun_comp = sun_opt.unwrap();
-  let sun_transform = payload
-    .scene
-    .global_transform(payload.sun_entity)
-    .unwrap();
+  let sun_transform = payload.scene.global_transform(payload.sun_entity).unwrap();
 
   let mut sky_opt = None;
-  payload.scene.query1::<aethervk_core_rlib::scene::SkyComponent, _>(|id, comp| {
-    sky_opt = Some((id, *comp));
-  });
+  payload
+    .scene
+    .query1::<aethervk_core_rlib::scene::SkyComponent, _>(|id, comp| {
+      sky_opt = Some((id, *comp));
+    });
 
   let mut grid_opt = None;
-  payload.scene.query1::<aethervk_core_rlib::scene::GridComponent, _>(|id, comp| {
-    grid_opt = Some((id, *comp));
-  });
+  payload
+    .scene
+    .query1::<aethervk_core_rlib::scene::GridComponent, _>(|id, comp| {
+      grid_opt = Some((id, *comp));
+    });
 
   let render_path = frame::ForwardRenderPath;
   render_path.record_commands(

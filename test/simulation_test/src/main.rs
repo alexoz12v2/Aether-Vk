@@ -17,6 +17,8 @@ use aethervk_oshal_rlib::math::{
   vector::{Vector3, vec3::Vec3f32, vec4::Quat},
 };
 use heapless::index_map::FnvIndexMap;
+#[cfg(target_os = "macos")]
+use winit::platform::macos::EventLoopBuilderExtMacOS;
 use std::{
   any::TypeId,
   io::Read,
@@ -43,6 +45,23 @@ struct AppState {
   root_entity: aethervk_core_rlib::scene::EntityId,
   window: winit::window::Window,
   is_resizing: bool,
+  is_exiting: bool,
+}
+
+impl Drop for AppState {
+  fn drop(&mut self) {
+    println!("Dropping AppState");
+  }
+}
+
+struct RenderFrontendDropTracker(Arc<RwLock<aethervk_core_rlib::gpu::RenderFrontend<'static>>>);
+impl Drop for RenderFrontendDropTracker {
+  fn drop(&mut self) {
+    println!(
+      "Dropping RenderFrontend wrapper in main (strong count: {})",
+      Arc::strong_count(&self.0)
+    );
+  }
 }
 
 impl simulation::Pausable for AppState {
@@ -67,7 +86,12 @@ fn main() {
     let _ = std::io::stdin().read(&mut [0u8]);
   }));
 
-  let event_loop = EventLoopBuilder::<AppEvent>::with_user_event()
+  let mut event_loop_builder = EventLoopBuilder::<AppEvent>::with_user_event();
+  // Disable default macOS menu. This disables default macOS bindings (so that we can customize interception of Super + Q)
+  #[cfg(target_os = "macos")]
+  event_loop_builder.with_default_menu(false);
+
+  let event_loop =event_loop_builder 
     .build()
     .unwrap();
   let proxy = event_loop.create_proxy();
@@ -216,7 +240,7 @@ fn main() {
   let comet = simulation::comet::load_comet_from_gltf(model_path.to_str().unwrap())
     .expect("Failed to load comet");
 
-  let root_entity = scene.spawn_entity();
+  let root_entity = scene.spawn_entity("entity");
   scene
     .add_component(
       root_entity,
@@ -228,7 +252,7 @@ fn main() {
     )
     .unwrap();
 
-  let mesh_entity = scene.spawn_entity();
+  let mesh_entity = scene.spawn_entity("entity");
   scene
     .add_component(
       mesh_entity,
@@ -244,7 +268,7 @@ fn main() {
     .unwrap();
   scene.set_parent(mesh_entity, Some(root_entity));
 
-  let cursor_entity = scene.spawn_entity();
+  let cursor_entity = scene.spawn_entity("entity");
   scene
     .add_component(
       cursor_entity,
@@ -260,7 +284,7 @@ fn main() {
     .unwrap();
   scene.set_parent(cursor_entity, Some(root_entity));
 
-  let camera_entity = scene.spawn_entity();
+  let camera_entity = scene.spawn_entity("entity");
   scene
     .add_component(
       camera_entity,
@@ -281,7 +305,7 @@ fn main() {
     .unwrap();
   scene.set_parent(camera_entity, Some(root_entity));
 
-  let sun_entity = scene.spawn_entity();
+  let sun_entity = scene.spawn_entity("sun");
   scene
     .add_component(
       sun_entity,
@@ -301,12 +325,12 @@ fn main() {
     )
     .unwrap();
 
-  let sky_entity = scene.spawn_entity();
+  let sky_entity = scene.spawn_entity("entity");
   scene
     .add_component(sky_entity, aethervk_core_rlib::scene::SkyComponent {})
     .unwrap();
 
-  let grid_entity = scene.spawn_entity();
+  let grid_entity = scene.spawn_entity("grid");
   scene
     .add_component(grid_entity, aethervk_core_rlib::scene::GridComponent {})
     .unwrap();
@@ -322,12 +346,15 @@ fn main() {
     time_scale: 1.0,
     root_entity,
     is_resizing: false,
+    is_exiting: false,
     window,
   };
 
+  let _render_frontend_tracker = RenderFrontendDropTracker(Arc::clone(&render_frontend));
+
   // --- Start Render Thread ---
   let (render_tx, render_rx) = mpsc::sync_channel::<Option<RenderPacket>>(1);
-  let mut render_thread_handle = Some(start_render_thread(
+  let mut render_thread_handle = start_render_thread(
     render_rx,
     Arc::clone(&scene_shared),
     Arc::clone(&render_frontend),
@@ -335,17 +362,17 @@ fn main() {
     presentation_engine,
     cursor_entity,
     sun_entity,
-  ));
+  );
 
   // --- Start Logic Thread ---
   let (logic_tx, logic_rx) = mpsc::channel::<LogicCommand>();
-  let mut logic_thread_handle = Some(start_logic_thread(
+  let mut logic_thread_handle = start_logic_thread(
     logic_rx,
     Arc::clone(&scene_shared),
     camera_entity,
     cursor_entity,
     grid_entity,
-  ));
+  );
 
   // Update initial resize to trigger projection matrix update
   let _ = logic_tx.send(LogicCommand::Resize {
@@ -359,6 +386,7 @@ fn main() {
   let mut mouse_x = 0.0;
   let mut mouse_y = 0.0;
   let mut last_log_time = Instant::now();
+  let mut modifiers_state = winit::keyboard::ModifiersState::empty();
 
   event_loop.set_control_flow(ControlFlow::Poll);
   event_loop
@@ -376,14 +404,9 @@ fn main() {
       Event::WindowEvent { event, window_id } if window_id == app_state.window.id() => {
         match event {
           WindowEvent::CloseRequested => {
-            let _ = render_tx.send(None);
+            app_state.is_exiting = true;
+            let _ = render_tx.try_send(None);
             let _ = logic_tx.send(LogicCommand::Exit);
-            if let Some(handle) = render_thread_handle.take() {
-              let _ = handle.join();
-            }
-            if let Some(handle) = logic_thread_handle.take() {
-              let _ = handle.join();
-            }
             elwt.exit();
           }
           WindowEvent::Resized(physical_size) => {
@@ -407,6 +430,9 @@ fn main() {
             {
               window_info.metal_layer.setContentsScale(scale_factor);
             }
+          }
+          WindowEvent::ModifiersChanged(modifiers) => {
+            modifiers_state = modifiers.state();
           }
           WindowEvent::CursorMoved { position, .. } => {
             mouse_x = position.x;
@@ -468,6 +494,16 @@ fn main() {
                     app_state.window.request_redraw();
                   }
                   KeyCode::KeyQ => {
+                    #[cfg(target_os = "macos")]
+                    if modifiers_state.super_key() {
+                      // So it doesn't even get here
+                      app_state.is_exiting = true;
+                      let _ = render_tx.try_send(None);
+                      let _ = logic_tx.send(LogicCommand::Exit);
+                      println!("You Clicked exit");
+                      elwt.exit();
+                      return;
+                    }
                     let _ = logic_tx.send(LogicCommand::MoveCursor {
                       axis: Vec3f32::from_components(0.0, -1.0, 0.0),
                       amount: speed,
@@ -503,7 +539,7 @@ fn main() {
             }
           }
           WindowEvent::RedrawRequested => {
-            if app_state.is_resizing {
+            if app_state.is_resizing || app_state.is_exiting {
               return;
             }
 
@@ -565,8 +601,12 @@ fn main() {
               window_size: app_state.window.inner_size(),
             };
 
-            if render_tx.send(Some(packet)).is_err() {
-              elwt.exit();
+            match render_tx.try_send(Some(packet)) {
+              Ok(_) => {}
+              Err(std::sync::mpsc::TrySendError::Full(_)) => {}
+              Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                elwt.exit();
+              }
             }
           }
           _ => {}
@@ -603,7 +643,16 @@ fn main() {
         });
         app_state.window.request_redraw();
       }
+      Event::LoopExiting => {
+        app_state.is_exiting = true;
+        let _ = render_tx.try_send(None);
+        let _ = logic_tx.send(LogicCommand::Exit);
+      }
       Event::AboutToWait => {
+        if app_state.is_exiting {
+          return;
+        }
+
         if last_log_time.elapsed().as_secs() >= 5 {
           last_log_time = Instant::now();
         }
@@ -614,4 +663,9 @@ fn main() {
       _ => (),
     })
     .unwrap();
+
+  println!("Event loop returned. Joining threads...");
+  let _ = render_thread_handle.join();
+  let _ = logic_thread_handle.join();
+  println!("Threads joined. Exiting main().");
 }
