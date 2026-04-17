@@ -155,6 +155,7 @@ pub trait RenderDevice: Send + Sync {
     entity_id: EntityId,
     component: &PhysicalMeshComponent,
     handle: PresentationEngineHandle,
+    debug_name: &str,
   ) -> GpuResult<ResourceUploadResult>;
 
   /// Generates the background sky image using compute shader

@@ -544,11 +544,10 @@ impl DeviceResources {
 
   fn create_physical_mesh_archetype(
     &mut self,
-    device: &ash::Device,
+    device: &vulkan::device::LogicalDevice,
     vertex_shader_key: ShaderKey,
     fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
-    synchronization2: &ash::khr::synchronization2::Device,
     queue: &Queue,
     handle: PresentationEngineHandle,
     timeline: u64,
@@ -586,7 +585,6 @@ impl DeviceResources {
         device,
         &vertex_shader,
         &fragment_shader,
-        &synchronization2,
         &self.allocator.allocator,
         &self.discard_pool,
         &queue,
@@ -677,10 +675,7 @@ impl DeviceResources {
         .pipeline_layout
         .get(),
       )
-      // TODO remove inversion if mesh is proper
-      .with_pipeline_flags(
-        PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE,
-      )
+      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
       .with_render_pass(
         self
           .renderpasses
@@ -745,7 +740,7 @@ impl DeviceResources {
 
   fn create_sun_archetype(
     &mut self,
-    device: &ash::Device,
+    device: &LogicalDevice,
     vertex_shader_key: ShaderKey,
     fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
@@ -776,9 +771,7 @@ impl DeviceResources {
     }
 
     // Create initial struct
-    let res = unsafe {
-      resources::SunRenderResourceArchetype::new(device, &vertex_shader, &fragment_shader)
-    }?;
+    let res = unsafe { resources::SunRenderResourceArchetype::new(device) }?;
     #[cfg(not(debug_assertions))]
     {
       self.sun_render_archetype = Some(res);
@@ -1127,7 +1120,7 @@ impl DeviceResources {
 
   fn create_cursor_archetype(
     &mut self,
-    device: &ash::Device,
+    device: &LogicalDevice,
     vertex_shader_key: ShaderKey,
     fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
@@ -1158,9 +1151,7 @@ impl DeviceResources {
     }
 
     // Create initial struct
-    let res = unsafe {
-      resources::CursorRenderResourceArchetype::new(device, &vertex_shader, &fragment_shader)
-    }?;
+    let res = unsafe { resources::CursorRenderResourceArchetype::new(device) }?;
     #[cfg(not(debug_assertions))]
     {
       self.cursor_render_archetype = Some(res);
@@ -1539,19 +1530,118 @@ impl RecordingCmdBufferData {
   }
 }
 
+// TODO Store api version and redirect methods from extensions to core if promoted
+pub(super) struct LogicalDevice {
+  pub handle: ash::Device,
+  /// Note: Remove if API_VERSION_1_2
+  pub create_renderpass2: ash::khr::create_renderpass2::Device,
+  pub buffer_device_address: ash::khr::buffer_device_address::Device,
+  pub timeline_semaphore: ash::khr::timeline_semaphore::Device,
+  /// Note: Remove if API_VERSION_1_3
+  pub synchronization2: ash::khr::synchronization2::Device,
+
+  #[cfg(debug_assertions)]
+  pub debug_utils: ash::ext::debug_utils::Device,
+
+  #[cfg(target_vendor = "apple")]
+  pub metal_objects: ash::ext::metal_objects::Device,
+}
+
+impl core::ops::Deref for LogicalDevice {
+  type Target = ash::Device;
+
+  fn deref(&self) -> &Self::Target {
+    &self.handle
+  }
+}
+
+impl LogicalDevice {
+  #[cfg(debug_assertions)]
+  pub fn set_debug_name<T: vk::Handle>(&self, object: T, name: &str) {
+    use core::str::FromStr;
+
+    if name.is_empty() {
+      return;
+    }
+    let name_cstr = alloc::ffi::CString::from_str(name).unwrap();
+    let name_info = vk::DebugUtilsObjectNameInfoEXT::default()
+      .object_handle(object)
+      .object_name(&name_cstr);
+
+    unsafe {
+      self
+        .debug_utils
+        .set_debug_utils_object_name(&name_info)
+        .expect(&alloc::format!("failed to set name {}", name));
+    }
+  }
+
+  #[cfg(not(debug_assertions))]
+  #[inline]
+  pub fn set_debug_name<T: vk::Handle>(&self, _object: T, _name: &str) {
+    // This is a no-op in release builds, and should be optimized away.
+  }
+}
+
+pub trait VulkanDebugNameExt: Sized {
+  fn with_name(self, device: &LogicalDevice, name: &str) -> Self;
+}
+pub trait VmaDebugNameExt: Sized {
+  fn with_name(self, device: &LogicalDevice, name: &str) -> Self;
+}
+
+// 2. Apply to Results containing Vulkan Handles
+impl<T: vk::Handle + Copy> VulkanDebugNameExt for ash::prelude::VkResult<T> {
+  #[inline]
+  fn with_name(self, device: &LogicalDevice, name: &str) -> Self {
+    if let Ok(handle) = &self {
+      device.set_debug_name(*handle, name);
+    }
+    self
+  }
+}
+
+// Implements the trait for ANY `Result` returning a VMA Tuple (Buffer/Image + Allocation)
+impl<T, A> VmaDebugNameExt for ash::prelude::VkResult<(T, A)>
+where
+  T: vk::Handle + Copy,
+{
+  #[inline]
+  fn with_name(self, device: &LogicalDevice, name: &str) -> Self {
+    if let Ok((handle, _alloc)) = &self {
+      // Apply the debug name to the Vulkan handle (VkBuffer / VkImage)
+      // This guarantees it shows up properly in RenderDoc!
+      device.set_debug_name(*handle, name);
+    }
+
+    // Pass the Result unmodified down the chain
+    self
+  }
+}
+
+impl<T, A1, A2> VmaDebugNameExt for ash::prelude::VkResult<(T, A1, A2)>
+where
+  T: vk::Handle + Copy,
+{
+  #[inline]
+  fn with_name(self, device: &LogicalDevice, name: &str) -> Self {
+    if let Ok((handle, _alloc, _alloc_info)) = &self {
+      // Apply the debug name to the Vulkan handle (VkBuffer / VkImage)
+      // This guarantees it shows up properly in RenderDoc!
+      device.set_debug_name(*handle, name);
+    }
+
+    // Pass the Result unmodified down the chain
+    self
+  }
+}
+
 pub(super) struct Device<'a> {
   query_result: utils::PhysicalDeviceQueryResult,
-  pub device: ash::Device,
   queues: Queues,
   instance: &'a instance::Instance,
 
-  /// Note: Remove if API_VERSION_1_2
-  create_renderpass2: ash::khr::create_renderpass2::Device,
-  buffer_device_address: ash::khr::buffer_device_address::Device,
-  /// Note: Remove if API_VERSION_1_3
-  synchronization2: ash::khr::synchronization2::Device,
-  #[cfg(target_vendor = "apple")]
-  metal_objects: ash::ext::metal_objects::Device,
+  device: LogicalDevice,
 
   res: spin::RwLock<DeviceResources>,
 
@@ -1778,38 +1868,32 @@ impl<'a> Device<'a> {
     let synchronization2 = ash::khr::synchronization2::Device::new(&instance.instance, &device);
     let buffer_device_address =
       ash::khr::buffer_device_address::Device::new(&instance.instance, &device);
+    let timeline_semaphore = ash::khr::timeline_semaphore::Device::new(&instance.instance, &device);
+
+    #[cfg(debug_assertions)]
+    let debug_utils = ash::ext::debug_utils::Device::new(&instance.instance, &device);
     #[cfg(target_vendor = "apple")]
-    {
-      let metal_objects = ash::ext::metal_objects::Device::new(&instance.instance, &device);
-      Ok(Self {
-        query_result: *chosen_physical_device_query_result,
-        device,
+    let metal_objects = ash::ext::metal_objects::Device::new(&instance.instance, &device);
+
+    Ok(Self {
+      query_result: *chosen_physical_device_query_result,
+      device: LogicalDevice {
+        timeline_semaphore,
+        handle: device,
         create_renderpass2,
         synchronization2,
         buffer_device_address,
+        #[cfg(target_vendor = "apple")]
         metal_objects,
-        queues,
-        res: res.into(),
-        instance,
-        depth_stencil_format,
-        recording_command_buffers: spin::RwLock::new(hashbrown::HashMap::new()),
-      })
-    }
-    #[cfg(not(target_vendor = "apple"))]
-    {
-      Ok(Self {
-        query_result: *chosen_physical_device_query_result,
-        device,
-        create_renderpass2,
-        synchronization2,
-        buffer_device_address,
-        queues,
-        res: res.into(),
-        instance,
-        depth_stencil_format,
-        recording_command_buffers: spin::RwLock::new(hashbrown::HashMap::new()),
-      })
-    }
+        #[cfg(debug_assertions)]
+        debug_utils,
+      },
+      queues,
+      res: res.into(),
+      instance,
+      depth_stencil_format,
+      recording_command_buffers: spin::RwLock::new(hashbrown::HashMap::new()),
+    })
   }
 
   pub(super) fn physical_device(&self) -> vk::PhysicalDevice {
@@ -2325,12 +2409,16 @@ impl<'a> Device<'a> {
 
 impl<'a> Drop for Device<'a> {
   fn drop(&mut self) {
+    aethervk_oshal_rlib::log!("Device::drop started. Waiting for device idle...");
     unsafe { self.device.device_wait_idle().unwrap_unchecked() };
+    aethervk_oshal_rlib::log!("Device::drop device_wait_idle complete. Starting cleanup...");
 
     self.res.write().cleanup(&self.device);
 
+    aethervk_oshal_rlib::log!("Device::drop cleanup complete. Destroying device...");
     // in the end, destroy the device
     unsafe { self.device.destroy_device(None) };
+    aethervk_oshal_rlib::log!("Device::drop finished.");
   }
 }
 
@@ -2343,7 +2431,7 @@ impl<'a> RenderDevice for Device<'a> {
         let mut metal_objects_info =
           vk::ExportMetalObjectsInfoEXT::default().push_next(&mut metal_device_info);
         unsafe {
-          (self.metal_objects.fp().export_metal_objects_ext)(
+          (self.device.metal_objects.fp().export_metal_objects_ext)(
             self.device.handle(),
             core::ptr::from_mut(&mut metal_objects_info),
           );
@@ -2563,6 +2651,7 @@ impl<'a> RenderDevice for Device<'a> {
     entity_id: EntityId,
     component: &PhysicalMeshComponent,
     handle: PresentationEngineHandle,
+    debug_name: &str,
   ) -> GpuResult<ResourceUploadResult> {
     let next_frame_timeline = self.res.read().get_timeline_semaphore_cached_value() + 1;
     let current_frame_timeline = next_frame_timeline - 1;
@@ -2588,7 +2677,6 @@ impl<'a> RenderDevice for Device<'a> {
           vkey,
           fkey,
           self.depth_stencil_format,
-          &self.synchronization2,
           &self.queues.get_graphics_queue(),
           handle,
           next_frame_timeline,
@@ -2662,13 +2750,13 @@ impl<'a> RenderDevice for Device<'a> {
         texture_flags |= TextureFlags::ALBEDO;
         Image::new_2d(
           &self.device,
-          &self.synchronization2,
           &res.allocator.allocator,
           command_buffer,
           &res.discard_pool,
           current_frame_timeline,
           &t,
           vk::ImageUsageFlags::SAMPLED,
+          &alloc::format!("TextureAlbedo_{}", debug_name),
         )
         .ok()
       });
@@ -2676,13 +2764,13 @@ impl<'a> RenderDevice for Device<'a> {
         texture_flags |= TextureFlags::NORMAL;
         Image::new_2d(
           &self.device,
-          &self.synchronization2,
           &res.allocator.allocator,
           command_buffer,
           &res.discard_pool,
           current_frame_timeline,
           &t,
           vk::ImageUsageFlags::SAMPLED,
+          &alloc::format!("TextureNormal_{}", debug_name),
         )
         .ok()
       });
@@ -2690,13 +2778,13 @@ impl<'a> RenderDevice for Device<'a> {
         texture_flags |= TextureFlags::ROUGHNESS;
         Image::new_2d(
           &self.device,
-          &self.synchronization2,
           &res.allocator.allocator,
           command_buffer,
           &res.discard_pool,
           current_frame_timeline,
           &t,
           vk::ImageUsageFlags::SAMPLED,
+          &alloc::format!("TextureRoughness_{}", debug_name),
         )
         .ok()
       });
@@ -2704,13 +2792,13 @@ impl<'a> RenderDevice for Device<'a> {
         texture_flags |= TextureFlags::AO;
         Image::new_2d(
           &self.device,
-          &self.synchronization2,
           &res.allocator.allocator,
           command_buffer,
           &res.discard_pool,
           current_frame_timeline,
           &t,
           vk::ImageUsageFlags::SAMPLED,
+          &alloc::format!("TextureAO_{}", debug_name),
         )
         .ok()
       });
@@ -2721,6 +2809,7 @@ impl<'a> RenderDevice for Device<'a> {
           res.descriptor_pool.as_ref().unwrap_unchecked(),
           &res.discard_pool,
           0,
+          debug_name,
         )?;
         ForwardMeshRenderResource::new(
           &self.device,
@@ -2743,6 +2832,7 @@ impl<'a> RenderDevice for Device<'a> {
           res.linear_sampler,
           descriptor_set,
           &archetype.dummy_texture_handle,
+          debug_name,
         )?
       };
 
@@ -2810,6 +2900,7 @@ impl<'a> RenderDevice for Device<'a> {
       vk::Format::R16G16B16A16_SFLOAT,
       graphics_queue.family_index,
       compute_queue.family_index,
+      "Sky",
     )?;
 
     // Create Descriptor Set Layout
@@ -2928,6 +3019,7 @@ impl<'a> RenderDevice for Device<'a> {
       let dep_info =
         vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&barrier));
       self
+        .device
         .synchronization2
         .cmd_pipeline_barrier2(command_buffer, &dep_info);
 
@@ -2974,6 +3066,7 @@ impl<'a> RenderDevice for Device<'a> {
       let dep_info2 =
         vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&barrier2));
       self
+        .device
         .synchronization2
         .cmd_pipeline_barrier2(command_buffer, &dep_info2);
 
@@ -3015,8 +3108,6 @@ impl<'a> RenderDevice for Device<'a> {
     &self,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
-    let next_frame_timeline = self.res.read().get_timeline_semaphore_cached_value() + 1;
-
     // ensure that the archetype for cursors exists
     if self.res.read().cursor_render_archetype.is_none() {
       let mut wres = self.res.write();
@@ -3172,7 +3263,7 @@ impl<'a> RenderDevice for Device<'a> {
     let subpass_begin_info = vk::SubpassBeginInfo::default().contents(vk::SubpassContents::INLINE);
 
     unsafe {
-      self.create_renderpass2.cmd_begin_render_pass2(
+      self.device.create_renderpass2.cmd_begin_render_pass2(
         cmd,
         &render_pass_begin_info,
         &subpass_begin_info,
@@ -3581,6 +3672,7 @@ impl<'a> RenderDevice for Device<'a> {
         vk::Format::R16G16B16A16_SFLOAT,
         graphics_queue.family_index,
         compute_queue.family_index,
+        "Sun",
       )?;
 
       // Now run sungen.comp
@@ -3652,31 +3744,6 @@ impl<'a> RenderDevice for Device<'a> {
       compute_info.shader_module = shader_module;
       compute_info.pipeline_layout = pipeline_layout;
 
-      compute_info.add_specialization_constant_u32(
-        vk::SpecializationMapEntry {
-          constant_id: 0,
-          offset: 0,
-          size: 4,
-        },
-        8,
-      );
-      compute_info.add_specialization_constant_u32(
-        vk::SpecializationMapEntry {
-          constant_id: 1,
-          offset: 4,
-          size: 4,
-        },
-        8,
-      );
-      compute_info.add_specialization_constant_u32(
-        vk::SpecializationMapEntry {
-          constant_id: 2,
-          offset: 8,
-          size: 4,
-        },
-        8,
-      );
-
       let compute_pipeline = res
         .pipeline_pool
         .write()
@@ -3734,6 +3801,7 @@ impl<'a> RenderDevice for Device<'a> {
           archetype.descriptor_set_layout.get(),
           &res.discard_pool,
           timeline,
+          "Sun",
         )?
         .get();
 
@@ -3788,9 +3856,16 @@ impl<'a> RenderDevice for Device<'a> {
       let ptr = alloc_info.mapped_data as *mut f32;
       *ptr = timeline as f32 * 0.016;
 
+      let _ = res.allocator.allocator.flush_allocation(
+        sun_resource.params_alloc.as_ref().unwrap(),
+        0,
+        vk::WHOLE_SIZE as u64,
+      );
+
       let bda_info =
         vk::BufferDeviceAddressInfo::default().buffer(sun_resource.params_buffer.unwrap());
       let buffer_address = self
+        .device
         .buffer_device_address
         .get_buffer_device_address(&bda_info);
 
@@ -3828,7 +3903,10 @@ impl<'a> RenderDevice for Device<'a> {
 
       let dep_info =
         vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&barrier));
-      self.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info);
+      self
+        .device
+        .synchronization2
+        .cmd_pipeline_barrier2(cmd, &dep_info);
 
       self.device.cmd_bind_pipeline(
         cmd,
@@ -3881,7 +3959,10 @@ impl<'a> RenderDevice for Device<'a> {
 
       let dep_info2 =
         vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&barrier2));
-      self.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info2);
+      self
+        .device
+        .synchronization2
+        .cmd_pipeline_barrier2(cmd, &dep_info2);
     }
 
     sun_resource.is_generated = true;
@@ -4098,7 +4179,7 @@ impl<'a> RenderDevice for Device<'a> {
           .descriptor_pool
           .as_ref()
           .unwrap()
-          .allocate(&self.device, layout, &wres.discard_pool, timeline)?
+          .allocate(&self.device, layout, &wres.discard_pool, timeline, "Sky")?
           .get();
 
         let image_info = vk::DescriptorImageInfo::default()
@@ -4293,6 +4374,7 @@ impl<'a> RenderDevice for Device<'a> {
 
     unsafe {
       self
+        .device
         .create_renderpass2
         .cmd_end_render_pass2(cmd, &subpass_end_info);
     }

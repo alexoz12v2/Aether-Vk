@@ -7,7 +7,7 @@ use crate::types::{GpuError, GpuResult};
 use aethervk_oshal_rlib::math::{
   matrix::{mat4::Mat4x4f32, Matrix4},
   quaternion::Quaternion,
-  vector::{vec3::Vec3f32, Vector, Vector3},
+  vector::{vec3::Vec3f32, Vector3},
 };
 use alloc::vec::Vec;
 
@@ -96,6 +96,7 @@ impl Frame {
     model_matrix: Mat4x4f32,
     renderable: RenderableDataRef,
     presentation_engine_handle: PresentationEngineHandle,
+    debug_name: &str,
   ) -> GpuResult<()> {
     match renderable {
       RenderableDataRef::ImageBillboard(_component) => {
@@ -106,6 +107,7 @@ impl Frame {
           entity_id,
           &component,
           presentation_engine_handle,
+          debug_name,
         )?;
         let index_count = component.mesh.indices.len() as u32;
         self.draw_calls.push(DrawCall::from_handles_and_matrix(
@@ -140,14 +142,8 @@ pub trait RenderPath {
       &crate::scene::SunComponent,
       &TransformComponent,
     )>,
-    sky: Option<(
-      crate::scene::EntityId,
-      &crate::scene::SkyComponent,
-    )>,
-    grid: Option<(
-      crate::scene::EntityId,
-      &crate::scene::GridComponent,
-    )>,
+    sky: Option<(crate::scene::EntityId, &crate::scene::SkyComponent)>,
+    grid: Option<(crate::scene::EntityId, &crate::scene::GridComponent)>,
     frame: &Frame,
     presentation_engine: PresentationEngineHandle,
     acquire_result: &AcquireResult,
@@ -167,14 +163,8 @@ impl RenderPath for ForwardRenderPath {
       &crate::scene::SunComponent,
       &TransformComponent,
     )>,
-    sky: Option<(
-      crate::scene::EntityId,
-      &crate::scene::SkyComponent,
-    )>,
-    grid: Option<(
-      crate::scene::EntityId,
-      &crate::scene::GridComponent,
-    )>,
+    sky: Option<(crate::scene::EntityId, &crate::scene::SkyComponent)>,
+    grid: Option<(crate::scene::EntityId, &crate::scene::GridComponent)>,
     frame: &Frame,
     presentation_engine: PresentationEngineHandle,
     acquire_result: &AcquireResult,
@@ -209,8 +199,9 @@ impl RenderPath for ForwardRenderPath {
             extent,
           },
         )?;
-        let view = Mat4x4f32::from_scale(aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(1.0, -1.0, 1.0))
-          * Mat4x4f32::from_quat(camera.0.rotation.conjugate())
+        let view = Mat4x4f32::from_scale(
+          aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(1.0, -1.0, 1.0),
+        ) * Mat4x4f32::from_quat(camera.0.rotation.conjugate())
           * Mat4x4f32::translation(camera.0.position * -1.0);
         let proj = camera.1.projection;
         let view_proj = proj * view;
@@ -237,7 +228,13 @@ impl RenderPath for ForwardRenderPath {
         }
 
         if let Some((grid_entity, grid_comp)) = grid {
-          device.render_grid(cmd_buffer, grid_entity, grid_comp, view_proj, camera.0.position)?;
+          device.render_grid(
+            cmd_buffer,
+            grid_entity,
+            grid_comp,
+            view_proj,
+            camera.0.position,
+          )?;
         }
 
         for cursor_call in &frame.cursor_calls {
