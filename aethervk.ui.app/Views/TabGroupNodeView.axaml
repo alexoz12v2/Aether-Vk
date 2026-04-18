@@ -5,39 +5,88 @@
              xmlns:vm="using:AetherVk.Logic.ViewModels"
              mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
              x:DataType="vm:TabGroupNodeViewModel"
-             x:Class="AetherVk.Views.TabGroupNodeView"
-             DragDrop.AllowDrop="True"
-             DragDrop.DragOver="OnDragOver"
-             DragDrop.DragLeave="OnDragLeave"
-             DragDrop.Drop="OnDrop">
-    <Border BorderBrush="{DynamicResource Border.Default}" BorderThickness="1" Margin="2">
-        <Grid>
-            <TabControl ItemsSource="{Binding Tabs}"
-                        SelectedItem="{Binding SelectedTab}">
-                <TabControl.ItemTemplate> <!-- Tab Header -->
-                <DataTemplate x:DataType="vm:TabItemViewModel">
-                    <Border Background="Transparent" PointerPressed="OnTabPointerPressed">
-                        <TextBlock Text="{Binding Title}" Padding="8,4" />
-                    </Border>
-                </DataTemplate>
-                </TabControl.ItemTemplate>
-                <TabControl.ContentTemplate> <!-- Tab Content -->
-                <DataTemplate x:DataType="vm:TabItemViewModel">
-                    <TextBlock Text="{Binding Title}" HorizontalAlignment="Center"/>
-                </DataTemplate>
-                </TabControl.ContentTemplate>
-            </TabControl>
+             x:Class="AetherVk.Views.TabGroupNodeView">
+  <Border BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" Margin="2"
+          Background="{DynamicResource Bg.Canvas}" CornerRadius="6">
+    <Grid>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="*" />
+      </Grid.RowDefinitions>
 
-            <Grid x:Name="PreviewOverlay" IsHitTestVisible="False" Opacity="0.5">
-                <Border x:Name="PreviewBox" Background="{DynamicResource Accent.Hover}" IsVisible="False" BorderThickness="2">
-                    <Border.Transitions>
-                        <Transitions>
-                            <DoubleTransition Property="Width" Duration="0:0:0.1" />
-                            <DoubleTransition Property="Height" Duration="0:0:0.1" />
-                        </Transitions>
-                    </Border.Transitions>
-                </Border>
-            </Grid>
+      <Border Grid.Row="0" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="0,0,0,1"
+              Background="{DynamicResource Bg.Surface}" CornerRadius="6,6,0,0">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+            <StackPanel Orientation="Horizontal" Spacing="4" Margin="4">
+              <ItemsControl ItemsSource="{Binding Tabs}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <StackPanel Orientation="Horizontal" Spacing="4" />
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:TabItemViewModel">
+
+                    <Border Background="Transparent" CornerRadius="4" PointerPressed="OnTabPointerPressed">
+
+                      <Border.Styles>
+                        <Style Selector="Border:pointerover">
+                          <Setter Property="Background" Value="{DynamicResource Bg.Hover}" />
+                        </Style>
+                      </Border.Styles>
+                      <StackPanel Orientation="Horizontal" Spacing="4">
+
+                        <Border Background="Transparent" ToolTip.Tip="Drag to Split"
+                                PointerPressed="OnTabIconPointerPressed">
+                          <PathIcon x:Name="TabDragHandle" Data="M2,2 L14,2 L14,14 L2,14 Z" Width="12" Height="12"
+                                    Margin="8,0,0,0" VerticalAlignment="Center"
+                                    Foreground="{DynamicResource Accent.Primary}" />
+                        </Border>
+
+                        <TextBlock Text="{Binding Title}" Padding="4,6,8,6" Foreground="{DynamicResource Text.Primary}" />
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+
+              <Button Command="{Binding AddNewTabCommand}"
+                      Content="+"
+                      Width="28" Height="28"
+                      Padding="0"
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="Add new UI Test Panel tab"
+                      Classes="accent" />
+              <Button Command="{Binding AddNewConsoleTabCommand}"
+                      Content="C"
+                      Width="28" Height="28"
+                      Padding="0"
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="Add new Console tab"
+                      Classes="accent" />
+            </StackPanel>
+          </ScrollViewer>
         </Grid>
-    </Border>
+      </Border>
+
+      <ContentControl Grid.Row="1" Content="{Binding SelectedTab}" Margin="4" />
+
+      <Grid x:Name="PreviewOverlay" Grid.Row="0" Grid.RowSpan="2" IsHitTestVisible="False" Opacity="0.5">
+        <Border x:Name="PreviewBox" Background="{DynamicResource Accent.Hover}" IsVisible="False" BorderThickness="2"
+                CornerRadius="4">
+          <Border.Transitions>
+            <Transitions>
+              <DoubleTransition Property="Width" Duration="0:0:0.1" />
+              <DoubleTransition Property="Height" Duration="0:0:0.1" />
+            </Transitions>
+          </Border.Transitions>
+        </Border>
+      </Grid>
+    </Grid>
+  </Border>
 </UserControl>

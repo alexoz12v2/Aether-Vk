@@ -1,187 +1,265 @@
 using System;
-using System.Linq;
 using System.Threading.Tasks;
 using AetherVk.Logic.Messages;
 using AetherVk.Logic.ViewModels;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
-using Avalonia.Interactivity;
-using Avalonia.Threading;
 using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Views;
 
-public partial class TabGroupNodeView : UserControl
+public partial class TabGroupNodeView : UserControl, IDragSourceView
 {
-  // TODO: move this logic in view model as much as possible
-  // OS-Level drag flag, we can't format typed bytes due to security risks ...
-  public static readonly DataFormat<string> ChildViewModelFormat =
+  private static readonly DataFormat<string> ChildViewModelFormat =
     DataFormat.CreateStringApplicationFormat("AetherVk.TabItemViewModel");
 
-  // ... therefore we need to hold a complex object in memory while drag active
-  // Note: Why Static? In a Desktop environment, there's only 1 cursor.
   private static TabItemViewModel? _draggedTabReference;
+
+  private bool _isInitiatingDrag;
+  private Point _dragStartPoint;
+  private TabItemViewModel? _tabToDrag;
 
   public TabGroupNodeView()
   {
     InitializeComponent();
-    // Drag is triggered by PointerPressed and DoDragDrop(), passing TabItemViewModel as payload
-    AddHandler(DragDrop.DragOverEvent, OnDragOver);
-    AddHandler(DragDrop.DragLeaveEvent, OnDragLeave);
-    AddHandler(DragDrop.DropEvent, OnDrop);
+
+    // 1. CRITICAL FIX: Forces Avalonia to accept drops even if you forget it in XAML
+    DragDrop.SetAllowDrop(this, true);
+
+    // Register to listen for the cleanup message from the logic layer
+    WeakReferenceMessenger.Default.Register<DragCompletedMessage>(this, (_, m) =>
+    {
+      if (ReferenceEquals(m.View, this))
+      {
+        Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(ClearDragState);
+      }
+    });
+  }
+
+  // NOTE: Avalonia Drag and Drop events are often registered via XAML in the new versions to work properly with compiled bindings.
+  // Instead of code-behind AddHandler in the constructor, we ensure we use OnDragOver, OnDragLeave, OnDrop methods
+  // bound using the attached events on the UserControl level.
+  // Since they are attached events, we MUST use AddHandler after the visual tree is built, or in XAML.
+  // Adding them in OnAttachedToVisualTree ensures they are registered correctly for the routed event system.
+  protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+  {
+    base.OnAttachedToVisualTree(e);
+    AddHandler(DragDrop.DragOverEvent, OnDragOver, Avalonia.Interactivity.RoutingStrategies.Bubble,
+      true);
+    AddHandler(DragDrop.DragLeaveEvent, OnDragLeave,
+      Avalonia.Interactivity.RoutingStrategies.Bubble, true);
+    AddHandler(DragDrop.DropEvent, OnDrop, Avalonia.Interactivity.RoutingStrategies.Bubble, true);
+
+    // Pointer Handlers for tracking the drag.
+    AddHandler(InputElement.PointerMovedEvent, OnTabPointerMoved,
+      Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
+    AddHandler(InputElement.PointerReleasedEvent, OnTabPointerReleased,
+      Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
+  }
+
+  protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+  {
+    base.OnDetachedFromVisualTree(e);
+    RemoveHandler(DragDrop.DragOverEvent, OnDragOver);
+    RemoveHandler(DragDrop.DragLeaveEvent, OnDragLeave);
+    RemoveHandler(DragDrop.DropEvent, OnDrop);
+
+    RemoveHandler(InputElement.PointerMovedEvent, OnTabPointerMoved);
+    RemoveHandler(InputElement.PointerReleasedEvent, OnTabPointerReleased);
   }
 
   #region Drag Handlers
+
   private void OnDragOver(object? sender, DragEventArgs e)
   {
     if (!e.DataTransfer.Contains(ChildViewModelFormat) || _draggedTabReference is null)
     {
       e.DragEffects = DragDropEffects.None;
+      e.Handled = true;
       return;
     }
 
-    // 1. Calculate mouse position relative to this UserControl
+    e.DragEffects = e.KeyModifiers.HasFlag(KeyModifiers.Control)
+      ? DragDropEffects.Copy
+      : DragDropEffects.Move;
     var pos = e.GetPosition(this);
     var zone = CalculateDockZone(pos, Bounds.Size);
-
-    // 2. Update PreviewBox Margin/Alignment based on the zone
     ShowPreview(zone);
-    e.DragEffects = DragDropEffects.Move;
+    e.Handled = true;
   }
 
   private void OnDragLeave(object? sender, DragEventArgs e)
   {
     PreviewBox.IsVisible = false;
+    e.Handled = true;
   }
 
   private void OnDrop(object? sender, DragEventArgs e)
   {
     PreviewBox.IsVisible = false;
-    if (
-      e.DataTransfer.Contains(ChildViewModelFormat)
-      && _draggedTabReference is { } draggedTab
-      && DataContext is TabGroupNodeViewModel targetNode
-    )
+
+    if (e.DataTransfer.Contains(ChildViewModelFormat) &&
+        _draggedTabReference is { } draggedTab && DataContext is TabGroupNodeViewModel targetNode)
     {
+      bool isCopy = e.KeyModifiers.HasFlag(KeyModifiers.Control) ||
+                    e.DragEffects == DragDropEffects.Copy;
       var pos = e.GetPosition(this);
       var zone = CalculateDockZone(pos, Bounds.Size);
 
-      // TODO: is movement enough?
+      WeakReferenceMessenger.Default.Send(new TabDroppedMessage(draggedTab, targetNode, zone,
+        isCopy));
 
-      // Send message to Root Manager to handle the tree mutation
-      // Dispatcher.UIThread.Post(() =>
-      // {
-      //   WeakReferenceMessenger.Default.Send(new TabDroppedMessage(draggedTab, targetNode, zone));
-      // });
-      WeakReferenceMessenger.Default.Send(new TabDroppedMessage(draggedTab, targetNode, zone));
+      e.DragEffects = isCopy ? DragDropEffects.Copy : DragDropEffects.Move;
     }
+
+    _draggedTabReference = null;
+    e.Handled = true;
   }
+
   #endregion
 
-  /// <summary>
-  /// Initializes the drag
-  /// </summary>
-  private async void OnTabPointerPressed(object? sender, PointerPressedEventArgs e)
+  private void OnTabPointerPressed(object? sender, PointerPressedEventArgs e)
   {
-    // ensure we drag only on left click
-    if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
-      return;
-
-    // check if this is the last tab in the manager
-    if (DataContext is TabGroupNodeViewModel vm && vm.IsRoot() && vm.Tabs.Count <= 1)
-      return; // optional: shake or show different cursor?
-
-    if (sender is Control control && control.DataContext is TabItemViewModel draggedTab)
+    if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed &&
+        sender is Border { DataContext: TabItemViewModel clickedTab } &&
+        DataContext is TabGroupNodeViewModel vm)
     {
-      var data = new DataTransfer();
-      var item = new DataTransferItem();
-      item.Set(ChildViewModelFormat, "DragActive");
-      data.Add(item);
-
-      _draggedTabReference = draggedTab;
-
-      // initiate the drag-and-drop operation
-      await DragDrop.DoDragDropAsync(e, data, DragDropEffects.Move);
-
-      // Note: In Avalonia, execution pauses here until the drop completes
-      _draggedTabReference = null;
+      vm.SelectedTab = clickedTab;
     }
+  }
+
+  private void OnTabIconPointerPressed(object? sender, PointerPressedEventArgs e)
+  {
+    if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+
+    if (sender is not Border { DataContext: TabItemViewModel clickedTab }) return;
+
+    // UX Fix: Select the tab when grabbing the drag handle!
+    if (DataContext is TabGroupNodeViewModel vm) vm.SelectedTab = clickedTab;
+
+    e.Handled = true;
+    _isInitiatingDrag = true;
+    _dragStartPoint = e.GetPosition(this);
+    _tabToDrag = clickedTab;
+  }
+
+  private void OnTabPointerMoved(object? sender, PointerEventArgs e)
+  {
+    if (!_isInitiatingDrag || _tabToDrag == null) return;
+
+    if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+    {
+      _isInitiatingDrag = false;
+      _tabToDrag = null;
+      return;
+    }
+
+    var currentPoint = e.GetPosition(this);
+    var dx = currentPoint.X - _dragStartPoint.X;
+    var dy = currentPoint.Y - _dragStartPoint.Y;
+
+    if (Math.Sqrt(dx * dx + dy * dy) < 10)
+    {
+      return;
+    }
+
+    _isInitiatingDrag = false;
+    StartDrag(e, _tabToDrag);
+    _tabToDrag = null;
+  }
+
+  private void OnTabPointerReleased(object? sender, PointerReleasedEventArgs e)
+  {
+    _isInitiatingDrag = false;
+    _tabToDrag = null;
+  }
+
+  private void StartDrag(PointerEventArgs e, TabItemViewModel draggedTab)
+  {
+    if (DataContext is TabGroupNodeViewModel vm && vm.IsRoot() && vm.Tabs.Count <= 1) return;
+
+    var data = new DataTransfer();
+    var item = new DataTransferItem();
+    item.Set(ChildViewModelFormat, "DragActive");
+    data.Add(item);
+
+    _draggedTabReference = draggedTab;
+
+    // Store task, we do not await it here per requirement to not use async/await
+    var dragTask = DragDrop.DoDragDropAsync(e, data, DragDropEffects.Move | DragDropEffects.Copy);
+
+    // Provide the task to the logic layer
+    var logicalTask = dragTask.ContinueWith(t => t.Result.ToString(), TaskScheduler.Default);
+    WeakReferenceMessenger.Default.Send(new TabDragTaskMessage(draggedTab, logicalTask, this));
+  }
+
+  public void ClearDragState()
+  {
+    _draggedTabReference = null;
+    PreviewBox.IsVisible = false;
   }
 
   private static DockZone CalculateDockZone(Point pos, Size bounds)
   {
-    // 30% from the edge triggers a split. The middle 40% triggers a coalesce (center).
-    double edgeThreshold = 0.3;
+    const double edgeThreshold = 0.3;
+    var isLeft = pos.X < bounds.Width * edgeThreshold;
+    var isRight = pos.X > bounds.Width * (1 - edgeThreshold);
+    var isTop = pos.Y < bounds.Height * edgeThreshold;
+    var isBottom = pos.Y > bounds.Height * (1 - edgeThreshold);
 
-    bool isLeft = pos.X < bounds.Width * edgeThreshold;
-    bool isRight = pos.X > bounds.Width * (1 - edgeThreshold);
-    bool isTop = pos.Y < bounds.Height * edgeThreshold;
-    bool isBottom = pos.Y > bounds.Height * (1 - edgeThreshold);
+    if (!isLeft && !isRight && !isTop && !isBottom) return DockZone.Center;
 
-    // If we are in the edges, resolve corners by finding the closest edge
-    if (isLeft || isRight || isTop || isBottom)
-    {
-      double distLeft = pos.X;
-      double distRight = bounds.Width - pos.X;
-      double distTop = pos.Y;
-      double distBottom = bounds.Height - pos.Y;
+    var distLeft = pos.X;
+    var distRight = bounds.Width - pos.X;
+    var distTop = pos.Y;
+    var distBottom = bounds.Height - pos.Y;
+    var minDist = Math.Min(Math.Min(distLeft, distRight), Math.Min(distTop, distBottom));
 
-      double minDist = Math.Min(Math.Min(distLeft, distRight), Math.Min(distTop, distBottom));
-
-      if (minDist == distLeft)
-        return DockZone.Left;
-      if (minDist == distRight)
-        return DockZone.Right;
-      if (minDist == distTop)
-        return DockZone.Top;
-      if (minDist == distBottom)
-        return DockZone.Bottom;
-    }
-    return DockZone.Center;
+    if (Math.Abs(minDist - distLeft) < 1e-6) return DockZone.Left;
+    if (Math.Abs(minDist - distRight) < 1e-6) return DockZone.Right;
+    if (Math.Abs(minDist - distTop) < 1e-6) return DockZone.Top;
+    return Math.Abs(minDist - distBottom) < 1e-6 ? DockZone.Bottom : DockZone.Center;
   }
 
   private void ShowPreview(DockZone zone)
   {
-    PreviewBox.IsVisible = true;
+    if (zone == DockZone.Center)
+    {
+      PreviewBox.IsVisible = false;
+      return;
+    }
 
-    // This represents the visual preview of the 50% split ratio
+    PreviewBox.IsVisible = true;
     double splitRatio = 0.5;
+    double w = Bounds.Width;
+    double h = Bounds.Height;
+
     switch (zone)
     {
       case DockZone.Left:
         PreviewBox.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left;
         PreviewBox.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch;
-        PreviewBox.Width = Bounds.Width * splitRatio;
-        PreviewBox.Height = double.NaN; // resets explicitly to Auto
+        PreviewBox.Width = w * splitRatio;
+        PreviewBox.Height = h;
         break;
-
       case DockZone.Right:
         PreviewBox.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right;
         PreviewBox.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch;
-        PreviewBox.Width = Bounds.Width * splitRatio;
-        PreviewBox.Height = double.NaN;
+        PreviewBox.Width = w * splitRatio;
+        PreviewBox.Height = h;
         break;
-
       case DockZone.Top:
         PreviewBox.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch;
         PreviewBox.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Top;
-        PreviewBox.Width = double.NaN;
-        PreviewBox.Height = Bounds.Height * splitRatio;
+        PreviewBox.Width = w;
+        PreviewBox.Height = h * splitRatio;
         break;
-
       case DockZone.Bottom:
         PreviewBox.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch;
         PreviewBox.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Bottom;
-        PreviewBox.Width = double.NaN;
-        PreviewBox.Height = Bounds.Height * splitRatio;
-        break;
-
-      case DockZone.Center:
-        PreviewBox.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch;
-        PreviewBox.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch;
-        PreviewBox.Width = double.NaN;
-        PreviewBox.Height = double.NaN;
+        PreviewBox.Width = w;
+        PreviewBox.Height = h * splitRatio;
         break;
     }
   }

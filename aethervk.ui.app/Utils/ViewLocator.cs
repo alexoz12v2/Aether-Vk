@@ -1,6 +1,7 @@
 ﻿using System;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
+using System.Reflection;
 
 namespace AetherVk.Utils;
 
@@ -11,16 +12,27 @@ public class ViewLocator : IDataTemplate
     if (data is null)
       return null;
 
-    var name = data.GetType().FullName!.Replace("ViewModel", "View", StringComparison.Ordinal);
-    var type = Type.GetType(name);
-    if (type != null)
-      return (Control)Activator.CreateInstance(type)!;
+    var name = data.GetType().FullName!;
 
-    return new TextBlock { Text = "Not Found: " + name };
+    // Correctly replace the ViewModel namespace with the View namespace
+    var viewName = name.Replace("AetherVk.Logic.ViewModels", "AetherVk.Views");
+    viewName = viewName.Replace("ViewModel", "View", StringComparison.Ordinal);
+
+    // Get the currently executing assembly (AetherVk.UI.App) which contains the Views
+    var assembly = Assembly.GetExecutingAssembly();
+    var type = assembly.GetType(viewName);
+
+    if (type != null)
+    {
+      return (Control)Activator.CreateInstance(type)!;
+    }
+
+    return new TextBlock { Text = "Not Found: " + viewName };
   }
 
   public bool Match(object? data)
   {
-    return data?.GetType().FullName!.EndsWith("ViewModel") ?? false;
+    // This locator is intended for ViewModels.
+    return data?.GetType().FullName?.EndsWith("ViewModel") ?? false;
   }
 }
