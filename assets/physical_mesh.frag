@@ -124,13 +124,24 @@ void main() {
   vec3 R = reflect(-V, N);
   
   // Approximate Diffuse IBL (Irradiance) by sampling sky map at the normal direction
-  vec3 irradiance = texture(skyMap, octEncode(N)).rgb;
+  vec3 irradiance = texture(skyMap, octEncode(N)).rgb * 0.02;
   vec3 diffuseIBL = irradiance * albedo;
   
   // Approximate Specular IBL (Radiance) by sampling sky map at the reflection direction
-  // Note: we can blur this based on roughness if mipmaps were available, using LOD. 
-  // For now, doing a basic lookup:
-  vec3 radiance = texture(skyMap, octEncode(R)).rgb;
+  // Blurring it manually to soften it, and watering down intensity
+  vec2 refUV = octEncode(R);
+  float blurSpread = 0.2 * roughness + 0.05; // large blur spread based on roughness
+  vec3 radiance = (
+    texture(skyMap, refUV).rgb +
+    texture(skyMap, refUV + vec2(blurSpread, 0.0)).rgb +
+    texture(skyMap, refUV + vec2(-blurSpread, 0.0)).rgb +
+    texture(skyMap, refUV + vec2(0.0, blurSpread)).rgb +
+    texture(skyMap, refUV + vec2(0.0, -blurSpread)).rgb +
+    texture(skyMap, refUV + vec2(blurSpread, blurSpread)).rgb +
+    texture(skyMap, refUV + vec2(-blurSpread, blurSpread)).rgb +
+    texture(skyMap, refUV + vec2(blurSpread, -blurSpread)).rgb +
+    texture(skyMap, refUV + vec2(-blurSpread, -blurSpread)).rgb
+  ) / 9.0 * 0.01;
   
   // Fresnel
   vec3 F0 = vec3(0.04);
@@ -141,6 +152,9 @@ void main() {
   // Combine IBL
   vec3 specularIBL = radiance * F; // Rough approximation for specular
   vec3 ambient = (kD * diffuseIBL + specularIBL) * ao;
+  
+  // Add a base background light to avoid pitch black meshes
+  ambient += vec3(0.05) * albedo * ao;
 
   outColor = vec4(diffuse * lightColor * ao + ambient, 1.0);
 }

@@ -752,9 +752,15 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
           .vertex_attribute_descriptions(&graphics_info.vertex_in.attributes)
       },
       input_assembly_state_builder: |graphics_info: &_| {
+        let topology = graphics_info.vertex_in.topology;
+        let is_strip = topology == vk::PrimitiveTopology::LINE_STRIP
+          || topology == vk::PrimitiveTopology::LINE_STRIP_WITH_ADJACENCY
+          || topology == vk::PrimitiveTopology::TRIANGLE_STRIP
+          || topology == vk::PrimitiveTopology::TRIANGLE_STRIP_WITH_ADJACENCY;
+        
         vk::PipelineInputAssemblyStateCreateInfo::default()
-          .topology(graphics_info.vertex_in.topology)
-          .primitive_restart_enable(false)
+          .topology(topology)
+          .primitive_restart_enable(is_strip)
       },
       tessellation_state_builder: |_| vk::PipelineTessellationStateCreateInfo::default(),
       viewport_state_builder: |graphics_info: &_| {

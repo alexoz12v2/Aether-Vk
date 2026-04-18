@@ -7,3 +7,6 @@
 [submodule "external/spirv-reflect"]
 	path = external/spirv-reflect
 	url = https://github.com/alexoz12v2/spirv-reflect-rs-no_std.git
+[submodule "external/anise"]
+	path = external/anise
+	url = https://github.com/alexoz12v2/anise_nostd.git

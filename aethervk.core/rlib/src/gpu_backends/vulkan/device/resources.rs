@@ -7,6 +7,8 @@ use oshal::{hash::FnvHasher, os::native::ThreadId};
 use ash::vk;
 use alloc::{boxed::Box, collections::VecDeque, sync, vec::Vec};
 use spirv_reflect::{ffi::SpvReflectResult_SPV_REFLECT_RESULT_SUCCESS, types::ReflectShaderStageFlags};
+use crate::gpu_backends::vulkan;
+use crate::gpu_backends::vulkan::device::{LogicalDevice, VmaDebugNameExt, VulkanDebugNameExt};
 use crate::simulation::comet::Texture;
 use vk_mem::Alloc;
 
@@ -72,6 +74,29 @@ enum DiscardItem {
   GenericHandle(Box<dyn DeviceResource>),
 }
 
+#[cfg(debug_assertions)]
+impl DiscardItem {
+  fn unique_id(&self) -> (u8, u64) {
+    use ash::vk::Handle;
+    match self {
+      Self::Buffer(b) => (0, b.buffer.as_raw()),
+      Self::Image(i) => (1, i.image.as_raw()),
+      Self::ImageView(v) => (2, v.as_raw()),
+      Self::Pipeline(p) => (3, p.as_raw()),
+      Self::PipelineLayout(l) => (4, l.as_raw()),
+      Self::DescriptorSetLayout(l) => (5, l.as_raw()),
+      Self::DescriptorPool(p, _) => (6, p.as_raw()),
+      Self::CommandPool(c) => (7, c.command_buffer.as_raw()),
+      Self::RenderPass(r) => (8, r.as_raw()),
+      Self::Framebuffer(f) => (9, f.as_raw()),
+      Self::GenericHandle(h) => {
+        let ptr: *const dyn DeviceResource = &**h;
+        (10, ptr as *const () as u64)
+      }
+    }
+  }
+}
+
 struct BufferDiscard {
   buffer: vk::Buffer,
   alloc: vk_mem::Allocation,
@@ -97,6 +122,8 @@ pub trait DiscardableResource {
 /// Note: this must not outlive device, hence don't expose it outside
 pub(super) struct DiscardPool {
   items: spin::Mutex<TimelineQueue<DiscardItem>>,
+  #[cfg(debug_assertions)]
+  queued_handles: spin::Mutex<hashbrown::HashSet<(u8, u64)>>,
 }
 
 unsafe impl Sync for DiscardPool {}
@@ -107,23 +134,37 @@ impl DiscardPool {
   pub unsafe fn new(cap: usize) -> Self {
     Self {
       items: spin::Mutex::new(TimelineQueue::with_capacity(cap)),
+      #[cfg(debug_assertions)]
+      queued_handles: spin::Mutex::new(hashbrown::HashSet::with_capacity(cap)),
     }
   }
 
-  pub fn discard_type_erased<T: DeviceResource + 'static>(&self, item: T, timeline: u64) {
+  fn push_item(&self, timeline: u64, item: DiscardItem) {
     let mut q = self.items.lock();
-    q.push(timeline, DiscardItem::GenericHandle(Box::new(item)));
+    #[cfg(debug_assertions)]
+    {
+      let handle = item.unique_id();
+      assert!(
+        self.queued_handles.lock().insert(handle),
+        "Resource discarded twice! Type: {}, Handle: {}",
+        handle.0,
+        handle.1
+      );
+    }
+    q.push(timeline, item);
+  }
+
+  pub fn discard_type_erased<T: DeviceResource + 'static>(&self, item: T, timeline: u64) {
+    self.push_item(timeline, DiscardItem::GenericHandle(Box::new(item)));
   }
 
   // TODO all other types of resources as needed
   pub fn discard_render_pass(&self, render_pass: vk::RenderPass, timeline: u64) {
-    let mut q = self.items.lock();
-    q.push(timeline, DiscardItem::RenderPass(render_pass));
+    self.push_item(timeline, DiscardItem::RenderPass(render_pass));
   }
 
   pub fn discard_framebuffer(&self, framebuffer: vk::Framebuffer, timeline: u64) {
-    let mut q = self.items.lock();
-    q.push(timeline, DiscardItem::Framebuffer(framebuffer));
+    self.push_item(timeline, DiscardItem::Framebuffer(framebuffer));
   }
 
   pub fn discard_buffer(
@@ -133,8 +174,7 @@ impl DiscardPool {
     alloc: vk_mem::Allocation,
     timeline: u64,
   ) {
-    let mut q = self.items.lock();
-    q.push(
+    self.push_item(
       timeline,
       DiscardItem::Buffer(BufferDiscard {
         buffer,
@@ -152,8 +192,7 @@ impl DiscardPool {
     manager: sync::Arc<commands::CommandPools>,
     timeline: u64,
   ) {
-    let mut q = self.items.lock();
-    q.push(
+    self.push_item(
       timeline,
       DiscardItem::CommandPool(CmdBufDiscard {
         thread_id,
@@ -171,8 +210,7 @@ impl DiscardPool {
     alloc: vk_mem::Allocation,
     timeline: u64,
   ) {
-    let mut q = self.items.lock();
-    q.push(
+    self.push_item(
       timeline,
       DiscardItem::Image(ImageDiscard {
         image,
@@ -183,13 +221,11 @@ impl DiscardPool {
   }
 
   pub fn discard_image_view(&self, image_view: vk::ImageView, timeline: u64) {
-    let mut q = self.items.lock();
-    q.push(timeline, DiscardItem::ImageView(image_view));
+    self.push_item(timeline, DiscardItem::ImageView(image_view));
   }
 
   pub fn discard_descriptor_set_layout(&self, layout: vk::DescriptorSetLayout, timeline: u64) {
-    let mut q = self.items.lock();
-    q.push(timeline, DiscardItem::DescriptorSetLayout(layout));
+    self.push_item(timeline, DiscardItem::DescriptorSetLayout(layout));
   }
 
   pub fn discard_descriptor_pool(
@@ -198,18 +234,15 @@ impl DiscardPool {
     manager: sync::Arc<descriptors::DescriptorPools>,
     timeline: u64,
   ) {
-    let mut q = self.items.lock();
-    q.push(timeline, DiscardItem::DescriptorPool(pool, manager));
+    self.push_item(timeline, DiscardItem::DescriptorPool(pool, manager));
   }
 
   pub fn discard_pipeline(&self, pipeline: vk::Pipeline, timeline: u64) {
-    let mut q = self.items.lock();
-    q.push(timeline, DiscardItem::Pipeline(pipeline));
+    self.push_item(timeline, DiscardItem::Pipeline(pipeline));
   }
 
   pub fn discard_pipeline_layout(&self, pipeline_layout: vk::PipelineLayout, timeline: u64) {
-    let mut q = self.items.lock();
-    q.push(timeline, DiscardItem::PipelineLayout(pipeline_layout));
+    self.push_item(timeline, DiscardItem::PipelineLayout(pipeline_layout));
   }
 
   pub fn destroy_discarded_resources_all(&self, device: &ash::Device) {
@@ -229,60 +262,69 @@ impl DiscardPool {
 
   fn destroy_discarded_resources_internal(&self, device: &ash::Device, timeline: u64) {
     let mut items = self.items.lock();
-    items.drain_ready(timeline, |item| match item {
-      DiscardItem::Buffer(BufferDiscard {
-        buffer,
-        alloc,
-        allocator,
-      }) => unsafe {
-        vk_mem::ffi::vmaDestroyBuffer(allocator, buffer, alloc.get_raw());
-      },
-      DiscardItem::Image(ImageDiscard {
-        image,
-        alloc,
-        allocator,
-      }) => unsafe {
-        vk_mem::ffi::vmaDestroyImage(allocator, image, alloc.get_raw());
-      },
-      DiscardItem::Pipeline(pipeline) => {
-        unsafe { device.destroy_pipeline(pipeline, None) };
+    #[cfg(debug_assertions)]
+    let mut queued_handles = self.queued_handles.lock();
+
+    items.drain_ready(timeline, |item| {
+      #[cfg(debug_assertions)]
+      {
+        queued_handles.remove(&item.unique_id());
       }
-      DiscardItem::PipelineLayout(pipeline_layout) => {
-        unsafe { device.destroy_pipeline_layout(pipeline_layout, None) };
-      }
-      DiscardItem::DescriptorSetLayout(layout) => {
-        unsafe { device.destroy_descriptor_set_layout(layout, None) };
-      }
-      DiscardItem::DescriptorPool(pool, manager) => {
-        // return the pool to the manager for recycling
-        manager.recycle(device, pool);
-      }
-      DiscardItem::CommandPool(CmdBufDiscard {
-        thread_id,
-        command_buffer,
-        manager,
-        id,
-      }) => {
-        let _x = manager.recycle(thread_id, id, command_buffer);
-        // leaking if we didn't manage to find it!
-        #[cfg(debug_assertions)]
-        {
-          if _x.is_err() {
-            panic!("aaa");
+      match item {
+        DiscardItem::Buffer(BufferDiscard {
+          buffer,
+          alloc,
+          allocator,
+        }) => unsafe {
+          vk_mem::ffi::vmaDestroyBuffer(allocator, buffer, alloc.get_raw());
+        },
+        DiscardItem::Image(ImageDiscard {
+          image,
+          alloc,
+          allocator,
+        }) => unsafe {
+          vk_mem::ffi::vmaDestroyImage(allocator, image, alloc.get_raw());
+        },
+        DiscardItem::Pipeline(pipeline) => {
+          unsafe { device.destroy_pipeline(pipeline, None) };
+        }
+        DiscardItem::PipelineLayout(pipeline_layout) => {
+          unsafe { device.destroy_pipeline_layout(pipeline_layout, None) };
+        }
+        DiscardItem::DescriptorSetLayout(layout) => {
+          unsafe { device.destroy_descriptor_set_layout(layout, None) };
+        }
+        DiscardItem::DescriptorPool(pool, manager) => {
+          // return the pool to the manager for recycling
+          manager.recycle(device, pool);
+        }
+        DiscardItem::CommandPool(CmdBufDiscard {
+          thread_id,
+          command_buffer,
+          manager,
+          id,
+        }) => {
+          let _x = manager.recycle(thread_id, id, command_buffer);
+          // leaking if we didn't manage to find it!
+          #[cfg(debug_assertions)]
+          {
+            if _x.is_err() {
+              panic!("aaa");
+            }
           }
         }
-      }
-      DiscardItem::ImageView(image_view) => unsafe {
-        device.destroy_image_view(image_view, None);
-      },
-      DiscardItem::RenderPass(render_pass) => unsafe {
-        device.destroy_render_pass(render_pass, None);
-      },
-      DiscardItem::Framebuffer(framebuffer) => unsafe {
-        device.destroy_framebuffer(framebuffer, None);
-      },
-      DiscardItem::GenericHandle(mut handle) => {
-        handle.cleanup(device);
+        DiscardItem::ImageView(image_view) => unsafe {
+          device.destroy_image_view(image_view, None);
+        },
+        DiscardItem::RenderPass(render_pass) => unsafe {
+          device.destroy_render_pass(render_pass, None);
+        },
+        DiscardItem::Framebuffer(framebuffer) => unsafe {
+          device.destroy_framebuffer(framebuffer, None);
+        },
+        DiscardItem::GenericHandle(mut handle) => {
+          handle.cleanup(device);
+        }
       }
     });
   }
@@ -323,13 +365,14 @@ impl Image {
   }
 
   pub fn new_storage_2d(
-    device: &ash::Device,
+    device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
     width: u32,
     height: u32,
     format: vk::Format,
     graphics_queue_family: u32,
     compute_queue_family: u32,
+    debug_name: &str,
   ) -> GpuResult<Self> {
     let mut sharing_mode = vk::SharingMode::EXCLUSIVE;
     let mut queue_family_indices = [graphics_queue_family, compute_queue_family];
@@ -361,7 +404,8 @@ impl Image {
     allocation_create_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
 
     let (image, alloc, _alloc_info) =
-      unsafe { allocator.create_image_with_alloc_info(&image_info, &allocation_create_info) }?;
+      unsafe { allocator.create_image_with_alloc_info(&image_info, &allocation_create_info) }
+        .with_name(device, &alloc::format!("VkImage_Storage_2D_{}", debug_name))?;
 
     let image_view_info = vk::ImageViewCreateInfo::default()
       .image(image)
@@ -377,7 +421,10 @@ impl Image {
           .level_count(1),
       );
     let image_view = unsafe {
-      let res = device.create_image_view(&image_view_info, None);
+      let res = device.create_image_view(&image_view_info, None).with_name(
+        device,
+        &alloc::format!("VkImageView_Storage_2D_{}", debug_name),
+      );
       if res.is_err() {
         let mut mut_alloc = alloc;
         allocator.destroy_image(image, &mut mut_alloc);
@@ -393,7 +440,7 @@ impl Image {
   }
 
   pub fn new_storage_3d(
-    device: &ash::Device,
+    device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
     width: u32,
     height: u32,
@@ -401,6 +448,7 @@ impl Image {
     format: vk::Format,
     graphics_queue_family: u32,
     compute_queue_family: u32,
+    debug_name: &str,
   ) -> GpuResult<Self> {
     let mut sharing_mode = vk::SharingMode::EXCLUSIVE;
     let mut queue_family_indices = [graphics_queue_family, compute_queue_family];
@@ -432,7 +480,8 @@ impl Image {
     allocation_create_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
 
     let (image, alloc, _alloc_info) =
-      unsafe { allocator.create_image_with_alloc_info(&image_info, &allocation_create_info) }?;
+      unsafe { allocator.create_image_with_alloc_info(&image_info, &allocation_create_info) }
+        .with_name(device, &alloc::format!("VkImage_Storage_3D_{}", debug_name))?;
 
     let image_view_info = vk::ImageViewCreateInfo::default()
       .image(image)
@@ -448,7 +497,10 @@ impl Image {
           .level_count(1),
       );
     let image_view = unsafe {
-      let res = device.create_image_view(&image_view_info, None);
+      let res = device.create_image_view(&image_view_info, None).with_name(
+        device,
+        &alloc::format!("VkImageView_Storage3D_{}", debug_name),
+      );
       if res.is_err() {
         let mut mut_alloc = alloc;
         allocator.destroy_image(image, &mut mut_alloc);
@@ -464,14 +516,14 @@ impl Image {
   }
 
   pub fn new_2d(
-    device: &ash::Device,
-    synchronization2: &ash::khr::synchronization2::Device,
+    device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
     command_buffer: vk::CommandBuffer,
     discard_pool: &DiscardPool,
     timeline: u64,
     texture: &Texture,
     usage: vk::ImageUsageFlags,
+    debug_name: &str,
   ) -> GpuResult<Self> {
     let image_size = (texture.data.len()) as vk::DeviceSize;
     if image_size == 0 {
@@ -492,7 +544,11 @@ impl Image {
       ..Default::default()
     };
     let (staging_buffer, staging_allocation, staging_alloc_info) =
-      unsafe { allocator.create_buffer_get_info(&staging_buffer_info, &staging_alloc_info) }?;
+      unsafe { allocator.create_buffer_get_info(&staging_buffer_info, &staging_alloc_info) }
+        .with_name(
+          device,
+          &alloc::format!("VkBuffer_New2D_Staging_{}", debug_name),
+        )?;
 
     unsafe {
       core::ptr::copy_nonoverlapping(
@@ -529,7 +585,8 @@ impl Image {
     allocation_create_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
 
     let (image, mut alloc, _alloc_info) =
-      unsafe { allocator.create_image_with_alloc_info(&image_info, &allocation_create_info) }?;
+      unsafe { allocator.create_image_with_alloc_info(&image_info, &allocation_create_info) }
+        .with_name(device, &alloc::format!("VkImage_New2D_{}", debug_name))?;
 
     // 2.1 Create Image View, then start recording upload data commands
     let image_view_info = vk::ImageViewCreateInfo::default()
@@ -546,7 +603,9 @@ impl Image {
           .level_count(1),
       );
     let image_view = unsafe {
-      let res = device.create_image_view(&image_view_info, None);
+      let res = device
+        .create_image_view(&image_view_info, None)
+        .with_name(device, &alloc::format!("VkImageView_New2D_{}", debug_name));
       if res.is_err() {
         allocator.destroy_image(image, &mut alloc);
       }
@@ -574,7 +633,9 @@ impl Image {
     let dependency_info_to_transfer = vk::DependencyInfo::default()
       .image_memory_barriers(core::slice::from_ref(&image_barrier_to_transfer));
     unsafe {
-      synchronization2.cmd_pipeline_barrier2(command_buffer, &dependency_info_to_transfer);
+      device
+        .synchronization2
+        .cmd_pipeline_barrier2(command_buffer, &dependency_info_to_transfer);
     }
 
     // 4. Copy buffer to image
@@ -625,7 +686,9 @@ impl Image {
     let dependency_info_to_shader_read = vk::DependencyInfo::default()
       .image_memory_barriers(core::slice::from_ref(&image_barrier_to_shader_read));
     unsafe {
-      synchronization2.cmd_pipeline_barrier2(command_buffer, &dependency_info_to_shader_read);
+      device
+        .synchronization2
+        .cmd_pipeline_barrier2(command_buffer, &dependency_info_to_shader_read);
     }
 
     // 6. Schedule staging buffer for destruction.
@@ -688,6 +751,13 @@ pub(super) struct SunRenderResource {
   pub image: Option<Image>,
   pub descriptor_set: Option<NonZeroHandle<vk::DescriptorSet>>,
   pub is_generated: bool,
+  pub compute_descriptor_pool: Option<vk::DescriptorPool>,
+  pub compute_descriptor_set_layout: Option<vk::DescriptorSetLayout>,
+  pub compute_descriptor_set: Option<vk::DescriptorSet>,
+  pub compute_pipeline: Option<crate::gpu_backends::vulkan::utils::NonZeroHandle<vk::Pipeline>>,
+  pub compute_pipeline_layout: Option<vk::PipelineLayout>,
+  pub params_buffer: Option<vk::Buffer>,
+  pub params_alloc: Option<vk_mem::Allocation>,
 }
 
 pub(super) struct ForwardMeshRenderResource {
@@ -803,7 +873,7 @@ impl ForwardMeshRenderResource {
   /// - `sampler` should outlive this object
   #[allow(clippy::too_many_arguments)]
   pub(super) unsafe fn new(
-    device: &ash::Device,
+    device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
     command_buffer: vk::CommandBuffer,
     discard_pool: &DiscardPool,
@@ -819,6 +889,7 @@ impl ForwardMeshRenderResource {
     sampler: NonZeroHandle<vk::Sampler>,
     descriptor_set: NonZeroHandle<vk::DescriptorSet>,
     dummy_texture: &Image,
+    debug_name: &str,
   ) -> GpuResult<Self> {
     let mut janitor = DeviceResourceJanitor::<'_, 7>::new(device);
     let vma_allocator = allocator.get_raw();
@@ -832,6 +903,7 @@ impl ForwardMeshRenderResource {
       timeline,
       position_data,
       vk::BufferUsageFlags::VERTEX_BUFFER,
+      &alloc::format!("PositionBuffer_{}", debug_name),
     )?;
     let pos_alloc = position_vertex_buffer.allocation;
     janitor
@@ -852,6 +924,7 @@ impl ForwardMeshRenderResource {
       timeline,
       attribute_data,
       vk::BufferUsageFlags::VERTEX_BUFFER,
+      &alloc::format!("AttributesBuffer_{}", debug_name),
     )?;
     let attr_alloc = attributes_vertex_buffer.allocation;
     janitor
@@ -872,6 +945,7 @@ impl ForwardMeshRenderResource {
       timeline,
       index_data,
       vk::BufferUsageFlags::INDEX_BUFFER,
+      &alloc::format!("IndexBuffer_{}", debug_name),
     )?;
     let idx_alloc = index_buffer.allocation;
     janitor
@@ -1012,11 +1086,7 @@ impl CursorRenderResourceArchetype {
     }
   }
 
-  pub unsafe fn new(
-    device: &ash::Device,
-    vertex_shader: &Shader,
-    fragment_shader: &Shader,
-  ) -> GpuResult<Self> {
+  pub unsafe fn new(device: &vulkan::device::LogicalDevice) -> GpuResult<Self> {
     let push_contant_ranges = alloc::vec![vk::PushConstantRange {
       stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
       offset: 0,
@@ -1029,7 +1099,8 @@ impl CursorRenderResourceArchetype {
       ..Default::default()
     };
 
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None)? };
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
+      .with_name(device, "VkPipelineLayout_CursorRenderResourceArchetype")?;
 
     Ok(Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
@@ -1039,6 +1110,33 @@ impl CursorRenderResourceArchetype {
     })
   }
 
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_pipeline_layout(layout, timeline);
+  }
+}
+
+pub(super) struct SkyRenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub pipeline_key: Option<PipelineKey>,
+  pub descriptor_set_layout: NonZeroHandle<vk::DescriptorSetLayout>,
+  pub descriptor_set: Option<NonZeroHandle<vk::DescriptorSet>>,
+}
+
+impl SkyRenderResourceArchetype {
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_pipeline_layout(layout, timeline);
+    discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
+  }
+}
+
+pub(super) struct GridRenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub pipeline_key: Option<PipelineKey>,
+}
+
+impl GridRenderResourceArchetype {
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
@@ -1066,11 +1164,7 @@ impl SunRenderResourceArchetype {
     }
   }
 
-  pub unsafe fn new(
-    device: &ash::Device,
-    vertex_shader: &Shader,
-    fragment_shader: &Shader,
-  ) -> GpuResult<Self> {
+  pub unsafe fn new(device: &vulkan::device::LogicalDevice) -> GpuResult<Self> {
     let push_contant_ranges = alloc::vec![vk::PushConstantRange {
       stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
       offset: 0,
@@ -1085,14 +1179,16 @@ impl SunRenderResourceArchetype {
 
     let set_layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
     let descriptor_set_layout =
-      unsafe { device.create_descriptor_set_layout(&set_layout_info, None) }?;
+      unsafe { device.create_descriptor_set_layout(&set_layout_info, None) }
+        .with_name(device, "VkDescriptorSetLayout_SunRenderResourceArchetype")?;
 
     let set_layouts = [descriptor_set_layout];
     let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
       .push_constant_ranges(&push_contant_ranges)
       .set_layouts(&set_layouts);
 
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
+      .with_name(device, "VkPipelineLayout_SunRenderResourceArchetype")?;
 
     Ok(Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
@@ -1107,98 +1203,6 @@ impl SunRenderResourceArchetype {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
     discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
-  }
-}
-
-pub(super) struct SkyRenderResourceArchetype {
-  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
-  pub descriptor_set_layout: NonZeroHandle<vk::DescriptorSetLayout>,
-  pub descriptor_pool: vk::DescriptorPool,
-  pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
-  pub graphics_info: Option<GraphicsInfo>,
-  pub pipeline_key: Option<PipelineKey>,
-}
-
-unsafe impl Sync for SkyRenderResourceArchetype {}
-unsafe impl Send for SkyRenderResourceArchetype {}
-
-impl SkyRenderResourceArchetype {
-  pub fn with_graphics_info(self, graphics_info: GraphicsInfo) -> Self {
-    let pipeline_key = graphics_info.pipeline_key();
-    Self {
-      graphics_info: Some(graphics_info),
-      pipeline_key: Some(pipeline_key),
-      ..self
-    }
-  }
-
-  pub unsafe fn new(
-    device: &ash::Device,
-    sky_image_view: vk::ImageView,
-    sampler: vk::Sampler,
-  ) -> GpuResult<Self> {
-    let push_constant_ranges = alloc::vec![vk::PushConstantRange {
-      stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-      offset: 0,
-      size: core::mem::size_of::<crate::gpu::SkyPushConstants>() as u32,
-    }];
-
-    let bindings = [vk::DescriptorSetLayoutBinding::default()
-      .binding(0)
-      .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-      .descriptor_count(1)
-      .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
-
-    let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    let descriptor_set_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }?;
-
-    let layouts = [descriptor_set_layout];
-    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
-      .set_layouts(&layouts)
-      .push_constant_ranges(&push_constant_ranges);
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
-
-    let pool_sizes = [vk::DescriptorPoolSize::default()
-      .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-      .descriptor_count(1)];
-    let pool_info = vk::DescriptorPoolCreateInfo::default()
-      .pool_sizes(&pool_sizes)
-      .max_sets(1);
-    let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }?;
-
-    let alloc_info = vk::DescriptorSetAllocateInfo::default()
-      .descriptor_pool(descriptor_pool)
-      .set_layouts(&layouts);
-    let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?[0];
-
-    let image_info = vk::DescriptorImageInfo::default()
-      .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-      .image_view(sky_image_view)
-      .sampler(sampler);
-    let write_descriptor_set = vk::WriteDescriptorSet::default()
-      .dst_set(descriptor_set)
-      .dst_binding(0)
-      .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-      .image_info(core::slice::from_ref(&image_info));
-    unsafe { device.update_descriptor_sets(&[write_descriptor_set], &[]) };
-
-    Ok(Self {
-      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
-      descriptor_set_layout: unsafe { NonZeroHandle::new_unchecked(descriptor_set_layout) },
-      descriptor_pool,
-      descriptor_set: unsafe { NonZeroHandle::new_unchecked(descriptor_set) },
-      graphics_info: None,
-      pipeline_key: None,
-    })
-  }
-}
-
-impl DiscardableResource for SkyRenderResourceArchetype {
-  fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
-    let layout = self.pipeline_layout.get();
-    discard_pool.discard_pipeline_layout(layout, timeline);
-    discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
-    unsafe { device.destroy_descriptor_pool(self.descriptor_pool, None) };
   }
 }
 
@@ -1237,10 +1241,9 @@ impl ForwardMeshRenderResourceArchetype {
   /// Safety:
   /// - `pipeline_key` must refer to a pipeline created with `vertex_shader` and `fragment_shader`,
   pub unsafe fn new(
-    device: &ash::Device,
+    device: &vulkan::device::LogicalDevice,
     vertex_shader: &Shader,
     fragment_shader: &Shader,
-    synchronization2: &ash::khr::synchronization2::Device,
     allocator: &vk_mem::Allocator,
     discard_pool: &DiscardPool,
     queue: &super::Queue,
@@ -1261,34 +1264,6 @@ impl ForwardMeshRenderResourceArchetype {
       return Err(GpuError::InvalidShader);
     }
     // --------------------------- 1. Descriptor Sets -------------------------------------------
-    // Helper to map descriptor types from spirv-reflect to ash and handle unsupported cases.
-    let map_descriptor_type =
-      |reflect_type: spirv_reflect::types::ReflectDescriptorType| -> GpuResult<vk::DescriptorType> {
-        use spirv_reflect::types::ReflectDescriptorType;
-        Ok(match reflect_type {
-          ReflectDescriptorType::Sampler => vk::DescriptorType::SAMPLER,
-          ReflectDescriptorType::CombinedImageSampler => vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-          ReflectDescriptorType::SampledImage => vk::DescriptorType::SAMPLED_IMAGE,
-          ReflectDescriptorType::StorageImage => vk::DescriptorType::STORAGE_IMAGE,
-          ReflectDescriptorType::UniformTexelBuffer => vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
-          ReflectDescriptorType::StorageTexelBuffer => vk::DescriptorType::STORAGE_TEXEL_BUFFER,
-          ReflectDescriptorType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
-          ReflectDescriptorType::StorageBuffer => vk::DescriptorType::STORAGE_BUFFER,
-          ReflectDescriptorType::UniformBufferDynamic => vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
-          ReflectDescriptorType::StorageBufferDynamic => vk::DescriptorType::STORAGE_BUFFER_DYNAMIC,
-          ReflectDescriptorType::InputAttachment => vk::DescriptorType::INPUT_ATTACHMENT,
-          ReflectDescriptorType::AccelerationStructureKHR => {
-            vk::DescriptorType::ACCELERATION_STRUCTURE_KHR
-          }
-          _ => {
-            return Err(GpuError::BackendSpecific(alloc::fmt::format(format_args!(
-              "Unsupported descriptor type: {:?}",
-              reflect_type
-            ))));
-          }
-        })
-      };
-
     // This will hold the merged layout information.
     // Map<set_number, Map<binding_number, vk::DescriptorSetLayoutBinding>>
     let mut merged_sets: hashbrown::HashMap<
@@ -1399,7 +1374,12 @@ impl ForwardMeshRenderResourceArchetype {
       .set_layouts(&descriptor_set_layouts)
       .push_constant_ranges(&push_constant_ranges);
 
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_create_info, None) }?;
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_create_info, None) }
+      .with_name(
+        device,
+        "VkPipelineLayout_ForwardMeshRenderResourceArchetype",
+      )?;
+
     janitor
       .push(FunctionalDeviceResource::new(
         pipeline_layout,
@@ -1527,13 +1507,13 @@ impl ForwardMeshRenderResourceArchetype {
 
       let image = Image::new_2d(
         device,
-        synchronization2,
         allocator,
         command_buffer,
         discard_pool,
         NEVER_DISCARD_TIMELINE,
         &dummy_texture,
         vk::ImageUsageFlags::SAMPLED,
+        "ForwardMeshRenderResourceArchetype_DummyTexture",
       );
       if image.is_err() {
         return Err(unsafe { image.unwrap_err_unchecked() });
@@ -1569,10 +1549,11 @@ impl ForwardMeshRenderResourceArchetype {
 
   pub fn create_descriptor_set_from_layout_at_index(
     &self,
-    device: &ash::Device,
+    device: &vulkan::device::LogicalDevice,
     descriptor_pools: &sync::Arc<DescriptorPools>,
     discard_pool: &DiscardPool,
     index: usize,
+    debug_name: &str,
   ) -> GpuResult<NonZeroHandle<vk::DescriptorSet>> {
     const NEVER_DISCARD_TIMELINE: u64 = u64::MAX;
 
@@ -1581,7 +1562,13 @@ impl ForwardMeshRenderResourceArchetype {
       .get(index)
       .ok_or(GpuError::InvalidArgument)?
       .get();
-    descriptor_pools.allocate(device, layout, discard_pool, NEVER_DISCARD_TIMELINE)
+    descriptor_pools.allocate(
+      device,
+      layout,
+      discard_pool,
+      NEVER_DISCARD_TIMELINE,
+      debug_name,
+    )
   }
 }
 
@@ -1632,13 +1619,14 @@ impl DiscardableResource for FrameResourceArchetype {
 
 /// Reusable helper function to perform the explicit staging buffer upload pattern.
 fn create_buffer_with_staging<T: Copy>(
-  device: &ash::Device,
+  device: &vulkan::device::LogicalDevice,
   allocator: &vk_mem::Allocator,
   command_buffer: vk::CommandBuffer,
   discard_pool: &DiscardPool,
   timeline: u64,
   data: &[T],
   usage: vk::BufferUsageFlags,
+  debug_name: &str,
 ) -> GpuResult<Buffer> {
   let buffer_size = (core::mem::size_of::<T>() * data.len()) as vk::DeviceSize;
   if buffer_size == 0 {
@@ -1659,7 +1647,8 @@ fn create_buffer_with_staging<T: Copy>(
     ..Default::default()
   };
   let (staging_buffer, staging_allocation, staging_alloc_info) =
-    unsafe { allocator.create_buffer_get_info(&staging_buffer_info, &staging_alloc_info) }?;
+    unsafe { allocator.create_buffer_get_info(&staging_buffer_info, &staging_alloc_info) }
+      .with_name(device, &alloc::format!("VkBuffer_Staging_{}", debug_name))?;
 
   // 2. Create device buffer (GPU-local). In case of failure, we clean up the staging buffer.
   let (device_buffer, device_allocation) = {
@@ -1672,7 +1661,9 @@ fn create_buffer_with_staging<T: Copy>(
       preferred_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
       ..Default::default()
     };
-    match unsafe { allocator.create_buffer(&device_buffer_info, &device_alloc_info) } {
+    match unsafe { allocator.create_buffer(&device_buffer_info, &device_alloc_info) }
+      .with_name(device, &alloc::format!("VkBuffer_{}", debug_name))
+    {
       Ok(result) => result,
       Err(err) => {
         unsafe {
@@ -1759,5 +1750,34 @@ fn create_buffer_with_staging<T: Copy>(
   Ok(Buffer {
     buffer: unsafe { NonZeroHandle::new_unchecked(device_buffer) },
     allocation: device_allocation,
+  })
+}
+
+// Helper to map descriptor types from spirv-reflect to ash and handle unsupported cases.
+fn map_descriptor_type(
+  reflect_type: spirv_reflect::types::ReflectDescriptorType,
+) -> GpuResult<vk::DescriptorType> {
+  use spirv_reflect::types::ReflectDescriptorType;
+  Ok(match reflect_type {
+    ReflectDescriptorType::Sampler => vk::DescriptorType::SAMPLER,
+    ReflectDescriptorType::CombinedImageSampler => vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+    ReflectDescriptorType::SampledImage => vk::DescriptorType::SAMPLED_IMAGE,
+    ReflectDescriptorType::StorageImage => vk::DescriptorType::STORAGE_IMAGE,
+    ReflectDescriptorType::UniformTexelBuffer => vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
+    ReflectDescriptorType::StorageTexelBuffer => vk::DescriptorType::STORAGE_TEXEL_BUFFER,
+    ReflectDescriptorType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
+    ReflectDescriptorType::StorageBuffer => vk::DescriptorType::STORAGE_BUFFER,
+    ReflectDescriptorType::UniformBufferDynamic => vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
+    ReflectDescriptorType::StorageBufferDynamic => vk::DescriptorType::STORAGE_BUFFER_DYNAMIC,
+    ReflectDescriptorType::InputAttachment => vk::DescriptorType::INPUT_ATTACHMENT,
+    ReflectDescriptorType::AccelerationStructureKHR => {
+      vk::DescriptorType::ACCELERATION_STRUCTURE_KHR
+    }
+    _ => {
+      return Err(GpuError::BackendSpecific(alloc::fmt::format(format_args!(
+        "Unsupported descriptor type: {:?}",
+        reflect_type
+      ))));
+    }
   })
 }

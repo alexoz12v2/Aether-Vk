@@ -1,6 +1,5 @@
 use core::{
   ffi,
-  ptr,
   hash::{Hash, Hasher},
 };
 use ahash::AHasher;
@@ -53,7 +52,7 @@ pub struct SkyPushConstants {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct SunPushConstants {
   pub model_view_proj: [f32; 16],
   pub model_inv: [f32; 16],
@@ -156,6 +155,7 @@ pub trait RenderDevice: Send + Sync {
     entity_id: EntityId,
     component: &PhysicalMeshComponent,
     handle: PresentationEngineHandle,
+    debug_name: &str,
   ) -> GpuResult<ResourceUploadResult>;
 
   /// Generates the background sky image using compute shader
@@ -175,14 +175,15 @@ pub trait RenderDevice: Send + Sync {
     frame_index: usize,
   ) -> GpuResult<SwapchainStatus>;
 
+  /// Start for an interface to draw something on the screen. Gets a handle to store rendering
+  /// state setting commands
+  
   fn download_windowless_image(
     &self,
     handle: PresentationEngineHandle,
     buffer: &mut [u8],
   ) -> GpuResult<()>;
 
-  /// Start for an interface to draw something on the screen. Gets a handle to store rendering
-  /// state setting commands
   fn get_command_buffer(&self) -> GpuResult<CommandBufferHandle>;
 
   fn begin_command_buffer(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
@@ -232,6 +233,13 @@ pub trait RenderDevice: Send + Sync {
 
   fn draw(&self, cmd_buffer: CommandBufferHandle, vertex_count: u32) -> GpuResult<()>;
 
+  fn update_sun(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    entity_id: crate::scene::EntityId,
+    component: &crate::scene::SunComponent,
+  ) -> GpuResult<()>;
+
   fn render_sun(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -245,7 +253,18 @@ pub trait RenderDevice: Send + Sync {
   fn render_sky(
     &self,
     cmd_buffer: CommandBufferHandle,
-    inv_view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+    entity_id: crate::scene::EntityId,
+    component: &crate::scene::SkyComponent,
+    view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+  ) -> GpuResult<()>;
+
+  fn render_grid(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    entity_id: crate::scene::EntityId,
+    component: &crate::scene::GridComponent,
+    view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+    camera_pos: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
   ) -> GpuResult<()>;
 
   fn end_render_pass(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
@@ -352,26 +371,23 @@ pub struct OpaqueNativeHandleInfo {
   pub ptr1: *mut ffi::c_void,
 }
 
-#[repr(u32)]
-#[derive(Debug, Clone, Copy)]
+/// Parameters passed from Avalonia to create the surface/swapchain
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum PresentationEngineType {
-  Window = 0,
-  WindowLess = 1,
+  Window,
+  WindowLess,
 }
 
-/// Parameters passed from Avalonia to create the surface/swapchain
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
 pub struct PresentationEngineParams {
   pub width: u32,
   pub height: u32,
   pub vsync: bool,
-  pub ty: PresentationEngineType,
   pub window_info: OpaqueNativeHandleInfo,
+  pub ty: PresentationEngineType,
 }
 
 impl PresentationEngineParams {
-  /// vsync and window_info are not used in windowless presentation engine
   pub fn windowless(width: u32, height: u32) -> Self {
     Self {
       width,
@@ -379,11 +395,12 @@ impl PresentationEngineParams {
       vsync: false,
       ty: PresentationEngineType::WindowLess,
       window_info: OpaqueNativeHandleInfo {
-        ptr0: ptr::null_mut(),
-        ptr1: ptr::null_mut(),
+        ptr0: core::ptr::null_mut(),
+        ptr1: core::ptr::null_mut(),
       },
     }
   }
 }
+
 
 pub mod frame;

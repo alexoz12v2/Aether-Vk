@@ -393,6 +393,8 @@ pub enum FsError {
   CouldNotReadFile,
   CouldNotGetFileSize,
   CouldNotGetCurrentExe,
+  CouldNotCreateFile,
+  CouldNotWriteFile,
 }
 
 pub fn current_exe() -> Result<PathBuf, FsError> {
@@ -573,6 +575,78 @@ pub fn read(path: &Path) -> Result<Vec<u8>, FsError> {
       Err(FsError::CouldNotReadFile)
     } else {
       Ok(buffer)
+    }
+  }
+}
+
+pub fn write(path: &Path, content: &[u8]) -> Result<(), FsError> {
+  #[cfg(windows)]
+  {
+    use windows::Win32::Storage::FileSystem::{
+      CreateFileW, WriteFile, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
+    };
+    use windows::Win32::Foundation::{GENERIC_WRITE, CloseHandle, INVALID_HANDLE_VALUE};
+
+    let mut path_buf = path.to_pathbuf();
+    let handle = unsafe {
+      CreateFileW(
+        windows::core::PCWSTR(path_buf.as_ptr_mut()),
+        GENERIC_WRITE.0,
+        FILE_SHARE_READ,
+        None,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        None,
+      )
+    }
+    .map_err(|_| FsError::CouldNotCreateFile)?;
+
+    if handle == INVALID_HANDLE_VALUE {
+      return Err(FsError::CouldNotCreateFile);
+    }
+
+    let mut bytes_written: u32 = 0;
+    let success = unsafe {
+      WriteFile(
+        handle,
+        Some(content),
+        Some(core::ptr::from_mut(&mut bytes_written)),
+        None,
+      )
+    };
+
+    unsafe {
+      CloseHandle(handle)
+    }
+    .map_err(|_| FsError::CouldNotCreateFile)?;
+
+    if success.is_err() {
+      Err(FsError::CouldNotWriteFile)
+    } else {
+      Ok(())
+    }
+  }
+  #[cfg(not(windows))]
+  {
+    use libc::{open, write, close, O_WRONLY, O_CREAT, O_TRUNC};
+
+    let mut path_buf = path.to_pathbuf();
+    // 0o666 = read and write for owner, group, and others
+    let fd = unsafe { open(path_buf.as_ptr_mut(), O_WRONLY | O_CREAT | O_TRUNC, 0o666) };
+    if fd < 0 {
+      return Err(FsError::CouldNotCreateFile);
+    }
+
+    let bytes_written = unsafe { write(fd, content.as_ptr() as _, content.len()) };
+
+    unsafe {
+      close(fd);
+    }
+
+    if bytes_written < 0 || bytes_written as usize != content.len() {
+      Err(FsError::CouldNotWriteFile)
+    } else {
+      Ok(())
     }
   }
 }

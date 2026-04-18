@@ -4,7 +4,7 @@ use aethervk_core_rlib::{
     frame::{self, RenderPath},
   },
   scene::{
-    CameraComponent, EntityId, PhysicalMeshComponent, Scene, SunComponent, TransformComponent,
+    CameraComponent, EntityId, PhysicalMeshComponent, Scene, SkyComponent, SunComponent, TransformComponent,
   },
   types::RuntimeParams,
 };
@@ -23,6 +23,7 @@ struct RenderPayloadData<'a> {
   camera_entity: EntityId,
   mesh_entity: EntityId,
   sun_entity: EntityId,
+  sky_entity: EntityId,
   width: u32,
   height: u32,
 }
@@ -94,8 +95,9 @@ fn main() {
     .register_component::<PhysicalMeshComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
   scene.register_component::<CameraComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
   scene.register_component::<SunComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
+  scene.register_component::<SkyComponent>(&[]);
 
-  let camera_entity = scene.spawn_entity();
+  let camera_entity = scene.spawn_entity("entity");
   scene
     .add_component(
       camera_entity,
@@ -115,7 +117,7 @@ fn main() {
     )
     .unwrap();
 
-  let mesh_entity = scene.spawn_entity();
+  let mesh_entity = scene.spawn_entity("entity");
   scene
     .add_component(
       mesh_entity,
@@ -144,7 +146,9 @@ fn main() {
     .expect("Failed to load comet");
   scene.add_component(mesh_entity, PhysicalMeshComponent { mesh: comet }).unwrap();
 
-  let sun_entity = scene.spawn_entity();
+  let sky_entity = scene.spawn_entity("sky");
+  scene.add_component(sky_entity, SkyComponent {}).unwrap();
+  let sun_entity = scene.spawn_entity("sun");
   scene
     .add_component(
       sun_entity,
@@ -170,6 +174,7 @@ fn main() {
     camera_entity,
     mesh_entity,
     sun_entity,
+    sky_entity,
     width,
     height,
   };
@@ -208,6 +213,7 @@ fn main() {
                   Mat4x4f32::identity(),
                   aethervk_core_rlib::scene::RenderableDataRef::PhysicalMesh(mesh),
                   payload.presentation_engine,
+                  "mesh",
                 )
                 .unwrap();
             });
@@ -225,6 +231,11 @@ fn main() {
               rotation: Quat::identity(),
               scale: Vec3f32::from_components(1.0, 1.0, 1.0),
             };
+            let mut sky_component = SkyComponent {};
+            payload
+              .scene
+              .with_component(payload.sky_entity, |c: &SkyComponent| sky_component = *c);
+
             let mut sun_component = SunComponent {
               resolution: (128, 128, 128),
             };
@@ -255,6 +266,8 @@ fn main() {
                 device,
                 (&camera_transform, &camera_component),
                 Some((payload.sun_entity, &sun_component, &sun_transform_mat)),
+                Some((payload.sky_entity, &sky_component)),
+                None,
                 &frame,
                 payload.presentation_engine,
                 &acquire_result,

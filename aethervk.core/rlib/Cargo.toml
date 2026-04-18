@@ -51,6 +51,8 @@ ktx2 = { version = "0.4.0", default-features = false }
 # SPIR-V Shaders
 spirv = "0.2"
 spirv-reflect = { path = "../../external/spirv-reflect", default-features = false }
+# anise library for almanac about SPK files and planet motion data
+anise = { path = "../../external/anise/anise", default-features = false }
 
 [target.'cfg(all(not(target_arch = "wasm32"), any( target_os = "windows", target_os = "linux", target_os = "macos", target_os = "android", target_os = "ios")))'.dependencies]
 ash = { version = "0.38", default-features = false, features = ["debug"] }
