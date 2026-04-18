@@ -17,20 +17,11 @@
         <DataTemplate DataType="{x:Type vm:SplitNodeViewModel}">
             <views:SplitNodeView />
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:ConsoleViewModel}">
+            <views:ConsoleView />
+        </DataTemplate>
         <utils:ViewLocator />
     </Application.DataTemplates>
-
-    <Application.Styles>
-        <FluentTheme />
-    </Application.Styles>
-
-    <!-- MacOS Entries shared by all windowses, under MacOS icon -->
-    <NativeMenu.Menu>
-        <NativeMenu>
-            <NativeMenuItem Header="About My Application..." />
-            <NativeMenuItem Header="Preferences" />
-        </NativeMenu>
-    </NativeMenu.Menu>
 
     <Application.Resources>
         <ResourceDictionary>
@@ -39,4 +30,9 @@
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>
+
+    <Application.Styles>
+        <FluentTheme />
+        <StyleInclude Source="avares://AetherVk/Styles/Controls.axaml" />
+    </Application.Styles>
 </Application>

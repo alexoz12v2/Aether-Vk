@@ -52,6 +52,7 @@
                     <MenuItem Header="Paste" />
                 </MenuItem>
             </Menu>
+            <Button Content="Toggle Theme" Command="{Binding ToggleThemeCommand}" DockPanel.Dock="Right" Margin="5" />
         </DockPanel>
         <Border Grid.Row="1">
             <views:DockingManagerView DataContext="{Binding DockingManager}"/>

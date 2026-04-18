@@ -3,7 +3,9 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using AetherVk.Logic.Messages;
+using AetherVk.Logic.Services; // Added for ConsoleService
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.ViewModels;
@@ -72,14 +74,30 @@ public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase
   [ObservableProperty]
   private TabItemViewModel _selectedTab;
 
+  private readonly ConsoleService _consoleService = new(); // Instantiate ConsoleService
+
   public TabGroupNodeViewModel(TabItemViewModel defaultTab, SplitNodeViewModel? parent = null)
     : base(parent)
   {
     Tabs.Add(defaultTab);
-    // TODO remove
-    Tabs.Add(new TabItemViewModel("The Other"));
     // Don't need to generate PropertyChanged on construction
     _selectedTab = defaultTab;
+  }
+
+  [RelayCommand]
+  private void AddNewTab()
+  {
+    var newTab = new UITestPanelViewModel(); // Default to UITestPanelViewModel
+    Tabs.Add(newTab);
+    SelectedTab = newTab;
+  }
+
+  [RelayCommand]
+  private void AddNewConsoleTab()
+  {
+    var newTab = new ConsoleViewModel(_consoleService); // Create ConsoleViewModel with service
+    Tabs.Add(newTab);
+    SelectedTab = newTab;
   }
 }
 
@@ -96,7 +114,9 @@ public partial class TabItemViewModel(string title) : ViewModelBase
 /// <summary>
 /// Root manager for docking layout
 /// </summary>
-public partial class DockingManagerViewModel : ViewModelBase, IRecipient<TabDroppedMessage>
+public partial class DockingManagerViewModel : ViewModelBase,
+    IRecipient<TabDroppedMessage>,
+    IRecipient<TabDragTaskMessage> // <-- Add this interface
 {
   [ObservableProperty]
   private LayoutNodeViewModelBase _rootNode;
@@ -104,59 +124,89 @@ public partial class DockingManagerViewModel : ViewModelBase, IRecipient<TabDrop
   public DockingManagerViewModel()
     : base()
   {
-    WeakReferenceMessenger.Default.Register(this);
+    WeakReferenceMessenger.Default.Register<TabDroppedMessage>(this);
+    WeakReferenceMessenger.Default.Register<TabDragTaskMessage>(this);
     // TODO establish default from configuration (then passed to VM)
-    var defaultTab = new TabItemViewModel(title: "Default View");
+    var defaultTab = new DebugUiViewModel();
+    var initialGroup = new TabGroupNodeViewModel(defaultTab);
+    initialGroup.Tabs.Add(new UITestPanelViewModel());
     // Don't need to generate PropertyChanged on construction
-    _rootNode = new TabGroupNodeViewModel(defaultTab);
+    _rootNode = initialGroup;
   }
 
+  // --- Track your Task safely from within the ViewModel ---
+  public async void Receive(TabDragTaskMessage message)
+  {
+      string finalAction = await message.DragTask;
+
+      if (finalAction == "None")
+      {
+          // The drag ended OUTSIDE the application window!
+          // You can implement your float-to-new-window logic right here.
+      }
+  }
+
+  // --- Fix the TabDroppedMessage ---
   public void Receive(TabDroppedMessage message)
   {
     var draggedTab = message.DraggedTab;
     var targetNode = message.TargetNode;
     var zone = message.Zone;
 
-    // 1. Find the curent owner of this tab
     var sourceNode = FindNodeContainingTab(RootNode, draggedTab);
+
+    // 5. Duplicate Crash Fix: When copying, we must create a NEW reference.
+    TabItemViewModel tabToInsert = draggedTab;
+    if (message.IsCopy)
+    {
+        // Generate a new reference. You may want to add a `.Clone()` method to
+        // TabItemViewModel later to handle inner state deep-copying.
+        tabToInsert = new TabItemViewModel(draggedTab.Title + " (Copy)");
+    }
+
     if (sourceNode is null)
-      return;
-
-    // 2. Safety: Prevent dragging the last tab of the entire system.
-    // If the root is a TabGroup and it has only one tab, cancel
-    if (RootNode is TabGroupNodeViewModel rootGroup && rootGroup.Tabs.Count <= 1)
-      return;
-
-    // 3. No-op check: Don't split a group using it's only tab (you'd split with an empty box)
-    if (sourceNode == targetNode && sourceNode.Tabs.Count <= 1 && zone != DockZone.Center)
-      return;
-
-    // 4. Center op check: Do nothing if you are returning to starting position
-    // Possible TODO: reorder tabs
-    if (zone == DockZone.Center && targetNode.Tabs.Contains(draggedTab))
-      return;
-
-    // 5. Perform Mutation: Remove First, Then split. Ensure we don't prune `targetNode` our of existence
-    RemoveTabAndCoalesce(draggedTab, sourceNode);
-    if (zone == DockZone.Center)
     {
-      targetNode.Tabs.Add(draggedTab);
-      targetNode.SelectedTab = draggedTab;
+        if (zone == DockZone.Center)
+        {
+            if (!targetNode.Tabs.Contains(tabToInsert)) targetNode.Tabs.Add(tabToInsert);
+            targetNode.SelectedTab = tabToInsert;
+        }
+        else SplitNodeAndInsertTab(targetNode, tabToInsert, zone);
+        return;
     }
-    else
+
+    // Return if it's the very last tab on screen (UNLESS we are explicitly copying it)
+    if (!message.IsCopy && RootNode is TabGroupNodeViewModel rootGroup && rootGroup.Tabs.Count <= 1)
+      return;
+
+    // Don't split a 1-tab group with nothing (UNLESS we are copying it)
+    if (!message.IsCopy && sourceNode == targetNode && sourceNode.Tabs.Count <= 1 && zone != DockZone.Center)
+      return;
+
+    // Do nothing if returning to starting position
+    if (!message.IsCopy && zone == DockZone.Center && targetNode.Tabs.Contains(draggedTab))
+      return;
+
+    // Mutate Old List
+    if (!message.IsCopy)
     {
-      SplitNodeAndInsertTab(targetNode, draggedTab, zone);
+        sourceNode.Tabs.Remove(draggedTab);
+        if (sourceNode.Tabs.Count == 0)
+        {
+            RemoveTabAndCoalesce(draggedTab, sourceNode);
+        }
     }
+
+    // Apply into New List
+    if (zone == DockZone.Center) {
+      if (!targetNode.Tabs.Contains(tabToInsert)) targetNode.Tabs.Add(tabToInsert);
+      targetNode.SelectedTab = tabToInsert;
+    }
+    else SplitNodeAndInsertTab(targetNode, tabToInsert, zone);
   }
 
   private void RemoveTabAndCoalesce(TabItemViewModel tabToRemove, TabGroupNodeViewModel sourceNode)
   {
-    sourceNode.Tabs.Remove(tabToRemove);
-
-    // If the node has still tabs, we don't need to coalesce anything
-    if (sourceNode.Tabs.Count > 0)
-      return;
-
     // If it's a root and it's empty, keep it alive to avoid a null UI
     var parent = sourceNode.Parent;
     if (parent == null)
@@ -165,59 +215,47 @@ public partial class DockingManagerViewModel : ViewModelBase, IRecipient<TabDrop
     // Coalesce: Replace parent (SplitNode) with the sibling of the empty node
     // The parent is a SplitNode, It needs to be replaced by its other child
     var sibling = (parent.FirstChild == sourceNode) ? parent.SecondChild : parent.FirstChild;
-    var grandParent = parent.Parent;
-    if (grandParent == null)
-    {
-      // parent was root. Sibling is the new root
-      RootNode = sibling;
-      sibling.Parent = null;
-    }
-    else
-    {
-      // Replace the parent in the grandparent with sibling
-      if (grandParent.FirstChild == parent)
-        grandParent.FirstChild = sibling;
-      else
-        grandParent.SecondChild = sibling;
-
-      sibling.Parent = grandParent;
-    }
+    ReplaceNode(parent, sibling);
   }
 
-  private void SplitNodeAndInsertTab(
-    TabGroupNodeViewModel target,
-    TabItemViewModel tab,
-    DockZone zone
-  )
+  // --- Fix the Tree-Breaking Bug ---
+  private void SplitNodeAndInsertTab(TabGroupNodeViewModel target, TabItemViewModel tab, DockZone zone)
   {
     var newGroup = new TabGroupNodeViewModel(tab);
-    var orientation =
-      (zone == DockZone.Left || zone == DockZone.Right)
-        ? SplitOrientation.Horizontal
-        : SplitOrientation.Vertical;
-    var parent = target.Parent;
-    var firstChild =
-      (zone == DockZone.Left || zone == DockZone.Top) ? (LayoutNodeViewModelBase)newGroup : target;
-    var secondChild =
-      (zone == DockZone.Left || zone == DockZone.Top) ? target : (LayoutNodeViewModelBase)newGroup;
+    var orientation = (zone == DockZone.Left || zone == DockZone.Right) ? SplitOrientation.Horizontal : SplitOrientation.Vertical;
+
+    var firstChild = (zone == DockZone.Left || zone == DockZone.Top) ? (LayoutNodeViewModelBase)newGroup : target;
+    var secondChild = (zone == DockZone.Left || zone == DockZone.Top) ? target : (LayoutNodeViewModelBase)newGroup;
     var splitNode = new SplitNodeViewModel(firstChild, secondChild, orientation);
 
+    // CRITICAL FIX: You MUST execute ReplaceNode before setting the parent properties.
+    // If you do it the other way around, ReplaceNode sees the new node as its own parent.
+    ReplaceNode(target, splitNode);
+
+    // Now it is safe to assign the relationships downward
     firstChild.Parent = splitNode;
     secondChild.Parent = splitNode;
+  }
 
-    // Swap out target node in the tree with the new split node
-    if (parent == null)
-    {
-      RootNode = splitNode;
-    }
-    else
-    {
-      if (parent.FirstChild == target)
-        parent.FirstChild = splitNode;
+  private void ReplaceNode(LayoutNodeViewModelBase oldNode, LayoutNodeViewModelBase newNode)
+  {
+      var parent = oldNode.Parent;
+      if (parent == null)
+      {
+          // oldNode was the root, newNode becomes the new root
+          RootNode = newNode;
+          newNode.Parent = null;
+      }
       else
-        parent.SecondChild = splitNode;
-      splitNode.Parent = parent;
-    }
+      {
+          // Replace oldNode with newNode in the parent's children
+          if (parent.FirstChild == oldNode)
+              parent.FirstChild = newNode;
+          else if (parent.SecondChild == oldNode)
+              parent.SecondChild = newNode;
+
+          newNode.Parent = parent;
+      }
   }
 
   private TabGroupNodeViewModel? FindNodeContainingTab(

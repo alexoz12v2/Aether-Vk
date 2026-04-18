@@ -1,0 +1,23 @@
+﻿<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+             x:DataType="vm:ConsoleViewModel"
+             x:Class="AetherVk.Views.ConsoleView">
+    <Grid RowDefinitions="*,Auto">
+        <ScrollViewer x:Name="ConsoleScrollViewer" Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl ItemsSource="{Binding Messages}" Margin="5">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <!-- TODO: When we merge, we should have fonts here, reference them-->
+                      <TextBlock Text="{Binding}" TextWrapping="Wrap" FontFamily="JetBrains Mono, Consolas, monospace"/>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+        <Button Grid.Row="1" Content="Clear Console" Command="{Binding ClearConsoleCommand}"
+                HorizontalAlignment="Right" Margin="5" Classes="accent"/>
+    </Grid>
+</UserControl>
