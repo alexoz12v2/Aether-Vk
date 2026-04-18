@@ -1,3 +1,4 @@
+#version 450 core
 // ============================================================
 // VULKAN EXTENSIONS
 // ============================================================
@@ -12,8 +13,7 @@
 // ============================================================
 // WORKGROUP AND RESOURCES
 // ============================================================
-// 3D Workgroup size configured via specialization constants
-layout(local_size_x_id = 0, local_size_y_id = 1, local_size_z_id = 2) in;
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 // Output 3D Volumetric Texture (rgba16f ideal for physically accurate HDR)
 layout(set = 0, binding = 0, rgba16f) uniform writeonly image3D sunVolume;
@@ -136,15 +136,16 @@ void main() {
 
   // Animate turbolence: (Simulating solar rotation and convection currents)
   // (Velocity towards v and w arbitrary, what feels right)
-  vec3 noisePos = uvw * push.params.noiseScale - vec3(0.0, time * 0.1, time * 0.05);
+  vec3 noisePos = uvw * push.params.noiseScale - vec3(time * 0.2, time * 2.5, time * 1.5);
   float turbolence = fbm(noisePos);
 
   // Temperature Granulation: Creates Hot/Cold spots on the Photosphere
-  float localTemp = photoTemp + (turbolence - 0.5) * 600.0;
+  // Amplify visual contrast of the temperature differences so we can see the fancy shader
+  float localTemp = photoTemp + (turbolence - 0.5) * 1200.0;
 
   // Magnetohydrodynamics (MHD) Surface Perturbation:
-  // Simulates flares and prominences pulling matter outwards from the core radius
-  float effectiveRadius = distFromCenter - turbolence * 0.15 * max(0.0, distFromCenter - rSun + 0.1);
+  // Make the surface turbulence more pronounced
+  float effectiveRadius = distFromCenter - (turbolence - 0.5) * 0.1;
 
   // Calculate density and atmospheric transition mask
   float density = hydrostaticDensity(effectiveRadius, rSun, scaleHeight);
@@ -156,11 +157,16 @@ void main() {
   // Calculate final HDR Emission
   vec3 emissionColor = blackbody(finalTemp);
 
+  // Apply a pleasing yellow-orange artistic tint because a physically correct 
+  // 5778K blackbody is technically white, which doesn't resemble a sun to human eyes.
+  vec3 artisticTint = mix(vec3(1.0, 0.6, 0.1), vec3(1.0, 0.8, 0.5), transitionMask);
+  emissionColor *= artisticTint;
+
   // Radiative Transfer: Simplified Volume rendering emission/absorption model
   // RGB = Emission * Density (Glowing Plasma), Alpha = Density (Optical Depth / Opacity)
   // we boost emission slightly by integrating our subgroup distance scalar for validation
   float intrinsicValidation = clamp(subgroupAvgDist / max(distFromCenter, 0.001), 0.9, 1.1);
-  vec3 finalColor = emissionColor * density * 2.0 * intrinsicValidation;
+  vec3 finalColor = emissionColor * density * 1.5 * intrinsicValidation;
 
   // Write out volumetric representation
   imageStore(sunVolume, texelCoord, vec4(finalColor, density));

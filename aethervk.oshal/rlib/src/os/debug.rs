@@ -130,18 +130,34 @@ mod windows_debug {
 mod unix_debug {
   use core::fmt;
 
+  #[cfg(not(feature = "std"))]
+  struct StdoutWriter;
+
+  #[cfg(not(feature = "std"))]
+  impl fmt::Write for StdoutWriter {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+      unsafe { libc::write(libc::STDOUT_FILENO, s.as_ptr().cast(), s.len()) };
+      Ok(())
+    }
+  }
+
+  #[cfg(not(feature = "std"))]
+
   pub fn log_message(args: fmt::Arguments) {
     // Simple write to stderr.
     // In a real no_std environment, this would need a different approach.
     // For now, this requires the `std` feature.
     #[cfg(feature = "std")]
     eprintln!("{}", args);
-    #[cfg(not(feature = "std"))]
+    #[cfg(all(not(feature = "std"), feature = "console_log"))]
     {
-      // In a true no_std environment, you would need a different way to output logs.
-      // For example, a serial port or a specific memory buffer.
-      // This is a placeholder.
-      let _ = args;
+      use core::fmt::Write;
+
+      let mut writer = StdoutWriter;
+      // format the passed arguments
+      let _ = writer.write_fmt(args);
+      // then add the newline
+      let _ = writer.write_str("\n");
     }
   }
 
@@ -302,6 +318,7 @@ impl<T, const V: i32> AsRef<T> for DropTracker<T, { V }> {
 }
 
 // Allows passing `&mut DropTracker<T>` to functions expecting `impl AsMut<T>`
+#[cfg(debug_assertions)]
 impl<T, const V: i32> AsMut<T> for DropTracker<T, { V }> {
   fn as_mut(&mut self) -> &mut T {
     &mut self.inner
@@ -309,6 +326,7 @@ impl<T, const V: i32> AsMut<T> for DropTracker<T, { V }> {
 }
 
 // Highly recommended for debugging: pass through Debug formatting if T supports it
+#[cfg(debug_assertions)]
 impl<T: core::fmt::Debug, const V: i32> core::fmt::Debug for DropTracker<T, { V }> {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     self.inner.fmt(f)

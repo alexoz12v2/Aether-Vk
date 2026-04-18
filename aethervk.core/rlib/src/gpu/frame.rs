@@ -7,7 +7,7 @@ use crate::types::{GpuError, GpuResult};
 use aethervk_oshal_rlib::math::{
   matrix::{mat4::Mat4x4f32, Matrix4},
   quaternion::Quaternion,
-  vector::{vec3::Vec3f32, Vector, Vector3},
+  vector::{vec3::Vec3f32, Vector3},
 };
 use alloc::vec::Vec;
 
@@ -96,6 +96,7 @@ impl Frame {
     model_matrix: Mat4x4f32,
     renderable: RenderableDataRef,
     presentation_engine_handle: PresentationEngineHandle,
+    debug_name: &str,
   ) -> GpuResult<()> {
     match renderable {
       RenderableDataRef::ImageBillboard(_component) => {
@@ -106,6 +107,7 @@ impl Frame {
           entity_id,
           &component,
           presentation_engine_handle,
+          debug_name,
         )?;
         let index_count = component.mesh.indices.len() as u32;
         self.draw_calls.push(DrawCall::from_handles_and_matrix(
@@ -140,6 +142,8 @@ pub trait RenderPath {
       &crate::scene::SunComponent,
       &TransformComponent,
     )>,
+    sky: Option<(crate::scene::EntityId, &crate::scene::SkyComponent)>,
+    grid: Option<(crate::scene::EntityId, &crate::scene::GridComponent)>,
     frame: &Frame,
     presentation_engine: PresentationEngineHandle,
     acquire_result: &AcquireResult,
@@ -159,6 +163,8 @@ impl RenderPath for ForwardRenderPath {
       &crate::scene::SunComponent,
       &TransformComponent,
     )>,
+    sky: Option<(crate::scene::EntityId, &crate::scene::SkyComponent)>,
+    grid: Option<(crate::scene::EntityId, &crate::scene::GridComponent)>,
     frame: &Frame,
     presentation_engine: PresentationEngineHandle,
     acquire_result: &AcquireResult,
@@ -168,6 +174,9 @@ impl RenderPath for ForwardRenderPath {
     device.begin_command_buffer(cmd_buffer)?;
 
     let _buf_result = {
+      if let Some((sun_entity, sun_comp, _)) = sun {
+        device.update_sun(cmd_buffer, sun_entity, sun_comp)?;
+      }
       device.begin_render_pass(cmd_buffer, presentation_engine, acquire_result)?;
 
       let _render_pass_result = {
@@ -190,39 +199,17 @@ impl RenderPath for ForwardRenderPath {
             extent,
           },
         )?;
-        let view = Mat4x4f32::look_at(
-          camera.0.position,
-          camera.0.position
-            + camera
-              .0
-              .rotation
-              .rotate_vector(<Vec3f32 as Vector3>::from_components(0.0, 0.0, -1.0)),
-          <Vec3f32 as Vector3>::from_components(0.0, 1.0, 0.0),
-        );
+        let view = Mat4x4f32::from_scale(
+          aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(1.0, -1.0, 1.0),
+        ) * Mat4x4f32::from_quat(camera.0.rotation.conjugate())
+          * Mat4x4f32::translation(camera.0.position * -1.0);
         let proj = camera.1.projection;
         let view_proj = proj * view;
 
-        for draw_call in &frame.draw_calls {
-          if let Err(e) = do_draw_call(device, view_proj, camera.0.position, cmd_buffer, draw_call) {
-            aethervk_oshal_rlib::log!("do_draw_call error: {:?}", e);
-          }
-        }
-
-        let mut view_no_trans = view;
-        view_no_trans.w.set_component(0, 0.0);
-        view_no_trans.w.set_component(1, 0.0);
-        view_no_trans.w.set_component(2, 0.0);
-        view_no_trans.w.set_component(3, 1.0);
-        let view_proj_no_trans = proj * view_no_trans;
-        let inv_view_proj = aethervk_oshal_rlib::math::matrix::SquareMatrix::inverse(view_proj_no_trans).unwrap_or(aethervk_oshal_rlib::math::matrix::SquareMatrix::identity());
-        if let Err(e) = device.render_sky(cmd_buffer, inv_view_proj) {
-            aethervk_oshal_rlib::log!("render_sky error: {:?}", e);
-        }
-
-        for cursor_call in &frame.cursor_calls {
-          if let Err(e) = do_draw_cursor(device, view, view_proj, cmd_buffer, cursor_call) {
-            aethervk_oshal_rlib::log!("do_draw_cursor error: {:?}", e);
-          }
+        if let Some((sky_entity, sky_comp)) = sky {
+          let sky_view = Mat4x4f32::from_quat(camera.0.rotation.conjugate());
+          let sky_view_proj = proj * sky_view;
+          device.render_sky(cmd_buffer, sky_entity, sky_comp, sky_view_proj)?;
         }
 
         if let Some((sun_entity, sun_comp, sun_transform)) = sun {
@@ -234,6 +221,24 @@ impl RenderPath for ForwardRenderPath {
             view,
             view_proj,
           )?;
+        }
+
+        for draw_call in &frame.draw_calls {
+          let _ = do_draw_call(device, view_proj, camera.0.position, cmd_buffer, draw_call);
+        }
+
+        if let Some((grid_entity, grid_comp)) = grid {
+          device.render_grid(
+            cmd_buffer,
+            grid_entity,
+            grid_comp,
+            view_proj,
+            camera.0.position,
+          )?;
+        }
+
+        for cursor_call in &frame.cursor_calls {
+          let _ = do_draw_cursor(device, view, view_proj, cmd_buffer, cursor_call);
         }
 
         Ok::<(), GpuError>(())

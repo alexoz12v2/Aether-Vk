@@ -6,65 +6,59 @@ use core::{ptr};
 
 use crate::{
   gpu_backends::vulkan::{
+    self,
     device::{DeviceResource, resources},
     utils::NonZeroHandle,
   },
-  types::{GpuError, GpuResult, SpscQueue},
+  types::{GpuError, GpuResult},
 };
 
-const POOL_SIZE_STORAGE_BUFFER: u32 = 210;
-const POOL_SIZE_STORAGE_IMAGE: u32 = 126;
-const POOL_SIZE_COMBINED_IMAGE_SAMPLER: u32 = 250;
-const POOL_SIZE_SAMPLER: u32 = 32;
-const POOL_SIZE_SAMPLED_IMAGE: u32 = 250;
-const POOL_SIZE_UNIFORM_BUFFER: u32 = 216;
-const POOL_SIZE_UNIFORM_TEXEL_BUFFER: u32 = 32;
-const POOL_SIZE_INPUT_ATTACHMENT: u32 = 9;
-const MAX_DESCRIPTOR_SETS: u32 = 256;
+const MAX_DESCRIPTOR_SETS: u32 = 1024;
 const POOL_SIZES: [vk::DescriptorPoolSize; 8] = [
   vk::DescriptorPoolSize {
     ty: vk::DescriptorType::STORAGE_BUFFER,
-    descriptor_count: POOL_SIZE_STORAGE_BUFFER,
+    descriptor_count: 1024,
   },
   vk::DescriptorPoolSize {
     ty: vk::DescriptorType::STORAGE_IMAGE,
-    descriptor_count: POOL_SIZE_STORAGE_IMAGE,
+    descriptor_count: 1024,
   },
   vk::DescriptorPoolSize {
     ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-    descriptor_count: POOL_SIZE_COMBINED_IMAGE_SAMPLER,
+    descriptor_count: 1024,
   },
   vk::DescriptorPoolSize {
     ty: vk::DescriptorType::UNIFORM_BUFFER,
-    descriptor_count: POOL_SIZE_UNIFORM_BUFFER,
+    descriptor_count: 1024,
   },
   vk::DescriptorPoolSize {
     ty: vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
-    descriptor_count: POOL_SIZE_UNIFORM_TEXEL_BUFFER,
+    descriptor_count: 1024,
   },
   vk::DescriptorPoolSize {
     ty: vk::DescriptorType::INPUT_ATTACHMENT,
-    descriptor_count: POOL_SIZE_INPUT_ATTACHMENT,
+    descriptor_count: 1024,
   },
   vk::DescriptorPoolSize {
     ty: vk::DescriptorType::SAMPLER,
-    descriptor_count: POOL_SIZE_SAMPLER,
+    descriptor_count: 1024,
   },
   vk::DescriptorPoolSize {
     ty: vk::DescriptorType::SAMPLED_IMAGE,
-    descriptor_count: POOL_SIZE_SAMPLED_IMAGE,
+    descriptor_count: 1024,
   },
 ];
 
 #[derive(Debug)]
 struct DescriptorPoolsInner {
-  recycled_pools: SpscQueue<vk::DescriptorPool>,
   active_pool: vk::DescriptorPool,
+  full_pools: Vec<vk::DescriptorPool>,
+  recycled_pools: Vec<vk::DescriptorPool>,
 }
 
 #[derive(Debug)]
 pub(super) struct DescriptorPools {
-  inner: spin::RwLock<DescriptorPoolsInner>,
+  inner: spin::Mutex<DescriptorPoolsInner>,
 }
 
 unsafe impl Sync for DescriptorPools {}
@@ -73,58 +67,64 @@ unsafe impl Send for DescriptorPools {}
 impl DescriptorPools {
   pub(super) fn new(
     device: &ash::Device,
-    fixed_capacity_pow2: usize,
+    _fixed_capacity_pow2: usize,
   ) -> GpuResult<sync::Arc<Self>> {
-    let s = sync::Arc::new(Self {
-      inner: spin::RwLock::new(DescriptorPoolsInner {
-        recycled_pools: SpscQueue::new(fixed_capacity_pow2),
-        active_pool: vk::DescriptorPool::null(),
-      }),
-    });
+    let mut inner = DescriptorPoolsInner {
+      active_pool: vk::DescriptorPool::null(),
+      full_pools: Vec::new(),
+      recycled_pools: Vec::new(),
+    };
+    inner.ensure_active_pool(device.handle(), device.fp_v1_0().create_descriptor_pool)?;
 
-    // initialize the first pool
-    s.inner
-      .write()
-      .ensure_active_pool(device.handle(), device.fp_v1_0().create_descriptor_pool)?;
-    Ok(s)
+    Ok(sync::Arc::new(Self {
+      inner: spin::Mutex::new(inner),
+    }))
   }
 
   pub(super) fn allocate(
     self: &sync::Arc<Self>,
-    device: &ash::Device,
+    device: &vulkan::device::LogicalDevice,
     layout: vk::DescriptorSetLayout,
     discard_pool: &resources::DiscardPool,
     timeline_value: u64,
+    debug_name: &str,
   ) -> GpuResult<NonZeroHandle<vk::DescriptorSet>> {
+    let mut inner = self.inner.lock();
     loop {
-      let inner = self.inner.read();
-      let pool = if inner.active_pool != vk::DescriptorPool::null() {
-        Ok(inner.active_pool)
-      } else {
-        GpuResult::Err(GpuError::InvalidState)
-      }?;
+      let pool = inner.active_pool;
+      if pool == vk::DescriptorPool::null() {
+        return Err(GpuError::InvalidState);
+      }
 
       let layouts = [layout];
       let alloc_info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(pool)
         .set_layouts(&layouts);
-      match unsafe {
-        let mut descriptor_set = vk::DescriptorSet::null();
-        let res = (device.fp_v1_0().allocate_descriptor_sets)(
+
+      let mut descriptor_set = vk::DescriptorSet::null();
+      let res = unsafe {
+        (device.fp_v1_0().allocate_descriptor_sets)(
           device.handle(),
           ptr::from_ref(&alloc_info),
           ptr::from_mut(&mut descriptor_set),
-        );
-        res.result_with_success(descriptor_set)
-      } {
-        Ok(sets) => return Ok(unsafe { NonZeroHandle::new_unchecked(sets) }),
-        Err(vk::Result::ERROR_OUT_OF_POOL_MEMORY | vk::Result::ERROR_FRAGMENTED_POOL) => {
-          let mut inner = self.inner.write();
+        )
+      };
+
+      // TODO debug names to pools too
+      match res {
+        vk::Result::SUCCESS => {
+          device.set_debug_name(
+            descriptor_set,
+            &alloc::format!("VkDescriptorSet_{}", debug_name),
+          );
+          return Ok(unsafe { NonZeroHandle::new_unchecked(descriptor_set) });
+        }
+        vk::Result::ERROR_OUT_OF_POOL_MEMORY | vk::Result::ERROR_FRAGMENTED_POOL => {
           self.discard_active_pool(&mut inner, discard_pool, timeline_value);
           inner.ensure_active_pool(device.handle(), device.fp_v1_0().create_descriptor_pool)?;
-          // Loop continues to try again with the pool
+          // Loop continues and tries again with new pool
         }
-        Err(e) => return Err(e.into()),
+        e => return Err(e.into()),
       }
     }
   }
@@ -133,7 +133,6 @@ impl DescriptorPools {
     if pool.is_null() {
       return;
     }
-    // TODO: unsuccessful log
     if unsafe {
       (device.fp_v1_0().reset_descriptor_pool)(
         device.handle(),
@@ -144,24 +143,24 @@ impl DescriptorPools {
     }
     .is_ok()
     {
-      let inner = self.inner.write();
-      let _ = inner.recycled_pools.try_push(pool);
+      let mut inner = self.inner.lock();
+      inner.recycled_pools.push(pool);
     }
   }
 
   fn discard_active_pool(
     self: &sync::Arc<Self>,
-    inner: &mut spin::RwLockWriteGuard<DescriptorPoolsInner>,
+    inner: &mut DescriptorPoolsInner,
     discard_pool: &resources::DiscardPool,
     timeline_value: u64,
   ) {
     if !inner.active_pool.is_null() {
-      // Pass the Arc of self to discard pool so that DiscardPool can call the `recycle` method when it's ready to give back the Descriptor Pool
       discard_pool.discard_descriptor_pool(
         inner.active_pool,
         sync::Arc::clone(self),
         timeline_value,
       );
+      inner.full_pools.push(inner.active_pool);
       inner.active_pool = vk::DescriptorPool::null();
     }
   }
@@ -176,7 +175,7 @@ impl DescriptorPoolsInner {
     if !self.active_pool.is_null() {
       return Ok(());
     }
-    if let Some(pool) = self.recycled_pools.try_pop() {
+    if let Some(pool) = self.recycled_pools.pop() {
       self.active_pool = pool;
       return Ok(());
     }
@@ -185,28 +184,37 @@ impl DescriptorPoolsInner {
     let create_info = vk::DescriptorPoolCreateInfo::default()
       .max_sets(MAX_DESCRIPTOR_SETS)
       .pool_sizes(&pool_sizes);
-    self.active_pool = unsafe {
-      let mut pool = vk::DescriptorPool::null();
-      let res = (create_descriptor_pool)(
+
+    let mut pool = vk::DescriptorPool::null();
+    let res = unsafe {
+      (create_descriptor_pool)(
         device,
         ptr::from_ref(&create_info),
         ptr::null(),
         ptr::from_mut(&mut pool),
-      );
-      res.result_with_success(pool)
-    }?;
-    Ok(())
+      )
+    };
+
+    if res == vk::Result::SUCCESS {
+      self.active_pool = pool;
+      Ok(())
+    } else {
+      Err(GpuError::InvalidState)
+    }
   }
 }
 
 impl DeviceResource for DescriptorPools {
   fn cleanup(&mut self, device: &ash::Device) {
-    let inner = self.inner.write();
+    let mut inner = self.inner.lock();
     if !inner.active_pool.is_null() {
       unsafe { device.destroy_descriptor_pool(inner.active_pool, None) };
     }
-    while let Some(recycled_pool) = inner.recycled_pools.try_pop() {
-      unsafe { device.destroy_descriptor_pool(recycled_pool, None) };
+    for pool in inner.full_pools.drain(..) {
+      unsafe { device.destroy_descriptor_pool(pool, None) };
+    }
+    for pool in inner.recycled_pools.drain(..) {
+      unsafe { device.destroy_descriptor_pool(pool, None) };
     }
   }
 }
