@@ -757,8 +757,8 @@ impl Scene {
     }
 
     let entity_id = {
-      let mut archetypes = self.archetypes.write();
       let mut entities = self.entities.write();
+      let mut archetypes = self.archetypes.write();
 
       let archetype = &mut archetypes[0];
       let entity_location = EntityLocation {
