@@ -23,7 +23,7 @@ pub struct LinearBVHHeader {
 pub enum LinearBound<S, V, M>
 where
   M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
-  V: Vector3<Scalar = S> + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
+  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
   S: FloatLike
     + FloatOps
     + FloatBits
@@ -39,7 +39,7 @@ where
 pub struct LinearBVHNode<S, V, M>
 where
   M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
-  V: Vector3<Scalar = S> + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
+  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
   S: FloatLike
     + FloatOps
     + FloatBits
@@ -61,7 +61,7 @@ where
 pub struct LinearBVH<S, V, M>
 where
   M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
-  V: Vector3<Scalar = S> + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
+  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
   S: FloatLike
     + FloatOps
     + FloatBits
@@ -77,7 +77,7 @@ where
 impl<S, V, M> LinearBVH<S, V, M>
 where
   M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
-  V: Vector3<Scalar = S> + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
+  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
   S: FloatLike
     + FloatOps
     + FloatBits

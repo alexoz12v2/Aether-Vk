@@ -586,6 +586,8 @@ impl DeviceResources {
     device: &vulkan::device::LogicalDevice,
     vertex_shader_key: ShaderKey,
     fragment_shader_key: ShaderKey,
+    outline_vertex_shader_key: ShaderKey,
+    outline_fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
     queue: &Queue,
     handle: PresentationEngineHandle,
@@ -617,6 +619,13 @@ impl DeviceResources {
     if fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
       return Err(GpuError::InvalidShader);
     }
+
+    let outline_vertex_shader = shader_manager
+      .get(outline_vertex_shader_key)
+      .ok_or(GpuError::InvalidShader)?;
+    let outline_fragment_shader = shader_manager
+      .get(outline_fragment_shader_key)
+      .ok_or(GpuError::InvalidShader)?;
 
     // Create initial struct
     let res = unsafe {
@@ -744,7 +753,33 @@ impl DeviceResources {
 
     let outline_graphics_info = pipeline_graphics_info
       .clone()
-      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::STENCIL_ENABLE)
+      .with_pre_rasterization(
+        PreRasterization::default()
+          .with_vertex_module(outline_vertex_shader.module.get())
+          .clone(),
+      )
+      .with_fragment_shader(
+        FragmentShader::default()
+          .with_fragment_module(outline_fragment_shader.module.get())
+          .add_viewport(vk::Viewport {
+            width: presentation_engine_state.extent().0 as _,
+            height: -(presentation_engine_state.extent().1 as f32),
+            x: 0.0,
+            y: presentation_engine_state.extent().1 as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+          })
+          .add_scissors(vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: vk::Extent2D {
+              width: presentation_engine_state.extent().0,
+              height: presentation_engine_state.extent().1,
+            },
+          })
+          .clone(),
+      )
+      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::STENCIL_ENABLE | PipelineFlags::NO_DEPTH_TEST)
+      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
       .with_stencil_compare_op(StencilCompareOp::NotEqual)
       .with_stencil_logic_op(StencilLogicOp::None)
       .with_stencil_reference(255)
@@ -2250,9 +2285,11 @@ impl<'a> Device<'a> {
   fn ensure_physical_mesh_shader_modules(
     &self,
     res: &impl core::ops::Deref<Target = DeviceResources>,
-  ) -> GpuResult<(ShaderKey, ShaderKey)> {
+  ) -> GpuResult<(ShaderKey, ShaderKey, ShaderKey, ShaderKey)> {
     let vert_path: PathBuf;
     let frag_path: PathBuf;
+    let outline_vert_path: PathBuf;
+    let outline_frag_path: PathBuf;
 
     // TODO: proper path management
     #[cfg(debug_assertions)]
@@ -2298,6 +2335,9 @@ impl<'a> Device<'a> {
       };
 
       vert_path = assets_dir.join("physical_mesh.vert.spv");
+      outline_vert_path = assets_dir.join("physical_mesh_outline.vert.spv");
+      outline_frag_path = assets_dir.join("physical_mesh_outline.frag.spv");
+
       #[cfg(feature = "physical_mesh_debug_normals")]
       {
         frag_path = assets_dir.join("physical_mesh_debug_normals.frag.spv");
@@ -2327,7 +2367,20 @@ impl<'a> Device<'a> {
       spirv::ExecutionModel::Fragment,
     )?;
 
-    Ok((vert_key, frag_key))
+    let outline_vert_key = shader_manager.get_or_load(
+      &self.device,
+      &outline_vert_path,
+      "main",
+      spirv::ExecutionModel::Vertex,
+    )?;
+    let outline_frag_key = shader_manager.get_or_load(
+      &self.device,
+      &outline_frag_path,
+      "main",
+      spirv::ExecutionModel::Fragment,
+    )?;
+
+    Ok((vert_key, frag_key, outline_vert_key, outline_frag_key))
   }
 
   fn ensure_skygen_shader_module(
@@ -2972,18 +3025,19 @@ impl<'a> RenderDevice for Device<'a> {
     let timeline = wres.get_timeline_semaphore_cached_value() + 1;
 
     if wres.physical_mesh_render_archetype.is_none() {
-      let (vkey, fkey) = self.ensure_physical_mesh_shader_modules(&wres)?;
+      let (vkey, fkey, ovkey, ofkey) = self.ensure_physical_mesh_shader_modules(&wres)?;
       wres.create_physical_mesh_archetype(
         &self.device,
         vkey,
         fkey,
+        ovkey,
+        ofkey,
         self.depth_stencil_format,
         &self.queues.get_graphics_queue(),
         handle,
         timeline,
       )?;
     }
-
     if wres.cursor_render_archetype.is_none() {
       let (vkey, fkey) = self.ensure_cursor_shader_modules(&wres)?;
       wres.create_cursor_archetype(&self.device, vkey, fkey, self.depth_stencil_format, handle)?;
@@ -3257,11 +3311,13 @@ impl<'a> RenderDevice for Device<'a> {
           );
           *guard = true;
         }
-        let (vkey, fkey) = self.ensure_physical_mesh_shader_modules(&wres)?;
+        let (vkey, fkey, ovkey, ofkey) = self.ensure_physical_mesh_shader_modules(&wres)?;
         wres.create_physical_mesh_archetype(
           &self.device,
           vkey,
           fkey,
+          ovkey,
+          ofkey,
           self.depth_stencil_format,
           &self.queues.get_graphics_queue(),
           handle,

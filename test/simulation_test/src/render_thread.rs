@@ -341,7 +341,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
     );
 
     let mut console_text = String::new();
-    let max_lines = 15; // Fit comfortably in 50% screen height without overlapping prompt
+    let max_lines = 12; // Further reduced to prevent any overlap
     let history_len = payload.packet.command_history.len();
     let scroll = payload.packet.console_scroll_offset.min(history_len.saturating_sub(max_lines));
     let start_idx = history_len.saturating_sub(max_lines + scroll);
@@ -352,19 +352,15 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
       console_text.push('\n');
     }
     
-    // Draw text from the bottom up so it never overlaps the prompt.
-    // The prompt is at the very bottom of the box.
+    // Position the prompt at the very bottom, and start the text history well above it.
     let prompt_y = box_y + height - 0.08;
-    
-    // Calculate roughly how tall the text block is. 16pt font is roughly 0.04 NDC depending on screen height.
-    // To be perfectly robust, we draw from the top but only the visible lines.
-    let text_start_y = box_y + 0.02;
+    let text_start_y = box_y + 0.05; 
     
     let _ = device.render_text(
       cmd_buffer,
       &console_text,
       font_path,
-      16.0,
+      14.0, // Slightly smaller font to fit better
       [0.8, 0.8, 0.8, 1.0], 
       [-0.98, text_start_y], 
       payload.presentation_engine,

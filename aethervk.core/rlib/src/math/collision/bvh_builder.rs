@@ -20,7 +20,7 @@ use crate::{
 pub enum BoundNode<S, V, M>
 where
   M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
-  V: Vector3<Scalar = S> + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
+  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
   S: FloatLike
     + FloatOps
     + FloatBits
@@ -36,7 +36,7 @@ where
 impl<S, V, M> BoundNode<S, V, M>
 where
   M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
-  V: Vector3<Scalar = S> + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
+  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
   S: FloatLike
     + FloatOps
     + FloatBits
@@ -69,7 +69,7 @@ where
 pub struct BVHNode<S, V, M>
 where
   M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
-  V: Vector3<Scalar = S> + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
+  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
   S: FloatLike
     + FloatOps
     + FloatBits
@@ -129,8 +129,8 @@ where
   V: Vector3<Scalar = S>
     + From<Vec3f32>
     + Into<Vec3f32>
-    + From<[V::Scalar; 3]>
-    + Into<[V::Scalar; 3]>,
+    + From<[S; 3]>
+    + Into<[S; 3]>,
   S: FloatLike
     + FloatOps
     + FloatBits
@@ -148,8 +148,8 @@ where
   V: Vector3<Scalar = S>
     + From<Vec3f32>
     + Into<Vec3f32>
-    + From<[V::Scalar; 3]>
-    + Into<[V::Scalar; 3]>,
+    + From<[S; 3]>
+    + Into<[S; 3]>,
   S: FloatLike
     + FloatOps
     + FloatBits
@@ -285,7 +285,6 @@ where
     let right = self.build_recursive(triangles, right_indices, depth + 1);
 
     // Ensure parent bound encloses children bounds (Strict BVH property)
-    // This fixes the issue where children could "poke out" of parents due to different bound types or axes
     let mut final_bound = bound;
     final_bound.encapsulate_bound(&left.bound);
     final_bound.encapsulate_bound(&right.bound);
@@ -316,7 +315,7 @@ where
     let max_c = max_centroid.component(axis).unwrap();
 
     if min_c >= max_c {
-      return None; // Cannot split on this axis (zero extent)
+      return None;
     }
 
     let bin_count = self.params.bin_count;
@@ -357,10 +356,7 @@ where
     for i in 0..bin_count - 1 {
       left_sum += bins[i].0;
       left_count[i] = left_sum;
-      left_box = AABB::new(
-        left_box.min().min(bins[i].1.min()),
-        left_box.max().max(bins[i].1.max()),
-      );
+      left_box.encapsulate_aabb(&bins[i].1);
       left_area[i] = self.aabb_surface_area(&left_box);
     }
 
@@ -372,16 +368,12 @@ where
     for i in (1..bin_count).rev() {
       right_sum += bins[i].0;
       right_count[i - 1] = right_sum;
-      right_box = AABB::new(
-        right_box.min().min(bins[i].1.min()),
-        right_box.max().max(bins[i].1.max()),
-      );
+      right_box.encapsulate_aabb(&bins[i].1);
       right_area[i - 1] = self.aabb_surface_area(&right_box);
     }
 
-    // Find best split
     let mut min_cost = S::from_f32(core::f32::INFINITY);
-    let mut best_bin = 0;
+    let mut best_bin: usize = 0;
 
     for i in 0..bin_count - 1 {
       let cost = S::from_f32(left_count[i] as f32) * left_area[i]
@@ -392,7 +384,6 @@ where
       }
     }
 
-    // Leaf cost logic (simplistic)
     let leaf_cost = S::from_f32(indices.len() as f32)
       * self.aabb_surface_area(&AABB::new(
         left_box.min().min(right_box.min()),
@@ -400,11 +391,9 @@ where
       ));
 
     if min_cost >= leaf_cost {
-      // Split cost is worse than not splitting
       return None;
     }
 
-    // Partition the indices based on the best bin
     let mut left_ptr = 0;
     let mut right_ptr = indices.len();
     while left_ptr < right_ptr {
@@ -424,7 +413,7 @@ where
     }
 
     if left_ptr == 0 || left_ptr == indices.len() {
-      return None; // Empty side
+      return None;
     }
 
     Some(left_ptr)
@@ -436,7 +425,6 @@ where
     let dy = d.y();
     let dz = d.z();
     let _0 = S::from_f32(0.0);
-    // Use positive dimensions only (empty boxes have 0 surface area)
     if dx < _0 || dy < _0 || dz < _0 {
       return _0;
     }
