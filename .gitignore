@@ -875,4 +875,3 @@ earth_trajectory_log.csv
 
 # gemini config
 .gemini/
-*.bsp
