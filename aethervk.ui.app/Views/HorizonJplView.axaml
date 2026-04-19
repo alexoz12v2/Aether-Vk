@@ -1,0 +1,48 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             x:DataType="vm:HorizonJplViewModel"
+             x:Class="AetherVk.Views.HorizonJplView">
+  <ScrollViewer>
+    <StackPanel Spacing="8" Margin="4">
+      <Expander Header="Horizons API" HorizontalAlignment="Stretch" IsExpanded="True">
+        <StackPanel Spacing="8">
+          <Grid ColumnDefinitions="Auto, *, Auto, *" RowDefinitions="Auto, Auto, Auto" Margin="4">
+            
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Command (Target):" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding Command}" Margin="0,0,8,4" />
+
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="Center:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBox Grid.Row="0" Grid.Column="3" Text="{Binding Center}" Margin="0,0,0,4" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="Start Time:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding StartTime}" Margin="0,0,8,4" />
+
+            <TextBlock Grid.Row="1" Grid.Column="2" Text="Stop Time:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding StopTime}" Margin="0,0,0,4" />
+
+            <TextBlock Grid.Row="2" Grid.Column="0" Text="Step Size:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding StepSize}" Margin="0,0,8,0" />
+            
+          </Grid>
+          <Button Content="Fetch Data" Command="{Binding FetchDataCommand}" HorizontalAlignment="Right" Classes="accent" />
+          <DataGrid x:Name="ResultDataGrid" ItemsSource="{Binding Data}" AutoGenerateColumns="False" IsReadOnly="True" Height="300" />
+        </StackPanel>
+      </Expander>
+
+      <Expander Header="Comets Search API" HorizontalAlignment="Stretch" IsExpanded="True">
+        <StackPanel Spacing="8">
+          <Grid ColumnDefinitions="Auto, *, Auto, *" RowDefinitions="Auto" Margin="4">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="First Obs After:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <CalendarDatePicker Grid.Row="0" Grid.Column="1" SelectedDate="{Binding CometStartTime}" Margin="0,0,8,4" HorizontalAlignment="Stretch" />
+
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="First Obs Before:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <CalendarDatePicker Grid.Row="0" Grid.Column="3" SelectedDate="{Binding CometStopTime}" Margin="0,0,0,4" HorizontalAlignment="Stretch" />
+          </Grid>
+          <Button Content="Fetch Comets" Command="{Binding FetchCometsCommand}" HorizontalAlignment="Right" Classes="accent" />
+          <DataGrid x:Name="CometsResultDataGrid" ItemsSource="{Binding CometsData}" AutoGenerateColumns="False" IsReadOnly="True" Height="300" />
+        </StackPanel>
+      </Expander>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

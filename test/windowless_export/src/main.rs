@@ -47,6 +47,18 @@ fn main() {
   let width = 800;
   let height = 600;
 
+  let asset_path = {
+    let mut path = std::env::current_exe().unwrap().parent().unwrap().to_owned();
+    while !path.join("assets").exists() {
+      path = path.parent().unwrap().to_owned();
+    }
+    path.join("assets")
+  };
+
+  let mut guard = aethervk_core_rlib::gpu::ASSET_DIR.write();
+  *guard = Some(asset_path.to_str().unwrap().to_string());
+  drop(guard);
+
   let presentation_engine = {
     let params = gpu::PresentationEngineParams::windowless(width, height);
     render_frontend

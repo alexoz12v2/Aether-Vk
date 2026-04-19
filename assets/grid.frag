@@ -1,7 +1,7 @@
 #version 450 core
 
-layout(location = 0) in vec3 inNearPos;
-layout(location = 1) in vec3 inFarPos;
+layout(location = 0) in vec4 inUnprojectedNear;
+layout(location = 1) in vec4 inUnprojectedFar;
 
 layout(location = 0) out vec4 outColor;
 
@@ -15,6 +15,9 @@ layout(push_constant) uniform Push {
 } push;
 
 void main() {
+  vec3 inNearPos = inUnprojectedNear.xyz / inUnprojectedNear.w;
+  vec3 inFarPos  = inUnprojectedFar.xyz / inUnprojectedFar.w;
+
   float t = -inNearPos.z / (inFarPos.z - inNearPos.z);
   
   if (t <= 0.0) {

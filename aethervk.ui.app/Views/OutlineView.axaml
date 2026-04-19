@@ -1,0 +1,26 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             xmlns:models="using:AetherVk.Logic.Models"
+             x:DataType="vm:OutlineViewModel"
+             x:Class="AetherVk.Views.OutlineView">
+    <Grid RowDefinitions="Auto, *">
+        <TextBlock Grid.Row="0" Text="Scene Hierarchy" FontWeight="Bold" Margin="8"/>
+
+        <TreeView Grid.Row="1" ItemsSource="{Binding RootEntities}" SelectedItem="{Binding SelectedEntity}" Margin="4">
+            <TreeView.DataTemplates>
+                <TreeDataTemplate DataType="models:Entity" ItemsSource="{Binding Children}">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <StackPanel.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Copy Name" Command="{Binding $parent[UserControl].((vm:OutlineViewModel)DataContext).CopyNameToClipboardCommand}" CommandParameter="{Binding Name}"/>
+                            </ContextMenu>
+                        </StackPanel.ContextMenu>
+                        <!-- We could put an icon here -->
+                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TreeDataTemplate>
+            </TreeView.DataTemplates>
+        </TreeView>
+    </Grid>
+</UserControl>

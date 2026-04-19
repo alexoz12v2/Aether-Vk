@@ -1064,6 +1064,56 @@ impl DiscardableResource for FrameResource {
   }
 }
 
+pub(super) struct MarkerRenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub push_contant_ranges: Vec<vk::PushConstantRange>,
+  pub graphics_info: Option<GraphicsInfo>,
+  pub pipeline_key: Option<PipelineKey>,
+}
+
+unsafe impl Sync for MarkerRenderResourceArchetype {}
+unsafe impl Send for MarkerRenderResourceArchetype {}
+
+impl MarkerRenderResourceArchetype {
+  pub fn with_graphics_info(self, graphics_info: GraphicsInfo) -> Self {
+    let pipeline_key = graphics_info.pipeline_key();
+    Self {
+      graphics_info: Some(graphics_info),
+      pipeline_key: Some(pipeline_key),
+      ..self
+    }
+  }
+
+  pub unsafe fn new(device: &vulkan::device::LogicalDevice) -> GpuResult<Self> {
+    let push_contant_ranges = alloc::vec![vk::PushConstantRange {
+      stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+      offset: 0,
+      size: core::mem::size_of::<crate::gpu::MarkerPushConstants>() as u32,
+    }];
+
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo {
+      p_push_constant_ranges: push_contant_ranges.as_ptr(),
+      push_constant_range_count: push_contant_ranges.len() as u32,
+      ..Default::default()
+    };
+
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
+      .with_name(device, "VkPipelineLayout_MarkerRenderResourceArchetype")?;
+
+    Ok(Self {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      push_contant_ranges,
+      graphics_info: None,
+      pipeline_key: None,
+    })
+  }
+
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_pipeline_layout(layout, timeline);
+  }
+}
+
 pub(super) struct CursorRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub push_contant_ranges: Vec<vk::PushConstantRange>,

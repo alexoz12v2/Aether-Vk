@@ -5,13 +5,13 @@ namespace AetherVk.Views;
 
 public partial class TabItemView : UserControl
 {
-    public TabItemView()
-    {
-        InitializeComponent();
-    }
+  public TabItemView()
+  {
+    InitializeComponent();
+  }
 
-    private void InitializeComponent()
-    {
-        AvaloniaXamlLoader.Load(this);
-    }
+  private void InitializeComponent()
+  {
+    AvaloniaXamlLoader.Load(this);
+  }
 }

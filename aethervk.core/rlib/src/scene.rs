@@ -116,6 +116,19 @@ impl Component for CameraComponent {}
 pub struct CursorComponent {}
 impl Component for CursorComponent {}
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct Marker {
+  pub local_pos: [f32; 3],
+  pub color: [f32; 3],
+  pub size: f32,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct MarkersComponent {
+  pub markers: alloc::vec::Vec<Marker>,
+}
+impl Component for MarkersComponent {}
+
 /// A physically-based mesh loaded from a glTF file.
 #[derive(Debug, PartialEq)]
 pub struct PhysicalMeshComponent {
@@ -181,6 +194,7 @@ pub enum RenderableDataRef<'a> {
   ImageBillboard(&'a ImageBillboardComponent),
   PhysicalMesh(&'a PhysicalMeshComponent),
   Cursor(&'a CursorComponent),
+  Markers(&'a MarkersComponent),
 }
 
 impl<'a> RenderableDataRef<'a> {
@@ -189,6 +203,7 @@ impl<'a> RenderableDataRef<'a> {
       RenderableDataRef::ImageBillboard(_) => 4,
       RenderableDataRef::PhysicalMesh(mesh) => mesh.mesh.indices.len() as u32,
       RenderableDataRef::Cursor(_) => 4, // 4 vertices for the quad cursor
+      RenderableDataRef::Markers(m) => (m.markers.len() * 4) as u32,
     }
   }
 }

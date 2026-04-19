@@ -4,6 +4,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:views="using:AetherVk.Views"
         xmlns:vm="using:AetherVk.Logic.ViewModels"
+        xmlns:services="using:AetherVk.Logic.Services"
         x:DataType="vm:MainWindowViewModel"
         mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
         x:Class="AetherVk.MainWindow"
@@ -30,6 +31,25 @@
                     <NativeMenu>
                         <NativeMenuItem Header="Copy"/>
                         <NativeMenuItem Header="Paste"/>
+                        <NativeMenuItemSeparator/>
+                        <NativeMenuItem Header="Mappings">
+                            <NativeMenuItem.Menu>
+                                <NativeMenu>
+                                    <NativeMenuItem Header="Rotate Camera : Shift + RMB" />
+                                    <NativeMenuItem Header="Pan Cursor : LMB" />
+                                    <NativeMenuItem Header="Zoom : Mouse Wheel" />
+                                    <NativeMenuItem Header="Reset Camera : R" />
+                                    <NativeMenuItem Header="Add Jet Raycast : Shift + RMB (in Add Mode)" />
+                                    <NativeMenuItem Header="Cancel Add Jet : Esc" />
+                                    <NativeMenuItem Header="Move Cursor Z-Up : E" />
+                                    <NativeMenuItem Header="Move Cursor Z-Down : Q" />
+                                    <NativeMenuItem Header="Move Cursor Y-Forward : Up Arrow" />
+                                    <NativeMenuItem Header="Move Cursor Y-Backward : Down Arrow" />
+                                    <NativeMenuItem Header="Move Cursor X-Left : Left Arrow" />
+                                    <NativeMenuItem Header="Move Cursor X-Right : Right Arrow" />
+                                </NativeMenu>
+                            </NativeMenuItem.Menu>
+                        </NativeMenuItem>
                     </NativeMenu>
                 </NativeMenuItem.Menu>
             </NativeMenuItem>
@@ -50,6 +70,21 @@
                 <MenuItem Header="Edit">
                     <MenuItem Header="Copy" />
                     <MenuItem Header="Paste" />
+                    <Separator />
+                    <MenuItem Header="Mappings">
+                        <MenuItem Header="Rotate Camera : Shift + RMB" />
+                        <MenuItem Header="Pan Cursor : LMB" />
+                        <MenuItem Header="Zoom : Mouse Wheel" />
+                        <MenuItem Header="Reset Camera : R" />
+                        <MenuItem Header="Add Jet Raycast : Shift + RMB (in Add Mode)" />
+                        <MenuItem Header="Cancel Add Jet : Esc" />
+                        <MenuItem Header="Move Cursor Z-Up : E" />
+                        <MenuItem Header="Move Cursor Z-Down : Q" />
+                        <MenuItem Header="Move Cursor Y-Forward : Up Arrow" />
+                        <MenuItem Header="Move Cursor Y-Backward : Down Arrow" />
+                        <MenuItem Header="Move Cursor X-Left : Left Arrow" />
+                        <MenuItem Header="Move Cursor X-Right : Right Arrow" />
+                    </MenuItem>
                 </MenuItem>
             </Menu>
             <Button Content="Toggle Theme" Command="{Binding ToggleThemeCommand}" DockPanel.Dock="Right" Margin="5" />
@@ -57,5 +92,19 @@
         <Border Grid.Row="1">
             <views:DockingManagerView DataContext="{Binding DockingManager}"/>
         </Border>
+
+        <!-- Breadcrumbs Overlay -->
+        <ItemsControl Grid.Row="0" Grid.RowSpan="2" ItemsSource="{Binding Breadcrumbs}" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="20" IsHitTestVisible="False">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="services:BreadcrumbMessage">
+                    <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,10" BoxShadow="0 4 8 0 #40000000">
+                        <StackPanel>
+                            <TextBlock Text="{Binding Title}" FontWeight="Bold" Foreground="{DynamicResource Text.Primary}"/>
+                            <TextBlock Text="{Binding Content}" Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap" MaxWidth="250"/>
+                        </StackPanel>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
     </Grid>
 </Window>

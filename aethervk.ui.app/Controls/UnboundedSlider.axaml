@@ -1,0 +1,21 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:AetherVk.Controls"
+             x:Class="AetherVk.Controls.UnboundedSlider"
+             Height="24">
+    <Panel Cursor="SizeWestEast" Background="Transparent" 
+           PointerPressed="OnPointerPressed"
+           PointerMoved="OnPointerMoved"
+           PointerReleased="OnPointerReleased"
+           Tapped="OnTapped">
+        <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="4" x:Name="RootBorder">
+            <TextBox x:Name="InputBox" Text="{Binding Value, RelativeSource={RelativeSource AncestorType=controls:UnboundedSlider}, StringFormat='0.###', Mode=TwoWay}" 
+                     Background="Transparent" BorderThickness="0"
+                     HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                     IsHitTestVisible="False"
+                     LostFocus="OnInputLostFocus"
+                     KeyDown="OnInputKeyDown"
+                     Padding="0"/>
+        </Border>
+    </Panel>
+</UserControl>

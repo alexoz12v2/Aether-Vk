@@ -27,6 +27,7 @@ class Program
 
     // 2. Pass the host to the App so that it can solve services
     App.Host = host;
+    AetherVk.Logic.Services.ServiceLocator.Provider = host.Services;
 
     // 3. start the host
     host.Start();
