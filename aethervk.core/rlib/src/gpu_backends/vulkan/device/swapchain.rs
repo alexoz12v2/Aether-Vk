@@ -89,7 +89,6 @@ pub(super) struct WindowedPresentationState {
   swapchain_generation: u64,
 }
 
-
 trait SwapchainCleanable {
   fn cleanup(&mut self, swapchain_device: &ash::khr::swapchain::Device, device: &ash::Device);
 }
@@ -234,7 +233,11 @@ impl PresentationState {
     }
   }
 
-  pub fn acquire_next_image(&mut self, device: &ash::Device, graphics_queue: vk::Queue) -> GpuResult<AcquireResult> {
+  pub fn acquire_next_image(
+    &mut self,
+    device: &ash::Device,
+    graphics_queue: vk::Queue,
+  ) -> GpuResult<AcquireResult> {
     match self {
       Self::Windowed(state) => state.acquire_next_image(device),
       Self::Windowless(state) => state.acquire_next_image(device, graphics_queue),
@@ -272,8 +275,12 @@ impl PresentationState {
     frame_index: u32,
   ) -> GpuResult<SwapchainStatus> {
     match self {
-      Self::Windowed(state) => unsafe { state.submit_image(graphics_queue, image_index, frame_index) },
-      Self::Windowless(state) => unsafe { state.submit_image(graphics_queue, image_index, frame_index) },
+      Self::Windowed(state) => unsafe {
+        state.submit_image(graphics_queue, image_index, frame_index)
+      },
+      Self::Windowless(state) => unsafe {
+        state.submit_image(graphics_queue, image_index, frame_index)
+      },
     }
   }
 
@@ -285,14 +292,16 @@ impl PresentationState {
     params: &PresentationEngineParams,
   ) -> GpuResult<Self> {
     match params.ty {
-      crate::gpu::PresentationEngineType::Window => {
-        Ok(Self::Windowed(WindowedPresentationState::new(
-          entry, instance, device, physical_device, params,
-        )?))
-      }
+      crate::gpu::PresentationEngineType::Window => Ok(Self::Windowed(
+        WindowedPresentationState::new(entry, instance, device, physical_device, params)?,
+      )),
       crate::gpu::PresentationEngineType::WindowLess => {
         Ok(Self::Windowless(WindowlessPresentationState::new(
-          instance, device, physical_device, params.width, params.height,
+          instance,
+          device,
+          physical_device,
+          params.width,
+          params.height,
         )?))
       }
     }
@@ -309,6 +318,9 @@ impl WindowedPresentationState {
   ) -> GpuResult<()> {
     self.width = width;
     self.height = height;
+    unsafe {
+      let _ = device.device_wait_idle();
+    }
     self.recreate_swapchain(device, true, physical_device)
   }
 
@@ -884,7 +896,7 @@ impl WindowedPresentationState {
     };
     debug_assert!(image_index as usize == self.next_image);
     match vk_result {
-      vk::Result::SUCCESS => {
+      vk::Result::SUCCESS | vk::Result::SUBOPTIMAL_KHR => {
         unsafe { self.frames[self.current_frame].steal_from_swapchain_image(swapchain_image) };
         let frame_idx_for_submission = self.current_frame;
         // this is the only arm in which status is changed
@@ -892,11 +904,11 @@ impl WindowedPresentationState {
         self.current_frame = (self.current_frame + 1) % frame_count;
         Ok(AcquireResult {
           image_index,
-          status: SwapchainStatus::Optimal,
+          status: SwapchainStatus::Optimal, // Must report Optimal so render loop consumes the signaled semaphore!
           frame_index: frame_idx_for_submission as u64,
         })
       }
-      vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR => Ok(AcquireResult {
+      vk::Result::ERROR_OUT_OF_DATE_KHR => Ok(AcquireResult {
         image_index,
         status: SwapchainStatus::NeedsRecreation,
         frame_index: self.current_frame as u64,
@@ -1182,7 +1194,11 @@ impl WindowlessPresentationState {
     Ok(())
   }
 
-  pub fn acquire_next_image(&mut self, device: &ash::Device, graphics_queue: vk::Queue) -> GpuResult<AcquireResult> {
+  pub fn acquire_next_image(
+    &mut self,
+    device: &ash::Device,
+    graphics_queue: vk::Queue,
+  ) -> GpuResult<AcquireResult> {
     let images_count = self.images.len();
     let frame_count = self.frames.len();
     let swapchain_image = &mut self.images[self.next_image];
@@ -1217,8 +1233,15 @@ impl WindowlessPresentationState {
 
     // Signal the acquire semaphore manually since there's no vkAcquireNextImageKHR
     // We can just submit an empty batch to the queue.
-    let sem_handle = unsafe { self.frames[self.current_frame].acquire_semaphore.as_ref().unwrap_unchecked().get() };
-    let signal_info = vk::SubmitInfo::default().signal_semaphores(core::slice::from_ref(&sem_handle));
+    let sem_handle = unsafe {
+      self.frames[self.current_frame]
+        .acquire_semaphore
+        .as_ref()
+        .unwrap_unchecked()
+        .get()
+    };
+    let signal_info =
+      vk::SubmitInfo::default().signal_semaphores(core::slice::from_ref(&sem_handle));
     unsafe { device.queue_submit(graphics_queue, &[signal_info], vk::Fence::null()) }?;
 
     self.next_image = (self.next_image + 1) % images_count;
@@ -1303,7 +1326,11 @@ impl WindowlessPresentationState {
 
     let image_count = 3;
     let format = self.format;
-    let extent = vk::Extent3D { width, height, depth: 1 };
+    let extent = vk::Extent3D {
+      width,
+      height,
+      depth: 1,
+    };
 
     let image_info = vk::ImageCreateInfo::default()
       .image_type(vk::ImageType::TYPE_2D)
@@ -1336,7 +1363,8 @@ impl WindowlessPresentationState {
     let sem_create_info = vk::SemaphoreCreateInfo::default();
     let fence_create_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
 
-    let mem_props = unsafe { instance.get_physical_device_memory_properties(physical_device.get()) };
+    let mem_props =
+      unsafe { instance.get_physical_device_memory_properties(physical_device.get()) };
 
     for _ in 0..image_count {
       let image = unsafe { NonZeroHandle::new_unchecked(device.create_image(&image_info, None)?) };
@@ -1357,7 +1385,8 @@ impl WindowlessPresentationState {
         .allocation_size(mem_reqs.size)
         .memory_type_index(mem_type_index);
 
-      let memory = unsafe { NonZeroHandle::new_unchecked(device.allocate_memory(&alloc_info, None)?) };
+      let memory =
+        unsafe { NonZeroHandle::new_unchecked(device.allocate_memory(&alloc_info, None)?) };
       unsafe { device.bind_image_memory(image.get(), memory.get(), 0)? };
 
       let view_info = img_view_create_info.image(image.get());

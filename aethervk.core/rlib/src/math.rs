@@ -57,66 +57,169 @@ pub fn compute_com_and_tensor(verts: &[Vec3f32], m: f32) -> (Vec3f32, Mat3f32) {
 }
 
 pub fn qr_diagonalization(mut a: Mat3f32, tol: f32, max_iter: usize) -> (Vec3f32, Mat3f32) {
-  let mut q_total = Mat3f32::identity();
+  let mut v = Mat3f32::identity();
+
   for _ in 0..max_iter {
-    let mut q = Mat3f32::zero();
-    let mut r = Mat3f32::zero();
+    // Find the largest off-diagonal element
+    let mut max_val = 0.0f32;
+    let mut p = 0;
+    let mut q = 1;
 
-    let v0 = a.x;
-    let mut v1 = a.y;
-    let mut v2 = a.z;
+    let off_diag = [
+      (0, 1, a.y.x().abs()),
+      (0, 2, a.z.x().abs()),
+      (1, 2, a.z.y().abs()),
+    ];
 
-    let r00 = v0.length();
-    r.x = Vec3f32::from_components(r00, 0.0, 0.0);
-    q.x = if r00 > 0.0 {
-      v0 / r00
-    } else {
-      Vec3f32::from_components(1.0, 0.0, 0.0)
-    };
+    for &(row, col, val) in &off_diag {
+      if val > max_val {
+        max_val = val;
+        p = row;
+        q = col;
+      }
+    }
 
-    let r01 = q.x.dot(v1);
-    r.y = Vec3f32::from_components(r01, 0.0, 0.0);
-    v1 = v1 - q.x * r01;
-    let r11 = v1.length();
-    r.y.set_component(1, r11);
-    q.y = if r11 > 0.0 {
-      v1 / r11
-    } else {
-      Vec3f32::from_components(0.0, 1.0, 0.0)
-    };
-
-    let r02 = q.x.dot(v2);
-    let r12 = q.y.dot(v2);
-    r.z = Vec3f32::from_components(r02, r12, 0.0);
-    v2 = v2 - q.x * r02 - q.y * r12;
-    let r22 = v2.length();
-    r.z.set_component(2, r22);
-    q.z = if r22 > 0.0 {
-      v2 / r22
-    } else {
-      Vec3f32::from_components(0.0, 0.0, 1.0)
-    };
-
-    a = r * q;
-    q_total = q_total * q;
-
-    let off_diag_max = [
-      a.x.y().abs(),
-      a.x.z().abs(),
-      a.y.x().abs(),
-      a.y.z().abs(),
-      a.z.x().abs(),
-      a.z.y().abs(),
-    ]
-    .into_iter()
-    .fold(0.0f32, f32::max);
-
-    if off_diag_max < tol {
+    if max_val < tol {
       break;
     }
+
+    // Compute Jacobi rotation
+    let a_pp = match p {
+      0 => a.x.x(),
+      1 => a.y.y(),
+      _ => a.z.z(),
+    };
+    let a_qq = match q {
+      1 => a.y.y(),
+      _ => a.z.z(),
+    };
+    let a_pq = match (p, q) {
+      (0, 1) => a.y.x(),
+      (0, 2) => a.z.x(),
+      _ => a.z.y(),
+    };
+
+    let theta = (a_qq - a_pp) / (2.0 * a_pq);
+    let mut t = 1.0 / (theta.abs() + (theta * theta + 1.0).sqrt());
+    if theta < 0.0 {
+      t = -t;
+    }
+
+    let c = 1.0 / (t * t + 1.0).sqrt();
+    let s = t * c;
+
+    // Apply rotation to A
+    let mut a_new = a.clone();
+
+    // Update diagonal elements
+    let t_apq = t * a_pq;
+    let new_app = a_pp - t_apq;
+    let new_aqq = a_qq + t_apq;
+
+    match p {
+      0 => a_new.x.set_component(0, new_app),
+      1 => a_new.y.set_component(1, new_app),
+      _ => a_new.z.set_component(2, new_app),
+    }
+    match q {
+      1 => a_new.y.set_component(1, new_aqq),
+      _ => a_new.z.set_component(2, new_aqq),
+    }
+
+    // Zero out the target off-diagonal elements
+    match (p, q) {
+      (0, 1) => { a_new.y.set_component(0, 0.0); a_new.x.set_component(1, 0.0); },
+      (0, 2) => { a_new.z.set_component(0, 0.0); a_new.x.set_component(2, 0.0); },
+      _      => { a_new.z.set_component(1, 0.0); a_new.y.set_component(2, 0.0); },
+    }
+
+    // Update the rest of the matrix
+    for r in 0..3 {
+      if r != p && r != q {
+        let a_rp = match (r, p) {
+          (0, 0) => a.x.x(), (0, 1) => a.y.x(), (0, 2) => a.z.x(),
+          (1, 0) => a.x.y(), (1, 1) => a.y.y(), (1, 2) => a.z.y(),
+          _ => a.x.z(),
+        };
+        if p == 0 && r == 1 { /* a_rp = a.x.y() */ }
+        let a_rp = match r {
+          0 => match p { 0 => a.x.x(), 1 => a.y.x(), _ => a.z.x() },
+          1 => match p { 0 => a.x.y(), 1 => a.y.y(), _ => a.z.y() },
+          _ => match p { 0 => a.x.z(), 1 => a.y.z(), _ => a.z.z() },
+        };
+        let a_rq = match r {
+          0 => match q { 1 => a.y.x(), _ => a.z.x() },
+          1 => match q { 1 => a.y.y(), _ => a.z.y() },
+          _ => match q { 1 => a.y.z(), _ => a.z.z() },
+        };
+
+        let new_arp = c * a_rp - s * a_rq;
+        let new_arq = s * a_rp + c * a_rq;
+
+        // Set A_rp and A_pr
+        match (r, p) {
+          (0, 1) => { a_new.y.set_component(0, new_arp); a_new.x.set_component(1, new_arp); },
+          (0, 2) => { a_new.z.set_component(0, new_arp); a_new.x.set_component(2, new_arp); },
+          (1, 0) => { a_new.x.set_component(1, new_arp); a_new.y.set_component(0, new_arp); },
+          (1, 2) => { a_new.z.set_component(1, new_arp); a_new.y.set_component(2, new_arp); },
+          (2, 0) => { a_new.x.set_component(2, new_arp); a_new.z.set_component(0, new_arp); },
+          (2, 1) => { a_new.y.set_component(2, new_arp); a_new.z.set_component(1, new_arp); },
+          _ => {}
+        }
+        
+        // Set A_rq and A_qr
+        match (r, q) {
+          (0, 1) => { a_new.y.set_component(0, new_arq); a_new.x.set_component(1, new_arq); },
+          (0, 2) => { a_new.z.set_component(0, new_arq); a_new.x.set_component(2, new_arq); },
+          (1, 0) => { a_new.x.set_component(1, new_arq); a_new.y.set_component(0, new_arq); },
+          (1, 2) => { a_new.z.set_component(1, new_arq); a_new.y.set_component(2, new_arq); },
+          (2, 0) => { a_new.x.set_component(2, new_arq); a_new.z.set_component(0, new_arq); },
+          (2, 1) => { a_new.y.set_component(2, new_arq); a_new.z.set_component(1, new_arq); },
+          _ => {}
+        }
+      }
+    }
+    a = a_new;
+
+    // Apply rotation to eigenvectors V
+    let mut v_new = v.clone();
+    for r in 0..3 {
+      let v_rp = match r {
+        0 => match p { 0 => v.x.x(), 1 => v.y.x(), _ => v.z.x() },
+        1 => match p { 0 => v.x.y(), 1 => v.y.y(), _ => v.z.y() },
+        _ => match p { 0 => v.x.z(), 1 => v.y.z(), _ => v.z.z() },
+      };
+      let v_rq = match r {
+        0 => match q { 1 => v.y.x(), _ => v.z.x() },
+        1 => match q { 1 => v.y.y(), _ => v.z.y() },
+        _ => match q { 1 => v.y.z(), _ => v.z.z() },
+      };
+
+      let new_vrp = c * v_rp - s * v_rq;
+      let new_vrq = s * v_rp + c * v_rq;
+
+      match (r, p) {
+        (0, 0) => v_new.x.set_component(0, new_vrp), (0, 1) => v_new.y.set_component(0, new_vrp), (0, 2) => v_new.z.set_component(0, new_vrp),
+        (1, 0) => v_new.x.set_component(1, new_vrp), (1, 1) => v_new.y.set_component(1, new_vrp), (1, 2) => v_new.z.set_component(1, new_vrp),
+        (2, 0) => v_new.x.set_component(2, new_vrp), (2, 1) => v_new.y.set_component(2, new_vrp), (2, 2) => v_new.z.set_component(2, new_vrp),
+        _ => {}
+      }
+      match (r, q) {
+        (0, 1) => v_new.y.set_component(0, new_vrq), (0, 2) => v_new.z.set_component(0, new_vrq),
+        (1, 1) => v_new.y.set_component(1, new_vrq), (1, 2) => v_new.z.set_component(1, new_vrq),
+        (2, 1) => v_new.y.set_component(2, new_vrq), (2, 2) => v_new.z.set_component(2, new_vrq),
+        _ => {}
+      }
+    }
+    v = v_new;
   }
 
-  (Vec3f32::from_components(a.x.x(), a.y.y(), a.z.z()), q_total)
+  // Ensure right-handed coordinate system
+  if v.determinant() < 0.0 {
+    v.x = -v.x;
+  }
+
+  (Vec3f32::from_components(a.x.x(), a.y.y(), a.z.z()), v)
 }
 
 pub fn hat(v: Vec3f32) -> Mat3f32 {
@@ -330,6 +433,72 @@ pub fn solve_cubic<T: FloatLike>(a: T, b: T, c: T, d: T) -> Vec<T> {
 }
 
 /// Specialized f32 version for solving a cubic polynomial.
-pub fn solve_cubic_f32(a: f32, b: f32, c: f32, d: f32) -> Vec<f32> {
-  solve_cubic(a, b, c, d)
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use aethervk_oshal_rlib::math::matrix::{Matrix, Matrix3};
+
+  fn assert_mat3_eq(a: Mat3f32, b: Mat3f32, tol: f32) {
+    for i in 0..3 {
+      let col_a = unsafe { a.column_unchecked(i) };
+      let col_b = unsafe { b.column_unchecked(i) };
+      assert!((col_a.x() - col_b.x()).abs() < tol, "Mismatch at col {}, x: {} vs {}", i, col_a.x(), col_b.x());
+      assert!((col_a.y() - col_b.y()).abs() < tol, "Mismatch at col {}, y: {} vs {}", i, col_a.y(), col_b.y());
+      assert!((col_a.z() - col_b.z()).abs() < tol, "Mismatch at col {}, z: {} vs {}", i, col_a.z(), col_b.z());
+    }
+  }
+
+  #[test]
+  fn test_jacobi_diagonalization_identity() {
+    let a = Mat3f32::identity();
+    let (evals, evecs) = qr_diagonalization(a, 1e-5, 50);
+    
+    assert!((evals.x() - 1.0).abs() < 1e-4);
+    assert!((evals.y() - 1.0).abs() < 1e-4);
+    assert!((evals.z() - 1.0).abs() < 1e-4);
+    assert_mat3_eq(evecs, Mat3f32::identity(), 1e-4);
+    assert!(evecs.is_pure_rotation_permissive());
+  }
+
+  #[test]
+  fn test_jacobi_diagonalization_diagonal() {
+    let a = Mat3f32 {
+      x: Vec3f32::from_components(2.0, 0.0, 0.0),
+      y: Vec3f32::from_components(0.0, 3.0, 0.0),
+      z: Vec3f32::from_components(0.0, 0.0, 5.0),
+    };
+    let (evals, evecs) = qr_diagonalization(a, 1e-5, 50);
+    
+    assert!((evals.x() - 2.0).abs() < 1e-4);
+    assert!((evals.y() - 3.0).abs() < 1e-4);
+    assert!((evals.z() - 5.0).abs() < 1e-4);
+    assert_mat3_eq(evecs, Mat3f32::identity(), 1e-4);
+    assert!(evecs.is_pure_rotation_permissive());
+  }
+
+  #[test]
+  fn test_jacobi_diagonalization_symmetric() {
+    let a = Mat3f32 {
+      x: Vec3f32::from_components(4.0, 1.0, 2.0),
+      y: Vec3f32::from_components(1.0, 3.0, 0.0),
+      z: Vec3f32::from_components(2.0, 0.0, 5.0),
+    };
+    let (evals, evecs) = qr_diagonalization(a, 1e-5, 50);
+    
+    // Check that A = V * D * V^T
+    let d = Mat3f32 {
+      x: Vec3f32::from_components(evals.x(), 0.0, 0.0),
+      y: Vec3f32::from_components(0.0, evals.y(), 0.0),
+      z: Vec3f32::from_components(0.0, 0.0, evals.z()),
+    };
+    let evecs_t = Mat3f32 {
+      x: Vec3f32::from_components(evecs.x.x(), evecs.y.x(), evecs.z.x()),
+      y: Vec3f32::from_components(evecs.x.y(), evecs.y.y(), evecs.z.y()),
+      z: Vec3f32::from_components(evecs.x.z(), evecs.y.z(), evecs.z.z()),
+    };
+    
+    let reconstructed = evecs * (d * evecs_t);
+    assert_mat3_eq(reconstructed, a, 1e-3);
+    assert!(evecs.is_pure_rotation_permissive(), "Eigenvector matrix must be a pure rotation");
+  }
 }

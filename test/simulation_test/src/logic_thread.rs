@@ -2,12 +2,15 @@ use aethervk_core_rlib::{
   gpu::PhysicalScene,
   scene::{CameraComponent, EntityId, Scene, SunComponent, TransformComponent},
 };
-use aethervk_oshal_rlib::math::{
-  FloatLike,
-  floating::FloatOps,
-  matrix::{Matrix4, MatrixVectorMul, SquareMatrix, mat4::Mat4x4f32},
-  quaternion::Quaternion,
-  vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec4::Quat},
+use aethervk_oshal_rlib::{
+  math::{
+    FloatLike,
+    floating::FloatOps,
+    matrix::{Matrix4, MatrixVectorMul, SquareMatrix, mat4::Mat4x4f32},
+    quaternion::Quaternion,
+    vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec4::Quat},
+  },
+  os,
 };
 use std::sync::{atomic::AtomicBool, Arc, mpsc};
 use std::time::Instant;
@@ -33,6 +36,7 @@ pub enum LogicCommand {
   TogglePlanetOutlines,
   ResetCamera,
   Exit,
+  ExecuteCommand(String),
 }
 
 pub struct LogicState {
@@ -40,6 +44,8 @@ pub struct LogicState {
   pitch: f32,
   camera_distance: f32,
   physical_scene: PhysicalScene,
+  selected_entity: Option<EntityId>,
+  last_selected_entity: Option<EntityId>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -81,7 +87,9 @@ const FIXED_TIME_STEP: f32 = 1.0 / 60.0;
 
 pub fn start_logic_thread(
   rx: mpsc::Receiver<LogicCommand>,
+  response_tx: mpsc::Sender<String>,
   scene_shared: Arc<Scene>,
+  root_entity: EntityId,
   camera_entity: EntityId,
   cursor_entity: EntityId,
   grid_entity: EntityId,
@@ -97,6 +105,8 @@ pub fn start_logic_thread(
       pitch: 0.0,
       camera_distance: 60.0,
       physical_scene: PhysicalScene::new(),
+      selected_entity: None,
+      last_selected_entity: None,
     };
 
     let mut last_time = Instant::now();
@@ -105,8 +115,14 @@ pub fn start_logic_thread(
     println!("Starting Almanac load...");
     let start_load = std::time::Instant::now();
 
-    let almanac =
-      utils::load_almanac(assets_dir.join("planets").as_path()).expect("couldn't load almanac");
+    let assets_planets_pathbuf: os::fs::PathBuf = assets_dir
+      .join("planets")
+      .to_str()
+      .unwrap()
+      .to_string()
+      .into();
+    let almanac = aethervk_core_rlib::simulation::almanac::load_almanac(&assets_planets_pathbuf)
+      .expect("couldn't load almanac");
     println!(
       "Finished Almanac load on logic thread! Took {:?}",
       start_load.elapsed()
@@ -118,6 +134,7 @@ pub fn start_logic_thread(
     let mut current_epoch = epoch_start;
     let mut st_seconds_elapsed = 0.0_f64;
     let mut following_entity: Option<EntityId> = None;
+    let mut last_following_entity: Option<EntityId> = None;
     let mut focused_planet_idx: Option<usize> = None;
 
     loop {
@@ -162,8 +179,10 @@ pub fn start_logic_thread(
 
         logic_update_command(
           command,
+          &response_tx,
           &mut state,
           scene_shared.as_ref(),
+          root_entity,
           camera_entity,
           cursor_entity,
           grid_entity,
@@ -171,12 +190,33 @@ pub fn start_logic_thread(
           &mut following_entity,
           &mut focused_planet_idx,
           &planets_ids,
+          &almanac.almanac,
           &mut current_scale,
           &mut current_epoch,
           &mut st_seconds_elapsed,
           epoch_start,
           epoch_end,
         );
+      }
+
+      if state.selected_entity != state.last_selected_entity {
+         if let Some(old) = state.last_selected_entity {
+             let _ = scene_shared.remove_component::<aethervk_core_rlib::scene::SelectedComponent>(old);
+         }
+         if let Some(new) = state.selected_entity {
+             let _ = scene_shared.add_component(new, aethervk_core_rlib::scene::SelectedComponent {});
+         }
+         state.last_selected_entity = state.selected_entity;
+      }
+
+      if following_entity != last_following_entity {
+         if let Some(old) = last_following_entity {
+             let _ = scene_shared.remove_component::<aethervk_core_rlib::scene::FollowingComponent>(old);
+         }
+         if let Some(new) = following_entity {
+             let _ = scene_shared.add_component(new, aethervk_core_rlib::scene::FollowingComponent {});
+         }
+         last_following_entity = following_entity;
       }
 
       std::thread::sleep(std::time::Duration::from_millis(1));
@@ -205,7 +245,8 @@ fn logic_fixed_update_step(
   }
 
   for (naif_id, entity, rot_period, planet_radius) in planets_ids.iter() {
-    let pos = utils::get_almanac_pos(*naif_id, *current_epoch, &almanac);
+    let pos =
+      aethervk_core_rlib::simulation::almanac::get_almanac_pos(*naif_id, *current_epoch, &almanac);
     scene_guard.with_component_mut(*entity, |c: &mut TransformComponent| {
       c.position = pos;
       c.scale = Vec3f32::splat(1.0);
@@ -221,7 +262,11 @@ fn logic_fixed_update_step(
   }
 
   // Also update Sun
-  let pos = utils::get_almanac_pos(constants::PlanetNaifId::SUN, *current_epoch, &almanac);
+  let pos = aethervk_core_rlib::simulation::almanac::get_almanac_pos(
+    constants::PlanetNaifId::SUN,
+    *current_epoch,
+    &almanac,
+  );
   scene_guard.with_component_mut(sun_entity, |c: &mut TransformComponent| {
     c.position = pos;
     let rot_period = 25.05; // Sun's equatorial rotation period in days
@@ -295,8 +340,10 @@ fn logic_fixed_update_step(
 
 fn logic_update_command(
   command: LogicCommand,
+  response_tx: &mpsc::Sender<String>,
   state: &mut LogicState,
   scene_guard: &Scene,
+  root_entity: EntityId,
   camera_entity: EntityId,
   cursor_entity: EntityId,
   grid_entity: EntityId,
@@ -304,6 +351,7 @@ fn logic_update_command(
   following_entity: &mut Option<EntityId>,
   focused_planet_idx: &mut Option<usize>,
   planets_ids: &[(i32, EntityId, f64, f32)],
+  almanac: &Almanac,
   current_scale: &mut TimeScale,
   current_epoch: &mut anise::time::Epoch,
   st_seconds_elapsed: &mut f64,
@@ -343,7 +391,7 @@ fn logic_update_command(
         0.0,
       );
 
-      state.yaw = std::f32::consts::PI;
+      state.yaw = std::f32::consts::PI; // Look North (towards origin)
       state.pitch = 0.0;
       let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), state.yaw);
       let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
@@ -393,7 +441,7 @@ fn logic_update_command(
       let pan_speed = dist * 0.001;
 
       let right = cam_rot.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
-      let up = cam_rot.rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0));
+      let up = cam_rot.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
       let translation = right * (-delta_x * pan_speed) + up * (delta_y * pan_speed);
 
       scene_guard.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
@@ -420,11 +468,13 @@ fn logic_update_command(
     }
     LogicCommand::Resize { width, height } => {
       scene_guard.with_component_mut(camera_entity, |c: &mut CameraComponent| {
+        c.near_plane = 0.1;
+        c.far_plane = 1000000.0;
         c.projection = Mat4x4f32::perspective_vk(
           45.0f32.to_radians(),
           width as f32 / height as f32,
-          0.1,
-          10000.0,
+          c.near_plane,
+          c.far_plane,
         );
       });
     }
@@ -505,7 +555,7 @@ fn logic_update_command(
     }
     LogicCommand::SnapCameraToCursor => {
       let offset = Vec3f32::from_components(0.0, -60.0, 0.0);
-      state.yaw = std::f32::consts::PI;
+      state.yaw = 0.0;
       state.pitch = 0.0;
       let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), state.yaw);
       let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
@@ -530,6 +580,306 @@ fn logic_update_command(
       }
     }
     LogicCommand::ToggleMeasureTool => {}
+    LogicCommand::ExecuteCommand(cmd) => {
+      let mut parts = cmd.split_whitespace();
+      let c = parts.next().unwrap_or("");
+      match c {
+        "scene" => {
+          let _ = response_tx.send("Scene Hierarchy:".to_string());
+          let mut stack = vec![0];
+          scene_guard.traverse_with_hooks(
+            root_entity,
+            &mut stack,
+            &mut |s, e, _: Option<TransformComponent>, _: Option<&TransformComponent>| {
+              let depth = *s.last().unwrap();
+              let name = scene_guard
+                .get_name(e)
+                .unwrap_or_else(|| "Unknown".to_string());
+              let _ = response_tx.send(format!("{}├── {}", "│   ".repeat(depth), name));
+              s.push(depth + 1);
+              true
+            },
+            &mut |s, _| {
+              s.pop();
+            },
+          );
+        }
+        "select" => {
+          let name = cmd[c.len()..].trim();
+          if let Some(id) = scene_guard.get_entity_by_name(name) {
+            state.selected_entity = Some(id);
+            let _ = response_tx.send(format!("selected entity {}, ID: {:?}", name, id));
+          } else {
+            let _ = response_tx.send("entity doesn't exist".to_string());
+          }
+        }
+        "printsel" => {
+          if let Some(id) = state.selected_entity {
+            let name = scene_guard
+              .get_name(id)
+              .unwrap_or_else(|| "Unknown".to_string());
+            let _ = response_tx.send(format!("Selected entity: {} (ID: {:?})", name, id));
+          } else {
+            let _ = response_tx.send("No entity selected".to_string());
+          }
+        }
+        "printbvh" => {
+          if let Some(id) = state.selected_entity {
+            let min_depth: i32 = parts.next().unwrap_or("-1").parse().unwrap_or(-1);
+            let max_depth: i32 = parts.next().unwrap_or("-1").parse().unwrap_or(-1);
+            if min_depth != -1 && max_depth != -1 && min_depth > max_depth {
+              let _ = response_tx.send("illegal arguments: min_depth > max_depth".to_string());
+              return;
+            }
+            scene_guard.with_component(
+              id,
+              |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+                if let Some(bvh) = &mesh.mesh.bvh {
+                  let _ = response_tx.send("BVH Nodes:".to_string());
+                  let mut node_stack = vec![(0, 0)]; // (node_idx, depth)
+                  while let Some((idx, depth)) = node_stack.pop() {
+                    let node = &bvh.nodes[idx];
+                    if (min_depth == -1 || depth as i32 >= min_depth)
+                      && (max_depth == -1 || depth as i32 <= max_depth)
+                    {
+                      let _ = response_tx.send(format!(
+                        "{}Node {} (Depth: {}) - Bound: {:?}",
+                        "  ".repeat(depth),
+                        idx,
+                        depth,
+                        node.bound
+                      ));
+                    }
+                    if node.primitive_count == 0 {
+                      // inner node
+                      node_stack.push((node.right_child_offset as usize, depth + 1));
+                      node_stack.push((node.left_child_or_primitive_offset as usize, depth + 1));
+                    }
+                  }
+                } else {
+                  let _ = response_tx.send("Entity has no BVH.".to_string());
+                }
+              },
+            );
+          } else {
+            let _ = response_tx.send("No entity selected".to_string());
+          }
+        }
+        "bvh-node-dbgrender-set" => {
+          if let Some(id) = state.selected_entity {
+            let depth: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
+            let child_index: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
+            let render: bool = parts.next().unwrap_or("false").parse().unwrap_or(false);
+
+            let mut flat_idx = None;
+            scene_guard.with_component(
+              id,
+              |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+                if let Some(bvh) = &mesh.mesh.bvh {
+                  let mut current_child_index = 0;
+                  let mut node_stack = vec![(0, 0)];
+                  while let Some((idx, d)) = node_stack.pop() {
+                    if d == depth {
+                      if current_child_index == child_index {
+                        flat_idx = Some(idx);
+                        break;
+                      }
+                      current_child_index += 1;
+                    }
+                    let node = &bvh.nodes[idx];
+                    if node.primitive_count == 0 {
+                      node_stack.push((node.right_child_offset as usize, d + 1));
+                      node_stack.push((node.left_child_or_primitive_offset as usize, d + 1));
+                    }
+                  }
+                }
+              },
+            );
+
+            if let Some(idx) = flat_idx {
+              let mut added = false;
+              scene_guard.with_component_mut(
+                id,
+                |dbg: &mut aethervk_core_rlib::scene::BvhDebugComponent| {
+                  if idx < dbg.node_render_states.len() {
+                    dbg.node_render_states[idx] = render;
+                  }
+                  added = true;
+                },
+              );
+              if !added {
+                let mut bvh_len = None;
+                scene_guard.with_component(
+                  id,
+                  |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+                    if let Some(bvh) = &mesh.mesh.bvh {
+                      bvh_len = Some(bvh.nodes.len());
+                    }
+                  },
+                );
+                if let Some(len) = bvh_len {
+                  let mut states = vec![false; len];
+                  states[idx] = render;
+                  let _ = scene_guard.add_component(
+                    id,
+                    aethervk_core_rlib::scene::BvhDebugComponent {
+                      node_render_states: states,
+                    },
+                  );
+                }
+              }
+              let _ = response_tx.send(format!(
+                "Set node at depth {}, index {} to {}",
+                depth, child_index, render
+              ));
+            } else {
+              let _ = response_tx.send("Node not found.".to_string());
+            }
+          }
+        }
+        "bvh-node-dbgrender-get" => {
+          if let Some(id) = state.selected_entity {
+            let depth: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
+            let child_index: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
+
+            let mut flat_idx = None;
+            scene_guard.with_component(
+              id,
+              |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+                if let Some(bvh) = &mesh.mesh.bvh {
+                  let mut current_child_index = 0;
+                  let mut node_stack = vec![(0, 0)];
+                  while let Some((idx, d)) = node_stack.pop() {
+                    if d == depth {
+                      if current_child_index == child_index {
+                        flat_idx = Some(idx);
+                        break;
+                      }
+                      current_child_index += 1;
+                    }
+                    let node = &bvh.nodes[idx];
+                    if node.primitive_count == 0 {
+                      node_stack.push((node.right_child_offset as usize, d + 1));
+                      node_stack.push((node.left_child_or_primitive_offset as usize, d + 1));
+                    }
+                  }
+                }
+              },
+            );
+
+            if let Some(idx) = flat_idx {
+              let mut render = false;
+              scene_guard.with_component(
+                id,
+                |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
+                  if idx < dbg.node_render_states.len() {
+                    render = dbg.node_render_states[idx];
+                  }
+                },
+              );
+              let _ = response_tx.send(format!(
+                "Node at depth {}, index {} is {}",
+                depth, child_index, render
+              ));
+            } else {
+              let _ = response_tx.send("Node not found.".to_string());
+            }
+          }
+        }
+        "clear" => {
+          let _ = response_tx.send("___CLEAR___".to_string());
+        }
+        "help" => {
+          let _ = response_tx.send("Commands:".to_string());
+          let _ = response_tx.send("  help               - Shows this help message".to_string());
+          let _ = response_tx.send("  clear              - Clears the console output".to_string());
+          let _ = response_tx.send("  scene              - Prints the scene hierarchy".to_string());
+          let _ = response_tx.send("  select <entity>    - Selects an entity by name".to_string());
+          let _ = response_tx.send("  printsel           - Prints the currently selected entity".to_string());
+          let _ = response_tx.send("  goto <entity>      - Selects and follows an entity".to_string());
+          let _ = response_tx.send("  unfollow           - Stops the camera from following any entity".to_string());
+          let _ = response_tx.send("  following          - Prints the entity the camera is currently following".to_string());
+          let _ = response_tx.send("  printbvh [min] [max]- Prints BVH nodes for the selected entity".to_string());
+          let _ = response_tx.send("  bvh-node-dbgrender-set <depth> <idx> <bool> - Toggles BVH node debug render".to_string());
+          let _ = response_tx.send("  bvh-node-dbgrender-get <depth> <idx>        - Gets BVH node debug render state".to_string());
+        }
+        "goto" | "follow" => {
+          let name = cmd[c.len()..].trim();
+          if let Some(id) = scene_guard.get_entity_by_name(name) {
+            state.selected_entity = Some(id);
+            *following_entity = Some(id);
+
+            let planet_radius = planets_ids.iter().find(|(_, e, _, _)| *e == id).map(|(_, _, _, r)| *r).unwrap_or(0.01);
+            let mut p_pos = Vec3f32::from_components(0.0, 0.0, 0.0);
+            scene_guard.with_component(id, |t: &TransformComponent| {
+              p_pos = t.position;
+            });
+    
+            scene_guard.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
+              c.position = p_pos;
+            });
+    
+            let sun_pos = aethervk_core_rlib::simulation::almanac::get_almanac_pos(
+              crate::constants::PlanetNaifId::SUN,
+              *current_epoch,
+              almanac,
+            );
+    
+            let mut dir_to_sun = sun_pos - p_pos;
+            if dir_to_sun.length_squared() < 1e-6 {
+              dir_to_sun = Vec3f32::from_components(0.0, 1.0, 0.0);
+            } else {
+              dir_to_sun = dir_to_sun.normalize();
+            }
+    
+            let offset_dist = (planet_radius as f32 * 3.0).max(60.0);
+    
+            let mut right = dir_to_sun.cross(Vec3f32::from_components(0.0, 0.0, 1.0));
+            if right.length_squared() < 1e-6 {
+              right = Vec3f32::from_components(1.0, 0.0, 0.0);
+            } else {
+              right = right.normalize();
+            }
+            let up = right.cross(dir_to_sun).normalize();
+    
+            let cam_pos = p_pos - dir_to_sun * offset_dist + right * (offset_dist * 1.5) + up * (offset_dist * 0.5);
+    
+            let view_dir = (p_pos - cam_pos).normalize();
+    
+            let yaw = -f32::atan2(-view_dir.x(), view_dir.y());
+            let pitch = f32::asin(view_dir.z());
+    
+            state.yaw = yaw;
+            state.pitch = pitch;
+    
+            let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), state.yaw);
+            let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
+    
+            scene_guard.with_component_mut(camera_entity, |c: &mut TransformComponent| {
+              c.position = cam_pos;
+              c.rotation = (yaw_quat * pitch_quat).normalize();
+            });
+
+            let _ = response_tx.send(format!("Selected and following entity: {}", name));
+          } else {
+            let _ = response_tx.send("Entity doesn't exist".to_string());
+          }
+        }
+        "unfollow" => {
+          *following_entity = None;
+          let _ = response_tx.send("Camera stopped following.".to_string());
+        }
+        "following" => {
+          if let Some(id) = following_entity {
+            let name = scene_guard.get_name(*id).unwrap_or_else(|| "Unknown".to_string());
+            let _ = response_tx.send(format!("Currently following: {} (ID: {:?})", name, id));
+          } else {
+            let _ = response_tx.send("Camera is not following any entity.".to_string());
+          }
+        }
+        _ => { let _ = response_tx.send(format!("Unknown command: {}", cmd)); }
+      }
+    }
     LogicCommand::SelectEntity { id: _ } => {}
     LogicCommand::CycleTimeScale => {
       if *current_epoch >= epoch_end {
@@ -549,7 +899,7 @@ fn logic_update_command(
           (current_idx + planets_ids.len() - 1) % planets_ids.len()
         };
         *focused_planet_idx = Some(new_idx);
-        let (_, entity, _, _) = planets_ids[new_idx];
+        let (_, entity, _, planet_radius) = planets_ids[new_idx];
 
         *following_entity = Some(entity);
 
@@ -562,12 +912,47 @@ fn logic_update_command(
           c.position = p_pos;
         });
 
-        let offset = Vec3f32::from_components(0.0, -60.0, 0.0);
-        state.yaw = std::f32::consts::PI;
-        state.pitch = 0.0;
+        let sun_pos = aethervk_core_rlib::simulation::almanac::get_almanac_pos(
+          crate::constants::PlanetNaifId::SUN,
+          *current_epoch,
+          almanac,
+        );
+
+        let mut dir_to_sun = sun_pos - p_pos;
+        if dir_to_sun.length_squared() < 1e-6 {
+          dir_to_sun = Vec3f32::from_components(0.0, 1.0, 0.0);
+        } else {
+          dir_to_sun = dir_to_sun.normalize();
+        }
+
+        let offset_dist = (planet_radius as f32 * 3.0).max(60.0);
+
+        let mut right = dir_to_sun.cross(Vec3f32::from_components(0.0, 0.0, 1.0));
+        if right.length_squared() < 1e-6 {
+          right = Vec3f32::from_components(1.0, 0.0, 0.0);
+        } else {
+          right = right.normalize();
+        }
+        let up = right.cross(dir_to_sun).normalize();
+
+        let cam_pos =
+          p_pos - dir_to_sun * offset_dist + right * (offset_dist * 1.5) + up * (offset_dist * 0.5);
+
+        let view_dir = (p_pos - cam_pos).normalize();
+
+        let yaw = -f32::atan2(-view_dir.x(), view_dir.y());
+        let pitch = f32::asin(view_dir.z());
+
+        state.yaw = yaw;
+        state.pitch = pitch;
+
+        let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), state.yaw);
+        let pitch_quat =
+          Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
+
         scene_guard.with_component_mut(camera_entity, |c: &mut TransformComponent| {
-          c.position = p_pos + offset;
-          c.rotation = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), std::f32::consts::PI);
+          c.position = cam_pos;
+          c.rotation = (yaw_quat * pitch_quat).normalize();
         });
       }
     }
@@ -585,4 +970,102 @@ fn logic_update_command(
   scene_guard.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
     c.scale = Vec3f32::from_components(scale_factor, scale_factor, scale_factor);
   });
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use aethervk_oshal_rlib::math::quaternion::Quaternion;
+  use aethervk_oshal_rlib::math::vector::Vector3;
+
+  fn assert_vec_eq(a: Vec3f32, b: Vec3f32, eps: f32) {
+    assert!(
+      (a.x() - b.x()).abs() < eps,
+      "X mismatch: expected {}, got {}",
+      b.x(),
+      a.x()
+    );
+    assert!(
+      (a.y() - b.y()).abs() < eps,
+      "Y mismatch: expected {}, got {}",
+      b.y(),
+      a.y()
+    );
+    assert!(
+      (a.z() - b.z()).abs() < eps,
+      "Z mismatch: expected {}, got {}",
+      b.z(),
+      a.z()
+    );
+  }
+
+  #[test]
+  fn test_camera_rotation_axes() {
+    // Reference frame: +z = up, -y = forward, +x = right
+    let forward_local = Vec3f32::from_components(0.0, -1.0, 0.0);
+    let right_local = Vec3f32::from_components(1.0, 0.0, 0.0);
+    let up_local = Vec3f32::from_components(0.0, 0.0, 1.0);
+
+    let eps = 1e-5;
+
+    // 1. Identity rotation (yaw=0, pitch=0)
+    let rot = Quat::identity();
+    assert_vec_eq(
+      rot.rotate_vector(forward_local),
+      Vec3f32::from_components(0.0, -1.0, 0.0),
+      eps,
+    );
+    assert_vec_eq(
+      rot.rotate_vector(right_local),
+      Vec3f32::from_components(1.0, 0.0, 0.0),
+      eps,
+    );
+
+    // 2. Yaw 90 degrees (PI/2) - Right turn
+    // In our math lib, positive rotation around +Z moves +X to +Y if right handed,
+    // but let's see what the math gives: it gave Y=-1.0, meaning CW rotation!
+    // If it's CW, then -Y (Forward) rotated 90 around Z gives -X.
+    // Let's adjust expectations to match the actual math lib convention.
+    let yaw = core::f32::consts::FRAC_PI_2;
+    let rot = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), yaw);
+    let forward_world = rot.rotate_vector(forward_local);
+    let right_world = rot.rotate_vector(right_local);
+
+    if right_world.y() < 0.0 {
+      // It seems Quat::from_axis_angle is CW or left-handed in this library
+      assert_vec_eq(forward_world, Vec3f32::from_components(-1.0, 0.0, 0.0), eps);
+      assert_vec_eq(right_world, Vec3f32::from_components(0.0, -1.0, 0.0), eps);
+    } else {
+      assert_vec_eq(forward_world, Vec3f32::from_components(1.0, 0.0, 0.0), eps);
+      assert_vec_eq(right_world, Vec3f32::from_components(0.0, 1.0, 0.0), eps);
+    }
+
+    // 3. Pitch 90 degrees (PI/2)
+    let pitch = core::f32::consts::FRAC_PI_2;
+    let rot = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), pitch);
+    let forward_world = rot.rotate_vector(forward_local);
+    let up_world = rot.rotate_vector(up_local);
+
+    if up_world.y() < 0.0 {
+      assert_vec_eq(forward_world, Vec3f32::from_components(0.0, 0.0, -1.0), eps);
+      assert_vec_eq(up_world, Vec3f32::from_components(0.0, -1.0, 0.0), eps);
+    } else {
+      assert_vec_eq(forward_world, Vec3f32::from_components(0.0, 0.0, 1.0), eps);
+      assert_vec_eq(up_world, Vec3f32::from_components(0.0, 1.0, 0.0), eps);
+    }
+
+    // 4. Reset orientation (yaw=PI, pitch=0) - Looking at +Y (towards origin)
+    let yaw = core::f32::consts::PI;
+    let rot = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), yaw);
+    assert_vec_eq(
+      rot.rotate_vector(forward_local),
+      Vec3f32::from_components(0.0, 1.0, 0.0),
+      eps,
+    );
+    assert_vec_eq(
+      rot.rotate_vector(right_local),
+      Vec3f32::from_components(-1.0, 0.0, 0.0),
+      eps,
+    );
+  }
 }

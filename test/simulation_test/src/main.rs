@@ -49,6 +49,11 @@ struct AppState {
   is_resizing: bool,
   is_exiting: bool,
   outlines_enabled: Arc<AtomicBool>,
+  is_command_prompt_open: bool,
+  console_open_progress: f32,
+  console_scroll_offset: usize,
+  command_history: std::collections::VecDeque<String>,
+  current_command: String,
 }
 
 impl Drop for AppState {
@@ -224,6 +229,9 @@ fn main() {
   scene.register_component::<SunComponent>(&[TypeId::of::<TransformComponent>()]);
   scene.register_component::<SkyComponent>(&[]);
   scene.register_component::<GridComponent>(&[]);
+  scene.register_component::<aethervk_core_rlib::scene::BvhDebugComponent>(&[]);
+  scene.register_component::<aethervk_core_rlib::scene::SelectedComponent>(&[]);
+  scene.register_component::<aethervk_core_rlib::scene::FollowingComponent>(&[]);
 
   let assets_dir = {
     let mut args = std::env::args();
@@ -270,29 +278,33 @@ fn main() {
     )
     .unwrap();
 
-  let mesh_entity = scene.spawn_entity("entity");
-  scene
-    .add_component(
-      mesh_entity,
-      TransformComponent {
-        position: Vec3f32::from_components(0.0, 0.0, 0.0),
-        rotation: Quat::identity(),
-        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-      },
-    )
-    .unwrap();
-  scene
-    .add_component(
-      mesh_entity,
-      PhysicalMeshComponent {
-        mesh: comet,
-        emissive_intensity: 0.0,
-        emissive_color: [0.0, 0.0, 0.0],
-      },
-    )
-    .unwrap();
-  scene.set_parent(mesh_entity, Some(root_entity));
+  #[cfg(not(feature = "spotless_rendering"))]
+  {
+    let mesh_entity = scene.spawn_entity("entity");
+    scene
+      .add_component(
+        mesh_entity,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        mesh_entity,
+        PhysicalMeshComponent {
+          mesh: comet,
+          emissive_intensity: 0.0,
+          emissive_color: [0.0, 0.0, 0.0],
+        },
+      )
+      .unwrap();
+    scene.set_parent(mesh_entity, Some(root_entity));
+  }
 
+  #[cfg(not(feature = "spotless_rendering"))]
   let planets = [
     (
       "Mercury",
@@ -345,6 +357,8 @@ fn main() {
   ];
 
   let mut planets_ids = Vec::new();
+
+  #[cfg(not(feature = "spotless_rendering"))]
   for (name, tex_path, naif_id, rot_period) in planets.iter() {
     let planet_radius = (utils::get_planet_radius(*naif_id, &assets_dir)
       / constants::DISTANCE_SCALE_FACTOR as f32)
@@ -403,8 +417,8 @@ fn main() {
     .add_component(
       camera_entity,
       TransformComponent {
-        position: Vec3f32::from_components(0.0, -400.0, 0.0),
-        rotation: Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), std::f32::consts::PI),
+        position: Vec3f32::from_components(0.0, -40.0, 0.0),
+        rotation: Quat::identity(),
         scale: Vec3f32::from_components(1.0, 1.0, 1.0),
       },
     )
@@ -417,8 +431,10 @@ fn main() {
           45.0f32.to_radians(),
           800.0 / 600.0, // Default aspect ratio, will be updated by resize
           0.1,
-          10000.0,
+          1000000.0,
         ),
+        near_plane: 0.1,
+        far_plane: 1000000.0,
       },
     )
     .unwrap();
@@ -501,6 +517,11 @@ fn main() {
     is_exiting: false,
     window,
     outlines_enabled: Arc::clone(&outlines_enabled),
+    is_command_prompt_open: false,
+    console_open_progress: 0.0,
+    console_scroll_offset: 0,
+    command_history: std::collections::VecDeque::with_capacity(1000),
+    current_command: String::new(),
   };
 
   let _render_frontend_tracker = RenderFrontendDropTracker(Arc::clone(&render_frontend));
@@ -515,13 +536,17 @@ fn main() {
     presentation_engine,
     cursor_entity,
     sun_entity,
+    assets_dir.clone(),
   );
 
   // --- Start Logic Thread ---
   let (logic_tx, logic_rx) = mpsc::channel::<LogicCommand>();
+  let (response_tx, response_rx) = mpsc::channel::<String>();
   let logic_thread_handle = start_logic_thread(
     logic_rx,
+    response_tx,
     Arc::clone(&scene_shared),
+    root_entity,
     camera_entity,
     cursor_entity,
     grid_entity,
@@ -628,104 +653,171 @@ fn main() {
           },
           WindowEvent::KeyboardInput { event, .. } => {
             if event.state == ElementState::Pressed {
-              if let PhysicalKey::Code(keycode) = event.physical_key {
-                let speed = 0.5;
-                match keycode {
-                  KeyCode::ArrowUp => {
-                    let _ = logic_tx.send(LogicCommand::MoveCursor {
-                      axis: Vec3f32::from_components(0.0, 0.0, -1.0),
-                      amount: speed,
-                    });
-                    app_state.window.request_redraw();
-                  }
-                  KeyCode::ArrowDown => {
-                    let _ = logic_tx.send(LogicCommand::MoveCursor {
-                      axis: Vec3f32::from_components(0.0, 0.0, 1.0),
-                      amount: speed,
-                    });
-                    app_state.window.request_redraw();
-                  }
-                  KeyCode::ArrowLeft => {
-                    let _ = logic_tx.send(LogicCommand::MoveCursor {
-                      axis: Vec3f32::from_components(-1.0, 0.0, 0.0),
-                      amount: speed,
-                    });
-                    app_state.window.request_redraw();
-                  }
-                  KeyCode::ArrowRight => {
-                    let _ = logic_tx.send(LogicCommand::MoveCursor {
-                      axis: Vec3f32::from_components(1.0, 0.0, 0.0),
-                      amount: speed,
-                    });
-                    app_state.window.request_redraw();
-                  }
-                  KeyCode::KeyQ => {
-                    #[cfg(target_os = "macos")]
-                    if modifiers_state.super_key() {
-                      // So it doesn't even get here
-                      app_state.is_exiting = true;
-                      let _ = logic_tx.send(LogicCommand::Exit);
-                      let _ = render_tx.try_send(None);
-                      println!("You Clicked exit");
-                      elwt.exit();
-                      return;
+              if app_state.is_command_prompt_open {
+                if let PhysicalKey::Code(KeyCode::Escape) = event.physical_key {
+                  app_state.is_command_prompt_open = false;
+                  app_state.window.request_redraw();
+                } else {
+                  match &event.logical_key {
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Backspace) => {
+                      app_state.current_command.pop();
+                      app_state.window.request_redraw();
                     }
-                    let _ = logic_tx.send(LogicCommand::MoveCursor {
-                      axis: Vec3f32::from_components(0.0, -1.0, 0.0),
-                      amount: speed,
-                    });
-                    app_state.window.request_redraw();
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::PageUp) => {
+                      app_state.console_scroll_offset = app_state.console_scroll_offset.saturating_add(1);
+                      app_state.window.request_redraw();
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::PageDown) => {
+                      app_state.console_scroll_offset = app_state.console_scroll_offset.saturating_sub(1);
+                      app_state.window.request_redraw();
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
+                      if !app_state.current_command.is_empty() {
+                        let cmd = app_state.current_command.clone();
+                        app_state.command_history.push_back(format!("> {}", cmd));
+                        let _ = logic_tx.send(LogicCommand::ExecuteCommand(cmd));
+                        if app_state.command_history.len() > 1000 {
+                          app_state.command_history.pop_front();
+                        }
+                        app_state.current_command.clear();
+                        app_state.console_scroll_offset = 0;
+                      }
+                      app_state.window.request_redraw();
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Space) => {
+                      app_state.current_command.push(' ');
+                      app_state.window.request_redraw();
+                    }
+                    winit::keyboard::Key::Character(c) => {
+                      app_state.current_command.push_str(c.as_str());
+                      app_state.window.request_redraw();
+                    }
+                    _ => {}
                   }
-                  KeyCode::KeyE => {
-                    let _ = logic_tx.send(LogicCommand::MoveCursor {
-                      axis: Vec3f32::from_components(0.0, 1.0, 0.0),
-                      amount: speed,
-                    });
-                    app_state.window.request_redraw();
+                }
+              } else {
+                if let PhysicalKey::Code(keycode) = event.physical_key {
+                  let speed = 0.5;
+                  match keycode {
+                    KeyCode::KeyM => {
+                      app_state.is_command_prompt_open = true;
+                      app_state.window.request_redraw();
+                    }
+                    KeyCode::ArrowUp => {
+                      let _ = logic_tx.send(LogicCommand::MoveCursor {
+                        axis: Vec3f32::from_components(0.0, 0.0, -1.0),
+                        amount: speed,
+                      });
+                      app_state.window.request_redraw();
+                    }
+                    KeyCode::ArrowDown => {
+                      let _ = logic_tx.send(LogicCommand::MoveCursor {
+                        axis: Vec3f32::from_components(0.0, 0.0, 1.0),
+                        amount: speed,
+                      });
+                      app_state.window.request_redraw();
+                    }
+                    KeyCode::ArrowLeft => {
+                      let _ = logic_tx.send(LogicCommand::MoveCursor {
+                        axis: Vec3f32::from_components(-1.0, 0.0, 0.0),
+                        amount: speed,
+                      });
+                      app_state.window.request_redraw();
+                    }
+                    KeyCode::ArrowRight => {
+                      let _ = logic_tx.send(LogicCommand::MoveCursor {
+                        axis: Vec3f32::from_components(1.0, 0.0, 0.0),
+                        amount: speed,
+                      });
+                      app_state.window.request_redraw();
+                    }
+                    KeyCode::KeyQ => {
+                      #[cfg(target_os = "macos")]
+                      if modifiers_state.super_key() {
+                        // So it doesn't even get here
+                        app_state.is_exiting = true;
+                        let _ = logic_tx.send(LogicCommand::Exit);
+                        let _ = render_tx.try_send(None);
+                        println!("You Clicked exit");
+                        elwt.exit();
+                        return;
+                      }
+                      let _ = logic_tx.send(LogicCommand::MoveCursor {
+                        axis: Vec3f32::from_components(0.0, -1.0, 0.0),
+                        amount: speed,
+                      });
+                      app_state.window.request_redraw();
+                    }
+                    KeyCode::KeyE => {
+                      let _ = logic_tx.send(LogicCommand::MoveCursor {
+                        axis: Vec3f32::from_components(0.0, 1.0, 0.0),
+                        amount: speed,
+                      });
+                      app_state.window.request_redraw();
+                    }
+                    KeyCode::KeyX => {
+                      let _ = logic_tx.send(LogicCommand::CycleTimeScale);
+                      app_state.window.request_redraw();
+                    }
+                    KeyCode::KeyA => {
+                      let _ = logic_tx.send(LogicCommand::CyclePlanet { forward: false });
+                      app_state.window.request_redraw();
+                    }
+                    KeyCode::KeyD => {
+                      let _ = logic_tx.send(LogicCommand::CyclePlanet { forward: true });
+                      app_state.window.request_redraw();
+                    }
+                    KeyCode::KeyG => {
+                      let _ = logic_tx.send(LogicCommand::ToggleGrid);
+                      app_state.window.request_redraw();
+                    }
+                    KeyCode::KeyH => {
+                      let _ = logic_tx.send(LogicCommand::TogglePlanetOutlines);
+                      app_state.window.request_redraw();
+                    }
+                    KeyCode::KeyT => {
+                      let _ = logic_tx.send(LogicCommand::ResetCamera);
+                      app_state.window.request_redraw();
+                    }
+                    KeyCode::Digit0 | KeyCode::Numpad0 => {
+                      let _ = logic_tx.send(LogicCommand::ResetCursor);
+                      app_state.window.request_redraw();
+                    }
+                    KeyCode::Digit1 | KeyCode::Numpad1 => {
+                      let _ = logic_tx.send(LogicCommand::SnapCursorToSun);
+                      app_state.window.request_redraw();
+                    }
+                    KeyCode::Digit2 | KeyCode::Numpad2 => {
+                      let _ = logic_tx.send(LogicCommand::SnapCameraToCursor);
+                      app_state.window.request_redraw();
+                    }
+                    KeyCode::KeyV => {
+                      let _ = logic_tx.send(LogicCommand::ToggleMeasureTool);
+                      app_state.window.request_redraw();
+                    }
+                    _ => {}
                   }
-                  KeyCode::KeyX => {
-                    let _ = logic_tx.send(LogicCommand::CycleTimeScale);
-                    app_state.window.request_redraw();
-                  }
-                  KeyCode::KeyA => {
-                    let _ = logic_tx.send(LogicCommand::CyclePlanet { forward: false });
-                    app_state.window.request_redraw();
-                  }
-                  KeyCode::KeyD => {
-                    let _ = logic_tx.send(LogicCommand::CyclePlanet { forward: true });
-                    app_state.window.request_redraw();
-                  }
-                  KeyCode::KeyG => {
-                    let _ = logic_tx.send(LogicCommand::ToggleGrid);
-                    app_state.window.request_redraw();
-                  }
-                  KeyCode::KeyH => {
-                    let _ = logic_tx.send(LogicCommand::ResetCamera);
-                    app_state.window.request_redraw();
-                  }
-                  KeyCode::KeyT => {
-                    let _ = logic_tx.send(LogicCommand::TogglePlanetOutlines);
-                    app_state.window.request_redraw();
-                  }
-                  KeyCode::Digit0 | KeyCode::Numpad0 => {
-                    let _ = logic_tx.send(LogicCommand::ResetCursor);
-                    app_state.window.request_redraw();
-                  }
-                  KeyCode::Digit1 | KeyCode::Numpad1 => {
-                    let _ = logic_tx.send(LogicCommand::SnapCursorToSun);
-                    app_state.window.request_redraw();
-                  }
-                  KeyCode::Digit2 | KeyCode::Numpad2 => {
-                    let _ = logic_tx.send(LogicCommand::SnapCameraToCursor);
-                    app_state.window.request_redraw();
-                  }
-                  KeyCode::KeyV => {
-                    let _ = logic_tx.send(LogicCommand::ToggleMeasureTool);
-                    app_state.window.request_redraw();
-                  }
-                  _ => {}
                 }
               }
+            }
+          }
+          WindowEvent::MouseWheel { delta, .. } => {
+            let scroll_amount = match delta {
+              winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+              winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 10.0) as f32, // tone down pixel delta
+            };
+            if app_state.is_command_prompt_open {
+               if scroll_amount > 0.0 {
+                 app_state.console_scroll_offset = app_state.console_scroll_offset.saturating_add(1);
+               } else if scroll_amount < 0.0 {
+                 app_state.console_scroll_offset = app_state.console_scroll_offset.saturating_sub(1);
+               }
+               app_state.window.request_redraw();
+            } else {
+              let _ = logic_tx.send(LogicCommand::ZoomCamera {
+                amount: scroll_amount,
+              });
+              app_state.window.request_redraw();
             }
           }
           WindowEvent::RedrawRequested => {
@@ -777,9 +869,13 @@ fn main() {
             };
             let mut camera_component = CameraComponent {
               projection: Mat4x4f32::identity(),
+              near_plane: 0.1,
+              far_plane: 10000000.0,
             };
 
-            scene_guard.with_component(app_state.camera_entity, |c| camera_transform = *c);
+            if let Some(global) = scene_guard.global_transform(app_state.camera_entity) {
+              camera_transform = global;
+            }
             scene_guard.with_component(app_state.camera_entity, |c| camera_component = *c);
 
             // Free read lock before potentially blocking on full channel to avoid deadlocking with Logic Thread
@@ -792,6 +888,12 @@ fn main() {
               outlines_enabled: app_state
                 .outlines_enabled
                 .load(std::sync::atomic::Ordering::Relaxed),
+              is_command_prompt_open: app_state.is_command_prompt_open,
+              console_open_progress: app_state.console_open_progress,
+              console_scroll_offset: app_state.console_scroll_offset,
+              command_history: app_state.command_history.clone(),
+
+              current_command: app_state.current_command.clone(),
             };
 
             match render_tx.try_send(Some(packet)) {
@@ -823,19 +925,6 @@ fn main() {
           app_state.window.request_redraw();
         }
       }
-      Event::DeviceEvent {
-        event: DeviceEvent::MouseWheel { delta, .. },
-        ..
-      } => {
-        let scroll_amount = match delta {
-          winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-          winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
-        };
-        let _ = logic_tx.send(LogicCommand::ZoomCamera {
-          amount: scroll_amount,
-        });
-        app_state.window.request_redraw();
-      }
       Event::LoopExiting => {
         app_state.is_exiting = true;
         let _ = logic_tx.send(LogicCommand::Exit);
@@ -844,6 +933,39 @@ fn main() {
       Event::AboutToWait => {
         if app_state.is_exiting {
           return;
+        }
+
+        let dt = 0.016; // approx 60fps
+        if app_state.is_command_prompt_open {
+          app_state.console_open_progress += dt * 5.0;
+          if app_state.console_open_progress > 1.0 {
+            app_state.console_open_progress = 1.0;
+          } else {
+            app_state.window.request_redraw();
+          }
+        } else {
+          app_state.console_open_progress -= dt * 5.0;
+          if app_state.console_open_progress < 0.0 {
+            app_state.console_open_progress = 0.0;
+          } else {
+            app_state.window.request_redraw();
+          }
+        }
+
+        let mut got_responses = false;
+        while let Ok(response) = response_rx.try_recv() {
+          if response == "___CLEAR___" {
+            app_state.command_history.clear();
+          } else {
+            app_state.command_history.push_back(response);
+            if app_state.command_history.len() > 1000 {
+              app_state.command_history.pop_front();
+            }
+          }
+          got_responses = true;
+        }
+        if got_responses && app_state.is_command_prompt_open {
+          app_state.window.request_redraw();
         }
 
         if last_log_time.elapsed().as_secs() >= 5 {

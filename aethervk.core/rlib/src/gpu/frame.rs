@@ -1,7 +1,10 @@
 use crate::gpu::{
   AcquireResult, GpuResourceHandle, PipelineKey, PresentationEngineHandle, RenderDevice,
 };
-use crate::scene::{CameraComponent, EntityId, RenderableDataRef, TransformComponent, SunComponent, SkyComponent, GridComponent};
+use crate::scene::{
+  CameraComponent, EntityId, RenderableDataRef, TransformComponent, SunComponent, SkyComponent,
+  GridComponent,
+};
 use crate::simulation::comet::{PushConstants, TextureFlags};
 use crate::types::{GpuError, GpuResult};
 use aethervk_oshal_rlib::math::{
@@ -216,10 +219,15 @@ pub fn do_draw_call(
         sun_color,
         camera_pos: camera_pos.into(),
         emissive_intensity: draw_call.outline_color[3], // using intensity for alpha? Or just packing color
-        emissive_color: [draw_call.outline_color[0], draw_call.outline_color[1], draw_call.outline_color[2]], // Emissive color abused for outline color
+        emissive_color: [
+          draw_call.outline_color[0],
+          draw_call.outline_color[1],
+          draw_call.outline_color[2],
+        ], // Emissive color abused for outline color
         _unused_pad: 0,
       };
       device.push_constants(cmd_buffer, &outline_push)?;
+      device.set_line_width(cmd_buffer, 1.0)?;
       device.draw_indexed(cmd_buffer, draw_call.index_count)?;
     }
   }

@@ -2,8 +2,8 @@ use thiserror::Error;
 
 pub mod debug;
 pub mod env;
-pub mod fs;
 pub mod files;
+pub mod fs;
 pub mod memory;
 pub mod native;
 pub mod pool;
@@ -32,6 +32,17 @@ pub enum ThreadingError {
   Unknown,
 }
 
+#[repr(u32)]
+#[derive(Debug, Clone, Copy)]
+pub enum FsError {
+  CouldNotOpenFile,
+  CouldNotReadFile,
+  CouldNotGetFileSize,
+  CouldNotGetCurrentExe,
+  CouldNotCreateFile,
+  CouldNotWriteFile,
+}
+
 #[derive(Debug, Error)]
 pub enum NativeError {
   #[error("Unknown Error")]
@@ -42,6 +53,9 @@ pub enum NativeError {
 
   #[error("Thread Error {0:?}")]
   OsThreadingError(ThreadingError),
+
+  #[error("File System Error {0:?}")]
+  OsFsError(FsError),
 }
 
 impl NativeError {

@@ -75,12 +75,12 @@ pub trait Quaternion:
     let col0 = Self::Vector::from_components(
       _1 - _2 * s * (qj.squared() + qk.squared()),
       _2 * s * (qi * qj + qk * qr),
-      _2 * (qi * qk - qj * qr),
+      _2 * s * (qi * qk - qj * qr),
     );
     let col1 = Self::Vector::from_components(
       _2 * s * (qi * qj - qk * qr),
       _1 - _2 * s * (qi.squared() + qk.squared()),
-      _2 * s * (qi * qk + qi * qr),
+      _2 * s * (qj * qk + qi * qr),
     );
     let col2 = Self::Vector::from_components(
       _2 * s * (qi * qk + qj * qr),
@@ -98,7 +98,10 @@ pub trait Quaternion:
     let v = self.vector_part();
     let a = self.scalar_part();
     let v_norm = v.length();
-    let theta = a.acos();
+    let theta = a
+      .min(Self::Scalar::from_f32(1.0))
+      .max(Self::Scalar::from_f32(-1.0))
+      .acos();
     let new_theta = theta * t;
     let new_a = new_theta.cos();
     let new_v = if v_norm > Self::Scalar::from_f32(1e-6) {
@@ -132,7 +135,10 @@ pub trait Quaternion:
       return Self::from_vector_and_scalar(v, s).normalize();
     }
 
-    let theta_0 = dot.acos();
+    let theta_0 = dot
+      .min(Self::Scalar::from_f32(1.0))
+      .max(Self::Scalar::from_f32(-1.0))
+      .acos();
     let theta = theta_0 * t;
 
     let sin_theta = theta.sin();

@@ -336,6 +336,7 @@ impl Instance {
             .instance
             .get_physical_device_features2(physical_device, &mut features2)
         };
+        required_features.features = features2.features;
         if required_features.any_missing().is_some() {
           // TODO Log
           return None;

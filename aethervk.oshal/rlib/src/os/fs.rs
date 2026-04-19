@@ -2,6 +2,8 @@ use core::borrow::Borrow;
 
 use alloc::vec::Vec;
 
+use crate::os::FsError;
+
 #[cfg(windows)]
 #[allow(non_camel_case_types)]
 pub type os_char = u16;
@@ -33,6 +35,13 @@ pub trait FileSystemObject {
 
 pub struct Path {
   inner: [os_char],
+}
+
+impl From<&str> for &Path {
+  fn from(s: &str) -> Self {
+    let the_ptr: *const os_char = s.as_ptr().cast();
+    Path::from_slice(unsafe { core::slice::from_raw_parts(the_ptr, s.len()) })
+  }
 }
 
 impl PartialEq for Path {
@@ -264,7 +273,7 @@ impl PathBuf {
     }
   }
 
-  pub fn extension(&self) -> Option<impl AsRef<str>> {
+  pub fn extension(&self) -> Option<&str> {
     let slice = self.as_slice();
     if let Some(pos) = slice.iter().rposition(|&c| c == b'.' as os_char) {
       #[cfg(windows)]
@@ -386,15 +395,6 @@ impl AsRef<Path> for PathBuf {
   fn as_ref(&self) -> &Path {
     Path::from_slice(strip_nul(self.as_slice()))
   }
-}
-
-pub enum FsError {
-  CouldNotOpenFile,
-  CouldNotReadFile,
-  CouldNotGetFileSize,
-  CouldNotGetCurrentExe,
-  CouldNotCreateFile,
-  CouldNotWriteFile,
 }
 
 pub fn current_exe() -> Result<PathBuf, FsError> {
@@ -615,10 +615,7 @@ pub fn write(path: &Path, content: &[u8]) -> Result<(), FsError> {
       )
     };
 
-    unsafe {
-      CloseHandle(handle)
-    }
-    .map_err(|_| FsError::CouldNotCreateFile)?;
+    unsafe { CloseHandle(handle) }.map_err(|_| FsError::CouldNotCreateFile)?;
 
     if success.is_err() {
       Err(FsError::CouldNotWriteFile)
@@ -662,5 +659,205 @@ impl core::ops::Deref for PathBuf {
 
   fn deref(&self) -> &Path {
     Path::from_slice(strip_nul(self.as_slice()))
+  }
+}
+
+// --- Directory Iteration Types ---
+
+pub struct DirEntry {
+  path: PathBuf,
+}
+
+impl DirEntry {
+  pub fn path(&self) -> PathBuf {
+    self.path.clone()
+  }
+}
+
+pub struct ReadDir {
+  #[cfg(windows)]
+  handle: windows::Win32::Foundation::HANDLE,
+  #[cfg(windows)]
+  find_data: windows::Win32::Storage::FileSystem::WIN32_FIND_DATAW,
+  #[cfg(windows)]
+  first: bool,
+  #[cfg(windows)]
+  parent: PathBuf,
+
+  #[cfg(not(windows))]
+  dirp: *mut libc::DIR,
+  #[cfg(not(windows))]
+  parent: PathBuf,
+}
+
+impl Iterator for ReadDir {
+  type Item = Result<DirEntry, FsError>;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    #[cfg(windows)]
+    {
+      use windows::Win32::Storage::FileSystem::FindNextFileW;
+
+      loop {
+        if self.first {
+          self.first = false;
+        } else {
+          let success =
+            unsafe { FindNextFileW(self.handle, core::ptr::from_mut(&mut self.find_data)) };
+          if success.is_err() {
+            return None;
+          }
+        }
+
+        let file_name = &self.find_data.cFileName;
+
+        // Skip "." and ".."
+        if file_name[0] == b'.' as u16 && file_name[1] == 0 {
+          continue;
+        }
+        if file_name[0] == b'.' as u16 && file_name[1] == b'.' as u16 && file_name[2] == 0 {
+          continue;
+        }
+
+        // Determine length of null-terminated string
+        let mut len = 0;
+        while len < file_name.len() && file_name[len] != 0 {
+          len += 1;
+        }
+
+        let mut path = self.parent.clone();
+        path.pop_nul_if_present();
+
+        if !path.as_slice().is_empty() && path.as_slice().last() != Some(&SEP) {
+          path.push_slice(&[SEP]);
+        }
+        path.push_slice(&file_name[..len]);
+
+        return Some(Ok(DirEntry { path }));
+      }
+    }
+
+    #[cfg(not(windows))]
+    {
+      use core::ffi::CStr;
+
+      loop {
+        let entry = unsafe { libc::readdir(self.dirp) };
+        if entry.is_null() {
+          return None;
+        }
+
+        let d_name = unsafe { (*entry).d_name.as_ptr() };
+        let file_name = unsafe { CStr::from_ptr(d_name) }.to_bytes();
+
+        // Skip "." and ".."
+        if file_name == b"." || file_name == b".." {
+          continue;
+        }
+
+        let mut path = self.parent.clone();
+        let slice =
+          unsafe { core::slice::from_raw_parts(d_name as *const os_char, file_name.len()) };
+
+        path.pop_nul_if_present();
+        if !path.as_slice().is_empty() && path.as_slice().last() != Some(&SEP) {
+          path.push_slice(&[SEP]);
+        }
+
+        path.push_slice(slice);
+
+        return Some(Ok(DirEntry { path }));
+      }
+    }
+  }
+}
+
+impl Drop for ReadDir {
+  fn drop(&mut self) {
+    #[cfg(windows)]
+    {
+      use windows::Win32::Storage::FileSystem::FindClose;
+      let _ = unsafe { FindClose(self.handle) };
+    }
+    #[cfg(not(windows))]
+    {
+      unsafe { libc::closedir(self.dirp) };
+    }
+  }
+}
+
+// --- Implement read_dir ---
+
+pub fn read_dir(path: &Path) -> Result<ReadDir, FsError> {
+  #[cfg(windows)]
+  {
+    use windows::Win32::Storage::FileSystem::{FindFirstFileW, WIN32_FIND_DATAW};
+    use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
+
+    let mut search_path = path.to_pathbuf();
+    search_path.push_slice(&[SEP, b'*' as os_char]);
+    search_path.ensure_nul_terminated();
+
+    let mut find_data: WIN32_FIND_DATAW = unsafe { core::mem::zeroed() };
+    let handle = unsafe {
+      FindFirstFileW(
+        windows::core::PCWSTR(search_path.as_ptr_mut()),
+        core::ptr::from_mut(&mut find_data),
+      )
+    };
+
+    if handle == INVALID_HANDLE_VALUE {
+      return Err(FsError::CouldNotReadFile);
+    }
+
+    Ok(ReadDir {
+      handle,
+      find_data,
+      first: true,
+      parent: path.to_pathbuf(),
+    })
+  }
+
+  #[cfg(not(windows))]
+  {
+    let mut path_buf = path.to_pathbuf();
+    let dirp = unsafe { libc::opendir(path_buf.as_ptr_mut()) };
+    if dirp.is_null() {
+      return Err(FsError::CouldNotReadFile);
+    }
+    Ok(ReadDir {
+      dirp,
+      parent: path.to_pathbuf(),
+    })
+  }
+}
+
+// --- Supporting string conversions (`.to_str()`) ---
+
+impl Path {
+  /// Returns the path as a standard string.
+  /// Note: Allocates a String on Windows due to UTF-16 decoding.
+  #[cfg(windows)]
+  pub fn to_str(&self) -> Option<alloc::string::String> {
+    alloc::string::String::from_utf16(strip_nul(&self.inner)).ok()
+  }
+
+  #[cfg(not(windows))]
+  pub fn to_str(&self) -> Option<&str> {
+    let slice = strip_nul(&self.inner);
+    let bytes = unsafe { core::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len()) };
+    core::str::from_utf8(bytes).ok()
+  }
+}
+
+/// Helper trait so `path.extension().and_then(|s| s.to_str())` compiles seamlessly,
+/// bridging `impl AsRef<str>` directly to a usable `&str`.
+pub trait ExtensionToStr {
+  fn to_str(&self) -> Option<&str>;
+}
+
+impl<T: AsRef<str>> ExtensionToStr for T {
+  fn to_str(&self) -> Option<&str> {
+    Some(self.as_ref())
   }
 }

@@ -31,6 +31,8 @@ use alloc::string::String;
 pub struct RenderBackendId(pub u64);
 pub const NULL_RENDER_BACEKND: RenderBackendId = RenderBackendId(0);
 pub const VULKAN_RENDER_BACKEND: RenderBackendId = RenderBackendId(1);
+pub const METAL_RENDER_BACKEND: RenderBackendId = RenderBackendId(2);
+pub const D3D12_RENDER_BACKEND: RenderBackendId = RenderBackendId(3);
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct GpuResourceHandle(pub u64);
@@ -163,6 +165,12 @@ pub trait RenderDevice: Send + Sync {
 
   /// Traverses a QuadTree of viewports and issues the respective drawing programs
   /// (3D Viewport or GUI elements)
+  fn set_line_width(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    width: f32,
+  ) -> GpuResult<()>;
+
   fn render_frame(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -185,7 +193,7 @@ pub trait RenderDevice: Send + Sync {
   ) -> GpuResult<()>;
 
   fn get_presentation_engine_extent(&self, handle: PresentationEngineHandle)
-  -> GpuResult<[u32; 2]>;
+    -> GpuResult<[u32; 2]>;
 
   /// Acquires the next image. If it returns NeedsRecreation, the caller should
   /// discard the frame, call resize, and try again next frame
@@ -219,7 +227,7 @@ pub trait RenderDevice: Send + Sync {
 
   /// Start for an interface to draw something on the screen. Gets a handle to store rendering
   /// state setting commands
-  
+
   fn download_windowless_image(
     &self,
     handle: PresentationEngineHandle,
@@ -307,6 +315,48 @@ pub trait RenderDevice: Send + Sync {
     component: &crate::scene::GridComponent,
     view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
     camera_pos: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
+    near_plane: f32,
+    far_plane: f32,
+  ) -> GpuResult<()>;
+
+  fn render_minimap(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    player_pos: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
+    max_distance: f32,
+    planets: &[(
+      aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
+      f32,
+      [f32; 4],
+    )],
+  ) -> GpuResult<()>;
+
+  fn render_bvh(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    nodes: &[(crate::math::collision::linear_bvh::LinearBound<f32, aethervk_oshal_rlib::math::vector::vec3::Vec3f32, aethervk_oshal_rlib::math::matrix::mat3::Mat3f32>, aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32)],
+    view_proj: [f32; 16],
+    presentation_engine: PresentationEngineHandle,
+  ) -> GpuResult<()>;
+
+  fn render_ui_rect(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    color: [f32; 4],
+    position: [f32; 2],
+    size: [f32; 2],
+    presentation_engine: PresentationEngineHandle,
+  ) -> GpuResult<()>;
+
+  fn render_text(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    text: &str,
+    font_path: &str,
+    points: f32,
+    color: [f32; 4],
+    position: [f32; 2],
+    presentation_engine: PresentationEngineHandle,
   ) -> GpuResult<()>;
 
   fn end_render_pass(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
@@ -447,8 +497,13 @@ impl PresentationEngineParams {
 /// Computes execution for physics, particle systems, and interval arithmetic.
 pub trait Kernels: Send + Sync {
   /// Dispatches compute shaders to step the physical simulation dynamically.
-  fn dispatch_physics_step(&self, cmd_buffer: CommandBufferHandle, physical_scene: &PhysicalScene, dt: f32) -> GpuResult<()>;
-  
+  fn dispatch_physics_step(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    physical_scene: &PhysicalScene,
+    dt: f32,
+  ) -> GpuResult<()>;
+
   /// Dispatches compute shaders for other effects (e.g., particles).
   fn dispatch_particles(&self, cmd_buffer: CommandBufferHandle, dt: f32) -> GpuResult<()>;
 }
@@ -457,7 +512,7 @@ pub trait Kernels: Send + Sync {
 pub trait KernelRenderBridge: Send + Sync {
   /// Inserts pipeline barriers or queue ownership transfers from Compute to Graphics.
   fn sync_compute_to_graphics(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
-  
+
   /// Inserts pipeline barriers or queue ownership transfers from Graphics to Compute.
   fn sync_graphics_to_compute(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 }

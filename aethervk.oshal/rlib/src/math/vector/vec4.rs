@@ -782,7 +782,11 @@ impl Quaternion for Quat {
   #[inline]
   fn normalize(self) -> Self {
     let n = self.norm();
-    if n > 0.0 { self / n } else { Self::identity() }
+    if n > 0.0 {
+      self / n
+    } else {
+      Self::identity()
+    }
   }
 
   /// The inverse of the quaternion. For unit quaternions, this is just the conjugate.

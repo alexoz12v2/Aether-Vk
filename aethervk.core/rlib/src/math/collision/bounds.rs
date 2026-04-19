@@ -95,17 +95,99 @@ where
     self.max.into()
   }
 
+  pub fn center(&self) -> V {
+    (self.min() + self.max()) * V::Scalar::from_f32(0.5)
+  }
+
+  pub fn half_extents(&self) -> V {
+    (self.max() - self.min()) * V::Scalar::from_f32(0.5)
+  }
+
+  pub fn contains_aabb(&self, other: &Self) -> bool {
+    let s_min = self.min();
+    let s_max = self.max();
+    let o_min = other.min();
+    let o_max = other.max();
+    let eps = V::Scalar::from_f32(1e-4);
+
+    o_min.x() >= s_min.x() - eps && o_max.x() <= s_max.x() + eps &&
+    o_min.y() >= s_min.y() - eps && o_max.y() <= s_max.y() + eps &&
+    o_min.z() >= s_min.z() - eps && o_max.z() <= s_max.z() + eps
+  }
+
+  pub fn contains_obb<S, M>(&self, other: &OBB<S, V, M>) -> bool
+  where
+    M: Matrix3<Scalar = S, Vector = V>,
+    V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
+    S: FloatLike + FloatOps,
+  {
+    let s_min = self.min();
+    let s_max = self.max();
+    let eps = V::Scalar::from_f32(1e-4);
+
+    for v in other.vertices() {
+      if v.x() < s_min.x() - eps || v.x() > s_max.x() + eps ||
+         v.y() < s_min.y() - eps || v.y() > s_max.y() + eps ||
+         v.z() < s_min.z() - eps || v.z() > s_max.z() + eps {
+        return false;
+      }
+    }
+    true
+  }
+
+  pub fn encapsulate_aabb(&mut self, other: &Self) {
+    let mut s_min = self.min();
+    let mut s_max = self.max();
+    let o_min = other.min();
+    let o_max = other.max();
+
+    s_min = s_min.min(o_min);
+    s_max = s_max.max(o_max);
+
+    self.min = [s_min.x(), s_min.y(), s_min.z()];
+    self.max = [s_max.x(), s_max.y(), s_max.z()];
+  }
+
+  pub fn encapsulate_obb<S, M>(&mut self, other: &OBB<S, V, M>)
+  where
+    M: Matrix3<Scalar = S, Vector = V>,
+    V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
+    S: FloatLike + FloatOps,
+  {
+    let mut s_min = self.min();
+    let mut s_max = self.max();
+
+    for v in other.vertices() {
+      s_min = s_min.min(v);
+      s_max = s_max.max(v);
+    }
+
+    self.min = [s_min.x(), s_min.y(), s_min.z()];
+    self.max = [s_max.x(), s_max.y(), s_max.z()];
+  }
+
+  pub fn contains_point(&self, p: V) -> bool {
+    let s_min = self.min();
+    let s_max = self.max();
+    let eps = V::Scalar::from_f32(1e-4);
+
+    p.x() >= s_min.x() - eps && p.x() <= s_max.x() + eps &&
+    p.y() >= s_min.y() - eps && p.y() <= s_max.y() + eps &&
+    p.z() >= s_min.z() - eps && p.z() <= s_max.z() + eps
+  }
+
   pub fn from_tris<I>(triangles: I) -> Self
   where
     I: IntoIterator<Item = Triangle>,
     I::IntoIter: Clone,
   {
     let iter = triangles.into_iter();
-    debug_assert!(iter.clone().count() > 0);
     let mut min = V::splat(V::Scalar::from_f32(f32::INFINITY));
     let mut max = V::splat(V::Scalar::from_f32(-f32::INFINITY));
+    let mut count = 0;
 
     for tri in iter {
+      count += 1;
       min = min
         .min((*tri.v0()).into())
         .min((*tri.v1()).into())
@@ -116,16 +198,21 @@ where
         .max((*tri.v2()).into());
     }
 
+    if count == 0 {
+      min = V::zero();
+      max = V::zero();
+    }
+
     Self {
       min: min.into(),
       max: max.into(),
     }
   }
 
-  pub fn transform<M>(&self, transform: &M) -> Self
+  pub fn transform<M2>(&self, transform: &M2) -> Self
   where
-    M: Matrix4<Scalar = V::Scalar> + MatrixVectorMul,
-    M::Vector: Vector4<Scalar = V::Scalar>,
+    M2: Matrix4<Scalar = V::Scalar> + MatrixVectorMul,
+    M2::Vector: Vector4<Scalar = V::Scalar>,
   {
     let min = self.min();
     let max = self.max();
@@ -146,7 +233,7 @@ where
     let mut new_max = V::splat(V::Scalar::from_f32(-f32::INFINITY));
 
     for c in corners.iter() {
-      let v4 = M::Vector::from_components(c.x(), c.y(), c.z(), _1);
+      let v4 = M2::Vector::from_components(c.x(), c.y(), c.z(), _1);
       let transformed = transform.mul_vector(v4);
       let tv = V::from_components(transformed.x(), transformed.y(), transformed.z());
       new_min = new_min.min(tv);
@@ -207,19 +294,18 @@ where
   {
     let iter_pass_1 = triangles.into_iter();
     let iter_pass_2 = iter_pass_1.clone();
-    debug_assert!(iter_pass_1.clone().count() > 0);
 
     // 1. Find 6 maximal points
-    // (Assuming V::splat and the scalar extractions match your math library)
     let mut max_x = V::splat(V::Scalar::from_f32(-f32::INFINITY));
     let mut min_x = V::splat(V::Scalar::from_f32(f32::INFINITY));
     let mut max_y = V::splat(V::Scalar::from_f32(-f32::INFINITY));
     let mut min_y = V::splat(V::Scalar::from_f32(f32::INFINITY));
     let mut max_z = V::splat(V::Scalar::from_f32(-f32::INFINITY));
     let mut min_z = V::splat(V::Scalar::from_f32(f32::INFINITY));
+    let mut count = 0;
 
     for tri in iter_pass_1 {
-      // Assuming you updated Triangle to have a `vertices` array/iterator
+      count += 1;
       for v in tri.vertices {
         if V::Scalar::from_f32(v.x()) > max_x.x() {
           max_x = v.into();
@@ -242,7 +328,11 @@ where
       }
     }
 
-    // --- TODO 1 RESOLVED: Find the pair with the maximum distance ---
+    if count == 0 {
+      return Self::new(V::zero(), V::Scalar::from_f32(0.0));
+    }
+
+    // Find the pair with the maximum distance
     let dist2_x = (max_x - min_x).length_squared();
     let dist2_y = (max_y - min_y).length_squared();
     let dist2_z = (max_z - min_z).length_squared();
@@ -262,11 +352,10 @@ where
       p2 = max_z;
     }
 
-    // --- TODO 2 RESOLVED: Initial center and radius ---
     let _0_5 = V::Scalar::from_f32(0.5);
     let mut center = (p1 + p2) * _0_5;
     let mut radius = max_dist2.sqrt() * _0_5;
-    let mut rad2 = radius * radius; // using * over .squared() for generic safety
+    let mut rad2 = radius * radius;
 
     // 2. Adjust sphere to encompass outside points
     let _2_0 = V::Scalar::from_f32(2.0);
@@ -274,20 +363,14 @@ where
     for tri in iter_pass_2 {
       for v in tri.vertices {
         let v_vec = V::from(v);
-        let offset = v_vec - center; // Vector from center to point
+        let offset = v_vec - center;
         let dist2 = offset.length_squared();
 
         if dist2 > rad2 {
           let dist = dist2.sqrt();
-
-          // Calculate the new radius
           let new_radius = (radius + dist) * _0_5;
-
-          // Shift the center towards the point
           let shift_ratio = (dist - radius) / (dist * _2_0);
           center = center + (offset * shift_ratio);
-
-          // Update tracking variables
           radius = new_radius;
           rad2 = radius * radius;
         }
@@ -297,15 +380,15 @@ where
     Self::new(center, radius)
   }
 
-  pub fn transform<M>(&self, transform: &M) -> Self
+  pub fn transform<M2>(&self, transform: &M2) -> Self
   where
-    M: Matrix4<Scalar = V::Scalar> + MatrixVectorMul,
-    M::Vector: Vector4<Scalar = V::Scalar>,
+    M2: Matrix4<Scalar = V::Scalar> + MatrixVectorMul,
+    M2::Vector: Vector4<Scalar = V::Scalar>,
   {
     let center = self.center();
     let _1 = V::Scalar::from_f32(1.0);
 
-    let center4 = M::Vector::from_components(center.x(), center.y(), center.z(), _1);
+    let center4 = M2::Vector::from_components(center.x(), center.y(), center.z(), _1);
     let new_center4 = transform.mul_vector(center4);
     let new_center = V::from_components(new_center4.x(), new_center4.y(), new_center4.z());
 
@@ -349,9 +432,9 @@ where
   S: FloatLike + FloatOps,
 {
   /// x_axis | y_axis | z_axis
-  axes: [[V::Scalar; 3]; 3],
-  origin: [V::Scalar; 3],
-  half_extents: [V::Scalar; 3],
+  _axes: [[S; 3]; 3],
+  _origin: [S; 3],
+  _half_extents: [S; 3],
 
   _phantom: core::marker::PhantomData<M>,
 }
@@ -359,47 +442,181 @@ where
 impl<S, V, M> OBB<S, V, M>
 where
   M: Matrix3<Scalar = S, Vector = V>,
-  V: Vector3<Scalar = S> + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
+  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
   S: FloatLike + FloatOps,
 {
-  pub fn rotation3(&self) -> M {
-    let flat: &[V::Scalar; 9] = unsafe { &*(self.axes.as_ptr() as *const [V::Scalar; 9]) };
-
-    M::from_array(flat)
-  }
-
   pub fn translation(&self) -> V {
-    V::from_components(self.origin[0], self.origin[1], self.origin[2])
+    V::from_components(self._origin[0], self._origin[1], self._origin[2])
   }
 
   pub fn axes(&self) -> [V; 3] {
-    let flat: &[V::Scalar; 9] = unsafe { &*(self.axes.as_ptr() as *const [V::Scalar; 9]) };
-
+    let flat: &[S; 9] = unsafe { &*(self._axes.as_ptr() as *const [S; 9]) };
     [
-      V::from_components(flat[0], flat[1], flat[2]), // x axis
-      V::from_components(flat[3], flat[4], flat[5]), // y axis
-      V::from_components(flat[6], flat[7], flat[8]), // z axis
+      V::from_components(flat[0], flat[1], flat[2]),
+      V::from_components(flat[3], flat[4], flat[5]),
+      V::from_components(flat[6], flat[7], flat[8]),
     ]
+  }
+
+  pub fn rotation3(&self) -> M {
+    let flat: &[S; 9] = unsafe { &*(self._axes.as_ptr() as *const [S; 9]) };
+    M::from_array(flat)
   }
 
   pub fn half_extent(&self) -> V {
     V::from_components(
-      self.half_extents[0],
-      self.half_extents[1],
-      self.half_extents[2],
+      self._half_extents[0],
+      self._half_extents[1],
+      self._half_extents[2],
     )
   }
 
-  pub fn new(center: V, rot: M, half_extent: V) -> Self
-  where
-    S: FloatOps + FloatBits,
-  {
-    debug_assert!(rot.is_pure_rotation());
+  pub fn half_extents(&self) -> V {
+    self.half_extent()
+  }
+
+  pub fn center(&self) -> V {
+    V::from_components(
+      self._origin[0],
+      self._origin[1],
+      self._origin[2],
+    )
+  }
+
+  pub fn vertices(&self) -> [V; 8] {
+    let center = self.translation();
+    let m3 = self.rotation3();
+    let x = m3.x() * self._half_extents[0];
+    let y = m3.y() * self._half_extents[1];
+    let z = m3.z() * self._half_extents[2];
+
+    [
+      center - x - y - z,
+      center + x - y - z,
+      center - x + y - z,
+      center + x + y - z,
+      center - x - y + z,
+      center + x - y + z,
+      center - x + y + z,
+      center + x + y + z,
+    ]
+  }
+}
+
+impl<S, V, M> OBB<S, V, M>
+where
+  M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
+  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
+  S: FloatLike + FloatOps + FloatBits,
+{
+  pub fn contains_aabb(&self, other: &AABB<V>) -> bool {
+    let eps = S::from_f32(1e-4);
+    let inv_rot = self.rotation3().transpose();
+    let center = self.translation();
+
+    for v in other.vertices() {
+      let local_v = inv_rot.mul_vector(v - center);
+      if local_v.x().abs() > self._half_extents[0] + eps ||
+         local_v.y().abs() > self._half_extents[1] + eps ||
+         local_v.z().abs() > self._half_extents[2] + eps {
+        return false;
+      }
+    }
+    true
+  }
+
+  pub fn contains_obb(&self, other: &Self) -> bool {
+    let eps = S::from_f32(1e-4);
+    let inv_rot = self.rotation3().transpose();
+    let center = self.translation();
+
+    for v in other.vertices() {
+      let local_v = inv_rot.mul_vector(v - center);
+      if local_v.x().abs() > self._half_extents[0] + eps ||
+         local_v.y().abs() > self._half_extents[1] + eps ||
+         local_v.z().abs() > self._half_extents[2] + eps {
+        return false;
+      }
+    }
+    true
+  }
+
+  pub fn encapsulate_aabb(&mut self, other: &AABB<V>) {
+    let inv_rot = self.rotation3().transpose();
+    let center = self.translation();
+
+    let mut min = V::from_components(
+      -self._half_extents[0],
+      -self._half_extents[1],
+      -self._half_extents[2],
+    );
+    let mut max = V::from_components(
+      self._half_extents[0],
+      self._half_extents[1],
+      self._half_extents[2],
+    );
+
+    for v in other.vertices() {
+      let local_v = inv_rot.mul_vector(v - center);
+      min = min.min(local_v);
+      max = max.max(local_v);
+    }
+
+    let new_local_center = (min + max) * S::from_f32(0.5);
+    let new_world_center = center + self.rotation3().mul_vector(new_local_center);
+    let new_half_extents = (max - min) * S::from_f32(0.5);
+
+    self._origin = [new_world_center.x(), new_world_center.y(), new_world_center.z()];
+    self._half_extents = [new_half_extents.x(), new_half_extents.y(), new_half_extents.z()];
+  }
+
+  pub fn encapsulate_obb(&mut self, other: &Self) {
+    let inv_rot = self.rotation3().transpose();
+    let center = self.translation();
+
+    let mut min = V::from_components(
+      -self._half_extents[0],
+      -self._half_extents[1],
+      -self._half_extents[2],
+    );
+    let mut max = V::from_components(
+      self._half_extents[0],
+      self._half_extents[1],
+      self._half_extents[2],
+    );
+
+    for v in other.vertices() {
+      let local_v = inv_rot.mul_vector(v - center);
+      min = min.min(local_v);
+      max = max.max(local_v);
+    }
+
+    let new_local_center = (min + max) * S::from_f32(0.5);
+    let new_world_center = center + self.rotation3().mul_vector(new_local_center);
+    let new_half_extents = (max - min) * S::from_f32(0.5);
+
+    self._origin = [new_world_center.x(), new_world_center.y(), new_world_center.z()];
+    self._half_extents = [new_half_extents.x(), new_half_extents.y(), new_half_extents.z()];
+  }
+
+  pub fn contains_point(&self, p: V) -> bool {
+    let eps = S::from_f32(1e-4);
+    let inv_rot = self.rotation3().transpose();
+    let center = self.translation();
+
+    let local_v = inv_rot.mul_vector(p - center);
+    local_v.x().abs() <= self._half_extents[0] + eps &&
+    local_v.y().abs() <= self._half_extents[1] + eps &&
+    local_v.z().abs() <= self._half_extents[2] + eps
+  }
+
+  pub fn new(center: V, rot: M, half_extent: V) -> Self {
+    debug_assert!(rot.is_pure_rotation_permissive());
 
     Self {
-      axes: [rot.x().into(), rot.y().into(), rot.z().into()],
-      origin: center.into(),
-      half_extents: half_extent.into(),
+      _axes: [rot.x().into(), rot.y().into(), rot.z().into()],
+      _origin: center.into(),
+      _half_extents: half_extent.into(),
       _phantom: core::marker::PhantomData,
     }
   }
@@ -412,7 +629,6 @@ where
     V: Into<Vec3f32>,
     I: IntoIterator<Item = Triangle>,
     I::IntoIter: Clone,
-    S: FloatOps + FloatBits,
   {
     let iter0 = triangles.into_iter();
     let iter1 = iter0.clone();
@@ -424,14 +640,12 @@ where
         (Vec3f32::splat(0.0), 0.0f32),
         |acc: (Vec3f32, f32), (mu_k, a_k)| (acc.0 + a_k * mu_k, acc.1 + a_k),
       );
-      (sum_vector / area, area)
+      if area <= 1e-8 {
+        (Vec3f32::zero(), 1.0)
+      } else {
+        (sum_vector / area, area)
+      }
     };
-
-    // Safely check for valid area post-iteration to avoid O(N) debug-assert penalties
-    debug_assert!(
-      area > 0.0,
-      "Cannot compute OOBB: mesh has zero surface area or is empty."
-    );
 
     // 2. Compute Covariance Matrix
     let covariance_matrix = {
@@ -497,7 +711,6 @@ where
   where
     M2: Matrix4<Scalar = S> + MatrixVectorMul,
     M2::Vector: Vector4<Scalar = S>,
-    S: FloatOps + FloatBits,
   {
     let c = self.translation();
     let _1 = S::from_f32(1.0);
@@ -533,9 +746,9 @@ where
 
     let new_rot = M::from_columns(nx, ny, nz);
 
-    let he_x = self.half_extents[0] * len_x;
-    let he_y = self.half_extents[1] * len_y;
-    let he_z = self.half_extents[2] * len_z;
+    let he_x = self._half_extents[0] * len_x;
+    let he_y = self._half_extents[1] * len_y;
+    let he_z = self._half_extents[2] * len_z;
 
     let new_he = V::from_components(he_x, he_y, he_z);
 
@@ -545,7 +758,7 @@ where
 
 impl<V, M> OBB<f32, V, M>
 where
-  M: Matrix3<Scalar = f32, Vector = V>,
+  M: Matrix3<Scalar = f32, Vector = V> + MatrixVectorMul,
   V: Vector3<Scalar = f32> + From<Vec3f32> + From<[f32; 3]> + Into<[f32; 3]>,
 {
   pub fn transform_f32(&self, transform: &Mat4f32) -> Self {

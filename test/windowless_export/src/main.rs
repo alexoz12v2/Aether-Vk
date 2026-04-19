@@ -4,7 +4,8 @@ use aethervk_core_rlib::{
     frame::{self, RenderScene},
   },
   scene::{
-    CameraComponent, EntityId, PhysicalMeshComponent, Scene, SkyComponent, SunComponent, TransformComponent,
+    CameraComponent, EntityId, PhysicalMeshComponent, Scene, SkyComponent, SunComponent,
+    TransformComponent,
   },
   types::RuntimeParams,
 };
@@ -112,7 +113,12 @@ fn main() {
     .add_component(
       camera_entity,
       CameraComponent {
-        projection: Mat4x4f32::perspective_vk(std::f32::consts::FRAC_PI_4, width as f32 / height as f32, 0.1, 100.0),
+        projection: Mat4x4f32::perspective_vk(
+          std::f32::consts::FRAC_PI_4,
+          width as f32 / height as f32,
+          0.1,
+          100.0,
+        ),
       },
     )
     .unwrap();
@@ -142,9 +148,19 @@ fn main() {
     }
     home_dir.join("assets/Comet.glb")
   };
-  let comet = aethervk_core_rlib::simulation::comet::load_comet_from_gltf(model_path.to_str().unwrap(), true)
-    .expect("Failed to load comet");
-  scene.add_component(mesh_entity, PhysicalMeshComponent { mesh: comet, emissive_intensity: 0.0, emissive_color: [0.0, 0.0, 0.0] }).unwrap();
+  let comet =
+    aethervk_core_rlib::simulation::comet::load_comet_from_gltf(model_path.to_str().unwrap(), true)
+      .expect("Failed to load comet");
+  scene
+    .add_component(
+      mesh_entity,
+      PhysicalMeshComponent {
+        mesh: comet,
+        emissive_intensity: 0.0,
+        emissive_color: [0.0, 0.0, 0.0],
+      },
+    )
+    .unwrap();
 
   let sky_entity = scene.spawn_entity("sky");
   scene.add_component(sky_entity, SkyComponent {}).unwrap();
@@ -209,7 +225,12 @@ fn main() {
               scale: Vec3f32::from_components(1.0, 1.0, 1.0),
             };
             let mut camera_component = CameraComponent {
-              projection: Mat4x4f32::perspective_vk(std::f32::consts::FRAC_PI_4, payload.width as f32 / payload.height as f32, 0.1, 100.0),
+              projection: Mat4x4f32::perspective_vk(
+                std::f32::consts::FRAC_PI_4,
+                payload.width as f32 / payload.height as f32,
+                0.1,
+                100.0,
+              ),
             };
             payload
               .scene
@@ -224,20 +245,22 @@ fn main() {
 
             let mut render_scene = RenderScene::new((camera_transform, camera_component));
 
-            payload.scene.with_component(payload.mesh_entity, |mesh: &PhysicalMeshComponent| {
-              render_scene
-                .add_renderable(
-                  device,
-                  payload.mesh_entity,
-                  Mat4x4f32::identity(),
-                  aethervk_core_rlib::scene::RenderableDataRef::PhysicalMesh(mesh),
-                  payload.presentation_engine,
-                  "mesh",
-                  false,
-                  [1.0, 1.0, 1.0, 1.0],
-                )
-                .unwrap();
-            });
+            payload
+              .scene
+              .with_component(payload.mesh_entity, |mesh: &PhysicalMeshComponent| {
+                render_scene
+                  .add_renderable(
+                    device,
+                    payload.mesh_entity,
+                    Mat4x4f32::identity(),
+                    aethervk_core_rlib::scene::RenderableDataRef::PhysicalMesh(mesh),
+                    payload.presentation_engine,
+                    "mesh",
+                    false,
+                    [1.0, 1.0, 1.0, 1.0],
+                  )
+                  .unwrap();
+              });
 
             let mut sun_transform = TransformComponent {
               position: Vec3f32::from_components(0.0, 0.0, 0.0),
@@ -265,10 +288,16 @@ fn main() {
 
             let cmd_buffer = device.get_command_buffer().unwrap();
             device.begin_command_buffer(cmd_buffer).unwrap();
-            device.update_sun(cmd_buffer, payload.sun_entity, &sun_component).unwrap();
-            device.begin_render_pass(cmd_buffer, payload.presentation_engine, &acquire_result).unwrap();
+            device
+              .update_sun(cmd_buffer, payload.sun_entity, &sun_component)
+              .unwrap();
+            device
+              .begin_render_pass(cmd_buffer, payload.presentation_engine, &acquire_result)
+              .unwrap();
 
-            let extent = device.get_presentation_engine_extent(payload.presentation_engine).unwrap();
+            let extent = device
+              .get_presentation_engine_extent(payload.presentation_engine)
+              .unwrap();
             let root_viewport = gpu::Viewport {
               x: 0.0,
               y: 0.0,
@@ -278,18 +307,33 @@ fn main() {
               max_depth: 1.0,
             };
             device.set_viewport(cmd_buffer, &root_viewport).unwrap();
-            device.set_scissor(cmd_buffer, &gpu::Rect2D { offset: [0, 0], extent }).unwrap();
+            device
+              .set_scissor(
+                cmd_buffer,
+                &gpu::Rect2D {
+                  offset: [0, 0],
+                  extent,
+                },
+              )
+              .unwrap();
 
             let quad_tree = gpu::ViewportQuadTree {
               root: gpu::viewport::ViewportNode {
                 viewport: root_viewport,
-                scissor: gpu::Rect2D { offset: [0, 0], extent },
-                program: gpu::viewport::DrawingProgram::Viewport3D { camera_entity: Some(payload.camera_entity) },
+                scissor: gpu::Rect2D {
+                  offset: [0, 0],
+                  extent,
+                },
+                program: gpu::viewport::DrawingProgram::Viewport3D {
+                  camera_entity: Some(payload.camera_entity),
+                },
                 children: None,
               },
             };
 
-            device.render_frame(cmd_buffer, &quad_tree, &render_scene).unwrap();
+            device
+              .render_frame(cmd_buffer, &quad_tree, &render_scene)
+              .unwrap();
             device.end_render_pass(cmd_buffer).unwrap();
             device.submit_command_buffer(cmd_buffer).unwrap();
 

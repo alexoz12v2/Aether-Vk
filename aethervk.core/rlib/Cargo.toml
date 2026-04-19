@@ -21,7 +21,14 @@ cursor_debug = []
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 objc = { version = "0.2.7" }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5.2"
+objc2-metal = "0.2.2"
+objc2-quartz-core = "0.2.2"
+objc2-foundation = "0.2.2"
+
 [dependencies]
+ab_glyph = "0.2.32"
 aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = [
     "console_log",
 ] }
@@ -53,6 +60,7 @@ spirv = "0.2"
 spirv-reflect = { path = "../../external/spirv-reflect", default-features = false }
 # anise library for almanac about SPK files and planet motion data
 anise = { path = "../../external/anise/anise", default-features = false }
+bytes = { version = "1", default-features = false }
 
 [target.'cfg(all(not(target_arch = "wasm32"), any( target_os = "windows", target_os = "linux", target_os = "macos", target_os = "android", target_os = "ios")))'.dependencies]
 ash = { version = "0.38", default-features = false, features = ["debug"] }
@@ -65,6 +73,8 @@ windows = { version = ">=0.59, <=0.62", default-features = false, features = [
     "Win32_Foundation",
     "Win32_System_Console",
     "Win32_System_LibraryLoader",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
 ] }
 
 [target.'cfg(target_family = "unix")'.dependencies]

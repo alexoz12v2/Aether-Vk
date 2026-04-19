@@ -5,8 +5,11 @@
 use alloc::vec::Vec;
 use aethervk_oshal_rlib::{
   self as oshal,
-  math::FloatLike,
-  math::vector::{Vector, Vector3, vec3::Vec3f32},
+  math::{
+    FloatLike,
+    vector::{Vector, Vector3, vec3::Vec3f32},
+  },
+  os::FsError,
 };
 use oshal::os::{
   fs::{self, FileSystemObject, PathBuf},
@@ -97,6 +100,10 @@ pub struct Texture {
   pub has_mipmaps: bool,
 }
 
+use aethervk_oshal_rlib::math::matrix::{Matrix3, mat3::Mat3f32};
+use crate::math::collision::bvh_builder::{BVHBuilder, BVHBuilderParams};
+use crate::math::collision::linear_bvh::LinearBVH;
+
 pub struct Comet {
   pub vertices: Vec<Vertex>,
   pub indices: Vec<u32>,
@@ -108,6 +115,86 @@ pub struct Comet {
   /// from this field, all other accessors are computed, plus conversion
   /// to any other scalar numeric format declared in oshal library, to support mixed precision simulation
   mass_properties: MassProperties,
+  pub bvh: Option<LinearBVH<f32, Vec3f32, Mat3f32>>,
+  pub principal_axes: Option<Mat3f32>,
+}
+
+fn compute_comet_extras(
+  vertices: &[Vertex],
+  indices: &[u32],
+  mass_properties: &mut MassProperties,
+) -> (Option<LinearBVH<f32, Vec3f32, Mat3f32>>, Option<Mat3f32>, Vec<Vertex>) {
+  use crate::math::compute_com_and_tensor;
+  let raw_verts: Vec<Vec3f32> = vertices
+    .iter()
+    .map(|v| Vec3f32::from_components(v.position[0], v.position[1], v.position[2]))
+    .collect();
+  let (_, mat) = compute_com_and_tensor(&raw_verts, 1.0); // Assume unit mass per vertex for geometry proxy
+  let (principal_moments, principal_axes) = crate::math::qr_diagonalization(mat, 1e-6, 100);
+
+  // Update mass properties to match the new diagonalized tensor
+  mass_properties.inertia.xx = principal_moments.x() as f64;
+  mass_properties.inertia.yy = principal_moments.y() as f64;
+  mass_properties.inertia.zz = principal_moments.z() as f64;
+  mass_properties.inertia.xy = 0.0;
+  mass_properties.inertia.xz = 0.0;
+  mass_properties.inertia.yz = 0.0;
+  
+  // Center of mass becomes (0,0,0) in the local frame since vertices are translated
+  mass_properties.center_of_mass = [0.0, 0.0, 0.0];
+  
+  // Calculate new principal axes correctly oriented.
+  // Transform vertices into the new local coordinate system aligned with the principal axes.
+  let mut local_vertices = vertices.to_vec();
+  for v in local_vertices.iter_mut() {
+    let v_world = Vec3f32::from_components(v.position[0], v.position[1], v.position[2]);
+    let vx = principal_axes.x.dot(v_world);
+    let vy = principal_axes.y.dot(v_world);
+    let vz = principal_axes.z.dot(v_world);
+    v.position = [vx, vy, vz];
+    
+    let n_world = Vec3f32::from_components(v.normal[0], v.normal[1], v.normal[2]);
+    let nx = principal_axes.x.dot(n_world);
+    let ny = principal_axes.y.dot(n_world);
+    let nz = principal_axes.z.dot(n_world);
+    v.normal = [nx, ny, nz];
+  }
+
+  oshal::log!("Inertia Principal Moments: {:?}", principal_moments);
+  // Log the axes properly formatted
+  use aethervk_oshal_rlib::math::vector::Vector;
+  oshal::log!(
+    "Principal Axes: \n[{:?}, {:?}, {:?}]\n[{:?}, {:?}, {:?}]\n[{:?}, {:?}, {:?}]",
+    principal_axes.x.x(),
+    principal_axes.y.x(),
+    principal_axes.z.x(),
+    principal_axes.x.y(),
+    principal_axes.y.y(),
+    principal_axes.z.y(),
+    principal_axes.x.z(),
+    principal_axes.y.z(),
+    principal_axes.z.z()
+  );
+
+  let mut tris = Vec::new();
+  for chunk in indices.chunks_exact(3) {
+    let v0 = local_vertices[chunk[0] as usize].position;
+    let v1 = local_vertices[chunk[1] as usize].position;
+    let v2 = local_vertices[chunk[2] as usize].position;
+    tris.push(Triangle {
+      vertices: [
+        Vec3f32::from_components(v0[0], v0[1], v0[2]),
+        Vec3f32::from_components(v1[0], v1[1], v1[2]),
+        Vec3f32::from_components(v2[0], v2[1], v2[2]),
+      ],
+    });
+  }
+
+  let builder = BVHBuilder::new(BVHBuilderParams::default());
+  let bvh = builder.build(&tris);
+  let linear_bvh = bvh.map(|root| LinearBVH::from_build_node(&root, 0));
+
+  (linear_bvh, Some(principal_axes), local_vertices)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -223,8 +310,8 @@ pub enum CometLoadError {
   MissingBuffer,
 }
 
-impl From<fs::FsError> for CometLoadError {
-  fn from(_: fs::FsError) -> Self {
+impl From<FsError> for CometLoadError {
+  fn from(_: FsError) -> Self {
     CometLoadError::IoError
   }
 }
@@ -293,11 +380,7 @@ fn get_texture_data(
       _ => return Err(CometLoadError::UnsupportedImageFormat),
     }
   } else if let Some(path) = uri_path {
-    if path
-      .extension()
-      .map(|s| s.as_ref() == "ktx2")
-      .unwrap_or(false)
-    {
+    if path.extension().map(|s| s == "ktx2").unwrap_or(false) {
       let reader =
         ktx2::Reader::new(&encoded_data).map_err(|_| CometLoadError::ImageDecodingError)?;
       let header = reader.header();
@@ -572,16 +655,19 @@ pub fn load_comet_from_gltf(path: &str, verbose: bool) -> Result<Comet, CometLoa
 
   oshal::log!("--- GLTF load successful! ---");
 
-  let mass_properties = calculate_mass_properties(&vertices, &indices, 1.0);
+  let mut mass_properties = calculate_mass_properties(&vertices, &indices, 1.0);
+  let (bvh, principal_axes, local_vertices) = compute_comet_extras(&vertices, &indices, &mut mass_properties);
 
   Ok(Comet {
-    vertices,
+    vertices: local_vertices,
     indices,
     albedo_map,
     normal_map,
     roughness_map,
     ao_map,
     mass_properties,
+    bvh,
+    principal_axes,
   })
 }
 
@@ -605,7 +691,10 @@ pub fn generate_uv_sphere(radius: f32, lat_segments: u32, lon_segments: u32) -> 
 
       let normal = [x, y, z];
       let position = [x * radius, y * radius, z * radius];
-      let uv = [lon as f32 / lon_segments as f32, lat as f32 / lat_segments as f32];
+      let uv = [
+        lon as f32 / lon_segments as f32,
+        lat as f32 / lat_segments as f32,
+      ];
 
       let tangent = if x == 0.0 && y == 0.0 {
         [1.0, 0.0, 0.0, 1.0]
@@ -638,16 +727,19 @@ pub fn generate_uv_sphere(radius: f32, lat_segments: u32, lon_segments: u32) -> 
     }
   }
 
-  let mass_properties = calculate_mass_properties(&vertices, &indices, 1.0);
+  let mut mass_properties = calculate_mass_properties(&vertices, &indices, 1.0);
+  let (bvh, principal_axes, local_vertices) = compute_comet_extras(&vertices, &indices, &mut mass_properties);
 
   Comet {
-    vertices,
+    vertices: local_vertices,
     indices,
     albedo_map: None,
     normal_map: None,
     roughness_map: None,
     ao_map: None,
     mass_properties,
+    bvh,
+    principal_axes,
   }
 }
 
@@ -669,13 +761,11 @@ pub fn load_texture_from_file(path: &str) -> Result<Texture, CometLoadError> {
         oshal::log!("zune_jpeg info error: no info available");
         CometLoadError::ImageDecodingError
       })?;
-      let mut data = decoder
-        .decode()
-        .map_err(|e| {
-          oshal::log!("zune_jpeg decode error: {:?}", e);
-          CometLoadError::ImageDecodingError
-        })?;
-        
+      let mut data = decoder.decode().map_err(|e| {
+        oshal::log!("zune_jpeg decode error: {:?}", e);
+        CometLoadError::ImageDecodingError
+      })?;
+
       let format = match info.components {
         1 => TexelFormat::R8_UNORM,
         3 => {
@@ -771,43 +861,4 @@ impl Default for CometSpecializationConstants {
 // since oshal and core are then exposed to cdylibs, each with their own instance of an Allocator,
 // we should never take ownership or return allocated stuff to cdylib interface.
 
-/*
- *  Mesh reading:
-- take a gltf directory path
-- ensure path exists and that associated texture resources exist
-- reject file if
 
--     1. Size mesh + textures too big
--     2. Any animation/morph targets present
--     3. More than one mesh present
--     4. Mesh is not watertight
--     4.1 Triangularization (or reject if not triangularized)
--     5. Any geometric normal, whether for faces or for vertex, is converted by corner (meaning attributes are stored per domain like blender)
--     textures should be associated to a given channel, which is remapped to a semantic meaning according to Oren Nayar model
-- compute, given dimension of spherical bounding box and total mass, per vertex mass and inertia tensor
-  - https://www.cs.upc.edu/~virtual/SGI/docs/3.%20Further%20Reading/Fast%20and%20accurate%20computation%20of%20polyhedral%20mass%20properties.pdf
-- diagonalize inertia tensor and transform object space accordingly
-
-We also need a Render pass abstraction to work with  frame+render path
-
-Render pass is created and cached given a render operation description. It doesn't match if an output attachment format (swapchain image) changes.
-Since we suppose that mesh fits as a whole, we can write a shared host side struct immediately shared by all render backends
-- Windows: IOCP via windows crate
-- Linux: libc + epoll / io_uring
-- MacOS: ?
-
-Once mesh parsing and transformation of object space is done, next is
-- Compute AABB and Bounding Volume Hierarchy in object space through the compute engine interface,
-  in such a way that each node stores the primitive span it references, such that, when the rigidbody is
-  transformed, we can cheaply recompute AABB for each node (or a better approach I'm not aware of)
-
-- the resulting struct is the "host side" backing, over which we'll compute VkBuffers and VkImages with their
-associated descriptor sets,
-- this means that there should be a trait "Renderable" which outputs an associated type which is the Backend specific
-- this means that both ComputeFrontend and RenderFrontend should have a AcceptRenderable trait/function to register/update their renderable state (eg transform or VkBuffer, or change texture)
-
-The following shaders will be used to render the rigidbody/comet body loaded through GLTF with this algorithm:
-
-// --- comet.frag ---
-DO NOT DELETE THESE!
- */
