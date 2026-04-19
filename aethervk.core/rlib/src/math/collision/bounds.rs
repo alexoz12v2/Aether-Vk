@@ -659,3 +659,60 @@ where
     self.transform(transform)
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+  use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
+
+  #[test]
+  fn test_aabb_contains() {
+    let aabb1 = AABB::new(Vec3f32::from_components(0.0, 0.0, 0.0), Vec3f32::from_components(10.0, 10.0, 10.0));
+    let aabb2 = AABB::new(Vec3f32::from_components(1.0, 1.0, 1.0), Vec3f32::from_components(9.0, 9.0, 9.0));
+    let aabb3 = AABB::new(Vec3f32::from_components(-1.0, 1.0, 1.0), Vec3f32::from_components(9.0, 9.0, 9.0));
+
+    assert!(aabb1.contains_aabb(&aabb2));
+    assert!(!aabb1.contains_aabb(&aabb3));
+    assert!(aabb1.contains_point(Vec3f32::from_components(5.0, 5.0, 5.0)));
+    assert!(!aabb1.contains_point(Vec3f32::from_components(11.0, 5.0, 5.0)));
+  }
+
+  #[test]
+  fn test_aabb_encapsulate() {
+    let mut aabb1 = AABB::new(Vec3f32::from_components(0.0, 0.0, 0.0), Vec3f32::from_components(5.0, 5.0, 5.0));
+    let aabb2 = AABB::new(Vec3f32::from_components(3.0, 3.0, 3.0), Vec3f32::from_components(10.0, 10.0, 10.0));
+    
+    aabb1.encapsulate_aabb(&aabb2);
+    assert_eq!(aabb1.min().x(), 0.0);
+    assert_eq!(aabb1.max().x(), 10.0);
+  }
+
+  #[test]
+  fn test_obb_contains_point() {
+    let obb = OBB::new(
+      Vec3f32::from_components(0.0, 0.0, 0.0),
+      Mat3f32::identity(),
+      Vec3f32::from_components(5.0, 5.0, 5.0),
+    );
+    assert!(obb.contains_point(Vec3f32::from_components(4.9, 4.9, 4.9)));
+    assert!(!obb.contains_point(Vec3f32::from_components(5.1, 0.0, 0.0)));
+  }
+
+  #[test]
+  fn test_bs_transform() {
+    use aethervk_oshal_rlib::math::matrix::{Matrix, Matrix4, SquareMatrix};
+    let bs = BS::new(Vec3f32::from_components(0.0, 0.0, 0.0), 5.0);
+    let mut t = Mat4f32::identity();
+    // Set scale to 2
+    t.x = aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(2.0, 0.0, 0.0, 0.0);
+    t.y = aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 2.0, 0.0, 0.0);
+    t.z = aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, 2.0, 0.0);
+    // Translate x
+    t.w = aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(10.0, 0.0, 0.0, 1.0);
+
+    let transformed = bs.transform_f32(&t);
+    assert_eq!(transformed.center().x(), 10.0);
+    assert_eq!(transformed.radius(), 10.0);
+  }
+}

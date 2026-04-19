@@ -431,3 +431,86 @@ where
     S::from_f32(2.0) * (dx * dy + dy * dz + dz * dx)
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+  use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
+
+  #[test]
+  fn test_bvh_builder_empty() {
+    let builder = BVHBuilder::<f32, Vec3f32, Mat3f32>::new(BVHBuilderParams::default());
+    let tris = vec![];
+    let root = builder.build(&tris);
+    assert!(root.is_none());
+  }
+
+  #[test]
+  fn test_bvh_builder_single_triangle() {
+    let builder = BVHBuilder::<f32, Vec3f32, Mat3f32>::new(BVHBuilderParams::default());
+    let t = Triangle {
+      vertices: [
+        Vec3f32::from_components(0.0, 0.0, 0.0),
+        Vec3f32::from_components(1.0, 0.0, 0.0),
+        Vec3f32::from_components(0.0, 1.0, 0.0),
+      ],
+    };
+    let tris = vec![t];
+    let root = builder.build(&tris).expect("Should build root");
+    
+    assert!(root.left.is_none());
+    assert!(root.right.is_none());
+    assert_eq!(root.primitive_indices.len(), 1);
+    assert_eq!(root.primitive_indices[0], 0);
+    
+    // Bounds should encapsulate the triangle
+    match &root.bound {
+      BoundNode::AABB(aabb) => {
+        assert_eq!(aabb.min().x(), 0.0);
+        assert_eq!(aabb.max().x(), 1.0);
+        assert_eq!(aabb.min().y(), 0.0);
+        assert_eq!(aabb.max().y(), 1.0);
+      },
+      _ => panic!("Expected AABB"),
+    }
+  }
+
+  #[test]
+  fn test_bvh_builder_split() {
+    let builder = BVHBuilder::<f32, Vec3f32, Mat3f32>::new(BVHBuilderParams {
+      aabb_levels: 10,
+      max_primitives_per_node: 1, // Force split
+      bin_count: 4,
+    });
+    let t1 = Triangle {
+      vertices: [
+        Vec3f32::from_components(0.0, 0.0, 0.0),
+        Vec3f32::from_components(1.0, 0.0, 0.0),
+        Vec3f32::from_components(0.0, 1.0, 0.0),
+      ],
+    };
+    let t2 = Triangle {
+      vertices: [
+        Vec3f32::from_components(10.0, 10.0, 10.0),
+        Vec3f32::from_components(11.0, 10.0, 10.0),
+        Vec3f32::from_components(10.0, 11.0, 10.0),
+      ],
+    };
+    let tris = vec![t1, t2];
+    let root = builder.build(&tris).expect("Should build root");
+    
+    assert!(root.left.is_some());
+    assert!(root.right.is_some());
+    assert!(root.primitive_indices.is_empty()); // Parent has no primitives
+    
+    // Parent should encapsulate both
+    match &root.bound {
+      BoundNode::AABB(aabb) => {
+        assert_eq!(aabb.min().x(), 0.0);
+        assert_eq!(aabb.max().x(), 11.0);
+      },
+      _ => panic!("Expected AABB"),
+    }
+  }
+}

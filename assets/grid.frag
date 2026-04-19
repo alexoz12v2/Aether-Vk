@@ -46,15 +46,15 @@ void main() {
   vec2 p = worldPos.xy * gridDensity;
   vec2 dp = fwidth(p);
   
-  float lineWidth = 0.03; 
+  float lineWidth = 0.01; // thinner lines
   
-  vec2 grid = smoothstep(lineWidth + dp, lineWidth - dp, abs(fract(p + 0.5) - 0.5));
+  vec2 grid = smoothstep(lineWidth + dp, max(lineWidth - dp, 0.0), abs(fract(p + 0.5) - 0.5));
   float alpha = max(grid.x, grid.y);
   
   vec2 p10 = p * 0.1;
   vec2 dp10 = dp * 0.1;
-  float majorLineWidth = 0.015;
-  vec2 grid10 = smoothstep(majorLineWidth + dp10, majorLineWidth - dp10, abs(fract(p10 + 0.5) - 0.5));
+  float majorLineWidth = 0.005; // thinner major lines
+  vec2 grid10 = smoothstep(majorLineWidth + dp10, max(majorLineWidth - dp10, 0.0), abs(fract(p10 + 0.5) - 0.5));
   float alpha10 = max(grid10.x, grid10.y);
   
   alpha = max(alpha * 0.3, alpha10 * 0.7);
@@ -62,12 +62,16 @@ void main() {
   float distFade = 1.0 - smoothstep(push.nearPlane + (push.farPlane - push.nearPlane) * 0.01, push.farPlane * 0.2, linearDepth);
   alpha *= distFade;
   
+  vec4 clipPos = push.viewProj * vec4(worldPos, 1.0);
+  
+  // Add a slight depth bias to the grid to prevent Z-fighting with objects exactly at z=0
+  clipPos.z -= 0.00001 * clipPos.w;
+  
   if (alpha < 0.01) {
     discard;
   }
   
   outColor = vec4(push.gridColor, alpha);
   
-  vec4 clipPos = push.viewProj * vec4(worldPos, 1.0);
   gl_FragDepth = (clipPos.z / clipPos.w);
 }

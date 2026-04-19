@@ -665,26 +665,61 @@ fn logic_update_command(
             let _ = response_tx.send("No entity selected".to_string());
           }
         }
-        "bvh-node-dbgrender-set" => {
+        "deselect" => {
+          if state.selected_entity.is_some() {
+            let id = state.selected_entity.unwrap();
+            let _ = scene_guard.remove_component::<aethervk_core_rlib::scene::SelectedComponent>(id);
+            state.selected_entity = None;
+            let _ = response_tx.send("Deselected entity.".to_string());
+          } else {
+            let _ = response_tx.send("No selected entity.".to_string());
+          }
+        }
+        "bvh-show" | "bvh-hide" | "bvh-node-dbgrender-set" => {
+          let is_show = c == "bvh-show" || parts.clone().last().unwrap_or("").parse::<bool>().unwrap_or(true);
           if let Some(id) = state.selected_entity {
-            let depth: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
-            let child_index: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
-            let render: bool = parts.next().unwrap_or("false").parse().unwrap_or(false);
+            let depth_str = parts.next().unwrap_or("all");
+            let idx_str = parts.next();
+            // Handle bvh-node-dbgrender-set legacy bool param
+            let target_idx: Option<u32> = if c == "bvh-node-dbgrender-set" {
+              idx_str.and_then(|s| s.parse().ok())
+            } else {
+              idx_str.and_then(|s| if s == "all" { None } else { s.parse().ok() })
+            };
 
-            let mut flat_idx = None;
+            let mut min_d = 0;
+            let mut max_d = u32::MAX;
+
+            if depth_str != "all" {
+              if let Some(dash_pos) = depth_str.find('-') {
+                let (start, end) = depth_str.split_at(dash_pos);
+                let end = &end[1..];
+                if !start.is_empty() { min_d = start.parse().unwrap_or(0); }
+                if !end.is_empty() { max_d = end.parse().unwrap_or(u32::MAX); }
+              } else {
+                let d: u32 = depth_str.parse().unwrap_or(0);
+                min_d = d;
+                max_d = d;
+              }
+            }
+
+            let mut flat_indices = Vec::new();
+            let mut max_depth_found = 0;
             scene_guard.with_component(
               id,
               |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
                 if let Some(bvh) = &mesh.mesh.bvh {
-                  let mut current_child_index = 0;
                   let mut node_stack = vec![(0, 0)];
+                  let mut current_child_index_at_depth = std::collections::HashMap::new();
+                  
                   while let Some((idx, d)) = node_stack.pop() {
-                    if d == depth {
-                      if current_child_index == child_index {
-                        flat_idx = Some(idx);
-                        break;
+                    if d > max_depth_found { max_depth_found = d; }
+                    if d >= min_d && d <= max_d {
+                      let child_index = current_child_index_at_depth.entry(d).or_insert(0);
+                      if target_idx.is_none() || target_idx == Some(*child_index) {
+                        flat_indices.push((d, idx));
                       }
-                      current_child_index += 1;
+                      *child_index += 1;
                     }
                     let node = &bvh.nodes[idx];
                     if node.primitive_count == 0 {
@@ -696,30 +731,39 @@ fn logic_update_command(
               },
             );
 
-            if let Some(idx) = flat_idx {
-              let mut added = false;
-              scene_guard.with_component_mut(
+            if flat_indices.is_empty() {
+              if min_d > max_depth_found && min_d != u32::MAX {
+                let _ = response_tx.send(format!("Error: Max depth is {}, requested {}.", max_depth_found, min_d));
+              } else {
+                let _ = response_tx.send("No nodes found for the given criteria.".to_string());
+              }
+            } else {
+              let mut bvh_len = 0;
+              scene_guard.with_component(
                 id,
-                |dbg: &mut aethervk_core_rlib::scene::BvhDebugComponent| {
-                  if idx < dbg.node_render_states.len() {
-                    dbg.node_render_states[idx] = render;
-                  }
-                  added = true;
+                |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+                  if let Some(bvh) = &mesh.mesh.bvh { bvh_len = bvh.nodes.len(); }
                 },
               );
-              if !added {
-                let mut bvh_len = None;
-                scene_guard.with_component(
+
+              if bvh_len > 0 {
+                let mut added = false;
+                scene_guard.with_component_mut(
                   id,
-                  |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
-                    if let Some(bvh) = &mesh.mesh.bvh {
-                      bvh_len = Some(bvh.nodes.len());
+                  |dbg: &mut aethervk_core_rlib::scene::BvhDebugComponent| {
+                    for &(_, idx) in &flat_indices {
+                      if idx < dbg.node_render_states.len() {
+                        dbg.node_render_states[idx] = is_show;
+                      }
                     }
+                    added = true;
                   },
                 );
-                if let Some(len) = bvh_len {
-                  let mut states = vec![false; len];
-                  states[idx] = render;
+                if !added {
+                  let mut states = vec![false; bvh_len];
+                  for &(_, idx) in &flat_indices {
+                    if idx < states.len() { states[idx] = is_show; }
+                  }
                   let _ = scene_guard.add_component(
                     id,
                     aethervk_core_rlib::scene::BvhDebugComponent {
@@ -727,14 +771,11 @@ fn logic_update_command(
                     },
                   );
                 }
+                let _ = response_tx.send(format!("{} {} nodes.", if is_show { "Showing" } else { "Hiding" }, flat_indices.len()));
               }
-              let _ = response_tx.send(format!(
-                "Set node at depth {}, index {} to {}",
-                depth, child_index, render
-              ));
-            } else {
-              let _ = response_tx.send("Node not found.".to_string());
             }
+          } else {
+            let _ = response_tx.send("No entity selected".to_string());
           }
         }
         "bvh-node-dbgrender-get" => {
@@ -796,11 +837,14 @@ fn logic_update_command(
           let _ = response_tx.send("  scene              - Prints the scene hierarchy".to_string());
           let _ = response_tx.send("  select <entity>    - Selects an entity by name".to_string());
           let _ = response_tx.send("  printsel           - Prints the currently selected entity".to_string());
+          let _ = response_tx.send("  deselect           - Deselects the currently selected entity".to_string());
           let _ = response_tx.send("  goto <entity>      - Selects and follows an entity".to_string());
           let _ = response_tx.send("  unfollow           - Stops the camera from following any entity".to_string());
           let _ = response_tx.send("  following          - Prints the entity the camera is currently following".to_string());
           let _ = response_tx.send("  printbvh [min] [max]- Prints BVH nodes for the selected entity".to_string());
-          let _ = response_tx.send("  bvh-node-dbgrender-set <depth> <idx> <bool> - Toggles BVH node debug render".to_string());
+          let _ = response_tx.send("  bvh-show <range> [idx] - Shows BVH nodes (e.g. 0-3, 2-, -4, all)".to_string());
+          let _ = response_tx.send("  bvh-hide <range> [idx] - Hides BVH nodes".to_string());
+          let _ = response_tx.send("  bvh-node-dbgrender-set <range> <idx> <bool> - Legacy toggle".to_string());
           let _ = response_tx.send("  bvh-node-dbgrender-get <depth> <idx>        - Gets BVH node debug render state".to_string());
         }
         "goto" | "follow" => {

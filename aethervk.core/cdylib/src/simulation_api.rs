@@ -434,6 +434,8 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
         0.1,
         10000.0,
       ),
+      near_plane: 0.1,
+      far_plane: 10000.0,
     },
   );
   scene.set_parent(camera_entity, Some(root_entity));
@@ -686,6 +688,8 @@ pub unsafe extern "C" fn avkSimulationContext_addCameraComponent(
       entity_id,
       CameraComponent {
         projection: Mat4x4f32::perspective_vk(fov, aspect, near, far),
+        near_plane: near,
+        far_plane: far,
       },
     );
   }
@@ -791,6 +795,8 @@ pub unsafe extern "C" fn avkSimulationContext_renderTick(ctx: *mut SimulationCon
   };
   let mut camera_component = CameraComponent {
     projection: Mat4x4f32::identity(),
+    near_plane: 0.1,
+    far_plane: 10000.0,
   };
 
   if let Some(global) = ctx.scene.global_transform(ctx.camera_entity) {

@@ -434,3 +434,86 @@ pub fn update_particles_multi_threaded(
     update_particles_single_threaded(particles, comet, sun_pos, sun_mass, dt);
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+  use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
+
+  #[test]
+  fn test_gravitational_force() {
+    let p_pos = Vec3f32::from_components(1.0e7, 0.0, 0.0);
+    let s_pos = Vec3f32::from_components(0.0, 0.0, 0.0);
+    let f = gravitational_force(p_pos, s_pos, 1.0, 1.0e10);
+    assert!(f.x() < 0.0);
+    assert_eq!(f.y(), 0.0);
+    assert_eq!(f.z(), 0.0);
+  }
+
+  #[test]
+  fn test_rigidbody_initialization() {
+    let verts = vec![
+      Vec3f32::from_components(0.0, 0.0, 0.0),
+      Vec3f32::from_components(1.0, 0.0, 0.0),
+      Vec3f32::from_components(0.0, 1.0, 0.0),
+      Vec3f32::from_components(0.0, 0.0, 1.0),
+    ];
+    let rb = RigidBody::new(
+      Vec3f32::from_components(0.0, 0.0, 0.0),
+      Vec3f32::from_components(1.0, 0.0, 0.0),
+      Vec3f32::from_components(0.0, 0.0, 0.0),
+      &verts,
+      1.0,
+    );
+    assert_eq!(rb.mass, 4.0);
+    assert_eq!(rb.velocity().x(), 1.0);
+  }
+
+  #[test]
+  fn test_particle_update() {
+    let mut p = Particle {
+      position: Vec3f32::from_components(10.0, 0.0, 0.0),
+      velocity: Vec3f32::from_components(-1.0, 0.0, 0.0),
+      mass: 1.0,
+      radius: 1.0,
+      beta: 0.0,
+      lifetime: 10.0,
+      collided: false,
+    };
+    p.update(1.0);
+    assert_eq!(p.lifetime, 9.0);
+    assert!(p.is_alive());
+  }
+
+  #[test]
+  fn test_continuous_collision_detection() {
+    let p = Particle {
+      position: Vec3f32::from_components(0.0, 0.0, 5.0),
+      velocity: Vec3f32::from_components(0.0, 0.0, -10.0),
+      mass: 1.0,
+      radius: 0.5,
+      beta: 0.0,
+      lifetime: 10.0,
+      collided: false,
+    };
+    
+    let verts = vec![
+      Vec3f32::from_components(-1.0, -1.0, 0.0),
+      Vec3f32::from_components(1.0, -1.0, 0.0),
+      Vec3f32::from_components(0.0, 1.0, 0.0),
+      Vec3f32::from_components(0.0, 0.0, -1.0),
+    ];
+    let comet = RigidBody::new(
+      Vec3f32::from_components(0.0, 0.0, 0.0),
+      Vec3f32::from_components(0.0, 0.0, 0.0),
+      Vec3f32::from_components(0.0, 0.0, 0.0),
+      &verts,
+      1.0,
+    );
+    
+    let (toi, normal) = continuous_collision_detection(&p, &comet, 0.5);
+    assert!(toi.is_some());
+    assert!(normal.is_some());
+  }
+}
