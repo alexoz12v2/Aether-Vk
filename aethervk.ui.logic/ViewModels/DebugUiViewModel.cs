@@ -9,19 +9,19 @@ namespace AetherVk.Logic.ViewModels;
 /// </summary>
 public partial class DebugUiViewModel() : TabItemViewModel("Debug UI")
 {
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(SendConsoleMessageCommand))]
-    private string? _messageToSend;
+  [ObservableProperty]
+  [NotifyCanExecuteChangedFor(nameof(SendConsoleMessageCommand))]
+  private string? _messageToSend;
 
-    private bool CanSendConsoleMessage() => !string.IsNullOrWhiteSpace(MessageToSend);
+  private bool CanSendConsoleMessage() => !string.IsNullOrWhiteSpace(MessageToSend);
 
-    [RelayCommand(CanExecute = nameof(CanSendConsoleMessage))]
-    private void SendConsoleMessage()
-    {
-        // The CanExecute check ensures MessageToSend is not null here.
-        WeakReferenceMessenger.Default.Send(new ConsoleMessage(MessageToSend!));
-        MessageToSend = string.Empty; // Clear the textbox after sending.
-    }
+  [RelayCommand(CanExecute = nameof(CanSendConsoleMessage))]
+  private void SendConsoleMessage()
+  {
+    // The CanExecute check ensures MessageToSend is not null here.
+    WeakReferenceMessenger.Default.Send(new ConsoleMessage(MessageToSend!));
+    MessageToSend = string.Empty; // Clear the textbox after sending.
+  }
 }
 
 /// <summary>
@@ -29,9 +29,10 @@ public partial class DebugUiViewModel() : TabItemViewModel("Debug UI")
 /// </summary>
 public class ConsoleMessage
 {
-    public string Message { get; }
-    public ConsoleMessage(string message)
-    {
-        Message = message;
-    }
+  public string Message { get; }
+
+  public ConsoleMessage(string message)
+  {
+    Message = message;
+  }
 }

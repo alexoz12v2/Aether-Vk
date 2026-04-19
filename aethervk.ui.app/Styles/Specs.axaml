@@ -1,0 +1,132 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Slider Style Overrides -->
+    <Style Selector="Slider">
+        <Setter Property="Foreground" Value="{DynamicResource Accent.Primary}"/>
+        <Setter Property="Background" Value="{DynamicResource Bg.Outline}"/>
+        <Setter Property="MinHeight" Value="24"/>
+    </Style>
+    <Style Selector="Slider /template/ Track">
+        <Setter Property="Height" Value="4"/>
+    </Style>
+    <Style Selector="Slider /template/ Thumb">
+        <Setter Property="Width" Value="16"/>
+        <Setter Property="Height" Value="16"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Slider:pointerover /template/ Thumb">
+        <Setter Property="Background" Value="{DynamicResource Accent.Hover}"/>
+    </Style>
+    <Style Selector="Slider:pressed /template/ Thumb">
+        <Setter Property="Background" Value="{DynamicResource Accent.Active}"/>
+    </Style>
+
+    <!-- Expander Style Overrides -->
+    <Style Selector="Expander">
+        <Setter Property="Margin" Value="0,0,0,4"/>
+        <Setter Property="CornerRadius" Value="4"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Bg.Outline}"/>
+        <Setter Property="Background" Value="{DynamicResource Bg.Surface}"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Background="{TemplateBinding Background}"
+                        BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="{TemplateBinding BorderThickness}"
+                        CornerRadius="{TemplateBinding CornerRadius}">
+                    <Grid RowDefinitions="Auto,*">
+                        <ToggleButton Name="ExpanderHeader"
+                                      Grid.Row="0"
+                                      IsChecked="{TemplateBinding IsExpanded, Mode=TwoWay}"
+                                      Content="{TemplateBinding Header}"
+                                      ContentTemplate="{TemplateBinding HeaderTemplate}"
+                                      HorizontalAlignment="Stretch"
+                                      HorizontalContentAlignment="Stretch"
+                                      Background="Transparent"
+                                      BorderThickness="0"
+                                      Padding="12,10">
+                            <ToggleButton.Template>
+                                <ControlTemplate>
+                                    <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                                        <Grid ColumnDefinitions="Auto,*">
+                                            <Path Name="Chevron"
+                                                  Grid.Column="0"
+                                                  Margin="0,0,12,0"
+                                                  VerticalAlignment="Center"
+                                                  Data="M 0 0 L 4 4 L 0 8"
+                                                  Stroke="{DynamicResource Text.Primary}"
+                                                  StrokeThickness="1.5"
+                                                  Fill="Transparent"/>
+                                            <ContentPresenter Grid.Column="1"
+                                                              Content="{TemplateBinding Content}"
+                                                              ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                              VerticalAlignment="Center"
+                                                              HorizontalAlignment="Left"/>
+                                        </Grid>
+                                    </Border>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <ContentPresenter Name="PART_ContentPresenter"
+                                          Grid.Row="1"
+                                          IsVisible="{TemplateBinding IsExpanded}"
+                                          Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          Padding="{TemplateBinding Padding}"/>
+                    </Grid>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="Expander:expanded /template/ ToggleButton#ExpanderHeader /template/ Path#Chevron">
+        <Setter Property="RenderTransform" Value="rotate(90deg)"/>
+    </Style>
+    <Style Selector="Expander /template/ ToggleButton#ExpanderHeader /template/ Path#Chevron">
+        <Setter Property="Transitions">
+            <Transitions>
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.2"/>
+            </Transitions>
+        </Setter>
+    </Style>
+
+    <!-- Accordion (Expanders with no margin and rounded outer border) -->
+    <Style Selector="Border.accordion">
+        <Setter Property="CornerRadius" Value="8"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Bg.Outline}"/>
+        <Setter Property="ClipToBounds" Value="True"/>
+    </Style>
+    <Style Selector="Border.accordion Expander">
+        <Setter Property="Margin" Value="0"/>
+        <Setter Property="BorderThickness" Value="0,0,0,1"/>
+        <Setter Property="CornerRadius" Value="0"/>
+    </Style>
+    <Style Selector="Border.accordion Expander:nth-last-child(1)">
+        <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+
+    <!-- ListTray / ListView Overrides -->
+    <Style Selector="ListBox.list-tray">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+    
+    <Style Selector="ListBoxItem.list-tray-item">
+        <Setter Property="MinHeight" Value="56"/>
+        <Setter Property="Padding" Value="16,8"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="BorderThickness" Value="0,0,0,1"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Bg.Outline}"/>
+    </Style>
+    <Style Selector="ListBoxItem.list-tray-item.dense">
+        <Setter Property="MinHeight" Value="40"/>
+    </Style>
+    <Style Selector="ListBoxItem.list-tray-item.large">
+        <Setter Property="MinHeight" Value="72"/>
+    </Style>
+</Styles>

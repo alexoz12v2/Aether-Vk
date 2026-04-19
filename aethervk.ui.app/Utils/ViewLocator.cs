@@ -1,7 +1,7 @@
 ﻿using System;
+using System.Reflection;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
-using System.Reflection;
 
 namespace AetherVk.Utils;
 

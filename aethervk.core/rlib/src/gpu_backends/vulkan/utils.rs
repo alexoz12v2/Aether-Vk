@@ -215,20 +215,9 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
   p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
   _p_user_data: *mut c_void,
 ) -> vk::Bool32 {
-  #[cfg(windows)]
-  {
-    use aethervk_oshal_rlib::log;
-
-    let p_msg = unsafe { (*p_callback_data).p_message };
-    let msg = unsafe { core::ffi::CStr::from_ptr(p_msg) };
-    log!("[Vulkan Messenger]: {:?}", msg);
-  }
-  #[cfg(target_family = "unix")]
-  {
-    let p_msg = unsafe { (*p_callback_data).p_message };
-    let count = unsafe { libc::strlen(p_msg) };
-    unsafe { libc::write(libc::STDOUT_FILENO, p_msg.cast(), count) };
-  }
+  let p_msg = unsafe { (*p_callback_data).p_message };
+  let msg = unsafe { core::ffi::CStr::from_ptr(p_msg) };
+  aethervk_oshal_rlib::log!("[Vulkan Messenger]: {:?}", msg);
 
   // don't abort Vulkan call
   vk::FALSE

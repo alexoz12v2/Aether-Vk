@@ -1,0 +1,35 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             x:DataType="vm:Viewport3DViewModel"
+             x:Class="AetherVk.Views.Viewport3DView">
+    <Grid>
+        <Image x:Name="RenderTargetImage" Stretch="Uniform" Focusable="True"
+               PointerPressed="OnPointerPressed"
+               PointerReleased="OnPointerReleased"
+               PointerMoved="OnPointerMoved"
+               PointerWheelChanged="OnPointerWheelChanged"
+               KeyDown="OnKeyDown" />
+
+        <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="10" Padding="5" CornerRadius="4" Background="#80000000" IsVisible="{Binding IsInitialized}">
+            <Rectangle x:Name="LivelinessIndicator" Width="16" Height="16" Fill="Red" RadiusX="2" RadiusY="2" />
+        </Border>
+
+        <Border Background="{DynamicResource Bg.Canvas}" Opacity="0.9" IsVisible="{Binding !IsInitialized}">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16">
+                <!-- Idle State -->
+                <StackPanel IsVisible="{Binding !IsLoading}" Spacing="16">
+                    <TextBlock Text="Initialize Native Simulation Engine" FontSize="20" FontWeight="Bold" HorizontalAlignment="Center"/>
+                    <TextBlock Text="Are you sure you want to initialize the native 3D runtime and create the first scene?" HorizontalAlignment="Center" TextWrapping="Wrap" MaxWidth="400" TextAlignment="Center"/>
+                    <Button Content="Initialize Scene" Classes="accent" Command="{Binding InitializeSceneCommand}" HorizontalAlignment="Center" Padding="20,10" FontSize="16" />
+                </StackPanel>
+
+                <!-- Loading State -->
+                <StackPanel IsVisible="{Binding IsLoading}" Spacing="16">
+                    <TextBlock Text="Initializing Engine..." FontSize="20" FontWeight="Bold" HorizontalAlignment="Center"/>
+                    <ProgressBar IsIndeterminate="True" Width="200" Height="4" HorizontalAlignment="Center" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

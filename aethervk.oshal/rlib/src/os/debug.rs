@@ -12,6 +12,8 @@ pub use windows_debug::*;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use unix_debug::*;
 
+pub static LOGGER_CALLBACK: core::sync::atomic::AtomicPtr<()> = core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+
 #[cfg(target_os = "windows")]
 mod windows_debug {
   use core::fmt;
@@ -91,6 +93,14 @@ mod windows_debug {
   pub fn log_message(args: fmt::Arguments) {
     let msg = alloc::fmt::format(args) + "\r\n";
 
+    if let Ok(c_msg) = alloc::ffi::CString::new(msg.clone()) {
+        let fptr = super::LOGGER_CALLBACK.load(core::sync::atomic::Ordering::Relaxed);
+        if !fptr.is_null() {
+            let cb: extern "C" fn(*const core::ffi::c_char) = unsafe { core::mem::transmute(fptr) };
+            cb(c_msg.as_ptr());
+        }
+    }
+
     #[cfg(feature = "console_log")]
     {
       // Initializes the console on the first call, subsequent calls just fetch the Option<HANDLE>
@@ -144,6 +154,15 @@ mod unix_debug {
   #[cfg(not(feature = "std"))]
 
   pub fn log_message(args: fmt::Arguments) {
+    let msg = alloc::fmt::format(args) + "\n";
+    if let Ok(c_msg) = alloc::ffi::CString::new(msg.clone()) {
+        let fptr = super::LOGGER_CALLBACK.load(core::sync::atomic::Ordering::Relaxed);
+        if !fptr.is_null() {
+            let cb: extern "C" fn(*const core::ffi::c_char) = unsafe { core::mem::transmute(fptr) };
+            cb(c_msg.as_ptr());
+        }
+    }
+
     // Simple write to stderr.
     // In a real no_std environment, this would need a different approach.
     // For now, this requires the `std` feature.

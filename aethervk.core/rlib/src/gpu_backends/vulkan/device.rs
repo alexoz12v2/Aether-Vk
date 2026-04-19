@@ -269,6 +269,12 @@ struct DeviceResources {
   cursor_render_archetype: Option<resources::CursorRenderResourceArchetype>,
 
   #[cfg(debug_assertions)]
+  marker_render_archetype:
+    DropTracker<TrackedOption<resources::MarkerRenderResourceArchetype, 2>, 2>,
+  #[cfg(not(debug_assertions))]
+  marker_render_archetype: Option<resources::MarkerRenderResourceArchetype>,
+
+  #[cfg(debug_assertions)]
   sky_render_archetype: DropTracker<TrackedOption<resources::SkyRenderResourceArchetype, 3>, 3>,
   #[cfg(not(debug_assertions))]
   sky_render_archetype: Option<resources::SkyRenderResourceArchetype>,
@@ -1125,6 +1131,159 @@ impl DeviceResources {
     }
   }
 
+  fn get_marker_archetype(&self) -> Option<&'_ resources::MarkerRenderResourceArchetype> {
+    #[cfg(debug_assertions)]
+    {
+      self.marker_render_archetype.as_ref().as_ref()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      self.marker_render_archetype.as_ref()
+    }
+  }
+
+  fn create_marker_archetype(
+    &mut self,
+    device: &LogicalDevice,
+    vertex_shader_key: ShaderKey,
+    fragment_shader_key: ShaderKey,
+    depth_stencil_format: vk::Format,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()> {
+    if self.marker_render_archetype.is_some() {
+      return Err(GpuError::InvalidState);
+    }
+
+    let live_presentation_engines_lock = self.live_presentation_engines.read();
+    let presentation_engine_lock = live_presentation_engines_lock
+      .get(&handle)
+      .ok_or(GpuError::InvalidArgument)?;
+    let presentation_engine_state = presentation_engine_lock.read();
+
+    let shader_manager = self.shader_manager.read();
+    let vertex_shader = shader_manager
+      .get(vertex_shader_key)
+      .ok_or(GpuError::InvalidShader)?;
+    if vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
+      return Err(GpuError::InvalidShader);
+    }
+    let fragment_shader = shader_manager
+      .get(fragment_shader_key)
+      .ok_or(GpuError::InvalidShader)?;
+    if fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
+      return Err(GpuError::InvalidShader);
+    }
+
+    let res = unsafe { resources::MarkerRenderResourceArchetype::new(device) }?;
+    #[cfg(not(debug_assertions))]
+    {
+      self.marker_render_archetype = Some(res);
+    }
+    #[cfg(debug_assertions)]
+    {
+      self.marker_render_archetype = DropTracker::new(TrackedOption::some(res));
+    }
+
+    let pipeline_graphics_info = GraphicsInfo::default()
+      .with_vertex_in(
+        VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+          .clone(),
+      )
+      .with_pre_rasterization(
+        PreRasterization::default()
+          .with_vertex_module(vertex_shader.module.get())
+          .clone(),
+      )
+      .with_fragment_shader(
+        FragmentShader::default()
+          .with_fragment_module(fragment_shader.module.get())
+          .add_viewport(vk::Viewport {
+            width: presentation_engine_state.extent().0 as _,
+            height: -(presentation_engine_state.extent().1 as f32),
+            x: 0.0,
+            y: presentation_engine_state.extent().1 as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+          })
+          .add_scissors(vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: vk::Extent2D {
+              width: presentation_engine_state.extent().0,
+              height: presentation_engine_state.extent().1,
+            },
+          })
+          .clone(),
+      )
+      .with_fragment_out(
+        FragmentOut::default()
+          .add_color_attachment_format(presentation_engine_state.format())
+          .with_depth_attachment_format(depth_stencil_format)
+          .with_stencil_attachment_format(depth_stencil_format)
+          .clone(),
+      )
+      .with_pipeline_layout(
+        unsafe {
+          let ref_arch: Option<&_>;
+          #[cfg(debug_assertions)]
+          {
+            ref_arch = self.marker_render_archetype.as_ref().as_ref();
+          }
+          #[cfg(not(debug_assertions))]
+          {
+            ref_arch = self.marker_render_archetype.as_ref();
+          }
+
+          ref_arch.unwrap_unchecked()
+        }
+        .pipeline_layout
+        .get(),
+      )
+      .with_pipeline_flags(PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE)
+      .with_render_pass(
+        self
+          .renderpasses
+          .get_or_create_render_pass(
+            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
+            0,
+            device,
+            &self.allocator.allocator,
+            &self.discard_pool,
+            0,
+          )?
+          .0
+          .get(),
+      )
+      .with_subpass(0)
+      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+      .with_stencil_compare_op(StencilCompareOp::None)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(255)
+      .with_stencil_compare_mask(0)
+      .with_stencil_write_mask(u32::MAX)
+      .clone();
+
+    self
+      .pipeline_pool
+      .write()
+      .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
+
+    {
+      let val = unsafe { self.marker_render_archetype.take().unwrap_unchecked() }
+        .with_graphics_info(pipeline_graphics_info);
+
+      #[cfg(not(debug_assertions))]
+      {
+        self.marker_render_archetype = Some(val);
+      }
+      #[cfg(debug_assertions)]
+      {
+        self.marker_render_archetype = DropTracker::new(TrackedOption::some(val));
+      }
+    }
+    Ok(())
+  }
+
   fn create_cursor_archetype(
     &mut self,
     device: &LogicalDevice,
@@ -1277,6 +1436,7 @@ impl DeviceResources {
       || self.sun_render_archetype.is_some()
       || self.sun_resources.read().is_some()
       || self.cursor_render_archetype.is_some()
+      || self.marker_render_archetype.is_some()
       || self.sky_render_archetype.is_some()
       || self.grid_render_archetype.is_some()
   }
@@ -1327,6 +1487,9 @@ impl DeviceResources {
       }
     }
     if let Some(mut archetype) = self.cursor_render_archetype.take() {
+      archetype.discard(device, &self.discard_pool, u64::MAX);
+    }
+    if let Some(mut archetype) = self.marker_render_archetype.take() {
       archetype.discard(device, &self.discard_pool, u64::MAX);
     }
     if let Some(mut archetype) = self.sky_render_archetype.take() {
@@ -1451,6 +1614,11 @@ impl DeviceResources {
       cursor_render_archetype: DropTracker::new(TrackedOption::none()),
       #[cfg(not(debug_assertions))]
       cursor_render_archetype: None,
+
+      #[cfg(debug_assertions)]
+      marker_render_archetype: DropTracker::new(TrackedOption::none()),
+      #[cfg(not(debug_assertions))]
+      marker_render_archetype: None,
       #[cfg(debug_assertions)]
       sky_render_archetype: DropTracker::new(TrackedOption::none()),
       #[cfg(not(debug_assertions))]
@@ -1914,62 +2082,28 @@ impl<'a> Device<'a> {
     let vert_path: PathBuf;
     let frag_path: PathBuf;
 
-    // TODO: proper path management
-    #[cfg(debug_assertions)]
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific(
+            "Failed to get executable path for asset loading".into(),
+          )
+        })?;
+        exe_path.parent().expect("Exe has no parent directory").join("assets")
+      }
+    };
+
+    vert_path = assets_dir.join("physical_mesh.vert.spv");
+    #[cfg(feature = "physical_mesh_debug_normals")]
     {
-      let assets_dir: PathBuf = {
-        use aethervk_oshal_rlib::os;
-        use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
-        if args.len() > 1 {
-          let p = PathBuf::from(&args[1]);
-          if !p.is_dir() {
-            return Err(GpuError::InvalidArgument);
-          }
-
-          p
-        } else {
-          let exe_path = fs::current_exe().map_err(|_| {
-            GpuError::BackendSpecific(
-              "Failed to get executable path for debug asset loading".into(),
-            )
-          })?;
-
-          let mut path = exe_path.parent();
-          let mut assets_dir: Option<PathBuf> = None;
-
-          while let Some(p) = path {
-            use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-            let test_path = p.join("assets");
-            if test_path.is_dir() {
-              assets_dir = Some(test_path);
-              break;
-            }
-            path = p.parent();
-          }
-
-          let assets_dir = assets_dir
-            .expect("Could not find assets directory when searching from executable path");
-
-          assets_dir
-        }
-      };
-
-      vert_path = assets_dir.join("physical_mesh.vert.spv");
-      #[cfg(feature = "physical_mesh_debug_normals")]
-      {
-        frag_path = assets_dir.join("physical_mesh_debug_normals.frag.spv");
-      }
-      #[cfg(not(feature = "physical_mesh_debug_normals"))]
-      {
-        frag_path = assets_dir.join("physical_mesh.frag.spv");
-      }
+      frag_path = assets_dir.join("physical_mesh_debug_normals.frag.spv");
     }
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(feature = "physical_mesh_debug_normals"))]
     {
-      todo!();
+      frag_path = assets_dir.join("physical_mesh.frag.spv");
     }
 
     let mut shader_manager = res.shader_manager.write();
@@ -1996,48 +2130,20 @@ impl<'a> Device<'a> {
   ) -> GpuResult<ShaderKey> {
     let comp_path: PathBuf;
 
-    // TODO: proper path management
-    #[cfg(debug_assertions)]
-    {
-      let assets_dir: PathBuf = {
-        use aethervk_oshal_rlib::os;
-        use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
-        if args.len() > 1 {
-          let p = PathBuf::from(&args[1]);
-          if !p.is_dir() {
-            return Err(GpuError::InvalidArgument);
-          }
-          p
-        } else {
-          let exe_path = os::fs::current_exe().map_err(|_| {
-            GpuError::BackendSpecific(
-              "Failed to get executable path for debug asset loading".into(),
-            )
-          })?;
-
-          let mut path = exe_path.parent();
-          let mut assets_dir: Option<PathBuf> = None;
-
-          while let Some(p) = path {
-            let test_path = p.join("assets");
-            if test_path.is_dir() {
-              assets_dir = Some(test_path);
-              break;
-            }
-            path = p.parent();
-          }
-
-          assets_dir.expect("Could not find assets directory when searching from executable path")
-        }
-      };
-      comp_path = assets_dir.join("skygen.comp.spv");
-    }
-    #[cfg(not(debug_assertions))]
-    {
-      todo!();
-    }
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific(
+            "Failed to get executable path for asset loading".into(),
+          )
+        })?;
+        exe_path.parent().expect("Exe has no parent directory").join("assets")
+      }
+    };
+    comp_path = assets_dir.join("skygen.comp.spv");
 
     let mut shader_manager = res.shader_manager.write();
 
@@ -2057,49 +2163,20 @@ impl<'a> Device<'a> {
   ) -> GpuResult<ShaderKey> {
     let comp_path: PathBuf;
 
-    #[cfg(debug_assertions)]
-    {
-      let assets_dir: PathBuf = {
-        use aethervk_oshal_rlib::os;
-        use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
-        if args.len() > 1 {
-          let p = PathBuf::from(&args[1]);
-          if !p.is_dir() {
-            return Err(GpuError::InvalidArgument);
-          }
-          p
-        } else {
-          let exe_path = os::fs::current_exe().map_err(|_| {
-            GpuError::BackendSpecific(
-              "Failed to get executable path for debug asset loading".into(),
-            )
-          })?;
-
-          let mut path = exe_path.parent();
-          let mut assets_dir: Option<PathBuf> = None;
-
-          while let Some(p) = path {
-            use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-            let test_path = p.join("assets");
-            if test_path.is_dir() {
-              assets_dir = Some(test_path);
-              break;
-            }
-            path = p.parent();
-          }
-
-          assets_dir.expect("Could not find assets directory when searching from executable path")
-        }
-      };
-      comp_path = assets_dir.join("sungen.comp.spv");
-    }
-    #[cfg(not(debug_assertions))]
-    {
-      todo!();
-    }
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific(
+            "Failed to get executable path for asset loading".into(),
+          )
+        })?;
+        exe_path.parent().expect("Exe has no parent directory").join("assets")
+      }
+    };
+    comp_path = assets_dir.join("sungen.comp.spv");
 
     let mut shader_manager = res.shader_manager.write();
     let comp_key = shader_manager.get_or_load(
@@ -2119,53 +2196,21 @@ impl<'a> Device<'a> {
     let vert_path: PathBuf;
     let frag_path: PathBuf;
 
-    #[cfg(debug_assertions)]
-    {
-      let assets_dir: PathBuf = {
-        use aethervk_oshal_rlib::os;
-        use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
-        if args.len() > 1 {
-          let p = PathBuf::from(&args[1]);
-          if !p.is_dir() {
-            return Err(GpuError::InvalidArgument);
-          }
-          p
-        } else {
-          let exe_path = os::fs::current_exe().map_err(|_| {
-            GpuError::BackendSpecific(
-              "Failed to get executable path for debug asset loading".into(),
-            )
-          })?;
-
-          let mut path = exe_path.parent();
-          let mut assets_dir: Option<PathBuf> = None;
-          let mut iter: i32 = 0;
-          const MAX_ITER: i32 = 32;
-
-          while let Some(p) = path {
-            let test_path = p.join("assets");
-            if test_path.is_dir() {
-              assets_dir = Some(test_path);
-              break;
-            }
-            if iter >= MAX_ITER {
-              break;
-            }
-            path = p.parent();
-            iter += 1;
-          }
-          assets_dir.unwrap()
-        }
-      };
-      vert_path = assets_dir.join("grid.vert.spv");
-      frag_path = assets_dir.join("grid.frag.spv");
-    }
-    #[cfg(not(debug_assertions))]
-    {
-      todo!();
-    }
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific(
+            "Failed to get executable path for asset loading".into(),
+          )
+        })?;
+        exe_path.parent().expect("Exe has no parent directory").join("assets")
+      }
+    };
+    vert_path = assets_dir.join("grid.vert.spv");
+    frag_path = assets_dir.join("grid.frag.spv");
 
     let mut shader_manager = res.shader_manager.write();
     let vkey = shader_manager.get_or_load(
@@ -2191,53 +2236,21 @@ impl<'a> Device<'a> {
     let vert_path: PathBuf;
     let frag_path: PathBuf;
 
-    #[cfg(debug_assertions)]
-    {
-      let assets_dir: PathBuf = {
-        use aethervk_oshal_rlib::os;
-        use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
-        if args.len() > 1 {
-          let p = PathBuf::from(&args[1]);
-          if !p.is_dir() {
-            return Err(GpuError::InvalidArgument);
-          }
-          p
-        } else {
-          let exe_path = os::fs::current_exe().map_err(|_| {
-            GpuError::BackendSpecific(
-              "Failed to get executable path for debug asset loading".into(),
-            )
-          })?;
-
-          let mut path = exe_path.parent();
-          let mut assets_dir: Option<PathBuf> = None;
-          let mut iter: i32 = 0;
-          const MAX_ITER: i32 = 32;
-
-          while let Some(p) = path {
-            let test_path = p.join("assets");
-            if test_path.is_dir() {
-              assets_dir = Some(test_path);
-              break;
-            }
-            if iter >= MAX_ITER {
-              break;
-            }
-            path = p.parent();
-            iter += 1;
-          }
-          assets_dir.unwrap()
-        }
-      };
-      vert_path = assets_dir.join("sky.vert.spv");
-      frag_path = assets_dir.join("sky.frag.spv");
-    }
-    #[cfg(not(debug_assertions))]
-    {
-      todo!();
-    }
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific(
+            "Failed to get executable path for asset loading".into(),
+          )
+        })?;
+        exe_path.parent().expect("Exe has no parent directory").join("assets")
+      }
+    };
+    vert_path = assets_dir.join("sky.vert.spv");
+    frag_path = assets_dir.join("sky.frag.spv");
 
     let mut shader_manager = res.shader_manager.write();
     let vkey = shader_manager.get_or_load(
@@ -2263,55 +2276,22 @@ impl<'a> Device<'a> {
     let vert_path: PathBuf;
     let frag_path: PathBuf;
 
-    #[cfg(debug_assertions)]
-    {
-      let assets_dir: PathBuf = {
-        use aethervk_oshal_rlib::os;
-        use aethervk_oshal_rlib::os::fs::FileSystemObject;
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific(
+            "Failed to get executable path for asset loading".into(),
+          )
+        })?;
+        exe_path.parent().expect("Exe has no parent directory").join("assets")
+      }
+    };
 
-        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
-        if args.len() > 1 {
-          let p = PathBuf::from(&args[1]);
-          if !p.is_dir() {
-            return Err(GpuError::InvalidArgument);
-          }
-
-          p
-        } else {
-          let exe_path = os::fs::current_exe().map_err(|_| {
-            GpuError::BackendSpecific(
-              "Failed to get executable path for debug asset loading".into(),
-            )
-          })?;
-
-          let mut path = exe_path.parent();
-          let mut assets_dir: Option<PathBuf> = None;
-
-          while let Some(p) = path {
-            use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-            let test_path = p.join("assets");
-            if test_path.is_dir() {
-              assets_dir = Some(test_path);
-              break;
-            }
-            path = p.parent();
-          }
-
-          let assets_dir = assets_dir
-            .expect("Could not find assets directory when searching from executable path");
-
-          assets_dir
-        }
-      };
-
-      vert_path = assets_dir.join("sun_volume.vert.spv");
-      frag_path = assets_dir.join("sun_volume.frag.spv");
-    }
-    #[cfg(not(debug_assertions))]
-    {
-      todo!();
-    }
+    vert_path = assets_dir.join("sun_volume.vert.spv");
+    frag_path = assets_dir.join("sun_volume.frag.spv");
 
     let mut shader_manager = res.shader_manager.write();
 
@@ -2331,6 +2311,46 @@ impl<'a> Device<'a> {
     Ok((vert_key, frag_key))
   }
 
+  fn ensure_marker_shader_modules(
+    &self,
+    res: &impl core::ops::Deref<Target = DeviceResources>,
+  ) -> GpuResult<(ShaderKey, ShaderKey)> {
+    let vert_path: PathBuf;
+    let frag_path: PathBuf;
+
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific(
+            "Failed to get executable path for asset loading".into(),
+          )
+        })?;
+        exe_path.parent().expect("Exe has no parent directory").join("assets")
+      }
+    };
+
+    vert_path = assets_dir.join("marker.vert.spv");
+    frag_path = assets_dir.join("marker.frag.spv");
+
+    let mut shader_manager = res.shader_manager.write();
+    let vkey = shader_manager.get_or_load(
+      &self.device,
+      &vert_path,
+      "main",
+      spirv::ExecutionModel::Vertex,
+    )?;
+    let fkey = shader_manager.get_or_load(
+      &self.device,
+      &frag_path,
+      "main",
+      spirv::ExecutionModel::Fragment,
+    )?;
+    Ok((vkey, fkey))
+  }
+
   fn ensure_cursor_shader_modules(
     &self,
     res: &impl core::ops::Deref<Target = DeviceResources>,
@@ -2338,61 +2358,28 @@ impl<'a> Device<'a> {
     let vert_path: PathBuf;
     let frag_path: PathBuf;
 
-    #[cfg(debug_assertions)]
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific(
+            "Failed to get executable path for asset loading".into(),
+          )
+        })?;
+        exe_path.parent().expect("Exe has no parent directory").join("assets")
+      }
+    };
+
+    vert_path = assets_dir.join("cursor.vert.spv");
+    #[cfg(feature = "cursor_debug")]
     {
-      let assets_dir: PathBuf = {
-        use aethervk_oshal_rlib::os;
-        use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
-        if args.len() > 1 {
-          let p = PathBuf::from(&args[1]);
-          if !p.is_dir() {
-            return Err(GpuError::InvalidArgument);
-          }
-
-          p
-        } else {
-          let exe_path = fs::current_exe().map_err(|_| {
-            GpuError::BackendSpecific(
-              "Failed to get executable path for debug asset loading".into(),
-            )
-          })?;
-
-          let mut path = exe_path.parent();
-          let mut assets_dir: Option<PathBuf> = None;
-
-          while let Some(p) = path {
-            use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-            let test_path = p.join("assets");
-            if test_path.is_dir() {
-              assets_dir = Some(test_path);
-              break;
-            }
-            path = p.parent();
-          }
-
-          let assets_dir = assets_dir
-            .expect("Could not find assets directory when searching from executable path");
-
-          assets_dir
-        }
-      };
-
-      vert_path = assets_dir.join("cursor.vert.spv");
-      #[cfg(feature = "cursor_debug")]
-      {
-        frag_path = assets_dir.join("cursor_debug.frag.spv");
-      }
-      #[cfg(not(feature = "cursor_debug"))]
-      {
-        frag_path = assets_dir.join("cursor.frag.spv");
-      }
+      frag_path = assets_dir.join("cursor_debug.frag.spv");
     }
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(feature = "cursor_debug"))]
     {
-      todo!();
+      frag_path = assets_dir.join("cursor.frag.spv");
     }
 
     let mut shader_manager = res.shader_manager.write();
@@ -2577,7 +2564,7 @@ impl<'a> RenderDevice for Device<'a> {
     let view =
       <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::from_columns(
         aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(1.0, 0.0, 0.0, 0.0),
-        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, 1.0, 0.0),
+        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, -1.0, 0.0),
         aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, -1.0, 0.0, 0.0),
         aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
       ) * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as aethervk_oshal_rlib::math::matrix::Matrix4>::from_quat_custom_frame(
@@ -2589,7 +2576,7 @@ impl<'a> RenderDevice for Device<'a> {
     if let Some((sky_entity, sky_comp)) = &render_scene.sky {
       let sky_view = <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::from_columns(
         aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(1.0, 0.0, 0.0, 0.0),
-        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, 1.0, 0.0),
+        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, -1.0, 0.0),
         aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, -1.0, 0.0, 0.0),
         aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
       ) * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as aethervk_oshal_rlib::math::matrix::Matrix4>::from_quat_custom_frame(
@@ -2628,6 +2615,10 @@ impl<'a> RenderDevice for Device<'a> {
 
     for cursor_call in &render_scene.cursor_calls {
       crate::gpu::frame::do_draw_cursor(self, view, view_proj, cmd_buffer, cursor_call)?;
+    }
+
+    for marker_call in &render_scene.marker_calls {
+      crate::gpu::frame::do_draw_marker(self, view, view_proj, cmd_buffer, marker_call)?;
     }
 
     Ok(())
@@ -3234,6 +3225,38 @@ impl<'a> RenderDevice for Device<'a> {
     Ok(())
   }
 
+  fn get_or_create_marker_resources(
+    &self,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult> {
+    if self.res.read().marker_render_archetype.is_none() {
+      let mut wres = self.res.write();
+      if wres.marker_render_archetype.is_none() {
+        let (vkey, fkey) = self.ensure_marker_shader_modules(&wres)?;
+        wres.create_marker_archetype(
+          &self.device,
+          vkey,
+          fkey,
+          self.depth_stencil_format,
+          handle,
+        )?;
+      }
+    }
+
+    let res = self.res.read();
+    let arch = res.get_marker_archetype().unwrap();
+    let pipeline_key = unsafe { arch.pipeline_key.unwrap_unchecked() };
+
+    Ok(ResourceUploadResult {
+      pipeline: pipeline_key,
+      outline_pipeline: None,
+      buffers: crate::gpu::NULL_GPU_RESOURCE,
+      texture_flags: TextureFlags::empty(),
+      emissive_intensity: 0.0,
+      emissive_color: [0.0; 3],
+    })
+  }
+
   fn get_or_create_cursor_resources(
     &self,
     handle: PresentationEngineHandle,
@@ -3335,7 +3358,7 @@ impl<'a> RenderDevice for Device<'a> {
         .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
         .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
         .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
-        .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        .old_layout(vk::ImageLayout::PRESENT_SRC_KHR)
         .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
         .image(image.get())
         .subresource_range(
@@ -3384,7 +3407,7 @@ impl<'a> RenderDevice for Device<'a> {
         .dst_stage_mask(vk::PipelineStageFlags2::NONE)
         .dst_access_mask(vk::AccessFlags2::NONE)
         .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-        .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
         .image(image.get())
         .subresource_range(
           vk::ImageSubresourceRange::default()
@@ -3416,7 +3439,6 @@ impl<'a> RenderDevice for Device<'a> {
       unsafe { self.device.destroy_command_pool(command_pool, None) };
 
       let mapped_ptr = alloc_info_res.mapped_data as *const u8;
-      oshal::log!("mapped_ptr is null: {}", mapped_ptr.is_null());
       if !mapped_ptr.is_null() {
         let _ = unsafe {
           res
@@ -3851,6 +3873,48 @@ impl<'a> RenderDevice for Device<'a> {
       }
     }
 
+    Ok(())
+  }
+
+  fn push_marker_constants(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    push_constants: &crate::gpu::MarkerPushConstants,
+  ) -> GpuResult<()> {
+    let res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers
+      .get(&(timeline, cmd_buffer))
+      .ok_or(GpuError::InvalidArgument)?;
+
+    let arch_ref: Option<&_>;
+    #[cfg(debug_assertions)]
+    {
+      arch_ref = res.marker_render_archetype.as_ref().as_ref();
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      arch_ref = res.marker_render_archetype.as_ref();
+    }
+
+    if let Some(arch) = arch_ref {
+      let layout = arch.pipeline_layout.get();
+      let push_constants_bytes = unsafe { core::slice::from_raw_parts(
+        push_constants as *const _ as *const u8,
+        core::mem::size_of::<crate::gpu::MarkerPushConstants>(),
+      ) };
+
+      unsafe {
+        self.device.cmd_push_constants(
+          data.command_buffer.get(),
+          layout,
+          vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+          0,
+          push_constants_bytes,
+        );
+      }
+    }
     Ok(())
   }
 

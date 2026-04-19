@@ -7,17 +7,23 @@
              x:DataType="vm:ConsoleViewModel"
              x:Class="AetherVk.Views.ConsoleView">
     <Grid RowDefinitions="*,Auto">
-        <ScrollViewer x:Name="ConsoleScrollViewer" Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <ItemsControl ItemsSource="{Binding Messages}" Margin="5">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                      <!-- TODO: When we merge, we should have fonts here, reference them-->
-                      <TextBlock Text="{Binding}" TextWrapping="Wrap" FontFamily="JetBrains Mono, Consolas, monospace"/>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-        </ScrollViewer>
-        <Button Grid.Row="1" Content="Clear Console" Command="{Binding ClearConsoleCommand}"
-                HorizontalAlignment="Right" Margin="5" Classes="accent"/>
+        <TextBox x:Name="ConsoleTextBox" 
+                 Grid.Row="0" 
+                 Margin="5"
+                 Text="{Binding FullText}" 
+                 IsReadOnly="True" 
+                 TextWrapping="Wrap" 
+                 AcceptsReturn="True"
+                 FontFamily="JetBrains Mono, Consolas, monospace" 
+                 FontSize="{Binding ConsoleFontSize}"
+                 PointerWheelChanged="OnConsolePointerWheelChanged" />
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="5">
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="5">
+                <Button Content="Zoom In (+)" Command="{Binding ZoomInCommand}" Classes="accent"/>
+                <Button Content="Zoom Out (-)" Command="{Binding ZoomOutCommand}" Classes="accent"/>
+                <Button Content="Export Logs" Click="OnExportLogsClicked" Classes="accent"/>
+            </StackPanel>
+            <Button Grid.Column="1" Content="Clear Console" Command="{Binding ClearConsoleCommand}" Classes="accent"/>
+        </Grid>
     </Grid>
 </UserControl>

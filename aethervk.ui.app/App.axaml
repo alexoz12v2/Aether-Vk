@@ -20,6 +20,24 @@
         <DataTemplate DataType="{x:Type vm:ConsoleViewModel}">
             <views:ConsoleView />
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:HorizonJplViewModel}">
+            <views:HorizonJplView />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:OutlineViewModel}">
+            <views:OutlineView />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:PropertiesViewModel}">
+            <views:PropertiesView />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:Viewport3DViewModel}">
+            <views:Viewport3DView />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:TimelineViewModel}">
+            <views:TimelineView />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:AlmanacExplorerViewModel}">
+            <views:AlmanacExplorerView />
+        </DataTemplate>
         <utils:ViewLocator />
     </Application.DataTemplates>
 
@@ -33,6 +51,8 @@
 
     <Application.Styles>
         <FluentTheme />
+        <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
         <StyleInclude Source="avares://AetherVk/Styles/Controls.axaml" />
+        <StyleInclude Source="avares://AetherVk/Styles/Specs.axaml" />
     </Application.Styles>
 </Application>
