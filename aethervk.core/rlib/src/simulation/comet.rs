@@ -861,4 +861,51 @@ impl Default for CometSpecializationConstants {
 // since oshal and core are then exposed to cdylibs, each with their own instance of an Allocator,
 // we should never take ownership or return allocated stuff to cdylib interface.
 
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+
+  #[test]
+  fn test_triangle_properties() {
+    let t = Triangle {
+      vertices: [
+        Vec3f32::from_components(0.0, 0.0, 0.0),
+        Vec3f32::from_components(1.0, 0.0, 0.0),
+        Vec3f32::from_components(0.0, 1.0, 0.0),
+      ],
+    };
+    
+    assert_eq!(t.area(), 0.5);
+    
+    let center = t.mean_vector();
+    assert!((center.x() - 0.3333333).abs() < 1e-6);
+    assert!((center.y() - 0.3333333).abs() < 1e-6);
+    assert_eq!(center.z(), 0.0);
+    
+    let normal = t.normal_ccw_unnormalized();
+    assert_eq!(normal.x(), 0.0);
+    assert_eq!(normal.y(), 0.0);
+    assert_eq!(normal.z(), 1.0);
+  }
+
+  #[test]
+  fn test_uv_sphere_generation() {
+    let sphere = generate_uv_sphere(2.0, 10, 10);
+    
+    // Check if the number of vertices and indices is correct
+    assert_eq!(sphere.vertices.len(), (10 + 1) * (10 + 1));
+    assert_eq!(sphere.indices.len(), 10 * 10 * 6);
+    
+    // Check that the mass properties are reasonable
+    assert!(sphere.mass_properties.mass > 0.0);
+    
+    // Check that vertices are roughly distance 2.0 from origin
+    for v in sphere.vertices.iter() {
+      let pos = Vec3f32::from_components(v.position[0], v.position[1], v.position[2]);
+      assert!((pos.length() - 2.0).abs() < 1e-5);
+    }
+  }
+}
+
 
