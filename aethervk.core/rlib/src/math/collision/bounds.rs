@@ -579,7 +579,8 @@ where
 
     let (_, eigenvectors) = qr_diagonalization(covariance_matrix, 1e-9f32, 10);
     let e0 = unsafe { eigenvectors.column_unchecked(0) }.normalize();
-    let e1 = unsafe { eigenvectors.column_unchecked(1) }.normalize();
+    let mut e1 = unsafe { eigenvectors.column_unchecked(1) };
+    e1 = (e1 - e0 * e0.dot(e1)).normalize();
     let e2 = e0.cross(e1).normalize();
     let e_s = [e0, e1, e2];
 

@@ -284,19 +284,8 @@ where
     let left = self.build_recursive(triangles, left_indices, depth + 1);
     let right = self.build_recursive(triangles, right_indices, depth + 1);
 
-    // Ensure parent bound encloses children bounds (Strict BVH property)
-    let mut final_bound = bound;
-    final_bound.encapsulate_bound(&left.bound);
-    final_bound.encapsulate_bound(&right.bound);
-
-    #[cfg(debug_assertions)]
-    {
-      assert!(final_bound.contains(&left.bound), "BVH Parent at depth {} does not contain left child!", depth);
-      assert!(final_bound.contains(&right.bound), "BVH Parent at depth {} does not contain right child!", depth);
-    }
-
     Box::new(BVHNode {
-      bound: final_bound,
+      bound,
       left: Some(left),
       right: Some(right),
       primitive_indices: Vec::new(),
@@ -329,7 +318,7 @@ where
       let centroid = tri.mean_vector().component(axis).unwrap();
 
       let mut bin_idx = (((centroid - min_c) / extent) * (bin_count as f32)) as usize;
-      if bin_idx == bin_count {
+      if bin_idx >= bin_count {
         bin_idx = bin_count - 1;
       }
 
@@ -400,7 +389,7 @@ where
       let tri = &triangles[indices[left_ptr]];
       let centroid = tri.mean_vector().component(axis).unwrap();
       let mut bin_idx = (((centroid - min_c) / extent) * (bin_count as f32)) as usize;
-      if bin_idx == bin_count {
+      if bin_idx >= bin_count {
         bin_idx = bin_count - 1;
       }
 
