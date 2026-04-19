@@ -116,36 +116,44 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
     payload.packet.camera_component,
   ));
 
-  payload.scene.query1::<aethervk_core_rlib::scene::SunComponent, _>(|entity, comp| {
-    if let Some(transform) = payload.scene.global_transform(entity) {
-      render_scene.sun = Some((entity, *comp, transform));
-    }
-  });
+  payload
+    .scene
+    .query1::<aethervk_core_rlib::scene::SunComponent, _>(|entity, comp| {
+      if let Some(transform) = payload.scene.global_transform(entity) {
+        render_scene.sun = Some((entity, *comp, transform));
+      }
+    });
 
-  payload.scene.query1::<aethervk_core_rlib::scene::SkyComponent, _>(|entity, comp| {
-    render_scene.sky = Some((entity, *comp));
-  });
+  payload
+    .scene
+    .query1::<aethervk_core_rlib::scene::SkyComponent, _>(|entity, comp| {
+      render_scene.sky = Some((entity, *comp));
+    });
 
-  payload.scene.query1::<aethervk_core_rlib::scene::GridComponent, _>(|entity, comp| {
-    render_scene.grid = Some((entity, *comp));
-  });
+  payload
+    .scene
+    .query1::<aethervk_core_rlib::scene::GridComponent, _>(|entity, comp| {
+      render_scene.grid = Some((entity, *comp));
+    });
 
-  payload.scene.query1::<aethervk_core_rlib::scene::CursorComponent, _>(|entity, comp| {
-    if let Some(transform) = payload.scene.global_transform(entity) {
-      render_scene
-        .add_renderable(
-          device,
-          entity,
-          transform.to_mat4(),
-          RenderableDataRef::Cursor(comp),
-          payload.presentation_engine,
-          "Cursor",
-          false,
-          [1.0, 1.0, 1.0, 1.0],
-        )
-        .unwrap();
-    }
-  });
+  payload
+    .scene
+    .query1::<aethervk_core_rlib::scene::CursorComponent, _>(|entity, comp| {
+      if let Some(transform) = payload.scene.global_transform(entity) {
+        render_scene
+          .add_renderable(
+            device,
+            entity,
+            transform.to_mat4(),
+            RenderableDataRef::Cursor(comp),
+            payload.presentation_engine,
+            "Cursor",
+            false,
+            [1.0, 1.0, 1.0, 1.0],
+          )
+          .unwrap();
+      }
+    });
 
   for item in &payload.packet.render_items {
     payload.scene.with_component(

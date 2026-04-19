@@ -160,10 +160,18 @@ pub trait FloatLike: Scalar + Copy {
   fn from_f32(num: f32) -> Self;
 
   fn min(self, rhs: Self) -> Self {
-    if self < rhs { self } else { rhs }
+    if self < rhs {
+      self
+    } else {
+      rhs
+    }
   }
   fn max(self, rhs: Self) -> Self {
-    if self > rhs { self } else { rhs }
+    if self > rhs {
+      self
+    } else {
+      rhs
+    }
   }
 
   fn sqrt(self) -> Self; // TODO Option? See Arch's manual for sqrt behavior and tag unsafe

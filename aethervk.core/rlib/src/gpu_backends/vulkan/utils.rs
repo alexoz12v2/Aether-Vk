@@ -596,6 +596,7 @@ pub(super) fn first_unsupported_extension<'a>(
 // -------------------------------- Device Features Handling -------------------
 #[derive(Copy, Clone, Debug)]
 pub(super) struct RequiredFeatures<'a> {
+  pub features: vk::PhysicalDeviceFeatures,
   pub buffer_device_address: vk::PhysicalDeviceBufferDeviceAddressFeatures<'a>,
   pub vulkan_memory_model: vk::PhysicalDeviceVulkanMemoryModelFeatures<'a>,
   pub timeline_semaphore: vk::PhysicalDeviceTimelineSemaphoreFeatures<'a>,
@@ -605,12 +606,14 @@ pub(super) struct RequiredFeatures<'a> {
 
 impl RequiredFeatures<'_> {
   pub fn new() -> Self {
+    let features = vk::PhysicalDeviceFeatures::default();
     let buffer_device_address = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
     let vulkan_memory_model = vk::PhysicalDeviceVulkanMemoryModelFeatures::default();
     let timeline_semaphore = vk::PhysicalDeviceTimelineSemaphoreFeatures::default();
     let synchronization2 = vk::PhysicalDeviceSynchronization2Features::default();
 
     Self {
+      features,
       buffer_device_address,
       vulkan_memory_model,
       timeline_semaphore,
@@ -620,6 +623,7 @@ impl RequiredFeatures<'_> {
 
   pub fn as_features2(&mut self) -> vk::PhysicalDeviceFeatures2<'_> {
     vk::PhysicalDeviceFeatures2::default()
+      .features(self.features)
       .push_next(&mut self.buffer_device_address)
       .push_next(&mut self.vulkan_memory_model)
       .push_next(&mut self.timeline_semaphore)
@@ -627,6 +631,7 @@ impl RequiredFeatures<'_> {
   }
 
   pub fn populate(&mut self) -> &mut Self {
+    self.features.fill_mode_non_solid = vk::TRUE;
     self.buffer_device_address.buffer_device_address = vk::TRUE;
     self.vulkan_memory_model.vulkan_memory_model = vk::TRUE;
     self.timeline_semaphore.timeline_semaphore = vk::TRUE;
@@ -638,6 +643,9 @@ impl RequiredFeatures<'_> {
   pub fn any_missing(&self) -> Option<Vec<string::String>> {
     use string::ToString;
     let mut the_vec = Vec::with_capacity(64);
+    if self.features.fill_mode_non_solid != vk::TRUE {
+      the_vec.push("fill_mode_non_solid".to_string());
+    }
     if self.buffer_device_address.buffer_device_address != vk::TRUE {
       the_vec.push("buffer_device_address".to_string());
     }

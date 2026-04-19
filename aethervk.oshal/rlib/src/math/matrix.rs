@@ -80,7 +80,33 @@ where
   where
     Self::Scalar: FloatOps + FloatBits,
   {
-    let eps = Self::Scalar::EPSILON;
+    let eps = Self::Scalar::from_f32(1e-5);
+
+    let x = unsafe { self.column_unchecked(0) };
+    let y = unsafe { self.column_unchecked(1) };
+    let z = unsafe { self.column_unchecked(2) };
+
+    // 1. Unit length (||v|| ≈ 1)
+    let _1 = Self::Scalar::from_f32(1.0);
+    let unit =
+      (x.dot(x) - _1).abs() <= eps && (y.dot(y) - _1).abs() <= eps && (z.dot(z) - _1).abs() <= eps;
+
+    // 2. Orthogonality (dot ≈ 0)
+    let orthogonal = x.dot(y).abs() <= eps && x.dot(z).abs() <= eps && y.dot(z).abs() <= eps;
+
+    // 3. Right-handed (determinant ≈ +1)
+    let det = self.determinant();
+    let proper = (det - _1).abs() <= eps;
+
+    unit && orthogonal && proper
+  }
+
+  /// No scaling or shear, but using a permissive epsilon to tolerate physics/eigen decomposition float drift.
+  fn is_pure_rotation_permissive(&self) -> bool
+  where
+    Self::Scalar: FloatOps + FloatBits,
+  {
+    let eps = Self::Scalar::from_f32(1e-2);
 
     let x = unsafe { self.column_unchecked(0) };
     let y = unsafe { self.column_unchecked(1) };

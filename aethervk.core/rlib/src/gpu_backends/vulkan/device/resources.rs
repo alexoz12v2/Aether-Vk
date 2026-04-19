@@ -1064,6 +1064,132 @@ impl DiscardableResource for FrameResource {
   }
 }
 
+pub(super) struct TextRenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub pipeline_key: Option<PipelineKey>,
+  pub descriptor_set_layout: NonZeroHandle<vk::DescriptorSetLayout>,
+  pub descriptor_pool: Option<NonZeroHandle<vk::DescriptorPool>>,
+  pub descriptor_set: Option<vk::DescriptorSet>,
+  pub font_texture: Option<Image>,
+  pub font_sampler: Option<vk::Sampler>,
+  pub font_atlas: Option<crate::scene::text::FontAtlas>,
+  pub allocator_raw: Option<vk_mem::ffi::VmaAllocator>,
+}
+
+unsafe impl Sync for TextRenderResourceArchetype {}
+unsafe impl Send for TextRenderResourceArchetype {}
+
+impl DiscardableResource for TextRenderResourceArchetype {
+  fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
+    discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
+    if let Some(pool) = self.descriptor_pool.take() {
+      discard_pool.discard_type_erased(
+        FunctionalDeviceResource::new(
+          pool.get(),
+          |pool, device| unsafe {
+            device.destroy_descriptor_pool(pool, None);
+          },
+        ),
+        timeline,
+      );
+    }
+    if let Some(sampler) = self.font_sampler.take() {
+      discard_pool.discard_type_erased(
+        FunctionalDeviceResource::new(
+          sampler,
+          |sampler, device| unsafe {
+            device.destroy_sampler(sampler, None);
+          },
+        ),
+        timeline,
+      );
+    }
+    if let Some(mut texture) = self.font_texture.take() {
+      if let Some(allocator_raw) = self.allocator_raw {
+        discard_pool.discard_image_view(texture.image_view.get(), timeline);
+        discard_pool.discard_image(
+          allocator_raw,
+          texture.image.get(),
+          texture.allocation,
+          timeline,
+        );
+      }
+    }
+  }
+}
+
+pub(super) struct BvhRenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub pipeline_key: Option<PipelineKey>,
+}
+
+impl DiscardableResource for BvhRenderResourceArchetype {
+  fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
+  }
+}
+
+impl BvhRenderResourceArchetype {
+  pub unsafe fn new(device: &vulkan::device::LogicalDevice) -> GpuResult<Self> {
+    let push_constant_ranges = [vk::PushConstantRange::default()
+      .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+      .offset(0)
+      .size(144)]; // mat4 (64) + vec4 * 5 (80) = 144 bytes
+      
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
+      .push_constant_ranges(&push_constant_ranges);
+      
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None)? };
+
+    Ok(Self {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      pipeline_key: None,
+    })
+  }
+
+  pub fn with_pipeline_key(self, pipeline_key: PipelineKey) -> Self {
+    Self {
+      pipeline_key: Some(pipeline_key),
+      ..self
+    }
+  }
+}
+
+pub(super) struct MinimapRenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub pipeline_key: Option<PipelineKey>,
+}
+
+impl MinimapRenderResourceArchetype {
+  pub unsafe fn new(device: &vulkan::device::LogicalDevice) -> GpuResult<Self> {
+    let push_constant_ranges = [vk::PushConstantRange {
+      stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+      offset: 0,
+      size: 544,
+    }];
+    let pipeline_layout_info =
+      vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None)? };
+    Ok(Self {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      pipeline_key: None,
+    })
+  }
+
+  pub fn with_pipeline_key(self, pipeline_key: PipelineKey) -> Self {
+    Self {
+      pipeline_key: Some(pipeline_key),
+      ..self
+    }
+  }
+
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_pipeline_layout(layout, timeline);
+  }
+}
+
 pub(super) struct CursorRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub push_contant_ranges: Vec<vk::PushConstantRange>,

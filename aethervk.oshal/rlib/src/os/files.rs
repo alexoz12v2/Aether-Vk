@@ -1,14 +1,4 @@
-use crate::os::fs::Path;
-
-// TODO move to os.rs
-pub enum FsError {
-  CouldNotOpenFile,
-  CouldNotReadFile,
-  CouldNotGetFileSize,
-  CouldNotGetCurrentExe,
-  CouldNotCreateFile,
-  CouldNotWriteFile,
-}
+use crate::os::{FsError, fs::Path};
 
 pub struct MappedFile {
   ptr: *mut core::ffi::c_void,

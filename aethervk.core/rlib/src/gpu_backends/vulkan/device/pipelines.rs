@@ -121,6 +121,7 @@ bitflags! {
     const NO_DEPTH_WRITE = 0x1u32 << 4;
     const STENCIL_ENABLE = 0x1u32 << 5;
     const NO_DEPTH_TEST = 0x1u32 << 6;
+    const NO_LINE_DYNAMIC_STATE = 0x1u32 << 7;
   }
 }
 
@@ -721,6 +722,10 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
       || topology == vk::PrimitiveTopology::LINE_STRIP
       || topology == vk::PrimitiveTopology::LINE_LIST_WITH_ADJACENCY
       || topology == vk::PrimitiveTopology::LINE_STRIP_WITH_ADJACENCY
+      || graphics_info.rasterization_polygon_mode == vk::PolygonMode::LINE
+      || !graphics_info
+        .pipeline_flags
+        .contains(PipelineFlags::NO_LINE_DYNAMIC_STATE)
     {
       dynamic_states.push(vk::DynamicState::LINE_WIDTH);
     }
@@ -757,7 +762,7 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
           || topology == vk::PrimitiveTopology::LINE_STRIP_WITH_ADJACENCY
           || topology == vk::PrimitiveTopology::TRIANGLE_STRIP
           || topology == vk::PrimitiveTopology::TRIANGLE_STRIP_WITH_ADJACENCY;
-        
+
         vk::PipelineInputAssemblyStateCreateInfo::default()
           .topology(topology)
           .primitive_restart_enable(is_strip)

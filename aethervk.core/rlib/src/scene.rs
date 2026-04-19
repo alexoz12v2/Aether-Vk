@@ -7,6 +7,8 @@
 //!   - Entities with the same set of components (an archetype) are stored together in contiguous memory.
 //!   - This is a simplified implementation focusing on the core concepts.
 
+pub mod text;
+
 use crate::simulation::comet::Comet;
 use aethervk_oshal_rlib::math::{FloatLike};
 use aethervk_oshal_rlib::math::matrix::Matrix4;
@@ -31,7 +33,11 @@ new_key_type! {
 
 /// A marker trait for all components.
 /// Components must be `'static + Send + Sync` to be used in the ECS.
-pub trait Component: 'static + Send + Sync {}
+pub trait Component: 'static + Send + Sync {
+  fn stringify(&self) -> alloc::string::String {
+    alloc::string::String::from("Component")
+  }
+}
 
 // === Component Definitions ===
 
@@ -108,6 +114,8 @@ impl TransformComponent {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CameraComponent {
   pub projection: Mat4x4f32,
+  pub near_plane: f32,
+  pub far_plane: f32,
 }
 impl Component for CameraComponent {}
 
@@ -153,6 +161,23 @@ impl Component for SkyComponent {}
 #[derive(Clone, Copy, PartialEq)]
 pub struct GridComponent {}
 impl Component for GridComponent {}
+
+/// A marker component for the selected entity.
+#[derive(Clone, Copy, PartialEq)]
+pub struct SelectedComponent {}
+impl Component for SelectedComponent {}
+
+/// A marker component for the entity being followed by the camera.
+#[derive(Clone, Copy, PartialEq)]
+pub struct FollowingComponent {}
+impl Component for FollowingComponent {}
+
+/// A component that stores debug render states for BVH nodes
+#[derive(Clone)]
+pub struct BvhDebugComponent {
+  pub node_render_states: alloc::vec::Vec<bool>,
+}
+impl Component for BvhDebugComponent {}
 
 /// A particle emitter, defining the properties of particles to be spawned.
 pub struct ParticleEmitterComponent {
@@ -752,7 +777,12 @@ impl Scene {
   }
 
   pub fn get_entity_by_name(&self, name: &str) -> Option<EntityId> {
-    self.names.read().iter().find(|(_, n)| *n == name).map(|(id, _)| *id)
+    self
+      .names
+      .read()
+      .iter()
+      .find(|(_, n)| *n == name)
+      .map(|(id, _)| *id)
   }
 
   pub fn get_name(&self, entity: EntityId) -> Option<alloc::string::String> {

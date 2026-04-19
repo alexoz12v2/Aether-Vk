@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use aethervk_oshal_rlib::math::{
   floating::{FloatBits, FloatOps},
-  matrix::{Matrix3, mat3::Mat3f32},
+  matrix::{Matrix3, MatrixVectorMul, mat3::Mat3f32},
   vector::{Vector, Vector3, vec3::Vec3f32},
   FloatLike,
 };
@@ -22,12 +22,12 @@ pub struct LinearBVHHeader {
 #[derive(Debug, Clone)]
 pub enum LinearBound<S, V, M>
 where
-  M: Matrix3<Scalar = S, Vector = V>,
+  M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
   V: Vector3<Scalar = S> + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
   S: FloatLike
     + FloatOps
+    + FloatBits
     + From<f32>
-    
     + core::ops::Mul<V, Output = V>
     + core::ops::Mul<M, Output = M>,
 {
@@ -38,12 +38,12 @@ where
 #[derive(Debug, Clone)]
 pub struct LinearBVHNode<S, V, M>
 where
-  M: Matrix3<Scalar = S, Vector = V>,
+  M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
   V: Vector3<Scalar = S> + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
   S: FloatLike
     + FloatOps
+    + FloatBits
     + From<f32>
-    
     + core::ops::Mul<V, Output = V>
     + core::ops::Mul<M, Output = M>,
 {
@@ -51,6 +51,8 @@ where
   /// Index of the left child, or `u32::MAX` if leaf. Right child is always `left_child_or_primitive_offset + 1` if not leaf.
   /// If leaf, this is the offset into the primitives array.
   pub left_child_or_primitive_offset: u32,
+  /// Index of the right child, or `u32::MAX` if leaf.
+  pub right_child_offset: u32,
   /// Number of primitives in this leaf. 0 if not a leaf.
   pub primitive_count: u32,
 }
@@ -58,12 +60,12 @@ where
 #[derive(Debug, Clone)]
 pub struct LinearBVH<S, V, M>
 where
-  M: Matrix3<Scalar = S, Vector = V>,
+  M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
   V: Vector3<Scalar = S> + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
   S: FloatLike
     + FloatOps
+    + FloatBits
     + From<f32>
-    
     + core::ops::Mul<V, Output = V>
     + core::ops::Mul<M, Output = M>,
 {
@@ -74,12 +76,12 @@ where
 
 impl<S, V, M> LinearBVH<S, V, M>
 where
-  M: Matrix3<Scalar = S, Vector = V>,
+  M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
   V: Vector3<Scalar = S> + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
   S: FloatLike
     + FloatOps
+    + FloatBits
     + From<f32>
-    
     + core::ops::Mul<V, Output = V>
     + core::ops::Mul<M, Output = M>,
 {
@@ -119,6 +121,7 @@ where
     nodes.push(LinearBVHNode {
       bound,
       left_child_or_primitive_offset: 0,
+      right_child_offset: u32::MAX,
       primitive_count: 0,
     });
 
@@ -131,14 +134,16 @@ where
     } else {
       // Inner node
       let mut left_idx = u32::MAX;
+      let mut right_idx = u32::MAX;
       if let Some(left) = &node.left {
         left_idx = Self::flatten_node(left, nodes, primitives);
       }
       if let Some(right) = &node.right {
-        Self::flatten_node(right, nodes, primitives);
+        right_idx = Self::flatten_node(right, nodes, primitives);
       }
-      
+
       nodes[current_idx as usize].left_child_or_primitive_offset = left_idx;
+      nodes[current_idx as usize].right_child_offset = right_idx;
       nodes[current_idx as usize].primitive_count = 0;
     }
 

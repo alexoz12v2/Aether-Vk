@@ -100,13 +100,20 @@ impl ParticleBVHBuilder {
     let extents = max_centroid - min_centroid;
     let mut axes = [0, 1, 2];
     axes.sort_by(|&a, &b| {
-      extents.component(b).unwrap().partial_cmp(&extents.component(a).unwrap()).unwrap_or(core::cmp::Ordering::Equal)
+      extents
+        .component(b)
+        .unwrap()
+        .partial_cmp(&extents.component(a).unwrap())
+        .unwrap_or(core::cmp::Ordering::Equal)
     });
 
     let mut split_index = count / 2;
     let axis = axes[0];
     indices.sort_by(|&a, &b| {
-      particles[a].position.component(axis).unwrap()
+      particles[a]
+        .position
+        .component(axis)
+        .unwrap()
         .partial_cmp(&particles[b].position.component(axis).unwrap())
         .unwrap_or(core::cmp::Ordering::Equal)
     });
@@ -164,7 +171,9 @@ pub fn refit_motion_bounds(
     }
   } else {
     // Combine children AABBs
-    let combine = |child: &Option<Box<BVHNode<f32, Vec3f32, Mat3f32>>>, min_b: &mut Vec3f32, max_b: &mut Vec3f32| {
+    let combine = |child: &Option<Box<BVHNode<f32, Vec3f32, Mat3f32>>>,
+                   min_b: &mut Vec3f32,
+                   max_b: &mut Vec3f32| {
       if let Some(c) = child {
         match &c.bound {
           BoundNode::AABB(aabb) => {
@@ -176,9 +185,15 @@ pub fn refit_motion_bounds(
             let center = obb.translation();
             let extents = obb.half_extent();
             let axes = obb.axes();
-            let ex = Vec3f32::from_components(axes[0].x().abs(), axes[0].y().abs(), axes[0].z().abs()) * extents.x();
-            let ey = Vec3f32::from_components(axes[1].x().abs(), axes[1].y().abs(), axes[1].z().abs()) * extents.y();
-            let ez = Vec3f32::from_components(axes[2].x().abs(), axes[2].y().abs(), axes[2].z().abs()) * extents.z();
+            let ex =
+              Vec3f32::from_components(axes[0].x().abs(), axes[0].y().abs(), axes[0].z().abs())
+                * extents.x();
+            let ey =
+              Vec3f32::from_components(axes[1].x().abs(), axes[1].y().abs(), axes[1].z().abs())
+                * extents.y();
+            let ez =
+              Vec3f32::from_components(axes[2].x().abs(), axes[2].y().abs(), axes[2].z().abs())
+                * extents.z();
             let aabb_ext = ex + ey + ez;
             *min_b = min_b.min(center - aabb_ext);
             *max_b = max_b.max(center + aabb_ext);
@@ -204,9 +219,18 @@ mod tests {
 
   #[test]
   fn test_particle_bvh_build_and_refit() {
-    let p1 = Particle { position: Vec3f32::from_components(0.0, 0.0, 0.0), radius: 1.0 };
-    let p2 = Particle { position: Vec3f32::from_components(5.0, 0.0, 0.0), radius: 1.0 };
-    let p3 = Particle { position: Vec3f32::from_components(0.0, 5.0, 0.0), radius: 1.0 };
+    let p1 = Particle {
+      position: Vec3f32::from_components(0.0, 0.0, 0.0),
+      radius: 1.0,
+    };
+    let p2 = Particle {
+      position: Vec3f32::from_components(5.0, 0.0, 0.0),
+      radius: 1.0,
+    };
+    let p3 = Particle {
+      position: Vec3f32::from_components(0.0, 5.0, 0.0),
+      radius: 1.0,
+    };
 
     let old_particles = vec![p1, p2, p3];
     let builder = ParticleBVHBuilder::new(BVHBuilderParams::default());
@@ -219,7 +243,7 @@ mod tests {
 
     if let BoundNode::AABB(aabb) = &bvh.bound {
       assert!(aabb.min().x() <= -2.0); // p1 old min was -1, new min is -2
-      assert!(aabb.max().x() >= 6.0);  // p2 max is 6
+      assert!(aabb.max().x() >= 6.0); // p2 max is 6
     } else {
       panic!("Expected AABB root after refit");
     }

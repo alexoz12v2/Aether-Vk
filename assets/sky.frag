@@ -5,7 +5,7 @@ layout(location = 0) out vec4 outColor;
 layout(binding = 0) uniform sampler2D skyMap;
 
 layout(push_constant) uniform Push {
-  mat4 invViewProj;
+  layout(offset = 0) mat4 invViewProj;
 } push;
 
 vec2 octEncode(vec3 v) {
@@ -17,6 +17,6 @@ vec2 octEncode(vec3 v) {
 void main() {
   vec4 ndc = vec4(inUV * 2.0 - 1.0, 1.0, 1.0);
   vec4 worldDir = push.invViewProj * ndc;
-  vec3 dir = normalize(worldDir.xyz / worldDir.w);
-  outColor = vec4(texture(skyMap, octEncode(dir)).rgb, 1.0);
+  vec3 dir = worldDir.w != 0.0 ? (worldDir.xyz / worldDir.w) : worldDir.xyz;
+  outColor = vec4(texture(skyMap, octEncode(normalize(dir))).rgb, 1.0);
 }

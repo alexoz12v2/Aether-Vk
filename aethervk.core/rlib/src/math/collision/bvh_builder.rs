@@ -6,7 +6,7 @@
 use alloc::{boxed::Box, vec::Vec};
 use aethervk_oshal_rlib::math::{
   floating::{FloatBits, FloatOps},
-  matrix::{Matrix3, mat3::Mat3f32},
+  matrix::{Matrix3, MatrixVectorMul, mat3::Mat3f32},
   vector::{Vector, Vector3, vec3::Vec3f32},
   FloatLike,
 };
@@ -19,12 +19,12 @@ use crate::{
 #[derive(Debug, Clone)]
 pub enum BoundNode<S, V, M>
 where
-  M: Matrix3<Scalar = S, Vector = V>,
+  M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
   V: Vector3<Scalar = S> + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
   S: FloatLike
     + FloatOps
+    + FloatBits
     + From<f32>
-    + From<i32>
     + core::ops::Mul<V, Output = V>
     + core::ops::Mul<M, Output = M>,
 {
@@ -33,15 +33,47 @@ where
   BS(BS<V>),
 }
 
-#[derive(Debug, Clone)]
-pub struct BVHNode<S, V, M>
+impl<S, V, M> BoundNode<S, V, M>
 where
-  M: Matrix3<Scalar = S, Vector = V>,
+  M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
   V: Vector3<Scalar = S> + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
   S: FloatLike
     + FloatOps
+    + FloatBits
     + From<f32>
-    + From<i32>
+    + core::ops::Mul<V, Output = V>
+    + core::ops::Mul<M, Output = M>,
+{
+  pub fn contains(&self, other: &Self) -> bool {
+    match (self, other) {
+      (BoundNode::AABB(a), BoundNode::AABB(b)) => a.contains_aabb(b),
+      (BoundNode::AABB(a), BoundNode::OBB(b)) => a.contains_obb(b),
+      (BoundNode::OBB(a), BoundNode::AABB(b)) => a.contains_aabb(b),
+      (BoundNode::OBB(a), BoundNode::OBB(b)) => a.contains_obb(b),
+      _ => true,
+    }
+  }
+
+  pub fn encapsulate_bound(&mut self, other: &Self) {
+    match (self, other) {
+      (BoundNode::AABB(a), BoundNode::AABB(b)) => a.encapsulate_aabb(b),
+      (BoundNode::AABB(a), BoundNode::OBB(b)) => a.encapsulate_obb(b),
+      (BoundNode::OBB(a), BoundNode::AABB(b)) => a.encapsulate_aabb(b),
+      (BoundNode::OBB(a), BoundNode::OBB(b)) => a.encapsulate_obb(b),
+      _ => {}
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
+pub struct BVHNode<S, V, M>
+where
+  M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
+  V: Vector3<Scalar = S> + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
+  S: FloatLike
+    + FloatOps
+    + FloatBits
+    + From<f32>
     + core::ops::Mul<V, Output = V>
     + core::ops::Mul<M, Output = M>,
 {
@@ -93,7 +125,7 @@ impl Default for BVHBuilderParams {
 
 pub struct BVHBuilder<S, V, M>
 where
-  M: Matrix3<Scalar = S, Vector = V> + From<Mat3f32>,
+  M: Matrix3<Scalar = S, Vector = V> + From<Mat3f32> + MatrixVectorMul,
   V: Vector3<Scalar = S>
     + From<Vec3f32>
     + Into<Vec3f32>
@@ -103,7 +135,6 @@ where
     + FloatOps
     + FloatBits
     + From<f32>
-    + From<i32>
     + core::ops::Mul<V, Output = V>
     + core::ops::Mul<M, Output = M>,
 {
@@ -113,7 +144,7 @@ where
 
 impl<S, V, M> BVHBuilder<S, V, M>
 where
-  M: Matrix3<Scalar = S, Vector = V> + From<Mat3f32>,
+  M: Matrix3<Scalar = S, Vector = V> + From<Mat3f32> + MatrixVectorMul,
   V: Vector3<Scalar = S>
     + From<Vec3f32>
     + Into<Vec3f32>
@@ -123,7 +154,6 @@ where
     + FloatOps
     + FloatBits
     + From<f32>
-    + From<i32>
     + core::ops::Mul<V, Output = V>
     + core::ops::Mul<M, Output = M>,
 {
@@ -251,11 +281,26 @@ where
 
     let (left_indices, right_indices) = indices.split_at_mut(split_index);
 
+    let left = self.build_recursive(triangles, left_indices, depth + 1);
+    let right = self.build_recursive(triangles, right_indices, depth + 1);
+
+    // Ensure parent bound encloses children bounds (Strict BVH property)
+    // This fixes the issue where children could "poke out" of parents due to different bound types or axes
+    let mut final_bound = bound;
+    final_bound.encapsulate_bound(&left.bound);
+    final_bound.encapsulate_bound(&right.bound);
+
+    #[cfg(debug_assertions)]
+    {
+      assert!(final_bound.contains(&left.bound), "BVH Parent at depth {} does not contain left child!", depth);
+      assert!(final_bound.contains(&right.bound), "BVH Parent at depth {} does not contain right child!", depth);
+    }
+
     Box::new(BVHNode {
-      bound,
-      left: Some(self.build_recursive(triangles, left_indices, depth + 1)),
-      right: Some(self.build_recursive(triangles, right_indices, depth + 1)),
-      primitive_indices: Vec::new(), // inner nodes don't store primitives directly
+      bound: final_bound,
+      left: Some(left),
+      right: Some(right),
+      primitive_indices: Vec::new(),
     })
   }
 

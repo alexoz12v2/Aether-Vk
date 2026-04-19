@@ -7,6 +7,7 @@ use aethervk_core_rlib::{
   types::GpuResult,
 };
 use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
+use aethervk_oshal_rlib::math::quaternion::Quaternion;
 use std::sync::{Arc, RwLock, mpsc};
 
 pub struct RenderItem {
@@ -20,6 +21,11 @@ pub struct RenderPacket {
   pub camera_component: CameraComponent,
   pub window_size: winit::dpi::PhysicalSize<u32>,
   pub outlines_enabled: bool,
+  pub is_command_prompt_open: bool,
+  pub console_open_progress: f32,
+  pub console_scroll_offset: usize,
+  pub command_history: std::collections::VecDeque<String>,
+  pub current_command: String,
 }
 
 #[repr(C)]
@@ -29,6 +35,7 @@ struct RenderPayloadData<'a> {
   scene: &'a Scene,
   cursor_entity: EntityId,
   sun_entity: EntityId,
+  assets_dir: &'a std::path::PathBuf,
 }
 
 pub fn start_render_thread(
@@ -39,6 +46,7 @@ pub fn start_render_thread(
   presentation_engine: gpu::PresentationEngineHandle,
   cursor_entity: EntityId,
   sun_entity: EntityId,
+  assets_dir: std::path::PathBuf,
 ) -> std::thread::JoinHandle<()> {
   std::thread::spawn(move || {
     while let Ok(Some(mut packet)) = render_rx.recv() {
@@ -49,6 +57,7 @@ pub fn start_render_thread(
         scene: &scene_guard,
         cursor_entity,
         sun_entity,
+        assets_dir: &assets_dir,
       };
 
       let res = render_frontend.write().unwrap().take_and(|context| {
@@ -86,41 +95,63 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
     payload.packet.camera_component,
   ));
 
-  payload.scene.query1::<aethervk_core_rlib::scene::SunComponent, _>(|entity, comp| {
-    if let Some(transform) = payload.scene.global_transform(entity) {
-      render_scene.sun = Some((entity, *comp, transform));
-    }
-  });
+  payload
+    .scene
+    .query1::<aethervk_core_rlib::scene::SunComponent, _>(|entity, comp| {
+      if let Some(transform) = payload.scene.global_transform(entity) {
+        render_scene.sun = Some((entity, *comp, transform));
+      }
+    });
 
-  payload.scene.query1::<aethervk_core_rlib::scene::SkyComponent, _>(|entity, comp| {
-    render_scene.sky = Some((entity, *comp));
-  });
+  payload
+    .scene
+    .query1::<aethervk_core_rlib::scene::SkyComponent, _>(|entity, comp| {
+      render_scene.sky = Some((entity, *comp));
+    });
 
-  payload.scene.query1::<aethervk_core_rlib::scene::GridComponent, _>(|entity, comp| {
-    render_scene.grid = Some((entity, *comp));
-  });
+  payload
+    .scene
+    .query1::<aethervk_core_rlib::scene::GridComponent, _>(|entity, comp| {
+      render_scene.grid = Some((entity, *comp));
+    });
 
-  payload.scene.query1::<aethervk_core_rlib::scene::CursorComponent, _>(|entity, comp| {
-    if let Some(transform) = payload.scene.global_transform(entity) {
-      render_scene
-        .add_renderable(
-          device,
-          entity,
-          transform.to_mat4(),
-          RenderableDataRef::Cursor(comp),
-          payload.presentation_engine,
-          "Cursor",
-          false,
-          [1.0, 1.0, 1.0, 1.0],
-        )
-        .unwrap();
-    }
-  });
+  payload
+    .scene
+    .query1::<aethervk_core_rlib::scene::CursorComponent, _>(|entity, comp| {
+      if let Some(transform) = payload.scene.global_transform(entity) {
+        render_scene
+          .add_renderable(
+            device,
+            entity,
+            transform.to_mat4(),
+            RenderableDataRef::Cursor(comp),
+            payload.presentation_engine,
+            "Cursor",
+            false,
+            [1.0, 1.0, 1.0, 1.0],
+          )
+          .unwrap();
+      }
+    });
 
   for item in &payload.packet.render_items {
     payload.scene.with_component(
       item.entity_id,
       |mesh: &PhysicalMeshComponent| -> GpuResult<()> {
+        let mut draw_outline = payload.packet.outlines_enabled;
+        let mut outline_color = [0.2, 0.5, 1.0, 1.0]; // Default blueish
+
+        let is_selected = payload.scene.with_component(item.entity_id, |_c: &aethervk_core_rlib::scene::SelectedComponent| {}).is_some();
+        let is_following = payload.scene.with_component(item.entity_id, |_c: &aethervk_core_rlib::scene::FollowingComponent| {}).is_some();
+
+        if is_following {
+          draw_outline = true;
+          outline_color = [1.0, 0.0, 0.0, 1.0]; // Red
+        } else if is_selected {
+          draw_outline = true;
+          outline_color = [1.0, 1.0, 1.0, 1.0]; // White
+        }
+
         render_scene
           .add_renderable(
             device,
@@ -129,36 +160,13 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
             RenderableDataRef::PhysicalMesh(mesh),
             payload.presentation_engine,
             "Comet",
-            false,
-            [1.0, 1.0, 1.0, 1.0],
+            draw_outline,
+            outline_color,
           )
           .unwrap();
         Ok(())
       },
     );
-  }
-
-  if payload.packet.outlines_enabled {
-    for item in &payload.packet.render_items {
-      payload.scene.with_component(
-        item.entity_id,
-        |mesh: &PhysicalMeshComponent| -> GpuResult<()> {
-          render_scene
-            .add_renderable(
-              device,
-              item.entity_id,
-              item.model_matrix,
-              RenderableDataRef::PhysicalMesh(mesh),
-              payload.presentation_engine,
-              "Outline",
-              true,
-              [1.0, 1.0, 1.0, 1.0],
-            )
-            .unwrap();
-          Ok(())
-        },
-      );
-    }
   }
 
   payload.scene.with_component(
@@ -254,8 +262,130 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
   };
   device.render_frame(cmd_buffer, &quad_tree, &render_scene)?;
 
-  device.end_render_pass(cmd_buffer)?;
-  device.submit_command_buffer(cmd_buffer)?;
+  let mut planets = Vec::new();
+  if let Some(sun_transform) = payload.scene.global_transform(payload.sun_entity) {
+    planets.push((sun_transform.position, 0.06, [1.0, 1.0, 0.2, 1.0]));
+  }
+  use aethervk_oshal_rlib::math::matrix::Matrix;
+  use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
+  for item in &payload.packet.render_items {
+    let col = item.model_matrix.column(3).unwrap();
+    let pos =
+      aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([col.x(), col.y(), col.z()]);
+    planets.push((pos, 0.02, [0.8, 0.8, 0.8, 1.0]));
+  }
+
+  let mut player_pos =
+    aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0]);
+  if let Some(cursor_transform) = payload.scene.global_transform(payload.cursor_entity) {
+    player_pos = cursor_transform.position;
+  }
+
+  let max_dist = 60000.0; // Pluto is around 59000 units away
+  let _ = device.render_minimap(cmd_buffer, player_pos, max_dist, &planets);
+
+  // Compute view matrix to print
+  let view =
+  <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as aethervk_oshal_rlib::math::matrix::Matrix4>::from_columns(
+    aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(1.0, 0.0, 0.0, 0.0),
+    aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, -1.0, 0.0),
+    aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 1.0, 0.0, 0.0),
+    aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
+  ) * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as aethervk_oshal_rlib::math::matrix::Matrix4>::from_quat_custom_frame(
+    payload.packet.camera_transform.rotation.conjugate(),
+  ) * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as aethervk_oshal_rlib::math::matrix::Matrix4>::translation(payload.packet.camera_transform.position * -1.0);
+
+  let view_proj = payload.packet.camera_component.projection * view;
+
+  let mut all_bvh_nodes = Vec::new();
+  for item in &payload.packet.render_items {
+    let mut dbg_states = None;
+    payload.scene.with_component(item.entity_id, |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
+      dbg_states = Some(dbg.node_render_states.clone());
+    });
+
+    if let Some(states) = dbg_states {
+      payload.scene.with_component(item.entity_id, |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+        if let Some(bvh) = &mesh.mesh.bvh {
+           for (i, &render) in states.iter().enumerate() {
+             if render && i < bvh.nodes.len() {
+                all_bvh_nodes.push((bvh.nodes[i].bound.clone(), item.model_matrix));
+             }
+           }
+        }
+      });
+    }
+  }
+  if !all_bvh_nodes.is_empty() {
+    let _ = device.render_bvh(cmd_buffer, &all_bvh_nodes, view_proj.into(), payload.presentation_engine);
+  }
+
+  // Calculate slide-in animation offset
+  let slide_y = -1.0 + (payload.packet.console_open_progress * 1.0); // Ranges from -1.0 (hidden above screen) to 0.0 (fully visible)
+  let base_y = 0.18 + slide_y;
+
+  if payload.packet.console_open_progress > 0.0 {
+    let font_path_buf = payload.assets_dir.join("fonts/JetBrainsMono-Bold.ttf");
+    let font_path = font_path_buf.to_str().unwrap();
+
+    let width = 2.0; // full screen width in NDC
+    let height = 1.0; // half screen height in NDC (total is 2.0)
+    let box_y = -1.0 - height + (payload.packet.console_open_progress * height);
+
+    let _ = device.render_ui_rect(
+      cmd_buffer,
+      [0.05, 0.1, 0.05, 0.7],
+      [-1.0, box_y],
+      [width, height],
+      payload.presentation_engine,
+    );
+
+    let mut console_text = String::new();
+    let max_lines = 15; // Fit comfortably in 50% screen height without overlapping prompt
+    let history_len = payload.packet.command_history.len();
+    let scroll = payload.packet.console_scroll_offset.min(history_len.saturating_sub(max_lines));
+    let start_idx = history_len.saturating_sub(max_lines + scroll);
+    let end_idx = history_len.saturating_sub(scroll);
+    
+    for cmd in payload.packet.command_history.iter().skip(start_idx).take(end_idx - start_idx) {
+      console_text.push_str(cmd);
+      console_text.push('\n');
+    }
+    
+    // Draw text from the bottom up so it never overlaps the prompt.
+    // The prompt is at the very bottom of the box.
+    let prompt_y = box_y + height - 0.08;
+    
+    // Calculate roughly how tall the text block is. 16pt font is roughly 0.04 NDC depending on screen height.
+    // To be perfectly robust, we draw from the top but only the visible lines.
+    let text_start_y = box_y + 0.02;
+    
+    let _ = device.render_text(
+      cmd_buffer,
+      &console_text,
+      font_path,
+      16.0,
+      [0.8, 0.8, 0.8, 1.0], 
+      [-0.98, text_start_y], 
+      payload.presentation_engine,
+    );
+
+    let mut prompt_text = String::from("> ");
+    prompt_text.push_str(&payload.packet.current_command);
+    prompt_text.push('_');
+
+    let _ = device.render_text(
+      cmd_buffer,
+      &prompt_text,
+      font_path,
+      16.0,
+      [1.0, 1.0, 0.2, 1.0], 
+      [-0.98, prompt_y], 
+      payload.presentation_engine,
+    );
+  }
+
+  device.end_render_pass(cmd_buffer)?;  device.submit_command_buffer(cmd_buffer)?;
 
   let present_status = device.present(
     payload.presentation_engine,
