@@ -15,7 +15,7 @@ layout(push_constant) uniform Push {
 } push;
 
 void main() {
-  float t = -inNearPos.y / (inFarPos.y - inNearPos.y);
+  float t = -inNearPos.z / (inFarPos.z - inNearPos.z);
   
   if (t <= 0.0) {
     discard;
@@ -28,7 +28,7 @@ void main() {
     discard;
   }
   
-  vec2 p = worldPos.xz * push.density;
+  vec2 p = worldPos.xy * push.density;
   vec2 dp = fwidth(p);
   
   float lineWidth = 0.003; 

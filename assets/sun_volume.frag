@@ -18,6 +18,10 @@ vec2 intersectSphere(vec3 ro, vec3 rd, float radius) {
 }
 
 void main() {
+    bool isInside = all(lessThan(abs(inLocalCameraPos), vec3(1.0001)));
+    if (isInside && !gl_FrontFacing) discard;
+    if (!isInside && gl_FrontFacing) discard;
+
     vec3 rayDir = normalize(inLocalPos - inLocalCameraPos);
     
     // Intersect with a unit sphere (radius 1.0) in local space
@@ -29,13 +33,13 @@ void main() {
     float tMax = t.y;
     
     // Raymarching setup
-    int maxSteps = 128;
-    float stepSize = (tMax - tMin) / float(maxSteps);
+    float stepSize = 0.015625; // fixed step size for stable integration
+    int steps = min(int(ceil((tMax - tMin) / stepSize)), 128);
     float currentT = tMin;
     
     vec4 accumulatedColor = vec4(0.0);
     
-    for (int i = 0; i < maxSteps; i++) {
+    for (int i = 0; i < steps; i++) {
         vec3 localPos = inLocalCameraPos + rayDir * currentT;
         
         // Map local position [-1, 1] to UVW [0, 1] for texture sampling
@@ -46,8 +50,8 @@ void main() {
         vec4 voxel = texture(sunVolume, uvw);
         
         // Front-to-back volumetric accumulation
-        // Multiply emission by density and step size
-        vec3 emission = voxel.rgb * voxel.a * stepSize;
+        // Multiply emission by step size (compute shader already pre-multiplied emission by density)
+        vec3 emission = voxel.rgb * stepSize;
         float alpha = voxel.a * stepSize;
         
         // Accumulate color and alpha (standard alpha compositing)

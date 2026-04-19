@@ -18,14 +18,15 @@ layout(binding = 2) uniform sampler2D roughnessMap;
 layout(binding = 3) uniform sampler2D aoMap;
 layout(binding = 4) uniform sampler2D skyMap;
 
-layout(push_constant) uniform Push { // std140
-  mat4 modelViewProj;
-  mat4 model;
-  vec3 sunPos;
-  uint textureFlags;
-  vec4 sunColor;
-  vec3 cameraPos;
-  uint _unused;
+layout(push_constant) uniform Push { 
+  layout(offset = 0) mat4 modelViewProj;
+  layout(offset = 64) mat4 model;
+  layout(offset = 128) vec3 sunPos;
+  layout(offset = 140) uint textureFlags;
+  layout(offset = 144) vec4 sunColor;
+  layout(offset = 160) vec3 cameraPos;
+  layout(offset = 172) float emissiveIntensity;
+  layout(offset = 176) vec3 emissiveColor;
 } push;
 
 // --- Specialization Constants ---
@@ -71,6 +72,11 @@ vec2 octEncode(vec3 v) {
 }
 
 void main() {
+  if (push.emissiveIntensity < 0.0) {
+      outColor = vec4(push.emissiveColor, 1.0);
+      return;
+  }
+
   bool useAlbedo    = (push.textureFlags & FLAG_ALBEDO) != 0u;
   bool useNormal    = (push.textureFlags & FLAG_NORMAL) != 0u;
   bool useRoughness = (push.textureFlags & FLAG_ROUGHNESS) != 0u;
@@ -83,8 +89,9 @@ void main() {
   float distanceToSun = length(unnormalizedLightVector);
   vec3 lightDir = unnormalizedLightVector / distanceToSun; // Normalized direction
   
-  // Inverse square attenuation (preventing division by zero with a small epsilon)
-  float attenuation = 1.0 / max(distanceToSun * distanceToSun, 0.0001);
+  // Inverse square attenuation makes distant planets pitch black at engine scales.
+  // We use a much softer falloff to maintain visibility.
+  float attenuation = 1.0 / (1.0 + 0.001 * distanceToSun);
   
   // Final light color arriving at the fragment
   vec3 lightColor = push.sunColor.xyz * attenuation;
@@ -156,5 +163,13 @@ void main() {
   // Add a base background light to avoid pitch black meshes
   ambient += vec3(0.05) * albedo * ao;
 
-  outColor = vec4(diffuse * lightColor * ao + ambient, 1.0);
+  // Compute emission
+  vec3 emission = push.emissiveColor * push.emissiveIntensity;
+
+  if (push.emissiveIntensity > 0.0) {
+      outColor = vec4(emission, 1.0);
+      return;
+  }
+
+  outColor = vec4(diffuse * lightColor * ao + ambient + emission, 1.0);
 }

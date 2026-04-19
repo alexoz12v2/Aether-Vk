@@ -1,7 +1,7 @@
 use crate::gpu::{
   AcquireResult, GpuResourceHandle, PipelineKey, PresentationEngineHandle, RenderDevice,
 };
-use crate::scene::{CameraComponent, EntityId, RenderableDataRef, TransformComponent};
+use crate::scene::{CameraComponent, EntityId, RenderableDataRef, TransformComponent, SunComponent, SkyComponent, GridComponent};
 use crate::simulation::comet::{PushConstants, TextureFlags};
 use crate::types::{GpuError, GpuResult};
 use aethervk_oshal_rlib::math::{
@@ -11,13 +11,16 @@ use aethervk_oshal_rlib::math::{
 };
 use alloc::vec::Vec;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct ResourceUploadResult {
   /// The pipeline to use for this draw call.
   pub pipeline: PipelineKey,
+  pub outline_pipeline: Option<PipelineKey>,
   /// The vertex buffer to bind.
   pub buffers: GpuResourceHandle,
   pub texture_flags: TextureFlags,
+  pub emissive_intensity: f32,
+  pub emissive_color: [f32; 3],
 }
 
 /// Represents a single draw call with all necessary information.
@@ -25,6 +28,7 @@ pub struct ResourceUploadResult {
 pub struct DrawCall {
   /// The pipeline to use for this draw call.
   pub pipeline: PipelineKey,
+  pub outline_pipeline: Option<PipelineKey>,
   /// The vertex buffer to bind.
   pub buffers: GpuResourceHandle,
   /// index count
@@ -32,6 +36,10 @@ pub struct DrawCall {
   /// The model matrix of the object to draw.
   pub model_matrix: Mat4x4f32,
   pub texture_flags: TextureFlags,
+  pub emissive_intensity: f32,
+  pub emissive_color: [f32; 3],
+  pub draw_outline: bool,
+  pub outline_color: [f32; 4],
 }
 
 impl DrawCall {
@@ -42,10 +50,15 @@ impl DrawCall {
   ) -> Self {
     Self {
       pipeline: result.pipeline,
+      outline_pipeline: result.outline_pipeline,
       buffers: result.buffers,
       index_count,
       model_matrix,
       texture_flags: result.texture_flags,
+      emissive_intensity: result.emissive_intensity,
+      emissive_color: result.emissive_color,
+      draw_outline: false,
+      outline_color: [1.0, 1.0, 1.0, 1.0],
     }
   }
 }
@@ -72,19 +85,27 @@ impl CursorDrawCall {
   }
 }
 
-/// A collection of all draw calls and resources for a single frame.
-pub struct Frame {
+/// A proper clear-cut struct representing the rendering scene.
+pub struct RenderScene {
   /// A list of draw calls to be executed for this frame.
   pub draw_calls: Vec<DrawCall>,
   /// A list of cursor draw calls.
   pub cursor_calls: Vec<CursorDrawCall>,
+  pub camera: (TransformComponent, CameraComponent),
+  pub sun: Option<(EntityId, SunComponent, TransformComponent)>,
+  pub sky: Option<(EntityId, SkyComponent)>,
+  pub grid: Option<(EntityId, GridComponent)>,
 }
 
-impl Frame {
-  pub fn new() -> Self {
+impl RenderScene {
+  pub fn new(camera: (TransformComponent, CameraComponent)) -> Self {
     Self {
       draw_calls: Vec::new(),
       cursor_calls: Vec::new(),
+      camera,
+      sun: None,
+      sky: None,
+      grid: None,
     }
   }
 
@@ -97,6 +118,8 @@ impl Frame {
     renderable: RenderableDataRef,
     presentation_engine_handle: PresentationEngineHandle,
     debug_name: &str,
+    draw_outline: bool,
+    outline_color: [f32; 4],
   ) -> GpuResult<()> {
     match renderable {
       RenderableDataRef::ImageBillboard(_component) => {
@@ -110,11 +133,10 @@ impl Frame {
           debug_name,
         )?;
         let index_count = component.mesh.indices.len() as u32;
-        self.draw_calls.push(DrawCall::from_handles_and_matrix(
-          res,
-          index_count,
-          model_matrix,
-        ));
+        let mut dc = DrawCall::from_handles_and_matrix(res, index_count, model_matrix);
+        dc.draw_outline = draw_outline;
+        dc.outline_color = outline_color;
+        self.draw_calls.push(dc);
       }
       RenderableDataRef::Cursor(_) => {
         let res: ResourceUploadResult =
@@ -128,134 +150,7 @@ impl Frame {
   }
 }
 
-/// A trait for a render path, which defines a strategy for rendering a frame.
-/// For now, we assume a render pass abstraction is available.
-pub trait RenderPath {
-  /// Records the rendering commands for a given frame into a command buffer.
-  /// The `render_pass` parameter is a placeholder for a render pass abstraction.
-  fn record_commands(
-    &self,
-    device: &dyn RenderDevice,
-    camera: (&TransformComponent, &CameraComponent),
-    sun: Option<(
-      crate::scene::EntityId,
-      &crate::scene::SunComponent,
-      &TransformComponent,
-    )>,
-    sky: Option<(crate::scene::EntityId, &crate::scene::SkyComponent)>,
-    grid: Option<(crate::scene::EntityId, &crate::scene::GridComponent)>,
-    frame: &Frame,
-    presentation_engine: PresentationEngineHandle,
-    acquire_result: &AcquireResult,
-  ) -> GpuResult<()>;
-}
-
-/// A simple forward rendering path.
-pub struct ForwardRenderPath;
-
-impl RenderPath for ForwardRenderPath {
-  fn record_commands(
-    &self,
-    device: &dyn RenderDevice,
-    camera: (&TransformComponent, &CameraComponent),
-    sun: Option<(
-      crate::scene::EntityId,
-      &crate::scene::SunComponent,
-      &TransformComponent,
-    )>,
-    sky: Option<(crate::scene::EntityId, &crate::scene::SkyComponent)>,
-    grid: Option<(crate::scene::EntityId, &crate::scene::GridComponent)>,
-    frame: &Frame,
-    presentation_engine: PresentationEngineHandle,
-    acquire_result: &AcquireResult,
-  ) -> GpuResult<()> {
-    let cmd_buffer = device.get_command_buffer()?;
-
-    device.begin_command_buffer(cmd_buffer)?;
-
-    let _buf_result = {
-      if let Some((sun_entity, sun_comp, _)) = sun {
-        device.update_sun(cmd_buffer, sun_entity, sun_comp)?;
-      }
-      device.begin_render_pass(cmd_buffer, presentation_engine, acquire_result)?;
-
-      let _render_pass_result = {
-        let extent = device.get_presentation_engine_extent(presentation_engine)?;
-        device.set_viewport(
-          cmd_buffer,
-          &super::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: extent[0] as f32,
-            height: extent[1] as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-          },
-        )?;
-        device.set_scissor(
-          cmd_buffer,
-          &super::Rect2D {
-            offset: [0, 0],
-            extent,
-          },
-        )?;
-        let view = Mat4x4f32::from_scale(
-          aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(1.0, -1.0, 1.0),
-        ) * Mat4x4f32::from_quat(camera.0.rotation.conjugate())
-          * Mat4x4f32::translation(camera.0.position * -1.0);
-        let proj = camera.1.projection;
-        let view_proj = proj * view;
-
-        if let Some((sky_entity, sky_comp)) = sky {
-          let sky_view = Mat4x4f32::from_quat(camera.0.rotation.conjugate());
-          let sky_view_proj = proj * sky_view;
-          device.render_sky(cmd_buffer, sky_entity, sky_comp, sky_view_proj)?;
-        }
-
-        if let Some((sun_entity, sun_comp, sun_transform)) = sun {
-          device.render_sun(
-            cmd_buffer,
-            sun_entity,
-            sun_comp,
-            sun_transform,
-            view,
-            view_proj,
-          )?;
-        }
-
-        for draw_call in &frame.draw_calls {
-          let _ = do_draw_call(device, view_proj, camera.0.position, cmd_buffer, draw_call);
-        }
-
-        if let Some((grid_entity, grid_comp)) = grid {
-          device.render_grid(
-            cmd_buffer,
-            grid_entity,
-            grid_comp,
-            view_proj,
-            camera.0.position,
-          )?;
-        }
-
-        for cursor_call in &frame.cursor_calls {
-          let _ = do_draw_cursor(device, view, view_proj, cmd_buffer, cursor_call);
-        }
-
-        Ok::<(), GpuError>(())
-      };
-
-      device.end_render_pass(cmd_buffer)?;
-
-      Ok::<(), GpuError>(())
-    };
-
-    device.submit_command_buffer(cmd_buffer)?;
-
-    Ok(())
-  }
-}
-
-fn do_draw_cursor(
+pub fn do_draw_cursor(
   device: &dyn RenderDevice,
   view: Mat4x4f32,
   view_proj: Mat4x4f32,
@@ -277,30 +172,57 @@ fn do_draw_cursor(
   Ok(())
 }
 
-fn do_draw_call(
+pub fn do_draw_call(
   device: &dyn RenderDevice,
   view_proj: Mat4x4f32,
   camera_pos: Vec3f32,
+  sun_pos: Vec3f32,
+  sun_color: [f32; 4],
   cmd_buffer: super::CommandBufferHandle,
   draw_call: &DrawCall,
 ) -> Result<(), crate::types::GpuError> {
-  // 2. Bind pipeline and buffers
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
   device.bind_buffers(cmd_buffer, draw_call.pipeline, draw_call.buffers)?;
 
-  // 3. Math & Push constants
   let model = draw_call.model_matrix;
   let mvp = view_proj * model;
   let push_constants = PushConstants {
     model_view_proj: mvp.into(),
     model: model.into(),
-    sun_pos: [1000.0, 1000.0, 1000.0],
+    sun_pos: sun_pos.into(),
     texture_flags: draw_call.texture_flags,
-    sun_color: [1000000.0, 1000000.0, 1000000.0, 1.0],
+    sun_color,
     camera_pos: camera_pos.into(),
-    _unused: 0,
+    emissive_intensity: draw_call.emissive_intensity,
+    emissive_color: draw_call.emissive_color,
+    _unused_pad: 0,
   };
   device.push_constants(cmd_buffer, &push_constants)?;
   device.draw_indexed(cmd_buffer, draw_call.index_count)?;
+
+  if draw_call.draw_outline {
+    if let Some(outline_pipeline) = draw_call.outline_pipeline {
+      device.bind_pipeline(cmd_buffer, outline_pipeline)?;
+      // Note: same buffers because geometry is identical, only pipeline changes
+      // but wait, bind_buffers also requires pipeline_key to identify layout in some engines
+      // Let's assume it works or we use the regular pipeline key for bind_buffers
+      device.bind_buffers(cmd_buffer, outline_pipeline, draw_call.buffers)?;
+
+      let outline_push = PushConstants {
+        model_view_proj: mvp.into(),
+        model: model.into(),
+        sun_pos: sun_pos.into(),
+        texture_flags: draw_call.texture_flags,
+        sun_color,
+        camera_pos: camera_pos.into(),
+        emissive_intensity: draw_call.outline_color[3], // using intensity for alpha? Or just packing color
+        emissive_color: [draw_call.outline_color[0], draw_call.outline_color[1], draw_call.outline_color[2]], // Emissive color abused for outline color
+        _unused_pad: 0,
+      };
+      device.push_constants(cmd_buffer, &outline_push)?;
+      device.draw_indexed(cmd_buffer, draw_call.index_count)?;
+    }
+  }
+
   Ok(())
 }

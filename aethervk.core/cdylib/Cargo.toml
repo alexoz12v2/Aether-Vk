@@ -16,6 +16,7 @@ std = []
 anyhow = { version = "1.0" }
 serde_json = "1.0"
 glob = "0.3"
+cbindgen = "0.26.0"
 
 [dependencies]
 aethervk-core-rlib = { path = "../rlib", default-features = false, features = [
@@ -23,6 +24,10 @@ aethervk-core-rlib = { path = "../rlib", default-features = false, features = [
 aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = [
     "console_log",
 ] }
+anise = { path = "../../external/anise/anise", default-features = false }
+heapless = { version = "0.9" }
+spin = { version = "0.10", features = ["once", "rwlock", "mutex"] }
+thingbuf = { version = "0.1", default-features = false, features = ["alloc"] }
 
 # crates necessary to avoid std
 # core, alloc → `rustc` already has them

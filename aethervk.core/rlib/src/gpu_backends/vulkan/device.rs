@@ -68,6 +68,8 @@ mod swapchain;
 
 use aethervk_oshal_rlib::math::matrix::{SquareMatrix, Matrix};
 use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
+use aethervk_oshal_rlib::math::quaternion::Quaternion;
+use aethervk_oshal_rlib::math::matrix::MatrixVectorMul;
 
 #[cfg(debug_assertions)]
 static ARCHETYPE_CREATED: spin::Once<spin::Mutex<bool>> = Once::new();
@@ -208,11 +210,16 @@ unsafe fn physical_mesh_resource_backend_to_frontend(
   handle: RenderableInstanceId,
   value: &ForwardMeshRenderResource,
   archetype: &ForwardMeshRenderResourceArchetype,
+  emissive_intensity: f32,
+  emissive_color: [f32; 3],
 ) -> ResourceUploadResult {
   ResourceUploadResult {
     pipeline: unsafe { archetype.pipeline_key.unwrap_unchecked() },
+    outline_pipeline: archetype.outline_pipeline_key,
     buffers: handle.into(),
     texture_flags: value.frontend_texture_flags(),
+    emissive_intensity,
+    emissive_color,
   }
 }
 
@@ -675,7 +682,7 @@ impl DeviceResources {
         .pipeline_layout
         .get(),
       )
-      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
+      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::INVERT_FRONT_FACE)
       .with_render_pass(
         self
           .renderpasses
@@ -837,7 +844,7 @@ impl DeviceResources {
         .pipeline_layout
         .get(),
       )
-      .with_pipeline_flags(PipelineFlags::CULL_ALL) // No culling so we see it from inside and outside (yes, cull all means no culling)
+      .with_pipeline_flags(PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE) // No culling so we see it from inside and outside (yes, cull all means no culling)
       .with_render_pass(
         self
           .renderpasses
@@ -960,7 +967,7 @@ impl DeviceResources {
       )
       .with_pipeline_layout(pipeline_layout)
       .with_pipeline_flags(
-        PipelineFlags::CULL_ALL | PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST,
+        PipelineFlags::CULL_ALL | PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST | PipelineFlags::INVERT_FRONT_FACE,
       )
       .with_render_pass(
         self
@@ -1068,7 +1075,7 @@ impl DeviceResources {
       )
       .with_pipeline_layout(pipeline_layout)
       .with_pipeline_flags(
-        PipelineFlags::CULL_ALL | PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST,
+        PipelineFlags::CULL_ALL | PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST | PipelineFlags::INVERT_FRONT_FACE,
       )
       .with_render_pass(
         self
@@ -1217,7 +1224,7 @@ impl DeviceResources {
         .pipeline_layout
         .get(),
       )
-      .with_pipeline_flags(PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL) // NO Culling, NO Depth Test (Yes, cull all means no culling)
+      .with_pipeline_flags(PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE) // NO Culling, NO Depth Test (Yes, cull all means no culling)
       .with_render_pass(
         self
           .renderpasses
@@ -2519,6 +2526,113 @@ impl<'a> RenderDevice for Device<'a> {
       .map_err(|e| e.into())
   }
 
+  fn init_archetypes(&self, handle: crate::gpu::PresentationEngineHandle) -> GpuResult<()> {
+    let mut wres = self.res.write();
+    let timeline = wres.get_timeline_semaphore_cached_value() + 1;
+
+    if wres.physical_mesh_render_archetype.is_none() {
+      let (vkey, fkey) = self.ensure_physical_mesh_shader_modules(&wres)?;
+      wres.create_physical_mesh_archetype(
+        &self.device,
+        vkey,
+        fkey,
+        self.depth_stencil_format,
+        &self.queues.get_graphics_queue(),
+        handle,
+        timeline,
+      )?;
+    }
+
+    if wres.cursor_render_archetype.is_none() {
+      let (vkey, fkey) = self.ensure_cursor_shader_modules(&wres)?;
+      wres.create_cursor_archetype(&self.device, vkey, fkey, self.depth_stencil_format, handle)?;
+    }
+
+    if wres.sun_render_archetype.is_none() {
+      let (vkey, fkey) = self.ensure_sun_shader_modules(&wres)?;
+      wres.create_sun_archetype(&self.device, vkey, fkey, self.depth_stencil_format, handle)?;
+    }
+
+    if wres.sky_render_archetype.is_none() {
+      let (vkey, fkey) = self.ensure_sky_shader_modules(&wres)?;
+      wres.create_sky_archetype(&self.device, vkey, fkey, self.depth_stencil_format, handle)?;
+    }
+
+    if wres.grid_render_archetype.is_none() {
+      let (vkey, fkey) = self.ensure_grid_shader_modules(&wres)?;
+      wres.create_grid_archetype(&self.device, vkey, fkey, self.depth_stencil_format, handle)?;
+    }
+
+    Ok(())
+  }
+
+  fn render_frame(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    _viewports: &crate::gpu::viewport::ViewportQuadTree,
+    render_scene: &crate::gpu::frame::RenderScene,
+  ) -> GpuResult<()> {
+    use aethervk_oshal_rlib::math::matrix::{Matrix4, MatrixVectorMul, SquareMatrix};
+    let camera = &render_scene.camera;
+    let view =
+      <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::from_columns(
+        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(1.0, 0.0, 0.0, 0.0),
+        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, 1.0, 0.0),
+        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, -1.0, 0.0, 0.0),
+        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
+      ) * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as aethervk_oshal_rlib::math::matrix::Matrix4>::from_quat_custom_frame(
+        camera.0.rotation.conjugate(),
+      ) * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::translation(camera.0.position * -1.0);
+    let proj = camera.1.projection;
+    let view_proj = proj * view;
+
+    if let Some((sky_entity, sky_comp)) = &render_scene.sky {
+      let sky_view = <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::from_columns(
+        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(1.0, 0.0, 0.0, 0.0),
+        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, 1.0, 0.0),
+        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, -1.0, 0.0, 0.0),
+        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
+      ) * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as aethervk_oshal_rlib::math::matrix::Matrix4>::from_quat_custom_frame(
+        camera.0.rotation.conjugate(),
+      );
+      let sky_view_proj = proj * sky_view;
+      self.render_sky(cmd_buffer, *sky_entity, sky_comp, sky_view_proj)?;
+    }
+
+    let sun_pos = render_scene.sun.as_ref().map(|(_, _, t)| t.position).unwrap_or_else(|| aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 0.0));
+
+    if let Some((sun_entity, sun_comp, sun_transform)) = &render_scene.sun {
+      self.render_sun(
+        cmd_buffer,
+        *sun_entity,
+        sun_comp,
+        sun_transform,
+        view,
+        view_proj,
+      )?;
+    }
+
+    for draw_call in &render_scene.draw_calls {
+      crate::gpu::frame::do_draw_call(self, view_proj, camera.0.position, sun_pos, [1.0, 1.0, 1.0, 1.0], cmd_buffer, draw_call)?;
+    }
+
+    if let Some((grid_entity, grid_comp)) = &render_scene.grid {
+      self.render_grid(
+        cmd_buffer,
+        *grid_entity,
+        grid_comp,
+        view_proj,
+        camera.0.position,
+      )?;
+    }
+
+    for cursor_call in &render_scene.cursor_calls {
+      crate::gpu::frame::do_draw_cursor(self, view, view_proj, cmd_buffer, cursor_call)?;
+    }
+
+    Ok(())
+  }
+
   fn create_presentation_engine(
     &self,
     params: &crate::gpu::PresentationEngineParams,
@@ -2715,6 +2829,8 @@ impl<'a> RenderDevice for Device<'a> {
             physical_mesh_id,
             &resource,
             &archetype,
+            component.emissive_intensity,
+            component.emissive_color,
           ));
         }
       }
@@ -2863,6 +2979,9 @@ impl<'a> RenderDevice for Device<'a> {
       self.device.destroy_command_pool(command_pool, None);
     }
 
+    let outline_pipeline_key = archetype.outline_pipeline_key;
+    let pipeline_key = unsafe { archetype.pipeline_key.unwrap_unchecked() };
+
     drop(res);
     let wres = self.res.write();
     let mut wresources = wres.physical_mesh_resources.write();
@@ -2879,8 +2998,11 @@ impl<'a> RenderDevice for Device<'a> {
 
     Ok(ResourceUploadResult {
       pipeline: pipeline_key,
+      outline_pipeline: outline_pipeline_key,
       buffers: physical_mesh_id.into(),
       texture_flags,
+      emissive_intensity: component.emissive_intensity,
+      emissive_color: component.emissive_color,
     })
   }
 
@@ -3141,8 +3263,11 @@ impl<'a> RenderDevice for Device<'a> {
     // the cursor doesn't have descriptor sets or vertex/index buffers
     Ok(ResourceUploadResult {
       pipeline: pipeline_key,
+      outline_pipeline: None,
       buffers: crate::gpu::NULL_GPU_RESOURCE, // no buffers
       texture_flags: TextureFlags::empty(),
+      emissive_intensity: 0.0,
+      emissive_color: [0.0; 3],
     })
   }
 
@@ -4240,13 +4365,27 @@ impl<'a> RenderDevice for Device<'a> {
       );
       let model_matrix = transform.to_mat4();
       let model_inv =
-        aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::inverse(model_matrix).unwrap();
+        <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as aethervk_oshal_rlib::math::matrix::SquareMatrix>::inverse(model_matrix).unwrap();
       let mvp: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 = view_proj * model_matrix;
+
+      // Ensure camera position is in local space of the sun
+      let local_camera_pos = model_inv.mul_vector(
+        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+          camera_world_pos.x(),
+          camera_world_pos.y(),
+          camera_world_pos.z(),
+          1.0,
+        ),
+      );
+      let local_camera_pos_vec3 = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+        local_camera_pos.x() / local_camera_pos.w(),
+        local_camera_pos.y() / local_camera_pos.w(),
+        local_camera_pos.z() / local_camera_pos.w(),
+      );
 
       let push_constants = crate::gpu::SunPushConstants {
         model_view_proj: mvp.into(),
-        model_inv: model_inv.into(),
-        camera_world_pos: camera_world_pos.into(),
+        local_camera_pos: local_camera_pos_vec3.into(),
         _unused: 0,
       };
 
@@ -4669,4 +4808,57 @@ fn extract_attribute_data(comet: &Comet) -> Vec<f32> {
     attribute_data.extend_from_slice(&vertex.tangent);
   }
   attribute_data
+}
+
+impl<'a> crate::gpu::Kernels for Device<'a> {
+  fn dispatch_physics_step(
+    &self,
+    _cmd_buffer: crate::gpu::CommandBufferHandle,
+    _physical_scene: &crate::gpu::PhysicalScene,
+    _dt: f32,
+  ) -> GpuResult<()> {
+    // TODO: Bind compute pipeline for IMR interval arithmetic integration
+    Ok(())
+  }
+
+  fn dispatch_particles(&self, _cmd_buffer: crate::gpu::CommandBufferHandle, _dt: f32) -> GpuResult<()> {
+    // TODO: Bind particle compute pipeline
+    Ok(())
+  }
+}
+
+impl<'a> crate::gpu::KernelRenderBridge for Device<'a> {
+  fn sync_compute_to_graphics(&self, cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {
+    let res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers
+      .get(&(timeline, cmd_buffer))
+      .ok_or(GpuError::InvalidArgument)?;
+
+    // Memory barrier to sync COMPUTE_SHADER writing to VERTEX_SHADER / FRAGMENT_SHADER reading
+    let mem_barrier = vk::MemoryBarrier2::default()
+      .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+      .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+      .dst_stage_mask(
+        vk::PipelineStageFlags2::VERTEX_SHADER | vk::PipelineStageFlags2::FRAGMENT_SHADER,
+      )
+      .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::UNIFORM_READ);
+
+    let dep_info =
+      vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&mem_barrier));
+
+    unsafe {
+      self
+        .device
+        .synchronization2
+        .cmd_pipeline_barrier2(data.command_buffer.get(), &dep_info);
+    }
+    Ok(())
+  }
+
+  fn sync_graphics_to_compute(&self, _cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {
+    // Counterpart memory barrier from Graphics output back to Compute reads
+    Ok(())
+  }
 }

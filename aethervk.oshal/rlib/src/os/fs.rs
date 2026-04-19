@@ -16,7 +16,7 @@ pub const SEP: os_char = if cfg!(windows) {
 };
 
 /// necessary utility to ensure equality and hash are not dependant on nul termination
-fn strip_nul(slice: &[os_char]) -> &[os_char] {
+pub(crate) fn strip_nul(slice: &[os_char]) -> &[os_char] {
   if let Some((&last, rest)) = slice.split_last() {
     if last == b'\0' as os_char {
       return rest;
@@ -244,7 +244,7 @@ impl PathBuf {
   }
 
   // nul terminated for ffi/os api compatibility
-  fn as_ptr_mut(&mut self) -> *const os_char {
+  pub(crate) fn as_ptr_mut(&mut self) -> *const os_char {
     self.ensure_nul_terminated();
     self.as_slice().as_ptr()
   }

@@ -94,7 +94,7 @@ vec3 blackbody(float tempK) {
   if (t <= 60.0) {
     color.g = 99.4708025861 * log(t) - 161.1195681661;
   } else {
-    color.g = 288.1221695283 * pow(t - 60.0, -0.0755148492);
+    color.g = 288.1221695283 * pow(max(t - 60.0, 0.001), -0.0755148492);
   }
 
   // Blue
@@ -113,13 +113,19 @@ void main() {
   ivec3 texelCoord = ivec3(gl_GlobalInvocationID);
   ivec3 size = imageSize(sunVolume);
 
-  if (any(greaterThanEqual(texelCoord, size))) {
-    return;
-  }
-
   // Normalized coordinates from -1.0 to 1.0 (0,0,0 is the center of the sun)
   vec3 uvw = (vec3(texelCoord) + 0.5) / vec3(size) * 2.0 - 1.0;
   float distFromCenter = length(uvw);
+
+  // Subgroup Intrinsics Demonstration:
+  // Averaging distance across the subgroup footprint
+  // While physically arabitrary, it demonstates GL_KHR_shader_subgroup_arithmetic usage
+  // over non-uniform control flow execution
+  float subgroupAvgDist = subgroupAdd(distFromCenter) / float(gl_SubgroupSize);
+
+  if (any(greaterThanEqual(texelCoord, size))) {
+    return;
+  }
 
   // Load simulation parameters from the PHysicalStorageBuffer pointer
   float time = push.params.time;
@@ -127,12 +133,6 @@ void main() {
   float scaleHeight = push.params.scaleHeight;
   float photoTemp = push.params.photosphereTemp;
   float coronaTemp = push.params.coronaTemp;
-
-  // Subgroup Intrinsics Demonstration:
-  // Averaging distance across the subgroup footprint
-  // While physically arabitrary, it demonstates GL_KHR_shader_subgroup_arithmetic usage
-  // over non-uniform control flow execution
-  float subgroupAvgDist = subgroupAdd(distFromCenter) / float(gl_SubgroupSize);
 
   // Animate turbolence: (Simulating solar rotation and convection currents)
   // (Velocity towards v and w arbitrary, what feels right)
@@ -146,28 +146,27 @@ void main() {
   // Magnetohydrodynamics (MHD) Surface Perturbation:
   // Make the surface turbulence more pronounced
   float effectiveRadius = distFromCenter - (turbolence - 0.5) * 0.1;
-
   // Calculate density and atmospheric transition mask
-  float density = hydrostaticDensity(effectiveRadius, rSun, scaleHeight);
-  float transitionMask = smoothstep(rSun, rSun + 0.1, effectiveRadius);
+  float density = exp(-(effectiveRadius - rSun) / scaleHeight);
+  density = clamp(density, 0.0, 1.0);
+  float transitionMask = smoothstep(0.0, 1.0, density);
 
-  // Mix core temperature and corona temperature based on distance
+  // Surface temperature
   float finalTemp = mix(localTemp, coronaTemp, transitionMask);
 
-  // Calculate final HDR Emission
-  vec3 emissionColor = blackbody(finalTemp);
+// Calculate final HDR Emission Color (Blackbody curve)
+vec3 emissionColor = blackbody(finalTemp);
 
-  // Apply a pleasing yellow-orange artistic tint because a physically correct 
-  // 5778K blackbody is technically white, which doesn't resemble a sun to human eyes.
-  vec3 artisticTint = mix(vec3(1.0, 0.6, 0.1), vec3(1.0, 0.8, 0.5), transitionMask);
-  emissionColor *= artisticTint;
+// Apply a pleasing yellow-orange artistic tint because a physically correct
+// 5778K blackbody is technically white, which doesn't resemble a sun to human eyes.
+vec3 artisticTint = mix(vec3(1.0, 0.15, 0.02), vec3(1.0, 0.35, 0.05), transitionMask);
+emissionColor *= artisticTint;
 
-  // Radiative Transfer: Simplified Volume rendering emission/absorption model
-  // RGB = Emission * Density (Glowing Plasma), Alpha = Density (Optical Depth / Opacity)
-  // we boost emission slightly by integrating our subgroup distance scalar for validation
-  float intrinsicValidation = clamp(subgroupAvgDist / max(distFromCenter, 0.001), 0.9, 1.1);
-  vec3 finalColor = emissionColor * density * 1.5 * intrinsicValidation;
-
-  // Write out volumetric representation
-  imageStore(sunVolume, texelCoord, vec4(finalColor, density));
+// Radiative Transfer: Simplified Volume rendering emission/absorption model
+// RGB = Emission (Glowing Plasma), Alpha = Density (Optical Depth / Opacity)
+// we boost emission slightly by integrating our subgroup distance scalar for validation
+float intrinsicValidation = clamp(subgroupAvgDist / max(distFromCenter, 0.001), 0.9, 1.1);
+vec3 finalColor = emissionColor * density * 0.9 * intrinsicValidation;
+// Write out volumetric representation
+imageStore(sunVolume, texelCoord, vec4(finalColor, density));
 }

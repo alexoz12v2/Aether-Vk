@@ -870,7 +870,9 @@ avk__*
 # utility to try stuff
 avk-ignored/
 TODO
+TODO2
 earth_trajectory_log.csv
 
 # gemini config
 .gemini/
+*.bsp
