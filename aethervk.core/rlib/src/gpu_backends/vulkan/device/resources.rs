@@ -1,14 +1,12 @@
-use core::fmt::write;
 use core::ptr;
 use core::hash::{Hash, Hasher};
 use aethervk_oshal_rlib as oshal;
-use ash::khr::dynamic_rendering;
 use oshal::{hash::FnvHasher, os::native::ThreadId};
 use ash::vk;
 use alloc::{boxed::Box, collections::VecDeque, sync, vec::Vec};
 use spirv_reflect::{ffi::SpvReflectResult_SPV_REFLECT_RESULT_SUCCESS, types::ReflectShaderStageFlags};
 use crate::gpu_backends::vulkan;
-use crate::gpu_backends::vulkan::device::{LogicalDevice, VmaDebugNameExt, VulkanDebugNameExt};
+use crate::gpu_backends::vulkan::device::{VmaDebugNameExt, VulkanDebugNameExt};
 use crate::simulation::comet::Texture;
 use vk_mem::Alloc;
 
@@ -16,10 +14,10 @@ use crate::gpu::PipelineKeyable;
 use crate::gpu_backends::vulkan::device::commands::{self, CommandBufferId};
 use crate::gpu_backends::vulkan::device::pipelines::GraphicsInfo;
 use crate::{
-  gpu::{PipelineKey, frame::Frame},
+  gpu::{PipelineKey},
   gpu_backends::vulkan::{
     device::{
-      DeviceResource, DeviceResourceJanitor, FunctionalDeviceResource, VertexIn,
+      DeviceResource, DeviceResourceJanitor, FunctionalDeviceResource,
       descriptors::{self, DescriptorPools},
       shader_manager::Shader,
     },
@@ -1219,6 +1217,7 @@ pub(super) struct ForwardMeshRenderResourceArchetype {
   pub graphics_info: Option<GraphicsInfo>,
   /// Populated after with_pipeline_key
   pub pipeline_key: Option<PipelineKey>,
+  pub outline_pipeline_key: Option<PipelineKey>,
 
   pub dummy_texture_handle: Image,
   /// Necessary evil for discard. assumes it outlives this object
@@ -1234,6 +1233,13 @@ impl ForwardMeshRenderResourceArchetype {
     Self {
       graphics_info: Some(graphics_info),
       pipeline_key: Some(pipeline_key),
+      ..self
+    }
+  }
+
+  pub fn with_outline_pipeline_key(self, outline_pipeline_key: PipelineKey) -> Self {
+    Self {
+      outline_pipeline_key: Some(outline_pipeline_key),
       ..self
     }
   }
@@ -1541,6 +1547,7 @@ impl ForwardMeshRenderResourceArchetype {
       specialization_constants,
       specialization_constants_values,
       pipeline_key: None,
+      outline_pipeline_key: None,
       graphics_info: None,
       dummy_texture_handle,
       allocator_raw: allocator.get_raw(),

@@ -1,8 +1,5 @@
 use aethervk_core_rlib::{
-  gpu::{
-    self, RenderDevice,
-    frame::{self, RenderPath},
-  },
+  gpu::{self, RenderDevice},
   scene::{
     CameraComponent, CursorComponent, EntityId, PhysicalMeshComponent, RenderableDataRef, Scene,
     TransformComponent,
@@ -22,6 +19,7 @@ pub struct RenderPacket {
   pub camera_transform: TransformComponent,
   pub camera_component: CameraComponent,
   pub window_size: winit::dpi::PhysicalSize<u32>,
+  pub outlines_enabled: bool,
 }
 
 #[repr(C)]
@@ -31,7 +29,6 @@ struct RenderPayloadData<'a> {
   scene: &'a Scene,
   cursor_entity: EntityId,
   sun_entity: EntityId,
-  // TODO sky_entity
 }
 
 pub fn start_render_thread(
@@ -84,12 +81,47 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
     return Ok(());
   }
 
-  let mut frame = frame::Frame::new();
+  let mut render_scene = gpu::frame::RenderScene::new((
+    payload.packet.camera_transform,
+    payload.packet.camera_component,
+  ));
+
+  payload.scene.query1::<aethervk_core_rlib::scene::SunComponent, _>(|entity, comp| {
+    if let Some(transform) = payload.scene.global_transform(entity) {
+      render_scene.sun = Some((entity, *comp, transform));
+    }
+  });
+
+  payload.scene.query1::<aethervk_core_rlib::scene::SkyComponent, _>(|entity, comp| {
+    render_scene.sky = Some((entity, *comp));
+  });
+
+  payload.scene.query1::<aethervk_core_rlib::scene::GridComponent, _>(|entity, comp| {
+    render_scene.grid = Some((entity, *comp));
+  });
+
+  payload.scene.query1::<aethervk_core_rlib::scene::CursorComponent, _>(|entity, comp| {
+    if let Some(transform) = payload.scene.global_transform(entity) {
+      render_scene
+        .add_renderable(
+          device,
+          entity,
+          transform.to_mat4(),
+          RenderableDataRef::Cursor(comp),
+          payload.presentation_engine,
+          "Cursor",
+          false,
+          [1.0, 1.0, 1.0, 1.0],
+        )
+        .unwrap();
+    }
+  });
+
   for item in &payload.packet.render_items {
     payload.scene.with_component(
       item.entity_id,
       |mesh: &PhysicalMeshComponent| -> GpuResult<()> {
-        frame
+        render_scene
           .add_renderable(
             device,
             item.entity_id,
@@ -97,11 +129,36 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
             RenderableDataRef::PhysicalMesh(mesh),
             payload.presentation_engine,
             "Comet",
+            false,
+            [1.0, 1.0, 1.0, 1.0],
           )
           .unwrap();
         Ok(())
       },
     );
+  }
+
+  if payload.packet.outlines_enabled {
+    for item in &payload.packet.render_items {
+      payload.scene.with_component(
+        item.entity_id,
+        |mesh: &PhysicalMeshComponent| -> GpuResult<()> {
+          render_scene
+            .add_renderable(
+              device,
+              item.entity_id,
+              item.model_matrix,
+              RenderableDataRef::PhysicalMesh(mesh),
+              payload.presentation_engine,
+              "Outline",
+              true,
+              [1.0, 1.0, 1.0, 1.0],
+            )
+            .unwrap();
+          Ok(())
+        },
+      );
+    }
   }
 
   payload.scene.with_component(
@@ -111,7 +168,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
         .scene
         .global_transform(payload.cursor_entity)
         .unwrap();
-      frame
+      render_scene
         .add_renderable(
           device,
           payload.cursor_entity,
@@ -119,6 +176,8 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
           RenderableDataRef::Cursor(cursor),
           payload.presentation_engine,
           "Cursor",
+          false,
+          [1.0, 1.0, 1.0, 1.0],
         )
         .unwrap();
       Ok(())
@@ -149,20 +208,54 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
       grid_opt = Some((id, *comp));
     });
 
-  let render_path = frame::ForwardRenderPath;
-  render_path.record_commands(
-    device,
-    (
-      &payload.packet.camera_transform,
-      &payload.packet.camera_component,
-    ),
-    Some((payload.sun_entity, &sun_comp, &sun_transform.into())),
-    sky_opt.as_ref().map(|(id, comp)| (*id, comp)),
-    grid_opt.as_ref().map(|(id, comp)| (*id, comp)),
-    &frame,
-    payload.presentation_engine,
-    &acquire_result,
-  )?;
+  render_scene.sun = Some((payload.sun_entity, sun_comp, sun_transform.into()));
+  if let Some((id, comp)) = sky_opt {
+    render_scene.sky = Some((id, comp));
+  }
+  if let Some((id, comp)) = grid_opt {
+    render_scene.grid = Some((id, comp));
+  }
+
+  let cmd_buffer = device.get_command_buffer()?;
+  device.begin_command_buffer(cmd_buffer)?;
+  device.update_sun(cmd_buffer, payload.sun_entity, &sun_comp)?;
+  device.begin_render_pass(cmd_buffer, payload.presentation_engine, &acquire_result)?;
+
+  let extent = device.get_presentation_engine_extent(payload.presentation_engine)?;
+  let root_viewport = gpu::Viewport {
+    x: 0.0,
+    y: 0.0,
+    width: extent[0] as f32,
+    height: extent[1] as f32,
+    min_depth: 0.0,
+    max_depth: 1.0,
+  };
+  device.set_viewport(cmd_buffer, &root_viewport)?;
+  device.set_scissor(
+    cmd_buffer,
+    &gpu::Rect2D {
+      offset: [0, 0],
+      extent,
+    },
+  );
+
+  let quad_tree = gpu::ViewportQuadTree {
+    root: gpu::viewport::ViewportNode {
+      viewport: root_viewport,
+      scissor: gpu::Rect2D {
+        offset: [0, 0],
+        extent,
+      },
+      program: gpu::viewport::DrawingProgram::Viewport3D {
+        camera_entity: None,
+      },
+      children: None,
+    },
+  };
+  device.render_frame(cmd_buffer, &quad_tree, &render_scene)?;
+
+  device.end_render_pass(cmd_buffer)?;
+  device.submit_command_buffer(cmd_buffer)?;
 
   let present_status = device.present(
     payload.presentation_engine,

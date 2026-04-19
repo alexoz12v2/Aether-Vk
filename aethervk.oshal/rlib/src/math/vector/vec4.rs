@@ -34,6 +34,14 @@ pub struct Vec4f32 {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Quat(pub Vec4f32);
 
+impl Quat {
+  pub fn from_components(p0: f32, p1: f32, p2: f32, p3: f32) -> Quat {
+    Self {
+      0: Vec4f32::from_components(p0, p1, p2, p3),
+    }
+  }
+}
+
 impl Into<[f32; 4]> for Vec4f32 {
   #[inline]
   fn into(self) -> [f32; 4] {

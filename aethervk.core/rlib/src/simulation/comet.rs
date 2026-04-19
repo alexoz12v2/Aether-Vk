@@ -5,6 +5,7 @@
 use alloc::vec::Vec;
 use aethervk_oshal_rlib::{
   self as oshal,
+  math::FloatLike,
   math::vector::{Vector, Vector3, vec3::Vec3f32},
 };
 use oshal::os::{
@@ -370,7 +371,7 @@ use alloc::collections::BTreeMap;
 /// Function to load a GLTF/GLB file
 /// 1. Watertightness Check: A closed, physical (manifold) mesh must have every undirected edge shared by exactly two triangles. If an edge has only one triangle, there's a hole. If it has three or more, there's self-intersecting/non-manifold geometry.
 /// 2. Outward Normals Check: By calculating the signed volume of the mesh using the divergence theorem, we can verify winding order. If the volume is negative, the triangles are wound backwards, meaning your normals are pointing inward.
-pub fn load_comet_from_gltf(path: &str) -> Result<Comet, CometLoadError> {
+pub fn load_comet_from_gltf(path: &str, verbose: bool) -> Result<Comet, CometLoadError> {
   oshal::log!("--- Starting GLTF load for: {} ---", path);
 
   let mut path_buf = PathBuf::new();
@@ -522,12 +523,14 @@ pub fn load_comet_from_gltf(path: &str) -> Result<Comet, CometLoadError> {
   let mut is_watertight = true;
   for (edge, count) in &edge_counts {
     if *count != 2 {
-      oshal::log!(
-        "  ERROR: Mesh is not watertight! Edge ({}, {}) is shared by {} triangles (expected 2).",
-        edge.0,
-        edge.1,
-        count
-      );
+      if verbose {
+        oshal::log!(
+          "  ERROR: Mesh is not watertight! Edge ({}, {}) is shared by {} triangles (expected 2).",
+          edge.0,
+          edge.1,
+          count
+        );
+      }
       is_watertight = false;
       // Depending on strictness, you might want to return an error here:
       // return Err(CometLoadError::NotWatertight);
@@ -582,6 +585,140 @@ pub fn load_comet_from_gltf(path: &str) -> Result<Comet, CometLoadError> {
   })
 }
 
+pub fn generate_uv_sphere(radius: f32, lat_segments: u32, lon_segments: u32) -> Comet {
+  let mut vertices = Vec::new();
+  let mut indices = Vec::new();
+
+  for lat in 0..=lat_segments {
+    let theta = lat as f32 * core::f32::consts::PI / lat_segments as f32;
+    let sin_theta = theta.sin();
+    let cos_theta = theta.cos();
+
+    for lon in 0..=lon_segments {
+      let phi = lon as f32 * 2.0 * core::f32::consts::PI / lon_segments as f32;
+      let sin_phi = phi.sin();
+      let cos_phi = phi.cos();
+
+      let x = cos_phi * sin_theta;
+      let y = sin_phi * sin_theta;
+      let z = cos_theta;
+
+      let normal = [x, y, z];
+      let position = [x * radius, y * radius, z * radius];
+      let uv = [lon as f32 / lon_segments as f32, lat as f32 / lat_segments as f32];
+
+      let tangent = if x == 0.0 && y == 0.0 {
+        [1.0, 0.0, 0.0, 1.0]
+      } else {
+        let tangent_len = (x * x + y * y).sqrt();
+        [-y / tangent_len, x / tangent_len, 0.0, 1.0]
+      };
+
+      vertices.push(Vertex {
+        position,
+        normal,
+        uv,
+        tangent,
+      });
+    }
+  }
+
+  for lat in 0..lat_segments {
+    for lon in 0..lon_segments {
+      let first = lat * (lon_segments + 1) + lon;
+      let second = first + lon_segments + 1;
+
+      indices.push(first);
+      indices.push(second);
+      indices.push(first + 1);
+
+      indices.push(second);
+      indices.push(second + 1);
+      indices.push(first + 1);
+    }
+  }
+
+  let mass_properties = calculate_mass_properties(&vertices, &indices, 1.0);
+
+  Comet {
+    vertices,
+    indices,
+    albedo_map: None,
+    normal_map: None,
+    roughness_map: None,
+    ao_map: None,
+    mass_properties,
+  }
+}
+
+pub fn load_texture_from_file(path: &str) -> Result<Texture, CometLoadError> {
+  let path_buf = PathBuf::from(path);
+  if !path_buf.is_file() {
+    return Err(CometLoadError::PathNotFound);
+  }
+  let encoded_data = fs::read(path_buf.as_ref()).map_err(|_| CometLoadError::TextureNotFound)?;
+
+  let extension = path.split('.').last().unwrap_or("").to_lowercase();
+  let (decoded_data, format, width, height, has_mipmaps) = match extension.as_str() {
+    "jpg" | "jpeg" => {
+      let mut decoder = zune_jpeg::JpegDecoder::new(ZCursor::new(&encoded_data));
+      if let Err(e) = decoder.decode_headers() {
+        oshal::log!("zune_jpeg header decode error: {:?}", e);
+      }
+      let info = decoder.info().ok_or_else(|| {
+        oshal::log!("zune_jpeg info error: no info available");
+        CometLoadError::ImageDecodingError
+      })?;
+      let mut data = decoder
+        .decode()
+        .map_err(|e| {
+          oshal::log!("zune_jpeg decode error: {:?}", e);
+          CometLoadError::ImageDecodingError
+        })?;
+        
+      let format = match info.components {
+        1 => TexelFormat::R8_UNORM,
+        3 => {
+          let mut rgba = Vec::with_capacity(data.len() / 3 * 4);
+          for chunk in data.chunks_exact(3) {
+            rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
+          }
+          data = rgba;
+          TexelFormat::R8G8B8A8_UNORM
+        }
+        4 => TexelFormat::R8G8B8A8_UNORM,
+        _ => return Err(CometLoadError::UnsupportedImageFormat),
+      };
+
+      (data, format, info.width as u32, info.height as u32, false)
+    }
+    "png" => {
+      let (header, image_data) =
+        png_decoder::decode(&encoded_data).map_err(|_| CometLoadError::ImageDecodingError)?;
+      (
+        image_data.into_flattened(),
+        if header.color_type == png_decoder::ColorType::RgbAlpha {
+          TexelFormat::R8G8B8A8_UNORM
+        } else {
+          TexelFormat::R8_UNORM
+        },
+        header.width,
+        header.height,
+        false,
+      )
+    }
+    _ => return Err(CometLoadError::UnsupportedImageFormat),
+  };
+
+  Ok(Texture {
+    data: decoded_data,
+    format,
+    width,
+    height,
+    has_mipmaps,
+  })
+}
+
 bitflags! {
   #[repr(C)]
   #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -602,7 +739,9 @@ pub struct PushConstants {
   pub texture_flags: TextureFlags,
   pub sun_color: [f32; 4],
   pub camera_pos: [f32; 3],
-  pub _unused: u32,
+  pub emissive_intensity: f32,
+  pub emissive_color: [f32; 3],
+  pub _unused_pad: u32,
 }
 
 #[repr(C)]

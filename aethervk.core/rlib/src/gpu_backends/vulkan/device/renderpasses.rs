@@ -191,7 +191,7 @@ impl RenderPasses {
   pub fn get_or_create_render_pass(
     &self,
     ty: RenderPassSpecification,
-    frame_index: u32,
+    image_index: u32,
     device: &ash::Device,
     allocator: &vk_mem::Allocator,
     discard_pool: &DiscardPool,
@@ -212,7 +212,7 @@ impl RenderPasses {
           .get(&RenderPassType::ColorDepthSingleSubpass)
         {
           if bundle.swapchain_generation == swapchain.swapchain_generation() {
-            return Ok((bundle.render_pass, bundle.framebuffer[frame_index as usize]));
+            return Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]));
           }
         }
 
@@ -344,7 +344,7 @@ impl RenderPasses {
             .unwrap_unchecked()
         };
 
-        Ok((bundle.render_pass, bundle.framebuffer[frame_index as usize]))
+        Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]))
       }
     }
   }

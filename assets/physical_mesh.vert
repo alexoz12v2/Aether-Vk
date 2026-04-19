@@ -10,14 +10,15 @@ layout(location = 3) in vec4 inTangent; // Added for Normal Mapping (w is handed
 
 // Shared Push Constant block (Exactly 176 bytes TODO: move to inline unif?)
 // Note: cameraPos used for IBL view vector computation in fragment shader
-layout(push_constant) uniform Push { // std140
-  mat4 modelViewProj; // 64 bytes
-  mat4 model;         // 64 bytes
-  vec3 sunPos;        // 12 bytes
-  uint textureFlags;  // 4 bytes (packs perfectly with vec3)
-  vec4 sunColor;      // 16 bytes
-  vec3 cameraPos;     // 12 bytes
-  uint _unused;       // 4 bytes
+layout(push_constant) uniform Push {
+  layout(offset = 0) mat4 modelViewProj;
+  layout(offset = 64) mat4 model;
+  layout(offset = 128) vec3 sunPos;
+  layout(offset = 140) uint textureFlags;
+  layout(offset = 144) vec4 sunColor;
+  layout(offset = 160) vec3 cameraPos;
+  layout(offset = 172) float emissiveIntensity;
+  layout(offset = 176) vec3 emissiveColor;
 } push;
 
 layout(location = 0) out vec3 outWorldPos;
@@ -39,5 +40,13 @@ void main() {
   // Calculate bitangent using the normal, tangent, and handedness sign
   outBitangent = cross(outNormal, outTangent) * inTangent.w;
 
-  gl_Position = push.modelViewProj * vec4(inPosition, 1.0);
+  vec4 clipPos = push.modelViewProj * vec4(inPosition, 1.0);
+
+  if (push.emissiveIntensity < 0.0) {
+      vec4 normalClip = push.modelViewProj * vec4(outNormal, 0.0);
+      vec2 offset = normalize(normalClip.xy) * 0.015 * clipPos.w;
+      clipPos.xy += offset;
+  }
+
+  gl_Position = clipPos;
 }

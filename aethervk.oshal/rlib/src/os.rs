@@ -3,6 +3,7 @@ use thiserror::Error;
 pub mod debug;
 pub mod env;
 pub mod fs;
+pub mod files;
 pub mod memory;
 pub mod native;
 pub mod pool;

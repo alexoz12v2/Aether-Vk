@@ -36,7 +36,7 @@ pub trait Component: 'static + Send + Sync {}
 // === Component Definitions ===
 
 /// Defines the position, rotation, and scale of an entity.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TransformComponent {
   pub position: Vec3f32,
   /// Stored as a quaternion.
@@ -105,7 +105,7 @@ impl TransformComponent {
 }
 
 /// Represents a camera in the scene.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CameraComponent {
   pub projection: Mat4x4f32,
 }
@@ -120,6 +120,8 @@ impl Component for CursorComponent {}
 #[derive(Debug, PartialEq)]
 pub struct PhysicalMeshComponent {
   pub mesh: Comet,
+  pub emissive_intensity: f32,
+  pub emissive_color: [f32; 3],
 }
 impl Component for PhysicalMeshComponent {}
 
@@ -713,6 +715,22 @@ impl Scene {
   }
 
   pub fn spawn_entity(&self, name: impl Into<alloc::string::String>) -> EntityId {
+    let mut actual_name = name.into();
+    {
+      let names = self.names.read();
+      if names.values().any(|n| *n == actual_name) {
+        let mut counter = 1;
+        loop {
+          let try_name = alloc::format!("{}_{}", actual_name, counter);
+          if !names.values().any(|n| *n == try_name) {
+            actual_name = try_name;
+            break;
+          }
+          counter += 1;
+        }
+      }
+    }
+
     let entity_id = {
       let mut archetypes = self.archetypes.write();
       let mut entities = self.entities.write();
@@ -728,9 +746,13 @@ impl Scene {
       entity_id
     };
 
-    self.names.write().insert(entity_id, name.into());
+    self.names.write().insert(entity_id, actual_name);
 
     entity_id
+  }
+
+  pub fn get_entity_by_name(&self, name: &str) -> Option<EntityId> {
+    self.names.read().iter().find(|(_, n)| *n == name).map(|(id, _)| *id)
   }
 
   pub fn get_name(&self, entity: EntityId) -> Option<alloc::string::String> {
@@ -738,7 +760,22 @@ impl Scene {
   }
 
   pub fn set_name(&self, entity: EntityId, name: impl Into<alloc::string::String>) {
-    self.names.write().insert(entity, name.into());
+    let mut actual_name = name.into();
+    {
+      let names = self.names.read();
+      if names.values().any(|n| *n == actual_name) {
+        let mut counter = 1;
+        loop {
+          let try_name = alloc::format!("{}_{}", actual_name, counter);
+          if !names.values().any(|n| *n == try_name) {
+            actual_name = try_name;
+            break;
+          }
+          counter += 1;
+        }
+      }
+    }
+    self.names.write().insert(entity, actual_name);
   }
 
   pub fn with_component<T: Component, F, R>(&self, entity_id: EntityId, f: F) -> Option<R>

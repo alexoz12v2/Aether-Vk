@@ -26,7 +26,7 @@ pub extern "C" fn main(_argc: isize, _argv: *const *const u8) -> isize {
   log!("--- Starting Anise no_std Logging Example ---");
 
   let manifest_dir = env!("CARGO_MANIFEST_DIR");
-  let bsp_path_str = format!("{}/../../external/anise/data/de440s.bsp", manifest_dir);
+  let bsp_path_str = format!("{}/../../assets/planets/de440.bsp", manifest_dir);
   let bsp_path = fs::PathBuf::from(&bsp_path_str);
 
   log!("Attempting to read SPK file from: {}", bsp_path_str);

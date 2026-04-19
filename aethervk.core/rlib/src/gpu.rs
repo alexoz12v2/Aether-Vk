@@ -19,6 +19,9 @@ use crate::types::{EngineResult, GpuResult};
 pub use super::gpu_backends::new_render_frontend;
 pub use super::gpu_backends::{vulkan::constants};
 
+pub use self::viewport::*;
+pub use self::frame::RenderScene;
+
 use heapless::index_map::FnvIndexMap;
 use alloc::boxed::Box;
 #[cfg(debug_assertions)]
@@ -39,6 +42,33 @@ impl GpuResourceHandle {
   }
 }
 
+pub struct KinematicBody {
+  pub entity_id: EntityId,
+  pub transform: TransformComponent,
+}
+
+pub struct DynamicBody {
+  pub entity_id: EntityId,
+  pub transform: TransformComponent,
+  pub velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
+  pub mass: f32,
+}
+
+/// Ephemeral structure rebuilt every frame holding the snapshot of the simulated physical scene.
+pub struct PhysicalScene {
+  pub kinematic_bodies: alloc::vec::Vec<KinematicBody>,
+  pub dynamic_bodies: alloc::vec::Vec<DynamicBody>,
+}
+
+impl PhysicalScene {
+  pub fn new() -> Self {
+    Self {
+      kinematic_bodies: alloc::vec::Vec::new(),
+      dynamic_bodies: alloc::vec::Vec::new(),
+    }
+  }
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct CommandBufferHandle(pub u64);
 
@@ -55,8 +85,7 @@ pub struct SkyPushConstants {
 #[derive(Debug, Clone, Copy)]
 pub struct SunPushConstants {
   pub model_view_proj: [f32; 16],
-  pub model_inv: [f32; 16],
-  pub camera_world_pos: [f32; 3],
+  pub local_camera_pos: [f32; 3],
   pub _unused: u32,
 }
 
@@ -127,6 +156,19 @@ pub trait RenderDevice: Send + Sync {
   /// - Update frame index within device and (vulkan) refresh timeline semaphore value
   /// - Refresh VMA memory budgets
   fn start_frame(&self) -> GpuResult<()>;
+
+  /// Eagerly compiles pipelines and creates archetypes during initialization
+  /// so we don't lazily compile on the first frame a specific mesh is requested.
+  fn init_archetypes(&self, handle: PresentationEngineHandle) -> GpuResult<()>;
+
+  /// Traverses a QuadTree of viewports and issues the respective drawing programs
+  /// (3D Viewport or GUI elements)
+  fn render_frame(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    viewports: &crate::gpu::viewport::ViewportQuadTree,
+    render_scene: &crate::gpu::frame::RenderScene,
+  ) -> GpuResult<()>;
 
   /// Creates the surface and initial swapchain
   fn create_presentation_engine(
@@ -402,5 +444,23 @@ impl PresentationEngineParams {
   }
 }
 
+/// Computes execution for physics, particle systems, and interval arithmetic.
+pub trait Kernels: Send + Sync {
+  /// Dispatches compute shaders to step the physical simulation dynamically.
+  fn dispatch_physics_step(&self, cmd_buffer: CommandBufferHandle, physical_scene: &PhysicalScene, dt: f32) -> GpuResult<()>;
+  
+  /// Dispatches compute shaders for other effects (e.g., particles).
+  fn dispatch_particles(&self, cmd_buffer: CommandBufferHandle, dt: f32) -> GpuResult<()>;
+}
+
+/// Bridges synchronization between Compute (Kernels) and Graphics (RenderDevice).
+pub trait KernelRenderBridge: Send + Sync {
+  /// Inserts pipeline barriers or queue ownership transfers from Compute to Graphics.
+  fn sync_compute_to_graphics(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
+  
+  /// Inserts pipeline barriers or queue ownership transfers from Graphics to Compute.
+  fn sync_graphics_to_compute(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
+}
 
 pub mod frame;
+pub mod viewport;

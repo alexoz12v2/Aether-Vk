@@ -2,8 +2,7 @@
 
 layout(push_constant) uniform Push {
     mat4 modelViewProj;
-    mat4 modelInv; // Inverse model matrix to transform camera to local space
-    vec3 cameraWorldPos;
+    vec3 localCameraPos;
 } push;
 
 layout(location = 0) out vec3 outLocalPos;
@@ -31,9 +30,7 @@ void main() {
     vec3 inPosition = cube_vertices[gl_VertexIndex];
     outLocalPos = inPosition;
     
-    // Transform camera to local space for raymarching
-    vec4 localCam = push.modelInv * vec4(push.cameraWorldPos, 1.0);
-    outLocalCameraPos = localCam.xyz / localCam.w;
+    outLocalCameraPos = push.localCameraPos;
     
     gl_Position = push.modelViewProj * vec4(inPosition, 1.0);
 }

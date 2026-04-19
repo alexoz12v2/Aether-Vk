@@ -1,5 +1,7 @@
+pub mod constants;
 mod logic_thread;
 mod render_thread;
+pub mod utils;
 mod windowing;
 
 use aethervk_core_rlib::{
@@ -22,7 +24,7 @@ use winit::platform::macos::EventLoopBuilderExtMacOS;
 use std::{
   any::TypeId,
   io::Read,
-  sync::{Arc, RwLock, mpsc},
+  sync::{Arc, RwLock, mpsc, atomic::AtomicBool},
   time::Instant,
 };
 use winit::{
@@ -31,7 +33,7 @@ use winit::{
   keyboard::{KeyCode, PhysicalKey},
   window::WindowBuilder,
 };
-
+use aethervk_oshal_rlib::math::vector::Vector;
 use logic_thread::{start_logic_thread, LogicCommand};
 use render_thread::{RenderItem, RenderPacket, start_render_thread};
 use windowing::{AppEvent, WindowExtractHandlesParams, extract_native_handles, setup_resize_hook};
@@ -43,9 +45,10 @@ struct AppState {
   is_paused: bool,
   time_scale: f32,
   root_entity: aethervk_core_rlib::scene::EntityId,
-  window: Arc<winit::window::Window>,
+  window: winit::window::Window,
   is_resizing: bool,
   is_exiting: bool,
+  outlines_enabled: Arc<AtomicBool>,
 }
 
 impl Drop for AppState {
@@ -91,19 +94,17 @@ fn main() {
   #[cfg(target_os = "macos")]
   event_loop_builder.with_default_menu(false);
 
-  let event_loop =event_loop_builder 
-    .build()
-    .unwrap();
+  let event_loop = event_loop_builder.build().unwrap();
   let proxy = event_loop.create_proxy();
   let proxy_ptr = unsafe { std::ptr::NonNull::new_unchecked(Box::into_raw(Box::new(proxy))) };
 
   let start_time = Instant::now();
   println!("[{:.2?}] Application starting.", start_time.elapsed());
 
-  let window = Arc::new(WindowBuilder::new()
+  let window = WindowBuilder::new()
     .with_title("AetherVk Simulation")
     .build(&event_loop)
-    .unwrap());
+    .unwrap();
   setup_resize_hook(&window, proxy_ptr);
 
   let runtime_params = Box::leak(Box::new(RuntimeParams {
@@ -183,11 +184,13 @@ fn main() {
 
           let data_ptr = data as *mut ClosureData;
           let (params_ref, handle_result) = unsafe { &mut *data_ptr };
-          **handle_result = device.create_presentation_engine(*params_ref);
-          if let Err(e) = &**handle_result {
-            println!("Presentation Engine creation failed: {:?}", e);
-            return Ok(());
+          let pe_result = device.create_presentation_engine(*params_ref);
+          if let Ok(pe) = pe_result {
+            device
+              .init_archetypes(pe)
+              .expect("Failed to initialize archetypes");
           }
+          **handle_result = pe_result;
 
           device
             .generate_sky()
@@ -222,27 +225,37 @@ fn main() {
   scene.register_component::<SkyComponent>(&[]);
   scene.register_component::<GridComponent>(&[]);
 
+  let assets_dir = {
+    let mut args = std::env::args();
+    if args.len() > 1 {
+      let _ = args.next().unwrap();
+      std::path::PathBuf::from(args.next().unwrap())
+    } else {
+      let mut home_dir = std::env::current_exe().unwrap();
+      let mut iter: i32 = 0;
+      const MAX_ITER: i32 = 32;
+      while {
+        let d = home_dir.join("assets");
+        !d.is_dir() && iter < MAX_ITER
+      } {
+        home_dir.pop();
+        iter += 1;
+        assert!(home_dir.is_dir());
+      }
+      home_dir.join("assets")
+    }
+  };
+
   let model_path = {
     let mut args = std::env::args();
     if args.len() > 1 {
       let _ = args.next().unwrap();
       std::path::PathBuf::from(args.next().unwrap()).join("Comet.glb")
     } else {
-      let mut home_dir = std::env::current_exe().unwrap();
-      let mut iter: i32 = 0;
-      const MAX_ITER: i32 = 32;
-      while {
-        let d = home_dir.join("assets/Comet.glb");
-        !d.is_file() && iter < MAX_ITER
-      } {
-        home_dir.pop();
-        iter += 1;
-        assert!(home_dir.is_dir());
-      }
-      home_dir.join("assets/Comet.glb")
+      assets_dir.join("Comet.glb")
     }
   };
-  let comet = simulation::comet::load_comet_from_gltf(model_path.to_str().unwrap())
+  let comet = simulation::comet::load_comet_from_gltf(model_path.to_str().unwrap(), false)
     .expect("Failed to load comet");
 
   let root_entity = scene.spawn_entity("entity");
@@ -269,9 +282,105 @@ fn main() {
     )
     .unwrap();
   scene
-    .add_component(mesh_entity, PhysicalMeshComponent { mesh: comet })
+    .add_component(
+      mesh_entity,
+      PhysicalMeshComponent {
+        mesh: comet,
+        emissive_intensity: 0.0,
+        emissive_color: [0.0, 0.0, 0.0],
+      },
+    )
     .unwrap();
   scene.set_parent(mesh_entity, Some(root_entity));
+
+  let planets = [
+    (
+      "Mercury",
+      "planets/textures/Mercury.jpg",
+      crate::constants::PlanetNaifId::MERCURY,
+      1407.6,
+    ),
+    (
+      "Venus",
+      "planets/textures/Venus.jpg",
+      crate::constants::PlanetNaifId::VENUS,
+      -5832.6,
+    ),
+    (
+      "Earth",
+      "planets/textures/Earth.jpg",
+      crate::constants::PlanetNaifId::EARTH,
+      23.93,
+    ),
+    (
+      "Mars",
+      "planets/textures/Mars.jpg",
+      crate::constants::PlanetNaifId::MARS,
+      24.62,
+    ),
+    (
+      "Jupiter",
+      "planets/textures/Jupiter.jpg",
+      crate::constants::PlanetNaifId::JUPITER,
+      9.92,
+    ),
+    (
+      "Saturn",
+      "planets/textures/Saturn.jpg",
+      crate::constants::PlanetNaifId::SATURN,
+      10.65,
+    ),
+    (
+      "Uranus",
+      "planets/textures/Uranus.jpg",
+      crate::constants::PlanetNaifId::URANUS,
+      -17.24,
+    ),
+    (
+      "Neptune",
+      "planets/textures/Neptune.jpg",
+      crate::constants::PlanetNaifId::NEPTUNE,
+      16.11,
+    ),
+  ];
+
+  let mut planets_ids = Vec::new();
+  for (name, tex_path, naif_id, rot_period) in planets.iter() {
+    let planet_radius = (utils::get_planet_radius(*naif_id, &assets_dir)
+      / constants::DISTANCE_SCALE_FACTOR as f32)
+      * constants::PLANET_VISUAL_SCALE;
+    let initial_pos = Vec3f32::zero();
+
+    let mut sphere = simulation::comet::generate_uv_sphere(planet_radius, 64, 64);
+    let tex =
+      simulation::comet::load_texture_from_file(assets_dir.join(tex_path).to_str().unwrap())
+        .expect(&format!("Failed to load texture for {}", name));
+    sphere.albedo_map = Some(tex);
+
+    let planet_entity = scene.spawn_entity(*name);
+    planets_ids.push((*naif_id, planet_entity, *rot_period, planet_radius));
+    scene
+      .add_component(
+        planet_entity,
+        TransformComponent {
+          position: initial_pos,
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        planet_entity,
+        PhysicalMeshComponent {
+          mesh: sphere,
+          emissive_intensity: 0.0,
+          emissive_color: [0.0, 0.0, 0.0],
+        },
+      )
+      .unwrap();
+    scene.set_parent(planet_entity, Some(root_entity));
+  }
 
   let cursor_entity = scene.spawn_entity("entity");
   scene
@@ -294,8 +403,8 @@ fn main() {
     .add_component(
       camera_entity,
       TransformComponent {
-        position: Vec3f32::from_components(0.0, 0.0, 5.0),
-        rotation: Quat::identity(),
+        position: Vec3f32::from_components(0.0, -400.0, 0.0),
+        rotation: Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), std::f32::consts::PI),
         scale: Vec3f32::from_components(1.0, 1.0, 1.0),
       },
     )
@@ -304,20 +413,31 @@ fn main() {
     .add_component(
       camera_entity,
       CameraComponent {
-        projection: Mat4x4f32::identity(),
+        projection: Mat4x4f32::perspective_vk(
+          45.0f32.to_radians(),
+          800.0 / 600.0, // Default aspect ratio, will be updated by resize
+          0.1,
+          10000.0,
+        ),
       },
     )
     .unwrap();
   scene.set_parent(camera_entity, Some(root_entity));
 
   let sun_entity = scene.spawn_entity("sun");
+  let sun_radius = (utils::get_planet_radius(constants::PlanetNaifId::SUN, &assets_dir)
+    / constants::DISTANCE_SCALE_FACTOR as f32)
+    * constants::UNIVERSAL_VISUAL_SCALE;
+  let sun_scale = sun_radius / 0.45;
+  let sun_pos = Vec3f32::zero();
+
   scene
     .add_component(
       sun_entity,
       TransformComponent {
-        position: Vec3f32::from_components(1000.0, 1000.0, 1000.0), // TODO: Invert Y axis in persp projection
+        position: sun_pos,
         rotation: Quat::identity(),
-        scale: Vec3f32::from_components(100.0, 100.0, 100.0),
+        scale: Vec3f32::from_components(sun_scale, sun_scale, sun_scale),
       },
     )
     .unwrap();
@@ -329,6 +449,32 @@ fn main() {
       },
     )
     .unwrap();
+
+  // Add emissive core for the sun
+  let sun_core_entity = scene.spawn_entity("sun_core");
+  let mut sun_sphere = simulation::comet::generate_uv_sphere(0.45 * 0.95, 64, 64);
+  sun_sphere.albedo_map = None;
+  scene
+    .add_component(
+      sun_core_entity,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    )
+    .unwrap();
+  scene
+    .add_component(
+      sun_core_entity,
+      PhysicalMeshComponent {
+        mesh: sun_sphere,
+        emissive_intensity: 0.9, // Reduced to prevent SDR whiteout clamp
+        emissive_color: [1.0, 0.35, 0.02], // Pure rich orange/red
+      },
+    )
+    .unwrap();
+  scene.set_parent(sun_core_entity, Some(sun_entity));
 
   let sky_entity = scene.spawn_entity("entity");
   scene
@@ -342,6 +488,7 @@ fn main() {
   scene.set_parent(sun_entity, Some(root_entity));
 
   let scene_shared = Arc::new(scene);
+  let outlines_enabled = Arc::new(AtomicBool::new(true));
 
   let mut app_state = AppState {
     scene: Arc::clone(&scene_shared),
@@ -352,25 +499,23 @@ fn main() {
     root_entity,
     is_resizing: false,
     is_exiting: false,
-    window: Arc::clone(&window),
+    window,
+    outlines_enabled: Arc::clone(&outlines_enabled),
   };
 
   let _render_frontend_tracker = RenderFrontendDropTracker(Arc::clone(&render_frontend));
-  let mut render_frontend_opt = Some(render_frontend);
-  let mut render_frontend_tracker_opt = Some(_render_frontend_tracker);
 
   // --- Start Render Thread ---
   let (render_tx, render_rx) = mpsc::sync_channel::<Option<RenderPacket>>(1);
   let render_thread_handle = start_render_thread(
     render_rx,
     Arc::clone(&scene_shared),
-    Arc::clone(render_frontend_opt.as_ref().unwrap()),
+    Arc::clone(&render_frontend),
     render_device_handle,
     presentation_engine,
     cursor_entity,
     sun_entity,
   );
-  let mut render_thread_handle_opt = Some(render_thread_handle);
 
   // --- Start Logic Thread ---
   let (logic_tx, logic_rx) = mpsc::channel::<LogicCommand>();
@@ -380,13 +525,25 @@ fn main() {
     camera_entity,
     cursor_entity,
     grid_entity,
+    planets_ids,
+    sun_entity,
+    sun_radius,
+    assets_dir,
+    Arc::clone(&outlines_enabled),
   );
-  let mut logic_thread_handle_opt = Some(logic_thread_handle);
 
-  // Update initial resize to trigger projection matrix update
+  let mut initial_width = app_state.window.inner_size().width;
+  let mut initial_height = app_state.window.inner_size().height;
+  if initial_width == 0 {
+    initial_width = 800;
+  }
+  if initial_height == 0 {
+    initial_height = 600;
+  }
+
   let _ = logic_tx.send(LogicCommand::Resize {
-    width: app_state.window.inner_size().width,
-    height: app_state.window.inner_size().height,
+    width: initial_width,
+    height: initial_height,
   });
 
   // --- Main Event Loop ---
@@ -414,13 +571,8 @@ fn main() {
         match event {
           WindowEvent::CloseRequested => {
             app_state.is_exiting = true;
-            let _ = render_tx.try_send(None);
             let _ = logic_tx.send(LogicCommand::Exit);
-            
-            if let Some(handle) = render_thread_handle_opt.take() { let _ = handle.join(); }
-            if let Some(handle) = logic_thread_handle_opt.take() { let _ = handle.join(); }
-            drop(render_frontend_tracker_opt.take());
-            drop(render_frontend_opt.take());
+            let _ = render_tx.try_send(None);
             elwt.exit();
           }
           WindowEvent::Resized(physical_size) => {
@@ -512,8 +664,8 @@ fn main() {
                     if modifiers_state.super_key() {
                       // So it doesn't even get here
                       app_state.is_exiting = true;
-                      let _ = render_tx.try_send(None);
                       let _ = logic_tx.send(LogicCommand::Exit);
+                      let _ = render_tx.try_send(None);
                       println!("You Clicked exit");
                       elwt.exit();
                       return;
@@ -531,8 +683,28 @@ fn main() {
                     });
                     app_state.window.request_redraw();
                   }
+                  KeyCode::KeyX => {
+                    let _ = logic_tx.send(LogicCommand::CycleTimeScale);
+                    app_state.window.request_redraw();
+                  }
+                  KeyCode::KeyA => {
+                    let _ = logic_tx.send(LogicCommand::CyclePlanet { forward: false });
+                    app_state.window.request_redraw();
+                  }
+                  KeyCode::KeyD => {
+                    let _ = logic_tx.send(LogicCommand::CyclePlanet { forward: true });
+                    app_state.window.request_redraw();
+                  }
                   KeyCode::KeyG => {
                     let _ = logic_tx.send(LogicCommand::ToggleGrid);
+                    app_state.window.request_redraw();
+                  }
+                  KeyCode::KeyH => {
+                    let _ = logic_tx.send(LogicCommand::ResetCamera);
+                    app_state.window.request_redraw();
+                  }
+                  KeyCode::KeyT => {
+                    let _ = logic_tx.send(LogicCommand::TogglePlanetOutlines);
                     app_state.window.request_redraw();
                   }
                   KeyCode::Digit0 | KeyCode::Numpad0 => {
@@ -547,6 +719,10 @@ fn main() {
                     let _ = logic_tx.send(LogicCommand::SnapCameraToCursor);
                     app_state.window.request_redraw();
                   }
+                  KeyCode::KeyV => {
+                    let _ = logic_tx.send(LogicCommand::ToggleMeasureTool);
+                    app_state.window.request_redraw();
+                  }
                   _ => {}
                 }
               }
@@ -556,7 +732,6 @@ fn main() {
             if app_state.is_resizing || app_state.is_exiting {
               return;
             }
-
 
             let mut render_items = Vec::new();
             let mut matrix_stack = vec![Mat4x4f32::identity()];
@@ -572,7 +747,7 @@ fn main() {
                 let local_transform = transform_opt
                   .map(|c| {
                     Mat4x4f32::translation(c.position)
-                      * Mat4x4f32::from_quat(c.rotation)
+                      * Mat4x4f32::from_quat_custom_frame(c.rotation)
                       * Mat4x4f32::from_scale(c.scale)
                   })
                   .unwrap_or(Mat4x4f32::identity());
@@ -614,6 +789,9 @@ fn main() {
               camera_transform,
               camera_component,
               window_size: app_state.window.inner_size(),
+              outlines_enabled: app_state
+                .outlines_enabled
+                .load(std::sync::atomic::Ordering::Relaxed),
             };
 
             match render_tx.try_send(Some(packet)) {
@@ -660,8 +838,8 @@ fn main() {
       }
       Event::LoopExiting => {
         app_state.is_exiting = true;
-        let _ = render_tx.try_send(None);
         let _ = logic_tx.send(LogicCommand::Exit);
+        let _ = render_tx.try_send(None);
       }
       Event::AboutToWait => {
         if app_state.is_exiting {
@@ -679,6 +857,8 @@ fn main() {
     })
     .unwrap();
 
-  println!("Event loop returned.");
-  println!("Exiting main().");
+  println!("Event loop returned. Joining threads...");
+  let _ = render_thread_handle.join();
+  let _ = logic_thread_handle.join();
+  println!("Threads joined. Exiting main().");
 }

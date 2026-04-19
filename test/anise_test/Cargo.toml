@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-aethervk-core-rlib = { path = "../../aethervk.core/rlib", default-features = false }
+# aethervk-core-rlib = { path = "../../aethervk.core/rlib", default-features = false }
 aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = ["console_log"] }
 anise = { path = "../../external/anise/anise", default-features = false }
 bytes = { version = "1.11.1", default-features = false }
