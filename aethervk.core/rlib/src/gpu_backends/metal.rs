@@ -328,6 +328,28 @@ impl RenderDevice for MetalRenderDevice {
     Ok(())
   }
 
+  fn get_or_create_marker_resources(
+    &self,
+    _handle: PresentationEngineHandle,
+  ) -> GpuResult<crate::gpu::frame::ResourceUploadResult> {
+    Ok(crate::gpu::frame::ResourceUploadResult {
+      pipeline: crate::gpu::PipelineKey(0),
+      outline_pipeline: None,
+      buffers: crate::gpu::GpuResourceHandle(0),
+      texture_flags: Default::default(),
+      emissive_intensity: 0.0,
+      emissive_color: [0.0; 3],
+    })
+  }
+
+  fn push_marker_constants(
+    &self,
+    _cmd_buffer: CommandBufferHandle,
+    _push_constants: &crate::gpu::MarkerPushConstants,
+  ) -> GpuResult<()> {
+    Ok(())
+  }
+
   fn end_render_pass(&self, _cmd_buffer: CommandBufferHandle) -> GpuResult<()> {
     Ok(())
   }

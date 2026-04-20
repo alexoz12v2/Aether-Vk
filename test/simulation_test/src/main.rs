@@ -94,6 +94,31 @@ fn main() {
     let _ = std::io::stdin().read(&mut [0u8]);
   }));
 
+  let assets_dir = {
+    let mut args = std::env::args();
+    if args.len() > 1 {
+      let _ = args.next().unwrap();
+      std::path::PathBuf::from(args.next().unwrap())
+    } else {
+      let mut home_dir = std::env::current_exe().unwrap();
+      let mut iter: i32 = 0;
+      const MAX_ITER: i32 = 32;
+      while {
+        let d = home_dir.join("assets");
+        !d.is_dir() && iter < MAX_ITER
+      } {
+        home_dir.pop();
+        iter += 1;
+        assert!(home_dir.is_dir());
+      }
+      home_dir.join("assets")
+    }
+  };
+
+  let mut guard = aethervk_core_rlib::gpu::ASSET_DIR.write();
+  *guard = Some(assets_dir.to_str().unwrap().to_string());
+  drop(guard);
+
   let mut event_loop_builder = EventLoopBuilder::<AppEvent>::with_user_event();
   // Disable default macOS menu. This disables default macOS bindings (so that we can customize interception of Super + Q)
   #[cfg(target_os = "macos")]
@@ -232,27 +257,6 @@ fn main() {
   scene.register_component::<aethervk_core_rlib::scene::BvhDebugComponent>(&[]);
   scene.register_component::<aethervk_core_rlib::scene::SelectedComponent>(&[]);
   scene.register_component::<aethervk_core_rlib::scene::FollowingComponent>(&[]);
-
-  let assets_dir = {
-    let mut args = std::env::args();
-    if args.len() > 1 {
-      let _ = args.next().unwrap();
-      std::path::PathBuf::from(args.next().unwrap())
-    } else {
-      let mut home_dir = std::env::current_exe().unwrap();
-      let mut iter: i32 = 0;
-      const MAX_ITER: i32 = 32;
-      while {
-        let d = home_dir.join("assets");
-        !d.is_dir() && iter < MAX_ITER
-      } {
-        home_dir.pop();
-        iter += 1;
-        assert!(home_dir.is_dir());
-      }
-      home_dir.join("assets")
-    }
-  };
 
   let model_path = {
     let mut args = std::env::args();
@@ -417,8 +421,11 @@ fn main() {
     .add_component(
       camera_entity,
       TransformComponent {
-        position: Vec3f32::from_components(0.0, -40.0, 0.0),
-        rotation: Quat::identity(),
+        position: Vec3f32::from_components(0.0, -400.0, 0.0),
+        rotation: Quat::from_axis_angle(
+          Vec3f32::from_components(0.0, 0.0, 1.0),
+          std::f32::consts::PI,
+        ),
         scale: Vec3f32::from_components(1.0, 1.0, 1.0),
       },
     )

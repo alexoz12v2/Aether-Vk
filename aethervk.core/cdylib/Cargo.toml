@@ -25,6 +25,7 @@ aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = f
     "console_log",
 ] }
 anise = { path = "../../external/anise/anise", default-features = false }
+bytes = { version = "1.11.1", default-features = false }
 heapless = { version = "0.9" }
 spin = { version = "0.10", features = ["once", "rwlock", "mutex"] }
 thingbuf = { version = "0.1", default-features = false, features = ["alloc"] }
@@ -49,3 +50,9 @@ windows = { version = ">=0.59, <= 0.62", default-features = false, features = [
 ] }
 windows-strings = { version = "0.5", default-features = false }
 wchar = "0.11"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

@@ -92,6 +92,7 @@ impl TexelFormat {
   }
 }
 
+#[derive(Clone)]
 pub struct Texture {
   pub data: Vec<u8>,
   pub format: TexelFormat,
@@ -104,6 +105,7 @@ use aethervk_oshal_rlib::math::matrix::{Matrix3, mat3::Mat3f32};
 use crate::math::collision::bvh_builder::{BVHBuilder, BVHBuilderParams};
 use crate::math::collision::linear_bvh::LinearBVH;
 
+#[derive(Clone)]
 pub struct Comet {
   pub vertices: Vec<Vertex>,
   pub indices: Vec<u32>,
@@ -114,7 +116,7 @@ pub struct Comet {
   /// mass, inertia_tensor, center_of_mass stored here as f64 (TODO Accessors)
   /// from this field, all other accessors are computed, plus conversion
   /// to any other scalar numeric format declared in oshal library, to support mixed precision simulation
-  mass_properties: MassProperties,
+  pub mass_properties: MassProperties,
   pub bvh: Option<LinearBVH<f32, Vec3f32, Mat3f32>>,
   pub principal_axes: Option<Mat3f32>,
 }
@@ -476,6 +478,8 @@ pub fn load_comet_from_gltf(path: &str, verbose: bool) -> Result<Comet, CometLoa
     oshal::log!("ERROR: GLTF Parse failed: {:?}", e);
     CometLoadError::GltfImportError(e)
   })?;
+  
+  oshal::log!("Correctly parsed GLB");
 
   // Validations
   if gltf.animations().next().is_some() {

@@ -67,21 +67,129 @@ public partial class SplitNodeViewModel : LayoutNodeViewModelBase
 /// <summary>
 /// Represents a "box" or leaf node that actually holds tabs
 /// </summary>
-public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase
+public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase, IRecipient<EntitySelectedMessage>
 {
   public ObservableCollection<TabItemViewModel> Tabs { get; } = [];
 
   [ObservableProperty]
-  private TabItemViewModel _selectedTab;
+  private TabItemViewModel? _selectedTab;
 
-  private readonly ConsoleService _consoleService = new(); // Instantiate ConsoleService
+  [ObservableProperty]
+  private bool _hasTabs;
 
   public TabGroupNodeViewModel(TabItemViewModel defaultTab, SplitNodeViewModel? parent = null)
     : base(parent)
   {
     Tabs.Add(defaultTab);
-    // Don't need to generate PropertyChanged on construction
-    _selectedTab = defaultTab;
+    SelectedTab = defaultTab;
+    HasTabs = true;
+
+    Tabs.CollectionChanged += (s, e) => HasTabs = Tabs.Count > 0;
+    WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
+  }
+
+  public void Receive(EntitySelectedMessage message)
+  {
+    if (message.SelectedEntity != null)
+    {
+      var propTab = Tabs.OfType<PropertiesViewModel>().FirstOrDefault();
+      if (propTab != null)
+      {
+        SelectedTab = propTab;
+      }
+    }
+  }
+
+  [RelayCommand]
+  private void CloseTab(TabItemViewModel tab)
+  {
+    Tabs.Remove(tab);
+    if (Tabs.Count > 0 && SelectedTab == tab)
+    {
+      SelectedTab = Tabs[Tabs.Count - 1];
+    }
+    else if (Tabs.Count == 0)
+    {
+      SelectedTab = null;
+      WeakReferenceMessenger.Default.Send(new CoalesceGroupMessage(this));
+    }
+  }
+
+  [RelayCommand]
+  private void CloseAllTabs()
+  {
+    Tabs.Clear();
+    SelectedTab = null;
+    WeakReferenceMessenger.Default.Send(new CoalesceGroupMessage(this));
+  }
+
+  [RelayCommand]
+  private void ChangeSelectedTab(string tabType)
+  {
+    if (SelectedTab == null)
+      return;
+    var index = Tabs.IndexOf(SelectedTab);
+    if (index == -1)
+      return;
+
+    TabItemViewModel? newTab = null;
+    switch (tabType)
+    {
+      case "UITestPanel":
+        newTab = new UITestPanelViewModel();
+        break;
+      case "Console":
+        var consoleService =
+          ServiceLocator.Provider?.GetService(typeof(ConsoleService)) as ConsoleService;
+        newTab =
+          consoleService != null
+            ? new ConsoleViewModel(consoleService)
+            : new ConsoleViewModel(new ConsoleService());
+        break;
+      case "HorizonJpl":
+        var horizonService =
+          ServiceLocator.Provider?.GetService(typeof(HorizonJplService)) as HorizonJplService;
+        if (horizonService != null)
+          newTab = new HorizonJplViewModel(horizonService);
+        break;
+      case "Outline":
+        var outlineVm = ServiceLocator.Provider?.GetService(typeof(OutlineViewModel)) as OutlineViewModel;
+        if (outlineVm != null)
+          newTab = outlineVm;
+        break;
+      case "Properties":
+        var propertiesVm = ServiceLocator.Provider?.GetService(typeof(PropertiesViewModel)) as PropertiesViewModel;
+        if (propertiesVm != null)
+          newTab = propertiesVm;
+        break;
+      case "DebugUI":
+        newTab = new DebugUiViewModel();
+        break;
+      case "Timeline":
+        var timelineService =
+          ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+        if (timelineService != null)
+          newTab = new TimelineViewModel(timelineService);
+        break;
+      case "Almanac":
+        var almanacService =
+          ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+        if (almanacService != null)
+          newTab = new AlmanacExplorerViewModel(almanacService);
+        break;
+      case "Viewport3D":
+        var viewportRuntimeService =
+          ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+        if (viewportRuntimeService != null)
+          newTab = new Viewport3DViewModel(viewportRuntimeService);
+        break;
+    }
+
+    if (newTab != null)
+    {
+      Tabs[index] = newTab;
+      SelectedTab = newTab;
+    }
   }
 
   [RelayCommand]
@@ -95,9 +203,89 @@ public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase
   [RelayCommand]
   private void AddNewConsoleTab()
   {
-    var newTab = new ConsoleViewModel(_consoleService); // Create ConsoleViewModel with service
+    // Resolve ConsoleService from ServiceLocator so it shares the same instance across tabs
+    var consoleService =
+      ServiceLocator.Provider?.GetService(typeof(ConsoleService)) as ConsoleService;
+    var newTab =
+      consoleService != null
+        ? new ConsoleViewModel(consoleService)
+        : new ConsoleViewModel(new ConsoleService());
     Tabs.Add(newTab);
     SelectedTab = newTab;
+  }
+
+  [RelayCommand]
+  private void AddNewHorizonJplTab()
+  {
+    var horizonService =
+      ServiceLocator.Provider?.GetService(typeof(HorizonJplService)) as HorizonJplService;
+    if (horizonService != null)
+    {
+      var newTab = new HorizonJplViewModel(horizonService);
+      Tabs.Add(newTab);
+      SelectedTab = newTab;
+    }
+  }
+
+  [RelayCommand]
+  private void AddNewOutlineTab()
+  {
+    var newTab = ServiceLocator.Provider?.GetService(typeof(OutlineViewModel)) as OutlineViewModel;
+    if (newTab != null && !Tabs.Contains(newTab))
+    {
+      Tabs.Add(newTab);
+    }
+    if (newTab != null) SelectedTab = newTab;
+  }
+
+  [RelayCommand]
+  private void AddNewPropertiesTab()
+  {
+    var newTab = ServiceLocator.Provider?.GetService(typeof(PropertiesViewModel)) as PropertiesViewModel;
+    if (newTab != null && !Tabs.Contains(newTab))
+    {
+      Tabs.Add(newTab);
+    }
+    if (newTab != null) SelectedTab = newTab;
+  }
+
+  [RelayCommand]
+  private void AddNewTimelineTab()
+  {
+    var runtimeService =
+      ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+    if (runtimeService != null)
+    {
+      var newTab = new TimelineViewModel(runtimeService);
+      Tabs.Add(newTab);
+      SelectedTab = newTab;
+    }
+  }
+
+  [RelayCommand]
+  private void AddNewAlmanacTab()
+  {
+    var runtimeService =
+      ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+    if (runtimeService != null)
+    {
+      var newTab = new AlmanacExplorerViewModel(runtimeService);
+      Tabs.Add(newTab);
+      SelectedTab = newTab;
+    }
+  }
+
+  [RelayCommand]
+  private void AddNewViewport3DTab()
+  {
+    var runtimeService =
+      ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+    if (runtimeService != null)
+    {
+      var newTab = new Viewport3DViewModel(runtimeService);
+      Tabs.Add(newTab);
+      SelectedTab = newTab;
+    }
   }
 }
 
@@ -114,9 +302,11 @@ public partial class TabItemViewModel(string title) : ViewModelBase
 /// <summary>
 /// Root manager for docking layout
 /// </summary>
-public partial class DockingManagerViewModel : ViewModelBase,
+public partial class DockingManagerViewModel
+  : ViewModelBase,
     IRecipient<TabDroppedMessage>,
-    IRecipient<TabDragTaskMessage> // <-- Add this interface
+    IRecipient<TabDragTaskMessage>,
+    IRecipient<CoalesceGroupMessage>
 {
   [ObservableProperty]
   private LayoutNodeViewModelBase _rootNode;
@@ -126,6 +316,7 @@ public partial class DockingManagerViewModel : ViewModelBase,
   {
     WeakReferenceMessenger.Default.Register<TabDroppedMessage>(this);
     WeakReferenceMessenger.Default.Register<TabDragTaskMessage>(this);
+    WeakReferenceMessenger.Default.Register<CoalesceGroupMessage>(this);
     // TODO establish default from configuration (then passed to VM)
     var defaultTab = new DebugUiViewModel();
     var initialGroup = new TabGroupNodeViewModel(defaultTab);
@@ -137,13 +328,13 @@ public partial class DockingManagerViewModel : ViewModelBase,
   // --- Track your Task safely from within the ViewModel ---
   public async void Receive(TabDragTaskMessage message)
   {
-      string finalAction = await message.DragTask;
+    string finalAction = await message.DragTask;
 
-      if (finalAction == "None")
-      {
-          // The drag ended OUTSIDE the application window!
-          // You can implement your float-to-new-window logic right here.
-      }
+    if (finalAction == "None")
+    {
+      // The drag ended OUTSIDE the application window!
+      // You can implement your float-to-new-window logic right here.
+    }
   }
 
   // --- Fix the TabDroppedMessage ---
@@ -159,20 +350,22 @@ public partial class DockingManagerViewModel : ViewModelBase,
     TabItemViewModel tabToInsert = draggedTab;
     if (message.IsCopy)
     {
-        // Generate a new reference. You may want to add a `.Clone()` method to
-        // TabItemViewModel later to handle inner state deep-copying.
-        tabToInsert = new TabItemViewModel(draggedTab.Title + " (Copy)");
+      // Generate a new reference. You may want to add a `.Clone()` method to
+      // TabItemViewModel later to handle inner state deep-copying.
+      tabToInsert = new TabItemViewModel(draggedTab.Title + " (Copy)");
     }
 
     if (sourceNode is null)
     {
-        if (zone == DockZone.Center)
-        {
-            if (!targetNode.Tabs.Contains(tabToInsert)) targetNode.Tabs.Add(tabToInsert);
-            targetNode.SelectedTab = tabToInsert;
-        }
-        else SplitNodeAndInsertTab(targetNode, tabToInsert, zone);
-        return;
+      if (zone == DockZone.Center)
+      {
+        if (!targetNode.Tabs.Contains(tabToInsert))
+          targetNode.Tabs.Add(tabToInsert);
+        targetNode.SelectedTab = tabToInsert;
+      }
+      else
+        SplitNodeAndInsertTab(targetNode, tabToInsert, zone);
+      return;
     }
 
     // Return if it's the very last tab on screen (UNLESS we are explicitly copying it)
@@ -180,7 +373,12 @@ public partial class DockingManagerViewModel : ViewModelBase,
       return;
 
     // Don't split a 1-tab group with nothing (UNLESS we are copying it)
-    if (!message.IsCopy && sourceNode == targetNode && sourceNode.Tabs.Count <= 1 && zone != DockZone.Center)
+    if (
+      !message.IsCopy
+      && sourceNode == targetNode
+      && sourceNode.Tabs.Count <= 1
+      && zone != DockZone.Center
+    )
       return;
 
     // Do nothing if returning to starting position
@@ -190,28 +388,48 @@ public partial class DockingManagerViewModel : ViewModelBase,
     // Mutate Old List
     if (!message.IsCopy)
     {
-        sourceNode.Tabs.Remove(draggedTab);
-        if (sourceNode.Tabs.Count == 0)
-        {
-            RemoveTabAndCoalesce(draggedTab, sourceNode);
-        }
+      sourceNode.Tabs.Remove(draggedTab);
+      if (sourceNode.Tabs.Count > 0 && sourceNode.SelectedTab == draggedTab)
+      {
+        sourceNode.SelectedTab = sourceNode.Tabs[sourceNode.Tabs.Count - 1];
+      }
+      else if (sourceNode.Tabs.Count == 0)
+      {
+        sourceNode.SelectedTab = null;
+        RemoveTabAndCoalesce(draggedTab, sourceNode);
+      }
     }
 
     // Apply into New List
-    if (zone == DockZone.Center) {
-      if (!targetNode.Tabs.Contains(tabToInsert)) targetNode.Tabs.Add(tabToInsert);
+    if (zone == DockZone.Center)
+    {
+      if (!targetNode.Tabs.Contains(tabToInsert))
+        targetNode.Tabs.Add(tabToInsert);
       targetNode.SelectedTab = tabToInsert;
     }
-    else SplitNodeAndInsertTab(targetNode, tabToInsert, zone);
+    else
+      SplitNodeAndInsertTab(targetNode, tabToInsert, zone);
   }
 
-  private void RemoveTabAndCoalesce(TabItemViewModel tabToRemove, TabGroupNodeViewModel sourceNode)
+  public void Receive(CoalesceGroupMessage message)
+  {
+    System.Diagnostics.Debug.WriteLine(
+      $"[DockingManager] Coalesce requested for node with parent: {message.GroupNode.Parent != null}"
+    );
+    RemoveTabAndCoalesce(null, message.GroupNode);
+  }
+
+  private void RemoveTabAndCoalesce(TabItemViewModel? tabToRemove, TabGroupNodeViewModel sourceNode)
   {
     // If it's a root and it's empty, keep it alive to avoid a null UI
     var parent = sourceNode.Parent;
     if (parent == null)
+    {
+      System.Diagnostics.Debug.WriteLine("[DockingManager] Parent is null, keeping root alive");
       return;
+    }
 
+    System.Diagnostics.Debug.WriteLine("[DockingManager] Replacing parent with sibling");
     // Coalesce: Replace parent (SplitNode) with the sibling of the empty node
     // The parent is a SplitNode, It needs to be replaced by its other child
     var sibling = (parent.FirstChild == sourceNode) ? parent.SecondChild : parent.FirstChild;
@@ -219,13 +437,22 @@ public partial class DockingManagerViewModel : ViewModelBase,
   }
 
   // --- Fix the Tree-Breaking Bug ---
-  private void SplitNodeAndInsertTab(TabGroupNodeViewModel target, TabItemViewModel tab, DockZone zone)
+  private void SplitNodeAndInsertTab(
+    TabGroupNodeViewModel target,
+    TabItemViewModel tab,
+    DockZone zone
+  )
   {
     var newGroup = new TabGroupNodeViewModel(tab);
-    var orientation = (zone == DockZone.Left || zone == DockZone.Right) ? SplitOrientation.Horizontal : SplitOrientation.Vertical;
+    var orientation =
+      (zone == DockZone.Left || zone == DockZone.Right)
+        ? SplitOrientation.Horizontal
+        : SplitOrientation.Vertical;
 
-    var firstChild = (zone == DockZone.Left || zone == DockZone.Top) ? (LayoutNodeViewModelBase)newGroup : target;
-    var secondChild = (zone == DockZone.Left || zone == DockZone.Top) ? target : (LayoutNodeViewModelBase)newGroup;
+    var firstChild =
+      (zone == DockZone.Left || zone == DockZone.Top) ? (LayoutNodeViewModelBase)newGroup : target;
+    var secondChild =
+      (zone == DockZone.Left || zone == DockZone.Top) ? target : (LayoutNodeViewModelBase)newGroup;
     var splitNode = new SplitNodeViewModel(firstChild, secondChild, orientation);
 
     // CRITICAL FIX: You MUST execute ReplaceNode before setting the parent properties.
@@ -239,26 +466,26 @@ public partial class DockingManagerViewModel : ViewModelBase,
 
   private void ReplaceNode(LayoutNodeViewModelBase oldNode, LayoutNodeViewModelBase newNode)
   {
-      var parent = oldNode.Parent;
-      if (parent == null)
-      {
-          // oldNode was the root, newNode becomes the new root
-          RootNode = newNode;
-          newNode.Parent = null;
-      }
-      else
-      {
-          // Replace oldNode with newNode in the parent's children
-          if (parent.FirstChild == oldNode)
-              parent.FirstChild = newNode;
-          else if (parent.SecondChild == oldNode)
-              parent.SecondChild = newNode;
+    var parent = oldNode.Parent;
+    if (parent == null)
+    {
+      // oldNode was the root, newNode becomes the new root
+      RootNode = newNode;
+      newNode.Parent = null;
+    }
+    else
+    {
+      // Replace oldNode with newNode in the parent's children
+      if (parent.FirstChild == oldNode)
+        parent.FirstChild = newNode;
+      else if (parent.SecondChild == oldNode)
+        parent.SecondChild = newNode;
 
-          newNode.Parent = parent;
-      }
+      newNode.Parent = parent;
+    }
   }
 
-  private TabGroupNodeViewModel? FindNodeContainingTab(
+  public TabGroupNodeViewModel? FindNodeContainingTab(
     LayoutNodeViewModelBase ancestor,
     TabItemViewModel tabItem
   )

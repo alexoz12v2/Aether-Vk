@@ -4,8 +4,8 @@ namespace AetherVk.Views;
 
 public partial class DebugUiView : UserControl
 {
-    public DebugUiView()
-    {
-        InitializeComponent();
-    }
+  public DebugUiView()
+  {
+    InitializeComponent();
+  }
 }

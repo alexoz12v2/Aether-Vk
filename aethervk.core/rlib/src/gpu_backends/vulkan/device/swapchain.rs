@@ -1154,7 +1154,7 @@ impl WindowlessPresentationState {
       current_frame: 0,
       width,
       height,
-      format: vk::Format::R8G8B8A8_UNORM, // Changed from SRGB to UNORM for offscreen output maybe
+      format: vk::Format::B8G8R8A8_UNORM,
       generation: 0,
     };
     this.recreate(instance, device, physical_device, width, height)?;

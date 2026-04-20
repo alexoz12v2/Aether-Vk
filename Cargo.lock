@@ -33,6 +33,7 @@ dependencies = [
  "anise",
  "anyhow",
  "ash",
+ "bytes",
  "cbindgen",
  "glob",
  "heapless",

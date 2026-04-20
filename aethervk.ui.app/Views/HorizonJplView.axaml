@@ -1,0 +1,53 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             x:DataType="vm:HorizonJplViewModel"
+             x:Class="AetherVk.Views.HorizonJplView">
+  <ScrollViewer>
+    <StackPanel Spacing="8" Margin="4">
+      <Expander Header="Horizons API" HorizontalAlignment="Stretch" IsExpanded="True">
+        <StackPanel Spacing="8">
+          <Grid ColumnDefinitions="Auto, *, Auto, *" RowDefinitions="Auto, Auto, Auto" Margin="4">
+            
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Command (Target):" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding Command}" Margin="0,0,8,4" ToolTip.Tip="Target body ID (e.g., '90000033' for 12P/Pons-Brooks)" />
+
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="Center:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <ComboBox Grid.Row="0" Grid.Column="3" ItemsSource="{Binding CenterOptions}" SelectedItem="{Binding Center}" Margin="0,0,0,4" ToolTip.Tip="Coordinate center (e.g., '@sun', '@399' for Earth)" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="Start Time:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding StartTime}" Margin="0,0,8,4" ToolTip.Tip="Start time (e.g., '2024-01-01')" />
+
+            <TextBlock Grid.Row="1" Grid.Column="2" Text="Stop Time:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding StopTime}" Margin="0,0,0,4" ToolTip.Tip="Stop time (e.g., '2024-12-31')" />
+
+            <TextBlock Grid.Row="2" Grid.Column="0" Text="Step Size:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding StepSize}" Margin="0,0,8,0" ToolTip.Tip="Step size (e.g., '1 d', '10 m')" />
+            
+          </Grid>
+          <Button Content="Fetch Data" Command="{Binding FetchDataCommand}" HorizontalAlignment="Right" Classes="accent" />
+          <DataGrid x:Name="ResultDataGrid" ItemsSource="{Binding Data}" AutoGenerateColumns="False" IsReadOnly="True" Height="300" />
+        </StackPanel>
+      </Expander>
+
+      <Expander Header="Comets Search API" HorizontalAlignment="Stretch" IsExpanded="True">
+        <StackPanel Spacing="8">
+          <Grid ColumnDefinitions="Auto, *, Auto, *" RowDefinitions="Auto" Margin="4">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="First Obs After:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <DatePicker Grid.Row="0" Grid.Column="1" SelectedDate="{Binding CometStartTime}" Margin="0,0,8,4" HorizontalAlignment="Stretch" ToolTip.Tip="Filter comets observed after this date" />
+
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="First Obs Before:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <DatePicker Grid.Row="0" Grid.Column="3" SelectedDate="{Binding CometStopTime}" Margin="0,0,0,4" HorizontalAlignment="Stretch" ToolTip.Tip="Filter comets observed before this date" />
+          </Grid>
+          <Button Content="Fetch Comets" Command="{Binding FetchCometsCommand}" HorizontalAlignment="Right" Classes="accent" />
+          <DataGrid x:Name="CometsResultDataGrid" ItemsSource="{Binding CometsData}" SelectedItem="{Binding SelectedComet}" AutoGenerateColumns="False" IsReadOnly="True" Height="300">
+            <!-- Bind selection to target field -->
+            <!-- We will do it in code behind or via SelectedItem in VM -->
+          </DataGrid>
+        </StackPanel>
+      </Expander>
+      
+      <Button Content="Horizon API Documentation" Command="{Binding OpenDocumentationCommand}" Background="Transparent" Foreground="{DynamicResource Accent.Primary}" HorizontalAlignment="Center" />
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

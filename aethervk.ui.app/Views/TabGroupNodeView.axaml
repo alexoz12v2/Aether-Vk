@@ -48,33 +48,94 @@
                                     Foreground="{DynamicResource Accent.Primary}" />
                         </Border>
 
-                        <TextBlock Text="{Binding Title}" Padding="4,6,8,6" Foreground="{DynamicResource Text.Primary}" />
+                        <TextBlock Text="{Binding Title}" Padding="4,6,4,6" VerticalAlignment="Center" Foreground="{DynamicResource Text.Primary}" />
+                        <Button Content="✕"
+                                Width="20" Height="20" Padding="0"
+                                Margin="0,0,4,0"
+                                VerticalAlignment="Center"
+                                HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                Background="Transparent" BorderThickness="0"
+                                ToolTip.Tip="Close Tab"
+                                Command="{Binding $parent[UserControl].((vm:TabGroupNodeViewModel)DataContext).CloseTabCommand}"
+                                CommandParameter="{Binding}" />
                       </StackPanel>
                     </Border>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
 
-              <Button Command="{Binding AddNewTabCommand}"
-                      Content="+"
+              <Button Content="+"
                       Width="28" Height="28"
                       Padding="0"
                       VerticalAlignment="Center"
-                      ToolTip.Tip="Add new UI Test Panel tab"
-                      Classes="accent" />
-              <Button Command="{Binding AddNewConsoleTabCommand}"
-                      Content="C"
+                      ToolTip.Tip="Add new tab"
+                      Classes="accent">
+                <Button.Flyout>
+                  <MenuFlyout>
+                    <MenuItem Header="UI Test Panel" Command="{Binding AddNewTabCommand}" />
+                    <MenuItem Header="Console" Command="{Binding AddNewConsoleTabCommand}" />
+                    <MenuItem Header="Horizon JPL Data Viewer" Command="{Binding AddNewHorizonJplTabCommand}" />
+                    <MenuItem Header="Timeline Editor" Command="{Binding AddNewTimelineTabCommand}" />
+                    <MenuItem Header="Almanac Explorer" Command="{Binding AddNewAlmanacTabCommand}" />
+                    <MenuItem Header="Outline" Command="{Binding AddNewOutlineTabCommand}" />
+                    <MenuItem Header="Properties" Command="{Binding AddNewPropertiesTabCommand}" />
+                    <MenuItem Header="Viewport 3D" Command="{Binding AddNewViewport3DTabCommand}" />
+                  </MenuFlyout>
+                </Button.Flyout>
+              </Button>
+              
+              <Button Content="⇆"
                       Width="28" Height="28"
-                      Padding="0"
-                      VerticalAlignment="Center"
-                      ToolTip.Tip="Add new Console tab"
-                      Classes="accent" />
+                      Padding="0" FontSize="18"
+                      VerticalAlignment="Center" HorizontalContentAlignment="Center"
+                      ToolTip.Tip="Change Selected Tab"
+                      IsVisible="{Binding HasTabs}">
+                <Button.Flyout>
+                  <MenuFlyout>
+                    <MenuItem Header="UI Test Panel" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="UITestPanel" />
+                    <MenuItem Header="Console" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="Console" />
+                    <MenuItem Header="Debug UI" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="DebugUI" />
+                    <MenuItem Header="Horizon JPL Data Viewer" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="HorizonJpl" />
+                    <MenuItem Header="Timeline Editor" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="Timeline" />
+                    <MenuItem Header="Almanac Explorer" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="Almanac" />
+                    <MenuItem Header="Outline" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="Outline" />
+                    <MenuItem Header="Properties" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="Properties" />
+                    <MenuItem Header="Viewport 3D" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="Viewport3D" />
+                  </MenuFlyout>
+                </Button.Flyout>
+              </Button>
+              
+              <Button Content="✕"
+                      Width="28" Height="28"
+                      Padding="0" FontSize="14"
+                      VerticalAlignment="Center" HorizontalContentAlignment="Center"
+                      ToolTip.Tip="Close All Tabs"
+                      Command="{Binding CloseAllTabsCommand}"
+                      IsVisible="{Binding HasTabs}" />
+
             </StackPanel>
           </ScrollViewer>
         </Grid>
       </Border>
 
-      <ContentControl Grid.Row="1" Content="{Binding SelectedTab}" Margin="4" />
+      <ContentControl Grid.Row="1" Content="{Binding SelectedTab}" Margin="4" IsVisible="{Binding HasTabs}" />
+      
+      <Button Grid.Row="1" Content="+" Classes="accent" FontSize="48" Width="100" Height="100" 
+              HorizontalAlignment="Center" VerticalAlignment="Center" 
+              IsVisible="{Binding !HasTabs}" HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
+          <Button.Flyout>
+              <MenuFlyout>
+                  <MenuItem Header="UI Test Panel" Command="{Binding AddNewTabCommand}" />
+                  <MenuItem Header="Console" Command="{Binding AddNewConsoleTabCommand}" />
+                  <MenuItem Header="Horizon JPL Data Viewer" Command="{Binding AddNewHorizonJplTabCommand}" />
+                  <MenuItem Header="Timeline Editor" Command="{Binding AddNewTimelineTabCommand}" />
+                  <MenuItem Header="Almanac Explorer" Command="{Binding AddNewAlmanacTabCommand}" />
+                  <MenuItem Header="Outline" Command="{Binding AddNewOutlineTabCommand}" />
+                  <MenuItem Header="Properties" Command="{Binding AddNewPropertiesTabCommand}" />
+                  <MenuItem Header="Viewport 3D" Command="{Binding AddNewViewport3DTabCommand}" />
+              </MenuFlyout>
+          </Button.Flyout>
+      </Button>
 
       <Grid x:Name="PreviewOverlay" Grid.Row="0" Grid.RowSpan="2" IsHitTestVisible="False" Opacity="0.5">
         <Border x:Name="PreviewBox" Background="{DynamicResource Accent.Hover}" IsVisible="False" BorderThickness="2"

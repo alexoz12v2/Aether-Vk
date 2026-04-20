@@ -17,6 +17,8 @@ use crate::types::{EngineResult, GpuResult};
 
 // Re-export what is necessary from backends
 pub use super::gpu_backends::new_render_frontend;
+pub use super::gpu_backends::get_available_render_backends;
+pub use super::gpu_backends::get_available_kernels;
 pub use super::gpu_backends::{vulkan::constants};
 
 pub use self::viewport::*;
@@ -100,6 +102,20 @@ pub struct CursorPushConstants {
   pub cursor_size: f32,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct MarkerPushConstants {
+  pub view_proj: [f32; 16],
+  pub center_pos: [f32; 3],
+  pub size: f32,
+  pub color: [f32; 3],
+  pub _pad0: f32,
+  pub camera_up: [f32; 3],
+  pub _pad1: f32,
+  pub camera_right: [f32; 3],
+  pub _pad2: f32,
+}
+
 impl RenderableInstanceId {
   pub fn from_physical_mesh(
     entity_id: EntityId,
@@ -116,6 +132,9 @@ impl From<RenderableInstanceId> for GpuResourceHandle {
     Self(value.0)
   }
 }
+
+// Allow the host application to configure the core assets path uniformly
+pub static ASSET_DIR: spin::RwLock<Option<alloc::string::String>> = spin::RwLock::new(None);
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub struct PipelineKey(pub u64);
@@ -217,6 +236,12 @@ pub trait RenderDevice: Send + Sync {
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult>;
 
+  /// Returns resources for marker rendering
+  fn get_or_create_marker_resources(
+    &self,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult>;
+
   /// Presents the image. Takes semaphore signaled by a rendering command buffer
   fn present(
     &self,
@@ -277,6 +302,12 @@ pub trait RenderDevice: Send + Sync {
     &self,
     cmd_buffer: CommandBufferHandle,
     push_constants: &CursorPushConstants,
+  ) -> GpuResult<()>;
+
+  fn push_marker_constants(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    push_constants: &MarkerPushConstants,
   ) -> GpuResult<()>;
 
   fn draw_indexed(&self, cmd_buffer: CommandBufferHandle, index_count: u32) -> GpuResult<()>;
