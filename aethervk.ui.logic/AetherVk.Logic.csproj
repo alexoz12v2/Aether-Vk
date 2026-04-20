@@ -6,7 +6,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Project Rule: Cannot import avalonia as a dependency here in logic -->
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageReference Include="System.Text.Json" Version="10.0.6" />
   </ItemGroup>
@@ -18,91 +17,73 @@
     <CargoOutDir Condition="'$(Configuration)' != 'Release'">debug</CargoOutDir>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(OS)' == 'Unix'">
+    <VkMacLib Condition="'$(VULKAN_SDK)' != '' And Exists('$(VULKAN_SDK)/lib/libvulkan.dylib')">$(VULKAN_SDK)/lib</VkMacLib>
+    <VkMacShare Condition="'$(VULKAN_SDK)' != '' And Exists('$(VULKAN_SDK)/share/vulkan/icd.d/MoltenVK_icd.json')">$(VULKAN_SDK)/share/vulkan</VkMacShare>
+
+    <VkMacLib Condition="'$(VkMacLib)' == '' And '$(VULKAN_SDK)' != '' And Exists('$(VULKAN_SDK)/macOS/lib/libvulkan.dylib')">$(VULKAN_SDK)/macOS/lib</VkMacLib>
+    <VkMacShare Condition="'$(VkMacShare)' == '' And '$(VULKAN_SDK)' != '' And Exists('$(VULKAN_SDK)/macOS/share/vulkan/icd.d/MoltenVK_icd.json')">$(VULKAN_SDK)/macOS/share/vulkan</VkMacShare>
+
+    <VkMacLib Condition="'$(VkMacLib)' == '' And Exists('/usr/local/lib/libvulkan.dylib')">/usr/local/lib</VkMacLib>
+    <VkMacShare Condition="'$(VkMacShare)' == '' And Exists('/usr/local/share/vulkan/icd.d/MoltenVK_icd.json')">/usr/local/share/vulkan</VkMacShare>
+  </PropertyGroup>
+
+  <Target Name="WarnMissingVulkanSdk" BeforeTargets="BeforeBuild" Condition="'$(OS)' == 'Unix' And '$(VkMacLib)' == ''">
+    <Warning Text="VULKAN_SDK environment variable is missing or invalid. The macOS Vulkan files will NOT be copied to the 'vulkan' directory. If using an IDE, try launching it from a terminal." />
+  </Target>
+
+  <ItemGroup Condition="'$(OS)' == 'Unix' And '$(VkMacLib)' != ''">
+    <Content Include="$(VkMacLib)/libvulkan.dylib" Link="vulkan/lib/libvulkan.dylib" Condition="Exists('$(VkMacLib)/libvulkan.dylib')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="$(VkMacLib)/libvulkan.1.dylib" Link="vulkan/lib/libvulkan.1.dylib" Condition="Exists('$(VkMacLib)/libvulkan.1.dylib')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="$(VkMacLib)/libvulkan.1.*.dylib" Link="vulkan/lib/%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="$(VkMacLib)/libMoltenVK.dylib" Link="vulkan/lib/libMoltenVK.dylib" Condition="Exists('$(VkMacLib)/libMoltenVK.dylib')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(OS)' == 'Unix' And '$(VkMacShare)' != '' And '$(Configuration)' != 'Release'">
+    <Content Include="$(VkMacLib)/libVkLayer_khronos_validation.dylib" Link="vulkan/lib/libVkLayer_khronos_validation.dylib" Condition="Exists('$(VkMacLib)/libVkLayer_khronos_validation.dylib')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="$(VkMacLib)/libVkLayer_khronos_synchronization2.dylib" Link="vulkan/lib/libVkLayer_khronos_synchronization2.dylib" Condition="Exists('$(VkMacLib)/libVkLayer_khronos_synchronization2.dylib')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="$(VkMacShare)/explicit_layer.d/VkLayer_khronos_validation.json" Link="vulkan/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json" Condition="Exists('$(VkMacShare)/explicit_layer.d/VkLayer_khronos_validation.json')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="$(VkMacShare)/explicit_layer.d/VkLayer_khronos_synchronization2.json" Link="vulkan/share/vulkan/explicit_layer.d/VkLayer_khronos_synchronization2.json" Condition="Exists('$(VkMacShare)/explicit_layer.d/VkLayer_khronos_synchronization2.json')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(OS)' == 'Unix' And '$(VkMacShare)' != ''">
+    <Content Include="$(VkMacShare)/icd.d/MoltenVK_icd.json" Link="vulkan/share/vulkan/icd.d/MoltenVK_icd.json" Condition="Exists('$(VkMacShare)/icd.d/MoltenVK_icd.json')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
   <Target Name="BuildNativeLibrary" BeforeTargets="BeforeBuild">
-    <Exec
-      Command="cargo build $(CargoArgs)"
-      WorkingDirectory="../aethervk.core/cdylib"
-      ContinueOnError="true"
-    >
+    <Exec Command="cargo build $(CargoArgs)" WorkingDirectory="../aethervk.core/cdylib" ContinueOnError="true">
       <Output TaskParameter="ExitCode" PropertyName="CargoExitCode" />
     </Exec>
-    <Warning
-      Condition="'$(CargoExitCode)' != '0'"
-      Text="Cargo build failed or cargo not found. Native library might be missing."
-    />
+    <Warning Condition="'$(CargoExitCode)' != '0'" Text="Cargo build failed or cargo not found. Native library might be missing." />
+  </Target>
 
+  <Target Name="InjectNativeLibraryContent" BeforeTargets="AssignTargetPaths">
     <ItemGroup>
-      <Content
-        Include="..\target\$(CargoOutDir)\aethervk_core_cdylib.dll"
-        Link="aethervk_core_cdylib.dll"
-        Condition="Exists('..\target\$(CargoOutDir)\aethervk_core_cdylib.dll')"
-      >
+      <Content Include="..\target\$(CargoOutDir)\aethervk_core_cdylib.dll" Link="aethervk_core_cdylib.dll" Condition="Exists('..\target\$(CargoOutDir)\aethervk_core_cdylib.dll')">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </Content>
-      <Content
-        Include="..\target\$(CargoOutDir)\libaethervk_core_cdylib.so"
-        Link="libaethervk_core_cdylib.so"
-        Condition="Exists('..\target\$(CargoOutDir)\libaethervk_core_cdylib.so')"
-      >
+      <Content Include="..\target\$(CargoOutDir)\libaethervk_core_cdylib.so" Link="libaethervk_core_cdylib.so" Condition="Exists('..\target\$(CargoOutDir)\libaethervk_core_cdylib.so')">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </Content>
-      <Content
-        Include="..\target\$(CargoOutDir)\libaethervk_core_cdylib.dylib"
-        Link="libaethervk_core_cdylib.dylib"
-        Condition="Exists('..\target\$(CargoOutDir)\libaethervk_core_cdylib.dylib')"
-      >
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </Content>
-
-      <!-- macOS Vulkan SDK binaries -->
-      <Content
-        Include="$(VULKAN_SDK)\macOS\lib\libvulkan.dylib"
-        Link="vulkan\lib\libvulkan.dylib"
-        Condition="'$(OS)' == 'Unix' And Exists('$(VULKAN_SDK)\macOS\lib\libvulkan.dylib')"
-      >
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </Content>
-      <Content
-        Include="$(VULKAN_SDK)\macOS\lib\libvulkan.1.dylib"
-        Link="vulkan\lib\libvulkan.1.dylib"
-        Condition="'$(OS)' == 'Unix' And Exists('$(VULKAN_SDK)\macOS\lib\libvulkan.1.dylib')"
-      >
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </Content>
-      <Content
-        Include="$(VULKAN_SDK)\macOS\lib\libvulkan.1.*.dylib"
-        Link="vulkan\lib\%(Filename)%(Extension)"
-        Condition="'$(OS)' == 'Unix' And Exists('$(VULKAN_SDK)\macOS\lib\libvulkan.dylib')"
-      >
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </Content>
-      <Content
-        Include="$(VULKAN_SDK)\macOS\lib\libMoltenVK.dylib"
-        Link="vulkan\lib\libMoltenVK.dylib"
-        Condition="'$(OS)' == 'Unix' And Exists('$(VULKAN_SDK)\macOS\lib\libMoltenVK.dylib')"
-      >
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </Content>
-      <!-- macOS Vulkan Validation Layers (Debug only) -->
-      <Content
-        Include="$(VULKAN_SDK)\macOS\lib\libVkLayer_*.dylib"
-        Link="vulkan\explicit_layer\%(Filename)%(Extension)"
-        Condition="'$(OS)' == 'Unix' And '$(Configuration)' != 'Release' And Exists('$(VULKAN_SDK)\macOS\lib\libMoltenVK.dylib')"
-      >
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </Content>
-      <Content
-        Include="$(VULKAN_SDK)\macOS\share\vulkan\explicit_layer.d\*.json"
-        Link="vulkan\explicit_layer\%(Filename)%(Extension)"
-        Condition="'$(OS)' == 'Unix' And '$(Configuration)' != 'Release' And Exists('$(VULKAN_SDK)\macOS\share\vulkan\explicit_layer.d')"
-      >
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </Content>
-      <Content
-        Include="$(VULKAN_SDK)\macOS\share\vulkan\icd.d\MoltenVK_icd.json"
-        Link="vulkan\icd\MoltenVK_icd.json"
-        Condition="'$(OS)' == 'Unix' And Exists('$(VULKAN_SDK)\macOS\share\vulkan\icd.d\MoltenVK_icd.json')"
-      >
+      <Content Include="..\target\$(CargoOutDir)\libaethervk_core_cdylib.dylib" Link="libaethervk_core_cdylib.dylib" Condition="Exists('..\target\$(CargoOutDir)\libaethervk_core_cdylib.dylib')">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </Content>
     </ItemGroup>

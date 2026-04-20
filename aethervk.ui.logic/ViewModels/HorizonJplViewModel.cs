@@ -47,19 +47,23 @@ public partial class HorizonJplViewModel : TabItemViewModel
   {
     if (value != null && value.Length > 0)
     {
-      // Extract the object designation or ID from the row.
-      // Usually, Horizon JPL returns things like "12P/Pons-Brooks  (90000033)"
-      // So we can extract the ID from parenthesis or just use the first column.
-      string target = value[0];
-      int startIdx = target.LastIndexOf('(');
-      int endIdx = target.LastIndexOf(')');
-      if (startIdx != -1 && endIdx != -1 && endIdx > startIdx)
+      if (value.Length > 3 && !string.IsNullOrWhiteSpace(value[3]))
       {
-        Command = target.Substring(startIdx + 1, endIdx - startIdx - 1).Trim();
+        Command = $"DES={value[3].Trim()}; CAP";
       }
       else
       {
-        Command = target.Trim();
+        string target = value[0];
+        int startIdx = target.LastIndexOf('(');
+        int endIdx = target.LastIndexOf(')');
+        if (startIdx != -1 && endIdx != -1 && endIdx > startIdx)
+        {
+          Command = target.Substring(startIdx + 1, endIdx - startIdx - 1).Trim();
+        }
+        else
+        {
+          Command = target.Trim();
+        }
       }
     }
   }

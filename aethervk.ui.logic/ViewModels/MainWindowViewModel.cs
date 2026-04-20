@@ -14,26 +14,35 @@ public enum AppTheme
 }
 
 public class ImportModelRequestMessage { }
+public class ImportImageRequestMessage { }
+
 public class OpenImportedModelsDialogMessage { }
 
 public partial class ImportedModelItem : ObservableObject
 {
   public ulong Id { get; }
-  
+
   [ObservableProperty]
   private string _name = "";
 
-  public ImportedModelItem(ulong id, string name)
+  public string FullPath { get; }
+
+  public ImportedModelItem(ulong id, string name, string fullPath)
   {
     Id = id;
     Name = name;
+    FullPath = fullPath;
   }
-
   [RelayCommand]
   private void Spawn()
   {
-    var runtime = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-    runtime?.SpawnModelInstance(Id, Name + " Instance");
+    WeakReferenceMessenger.Default.Send(new OpenSpawnMeshDialogMessage(this));
+  }
+
+  [RelayCommand]
+  private void ViewMesh()
+  {
+    WeakReferenceMessenger.Default.Send(new OpenMeshViewerMessage(this));
   }
 
   [RelayCommand]
@@ -45,6 +54,18 @@ public partial class ImportedModelItem : ObservableObject
     // Signal UI to remove from list
     WeakReferenceMessenger.Default.Send(new ModelUnloadedMessage(this));
   }
+}
+
+public class OpenSpawnMeshDialogMessage
+{
+  public ImportedModelItem Model { get; }
+  public OpenSpawnMeshDialogMessage(ImportedModelItem model) => Model = model;
+}
+
+public class OpenMeshViewerMessage
+{
+  public ImportedModelItem Model { get; }
+  public OpenMeshViewerMessage(ImportedModelItem model) => Model = model;
 }
 
 public class ModelUnloadedMessage
@@ -82,6 +103,12 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   private void ImportModel()
   {
     WeakReferenceMessenger.Default.Send(new ImportModelRequestMessage());
+  }
+
+  [RelayCommand]
+  private void ImportImage()
+  {
+    WeakReferenceMessenger.Default.Send(new ImportImageRequestMessage());
   }
 
   [RelayCommand]

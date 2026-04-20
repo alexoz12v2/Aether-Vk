@@ -2,7 +2,7 @@ use crate::gpu::{
   AcquireResult, CommandBufferHandle, CursorPushConstants, DeviceAdditionalParams,
   GpuResourceHandle, NativeGpuProperty, PipelineKey, PresentationEngineHandle,
   PresentationEngineParams, Rect2D, RenderBackendId, RenderContext, RenderDevice,
-  RenderDeviceHandle, SkyPushConstants, SunPushConstants, SwapchainStatus, Viewport,
+  RenderDeviceHandle, SkyPushConstants, SunPushConstants, SwapchainStatus, Viewport, MeasurementPushConstants,
   METAL_RENDER_BACKEND,
 };
 use crate::gpu::frame::ResourceUploadResult;
@@ -136,6 +136,13 @@ impl RenderDevice for MetalRenderDevice {
 
   fn generate_sky(&self) -> GpuResult<()> {
     Ok(())
+  }
+
+  fn get_or_create_billboard_resources(
+    &self,
+    _handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult> {
+    Err(GpuError::UnsupportedFeature)
   }
 
   fn get_or_create_cursor_resources(
@@ -297,7 +304,7 @@ impl RenderDevice for MetalRenderDevice {
   fn render_bvh(
     &self,
     _cmd_buffer: CommandBufferHandle,
-    _nodes: &[(crate::math::collision::linear_bvh::LinearBound<f32, aethervk_oshal_rlib::math::vector::vec3::Vec3f32, aethervk_oshal_rlib::math::matrix::mat3::Mat3f32>, aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32)],
+    _nodes: &[(crate::math::collision::linear_bvh::LinearBound<f32>, aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32)],
     _view_proj: [f32; 16],
     _presentation_engine: PresentationEngineHandle,
   ) -> GpuResult<()> {
@@ -326,6 +333,29 @@ impl RenderDevice for MetalRenderDevice {
     _presentation_engine: PresentationEngineHandle,
   ) -> GpuResult<()> {
     Ok(())
+  }
+
+  fn get_or_create_measurement_resources(
+    &self,
+    _handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult> {
+    todo!()
+  }
+
+  fn push_measurement_constants(
+    &self,
+    _cmd_buffer: CommandBufferHandle,
+    _push_constants: &MeasurementPushConstants,
+  ) -> GpuResult<()> {
+    todo!()
+  }
+
+  fn push_billboard_constants(
+    &self,
+    _cmd_buffer: CommandBufferHandle,
+    _push_constants: &crate::gpu::BillboardPushConstants,
+  ) -> GpuResult<()> {
+    todo!()
   }
 
   fn get_or_create_marker_resources(

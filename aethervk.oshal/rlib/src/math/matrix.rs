@@ -141,6 +141,36 @@ where
   /// column-major order
   fn from_array(x: &[Self::Scalar; 16]) -> Self;
 
+  fn into_linear<M>(self) -> M
+  where
+    M: Matrix3<Scalar = Self::Scalar>,
+    M::Vector: Vector3<Scalar = Self::Scalar>,
+  {
+    let a0 = unsafe { self.column_unchecked(0) };
+    let a1 = unsafe { self.column_unchecked(1) };
+    let a2 = unsafe { self.column_unchecked(2) };
+    let a0 = M::Vector::from_components(a0.x(), a0.y(), a0.z());
+    let a1 = M::Vector::from_components(a1.x(), a1.y(), a1.z());
+    let a2 = M::Vector::from_components(a2.x(), a2.y(), a2.z());
+
+    M::from_columns(a0, a1, a2)
+  }
+
+  /// Creates a linear mapping from an affine/projection general mapping
+  fn zeroed_translation(&self) -> Self {
+    let _0 = <Self::Scalar as MulAddIdentity>::zero();
+    let _1 = <Self::Scalar as MulAddIdentity>::one();
+    let v = Self::Vector::from_components(_0, _0, _0, _1);
+    unsafe {
+      Self::from_columns(
+        self.column_unchecked(0),
+        self.column_unchecked(1),
+        self.column_unchecked(2),
+        v,
+      )
+    }
+  }
+
   /// Creates a translation matrix.
   fn translation<V3>(v: V3) -> Self
   where

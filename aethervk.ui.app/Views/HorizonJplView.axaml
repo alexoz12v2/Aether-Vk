@@ -40,7 +40,7 @@
             <DatePicker Grid.Row="0" Grid.Column="3" SelectedDate="{Binding CometStopTime}" Margin="0,0,0,4" HorizontalAlignment="Stretch" ToolTip.Tip="Filter comets observed before this date" />
           </Grid>
           <Button Content="Fetch Comets" Command="{Binding FetchCometsCommand}" HorizontalAlignment="Right" Classes="accent" />
-          <DataGrid x:Name="CometsResultDataGrid" ItemsSource="{Binding CometsData}" SelectedItem="{Binding SelectedComet}" AutoGenerateColumns="False" IsReadOnly="True" Height="300">
+          <DataGrid x:Name="CometsResultDataGrid" ItemsSource="{Binding CometsData}" SelectedItem="{Binding SelectedComet}" AutoGenerateColumns="False" IsReadOnly="True" Height="300" DoubleTapped="OnCometsGridDoubleTapped">
             <!-- Bind selection to target field -->
             <!-- We will do it in code behind or via SelectedItem in VM -->
           </DataGrid>

@@ -323,8 +323,8 @@ impl EntryWrapper {
 
           // 2. Build local paths natively via slice concatenation
           let local_layer =
-            alloc::ffi::CString::new([dir_bytes, b"vulkan/layer"].concat()).unwrap();
-          let local_icd = alloc::ffi::CString::new([dir_bytes, b"vulkan/layer"].concat()).unwrap();
+            alloc::ffi::CString::new([dir_bytes, b"vulkan/share/vulkan/explicit_layer.d"].concat()).unwrap();
+          let local_icd = alloc::ffi::CString::new([dir_bytes, b"vulkan/share/vulkan/icd.d"].concat()).unwrap();
           let local_loader =
             alloc::ffi::CString::new([dir_bytes, b"vulkan/lib/libvulkan.dylib"].concat()).unwrap();
 

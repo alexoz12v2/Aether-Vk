@@ -8,7 +8,7 @@ use aethervk_oshal_rlib as oshal;
 use oshal::{
   hash::FnvHasher,
   os::{
-    fs::{self, PathBuf},
+    fs::{PathBuf},
     memory::{MaxAlignedStorage, StackAllocator},
     native::this_thread,
   },
@@ -70,6 +70,7 @@ use aethervk_oshal_rlib::math::matrix::{SquareMatrix, Matrix};
 use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
 use aethervk_oshal_rlib::math::quaternion::Quaternion;
 use aethervk_oshal_rlib::math::matrix::MatrixVectorMul;
+use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
 
 #[cfg(debug_assertions)]
 static ARCHETYPE_CREATED: spin::Once<spin::Mutex<bool>> = Once::new();
@@ -263,8 +264,13 @@ struct DeviceResources {
   sun_render_archetype: Option<resources::SunRenderResourceArchetype>,
 
   #[cfg(debug_assertions)]
+  billboard_render_archetype:
+    DropTracker<TrackedOption<resources::BillboardRenderResourceArchetype, 1>, 1>,
+  #[cfg(debug_assertions)]
   cursor_render_archetype:
     DropTracker<TrackedOption<resources::CursorRenderResourceArchetype, 1>, 1>,
+  #[cfg(not(debug_assertions))]
+  billboard_render_archetype: Option<resources::BillboardRenderResourceArchetype>,
   #[cfg(not(debug_assertions))]
   cursor_render_archetype: Option<resources::CursorRenderResourceArchetype>,
 
@@ -273,6 +279,12 @@ struct DeviceResources {
     DropTracker<TrackedOption<resources::MarkerRenderResourceArchetype, 2>, 2>,
   #[cfg(not(debug_assertions))]
   marker_render_archetype: Option<resources::MarkerRenderResourceArchetype>,
+
+  #[cfg(debug_assertions)]
+  measurement_render_archetype:
+    DropTracker<TrackedOption<resources::MeasurementRenderResourceArchetype, 13>, 13>,
+  #[cfg(not(debug_assertions))]
+  measurement_render_archetype: Option<resources::MeasurementRenderResourceArchetype>,
 
   #[cfg(debug_assertions)]
   sky_render_archetype: DropTracker<TrackedOption<resources::SkyRenderResourceArchetype, 3>, 3>,
@@ -285,7 +297,8 @@ struct DeviceResources {
   grid_render_archetype: Option<resources::GridRenderResourceArchetype>,
 
   #[cfg(debug_assertions)]
-  minimap_render_archetype: DropTracker<TrackedOption<resources::MinimapRenderResourceArchetype, 5>, 5>,
+  minimap_render_archetype:
+    DropTracker<TrackedOption<resources::MinimapRenderResourceArchetype, 5>, 5>,
   #[cfg(not(debug_assertions))]
   minimap_render_archetype: Option<resources::MinimapRenderResourceArchetype>,
 
@@ -426,7 +439,9 @@ impl DeviceResources {
 
     let outline_graphics_info = graphics_info
       .clone()
-      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::STENCIL_ENABLE)
+      .with_pipeline_flags(
+        PipelineFlags::CULL_BACK | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::STENCIL_ENABLE,
+      )
       .with_stencil_compare_op(StencilCompareOp::NotEqual)
       .with_stencil_logic_op(StencilLogicOp::None)
       .with_stencil_reference(255)
@@ -435,7 +450,11 @@ impl DeviceResources {
       .clone();
 
     if let Some(outline_key) = archetype.outline_pipeline_key {
-      write_pipeline.discard_graphics_pipeline_if_present(outline_key, &self.discard_pool, timeline);
+      write_pipeline.discard_graphics_pipeline_if_present(
+        outline_key,
+        &self.discard_pool,
+        timeline,
+      );
     }
     let outline_pipeline_key = outline_graphics_info.pipeline_key();
     write_pipeline.get_or_create_graphics_pipeline(device, &outline_graphics_info)?;
@@ -735,7 +754,7 @@ impl DeviceResources {
         .pipeline_layout
         .get(),
       )
-      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::INVERT_FRONT_FACE)
+      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
       .with_render_pass(
         self
           .renderpasses
@@ -790,7 +809,12 @@ impl DeviceResources {
           })
           .clone(),
       )
-      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::STENCIL_ENABLE | PipelineFlags::NO_DEPTH_TEST)
+      .with_pipeline_flags(
+        PipelineFlags::CULL_BACK
+          | PipelineFlags::INVERT_FRONT_FACE
+          | PipelineFlags::STENCIL_ENABLE
+          | PipelineFlags::NO_DEPTH_TEST,
+      )
       .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
       .with_stencil_compare_op(StencilCompareOp::NotEqual)
       .with_stencil_logic_op(StencilLogicOp::None)
@@ -1063,7 +1087,10 @@ impl DeviceResources {
       )
       .with_pipeline_layout(pipeline_layout)
       .with_pipeline_flags(
-        PipelineFlags::CULL_ALL | PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST | PipelineFlags::INVERT_FRONT_FACE,
+        PipelineFlags::CULL_ALL
+          | PipelineFlags::NO_DEPTH_WRITE
+          | PipelineFlags::NO_DEPTH_TEST
+          | PipelineFlags::INVERT_FRONT_FACE,
       )
       .with_render_pass(
         self
@@ -1171,7 +1198,10 @@ impl DeviceResources {
       )
       .with_pipeline_layout(pipeline_layout)
       .with_pipeline_flags(
-        PipelineFlags::CULL_ALL | PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST | PipelineFlags::INVERT_FRONT_FACE,
+        PipelineFlags::CULL_ALL
+          | PipelineFlags::NO_DEPTH_WRITE
+          | PipelineFlags::NO_DEPTH_TEST
+          | PipelineFlags::INVERT_FRONT_FACE,
       )
       .with_render_pass(
         self
@@ -1219,6 +1249,171 @@ impl DeviceResources {
     {
       self.cursor_render_archetype.as_ref()
     }
+  }
+
+  fn get_billboard_archetype(&self) -> Option<&'_ resources::BillboardRenderResourceArchetype> {
+    #[cfg(debug_assertions)]
+    {
+      self.billboard_render_archetype.as_ref().as_ref()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      self.billboard_render_archetype.as_ref()
+    }
+  }
+
+  fn get_measurement_archetype(&self) -> Option<&'_ resources::MeasurementRenderResourceArchetype> {
+    #[cfg(debug_assertions)]
+    {
+      self.measurement_render_archetype.as_ref().as_ref()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      self.measurement_render_archetype.as_ref()
+    }
+  }
+
+  fn create_measurement_archetype(
+    &mut self,
+    device: &LogicalDevice,
+    vertex_shader_key: ShaderKey,
+    fragment_shader_key: ShaderKey,
+    depth_stencil_format: vk::Format,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()> {
+    if self.measurement_render_archetype.is_some() {
+      return Err(GpuError::InvalidState);
+    }
+
+    let live_presentation_engines_lock = self.live_presentation_engines.read();
+    let presentation_engine_lock = live_presentation_engines_lock
+      .get(&handle)
+      .ok_or(GpuError::InvalidArgument)?;
+    let presentation_engine_state = presentation_engine_lock.read();
+
+    let shader_manager = self.shader_manager.read();
+    let vertex_shader = shader_manager
+      .get(vertex_shader_key)
+      .ok_or(GpuError::InvalidShader)?;
+    if vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
+      return Err(GpuError::InvalidShader);
+    }
+    let fragment_shader = shader_manager
+      .get(fragment_shader_key)
+      .ok_or(GpuError::InvalidShader)?;
+    if fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
+      return Err(GpuError::InvalidShader);
+    }
+
+    let res = unsafe { resources::MeasurementRenderResourceArchetype::new(device) }?;
+    #[cfg(not(debug_assertions))]
+    {
+      self.measurement_render_archetype = Some(res);
+    }
+    #[cfg(debug_assertions)]
+    {
+      self.measurement_render_archetype = DropTracker::new(TrackedOption::some(res));
+    }
+
+    let pipeline_graphics_info = GraphicsInfo::default()
+      .with_vertex_in(
+        VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::LINE_LIST)
+          .clone(),
+      )
+      .with_pre_rasterization(
+        PreRasterization::default()
+          .with_vertex_module(vertex_shader.module.get())
+          .clone(),
+      )
+      .with_fragment_shader(
+        FragmentShader::default()
+          .with_fragment_module(fragment_shader.module.get())
+          .add_viewport(vk::Viewport {
+            width: presentation_engine_state.extent().0 as _,
+            height: -(presentation_engine_state.extent().1 as f32),
+            x: 0.0,
+            y: presentation_engine_state.extent().1 as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+          })
+          .add_scissors(vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: vk::Extent2D {
+              width: presentation_engine_state.extent().0,
+              height: presentation_engine_state.extent().1,
+            },
+          })
+          .clone(),
+      )
+      .with_fragment_out(
+        FragmentOut::default()
+          .add_color_attachment_format(presentation_engine_state.format())
+          .with_depth_attachment_format(depth_stencil_format)
+          .with_stencil_attachment_format(depth_stencil_format)
+          .clone(),
+      )
+      .with_pipeline_layout(
+        unsafe {
+          let ref_arch: Option<&_>;
+          #[cfg(debug_assertions)]
+          {
+            ref_arch = self.measurement_render_archetype.as_ref().as_ref();
+          }
+          #[cfg(not(debug_assertions))]
+          {
+            ref_arch = self.measurement_render_archetype.as_ref();
+          }
+
+          ref_arch.unwrap_unchecked()
+        }
+        .pipeline_layout
+        .get(),
+      )
+      .with_pipeline_flags(PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE)
+      .with_render_pass(
+        self
+          .renderpasses
+          .get_or_create_render_pass(
+            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
+            0,
+            device,
+            &self.allocator.allocator,
+            &self.discard_pool,
+            0,
+          )?
+          .0
+          .get(),
+      )
+      .with_subpass(0)
+      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+      .with_stencil_compare_op(StencilCompareOp::None)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(255)
+      .with_stencil_compare_mask(0)
+      .with_stencil_write_mask(u32::MAX)
+      .clone();
+
+    self
+      .pipeline_pool
+      .write()
+      .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
+
+    {
+      let val = unsafe { self.measurement_render_archetype.take().unwrap_unchecked() }
+        .with_graphics_info(pipeline_graphics_info);
+
+      #[cfg(not(debug_assertions))]
+      {
+        self.measurement_render_archetype = Some(val);
+      }
+      #[cfg(debug_assertions)]
+      {
+        self.measurement_render_archetype = DropTracker::new(TrackedOption::some(val));
+      }
+    }
+
+    Ok(())
   }
 
   fn get_marker_archetype(&self) -> Option<&'_ resources::MarkerRenderResourceArchetype> {
@@ -1374,6 +1569,154 @@ impl DeviceResources {
     Ok(())
   }
 
+  fn create_billboard_archetype(
+    &mut self,
+    device: &LogicalDevice,
+    vertex_shader_key: ShaderKey,
+    fragment_shader_key: ShaderKey,
+    depth_stencil_format: vk::Format,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()> {
+    if self.billboard_render_archetype.is_some() {
+      return Err(GpuError::InvalidState);
+    }
+
+    let live_presentation_engines_lock = self.live_presentation_engines.read();
+    let presentation_engine_lock = live_presentation_engines_lock
+      .get(&handle)
+      .ok_or(GpuError::InvalidArgument)?;
+    let presentation_engine_state = presentation_engine_lock.read();
+
+    let shader_manager = self.shader_manager.read();
+    let vertex_shader = shader_manager
+      .get(vertex_shader_key)
+      .ok_or(GpuError::InvalidShader)?;
+    if vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
+      return Err(GpuError::InvalidShader);
+    }
+    let fragment_shader = shader_manager
+      .get(fragment_shader_key)
+      .ok_or(GpuError::InvalidShader)?;
+    if fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
+      return Err(GpuError::InvalidShader);
+    }
+
+    // Create initial struct
+    let res = unsafe { resources::BillboardRenderResourceArchetype::new(device) }?;
+    #[cfg(not(debug_assertions))]
+    {
+      self.billboard_render_archetype = Some(res);
+    }
+    #[cfg(debug_assertions)]
+    {
+      self.billboard_render_archetype = DropTracker::new(TrackedOption::some(res));
+    }
+
+    // then populate graphics info and pipeline key
+    let pipeline_graphics_info = GraphicsInfo::default()
+      .with_vertex_in(
+        VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+          .clone(),
+      )
+      .with_pre_rasterization(
+        PreRasterization::default()
+          .with_vertex_module(vertex_shader.module.get())
+          .clone(),
+      )
+      .with_fragment_shader(
+        FragmentShader::default()
+          .with_fragment_module(fragment_shader.module.get())
+          .add_viewport(vk::Viewport {
+            width: presentation_engine_state.extent().0 as _,
+            height: -(presentation_engine_state.extent().1 as f32), // Y axis points downwards in Vulkan, so flip it
+            x: 0.0,
+            y: presentation_engine_state.extent().1 as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+          })
+          .add_scissors(vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: vk::Extent2D {
+              width: presentation_engine_state.extent().0,
+              height: presentation_engine_state.extent().1,
+            },
+          })
+          .clone(),
+      )
+      .with_fragment_out(
+        FragmentOut::default()
+          .add_color_attachment_format(presentation_engine_state.format())
+          .with_depth_attachment_format(depth_stencil_format)
+          .with_stencil_attachment_format(depth_stencil_format)
+          .clone(),
+      )
+      .with_pipeline_layout(
+        unsafe {
+          let ref_arch: Option<&_>;
+          #[cfg(debug_assertions)]
+          {
+            ref_arch = self.billboard_render_archetype.as_ref().as_ref();
+          }
+          #[cfg(not(debug_assertions))]
+          {
+            ref_arch = self.billboard_render_archetype.as_ref();
+          }
+
+          ref_arch.unwrap_unchecked()
+        }
+        .pipeline_layout
+        .get(),
+      )
+      .with_pipeline_flags(
+        PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE,
+      ) // NO Culling, NO Depth Test (Yes, cull all means no culling)
+      .with_render_pass(
+        self
+          .renderpasses
+          .get_or_create_render_pass(
+            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
+            0,
+            device,
+            &self.allocator.allocator,
+            &self.discard_pool,
+            0,
+          )?
+          .0
+          .get(),
+      )
+      .with_subpass(0)
+      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+      .with_stencil_compare_op(StencilCompareOp::None)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(255)
+      .with_stencil_compare_mask(0)
+      .with_stencil_write_mask(u32::MAX)
+      .clone();
+    self
+      .pipeline_pool
+      .write()
+      .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
+
+    {
+      let val = unsafe { self.billboard_render_archetype.take().unwrap_unchecked() }
+        .with_graphics_info(pipeline_graphics_info);
+
+      #[cfg(not(debug_assertions))]
+      {
+        self.billboard_render_archetype = Some(val);
+      }
+      #[cfg(debug_assertions)]
+      {
+        self.billboard_render_archetype = DropTracker::new(TrackedOption::some(val));
+      }
+    }
+
+    debug_assert!(self.billboard_render_archetype.is_some());
+
+    Ok(())
+  }
+
   fn create_cursor_archetype(
     &mut self,
     device: &LogicalDevice,
@@ -1473,7 +1816,9 @@ impl DeviceResources {
         .pipeline_layout
         .get(),
       )
-      .with_pipeline_flags(PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE) // NO Culling, NO Depth Test (Yes, cull all means no culling)
+      .with_pipeline_flags(
+        PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE,
+      ) // NO Culling, NO Depth Test (Yes, cull all means no culling)
       .with_render_pass(
         self
           .renderpasses
@@ -1520,11 +1865,303 @@ impl DeviceResources {
     Ok(())
   }
 
+  fn ensure_text_shader_modules(&self, device: &ash::Device) -> GpuResult<(ShaderKey, ShaderKey)> {
+    let vert_path: PathBuf;
+    let frag_path: PathBuf;
+
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific("Failed to get executable path for asset loading".into())
+        })?;
+        exe_path
+          .parent()
+          .expect("Exe has no parent directory")
+          .join("assets")
+      }
+    };
+
+    vert_path = assets_dir.join("text.vert.spv");
+    frag_path = assets_dir.join("text.frag.spv");
+
+    let mut shader_manager = self.shader_manager.write();
+    let vkey = shader_manager.get_or_load(
+      device,
+      vert_path.as_ref(),
+      "main",
+      spirv::ExecutionModel::Vertex,
+    )?;
+    let fkey = shader_manager.get_or_load(
+      device,
+      frag_path.as_ref(),
+      "main",
+      spirv::ExecutionModel::Fragment,
+    )?;
+
+    Ok((vkey, fkey))
+  }
+
+  fn create_text_archetype(
+    &mut self,
+    device: &vulkan::device::LogicalDevice,
+    vertex_shader_key: ShaderKey,
+    fragment_shader_key: ShaderKey,
+    depth_stencil_format: vk::Format,
+    queue: &Queue,
+    timeline: u64,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()> {
+    if self.text_render_archetype.is_some() {
+      return Err(GpuError::InvalidState);
+    }
+    let live_engines_lock = self.live_presentation_engines.read();
+    let presentation_engine_state = live_engines_lock.get(&handle).unwrap().read();
+    let shader_manager = self.shader_manager.read();
+    let vertex_shader = shader_manager.get(vertex_shader_key).unwrap();
+    let fragment_shader = shader_manager.get(fragment_shader_key).unwrap();
+
+    let bindings = [vk::DescriptorSetLayoutBinding::default()
+      .binding(0)
+      .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+      .descriptor_count(1)
+      .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+    let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    let set_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }?;
+    let set_layouts = [set_layout];
+
+    let push_constant_ranges = [vk::PushConstantRange::default()
+      .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+      .offset(0)
+      .size(48)]; // vec2 + vec2 + vec4 + vec4 = 48 bytes
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
+      .set_layouts(&set_layouts)
+      .push_constant_ranges(&push_constant_ranges);
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
+
+    let mut arch = resources::TextRenderResourceArchetype {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      pipeline_key: None,
+      descriptor_set_layout: unsafe { NonZeroHandle::new_unchecked(set_layout) },
+      descriptor_pool: None,
+      descriptor_set: None,
+      font_texture: None,
+      font_sampler: None,
+      font_atlas: None,
+      allocator_raw: Some(self.allocator.allocator.get_raw()),
+    };
+
+    // Upload Font Atlas
+    let font_path: aethervk_oshal_rlib::os::fs::PathBuf;
+    #[cfg(debug_assertions)]
+    {
+      let assets_dir: aethervk_oshal_rlib::os::fs::PathBuf = {
+        use aethervk_oshal_rlib::os;
+        use aethervk_oshal_rlib::os::fs::FileSystemObject;
+        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
+        if args.len() > 1 {
+          aethervk_oshal_rlib::os::fs::PathBuf::from(&args[1])
+        } else {
+          let exe_path =
+            os::fs::current_exe().map_err(|_| GpuError::BackendSpecific("Fail".into()))?;
+          let mut path = exe_path.parent();
+          let mut assets_dir: Option<PathBuf> = None;
+          while let Some(p) = path {
+            let test_path = p.join("assets");
+            if test_path.is_dir() {
+              assets_dir = Some(test_path);
+              break;
+            }
+            path = p.parent();
+          }
+          assets_dir.expect("Fail")
+        }
+      };
+      font_path = assets_dir.join("fonts/JetBrainsMono-Bold.ttf");
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      font_path = aethervk_oshal_rlib::os::fs::PathBuf::from("assets/fonts/JetBrainsMono-Bold.ttf");
+    }
+
+    if let Ok(mapped_file) = aethervk_oshal_rlib::os::files::MappedFile::new(font_path) {
+      let font_data = mapped_file.as_slice();
+      if let Some(atlas) = crate::scene::text::create_ascii_atlas(font_data, 64.0) {
+        let texture = crate::simulation::comet::Texture {
+          data: atlas.image_data.clone(),
+          format: crate::simulation::comet::TexelFormat::R8_UNORM,
+          width: atlas.width,
+          height: atlas.height,
+          has_mipmaps: false,
+        };
+
+        let command_pool_info = vk::CommandPoolCreateInfo::default()
+          .queue_family_index(queue.family_index)
+          .flags(vk::CommandPoolCreateFlags::TRANSIENT);
+        let command_pool = unsafe { device.create_command_pool(&command_pool_info, None) }?;
+
+        let alloc_info = vk::CommandBufferAllocateInfo::default()
+          .command_pool(command_pool)
+          .level(vk::CommandBufferLevel::PRIMARY)
+          .command_buffer_count(1);
+        let command_buffer = unsafe { device.allocate_command_buffers(&alloc_info) }?[0];
+
+        let begin_info =
+          vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        unsafe { device.begin_command_buffer(command_buffer, &begin_info)? };
+
+        if let Ok(image) = resources::Image::new_2d(
+          device,
+          &self.allocator.allocator,
+          command_buffer,
+          &self.discard_pool,
+          timeline,
+          &texture,
+          vk::ImageUsageFlags::SAMPLED,
+          "FontAtlas",
+        ) {
+          let sampler_info = vk::SamplerCreateInfo::default()
+            .mag_filter(vk::Filter::LINEAR)
+            .min_filter(vk::Filter::LINEAR)
+            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+          if let Ok(sampler) = unsafe { device.create_sampler(&sampler_info, None) } {
+            let pool_sizes = [vk::DescriptorPoolSize::default()
+              .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+              .descriptor_count(1)];
+            let pool_info = vk::DescriptorPoolCreateInfo::default()
+              .pool_sizes(&pool_sizes)
+              .max_sets(1);
+            if let Ok(pool) = unsafe { device.create_descriptor_pool(&pool_info, None) } {
+              let set_layouts = [arch.descriptor_set_layout.get()];
+              let alloc_info = vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(pool)
+                .set_layouts(&set_layouts);
+              if let Ok(sets) = unsafe { device.allocate_descriptor_sets(&alloc_info) } {
+                let set = sets[0];
+                let image_info = [vk::DescriptorImageInfo::default()
+                  .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                  .image_view(image.image_view.get())
+                  .sampler(sampler)];
+                let write = vk::WriteDescriptorSet::default()
+                  .dst_set(set)
+                  .dst_binding(0)
+                  .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                  .image_info(&image_info);
+                unsafe { device.update_descriptor_sets(&[write], &[]) };
+
+                arch.font_texture = Some(image);
+                arch.font_sampler = Some(sampler);
+                arch.descriptor_pool = Some(unsafe { NonZeroHandle::new_unchecked(pool) });
+                arch.descriptor_set = Some(set);
+                arch.font_atlas = Some(atlas);
+              }
+            }
+          }
+        }
+        unsafe { device.end_command_buffer(command_buffer)? };
+
+        let command_buffers = [command_buffer];
+        let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
+
+        unsafe {
+          device.queue_submit(queue.handle, &[submit_info], vk::Fence::null())?;
+          device.queue_wait_idle(queue.handle)?;
+          device.destroy_command_pool(command_pool, None);
+        }
+      }
+    }
+
+    let pipeline_graphics_info = GraphicsInfo::default()
+      .with_vertex_in(
+        VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+          .clone(),
+      )
+      .with_pre_rasterization(
+        PreRasterization::default()
+          .with_vertex_module(vertex_shader.module.get())
+          .clone(),
+      )
+      .with_fragment_shader(
+        FragmentShader::default()
+          .with_fragment_module(fragment_shader.module.get())
+          .add_viewport(vk::Viewport {
+            width: presentation_engine_state.extent().0 as _,
+            height: -(presentation_engine_state.extent().1 as f32),
+            x: 0.0,
+            y: presentation_engine_state.extent().1 as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+          })
+          .add_scissors(vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: vk::Extent2D {
+              width: presentation_engine_state.extent().0,
+              height: presentation_engine_state.extent().1,
+            },
+          })
+          .clone(),
+      )
+      .with_fragment_out(
+        FragmentOut::default()
+          .add_color_attachment_format(presentation_engine_state.format())
+          .with_depth_attachment_format(depth_stencil_format)
+          .clone(),
+      )
+      .with_pipeline_layout(pipeline_layout)
+      .with_pipeline_flags(
+        PipelineFlags::CULL_ALL
+          | PipelineFlags::NO_DEPTH_WRITE
+          | PipelineFlags::NO_DEPTH_TEST
+          | PipelineFlags::INVERT_FRONT_FACE,
+      )
+      .with_render_pass(
+        self
+          .renderpasses
+          .get_or_create_render_pass(
+            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
+            0,
+            device,
+            &self.allocator.allocator,
+            &self.discard_pool,
+            0,
+          )?
+          .0
+          .get(),
+      )
+      .with_subpass(0)
+      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+      .clone();
+
+    let pipeline_key = pipeline_graphics_info.pipeline_key();
+    self
+      .pipeline_pool
+      .write()
+      .get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
+    arch.pipeline_key = Some(pipeline_key);
+
+    #[cfg(not(debug_assertions))]
+    {
+      self.text_render_archetype = Some(arch);
+    }
+    #[cfg(debug_assertions)]
+    {
+      self.text_render_archetype = DropTracker::new(TrackedOption::some(arch));
+    }
+
+    Ok(())
+  }
+
   fn has_discardables(&self) -> bool {
     self.physical_mesh_render_archetype.is_some()
       || self.physical_mesh_resources.read().is_some()
       || self.sun_render_archetype.is_some()
       || self.sun_resources.read().is_some()
+      || self.billboard_render_archetype.is_some()
       || self.cursor_render_archetype.is_some()
       || self.marker_render_archetype.is_some()
       || self.sky_render_archetype.is_some()
@@ -1578,6 +2215,9 @@ impl DeviceResources {
           unsafe { device.destroy_descriptor_set_layout(layout, None) };
         }
       }
+    }
+    if let Some(mut archetype) = self.billboard_render_archetype.take() {
+      archetype.discard(device, &self.discard_pool, u64::MAX);
     }
     if let Some(mut archetype) = self.cursor_render_archetype.take() {
       archetype.discard(device, &self.discard_pool, u64::MAX);
@@ -1713,7 +2353,11 @@ impl DeviceResources {
       #[cfg(not(debug_assertions))]
       sun_render_archetype: None,
       #[cfg(debug_assertions)]
+      billboard_render_archetype: DropTracker::new(TrackedOption::none()),
+      #[cfg(debug_assertions)]
       cursor_render_archetype: DropTracker::new(TrackedOption::none()),
+      #[cfg(not(debug_assertions))]
+      billboard_render_archetype: None,
       #[cfg(not(debug_assertions))]
       cursor_render_archetype: None,
 
@@ -1721,6 +2365,10 @@ impl DeviceResources {
       marker_render_archetype: DropTracker::new(TrackedOption::none()),
       #[cfg(not(debug_assertions))]
       marker_render_archetype: None,
+      #[cfg(debug_assertions)]
+      measurement_render_archetype: DropTracker::new(TrackedOption::none()),
+      #[cfg(not(debug_assertions))]
+      measurement_render_archetype: None,
       #[cfg(debug_assertions)]
       sky_render_archetype: DropTracker::new(TrackedOption::none()),
       #[cfg(not(debug_assertions))]
@@ -2204,11 +2852,12 @@ impl<'a> Device<'a> {
       } else {
         use aethervk_oshal_rlib::os::fs;
         let exe_path = fs::current_exe().map_err(|_| {
-          GpuError::BackendSpecific(
-            "Failed to get executable path for asset loading".into(),
-          )
+          GpuError::BackendSpecific("Failed to get executable path for asset loading".into())
         })?;
-        exe_path.parent().expect("Exe has no parent directory").join("assets")
+        exe_path
+          .parent()
+          .expect("Exe has no parent directory")
+          .join("assets")
       }
     };
 
@@ -2277,11 +2926,12 @@ impl<'a> Device<'a> {
       } else {
         use aethervk_oshal_rlib::os::fs;
         let exe_path = fs::current_exe().map_err(|_| {
-          GpuError::BackendSpecific(
-            "Failed to get executable path for asset loading".into(),
-          )
+          GpuError::BackendSpecific("Failed to get executable path for asset loading".into())
         })?;
-        exe_path.parent().expect("Exe has no parent directory").join("assets")
+        exe_path
+          .parent()
+          .expect("Exe has no parent directory")
+          .join("assets")
       }
     };
     comp_path = assets_dir.join("skygen.comp.spv");
@@ -2310,11 +2960,12 @@ impl<'a> Device<'a> {
       } else {
         use aethervk_oshal_rlib::os::fs;
         let exe_path = fs::current_exe().map_err(|_| {
-          GpuError::BackendSpecific(
-            "Failed to get executable path for asset loading".into(),
-          )
+          GpuError::BackendSpecific("Failed to get executable path for asset loading".into())
         })?;
-        exe_path.parent().expect("Exe has no parent directory").join("assets")
+        exe_path
+          .parent()
+          .expect("Exe has no parent directory")
+          .join("assets")
       }
     };
     comp_path = assets_dir.join("sungen.comp.spv");
@@ -2343,11 +2994,12 @@ impl<'a> Device<'a> {
       } else {
         use aethervk_oshal_rlib::os::fs;
         let exe_path = fs::current_exe().map_err(|_| {
-          GpuError::BackendSpecific(
-            "Failed to get executable path for asset loading".into(),
-          )
+          GpuError::BackendSpecific("Failed to get executable path for asset loading".into())
         })?;
-        exe_path.parent().expect("Exe has no parent directory").join("assets")
+        exe_path
+          .parent()
+          .expect("Exe has no parent directory")
+          .join("assets")
       }
     };
     vert_path = assets_dir.join("grid.vert.spv");
@@ -2383,11 +3035,12 @@ impl<'a> Device<'a> {
       } else {
         use aethervk_oshal_rlib::os::fs;
         let exe_path = fs::current_exe().map_err(|_| {
-          GpuError::BackendSpecific(
-            "Failed to get executable path for asset loading".into(),
-          )
+          GpuError::BackendSpecific("Failed to get executable path for asset loading".into())
         })?;
-        exe_path.parent().expect("Exe has no parent directory").join("assets")
+        exe_path
+          .parent()
+          .expect("Exe has no parent directory")
+          .join("assets")
       }
     };
     vert_path = assets_dir.join("sky.vert.spv");
@@ -2423,11 +3076,12 @@ impl<'a> Device<'a> {
       } else {
         use aethervk_oshal_rlib::os::fs;
         let exe_path = fs::current_exe().map_err(|_| {
-          GpuError::BackendSpecific(
-            "Failed to get executable path for asset loading".into(),
-          )
+          GpuError::BackendSpecific("Failed to get executable path for asset loading".into())
         })?;
-        exe_path.parent().expect("Exe has no parent directory").join("assets")
+        exe_path
+          .parent()
+          .expect("Exe has no parent directory")
+          .join("assets")
       }
     };
 
@@ -2465,11 +3119,12 @@ impl<'a> Device<'a> {
       } else {
         use aethervk_oshal_rlib::os::fs;
         let exe_path = fs::current_exe().map_err(|_| {
-          GpuError::BackendSpecific(
-            "Failed to get executable path for asset loading".into(),
-          )
+          GpuError::BackendSpecific("Failed to get executable path for asset loading".into())
         })?;
-        exe_path.parent().expect("Exe has no parent directory").join("assets")
+        exe_path
+          .parent()
+          .expect("Exe has no parent directory")
+          .join("assets")
       }
     };
 
@@ -2492,6 +3147,97 @@ impl<'a> Device<'a> {
     Ok((vkey, fkey))
   }
 
+  fn ensure_measurement_shader_modules(
+    &self,
+    res: &impl core::ops::Deref<Target = DeviceResources>,
+  ) -> GpuResult<(ShaderKey, ShaderKey)> {
+    let vert_path: PathBuf;
+    let frag_path: PathBuf;
+
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific("Failed to get executable path for asset loading".into())
+        })?;
+        exe_path
+          .parent()
+          .expect("Exe has no parent directory")
+          .join("assets")
+      }
+    };
+
+    vert_path = assets_dir.join("measurement.vert.spv");
+    frag_path = assets_dir.join("measurement.frag.spv");
+
+    let mut shader_manager = res.shader_manager.write();
+    let vkey = shader_manager.get_or_load(
+      &self.device,
+      &vert_path,
+      "main",
+      spirv::ExecutionModel::Vertex,
+    )?;
+    let fkey = shader_manager.get_or_load(
+      &self.device,
+      &frag_path,
+      "main",
+      spirv::ExecutionModel::Fragment,
+    )?;
+    Ok((vkey, fkey))
+  }
+
+  fn ensure_billboard_shader_modules(
+    &self,
+    res: &impl core::ops::Deref<Target = DeviceResources>,
+  ) -> GpuResult<(ShaderKey, ShaderKey)> {
+    let vert_path: PathBuf;
+    let frag_path: PathBuf;
+
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific("Failed to get executable path for asset loading".into())
+        })?;
+        exe_path
+          .parent()
+          .expect("Exe has no parent directory")
+          .join("assets")
+      }
+    };
+
+    vert_path = assets_dir.join("billboard.vert.spv");
+    #[cfg(feature = "billboard_debug")]
+    {
+      frag_path = assets_dir.join("billboard_debug.frag.spv");
+    }
+    #[cfg(not(feature = "billboard_debug"))]
+    {
+      frag_path = assets_dir.join("billboard.frag.spv");
+    }
+
+    let mut shader_manager = res.shader_manager.write();
+
+    let vert_key = shader_manager.get_or_load(
+      &self.device,
+      &vert_path,
+      "main",
+      spirv::ExecutionModel::Vertex,
+    )?;
+    let frag_key = shader_manager.get_or_load(
+      &self.device,
+      &frag_path,
+      "main",
+      spirv::ExecutionModel::Fragment,
+    )?;
+
+    Ok((vert_key, frag_key))
+  }
+
   fn ensure_cursor_shader_modules(
     &self,
     res: &impl core::ops::Deref<Target = DeviceResources>,
@@ -2505,11 +3251,12 @@ impl<'a> Device<'a> {
       } else {
         use aethervk_oshal_rlib::os::fs;
         let exe_path = fs::current_exe().map_err(|_| {
-          GpuError::BackendSpecific(
-            "Failed to get executable path for asset loading".into(),
-          )
+          GpuError::BackendSpecific("Failed to get executable path for asset loading".into())
         })?;
-        exe_path.parent().expect("Exe has no parent directory").join("assets")
+        exe_path
+          .parent()
+          .expect("Exe has no parent directory")
+          .join("assets")
       }
     };
 
@@ -2557,7 +3304,6 @@ impl<'a> Drop for Device<'a> {
   }
 }
 
-
 fn ensure_bvh_shader_modules(
   device: &LogicalDevice,
   res: &DeviceResources,
@@ -2576,9 +3322,7 @@ fn ensure_bvh_shader_modules(
         aethervk_oshal_rlib::os::fs::PathBuf::from(&args[1])
       } else {
         let exe_path = os::fs::current_exe().map_err(|_| {
-          GpuError::BackendSpecific(
-            "Failed to get executable path for debug asset loading".into(),
-          )
+          GpuError::BackendSpecific("Failed to get executable path for debug asset loading".into())
         })?;
 
         let mut path = exe_path.parent();
@@ -2595,8 +3339,8 @@ fn ensure_bvh_shader_modules(
           path = p.parent();
         }
 
-        let assets_dir = assets_dir
-          .expect("Could not find assets directory when searching from executable path");
+        let assets_dir =
+          assets_dir.expect("Could not find assets directory when searching from executable path");
 
         assets_dir
       }
@@ -2612,8 +3356,18 @@ fn ensure_bvh_shader_modules(
   }
 
   let mut shader_manager = res.shader_manager.write();
-  let vkey = shader_manager.get_or_load(device, vert_path.as_ref(), "main", spirv::ExecutionModel::Vertex)?;
-  let fkey = shader_manager.get_or_load(device, frag_path.as_ref(), "main", spirv::ExecutionModel::Fragment)?;
+  let vkey = shader_manager.get_or_load(
+    device,
+    vert_path.as_ref(),
+    "main",
+    spirv::ExecutionModel::Vertex,
+  )?;
+  let fkey = shader_manager.get_or_load(
+    device,
+    frag_path.as_ref(),
+    "main",
+    spirv::ExecutionModel::Fragment,
+  )?;
 
   Ok((vkey, fkey))
 }
@@ -2640,7 +3394,10 @@ fn ensure_minimap_shader_modules(
         let mut assets_dir: Option<aethervk_oshal_rlib::os::fs::PathBuf> = None;
         while let Some(p) = path {
           let test_path = p.join("assets");
-          if test_path.is_dir() { assets_dir = Some(test_path); break; }
+          if test_path.is_dir() {
+            assets_dir = Some(test_path);
+            break;
+          }
           path = p.parent();
         }
         assets_dir.unwrap()
@@ -2650,11 +3407,15 @@ fn ensure_minimap_shader_modules(
     frag_path = assets_dir.join("minimap.frag.spv");
   }
   #[cfg(not(debug_assertions))]
-  { todo!(); }
+  {
+    todo!();
+  }
 
   let mut shader_manager = res.shader_manager.write();
-  let vert_key = shader_manager.get_or_load(device, &vert_path, "main", spirv::ExecutionModel::Vertex)?;
-  let frag_key = shader_manager.get_or_load(device, &frag_path, "main", spirv::ExecutionModel::Fragment)?;
+  let vert_key =
+    shader_manager.get_or_load(device, &vert_path, "main", spirv::ExecutionModel::Vertex)?;
+  let frag_key =
+    shader_manager.get_or_load(device, &frag_path, "main", spirv::ExecutionModel::Fragment)?;
   Ok((vert_key, frag_key))
 }
 
@@ -2793,6 +3554,19 @@ impl<'a> RenderDevice for Device<'a> {
       wres.create_grid_archetype(&self.device, vkey, fkey, self.depth_stencil_format, handle)?;
     }
 
+    if wres.text_render_archetype.is_none() {
+      let (vkey, fkey) = wres.ensure_text_shader_modules(&self.device)?;
+      wres.create_text_archetype(
+        &self.device,
+        vkey,
+        fkey,
+        self.depth_stencil_format,
+        &self.queues.get_graphics_queue(),
+        timeline,
+        handle,
+      )?;
+    }
+
     Ok(())
   }
 
@@ -2820,7 +3594,7 @@ impl<'a> RenderDevice for Device<'a> {
   ) -> GpuResult<()> {
     use aethervk_oshal_rlib::math::matrix::{Matrix4, MatrixVectorMul, SquareMatrix};
     let camera = &render_scene.camera;
-      let view =
+    let view =
       <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::from_columns(
         aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(1.0, 0.0, 0.0, 0.0),
         aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, -1.0, 0.0),
@@ -2845,7 +3619,13 @@ impl<'a> RenderDevice for Device<'a> {
       self.render_sky(cmd_buffer, *sky_entity, sky_comp, sky_view_proj)?;
     }
 
-    let sun_pos = render_scene.sun.as_ref().map(|(_, _, t)| t.position).unwrap_or_else(|| aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 0.0));
+    let sun_pos = render_scene
+      .sun
+      .as_ref()
+      .map(|(_, _, t)| t.position)
+      .unwrap_or_else(|| {
+        aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 0.0)
+      });
 
     if let Some((sun_entity, sun_comp, sun_transform)) = &render_scene.sun {
       self.render_sun(
@@ -2859,7 +3639,15 @@ impl<'a> RenderDevice for Device<'a> {
     }
 
     for draw_call in &render_scene.draw_calls {
-      crate::gpu::frame::do_draw_call(self, view_proj, camera.0.position, sun_pos, [1.0, 1.0, 1.0, 1.0], cmd_buffer, draw_call)?;
+      crate::gpu::frame::do_draw_call(
+        self,
+        view_proj,
+        camera.0.position,
+        sun_pos,
+        [1.0, 1.0, 1.0, 1.0],
+        cmd_buffer,
+        draw_call,
+      )?;
     }
 
     if let Some((grid_entity, grid_comp)) = &render_scene.grid {
@@ -2880,6 +3668,14 @@ impl<'a> RenderDevice for Device<'a> {
 
     for marker_call in &render_scene.marker_calls {
       crate::gpu::frame::do_draw_marker(self, view, view_proj, cmd_buffer, marker_call)?;
+    }
+
+    for measurement_call in &render_scene.measurement_calls {
+      crate::gpu::frame::do_draw_measurement(self, view, view_proj, cmd_buffer, measurement_call)?;
+    }
+
+    for billboard_call in &render_scene.billboard_calls {
+      crate::gpu::frame::do_draw_billboard(self, view, view_proj, cmd_buffer, billboard_call)?;
     }
 
     Ok(())
@@ -2978,7 +3774,9 @@ impl<'a> RenderDevice for Device<'a> {
       .read()
       .get(&handle)
     {
-      engine.write().acquire_next_image(&self.device, self.queues.get_graphics_queue().handle)
+      engine
+        .write()
+        .acquire_next_image(&self.device, self.queues.get_graphics_queue().handle)
     } else {
       Err(GpuError::InvalidArgument)
     }
@@ -3520,17 +4318,15 @@ impl<'a> RenderDevice for Device<'a> {
     })
   }
 
-  fn get_or_create_cursor_resources(
+  fn get_or_create_measurement_resources(
     &self,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
-    // ensure that the archetype for cursors exists
-    if self.res.read().cursor_render_archetype.is_none() {
+    if self.res.read().measurement_render_archetype.is_none() {
       let mut wres = self.res.write();
-      // Re-check condition after acquiring write lock
-      if wres.cursor_render_archetype.is_none() {
-        let (vkey, fkey) = self.ensure_cursor_shader_modules(&wres)?;
-        wres.create_cursor_archetype(
+      if wres.measurement_render_archetype.is_none() {
+        let (vkey, fkey) = self.ensure_measurement_shader_modules(&wres)?;
+        wres.create_measurement_archetype(
           &self.device,
           vkey,
           fkey,
@@ -3541,12 +4337,46 @@ impl<'a> RenderDevice for Device<'a> {
     }
 
     let res = self.res.read();
-    let archetype = unsafe { res.get_cursor_archetype().unwrap_unchecked() };
+    let arch = res.get_measurement_archetype().unwrap();
+    let pipeline_key = unsafe { arch.pipeline_key.unwrap_unchecked() };
+
+    Ok(ResourceUploadResult {
+      pipeline: pipeline_key,
+      outline_pipeline: None,
+      buffers: crate::gpu::NULL_GPU_RESOURCE,
+      texture_flags: TextureFlags::empty(),
+      emissive_intensity: 0.0,
+      emissive_color: [0.0; 3],
+    })
+  }
+
+  fn get_or_create_billboard_resources(
+    &self,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult> {
+    // ensure that the archetype for billboards exists
+    if self.res.read().billboard_render_archetype.is_none() {
+      let mut wres = self.res.write();
+      // Re-check condition after acquiring write lock
+      if wres.billboard_render_archetype.is_none() {
+        let (vkey, fkey) = self.ensure_billboard_shader_modules(&wres)?;
+        wres.create_billboard_archetype(
+          &self.device,
+          vkey,
+          fkey,
+          self.depth_stencil_format,
+          handle,
+        )?;
+      }
+    }
+
+    let res = self.res.read();
+    let archetype = unsafe { res.get_billboard_archetype().unwrap_unchecked() };
 
     // Safety: Archetype, once properly constructed, has everything populated
     let pipeline_key = unsafe { archetype.pipeline_key.unwrap_unchecked() };
 
-    // the cursor doesn't have descriptor sets or vertex/index buffers
+    // the billboard doesn't have descriptor sets or vertex/index buffers
     Ok(ResourceUploadResult {
       pipeline: pipeline_key,
       outline_pipeline: None,
@@ -3636,7 +4466,8 @@ impl<'a> RenderDevice for Device<'a> {
         vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&image_barrier));
       unsafe {
         self
-          .device.synchronization2
+          .device
+          .synchronization2
           .cmd_pipeline_barrier2(command_buffer, &dep_info)
       };
 
@@ -3684,7 +4515,8 @@ impl<'a> RenderDevice for Device<'a> {
         vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&image_barrier2));
       unsafe {
         self
-          .device.synchronization2
+          .device
+          .synchronization2
           .cmd_pipeline_barrier2(command_buffer, &dep_info2)
       };
 
@@ -3726,6 +4558,43 @@ impl<'a> RenderDevice for Device<'a> {
     } else {
       Err(GpuError::InvalidState)
     }
+  }
+
+  fn get_or_create_cursor_resources(
+    &self,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult> {
+    // ensure that the archetype for cursors exists
+    if self.res.read().cursor_render_archetype.is_none() {
+      let mut wres = self.res.write();
+      // Re-check condition after acquiring write lock
+      if wres.cursor_render_archetype.is_none() {
+        let (vkey, fkey) = self.ensure_cursor_shader_modules(&wres)?;
+        wres.create_cursor_archetype(
+          &self.device,
+          vkey,
+          fkey,
+          self.depth_stencil_format,
+          handle,
+        )?;
+      }
+    }
+
+    let res = self.res.read();
+    let archetype = unsafe { res.get_cursor_archetype().unwrap_unchecked() };
+
+    // Safety: Archetype, once properly constructed, has everything populated
+    let pipeline_key = unsafe { archetype.pipeline_key.unwrap_unchecked() };
+
+    // the cursor doesn't have descriptor sets or vertex/index buffers
+    Ok(ResourceUploadResult {
+      pipeline: pipeline_key,
+      outline_pipeline: None,
+      buffers: crate::gpu::NULL_GPU_RESOURCE, // no buffers
+      texture_flags: TextureFlags::empty(),
+      emissive_intensity: 0.0,
+      emissive_color: [0.0; 3],
+    })
   }
 
   fn get_command_buffer(&self) -> GpuResult<crate::gpu::CommandBufferHandle> {
@@ -4163,10 +5032,100 @@ impl<'a> RenderDevice for Device<'a> {
 
     if let Some(arch) = arch_ref {
       let layout = arch.pipeline_layout.get();
-      let push_constants_bytes = unsafe { core::slice::from_raw_parts(
-        push_constants as *const _ as *const u8,
-        core::mem::size_of::<crate::gpu::MarkerPushConstants>(),
-      ) };
+      let push_constants_bytes = unsafe {
+        core::slice::from_raw_parts(
+          push_constants as *const _ as *const u8,
+          core::mem::size_of::<crate::gpu::MarkerPushConstants>(),
+        )
+      };
+
+      unsafe {
+        self.device.cmd_push_constants(
+          data.command_buffer.get(),
+          layout,
+          vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+          0,
+          push_constants_bytes,
+        );
+      }
+    }
+    Ok(())
+  }
+
+  fn push_billboard_constants(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    push_constants: &crate::gpu::BillboardPushConstants,
+  ) -> GpuResult<()> {
+    let res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers
+      .get(&(timeline, cmd_buffer))
+      .ok_or(GpuError::InvalidArgument)?;
+
+    let arch_ref: Option<&_>;
+    #[cfg(debug_assertions)]
+    {
+      arch_ref = res.billboard_render_archetype.as_ref().as_ref();
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      arch_ref = res.billboard_render_archetype.as_ref();
+    }
+
+    if let Some(arch) = arch_ref {
+      let layout = arch.pipeline_layout.get();
+      let push_constants_bytes = unsafe {
+        core::slice::from_raw_parts(
+          push_constants as *const _ as *const u8,
+          core::mem::size_of::<crate::gpu::BillboardPushConstants>(),
+        )
+      };
+
+      unsafe {
+        self.device.cmd_push_constants(
+          data.command_buffer.get(),
+          layout,
+          vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+          0,
+          push_constants_bytes,
+        );
+      }
+    }
+    Ok(())
+  }
+
+  fn push_measurement_constants(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    push_constants: &crate::gpu::MeasurementPushConstants,
+  ) -> GpuResult<()> {
+    let res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers
+      .get(&(timeline, cmd_buffer))
+      .ok_or(GpuError::InvalidArgument)?;
+
+    let arch_ref: Option<&_>;
+    #[cfg(debug_assertions)]
+    {
+      arch_ref = res.measurement_render_archetype.as_ref().as_ref();
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      arch_ref = res.measurement_render_archetype.as_ref();
+    }
+
+    if let Some(arch) = arch_ref {
+      let layout = arch.pipeline_layout.get();
+      let push_constants_bytes = unsafe {
+        core::slice::from_raw_parts(
+          push_constants as *const _ as *const u8,
+          core::mem::size_of::<crate::gpu::MeasurementPushConstants>(),
+        )
+      };
 
       unsafe {
         self.device.cmd_push_constants(
@@ -5016,7 +5975,11 @@ impl<'a> RenderDevice for Device<'a> {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     player_pos: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
     max_distance: f32,
-    planets: &[(aethervk_oshal_rlib::math::vector::vec3::Vec3f32, f32, [f32; 4])],
+    planets: &[(
+      aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
+      f32,
+      [f32; 4],
+    )],
   ) -> GpuResult<()> {
     let mut res = self.res.read();
     let timeline = res.get_timeline_semaphore_cached_value();
@@ -5039,33 +6002,63 @@ impl<'a> RenderDevice for Device<'a> {
           let pe = presentation_engine_lock.get(&h).unwrap().read();
 
           let pipeline_graphics_info = pipelines::GraphicsInfo::default()
-            .with_vertex_in(pipelines::VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP).clone())
+            .with_vertex_in(
+              pipelines::VertexIn::default()
+                .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+                .clone(),
+            )
             .with_pre_rasterization(
               pipelines::PreRasterization::default()
                 .with_vertex_module(vertex_shader.module.get())
-                .clone()
+                .clone(),
             )
             .with_fragment_shader(
               pipelines::FragmentShader::default()
                 .with_fragment_module(fragment_shader.module.get())
                 .add_viewport(vk::Viewport {
-                  width: pe.extent().0 as f32, height: -(pe.extent().1 as f32), x: 0.0, y: pe.extent().1 as f32, min_depth: 0.0, max_depth: 1.0
+                  width: pe.extent().0 as f32,
+                  height: -(pe.extent().1 as f32),
+                  x: 0.0,
+                  y: pe.extent().1 as f32,
+                  min_depth: 0.0,
+                  max_depth: 1.0,
                 })
-                .add_scissors(vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width: pe.extent().0, height: pe.extent().1 } })
-                .clone()
+                .add_scissors(vk::Rect2D {
+                  offset: vk::Offset2D { x: 0, y: 0 },
+                  extent: vk::Extent2D {
+                    width: pe.extent().0,
+                    height: pe.extent().1,
+                  },
+                })
+                .clone(),
             )
             .with_fragment_out(
               pipelines::FragmentOut::default()
                 .add_color_attachment_format(pe.format())
-                .clone()
+                .clone(),
             )
             .with_pipeline_layout(arch.pipeline_layout.get())
-            .with_pipeline_flags(pipelines::PipelineFlags::CULL_ALL | pipelines::PipelineFlags::NO_DEPTH_TEST | pipelines::PipelineFlags::NO_DEPTH_WRITE)
+            .with_pipeline_flags(
+              pipelines::PipelineFlags::CULL_ALL
+                | pipelines::PipelineFlags::NO_DEPTH_TEST
+                | pipelines::PipelineFlags::NO_DEPTH_WRITE,
+            )
             .with_render_pass(
-              wres.renderpasses.get_or_create_render_pass(
-                renderpasses::RenderPassSpecification::single_pass(&pe, self.depth_stencil_format),
-                0, &self.device, &wres.allocator.allocator, &wres.discard_pool, timeline
-              )?.0.get()
+              wres
+                .renderpasses
+                .get_or_create_render_pass(
+                  renderpasses::RenderPassSpecification::single_pass(
+                    &pe,
+                    self.depth_stencil_format,
+                  ),
+                  0,
+                  &self.device,
+                  &wres.allocator.allocator,
+                  &wres.discard_pool,
+                  timeline,
+                )?
+                .0
+                .get(),
             )
             .with_subpass(0)
             .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
@@ -5076,7 +6069,10 @@ impl<'a> RenderDevice for Device<'a> {
           drop(shader_manager);
 
           let pipeline_key = pipeline_graphics_info.pipeline_key();
-          wres.pipeline_pool.write().get_or_create_graphics_pipeline(&self.device, &pipeline_graphics_info)?;
+          wres
+            .pipeline_pool
+            .write()
+            .get_or_create_graphics_pipeline(&self.device, &pipeline_graphics_info)?;
           arch.pipeline_key = Some(pipeline_key);
 
           #[cfg(not(debug_assertions))]
@@ -5085,7 +6081,9 @@ impl<'a> RenderDevice for Device<'a> {
           }
           #[cfg(debug_assertions)]
           {
-            wres.minimap_render_archetype = aethervk_oshal_rlib::os::debug::DropTracker::new(aethervk_oshal_rlib::os::debug::TrackedOption::some(arch));
+            wres.minimap_render_archetype = aethervk_oshal_rlib::os::debug::DropTracker::new(
+              aethervk_oshal_rlib::os::debug::TrackedOption::some(arch),
+            );
           }
         }
       }
@@ -5104,7 +6102,11 @@ impl<'a> RenderDevice for Device<'a> {
     }
 
     if let Some(archetype) = arch_ref {
-      let pipeline = res.pipeline_pool.read().get_graphics_pipeline(archetype.pipeline_key.unwrap()).unwrap();
+      let pipeline = res
+        .pipeline_pool
+        .read()
+        .get_graphics_pipeline(archetype.pipeline_key.unwrap())
+        .unwrap();
       let cmd_buffers = self.recording_command_buffers.read();
       let data = cmd_buffers.get(&(timeline, cmd_buffer)).unwrap();
       let cmd = data.command_buffer.get();
@@ -5124,7 +6126,9 @@ impl<'a> RenderDevice for Device<'a> {
       };
 
       unsafe {
-        self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
+        self
+          .device
+          .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
 
         let mut push_bytes = [0u8; 544];
 
@@ -5135,26 +6139,68 @@ impl<'a> RenderDevice for Device<'a> {
         let max_distance_f = max_distance;
         let num_planets = planets.len() as u32;
 
-        core::ptr::copy_nonoverlapping(&offset as *const _ as *const u8, push_bytes.as_mut_ptr().add(0), 8);
-        core::ptr::copy_nonoverlapping(&size as *const _ as *const u8, push_bytes.as_mut_ptr().add(8), 8);
-        core::ptr::copy_nonoverlapping(&player_pos_arr as *const _ as *const u8, push_bytes.as_mut_ptr().add(16), 8);
-        core::ptr::copy_nonoverlapping(&max_distance_f as *const _ as *const u8, push_bytes.as_mut_ptr().add(24), 4);
-        core::ptr::copy_nonoverlapping(&num_planets as *const _ as *const u8, push_bytes.as_mut_ptr().add(28), 4);
+        core::ptr::copy_nonoverlapping(
+          &offset as *const _ as *const u8,
+          push_bytes.as_mut_ptr().add(0),
+          8,
+        );
+        core::ptr::copy_nonoverlapping(
+          &size as *const _ as *const u8,
+          push_bytes.as_mut_ptr().add(8),
+          8,
+        );
+        core::ptr::copy_nonoverlapping(
+          &player_pos_arr as *const _ as *const u8,
+          push_bytes.as_mut_ptr().add(16),
+          8,
+        );
+        core::ptr::copy_nonoverlapping(
+          &max_distance_f as *const _ as *const u8,
+          push_bytes.as_mut_ptr().add(24),
+          4,
+        );
+        core::ptr::copy_nonoverlapping(
+          &num_planets as *const _ as *const u8,
+          push_bytes.as_mut_ptr().add(28),
+          4,
+        );
 
         for (i, p) in planets.iter().enumerate().take(16) {
-           let base = 32 + i * 32;
-           let p_pos = [p.0.x(), p.0.y()];
-           let p_size = p.1;
-           let p_pad = 0.0f32;
-           let p_color = p.2;
+          let base = 32 + i * 32;
+          let p_pos = [p.0.x(), p.0.y()];
+          let p_size = p.1;
+          let p_pad = 0.0f32;
+          let p_color = p.2;
 
-           core::ptr::copy_nonoverlapping(&p_pos as *const _ as *const u8, push_bytes.as_mut_ptr().add(base + 0), 8);
-           core::ptr::copy_nonoverlapping(&p_size as *const _ as *const u8, push_bytes.as_mut_ptr().add(base + 8), 4);
-           core::ptr::copy_nonoverlapping(&p_pad as *const _ as *const u8, push_bytes.as_mut_ptr().add(base + 12), 4);
-           core::ptr::copy_nonoverlapping(&p_color as *const _ as *const u8, push_bytes.as_mut_ptr().add(base + 16), 16);
+          core::ptr::copy_nonoverlapping(
+            &p_pos as *const _ as *const u8,
+            push_bytes.as_mut_ptr().add(base + 0),
+            8,
+          );
+          core::ptr::copy_nonoverlapping(
+            &p_size as *const _ as *const u8,
+            push_bytes.as_mut_ptr().add(base + 8),
+            4,
+          );
+          core::ptr::copy_nonoverlapping(
+            &p_pad as *const _ as *const u8,
+            push_bytes.as_mut_ptr().add(base + 12),
+            4,
+          );
+          core::ptr::copy_nonoverlapping(
+            &p_color as *const _ as *const u8,
+            push_bytes.as_mut_ptr().add(base + 16),
+            16,
+          );
         }
 
-        self.device.cmd_push_constants(cmd, layout, vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT, 0, &push_bytes);
+        self.device.cmd_push_constants(
+          cmd,
+          layout,
+          vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+          0,
+          &push_bytes,
+        );
 
         self.device.cmd_draw(cmd, 4, 1, 0, 0);
       }
@@ -5165,7 +6211,10 @@ impl<'a> RenderDevice for Device<'a> {
   fn render_bvh(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
-    nodes: &[(crate::math::collision::linear_bvh::LinearBound<f32, aethervk_oshal_rlib::math::vector::vec3::Vec3f32, aethervk_oshal_rlib::math::matrix::mat3::Mat3f32>, aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32)],
+    nodes: &[(
+      crate::math::collision::linear_bvh::LinearBound<f32>,
+      aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+    )],
     view_proj: [f32; 16],
     presentation_engine: PresentationEngineHandle,
   ) -> GpuResult<()> {
@@ -5188,34 +6237,59 @@ impl<'a> RenderDevice for Device<'a> {
         let pe = live_engines_lock.get(&presentation_engine).unwrap().read();
 
         let pipeline_graphics_info = pipelines::GraphicsInfo::default()
-          .with_vertex_in(pipelines::VertexIn::default().with_topology(vk::PrimitiveTopology::LINE_LIST).clone())
+          .with_vertex_in(
+            pipelines::VertexIn::default()
+              .with_topology(vk::PrimitiveTopology::LINE_LIST)
+              .clone(),
+          )
           .with_pre_rasterization(
             pipelines::PreRasterization::default()
               .with_vertex_module(vertex_shader.module.get())
-              .clone()
+              .clone(),
           )
           .with_fragment_shader(
             pipelines::FragmentShader::default()
               .with_fragment_module(fragment_shader.module.get())
               .add_viewport(vk::Viewport {
-                width: pe.extent().0 as f32, height: -(pe.extent().1 as f32), x: 0.0, y: pe.extent().1 as f32, min_depth: 0.0, max_depth: 1.0
+                width: pe.extent().0 as f32,
+                height: -(pe.extent().1 as f32),
+                x: 0.0,
+                y: pe.extent().1 as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
               })
-              .add_scissors(vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width: pe.extent().0, height: pe.extent().1 } })
-              .clone()
+              .add_scissors(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: vk::Extent2D {
+                  width: pe.extent().0,
+                  height: pe.extent().1,
+                },
+              })
+              .clone(),
           )
           .with_fragment_out(
             pipelines::FragmentOut::default()
               .add_color_attachment_format(pe.format())
               .with_depth_attachment_format(self.depth_stencil_format)
-              .clone()
+              .clone(),
           )
           .with_pipeline_layout(arch.pipeline_layout.get())
-          .with_pipeline_flags(pipelines::PipelineFlags::NO_DEPTH_WRITE | pipelines::PipelineFlags::INVERT_FRONT_FACE)
+          .with_pipeline_flags(
+            pipelines::PipelineFlags::NO_DEPTH_WRITE | pipelines::PipelineFlags::INVERT_FRONT_FACE,
+          )
           .with_render_pass(
-            wres.renderpasses.get_or_create_render_pass(
-              renderpasses::RenderPassSpecification::single_pass(&pe, self.depth_stencil_format),
-              0, &self.device, &wres.allocator.allocator, &wres.discard_pool, timeline
-            )?.0.get()
+            wres
+              .renderpasses
+              .get_or_create_render_pass(
+                renderpasses::RenderPassSpecification::single_pass(&pe, self.depth_stencil_format),
+                0,
+                &self.device,
+                &wres.allocator.allocator,
+                &wres.discard_pool,
+                timeline,
+              )?
+              .0
+              .get(),
           )
           .with_subpass(0)
           .with_rasterization_polygon_mode(vk::PolygonMode::LINE)
@@ -5226,7 +6300,10 @@ impl<'a> RenderDevice for Device<'a> {
         drop(shader_manager);
 
         let pipeline_key = pipeline_graphics_info.pipeline_key();
-        wres.pipeline_pool.write().get_or_create_graphics_pipeline(&self.device, &pipeline_graphics_info)?;
+        wres
+          .pipeline_pool
+          .write()
+          .get_or_create_graphics_pipeline(&self.device, &pipeline_graphics_info)?;
         arch.pipeline_key = Some(pipeline_key);
 
         #[cfg(not(debug_assertions))]
@@ -5235,7 +6312,9 @@ impl<'a> RenderDevice for Device<'a> {
         }
         #[cfg(debug_assertions)]
         {
-          wres.bvh_render_archetype = aethervk_oshal_rlib::os::debug::DropTracker::new(aethervk_oshal_rlib::os::debug::TrackedOption::some(arch));
+          wres.bvh_render_archetype = aethervk_oshal_rlib::os::debug::DropTracker::new(
+            aethervk_oshal_rlib::os::debug::TrackedOption::some(arch),
+          );
         }
       }
       drop(wres);
@@ -5253,7 +6332,11 @@ impl<'a> RenderDevice for Device<'a> {
     }
 
     if let Some(archetype) = arch_ref {
-      let pipeline = res.pipeline_pool.read().get_graphics_pipeline(archetype.pipeline_key.unwrap()).unwrap();
+      let pipeline = res
+        .pipeline_pool
+        .read()
+        .get_graphics_pipeline(archetype.pipeline_key.unwrap())
+        .unwrap();
       let cmd_buffers = self.recording_command_buffers.read();
       let data = cmd_buffers.get(&(timeline, cmd_buffer)).unwrap();
       let cmd = data.command_buffer.get();
@@ -5263,12 +6346,18 @@ impl<'a> RenderDevice for Device<'a> {
       let live_engines_lock = res.live_presentation_engines.read();
       let pe = live_engines_lock.get(&presentation_engine).unwrap().read();
       let extent = pe.extent();
-      let aspect_ratio = if extent.1 > 0 { extent.0 as f32 / extent.1 as f32 } else { 1.0 };
+      let aspect_ratio = if extent.1 > 0 {
+        extent.0 as f32 / extent.1 as f32
+      } else {
+        1.0
+      };
       drop(pe);
       drop(live_engines_lock);
 
       unsafe {
-        self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
+        self
+          .device
+          .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
         self.device.cmd_set_line_width(cmd, 1.0);
 
         for &(ref bound, ref model_matrix) in nodes {
@@ -5279,41 +6368,83 @@ impl<'a> RenderDevice for Device<'a> {
             LinearBound::AABB(aabb) => {
               let center = aabb.center();
               let he = aabb.half_extents();
-              (center, 1.0f32, he, [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0])
+              (
+                center,
+                1.0f32,
+                he,
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+              )
             }
             LinearBound::OBB(obb) => {
-              let center = obb.center();
-              let he = obb.half_extents();
-              let axes = obb.axes();
-              (center, 1.0f32, he, [axes[0].x(), axes[0].y(), axes[0].z()],
-               [axes[1].x(), axes[1].y(), axes[1].z()],
-               [axes[2].x(), axes[2].y(), axes[2].z()])
+              let center: Vec3f32 = obb.center();
+              let he: Vec3f32 = obb.half_extents();
+              let axes: [Vec3f32; 3] = obb.axes();
+              (
+                center,
+                1.0f32,
+                he,
+                [axes[0].x(), axes[0].y(), axes[0].z()],
+                [axes[1].x(), axes[1].y(), axes[1].z()],
+                [axes[2].x(), axes[2].y(), axes[2].z()],
+              )
             }
           };
 
           let mut push_bytes = [0u8; 144];
 
           use aethervk_oshal_rlib::math::matrix::Matrix4;
-          let view_proj_mat = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_array(&view_proj);
+          let view_proj_mat =
+            aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_array(&view_proj);
           let mvp = view_proj_mat * *model_matrix;
           let mvp_arr: [f32; 16] = mvp.into();
 
-          core::ptr::copy_nonoverlapping(&mvp_arr as *const _ as *const u8, push_bytes.as_mut_ptr(), 64);
+          core::ptr::copy_nonoverlapping(
+            &mvp_arr as *const _ as *const u8,
+            push_bytes.as_mut_ptr(),
+            64,
+          );
 
-          use aethervk_oshal_rlib::math::vector::Vector;
           let center_type = [center.x(), center.y(), center.z(), type_val];
           let extents_arr = [extents.x(), extents.y(), extents.z(), 0.0];
           let axes_x = [ax[0], ax[1], ax[2], 0.0];
           let axes_y = [ay[0], ay[1], ay[2], 0.0];
           let axes_z = [az[0], az[1], az[2], 0.0];
 
-          core::ptr::copy_nonoverlapping(&center_type as *const _ as *const u8, push_bytes.as_mut_ptr().add(64), 16);
-          core::ptr::copy_nonoverlapping(&extents_arr as *const _ as *const u8, push_bytes.as_mut_ptr().add(80), 16);
-          core::ptr::copy_nonoverlapping(&axes_x as *const _ as *const u8, push_bytes.as_mut_ptr().add(96), 16);
-          core::ptr::copy_nonoverlapping(&axes_y as *const _ as *const u8, push_bytes.as_mut_ptr().add(112), 16);
-          core::ptr::copy_nonoverlapping(&axes_z as *const _ as *const u8, push_bytes.as_mut_ptr().add(128), 16);
+          core::ptr::copy_nonoverlapping(
+            &center_type as *const _ as *const u8,
+            push_bytes.as_mut_ptr().add(64),
+            16,
+          );
+          core::ptr::copy_nonoverlapping(
+            &extents_arr as *const _ as *const u8,
+            push_bytes.as_mut_ptr().add(80),
+            16,
+          );
+          core::ptr::copy_nonoverlapping(
+            &axes_x as *const _ as *const u8,
+            push_bytes.as_mut_ptr().add(96),
+            16,
+          );
+          core::ptr::copy_nonoverlapping(
+            &axes_y as *const _ as *const u8,
+            push_bytes.as_mut_ptr().add(112),
+            16,
+          );
+          core::ptr::copy_nonoverlapping(
+            &axes_z as *const _ as *const u8,
+            push_bytes.as_mut_ptr().add(128),
+            16,
+          );
 
-          self.device.cmd_push_constants(cmd, layout, vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT, 0, &push_bytes);
+          self.device.cmd_push_constants(
+            cmd,
+            layout,
+            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+            0,
+            &push_bytes,
+          );
 
           let vert_count = if type_val == 1.0 { 24 } else { 216 };
           self.device.cmd_draw(cmd, vert_count, 1, 0, 0);
@@ -5344,27 +6475,34 @@ impl<'a> RenderDevice for Device<'a> {
       arch_ref = res.text_render_archetype.as_ref();
     }
 
+    debug_assert!(arch_ref.is_some());
     if let Some(archetype) = arch_ref {
-      let pipeline = res.pipeline_pool.read().get_graphics_pipeline(archetype.pipeline_key.unwrap()).unwrap();
+      let pipeline = res
+        .pipeline_pool
+        .read()
+        .get_graphics_pipeline(archetype.pipeline_key.unwrap())
+        .unwrap();
       let cmd_buffers = self.recording_command_buffers.read();
       let data = cmd_buffers.get(&(timeline, cmd_buffer)).unwrap();
       let cmd = data.command_buffer.get();
       let layout = archetype.pipeline_layout.get();
 
       unsafe {
-        self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
+        self
+          .device
+          .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
 
         if let Some(set) = archetype.descriptor_set {
-           self.device.cmd_bind_descriptor_sets(
-             cmd,
-             vk::PipelineBindPoint::GRAPHICS,
-             layout,
-             0,
-             &[set],
-             &[]
-           );
+          self.device.cmd_bind_descriptor_sets(
+            cmd,
+            vk::PipelineBindPoint::GRAPHICS,
+            layout,
+            0,
+            &[set],
+            &[],
+          );
         } else {
-           return Ok(());
+          return Err(GpuError::InvalidState);
         }
 
         let mut push_bytes = [0u8; 48];
@@ -5372,14 +6510,38 @@ impl<'a> RenderDevice for Device<'a> {
         let scale_arr = [size[0], size[1]];
         let uv_bounds = [0.0f32, 0.0f32, -1.0f32, -1.0f32];
 
-        core::ptr::copy_nonoverlapping(&pos_arr as *const _ as *const u8, push_bytes.as_mut_ptr(), 8);
-        core::ptr::copy_nonoverlapping(&scale_arr as *const _ as *const u8, push_bytes.as_mut_ptr().add(8), 8);
-        core::ptr::copy_nonoverlapping(&color as *const _ as *const u8, push_bytes.as_mut_ptr().add(16), 16);
-        core::ptr::copy_nonoverlapping(&uv_bounds as *const _ as *const u8, push_bytes.as_mut_ptr().add(32), 16);
+        core::ptr::copy_nonoverlapping(
+          &pos_arr as *const _ as *const u8,
+          push_bytes.as_mut_ptr(),
+          8,
+        );
+        core::ptr::copy_nonoverlapping(
+          &scale_arr as *const _ as *const u8,
+          push_bytes.as_mut_ptr().add(8),
+          8,
+        );
+        core::ptr::copy_nonoverlapping(
+          &color as *const _ as *const u8,
+          push_bytes.as_mut_ptr().add(16),
+          16,
+        );
+        core::ptr::copy_nonoverlapping(
+          &uv_bounds as *const _ as *const u8,
+          push_bytes.as_mut_ptr().add(32),
+          16,
+        );
 
-        self.device.cmd_push_constants(cmd, layout, vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT, 0, &push_bytes);
+        self.device.cmd_push_constants(
+          cmd,
+          layout,
+          vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+          0,
+          &push_bytes,
+        );
         self.device.cmd_draw(cmd, 4, 1, 0, 0);
       }
+    } else {
+      return Err(GpuError::InvalidState);
     }
 
     Ok(())
@@ -5409,7 +6571,11 @@ impl<'a> RenderDevice for Device<'a> {
     }
 
     if let Some(archetype) = arch_ref {
-      let pipeline = res.pipeline_pool.read().get_graphics_pipeline(archetype.pipeline_key.unwrap()).unwrap();
+      let pipeline = res
+        .pipeline_pool
+        .read()
+        .get_graphics_pipeline(archetype.pipeline_key.unwrap())
+        .unwrap();
       let cmd_buffers = self.recording_command_buffers.read();
       let data = cmd_buffers.get(&(timeline, cmd_buffer)).unwrap();
       let cmd = data.command_buffer.get();
@@ -5417,25 +6583,34 @@ impl<'a> RenderDevice for Device<'a> {
 
       // Fetch screen size
       let live_engines_lock = res.live_presentation_engines.read();
-      let (screen_width, screen_height) = if let Some(engine_state) = live_engines_lock.values().next() {
-        let ext = engine_state.read().extent();
-        if ext.0 > 0 && ext.1 > 0 { (ext.0 as f32, ext.1 as f32) } else { (800.0, 600.0) }
-      } else { (800.0, 600.0) };
+      let (screen_width, screen_height) =
+        if let Some(engine_state) = live_engines_lock.values().next() {
+          let ext = engine_state.read().extent();
+          if ext.0 > 0 && ext.1 > 0 {
+            (ext.0 as f32, ext.1 as f32)
+          } else {
+            (800.0, 600.0)
+          }
+        } else {
+          (800.0, 600.0)
+        };
 
       unsafe {
-        self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
+        self
+          .device
+          .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
 
         if let Some(set) = archetype.descriptor_set {
-           self.device.cmd_bind_descriptor_sets(
-             cmd,
-             vk::PipelineBindPoint::GRAPHICS,
-             layout,
-             0,
-             &[set],
-             &[]
-           );
+          self.device.cmd_bind_descriptor_sets(
+            cmd,
+            vk::PipelineBindPoint::GRAPHICS,
+            layout,
+            0,
+            &[set],
+            &[],
+          );
         } else {
-           return Ok(());
+          return Ok(());
         }
 
         let mut cursor_x = position[0];
@@ -5446,10 +6621,10 @@ impl<'a> RenderDevice for Device<'a> {
         let scale_y = scale_factor * 2.0 / screen_height;
         for c in text.chars() {
           if c == '\n' {
-             cursor_x = position[0];
-             // Simple line height advance
-             cursor_y += 64.0 * scale_y * 1.5;
-             continue;
+            cursor_x = position[0];
+            // Simple line height advance
+            cursor_y += 64.0 * scale_y * 1.5;
+            continue;
           }
           let mut uv_bounds = [0.0f32, 0.0f32, 1.0f32, 1.0f32];
           let mut char_size = [1.0f32, 1.0f32];
@@ -5458,15 +6633,25 @@ impl<'a> RenderDevice for Device<'a> {
 
           if let Some(atlas) = &archetype.font_atlas {
             if let Some(glyph) = atlas.glyphs.get(&c) {
-               uv_bounds = [glyph.uv_min[0], glyph.uv_min[1], glyph.uv_max[0], glyph.uv_max[1]];
-               char_size = glyph.size;
-               char_offset = glyph.offset;
-               advance = glyph.advance;
+              uv_bounds = [
+                glyph.uv_min[0],
+                glyph.uv_min[1],
+                glyph.uv_max[0],
+                glyph.uv_max[1],
+              ];
+              char_size = glyph.size;
+              char_offset = glyph.offset;
+              advance = glyph.advance;
             } else if let Some(glyph) = atlas.glyphs.get(&'█') {
-               uv_bounds = [glyph.uv_min[0], glyph.uv_min[1], glyph.uv_max[0], glyph.uv_max[1]];
-               char_size = glyph.size;
-               char_offset = glyph.offset;
-               advance = glyph.advance;
+              uv_bounds = [
+                glyph.uv_min[0],
+                glyph.uv_min[1],
+                glyph.uv_max[0],
+                glyph.uv_max[1],
+              ];
+              char_size = glyph.size;
+              char_offset = glyph.offset;
+              advance = glyph.advance;
             }
           }
 
@@ -5476,12 +6661,34 @@ impl<'a> RenderDevice for Device<'a> {
           let pos_arr = [cx, cy];
           let scale_arr = [char_size[0] * scale_x, char_size[1] * scale_y];
 
-          core::ptr::copy_nonoverlapping(&pos_arr as *const _ as *const u8, push_bytes.as_mut_ptr(), 8);
-          core::ptr::copy_nonoverlapping(&scale_arr as *const _ as *const u8, push_bytes.as_mut_ptr().add(8), 8);
-          core::ptr::copy_nonoverlapping(&color as *const _ as *const u8, push_bytes.as_mut_ptr().add(16), 16);
-          core::ptr::copy_nonoverlapping(&uv_bounds as *const _ as *const u8, push_bytes.as_mut_ptr().add(32), 16);
+          core::ptr::copy_nonoverlapping(
+            &pos_arr as *const _ as *const u8,
+            push_bytes.as_mut_ptr(),
+            8,
+          );
+          core::ptr::copy_nonoverlapping(
+            &scale_arr as *const _ as *const u8,
+            push_bytes.as_mut_ptr().add(8),
+            8,
+          );
+          core::ptr::copy_nonoverlapping(
+            &color as *const _ as *const u8,
+            push_bytes.as_mut_ptr().add(16),
+            16,
+          );
+          core::ptr::copy_nonoverlapping(
+            &uv_bounds as *const _ as *const u8,
+            push_bytes.as_mut_ptr().add(32),
+            16,
+          );
 
-          self.device.cmd_push_constants(cmd, layout, vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT, 0, &push_bytes);
+          self.device.cmd_push_constants(
+            cmd,
+            layout,
+            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+            0,
+            &push_bytes,
+          );
           self.device.cmd_draw(cmd, 4, 1, 0, 0);
 
           cursor_x += advance * scale_x;
@@ -5633,7 +6840,11 @@ impl<'a> crate::gpu::Kernels for Device<'a> {
     Ok(())
   }
 
-  fn dispatch_particles(&self, _cmd_buffer: crate::gpu::CommandBufferHandle, _dt: f32) -> GpuResult<()> {
+  fn dispatch_particles(
+    &self,
+    _cmd_buffer: crate::gpu::CommandBufferHandle,
+    _dt: f32,
+  ) -> GpuResult<()> {
     // TODO: Bind particle compute pipeline
     Ok(())
   }
@@ -5669,7 +6880,10 @@ impl<'a> crate::gpu::KernelRenderBridge for Device<'a> {
     Ok(())
   }
 
-  fn sync_graphics_to_compute(&self, _cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {
+  fn sync_graphics_to_compute(
+    &self,
+    _cmd_buffer: crate::gpu::CommandBufferHandle,
+  ) -> GpuResult<()> {
     // Counterpart memory barrier from Graphics output back to Compute reads
     Ok(())
   }

@@ -135,15 +135,8 @@ public partial class BvhNode : ObservableObject
   [ObservableProperty]
   private bool _isVisible;
 
-  // Readonly details
-  public string Details =>
-    Type switch
-    {
-      BvhNodeType.BoundingSphere => "Radius: 15.2, Center: (0,0,0)",
-      BvhNodeType.AABB => "Min: (-10, -10, -10), Max: (10, 10, 10)",
-      BvhNodeType.OBB => "Center: (0,0,0), Extents: (10,5,2)",
-      _ => "",
-    };
+  [ObservableProperty]
+  private string _details = "";
 
   public ObservableCollection<BvhNode> Children { get; } = new();
 
@@ -208,16 +201,5 @@ public partial class CometComponent : ObservableObject, IComponent
 
   public CometComponent()
   {
-    // Mock data
-    var root = new BvhNode { Name = "Root BS", Type = BvhNodeType.BoundingSphere };
-    var child1 = new BvhNode { Name = "Left AABB", Type = BvhNodeType.AABB };
-    var child2 = new BvhNode { Name = "Right AABB", Type = BvhNodeType.AABB };
-    root.Children.Add(child1);
-    root.Children.Add(child2);
-
-    child1.Children.Add(new BvhNode { Name = "Leaf OBB 1", Type = BvhNodeType.OBB });
-    child2.Children.Add(new BvhNode { Name = "Leaf OBB 2", Type = BvhNodeType.OBB });
-
-    BvhTree.Add(root);
   }
 }

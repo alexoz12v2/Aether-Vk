@@ -17,69 +17,56 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub enum BoundNode<S, V, M>
+pub enum BoundNode<S>
 where
-  M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
-  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
-  S: FloatLike
-    + FloatOps
-    + FloatBits
-    + From<f32>
-    + core::ops::Mul<V, Output = V>
-    + core::ops::Mul<M, Output = M>,
+  S: FloatLike + FloatOps + FloatBits + From<f32>,
 {
-  AABB(AABB<V>),
-  OBB(OBB<S, V, M>),
-  BS(BS<V>),
+  AABB(AABB<S>),
+  OBB(OBB<S>),
+  BS(BS<S>),
 }
 
-impl<S, V, M> BoundNode<S, V, M>
+impl<S> BoundNode<S>
 where
-  M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
-  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
-  S: FloatLike
-    + FloatOps
-    + FloatBits
-    + From<f32>
-    + core::ops::Mul<V, Output = V>
-    + core::ops::Mul<M, Output = M>,
+  S: FloatLike + FloatOps + FloatBits + From<f32>,
 {
-  pub fn contains(&self, other: &Self) -> bool {
+  pub fn contains<V, M>(&self, other: &Self) -> bool
+  where
+    V: Vector3<Scalar = S> + From<[S; 3]>,
+    M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
+  {
     match (self, other) {
-      (BoundNode::AABB(a), BoundNode::AABB(b)) => a.contains_aabb(b),
-      (BoundNode::AABB(a), BoundNode::OBB(b)) => a.contains_obb(b),
-      (BoundNode::OBB(a), BoundNode::AABB(b)) => a.contains_aabb(b),
-      (BoundNode::OBB(a), BoundNode::OBB(b)) => a.contains_obb(b),
+      (BoundNode::AABB(a), BoundNode::AABB(b)) => a.contains_aabb::<V>(b),
+      (BoundNode::AABB(a), BoundNode::OBB(b)) => a.contains_obb::<V>(b),
+      (BoundNode::OBB(a), BoundNode::AABB(b)) => a.contains_aabb::<V, M>(b),
+      (BoundNode::OBB(a), BoundNode::OBB(b)) => a.contains_obb::<V, M>(b),
       _ => true,
     }
   }
 
-  pub fn encapsulate_bound(&mut self, other: &Self) {
+  pub fn encapsulate_bound<V, M>(&mut self, other: &Self)
+  where
+    V: Vector3<Scalar = S> + From<[S; 3]>,
+    M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
+  {
     match (self, other) {
-      (BoundNode::AABB(a), BoundNode::AABB(b)) => a.encapsulate_aabb(b),
-      (BoundNode::AABB(a), BoundNode::OBB(b)) => a.encapsulate_obb(b),
-      (BoundNode::OBB(a), BoundNode::AABB(b)) => a.encapsulate_aabb(b),
-      (BoundNode::OBB(a), BoundNode::OBB(b)) => a.encapsulate_obb(b),
+      (BoundNode::AABB(a), BoundNode::AABB(b)) => a.encapsulate_aabb::<V>(b),
+      (BoundNode::AABB(a), BoundNode::OBB(b)) => a.encapsulate_obb::<V>(b),
+      (BoundNode::OBB(a), BoundNode::AABB(b)) => a.encapsulate_aabb::<V, M>(b),
+      (BoundNode::OBB(a), BoundNode::OBB(b)) => a.encapsulate_obb::<V, M>(b),
       _ => {}
     }
   }
 }
 
 #[derive(Debug, Clone)]
-pub struct BVHNode<S, V, M>
+pub struct BVHNode<S>
 where
-  M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
-  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
-  S: FloatLike
-    + FloatOps
-    + FloatBits
-    + From<f32>
-    + core::ops::Mul<V, Output = V>
-    + core::ops::Mul<M, Output = M>,
+  S: FloatLike + FloatOps + FloatBits + From<f32>,
 {
-  pub bound: BoundNode<S, V, M>,
-  pub left: Option<Box<BVHNode<S, V, M>>>,
-  pub right: Option<Box<BVHNode<S, V, M>>>,
+  pub bound: BoundNode<S>,
+  pub left: Option<Box<BVHNode<S>>>,
+  pub right: Option<Box<BVHNode<S>>>,
   // Indices into the original triangle slice
   pub primitive_indices: Vec<usize>,
 }
@@ -126,11 +113,7 @@ impl Default for BVHBuilderParams {
 pub struct BVHBuilder<S, V, M>
 where
   M: Matrix3<Scalar = S, Vector = V> + From<Mat3f32> + MatrixVectorMul,
-  V: Vector3<Scalar = S>
-    + From<Vec3f32>
-    + Into<Vec3f32>
-    + From<[S; 3]>
-    + Into<[S; 3]>,
+  V: Vector3<Scalar = S> + From<Vec3f32> + Into<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
   S: FloatLike
     + FloatOps
     + FloatBits
@@ -145,11 +128,7 @@ where
 impl<S, V, M> BVHBuilder<S, V, M>
 where
   M: Matrix3<Scalar = S, Vector = V> + From<Mat3f32> + MatrixVectorMul,
-  V: Vector3<Scalar = S>
-    + From<Vec3f32>
-    + Into<Vec3f32>
-    + From<[S; 3]>
-    + Into<[S; 3]>,
+  V: Vector3<Scalar = S> + From<Vec3f32> + Into<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
   S: FloatLike
     + FloatOps
     + FloatBits
@@ -164,7 +143,7 @@ where
     }
   }
 
-  pub fn build(&self, triangles: &[Triangle]) -> Option<Box<BVHNode<S, V, M>>> {
+  pub fn build(&self, triangles: &[Triangle]) -> Option<Box<BVHNode<S>>> {
     if triangles.is_empty() {
       return None;
     }
@@ -178,15 +157,15 @@ where
     triangles: &[Triangle],
     indices: &mut [usize],
     depth: usize,
-  ) -> Box<BVHNode<S, V, M>> {
+  ) -> Box<BVHNode<S>> {
     let count = indices.len();
     let current_tris = indices.iter().map(|&i| triangles[i]);
 
     // Create bound based on depth
     let bound = if depth < self.params.aabb_levels {
-      BoundNode::AABB(AABB::from_tris(current_tris))
+      BoundNode::AABB(AABB::from_tris::<V, _>(current_tris))
     } else {
-      BoundNode::OBB(OBB::from_tris(current_tris))
+      BoundNode::OBB(OBB::from_tris::<V, M, _>(current_tris))
     };
 
     if count <= self.params.max_primitives_per_node {
@@ -226,6 +205,7 @@ where
 
     // 1. Try SAH binning on axes starting from longest
     for &axis in &axes {
+      // TODO: Split by using AABB if current level is AABB, otherwise use OBB
       if let Some(idx) = self.try_sah_split(triangles, indices, axis, min_centroid, max_centroid) {
         split_index = idx;
         found_split = true;
@@ -308,7 +288,7 @@ where
     }
 
     let bin_count = self.params.bin_count;
-    let mut bins = alloc::vec![(0, AABB::<V>::new(V::splat(V::Scalar::from_f32(core::f32::INFINITY)), V::splat(V::Scalar::from_f32(core::f32::NEG_INFINITY)))); bin_count];
+    let mut bins = alloc::vec![(0, AABB::<S>::new(V::splat(V::Scalar::from_f32(core::f32::INFINITY)), V::splat(V::Scalar::from_f32(core::f32::NEG_INFINITY)))); bin_count];
 
     let extent = max_c - min_c;
 
@@ -324,10 +304,10 @@ where
 
       bins[bin_idx].0 += 1;
 
-      let tri_aabb = AABB::<V>::from_tris(core::iter::once(*tri));
+      let tri_aabb = AABB::<S>::from_tris::<V, _>(core::iter::once(*tri));
 
-      let b_min = bins[bin_idx].1.min().min(tri_aabb.min());
-      let b_max = bins[bin_idx].1.max().max(tri_aabb.max());
+      let b_min: V = bins[bin_idx].1.min::<V>().min(tri_aabb.min());
+      let b_max: V = bins[bin_idx].1.max::<V>().max(tri_aabb.max());
       bins[bin_idx].1 = AABB::new(b_min, b_max);
     }
 
@@ -337,7 +317,7 @@ where
     let mut left_count = alloc::vec![0; bin_count - 1];
     let mut right_count = alloc::vec![0; bin_count - 1];
 
-    let mut left_box = AABB::<V>::new(
+    let mut left_box = AABB::<S>::new(
       V::splat(V::Scalar::from_f32(core::f32::INFINITY)),
       V::splat(V::Scalar::from_f32(core::f32::NEG_INFINITY)),
     );
@@ -345,11 +325,11 @@ where
     for i in 0..bin_count - 1 {
       left_sum += bins[i].0;
       left_count[i] = left_sum;
-      left_box.encapsulate_aabb(&bins[i].1);
+      left_box.encapsulate_aabb::<V>(&bins[i].1);
       left_area[i] = self.aabb_surface_area(&left_box);
     }
 
-    let mut right_box = AABB::<V>::new(
+    let mut right_box = AABB::<S>::new(
       V::splat(V::Scalar::from_f32(core::f32::INFINITY)),
       V::splat(V::Scalar::from_f32(core::f32::NEG_INFINITY)),
     );
@@ -357,7 +337,7 @@ where
     for i in (1..bin_count).rev() {
       right_sum += bins[i].0;
       right_count[i - 1] = right_sum;
-      right_box.encapsulate_aabb(&bins[i].1);
+      right_box.encapsulate_aabb::<V>(&bins[i].1);
       right_area[i - 1] = self.aabb_surface_area(&right_box);
     }
 
@@ -375,8 +355,8 @@ where
 
     let leaf_cost = S::from_f32(indices.len() as f32)
       * self.aabb_surface_area(&AABB::new(
-        left_box.min().min(right_box.min()),
-        left_box.max().max(right_box.max()),
+        left_box.min::<V>().min(right_box.min()),
+        left_box.max::<V>().max(right_box.max()),
       ));
 
     if min_cost >= leaf_cost {
@@ -408,8 +388,8 @@ where
     Some(left_ptr)
   }
 
-  fn aabb_surface_area(&self, aabb: &AABB<V>) -> S {
-    let d = aabb.max() - aabb.min();
+  fn aabb_surface_area(&self, aabb: &AABB<S>) -> S {
+    let d: V = aabb.max::<V>() - aabb.min();
     let dx = d.x();
     let dy = d.y();
     let dz = d.z();
@@ -447,20 +427,20 @@ mod tests {
     };
     let tris = vec![t];
     let root = builder.build(&tris).expect("Should build root");
-    
+
     assert!(root.left.is_none());
     assert!(root.right.is_none());
     assert_eq!(root.primitive_indices.len(), 1);
     assert_eq!(root.primitive_indices[0], 0);
-    
+
     // Bounds should encapsulate the triangle
     match &root.bound {
       BoundNode::AABB(aabb) => {
-        assert_eq!(aabb.min().x(), 0.0);
-        assert_eq!(aabb.max().x(), 1.0);
-        assert_eq!(aabb.min().y(), 0.0);
-        assert_eq!(aabb.max().y(), 1.0);
-      },
+        assert_eq!(aabb.min::<Vec3f32>().x(), 0.0);
+        assert_eq!(aabb.max::<Vec3f32>().x(), 1.0);
+        assert_eq!(aabb.min::<Vec3f32>().y(), 0.0);
+        assert_eq!(aabb.max::<Vec3f32>().y(), 1.0);
+      }
       _ => panic!("Expected AABB"),
     }
   }
@@ -488,17 +468,17 @@ mod tests {
     };
     let tris = vec![t1, t2];
     let root = builder.build(&tris).expect("Should build root");
-    
+
     assert!(root.left.is_some());
     assert!(root.right.is_some());
     assert!(root.primitive_indices.is_empty()); // Parent has no primitives
-    
+
     // Parent should encapsulate both
     match &root.bound {
       BoundNode::AABB(aabb) => {
-        assert_eq!(aabb.min().x(), 0.0);
-        assert_eq!(aabb.max().x(), 11.0);
-      },
+        assert_eq!(aabb.min::<Vec3f32>().x(), 0.0);
+        assert_eq!(aabb.max::<Vec3f32>().x(), 11.0);
+      }
       _ => panic!("Expected AABB"),
     }
   }

@@ -1,0 +1,19 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:AetherVk.Logic.ViewModels"
+        x:DataType="vm:MeshViewerViewModel"
+        x:Class="AetherVk.Views.MeshViewerWindow"
+        Title="Mesh Viewer" Width="800" Height="600">
+    <Grid>
+        <Image x:Name="RenderTargetImage" Stretch="Uniform" Focusable="True"
+               PointerPressed="OnPointerPressed"
+               PointerReleased="OnPointerReleased"
+               PointerMoved="OnPointerMoved"
+               PointerWheelChanged="OnPointerWheelChanged" />
+        
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16" IsVisible="{Binding !IsInitialized}">
+            <TextBlock Text="Initializing Engine..." FontSize="20" FontWeight="Bold" HorizontalAlignment="Center"/>
+            <ProgressBar IsIndeterminate="True" Width="200" Height="4" HorizontalAlignment="Center" />
+        </StackPanel>
+    </Grid>
+</Window>

@@ -32,6 +32,9 @@ public static class NativeInterop
   public static extern ulong avkSimulationContext_spawnEntity(IntPtr ctx, string name);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_removeEntity(IntPtr ctx, ulong entity);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_setParent(IntPtr ctx, ulong entity, ulong parent);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -94,6 +97,25 @@ public static class NativeInterop
     out float scaleY,
     out float scaleZ
   );
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct FfiBvhNode
+  {
+    public uint NodeType;
+    public float MinX, MinY, MinZ;
+    public float MaxX, MaxY, MaxZ;
+    public float CenterX, CenterY, CenterZ;
+    public float ExtentsX, ExtentsY, ExtentsZ;
+    public uint LeftChild;
+    public uint RightChild;
+    public uint PrimitiveCount;
+  }
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern IntPtr avkSimulationContext_getBvhNodes(IntPtr ctx, ulong entity, out uint count);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_freeBvhNodes(IntPtr ptr, uint count);
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.I1)]
@@ -241,6 +263,26 @@ public static class NativeInterop
   public static extern void avkSimulationContext_addGridComponent(IntPtr ctx, ulong entity);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_addMeasurementComponent(
+    IntPtr ctx,
+    ulong entity,
+    float p1X, float p1Y, float p1Z,
+    float p2X, float p2Y, float p2Z
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_addImageBillboardComponent(
+    IntPtr ctx,
+    ulong entity,
+    [MarshalAs(UnmanagedType.I1)] bool isScreenSpace,
+    float width,
+    float height
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_setClearColor(IntPtr ctx, float r, float g, float b, float a);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_renderTick(IntPtr ctx);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -277,7 +319,7 @@ public static class NativeInterop
   public static extern void avkSimulationContext_setBreadcrumbCallback(BreadcrumbCallback cb);
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_setAssetPath(IntPtr ctx, string path);
+  public static extern void avkSimulationContext_setAssetPath(string path);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_processCommand(

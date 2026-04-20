@@ -54,6 +54,13 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
         bool hasSunOrPlanet = SelectedEntity.Components.Any(c => c is SunComponent || c is PlanetComponent);
         transform.IsEditable = !hasSunOrPlanet;
       }
+      
+      var comet = SelectedEntity.Components.OfType<CometComponent>().FirstOrDefault();
+      if (comet != null)
+      {
+        var runtimeService = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+        runtimeService?.RefreshBvhNodes(SelectedEntity.Id, comet);
+      }
     }
   }
 

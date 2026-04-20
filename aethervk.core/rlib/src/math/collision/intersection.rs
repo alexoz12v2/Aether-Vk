@@ -8,7 +8,7 @@ use aethervk_oshal_rlib::math::{
   vector::{Vector, Vector2, Vector3, vec3::Vec3f32},
 };
 use itertools::Itertools;
-
+use aethervk_oshal_rlib::math::matrix::MatrixVectorMul;
 use crate::{
   math::collision::bounds::{AABB, BS, OBB},
   simulation::comet::Triangle,
@@ -19,6 +19,7 @@ use crate::{
 pub struct Ray<V>
 where
   V: Vector3,
+  V::Scalar: FloatLike + FloatOps + FloatBits,
 {
   pub origin: V,
   pub direction: V,
@@ -28,13 +29,13 @@ where
 // ----------------------------------------------------------------------------
 // Sphere vs Sphere
 // ----------------------------------------------------------------------------
-pub fn intersect_sphere_sphere<V>(a: &BS<V>, b: &BS<V>) -> bool
+pub fn intersect_sphere_sphere<V>(a: &BS<V::Scalar>, b: &BS<V::Scalar>) -> bool
 where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
-  V::Scalar: FloatLike + From<f32> + core::ops::Mul<V, Output = V>,
+  V::Scalar: FloatLike + FloatOps + FloatBits + From<f32> + core::ops::Mul<V, Output = V>,
 {
-  let d = a.center() - b.center();
-  let r_sum = a.radius() + b.radius();
+  let d: V = a.center::<V>() - b.center();
+  let r_sum: V::Scalar = a.radius() + b.radius();
   d.length_squared() <= r_sum * r_sum
 }
 
@@ -43,15 +44,15 @@ where
 // ----------------------------------------------------------------------------
 // TODO: AABB vs AABB, AABB vs OBB, OBB vs OBB (15 combinations)
 
-pub fn intersect_aabb_aabb<V>(a: &AABB<V>, b: &AABB<V>) -> bool
+pub fn intersect_aabb_aabb<V>(a: &AABB<V::Scalar>, b: &AABB<V::Scalar>) -> bool
 where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
-  V::Scalar: FloatLike,
+  V::Scalar: FloatLike + FloatOps + FloatBits,
 {
-  let a_min = a.min();
-  let a_max = a.max();
-  let b_min = b.min();
-  let b_max = b.max();
+  let a_min: V = a.min();
+  let a_max: V = a.max();
+  let b_min: V = b.min();
+  let b_max: V = b.max();
 
   if a_max.x() < b_min.x() || a_min.x() > b_max.x() {
     return false;
@@ -68,7 +69,7 @@ where
 
 /// Checks if two Oriented Bounding Boxes overlap. They should refer to a common frame of coordinates
 /// (centers and axes of both)
-pub fn intersect_obb_obb<S, V, M>(a: &OBB<S, V, M>, b: &OBB<S, V, M>) -> bool
+pub fn intersect_obb_obb<S, V, M>(a: &OBB<S>, b: &OBB<S>) -> bool
 where
   M: Matrix3<Scalar = S, Vector = V>,
   V: Vector3<Scalar = S> + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
@@ -79,12 +80,12 @@ where
     + core::ops::Mul<V, Output = V>
     + core::ops::Mul<M, Output = M>,
 {
-  let pos_a = a.translation();
-  let pos_b = b.translation();
-  let ext_a = a.half_extent();
-  let ext_b = b.half_extent();
-  let axes_a = a.axes();
-  let axes_b = b.axes();
+  let pos_a: V = a.translation();
+  let pos_b: V = b.translation();
+  let ext_a: V = a.half_extent();
+  let ext_b: V = b.half_extent();
+  let axes_a: [V; 3] = a.axes();
+  let axes_b: [V; 3] = b.axes();
 
   // 1. Vector from center A to center B in world space
   let t_world = pos_b - pos_a;
@@ -445,14 +446,14 @@ where
 // ----------------------------------------------------------------------------
 // Box vs Sphere
 // ----------------------------------------------------------------------------
-pub fn intersect_aabb_sphere<V>(aabb: &AABB<V>, bs: &BS<V>) -> bool
+pub fn intersect_aabb_sphere<V>(aabb: &AABB<V::Scalar>, bs: &BS<V::Scalar>) -> bool
 where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
-  V::Scalar: FloatLike + From<f32> + core::ops::Mul<V, Output = V>,
+  V::Scalar: FloatLike + FloatOps + FloatBits + From<f32> + core::ops::Mul<V, Output = V>,
 {
-  let c = bs.center();
-  let min = aabb.min();
-  let max = aabb.max();
+  let c: V = bs.center();
+  let min: V = aabb.min();
+  let max: V = aabb.max();
 
   let closest = c.max(min).min(max);
   let d = c - closest;
@@ -466,7 +467,7 @@ where
 // TODO: obb_triangle by transforming the triangle itself into the OBB frame of reference,
 // so that we can treat it as a AABB
 /// AABB/Triangle SAT
-pub fn intersect_aabb_triangle<S, Vec3, Vec2>(aabb: &AABB<Vec3>, tri: &Triangle) -> bool
+pub fn intersect_aabb_triangle<S, Vec3, Vec2>(aabb: &AABB<Vec3::Scalar>, tri: &Triangle) -> bool
 where
   Vec3: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
   Vec2: Vector2<Scalar = S>,
@@ -483,7 +484,7 @@ where
   }
   // 2. Signed distances for each vertex of box to Triangle Plane
   let aabb_vertices = aabb.vertices();
-  let aabb_segment_indices = AABB::<Vec3>::edges();
+  let aabb_segment_indices = AABB::<Vec3::Scalar>::edges();
   let aabb_signed_distances: [S; 8] = unsafe {
     aabb_vertices
       .iter()
@@ -539,7 +540,7 @@ where
 // ----------------------------------------------------------------------------
 // Sphere vs Triangle
 // ----------------------------------------------------------------------------
-pub fn intersect_sphere_triangle<Vec3>(sphere: &BS<Vec3>, tri: &Triangle) -> bool
+pub fn intersect_sphere_triangle<Vec3>(sphere: &BS<Vec3::Scalar>, tri: &Triangle) -> bool
 where
   Vec3: Vector3 + From<Vec3f32> + From<[Vec3::Scalar; 3]> + Into<[Vec3::Scalar; 3]>,
   Vec3::Scalar: FloatLike + FloatBits + FloatOps + From<f32> + core::ops::Mul<Vec3, Output = Vec3>,
@@ -655,10 +656,10 @@ where
 // ----------------------------------------------------------------------------
 // Ray vs Sphere
 // ----------------------------------------------------------------------------
-pub fn intersect_ray_sphere<V>(ray: &Ray<V>, bs: &BS<V>) -> bool
+pub fn intersect_ray_sphere<V>(ray: &Ray<V>, bs: &BS<V::Scalar>) -> bool
 where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
-  V::Scalar: FloatLike + From<f32> + core::ops::Mul<V, Output = V>,
+  V::Scalar: FloatLike + FloatOps + FloatBits + From<f32> + core::ops::Mul<V, Output = V>,
 {
   let m = ray.origin - bs.center();
   let b = m.dot(ray.direction);
@@ -704,7 +705,7 @@ where
     return false;
   }
 
-  let f = V::Scalar::from_f32(1.0) / a;
+  let f: V::Scalar = V::Scalar::from_f32(1.0) / a;
   let s = ray.origin - v0;
   let u = f * s.dot(h);
 
@@ -732,9 +733,64 @@ where
 }
 
 // ----------------------------------------------------------------------------
+// Ray vs OBB
+// ----------------------------------------------------------------------------
+pub fn intersect_ray_obb<S, V, M>(ray: &Ray<V>, obb: &OBB<S>) -> bool
+where
+  M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
+  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
+  S: FloatLike
+    + FloatOps
+    + FloatBits
+    + From<f32>
+    + core::ops::Mul<V, Output = V>
+    + core::ops::Mul<M, Output = M>,
+{
+  let epsilon = S::from_f32(1e-6);
+  let mut tmin = S::from_f32(0.0);
+  let mut tmax = ray.length;
+
+  let p = obb.translation::<V>() - ray.origin;
+  let axes: [V; 3] = obb.axes();
+  let extents: V = obb.half_extent();
+
+  // Test intersection against the 3 OBB axes
+  for i in 0..3 {
+    let axis = axes[i];
+    let e = extents.component(i).unwrap();
+    let d = axis.dot(p);
+    let f = ray.direction.dot(axis);
+
+    if f.abs() > epsilon {
+      let mut t1 = (d - e) / f;
+      let mut t2 = (d + e) / f;
+      if t1 > t2 {
+        core::mem::swap(&mut t1, &mut t2);
+      }
+      if t1 > tmin {
+        tmin = t1;
+      }
+      if t2 < tmax {
+        tmax = t2;
+      }
+      if tmin > tmax {
+        return false;
+      }
+      if tmax < S::from_f32(0.0) {
+        return false;
+      }
+    } else if d < -e || d > e {
+      return false;
+    }
+  }
+
+  true
+}
+
+// ----------------------------------------------------------------------------
 // Ray vs Box
 // ----------------------------------------------------------------------------
-pub fn intersect_ray_aabb<V>(ray: &Ray<V>, aabb: &AABB<V>) -> bool
+pub fn intersect_ray_aabb<V>(ray: &Ray<V>, aabb: &AABB<V::Scalar>) -> bool
 where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
   V::Scalar: FloatLike + FloatOps + FloatBits + From<f32>,
@@ -742,8 +798,8 @@ where
   let mut tmin = V::Scalar::from_f32(0.0);
   let mut tmax = ray.length;
 
-  let min_val = aabb.min();
-  let max_val = aabb.max();
+  let min_val: V = aabb.min();
+  let max_val: V = aabb.max();
 
   let dir_x = ray.direction.x();
   let dir_y = ray.direction.y();
@@ -760,7 +816,7 @@ where
       return false;
     }
   } else {
-    let ood = V::Scalar::from_f32(1.0) / dir_x;
+    let ood: V::Scalar = V::Scalar::from_f32(1.0) / dir_x;
     let mut t1 = (min_val.x() - origin_x) * ood;
     let mut t2 = (max_val.x() - origin_x) * ood;
     if t1 > t2 {
@@ -782,7 +838,7 @@ where
       return false;
     }
   } else {
-    let ood = V::Scalar::from_f32(1.0) / dir_y;
+    let ood: V::Scalar = V::Scalar::from_f32(1.0) / dir_y;
     let mut t1 = (min_val.y() - origin_y) * ood;
     let mut t2 = (max_val.y() - origin_y) * ood;
     if t1 > t2 {
@@ -804,7 +860,7 @@ where
       return false;
     }
   } else {
-    let ood = V::Scalar::from_f32(1.0) / dir_z;
+    let ood: V::Scalar = V::Scalar::from_f32(1.0) / dir_z;
     let mut t1 = (min_val.z() - origin_z) * ood;
     let mut t2 = (max_val.z() - origin_z) * ood;
     if t1 > t2 {
@@ -847,22 +903,22 @@ mod tests {
   #[test]
   fn test_intersect_sphere_sphere() {
     // Positive: overlapping
-    assert!(intersect_sphere_sphere(
+    assert!(intersect_sphere_sphere::<Vec3f32>(
       &BS::new(mk_vec(0., 0., 0.), 2.0),
       &BS::new(mk_vec(3., 0., 0.), 2.0)
     ));
     // Edge 1: touching
-    assert!(intersect_sphere_sphere(
+    assert!(intersect_sphere_sphere::<Vec3f32>(
       &BS::new(mk_vec(0., 0., 0.), 2.0),
       &BS::new(mk_vec(4., 0., 0.), 2.0)
     ));
     // Edge 2: one inside other
-    assert!(intersect_sphere_sphere(
+    assert!(intersect_sphere_sphere::<Vec3f32>(
       &BS::new(mk_vec(0., 0., 0.), 5.0),
       &BS::new(mk_vec(1., 0., 0.), 1.0)
     ));
     // Edge 3: disjoint
-    assert!(!intersect_sphere_sphere(
+    assert!(!intersect_sphere_sphere::<Vec3f32>(
       &BS::new(mk_vec(0., 0., 0.), 2.0),
       &BS::new(mk_vec(5., 0., 0.), 2.0)
     ));
@@ -872,22 +928,22 @@ mod tests {
   #[test]
   fn test_intersect_aabb_aabb() {
     // Positive: overlapping
-    assert!(intersect_aabb_aabb(
+    assert!(intersect_aabb_aabb::<Vec3f32>(
       &AABB::new(mk_vec(0., 0., 0.), mk_vec(2., 2., 2.)),
       &AABB::new(mk_vec(1., 1., 1.), mk_vec(3., 3., 3.))
     ));
     // Edge 1: touching face
-    assert!(intersect_aabb_aabb(
+    assert!(intersect_aabb_aabb::<Vec3f32>(
       &AABB::new(mk_vec(0., 0., 0.), mk_vec(2., 2., 2.)),
       &AABB::new(mk_vec(2., 0., 0.), mk_vec(4., 2., 2.))
     ));
     // Edge 2: touching corner
-    assert!(intersect_aabb_aabb(
+    assert!(intersect_aabb_aabb::<Vec3f32>(
       &AABB::new(mk_vec(0., 0., 0.), mk_vec(2., 2., 2.)),
       &AABB::new(mk_vec(2., 2., 2.), mk_vec(4., 4., 4.))
     ));
     // Edge 3: disjoint
-    assert!(!intersect_aabb_aabb(
+    assert!(!intersect_aabb_aabb::<Vec3f32>(
       &AABB::new(mk_vec(0., 0., 0.), mk_vec(2., 2., 2.)),
       &AABB::new(mk_vec(3., 0., 0.), mk_vec(4., 2., 2.))
     ));
@@ -898,23 +954,23 @@ mod tests {
   fn test_intersect_obb_obb() {
     let ident = Mat3f32::identity();
     // Positive: overlapping
-    assert!(intersect_obb_obb(
+    assert!(intersect_obb_obb::<f32, Vec3f32, Mat3f32>(
       &OBB::new(mk_vec(0., 0., 0.), ident, mk_vec(1., 1., 1.)),
       &OBB::new(mk_vec(1., 0., 0.), ident, mk_vec(1., 1., 1.))
     ));
     // Edge 1: touching
-    assert!(intersect_obb_obb(
+    assert!(intersect_obb_obb::<f32, Vec3f32, Mat3f32>(
       &OBB::new(mk_vec(0., 0., 0.), ident, mk_vec(1., 1., 1.)),
       &OBB::new(mk_vec(2., 0., 0.), ident, mk_vec(1., 1., 1.))
     ));
     // Edge 2: rotated, touching
     let rot = Mat3f32::from_array(&[0., -1., 0., 1., 0., 0., 0., 0., 1.]);
-    assert!(intersect_obb_obb(
+    assert!(intersect_obb_obb::<f32, Vec3f32, Mat3f32>(
       &OBB::new(mk_vec(0., 0., 0.), ident, mk_vec(1., 1., 1.)),
       &OBB::new(mk_vec(2., 0., 0.), rot, mk_vec(1., 1., 1.))
     ));
     // Edge 3: disjoint
-    assert!(!intersect_obb_obb(
+    assert!(!intersect_obb_obb::<f32, Vec3f32, Mat3f32>(
       &OBB::new(mk_vec(0., 0., 0.), ident, mk_vec(1., 1., 1.)),
       &OBB::new(mk_vec(3., 0., 0.), ident, mk_vec(1., 1., 1.))
     ));
@@ -955,23 +1011,23 @@ mod tests {
   fn test_intersect_aabb_sphere() {
     let aabb = AABB::new(mk_vec(0., 0., 0.), mk_vec(2., 2., 2.));
     // Positive: overlapping
-    assert!(intersect_aabb_sphere(
+    assert!(intersect_aabb_sphere::<Vec3f32>(
       &aabb,
       &BS::new(mk_vec(1., 1., 1.), 2.0)
     ));
     // Edge 1: touching face
-    assert!(intersect_aabb_sphere(
+    assert!(intersect_aabb_sphere::<Vec3f32>(
       &aabb,
       &BS::new(mk_vec(3., 1., 1.), 1.0)
     ));
     // Edge 2: touching corner
     let corner_dist = (3.0_f32).sqrt();
-    assert!(intersect_aabb_sphere(
+    assert!(intersect_aabb_sphere::<Vec3f32>(
       &aabb,
       &BS::new(mk_vec(3., 3., 3.), corner_dist)
     ));
     // Edge 3: disjoint
-    assert!(!intersect_aabb_sphere(
+    assert!(!intersect_aabb_sphere::<Vec3f32>(
       &aabb,
       &BS::new(mk_vec(4., 1., 1.), 1.0)
     ));
@@ -1007,20 +1063,20 @@ mod tests {
     let s = BS::new(mk_vec(0., 0., 0.), 2.0);
     // Positive: overlapping
     let t1 = mk_tri(mk_vec(1., 0., 0.), mk_vec(3., 0., 0.), mk_vec(1., 2., 0.));
-    assert!(intersect_sphere_triangle(&s, &t1));
+    assert!(intersect_sphere_triangle::<Vec3f32>(&s, &t1));
     // Edge 1: touching vertex
     let t2 = mk_tri(mk_vec(2., 0., 0.), mk_vec(4., 0., 0.), mk_vec(2., 2., 0.));
-    assert!(intersect_sphere_triangle(&s, &t2));
+    assert!(intersect_sphere_triangle::<Vec3f32>(&s, &t2));
     // Edge 2: completely inside sphere
     let t3 = mk_tri(
       mk_vec(0.1, 0., 0.),
       mk_vec(0.5, 0., 0.),
       mk_vec(0.1, 0.5, 0.),
     );
-    assert!(intersect_sphere_triangle(&s, &t3));
+    assert!(intersect_sphere_triangle::<Vec3f32>(&s, &t3));
     // Edge 3: disjoint
     let t4 = mk_tri(mk_vec(3., 0., 0.), mk_vec(5., 0., 0.), mk_vec(3., 2., 0.));
-    assert!(!intersect_sphere_triangle(&s, &t4));
+    assert!(!intersect_sphere_triangle::<Vec3f32>(&s, &t4));
   }
 
   // 8. intersect_ray_sphere

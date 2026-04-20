@@ -299,7 +299,8 @@ fn main() {
       .add_component(
         mesh_entity,
         PhysicalMeshComponent {
-          mesh: comet,
+          asset_path: "".to_string(),
+          mesh: Arc::from(comet),
           emissive_intensity: 0.0,
           emissive_color: [0.0, 0.0, 0.0],
         },
@@ -391,7 +392,8 @@ fn main() {
       .add_component(
         planet_entity,
         PhysicalMeshComponent {
-          mesh: sphere,
+          asset_path: "".to_string(),
+          mesh: Arc::from(sphere),
           emissive_intensity: 0.0,
           emissive_color: [0.0, 0.0, 0.0],
         },
@@ -491,7 +493,8 @@ fn main() {
     .add_component(
       sun_core_entity,
       PhysicalMeshComponent {
-        mesh: sun_sphere,
+        asset_path: "".to_string(),
+        mesh: Arc::from(sun_sphere),
         emissive_intensity: 0.9, // Reduced to prevent SDR whiteout clamp
         emissive_color: [1.0, 0.35, 0.02], // Pure rich orange/red
       },
@@ -671,11 +674,13 @@ fn main() {
                       app_state.window.request_redraw();
                     }
                     winit::keyboard::Key::Named(winit::keyboard::NamedKey::PageUp) => {
-                      app_state.console_scroll_offset = app_state.console_scroll_offset.saturating_add(1);
+                      app_state.console_scroll_offset =
+                        app_state.console_scroll_offset.saturating_add(1);
                       app_state.window.request_redraw();
                     }
                     winit::keyboard::Key::Named(winit::keyboard::NamedKey::PageDown) => {
-                      app_state.console_scroll_offset = app_state.console_scroll_offset.saturating_sub(1);
+                      app_state.console_scroll_offset =
+                        app_state.console_scroll_offset.saturating_sub(1);
                       app_state.window.request_redraw();
                     }
                     winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
@@ -814,12 +819,12 @@ fn main() {
               winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 10.0) as f32, // tone down pixel delta
             };
             if app_state.is_command_prompt_open {
-               if scroll_amount > 0.0 {
-                 app_state.console_scroll_offset = app_state.console_scroll_offset.saturating_add(1);
-               } else if scroll_amount < 0.0 {
-                 app_state.console_scroll_offset = app_state.console_scroll_offset.saturating_sub(1);
-               }
-               app_state.window.request_redraw();
+              if scroll_amount > 0.0 {
+                app_state.console_scroll_offset = app_state.console_scroll_offset.saturating_add(1);
+              } else if scroll_amount < 0.0 {
+                app_state.console_scroll_offset = app_state.console_scroll_offset.saturating_sub(1);
+              }
+              app_state.window.request_redraw();
             } else {
               let _ = logic_tx.send(LogicCommand::ZoomCamera {
                 amount: scroll_amount,

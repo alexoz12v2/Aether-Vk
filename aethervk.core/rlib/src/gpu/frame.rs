@@ -99,6 +99,22 @@ pub struct MarkerDrawCall {
   pub color: [f32; 3],
 }
 
+pub struct MeasurementDrawCall {
+  pub pipeline: PipelineKey,
+  pub vertex_count: u32,
+  pub p1: [f32; 3],
+  pub p2: [f32; 3],
+  pub distance: f32,
+}
+
+pub struct BillboardDrawCall {
+  pub pipeline: PipelineKey,
+  pub vertex_count: u32,
+  pub model_matrix: Mat4x4f32,
+  pub texture_id: u64,
+  pub billboard_type: crate::scene::BillboardType,
+}
+
 /// A proper clear-cut struct representing the rendering scene.
 pub struct RenderScene {
   /// A list of draw calls to be executed for this frame.
@@ -107,6 +123,10 @@ pub struct RenderScene {
   pub cursor_calls: Vec<CursorDrawCall>,
   /// A list of marker draw calls.
   pub marker_calls: Vec<MarkerDrawCall>,
+  /// A list of measurement draw calls.
+  pub measurement_calls: Vec<MeasurementDrawCall>,
+  /// A list of billboard draw calls.
+  pub billboard_calls: Vec<BillboardDrawCall>,
   pub camera: (TransformComponent, CameraComponent),
   pub sun: Option<(EntityId, SunComponent, TransformComponent)>,
   pub sky: Option<(EntityId, SkyComponent)>,
@@ -119,6 +139,8 @@ impl RenderScene {
       draw_calls: Vec::new(),
       cursor_calls: Vec::new(),
       marker_calls: Vec::new(),
+      measurement_calls: Vec::new(),
+      billboard_calls: Vec::new(),
       camera,
       sun: None,
       sky: None,
@@ -139,8 +161,16 @@ impl RenderScene {
     outline_color: [f32; 4],
   ) -> GpuResult<()> {
     match renderable {
-      RenderableDataRef::ImageBillboard(_component) => {
-        todo!();
+      RenderableDataRef::ImageBillboard(component) => {
+        let res: ResourceUploadResult =
+          device.get_or_create_billboard_resources(presentation_engine_handle)?;
+        self.billboard_calls.push(BillboardDrawCall {
+          pipeline: res.pipeline,
+          vertex_count: 4,
+          model_matrix,
+          texture_id: component.texture_id,
+          billboard_type: component.billboard_type,
+        });
       }
       RenderableDataRef::PhysicalMesh(component) => {
         let res: ResourceUploadResult = device.get_or_create_physical_mesh_resources(
@@ -175,6 +205,17 @@ impl RenderScene {
             color: marker.color,
           });
         }
+      }
+      RenderableDataRef::Measurement(component) => {
+        let res: ResourceUploadResult =
+          device.get_or_create_measurement_resources(presentation_engine_handle)?;
+        self.measurement_calls.push(MeasurementDrawCall {
+          pipeline: res.pipeline,
+          vertex_count: 6,
+          p1: [component.pos1.x(), component.pos1.y(), component.pos1.z()],
+          p2: [component.pos2.x(), component.pos2.y(), component.pos2.z()],
+          distance: (component.pos2 - component.pos1).length(),
+        });
       }
     }
     Ok(())
@@ -240,6 +281,88 @@ pub fn do_draw_marker(
     _pad2: 0.0,
   };
   device.push_marker_constants(cmd_buffer, &push_constants)?;
+  device.draw(cmd_buffer, draw_call.vertex_count)?;
+
+  Ok(())
+}
+
+pub fn do_draw_measurement(
+  device: &dyn RenderDevice,
+  view: Mat4x4f32,
+  view_proj: Mat4x4f32,
+  cmd_buffer: super::CommandBufferHandle,
+  draw_call: &MeasurementDrawCall,
+) -> Result<(), crate::types::GpuError> {
+  device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
+
+  let mut camera_up = [0.0; 3];
+  let mut camera_right = [0.0; 3];
+
+  if let Some(inv_view) = view.inverse() {
+    let up: aethervk_oshal_rlib::math::vector::vec4::Vec4f32 = inv_view.column(1).unwrap();
+    let right: aethervk_oshal_rlib::math::vector::vec4::Vec4f32 = inv_view.column(0).unwrap();
+    camera_up = [up.x(), up.y(), up.z()];
+    camera_right = [right.x(), right.y(), right.z()];
+  }
+
+  let push_constants = crate::gpu::MeasurementPushConstants {
+    view_proj: view_proj.into(),
+    p1: draw_call.p1,
+    _pad0: 0.0,
+    p2: draw_call.p2,
+    _pad1: 0.0,
+    camera_up,
+    _pad2: 0.0,
+    camera_right,
+    _pad3: 0.0,
+    color: [1.0, 1.0, 1.0], // White
+    _pad4: 0.0,
+  };
+  device.push_measurement_constants(cmd_buffer, &push_constants)?;
+  device.draw(cmd_buffer, draw_call.vertex_count)?;
+
+  Ok(())
+}
+
+pub fn do_draw_billboard(
+  device: &dyn RenderDevice,
+  view: Mat4x4f32,
+  view_proj: Mat4x4f32,
+  cmd_buffer: super::CommandBufferHandle,
+  draw_call: &BillboardDrawCall,
+) -> Result<(), crate::types::GpuError> {
+  device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
+
+  let mut camera_up = [0.0; 3];
+  let mut camera_right = [0.0; 3];
+
+  if let Some(inv_view) = view.inverse() {
+    let up: aethervk_oshal_rlib::math::vector::vec4::Vec4f32 = inv_view.column(1).unwrap();
+    let right: aethervk_oshal_rlib::math::vector::vec4::Vec4f32 = inv_view.column(0).unwrap();
+    camera_up = [up.x(), up.y(), up.z()];
+    camera_right = [right.x(), right.y(), right.z()];
+  }
+
+  let center_pos: aethervk_oshal_rlib::math::vector::vec4::Vec4f32 = draw_call.model_matrix.column(3).unwrap();
+
+  let (size, is_screen_space) = match draw_call.billboard_type {
+    crate::scene::BillboardType::WorldSpace { width, height } => ([width, height], 0),
+    crate::scene::BillboardType::ScreenSpace { pct_width, pct_height } => ([pct_width, pct_height], 1),
+  };
+
+  let push_constants = crate::gpu::BillboardPushConstants {
+    view_proj: view_proj.into(),
+    center_pos: [center_pos.x(), center_pos.y(), center_pos.z()],
+    _pad0: 0.0,
+    camera_up,
+    _pad1: 0.0,
+    camera_right,
+    _pad2: 0.0,
+    size,
+    is_screen_space,
+    texture_id: draw_call.texture_id as u32,
+  };
+  device.push_billboard_constants(cmd_buffer, &push_constants)?;
   device.draw(cmd_buffer, draw_call.vertex_count)?;
 
   Ok(())
