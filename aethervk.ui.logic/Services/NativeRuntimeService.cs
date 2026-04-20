@@ -10,7 +10,7 @@ using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.Services;
 
-public partial class NativeRuntimeService : ObservableObject
+public partial class NativeRuntimeService : ObservableObject, IDisposable
 {
   [ObservableProperty]
   private bool _isInitialized;
@@ -26,6 +26,15 @@ public partial class NativeRuntimeService : ObservableObject
 
   private NativeInterop.LoggerCallback? _loggerCallbackDelegate;
   private NativeInterop.BreadcrumbCallback? _breadcrumbCallbackDelegate;
+
+  public void Dispose()
+  {
+    if (_simulationContext != IntPtr.Zero)
+    {
+      NativeInterop.avkSimulationContext_shutdown(_simulationContext);
+      _simulationContext = IntPtr.Zero;
+    }
+  }
 
   public NativeRuntimeService()
   {
@@ -145,11 +154,32 @@ public partial class NativeRuntimeService : ObservableObject
   public void InitializeSimulationContext(
     string backend = "Vulkan",
     uint width = 800,
-    uint height = 600
+    uint height = 600,
+    string assetOverride = null
   )
   {
     if (IsInitialized)
       return;
+
+    // Resolve absolute path to the published assets folder
+    var exePath = System.AppDomain.CurrentDomain.BaseDirectory;
+    
+    // Point Vulkan loader to our embedded MoltenVK and layers if they exist
+    var icdPath = System.IO.Path.Combine(exePath, "vulkan", "share", "vulkan", "icd.d", "MoltenVK_icd.json");
+    if (System.IO.File.Exists(icdPath))
+    {
+      Environment.SetEnvironmentVariable("VK_DRIVER_FILES", icdPath);
+      Environment.SetEnvironmentVariable("VK_ICD_FILENAMES", icdPath);
+    }
+
+    var layerPath = System.IO.Path.Combine(exePath, "vulkan", "share", "vulkan", "explicit_layer.d");
+    if (System.IO.Directory.Exists(layerPath))
+    {
+      Environment.SetEnvironmentVariable("VK_LAYER_PATH", layerPath);
+    }
+
+    var assetPath = assetOverride ?? System.IO.Path.Combine(exePath, "assets");
+    NativeInterop.avkSimulationContext_setAssetPath(assetPath);
 
     _simulationContext = NativeInterop.avkSimulationContext_startup(backend, width, height);
 
@@ -164,11 +194,6 @@ public partial class NativeRuntimeService : ObservableObject
     }
 
     IsInitialized = true;
-
-    // Resolve absolute path to the published assets folder
-    var exePath = System.AppDomain.CurrentDomain.BaseDirectory;
-    var assetPath = System.IO.Path.Combine(exePath, "assets");
-    NativeInterop.avkSimulationContext_setAssetPath(_simulationContext, assetPath);
 
     if (ServiceLocator.DispatchToUI != null)
     {
@@ -284,6 +309,14 @@ public partial class NativeRuntimeService : ObservableObject
     IsRunning = false;
   }
 
+  public void RenderTick()
+  {
+    if (_simulationContext != IntPtr.Zero)
+    {
+      NativeInterop.avkSimulationContext_renderTick(_simulationContext);
+    }
+  }
+
   public void ShutdownSimulation()
   {
     if (!IsInitialized)
@@ -303,6 +336,14 @@ public partial class NativeRuntimeService : ObservableObject
     {
       NativeInterop.avkSimulationContext_renderTickSync(_simulationContext);
       SyncEntities();
+    }
+  }
+
+  public void SetClearColor(float r, float g, float b, float a)
+  {
+    if (_simulationContext != IntPtr.Zero)
+    {
+      NativeInterop.avkSimulationContext_setClearColor(_simulationContext, r, g, b, a);
     }
   }
 
@@ -413,7 +454,7 @@ public partial class NativeRuntimeService : ObservableObject
     }
   }
 
-  public void SpawnModelInstance(ulong modelId, string name)
+  public void SpawnModelInstance(ulong modelId, string name, float posX = 0f, float posY = 0f, float posZ = 0f)
   {
     if (_simulationContext != IntPtr.Zero)
     {
@@ -427,7 +468,7 @@ public partial class NativeRuntimeService : ObservableObject
         RootEntities.Add(entity);
 
         // Fetch basic components that were created
-        entity.Components.Add(new TransformComponent());
+        entity.Components.Add(new TransformComponent { PosX = posX, PosY = posY, PosZ = posZ });
         entity.Components.Add(new CometComponent()); // Assume it spawns as a comet for now
       }
     }
@@ -672,11 +713,18 @@ public partial class NativeRuntimeService : ObservableObject
       root.Children.Add(sun);
       _entityMap[4] = sun;
 
-      var grid = new Entity(5, "grid");
+      var sunCore = new Entity(5, "sun_core");
+      WireEntityComponents(sunCore);
+      sunCore.Components.Add(new TransformComponent());
+      sunCore.Components.Add(new CometComponent());
+      sun.Children.Add(sunCore);
+      _entityMap[5] = sunCore;
+
+      var grid = new Entity(6, "grid");
       WireEntityComponents(grid);
       grid.Components.Add(new GridComponent());
       root.Children.Add(grid);
-      _entityMap[5] = grid;
+      _entityMap[6] = grid;
     }
     else
     {
@@ -760,12 +808,6 @@ public partial class NativeRuntimeService : ObservableObject
           }
           else if (item is CometComponent comet)
           {
-            uint i = 0;
-            foreach (var root in comet.BvhTree)
-            {
-               AssignBvhNodeIds(root, entity.Id, ref i);
-            }
-
             comet.Jets.CollectionChanged += (s, e) =>
             {
               SyncMarkers(entity.Id, comet);
@@ -786,13 +828,70 @@ public partial class NativeRuntimeService : ObservableObject
     };
   }
 
-  private void AssignBvhNodeIds(BvhNode node, ulong entityId, ref uint index)
+  public void RefreshBvhNodes(ulong entityId, CometComponent comet)
   {
-    node.EntityId = entityId;
-    node.Index = index++;
-    foreach (var child in node.Children)
+    if (_simulationContext == IntPtr.Zero) return;
+
+    comet.BvhTree.Clear();
+
+    IntPtr ptr = NativeInterop.avkSimulationContext_getBvhNodes(_simulationContext, entityId, out uint count);
+    if (ptr == IntPtr.Zero || count == 0) return;
+
+    var nodes = new NativeInterop.FfiBvhNode[count];
+    for (int i = 0; i < count; i++)
     {
-      AssignBvhNodeIds(child, entityId, ref index);
+      nodes[i] = Marshal.PtrToStructure<NativeInterop.FfiBvhNode>(ptr + i * Marshal.SizeOf<NativeInterop.FfiBvhNode>());
+    }
+
+    NativeInterop.avkSimulationContext_freeBvhNodes(ptr, count);
+
+    BvhNode? BuildNode(uint index)
+    {
+      if (index >= count) return null;
+      var ffiNode = nodes[index];
+      
+      var node = new BvhNode
+      {
+        EntityId = entityId,
+        Index = index,
+        Name = ffiNode.PrimitiveCount > 0 ? "Leaf Node" : "Inner Node"
+      };
+
+      if (ffiNode.NodeType == 0)
+      {
+        node.Type = BvhNodeType.AABB;
+        node.Details = $"Min: ({ffiNode.MinX:F1}, {ffiNode.MinY:F1}, {ffiNode.MinZ:F1}), Max: ({ffiNode.MaxX:F1}, {ffiNode.MaxY:F1}, {ffiNode.MaxZ:F1})";
+      }
+      else
+      {
+        node.Type = BvhNodeType.OBB;
+        node.Details = $"Center: ({ffiNode.CenterX:F1}, {ffiNode.CenterY:F1}, {ffiNode.CenterZ:F1}), Extents: ({ffiNode.ExtentsX:F1}, {ffiNode.ExtentsY:F1}, {ffiNode.ExtentsZ:F1})";
+      }
+
+      if (ffiNode.PrimitiveCount == 0)
+      {
+        if (ffiNode.LeftChild != uint.MaxValue)
+        {
+          var left = BuildNode(ffiNode.LeftChild);
+          if (left != null) node.Children.Add(left);
+        }
+        if (ffiNode.RightChild != uint.MaxValue)
+        {
+          var right = BuildNode(ffiNode.RightChild);
+          if (right != null) node.Children.Add(right);
+        }
+      }
+
+      return node;
+    }
+
+    if (count > 0)
+    {
+      var root = BuildNode(0);
+      if (root != null)
+      {
+        comet.BvhTree.Add(root);
+      }
     }
   }
 
@@ -830,6 +929,37 @@ public partial class NativeRuntimeService : ObservableObject
     return entity;
   }
 
+  public Entity CreateMeasurement(string name, float[] p1, float[] p2)
+  {
+    var entity = SpawnEntity(name, RootEntities.FirstOrDefault());
+    if (_simulationContext != IntPtr.Zero)
+    {
+      NativeInterop.avkSimulationContext_addMeasurementComponent(
+        _simulationContext,
+        entity.Id,
+        p1[0], p1[1], p1[2],
+        p2[0], p2[1], p2[2]
+      );
+    }
+    return entity;
+  }
+
+  public Entity SpawnImageBillboard(string name, bool isScreenSpace, float width, float height)
+  {
+    var entity = SpawnEntity(name, RootEntities.FirstOrDefault());
+    if (_simulationContext != IntPtr.Zero)
+    {
+      NativeInterop.avkSimulationContext_addImageBillboardComponent(
+        _simulationContext,
+        entity.Id,
+        isScreenSpace,
+        width,
+        height
+      );
+    }
+    return entity;
+  }
+
   public Entity CreateCamera(Entity parent)
   {
     var camera = SpawnEntity("camera", parent);
@@ -858,5 +988,29 @@ public partial class NativeRuntimeService : ObservableObject
   public Entity? GetEntityById(ulong id)
   {
     return _entityMap.TryGetValue(id, out var entity) ? entity : null;
+  }
+
+  public void RemoveEntity(ulong id)
+  {
+    if (_simulationContext != IntPtr.Zero)
+    {
+      NativeInterop.avkSimulationContext_removeEntity(_simulationContext, id);
+    }
+    if (_entityMap.TryGetValue(id, out var entity))
+    {
+      foreach (var parent in _entityMap.Values)
+      {
+        if (parent.Children.Contains(entity))
+        {
+          parent.Children.Remove(entity);
+          break;
+        }
+      }
+      if (RootEntities.Contains(entity))
+      {
+        RootEntities.Remove(entity);
+      }
+      _entityMap.Remove(id);
+    }
   }
 }

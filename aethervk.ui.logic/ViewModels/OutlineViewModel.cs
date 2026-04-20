@@ -49,4 +49,16 @@ public partial class OutlineViewModel : TabItemViewModel
     var console = ServiceLocator.Provider?.GetService(typeof(ConsoleService)) as ConsoleService;
     console?.Log($"Copied entity name to clipboard: {name}");
   }
+
+  [RelayCommand]
+  private void DeleteEntity(Entity entity)
+  {
+    if (entity.IsMeasurement)
+    {
+      _runtimeService.RemoveEntity(entity.Id);
+      
+      var breadcrumb = ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
+      breadcrumb?.ShowMessageAsync("Entity Deleted", $"Deleted measurement: {entity.Name}");
+    }
+  }
 }

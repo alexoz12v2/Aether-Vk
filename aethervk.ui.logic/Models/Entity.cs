@@ -37,6 +37,9 @@ public partial class Entity : ObservableObject
   public ObservableCollection<Entity> Children { get; } = new();
   public ObservableCollection<IComponent> Components { get; } = new();
 
+  public bool IsRoot => Name == "root" || Id == 1;
+  public bool IsMeasurement => Name.StartsWith("Measurement");
+
   public Entity(ulong id, string name)
   {
     Id = id;

@@ -104,6 +104,37 @@ pub struct CursorPushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct MeasurementPushConstants {
+  pub view_proj: [f32; 16],
+  pub p1: [f32; 3],
+  pub _pad0: f32,
+  pub p2: [f32; 3],
+  pub _pad1: f32,
+  pub camera_up: [f32; 3],
+  pub _pad2: f32,
+  pub camera_right: [f32; 3],
+  pub _pad3: f32,
+  pub color: [f32; 3],
+  pub _pad4: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct BillboardPushConstants {
+  pub view_proj: [f32; 16],
+  pub center_pos: [f32; 3],
+  pub _pad0: f32,
+  pub camera_up: [f32; 3],
+  pub _pad1: f32,
+  pub camera_right: [f32; 3],
+  pub _pad2: f32,
+  pub size: [f32; 2],
+  pub is_screen_space: u32,
+  pub texture_id: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct MarkerPushConstants {
   pub view_proj: [f32; 16],
   pub center_pos: [f32; 3],
@@ -184,11 +215,7 @@ pub trait RenderDevice: Send + Sync {
 
   /// Traverses a QuadTree of viewports and issues the respective drawing programs
   /// (3D Viewport or GUI elements)
-  fn set_line_width(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    width: f32,
-  ) -> GpuResult<()>;
+  fn set_line_width(&self, cmd_buffer: CommandBufferHandle, width: f32) -> GpuResult<()>;
 
   fn render_frame(
     &self,
@@ -212,7 +239,7 @@ pub trait RenderDevice: Send + Sync {
   ) -> GpuResult<()>;
 
   fn get_presentation_engine_extent(&self, handle: PresentationEngineHandle)
-    -> GpuResult<[u32; 2]>;
+  -> GpuResult<[u32; 2]>;
 
   /// Acquires the next image. If it returns NeedsRecreation, the caller should
   /// discard the frame, call resize, and try again next frame
@@ -230,6 +257,12 @@ pub trait RenderDevice: Send + Sync {
   /// Generates the background sky image using compute shader
   fn generate_sky(&self) -> GpuResult<()>;
 
+  /// Returns resources for the billboard rendering
+  fn get_or_create_billboard_resources(
+    &self,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult>;
+
   /// Returns resources for the cursor rendering
   fn get_or_create_cursor_resources(
     &self,
@@ -237,6 +270,11 @@ pub trait RenderDevice: Send + Sync {
   ) -> GpuResult<ResourceUploadResult>;
 
   /// Returns resources for marker rendering
+  fn get_or_create_measurement_resources(
+    &self,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult>;
+
   fn get_or_create_marker_resources(
     &self,
     handle: PresentationEngineHandle,
@@ -310,6 +348,18 @@ pub trait RenderDevice: Send + Sync {
     push_constants: &MarkerPushConstants,
   ) -> GpuResult<()>;
 
+  fn push_measurement_constants(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    push_constants: &MeasurementPushConstants,
+  ) -> GpuResult<()>;
+
+  fn push_billboard_constants(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    push_constants: &BillboardPushConstants,
+  ) -> GpuResult<()>;
+
   fn draw_indexed(&self, cmd_buffer: CommandBufferHandle, index_count: u32) -> GpuResult<()>;
 
   fn draw(&self, cmd_buffer: CommandBufferHandle, vertex_count: u32) -> GpuResult<()>;
@@ -365,7 +415,10 @@ pub trait RenderDevice: Send + Sync {
   fn render_bvh(
     &self,
     cmd_buffer: CommandBufferHandle,
-    nodes: &[(crate::math::collision::linear_bvh::LinearBound<f32, aethervk_oshal_rlib::math::vector::vec3::Vec3f32, aethervk_oshal_rlib::math::matrix::mat3::Mat3f32>, aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32)],
+    nodes: &[(
+      crate::math::collision::linear_bvh::LinearBound<f32>,
+      aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+    )],
     view_proj: [f32; 16],
     presentation_engine: PresentationEngineHandle,
   ) -> GpuResult<()>;

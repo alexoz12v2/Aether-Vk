@@ -41,7 +41,7 @@ pub extern "C" fn main(_argc: isize, _argv: *const *const u8) -> isize {
 
   let bytes = BytesMut::from(file_data.as_slice());
 
-  let almanac = match Almanac::default().load_from_bytes(bytes) {
+  let almanac = match Almanac::default().load_from_bytes(bytes, "Default") {
     Ok(a) => a,
     Err(e) => {
       log!("Failed to load SPK: {:?}", e);

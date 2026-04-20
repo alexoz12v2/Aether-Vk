@@ -102,6 +102,13 @@ impl RenderDevice for D3d12RenderDevice {
     unimplemented!()
   }
 
+  fn get_or_create_billboard_resources(
+    &self,
+    _handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult> {
+    unimplemented!()
+  }
+
   fn get_or_create_cursor_resources(
     &self,
     _handle: PresentationEngineHandle,

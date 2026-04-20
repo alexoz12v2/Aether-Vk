@@ -75,4 +75,12 @@ public partial class HorizonJplView : UserControl
       );
     }
   }
+
+  private void OnCometsGridDoubleTapped(object? sender, Avalonia.Input.TappedEventArgs e)
+  {
+    if (_viewModel != null && _viewModel.SelectedComet != null)
+    {
+      _viewModel.FetchDataCommand.Execute(null);
+    }
+  }
 }

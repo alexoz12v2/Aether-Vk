@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel;
 using System.Linq;
+using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
 using Avalonia;
 using Avalonia.Controls;
@@ -157,6 +158,8 @@ public partial class App : Application
         
         desktop.Exit += (sender, args) =>
         {
+           var runtimeService = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+           runtimeService?.Dispose();
            System.Environment.Exit(0);
         };
       }

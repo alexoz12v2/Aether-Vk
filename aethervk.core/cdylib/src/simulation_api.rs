@@ -25,6 +25,7 @@ use thingbuf::mpsc;
 use oshal::os::thread::{self, Thread};
 use spin::rwlock::RwLock;
 use aethervk_oshal_rlib::math::matrix::{Matrix4, SquareMatrix};
+use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
 use aethervk_oshal_rlib::math::vector::Vector3;
 
 #[derive(Default)]
@@ -89,6 +90,7 @@ pub struct RenderPacket {
   pub window_width: u32,
   pub window_height: u32,
   pub outlines_enabled: bool,
+  pub clear_color: [f32; 4],
 }
 
 #[repr(C)]
@@ -136,7 +138,10 @@ fn start_render_thread(
           }
         }
         Ok(None) => break, // Exit loop
-        Err(_) => {
+        Err(e) => {
+          if let thingbuf::mpsc::errors::TryRecvError::Closed = e {
+            break;
+          }
           core::hint::spin_loop();
         }
       }
@@ -167,35 +172,82 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
   payload
     .scene
     .query1::<aethervk_core_rlib::scene::SunComponent, _>(|entity, comp| {
-      if let Some(transform) = payload.scene.global_transform(entity) {
-        render_scene.sun = Some((entity, *comp, transform));
+      if payload
+        .scene
+        .with_component(entity, |_c: &aethervk_core_rlib::scene::HiddenComponent| {})
+        .is_none()
+      {
+        if let Some(transform) = payload.scene.global_transform(entity) {
+          render_scene.sun = Some((entity, *comp, transform));
+        }
       }
     });
 
   payload
     .scene
     .query1::<aethervk_core_rlib::scene::SkyComponent, _>(|entity, comp| {
-      render_scene.sky = Some((entity, *comp));
+      if payload
+        .scene
+        .with_component(entity, |_c: &aethervk_core_rlib::scene::HiddenComponent| {})
+        .is_none()
+      {
+        render_scene.sky = Some((entity, *comp));
+      }
     });
 
   payload
     .scene
     .query1::<aethervk_core_rlib::scene::GridComponent, _>(|entity, comp| {
-      render_scene.grid = Some((entity, *comp));
+      if payload
+        .scene
+        .with_component(entity, |_c: &aethervk_core_rlib::scene::HiddenComponent| {})
+        .is_none()
+      {
+        render_scene.grid = Some((entity, *comp));
+      }
     });
 
   payload
     .scene
     .query1::<aethervk_core_rlib::scene::CursorComponent, _>(|entity, comp| {
-      if let Some(transform) = payload.scene.global_transform(entity) {
+      if payload
+        .scene
+        .with_component(entity, |_c: &aethervk_core_rlib::scene::HiddenComponent| {})
+        .is_none()
+      {
+        if let Some(transform) = payload.scene.global_transform(entity) {
+          render_scene
+            .add_renderable(
+              device,
+              entity,
+              transform.to_mat4(),
+              RenderableDataRef::Cursor(comp),
+              payload.presentation_engine,
+              "Cursor",
+              false,
+              [1.0, 1.0, 1.0, 1.0],
+            )
+            .unwrap();
+        }
+      }
+    });
+
+  payload
+    .scene
+    .query1::<aethervk_core_rlib::scene::MeasurementComponent, _>(|entity, comp| {
+      if payload
+        .scene
+        .with_component(entity, |_c: &aethervk_core_rlib::scene::HiddenComponent| {})
+        .is_none()
+      {
         render_scene
           .add_renderable(
             device,
             entity,
-            transform.to_mat4(),
-            RenderableDataRef::Cursor(comp),
+            aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::identity(),
+            RenderableDataRef::Measurement(comp),
             payload.presentation_engine,
-            "Cursor",
+            "Measurement",
             false,
             [1.0, 1.0, 1.0, 1.0],
           )
@@ -203,8 +255,40 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
       }
     });
 
+  payload
+    .scene
+    .query1::<aethervk_core_rlib::scene::ImageBillboardComponent, _>(|entity, comp| {
+      if payload
+        .scene
+        .with_component(entity, |_c: &aethervk_core_rlib::scene::HiddenComponent| {})
+        .is_none()
+      {
+        let mut model_matrix = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::identity();
+        if let Some(transform) = payload.scene.global_transform(entity) {
+          model_matrix = transform.to_mat4();
+        }
+        render_scene
+          .add_renderable(
+            device,
+            entity,
+            model_matrix,
+            RenderableDataRef::ImageBillboard(comp),
+            payload.presentation_engine,
+            "ImageBillboard",
+            false,
+            [1.0, 1.0, 1.0, 1.0],
+          )
+          .unwrap();
+      }
+    });
   for item in &payload.packet.render_items {
-    let is_hidden = payload.scene.with_component(item.entity_id, |_c: &aethervk_core_rlib::scene::HiddenComponent| {}).is_some();
+    let is_hidden = payload
+      .scene
+      .with_component(
+        item.entity_id,
+        |_c: &aethervk_core_rlib::scene::HiddenComponent| {},
+      )
+      .is_some();
     if is_hidden {
       continue;
     }
@@ -214,8 +298,20 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
         let mut draw_outline = payload.packet.outlines_enabled;
         let mut outline_color = [0.0, 0.0, 0.0, 0.0]; // Hidden by default, unless overriden
 
-        let is_selected = payload.scene.with_component(item.entity_id, |_c: &aethervk_core_rlib::scene::SelectedComponent| {}).is_some();
-        let is_following = payload.scene.with_component(item.entity_id, |_c: &aethervk_core_rlib::scene::FollowingComponent| {}).is_some();
+        let is_selected = payload
+          .scene
+          .with_component(
+            item.entity_id,
+            |_c: &aethervk_core_rlib::scene::SelectedComponent| {},
+          )
+          .is_some();
+        let is_following = payload
+          .scene
+          .with_component(
+            item.entity_id,
+            |_c: &aethervk_core_rlib::scene::FollowingComponent| {},
+          )
+          .is_some();
 
         if is_selected {
           draw_outline = true;
@@ -248,25 +344,36 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
   // BVH debug rendering
   let mut all_bvh_nodes = Vec::new();
   for item in &payload.packet.render_items {
-    let is_hidden = payload.scene.with_component(item.entity_id, |_c: &aethervk_core_rlib::scene::HiddenComponent| {}).is_some();
+    let is_hidden = payload
+      .scene
+      .with_component(
+        item.entity_id,
+        |_c: &aethervk_core_rlib::scene::HiddenComponent| {},
+      )
+      .is_some();
     if is_hidden {
       continue;
     }
     let mut dbg_states = None;
-    payload.scene.with_component(item.entity_id, |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
-      dbg_states = Some(dbg.node_render_states.clone());
-    });
+    payload.scene.with_component(
+      item.entity_id,
+      |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
+        dbg_states = Some(dbg.node_render_states.clone());
+      },
+    );
 
     if let Some(states) = dbg_states {
-      payload.scene.with_component(item.entity_id, |mesh: &PhysicalMeshComponent| {
-        if let Some(bvh) = &mesh.mesh.bvh {
-           for (i, &render) in states.iter().enumerate() {
-             if render && i < bvh.nodes.len() {
+      payload
+        .scene
+        .with_component(item.entity_id, |mesh: &PhysicalMeshComponent| {
+          if let Some(bvh) = &mesh.mesh.bvh {
+            for (i, &render) in states.iter().enumerate() {
+              if render && i < bvh.nodes.len() {
                 all_bvh_nodes.push((bvh.nodes[i].bound.clone(), item.model_matrix));
-             }
-           }
-        }
-      });
+              }
+            }
+          }
+        });
     }
   }
 
@@ -305,6 +412,14 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
       device.begin_command_buffer(cmd_buffer)?;
       device.update_sun(cmd_buffer, payload.sun_entity, &sun_comp)?;
       device.begin_render_pass(cmd_buffer, payload.presentation_engine, &acquire_result)?;
+
+      let _ = device.render_ui_rect(
+        cmd_buffer,
+        payload.packet.clear_color,
+        [-1.0, -1.0],
+        [2.0, 2.0],
+        payload.presentation_engine,
+      );
 
       let extent = device.get_presentation_engine_extent(payload.presentation_engine)?;
       let root_viewport = gpu::Viewport {
@@ -353,8 +468,63 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
       let view_proj = payload.packet.camera_component.projection * view;
 
       if !all_bvh_nodes.is_empty() {
-        let _ = device.render_bvh(cmd_buffer, &all_bvh_nodes, view_proj.into(), payload.presentation_engine);
+        let _ = device.render_bvh(
+          cmd_buffer,
+          &all_bvh_nodes,
+          view_proj.into(),
+          payload.presentation_engine,
+        );
       }
+
+      let font_path = if cfg!(target_os = "windows") {
+        "C:/Windows/Fonts/segoeui.ttf"
+      } else if cfg!(target_os = "macos") {
+        "/System/Library/Fonts/SFNS.ttf"
+      } else {
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+      };
+
+      payload
+        .scene
+        .query1::<aethervk_core_rlib::scene::MeasurementComponent, _>(|entity, comp| {
+          if payload
+            .scene
+            .with_component(entity, |_c: &aethervk_core_rlib::scene::HiddenComponent| {})
+            .is_none()
+          {
+            let mid = comp.pos1 + (comp.pos2 - comp.pos1) * 0.5;
+            let mid_vec4 = aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+              mid.x(),
+              mid.y(),
+              mid.z(),
+              1.0,
+            );
+            let mut clip = view_proj.mul_vector(mid_vec4);
+            if clip.w() > 0.0 {
+              clip = clip / clip.w();
+              if clip.z() >= 0.0 && clip.z() <= 1.0 {
+                let ndc_x = clip.x();
+                let ndc_y = clip.y();
+
+                let screen_x = (ndc_x * 0.5 + 0.5) * payload.packet.window_width as f32;
+                let screen_y = (ndc_y * 0.5 + 0.5) * payload.packet.window_height as f32;
+
+                let distance = (comp.pos2 - comp.pos1).length();
+                let text = alloc::format!("{:.3} m", distance);
+
+                let _ = device.render_text(
+                  cmd_buffer,
+                  &text,
+                  font_path,
+                  24.0, // Or some reasonable font size
+                  [1.0, 1.0, 1.0, 1.0],
+                  [screen_x, screen_y],
+                  payload.presentation_engine,
+                );
+              }
+            }
+          }
+        });
 
       device.end_render_pass(cmd_buffer)?;
       device.submit_command_buffer(cmd_buffer)?;
@@ -401,9 +571,12 @@ pub struct SimulationContext {
   pub window_width: u32,
   pub window_height: u32,
   pub logic_state: RwLock<LogicState>,
-  
-  pub model_registry: BTreeMap<u64, (String, simulation::comet::Comet)>,
+
+  pub model_registry: BTreeMap<u64, String>,
   pub next_model_id: u64,
+  pub mesh_cache: Arc<aethervk_core_rlib::scene::AssetCache<simulation::comet::Comet>>,
+  pub physics_scene: Arc<RwLock<aethervk_core_rlib::physics::physics_scene::PhysicsScene>>,
+  pub clear_color: [f32; 4],
 }
 
 impl SimulationContext {
@@ -417,6 +590,21 @@ impl SimulationContext {
   fn get_entity(&self, external_id: u64) -> Option<EntityId> {
     self.entity_map.get(&external_id).copied()
   }
+}
+
+static LOGGER_CALLBACK: core::sync::atomic::AtomicPtr<()> =
+  core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setLoggerCallback(
+  cb: Option<extern "C" fn(*const c_char)>,
+) {
+  let ptr = match cb {
+    Some(f) => f as *mut (),
+    None => core::ptr::null_mut(),
+  };
+  LOGGER_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
 }
 
 static BREADCRUMB_CALLBACK: core::sync::atomic::AtomicPtr<()> =
@@ -511,7 +699,12 @@ pub unsafe extern "C" fn avkSimulationContext_importModel(
     emit_breadcrumb(1, &format!("Generating BVH for path: {}", path_str));
     let model_id = ctx.next_model_id;
     ctx.next_model_id += 1;
-    ctx.model_registry.insert(model_id, (String::from(path_str), mesh));
+
+    // Add to cache
+    ctx.mesh_cache.insert(String::from(path_str), mesh);
+
+    // Add to registry
+    ctx.model_registry.insert(model_id, String::from(path_str));
     return model_id;
   }
 
@@ -529,11 +722,11 @@ pub unsafe extern "C" fn avkSimulationContext_unloadModel(
     return;
   }
   let ctx = unsafe { &mut *ctx };
-  
+
   if ctx.model_registry.remove(&model_id).is_some() {
-     // NOTE: Cascade removal from the scene of instances is complex without an 'InstanceComponent'. 
-     // For now, we only remove it from the registry. Full ECS cleanup should happen on user request.
-     emit_breadcrumb(1, &format!("Unloaded model {}", model_id));
+    // NOTE: Cascade removal from the scene of instances is complex without an 'InstanceComponent'.
+    // For now, we only remove it from the registry. Full ECS cleanup should happen on user request.
+    emit_breadcrumb(1, &format!("Unloaded model {}", model_id));
   }
 }
 
@@ -549,15 +742,15 @@ pub unsafe extern "C" fn avkSimulationContext_spawnModelInstance(
   }
   let ctx = unsafe { &mut *ctx };
 
-  if let Some((_, mesh)) = ctx.model_registry.get(&model_id) {
+  if let Some(path_str) = ctx.model_registry.get(&model_id) {
     let name_str = if name.is_null() {
       "ModelInstance"
     } else {
       unsafe { CStr::from_ptr(name).to_str().unwrap_or("ModelInstance") }
     };
-    
+
     let entity_id = ctx.scene.spawn_entity(name_str);
-    
+
     let _ = ctx.scene.add_component(
       entity_id,
       TransformComponent {
@@ -567,16 +760,21 @@ pub unsafe extern "C" fn avkSimulationContext_spawnModelInstance(
       },
     );
 
-    // Duplicate mesh for the instance. Ideally we should reference it, but PhysicalMeshComponent owns it currently.
-    // Assuming Comet implements Clone or we can clone it. Wait, Comet does not derive Clone. 
-    // We can recreate it or just implement Clone for Comet.
-    // Let's implement Clone for Comet in simulation/comet.rs.
-    let mesh_clone = mesh.clone(); 
-    
+    let mesh_arc = if let Some(cached_mesh) = ctx.mesh_cache.get(path_str) {
+      cached_mesh
+    } else {
+      if let Ok(loaded_mesh) = simulation::comet::load_comet_from_gltf(path_str, false) {
+        ctx.mesh_cache.insert(path_str.clone(), loaded_mesh)
+      } else {
+        return 0; // Failed to load mesh
+      }
+    };
+
     let _ = ctx.scene.add_component(
       entity_id,
       PhysicalMeshComponent {
-        mesh: mesh_clone,
+        asset_path: path_str.clone(),
+        mesh: mesh_arc,
         emissive_intensity: 0.0,
         emissive_color: [0.0, 0.0, 0.0],
       },
@@ -799,87 +997,162 @@ pub unsafe extern "C" fn avkSimulationContext_raycast(
   let mut hit_point = Vec3f32::from_components(0.0, 0.0, 0.0);
   let mut hit_entity = None;
 
-  // TODO: Use BVH from PhysicalScene once implemented.
-  // For now, cycle through all PhysicalMeshComponents and their triangles.
+  let ray = aethervk_core_rlib::math::collision::intersection::Ray {
+    origin: ro,
+    direction: rd,
+    length: core::f32::MAX,
+  };
+
+  let mut hit_instances = alloc::vec::Vec::new();
+  {
+    let ps = ctx.physics_scene.read();
+    for node in ps.world_bvh.nodes.iter() {
+      let hits_instance = match &node.bound {
+        aethervk_core_rlib::math::collision::linear_bvh::LinearBound::AABB(aabb) => {
+          aethervk_core_rlib::math::collision::intersection::intersect_ray_aabb(&ray, aabb)
+        }
+        aethervk_core_rlib::math::collision::linear_bvh::LinearBound::OBB(obb) => {
+          aethervk_core_rlib::math::collision::intersection::intersect_ray_obb::<
+            f32,
+            Vec3f32,
+            aethervk_oshal_rlib::math::matrix::mat3::Mat3f32,
+          >(&ray, obb)
+        }
+      };
+
+      if hits_instance {
+        hit_instances.push(ps.entity_mappings[node.left_child_or_primitive_offset as usize]);
+      }
+    }
+  }
+
   ctx
     .scene
     .query2::<PhysicalMeshComponent, TransformComponent, _>(|entity, mesh, transform| {
-      let model_matrix = Mat4x4f32::translation(transform.position)
-        * <Mat4x4f32 as Matrix4>::from_quat_custom_frame(transform.rotation)
-        * Mat4x4f32::from_scale(transform.scale);
+      if !hit_instances.contains(&entity) {
+        return;
+      }
 
-      let inv_model = model_matrix.inverse().unwrap_or(Mat4x4f32::identity());
+      if let Some(bvh) = &mesh.mesh.bvh {
+        let model_matrix = Mat4x4f32::translation(transform.position)
+          * <Mat4x4f32 as Matrix4>::from_quat_custom_frame(transform.rotation)
+          * Mat4x4f32::from_scale(transform.scale);
 
-      // Transform ray to local space
-      let local_ro = inv_model.mul_vector(
-        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
-          ro.x(),
-          ro.y(),
-          ro.z(),
-          1.0,
-        ),
-      );
-      let local_rd = inv_model.mul_vector(
-        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
-          rd.x(),
-          rd.y(),
-          rd.z(),
-          0.0,
-        ),
-      );
+        let inv_model = model_matrix.inverse().unwrap_or(Mat4x4f32::identity());
 
-      let local_ro = Vec3f32::from_components(local_ro.x(), local_ro.y(), local_ro.z());
-      let local_rd = Vec3f32::from_components(local_rd.x(), local_rd.y(), local_rd.z()).normalize();
+        let local_ro = inv_model.mul_vector(
+          aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+            ro.x(),
+            ro.y(),
+            ro.z(),
+            1.0,
+          ),
+        );
+        let local_rd = inv_model.mul_vector(
+          aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+            rd.x(),
+            rd.y(),
+            rd.z(),
+            0.0,
+          ),
+        );
 
-      for i in (0..mesh.mesh.indices.len()).step_by(3) {
-        if i + 2 >= mesh.mesh.indices.len() {
-          break;
-        }
-        let v0 = mesh.mesh.vertices[mesh.mesh.indices[i] as usize].position;
-        let v1 = mesh.mesh.vertices[mesh.mesh.indices[i + 1] as usize].position;
-        let v2 = mesh.mesh.vertices[mesh.mesh.indices[i + 2] as usize].position;
+        let local_ro = Vec3f32::from_components(local_ro.x(), local_ro.y(), local_ro.z());
+        let local_rd =
+          Vec3f32::from_components(local_rd.x(), local_rd.y(), local_rd.z()).normalize();
 
-        let v0 = Vec3f32::from_components(v0[0], v0[1], v0[2]);
-        let v1 = Vec3f32::from_components(v1[0], v1[1], v1[2]);
-        let v2 = Vec3f32::from_components(v2[0], v2[1], v2[2]);
+        let local_ray = aethervk_core_rlib::math::collision::intersection::Ray {
+          origin: local_ro,
+          direction: local_rd,
+          length: core::f32::MAX,
+        };
 
-        let edge1 = v1 - v0;
-        let edge2 = v2 - v0;
-        let h = local_rd.cross(edge2);
-        let a = edge1.dot(h);
-
-        if a > -1e-6 && a < 1e-6 {
-          continue;
-        } // parallel
-
-        let f = 1.0 / a;
-        let s = local_ro - v0;
-        let u = f * s.dot(h);
-        if u < 0.0 || u > 1.0 {
-          continue;
+        let mut stack = alloc::vec::Vec::new();
+        if !bvh.nodes.is_empty() {
+          stack.push(0);
         }
 
-        let q = s.cross(edge1);
-        let v = f * local_rd.dot(q);
-        if v < 0.0 || u + v > 1.0 {
-          continue;
-        }
+        while let Some(node_idx) = stack.pop() {
+          let local_node = &bvh.nodes[node_idx];
 
-        let t = f * edge2.dot(q);
-        if t > 1e-5 && t < closest_t {
-          closest_t = t;
-          let local_hit = local_ro + local_rd * t;
+          let hit_local_node = match &local_node.bound {
+            aethervk_core_rlib::math::collision::linear_bvh::LinearBound::AABB(aabb) => {
+              aethervk_core_rlib::math::collision::intersection::intersect_ray_aabb(
+                &local_ray, aabb,
+              )
+            }
+            aethervk_core_rlib::math::collision::linear_bvh::LinearBound::OBB(obb) => {
+              aethervk_core_rlib::math::collision::intersection::intersect_ray_obb::<
+                f32,
+                Vec3f32,
+                Mat3f32,
+              >(&local_ray, obb)
+            }
+          };
 
-          let global_hit = model_matrix.mul_vector(
-            aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
-              local_hit.x(),
-              local_hit.y(),
-              local_hit.z(),
-              1.0,
-            ),
-          );
-          hit_point = Vec3f32::from_components(global_hit.x(), global_hit.y(), global_hit.z());
-          hit_entity = Some(entity);
+          if hit_local_node {
+            if local_node.primitive_count > 0 {
+              let prim_start = local_node.left_child_or_primitive_offset as usize;
+              let prim_end = prim_start + local_node.primitive_count as usize;
+              for j in prim_start..prim_end {
+                let tri_idx = bvh.primitives[j];
+                let v0 = mesh.mesh.vertices[mesh.mesh.indices[tri_idx * 3] as usize].position;
+                let v1 = mesh.mesh.vertices[mesh.mesh.indices[tri_idx * 3 + 1] as usize].position;
+                let v2 = mesh.mesh.vertices[mesh.mesh.indices[tri_idx * 3 + 2] as usize].position;
+
+                let v0 = Vec3f32::from_components(v0[0], v0[1], v0[2]);
+                let v1 = Vec3f32::from_components(v1[0], v1[1], v1[2]);
+                let v2 = Vec3f32::from_components(v2[0], v2[1], v2[2]);
+
+                let edge1 = v1 - v0;
+                let edge2 = v2 - v0;
+                let h = local_rd.cross(edge2);
+                let a = edge1.dot(h);
+
+                if a > -1e-6 && a < 1e-6 {
+                  continue;
+                }
+
+                let f = 1.0 / a;
+                let s = local_ro - v0;
+                let u = f * s.dot(h);
+                if u < 0.0 || u > 1.0 {
+                  continue;
+                }
+
+                let q = s.cross(edge1);
+                let v = f * local_rd.dot(q);
+                if v < 0.0 || u + v > 1.0 {
+                  continue;
+                }
+
+                let t = f * edge2.dot(q);
+                if t > 1e-5 && t < closest_t {
+                  closest_t = t;
+                  let local_hit = local_ro + local_rd * t;
+
+                  let global_hit = model_matrix.mul_vector(
+                    aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+                      local_hit.x(),
+                      local_hit.y(),
+                      local_hit.z(),
+                      1.0,
+                    ),
+                  );
+                  hit_point =
+                    Vec3f32::from_components(global_hit.x(), global_hit.y(), global_hit.z());
+                  hit_entity = Some(entity);
+                }
+              }
+            } else {
+              if local_node.right_child_offset != u32::MAX {
+                stack.push(local_node.right_child_offset as usize);
+              }
+              if local_node.left_child_or_primitive_offset != u32::MAX {
+                stack.push(local_node.left_child_or_primitive_offset as usize);
+              }
+            }
+          }
         }
       }
     });
@@ -996,11 +1269,8 @@ pub unsafe extern "C" fn avkSimulationContext_getEpochLimits(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_setAssetPath(
-  ctx: *mut SimulationContext,
-  path: *const c_char,
-) {
-  if ctx.is_null() || path.is_null() {
+pub unsafe extern "C" fn avkSimulationContext_setAssetPath(path: *const c_char) {
+  if path.is_null() {
     return;
   }
 
@@ -1095,6 +1365,9 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
   }
 
   let render_device_handle = render_device_handle_opt.unwrap().unwrap();
+
+  let width = if width == 0 { 800 } else { width };
+  let height = if height == 0 { 600 } else { height };
 
   let presentation_engine = {
     let params = gpu::PresentationEngineParams::windowless(width, height);
@@ -1224,6 +1497,10 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
   let _ = scene.add_component(grid_entity, GridComponent {});
   scene.set_parent(grid_entity, Some(root_entity));
 
+  let physics_scene = Arc::new(RwLock::new(
+    aethervk_core_rlib::physics::physics_scene::PhysicsScene::build_from_scene(&scene),
+  ));
+
   let mut ctx = Box::new(SimulationContext {
     scene: Arc::new(scene),
     presentation_engine,
@@ -1245,6 +1522,9 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
     logic_state: RwLock::new(LogicState::default()),
     model_registry: BTreeMap::new(),
     next_model_id: 1,
+    mesh_cache: Arc::new(aethervk_core_rlib::scene::AssetCache::new()),
+    physics_scene,
+    clear_color: [0.0, 0.0, 0.0, 1.0],
   });
 
   ctx.register_entity(root_entity);
@@ -1320,6 +1600,25 @@ pub unsafe extern "C" fn avkSimulationContext_spawnEntity(
   };
   let id = ctx.scene.spawn_entity(name_str);
   ctx.register_entity(id)
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_removeEntity(
+  ctx: *mut SimulationContext,
+  entity: u64,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx = unsafe { &mut *ctx };
+  if let Some(entity_id) = ctx.get_entity(entity) {
+    ctx.scene.remove_entity(entity_id);
+    ctx.entity_map.remove(&entity);
+    true
+  } else {
+    false
+  }
 }
 
 #[unsafe(no_mangle)]
@@ -1486,6 +1785,251 @@ pub unsafe extern "C" fn avkSimulationContext_getTransformComponent(
   }
   false
 }
+#[repr(C)]
+pub struct FfiBvhNode {
+  pub node_type: u32, // 0 = AABB, 1 = OBB
+  pub min_x: f32,
+  pub min_y: f32,
+  pub min_z: f32,
+  pub max_x: f32,
+  pub max_y: f32,
+  pub max_z: f32,
+  pub center_x: f32,
+  pub center_y: f32,
+  pub center_z: f32,
+  pub extents_x: f32,
+  pub extents_y: f32,
+  pub extents_z: f32,
+  pub left_child: u32,
+  pub right_child: u32,
+  pub primitive_count: u32,
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getBvhNodes(
+  ctx: *mut SimulationContext,
+  entity: u64,
+  count: *mut u32,
+) -> *mut FfiBvhNode {
+  if ctx.is_null() {
+    if !count.is_null() {
+      unsafe {
+        *count = 0;
+      }
+    }
+    return core::ptr::null_mut();
+  }
+  let ctx = unsafe { &mut *ctx };
+
+  if let Some(entity_id) = ctx.get_entity(entity) {
+    let mut ffi_nodes = Vec::new();
+
+    ctx
+      .scene
+      .with_component(entity_id, |mesh: &PhysicalMeshComponent| {
+        if let Some(bvh) = &mesh.mesh.bvh {
+          for node in &bvh.nodes {
+            let mut ffi_node = FfiBvhNode {
+              node_type: 0,
+              min_x: 0.0,
+              min_y: 0.0,
+              min_z: 0.0,
+              max_x: 0.0,
+              max_y: 0.0,
+              max_z: 0.0,
+              center_x: 0.0,
+              center_y: 0.0,
+              center_z: 0.0,
+              extents_x: 0.0,
+              extents_y: 0.0,
+              extents_z: 0.0,
+              left_child: node.left_child_or_primitive_offset,
+              right_child: node.right_child_offset,
+              primitive_count: node.primitive_count,
+            };
+
+            match &node.bound {
+              aethervk_core_rlib::math::collision::linear_bvh::LinearBound::AABB(aabb) => {
+                ffi_node.node_type = 0;
+                ffi_node.min_x = aabb.min::<Vec3f32>().x();
+                ffi_node.min_y = aabb.min::<Vec3f32>().y();
+                ffi_node.min_z = aabb.min::<Vec3f32>().z();
+                ffi_node.max_x = aabb.max::<Vec3f32>().x();
+                ffi_node.max_y = aabb.max::<Vec3f32>().y();
+                ffi_node.max_z = aabb.max::<Vec3f32>().z();
+              }
+              aethervk_core_rlib::math::collision::linear_bvh::LinearBound::OBB(obb) => {
+                ffi_node.node_type = 1;
+                let t: Vec3f32 = obb.translation();
+                let ext: Vec3f32 = obb.half_extent();
+                ffi_node.center_x = t.x();
+                ffi_node.center_y = t.y();
+                ffi_node.center_z = t.z();
+                ffi_node.extents_x = ext.x();
+                ffi_node.extents_y = ext.y();
+                ffi_node.extents_z = ext.z();
+              }
+            }
+            ffi_nodes.push(ffi_node);
+          }
+        }
+      });
+
+    if !count.is_null() {
+      unsafe {
+        *count = ffi_nodes.len() as u32;
+      }
+    }
+
+    if ffi_nodes.is_empty() {
+      return core::ptr::null_mut();
+    }
+
+    let ptr = ffi_nodes.as_mut_ptr();
+    core::mem::forget(ffi_nodes);
+    return ptr;
+  }
+
+  if !count.is_null() {
+    unsafe {
+      *count = 0;
+    }
+  }
+  core::ptr::null_mut()
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_freeBvhNodes(ptr: *mut FfiBvhNode, count: u32) {
+  if !ptr.is_null() {
+    let _ = unsafe { Vec::from_raw_parts(ptr, count as usize, count as usize) };
+  }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setBvhNodeVisibility(
+  ctx: *mut SimulationContext,
+  entity: u64,
+  node_index: u32,
+  is_visible: bool,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx = unsafe { &mut *ctx };
+  if let Some(entity_id) = ctx.get_entity(entity) {
+    let mut bvh_len = 0;
+    ctx.scene.with_component(
+      entity_id,
+      |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+        if let Some(bvh) = &mesh.mesh.bvh {
+          bvh_len = bvh.nodes.len();
+        }
+      },
+    );
+
+    if bvh_len > 0 {
+      let mut added = false;
+      ctx.scene.with_component_mut(
+        entity_id,
+        |dbg: &mut aethervk_core_rlib::scene::BvhDebugComponent| {
+          if (node_index as usize) < dbg.node_render_states.len() {
+            dbg.node_render_states[node_index as usize] = is_visible;
+          }
+          added = true;
+        },
+      );
+
+      if !added {
+        let mut states = vec![false; bvh_len];
+        if (node_index as usize) < states.len() {
+          states[node_index as usize] = is_visible;
+        }
+        let _ = ctx.scene.add_component(
+          entity_id,
+          aethervk_core_rlib::scene::BvhDebugComponent {
+            node_render_states: states,
+          },
+        );
+      }
+    }
+  }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setEntityVisibility(
+  ctx: *mut SimulationContext,
+  entity: u64,
+  visible: bool,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx = unsafe { &mut *ctx };
+  if let Some(entity_id) = ctx.get_entity(entity) {
+    if visible {
+      let _ = ctx
+        .scene
+        .remove_component::<aethervk_core_rlib::scene::HiddenComponent>(entity_id);
+    } else {
+      let _ = ctx
+        .scene
+        .add_component(entity_id, aethervk_core_rlib::scene::HiddenComponent {});
+    }
+  }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setEntitySelected(
+  ctx: *mut SimulationContext,
+  entity: u64,
+  selected: bool,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx = unsafe { &mut *ctx };
+  if let Some(entity_id) = ctx.get_entity(entity) {
+    if selected {
+      let _ = ctx
+        .scene
+        .add_component(entity_id, aethervk_core_rlib::scene::SelectedComponent {});
+    } else {
+      let _ = ctx
+        .scene
+        .remove_component::<aethervk_core_rlib::scene::SelectedComponent>(entity_id);
+    }
+  }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setEntityFollowing(
+  ctx: *mut SimulationContext,
+  entity: u64,
+  following: bool,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx = unsafe { &mut *ctx };
+  if let Some(entity_id) = ctx.get_entity(entity) {
+    if following {
+      let _ = ctx
+        .scene
+        .add_component(entity_id, aethervk_core_rlib::scene::FollowingComponent {});
+    } else {
+      let _ = ctx
+        .scene
+        .remove_component::<aethervk_core_rlib::scene::FollowingComponent>(entity_id);
+    }
+  }
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_addPhysicalMeshComponent(
@@ -1503,17 +2047,27 @@ pub unsafe extern "C" fn avkSimulationContext_addPhysicalMeshComponent(
   let ctx = unsafe { &mut *ctx };
   if let Some(entity_id) = ctx.get_entity(entity) {
     let path_str = unsafe { CStr::from_ptr(gltf_path).to_str().unwrap_or("") };
-    if let Ok(mesh) = simulation::comet::load_comet_from_gltf(path_str, false) {
-      let _ = ctx.scene.add_component(
-        entity_id,
-        PhysicalMeshComponent {
-          mesh,
-          emissive_intensity,
-          emissive_color: [emissive_r, emissive_g, emissive_b],
-        },
-      );
-      return true;
-    }
+
+    let mesh_arc = if let Some(cached_mesh) = ctx.mesh_cache.get(path_str) {
+      cached_mesh
+    } else {
+      if let Ok(loaded_mesh) = simulation::comet::load_comet_from_gltf(path_str, false) {
+        ctx.mesh_cache.insert(String::from(path_str), loaded_mesh)
+      } else {
+        return false;
+      }
+    };
+
+    let _ = ctx.scene.add_component(
+      entity_id,
+      PhysicalMeshComponent {
+        asset_path: String::from(path_str),
+        mesh: mesh_arc,
+        emissive_intensity,
+        emissive_color: [emissive_r, emissive_g, emissive_b],
+      },
+    );
+    return true;
   }
   false
 }
@@ -1575,12 +2129,26 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraComponent(
   }
   let ctx = unsafe { &mut *ctx };
   if let Some(entity_id) = ctx.get_entity(entity) {
+    let mut dist = 100.0;
+    if let Some(transform) = ctx.scene.global_transform(entity_id) {
+      let cursor_id = ctx.cursor_entity;
+      if let Some(cursor_transform) = ctx.scene.global_transform(cursor_id) {
+        dist = (transform.position - cursor_transform.position).length();
+        if dist < 0.1 {
+          dist = 0.1;
+        }
+      }
+    }
+
     ctx
       .scene
       .with_component_mut(entity_id, |c: &mut CameraComponent| {
+        c.near_plane = near;
+        c.far_plane = far;
         if is_orthographic {
-          // Simple orthographic mapping based on distance/fov as scale
-          let ortho_height = fov * 2.0; // using fov as orthographic scale
+          // Use camera distance to calculate orthographic size to roughly match perspective framing
+          // at the cursor plane.
+          let ortho_height = dist * (fov.to_radians() / 2.0).tan() * 2.0;
           let ortho_width = ortho_height * aspect;
           c.projection = Mat4x4f32::orthographic_vk(
             -ortho_width / 2.0,
@@ -1676,6 +2244,30 @@ pub unsafe extern "C" fn avkSimulationContext_addSunComponent(
         resolution: (res_x, res_y, res_z),
       },
     );
+
+    // Add emissive core for the sun
+    let sun_core_id = ctx.scene.spawn_entity("sun_core");
+    let mut sun_sphere =
+      aethervk_core_rlib::simulation::comet::generate_uv_sphere(0.45 * 0.95, 64, 64);
+    sun_sphere.albedo_map = None;
+    let _ = ctx.scene.add_component(
+      sun_core_id,
+      TransformComponent {
+        position: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+        scale: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    );
+    let _ = ctx.scene.add_component(
+      sun_core_id,
+      PhysicalMeshComponent {
+        asset_path: alloc::string::String::new(),
+        mesh: alloc::sync::Arc::from(sun_sphere),
+        emissive_intensity: 0.9,
+        emissive_color: [1.0, 0.35, 0.02],
+      },
+    );
+    ctx.scene.set_parent(sun_core_id, Some(entity_id));
   }
 }
 
@@ -1696,6 +2288,66 @@ pub unsafe extern "C" fn avkSimulationContext_addGridComponent(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_addMeasurementComponent(
+  ctx: *mut SimulationContext,
+  entity: u64,
+  p1_x: f32,
+  p1_y: f32,
+  p1_z: f32,
+  p2_x: f32,
+  p2_y: f32,
+  p2_z: f32,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx = unsafe { &mut *ctx };
+  if let Some(entity_id) = ctx.get_entity(entity) {
+    let _ = ctx.scene.add_component(
+      entity_id,
+      aethervk_core_rlib::scene::MeasurementComponent {
+        pos1: Vec3f32::from_components(p1_x, p1_y, p1_z),
+        pos2: Vec3f32::from_components(p2_x, p2_y, p2_z),
+        points: 14.0,
+      },
+    );
+  }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_addImageBillboardComponent(
+  ctx: *mut SimulationContext,
+  entity: u64,
+  is_screen_space: bool,
+  width: f32,
+  height: f32,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx = unsafe { &mut *ctx };
+  if let Some(entity_id) = ctx.get_entity(entity) {
+    let billboard_type = if is_screen_space {
+      aethervk_core_rlib::scene::BillboardType::ScreenSpace {
+        pct_width: width,
+        pct_height: height,
+      }
+    } else {
+      aethervk_core_rlib::scene::BillboardType::WorldSpace { width, height }
+    };
+    let _ = ctx.scene.add_component(
+      entity_id,
+      aethervk_core_rlib::scene::ImageBillboardComponent {
+        texture_id: 0,
+        billboard_type,
+      },
+    );
+  }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_renderTick(ctx: *mut SimulationContext) {
   if ctx.is_null() {
     return;
@@ -1704,6 +2356,11 @@ pub unsafe extern "C" fn avkSimulationContext_renderTick(ctx: *mut SimulationCon
 
   let mut render_items = Vec::new();
   let mut matrix_stack = vec![Mat4x4f32::identity()];
+
+  {
+    let mut ps = ctx.physics_scene.write();
+    *ps = aethervk_core_rlib::physics::physics_scene::PhysicsScene::build_from_scene(&ctx.scene);
+  }
 
   ctx.scene.traverse_with_hooks(
     ctx.root_entity,
@@ -1764,10 +2421,11 @@ pub unsafe extern "C" fn avkSimulationContext_renderTick(ctx: *mut SimulationCon
     outlines_enabled: ctx
       .outlines_enabled
       .load(core::sync::atomic::Ordering::Relaxed),
+    clear_color: ctx.clear_color,
   };
 
   if let Some(tx) = &ctx.render_tx {
-    let _ = tx.try_send(Some(packet));
+    let _ = tx.send(Some(packet));
   }
 }
 
@@ -1883,17 +2541,25 @@ pub unsafe extern "C" fn avkSimulationContext_processCommand(
     1 => {
       // ZoomCamera
       let amount = command.float_val_1;
-      let zoom_speed = dist * 0.1;
 
-      let forward = cam_rot.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
-
-      let new_pos = cam_pos + forward * (amount * zoom_speed);
-
-      ctx
+      let is_ortho = ctx
         .scene
-        .with_component_mut(ctx.camera_entity, |c: &mut TransformComponent| {
-          c.position = new_pos;
-        });
+        .with_component(ctx.camera_entity, |c: &CameraComponent| {
+          c.projection.column(3).unwrap().w().abs() > 0.5
+        })
+        .unwrap_or(false);
+
+      if !is_ortho {
+        let zoom_speed = dist * 0.01;
+        let forward = cam_rot.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
+        let new_pos = cam_pos + forward * (amount * zoom_speed);
+
+        ctx
+          .scene
+          .with_component_mut(ctx.camera_entity, |c: &mut TransformComponent| {
+            c.position = new_pos;
+          });
+      }
     }
     2 => {
       // ResetCamera
@@ -1976,36 +2642,65 @@ pub unsafe extern "C" fn avkSimulationContext_processCommand(
       // FollowEntity
       let target_entity_id = ctx.get_entity(command.ulong_val);
       if let Some(target) = target_entity_id {
-        let _ = ctx.scene.add_component(target, aethervk_core_rlib::scene::FollowingComponent {});
+        let _ = ctx
+          .scene
+          .add_component(target, aethervk_core_rlib::scene::FollowingComponent {});
       }
     }
     6 => {
       // UnfollowEntity
       let mut following_entities = Vec::new();
-      ctx.scene.query1::<aethervk_core_rlib::scene::FollowingComponent, _>(|entity, _| {
-        following_entities.push(entity);
-      });
+      ctx
+        .scene
+        .query1::<aethervk_core_rlib::scene::FollowingComponent, _>(|entity, _| {
+          following_entities.push(entity);
+        });
       for entity in following_entities {
-        let _ = ctx.scene.remove_component::<aethervk_core_rlib::scene::FollowingComponent>(entity);
+        let _ = ctx
+          .scene
+          .remove_component::<aethervk_core_rlib::scene::FollowingComponent>(entity);
       }
     }
     7 => {
       // MoveCursor
       let axis_x = command.float_val_1;
       let axis_y = command.float_val_2;
-      let axis_z = f32::from_bits(command.ulong_val as u32); // Using ulong_val to pack z
+      let axis_z = 0.0; // not passed via 2 floats. Wait, if it's move, we could use z.
+      let pan_speed = dist * 0.001;
 
-      let translation = Vec3f32::from_components(axis_x, axis_y, axis_z);
+      let translation = Vec3f32::from_components(axis_x, axis_y, axis_z) * pan_speed;
 
       ctx
         .scene
         .with_component_mut(ctx.cursor_entity, |c: &mut TransformComponent| {
           c.position = c.position + translation;
         });
+      ctx
+        .scene
+        .with_component_mut(ctx.camera_entity, |c: &mut TransformComponent| {
+          c.position = c.position + translation;
+        });
     }
     _ => {}
   }
 }
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setClearColor(
+  ctx: *mut SimulationContext,
+  r: f32,
+  g: f32,
+  b: f32,
+  a: f32,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx = unsafe { &mut *ctx };
+  ctx.clear_color = [r, g, b, a];
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_downloadImage(
@@ -2039,17 +2734,6 @@ pub unsafe extern "C" fn avkSimulationContext_downloadImage(
   res.is_some()
 }
 
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_setLoggerCallback(
-  cb: Option<extern "C" fn(*const c_char)>,
-) {
-  let ptr = match cb {
-    Some(f) => f as *mut (),
-    None => core::ptr::null_mut(),
-  };
-  aethervk_oshal_rlib::os::debug::LOGGER_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
-}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn aethervk_core_cdylib_log(msg: *const c_char) {
@@ -2131,6 +2815,7 @@ pub unsafe extern "C" fn avkSimulationContext_renderTickSync(ctx: *mut Simulatio
     outlines_enabled: ctx
       .outlines_enabled
       .load(core::sync::atomic::Ordering::Relaxed),
+    clear_color: ctx.clear_color,
   };
 
   let mut c_payload = RenderPayloadData {
@@ -2151,4 +2836,5 @@ pub unsafe extern "C" fn avkSimulationContext_renderTickSync(ctx: *mut Simulatio
       .unwrap();
     Ok(())
   });
-  }
+}
+

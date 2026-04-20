@@ -13,6 +13,7 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<BreadcrumbService>();
     collection.AddSingleton<HorizonJplService>();
     collection.AddSingleton<NativeRuntimeService>();
+    collection.AddSingleton<FileWatcherService>();
   }
 
   public static void AddViewModels(this IServiceCollection collection)

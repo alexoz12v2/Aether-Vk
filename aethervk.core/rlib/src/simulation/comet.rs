@@ -117,7 +117,7 @@ pub struct Comet {
   /// from this field, all other accessors are computed, plus conversion
   /// to any other scalar numeric format declared in oshal library, to support mixed precision simulation
   pub mass_properties: MassProperties,
-  pub bvh: Option<LinearBVH<f32, Vec3f32, Mat3f32>>,
+  pub bvh: Option<LinearBVH<f32>>,
   pub principal_axes: Option<Mat3f32>,
 }
 
@@ -125,7 +125,7 @@ fn compute_comet_extras(
   vertices: &[Vertex],
   indices: &[u32],
   mass_properties: &mut MassProperties,
-) -> (Option<LinearBVH<f32, Vec3f32, Mat3f32>>, Option<Mat3f32>, Vec<Vertex>) {
+) -> (Option<LinearBVH<f32>>, Option<Mat3f32>, Vec<Vertex>) {
   use crate::math::compute_com_and_tensor;
   let raw_verts: Vec<Vec3f32> = vertices
     .iter()
@@ -192,7 +192,7 @@ fn compute_comet_extras(
     });
   }
 
-  let builder = BVHBuilder::new(BVHBuilderParams::default());
+  let builder = BVHBuilder::<f32, Vec3f32, Mat3f32>::new(BVHBuilderParams::default());
   let bvh = builder.build(&tris);
   let linear_bvh = bvh.map(|root| LinearBVH::from_build_node(&root, 0));
 

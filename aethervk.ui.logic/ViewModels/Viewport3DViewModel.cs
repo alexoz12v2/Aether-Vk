@@ -28,6 +28,35 @@ public partial class Viewport3DViewModel
   [ObservableProperty]
   private bool _isAddingJet;
 
+  [ObservableProperty]
+  private bool _isMeasuringMode;
+
+  [ObservableProperty]
+  private bool _hasFirstMeasurementPoint;
+
+  [ObservableProperty]
+  private float _firstMeasurementPointX;
+
+  [ObservableProperty]
+  private float _firstMeasurementPointY;
+
+  [ObservableProperty]
+  private float _firstMeasurementPointZ;
+
+  [ObservableProperty]
+  private bool _showNoIntersectionFlyout;
+
+  [ObservableProperty]
+  private float _manualMeasurementX;
+
+  [ObservableProperty]
+  private float _manualMeasurementY;
+
+  [ObservableProperty]
+  private float _manualMeasurementZ;
+
+  private static int _measurementCounter = 1;
+
   public event Action? OnFrameReady;
 
   public Viewport3DViewModel(NativeRuntimeService runtimeService)
@@ -71,6 +100,19 @@ public partial class Viewport3DViewModel
 
     var breadcrumb =
       ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
+
+    if (IsMeasuringMode)
+    {
+      if (res.hit)
+      {
+        HandleMeasurementPoint(res.px, res.py, res.pz);
+      }
+      else
+      {
+        ShowNoIntersectionFlyout = true;
+      }
+      return;
+    }
       
     if (res.hit)
     {
@@ -119,6 +161,70 @@ public partial class Viewport3DViewModel
         }
       }
     }
+  }
+
+  private void HandleMeasurementPoint(float x, float y, float z)
+  {
+    if (!HasFirstMeasurementPoint)
+    {
+      HasFirstMeasurementPoint = true;
+      FirstMeasurementPointX = x;
+      FirstMeasurementPointY = y;
+      FirstMeasurementPointZ = z;
+    }
+    else
+    {
+      var name = $"Measurement_{_measurementCounter++}";
+      _runtimeService.CreateMeasurement(
+        name,
+        new[] { FirstMeasurementPointX, FirstMeasurementPointY, FirstMeasurementPointZ },
+        new[] { x, y, z }
+      );
+      
+      HasFirstMeasurementPoint = false;
+      IsMeasuringMode = false;
+      ShowNoIntersectionFlyout = false;
+    }
+  }
+
+  [CommunityToolkit.Mvvm.Input.RelayCommand]
+  private void SubmitManualMeasurement()
+  {
+    HandleMeasurementPoint(ManualMeasurementX, ManualMeasurementY, ManualMeasurementZ);
+    ShowNoIntersectionFlyout = false;
+  }
+
+  [CommunityToolkit.Mvvm.Input.RelayCommand]
+  private void SubmitCursorMeasurement()
+  {
+    float cx = 0, cy = 0, cz = 0;
+    var cursor = _runtimeService.RootEntities.FirstOrDefault(e => e.Name == "cursor" || e.Components.Any(c => c.Name == "Cursor"));
+    if (cursor != null)
+    {
+      var transform = cursor.Components.OfType<AetherVk.Logic.Models.TransformComponent>().FirstOrDefault();
+      if (transform != null)
+      {
+        cx = transform.PosX;
+        cy = transform.PosY;
+        cz = transform.PosZ;
+      }
+    }
+    HandleMeasurementPoint(cx, cy, cz);
+    ShowNoIntersectionFlyout = false;
+  }
+
+  [CommunityToolkit.Mvvm.Input.RelayCommand]
+  private void UndoMeasurementRaycast()
+  {
+    ShowNoIntersectionFlyout = false;
+  }
+
+  [CommunityToolkit.Mvvm.Input.RelayCommand]
+  private void ToggleMeasuringMode()
+  {
+    IsMeasuringMode = !IsMeasuringMode;
+    HasFirstMeasurementPoint = false;
+    ShowNoIntersectionFlyout = false;
   }
 
   [CommunityToolkit.Mvvm.Input.RelayCommand]

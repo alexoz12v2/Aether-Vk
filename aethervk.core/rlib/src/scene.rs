@@ -7,6 +7,8 @@
 //!   - Entities with the same set of components (an archetype) are stored together in contiguous memory.
 //!   - This is a simplified implementation focusing on the core concepts.
 
+// TODO add the cache class for meshes and billboard data as specified in simulation api
+
 pub mod text;
 
 use crate::simulation::comet::Comet;
@@ -25,6 +27,39 @@ use core::any::{Any, TypeId};
 use hashbrown::{HashMap, HashSet};
 
 // === Core ECS Types ===
+
+/// A thread-safe, basic Asset Cache
+pub struct AssetCache<T> {
+  // A map of file path to the loaded asset, wrapped in Arc to allow sharing
+  assets: RwLock<HashMap<alloc::string::String, alloc::sync::Arc<T>>>,
+}
+
+impl<T> AssetCache<T> {
+  pub fn new() -> Self {
+    Self {
+      assets: RwLock::new(HashMap::new()),
+    }
+  }
+
+  pub fn get(&self, path: &str) -> Option<alloc::sync::Arc<T>> {
+    self.assets.read().get(path).cloned()
+  }
+
+  pub fn insert(&self, path: alloc::string::String, asset: T) -> alloc::sync::Arc<T> {
+    let mut map = self.assets.write();
+    let arc = alloc::sync::Arc::new(asset);
+    map.insert(path, arc.clone());
+    arc
+  }
+
+  pub fn remove(&self, path: &str) -> Option<alloc::sync::Arc<T>> {
+    self.assets.write().remove(path)
+  }
+
+  pub fn clear(&self) {
+    self.assets.write().clear();
+  }
+}
 
 new_key_type! {
   /// A unique identifier for an entity in the scene.
@@ -138,12 +173,33 @@ pub struct MarkersComponent {
 impl Component for MarkersComponent {}
 
 /// A physically-based mesh loaded from a glTF file.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct PhysicalMeshComponent {
-  pub mesh: Comet,
+  pub asset_path: alloc::string::String,
+  pub mesh: alloc::sync::Arc<Comet>,
   pub emissive_intensity: f32,
   pub emissive_color: [f32; 3],
 }
+
+impl Clone for PhysicalMeshComponent {
+  fn clone(&self) -> Self {
+    Self {
+      asset_path: self.asset_path.clone(),
+      mesh: self.mesh.clone(),
+      emissive_intensity: self.emissive_intensity,
+      emissive_color: self.emissive_color,
+    }
+  }
+}
+
+impl PartialEq for PhysicalMeshComponent {
+  fn eq(&self, other: &Self) -> bool {
+    self.asset_path == other.asset_path
+      && self.emissive_intensity == other.emissive_intensity
+      && self.emissive_color == other.emissive_color
+  }
+}
+
 impl Component for PhysicalMeshComponent {}
 
 /// A marker component for entities that should be rendered.
@@ -151,10 +207,15 @@ pub struct Renderable;
 impl Component for Renderable {}
 
 /// Represents a 2D texture billboard.
+#[derive(Clone, Copy, PartialEq)]
+pub enum BillboardType {
+  WorldSpace { width: f32, height: f32 },
+  ScreenSpace { pct_width: f32, pct_height: f32 },
+}
+
 pub struct ImageBillboardComponent {
   pub texture_id: u64,
-  pub width: f32,
-  pub height: f32,
+  pub billboard_type: BillboardType,
 }
 impl Component for ImageBillboardComponent {}
 
@@ -197,6 +258,16 @@ pub struct BvhDebugComponent {
 }
 impl Component for BvhDebugComponent {}
 
+/// A measurement line between two points with an associated distance.
+#[derive(Clone, PartialEq, Debug)]
+pub struct MeasurementComponent {
+  pub pos1: Vec3f32,
+  pub pos2: Vec3f32,
+  /// Size in PTs for character rendering
+  pub points: f32,
+}
+impl Component for MeasurementComponent {}
+
 /// A particle emitter, defining the properties of particles to be spawned.
 pub struct ParticleEmitterComponent {
   /// Number of particles to spawn per second.
@@ -225,6 +296,7 @@ pub enum RenderableDataRef<'a> {
   PhysicalMesh(&'a PhysicalMeshComponent),
   Cursor(&'a CursorComponent),
   Markers(&'a MarkersComponent),
+  Measurement(&'a MeasurementComponent),
 }
 
 impl<'a> RenderableDataRef<'a> {
@@ -234,6 +306,7 @@ impl<'a> RenderableDataRef<'a> {
       RenderableDataRef::PhysicalMesh(mesh) => mesh.mesh.indices.len() as u32,
       RenderableDataRef::Cursor(_) => 4, // 4 vertices for the quad cursor
       RenderableDataRef::Markers(m) => (m.markers.len() * 4) as u32,
+      RenderableDataRef::Measurement(_) => 6, // 6 vertices for line list
     }
   }
 }
@@ -269,6 +342,8 @@ trait ComponentStorage: Send + Sync {
   fn as_mut_any(&mut self) -> &mut dyn Any;
   /// Moves a component from this storage to another, using swap_remove for efficiency.
   fn swap_remove_and_push_to(&mut self, index: usize, other: &mut dyn ComponentStorage);
+  /// Removes a component from this storage, using swap_remove for efficiency.
+  fn swap_remove(&mut self, index: usize);
   /// Pushes a type-erased component into this storage.
   fn push_any(&mut self, component: Box<dyn Any + Send + Sync>);
   /// The `TypeId` of the component stored.
@@ -288,6 +363,10 @@ impl<T: Component> ComponentStorage for Vec<T> {
     if let Some(other_vec) = other.as_mut_any().downcast_mut::<Vec<T>>() {
       other_vec.push(removed);
     }
+  }
+
+  fn swap_remove(&mut self, index: usize) {
+    self.swap_remove(index);
   }
 
   fn push_any(&mut self, component: Box<dyn Any + Send + Sync>) {
@@ -858,6 +937,38 @@ impl Scene {
     let components = components_lock.as_mut_any().downcast_mut::<Vec<T>>()?;
 
     Some(f(&mut components[location.row_index]))
+  }
+
+  pub fn remove_entity(&self, entity_id: EntityId) {
+    let src_location = {
+      let mut entities = self.entities.write();
+      if let Some(loc) = entities.remove(entity_id) {
+        loc
+      } else {
+        return;
+      }
+    };
+    
+    self.hierarchy.write().remove_entity(entity_id);
+    self.names.write().remove(&entity_id);
+
+    let mut archetypes = self.archetypes.write();
+    let src_arch = &mut archetypes[src_location.archetype_index];
+    
+    let swapped_entity_id_opt = src_arch.entities.get(src_location.row_index).copied();
+    src_arch.entities.swap_remove(src_location.row_index);
+    
+    for (_, storage_lock) in src_arch.components.iter() {
+       let mut storage = storage_lock.write();
+       storage.swap_remove(src_location.row_index);
+    }
+    
+    if let Some(swapped_id) = swapped_entity_id_opt {
+      // The entity that was swapped in now has row_index = src_location.row_index
+      if let Some(loc) = self.entities.write().get_mut(swapped_id) {
+        loc.row_index = src_location.row_index;
+      }
+    }
   }
 
   pub fn remove_component<T: Component>(&self, entity_id: EntityId) -> Result<(), &str> {

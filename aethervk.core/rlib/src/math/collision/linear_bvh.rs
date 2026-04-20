@@ -20,34 +20,20 @@ pub struct LinearBVHHeader {
 }
 
 #[derive(Debug, Clone)]
-pub enum LinearBound<S, V, M>
+pub enum LinearBound<S>
 where
-  M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
-  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
-  S: FloatLike
-    + FloatOps
-    + FloatBits
-    + From<f32>
-    + core::ops::Mul<V, Output = V>
-    + core::ops::Mul<M, Output = M>,
+  S: FloatLike + FloatOps + FloatBits + From<f32>,
 {
-  AABB(AABB<V>),
-  OBB(OBB<S, V, M>),
+  AABB(AABB<S>),
+  OBB(OBB<S>),
 }
 
 #[derive(Debug, Clone)]
-pub struct LinearBVHNode<S, V, M>
+pub struct LinearBVHNode<S>
 where
-  M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
-  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
-  S: FloatLike
-    + FloatOps
-    + FloatBits
-    + From<f32>
-    + core::ops::Mul<V, Output = V>
-    + core::ops::Mul<M, Output = M>,
+  S: FloatLike + FloatOps + FloatBits + From<f32>,
 {
-  pub bound: LinearBound<S, V, M>,
+  pub bound: LinearBound<S>,
   /// Index of the left child, or `u32::MAX` if leaf. Right child is always `left_child_or_primitive_offset + 1` if not leaf.
   /// If leaf, this is the offset into the primitives array.
   pub left_child_or_primitive_offset: u32,
@@ -58,38 +44,24 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct LinearBVH<S, V, M>
+pub struct LinearBVH<S>
 where
-  M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
-  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
-  S: FloatLike
-    + FloatOps
-    + FloatBits
-    + From<f32>
-    + core::ops::Mul<V, Output = V>
-    + core::ops::Mul<M, Output = M>,
+  S: FloatLike + FloatOps + FloatBits + From<f32>,
 {
   pub header: LinearBVHHeader,
-  pub nodes: Vec<LinearBVHNode<S, V, M>>,
+  pub nodes: Vec<LinearBVHNode<S>>,
   pub primitives: Vec<usize>,
 }
 
-impl<S, V, M> LinearBVH<S, V, M>
+impl<S> LinearBVH<S>
 where
-  M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
-  V: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
-  S: FloatLike
-    + FloatOps
-    + FloatBits
-    + From<f32>
-    + core::ops::Mul<V, Output = V>
-    + core::ops::Mul<M, Output = M>,
+  S: FloatLike + FloatOps + FloatBits + From<f32>,
 {
-  pub fn from_build_node(root: &BVHNode<S, V, M>, preciseness: u32) -> Self {
+  pub fn from_build_node(root: &BVHNode<S>, preciseness: u32) -> Self {
     let mut nodes = Vec::new();
     let mut primitives = Vec::new();
 
-    // Flatten in depth-first order first, we can do Morton order sorting later if needed
+    // TODO do Morton order sorting
     // The typical GPU linear layout is left child = next node, right child = current + skip offset.
     Self::flatten_node(root, &mut nodes, &mut primitives);
 
@@ -105,8 +77,8 @@ where
   }
 
   fn flatten_node(
-    node: &BVHNode<S, V, M>,
-    nodes: &mut Vec<LinearBVHNode<S, V, M>>,
+    node: &BVHNode<S>,
+    nodes: &mut Vec<LinearBVHNode<S>>,
     primitives: &mut Vec<usize>,
   ) -> u32 {
     let bound = match &node.bound {

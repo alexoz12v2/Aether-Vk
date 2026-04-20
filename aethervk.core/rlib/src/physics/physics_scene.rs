@@ -9,8 +9,9 @@ use aethervk_oshal_rlib::math::{
 /// (rebuilt every update, not fixed update).
 /// It aggregates the components from `Scene` and builds a world-wide BVH.
 pub struct PhysicsScene {
+  // TODO variable precision
   /// World-wide BVH, composed of leaf nodes that are roots of each instance's BVH.
-  pub world_bvh: LinearBVH<f32, Vec3f32, Mat3f32>,
+  pub world_bvh: LinearBVH<f32>,
   /// Mapping from leaf index in the world BVH back to the entity it represents.
   pub entity_mappings: alloc::vec::Vec<EntityId>,
 }
@@ -24,7 +25,7 @@ impl PhysicsScene {
 
     scene.query2::<crate::scene::TransformComponent, crate::scene::PhysicalMeshComponent, _>(
       |entity, transform, mesh| {
-        if let Some(bvh) = &mesh.bvh {
+        if let Some(bvh) = &mesh.mesh.bvh {
           if !bvh.nodes.is_empty() {
             let root_bound = &bvh.nodes[0].bound;
 

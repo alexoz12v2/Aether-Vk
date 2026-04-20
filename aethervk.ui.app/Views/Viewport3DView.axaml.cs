@@ -16,7 +16,7 @@ public partial class Viewport3DView : UserControl
   private DispatcherTimer? _livelinessTimer;
   private DateTime _lastFrameTime;
 
-  private bool _isLeftDragging = false;
+  private bool _isMiddleDragging = false;
   private bool _isRightDragging = false;
   private Avalonia.Point _lastPointerPos;
 
@@ -113,8 +113,8 @@ public partial class Viewport3DView : UserControl
       return;
     }
 
-    if (point.Properties.IsLeftButtonPressed)
-      _isLeftDragging = true;
+    if (point.Properties.IsMiddleButtonPressed)
+      _isMiddleDragging = true;
     if (point.Properties.IsRightButtonPressed)
       _isRightDragging = true;
 
@@ -124,8 +124,8 @@ public partial class Viewport3DView : UserControl
 
   private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
   {
-    if (e.InitialPressMouseButton == MouseButton.Left)
-      _isLeftDragging = false;
+    if (e.InitialPressMouseButton == MouseButton.Middle)
+      _isMiddleDragging = false;
     if (e.InitialPressMouseButton == MouseButton.Right)
       _isRightDragging = false;
 
@@ -143,7 +143,7 @@ public partial class Viewport3DView : UserControl
     {
       _viewModel?.RuntimeService.RotateCamera(deltaX, deltaY);
     }
-    else if (_isLeftDragging)
+    else if (_isMiddleDragging)
     {
       _viewModel?.RuntimeService.PanCursor(deltaX, deltaY);
     }
@@ -162,6 +162,13 @@ public partial class Viewport3DView : UserControl
     {
       _viewModel.IsAddingJet = false;
       Cursor = new Cursor(StandardCursorType.Arrow);
+      e.Handled = true;
+      return;
+    }
+
+    if (e.Key == Key.Tab)
+    {
+      _viewModel?.ToggleMeasuringModeCommand.Execute(null);
       e.Handled = true;
       return;
     }

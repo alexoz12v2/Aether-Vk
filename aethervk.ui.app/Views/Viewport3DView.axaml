@@ -11,8 +11,41 @@
                PointerWheelChanged="OnPointerWheelChanged"
                KeyDown="OnKeyDown" />
 
-        <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="10" Padding="5" CornerRadius="4" Background="#80000000" IsVisible="{Binding IsInitialized}">
-            <Rectangle x:Name="LivelinessIndicator" Width="16" Height="16" Fill="Red" RadiusX="2" RadiusY="2" />
+        <StackPanel HorizontalAlignment="Right" VerticalAlignment="Top" Margin="10" Spacing="5" IsVisible="{Binding IsInitialized}">
+            <Border Padding="5" CornerRadius="4" Background="#80000000">
+                <Rectangle x:Name="LivelinessIndicator" Width="16" Height="16" Fill="Red" RadiusX="2" RadiusY="2" />
+            </Border>
+            
+            <Border Padding="10,5" CornerRadius="4" Background="#80000000">
+                <StackPanel>
+                    <TextBlock Text="{Binding IsMeasuringMode, Converter={x:Static ObjectConverters.IsNull}}" FontSize="14" FontWeight="Bold" Foreground="White" />
+                    <TextBlock Text="Measuring Mode" IsVisible="{Binding IsMeasuringMode}" FontSize="14" FontWeight="Bold" Foreground="Yellow" />
+                    <TextBlock Text="Normal Mode" IsVisible="{Binding !IsMeasuringMode}" FontSize="14" FontWeight="Bold" Foreground="LightGray" />
+                    <TextBlock IsVisible="{Binding HasFirstMeasurementPoint}" Text="{Binding FirstMeasurementPointX, StringFormat='{}Point 1: [{0:F2}, '}" Foreground="White" FontSize="12"/>
+                    <TextBlock IsVisible="{Binding HasFirstMeasurementPoint}" Text="{Binding FirstMeasurementPointY, StringFormat='{}{0:F2}, '}" Foreground="White" FontSize="12"/>
+                    <TextBlock IsVisible="{Binding HasFirstMeasurementPoint}" Text="{Binding FirstMeasurementPointZ, StringFormat='{}{0:F2}]'}" Foreground="White" FontSize="12"/>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+        
+        <Border Background="#F0202020" BorderBrush="Gray" BorderThickness="1" CornerRadius="8" Padding="20" HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding ShowNoIntersectionFlyout}">
+            <StackPanel Spacing="15">
+                <TextBlock Text="No intersection found." FontWeight="Bold" FontSize="16" Foreground="Yellow"/>
+                
+                <TextBlock Text="Do you want to place a point at arbitrary coordinates?" Foreground="White"/>
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                    <TextBox Text="{Binding ManualMeasurementX}" Width="80" Watermark="X" />
+                    <TextBox Text="{Binding ManualMeasurementY}" Width="80" Watermark="Y" />
+                    <TextBox Text="{Binding ManualMeasurementZ}" Width="80" Watermark="Z" />
+                    <Button Content="Submit Coordinates" Command="{Binding SubmitManualMeasurementCommand}" />
+                </StackPanel>
+
+                <TextBlock Text="Do you want to place it under cursor?" Foreground="White" Margin="0,10,0,0"/>
+                <Button Content="Place Under Cursor" Command="{Binding SubmitCursorMeasurementCommand}" />
+
+                <TextBlock Text="Do you want to undo the raycast?" Foreground="White" Margin="0,10,0,0"/>
+                <Button Content="Undo Raycast" Command="{Binding UndoMeasurementRaycastCommand}" />
+            </StackPanel>
         </Border>
 
         <Border Background="{DynamicResource Bg.Canvas}" Opacity="0.9" IsVisible="{Binding !IsInitialized}">

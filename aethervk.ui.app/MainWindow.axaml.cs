@@ -27,6 +27,16 @@ public partial class MainWindow : Window
       ShowImportedModelsFlyout();
     });
 
+    WeakReferenceMessenger.Default.Register<OpenMeshViewerMessage>(this, (r, m) =>
+    {
+       var isLightTheme = Avalonia.Application.Current?.ActualThemeVariant == Avalonia.Styling.ThemeVariant.Light;
+       var meshViewer = new Views.MeshViewerWindow
+       {
+           DataContext = new MeshViewerViewModel(m.Model.FullPath, m.Model.Name, isLightTheme)
+       };
+       meshViewer.Show(this);
+    });
+
     KeyDown += OnKeyDown;
   }
 
@@ -34,23 +44,11 @@ public partial class MainWindow : Window
   {
     if (DataContext is MainWindowViewModel vm)
     {
-      var flyout = new MenuFlyout();
-      foreach (var model in vm.ImportedModels)
+      var window = new Views.ManageImportsWindow
       {
-        var item = new MenuItem { Header = model.Name };
-        var spawnItem = new MenuItem { Header = "Spawn Instance", Command = model.SpawnCommand };
-        var unloadItem = new MenuItem { Header = "Unload", Command = model.UnloadCommand };
-        item.Items.Add(spawnItem);
-        item.Items.Add(unloadItem);
-        flyout.Items.Add(item);
-      }
-      
-      if (vm.ImportedModels.Count == 0)
-      {
-        flyout.Items.Add(new MenuItem { Header = "No models imported", IsEnabled = false });
-      }
-
-      flyout.ShowAt(this);
+        DataContext = vm
+      };
+      window.ShowDialog(this);
     }
   }
 
@@ -90,6 +88,58 @@ public partial class MainWindow : Window
     }
   }
 
+  private async Task ShowImportImageDialogAsync()
+  {
+    var dialog = new OpenFileDialog
+    {
+      Title = "Import Image",
+      AllowMultiple = false,
+      Filters = new System.Collections.Generic.List<FileDialogFilter>
+      {
+        new FileDialogFilter { Name = "Images", Extensions = { "png", "jpg", "jpeg", "bmp", "tga" } }
+      }
+    };
+
+    var result = await dialog.ShowAsync(this);
+    if (result != null && result.Length > 0)
+    {
+      var filePath = result[0];
+      try
+      {
+        // Parse dimensions
+        using var stream = System.IO.File.OpenRead(filePath);
+        var bitmap = new Avalonia.Media.Imaging.Bitmap(stream);
+        float width = (float)bitmap.Size.Width;
+        float height = (float)bitmap.Size.Height;
+        
+        var fileName = System.IO.Path.GetFileNameWithoutExtension(filePath);
+
+        var spawnDialog = new Views.SpawnImageDialogWindow
+        {
+          DataContext = new SpawnImageViewModel(fileName + " Billboard", width, height)
+        };
+
+        var dlgResult = await spawnDialog.ShowDialog<bool>(this);
+        if (dlgResult && spawnDialog.DataContext is SpawnImageViewModel vm)
+        {
+          var runtime = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+          if (runtime != null)
+          {
+            var entity = runtime.SpawnImageBillboard(vm.EntityName, vm.IsScreenSpace, vm.Width, vm.Height);
+            
+            var watcherService = ServiceLocator.Provider?.GetService(typeof(FileWatcherService)) as FileWatcherService;
+            watcherService?.WatchImageFile(filePath, entity);
+          }
+        }
+      }
+      catch (System.Exception ex)
+      {
+        var breadcrumb = ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
+        breadcrumb?.ShowMessageAsync("Import Error", $"Failed to load image: {ex.Message}", default, 3);
+      }
+    }
+  }
+
   private async Task ShowImportModelDialogAsync()
   {
     var dialog = new OpenFileDialog
@@ -116,7 +166,7 @@ public partial class MainWindow : Window
           if (DataContext is MainWindowViewModel vm)
           {
             var fileName = System.IO.Path.GetFileName(filePath);
-            vm.ImportedModels.Add(new ImportedModelItem(modelId, fileName));
+            vm.ImportedModels.Add(new ImportedModelItem(modelId, fileName, filePath));
           }
         }
       }

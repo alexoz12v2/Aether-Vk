@@ -104,15 +104,18 @@
                             <MenuItem Header="Move Cursor X-Left : Left Arrow" />
                             <MenuItem Header="Move Cursor X-Right : Right Arrow" />
                         </MenuItem>
-                        <MenuItem Header="Imported Models" ItemsSource="{Binding ImportedModels}">
-                            <MenuItem.ItemTemplate>
-                                <DataTemplate>
-                                    <MenuItem Header="{Binding Name}">
-                                        <MenuItem Header="Spawn Instance" Command="{Binding SpawnCommand}" />
-                                        <MenuItem Header="Unload" Command="{Binding UnloadCommand}" />
-                                    </MenuItem>
-                                </DataTemplate>
-                            </MenuItem.ItemTemplate>
+                        <MenuItem Header="Imported Models">
+                            <MenuItem Header="Manage Models..." Command="{Binding OpenImportedModelsDialogCommand}" />
+                            <MenuItem Header="Active Models" ItemsSource="{Binding ImportedModels}">
+                                <MenuItem.ItemTemplate>
+                                    <DataTemplate>
+                                        <MenuItem Header="{Binding Name}">
+                                            <MenuItem Header="Spawn Instance" Command="{Binding SpawnCommand}" />
+                                            <MenuItem Header="Unload" Command="{Binding UnloadCommand}" />
+                                        </MenuItem>
+                                    </DataTemplate>
+                                </MenuItem.ItemTemplate>
+                            </MenuItem>
                         </MenuItem>
                     </MenuItem>
                 </MenuItem>
