@@ -8,9 +8,9 @@ use crate::scene::{
 use crate::simulation::comet::{PushConstants, TextureFlags};
 use crate::types::{GpuError, GpuResult};
 use aethervk_oshal_rlib::math::{
-  matrix::{mat4::Mat4x4f32, Matrix4},
+  matrix::{mat4::Mat4x4f32, Matrix4, SquareMatrix, MatrixVectorMul, Matrix},
   quaternion::Quaternion,
-  vector::{vec3::Vec3f32, Vector3},
+  vector::{vec3::Vec3f32, Vector3, Vector4, Vector},
 };
 use alloc::vec::Vec;
 
@@ -88,12 +88,25 @@ impl CursorDrawCall {
   }
 }
 
+/// Represents a draw call for a marker.
+#[derive(Clone)]
+pub struct MarkerDrawCall {
+  pub pipeline: PipelineKey,
+  pub vertex_count: u32,
+  pub model_matrix: Mat4x4f32,
+  pub local_pos: [f32; 3],
+  pub size: f32,
+  pub color: [f32; 3],
+}
+
 /// A proper clear-cut struct representing the rendering scene.
 pub struct RenderScene {
   /// A list of draw calls to be executed for this frame.
   pub draw_calls: Vec<DrawCall>,
   /// A list of cursor draw calls.
   pub cursor_calls: Vec<CursorDrawCall>,
+  /// A list of marker draw calls.
+  pub marker_calls: Vec<MarkerDrawCall>,
   pub camera: (TransformComponent, CameraComponent),
   pub sun: Option<(EntityId, SunComponent, TransformComponent)>,
   pub sky: Option<(EntityId, SkyComponent)>,
@@ -105,6 +118,7 @@ impl RenderScene {
     Self {
       draw_calls: Vec::new(),
       cursor_calls: Vec::new(),
+      marker_calls: Vec::new(),
       camera,
       sun: None,
       sky: None,
@@ -148,11 +162,24 @@ impl RenderScene {
           .cursor_calls
           .push(CursorDrawCall::from_result_and_matrix(res, 4, model_matrix));
       }
+      RenderableDataRef::Markers(component) => {
+        let res: ResourceUploadResult =
+          device.get_or_create_marker_resources(presentation_engine_handle)?;
+        for marker in &component.markers {
+          self.marker_calls.push(MarkerDrawCall {
+            pipeline: res.pipeline,
+            vertex_count: 4,
+            model_matrix,
+            local_pos: marker.local_pos,
+            size: marker.size,
+            color: marker.color,
+          });
+        }
+      }
     }
     Ok(())
   }
 }
-
 pub fn do_draw_cursor(
   device: &dyn RenderDevice,
   view: Mat4x4f32,
@@ -169,9 +196,52 @@ pub fn do_draw_cursor(
     model: draw_call.model_matrix.into(),
     cursor_size: 0.05, // TODO extract from draw call
   };
+
   device.push_cursor_constants(cmd_buffer, &push_constants)?;
-  // Use non-indexed drawing for the cursor
   device.draw(cmd_buffer, draw_call.vertex_count)?;
+
+  Ok(())
+}
+
+pub fn do_draw_marker(
+  device: &dyn RenderDevice,
+  view: Mat4x4f32,
+  view_proj: Mat4x4f32,
+  cmd_buffer: super::CommandBufferHandle,
+  draw_call: &MarkerDrawCall,
+) -> Result<(), crate::types::GpuError> {
+  device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
+
+  let mut camera_up = [0.0; 3];
+  let mut camera_right = [0.0; 3];
+
+  if let Some(inv_view) = view.inverse() {
+    let up: aethervk_oshal_rlib::math::vector::vec4::Vec4f32 = inv_view.column(1).unwrap();
+    let right: aethervk_oshal_rlib::math::vector::vec4::Vec4f32 = inv_view.column(0).unwrap();
+    camera_up = [up.x(), up.y(), up.z()];
+    camera_right = [right.x(), right.y(), right.z()];
+  }
+
+  let global_center = draw_call.model_matrix.mul_vector(
+    aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+      draw_call.local_pos[0], draw_call.local_pos[1], draw_call.local_pos[2], 1.0
+    )
+  );
+
+  let push_constants = crate::gpu::MarkerPushConstants {
+    view_proj: view_proj.into(),
+    center_pos: [global_center.x(), global_center.y(), global_center.z()],
+    size: draw_call.size,
+    color: draw_call.color,
+    _pad0: 0.0,
+    camera_up,
+    _pad1: 0.0,
+    camera_right,
+    _pad2: 0.0,
+  };
+  device.push_marker_constants(cmd_buffer, &push_constants)?;
+  device.draw(cmd_buffer, draw_call.vertex_count)?;
+
   Ok(())
 }
 

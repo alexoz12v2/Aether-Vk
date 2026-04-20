@@ -1,0 +1,192 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             xmlns:models="using:AetherVk.Logic.Models"
+             xmlns:controls="using:AetherVk.Controls"
+             x:DataType="vm:PropertiesViewModel"
+             x:Class="AetherVk.Views.PropertiesView">
+    <Grid RowDefinitions="Auto, *">
+        <TextBlock Grid.Row="0" Text="{Binding SelectedEntity.Name, StringFormat='Properties - {0}'}" 
+                   FontWeight="Bold" Margin="8" />
+        
+        <ScrollViewer Grid.Row="1" Margin="4">
+            <ItemsControl ItemsSource="{Binding SelectedEntity.Components}">
+                <ItemsControl.DataTemplates>
+                    
+                    <!-- Transform Component -->
+                    <DataTemplate DataType="models:TransformComponent">
+                        <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">
+                            <StackPanel Spacing="4">
+                                <Expander Header="Position" HorizontalAlignment="Stretch">
+                                    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
+                                        <TextBlock Grid.Column="0" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding PosX}" Margin="0,0,8,0"/>
+                                        <TextBlock Grid.Column="2" Text="Y:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="3" Value="{Binding PosY}" Margin="0,0,8,0"/>
+                                        <TextBlock Grid.Column="4" Text="Z:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="5" Value="{Binding PosZ}"/>
+                                    </Grid>
+                                </Expander>
+                                
+                                <Expander Header="Rotation (Quat)" HorizontalAlignment="Stretch">
+                                    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*,Auto,*">
+                                        <TextBlock Grid.Column="0" Text="W:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding RotW}" Margin="0,0,8,0"/>
+                                        <TextBlock Grid.Column="2" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="3" Value="{Binding RotX}" Margin="0,0,8,0"/>
+                                        <TextBlock Grid.Column="4" Text="Y:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="5" Value="{Binding RotY}" Margin="0,0,8,0"/>
+                                        <TextBlock Grid.Column="6" Text="Z:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="7" Value="{Binding RotZ}"/>
+                                    </Grid>
+                                </Expander>
+
+                                <Expander Header="Scale" HorizontalAlignment="Stretch">
+                                    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
+                                        <TextBlock Grid.Column="0" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding ScaleX}" Margin="0,0,8,0"/>
+                                        <TextBlock Grid.Column="2" Text="Y:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="3" Value="{Binding ScaleY}" Margin="0,0,8,0"/>
+                                        <TextBlock Grid.Column="4" Text="Z:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="5" Value="{Binding ScaleZ}"/>
+                                    </Grid>
+                                </Expander>
+                            </StackPanel>
+                        </Expander>
+                    </DataTemplate>
+
+                    <!-- Camera Component -->
+                    <DataTemplate DataType="models:CameraComponent">
+                        <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">
+                            <StackPanel Spacing="4">
+                                <CheckBox Content="Active Camera" IsChecked="{Binding IsActiveCamera}" />
+                                <CheckBox Content="Orthographic" IsChecked="{Binding IsOrthographic}" />
+                                
+                                <Expander Header="Projection" HorizontalAlignment="Stretch">
+                                    <Grid ColumnDefinitions="Auto, *" RowDefinitions="Auto, Auto, Auto">
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="FOV:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <controls:UnboundedSlider Grid.Row="0" Grid.Column="1" Value="{Binding Fov}"/>
+                                        
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Near:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <controls:UnboundedSlider Grid.Row="1" Grid.Column="1" Value="{Binding NearPlane}"/>
+                                        
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Far:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <controls:UnboundedSlider Grid.Row="2" Grid.Column="1" Value="{Binding FarPlane}"/>
+                                    </Grid>
+                                </Expander>
+                                
+                                <TextBlock Text="Projection Matrix Preview" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                <TextBlock Text="{Binding ProjectionMatrixPreview}" Foreground="{DynamicResource Text.Secondary}" />
+                            </StackPanel>
+                        </Expander>
+                    </DataTemplate>
+
+                    <!-- Sun Component -->
+                    <DataTemplate DataType="models:SunComponent">
+                        <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="{Binding PositionX, StringFormat='Pos X: {0}'}" />
+                                <TextBlock Text="{Binding PositionY, StringFormat='Pos Y: {0}'}" />
+                                <TextBlock Text="{Binding PositionZ, StringFormat='Pos Z: {0}'}" />
+                                <TextBlock Text="{Binding Temperature, StringFormat='Temperature: {0} K'}" />
+                                <CheckBox Content="Show Bounding Box" IsChecked="{Binding ShowBoundingBox}" />
+                                <CheckBox Content="Follow" IsChecked="{Binding $parent[UserControl].((vm:PropertiesViewModel)DataContext).IsFollowingEntity}" />
+                                <Button Content="Snap Camera" Command="{Binding $parent[UserControl].((vm:PropertiesViewModel)DataContext).SnapToSelectedEntityCommand}" Classes="accent" Margin="0,8,0,0" HorizontalAlignment="Right" />
+                            </StackPanel>
+                        </Expander>
+                    </DataTemplate>
+                    
+                    <!-- Planet Component -->
+                    <DataTemplate DataType="models:PlanetComponent">
+                        <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Position" FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding PositionX, StringFormat='X: {0}'}" />
+                                <TextBlock Text="{Binding PositionY, StringFormat='Y: {0}'}" />
+                                <TextBlock Text="{Binding PositionZ, StringFormat='Z: {0}'}" />
+                                <TextBlock Text="Velocity" FontWeight="SemiBold" Margin="0,8,0,0" />
+                                <TextBlock Text="{Binding VelocityX, StringFormat='X: {0}'}" />
+                                <TextBlock Text="{Binding VelocityY, StringFormat='Y: {0}'}" />
+                                <TextBlock Text="{Binding VelocityZ, StringFormat='Z: {0}'}" />
+                                <CheckBox Content="Show Bounding Box" IsChecked="{Binding ShowBoundingBox}" Margin="0,8,0,0"/>
+                                <CheckBox Content="Follow" IsChecked="{Binding $parent[UserControl].((vm:PropertiesViewModel)DataContext).IsFollowingEntity}" />
+                                <Button Content="Snap Camera" Command="{Binding $parent[UserControl].((vm:PropertiesViewModel)DataContext).SnapToSelectedEntityCommand}" Classes="accent" Margin="0,8,0,0" HorizontalAlignment="Right" />
+                            </StackPanel>
+                        </Expander>
+                    </DataTemplate>
+                    
+                    <!-- Cursor/Grid Component -->
+                    <DataTemplate DataType="models:CursorComponent">
+                        <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">
+                            <StackPanel Spacing="4">
+                                <CheckBox Content="Is Visible" IsChecked="{Binding IsVisible}" />
+                                <CheckBox Content="Follow" IsChecked="{Binding $parent[UserControl].((vm:PropertiesViewModel)DataContext).IsFollowingEntity}" />
+                                <Button Content="Snap Camera" Command="{Binding $parent[UserControl].((vm:PropertiesViewModel)DataContext).SnapToSelectedEntityCommand}" Classes="accent" Margin="0,8,0,0" HorizontalAlignment="Right" />
+                            </StackPanel>
+                        </Expander>
+                    </DataTemplate>
+                    <DataTemplate DataType="models:GridComponent">
+                        <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">
+                            <StackPanel Spacing="4">
+                                <CheckBox Content="Is Visible" IsChecked="{Binding IsVisible}" />
+                            </StackPanel>
+                        </Expander>
+                    </DataTemplate>
+                    
+                    <!-- Comet Component -->
+                    <DataTemplate DataType="models:CometComponent">
+                        <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Mechanical State" FontWeight="Bold" />
+                                <TextBlock Text="{Binding PositionX, StringFormat='Pos X: {0}'}" />
+                                <TextBlock Text="{Binding VelocityY, StringFormat='Vel Y: {0}'}" />
+                                <TextBlock Text="Inertia Tensor:" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                                <TextBlock Text="{Binding InertiaTensor}" FontFamily="Consolas" />
+                                
+                                <CheckBox Content="Follow" IsChecked="{Binding $parent[UserControl].((vm:PropertiesViewModel)DataContext).IsFollowingEntity}" />
+                                <Button Content="Snap Camera" Command="{Binding $parent[UserControl].((vm:PropertiesViewModel)DataContext).SnapToSelectedEntityCommand}" Classes="accent" Margin="0,8,0,0" HorizontalAlignment="Right" />
+
+                                <TextBlock Text="BVH Explorer" FontWeight="Bold" Margin="0,12,0,4"/>
+                                <TreeView ItemsSource="{Binding BvhTree}" MinHeight="100" MaxHeight="300">
+                                    <TreeView.DataTemplates>
+                                        <TreeDataTemplate DataType="models:BvhNode" ItemsSource="{Binding Children}">
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <CheckBox IsChecked="{Binding IsVisible}" Margin="0,-4,0,0" ToolTip.Tip="Toggle Render Visibility" />
+                                                <TextBlock Text="{Binding Type, StringFormat='[{0}]'}" Foreground="{DynamicResource Accent.Primary}" VerticalAlignment="Center"/>
+                                                <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                                                <TextBlock Text="{Binding Details}" Foreground="{DynamicResource Text.Secondary}" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                            </StackPanel>
+                                        </TreeDataTemplate>
+                                    </TreeView.DataTemplates>
+                                </TreeView>
+                                
+                                <Grid ColumnDefinitions="*, Auto" Margin="0,16,0,8">
+                                    <TextBlock Grid.Column="0" Text="Surface Jets" FontWeight="Bold" VerticalAlignment="Center" />
+                                    <Button Grid.Column="1" Content="+" Classes="accent" Padding="8,2" Command="{Binding $parent[UserControl].((vm:PropertiesViewModel)DataContext).ToggleAddJetModeCommand}" ToolTip.Tip="Add New Jet (Shift+RMB on Comet)"/>
+                                </Grid>
+                                
+                                <ListBox ItemsSource="{Binding Jets}" Classes="list-tray" MaxHeight="200" Background="Transparent" BorderThickness="0">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate DataType="models:JetMarker">
+                                            <Border Classes="list-tray-item dense" Background="{DynamicResource Bg.Surface}" CornerRadius="4" Margin="0,0,0,4" Padding="12,8">
+                                                <Grid ColumnDefinitions="Auto, *, Auto">
+                                                    <Border Grid.Column="0" Width="16" Height="16" CornerRadius="8" Background="Orange" Margin="0,0,12,0" />
+                                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Name}" FontWeight="Bold" />
+                                                        <TextBlock Text="{Binding Size, StringFormat='Size: {0}'}" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
+                                                    </StackPanel>
+                                                    <Button Grid.Column="2" Content="Edit Color" Classes="accent" Padding="4,2" FontSize="12" ToolTip.Tip="Change Color"/>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </StackPanel>
+                        </Expander>
+                    </DataTemplate>
+
+                </ItemsControl.DataTemplates>
+            </ItemsControl>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

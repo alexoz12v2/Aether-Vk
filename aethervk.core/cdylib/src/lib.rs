@@ -34,6 +34,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 // ----------------- Panic Handler ----------------------------------
 #[panic_handler]
 #[cfg(not(any(test, feature = "std")))]
+#[cfg(target_arch = "wasm32")] // Hack to disable it on non-wasm, because we know macOS is linking std due to ab_glyph
 fn the_panic(_info: &PanicInfo) -> ! {
   aethervk_oshal_rlib::panic_handler_impl();
 }

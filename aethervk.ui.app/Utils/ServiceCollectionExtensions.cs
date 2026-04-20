@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -8,11 +9,16 @@ public static class ServiceCollectionExtensions
 {
   public static void AddCommonServices(this IServiceCollection collection)
   {
-    // TODO Logging and stuff
+    collection.AddSingleton<ConsoleService>();
+    collection.AddSingleton<BreadcrumbService>();
+    collection.AddSingleton<HorizonJplService>();
+    collection.AddSingleton<NativeRuntimeService>();
   }
 
   public static void AddViewModels(this IServiceCollection collection)
   {
     collection.AddTransient<HomePageViewModel>();
+    collection.AddSingleton<OutlineViewModel>();
+    collection.AddSingleton<PropertiesViewModel>();
   }
 }

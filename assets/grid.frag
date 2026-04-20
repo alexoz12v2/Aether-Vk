@@ -1,27 +1,23 @@
 #version 450 core
 
-layout(location = 0) in vec2 inUV;
+layout(location = 0) in vec4 inUnprojectedNear;
+layout(location = 1) in vec4 inUnprojectedFar;
+
 layout(location = 0) out vec4 outColor;
 
 layout(push_constant) uniform Push {
-  layout(offset = 0) mat4 viewProj;
-  layout(offset = 64) mat4 invViewProj;
-  layout(offset = 128) vec3 cameraPos;
-  layout(offset = 140) float nearPlane;
-  layout(offset = 144) float farPlane;
-  layout(offset = 148) float density;
-  layout(offset = 152) vec2 _pad1;
-  layout(offset = 160) vec3 gridColor;
-  layout(offset = 172) float _pad2;
+  mat4 viewProj;
+  vec3 cameraPos;
+  float nearPlane;
+  float farPlane;
+  float density;
+  vec3 gridColor;
 } push;
 
 void main() {
-  vec4 unprojectedNear = push.invViewProj * vec4(inUV.x, inUV.y, 0.0, 1.0);
-  vec4 unprojectedFar  = push.invViewProj * vec4(inUV.x, inUV.y, 1.0, 1.0);
-  
-  vec3 nearPos = unprojectedNear.xyz / unprojectedNear.w;
-  vec3 farPos  = unprojectedFar.xyz / unprojectedFar.w;
-  
+  vec3 nearPos = inUnprojectedNear.xyz / inUnprojectedNear.w;
+  vec3 farPos  = inUnprojectedFar.xyz / inUnprojectedFar.w;
+
   vec3 viewDir = farPos - nearPos;
   if (abs(viewDir.z) < 1e-6) {
     discard;

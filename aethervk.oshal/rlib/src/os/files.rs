@@ -16,6 +16,8 @@ impl MappedFile {
 
     #[cfg(windows)]
     {
+      use core::ffi::c_void;
+
       use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE};
       use windows::Win32::Storage::FileSystem::{
         CreateFileW, GetFileSizeEx, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, OPEN_EXISTING,
@@ -98,7 +100,8 @@ impl MappedFile {
         return Err(FsError::CouldNotReadFile);
       }
 
-      let view_ptr = unsafe { MapViewOfFile(mapping_handle, FILE_MAP_READ, 0, 0, len) }.into_ptr();
+      let view_ptr: *mut c_void =
+        unsafe { MapViewOfFile(mapping_handle, FILE_MAP_READ, 0, 0, len) }.Value;
 
       // Prevent handle leaks! The OS map view retains an internal reference to the
       // file object behind the scenes, making it entirely safe to close handles immediately.
@@ -170,8 +173,13 @@ impl Drop for MappedFile {
 
     #[cfg(windows)]
     {
-      use windows::Win32::System::Memory::UnmapViewOfFile;
-      let _ = unsafe { UnmapViewOfFile(self.ptr as *const core::ffi::c_void) };
+      use windows::Win32::System::Memory::{UnmapViewOfFile, MEMORY_MAPPED_VIEW_ADDRESS};
+
+      let _ = unsafe {
+        UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
+          Value: self.ptr as *mut core::ffi::c_void,
+        })
+      };
     }
     #[cfg(not(windows))]
     {

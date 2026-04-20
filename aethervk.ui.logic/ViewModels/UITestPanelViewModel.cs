@@ -2,5 +2,6 @@
 
 public partial class UITestPanelViewModel : TabItemViewModel
 {
-  public UITestPanelViewModel() : base("UI Test Panel") {}
+  public UITestPanelViewModel()
+    : base("UI Test Panel") { }
 }

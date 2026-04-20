@@ -28,13 +28,16 @@ public partial class TabGroupNodeView : UserControl, IDragSourceView
     DragDrop.SetAllowDrop(this, true);
 
     // Register to listen for the cleanup message from the logic layer
-    WeakReferenceMessenger.Default.Register<DragCompletedMessage>(this, (_, m) =>
-    {
-      if (ReferenceEquals(m.View, this))
+    WeakReferenceMessenger.Default.Register<DragCompletedMessage>(
+      this,
+      (_, m) =>
       {
-        Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(ClearDragState);
+        if (ReferenceEquals(m.View, this))
+        {
+          Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(ClearDragState);
+        }
       }
-    });
+    );
   }
 
   // NOTE: Avalonia Drag and Drop events are often registered via XAML in the new versions to work properly with compiled bindings.
@@ -45,17 +48,33 @@ public partial class TabGroupNodeView : UserControl, IDragSourceView
   protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
   {
     base.OnAttachedToVisualTree(e);
-    AddHandler(DragDrop.DragOverEvent, OnDragOver, Avalonia.Interactivity.RoutingStrategies.Bubble,
-      true);
-    AddHandler(DragDrop.DragLeaveEvent, OnDragLeave,
-      Avalonia.Interactivity.RoutingStrategies.Bubble, true);
+    AddHandler(
+      DragDrop.DragOverEvent,
+      OnDragOver,
+      Avalonia.Interactivity.RoutingStrategies.Bubble,
+      true
+    );
+    AddHandler(
+      DragDrop.DragLeaveEvent,
+      OnDragLeave,
+      Avalonia.Interactivity.RoutingStrategies.Bubble,
+      true
+    );
     AddHandler(DragDrop.DropEvent, OnDrop, Avalonia.Interactivity.RoutingStrategies.Bubble, true);
 
     // Pointer Handlers for tracking the drag.
-    AddHandler(InputElement.PointerMovedEvent, OnTabPointerMoved,
-      Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
-    AddHandler(InputElement.PointerReleasedEvent, OnTabPointerReleased,
-      Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
+    AddHandler(
+      InputElement.PointerMovedEvent,
+      OnTabPointerMoved,
+      Avalonia.Interactivity.RoutingStrategies.Bubble,
+      handledEventsToo: true
+    );
+    AddHandler(
+      InputElement.PointerReleasedEvent,
+      OnTabPointerReleased,
+      Avalonia.Interactivity.RoutingStrategies.Bubble,
+      handledEventsToo: true
+    );
   }
 
   protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -99,16 +118,20 @@ public partial class TabGroupNodeView : UserControl, IDragSourceView
   {
     PreviewBox.IsVisible = false;
 
-    if (e.DataTransfer.Contains(ChildViewModelFormat) &&
-        _draggedTabReference is { } draggedTab && DataContext is TabGroupNodeViewModel targetNode)
+    if (
+      e.DataTransfer.Contains(ChildViewModelFormat)
+      && _draggedTabReference is { } draggedTab
+      && DataContext is TabGroupNodeViewModel targetNode
+    )
     {
-      bool isCopy = e.KeyModifiers.HasFlag(KeyModifiers.Control) ||
-                    e.DragEffects == DragDropEffects.Copy;
+      bool isCopy =
+        e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.DragEffects == DragDropEffects.Copy;
       var pos = e.GetPosition(this);
       var zone = CalculateDockZone(pos, Bounds.Size);
 
-      WeakReferenceMessenger.Default.Send(new TabDroppedMessage(draggedTab, targetNode, zone,
-        isCopy));
+      WeakReferenceMessenger.Default.Send(
+        new TabDroppedMessage(draggedTab, targetNode, zone, isCopy)
+      );
 
       e.DragEffects = isCopy ? DragDropEffects.Copy : DragDropEffects.Move;
     }
@@ -121,9 +144,11 @@ public partial class TabGroupNodeView : UserControl, IDragSourceView
 
   private void OnTabPointerPressed(object? sender, PointerPressedEventArgs e)
   {
-    if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed &&
-        sender is Border { DataContext: TabItemViewModel clickedTab } &&
-        DataContext is TabGroupNodeViewModel vm)
+    if (
+      e.GetCurrentPoint(this).Properties.IsLeftButtonPressed
+      && sender is Border { DataContext: TabItemViewModel clickedTab }
+      && DataContext is TabGroupNodeViewModel vm
+    )
     {
       vm.SelectedTab = clickedTab;
     }
@@ -131,12 +156,15 @@ public partial class TabGroupNodeView : UserControl, IDragSourceView
 
   private void OnTabIconPointerPressed(object? sender, PointerPressedEventArgs e)
   {
-    if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+    if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+      return;
 
-    if (sender is not Border { DataContext: TabItemViewModel clickedTab }) return;
+    if (sender is not Border { DataContext: TabItemViewModel clickedTab })
+      return;
 
     // UX Fix: Select the tab when grabbing the drag handle!
-    if (DataContext is TabGroupNodeViewModel vm) vm.SelectedTab = clickedTab;
+    if (DataContext is TabGroupNodeViewModel vm)
+      vm.SelectedTab = clickedTab;
 
     e.Handled = true;
     _isInitiatingDrag = true;
@@ -146,7 +174,8 @@ public partial class TabGroupNodeView : UserControl, IDragSourceView
 
   private void OnTabPointerMoved(object? sender, PointerEventArgs e)
   {
-    if (!_isInitiatingDrag || _tabToDrag == null) return;
+    if (!_isInitiatingDrag || _tabToDrag == null)
+      return;
 
     if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
     {
@@ -177,7 +206,8 @@ public partial class TabGroupNodeView : UserControl, IDragSourceView
 
   private void StartDrag(PointerEventArgs e, TabItemViewModel draggedTab)
   {
-    if (DataContext is TabGroupNodeViewModel vm && vm.IsRoot() && vm.Tabs.Count <= 1) return;
+    if (DataContext is TabGroupNodeViewModel vm && vm.IsRoot() && vm.Tabs.Count <= 1)
+      return;
 
     var data = new DataTransfer();
     var item = new DataTransferItem();
@@ -208,7 +238,8 @@ public partial class TabGroupNodeView : UserControl, IDragSourceView
     var isTop = pos.Y < bounds.Height * edgeThreshold;
     var isBottom = pos.Y > bounds.Height * (1 - edgeThreshold);
 
-    if (!isLeft && !isRight && !isTop && !isBottom) return DockZone.Center;
+    if (!isLeft && !isRight && !isTop && !isBottom)
+      return DockZone.Center;
 
     var distLeft = pos.X;
     var distRight = bounds.Width - pos.X;
@@ -216,9 +247,12 @@ public partial class TabGroupNodeView : UserControl, IDragSourceView
     var distBottom = bounds.Height - pos.Y;
     var minDist = Math.Min(Math.Min(distLeft, distRight), Math.Min(distTop, distBottom));
 
-    if (Math.Abs(minDist - distLeft) < 1e-6) return DockZone.Left;
-    if (Math.Abs(minDist - distRight) < 1e-6) return DockZone.Right;
-    if (Math.Abs(minDist - distTop) < 1e-6) return DockZone.Top;
+    if (Math.Abs(minDist - distLeft) < 1e-6)
+      return DockZone.Left;
+    if (Math.Abs(minDist - distRight) < 1e-6)
+      return DockZone.Right;
+    if (Math.Abs(minDist - distTop) < 1e-6)
+      return DockZone.Top;
     return Math.Abs(minDist - distBottom) < 1e-6 ? DockZone.Bottom : DockZone.Center;
   }
 

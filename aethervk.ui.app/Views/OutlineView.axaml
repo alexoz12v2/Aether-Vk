@@ -1,0 +1,65 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             xmlns:models="using:AetherVk.Logic.Models"
+             x:DataType="vm:OutlineViewModel"
+             x:Class="AetherVk.Views.OutlineView">
+    <Grid RowDefinitions="Auto, *">
+        <TextBlock Grid.Row="0" Text="Scene Hierarchy" FontWeight="Bold" Margin="8"/>
+
+        <TreeView Grid.Row="1" ItemsSource="{Binding RootEntities}" SelectedItem="{Binding SelectedEntity}" Margin="4">
+            <TreeView.Styles>
+                <Style Selector="TreeViewItem">
+                    <Setter Property="HorizontalAlignment" Value="Stretch" />
+                </Style>
+            </TreeView.Styles>
+            <TreeView.DataTemplates>
+                <TreeDataTemplate DataType="models:Entity" ItemsSource="{Binding Children}">
+                    <Grid ColumnDefinitions="*, Auto, Auto" Margin="0,2" HorizontalAlignment="Stretch">
+                        <Grid.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Copy Name" Command="{Binding $parent[UserControl].((vm:OutlineViewModel)DataContext).CopyNameToClipboardCommand}" CommandParameter="{Binding Name}"/>
+                            </ContextMenu>
+                        </Grid.ContextMenu>
+
+                        <TextBlock Grid.Column="0" Text="{Binding Name}" VerticalAlignment="Center" Margin="0,0,16,0" />
+
+                        <!-- Visibility Toggle -->
+                        <ToggleButton Grid.Column="1" IsChecked="{Binding IsVisible}"
+                                      Background="Transparent"
+                                      BorderThickness="0"
+                                      Padding="4">
+                            <TextBlock Text="👁" Classes="visibilityIcon" />
+                            <ToggleButton.Styles>
+                                <Style Selector="ToggleButton:checked TextBlock.visibilityIcon">
+                                    <Setter Property="Foreground" Value="{DynamicResource Accent.Primary}" />
+                                </Style>
+                                <Style Selector="ToggleButton:unchecked TextBlock.visibilityIcon">
+                                    <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}" />
+                                    <Setter Property="TextDecorations" Value="Strikethrough" />
+                                </Style>
+                            </ToggleButton.Styles>
+                        </ToggleButton>
+
+                        <!-- Outline Toggle -->
+                        <ToggleButton Grid.Column="2" IsChecked="{Binding IsOutlined}"
+                                      Background="Transparent"
+                                      BorderThickness="0"
+                                      Padding="4"
+                                      Margin="4,0,0,0">
+                            <TextBlock Text="⭕" Classes="outlineIcon" />
+                            <ToggleButton.Styles>
+                                <Style Selector="ToggleButton:checked TextBlock.outlineIcon">
+                                    <Setter Property="Foreground" Value="{DynamicResource Accent.Primary}" />
+                                </Style>
+                                <Style Selector="ToggleButton:unchecked TextBlock.outlineIcon">
+                                    <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}" />
+                                </Style>
+                            </ToggleButton.Styles>
+                        </ToggleButton>
+                    </Grid>
+                </TreeDataTemplate>
+            </TreeView.DataTemplates>
+        </TreeView>
+    </Grid>
+</UserControl>

@@ -269,6 +269,12 @@ struct DeviceResources {
   cursor_render_archetype: Option<resources::CursorRenderResourceArchetype>,
 
   #[cfg(debug_assertions)]
+  marker_render_archetype:
+    DropTracker<TrackedOption<resources::MarkerRenderResourceArchetype, 2>, 2>,
+  #[cfg(not(debug_assertions))]
+  marker_render_archetype: Option<resources::MarkerRenderResourceArchetype>,
+
+  #[cfg(debug_assertions)]
   sky_render_archetype: DropTracker<TrackedOption<resources::SkyRenderResourceArchetype, 3>, 3>,
   #[cfg(not(debug_assertions))]
   sky_render_archetype: Option<resources::SkyRenderResourceArchetype>,
@@ -623,9 +629,15 @@ impl DeviceResources {
     let outline_vertex_shader = shader_manager
       .get(outline_vertex_shader_key)
       .ok_or(GpuError::InvalidShader)?;
+    if outline_vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
+      return Err(GpuError::InvalidShader);
+    }
     let outline_fragment_shader = shader_manager
       .get(outline_fragment_shader_key)
       .ok_or(GpuError::InvalidShader)?;
+    if outline_fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
+      return Err(GpuError::InvalidShader);
+    }
 
     // Create initial struct
     let res = unsafe {
@@ -723,7 +735,7 @@ impl DeviceResources {
         .pipeline_layout
         .get(),
       )
-      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
+      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::INVERT_FRONT_FACE)
       .with_render_pass(
         self
           .renderpasses
@@ -763,7 +775,7 @@ impl DeviceResources {
           .with_fragment_module(outline_fragment_shader.module.get())
           .add_viewport(vk::Viewport {
             width: presentation_engine_state.extent().0 as _,
-            height: -(presentation_engine_state.extent().1 as f32),
+            height: -(presentation_engine_state.extent().1 as f32), // Y axis points downwards in Vulkan, so flip it
             x: 0.0,
             y: presentation_engine_state.extent().1 as f32,
             min_depth: 0.0,
@@ -928,7 +940,7 @@ impl DeviceResources {
         .pipeline_layout
         .get(),
       )
-      .with_pipeline_flags(PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::NO_DEPTH_WRITE) // No culling so we see it from inside and outside (yes, cull all means no culling)
+      .with_pipeline_flags(PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE) // No culling so we see it from inside and outside (yes, cull all means no culling)
       .with_render_pass(
         self
           .renderpasses
@@ -1110,7 +1122,7 @@ impl DeviceResources {
     let push_constant_ranges = [vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
       .offset(0)
-      .size(256)];
+      .size(128)];
     let pipeline_layout_info =
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
@@ -1159,7 +1171,7 @@ impl DeviceResources {
       )
       .with_pipeline_layout(pipeline_layout)
       .with_pipeline_flags(
-        PipelineFlags::CULL_ALL | PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::INVERT_FRONT_FACE,
+        PipelineFlags::CULL_ALL | PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST | PipelineFlags::INVERT_FRONT_FACE,
       )
       .with_render_pass(
         self
@@ -1207,6 +1219,159 @@ impl DeviceResources {
     {
       self.cursor_render_archetype.as_ref()
     }
+  }
+
+  fn get_marker_archetype(&self) -> Option<&'_ resources::MarkerRenderResourceArchetype> {
+    #[cfg(debug_assertions)]
+    {
+      self.marker_render_archetype.as_ref().as_ref()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      self.marker_render_archetype.as_ref()
+    }
+  }
+
+  fn create_marker_archetype(
+    &mut self,
+    device: &LogicalDevice,
+    vertex_shader_key: ShaderKey,
+    fragment_shader_key: ShaderKey,
+    depth_stencil_format: vk::Format,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()> {
+    if self.marker_render_archetype.is_some() {
+      return Err(GpuError::InvalidState);
+    }
+
+    let live_presentation_engines_lock = self.live_presentation_engines.read();
+    let presentation_engine_lock = live_presentation_engines_lock
+      .get(&handle)
+      .ok_or(GpuError::InvalidArgument)?;
+    let presentation_engine_state = presentation_engine_lock.read();
+
+    let shader_manager = self.shader_manager.read();
+    let vertex_shader = shader_manager
+      .get(vertex_shader_key)
+      .ok_or(GpuError::InvalidShader)?;
+    if vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
+      return Err(GpuError::InvalidShader);
+    }
+    let fragment_shader = shader_manager
+      .get(fragment_shader_key)
+      .ok_or(GpuError::InvalidShader)?;
+    if fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
+      return Err(GpuError::InvalidShader);
+    }
+
+    let res = unsafe { resources::MarkerRenderResourceArchetype::new(device) }?;
+    #[cfg(not(debug_assertions))]
+    {
+      self.marker_render_archetype = Some(res);
+    }
+    #[cfg(debug_assertions)]
+    {
+      self.marker_render_archetype = DropTracker::new(TrackedOption::some(res));
+    }
+
+    let pipeline_graphics_info = GraphicsInfo::default()
+      .with_vertex_in(
+        VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+          .clone(),
+      )
+      .with_pre_rasterization(
+        PreRasterization::default()
+          .with_vertex_module(vertex_shader.module.get())
+          .clone(),
+      )
+      .with_fragment_shader(
+        FragmentShader::default()
+          .with_fragment_module(fragment_shader.module.get())
+          .add_viewport(vk::Viewport {
+            width: presentation_engine_state.extent().0 as _,
+            height: -(presentation_engine_state.extent().1 as f32),
+            x: 0.0,
+            y: presentation_engine_state.extent().1 as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+          })
+          .add_scissors(vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: vk::Extent2D {
+              width: presentation_engine_state.extent().0,
+              height: presentation_engine_state.extent().1,
+            },
+          })
+          .clone(),
+      )
+      .with_fragment_out(
+        FragmentOut::default()
+          .add_color_attachment_format(presentation_engine_state.format())
+          .with_depth_attachment_format(depth_stencil_format)
+          .with_stencil_attachment_format(depth_stencil_format)
+          .clone(),
+      )
+      .with_pipeline_layout(
+        unsafe {
+          let ref_arch: Option<&_>;
+          #[cfg(debug_assertions)]
+          {
+            ref_arch = self.marker_render_archetype.as_ref().as_ref();
+          }
+          #[cfg(not(debug_assertions))]
+          {
+            ref_arch = self.marker_render_archetype.as_ref();
+          }
+
+          ref_arch.unwrap_unchecked()
+        }
+        .pipeline_layout
+        .get(),
+      )
+      .with_pipeline_flags(PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE)
+      .with_render_pass(
+        self
+          .renderpasses
+          .get_or_create_render_pass(
+            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
+            0,
+            device,
+            &self.allocator.allocator,
+            &self.discard_pool,
+            0,
+          )?
+          .0
+          .get(),
+      )
+      .with_subpass(0)
+      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+      .with_stencil_compare_op(StencilCompareOp::None)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(255)
+      .with_stencil_compare_mask(0)
+      .with_stencil_write_mask(u32::MAX)
+      .clone();
+
+    self
+      .pipeline_pool
+      .write()
+      .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
+
+    {
+      let val = unsafe { self.marker_render_archetype.take().unwrap_unchecked() }
+        .with_graphics_info(pipeline_graphics_info);
+
+      #[cfg(not(debug_assertions))]
+      {
+        self.marker_render_archetype = Some(val);
+      }
+      #[cfg(debug_assertions)]
+      {
+        self.marker_render_archetype = DropTracker::new(TrackedOption::some(val));
+      }
+    }
+    Ok(())
   }
 
   fn create_cursor_archetype(
@@ -1355,279 +1520,13 @@ impl DeviceResources {
     Ok(())
   }
 
-  fn ensure_text_shader_modules(
-    &self,
-    device: &ash::Device,
-  ) -> GpuResult<(ShaderKey, ShaderKey)> {
-    use aethervk_oshal_rlib::os::fs::FileSystemObject;
-    let vert_path: PathBuf;
-    let frag_path: PathBuf;
-
-    #[cfg(debug_assertions)]
-    {
-      let mut exe_path = oshal::os::fs::current_exe().unwrap();
-      while let Some(p) = exe_path.parent() {
-        if p.join("assets").is_dir() {
-          exe_path = p.join("assets");
-          break;
-        }
-        exe_path = p;
-      }
-      vert_path = exe_path.join("text.vert.spv");
-      frag_path = exe_path.join("text.frag.spv");
-    }
-    #[cfg(not(debug_assertions))]
-    {
-      vert_path = PathBuf::from("assets/text.vert.spv");
-      frag_path = PathBuf::from("assets/text.frag.spv");
-    }
-
-    let mut shader_manager = self.shader_manager.write();
-    let vkey = shader_manager.get_or_load(device, vert_path.as_ref(), "main", spirv::ExecutionModel::Vertex)?;
-    let fkey = shader_manager.get_or_load(device, frag_path.as_ref(), "main", spirv::ExecutionModel::Fragment)?;
-
-    Ok((vkey, fkey))
-  }
-
-  fn create_text_archetype(
-    &mut self,
-    device: &vulkan::device::LogicalDevice,
-    vertex_shader_key: ShaderKey,
-    fragment_shader_key: ShaderKey,
-    depth_stencil_format: vk::Format,
-    queue: &Queue,
-    timeline: u64,
-    handle: PresentationEngineHandle,
-  ) -> GpuResult<()> {
-    if self.text_render_archetype.is_some() {
-      return Err(GpuError::InvalidState);
-    }
-    let live_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_state = live_engines_lock.get(&handle).unwrap().read();
-    let shader_manager = self.shader_manager.read();
-    let vertex_shader = shader_manager.get(vertex_shader_key).unwrap();
-    let fragment_shader = shader_manager.get(fragment_shader_key).unwrap();
-
-    let bindings = [vk::DescriptorSetLayoutBinding::default()
-      .binding(0)
-      .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-      .descriptor_count(1)
-      .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
-    let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    let set_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }?;
-    let set_layouts = [set_layout];
-
-    let push_constant_ranges = [vk::PushConstantRange::default()
-      .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
-      .offset(0)
-      .size(48)]; // vec2 + vec2 + vec4 + vec4 = 48 bytes
-    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
-      .set_layouts(&set_layouts)
-      .push_constant_ranges(&push_constant_ranges);
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
-
-    let mut arch = resources::TextRenderResourceArchetype {
-      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
-      pipeline_key: None,
-      descriptor_set_layout: unsafe { NonZeroHandle::new_unchecked(set_layout) },
-      descriptor_pool: None,
-      descriptor_set: None,
-      font_texture: None,
-      font_sampler: None,
-      font_atlas: None,
-      allocator_raw: Some(self.allocator.allocator.get_raw()),
-    };
-
-    // Upload Font Atlas
-    let font_path: aethervk_oshal_rlib::os::fs::PathBuf;
-    #[cfg(debug_assertions)]
-    {
-      let assets_dir: aethervk_oshal_rlib::os::fs::PathBuf = {
-        use aethervk_oshal_rlib::os;
-        use aethervk_oshal_rlib::os::fs::FileSystemObject;
-        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
-        if args.len() > 1 {
-          aethervk_oshal_rlib::os::fs::PathBuf::from(&args[1])
-        } else {
-          let exe_path = os::fs::current_exe().map_err(|_| GpuError::BackendSpecific("Fail".into()))?;
-          let mut path = exe_path.parent();
-          let mut assets_dir: Option<PathBuf> = None;
-          while let Some(p) = path {
-            let test_path = p.join("assets");
-            if test_path.is_dir() { assets_dir = Some(test_path); break; }
-            path = p.parent();
-          }
-          assets_dir.expect("Fail")
-        }
-      };
-      font_path = assets_dir.join("fonts/JetBrainsMono-Bold.ttf");
-    }
-    #[cfg(not(debug_assertions))]
-    {
-      font_path = aethervk_oshal_rlib::os::fs::PathBuf::from("assets/fonts/JetBrainsMono-Bold.ttf");
-    }
-
-    if let Ok(mapped_file) = aethervk_oshal_rlib::os::files::MappedFile::new(font_path) {
-      let font_data = mapped_file.as_slice();
-      if let Some(atlas) = crate::scene::text::create_ascii_atlas(font_data, 64.0) {
-        let texture = crate::simulation::comet::Texture {
-           data: atlas.image_data.clone(),
-           format: crate::simulation::comet::TexelFormat::R8_UNORM,
-           width: atlas.width,
-           height: atlas.height,
-           has_mipmaps: false,
-        };
-
-        let command_pool_info = vk::CommandPoolCreateInfo::default()
-          .queue_family_index(queue.family_index)
-          .flags(vk::CommandPoolCreateFlags::TRANSIENT);
-        let command_pool = unsafe { device.create_command_pool(&command_pool_info, None) }?;
-
-        let alloc_info = vk::CommandBufferAllocateInfo::default()
-          .command_pool(command_pool)
-          .level(vk::CommandBufferLevel::PRIMARY)
-          .command_buffer_count(1);
-        let command_buffer = unsafe { device.allocate_command_buffers(&alloc_info) }?[0];
-
-        let begin_info = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        unsafe { device.begin_command_buffer(command_buffer, &begin_info)? };
-
-        if let Ok(image) = resources::Image::new_2d(device, &self.allocator.allocator, command_buffer, &self.discard_pool, timeline, &texture, vk::ImageUsageFlags::SAMPLED, "FontAtlas") {
-          let sampler_info = vk::SamplerCreateInfo::default()
-            .mag_filter(vk::Filter::LINEAR)
-            .min_filter(vk::Filter::LINEAR)
-            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
-          if let Ok(sampler) = unsafe { device.create_sampler(&sampler_info, None) } {
-            let pool_sizes = [vk::DescriptorPoolSize::default().ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER).descriptor_count(1)];
-            let pool_info = vk::DescriptorPoolCreateInfo::default().pool_sizes(&pool_sizes).max_sets(1);
-            if let Ok(pool) = unsafe { device.create_descriptor_pool(&pool_info, None) } {
-              let set_layouts = [arch.descriptor_set_layout.get()];
-              let alloc_info = vk::DescriptorSetAllocateInfo::default().descriptor_pool(pool).set_layouts(&set_layouts);
-              if let Ok(sets) = unsafe { device.allocate_descriptor_sets(&alloc_info) } {
-                let set = sets[0];
-                let image_info = [vk::DescriptorImageInfo::default()
-                  .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                  .image_view(image.image_view.get())
-                  .sampler(sampler)];
-                let write = vk::WriteDescriptorSet::default()
-                  .dst_set(set)
-                  .dst_binding(0)
-                  .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                  .image_info(&image_info);
-                unsafe { device.update_descriptor_sets(&[write], &[]) };
-                
-                arch.font_texture = Some(image);
-                arch.font_sampler = Some(sampler);
-                arch.descriptor_pool = Some(unsafe { NonZeroHandle::new_unchecked(pool) });
-                arch.descriptor_set = Some(set);
-                arch.font_atlas = Some(atlas);
-              }
-            }
-          }
-        }
-        unsafe { device.end_command_buffer(command_buffer)? };
-
-        let command_buffers = [command_buffer];
-        let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
-        
-        unsafe {
-          device.queue_submit(
-            queue.handle,
-            &[submit_info],
-            vk::Fence::null(),
-          )?;
-          device.queue_wait_idle(queue.handle)?;
-          device.destroy_command_pool(command_pool, None);
-        }
-      }
-    }
-
-    let pipeline_graphics_info = GraphicsInfo::default()
-      .with_vertex_in(
-        VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-          .clone(),
-      )
-      .with_pre_rasterization(
-        PreRasterization::default()
-          .with_vertex_module(vertex_shader.module.get())
-          .clone(),
-      )
-      .with_fragment_shader(
-        FragmentShader::default()
-          .with_fragment_module(fragment_shader.module.get())
-          .add_viewport(vk::Viewport {
-            width: presentation_engine_state.extent().0 as _,
-            height: -(presentation_engine_state.extent().1 as f32),
-            x: 0.0,
-            y: presentation_engine_state.extent().1 as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-          })
-          .add_scissors(vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-              width: presentation_engine_state.extent().0,
-              height: presentation_engine_state.extent().1,
-            },
-          })
-          .clone(),
-      )
-      .with_fragment_out(
-        FragmentOut::default()
-          .add_color_attachment_format(presentation_engine_state.format())
-          .with_depth_attachment_format(depth_stencil_format)
-          .clone(),
-      )
-      .with_pipeline_layout(pipeline_layout)
-      .with_pipeline_flags(
-        PipelineFlags::CULL_ALL | PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST | PipelineFlags::INVERT_FRONT_FACE,
-      )
-      .with_render_pass(
-        self
-          .renderpasses
-          .get_or_create_render_pass(
-            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
-            0,
-            device,
-            &self.allocator.allocator,
-            &self.discard_pool,
-            0,
-          )?
-          .0
-          .get(),
-      )
-      .with_subpass(0)
-      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
-      .clone();
-
-    let pipeline_key = pipeline_graphics_info.pipeline_key();
-    self
-      .pipeline_pool
-      .write()
-      .get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
-    arch.pipeline_key = Some(pipeline_key);
-
-    #[cfg(not(debug_assertions))]
-    {
-      self.text_render_archetype = Some(arch);
-    }
-    #[cfg(debug_assertions)]
-    {
-      self.text_render_archetype = DropTracker::new(TrackedOption::some(arch));
-    }
-
-    Ok(())
-  }
-
   fn has_discardables(&self) -> bool {
     self.physical_mesh_render_archetype.is_some()
       || self.physical_mesh_resources.read().is_some()
       || self.sun_render_archetype.is_some()
       || self.sun_resources.read().is_some()
       || self.cursor_render_archetype.is_some()
+      || self.marker_render_archetype.is_some()
       || self.sky_render_archetype.is_some()
       || self.grid_render_archetype.is_some()
       || self.minimap_render_archetype.is_some()
@@ -1681,6 +1580,9 @@ impl DeviceResources {
       }
     }
     if let Some(mut archetype) = self.cursor_render_archetype.take() {
+      archetype.discard(device, &self.discard_pool, u64::MAX);
+    }
+    if let Some(mut archetype) = self.marker_render_archetype.take() {
       archetype.discard(device, &self.discard_pool, u64::MAX);
     }
     if let Some(mut archetype) = self.sky_render_archetype.take() {
@@ -1814,6 +1716,11 @@ impl DeviceResources {
       cursor_render_archetype: DropTracker::new(TrackedOption::none()),
       #[cfg(not(debug_assertions))]
       cursor_render_archetype: None,
+
+      #[cfg(debug_assertions)]
+      marker_render_archetype: DropTracker::new(TrackedOption::none()),
+      #[cfg(not(debug_assertions))]
+      marker_render_archetype: None,
       #[cfg(debug_assertions)]
       sky_render_archetype: DropTracker::new(TrackedOption::none()),
       #[cfg(not(debug_assertions))]
@@ -2286,54 +2193,33 @@ impl<'a> Device<'a> {
     &self,
     res: &impl core::ops::Deref<Target = DeviceResources>,
   ) -> GpuResult<(ShaderKey, ShaderKey, ShaderKey, ShaderKey)> {
-    let vert_path: PathBuf;
-    let frag_path: PathBuf;
-    let outline_vert_path: PathBuf;
-    let outline_frag_path: PathBuf;
+    let mut vert_path: PathBuf = PathBuf::new();
+    let mut frag_path: PathBuf = PathBuf::new();
+    let mut outline_vert_path: PathBuf = PathBuf::new();
+    let mut outline_frag_path: PathBuf = PathBuf::new();
 
-    // TODO: proper path management
-    #[cfg(debug_assertions)]
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific(
+            "Failed to get executable path for asset loading".into(),
+          )
+        })?;
+        exe_path.parent().expect("Exe has no parent directory").join("assets")
+      }
+    };
+
+    vert_path = assets_dir.join("physical_mesh.vert.spv");
+    #[cfg(feature = "physical_mesh_debug_normals")]
     {
-      let assets_dir: PathBuf = {
-        use aethervk_oshal_rlib::os;
-        use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
-        if args.len() > 1 {
-          let p = PathBuf::from(&args[1]);
-          if !p.is_dir() {
-            return Err(GpuError::InvalidArgument);
-          }
-
-          p
-        } else {
-          let exe_path = fs::current_exe().map_err(|_| {
-            GpuError::BackendSpecific(
-              "Failed to get executable path for debug asset loading".into(),
-            )
-          })?;
-
-          let mut path = exe_path.parent();
-          let mut assets_dir: Option<PathBuf> = None;
-
-          while let Some(p) = path {
-            use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-            let test_path = p.join("assets");
-            if test_path.is_dir() {
-              assets_dir = Some(test_path);
-              break;
-            }
-            path = p.parent();
-          }
-
-          let assets_dir = assets_dir
-            .expect("Could not find assets directory when searching from executable path");
-
-          assets_dir
-        }
-      };
-
+      frag_path = assets_dir.join("physical_mesh_debug_normals.frag.spv");
+    }
+    #[cfg(not(feature = "physical_mesh_debug_normals"))]
+    {
+      frag_path = assets_dir.join("physical_mesh.frag.spv");
       vert_path = assets_dir.join("physical_mesh.vert.spv");
       outline_vert_path = assets_dir.join("physical_mesh_outline.vert.spv");
       outline_frag_path = assets_dir.join("physical_mesh_outline.frag.spv");
@@ -2346,10 +2232,6 @@ impl<'a> Device<'a> {
       {
         frag_path = assets_dir.join("physical_mesh.frag.spv");
       }
-    }
-    #[cfg(not(debug_assertions))]
-    {
-      todo!();
     }
 
     let mut shader_manager = res.shader_manager.write();
@@ -2389,48 +2271,20 @@ impl<'a> Device<'a> {
   ) -> GpuResult<ShaderKey> {
     let comp_path: PathBuf;
 
-    // TODO: proper path management
-    #[cfg(debug_assertions)]
-    {
-      let assets_dir: PathBuf = {
-        use aethervk_oshal_rlib::os;
-        use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
-        if args.len() > 1 {
-          let p = PathBuf::from(&args[1]);
-          if !p.is_dir() {
-            return Err(GpuError::InvalidArgument);
-          }
-          p
-        } else {
-          let exe_path = os::fs::current_exe().map_err(|_| {
-            GpuError::BackendSpecific(
-              "Failed to get executable path for debug asset loading".into(),
-            )
-          })?;
-
-          let mut path = exe_path.parent();
-          let mut assets_dir: Option<PathBuf> = None;
-
-          while let Some(p) = path {
-            let test_path = p.join("assets");
-            if test_path.is_dir() {
-              assets_dir = Some(test_path);
-              break;
-            }
-            path = p.parent();
-          }
-
-          assets_dir.expect("Could not find assets directory when searching from executable path")
-        }
-      };
-      comp_path = assets_dir.join("skygen.comp.spv");
-    }
-    #[cfg(not(debug_assertions))]
-    {
-      todo!();
-    }
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific(
+            "Failed to get executable path for asset loading".into(),
+          )
+        })?;
+        exe_path.parent().expect("Exe has no parent directory").join("assets")
+      }
+    };
+    comp_path = assets_dir.join("skygen.comp.spv");
 
     let mut shader_manager = res.shader_manager.write();
 
@@ -2450,49 +2304,20 @@ impl<'a> Device<'a> {
   ) -> GpuResult<ShaderKey> {
     let comp_path: PathBuf;
 
-    #[cfg(debug_assertions)]
-    {
-      let assets_dir: PathBuf = {
-        use aethervk_oshal_rlib::os;
-        use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
-        if args.len() > 1 {
-          let p = PathBuf::from(&args[1]);
-          if !p.is_dir() {
-            return Err(GpuError::InvalidArgument);
-          }
-          p
-        } else {
-          let exe_path = os::fs::current_exe().map_err(|_| {
-            GpuError::BackendSpecific(
-              "Failed to get executable path for debug asset loading".into(),
-            )
-          })?;
-
-          let mut path = exe_path.parent();
-          let mut assets_dir: Option<PathBuf> = None;
-
-          while let Some(p) = path {
-            use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-            let test_path = p.join("assets");
-            if test_path.is_dir() {
-              assets_dir = Some(test_path);
-              break;
-            }
-            path = p.parent();
-          }
-
-          assets_dir.expect("Could not find assets directory when searching from executable path")
-        }
-      };
-      comp_path = assets_dir.join("sungen.comp.spv");
-    }
-    #[cfg(not(debug_assertions))]
-    {
-      todo!();
-    }
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific(
+            "Failed to get executable path for asset loading".into(),
+          )
+        })?;
+        exe_path.parent().expect("Exe has no parent directory").join("assets")
+      }
+    };
+    comp_path = assets_dir.join("sungen.comp.spv");
 
     let mut shader_manager = res.shader_manager.write();
     let comp_key = shader_manager.get_or_load(
@@ -2512,53 +2337,21 @@ impl<'a> Device<'a> {
     let vert_path: PathBuf;
     let frag_path: PathBuf;
 
-    #[cfg(debug_assertions)]
-    {
-      let assets_dir: PathBuf = {
-        use aethervk_oshal_rlib::os;
-        use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
-        if args.len() > 1 {
-          let p = PathBuf::from(&args[1]);
-          if !p.is_dir() {
-            return Err(GpuError::InvalidArgument);
-          }
-          p
-        } else {
-          let exe_path = os::fs::current_exe().map_err(|_| {
-            GpuError::BackendSpecific(
-              "Failed to get executable path for debug asset loading".into(),
-            )
-          })?;
-
-          let mut path = exe_path.parent();
-          let mut assets_dir: Option<PathBuf> = None;
-          let mut iter: i32 = 0;
-          const MAX_ITER: i32 = 32;
-
-          while let Some(p) = path {
-            let test_path = p.join("assets");
-            if test_path.is_dir() {
-              assets_dir = Some(test_path);
-              break;
-            }
-            if iter >= MAX_ITER {
-              break;
-            }
-            path = p.parent();
-            iter += 1;
-          }
-          assets_dir.unwrap()
-        }
-      };
-      vert_path = assets_dir.join("grid.vert.spv");
-      frag_path = assets_dir.join("grid.frag.spv");
-    }
-    #[cfg(not(debug_assertions))]
-    {
-      todo!();
-    }
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific(
+            "Failed to get executable path for asset loading".into(),
+          )
+        })?;
+        exe_path.parent().expect("Exe has no parent directory").join("assets")
+      }
+    };
+    vert_path = assets_dir.join("grid.vert.spv");
+    frag_path = assets_dir.join("grid.frag.spv");
 
     let mut shader_manager = res.shader_manager.write();
     let vkey = shader_manager.get_or_load(
@@ -2584,53 +2377,21 @@ impl<'a> Device<'a> {
     let vert_path: PathBuf;
     let frag_path: PathBuf;
 
-    #[cfg(debug_assertions)]
-    {
-      let assets_dir: PathBuf = {
-        use aethervk_oshal_rlib::os;
-        use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
-        if args.len() > 1 {
-          let p = PathBuf::from(&args[1]);
-          if !p.is_dir() {
-            return Err(GpuError::InvalidArgument);
-          }
-          p
-        } else {
-          let exe_path = os::fs::current_exe().map_err(|_| {
-            GpuError::BackendSpecific(
-              "Failed to get executable path for debug asset loading".into(),
-            )
-          })?;
-
-          let mut path = exe_path.parent();
-          let mut assets_dir: Option<PathBuf> = None;
-          let mut iter: i32 = 0;
-          const MAX_ITER: i32 = 32;
-
-          while let Some(p) = path {
-            let test_path = p.join("assets");
-            if test_path.is_dir() {
-              assets_dir = Some(test_path);
-              break;
-            }
-            if iter >= MAX_ITER {
-              break;
-            }
-            path = p.parent();
-            iter += 1;
-          }
-          assets_dir.unwrap()
-        }
-      };
-      vert_path = assets_dir.join("sky.vert.spv");
-      frag_path = assets_dir.join("sky.frag.spv");
-    }
-    #[cfg(not(debug_assertions))]
-    {
-      todo!();
-    }
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific(
+            "Failed to get executable path for asset loading".into(),
+          )
+        })?;
+        exe_path.parent().expect("Exe has no parent directory").join("assets")
+      }
+    };
+    vert_path = assets_dir.join("sky.vert.spv");
+    frag_path = assets_dir.join("sky.frag.spv");
 
     let mut shader_manager = res.shader_manager.write();
     let vkey = shader_manager.get_or_load(
@@ -2656,55 +2417,22 @@ impl<'a> Device<'a> {
     let vert_path: PathBuf;
     let frag_path: PathBuf;
 
-    #[cfg(debug_assertions)]
-    {
-      let assets_dir: PathBuf = {
-        use aethervk_oshal_rlib::os;
-        use aethervk_oshal_rlib::os::fs::FileSystemObject;
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific(
+            "Failed to get executable path for asset loading".into(),
+          )
+        })?;
+        exe_path.parent().expect("Exe has no parent directory").join("assets")
+      }
+    };
 
-        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
-        if args.len() > 1 {
-          let p = PathBuf::from(&args[1]);
-          if !p.is_dir() {
-            return Err(GpuError::InvalidArgument);
-          }
-
-          p
-        } else {
-          let exe_path = os::fs::current_exe().map_err(|_| {
-            GpuError::BackendSpecific(
-              "Failed to get executable path for debug asset loading".into(),
-            )
-          })?;
-
-          let mut path = exe_path.parent();
-          let mut assets_dir: Option<PathBuf> = None;
-
-          while let Some(p) = path {
-            use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-            let test_path = p.join("assets");
-            if test_path.is_dir() {
-              assets_dir = Some(test_path);
-              break;
-            }
-            path = p.parent();
-          }
-
-          let assets_dir = assets_dir
-            .expect("Could not find assets directory when searching from executable path");
-
-          assets_dir
-        }
-      };
-
-      vert_path = assets_dir.join("sun_volume.vert.spv");
-      frag_path = assets_dir.join("sun_volume.frag.spv");
-    }
-    #[cfg(not(debug_assertions))]
-    {
-      todo!();
-    }
+    vert_path = assets_dir.join("sun_volume.vert.spv");
+    frag_path = assets_dir.join("sun_volume.frag.spv");
 
     let mut shader_manager = res.shader_manager.write();
 
@@ -2724,6 +2452,46 @@ impl<'a> Device<'a> {
     Ok((vert_key, frag_key))
   }
 
+  fn ensure_marker_shader_modules(
+    &self,
+    res: &impl core::ops::Deref<Target = DeviceResources>,
+  ) -> GpuResult<(ShaderKey, ShaderKey)> {
+    let vert_path: PathBuf;
+    let frag_path: PathBuf;
+
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific(
+            "Failed to get executable path for asset loading".into(),
+          )
+        })?;
+        exe_path.parent().expect("Exe has no parent directory").join("assets")
+      }
+    };
+
+    vert_path = assets_dir.join("marker.vert.spv");
+    frag_path = assets_dir.join("marker.frag.spv");
+
+    let mut shader_manager = res.shader_manager.write();
+    let vkey = shader_manager.get_or_load(
+      &self.device,
+      &vert_path,
+      "main",
+      spirv::ExecutionModel::Vertex,
+    )?;
+    let fkey = shader_manager.get_or_load(
+      &self.device,
+      &frag_path,
+      "main",
+      spirv::ExecutionModel::Fragment,
+    )?;
+    Ok((vkey, fkey))
+  }
+
   fn ensure_cursor_shader_modules(
     &self,
     res: &impl core::ops::Deref<Target = DeviceResources>,
@@ -2731,61 +2499,28 @@ impl<'a> Device<'a> {
     let vert_path: PathBuf;
     let frag_path: PathBuf;
 
-    #[cfg(debug_assertions)]
+    let assets_dir = {
+      if let Some(path_str) = &*crate::gpu::ASSET_DIR.read() {
+        PathBuf::from(path_str)
+      } else {
+        use aethervk_oshal_rlib::os::fs;
+        let exe_path = fs::current_exe().map_err(|_| {
+          GpuError::BackendSpecific(
+            "Failed to get executable path for asset loading".into(),
+          )
+        })?;
+        exe_path.parent().expect("Exe has no parent directory").join("assets")
+      }
+    };
+
+    vert_path = assets_dir.join("cursor.vert.spv");
+    #[cfg(feature = "cursor_debug")]
     {
-      let assets_dir: PathBuf = {
-        use aethervk_oshal_rlib::os;
-        use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-        let args = os::env::args().map_err(|_| GpuError::InvalidArgument)?;
-        if args.len() > 1 {
-          let p = PathBuf::from(&args[1]);
-          if !p.is_dir() {
-            return Err(GpuError::InvalidArgument);
-          }
-
-          p
-        } else {
-          let exe_path = fs::current_exe().map_err(|_| {
-            GpuError::BackendSpecific(
-              "Failed to get executable path for debug asset loading".into(),
-            )
-          })?;
-
-          let mut path = exe_path.parent();
-          let mut assets_dir: Option<PathBuf> = None;
-
-          while let Some(p) = path {
-            use aethervk_oshal_rlib::os::fs::FileSystemObject;
-
-            let test_path = p.join("assets");
-            if test_path.is_dir() {
-              assets_dir = Some(test_path);
-              break;
-            }
-            path = p.parent();
-          }
-
-          let assets_dir = assets_dir
-            .expect("Could not find assets directory when searching from executable path");
-
-          assets_dir
-        }
-      };
-
-      vert_path = assets_dir.join("cursor.vert.spv");
-      #[cfg(feature = "cursor_debug")]
-      {
-        frag_path = assets_dir.join("cursor_debug.frag.spv");
-      }
-      #[cfg(not(feature = "cursor_debug"))]
-      {
-        frag_path = assets_dir.join("cursor.frag.spv");
-      }
+      frag_path = assets_dir.join("cursor_debug.frag.spv");
     }
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(feature = "cursor_debug"))]
     {
-      todo!();
+      frag_path = assets_dir.join("cursor.frag.spv");
     }
 
     let mut shader_manager = res.shader_manager.write();
@@ -3058,11 +2793,6 @@ impl<'a> RenderDevice for Device<'a> {
       wres.create_grid_archetype(&self.device, vkey, fkey, self.depth_stencil_format, handle)?;
     }
 
-    if wres.text_render_archetype.is_none() {
-      let (vkey, fkey) = wres.ensure_text_shader_modules(&self.device)?;
-      wres.create_text_archetype(&self.device, vkey, fkey, self.depth_stencil_format, &self.queues.get_graphics_queue(), timeline, handle)?;
-    }
-
     Ok(())
   }
 
@@ -3146,6 +2876,10 @@ impl<'a> RenderDevice for Device<'a> {
 
     for cursor_call in &render_scene.cursor_calls {
       crate::gpu::frame::do_draw_cursor(self, view, view_proj, cmd_buffer, cursor_call)?;
+    }
+
+    for marker_call in &render_scene.marker_calls {
+      crate::gpu::frame::do_draw_marker(self, view, view_proj, cmd_buffer, marker_call)?;
     }
 
     Ok(())
@@ -3754,6 +3488,38 @@ impl<'a> RenderDevice for Device<'a> {
     Ok(())
   }
 
+  fn get_or_create_marker_resources(
+    &self,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult> {
+    if self.res.read().marker_render_archetype.is_none() {
+      let mut wres = self.res.write();
+      if wres.marker_render_archetype.is_none() {
+        let (vkey, fkey) = self.ensure_marker_shader_modules(&wres)?;
+        wres.create_marker_archetype(
+          &self.device,
+          vkey,
+          fkey,
+          self.depth_stencil_format,
+          handle,
+        )?;
+      }
+    }
+
+    let res = self.res.read();
+    let arch = res.get_marker_archetype().unwrap();
+    let pipeline_key = unsafe { arch.pipeline_key.unwrap_unchecked() };
+
+    Ok(ResourceUploadResult {
+      pipeline: pipeline_key,
+      outline_pipeline: None,
+      buffers: crate::gpu::NULL_GPU_RESOURCE,
+      texture_flags: TextureFlags::empty(),
+      emissive_intensity: 0.0,
+      emissive_color: [0.0; 3],
+    })
+  }
+
   fn get_or_create_cursor_resources(
     &self,
     handle: PresentationEngineHandle,
@@ -3855,7 +3621,7 @@ impl<'a> RenderDevice for Device<'a> {
         .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
         .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
         .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
-        .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        .old_layout(vk::ImageLayout::PRESENT_SRC_KHR)
         .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
         .image(image.get())
         .subresource_range(
@@ -3904,7 +3670,7 @@ impl<'a> RenderDevice for Device<'a> {
         .dst_stage_mask(vk::PipelineStageFlags2::NONE)
         .dst_access_mask(vk::AccessFlags2::NONE)
         .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-        .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
         .image(image.get())
         .subresource_range(
           vk::ImageSubresourceRange::default()
@@ -3936,7 +3702,6 @@ impl<'a> RenderDevice for Device<'a> {
       unsafe { self.device.destroy_command_pool(command_pool, None) };
 
       let mapped_ptr = alloc_info_res.mapped_data as *const u8;
-      oshal::log!("mapped_ptr is null: {}", mapped_ptr.is_null());
       if !mapped_ptr.is_null() {
         let _ = unsafe {
           res
@@ -4371,6 +4136,48 @@ impl<'a> RenderDevice for Device<'a> {
       }
     }
 
+    Ok(())
+  }
+
+  fn push_marker_constants(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    push_constants: &crate::gpu::MarkerPushConstants,
+  ) -> GpuResult<()> {
+    let res = self.res.read();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers
+      .get(&(timeline, cmd_buffer))
+      .ok_or(GpuError::InvalidArgument)?;
+
+    let arch_ref: Option<&_>;
+    #[cfg(debug_assertions)]
+    {
+      arch_ref = res.marker_render_archetype.as_ref().as_ref();
+    }
+    #[cfg(not(debug_assertions))]
+    {
+      arch_ref = res.marker_render_archetype.as_ref();
+    }
+
+    if let Some(arch) = arch_ref {
+      let layout = arch.pipeline_layout.get();
+      let push_constants_bytes = unsafe { core::slice::from_raw_parts(
+        push_constants as *const _ as *const u8,
+        core::mem::size_of::<crate::gpu::MarkerPushConstants>(),
+      ) };
+
+      unsafe {
+        self.device.cmd_push_constants(
+          data.command_buffer.get(),
+          layout,
+          vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+          0,
+          push_constants_bytes,
+        );
+      }
+    }
     Ok(())
   }
 
@@ -5163,7 +4970,6 @@ impl<'a> RenderDevice for Device<'a> {
     #[repr(C)]
     struct GridPush {
       view_proj: [f32; 16],
-      inv_view_proj: [f32; 16],
       camera_pos: [f32; 3],
       near_plane: f32,
       far_plane: f32,
@@ -5173,11 +4979,8 @@ impl<'a> RenderDevice for Device<'a> {
       _pad2: f32,
     }
 
-    let inv_view_proj_mat = view_proj.inverse().unwrap();
-
     let push = GridPush {
       view_proj: view_proj.into(),
-      inv_view_proj: inv_view_proj_mat.into(),
       camera_pos: camera_pos.into(),
       near_plane,
       far_plane,
@@ -5223,18 +5026,18 @@ impl<'a> RenderDevice for Device<'a> {
       let mut wres = self.res.write();
       if wres.minimap_render_archetype.is_none() {
         let (vkey, fkey) = ensure_minimap_shader_modules(&self.device, &wres)?;
-        
+
         let mut arch = unsafe { resources::MinimapRenderResourceArchetype::new(&self.device)? };
-        
+
         let shader_manager = wres.shader_manager.read();
         let vertex_shader = shader_manager.get(vkey).unwrap();
         let fragment_shader = shader_manager.get(fkey).unwrap();
-        
+
         let handle = wres.live_presentation_engines.read().keys().next().copied();
         if let Some(h) = handle {
           let presentation_engine_lock = wres.live_presentation_engines.read();
           let pe = presentation_engine_lock.get(&h).unwrap().read();
-          
+
           let pipeline_graphics_info = pipelines::GraphicsInfo::default()
             .with_vertex_in(pipelines::VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP).clone())
             .with_pre_rasterization(
@@ -5267,7 +5070,7 @@ impl<'a> RenderDevice for Device<'a> {
             .with_subpass(0)
             .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
             .clone();
-            
+
           drop(pe);
           drop(presentation_engine_lock);
           drop(shader_manager);
@@ -5275,7 +5078,7 @@ impl<'a> RenderDevice for Device<'a> {
           let pipeline_key = pipeline_graphics_info.pipeline_key();
           wres.pipeline_pool.write().get_or_create_graphics_pipeline(&self.device, &pipeline_graphics_info)?;
           arch.pipeline_key = Some(pipeline_key);
-          
+
           #[cfg(not(debug_assertions))]
           {
             wres.minimap_render_archetype = Some(arch);
@@ -5322,37 +5125,37 @@ impl<'a> RenderDevice for Device<'a> {
 
       unsafe {
         self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
-        
+
         let mut push_bytes = [0u8; 544];
-        
+
         let offset = [0.7f32, 0.7f32];
         let size = [0.25f32, 0.25f32 * aspect_ratio];
         use aethervk_oshal_rlib::math::vector::Vector;
         let player_pos_arr = [player_pos.x(), player_pos.y()];
         let max_distance_f = max_distance;
         let num_planets = planets.len() as u32;
-        
+
         core::ptr::copy_nonoverlapping(&offset as *const _ as *const u8, push_bytes.as_mut_ptr().add(0), 8);
         core::ptr::copy_nonoverlapping(&size as *const _ as *const u8, push_bytes.as_mut_ptr().add(8), 8);
         core::ptr::copy_nonoverlapping(&player_pos_arr as *const _ as *const u8, push_bytes.as_mut_ptr().add(16), 8);
         core::ptr::copy_nonoverlapping(&max_distance_f as *const _ as *const u8, push_bytes.as_mut_ptr().add(24), 4);
         core::ptr::copy_nonoverlapping(&num_planets as *const _ as *const u8, push_bytes.as_mut_ptr().add(28), 4);
-        
+
         for (i, p) in planets.iter().enumerate().take(16) {
            let base = 32 + i * 32;
            let p_pos = [p.0.x(), p.0.y()];
            let p_size = p.1;
            let p_pad = 0.0f32;
            let p_color = p.2;
-           
+
            core::ptr::copy_nonoverlapping(&p_pos as *const _ as *const u8, push_bytes.as_mut_ptr().add(base + 0), 8);
            core::ptr::copy_nonoverlapping(&p_size as *const _ as *const u8, push_bytes.as_mut_ptr().add(base + 8), 4);
            core::ptr::copy_nonoverlapping(&p_pad as *const _ as *const u8, push_bytes.as_mut_ptr().add(base + 12), 4);
            core::ptr::copy_nonoverlapping(&p_color as *const _ as *const u8, push_bytes.as_mut_ptr().add(base + 16), 16);
         }
-        
+
         self.device.cmd_push_constants(cmd, layout, vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT, 0, &push_bytes);
-        
+
         self.device.cmd_draw(cmd, 4, 1, 0, 0);
       }
     }
@@ -5374,16 +5177,16 @@ impl<'a> RenderDevice for Device<'a> {
       let mut wres = self.res.write();
       if wres.bvh_render_archetype.is_none() {
         let (vkey, fkey) = ensure_bvh_shader_modules(&self.device, &wres)?;
-        
+
         let mut arch = unsafe { resources::BvhRenderResourceArchetype::new(&self.device)? };
-        
+
         let shader_manager = wres.shader_manager.read();
         let vertex_shader = shader_manager.get(vkey).unwrap();
         let fragment_shader = shader_manager.get(fkey).unwrap();
-        
+
         let live_engines_lock = wres.live_presentation_engines.read();
         let pe = live_engines_lock.get(&presentation_engine).unwrap().read();
-        
+
         let pipeline_graphics_info = pipelines::GraphicsInfo::default()
           .with_vertex_in(pipelines::VertexIn::default().with_topology(vk::PrimitiveTopology::LINE_LIST).clone())
           .with_pre_rasterization(
@@ -5417,7 +5220,7 @@ impl<'a> RenderDevice for Device<'a> {
           .with_subpass(0)
           .with_rasterization_polygon_mode(vk::PolygonMode::LINE)
           .clone();
-          
+
         drop(pe);
         drop(live_engines_lock);
         drop(shader_manager);
@@ -5425,7 +5228,7 @@ impl<'a> RenderDevice for Device<'a> {
         let pipeline_key = pipeline_graphics_info.pipeline_key();
         wres.pipeline_pool.write().get_or_create_graphics_pipeline(&self.device, &pipeline_graphics_info)?;
         arch.pipeline_key = Some(pipeline_key);
-        
+
         #[cfg(not(debug_assertions))]
         {
           wres.bvh_render_archetype = Some(arch);
@@ -5467,11 +5270,11 @@ impl<'a> RenderDevice for Device<'a> {
       unsafe {
         self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
         self.device.cmd_set_line_width(cmd, 1.0);
-        
+
         for &(ref bound, ref model_matrix) in nodes {
           use crate::math::collision::linear_bvh::LinearBound;
           use aethervk_oshal_rlib::math::matrix::Matrix;
-          
+
           let (center, type_val, extents, ax, ay, az) = match bound {
             LinearBound::AABB(aabb) => {
               let center = aabb.center();
@@ -5482,36 +5285,36 @@ impl<'a> RenderDevice for Device<'a> {
               let center = obb.center();
               let he = obb.half_extents();
               let axes = obb.axes();
-              (center, 1.0f32, he, [axes[0].x(), axes[0].y(), axes[0].z()], 
-               [axes[1].x(), axes[1].y(), axes[1].z()], 
+              (center, 1.0f32, he, [axes[0].x(), axes[0].y(), axes[0].z()],
+               [axes[1].x(), axes[1].y(), axes[1].z()],
                [axes[2].x(), axes[2].y(), axes[2].z()])
             }
           };
 
           let mut push_bytes = [0u8; 144];
-          
+
           use aethervk_oshal_rlib::math::matrix::Matrix4;
           let view_proj_mat = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_array(&view_proj);
           let mvp = view_proj_mat * *model_matrix;
           let mvp_arr: [f32; 16] = mvp.into();
 
           core::ptr::copy_nonoverlapping(&mvp_arr as *const _ as *const u8, push_bytes.as_mut_ptr(), 64);
-          
+
           use aethervk_oshal_rlib::math::vector::Vector;
           let center_type = [center.x(), center.y(), center.z(), type_val];
           let extents_arr = [extents.x(), extents.y(), extents.z(), 0.0];
           let axes_x = [ax[0], ax[1], ax[2], 0.0];
           let axes_y = [ay[0], ay[1], ay[2], 0.0];
           let axes_z = [az[0], az[1], az[2], 0.0];
-          
+
           core::ptr::copy_nonoverlapping(&center_type as *const _ as *const u8, push_bytes.as_mut_ptr().add(64), 16);
           core::ptr::copy_nonoverlapping(&extents_arr as *const _ as *const u8, push_bytes.as_mut_ptr().add(80), 16);
           core::ptr::copy_nonoverlapping(&axes_x as *const _ as *const u8, push_bytes.as_mut_ptr().add(96), 16);
           core::ptr::copy_nonoverlapping(&axes_y as *const _ as *const u8, push_bytes.as_mut_ptr().add(112), 16);
           core::ptr::copy_nonoverlapping(&axes_z as *const _ as *const u8, push_bytes.as_mut_ptr().add(128), 16);
-          
+
           self.device.cmd_push_constants(cmd, layout, vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT, 0, &push_bytes);
-          
+
           let vert_count = if type_val == 1.0 { 24 } else { 216 };
           self.device.cmd_draw(cmd, vert_count, 1, 0, 0);
         }
@@ -5550,7 +5353,7 @@ impl<'a> RenderDevice for Device<'a> {
 
       unsafe {
         self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
-        
+
         if let Some(set) = archetype.descriptor_set {
            self.device.cmd_bind_descriptor_sets(
              cmd,
@@ -5563,22 +5366,22 @@ impl<'a> RenderDevice for Device<'a> {
         } else {
            return Ok(());
         }
-        
+
         let mut push_bytes = [0u8; 48];
         let pos_arr = [position[0], position[1]];
         let scale_arr = [size[0], size[1]];
         let uv_bounds = [0.0f32, 0.0f32, -1.0f32, -1.0f32];
-        
+
         core::ptr::copy_nonoverlapping(&pos_arr as *const _ as *const u8, push_bytes.as_mut_ptr(), 8);
         core::ptr::copy_nonoverlapping(&scale_arr as *const _ as *const u8, push_bytes.as_mut_ptr().add(8), 8);
         core::ptr::copy_nonoverlapping(&color as *const _ as *const u8, push_bytes.as_mut_ptr().add(16), 16);
         core::ptr::copy_nonoverlapping(&uv_bounds as *const _ as *const u8, push_bytes.as_mut_ptr().add(32), 16);
-        
+
         self.device.cmd_push_constants(cmd, layout, vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT, 0, &push_bytes);
         self.device.cmd_draw(cmd, 4, 1, 0, 0);
       }
     }
-    
+
     Ok(())
   }
 
@@ -5647,12 +5450,12 @@ impl<'a> RenderDevice for Device<'a> {
              // Simple line height advance
              cursor_y += 64.0 * scale_y * 1.5;
              continue;
-          }          
+          }
           let mut uv_bounds = [0.0f32, 0.0f32, 1.0f32, 1.0f32];
           let mut char_size = [1.0f32, 1.0f32];
           let mut char_offset = [0.0f32, 0.0f32];
           let mut advance = 0.5f32;
-          
+
           if let Some(atlas) = &archetype.font_atlas {
             if let Some(glyph) = atlas.glyphs.get(&c) {
                uv_bounds = [glyph.uv_min[0], glyph.uv_min[1], glyph.uv_max[0], glyph.uv_max[1]];
@@ -5666,26 +5469,26 @@ impl<'a> RenderDevice for Device<'a> {
                advance = glyph.advance;
             }
           }
-          
+
           let mut push_bytes = [0u8; 48];
           let cx = cursor_x + char_offset[0] * scale_x;
           let cy = cursor_y + char_offset[1] * scale_y;
           let pos_arr = [cx, cy];
           let scale_arr = [char_size[0] * scale_x, char_size[1] * scale_y];
-          
+
           core::ptr::copy_nonoverlapping(&pos_arr as *const _ as *const u8, push_bytes.as_mut_ptr(), 8);
           core::ptr::copy_nonoverlapping(&scale_arr as *const _ as *const u8, push_bytes.as_mut_ptr().add(8), 8);
           core::ptr::copy_nonoverlapping(&color as *const _ as *const u8, push_bytes.as_mut_ptr().add(16), 16);
           core::ptr::copy_nonoverlapping(&uv_bounds as *const _ as *const u8, push_bytes.as_mut_ptr().add(32), 16);
-          
+
           self.device.cmd_push_constants(cmd, layout, vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT, 0, &push_bytes);
           self.device.cmd_draw(cmd, 4, 1, 0, 0);
-          
+
           cursor_x += advance * scale_x;
         }
       }
     }
-    
+
     Ok(())
   }
 

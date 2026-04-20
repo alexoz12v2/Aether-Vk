@@ -1,4 +1,4 @@
-#version 450
+#version 450 core
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProj;
