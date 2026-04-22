@@ -316,14 +316,14 @@ public partial class DockingManagerViewModel
   [ObservableProperty]
   private LayoutNodeViewModelBase _rootNode;
 
-  public DockingManagerViewModel()
+  public DockingManagerViewModel(LayoutNodeViewModelBase? rootNode = null)
     : base()
   {
     WeakReferenceMessenger.Default.Register<TabDroppedMessage>(this);
     WeakReferenceMessenger.Default.Register<TabDragTaskMessage>(this);
     WeakReferenceMessenger.Default.Register<CoalesceGroupMessage>(this);
     
-    _rootNode = CreateDefaultLayout();
+    _rootNode = rootNode ?? CreateDefaultLayout();
   }
 
   private LayoutNodeViewModelBase CreateDefaultLayout()

@@ -17,6 +17,7 @@ use bitflags::bitflags;
 
 use itertools::Itertools;
 use vk_mem::Alloc;
+use aethervk_oshal_rlib::os::debug;
 #[cfg(windows)]
 use windows::{
   core::{w, s},
@@ -210,7 +211,7 @@ impl PhysicalDeviceQueryResult {
 // TODO: Printer
 #[cfg(debug_assertions)]
 pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
-  _message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+  message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
   _message_types: vk::DebugUtilsMessageTypeFlagsEXT,
   p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
   _p_user_data: *mut c_void,
@@ -218,6 +219,10 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
   let p_msg = unsafe { (*p_callback_data).p_message };
   let msg = unsafe { core::ffi::CStr::from_ptr(p_msg) };
   aethervk_oshal_rlib::log!("[Vulkan Messenger]: {:?}", msg);
+
+  if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
+    debug::print_stacktrace();
+  }
 
   // don't abort Vulkan call
   vk::FALSE
@@ -323,8 +328,10 @@ impl EntryWrapper {
 
           // 2. Build local paths natively via slice concatenation
           let local_layer =
-            alloc::ffi::CString::new([dir_bytes, b"vulkan/share/vulkan/explicit_layer.d"].concat()).unwrap();
-          let local_icd = alloc::ffi::CString::new([dir_bytes, b"vulkan/share/vulkan/icd.d"].concat()).unwrap();
+            alloc::ffi::CString::new([dir_bytes, b"vulkan/share/vulkan/explicit_layer.d"].concat())
+              .unwrap();
+          let local_icd =
+            alloc::ffi::CString::new([dir_bytes, b"vulkan/share/vulkan/icd.d"].concat()).unwrap();
           let local_loader =
             alloc::ffi::CString::new([dir_bytes, b"vulkan/lib/libvulkan.dylib"].concat()).unwrap();
 
@@ -586,10 +593,16 @@ pub(super) fn first_unsupported_extension<'a>(
 #[derive(Copy, Clone, Debug)]
 pub(super) struct RequiredFeatures<'a> {
   pub features: vk::PhysicalDeviceFeatures,
+  /// promoted to 1.2
   pub buffer_device_address: vk::PhysicalDeviceBufferDeviceAddressFeatures<'a>,
+  /// promoted to 1.2
   pub vulkan_memory_model: vk::PhysicalDeviceVulkanMemoryModelFeatures<'a>,
+  /// promoted to 1.2
   pub timeline_semaphore: vk::PhysicalDeviceTimelineSemaphoreFeatures<'a>,
+  /// promoted to 1.2
   pub synchronization2: vk::PhysicalDeviceSynchronization2Features<'a>,
+  /// promoted to 1.2
+  pub descriptor_indexing: vk::PhysicalDeviceDescriptorIndexingFeatures<'a>,
   // TODO add VK_KHR_variable_pointers (promoted to 1.1)
 }
 
@@ -600,6 +613,7 @@ impl RequiredFeatures<'_> {
     let vulkan_memory_model = vk::PhysicalDeviceVulkanMemoryModelFeatures::default();
     let timeline_semaphore = vk::PhysicalDeviceTimelineSemaphoreFeatures::default();
     let synchronization2 = vk::PhysicalDeviceSynchronization2Features::default();
+    let descriptor_indexing = vk::PhysicalDeviceDescriptorIndexingFeatures::default();
 
     Self {
       features,
@@ -607,6 +621,7 @@ impl RequiredFeatures<'_> {
       vulkan_memory_model,
       timeline_semaphore,
       synchronization2,
+      descriptor_indexing,
     }
   }
 
@@ -617,6 +632,7 @@ impl RequiredFeatures<'_> {
       .push_next(&mut self.vulkan_memory_model)
       .push_next(&mut self.timeline_semaphore)
       .push_next(&mut self.synchronization2)
+      .push_next(&mut self.descriptor_indexing)
   }
 
   pub fn populate(&mut self) -> &mut Self {
@@ -625,6 +641,16 @@ impl RequiredFeatures<'_> {
     self.vulkan_memory_model.vulkan_memory_model = vk::TRUE;
     self.timeline_semaphore.timeline_semaphore = vk::TRUE;
     self.synchronization2.synchronization2 = vk::TRUE;
+    // TODO: check that these are baseline for low end devices
+    self.descriptor_indexing.runtime_descriptor_array = vk::TRUE;
+    // TODO: check that these are baseline for low end devices
+    self
+      .descriptor_indexing
+      .shader_sampled_image_array_non_uniform_indexing = vk::TRUE;
+    // TODO: check that these are baseline for low end devices
+    self.descriptor_indexing.descriptor_binding_partially_bound = vk::TRUE;
+    // TODO: check that these are baseline for low end devices
+    self.descriptor_indexing.descriptor_binding_sampled_image_update_after_bind = vk::TRUE;
 
     self
   }
@@ -646,6 +672,22 @@ impl RequiredFeatures<'_> {
     }
     if self.synchronization2.synchronization2 != vk::TRUE {
       the_vec.push("synchronization2".to_string());
+    }
+    if self.descriptor_indexing.runtime_descriptor_array != vk::TRUE {
+      the_vec.push("descriptor_indexing".to_string());
+    }
+    if self
+      .descriptor_indexing
+      .shader_sampled_image_array_non_uniform_indexing
+      != vk::TRUE
+    {
+      the_vec.push("descriptor_indexing_non_uniform_indexing".to_string());
+    }
+    if self.descriptor_indexing.descriptor_binding_partially_bound != vk::TRUE {
+      the_vec.push("descriptor_binding_partially_bound".to_string());
+    }
+    if self.descriptor_indexing.descriptor_binding_sampled_image_update_after_bind != vk::TRUE {
+      the_vec.push("descriptor_binding_sampled_image_update_after_bind_1".to_string());
     }
 
     if the_vec.is_empty() {

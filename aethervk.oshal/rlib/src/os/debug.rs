@@ -68,7 +68,7 @@ mod windows_debug {
         FILE_ATTRIBUTE_NORMAL,
         None,
       )
-      .unwrap_or(INVALID_HANDLE_VALUE);
+          .unwrap_or(INVALID_HANDLE_VALUE);
 
       if handle.is_invalid() {
         return None;
@@ -94,11 +94,11 @@ mod windows_debug {
     let msg = alloc::fmt::format(args) + "\r\n";
 
     if let Ok(c_msg) = alloc::ffi::CString::new(msg.clone()) {
-        let fptr = super::LOGGER_CALLBACK.load(core::sync::atomic::Ordering::Relaxed);
-        if !fptr.is_null() {
-            let cb: extern "C" fn(*const core::ffi::c_char) = unsafe { core::mem::transmute(fptr) };
-            cb(c_msg.as_ptr());
-        }
+      let fptr = super::LOGGER_CALLBACK.load(core::sync::atomic::Ordering::Relaxed);
+      if !fptr.is_null() {
+        let cb: extern "C" fn(*const core::ffi::c_char) = unsafe { core::mem::transmute(fptr) };
+        cb(c_msg.as_ptr());
+      }
     }
 
     #[cfg(feature = "console_log")]
@@ -129,10 +129,109 @@ mod windows_debug {
   }
 
   pub fn print_stacktrace() {
-    // Implementation for Windows stacktrace here
-    // This is a complex topic and requires careful implementation.
-    // For now, we'll just log a message.
-    crate::log!("Stacktrace (Windows): Not yet implemented.");
+    use core::mem::{size_of, MaybeUninit};
+
+    // We define standard Win32 structures to circumvent differing
+    // pointer/handle types mapped across versions of the windows-rs crate.
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+      fn RtlCaptureStackBackTrace(
+        FramesToSkip: u32,
+        FramesToCapture: u32,
+        BackTrace: *mut *mut core::ffi::c_void,
+        BackTraceHash: *mut u32,
+      ) -> u16;
+      fn GetCurrentProcess() -> *mut core::ffi::c_void;
+    }
+
+    #[link(name = "dbghelp")]
+    unsafe extern "system" {
+      fn SymInitialize(
+        hProcess: *mut core::ffi::c_void,
+        UserSearchPath: *const core::ffi::c_char,
+        fInvadeProcess: i32,
+      ) -> i32;
+      fn SymSetOptions(SymOptions: u32) -> u32;
+      fn SymFromAddr(
+        hProcess: *mut core::ffi::c_void,
+        Address: u64,
+        Displacement: *mut u64,
+        Symbol: *mut SYMBOL_INFO,
+      ) -> i32;
+    }
+
+    #[repr(C)]
+    struct SYMBOL_INFO {
+      SizeOfStruct: u32,
+      TypeIndex: u32,
+      Reserved: [u64; 2],
+      Index: u32,
+      Size: u32,
+      ModBase: u64,
+      Flags: u32,
+      Value: u64,
+      Address: u64,
+      Register: u32,
+      Scope: u32,
+      Tag: u32,
+      NameLen: u32,
+      MaxNameLen: u32,
+      Name: [core::ffi::c_char; 1],
+    }
+
+    unsafe {
+      let process = GetCurrentProcess();
+
+      // Ensures DbgHelp's initialization happens safely exactly once.
+      static SYM_INIT: ::spin::Once<()> = ::spin::Once::new();
+      SYM_INIT.call_once(|| {
+        SymSetOptions(0x00000002); // SYMOPT_UNDNAME (Demangles C++ names)
+        SymInitialize(process, core::ptr::null(), 1); // 1 = TRUE (fInvadeProcess)
+      });
+
+      let mut buffer: [*mut core::ffi::c_void; 64] = [core::ptr::null_mut(); 64];
+      let frames = RtlCaptureStackBackTrace(0, 64, buffer.as_mut_ptr(), core::ptr::null_mut());
+
+      if frames == 0 {
+        crate::log!("Stacktrace: (empty or failed to capture)");
+        return;
+      }
+
+      crate::log!("Stacktrace:");
+
+      // Align memory to 8-byte bounds. SYMBOL_INFO requires contiguous trailing space
+      // for the dynamically sized name string since DbgHelp natively maps into it.
+      const SYMBOL_BUFFER_SIZE: usize = size_of::<SYMBOL_INFO>() + 256;
+      #[repr(C, align(8))]
+      struct SymbolBuffer([u8; SYMBOL_BUFFER_SIZE]);
+
+      for i in 0..frames {
+        let addr = buffer[i as usize];
+
+        let mut sym_buf = MaybeUninit::<SymbolBuffer>::zeroed();
+        let symbol_info = sym_buf.as_mut_ptr() as *mut SYMBOL_INFO;
+
+        (*symbol_info).SizeOfStruct = size_of::<SYMBOL_INFO>() as u32;
+        (*symbol_info).MaxNameLen = 255;
+
+        let mut displacement: u64 = 0;
+        let success = SymFromAddr(process, addr as u64, &mut displacement, symbol_info);
+
+        if success != 0 {
+          let name_len = core::cmp::min((*symbol_info).NameLen as usize, 254);
+          let name_ptr = (*symbol_info).Name.as_ptr() as *const u8;
+          let name_slice = core::slice::from_raw_parts(name_ptr, name_len);
+
+          if let Ok(name_str) = core::str::from_utf8(name_slice) {
+            crate::log!("  [{:2}] {} +0x{:x} ({:p})", i, name_str, displacement, addr);
+            continue;
+          }
+        }
+
+        // Fallback if the symbol wasn't natively resolvable / valid utf-8
+        crate::log!("  [{:2}] <unknown> ({:p})", i, addr);
+      }
+    }
   }
 }
 
@@ -152,15 +251,14 @@ mod unix_debug {
   }
 
   #[cfg(not(feature = "std"))]
-
   pub fn log_message(args: fmt::Arguments) {
     let msg = alloc::fmt::format(args) + "\n";
     if let Ok(c_msg) = alloc::ffi::CString::new(msg.clone()) {
-        let fptr = super::LOGGER_CALLBACK.load(core::sync::atomic::Ordering::Relaxed);
-        if !fptr.is_null() {
-            let cb: extern "C" fn(*const core::ffi::c_char) = unsafe { core::mem::transmute(fptr) };
-            cb(c_msg.as_ptr());
-        }
+      let fptr = super::LOGGER_CALLBACK.load(core::sync::atomic::Ordering::Relaxed);
+      if !fptr.is_null() {
+        let cb: extern "C" fn(*const core::ffi::c_char) = unsafe { core::mem::transmute(fptr) };
+        cb(c_msg.as_ptr());
+      }
     }
 
     // Simple write to stderr.
@@ -180,174 +278,54 @@ mod unix_debug {
     }
   }
 
+  #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
   pub fn print_stacktrace() {
-    // Placeholder for non-Windows stacktrace
-    log!("Stacktrace (Unix): Not yet implemented.");
-  }
-}
+    unsafe extern "C" {
+      // Exposed by default in libc without any std dependencies
+      fn backtrace(buffer: *mut *mut core::ffi::c_void, size: core::ffi::c_int) -> core::ffi::c_int;
+      fn backtrace_symbols(
+        buffer: *const *mut core::ffi::c_void,
+        size: core::ffi::c_int,
+      ) -> *mut *mut core::ffi::c_char;
+    }
 
-/// Drop-in replacement for Option to track when it becomes None
-#[cfg(debug_assertions)]
-pub struct TrackedOption<T, const V: i32>(Option<T>);
+    unsafe {
+      let mut buffer: [*mut core::ffi::c_void; 64] = [core::ptr::null_mut(); 64];
+      let size = backtrace(buffer.as_mut_ptr(), 64);
 
-#[cfg(debug_assertions)]
-impl<T, const V: i32> TrackedOption<T, { V }> {
-  pub const fn some(val: T) -> Self {
-    Self(Some(val))
-  }
-
-  pub const fn none() -> Self {
-    Self(None)
-  }
-
-  /// Intercepts `take` and logs/panics with the caller's location
-  #[track_caller]
-  pub fn take(&mut self) -> Option<T> {
-    let caller = core::panic::Location::caller();
-
-    log!(
-      "Option tag {} Taken at {}:{}",
-      V,
-      caller.file(),
-      caller.line()
-    );
-    self.0.take()
-  }
-
-  #[track_caller]
-  pub fn replace(&mut self, value: T) -> Option<T> {
-    let caller = core::panic::Location::caller();
-
-    log!(
-      "Option tag {} Replaced at {}:{}",
-      V,
-      caller.file(),
-      caller.line()
-    );
-    self.0.replace(value)
+      if size > 0 {
+        let symbols = backtrace_symbols(buffer.as_ptr(), size);
+        if !symbols.is_null() {
+          crate::log!("Stacktrace:");
+          for i in 0..size {
+            let ptr = *symbols.add(i as usize);
+            if !ptr.is_null() {
+              let c_str = core::ffi::CStr::from_ptr(ptr);
+              if let Ok(s) = c_str.to_str() {
+                crate::log!("  [{:2}] {}", i, s);
+              } else {
+                crate::log!("  [{:2}] <invalid utf8> {:p}", i, buffer[i as usize]);
+              }
+            } else {
+              crate::log!("  [{:2}] {:p}", i, buffer[i as usize]);
+            }
+          }
+          // libc's backtrace_symbols explicitly allocates its return array pointer
+          libc::free(symbols as *mut core::ffi::c_void);
+        } else {
+          crate::log!("Stacktrace: (symbols temporarily unavailable)");
+          for i in 0..size {
+            crate::log!("  [{:2}] {:p}", i, buffer[i as usize]);
+          }
+        }
+      } else {
+        crate::log!("Stacktrace: (empty)");
+      }
+    }
   }
 
-  // Pass through other common Option methods you might need
-  pub fn is_none(&self) -> bool {
-    self.0.is_none()
-  }
-  pub fn is_some(&self) -> bool {
-    self.0.is_some()
-  }
-  pub fn as_ref(&self) -> Option<&T> {
-    self.0.as_ref()
-  }
-  pub fn as_mut(&mut self) -> Option<&mut T> {
-    self.0.as_mut()
-  }
-  #[track_caller]
-  pub fn unwrap(self) -> T {
-    // Option::unwrap already tracks caller natively, but adding the
-    // attribute here ensures the panic points to *our* code, not this wrapper.
-    self.0.unwrap()
-  }
-
-  // --- Unwrapping Methods ---
-  #[track_caller]
-  pub fn expect(self, msg: &str) -> T {
-    self.0.expect(msg)
-  }
-
-  pub fn unwrap_or(self, default: T) -> T {
-    self.0.unwrap_or(default)
-  }
-
-  pub fn unwrap_or_else<F: FnOnce() -> T>(self, f: F) -> T {
-    self.0.unwrap_or_else(f)
-  }
-
-  pub fn unwrap_or_default(self) -> T
-  where
-    T: Default,
-  {
-    self.0.unwrap_or_default()
-  }
-
-  // --- Functional Combinators ---
-  pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Option<U> {
-    self.0.map(f)
-  }
-
-  pub fn and_then<U, F: FnOnce(T) -> Option<U>>(self, f: F) -> Option<U> {
-    self.0.and_then(f)
-  }
-}
-
-#[cfg(debug_assertions)]
-pub struct DropTracker<T, const V: i32> {
-  pub inner: T,
-}
-
-#[cfg(debug_assertions)]
-impl<T, const V: i32> DropTracker<T, { V }> {
-  pub fn new(inner: T) -> Self {
-    Self { inner }
-  }
-}
-
-#[cfg(debug_assertions)]
-impl<T, const V: i32> Drop for DropTracker<T, { V }> {
-  #[track_caller]
-  fn drop(&mut self) {
-    let caller = core::panic::Location::caller();
-    // Put a debugger breakpoint on the line below!
-    // When the debugger halts here, look at your call stack to see
-    // exactly what triggered the drop (and thus, the None state).
-
-    // OR, if you have logging enabled:
-    log!(
-      "The inner value tag {} was just dropped! at {}:{}",
-      V,
-      caller.file(),
-      caller.line()
-    );
-  }
-}
-
-// Allows `&*tracker` to transparently act as `&T`
-// You can now call methods of `T` directly on `DropTracker<T>`
-#[cfg(debug_assertions)]
-impl<T, const V: i32> core::ops::Deref for DropTracker<T, { V }> {
-  type Target = T;
-
-  fn deref(&self) -> &Self::Target {
-    &self.inner
-  }
-}
-
-// Allows `&mut *tracker` to transparently act as `&mut T`
-#[cfg(debug_assertions)]
-impl<T, const V: i32> core::ops::DerefMut for DropTracker<T, { V }> {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    &mut self.inner
-  }
-}
-
-// Allows passing `&DropTracker<T>` to functions expecting `impl AsRef<T>`
-#[cfg(debug_assertions)]
-impl<T, const V: i32> AsRef<T> for DropTracker<T, { V }> {
-  fn as_ref(&self) -> &T {
-    &self.inner
-  }
-}
-
-// Allows passing `&mut DropTracker<T>` to functions expecting `impl AsMut<T>`
-#[cfg(debug_assertions)]
-impl<T, const V: i32> AsMut<T> for DropTracker<T, { V }> {
-  fn as_mut(&mut self) -> &mut T {
-    &mut self.inner
-  }
-}
-
-// Highly recommended for debugging: pass through Debug formatting if T supports it
-#[cfg(debug_assertions)]
-impl<T: core::fmt::Debug, const V: i32> core::fmt::Debug for DropTracker<T, { V }> {
-  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    self.inner.fmt(f)
+  #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
+  pub fn print_stacktrace() {
+    crate::log!("Stacktrace: Not natively supported by libc in this target environment.");
   }
 }

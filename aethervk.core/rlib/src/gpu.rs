@@ -24,15 +24,17 @@ pub use super::gpu_backends::{vulkan::constants};
 pub use self::viewport::*;
 pub use self::frame::RenderScene;
 
+pub type RwLock<T> = spin::rwlock::RwLock<T>;
+
 use heapless::index_map::FnvIndexMap;
 use alloc::boxed::Box;
 #[cfg(debug_assertions)]
 use alloc::string::String;
 use alloc::sync::Arc;
-use spin::rwlock::RwLock;
 use aethervk_oshal_rlib::os::time::timeus_t;
 use crate::physics::physics_scene::PhysicsScene;
 use crate::scene::Scene;
+use crate::simulation::comet::Texture;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct RenderBackendId(pub u64);
@@ -308,6 +310,12 @@ pub trait RenderDevice: Send + Sync {
   /// alter internal state for current command buffer binding a new graphics pipeline
   fn bind_pipeline(&self, cmd_buffer: CommandBufferHandle, pipeline: PipelineKey) -> GpuResult<()>;
 
+  /// check for billboard texture existance
+  fn check_billboard_texture_id(&self, texture_id: u64) -> GpuResult<()>;
+
+  // `init_archetypes` should have already been called
+  fn add_billboard_texture(&self, texture: &Texture) -> GpuResult<()>;
+
   /// alter internal state for current command buffer to use a specific set of buffers, coherent with pipeline
   fn bind_buffers(
     &self,
@@ -453,6 +461,77 @@ pub trait RenderDevice: Send + Sync {
   fn create_task(&self) -> u64;
 
   fn fail_task(&self, task_id: u64, error: GpuError);
+  
+  fn success_task(&self, task_id: u64);
+}
+
+/// An RAII guard ensuring the command buffer is always submitted.
+pub struct ScopedCommandBuffer<'a> {
+  device: &'a dyn RenderDevice,
+  cmd_buffer: CommandBufferHandle,
+  submitted: bool,
+}
+
+impl<'a> ScopedCommandBuffer<'a> {
+  pub fn new(device: &'a dyn RenderDevice, cmd_buffer: CommandBufferHandle) -> GpuResult<Self> {
+    device.begin_command_buffer(cmd_buffer)?;
+    Ok(Self {
+      device,
+      cmd_buffer,
+      submitted: false,
+    })
+  }
+
+  pub fn cmd(&self) -> CommandBufferHandle {
+    self.cmd_buffer
+  }
+
+  /// Explicitly submits the command buffer.
+  pub fn submit(mut self) -> GpuResult<()> {
+    self.submitted = true;
+    self.device.submit_command_buffer(self.cmd_buffer, None)
+  }
+}
+
+impl<'a> Drop for ScopedCommandBuffer<'a> {
+  fn drop(&mut self) {
+    if !self.submitted {
+      // Force submission on early exit/panic. Result is ignored to prevent double panics.
+      let _ = self.device.submit_command_buffer(self.cmd_buffer, None);
+    }
+  }
+}
+
+/// An RAII guard ensuring the render pass is always ended.
+pub struct ScopedRenderPass<'a> {
+  device: &'a dyn RenderDevice,
+  cmd_buffer: CommandBufferHandle,
+  ended: bool,
+}
+
+impl<'a> ScopedRenderPass<'a> {
+  pub fn new(device: &'a dyn RenderDevice, cmd_buffer: CommandBufferHandle) -> Self {
+    Self {
+      device,
+      cmd_buffer,
+      ended: false,
+    }
+  }
+
+  /// Explicitly ends the render pass.
+  pub fn end(mut self) -> GpuResult<()> {
+    self.ended = true;
+    self.device.end_render_pass(self.cmd_buffer)
+  }
+}
+
+impl<'a> Drop for ScopedRenderPass<'a> {
+  fn drop(&mut self) {
+    if !self.ended {
+      // Force end on early exit/panic.
+      let _ = self.device.end_render_pass(self.cmd_buffer);
+    }
+  }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -496,7 +575,7 @@ impl<'a> RenderFrontend<'a> {
   }
 
   pub fn take_mut_and<T>(
-    &mut self,
+    &self,
     f: impl FnOnce(&mut dyn RenderContext) -> EngineResult<T>,
   ) -> Option<EngineResult<T>> {
     match self.backend.try_write() {

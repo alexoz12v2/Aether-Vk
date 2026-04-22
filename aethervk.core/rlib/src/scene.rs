@@ -77,7 +77,7 @@ pub trait Component: 'static + Send + Sync {
 // === Component Definitions ===
 
 /// Defines the position, rotation, and scale of an entity.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct TransformComponent {
   pub position: Vec3f32,
   /// Stored as a quaternion.
@@ -146,7 +146,7 @@ impl TransformComponent {
 }
 
 /// Represents a camera in the scene.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct CameraComponent {
   pub projection: Mat4x4f32,
   pub near_plane: f32,

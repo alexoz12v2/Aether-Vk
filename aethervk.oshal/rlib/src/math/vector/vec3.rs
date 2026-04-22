@@ -17,6 +17,12 @@ pub fn vec3(x: f32, y: f32, z: f32) -> Vec3f32 {
 #[derive(Copy, Clone, Debug)]
 pub struct Vec3f32(pub Vec4f32);
 
+impl Default for Vec3f32 {
+  fn default() -> Self {
+    Self::zero()
+  }
+}
+
 impl Vec3f32 {
   #[inline]
   pub fn from_array(data: [f32; 3]) -> Self {

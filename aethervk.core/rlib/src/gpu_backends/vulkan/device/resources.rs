@@ -2,7 +2,7 @@ use core::ptr;
 use core::hash::{Hash, Hasher};
 use aethervk_oshal_rlib as oshal;
 use oshal::{hash::FnvHasher, os::native::ThreadId};
-use ash::vk;
+use ash::{vk, Device};
 use alloc::{boxed::Box, collections::VecDeque, sync, vec::Vec};
 use spirv_reflect::{ffi::SpvReflectResult_SPV_REFLECT_RESULT_SUCCESS, types::ReflectShaderStageFlags};
 use crate::gpu_backends::vulkan;
@@ -1085,23 +1085,17 @@ impl DiscardableResource for TextRenderResourceArchetype {
     discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
     if let Some(pool) = self.descriptor_pool.take() {
       discard_pool.discard_type_erased(
-        FunctionalDeviceResource::new(
-          pool.get(),
-          |pool, device| unsafe {
-            device.destroy_descriptor_pool(pool, None);
-          },
-        ),
+        FunctionalDeviceResource::new(pool.get(), |pool, device| unsafe {
+          device.destroy_descriptor_pool(pool, None);
+        }),
         timeline,
       );
     }
     if let Some(sampler) = self.font_sampler.take() {
       discard_pool.discard_type_erased(
-        FunctionalDeviceResource::new(
-          sampler,
-          |sampler, device| unsafe {
-            device.destroy_sampler(sampler, None);
-          },
-        ),
+        FunctionalDeviceResource::new(sampler, |sampler, device| unsafe {
+          device.destroy_sampler(sampler, None);
+        }),
         timeline,
       );
     }
@@ -1136,10 +1130,10 @@ impl BvhRenderResourceArchetype {
       .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
       .offset(0)
       .size(144)]; // mat4 (64) + vec4 * 5 (80) = 144 bytes
-      
-    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
-      .push_constant_ranges(&push_constant_ranges);
-      
+
+    let pipeline_layout_info =
+      vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
+
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None)? };
 
     Ok(Self {
@@ -1191,7 +1185,10 @@ impl MeasurementRenderResourceArchetype {
     };
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
-      .with_name(device, "VkPipelineLayout_MeasurementRenderResourceArchetype")?;
+      .with_name(
+        device,
+        "VkPipelineLayout_MeasurementRenderResourceArchetype",
+      )?;
 
     Ok(Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
@@ -1203,7 +1200,7 @@ impl MeasurementRenderResourceArchetype {
 
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
-    discard_pool.discard_pipeline_layout(layout, timeline);
+    discard_pool.discard_pipeline_layout(layout, u64::MAX);
   }
 }
 
@@ -1291,12 +1288,20 @@ impl MinimapRenderResourceArchetype {
   }
 }
 
-
+/// Archetype has a list of textures, then each instance, when push constants, chooses one
+/// with the textureId.
+/// `NonZeroHandle` constraint satisfied until you call `discard`
 pub(super) struct BillboardRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub set_0_layout: NonZeroHandle<vk::DescriptorSetLayout>,
+  pub set_1_layout: NonZeroHandle<vk::DescriptorSetLayout>,
   pub push_contant_ranges: Vec<vk::PushConstantRange>,
   pub graphics_info: Option<GraphicsInfo>,
   pub pipeline_key: Option<PipelineKey>,
+  /// Not using the `super::descriptors::DescriptorPools` because, as this is an archetype,
+  /// pool should be persistent
+  pub descriptor_pool: NonZeroHandle<vk::DescriptorPool>,
+  pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
 }
 
 unsafe impl Sync for BillboardRenderResourceArchetype {}
@@ -1312,14 +1317,59 @@ impl BillboardRenderResourceArchetype {
     }
   }
 
+  /// Don't bother cleaning up cause it fails. TODO: Cleanup
   pub unsafe fn new(device: &vulkan::device::LogicalDevice) -> GpuResult<Self> {
+    const MAX_IMAGE_COUNT: u32 = 256;
     let push_contant_ranges = alloc::vec![vk::PushConstantRange {
       stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
       offset: 0,
       size: core::mem::size_of::<crate::gpu::BillboardPushConstants>() as u32,
     }];
 
+    // 1. Create a dummy layout for set = 0, because your shader specifies set = 1.
+    // (If you actually have a global camera/scene descriptor at set = 0, use its layout here instead!)
+    let empty_layout_info = vk::DescriptorSetLayoutCreateInfo::default();
+    let set_0_layout = unsafe { device.create_descriptor_set_layout(&empty_layout_info, None) }
+      .with_name(device, "VkDescriptorSetLayout_EmptySet0")?;
+
+    // 2. Create the bindless layout for set = 1
+    let bindings = [vk::DescriptorSetLayoutBinding {
+      binding: 0,
+      descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+      descriptor_count: MAX_IMAGE_COUNT, // Bounded to exactly match the max capacity in your POOL_SIZES
+      stage_flags: vk::ShaderStageFlags::FRAGMENT,
+      p_immutable_samplers: ptr::null(),
+      ..Default::default()
+    }];
+
+    // Enable PARTIALLY_BOUND so the shader can use an array without us populating all 256 slots initially.
+    // Enable UPDATE_AFTER_BIND so we can write to the descriptors after binding to the command buffer.
+    let binding_flags =
+      [vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND];
+
+    let binding_flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
+      binding_count: binding_flags.len() as u32,
+      p_binding_flags: binding_flags.as_ptr(),
+      ..Default::default()
+    };
+
+    let bindless_layout_info = vk::DescriptorSetLayoutCreateInfo {
+      flags: vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL,
+      binding_count: bindings.len() as u32,
+      p_bindings: bindings.as_ptr(),
+      p_next: ptr::from_ref(&binding_flags_info) as *const _,
+      ..Default::default()
+    };
+
+    let set_1_layout = unsafe { device.create_descriptor_set_layout(&bindless_layout_info, None) }
+      .with_name(device, "VkDescriptorSetLayout_BindlessTextures")?;
+
+    // Array indices directly map to `set = X` in your GLSL
+    let set_layouts = [set_0_layout, set_1_layout];
+
     let pipeline_layout_info = vk::PipelineLayoutCreateInfo {
+      p_set_layouts: set_layouts.as_ptr(),
+      set_layout_count: set_layouts.len() as u32,
       p_push_constant_ranges: push_contant_ranges.as_ptr(),
       push_constant_range_count: push_contant_ranges.len() as u32,
       ..Default::default()
@@ -1328,17 +1378,108 @@ impl BillboardRenderResourceArchetype {
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .with_name(device, "VkPipelineLayout_BillboardRenderResourceArchetype")?;
 
+    // Create descriptor pool and descriptor set
+    let pool_sizes = [vk::DescriptorPoolSize::default()
+      .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+      .descriptor_count(MAX_IMAGE_COUNT)];
+    let create_info = vk::DescriptorPoolCreateInfo::default()
+      // flag to allow allocations of bindless sets. from VK_EXT_descriptor_indexing
+      .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
+      .max_sets(1)
+      .pool_sizes(&pool_sizes);
+    let descriptor_pool = unsafe { device.create_descriptor_pool(&create_info, None) }.with_name(
+      device,
+      "VkDescriptorPoolCreateInfo_Dedicated_BillboardRenderResourceArchetype",
+    )?;
+
+    let layouts = [set_1_layout];
+    let alloc_info = vk::DescriptorSetAllocateInfo::default()
+      .descriptor_pool(descriptor_pool)
+      .set_layouts(&layouts);
+    let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?
+      .get(0)
+      .copied()
+      .unwrap();
+    device.set_debug_name(
+      descriptor_set,
+      "VkDescriptorSet_Dedicated_BillboardRenderResourceArchetype",
+    );
+
     Ok(Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
       push_contant_ranges,
       graphics_info: None,
       pipeline_key: None,
+      set_0_layout: unsafe { NonZeroHandle::new_unchecked(set_0_layout) },
+      set_1_layout: unsafe { NonZeroHandle::new_unchecked(set_1_layout) },
+      descriptor_pool: unsafe { NonZeroHandle::new_unchecked(descriptor_pool) },
+      descriptor_set: unsafe { NonZeroHandle::new_unchecked(descriptor_set) },
     })
+  }
+
+  /// Uploads a texture to the GPU and assigns it to a specific index in the bindless array.
+  /// Returns the `Image` so the caller can hold onto it (to prevent it from dropping)
+  /// and eventually discard it when it is no longer needed.
+  pub fn add_texture(
+    &self,
+    device: &vulkan::device::LogicalDevice,
+    allocator: &vk_mem::Allocator,
+    command_buffer: vk::CommandBuffer,
+    discard_pool: &DiscardPool,
+    timeline: u64,
+    texture: &Texture,
+    sampler: NonZeroHandle<vk::Sampler>,
+    array_index: u32,
+    debug_name: &str,
+  ) -> GpuResult<Image> {
+    // 1. Create the Image using your existing helper.
+    // This flawlessly handles the staging buffer, transfer commands,
+    // pipeline barriers, and staging cleanup!
+    let image = Image::new_2d(
+      device,
+      allocator,
+      command_buffer,
+      discard_pool,
+      timeline,
+      texture,
+      vk::ImageUsageFlags::SAMPLED,
+      debug_name,
+    )?;
+
+    // 2. Update the specific index in the bindless descriptor array.
+    let image_info = vk::DescriptorImageInfo::default()
+      .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+      .image_view(image.image_view.get())
+      .sampler(sampler.get());
+
+    let write = vk::WriteDescriptorSet::default()
+      .dst_set(self.descriptor_set.get())
+      .dst_binding(0) // Binding 0 from your layout
+      .dst_array_element(array_index) // The specific slot in textures[]
+      .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+      .image_info(core::slice::from_ref(&image_info));
+
+    unsafe {
+      device.update_descriptor_sets(core::slice::from_ref(&write), &[]);
+    }
+
+    // Return the image so the caller can manage its lifetime/discard later.
+    Ok(image)
   }
 
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
+    // we don't care about descriptor set. discard the pool
+    discard_pool.discard_type_erased(
+      FunctionalDeviceResource::new(self.descriptor_pool.get(), |pool, device| unsafe {
+        device.destroy_descriptor_pool(pool, None);
+      }),
+      timeline,
+    );
+
     discard_pool.discard_pipeline_layout(layout, timeline);
+    discard_pool.discard_descriptor_set_layout(self.set_1_layout.get(), timeline);
+    discard_pool.discard_descriptor_set_layout(self.set_0_layout.get(), timeline);
   }
 }
 
@@ -1808,7 +1949,10 @@ impl ForwardMeshRenderResourceArchetype {
         let command_buffers = [command_buffer];
         let submits = [vk::SubmitInfo::default().command_buffers(&command_buffers)];
         let fence = device.create_fence(&vk::FenceCreateInfo::default(), None)?;
-        device.locked_queue_submit(queue.handle, &submits, fence).map_err(GpuError::from)?;        device.wait_for_fences(&[fence], true, u64::MAX)?;
+        device
+          .locked_queue_submit(queue.handle, &submits, fence)
+          .map_err(GpuError::from)?;
+        device.wait_for_fences(&[fence], true, u64::MAX)?;
         device.destroy_fence(fence, None);
       };
 

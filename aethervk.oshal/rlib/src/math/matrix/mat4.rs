@@ -12,7 +12,7 @@ use crate::math::{
 };
 
 /// Column-Major, f32 storage for 4x4 matrices
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug, Default)]
 #[repr(C)]
 pub struct Mat4x4f32 {
   pub x: Vec4f32,

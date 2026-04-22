@@ -182,6 +182,8 @@ impl DescriptorPoolsInner {
 
     let pool_sizes = POOL_SIZES;
     let create_info = vk::DescriptorPoolCreateInfo::default()
+        // flag to allow allocations of bindless sets. from VK_EXT_descriptor_indexing
+      .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
       .max_sets(MAX_DESCRIPTOR_SETS)
       .pool_sizes(&pool_sizes);
 

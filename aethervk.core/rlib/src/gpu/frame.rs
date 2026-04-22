@@ -331,7 +331,7 @@ pub fn do_draw_billboard(
   cmd_buffer: super::CommandBufferHandle,
   draw_call: &BillboardDrawCall,
 ) -> Result<(), crate::types::GpuError> {
-  device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
+  device.check_billboard_texture_id(draw_call.texture_id)?;
 
   let mut camera_up = [0.0; 3];
   let mut camera_right = [0.0; 3];

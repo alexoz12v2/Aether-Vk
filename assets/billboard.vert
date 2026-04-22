@@ -1,5 +1,7 @@
 #version 450 core
 
+// Probably will change to set = 0 in the future due to push constraints. Push will only have
+// textureId and screen space probably
 layout(push_constant) uniform Push {
   mat4 viewProj;
   vec3 centerPos;

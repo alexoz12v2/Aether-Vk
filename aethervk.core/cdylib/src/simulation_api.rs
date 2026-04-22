@@ -76,13 +76,13 @@ impl Default for LogicState {
   }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RenderItem {
   pub entity_id: EntityId,
   pub model_matrix: Mat4x4f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RenderPacket {
   pub render_items: Vec<RenderItem>,
   pub camera_transform: TransformComponent,
@@ -93,15 +93,27 @@ pub struct RenderPacket {
   pub clear_color: [f32; 4],
 }
 
+#[derive(Clone, Copy)]
+struct SendPtr<T>(pub *const T);
+unsafe impl<T> Send for SendPtr<T> {}
+unsafe impl<T> Sync for SendPtr<T> {}
+
+#[derive(Clone, Copy)]
+struct SendPtrMut<T>(pub *mut T);
+unsafe impl<T> Send for SendPtrMut<T> {}
+unsafe impl<T> Sync for SendPtrMut<T> {}
+
+#[derive(Clone)]
 pub enum RenderCommand {
+  None,
   RenderFrame {
     packet: RenderPacket,
     task_id: u64,
   },
   DownloadImage {
-    buffer: *mut u8,
+    buffer: SendPtrMut<u8>,
     buffer_size: usize,
-    success: *mut bool,
+    success: SendPtrMut<bool>,
     done_signal: Arc<AtomicBool>,
   },
   SetClearColor([f32; 4]),
@@ -111,6 +123,12 @@ pub enum RenderCommand {
   },
   GenerateSky,
   Shutdown,
+}
+
+impl Default for RenderCommand {
+  fn default() -> Self {
+    Self::None
+  }
 }
 
 unsafe impl Send for RenderCommand {}
@@ -137,110 +155,117 @@ fn start_render_thread(
   thread::spawn(move || {
     let mut clear_color = [0.0, 0.0, 0.0, 1.0];
     loop {
-      match render_rx.recv() {
-        Ok(RenderCommand::RenderFrame { mut packet, task_id }) => {
-          packet.clear_color = clear_color;
-          let scene_guard = scene_shared.as_ref();
-          let mut c_payload = RenderPayloadData {
-            packet: &mut packet,
-            presentation_engine,
-            scene: &scene_guard,
-            cursor_entity,
-            sun_entity,
-            task_id,
-          };
+      match render_rx.try_recv() {
+        Ok(cmd) => match cmd {
+          RenderCommand::RenderFrame { mut packet, task_id } => {
+            oshal::log!("[RenderThread] Received RenderFrame: task_id={}", task_id);
+            packet.clear_color = clear_color;
+            let scene_guard = scene_shared.as_ref();
+            let mut c_payload = RenderPayloadData {
+              packet: &mut packet,
+              presentation_engine,
+              scene: &scene_guard,
+              cursor_entity,
+              sun_entity,
+              task_id,
+            };
 
-          let res = frontend.take_and(|context| {
-            context
-              .deref_device_and(
-                render_device_handle,
-                &mut c_payload as *mut _ as *mut core::ffi::c_void,
-                render_payload_ffi,
-              )
-              .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
-          });
-          
-          if let Some(Err(e)) = res {
-            // Report failure to task registry
-            let _ = frontend.take_and(|context| {
-              context.deref_device_and(
-                render_device_handle,
-                &mut (task_id, e) as *mut _ as *mut core::ffi::c_void,
-                |device, data| {
-                  let (tid, err) = unsafe { &*(data as *mut (u64, aethervk_core_rlib::types::EngineError)) };
-                  if let aethervk_core_rlib::types::EngineError::Gpu(gpu_err) = err {
-                    device.fail_task(*tid, gpu_err.clone());
-                  } else {
-                    device.fail_task(*tid, aethervk_core_rlib::types::GpuError::InvalidState);
+            let res = frontend.take_and(|context| {
+              context
+                .deref_device_and(
+                  render_device_handle,
+                  &mut c_payload as *mut _ as *mut core::ffi::c_void,
+                  render_payload_ffi,
+                )
+                .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
+                .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
+            });
+            
+            if let Some(Err(e)) = res {
+              // Report failure to task registry
+              let _ = frontend.take_and(|context| {
+                let _ = context.deref_device_and(
+                  render_device_handle,
+                  &mut (task_id, e) as *mut _ as *mut core::ffi::c_void,
+                  |device, data| {
+                    let (tid, err) = unsafe { &*(data as *mut (u64, aethervk_core_rlib::types::EngineError)) };
+                    if let aethervk_core_rlib::types::EngineError::Gpu(gpu_err) = err {
+                      device.fail_task(*tid, gpu_err.clone());
+                    } else {
+                      device.fail_task(*tid, aethervk_core_rlib::types::GpuError::InvalidState);
+                    }
+                    Ok(())
                   }
-                  Ok(())
-                }
-              ).unwrap_or(Ok(()))
+                ).ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
+                .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from));
+                Ok(())
+              });
+            }
+          }
+          RenderCommand::DownloadImage {
+            buffer,
+            buffer_size,
+            success,
+            done_signal,
+          } => {
+            let slice = unsafe { core::slice::from_raw_parts_mut(buffer.0, buffer_size) };
+            let mut payload = (presentation_engine, slice);
+            let res = frontend.take_and(|context| {
+              context
+                .deref_device_and(
+                  render_device_handle,
+                  &mut payload as *mut _ as *mut core::ffi::c_void,
+                  |device, data| {
+                    let (engine, buf) =
+                      unsafe { &mut *(data as *mut (gpu::PresentationEngineHandle, &mut [u8])) };
+                    device.download_windowless_image(*engine, *buf)
+                  },
+                )
+                .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
+                .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
+            });
+            unsafe { *(success.0) = matches!(res, Some(Ok(()))) };
+            done_signal.store(true, core::sync::atomic::Ordering::Release);
+          }
+          RenderCommand::SetClearColor(color) => {
+            clear_color = color;
+          }
+          RenderCommand::Resize { width, height } => {
+            let mut data = (presentation_engine, width, height);
+            let _ = frontend.take_and(|context| {
+              let _ = context
+                .deref_device_and(
+                  render_device_handle,
+                  &mut data as *mut _ as *mut core::ffi::c_void,
+                  |device, data_ptr| {
+                    let (pe, w, h) =
+                      unsafe { &mut *(data_ptr as *mut (gpu::PresentationEngineHandle, u32, u32)) };
+                    device.resize_presentation_engine(*pe, *w, *h)
+                  },
+                );
+              Ok(())
             });
           }
-        }
-        Ok(RenderCommand::DownloadImage {
-          buffer,
-          buffer_size,
-          success,
-          done_signal,
-        }) => {
-          let slice = unsafe { core::slice::from_raw_parts_mut(buffer, buffer_size) };
-          let mut payload = (presentation_engine, slice);
-          let res = frontend.take_and(|context| {
-            context
-              .deref_device_and(
-                render_device_handle,
-                &mut payload as *mut _ as *mut core::ffi::c_void,
-                |device, data| {
-                  let (engine, buf) =
-                    unsafe { &mut *(data as *mut (gpu::PresentationEngineHandle, &mut [u8])) };
-                  device.download_windowless_image(*engine, *buf)
-                },
-              )
-              .unwrap()
-          });
-          unsafe { *success = res.is_ok() };
-          done_signal.store(true, core::sync::atomic::Ordering::Release);
-        }
-        Ok(RenderCommand::SetClearColor(color)) => {
-          clear_color = color;
-        }
-        Ok(RenderCommand::Resize { width, height }) => {
-          let mut data = (presentation_engine, width, height);
-          let _ = frontend.take_and(|context| {
-            context
-              .deref_device_and(
-                render_device_handle,
-                &mut data as *mut _ as *mut core::ffi::c_void,
-                |device, data_ptr| {
-                  let (pe, w, h) =
-                    unsafe { &mut *(data_ptr as *mut (gpu::PresentationEngineHandle, u32, u32)) };
-                  device.resize_presentation_engine(*pe, *w, *h)
-                },
-              )
-              .unwrap();
-            Ok(())
-          });
-        }
-        Ok(RenderCommand::GenerateSky) => {
-          let _ = frontend.take_and(|context| {
-            context
-              .deref_device_and(
-                render_device_handle,
-                core::ptr::null_mut(),
-                |device, _| device.generate_sky(),
-              )
-              .unwrap();
-            Ok(())
-          });
-        }
-        Ok(RenderCommand::Shutdown) => break,
+          RenderCommand::GenerateSky => {
+            let _ = frontend.take_and(|context| {
+              let _ = context
+                .deref_device_and(
+                  render_device_handle,
+                  core::ptr::null_mut(),
+                  |device, _| device.generate_sky(),
+                );
+              Ok(())
+            });
+          }
+          RenderCommand::Shutdown => break,
+          RenderCommand::None => {}
+        },
         Err(e) => {
           if let thingbuf::mpsc::errors::TryRecvError::Closed = e {
             break;
           }
-          core::hint::spin_loop();
+          // Avoid pegging CPU if no commands
+          oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
         }
       }
     }
@@ -255,6 +280,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
   let acquire_result = device.acquire_next_image(payload.presentation_engine)?;
   if acquire_result.status.needs_resize() {
     // handled via resize command or next frame
+    device.success_task(payload.task_id);
     return Ok(());
   }
 
@@ -704,9 +730,6 @@ impl SimulationContext {
   }
 }
 
-static LOGGER_CALLBACK: core::sync::atomic::AtomicPtr<()> =
-  core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
-
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_setLoggerCallback(
@@ -716,7 +739,7 @@ pub unsafe extern "C" fn avkSimulationContext_setLoggerCallback(
     Some(f) => f as *mut (),
     None => core::ptr::null_mut(),
   };
-  LOGGER_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
+  aethervk_oshal_rlib::os::debug::LOGGER_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
 }
 
 static BREADCRUMB_CALLBACK: core::sync::atomic::AtomicPtr<()> =
@@ -1325,12 +1348,12 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
   let width = if width == 0 { 800 } else { width };
   let height = if height == 0 { 600 } else { height };
 
-  let runtime_params = RuntimeParams {
+  let runtime_params = Box::leak(Box::new(RuntimeParams {
     render_backend_params: FnvIndexMap::new(),
-  };
+  }));
 
   let frontend = Arc::new(
-    gpu::new_render_frontend(gpu::VULKAN_RENDER_BACKEND, &runtime_params).unwrap()
+    gpu::new_render_frontend(gpu::VULKAN_RENDER_BACKEND, runtime_params).unwrap()
   );
   let additional_params = gpu::DeviceAdditionalParams::new();
   let render_device_handle = frontend.take_mut_and(|context| {
@@ -1349,7 +1372,7 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
           let (params, out) = unsafe {
             &mut *(data as *mut (&gpu::PresentationEngineParams, *mut GpuResult<gpu::PresentationEngineHandle>))
           };
-          let pe_res = device.create_presentation_engine(**params);
+          let pe_res = device.create_presentation_engine(*params);
           if let Ok(pe) = pe_res {
             device.init_archetypes(pe).unwrap();
           }
@@ -1357,8 +1380,8 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
           Ok(())
         },
       )
-      .unwrap();
-    Ok(())
+      .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
+      .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
   }).unwrap();
 
   let presentation_engine = match presentation_engine_result {
@@ -1510,10 +1533,11 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
         let pool = unsafe { &*(data as *mut Arc<RwLock<aethervk_oshal_rlib::os::pool::ThreadPool>>) };
         device.wire_callbacks(Arc::clone(pool))
       }
-    ).unwrap()
+    ).ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
+    .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
   }).unwrap();
 
-  render_tx.send(RenderCommand::GenerateSky).unwrap();
+  render_tx.try_send(RenderCommand::GenerateSky).unwrap();
 
   let mut ctx = Box::new(SimulationContext {
     scene: scene_arc,
@@ -1581,10 +1605,53 @@ pub unsafe extern "C" fn avkSimulationContext_stopThreads(ctx: *mut SimulationCo
   }
   let ctx = unsafe { &mut *ctx };
 
-  let _ = ctx.render_tx.send(RenderCommand::Shutdown);
+  let _ = ctx.render_tx.try_send(RenderCommand::Shutdown);
   if let Some(handle) = ctx.render_thread_handle.take() {
     handle.join();
   }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_spawnProceduralSphere(
+  ctx: *mut SimulationContext,
+  name: *const c_char,
+  radius: f32,
+) -> u64 {
+  if ctx.is_null() {
+    return 0;
+  }
+  let ctx = unsafe { &mut *ctx };
+  let name_str = if name.is_null() {
+    "ProceduralSphere"
+  } else {
+    unsafe { CStr::from_ptr(name).to_str().unwrap_or("ProceduralSphere") }
+  };
+
+  let sphere = simulation::comet::generate_uv_sphere(radius, 32, 32);
+  let entity_id = ctx.scene.spawn_entity(name_str);
+
+  let _ = ctx.scene.add_component(
+    entity_id,
+    TransformComponent {
+      position: Vec3f32::from_components(0.0, 0.0, 0.0),
+      rotation: Quat::identity(),
+      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+    },
+  );
+
+  let _ = ctx.scene.add_component(
+    entity_id,
+    PhysicalMeshComponent {
+      asset_path: alloc::string::String::new(),
+      mesh: Arc::from(sphere),
+      emissive_intensity: 0.0,
+      emissive_color: [0.0, 0.0, 0.0],
+    },
+  );
+
+  ctx.scene.set_parent(entity_id, Some(ctx.root_entity));
+  ctx.register_entity(entity_id)
 }
 
 #[unsafe(no_mangle)]
@@ -2059,6 +2126,17 @@ pub unsafe extern "C" fn avkSimulationContext_simulationTick(ctx: *mut Simulatio
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_renderTick(ctx: *mut SimulationContext) -> u64 {
+  // Use libc to write to a file for debugging
+  unsafe {
+      let path = b"debug_native.log\0";
+      let fd = libc::open(path.as_ptr().cast(), libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND, 0o644);
+      if fd >= 0 {
+          let msg = b"renderTick called\n";
+          libc::write(fd, msg.as_ptr().cast(), msg.len());
+          libc::close(fd);
+      }
+  }
+
   if ctx.is_null() {
     return 0;
   }
@@ -2074,11 +2152,13 @@ pub unsafe extern "C" fn avkSimulationContext_renderTick(ctx: *mut SimulationCon
         *tid = device.create_task();
         Ok(())
       }
-    ).unwrap_or(Ok(()))
+    ).ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
+    .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
   });
 
   let packet = collect_render_packet(ctx);
-  let _ = ctx.render_tx.send(RenderCommand::RenderFrame { packet, task_id });
+  oshal::log!("[SimulationAPI] renderTick: sending RenderFrame for task_id={}", task_id);
+  let _ = ctx.render_tx.try_send(RenderCommand::RenderFrame { packet, task_id });
   
   task_id
 }
@@ -2108,7 +2188,8 @@ pub unsafe extern "C" fn avkSimulationContext_getTaskStatus(
         }
         Ok(())
       }
-    ).unwrap_or(Ok(()))
+    ).ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
+    .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
   });
 
   if res.is_none() {
@@ -2141,7 +2222,7 @@ pub unsafe extern "C" fn avkSimulationContext_resize(
       );
     });
 
-  let _ = ctx.render_tx.send(RenderCommand::Resize { width, height });
+  let _ = ctx.render_tx.try_send(RenderCommand::Resize { width, height });
 }
 
 #[unsafe(no_mangle)]
@@ -2404,7 +2485,7 @@ pub unsafe extern "C" fn avkSimulationContext_setClearColor(
     return;
   }
   let ctx = unsafe { &mut *ctx };
-  let _ = ctx.render_tx.send(RenderCommand::SetClearColor([r, g, b, a]));
+  let _ = ctx.render_tx.try_send(RenderCommand::SetClearColor([r, g, b, a]));
 }
 
 #[unsafe(no_mangle)]
@@ -2422,20 +2503,33 @@ pub unsafe extern "C" fn avkSimulationContext_downloadImage(
   let mut success = false;
   let done_signal = Arc::new(AtomicBool::new(false));
   
-  let _ = ctx.render_tx.send(RenderCommand::DownloadImage {
-    buffer: buffer_ptr,
+  let _ = ctx.render_tx.try_send(RenderCommand::DownloadImage {
+    buffer: SendPtrMut(buffer_ptr),
     buffer_size,
-    success: &mut success,
+    success: SendPtrMut(&mut success),
     done_signal: Arc::clone(&done_signal),
   });
 
   while !done_signal.load(core::sync::atomic::Ordering::Acquire) {
-    core::hint::spin_loop();
+    oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
   }
 
   success
 }
 
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setAssetPath(path: *const c_char) {
+  if path.is_null() {
+    return;
+  }
+
+  if let Ok(c_str) = unsafe { core::ffi::CStr::from_ptr(path) }.to_str() {
+    let mut guard = aethervk_core_rlib::gpu::ASSET_DIR.write();
+    *guard = Some(alloc::string::String::from(c_str));
+  }
+}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn aethervk_core_cdylib_log(msg: *const c_char) {
