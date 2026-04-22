@@ -29,6 +29,9 @@ public static class NativeInterop
   public static extern void avkSimulationContext_stopThreads(IntPtr ctx);
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
+  public static extern ulong avkSimulationContext_spawnProceduralSphere(IntPtr ctx, string name, float radius);
+
+  [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_spawnEntity(IntPtr ctx, string name);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

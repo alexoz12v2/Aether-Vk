@@ -122,6 +122,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       string? message = System.Runtime.InteropServices.Marshal.PtrToStringAnsi(messagePtr);
       if (message != null)
       {
+        System.Console.Error.WriteLine($"[Native] {message}");
         var consoleService =
           ServiceLocator.Provider?.GetService(typeof(ConsoleService)) as ConsoleService;
         consoleService?.Log(message);
@@ -172,6 +173,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return result;
   }
 
+  private static readonly object _staticInitLock = new object();
+
   public void InitializeSimulationContext(
     string backend = "Vulkan",
     uint width = 800,
@@ -179,8 +182,10 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     string assetOverride = null
   )
   {
-    if (IsInitialized)
-      return;
+    lock (_staticInitLock)
+    {
+      if (IsInitialized)
+        return;
 
     // Resolve absolute path to the published assets folder
     var exePath = System.AppDomain.CurrentDomain.BaseDirectory;
@@ -225,6 +230,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     else
     {
       CreateScene();
+    }
     }
   }
 
@@ -347,21 +353,48 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
   public async Task RenderTickAsync()
   {
-    if (_simulationContext == IntPtr.Zero) return;
+    if (_simulationContext == IntPtr.Zero) 
+    {
+        System.Console.Error.WriteLine("[C#] RenderTickAsync: _simulationContext is null!");
+        return;
+    }
 
+    System.Console.Error.WriteLine("[C#] RenderTickAsync: calling native renderTick");
     ulong taskId = NativeInterop.avkSimulationContext_renderTick(_simulationContext);
+    System.Console.Error.WriteLine($"[C#] RenderTickAsync: native renderTick returned taskId={taskId}");
+    
     if (taskId == 0) return;
 
     await Task.Run(async () =>
     {
+      System.Console.Error.WriteLine($"[C#] RenderTickAsync: polling status for taskId={taskId}");
+      var start = DateTime.Now;
       while (true)
       {
         int status = NativeInterop.avkSimulationContext_getTaskStatus(_simulationContext, taskId);
-        if (status == 1) break; // Success
-        if (status == 2) throw new Exception("GPU Task Failed");
-        if (status == -1) throw new Exception("Invalid Simulation Context");
+        if (status == 1) 
+        {
+            System.Console.Error.WriteLine($"[C#] RenderTickAsync: taskId={taskId} completed successfully in {(DateTime.Now - start).TotalMilliseconds}ms");
+            break; 
+        }
+        if (status == 2) 
+        {
+            System.Console.Error.WriteLine($"[C#] RenderTickAsync: taskId={taskId} failed!");
+            throw new Exception("GPU Task Failed");
+        }
+        if (status == -1) 
+        {
+            System.Console.Error.WriteLine($"[C#] RenderTickAsync: taskId={taskId} returned invalid context!");
+            throw new Exception("Invalid Simulation Context");
+        }
 
-        await Task.Delay(8); // Poll every ~8ms
+        if ((DateTime.Now - start).TotalSeconds > 10)
+        {
+            System.Console.Error.WriteLine($"[C#] RenderTickAsync: taskId={taskId} TIMEOUT after 10 seconds!");
+            throw new TimeoutException("GPU Task timed out");
+        }
+
+        await Task.Delay(10); // Poll every ~10ms
       }
     });
   }
@@ -982,6 +1015,37 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         comet.BvhTree.Add(root);
       }
     }
+  }
+
+  public ulong SpawnProceduralSphere(string name, float radius)
+  {
+    lock (_nativeLock)
+    {
+      if (_simulationContext != IntPtr.Zero)
+      {
+        ulong id = NativeInterop.avkSimulationContext_spawnProceduralSphere(_simulationContext, name, radius);
+        if (id > 0)
+        {
+          var entity = new Entity(id, name);
+          _entityMap[id] = entity;
+          WireEntityComponents(entity);
+          // For now, don't automatically add to RootEntities if it's a test mesh
+          // or maybe we should? Tests might want to check RootEntities.
+          // Let's add it to a child of root if possible.
+          var root = GetEntityByName("root");
+          if (root != null)
+          {
+            root.Children.Add(entity);
+          }
+          else
+          {
+            RootEntities.Add(entity);
+          }
+          return id;
+        }
+      }
+    }
+    return 0;
   }
 
   public Entity SpawnEntity(string name, Entity? parent = null)

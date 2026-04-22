@@ -30,9 +30,21 @@ pub struct Vec4f32 {
   pub data: [f32; 4], // alignment to 16 like other branches
 }
 
+impl Default for Vec4f32 {
+  fn default() -> Self {
+    Self::from_components(0.0, 0.0, 0.0, 0.0)
+  }
+}
+
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Quat(pub Vec4f32);
+
+impl Default for Quat {
+  fn default() -> Self {
+    Self::identity()
+  }
+}
 
 impl Quat {
   pub fn from_components(p0: f32, p1: f32, p2: f32, p3: f32) -> Quat {

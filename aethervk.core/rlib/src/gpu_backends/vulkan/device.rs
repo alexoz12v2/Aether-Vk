@@ -30,7 +30,7 @@ const TASK_STATUS_SUCCESS: u32 = 1;
 const TASK_STATUS_FAILED: u32 = 2;
 
 struct TimelinePollingWorkload {
-  resources: Arc<DeviceResources>,
+  resources: Arc<spin::rwlock::RwLock<DeviceResources>>,
   stop_signal: Arc<core::sync::atomic::AtomicBool>,
 }
 
@@ -41,19 +41,26 @@ impl oshal::os::pool::Workload for TimelinePollingWorkload {
       last_check.ut_update();
 
       // Poll semaphore
+      let res = self.resources.read();
       if let Ok(gpu_value) = unsafe {
-        self
-          .resources
+        res
           .timeline_sem_device
-          .get_semaphore_counter_value(self.resources.timeline_semaphore.get())
+          .get_semaphore_counter_value(res.timeline_semaphore.get())
       } {
-        self
-          .resources
+        if gpu_value > res.get_timeline_semaphore_cached_value() {
+          oshal::log!(
+            "[TimelinePolling] Semaphore advanced: {} -> {}",
+            res.get_timeline_semaphore_cached_value(),
+            gpu_value
+          );
+        }
+
+        res
           .timeline_semaphore_cached_value
           .fetch_max(gpu_value, Ordering::Relaxed);
 
         // Resolve tasks
-        let registry = self.resources.task_registry.write();
+        let registry = res.task_registry.read();
         let completed_ids: Vec<u64> = registry
           .iter()
           .filter(|(_, entry)| {
@@ -69,6 +76,7 @@ impl oshal::os::pool::Workload for TimelinePollingWorkload {
           }
         }
       }
+      drop(res);
 
       // Yield/Sleep ~16.67ms
       oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(16));
@@ -121,13 +129,12 @@ mod resources;
 mod shader_manager;
 mod swapchain;
 
-// TODO: diminish push constant from 160 bytes to 128 bytes
-
 use aethervk_oshal_rlib::math::matrix::{SquareMatrix, Matrix};
 use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
 use aethervk_oshal_rlib::math::quaternion::Quaternion;
 use aethervk_oshal_rlib::math::matrix::MatrixVectorMul;
 use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+use crate::simulation::comet::Texture;
 
 trait DeviceResource {
   /// Cleanup function to facilitate hierarchical manual Drop of resources
@@ -316,6 +323,8 @@ struct DeviceResources {
   sun_render_archetype: spin::RwLock<Option<resources::SunRenderResourceArchetype>>,
 
   billboard_render_archetype: spin::RwLock<Option<resources::BillboardRenderResourceArchetype>>,
+  billboard_resources: spin::RwLock<alloc::vec::Vec<resources::Image>>,
+
   cursor_render_archetype: spin::RwLock<Option<resources::CursorRenderResourceArchetype>>,
 
   marker_render_archetype: spin::RwLock<Option<resources::MarkerRenderResourceArchetype>>,
@@ -603,6 +612,7 @@ impl DeviceResources {
   fn create_physical_mesh_archetype(
     &self,
     device: &LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
     fragment_shader_key: ShaderKey,
     outline_vertex_shader_key: ShaderKey,
@@ -625,7 +635,6 @@ impl DeviceResources {
       return Err(GpuError::InvalidState);
     }
 
-    let shader_manager = self.shader_manager.read();
     let vertex_shader = shader_manager
       .get(vertex_shader_key)
       .ok_or(GpuError::InvalidShader)?;
@@ -811,6 +820,7 @@ impl DeviceResources {
   fn create_sun_archetype(
     &self,
     device: &LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
     fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
@@ -827,7 +837,6 @@ impl DeviceResources {
       .ok_or(GpuError::InvalidArgument)?;
     let presentation_engine_state = presentation_engine_lock.read();
 
-    let shader_manager = self.shader_manager.read();
     let vertex_shader = shader_manager
       .get(vertex_shader_key)
       .ok_or(GpuError::InvalidShader)?;
@@ -917,12 +926,12 @@ impl DeviceResources {
       .write()
       .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
 
-    {
-      let mut sun_render_archetype = self.sun_render_archetype.write();
-      sun_render_archetype.as_mut().unwrap().graphics_info = Some(pipeline_graphics_info);
-    }
+    let pipeline_key = pipeline_graphics_info.pipeline_key();
+    let sun_render_archetype_mut = sun_render_archetype.as_mut().unwrap();
+    sun_render_archetype_mut.graphics_info = Some(pipeline_graphics_info);
+    sun_render_archetype_mut.pipeline_key = Some(pipeline_key);
 
-    debug_assert!(self.sun_render_archetype.read().is_some());
+    debug_assert!(sun_render_archetype.is_some());
 
     Ok(())
   }
@@ -930,6 +939,7 @@ impl DeviceResources {
   fn create_sky_archetype(
     &self,
     device: &LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
     fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
@@ -941,7 +951,6 @@ impl DeviceResources {
     }
     let live_engines_lock = self.live_presentation_engines.read();
     let presentation_engine_state = live_engines_lock.get(&handle).unwrap().read();
-    let shader_manager = self.shader_manager.read();
     let vertex_shader = shader_manager.get(vertex_shader_key).unwrap();
     let fragment_shader = shader_manager.get(fragment_shader_key).unwrap();
 
@@ -1047,6 +1056,7 @@ impl DeviceResources {
   fn create_grid_archetype(
     &self,
     device: &LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
     fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
@@ -1058,7 +1068,6 @@ impl DeviceResources {
     }
     let live_engines_lock = self.live_presentation_engines.read();
     let presentation_engine_state = live_engines_lock.get(&handle).unwrap().read();
-    let shader_manager = self.shader_manager.read();
     let vertex_shader = shader_manager.get(vertex_shader_key).unwrap();
     let fragment_shader = shader_manager.get(fragment_shader_key).unwrap();
 
@@ -1152,6 +1161,7 @@ impl DeviceResources {
   fn create_minimap_archetype(
     &self,
     device: &LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
     vkey: ShaderKey,
     fkey: ShaderKey,
     depth_stencil_format: vk::Format,
@@ -1166,7 +1176,6 @@ impl DeviceResources {
       Some(unsafe { resources::MinimapRenderResourceArchetype::new(device)? });
     let arch_mut = minimap_render_archetype.as_mut().unwrap();
 
-    let shader_manager = self.shader_manager.read();
     let vertex_shader = shader_manager.get(vkey).unwrap();
     let fragment_shader = shader_manager.get(fkey).unwrap();
 
@@ -1235,7 +1244,6 @@ impl DeviceResources {
 
     drop(pe);
     drop(presentation_engine_lock);
-    drop(shader_manager);
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
     self
@@ -1250,6 +1258,7 @@ impl DeviceResources {
   fn create_measurement_archetype(
     &self,
     device: &LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
     fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
@@ -1266,7 +1275,6 @@ impl DeviceResources {
       .ok_or(GpuError::InvalidArgument)?;
     let presentation_engine_state = presentation_engine_lock.read();
 
-    let shader_manager = self.shader_manager.read();
     let vertex_shader = shader_manager
       .get(vertex_shader_key)
       .ok_or(GpuError::InvalidShader)?;
@@ -1372,6 +1380,7 @@ impl DeviceResources {
   fn create_marker_archetype(
     &self,
     device: &LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
     fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
@@ -1388,7 +1397,6 @@ impl DeviceResources {
       .ok_or(GpuError::InvalidArgument)?;
     let presentation_engine_state = presentation_engine_lock.read();
 
-    let shader_manager = self.shader_manager.read();
     let vertex_shader = shader_manager
       .get(vertex_shader_key)
       .ok_or(GpuError::InvalidShader)?;
@@ -1488,6 +1496,7 @@ impl DeviceResources {
   fn create_billboard_archetype(
     &self,
     device: &LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
     fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
@@ -1504,7 +1513,6 @@ impl DeviceResources {
       .ok_or(GpuError::InvalidArgument)?;
     let presentation_engine_state = presentation_engine_lock.read();
 
-    let shader_manager = self.shader_manager.read();
     let vertex_shader = shader_manager
       .get(vertex_shader_key)
       .ok_or(GpuError::InvalidShader)?;
@@ -1610,6 +1618,7 @@ impl DeviceResources {
   fn create_cursor_archetype(
     &self,
     device: &LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
     fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
@@ -1626,7 +1635,6 @@ impl DeviceResources {
       .ok_or(GpuError::InvalidArgument)?;
     let presentation_engine_state = presentation_engine_lock.read();
 
-    let shader_manager = self.shader_manager.read();
     let vertex_shader = shader_manager
       .get(vertex_shader_key)
       .ok_or(GpuError::InvalidShader)?;
@@ -1722,7 +1730,11 @@ impl DeviceResources {
       .write()
       .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
 
-    cursor_render_archetype.as_mut().unwrap().graphics_info = Some(pipeline_graphics_info);
+    let pipeline_key = pipeline_graphics_info.pipeline_key();
+
+    let cursor_render_archetype_mut = cursor_render_archetype.as_mut().unwrap();
+    cursor_render_archetype_mut.graphics_info = Some(pipeline_graphics_info);
+    cursor_render_archetype_mut.pipeline_key = Some(pipeline_key);
 
     debug_assert!(cursor_render_archetype.is_some());
 
@@ -1732,6 +1744,7 @@ impl DeviceResources {
   fn create_text_archetype(
     &self,
     device: &vulkan::device::LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
     fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
@@ -1745,7 +1758,6 @@ impl DeviceResources {
     }
     let live_engines_lock = self.live_presentation_engines.read();
     let presentation_engine_state = live_engines_lock.get(&handle).unwrap().read();
-    let shader_manager = self.shader_manager.read();
     let vertex_shader = shader_manager.get(vertex_shader_key).unwrap();
     let fragment_shader = shader_manager.get(fragment_shader_key).unwrap();
 
@@ -1982,6 +1994,7 @@ impl DeviceResources {
   fn create_bvh_archetype(
     &self,
     device: &vulkan::device::LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
     vkey: shader_manager::ShaderKey,
     fkey: shader_manager::ShaderKey,
     depth_stencil_format: vk::Format,
@@ -1995,7 +2008,6 @@ impl DeviceResources {
     *bvh_render_archetype = Some(unsafe { resources::BvhRenderResourceArchetype::new(device) }?);
     let archetype = bvh_render_archetype.as_mut().unwrap();
 
-    let shader_manager = self.shader_manager.read();
     let vertex_shader = shader_manager.get(vkey).unwrap();
     let fragment_shader = shader_manager.get(fkey).unwrap();
 
@@ -2063,7 +2075,6 @@ impl DeviceResources {
 
     drop(pe);
     drop(live_engines_lock);
-    drop(shader_manager);
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
     self
@@ -2088,6 +2099,7 @@ impl DeviceResources {
       || self.minimap_render_archetype.read().is_some()
       || self.text_render_archetype.read().is_some()
       || self.bvh_render_archetype.read().is_some()
+      || !self.billboard_resources.read().is_empty()
   }
 
   fn clear_discardables(&mut self, device: &ash::Device) {
@@ -2133,6 +2145,17 @@ impl DeviceResources {
           unsafe { device.destroy_descriptor_set_layout(layout, None) };
         }
       }
+    }
+    for image in self.billboard_resources.write().drain(..) {
+      self.discard_pool.discard_image(
+        self.allocator.allocator.get_raw(),
+        image.image.get(),
+        image.allocation,
+        u64::MAX,
+      );
+      self
+        .discard_pool
+        .discard_image_view(image.image_view.get(), u64::MAX);
     }
     if let Some(mut archetype) = self.billboard_render_archetype.write().take() {
       archetype.discard(device, &self.discard_pool, u64::MAX);
@@ -2202,7 +2225,6 @@ impl DeviceResources {
     let renderpasses =
       renderpasses::RenderPasses::new(&instance.instance, &device, &allocator.allocator);
 
-    // - Pipeline Pool (TODO: cache data?)
     let pipeline_pool = match pipelines::PipelinePool::new(device, None) {
       Ok(pool) => spin::RwLock::new(pool),
       Err(e) => {
@@ -2262,6 +2284,7 @@ impl DeviceResources {
       sun_resources: spin::RwLock::new(None),
       sun_render_archetype: spin::RwLock::new(None),
       billboard_render_archetype: spin::RwLock::new(None),
+      billboard_resources: spin::RwLock::new(Vec::with_capacity(16)),
       cursor_render_archetype: spin::RwLock::new(None),
 
       marker_render_archetype: spin::RwLock::new(None),
@@ -2348,7 +2371,6 @@ impl RecordingCmdBufferData {
   }
 }
 
-// TODO Store api version and redirect methods from extensions to core if promoted
 pub(super) struct LogicalDevice {
   pub handle: ash::Device,
   pub submission_lock: Mutex<()>,
@@ -2508,7 +2530,7 @@ pub(super) struct Device<'a> {
 
   device: LogicalDevice,
 
-  res: Arc<DeviceResources>,
+  res: Arc<spin::rwlock::RwLock<DeviceResources>>,
   callback_stop_signal: Arc<core::sync::atomic::AtomicBool>,
 
   // Some bookkeeping I don't know where to put
@@ -2665,7 +2687,7 @@ impl<'a> Device<'a> {
     }?;
     let physical_device = chosen_physical_device_query_result.physical_device;
 
-    // 1. enable required and TODO optional features
+    // 1. enable required
     let mut required_features = utils::RequiredFeatures::new();
     required_features.populate();
     let mut features2 = required_features.as_features2();
@@ -2756,7 +2778,7 @@ impl<'a> Device<'a> {
         debug_utils,
       },
       queues,
-      res: Arc::new(res),
+      res: Arc::new(spin::rwlock::RwLock::new(res)),
       callback_stop_signal: Arc::new(core::sync::atomic::AtomicBool::new(false)),
 
       instance,
@@ -2773,13 +2795,13 @@ impl<'a> Device<'a> {
 impl<'a> Drop for Device<'a> {
   fn drop(&mut self) {
     aethervk_oshal_rlib::log!("Device::drop started. Waiting for device idle...");
+    // Signal stop to timeline polling task
+    self.callback_stop_signal.store(true, Ordering::Release);
+
     unsafe { self.device.device_wait_idle().unwrap_unchecked() };
     aethervk_oshal_rlib::log!("Device::drop device_wait_idle complete. Starting cleanup...");
 
-    assert_eq!(Arc::strong_count(&self.res), 1);
-    let res_shared = self.res.clone();
-    let mut res = Arc::try_unwrap(res_shared).unwrap();
-    res.cleanup(&self.device);
+    self.res.write().cleanup(&self.device);
 
     aethervk_oshal_rlib::log!("Device::drop cleanup complete. Destroying device...");
     // in the end, destroy the device
@@ -2872,20 +2894,23 @@ impl<'a> RenderDevice for Device<'a> {
   fn start_frame(&self) -> GpuResult<()> {
     self
       .res
+      .read()
       .refresh_timeline_semaphore_cached_value(&self.device)
       .map_err(|e| e.into())
   }
 
   /// Initializes all archetypes in the order they are declared inside `DeviceResources`
   fn init_archetypes(&self, handle: crate::gpu::PresentationEngineHandle) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value() + 1;
-    let mut shader_manager = self.res.shader_manager.write();
+    let res_guard = self.res.read();
+    let timeline = res_guard.get_timeline_semaphore_cached_value() + 1;
+    let mut shader_manager = res_guard.shader_manager.write();
 
-    if self.res.physical_mesh_render_archetype.read().is_none() {
+    if res_guard.physical_mesh_render_archetype.read().is_none() {
       let (vkey, fkey, ovkey, ofkey) =
         ensure_physical_mesh_shader_modules(&self.device, &mut shader_manager)?;
-      self.res.create_physical_mesh_archetype(
+      res_guard.create_physical_mesh_archetype(
         &self.device,
+        &shader_manager,
         vkey,
         fkey,
         ovkey,
@@ -2897,17 +2922,23 @@ impl<'a> RenderDevice for Device<'a> {
       )?;
     }
 
-    if self.res.sun_render_archetype.read().is_none() {
+    if res_guard.sun_render_archetype.read().is_none() {
       let (vkey, fkey) = ensure_sun_shader_modules(&self.device, &mut shader_manager)?;
-      self
-        .res
-        .create_sun_archetype(&self.device, vkey, fkey, self.depth_stencil_format, handle)?;
+      res_guard.create_sun_archetype(
+        &self.device,
+        &*shader_manager,
+        vkey,
+        fkey,
+        self.depth_stencil_format,
+        handle,
+      )?;
     }
 
-    if self.res.billboard_render_archetype.read().is_none() {
+    if res_guard.billboard_render_archetype.read().is_none() {
       let (vkey, fkey) = ensure_billboard_shader_modules(&self.device, &mut shader_manager)?;
-      self.res.create_billboard_archetype(
+      res_guard.create_billboard_archetype(
         &self.device,
+        &shader_manager,
         vkey,
         fkey,
         self.depth_stencil_format,
@@ -2915,10 +2946,11 @@ impl<'a> RenderDevice for Device<'a> {
       )?;
     }
 
-    if self.res.cursor_render_archetype.read().is_none() {
+    if res_guard.cursor_render_archetype.read().is_none() {
       let (vkey, fkey) = ensure_cursor_shader_modules(&self.device, &mut shader_manager)?;
-      self.res.create_cursor_archetype(
+      res_guard.create_cursor_archetype(
         &self.device,
+        &shader_manager,
         vkey,
         fkey,
         self.depth_stencil_format,
@@ -2926,10 +2958,11 @@ impl<'a> RenderDevice for Device<'a> {
       )?;
     }
 
-    if self.res.marker_render_archetype.read().is_none() {
+    if res_guard.marker_render_archetype.read().is_none() {
       let (vkey, fkey) = ensure_marker_shader_modules(&self.device, &mut shader_manager)?;
-      self.res.create_marker_archetype(
+      res_guard.create_marker_archetype(
         &self.device,
+        &shader_manager,
         vkey,
         fkey,
         self.depth_stencil_format,
@@ -2937,10 +2970,11 @@ impl<'a> RenderDevice for Device<'a> {
       )?;
     }
 
-    if self.res.measurement_render_archetype.read().is_none() {
+    if res_guard.measurement_render_archetype.read().is_none() {
       let (vkey, fkey) = ensure_measurement_shader_modules(&self.device, &mut shader_manager)?;
-      self.res.create_measurement_archetype(
+      res_guard.create_measurement_archetype(
         &self.device,
+        &shader_manager,
         vkey,
         fkey,
         self.depth_stencil_format,
@@ -2948,17 +2982,11 @@ impl<'a> RenderDevice for Device<'a> {
       )?;
     }
 
-    if self.res.sky_render_archetype.read().is_none() {
+    if res_guard.sky_render_archetype.read().is_none() {
       let (vkey, fkey) = ensure_sky_shader_modules(&self.device, &mut shader_manager)?;
-      self
-        .res
-        .create_sky_archetype(&self.device, vkey, fkey, self.depth_stencil_format, handle)?;
-    }
-
-    if self.res.grid_render_archetype.read().is_none() {
-      let (vkey, fkey) = ensure_grid_shader_modules(&self.device, &mut shader_manager)?;
-      self.res.create_grid_archetype(
+      res_guard.create_sky_archetype(
         &self.device,
+        &shader_manager,
         vkey,
         fkey,
         self.depth_stencil_format,
@@ -2966,10 +2994,23 @@ impl<'a> RenderDevice for Device<'a> {
       )?;
     }
 
-    if self.res.minimap_render_archetype.read().is_none() {
-      let (vkey, fkey) = ensure_minimap_shader_modules(&self.device, &mut shader_manager)?;
-      self.res.create_minimap_archetype(
+    if res_guard.grid_render_archetype.read().is_none() {
+      let (vkey, fkey) = ensure_grid_shader_modules(&self.device, &mut shader_manager)?;
+      res_guard.create_grid_archetype(
         &self.device,
+        &shader_manager,
+        vkey,
+        fkey,
+        self.depth_stencil_format,
+        handle,
+      )?;
+    }
+
+    if res_guard.minimap_render_archetype.read().is_none() {
+      let (vkey, fkey) = ensure_minimap_shader_modules(&self.device, &mut shader_manager)?;
+      res_guard.create_minimap_archetype(
+        &self.device,
+        &shader_manager,
         vkey,
         fkey,
         self.depth_stencil_format,
@@ -2978,10 +3019,11 @@ impl<'a> RenderDevice for Device<'a> {
       )?;
     }
 
-    if self.res.text_render_archetype.read().is_none() {
+    if res_guard.text_render_archetype.read().is_none() {
       let (vkey, fkey) = ensure_text_shader_modules(&self.device, &mut shader_manager)?;
-      self.res.create_text_archetype(
+      res_guard.create_text_archetype(
         &self.device,
+        &shader_manager,
         vkey,
         fkey,
         self.depth_stencil_format,
@@ -2991,10 +3033,11 @@ impl<'a> RenderDevice for Device<'a> {
       )?;
     }
 
-    if self.res.bvh_render_archetype.read().is_none() {
+    if res_guard.bvh_render_archetype.read().is_none() {
       let (vkey, fkey) = ensure_bvh_shader_modules(&self.device, &mut shader_manager)?;
-      self.res.create_bvh_archetype(
+      res_guard.create_bvh_archetype(
         &self.device,
+        &shader_manager,
         vkey,
         fkey,
         self.depth_stencil_format,
@@ -3011,7 +3054,7 @@ impl<'a> RenderDevice for Device<'a> {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     width: f32,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let timeline = self.res.read().get_timeline_semaphore_cached_value();
     let cmd_buffers = self.recording_command_buffers.read();
     let data = cmd_buffers.get(&(timeline, cmd_buffer)).unwrap();
     let cmd = data.command_buffer.get();
@@ -3109,6 +3152,36 @@ impl<'a> RenderDevice for Device<'a> {
       crate::gpu::frame::do_draw_measurement(self, view, view_proj, cmd_buffer, measurement_call)?;
     }
 
+    if render_scene.billboard_calls.len() > 0 {
+      let draw_call = unsafe { render_scene.billboard_calls.get_unchecked(0) };
+      self.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
+      let res = self.res.read();
+      let billboard_render_archetype = res.billboard_render_archetype.read();
+      let billboard_render_archetype_ref = billboard_render_archetype.as_ref().unwrap();
+      let d: vk::DescriptorSet = billboard_render_archetype_ref.descriptor_set.get();
+      let layout = billboard_render_archetype_ref.pipeline_layout.get();
+      let cmd = unsafe {
+        let cmd_buffers = self.recording_command_buffers.read();
+        cmd_buffers
+          .get(&(
+            self.res.read().get_timeline_semaphore_cached_value(),
+            cmd_buffer,
+          ))
+          .unwrap_unchecked()
+          .command_buffer
+          .get()
+      };
+      unsafe {
+        self.device.cmd_bind_descriptor_sets(
+          cmd,
+          vk::PipelineBindPoint::GRAPHICS,
+          layout,
+          1,
+          core::slice::from_ref(&d),
+          &[0],
+        )
+      };
+    }
     for billboard_call in &render_scene.billboard_calls {
       crate::gpu::frame::do_draw_billboard(self, view, view_proj, cmd_buffer, billboard_call)?;
     }
@@ -3142,13 +3215,97 @@ impl<'a> RenderDevice for Device<'a> {
     let handle =
       PresentationEngineHandle(NEXT_HANDLE.fetch_add(1, core::sync::atomic::Ordering::Relaxed));
 
-    self
-      .res
+    let res_guard = self.res.read();
+    res_guard
       .live_presentation_engines
       .write()
       .insert(handle, spin::RwLock::new(presentation_state));
 
     Ok(handle)
+  }
+
+  fn check_billboard_texture_id(&self, texture_id: u64) -> GpuResult<()> {
+    let res = self.res.read();
+    let billboard_resources = res.billboard_resources.read();
+    if billboard_resources.len() > texture_id as usize {
+      Ok(())
+    } else {
+      Err(GpuError::InvalidState)
+    }
+  }
+
+  fn add_billboard_texture(&self, texture: &Texture) -> GpuResult<()> {
+    let graphics_queue = self.queues.get_graphics_queue();
+
+    let mut res = self.res.write();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let mut billboard_resources = res.billboard_resources.write();
+    let billboard_render_archetype = res.billboard_render_archetype.read();
+
+    // Create throwaway command buffer
+    let command_pool = {
+      let create_info = vk::CommandPoolCreateInfo::default()
+        .queue_family_index(graphics_queue.family_index)
+        .flags(vk::CommandPoolCreateFlags::TRANSIENT);
+      unsafe { self.device.create_command_pool(&create_info, None) }
+    }?;
+
+    let command_buffer = {
+      let alloc_info = vk::CommandBufferAllocateInfo::default()
+        .command_pool(command_pool)
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .command_buffer_count(1);
+      unsafe { self.device.allocate_command_buffers(&alloc_info) }?[0]
+    };
+
+    // start command buffer
+    let begin_info =
+      vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+    unsafe {
+      self
+        .device
+        .begin_command_buffer(command_buffer, &begin_info)?
+    };
+
+    let image = {
+      let billboard_render_archetype_ref = billboard_render_archetype.as_ref().unwrap();
+      billboard_render_archetype_ref.add_texture(
+        &self.device,
+        &res.allocator.allocator,
+        command_buffer,
+        &res.discard_pool,
+        timeline,
+        texture,
+        res.linear_sampler,
+        billboard_resources.len() as _,
+        &alloc::format!("BillBoard_{}", billboard_resources.len()),
+      )?
+    };
+
+    billboard_resources.push(image);
+
+    // TODO: refactor this together with command buffer creation into a utility function called
+    // "one_time_gpu_upload"
+    unsafe {
+      self.device.end_command_buffer(command_buffer)?;
+      let command_buffers = [command_buffer];
+      let submits = [vk::SubmitInfo::default().command_buffers(&command_buffers)];
+      let fence = unsafe {
+        self
+          .device
+          .create_fence(&vk::FenceCreateInfo::default(), None)
+      }?;
+      self
+        .device
+        .locked_queue_submit(graphics_queue.handle, &submits, fence)
+        .map_err(GpuError::from)?;
+      unsafe {
+        self.device.wait_for_fences(&[fence], true, u64::MAX)?;
+        self.device.destroy_fence(fence, None);
+      }
+    };
+
+    Ok(())
   }
 
   fn resize_presentation_engine(
@@ -3161,12 +3318,13 @@ impl<'a> RenderDevice for Device<'a> {
 
     // Acquire a single write lock to perform the entire resize operation atomically.
     // This prevents deadlocks and satisfies the borrow checker.
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let res_guard = self.res.read();
+    let timeline = res_guard.get_timeline_semaphore_cached_value();
 
     // Get a mutable reference to the presentation engine to resize it.
     // borrow checker enforces us to reacquire the lock after we call a mutating method
     {
-      let engine_lock = self.res.live_presentation_engines.read();
+      let engine_lock = res_guard.live_presentation_engines.read();
       let engine = engine_lock.get(&handle).ok_or(GpuError::InvalidArgument)?;
       engine.write().resize(
         &self.instance.instance,
@@ -3176,19 +3334,19 @@ impl<'a> RenderDevice for Device<'a> {
         height,
       )?;
     }
+    drop(res_guard);
 
     // After resizing, update dependent resources like pipelines/renderpasses.
     // `update_physical_mesh_archetype_for_presentation_engine` takes `&mut self` (for `wres`)
     // and an immutable `&PresentationState` (for `engine`). This is a valid borrow pattern.
-    self
-      .res
-      .update_physical_mesh_archetype_for_presentation_engine(&self.device, handle, timeline)?;
-    self
-      .res
-      .update_cursor_archetype_for_presentation_engine(&self.device, handle, timeline)?;
-    self
-      .res
-      .update_sun_archetype_for_presentation_engine(&self.device, handle, timeline)?;
+    let res_guard = self.res.read();
+    res_guard.update_physical_mesh_archetype_for_presentation_engine(
+      &self.device,
+      handle,
+      timeline,
+    )?;
+    res_guard.update_cursor_archetype_for_presentation_engine(&self.device, handle, timeline)?;
+    res_guard.update_sun_archetype_for_presentation_engine(&self.device, handle, timeline)?;
 
     Ok(())
   }
@@ -3197,7 +3355,9 @@ impl<'a> RenderDevice for Device<'a> {
     &self,
     handle: crate::gpu::PresentationEngineHandle,
   ) -> GpuResult<[u32; 2]> {
-    if let Some(engine) = self.res.live_presentation_engines.read().get(&handle) {
+    let res_guard = self.res.read();
+    let live_engines_lock = res_guard.live_presentation_engines.read();
+    if let Some(engine) = live_engines_lock.get(&handle) {
       let e = engine.read().extent();
       Ok([e.0, e.1])
     } else {
@@ -3209,7 +3369,9 @@ impl<'a> RenderDevice for Device<'a> {
     &self,
     handle: crate::gpu::PresentationEngineHandle,
   ) -> GpuResult<crate::gpu::AcquireResult> {
-    if let Some(engine) = self.res.live_presentation_engines.read().get(&handle) {
+    let res_guard = self.res.read();
+    let live_engines_lock = res_guard.live_presentation_engines.read();
+    if let Some(engine) = live_engines_lock.get(&handle) {
       engine
         .write()
         .acquire_next_image(&self.device, self.queues.get_graphics_queue().handle)
@@ -3237,37 +3399,43 @@ impl<'a> RenderDevice for Device<'a> {
     handle: PresentationEngineHandle,
     debug_name: &str,
   ) -> GpuResult<ResourceUploadResult> {
-    let next_frame_timeline = self.res.get_timeline_semaphore_cached_value() + 1;
+    let res_guard = self.res.read();
+    let next_frame_timeline = res_guard.get_timeline_semaphore_cached_value() + 1;
     let current_frame_timeline = next_frame_timeline - 1;
 
-    // ensure that the archetype for physical meshes exists
-    let archetype = self.res.physical_mesh_render_archetype.read();
-    let archetype_not_exists = archetype.is_none();
-    if archetype_not_exists {
-      return Err(GpuError::InvalidState);
-    }
-
-    let archetype_ref = archetype.as_ref().unwrap();
+    let (pipeline_key, outline_pipeline_key) = {
+      let archetype_guard = res_guard.physical_mesh_render_archetype.read();
+      if archetype_guard.is_none() {
+        return Err(GpuError::InvalidState);
+      }
+      let archetype_ref = archetype_guard.as_ref().unwrap();
+      (
+        unsafe { archetype_ref.pipeline_key.unwrap_unchecked() },
+        archetype_ref.outline_pipeline_key,
+      )
+    };
 
     // Get rendering system Internal Mesh Identifier
     let physical_mesh_id = RenderableInstanceId::from_physical_mesh(entity_id, component);
 
     // Does the mesh already exist? If so, return cached resource
-    let read_resouces = self.res.physical_mesh_resources.read();
-    if let Some(resources) = read_resouces.as_ref() {
-      if let Some(resource) = resources.get(&physical_mesh_id) {
-        unsafe {
-          return Ok(physical_mesh_resource_backend_to_frontend(
-            physical_mesh_id,
-            &resource,
-            &archetype_ref,
-            component.emissive_intensity,
-            component.emissive_color,
-          ));
+    {
+      let read_resources = res_guard.physical_mesh_resources.read();
+      if let Some(resources) = read_resources.as_ref() {
+        if let Some(resource) = resources.get(&physical_mesh_id) {
+          return Ok(ResourceUploadResult {
+            pipeline: pipeline_key,
+            outline_pipeline: outline_pipeline_key,
+            buffers: physical_mesh_id.into(),
+            texture_flags: resource.frontend_texture_flags(),
+            emissive_intensity: component.emissive_intensity,
+            emissive_color: component.emissive_color,
+          });
         }
       }
     }
-    drop(read_resouces);
+
+    drop(res_guard);
 
     // Otherwise, create it inside the resources registry
     // Upload is a blocking operation, so we need to release the read lock on res
@@ -3290,6 +3458,7 @@ impl<'a> RenderDevice for Device<'a> {
     };
 
     let (resource, texture_flags) = 'resource_creation: {
+      let res_guard = self.res.read();
       let begin_info =
         vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
       unsafe {
@@ -3305,9 +3474,9 @@ impl<'a> RenderDevice for Device<'a> {
         texture_flags |= TextureFlags::ALBEDO;
         Image::new_2d(
           &self.device,
-          &self.res.allocator.allocator,
+          &res_guard.allocator.allocator,
           command_buffer,
-          &self.res.discard_pool,
+          &res_guard.discard_pool,
           current_frame_timeline,
           &t,
           vk::ImageUsageFlags::SAMPLED,
@@ -3319,9 +3488,9 @@ impl<'a> RenderDevice for Device<'a> {
         texture_flags |= TextureFlags::NORMAL;
         Image::new_2d(
           &self.device,
-          &self.res.allocator.allocator,
+          &res_guard.allocator.allocator,
           command_buffer,
-          &self.res.discard_pool,
+          &res_guard.discard_pool,
           current_frame_timeline,
           &t,
           vk::ImageUsageFlags::SAMPLED,
@@ -3333,9 +3502,9 @@ impl<'a> RenderDevice for Device<'a> {
         texture_flags |= TextureFlags::ROUGHNESS;
         Image::new_2d(
           &self.device,
-          &self.res.allocator.allocator,
+          &res_guard.allocator.allocator,
           command_buffer,
-          &self.res.discard_pool,
+          &res_guard.discard_pool,
           current_frame_timeline,
           &t,
           vk::ImageUsageFlags::SAMPLED,
@@ -3347,9 +3516,9 @@ impl<'a> RenderDevice for Device<'a> {
         texture_flags |= TextureFlags::AO;
         Image::new_2d(
           &self.device,
-          &self.res.allocator.allocator,
+          &res_guard.allocator.allocator,
           command_buffer,
-          &self.res.discard_pool,
+          &res_guard.discard_pool,
           current_frame_timeline,
           &t,
           vk::ImageUsageFlags::SAMPLED,
@@ -3358,19 +3527,23 @@ impl<'a> RenderDevice for Device<'a> {
         .ok()
       });
 
+      let archetype = res_guard.physical_mesh_render_archetype.read();
+      let archetype_ref = archetype.as_ref().unwrap();
+
       let resource = unsafe {
+        let dp_lock = res_guard.descriptor_pool.read();
         let descriptor_set = archetype_ref.create_descriptor_set_from_layout_at_index(
           &self.device,
-          self.res.descriptor_pool.read().as_ref().unwrap_unchecked(),
-          &self.res.discard_pool,
+          dp_lock.as_ref().unwrap_unchecked(),
+          &res_guard.discard_pool,
           0,
           debug_name,
         )?;
         ForwardMeshRenderResource::new(
           &self.device,
-          &self.res.allocator.allocator,
+          &res_guard.allocator.allocator,
           command_buffer,
-          &self.res.discard_pool,
+          &res_guard.discard_pool,
           current_frame_timeline,
           &position_data,
           &attribute_data,
@@ -3379,8 +3552,7 @@ impl<'a> RenderDevice for Device<'a> {
           normal_image,
           roughness_image,
           ao_image,
-          self
-            .res
+          res_guard
             .sky_image
             .read()
             .as_ref()
@@ -3396,7 +3568,7 @@ impl<'a> RenderDevice for Device<'a> {
                 allocation: archetype_ref.dummy_texture_handle.allocation,
               })
             }),
-          self.res.linear_sampler,
+          res_guard.linear_sampler,
           descriptor_set,
           &archetype_ref.dummy_texture_handle,
           debug_name,
@@ -3428,10 +3600,8 @@ impl<'a> RenderDevice for Device<'a> {
       self.device.destroy_command_pool(command_pool, None);
     }
 
-    let outline_pipeline_key = archetype_ref.outline_pipeline_key;
-    let pipeline_key = unsafe { archetype_ref.pipeline_key.unwrap_unchecked() };
-
-    let mut wresources = self.res.physical_mesh_resources.write();
+    let res_guard = self.res.read();
+    let mut wresources = res_guard.physical_mesh_resources.write();
     if wresources.is_none() {
       *wresources = Some(hashbrown::HashMap::new());
     }
@@ -3454,19 +3624,20 @@ impl<'a> RenderDevice for Device<'a> {
   }
 
   fn generate_sky(&self) -> GpuResult<()> {
-    let sky_image = self.res.sky_image.read();
+    let res_guard = self.res.read();
+    let sky_image = res_guard.sky_image.read();
     if sky_image.is_some() {
       return Ok(()); // Sky is already generated, do not destroy and recreate it
     }
     drop(sky_image);
 
     let comp_key = {
-      let mut shader_manager = self.res.shader_manager.write();
+      let mut shader_manager = res_guard.shader_manager.write();
       ensure_skygen_shader_module(&self.device, &mut shader_manager)?
     };
 
     let shader_module = {
-      let shader_manager = self.res.shader_manager.read();
+      let shader_manager = res_guard.shader_manager.read();
       let shader = shader_manager
         .get(comp_key)
         .ok_or(GpuError::InvalidShader)?;
@@ -3479,7 +3650,7 @@ impl<'a> RenderDevice for Device<'a> {
     // Create sky image 2048x2048
     let sky_image = resources::Image::new_storage_2d(
       &self.device,
-      &self.res.allocator.allocator,
+      &res_guard.allocator.allocator,
       2048,
       2048,
       vk::Format::R16G16B16A16_SFLOAT,
@@ -3558,8 +3729,7 @@ impl<'a> RenderDevice for Device<'a> {
       16,
     );
 
-    let compute_pipeline = self
-      .res
+    let compute_pipeline = res_guard
       .pipeline_pool
       .write()
       .get_or_create_compute_pipeline(&self.device, &compute_info)?;
@@ -3680,11 +3850,11 @@ impl<'a> RenderDevice for Device<'a> {
     }
 
     // In case it already has an image, destroy it
-    let mut wsky_image = self.res.sky_image.write();
+    let mut wsky_image = res_guard.sky_image.write();
     if wsky_image.is_some() {
       unsafe {
         vk_mem::ffi::vmaDestroyImage(
-          self.res.allocator.allocator.get_raw(),
+          res_guard.allocator.allocator.get_raw(),
           wsky_image.as_ref().unwrap().image.get(),
           wsky_image.as_ref().unwrap().allocation.get_raw(),
         );
@@ -3703,7 +3873,8 @@ impl<'a> RenderDevice for Device<'a> {
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
     // ensure that the archetype for billboards exists
-    let archetype = self.res.billboard_render_archetype.read();
+    let res_guard = self.res.read();
+    let archetype = res_guard.billboard_render_archetype.read();
     let archetype_not_exists = archetype.is_none();
     if archetype_not_exists {
       return Err(GpuError::InvalidState);
@@ -3729,7 +3900,8 @@ impl<'a> RenderDevice for Device<'a> {
     &self,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
-    let archetype = self.res.cursor_render_archetype.read();
+    let res_guard = self.res.read();
+    let archetype = res_guard.cursor_render_archetype.read();
     let archetype_not_exists = archetype.is_none();
     // ensure that the archetype for cursors exists
     if archetype_not_exists {
@@ -3739,7 +3911,7 @@ impl<'a> RenderDevice for Device<'a> {
     let archetype_ref = archetype.as_ref().unwrap();
 
     // Safety: Archetype, once properly constructed, has everything populated
-    let pipeline_key = unsafe { archetype_ref.pipeline_key.unwrap_unchecked() };
+    let pipeline_key = archetype_ref.pipeline_key.unwrap();
 
     // the cursor doesn't have descriptor sets or vertex/index buffers
     Ok(ResourceUploadResult {
@@ -3756,7 +3928,8 @@ impl<'a> RenderDevice for Device<'a> {
     &self,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
-    let arch = self.res.measurement_render_archetype.read();
+    let res_guard = self.res.read();
+    let arch = res_guard.measurement_render_archetype.read();
     let archetype_not_exists = arch.is_none();
     if archetype_not_exists {
       return Err(GpuError::InvalidState);
@@ -3779,7 +3952,8 @@ impl<'a> RenderDevice for Device<'a> {
     &self,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
-    let arch = self.res.marker_render_archetype.read();
+    let res_guard = self.res.read();
+    let arch = res_guard.marker_render_archetype.read();
     let archetype_not_exists = arch.is_none();
     if archetype_not_exists {
       return Err(GpuError::InvalidState);
@@ -3804,7 +3978,9 @@ impl<'a> RenderDevice for Device<'a> {
     image_index: usize,
     frame_index: usize,
   ) -> GpuResult<crate::gpu::SwapchainStatus> {
-    if let Some(engine) = self.res.live_presentation_engines.read().get(&handle) {
+    let res_guard = self.res.read();
+    let live_engines_lock = res_guard.live_presentation_engines.read();
+    if let Some(engine) = live_engines_lock.get(&handle) {
       let graphics_queue = self.queues.get_graphics_queue().handle;
       unsafe {
         engine.write().submit_image(
@@ -3824,7 +4000,8 @@ impl<'a> RenderDevice for Device<'a> {
     handle: PresentationEngineHandle,
     buffer: &mut [u8],
   ) -> GpuResult<()> {
-    let engine_lock = self.res.live_presentation_engines.read();
+    let res_guard = self.res.read();
+    let engine_lock = res_guard.live_presentation_engines.read();
     let state_lock = engine_lock.get(&handle).ok_or(GpuError::InvalidState)?;
     let mut state = state_lock.write();
 
@@ -3847,18 +4024,17 @@ impl<'a> RenderDevice for Device<'a> {
         | vk_mem::AllocationCreateFlags::MAPPED;
 
       let (staging_buffer, alloc) = unsafe {
-        self
-          .res
+        res_guard
           .allocator
           .allocator
           .create_buffer(&buffer_info, &alloc_info)
       }?;
-      let alloc_info_res = self.res.allocator.allocator.get_allocation_info(&alloc);
+      let alloc_info_res = res_guard.allocator.allocator.get_allocation_info(&alloc);
 
       let graphics_queue = self.queues.get_graphics_queue();
-      let timeline_value = self.res.get_timeline_semaphore_cached_value();
+      let timeline_value = res_guard.get_timeline_semaphore_cached_value();
       self.device.wait_for_semaphore_value(
-        self.res.timeline_semaphore.get(),
+        res_guard.timeline_semaphore.get(),
         timeline_value,
         u64::MAX,
       )?;
@@ -3953,8 +4129,7 @@ impl<'a> RenderDevice for Device<'a> {
 
       let mapped_ptr = alloc_info_res.mapped_data as *const u8;
       if !mapped_ptr.is_null() {
-        self
-          .res
+        res_guard
           .allocator
           .allocator
           .invalidate_allocation(&alloc, 0, vk::WHOLE_SIZE)?;
@@ -3965,8 +4140,7 @@ impl<'a> RenderDevice for Device<'a> {
 
       unsafe {
         let mut mut_alloc = alloc;
-        self
-          .res
+        res_guard
           .allocator
           .allocator
           .destroy_buffer(staging_buffer, &mut mut_alloc);
@@ -3979,7 +4153,8 @@ impl<'a> RenderDevice for Device<'a> {
   }
 
   fn get_command_buffer(&self) -> GpuResult<crate::gpu::CommandBufferHandle> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let res_guard = self.res.read();
+    let timeline = res_guard.get_timeline_semaphore_cached_value();
     let cmd_buf_id = cmd_id_from_timeline_and_thread_id(timeline);
 
     if !self
@@ -3988,8 +4163,7 @@ impl<'a> RenderDevice for Device<'a> {
       .contains_key(&(timeline, cmd_buf_id))
     {
       let cmd = unsafe {
-        self
-          .res
+        res_guard
           .command_pools
           .read()
           .get_unchecked(self.queues.get_graphics_queue().index as usize)
@@ -4007,7 +4181,7 @@ impl<'a> RenderDevice for Device<'a> {
   }
 
   fn begin_command_buffer(&self, cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let timeline = self.res.read().get_timeline_semaphore_cached_value();
     let mut cmd_buffers = self.recording_command_buffers.write();
     let data = cmd_buffers
       .get_mut(&(timeline, cmd_buffer))
@@ -4035,13 +4209,14 @@ impl<'a> RenderDevice for Device<'a> {
     presentation_engine: PresentationEngineHandle,
     acquire_result: &AcquireResult,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
-    let presentation_engines = self.res.live_presentation_engines.read();
+    let res_guard = self.res.read();
+    let timeline = res_guard.get_timeline_semaphore_cached_value();
+    let presentation_engines_guard = res_guard.live_presentation_engines.read();
     let cmd_buffers = self.recording_command_buffers.read();
     if !cmd_buffers.contains_key(&(timeline, cmd_buffer)) {
       return Err(GpuError::InvalidArgument);
     }
-    if !presentation_engines.contains_key(&presentation_engine) {
+    if !presentation_engines_guard.contains_key(&presentation_engine) {
       return Err(GpuError::InvalidArgument);
     }
 
@@ -4052,7 +4227,7 @@ impl<'a> RenderDevice for Device<'a> {
     }
 
     let wpresentation_engine = unsafe {
-      presentation_engines
+      presentation_engines_guard
         .get(&presentation_engine)
         .unwrap_unchecked()
     }
@@ -4073,12 +4248,12 @@ impl<'a> RenderDevice for Device<'a> {
       acquire_result: *acquire_result,
       presentation_engine,
     });
-    let (render_pass, framebuffer) = self.res.renderpasses.get_or_create_render_pass(
+    let (render_pass, framebuffer) = self.res.read().renderpasses.get_or_create_render_pass(
       RenderPassSpecification::single_pass(&wpresentation_engine, self.depth_stencil_format),
       acquire_result.frame_index as u32,
       &self.device,
-      &self.res.allocator.allocator,
-      &self.res.discard_pool,
+      &self.res.read().allocator.allocator,
+      &self.res.read().discard_pool,
       timeline,
     )?;
 
@@ -4086,6 +4261,7 @@ impl<'a> RenderDevice for Device<'a> {
     let mut black = [vk::ClearValue::default(), vk::ClearValue::default()]; // 2 attachments
     self
       .res
+      .read()
       .renderpasses
       .get_clear_values_render_pass(RenderPassType::ColorDepthSingleSubpass, &mut black)?;
 
@@ -4118,7 +4294,7 @@ impl<'a> RenderDevice for Device<'a> {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     viewport: &crate::gpu::Viewport,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let timeline = self.res.read().get_timeline_semaphore_cached_value();
     let cmd_buffers = self.recording_command_buffers.read();
     let data = cmd_buffers
       .get(&(timeline, cmd_buffer))
@@ -4145,7 +4321,7 @@ impl<'a> RenderDevice for Device<'a> {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     scissor: &crate::gpu::Rect2D,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let timeline = self.res.read().get_timeline_semaphore_cached_value();
     let cmd_buffers = self.recording_command_buffers.read();
     let data = cmd_buffers
       .get(&(timeline, cmd_buffer))
@@ -4174,7 +4350,7 @@ impl<'a> RenderDevice for Device<'a> {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     pipeline_key: crate::gpu::PipelineKey,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let timeline = self.res.read().get_timeline_semaphore_cached_value();
     let cmd_buffers = self.recording_command_buffers.read();
     if !cmd_buffers.contains_key(&(timeline, cmd_buffer)) {
       return Err(GpuError::InvalidArgument);
@@ -4191,6 +4367,7 @@ impl<'a> RenderDevice for Device<'a> {
 
     let pipeline = self
       .res
+      .read()
       .pipeline_pool
       .read()
       .get_graphics_pipeline(pipeline_key)
@@ -4213,21 +4390,22 @@ impl<'a> RenderDevice for Device<'a> {
     _pipeline: crate::gpu::PipelineKey,
     buffers: GpuResourceHandle,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let timeline = self.res.read().get_timeline_semaphore_cached_value();
     let cmd_buffers = self.recording_command_buffers.read();
     let data = cmd_buffers
       .get(&(timeline, cmd_buffer))
       .ok_or(GpuError::InvalidArgument)?;
 
     let physical_mesh_id = RenderableInstanceId(buffers.0);
-    let physical_mesh_resources = self.res.physical_mesh_resources.read();
-    let resource = physical_mesh_resources
+    let res_guard = self.res.read();
+    let physical_mesh_resources_guard = res_guard.physical_mesh_resources.read();
+    let resource = physical_mesh_resources_guard
       .as_ref()
       .and_then(|map| map.get(&physical_mesh_id))
       .ok_or(GpuError::InvalidArgument)?;
 
-    let physical_mesh_render_archetype = self.res.physical_mesh_render_archetype.read();
-    let archetype = physical_mesh_render_archetype
+    let physical_mesh_render_archetype_guard = res_guard.physical_mesh_render_archetype.read();
+    let archetype = physical_mesh_render_archetype_guard
       .as_ref()
       .ok_or(GpuError::InvalidState)?;
 
@@ -4277,14 +4455,15 @@ impl<'a> RenderDevice for Device<'a> {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     push_constants: &crate::simulation::comet::PushConstants,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let timeline = self.res.read().get_timeline_semaphore_cached_value();
     let cmd_buffers = self.recording_command_buffers.read();
     let data = cmd_buffers
       .get(&(timeline, cmd_buffer))
       .ok_or(GpuError::InvalidArgument)?;
 
-    let physical_mesh_render_archetype = self.res.physical_mesh_render_archetype.read();
-    let archetype = physical_mesh_render_archetype
+    let res_guard = self.res.read();
+    let physical_mesh_render_archetype_guard = res_guard.physical_mesh_render_archetype.read();
+    let archetype = physical_mesh_render_archetype_guard
       .as_ref()
       .ok_or(GpuError::InvalidState)?;
 
@@ -4315,14 +4494,15 @@ impl<'a> RenderDevice for Device<'a> {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     push_constants: &crate::gpu::SunPushConstants,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let timeline = self.res.read().get_timeline_semaphore_cached_value();
     let cmd_buffers = self.recording_command_buffers.read();
     let data = cmd_buffers
       .get(&(timeline, cmd_buffer))
       .ok_or(GpuError::InvalidArgument)?;
 
-    let sun_render_archetype = self.res.sun_render_archetype.read();
-    let archetype = sun_render_archetype
+    let res_guard = self.res.read();
+    let sun_render_archetype_guard = res_guard.sun_render_archetype.read();
+    let archetype = sun_render_archetype_guard
       .as_ref()
       .ok_or(GpuError::InvalidState)?;
 
@@ -4353,14 +4533,15 @@ impl<'a> RenderDevice for Device<'a> {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     push_constants: &crate::gpu::CursorPushConstants,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let timeline = self.res.read().get_timeline_semaphore_cached_value();
     let cmd_buffers = self.recording_command_buffers.read();
     let data = cmd_buffers
       .get(&(timeline, cmd_buffer))
       .ok_or(GpuError::InvalidArgument)?;
 
-    let cursor_render_archetype = self.res.cursor_render_archetype.read();
-    let archetype = cursor_render_archetype
+    let res_guard = self.res.read();
+    let cursor_render_archetype_guard = res_guard.cursor_render_archetype.read();
+    let archetype = cursor_render_archetype_guard
       .as_ref()
       .ok_or(GpuError::InvalidState)?;
 
@@ -4391,14 +4572,15 @@ impl<'a> RenderDevice for Device<'a> {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     push_constants: &crate::gpu::MarkerPushConstants,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let timeline = self.res.read().get_timeline_semaphore_cached_value();
     let cmd_buffers = self.recording_command_buffers.read();
     let data = cmd_buffers
       .get(&(timeline, cmd_buffer))
       .ok_or(GpuError::InvalidArgument)?;
 
-    let marker_render_archetype = self.res.marker_render_archetype.read();
-    let arch_ref = marker_render_archetype.as_ref();
+    let res_guard = self.res.read();
+    let marker_render_archetype_guard = res_guard.marker_render_archetype.read();
+    let arch_ref = marker_render_archetype_guard.as_ref();
 
     if let Some(arch) = arch_ref {
       let layout = arch.pipeline_layout.get();
@@ -4427,14 +4609,15 @@ impl<'a> RenderDevice for Device<'a> {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     push_constants: &crate::gpu::MeasurementPushConstants,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let timeline = self.res.read().get_timeline_semaphore_cached_value();
     let cmd_buffers = self.recording_command_buffers.read();
     let data = cmd_buffers
       .get(&(timeline, cmd_buffer))
       .ok_or(GpuError::InvalidArgument)?;
 
-    let measurement_render_archetype = self.res.measurement_render_archetype.read();
-    let arch_ref = measurement_render_archetype.as_ref();
+    let res_guard = self.res.read();
+    let measurement_render_archetype_guard = res_guard.measurement_render_archetype.read();
+    let arch_ref = measurement_render_archetype_guard.as_ref();
 
     if let Some(arch) = arch_ref {
       let layout = arch.pipeline_layout.get();
@@ -4463,14 +4646,15 @@ impl<'a> RenderDevice for Device<'a> {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     push_constants: &crate::gpu::BillboardPushConstants,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let timeline = self.res.read().get_timeline_semaphore_cached_value();
     let cmd_buffers = self.recording_command_buffers.read();
     let data = cmd_buffers
       .get(&(timeline, cmd_buffer))
       .ok_or(GpuError::InvalidArgument)?;
 
-    let billboard_render_archetype = self.res.billboard_render_archetype.read();
-    let arch_ref = billboard_render_archetype.as_ref();
+    let res_guard = self.res.read();
+    let billboard_render_archetype_guard = res_guard.billboard_render_archetype.read();
+    let arch_ref = billboard_render_archetype_guard.as_ref();
 
     if let Some(arch) = arch_ref {
       let layout = arch.pipeline_layout.get();
@@ -4499,7 +4683,7 @@ impl<'a> RenderDevice for Device<'a> {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     index_count: u32,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let timeline = self.res.read().get_timeline_semaphore_cached_value();
     let cmd_buffers = self.recording_command_buffers.read();
     let data = cmd_buffers
       .get(&(timeline, cmd_buffer))
@@ -4515,7 +4699,7 @@ impl<'a> RenderDevice for Device<'a> {
   }
 
   fn draw(&self, cmd_buffer: crate::gpu::CommandBufferHandle, vertex_count: u32) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let timeline = self.res.read().get_timeline_semaphore_cached_value();
     let cmd_buffers = self.recording_command_buffers.read();
     let data = cmd_buffers
       .get(&(timeline, cmd_buffer))
@@ -4536,14 +4720,15 @@ impl<'a> RenderDevice for Device<'a> {
     entity_id: crate::scene::EntityId,
     component: &crate::scene::SunComponent,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let res_guard = self.res.read();
+    let timeline = res_guard.get_timeline_semaphore_cached_value();
 
-    let sun_archetype_not_exists = self.res.sun_render_archetype.read().is_none();
+    let sun_archetype_not_exists = res_guard.sun_render_archetype.read().is_none();
     if sun_archetype_not_exists {
       return Err(GpuError::InvalidState);
     }
 
-    let mut sun_res_lock = self.res.sun_resources.write();
+    let mut sun_res_lock = res_guard.sun_resources.write();
     if sun_res_lock.is_none() {
       *sun_res_lock = Some(hashbrown::HashMap::new());
     }
@@ -4553,7 +4738,7 @@ impl<'a> RenderDevice for Device<'a> {
       let compute_queue = self.queues.get_compute_queue();
       let image = resources::Image::new_storage_3d(
         &self.device,
-        &self.res.allocator.allocator,
+        &res_guard.allocator.allocator,
         component.resolution.0,
         component.resolution.1,
         component.resolution.2,
@@ -4565,11 +4750,11 @@ impl<'a> RenderDevice for Device<'a> {
 
       // Now run sungen.comp
       let comp_key = {
-        let mut shader_manager = self.res.shader_manager.write();
+        let mut shader_manager = res_guard.shader_manager.write();
         ensure_sungen_shader_module(&self.device, &mut shader_manager)?
       };
       let shader_module = {
-        let shader_manager = self.res.shader_manager.read();
+        let shader_manager = res_guard.shader_manager.read();
         let shader = shader_manager
           .get(comp_key)
           .ok_or(GpuError::InvalidShader)?;
@@ -4635,8 +4820,7 @@ impl<'a> RenderDevice for Device<'a> {
       compute_info.shader_module = shader_module;
       compute_info.pipeline_layout = pipeline_layout;
 
-      let compute_pipeline = self
-        .res
+      let compute_pipeline = res_guard
         .pipeline_pool
         .write()
         .get_or_create_compute_pipeline(&self.device, &compute_info)?;
@@ -4653,15 +4837,13 @@ impl<'a> RenderDevice for Device<'a> {
         .usage(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
       let (params_buffer, params_alloc) = unsafe {
-        self
-          .res
+        res_guard
           .allocator
           .allocator
           .create_buffer(&buffer_info, &allocation_create_info)?
       };
 
-      let alloc_info = self
-        .res
+      let alloc_info = res_guard
         .allocator
         .allocator
         .get_allocation_info(&params_alloc);
@@ -4669,7 +4851,7 @@ impl<'a> RenderDevice for Device<'a> {
       unsafe {
         let ptr = alloc_info.mapped_data as *mut [f32; 6];
         *ptr = [
-          timeline as f32 * 0.016, // time (TODO pass time)
+          timeline as f32 * 0.016, // time
           5778.0,                  // photosphereTemp
           1000000.0,               // coronaTemp
           0.6,                     // radius
@@ -4678,13 +4860,12 @@ impl<'a> RenderDevice for Device<'a> {
         ];
       }
 
-      let sun_render_archetype = self.res.sun_render_archetype.read();
+      let sun_render_archetype = res_guard.sun_render_archetype.read();
       let archetype = sun_render_archetype
         .as_ref()
         .ok_or(GpuError::InvalidState)?;
 
-      let graphics_descriptor_set = self
-        .res
+      let graphics_descriptor_set = res_guard
         .descriptor_pool
         .read()
         .as_ref()
@@ -4692,7 +4873,7 @@ impl<'a> RenderDevice for Device<'a> {
         .allocate(
           &self.device,
           archetype.descriptor_set_layout.get(),
-          &self.res.discard_pool,
+          &res_guard.discard_pool,
           timeline,
           "Sun",
         )?
@@ -4702,7 +4883,7 @@ impl<'a> RenderDevice for Device<'a> {
       let image_info = vk::DescriptorImageInfo::default()
         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
         .image_view(image.image_view.get())
-        .sampler(self.res.linear_sampler.get());
+        .sampler(res_guard.linear_sampler.get());
       let write_descriptor_set = vk::WriteDescriptorSet::default()
         .dst_set(graphics_descriptor_set)
         .dst_binding(0)
@@ -4744,13 +4925,14 @@ impl<'a> RenderDevice for Device<'a> {
     unsafe {
       let alloc_info = self
         .res
+        .read()
         .allocator
         .allocator
         .get_allocation_info(sun_resource.params_alloc.as_ref().unwrap());
       let ptr = alloc_info.mapped_data as *mut f32;
       *ptr = timeline as f32 * 0.016;
 
-      let _ = self.res.allocator.allocator.flush_allocation(
+      let _ = self.res.read().allocator.allocator.flush_allocation(
         sun_resource.params_alloc.as_ref().unwrap(),
         0,
         vk::WHOLE_SIZE as u64,
@@ -4873,17 +5055,18 @@ impl<'a> RenderDevice for Device<'a> {
     view: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
     view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let res_guard = self.res.read();
+    let timeline = res_guard.get_timeline_semaphore_cached_value();
 
     // ensure that the archetype for sun exists
-    let sun_archetype = self.res.sun_render_archetype.read();
-    let sun_archetype_not_exists = sun_archetype.is_none();
-    if sun_archetype_not_exists {
+    let sun_archetype_guard = res_guard.sun_render_archetype.read();
+    let sun_archetype = sun_archetype_guard.as_ref();
+    if sun_archetype.is_none() {
       return Err(GpuError::InvalidState);
     }
 
-    let map = self.res.sun_resources.read();
-    let sun_opt = map.as_ref().and_then(|m| m.get(&entity_id));
+    let map_guard = res_guard.sun_resources.read();
+    let sun_opt = map_guard.as_ref().and_then(|m| m.get(&entity_id));
     if sun_opt.is_none() {
       return Err(GpuError::InvalidState);
     }
@@ -4894,6 +5077,7 @@ impl<'a> RenderDevice for Device<'a> {
     let pipeline_key = archetype.pipeline_key.ok_or(GpuError::InvalidState)?;
     let pipeline = self
       .res
+      .read()
       .pipeline_pool
       .read()
       .get_graphics_pipeline(pipeline_key)
@@ -4990,19 +5174,20 @@ impl<'a> RenderDevice for Device<'a> {
     component: &crate::scene::SkyComponent,
     view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
-    let sky_image = self.res.sky_image.read();
-    if sky_image.is_none() {
+    let res_guard = self.res.read();
+    let timeline = res_guard.get_timeline_semaphore_cached_value();
+    let sky_image_guard = res_guard.sky_image.read();
+    if sky_image_guard.is_none() {
       return Err(GpuError::InvalidState);
     }
 
     let do_alloc = {
-      let sky_render_archetype = self.res.sky_render_archetype.read();
-      if sky_render_archetype.is_none() {
+      let sky_render_archetype_guard = res_guard.sky_render_archetype.read();
+      if sky_render_archetype_guard.is_none() {
         return Err(GpuError::InvalidState);
       }
 
-      let needs_desc = sky_render_archetype
+      let needs_desc = sky_render_archetype_guard
         .as_ref()
         .unwrap()
         .descriptor_set
@@ -5011,7 +5196,7 @@ impl<'a> RenderDevice for Device<'a> {
       let mut do_alloc = false;
       if needs_desc {
         {
-          let arch_ref = sky_render_archetype.as_ref();
+          let arch_ref = sky_render_archetype_guard.as_ref();
           if let Some(arch) = arch_ref {
             if arch.descriptor_set.is_none() {
               do_alloc = true;
@@ -5024,23 +5209,21 @@ impl<'a> RenderDevice for Device<'a> {
     };
 
     if do_alloc {
-      let mut sky_render_archetype = self.res.sky_render_archetype.write();
-      let layout = sky_render_archetype
+      let mut sky_render_archetype_guard = res_guard.sky_render_archetype.write();
+      let layout = sky_render_archetype_guard
         .as_ref()
         .unwrap()
         .descriptor_set_layout
         .get();
 
-      let new_set = self
-        .res
-        .descriptor_pool
-        .read()
+      let pool_guard = res_guard.descriptor_pool.read();
+      let new_set = pool_guard
         .as_ref()
         .unwrap()
         .allocate(
           &self.device,
           layout,
-          &self.res.discard_pool,
+          &res_guard.discard_pool,
           timeline,
           "Sky",
         )?
@@ -5049,7 +5232,7 @@ impl<'a> RenderDevice for Device<'a> {
       let image_info = vk::DescriptorImageInfo::default()
         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
         .image_view(
-          sky_image
+          sky_image_guard
             .as_ref()
             .map(|img| img.image_view.get())
             .unwrap_or_else(|| {
@@ -5057,10 +5240,10 @@ impl<'a> RenderDevice for Device<'a> {
               // but sky render has its own set layout.
               // Let's just use the image view from sky_image if it exists,
               // or if it doesn't, we probably shouldn't be here yet or should have a generic dummy.
-              sky_image.as_ref().unwrap().image_view.get()
+              sky_image_guard.as_ref().unwrap().image_view.get()
             }),
         )
-        .sampler(self.res.linear_sampler.get());
+        .sampler(res_guard.linear_sampler.get());
       let write_descriptor_set = vk::WriteDescriptorSet::default()
         .dst_set(new_set)
         .dst_binding(0)
@@ -5072,18 +5255,17 @@ impl<'a> RenderDevice for Device<'a> {
           .update_descriptor_sets(&[write_descriptor_set], &[])
       };
 
-      sky_render_archetype.as_mut().unwrap().descriptor_set =
+      sky_render_archetype_guard.as_mut().unwrap().descriptor_set =
         Some(unsafe { NonZeroHandle::new_unchecked(new_set) });
     }
 
-    let sky_render_archetype = self.res.sky_render_archetype.read();
+    let sky_render_archetype_guard = res_guard.sky_render_archetype.read();
     let cmd_buffers = self.recording_command_buffers.read();
     let data = cmd_buffers.get(&(timeline, cmd_buffer)).unwrap();
-    let archetype = sky_render_archetype.as_ref().unwrap();
+    let archetype = sky_render_archetype_guard.as_ref().unwrap();
 
     let pipeline_key = archetype.pipeline_key.unwrap();
-    let pipeline = self
-      .res
+    let pipeline = res_guard
       .pipeline_pool
       .read()
       .get_graphics_pipeline(pipeline_key)
@@ -5135,20 +5317,20 @@ impl<'a> RenderDevice for Device<'a> {
     near_plane: f32,
     far_plane: f32,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
-    let grid_render_archetype = self.res.grid_render_archetype.read();
+    let res_guard = self.res.read();
+    let timeline = res_guard.get_timeline_semaphore_cached_value();
+    let grid_render_archetype_guard = res_guard.grid_render_archetype.read();
 
-    if grid_render_archetype.is_none() {
+    if grid_render_archetype_guard.is_none() {
       return Err(GpuError::InvalidState);
     }
 
     let cmd_buffers = self.recording_command_buffers.read();
     let data = cmd_buffers.get(&(timeline, cmd_buffer)).unwrap();
-    let archetype = grid_render_archetype.as_ref().unwrap();
+    let archetype = grid_render_archetype_guard.as_ref().unwrap();
 
     let pipeline_key = archetype.pipeline_key.unwrap();
-    let pipeline = self
-      .res
+    let pipeline = res_guard
       .pipeline_pool
       .read()
       .get_graphics_pipeline(pipeline_key)
@@ -5212,15 +5394,15 @@ impl<'a> RenderDevice for Device<'a> {
       [f32; 4],
     )],
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
-    let minimap_render_archetype = self.res.minimap_render_archetype.read();
-    if minimap_render_archetype.is_none() {
+    let res_guard = self.res.read();
+    let timeline = res_guard.get_timeline_semaphore_cached_value();
+    let minimap_render_archetype_guard = res_guard.minimap_render_archetype.read();
+    if minimap_render_archetype_guard.is_none() {
       return Err(GpuError::InvalidState);
     }
 
-    let archetype = minimap_render_archetype.as_ref().unwrap();
-    let pipeline = self
-      .res
+    let archetype = minimap_render_archetype_guard.as_ref().unwrap();
+    let pipeline = res_guard
       .pipeline_pool
       .read()
       .get_graphics_pipeline(archetype.pipeline_key.unwrap())
@@ -5231,7 +5413,7 @@ impl<'a> RenderDevice for Device<'a> {
     let layout = archetype.pipeline_layout.get();
 
     // Fetch aspect ratio from the active presentation engine (we assume there's at least one, or we default to 1.0)
-    let live_engines_lock = self.res.live_presentation_engines.read();
+    let live_engines_lock = res_guard.live_presentation_engines.read();
     let aspect_ratio = if let Some(engine_state) = live_engines_lock.values().next() {
       let ext = engine_state.read().extent();
       if ext.1 > 0 {
@@ -5335,15 +5517,15 @@ impl<'a> RenderDevice for Device<'a> {
     view_proj: [f32; 16],
     presentation_engine: PresentationEngineHandle,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
-    let bvh_render_archetype = self.res.bvh_render_archetype.read();
-    if bvh_render_archetype.is_none() {
+    let res_guard = self.res.read();
+    let timeline = res_guard.get_timeline_semaphore_cached_value();
+    let bvh_render_archetype_guard = res_guard.bvh_render_archetype.read();
+    if bvh_render_archetype_guard.is_none() {
       return Err(GpuError::InvalidState);
     }
 
-    let archetype = bvh_render_archetype.as_ref().unwrap();
-    let pipeline = self
-      .res
+    let archetype = bvh_render_archetype_guard.as_ref().unwrap();
+    let pipeline = res_guard
       .pipeline_pool
       .read()
       .get_graphics_pipeline(archetype.pipeline_key.unwrap())
@@ -5354,7 +5536,7 @@ impl<'a> RenderDevice for Device<'a> {
     let layout = archetype.pipeline_layout.get();
 
     // Fetch aspect ratio from the active presentation engine (we assume there's at least one, or we default to 1.0)
-    let live_engines_lock = self.res.live_presentation_engines.read();
+    let live_engines_lock = res_guard.live_presentation_engines.read();
     let pe = live_engines_lock.get(&presentation_engine).unwrap().read();
     let extent = pe.extent();
     let aspect_ratio = if extent.1 > 0 {
@@ -5472,14 +5654,14 @@ impl<'a> RenderDevice for Device<'a> {
     size: [f32; 2],
     presentation_engine: PresentationEngineHandle,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
-    let text_render_archetype = self.res.text_render_archetype.read();
-    if text_render_archetype.is_none() {
+    let res_guard = self.res.read();
+    let timeline = res_guard.get_timeline_semaphore_cached_value();
+    let text_render_archetype_guard = res_guard.text_render_archetype.read();
+    if text_render_archetype_guard.is_none() {
       return Err(GpuError::InvalidState);
     }
-    let archetype = text_render_archetype.as_ref().unwrap();
-    let pipeline = self
-      .res
+    let archetype = text_render_archetype_guard.as_ref().unwrap();
+    let pipeline = res_guard
       .pipeline_pool
       .read()
       .get_graphics_pipeline(archetype.pipeline_key.unwrap())
@@ -5556,15 +5738,15 @@ impl<'a> RenderDevice for Device<'a> {
     position: [f32; 2],
     presentation_engine: PresentationEngineHandle,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
-    let text_render_archetype = self.res.text_render_archetype.read();
-    if text_render_archetype.is_none() {
+    let res_guard = self.res.read();
+    let timeline = res_guard.get_timeline_semaphore_cached_value();
+    let text_render_archetype_guard = res_guard.text_render_archetype.read();
+    if text_render_archetype_guard.is_none() {
       return Err(GpuError::InvalidState);
     }
 
-    let archetype = text_render_archetype.as_ref().unwrap();
-    let pipeline = self
-      .res
+    let archetype = text_render_archetype_guard.as_ref().unwrap();
+    let pipeline = res_guard
       .pipeline_pool
       .read()
       .get_graphics_pipeline(archetype.pipeline_key.unwrap())
@@ -5575,7 +5757,7 @@ impl<'a> RenderDevice for Device<'a> {
     let layout = archetype.pipeline_layout.get();
 
     // Fetch screen size
-    let live_engines_lock = self.res.live_presentation_engines.read();
+    let live_engines_lock = res_guard.live_presentation_engines.read();
     let (screen_width, screen_height) =
       if let Some(engine_state) = live_engines_lock.values().next() {
         let ext = engine_state.read().extent();
@@ -5692,7 +5874,7 @@ impl<'a> RenderDevice for Device<'a> {
   }
 
   fn end_render_pass(&self, cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let timeline = self.res.read().get_timeline_semaphore_cached_value();
     let cmd_buffers = self.recording_command_buffers.read();
     let data = cmd_buffers
       .get(&(timeline, cmd_buffer))
@@ -5716,7 +5898,7 @@ impl<'a> RenderDevice for Device<'a> {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     task_id: Option<u64>,
   ) -> GpuResult<()> {
-    let timeline = self.res.get_timeline_semaphore_cached_value();
+    let timeline = self.res.read().get_timeline_semaphore_cached_value();
     let mut cmd_buffers = self.recording_command_buffers.write();
     let mut data = cmd_buffers
       .remove(&(timeline, cmd_buffer))
@@ -5727,8 +5909,9 @@ impl<'a> RenderDevice for Device<'a> {
     }
 
     let presentation = data.presentation.ok_or(GpuError::InvalidState)?;
-    let presentation_engines = self.res.live_presentation_engines.read();
-    let presentation_engine = presentation_engines
+    let res_guard = self.res.read();
+    let presentation_engines_guard = res_guard.live_presentation_engines.read();
+    let presentation_engine = presentation_engines_guard
       .get(&presentation.presentation_engine)
       .ok_or(GpuError::InvalidArgument)?;
 
@@ -5739,6 +5922,7 @@ impl<'a> RenderDevice for Device<'a> {
     let (_, _, signal_semaphore) = unsafe {
       rpresentation_engine.get_image_resources(presentation.acquire_result.image_index as usize)
     };
+    let res_guard = self.res.read();
     let next_timeline_value = timeline + 1;
 
     let mut signal_semaphores = alloc::vec::Vec::new();
@@ -5749,7 +5933,7 @@ impl<'a> RenderDevice for Device<'a> {
       timeline_values.push(0);
     }
 
-    signal_semaphores.push(self.res.timeline_semaphore.get());
+    signal_semaphores.push(res_guard.timeline_semaphore.get());
     timeline_values.push(next_timeline_value);
 
     let wait_semaphores = [wait_semaphore.get()];
@@ -5766,7 +5950,7 @@ impl<'a> RenderDevice for Device<'a> {
       .push_next(&mut timeline_info);
 
     if let Some(tid) = task_id {
-      let registry = self.res.task_registry.read();
+      let registry = res_guard.task_registry.read();
       if let Some(entry) = registry.get(&tid) {
         entry
           .target_value
@@ -5784,13 +5968,11 @@ impl<'a> RenderDevice for Device<'a> {
       )
       .map_err(GpuError::from)?;
 
-    self
-      .res
+    res_guard
       .timeline_semaphore_cached_value
       .store(next_timeline_value, Ordering::Relaxed);
 
-    let cmd_pools = self
-      .res
+    let cmd_pools = res_guard
       .command_pools
       .read()
       .get(graphics_queue.index as usize)
@@ -5800,7 +5982,7 @@ impl<'a> RenderDevice for Device<'a> {
 
     data.discard(
       cmd_buffer.into(),
-      &self.res.discard_pool,
+      &res_guard.discard_pool,
       cmd_pools,
       next_timeline_value,
     );
@@ -5827,15 +6009,26 @@ impl<'a> RenderDevice for Device<'a> {
   }
 
   fn is_task_completed(&self, task_id: u64) -> GpuResult<bool> {
-    let registry = self.res.task_registry.read();
-    if let Some(entry) = registry.get(&task_id) {
+    let res_guard = self.res.read();
+    let registry_guard = res_guard.task_registry.read();
+    if let Some(entry) = registry_guard.get(&task_id) {
       let status = entry.status.load(Ordering::Acquire);
+      let target = entry.target_value.load(Ordering::Acquire);
       if status == TASK_STATUS_SUCCESS {
         Ok(true)
       } else if status == TASK_STATUS_FAILED {
-        let err = entry.error.read().clone().unwrap_or(GpuError::InvalidState);
+        let err_guard = entry.error.read();
+        let err = err_guard.clone().unwrap_or(GpuError::InvalidState);
         Err(err)
       } else {
+        if task_id % 100 == 0 {
+          // Log occasionally to avoid spam
+          oshal::log!(
+            "[is_task_completed] task_id={} status=Pending target={}",
+            task_id,
+            target
+          );
+        }
         Ok(false)
       }
     } else {
@@ -5844,21 +6037,31 @@ impl<'a> RenderDevice for Device<'a> {
   }
 
   fn create_task(&self) -> u64 {
-    let id = self.res.next_task_id.fetch_add(1, Ordering::SeqCst);
+    let res_guard = self.res.read();
+    let id = res_guard.next_task_id.fetch_add(1, Ordering::SeqCst);
     let entry = Arc::new(TaskEntry {
       target_value: AtomicU64::new(u64::MAX), // To be set during submit
       status: AtomicU32::new(TASK_STATUS_PENDING),
       error: spin::RwLock::new(None),
     });
-    self.res.task_registry.write().insert(id, entry);
+    res_guard.task_registry.write().insert(id, entry);
     id
   }
 
   fn fail_task(&self, task_id: u64, error: GpuError) {
-    let registry = self.res.task_registry.read();
-    if let Some(entry) = registry.get(&task_id) {
+    let res_guard = self.res.read();
+    let registry_guard = res_guard.task_registry.read();
+    if let Some(entry) = registry_guard.get(&task_id) {
       *entry.error.write() = Some(error);
       entry.status.store(TASK_STATUS_FAILED, Ordering::Release);
+    }
+  }
+
+  fn success_task(&self, task_id: u64) {
+    let res_guard = self.res.read();
+    let registry_guard = res_guard.task_registry.read();
+    if let Some(entry) = registry_guard.get(&task_id) {
+      entry.status.store(TASK_STATUS_SUCCESS, Ordering::Release);
     }
   }
 }

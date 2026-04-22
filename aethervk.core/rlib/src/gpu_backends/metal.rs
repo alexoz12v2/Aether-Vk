@@ -9,7 +9,7 @@ use crate::gpu::frame::ResourceUploadResult;
 use crate::scene::{
   EntityId, PhysicalMeshComponent, SkyComponent, SunComponent, TransformComponent, GridComponent,
 };
-use crate::simulation::comet::PushConstants;
+use crate::simulation::comet::{PushConstants, Texture};
 use crate::traits::InitWithRuntime;
 use crate::types::{EngineResult, GpuResult, RuntimeParams, GpuError};
 use alloc::boxed::Box;
@@ -411,4 +411,14 @@ impl RenderDevice for MetalRenderDevice {
   }
 
   fn fail_task(&self, _task_id: u64, _error: GpuError) {}
+
+  fn success_task(&self, _task_id: u64) {}
+
+  fn check_billboard_texture_id(&self, texture_id: u64) -> GpuResult<()> {
+    todo!()
+  }
+
+  fn add_billboard_texture(&self, texture: &Texture) -> GpuResult<()> {
+    todo!()
+  }
 }

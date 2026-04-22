@@ -37,6 +37,7 @@ dependencies = [
  "cbindgen",
  "glob",
  "heapless",
+ "libc",
  "mimalloc",
  "serde_json",
  "spin 0.10.0",

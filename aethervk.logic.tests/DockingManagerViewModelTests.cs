@@ -10,20 +10,22 @@ public class DockingManagerViewModelTests
   [Fact]
   public void DockingManager_InitializesWithDefaultTab()
   {
-    var vm = new DockingManagerViewModel();
+    var defaultTab = new DebugUiViewModel();
+    var rootGroup = new TabGroupNodeViewModel(defaultTab);
+    var vm = new DockingManagerViewModel(rootGroup);
+    
     Assert.NotNull(vm.RootNode);
     Assert.IsType<TabGroupNodeViewModel>(vm.RootNode);
-    var rootGroup = (TabGroupNodeViewModel)vm.RootNode;
-    Assert.Equal(2, rootGroup.Tabs.Count); // Default View + UITestPanel
-    Assert.Equal("Debug UI", rootGroup.Tabs[0].Title);
-    Assert.Equal("UI Test Panel", rootGroup.Tabs[1].Title);
+    var currentRootGroup = (TabGroupNodeViewModel)vm.RootNode;
+    Assert.Equal(1, currentRootGroup.Tabs.Count); 
+    Assert.Equal("Debug UI", currentRootGroup.Tabs[0].Title);
   }
 
   [Fact]
   public void AddNewTabCommand_AddsNewUITestPanelTab()
   {
-    var vm = new DockingManagerViewModel();
-    var rootGroup = (TabGroupNodeViewModel)vm.RootNode;
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
+    var vm = new DockingManagerViewModel(rootGroup);
     var initialTabCount = rootGroup.Tabs.Count;
 
     rootGroup.AddNewTabCommand.Execute(null);
@@ -36,8 +38,8 @@ public class DockingManagerViewModelTests
   [Fact]
   public void AddNewConsoleTabCommand_AddsNewConsoleTab()
   {
-    var vm = new DockingManagerViewModel();
-    var rootGroup = (TabGroupNodeViewModel)vm.RootNode;
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
+    var vm = new DockingManagerViewModel(rootGroup);
     var initialTabCount = rootGroup.Tabs.Count;
 
     rootGroup.AddNewConsoleTabCommand.Execute(null);
@@ -50,8 +52,8 @@ public class DockingManagerViewModelTests
   [Fact]
   public void ReceiveTabDroppedMessage_CenterZone_AddsTabToTarget()
   {
-    var vm = new DockingManagerViewModel();
-    var rootGroup = (TabGroupNodeViewModel)vm.RootNode;
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
+    var vm = new DockingManagerViewModel(rootGroup);
 
     var newTab = new TabItemViewModel("New Tab");
     var message = new TabDroppedMessage(newTab, rootGroup, DockZone.Center);
@@ -64,8 +66,8 @@ public class DockingManagerViewModelTests
   [Fact]
   public void ReceiveTabDroppedMessage_LeftZone_SplitsHorizontally()
   {
-    var vm = new DockingManagerViewModel();
-    var rootGroup = (TabGroupNodeViewModel)vm.RootNode;
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
+    var vm = new DockingManagerViewModel(rootGroup);
     var originalTab = rootGroup.SelectedTab;
     var newTab = new TabItemViewModel("New Left Tab");
 
@@ -90,8 +92,8 @@ public class DockingManagerViewModelTests
   [Fact]
   public void ReceiveTabDroppedMessage_RightZone_SplitsHorizontally()
   {
-    var vm = new DockingManagerViewModel();
-    var rootGroup = (TabGroupNodeViewModel)vm.RootNode;
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
+    var vm = new DockingManagerViewModel(rootGroup);
     var originalTab = rootGroup.SelectedTab;
     var newTab = new TabItemViewModel("New Right Tab");
 
@@ -116,8 +118,8 @@ public class DockingManagerViewModelTests
   [Fact]
   public void ReceiveTabDroppedMessage_TopZone_SplitsVertically()
   {
-    var vm = new DockingManagerViewModel();
-    var rootGroup = (TabGroupNodeViewModel)vm.RootNode;
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
+    var vm = new DockingManagerViewModel(rootGroup);
     var originalTab = rootGroup.SelectedTab;
     var newTab = new TabItemViewModel("New Top Tab");
 
@@ -142,8 +144,8 @@ public class DockingManagerViewModelTests
   [Fact]
   public void ReceiveTabDroppedMessage_BottomZone_SplitsVertically()
   {
-    var vm = new DockingManagerViewModel();
-    var rootGroup = (TabGroupNodeViewModel)vm.RootNode;
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
+    var vm = new DockingManagerViewModel(rootGroup);
     var originalTab = rootGroup.SelectedTab;
     var newTab = new TabItemViewModel("New Bottom Tab");
 
@@ -168,8 +170,8 @@ public class DockingManagerViewModelTests
   [Fact]
   public void RemoveTabAndCoalesce_RemovesTabAndCoalescesNode()
   {
-    var vm = new DockingManagerViewModel();
-    var rootGroup = (TabGroupNodeViewModel)vm.RootNode;
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
+    var vm = new DockingManagerViewModel(rootGroup);
 
     // Split the root to create a more complex structure
     var newTab = new TabItemViewModel("New Tab");
@@ -194,8 +196,9 @@ public class DockingManagerViewModelTests
   [Fact]
   public void RemoveTabAndCoalesce_DoesNotCoalesceIfTabsRemain()
   {
-    var vm = new DockingManagerViewModel();
-    var rootGroup = (TabGroupNodeViewModel)vm.RootNode;
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
+    rootGroup.Tabs.Add(new UITestPanelViewModel());
+    var vm = new DockingManagerViewModel(rootGroup);
     var tab1 = rootGroup.Tabs[0];
     var tab2 = rootGroup.Tabs[1];
 
@@ -209,25 +212,23 @@ public class DockingManagerViewModelTests
   [Fact]
   public void RemoveTabAndCoalesce_DoesNotCoalesceRootIfOnlyOneTab()
   {
-    var vm = new DockingManagerViewModel();
-    var rootGroup = (TabGroupNodeViewModel)vm.RootNode;
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
+    var vm = new DockingManagerViewModel(rootGroup);
     var tab1 = rootGroup.Tabs[0];
-    var tab2 = rootGroup.Tabs[1];
 
-    // Remove all but one tab
+    // Remove all tabs
     rootGroup.Tabs.Remove(tab1);
-    rootGroup.Tabs.Remove(tab2);
 
     // The root group should still exist, even if empty (to avoid null UI)
-    Assert.Equal(0, rootGroup.Tabs.Count);
+    Assert.Empty(rootGroup.Tabs);
     Assert.Equal(rootGroup, vm.RootNode);
   }
 
   [Fact]
   public void FindNodeContainingTab_FindsTabInRootGroup()
   {
-    var vm = new DockingManagerViewModel();
-    var rootGroup = (TabGroupNodeViewModel)vm.RootNode;
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
+    var vm = new DockingManagerViewModel(rootGroup);
     var tabToFind = rootGroup.Tabs[0];
 
     var foundNode = vm.FindNodeContainingTab(vm.RootNode, tabToFind);
@@ -237,8 +238,8 @@ public class DockingManagerViewModelTests
   [Fact]
   public void FindNodeContainingTab_FindsTabInSplitNodeChild()
   {
-    var vm = new DockingManagerViewModel();
-    var rootGroup = (TabGroupNodeViewModel)vm.RootNode;
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
+    var vm = new DockingManagerViewModel(rootGroup);
     var originalTab = rootGroup.SelectedTab;
     var newTab = new TabItemViewModel("New Tab");
 

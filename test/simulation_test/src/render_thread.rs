@@ -9,6 +9,7 @@ use aethervk_core_rlib::{
 use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
 use aethervk_oshal_rlib::math::quaternion::Quaternion;
 use std::sync::{Arc, RwLock, mpsc};
+use aethervk_core_rlib::gpu::{ScopedCommandBuffer, ScopedRenderPass};
 
 pub struct RenderItem {
   pub entity_id: EntityId,
@@ -236,10 +237,17 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
     render_scene.grid = Some((id, comp));
   }
 
-  let cmd_buffer = device.get_command_buffer()?;
-  device.begin_command_buffer(cmd_buffer)?;
+  // --- Start of safely scoped GPU Operations ---
+
+  let raw_cmd_buffer = device.get_command_buffer()?;
+  let cmd_guard = ScopedCommandBuffer::new(device, raw_cmd_buffer)?;
+  let cmd_buffer = cmd_guard.cmd();
+
   device.update_sun(cmd_buffer, payload.sun_entity, &sun_comp)?;
   device.begin_render_pass(cmd_buffer, payload.presentation_engine, &acquire_result)?;
+
+  // Protect the active render pass. If any `?` happens below, `rp_guard` ends the pass automatically.
+  let rp_guard = ScopedRenderPass::new(device, cmd_buffer);
 
   let extent = device.get_presentation_engine_extent(payload.presentation_engine)?;
   let root_viewport = gpu::Viewport {
@@ -257,7 +265,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
       offset: [0, 0],
       extent,
     },
-  );
+  )?;
 
   let quad_tree = gpu::ViewportQuadTree {
     root: gpu::viewport::ViewportNode {
@@ -298,14 +306,14 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
 
   // Compute view matrix to print
   let view =
-  <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as aethervk_oshal_rlib::math::matrix::Matrix4>::from_columns(
-    aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(1.0, 0.0, 0.0, 0.0),
-    aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, -1.0, 0.0),
-    aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 1.0, 0.0, 0.0),
-    aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
-  ) * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as aethervk_oshal_rlib::math::matrix::Matrix4>::from_quat_custom_frame(
-    payload.packet.camera_transform.rotation.conjugate(),
-  ) * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as aethervk_oshal_rlib::math::matrix::Matrix4>::translation(payload.packet.camera_transform.position * -1.0);
+      <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as aethervk_oshal_rlib::math::matrix::Matrix4>::from_columns(
+        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(1.0, 0.0, 0.0, 0.0),
+        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, -1.0, 0.0),
+        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 1.0, 0.0, 0.0),
+        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
+      ) * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as aethervk_oshal_rlib::math::matrix::Matrix4>::from_quat_custom_frame(
+        payload.packet.camera_transform.rotation.conjugate(),
+      ) * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as aethervk_oshal_rlib::math::matrix::Matrix4>::translation(payload.packet.camera_transform.position * -1.0);
 
   let view_proj = payload.packet.camera_component.projection * view;
 
@@ -413,14 +421,18 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
     );
   }
 
-  device.end_render_pass(cmd_buffer)?;
-  device.submit_command_buffer(cmd_buffer, None)?;
+  // Explictly end and submit. Bypasses the Drop trait's automatic closure.
+  rp_guard.end()?;
+  cmd_guard.submit()?;
+
+  // --- End of safely scoped GPU Operations ---
 
   let present_status = device.present(
     payload.presentation_engine,
     acquire_result.image_index as usize,
     acquire_result.frame_index as usize,
   )?;
+
   if present_status.needs_resize() {
     device.resize_presentation_engine(
       payload.presentation_engine,
