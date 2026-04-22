@@ -1,7 +1,8 @@
 use core::borrow::Borrow;
 
 use alloc::vec::Vec;
-
+use core::fmt;
+use core::fmt::Formatter;
 use crate::os::FsError;
 
 #[cfg(windows)]
@@ -161,7 +162,7 @@ fn utf8_to_utf16(s: &str, out: &mut Vec<u16>) {
   out.extend(s.encode_utf16());
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PathBuf {
   storage: PathStorage,
 }
@@ -186,6 +187,15 @@ const PATH_SBO_CAP: usize = if cfg!(windows) { 32 } else { 64 };
 enum PathStorage {
   Inline(heapless::Vec<os_char, PATH_SBO_CAP>),
   Heap(Vec<os_char>),
+}
+
+impl fmt::Debug for PathStorage {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    match self {
+      Self::Inline(vec) => f.debug_tuple("Inline").field(vec).finish(),
+      Self::Heap(vec) => f.debug_tuple("Heap").field(vec).finish(),
+    }
+  }
 }
 
 impl PathBuf {

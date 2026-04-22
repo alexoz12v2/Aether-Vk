@@ -74,6 +74,11 @@ public partial class MeshViewerViewModel : TabItemViewModel
         _cts = new CancellationTokenSource();
         var token = _cts.Token;
 
+        // TODO: Correct render and simulation loop to be independent with each other, ie both
+        // of them contain tasks with "generation sync"
+        // Simulation Task i | Before | Render Task i
+        // Simulation Task i | Before | Simulation Task i + 1
+        // Render Task i | Before | Render Task i + 1
         Task.Run(() =>
         {
             var sw = Stopwatch.StartNew();
@@ -87,7 +92,7 @@ public partial class MeshViewerViewModel : TabItemViewModel
                 if (dt.TotalMilliseconds >= 16.66)
                 {
                     lastTime = current;
-                    
+
                     _runtimeService.SimulationTick();
                     _ = _runtimeService.RenderTickAsync();
                     OnFrameReady?.Invoke();

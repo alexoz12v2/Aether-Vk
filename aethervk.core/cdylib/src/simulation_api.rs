@@ -15,6 +15,7 @@ use aethervk_oshal_rlib::math::{
   vector::{vec3::Vec3f32, vec4::Quat, Vector, Vector4},
 };
 use alloc::{boxed::Box, sync::Arc, vec, vec::Vec, collections::BTreeMap, string::String, format};
+use alloc::string::ToString;
 use heapless::index_map::FnvIndexMap;
 use core::{
   any::TypeId,
@@ -27,12 +28,22 @@ use spin::rwlock::RwLock;
 use aethervk_oshal_rlib::math::matrix::{Matrix4, SquareMatrix};
 use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
 use aethervk_oshal_rlib::math::vector::Vector3;
+use aethervk_oshal_rlib::os::pool::tasklet::ThreadPoolExt;
 
-#[derive(Default)]
 pub struct AlmanacPackedData {
   pub data: Vec<Vec<u8>>,
   pub file_names: Vec<String>,
   pub almanac: anise::almanac::Almanac,
+}
+
+impl Default for AlmanacPackedData {
+  fn default() -> Self {
+    Self {
+      data: Vec::new(),
+      file_names: Vec::new(),
+      almanac: anise::almanac::Almanac::default(),
+    }
+  }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -157,7 +168,10 @@ fn start_render_thread(
     loop {
       match render_rx.try_recv() {
         Ok(cmd) => match cmd {
-          RenderCommand::RenderFrame { mut packet, task_id } => {
+          RenderCommand::RenderFrame {
+            mut packet,
+            task_id,
+          } => {
             oshal::log!("[RenderThread] Received RenderFrame: task_id={}", task_id);
             packet.clear_color = clear_color;
             let scene_guard = scene_shared.as_ref();
@@ -180,24 +194,32 @@ fn start_render_thread(
                 .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
                 .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
             });
-            
+
             if let Some(Err(e)) = res {
+              oshal::log!(
+                "[RenderThread] task_id={} | Error on render_payload_ffi={}",
+                task_id,
+                e.to_string()
+              );
               // Report failure to task registry
               let _ = frontend.take_and(|context| {
-                let _ = context.deref_device_and(
-                  render_device_handle,
-                  &mut (task_id, e) as *mut _ as *mut core::ffi::c_void,
-                  |device, data| {
-                    let (tid, err) = unsafe { &*(data as *mut (u64, aethervk_core_rlib::types::EngineError)) };
-                    if let aethervk_core_rlib::types::EngineError::Gpu(gpu_err) = err {
-                      device.fail_task(*tid, gpu_err.clone());
-                    } else {
-                      device.fail_task(*tid, aethervk_core_rlib::types::GpuError::InvalidState);
-                    }
-                    Ok(())
-                  }
-                ).ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
-                .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from));
+                let _ = context
+                  .deref_device_and(
+                    render_device_handle,
+                    &mut (task_id, e) as *mut _ as *mut core::ffi::c_void,
+                    |device, data| {
+                      let (tid, err) =
+                        unsafe { &*(data as *mut (u64, aethervk_core_rlib::types::EngineError)) };
+                      if let aethervk_core_rlib::types::EngineError::Gpu(gpu_err) = err {
+                        device.fail_task(*tid, gpu_err.clone());
+                      } else {
+                        device.fail_task(*tid, aethervk_core_rlib::types::GpuError::InvalidState);
+                      }
+                      Ok(())
+                    },
+                  )
+                  .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
+                  .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from));
                 Ok(())
               });
             }
@@ -233,27 +255,25 @@ fn start_render_thread(
           RenderCommand::Resize { width, height } => {
             let mut data = (presentation_engine, width, height);
             let _ = frontend.take_and(|context| {
-              let _ = context
-                .deref_device_and(
-                  render_device_handle,
-                  &mut data as *mut _ as *mut core::ffi::c_void,
-                  |device, data_ptr| {
-                    let (pe, w, h) =
-                      unsafe { &mut *(data_ptr as *mut (gpu::PresentationEngineHandle, u32, u32)) };
-                    device.resize_presentation_engine(*pe, *w, *h)
-                  },
-                );
+              let _ = context.deref_device_and(
+                render_device_handle,
+                &mut data as *mut _ as *mut core::ffi::c_void,
+                |device, data_ptr| {
+                  let (pe, w, h) =
+                    unsafe { &mut *(data_ptr as *mut (gpu::PresentationEngineHandle, u32, u32)) };
+                  device.resize_presentation_engine(*pe, *w, *h)
+                },
+              );
               Ok(())
             });
           }
           RenderCommand::GenerateSky => {
             let _ = frontend.take_and(|context| {
-              let _ = context
-                .deref_device_and(
-                  render_device_handle,
-                  core::ptr::null_mut(),
-                  |device, _| device.generate_sky(),
-                );
+              let _ = context.deref_device_and(
+                render_device_handle,
+                core::ptr::null_mut(),
+                |device, _| device.generate_sky(),
+              );
               Ok(())
             });
           }
@@ -273,10 +293,13 @@ fn start_render_thread(
   .unwrap()
 }
 
+// TODO: remove logs when it works
 fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -> GpuResult<()> {
   let payload = unsafe { &mut *(data as *mut RenderPayloadData) };
+  oshal::log!("[RenderThread] Received RenderPayload");
 
   device.start_frame()?;
+  oshal::log!("[RenderThread] Received RenderPayload: device.start_frame()");
   let acquire_result = device.acquire_next_image(payload.presentation_engine)?;
   if acquire_result.status.needs_resize() {
     // handled via resize command or next frame
@@ -288,6 +311,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
     payload.packet.camera_transform,
     payload.packet.camera_component,
   ));
+  oshal::log!("[RenderThread] Starting payload collection into render scene");
 
   payload
     .scene
@@ -302,6 +326,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
         }
       }
     });
+  oshal::log!("[RenderThread] render_scene.sun");
 
   payload
     .scene
@@ -314,6 +339,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
         render_scene.sky = Some((entity, *comp));
       }
     });
+  oshal::log!("[RenderThread] render_scene.sky");
 
   payload
     .scene
@@ -326,6 +352,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
         render_scene.grid = Some((entity, *comp));
       }
     });
+  oshal::log!("[RenderThread] render_scene.grid");
 
   payload
     .scene
@@ -351,6 +378,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
         }
       }
     });
+  oshal::log!("[RenderThread] render_scene.add_renderable CursorComponent");
 
   payload
     .scene
@@ -374,7 +402,9 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
           .unwrap();
       }
     });
+  oshal::log!("[RenderThread] render_scene.add_renderable MeasurementComponent");
 
+  // TODO: ImageBillboardComponent more entities
   payload
     .scene
     .query1::<aethervk_core_rlib::scene::ImageBillboardComponent, _>(|entity, comp| {
@@ -401,6 +431,8 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
           .unwrap();
       }
     });
+  oshal::log!("[RenderThread] render_scene.add_renderable ImageBillboard");
+
   for item in &payload.packet.render_items {
     let is_hidden = payload
       .scene
@@ -444,6 +476,10 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
           outline_color = [0.2, 0.5, 1.0, 0.5]; // faint blue for global outlines if enabled
         }
 
+        oshal::log!(
+          "[RenderThread] render_scene.add_renderable RenderableDataRef::PhysicalMesh {:?}",
+          item.entity_id
+        );
         render_scene
           .add_renderable(
             device,
@@ -451,11 +487,15 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
             item.model_matrix,
             RenderableDataRef::PhysicalMesh(mesh),
             payload.presentation_engine,
-            "Comet",
+            &alloc::format!("Comet_{:?}", item.entity_id), // TODO: Comet
             draw_outline,
             outline_color,
           )
           .unwrap();
+        oshal::log!(
+          "[RenderThread] DONE RenderableDataRef::PhysicalMesh {:?}",
+          item.entity_id
+        );
         Ok(())
       },
     );
@@ -498,7 +538,14 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
   }
 
   let mut sun_opt = None;
-  if payload.scene.with_component(payload.sun_entity, |_: &aethervk_core_rlib::scene::HiddenComponent| {}).is_none() {
+  if payload
+    .scene
+    .with_component(
+      payload.sun_entity,
+      |_: &aethervk_core_rlib::scene::HiddenComponent| {},
+    )
+    .is_none()
+  {
     payload.scene.with_component(
       payload.sun_entity,
       |sun_comp: &aethervk_core_rlib::scene::SunComponent| {
@@ -512,7 +559,11 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
       payload
         .scene
         .query1::<aethervk_core_rlib::scene::SkyComponent, _>(|entity, comp| {
-          if payload.scene.with_component(entity, |_c: &aethervk_core_rlib::scene::HiddenComponent| {}).is_none() {
+          if payload
+            .scene
+            .with_component(entity, |_c: &aethervk_core_rlib::scene::HiddenComponent| {})
+            .is_none()
+          {
             sky_opt = Some((entity, *comp));
           }
         });
@@ -521,7 +572,11 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
       payload
         .scene
         .query1::<aethervk_core_rlib::scene::GridComponent, _>(|entity, comp| {
-          if payload.scene.with_component(entity, |_c: &aethervk_core_rlib::scene::HiddenComponent| {}).is_none() {
+          if payload
+            .scene
+            .with_component(entity, |_c: &aethervk_core_rlib::scene::HiddenComponent| {})
+            .is_none()
+          {
             grid_opt = Some((entity, *comp));
           }
         });
@@ -534,11 +589,31 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
         render_scene.grid = Some((id, comp));
       }
 
+      oshal::log!(
+        "[RenderThread] task_id={} | device.get_command_buffer()",
+        payload.task_id
+      );
       let cmd_buffer = device.get_command_buffer()?;
+      oshal::log!(
+        "[RenderThread] task_id={} | device.begin_command_buffer()",
+        payload.task_id
+      );
       device.begin_command_buffer(cmd_buffer)?;
+      oshal::log!(
+        "[RenderThread] task_id={} | device.update_sun()",
+        payload.task_id
+      );
       device.update_sun(cmd_buffer, payload.sun_entity, &sun_comp)?;
+      oshal::log!(
+        "[RenderThread] task_id={} | device.begin_render_pass()",
+        payload.task_id
+      );
       device.begin_render_pass(cmd_buffer, payload.presentation_engine, &acquire_result)?;
 
+      oshal::log!(
+        "[RenderThread] task_id={} | device.get_presentation_engine_extent()",
+        payload.task_id
+      );
       let extent = device.get_presentation_engine_extent(payload.presentation_engine)?;
       let root_viewport = gpu::Viewport {
         x: 0.0,
@@ -548,6 +623,10 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
         min_depth: 0.0,
         max_depth: 1.0,
       };
+      oshal::log!(
+        "[RenderThread] task_id={} | device.set_viewport()",
+        payload.task_id
+      );
       device.set_viewport(cmd_buffer, &root_viewport)?;
       let _ = device.set_scissor(
         cmd_buffer,
@@ -557,6 +636,10 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
         },
       );
 
+      oshal::log!(
+        "[RenderThread] task_id={} | device.render_ui_rect()",
+        payload.task_id
+      );
       let _ = device.render_ui_rect(
         cmd_buffer,
         payload.packet.clear_color,
@@ -578,7 +661,15 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
           children: None,
         },
       };
+      oshal::log!(
+        "[RenderThread] task_id={} | device.render_frame()",
+        payload.task_id
+      );
       device.render_frame(cmd_buffer, &quad_tree, &render_scene)?;
+      oshal::log!(
+        "[RenderThread] task_id={} | DONE device.render_frame()",
+        payload.task_id
+      );
 
       // Compute view matrix to print
       let view =
@@ -691,13 +782,13 @@ pub struct SimulationContext {
 
   pub window_width: u32,
   pub window_height: u32,
-  pub logic_state: RwLock<LogicState>,
+  pub logic_state: RwLock<Box<LogicState>>,
 
   pub model_registry: BTreeMap<u64, String>,
   pub next_model_id: u64,
   pub mesh_cache: Arc<aethervk_core_rlib::scene::AssetCache<simulation::comet::Comet>>,
   pub physics_scene: Arc<RwLock<aethervk_core_rlib::physics::physics_scene::PhysicsScene>>,
-  pub thread_pool: Arc<RwLock<aethervk_oshal_rlib::os::pool::ThreadPool>>,
+  pub thread_pool: Arc<aethervk_oshal_rlib::os::pool::ThreadPool>,
   pub time_info: Arc<RwLock<aethervk_oshal_rlib::os::time::TimeInfo>>,
   pub clear_color: [f32; 4],
 }
@@ -715,7 +806,6 @@ impl aethervk_oshal_rlib::os::pool::Workload for PhysicsRebuildWorkload {
     *guard = new_physics;
   }
 }
-
 
 impl SimulationContext {
   fn register_entity(&mut self, id: EntityId) -> u64 {
@@ -1328,6 +1418,8 @@ pub unsafe extern "C" fn avkSimulationContext_raycast(
   false
 }
 
+// TODO: at each failure step, the function should be able to rollback such that every time
+// we recall it we have a fresh start
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_startup(
@@ -1345,6 +1437,8 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
     return core::ptr::null_mut(); // Unsupported backend
   }
 
+  let thread_pool = Arc::new(aethervk_oshal_rlib::os::pool::ThreadPool::new(4).unwrap());
+
   let width = if width == 0 { 800 } else { width };
   let height = if height == 0 { 600 } else { height };
 
@@ -1352,37 +1446,48 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
     render_backend_params: FnvIndexMap::new(),
   }));
 
-  let frontend = Arc::new(
-    gpu::new_render_frontend(gpu::VULKAN_RENDER_BACKEND, runtime_params).unwrap()
-  );
+  let frontend =
+    Arc::new(gpu::new_render_frontend(gpu::VULKAN_RENDER_BACKEND, runtime_params).unwrap());
   let additional_params = gpu::DeviceAdditionalParams::new();
-  let render_device_handle = frontend.take_mut_and(|context| {
-     Ok(context.init_device(0, &additional_params).unwrap())
-  }).unwrap().unwrap();
+  let render_device_handle = frontend
+    .take_mut_and(|context| Ok(context.init_device(0, &additional_params).unwrap()))
+    .unwrap()
+    .unwrap();
 
   let mut presentation_engine_result: GpuResult<gpu::PresentationEngineHandle> =
     Err(aethervk_core_rlib::types::GpuError::InvalidState);
 
-  frontend.take_and(|context| {
-    context
-      .deref_device_and(
-        render_device_handle,
-        &mut (&gpu::PresentationEngineParams::windowless(width, height), &mut presentation_engine_result) as *mut _ as *mut core::ffi::c_void,
-        |device, data| {
-          let (params, out) = unsafe {
-            &mut *(data as *mut (&gpu::PresentationEngineParams, *mut GpuResult<gpu::PresentationEngineHandle>))
-          };
-          let pe_res = device.create_presentation_engine(*params);
-          if let Ok(pe) = pe_res {
-            device.init_archetypes(pe).unwrap();
-          }
-          unsafe { **out = pe_res };
-          Ok(())
-        },
-      )
-      .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
-      .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
-  }).unwrap();
+  let result = frontend
+    .take_and(|context| {
+      context
+        .deref_device_and(
+          render_device_handle,
+          &mut (
+            &gpu::PresentationEngineParams::windowless(width, height),
+            &mut presentation_engine_result,
+          ) as *mut _ as *mut core::ffi::c_void,
+          |device, data| {
+            let (params, out) = unsafe {
+              &mut *(data
+                as *mut (
+                  &gpu::PresentationEngineParams,
+                  *mut GpuResult<gpu::PresentationEngineHandle>,
+                ))
+            };
+            let pe = device.create_presentation_engine(*params)?;
+            device.init_archetypes(pe)?;
+            unsafe { **out = Ok(pe) };
+            Ok(())
+          },
+        )
+        .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
+        .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
+    })
+    .unwrap();
+
+  if let Err(e) = result {
+    oshal::log!("{}", e.to_string());
+  }
 
   let presentation_engine = match presentation_engine_result {
     Ok(pe) => pe,
@@ -1441,6 +1546,7 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
   );
   scene.set_parent(camera_entity, Some(root_entity));
 
+  // TODO: Do not ignore any error
   let sky_entity = scene.spawn_entity("sky");
   let _ = scene.add_component(sky_entity, SkyComponent {});
   scene.set_parent(sky_entity, Some(root_entity));
@@ -1458,6 +1564,19 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
   scene.set_parent(cursor_entity, Some(root_entity));
 
   let sun_entity = scene.spawn_entity("sun");
+  // recursive method here to diagonalize inertia tensor (even though it's a sphere so inertia should be close formula)
+  let task_handle = {
+    let res =
+      thread_pool.spawn_tasklet(|| simulation::comet::generate_uv_sphere(0.45 * 0.95, 64, 64));
+    if res.is_err() {
+      return core::ptr::null_mut();
+    }
+    res.unwrap()
+  };
+  // causes stack overflow. So, run it undet tasklet
+  oshal::log!("before waiting for sun generate_uv_sphere tasklet");
+  let sun_sphere = task_handle.wait();
+  oshal::log!("After sun generate_uv_sphere tasklet");
   let _ = scene.add_component(
     sun_entity,
     TransformComponent {
@@ -1472,21 +1591,8 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
       resolution: (128, 128, 128),
     },
   );
-  scene.set_parent(sun_entity, Some(root_entity));
-
-  // Add emissive core for the sun during startup to match C# logic
-  let sun_core_id = scene.spawn_entity("sun_core");
-  let sun_sphere = aethervk_core_rlib::simulation::comet::generate_uv_sphere(0.45 * 0.95, 64, 64);
   let _ = scene.add_component(
-    sun_core_id,
-    TransformComponent {
-      position: Vec3f32::from_components(0.0, 0.0, 0.0),
-      rotation: Quat::identity(),
-      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-    },
-  );
-  let _ = scene.add_component(
-    sun_core_id,
+    sun_entity,
     PhysicalMeshComponent {
       asset_path: alloc::string::String::new(),
       mesh: alloc::sync::Arc::from(sun_sphere),
@@ -1494,23 +1600,21 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
       emissive_color: [1.0, 0.35, 0.02],
     },
   );
-  scene.set_parent(sun_core_id, Some(sun_entity));
+  scene.set_parent(sun_entity, Some(root_entity));
 
   let grid_entity = scene.spawn_entity("grid");
   let _ = scene.add_component(grid_entity, GridComponent {});
   scene.set_parent(grid_entity, Some(root_entity));
 
+  oshal::log!("Before PhysicsScene::build_from_scene");
   let physics_scene = Arc::new(RwLock::new(
     aethervk_core_rlib::physics::physics_scene::PhysicsScene::build_from_scene(&scene),
   ));
+  oshal::log!("PhysicsScene::build_from_scene Finished");
 
-  let thread_pool = Arc::new(RwLock::new(
-    aethervk_oshal_rlib::os::pool::ThreadPool::new(4).unwrap(),
-  ));
-
-  let time_info = Arc::new(RwLock::new(
-    aethervk_oshal_rlib::os::time::TimeInfo::new(16667, 100000, 1.0),
-  ));
+  let time_info = Arc::new(RwLock::new(aethervk_oshal_rlib::os::time::TimeInfo::new(
+    16667, 100000, 1.0,
+  )));
 
   let scene_arc = Arc::new(scene);
 
@@ -1523,21 +1627,35 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
     cursor_entity,
     sun_entity,
   );
+  oshal::log!("Started Render Thread");
 
   // Wire callbacks for completion tracking
-  frontend.take_and(|context| {
-    context.deref_device_and(
-      render_device_handle,
-      &mut Arc::clone(&thread_pool) as *mut _ as *mut core::ffi::c_void,
-      |device, data| {
-        let pool = unsafe { &*(data as *mut Arc<RwLock<aethervk_oshal_rlib::os::pool::ThreadPool>>) };
-        device.wire_callbacks(Arc::clone(pool))
-      }
-    ).ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
-    .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
-  }).unwrap();
+  let result = frontend
+    .take_and(|context| {
+      context
+        .deref_device_and(
+          render_device_handle,
+          &mut Arc::clone(&thread_pool) as *mut _ as *mut core::ffi::c_void,
+          |device, data| {
+            let pool = unsafe { &*(data as *mut Arc<aethervk_oshal_rlib::os::pool::ThreadPool>) };
+            device.wire_callbacks(Arc::clone(pool))
+          },
+        )
+        .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
+        .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
+    })
+    .unwrap();
+  if result.is_err() {
+    oshal::log!("{}", result.unwrap_err().to_string());
+    return core::ptr::null_mut();
+  }
 
-  render_tx.try_send(RenderCommand::GenerateSky).unwrap();
+  // TODO: see where this can go better: generate sky
+  let result = render_tx.try_send(RenderCommand::GenerateSky);
+  if result.is_err() {
+    oshal::log!("{}", result.unwrap_err().to_string());
+    return core::ptr::null_mut();
+  }
 
   let mut ctx = Box::new(SimulationContext {
     scene: scene_arc,
@@ -1557,7 +1675,7 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
     asset_path: None,
     window_width: width,
     window_height: height,
-    logic_state: RwLock::new(LogicState::default()),
+    logic_state: RwLock::new(Box::new(LogicState::default())),
     model_registry: BTreeMap::new(),
     next_model_id: 1,
     mesh_cache: Arc::new(aethervk_core_rlib::scene::AssetCache::new()),
@@ -1571,8 +1689,8 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
   ctx.register_entity(camera_entity); // 2
   ctx.register_entity(cursor_entity); // 3
   ctx.register_entity(sun_entity); // 4
-  ctx.register_entity(sun_core_id); // 5
-  ctx.register_entity(grid_entity); // 6
+  ctx.register_entity(grid_entity); // 5
+  oshal::log!("entities registered in the context");
 
   Box::into_raw(ctx)
 }
@@ -1583,14 +1701,15 @@ pub unsafe extern "C" fn avkSimulationContext_shutdown(ctx: *mut SimulationConte
   if !ctx.is_null() {
     let mut ctx = unsafe { Box::from_raw(ctx) };
     unsafe { avkSimulationContext_stopThreads(&mut *ctx) };
-    
+
     // Explicitly clear caches to drop Arcs and trigger GPU resource cleanup
     ctx.mesh_cache.clear();
-    
-    // The rest of SimulationContext will be dropped here
+
+    // TODO: The rest of SimulationContext will be dropped here
   }
 }
 
+// TODO: return status. if they are stopped restart them
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_startThreads(ctx: *mut SimulationContext) {
@@ -2003,11 +2122,12 @@ pub unsafe extern "C" fn avkSimulationContext_setBvhNodeVisibility(
 
     if (node_index as usize) < bvh_len {
       let mut dbg_opt = None;
-      ctx
-        .scene
-        .with_component(entity_id, |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
+      ctx.scene.with_component(
+        entity_id,
+        |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
           dbg_opt = Some(dbg.node_render_states.clone());
-        });
+        },
+      );
 
       let mut states = match dbg_opt {
         Some(s) => s,
@@ -2097,6 +2217,7 @@ fn collect_render_packet(ctx: &SimulationContext) -> RenderPacket {
   }
 }
 
+// TODO: like renderTick (when it works) it should be asynchronous and return a task_id
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_simulationTick(ctx: *mut SimulationContext) {
@@ -2117,9 +2238,8 @@ pub unsafe extern "C" fn avkSimulationContext_simulationTick(ctx: *mut Simulatio
       scene: Arc::clone(&ctx.scene),
       physics_scene: Arc::clone(&ctx.physics_scene),
     });
-    let mut pool = ctx.thread_pool.write();
-    let _ = pool.scatter(vec![workload]);
-    pool.gather(); // Synchronous for now to ensure raycast works immediately after tick, but running in pool
+    let _ = ctx.thread_pool.scatter(vec![workload]);
+    ctx.thread_pool.gather(); // Synchronous for now to ensure raycast works immediately after tick, but running in pool
   }
 }
 
@@ -2128,13 +2248,17 @@ pub unsafe extern "C" fn avkSimulationContext_simulationTick(ctx: *mut Simulatio
 pub unsafe extern "C" fn avkSimulationContext_renderTick(ctx: *mut SimulationContext) -> u64 {
   // Use libc to write to a file for debugging
   unsafe {
-      let path = b"debug_native.log\0";
-      let fd = libc::open(path.as_ptr().cast(), libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND, 0o644);
-      if fd >= 0 {
-          let msg = b"renderTick called\n";
-          libc::write(fd, msg.as_ptr().cast(), msg.len());
-          libc::close(fd);
-      }
+    let path = b"debug_native.log\0";
+    let fd = libc::open(
+      path.as_ptr().cast(),
+      libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND,
+      0o644,
+    );
+    if fd >= 0 {
+      let msg = b"renderTick called\n";
+      libc::write(fd, msg.as_ptr().cast(), msg.len());
+      libc::close(fd);
+    }
   }
 
   if ctx.is_null() {
@@ -2144,22 +2268,29 @@ pub unsafe extern "C" fn avkSimulationContext_renderTick(ctx: *mut SimulationCon
 
   let mut task_id = 0;
   let _ = ctx.render_frontend.take_and(|context| {
-    context.deref_device_and(
-      ctx.render_device_handle,
-      &mut task_id as *mut _ as *mut core::ffi::c_void,
-      |device, data| {
-        let tid = unsafe { &mut *(data as *mut u64) };
-        *tid = device.create_task();
-        Ok(())
-      }
-    ).ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
-    .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
+    context
+      .deref_device_and(
+        ctx.render_device_handle,
+        &mut task_id as *mut _ as *mut core::ffi::c_void,
+        |device, data| {
+          let tid = unsafe { &mut *(data as *mut u64) };
+          *tid = device.create_task();
+          Ok(())
+        },
+      )
+      .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
+      .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
   });
 
   let packet = collect_render_packet(ctx);
-  oshal::log!("[SimulationAPI] renderTick: sending RenderFrame for task_id={}", task_id);
-  let _ = ctx.render_tx.try_send(RenderCommand::RenderFrame { packet, task_id });
-  
+  oshal::log!(
+    "[SimulationAPI] renderTick: sending RenderFrame for task_id={}",
+    task_id
+  );
+  let _ = ctx
+    .render_tx
+    .try_send(RenderCommand::RenderFrame { packet, task_id });
+
   task_id
 }
 
@@ -2176,20 +2307,23 @@ pub unsafe extern "C" fn avkSimulationContext_getTaskStatus(
 
   let mut status = 0; // 0: Pending, 1: Success, 2: Failed
   let res = ctx.render_frontend.take_and(|context| {
-    context.deref_device_and(
-      ctx.render_device_handle,
-      &mut (task_id, &mut status) as *mut _ as *mut core::ffi::c_void,
-      |device, data| {
-        let (tid, s) = unsafe { &mut *(data as *mut (u64, &mut i32)) };
-        match device.is_task_completed(*tid) {
-          Ok(true) => **s = 1,
-          Ok(false) => **s = 0,
-          Err(_) => **s = 2,
-        }
-        Ok(())
-      }
-    ).ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
-    .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
+    context
+      .deref_device_and(
+        ctx.render_device_handle,
+        &mut (task_id, &mut status) as *mut _ as *mut core::ffi::c_void,
+        |device, data| {
+          let (tid, s) = unsafe { &mut *(data as *mut (u64, &mut i32)) };
+          oshal::log!("Calling device.is_task_completed for task id {}", *tid);
+          match device.is_task_completed(*tid) {
+            Ok(true) => **s = 1,
+            Ok(false) => **s = 0,
+            Err(_) => **s = 2,
+          }
+          Ok(())
+        },
+      )
+      .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
+      .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
   });
 
   if res.is_none() {
@@ -2222,7 +2356,9 @@ pub unsafe extern "C" fn avkSimulationContext_resize(
       );
     });
 
-  let _ = ctx.render_tx.try_send(RenderCommand::Resize { width, height });
+  let _ = ctx
+    .render_tx
+    .try_send(RenderCommand::Resize { width, height });
 }
 
 #[unsafe(no_mangle)]
@@ -2485,7 +2621,9 @@ pub unsafe extern "C" fn avkSimulationContext_setClearColor(
     return;
   }
   let ctx = unsafe { &mut *ctx };
-  let _ = ctx.render_tx.try_send(RenderCommand::SetClearColor([r, g, b, a]));
+  let _ = ctx
+    .render_tx
+    .try_send(RenderCommand::SetClearColor([r, g, b, a]));
 }
 
 #[unsafe(no_mangle)]
@@ -2499,10 +2637,10 @@ pub unsafe extern "C" fn avkSimulationContext_downloadImage(
     return false;
   }
   let ctx = unsafe { &mut *ctx };
-  
+
   let mut success = false;
   let done_signal = Arc::new(AtomicBool::new(false));
-  
+
   let _ = ctx.render_tx.try_send(RenderCommand::DownloadImage {
     buffer: SendPtrMut(buffer_ptr),
     buffer_size,
@@ -2516,7 +2654,6 @@ pub unsafe extern "C" fn avkSimulationContext_downloadImage(
 
   success
 }
-
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]

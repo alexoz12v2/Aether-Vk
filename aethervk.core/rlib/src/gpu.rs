@@ -453,7 +453,7 @@ pub trait RenderDevice: Send + Sync {
 
   fn wire_callbacks(
     &self,
-    pool: Arc<RwLock<aethervk_oshal_rlib::os::pool::ThreadPool>>,
+    pool: Arc<aethervk_oshal_rlib::os::pool::ThreadPool>,
   ) -> GpuResult<()>;
 
   fn is_task_completed(&self, task_id: u64) -> GpuResult<bool>;
