@@ -17,7 +17,6 @@ pub use aethervk_oshal_rlib::panic_handler_impl;
 // TODO organize pub
 mod gpu_backends;
 
-pub mod compute;
 pub mod gpu;
 pub mod math;
 pub mod physics;

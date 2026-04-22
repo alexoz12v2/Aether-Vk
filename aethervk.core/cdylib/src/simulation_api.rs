@@ -93,6 +93,28 @@ pub struct RenderPacket {
   pub clear_color: [f32; 4],
 }
 
+pub enum RenderCommand {
+  RenderFrame {
+    packet: RenderPacket,
+    task_id: u64,
+  },
+  DownloadImage {
+    buffer: *mut u8,
+    buffer_size: usize,
+    success: *mut bool,
+    done_signal: Arc<AtomicBool>,
+  },
+  SetClearColor([f32; 4]),
+  Resize {
+    width: u32,
+    height: u32,
+  },
+  GenerateSky,
+  Shutdown,
+}
+
+unsafe impl Send for RenderCommand {}
+
 #[repr(C)]
 struct RenderPayloadData<'a> {
   packet: &'a mut RenderPacket,
@@ -100,21 +122,24 @@ struct RenderPayloadData<'a> {
   scene: &'a Scene,
   cursor_entity: EntityId,
   sun_entity: EntityId,
+  task_id: u64,
 }
 
 fn start_render_thread(
-  render_rx: mpsc::Receiver<Option<RenderPacket>>,
+  render_rx: mpsc::Receiver<RenderCommand>,
   scene_shared: Arc<Scene>,
-  render_frontend: Arc<RwLock<aethervk_core_rlib::gpu::RenderFrontend<'static>>>,
+  frontend: Arc<aethervk_core_rlib::gpu::RenderFrontend<'static>>,
   render_device_handle: gpu::RenderDeviceHandle,
   presentation_engine: gpu::PresentationEngineHandle,
   cursor_entity: EntityId,
   sun_entity: EntityId,
 ) -> Thread {
   thread::spawn(move || {
+    let mut clear_color = [0.0, 0.0, 0.0, 1.0];
     loop {
-      match render_rx.try_recv() {
-        Ok(Some(mut packet)) => {
+      match render_rx.recv() {
+        Ok(RenderCommand::RenderFrame { mut packet, task_id }) => {
+          packet.clear_color = clear_color;
           let scene_guard = scene_shared.as_ref();
           let mut c_payload = RenderPayloadData {
             packet: &mut packet,
@@ -122,9 +147,10 @@ fn start_render_thread(
             scene: &scene_guard,
             cursor_entity,
             sun_entity,
+            task_id,
           };
 
-          let res = render_frontend.write().take_and(|context| {
+          let res = frontend.take_and(|context| {
             context
               .deref_device_and(
                 render_device_handle,
@@ -133,11 +159,83 @@ fn start_render_thread(
               )
               .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
           });
-          if let Some(Err(_e)) = res {
-            // Handle render error
+          
+          if let Some(Err(e)) = res {
+            // Report failure to task registry
+            let _ = frontend.take_and(|context| {
+              context.deref_device_and(
+                render_device_handle,
+                &mut (task_id, e) as *mut _ as *mut core::ffi::c_void,
+                |device, data| {
+                  let (tid, err) = unsafe { &*(data as *mut (u64, aethervk_core_rlib::types::EngineError)) };
+                  if let aethervk_core_rlib::types::EngineError::Gpu(gpu_err) = err {
+                    device.fail_task(*tid, gpu_err.clone());
+                  } else {
+                    device.fail_task(*tid, aethervk_core_rlib::types::GpuError::InvalidState);
+                  }
+                  Ok(())
+                }
+              ).unwrap_or(Ok(()))
+            });
           }
         }
-        Ok(None) => break, // Exit loop
+        Ok(RenderCommand::DownloadImage {
+          buffer,
+          buffer_size,
+          success,
+          done_signal,
+        }) => {
+          let slice = unsafe { core::slice::from_raw_parts_mut(buffer, buffer_size) };
+          let mut payload = (presentation_engine, slice);
+          let res = frontend.take_and(|context| {
+            context
+              .deref_device_and(
+                render_device_handle,
+                &mut payload as *mut _ as *mut core::ffi::c_void,
+                |device, data| {
+                  let (engine, buf) =
+                    unsafe { &mut *(data as *mut (gpu::PresentationEngineHandle, &mut [u8])) };
+                  device.download_windowless_image(*engine, *buf)
+                },
+              )
+              .unwrap()
+          });
+          unsafe { *success = res.is_ok() };
+          done_signal.store(true, core::sync::atomic::Ordering::Release);
+        }
+        Ok(RenderCommand::SetClearColor(color)) => {
+          clear_color = color;
+        }
+        Ok(RenderCommand::Resize { width, height }) => {
+          let mut data = (presentation_engine, width, height);
+          let _ = frontend.take_and(|context| {
+            context
+              .deref_device_and(
+                render_device_handle,
+                &mut data as *mut _ as *mut core::ffi::c_void,
+                |device, data_ptr| {
+                  let (pe, w, h) =
+                    unsafe { &mut *(data_ptr as *mut (gpu::PresentationEngineHandle, u32, u32)) };
+                  device.resize_presentation_engine(*pe, *w, *h)
+                },
+              )
+              .unwrap();
+            Ok(())
+          });
+        }
+        Ok(RenderCommand::GenerateSky) => {
+          let _ = frontend.take_and(|context| {
+            context
+              .deref_device_and(
+                render_device_handle,
+                core::ptr::null_mut(),
+                |device, _| device.generate_sky(),
+              )
+              .unwrap();
+            Ok(())
+          });
+        }
+        Ok(RenderCommand::Shutdown) => break,
         Err(e) => {
           if let thingbuf::mpsc::errors::TryRecvError::Closed = e {
             break;
@@ -156,11 +254,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
   device.start_frame()?;
   let acquire_result = device.acquire_next_image(payload.presentation_engine)?;
   if acquire_result.status.needs_resize() {
-    device.resize_presentation_engine(
-      payload.presentation_engine,
-      payload.packet.window_width,
-      payload.packet.window_height,
-    )?;
+    // handled via resize command or next frame
     return Ok(());
   }
 
@@ -378,26 +472,32 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
   }
 
   let mut sun_opt = None;
-  payload.scene.with_component(
-    payload.sun_entity,
-    |sun_comp: &aethervk_core_rlib::scene::SunComponent| {
-      sun_opt = Some(*sun_comp);
-    },
-  );
+  if payload.scene.with_component(payload.sun_entity, |_: &aethervk_core_rlib::scene::HiddenComponent| {}).is_none() {
+    payload.scene.with_component(
+      payload.sun_entity,
+      |sun_comp: &aethervk_core_rlib::scene::SunComponent| {
+        sun_opt = Some(*sun_comp);
+      },
+    );
+  }
   if let Some(sun_comp) = sun_opt {
     if let Some(sun_transform) = payload.scene.global_transform(payload.sun_entity) {
       let mut sky_opt = None;
       payload
         .scene
-        .query1::<aethervk_core_rlib::scene::SkyComponent, _>(|id, comp| {
-          sky_opt = Some((id, *comp));
+        .query1::<aethervk_core_rlib::scene::SkyComponent, _>(|entity, comp| {
+          if payload.scene.with_component(entity, |_c: &aethervk_core_rlib::scene::HiddenComponent| {}).is_none() {
+            sky_opt = Some((entity, *comp));
+          }
         });
 
       let mut grid_opt = None;
       payload
         .scene
-        .query1::<aethervk_core_rlib::scene::GridComponent, _>(|id, comp| {
-          grid_opt = Some((id, *comp));
+        .query1::<aethervk_core_rlib::scene::GridComponent, _>(|entity, comp| {
+          if payload.scene.with_component(entity, |_c: &aethervk_core_rlib::scene::HiddenComponent| {}).is_none() {
+            grid_opt = Some((entity, *comp));
+          }
         });
 
       render_scene.sun = Some((payload.sun_entity, sun_comp, sun_transform.into()));
@@ -412,14 +512,6 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
       device.begin_command_buffer(cmd_buffer)?;
       device.update_sun(cmd_buffer, payload.sun_entity, &sun_comp)?;
       device.begin_render_pass(cmd_buffer, payload.presentation_engine, &acquire_result)?;
-
-      let _ = device.render_ui_rect(
-        cmd_buffer,
-        payload.packet.clear_color,
-        [-1.0, -1.0],
-        [2.0, 2.0],
-        payload.presentation_engine,
-      );
 
       let extent = device.get_presentation_engine_extent(payload.presentation_engine)?;
       let root_viewport = gpu::Viewport {
@@ -437,6 +529,14 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
           offset: [0, 0],
           extent,
         },
+      );
+
+      let _ = device.render_ui_rect(
+        cmd_buffer,
+        payload.packet.clear_color,
+        [-1.0, -1.0],
+        [2.0, 2.0],
+        payload.presentation_engine,
       );
 
       let quad_tree = gpu::ViewportQuadTree {
@@ -527,7 +627,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
         });
 
       device.end_render_pass(cmd_buffer)?;
-      device.submit_command_buffer(cmd_buffer)?;
+      device.submit_command_buffer(cmd_buffer, Some(payload.task_id))?;
 
       let present_status = device.present(
         payload.presentation_engine,
@@ -535,11 +635,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
         acquire_result.frame_index as usize,
       )?;
       if present_status.needs_resize() {
-        let _ = device.resize_presentation_engine(
-          payload.presentation_engine,
-          payload.packet.window_width,
-          payload.packet.window_height,
-        );
+        // handled via next frame or resize command
       }
     }
   }
@@ -550,8 +646,10 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
 pub struct SimulationContext {
   pub scene: Arc<Scene>,
   pub presentation_engine: gpu::PresentationEngineHandle,
-  pub render_frontend: Arc<RwLock<aethervk_core_rlib::gpu::RenderFrontend<'static>>>,
+  pub render_frontend: Arc<aethervk_core_rlib::gpu::RenderFrontend<'static>>,
   pub render_device_handle: gpu::RenderDeviceHandle,
+  pub render_tx: mpsc::Sender<RenderCommand>,
+  pub render_thread_handle: Option<Thread>,
 
   pub entity_map: BTreeMap<u64, EntityId>,
   pub next_entity_id: u64,
@@ -565,9 +663,6 @@ pub struct SimulationContext {
   pub outlines_enabled: Arc<AtomicBool>,
   pub asset_path: Option<alloc::string::String>,
 
-  pub render_tx: Option<mpsc::Sender<Option<RenderPacket>>>,
-  pub render_thread_handle: Option<Thread>,
-
   pub window_width: u32,
   pub window_height: u32,
   pub logic_state: RwLock<LogicState>,
@@ -576,8 +671,25 @@ pub struct SimulationContext {
   pub next_model_id: u64,
   pub mesh_cache: Arc<aethervk_core_rlib::scene::AssetCache<simulation::comet::Comet>>,
   pub physics_scene: Arc<RwLock<aethervk_core_rlib::physics::physics_scene::PhysicsScene>>,
+  pub thread_pool: Arc<RwLock<aethervk_oshal_rlib::os::pool::ThreadPool>>,
+  pub time_info: Arc<RwLock<aethervk_oshal_rlib::os::time::TimeInfo>>,
   pub clear_color: [f32; 4],
 }
+
+struct PhysicsRebuildWorkload {
+  scene: Arc<aethervk_core_rlib::scene::Scene>,
+  physics_scene: Arc<RwLock<aethervk_core_rlib::physics::physics_scene::PhysicsScene>>,
+}
+
+impl aethervk_oshal_rlib::os::pool::Workload for PhysicsRebuildWorkload {
+  fn execute(&self) {
+    let new_physics =
+      aethervk_core_rlib::physics::physics_scene::PhysicsScene::build_from_scene(&self.scene);
+    let mut guard = self.physics_scene.write();
+    *guard = new_physics;
+  }
+}
+
 
 impl SimulationContext {
   fn register_entity(&mut self, id: EntityId) -> u64 {
@@ -1195,143 +1307,6 @@ pub unsafe extern "C" fn avkSimulationContext_raycast(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_setMarkers(
-  ctx: *mut SimulationContext,
-  entity: u64,
-  count: u32,
-  px: *const f32,
-  py: *const f32,
-  pz: *const f32,
-  cr: *const f32,
-  cg: *const f32,
-  cb: *const f32,
-  sizes: *const f32,
-) {
-  if ctx.is_null()
-    || px.is_null()
-    || py.is_null()
-    || pz.is_null()
-    || cr.is_null()
-    || cg.is_null()
-    || cb.is_null()
-    || sizes.is_null()
-  {
-    return;
-  }
-  let ctx = unsafe { &mut *ctx };
-  if let Some(entity_id) = ctx.get_entity(entity) {
-    let mut markers = Vec::with_capacity(count as usize);
-    let px_slice = unsafe { core::slice::from_raw_parts(px, count as usize) };
-    let py_slice = unsafe { core::slice::from_raw_parts(py, count as usize) };
-    let pz_slice = unsafe { core::slice::from_raw_parts(pz, count as usize) };
-    let cr_slice = unsafe { core::slice::from_raw_parts(cr, count as usize) };
-    let cg_slice = unsafe { core::slice::from_raw_parts(cg, count as usize) };
-    let cb_slice = unsafe { core::slice::from_raw_parts(cb, count as usize) };
-    let sz_slice = unsafe { core::slice::from_raw_parts(sizes, count as usize) };
-    for i in 0..count as usize {
-      markers.push(aethervk_core_rlib::scene::Marker {
-        local_pos: [px_slice[i], py_slice[i], pz_slice[i]],
-        color: [cr_slice[i], cg_slice[i], cb_slice[i]],
-        size: sz_slice[i],
-      });
-    }
-    let _ = ctx.scene.add_component(
-      entity_id,
-      aethervk_core_rlib::scene::MarkersComponent { markers },
-    );
-  }
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_getEpochLimits(
-  ctx: *mut SimulationContext,
-  start_tai: *mut f64,
-  end_tai: *mut f64,
-) -> bool {
-  if ctx.is_null() {
-    return false;
-  }
-  let ctx = unsafe { &mut *ctx };
-  let logic = ctx.logic_state.read();
-  if !start_tai.is_null() {
-    unsafe {
-      *start_tai = logic.epoch_start.to_tai_seconds();
-    }
-  }
-  if !end_tai.is_null() {
-    unsafe {
-      *end_tai = logic.epoch_end.to_tai_seconds();
-    }
-  }
-  true
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_setAssetPath(path: *const c_char) {
-  if path.is_null() {
-    return;
-  }
-
-  if let Ok(c_str) = unsafe { core::ffi::CStr::from_ptr(path) }.to_str() {
-    let mut guard = aethervk_core_rlib::gpu::ASSET_DIR.write();
-    *guard = Some(alloc::string::String::from(c_str));
-  }
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkGetAvailableRenderBackends(count: *mut u32) -> *mut *mut c_char {
-  let backends = gpu::get_available_render_backends();
-  if !count.is_null() {
-    unsafe {
-      *count = backends.len() as u32;
-    }
-  }
-  let mut ptrs: Vec<*mut c_char> = backends
-    .into_iter()
-    .map(|s| alloc::ffi::CString::new(s).unwrap().into_raw())
-    .collect();
-  let ptr = ptrs.as_mut_ptr();
-  core::mem::forget(ptrs);
-  ptr
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkGetAvailableKernels(count: *mut u32) -> *mut *mut c_char {
-  let kernels = gpu::get_available_kernels();
-  if !count.is_null() {
-    unsafe {
-      *count = kernels.len() as u32;
-    }
-  }
-  let mut ptrs: Vec<*mut c_char> = kernels
-    .into_iter()
-    .map(|s| alloc::ffi::CString::new(s).unwrap().into_raw())
-    .collect();
-  let ptr = ptrs.as_mut_ptr();
-  core::mem::forget(ptrs);
-  ptr
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkFreeStringArray(arr: *mut *mut c_char, count: u32) {
-  if arr.is_null() {
-    return;
-  }
-  let ptrs = unsafe { Vec::from_raw_parts(arr, count as usize, count as usize) };
-  for p in ptrs {
-    if !p.is_null() {
-      let _ = unsafe { alloc::ffi::CString::from_raw(p) };
-    }
-  }
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_startup(
   backend: *const c_char,
   width: u32,
@@ -1347,68 +1322,51 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
     return core::ptr::null_mut(); // Unsupported backend
   }
 
-  let runtime_params = Box::leak(Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-  }));
-
-  let render_frontend = Arc::new(RwLock::new(
-    gpu::new_render_frontend(gpu::VULKAN_RENDER_BACKEND, runtime_params).unwrap(),
-  ));
-
-  let additional_params = gpu::DeviceAdditionalParams::new();
-  let mut write_render_frontend = render_frontend.write();
-  let render_device_handle_opt = write_render_frontend
-    .take_mut_and(|context| Ok(context.init_device(0, &additional_params).unwrap()));
-
-  if render_device_handle_opt.is_none() {
-    return core::ptr::null_mut();
-  }
-
-  let render_device_handle = render_device_handle_opt.unwrap().unwrap();
-
   let width = if width == 0 { 800 } else { width };
   let height = if height == 0 { 600 } else { height };
 
-  let presentation_engine = {
-    let params = gpu::PresentationEngineParams::windowless(width, height);
-    write_render_frontend
-      .take_and(|context| {
-        let mut handle_result: aethervk_core_rlib::types::GpuResult<gpu::PresentationEngineHandle> =
-          Err(aethervk_core_rlib::types::GpuError::InvalidState);
-        let mut closure_data = (&params, &mut handle_result);
+  let runtime_params = RuntimeParams {
+    render_backend_params: FnvIndexMap::new(),
+  };
 
-        let closure = |device: &dyn gpu::RenderDevice, data: *mut core::ffi::c_void| {
-          type ClosureData<'a> = (
-            &'a gpu::PresentationEngineParams,
-            &'a mut aethervk_core_rlib::types::GpuResult<gpu::PresentationEngineHandle>,
-          );
+  let frontend = Arc::new(
+    gpu::new_render_frontend(gpu::VULKAN_RENDER_BACKEND, &runtime_params).unwrap()
+  );
+  let additional_params = gpu::DeviceAdditionalParams::new();
+  let render_device_handle = frontend.take_mut_and(|context| {
+     Ok(context.init_device(0, &additional_params).unwrap())
+  }).unwrap().unwrap();
 
-          let data_ptr = data as *mut ClosureData;
-          let (params_ref, handle_result) = unsafe { &mut *data_ptr };
-          let pe_result = device.create_presentation_engine(*params_ref);
-          if let Ok(pe) = pe_result {
+  let mut presentation_engine_result: GpuResult<gpu::PresentationEngineHandle> =
+    Err(aethervk_core_rlib::types::GpuError::InvalidState);
+
+  frontend.take_and(|context| {
+    context
+      .deref_device_and(
+        render_device_handle,
+        &mut (&gpu::PresentationEngineParams::windowless(width, height), &mut presentation_engine_result) as *mut _ as *mut core::ffi::c_void,
+        |device, data| {
+          let (params, out) = unsafe {
+            &mut *(data as *mut (&gpu::PresentationEngineParams, *mut GpuResult<gpu::PresentationEngineHandle>))
+          };
+          let pe_res = device.create_presentation_engine(**params);
+          if let Ok(pe) = pe_res {
             device.init_archetypes(pe).unwrap();
           }
-          **handle_result = pe_result;
-
-          device.generate_sky().unwrap();
+          unsafe { **out = pe_res };
           Ok(())
-        };
+        },
+      )
+      .unwrap();
+    Ok(())
+  }).unwrap();
 
-        context
-          .deref_device_and(
-            render_device_handle,
-            &mut closure_data as *mut _ as *mut core::ffi::c_void,
-            closure,
-          )
-          .unwrap()
-          .unwrap();
-        Ok(handle_result.unwrap())
-      })
-      .unwrap()
-      .unwrap()
+  let presentation_engine = match presentation_engine_result {
+    Ok(pe) => pe,
+    Err(_) => return core::ptr::null_mut(),
   };
-  drop(write_render_frontend);
+
+  let (render_tx, render_rx) = mpsc::channel(128);
 
   let scene = Scene::new();
   scene.register_component::<TransformComponent>(&[]);
@@ -1493,6 +1451,28 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
   );
   scene.set_parent(sun_entity, Some(root_entity));
 
+  // Add emissive core for the sun during startup to match C# logic
+  let sun_core_id = scene.spawn_entity("sun_core");
+  let sun_sphere = aethervk_core_rlib::simulation::comet::generate_uv_sphere(0.45 * 0.95, 64, 64);
+  let _ = scene.add_component(
+    sun_core_id,
+    TransformComponent {
+      position: Vec3f32::from_components(0.0, 0.0, 0.0),
+      rotation: Quat::identity(),
+      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+    },
+  );
+  let _ = scene.add_component(
+    sun_core_id,
+    PhysicalMeshComponent {
+      asset_path: alloc::string::String::new(),
+      mesh: alloc::sync::Arc::from(sun_sphere),
+      emissive_intensity: 0.9,
+      emissive_color: [1.0, 0.35, 0.02],
+    },
+  );
+  scene.set_parent(sun_core_id, Some(sun_entity));
+
   let grid_entity = scene.spawn_entity("grid");
   let _ = scene.add_component(grid_entity, GridComponent {});
   scene.set_parent(grid_entity, Some(root_entity));
@@ -1501,11 +1481,47 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
     aethervk_core_rlib::physics::physics_scene::PhysicsScene::build_from_scene(&scene),
   ));
 
-  let mut ctx = Box::new(SimulationContext {
-    scene: Arc::new(scene),
-    presentation_engine,
-    render_frontend,
+  let thread_pool = Arc::new(RwLock::new(
+    aethervk_oshal_rlib::os::pool::ThreadPool::new(4).unwrap(),
+  ));
+
+  let time_info = Arc::new(RwLock::new(
+    aethervk_oshal_rlib::os::time::TimeInfo::new(16667, 100000, 1.0),
+  ));
+
+  let scene_arc = Arc::new(scene);
+
+  let render_thread_handle = start_render_thread(
+    render_rx,
+    Arc::clone(&scene_arc),
+    Arc::clone(&frontend),
     render_device_handle,
+    presentation_engine,
+    cursor_entity,
+    sun_entity,
+  );
+
+  // Wire callbacks for completion tracking
+  frontend.take_and(|context| {
+    context.deref_device_and(
+      render_device_handle,
+      &mut Arc::clone(&thread_pool) as *mut _ as *mut core::ffi::c_void,
+      |device, data| {
+        let pool = unsafe { &*(data as *mut Arc<RwLock<aethervk_oshal_rlib::os::pool::ThreadPool>>) };
+        device.wire_callbacks(Arc::clone(pool))
+      }
+    ).unwrap()
+  }).unwrap();
+
+  render_tx.send(RenderCommand::GenerateSky).unwrap();
+
+  let mut ctx = Box::new(SimulationContext {
+    scene: scene_arc,
+    presentation_engine,
+    render_frontend: frontend,
+    render_device_handle,
+    render_tx,
+    render_thread_handle: Some(render_thread_handle),
     entity_map: BTreeMap::new(),
     next_entity_id: 1,
     root_entity,
@@ -1515,8 +1531,6 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
     grid_entity,
     outlines_enabled: Arc::new(AtomicBool::new(false)),
     asset_path: None,
-    render_tx: None,
-    render_thread_handle: None,
     window_width: width,
     window_height: height,
     logic_state: RwLock::new(LogicState::default()),
@@ -1524,14 +1538,17 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
     next_model_id: 1,
     mesh_cache: Arc::new(aethervk_core_rlib::scene::AssetCache::new()),
     physics_scene,
+    thread_pool,
+    time_info,
     clear_color: [0.0, 0.0, 0.0, 1.0],
   });
 
-  ctx.register_entity(root_entity);
-  ctx.register_entity(camera_entity);
-  ctx.register_entity(cursor_entity);
-  ctx.register_entity(sun_entity);
-  ctx.register_entity(grid_entity);
+  ctx.register_entity(root_entity); // 1
+  ctx.register_entity(camera_entity); // 2
+  ctx.register_entity(cursor_entity); // 3
+  ctx.register_entity(sun_entity); // 4
+  ctx.register_entity(sun_core_id); // 5
+  ctx.register_entity(grid_entity); // 6
 
   Box::into_raw(ctx)
 }
@@ -1542,29 +1559,18 @@ pub unsafe extern "C" fn avkSimulationContext_shutdown(ctx: *mut SimulationConte
   if !ctx.is_null() {
     let mut ctx = unsafe { Box::from_raw(ctx) };
     unsafe { avkSimulationContext_stopThreads(&mut *ctx) };
+    
+    // Explicitly clear caches to drop Arcs and trigger GPU resource cleanup
+    ctx.mesh_cache.clear();
+    
+    // The rest of SimulationContext will be dropped here
   }
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_startThreads(ctx: *mut SimulationContext) {
-  if ctx.is_null() {
-    return;
-  }
-  let ctx = unsafe { &mut *ctx };
-
-  let (render_tx, render_rx) = mpsc::channel::<Option<RenderPacket>>(32);
-  let render_thread_handle = start_render_thread(
-    render_rx,
-    Arc::clone(&ctx.scene),
-    Arc::clone(&ctx.render_frontend),
-    ctx.render_device_handle,
-    ctx.presentation_engine,
-    ctx.cursor_entity,
-    ctx.sun_entity,
-  );
-  ctx.render_tx = Some(render_tx);
-  ctx.render_thread_handle = Some(render_thread_handle);
+  // Now handled in startup
 }
 
 #[unsafe(no_mangle)]
@@ -1575,9 +1581,7 @@ pub unsafe extern "C" fn avkSimulationContext_stopThreads(ctx: *mut SimulationCo
   }
   let ctx = unsafe { &mut *ctx };
 
-  if let Some(tx) = &ctx.render_tx {
-    let _ = tx.try_send(None);
-  }
+  let _ = ctx.render_tx.send(RenderCommand::Shutdown);
   if let Some(handle) = ctx.render_thread_handle.take() {
     handle.join();
   }
@@ -1930,437 +1934,38 @@ pub unsafe extern "C" fn avkSimulationContext_setBvhNodeVisibility(
       },
     );
 
-    if bvh_len > 0 {
-      let mut added = false;
-      ctx.scene.with_component_mut(
+    if (node_index as usize) < bvh_len {
+      let mut dbg_opt = None;
+      ctx
+        .scene
+        .with_component(entity_id, |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
+          dbg_opt = Some(dbg.node_render_states.clone());
+        });
+
+      let mut states = match dbg_opt {
+        Some(s) => s,
+        None => {
+          let mut s = Vec::with_capacity(bvh_len);
+          s.resize(bvh_len, false);
+          s
+        }
+      };
+
+      states[node_index as usize] = is_visible;
+
+      let _ = ctx.scene.add_component(
         entity_id,
-        |dbg: &mut aethervk_core_rlib::scene::BvhDebugComponent| {
-          if (node_index as usize) < dbg.node_render_states.len() {
-            dbg.node_render_states[node_index as usize] = is_visible;
-          }
-          added = true;
+        aethervk_core_rlib::scene::BvhDebugComponent {
+          node_render_states: states,
         },
       );
-
-      if !added {
-        let mut states = vec![false; bvh_len];
-        if (node_index as usize) < states.len() {
-          states[node_index as usize] = is_visible;
-        }
-        let _ = ctx.scene.add_component(
-          entity_id,
-          aethervk_core_rlib::scene::BvhDebugComponent {
-            node_render_states: states,
-          },
-        );
-      }
     }
   }
 }
 
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_setEntityVisibility(
-  ctx: *mut SimulationContext,
-  entity: u64,
-  visible: bool,
-) {
-  if ctx.is_null() {
-    return;
-  }
-  let ctx = unsafe { &mut *ctx };
-  if let Some(entity_id) = ctx.get_entity(entity) {
-    if visible {
-      let _ = ctx
-        .scene
-        .remove_component::<aethervk_core_rlib::scene::HiddenComponent>(entity_id);
-    } else {
-      let _ = ctx
-        .scene
-        .add_component(entity_id, aethervk_core_rlib::scene::HiddenComponent {});
-    }
-  }
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_setEntitySelected(
-  ctx: *mut SimulationContext,
-  entity: u64,
-  selected: bool,
-) {
-  if ctx.is_null() {
-    return;
-  }
-  let ctx = unsafe { &mut *ctx };
-  if let Some(entity_id) = ctx.get_entity(entity) {
-    if selected {
-      let _ = ctx
-        .scene
-        .add_component(entity_id, aethervk_core_rlib::scene::SelectedComponent {});
-    } else {
-      let _ = ctx
-        .scene
-        .remove_component::<aethervk_core_rlib::scene::SelectedComponent>(entity_id);
-    }
-  }
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_setEntityFollowing(
-  ctx: *mut SimulationContext,
-  entity: u64,
-  following: bool,
-) {
-  if ctx.is_null() {
-    return;
-  }
-  let ctx = unsafe { &mut *ctx };
-  if let Some(entity_id) = ctx.get_entity(entity) {
-    if following {
-      let _ = ctx
-        .scene
-        .add_component(entity_id, aethervk_core_rlib::scene::FollowingComponent {});
-    } else {
-      let _ = ctx
-        .scene
-        .remove_component::<aethervk_core_rlib::scene::FollowingComponent>(entity_id);
-    }
-  }
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_addPhysicalMeshComponent(
-  ctx: *mut SimulationContext,
-  entity: u64,
-  gltf_path: *const c_char,
-  emissive_intensity: f32,
-  emissive_r: f32,
-  emissive_g: f32,
-  emissive_b: f32,
-) -> bool {
-  if ctx.is_null() || gltf_path.is_null() {
-    return false;
-  }
-  let ctx = unsafe { &mut *ctx };
-  if let Some(entity_id) = ctx.get_entity(entity) {
-    let path_str = unsafe { CStr::from_ptr(gltf_path).to_str().unwrap_or("") };
-
-    let mesh_arc = if let Some(cached_mesh) = ctx.mesh_cache.get(path_str) {
-      cached_mesh
-    } else {
-      if let Ok(loaded_mesh) = simulation::comet::load_comet_from_gltf(path_str, false) {
-        ctx.mesh_cache.insert(String::from(path_str), loaded_mesh)
-      } else {
-        return false;
-      }
-    };
-
-    let _ = ctx.scene.add_component(
-      entity_id,
-      PhysicalMeshComponent {
-        asset_path: String::from(path_str),
-        mesh: mesh_arc,
-        emissive_intensity,
-        emissive_color: [emissive_r, emissive_g, emissive_b],
-      },
-    );
-    return true;
-  }
-  false
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_addSkyComponent(
-  ctx: *mut SimulationContext,
-  entity: u64,
-) {
-  if ctx.is_null() {
-    return;
-  }
-  let ctx = unsafe { &mut *ctx };
-  if let Some(entity_id) = ctx.get_entity(entity) {
-    let _ = ctx.scene.add_component(entity_id, SkyComponent {});
-  }
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_addCameraComponent(
-  ctx: *mut SimulationContext,
-  entity: u64,
-  fov: f32,
-  aspect: f32,
-  near: f32,
-  far: f32,
-) {
-  if ctx.is_null() {
-    return;
-  }
-  let ctx = unsafe { &mut *ctx };
-  if let Some(entity_id) = ctx.get_entity(entity) {
-    let _ = ctx.scene.add_component(
-      entity_id,
-      CameraComponent {
-        projection: Mat4x4f32::perspective_vk(fov.to_radians(), aspect, near, far),
-        near_plane: near,
-        far_plane: far,
-      },
-    );
-  }
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_setCameraComponent(
-  ctx: *mut SimulationContext,
-  entity: u64,
-  is_orthographic: bool,
-  fov: f32,
-  aspect: f32,
-  near: f32,
-  far: f32,
-) {
-  if ctx.is_null() {
-    return;
-  }
-  let ctx = unsafe { &mut *ctx };
-  if let Some(entity_id) = ctx.get_entity(entity) {
-    let mut dist = 100.0;
-    if let Some(transform) = ctx.scene.global_transform(entity_id) {
-      let cursor_id = ctx.cursor_entity;
-      if let Some(cursor_transform) = ctx.scene.global_transform(cursor_id) {
-        dist = (transform.position - cursor_transform.position).length();
-        if dist < 0.1 {
-          dist = 0.1;
-        }
-      }
-    }
-
-    ctx
-      .scene
-      .with_component_mut(entity_id, |c: &mut CameraComponent| {
-        c.near_plane = near;
-        c.far_plane = far;
-        if is_orthographic {
-          // Use camera distance to calculate orthographic size to roughly match perspective framing
-          // at the cursor plane.
-          let ortho_height = dist * (fov.to_radians() / 2.0).tan() * 2.0;
-          let ortho_width = ortho_height * aspect;
-          c.projection = Mat4x4f32::orthographic_vk(
-            -ortho_width / 2.0,
-            ortho_width / 2.0,
-            -ortho_height / 2.0,
-            ortho_height / 2.0,
-            near,
-            far,
-          );
-        } else {
-          c.projection = Mat4x4f32::perspective_vk(fov.to_radians(), aspect, near, far);
-        }
-      });
-  }
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_getCameraComponent(
-  ctx: *mut SimulationContext,
-  entity: u64,
-  proj: *mut f32,
-) -> bool {
-  if ctx.is_null() || proj.is_null() {
-    return false;
-  }
-  let ctx = unsafe { &mut *ctx };
-  if let Some(entity_id) = ctx.get_entity(entity) {
-    let mut success = false;
-    ctx.scene.with_component(entity_id, |c: &CameraComponent| {
-      let mut slice = unsafe { core::slice::from_raw_parts_mut(proj, 16) };
-      let matrix = c.projection;
-      // Copy matrix floats
-      let c0 = matrix.column(0).unwrap();
-      let c1 = matrix.column(1).unwrap();
-      let c2 = matrix.column(2).unwrap();
-      let c3 = matrix.column(3).unwrap();
-      slice[0] = c0.x();
-      slice[1] = c0.y();
-      slice[2] = c0.z();
-      slice[3] = c0.w();
-      slice[4] = c1.x();
-      slice[5] = c1.y();
-      slice[6] = c1.z();
-      slice[7] = c1.w();
-      slice[8] = c2.x();
-      slice[9] = c2.y();
-      slice[10] = c2.z();
-      slice[11] = c2.w();
-      slice[12] = c3.x();
-      slice[13] = c3.y();
-      slice[14] = c3.z();
-      slice[15] = c3.w();
-      success = true;
-    });
-    return success;
-  }
-  false
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_addCursorComponent(
-  ctx: *mut SimulationContext,
-  entity: u64,
-) {
-  if ctx.is_null() {
-    return;
-  }
-  let ctx = unsafe { &mut *ctx };
-  if let Some(entity_id) = ctx.get_entity(entity) {
-    let _ = ctx.scene.add_component(entity_id, CursorComponent {});
-  }
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_addSunComponent(
-  ctx: *mut SimulationContext,
-  entity: u64,
-  res_x: u32,
-  res_y: u32,
-  res_z: u32,
-) {
-  if ctx.is_null() {
-    return;
-  }
-  let ctx = unsafe { &mut *ctx };
-  if let Some(entity_id) = ctx.get_entity(entity) {
-    let _ = ctx.scene.add_component(
-      entity_id,
-      SunComponent {
-        resolution: (res_x, res_y, res_z),
-      },
-    );
-
-    // Add emissive core for the sun
-    let sun_core_id = ctx.scene.spawn_entity("sun_core");
-    let mut sun_sphere =
-      aethervk_core_rlib::simulation::comet::generate_uv_sphere(0.45 * 0.95, 64, 64);
-    sun_sphere.albedo_map = None;
-    let _ = ctx.scene.add_component(
-      sun_core_id,
-      TransformComponent {
-        position: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 0.0),
-        rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
-        scale: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(1.0, 1.0, 1.0),
-      },
-    );
-    let _ = ctx.scene.add_component(
-      sun_core_id,
-      PhysicalMeshComponent {
-        asset_path: alloc::string::String::new(),
-        mesh: alloc::sync::Arc::from(sun_sphere),
-        emissive_intensity: 0.9,
-        emissive_color: [1.0, 0.35, 0.02],
-      },
-    );
-    ctx.scene.set_parent(sun_core_id, Some(entity_id));
-  }
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_addGridComponent(
-  ctx: *mut SimulationContext,
-  entity: u64,
-) {
-  if ctx.is_null() {
-    return;
-  }
-  let ctx = unsafe { &mut *ctx };
-  if let Some(entity_id) = ctx.get_entity(entity) {
-    let _ = ctx.scene.add_component(entity_id, GridComponent {});
-  }
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_addMeasurementComponent(
-  ctx: *mut SimulationContext,
-  entity: u64,
-  p1_x: f32,
-  p1_y: f32,
-  p1_z: f32,
-  p2_x: f32,
-  p2_y: f32,
-  p2_z: f32,
-) {
-  if ctx.is_null() {
-    return;
-  }
-  let ctx = unsafe { &mut *ctx };
-  if let Some(entity_id) = ctx.get_entity(entity) {
-    let _ = ctx.scene.add_component(
-      entity_id,
-      aethervk_core_rlib::scene::MeasurementComponent {
-        pos1: Vec3f32::from_components(p1_x, p1_y, p1_z),
-        pos2: Vec3f32::from_components(p2_x, p2_y, p2_z),
-        points: 14.0,
-      },
-    );
-  }
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_addImageBillboardComponent(
-  ctx: *mut SimulationContext,
-  entity: u64,
-  is_screen_space: bool,
-  width: f32,
-  height: f32,
-) {
-  if ctx.is_null() {
-    return;
-  }
-  let ctx = unsafe { &mut *ctx };
-  if let Some(entity_id) = ctx.get_entity(entity) {
-    let billboard_type = if is_screen_space {
-      aethervk_core_rlib::scene::BillboardType::ScreenSpace {
-        pct_width: width,
-        pct_height: height,
-      }
-    } else {
-      aethervk_core_rlib::scene::BillboardType::WorldSpace { width, height }
-    };
-    let _ = ctx.scene.add_component(
-      entity_id,
-      aethervk_core_rlib::scene::ImageBillboardComponent {
-        texture_id: 0,
-        billboard_type,
-      },
-    );
-  }
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_renderTick(ctx: *mut SimulationContext) {
-  if ctx.is_null() {
-    return;
-  }
-  let ctx = unsafe { &mut *ctx };
-
+fn collect_render_packet(ctx: &SimulationContext) -> RenderPacket {
   let mut render_items = Vec::new();
   let mut matrix_stack = vec![Mat4x4f32::identity()];
-
-  {
-    let mut ps = ctx.physics_scene.write();
-    *ps = aethervk_core_rlib::physics::physics_scene::PhysicsScene::build_from_scene(&ctx.scene);
-  }
 
   ctx.scene.traverse_with_hooks(
     ctx.root_entity,
@@ -2412,7 +2017,7 @@ pub unsafe extern "C" fn avkSimulationContext_renderTick(ctx: *mut SimulationCon
     .scene
     .with_component(ctx.camera_entity, |c| camera_component = *c);
 
-  let packet = RenderPacket {
+  RenderPacket {
     render_items,
     camera_transform,
     camera_component,
@@ -2422,11 +2027,94 @@ pub unsafe extern "C" fn avkSimulationContext_renderTick(ctx: *mut SimulationCon
       .outlines_enabled
       .load(core::sync::atomic::Ordering::Relaxed),
     clear_color: ctx.clear_color,
-  };
-
-  if let Some(tx) = &ctx.render_tx {
-    let _ = tx.send(Some(packet));
   }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_simulationTick(ctx: *mut SimulationContext) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx = unsafe { &mut *ctx };
+
+  // Update time
+  {
+    let mut time = ctx.time_info.write();
+    time.ut_update();
+  }
+
+  // Concurrent physics rebuild
+  {
+    let workload = Box::new(PhysicsRebuildWorkload {
+      scene: Arc::clone(&ctx.scene),
+      physics_scene: Arc::clone(&ctx.physics_scene),
+    });
+    let mut pool = ctx.thread_pool.write();
+    let _ = pool.scatter(vec![workload]);
+    pool.gather(); // Synchronous for now to ensure raycast works immediately after tick, but running in pool
+  }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_renderTick(ctx: *mut SimulationContext) -> u64 {
+  if ctx.is_null() {
+    return 0;
+  }
+  let ctx = unsafe { &mut *ctx };
+
+  let mut task_id = 0;
+  let _ = ctx.render_frontend.take_and(|context| {
+    context.deref_device_and(
+      ctx.render_device_handle,
+      &mut task_id as *mut _ as *mut core::ffi::c_void,
+      |device, data| {
+        let tid = unsafe { &mut *(data as *mut u64) };
+        *tid = device.create_task();
+        Ok(())
+      }
+    ).unwrap_or(Ok(()))
+  });
+
+  let packet = collect_render_packet(ctx);
+  let _ = ctx.render_tx.send(RenderCommand::RenderFrame { packet, task_id });
+  
+  task_id
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getTaskStatus(
+  ctx: *mut SimulationContext,
+  task_id: u64,
+) -> i32 {
+  if ctx.is_null() {
+    return -1;
+  }
+  let ctx = unsafe { &mut *ctx };
+
+  let mut status = 0; // 0: Pending, 1: Success, 2: Failed
+  let res = ctx.render_frontend.take_and(|context| {
+    context.deref_device_and(
+      ctx.render_device_handle,
+      &mut (task_id, &mut status) as *mut _ as *mut core::ffi::c_void,
+      |device, data| {
+        let (tid, s) = unsafe { &mut *(data as *mut (u64, &mut i32)) };
+        match device.is_task_completed(*tid) {
+          Ok(true) => **s = 1,
+          Ok(false) => **s = 0,
+          Err(_) => **s = 2,
+        }
+        Ok(())
+      }
+    ).unwrap_or(Ok(()))
+  });
+
+  if res.is_none() {
+    return -1;
+  }
+  status
 }
 
 #[unsafe(no_mangle)]
@@ -2452,6 +2140,8 @@ pub unsafe extern "C" fn avkSimulationContext_resize(
         10000.0,
       );
     });
+
+  let _ = ctx.render_tx.send(RenderCommand::Resize { width, height });
 }
 
 #[unsafe(no_mangle)]
@@ -2590,7 +2280,7 @@ pub unsafe extern "C" fn avkSimulationContext_processCommand(
       let pan_speed = dist * 0.001;
 
       let right = cam_rot.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
-      let up = cam_rot.rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0));
+      let up = cam_rot.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
       let translation = right * (-delta_x * pan_speed) + up * (delta_y * pan_speed);
 
       ctx
@@ -2617,7 +2307,7 @@ pub unsafe extern "C" fn avkSimulationContext_processCommand(
 
         // Distance relative to scale, or default
         let dist = t_scale.x().max(t_scale.y()).max(t_scale.z()) * 3.0;
-        let offset = Vec3f32::from_components(0.0, -dist.max(20.0), 0.0);
+        let offset = Vec3f32::from_components(0.0, -dist.max(400.0), 0.0);
 
         let yaw = core::f32::consts::PI;
         let pitch = 0.0;
@@ -2662,10 +2352,26 @@ pub unsafe extern "C" fn avkSimulationContext_processCommand(
       }
     }
     7 => {
+      // PanCamera (does not move cursor)
+      let delta_x = command.float_val_1;
+      let delta_y = command.float_val_2;
+      let pan_speed = dist * 0.001;
+
+      let right = cam_rot.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
+      let up = cam_rot.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
+      let translation = right * (-delta_x * pan_speed) + up * (delta_y * pan_speed);
+
+      ctx
+        .scene
+        .with_component_mut(ctx.camera_entity, |c: &mut TransformComponent| {
+          c.position = c.position + translation;
+        });
+    }
+    8 => {
       // MoveCursor
       let axis_x = command.float_val_1;
       let axis_y = command.float_val_2;
-      let axis_z = 0.0; // not passed via 2 floats. Wait, if it's move, we could use z.
+      let axis_z = 0.0; // not passed via 2 floats.
       let pan_speed = dist * 0.001;
 
       let translation = Vec3f32::from_components(axis_x, axis_y, axis_z) * pan_speed;
@@ -2698,7 +2404,7 @@ pub unsafe extern "C" fn avkSimulationContext_setClearColor(
     return;
   }
   let ctx = unsafe { &mut *ctx };
-  ctx.clear_color = [r, g, b, a];
+  let _ = ctx.render_tx.send(RenderCommand::SetClearColor([r, g, b, a]));
 }
 
 #[unsafe(no_mangle)]
@@ -2712,26 +2418,22 @@ pub unsafe extern "C" fn avkSimulationContext_downloadImage(
     return false;
   }
   let ctx = unsafe { &mut *ctx };
-  let buffer = unsafe { core::slice::from_raw_parts_mut(buffer_ptr, buffer_size) };
-
-  let mut payload = (ctx.presentation_engine, buffer);
-  let res = ctx.render_frontend.write().take_and(|context| {
-    context
-      .deref_device_and(
-        ctx.render_device_handle,
-        &mut payload as *mut _ as *mut core::ffi::c_void,
-        |device, data| {
-          let (engine, buf) =
-            unsafe { &mut *(data as *mut (gpu::PresentationEngineHandle, &mut [u8])) };
-          device.download_windowless_image(*engine, *buf).unwrap();
-          Ok(())
-        },
-      )
-      .unwrap();
-    Ok(())
+  
+  let mut success = false;
+  let done_signal = Arc::new(AtomicBool::new(false));
+  
+  let _ = ctx.render_tx.send(RenderCommand::DownloadImage {
+    buffer: buffer_ptr,
+    buffer_size,
+    success: &mut success,
+    done_signal: Arc::clone(&done_signal),
   });
 
-  res.is_some()
+  while !done_signal.load(core::sync::atomic::Ordering::Acquire) {
+    core::hint::spin_loop();
+  }
+
+  success
 }
 
 
@@ -2744,97 +2446,3 @@ pub unsafe extern "C" fn aethervk_core_cdylib_log(msg: *const c_char) {
     cb(msg);
   }
 }
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_renderTickSync(ctx: *mut SimulationContext) {
-  if ctx.is_null() {
-    return;
-  }
-  let ctx = unsafe { &mut *ctx };
-
-  let mut render_items = Vec::new();
-  let mut matrix_stack = vec![Mat4x4f32::identity()];
-
-  ctx.scene.traverse_with_hooks(
-    ctx.root_entity,
-    &mut matrix_stack,
-    &mut |stack: &mut Vec<Mat4x4f32>,
-          entity: EntityId,
-          transform_opt: Option<TransformComponent>,
-          mesh_opt: Option<&PhysicalMeshComponent>| {
-      let local_transform = transform_opt
-        .map(|c| {
-          Mat4x4f32::translation(c.position)
-            * <Mat4x4f32 as Matrix4>::from_quat_custom_frame(c.rotation)
-            * Mat4x4f32::from_scale(c.scale)
-        })
-        .unwrap_or(Mat4x4f32::identity());
-
-      let parent_transform = stack.last().unwrap();
-      let global_transform = *parent_transform * local_transform;
-
-      if mesh_opt.is_some() {
-        render_items.push(RenderItem {
-          entity_id: entity,
-          model_matrix: global_transform,
-        });
-      }
-      stack.push(global_transform);
-      true
-    },
-    &mut |stack: &mut Vec<Mat4x4f32>, _| {
-      stack.pop();
-    },
-  );
-
-  let mut camera_transform = TransformComponent {
-    position: Vec3f32::from_components(0.0, 0.0, 0.0),
-    rotation: Quat::identity(),
-    scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-  };
-  let mut camera_component = CameraComponent {
-    projection: Mat4x4f32::identity(),
-    near_plane: 0.1,
-    far_plane: 10000.0,
-  };
-
-  if let Some(global) = ctx.scene.global_transform(ctx.camera_entity) {
-    camera_transform = global;
-  }
-  ctx
-    .scene
-    .with_component(ctx.camera_entity, |c| camera_component = *c);
-
-  let mut packet = RenderPacket {
-    render_items,
-    camera_transform,
-    camera_component,
-    window_width: ctx.window_width,
-    window_height: ctx.window_height,
-    outlines_enabled: ctx
-      .outlines_enabled
-      .load(core::sync::atomic::Ordering::Relaxed),
-    clear_color: ctx.clear_color,
-  };
-
-  let mut c_payload = RenderPayloadData {
-    packet: &mut packet,
-    presentation_engine: ctx.presentation_engine,
-    scene: &ctx.scene,
-    cursor_entity: ctx.cursor_entity,
-    sun_entity: ctx.sun_entity,
-  };
-
-  let _ = ctx.render_frontend.write().take_and(|context| {
-    context
-      .deref_device_and(
-        ctx.render_device_handle,
-        &mut c_payload as *mut _ as *mut core::ffi::c_void,
-        render_payload_ffi,
-      )
-      .unwrap();
-    Ok(())
-  });
-}
-

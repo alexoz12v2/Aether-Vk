@@ -865,7 +865,22 @@ where
 
     Self::new(new_c, new_rot, new_he)
   }
+
+  pub fn to_aabb<V>(&self) -> AABB<S>
+  where
+    V: Vector3<Scalar = S> + From<[S; 3]> + Into<[S; 3]>,
+  {
+    let mut min = V::splat(S::from_f32(f32::INFINITY));
+    let mut max = V::splat(S::from_f32(f32::NEG_INFINITY));
+    for v in self.vertices::<V>() {
+      min = min.min(v);
+      max = max.max(v);
+    }
+    AABB::new(min, max)
+  }
 }
+
+
 
 impl OBB<f32> {
   pub fn translation_f32(&self) -> Vec3f32 {

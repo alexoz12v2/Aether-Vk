@@ -13,7 +13,7 @@ use crate::{
   scene::{EntityId, PhysicalMeshComponent, TransformComponent},
   simulation::comet::PushConstants,
 };
-use crate::types::{EngineResult, GpuResult};
+use crate::types::{EngineResult, GpuError, GpuResult};
 
 // Re-export what is necessary from backends
 pub use super::gpu_backends::new_render_frontend;
@@ -28,6 +28,11 @@ use heapless::index_map::FnvIndexMap;
 use alloc::boxed::Box;
 #[cfg(debug_assertions)]
 use alloc::string::String;
+use alloc::sync::Arc;
+use spin::rwlock::RwLock;
+use aethervk_oshal_rlib::os::time::timeus_t;
+use crate::physics::physics_scene::PhysicsScene;
+use crate::scene::Scene;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct RenderBackendId(pub u64);
@@ -46,31 +51,18 @@ impl GpuResourceHandle {
   }
 }
 
+#[derive(Clone, Copy)]
 pub struct KinematicBody {
   pub entity_id: EntityId,
   pub transform: TransformComponent,
 }
 
+#[derive(Clone, Copy)]
 pub struct DynamicBody {
   pub entity_id: EntityId,
   pub transform: TransformComponent,
   pub velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
   pub mass: f32,
-}
-
-/// Ephemeral structure rebuilt every frame holding the snapshot of the simulated physical scene.
-pub struct PhysicalScene {
-  pub kinematic_bodies: alloc::vec::Vec<KinematicBody>,
-  pub dynamic_bodies: alloc::vec::Vec<DynamicBody>,
-}
-
-impl PhysicalScene {
-  pub fn new() -> Self {
-    Self {
-      kinematic_bodies: alloc::vec::Vec::new(),
-      dynamic_bodies: alloc::vec::Vec::new(),
-    }
-  }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
@@ -445,7 +437,22 @@ pub trait RenderDevice: Send + Sync {
 
   fn end_render_pass(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 
-  fn submit_command_buffer(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
+  fn submit_command_buffer(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    task_id: Option<u64>,
+  ) -> GpuResult<()>;
+
+  fn wire_callbacks(
+    &self,
+    pool: Arc<RwLock<aethervk_oshal_rlib::os::pool::ThreadPool>>,
+  ) -> GpuResult<()>;
+
+  fn is_task_completed(&self, task_id: u64) -> GpuResult<bool>;
+
+  fn create_task(&self) -> u64;
+
+  fn fail_task(&self, task_id: u64, error: GpuError);
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -578,18 +585,170 @@ impl PresentationEngineParams {
   }
 }
 
+// -- Compute Engine traits --
+/// Abstract handle for a compute queue (Vulkan/Metal Command Buffer, CUDA Stream, ...)
+/// Represents a thread of execution
+pub trait CommandBuffer: Send + Sync {
+  /// Dispatches the recorded command graph to the backend hardware queue
+  fn submit(&mut self) -> EngineResult<()>;
+}
+
+/// Continuous array residing entirely in backend memory
+pub trait DeviceBuffer<T>: Send + Sync {
+  type Cmd: CommandBuffer;
+  /// Handle type representing pending GPU-to-CPU DMA transfer.
+  /// Lifetime constraint: This handle should die before device buffer
+  type ReadHandle<'a>: WaitHandle<alloc::vec::Vec<timeus_t>>
+  where
+    Self: 'a,
+    T: 'a;
+
+  fn capacity(&self) -> usize;
+
+  /// Enqueues a DMA copy-back command to the CPU. the returned Future does NOT
+  /// borrow `cmd`, allowing you to submit the command buffer while the tasklet
+  /// awaits the GPU synchronization primitive (fence)
+  fn enqueue_read_to_cpu<'a>(&self, cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'a>>;
+}
+
+/// A handle representing a pending GPU-to-CPU DMA transfer.
+/// WARN: Any WaitHandle implementation should implement Drop, so that if we early exit from a function we know wait has been done.
+pub trait WaitHandle<T>: Send + Sync {
+  /// Blocks the current thread (or yields the tasklet back to your custom
+  /// engine scheduler) until the hardware signals completion. Consumes the handle.
+  fn wait(self) -> EngineResult<T>;
+}
+
+/// Specialized `DeviceBuffer` with a dynamic length managed by an atomic counter on the GPU
+/// This is heavily used for Stream compaction
+pub trait DeviceList<T>: DeviceBuffer<T> {
+  fn clear(&mut self, cmd: &mut Self::Cmd) -> EngineResult<()>;
+}
+
+/// Opaque trait for backend-specific Bounding Volume Hierarchy
+pub trait DeviceBvh: Send + Sync {
+  type Cmd: CommandBuffer;
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ColliderId {
+  pub entity_id: u32,
+  /// Set to `u32::MAX` if it's a monolithic body. Otherwise, it is the particle instance index.
+  pub primitive_index: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CollisionPair {
+  pub a: ColliderId,
+  pub b: ColliderId,
+  pub time_of_impact: f32,
+}
+
 /// Computes execution for physics, particle systems, and interval arithmetic.
 pub trait Kernels: Send + Sync {
-  /// Dispatches compute shaders to step the physical simulation dynamically.
-  fn dispatch_physics_step(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    physical_scene: &PhysicalScene,
-    dt: f32,
-  ) -> GpuResult<()>;
+  type Cmd: CommandBuffer;
 
-  /// Dispatches compute shaders for other effects (e.g., particles).
-  fn dispatch_particles(&self, cmd_buffer: CommandBufferHandle, dt: f32) -> GpuResult<()>;
+  // --- Associated Types mapping to the underlying Backend ---
+  type Buffer<T: Copy + Send + Sync>: DeviceBuffer<T, Cmd = Self::Cmd>;
+  type List<T: Copy + Send + Sync>: DeviceList<T, Cmd = Self::Cmd>;
+  type MotionBvh: DeviceBvh<Cmd = Self::Cmd>;
+
+  fn create_command_buffer(&self) -> EngineResult<Self::Cmd>;
+
+  // 1. & 2. Build Collections
+  fn build_kinematic_bodies(
+    &self,
+    cmd: &mut Self::Cmd,
+    scene: &PhysicsScene,
+    scene0: &Scene,
+  ) -> EngineResult<Self::Buffer<KinematicBody>>;
+  fn build_dynamic_bodies(
+    &self,
+    cmd: &mut Self::Cmd,
+    scene: &PhysicsScene,
+    scene0: &Scene,
+  ) -> EngineResult<Self::Buffer<DynamicBody>>;
+
+  // 3. Apply gravitational / position-dependent forces
+  fn compute_forces(
+    &self,
+    cmd: &mut Self::Cmd,
+    kinematics: &Self::Buffer<KinematicBody>,
+    dynamics: &mut Self::Buffer<DynamicBody>,
+  ) -> EngineResult<()>;
+
+  // 4. ODE Solver Substep
+  fn step_ode(
+    &self,
+    cmd: &mut Self::Cmd,
+    dynamics: &mut Self::Buffer<DynamicBody>,
+    dt: timeus_t,
+  ) -> EngineResult<()>;
+
+  // 5. Collision Pipeline
+  fn build_motion_bvh(
+    &self,
+    cmd: &mut Self::Cmd,
+    dynamics: &Self::Buffer<DynamicBody>,
+  ) -> EngineResult<Self::MotionBvh>;
+  fn self_intersect_scene(
+    &self,
+    cmd: &mut Self::Cmd,
+    bvh: &Self::MotionBvh,
+  ) -> EngineResult<Self::List<CollisionPair>>;
+  fn intersect_instances(
+    &self,
+    cmd: &mut Self::Cmd,
+    potentials: &Self::List<CollisionPair>,
+  ) -> EngineResult<Self::List<CollisionPair>>;
+
+  /// Stream compaction shrink logic evaluated entirely on the GPU.
+  fn compact_collisions(
+    &self,
+    cmd: &mut Self::Cmd,
+    globals: &Self::List<CollisionPair>,
+    time_delta: timeus_t,
+  ) -> EngineResult<Self::List<CollisionPair>>;
+
+  /// Parallel reduction to find the lowest `time_of_impact`.
+  /// Returns a tiny buffer of length 1 containing $t_c$.
+  fn find_earliest_collision(
+    &self,
+    cmd: &mut Self::Cmd,
+    compacted: &Self::List<CollisionPair>,
+  ) -> EngineResult<Self::Buffer<timeus_t>>;
+
+  fn apply_collision_responses(
+    &self,
+    cmd: &mut Self::Cmd,
+    dynamics: &mut Self::Buffer<DynamicBody>,
+    collisions: &Self::List<CollisionPair>,
+    force_inelastic: bool,
+  ) -> EngineResult<()>;
+
+  // --- CCD Rewind Subsystem ---
+  fn snapshot_dynamics(
+    &self,
+    cmd: &mut Self::Cmd,
+    dynamics: &Self::Buffer<DynamicBody>,
+  ) -> EngineResult<Self::Buffer<DynamicBody>>;
+  fn restore_dynamics(
+    &self,
+    cmd: &mut Self::Cmd,
+    dynamics: &mut Self::Buffer<DynamicBody>,
+    snapshot: &Self::Buffer<DynamicBody>,
+  ) -> EngineResult<()>;
+
+  // --- Write back dynamic state ---
+  fn write_back_to_scene(
+    &self,
+    cmd: &mut Self::Cmd,
+    dynamics: &Self::Buffer<DynamicBody>,
+    physical_scene: &mut PhysicsScene,
+    scene: &mut Scene,
+  ) -> EngineResult<()>;
 }
 
 /// Bridges synchronization between Compute (Kernels) and Graphics (RenderDevice).

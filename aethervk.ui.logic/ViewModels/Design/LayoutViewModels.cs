@@ -1,6 +1,6 @@
+#if DEBUG
 namespace AetherVk.Logic.ViewModels.Design;
 
-// TODO: Do not include these in release builds
 public class TabGroupNodeViewModelDesign : TabGroupNodeViewModel
 {
   public TabGroupNodeViewModelDesign()
@@ -20,3 +20,4 @@ public class SplitNodeViewModelDesign : SplitNodeViewModel
       SplitOrientation.Horizontal
     ) { }
 }
+#endif

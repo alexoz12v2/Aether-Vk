@@ -5,7 +5,7 @@ use ash::vk::{self, Handle};
 
 use crate::{
   gpu::{AcquireResult, OpaqueNativeHandleInfo, PresentationEngineParams, SwapchainStatus},
-  gpu_backends::vulkan::{device::DeviceResource, utils::NonZeroHandle},
+  gpu_backends::vulkan::{device::DeviceResource, utils::NonZeroHandle, device::LogicalDevice},
   types::{GpuError, GpuResult},
 };
 
@@ -235,7 +235,7 @@ impl PresentationState {
 
   pub fn acquire_next_image(
     &mut self,
-    device: &ash::Device,
+    device: &LogicalDevice,
     graphics_queue: vk::Queue,
   ) -> GpuResult<AcquireResult> {
     match self {
@@ -270,13 +270,14 @@ impl PresentationState {
 
   pub unsafe fn submit_image(
     &mut self,
+    device: &LogicalDevice,
     graphics_queue: vk::Queue,
     image_index: u32,
     frame_index: u32,
   ) -> GpuResult<SwapchainStatus> {
     match self {
       Self::Windowed(state) => unsafe {
-        state.submit_image(graphics_queue, image_index, frame_index)
+        state.submit_image(device, graphics_queue, image_index, frame_index)
       },
       Self::Windowless(state) => unsafe {
         state.submit_image(graphics_queue, image_index, frame_index)
@@ -319,7 +320,14 @@ impl WindowedPresentationState {
     self.width = width;
     self.height = height;
     unsafe {
-      let _ = device.device_wait_idle();
+      let fences: Vec<_> = self
+        .frames
+        .iter()
+        .filter_map(|f| f.submission_fence.map(|h| h.get()))
+        .collect();
+      if !fences.is_empty() {
+        device.wait_for_fences(&fences, true, u64::MAX)?;
+      }
     }
     self.recreate_swapchain(device, true, physical_device)
   }
@@ -847,7 +855,7 @@ impl WindowedPresentationState {
   /// Note:
   /// - When it returns Ok(AcquireResult) with SwapchainStatus::Optimal -> increments `next_image` when successful and makes frame at `current_frame` eligible for submission
   /// - AcquireResult::image_available_semaphore is not used. State tracked internally by presentation engine
-  pub fn acquire_next_image(&mut self, device: &ash::Device) -> GpuResult<AcquireResult> {
+  pub fn acquire_next_image(&mut self, device: &LogicalDevice) -> GpuResult<AcquireResult> {
     const FIRST_ATTEMPT_TIMEOUT_NS: u64 = 167;
     let images_count = self.images.len();
     let frame_count = self.frames.len();
@@ -970,6 +978,7 @@ impl WindowedPresentationState {
   /// - `graphics_queue` should be from a GRAPHICS queue family which supports presentation
   pub unsafe fn submit_image(
     &mut self,
+    device: &LogicalDevice,
     graphics_queue: vk::Queue,
     image_index: u32,
     frame_index: u32,
@@ -989,10 +998,13 @@ impl WindowedPresentationState {
       .swapchains(&swapchains)
       .image_indices(&image_indices);
 
-    let result = unsafe {
-      self
-        .swapchain_device
-        .queue_present(graphics_queue, &present_info)
+    let result = {
+      let _guard = device.submission_lock.lock();
+      unsafe {
+        self
+          .swapchain_device
+          .queue_present(graphics_queue, &present_info)
+      }
     };
 
     match result {
@@ -1196,7 +1208,7 @@ impl WindowlessPresentationState {
 
   pub fn acquire_next_image(
     &mut self,
-    device: &ash::Device,
+    device: &LogicalDevice,
     graphics_queue: vk::Queue,
   ) -> GpuResult<AcquireResult> {
     let images_count = self.images.len();
@@ -1242,7 +1254,7 @@ impl WindowlessPresentationState {
     };
     let signal_info =
       vk::SubmitInfo::default().signal_semaphores(core::slice::from_ref(&sem_handle));
-    unsafe { device.queue_submit(graphics_queue, &[signal_info], vk::Fence::null()) }?;
+    device.locked_queue_submit(graphics_queue, &[signal_info], vk::Fence::null()).map_err(GpuError::from)?;
 
     self.next_image = (self.next_image + 1) % images_count;
     self.current_frame = (self.current_frame + 1) % frame_count;

@@ -294,9 +294,14 @@ public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase, IRecipient
 /// </summary>
 public partial class TabItemViewModel(string title) : ViewModelBase
 {
-  // TODO: add properties and stuff
   [ObservableProperty]
   private string _title = title;
+
+  [ObservableProperty]
+  private string? _icon;
+
+  [ObservableProperty]
+  private bool _canClose = true;
 }
 
 /// <summary>
@@ -317,12 +322,31 @@ public partial class DockingManagerViewModel
     WeakReferenceMessenger.Default.Register<TabDroppedMessage>(this);
     WeakReferenceMessenger.Default.Register<TabDragTaskMessage>(this);
     WeakReferenceMessenger.Default.Register<CoalesceGroupMessage>(this);
-    // TODO establish default from configuration (then passed to VM)
-    var defaultTab = new DebugUiViewModel();
-    var initialGroup = new TabGroupNodeViewModel(defaultTab);
-    initialGroup.Tabs.Add(new UITestPanelViewModel());
-    // Don't need to generate PropertyChanged on construction
-    _rootNode = initialGroup;
+    
+    _rootNode = CreateDefaultLayout();
+  }
+
+  private LayoutNodeViewModelBase CreateDefaultLayout()
+  {
+    // Default layout: Viewport3D on top, Console and others on bottom
+    var viewportTab = new Viewport3DViewModel(
+      ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService 
+      ?? new NativeRuntimeService()
+    );
+    var viewportGroup = new TabGroupNodeViewModel(viewportTab);
+
+    var consoleTab = new ConsoleViewModel(
+      ServiceLocator.Provider?.GetService(typeof(ConsoleService)) as ConsoleService 
+      ?? new ConsoleService()
+    );
+    var bottomGroup = new TabGroupNodeViewModel(consoleTab);
+    bottomGroup.Tabs.Add(new DebugUiViewModel());
+
+    var split = new SplitNodeViewModel(viewportGroup, bottomGroup, SplitOrientation.Vertical, 0.7);
+    viewportGroup.Parent = split;
+    bottomGroup.Parent = split;
+    
+    return split;
   }
 
   // --- Track your Task safely from within the ViewModel ---

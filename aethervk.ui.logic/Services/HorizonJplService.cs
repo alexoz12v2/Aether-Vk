@@ -64,7 +64,7 @@ public class HorizonJplService
     }
   }
 
-  private void ParseCometsJson(string json)
+  internal void ParseCometsJson(string json)
   {
     CometsData.Clear();
     CometsHeaders.Clear();
@@ -156,7 +156,7 @@ public class HorizonJplService
     }
   }
 
-  private void ParseText(string text)
+  internal void ParseText(string text)
   {
     SessionData.Clear();
     Headers.Clear();

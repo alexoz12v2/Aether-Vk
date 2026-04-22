@@ -1,7 +1,7 @@
 use aethervk_core_rlib::{
   gpu::{
     self, RenderDevice,
-    frame::{self, RenderScene},
+    frame::{RenderScene},
   },
   scene::{
     CameraComponent, EntityId, PhysicalMeshComponent, Scene, SkyComponent, SunComponent,
@@ -49,7 +49,11 @@ fn main() {
   let height = 600;
 
   let asset_path = {
-    let mut path = std::env::current_exe().unwrap().parent().unwrap().to_owned();
+    let mut path = std::env::current_exe()
+      .unwrap()
+      .parent()
+      .unwrap()
+      .to_owned();
     while !path.join("assets").exists() {
       path = path.parent().unwrap().to_owned();
     }
@@ -131,6 +135,8 @@ fn main() {
           0.1,
           100.0,
         ),
+        near_plane: 0.1,
+        far_plane: 100.0,
       },
     )
     .unwrap();
@@ -160,13 +166,15 @@ fn main() {
     }
     home_dir.join("assets/Comet.glb")
   };
-  let comet =
+  let comet = Arc::from(
     aethervk_core_rlib::simulation::comet::load_comet_from_gltf(model_path.to_str().unwrap(), true)
-      .expect("Failed to load comet");
+      .expect("Failed to load comet"),
+  );
   scene
     .add_component(
       mesh_entity,
       PhysicalMeshComponent {
+        asset_path: "".to_string(),
         mesh: comet,
         emissive_intensity: 0.0,
         emissive_color: [0.0, 0.0, 0.0],
@@ -243,6 +251,8 @@ fn main() {
                 0.1,
                 100.0,
               ),
+              near_plane: 0.1,
+              far_plane: 100.0,
             };
             payload
               .scene
@@ -347,7 +357,7 @@ fn main() {
               .render_frame(cmd_buffer, &quad_tree, &render_scene)
               .unwrap();
             device.end_render_pass(cmd_buffer).unwrap();
-            device.submit_command_buffer(cmd_buffer).unwrap();
+            device.submit_command_buffer(cmd_buffer, None).unwrap();
 
             let _present_status = device
               .present(

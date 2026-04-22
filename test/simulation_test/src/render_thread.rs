@@ -141,8 +141,20 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
         let mut draw_outline = payload.packet.outlines_enabled;
         let mut outline_color = [0.2, 0.5, 1.0, 1.0]; // Default blueish
 
-        let is_selected = payload.scene.with_component(item.entity_id, |_c: &aethervk_core_rlib::scene::SelectedComponent| {}).is_some();
-        let is_following = payload.scene.with_component(item.entity_id, |_c: &aethervk_core_rlib::scene::FollowingComponent| {}).is_some();
+        let is_selected = payload
+          .scene
+          .with_component(
+            item.entity_id,
+            |_c: &aethervk_core_rlib::scene::SelectedComponent| {},
+          )
+          .is_some();
+        let is_following = payload
+          .scene
+          .with_component(
+            item.entity_id,
+            |_c: &aethervk_core_rlib::scene::FollowingComponent| {},
+          )
+          .is_some();
 
         if is_following {
           draw_outline = true;
@@ -300,24 +312,35 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
   let mut all_bvh_nodes = Vec::new();
   for item in &payload.packet.render_items {
     let mut dbg_states = None;
-    payload.scene.with_component(item.entity_id, |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
-      dbg_states = Some(dbg.node_render_states.clone());
-    });
+    payload.scene.with_component(
+      item.entity_id,
+      |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
+        dbg_states = Some(dbg.node_render_states.clone());
+      },
+    );
 
     if let Some(states) = dbg_states {
-      payload.scene.with_component(item.entity_id, |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
-        if let Some(bvh) = &mesh.mesh.bvh {
-           for (i, &render) in states.iter().enumerate() {
-             if render && i < bvh.nodes.len() {
+      payload.scene.with_component(
+        item.entity_id,
+        |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+          if let Some(bvh) = &mesh.mesh.bvh {
+            for (i, &render) in states.iter().enumerate() {
+              if render && i < bvh.nodes.len() {
                 all_bvh_nodes.push((bvh.nodes[i].bound.clone(), item.model_matrix));
-             }
-           }
-        }
-      });
+              }
+            }
+          }
+        },
+      );
     }
   }
   if !all_bvh_nodes.is_empty() {
-    let _ = device.render_bvh(cmd_buffer, &all_bvh_nodes, view_proj.into(), payload.presentation_engine);
+    let _ = device.render_bvh(
+      cmd_buffer,
+      &all_bvh_nodes,
+      view_proj.into(),
+      payload.presentation_engine,
+    );
   }
 
   // Calculate slide-in animation offset
@@ -343,26 +366,35 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
     let mut console_text = String::new();
     let max_lines = 12; // Further reduced to prevent any overlap
     let history_len = payload.packet.command_history.len();
-    let scroll = payload.packet.console_scroll_offset.min(history_len.saturating_sub(max_lines));
+    let scroll = payload
+      .packet
+      .console_scroll_offset
+      .min(history_len.saturating_sub(max_lines));
     let start_idx = history_len.saturating_sub(max_lines + scroll);
     let end_idx = history_len.saturating_sub(scroll);
-    
-    for cmd in payload.packet.command_history.iter().skip(start_idx).take(end_idx - start_idx) {
+
+    for cmd in payload
+      .packet
+      .command_history
+      .iter()
+      .skip(start_idx)
+      .take(end_idx - start_idx)
+    {
       console_text.push_str(cmd);
       console_text.push('\n');
     }
-    
+
     // Position the prompt at the very bottom, and start the text history well above it.
     let prompt_y = box_y + height - 0.08;
-    let text_start_y = box_y + 0.05; 
-    
+    let text_start_y = box_y + 0.05;
+
     let _ = device.render_text(
       cmd_buffer,
       &console_text,
       font_path,
       14.0, // Slightly smaller font to fit better
-      [0.8, 0.8, 0.8, 1.0], 
-      [-0.98, text_start_y], 
+      [0.8, 0.8, 0.8, 1.0],
+      [-0.98, text_start_y],
       payload.presentation_engine,
     );
 
@@ -375,13 +407,14 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
       &prompt_text,
       font_path,
       16.0,
-      [1.0, 1.0, 0.2, 1.0], 
-      [-0.98, prompt_y], 
+      [1.0, 1.0, 0.2, 1.0],
+      [-0.98, prompt_y],
       payload.presentation_engine,
     );
   }
 
-  device.end_render_pass(cmd_buffer)?;  device.submit_command_buffer(cmd_buffer)?;
+  device.end_render_pass(cmd_buffer)?;
+  device.submit_command_buffer(cmd_buffer, None)?;
 
   let present_status = device.present(
     payload.presentation_engine,

@@ -223,10 +223,16 @@ impl RenderPasses {
           bundle.discard(discard_pool, self.allocator, timeline);
         }
 
+        let final_layout = match swapchain {
+          PresentationState::Windowed(_) => vk::ImageLayout::PRESENT_SRC_KHR,
+          PresentationState::Windowless(_) => vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        };
+
         let render_pass = Self::create_color_depth_single_render_pass(
           &self.render_pass_device,
           color_format,
           depth_stencil_format,
+          final_layout,
         )
         .or_else(|e| {
           let _ = (&mut write_render_passes).remove(&RenderPassType::ColorDepthSingleSubpass);
@@ -353,6 +359,7 @@ impl RenderPasses {
     render_pass_device: &ash::khr::create_renderpass2::Device,
     color_format: vk::Format,
     depth_stencil_format: vk::Format,
+    final_color_layout: vk::ImageLayout,
   ) -> GpuResult<NonZeroHandle<vk::RenderPass>> {
     let attachments = [
       vk::AttachmentDescription2::default()
@@ -363,7 +370,7 @@ impl RenderPasses {
         .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
         .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
         .initial_layout(vk::ImageLayout::UNDEFINED)
-        .final_layout(vk::ImageLayout::PRESENT_SRC_KHR),
+        .final_layout(final_color_layout),
       vk::AttachmentDescription2::default()
         .format(depth_stencil_format)
         .samples(vk::SampleCountFlags::TYPE_1)

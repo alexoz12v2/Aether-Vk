@@ -8,7 +8,7 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace AetherVk.Logic.ViewModels;
 
-public partial class MeshViewerViewModel : ViewModelBase
+public partial class MeshViewerViewModel : TabItemViewModel
 {
     private readonly NativeRuntimeService _runtimeService;
     private CancellationTokenSource? _cts;
@@ -23,6 +23,7 @@ public partial class MeshViewerViewModel : ViewModelBase
     public event Action? OnFrameReady;
 
     public MeshViewerViewModel(string modelPath, string modelName, bool isLightTheme)
+        : base(modelName)
     {
         _runtimeService = new NativeRuntimeService();
         _isLightTheme = isLightTheme;
@@ -31,11 +32,16 @@ public partial class MeshViewerViewModel : ViewModelBase
 
     private async Task InitializeSceneAsync(string modelPath, string modelName)
     {
+        if (IsInitialized) return;
+
         await Task.Run(() =>
         {
-            try 
+            try
             {
-                _runtimeService.InitializeSimulationContext("Vulkan", Width, Height);
+                if (!_runtimeService.IsInitialized)
+                {
+                    _runtimeService.InitializeSimulationContext("Vulkan", Width, Height);
+                }
                 if (_isLightTheme)
                 {
                     _runtimeService.SetClearColor(1.0f, 1.0f, 1.0f, 1.0f);
@@ -50,13 +56,13 @@ public partial class MeshViewerViewModel : ViewModelBase
                 {
                     _runtimeService.SpawnModelInstance(modelId, modelName);
                 }
-            } 
-            catch (System.DllNotFoundException) 
+            }
+            catch (System.DllNotFoundException)
             {
                 // Ignored for testing without vulkan
             }
         });
-        
+
         IsInitialized = true;
         StartGameLoop();
     }
@@ -82,7 +88,8 @@ public partial class MeshViewerViewModel : ViewModelBase
                 {
                     lastTime = current;
                     
-                    _runtimeService.RenderTick();
+                    _runtimeService.SimulationTick();
+                    _ = _runtimeService.RenderTickAsync();
                     OnFrameReady?.Invoke();
                 }
                 else
@@ -101,6 +108,5 @@ public partial class MeshViewerViewModel : ViewModelBase
     public void Stop()
     {
         _cts?.Cancel();
-        _runtimeService.Dispose();
     }
 }
