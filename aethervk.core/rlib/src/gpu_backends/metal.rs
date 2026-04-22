@@ -20,6 +20,9 @@ use core::ffi;
 // Bring in the objc2 dependencies just to ensure they are used if we wanted to
 // (removed due to import errors)
 
+use alloc::sync::Arc;
+use spin::rwlock::RwLock;
+
 pub struct MetalRenderContext {}
 
 impl InitWithRuntime<Self> for MetalRenderContext {
@@ -384,7 +387,28 @@ impl RenderDevice for MetalRenderDevice {
     Ok(())
   }
 
-  fn submit_command_buffer(&self, _cmd_buffer: CommandBufferHandle) -> GpuResult<()> {
+  fn submit_command_buffer(
+    &self,
+    _cmd_buffer: CommandBufferHandle,
+    _task_id: Option<u64>,
+  ) -> GpuResult<()> {
     Ok(())
   }
+
+  fn wire_callbacks(
+    &self,
+    _pool: Arc<RwLock<aethervk_oshal_rlib::os::pool::ThreadPool>>,
+  ) -> GpuResult<()> {
+    Ok(())
+  }
+
+  fn is_task_completed(&self, _task_id: u64) -> GpuResult<bool> {
+    Ok(true)
+  }
+
+  fn create_task(&self) -> u64 {
+    0
+  }
+
+  fn fail_task(&self, _task_id: u64, _error: GpuError) {}
 }

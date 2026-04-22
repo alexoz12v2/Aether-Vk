@@ -113,12 +113,12 @@ public partial class Viewport3DViewModel
       }
       return;
     }
-      
+
     if (res.hit)
     {
       var outlineVm = ServiceLocator.Provider?.GetService(typeof(OutlineViewModel)) as OutlineViewModel;
       var entity = _runtimeService.GetEntityById(res.entityId);
-      
+
       if (entity != null)
       {
         if (outlineVm?.SelectedEntity?.Id == entity.Id)
@@ -161,6 +161,15 @@ public partial class Viewport3DViewModel
         }
       }
     }
+    else
+    {
+      // Deselect when clicking on empty space
+      var outlineVm = ServiceLocator.Provider?.GetService(typeof(OutlineViewModel)) as OutlineViewModel;
+      if (outlineVm != null)
+      {
+        outlineVm.SelectedEntity = null;
+      }
+    }
   }
 
   private void HandleMeasurementPoint(float x, float y, float z)
@@ -180,7 +189,7 @@ public partial class Viewport3DViewModel
         new[] { FirstMeasurementPointX, FirstMeasurementPointY, FirstMeasurementPointZ },
         new[] { x, y, z }
       );
-      
+
       HasFirstMeasurementPoint = false;
       IsMeasuringMode = false;
       ShowNoIntersectionFlyout = false;
@@ -254,17 +263,25 @@ public partial class Viewport3DViewModel
       async () =>
       {
         var sw = Stopwatch.StartNew();
-        TimeSpan lastTime = sw.Elapsed;
+        var lastTime = sw.Elapsed;
+        var accumulatedTime = TimeSpan.Zero;
+        var fixedTimeStep = TimeSpan.FromSeconds(1.0 / 60.0);
 
         while (!token.IsCancellationRequested)
         {
-          TimeSpan current = sw.Elapsed;
-          TimeSpan dt = current - lastTime;
+          var currentTime = sw.Elapsed;
+          var deltaTime = currentTime - lastTime;
+          lastTime = currentTime;
+          accumulatedTime += deltaTime;
 
-          // ~60 FPS Target (16.66ms)
-          if (dt.TotalMilliseconds >= 16.66 && IsInitialized)
+          if (IsInitialized)
           {
-            lastTime = current;
+            // Fixed Update: Simulation stepping
+            while (accumulatedTime >= fixedTimeStep)
+            {
+              _runtimeService.SimulationTick();
+              accumulatedTime -= fixedTimeStep;
+            }
 
             // Update camera
             ulong activeCam = _runtimeService.GetActiveCameraId();
@@ -273,17 +290,14 @@ public partial class Viewport3DViewModel
               _runtimeService.SetActiveCamera(activeCam);
             }
 
-            // Render Frame Sync
-            _runtimeService.RenderTickSync();
+            // Async Render
+            await _runtimeService.RenderTickAsync();
 
-            // Notify View to copy frame
             OnFrameReady?.Invoke();
           }
-          else
-          {
-            // Yield
-            await Task.Delay(1, token);
-          }
+
+          // Yield to prevent pegging the CPU, aiming for ~60 FPS render signal
+          await Task.Delay(1, token);
         }
       },
       token

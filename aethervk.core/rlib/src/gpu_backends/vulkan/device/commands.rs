@@ -1,4 +1,4 @@
-use core::ptr;
+use core::{fmt, ptr};
 
 use crate::{
   gpu::{CommandBufferHandle, GpuResourceHandle},
@@ -7,6 +7,7 @@ use crate::{
 };
 use aethervk_oshal_rlib::os::native::ThreadId;
 use alloc::{boxed::Box, collections::btree_map::BTreeMap};
+use core::fmt::{Formatter, Pointer};
 use ash::vk;
 
 // TODO: implement trait/function to hash some compile time string
@@ -19,6 +20,7 @@ impl From<CommandBufferHandle> for CommandBufferId {
   }
 }
 
+#[derive(Debug)]
 struct ThreadPools {
   recycled: SpscQueue<vk::CommandPool>,
   active: Option<vk::CommandPool>,
@@ -31,6 +33,20 @@ pub(super) struct CommandPools {
   registry: spin::RwLock<BTreeMap<ThreadId, Box<ThreadPools>>>,
   queue_family_index: u32,
   spsc_capacity: usize,
+}
+
+impl fmt::Debug for CommandPools {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    f.write_str("CommandPools")?;
+    f.debug_map()
+      .entries(self.registry.read().iter())
+      .finish()?;
+    f.write_str(&alloc::format!(
+      "queue_family_index: {}",
+      self.queue_family_index
+    ))?;
+    f.write_str(&alloc::format!("spsc_capacity: {}", self.spsc_capacity))
+  }
 }
 
 unsafe impl Sync for CommandPools {}

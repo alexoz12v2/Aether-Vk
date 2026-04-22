@@ -283,10 +283,13 @@ public static class NativeInterop
   public static extern void avkSimulationContext_setClearColor(IntPtr ctx, float r, float g, float b, float a);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_renderTick(IntPtr ctx);
+  public static extern void avkSimulationContext_simulationTick(IntPtr ctx);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_renderTickSync(IntPtr ctx);
+  public static extern ulong avkSimulationContext_renderTick(IntPtr ctx);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern int avkSimulationContext_getTaskStatus(IntPtr ctx, ulong taskId);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_resize(IntPtr ctx, uint width, uint height);

@@ -38,7 +38,7 @@ pub type EngineResult<T> = core::result::Result<T, EngineError>;
 
 // TODO: These will evolve as development progresses
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum GpuError {
   #[error("Invalid Input Argument")]
   InvalidArgument,

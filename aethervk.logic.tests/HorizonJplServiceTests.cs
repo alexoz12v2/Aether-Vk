@@ -16,7 +16,7 @@ public class HorizonJplServiceTests
     var service = new HorizonJplService(console, breadcrumb);
 
     await service.FetchCometsAsync("2000-01-01", "2020-01-01");
-    Assert.NotEmpty(service.CometsData);
+    Assert.True(service.CometsData.Count > 0, "FetchCometsAsync returned no comets for the given date range.");
 
     var comets = service.CometsData.Take(5).ToList();
 
@@ -27,11 +27,89 @@ public class HorizonJplServiceTests
       await service.FetchDataAsync(
           command: $"DES={spkId}; CAP",
           startTime: "2024-01-01",
-          stopTime: "2024-01-10",          stepSize: "1 d",
+          stopTime: "2024-01-10",
+          stepSize: "1 d",
           center: "500@399"
       );
       
-      Assert.NotEmpty(service.SessionData);
+      Assert.True(service.SessionData.Count > 0, $"FetchDataAsync returned no ephemeris data for SPK-ID: {spkId}");
     }
+  }
+
+  [Fact]
+  public void ParseText_WithInvalidContent_ReturnsEmptyCollections()
+  {
+    var console = new ConsoleService();
+    var breadcrumb = new BreadcrumbService();
+    var service = new HorizonJplService(console, breadcrumb);
+
+    // JPL sometimes returns an error message in plain text without $$SOE markers
+    string errorResponse = "Target body name not found";
+
+    service.ParseText(errorResponse);
+
+    Assert.Empty(service.Headers);
+    Assert.Empty(service.SessionData);
+  }
+
+  [Fact]
+  public void ParseCometsJson_CorrectlyParsesFieldsAndData()
+  {
+    var console = new ConsoleService();
+    var breadcrumb = new BreadcrumbService();
+    var service = new HorizonJplService(console, breadcrumb);
+
+    string mockJson = @"
+    {
+      ""fields"": [""full_name"", ""first_obs"", ""soln_date"", ""spkid""],
+      ""data"": [
+        [""C/2023 A1 (Tsuchinshan-ATLAS)"", ""2023-01-09"", ""2023-10-12"", ""1000001""],
+        [""12P/Pons-Brooks"", ""1812-07-21"", ""2024-04-21"", ""90000033""]
+      ]
+    }";
+
+    service.ParseCometsJson(mockJson);
+
+    Assert.Equal(4, service.CometsHeaders.Count);
+    Assert.Equal("full_name", service.CometsHeaders[0]);
+    Assert.Equal(2, service.CometsData.Count);
+    Assert.Equal("C/2023 A1 (Tsuchinshan-ATLAS)", service.CometsData[0][0]);
+    Assert.Equal("90000033", service.CometsData[1][3]);
+  }
+
+  [Fact]
+  public void ParseText_CorrectlyParsesEphemerisData()
+  {
+    var console = new ConsoleService();
+    var breadcrumb = new BreadcrumbService();
+    var service = new HorizonJplService(console, breadcrumb);
+
+    string mockResponse = @"
+*******************************************************************************
+JPL/HORIZONS                 12P/Pons-Brooks                 2026-Apr-21 10:50:52
+...
+$$SOE
+2024-Jan-01 00:00, 12 34 56.78, +12 34 56.7, 1.234, 5.678
+2024-Jan-02 00:00, 12 35 57.78, +12 35 57.7, 1.235, 5.679
+$$EOE
+*******************************************************************************
+";
+    // Mocking headers because they are usually 2 lines above SOE in a specific format
+    string mockResponseWithHeaders = @"
+Date__(UT)__HR:MN, R.A.__(ICRF)__, DEC__(ICRF)__, APmag, S-brt,
+*******************************************************************************
+$$SOE
+2024-Jan-01 00:00, 12 34 56.78, +12 34 56.7, 1.234, 5.678
+2024-Jan-02 00:00, 12 35 57.78, +12 35 57.7, 1.235, 5.679
+$$EOE
+";
+
+    service.ParseText(mockResponseWithHeaders);
+
+    Assert.NotEmpty(service.Headers);
+    Assert.Equal("Date__(UT)__HR:MN", service.Headers[0]);
+    Assert.Equal(2, service.SessionData.Count);
+    Assert.Equal("2024-Jan-01 00:00", service.SessionData[0][0]);
+    Assert.Equal("1.235", service.SessionData[1][3]);
   }
 }

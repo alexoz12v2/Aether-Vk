@@ -145,7 +145,7 @@ public partial class Viewport3DView : UserControl
     }
     else if (_isMiddleDragging)
     {
-      _viewModel?.RuntimeService.PanCursor(deltaX, deltaY);
+      _viewModel?.RuntimeService.PanCamera(deltaX, deltaY);
     }
 
     _lastPointerPos = currentPos;

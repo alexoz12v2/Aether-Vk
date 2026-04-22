@@ -1807,8 +1807,9 @@ impl ForwardMeshRenderResourceArchetype {
         device.end_command_buffer(command_buffer)?;
         let command_buffers = [command_buffer];
         let submits = [vk::SubmitInfo::default().command_buffers(&command_buffers)];
-        device.queue_submit(queue.handle, &submits, vk::Fence::null())?;
-        device.queue_wait_idle(queue.handle)?;
+        let fence = device.create_fence(&vk::FenceCreateInfo::default(), None)?;
+        device.locked_queue_submit(queue.handle, &submits, fence).map_err(GpuError::from)?;        device.wait_for_fences(&[fence], true, u64::MAX)?;
+        device.destroy_fence(fence, None);
       };
 
       image

@@ -233,3 +233,38 @@ mod pthread_pool {
 pub use windows_pool::ThreadPool;
 #[cfg(unix)]
 pub use pthread_pool::ThreadPool;
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use core::sync::atomic::{AtomicUsize, Ordering};
+  use alloc::sync::Arc;
+
+  struct TestWorkload {
+    counter: Arc<AtomicUsize>,
+  }
+
+  impl Workload for TestWorkload {
+    fn execute(&self) {
+      self.counter.fetch_add(1, Ordering::SeqCst);
+    }
+  }
+
+  #[test]
+  fn test_thread_pool_scatter_gather() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let mut pool = ThreadPool::new(4).expect("Failed to create thread pool");
+
+    let mut workloads: Vec<Box<dyn Workload>> = Vec::new();
+    for _ in 0..100 {
+      workloads.push(Box::new(TestWorkload {
+        counter: Arc::clone(&counter),
+      }));
+    }
+
+    pool.scatter(workloads).expect("Failed to scatter workloads");
+    pool.gather();
+
+    assert_eq!(counter.load(Ordering::SeqCst), 100);
+  }
+}
