@@ -38,9 +38,7 @@ fn main() {
   let additional_params = gpu::DeviceAdditionalParams::new();
 
   // must outlive render frontend
-  let thread_pool = Arc::new(RwLock::new(
-    aethervk_oshal_rlib::os::pool::ThreadPool::new(4).unwrap(),
-  ));
+  let thread_pool = Arc::new(aethervk_oshal_rlib::os::pool::ThreadPool::new(4).unwrap());
 
   {
     let render_frontend = Arc::new(RwLock::new(
@@ -59,8 +57,7 @@ fn main() {
             render_device_handle,
             &mut Arc::clone(&thread_pool) as *mut _ as *mut core::ffi::c_void,
             |device, data| {
-              let pool =
-                unsafe { &*(data as *mut Arc<RwLock<aethervk_oshal_rlib::os::pool::ThreadPool>>) };
+              let pool = unsafe { &*(data as *mut Arc<aethervk_oshal_rlib::os::pool::ThreadPool>) };
               device.wire_callbacks(Arc::clone(pool))
             },
           )

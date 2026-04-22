@@ -141,10 +141,10 @@ fn compute_comet_extras(
   mass_properties.inertia.xy = 0.0;
   mass_properties.inertia.xz = 0.0;
   mass_properties.inertia.yz = 0.0;
-  
+
   // Center of mass becomes (0,0,0) in the local frame since vertices are translated
   mass_properties.center_of_mass = [0.0, 0.0, 0.0];
-  
+
   // Calculate new principal axes correctly oriented.
   // Transform vertices into the new local coordinate system aligned with the principal axes.
   let mut local_vertices = vertices.to_vec();
@@ -154,7 +154,7 @@ fn compute_comet_extras(
     let vy = principal_axes.y.dot(v_world);
     let vz = principal_axes.z.dot(v_world);
     v.position = [vx, vy, vz];
-    
+
     let n_world = Vec3f32::from_components(v.normal[0], v.normal[1], v.normal[2]);
     let nx = principal_axes.x.dot(n_world);
     let ny = principal_axes.y.dot(n_world);
@@ -478,7 +478,7 @@ pub fn load_comet_from_gltf(path: &str, verbose: bool) -> Result<Comet, CometLoa
     oshal::log!("ERROR: GLTF Parse failed: {:?}", e);
     CometLoadError::GltfImportError(e)
   })?;
-  
+
   oshal::log!("Correctly parsed GLB");
 
   // Validations
@@ -660,7 +660,8 @@ pub fn load_comet_from_gltf(path: &str, verbose: bool) -> Result<Comet, CometLoa
   oshal::log!("--- GLTF load successful! ---");
 
   let mut mass_properties = calculate_mass_properties(&vertices, &indices, 1.0);
-  let (bvh, principal_axes, local_vertices) = compute_comet_extras(&vertices, &indices, &mut mass_properties);
+  let (bvh, principal_axes, local_vertices) =
+    compute_comet_extras(&vertices, &indices, &mut mass_properties);
 
   Ok(Comet {
     vertices: local_vertices,
@@ -675,6 +676,7 @@ pub fn load_comet_from_gltf(path: &str, verbose: bool) -> Result<Comet, CometLoa
   })
 }
 
+// TODO: inertia tensor for a sphere is a closed formula. See Computer Animation Book at appendix
 pub fn generate_uv_sphere(radius: f32, lat_segments: u32, lon_segments: u32) -> Comet {
   let mut vertices = Vec::new();
   let mut indices = Vec::new();
@@ -732,7 +734,8 @@ pub fn generate_uv_sphere(radius: f32, lat_segments: u32, lon_segments: u32) -> 
   }
 
   let mut mass_properties = calculate_mass_properties(&vertices, &indices, 1.0);
-  let (bvh, principal_axes, local_vertices) = compute_comet_extras(&vertices, &indices, &mut mass_properties);
+  let (bvh, principal_axes, local_vertices) =
+    compute_comet_extras(&vertices, &indices, &mut mass_properties);
 
   Comet {
     vertices: local_vertices,
@@ -869,6 +872,7 @@ impl Default for CometSpecializationConstants {
 mod tests {
   use super::*;
   use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+  use crate::simulation;
 
   #[test]
   fn test_triangle_properties() {
@@ -879,14 +883,14 @@ mod tests {
         Vec3f32::from_components(0.0, 1.0, 0.0),
       ],
     };
-    
+
     assert_eq!(t.area(), 0.5);
-    
+
     let center = t.mean_vector();
     assert!((center.x() - 0.3333333).abs() < 1e-6);
     assert!((center.y() - 0.3333333).abs() < 1e-6);
     assert_eq!(center.z(), 0.0);
-    
+
     let normal = t.normal_ccw_unnormalized();
     assert_eq!(normal.x(), 0.0);
     assert_eq!(normal.y(), 0.0);
@@ -896,20 +900,46 @@ mod tests {
   #[test]
   fn test_uv_sphere_generation() {
     let sphere = generate_uv_sphere(2.0, 10, 10);
-    
+
     // Check if the number of vertices and indices is correct
     assert_eq!(sphere.vertices.len(), (10 + 1) * (10 + 1));
     assert_eq!(sphere.indices.len(), 10 * 10 * 6);
-    
+
     // Check that the mass properties are reasonable
     assert!(sphere.mass_properties.mass > 0.0);
-    
+
     // Check that vertices are roughly distance 2.0 from origin
     for v in sphere.vertices.iter() {
       let pos = Vec3f32::from_components(v.position[0], v.position[1], v.position[2]);
       assert!((pos.length() - 2.0).abs() < 1e-5);
     }
   }
+
+  #[test]
+  fn test_comet_glb_loading_and_inertia_diagonalization() {
+    let assets_dir = {
+      let mut home_dir = std::env::current_exe().unwrap();
+      let mut iter: i32 = 0;
+      const MAX_ITER: i32 = 32;
+      while {
+        let d = home_dir.join("assets");
+        !d.is_dir() && iter < MAX_ITER
+      } {
+        home_dir.pop();
+        iter += 1;
+        assert!(home_dir.is_dir());
+      }
+      home_dir.join("assets")
+    };
+    let model_dir = assets_dir.join("Comet.glb");
+    assert!(model_dir.is_file());
+
+    let comet = load_comet_from_gltf(model_dir.to_str().unwrap(), false)
+        .expect("Failed to load comet");
+    let inertia = comet.mass_properties.inertia;
+    const THRESHOLD: f64 = 1e-6;
+    assert!(inertia.xy.abs() < THRESHOLD);
+    assert!(inertia.xz.abs() < THRESHOLD);
+    assert!(inertia.yz.abs() < THRESHOLD);
+  }
 }
-
-

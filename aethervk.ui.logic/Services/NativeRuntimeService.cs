@@ -187,50 +187,50 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       if (IsInitialized)
         return;
 
-    // Resolve absolute path to the published assets folder
-    var exePath = System.AppDomain.CurrentDomain.BaseDirectory;
+      // Resolve absolute path to the published assets folder
+      var exePath = System.AppDomain.CurrentDomain.BaseDirectory;
 
-    // Point Vulkan loader to our embedded MoltenVK and layers if they exist
-    var icdPath = System.IO.Path.Combine(exePath, "vulkan", "share", "vulkan", "icd.d",
-      "MoltenVK_icd.json");
-    if (System.IO.File.Exists(icdPath))
-    {
-      Environment.SetEnvironmentVariable("VK_DRIVER_FILES", icdPath);
-      Environment.SetEnvironmentVariable("VK_ICD_FILENAMES", icdPath);
-    }
+      // Point Vulkan loader to our embedded MoltenVK and layers if they exist
+      var icdPath = System.IO.Path.Combine(exePath, "vulkan", "share", "vulkan", "icd.d",
+        "MoltenVK_icd.json");
+      if (System.IO.File.Exists(icdPath))
+      {
+        Environment.SetEnvironmentVariable("VK_DRIVER_FILES", icdPath);
+        Environment.SetEnvironmentVariable("VK_ICD_FILENAMES", icdPath);
+      }
 
-    var layerPath =
-      System.IO.Path.Combine(exePath, "vulkan", "share", "vulkan", "explicit_layer.d");
-    if (System.IO.Directory.Exists(layerPath))
-    {
-      Environment.SetEnvironmentVariable("VK_LAYER_PATH", layerPath);
-    }
+      var layerPath =
+        System.IO.Path.Combine(exePath, "vulkan", "share", "vulkan", "explicit_layer.d");
+      if (System.IO.Directory.Exists(layerPath))
+      {
+        Environment.SetEnvironmentVariable("VK_LAYER_PATH", layerPath);
+      }
 
-    var assetPath = assetOverride ?? System.IO.Path.Combine(exePath, "assets");
-    NativeInterop.avkSimulationContext_setAssetPath(assetPath);
+      var assetPath = assetOverride ?? System.IO.Path.Combine(exePath, "assets");
+      NativeInterop.avkSimulationContext_setAssetPath(assetPath);
 
-    _simulationContext = NativeInterop.avkSimulationContext_startup(backend, width, height);
+      _simulationContext = NativeInterop.avkSimulationContext_startup(backend, width, height);
 
-    if (_simulationContext == IntPtr.Zero)
-    {
-      CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
-        new AetherVk.Logic.Messages.CriticalErrorMessage(
-          $"CRITICAL ERROR:\nThe '{backend}' simulation backend could not be initialized.\n\nThe application cannot run without the core simulation engine."
-        )
-      );
-      return;
-    }
+      if (_simulationContext == IntPtr.Zero)
+      {
+        CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+          new AetherVk.Logic.Messages.CriticalErrorMessage(
+            $"CRITICAL ERROR:\nThe '{backend}' simulation backend could not be initialized.\n\nThe application cannot run without the core simulation engine."
+          )
+        );
+        return;
+      }
 
-    IsInitialized = true;
+      IsInitialized = true;
 
-    if (ServiceLocator.DispatchToUI != null)
-    {
-      ServiceLocator.DispatchToUI(() => CreateScene());
-    }
-    else
-    {
-      CreateScene();
-    }
+      if (ServiceLocator.DispatchToUI != null)
+      {
+        ServiceLocator.DispatchToUI(() => CreateScene());
+      }
+      else
+      {
+        CreateScene();
+      }
     }
   }
 
@@ -353,48 +353,21 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
   public async Task RenderTickAsync()
   {
-    if (_simulationContext == IntPtr.Zero) 
-    {
-        System.Console.Error.WriteLine("[C#] RenderTickAsync: _simulationContext is null!");
-        return;
-    }
+    if (_simulationContext == IntPtr.Zero) return;
 
-    System.Console.Error.WriteLine("[C#] RenderTickAsync: calling native renderTick");
     ulong taskId = NativeInterop.avkSimulationContext_renderTick(_simulationContext);
-    System.Console.Error.WriteLine($"[C#] RenderTickAsync: native renderTick returned taskId={taskId}");
-    
     if (taskId == 0) return;
 
     await Task.Run(async () =>
     {
-      System.Console.Error.WriteLine($"[C#] RenderTickAsync: polling status for taskId={taskId}");
-      var start = DateTime.Now;
       while (true)
       {
         int status = NativeInterop.avkSimulationContext_getTaskStatus(_simulationContext, taskId);
-        if (status == 1) 
-        {
-            System.Console.Error.WriteLine($"[C#] RenderTickAsync: taskId={taskId} completed successfully in {(DateTime.Now - start).TotalMilliseconds}ms");
-            break; 
-        }
-        if (status == 2) 
-        {
-            System.Console.Error.WriteLine($"[C#] RenderTickAsync: taskId={taskId} failed!");
-            throw new Exception("GPU Task Failed");
-        }
-        if (status == -1) 
-        {
-            System.Console.Error.WriteLine($"[C#] RenderTickAsync: taskId={taskId} returned invalid context!");
-            throw new Exception("Invalid Simulation Context");
-        }
+        if (status == 1) break; // Success
+        if (status == 2) throw new Exception("GPU Task Failed");
+        if (status == -1) throw new Exception("Invalid Simulation Context");
 
-        if ((DateTime.Now - start).TotalSeconds > 10)
-        {
-            System.Console.Error.WriteLine($"[C#] RenderTickAsync: taskId={taskId} TIMEOUT after 10 seconds!");
-            throw new TimeoutException("GPU Task timed out");
-        }
-
-        await Task.Delay(10); // Poll every ~10ms
+        await Task.Delay(1); // Poll every ~1ms for faster response without pegging CPU
       }
     });
   }
@@ -1023,7 +996,9 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     {
       if (_simulationContext != IntPtr.Zero)
       {
-        ulong id = NativeInterop.avkSimulationContext_spawnProceduralSphere(_simulationContext, name, radius);
+        ulong id =
+          NativeInterop.avkSimulationContext_spawnProceduralSphere(_simulationContext, name,
+            radius);
         if (id > 0)
         {
           var entity = new Entity(id, name);
@@ -1041,10 +1016,12 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
           {
             RootEntities.Add(entity);
           }
+
           return id;
         }
       }
     }
+
     return 0;
   }
 

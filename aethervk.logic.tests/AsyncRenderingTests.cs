@@ -84,6 +84,8 @@ public class AsyncRenderingTests : IDisposable
         int topLeftIdx = 0;
         // Note: format might be BGRA or RGBA depending on backend. Vulkan windowless is usually RGBA8 or BGRA8.
         // We'll check if it's green-ish.
+        // TODO: correct: generate sky makes so that this is not a clear color. Either add support for simulation_api and device.rs
+        // TODO: or correct the expected color
         Assert.True(pixels[topLeftIdx + 1] > 200, "Top-left pixel should be green (clear color).");
 
         // Center pixel (should have the sphere)

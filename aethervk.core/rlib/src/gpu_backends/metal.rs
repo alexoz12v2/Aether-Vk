@@ -396,8 +396,8 @@ impl RenderDevice for MetalRenderDevice {
   }
 
   fn wire_callbacks(
-    &self,
-    _pool: Arc<RwLock<aethervk_oshal_rlib::os::pool::ThreadPool>>,
+      &self,
+      pool: Arc<aethervk_oshal_rlib::os::pool::ThreadPool>,
   ) -> GpuResult<()> {
     Ok(())
   }
