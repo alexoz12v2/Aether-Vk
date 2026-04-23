@@ -35,7 +35,7 @@ pub(self) const MAX_DEVICES: usize = 4;
 pub fn new_render_frontend(
   ty: RenderBackendId,
   params: &'_ RuntimeParams,
-) -> EngineResult<RenderFrontend<'_>> {
+) -> EngineResult<RenderFrontend> {
   match ty {
     VULKAN_RENDER_BACKEND => {
       vulkan::VulkanRenderContext::init_with_runtime(params).map(|back| back.into())

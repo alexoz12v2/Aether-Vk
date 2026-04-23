@@ -62,7 +62,9 @@ public partial class ConsoleService : ObservableObject, IDisposable
 
   public void Clear()
   {
-    while (_messageQueue.TryDequeue(out _)) { }
+    while (_messageQueue.TryDequeue(out _))
+    {
+    }
 
     if (ServiceLocator.DispatchToUI != null)
     {

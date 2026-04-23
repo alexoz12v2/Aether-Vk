@@ -1,4 +1,4 @@
-use aethervk_core_rlib::gpu::OpaqueNativeHandleInfo;
+use aethervk_core_rlib::gpu::{OpaqueNativeHandleInfo, RenderDeviceHandle, RenderFrontend};
 
 #[cfg(target_os = "macos")]
 use objc2_app_kit::NSView;
@@ -26,7 +26,7 @@ pub enum AppEvent {
 }
 
 #[cfg(target_os = "macos")]
-unsafe fn setup_metal_layer(
+pub unsafe fn setup_metal_layer(
   window: &Window,
   device: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>,
 ) -> objc2::rc::Retained<objc2_quartz_core::CAMetalLayer> {
@@ -167,7 +167,7 @@ pub fn extract_native_handles(
 /// We need to intercept `WM_ENTERSIZEMOVE` and `WM_EXITSIZEMOVE` so that we can pause and resume
 /// rendering during live resize on Windows.
 #[cfg(windows)]
-fn setup_windows_resize_hook(
+pub fn setup_windows_resize_hook(
   window: &Window,
   proxy_ptr: std::ptr::NonNull<EventLoopProxy<AppEvent>>,
 ) {
@@ -217,9 +217,12 @@ use objc2::{ClassType, DeclaredClass, declare_class, msg_send, msg_send_id, rc::
 use objc2_foundation::{ns_string, NSNotification, NSNotificationCenter, NSObject};
 #[cfg(target_os = "macos")]
 use std::cell::Cell;
+use std::path::PathBuf;
+use aethervk_core_rlib::gpu;
+use aethervk_core_rlib::types::GpuResult;
 
 #[cfg(target_os = "macos")]
-struct ResizeObserverIvars {
+pub struct ResizeObserverIvars {
   proxy_ptr: Cell<std::ptr::NonNull<EventLoopProxy<AppEvent>>>,
 }
 
@@ -227,7 +230,7 @@ struct ResizeObserverIvars {
 objc2::define_class!(
   #[unsafe(super(NSObject))]
   #[ivars = ResizeObserverIvars]
-  struct ResizeObserver;
+  pub struct ResizeObserver;
 
   impl ResizeObserver {
     #[unsafe(method(windowWillStartLiveResize:))]
@@ -248,7 +251,7 @@ objc2::define_class!(
 
 #[cfg(target_os = "macos")]
 impl ResizeObserver {
-  fn new(proxy_ptr: std::ptr::NonNull<EventLoopProxy<AppEvent>>) -> Retained<Self> {
+  pub fn new(proxy_ptr: std::ptr::NonNull<EventLoopProxy<AppEvent>>) -> Retained<Self> {
     let this: Retained<Self> = unsafe {
       let some = msg_send![Self::class(), alloc];
       msg_send![some, init]
@@ -259,7 +262,7 @@ impl ResizeObserver {
 }
 
 #[cfg(target_os = "macos")]
-fn setup_macos_resize_hook(
+pub fn setup_macos_resize_hook(
   window: &Window,
   proxy_ptr: std::ptr::NonNull<EventLoopProxy<AppEvent>>,
 ) {
@@ -300,4 +303,57 @@ pub fn setup_resize_hook(window: &Window, proxy_ptr: std::ptr::NonNull<EventLoop
   {
     // todo!();
   }
+}
+
+pub fn cycle_get_asset_path_from_exe(use_args: bool) -> PathBuf {
+  let asset_dir = {
+    let mut args = std::env::args();
+    if use_args && args.len() > 1 {
+      let _ = args.next().unwrap();
+      std::path::PathBuf::from(args.next().unwrap())
+    } else {
+      let mut path = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_owned();
+      while !path.join("assets").exists() {
+        path = path.parent().unwrap().to_owned();
+      }
+      path.join("assets")
+    }
+  };
+  assert!(asset_dir.is_dir());
+  let mut guard = aethervk_core_rlib::gpu::ASSET_DIR.write();
+  *guard = Some(asset_dir.to_str().unwrap().to_string());
+  drop(guard);
+  asset_dir
+}
+
+pub fn get_handle_and_window_info(
+  render_frontend: &RenderFrontend,
+  render_device_handle: RenderDeviceHandle,
+  window: &Window,
+) -> (OpaqueNativeHandleInfo, WindowPlatformData) {
+  let params: WindowExtractHandlesParams;
+  #[cfg(not(target_os = "macos"))]
+  {
+    params = WindowExtractHandlesParams {};
+  }
+  #[cfg(target_os = "macos")]
+  {
+    let mtl_device_id = render_frontend
+      .with_device(render_device_handle, |device| {
+        let mtl_device_id = device
+          .get_native_prop(gpu::NativeGpuProperty::VulkanMetalDeviceId)
+          .unwrap();
+        let dev_ptr =
+          mtl_device_id as *mut objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>;
+        let metal_device = unsafe { objc2::rc::Retained::retain(dev_ptr).unwrap() };
+        Ok(metal_device)
+      })
+      .unwrap();
+    params = WindowExtractHandlesParams::new_macos(mtl_device_id);
+  }
+  extract_native_handles(&window, &params)
 }

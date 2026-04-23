@@ -179,7 +179,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     string backend = "Vulkan",
     uint width = 800,
     uint height = 600,
-    string assetOverride = null
+    string assetOverride = null,
+    bool populateDefault = true
   )
   {
     lock (_staticInitLock)
@@ -191,6 +192,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       var exePath = System.AppDomain.CurrentDomain.BaseDirectory;
 
       // Point Vulkan loader to our embedded MoltenVK and layers if they exist
+      // TODO: This part up toll set of VK_LAYER_PATH is for MacOS only
       var icdPath = System.IO.Path.Combine(exePath, "vulkan", "share", "vulkan", "icd.d",
         "MoltenVK_icd.json");
       if (System.IO.File.Exists(icdPath))
@@ -225,11 +227,11 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
       if (ServiceLocator.DispatchToUI != null)
       {
-        ServiceLocator.DispatchToUI(() => CreateScene());
+        ServiceLocator.DispatchToUI(() => CreateScene(populateDefault));
       }
       else
       {
-        CreateScene();
+        CreateScene(populateDefault);
       }
     }
   }
@@ -360,12 +362,12 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
     await Task.Run(async () =>
     {
-      while (true)
+      while (_simulationContext != IntPtr.Zero)
       {
         int status = NativeInterop.avkSimulationContext_getTaskStatus(_simulationContext, taskId);
         if (status == 1) break; // Success
         if (status == 2) throw new Exception("GPU Task Failed");
-        if (status == -1) throw new Exception("Invalid Simulation Context");
+        if (status == -1) break; // Context destroyed
 
         await Task.Delay(1); // Poll every ~1ms for faster response without pegging CPU
       }
@@ -378,8 +380,11 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       return;
 
     StopSimulation();
-    NativeInterop.avkSimulationContext_shutdown(_simulationContext);
-    _simulationContext = IntPtr.Zero;
+    lock (_nativeLock)
+    {
+      NativeInterop.avkSimulationContext_shutdown(_simulationContext);
+      _simulationContext = IntPtr.Zero;
+    }
     IsInitialized = false;
     RootEntities.Clear();
     _entityMap.Clear();
@@ -530,6 +535,13 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       {
         NativeInterop.avkSimulationContext_unloadModel(_simulationContext, modelId);
       }
+    }
+
+    // Cleanup UI mirroring
+    var toRemove = _entityMap.Values.Where(e => e.Name.StartsWith($"model_{modelId}") || e.Name == "model").ToList();
+    foreach (var entity in toRemove)
+    {
+       RemoveEntity(entity.Id);
     }
   }
 
@@ -769,76 +781,75 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return fallbackId;
   }
 
-  public void CreateScene()
+  public void CreateScene(bool populateDefault = true)
   {
     RootEntities.Clear();
     _entityMap.Clear();
 
     if (_simulationContext != IntPtr.Zero)
     {
-      // If initialized, the native layer already creates these. We must query them.
-      // Right now we don't have an API to query the scene graph, so we simulate the mirror tree exactly as it is spawned natively
-      var root = new Entity(1, "root");
-      RootEntities.Add(root);
-      _entityMap[1] = root;
-      WireEntityComponents(root);
+      if (populateDefault)
+      {
+        NativeInterop.avkSimulationContext_createDefaultScene(_simulationContext);
+      }
 
-      var camera = new Entity(2, "camera");
-      WireEntityComponents(camera);
-      camera.Components.Add(new TransformComponent { PosY = -400.0f });
-      camera.Components.Add(new CameraComponent { IsActiveCamera = true });
-      root.Children.Add(camera);
-      _entityMap[2] = camera;
+      uint count = NativeInterop.avkSimulationContext_getEntityCount(_simulationContext);
+      if (count > 0)
+      {
+        IntPtr idsPtr = Marshal.AllocHGlobal((int)count * sizeof(long));
+        NativeInterop.avkSimulationContext_getEntityIds(_simulationContext, idsPtr, count);
 
-      var cursor = new Entity(3, "cursor");
-      WireEntityComponents(cursor);
-      cursor.Components.Add(new TransformComponent());
-      cursor.Components.Add(new CursorComponent());
-      root.Children.Add(cursor);
-      _entityMap[3] = cursor;
+        long[] ids = new long[count];
+        Marshal.Copy(idsPtr, ids, 0, (int)count);
+        Marshal.FreeHGlobal(idsPtr);
 
-      var sun = new Entity(4, "sun");
-      WireEntityComponents(sun);
-      sun.Components.Add(new TransformComponent());
-      sun.Components.Add(new SunComponent());
-      root.Children.Add(sun);
-      _entityMap[4] = sun;
+        IntPtr namePtr = Marshal.AllocHGlobal(256);
+        foreach (long signedId in ids)
+        {
+          ulong id = (ulong)signedId;
+          string name = "Entity";
+          if (NativeInterop.avkSimulationContext_getEntityName(_simulationContext, id, namePtr, 256))
+          {
+            name = Marshal.PtrToStringAnsi(namePtr) ?? name;
+          }
 
-      var sunCore = new Entity(5, "sun_core");
-      WireEntityComponents(sunCore);
-      sunCore.Components.Add(new TransformComponent());
-      sunCore.Components.Add(new CometComponent());
-      sun.Children.Add(sunCore);
-      _entityMap[5] = sunCore;
+          var entity = new Entity(id, name);
+          _entityMap[id] = entity;
+          WireEntityComponents(entity);
+        }
+        Marshal.FreeHGlobal(namePtr);
 
-      var grid = new Entity(6, "grid");
-      WireEntityComponents(grid);
-      grid.Components.Add(new GridComponent());
-      root.Children.Add(grid);
-      _entityMap[6] = grid;
-    }
-    else
-    {
-      // 1. Create Root
-      var root = SpawnEntity("root");
-      RootEntities.Add(root);
+        // Build hierarchy & default components based on FFI entity type heuristics
+        foreach (long signedId in ids)
+        {
+          ulong id = (ulong)signedId;
+          var entity = _entityMap[id];
+          ulong parentId = NativeInterop.avkSimulationContext_getEntityParent(_simulationContext, id);
+          if (parentId != 0 && _entityMap.TryGetValue(parentId, out var parent))
+          {
+            parent.Children.Add(entity);
+          }
+          else
+          {
+            RootEntities.Add(entity);
+          }
 
-      // 2. Create Sun
-      var sun = SpawnEntity("sun", root);
-      sun.Components.Add(new TransformComponent());
-      sun.Components.Add(new SunComponent());
+          // Fetch basic transform logic
+          entity.Components.Add(new TransformComponent());
 
-      // 3. Create Grid
-      var grid = SpawnEntity("grid", root);
-      grid.Components.Add(new GridComponent());
+          // Add UI mirrored components by FFI inspection heuristic
+          // TODO: No. Do not use heuristic. Add a function which queries the list of components present, and we decide which to spawn
+          if (entity.Name == "camera") entity.Components.Add(new CameraComponent());
+          if (entity.Name == "cursor") entity.Components.Add(new CursorComponent());
+          if (entity.Name == "sun") entity.Components.Add(new SunComponent());
+          // TODO: remove sun core. nucleus of sun is included in sun entity itself
+          if (entity.Name == "sun_core") entity.Components.Add(new CometComponent());
+          if (entity.Name == "grid") entity.Components.Add(new GridComponent());
+          if (entity.Name.Contains("measurement", StringComparison.OrdinalIgnoreCase)) entity.Components.Add(new MeasurementComponent());
+        }
 
-      // 4. Create Cursor
-      var cursor = SpawnEntity("cursor", root);
-      cursor.Components.Add(new TransformComponent());
-      cursor.Components.Add(new CursorComponent());
-
-      // 5. Create Camera
-      CreateCamera(root);
+        SyncEntities(); // Immediately populate real positions
+      }
     }
   }
 
@@ -1063,6 +1074,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   public Entity CreateMeasurement(string name, float[] p1, float[] p2)
   {
     var entity = SpawnEntity(name, RootEntities.FirstOrDefault());
+    entity.Components.Add(new MeasurementComponent());
+
     if (_simulationContext != IntPtr.Zero)
     {
       NativeInterop.avkSimulationContext_addMeasurementComponent(
@@ -1122,6 +1135,14 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   public Entity? GetEntityById(ulong id)
   {
     return _entityMap.TryGetValue(id, out var entity) ? entity : null;
+  }
+
+  public void SetEntityName(ulong id, string name)
+  {
+    if (_simulationContext != IntPtr.Zero)
+    {
+      NativeInterop.avkSimulationContext_setEntityName(_simulationContext, id, name);
+    }
   }
 
   public void RemoveEntity(ulong id)

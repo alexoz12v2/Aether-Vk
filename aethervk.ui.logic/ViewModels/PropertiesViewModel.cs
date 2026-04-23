@@ -83,4 +83,21 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
     var breadcrumb = ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
     breadcrumb?.ShowMessageAsync("Add Jet Mode", "Hold Shift and Right Click on the comet to add a jet at the intersection point.");
   }
+
+  [RelayCommand]
+  private void DeleteSelectedEntity()
+  {
+    if (SelectedEntity != null && SelectedEntity.IsMeasurement)
+    {
+      var runtimeService = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+      var name = SelectedEntity.Name;
+      runtimeService?.RemoveEntity(SelectedEntity.Id);
+      
+      var breadcrumb = ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
+      breadcrumb?.ShowMessageAsync("Entity Deleted", $"Deleted measurement: {name}");
+      
+      // Deselect
+      WeakReferenceMessenger.Default.Send(new EntitySelectedMessage(null));
+    }
+  }
 }

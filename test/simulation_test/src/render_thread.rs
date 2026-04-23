@@ -8,7 +8,7 @@ use aethervk_core_rlib::{
 };
 use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
 use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use std::sync::{Arc, RwLock, mpsc};
+use std::sync::{Arc, mpsc};
 use aethervk_core_rlib::gpu::{ScopedCommandBuffer, ScopedRenderPass};
 
 pub struct RenderItem {
@@ -42,7 +42,7 @@ struct RenderPayloadData<'a> {
 pub fn start_render_thread(
   render_rx: mpsc::Receiver<Option<RenderPacket>>,
   scene_shared: Arc<Scene>,
-  render_frontend: Arc<RwLock<aethervk_core_rlib::gpu::RenderFrontend<'static>>>,
+  render_frontend: gpu::RenderFrontend,
   render_device_handle: gpu::RenderDeviceHandle,
   presentation_engine: gpu::PresentationEngineHandle,
   cursor_entity: EntityId,
@@ -61,25 +61,17 @@ pub fn start_render_thread(
         assets_dir: &assets_dir,
       };
 
-      let res = render_frontend.write().unwrap().take_and(|context| {
-        context
-          .deref_device_and(
-            render_device_handle,
-            &mut c_payload as *mut _ as *mut core::ffi::c_void,
-            render_payload_ffi,
-          )
-          .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
+      let res = render_frontend.with_device(render_device_handle, |device| {
+        render_payload_ffi(device, &mut c_payload)
       });
-      if let Some(Err(e)) = res {
+      if let Err(e) = res {
         println!("Render error: {:?}", e);
       }
     }
   })
 }
 
-fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -> GpuResult<()> {
-  let payload = unsafe { &mut *(data as *mut RenderPayloadData) };
-
+fn render_payload_ffi(device: &dyn RenderDevice, payload: &mut RenderPayloadData) -> GpuResult<()> {
   device.start_frame()?;
   let acquire_result = device.acquire_next_image(payload.presentation_engine)?;
   if acquire_result.status.needs_resize() {
@@ -267,27 +259,14 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
     },
   )?;
 
-  let quad_tree = gpu::ViewportQuadTree {
-    root: gpu::viewport::ViewportNode {
-      viewport: root_viewport,
-      scissor: gpu::Rect2D {
-        offset: [0, 0],
-        extent,
-      },
-      program: gpu::viewport::DrawingProgram::Viewport3D {
-        camera_entity: None,
-      },
-      children: None,
-    },
-  };
-  device.render_frame(cmd_buffer, &quad_tree, &render_scene)?;
+  device.render_frame(cmd_buffer, &render_scene)?;
 
   let mut planets = Vec::new();
   if let Some(sun_transform) = payload.scene.global_transform(payload.sun_entity) {
     planets.push((sun_transform.position, 0.06, [1.0, 1.0, 0.2, 1.0]));
   }
   use aethervk_oshal_rlib::math::matrix::Matrix;
-  use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
+  use aethervk_oshal_rlib::math::vector::{Vector4};
   for item in &payload.packet.render_items {
     let col = item.model_matrix.column(3).unwrap();
     let pos =
@@ -351,7 +330,7 @@ fn render_payload_ffi(device: &dyn RenderDevice, data: *mut core::ffi::c_void) -
     );
   }
 
-  // Calculate slide-in animation offset
+  // TODO use Calculate slide-in animation offset
   let slide_y = -1.0 + (payload.packet.console_open_progress * 1.0); // Ranges from -1.0 (hidden above screen) to 0.0 (fully visible)
   let base_y = 0.18 + slide_y;
 

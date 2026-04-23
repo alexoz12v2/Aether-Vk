@@ -26,6 +26,8 @@ pub(super) struct TaskEntry {
   pub(super) error: spin::RwLock<Option<GpuError>>,
 }
 
+// TODO add feature verbose_logging
+
 const TASK_STATUS_PENDING: u32 = 0;
 const TASK_STATUS_SUCCESS: u32 = 1;
 const TASK_STATUS_FAILED: u32 = 2;
@@ -3079,7 +3081,6 @@ impl<'a> RenderDevice for Device<'a> {
   fn render_frame(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
-    _viewports: &crate::gpu::viewport::ViewportQuadTree,
     render_scene: &crate::gpu::frame::RenderScene,
   ) -> GpuResult<()> {
     use aethervk_oshal_rlib::math::matrix::{Matrix4, MatrixVectorMul, SquareMatrix};
@@ -3096,7 +3097,7 @@ impl<'a> RenderDevice for Device<'a> {
     let proj = camera.1.projection;
     let view_proj = proj * view;
 
-    oshal::log!("[RenderThread] render_frame | self.render_sky");
+    // oshal::log!("[RenderThread] render_frame | self.render_sky");
     if let Some((sky_entity, sky_comp)) = &render_scene.sky {
       let sky_view = <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::from_columns(
                 aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(1.0, 0.0, 0.0, 0.0),
@@ -3125,7 +3126,7 @@ impl<'a> RenderDevice for Device<'a> {
         aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 0.0)
       });
 
-    oshal::log!("[RenderThread] render_frame | self.render_sun");
+    // oshal::log!("[RenderThread] render_frame | self.render_sun");
     if let Some((sun_entity, sun_comp, sun_transform)) = &render_scene.sun {
       self.render_sun(
         cmd_buffer,
@@ -3137,12 +3138,12 @@ impl<'a> RenderDevice for Device<'a> {
       )?;
     }
 
-    oshal::log!(
-      "[RenderThread] render_frame | draw_call | {}",
-      render_scene.draw_calls.len()
-    );
+    // oshal::log!(
+    //   "[RenderThread] render_frame | draw_call | {}",
+    //   render_scene.draw_calls.len()
+    // );
     for draw_call in &render_scene.draw_calls {
-      oshal::log!("[RenderThread] render_frame | draw_call");
+      // oshal::log!("[RenderThread] render_frame | draw_call");
       crate::gpu::frame::do_draw_call(
         self,
         view_proj,
@@ -3154,7 +3155,7 @@ impl<'a> RenderDevice for Device<'a> {
       )?;
     }
 
-    oshal::log!("[RenderThread] render_frame | draw_call grid");
+    // oshal::log!("[RenderThread] render_frame | draw_call grid");
     if let Some((grid_entity, grid_comp)) = &render_scene.grid {
       self.render_grid(
         cmd_buffer,
@@ -3167,18 +3168,18 @@ impl<'a> RenderDevice for Device<'a> {
       )?;
     }
 
-    oshal::log!(
-      "[RenderThread] render_frame | cursor_calls | {}",
-      render_scene.cursor_calls.len()
-    );
+    // oshal::log!(
+    //   "[RenderThread] render_frame | cursor_calls | {}",
+    //   render_scene.cursor_calls.len()
+    // );
     for cursor_call in &render_scene.cursor_calls {
       crate::gpu::frame::do_draw_cursor(self, view, view_proj, cmd_buffer, cursor_call)?;
     }
 
-    oshal::log!(
-      "[RenderThread] render_frame | marker_calls | {}",
-      render_scene.marker_calls.len()
-    );
+    // oshal::log!(
+    //   "[RenderThread] render_frame | marker_calls | {}",
+    //   render_scene.marker_calls.len()
+    // );
     for marker_call in &render_scene.marker_calls {
       crate::gpu::frame::do_draw_marker(self, view, view_proj, cmd_buffer, marker_call)?;
     }
@@ -3257,90 +3258,6 @@ impl<'a> RenderDevice for Device<'a> {
       .insert(handle, spin::RwLock::new(presentation_state));
 
     Ok(handle)
-  }
-
-  fn check_billboard_texture_id(&self, texture_id: u64) -> GpuResult<()> {
-    let res = self.res.read();
-    let billboard_resources = res.billboard_resources.read();
-    if billboard_resources.len() > texture_id as usize {
-      Ok(())
-    } else {
-      Err(GpuError::InvalidState)
-    }
-  }
-
-  fn add_billboard_texture(&self, texture: &Texture) -> GpuResult<()> {
-    let graphics_queue = self.queues.get_graphics_queue();
-
-    let mut res = self.res.write();
-    let timeline = res.get_timeline_semaphore_cached_value();
-    let mut billboard_resources = res.billboard_resources.write();
-    let billboard_render_archetype = res.billboard_render_archetype.read();
-
-    // Create throwaway command buffer
-    let command_pool = {
-      let create_info = vk::CommandPoolCreateInfo::default()
-        .queue_family_index(graphics_queue.family_index)
-        .flags(vk::CommandPoolCreateFlags::TRANSIENT);
-      unsafe { self.device.create_command_pool(&create_info, None) }
-    }?;
-
-    let command_buffer = {
-      let alloc_info = vk::CommandBufferAllocateInfo::default()
-        .command_pool(command_pool)
-        .level(vk::CommandBufferLevel::PRIMARY)
-        .command_buffer_count(1);
-      unsafe { self.device.allocate_command_buffers(&alloc_info) }?[0]
-    };
-
-    // start command buffer
-    let begin_info =
-      vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-    unsafe {
-      self
-        .device
-        .begin_command_buffer(command_buffer, &begin_info)?
-    };
-
-    let image = {
-      let billboard_render_archetype_ref = billboard_render_archetype.as_ref().unwrap();
-      billboard_render_archetype_ref.add_texture(
-        &self.device,
-        &res.allocator.allocator,
-        command_buffer,
-        &res.discard_pool,
-        timeline,
-        texture,
-        res.linear_sampler,
-        billboard_resources.len() as _,
-        &alloc::format!("BillBoard_{}", billboard_resources.len()),
-      )?
-    };
-
-    billboard_resources.push(image);
-
-    // TODO: refactor this together with command buffer creation into a utility function called
-    // "one_time_gpu_upload"
-    unsafe {
-      self.device.end_command_buffer(command_buffer)?;
-      let command_buffers = [command_buffer];
-      let submits = [vk::SubmitInfo::default().command_buffers(&command_buffers)];
-      let fence = unsafe {
-        self
-          .device
-          .create_fence(&vk::FenceCreateInfo::default(), None)
-      }?;
-      self
-        .device
-        .locked_queue_submit(graphics_queue.handle, &submits, fence)
-        .map_err(GpuError::from)?;
-      unsafe {
-        self.device.wait_for_fences(&[fence], true, u64::MAX)?;
-        self.device.destroy_fence(fence, None);
-      }
-    };
-
-    Ok(())
   }
 
   fn resize_presentation_engine(
@@ -4415,6 +4332,90 @@ impl<'a> RenderDevice for Device<'a> {
     }
     // ready to discard it if necessary (on resize)
     data.bound_pipeline = Some(pipeline);
+
+    Ok(())
+  }
+
+  fn check_billboard_texture_id(&self, texture_id: u64) -> GpuResult<()> {
+    let res = self.res.read();
+    let billboard_resources = res.billboard_resources.read();
+    if billboard_resources.len() > texture_id as usize {
+      Ok(())
+    } else {
+      Err(GpuError::InvalidState)
+    }
+  }
+
+  fn add_billboard_texture(&self, texture: &Texture) -> GpuResult<()> {
+    let graphics_queue = self.queues.get_graphics_queue();
+
+    let mut res = self.res.write();
+    let timeline = res.get_timeline_semaphore_cached_value();
+    let mut billboard_resources = res.billboard_resources.write();
+    let billboard_render_archetype = res.billboard_render_archetype.read();
+
+    // Create throwaway command buffer
+    let command_pool = {
+      let create_info = vk::CommandPoolCreateInfo::default()
+        .queue_family_index(graphics_queue.family_index)
+        .flags(vk::CommandPoolCreateFlags::TRANSIENT);
+      unsafe { self.device.create_command_pool(&create_info, None) }
+    }?;
+
+    let command_buffer = {
+      let alloc_info = vk::CommandBufferAllocateInfo::default()
+        .command_pool(command_pool)
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .command_buffer_count(1);
+      unsafe { self.device.allocate_command_buffers(&alloc_info) }?[0]
+    };
+
+    // start command buffer
+    let begin_info =
+      vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+    unsafe {
+      self
+        .device
+        .begin_command_buffer(command_buffer, &begin_info)?
+    };
+
+    let image = {
+      let billboard_render_archetype_ref = billboard_render_archetype.as_ref().unwrap();
+      billboard_render_archetype_ref.add_texture(
+        &self.device,
+        &res.allocator.allocator,
+        command_buffer,
+        &res.discard_pool,
+        timeline,
+        texture,
+        res.linear_sampler,
+        billboard_resources.len() as _,
+        &alloc::format!("BillBoard_{}", billboard_resources.len()),
+      )?
+    };
+
+    billboard_resources.push(image);
+
+    // TODO: refactor this together with command buffer creation into a utility function called
+    // "one_time_gpu_upload"
+    unsafe {
+      self.device.end_command_buffer(command_buffer)?;
+      let command_buffers = [command_buffer];
+      let submits = [vk::SubmitInfo::default().command_buffers(&command_buffers)];
+      let fence = unsafe {
+        self
+          .device
+          .create_fence(&vk::FenceCreateInfo::default(), None)
+      }?;
+      self
+        .device
+        .locked_queue_submit(graphics_queue.handle, &submits, fence)
+        .map_err(GpuError::from)?;
+      unsafe {
+        self.device.wait_for_fences(&[fence], true, u64::MAX)?;
+        self.device.destroy_fence(fence, None);
+      }
+    };
 
     Ok(())
   }
@@ -6049,7 +6050,7 @@ impl<'a> RenderDevice for Device<'a> {
     let res_guard = self.res.read();
     let registry_guard = res_guard.task_registry.read();
     if let Some(entry) = registry_guard.get(&task_id) {
-      oshal::log!("{:?}", entry.as_ref());
+      // oshal::log!("{:?}", entry.as_ref());
       let status = entry.status.load(Ordering::Acquire);
       let target = entry.target_value.load(Ordering::Acquire);
       if status == TASK_STATUS_SUCCESS {

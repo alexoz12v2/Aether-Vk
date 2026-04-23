@@ -40,7 +40,7 @@ public partial class MeshViewerViewModel : TabItemViewModel
             {
                 if (!_runtimeService.IsInitialized)
                 {
-                    _runtimeService.InitializeSimulationContext("Vulkan", Width, Height);
+                    _runtimeService.InitializeSimulationContext("Vulkan", Width, Height, null, false);
                 }
                 if (_isLightTheme)
                 {
@@ -56,6 +56,9 @@ public partial class MeshViewerViewModel : TabItemViewModel
                 {
                     _runtimeService.SpawnModelInstance(modelId, modelName);
                 }
+                
+                // Ensure camera is active for Mesh Viewer inputs to work
+                _runtimeService.SetActiveCamera(2); // ID 2 is created by CreateScene as "camera"
             }
             catch (System.DllNotFoundException)
             {
@@ -79,7 +82,7 @@ public partial class MeshViewerViewModel : TabItemViewModel
         // Simulation Task i | Before | Render Task i
         // Simulation Task i | Before | Simulation Task i + 1
         // Render Task i | Before | Render Task i + 1
-        Task.Run(() =>
+        Task.Run(async () =>
         {
             var sw = Stopwatch.StartNew();
             TimeSpan lastTime = sw.Elapsed;
@@ -94,12 +97,12 @@ public partial class MeshViewerViewModel : TabItemViewModel
                     lastTime = current;
 
                     _runtimeService.SimulationTick();
-                    _ = _runtimeService.RenderTickAsync();
+                    await _runtimeService.RenderTickAsync();
                     OnFrameReady?.Invoke();
                 }
                 else
                 {
-                    Thread.Sleep(1);
+                    await Task.Delay(1);
                 }
             }
         }, token);
@@ -113,5 +116,6 @@ public partial class MeshViewerViewModel : TabItemViewModel
     public void Stop()
     {
         _cts?.Cancel();
+        _runtimeService.ShutdownSimulation();
     }
 }

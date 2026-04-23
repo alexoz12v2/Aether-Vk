@@ -14,6 +14,21 @@ public static class NativeInterop
   public static extern IntPtr avkGetAvailableRenderBackends(out uint count);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern uint avkSimulationContext_getEntityCount(IntPtr ctx);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_getEntityIds(IntPtr ctx, IntPtr outIds, uint maxCount);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_getEntityName(IntPtr ctx, ulong entity, IntPtr outName, uint maxLen);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern ulong avkSimulationContext_getEntityParent(IntPtr ctx, ulong entity);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern ulong avkSimulationContext_createDefaultScene(IntPtr ctx);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern IntPtr avkGetAvailableKernels(out uint count);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -33,6 +48,9 @@ public static class NativeInterop
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_spawnEntity(IntPtr ctx, string name);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_setEntityName(IntPtr ctx, ulong entity, [MarshalAs(UnmanagedType.LPStr)] string name);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_removeEntity(IntPtr ctx, ulong entity);

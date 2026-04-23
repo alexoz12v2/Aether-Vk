@@ -1,8 +1,3 @@
-use std::fmt::format;
-use anise::errors::AlmanacResult;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::Vector3;
-use aethervk_oshal_rlib::os::files::MappedFile;
 // Add this line
 use crate::constants;
 
@@ -59,4 +54,3 @@ pub fn get_planet_radius(id: i32, assets_dir: &std::path::Path) -> f32 {
   }
 }
 
-pub fn nothing() {}

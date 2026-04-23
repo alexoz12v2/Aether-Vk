@@ -279,7 +279,8 @@ public partial class Viewport3DViewModel
             // Fixed Update: Simulation stepping
             while (accumulatedTime >= fixedTimeStep)
             {
-              _runtimeService.SimulationTick();
+              // TODO: still to be implemented
+              // _runtimeService.SimulationTick();
               accumulatedTime -= fixedTimeStep;
             }
 

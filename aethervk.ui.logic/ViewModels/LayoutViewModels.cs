@@ -34,17 +34,13 @@ public abstract class LayoutNodeViewModelBase(SplitNodeViewModel? parent) : View
 /// </summary>
 public partial class SplitNodeViewModel : LayoutNodeViewModelBase
 {
-  [ObservableProperty]
-  private LayoutNodeViewModelBase _firstChild;
+  [ObservableProperty] private LayoutNodeViewModelBase _firstChild;
 
-  [ObservableProperty]
-  private LayoutNodeViewModelBase _secondChild;
+  [ObservableProperty] private LayoutNodeViewModelBase _secondChild;
 
-  [ObservableProperty]
-  private SplitOrientation _orientation;
+  [ObservableProperty] private SplitOrientation _orientation;
 
-  [ObservableProperty]
-  private double _splitRatio;
+  [ObservableProperty] private double _splitRatio;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
   public SplitNodeViewModel(
@@ -67,15 +63,14 @@ public partial class SplitNodeViewModel : LayoutNodeViewModelBase
 /// <summary>
 /// Represents a "box" or leaf node that actually holds tabs
 /// </summary>
-public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase, IRecipient<EntitySelectedMessage>
+public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase,
+  IRecipient<EntitySelectedMessage>
 {
   public ObservableCollection<TabItemViewModel> Tabs { get; } = [];
 
-  [ObservableProperty]
-  private TabItemViewModel? _selectedTab;
+  [ObservableProperty] private TabItemViewModel? _selectedTab;
 
-  [ObservableProperty]
-  private bool _hasTabs;
+  [ObservableProperty] private bool _hasTabs;
 
   public TabGroupNodeViewModel(TabItemViewModel defaultTab, SplitNodeViewModel? parent = null)
     : base(parent)
@@ -133,6 +128,7 @@ public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase, IRecipient
       return;
 
     TabItemViewModel? newTab = null;
+    // TODO BAD. This inhibits persistence. Introduce a service which registers live tabs
     switch (tabType)
     {
       case "UITestPanel":
@@ -153,12 +149,14 @@ public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase, IRecipient
           newTab = new HorizonJplViewModel(horizonService);
         break;
       case "Outline":
-        var outlineVm = ServiceLocator.Provider?.GetService(typeof(OutlineViewModel)) as OutlineViewModel;
+        var outlineVm =
+          ServiceLocator.Provider?.GetService(typeof(OutlineViewModel)) as OutlineViewModel;
         if (outlineVm != null)
           newTab = outlineVm;
         break;
       case "Properties":
-        var propertiesVm = ServiceLocator.Provider?.GetService(typeof(PropertiesViewModel)) as PropertiesViewModel;
+        var propertiesVm =
+          ServiceLocator.Provider?.GetService(typeof(PropertiesViewModel)) as PropertiesViewModel;
         if (propertiesVm != null)
           newTab = propertiesVm;
         break;
@@ -192,6 +190,7 @@ public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase, IRecipient
     }
   }
 
+  // TODO Remove all these stupid commands and leave just one which receives the view model and does proper dependency injection
   [RelayCommand]
   private void AddNewTab()
   {
@@ -235,17 +234,20 @@ public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase, IRecipient
     {
       Tabs.Add(newTab);
     }
+
     if (newTab != null) SelectedTab = newTab;
   }
 
   [RelayCommand]
   private void AddNewPropertiesTab()
   {
-    var newTab = ServiceLocator.Provider?.GetService(typeof(PropertiesViewModel)) as PropertiesViewModel;
+    var newTab =
+      ServiceLocator.Provider?.GetService(typeof(PropertiesViewModel)) as PropertiesViewModel;
     if (newTab != null && !Tabs.Contains(newTab))
     {
       Tabs.Add(newTab);
     }
+
     if (newTab != null) SelectedTab = newTab;
   }
 
@@ -294,14 +296,11 @@ public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase, IRecipient
 /// </summary>
 public partial class TabItemViewModel(string title) : ViewModelBase
 {
-  [ObservableProperty]
-  private string _title = title;
+  [ObservableProperty] private string _title = title;
 
-  [ObservableProperty]
-  private string? _icon;
+  [ObservableProperty] private string? _icon;
 
-  [ObservableProperty]
-  private bool _canClose = true;
+  [ObservableProperty] private bool _canClose = true;
 }
 
 /// <summary>
@@ -313,8 +312,7 @@ public partial class DockingManagerViewModel
     IRecipient<TabDragTaskMessage>,
     IRecipient<CoalesceGroupMessage>
 {
-  [ObservableProperty]
-  private LayoutNodeViewModelBase _rootNode;
+  [ObservableProperty] private LayoutNodeViewModelBase _rootNode;
 
   public DockingManagerViewModel(LayoutNodeViewModelBase? rootNode = null)
     : base()
@@ -322,7 +320,7 @@ public partial class DockingManagerViewModel
     WeakReferenceMessenger.Default.Register<TabDroppedMessage>(this);
     WeakReferenceMessenger.Default.Register<TabDragTaskMessage>(this);
     WeakReferenceMessenger.Default.Register<CoalesceGroupMessage>(this);
-    
+
     _rootNode = rootNode ?? CreateDefaultLayout();
   }
 
@@ -330,23 +328,31 @@ public partial class DockingManagerViewModel
   {
     // Default layout: Viewport3D on top, Console and others on bottom
     var viewportTab = new Viewport3DViewModel(
-      ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService 
-      ?? new NativeRuntimeService()
+      (ServiceLocator.Provider!.GetService(typeof(NativeRuntimeService))! as NativeRuntimeService)!
     );
     var viewportGroup = new TabGroupNodeViewModel(viewportTab);
 
     var consoleTab = new ConsoleViewModel(
-      ServiceLocator.Provider?.GetService(typeof(ConsoleService)) as ConsoleService 
-      ?? new ConsoleService()
+      (ServiceLocator.Provider.GetService(typeof(ConsoleService))! as ConsoleService)!
     );
     var bottomGroup = new TabGroupNodeViewModel(consoleTab);
-    bottomGroup.Tabs.Add(new DebugUiViewModel());
 
     var split = new SplitNodeViewModel(viewportGroup, bottomGroup, SplitOrientation.Vertical, 0.7);
     viewportGroup.Parent = split;
     bottomGroup.Parent = split;
-    
-    return split;
+
+    var outlineTab =
+      new OutlineViewModel(
+        (ServiceLocator.Provider.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService)
+        !);
+    var propertiesTab = new PropertiesViewModel();
+    var rightGroup = new TabGroupNodeViewModel(outlineTab);
+    // TODO When I try to move this tab below, the left tab gets nuked. Fix that
+    rightGroup.Tabs.Add(propertiesTab);
+    // TODO split ratio doesn't work
+    var halfSplit = new SplitNodeViewModel(split, rightGroup, SplitOrientation.Horizontal, 0.7);
+
+    return halfSplit;
   }
 
   // --- Track your Task safely from within the ViewModel ---
@@ -389,6 +395,7 @@ public partial class DockingManagerViewModel
       }
       else
         SplitNodeAndInsertTab(targetNode, tabToInsert, zone);
+
       return;
     }
 

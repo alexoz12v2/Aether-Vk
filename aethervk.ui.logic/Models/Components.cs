@@ -87,7 +87,6 @@ public partial class GridComponent : ObservableObject, IComponent
   [ObservableProperty]
   private bool _isVisible = true;
 }
-
 public partial class SunComponent : ObservableObject, IComponent
 {
   public string Name => "Sun";
@@ -95,10 +94,16 @@ public partial class SunComponent : ObservableObject, IComponent
   public float PositionX { get; } = 0.0f;
   public float PositionY { get; } = 0.0f;
   public float PositionZ { get; } = 0.0f;
-  public float Temperature { get; } = 5778.0f;
+
+  public float Temperature { get; } = 5778.0f; // K
 
   [ObservableProperty]
-  private bool _showBoundingBox;
+  private bool _showBoundingBox = false;
+}
+
+public partial class MeasurementComponent : ObservableObject, IComponent
+{
+  public string Name => "Measurement";
 }
 
 public partial class PlanetComponent : ObservableObject, IComponent

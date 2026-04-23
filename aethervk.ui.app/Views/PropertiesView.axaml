@@ -6,11 +6,18 @@
              x:DataType="vm:PropertiesViewModel"
              x:Class="AetherVk.Views.PropertiesView">
     <Grid RowDefinitions="Auto, *">
-        <TextBlock Grid.Row="0" Text="{Binding SelectedEntity.Name, StringFormat='Properties - {0}'}" 
-                   FontWeight="Bold" Margin="8" />
-        
-        <ScrollViewer Grid.Row="1" Margin="4">
-            <ItemsControl ItemsSource="{Binding SelectedEntity.Components}">
+        <Grid Grid.Row="0" Margin="8">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="Properties -" FontWeight="Bold" VerticalAlignment="Center" />
+                <TextBox Text="{Binding SelectedEntity.Name}" FontWeight="Bold" VerticalAlignment="Center" MinWidth="150" />
+            </StackPanel>
+            <Button HorizontalAlignment="Right" Content="Delete Entity" 
+                    Command="{Binding DeleteSelectedEntityCommand}" 
+                    IsVisible="{Binding SelectedEntity.IsMeasurement}" 
+                    Classes="accent" />
+        </Grid>
+
+        <ScrollViewer Grid.Row="1" Margin="4">            <ItemsControl ItemsSource="{Binding SelectedEntity.Components}">
                 <ItemsControl.DataTemplates>
                     
                     <!-- Transform Component -->
