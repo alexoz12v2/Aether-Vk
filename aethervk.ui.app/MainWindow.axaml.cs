@@ -165,8 +165,11 @@ public partial class MainWindow : Window
         {
           if (DataContext is MainWindowViewModel vm)
           {
-            var fileName = System.IO.Path.GetFileName(filePath);
-            vm.ImportedModels.Add(new ImportedModelItem(modelId, fileName, filePath));
+            if (!vm.ImportedModels.Any(m => m.Id == modelId))
+            {
+              var fileName = System.IO.Path.GetFileName(filePath);
+              vm.ImportedModels.Add(new ImportedModelItem(modelId, fileName, filePath));
+            }
           }
         }
       }

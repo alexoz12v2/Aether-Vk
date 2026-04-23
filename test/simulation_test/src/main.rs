@@ -2,7 +2,6 @@ pub mod constants;
 mod logic_thread;
 mod render_thread;
 pub mod utils;
-mod windowing;
 
 use aethervk_core_rlib::{
   gpu::{self},
@@ -10,7 +9,7 @@ use aethervk_core_rlib::{
     CameraComponent, CursorComponent, GridComponent, PhysicalMeshComponent, Scene, SkyComponent,
     SunComponent, TransformComponent,
   },
-  simulation,
+  simulation, types,
   types::RuntimeParams,
 };
 use aethervk_oshal_rlib::math::{
@@ -36,6 +35,8 @@ use winit::{
 use aethervk_oshal_rlib::math::vector::Vector;
 use logic_thread::{start_logic_thread, LogicCommand};
 use render_thread::{RenderItem, RenderPacket, start_render_thread};
+use test_utils as windowing;
+use test_utils::{cycle_get_asset_path_from_exe, get_handle_and_window_info};
 use windowing::{AppEvent, WindowExtractHandlesParams, extract_native_handles, setup_resize_hook};
 
 struct AppState {
@@ -62,16 +63,6 @@ impl Drop for AppState {
   }
 }
 
-struct RenderFrontendDropTracker(Arc<RwLock<aethervk_core_rlib::gpu::RenderFrontend<'static>>>);
-impl Drop for RenderFrontendDropTracker {
-  fn drop(&mut self) {
-    println!(
-      "Dropping RenderFrontend wrapper in main (strong count: {})",
-      Arc::strong_count(&self.0)
-    );
-  }
-}
-
 impl simulation::Pausable for AppState {
   fn is_paused(&self) -> bool {
     self.is_paused
@@ -94,30 +85,7 @@ fn main() {
     let _ = std::io::stdin().read(&mut [0u8]);
   }));
 
-  let assets_dir = {
-    let mut args = std::env::args();
-    if args.len() > 1 {
-      let _ = args.next().unwrap();
-      std::path::PathBuf::from(args.next().unwrap())
-    } else {
-      let mut home_dir = std::env::current_exe().unwrap();
-      let mut iter: i32 = 0;
-      const MAX_ITER: i32 = 32;
-      while {
-        let d = home_dir.join("assets");
-        !d.is_dir() && iter < MAX_ITER
-      } {
-        home_dir.pop();
-        iter += 1;
-        assert!(home_dir.is_dir());
-      }
-      home_dir.join("assets")
-    }
-  };
-
-  let mut guard = aethervk_core_rlib::gpu::ASSET_DIR.write();
-  *guard = Some(assets_dir.to_str().unwrap().to_string());
-  drop(guard);
+  let assets_dir = cycle_get_asset_path_from_exe(true);
 
   let mut event_loop_builder = EventLoopBuilder::<AppEvent>::with_user_event();
   // Disable default macOS menu. This disables default macOS bindings (so that we can customize interception of Super + Q)
@@ -137,56 +105,21 @@ fn main() {
     .unwrap();
   setup_resize_hook(&window, proxy_ptr);
 
-  let runtime_params = Box::leak(Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-  }));
-  let render_frontend = Arc::new(RwLock::new(
-    gpu::new_render_frontend(gpu::VULKAN_RENDER_BACKEND, runtime_params).unwrap(),
-  ));
+  let render_frontend = {
+    let runtime_params = Box::new(RuntimeParams {
+      render_backend_params: FnvIndexMap::new(),
+    });
+    gpu::new_render_frontend(gpu::VULKAN_RENDER_BACKEND, &runtime_params).unwrap()
+  };
 
   let additional_params = gpu::DeviceAdditionalParams::new();
   let render_device_handle = render_frontend
     .write()
-    .unwrap()
-    .take_mut_and(|context| Ok(context.init_device(0, &additional_params)?))
-    .unwrap()
+    .init_device(0, &additional_params)
     .unwrap();
 
-  let params: WindowExtractHandlesParams;
-  #[cfg(not(target_os = "macos"))]
-  {
-    params = WindowExtractHandlesParams {};
-  }
-  #[cfg(target_os = "macos")]
-  {
-    let mtl_device_id = render_frontend
-      .read()
-      .unwrap()
-      .take_and(|context| {
-        let mut mtl_device_id = core::ptr::null::<core::ffi::c_void>();
-        context.deref_device_and(
-          render_device_handle,
-          core::ptr::from_mut(&mut mtl_device_id) as *mut _,
-          |device, ptr_dev_id| {
-            let ptr = ptr_dev_id as *mut *const core::ffi::c_void;
-            unsafe {
-              *ptr = device
-                .get_native_prop(gpu::NativeGpuProperty::VulkanMetalDeviceId)
-                .unwrap();
-            };
-            Ok(())
-          },
-        );
-        let dev_ptr =
-          mtl_device_id as *mut objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>;
-        let metal_device = unsafe { objc2::rc::Retained::retain(dev_ptr).unwrap() };
-        Ok(metal_device)
-      })
-      .unwrap()
-      .unwrap();
-    params = WindowExtractHandlesParams::new_macos(mtl_device_id);
-  }
-  let (native_handles, window_info) = extract_native_handles(&window, &params);
+  let (native_handles, window_info) =
+    get_handle_and_window_info(&render_frontend, render_device_handle, &window);
 
   let presentation_engine = {
     let params = gpu::PresentationEngineParams {
@@ -197,48 +130,9 @@ fn main() {
       window_info: native_handles,
     };
     render_frontend
-      .write()
-      .unwrap()
-      .take_and(|context| {
-        use aethervk_core_rlib::types::GpuError;
-
-        let mut handle_result: aethervk_core_rlib::types::GpuResult<gpu::PresentationEngineHandle> =
-          Err(GpuError::InvalidState);
-        let mut closure_data = (&params, &mut handle_result);
-
-        let closure = |device: &dyn gpu::RenderDevice, data: *mut core::ffi::c_void| {
-          type ClosureData<'a> = (
-            &'a gpu::PresentationEngineParams,
-            &'a mut aethervk_core_rlib::types::GpuResult<gpu::PresentationEngineHandle>,
-          );
-
-          let data_ptr = data as *mut ClosureData;
-          let (params_ref, handle_result) = unsafe { &mut *data_ptr };
-          let pe_result = device.create_presentation_engine(*params_ref);
-          if let Ok(pe) = pe_result {
-            device
-              .init_archetypes(pe)
-              .expect("Failed to initialize archetypes");
-          }
-          **handle_result = pe_result;
-
-          device
-            .generate_sky()
-            .expect("Failed to generate background sky map!");
-
-          Ok(())
-        };
-
-        context
-          .deref_device_and(
-            render_device_handle,
-            &mut closure_data as *mut _ as *mut core::ffi::c_void,
-            closure,
-          )
-          .unwrap()?;
-        Ok(handle_result?)
+      .with_device(render_device_handle, |device| {
+        create_presentation_engine_and_init_archetypes(device, &params)
       })
-      .unwrap()
       .unwrap()
   };
   println!(
@@ -534,14 +428,12 @@ fn main() {
     current_command: String::new(),
   };
 
-  let _render_frontend_tracker = RenderFrontendDropTracker(Arc::clone(&render_frontend));
-
   // --- Start Render Thread ---
   let (render_tx, render_rx) = mpsc::sync_channel::<Option<RenderPacket>>(1);
   let render_thread_handle = start_render_thread(
     render_rx,
     Arc::clone(&scene_shared),
-    Arc::clone(&render_frontend),
+    render_frontend,
     render_device_handle,
     presentation_engine,
     cursor_entity,
@@ -995,4 +887,14 @@ fn main() {
   let _ = render_thread_handle.join();
   let _ = logic_thread_handle.join();
   println!("Threads joined. Exiting main().");
+}
+
+fn create_presentation_engine_and_init_archetypes(
+  device: &dyn gpu::RenderDevice,
+  params: &gpu::PresentationEngineParams,
+) -> types::GpuResult<gpu::PresentationEngineHandle> {
+  let pe = device.create_presentation_engine(params)?;
+  device.init_archetypes(pe)?;
+  device.generate_sky()?;
+  Ok(pe)
 }

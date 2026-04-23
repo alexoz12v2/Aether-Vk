@@ -19,10 +19,15 @@ use windows::{
   Win32::Foundation::HANDLE,
   Win32::System::Threading::{GetCurrentProcess, TerminateProcess},
 };
+use crate::os::debug;
 
 // --------------- Centralized Panic Handler Implementation ---------
 #[inline]
 pub fn panic_handler_impl() -> ! {
+  #[cfg(debug_assertions)]
+  {
+    debug::print_stacktrace();
+  }
   #[cfg(windows)]
   {
     // TODO: on debug_assertions, use WinDbg to print stacktrace

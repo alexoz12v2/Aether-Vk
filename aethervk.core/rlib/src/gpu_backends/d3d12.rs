@@ -55,7 +55,6 @@ impl RenderDevice for D3d12RenderDevice {
   fn render_frame(
     &self,
     _cmd_buffer: CommandBufferHandle,
-    _viewports: &ViewportQuadTree,
     _render_scene: &RenderScene,
   ) -> GpuResult<()> {
     unimplemented!()

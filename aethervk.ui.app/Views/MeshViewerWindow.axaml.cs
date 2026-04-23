@@ -55,17 +55,23 @@ public partial class MeshViewerWindow : Window
     if (_bitmap == null || _viewModel == null)
       return;
 
-    _lastFrameTime = DateTime.Now;
-
-    using (var frame = _bitmap.Lock())
+    Dispatcher.UIThread.Post(() => 
     {
-      _viewModel.CopyFrameToBuffer(
-        frame.Address,
-        (nuint)(_viewModel.Width * _viewModel.Height * 4)
-      );
-    }
+      if (_bitmap == null || _viewModel == null)
+        return;
 
-    Dispatcher.UIThread.Post(() => RenderTargetImage.InvalidateVisual());
+      _lastFrameTime = DateTime.Now;
+
+      using (var frame = _bitmap.Lock())
+      {
+        _viewModel.CopyFrameToBuffer(
+          frame.Address,
+          (nuint)(_viewModel.Width * _viewModel.Height * 4)
+        );
+      }
+
+      RenderTargetImage.InvalidateVisual();
+    });
   }
 
   private void OnPointerPressed(object? sender, PointerPressedEventArgs e)

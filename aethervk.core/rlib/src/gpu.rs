@@ -214,7 +214,6 @@ pub trait RenderDevice: Send + Sync {
   fn render_frame(
     &self,
     cmd_buffer: CommandBufferHandle,
-    viewports: &crate::gpu::viewport::ViewportQuadTree,
     render_scene: &crate::gpu::frame::RenderScene,
   ) -> GpuResult<()>;
 
@@ -451,17 +450,14 @@ pub trait RenderDevice: Send + Sync {
     task_id: Option<u64>,
   ) -> GpuResult<()>;
 
-  fn wire_callbacks(
-    &self,
-    pool: Arc<aethervk_oshal_rlib::os::pool::ThreadPool>,
-  ) -> GpuResult<()>;
+  fn wire_callbacks(&self, pool: Arc<aethervk_oshal_rlib::os::pool::ThreadPool>) -> GpuResult<()>;
 
   fn is_task_completed(&self, task_id: u64) -> GpuResult<bool>;
 
   fn create_task(&self) -> u64;
 
   fn fail_task(&self, task_id: u64, error: GpuError);
-  
+
   fn success_task(&self, task_id: u64);
 }
 
@@ -559,17 +555,79 @@ pub trait RenderContext: Send + Sync {
 
 // NOTE: This is a box like type, so we don't need to box it when returning it to cdylib,
 // we can instead use the ManualDrop mechanism
-pub struct RenderFrontend<'a> {
-  backend: spin::RwLock<Box<dyn RenderContext + 'a>>,
+pub struct RenderFrontend {
+  backend: Arc<spin::RwLock<dyn RenderContext + 'static>>,
+}
+impl core::ops::Deref for RenderFrontend {
+  type Target = Arc<spin::RwLock<dyn RenderContext + 'static>>;
+
+  fn deref(&self) -> &Self::Target {
+    &self.backend
+  }
 }
 
-impl<'a> RenderFrontend<'a> {
+unsafe impl Sync for RenderFrontend {}
+unsafe impl Send for RenderFrontend {}
+
+impl RenderFrontend {
+  /// Executes a closure with the specified render device safely.
+  /// We use a trampoline to pass a safe Rust closure through the C-style
+  /// `deref_device_and` `*mut c_void` parameter.
+  pub fn with_device<F, R>(&self, device_id: RenderDeviceHandle, f: F) -> GpuResult<R>
+  where
+    F: FnOnce(&dyn RenderDevice) -> GpuResult<R>,
+  {
+    // 1. Prepare storage for our generic result since `deref_device_and`
+    // strictly expects the callback to return `GpuResult<()>`.
+    let mut result: Option<GpuResult<R>> = None;
+
+    // 2. Bundle the closure and the result destination together.
+    let mut payload = (Some(f), &mut result);
+    let p_user_data = &mut payload as *mut _ as *mut core::ffi::c_void;
+
+    // 3. Define the C-compatible trampoline function.
+    fn trampoline<F, R>(
+      dev: &dyn RenderDevice,
+      p_user_data: *mut core::ffi::c_void,
+    ) -> GpuResult<()>
+    where
+      F: FnOnce(&dyn RenderDevice) -> GpuResult<R>,
+    {
+      // Cast the void pointer back to our known payload type
+      let payload_ptr = p_user_data as *mut (Option<F>, &mut Option<GpuResult<R>>);
+
+      // Unsafe block is required to dereference the raw pointer, but it's
+      // sound here because the payload lives in the parent stack frame.
+      let payload = unsafe { &mut *payload_ptr };
+
+      // Take the closure out of the Option so we can consume it (FnOnce)
+      let closure = payload.0.take().expect("Closure called multiple times");
+
+      // Execute the closure and store the actual result
+      *payload.1 = Some(closure(dev));
+
+      // Return a dummy success to satisfy the `fn(...) -> GpuResult<()>` signature
+      Ok(())
+    }
+
+    // 4. Lock the backend and execute the trampoline
+    let backend_guard = self.backend.read();
+    let call_result = backend_guard.deref_device_and(device_id, p_user_data, trampoline::<F, R>);
+
+    // 5. If the device was found and the callback executed, return our captured result.
+    // Otherwise, return None (device not found) or propagate a backend internal error.
+    match call_result {
+      Some(Ok(())) => unsafe { result.unwrap_unchecked() },
+      Some(Err(e)) => Err(e),
+      None => Err(GpuError::DeviceLost),
+    }
+  }
   pub fn take_and<T>(
     &self,
     f: impl FnOnce(&dyn RenderContext) -> EngineResult<T>,
   ) -> Option<EngineResult<T>> {
     match self.backend.try_read() {
-      Some(guard) => Some(f(guard.as_ref())),
+      Some(guard) => Some(f(&*guard)),
       None => None,
     }
   }
@@ -579,20 +637,20 @@ impl<'a> RenderFrontend<'a> {
     f: impl FnOnce(&mut dyn RenderContext) -> EngineResult<T>,
   ) -> Option<EngineResult<T>> {
     match self.backend.try_write() {
-      Some(mut guard) => Some(f(guard.as_mut())),
+      Some(mut guard) => Some(f(&mut *guard)),
       None => None,
     }
   }
 }
 
 // Boxing mechanism used by factory method in `gpu_backends` `new_render_frontend`
-impl<'a, T> From<T> for RenderFrontend<'a>
+impl<T> From<T> for RenderFrontend
 where
-  T: RenderContext + 'a,
+  T: RenderContext + 'static,
 {
   fn from(value: T) -> Self {
     RenderFrontend {
-      backend: spin::RwLock::new(Box::new(value)),
+      backend: Arc::new(spin::RwLock::new(value)),
     }
   }
 }

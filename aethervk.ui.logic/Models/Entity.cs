@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Messaging;
 
@@ -38,12 +39,18 @@ public partial class Entity : ObservableObject
   public ObservableCollection<IComponent> Components { get; } = new();
 
   public bool IsRoot => Name == "root" || Id == 1;
-  public bool IsMeasurement => Name.StartsWith("Measurement");
+  public bool IsMeasurement => Components.Any(c => c is MeasurementComponent);
 
   public Entity(ulong id, string name)
   {
     Id = id;
     _name = name;
+  }
+
+  partial void OnNameChanged(string value)
+  {
+    var runtimeService = Services.ServiceLocator.Provider?.GetService(typeof(Services.NativeRuntimeService)) as Services.NativeRuntimeService;
+    runtimeService?.SetEntityName(Id, value);
   }
 
   partial void OnIsVisibleChanged(bool value)

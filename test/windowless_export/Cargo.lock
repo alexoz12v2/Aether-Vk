@@ -520,15 +520,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "core2"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b49ba7ef1ad6107f8824dbe97de947cbaac53c44e7f9756a1fba0d37c1eec505"
-dependencies = [
- "memchr",
-]
-
-[[package]]
 name = "crc32fast"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -984,10 +975,10 @@ name = "gltf"
 version = "1.4.0"
 dependencies = [
  "byteorder",
- "core2",
  "gltf-json",
  "lazy_static",
  "libm",
+ "no_std_io2",
  "serde_json",
 ]
 
@@ -1005,8 +996,8 @@ dependencies = [
 name = "gltf-json"
 version = "1.4.0"
 dependencies = [
- "core2",
  "gltf-derive",
+ "no_std_io2",
  "serde",
  "serde_derive",
  "serde_json",

@@ -90,7 +90,6 @@ impl RenderDevice for MetalRenderDevice {
   fn render_frame(
     &self,
     _cmd_buffer: CommandBufferHandle,
-    _viewports: &crate::gpu::viewport::ViewportQuadTree,
     _render_scene: &crate::gpu::frame::RenderScene,
   ) -> GpuResult<()> {
     Ok(())

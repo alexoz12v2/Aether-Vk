@@ -364,23 +364,7 @@ fn main() {
                 )
                 .unwrap();
 
-              let quad_tree = gpu::ViewportQuadTree {
-                root: gpu::viewport::ViewportNode {
-                  viewport: root_viewport,
-                  scissor: gpu::Rect2D {
-                    offset: [0, 0],
-                    extent,
-                  },
-                  program: gpu::viewport::DrawingProgram::Viewport3D {
-                    camera_entity: Some(payload.camera_entity),
-                  },
-                  children: None,
-                },
-              };
-
-              device
-                .render_frame(cmd_buffer, &quad_tree, &render_scene)
-                .unwrap();
+              device.render_frame(cmd_buffer, &render_scene).unwrap();
               device.end_render_pass(cmd_buffer).unwrap();
 
               let task_id = device.create_task();

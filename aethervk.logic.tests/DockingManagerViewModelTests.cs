@@ -1,23 +1,57 @@
-﻿using System.Linq;
-using AetherVk.Logic.Messages;
+﻿using AetherVk.Logic.Messages;
+using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
 using Xunit;
+using Moq;
 
 namespace AetherVk.Logic.Tests;
 
-public class DockingManagerViewModelTests
+// Put this in a non-parallel collection to prevent static state race conditions
+[CollectionDefinition("Non-Parallel Collection", DisableParallelization = true)]
+public class DockingManagerViewModelTests : IDisposable
 {
+  private readonly Mock<IServiceProvider> _mockServiceProvider;
+  private readonly Mock<NativeRuntimeService> _mockRuntimeService;
+  private readonly Mock<ConsoleService> _mockConsoleService;
+
+  public DockingManagerViewModelTests()
+  {
+    // 1. Create the mocks
+    _mockServiceProvider = new Mock<IServiceProvider>();
+    _mockRuntimeService = new Mock<NativeRuntimeService>();
+    _mockConsoleService = new Mock<ConsoleService>();
+
+    // 2. Setup the Service Provider to return your mocked services
+    _mockServiceProvider
+      .Setup(sp => sp.GetService(typeof(NativeRuntimeService)))
+      .Returns(_mockRuntimeService.Object);
+
+    _mockServiceProvider
+      .Setup(sp => sp.GetService(typeof(ConsoleService)))
+      .Returns(_mockConsoleService.Object);
+
+    // 3. Hijack the global locator
+    // (Assuming Provider has a setter. If it has an Initialize method, use that instead)
+    ServiceLocator.Provider = _mockServiceProvider.Object;
+  }
+
+  public void Dispose()
+  {
+    // CRITICAL: Clean up the static state after the test finishes
+    ServiceLocator.Provider = null;
+  }
+
   [Fact]
   public void DockingManager_InitializesWithDefaultTab()
   {
     var defaultTab = new DebugUiViewModel();
     var rootGroup = new TabGroupNodeViewModel(defaultTab);
     var vm = new DockingManagerViewModel(rootGroup);
-    
+
     Assert.NotNull(vm.RootNode);
     Assert.IsType<TabGroupNodeViewModel>(vm.RootNode);
     var currentRootGroup = (TabGroupNodeViewModel)vm.RootNode;
-    Assert.Equal(1, currentRootGroup.Tabs.Count); 
+    Assert.Equal(1, currentRootGroup.Tabs.Count);
     Assert.Equal("Debug UI", currentRootGroup.Tabs[0].Title);
   }
 

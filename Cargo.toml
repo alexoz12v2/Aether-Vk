@@ -2,7 +2,7 @@
 members = [
   "aethervk.core/cdylib",
   "aethervk.core/rlib",
-  "aethervk.oshal/rlib",
+  "aethervk.oshal/rlib", "test/test_utils",
 ]
 resolver = "3"
 exclude = [

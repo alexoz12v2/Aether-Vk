@@ -488,6 +488,15 @@ impl Scene {
     self.hierarchy.write().set_parent(child, parent);
   }
 
+  pub fn get_parent(&self, entity: EntityId) -> Option<EntityId> {
+    let entities = self.entities.read();
+    if !entities.contains_key(entity) {
+      return None;
+    }
+    let hierarchy = self.hierarchy.read();
+    hierarchy.parents.get(&entity).cloned()
+  }
+
   pub fn traverse_dfs_pre_order<A, F, C>(
     &self,
     start_entity: EntityId,

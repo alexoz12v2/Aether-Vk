@@ -20,7 +20,7 @@ public class HorizonJplService
 
   public HorizonJplService(ConsoleService console, BreadcrumbService breadcrumb)
   {
-    _httpClient = new HttpClient();
+    _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
     _console = console;
     _breadcrumb = breadcrumb;
   }
@@ -112,17 +112,22 @@ public class HorizonJplService
     string startTime,
     string stopTime,
     string stepSize,
-    string center
+    string center,
+    System.Threading.CancellationToken cancellationToken = default
   )
   {
     try
     {
-      var url =
-        $"https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND='{Uri.EscapeDataString(command)}'&OBJ_DATA='YES'&MAKE_EPHEM='YES'&EPHEM_TYPE='OBSERVER'&CENTER='{Uri.EscapeDataString(center)}'&START_TIME='{Uri.EscapeDataString(startTime)}'&STOP_TIME='{Uri.EscapeDataString(stopTime)}'&STEP_SIZE='{Uri.EscapeDataString(stepSize)}'&CSV_FORMAT='YES'";
+      using var request = new HttpRequestMessage(HttpMethod.Get, 
+        $"https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND='{Uri.EscapeDataString(command)}'&OBJ_DATA='YES'&MAKE_EPHEM='YES'&EPHEM_TYPE='OBSERVER'&CENTER='{Uri.EscapeDataString(center)}'&START_TIME='{Uri.EscapeDataString(startTime)}'&STOP_TIME='{Uri.EscapeDataString(stopTime)}'&STEP_SIZE='{Uri.EscapeDataString(stepSize)}'&CSV_FORMAT='YES'"
+      );
 
-      _console.Log($"[HorizonJpl] GET {url}");
+      _console.Log($"[HorizonJpl] GET {request.RequestUri}");
 
-      var response = await _httpClient.GetAsync(url);
+      // Send the request. Using ResponseContentRead to avoid hanging on stream parsing of chunked encoding
+      using var cts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+      cts.CancelAfter(TimeSpan.FromSeconds(5)); // Force 5s timeout on stream
+      var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseContentRead, cts.Token);
 
       _console.Log(
         $"[HorizonJpl] Response Status: {(int)response.StatusCode} {response.ReasonPhrase}"
