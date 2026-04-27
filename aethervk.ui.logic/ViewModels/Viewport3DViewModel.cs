@@ -15,6 +15,7 @@ public partial class Viewport3DViewModel
 {
   private readonly NativeRuntimeService _runtimeService;
   private CancellationTokenSource? _cts;
+  private Task? _lastRenderTask;
 
   public uint Width { get; } = 800;
   public uint Height { get; } = 600;
@@ -291,14 +292,19 @@ public partial class Viewport3DViewModel
               _runtimeService.SetActiveCamera(activeCam);
             }
 
-            // Async Render
-            await _runtimeService.RenderTickAsync();
+            // Wait for previous render to finish before starting a new one
+            if (_lastRenderTask != null)
+            {
+                await _lastRenderTask;
+                OnFrameReady?.Invoke();
+            }
 
-            OnFrameReady?.Invoke();
+            // Async Render - fire and forget, save task
+            _lastRenderTask = _runtimeService.RenderTickAsync();
           }
 
           // Yield to prevent pegging the CPU, aiming for ~60 FPS render signal
-          await Task.Delay(1, token);
+          await Task.Delay(16, token);
         }
       },
       token

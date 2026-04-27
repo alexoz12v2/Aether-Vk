@@ -101,7 +101,7 @@ impl CommandPools {
       *used = false;
       Ok(())
     } else {
-      Err(GpuError::InvalidArgument)
+      Err(GpuError::InvalidArgument("commands.rs:104"))
     }
   }
 

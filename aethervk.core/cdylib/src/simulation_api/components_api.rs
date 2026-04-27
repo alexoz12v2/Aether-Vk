@@ -2,69 +2,66 @@ use super::*;
 use crate::simulation_api::SimulationContext;
 use alloc::{vec::Vec, sync::Arc};
 use core::ffi::{c_char, CStr};
+use aethervk_core_rlib::scene::AddComponentError;
+use aethervk_oshal_rlib::os;
+use aethervk_oshal_rlib::os::fs;
+use crate::{expect_scene, expect_scene_and_entity};
 
 impl SimulationContext {
   pub fn add_transform_component(
     &mut self,
+    scene_id: u64,
     entity: u64,
-    pos_x: f32,
-    pos_y: f32,
-    pos_z: f32,
-    rot_w: f32,
-    rot_x: f32,
-    rot_y: f32,
-    rot_z: f32,
-    scale_x: f32,
-    scale_y: f32,
-    scale_z: f32,
-  ) -> Result<(), EngineError> {
-    let active_scene = self.active_scene().ok_or(EngineError::InvalidNullArgument)?;
-    if let Some(entity_id) = active_scene.get_entity(entity) {
-      let _ = active_scene.scene.add_component(
+    position: Vec3f32,
+    rotation: Quat,
+    scale: Vec3f32,
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:add_transform_component"
+    );
+    scene
+      .scene
+      .add_component(
         entity_id,
         TransformComponent {
-          position: Vec3f32::from_components(pos_x, pos_y, pos_z),
-          rotation: Quat::from_components(rot_x, rot_y, rot_z, rot_w),
-          scale: Vec3f32::from_components(scale_x, scale_y, scale_z),
+          position,
+          rotation,
+          scale,
         },
-      );
-      Ok(())
-    } else {
-      Err(EngineError::Gpu(GpuError::InvalidState))
-    }
+      )
+      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
   pub fn set_transform_component(
     &mut self,
+    scene_id: u64,
     entity: u64,
-    pos_x: f32,
-    pos_y: f32,
-    pos_z: f32,
-    rot_w: f32,
-    rot_x: f32,
-    rot_y: f32,
-    rot_z: f32,
-    scale_x: f32,
-    scale_y: f32,
-    scale_z: f32,
-  ) -> Result<(), EngineError> {
-    let active_scene = self.active_scene().ok_or(EngineError::InvalidNullArgument)?;
-    if let Some(entity_id) = active_scene.get_entity(entity) {
-      active_scene
-        .scene
-        .with_component_mut(entity_id, |c: &mut TransformComponent| {
-          c.position = Vec3f32::from_components(pos_x, pos_y, pos_z);
-          c.rotation = Quat::from_components(rot_x, rot_y, rot_z, rot_w);
-          c.scale = Vec3f32::from_components(scale_x, scale_y, scale_z);
-        });
-      Ok(())
-    } else {
-      Err(EngineError::Gpu(GpuError::InvalidState))
-    }
+    position: Vec3f32,
+    rotation: Quat,
+    scale: Vec3f32,
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:set_transform_component"
+    );
+    scene
+      .scene
+      .with_component_mut(entity_id, |c: &mut TransformComponent| {
+        c.position = position;
+        c.rotation = rotation;
+        c.scale = scale;
+      })
+      .ok_or(EngineError::InvalidOperation(
+        "components_api:set_transform_component couldn't find transform component",
+      ))
   }
 
   pub fn get_transform_component(
     &mut self,
+    scene_id: u64,
     entity: u64,
     pos_x: *mut f32,
     pos_y: *mut f32,
@@ -76,346 +73,464 @@ impl SimulationContext {
     scale_x: *mut f32,
     scale_y: *mut f32,
     scale_z: *mut f32,
-  ) -> Result<bool, EngineError> {
-    let active_scene = self.active_scene().ok_or(EngineError::InvalidNullArgument)?;
-    if let Some(entity_id) = active_scene.get_entity(entity) {
-      if let Some(transform) = active_scene.scene.global_transform(entity_id) {
-        unsafe {
-          if !pos_x.is_null() { *pos_x = transform.position.x(); }
-          if !pos_y.is_null() { *pos_y = transform.position.y(); }
-          if !pos_z.is_null() { *pos_z = transform.position.z(); }
-          if !rot_w.is_null() { *rot_w = transform.rotation.scalar_part(); }
-          let v = transform.rotation.vector_part();
-          if !rot_x.is_null() { *rot_x = v.x(); }
-          if !rot_y.is_null() { *rot_y = v.y(); }
-          if !rot_z.is_null() { *rot_z = v.z(); }
-          if !scale_x.is_null() { *scale_x = transform.scale.x(); }
-          if !scale_y.is_null() { *scale_y = transform.scale.y(); }
-          if !scale_z.is_null() { *scale_z = transform.scale.z(); }
-        }
-        return Ok(true);
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:get_transform_component"
+    );
+    let transform =
+      scene
+        .scene
+        .global_transform(entity_id)
+        .ok_or(EngineError::InvalidOperation(
+          "component_api:get_transform_component couldn't compute global transform",
+        ))?;
+    unsafe {
+      if !pos_x.is_null() {
+        *pos_x = transform.position.x();
+      }
+      if !pos_y.is_null() {
+        *pos_y = transform.position.y();
+      }
+      if !pos_z.is_null() {
+        *pos_z = transform.position.z();
+      }
+      if !rot_w.is_null() {
+        *rot_w = transform.rotation.scalar_part();
+      }
+      let v = transform.rotation.vector_part();
+      if !rot_x.is_null() {
+        *rot_x = v.x();
+      }
+      if !rot_y.is_null() {
+        *rot_y = v.y();
+      }
+      if !rot_z.is_null() {
+        *rot_z = v.z();
+      }
+      if !scale_x.is_null() {
+        *scale_x = transform.scale.x();
+      }
+      if !scale_y.is_null() {
+        *scale_y = transform.scale.y();
+      }
+      if !scale_z.is_null() {
+        *scale_z = transform.scale.z();
       }
     }
-    Ok(false)
+    Ok(())
   }
 
-  pub fn set_bvh_node_visibility(&mut self, entity: u64, node_index: u32, is_visible: bool) -> Result<(), EngineError> {
-    let active_scene = self.active_scene().ok_or(EngineError::InvalidNullArgument)?;
-    if let Some(entity_id) = active_scene.get_entity(entity) {
-      let mut bvh_len = 0;
-      let _ = active_scene.scene.with_component(
+  pub fn set_bvh_node_visibility(
+    &mut self,
+    scene_id: u64,
+    entity: u64,
+    node_index: u32,
+    is_visible: bool,
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:set_bvh_node_visibility"
+    );
+    let mut bvh_len = 0;
+    scene
+      .scene
+      .with_component(entity_id, |mesh: &PhysicalMeshComponent| {
+        if let Some(bvh) = &mesh.mesh.bvh {
+          bvh_len = bvh.nodes.len();
+        }
+      })
+      .ok_or(EngineError::InvalidOperation(
+        "component_api:set_bvh_node_visibility entity doesn't have PhysicalMeshComponent",
+      ))?;
+
+    if (node_index as usize) < bvh_len {
+      let mut dbg_opt = None;
+      let _ = scene.scene.with_component(
         entity_id,
-        |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
-          if let Some(bvh) = &mesh.mesh.bvh {
-            bvh_len = bvh.nodes.len();
-          }
+        |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
+          dbg_opt = Some(dbg.node_render_states.clone());
         },
       );
 
-      if (node_index as usize) < bvh_len {
-        let mut dbg_opt = None;
-        let _ = active_scene.scene.with_component(
+      let mut states = match dbg_opt {
+        Some(s) => s,
+        None => {
+          let mut s = Vec::with_capacity(bvh_len);
+          s.resize(bvh_len, false);
+          s
+        }
+      };
+
+      if (node_index as usize) < states.len() {
+        states[node_index as usize] = is_visible;
+
+        let res = scene.scene.add_component(
           entity_id,
-          |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
-            dbg_opt = Some(dbg.node_render_states.clone());
+          aethervk_core_rlib::scene::BvhDebugComponent {
+            node_render_states: states,
           },
         );
-
-        let mut states = match dbg_opt {
-          Some(s) => s,
-          None => {
-            let mut s = Vec::with_capacity(bvh_len);
-            s.resize(bvh_len, false);
-            s
+        if let Err(err) = res {
+          match err {
+            AddComponentError::EntityNotFound
+            | AddComponentError::ComponentNotRegistered
+            | AddComponentError::DependencyNotSatisfied { .. } => {
+              // TODO should we return error or continue? Maybe accumulate errors and return error if at least one?
+              oshal::log!("components_api:set_bvh_node_visibility failed, {}", err);
+            }
+            AddComponentError::ComponentAlreadyExists => {}
           }
-        };
-
-        if (node_index as usize) < states.len() {
-          states[node_index as usize] = is_visible;
-
-          let _ = active_scene.scene.add_component(
-            entity_id,
-            aethervk_core_rlib::scene::BvhDebugComponent {
-              node_render_states: states,
-            },
-          );
         }
       }
-      Ok(())
-    } else {
-      Err(EngineError::Gpu(GpuError::InvalidState))
     }
+    Ok(())
   }
 
   pub fn add_camera_component(
     &mut self,
+    scene_id: u64,
     entity: u64,
-    fov: f32,
-    aspect_ratio: f32,
-    near_plane: f32,
-    far_plane: f32,
-  ) -> Result<(), EngineError> {
-    let active_scene = self.active_scene().ok_or(EngineError::InvalidNullArgument)?;
-    if let Some(entity_id) = active_scene.get_entity(entity) {
-      let _ = active_scene.scene.add_component(
+    params: CameraParams,
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:add_camera_component"
+    );
+    scene
+      .scene
+      .add_component(
         entity_id,
-        aethervk_core_rlib::scene::CameraComponent {
-          projection: Mat4x4f32::perspective_vk(
-            fov.to_radians(),
-            aspect_ratio,
-            near_plane,
-            far_plane,
-          ),
-          near_plane,
-          far_plane,
+        CameraComponent {
+          projection: match params {
+            CameraParams::Perspective(PerspectiveCameraParams {
+              fov,
+              aspect_ratio,
+              near_plane,
+              far_plane,
+            }) => Mat4x4f32::perspective_vk(fov, aspect_ratio, near_plane, far_plane),
+            CameraParams::Orthographic(OrthographicCameraParams {
+              left,
+              right,
+              bottom,
+              top,
+              near,
+              far,
+            }) => Mat4x4f32::orthographic_vk(left, right, bottom, top, near, far),
+          },
+          near_plane: params.near(),
+          far_plane: params.far(),
         },
-      );
-      Ok(())
-    } else {
-      Err(EngineError::Gpu(GpuError::InvalidState))
-    }
+      )
+      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
   pub fn set_camera_component(
     &mut self,
+    scene_id: u64,
     entity: u64,
-    is_orthographic: bool,
-    fov: f32,
-    aspect_ratio: f32,
-    near_plane: f32,
-    far_plane: f32,
-  ) -> Result<(), EngineError> {
-    let active_scene = self.active_scene().ok_or(EngineError::InvalidNullArgument)?;
-    if let Some(entity_id) = active_scene.get_entity(entity) {
-      active_scene
-        .scene
-        .with_component_mut(entity_id, |c: &mut CameraComponent| {
-          if is_orthographic {
-            // TODO: implement ortho projection if needed
-            c.projection = Mat4x4f32::perspective_vk(fov.to_radians(), aspect_ratio, near_plane, far_plane);
-          } else {
-            c.projection =
-              Mat4x4f32::perspective_vk(fov.to_radians(), aspect_ratio, near_plane, far_plane);
+    params: CameraParams,
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:set_camera_component"
+    );
+    scene
+      .scene
+      .with_component_mut(entity_id, |c: &mut CameraComponent| {
+        match params {
+          CameraParams::Perspective(PerspectiveCameraParams {
+            fov,
+            aspect_ratio,
+            near_plane,
+            far_plane,
+          }) => {
+            c.projection = Mat4x4f32::perspective_vk(fov, aspect_ratio, near_plane, far_plane);
           }
-          c.near_plane = near_plane;
-          c.far_plane = far_plane;
-        });
-      Ok(())
-    } else {
-      Err(EngineError::Gpu(GpuError::InvalidState))
-    }
+          CameraParams::Orthographic(OrthographicCameraParams {
+            left,
+            right,
+            bottom,
+            top,
+            near,
+            far,
+          }) => {
+            c.projection = Mat4x4f32::orthographic_vk(left, right, bottom, top, near, far);
+          }
+        }
+        c.near_plane = params.near();
+        c.far_plane = params.far();
+      })
+      .ok_or(EngineError::InvalidOperation(
+        "components_api:set_camera_component couldn't find camera component",
+      ))
   }
 
-  pub fn get_camera_component(&mut self, entity: u64, proj_out: *mut f32) -> Result<bool, EngineError> {
-    if proj_out.is_null() {
-      return Err(EngineError::InvalidNullArgument);
-    }
-    let active_scene = self.active_scene().ok_or(EngineError::InvalidNullArgument)?;
-    if let Some(entity_id) = active_scene.get_entity(entity) {
-      let mut found = false;
-      let _ = active_scene
-        .scene
-        .with_component(entity_id, |c: &CameraComponent| {
-          let p: [f32; 16] = c.projection.into();
-          unsafe {
-            for i in 0..16 {
-              *proj_out.add(i) = p[i];
-            }
-          }
-          found = true;
-        });
-      return Ok(found);
-    }
-    Ok(false)
+  pub fn get_camera_component(
+    &mut self,
+    scene_id: u64,
+    entity: u64,
+    proj_out: &mut [f32; 16],
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:get_camera_component"
+    );
+    scene
+      .scene
+      .with_component(entity_id, |c: &CameraComponent| {
+        *proj_out = c.projection.into();
+      })
+      .ok_or(EngineError::InvalidOperation(
+        "component_api:get_camera_component couldn't find camera component",
+      ))
   }
 
   pub fn add_physical_mesh_component(
     &mut self,
+    scene_id: u64,
     entity: u64,
-    gltf_path: *const c_char,
+    gltf_path: &fs::Path,
     emissive_intensity: f32,
-    emissive_color_r: f32,
-    emissive_color_g: f32,
-    emissive_color_b: f32,
-  ) -> Result<bool, EngineError> {
-    if gltf_path.is_null() {
-      return Err(EngineError::InvalidNullArgument);
-    }
-    let path_str = unsafe { CStr::from_ptr(gltf_path).to_str().unwrap_or("") };
-    let active_scene = self.active_scene().ok_or(EngineError::InvalidNullArgument)?;
-    if let Some(entity_id) = active_scene.get_entity(entity) {
-      if let Ok(mesh) = simulation::comet::load_comet_from_gltf(path_str, false) {
-        let mesh_arc = Arc::from(mesh);
-        let _ = active_scene.scene.add_component(
-          entity_id,
-          PhysicalMeshComponent {
-            asset_path: alloc::string::String::from(path_str),
-            mesh: mesh_arc,
-            emissive_intensity,
-            emissive_color: [emissive_color_r, emissive_color_g, emissive_color_b],
-          },
-        );
-        return Ok(true);
-      }
-    }
-    Ok(false)
+    emissive_color: [f32; 3],
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:add_physical_mesh_component"
+    );
+    let path_str = gltf_path.to_str_unified().unwrap().to_string();
+    let mesh = simulation::comet::load_comet_from_gltf(&path_str, false)?;
+    let mesh_arc = Arc::from(mesh);
+    scene
+      .scene
+      .add_component(
+        entity_id,
+        PhysicalMeshComponent {
+          asset_path: path_str,
+          mesh: mesh_arc,
+          emissive_intensity,
+          emissive_color,
+        },
+      )
+      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
-  pub fn add_sky_component(&mut self, entity: u64) -> Result<(), EngineError> {
-    let active_scene = self.active_scene().ok_or(EngineError::InvalidNullArgument)?;
-    if let Some(entity_id) = active_scene.get_entity(entity) {
-      let _ = active_scene.scene.add_component(entity_id, SkyComponent {});
-      Ok(())
-    } else {
-      Err(EngineError::Gpu(GpuError::InvalidState))
-    }
+  pub fn add_sky_component(&mut self, scene_id: u64, entity: u64) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:add_sky_component"
+    );
+    scene
+      .scene
+      .add_component(entity_id, SkyComponent {})
+      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
-  pub fn add_cursor_component(&mut self, entity: u64) -> Result<(), EngineError> {
-    let active_scene = self.active_scene().ok_or(EngineError::InvalidNullArgument)?;
-    if let Some(entity_id) = active_scene.get_entity(entity) {
-      let _ = active_scene
-        .scene
-        .add_component(entity_id, CursorComponent {});
-      Ok(())
-    } else {
-      Err(EngineError::Gpu(GpuError::InvalidState))
-    }
+  pub fn add_cursor_component(&mut self, scene_id: u64, entity: u64) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:add_cursor_component"
+    );
+    scene
+      .scene
+      .add_component(entity_id, CursorComponent {})
+      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
   pub fn add_sun_component(
     &mut self,
+    scene_id: u64,
     entity: u64,
-    resolution_x: u32,
-    resolution_y: u32,
-    resolution_z: u32,
-  ) -> Result<(), EngineError> {
-    let active_scene = self.active_scene().ok_or(EngineError::InvalidNullArgument)?;
-    if let Some(entity_id) = active_scene.get_entity(entity) {
-      let _ = active_scene.scene.add_component(
-        entity_id,
-        SunComponent {
-          resolution: (resolution_x, resolution_y, resolution_z),
-        },
-      );
-      Ok(())
-    } else {
-      Err(EngineError::Gpu(GpuError::InvalidState))
-    }
+    resolution: (u32, u32, u32),
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:add_sun_component"
+    );
+    scene
+      .scene
+      .add_component(entity_id, SunComponent { resolution })
+      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
-  pub fn add_grid_component(&mut self, entity: u64) -> Result<(), EngineError> {
-    let active_scene = self.active_scene().ok_or(EngineError::InvalidNullArgument)?;
-    if let Some(entity_id) = active_scene.get_entity(entity) {
-      let _ = active_scene
-        .scene
-        .add_component(entity_id, GridComponent {});
-      Ok(())
-    } else {
-      Err(EngineError::Gpu(GpuError::InvalidState))
-    }
+  pub fn add_grid_component(&mut self, scene_id: u64, entity: u64) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:add_grid_component"
+    );
+    scene
+      .scene
+      .add_component(entity_id, GridComponent {})
+      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
   pub fn add_measurement_component(
     &mut self,
+    scene_id: u64,
     entity: u64,
-    p1_x: f32,
-    p1_y: f32,
-    p1_z: f32,
-    p2_x: f32,
-    p2_y: f32,
-    p2_z: f32,
-  ) -> Result<(), EngineError> {
-    let active_scene = self.active_scene().ok_or(EngineError::InvalidNullArgument)?;
-    if let Some(entity_id) = active_scene.get_entity(entity) {
-      let _ = active_scene.scene.add_component(
+    pos1: Vec3f32,
+    pos2: Vec3f32,
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:add_measurement_component"
+    );
+    scene
+      .scene
+      .add_component(
         entity_id,
         aethervk_core_rlib::scene::MeasurementComponent {
-          pos1: Vec3f32::from_components(p1_x, p1_y, p1_z),
-          pos2: Vec3f32::from_components(p2_x, p2_y, p2_z),
+          pos1,
+          pos2,
           points: 1.0,
         },
-      );
-      Ok(())
-    } else {
-      Err(EngineError::Gpu(GpuError::InvalidState))
-    }
+      )
+      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
   pub fn add_image_billboard_component(
     &mut self,
+    scene_id: u64,
     entity: u64,
     is_screen_space: bool,
     width: f32,
     height: f32,
-  ) -> Result<(), EngineError> {
-    let active_scene = self.active_scene().ok_or(EngineError::InvalidNullArgument)?;
-    if let Some(entity_id) = active_scene.get_entity(entity) {
-      let billboard_type = if is_screen_space {
-        aethervk_core_rlib::scene::BillboardType::ScreenSpace {
-          pct_width: width,
-          pct_height: height,
-        }
-      } else {
-        aethervk_core_rlib::scene::BillboardType::WorldSpace { width, height }
-      };
-      let _ = active_scene.scene.add_component(
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:add_image_billboard"
+    );
+    let billboard_type = if is_screen_space {
+      aethervk_core_rlib::scene::BillboardType::ScreenSpace {
+        pct_width: width,
+        pct_height: height,
+      }
+    } else {
+      aethervk_core_rlib::scene::BillboardType::WorldSpace { width, height }
+    };
+    scene
+      .scene
+      .add_component(
         entity_id,
         aethervk_core_rlib::scene::ImageBillboardComponent {
           texture_id: 0,
           billboard_type,
         },
-      );
-      Ok(())
-    } else {
-      Err(EngineError::Gpu(GpuError::InvalidState))
-    }
+      )
+      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
   pub fn set_markers(
     &mut self,
+    scene_id: u64,
     entity: u64,
-    count: u32,
-    px: *const f32,
-    py: *const f32,
-    pz: *const f32,
-    cr: *const f32,
-    cg: *const f32,
-    cb: *const f32,
-    sizes: *const f32,
-  ) -> Result<(), EngineError> {
-    let active_scene = self.active_scene().ok_or(EngineError::InvalidNullArgument)?;
-    if let Some(entity_id) = active_scene.get_entity(entity) {
-      let mut markers = alloc::vec::Vec::new();
+    markers: &[FfiMarker],
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:set_markers"
+    );
+    let markers: Vec<rlib::scene::Marker> = markers.iter().map(|m| (*m).into()).collect();
+    let mut found = false;
+    let _ = scene.scene.with_component_mut(
+      entity_id,
+      |m: &mut aethervk_core_rlib::scene::MarkersComponent| {
+        // TODO can I avoid copying? Probably if I wrap into an mut Option
+        m.markers = markers.clone();
+        found = true;
+      },
+    );
 
-      for i in 0..count as isize {
-        unsafe {
-          markers.push(aethervk_core_rlib::scene::Marker {
-            local_pos: [*px.offset(i), *py.offset(i), *pz.offset(i)],
-            color: [*cr.offset(i), *cg.offset(i), *cb.offset(i)],
-            size: *sizes.offset(i),
-          });
-        }
-      }
-
-      let mut found = false;
-      let _ = active_scene.scene.with_component_mut(
-        entity_id,
-        |m: &mut aethervk_core_rlib::scene::MarkersComponent| {
-          m.markers = markers.clone();
-          found = true;
-        },
-      );
-
-      if !found {
-        let _ = active_scene.scene.add_component(
+    if !found {
+      scene
+        .scene
+        .add_component(
           entity_id,
           aethervk_core_rlib::scene::MarkersComponent { markers },
-        );
-      }
-      Ok(())
-    } else {
-      Err(EngineError::Gpu(GpuError::InvalidState))
+        )
+        .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?
+    }
+    Ok(())
+  }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PerspectiveCameraParams {
+  /// Should already be in radians!
+  fov: f32,
+  aspect_ratio: f32,
+  near_plane: f32,
+  far_plane: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OrthographicCameraParams {
+  left: f32,
+  right: f32,
+  bottom: f32,
+  top: f32,
+  near: f32,
+  far: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CameraParams {
+  Perspective(PerspectiveCameraParams),
+  Orthographic(OrthographicCameraParams),
+}
+
+impl CameraParams {
+  pub fn new_perspective(fov: f32, aspect_ratio: f32, near_plane: f32, far_plane: f32) -> Self {
+    Self::Perspective(PerspectiveCameraParams {
+      fov,
+      aspect_ratio,
+      near_plane,
+      far_plane,
+    })
+  }
+
+  pub fn new_orthographic(
+    left: f32,
+    right: f32,
+    bottom: f32,
+    top: f32,
+    near: f32,
+    far: f32,
+  ) -> Self {
+    Self::Orthographic(OrthographicCameraParams {
+      left,
+      right,
+      bottom,
+      top,
+      near,
+      far,
+    })
+  }
+
+  pub fn near(&self) -> f32 {
+    match self {
+      CameraParams::Perspective(PerspectiveCameraParams { near_plane, .. }) => *near_plane,
+      CameraParams::Orthographic(OrthographicCameraParams { near, .. }) => *near,
+    }
+  }
+
+  pub fn far(&self) -> f32 {
+    match self {
+      CameraParams::Perspective(PerspectiveCameraParams { far_plane, .. }) => *far_plane,
+      CameraParams::Orthographic(OrthographicCameraParams { far, .. }) => *far,
     }
   }
 }

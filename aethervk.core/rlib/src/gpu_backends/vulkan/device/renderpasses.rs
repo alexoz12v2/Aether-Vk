@@ -170,10 +170,10 @@ impl RenderPasses {
       RenderPassType::ColorDepthSingleSubpass => {
         let read_render_passes = self.render_passes.read();
         if !read_render_passes.contains_key(&RenderPassType::ColorDepthSingleSubpass) {
-          return Err(crate::types::GpuError::InvalidState);
+          return Err(crate::types::GpuError::InvalidState("renderpasses.rs:173"));
         }
         if out_values.len() != 2 {
-          return Err(crate::types::GpuError::InvalidArgument);
+          return Err(crate::types::GpuError::InvalidArgument("renderpasses.rs:176"));
         }
         let bundle = unsafe {
           read_render_passes
@@ -414,22 +414,28 @@ impl RenderPasses {
           | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE
           | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
       );
+    let mut dst_stage_mask = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
+    let mut dst_access_mask = vk::AccessFlags2::empty();
+
+    if final_color_layout == vk::ImageLayout::TRANSFER_SRC_OPTIMAL {
+      dst_stage_mask = vk::PipelineStageFlags2::TRANSFER;
+      dst_access_mask = vk::AccessFlags2::TRANSFER_READ;
+    }
+
     let mut _0_external_memory_barrier = vk::MemoryBarrier2::default()
       .src_stage_mask(
         vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT
           | vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
           | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
       )
-      .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
+      .dst_stage_mask(dst_stage_mask)
       .src_access_mask(
         vk::AccessFlags2::COLOR_ATTACHMENT_READ
           | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
           | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE
           | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
       )
-      // note: VK_ACCESS_MEMORY_READ is allowed on exiting dependency, but needed only if there's a
-      // consumer for this memory within the render-pass
-      .dst_access_mask(vk::AccessFlags2::empty());
+      .dst_access_mask(dst_access_mask);
 
     let subpass_dependencies = [
       // EXTERNAL -> 0

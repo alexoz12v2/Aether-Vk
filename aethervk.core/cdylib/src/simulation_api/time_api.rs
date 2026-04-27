@@ -1,4 +1,3 @@
-use super::*;
 use crate::simulation_api::SimulationContext;
 use alloc::{format};
 use core::ffi::{c_char};
@@ -41,5 +40,18 @@ impl SimulationContext {
   pub fn set_simulation_time(&mut self, time_tai: f64) {
     let mut logic = self.logic_state.write();
     logic.current_epoch = anise::time::Epoch::from_tai_seconds(time_tai);
+  }
+
+  pub fn get_epoch_limits(&self, start_tai: *mut f64, end_tai: *mut f64) -> bool {
+    let logic = self.logic_state.read();
+    unsafe {
+      if !start_tai.is_null() {
+        *start_tai = logic.epoch_start.to_tai_seconds();
+      }
+      if !end_tai.is_null() {
+        *end_tai = logic.epoch_end.to_tai_seconds();
+      }
+    }
+    true
   }
 }

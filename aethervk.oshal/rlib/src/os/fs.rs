@@ -1,3 +1,4 @@
+use alloc::borrow::Cow;
 use core::borrow::Borrow;
 
 use alloc::vec::Vec;
@@ -18,7 +19,7 @@ pub const SEP: os_char = if cfg!(windows) {
   b'/' as os_char
 };
 
-/// necessary utility to ensure equality and hash are not dependant on nul termination
+/// necessary utility to ensure equality and hash are not dependent on nul termination
 pub(crate) fn strip_nul(slice: &[os_char]) -> &[os_char] {
   if let Some((&last, rest)) = slice.split_last() {
     if last == b'\0' as os_char {
@@ -36,6 +37,27 @@ pub trait FileSystemObject {
 
 pub struct Path {
   inner: [os_char],
+}
+
+impl AsRef<Path> for Path {
+  #[inline]
+  fn as_ref(&self) -> &Path {
+    self
+  }
+}
+
+impl AsRef<Path> for str {
+  #[inline]
+  fn as_ref(&self) -> &Path {
+    self.into() // Calls your From<&str> implementation
+  }
+}
+
+impl AsRef<Path> for alloc::string::String {
+  #[inline]
+  fn as_ref(&self) -> &Path {
+    self.as_str().into()
+  }
 }
 
 impl From<&str> for &Path {
@@ -60,6 +82,27 @@ impl core::hash::Hash for Path {
 }
 
 impl Path {
+  /// Returns the path as a string.
+  /// On Unix, this is a zero-cost borrow. On Windows, this allocates a new String.
+  pub fn to_str_unified(&self) -> Option<Cow<'_, str>> {
+    #[cfg(windows)]
+    {
+      // Windows: We must allocate a String to convert UTF-16 to UTF-8
+      alloc::string::String::from_utf16(strip_nul(&self.inner))
+        .ok()
+        .map(Cow::Owned)
+    }
+
+    #[cfg(not(windows))]
+    {
+      // Unix: We can directly borrow the underlying c_char / u8 slice
+      let slice = strip_nul(&self.inner);
+      let bytes = unsafe { core::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len()) };
+
+      core::str::from_utf8(bytes).ok().map(Cow::Borrowed)
+    }
+  }
+
   pub fn from_slice(slice: &[os_char]) -> &Self {
     let ptr: *const Self = (slice as *const [os_char]) as *const Path;
     unsafe { &*ptr }
@@ -191,9 +234,16 @@ enum PathStorage {
 
 impl fmt::Debug for PathStorage {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-    match self {
-      Self::Inline(vec) => f.debug_tuple("Inline").field(vec).finish(),
-      Self::Heap(vec) => f.debug_tuple("Heap").field(vec).finish(),
+    let (variant_name, bytes) = match self {
+      Self::Inline(vec) => ("Inline", vec.as_slice()),
+      Self::Heap(vec) => ("Heap", vec.as_slice()),
+    };
+
+    match str::from_utf8(bytemuck::cast_slice(bytes)) {
+      // Print `Heap("/path/to/file")`
+      Ok(s) => f.debug_tuple(variant_name).field(&s).finish(),
+      // Print `Heap([47, 86, ...])`
+      Err(_) => f.debug_tuple(variant_name).field(&bytes).finish(),
     }
   }
 }
@@ -466,6 +516,7 @@ pub fn current_exe() -> Result<PathBuf, FsError> {
       // This call will fail but will set buf_size to the required size.
       // TODO: does the mach2 crate have an equivalent which is not deprecated? well there's a FIXME that says
       // that maybe this function will get undeprecated
+      // TODO deprecated use mach2 instead?
       libc::_NSGetExecutablePath(core::ptr::null_mut(), &mut buf_size)
     };
 
@@ -474,6 +525,7 @@ pub fn current_exe() -> Result<PathBuf, FsError> {
     }
 
     let mut buffer: Vec<c_char> = vec![0; buf_size as usize];
+    // TODO deprecated use mach2 instead?
     let result = unsafe { libc::_NSGetExecutablePath(buffer.as_mut_ptr(), &mut buf_size) };
 
     if result != 0 {
@@ -497,7 +549,7 @@ pub fn current_exe() -> Result<PathBuf, FsError> {
   }
 }
 
-pub fn read(path: &Path) -> Result<Vec<u8>, FsError> {
+pub fn read<T: AsRef<Path>>(path: T) -> Result<Vec<u8>, FsError> {
   #[cfg(windows)]
   {
     use windows::Win32::Storage::FileSystem::{
@@ -559,7 +611,7 @@ pub fn read(path: &Path) -> Result<Vec<u8>, FsError> {
     use libc::{open, fstat, read, close, O_RDONLY};
     use core::mem;
 
-    let mut path_buf = path.to_pathbuf();
+    let mut path_buf: PathBuf = path.as_ref().to_pathbuf();
     let fd = unsafe { open(path_buf.as_ptr_mut(), O_RDONLY) };
     if fd < 0 {
       return Err(FsError::CouldNotOpenFile);
@@ -842,24 +894,6 @@ pub fn read_dir(path: &Path) -> Result<ReadDir, FsError> {
   }
 }
 
-// --- Supporting string conversions (`.to_str()`) ---
-
-impl Path {
-  /// Returns the path as a standard string.
-  /// Note: Allocates a String on Windows due to UTF-16 decoding.
-  #[cfg(windows)]
-  pub fn to_str(&self) -> Option<alloc::string::String> {
-    alloc::string::String::from_utf16(strip_nul(&self.inner)).ok()
-  }
-
-  #[cfg(not(windows))]
-  pub fn to_str(&self) -> Option<&str> {
-    let slice = strip_nul(&self.inner);
-    let bytes = unsafe { core::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len()) };
-    core::str::from_utf8(bytes).ok()
-  }
-}
-
 /// Helper trait so `path.extension().and_then(|s| s.to_str())` compiles seamlessly,
 /// bridging `impl AsRef<str>` directly to a usable `&str`.
 pub trait ExtensionToStr {
@@ -869,5 +903,39 @@ pub trait ExtensionToStr {
 impl<T: AsRef<str>> ExtensionToStr for T {
   fn to_str(&self) -> Option<&str> {
     Some(self.as_ref())
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_pathbuf_push_pop() {
+    let mut p = PathBuf::new();
+    p = p.join("test").join("dir");
+    let s = p.to_str_unified().unwrap();
+    assert!(s.ends_with("test/dir") || s.ends_with("test\\dir"));
+
+    p.pop();
+    let s2 = p.to_str_unified().unwrap();
+    assert!(s2.ends_with("test"));
+  }
+
+  #[test]
+  fn test_pathbuf_extension() {
+    let p = PathBuf::from("file.txt");
+    assert_eq!(p.extension(), Some("txt"));
+
+    let p2 = PathBuf::from("file_no_ext");
+    assert_eq!(p2.extension(), None);
+  }
+
+  #[test]
+  fn test_pathbuf_join() {
+    let p1 = PathBuf::from("test");
+    let p2 = p1.join("dir");
+    let s = p2.to_str_unified().unwrap();
+    assert!(s.ends_with("test/dir") || s.ends_with("test\\dir"));
   }
 }

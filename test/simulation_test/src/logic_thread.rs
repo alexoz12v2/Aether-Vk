@@ -17,6 +17,503 @@ use anise::almanac::Almanac;
 use anise::prelude::Epoch;
 use crate::{constants, utils};
 
+pub struct CmdContext<'a> {
+  pub scene_guard: &'a Scene,
+  pub response_tx: &'a mpsc::Sender<String>,
+  pub state: &'a mut LogicState,
+  pub root_entity: EntityId,
+  pub camera_entity: EntityId,
+  pub cursor_entity: EntityId,
+  pub grid_entity: EntityId,
+  pub following_entity: &'a mut Option<EntityId>,
+  pub focused_planet_idx: &'a mut Option<usize>,
+  pub planets_ids: &'a [(i32, EntityId, f64, f32)],
+  pub almanac: &'a Almanac,
+  pub current_scale: &'a mut TimeScale,
+  pub current_epoch: &'a mut anise::time::Epoch,
+  pub st_seconds_elapsed: &'a mut f64,
+  pub epoch_start: anise::time::Epoch,
+  pub epoch_end: anise::time::Epoch,
+}
+
+fn register_commands(registry: &mut test_utils::command::CommandRegistry<CmdContext>) {
+  registry.register("clear", |ctx, _args, tx| {
+    let _ = tx.send("___CLEAR___".to_string());
+  });
+  registry.register("help", |ctx, _args, tx| {
+    let _ = tx.send("Commands:".to_string());
+    let _ = tx.send("  help               - Shows this help message".to_string());
+    let _ = tx.send("  clear              - Clears the console output".to_string());
+    let _ = tx.send("  scene              - Prints the scene hierarchy".to_string());
+    let _ = tx.send("  select <entity>    - Selects an entity by name".to_string());
+    let _ = tx.send("  printsel           - Prints the currently selected entity".to_string());
+    let _ = tx.send("  deselect           - Deselects the currently selected entity".to_string());
+    let _ = tx.send("  goto <entity>      - Selects and follows an entity".to_string());
+    let _ =
+      tx.send("  unfollow           - Stops the camera from following any entity".to_string());
+    let _ = tx.send(
+      "  following          - Prints the entity the camera is currently following".to_string(),
+    );
+    let _ = tx.send("  printbvh [min] [max]- Prints BVH nodes for the selected entity".to_string());
+    let _ =
+      tx.send("  bvh-show <range> [idx] - Shows BVH nodes (e.g. 0-3, 2-, -4, all)".to_string());
+    let _ = tx.send("  bvh-hide <range> [idx] - Hides BVH nodes".to_string());
+    let _ = tx.send("  bvh-node-dbgrender-set <range> <idx> <bool> - Legacy toggle".to_string());
+    let _ = tx.send(
+      "  bvh-node-dbgrender-get <depth> <idx>        - Gets BVH node debug render state"
+        .to_string(),
+    );
+  });
+  registry.register("scene", |ctx, _args, tx| {
+    let _ = tx.send("Scene Hierarchy:".to_string());
+    let mut stack = vec![0];
+    ctx.scene_guard.traverse_with_hooks(
+      ctx.root_entity,
+      &mut stack,
+      &mut |s, e, _: Option<TransformComponent>, _: Option<&TransformComponent>| {
+        let depth = *s.last().unwrap();
+        let name = ctx
+          .scene_guard
+          .get_name(e)
+          .unwrap_or_else(|| "Unknown".to_string());
+        let _ = tx.send(format!("{}├── {}", "│   ".repeat(depth), name));
+        s.push(depth + 1);
+        true
+      },
+      &mut |s, _| {
+        s.pop();
+      },
+    );
+  });
+  registry.register("select", |ctx, args, tx| {
+    if args.is_empty() {
+      return;
+    }
+    let name = args.join(" ");
+    if let Some(id) = ctx.scene_guard.get_entity_by_name(&name) {
+      ctx.state.selected_entity = Some(id);
+      let _ = tx.send(format!("selected entity {}, ID: {:?}", name, id));
+    } else {
+      let _ = tx.send("entity doesn\'t exist".to_string());
+    }
+  });
+  registry.register("printsel", |ctx, _args, tx| {
+    if let Some(id) = ctx.state.selected_entity {
+      let name = ctx
+        .scene_guard
+        .get_name(id)
+        .unwrap_or_else(|| "Unknown".to_string());
+      let _ = tx.send(format!("Selected entity: {} (ID: {:?})", name, id));
+    } else {
+      let _ = tx.send("No entity selected".to_string());
+    }
+  });
+  registry.register("deselect", |ctx, _args, tx| {
+    if ctx.state.selected_entity.is_some() {
+      let id = ctx.state.selected_entity.unwrap();
+      let _ = ctx
+        .scene_guard
+        .remove_component::<aethervk_core_rlib::scene::SelectedComponent>(id);
+      ctx.state.selected_entity = None;
+      let _ = tx.send("Deselected entity.".to_string());
+    } else {
+      let _ = tx.send("No selected entity.".to_string());
+    }
+  });
+  registry.register("unfollow", |ctx, _args, tx| {
+    *ctx.following_entity = None;
+    let _ = tx.send("Camera stopped following.".to_string());
+  });
+  registry.register("following", |ctx, _args, tx| {
+    if let Some(id) = *ctx.following_entity {
+      let name = ctx
+        .scene_guard
+        .get_name(id)
+        .unwrap_or_else(|| "Unknown".to_string());
+      let _ = tx.send(format!("Currently following: {} (ID: {:?})", name, id));
+    } else {
+      let _ = tx.send("Camera is not following any entity.".to_string());
+    }
+  });
+  registry.register("printbvh", |ctx, args, tx| {
+    if let Some(id) = ctx.state.selected_entity {
+      let mut parts = args.iter();
+      let min_depth: i32 = parts.next().unwrap_or(&"-1").parse().unwrap_or(-1);
+      let max_depth: i32 = parts.next().unwrap_or(&"-1").parse().unwrap_or(-1);
+      if min_depth != -1 && max_depth != -1 && min_depth > max_depth {
+        let _ = tx.send("illegal arguments: min_depth > max_depth".to_string());
+        return;
+      }
+      ctx.scene_guard.with_component(
+        id,
+        |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+          if let Some(bvh) = &mesh.mesh.bvh {
+            let _ = tx.send("BVH Nodes:".to_string());
+            let mut node_stack = vec![(0, 0)]; // (node_idx, depth)
+            while let Some((idx, depth)) = node_stack.pop() {
+              let node = &bvh.nodes[idx];
+              if (min_depth == -1 || depth as i32 >= min_depth)
+                && (max_depth == -1 || depth as i32 <= max_depth)
+              {
+                let _ = tx.send(format!(
+                  "{}Node {} (Depth: {}) - Bound: {:?}",
+                  "  ".repeat(depth),
+                  idx,
+                  depth,
+                  node.bound
+                ));
+              }
+              if node.primitive_count == 0 {
+                node_stack.push((node.right_child_offset as usize, depth + 1));
+                node_stack.push((node.left_child_or_primitive_offset as usize, depth + 1));
+              }
+            }
+          } else {
+            let _ = tx.send("Entity has no BVH.".to_string());
+          }
+        },
+      );
+    } else {
+      let _ = tx.send("No entity selected".to_string());
+    }
+  });
+  registry.register("goto", |ctx, args, tx| {
+    if args.is_empty() {
+      return;
+    }
+    let name = args.join(" ");
+    if let Some(id) = ctx.scene_guard.get_entity_by_name(&name) {
+      ctx.state.selected_entity = Some(id);
+      *ctx.following_entity = Some(id);
+
+      let planet_radius = ctx
+        .planets_ids
+        .iter()
+        .find(|(_, e, _, _)| *e == id)
+        .map(|(_, _, _, r)| *r)
+        .unwrap_or(0.01);
+      let mut p_pos = Vec3f32::from_components(0.0, 0.0, 0.0);
+      ctx
+        .scene_guard
+        .with_component(id, |t: &TransformComponent| {
+          p_pos = t.position;
+        });
+
+      ctx
+        .scene_guard
+        .with_component_mut(ctx.cursor_entity, |c: &mut TransformComponent| {
+          c.position = p_pos;
+        });
+
+      let sun_pos = aethervk_core_rlib::simulation::almanac::get_almanac_pos(
+        crate::constants::PlanetNaifId::SUN,
+        *ctx.current_epoch,
+        ctx.almanac,
+      );
+
+      let mut dir_to_sun = sun_pos - p_pos;
+      if dir_to_sun.length_squared() < 1e-6 {
+        dir_to_sun = Vec3f32::from_components(0.0, 1.0, 0.0);
+      } else {
+        dir_to_sun = dir_to_sun.normalize();
+      }
+
+      let offset_dist = (planet_radius as f32 * 3.0).max(60.0);
+
+      let mut right = dir_to_sun.cross(Vec3f32::from_components(0.0, 0.0, 1.0));
+      if right.length_squared() < 1e-6 {
+        right = Vec3f32::from_components(1.0, 0.0, 0.0);
+      } else {
+        right = right.normalize();
+      }
+      let up = right.cross(dir_to_sun).normalize();
+
+      let cam_pos =
+        p_pos - dir_to_sun * offset_dist + right * (offset_dist * 1.5) + up * (offset_dist * 0.5);
+
+      let view_dir = (p_pos - cam_pos).normalize();
+
+      let yaw = -f32::atan2(-view_dir.x(), view_dir.y());
+      let pitch = f32::asin(view_dir.z());
+
+      ctx.state.yaw = yaw;
+      ctx.state.pitch = pitch;
+
+      let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), ctx.state.yaw);
+      let pitch_quat =
+        Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), ctx.state.pitch);
+
+      ctx
+        .scene_guard
+        .with_component_mut(ctx.camera_entity, |c: &mut TransformComponent| {
+          c.position = cam_pos;
+          c.rotation = (yaw_quat * pitch_quat).normalize();
+        });
+
+      let _ = tx.send(format!("Selected and following entity: {}", name));
+    } else {
+      let _ = tx.send("Entity doesn't exist".to_string());
+    }
+  });
+  registry.register("follow", |ctx, args, tx| {
+    if args.is_empty() {
+      return;
+    }
+    let name = args.join(" ");
+    if let Some(id) = ctx.scene_guard.get_entity_by_name(&name) {
+      ctx.state.selected_entity = Some(id);
+      *ctx.following_entity = Some(id);
+      let _ = tx.send(format!("Following entity: {}", name));
+    } else {
+      let _ = tx.send("Entity doesn't exist".to_string());
+    }
+  });
+
+  registry.register("printbvh", |ctx, args, tx| {
+    if let Some(id) = ctx.state.selected_entity {
+      let mut parts = args.iter();
+      let min_depth: i32 = parts.next().unwrap_or(&"-1").parse().unwrap_or(-1);
+      let max_depth: i32 = parts.next().unwrap_or(&"-1").parse().unwrap_or(-1);
+      if min_depth != -1 && max_depth != -1 && min_depth > max_depth {
+        let _ = tx.send("illegal arguments: min_depth > max_depth".to_string());
+        return;
+      }
+      ctx.scene_guard.with_component(
+        id,
+        |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+          if let Some(bvh) = &mesh.mesh.bvh {
+            let _ = tx.send("BVH Nodes:".to_string());
+            let mut node_stack = vec![(0, 0)]; // (node_idx, depth)
+            while let Some((idx, depth)) = node_stack.pop() {
+              let node = &bvh.nodes[idx];
+              if (min_depth == -1 || depth as i32 >= min_depth)
+                && (max_depth == -1 || depth as i32 <= max_depth)
+              {
+                let _ = tx.send(format!(
+                  "{}Node {} (Depth: {}) - Bound: {:?}",
+                  "  ".repeat(depth),
+                  idx,
+                  depth,
+                  node.bound
+                ));
+              }
+              if node.primitive_count == 0 {
+                node_stack.push((node.right_child_offset as usize, depth + 1));
+                node_stack.push((node.left_child_or_primitive_offset as usize, depth + 1));
+              }
+            }
+          } else {
+            let _ = tx.send("Entity has no BVH.".to_string());
+          }
+        },
+      );
+    } else {
+      let _ = tx.send("No entity selected".to_string());
+    }
+  });
+
+  registry.register("bvh-show", |ctx, args, tx| bvh_visibility(ctx, args, tx, true));
+  registry.register("show-bvh", |ctx, args, tx| bvh_visibility(ctx, args, tx, true));
+  registry.register("bvh-hide", |ctx, args, tx| bvh_visibility(ctx, args, tx, false));
+  registry.register("hide-bvh", |ctx, args, tx| bvh_visibility(ctx, args, tx, false));
+  registry.register("bvh-node-dbgrender-set", |ctx, args, tx| {
+    let is_show = args.last().unwrap_or(&"").parse::<bool>().unwrap_or(true);
+    bvh_visibility(ctx, args, tx, is_show);
+  });
+  registry.register("set-bvh-dbgrender", |ctx, args, tx| {
+    let is_show = args.last().unwrap_or(&"").parse::<bool>().unwrap_or(true);
+    bvh_visibility(ctx, args, tx, is_show);
+  });
+
+  registry.register("bvh-node-dbgrender-get", |ctx, args, tx| {
+    if let Some(id) = ctx.state.selected_entity {
+      let mut parts = args.iter();
+      let depth: u32 = parts.next().unwrap_or(&"0").parse().unwrap_or(0);
+      let child_index: u32 = parts.next().unwrap_or(&"0").parse().unwrap_or(0);
+
+      let mut flat_idx = None;
+      ctx.scene_guard.with_component(
+        id,
+        |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+          if let Some(bvh) = &mesh.mesh.bvh {
+            let mut current_child_index = 0;
+            let mut node_stack = vec![(0, 0)];
+            while let Some((idx, d)) = node_stack.pop() {
+              if d == depth {
+                if current_child_index == child_index {
+                  flat_idx = Some(idx);
+                  break;
+                }
+                current_child_index += 1;
+              }
+              let node = &bvh.nodes[idx];
+              if node.primitive_count == 0 {
+                node_stack.push((node.right_child_offset as usize, d + 1));
+                node_stack.push((node.left_child_or_primitive_offset as usize, d + 1));
+              }
+            }
+          }
+        },
+      );
+
+      if let Some(idx) = flat_idx {
+        let mut render = false;
+        ctx.scene_guard.with_component(
+          id,
+          |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
+            if idx < dbg.node_render_states.len() {
+              render = dbg.node_render_states[idx];
+            }
+          },
+        );
+        let _ = tx.send(format!(
+          "Node at depth {}, index {} is {}",
+          depth, child_index, render
+        ));
+      } else {
+        let _ = tx.send("Node not found.".to_string());
+      }
+    } else {
+      let _ = tx.send("No entity selected".to_string());
+    }
+  });
+  registry.register("get-bvh-dbgrender", |ctx, args, tx| {
+    if let Some(id) = ctx.state.selected_entity {
+      let mut parts = args.iter();
+      let depth: u32 = parts.next().unwrap_or(&"0").parse().unwrap_or(0);
+      let child_index: u32 = parts.next().unwrap_or(&"0").parse().unwrap_or(0);
+
+      let mut flat_idx = None;
+      ctx.scene_guard.with_component(
+        id,
+        |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+          if let Some(bvh) = &mesh.mesh.bvh {
+            let mut current_child_index = 0;
+            let mut node_stack = vec![(0, 0)];
+            while let Some((idx, d)) = node_stack.pop() {
+              if d == depth {
+                if current_child_index == child_index {
+                  flat_idx = Some(idx);
+                  break;
+                }
+                current_child_index += 1;
+              }
+              let node = &bvh.nodes[idx];
+              if node.primitive_count == 0 {
+                node_stack.push((node.right_child_offset as usize, d + 1));
+                node_stack.push((node.left_child_or_primitive_offset as usize, d + 1));
+              }
+            }
+          }
+        },
+      );
+
+      if let Some(idx) = flat_idx {
+        let mut render = false;
+        ctx.scene_guard.with_component(
+          id,
+          |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
+            if idx < dbg.node_render_states.len() {
+              render = dbg.node_render_states[idx];
+            }
+          },
+        );
+        let _ = tx.send(format!(
+          "Node at depth {}, index {} is {}",
+          depth, child_index, render
+        ));
+      } else {
+        let _ = tx.send("Node not found.".to_string());
+      }
+    } else {
+      let _ = tx.send("No entity selected".to_string());
+    }
+  });
+}
+
+fn bvh_visibility(ctx: &mut CmdContext, args: &[&str], tx: &std::sync::mpsc::Sender<String>, is_show: bool) {
+  if let Some(id) = ctx.state.selected_entity {
+    let mut parts = args.iter();
+    let depth_str = parts.next().unwrap_or(&"all");
+    let idx_str = parts.next();
+    let target_idx: Option<u32> = idx_str.and_then(|s| if *s == "all" { None } else { s.parse().ok() });
+
+    let mut min_d = 0;
+    let mut max_d = u32::MAX;
+
+    if *depth_str != "all" {
+      if let Some(dash_pos) = depth_str.find('-') {
+        let (start, end) = depth_str.split_at(dash_pos);
+        let end = &end[1..];
+        if !start.is_empty() { min_d = start.parse().unwrap_or(0); }
+        if !end.is_empty() { max_d = end.parse().unwrap_or(u32::MAX); }
+      } else {
+        let d: u32 = depth_str.parse().unwrap_or(0);
+        min_d = d;
+        max_d = d;
+      }
+    }
+
+    let mut flat_indices = Vec::new();
+    let mut max_depth_found = 0;
+    ctx.scene_guard.with_component(id, |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+      if let Some(bvh) = &mesh.mesh.bvh {
+        let mut node_stack = vec![(0, 0)];
+        let mut current_child_index_at_depth = std::collections::HashMap::new();
+
+        while let Some((idx, d)) = node_stack.pop() {
+          if d > max_depth_found { max_depth_found = d; }
+          if d >= min_d && d <= max_d {
+            let child_index = current_child_index_at_depth.entry(d).or_insert(0);
+            if target_idx.is_none() || target_idx == Some(*child_index) {
+              flat_indices.push((d, idx));
+            }
+            *child_index += 1;
+          }
+          let node = &bvh.nodes[idx];
+          if node.primitive_count == 0 {
+            node_stack.push((node.right_child_offset as usize, d + 1));
+            node_stack.push((node.left_child_or_primitive_offset as usize, d + 1));
+          }
+        }
+      }
+    });
+
+    if flat_indices.is_empty() {
+      if min_d > max_depth_found && min_d != u32::MAX {
+        let _ = tx.send(format!("Error: Max depth is {}, requested {}.", max_depth_found, min_d));
+      } else {
+        let _ = tx.send("No nodes found for the given criteria.".to_string());
+      }
+    } else {
+      let mut bvh_len = 0;
+      ctx.scene_guard.with_component(id, |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+        if let Some(bvh) = &mesh.mesh.bvh { bvh_len = bvh.nodes.len(); }
+      });
+
+      if bvh_len > 0 {
+        let mut added = false;
+        ctx.scene_guard.with_component_mut(id, |dbg: &mut aethervk_core_rlib::scene::BvhDebugComponent| {
+          for &(_, idx) in &flat_indices {
+            if idx < dbg.node_render_states.len() { dbg.node_render_states[idx] = is_show; }
+          }
+          added = true;
+        });
+        if !added {
+          let mut states = vec![false; bvh_len];
+          for &(_, idx) in &flat_indices {
+            if idx < states.len() { states[idx] = is_show; }
+          }
+          let _ = ctx.scene_guard.add_component(id, aethervk_core_rlib::scene::BvhDebugComponent { node_render_states: states });
+        }
+        let _ = tx.send(format!("{} {} nodes.", if is_show { "Showing" } else { "Hiding" }, flat_indices.len()));
+      }
+    }
+  } else {
+    let _ = tx.send("No entity selected".to_string());
+  }
+}
+
 pub enum LogicCommand {
   RotateCamera { delta_x: f32, delta_y: f32 },
   ZoomCamera { amount: f32 },
@@ -580,397 +1077,28 @@ fn logic_update_command(
     }
     LogicCommand::ToggleMeasureTool => {}
     LogicCommand::ExecuteCommand(cmd) => {
-      let mut parts = cmd.split_whitespace();
-      let c = parts.next().unwrap_or("");
-      match c {
-        "scene" => {
-          let _ = response_tx.send("Scene Hierarchy:".to_string());
-          let mut stack = vec![0];
-          scene_guard.traverse_with_hooks(
-            root_entity,
-            &mut stack,
-            &mut |s, e, _: Option<TransformComponent>, _: Option<&TransformComponent>| {
-              let depth = *s.last().unwrap();
-              let name = scene_guard
-                .get_name(e)
-                .unwrap_or_else(|| "Unknown".to_string());
-              let _ = response_tx.send(format!("{}├── {}", "│   ".repeat(depth), name));
-              s.push(depth + 1);
-              true
-            },
-            &mut |s, _| {
-              s.pop();
-            },
-          );
-        }
-        "select" => {
-          let name = cmd[c.len()..].trim();
-          if let Some(id) = scene_guard.get_entity_by_name(name) {
-            state.selected_entity = Some(id);
-            let _ = response_tx.send(format!("selected entity {}, ID: {:?}", name, id));
-          } else {
-            let _ = response_tx.send("entity doesn't exist".to_string());
-          }
-        }
-        "printsel" => {
-          if let Some(id) = state.selected_entity {
-            let name = scene_guard
-              .get_name(id)
-              .unwrap_or_else(|| "Unknown".to_string());
-            let _ = response_tx.send(format!("Selected entity: {} (ID: {:?})", name, id));
-          } else {
-            let _ = response_tx.send("No entity selected".to_string());
-          }
-        }
-        "printbvh" => {
-          if let Some(id) = state.selected_entity {
-            let min_depth: i32 = parts.next().unwrap_or("-1").parse().unwrap_or(-1);
-            let max_depth: i32 = parts.next().unwrap_or("-1").parse().unwrap_or(-1);
-            if min_depth != -1 && max_depth != -1 && min_depth > max_depth {
-              let _ = response_tx.send("illegal arguments: min_depth > max_depth".to_string());
-              return;
-            }
-            scene_guard.with_component(
-              id,
-              |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
-                if let Some(bvh) = &mesh.mesh.bvh {
-                  let _ = response_tx.send("BVH Nodes:".to_string());
-                  let mut node_stack = vec![(0, 0)]; // (node_idx, depth)
-                  while let Some((idx, depth)) = node_stack.pop() {
-                    let node = &bvh.nodes[idx];
-                    if (min_depth == -1 || depth as i32 >= min_depth)
-                      && (max_depth == -1 || depth as i32 <= max_depth)
-                    {
-                      let _ = response_tx.send(format!(
-                        "{}Node {} (Depth: {}) - Bound: {:?}",
-                        "  ".repeat(depth),
-                        idx,
-                        depth,
-                        node.bound
-                      ));
-                    }
-                    if node.primitive_count == 0 {
-                      // inner node
-                      node_stack.push((node.right_child_offset as usize, depth + 1));
-                      node_stack.push((node.left_child_or_primitive_offset as usize, depth + 1));
-                    }
-                  }
-                } else {
-                  let _ = response_tx.send("Entity has no BVH.".to_string());
-                }
-              },
-            );
-          } else {
-            let _ = response_tx.send("No entity selected".to_string());
-          }
-        }
-        "deselect" => {
-          if state.selected_entity.is_some() {
-            let id = state.selected_entity.unwrap();
-            let _ =
-              scene_guard.remove_component::<aethervk_core_rlib::scene::SelectedComponent>(id);
-            state.selected_entity = None;
-            let _ = response_tx.send("Deselected entity.".to_string());
-          } else {
-            let _ = response_tx.send("No selected entity.".to_string());
-          }
-        }
-        "bvh-show" | "bvh-hide" | "bvh-node-dbgrender-set" => {
-          let is_show = c == "bvh-show"
-            || parts
-              .clone()
-              .last()
-              .unwrap_or("")
-              .parse::<bool>()
-              .unwrap_or(true);
-          if let Some(id) = state.selected_entity {
-            let depth_str = parts.next().unwrap_or("all");
-            let idx_str = parts.next();
-            // Handle bvh-node-dbgrender-set legacy bool param
-            let target_idx: Option<u32> = if c == "bvh-node-dbgrender-set" {
-              idx_str.and_then(|s| s.parse().ok())
-            } else {
-              idx_str.and_then(|s| if s == "all" { None } else { s.parse().ok() })
-            };
+      let mut ctx = CmdContext {
+        scene_guard,
+        response_tx: &response_tx,
+        state,
+        root_entity,
+        camera_entity,
+        cursor_entity,
+        grid_entity,
+        following_entity,
+        focused_planet_idx,
+        planets_ids,
+        almanac,
+        current_scale,
+        current_epoch,
+        st_seconds_elapsed,
+        epoch_start,
+        epoch_end,
+      };
 
-            let mut min_d = 0;
-            let mut max_d = u32::MAX;
-
-            if depth_str != "all" {
-              if let Some(dash_pos) = depth_str.find('-') {
-                let (start, end) = depth_str.split_at(dash_pos);
-                let end = &end[1..];
-                if !start.is_empty() {
-                  min_d = start.parse().unwrap_or(0);
-                }
-                if !end.is_empty() {
-                  max_d = end.parse().unwrap_or(u32::MAX);
-                }
-              } else {
-                let d: u32 = depth_str.parse().unwrap_or(0);
-                min_d = d;
-                max_d = d;
-              }
-            }
-
-            let mut flat_indices = Vec::new();
-            let mut max_depth_found = 0;
-            scene_guard.with_component(
-              id,
-              |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
-                if let Some(bvh) = &mesh.mesh.bvh {
-                  let mut node_stack = vec![(0, 0)];
-                  let mut current_child_index_at_depth = std::collections::HashMap::new();
-
-                  while let Some((idx, d)) = node_stack.pop() {
-                    if d > max_depth_found {
-                      max_depth_found = d;
-                    }
-                    if d >= min_d && d <= max_d {
-                      let child_index = current_child_index_at_depth.entry(d).or_insert(0);
-                      if target_idx.is_none() || target_idx == Some(*child_index) {
-                        flat_indices.push((d, idx));
-                      }
-                      *child_index += 1;
-                    }
-                    let node = &bvh.nodes[idx];
-                    if node.primitive_count == 0 {
-                      node_stack.push((node.right_child_offset as usize, d + 1));
-                      node_stack.push((node.left_child_or_primitive_offset as usize, d + 1));
-                    }
-                  }
-                }
-              },
-            );
-
-            if flat_indices.is_empty() {
-              if min_d > max_depth_found && min_d != u32::MAX {
-                let _ = response_tx.send(format!(
-                  "Error: Max depth is {}, requested {}.",
-                  max_depth_found, min_d
-                ));
-              } else {
-                let _ = response_tx.send("No nodes found for the given criteria.".to_string());
-              }
-            } else {
-              let mut bvh_len = 0;
-              scene_guard.with_component(
-                id,
-                |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
-                  if let Some(bvh) = &mesh.mesh.bvh {
-                    bvh_len = bvh.nodes.len();
-                  }
-                },
-              );
-
-              if bvh_len > 0 {
-                let mut added = false;
-                scene_guard.with_component_mut(
-                  id,
-                  |dbg: &mut aethervk_core_rlib::scene::BvhDebugComponent| {
-                    for &(_, idx) in &flat_indices {
-                      if idx < dbg.node_render_states.len() {
-                        dbg.node_render_states[idx] = is_show;
-                      }
-                    }
-                    added = true;
-                  },
-                );
-                if !added {
-                  let mut states = vec![false; bvh_len];
-                  for &(_, idx) in &flat_indices {
-                    if idx < states.len() {
-                      states[idx] = is_show;
-                    }
-                  }
-                  let _ = scene_guard.add_component(
-                    id,
-                    aethervk_core_rlib::scene::BvhDebugComponent {
-                      node_render_states: states,
-                    },
-                  );
-                }
-                let _ = response_tx.send(format!(
-                  "{} {} nodes.",
-                  if is_show { "Showing" } else { "Hiding" },
-                  flat_indices.len()
-                ));
-              }
-            }
-          } else {
-            let _ = response_tx.send("No entity selected".to_string());
-          }
-        }
-        "bvh-node-dbgrender-get" => {
-          if let Some(id) = state.selected_entity {
-            let depth: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
-            let child_index: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
-
-            let mut flat_idx = None;
-            scene_guard.with_component(
-              id,
-              |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
-                if let Some(bvh) = &mesh.mesh.bvh {
-                  let mut current_child_index = 0;
-                  let mut node_stack = vec![(0, 0)];
-                  while let Some((idx, d)) = node_stack.pop() {
-                    if d == depth {
-                      if current_child_index == child_index {
-                        flat_idx = Some(idx);
-                        break;
-                      }
-                      current_child_index += 1;
-                    }
-                    let node = &bvh.nodes[idx];
-                    if node.primitive_count == 0 {
-                      node_stack.push((node.right_child_offset as usize, d + 1));
-                      node_stack.push((node.left_child_or_primitive_offset as usize, d + 1));
-                    }
-                  }
-                }
-              },
-            );
-
-            if let Some(idx) = flat_idx {
-              let mut render = false;
-              scene_guard.with_component(
-                id,
-                |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
-                  if idx < dbg.node_render_states.len() {
-                    render = dbg.node_render_states[idx];
-                  }
-                },
-              );
-              let _ = response_tx.send(format!(
-                "Node at depth {}, index {} is {}",
-                depth, child_index, render
-              ));
-            } else {
-              let _ = response_tx.send("Node not found.".to_string());
-            }
-          }
-        }
-        "clear" => {
-          let _ = response_tx.send("___CLEAR___".to_string());
-        }
-        "help" => {
-          let _ = response_tx.send("Commands:".to_string());
-          let _ = response_tx.send("  help               - Shows this help message".to_string());
-          let _ = response_tx.send("  clear              - Clears the console output".to_string());
-          let _ = response_tx.send("  scene              - Prints the scene hierarchy".to_string());
-          let _ = response_tx.send("  select <entity>    - Selects an entity by name".to_string());
-          let _ = response_tx
-            .send("  printsel           - Prints the currently selected entity".to_string());
-          let _ = response_tx
-            .send("  deselect           - Deselects the currently selected entity".to_string());
-          let _ =
-            response_tx.send("  goto <entity>      - Selects and follows an entity".to_string());
-          let _ = response_tx
-            .send("  unfollow           - Stops the camera from following any entity".to_string());
-          let _ = response_tx.send(
-            "  following          - Prints the entity the camera is currently following"
-              .to_string(),
-          );
-          let _ = response_tx
-            .send("  printbvh [min] [max]- Prints BVH nodes for the selected entity".to_string());
-          let _ = response_tx
-            .send("  bvh-show <range> [idx] - Shows BVH nodes (e.g. 0-3, 2-, -4, all)".to_string());
-          let _ = response_tx.send("  bvh-hide <range> [idx] - Hides BVH nodes".to_string());
-          let _ = response_tx
-            .send("  bvh-node-dbgrender-set <range> <idx> <bool> - Legacy toggle".to_string());
-          let _ = response_tx.send(
-            "  bvh-node-dbgrender-get <depth> <idx>        - Gets BVH node debug render state"
-              .to_string(),
-          );
-        }
-        "goto" | "follow" => {
-          let name = cmd[c.len()..].trim();
-          if let Some(id) = scene_guard.get_entity_by_name(name) {
-            state.selected_entity = Some(id);
-            *following_entity = Some(id);
-
-            let planet_radius = planets_ids
-              .iter()
-              .find(|(_, e, _, _)| *e == id)
-              .map(|(_, _, _, r)| *r)
-              .unwrap_or(0.01);
-            let mut p_pos = Vec3f32::from_components(0.0, 0.0, 0.0);
-            scene_guard.with_component(id, |t: &TransformComponent| {
-              p_pos = t.position;
-            });
-
-            scene_guard.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
-              c.position = p_pos;
-            });
-
-            let sun_pos = aethervk_core_rlib::simulation::almanac::get_almanac_pos(
-              crate::constants::PlanetNaifId::SUN,
-              *current_epoch,
-              almanac,
-            );
-
-            let mut dir_to_sun = sun_pos - p_pos;
-            if dir_to_sun.length_squared() < 1e-6 {
-              dir_to_sun = Vec3f32::from_components(0.0, 1.0, 0.0);
-            } else {
-              dir_to_sun = dir_to_sun.normalize();
-            }
-
-            let offset_dist = (planet_radius as f32 * 3.0).max(60.0);
-
-            let mut right = dir_to_sun.cross(Vec3f32::from_components(0.0, 0.0, 1.0));
-            if right.length_squared() < 1e-6 {
-              right = Vec3f32::from_components(1.0, 0.0, 0.0);
-            } else {
-              right = right.normalize();
-            }
-            let up = right.cross(dir_to_sun).normalize();
-
-            let cam_pos = p_pos - dir_to_sun * offset_dist
-              + right * (offset_dist * 1.5)
-              + up * (offset_dist * 0.5);
-
-            let view_dir = (p_pos - cam_pos).normalize();
-
-            let yaw = -f32::atan2(-view_dir.x(), view_dir.y());
-            let pitch = f32::asin(view_dir.z());
-
-            state.yaw = yaw;
-            state.pitch = pitch;
-
-            let yaw_quat =
-              Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), state.yaw);
-            let pitch_quat =
-              Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
-
-            scene_guard.with_component_mut(camera_entity, |c: &mut TransformComponent| {
-              c.position = cam_pos;
-              c.rotation = (yaw_quat * pitch_quat).normalize();
-            });
-
-            let _ = response_tx.send(format!("Selected and following entity: {}", name));
-          } else {
-            let _ = response_tx.send("Entity doesn't exist".to_string());
-          }
-        }
-        "unfollow" => {
-          *following_entity = None;
-          let _ = response_tx.send("Camera stopped following.".to_string());
-        }
-        "following" => {
-          if let Some(id) = following_entity {
-            let name = scene_guard
-              .get_name(*id)
-              .unwrap_or_else(|| "Unknown".to_string());
-            let _ = response_tx.send(format!("Currently following: {} (ID: {:?})", name, id));
-          } else {
-            let _ = response_tx.send("Camera is not following any entity.".to_string());
-          }
-        }
-        _ => {
-          let _ = response_tx.send(format!("Unknown command: {}", cmd));
-        }
-      }
+      let mut registry = test_utils::command::CommandRegistry::<CmdContext>::new();
+      register_commands(&mut registry);
+      registry.execute(&cmd, &mut ctx, response_tx);
     }
     LogicCommand::SelectEntity { id: _ } => {}
     LogicCommand::CycleTimeScale => {

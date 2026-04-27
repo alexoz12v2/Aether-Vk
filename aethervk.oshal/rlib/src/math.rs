@@ -2,6 +2,16 @@ use core::{arch::asm, cmp, ops};
 
 // target_pointer_width = "64" assumed, as done in lib.rs
 
+/// Safe division guard to avoid `.abs()` (which requires libm in `no_std`)
+/// and bypasses Infinity/NaN scaling bounds when dividing by ~0.0
+pub fn safe_div(a: f32, b: f32) -> f32 {
+  if b > -1e-6_f32 && b < 1e-6_f32 {
+    0.0
+  } else {
+    a / b
+  }
+}
+
 /// Helper function to find the minimum between two PartialOrd elements by reference
 #[inline]
 pub fn min_two<'a, T: PartialOrd + ?Sized>(a: &'a T, b: &'a T) -> &'a T {
@@ -160,18 +170,10 @@ pub trait FloatLike: Scalar + Copy {
   fn from_f32(num: f32) -> Self;
 
   fn min(self, rhs: Self) -> Self {
-    if self < rhs {
-      self
-    } else {
-      rhs
-    }
+    if self < rhs { self } else { rhs }
   }
   fn max(self, rhs: Self) -> Self {
-    if self > rhs {
-      self
-    } else {
-      rhs
-    }
+    if self > rhs { self } else { rhs }
   }
 
   fn sqrt(self) -> Self; // TODO Option? See Arch's manual for sqrt behavior and tag unsafe

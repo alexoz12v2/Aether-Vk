@@ -2,7 +2,7 @@ use crate::math::{compute_com_and_tensor, qr_diagonalization, hat, vee, expm_hat
 use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
 use aethervk_oshal_rlib::math::matrix::{Matrix, Matrix3, MatrixVectorMul, SquareMatrix, mat3::Mat3f32};
 use aethervk_oshal_rlib::math::{FloatLike, MulAddIdentity};
-use aethervk_oshal_rlib::os::pool::{ThreadPool, Workload};
+use aethervk_oshal_rlib::os::pool::{ThreadPool, Workload, WorkloadStatus};
 use alloc::vec::Vec;
 use alloc::boxed::Box;
 
@@ -385,12 +385,13 @@ unsafe impl Send for ParticleUpdateWorkload {}
 unsafe impl Sync for ParticleUpdateWorkload {}
 
 impl Workload for ParticleUpdateWorkload {
-  fn execute(&self) {
+  fn execute(&mut self) -> WorkloadStatus {
     let particles =
       unsafe { core::slice::from_raw_parts_mut(self.particles_ptr, self.particles_len) };
     let comet = unsafe { &*self.comet };
 
     update_particles_single_threaded(particles, comet, self.sun_pos, self.sun_mass, self.dt);
+    WorkloadStatus::Complete
   }
 }
 

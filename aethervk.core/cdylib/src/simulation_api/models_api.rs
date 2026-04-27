@@ -66,7 +66,7 @@ impl SimulationContext {
       self.mesh_cache.insert(String::from(path_str), mesh);
 
       // Add to registry
-      self.model_registry.insert(model_id, String::from(path_str));
+      self.model_registry.insert(model_id, path_str.to_string());
       return Ok(model_id);
     }
 
@@ -93,7 +93,7 @@ impl SimulationContext {
         cached_mesh
       } else {
         if let Ok(loaded_mesh) = simulation::comet::load_comet_from_gltf(&path_str, false) {
-          self.mesh_cache.insert(path_str.clone(), loaded_mesh)
+          self.mesh_cache.insert(path_str.to_string(), loaded_mesh)
         } else {
           return Ok(0); 
         }
@@ -114,7 +114,7 @@ impl SimulationContext {
       let _ = active.scene.add_component(
         entity_id,
         PhysicalMeshComponent {
-          asset_path: path_str.clone(),
+          asset_path: path_str.to_string(),
           mesh: mesh_arc,
           emissive_intensity: 0.0,
           emissive_color: [0.0, 0.0, 0.0],

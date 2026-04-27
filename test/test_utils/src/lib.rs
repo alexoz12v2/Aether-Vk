@@ -1,23 +1,56 @@
-use aethervk_core_rlib::gpu::{OpaqueNativeHandleInfo, RenderDeviceHandle, RenderFrontend};
+pub mod app;
+pub mod command;
+pub mod threading;
 
+use aethervk_core_rlib::gpu::{
+  OpaqueNativeHandleInfo, PresentationEngineHandle, RenderDevice, RenderDeviceHandle,
+  RenderFrontend, RenderScene,
+};
+#[cfg(target_os = "linux")]
+use core::ffi;
+#[cfg(windows)]
+use core::ffi;
+use std::any::TypeId;
+#[cfg(target_os = "macos")]
+use objc2::{msg_send, rc::Retained, sel, ClassType, DeclaredClass};
 #[cfg(target_os = "macos")]
 use objc2_app_kit::NSView;
+#[cfg(target_os = "macos")]
+use objc2_foundation::{ns_string, NSNotification, NSNotificationCenter, NSObject};
 #[cfg(target_os = "macos")]
 use objc2_quartz_core::CAAutoresizingMask;
 #[cfg(target_os = "macos")]
 use raw_window_handle::RawWindowHandle;
 #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
 use raw_window_handle::RawWindowHandle;
-#[cfg(target_os = "linux")]
-use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
-#[cfg(target_os = "linux")]
-use core::ffi;
 #[cfg(windows)]
 use raw_window_handle::RawWindowHandle;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-#[cfg(windows)]
-use core::ffi;
+#[cfg(target_os = "linux")]
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
+#[cfg(target_os = "macos")]
+use std::cell::Cell;
+use std::cell::RefCell;
+use std::error::Error;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use winit::event_loop::{EventLoop, EventLoopBuilder};
+#[cfg(target_os = "macos")]
+use winit::platform::macos::EventLoopBuilderExtMacOS;
+use winit::window::WindowBuilder;
 use winit::{event_loop::EventLoopProxy, window::Window};
+use aethervk_core_rlib::gpu;
+use aethervk_core_rlib::gpu::scene_conversion::SceneConversionExt;
+use aethervk_core_rlib::scene::{
+  AddComponentError, CameraComponent, CursorComponent, EntityId, GridComponent,
+  PhysicalMeshComponent, Scene, SkyComponent, SunComponent, TransformComponent,
+};
+use aethervk_core_rlib::simulation::comet::Comet;
+use aethervk_core_rlib::types::{EngineError, GpuResult};
+use aethervk_oshal_rlib::math::quaternion::Quaternion;
+use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+use aethervk_oshal_rlib::math::vector::vec4::Quat;
+use aethervk_oshal_rlib::math::vector::Vector3;
 
 /// Custom event type to handle resizing start and stop
 pub enum AppEvent {
@@ -29,12 +62,9 @@ pub enum AppEvent {
 pub unsafe fn setup_metal_layer(
   window: &Window,
   device: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>,
-) -> objc2::rc::Retained<objc2_quartz_core::CAMetalLayer> {
+) -> Retained<objc2_quartz_core::CAMetalLayer> {
   use objc2_app_kit::NSView;
   use objc2_quartz_core::CAMetalLayer;
-  use objc2_metal::MTLPixelFormat;
-  use objc2_core_foundation::CGSize;
-
   let raw_handle = window.window_handle().unwrap().as_raw();
   let view_ptr = match raw_handle {
     RawWindowHandle::AppKit(w) => w.ns_view.as_ptr(),
@@ -173,7 +203,7 @@ pub fn setup_windows_resize_hook(
 ) {
   use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
-    UI::Shell::{SetWindowSubclass, DefSubclassProc},
+    UI::Shell::{DefSubclassProc, SetWindowSubclass},
     UI::WindowsAndMessaging::{WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE},
   };
 
@@ -210,16 +240,6 @@ pub fn setup_windows_resize_hook(
     }
   }
 }
-
-#[cfg(target_os = "macos")]
-use objc2::{ClassType, DeclaredClass, declare_class, msg_send, msg_send_id, rc::Retained, sel};
-#[cfg(target_os = "macos")]
-use objc2_foundation::{ns_string, NSNotification, NSNotificationCenter, NSObject};
-#[cfg(target_os = "macos")]
-use std::cell::Cell;
-use std::path::PathBuf;
-use aethervk_core_rlib::gpu;
-use aethervk_core_rlib::types::GpuResult;
 
 #[cfg(target_os = "macos")]
 pub struct ResizeObserverIvars {
@@ -330,6 +350,10 @@ pub fn cycle_get_asset_path_from_exe(use_args: bool) -> PathBuf {
   asset_dir
 }
 
+pub fn get_monospace_font_path_from_asset_path<T: AsRef<Path>>(asset_dir: T) -> PathBuf {
+  asset_dir.as_ref().join("fonts/JetBrainsMono-Bold.ttf")
+}
+
 pub fn get_handle_and_window_info(
   render_frontend: &RenderFrontend,
   render_device_handle: RenderDeviceHandle,
@@ -356,4 +380,178 @@ pub fn get_handle_and_window_info(
     params = WindowExtractHandlesParams::new_macos(mtl_device_id);
   }
   extract_native_handles(&window, &params)
+}
+
+pub fn create_winit_window_and_event_loop<S>(title: S) -> (Window, EventLoop<AppEvent>)
+where
+  S: Into<String>,
+{
+  let mut event_loop_builder = EventLoopBuilder::<AppEvent>::with_user_event();
+  // Disable default macOS menu. This disables default macOS bindings (so that we can customize interception of Super + Q)
+  #[cfg(target_os = "macos")]
+  event_loop_builder.with_default_menu(false);
+
+  let event_loop = event_loop_builder.build().unwrap();
+  let proxy = event_loop.create_proxy();
+  let proxy_ptr = unsafe { std::ptr::NonNull::new_unchecked(Box::into_raw(Box::new(proxy))) };
+
+  let window = WindowBuilder::new()
+    .with_title(title)
+    .build(&event_loop)
+    .unwrap();
+  setup_resize_hook(&window, proxy_ptr);
+
+  (window, event_loop)
+}
+
+pub trait SceneTestUtilsExt {
+  fn with_all_dbg_components(self) -> Self;
+  fn add_root_entity(&self) -> Result<EntityId, AddComponentError>;
+
+  fn add_mesh<S>(&self, entity_name: S, parent: EntityId) -> SceneMeshEntityBuilder
+  where
+    S: Into<String>;
+}
+
+impl SceneTestUtilsExt for Scene {
+  fn with_all_dbg_components(self) -> Self {
+    self.register_component::<TransformComponent>(&[]);
+    self.register_component::<PhysicalMeshComponent>(&[TypeId::of::<TransformComponent>()]);
+    self.register_component::<CameraComponent>(&[TypeId::of::<TransformComponent>()]);
+    self.register_component::<CursorComponent>(&[TypeId::of::<TransformComponent>()]);
+    self.register_component::<SunComponent>(&[TypeId::of::<TransformComponent>()]);
+    self.register_component::<SkyComponent>(&[]);
+    self.register_component::<GridComponent>(&[]);
+    self.register_component::<aethervk_core_rlib::scene::BvhDebugComponent>(&[]);
+    self.register_component::<aethervk_core_rlib::scene::SelectedComponent>(&[]);
+    self.register_component::<aethervk_core_rlib::scene::FollowingComponent>(&[]);
+    self
+  }
+
+  fn add_root_entity(&self) -> Result<EntityId, AddComponentError> {
+    let root_entity = self.spawn_entity("Root");
+    self
+      .add_component(
+        root_entity,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .map(|_| root_entity)
+  }
+
+  fn add_mesh<S>(&'_ self, entity_name: S, parent: EntityId) -> SceneMeshEntityBuilder<'_>
+  where
+    S: Into<String>,
+  {
+    SceneMeshEntityBuilder::new(entity_name, parent, self)
+  }
+}
+
+pub struct SceneMeshEntityBuilder<'a> {
+  entity_id: EntityId,
+  scene: &'a Scene,
+  error: RefCell<Option<Box<dyn Error>>>,
+}
+
+impl<'a> SceneMeshEntityBuilder<'a> {
+  fn new<S>(entity_name: S, parent: EntityId, scene: &'a Scene) -> Self
+  where
+    S: Into<String>,
+  {
+    let entity_id = scene.spawn_entity(entity_name);
+    scene.set_parent(entity_id, Some(parent));
+    Self {
+      entity_id,
+      scene,
+      error: RefCell::new(None),
+    }
+  }
+
+  pub fn with_mesh<S>(self, asset_path: S, mesh: Arc<Comet>) -> Self
+  where
+    S: Into<String>,
+  {
+    if self
+      .scene
+      .has_component::<PhysicalMeshComponent>(self.entity_id)
+      .into()
+    {
+      let mut error = self.error.borrow_mut();
+      *error = Some(Box::new(EngineError::InvalidOperation(
+        "Cannot add a component which is already present",
+      )));
+    } else if let Err(err) = self.scene.add_component(
+      self.entity_id,
+      PhysicalMeshComponent {
+        asset_path: asset_path.into(),
+        mesh,
+        emissive_intensity: 0.0,
+        emissive_color: [0.0, 0.0, 0.0],
+      },
+    ) {
+      let mut error = self.error.borrow_mut();
+      *error = Some(Box::new(err));
+    }
+    self
+  }
+
+  pub fn with_position(self, position: Vec3f32) -> Self {
+    if self
+      .scene
+      .has_component::<TransformComponent>(self.entity_id)
+      .into()
+    {
+      let mut error = self.error.borrow_mut();
+      *error = Some(Box::new(EngineError::InvalidOperation(
+        "Cannot add a component which is already present",
+      )));
+    } else if let Err(err) = self.scene.add_component(
+      self.entity_id,
+      TransformComponent {
+        position,
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    ) {
+      let mut error = self.error.borrow_mut();
+      *error = Some(Box::new(err));
+    }
+    self
+  }
+
+  pub fn build(self) -> Result<EntityId, Box<dyn Error>> {
+    let has_transform: bool = self
+      .scene
+      .has_component::<TransformComponent>(self.entity_id)
+      .into();
+    let has_mesh: bool = self
+      .scene
+      .has_component::<PhysicalMeshComponent>(self.entity_id)
+      .into();
+    if !has_transform || !has_mesh {
+      return Err(Box::new(EngineError::InvalidOperation(
+        "Missing `TransformComponent` or `PhysicalMeshComponent`",
+      )));
+    }
+    let mut error = self.error.borrow_mut();
+    if error.is_some() {
+      return Err(unsafe { error.take().unwrap_unchecked() });
+    }
+
+    Ok(self.entity_id)
+  }
+}
+
+pub fn scene_to_render_scene(
+  scene: &Scene,
+  device: &dyn RenderDevice,
+  presentation_engine_handle: PresentationEngineHandle,
+  camera_entity: EntityId,
+  render_outlines: bool,
+) -> GpuResult<RenderScene> {
+  let render_scene_extraction = scene.convert_scene(camera_entity, render_outlines)?;
+  render_scene_extraction.build_render_scene(device, presentation_engine_handle)
 }

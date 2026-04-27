@@ -17,6 +17,7 @@ use crate::{
   },
   types::GpuResult,
 };
+use crate::gpu::vulkan::device::swapchain;
 
 // ---------------- COMPUTE PIPELINE HASH ------------------------------------
 fn eq_specialization_constants(
@@ -472,6 +473,34 @@ impl Hash for GraphicsInfo {
 }
 
 impl GraphicsInfo {
+  // TODO: Add methods to diminish code duplication in [`super::archetypes_struct`]
+  pub fn apply_presentation_defaults(
+    mut self,
+    pe: &swapchain::PresentationState,
+    depth_format: vk::Format,
+    layout: vk::PipelineLayout,
+    render_pass: vk::RenderPass,
+  ) -> Self {
+    let (width, height) = pe.extent();
+    self.fragment_shader.viewports.push(vk::Viewport {
+      width: width as f32, height: -(height as f32), x: 0.0, y: height as f32, min_depth: 0.0, max_depth: 1.0
+    });
+    self.fragment_shader.scissors.push(vk::Rect2D {
+      offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width, height }
+    });
+
+    self.fragment_out.color_attachment_formats.push(pe.format());
+    self.fragment_out.depth_attachment_format = Some(depth_format);
+    if self.pipeline_flags.contains(PipelineFlags::STENCIL_ENABLE) {
+      self.fragment_out.stencil_attachment_format = Some(depth_format);
+    }
+
+    self.pipeline_layout = layout;
+    self.render_pass = render_pass;
+    self.subpass = 0;
+    self
+  }
+
   pub(super) fn add_specialization_constant_u32(
     &mut self,
     constant: vk::SpecializationMapEntry,

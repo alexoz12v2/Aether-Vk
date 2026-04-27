@@ -34,6 +34,8 @@ pub fn execution_model_to_shader_flags(
     spirv::ExecutionModel::ClosestHitKHR => vk::ShaderStageFlags::CLOSEST_HIT_KHR,
     spirv::ExecutionModel::MissKHR => vk::ShaderStageFlags::MISS_KHR,
     spirv::ExecutionModel::CallableKHR => vk::ShaderStageFlags::CALLABLE_KHR,
+    spirv::ExecutionModel::TaskEXT => vk::ShaderStageFlags::TASK_EXT,
+    spirv::ExecutionModel::MeshEXT => vk::ShaderStageFlags::MESH_EXT,
   }
 }
 
@@ -107,7 +109,7 @@ impl Shader {
 
     Ok(Self {
       module,
-      entry_point: CString::new(entry_point).map_err(|_| GpuError::InvalidState)?,
+      entry_point: CString::new(entry_point).map_err(|_| GpuError::InvalidState("shader_manager.rs:110"))?,
       shader_stage: execution_model_to_shader_flags(execution_model),
       spv_module,
     })
@@ -144,7 +146,7 @@ impl ShaderManager {
     }
 
     // Load the SPIR-V shader code from the file.
-    let spirv_code = fs::read(&path).map_err(|_| GpuError::InvalidArgument)?;
+    let spirv_code = fs::read(&path).map_err(|_| GpuError::InvalidArgument("shader_manager.rs:147"))?;
 
     // Ensure the code is aligned to 4 bytes (u32).
     let (prefix, code, suffix) = unsafe { spirv_code.align_to::<u32>() };

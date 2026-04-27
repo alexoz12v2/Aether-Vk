@@ -22,16 +22,17 @@ cursor_debug = []
 objc = { version = "0.2.7" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.5.2"
-objc2-metal = "0.2.2"
-objc2-quartz-core = "0.2.2"
-objc2-foundation = "0.2.2"
+objc2 = "0.6.4"
+objc2-metal = "0.3.2"
+objc2-quartz-core = "0.3.2"
+objc2-foundation = "0.3.2"
+
+[dev-dependencies]
+ntest = "*"
 
 [dependencies]
-ab_glyph = "0.2.32"
-aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = [
-    "console_log",
-] }
+ab_glyph = { version = "0.2.32", default-features = false, features = ["libm", "variable-fonts", "gvar-alloc"] }
+aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = ["console_log"] }
 static_assertions = "1.1.0"
 spin = { version = "0.10", features = ["once", "rwlock", "mutex"] }
 thiserror = { version = "2", default-features = false }
@@ -40,7 +41,7 @@ heapless = { version = "0.9" }
 itertools = { version = "0.14", default-features = false }
 ouroboros = { version = "0.18", default-features = false }
 slotmap = { version = "1.1.1", default-features = false }
-hashbrown = { version = "0.16" }
+hashbrown = { version = "0.17" }
 # Model Loading
 gltf = { version = "1.4.0", path = "../../external/gltf" }
 # cannot enable gltf feature cause it imports std
@@ -49,14 +50,11 @@ ahash = { version = "0.8", default-features = false }
 bytemuck = { version = "1.15", default-features = false }
 # Texture Loading
 png-decoder = { version = "0.2.0" }
-zune-jpeg = { version = "0.5.14", default-features = false, features = [
-    "x86",
-    "neon",
-] }
+zune-jpeg = { version = "0.5.14", default-features = false, features = ["x86", "neon"] }
 zune-core = "0.5.1"
-ktx2 = { version = "0.4.0", default-features = false }
+ktx2 = { version = "0.5.0", default-features = false }
 # SPIR-V Shaders
-spirv = "0.2"
+spirv = "0.4.0+sdk-1.4.341.0"
 spirv-reflect = { path = "../../external/spirv-reflect", default-features = false }
 # anise library for almanac about SPK files and planet motion data
 anise = { path = "../../external/anise/anise", default-features = false }
@@ -69,7 +67,7 @@ vk-mem = { version = "0.5", path = "../../external/vk-mem", default-features = f
 ] }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = ">=0.59, <=0.62", default-features = false, features = [
+windows = { version = ">=0.59, <=0.62.2", default-features = false, features = [
     "Win32_Foundation",
     "Win32_System_Console",
     "Win32_System_LibraryLoader",
@@ -81,3 +79,9 @@ windows = { version = ">=0.59, <=0.62", default-features = false, features = [
 libc = { version = "0.2", default-features = false, features = [
     "extra_traits",
 ] }
+
+[profile.default]
+# after doing `cargo install cargo-nextest`
+# configuration for `cargo nextest run`
+# Fail the test if it takes longer than 10 seconds
+slow-timeout = { period = "10s", terminate-after = 1 }

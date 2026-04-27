@@ -1,3 +1,4 @@
+use aethervk_core_rlib::types::GpuResult;
 use aethervk_core_rlib::{
   gpu::{self, frame::RenderScene, RenderDevice},
   scene::{
@@ -13,22 +14,17 @@ use aethervk_oshal_rlib::math::{
 };
 use heapless::index_map::FnvIndexMap;
 use rfd::FileDialog;
-use std::sync::{Arc};
+use std::sync::Arc;
 use test_utils::{
-  cycle_get_asset_path_from_exe, get_handle_and_window_info,
-  setup_resize_hook, AppEvent,
+  cycle_get_asset_path_from_exe, get_handle_and_window_info, setup_resize_hook, AppEvent,
 };
-use winit::{
-  event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent},
-  event_loop::{ControlFlow, EventLoopBuilder},
-  keyboard::{KeyCode, PhysicalKey},
-  window::WindowBuilder,
-};
-use aethervk_core_rlib::types::GpuResult;
+use winit::{event_loop::EventLoopBuilder, window::WindowBuilder};
 
 struct AppState {
   is_resizing: bool,
   is_exiting: bool,
+  scene: Arc<Scene>,
+  window: Option<winit::window::Window>,
 }
 
 #[repr(C)]
@@ -72,6 +68,7 @@ fn main() {
   let render_frontend = {
     let runtime_params = Box::new(RuntimeParams {
       render_backend_params: FnvIndexMap::new(),
+      validation_error_callback: None,
     });
     gpu::new_render_frontend(gpu::VULKAN_RENDER_BACKEND, &runtime_params).unwrap()
   };
@@ -209,142 +206,199 @@ fn main() {
     )
     .unwrap();
 
-  let mut app_state = AppState {
+  let app_state = AppState {
     is_resizing: false,
     is_exiting: false,
+    scene: Arc::new(scene),
+    window: Some(window),
   };
 
-  let mut right_mouse_button_down = false;
+  let mesh_app = MeshApp {
+    app_state,
+    render_frontend,
+    render_device_handle,
+    presentation_engine,
+    camera_entity,
+    mesh_entity,
+    sun_entity,
+    right_mouse_button_down: false,
+    cam_dist,
+    cam_yaw,
+    cam_pitch,
+    width,
+    height,
+    window_info: _window_info,
+  };
 
-  event_loop.set_control_flow(ControlFlow::Poll);
-  event_loop
-    .run(move |event, elwt| match event {
-      Event::UserEvent(app_event) => match app_event {
-        AppEvent::ResizeStarted => {
-          app_state.is_resizing = true;
-        }
-        AppEvent::ResizeEnded => {
-          app_state.is_resizing = false;
-          window.request_redraw();
-        }
-      },
-      Event::WindowEvent { event, window_id } if window_id == window.id() => match event {
-        WindowEvent::CloseRequested => {
-          app_state.is_exiting = true;
-          elwt.exit();
-        }
-        WindowEvent::Resized(physical_size) => {
-          width = physical_size.width;
-          height = physical_size.height;
-          #[cfg(target_os = "macos")]
-          {
-            _window_info
-              .metal_layer
-              .setDrawableSize(objc2_core_foundation::CGSize {
-                width: physical_size.width as f64,
-                height: physical_size.height as f64,
-              });
-          }
-          scene.with_component_mut(camera_entity, |c: &mut CameraComponent| {
-            c.projection = Mat4x4f32::perspective_vk(
-              std::f32::consts::FRAC_PI_4,
-              width as f32 / height as f32,
-              0.1,
-              100.0,
-            );
-          });
-        }
-        WindowEvent::MouseInput {
-          state: element_state,
-          button,
-          ..
-        } => {
-          if button == MouseButton::Right {
-            right_mouse_button_down = element_state == ElementState::Pressed;
-          }
-        }
-        WindowEvent::MouseWheel { delta, .. } => {
-          let scroll_amount = match delta {
-            winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-            winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 10.0) as f32,
-          };
-          cam_dist = (cam_dist - scroll_amount).max(0.1);
+  test_utils::app::run_app(mesh_app, event_loop);
+}
 
-          let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), cam_yaw);
-          let pitch_quat =
-            Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), cam_pitch);
-          let new_rot = yaw_quat * pitch_quat;
-          let offset = Vec3f32::from_components(0.0, -1.0, 0.0) * cam_dist;
-          let new_offset = new_rot.rotate_vector(offset);
-          scene.with_component_mut(camera_entity, |c: &mut TransformComponent| {
-            c.position = new_offset;
-            c.rotation = new_rot;
-          });
-          window.request_redraw();
-        }
-        WindowEvent::KeyboardInput { event, .. } => {
-          if event.state == ElementState::Pressed {
-            if let PhysicalKey::Code(KeyCode::Escape) = event.physical_key {
-              app_state.is_exiting = true;
-              elwt.exit();
-            }
-          }
-        }
-        WindowEvent::RedrawRequested => {
-          if app_state.is_resizing || app_state.is_exiting || width == 0 || height == 0 {
-            return;
-          }
+struct MeshApp {
+  app_state: AppState,
+  render_frontend: gpu::RenderFrontend,
+  render_device_handle: gpu::RenderDeviceHandle,
+  presentation_engine: gpu::PresentationEngineHandle,
+  camera_entity: EntityId,
+  mesh_entity: EntityId,
+  sun_entity: EntityId,
+  right_mouse_button_down: bool,
+  cam_dist: f32,
+  cam_yaw: f32,
+  cam_pitch: f32,
+  width: u32,
+  height: u32,
+  window_info: test_utils::WindowPlatformData,
+}
 
-          let mut payload = RenderPayloadData {
-            presentation_engine,
-            scene: &scene,
-            camera_entity,
-            mesh_entity,
-            sun_entity,
-            width,
-            height,
-          };
+impl test_utils::app::App for MeshApp {
+  fn window(&self) -> Option<&winit::window::Window> {
+    self.app_state.window.as_ref()
+  }
 
-          render_frontend
-            .with_device(render_device_handle, |device| {
-              render_function(device, &mut payload)
-            })
-            .unwrap();
+  fn is_resizing(&self) -> bool {
+    self.app_state.is_resizing
+  }
+
+  fn set_resizing(&mut self, resizing: bool) {
+    self.app_state.is_resizing = resizing;
+  }
+
+  fn is_exiting(&self) -> bool {
+    self.app_state.is_exiting
+  }
+
+  fn set_exiting(&mut self, exiting: bool) {
+    self.app_state.is_exiting = exiting;
+  }
+
+  fn on_resize(&mut self, width: u32, height: u32) {
+    self.width = width;
+    self.height = height;
+    #[cfg(target_os = "macos")]
+    {
+      self
+        .window_info
+        .metal_layer
+        .setDrawableSize(objc2_core_foundation::CGSize {
+          width: width as f64,
+          height: height as f64,
+        });
+    }
+    self
+      .app_state
+      .scene
+      .with_component_mut(self.camera_entity, |c: &mut CameraComponent| {
+        c.projection = Mat4x4f32::perspective_vk(
+          std::f32::consts::FRAC_PI_4,
+          width as f32 / height as f32,
+          0.1,
+          100.0,
+        );
+      });
+  }
+
+  fn on_mouse_input(
+    &mut self,
+    button: winit::event::MouseButton,
+    state: winit::event::ElementState,
+  ) {
+    if button == winit::event::MouseButton::Right {
+      self.right_mouse_button_down = state == winit::event::ElementState::Pressed;
+    }
+  }
+
+  fn on_keyboard_input(
+    &mut self,
+    event: &winit::event::KeyEvent,
+    modifiers: winit::keyboard::ModifiersState,
+  ) {
+    if event.state == winit::event::ElementState::Pressed {
+      if let winit::keyboard::PhysicalKey::Code(keycode) = event.physical_key {
+        if keycode == winit::keyboard::KeyCode::Escape {
+          // Do not exit on escape
         }
-        _ => {}
-      },
-      Event::DeviceEvent {
-        event: DeviceEvent::MouseMotion { delta },
-        ..
-      } => {
-        if right_mouse_button_down {
-          let rotation_speed = 0.005;
-          cam_yaw += delta.0 as f32 * rotation_speed;
-          cam_pitch -= delta.1 as f32 * rotation_speed;
-          cam_yaw = cam_yaw % (std::f32::consts::PI * 2.0);
-          cam_pitch = cam_pitch.clamp(-1.55, 1.55);
-
-          let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), cam_yaw);
-          let pitch_quat =
-            Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), cam_pitch);
-          let new_rot = yaw_quat * pitch_quat;
-          let offset = Vec3f32::from_components(0.0, -1.0, 0.0) * cam_dist;
-          let new_offset = new_rot.rotate_vector(offset);
-          scene.with_component_mut(camera_entity, |c: &mut TransformComponent| {
-            c.position = new_offset;
-            c.rotation = new_rot;
-          });
-          window.request_redraw();
+        #[cfg(target_os = "macos")]
+        if keycode == winit::keyboard::KeyCode::KeyQ && modifiers.super_key() {
+          self.app_state.is_exiting = true;
         }
       }
-      Event::AboutToWait => {
-        if !app_state.is_resizing && !app_state.is_exiting {
-          window.request_redraw();
-        }
+    }
+  }
+
+  fn on_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
+    let scroll_amount = match delta {
+      winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+      winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 10.0) as f32,
+    };
+    self.cam_dist = (self.cam_dist - scroll_amount).max(0.1);
+
+    let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), self.cam_yaw);
+    let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), self.cam_pitch);
+    let new_rot = yaw_quat * pitch_quat;
+    let offset = Vec3f32::from_components(0.0, -1.0, 0.0) * self.cam_dist;
+    let new_offset = new_rot.rotate_vector(offset);
+    self
+      .app_state
+      .scene
+      .with_component_mut(self.camera_entity, |c: &mut TransformComponent| {
+        c.position = new_offset;
+        c.rotation = new_rot;
+      });
+    if let Some(w) = self.app_state.window.as_ref() {
+      w.request_redraw();
+    }
+  }
+
+  fn on_mouse_motion(&mut self, delta: (f64, f64)) {
+    if self.right_mouse_button_down {
+      let rotation_speed = 0.005;
+      self.cam_yaw += delta.0 as f32 * rotation_speed;
+      self.cam_pitch -= delta.1 as f32 * rotation_speed;
+      self.cam_yaw = self.cam_yaw % (std::f32::consts::PI * 2.0);
+      self.cam_pitch = self.cam_pitch.clamp(-1.55, 1.55);
+
+      let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), self.cam_yaw);
+      let pitch_quat =
+        Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), self.cam_pitch);
+      let new_rot = yaw_quat * pitch_quat;
+      let offset = Vec3f32::from_components(0.0, -1.0, 0.0) * self.cam_dist;
+      let new_offset = new_rot.rotate_vector(offset);
+      self
+        .app_state
+        .scene
+        .with_component_mut(self.camera_entity, |c: &mut TransformComponent| {
+          c.position = new_offset;
+          c.rotation = new_rot;
+        });
+      if let Some(w) = self.app_state.window.as_ref() {
+        w.request_redraw();
       }
-      _ => (),
-    })
-    .unwrap();
+    }
+  }
+
+  fn on_redraw(&mut self) {
+    if self.width == 0 || self.height == 0 {
+      return;
+    }
+
+    let mut payload = RenderPayloadData {
+      presentation_engine: self.presentation_engine,
+      scene: &self.app_state.scene,
+      camera_entity: self.camera_entity,
+      mesh_entity: self.mesh_entity,
+      sun_entity: self.sun_entity,
+      width: self.width,
+      height: self.height,
+    };
+
+    self
+      .render_frontend
+      .with_device(self.render_device_handle, |device| {
+        render_function(device, &mut payload).unwrap();
+        Ok(())
+      })
+      .unwrap();
+  }
 }
 
 fn render_function(device: &dyn RenderDevice, payload: &mut RenderPayloadData) -> GpuResult<()> {

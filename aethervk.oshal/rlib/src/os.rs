@@ -103,3 +103,13 @@ impl From<ThreadingError> for NativeError {
     value.into()
   }
 }
+
+pub const FONT_PATH: &str = if cfg!(target_os = "windows") {
+  "C:/Windows/Fonts/segoeui.ttf"
+} else if cfg!(target_os = "macos") {
+  "/System/Library/Fonts/SFNS.ttf"
+} else {
+  // TODO check that this exists in any common linux distro
+  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+};
+

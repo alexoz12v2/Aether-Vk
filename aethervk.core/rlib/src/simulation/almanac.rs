@@ -3,14 +3,17 @@ use aethervk_oshal_rlib::math::vector::vec4::Quat;
 use aethervk_oshal_rlib::math::quaternion::Quaternion;
 use aethervk_oshal_rlib::math::vector::Vector3;
 use aethervk_oshal_rlib::os;
-use aethervk_oshal_rlib::os::fs::{FileSystemObject};
+use aethervk_oshal_rlib::os::fs::{ExtensionToStr, FileSystemObject};
+use alloc::vec::Vec;
+use alloc::string::String;
 
 pub const DISTANCE_SCALE_FACTOR: f64 = 10000000.0;
 
 #[derive(Default)]
 pub struct AlmanacPackedData {
   /// loaded SPKs. TODO: mapped file and implement whatever to do bytes::BytesMut::from_iter
-  pub data: alloc::vec::Vec<alloc::vec::Vec<u8>>,
+  pub data: Vec<Vec<u8>>,
+  pub file_names: Vec<String>,
   /// the almanac itself
   pub almanac: anise::almanac::Almanac,
 }
@@ -23,10 +26,11 @@ pub fn load_almanac(path: &os::fs::Path) -> anise::errors::AlmanacResult<Almanac
       if path.is_file() {
         if let Some(ext) = path.extension() {
           if ext == "bsp" {
-            if let Some(path_str) = path.to_str() {
+            if let Some(path_cow) = path.to_str_unified() {
+              let path_str = path_cow.to_str().unwrap();
+              let path: &os::fs::Path = path_str.into();
               result.data.push(
-                os::fs::read(path_str.into())
-                  .expect(&alloc::format!("Couldn't read file {}", path_str)),
+                os::fs::read(path).expect(&alloc::format!("Couldn't read file {}", path_str)),
               );
               let bytes = bytes::BytesMut::from(result.data.last().unwrap().as_slice());
               result.almanac = result.almanac.load_from_bytes(bytes, path_str)?;

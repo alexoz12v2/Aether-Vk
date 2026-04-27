@@ -863,7 +863,7 @@ impl WindowedPresentationState {
     if !swapchain_image.eligible_for_acquisition()
       || !self.frames[self.current_frame].eligible_for_steal()
     {
-      return Err(GpuError::InvalidState);
+      return Err(GpuError::InvalidState("swapchain.rs:866"));
     }
     let fences: &[vk::Fence] = unsafe {
       core::slice::from_ref(&swapchain_image.submission_fence.as_ref().unwrap_unchecked())
@@ -986,7 +986,7 @@ impl WindowedPresentationState {
     let image = &mut self.images[image_index as usize];
     let frame = &mut self.frames[frame_index as usize];
     if image.eligible_for_acquisition() || frame.eligible_for_steal() {
-      return Err(GpuError::InvalidState);
+      return Err(GpuError::InvalidState("swapchain.rs:989"));
     }
 
     let wait_semaphores = [image.present_semaphore.get()];
@@ -1128,6 +1128,8 @@ pub(super) struct WindowlessPresentationState {
   format: vk::Format,
 
   generation: u64,
+  pub submitted_frames: u64,
+  pub last_timeline_value: core::sync::atomic::AtomicU64,
 }
 
 impl DeviceResource for WindowlessPresentationState {
@@ -1168,6 +1170,8 @@ impl WindowlessPresentationState {
       height,
       format: vk::Format::B8G8R8A8_UNORM,
       generation: 0,
+      submitted_frames: 0,
+      last_timeline_value: core::sync::atomic::AtomicU64::new(0),
     };
     this.recreate(instance, device, physical_device, width, height)?;
     Ok(this)
@@ -1217,7 +1221,10 @@ impl WindowlessPresentationState {
     if !swapchain_image.eligible_for_acquisition()
       || !self.frames[self.current_frame].eligible_for_steal()
     {
-      return Err(GpuError::InvalidState);
+      return Err(GpuError::InvalidState("swapchain.rs:1222"));
+    }
+    if swapchain_image.submission_fence.is_none() {
+      unsafe { swapchain_image.reclaim_from_swapchain_frame(&mut self.frames[self.current_frame]) };
     }
     let fences: &[vk::Fence] = unsafe {
       core::slice::from_ref(&swapchain_image.submission_fence.as_ref().unwrap_unchecked())
@@ -1303,18 +1310,26 @@ impl WindowlessPresentationState {
     let image = &mut self.images[image_index as usize];
     let frame = &mut self.frames[frame_index as usize];
     if image.eligible_for_acquisition() || frame.eligible_for_steal() {
-      return Err(GpuError::InvalidState);
+      return Err(GpuError::InvalidState("swapchain.rs:1308"));
     }
     unsafe { image.reclaim_from_swapchain_frame(frame) };
+    self.submitted_frames += 1;
     Ok(SwapchainStatus::Optimal)
   }
 
   pub fn get_last_submitted_image(&self) -> GpuResult<NonZeroHandle<vk::Image>> {
+    if self.submitted_frames == 0 {
+      return Err(GpuError::InvalidState("swapchain.rs:1317"));
+    }
     if self.images.is_empty() {
-      return Err(GpuError::InvalidState);
+      return Err(GpuError::InvalidState("swapchain.rs:1320"));
     }
     let last_index = (self.next_image + self.images.len() - 1) % self.images.len();
     Ok(self.images[last_index].image)
+  }
+
+  pub fn get_last_submitted_timeline_value(&self) -> u64 {
+    self.last_timeline_value.load(core::sync::atomic::Ordering::Acquire)
   }
 
   fn recreate(

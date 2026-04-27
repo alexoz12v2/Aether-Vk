@@ -27,7 +27,6 @@ impl RenderDevice for D3d12RenderDevice {
     unimplemented!()
   }
 
-  #[cfg(debug_assertions)]
   fn print_info(&self) -> String {
     unimplemented!()
   }
@@ -44,11 +43,7 @@ impl RenderDevice for D3d12RenderDevice {
     unimplemented!()
   }
 
-  fn set_line_width(
-    &self,
-    _cmd_buffer: CommandBufferHandle,
-    _width: f32,
-  ) -> GpuResult<()> {
+  fn set_line_width(&self, _cmd_buffer: CommandBufferHandle, _width: f32) -> GpuResult<()> {
     unimplemented!()
   }
 
@@ -65,6 +60,10 @@ impl RenderDevice for D3d12RenderDevice {
     _params: &PresentationEngineParams,
   ) -> GpuResult<PresentationEngineHandle> {
     unimplemented!()
+  }
+
+  fn destroy_present_engine(&self, _present_engine: PresentationEngineHandle) {
+    todo!()
   }
 
   fn resize_presentation_engine(
@@ -128,6 +127,7 @@ impl RenderDevice for D3d12RenderDevice {
     &self,
     _handle: PresentationEngineHandle,
     _buffer: &mut [u8],
+    _task_id: Option<u64>,
   ) -> GpuResult<()> {
     unimplemented!()
   }
@@ -263,7 +263,14 @@ impl RenderDevice for D3d12RenderDevice {
   fn render_bvh(
     &self,
     _cmd_buffer: CommandBufferHandle,
-    _nodes: &[(crate::math::collision::linear_bvh::LinearBound<f32, aethervk_oshal_rlib::math::vector::vec3::Vec3f32, aethervk_oshal_rlib::math::matrix::mat3::Mat3f32>, aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32)],
+    _nodes: &[(
+      crate::math::collision::linear_bvh::LinearBound<
+        f32,
+        aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
+        aethervk_oshal_rlib::math::matrix::mat3::Mat3f32,
+      >,
+      aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+    )],
     _view_proj: [f32; 16],
     _presentation_engine: PresentationEngineHandle,
   ) -> GpuResult<()> {

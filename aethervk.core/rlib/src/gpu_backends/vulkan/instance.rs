@@ -22,7 +22,7 @@ pub(super) struct Instance {
 impl Instance {
   /// ## Safety
   /// See `utils::vk_entry` and `ash::Entry::create_instance`
-  pub(super) unsafe fn new(base_path_override: Option<&CStr>) -> GpuResult<Self> {
+  pub(super) unsafe fn new(base_path_override: Option<&CStr>, validation_error_callback: Option<fn(&str)>) -> GpuResult<Self> {
     let entry_wrapper = utils::EntryWrapper::new(base_path_override)?;
     let vk_entry = entry_wrapper
       .weak_entry()
@@ -132,6 +132,9 @@ impl Instance {
       vk::ValidationFeaturesEXT::default().enabled_validation_features(&printf_features);
 
     #[cfg(debug_assertions)]
+    let p_user_data = validation_error_callback.map(|f| f as *mut core::ffi::c_void).unwrap_or(core::ptr::null_mut());
+
+    #[cfg(debug_assertions)]
     let mut msg_create_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
       .message_severity(
         vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
@@ -144,6 +147,7 @@ impl Instance {
           | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
           | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
       )
+      .user_data(p_user_data)
       .pfn_user_callback(Some(utils::debug_utils_messenger_user_callback));
 
     // =========================================================================
@@ -384,11 +388,4 @@ impl Drop for Instance {
     }
     unsafe { self.instance.destroy_instance(None) };
   }
-}
-
-// --------------------------- Unit Testing --------------------------------
-// TODO
-#[cfg(test)]
-mod tests {
-  use super::*;
 }

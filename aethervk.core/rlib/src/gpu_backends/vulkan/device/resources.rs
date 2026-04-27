@@ -10,7 +10,7 @@ use crate::gpu_backends::vulkan::device::{VmaDebugNameExt, VulkanDebugNameExt};
 use crate::simulation::comet::Texture;
 use vk_mem::Alloc;
 
-use crate::gpu::PipelineKeyable;
+use crate::gpu::{PipelineKeyable, TextureFlags};
 use crate::gpu_backends::vulkan::device::commands::{self, CommandBufferId};
 use crate::gpu_backends::vulkan::device::pipelines::GraphicsInfo;
 use crate::{
@@ -525,7 +525,7 @@ impl Image {
   ) -> GpuResult<Self> {
     let image_size = (texture.data.len()) as vk::DeviceSize;
     if image_size == 0 {
-      return Err(GpuError::InvalidArgument);
+      return Err(GpuError::InvalidArgument("resources.rs:528"));
     }
 
     let vma_allocator = allocator.get_raw();
@@ -706,22 +706,6 @@ impl Hash for Image {
   }
 }
 
-// TODO: move up to frame.rs
-bitflags::bitflags! {
-  pub(super) struct TextureFlags: u32 {
-    const FlagAlbedo = 1u32 << 0;
-    const FlagNormal = 1u32 << 1;
-    const FlagRoughness = 1u32 << 2;
-    const FlagAo  = 1u32 << 3;
-  }
-}
-
-impl TextureFlags {
-  pub fn count() -> usize {
-    4
-  }
-}
-
 #[repr(C)]
 pub(super) struct ForwardMeshRenderResourcePushData {
   model_view_projection: [f32; 16],
@@ -840,19 +824,19 @@ impl DiscardableResource for ForwardMeshRenderResource {
 }
 
 impl ForwardMeshRenderResource {
-  pub fn frontend_texture_flags(&self) -> crate::simulation::comet::TextureFlags {
-    let mut flags = crate::simulation::comet::TextureFlags::empty();
+  pub fn frontend_texture_flags(&self) -> TextureFlags {
+    let mut flags = TextureFlags::empty();
     if self.albedo_image.is_some() {
-      flags |= crate::simulation::comet::TextureFlags::ALBEDO;
+      flags |= TextureFlags::ALBEDO;
     }
     if self.normal_image.is_some() {
-      flags |= crate::simulation::comet::TextureFlags::NORMAL;
+      flags |= TextureFlags::NORMAL;
     }
     if self.roughness_image.is_some() {
-      flags |= crate::simulation::comet::TextureFlags::ROUGHNESS;
+      flags |= TextureFlags::ROUGHNESS;
     }
     if self.ao_image.is_some() {
-      flags |= crate::simulation::comet::TextureFlags::AO;
+      flags |= TextureFlags::AO;
     }
     flags
   }
@@ -1064,15 +1048,27 @@ impl DiscardableResource for FrameResource {
   }
 }
 
+pub struct UploadedFont {
+  pub texture: Image,
+  pub atlas: crate::scene::text::FontAtlas,
+  pub descriptor_index: u32, // The assigned array element
+}
+
 pub(super) struct TextRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub pipeline_key: Option<PipelineKey>,
   pub descriptor_set_layout: NonZeroHandle<vk::DescriptorSetLayout>,
   pub descriptor_pool: Option<NonZeroHandle<vk::DescriptorPool>>,
   pub descriptor_set: Option<vk::DescriptorSet>,
-  pub font_texture: Option<Image>,
   pub font_sampler: Option<vk::Sampler>,
-  pub font_atlas: Option<crate::scene::text::FontAtlas>,
+
+  // Bindless Management Map
+  pub uploaded_fonts: hashbrown::HashMap<u64, UploadedFont>,
+  // TODO substitute with a bitmap. max_fonts should be a function which gives the number of bits
+  pub free_descriptor_indices: Vec<u32>,
+  pub next_descriptor_index: u32,
+  pub max_fonts: u32,
+
   pub allocator_raw: Option<vk_mem::ffi::VmaAllocator>,
 }
 
@@ -1083,6 +1079,7 @@ impl DiscardableResource for TextRenderResourceArchetype {
   fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
     discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
+
     if let Some(pool) = self.descriptor_pool.take() {
       discard_pool.discard_type_erased(
         FunctionalDeviceResource::new(pool.get(), |pool, device| unsafe {
@@ -1099,17 +1096,153 @@ impl DiscardableResource for TextRenderResourceArchetype {
         timeline,
       );
     }
-    if let Some(mut texture) = self.font_texture.take() {
-      if let Some(allocator_raw) = self.allocator_raw {
-        discard_pool.discard_image_view(texture.image_view.get(), timeline);
+
+    if let Some(allocator_raw) = self.allocator_raw {
+      for (_, uploaded_font) in self.uploaded_fonts.drain() {
+        discard_pool.discard_image_view(uploaded_font.texture.image_view.get(), timeline);
         discard_pool.discard_image(
           allocator_raw,
-          texture.image.get(),
-          texture.allocation,
+          uploaded_font.texture.image.get(),
+          uploaded_font.texture.allocation,
           timeline,
         );
       }
     }
+  }
+}
+
+impl TextRenderResourceArchetype {
+  pub fn upload_font_atlas(
+    &mut self,
+    device: &vulkan::device::LogicalDevice,
+    queue: &vulkan::device::Queue,
+    allocator: &vk_mem::Allocator,
+    discard_pool: &DiscardPool,
+    timeline: u64,
+    font_hash: u64,
+    atlas: crate::scene::text::FontAtlas,
+  ) -> GpuResult<u32> {
+    // TODO write this function with a rollback (Drop) struct (started cmdbuf, ...)
+    if let Some(existing) = self.uploaded_fonts.get(&font_hash) {
+      return Ok(existing.descriptor_index);
+    }
+
+    // Try tracking a recycled hole before increasing the linear capacity bounds
+    let descriptor_index = if let Some(idx) = self.free_descriptor_indices.pop() {
+      idx
+    } else if self.next_descriptor_index < self.max_fonts {
+      let idx = self.next_descriptor_index;
+      self.next_descriptor_index += 1;
+      idx
+    } else {
+      return Err(GpuError::InvalidState(
+        "Exceeded descriptor array layout maximum capacity",
+      ));
+    };
+
+    let texture = crate::simulation::comet::Texture {
+      data: atlas.image_data.clone(),
+      format: crate::simulation::comet::TexelFormat::R8_UNORM,
+      width: atlas.width,
+      height: atlas.height,
+      has_mipmaps: false,
+    };
+
+    let command_pool_info = vk::CommandPoolCreateInfo::default()
+      .queue_family_index(queue.family_index)
+      .flags(vk::CommandPoolCreateFlags::TRANSIENT);
+    let command_pool = unsafe { device.create_command_pool(&command_pool_info, None) }?;
+
+    let alloc_info = vk::CommandBufferAllocateInfo::default()
+      .command_pool(command_pool)
+      .level(vk::CommandBufferLevel::PRIMARY)
+      .command_buffer_count(1);
+    let command_buffer = unsafe { device.allocate_command_buffers(&alloc_info) }?[0];
+
+    let begin_info =
+      vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+    unsafe { device.begin_command_buffer(command_buffer, &begin_info)? };
+
+    let image = Image::new_2d(
+      device,
+      allocator,
+      command_buffer,
+      discard_pool,
+      timeline,
+      &texture,
+      vk::ImageUsageFlags::SAMPLED,
+      "FontAtlas Dynamic",
+    )?;
+
+    unsafe { device.end_command_buffer(command_buffer)? };
+
+    let command_buffers = [command_buffer];
+    let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
+
+    unsafe {
+      let fence = device.create_fence(&vk::FenceCreateInfo::default(), None)?;
+      device
+        .locked_queue_submit(queue.handle, &[submit_info], fence)
+        .map_err(GpuError::from)?;
+      device.wait_for_fences(&[fence], true, u64::MAX)?;
+      device.destroy_fence(fence, None);
+      device.destroy_command_pool(command_pool, None);
+    }
+
+    // Overwrite the specific array element natively
+    if let (Some(sampler), Some(set)) = (self.font_sampler, self.descriptor_set) {
+      let image_info = [vk::DescriptorImageInfo::default()
+        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .image_view(image.image_view.get())
+        .sampler(sampler)];
+
+      let write = vk::WriteDescriptorSet::default()
+        .dst_set(set)
+        .dst_binding(0)
+        .dst_array_element(descriptor_index) // Writes exactly over the targeted array index
+        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .image_info(&image_info);
+
+      unsafe { device.update_descriptor_sets(&[write], &[]) };
+    }
+
+    self.uploaded_fonts.insert(
+      font_hash,
+      UploadedFont {
+        texture: image,
+        atlas,
+        descriptor_index,
+      },
+    );
+
+    Ok(descriptor_index)
+  }
+
+  pub fn remove_font_atlas(
+    &mut self,
+    font_hash: u64,
+    discard_pool: &DiscardPool,
+    timeline: u64,
+  ) -> GpuResult<()> {
+    if let Some(mut uploaded) = self.uploaded_fonts.remove(&font_hash) {
+      // Create a "Hole" implicitly pushing the index back as structurally available.
+      self.free_descriptor_indices.push(uploaded.descriptor_index);
+
+      // Destroy the hardware memory via timeline limits. Partially bound rules will suppress the descriptor warning.
+      if let Some(allocator_raw) = self.allocator_raw {
+        discard_pool.discard_image_view(uploaded.texture.image_view.get(), timeline);
+        discard_pool.discard_image(
+          allocator_raw,
+          uploaded.texture.image.get(),
+          uploaded.texture.allocation,
+          timeline,
+        );
+        return Ok(());
+      }
+    }
+    Err(GpuError::InvalidArgument(
+      "[Vulkan RenderDevice] resource:remove_font_atlas: atlas not found",
+    ))
   }
 }
 
@@ -1761,7 +1894,7 @@ impl ForwardMeshRenderResourceArchetype {
           .push(FunctionalDeviceResource::new(layout, |h, d| unsafe {
             d.destroy_descriptor_set_layout(h, None)
           }))
-          .map_err(|_| GpuError::InvalidState)?;
+          .map_err(|_| GpuError::InvalidState("resources.rs:1764"))?;
         Ok(layout)
       })
       .collect::<GpuResult<Vec<_>>>()?;
@@ -1810,7 +1943,7 @@ impl ForwardMeshRenderResourceArchetype {
         pipeline_layout,
         |h, d| unsafe { d.destroy_pipeline_layout(h, None) },
       ))
-      .map_err(|_| GpuError::InvalidState)?;
+      .map_err(|_| GpuError::InvalidState("resources.rs:1813"))?;
 
     // --------------------------- 4. Specialization Infos --------------------------------------
     let mut specialization_constants = [Vec::new(), Vec::new()];
@@ -1902,7 +2035,7 @@ impl ForwardMeshRenderResourceArchetype {
         .push(FunctionalDeviceResource::new(command_pool, |h, d| unsafe {
           d.destroy_command_pool(h, None)
         }))
-        .map_err(|_| GpuError::InvalidState)?;
+        .map_err(|_| GpuError::InvalidState("resources.rs:1905"))?;
 
       let command_buffer = {
         let alloc_info = vk::CommandBufferAllocateInfo::default()
@@ -1990,7 +2123,7 @@ impl ForwardMeshRenderResourceArchetype {
     let layout = self
       .descriptor_set_layouts
       .get(index)
-      .ok_or(GpuError::InvalidArgument)?
+      .ok_or(GpuError::InvalidArgument("resources.rs:1993"))?
       .get();
     descriptor_pools.allocate(
       device,
@@ -2060,7 +2193,7 @@ fn create_buffer_with_staging<T: Copy>(
 ) -> GpuResult<Buffer> {
   let buffer_size = (core::mem::size_of::<T>() * data.len()) as vk::DeviceSize;
   if buffer_size == 0 {
-    return Err(GpuError::InvalidArgument);
+    return Err(GpuError::InvalidArgument("resources.rs:2063"));
   }
 
   let vma_allocator = allocator.get_raw();

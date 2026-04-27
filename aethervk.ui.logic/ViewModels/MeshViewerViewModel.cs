@@ -12,6 +12,7 @@ public partial class MeshViewerViewModel : TabItemViewModel
 {
     private readonly NativeRuntimeService _runtimeService;
     private CancellationTokenSource? _cts;
+    private Task? _lastRenderTask;
     private readonly bool _isLightTheme;
 
     public uint Width { get; } = 800;
@@ -57,8 +58,25 @@ public partial class MeshViewerViewModel : TabItemViewModel
                     _runtimeService.SpawnModelInstance(modelId, modelName);
                 }
                 
-                // Ensure camera is active for Mesh Viewer inputs to work
-                _runtimeService.SetActiveCamera(2); // ID 2 is created by CreateScene as "camera"
+                var root = System.Linq.Enumerable.FirstOrDefault(_runtimeService.RootEntities);
+                var camera = _runtimeService.CreateCamera(root);
+                
+                // Configure camera specifically for Mesh Viewer (like in the native test)
+                var camTransform = System.Linq.Enumerable.FirstOrDefault(System.Linq.Enumerable.OfType<AetherVk.Logic.Models.TransformComponent>(camera.Components));
+                if (camTransform != null)
+                {
+                    camTransform.PosX = 0.0f;
+                    camTransform.PosY = -5.0f;
+                    camTransform.PosZ = 0.0f;
+                    camTransform.RotW = 0.0f;
+                    camTransform.RotX = 0.0f;
+                    camTransform.RotY = 0.0f;
+                    camTransform.RotZ = 1.0f;
+                }
+                
+                _runtimeService.SetActiveCamera(camera.Id);
+                var sun = _runtimeService.SpawnEntity("sun", root);
+                sun.Components.Add(new AetherVk.Logic.Models.SunComponent());
             }
             catch (System.DllNotFoundException)
             {
@@ -97,12 +115,18 @@ public partial class MeshViewerViewModel : TabItemViewModel
                     lastTime = current;
 
                     _runtimeService.SimulationTick();
-                    await _runtimeService.RenderTickAsync();
-                    OnFrameReady?.Invoke();
+
+                    if (_lastRenderTask != null)
+                    {
+                        await _lastRenderTask;
+                        OnFrameReady?.Invoke();
+                    }
+
+                    _lastRenderTask = _runtimeService.RenderTickAsync();
                 }
                 else
                 {
-                    await Task.Delay(1);
+                    await Task.Delay(16, token);
                 }
             }
         }, token);
@@ -116,6 +140,6 @@ public partial class MeshViewerViewModel : TabItemViewModel
     public void Stop()
     {
         _cts?.Cancel();
-        _runtimeService.ShutdownSimulation();
+        Task.Run(() => _runtimeService.ShutdownSimulation());
     }
 }

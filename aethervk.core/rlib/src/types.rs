@@ -4,6 +4,7 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 
 use heapless::index_map::FnvIndexMap;
 use thiserror::Error;
+use aethervk_oshal_rlib::os::{FsError, NativeError};
 
 pub const RUNTIME_PARAMS_MAX_COUNT: usize = 16;
 pub(super) type RuntimeParamsIndex = u32;
@@ -12,6 +13,16 @@ pub struct RuntimeParams {
   // TODO add logging stuff
   // backend specific additional parameters (each backend root file defined `RUNTIME_PARAM_<NAME>_*`)
   pub render_backend_params: FnvIndexMap<RuntimeParamsIndex, String, RUNTIME_PARAMS_MAX_COUNT>,
+  pub validation_error_callback: Option<fn(&str)>,
+}
+
+impl RuntimeParams {
+  pub fn new_with_callback(validation_error_callback: Option<fn(&str)>) -> Self {
+    Self {
+      render_backend_params: FnvIndexMap::new(),
+      validation_error_callback,
+    }
+  }
 }
 
 // ---------------------------- Error Types -----------------------------------
@@ -32,6 +43,9 @@ pub enum EngineError {
 
   #[error("null argument")]
   InvalidNullArgument,
+  
+  #[error("Native Error: {0}")]
+  Native(#[from] NativeError),
 }
 
 pub type EngineResult<T> = core::result::Result<T, EngineError>;
@@ -40,11 +54,11 @@ pub type EngineResult<T> = core::result::Result<T, EngineError>;
 
 #[derive(Debug, Error, Clone)]
 pub enum GpuError {
-  #[error("Invalid Input Argument")]
-  InvalidArgument,
+  #[error("Invalid Input Argument: {0}")]
+  InvalidArgument(&'static str),
 
-  #[error("Invalid Object State")]
-  InvalidState,
+  #[error("Invalid Object State: {0}")]
+  InvalidState(&'static str),
 
   #[error("Device lost")]
   DeviceLost,
@@ -74,6 +88,16 @@ pub type GpuResult<T> = core::result::Result<T, GpuError>;
 pub enum IoError {
   #[error("IO Error")]
   Failed,
+  #[error("IO Error {0:?}")]
+  FileIO(FsError),
+  #[error("IO Error (Specific): {0}")]
+  Specific(&'static str),
+}
+
+impl From<FsError> for IoError {
+  fn from(value: FsError) -> Self {
+    Self::FileIO(value)
+  }
 }
 
 pub type IoResult<T> = core::result::Result<T, IoError>;

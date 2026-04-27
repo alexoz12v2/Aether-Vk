@@ -1,43 +1,36 @@
+use aethervk_core_rlib::{
+  gpu::ASSET_DIR,
+  scene::text::FontAtlas,
+  gpu::{self},
+  scene::{CameraComponent, CursorComponent, PhysicalMeshComponent, Scene, TransformComponent},
+  simulation, types,
+  types::RuntimeParams,
+};
+use aethervk_oshal_rlib::{
+  math::vector::Vector,
+  math::{
+    matrix::{mat4::Mat4x4f32, Matrix4},
+    quaternion::Quaternion,
+    vector::{vec3::Vec3f32, vec4::Quat, Vector3},
+  },
+};
+use heapless::index_map::FnvIndexMap;
+use logic_thread::{start_logic_thread, LogicCommand};
+use render_thread::{start_render_thread, RenderPacket};
+use std::{
+  io::Read,
+  sync::{atomic::AtomicBool, mpsc, Arc},
+  time::Instant,
+};
+use test_utils::{
+  create_winit_window_and_event_loop, cycle_get_asset_path_from_exe, get_handle_and_window_info,
+  get_monospace_font_path_from_asset_path, SceneTestUtilsExt,
+};
+
 pub mod constants;
 mod logic_thread;
 mod render_thread;
 pub mod utils;
-
-use aethervk_core_rlib::{
-  gpu::{self},
-  scene::{
-    CameraComponent, CursorComponent, GridComponent, PhysicalMeshComponent, Scene, SkyComponent,
-    SunComponent, TransformComponent,
-  },
-  simulation, types,
-  types::RuntimeParams,
-};
-use aethervk_oshal_rlib::math::{
-  matrix::{Matrix4, SquareMatrix, mat4::Mat4x4f32},
-  quaternion::Quaternion,
-  vector::{Vector3, vec3::Vec3f32, vec4::Quat},
-};
-use heapless::index_map::FnvIndexMap;
-#[cfg(target_os = "macos")]
-use winit::platform::macos::EventLoopBuilderExtMacOS;
-use std::{
-  any::TypeId,
-  io::Read,
-  sync::{Arc, RwLock, mpsc, atomic::AtomicBool},
-  time::Instant,
-};
-use winit::{
-  event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent},
-  event_loop::{ControlFlow, EventLoopBuilder},
-  keyboard::{KeyCode, PhysicalKey},
-  window::WindowBuilder,
-};
-use aethervk_oshal_rlib::math::vector::Vector;
-use logic_thread::{start_logic_thread, LogicCommand};
-use render_thread::{RenderItem, RenderPacket, start_render_thread};
-use test_utils as windowing;
-use test_utils::{cycle_get_asset_path_from_exe, get_handle_and_window_info};
-use windowing::{AppEvent, WindowExtractHandlesParams, extract_native_handles, setup_resize_hook};
 
 struct AppState {
   scene: Arc<Scene>,
@@ -46,7 +39,7 @@ struct AppState {
   is_paused: bool,
   time_scale: f32,
   root_entity: aethervk_core_rlib::scene::EntityId,
-  window: winit::window::Window,
+  window: Option<winit::window::Window>,
   is_resizing: bool,
   is_exiting: bool,
   outlines_enabled: Arc<AtomicBool>,
@@ -86,28 +79,15 @@ fn main() {
   }));
 
   let assets_dir = cycle_get_asset_path_from_exe(true);
-
-  let mut event_loop_builder = EventLoopBuilder::<AppEvent>::with_user_event();
-  // Disable default macOS menu. This disables default macOS bindings (so that we can customize interception of Super + Q)
-  #[cfg(target_os = "macos")]
-  event_loop_builder.with_default_menu(false);
-
-  let event_loop = event_loop_builder.build().unwrap();
-  let proxy = event_loop.create_proxy();
-  let proxy_ptr = unsafe { std::ptr::NonNull::new_unchecked(Box::into_raw(Box::new(proxy))) };
-
   let start_time = Instant::now();
   println!("[{:.2?}] Application starting.", start_time.elapsed());
 
-  let window = WindowBuilder::new()
-    .with_title("AetherVk Simulation")
-    .build(&event_loop)
-    .unwrap();
-  setup_resize_hook(&window, proxy_ptr);
+  let (window, event_loop) = create_winit_window_and_event_loop("AetherVk Simulation");
 
   let render_frontend = {
     let runtime_params = Box::new(RuntimeParams {
       render_backend_params: FnvIndexMap::new(),
+      validation_error_callback: None,
     });
     gpu::new_render_frontend(gpu::VULKAN_RENDER_BACKEND, &runtime_params).unwrap()
   };
@@ -121,7 +101,7 @@ fn main() {
   let (native_handles, window_info) =
     get_handle_and_window_info(&render_frontend, render_device_handle, &window);
 
-  let presentation_engine = {
+  let (presentation_engine, font_id) = {
     let params = gpu::PresentationEngineParams {
       width: window.inner_size().width,
       height: window.inner_size().height,
@@ -140,41 +120,12 @@ fn main() {
     start_time.elapsed()
   );
 
-  let scene = Scene::new();
-  scene.register_component::<TransformComponent>(&[]);
-  scene.register_component::<PhysicalMeshComponent>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<CameraComponent>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<CursorComponent>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<SunComponent>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<SkyComponent>(&[]);
-  scene.register_component::<GridComponent>(&[]);
-  scene.register_component::<aethervk_core_rlib::scene::BvhDebugComponent>(&[]);
-  scene.register_component::<aethervk_core_rlib::scene::SelectedComponent>(&[]);
-  scene.register_component::<aethervk_core_rlib::scene::FollowingComponent>(&[]);
-
-  let model_path = {
-    let mut args = std::env::args();
-    if args.len() > 1 {
-      let _ = args.next().unwrap();
-      std::path::PathBuf::from(args.next().unwrap()).join("Comet.glb")
-    } else {
-      assets_dir.join("Comet.glb")
-    }
-  };
+  let scene = Scene::new().with_all_dbg_components();
+  let model_path = assets_dir.join("Comet.glb");
   let comet = simulation::comet::load_comet_from_gltf(model_path.to_str().unwrap(), false)
     .expect("Failed to load comet");
 
-  let root_entity = scene.spawn_entity("entity");
-  scene
-    .add_component(
-      root_entity,
-      TransformComponent {
-        position: Vec3f32::from_components(0.0, 0.0, 0.0),
-        rotation: Quat::identity(),
-        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-      },
-    )
-    .unwrap();
+  let root_entity = scene.add_root_entity().unwrap();
 
   #[cfg(not(feature = "spotless_rendering"))]
   {
@@ -264,36 +215,21 @@ fn main() {
       * constants::PLANET_VISUAL_SCALE;
     let initial_pos = Vec3f32::zero();
 
-    let mut sphere = simulation::comet::generate_uv_sphere(planet_radius, 64, 64);
-    let tex =
-      simulation::comet::load_texture_from_file(assets_dir.join(tex_path).to_str().unwrap())
-        .expect(&format!("Failed to load texture for {}", name));
-    sphere.albedo_map = Some(tex);
-
-    let planet_entity = scene.spawn_entity(*name);
+    let sphere = {
+      let mut sphere = simulation::comet::generate_uv_sphere(planet_radius, 64, 64);
+      let tex =
+        simulation::comet::load_texture_from_file(assets_dir.join(tex_path).to_str().unwrap())
+          .expect(&format!("Failed to load texture for {}", name));
+      sphere.albedo_map = Some(tex);
+      Arc::from(sphere)
+    };
+    let planet_entity = scene
+      .add_mesh(*name, root_entity)
+      .with_position(initial_pos)
+      .with_mesh("", sphere)
+      .build()
+      .unwrap();
     planets_ids.push((*naif_id, planet_entity, *rot_period, planet_radius));
-    scene
-      .add_component(
-        planet_entity,
-        TransformComponent {
-          position: initial_pos,
-          rotation: Quat::identity(),
-          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-        },
-      )
-      .unwrap();
-    scene
-      .add_component(
-        planet_entity,
-        PhysicalMeshComponent {
-          asset_path: "".to_string(),
-          mesh: Arc::from(sphere),
-          emissive_intensity: 0.0,
-          emissive_color: [0.0, 0.0, 0.0],
-        },
-      )
-      .unwrap();
-    scene.set_parent(planet_entity, Some(root_entity));
   }
 
   let cursor_entity = scene.spawn_entity("entity");
@@ -419,7 +355,7 @@ fn main() {
     root_entity,
     is_resizing: false,
     is_exiting: false,
-    window,
+    window: Some(window),
     outlines_enabled: Arc::clone(&outlines_enabled),
     is_command_prompt_open: false,
     console_open_progress: 0.0,
@@ -436,9 +372,7 @@ fn main() {
     render_frontend,
     render_device_handle,
     presentation_engine,
-    cursor_entity,
-    sun_entity,
-    assets_dir.clone(),
+    font_id,
   );
 
   // --- Start Logic Thread ---
@@ -459,8 +393,13 @@ fn main() {
     Arc::clone(&outlines_enabled),
   );
 
-  let mut initial_width = app_state.window.inner_size().width;
-  let mut initial_height = app_state.window.inner_size().height;
+  let _app_threads = test_utils::threading::AppThreads {
+    logic_thread: Some(logic_thread_handle),
+    render_thread: Some(render_thread_handle),
+  };
+
+  let mut initial_width = app_state.window.as_ref().unwrap().inner_size().width;
+  let mut initial_height = app_state.window.as_ref().unwrap().inner_size().height;
   if initial_width == 0 {
     initial_width = 800;
   }
@@ -474,427 +413,417 @@ fn main() {
   });
 
   // --- Main Event Loop ---
-  let mut right_mouse_button_down = false;
-  let mut middle_mouse_button_down = false;
-  let mut mouse_x = 0.0;
-  let mut mouse_y = 0.0;
-  let mut last_log_time = Instant::now();
-  let mut modifiers_state = winit::keyboard::ModifiersState::empty();
 
-  event_loop.set_control_flow(ControlFlow::Poll);
-  event_loop
-    .run(move |event, elwt| match event {
-      Event::UserEvent(app_event) => match app_event {
-        AppEvent::ResizeStarted => {
-          app_state.is_resizing = true;
-        }
-        AppEvent::ResizeEnded => {
-          app_state.is_resizing = false;
-          app_state.window.request_redraw();
-        }
-      },
+  let sim_app = SimApp {
+    app_state,
+    logic_tx,
+    render_tx,
+    response_rx,
+    right_mouse_button_down: false,
+    middle_mouse_button_down: false,
+    mouse_x: 0.0,
+    mouse_y: 0.0,
+    last_log_time: std::time::Instant::now(),
+    _app_threads,
+    window_info,
+  };
 
-      Event::WindowEvent { event, window_id } if window_id == app_state.window.id() => {
-        match event {
-          WindowEvent::CloseRequested => {
-            app_state.is_exiting = true;
-            let _ = logic_tx.send(LogicCommand::Exit);
-            let _ = render_tx.try_send(None);
-            elwt.exit();
-          }
-          WindowEvent::Resized(physical_size) => {
-            let _ = logic_tx.send(LogicCommand::Resize {
-              width: physical_size.width,
-              height: physical_size.height,
-            });
-
-            #[cfg(target_os = "macos")]
-            {
-              window_info
-                .metal_layer
-                .setDrawableSize(objc2_core_foundation::CGSize {
-                  width: physical_size.width as f64,
-                  height: physical_size.height as f64,
-                });
-            }
-          }
-          WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-            #[cfg(target_os = "macos")]
-            {
-              window_info.metal_layer.setContentsScale(scale_factor);
-            }
-          }
-          WindowEvent::ModifiersChanged(modifiers) => {
-            modifiers_state = modifiers.state();
-          }
-          WindowEvent::CursorMoved { position, .. } => {
-            mouse_x = position.x;
-            mouse_y = position.y;
-          }
-          WindowEvent::MouseInput {
-            state: element_state,
-            button,
-            ..
-          } => match button {
-            MouseButton::Right => right_mouse_button_down = element_state == ElementState::Pressed,
-            MouseButton::Middle => {
-              middle_mouse_button_down = element_state == ElementState::Pressed
-            }
-            MouseButton::Left => {
-              if element_state == ElementState::Pressed {
-                let size = app_state.window.inner_size();
-                if size.width > 0 && size.height > 0 {
-                  let ndc_x = (mouse_x as f32 / size.width as f32) * 2.0 - 1.0;
-                  let ndc_y = (mouse_y as f32 / size.height as f32) * 2.0 - 1.0;
-                  let _ = logic_tx.send(LogicCommand::RaycastCursor { ndc_x, ndc_y });
-                  app_state.window.request_redraw();
-                }
-              }
-            }
-            _ => {}
-          },
-          WindowEvent::KeyboardInput { event, .. } => {
-            if event.state == ElementState::Pressed {
-              if app_state.is_command_prompt_open {
-                if let PhysicalKey::Code(KeyCode::Escape) = event.physical_key {
-                  app_state.is_command_prompt_open = false;
-                  app_state.window.request_redraw();
-                } else {
-                  match &event.logical_key {
-                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Backspace) => {
-                      app_state.current_command.pop();
-                      app_state.window.request_redraw();
-                    }
-                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::PageUp) => {
-                      app_state.console_scroll_offset =
-                        app_state.console_scroll_offset.saturating_add(1);
-                      app_state.window.request_redraw();
-                    }
-                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::PageDown) => {
-                      app_state.console_scroll_offset =
-                        app_state.console_scroll_offset.saturating_sub(1);
-                      app_state.window.request_redraw();
-                    }
-                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
-                      if !app_state.current_command.is_empty() {
-                        let cmd = app_state.current_command.clone();
-                        app_state.command_history.push_back(format!("> {}", cmd));
-                        let _ = logic_tx.send(LogicCommand::ExecuteCommand(cmd));
-                        if app_state.command_history.len() > 1000 {
-                          app_state.command_history.pop_front();
-                        }
-                        app_state.current_command.clear();
-                        app_state.console_scroll_offset = 0;
-                      }
-                      app_state.window.request_redraw();
-                    }
-                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Space) => {
-                      app_state.current_command.push(' ');
-                      app_state.window.request_redraw();
-                    }
-                    winit::keyboard::Key::Character(c) => {
-                      app_state.current_command.push_str(c.as_str());
-                      app_state.window.request_redraw();
-                    }
-                    _ => {}
-                  }
-                }
-              } else {
-                if let PhysicalKey::Code(keycode) = event.physical_key {
-                  let speed = 0.5;
-                  match keycode {
-                    KeyCode::KeyM => {
-                      app_state.is_command_prompt_open = true;
-                      app_state.window.request_redraw();
-                    }
-                    KeyCode::ArrowUp => {
-                      let _ = logic_tx.send(LogicCommand::MoveCursor {
-                        axis: Vec3f32::from_components(0.0, 0.0, -1.0),
-                        amount: speed,
-                      });
-                      app_state.window.request_redraw();
-                    }
-                    KeyCode::ArrowDown => {
-                      let _ = logic_tx.send(LogicCommand::MoveCursor {
-                        axis: Vec3f32::from_components(0.0, 0.0, 1.0),
-                        amount: speed,
-                      });
-                      app_state.window.request_redraw();
-                    }
-                    KeyCode::ArrowLeft => {
-                      let _ = logic_tx.send(LogicCommand::MoveCursor {
-                        axis: Vec3f32::from_components(-1.0, 0.0, 0.0),
-                        amount: speed,
-                      });
-                      app_state.window.request_redraw();
-                    }
-                    KeyCode::ArrowRight => {
-                      let _ = logic_tx.send(LogicCommand::MoveCursor {
-                        axis: Vec3f32::from_components(1.0, 0.0, 0.0),
-                        amount: speed,
-                      });
-                      app_state.window.request_redraw();
-                    }
-                    KeyCode::KeyQ => {
-                      #[cfg(target_os = "macos")]
-                      if modifiers_state.super_key() {
-                        // So it doesn't even get here
-                        app_state.is_exiting = true;
-                        let _ = logic_tx.send(LogicCommand::Exit);
-                        let _ = render_tx.try_send(None);
-                        println!("You Clicked exit");
-                        elwt.exit();
-                        return;
-                      }
-                      let _ = logic_tx.send(LogicCommand::MoveCursor {
-                        axis: Vec3f32::from_components(0.0, -1.0, 0.0),
-                        amount: speed,
-                      });
-                      app_state.window.request_redraw();
-                    }
-                    KeyCode::KeyE => {
-                      let _ = logic_tx.send(LogicCommand::MoveCursor {
-                        axis: Vec3f32::from_components(0.0, 1.0, 0.0),
-                        amount: speed,
-                      });
-                      app_state.window.request_redraw();
-                    }
-                    KeyCode::KeyX => {
-                      let _ = logic_tx.send(LogicCommand::CycleTimeScale);
-                      app_state.window.request_redraw();
-                    }
-                    KeyCode::KeyA => {
-                      let _ = logic_tx.send(LogicCommand::CyclePlanet { forward: false });
-                      app_state.window.request_redraw();
-                    }
-                    KeyCode::KeyD => {
-                      let _ = logic_tx.send(LogicCommand::CyclePlanet { forward: true });
-                      app_state.window.request_redraw();
-                    }
-                    KeyCode::KeyG => {
-                      let _ = logic_tx.send(LogicCommand::ToggleGrid);
-                      app_state.window.request_redraw();
-                    }
-                    KeyCode::KeyH => {
-                      let _ = logic_tx.send(LogicCommand::TogglePlanetOutlines);
-                      app_state.window.request_redraw();
-                    }
-                    KeyCode::KeyT => {
-                      let _ = logic_tx.send(LogicCommand::ResetCamera);
-                      app_state.window.request_redraw();
-                    }
-                    KeyCode::Digit0 | KeyCode::Numpad0 => {
-                      let _ = logic_tx.send(LogicCommand::ResetCursor);
-                      app_state.window.request_redraw();
-                    }
-                    KeyCode::Digit1 | KeyCode::Numpad1 => {
-                      let _ = logic_tx.send(LogicCommand::SnapCursorToSun);
-                      app_state.window.request_redraw();
-                    }
-                    KeyCode::Digit2 | KeyCode::Numpad2 => {
-                      let _ = logic_tx.send(LogicCommand::SnapCameraToCursor);
-                      app_state.window.request_redraw();
-                    }
-                    KeyCode::KeyV => {
-                      let _ = logic_tx.send(LogicCommand::ToggleMeasureTool);
-                      app_state.window.request_redraw();
-                    }
-                    _ => {}
-                  }
-                }
-              }
-            }
-          }
-          WindowEvent::MouseWheel { delta, .. } => {
-            let scroll_amount = match delta {
-              winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-              winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 10.0) as f32, // tone down pixel delta
-            };
-            if app_state.is_command_prompt_open {
-              if scroll_amount > 0.0 {
-                app_state.console_scroll_offset = app_state.console_scroll_offset.saturating_add(1);
-              } else if scroll_amount < 0.0 {
-                app_state.console_scroll_offset = app_state.console_scroll_offset.saturating_sub(1);
-              }
-              app_state.window.request_redraw();
-            } else {
-              let _ = logic_tx.send(LogicCommand::ZoomCamera {
-                amount: scroll_amount,
-              });
-              app_state.window.request_redraw();
-            }
-          }
-          WindowEvent::RedrawRequested => {
-            if app_state.is_resizing || app_state.is_exiting {
-              return;
-            }
-
-            let mut render_items = Vec::new();
-            let mut matrix_stack = vec![Mat4x4f32::identity()];
-            let scene_guard = app_state.scene.as_ref();
-
-            scene_guard.traverse_with_hooks(
-              app_state.root_entity,
-              &mut matrix_stack,
-              &mut |stack: &mut Vec<Mat4x4f32>,
-                    entity,
-                    transform_opt: Option<TransformComponent>,
-                    mesh_opt: Option<&PhysicalMeshComponent>| {
-                let local_transform = transform_opt
-                  .map(|c| {
-                    Mat4x4f32::translation(c.position)
-                      * Mat4x4f32::from_quat_custom_frame(c.rotation)
-                      * Mat4x4f32::from_scale(c.scale)
-                  })
-                  .unwrap_or(Mat4x4f32::identity());
-
-                let parent_transform = stack.last().unwrap();
-                let global_transform = *parent_transform * local_transform;
-
-                if mesh_opt.is_some() {
-                  render_items.push(RenderItem {
-                    entity_id: entity,
-                    model_matrix: global_transform,
-                  });
-                }
-
-                stack.push(global_transform);
-                true
-              },
-              &mut |stack, _| {
-                stack.pop();
-              },
-            );
-
-            let mut camera_transform = TransformComponent {
-              position: Vec3f32::from_components(0.0, 0.0, 0.0),
-              rotation: Quat::identity(),
-              scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-            };
-            let mut camera_component = CameraComponent {
-              projection: Mat4x4f32::identity(),
-              near_plane: 0.1,
-              far_plane: 10000000.0,
-            };
-
-            if let Some(global) = scene_guard.global_transform(app_state.camera_entity) {
-              camera_transform = global;
-            }
-            scene_guard.with_component(app_state.camera_entity, |c| camera_component = *c);
-
-            // Free read lock before potentially blocking on full channel to avoid deadlocking with Logic Thread
-
-            let packet = RenderPacket {
-              render_items,
-              camera_transform,
-              camera_component,
-              window_size: app_state.window.inner_size(),
-              outlines_enabled: app_state
-                .outlines_enabled
-                .load(std::sync::atomic::Ordering::Relaxed),
-              is_command_prompt_open: app_state.is_command_prompt_open,
-              console_open_progress: app_state.console_open_progress,
-              console_scroll_offset: app_state.console_scroll_offset,
-              command_history: app_state.command_history.clone(),
-
-              current_command: app_state.current_command.clone(),
-            };
-
-            match render_tx.try_send(Some(packet)) {
-              Ok(_) => {}
-              Err(std::sync::mpsc::TrySendError::Full(_)) => {}
-              Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
-                elwt.exit();
-              }
-            }
-          }
-          _ => {}
-        }
-      }
-      Event::DeviceEvent {
-        event: DeviceEvent::MouseMotion { delta },
-        ..
-      } => {
-        if right_mouse_button_down {
-          let _ = logic_tx.send(LogicCommand::RotateCamera {
-            delta_x: delta.0 as f32,
-            delta_y: delta.1 as f32,
-          });
-          app_state.window.request_redraw();
-        } else if middle_mouse_button_down {
-          let _ = logic_tx.send(LogicCommand::PanCursor {
-            delta_x: delta.0 as f32,
-            delta_y: delta.1 as f32,
-          });
-          app_state.window.request_redraw();
-        }
-      }
-      Event::LoopExiting => {
-        app_state.is_exiting = true;
-        let _ = logic_tx.send(LogicCommand::Exit);
-        let _ = render_tx.try_send(None);
-      }
-      Event::AboutToWait => {
-        if app_state.is_exiting {
-          return;
-        }
-
-        let dt = 0.016; // approx 60fps
-        if app_state.is_command_prompt_open {
-          app_state.console_open_progress += dt * 5.0;
-          if app_state.console_open_progress > 1.0 {
-            app_state.console_open_progress = 1.0;
-          } else {
-            app_state.window.request_redraw();
-          }
-        } else {
-          app_state.console_open_progress -= dt * 5.0;
-          if app_state.console_open_progress < 0.0 {
-            app_state.console_open_progress = 0.0;
-          } else {
-            app_state.window.request_redraw();
-          }
-        }
-
-        let mut got_responses = false;
-        while let Ok(response) = response_rx.try_recv() {
-          if response == "___CLEAR___" {
-            app_state.command_history.clear();
-          } else {
-            app_state.command_history.push_back(response);
-            if app_state.command_history.len() > 1000 {
-              app_state.command_history.pop_front();
-            }
-          }
-          got_responses = true;
-        }
-        if got_responses && app_state.is_command_prompt_open {
-          app_state.window.request_redraw();
-        }
-
-        if last_log_time.elapsed().as_secs() >= 5 {
-          last_log_time = Instant::now();
-        }
-        if !app_state.is_resizing {
-          app_state.window.request_redraw();
-        }
-      }
-      _ => (),
-    })
-    .unwrap();
-
-  println!("Event loop returned. Joining threads...");
-  let _ = render_thread_handle.join();
-  let _ = logic_thread_handle.join();
-  println!("Threads joined. Exiting main().");
+  test_utils::app::run_app(sim_app, event_loop);
+  println!("Event loop returned. AppThreads will join threads on drop. Exiting main().");
 }
 
 fn create_presentation_engine_and_init_archetypes(
   device: &dyn gpu::RenderDevice,
   params: &gpu::PresentationEngineParams,
-) -> types::GpuResult<gpu::PresentationEngineHandle> {
+) -> types::GpuResult<(gpu::PresentationEngineHandle, (u64, u32))> {
+  let asset_dir = ASSET_DIR.read();
+  let mono_font = get_monospace_font_path_from_asset_path(asset_dir.as_ref().unwrap());
+  assert!(mono_font.is_file());
+  let mono_font = FontAtlas::from_path(mono_font.to_str().unwrap(), 12.0).unwrap();
   let pe = device.create_presentation_engine(params)?;
   device.init_archetypes(pe)?;
   device.generate_sky()?;
-  Ok(pe)
+  let mono_font_hash = mono_font.hash_metadata();
+  let mono_font_id = device.allocate_rasterized_font_atlas(mono_font_hash, mono_font)?;
+  Ok((pe, (mono_font_hash, mono_font_id)))
+}
+
+struct SimApp {
+  app_state: AppState,
+  logic_tx: std::sync::mpsc::Sender<LogicCommand>,
+  render_tx: std::sync::mpsc::SyncSender<Option<RenderPacket>>,
+  response_rx: std::sync::mpsc::Receiver<String>,
+  right_mouse_button_down: bool,
+  middle_mouse_button_down: bool,
+  mouse_x: f64,
+  mouse_y: f64,
+  last_log_time: std::time::Instant,
+  _app_threads: test_utils::threading::AppThreads,
+  window_info: test_utils::WindowPlatformData,
+}
+
+impl test_utils::app::App for SimApp {
+  fn window(&self) -> Option<&winit::window::Window> {
+    self.app_state.window.as_ref()
+  }
+
+  fn is_resizing(&self) -> bool {
+    self.app_state.is_resizing
+  }
+
+  fn set_resizing(&mut self, resizing: bool) {
+    self.app_state.is_resizing = resizing;
+  }
+
+  fn is_exiting(&self) -> bool {
+    self.app_state.is_exiting
+  }
+
+  fn set_exiting(&mut self, exiting: bool) {
+    self.app_state.is_exiting = exiting;
+  }
+
+  fn on_resize(&mut self, width: u32, height: u32) {
+    let _ = self.logic_tx.send(LogicCommand::Resize { width, height });
+    #[cfg(target_os = "macos")]
+    {
+      self
+        .window_info
+        .metal_layer
+        .setDrawableSize(objc2_core_foundation::CGSize {
+          width: width as f64,
+          height: height as f64,
+        });
+    }
+  }
+
+  fn on_close_requested(&mut self) {
+    self.app_state.window = None;
+    let _ = self.logic_tx.send(LogicCommand::Exit);
+    let _ = self.render_tx.try_send(None);
+  }
+
+  fn on_mouse_input(
+    &mut self,
+    button: winit::event::MouseButton,
+    state: winit::event::ElementState,
+  ) {
+    match button {
+      winit::event::MouseButton::Right => {
+        self.right_mouse_button_down = state == winit::event::ElementState::Pressed
+      }
+      winit::event::MouseButton::Middle => {
+        self.middle_mouse_button_down = state == winit::event::ElementState::Pressed
+      }
+      winit::event::MouseButton::Left => {
+        if state == winit::event::ElementState::Pressed {
+          let size = self.app_state.window.as_ref().unwrap().inner_size();
+          if size.width > 0 && size.height > 0 {
+            let ndc_x = (self.mouse_x as f32 / size.width as f32) * 2.0 - 1.0;
+            let ndc_y = (self.mouse_y as f32 / size.height as f32) * 2.0 - 1.0;
+            let _ = self
+              .logic_tx
+              .send(LogicCommand::RaycastCursor { ndc_x, ndc_y });
+            if let Some(w) = self.app_state.window.as_ref() {
+              w.request_redraw();
+            }
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn on_cursor_moved(&mut self, position: winit::dpi::PhysicalPosition<f64>) {
+    self.mouse_x = position.x;
+    self.mouse_y = position.y;
+  }
+
+  fn on_keyboard_input(
+    &mut self,
+    event: &winit::event::KeyEvent,
+    modifiers: winit::keyboard::ModifiersState,
+  ) {
+    if event.state == winit::event::ElementState::Pressed {
+      if self.app_state.is_command_prompt_open {
+        if let winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Escape) =
+          event.physical_key
+        {
+          self.app_state.is_command_prompt_open = false;
+          if let Some(w) = self.app_state.window.as_ref() {
+            w.request_redraw();
+          }
+        } else {
+          match &event.logical_key {
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Backspace) => {
+              self.app_state.current_command.pop();
+              if let Some(w) = self.app_state.window.as_ref() {
+                w.request_redraw();
+              }
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::PageUp) => {
+              self.app_state.console_scroll_offset =
+                self.app_state.console_scroll_offset.saturating_add(1);
+              if let Some(w) = self.app_state.window.as_ref() {
+                w.request_redraw();
+              }
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::PageDown) => {
+              self.app_state.console_scroll_offset =
+                self.app_state.console_scroll_offset.saturating_sub(1);
+              if let Some(w) = self.app_state.window.as_ref() {
+                w.request_redraw();
+              }
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
+              if !self.app_state.current_command.is_empty() {
+                let cmd = self.app_state.current_command.clone();
+                self
+                  .app_state
+                  .command_history
+                  .push_back(format!("> {}", cmd));
+                let _ = self.logic_tx.send(LogicCommand::ExecuteCommand(cmd));
+                if self.app_state.command_history.len() > 1000 {
+                  self.app_state.command_history.pop_front();
+                }
+                self.app_state.current_command.clear();
+                self.app_state.console_scroll_offset = 0;
+              }
+              if let Some(w) = self.app_state.window.as_ref() {
+                w.request_redraw();
+              }
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Space) => {
+              self.app_state.current_command.push(' ');
+              if let Some(w) = self.app_state.window.as_ref() {
+                w.request_redraw();
+              }
+            }
+            winit::keyboard::Key::Character(c) => {
+              self.app_state.current_command.push_str(c.as_str());
+              if let Some(w) = self.app_state.window.as_ref() {
+                w.request_redraw();
+              }
+            }
+            _ => {}
+          }
+        }
+      } else {
+        if let winit::keyboard::PhysicalKey::Code(keycode) = event.physical_key {
+          let speed = 0.5;
+          #[cfg(target_os = "macos")]
+          if keycode == winit::keyboard::KeyCode::KeyQ && modifiers.super_key() {
+            self.app_state.is_exiting = true;
+            self.on_close_requested();
+            println!("You Clicked exit");
+            return;
+          }
+
+          if let Some(axis) = test_utils::command::get_camera_movement_axis(keycode) {
+            let _ = self.logic_tx.send(LogicCommand::MoveCursor {
+              axis,
+              amount: speed,
+            });
+            if let Some(w) = self.app_state.window.as_ref() {
+              w.request_redraw();
+            }
+          } else {
+            match keycode {
+              winit::keyboard::KeyCode::KeyM => {
+                self.app_state.is_command_prompt_open = true;
+                if let Some(w) = self.app_state.window.as_ref() {
+                  w.request_redraw();
+                }
+              }
+              winit::keyboard::KeyCode::KeyX => {
+                let _ = self.logic_tx.send(LogicCommand::CycleTimeScale);
+                if let Some(w) = self.app_state.window.as_ref() {
+                  w.request_redraw();
+                }
+              }
+              winit::keyboard::KeyCode::KeyA => {
+                let _ = self
+                  .logic_tx
+                  .send(LogicCommand::CyclePlanet { forward: false });
+                if let Some(w) = self.app_state.window.as_ref() {
+                  w.request_redraw();
+                }
+              }
+              winit::keyboard::KeyCode::KeyD => {
+                let _ = self
+                  .logic_tx
+                  .send(LogicCommand::CyclePlanet { forward: true });
+                if let Some(w) = self.app_state.window.as_ref() {
+                  w.request_redraw();
+                }
+              }
+              winit::keyboard::KeyCode::KeyG => {
+                let _ = self.logic_tx.send(LogicCommand::ToggleGrid);
+                if let Some(w) = self.app_state.window.as_ref() {
+                  w.request_redraw();
+                }
+              }
+              winit::keyboard::KeyCode::KeyH => {
+                let _ = self.logic_tx.send(LogicCommand::TogglePlanetOutlines);
+                if let Some(w) = self.app_state.window.as_ref() {
+                  w.request_redraw();
+                }
+              }
+              winit::keyboard::KeyCode::KeyT => {
+                let _ = self.logic_tx.send(LogicCommand::ResetCamera);
+                if let Some(w) = self.app_state.window.as_ref() {
+                  w.request_redraw();
+                }
+              }
+              winit::keyboard::KeyCode::Digit0 | winit::keyboard::KeyCode::Numpad0 => {
+                let _ = self.logic_tx.send(LogicCommand::ResetCursor);
+                if let Some(w) = self.app_state.window.as_ref() {
+                  w.request_redraw();
+                }
+              }
+              winit::keyboard::KeyCode::Digit1 | winit::keyboard::KeyCode::Numpad1 => {
+                let _ = self.logic_tx.send(LogicCommand::SnapCursorToSun);
+                if let Some(w) = self.app_state.window.as_ref() {
+                  w.request_redraw();
+                }
+              }
+              winit::keyboard::KeyCode::Digit2 | winit::keyboard::KeyCode::Numpad2 => {
+                let _ = self.logic_tx.send(LogicCommand::SnapCameraToCursor);
+                if let Some(w) = self.app_state.window.as_ref() {
+                  w.request_redraw();
+                }
+              }
+              winit::keyboard::KeyCode::KeyV => {
+                let _ = self.logic_tx.send(LogicCommand::ToggleMeasureTool);
+                if let Some(w) = self.app_state.window.as_ref() {
+                  w.request_redraw();
+                }
+              }
+              _ => {}
+            }
+          }
+        }
+      }
+    }
+  }
+
+  fn on_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
+    let scroll_amount = match delta {
+      winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+      winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 10.0) as f32,
+    };
+    if self.app_state.is_command_prompt_open {
+      if scroll_amount > 0.0 {
+        self.app_state.console_scroll_offset =
+          self.app_state.console_scroll_offset.saturating_add(1);
+      } else if scroll_amount < 0.0 {
+        self.app_state.console_scroll_offset =
+          self.app_state.console_scroll_offset.saturating_sub(1);
+      }
+      if let Some(w) = self.app_state.window.as_ref() {
+        w.request_redraw();
+      }
+    } else {
+      let _ = self.logic_tx.send(LogicCommand::ZoomCamera {
+        amount: scroll_amount,
+      });
+      if let Some(w) = self.app_state.window.as_ref() {
+        w.request_redraw();
+      }
+    }
+  }
+
+  fn on_mouse_motion(&mut self, delta: (f64, f64)) {
+    if self.right_mouse_button_down {
+      let _ = self.logic_tx.send(LogicCommand::RotateCamera {
+        delta_x: delta.0 as f32,
+        delta_y: delta.1 as f32,
+      });
+      if let Some(w) = self.app_state.window.as_ref() {
+        w.request_redraw();
+      }
+    } else if self.middle_mouse_button_down {
+      let _ = self.logic_tx.send(LogicCommand::PanCursor {
+        delta_x: delta.0 as f32,
+        delta_y: delta.1 as f32,
+      });
+      if let Some(w) = self.app_state.window.as_ref() {
+        w.request_redraw();
+      }
+    }
+  }
+
+  fn on_redraw(&mut self) {
+    let packet = RenderPacket {
+      camera_entity: self.app_state.camera_entity,
+      window_size: self.app_state.window.as_ref().unwrap().inner_size(),
+      outlines_enabled: self
+        .app_state
+        .outlines_enabled
+        .load(std::sync::atomic::Ordering::Relaxed),
+      is_command_prompt_open: self.app_state.is_command_prompt_open,
+      console_open_progress: self.app_state.console_open_progress,
+      console_scroll_offset: self.app_state.console_scroll_offset,
+      command_history: self.app_state.command_history.clone(),
+      current_command: self.app_state.current_command.clone(),
+    };
+
+    match self.render_tx.try_send(Some(packet)) {
+      Ok(_) => {}
+      Err(mpsc::TrySendError::Full(_)) => {}
+      Err(mpsc::TrySendError::Disconnected(_)) => {
+        self.app_state.is_exiting = true;
+      }
+    }
+  }
+
+  fn on_about_to_wait(&mut self) {
+    let dt = 0.016;
+    if self.app_state.is_command_prompt_open {
+      self.app_state.console_open_progress += dt * 5.0;
+      if self.app_state.console_open_progress > 1.0 {
+        self.app_state.console_open_progress = 1.0;
+      } else {
+        if let Some(w) = self.app_state.window.as_ref() {
+          w.request_redraw();
+        }
+      }
+    } else {
+      self.app_state.console_open_progress -= dt * 5.0;
+      if self.app_state.console_open_progress < 0.0 {
+        self.app_state.console_open_progress = 0.0;
+      } else {
+        if let Some(w) = self.app_state.window.as_ref() {
+          w.request_redraw();
+        }
+      }
+    }
+
+    let mut got_responses = false;
+    while let Ok(response) = self.response_rx.try_recv() {
+      if response == "___CLEAR___" {
+        self.app_state.command_history.clear();
+      } else {
+        self.app_state.command_history.push_back(response);
+        if self.app_state.command_history.len() > 1000 {
+          self.app_state.command_history.pop_front();
+        }
+      }
+      got_responses = true;
+    }
+    if got_responses && self.app_state.is_command_prompt_open {
+      if let Some(w) = self.app_state.window.as_ref() {
+        w.request_redraw();
+      }
+    }
+
+    if self.last_log_time.elapsed().as_secs() >= 5 {
+      self.last_log_time = std::time::Instant::now();
+    }
+    if !self.app_state.is_resizing {
+      if let Some(w) = self.app_state.window.as_ref() {
+        w.request_redraw();
+      }
+    }
+  }
 }

@@ -62,7 +62,6 @@ impl RenderDevice for MetalRenderDevice {
     None
   }
 
-  #[cfg(debug_assertions)]
   fn print_info(&self) -> String {
     String::from("Metal Render Device")
   }
@@ -167,6 +166,7 @@ impl RenderDevice for MetalRenderDevice {
     &self,
     _handle: PresentationEngineHandle,
     _buffer: &mut [u8],
+    _task_id: Option<u64>,
   ) -> GpuResult<()> {
     Ok(())
   }
@@ -418,6 +418,10 @@ impl RenderDevice for MetalRenderDevice {
   }
 
   fn add_billboard_texture(&self, texture: &Texture) -> GpuResult<()> {
+    todo!()
+  }
+
+  fn destroy_presentation_engine(&self, handle: PresentationEngineHandle) -> GpuResult<()> {
     todo!()
   }
 }
