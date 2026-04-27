@@ -1,13 +1,9 @@
 use super::*;
-use crate::simulation_api::SimulationContext;
-use alloc::{vec::Vec, string::String, boxed::Box, sync::Arc, format, collections::BTreeMap};
-use core::ffi::{c_char, CStr};
-use aethervk_core_rlib::scene::*;
-use aethervk_core_rlib::gpu::*;
-use aethervk_core_rlib::types::*;
-use aethervk_oshal_rlib::math::vector::*;
-use aethervk_oshal_rlib::math::quaternion::*;
-use aethervk_oshal_rlib::math::matrix::*;
+use crate::simulation_api::{SimulationContext, RenderCommand, BREADCRUMB_CALLBACK};
+use aethervk_core_rlib::scene::CameraComponent;
+use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
+use aethervk_core_rlib::types::EngineError;
+use core::ffi::c_char;
 
 impl SimulationContext {
   pub fn set_logger_callback(cb: Option<extern "C" fn(*const c_char)>) {
@@ -29,24 +25,14 @@ impl SimulationContext {
 
   pub fn get_task_status(&mut self, task_id: u64) -> i32 {
     let mut status = 0; // 0: Pending, 1: Success, 2: Failed
-    let res = self.render_frontend.take_and(|context| {
-      context
-        .deref_device_and(
-          self.render_device_handle,
-          &mut (task_id, &mut status) as *mut _ as *mut core::ffi::c_void,
-          |device, data| {
-            let (tid, s) = unsafe { &mut *(data as *mut (u64, &mut i32)) };
-            match device.is_task_completed(*tid) {
-              Ok(true) => **s = 1,
-              Ok(false) => **s = 0,
-              Err(_) => **s = 2,
-            }
-            Ok(())
-          },
-        )
-        .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
-        .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
-    });
+    let res = Some(self.render_frontend.with_device(self.render_device_handle, |device| {
+        match device.is_task_completed(task_id) {
+          Ok(true) => status = 1,
+          Ok(false) => status = 0,
+          Err(_) => status = 2,
+        }
+        Ok(())
+    }).map_err(aethervk_core_rlib::types::EngineError::from));
 
     if res.is_none() {
       return -1;
@@ -55,10 +41,11 @@ impl SimulationContext {
   }
 
   pub fn resize(&mut self, width: u32, height: u32) -> Result<(), EngineError> {
-    self.window_width = width;
-    self.window_height = height;
-    
-    if let Some(active) = self.active_scene() {
+    if let Some(scene_ctx_arc) = self.active_scene_clone() {
+      let mut active = scene_ctx_arc.write();
+      
+      
+      
       let target_entity = active.active_camera_entity;
       active.scene.with_component_mut(
         target_entity,
@@ -71,11 +58,12 @@ impl SimulationContext {
           );
         },
       );
+      
+      drop(active);
+      let _ = self
+        .render_tx
+        .try_send(RenderCommand::Resize { width, height,  });
     }
-
-    let _ = self
-      .render_tx
-      .try_send(RenderCommand::Resize { width, height });
     Ok(())
   }
 

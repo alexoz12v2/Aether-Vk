@@ -54,8 +54,12 @@ pub(super) struct VulkanRenderContext {
 }
 
 impl VulkanCore {
-  fn from_path(base_override_path: Option<&CStr>) -> GpuResult<Self> {
-    let instance = unsafe { instance::Instance::new(base_override_path) }?;
+  fn from_path(
+    base_override_path: Option<&CStr>,
+    validation_error_callback: Option<fn(&str)>,
+  ) -> GpuResult<Self> {
+    let instance =
+      unsafe { instance::Instance::new(base_override_path, validation_error_callback) }?;
     let live_devices = FnvIndexMap::new();
 
     Ok(
@@ -92,6 +96,7 @@ impl InitWithRuntime<VulkanRenderContext> for VulkanRenderContext {
     } else {
       let new_core = sync::Arc::new(spin::RwLock::new(VulkanCore::from_path(
         base_override_path.as_deref(),
+        params.validation_error_callback,
       )?));
       *s_core = sync::Arc::downgrade(&new_core);
       new_core
@@ -124,8 +129,8 @@ impl RenderContext for VulkanRenderContext {
     additional_params: &DeviceAdditionalParams,
   ) -> GpuResult<RenderDeviceHandle> {
     let handle = self.device_id_from_index(index);
-    let query_input =
-      PhysicalDeviceQueryInput::from_params(additional_params).ok_or(GpuError::InvalidArgument)?;
+    let query_input = PhysicalDeviceQueryInput::from_params(additional_params)
+      .ok_or(GpuError::InvalidArgument("vulkan.rs:128"))?;
 
     self.core.write().with_mut(|fields| {
       if !fields.live_devices.contains_key(&handle) {

@@ -5,9 +5,11 @@ layout(push_constant) uniform Push {
     vec2 scale;
     vec4 color;
     vec4 uv_bounds; // xy = min, zw = max
+    uint texture_id;
 } push;
 
 layout(location = 0) out vec2 outUV;
+layout(location = 1) flat out uint outTextureId;
 
 const vec2 quad[4] = vec2[] (
   vec2(0.0, 0.0),
@@ -25,4 +27,5 @@ void main() {
     vec2 screenPos = push.pos + (inPosition * push.scale);
     
     gl_Position = vec4(screenPos, 0.0, 1.0);
+    outTextureId = push.texture_id;
 }

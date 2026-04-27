@@ -3,42 +3,36 @@ use core::{
   hash::{Hash, Hasher},
 };
 use ahash::AHasher;
-
-// Note: this is a no_std environment
-// Do not add anything unrelated to gpu interface here. If you want to define components, scene,
-// and other modeling, create new files
-
 use crate::{
   gpu::frame::ResourceUploadResult,
   scene::{EntityId, PhysicalMeshComponent, TransformComponent},
-  simulation::comet::PushConstants,
 };
 use crate::types::{EngineResult, GpuError, GpuResult};
+use heapless::index_map::FnvIndexMap;
+use alloc::sync::Weak;
+#[cfg(debug_assertions)]
+use alloc::string::String;
+use alloc::sync::Arc;
+use ab_glyph::PxScale;
+use bitflags::bitflags;
+use aethervk_oshal_rlib::os::time::timeus_t;
+use crate::physics::physics_scene::PhysicsScene;
+use crate::scene::Scene;
+use crate::scene::text::{FontAtlas, GlyphInfo};
+use crate::simulation::comet::Texture;
 
-// Re-export what is necessary from backends
-pub use super::gpu_backends::new_render_frontend;
-pub use super::gpu_backends::get_available_render_backends;
-pub use super::gpu_backends::get_available_kernels;
-pub use super::gpu_backends::{vulkan::constants};
+pub use super::gpu_backends::*;
 
-pub use self::viewport::*;
+pub mod frame;
+pub mod scene_conversion;
+
 pub use self::frame::RenderScene;
 
 pub type RwLock<T> = spin::rwlock::RwLock<T>;
 
-use heapless::index_map::FnvIndexMap;
-use alloc::boxed::Box;
-#[cfg(debug_assertions)]
-use alloc::string::String;
-use alloc::sync::Arc;
-use aethervk_oshal_rlib::os::time::timeus_t;
-use crate::physics::physics_scene::PhysicsScene;
-use crate::scene::Scene;
-use crate::simulation::comet::Texture;
-
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct RenderBackendId(pub u64);
-pub const NULL_RENDER_BACEKND: RenderBackendId = RenderBackendId(0);
+pub const NULL_RENDER_BACKEND: RenderBackendId = RenderBackendId(0);
 pub const VULKAN_RENDER_BACKEND: RenderBackendId = RenderBackendId(1);
 pub const METAL_RENDER_BACKEND: RenderBackendId = RenderBackendId(2);
 pub const D3D12_RENDER_BACKEND: RenderBackendId = RenderBackendId(3);
@@ -73,10 +67,74 @@ pub struct CommandBufferHandle(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RenderableInstanceId(pub u64);
 
+pub trait GpuCometExt {
+  fn texture_flags(&self) -> TextureFlags;
+}
+
+impl GpuCometExt for crate::simulation::comet::Comet {
+  fn texture_flags(&self) -> TextureFlags {
+    let mut flags = TextureFlags::empty();
+    if self.albedo_map.is_some() {
+      flags |= TextureFlags::ALBEDO;
+    }
+    if self.normal_map.is_some() {
+      flags |= TextureFlags::NORMAL;
+    }
+    if self.roughness_map.is_some() {
+      flags |= TextureFlags::ROUGHNESS;
+    }
+    if self.ao_map.is_some() {
+      flags |= TextureFlags::AO;
+    }
+    flags
+  }
+}
+
+bitflags! {
+  #[repr(C)]
+  #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+  pub struct TextureFlags: u32 {
+    const ALBEDO    = 1 << 0;
+    const NORMAL    = 1 << 1;
+    const ROUGHNESS = 1 << 2;
+    const AO        = 1 << 3;
+  }
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct SkyPushConstants {
-  pub inv_view_proj: [f32; 16],
+pub struct PushConstants {
+  pub model_view_proj: [[f32; 4]; 4],
+  pub model: [[f32; 4]; 4],
+  pub sun_pos: [f32; 3],
+  pub texture_flags: TextureFlags,
+  pub sun_color: [f32; 4],
+  pub camera_pos: [f32; 3],
+  pub emissive_intensity: f32,
+  pub emissive_color: [f32; 3],
+  pub _unused_pad: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct CometSpecializationConstants {
+  pub base_albedo_r: f32,
+  pub base_albedo_g: f32,
+  pub base_albedo_b: f32,
+  pub base_roughness: f32,
+  pub base_ao: f32,
+}
+
+impl Default for CometSpecializationConstants {
+  fn default() -> Self {
+    Self {
+      base_albedo_r: 0.04,
+      base_albedo_g: 0.04,
+      base_albedo_b: 0.04,
+      base_roughness: 0.9,
+      base_ao: 1.0,
+    }
+  }
 }
 
 #[repr(C)]
@@ -94,6 +152,12 @@ pub struct CursorPushConstants {
   pub view_proj: [f32; 16],
   pub model: [f32; 16],
   pub cursor_size: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SkyPushConstants {
+  pub inv_view_proj: [f32; 16],
 }
 
 #[repr(C)]
@@ -141,6 +205,61 @@ pub struct MarkerPushConstants {
   pub _pad2: f32,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GridPushConstants {
+  pub view_proj: [f32; 16],
+  pub camera_pos: [f32; 3],
+  pub near_plane: f32,
+  pub far_plane: f32,
+  pub density: f32,
+  pub _pad1: [f32; 2],
+  pub grid_color: [f32; 3],
+  pub _pad2: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct BvhPushConstants {
+  pub mvp_arr: [f32; 16],
+  pub center_type: [f32; 4],
+  pub extents_arr: [f32; 4],
+  pub axes_x: [f32; 4],
+  pub axes_y: [f32; 4],
+  pub axes_z: [f32; 4],
+}
+
+// TODO remove on text rendering v2
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TextPushConstants {
+  pub pos: [f32; 2],
+  pub scale: [f32; 2],
+  pub color: [f32; 4],
+  pub uv_bounds: [f32; 4],
+  pub texture_id: u32,
+}
+
+impl TextPushConstants {
+  pub(crate) fn from_glyph(
+    glyph: &GlyphInfo,
+    cursor_position: [f32; 2],
+    screen_extent: [f32; 2],
+    desired_points: f32,
+    atlas_scale: PxScale,
+    texture_id: u32,
+    color: [f32; 4],
+  ) -> Self {
+    Self {
+      pos: glyph.screen_position(cursor_position, screen_extent, desired_points, atlas_scale),
+      scale: glyph.screen_size(screen_extent, desired_points, atlas_scale),
+      color,
+      uv_bounds: glyph.uv_bounds(),
+      texture_id,
+    }
+  }
+}
+
 impl RenderableInstanceId {
   pub fn from_physical_mesh(
     entity_id: EntityId,
@@ -174,6 +293,15 @@ pub struct Rect2D {
   pub extent: [u32; 2],
 }
 
+impl Rect2D {
+  pub fn from_extent(extent: [u32; 2]) -> Self {
+    Self {
+      offset: [0, 0],
+      extent,
+    }
+  }
+}
+
 #[derive(Clone, Copy)]
 pub struct Viewport {
   pub x: f32,
@@ -184,16 +312,44 @@ pub struct Viewport {
   pub max_depth: f32,
 }
 
+impl Viewport {
+  pub fn from_extent(extent: [u32; 2]) -> Self {
+    Self {
+      x: 0.0,
+      y: 0.0,
+      width: extent[0] as f32,
+      height: extent[1] as f32,
+      min_depth: 0.0,
+      max_depth: 1.0,
+    }
+  }
+}
+
 #[repr(u32)]
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum NativeGpuProperty {
   VulkanMetalDeviceId = 0,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ArchetypeId {
+  Sun,
+  PhysicalMesh,
+  Billboard,
+  Cursor,
+  Marker,
+  Measurement,
+  Sky,
+  Grid,
+  Minimap,
+  Text,
+  Bvh,
+}
+
+/// Rule for rendering functions: They cannot take a [`crate::scene::EntityId`]
 pub trait RenderDevice: Send + Sync {
   fn get_native_prop(&self, prop: NativeGpuProperty) -> Option<*mut core::ffi::c_void>;
 
-  #[cfg(debug_assertions)]
   fn print_info(&self) -> String;
 
   fn context_id(&self) -> u64;
@@ -214,7 +370,7 @@ pub trait RenderDevice: Send + Sync {
   fn render_frame(
     &self,
     cmd_buffer: CommandBufferHandle,
-    render_scene: &crate::gpu::frame::RenderScene,
+    render_scene: &RenderScene,
   ) -> GpuResult<()>;
 
   /// Creates the surface and initial swapchain
@@ -222,6 +378,9 @@ pub trait RenderDevice: Send + Sync {
     &self,
     params: &PresentationEngineParams,
   ) -> GpuResult<PresentationEngineHandle>;
+
+  /// Destroys a swapchain
+  fn destroy_presentation_engine(&self, handle: PresentationEngineHandle) -> GpuResult<()>;
 
   /// Allows caller to explicitly trigger a resize/recreation
   fn resize_presentation_engine(
@@ -238,6 +397,7 @@ pub trait RenderDevice: Send + Sync {
   /// discard the frame, call resize, and try again next frame
   fn acquire_next_image(&self, handle: PresentationEngineHandle) -> GpuResult<AcquireResult>;
 
+  // TODO: see how to refactor get_or_create functions
   /// Returns (pipeline, vertex_buffer, index_buffer)
   fn get_or_create_physical_mesh_resources(
     &self,
@@ -273,6 +433,21 @@ pub trait RenderDevice: Send + Sync {
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult>;
 
+  fn get_sun_pipeline_key(&self) -> GpuResult<PipelineKey>;
+
+  fn get_sky_pipeline_key(&self) -> GpuResult<PipelineKey>;
+
+  fn get_grid_pipeline_kay(&self) -> GpuResult<PipelineKey>;
+
+  fn get_bvh_pipeline_kay(&self) -> GpuResult<PipelineKey>;
+
+  /// Given FontAtlas (moved), try to allocate a rasterized representation of it
+  /// for the render device. Returns internal id used by RenderDevice (as descriptor index)
+  /// Given `hash` should also be kept by caller, in case removal is desired
+  fn allocate_rasterized_font_atlas(&self, hash: u64, font_atlas: FontAtlas) -> GpuResult<u32>;
+
+  fn free_rasterized_font_atlas(&self, hash: u64, font_atlas_id: u32) -> GpuResult<()>;
+
   /// Presents the image. Takes semaphore signaled by a rendering command buffer
   fn present(
     &self,
@@ -288,6 +463,7 @@ pub trait RenderDevice: Send + Sync {
     &self,
     handle: PresentationEngineHandle,
     buffer: &mut [u8],
+    task_id: Option<u64>,
   ) -> GpuResult<()>;
 
   fn get_command_buffer(&self) -> GpuResult<CommandBufferHandle>;
@@ -316,6 +492,7 @@ pub trait RenderDevice: Send + Sync {
   fn add_billboard_texture(&self, texture: &Texture) -> GpuResult<()>;
 
   /// alter internal state for current command buffer to use a specific set of buffers, coherent with pipeline
+  /// TODO rework to 1) not take pipeline key 2) support multiple archetypes which use buffers
   fn bind_buffers(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -323,82 +500,57 @@ pub trait RenderDevice: Send + Sync {
     buffers: GpuResourceHandle,
   ) -> GpuResult<()>;
 
-  fn push_constants(
+  fn push_constants_raw(
     &self,
     cmd_buffer: CommandBufferHandle,
-    push_constants: &PushConstants,
-  ) -> GpuResult<()>;
-
-  fn push_sun_constants(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    push_constants: &SunPushConstants,
-  ) -> GpuResult<()>;
-
-  fn push_cursor_constants(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    push_constants: &CursorPushConstants,
-  ) -> GpuResult<()>;
-
-  fn push_marker_constants(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    push_constants: &MarkerPushConstants,
-  ) -> GpuResult<()>;
-
-  fn push_measurement_constants(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    push_constants: &MeasurementPushConstants,
-  ) -> GpuResult<()>;
-
-  fn push_billboard_constants(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    push_constants: &BillboardPushConstants,
+    archetype: ArchetypeId,
+    push_constants_bytes: &[u8],
   ) -> GpuResult<()>;
 
   fn draw_indexed(&self, cmd_buffer: CommandBufferHandle, index_count: u32) -> GpuResult<()>;
 
   fn draw(&self, cmd_buffer: CommandBufferHandle, vertex_count: u32) -> GpuResult<()>;
 
+  // TODO move to kernels trait
   fn update_sun(
     &self,
     cmd_buffer: CommandBufferHandle,
     entity_id: crate::scene::EntityId,
-    component: &crate::scene::SunComponent,
+    resolution: (u32, u32, u32),
   ) -> GpuResult<()>;
 
-  fn render_sun(
+  fn prepare_billboard_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
-    entity_id: crate::scene::EntityId,
-    component: &crate::scene::SunComponent,
-    transform: &crate::scene::TransformComponent,
-    view: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
-    view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
   ) -> GpuResult<()>;
 
-  fn render_sky(
+  fn prepare_bvh_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
-    entity_id: crate::scene::EntityId,
-    component: &crate::scene::SkyComponent,
-    view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
   ) -> GpuResult<()>;
 
-  fn render_grid(
+  /// Allocates Descriptor (not image, that is done in `generate_sky`) and updates if not done yet
+  /// TODO probably move into bridge between Kernels and RenderDevice when Kernels has generates_sky
+  /// TODO remove entity. Support for only one sun
+  fn prepare_sun_for_render(
     &self,
     cmd_buffer: CommandBufferHandle,
-    entity_id: crate::scene::EntityId,
-    component: &crate::scene::GridComponent,
-    view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
-    camera_pos: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
-    near_plane: f32,
-    far_plane: f32,
+    entity: EntityId,
   ) -> GpuResult<()>;
 
+  /// Allocates Descriptor (not image, that is done in `generate_sky`) and updates if not done yet
+  /// TODO probably move into bridge between Kernels and RenderDevice when Kernels has generates_sky
+  fn prepare_sky_for_render(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
+
+  /// Screen extent should be the chosen presentation engine extent to correctly display screen size and position
+  /// `atlas_id` is composed of the `hash` and internal id for the font atlas
+  fn prepare_text_archetype_for_render_and_bind_pipeline(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+  ) -> GpuResult<()>;
+
+  // TODO move in frame as a ui rendering
+  #[deprecated]
   fn render_minimap(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -409,17 +561,7 @@ pub trait RenderDevice: Send + Sync {
       f32,
       [f32; 4],
     )],
-  ) -> GpuResult<()>;
-
-  fn render_bvh(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    nodes: &[(
-      crate::math::collision::linear_bvh::LinearBound<f32>,
-      aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
-    )],
-    view_proj: [f32; 16],
-    presentation_engine: PresentationEngineHandle,
+    screen_extent: [f32; 2],
   ) -> GpuResult<()>;
 
   fn render_ui_rect(
@@ -428,21 +570,36 @@ pub trait RenderDevice: Send + Sync {
     color: [f32; 4],
     position: [f32; 2],
     size: [f32; 2],
-    presentation_engine: PresentationEngineHandle,
   ) -> GpuResult<()>;
 
+  // TODO instead of rendering a character at a time, we should pass letters as vertices and use 4 instances to create a quad. vertex data should have the necessary glyph position/size and texture id. This means that we need a "streaming buffer" (See VMA guidelines) instead of push constants
+  /// `prepare_text_archetype_for_render_and_bind_pipeline` should have already been called
+  /// therefore assumes text pipeline, descriptor sets, are already in place.
   fn render_text(
     &self,
     cmd_buffer: CommandBufferHandle,
     text: &str,
-    font_path: &str,
-    points: f32,
+    start_cursor_position: [f32; 2],
+    screen_extent: [f32; 2],
+    atlas_id: (u64, u32),
+    desired_points: f32,
     color: [f32; 4],
-    position: [f32; 2],
-    presentation_engine: PresentationEngineHandle,
   ) -> GpuResult<()>;
 
   fn end_render_pass(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
+
+  /// Call this right after `end_render_pass`. It allocates a staging buffer
+  /// and natively injects the GPU Image-to-Buffer copy directly into your main frame.
+  fn record_windowless_download(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
+    task_id: u64,
+  ) -> GpuResult<()>;
+
+  /// Call this once `is_task_completed(task_id)` for a `record_windowless_download` task is true.
+  /// It completes the CPU memory copy instantly without touching any Vulkan Queues.
+  fn read_windowless_download(&self, task_id: u64, buffer: &mut [u8]) -> GpuResult<()>;
 
   fn submit_command_buffer(
     &self,
@@ -461,19 +618,105 @@ pub trait RenderDevice: Send + Sync {
   fn success_task(&self, task_id: u64);
 }
 
+macro_rules! implement_render_device_ext {
+  (
+    $(
+        // Match the desired method name, the target ArchetypeId variant, and the specific push constant type
+        fn $method_name:ident($archetype:ident, $struct_ty:ty);
+    )*
+  ) => {
+    /// Extension trait for `RenderDevice` such that we can give more ergonomic methods without
+    /// losing dyn compatibility
+    pub trait RenderDeviceExt {
+      /// Generically push any struct as push constants.
+      /// Struct should be `#[repr(C)]`
+      fn push_constants<T>(
+        &self,
+        cmd_buffer: crate::gpu::CommandBufferHandle,
+        archetype: ArchetypeId,
+        push_constants: &T,
+      ) -> GpuResult<()>;
+
+      // Generate a trait method for each rule
+      $(
+        fn $method_name(
+          &self,
+          cmd_buffer: crate::gpu::CommandBufferHandle,
+          push_constants: &$struct_ty,
+        ) -> GpuResult<()>;
+      )*
+    }
+
+    impl<R: RenderDevice + ?Sized> RenderDeviceExt for R {
+      fn push_constants<T>(
+        &self,
+        cmd_buffer: crate::gpu::CommandBufferHandle,
+        archetype: ArchetypeId,
+        push_constants: &T,
+      ) -> GpuResult<()> {
+        // Convert generic struct to bytes
+        let bytes = unsafe {
+            core::slice::from_raw_parts(
+                push_constants as *const T as *const u8,
+                core::mem::size_of::<T>(),
+            )
+        };
+        self.push_constants_raw(cmd_buffer, archetype, bytes)
+      }
+
+      // Generate the boilerplate implementation for each rule
+      $(
+        fn $method_name(
+          &self,
+          cmd_buffer: crate::gpu::CommandBufferHandle,
+          push_constants: &$struct_ty,
+        ) -> GpuResult<()> {
+          self.push_constants(cmd_buffer, ArchetypeId::$archetype, push_constants)
+        }
+      )*
+    }
+  };
+}
+
+// Call the macro with your specific methods, archetype enum variants, and structs
+implement_render_device_ext! {
+  fn push_sun_constants(Sun, SunPushConstants);
+  fn push_constants_mesh(PhysicalMesh, PushConstants);
+  fn push_billboard_constants(Billboard, BillboardPushConstants);
+  fn push_cursor_constants(Cursor, CursorPushConstants);
+  fn push_marker_constants(Marker, MarkerPushConstants);
+  fn push_measurement_constants(Measurement, MeasurementPushConstants);
+  fn push_sky_constants(Sky, SkyPushConstants);
+  fn push_grid_constants(Grid, GridPushConstants);
+  // Minimap, TODO
+  // fn push_minimap_constants(Minimap, MinimapPushConstants);
+  // Text,
+  fn push_text_constants(Text, TextPushConstants);
+  // Bvh,
+  fn push_bvh_constants(Bvh, BvhPushConstants);
+
+  // to add new archetypes, add one line here:
+}
+
 /// An RAII guard ensuring the command buffer is always submitted.
 pub struct ScopedCommandBuffer<'a> {
   device: &'a dyn RenderDevice,
   cmd_buffer: CommandBufferHandle,
+  task_id: Option<u64>,
   submitted: bool,
 }
 
 impl<'a> ScopedCommandBuffer<'a> {
-  pub fn new(device: &'a dyn RenderDevice, cmd_buffer: CommandBufferHandle) -> GpuResult<Self> {
+  pub fn new(
+    device: &'a dyn RenderDevice,
+    cmd_buffer: CommandBufferHandle,
+    task_id: Option<u64>,
+  ) -> GpuResult<Self> {
     device.begin_command_buffer(cmd_buffer)?;
     Ok(Self {
       device,
       cmd_buffer,
+      task_id,
       submitted: false,
     })
   }
@@ -485,7 +728,9 @@ impl<'a> ScopedCommandBuffer<'a> {
   /// Explicitly submits the command buffer.
   pub fn submit(mut self) -> GpuResult<()> {
     self.submitted = true;
-    self.device.submit_command_buffer(self.cmd_buffer, None)
+    self
+      .device
+      .submit_command_buffer(self.cmd_buffer, self.task_id)
   }
 }
 
@@ -493,7 +738,9 @@ impl<'a> Drop for ScopedCommandBuffer<'a> {
   fn drop(&mut self) {
     if !self.submitted {
       // Force submission on early exit/panic. Result is ignored to prevent double panics.
-      let _ = self.device.submit_command_buffer(self.cmd_buffer, None);
+      let _ = self
+        .device
+        .submit_command_buffer(self.cmd_buffer, self.task_id);
     }
   }
 }
@@ -555,9 +802,21 @@ pub trait RenderContext: Send + Sync {
 
 // NOTE: This is a box like type, so we don't need to box it when returning it to cdylib,
 // we can instead use the ManualDrop mechanism
+#[derive(Clone)]
 pub struct RenderFrontend {
   backend: Arc<spin::RwLock<dyn RenderContext + 'static>>,
 }
+
+pub type WeakRenderFrontend = Weak<spin::RwLock<dyn RenderContext + 'static>>;
+pub trait WeakRenderFrontendExt {
+  fn as_frontend(&self) -> Option<RenderFrontend>;
+}
+impl WeakRenderFrontendExt for WeakRenderFrontend {
+  fn as_frontend(&self) -> Option<RenderFrontend> {
+    self.upgrade().map(|s| RenderFrontend { backend: s })
+  }
+}
+
 impl core::ops::Deref for RenderFrontend {
   type Target = Arc<spin::RwLock<dyn RenderContext + 'static>>;
 
@@ -570,6 +829,10 @@ unsafe impl Sync for RenderFrontend {}
 unsafe impl Send for RenderFrontend {}
 
 impl RenderFrontend {
+  pub fn weak_self(&self) -> WeakRenderFrontend {
+    Arc::downgrade(&self.backend)
+  }
+
   /// Executes a closure with the specified render device safely.
   /// We use a trampoline to pass a safe Rust closure through the C-style
   /// `deref_device_and` `*mut c_void` parameter.
@@ -655,8 +918,14 @@ where
   }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Default, Debug, Copy, Clone, Eq, Ord, PartialOrd, PartialEq, Hash)]
 pub struct PresentationEngineHandle(pub u64);
+
+impl PresentationEngineHandle {
+  pub fn is_valid(self) -> bool {
+    self.0 != 0
+  }
+}
 
 /// Status returned by acquire and present operations
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -896,6 +1165,3 @@ pub trait KernelRenderBridge: Send + Sync {
   /// Inserts pipeline barriers or queue ownership transfers from Graphics to Compute.
   fn sync_graphics_to_compute(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 }
-
-pub mod frame;
-pub mod viewport;

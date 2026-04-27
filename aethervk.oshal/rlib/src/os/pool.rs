@@ -1,111 +1,152 @@
 //! A thread pool for scattering and gathering computation workloads.
 
-use alloc::boxed::Box;
-use alloc::vec::Vec;
-use core::marker::{Send, Sync};
+use core::marker::Send;
 
 use crate::os::NativeResult;
 
+pub mod chunked;
+pub mod persistent;
 pub mod tasklet;
 
+/// Status returned by a workload to guide the thread scheduler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkloadStatus {
+  /// The workload has finished execution and its memory will be dropped.
+  Complete,
+  /// The workload wishes to pause execution and requests re-insertion into the queue.
+  Yield,
+}
+
 /// A unit of work that can be executed by the thread pool.
-pub trait Workload: Send + Sync {
-  /// Executes the workload.
-  fn execute(&self);
+pub trait Workload: Send {
+  /// Executes the workload mutably, returning its scheduling directive.
+  fn execute(&mut self) -> WorkloadStatus;
+
+  /// Returns an optional tasklet ID. Workloads with the same tasklet ID
+  /// will always be executed sequentially by the same underlying thread in the pool.
+  fn tasklet_id(&self) -> Option<usize> {
+    None
+  }
 }
 
 #[cfg(target_os = "windows")]
 mod windows_pool {
   use crate::os::NativeError;
-  use spin::Mutex; // Imported spin::Mutex for no_std interior mutability
   use alloc::boxed::Box;
+  use alloc::collections::VecDeque;
+  use alloc::sync::Arc;
   use alloc::vec::Vec;
+  use core::ffi::c_void;
+  use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+  use spin::Mutex;
 
   use super::*;
+  use windows::Win32::Foundation::{CloseHandle, HANDLE};
   use windows::Win32::System::Threading::{
-    CloseThreadpool, CloseThreadpoolWork, CreateThreadpool, CreateThreadpoolWork,
-    PTP_CALLBACK_INSTANCE, PTP_POOL, PTP_WORK, SetThreadpoolThreadMaximum,
-    SetThreadpoolThreadMinimum, SubmitThreadpoolWork, TP_CALLBACK_ENVIRON_V3,
-    TP_CALLBACK_PRIORITY_NORMAL, WaitForThreadpoolWorkCallbacks,
+    CreateThread, SwitchToThread, WaitForSingleObject, INFINITE, THREAD_CREATION_FLAGS,
   };
+
+  struct ThreadPoolState {
+    shared_queue: Mutex<VecDeque<Box<dyn Workload>>>,
+    local_queues: Vec<Mutex<VecDeque<Box<dyn Workload>>>>,
+    shutdown: AtomicBool,
+    pending_tasks: AtomicUsize,
+  }
+
+  struct ThreadArg {
+    state: Arc<ThreadPoolState>,
+    id: usize,
+  }
 
   /// A thread pool for executing workloads.
   pub struct ThreadPool {
-    pool: PTP_POOL,
-    callback_environ: TP_CALLBACK_ENVIRON_V3,
-    work_items: Mutex<Vec<PTP_WORK>>, // Wrapped in Mutex
+    threads: Vec<HANDLE>,
+    state: Arc<ThreadPoolState>,
   }
 
-  // Explicitly mark ThreadPool as Send and Sync. Win32 Threadpool APIs
-  // are designed to be entirely thread-safe for concurrent submissions.
   unsafe impl Send for ThreadPool {}
   unsafe impl Sync for ThreadPool {}
 
   impl ThreadPool {
     pub fn new(num_threads: usize) -> NativeResult<Self> {
-      let pool = unsafe { CreateThreadpool(None) }
-        .map_err(|_| NativeError::OsThreadingError(crate::os::ThreadingError::Unknown))?;
-
-      let threads_u32 = num_threads as u32;
-      unsafe {
-        SetThreadpoolThreadMinimum(pool, threads_u32)
-          .map_err(|_| NativeError::OsThreadingError(crate::os::ThreadingError::Unknown))?;
-        SetThreadpoolThreadMaximum(pool, threads_u32);
+      let mut local_queues = Vec::with_capacity(num_threads);
+      for _ in 0..num_threads {
+        local_queues.push(Mutex::new(VecDeque::new()));
       }
 
-      let mut callback_environ = TP_CALLBACK_ENVIRON_V3::default();
-      callback_environ.Version = 3;
-      callback_environ.CallbackPriority = TP_CALLBACK_PRIORITY_NORMAL;
-      callback_environ.Size = core::mem::size_of::<TP_CALLBACK_ENVIRON_V3>() as u32;
-      callback_environ.Pool = pool;
+      let state = Arc::new(ThreadPoolState {
+        shared_queue: Mutex::new(VecDeque::new()),
+        local_queues,
+        shutdown: AtomicBool::new(false),
+        pending_tasks: AtomicUsize::new(0),
+      });
 
-      Ok(Self {
-        pool,
-        callback_environ,
-        work_items: Mutex::new(Vec::new()), // Initialize Mutex
-      })
+      let mut threads = Vec::with_capacity(num_threads);
+
+      for i in 0..num_threads {
+        let arg = Box::new(ThreadArg {
+          state: Arc::clone(&state),
+          id: i,
+        });
+
+        let raw_arg = Box::into_raw(arg);
+        let handle_res = unsafe {
+          CreateThread(
+            None,
+            0,
+            Some(thread_func),
+            Some(raw_arg as *const c_void),
+            THREAD_CREATION_FLAGS(0),
+            None,
+          )
+        };
+
+        match handle_res {
+          Ok(handle) => threads.push(handle),
+          Err(_) => {
+            let _ = unsafe { Box::from_raw(raw_arg) }; // Drop cleanly on failure to avoid leak
+            state.shutdown.store(true, Ordering::SeqCst);
+            for &thread in &threads {
+              unsafe {
+                let _ = WaitForSingleObject(thread, INFINITE);
+                let _ = CloseHandle(thread);
+              }
+            }
+            return Err(NativeError::OsThreadingError(
+              crate::os::ThreadingError::Unknown,
+            ));
+          }
+        }
+      }
+
+      Ok(Self { threads, state })
     }
 
-    /// Scatters the given workloads among the threads in the pool.
     pub fn scatter(&self, workloads: Vec<Box<dyn Workload>>) -> NativeResult<()> {
-      // Changed to &self
-      let mut items = self.work_items.lock();
+      let num_threads = self.state.local_queues.len();
+      self
+        .state
+        .pending_tasks
+        .fetch_add(workloads.len(), Ordering::SeqCst);
 
       for workload in workloads {
-        let thin_ptr = Box::into_raw(Box::new(workload));
-
-        let work = unsafe {
-          CreateThreadpoolWork(
-            Some(work_callback),
-            Some(thin_ptr as *mut core::ffi::c_void),
-            Some(core::ptr::from_ref(&self.callback_environ)),
-          )
+        if let Some(id) = workload.tasklet_id() {
+          if num_threads > 0 {
+            let target = id % num_threads;
+            self.state.local_queues[target].lock().push_back(workload);
+            continue;
+          }
         }
-        .map_err(|_| NativeError::OsThreadingError(crate::os::ThreadingError::Unknown))?;
-
-        items.push(work);
-
-        unsafe {
-          SubmitThreadpoolWork(work);
-        }
+        self.state.shared_queue.lock().push_back(workload);
       }
 
       Ok(())
     }
 
-    /// Gathers the results of the scattered workloads.
     pub fn gather(&self) {
-      // Changed to &self
-      // Extract the works quickly so we don't hold the spinlock while waiting
-      let works = {
-        let mut items = self.work_items.lock();
-        core::mem::take(&mut *items)
-      };
-
-      for work in works {
+      while self.state.pending_tasks.load(Ordering::Acquire) > 0 {
         unsafe {
-          WaitForThreadpoolWorkCallbacks(work, false.into());
-          CloseThreadpoolWork(work);
+          let _ = SwitchToThread();
         }
       }
     }
@@ -113,37 +154,111 @@ mod windows_pool {
 
   impl Drop for ThreadPool {
     fn drop(&mut self) {
-      unsafe { CloseThreadpool(self.pool) };
+      self.state.shutdown.store(true, Ordering::SeqCst);
+      for &thread in &self.threads {
+        unsafe {
+          let _ = WaitForSingleObject(thread, INFINITE);
+          let _ = CloseHandle(thread);
+        }
+      }
     }
   }
 
-  unsafe extern "system" fn work_callback(
-    _instance: PTP_CALLBACK_INSTANCE,
-    context: *mut core::ffi::c_void,
-    _work: PTP_WORK,
-  ) {
-    let workload = unsafe { Box::from_raw(context as *mut Box<dyn Workload>) };
-    workload.execute();
+  unsafe extern "system" fn thread_func(arg: *mut c_void) -> u32 {
+    let thread_arg = Box::from_raw(arg as *mut ThreadArg);
+    let state = thread_arg.state.clone();
+    let id = thread_arg.id;
+    drop(thread_arg);
+
+    let mut tick: u8 = 0;
+
+    while !state.shutdown.load(Ordering::Acquire) {
+      tick = tick.wrapping_add(1);
+
+      // Every 4th cycle prioritize popping from the shared queue to prevent
+      // queue starvation triggered by heavily persistent local tasklets loop
+      let try_shared_first = tick % 4 == 0;
+
+      let workload = if try_shared_first {
+        let mut shared = state.shared_queue.lock();
+        if let Some(w) = shared.pop_front() {
+          Some(w)
+        } else {
+          drop(shared);
+          state.local_queues[id].lock().pop_front()
+        }
+      } else {
+        let mut local = state.local_queues[id].lock();
+        if let Some(w) = local.pop_front() {
+          Some(w)
+        } else {
+          drop(local);
+          state.shared_queue.lock().pop_front()
+        }
+      };
+
+      if let Some(mut workload) = workload {
+        match workload.execute() {
+          WorkloadStatus::Complete => {
+            state.pending_tasks.fetch_sub(1, Ordering::Release);
+          }
+          WorkloadStatus::Yield => {
+            let mut target_q = None;
+            if let Some(tid) = workload.tasklet_id() {
+              let num_threads = state.local_queues.len();
+              if num_threads > 0 {
+                target_q = Some(tid % num_threads);
+              }
+            }
+
+            if let Some(target) = target_q {
+              state.local_queues[target].lock().push_back(workload);
+            } else {
+              state.shared_queue.lock().push_back(workload);
+            }
+
+            // Yield heuristic to prevent a 100% CPU lock in a persistent while-loop:
+            // If the combined size of the queues this thread reads from is <= 1, it means
+            // the task we *just* yielded back is the exact same one it'll pull next iteration!
+            let local_len = state.local_queues[id].lock().len();
+            let shared_len = state.shared_queue.lock().len();
+            if local_len + shared_len <= 1 {
+              let _ = SwitchToThread();
+            }
+          }
+        }
+      } else {
+        let _ = SwitchToThread();
+      }
+    }
+
+    0
   }
 }
 
 #[cfg(unix)]
 mod pthread_pool {
   use super::*;
+  use alloc::boxed::Box;
   use alloc::collections::VecDeque;
   use alloc::sync::Arc;
   use alloc::vec::Vec;
-  use alloc::boxed::Box;
+  use core::ffi::c_void;
   use core::ptr;
+  use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
   use libc::{pthread_create, pthread_join, pthread_t};
   use spin::Mutex;
-  use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-  use core::ffi::c_void;
 
   struct ThreadPoolState {
-    work_queue: Mutex<VecDeque<Box<dyn Workload>>>,
+    shared_queue: Mutex<VecDeque<Box<dyn Workload>>>,
+    local_queues: Vec<Mutex<VecDeque<Box<dyn Workload>>>>,
     shutdown: AtomicBool,
-    active_threads: AtomicUsize,
+    pending_tasks: AtomicUsize,
+  }
+
+  struct ThreadArg {
+    state: Arc<ThreadPoolState>,
+    id: usize,
   }
 
   /// A thread pool for executing workloads.
@@ -152,58 +267,78 @@ mod pthread_pool {
     state: Arc<ThreadPoolState>,
   }
 
-  // Explicitly mark as Send/Sync since `pthread_t` might act as a raw pointer
-  // on certain unix variants, blocking the auto-trait.
   unsafe impl Send for ThreadPool {}
   unsafe impl Sync for ThreadPool {}
 
   impl ThreadPool {
     pub fn new(num_threads: usize) -> NativeResult<Self> {
+      let mut local_queues = Vec::with_capacity(num_threads);
+      for _ in 0..num_threads {
+        local_queues.push(Mutex::new(VecDeque::new()));
+      }
+
       let state = Arc::new(ThreadPoolState {
-        work_queue: Mutex::new(VecDeque::new()),
+        shared_queue: Mutex::new(VecDeque::new()),
+        local_queues,
         shutdown: AtomicBool::new(false),
-        active_threads: AtomicUsize::new(0),
+        pending_tasks: AtomicUsize::new(0),
       });
 
       let mut threads = Vec::with_capacity(num_threads);
 
-      for _ in 0..num_threads {
-        let state = Arc::clone(&state);
-        let mut thread: pthread_t = 0;
-        let ret = unsafe {
-          pthread_create(
-            &mut thread,
-            ptr::null(),
-            thread_func,
-            Arc::into_raw(state) as *mut _,
-          )
-        };
+      for i in 0..num_threads {
+        let arg = Box::new(ThreadArg {
+          state: Arc::clone(&state),
+          id: i,
+        });
+
+        let raw_arg = Box::into_raw(arg);
+        let mut thread: pthread_t = unsafe { core::mem::zeroed() };
+        let ret =
+          unsafe { pthread_create(&mut thread, ptr::null(), thread_func, raw_arg as *mut _) };
+
         if ret == 0 {
           threads.push(thread);
         } else {
-          // Handle thread creation error
+          let _ = unsafe { Box::from_raw(raw_arg) };
+          state.shutdown.store(true, Ordering::SeqCst);
+          for &t in &threads {
+            unsafe {
+              pthread_join(t, ptr::null_mut());
+            }
+          }
+          return Err(crate::os::NativeError::OsThreadingError(
+            crate::os::ThreadingError::Unknown,
+          ));
         }
       }
 
       Ok(Self { threads, state })
     }
 
-    /// Scatters the given workloads among the threads in the pool.
     pub fn scatter(&self, workloads: Vec<Box<dyn Workload>>) -> NativeResult<()> {
-      // Changed to &self
-      let mut queue = self.state.work_queue.lock();
+      let num_threads = self.state.local_queues.len();
+      self
+        .state
+        .pending_tasks
+        .fetch_add(workloads.len(), Ordering::SeqCst);
+
       for workload in workloads {
-        queue.push_back(workload);
+        if let Some(id) = workload.tasklet_id() {
+          if num_threads > 0 {
+            let target = id % num_threads;
+            self.state.local_queues[target].lock().push_back(workload);
+            continue;
+          }
+        }
+        self.state.shared_queue.lock().push_back(workload);
       }
 
       Ok(())
     }
 
-    /// Gathers the results of the scattered workloads.
     pub fn gather(&self) {
-      while !self.state.work_queue.lock().is_empty()
-        || self.state.active_threads.load(Ordering::SeqCst) > 0
-      {
+      while self.state.pending_tasks.load(Ordering::Acquire) > 0 {
         unsafe { libc::sched_yield() };
       }
     }
@@ -212,27 +347,71 @@ mod pthread_pool {
   impl Drop for ThreadPool {
     fn drop(&mut self) {
       self.state.shutdown.store(true, Ordering::SeqCst);
-      for thread in &self.threads {
+      for &thread in &self.threads {
         unsafe {
-          pthread_join(*thread, ptr::null_mut());
+          pthread_join(thread, ptr::null_mut());
         }
       }
     }
   }
 
   extern "C" fn thread_func(arg: *mut c_void) -> *mut c_void {
-    let state = unsafe { Arc::from_raw(arg as *mut ThreadPoolState) };
+    let thread_arg = unsafe { Box::from_raw(arg as *mut ThreadArg) };
+    let state = thread_arg.state.clone();
+    let id = thread_arg.id;
+    drop(thread_arg);
 
-    while !state.shutdown.load(Ordering::SeqCst) {
-      let workload = {
-        let mut queue = state.work_queue.lock();
-        queue.pop_front()
+    let mut tick: u8 = 0;
+
+    while !state.shutdown.load(Ordering::Acquire) {
+      tick = tick.wrapping_add(1);
+      let try_shared_first = tick % 4 == 0;
+
+      let workload = if try_shared_first {
+        let mut shared = state.shared_queue.lock();
+        if let Some(w) = shared.pop_front() {
+          Some(w)
+        } else {
+          drop(shared);
+          state.local_queues[id].lock().pop_front()
+        }
+      } else {
+        let mut local = state.local_queues[id].lock();
+        if let Some(w) = local.pop_front() {
+          Some(w)
+        } else {
+          drop(local);
+          state.shared_queue.lock().pop_front()
+        }
       };
 
-      if let Some(workload) = workload {
-        state.active_threads.fetch_add(1, Ordering::SeqCst);
-        workload.execute();
-        state.active_threads.fetch_sub(1, Ordering::SeqCst);
+      if let Some(mut workload) = workload {
+        match workload.execute() {
+          WorkloadStatus::Complete => {
+            state.pending_tasks.fetch_sub(1, Ordering::Release);
+          }
+          WorkloadStatus::Yield => {
+            let mut target_q = None;
+            if let Some(tid) = workload.tasklet_id() {
+              let num_threads = state.local_queues.len();
+              if num_threads > 0 {
+                target_q = Some(tid % num_threads);
+              }
+            }
+
+            if let Some(target) = target_q {
+              state.local_queues[target].lock().push_back(workload);
+            } else {
+              state.shared_queue.lock().push_back(workload);
+            }
+
+            let local_len = state.local_queues[id].lock().len();
+            let shared_len = state.shared_queue.lock().len();
+            if local_len + shared_len <= 1 {
+              unsafe { libc::sched_yield() };
+            }
+          }
+        }
       } else {
         unsafe { libc::sched_yield() };
       }
@@ -252,21 +431,24 @@ mod tests {
   use super::*;
   use core::sync::atomic::{AtomicUsize, Ordering};
   use alloc::sync::Arc;
+  use alloc::boxed::Box;
+  use alloc::vec::Vec;
 
   struct TestWorkload {
     counter: Arc<AtomicUsize>,
   }
 
   impl Workload for TestWorkload {
-    fn execute(&self) {
+    fn execute(&mut self) -> WorkloadStatus {
       self.counter.fetch_add(1, Ordering::SeqCst);
+      WorkloadStatus::Complete
     }
   }
 
   #[test]
   fn test_thread_pool_scatter_gather() {
     let counter = Arc::new(AtomicUsize::new(0));
-    let mut pool = ThreadPool::new(4).expect("Failed to create thread pool");
+    let pool = ThreadPool::new(4).expect("Failed to create thread pool");
 
     let mut workloads: Vec<Box<dyn Workload>> = Vec::new();
     for _ in 0..100 {

@@ -4,16 +4,12 @@
 //! - Axis Aligned Bounding Boxes
 //! - Object Aligned Bounding Boxes
 //! - Spherical Bounds
-
-use core::{f32, ops};
 use aethervk_oshal_rlib::{
   self as oshal,
   math::{
-    FloatLike, Scalar,
+    FloatLike,
     floating::{FloatBits, FloatOps},
-    matrix::{
-      Matrix, Matrix3, Matrix4, MatrixVectorMul, mat3::Mat3f32, mat4::Mat4x4f32 as Mat4f32,
-    },
+    matrix::{Matrix, Matrix3, Matrix4, MatrixVectorMul, mat3::Mat3f32, mat4::Mat4x4f32},
     vector::{Vector, Vector3, Vector4},
   },
 };
@@ -235,7 +231,7 @@ where
 
   pub fn transform<V, M2>(&self, transform: &M2) -> Self
   where
-    M2: Matrix4<Scalar = S> + MatrixVectorMul + From<Mat4f32>,
+    M2: Matrix4<Scalar = S> + MatrixVectorMul + From<Mat4x4f32>,
     M2::Vector: Vector4<Scalar = S>,
     V: Vector3<Scalar = S> + From<[S; 3]> + Into<[S; 3]>,
   {
@@ -273,7 +269,7 @@ where
   where
     M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
     V: Vector3<Scalar = S> + Into<[S; 3]>,
-    M2: Matrix4<Scalar = S> + MatrixVectorMul + From<Mat4f32>,
+    M2: Matrix4<Scalar = S> + MatrixVectorMul + From<Mat4x4f32>,
     M2::Vector: Vector4<Scalar = S>,
   {
     // 1. Extract the pure rotation matrix (3x3) from the 4x4 transform
@@ -290,7 +286,7 @@ where
     let half_extents = (max_v - min_v) * _0_5;
 
     // 4. Transform the center to world space using the FULL 4x4 matrix
-    // Note: Replace `transform_point` with whatever method your Mat4f32 uses
+    // Note: Replace `transform_point` with whatever method your Mat4x4f32 uses
     // to apply rotation + translation to a 3D point (w = 1.0)
     let world_center = rot.mul_vector(local_center);
 
@@ -329,11 +325,11 @@ impl AABB<f32> {
   pub fn contains_point_f32(&self, point: Vec3f32) -> bool {
     self.contains_point(point)
   }
-  pub fn transform_f32(&self, transform: &Mat4f32) -> Self {
-    self.transform::<Vec3f32, Mat4f32>(transform)
+  pub fn transform_f32(&self, transform: &Mat4x4f32) -> Self {
+    self.transform::<Vec3f32, Mat4x4f32>(transform)
   }
-  pub fn transform_to_obb_f32(&self, transform: &Mat4f32) -> OBB<f32> {
-    self.transform_to_obb::<Mat3f32, Vec3f32, Mat4f32>(transform)
+  pub fn transform_to_obb_f32(&self, transform: &Mat4x4f32) -> OBB<f32> {
+    self.transform_to_obb::<Mat3f32, Vec3f32, Mat4x4f32>(transform)
   }
 }
 
@@ -495,8 +491,8 @@ where
 }
 
 impl BS<f32> {
-  pub fn transform_f32(&self, transform: &Mat4f32) -> Self {
-    self.transform::<Vec3f32, Mat4f32>(transform)
+  pub fn transform_f32(&self, transform: &Mat4x4f32) -> Self {
+    self.transform::<Vec3f32, Mat4x4f32>(transform)
   }
 }
 
@@ -880,8 +876,6 @@ where
   }
 }
 
-
-
 impl OBB<f32> {
   pub fn translation_f32(&self) -> Vec3f32 {
     self.translation()
@@ -919,7 +913,7 @@ impl OBB<f32> {
   pub fn contains_point_f32(&self, p: Vec3f32) -> bool {
     self.contains_point::<_, Mat3f32>(p)
   }
-  pub fn transform_f32(&self, transform: &Mat4f32) -> Self {
+  pub fn transform_f32(&self, transform: &Mat4x4f32) -> Self {
     self.transform::<Vec3f32, Mat3f32, _>(transform)
   }
 }
@@ -982,7 +976,7 @@ mod tests {
   fn test_bs_transform() {
     use aethervk_oshal_rlib::math::matrix::{Matrix, Matrix4, SquareMatrix};
     let bs = BS::new(Vec3f32::from_components(0.0, 0.0, 0.0), 5.0);
-    let mut t = Mat4f32::identity();
+    let mut t = Mat4x4f32::identity();
     // Set scale to 2
     t.x = aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(2.0, 0.0, 0.0, 0.0);
     t.y = aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 2.0, 0.0, 0.0);

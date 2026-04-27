@@ -17,10 +17,12 @@ public static class NativeInterop
   public static extern uint avkSimulationContext_getEntityCount(IntPtr ctx);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_getEntityIds(IntPtr ctx, IntPtr outIds, uint maxCount);
+  public static extern void avkSimulationContext_getEntityIds(IntPtr ctx, IntPtr outIds,
+    uint maxCount);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern bool avkSimulationContext_getEntityName(IntPtr ctx, ulong entity, IntPtr outName, uint maxLen);
+  public static extern bool avkSimulationContext_getEntityName(IntPtr ctx, ulong entity,
+    IntPtr outName, uint maxLen);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_getEntityParent(IntPtr ctx, ulong entity);
@@ -44,13 +46,15 @@ public static class NativeInterop
   public static extern void avkSimulationContext_stopThreads(IntPtr ctx);
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
-  public static extern ulong avkSimulationContext_spawnProceduralSphere(IntPtr ctx, string name, float radius);
+  public static extern ulong avkSimulationContext_spawnProceduralSphere(IntPtr ctx, string name,
+    float radius);
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_spawnEntity(IntPtr ctx, string name);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_setEntityName(IntPtr ctx, ulong entity, [MarshalAs(UnmanagedType.LPStr)] string name);
+  public static extern void avkSimulationContext_setEntityName(IntPtr ctx, ulong entity,
+    [MarshalAs(UnmanagedType.LPStr)] string name);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_removeEntity(IntPtr ctx, ulong entity);
@@ -59,16 +63,21 @@ public static class NativeInterop
   public static extern void avkSimulationContext_setParent(IntPtr ctx, ulong entity, ulong parent);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_setEntityVisibility(IntPtr ctx, ulong entity, [MarshalAs(UnmanagedType.I1)] bool visible);
+  public static extern void avkSimulationContext_setEntityVisibility(IntPtr ctx, ulong sceneId,
+    ulong entity,
+    [MarshalAs(UnmanagedType.I1)] bool visible);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_setEntitySelected(IntPtr ctx, ulong entity, [MarshalAs(UnmanagedType.I1)] bool selected);
+  public static extern void avkSimulationContext_setEntitySelected(IntPtr ctx, ulong sceneId,
+    ulong entity, [MarshalAs(UnmanagedType.I1)] bool selected);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_setEntityFollowing(IntPtr ctx, ulong entity, [MarshalAs(UnmanagedType.I1)] bool following);
+  public static extern void avkSimulationContext_setEntityFollowing(IntPtr ctx, ulong entity,
+    [MarshalAs(UnmanagedType.I1)] bool following);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_setBvhNodeVisibility(IntPtr ctx, ulong entity, uint nodeIndex, [MarshalAs(UnmanagedType.I1)] bool visible);
+  public static extern void avkSimulationContext_setBvhNodeVisibility(IntPtr ctx, ulong entity,
+    uint nodeIndex, [MarshalAs(UnmanagedType.I1)] bool visible);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_addTransformComponent(
@@ -133,7 +142,8 @@ public static class NativeInterop
   }
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern IntPtr avkSimulationContext_getBvhNodes(IntPtr ctx, ulong entity, out uint count);
+  public static extern IntPtr avkSimulationContext_getBvhNodes(IntPtr ctx, ulong entity,
+    out uint count);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_freeBvhNodes(IntPtr ptr, uint count);
@@ -205,7 +215,8 @@ public static class NativeInterop
   public static extern void avkSimulationContext_unloadModel(IntPtr ctx, ulong modelId);
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
-  public static extern ulong avkSimulationContext_spawnModelInstance(IntPtr ctx, ulong modelId, string name);
+  public static extern ulong avkSimulationContext_spawnModelInstance(IntPtr ctx, ulong modelId,
+    string name);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern IntPtr avkSimulationContext_getAlmanacLoadedFiles(
@@ -301,7 +312,8 @@ public static class NativeInterop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_setClearColor(IntPtr ctx, float r, float g, float b, float a);
+  public static extern void avkSimulationContext_setClearColor(IntPtr ctx, float r, float g,
+    float b, float a);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_simulationTick(IntPtr ctx);
@@ -326,8 +338,7 @@ public static class NativeInterop
     public float float_val_2;
     public ulong ulong_val;
 
-    [MarshalAs(UnmanagedType.I1)]
-    public bool bool_val;
+    [MarshalAs(UnmanagedType.I1)] public bool bool_val;
   }
 
   [UnmanagedFunctionPointer(CallingConvention.Cdecl)]

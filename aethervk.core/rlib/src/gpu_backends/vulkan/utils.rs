@@ -209,6 +209,9 @@ impl PhysicalDeviceQueryResult {
 // -------------------------------- Debug Messenger --------------------------
 // TODO: copy from mac
 // TODO: Printer
+#[cfg(test)]
+pub static VULKAN_ERROR_MESSAGES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
 #[cfg(debug_assertions)]
 pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
   message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
@@ -221,6 +224,19 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
   aethervk_oshal_rlib::log!("[Vulkan Messenger]: {:?}", msg);
 
   if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
+    #[cfg(test)]
+    {
+      if let Ok(mut errors) = VULKAN_ERROR_MESSAGES.lock() {
+        errors.push(msg.to_string_lossy().into_owned());
+      }
+    }
+    
+    if !_p_user_data.is_null() {
+      let callback: fn(&str) = unsafe { core::mem::transmute(_p_user_data) };
+      let s = msg.to_str().unwrap_or("Invalid UTF-8");
+      callback(s);
+    }
+
     debug::print_stacktrace();
   }
 

@@ -351,6 +351,8 @@ public partial class DockingManagerViewModel
     rightGroup.Tabs.Add(propertiesTab);
     // TODO split ratio doesn't work
     var halfSplit = new SplitNodeViewModel(split, rightGroup, SplitOrientation.Horizontal, 0.7);
+    split.Parent = halfSplit;
+    rightGroup.Parent = halfSplit;
 
     return halfSplit;
   }

@@ -1,12 +1,7 @@
-// this is a no_std module. if we need to use os-specific stuff, eg objc2-* libraries, windows crate, libc crate,
-// we can go through the oshal rlib, expose a function/struct, and then come back here.
-// since oshal and core are then exposed to cdylibs, each with their own instance of an Allocator,
-// we should never take ownership or return allocated stuff to cdylib interface.
 use alloc::vec::Vec;
 use aethervk_oshal_rlib::{
   self as oshal,
   math::{
-    FloatLike,
     vector::{Vector, Vector3, vec3::Vec3f32},
   },
   os::FsError,
@@ -14,11 +9,12 @@ use aethervk_oshal_rlib::{
 use oshal::os::{
   fs::{self, FileSystemObject, PathBuf},
 };
-use bitflags::bitflags;
 use ktx2;
 use polyhedral_mass_properties::{MassProperties, TriangleContrib};
 use zune_core::bytestream::ZCursor;
 use zune_jpeg;
+
+pub mod uv_grid;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vertex {
@@ -162,21 +158,8 @@ fn compute_comet_extras(
     v.normal = [nx, ny, nz];
   }
 
-  oshal::log!("Inertia Principal Moments: {:?}", principal_moments);
   // Log the axes properly formatted
   use aethervk_oshal_rlib::math::vector::Vector;
-  oshal::log!(
-    "Principal Axes: \n[{:?}, {:?}, {:?}]\n[{:?}, {:?}, {:?}]\n[{:?}, {:?}, {:?}]",
-    principal_axes.x.x(),
-    principal_axes.y.x(),
-    principal_axes.z.x(),
-    principal_axes.x.y(),
-    principal_axes.y.y(),
-    principal_axes.z.y(),
-    principal_axes.x.z(),
-    principal_axes.y.z(),
-    principal_axes.z.z()
-  );
 
   let mut tris = Vec::new();
   for chunk in indices.chunks_exact(3) {
@@ -242,23 +225,6 @@ impl Triangle {
 }
 
 impl Comet {
-  pub fn texture_flags(&self) -> TextureFlags {
-    let mut flags = TextureFlags::empty();
-    if self.albedo_map.is_some() {
-      flags |= TextureFlags::ALBEDO;
-    }
-    if self.normal_map.is_some() {
-      flags |= TextureFlags::NORMAL;
-    }
-    if self.roughness_map.is_some() {
-      flags |= TextureFlags::ROUGHNESS;
-    }
-    if self.ao_map.is_some() {
-      flags |= TextureFlags::AO;
-    }
-    flags
-  }
-
   /// Returns a zero-allocation, cloneable iterator over the mesh's triangles.
   pub fn iter_triangles(&self) -> impl Iterator<Item = Triangle> + Clone + '_ {
     // Iterate over indices in groups of 3
@@ -318,6 +284,28 @@ impl From<FsError> for CometLoadError {
   }
 }
 
+impl From<CometLoadError> for EngineError {
+  fn from(value: CometLoadError) -> Self {
+    let message = match value {
+      CometLoadError::PathNotFound => "CometLoadError::PathNotFound",
+      CometLoadError::TextureNotFound => "CometLoadError::TextureNotFound",
+      CometLoadError::TooLarge => "CometLoadError::TooLarge",
+      CometLoadError::AnimationsNotSupported => "CometLoadError::AnimationsNotSupported",
+      CometLoadError::MultipleMeshesNotSupported => "CometLoadError::MultipleMeshesNotSupported",
+      CometLoadError::NotWatertight => "CometLoadError::NotWatertight",
+      CometLoadError::UnsupportedPrimitiveMode => "CometLoadError::UnsupportedPrimitiveMode",
+      CometLoadError::UnsupportedImageFormat => "CometLoadError::UnsupportedImageFormat",
+      CometLoadError::ImageDecodingError => "CometLoadError::ImageDecodingError",
+      CometLoadError::UnsupportedNormalData => "CometLoadError::UnsupportedNormalData",
+      CometLoadError::GltfImportError(_) => "CometLoadError::GltfImportError",
+      CometLoadError::IoError => "CometLoadError::IoError",
+      CometLoadError::MissingBuffer => "CometLoadError::MissingBuffer",
+    };
+
+    Self::InvalidOperation(message)
+  }
+}
+
 fn get_texture_data(
   source: gltf::image::Source,
   base_path: &PathBuf,
@@ -335,7 +323,7 @@ fn get_texture_data(
     }
     gltf::image::Source::Uri { uri, mime_type } => {
       let path = base_path.join(uri);
-      let data = fs::read(path.as_ref()).map_err(|_| CometLoadError::TextureNotFound)?;
+      let data = fs::read(&path).map_err(|_| CometLoadError::TextureNotFound)?;
       (data, mime_type, Some(path))
     }
   };
@@ -451,6 +439,7 @@ fn calculate_mass_properties(
 }
 
 use alloc::collections::BTreeMap;
+use crate::types::EngineError;
 // Assuming Vec, PathBuf, etc. are already in scope
 
 /// Function to load a GLTF/GLB file
@@ -468,7 +457,7 @@ pub fn load_comet_from_gltf(path: &str, verbose: bool) -> Result<Comet, CometLoa
   }
 
   let base_path = path_buf.parent().unwrap_or_else(PathBuf::new);
-  let data = fs::read(path_buf.as_ref())?;
+  let data = fs::read(&path_buf)?;
 
   oshal::log!(
     "File read successfully ({} bytes). Parsing GLTF...",
@@ -755,7 +744,7 @@ pub fn load_texture_from_file(path: &str) -> Result<Texture, CometLoadError> {
   if !path_buf.is_file() {
     return Err(CometLoadError::PathNotFound);
   }
-  let encoded_data = fs::read(path_buf.as_ref()).map_err(|_| CometLoadError::TextureNotFound)?;
+  let encoded_data = fs::read(&path_buf).map_err(|_| CometLoadError::TextureNotFound)?;
 
   let extension = path.split('.').last().unwrap_or("").to_lowercase();
   let (decoded_data, format, width, height, has_mipmaps) = match extension.as_str() {
@@ -816,63 +805,89 @@ pub fn load_texture_from_file(path: &str) -> Result<Texture, CometLoadError> {
   })
 }
 
-bitflags! {
-  #[repr(C)]
-  #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-  pub struct TextureFlags: u32 {
-    const ALBEDO    = 1 << 0;
-    const NORMAL    = 1 << 1;
-    const ROUGHNESS = 1 << 2;
-    const AO        = 1 << 3;
+/// Returns the squared distance to the closest point on the triangle
+/// and the Barycentric weights [w0, w1, w2] of that closest point
+/// note: `p` is the given point, while `a`,`b`,`c` are the triangle vertices
+///
+/// Christer Ericson's classic Voronoi region-based algorithm for finding the closest point on a triangle.
+fn closest_point_barycentric_3d(p: Vec3f32, a: Vec3f32, b: Vec3f32, c: Vec3f32) -> (f32, Vec3f32) {
+  let ab = b - a;
+  let ac = c - a;
+  let ap = p - a;
+
+  // Check if P in vertex region outside A
+  let d1 = ab.dot(ap);
+  let d2 = ac.dot(ap);
+  if d1 <= 0.0 && d2 <= 0.0 {
+    return (ap.length_squared(), Vec3f32::from_components(1.0, 0.0, 0.0));
   }
-}
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct PushConstants {
-  pub model_view_proj: [[f32; 4]; 4],
-  pub model: [[f32; 4]; 4],
-  pub sun_pos: [f32; 3],
-  pub texture_flags: TextureFlags,
-  pub sun_color: [f32; 4],
-  pub camera_pos: [f32; 3],
-  pub emissive_intensity: f32,
-  pub emissive_color: [f32; 3],
-  pub _unused_pad: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct CometSpecializationConstants {
-  pub base_albedo_r: f32,
-  pub base_albedo_g: f32,
-  pub base_albedo_b: f32,
-  pub base_roughness: f32,
-  pub base_ao: f32,
-}
-
-impl Default for CometSpecializationConstants {
-  fn default() -> Self {
-    Self {
-      base_albedo_r: 0.04,
-      base_albedo_g: 0.04,
-      base_albedo_b: 0.04,
-      base_roughness: 0.9,
-      base_ao: 1.0,
-    }
+  // Check if P in vertex region outside B
+  let bp = p - b; // FIXED: This was p - a in your original code
+  let d3 = ab.dot(bp);
+  let d4 = ac.dot(bp);
+  if d3 >= 0.0 && d4 <= d3 {
+    return (bp.length_squared(), Vec3f32::from_components(0.0, 1.0, 0.0));
   }
-}
 
-// this is a no_std module. if we need to use os-specific stuff, eg objc2-* libraries, windows crate, libc crate,
-// we can go through the oshal rlib, expose a function/struct, and then come back here.
-// since oshal and core are then exposed to cdylibs, each with their own instance of an Allocator,
-// we should never take ownership or return allocated stuff to cdylib interface.
+  // Check if P in edge region of AB, if so return projection of P onto AB
+  let vc = d1 * d4 - d3 * d2;
+  if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+    let v = d1 / (d1 - d3);
+    let closest = a + ab * v;
+    return (
+      (p - closest).length_squared(),
+      Vec3f32::from_components(1.0 - v, v, 0.0),
+    );
+  }
+
+  // Check if P in vertex region outside C
+  let cp = p - c;
+  let d5 = ab.dot(cp);
+  let d6 = ac.dot(cp);
+  if d6 >= 0.0 && d5 <= d6 {
+    return (cp.length_squared(), Vec3f32::from_components(0.0, 0.0, 1.0));
+  }
+
+  // Check if P in edge region of AC, if so return projection of P onto AC
+  let vb = d5 * d2 - d1 * d6;
+  if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+    let w = d2 / (d2 - d6);
+    let closest = a + ac * w;
+    return (
+      (p - closest).length_squared(),
+      Vec3f32::from_components(1.0 - w, 0.0, w),
+    );
+  }
+
+  // Check if P in edge region of BC, if so return projection of P onto BC
+  let va = d3 * d6 - d5 * d4;
+  if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+    let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+    let closest = b + (c - b) * w;
+    return (
+      (p - closest).length_squared(),
+      Vec3f32::from_components(0.0, 1.0 - w, w),
+    );
+  }
+
+  // P inside face region. Compute Q through its barycentric coordinates (u, v, w)
+  let denom = 1.0 / (va + vb + vc);
+  let v = vb * denom;
+  let w = vc * denom;
+  let u = 1.0 - v - w;
+  let closest = a + ab * v + ac * w;
+
+  (
+    (p - closest).length_squared(),
+    Vec3f32::from_components(u, v, w),
+  )
+}
 
 #[cfg(test)]
 mod tests {
   use super::*;
   use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-  use crate::simulation;
 
   #[test]
   fn test_triangle_properties() {
@@ -934,8 +949,8 @@ mod tests {
     let model_dir = assets_dir.join("Comet.glb");
     assert!(model_dir.is_file());
 
-    let comet = load_comet_from_gltf(model_dir.to_str().unwrap(), false)
-        .expect("Failed to load comet");
+    let comet =
+      load_comet_from_gltf(model_dir.to_str().unwrap(), false).expect("Failed to load comet");
     let inertia = comet.mass_properties.inertia;
     const THRESHOLD: f64 = 1e-6;
     assert!(inertia.xy.abs() < THRESHOLD);

@@ -5,9 +5,12 @@ use aethervk_oshal_rlib::math::{
   vector::{vec3::Vec3f32, Vector, Vector3},
 };
 
+pub mod math;
+
 /// PhysicsScene is a "throwaway projection" of the scene hierarchy
 /// (rebuilt every update, not fixed update).
 /// It aggregates the components from `Scene` and builds a world-wide BVH.
+#[derive(Clone, Debug)]
 pub struct PhysicsScene {
   // TODO variable precision
   /// World-wide BVH, composed of leaf nodes that are roots of each instance's BVH.

@@ -1,18 +1,19 @@
 use crate::gpu::{
-  AcquireResult, GpuResourceHandle, PipelineKey, PresentationEngineHandle, RenderDevice,
+  GpuResourceHandle, GridPushConstants, PipelineKey, PresentationEngineHandle, PushConstants,
+  RenderDevice, RenderDeviceExt, SkyPushConstants, SunPushConstants, TextureFlags,
 };
-use crate::scene::{
-  CameraComponent, EntityId, RenderableDataRef, TransformComponent, SunComponent, SkyComponent,
-  GridComponent,
-};
-use crate::simulation::comet::{PushConstants, TextureFlags};
+use crate::scene::{CameraComponent, EntityId, RenderableDataRef, TransformComponent};
 use crate::types::{GpuError, GpuResult};
+use aethervk_oshal_rlib::math::vector::vec4::{Quat, Vec4f32};
 use aethervk_oshal_rlib::math::{
-  matrix::{mat4::Mat4x4f32, Matrix4, SquareMatrix, MatrixVectorMul, Matrix},
+  matrix::{mat4::Mat4x4f32, Matrix, Matrix4, MatrixVectorMul, SquareMatrix},
   quaternion::Quaternion,
-  vector::{vec3::Vec3f32, Vector3, Vector4, Vector},
+  vector::{vec3::Vec3f32, Vector3, Vector4},
 };
 use alloc::vec::Vec;
+use crate::math::collision::linear_bvh::LinearBound;
+
+// TODO move render_frame here
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct ResourceUploadResult {
@@ -39,16 +40,19 @@ pub struct DrawCall {
   /// The model matrix of the object to draw.
   pub model_matrix: Mat4x4f32,
   pub texture_flags: TextureFlags,
+  /// From `PhysicalMeshComponent`
   pub emissive_intensity: f32,
+  /// From `PhysicalMeshComponent`
   pub emissive_color: [f32; 3],
   pub draw_outline: bool,
   pub outline_color: [f32; 4],
 }
 
 impl DrawCall {
-  pub(crate) fn from_handles_and_matrix(
+  pub fn from_handles_and_matrix(
     result: ResourceUploadResult,
     index_count: u32,
+    outline: Option<[f32; 4]>,
     model_matrix: Mat4x4f32,
   ) -> Self {
     Self {
@@ -60,14 +64,13 @@ impl DrawCall {
       texture_flags: result.texture_flags,
       emissive_intensity: result.emissive_intensity,
       emissive_color: result.emissive_color,
-      draw_outline: false,
-      outline_color: [1.0, 1.0, 1.0, 1.0],
+      draw_outline: outline.is_some(),
+      outline_color: outline.unwrap_or([1.0, 1.0, 1.0, 1.0]),
     }
   }
 }
 
 /// Represents a draw call for a cursor.
-#[derive(Clone)]
 pub struct CursorDrawCall {
   pub pipeline: PipelineKey,
   pub vertex_count: u32,
@@ -75,7 +78,7 @@ pub struct CursorDrawCall {
 }
 
 impl CursorDrawCall {
-  pub(crate) fn from_result_and_matrix(
+  pub fn from_result_and_matrix(
     result: ResourceUploadResult,
     vertex_count: u32,
     model_matrix: Mat4x4f32,
@@ -89,7 +92,6 @@ impl CursorDrawCall {
 }
 
 /// Represents a draw call for a marker.
-#[derive(Clone)]
 pub struct MarkerDrawCall {
   pub pipeline: PipelineKey,
   pub vertex_count: u32,
@@ -99,12 +101,51 @@ pub struct MarkerDrawCall {
   pub color: [f32; 3],
 }
 
+impl MarkerDrawCall {
+  const VERTEX_COUNT_VK: u32 = 4;
+  pub fn from_values(
+    pipeline: PipelineKey,
+    model_matrix: Mat4x4f32,
+    local_pos: [f32; 3],
+    size: f32,
+    color: [f32; 3],
+  ) -> Self {
+    Self {
+      pipeline,
+      vertex_count: Self::VERTEX_COUNT_VK,
+      model_matrix,
+      local_pos,
+      size,
+      color,
+    }
+  }
+}
+
 pub struct MeasurementDrawCall {
   pub pipeline: PipelineKey,
   pub vertex_count: u32,
   pub p1: [f32; 3],
   pub p2: [f32; 3],
-  pub distance: f32,
+  pub points: f32, // TODO handle font size (since text used by text archetype too, need a font registry class)
+}
+
+impl MeasurementDrawCall {
+  const VERTEX_COUNT_VK: u32 = 6;
+
+  pub fn from_data_and_pipeline(
+    p1: Vec3f32,
+    p2: Vec3f32,
+    points: f32,
+    pipeline_key: PipelineKey,
+  ) -> Self {
+    Self {
+      pipeline: pipeline_key,
+      vertex_count: Self::VERTEX_COUNT_VK,
+      p1: p1.into(),
+      p2: p2.into(),
+      points,
+    }
+  }
 }
 
 pub struct BillboardDrawCall {
@@ -115,36 +156,269 @@ pub struct BillboardDrawCall {
   pub billboard_type: crate::scene::BillboardType,
 }
 
-/// A proper clear-cut struct representing the rendering scene.
+impl BillboardDrawCall {
+  const VERTEX_COUNT_VK: u32 = 4;
+  pub fn from_data(
+    pipeline: PipelineKey,
+    model_matrix: Mat4x4f32,
+    texture_id: u64,
+    billboard_type: crate::scene::BillboardType,
+  ) -> Self {
+    Self {
+      pipeline,
+      vertex_count: Self::VERTEX_COUNT_VK,
+      model_matrix,
+      texture_id,
+      billboard_type,
+    }
+  }
+}
+
+pub struct SunDrawCall {
+  // TODO: remove. This is needed because the RenderDevice maps entity id to pipeline layout and descriptor set.
+  pub entity: EntityId,
+  pub pipeline: PipelineKey,
+  pub model_matrix: Mat4x4f32,
+  /// camera position in local space of the sun
+  pub local_camera_pos: Vec3f32,
+  pub vertex_count: u32,
+}
+
+impl SunDrawCall {
+  const VERTEX_COUNT_TRIANGLE_STRIP_VK: u32 = 14;
+
+  /// Result is meant to be logged and converted to a None. Shouldn't stop rendering
+  /// TODO: remove entity
+  pub fn from_model_and_camera(
+    model: Mat4x4f32,
+    c: &CameraRenderData,
+    pipeline_key: PipelineKey,
+    entity: EntityId,
+  ) -> GpuResult<Self> {
+    let model_inv = model
+      .inverse()
+      .ok_or(GpuError::BackendSpecific(alloc::format!(
+        "SunDrawCall: Couldn't invert model matrix {:?}",
+        model
+      )))?;
+    let local_camera_pos = Vec3f32(model_inv.mul_vector(c.pos.to_point()));
+    Ok(Self {
+      entity,
+      pipeline: pipeline_key,
+      model_matrix: model,
+      local_camera_pos,
+      vertex_count: Self::VERTEX_COUNT_TRIANGLE_STRIP_VK,
+    })
+  }
+
+  pub fn sun_pos(&self) -> Vec3f32 {
+    Vec3f32(self.model_matrix.w)
+  }
+}
+
+pub struct SkyDrawCall {
+  pub sky_view_proj: Mat4x4f32,
+  pub pipeline: PipelineKey,
+  pub inv_view_proj_mat: Mat4x4f32,
+  pub vertex_count: u32,
+}
+
+impl SkyDrawCall {
+  const VERTEX_COUNT_VK: u32 = 3;
+
+  pub fn from_camera(camera_data: &CameraRenderData, pipeline_key: PipelineKey) -> GpuResult<Self> {
+    let sky_view_proj = {
+      let sky_view = Mat4x4f32::from_columns(
+        Vec4f32::from_components(1.0, 0.0, 0.0, 0.0),
+        Vec4f32::from_components(0.0, 0.0, -1.0, 0.0),
+        Vec4f32::from_components(0.0, 1.0, 0.0, 0.0),
+        Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
+      ) * Mat4x4f32::from_quat_custom_frame(camera_data.rot.conjugate());
+      camera_data.proj * sky_view
+    };
+    let inv_view_proj_mat = camera_data
+      .view_proj
+      .inverse()
+      .ok_or(GpuError::InvalidState(
+        "SkyDrawCall: couldn't invert view_proj matrix",
+      ))?;
+
+    Ok(Self {
+      sky_view_proj,
+      pipeline: pipeline_key,
+      inv_view_proj_mat,
+      vertex_count: Self::VERTEX_COUNT_VK,
+    })
+  }
+}
+
+pub struct GridDrawCall {
+  pub pipeline: PipelineKey,
+  pub density: f32,
+  pub grid_size: f32, // TODO main lines size
+  pub grid_color: [f32; 3],
+  pub vertex_count: u32,
+}
+
+impl GridDrawCall {
+  const VERTEX_COUNT_VK: u32 = 4;
+  pub fn new(pipeline: PipelineKey, density: f32, grid_size: f32, grid_color: [f32; 3]) -> Self {
+    Self {
+      pipeline,
+      density,
+      grid_size,
+      grid_color,
+      vertex_count: Self::VERTEX_COUNT_VK,
+    }
+  }
+}
+
+/// Model is not stored here cause it's shared with its physical mesh
+pub struct BvhDrawCall {
+  /// "weak reference" to physical mesh draw call (to take model)
+  pub physical_mesh_call_index: usize,
+  pub pipeline: PipelineKey,
+  pub vertex_count: u32, // 24
+  /// object space axes
+  pub axes: [[f32; 3]; 3],
+  /// object space center
+  pub center: Vec3f32,
+  /// half lengths along each axis
+  pub extents: Vec3f32,
+}
+
+impl BvhDrawCall {
+  const VERTEX_COUNT_VK: u32 = 24;
+
+  pub fn new(bound: &LinearBound<f32>, pipeline_key: PipelineKey, physical_mesh_call_index: usize) -> Self {
+    let (center, extents, ax, ay, az) = match bound {
+      LinearBound::AABB(aabb) => {
+        let center = aabb.center();
+        let he = aabb.half_extents();
+        (
+          center,
+          he,
+          [1.0, 0.0, 0.0],
+          [0.0, 1.0, 0.0],
+          [0.0, 0.0, 1.0],
+        )
+      }
+      LinearBound::OBB(obb) => {
+        let center: Vec3f32 = obb.center();
+        let he: Vec3f32 = obb.half_extents();
+        let axes: [Vec3f32; 3] = obb.axes();
+        (
+          center,
+          he,
+          [axes[0].x(), axes[0].y(), axes[0].z()],
+          [axes[1].x(), axes[1].y(), axes[1].z()],
+          [axes[2].x(), axes[2].y(), axes[2].z()],
+        )
+      }
+    };
+    Self {
+      physical_mesh_call_index,
+      pipeline: pipeline_key,
+      vertex_count: Self::VERTEX_COUNT_VK,
+      axes: [ax, ay, az],
+      center,
+      extents,
+    }
+  }
+
+  pub fn to_push_constants(&self, mesh_draw_calls: &[DrawCall], camera_data: &CameraRenderData) -> Option<super::BvhPushConstants> {
+    let center_arr: [f32; 3] = self.center.into();
+    let extents_arr: [f32; 3] = self.extents.into();
+    let ax = self.axes[0];
+    let ay = self.axes[1];
+    let az = self.axes[2];
+    let model = &mesh_draw_calls.get(self.physical_mesh_call_index)?.model_matrix;
+    let view_proj = &camera_data.view_proj;
+    let mvp_mat = *view_proj * *model;
+    Some(super::BvhPushConstants {
+      mvp_arr: mvp_mat.into(),
+      center_type: [center_arr[0], center_arr[1], center_arr[2], 1.0],
+      extents_arr: [extents_arr[0], extents_arr[1], extents_arr[2], 0.0],
+      axes_x: [ax[0], ax[1], ax[2], 0.0],
+      axes_y: [ay[0], ay[1], ay[2], 0.0],
+      axes_z: [az[0], az[1], az[2], 0.0],
+    })
+  }
+}
+
+pub struct CameraRenderData {
+  pub pos: Vec3f32,
+  pub rot: Quat,
+  pub view: Mat4x4f32,
+  pub proj: Mat4x4f32,
+  pub view_proj: Mat4x4f32,
+  pub up: [f32; 3],
+  pub right: [f32; 3],
+  pub near: f32,
+  pub far: f32,
+}
+
+impl CameraRenderData {
+  /// Note: camera component should have been updated with presentation engine data
+  pub fn new(transform: &TransformComponent, camera: &CameraComponent) -> Self {
+    // Compute view matrix (usually the inverse of the camera's global transform matrix)
+    let view = transform
+      .to_mat4::<Mat4x4f32>()
+      .inverse()
+      .unwrap_or_else(|| Mat4x4f32::identity());
+    let view_proj = camera.projection * view;
+
+    // Extract Right and Up from the quaternion directly in O(1). No matrix inversions!
+    let right = transform
+      .rotation
+      .rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
+    let up = transform
+      .rotation
+      .rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0));
+
+    Self {
+      pos: transform.position,
+      rot: transform.rotation,
+      view,
+      proj: camera.projection,
+      view_proj,
+      up: [up.x(), up.y(), up.z()],
+      right: [right.x(), right.y(), right.z()],
+      far: camera.far_plane,
+      near: camera.near_plane,
+    }
+  }
+}
+
 pub struct RenderScene {
-  /// A list of draw calls to be executed for this frame.
+  pub camera_data: CameraRenderData,
+
   pub draw_calls: Vec<DrawCall>,
-  /// A list of cursor draw calls.
-  pub cursor_calls: Vec<CursorDrawCall>,
-  /// A list of marker draw calls.
   pub marker_calls: Vec<MarkerDrawCall>,
-  /// A list of measurement draw calls.
   pub measurement_calls: Vec<MeasurementDrawCall>,
-  /// A list of billboard draw calls.
   pub billboard_calls: Vec<BillboardDrawCall>,
-  pub camera: (TransformComponent, CameraComponent),
-  pub sun: Option<(EntityId, SunComponent, TransformComponent)>,
-  pub sky: Option<(EntityId, SkyComponent)>,
-  pub grid: Option<(EntityId, GridComponent)>,
+  pub bvh_draw_calls: Vec<BvhDrawCall>,
+
+  pub cursor_call: Option<CursorDrawCall>,
+  pub sun_call: Option<SunDrawCall>,
+  pub sky_call: Option<SkyDrawCall>,
+  pub grid_call: Option<GridDrawCall>,
 }
 
 impl RenderScene {
+  const START_VEC_CAPACITY: usize = 32;
   pub fn new(camera: (TransformComponent, CameraComponent)) -> Self {
     Self {
-      draw_calls: Vec::new(),
-      cursor_calls: Vec::new(),
-      marker_calls: Vec::new(),
-      measurement_calls: Vec::new(),
-      billboard_calls: Vec::new(),
-      camera,
-      sun: None,
-      sky: None,
-      grid: None,
+      draw_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
+      cursor_call: None,
+      marker_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
+      measurement_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
+      billboard_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
+      bvh_draw_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
+      camera_data: CameraRenderData::new(&camera.0, &camera.1),
+      sun_call: None,
+      sky_call: None,
+      grid_call: None,
     }
   }
 
@@ -180,17 +454,27 @@ impl RenderScene {
           debug_name,
         )?;
         let index_count = component.mesh.indices.len() as u32;
-        let mut dc = DrawCall::from_handles_and_matrix(res, index_count, model_matrix);
-        dc.draw_outline = draw_outline;
-        dc.outline_color = outline_color;
+        let dc = DrawCall::from_handles_and_matrix(
+          res,
+          index_count,
+          if draw_outline {
+            Some(outline_color)
+          } else {
+            None
+          },
+          model_matrix,
+        );
         self.draw_calls.push(dc);
       }
       RenderableDataRef::Cursor(_) => {
+        if self.cursor_call.is_some() {
+          return Err(GpuError::InvalidState(
+            "[Vulkan] RenderScene:add_renderable cursor call already present",
+          ));
+        }
         let res: ResourceUploadResult =
           device.get_or_create_cursor_resources(presentation_engine_handle)?;
-        self
-          .cursor_calls
-          .push(CursorDrawCall::from_result_and_matrix(res, 4, model_matrix));
+        self.cursor_call = Some(CursorDrawCall::from_result_and_matrix(res, 4, model_matrix));
       }
       RenderableDataRef::Markers(component) => {
         let res: ResourceUploadResult =
@@ -214,26 +498,26 @@ impl RenderScene {
           vertex_count: 6,
           p1: [component.pos1.x(), component.pos1.y(), component.pos1.z()],
           p2: [component.pos2.x(), component.pos2.y(), component.pos2.z()],
-          distance: (component.pos2 - component.pos1).length(),
+          points: 12.0,
         });
       }
     }
     Ok(())
   }
 }
+
 pub fn do_draw_cursor(
   device: &dyn RenderDevice,
-  view: Mat4x4f32,
-  view_proj: Mat4x4f32,
+  camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
   draw_call: &CursorDrawCall,
-) -> Result<(), crate::types::GpuError> {
+) -> GpuResult<()> {
   // 2. Bind pipeline
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
 
   let push_constants = crate::gpu::CursorPushConstants {
-    view: view.into(),
-    view_proj: view_proj.into(),
+    view: camera.view.into(),
+    view_proj: camera.view_proj.into(),
     model: draw_call.model_matrix.into(),
     cursor_size: 0.05, // TODO extract from draw call
   };
@@ -246,38 +530,31 @@ pub fn do_draw_cursor(
 
 pub fn do_draw_marker(
   device: &dyn RenderDevice,
-  view: Mat4x4f32,
-  view_proj: Mat4x4f32,
+  camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
   draw_call: &MarkerDrawCall,
-) -> Result<(), crate::types::GpuError> {
+) -> GpuResult<()> {
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
 
-  let mut camera_up = [0.0; 3];
-  let mut camera_right = [0.0; 3];
-
-  if let Some(inv_view) = view.inverse() {
-    let up: aethervk_oshal_rlib::math::vector::vec4::Vec4f32 = inv_view.column(1).unwrap();
-    let right: aethervk_oshal_rlib::math::vector::vec4::Vec4f32 = inv_view.column(0).unwrap();
-    camera_up = [up.x(), up.y(), up.z()];
-    camera_right = [right.x(), right.y(), right.z()];
-  }
-
+  // Matrix-Vector multiplication is fast and perfectly correct here
   let global_center = draw_call.model_matrix.mul_vector(
     aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
-      draw_call.local_pos[0], draw_call.local_pos[1], draw_call.local_pos[2], 1.0
-    )
+      draw_call.local_pos[0],
+      draw_call.local_pos[1],
+      draw_call.local_pos[2],
+      1.0,
+    ),
   );
 
   let push_constants = crate::gpu::MarkerPushConstants {
-    view_proj: view_proj.into(),
+    view_proj: camera.view_proj.into(),
     center_pos: [global_center.x(), global_center.y(), global_center.z()],
     size: draw_call.size,
     color: draw_call.color,
+    camera_up: camera.up,       // <--- Passed directly!
+    camera_right: camera.right, // <--- Passed directly!
     _pad0: 0.0,
-    camera_up,
     _pad1: 0.0,
-    camera_right,
     _pad2: 0.0,
   };
   device.push_marker_constants(cmd_buffer, &push_constants)?;
@@ -288,32 +565,21 @@ pub fn do_draw_marker(
 
 pub fn do_draw_measurement(
   device: &dyn RenderDevice,
-  view: Mat4x4f32,
-  view_proj: Mat4x4f32,
+  camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
   draw_call: &MeasurementDrawCall,
-) -> Result<(), crate::types::GpuError> {
+) -> GpuResult<()> {
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
 
-  let mut camera_up = [0.0; 3];
-  let mut camera_right = [0.0; 3];
-
-  if let Some(inv_view) = view.inverse() {
-    let up: aethervk_oshal_rlib::math::vector::vec4::Vec4f32 = inv_view.column(1).unwrap();
-    let right: aethervk_oshal_rlib::math::vector::vec4::Vec4f32 = inv_view.column(0).unwrap();
-    camera_up = [up.x(), up.y(), up.z()];
-    camera_right = [right.x(), right.y(), right.z()];
-  }
-
   let push_constants = crate::gpu::MeasurementPushConstants {
-    view_proj: view_proj.into(),
+    view_proj: camera.view_proj.into(),
     p1: draw_call.p1,
     _pad0: 0.0,
     p2: draw_call.p2,
     _pad1: 0.0,
-    camera_up,
+    camera_up: camera.up,
     _pad2: 0.0,
-    camera_right,
+    camera_right: camera.right,
     _pad3: 0.0,
     color: [1.0, 1.0, 1.0], // White
     _pad4: 0.0,
@@ -324,44 +590,46 @@ pub fn do_draw_measurement(
   Ok(())
 }
 
+/// Requires pipeline and descriptor sets to be already bound
 pub fn do_draw_billboard(
   device: &dyn RenderDevice,
-  view: Mat4x4f32,
-  view_proj: Mat4x4f32,
+  camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
   draw_call: &BillboardDrawCall,
-) -> Result<(), crate::types::GpuError> {
-  device.check_billboard_texture_id(draw_call.texture_id)?;
-
-  let mut camera_up = [0.0; 3];
-  let mut camera_right = [0.0; 3];
-
-  if let Some(inv_view) = view.inverse() {
-    let up: aethervk_oshal_rlib::math::vector::vec4::Vec4f32 = inv_view.column(1).unwrap();
-    let right: aethervk_oshal_rlib::math::vector::vec4::Vec4f32 = inv_view.column(0).unwrap();
-    camera_up = [up.x(), up.y(), up.z()];
-    camera_right = [right.x(), right.y(), right.z()];
+) -> GpuResult<()> {
+  if device
+    .check_billboard_texture_id(draw_call.texture_id)
+    .is_err()
+  {
+    return Ok(());
   }
 
-  let center_pos: aethervk_oshal_rlib::math::vector::vec4::Vec4f32 = draw_call.model_matrix.column(3).unwrap();
+  // Optimization: Matrix column extraction is significantly faster than vector multiplication.
+  // The translation component of a 4x4 matrix is always the final column!
+  let center_pos: aethervk_oshal_rlib::math::vector::vec4::Vec4f32 =
+    draw_call.model_matrix.column(3).unwrap();
 
   let (size, is_screen_space) = match draw_call.billboard_type {
     crate::scene::BillboardType::WorldSpace { width, height } => ([width, height], 0),
-    crate::scene::BillboardType::ScreenSpace { pct_width, pct_height } => ([pct_width, pct_height], 1),
+    crate::scene::BillboardType::ScreenSpace {
+      pct_width,
+      pct_height,
+    } => ([pct_width, pct_height], 1),
   };
 
   let push_constants = crate::gpu::BillboardPushConstants {
-    view_proj: view_proj.into(),
+    view_proj: camera.view_proj.into(),
     center_pos: [center_pos.x(), center_pos.y(), center_pos.z()],
-    _pad0: 0.0,
-    camera_up,
-    _pad1: 0.0,
-    camera_right,
-    _pad2: 0.0,
     size,
     is_screen_space,
     texture_id: draw_call.texture_id as u32,
+    camera_up: camera.up,
+    camera_right: camera.right,
+    _pad0: 0.0,
+    _pad1: 0.0,
+    _pad2: 0.0,
   };
+
   device.push_billboard_constants(cmd_buffer, &push_constants)?;
   device.draw(cmd_buffer, draw_call.vertex_count)?;
 
@@ -370,30 +638,29 @@ pub fn do_draw_billboard(
 
 pub fn do_draw_call(
   device: &dyn RenderDevice,
-  view_proj: Mat4x4f32,
-  camera_pos: Vec3f32,
+  camera: &CameraRenderData,
   sun_pos: Vec3f32,
   sun_color: [f32; 4],
   cmd_buffer: super::CommandBufferHandle,
   draw_call: &DrawCall,
-) -> Result<(), crate::types::GpuError> {
+) -> GpuResult<()> {
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
   device.bind_buffers(cmd_buffer, draw_call.pipeline, draw_call.buffers)?;
 
   let model = draw_call.model_matrix;
-  let mvp = view_proj * model;
+  let mvp = camera.view_proj * model;
   let push_constants = PushConstants {
     model_view_proj: mvp.into(),
     model: model.into(),
     sun_pos: sun_pos.into(),
     texture_flags: draw_call.texture_flags,
     sun_color,
-    camera_pos: camera_pos.into(),
+    camera_pos: camera.pos.into(),
     emissive_intensity: draw_call.emissive_intensity,
     emissive_color: draw_call.emissive_color,
     _unused_pad: 0,
   };
-  device.push_constants(cmd_buffer, &push_constants)?;
+  device.push_constants_mesh(cmd_buffer, &push_constants)?;
   device.draw_indexed(cmd_buffer, draw_call.index_count)?;
 
   if draw_call.draw_outline {
@@ -410,7 +677,7 @@ pub fn do_draw_call(
         sun_pos: sun_pos.into(),
         texture_flags: draw_call.texture_flags,
         sun_color,
-        camera_pos: camera_pos.into(),
+        camera_pos: camera.pos.into(),
         emissive_intensity: draw_call.outline_color[3], // using intensity for alpha? Or just packing color
         emissive_color: [
           draw_call.outline_color[0],
@@ -419,7 +686,7 @@ pub fn do_draw_call(
         ], // Emissive color abused for outline color
         _unused_pad: 0,
       };
-      device.push_constants(cmd_buffer, &outline_push)?;
+      device.push_constants_mesh(cmd_buffer, &outline_push)?;
       device.set_line_width(cmd_buffer, 1.0)?;
       device.draw_indexed(cmd_buffer, draw_call.index_count)?;
     }
@@ -427,3 +694,75 @@ pub fn do_draw_call(
 
   Ok(())
 }
+
+/// This is called after render device has already bound descriptor sets (cause we didn't abstract them yet)
+/// TODO: Add to the push constant abstraction an abstraction for descriptor sets
+pub fn do_draw_sun(
+  device: &dyn RenderDevice,
+  camera: &CameraRenderData,
+  cmd_buffer: super::CommandBufferHandle,
+  draw_call: &SunDrawCall,
+) -> GpuResult<()> {
+  device.prepare_sun_for_render(cmd_buffer, draw_call.entity)?;
+  device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
+  let mvp = camera.view_proj * draw_call.model_matrix;
+  let push_constants = SunPushConstants {
+    model_view_proj: mvp.into(),
+    local_camera_pos: draw_call.local_camera_pos.into(),
+    _unused: 0,
+  };
+  device.push_sun_constants(cmd_buffer, &push_constants)?;
+  device.draw(cmd_buffer, draw_call.vertex_count)
+}
+
+pub fn do_draw_sky(
+  device: &dyn RenderDevice,
+  cmd_buffer: super::CommandBufferHandle,
+  draw_call: &SkyDrawCall,
+) -> GpuResult<()> {
+  let push_constants = SkyPushConstants {
+    inv_view_proj: draw_call.inv_view_proj_mat.into(),
+  };
+
+  device.prepare_sky_for_render(cmd_buffer)?;
+  device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
+  device.push_sky_constants(cmd_buffer, &push_constants)?;
+  device.draw(cmd_buffer, draw_call.vertex_count)
+}
+
+pub fn do_draw_grid(
+  device: &dyn RenderDevice,
+  cmd_buffer: super::CommandBufferHandle,
+  camera: &CameraRenderData,
+  draw_call: &GridDrawCall,
+) -> GpuResult<()> {
+  let push_constants = GridPushConstants {
+    view_proj: camera.view_proj.into(),
+    camera_pos: camera.pos.into(),
+    near_plane: camera.near,
+    far_plane: camera.far,
+    density: draw_call.density,
+    _pad1: [0.0, 0.0],
+    grid_color: draw_call.grid_color,
+    _pad2: 0.0,
+  };
+  device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
+  device.push_grid_constants(cmd_buffer, &push_constants)?;
+  device.draw(cmd_buffer, draw_call.vertex_count)
+}
+
+/// prepare_bvh_archetype_for_render_and_bind_pipeline should have been already called
+pub fn do_bvh_draw_call(
+  device: &dyn RenderDevice,
+  cmd_buffer: super::CommandBufferHandle,
+  camera: &CameraRenderData,
+  draw_call: &BvhDrawCall,
+  mesh_draw_calls: &[DrawCall],
+) -> GpuResult<()> {
+  let push_constants = draw_call.to_push_constants(mesh_draw_calls, camera).ok_or(GpuError::InvalidState("[Render Frame] Couldn't compute BVH push constants"))?;
+  device.push_bvh_constants(cmd_buffer, &push_constants)?;
+  device.draw(cmd_buffer, draw_call.vertex_count)
+}
+
+// TODO: all of the do_draw_* functions should have a rollback mechanism
+// TODO trait type for internal command buffer so that you get it once

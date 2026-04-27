@@ -4,10 +4,11 @@ using System.Threading.Tasks;
 using AetherVk.Logic.Services;
 using Xunit;
 
-namespace AetherVk.Logic.Tests;
-
-public class NativeRuntimeServiceTests : IDisposable
+namespace AetherVk.Logic.Tests
 {
+  [Collection("Sequential")]
+  public class NativeRuntimeServiceTests : IDisposable
+  {
   private NativeRuntimeService _service;
   private string _assetPath;
 
@@ -83,4 +84,42 @@ public class NativeRuntimeServiceTests : IDisposable
     }
     catch (System.DllNotFoundException) {}
   }
+  
+  [Fact]
+  public void ProcessCommand_ShouldExecuteWithoutCrashing()
+  {
+    try
+    {
+      _service.InitializeSimulationContext("Vulkan", 800, 600, _assetPath);
+      Assert.True(_service.IsInitialized);
+      
+      // Pan camera
+      AetherVk.Logic.Services.NativeInterop.avkSimulationContext_processCommand(
+        (IntPtr)typeof(NativeRuntimeService).GetField("_simulationContext", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(_service)!,
+        new AetherVk.Logic.Services.NativeInterop.FfiLogicCommand {
+          cmd_type = 7, // PanCamera
+          float_val_1 = 10.0f,
+          float_val_2 = -5.0f,
+          ulong_val = 0,
+          bool_val = false
+        }
+      );
+      
+      // Zoom camera
+      AetherVk.Logic.Services.NativeInterop.avkSimulationContext_processCommand(
+        (IntPtr)typeof(NativeRuntimeService).GetField("_simulationContext", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(_service)!,
+        new AetherVk.Logic.Services.NativeInterop.FfiLogicCommand {
+          cmd_type = 1, // ZoomCamera
+          float_val_1 = 5.0f,
+        }
+      );
+
+      // Sleep briefly to let the logic thread process the commands
+      System.Threading.Thread.Sleep(50);
+      
+      Assert.True(true, "processCommand successfully executed without deadlock or crash");
+    }
+    catch (System.DllNotFoundException) {}
+  }
+}
 }

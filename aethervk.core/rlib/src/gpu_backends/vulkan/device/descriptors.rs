@@ -93,7 +93,7 @@ impl DescriptorPools {
     loop {
       let pool = inner.active_pool;
       if pool == vk::DescriptorPool::null() {
-        return Err(GpuError::InvalidState);
+        return Err(GpuError::InvalidState("descriptors.rs:96"));
       }
 
       let layouts = [layout];
@@ -201,7 +201,7 @@ impl DescriptorPoolsInner {
       self.active_pool = pool;
       Ok(())
     } else {
-      Err(GpuError::InvalidState)
+      Err(GpuError::InvalidState("descriptors.rs:204"))
     }
   }
 }

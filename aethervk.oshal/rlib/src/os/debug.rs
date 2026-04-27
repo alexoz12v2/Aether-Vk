@@ -98,6 +98,7 @@ mod windows_debug {
       if !fptr.is_null() {
         let cb: extern "C" fn(*const core::ffi::c_char) = unsafe { core::mem::transmute(fptr) };
         cb(c_msg.as_ptr());
+        return;
       }
     }
 
@@ -258,6 +259,7 @@ mod unix_debug {
       if !fptr.is_null() {
         let cb: extern "C" fn(*const core::ffi::c_char) = unsafe { core::mem::transmute(fptr) };
         cb(c_msg.as_ptr());
+        return;
       }
     }
 
