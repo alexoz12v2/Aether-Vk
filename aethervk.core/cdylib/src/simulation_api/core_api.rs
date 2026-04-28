@@ -96,6 +96,7 @@ impl SimulationContext {
     self.with_device(|render_device| {
       let params = gpu::PresentationEngineParams::windowless(width, height);
       let h = render_device.create_presentation_engine(&params)?;
+      render_device.init_archetypes(h)?;
       let mut presentation_engines = self.presentation_engines.write();
       if presentation_engines.insert(h) {
         Ok(h)
@@ -153,6 +154,7 @@ impl SimulationContext {
       .tx()
       .try_send(RenderCommand::RenderFrame(crate::structs::RenderFrame {
         presentation_engine_handle,
+        task_id,
         scene,
         render_physical_meshes_outline: active
           .read()
@@ -183,38 +185,13 @@ impl SimulationContext {
     Ok(())
   }
 
-  // TODO if task insertion failed, use Option::None
-  pub fn download_image(&self, buffer_ptr: *mut u8, buffer_size: usize) -> u64 {
+  pub fn download_image(&self, task_id: u64, buffer_ptr: *mut u8, buffer_size: usize) -> bool {
     if buffer_ptr.is_null() {
-      return 0;
+      return false;
     }
-    let task_id = self
-      .render_proxy
-      .0
-      .as_frontend()
-      .and_then(|context| {
-        context
-          .with_device(self.render_proxy.1, |device| Ok(device.create_task()))
-          .ok()
-      })
-      .unwrap_or(0);
-
-    if task_id == 0 {
-      return 0;
-    }
-
-    let _ = self
-      .threads
-      .render_thread
-      .tx()
-      .try_send(RenderCommand::DownloadImage(
-        crate::structs::DownloadImage {
-          task_id,
-          buffer: crate::structs::SendPtrMut(buffer_ptr),
-          buffer_size,
-        },
-      ));
-
-    task_id
+    self.with_device(|device| {
+      let buffer = unsafe { core::slice::from_raw_parts_mut(buffer_ptr, buffer_size) };
+      device.read_windowless_download(task_id, buffer)
+    }).map(|_| true).unwrap_or(false)
   }
 }

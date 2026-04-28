@@ -68,6 +68,12 @@ pub struct SimulationTaskManager {
   tasks: BTreeMap<u64, SimulationTaskStatus>,
 }
 
+impl Drop for SimulationTaskManager {
+  fn drop(&mut self) {
+    oshal::log!("SimulationTaskManager drop started");
+  }
+}
+
 impl SimulationTaskManager {
   pub fn new() -> Self {
     Self {
@@ -357,10 +363,15 @@ impl<T> ThreadTxContainer<T> {
   pub fn tx(&self) -> &mpsc::Sender<T> {
     self.tx.as_ref().unwrap()
   }
+
+  pub fn tx_opt(&self) -> Option<&mpsc::Sender<T>> {
+    self.tx.as_ref()
+  }
 }
 
 impl<T> Drop for ThreadTxContainer<T> {
   fn drop(&mut self) {
+    oshal::log!("ThreadTxContainer drop started. Dropping tx...");
     // 1. Drop the Sender first.
     // This closes the channel. The Receiver in the background thread
     // will now yield `None` or an error, signaling the thread to exit.
@@ -370,7 +381,9 @@ impl<T> Drop for ThreadTxContainer<T> {
     // Because the channel is closed, the thread will finish its work
     // and this join will safely unblock.
     if let Some(thread) = self.handle.take() {
+      oshal::log!("ThreadTxContainer joining thread...");
       thread.join();
+      oshal::log!("ThreadTxContainer thread joined.");
     }
   }
 }
@@ -452,6 +465,29 @@ pub struct SimulationThreads {
   /// Task pool handle (duplicated here so that it outlives threads). Should not be accessed
   /// by FFI caller threads
   pool: Arc<os::pool::ThreadPool>,
+}
+
+impl Drop for SimulationThreads {
+  fn drop(&mut self) {
+    oshal::log!("SimulationThreads drop started");
+    if let Some(tx) = self.render_thread.tx.take() {
+      let _ = tx.try_send(RenderCommand::Shutdown);
+    }
+    if let Some(tx) = self.logic_thread.tx.take() {
+      let _ = tx.try_send(LogicCommand::Shutdown);
+    }
+
+    self.render_feedback_rx = None;
+    self.logic_feedback_rx = None;
+
+    if let Some(handle) = self.render_thread.handle.take() {
+      let _ = handle.join();
+    }
+    if let Some(handle) = self.logic_thread.handle.take() {
+      let _ = handle.join();
+    }
+    oshal::log!("SimulationThreads drop finished");
+  }
 }
 
 pub struct LogicWorkload {
@@ -1004,6 +1040,7 @@ pub enum RenderFeedback {
 #[derive(Clone, Debug)]
 pub struct RenderFrame {
   pub presentation_engine_handle: PresentationEngineHandle,
+  pub task_id: u64,
   pub scene: Arc<RwLock<SceneContext>>,
   pub render_physical_meshes_outline: bool,
   pub camera_entity: EntityId,
@@ -1036,6 +1073,7 @@ pub enum RenderCommand {
   Shutdown,
 
   RenderFrame(RenderFrame),
+  
   DownloadImage(DownloadImage),
 
   Resize(Resize),
@@ -1228,6 +1266,12 @@ impl RenderThreadParams {
         .map_err(|e| EngineError::from(e))?
     };
 
+    render_frontend
+      .with_device(render_device_handle, |device| {
+        device.wire_callbacks(Arc::clone(&thread_pool))
+      })
+      .map_err(|e| EngineError::from(e))?;
+
     Ok(RenderThreadParams {
       channel_capacity: Self::DEFAULT_CHANNEL_CAPACITY,
       render_frontend,
@@ -1268,8 +1312,10 @@ impl RenderThreadContext {
       return false;
     }
     let render_frontend = unsafe { render_frontend.as_ref().unwrap_unchecked() };
-    // Weak count comes from the Simulation Context
-    Arc::strong_count(&render_frontend) == 1 && Arc::weak_count(&render_frontend) == 1
+    let strong = Arc::strong_count(&render_frontend);
+    let weak = Arc::weak_count(&render_frontend);
+    oshal::log!("is_render_single_ownership | strong: {}, weak: {}", strong, weak);
+    strong == 1 && weak == 1
   }
 }
 

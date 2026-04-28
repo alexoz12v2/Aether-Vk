@@ -225,7 +225,7 @@ impl RenderPasses {
 
         let final_layout = match swapchain {
           PresentationState::Windowed(_) => vk::ImageLayout::PRESENT_SRC_KHR,
-          PresentationState::Windowless(_) => vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+          PresentationState::Windowless(_) => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
         };
 
         let render_pass = Self::create_color_depth_single_render_pass(

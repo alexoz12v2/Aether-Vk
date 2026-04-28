@@ -5,10 +5,16 @@ use std::println;
 use core::ffi::c_char;
 use core::ffi::CStr;
 use std::sync::Arc;
+use alloc::format;
 use aethervk_core_rlib::gpu;
 use super::components_api::CameraParams;
 
 fn get_test_context() -> Option<*mut SimulationContext> {
+  // Set asset path before startup so it's available for shaders
+  let asset_dir = format!("{}/../../assets", env!("CARGO_MANIFEST_DIR"));
+  let path = alloc::ffi::CString::new(asset_dir).unwrap();
+  SimulationContext::set_asset_path(path.as_ptr());
+
   let ctx_ptr = SimulationContext::startup(gpu::VULKAN_RENDER_BACKEND);
   if let Ok(boxed) = ctx_ptr {
     return Some(alloc::boxed::Box::into_raw(boxed));
@@ -259,10 +265,10 @@ fn test_render_tick_and_download() {
       assert!(status == 1 || status == 2, "Render task stuck in pending");
 
       let mut buffer = vec![0u8; (width * height * 4) as usize];
-      let d_task_id = ctx.download_image(buffer.as_mut_ptr(), buffer.len());
-      if d_task_id > 0 {
+      let success = ctx.download_image(task_id, buffer.as_mut_ptr(), buffer.len());
+      if success {
           let mut attempts = 0;
-          while ctx.get_task_status(d_task_id) == 0 && attempts < 20 {
+          while ctx.get_task_status(task_id) == 0 && attempts < 20 {
             oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
             attempts += 1;
           }
@@ -358,6 +364,7 @@ fn test_all_archetypes() {
           status = ctx.get_task_status(task_id);
           attempts += 1;
         }
+        assert!(status == 1 || status == 2, "Render task stuck in pending");
       }
 
       let _ = alloc::boxed::Box::from_raw(ctx_ptr);

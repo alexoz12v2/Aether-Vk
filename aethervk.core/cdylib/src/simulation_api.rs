@@ -57,6 +57,12 @@ pub struct SimulationContext {
   pub(crate) logic_state: Arc<RwLock<structs::LogicState>>,
 }
 
+impl Drop for SimulationContext {
+  fn drop(&mut self) {
+    oshal::log!("SimulationContext drop started");
+  }
+}
+
 unsafe impl Sync for SimulationContext {}
 
 impl SimulationContext {
@@ -268,15 +274,33 @@ pub unsafe extern "C" fn avkSimulationContext_createEmptyScene(ctx: *mut Simulat
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_createPresentationEngine(
+  ctx: *mut SimulationContext,
+  width: u32,
+  height: u32,
+) -> u64 {
+  if ctx.is_null() { return 0; }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.create_presentation_engine(width, height).map(|h| h.0).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_createDefaultScene(ctx: *mut SimulationContext) -> u64 {
   if ctx.is_null() {
     return 0;
   }
   let ctx_ref = unsafe { &*ctx };
-  ctx_ref.create_default_scene().unwrap_or_else(|e| {
-    oshal::log!("create_default_scene failed: {}", e);
-    0
-  })
+  match ctx_ref.create_default_scene() {
+    Ok(id) => {
+      oshal::log!("create_default_scene SUCCESS: {}", id);
+      id
+    }
+    Err(e) => {
+      oshal::log!("create_default_scene failed: {}", e);
+      0
+    }
+  }
 }
 
 // --- Entity Management (Async) ---
@@ -447,7 +471,13 @@ pub unsafe extern "C" fn avkSimulationContext_getEntityCount(
     return 0;
   }
   let ctx_ref = unsafe { &*ctx };
-  ctx_ref.get_entity_count(scene_id).unwrap_or(0)
+  ctx_ref.get_entity_count(scene_id).map(|c| {
+    oshal::log!("getEntityCount for scene_id {} returned {}", scene_id, c);
+    c
+  }).unwrap_or_else(|e| {
+    oshal::log!("getEntityCount failed for scene_id {}: {}", scene_id, e);
+    0
+  })
 }
 
 #[unsafe(no_mangle)]
@@ -481,6 +511,20 @@ pub unsafe extern "C" fn avkSimulationContext_getEntityName(
   let ctx_ref = unsafe { &*ctx };
   let name = unsafe { core::slice::from_raw_parts_mut(out_name, max_len as usize) };
   ctx_ref.get_entity_name(scene_id, entity, name).is_ok()
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getEntityParent(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+) -> u64 {
+  if ctx.is_null() {
+    return 0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.get_entity_parent(scene_id, entity).unwrap_or(0)
 }
 
 // --- Async Heavy Operations ---
@@ -965,14 +1009,15 @@ pub unsafe extern "C" fn avkSimulationContext_renderTick(
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_downloadImage(
   ctx: *mut SimulationContext,
+  task_id: u64,
   buffer_ptr: *mut u8,
   buffer_size: usize,
-) -> u64 {
+) -> bool {
   if ctx.is_null() {
-    return 0;
+    return false;
   }
   let ctx_ref = unsafe { &*ctx };
-  ctx_ref.download_image(buffer_ptr, buffer_size)
+  ctx_ref.download_image(task_id, buffer_ptr, buffer_size)
 }
 
 #[unsafe(no_mangle)]
@@ -994,6 +1039,51 @@ pub unsafe extern "C" fn avkSimulationContext_addCameraComponent(
     near_plane: near,
     far_plane: far,
   }));
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setCameraComponent(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  is_orthographic: bool,
+  fov: f32,
+  aspect: f32,
+  near: f32,
+  far: f32,
+) {
+  if ctx.is_null() { return; }
+  let ctx_ref = unsafe { &*ctx };
+  let params = if is_orthographic {
+    crate::simulation_api::components_api::CameraParams::Orthographic(crate::simulation_api::components_api::OrthographicCameraParams {
+      left: -aspect, right: aspect, bottom: -1.0, top: 1.0, near, far
+    })
+  } else {
+    crate::simulation_api::components_api::CameraParams::Perspective(crate::simulation_api::components_api::PerspectiveCameraParams {
+      fov: fov.to_radians(), aspect_ratio: aspect, near_plane: near, far_plane: far
+    })
+  };
+  let _ = ctx_ref.set_camera_component(scene_id, entity, params);
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getCameraComponent(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  proj_out: *mut f32,
+) -> bool {
+  if ctx.is_null() || proj_out.is_null() { return false; }
+  let ctx_ref = unsafe { &*ctx };
+  let mut arr = [0.0; 16];
+  if ctx_ref.get_camera_component(scene_id, entity, &mut arr).is_ok() {
+    unsafe { core::ptr::copy_nonoverlapping(arr.as_ptr(), proj_out, 16) };
+    true
+  } else {
+    false
+  }
 }
 
 #[unsafe(no_mangle)]
@@ -1057,20 +1147,57 @@ pub unsafe extern "C" fn avkSimulationContext_setMarkers(
     return;
   }
   let ctx_ref = unsafe { &*ctx };
-  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-  use aethervk_core_rlib::components::markers::Marker;
+  use crate::structs::FfiMarker;
   use alloc::vec::Vec;
 
   let mut markers = Vec::with_capacity(count as usize);
   for i in 0..(count as usize) {
-    markers.push(Marker {
-      position: Vec3f32::from_components(unsafe { *px.add(i) }, unsafe { *py.add(i) }, unsafe { *pz.add(i) }),
-      color: Vec3f32::from_components(unsafe { *cr.add(i) }, unsafe { *cg.add(i) }, unsafe { *cb.add(i) }),
+    markers.push(FfiMarker {
+      position: [unsafe { *px.add(i) }, unsafe { *py.add(i) }, unsafe { *pz.add(i) }],
+      color: [unsafe { *cr.add(i) }, unsafe { *cg.add(i) }, unsafe { *cb.add(i) }],
       size: unsafe { *sizes.add(i) },
     });
   }
 
-  let _ = ctx_ref.sync_markers(scene_id, entity, markers);
+  let _ = ctx_ref.set_markers(scene_id, entity, &markers);
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getBvhNodes(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  count: *mut u32,
+) -> *mut crate::structs::FfiBvhNode {
+  if ctx.is_null() || count.is_null() { return core::ptr::null_mut(); }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.get_bvh_nodes(scene_id, entity, count).unwrap_or(core::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_freeBvhNodes(
+  ptr: *mut crate::structs::FfiBvhNode,
+  count: u32,
+) {
+  if !ptr.is_null() && count > 0 {
+    let _ = unsafe { alloc::vec::Vec::from_raw_parts(ptr, count as usize, count as usize) };
+  }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setBvhNodeVisibility(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  node_index: u32,
+  visible: bool,
+) {
+  if ctx.is_null() { return; }
+  let ctx_ref = unsafe { &*ctx };
+  let _ = ctx_ref.set_bvh_node_visibility(scene_id, entity, node_index, visible);
 }
 
 #[cfg(test)]
