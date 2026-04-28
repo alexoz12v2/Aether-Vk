@@ -243,7 +243,7 @@ impl RenderPasses {
         // Safety: We removed everything with that key above.
         let black_value = vk::ClearValue {
           color: vk::ClearColorValue {
-            float32: [0.0, 0.0, 1.0, 1.0],
+            float32: [0.0, 0.0, 0.0, 1.0],
           },
         };
         // TODO: zero our stencil

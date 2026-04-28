@@ -331,7 +331,7 @@ public static class NativeInterop
   public static extern ulong avkSimulationContext_simulationTick(IntPtr ctx, ulong sceneId, double deltaTime);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern ulong avkSimulationContext_renderTick(IntPtr ctx, ulong presentationEngineHandle, ulong sceneId, uint width, uint height);
+  public static extern ulong avkSimulationContext_renderTick(IntPtr ctx, ulong presentationEngineHandle, ulong sceneId, ulong cameraId, uint width, uint height);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern int avkSimulationContext_getTaskStatus(IntPtr ctx, ulong taskId);
