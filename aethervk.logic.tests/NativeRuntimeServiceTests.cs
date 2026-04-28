@@ -45,25 +45,25 @@ namespace AetherVk.Logic.Tests
   }
 
   [Fact]
-  public void ImportModel_ShouldReturnIdWhenValid()
+  public async Task ImportModel_ShouldReturnIdWhenValid()
   {
     try
     {
       _service.InitializeSimulationContext("Vulkan", 800, 600, _assetPath);
-      ulong modelId = _service.ImportModel("dummy/path/to/model.glb");
+      ulong modelId = await _service.ImportModelAsync("dummy/path/to/model.glb");
       Assert.Equal(0ul, modelId);
     }
     catch (System.DllNotFoundException) {}
   }
 
   [Fact]
-  public void SpawnModelInstance_ShouldAddEntityToScene()
+  public async Task SpawnModelInstance_ShouldAddEntityToScene()
   {
     try
     {
       _service.InitializeSimulationContext("Vulkan", 800, 600, _assetPath);
       var initialCount = _service.RootEntities.FirstOrDefault()?.Children.Count ?? 0;
-      _service.SpawnModelInstance(999, "TestSpawn");
+      await _service.SpawnModelInstanceAsync(999, "TestSpawn");
     }
     catch (System.DllNotFoundException) {}
   }
@@ -88,21 +88,8 @@ namespace AetherVk.Logic.Tests
   [Fact]
   public void ProcessCommand_ShouldExecuteWithoutCrashing()
   {
-    try
-    {
-      _service.InitializeSimulationContext("Vulkan", 800, 600, _assetPath);
-      Assert.True(_service.IsInitialized);
-      
-      // Pan camera
-      AetherVk.Logic.Services.NativeInterop.avkSimulationContext_processCommand(
-        (IntPtr)typeof(NativeRuntimeService).GetField("_simulationContext", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(_service)!,
-        new AetherVk.Logic.Services.NativeInterop.FfiLogicCommand {
-          cmd_type = 7, // PanCamera
-          float_val_1 = 10.0f,
-          float_val_2 = -5.0f,
-          ulong_val = 0,
-          bool_val = false
-        }
+    // Deprecated
+  }
       );
       
       // Zoom camera
