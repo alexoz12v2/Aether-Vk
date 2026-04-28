@@ -311,9 +311,9 @@ public partial class Viewport3DViewModel
     );
   }
 
-  public void CopyFrameToBuffer(IntPtr bufferPtr, nuint bufferSize)
+  public async Task CopyFrameToBuffer(IntPtr bufferPtr, nuint bufferSize)
   {
-    _runtimeService.DownloadImage(bufferPtr, bufferSize);
+    await _runtimeService.DownloadImageAsync(bufferPtr, bufferSize);
   }
 
   public void Stop()

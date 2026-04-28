@@ -140,7 +140,7 @@ pub fn get_available_kernels() -> Vec<&'static str> {
 pub fn simulation_step<K>(
   kernels: &K,
   physical_scene: &mut PhysicsScene,
-  scene: &mut Scene,
+  scene: &Scene,
   t0: timeus_t,
   t1: timeus_t,
 ) -> EngineResult<()>

@@ -35,7 +35,7 @@ public partial class MeshViewerViewModel : TabItemViewModel
     {
         if (IsInitialized) return;
 
-        await Task.Run(() =>
+        await Task.Run(async () =>
         {
             try
             {
@@ -43,19 +43,11 @@ public partial class MeshViewerViewModel : TabItemViewModel
                 {
                     _runtimeService.InitializeSimulationContext("Vulkan", Width, Height, null, false);
                 }
-                if (_isLightTheme)
-                {
-                    _runtimeService.SetClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-                }
-                else
-                {
-                    _runtimeService.SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-                }
 
-                ulong modelId = _runtimeService.ImportModel(modelPath);
+                ulong modelId = await _runtimeService.ImportModelAsync(modelPath);
                 if (modelId > 0)
                 {
-                    _runtimeService.SpawnModelInstance(modelId, modelName);
+                    await _runtimeService.SpawnModelInstanceAsync(modelId, modelName);
                 }
                 
                 var root = System.Linq.Enumerable.FirstOrDefault(_runtimeService.RootEntities);
@@ -132,9 +124,9 @@ public partial class MeshViewerViewModel : TabItemViewModel
         }, token);
     }
 
-    public void CopyFrameToBuffer(IntPtr bufferPtr, nuint bufferSize)
+    public async Task CopyFrameToBuffer(IntPtr bufferPtr, nuint bufferSize)
     {
-        _runtimeService.DownloadImage(bufferPtr, bufferSize);
+        await _runtimeService.DownloadImageAsync(bufferPtr, bufferSize);
     }
 
     public void Stop()

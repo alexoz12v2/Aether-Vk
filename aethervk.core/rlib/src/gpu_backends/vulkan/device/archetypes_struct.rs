@@ -19,11 +19,32 @@ use alloc::vec::Vec;
 
 // TODO rewrite error messages
 
+fn get_validated_shaders<'a>(
+  shader_manager: &'a shader_manager::ShaderManager,
+  vertex_shader_key: ShaderKey,
+  fragment_shader_key: ShaderKey,
+) -> GpuResult<(&'a shader_manager::Shader, &'a shader_manager::Shader)> {
+  let vertex_shader = shader_manager
+    .get(vertex_shader_key)
+    .ok_or(GpuError::InvalidShader)?;
+  if vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
+    return Err(GpuError::InvalidShader);
+  }
+  let fragment_shader = shader_manager
+    .get(fragment_shader_key)
+    .ok_or(GpuError::InvalidShader)?;
+  if fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
+    return Err(GpuError::InvalidShader);
+  }
+  Ok((vertex_shader, fragment_shader))
+}
+
 #[derive(Default)]
 pub(super) struct Archetypes {
   pub sun_render_archetype: spin::RwLock<Option<resources::SunRenderResourceArchetype>>,
   pub physical_mesh_render_archetype: spin::RwLock<Option<ForwardMeshRenderResourceArchetype>>,
   pub billboard_render_archetype: spin::RwLock<Option<resources::BillboardRenderResourceArchetype>>,
+  pub particle_render_archetype: spin::RwLock<Option<resources::ParticleRenderResourceArchetype>>,
   pub cursor_render_archetype: spin::RwLock<Option<resources::CursorRenderResourceArchetype>>,
   pub marker_render_archetype: spin::RwLock<Option<resources::MarkerRenderResourceArchetype>>,
   pub measurement_render_archetype:
@@ -33,6 +54,7 @@ pub(super) struct Archetypes {
   pub minimap_render_archetype: spin::RwLock<Option<resources::MinimapRenderResourceArchetype>>,
   pub text_render_archetype: spin::RwLock<Option<resources::TextRenderResourceArchetype>>,
   pub bvh_render_archetype: spin::RwLock<Option<resources::BvhRenderResourceArchetype>>,
+  pub gizmo_render_archetype: spin::RwLock<Option<resources::GizmoRenderResourceArchetype>>,
 }
 
 impl Archetypes {
@@ -40,6 +62,7 @@ impl Archetypes {
     self.sun_render_archetype.read().is_some()
       || self.physical_mesh_render_archetype.read().is_some()
       || self.billboard_render_archetype.read().is_some()
+      || self.particle_render_archetype.read().is_some()
       || self.cursor_render_archetype.read().is_some()
       || self.marker_render_archetype.read().is_some()
       || self.measurement_render_archetype.read().is_some()
@@ -48,6 +71,7 @@ impl Archetypes {
       || self.minimap_render_archetype.read().is_some()
       || self.text_render_archetype.read().is_some()
       || self.bvh_render_archetype.read().is_some()
+      || self.gizmo_render_archetype.read().is_some()
   }
 
   pub fn discard(&self, device: &ash::Device, discard_pool: &resources::DiscardPool) {
@@ -58,6 +82,9 @@ impl Archetypes {
       archetype.discard(device, discard_pool, u64::MAX);
     }
     if let Some(mut archetype) = self.billboard_render_archetype.write().take() {
+      archetype.discard(device, discard_pool, u64::MAX);
+    }
+    if let Some(mut archetype) = self.particle_render_archetype.write().take() {
       archetype.discard(device, discard_pool, u64::MAX);
     }
     if let Some(mut archetype) = self.cursor_render_archetype.write().take() {
@@ -84,196 +111,312 @@ impl Archetypes {
     if let Some(mut archetype) = self.measurement_render_archetype.write().take() {
       archetype.discard(device, discard_pool, u64::MAX);
     }
-  }
-
-  /// update [`pipelines::FragmentOut`] and [`vk::RenderPass`] inside [`pipelines::GraphicsInfo`]
-  /// disard old and create updated graphics [`vk::Pipeline`]
-  /// Note: Update is performed only if archetype initialized once
-  pub fn update_physical_mesh_archetype_for_presentation_engine(
-    &self,
-    device: &LogicalDevice,
-    presentation_engine: &swapchain::PresentationState,
-    write_pipeline: &mut pipelines::PipelinePool,
-    renderpasses: &renderpasses::RenderPasses,
-    allocator: &vk_mem::Allocator,
-    discard_pool: &resources::DiscardPool,
-    timeline: u64,
-  ) -> GpuResult<()> {
-    let mut archetype_lock = self.physical_mesh_render_archetype.write();
-    let archetype = unsafe {
-      let mut_arch: Option<&mut _>;
-      mut_arch = archetype_lock.as_mut();
-
-      mut_arch.ok_or(GpuError::InvalidState("device.rs"))?
-    };
-
-    if archetype.graphics_info.is_none() || archetype.pipeline_key.is_none() {
-      return Err(GpuError::InvalidState("device.rs"));
+    if let Some(mut archetype) = self.gizmo_render_archetype.write().take() {
+      archetype.discard(device, discard_pool, u64::MAX);
     }
-    let pipeline_key = *unsafe { archetype.pipeline_key.as_ref().unwrap_unchecked() };
-    let graphics_info = unsafe { archetype.graphics_info.as_mut().unwrap_unchecked() };
-    let depth_stencil_format = graphics_info
-      .fragment_out
-      .depth_attachment_format
-      .unwrap_or(vk::Format::UNDEFINED);
+  }
+}
 
-    graphics_info.fragment_out.color_attachment_formats.clear();
-    graphics_info
-      .fragment_out
-      .color_attachment_formats
-      .push(presentation_engine.format());
-    graphics_info.render_pass = renderpasses
-      .get_or_create_render_pass(
-        renderpasses::RenderPassSpecification::single_pass(
-          &presentation_engine,
-          depth_stencil_format,
-        ),
-        0,
-        device,
-        allocator,
-        discard_pool,
-        timeline,
+macro_rules! impl_update_archetype {
+  (
+    $fn_name:ident, 
+    $archetype_field:ident
+    $(, |$arch:ident, $dev:ident, $wp:ident, $dp:ident, $tl:ident, $gi:ident| $extra:block)?
+  ) => {
+    pub fn $fn_name(
+      &self,
+      device: &LogicalDevice,
+      presentation_engine: &swapchain::PresentationState,
+      write_pipeline: &mut pipelines::PipelinePool,
+      renderpasses: &renderpasses::RenderPasses,
+      allocator: &vk_mem::Allocator,
+      discard_pool: &resources::DiscardPool,
+      timeline: u64,
+    ) -> GpuResult<()> {
+      let mut archetype_lock = self.$archetype_field.write();
+      let archetype = {
+        let mut_arch: Option<&mut _> = archetype_lock.as_mut();
+        mut_arch.ok_or(GpuError::InvalidState("device.rs"))?
+      };
+
+      if archetype.graphics_info.is_none() || archetype.pipeline_key.is_none() {
+        return Err(GpuError::InvalidState("device.rs"));
+      }
+
+      let old_pipeline_key = *unsafe { archetype.pipeline_key.as_ref().unwrap_unchecked() };
+      
+      let new_pipeline_key;
+      {
+        let graphics_info = unsafe { archetype.graphics_info.as_mut().unwrap_unchecked() };
+        let depth_stencil_format = graphics_info
+          .fragment_out
+          .depth_attachment_format
+          .unwrap_or(vk::Format::UNDEFINED);
+
+        graphics_info.fragment_out.color_attachment_formats.clear();
+        graphics_info
+          .fragment_out
+          .color_attachment_formats
+          .push(presentation_engine.format());
+        graphics_info.render_pass = renderpasses
+          .get_or_create_render_pass(
+            RenderPassSpecification::single_pass(presentation_engine, depth_stencil_format),
+            0,
+            device,
+            allocator,
+            discard_pool,
+            timeline,
+          )?
+          .0
+          .get();
+        // Note: don't care about viewport and scissor cause they are dynamic state
+        write_pipeline.get_or_create_graphics_pipeline(device, graphics_info)?;
+        new_pipeline_key = graphics_info.pipeline_key();
+      }
+
+      write_pipeline.discard_graphics_pipeline_if_present(old_pipeline_key, discard_pool, timeline);
+      archetype.pipeline_key = Some(new_pipeline_key);
+
+      $(
+        let $arch = &mut *archetype;
+        let $dev = device;
+        let $wp = &mut *write_pipeline;
+        let $dp = discard_pool;
+        let $tl = timeline;
+        let $gi = $arch.graphics_info.as_ref().unwrap();
+        $extra
       )?
-      .0
-      .get();
-    // Note: don't care about viewport and scissor cause they are dynamic state
-    write_pipeline.get_or_create_graphics_pipeline(device, graphics_info)?;
-    write_pipeline.discard_graphics_pipeline_if_present(pipeline_key, discard_pool, timeline);
 
-    let pipeline_key = graphics_info.pipeline_key();
-    archetype.pipeline_key = Some(pipeline_key);
-
-    let outline_graphics_info = graphics_info
-      .clone()
-      .with_pipeline_flags(
-        PipelineFlags::CULL_BACK | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::STENCIL_ENABLE,
-      )
-      .with_stencil_compare_op(StencilCompareOp::NotEqual)
-      .with_stencil_logic_op(StencilLogicOp::None)
-      .with_stencil_reference(255)
-      .with_stencil_compare_mask(255)
-      .with_stencil_write_mask(0)
-      .clone();
-
-    if let Some(outline_key) = archetype.outline_pipeline_key {
-      write_pipeline.discard_graphics_pipeline_if_present(outline_key, discard_pool, timeline);
+      Ok(())
     }
-    let outline_pipeline_key = outline_graphics_info.pipeline_key();
-    write_pipeline.get_or_create_graphics_pipeline(device, &outline_graphics_info)?;
-    archetype.outline_pipeline_key = Some(outline_pipeline_key);
+  };
+}
 
-    Ok(())
-  }
+macro_rules! impl_create_archetype {
+  (
+    $fn_name:ident,
+    $archetype_field:ident,
+    $resource_struct:ident
+    $(, |$gi:ident| $extra:block)?
+  ) => {
+    pub fn $fn_name(
+      &self,
+      device: &LogicalDevice,
+      shader_manager: &shader_manager::ShaderManager,
+      vertex_shader_key: ShaderKey,
+      fragment_shader_key: ShaderKey,
+      depth_stencil_format: vk::Format,
+      presentation_engine_state: &swapchain::PresentationState,
+      allocator: &vk_mem::Allocator,
+      discard_pool: &resources::DiscardPool,
+      renderpasses: &renderpasses::RenderPasses,
+      pipeline_pool: &mut pipelines::PipelinePool,
+      timeline: u64,
+    ) -> GpuResult<()> {
+      let mut archetype_lock = self.$archetype_field.write();
+      if archetype_lock.is_some() {
+        return Err(GpuError::InvalidState("device.rs"));
+      }
 
-  pub fn update_cursor_archetype_for_presentation_engine(
-    &self,
-    device: &LogicalDevice,
-    presentation_engine: &swapchain::PresentationState,
-    write_pipeline: &mut pipelines::PipelinePool,
-    renderpasses: &renderpasses::RenderPasses,
-    allocator: &vk_mem::Allocator,
-    discard_pool: &resources::DiscardPool,
-    timeline: u64,
-  ) -> GpuResult<()> {
-    let mut archetype_lock = self.cursor_render_archetype.write();
-    let archetype = {
-      let mut_arch: Option<&mut _> = archetype_lock.as_mut();
+      let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
 
-      mut_arch.ok_or(GpuError::InvalidState("device.rs"))?
-    };
+      let res = unsafe { resources::$resource_struct::new(device) }?;
+      *archetype_lock = Some(res);
 
-    if archetype.graphics_info.is_none() || archetype.pipeline_key.is_none() {
-      return Err(GpuError::InvalidState("device.rs"));
-    }
-    let pipeline_key = *unsafe { archetype.pipeline_key.as_ref().unwrap_unchecked() };
+      let layout = archetype_lock.as_ref().unwrap().pipeline_layout.get();
+      let render_pass = renderpasses
+        .get_or_create_render_pass(
+          RenderPassSpecification::single_pass(presentation_engine_state, depth_stencil_format),
+          0,
+          device,
+          allocator,
+          discard_pool,
+          timeline,
+        )?.0.get();
 
-    let graphics_info = unsafe { archetype.graphics_info.as_mut().unwrap_unchecked() };
-    let depth_stencil_format = graphics_info
-      .fragment_out
-      .depth_attachment_format
-      .unwrap_or(vk::Format::UNDEFINED);
+      let mut graphics_info = GraphicsInfo::default()
+        .with_pre_rasterization(
+          PreRasterization::default().with_vertex_module(vertex_shader.module.get()).clone()
+        )
+        .with_fragment_shader(
+          FragmentShader::default().with_fragment_module(fragment_shader.module.get()).clone()
+        )
+        .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+        .clone();
 
-    graphics_info.fragment_out.color_attachment_formats.clear();
-    graphics_info
-      .fragment_out
-      .color_attachment_formats
-      .push(presentation_engine.format());
-    graphics_info.render_pass = renderpasses
-      .get_or_create_render_pass(
-        RenderPassSpecification::single_pass(&presentation_engine, depth_stencil_format),
-        0,
-        device,
-        allocator,
-        discard_pool,
-        timeline,
+      $(
+        let $gi = &mut graphics_info;
+        $extra
       )?
-      .0
-      .get();
-    // Note: don't care about viewport and scissor cause they are dynamic state
-    write_pipeline.get_or_create_graphics_pipeline(device, graphics_info)?;
-    write_pipeline.discard_graphics_pipeline_if_present(pipeline_key, discard_pool, timeline);
 
-    let pipeline_key = graphics_info.pipeline_key();
-    archetype.pipeline_key = Some(pipeline_key);
+      let pipeline_graphics_info = graphics_info.apply_presentation_defaults(
+        presentation_engine_state, depth_stencil_format, layout, render_pass
+      );
 
-    Ok(())
-  }
+      pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
 
-  pub fn update_sun_archetype_for_presentation_engine(
-    &self,
-    device: &LogicalDevice,
-    presentation_engine: &swapchain::PresentationState,
-    write_pipeline: &mut pipelines::PipelinePool,
-    renderpasses: &renderpasses::RenderPasses,
-    allocator: &vk_mem::Allocator,
-    discard_pool: &resources::DiscardPool,
-    timeline: u64,
-  ) -> GpuResult<()> {
-    let mut archetype_lock = self.sun_render_archetype.write();
-    let archetype = unsafe {
-      let mut_arch: Option<&mut _> = archetype_lock.as_mut();
+      let arch_mut = archetype_lock.as_mut().unwrap();
+      arch_mut.pipeline_key = Some(pipeline_graphics_info.pipeline_key());
+      arch_mut.graphics_info = Some(pipeline_graphics_info);
 
-      mut_arch.ok_or(GpuError::InvalidState("device.rs"))?
-    };
-
-    if archetype.graphics_info.is_none() || archetype.pipeline_key.is_none() {
-      return Err(GpuError::InvalidState("device.rs"));
+      Ok(())
     }
-    let pipeline_key = *unsafe { archetype.pipeline_key.as_ref().unwrap_unchecked() };
+  };
+}
 
-    let graphics_info = unsafe { archetype.graphics_info.as_mut().unwrap_unchecked() };
-    let depth_stencil_format = graphics_info
-      .fragment_out
-      .depth_attachment_format
-      .unwrap_or(vk::Format::UNDEFINED);
+impl Archetypes {
+  impl_update_archetype!(
+    update_physical_mesh_archetype_for_presentation_engine,
+    physical_mesh_render_archetype,
+    |archetype, device, write_pipeline, discard_pool, timeline, graphics_info| {
+      let outline_graphics_info = graphics_info
+        .clone()
+        .with_pipeline_flags(
+          PipelineFlags::CULL_BACK | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::STENCIL_ENABLE,
+        )
+        .with_stencil_compare_op(StencilCompareOp::NotEqual)
+        .with_stencil_logic_op(StencilLogicOp::None)
+        .with_stencil_reference(255)
+        .with_stencil_compare_mask(255)
+        .with_stencil_write_mask(0)
+        .clone();
 
-    graphics_info.fragment_out.color_attachment_formats.clear();
-    graphics_info
-      .fragment_out
-      .color_attachment_formats
-      .push(presentation_engine.format());
-    graphics_info.render_pass = renderpasses
-      .get_or_create_render_pass(
-        RenderPassSpecification::single_pass(&presentation_engine, depth_stencil_format),
-        0,
-        device,
-        allocator,
-        discard_pool,
-        timeline,
-      )?
-      .0
-      .get();
-    // Note: don't care about viewport and scissor cause they are dynamic state
-    write_pipeline.get_or_create_graphics_pipeline(device, graphics_info)?;
-    write_pipeline.discard_graphics_pipeline_if_present(pipeline_key, discard_pool, timeline);
+      if let Some(outline_key) = archetype.outline_pipeline_key {
+        write_pipeline.discard_graphics_pipeline_if_present(outline_key, discard_pool, timeline);
+      }
+      let outline_pipeline_key = outline_graphics_info.pipeline_key();
+      write_pipeline.get_or_create_graphics_pipeline(device, &outline_graphics_info)?;
+      archetype.outline_pipeline_key = Some(outline_pipeline_key);
+    }
+  );
 
-    let pipeline_key = graphics_info.pipeline_key();
-    archetype.pipeline_key = Some(pipeline_key);
-
-    Ok(())
-  }
+  impl_update_archetype!(update_cursor_archetype_for_presentation_engine, cursor_render_archetype);
+  impl_update_archetype!(update_particle_archetype_for_presentation_engine, particle_render_archetype);
+  impl_update_archetype!(update_sun_archetype_for_presentation_engine, sun_render_archetype);
 
   // ------------------------------------ Creation ------------------------------------
+
+  impl_create_archetype!(
+    create_sun_archetype,
+    sun_render_archetype,
+    SunRenderResourceArchetype,
+    |gi| {
+      gi.with_vertex_in(
+        VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+          .clone(),
+      )
+      .with_pipeline_flags(
+        PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::NO_DEPTH_WRITE,
+      );
+    }
+  );
+
+  impl_create_archetype!(
+    create_particle_archetype,
+    particle_render_archetype,
+    ParticleRenderResourceArchetype,
+    |gi| {
+      gi.with_vertex_in(
+        VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+          .clone(),
+      )
+      .with_pipeline_flags(
+        PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE,
+      )
+      .with_stencil_compare_op(StencilCompareOp::None)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(255)
+      .with_stencil_compare_mask(0)
+      .with_stencil_write_mask(u32::MAX);
+    }
+  );
+
+  impl_create_archetype!(
+    create_cursor_archetype,
+    cursor_render_archetype,
+    CursorRenderResourceArchetype,
+    |gi| {
+      gi.with_vertex_in(
+        VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+          .clone(),
+      )
+      .with_pipeline_flags(
+        PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE,
+      )
+      .with_stencil_compare_op(StencilCompareOp::None)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(255)
+      .with_stencil_compare_mask(0)
+      .with_stencil_write_mask(u32::MAX);
+    }
+  );
+
+  impl_create_archetype!(
+    create_measurement_archetype,
+    measurement_render_archetype,
+    MeasurementRenderResourceArchetype,
+    |gi| {
+      gi.with_vertex_in(
+        VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::LINE_LIST)
+          .clone(),
+      )
+      .with_pipeline_flags(
+        PipelineFlags::CULL_ALL
+          | PipelineFlags::INVERT_FRONT_FACE
+          | PipelineFlags::NO_DEPTH_TEST
+          | PipelineFlags::NO_DEPTH_WRITE,
+      )
+      .with_stencil_compare_op(StencilCompareOp::None)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(255)
+      .with_stencil_compare_mask(0)
+      .with_stencil_write_mask(u32::MAX);
+    }
+  );
+
+  impl_create_archetype!(
+    create_marker_archetype,
+    marker_render_archetype,
+    MarkerRenderResourceArchetype,
+    |gi| {
+      gi.with_vertex_in(
+        VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+          .clone(),
+      )
+      .with_pipeline_flags(PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE)
+      .with_stencil_compare_op(StencilCompareOp::None)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(255)
+      .with_stencil_compare_mask(0)
+      .with_stencil_write_mask(u32::MAX);
+    }
+  );
+
+  impl_create_archetype!(
+    create_billboard_archetype,
+    billboard_render_archetype,
+    BillboardRenderResourceArchetype,
+    |gi| {
+      gi.with_vertex_in(
+        VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+          .clone(),
+      )
+      .with_pipeline_flags(
+        PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE,
+      )
+      .with_stencil_compare_op(StencilCompareOp::None)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(255)
+      .with_stencil_compare_mask(0)
+      .with_stencil_write_mask(u32::MAX);
+    }
+  );
 
   pub fn create_physical_mesh_archetype(
     &self,
@@ -472,120 +615,6 @@ impl Archetypes {
     Ok(())
   }
 
-  pub fn create_sun_archetype(
-    &self,
-    device: &LogicalDevice,
-    shader_manager: &shader_manager::ShaderManager,
-    vertex_shader_key: ShaderKey,
-    fragment_shader_key: ShaderKey,
-    depth_stencil_format: vk::Format,
-    presentation_engine_state: &swapchain::PresentationState,
-    allocator: &vk_mem::Allocator,
-    discard_pool: &resources::DiscardPool,
-    renderpasses: &renderpasses::RenderPasses,
-    pipeline_pool: &mut pipelines::PipelinePool,
-  ) -> GpuResult<()> {
-    let mut sun_render_archetype = self.sun_render_archetype.write();
-    if sun_render_archetype.is_some() {
-      return Err(GpuError::InvalidState("device.rs"));
-    }
-
-    let vertex_shader = shader_manager
-      .get(vertex_shader_key)
-      .ok_or(GpuError::InvalidShader)?;
-    if vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
-      return Err(GpuError::InvalidShader);
-    }
-    let fragment_shader = shader_manager
-      .get(fragment_shader_key)
-      .ok_or(GpuError::InvalidShader)?;
-    if fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
-      return Err(GpuError::InvalidShader);
-    }
-
-    // Create initial struct
-    let res = unsafe { resources::SunRenderResourceArchetype::new(device) }?;
-    *sun_render_archetype = Some(res);
-
-    // then populate graphics info and pipeline key
-    let pipeline_graphics_info = GraphicsInfo::default()
-      .with_vertex_in(
-        VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-          .clone(),
-      )
-      .with_pre_rasterization(
-        PreRasterization::default()
-          .with_vertex_module(vertex_shader.module.get())
-          .clone(),
-      )
-      .with_fragment_shader(
-        FragmentShader::default()
-          .with_fragment_module(fragment_shader.module.get())
-          .add_viewport(vk::Viewport {
-            width: presentation_engine_state.extent().0 as _,
-            height: -(presentation_engine_state.extent().1 as f32), // Y axis points downwards in Vulkan, so flip it
-            x: 0.0,
-            y: presentation_engine_state.extent().1 as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-          })
-          .add_scissors(vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-              width: presentation_engine_state.extent().0,
-              height: presentation_engine_state.extent().1,
-            },
-          })
-          .clone(),
-      )
-      .with_fragment_out(
-        FragmentOut::default()
-          .add_color_attachment_format(presentation_engine_state.format())
-          .with_depth_attachment_format(depth_stencil_format)
-          .with_stencil_attachment_format(depth_stencil_format)
-          .clone(),
-      )
-      .with_pipeline_layout(
-        unsafe {
-          let ref_arch: Option<&_> = sun_render_archetype.as_ref();
-          ref_arch.unwrap_unchecked()
-        }
-        .pipeline_layout
-        .get(),
-      )
-      .with_pipeline_flags(
-        PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::NO_DEPTH_WRITE,
-      ) // No culling so we see it from inside and outside (yes, cull all means no culling) + No depth write for volume
-      .with_render_pass(
-        renderpasses
-          .get_or_create_render_pass(
-            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
-            0,
-            device,
-            allocator,
-            discard_pool,
-            0,
-          )?
-          .0
-          .get(),
-      )
-      .with_subpass(0)
-      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
-      .clone();
-
- pipeline_pool
-      .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
-
-    let pipeline_key = pipeline_graphics_info.pipeline_key();
-    let sun_render_archetype_mut = sun_render_archetype.as_mut().unwrap();
-    sun_render_archetype_mut.graphics_info = Some(pipeline_graphics_info);
-    sun_render_archetype_mut.pipeline_key = Some(pipeline_key);
-
-    debug_assert!(sun_render_archetype.is_some());
-
-    Ok(())
-  }
 
   pub fn create_sky_archetype(
     &self,
@@ -599,6 +628,7 @@ impl Archetypes {
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool: &mut pipelines::PipelinePool,
+    timeline: u64,
   ) -> GpuResult<()> {
     let mut sky_render_archetype = self.sky_render_archetype.write();
     if sky_render_archetype.is_some() {
@@ -714,6 +744,7 @@ impl Archetypes {
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool: &mut pipelines::PipelinePool,
+    timeline: u64,
   ) -> GpuResult<()> {
     let mut grid_render_archetype = self.grid_render_archetype.write();
     if grid_render_archetype.is_some() {
@@ -896,473 +927,10 @@ impl Archetypes {
     Ok(())
   }
 
-  pub fn create_measurement_archetype(
-    &self,
-    device: &LogicalDevice,
-    shader_manager: &shader_manager::ShaderManager,
-    vertex_shader_key: ShaderKey,
-    fragment_shader_key: ShaderKey,
-    depth_stencil_format: vk::Format,
-    presentation_engine_state: &swapchain::PresentationState,
-    allocator: &vk_mem::Allocator,
-    discard_pool: &resources::DiscardPool,
-    renderpasses: &renderpasses::RenderPasses,
-    pipeline_pool: &mut pipelines::PipelinePool,
-  ) -> GpuResult<()> {
-    let mut measurement_render_archetype = self.measurement_render_archetype.write();
-    if measurement_render_archetype.is_some() {
-      return Err(GpuError::InvalidState("device.rs"));
-    }
 
-    let vertex_shader = shader_manager
-      .get(vertex_shader_key)
-      .ok_or(GpuError::InvalidShader)?;
-    if vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
-      return Err(GpuError::InvalidShader);
-    }
-    let fragment_shader = shader_manager
-      .get(fragment_shader_key)
-      .ok_or(GpuError::InvalidShader)?;
-    if fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
-      return Err(GpuError::InvalidShader);
-    }
 
-    let res = unsafe { resources::MeasurementRenderResourceArchetype::new(device) }?;
-    *measurement_render_archetype = Some(res);
 
-    let pipeline_graphics_info = GraphicsInfo::default()
-      .with_vertex_in(
-        VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::LINE_LIST)
-          .clone(),
-      )
-      .with_pre_rasterization(
-        PreRasterization::default()
-          .with_vertex_module(vertex_shader.module.get())
-          .clone(),
-      )
-      .with_fragment_shader(
-        FragmentShader::default()
-          .with_fragment_module(fragment_shader.module.get())
-          .add_viewport(vk::Viewport {
-            width: presentation_engine_state.extent().0 as _,
-            height: -(presentation_engine_state.extent().1 as f32),
-            x: 0.0,
-            y: presentation_engine_state.extent().1 as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-          })
-          .add_scissors(vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-              width: presentation_engine_state.extent().0,
-              height: presentation_engine_state.extent().1,
-            },
-          })
-          .clone(),
-      )
-      .with_fragment_out(
-        FragmentOut::default()
-          .add_color_attachment_format(presentation_engine_state.format())
-          .with_depth_attachment_format(depth_stencil_format)
-          .with_stencil_attachment_format(depth_stencil_format)
-          .clone(),
-      )
-      .with_pipeline_layout(
-        unsafe {
-          let ref_arch: Option<&_>;
-          ref_arch = measurement_render_archetype.as_ref();
-          ref_arch.unwrap_unchecked()
-        }
-        .pipeline_layout
-        .get(),
-      )
-      .with_pipeline_flags(
-        PipelineFlags::CULL_ALL
-          | PipelineFlags::INVERT_FRONT_FACE
-          | PipelineFlags::NO_DEPTH_TEST
-          | PipelineFlags::NO_DEPTH_WRITE,
-      )
-      .with_render_pass(
-        renderpasses
-          .get_or_create_render_pass(
-            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
-            0,
-            device,
-            allocator,
-            discard_pool,
-            0,
-          )?
-          .0
-          .get(),
-      )
-      .with_subpass(0)
-      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
-      .with_stencil_compare_op(StencilCompareOp::None)
-      .with_stencil_logic_op(StencilLogicOp::Replace)
-      .with_stencil_reference(255)
-      .with_stencil_compare_mask(0)
-      .with_stencil_write_mask(u32::MAX)
-      .clone();
 
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
-
-    let pkey = pipeline_graphics_info.pipeline_key();
-    measurement_render_archetype.as_mut().unwrap().pipeline_key = Some(pkey);
-    measurement_render_archetype.as_mut().unwrap().graphics_info = Some(pipeline_graphics_info);
-
-    Ok(())
-  }
-
-  pub fn create_marker_archetype(
-    &self,
-    device: &LogicalDevice,
-    shader_manager: &shader_manager::ShaderManager,
-    vertex_shader_key: ShaderKey,
-    fragment_shader_key: ShaderKey,
-    depth_stencil_format: vk::Format,
-    presentation_engine_state: &swapchain::PresentationState,
-    allocator: &vk_mem::Allocator,
-    discard_pool: &resources::DiscardPool,
-    renderpasses: &renderpasses::RenderPasses,
-    pipeline_pool: &mut pipelines::PipelinePool,
-  ) -> GpuResult<()> {
-    let mut marker_render_archetype = self.marker_render_archetype.write();
-    if marker_render_archetype.is_some() {
-      return Err(GpuError::InvalidState("device.rs"));
-    }
-
-    let vertex_shader = shader_manager
-      .get(vertex_shader_key)
-      .ok_or(GpuError::InvalidShader)?;
-    if vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
-      return Err(GpuError::InvalidShader);
-    }
-    let fragment_shader = shader_manager
-      .get(fragment_shader_key)
-      .ok_or(GpuError::InvalidShader)?;
-    if fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
-      return Err(GpuError::InvalidShader);
-    }
-
-    let res = unsafe { resources::MarkerRenderResourceArchetype::new(device) }?;
-    *marker_render_archetype = Some(res);
-
-    let pipeline_graphics_info = GraphicsInfo::default()
-      .with_vertex_in(
-        VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-          .clone(),
-      )
-      .with_pre_rasterization(
-        PreRasterization::default()
-          .with_vertex_module(vertex_shader.module.get())
-          .clone(),
-      )
-      .with_fragment_shader(
-        FragmentShader::default()
-          .with_fragment_module(fragment_shader.module.get())
-          .add_viewport(vk::Viewport {
-            width: presentation_engine_state.extent().0 as _,
-            height: -(presentation_engine_state.extent().1 as f32),
-            x: 0.0,
-            y: presentation_engine_state.extent().1 as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-          })
-          .add_scissors(vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-              width: presentation_engine_state.extent().0,
-              height: presentation_engine_state.extent().1,
-            },
-          })
-          .clone(),
-      )
-      .with_fragment_out(
-        FragmentOut::default()
-          .add_color_attachment_format(presentation_engine_state.format())
-          .with_depth_attachment_format(depth_stencil_format)
-          .with_stencil_attachment_format(depth_stencil_format)
-          .clone(),
-      )
-      .with_pipeline_layout(
-        unsafe {
-          let ref_arch: Option<&_>;
-          ref_arch = marker_render_archetype.as_ref();
-          ref_arch.unwrap_unchecked()
-        }
-        .pipeline_layout
-        .get(),
-      )
-      .with_pipeline_flags(PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE)
-      .with_render_pass(
-        renderpasses
-          .get_or_create_render_pass(
-            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
-            0,
-            device,
-            allocator,
-            discard_pool,
-            0,
-          )?
-          .0
-          .get(),
-      )
-      .with_subpass(0)
-      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
-      .with_stencil_compare_op(StencilCompareOp::None)
-      .with_stencil_logic_op(StencilLogicOp::Replace)
-      .with_stencil_reference(255)
-      .with_stencil_compare_mask(0)
-      .with_stencil_write_mask(u32::MAX)
-      .clone();
-
-    pipeline_pool
-      .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
-
-    let pkey = pipeline_graphics_info.pipeline_key();
-    marker_render_archetype.as_mut().unwrap().pipeline_key = Some(pkey);
-    marker_render_archetype.as_mut().unwrap().graphics_info = Some(pipeline_graphics_info);
-
-    Ok(())
-  }
-
-  pub fn create_billboard_archetype(
-    &self,
-    device: &LogicalDevice,
-    shader_manager: &shader_manager::ShaderManager,
-    vertex_shader_key: ShaderKey,
-    fragment_shader_key: ShaderKey,
-    depth_stencil_format: vk::Format,
-    presentation_engine_state: &swapchain::PresentationState,
-    allocator: &vk_mem::Allocator,
-    discard_pool: &resources::DiscardPool,
-    renderpasses: &renderpasses::RenderPasses,
-    pipeline_pool: &mut pipelines::PipelinePool,
-  ) -> GpuResult<()> {
-    let mut billboard_render_archetype = self.billboard_render_archetype.write();
-    if billboard_render_archetype.is_some() {
-      return Err(GpuError::InvalidState("device.rs"));
-    }
-
-    let vertex_shader = shader_manager
-      .get(vertex_shader_key)
-      .ok_or(GpuError::InvalidShader)?;
-    if vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
-      return Err(GpuError::InvalidShader);
-    }
-    let fragment_shader = shader_manager
-      .get(fragment_shader_key)
-      .ok_or(GpuError::InvalidShader)?;
-    if fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
-      return Err(GpuError::InvalidShader);
-    }
-
-    // Create initial struct
-    let res = unsafe { resources::BillboardRenderResourceArchetype::new(device) }?;
-    *billboard_render_archetype = Some(res);
-
-    // then populate graphics info and pipeline key
-    let pipeline_graphics_info = GraphicsInfo::default()
-      .with_vertex_in(
-        VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-          .clone(),
-      )
-      .with_pre_rasterization(
-        PreRasterization::default()
-          .with_vertex_module(vertex_shader.module.get())
-          .clone(),
-      )
-      .with_fragment_shader(
-        FragmentShader::default()
-          .with_fragment_module(fragment_shader.module.get())
-          .add_viewport(vk::Viewport {
-            width: presentation_engine_state.extent().0 as _,
-            height: -(presentation_engine_state.extent().1 as f32), // Y axis points downwards in Vulkan, so flip it
-            x: 0.0,
-            y: presentation_engine_state.extent().1 as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-          })
-          .add_scissors(vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-              width: presentation_engine_state.extent().0,
-              height: presentation_engine_state.extent().1,
-            },
-          })
-          .clone(),
-      )
-      .with_fragment_out(
-        FragmentOut::default()
-          .add_color_attachment_format(presentation_engine_state.format())
-          .with_depth_attachment_format(depth_stencil_format)
-          .with_stencil_attachment_format(depth_stencil_format)
-          .clone(),
-      )
-      .with_pipeline_layout(
-        unsafe {
-          let ref_arch: Option<&_>;
-          ref_arch = billboard_render_archetype.as_ref();
-          ref_arch.unwrap_unchecked()
-        }
-        .pipeline_layout
-        .get(),
-      )
-      .with_pipeline_flags(
-        PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE,
-      ) // NO Culling, NO Depth Test (Yes, cull all means no culling)
-      .with_render_pass(
-        renderpasses
-          .get_or_create_render_pass(
-            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
-            0,
-            device,
-            allocator,
-            discard_pool,
-            0,
-          )?
-          .0
-          .get(),
-      )
-      .with_subpass(0)
-      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
-      .with_stencil_compare_op(StencilCompareOp::None)
-      .with_stencil_logic_op(StencilLogicOp::Replace)
-      .with_stencil_reference(255)
-      .with_stencil_compare_mask(0)
-      .with_stencil_write_mask(u32::MAX)
-      .clone();
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
-
-    billboard_render_archetype.as_mut().unwrap().graphics_info = Some(pipeline_graphics_info);
-
-    debug_assert!(billboard_render_archetype.is_some());
-
-    Ok(())
-  }
-
-  pub fn create_cursor_archetype(
-    &self,
-    device: &LogicalDevice,
-    shader_manager: &shader_manager::ShaderManager,
-    vertex_shader_key: ShaderKey,
-    fragment_shader_key: ShaderKey,
-    depth_stencil_format: vk::Format,
-    presentation_engine_state: &swapchain::PresentationState,
-    allocator: &vk_mem::Allocator,
-    discard_pool: &resources::DiscardPool,
-    renderpasses: &renderpasses::RenderPasses,
-    pipeline_pool: &mut pipelines::PipelinePool,
-  ) -> GpuResult<()> {
-    let mut cursor_render_archetype = self.cursor_render_archetype.write();
-    if cursor_render_archetype.is_some() {
-      return Err(GpuError::InvalidState("device.rs"));
-    }
-
-    let vertex_shader = shader_manager
-      .get(vertex_shader_key)
-      .ok_or(GpuError::InvalidShader)?;
-    if vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
-      return Err(GpuError::InvalidShader);
-    }
-    let fragment_shader = shader_manager
-      .get(fragment_shader_key)
-      .ok_or(GpuError::InvalidShader)?;
-    if fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
-      return Err(GpuError::InvalidShader);
-    }
-
-    // Create initial struct
-    let res = unsafe { resources::CursorRenderResourceArchetype::new(device) }?;
-    *cursor_render_archetype = Some(res);
-
-    // then populate graphics info and pipeline key
-    let pipeline_graphics_info = GraphicsInfo::default()
-      .with_vertex_in(
-        VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-          .clone(),
-      )
-      .with_pre_rasterization(
-        PreRasterization::default()
-          .with_vertex_module(vertex_shader.module.get())
-          .clone(),
-      )
-      .with_fragment_shader(
-        FragmentShader::default()
-          .with_fragment_module(fragment_shader.module.get())
-          .add_viewport(vk::Viewport {
-            width: presentation_engine_state.extent().0 as _,
-            height: -(presentation_engine_state.extent().1 as f32), // Y axis points downwards in Vulkan, so flip it
-            x: 0.0,
-            y: presentation_engine_state.extent().1 as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-          })
-          .add_scissors(vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-              width: presentation_engine_state.extent().0,
-              height: presentation_engine_state.extent().1,
-            },
-          })
-          .clone(),
-      )
-      .with_fragment_out(
-        FragmentOut::default()
-          .add_color_attachment_format(presentation_engine_state.format())
-          .with_depth_attachment_format(depth_stencil_format)
-          .with_stencil_attachment_format(depth_stencil_format)
-          .clone(),
-      )
-      .with_pipeline_layout(
-        unsafe {
-          let ref_arch: Option<&_>;
-          ref_arch = cursor_render_archetype.as_ref();
-          ref_arch.unwrap_unchecked()
-        }
-        .pipeline_layout
-        .get(),
-      )
-      .with_pipeline_flags(
-        PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE,
-      ) // NO Culling, NO Depth Test (Yes, cull all means no culling)
-      .with_render_pass(
-        renderpasses
-          .get_or_create_render_pass(
-            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
-            0,
-            device,
-            allocator,
-            discard_pool,
-            0,
-          )?
-          .0
-          .get(),
-      )
-      .with_subpass(0)
-      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
-      .with_stencil_compare_op(StencilCompareOp::None)
-      .with_stencil_logic_op(StencilLogicOp::Replace)
-      .with_stencil_reference(255)
-      .with_stencil_compare_mask(0)
-      .with_stencil_write_mask(u32::MAX)
-      .clone();
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
-
-    let pipeline_key = pipeline_graphics_info.pipeline_key();
-
-    let cursor_render_archetype_mut = cursor_render_archetype.as_mut().unwrap();
-    cursor_render_archetype_mut.graphics_info = Some(pipeline_graphics_info);
-    cursor_render_archetype_mut.pipeline_key = Some(pipeline_key);
-
-    debug_assert!(cursor_render_archetype.is_some());
-
-    Ok(())
-  }
 
   pub fn create_text_archetype(
     &self,
@@ -1587,6 +1155,95 @@ impl Archetypes {
       .with_pipeline_layout(archetype.pipeline_layout.get())
       .with_pipeline_flags(
         pipelines::PipelineFlags::NO_DEPTH_WRITE | pipelines::PipelineFlags::INVERT_FRONT_FACE,
+      )
+      .with_render_pass(
+        renderpasses
+          .get_or_create_render_pass(
+            renderpasses::RenderPassSpecification::single_pass(&pe, depth_stencil_format),
+            0,
+            &device,
+            allocator,
+            discard_pool,
+            timeline,
+          )?
+          .0
+          .get(),
+      )
+      .with_subpass(0)
+      .with_rasterization_polygon_mode(vk::PolygonMode::LINE)
+      .clone();
+
+    let pipeline_key = pipeline_graphics_info.pipeline_key();
+    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
+    archetype.pipeline_key = Some(pipeline_key);
+
+    Ok(())
+  }
+
+  pub fn create_gizmo_archetype(
+    &self,
+    device: &LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
+    vkey: ShaderKey,
+    fkey: ShaderKey,
+    depth_stencil_format: vk::Format,
+    pe: &swapchain::PresentationState,
+    allocator: &vk_mem::Allocator,
+    discard_pool: &resources::DiscardPool,
+    renderpasses: &renderpasses::RenderPasses,
+    pipeline_pool: &mut pipelines::PipelinePool,
+    timeline: u64,
+  ) -> GpuResult<()> {
+    let mut gizmo_render_archetype = self.gizmo_render_archetype.write();
+    if gizmo_render_archetype.is_some() {
+      return Err(GpuError::InvalidState("device.rs"));
+    }
+    *gizmo_render_archetype = Some(unsafe { resources::GizmoRenderResourceArchetype::new(device, allocator.get_raw()) }?);
+    let archetype = gizmo_render_archetype.as_mut().unwrap();
+
+    let vertex_shader = shader_manager.get(vkey).unwrap();
+    let fragment_shader = shader_manager.get(fkey).unwrap();
+
+    let pipeline_graphics_info = pipelines::GraphicsInfo::default()
+      .with_vertex_in(
+        pipelines::VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::LINE_LIST)
+          .clone(),
+      )
+      .with_pre_rasterization(
+        pipelines::PreRasterization::default()
+          .with_vertex_module(vertex_shader.module.get())
+          .clone(),
+      )
+      .with_fragment_shader(
+        pipelines::FragmentShader::default()
+          .with_fragment_module(fragment_shader.module.get())
+          .add_viewport(vk::Viewport {
+            width: pe.extent().0 as f32,
+            height: -(pe.extent().1 as f32),
+            x: 0.0,
+            y: pe.extent().1 as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+          })
+          .add_scissors(vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: vk::Extent2D {
+              width: pe.extent().0,
+              height: pe.extent().1,
+            },
+          })
+          .clone(),
+      )
+      .with_fragment_out(
+        pipelines::FragmentOut::default()
+          .add_color_attachment_format(pe.format())
+          .with_depth_attachment_format(depth_stencil_format)
+          .clone(),
+      )
+      .with_pipeline_layout(archetype.pipeline_layout.get())
+      .with_pipeline_flags(
+        pipelines::PipelineFlags::NO_DEPTH_TEST | pipelines::PipelineFlags::NO_DEPTH_WRITE | pipelines::PipelineFlags::INVERT_FRONT_FACE,
       )
       .with_render_pass(
         renderpasses

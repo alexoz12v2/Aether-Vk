@@ -137,8 +137,8 @@ impl UvGrid {
     }
   }
 
-  /// Queries the mapper for an O(1) interpolated 3D object space position.
-  pub fn query(&self, uv: [f32; 2], vertices: &[Vertex], indices: &[u32]) -> Option<[f32; 3]> {
+  /// Queries the mapper for an O(1) interpolated 3D object space position and normal.
+  pub fn query(&self, uv: [f32; 2], vertices: &[Vertex], indices: &[u32]) -> Option<([f32; 3], [f32; 3])> {
     if uv[0] < self.min_uv[0]
       || uv[0] > self.max_uv[0]
       || uv[1] < self.min_uv[1]
@@ -181,11 +181,18 @@ impl UvGrid {
       let v2 = &vertices[i2];
 
       if let Some([w0, w1, w2]) = barycentric_2d(uv, v0.uv, v1.uv, v2.uv) {
-        return Some([
-          w0 * v0.position[0] + w1 * v1.position[0] + w2 * v2.position[0],
-          w0 * v0.position[1] + w1 * v1.position[1] + w2 * v2.position[1],
-          w0 * v0.position[2] + w1 * v1.position[2] + w2 * v2.position[2],
-        ]);
+        return Some((
+          [
+            w0 * v0.position[0] + w1 * v1.position[0] + w2 * v2.position[0],
+            w0 * v0.position[1] + w1 * v1.position[1] + w2 * v2.position[1],
+            w0 * v0.position[2] + w1 * v1.position[2] + w2 * v2.position[2],
+          ],
+          [
+            w0 * v0.normal[0] + w1 * v1.normal[0] + w2 * v2.normal[0],
+            w0 * v0.normal[1] + w1 * v1.normal[1] + w2 * v2.normal[1],
+            w0 * v0.normal[2] + w1 * v1.normal[2] + w2 * v2.normal[2],
+          ],
+        ));
       }
     }
     None

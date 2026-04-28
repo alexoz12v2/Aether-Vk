@@ -23,8 +23,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   public ObservableCollection<Entity> RootEntities { get; } = new();
   private readonly Dictionary<ulong, Entity> _entityMap = new();
 
-  private NativeInterop.LoggerCallback _loggerCallbackDelegate;
-  private NativeInterop.BreadcrumbCallback _breadcrumbCallbackDelegate;
+  private static readonly NativeInterop.LoggerCallback _loggerCallbackDelegate = new NativeInterop.LoggerCallback(NativeLogCallback);
+  private static readonly NativeInterop.BreadcrumbCallback _breadcrumbCallbackDelegate = new NativeInterop.BreadcrumbCallback(NativeBreadcrumbCallback);
 
   public void Dispose()
   {
@@ -41,8 +41,6 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   public NativeRuntimeService()
 
   {
-    _loggerCallbackDelegate = new NativeInterop.LoggerCallback(NativeLogCallback);
-    _breadcrumbCallbackDelegate = new NativeInterop.BreadcrumbCallback(NativeBreadcrumbCallback);
     try
     {
       NativeInterop.avkSimulationContext_setLoggerCallback(_loggerCallbackDelegate);
@@ -59,7 +57,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       {
         if (_simulationContext != IntPtr.Zero)
         {
-          NativeInterop.avkSimulationContext_setEntityVisibility(_simulationContext, m.Entity.Id,
+          NativeInterop.avkSimulationContext_setEntityVisibility(_simulationContext, 1, m.Entity.Id,
             m.Entity.IsVisible);
         }
       }
@@ -71,7 +69,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       {
         if (_simulationContext != IntPtr.Zero)
         {
-          NativeInterop.avkSimulationContext_setEntityFollowing(_simulationContext, m.Entity.Id,
+          NativeInterop.avkSimulationContext_setEntityFollowing(_simulationContext, 1, m.Entity.Id,
             m.Entity.IsOutlined);
         }
       }
@@ -87,21 +85,21 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
             // Deselect all
             foreach (var entity in _entityMap.Values)
             {
-              NativeInterop.avkSimulationContext_setEntitySelected(_simulationContext, entity.Id,
+              NativeInterop.avkSimulationContext_setEntitySelected(_simulationContext, 1, entity.Id,
                 false);
             }
 
             if (m.SelectedEntity != null)
             {
               NativeInterop.avkSimulationContext_setEntitySelected(_simulationContext,
-                m.SelectedEntity.Id, true);
+                1, m.SelectedEntity.Id, true);
             }
           }
         }
       });
   }
 
-  private void NativeBreadcrumbCallback(uint status, IntPtr messagePtr)
+  private static void NativeBreadcrumbCallback(uint status, IntPtr messagePtr)
   {
     if (messagePtr != IntPtr.Zero)
     {
@@ -115,7 +113,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
   }
 
-  private void NativeLogCallback(IntPtr messagePtr)
+  private static void NativeLogCallback(IntPtr messagePtr)
   {
     if (messagePtr != IntPtr.Zero)
     {
@@ -130,11 +128,25 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
   }
 
+  private async Task PollTaskAsync(ulong taskId)
+  {
+    if (taskId == 0) return;
+    while (_simulationContext != IntPtr.Zero)
+    {
+      int status = NativeInterop.avkSimulationContext_getTaskStatus(_simulationContext, taskId);
+      if (status == 1) return; // Success
+      if (status == 2) throw new Exception("Native Task Failed");
+      if (status == -1) throw new Exception("Native Context Destroyed");
+
+      await Task.Delay(1);
+    }
+  }
+
   public void SetBvhNodeVisibility(ulong entityId, uint nodeIndex, bool isVisible)
   {
     if (_simulationContext != IntPtr.Zero)
     {
-      NativeInterop.avkSimulationContext_setBvhNodeVisibility(_simulationContext, entityId,
+      NativeInterop.avkSimulationContext_setBvhNodeVisibility(_simulationContext, 1, entityId,
         nodeIndex, isVisible);
     }
   }
@@ -248,7 +260,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       var files = System.IO.Directory.GetFiles(assetPath, "*.bsp");
       foreach (var file in files)
       {
-        LoadAlmanacFile(file);
+        _ = LoadAlmanacFileAsync(file);
       }
     }
   }
@@ -265,7 +277,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       {
         bool success = NativeInterop.avkSimulationContext_getTransformComponent(
           _simulationContext,
-          entity.Id,
+          1, entity.Id,
           out float px,
           out float py,
           out float pz,
@@ -302,7 +314,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         IntPtr projPtr = Marshal.AllocHGlobal(16 * sizeof(float));
         bool camSuccess = NativeInterop.avkSimulationContext_getCameraComponent(
           _simulationContext,
-          entity.Id,
+          1, entity.Id,
           projPtr
         );
         if (camSuccess)
@@ -328,7 +340,6 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     if (!IsInitialized || IsRunning)
       return;
 
-    NativeInterop.avkSimulationContext_startThreads(_simulationContext);
     IsRunning = true;
   }
 
@@ -337,7 +348,6 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     if (!IsRunning)
       return;
 
-    NativeInterop.avkSimulationContext_stopThreads(_simulationContext);
     IsRunning = false;
   }
 
@@ -347,7 +357,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     {
       if (_simulationContext != IntPtr.Zero)
       {
-        NativeInterop.avkSimulationContext_simulationTick(_simulationContext);
+        NativeInterop.avkSimulationContext_simulationTick(_simulationContext, 1, 0.0);
         SyncEntities();
       }
     }
@@ -357,21 +367,10 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   {
     if (_simulationContext == IntPtr.Zero) return;
 
-    ulong taskId = NativeInterop.avkSimulationContext_renderTick(_simulationContext);
+    ulong taskId = NativeInterop.avkSimulationContext_renderTick(_simulationContext, 0, 1, 800, 600);
     if (taskId == 0) return;
 
-    await Task.Run(async () =>
-    {
-      while (_simulationContext != IntPtr.Zero)
-      {
-        int status = NativeInterop.avkSimulationContext_getTaskStatus(_simulationContext, taskId);
-        if (status == 1) break; // Success
-        if (status == 2) throw new Exception("GPU Task Failed");
-        if (status == -1) break; // Context destroyed
-
-        await Task.Delay(1); // Poll every ~1ms for faster response without pegging CPU
-      }
-    });
+    await PollTaskAsync(taskId);
   }
 
   public void ShutdownSimulation()
@@ -390,36 +389,27 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     _entityMap.Clear();
   }
 
-  public void SetClearColor(float r, float g, float b, float a)
+  public async Task<bool> DownloadImageAsync(IntPtr bufferPtr, nuint bufferSize)
   {
-    if (_simulationContext != IntPtr.Zero)
-    {
-      NativeInterop.avkSimulationContext_setClearColor(_simulationContext, r, g, b, a);
-    }
-  }
+    if (_simulationContext == IntPtr.Zero) return false;
 
-  public bool DownloadImage(IntPtr bufferPtr, nuint bufferSize)
-  {
-    lock (_nativeLock)
-    {
-      if (_simulationContext != IntPtr.Zero)
-      {
-        return NativeInterop.avkSimulationContext_downloadImage(
-          _simulationContext,
-          bufferPtr,
-          bufferSize
-        );
-      }
-    }
+    ulong taskId = NativeInterop.avkSimulationContext_downloadImage(
+      _simulationContext,
+      bufferPtr,
+      bufferSize
+    );
 
-    return false;
+    if (taskId == 0) return false;
+
+    await PollTaskAsync(taskId);
+    return true; // If PollTaskAsync didn't throw, it's a success
   }
 
   public void SetActiveCamera(ulong cameraEntityId)
   {
     if (_simulationContext != IntPtr.Zero)
     {
-      NativeInterop.avkSimulationContext_setActiveCamera(_simulationContext, cameraEntityId);
+      NativeInterop.avkSimulationContext_setActiveCamera(_simulationContext, 1, cameraEntityId);
     }
   }
 
@@ -427,14 +417,12 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   {
     if (_simulationContext != IntPtr.Zero)
     {
-      NativeInterop.avkSimulationContext_processCommand(
+      _ = NativeInterop.avkSimulationContext_rotateCamera(
         _simulationContext,
-        new NativeInterop.FfiLogicCommand
-        {
-          cmd_type = 0,
-          float_val_1 = deltaX,
-          float_val_2 = deltaY,
-        }
+        1,
+        GetActiveCameraId(),
+        deltaX,
+        deltaY
       );
     }
   }
@@ -443,9 +431,11 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   {
     if (_simulationContext != IntPtr.Zero)
     {
-      NativeInterop.avkSimulationContext_processCommand(
+      _ = NativeInterop.avkSimulationContext_zoomCamera(
         _simulationContext,
-        new NativeInterop.FfiLogicCommand { cmd_type = 1, float_val_1 = amount }
+        1,
+        GetActiveCameraId(),
+        amount
       );
     }
   }
@@ -454,14 +444,11 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   {
     if (_simulationContext != IntPtr.Zero)
     {
-      NativeInterop.avkSimulationContext_processCommand(
+      _ = NativeInterop.avkSimulationContext_panCursor(
         _simulationContext,
-        new NativeInterop.FfiLogicCommand
-        {
-          cmd_type = 3,
-          float_val_1 = deltaX,
-          float_val_2 = deltaY,
-        }
+        1,
+        deltaX,
+        deltaY
       );
     }
   }
@@ -470,15 +457,12 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   {
     if (_simulationContext != IntPtr.Zero)
     {
-      NativeInterop.avkSimulationContext_processCommand(
+      _ = NativeInterop.avkSimulationContext_moveCursor(
         _simulationContext,
-        new NativeInterop.FfiLogicCommand
-        {
-          cmd_type = 8,
-          float_val_1 = x,
-          float_val_2 = y,
-          ulong_val = (ulong)BitConverter.ToInt32(BitConverter.GetBytes(z), 0),
-        }
+        1,
+        x,
+        y,
+        z
       );
     }
   }
@@ -487,44 +471,38 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   {
     if (_simulationContext != IntPtr.Zero)
     {
-      NativeInterop.avkSimulationContext_processCommand(
+      _ = NativeInterop.avkSimulationContext_panCamera(
         _simulationContext,
-        new NativeInterop.FfiLogicCommand
-        {
-          cmd_type = 7,
-          float_val_1 = deltaX,
-          float_val_2 = deltaY,
-        }
+        1,
+        GetActiveCameraId(),
+        deltaX,
+        deltaY
       );
     }
   }
 
-  public bool LoadAlmanacFile(string path)
+  public async Task<bool> LoadAlmanacFileAsync(string path)
   {
-    if (_simulationContext != IntPtr.Zero)
-    {
-      return NativeInterop.avkSimulationContext_loadAlmanacFile(_simulationContext, path);
-    }
-
-    return false;
+    if (_simulationContext == IntPtr.Zero) return false;
+    ulong taskId = NativeInterop.avkSimulationContext_loadAlmanacFile(_simulationContext, path);
+    await PollTaskAsync(taskId);
+    return NativeInterop.avkSimulationContext_getTaskResultBool(_simulationContext, taskId);
   }
 
-  public ulong ImportModel(string path)
+  public async Task<bool> LoadCometSpkAsync(string path, uint spkid)
   {
-    lock (_nativeLock)
-    {
-      if (_simulationContext != IntPtr.Zero)
-      {
-        return NativeInterop.avkSimulationContext_importModel(_simulationContext, path);
-      }
-    }
+    if (_simulationContext == IntPtr.Zero) return false;
+    ulong taskId = NativeInterop.avkSimulationContext_loadCometSpk(_simulationContext, path, spkid);
+    await PollTaskAsync(taskId);
+    return NativeInterop.avkSimulationContext_getTaskResultBool(_simulationContext, taskId);
+  }
 
-    var breadcrumb =
-      ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
-    breadcrumb?.ShowMessageAsync("Import Error",
-      "Please initialize the 3D Viewport before importing models.", TimeSpan.FromSeconds(5), 3);
-
-    return 0;
+  public async Task<ulong> ImportModelAsync(string path)
+  {
+    if (_simulationContext == IntPtr.Zero) return 0;
+    ulong taskId = NativeInterop.avkSimulationContext_importModel(_simulationContext, path);
+    await PollTaskAsync(taskId);
+    return NativeInterop.avkSimulationContext_getTaskResultU64(_simulationContext, taskId);
   }
 
   public void UnloadModel(ulong modelId)
@@ -545,29 +523,27 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
   }
 
-  public void SpawnModelInstance(ulong modelId, string name, float posX = 0f, float posY = 0f,
+  public async Task<ulong> SpawnModelInstanceAsync(ulong modelId, string name, float posX = 0f, float posY = 0f,
     float posZ = 0f)
   {
-    lock (_nativeLock)
+    if (_simulationContext == IntPtr.Zero) return 0;
+    ulong taskId = NativeInterop.avkSimulationContext_spawnModelInstance(_simulationContext, modelId, name);
+    await PollTaskAsync(taskId);
+    ulong instanceId = NativeInterop.avkSimulationContext_getTaskResultU64(_simulationContext, taskId);
+    
+    if (instanceId > 0)
     {
-      if (_simulationContext != IntPtr.Zero)
-      {
-        ulong instanceId =
-          NativeInterop.avkSimulationContext_spawnModelInstance(_simulationContext, modelId, name);
-        if (instanceId > 0)
-        {
-          // Add to UI mirroring
-          var entity = new Entity(instanceId, name);
-          _entityMap[instanceId] = entity;
-          WireEntityComponents(entity);
-          RootEntities.Add(entity);
+        // Add to UI mirroring
+        var entity = new Entity(instanceId, name);
+        _entityMap[instanceId] = entity;
+        WireEntityComponents(entity);
+        RootEntities.Add(entity);
 
-          // Fetch basic components that were created
-          entity.Components.Add(new TransformComponent { PosX = posX, PosY = posY, PosZ = posZ });
-          entity.Components.Add(new CometComponent()); // Assume it spawns as a comet for now
-        }
-      }
+        // Fetch basic components that were created
+        entity.Components.Add(new TransformComponent { PosX = posX, PosY = posY, PosZ = posZ });
+        entity.Components.Add(new CometComponent()); // Assume it spawns as a comet for now
     }
+    return instanceId;
   }
 
   public string[] GetLoadedAlmanacFiles()
@@ -655,36 +631,32 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return false;
   }
 
-  public Task<(bool hit, ulong entityId, float px, float py, float pz)> RaycastNdcAsync(
+  public async Task<(bool hit, ulong entityId, float px, float py, float pz)> RaycastNdcAsync(
     float ndcX,
     float ndcY
   )
   {
     if (_simulationContext == IntPtr.Zero)
-      return Task.FromResult((false, 0UL, 0f, 0f, 0f));
+      return (false, 0UL, 0f, 0f, 0f);
 
-    return Task.Run(() =>
+    ulong taskId = NativeInterop.avkSimulationContext_raycastNdc(_simulationContext, 1, ndcX, ndcY);
+    await PollTaskAsync(taskId);
+    
+    if (NativeInterop.avkSimulationContext_getTaskResultRaycast(_simulationContext, taskId, out var result))
     {
-      bool success = NativeInterop.avkSimulationContext_raycastNdc(
-        _simulationContext,
-        ndcX,
-        ndcY,
-        out ulong outHitEntity,
-        out float outPx,
-        out float outPy,
-        out float outPz
-      );
-      return (success, outHitEntity, outPx, outPy, outPz);
-    });
+        return (result.Hit, result.Entity, result.Px, result.Py, result.Pz);
+    }
+    return (false, 0UL, 0f, 0f, 0f);
   }
 
   public void ResetCamera()
   {
     if (_simulationContext != IntPtr.Zero)
     {
-      NativeInterop.avkSimulationContext_processCommand(
+      _ = NativeInterop.avkSimulationContext_resetCamera(
         _simulationContext,
-        new NativeInterop.FfiLogicCommand { cmd_type = 2 }
+        1,
+        GetActiveCameraId()
       );
     }
   }
@@ -693,9 +665,11 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   {
     if (_simulationContext != IntPtr.Zero)
     {
-      NativeInterop.avkSimulationContext_processCommand(
+      _ = NativeInterop.avkSimulationContext_snapToEntity(
         _simulationContext,
-        new NativeInterop.FfiLogicCommand { cmd_type = 4, ulong_val = entityId }
+        1,
+        GetActiveCameraId(), // Use camera as snap entity for now
+        entityId
       );
     }
   }
@@ -704,9 +678,12 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   {
     if (_simulationContext != IntPtr.Zero)
     {
-      NativeInterop.avkSimulationContext_processCommand(
+      _ = NativeInterop.avkSimulationContext_followEntity(
         _simulationContext,
-        new NativeInterop.FfiLogicCommand { cmd_type = 5, ulong_val = entityId }
+        1,
+        GetActiveCameraId(),
+        entityId,
+        true
       );
     }
   }
@@ -715,9 +692,10 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   {
     if (_simulationContext != IntPtr.Zero)
     {
-      NativeInterop.avkSimulationContext_processCommand(
+      _ = NativeInterop.avkSimulationContext_unfollowEntity(
         _simulationContext,
-        new NativeInterop.FfiLogicCommand { cmd_type = 6 }
+        1,
+        GetActiveCameraId()
       );
     }
   }
@@ -750,7 +728,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
     NativeInterop.avkSimulationContext_setMarkers(
       _simulationContext,
-      entityId,
+      1, entityId,
       (uint)count,
       px,
       py,
@@ -872,7 +850,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
               {
                 NativeInterop.avkSimulationContext_setTransformComponent(
                   _simulationContext,
-                  entity.Id,
+                  1, entity.Id,
                   tc.PosX,
                   tc.PosY,
                   tc.PosZ,
@@ -898,7 +876,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
               {
                 NativeInterop.avkSimulationContext_setCameraComponent(
                   _simulationContext,
-                  entity.Id,
+                  1, entity.Id,
                   cc.IsOrthographic,
                   cc.Fov,
                   cc.AspectRatio,
@@ -934,7 +912,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     comet.BvhTree.Clear();
 
     IntPtr ptr =
-      NativeInterop.avkSimulationContext_getBvhNodes(_simulationContext, entityId, out uint count);
+      NativeInterop.avkSimulationContext_getBvhNodes(_simulationContext, 1, entityId, out uint count);
     if (ptr == IntPtr.Zero || count == 0) return;
 
     var nodes = new NativeInterop.FfiBvhNode[count];
@@ -1008,7 +986,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       if (_simulationContext != IntPtr.Zero)
       {
         ulong id =
-          NativeInterop.avkSimulationContext_spawnProceduralSphere(_simulationContext, name,
+          NativeInterop.avkSimulationContext_spawnProceduralSphere(_simulationContext, 1, name,
             radius);
         if (id > 0)
         {
@@ -1042,7 +1020,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     ulong nativeId = 0;
     if (_simulationContext != IntPtr.Zero)
     {
-      nativeId = NativeInterop.avkSimulationContext_spawnEntity(_simulationContext, name);
+      nativeId = NativeInterop.avkSimulationContext_spawnEntity(_simulationContext, 1, name);
     }
     else
     {
@@ -1058,7 +1036,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     {
       if (_simulationContext != IntPtr.Zero)
       {
-        NativeInterop.avkSimulationContext_setParent(_simulationContext, nativeId, parent.Id);
+        NativeInterop.avkSimulationContext_setParent(_simulationContext, 1, nativeId, parent.Id);
       }
 
       parent.Children.Add(entity);
@@ -1080,7 +1058,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     {
       NativeInterop.avkSimulationContext_addMeasurementComponent(
         _simulationContext,
-        entity.Id,
+        1, entity.Id,
         p1[0], p1[1], p1[2],
         p2[0], p2[1], p2[2]
       );
@@ -1096,7 +1074,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     {
       NativeInterop.avkSimulationContext_addImageBillboardComponent(
         _simulationContext,
-        entity.Id,
+        1, entity.Id,
         isScreenSpace,
         width,
         height
@@ -1116,7 +1094,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     {
       NativeInterop.avkSimulationContext_addCameraComponent(
         _simulationContext,
-        camera.Id,
+        1, camera.Id,
         45.0f,
         1.77f,
         0.1f,
@@ -1141,7 +1119,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   {
     if (_simulationContext != IntPtr.Zero)
     {
-      NativeInterop.avkSimulationContext_setEntityName(_simulationContext, id, name);
+      NativeInterop.avkSimulationContext_setEntityName(_simulationContext, 1, id, name);
     }
   }
 
@@ -1149,7 +1127,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   {
     if (_simulationContext != IntPtr.Zero)
     {
-      NativeInterop.avkSimulationContext_removeEntity(_simulationContext, id);
+      NativeInterop.avkSimulationContext_removeEntity(_simulationContext, 1, id);
     }
 
     if (_entityMap.TryGetValue(id, out var entity))

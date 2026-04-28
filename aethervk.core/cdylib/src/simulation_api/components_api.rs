@@ -1,15 +1,14 @@
 use super::*;
 use crate::simulation_api::SimulationContext;
 use alloc::{vec::Vec, sync::Arc};
-use core::ffi::{c_char, CStr};
 use aethervk_core_rlib::scene::AddComponentError;
-use aethervk_oshal_rlib::os;
 use aethervk_oshal_rlib::os::fs;
 use crate::{expect_scene, expect_scene_and_entity};
+use crate::structs::FfiMarker;
 
 impl SimulationContext {
   pub fn add_transform_component(
-    &mut self,
+    &self,
     scene_id: u64,
     entity: u64,
     position: Vec3f32,
@@ -21,9 +20,7 @@ impl SimulationContext {
       entity,
       "component_api:add_transform_component"
     );
-    scene
-      .scene
-      .add_component(
+    scene.write().scene.add_component(
         entity_id,
         TransformComponent {
           position,
@@ -35,7 +32,7 @@ impl SimulationContext {
   }
 
   pub fn set_transform_component(
-    &mut self,
+    &self,
     scene_id: u64,
     entity: u64,
     position: Vec3f32,
@@ -47,9 +44,7 @@ impl SimulationContext {
       entity,
       "component_api:set_transform_component"
     );
-    scene
-      .scene
-      .with_component_mut(entity_id, |c: &mut TransformComponent| {
+    scene.write().scene.with_component_mut(entity_id, |c: &mut TransformComponent| {
         c.position = position;
         c.rotation = rotation;
         c.scale = scale;
@@ -60,7 +55,7 @@ impl SimulationContext {
   }
 
   pub fn get_transform_component(
-    &mut self,
+    &self,
     scene_id: u64,
     entity: u64,
     pos_x: *mut f32,
@@ -80,9 +75,7 @@ impl SimulationContext {
       "component_api:get_transform_component"
     );
     let transform =
-      scene
-        .scene
-        .global_transform(entity_id)
+      scene.read().scene.global_transform(entity_id)
         .ok_or(EngineError::InvalidOperation(
           "component_api:get_transform_component couldn't compute global transform",
         ))?;
@@ -123,7 +116,7 @@ impl SimulationContext {
   }
 
   pub fn set_bvh_node_visibility(
-    &mut self,
+    &self,
     scene_id: u64,
     entity: u64,
     node_index: u32,
@@ -135,9 +128,7 @@ impl SimulationContext {
       "component_api:set_bvh_node_visibility"
     );
     let mut bvh_len = 0;
-    scene
-      .scene
-      .with_component(entity_id, |mesh: &PhysicalMeshComponent| {
+    scene.read().scene.with_component(entity_id, |mesh: &PhysicalMeshComponent| {
         if let Some(bvh) = &mesh.mesh.bvh {
           bvh_len = bvh.nodes.len();
         }
@@ -148,7 +139,7 @@ impl SimulationContext {
 
     if (node_index as usize) < bvh_len {
       let mut dbg_opt = None;
-      let _ = scene.scene.with_component(
+      let _ = scene.read().scene.with_component(
         entity_id,
         |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
           dbg_opt = Some(dbg.node_render_states.clone());
@@ -167,7 +158,7 @@ impl SimulationContext {
       if (node_index as usize) < states.len() {
         states[node_index as usize] = is_visible;
 
-        let res = scene.scene.add_component(
+        let res = scene.write().scene.add_component(
           entity_id,
           aethervk_core_rlib::scene::BvhDebugComponent {
             node_render_states: states,
@@ -190,7 +181,7 @@ impl SimulationContext {
   }
 
   pub fn add_camera_component(
-    &mut self,
+    &self,
     scene_id: u64,
     entity: u64,
     params: CameraParams,
@@ -200,9 +191,7 @@ impl SimulationContext {
       entity,
       "component_api:add_camera_component"
     );
-    scene
-      .scene
-      .add_component(
+    scene.write().scene.add_component(
         entity_id,
         CameraComponent {
           projection: match params {
@@ -229,7 +218,7 @@ impl SimulationContext {
   }
 
   pub fn set_camera_component(
-    &mut self,
+    &self,
     scene_id: u64,
     entity: u64,
     params: CameraParams,
@@ -239,9 +228,7 @@ impl SimulationContext {
       entity,
       "component_api:set_camera_component"
     );
-    scene
-      .scene
-      .with_component_mut(entity_id, |c: &mut CameraComponent| {
+    scene.write().scene.with_component_mut(entity_id, |c: &mut CameraComponent| {
         match params {
           CameraParams::Perspective(PerspectiveCameraParams {
             fov,
@@ -271,7 +258,7 @@ impl SimulationContext {
   }
 
   pub fn get_camera_component(
-    &mut self,
+    &self,
     scene_id: u64,
     entity: u64,
     proj_out: &mut [f32; 16],
@@ -281,9 +268,7 @@ impl SimulationContext {
       entity,
       "component_api:get_camera_component"
     );
-    scene
-      .scene
-      .with_component(entity_id, |c: &CameraComponent| {
+    scene.read().scene.with_component(entity_id, |c: &CameraComponent| {
         *proj_out = c.projection.into();
       })
       .ok_or(EngineError::InvalidOperation(
@@ -292,7 +277,7 @@ impl SimulationContext {
   }
 
   pub fn add_physical_mesh_component(
-    &mut self,
+    &self,
     scene_id: u64,
     entity: u64,
     gltf_path: &fs::Path,
@@ -307,9 +292,7 @@ impl SimulationContext {
     let path_str = gltf_path.to_str_unified().unwrap().to_string();
     let mesh = simulation::comet::load_comet_from_gltf(&path_str, false)?;
     let mesh_arc = Arc::from(mesh);
-    scene
-      .scene
-      .add_component(
+    scene.write().scene.add_component(
         entity_id,
         PhysicalMeshComponent {
           asset_path: path_str,
@@ -321,32 +304,28 @@ impl SimulationContext {
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
-  pub fn add_sky_component(&mut self, scene_id: u64, entity: u64) -> EngineResult<()> {
+  pub fn add_sky_component(&self, scene_id: u64, entity: u64) -> EngineResult<()> {
     let (scene, entity_id) = expect_scene_and_entity!(
       self.get_scene(scene_id),
       entity,
       "component_api:add_sky_component"
     );
-    scene
-      .scene
-      .add_component(entity_id, SkyComponent {})
+    scene.write().scene.add_component(entity_id, SkyComponent {})
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
-  pub fn add_cursor_component(&mut self, scene_id: u64, entity: u64) -> EngineResult<()> {
+  pub fn add_cursor_component(&self, scene_id: u64, entity: u64) -> EngineResult<()> {
     let (scene, entity_id) = expect_scene_and_entity!(
       self.get_scene(scene_id),
       entity,
       "component_api:add_cursor_component"
     );
-    scene
-      .scene
-      .add_component(entity_id, CursorComponent {})
+    scene.write().scene.add_component(entity_id, CursorComponent {})
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
   pub fn add_sun_component(
-    &mut self,
+    &self,
     scene_id: u64,
     entity: u64,
     resolution: (u32, u32, u32),
@@ -356,26 +335,22 @@ impl SimulationContext {
       entity,
       "component_api:add_sun_component"
     );
-    scene
-      .scene
-      .add_component(entity_id, SunComponent { resolution })
+    scene.write().scene.add_component(entity_id, SunComponent { resolution })
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
-  pub fn add_grid_component(&mut self, scene_id: u64, entity: u64) -> EngineResult<()> {
+  pub fn add_grid_component(&self, scene_id: u64, entity: u64) -> EngineResult<()> {
     let (scene, entity_id) = expect_scene_and_entity!(
       self.get_scene(scene_id),
       entity,
       "component_api:add_grid_component"
     );
-    scene
-      .scene
-      .add_component(entity_id, GridComponent {})
+    scene.write().scene.add_component(entity_id, GridComponent {})
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
   pub fn add_measurement_component(
-    &mut self,
+    &self,
     scene_id: u64,
     entity: u64,
     pos1: Vec3f32,
@@ -386,11 +361,10 @@ impl SimulationContext {
       entity,
       "component_api:add_measurement_component"
     );
-    scene
-      .scene
-      .add_component(
+    scene.write().scene.add_component(
         entity_id,
         aethervk_core_rlib::scene::MeasurementComponent {
+          significant_digits: 2,
           pos1,
           pos2,
           points: 1.0,
@@ -400,7 +374,7 @@ impl SimulationContext {
   }
 
   pub fn add_image_billboard_component(
-    &mut self,
+    &self,
     scene_id: u64,
     entity: u64,
     is_screen_space: bool,
@@ -420,9 +394,7 @@ impl SimulationContext {
     } else {
       aethervk_core_rlib::scene::BillboardType::WorldSpace { width, height }
     };
-    scene
-      .scene
-      .add_component(
+    scene.write().scene.add_component(
         entity_id,
         aethervk_core_rlib::scene::ImageBillboardComponent {
           texture_id: 0,
@@ -432,20 +404,15 @@ impl SimulationContext {
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
-  pub fn set_markers(
-    &mut self,
-    scene_id: u64,
-    entity: u64,
-    markers: &[FfiMarker],
-  ) -> EngineResult<()> {
+  pub fn set_markers(&self, scene_id: u64, entity: u64, markers: &[FfiMarker]) -> EngineResult<()> {
     let (scene, entity_id) = expect_scene_and_entity!(
       self.get_scene(scene_id),
       entity,
       "component_api:set_markers"
     );
-    let markers: Vec<rlib::scene::Marker> = markers.iter().map(|m| (*m).into()).collect();
+    let markers: Vec<aethervk_core_rlib::scene::Marker> = markers.iter().map(|m| (*m).into()).collect();
     let mut found = false;
-    let _ = scene.scene.with_component_mut(
+    let _ = scene.write().scene.with_component_mut(
       entity_id,
       |m: &mut aethervk_core_rlib::scene::MarkersComponent| {
         // TODO can I avoid copying? Probably if I wrap into an mut Option
@@ -455,7 +422,7 @@ impl SimulationContext {
     );
 
     if !found {
-      scene
+      scene.write()
         .scene
         .add_component(
           entity_id,
@@ -468,26 +435,26 @@ impl SimulationContext {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct PerspectiveCameraParams {
+pub struct PerspectiveCameraParams {
   /// Should already be in radians!
-  fov: f32,
-  aspect_ratio: f32,
-  near_plane: f32,
-  far_plane: f32,
+  pub fov: f32,
+  pub aspect_ratio: f32,
+  pub near_plane: f32,
+  pub far_plane: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct OrthographicCameraParams {
-  left: f32,
-  right: f32,
-  bottom: f32,
-  top: f32,
-  near: f32,
-  far: f32,
+pub struct OrthographicCameraParams {
+  pub left: f32,
+  pub right: f32,
+  pub bottom: f32,
+  pub top: f32,
+  pub near: f32,
+  pub far: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum CameraParams {
+pub enum CameraParams {
   Perspective(PerspectiveCameraParams),
   Orthographic(OrthographicCameraParams),
 }

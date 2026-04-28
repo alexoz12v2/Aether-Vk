@@ -1,6 +1,7 @@
 use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
-use aethervk_oshal_rlib::math::matrix::MatrixVectorMul;
+use aethervk_oshal_rlib::math::matrix::{MatrixVectorMul, Matrix4};
 use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
 use crate::gpu;
 use crate::gpu::frame::CameraRenderData;
 use crate::gpu::RenderDevice;
@@ -45,8 +46,14 @@ pub struct RenderSceneExtraction {
   pub extracted_meshes: Vec<PhysicalMeshSceneData>,
   pub extracted_markers: Vec<(TransformComponent, MarkersComponent)>,
   pub extracted_billboards: Vec<(Mat4x4f32, u64, BillboardType)>,
-  pub extracted_measurements: Vec<(Vec3f32, Vec3f32)>,
+  pub extracted_measurements: Vec<(Vec3f32, Vec3f32, f32, u32)>,
   pub extracted_bvhs: Vec<(Vec<LinearBound<f32>>, usize)>,
+  pub extracted_particles: Vec<(
+    EntityId,
+    Vec<crate::scene::particles::ParticleData>,
+    crate::scene::particles::ParticleEmitterConfig,
+  )>,
+  pub extracted_gizmos: Vec<(EntityId, Mat4x4f32, f32)>,
 
   pub extracted_sky: Option<()>,
   pub extracted_sun: Option<(Mat4x4f32, EntityId)>,
@@ -71,6 +78,8 @@ impl RenderSceneExtraction {
       measurement_calls: Vec::with_capacity(self.extracted_measurements.len()),
       billboard_calls: Vec::with_capacity(self.extracted_billboards.len()),
       bvh_draw_calls: Vec::with_capacity(self.extracted_bvhs.len()),
+      gizmo_calls: Vec::with_capacity(self.extracted_gizmos.len()),
+      particle_calls: Vec::with_capacity(self.extracted_particles.len()),
       camera_data: self.camera_data,
       sun_call: None,
       sky_call: None,
@@ -101,6 +110,7 @@ impl RenderSceneExtraction {
         res,
         4,
         t.to_mat4(),
+        t.scale.x(),
       ));
     }
 
@@ -128,9 +138,9 @@ impl RenderSceneExtraction {
       let pipeline = device
         .get_or_create_measurement_resources(presentation_engine_handle)?
         .pipeline;
-      for (p1, p2) in self.extracted_measurements {
+      for (p1, p2, points, significant_digits) in self.extracted_measurements {
         render_scene.measurement_calls.push(
-          gpu::frame::MeasurementDrawCall::from_data_and_pipeline(p1, p2, 12.0, pipeline),
+          gpu::frame::MeasurementDrawCall::from_data_and_pipeline(p1, p2, points, significant_digits, pipeline),
         );
       }
     }
@@ -224,9 +234,16 @@ impl SceneConversionExt for crate::scene::Scene {
       Vec::with_capacity(START_VEC_CAPACITY);
     let mut extracted_billboards: Vec<(Mat4x4f32, u64, BillboardType)> =
       Vec::with_capacity(START_VEC_CAPACITY);
-    let mut extracted_measurements: Vec<(Vec3f32, Vec3f32)> =
+    let mut extracted_measurements: Vec<(Vec3f32, Vec3f32, f32, u32)> =
       Vec::with_capacity(START_VEC_CAPACITY);
     let mut extracted_bvhs: Vec<(Vec<LinearBound<f32>>, usize)> =
+      Vec::with_capacity(START_VEC_CAPACITY);
+    let mut extracted_particles: Vec<(
+      EntityId,
+      Vec<crate::scene::particles::ParticleData>,
+      crate::scene::particles::ParticleEmitterConfig,
+    )> = Vec::with_capacity(START_VEC_CAPACITY);
+    let mut extracted_gizmos: Vec<(EntityId, Mat4x4f32, f32)> =
       Vec::with_capacity(START_VEC_CAPACITY);
 
     let extracted_sky: Option<()>;
@@ -249,7 +266,7 @@ impl SceneConversionExt for crate::scene::Scene {
     // Cursor
     cursor_transform = self
       .query1_first_res_without::<_, HiddenComponent, _, _>(|_id, _c: &CursorComponent| {
-        self.global_transform(camera_entity)
+        self.global_transform(_id)
       })
       .map(|(t, id)| t);
 
@@ -310,7 +327,7 @@ impl SceneConversionExt for crate::scene::Scene {
         let mat: Mat4x4f32 = t.to_mat4();
         let p1 = Vec3f32(mat.mul_vector(m.pos1.to_point()));
         let p2 = Vec3f32(mat.mul_vector(m.pos2.to_point()));
-        extracted_measurements.push((p1, p2));
+        extracted_measurements.push((p1, p2, m.points, m.significant_digits));
       }
     });
 
@@ -345,6 +362,29 @@ impl SceneConversionExt for crate::scene::Scene {
       })
       .map(|(d, _)| d);
 
+    // Particles
+    self.query1_without::<_, HiddenComponent, _>(
+      |id, sys: &crate::scene::particles::ParticleSystemComponent| {
+        extracted_particles.push((id, sys.particles.clone(), sys.config.clone()));
+      },
+    );
+
+    // Gizmos
+    self.query1_without::<_, HiddenComponent, _>(|id, gizmo: &crate::scene::GizmoComponent| {
+      if gizmo.gizmo_visible {
+        if let Some(t) = self.global_transform(id) {
+          let t_mat = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::translation(t.position)
+            * aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_quat_custom_frame(
+              t.rotation,
+            );
+
+          let gizmo_model = t_mat;
+
+          extracted_gizmos.push((id, gizmo_model, gizmo.gizmo_scale));
+        }
+      }
+    });
+
     // ... More components here
 
     Ok(RenderSceneExtraction {
@@ -353,6 +393,8 @@ impl SceneConversionExt for crate::scene::Scene {
       extracted_billboards,
       extracted_measurements,
       extracted_bvhs,
+      extracted_particles,
+      extracted_gizmos,
       extracted_sky,
       extracted_sun,
       extracted_grid,

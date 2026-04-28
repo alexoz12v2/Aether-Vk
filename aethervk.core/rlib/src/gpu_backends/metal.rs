@@ -245,6 +245,17 @@ impl RenderDevice for MetalRenderDevice {
     Ok(())
   }
 
+  fn draw_indirect(
+    &self,
+    _cmd_buffer: CommandBufferHandle,
+    _indirect_buffer: GpuResourceHandle,
+    _offset: u64,
+    _draw_count: u32,
+    _stride: u32,
+  ) -> GpuResult<()> {
+    Ok(())
+  }
+
   fn update_sun(
     &self,
     _cmd_buffer: CommandBufferHandle,
@@ -337,6 +348,28 @@ impl RenderDevice for MetalRenderDevice {
     Ok(())
   }
 
+  fn get_or_create_gizmo_resources(
+    &self,
+    _handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult> {
+    Err(GpuError::UnsupportedFeature)
+  }
+
+  fn update_gizmo_instance(
+    &self,
+    _entity: EntityId,
+    _model: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+  ) -> GpuResult<u32> {
+    Err(GpuError::UnsupportedFeature)
+  }
+
+  fn prepare_gizmo_archetype_for_render_and_bind_pipeline(
+    &self,
+    _cmd_buffer: CommandBufferHandle,
+  ) -> GpuResult<()> {
+    Err(GpuError::UnsupportedFeature)
+  }
+
   fn get_or_create_measurement_resources(
     &self,
     _handle: PresentationEngineHandle,
@@ -348,6 +381,14 @@ impl RenderDevice for MetalRenderDevice {
     &self,
     _cmd_buffer: CommandBufferHandle,
     _push_constants: &MeasurementPushConstants,
+  ) -> GpuResult<()> {
+    todo!()
+  }
+
+  fn push_gizmo_constants(
+    &self,
+    _cmd_buffer: CommandBufferHandle,
+    _push_constants: &crate::gpu::GizmoPushConstants,
   ) -> GpuResult<()> {
     todo!()
   }

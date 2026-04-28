@@ -902,10 +902,27 @@ impl WindowedPresentationState {
       );
       (index, vk_result)
     };
-    debug_assert!(image_index as usize == self.next_image);
+    
+    if image_index as usize != self.next_image {
+      let next_fence = self.images[self.next_image].submission_fence.take();
+      let next_sem = self.images[self.next_image].acquire_semaphore.take();
+      let actual_fence = self.images[image_index as usize].submission_fence.take();
+      let actual_sem = self.images[image_index as usize].acquire_semaphore.take();
+
+      self.images[image_index as usize].submission_fence = next_fence;
+      self.images[image_index as usize].acquire_semaphore = next_sem;
+      self.images[self.next_image].submission_fence = actual_fence;
+      self.images[self.next_image].acquire_semaphore = actual_sem;
+
+      if let Some(fence) = self.images[self.next_image].submission_fence {
+        unsafe { let _ = device.wait_for_fences(&[fence.get()], false, u64::MAX); }
+      }
+    }
+
     match vk_result {
       vk::Result::SUCCESS | vk::Result::SUBOPTIMAL_KHR => {
-        unsafe { self.frames[self.current_frame].steal_from_swapchain_image(swapchain_image) };
+        let actual_image = &mut self.images[image_index as usize];
+        unsafe { self.frames[self.current_frame].steal_from_swapchain_image(actual_image) };
         let frame_idx_for_submission = self.current_frame;
         // this is the only arm in which status is changed
         self.next_image = (self.next_image + 1) % images_count;

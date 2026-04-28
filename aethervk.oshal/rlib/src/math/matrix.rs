@@ -428,39 +428,12 @@ where
     Q: Quaternion<Scalar = Self::Scalar, Vector = V>,
     V: Vector3<Scalar = Self::Scalar>,
   {
-    let s = q.scalar_part();
-    let v = q.vector_part();
-    let x = v.x();
-    let y = v.y();
-    let z = v.z();
-
-    let x2 = x + x;
-    let y2 = y + y;
-    let z2 = z + z;
-
-    let xx = x * x2;
-    let xy = x * y2;
-    let xz = x * z2;
-    let yy = y * y2;
-    let yz = y * z2;
-    let zz = z * z2;
-    let wx = s * x2;
-    let wy = s * y2;
-    let wz = s * z2;
-
     let one = <Self::Scalar as MulAddIdentity>::one();
     let zero = <Self::Scalar as MulAddIdentity>::zero();
-
-    Self::from_columns(
-      // Column 0: Right (+x)
-      Self::Vector::from_components(one - (yy + zz), xy + wz, xz - wy, zero),
-      // Column 1: Forward (-y)
-      Self::Vector::from_components(xy - wz, one - (xx + zz), yz + wx, zero),
-      // Column 2: Up (+z)
-      Self::Vector::from_components(xz + wy, yz - wx, one - (xx + yy), zero),
-      // Column 3: Translation/W
-      Self::Vector::from_components(zero, zero, zero, one),
-    )
+    let right = V::from_components(one, zero, zero);
+    let up = V::from_components(zero, zero, one);
+    let backward = V::from_components(zero, one, zero);
+    Self::from_quat_and_axes(q, right, up, backward)
   }
 
   fn from_scale<V>(v: V) -> Self

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+test_utils = { path = "../test_utils" }
 aethervk-core-rlib = { path = "../../aethervk.core/rlib", default-features = false }
 aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = [
   "console_log",

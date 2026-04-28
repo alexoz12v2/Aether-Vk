@@ -1,5 +1,6 @@
 using System;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -218,6 +219,72 @@ public class HorizonJplService
           SessionData.Add(rowData);
         }
       }
+    }
+  }
+
+  public async Task<string?> DownloadSpkAsync(string spkid, string startTime, string stopTime)
+  {
+    try
+    {
+      var cacheDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache", "spk");
+      if (!Directory.Exists(cacheDir))
+      {
+        Directory.CreateDirectory(cacheDir);
+      }
+
+      var fileName = $"{spkid}_{startTime}_{stopTime}.bsp".Replace(" ", "_").Replace(":", "-");
+      var filePath = Path.Combine(cacheDir, fileName);
+
+      if (File.Exists(filePath))
+      {
+        _console.Log($"[HorizonJpl] SPK for {spkid} already cached at {filePath}");
+        return filePath;
+      }
+
+      var url = "https://ssd.jpl.nasa.gov/api/horizons.api";
+      var query = $"?format=json&COMMAND='{Uri.EscapeDataString(spkid)}'&OBJ_DATA=NO&MAKE_EPHEM=YES&EPHEM_TYPE=SPK&START_TIME='{Uri.EscapeDataString(startTime)}'&STOP_TIME='{Uri.EscapeDataString(stopTime)}'";
+
+      _console.Log($"[HorizonJpl] Requesting SPK: {url}{query}");
+
+      var response = await _httpClient.GetAsync(url + query);
+      if (!response.IsSuccessStatusCode)
+      {
+        _console.Log($"[HorizonJpl] SPK Download failed: {response.StatusCode}");
+        return null;
+      }
+
+      var json = await response.Content.ReadAsStringAsync();
+      using var doc = System.Text.Json.JsonDocument.Parse(json);
+      var root = doc.RootElement;
+
+      if (root.TryGetProperty("spk", out var spkElement))
+      {
+        var base64Spk = spkElement.GetString();
+        if (string.IsNullOrEmpty(base64Spk))
+        {
+          _console.Log("[HorizonJpl] SPK field is empty in response.");
+          return null;
+        }
+
+        var binarySpk = Convert.FromBase64String(base64Spk);
+        using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true))
+        {
+            await fs.WriteAsync(binarySpk, 0, binarySpk.Length);
+        }
+        _console.Log($"[HorizonJpl] Successfully saved SPK to {filePath} ({binarySpk.Length / 1024.0:F2} KB)");
+        return filePath;
+      }
+      else
+      {
+        var error = root.TryGetProperty("error", out var err) ? err.GetString() : "Unknown error";
+        _console.Log($"[HorizonJpl] Failed to generate SPK. API Error: {error}");
+        return null;
+      }
+    }
+    catch (Exception ex)
+    {
+      _console.Log($"[HorizonJpl] SPK Download Exception: {ex.Message}");
+      return null;
     }
   }
 }

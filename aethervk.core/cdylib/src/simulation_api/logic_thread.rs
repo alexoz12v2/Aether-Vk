@@ -1,26 +1,31 @@
 use spin::RwLockReadGuard;
-use aethervk_oshal_rlib as oshal;
-use aethervk_core_rlib as rlib;
-use thingbuf::mpsc;
-use aethervk_core_rlib::scene::{
-  CameraComponent, CursorComponent, EntityId, FollowingComponent, TransformComponent,
+use aethervk_core_rlib::{
+  self as rlib,
+  scene::{CameraComponent, CursorComponent, EntityId, FollowingComponent, TransformComponent},
+  types::{EngineError, EngineResult},
 };
-use aethervk_oshal_rlib::math::floating::FloatOps;
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::vec4::Quat;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
-use rlib::types::{EngineError, EngineResult};
-use oshal::os::{NativeError, ThreadingError};
-use oshal::os::thread;
-use oshal::os::thread::Thread;
-use crate::SimulationContext;
-use crate::structs::{LogicCommand, LogicThreadContext, SceneContext};
+use thingbuf::mpsc;
+use aethervk_oshal_rlib::{
+  os::{NativeError, ThreadingError},
+  self as oshal,
+  math::floating::FloatOps,
+  math::quaternion::Quaternion,
+  math::vector::vec3::Vec3f32,
+  math::vector::vec4::Quat,
+  math::vector::{Vector, Vector3, Vector4},
+  os::pool::WorkloadStatus,
+  os::thread,
+  os::thread::Thread,
+};
+use crate::{
+  SimulationContext,
+  structs::{
+    LogicCommand, LogicThreadContext, SceneContext, LogicWorkload, SimulationTaskResult,
+    FfiRaycastResult,
+  },
+};
+use alloc::{boxed::Box, string::ToString};
 
-// TODO: add update step which puts a tasklet upon request from FFI caller thread. it specified
-// TODO  a scene to update (probably mesh viewer won't need it as commands are naturally processed)
-// TODO each command in process_command into its own function called process_command_{snake_case_command_name}
-// TODO process_command should take by reference the context and do something with it (eg feedback, pool usage for tasks, time info)
 pub fn start_logic_thread(
   logic_rx: mpsc::Receiver<LogicCommand>,
   context: LogicThreadContext,
@@ -32,9 +37,12 @@ pub fn start_logic_thread(
           if let LogicCommand::Shutdown = cmd {
             break;
           }
-          if let Err(e) = process_command(cmd) {
-            oshal::log!("[Logic thread] failed to process command: {:?}", e);
-          }
+
+          let workload = Box::new(LogicWorkload {
+            cmd,
+            ctx: context.clone(),
+          });
+          let _ = context.thread_pool.scatter(alloc::vec![workload]);
         }
         Err(e) => {
           if let mpsc::errors::TryRecvError::Closed = e {
@@ -50,18 +58,57 @@ pub fn start_logic_thread(
   .map_err(|err| <NativeError as Into<EngineError>>::into(err))
 }
 
-fn process_command(command: LogicCommand) -> EngineResult<()> {
+impl oshal::os::pool::Workload for LogicWorkload {
+  fn execute(&mut self) -> WorkloadStatus {
+    let task_id = match &self.cmd {
+      LogicCommand::ImportModel { task_id, .. } => Some(*task_id),
+      LogicCommand::LoadAlmanac { task_id, .. } => Some(*task_id),
+      LogicCommand::LoadCometSpk { task_id, .. } => Some(*task_id),
+      LogicCommand::SpawnModelInstance { task_id, .. } => Some(*task_id),
+      LogicCommand::RaycastNdc { task_id, .. } => Some(*task_id),
+      LogicCommand::Raycast { task_id, .. } => Some(*task_id),
+      _ => None,
+    };
+
+    let res = process_command_internal(self.cmd.clone(), &self.ctx);
+
+    if let Some(tid) = task_id {
+      let mut manager = self.ctx.task_manager.write();
+      match res {
+        Ok(result) => manager.success_task(tid, result),
+        Err(e) => manager.fail_task(tid, e.to_string()),
+      }
+    }
+
+    WorkloadStatus::Complete
+  }
+}
+
+// TODO: All logic processing should be async. therefore, each command which is not Shutdown should modify the logic thread context (new members) to keep track of ongoing commands, so that when their state
+// TODO  is polled, we can answer. This means that,
+// TODO - when a scene is registered in the logic thread (new command), a *timed task* is dispatched every *requested from command* milliseconds (eg 16ms)
+// TODO - this task is basically an iteration of a game loop, with N fixed updates (depends on elapsed simulation time, see time module on oshal (Unity inspired)) and then update function
+// TODO - all camera commands should be registered under the logic scene structure, so that the update function can update the camera, cursor and everything else
+// TODO - after this task is done, its task status should be set accordingly as failure if some error was encountered in the update or ok and the task is marked as finished, such that when queried everything is fine
+// TODO - after the task is done, the C# FFI caller thread (eg view model) can start its round of queries
+// TODO    - query the number and ids of non hidden components in the scene (including camera, cursor, ...)
+// TODO    - should query only the component properties needed by the current properties editor, therefore must have support
+// TODO    - query transform, query visibility (and toggle visibility), query BVH nodes
+// TODO    - these "light" edits can be synchronous, ie processed directly in the logic thread and in the end a feedback is sent to FFI caller
+// TODO - I/O Heavy tasks should be dispatched to thread pool and feedback immediately to return task id. Then, task should be polled
+fn process_command_internal(
+  command: LogicCommand,
+  ctx: &LogicThreadContext,
+) -> EngineResult<SimulationTaskResult> {
   match command {
-    LogicCommand::Shutdown => Ok(()),
-    LogicCommand::RotateCamera(super::structs::RotateCamera {
+    LogicCommand::Shutdown => Ok(SimulationTaskResult::None),
+    LogicCommand::RotateCamera(crate::structs::RotateCamera {
       camera_entity,
       scene,
       delta_x,
       delta_y,
     }) => {
       let scene_read = scene.read();
-      // TODO figure out how to get global rotation and how to get then local one?
-      // TODO process_command
       let (cam_pos, cam_rot) = scene_read
         .scene
         .with_component::<TransformComponent, _, _>(
@@ -92,23 +139,24 @@ fn process_command(command: LogicCommand) -> EngineResult<()> {
       let combined = pitch_quat * yaw_quat * cam_rot;
       let len_sq = combined.0.dot(combined.0);
       if len_sq < 1e-6 {
-        return Ok(());
+        return Ok(SimulationTaskResult::None);
       }
       let new_rot = combined.normalize();
 
       let rot_delta = new_rot * cam_rot.conjugate();
       let new_offset = rot_delta.rotate_vector(offset);
-      // unwrap: since we queried initial TransformComponent, we can modify it
       scene_read
         .scene
         .with_component_mut(camera_entity, |c: &mut TransformComponent| {
           c.position = cursor_pos + new_offset;
           c.rotation = new_rot;
         })
-        .unwrap();
-      Ok(())
+        .ok_or(EngineError::InvalidOperation(
+          "logic_thread:RotateCamera | failed to update transform",
+        ))?;
+      Ok(SimulationTaskResult::None)
     }
-    LogicCommand::ZoomCamera(super::structs::ZoomCamera {
+    LogicCommand::ZoomCamera(crate::structs::ZoomCamera {
       camera_entity,
       scene,
       amount,
@@ -123,7 +171,7 @@ fn process_command(command: LogicCommand) -> EngineResult<()> {
           "logic_thread:ZoomCamera | scene doesn't have CameraComponent",
         ))?;
       if is_ortho {
-        return Ok(());
+        return Ok(SimulationTaskResult::None);
       }
       let (cursor_pos, _) = scene_read
         .scene
@@ -145,15 +193,15 @@ fn process_command(command: LogicCommand) -> EngineResult<()> {
         })
         .ok_or(EngineError::InvalidOperation(
           "logic_thread:ZoomCamera | scene doesn't have TransformComponent",
-        ))
+        ))?;
+      Ok(SimulationTaskResult::None)
     }
-    LogicCommand::ResetCamera(super::structs::ResetCamera {
+    LogicCommand::ResetCamera(crate::structs::ResetCamera {
       camera_entity,
       scene,
     }) => {
-      // Origin in viewport is Solar System Barycentre
       let ssb = Vec3f32::from_components(0.0, 0.0, 0.0);
-      let offset = SimulationContext::CAMERA_START_POS;
+      let offset = SimulationContext::camera_start_pos();
       let yaw = <f32 as FloatOps>::PI;
       let pitch = 0.0;
       let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), yaw);
@@ -168,9 +216,10 @@ fn process_command(command: LogicCommand) -> EngineResult<()> {
         })
         .ok_or(EngineError::InvalidOperation(
           "logic_thread:ResetCamera | camera entity doesn't have TransformComponent",
-        ))
+        ))?;
+      Ok(SimulationTaskResult::None)
     }
-    LogicCommand::PanCamera(super::structs::PanCamera {
+    LogicCommand::PanCamera(crate::structs::PanCamera {
       camera_entity,
       scene,
       delta_x,
@@ -200,17 +249,16 @@ fn process_command(command: LogicCommand) -> EngineResult<()> {
         })
         .ok_or(EngineError::InvalidOperation(
           "logic_thread:PanCamera | camera doesn't have TranformComponent",
-        ))
+        ))?;
+      Ok(SimulationTaskResult::None)
     }
-    // TODO remove this, what does pan cursor even mean?
-    LogicCommand::PanCursor(_) => Ok(()),
-    LogicCommand::MoveCursor(super::structs::MoveCursor {
+    LogicCommand::PanCursor(_) => Ok(SimulationTaskResult::None),
+    LogicCommand::MoveCursor(crate::structs::MoveCursor {
       scene,
       delta_x,
       delta_y,
       delta_z,
     }) => {
-      // TODO adjust
       let speed = 0.001;
       let scene_read = scene.read();
       scene_read
@@ -223,17 +271,19 @@ fn process_command(command: LogicCommand) -> EngineResult<()> {
         .map(|_| ())
         .ok_or(EngineError::InvalidOperation(
           "logic_thread:MoveCursor | scene doesn't have cursor",
-        ))
+        ))?;
+      Ok(SimulationTaskResult::None)
     }
-    LogicCommand::SnapToEntity(super::structs::SnapToEntity {
+    LogicCommand::SnapToEntity(crate::structs::SnapToEntity {
       snap_entity,
       target_entity,
       scene,
     }) => {
       let scene_read = scene.read();
-      try_snap_entity(snap_entity, target_entity, &scene_read)
+      try_snap_entity(snap_entity, target_entity, &scene_read)?;
+      Ok(SimulationTaskResult::None)
     }
-    LogicCommand::FollowEntity(super::structs::FollowEntity {
+    LogicCommand::FollowEntity(crate::structs::FollowEntity {
       snap_entity,
       entity_id,
       scene,
@@ -243,35 +293,133 @@ fn process_command(command: LogicCommand) -> EngineResult<()> {
 
       if unfollow_other {
         scene_read
-            .scene
-            .remove_component::<FollowingComponent>(entity_id)
-            .map_err(|e| EngineError::InvalidOperation(e))?;
+          .scene
+          .remove_component::<FollowingComponent>(entity_id)
+          .map_err(|e| EngineError::InvalidOperation(e))?;
       }
 
       try_snap_entity(snap_entity, entity_id, &scene_read)?;
       scene_read
         .scene
         .add_component(entity_id, FollowingComponent {})
-        .map_err(|e| EngineError::from(e))
+        .map_err(|e| EngineError::from(e))?;
+      Ok(SimulationTaskResult::None)
     }
-    LogicCommand::UnfollowEntity(super::structs::UnfollowEntity { entity_id, scene }) => {
+    LogicCommand::UnfollowEntity(crate::structs::UnfollowEntity { entity_id, scene }) => {
       let scene_read = scene.read();
       scene_read
         .scene
         .remove_component::<FollowingComponent>(entity_id)
-        .map_err(|e| EngineError::InvalidOperation(e))
+        .map_err(|e| EngineError::InvalidOperation(e))?;
+      Ok(SimulationTaskResult::None)
     }
     LogicCommand::FeedbackGetTimeScale => {
-      // TODO async query. Integrate pool and feedback
-      todo!()
+      let scale = ctx.logic_state.read().current_scale;
+      Ok(SimulationTaskResult::U64(match scale {
+        crate::structs::TimeScale::Stopped => 0,
+        crate::structs::TimeScale::OneDay => 1,
+        crate::structs::TimeScale::OneWeek => 2,
+        crate::structs::TimeScale::OneMonth => 3,
+      }))
     }
     LogicCommand::FeedbackGetDateTimeUTC => {
-      // TODO async query. Integrate pool and feedback
-      todo!()
+      let utc_str = ctx.logic_state.read().current_epoch.to_string();
+      // Return success with None, as this is currently handled by get_simulation_time_utc
+      // TODO: decide if we want to return strings as results
+      Ok(SimulationTaskResult::None)
     }
-    LogicCommand::FeedbackGetDateTimeLimitsUTC => {
-      // TODO async query. Integrate pool and feedback
-      todo!()
+    LogicCommand::FeedbackGetDateTimeLimitsUTC => Ok(SimulationTaskResult::None),
+
+    LogicCommand::ImportModel { task_id: _, path } => {
+      let mut scenes = ctx.scenes.write();
+      let model_id = scenes.import_model_internal(&path)?;
+      Ok(SimulationTaskResult::U64(model_id))
+    }
+    LogicCommand::LoadAlmanac { task_id: _, path } => {
+      let success = ctx.load_almanac_file_internal(&path)?;
+      Ok(SimulationTaskResult::Bool(success))
+    }
+    LogicCommand::LoadCometSpk {
+      task_id: _,
+      path,
+      spkid,
+    } => {
+      let success = ctx.load_comet_spk_internal(&path, spkid)?;
+      Ok(SimulationTaskResult::Bool(success))
+    }
+    LogicCommand::SpawnModelInstance {
+      task_id: _,
+      model_id,
+      name,
+    } => {
+      let mut scenes = ctx.scenes.write();
+      let instance_id = scenes.spawn_model_instance_internal(model_id, &name)?;
+      Ok(SimulationTaskResult::U64(instance_id))
+    }
+    LogicCommand::RaycastNdc {
+      task_id: _,
+      scene_id,
+      ndc_x,
+      ndc_y,
+    } => {
+      let res = ctx.raycast_ndc_internal(scene_id, ndc_x, ndc_y)?;
+      Ok(SimulationTaskResult::Raycast(res))
+    }
+    LogicCommand::Raycast {
+      task_id: _,
+      scene_id,
+      ro,
+      rd,
+    } => {
+      let res = ctx.raycast_internal(scene_id, ro, rd)?;
+      Ok(SimulationTaskResult::Raycast(res))
+    }
+    LogicCommand::SimulationTick {
+      task_id: _,
+      scene_id,
+      delta_time,
+    } => {
+      // 1. Update time
+      let (current_epoch, step_days) = {
+        let mut time_info = ctx.time_info.write();
+        time_info.ut_update();
+        let mut logic_state = ctx.logic_state.write();
+        let step_days = logic_state.current_scale.to_days_per_st_second() * delta_time;
+        logic_state.current_epoch = logic_state.current_epoch + anise::time::Unit::Day * step_days;
+        (logic_state.current_epoch, step_days)
+      };
+
+      // 2. Update Almanac bodies
+      {
+        let scenes = ctx.scenes.read();
+        let scene_ctx = scenes
+          .get(&scene_id)
+          .ok_or(EngineError::InvalidOperation("scene not found"))?
+          .read();
+        let logic_state = ctx.logic_state.read();
+        
+        scene_ctx.scene.query2_mut::<TransformComponent, rlib::scene::AlmanacPlanet, _>(
+          |_, transform, planet| {
+            planet.step(transform, current_epoch, step_days, &logic_state.almanac_data.almanac);
+          }
+        );
+      }
+
+      // 3. Physics rebuild
+      let scenes = ctx.scenes.read();
+      let scene_ctx = scenes
+        .get(&scene_id)
+        .ok_or(EngineError::InvalidOperation("scene not found"))?
+        .read();
+
+      if let Some(ps_lock) = &scene_ctx.physics_scene {
+        let mut ps = ps_lock.write();
+        *ps = rlib::physics::physics_scene::PhysicsScene::build_from_scene(&scene_ctx.scene);
+      }
+
+      // TODO: implement controllers update (camera, cursor, etc.)
+      
+      Ok(SimulationTaskResult::None)
     }
   }
 }
@@ -289,7 +437,6 @@ fn try_snap_entity(
         .ok_or(EngineError::InvalidOperation(
           "logic_thread:SnapToEntity | snap target doesn't have TransformComponent",
         ))?;
-    // TODO tweak
     let offset = Vec3f32::from_components(0.0, -10.0, 0.0);
     t.position -= offset;
     (t.position, t.rotation)

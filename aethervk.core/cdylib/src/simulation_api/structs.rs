@@ -1,27 +1,35 @@
-use aethervk_core_rlib as rlib;
-use aethervk_oshal_rlib as oshal;
-use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
-use alloc::string::String;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
-use core::cell::RefCell;
-use core::sync::atomic::AtomicBool;
-use spin::rwlock::RwLock;
+use alloc::{
+  string::{String, ToString},
+  collections::BTreeMap,
+  sync::Arc,
+  vec::Vec,
+};
+use core::{cell::RefCell, sync::atomic::AtomicBool};
+use spin::{rwlock::RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thingbuf::mpsc;
-use aethervk_core_rlib::gpu::DeviceAdditionalParams;
-use aethervk_core_rlib::types::{GpuError, RuntimeParams};
-use rlib::{gpu, physics, simulation};
-use rlib::gpu::PresentationEngineHandle;
-use rlib::scene::{CameraComponent, EntityId, Scene, TransformComponent};
-use rlib::simulation::almanac::AlmanacPackedData;
-use rlib::types::{EngineError, EngineResult};
-use oshal::math::matrix::mat4::Mat4x4f32;
-use oshal::os;
-use oshal::os::thread::Thread;
-use crate::logic_thread::start_logic_thread;
-use crate::render_thread::start_render_thread;
-use crate::{expect_entity, SimulationContext};
+use aethervk_core_rlib::{
+  physics::physics_scene::math::PhysicsSceneMathExt,
+  gpu::DeviceAdditionalParams,
+  self as rlib,
+  types::{GpuError, RuntimeParams},
+  gpu, physics, simulation,
+  gpu::PresentationEngineHandle,
+  scene::{CameraComponent, EntityId, Scene, TransformComponent},
+  simulation::almanac::AlmanacPackedData,
+  types::{EngineError, EngineResult},
+};
+use aethervk_oshal_rlib::{
+  math::vector::{Vector, Vector3, Vector4},
+  math::vector::vec4::{Quat, Vec4f32},
+  math::vector::vec3::Vec3f32,
+  math::quaternion::Quaternion,
+  math::matrix::{Matrix4, MatrixVectorMul, SquareMatrix},
+  self as oshal,
+  math::matrix::mat4::Mat4x4f32,
+  os,
+  os::thread::Thread,
+};
+use crate::{logic_thread::start_logic_thread, render_thread::start_render_thread, expect_entity};
 
 // --------------------- FFI Types ---------------------------
 
@@ -30,6 +38,77 @@ pub enum FfiRenderTaskStatus {
   Completed = 0,
   Pending = 1,
   Error = 2,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct FfiRaycastResult {
+  pub hit: bool,
+  pub entity: u64,
+  pub px: f32,
+  pub py: f32,
+  pub pz: f32,
+}
+
+pub enum SimulationTaskResult {
+  None,
+  U64(u64),
+  Bool(bool),
+  Raycast(FfiRaycastResult),
+}
+
+pub enum SimulationTaskStatus {
+  Pending,
+  Completed(SimulationTaskResult),
+  Error(String),
+}
+
+pub struct SimulationTaskManager {
+  next_task_id: u64,
+  tasks: BTreeMap<u64, SimulationTaskStatus>,
+}
+
+impl SimulationTaskManager {
+  pub fn new() -> Self {
+    Self {
+      next_task_id: 1,
+      tasks: BTreeMap::new(),
+    }
+  }
+
+  pub fn create_task(&mut self) -> core::num::NonZero<u64> {
+    let id = self.next_task_id | (1u64 << 63);
+    self.next_task_id += 1;
+    self.tasks.insert(id, SimulationTaskStatus::Pending);
+    unsafe { core::num::NonZero::new_unchecked(id) }
+  }
+
+  pub fn success_task(&mut self, id: u64, result: SimulationTaskResult) {
+    self
+      .tasks
+      .insert(id, SimulationTaskStatus::Completed(result));
+  }
+
+  pub fn fail_task(&mut self, id: u64, error: String) {
+    self.tasks.insert(id, SimulationTaskStatus::Error(error));
+  }
+
+  pub fn get_status(&self, id: u64) -> i32 {
+    match self.tasks.get(&id) {
+      Some(SimulationTaskStatus::Pending) => 0,
+      Some(SimulationTaskStatus::Completed(_)) => 1,
+      Some(SimulationTaskStatus::Error(_)) => 2,
+      None => -1,
+    }
+  }
+
+  pub fn take_result(&mut self, id: u64) -> Option<SimulationTaskResult> {
+    if let Some(SimulationTaskStatus::Completed(res)) = self.tasks.remove(&id) {
+      Some(res)
+    } else {
+      None
+    }
+  }
 }
 
 // TODO sync with C#
@@ -190,7 +269,7 @@ pub struct FfiMarker {
   pub size: f32,
 }
 
-impl From<FfiMarker> for rlib::scene::Marker {
+impl From<FfiMarker> for aethervk_core_rlib::scene::Marker {
   fn from(value: FfiMarker) -> Self {
     Self {
       local_pos: value.position,
@@ -304,7 +383,7 @@ pub struct SimulationSceneData {
   /// Scene state: next available id. Steadily incremented
   next_scene_id: u64,
   /// mesh cache shared among all scenes
-  mesh_cache: Arc<rlib::scene::AssetCache<simulation::comet::Comet>>,
+  mesh_cache: Arc<aethervk_core_rlib::scene::AssetCache<simulation::comet::Comet>>,
   /// Loaded GLTF Models. Necessary with the asset cache because when a model is evicted,
   /// the string used as key in the cache is eliminated
   pub model_registry: BTreeMap<u64, String>,
@@ -321,10 +400,14 @@ impl SimulationSceneData {
     Self {
       scenes: BTreeMap::new(),
       next_scene_id: 1,
-      mesh_cache: Arc::new(rlib::scene::AssetCache::new()),
+      mesh_cache: Arc::new(aethervk_core_rlib::scene::AssetCache::new()),
       model_registry: Default::default(),
       next_model_id: 1,
     }
+  }
+
+  pub fn get_scene(&self, scene_id: u64) -> Option<Arc<RwLock<SceneContext>>> {
+    self.scenes.get(&scene_id).cloned()
   }
 
   /// Insert a new scene in `scenes` and properly increment next free id counter.
@@ -334,9 +417,7 @@ impl SimulationSceneData {
     debug_assert!(Arc::strong_count(&scene_ctx) == 1 && Arc::weak_count(&scene_ctx) == 0);
     let new_id = self.next_scene_id;
     debug_assert!(new_id != 0);
-    // Why unwrap: If you insert a scene only through this method, we will always use
-    // fresh new values starting from 1
-    self.scenes.insert(new_id, scene_ctx).unwrap();
+    let _ = self.scenes.insert(new_id, scene_ctx);
     self.next_scene_id += 1;
     new_id
   }
@@ -373,16 +454,237 @@ pub struct SimulationThreads {
   pool: Arc<os::pool::ThreadPool>,
 }
 
+pub struct LogicWorkload {
+  pub cmd: LogicCommand,
+  pub ctx: LogicThreadContext,
+}
+
+impl LogicThreadContext {
+  pub fn load_almanac_file_internal(&self, path: &str) -> EngineResult<bool> {
+    let mut logic = self.logic_state.write();
+    if logic.almanac_data.file_names.iter().any(|f| f == path) {
+      return Ok(true);
+    }
+
+    let mut path_buf = oshal::os::fs::PathBuf::new();
+    path_buf.push(path);
+
+    if let Ok(data) = oshal::os::fs::read(path_buf.as_ref()) {
+      logic.almanac_data.data.push(data);
+      if let Some(last_data) = logic.almanac_data.data.last() {
+        let bytes = bytes::BytesMut::from(last_data.as_slice());
+        logic.almanac_data.file_names.push(path.to_string());
+        if let Ok(new_almanac) = logic
+          .almanac_data
+          .almanac
+          .clone()
+          .load_from_bytes(bytes, path)
+        {
+          logic.almanac_data.almanac = new_almanac;
+          return Ok(true);
+        } else {
+          logic.almanac_data.data.pop();
+          logic.almanac_data.file_names.pop();
+        }
+      }
+    }
+    Ok(false)
+  }
+
+  pub fn load_comet_spk_internal(&self, path: &str, _spkid: u32) -> EngineResult<bool> {
+    // Currently, loading a comet SPK is identical to loading any other almanac file.
+    // The `spkid` can be used for logging or specific metadata management in the future.
+    self.load_almanac_file_internal(path)
+  }
+
+  pub fn raycast_ndc_internal(
+    &self,
+    scene_id: u64,
+    ndc_x: f32,
+    ndc_y: f32,
+  ) -> EngineResult<FfiRaycastResult> {
+    let (ro, rd) = {
+      let scenes = self.scenes.read();
+      let active = scenes
+        .get(&scene_id)
+        .ok_or(EngineError::InvalidOperation("scene not found"))?
+        .read();
+      let active_camera_entity = active
+        .active_camera_entity
+        .ok_or(EngineError::InvalidOperation("no active camera"))?;
+
+      let mut view = Mat4x4f32::identity();
+      active
+        .scene
+        .with_component(active_camera_entity, |c: &TransformComponent| {
+          view = Mat4x4f32::from_columns(
+            Vec4f32::from_components(1.0, 0.0, 0.0, 0.0),
+            Vec4f32::from_components(0.0, 0.0, -1.0, 0.0),
+            Vec4f32::from_components(0.0, -1.0, 0.0, 0.0),
+            Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
+          ) * Mat4x4f32::from_quat_custom_frame(c.rotation.conjugate())
+            * Mat4x4f32::translation(c.position * -1.0);
+        })
+        .ok_or(EngineError::InvalidOperation("camera transform missing"))?;
+
+      let mut view_proj_inv = Mat4x4f32::identity();
+      active
+        .scene
+        .with_component(active_camera_entity, |cam: &CameraComponent| {
+          let proj = cam.projection;
+          let view_proj = proj * view;
+          view_proj_inv = view_proj.inverse().unwrap_or(Mat4x4f32::identity());
+        })
+        .ok_or(EngineError::InvalidOperation("camera component missing"))?;
+
+      let ndc_near = Vec4f32::from_components(ndc_x, ndc_y, 0.0, 1.0);
+      let ndc_far = Vec4f32::from_components(ndc_x, ndc_y, 1.0, 1.0);
+      let mut world_near = view_proj_inv.mul_vector(ndc_near);
+      let mut world_far = view_proj_inv.mul_vector(ndc_far);
+      if world_near.w() != 0.0 {
+        world_near = world_near / world_near.w();
+      }
+      if world_far.w() != 0.0 {
+        world_far = world_far / world_far.w();
+      }
+      let ro = Vec3f32::from_components(world_near.x(), world_near.y(), world_near.z());
+      let target = Vec3f32::from_components(world_far.x(), world_far.y(), world_far.z());
+      let delta = target - ro;
+      (ro, delta.normalize())
+    };
+
+    self.raycast_internal(scene_id, ro, rd)
+  }
+
+  pub fn raycast_internal(
+    &self,
+    scene_id: u64,
+    ro: Vec3f32,
+    rd: Vec3f32,
+  ) -> EngineResult<FfiRaycastResult> {
+    use rlib::physics::physics_scene::math::closest_intersection;
+    let scenes = self.scenes.read();
+    let scene_ctx = scenes
+      .get(&scene_id)
+      .ok_or(EngineError::InvalidOperation("scene not found"))?
+      .read();
+    let ps_lock = scene_ctx
+      .physics_scene
+      .as_ref()
+      .ok_or(EngineError::InvalidOperation("physics scene missing"))?;
+    let ps = ps_lock.read();
+
+    let ray = aethervk_core_rlib::math::collision::intersection::Ray {
+      origin: ro,
+      direction: rd,
+      length: f32::MAX,
+    };
+
+    let hit_instances = ps.intersect_world_bvh_math(&ray);
+    let intersections: Vec<((f32, Vec3f32), EntityId)> = scene_ctx
+      .scene
+      .query2_res::<aethervk_core_rlib::scene::PhysicalMeshComponent, TransformComponent, _, (f32, Vec3f32)>(
+      |entity, mesh, transform| {
+        if !hit_instances.contains(&entity) || mesh.mesh.bvh.is_none() {
+          return None;
+        }
+        let model_matrix = Mat4x4f32::translation(transform.position)
+          * <Mat4x4f32 as oshal::math::matrix::Matrix4>::from_quat_custom_frame(transform.rotation)
+          * Mat4x4f32::from_scale(transform.scale);
+        ps.intersect_mesh_bvh_math(ro, rd, model_matrix, mesh, ray.length)
+      },
+    );
+
+    if let Some((_, hit_point, hit_entity)) = closest_intersection(&intersections) {
+      let external_id = scene_ctx
+        .entity_map
+        .iter()
+        .find(|&(_, v)| *v == hit_entity)
+        .map(|(ext, _)| *ext)
+        .unwrap_or(0);
+      return Ok(FfiRaycastResult {
+        hit: true,
+        entity: external_id,
+        px: hit_point.x(),
+        py: hit_point.y(),
+        pz: hit_point.z(),
+      });
+    }
+
+    Ok(FfiRaycastResult {
+      hit: false,
+      entity: 0,
+      px: 0.0,
+      py: 0.0,
+      pz: 0.0,
+    })
+  }
+}
+
+impl SimulationSceneData {
+  pub fn import_model_internal(&mut self, path: &str) -> EngineResult<u64> {
+    if let Ok(mesh) = aethervk_core_rlib::simulation::comet::load_comet_from_gltf(path, false) {
+      let model_id = self.next_model_id;
+      self.next_model_id += 1;
+      self.mesh_cache.insert(path.to_string(), mesh);
+      self.model_registry.insert(model_id, path.to_string());
+      return Ok(model_id);
+    }
+    Ok(0)
+  }
+
+  pub fn spawn_model_instance_internal(&mut self, model_id: u64, name: &str) -> EngineResult<u64> {
+    let path_str = self
+      .model_registry
+      .get(&model_id)
+      .ok_or(EngineError::InvalidOperation("model not found"))?
+      .clone();
+    let mesh_arc = if let Some(cached) = self.mesh_cache.get(&path_str) {
+      cached
+    } else {
+      let loaded = aethervk_core_rlib::simulation::comet::load_comet_from_gltf(&path_str, false)?;
+      self.mesh_cache.insert(path_str.clone(), loaded)
+    };
+
+    let scene_ctx_lock = self
+      .scenes
+      .get(&1)
+      .ok_or(EngineError::InvalidOperation("no scene"))?;
+    let mut scene_ctx = scene_ctx_lock.write();
+    let entity_id = scene_ctx.scene.spawn_entity(name);
+    scene_ctx.scene.add_component(
+      entity_id,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    )?;
+    scene_ctx.scene.add_component(
+      entity_id,
+      aethervk_core_rlib::scene::PhysicalMeshComponent {
+        asset_path: path_str,
+        mesh: mesh_arc,
+        emissive_intensity: 0.0,
+        emissive_color: [0.0, 0.0, 0.0],
+      },
+    )?;
+    let root = scene_ctx.root_entity;
+    scene_ctx.scene.set_parent(entity_id, Some(root));
+    Ok(scene_ctx.register_entity(entity_id))
+  }
+}
+
 impl SimulationThreads {
   pub fn render_thread_running(&self) -> bool {
     let result = self.render_thread.handle.is_some();
-    debug_assert!(self.render_thread.tx.is_some() && self.render_feedback_rx.is_some());
+    debug_assert!(!result || (self.render_thread.tx.is_some() && self.render_feedback_rx.is_some()));
     result
   }
 
   pub fn logic_thread_running(&self) -> bool {
     let result = self.logic_thread.handle.is_some();
-    debug_assert!(self.logic_thread.tx.is_some() && self.logic_feedback_rx.is_some());
+    debug_assert!(!result || (self.logic_thread.tx.is_some() && self.logic_feedback_rx.is_some()));
     result
   }
 
@@ -420,7 +722,8 @@ impl SimulationThreads {
     }
     let (render_tx, render_rx) = mpsc::channel(params.channel_capacity);
     let (render_feedback_tx, render_feedback_rx) = mpsc::channel(params.channel_capacity);
-    let render_thread_handle = start_render_thread(render_rx, params.to_context(render_feedback_tx))?;
+    let render_thread_handle =
+      start_render_thread(render_rx, params.to_context(render_feedback_tx))?;
     self.render_thread.tx = Some(render_tx);
     self.render_thread.handle = Some(render_thread_handle);
     self.render_feedback_rx = Some(render_feedback_rx);
@@ -559,9 +862,8 @@ pub struct UnfollowEntity {
   pub scene: Arc<RwLock<SceneContext>>,
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Debug)]
 pub enum LogicCommand {
-  #[default]
   Shutdown,
 
   RotateCamera(RotateCamera),
@@ -579,221 +881,55 @@ pub enum LogicCommand {
   FeedbackGetTimeScale,
   FeedbackGetDateTimeUTC,
   FeedbackGetDateTimeLimitsUTC,
+
+  ImportModel {
+    task_id: u64,
+    path: String,
+  },
+  LoadAlmanac {
+    task_id: u64,
+    path: String,
+  },
+  LoadCometSpk {
+    task_id: u64,
+    path: String,
+    spkid: u32,
+  },
+  SpawnModelInstance {
+    task_id: u64,
+    model_id: u64,
+    name: String,
+  },
+  RaycastNdc {
+    task_id: u64,
+    scene_id: u64,
+    ndc_x: f32,
+    ndc_y: f32,
+  },
+  Raycast {
+    task_id: u64,
+    scene_id: u64,
+    ro: Vec3f32,
+    rd: Vec3f32,
+  },
+  SimulationTick {
+    task_id: u64,
+    scene_id: u64,
+    delta_time: f64,
+  },
+}
+
+impl Default for LogicCommand {
+  fn default() -> Self {
+    Self::Shutdown
+  }
 }
 
 impl LogicCommand {
   const PARSING_ERROR: &str = "LogicCommand::new | parsing error";
-
-  // TODO add check for floats that they are valid, normalized, finite floats
-  pub fn new(ctx: &SimulationContext, ffi_logic_command: FfiLogicCommand) -> EngineResult<Self> {
-    match ffi_logic_command.cmd_type {
-      FfiLogicCommandType::Shutdown => Ok(LogicCommand::Shutdown),
-      FfiLogicCommandType::RotateCamera => {
-        let (camera_entity_id, scene_id, delta_x, delta_y) = ffi_logic_command
-          .get_u64x2_f32x2_at_start()
-          .ok_or(EngineError::InvalidOperation(Self::PARSING_ERROR))?;
-        let scene = ctx
-          .scenes
-          .get(&scene_id)
-          .ok_or_else(|| EngineError::InvalidOperation(Self::PARSING_ERROR))
-          .cloned()?;
-        let scene_read = scene.read();
-        let camera_entity =
-          expect_entity!(scene_read, camera_entity_id, "LogicCommand::RotateCamera");
-        drop(scene_read);
-        Ok(LogicCommand::RotateCamera(RotateCamera {
-          camera_entity,
-          scene,
-          delta_x,
-          delta_y,
-        }))
-      }
-      FfiLogicCommandType::ZoomCamera => {
-        let (camera_entity_id, scene_id, amount) = ffi_logic_command
-          .get_u64x2_f32_at_start()
-          .ok_or(EngineError::InvalidOperation(Self::PARSING_ERROR))?;
-        let scene = ctx
-          .scenes
-          .get(&scene_id)
-          .ok_or(EngineError::InvalidOperation(
-            "LogicCommand::ZoomCamera scene not present",
-          ))
-          .cloned()?;
-        let scene_read = scene.read();
-        let camera_entity =
-          expect_entity!(scene_read, camera_entity_id, "LogicCommand::ZoomCamera");
-        drop(scene_read);
-        Ok(LogicCommand::ZoomCamera(ZoomCamera {
-          camera_entity,
-          scene,
-          amount,
-        }))
-      }
-      FfiLogicCommandType::ResetCamera => {
-        let (camera_entity_id, scene_id) = ffi_logic_command
-          .get_u64x2_at_start()
-          .ok_or(EngineError::InvalidOperation(Self::PARSING_ERROR))?;
-        let scene = ctx
-          .scenes
-          .get(&scene_id)
-          .ok_or(EngineError::InvalidOperation(
-            "LogicCommand::ResetCamera scene not present",
-          ))
-          .cloned()?;
-        let scene_read = scene.read();
-        let camera_entity =
-          expect_entity!(scene_read, camera_entity_id, "LogicCommand::ResetCamera");
-        drop(scene_read);
-        Ok(LogicCommand::ResetCamera(ResetCamera {
-          camera_entity,
-          scene,
-        }))
-      }
-      FfiLogicCommandType::PanCamera => {
-        let (camera_entity_id, scene_id, delta_x, delta_y) = ffi_logic_command
-          .get_u64x2_f32x2_at_start()
-          .ok_or(EngineError::InvalidOperation(Self::PARSING_ERROR))?;
-        let scene = ctx
-          .scenes
-          .get(&scene_id)
-          .ok_or(EngineError::InvalidOperation(Self::PARSING_ERROR))
-          .cloned()?;
-        let scene_read = scene.read();
-        let camera_entity =
-          expect_entity!(scene_read, camera_entity_id, "LogicCommand::ResetCamera");
-        drop(scene_read);
-        Ok(LogicCommand::PanCamera(PanCamera {
-          camera_entity,
-          scene,
-          delta_x,
-          delta_y,
-        }))
-      }
-      FfiLogicCommandType::PanCursor => {
-        let (scene_id, delta_x, delta_y) = ffi_logic_command
-          .get_u64_f32x2_at_start()
-          .ok_or(EngineError::InvalidOperation(Self::PARSING_ERROR))?;
-        let scene = ctx
-          .scenes
-          .get(&scene_id)
-          .ok_or(EngineError::InvalidOperation(Self::PARSING_ERROR))
-          .cloned()?;
-        Ok(LogicCommand::PanCursor(PanCursor {
-          scene,
-          delta_x,
-          delta_y,
-        }))
-      }
-      FfiLogicCommandType::MoveCursor => {
-        let (scene_id, delta_x, delta_y, delta_z) = ffi_logic_command
-          .get_u64_f32x3_at_start()
-          .ok_or(EngineError::InvalidOperation(Self::PARSING_ERROR))?;
-        let scene = ctx
-          .scenes
-          .get(&scene_id)
-          .ok_or(EngineError::InvalidOperation(Self::PARSING_ERROR))
-          .cloned()?;
-        Ok(LogicCommand::MoveCursor(MoveCursor {
-          scene,
-          delta_x,
-          delta_y,
-          delta_z,
-        }))
-      }
-      FfiLogicCommandType::SnapToEntity => {
-        let (snap_entity_id, target_entity_id, scene_id) =
-          ffi_logic_command
-            .get_u64x3_at_start()
-            .ok_or(EngineError::InvalidOperation(Self::PARSING_ERROR))?;
-        let scene = ctx
-          .scenes
-          .get(&scene_id)
-          .ok_or(EngineError::InvalidOperation(
-            "LogicCommand::new | SnapToEntity | scene not found",
-          ))?
-          .clone();
-        let scene_read = scene.read();
-        let snap_entity = expect_entity!(
-          scene_read,
-          snap_entity_id,
-          "LogicCommand::new | SnapToEntity"
-        );
-        let target_entity = expect_entity!(
-          scene_read,
-          target_entity_id,
-          "LogicCommand::new | SnapToEntity"
-        );
-        drop(scene_read);
-        Ok(LogicCommand::SnapToEntity(SnapToEntity {
-          snap_entity,
-          target_entity,
-          scene,
-        }))
-      }
-      FfiLogicCommandType::FollowEntity => {
-        let (unfollow_other_u32, snap_entity_ext_id, entity_ext_id, scene_id) = ffi_logic_command
-          .get_u32_u64x3_at_start()
-          .ok_or(EngineError::InvalidOperation(Self::PARSING_ERROR))?;
-        let scene = ctx
-          .scenes
-          .get(&scene_id)
-          .ok_or(EngineError::InvalidOperation(
-            "LogicCommand::new | SnapToEntity | scene not found",
-          ))?
-          .clone();
-        let scene_read = scene.read();
-        let snap_entity = expect_entity!(
-          scene_read,
-          snap_entity_ext_id,
-          "LogicCommand::new | FollowEntity"
-        );
-        let entity_id = expect_entity!(
-          scene_read,
-          entity_ext_id,
-          "LogicCommand::new | SnapToEntity"
-        );
-        let unfollow_other = unfollow_other_u32 != 0;
-        drop(scene_read);
-        Ok(LogicCommand::FollowEntity(FollowEntity {
-          snap_entity,
-          entity_id,
-          scene,
-          unfollow_other,
-        }))
-      }
-      FfiLogicCommandType::UnfollowEntity => {
-        let (entity_ext_id, scene_id) = ffi_logic_command
-          .get_u64x2_at_start()
-          .ok_or(EngineError::InvalidOperation(Self::PARSING_ERROR))?;
-        let scene = ctx
-          .scenes
-          .get(&scene_id)
-          .ok_or(EngineError::InvalidOperation(
-            "LogicCommand::new | UnfollowEntity | scene not found",
-          ))?
-          .clone();
-        let scene_read = scene.read();
-        let entity_id = expect_entity!(
-          scene_read,
-          entity_ext_id,
-          "LogicCommand::new | UnfollowEntity"
-        );
-        drop(scene_read);
-        Ok(LogicCommand::UnfollowEntity(UnfollowEntity {
-          entity_id,
-          scene,
-        }))
-      }
-      FfiLogicCommandType::FeedbackGetTimeScale => Ok(LogicCommand::FeedbackGetTimeScale),
-      FfiLogicCommandType::FeedbackGetDateTimeUTC => Ok(LogicCommand::FeedbackGetDateTimeUTC),
-      FfiLogicCommandType::FeedbackGetDateTimeLimitsUTC => {
-        Ok(LogicCommand::FeedbackGetDateTimeLimitsUTC)
-      }
-    }
-  }
 }
 
-#[derive(Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, PartialEq, Default, Debug)]
 pub enum TimeScale {
   Stopped,
   #[default]
@@ -803,7 +939,7 @@ pub enum TimeScale {
 }
 
 impl TimeScale {
-  fn to_days_per_st_second(self) -> f64 {
+  pub fn to_days_per_st_second(self) -> f64 {
     match self {
       TimeScale::Stopped => 0.0,
       TimeScale::OneDay => 1.0,
@@ -963,13 +1099,12 @@ impl SceneContext {
   }
 
   fn with_new_entity_inserted(mut self, entity_id: EntityId) -> EngineResult<Self> {
-    self
-      .entity_map
-      .insert(self.next_entity_id, entity_id)
-      .ok_or(EngineError::InvalidOperation(
+    if self.entity_map.insert(self.next_entity_id, entity_id).is_some() {
+      return Err(EngineError::InvalidOperation(
         "simulation_api:with_new_entity_inserted | Failed to insert entity into entity_map",
-      ))?;
-    self.next_entity_id = self.next_entity_id + 1;
+      ));
+    }
+    self.next_entity_id += 1;
     Ok(self)
   }
 
@@ -1033,10 +1168,12 @@ impl SceneContext {
   }
 
   pub fn new_empty(scene: Arc<Scene>, root_entity: EntityId) -> Self {
+    let mut entity_map = BTreeMap::new();
+    entity_map.insert(1, root_entity);
     Self {
       scene,
-      entity_map: BTreeMap::new(),
-      next_entity_id: 1,
+      entity_map,
+      next_entity_id: 2,
       root_entity,
       active_camera_entity: None,
       cursor_entity: None,
@@ -1051,8 +1188,7 @@ impl SceneContext {
   pub fn register_entity(&mut self, id: EntityId) -> u64 {
     let external_id = self.next_entity_id;
     self.next_entity_id += 1;
-    // unwrap because, being even increasing, it should never fail.
-    self.entity_map.insert(external_id, id).unwrap();
+    let _ = self.entity_map.insert(external_id, id);
     external_id
   }
 
@@ -1145,6 +1281,9 @@ pub struct LogicThreadParams {
   /// from FFI
   /// TODO: Alternative: Render and Logic Commands take TimeReadings as param. is it better?
   pub time_info: Arc<RwLock<os::time::TimeInfo>>,
+  pub task_manager: Arc<RwLock<SimulationTaskManager>>,
+  pub logic_state: Arc<RwLock<LogicState>>,
+  pub scenes: Arc<RwLock<SimulationSceneData>>,
 }
 
 impl LogicThreadParams {
@@ -1153,28 +1292,36 @@ impl LogicThreadParams {
   pub fn new(
     thread_pool: Arc<os::pool::ThreadPool>,
     time_info: Arc<RwLock<os::time::TimeInfo>>,
+    task_manager: Arc<RwLock<SimulationTaskManager>>,
+    logic_state: Arc<RwLock<LogicState>>,
+    scenes: Arc<RwLock<SimulationSceneData>>,
   ) -> Self {
     Self {
       channel_capacity: Self::DEFAULT_CHANNEL_CAPACITY,
       thread_pool,
       time_info,
+      task_manager,
+      logic_state,
+      scenes,
     }
   }
 
   pub fn to_context(self, logic_feedback_tx: mpsc::Sender<LogicFeedback>) -> LogicThreadContext {
     LogicThreadContext {
-      // TODO investigate
-      logic_state: Default::default(),
+      logic_state: self.logic_state,
       thread_pool: self.thread_pool,
       time_info: self.time_info,
       logic_feedback_tx,
+      task_manager: self.task_manager,
+      scenes: self.scenes,
     }
   }
 }
 
 /// Struct whose lifetime is equal to the logic thread's lifetime
+#[derive(Clone)]
 pub struct LogicThreadContext {
-  pub logic_state: RwLock<Box<LogicState>>,
+  pub logic_state: Arc<RwLock<LogicState>>,
   /// Thread pool for task submission shared between render thread and logic thread
   pub thread_pool: Arc<os::pool::ThreadPool>,
   /// Timing state shared between render thread, simulation thread, and all caller threads
@@ -1183,4 +1330,6 @@ pub struct LogicThreadContext {
   pub time_info: Arc<RwLock<os::time::TimeInfo>>,
   /// Transmission channel to send back data to FFI caller threads
   pub logic_feedback_tx: mpsc::Sender<LogicFeedback>,
+  pub task_manager: Arc<RwLock<SimulationTaskManager>>,
+  pub scenes: Arc<RwLock<SimulationSceneData>>,
 }

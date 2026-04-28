@@ -391,7 +391,7 @@ impl Workload for ParticleUpdateWorkload {
     let comet = unsafe { &*self.comet };
 
     update_particles_single_threaded(particles, comet, self.sun_pos, self.sun_mass, self.dt);
-    WorkloadStatus::Complete
+    aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete
   }
 }
 

@@ -1,8 +1,5 @@
 use aethervk_core_rlib::{
-  gpu::{
-    self, RenderDevice,
-    frame::{RenderScene},
-  },
+  gpu::{self, RenderDevice},
   scene::{
     CameraComponent, EntityId, PhysicalMeshComponent, Scene, SkyComponent, SunComponent,
     TransformComponent,
@@ -10,13 +7,24 @@ use aethervk_core_rlib::{
   types::RuntimeParams,
 };
 use aethervk_oshal_rlib::math::{
-  matrix::{SquareMatrix, Matrix4, mat4::Mat4x4f32},
+  matrix::{Matrix4, mat4::Mat4x4f32},
   quaternion::Quaternion,
   vector::{vec3::Vec3f32, vec4::Quat, Vector3},
 };
 use heapless::index_map::FnvIndexMap;
 use std::sync::{Arc};
-use aethervk_core_rlib::gpu::RwLock;
+use aethervk_core_rlib::gpu::{ScopedCommandBuffer, ScopedRenderPass};
+use aethervk_core_rlib::types::GpuError;
+use test_utils::scene_to_render_scene;
+
+macro_rules! try_task {
+  ($task:expr, $expr:expr) => {
+    $expr.map_err(|err| {
+      $task.error = Some(err.clone());
+      err
+    })?
+  };
+}
 
 #[repr(C)]
 struct RenderPayloadData<'a> {
@@ -188,160 +196,78 @@ fn main() {
       )
       .unwrap();
 
-    let mut payload = RenderPayloadData {
-      presentation_engine,
-      scene: &scene,
-      camera_entity,
-      mesh_entity,
-      sun_entity,
-      sky_entity,
-      width,
-      height,
-    };
-
     render_frontend
       .with_device(render_device_handle, |device| {
-        let payload = unsafe { &mut *(&mut payload as *mut _ as *mut RenderPayloadData) };
-        device.init_archetypes(payload.presentation_engine).unwrap();
+        device.init_archetypes(presentation_engine).unwrap();
+        let render_scene =
+          scene_to_render_scene(&scene, device, presentation_engine, camera_entity, false)?;
 
         device.start_frame().map_err(|e| {
           println!("start_frame failed: {:?}", e);
           e
         })?;
-        let acquire_result = device
-          .acquire_next_image(payload.presentation_engine)
-          .map_err(|e| {
+        let mut task = Task::new(device, device.create_task());
+        let acquire_result = try_task!(
+          task,
+          device.acquire_next_image(presentation_engine).map_err(|e| {
             println!("acquire_next_image failed: {:?}", e);
             e
-          })?;
+          })
+        );
 
-        let mut camera_transform = TransformComponent {
-          position: Vec3f32::from_components(0.0, 0.0, 0.0),
-          rotation: Quat::identity(),
-          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-        };
-        let mut camera_component = CameraComponent {
-          projection: Mat4x4f32::perspective_vk(
-            std::f32::consts::FRAC_PI_4,
-            payload.width as f32 / payload.height as f32,
-            0.1,
-            100.0,
-          ),
-          near_plane: 0.1,
-          far_plane: 100.0,
-        };
-        payload
-          .scene
-          .with_component(payload.camera_entity, |c: &TransformComponent| {
-            camera_transform = *c
-          });
-        payload
-          .scene
-          .with_component(payload.camera_entity, |c: &CameraComponent| {
-            camera_component = *c
-          });
+        let cmd_buffer = try_task!(task, device.get_command_buffer());
+        let cmd_guard = ScopedCommandBuffer::new(device, cmd_buffer, Some(task.task_id))?;
+        try_task!(task, device.begin_command_buffer(cmd_buffer));
+        if let Some(sun_call) = &render_scene.sun_call {
+          // TODO move to kernels
+          try_task!(
+            task,
+            device.update_sun(cmd_buffer, sun_call.entity, (128, 128, 128))
+          );
+        }
+        try_task!(
+          task,
+          device.begin_render_pass(cmd_buffer, presentation_engine, &acquire_result)
+        );
+        let render_pass_guard = ScopedRenderPass::new(device, cmd_buffer);
 
-        let mut render_scene = RenderScene::new((camera_transform, camera_component));
+        let extent = try_task!(
+          task,
+          device.get_presentation_engine_extent(presentation_engine)
+        );
+        try_task!(
+          task,
+          device.set_viewport(cmd_buffer, &gpu::Viewport::from_extent(extent))
+        );
+        try_task!(
+          task,
+          device.set_scissor(cmd_buffer, &gpu::Rect2D::from_extent(extent))
+        );
 
-        payload
-          .scene
-          .with_component(payload.mesh_entity, |mesh: &PhysicalMeshComponent| {
-            render_scene
-              .add_renderable(
-                device,
-                payload.mesh_entity,
-                Mat4x4f32::identity(),
-                aethervk_core_rlib::scene::RenderableDataRef::PhysicalMesh(mesh),
-                payload.presentation_engine,
-                "mesh",
-                false,
-                [1.0, 1.0, 1.0, 1.0],
-              )
-              .unwrap();
-          });
+        try_task!(task, device.render_frame(cmd_buffer, &render_scene));
+        try_task!(task, render_pass_guard.end());
 
-        let mut sun_transform = TransformComponent {
-          position: Vec3f32::from_components(0.0, 0.0, 0.0),
-          rotation: Quat::identity(),
-          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-        };
-        let mut sun_component = SunComponent {
-          resolution: (128, 128, 128),
-        };
-        let mut sky_component = SkyComponent {};
-        payload
-          .scene
-          .with_component(payload.sky_entity, |c: &SkyComponent| sky_component = *c);
-        payload
-          .scene
-          .with_component(payload.sun_entity, |c: &TransformComponent| {
-            sun_transform = *c
-          });
-        payload
-          .scene
-          .with_component(payload.sun_entity, |c: &SunComponent| sun_component = *c);
+        cmd_guard.submit().unwrap();
 
-        render_scene.sun = Some((payload.sun_entity, sun_component, sun_transform.into()));
-        render_scene.sky = Some((payload.sky_entity, sky_component));
-
-        let cmd_buffer = device.get_command_buffer().unwrap();
-        device.begin_command_buffer(cmd_buffer).unwrap();
-        device
-          .update_sun(cmd_buffer, payload.sun_entity, &sun_component)
-          .unwrap();
-        device
-          .begin_render_pass(cmd_buffer, payload.presentation_engine, &acquire_result)
-          .unwrap();
-
-        let extent = device
-          .get_presentation_engine_extent(payload.presentation_engine)
-          .unwrap();
-        let root_viewport = gpu::Viewport {
-          x: 0.0,
-          y: 0.0,
-          width: extent[0] as f32,
-          height: extent[1] as f32,
-          min_depth: 0.0,
-          max_depth: 1.0,
-        };
-        device.set_viewport(cmd_buffer, &root_viewport).unwrap();
-        device
-          .set_scissor(
-            cmd_buffer,
-            &gpu::Rect2D {
-              offset: [0, 0],
-              extent,
-            },
-          )
-          .unwrap();
-
-        device.render_frame(cmd_buffer, &render_scene).unwrap();
-        device.end_render_pass(cmd_buffer).unwrap();
-
-        let task_id = device.create_task();
-        device
-          .submit_command_buffer(cmd_buffer, Some(task_id))
-          .unwrap();
-
-        println!("Waiting for task {} to complete...", task_id);
+        println!("Waiting for task {} to complete...", task.task_id);
         loop {
-          match device.is_task_completed(task_id) {
+          match device.is_task_completed(task.task_id) {
             Ok(true) => {
-              println!("Task {} completed successfully.", task_id);
+              println!("Task {} completed successfully.", task.task_id);
               break;
             }
             Ok(false) => {
               std::thread::sleep(std::time::Duration::from_millis(1));
             }
             Err(e) => {
-              panic!("Task {} failed with error: {:?}", task_id, e);
+              panic!("Task {} failed with error: {:?}", task.task_id, e);
             }
           }
         }
 
         let _present_status = device
           .present(
-            payload.presentation_engine,
+            presentation_engine,
             acquire_result.image_index as usize,
             acquire_result.frame_index as usize,
           )
@@ -350,9 +276,9 @@ fn main() {
             e
           })?;
 
-        let mut buffer = vec![0u8; (payload.width * payload.height * 4) as usize];
+        let mut buffer = vec![0u8; (width * height * 4) as usize];
         device
-          .download_windowless_image(payload.presentation_engine, &mut buffer, Some(1))
+          .download_windowless_image(presentation_engine, &mut buffer, Some(1))
           .map_err(|e| {
             println!("download_windowless_image failed: {:?}", e);
             e
@@ -381,8 +307,8 @@ fn main() {
         image::save_buffer(
           out_path.clone(),
           &buffer,
-          payload.width,
-          payload.height,
+          width,
+          height,
           image::ColorType::Rgba8,
         )
         .unwrap();
@@ -391,5 +317,29 @@ fn main() {
         Ok(())
       })
       .unwrap();
+  }
+}
+
+struct Task<'a> {
+  device: &'a dyn RenderDevice,
+  task_id: u64,
+  error: Option<GpuError>,
+}
+
+impl<'a> Task<'a> {
+  fn new(device: &'a dyn RenderDevice, task_id: u64) -> Task<'a> {
+    Task {
+      device,
+      task_id,
+      error: None,
+    }
+  }
+}
+
+impl<'a> Drop for Task<'a> {
+  fn drop(&mut self) {
+    if let Some(err) = self.error.take() {
+      self.device.fail_task(self.task_id, err);
+    }
   }
 }
