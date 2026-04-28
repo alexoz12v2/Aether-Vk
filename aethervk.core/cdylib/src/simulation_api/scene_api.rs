@@ -183,8 +183,7 @@ impl SimulationContext {
   pub fn get_entity_ids(&self, scene_id: u64, out_ids: &mut [u64]) -> EngineResult<(u32, u32)> {
     let scene = expect_scene!(self.get_scene(scene_id), "scene_api:get_entity_ids");
     let map = scene.read();
-    let enumerate_entities = map.entity_map.keys().enumerate();
-    let entities_num = enumerate_entities.len();
+    let entities_num = map.entity_map.len();
     let buffer_len = out_ids.len();
     let missing = if buffer_len >= entities_num {
       0
@@ -192,7 +191,7 @@ impl SimulationContext {
       (entities_num - out_ids.len()) as u32
     };
     let take_len = core::cmp::min(entities_num, buffer_len) as u32;
-    for (i, &id) in enumerate_entities.take(take_len as usize) {
+    for (i, &id) in map.entity_map.keys().enumerate().take(take_len as usize) {
       out_ids[i] = id;
     }
     Ok((take_len, missing))
@@ -323,6 +322,10 @@ impl SimulationContext {
         .with_physics_scene(),
     ));
 
+    if let Some(tx) = self.threads.render_thread.tx_opt() {
+      let _ = tx.try_send(crate::simulation_api::structs::RenderCommand::GenerateSky);
+    }
+
     Ok(self.scenes.write().insert_scene(scene_ctx))
   }
 
@@ -432,6 +435,9 @@ pub(crate) fn empty_scene_object() -> EngineResult<(Scene, EntityId)> {
   scene.register_component::<HiddenComponent>(&[]);
   scene.register_component::<BvhDebugComponent>(&[]);
   scene.register_component::<MeasurementComponent>(&[]);
+  scene.register_component::<aethervk_core_rlib::scene::ImageBillboardComponent>(&[TypeId::of::<TransformComponent>()]);
+  scene.register_component::<aethervk_core_rlib::scene::GizmoComponent>(&[TypeId::of::<TransformComponent>()]);
+  scene.register_component::<aethervk_core_rlib::scene::ParticleStateComponent>(&[TypeId::of::<TransformComponent>()]);
 
   let root_entity = scene.spawn_entity("root");
   scene

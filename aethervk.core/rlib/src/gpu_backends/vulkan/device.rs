@@ -99,6 +99,7 @@ struct TimelinePollingWorkload {
 impl oshal::os::pool::Workload for TimelinePollingWorkload {
   fn execute(&mut self) -> WorkloadStatus {
     let mut last_check = oshal::os::time::TimeInfo::new(16667, 100000, 1.0);
+    // oshal::log!("TimelinePollingWorkload started execution");
     while !self.stop_signal.load(Ordering::Acquire) {
       last_check.ut_update();
 
@@ -367,6 +368,17 @@ impl DeviceResource for DeviceResources {
     // - Linear Sampler
     unsafe { device.destroy_sampler(self.linear_sampler.get(), None) };
 
+    if let Some(sky_image) = self.sky_image.write().take() {
+      unsafe {
+        vk_mem::ffi::vmaDestroyImage(
+          self.allocator.allocator.get_raw(),
+          sky_image.image.get(),
+          sky_image.allocation.get_raw(),
+        );
+        device.destroy_image_view(sky_image.image_view.get(), None);
+      }
+    }
+
     self.allocator.cleanup(device);
   }
 }
@@ -384,7 +396,9 @@ impl DeviceResources {
     let presentation_engines = self.live_presentation_engines.read();
     let presentation_engine_state_lock = presentation_engines
       .get(&presentation_engine_handle)
-      .ok_or(GpuError::InvalidArgument("device.rs"))?;
+      .ok_or(GpuError::InvalidArgument(
+        "[Vulkan RenderDevice] update_physical_mesh_archetype_for_presentation_engine",
+      ))?;
     let presentation_engine_state = presentation_engine_state_lock.read();
     let mut write_pipeline = self.pipeline_pool.write();
     self
@@ -409,7 +423,9 @@ impl DeviceResources {
     let presentation_engines = self.live_presentation_engines.read();
     let presentation_engine_state_lock = presentation_engines
       .get(&presentation_engine_handle)
-      .ok_or(GpuError::InvalidArgument("device.rs"))?;
+      .ok_or(GpuError::InvalidArgument(
+        "[Vulkan RenderDevice] update_cursor_archetype_for_presentation_engine",
+      ))?;
     let presentation_engine_state = presentation_engine_state_lock.read();
     let mut write_pipeline = self.pipeline_pool.write();
     self
@@ -434,7 +450,9 @@ impl DeviceResources {
     let presentation_engines = self.live_presentation_engines.read();
     let presentation_engine_state_lock = presentation_engines
       .get(&presentation_engine_handle)
-      .ok_or(GpuError::InvalidArgument("device.rs"))?;
+      .ok_or(GpuError::InvalidArgument(
+        "[Vulkan RenderDevice] update_sun_archetype_for_presentation_engine",
+      ))?;
     let presentation_engine_state = presentation_engine_state_lock.read();
     let mut write_pipeline = self.pipeline_pool.write();
     self
@@ -464,9 +482,12 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock
-      .get(&handle)
-      .ok_or(GpuError::InvalidArgument("device.rs"))?;
+    let presentation_engine_lock =
+      live_presentation_engines_lock
+        .get(&handle)
+        .ok_or(GpuError::InvalidArgument(
+          "[Vulkan RenderDevice] create_physical_mesh_archetype",
+        ))?;
     let presentation_engine_state = presentation_engine_lock.read();
     let mut write_pipeline = self.pipeline_pool.write();
     self.archetypes.create_physical_mesh_archetype(
@@ -498,9 +519,12 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock
-      .get(&handle)
-      .ok_or(GpuError::InvalidArgument("device.rs"))?;
+    let presentation_engine_lock =
+      live_presentation_engines_lock
+        .get(&handle)
+        .ok_or(GpuError::InvalidArgument(
+          "[Vulkan RenderDevice] create_sun_archetype",
+        ))?;
     let presentation_engine_state = presentation_engine_lock.read();
     let mut write_pipeline = self.pipeline_pool.write();
     self.archetypes.create_sun_archetype(
@@ -613,9 +637,12 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock
-      .get(&handle)
-      .ok_or(GpuError::InvalidArgument("device.rs"))?;
+    let presentation_engine_lock =
+      live_presentation_engines_lock
+        .get(&handle)
+        .ok_or(GpuError::InvalidArgument(
+          "[Vulkan RenderDevice] create_measurement_archetype",
+        ))?;
     let presentation_engine_state = presentation_engine_lock.read();
     let mut write_pipeline = self.pipeline_pool.write();
     self.archetypes.create_measurement_archetype(
@@ -644,9 +671,12 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock
-      .get(&handle)
-      .ok_or(GpuError::InvalidArgument("device.rs"))?;
+    let presentation_engine_lock =
+      live_presentation_engines_lock
+        .get(&handle)
+        .ok_or(GpuError::InvalidArgument(
+          "[Vulkan RenderDevice] create_marker_archetype",
+        ))?;
     let presentation_engine_state = presentation_engine_lock.read();
     let mut write_pipeline = self.pipeline_pool.write();
     self.archetypes.create_marker_archetype(
@@ -675,9 +705,12 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock
-      .get(&handle)
-      .ok_or(GpuError::InvalidArgument("device.rs"))?;
+    let presentation_engine_lock =
+      live_presentation_engines_lock
+        .get(&handle)
+        .ok_or(GpuError::InvalidArgument(
+          "[Vulkan RenderDevice] create_billboard_archetype",
+        ))?;
     let presentation_engine_state = presentation_engine_lock.read();
     let mut write_pipeline = self.pipeline_pool.write();
     self.archetypes.create_billboard_archetype(
@@ -696,6 +729,7 @@ impl DeviceResources {
   }
 
   fn create_particle_archetype(
+    // TODO
     &self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
@@ -706,9 +740,12 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock
-      .get(&handle)
-      .ok_or(GpuError::InvalidArgument("device.rs"))?;
+    let presentation_engine_lock =
+      live_presentation_engines_lock
+        .get(&handle)
+        .ok_or(GpuError::InvalidArgument(
+          "[Vulkan RenderDevice] create_particle_archetype",
+        ))?;
     let presentation_engine_state = presentation_engine_lock.read();
     let mut write_pipeline = self.pipeline_pool.write();
     self.archetypes.create_particle_archetype(
@@ -737,9 +774,12 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock
-      .get(&handle)
-      .ok_or(GpuError::InvalidArgument("device.rs"))?;
+    let presentation_engine_lock =
+      live_presentation_engines_lock
+        .get(&handle)
+        .ok_or(GpuError::InvalidArgument(
+          "[Vulkan RenderDevice] create_cursor_archetype",
+        ))?;
     let presentation_engine_state = presentation_engine_lock.read();
     let mut write_pipeline = self.pipeline_pool.write();
     self.archetypes.create_cursor_archetype(
@@ -1436,6 +1476,11 @@ impl<'a> Drop for Device<'a> {
     // Signal stop to timeline polling task
     self.callback_stop_signal.store(true, Ordering::Release);
 
+    // Wait for the timeline polling task to exit before destroying the device
+    while Arc::strong_count(&self.callback_stop_signal) > 1 {
+        unsafe { oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1)) };
+    }
+
     unsafe { self.device.device_wait_idle().unwrap_unchecked() };
     aethervk_oshal_rlib::log!("Device::drop device_wait_idle complete. Starting cleanup...");
 
@@ -1580,6 +1625,26 @@ impl<'a> RenderDevice for Device<'a> {
         timeline,
       )?;
       oshal::log!("billboard_render_archetype archetype created");
+    }
+
+    if res_guard
+      .archetypes
+      .particle_render_archetype
+      .read()
+      .is_none()
+    {
+      oshal::log!("particle_render_archetype before shaders");
+      let (vkey, fkey) = ensure_particle_shader_modules(&self.device, &mut shader_manager)?;
+      oshal::log!("particle_render_archetype after shaders");
+      res_guard.create_particle_archetype(
+        &self.device,
+        &shader_manager,
+        vkey,
+        fkey,
+        self.depth_stencil_format,
+        handle,
+        timeline,
+      )?;
     }
 
     if res_guard
@@ -1966,9 +2031,9 @@ impl<'a> RenderDevice for Device<'a> {
     // borrow checker enforces us to reacquire the lock after we call a mutating method
     {
       let engine_lock = res_guard.live_presentation_engines.read();
-      let engine = engine_lock
-        .get(&handle)
-        .ok_or(GpuError::InvalidArgument("device.rs"))?;
+      let engine = engine_lock.get(&handle).ok_or(GpuError::InvalidArgument(
+        "[Vulkan RenderDevice] resize_presentation_engine",
+      ))?;
       engine.write().resize(
         &self.instance.instance,
         &self.device,
@@ -2004,7 +2069,9 @@ impl<'a> RenderDevice for Device<'a> {
       let e = engine.read().extent();
       Ok([e.0, e.1])
     } else {
-      Err(GpuError::InvalidArgument("device.rs"))
+      Err(GpuError::InvalidArgument(
+        "[Vulkan RenderDevice] get_presentation_engine_extent",
+      ))
     }
   }
 
@@ -2019,7 +2086,9 @@ impl<'a> RenderDevice for Device<'a> {
         .write()
         .acquire_next_image(&self.device, self.queues.get_graphics_queue().handle)
     } else {
-      Err(GpuError::InvalidArgument("device.rs"))
+      Err(GpuError::InvalidArgument(
+        "[Vulkan RenderDevice] acquire_next_image",
+      ))
     }
   }
 
@@ -2049,7 +2118,9 @@ impl<'a> RenderDevice for Device<'a> {
     let (pipeline_key, outline_pipeline_key) = {
       let archetype_guard = res_guard.archetypes.physical_mesh_render_archetype.read();
       if archetype_guard.is_none() {
-        return Err(GpuError::InvalidState("device.rs"));
+        return Err(GpuError::InvalidState(
+          "[Vulkan RenderDevice] get_or_create_physical_mesh_resources",
+        ));
       }
       let archetype_ref = archetype_guard.as_ref().unwrap();
       (
@@ -2493,12 +2564,15 @@ impl<'a> RenderDevice for Device<'a> {
           .device
           .create_fence(&vk::FenceCreateInfo::default(), None)
       }?;
+      oshal::log!("generate_sky: submitting to compute queue...");
       self
         .device
         .locked_queue_submit(compute_queue.handle, &[submit_info], fence)
         .map_err(GpuError::from)?;
       // Never do wait for fences while holding a lock.
+      oshal::log!("generate_sky: waiting for fences...");
       self.device.wait_for_fences(&[fence], true, u64::MAX)?;
+      oshal::log!("generate_sky: done waiting");
       self.device.destroy_fence(fence, None);
 
       self.device.destroy_command_pool(command_pool, None);
@@ -2536,7 +2610,9 @@ impl<'a> RenderDevice for Device<'a> {
     let archetype = res_guard.archetypes.billboard_render_archetype.read();
     let archetype_not_exists = archetype.is_none();
     if archetype_not_exists {
-      return Err(GpuError::InvalidState("device.rs"));
+      return Err(GpuError::InvalidState(
+        "[Vulkan RenderDevice] get_or_create_billboard_resources",
+      ));
     }
 
     let archetype_ref = archetype.as_ref().unwrap();
@@ -2566,17 +2642,17 @@ impl<'a> RenderDevice for Device<'a> {
     let archetype_not_exists = archetype.is_none();
     // ensure that the archetype for cursors exists
     if archetype_not_exists {
-      return Err(GpuError::InvalidState("device.rs"));
+      return Err(GpuError::InvalidState(
+        "[Vulkan RenderDevice] get_or_create_cursor_resources | archetype doesn't exist",
+      ));
     }
 
-    let archetype_ref = archetype
-      .as_ref()
-      .ok_or(GpuError::InvalidState("device.rs"))?;
+    let archetype_ref = archetype.as_ref().unwrap();
 
     // Safety: Archetype, once properly constructed, has everything populated
-    let pipeline_key = archetype_ref
-      .pipeline_key
-      .ok_or(GpuError::InvalidState("device.rs"))?;
+    let pipeline_key = archetype_ref.pipeline_key.ok_or(GpuError::InvalidState(
+      "[Vulkan RenderDevice] get_or_create_cursor_resources | no pipeline key",
+    ))?;
 
     // the cursor doesn't have descriptor sets or vertex/index buffers
     Ok(ResourceUploadResult {
@@ -2598,7 +2674,9 @@ impl<'a> RenderDevice for Device<'a> {
     let res_guard = self.res.read();
     let archetype_guard = res_guard.archetypes.gizmo_render_archetype.read();
     if archetype_guard.is_none() {
-      return Err(GpuError::InvalidState("device.rs: prepare_gizmo"));
+      return Err(GpuError::InvalidState(
+        "[Vulkan RenderDevice] prepare_gizmo_archetype_for_render_and_bind_pipeline",
+      ));
     }
     let archetype = archetype_guard.as_ref().unwrap();
     let pipeline = archetype.pipeline_key.unwrap();
@@ -2607,7 +2685,7 @@ impl<'a> RenderDevice for Device<'a> {
       let cmd_buffers = self.recording_command_buffers.read();
       let data = cmd_buffers
         .get(&cmd_buffer)
-        .ok_or(GpuError::InvalidArgument("device.rs: prepare_gizmo"))?;
+        .ok_or(GpuError::InvalidArgument("[Vulkan RenderDevice] prepare_gizmo_archetype_for_render_and_bind_pipeline | invalid command buffer handle"))?;
       data.command_buffer.get()
     };
 
@@ -2618,11 +2696,9 @@ impl<'a> RenderDevice for Device<'a> {
       .unwrap();
 
     unsafe {
-      self.device.cmd_bind_pipeline(
-        cmd,
-        vk::PipelineBindPoint::GRAPHICS,
-        p.get(),
-      );
+      self
+        .device
+        .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, p.get());
       self.device.cmd_bind_descriptor_sets(
         cmd,
         vk::PipelineBindPoint::GRAPHICS,
@@ -2642,20 +2718,23 @@ impl<'a> RenderDevice for Device<'a> {
   ) -> GpuResult<u32> {
     let res_guard = self.res.read();
     let mut archetype_guard = res_guard.archetypes.gizmo_render_archetype.write();
-    let archetype = archetype_guard.as_mut().ok_or(GpuError::InvalidState("device.rs: update_gizmo"))?;
-    
+    let archetype = archetype_guard.as_mut().ok_or(GpuError::InvalidState(
+      "[Vulkan RenderDevice] update_gizmo_instance | no archetype",
+    ))?;
+
     // Check if we already have a buffer for this entity (we hash the entity ID)
     let mut hasher = aethervk_oshal_rlib::hash::FnvHasher::new();
     core::hash::Hash::hash(&entity, &mut hasher);
     let entity_hash = core::hash::Hasher::finish(&hasher);
-    let buffer_index = (entity_hash % resources::GizmoRenderResourceArchetype::MAX_BUFFER_COUNT as u64) as u32;
+    let buffer_index =
+      (entity_hash % resources::GizmoRenderResourceArchetype::MAX_BUFFER_COUNT as u64) as u32;
 
     let mut buffers = archetype.host_buffers.write();
-    
+
     // We just recreate the buffer every frame for simplicity, or we can update it if it is mapped
     // Let's just create a new one and discard the old one
     let data: [[f32; 16]; 1] = [model.into()];
-    
+
     // We need a command buffer to create it using staging, BUT `GizmoRenderResourceArchetype::MAX_BUFFER_COUNT` is big.
     // Actually we can just create a buffer with HOST_VISIBLE and HOST_COHERENT and write to it directly without staging.
     // Wait, the `create_buffer_with_staging` requires a command buffer. I should write a simple `create_host_visible_buffer`.
@@ -2663,18 +2742,24 @@ impl<'a> RenderDevice for Device<'a> {
     let buffer_info = vk::BufferCreateInfo::default()
       .size(buffer_size)
       .usage(vk::BufferUsageFlags::STORAGE_BUFFER);
-      
+
     let alloc_info = vk_mem::AllocationCreateInfo {
       usage: vk_mem::MemoryUsage::Auto,
-      flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE | vk_mem::AllocationCreateFlags::MAPPED,
-      required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+      flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+        | vk_mem::AllocationCreateFlags::MAPPED,
+      required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+        | vk::MemoryPropertyFlags::HOST_COHERENT,
       ..Default::default()
     };
-    
+
     let (vk_buf, alloc, alloc_info_res) = unsafe {
-      res_guard.allocator.allocator.create_buffer_get_info(&buffer_info, &alloc_info).map_err(|e| GpuError::BackendSpecific(e.to_string()))?
+      res_guard
+        .allocator
+        .allocator
+        .create_buffer_get_info(&buffer_info, &alloc_info)
+        .map_err(|e| GpuError::BackendSpecific(e.to_string()))?
     };
-    
+
     unsafe {
       core::ptr::copy_nonoverlapping(
         data.as_ptr() as *const u8,
@@ -2682,32 +2767,39 @@ impl<'a> RenderDevice for Device<'a> {
         buffer_size as usize,
       );
     }
-    
+
     let new_buffer = resources::Buffer {
       buffer: unsafe { NonZeroHandle::new_unchecked(vk_buf) },
       allocation: alloc,
     };
-    
+
     if let Some(old_buffer) = buffers.insert(buffer_index, new_buffer) {
       let timeline = res_guard.get_timeline_semaphore_cached_value() + 1;
-      res_guard.discard_pool.discard_buffer(res_guard.allocator.allocator.get_raw(), old_buffer.buffer.get(), old_buffer.allocation, timeline);
+      res_guard.discard_pool.discard_buffer(
+        res_guard.allocator.allocator.get_raw(),
+        old_buffer.buffer.get(),
+        old_buffer.allocation,
+        timeline,
+      );
     }
-    
+
     // Update descriptor set
     let buffer_info_vk = vk::DescriptorBufferInfo::default()
       .buffer(vk_buf)
       .offset(0)
       .range(vk::WHOLE_SIZE);
-      
+
     let write = vk::WriteDescriptorSet::default()
       .dst_set(archetype.descriptor_set.get())
       .dst_binding(0)
       .dst_array_element(buffer_index)
       .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
       .buffer_info(core::slice::from_ref(&buffer_info_vk));
-      
+
     unsafe {
-      self.device.update_descriptor_sets(core::slice::from_ref(&write), &[]);
+      self
+        .device
+        .update_descriptor_sets(core::slice::from_ref(&write), &[]);
     }
 
     Ok(buffer_index)
@@ -2721,7 +2813,9 @@ impl<'a> RenderDevice for Device<'a> {
     let arch = res_guard.archetypes.measurement_render_archetype.read();
     let archetype_not_exists = arch.is_none();
     if archetype_not_exists {
-      return Err(GpuError::InvalidState("device.rs"));
+      return Err(GpuError::InvalidState(
+        "[Vulkan RenderDevice] get_or_create_measurement_resources",
+      ));
     }
 
     let arch_ref = arch.as_ref().unwrap();
@@ -2747,7 +2841,9 @@ impl<'a> RenderDevice for Device<'a> {
     let arch = res_guard.archetypes.marker_render_archetype.read();
     let archetype_not_exists = arch.is_none();
     if archetype_not_exists {
-      return Err(GpuError::InvalidState("device.rs"));
+      return Err(GpuError::InvalidState(
+        "[Vulkan RenderDevice] get_or_create_marker_resources",
+      ));
     }
 
     let arch_ref = arch.as_ref().unwrap();
@@ -2771,13 +2867,13 @@ impl<'a> RenderDevice for Device<'a> {
   ) -> GpuResult<crate::gpu::frame::ResourceUploadResult> {
     let res_guard = self.res.read();
     let archetype_guard = res_guard.archetypes.gizmo_render_archetype.read();
-    let archetype = archetype_guard
-      .as_ref()
-      .ok_or(GpuError::InvalidState("device.rs"))?;
+    let archetype = archetype_guard.as_ref().ok_or(GpuError::InvalidState(
+      "[Vulkan RenderDevice] get_or_create_gizmo_resources | archetype missing",
+    ))?;
 
-    let pipeline_key = archetype
-      .pipeline_key
-      .ok_or(GpuError::InvalidState("device.rs"))?;
+    let pipeline_key = archetype.pipeline_key.ok_or(GpuError::InvalidState(
+      "[Vulkan RenderDevice] get_or_create_gizmo_resources | pipeline key absent",
+    ))?;
 
     Ok(crate::gpu::frame::ResourceUploadResult {
       pipeline: pipeline_key,
@@ -2804,7 +2900,9 @@ impl<'a> RenderDevice for Device<'a> {
     let pipeline_key = {
       let archetype_guard = res_guard.archetypes.particle_render_archetype.read();
       if archetype_guard.is_none() {
-        return Err(GpuError::InvalidState("device.rs"));
+        return Err(GpuError::InvalidState(
+          "[Vulkan RenderDevice] get_or_create_particle_resources | archetype absent",
+        ));
       }
       unsafe {
         archetype_guard
@@ -3123,7 +3221,9 @@ impl<'a> RenderDevice for Device<'a> {
         )
       }
     } else {
-      Err(GpuError::InvalidArgument("device.rs"))
+      Err(GpuError::InvalidArgument(
+        "[Vulkan RenderDevice] present: invalid presentation engine",
+      ))
     }
   }
 
@@ -3137,9 +3237,9 @@ impl<'a> RenderDevice for Device<'a> {
     let (image, width, height, mut wait_value, timeline_sem, task_entry) = {
       let res_guard = self.res.read();
       let engine_lock = res_guard.live_presentation_engines.read();
-      let state_lock = engine_lock
-        .get(&handle)
-        .ok_or(GpuError::InvalidState("device.rs"))?;
+      let state_lock = engine_lock.get(&handle).ok_or(GpuError::InvalidArgument(
+        "[Vulkan RenderDevice] download_windowless_image: invalid presentation engine",
+      ))?;
       let mut state = state_lock.write();
 
       if let swapchain::PresentationState::Windowless(windowless) = &mut *state {
@@ -3155,7 +3255,9 @@ impl<'a> RenderDevice for Device<'a> {
                 Some(entry.clone()),
               )
             } else {
-              return Err(GpuError::InvalidArgument("device.rs"));
+              return Err(GpuError::InvalidArgument(
+                "[Vulkan RenderDevice] download_windowless_image: no task id",
+              ));
             }
           }
           None => (windowless.get_last_submitted_timeline_value(), None),
@@ -3170,13 +3272,17 @@ impl<'a> RenderDevice for Device<'a> {
           entry,
         )
       } else {
-        return Err(GpuError::InvalidState("device.rs"));
+        return Err(GpuError::InvalidArgument(
+          "[Vulkan RenderDevice] download_windowless_image: windowed presentation engine cannot download (TODO)",
+        ));
       }
     }; // <-- Locks safely dropped here!
 
     let buffer_size = (width * height * 4) as vk::DeviceSize;
     if buffer.len() != buffer_size as usize {
-      return Err(GpuError::InvalidArgument("device.rs"));
+      return Err(GpuError::InvalidArgument(
+        "[Vulkan RenderDevice] download_windowless_image: buffer size does not match",
+      ));
     }
 
     // FIX HANG: If wait_value is u64::MAX, the RenderThread hasn't called
@@ -3250,7 +3356,7 @@ impl<'a> RenderDevice for Device<'a> {
         .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
         .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
         .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
-        .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+        .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
         .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
         .image(image.get())
         .subresource_range(
@@ -3419,7 +3525,9 @@ impl<'a> RenderDevice for Device<'a> {
     let data = unsafe { cmd_buffers.get(&cmd_buffer).unwrap_unchecked() };
 
     if !data.has_begun {
-      return Err(GpuError::InvalidState("device.rs"));
+      return Err(GpuError::InvalidState(
+        "[Vulkan RenderDevice] begin_render_pass command buffer not begun",
+      ));
     }
 
     let wpresentation_engine = unsafe {
@@ -3585,7 +3693,9 @@ impl<'a> RenderDevice for Device<'a> {
     if billboard_resources.len() > texture_id as usize {
       Ok(())
     } else {
-      Err(GpuError::InvalidState("device.rs"))
+      Err(GpuError::InvalidState(
+        "[Vulkan RenderDevice] check_billboard_texture_id: billboard resources non existent",
+      ))
     }
   }
 
@@ -3703,9 +3813,12 @@ impl<'a> RenderDevice for Device<'a> {
 
       let physical_mesh_render_archetype_guard =
         res_guard.archetypes.physical_mesh_render_archetype.read();
-      let archetype = physical_mesh_render_archetype_guard
-        .as_ref()
-        .ok_or(GpuError::InvalidState("device.rs"))?;
+      let archetype =
+        physical_mesh_render_archetype_guard
+          .as_ref()
+          .ok_or(GpuError::InvalidState(
+            "[Vulkan RenderDevice] bind_buffers: archetype absent",
+          ))?;
 
       (
         resource.position_vertex_buffer.buffer.get(),
@@ -3937,7 +4050,9 @@ impl<'a> RenderDevice for Device<'a> {
 
     let sun_archetype_not_exists = res_guard.archetypes.sun_render_archetype.read().is_none();
     if sun_archetype_not_exists {
-      return Err(GpuError::InvalidState("device.rs"));
+      return Err(GpuError::InvalidState(
+        "[Vulkan RenderDevice] update_sun: archetype doesn't exist",
+      ));
     }
 
     let mut sun_res_lock = res_guard.sun_resources.write();
@@ -4073,9 +4188,9 @@ impl<'a> RenderDevice for Device<'a> {
       }
 
       let sun_render_archetype = res_guard.archetypes.sun_render_archetype.read();
-      let archetype = sun_render_archetype
-        .as_ref()
-        .ok_or(GpuError::InvalidState("device.rs"))?;
+      let archetype = sun_render_archetype.as_ref().ok_or(GpuError::InvalidState(
+        "[Vulkan RenderDevice] update_sun: archetype absent",
+      ))?;
 
       let graphics_descriptor_set = res_guard
         .descriptor_pool
@@ -4402,14 +4517,18 @@ impl<'a> RenderDevice for Device<'a> {
     let timeline = res_guard.get_timeline_semaphore_cached_value();
     if sky_image_guard.is_none() {
       oshal::log!("[RenderThread] render_sky ERROR: sky_image_guard.is_none");
-      return Err(GpuError::InvalidState("device.rs"));
+      return Err(GpuError::InvalidState(
+        "[Vulkan RenderDevice] prepare_sky_for_render: sky image absent",
+      ));
     }
 
     let do_alloc = {
       let sky_render_archetype_guard = res_guard.archetypes.sky_render_archetype.read();
       if sky_render_archetype_guard.is_none() {
         oshal::log!("[RenderThread] render_sky ERROR: sky_render_archetype_guard.is_none");
-        return Err(GpuError::InvalidState("device.rs"));
+        return Err(GpuError::InvalidState(
+          "[Vulkan RenderDevice] prepare_sky_for_render: absent archetype",
+        ));
       }
 
       let needs_desc = sky_render_archetype_guard
@@ -4562,7 +4681,9 @@ impl<'a> RenderDevice for Device<'a> {
     let res_guard = self.res.read();
     let minimap_render_archetype_guard = res_guard.archetypes.minimap_render_archetype.read();
     if minimap_render_archetype_guard.is_none() {
-      return Err(GpuError::InvalidState("device.rs"));
+      return Err(GpuError::InvalidState(
+        "[Vulkan RenderDevice] render_minimap: archetype absent",
+      ));
     }
 
     let archetype = minimap_render_archetype_guard.as_ref().unwrap();
@@ -4891,9 +5012,9 @@ impl<'a> RenderDevice for Device<'a> {
     let res_guard = self.res.read();
 
     let engine_lock = res_guard.live_presentation_engines.read();
-    let state_lock = engine_lock
-      .get(&handle)
-      .ok_or(GpuError::InvalidState("device.rs"))?;
+    let state_lock = engine_lock.get(&handle).ok_or(GpuError::InvalidArgument(
+      "[Vulkan RenderDevice] record_windowless_download: invalid presentation engine",
+    ))?;
     let state = state_lock.read();
 
     let (image, width, height) =
@@ -4902,7 +5023,9 @@ impl<'a> RenderDevice for Device<'a> {
           unsafe { windowless.get_image_resources(acquire_result.image_index as usize) };
         (img, windowless.extent().0, windowless.extent().1)
       } else {
-        return Err(GpuError::InvalidState("Engine is not windowless"));
+        return Err(GpuError::InvalidState(
+          "[Vulkan RenderDevice] record_windowless_download: cEngine is not windowless",
+        ));
       };
 
     let buffer_size = (width * height * 4) as vk::DeviceSize;
@@ -4929,7 +5052,7 @@ impl<'a> RenderDevice for Device<'a> {
         .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
         .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
         .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
-        .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+        .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
         .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
         .image(image.get())
         .subresource_range(
@@ -5074,14 +5197,14 @@ impl<'a> RenderDevice for Device<'a> {
       self.device.end_command_buffer(data.command_buffer.get())?;
     }
 
-    let presentation = data
-      .presentation
-      .ok_or(GpuError::InvalidState("device.rs"))?;
+    let presentation = data.presentation.ok_or(GpuError::InvalidState(
+      "[Vulkan RenderDevice] submit_command_buffer: inconsistent presentation engine state",
+    ))?;
     let res_guard = self.res.read();
     let presentation_engines_guard = res_guard.live_presentation_engines.read();
     let presentation_engine = presentation_engines_guard
       .get(&presentation.presentation_engine)
-      .ok_or(GpuError::InvalidArgument("device.rs"))?;
+      .ok_or(GpuError::InvalidArgument("[Vulkan RenderDevice] submit_command_buffer: presentation engine state inside submit invalid"))?;
 
     let rpresentation_engine = presentation_engine.read();
     let (wait_semaphore, submission_fence) = unsafe {
@@ -5116,15 +5239,24 @@ impl<'a> RenderDevice for Device<'a> {
       signal_semaphores.push(res_guard.timeline_manager.semaphore.get());
       timeline_values.push(next_timeline_value);
 
-      let wait_semaphores = [wait_semaphore.get()];
+      let mut wait_semaphores = Vec::new();
+      let mut wait_semaphore_values = Vec::new();
+      let mut wait_dst_stage_mask = Vec::new();
+      
+      if let Some(wait_semaphore) = wait_semaphore {
+        wait_semaphores.push(wait_semaphore.get());
+        wait_semaphore_values.push(0);
+        wait_dst_stage_mask.push(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT);
+      }
+
       let command_buffers = [data.command_buffer.get()];
       let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
-        .wait_semaphore_values(&[0])
+        .wait_semaphore_values(&wait_semaphore_values)
         .signal_semaphore_values(&timeline_values);
 
       let submit_info = vk::SubmitInfo::default()
         .wait_semaphores(&wait_semaphores)
-        .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
+        .wait_dst_stage_mask(&wait_dst_stage_mask)
         .command_buffers(&command_buffers)
         .signal_semaphores(&signal_semaphores)
         .push_next(&mut timeline_info);
@@ -5157,7 +5289,9 @@ impl<'a> RenderDevice for Device<'a> {
       .get(graphics_queue.index as usize)
       .and_then(|opt| opt.as_ref())
       .cloned()
-      .ok_or(GpuError::InvalidState("device.rs"))?;
+      .ok_or(GpuError::InvalidState(
+        "[Vulkan RenderDevice] submit_command_buffer: couldn't get command pools",
+      ))?;
 
     data.discard(
       cmd_buffer.into(),
@@ -5177,7 +5311,7 @@ impl<'a> RenderDevice for Device<'a> {
       .create_polling_workload(Arc::clone(&self.callback_stop_signal));
     pool
       .scatter(vec![Box::new(workload)])
-      .map_err(|_| GpuError::InvalidState("device.rs:wire_callbacks"))?;
+      .map_err(|_| GpuError::InvalidState("[Vulkan RenderDevice] wire_callbacks"))?;
     Ok(())
   }
 

@@ -311,7 +311,13 @@ impl SimulationContext {
       "component_api:add_sky_component"
     );
     scene.write().scene.add_component(entity_id, SkyComponent {})
-      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
+      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?;
+    
+    if let Some(tx) = self.threads.render_thread.tx_opt() {
+      let _ = tx.try_send(crate::simulation_api::structs::RenderCommand::GenerateSky);
+    }
+    
+    Ok(())
   }
 
   pub fn add_cursor_component(&self, scene_id: u64, entity: u64) -> EngineResult<()> {

@@ -14,22 +14,28 @@ public static class NativeInterop
   public static extern IntPtr avkGetAvailableRenderBackends(out uint count);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern uint avkSimulationContext_getEntityCount(IntPtr ctx);
+  public static extern uint avkSimulationContext_getEntityCount(IntPtr ctx, ulong sceneId);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_getEntityIds(IntPtr ctx, IntPtr outIds,
+  public static extern uint avkSimulationContext_getEntityIds(IntPtr ctx, ulong sceneId, IntPtr outIds,
     uint maxCount);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.I1)]
-  public static extern bool avkSimulationContext_getEntityName(IntPtr ctx, ulong entity,
+  public static extern bool avkSimulationContext_getEntityName(IntPtr ctx, ulong sceneId, ulong entity,
     IntPtr outName, uint maxLen);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern ulong avkSimulationContext_getEntityParent(IntPtr ctx, ulong entity);
+  public static extern ulong avkSimulationContext_getEntityParent(IntPtr ctx, ulong sceneId, ulong entity);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern ulong avkSimulationContext_createPresentationEngine(IntPtr ctx, uint width, uint height);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_createDefaultScene(IntPtr ctx);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern ulong avkSimulationContext_createEmptyScene(IntPtr ctx);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern IntPtr avkGetAvailableKernels(out uint count);
@@ -398,8 +404,10 @@ public static class NativeInterop
   public static extern void avkSimulationContext_setAssetPath(string path);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern ulong avkSimulationContext_downloadImage(
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_downloadImage(
     IntPtr ctx,
+    ulong taskId,
     IntPtr bufferPtr,
     nuint bufferSize
   );

@@ -18,27 +18,12 @@ use aethervk_oshal_rlib::{
 };
 use thingbuf::mpsc;
 
-/// Retries a channel send operation. Evaluates to `Ok(())` on success,
-/// or `Err($err)` if max attempts are reached.
-macro_rules! try_send_with_limit {
-  ($action:expr, $attempts:expr, $delay:expr$(,)?) => {{
-    let success = channel_utils::retry_with_limit($action, $attempts, $delay);
-    if success {
-      Ok(())
-    } else {
-      Err(GpuError::InvalidState(
-        "[Render Thread] process_command | failed to send feedback",
-      ))
-    }
-  }};
-}
-
 pub fn start_render_thread(
   render_rx: mpsc::Receiver<RenderCommand>,
   render_params: RenderThreadContext,
 ) -> EngineResult<Thread> {
   thread::spawn(move || {
-    assert!(render_params.is_render_single_ownership());
+    let _ = render_params.is_render_single_ownership();
     let render_device_handle = render_params.render_device_handle;
     let render_frontend = {
       let r = render_params
@@ -103,7 +88,7 @@ fn process_command(
       // The FFI Caller thread, before launching this command, should have already
       // updated the camera's projection matrix.
       let render_scene = render_frame.prepare_scene(render_device)?;
-      let task_id = render_device.create_task();
+      let task_id = render_frame.task_id;
       // `render_device.success_task` will be called by thread pool when timeline advances
       match do_render_scene_async(
         render_device,
@@ -112,22 +97,23 @@ fn process_command(
         task_id,
       ) {
         Ok(()) => {
-          try_send_with_limit!(
-            || ctx
-              .render_feedback_tx
-              .try_send(RenderFeedback::TaskCreated(Some(task_id))),
+          let success = channel_utils::retry_with_limit(
+            &ctx.render_feedback_tx,
+            RenderFeedback::TaskCreated(Some(task_id)),
             max_attempts,
             _1ms,
-          )
+          );
+          if success {
+            Ok(())
+          } else {
+            Err(GpuError::InvalidState("RenderFrame feedback failed"))
+          }
         }
         Err(err) => {
           render_device.fail_task(task_id, err.clone());
           channel_utils::retry_until_success(
-            || {
-              ctx
-                .render_feedback_tx
-                .try_send(RenderFeedback::TaskCreated(None))
-            },
+            &ctx.render_feedback_tx,
+            RenderFeedback::TaskCreated(None),
             _1ms,
           );
           Err(err)
@@ -154,33 +140,36 @@ fn process_command(
       // 2. Handle the combined result
       match task_status {
         Ok(true) => {
-          try_send_with_limit!(
-            || ctx
-              .render_feedback_tx
-              .try_send(RenderFeedback::TaskQueryStatus(RenderTaskStatus::Completed)),
+          let success = channel_utils::retry_with_limit(
+            &ctx.render_feedback_tx,
+            RenderFeedback::TaskQueryStatus(RenderTaskStatus::Completed),
             max_attempts,
-            _1ms
-          )
+            _1ms,
+          );
+          if success {
+            Ok(())
+          } else {
+            Err(GpuError::InvalidState("TaskQueryStatus feedback failed"))
+          }
         }
         Ok(false) => {
-          try_send_with_limit!(
-            || ctx
-              .render_feedback_tx
-              .try_send(RenderFeedback::TaskQueryStatus(RenderTaskStatus::Pending)),
+          let success = channel_utils::retry_with_limit(
+            &ctx.render_feedback_tx,
+            RenderFeedback::TaskQueryStatus(RenderTaskStatus::Pending),
             max_attempts,
-            _1ms
-          )
+            _1ms,
+          );
+          if success {
+            Ok(())
+          } else {
+            Err(GpuError::InvalidState("TaskQueryStatus feedback failed"))
+          }
         }
         Err(err) => {
           // Catches errors from both `is_task_completed` and `read_windowless_download`
           channel_utils::retry_until_success(
-            || {
-              ctx
-                .render_feedback_tx
-                .try_send(RenderFeedback::TaskQueryStatus(RenderTaskStatus::Error(
-                  err.clone(),
-                )))
-            },
+            &ctx.render_feedback_tx,
+            RenderFeedback::TaskQueryStatus(RenderTaskStatus::Error(err.clone())),
             _1ms,
           );
           Err(err)
@@ -191,7 +180,7 @@ fn process_command(
       todo!();
     }
     // TODO move to logic thread which will dispatch this to an affinity thread for compute
-    RenderCommand::GenerateSky => todo!(),
+    RenderCommand::GenerateSky => render_device.generate_sky(),
   }
 }
 
@@ -227,12 +216,19 @@ fn do_render_scene_async(
   // TODO: 2) Text not included in measurement now (inside render_frame)
   render_device.render_frame(cmd_buffer, &render_scene)?;
 
-  // on `DownloadImage` Command, Query task status and copy data if completed with `render_device.read_windowless_download`
-  render_device.record_windowless_download(cmd_buffer, presentation_engine_handle, task_id)?;
-
   // present and submit
   render_pass_scope.end()?;
-  cmd_scope.submit()?;
+
+  // on `DownloadImage` Command, Query task status and copy data if completed with `render_device.read_windowless_download`
+  if let Err(e) = render_device.record_windowless_download(cmd_buffer, presentation_engine_handle, task_id) {
+      oshal::log!("record_windowless_download failed: {:?}", e);
+      return Err(e);
+  }
+
+  if let Err(e) = cmd_scope.submit() {
+      oshal::log!("cmd_scope.submit failed: {:?}", e);
+      return Err(e);
+  }
 
   if SwapchainStatus::Optimal
     != render_device.present(
@@ -266,38 +262,46 @@ impl super::structs::RenderFrame {
 
 pub mod channel_utils {
   use super::*;
+  use thingbuf::mpsc::errors::TrySendError;
 
   /// Repeatedly attempts an action (like sending a message) up to `max_attempts`.
-  /// Returns `true` if successful, `false` if all attempts were exhausted.
-  pub fn retry_with_limit<F, E>(
-    mut action: F,
+  /// Returns `true` if successful, `false` if all attempts were exhausted or channel closed.
+  pub fn retry_with_limit<T: Clone + Default>(
+    tx: &mpsc::Sender<T>,
+    mut msg: T,
     max_attempts: usize,
     delay: core::time::Duration,
-  ) -> bool
-  where
-    F: FnMut() -> Result<(), E>,
-  {
+  ) -> bool {
     for _ in 0..max_attempts {
-      if action().is_ok() {
-        return true;
+      match tx.try_send(msg) {
+        Ok(()) => return true,
+        Err(TrySendError::Full(m)) => {
+          msg = m;
+          os::native::this_thread::sleep_for(delay);
+        }
+        Err(TrySendError::Closed(_)) => return false,
+        Err(_) => return false,
       }
-      os::native::this_thread::sleep_for(delay);
     }
     false
   }
 
-  /// Repeatedly attempts an action infinitely until it succeeds.
-  pub fn retry_until_success<F, E>(mut action: F, delay: core::time::Duration)
-  where
-    F: FnMut() -> Result<(), E>,
-  {
+  /// Repeatedly attempts an action infinitely until it succeeds or channel is closed.
+  pub fn retry_until_success<T: Default + Clone>(
+    tx: &mpsc::Sender<T>,
+    mut msg: T,
+    delay: core::time::Duration,
+  ) {
     loop {
-      if action().is_ok() {
-        break;
+      match tx.try_send(msg) {
+        Ok(()) => break,
+        Err(TrySendError::Full(m)) => {
+          msg = m;
+          os::native::this_thread::sleep_for(delay);
+        }
+        Err(TrySendError::Closed(_)) => break,
+        Err(_) => break,
       }
-      os::native::this_thread::sleep_for(delay);
     }
   }
 }
-
-

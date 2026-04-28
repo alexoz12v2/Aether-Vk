@@ -247,7 +247,10 @@ impl PresentationState {
   pub unsafe fn get_frame_resources(
     &self,
     index: usize,
-  ) -> (NonZeroHandle<vk::Semaphore>, NonZeroHandle<vk::Fence>) {
+  ) -> (
+    Option<NonZeroHandle<vk::Semaphore>>,
+    NonZeroHandle<vk::Fence>,
+  ) {
     match self {
       Self::Windowed(state) => unsafe { state.get_frame_resources(index) },
       Self::Windowless(state) => unsafe { state.get_frame_resources(index) },
@@ -955,13 +958,13 @@ impl WindowedPresentationState {
   pub unsafe fn get_frame_resources(
     &self,
     index: usize,
-  ) -> (NonZeroHandle<vk::Semaphore>, NonZeroHandle<vk::Fence>) {
+  ) -> (Option<NonZeroHandle<vk::Semaphore>>, NonZeroHandle<vk::Fence>) {
     debug_assert!(self.frames.len() > index);
     let frame = &self.frames[index];
     debug_assert!(!frame.eligible_for_steal());
     unsafe {
       (
-        frame.acquire_semaphore.unwrap_unchecked(),
+        Some(frame.acquire_semaphore.unwrap_unchecked()),
         frame.submission_fence.unwrap_unchecked(),
       )
     }
@@ -1292,13 +1295,13 @@ impl WindowlessPresentationState {
   pub unsafe fn get_frame_resources(
     &self,
     index: usize,
-  ) -> (NonZeroHandle<vk::Semaphore>, NonZeroHandle<vk::Fence>) {
+  ) -> (Option<NonZeroHandle<vk::Semaphore>>, NonZeroHandle<vk::Fence>) {
     debug_assert!(self.frames.len() > index);
     let frame = &self.frames[index];
     debug_assert!(!frame.eligible_for_steal());
     unsafe {
       (
-        frame.acquire_semaphore.unwrap_unchecked(),
+        None,
         frame.submission_fence.unwrap_unchecked(),
       )
     }

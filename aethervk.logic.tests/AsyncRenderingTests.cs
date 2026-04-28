@@ -181,7 +181,7 @@ namespace AetherVk.Logic.Tests
         IntPtr simCtx = (IntPtr)typeof(NativeRuntimeService).GetField("_simulationContext",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
           .GetValue(_service)!;
-        uint count = NativeInterop.avkSimulationContext_getEntityCount(simCtx);
+        uint count = NativeInterop.avkSimulationContext_getEntityCount(simCtx, newSceneId);
         Assert.True(count > 0, "New scene should have entities\n");
 
         // Clean shutdown

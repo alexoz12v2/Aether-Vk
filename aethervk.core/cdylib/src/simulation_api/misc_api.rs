@@ -39,10 +39,14 @@ impl SimulationContext {
         .and_then(|frontend| {
           frontend
             .with_device(self.render_proxy.1, |device| {
-              match device.is_task_completed(task_id) {
+              let res = device.is_task_completed(task_id);
+              match res {
                 Ok(true) => Ok(1),
                 Ok(false) => Ok(0),
-                Err(_) => Ok(2),
+                Err(e) => {
+                  oshal::log!("is_task_completed err: {:?}", e);
+                  Ok(2)
+                },
               }
             })
             .ok()
