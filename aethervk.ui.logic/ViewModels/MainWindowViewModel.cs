@@ -129,7 +129,7 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   {
     var runtimeService =
       ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-    runtimeService?.RotateCamera(10.0f, 0.0f);
+    runtimeService?.RotateCamera(1, 10.0f, 0.0f);
   }
 
   [RelayCommand]
@@ -137,7 +137,7 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   {
     var runtimeService =
       ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-    runtimeService?.RotateCamera(-10.0f, 0.0f);
+    runtimeService?.RotateCamera(1, -10.0f, 0.0f);
   }
 
   [RelayCommand]
@@ -145,7 +145,7 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   {
     var runtimeService =
       ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-    runtimeService?.ZoomCamera(2.0f);
+    runtimeService?.ZoomCamera(1, 2.0f);
   }
 
   [RelayCommand]
@@ -153,7 +153,7 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   {
     var runtimeService =
       ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-    runtimeService?.ZoomCamera(-2.0f);
+    runtimeService?.ZoomCamera(1, -2.0f);
   }
 
   [RelayCommand]
@@ -161,6 +161,6 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   {
     var runtimeService =
       ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-    runtimeService?.ResetCamera();
+    runtimeService?.ResetCamera(1);
   }
 }

@@ -14,6 +14,7 @@ public partial class MeshViewerViewModel : TabItemViewModel
     private CancellationTokenSource? _cts;
     private Task? _lastRenderTask;
     private readonly bool _isLightTheme;
+    public ulong CameraId { get; private set; } = 1;
 
     public uint Width { get; } = 800;
     public uint Height { get; } = 600;
@@ -66,7 +67,7 @@ public partial class MeshViewerViewModel : TabItemViewModel
                     camTransform.RotZ = 1.0f;
                 }
                 
-                _runtimeService.SetActiveCamera(camera.Id);
+                CameraId = camera.Id;
                 var sun = _runtimeService.SpawnEntity("sun", root);
                 sun.Components.Add(new AetherVk.Logic.Models.SunComponent());
             }
@@ -114,7 +115,7 @@ public partial class MeshViewerViewModel : TabItemViewModel
                         OnFrameReady?.Invoke();
                     }
 
-                    _lastRenderTask = _runtimeService.RenderTickAsync();
+                    _lastRenderTask = _runtimeService.RenderTickAsync(CameraId);
                 }
                 else
                 {

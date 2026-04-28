@@ -60,11 +60,11 @@ namespace AetherVk.Logic.Tests
 
         // Position camera to look at the sphere
         var root = _service.RootEntities.FirstOrDefault();
-        var camera = root?.Children.FirstOrDefault(e => e.Name == "camera\n");
+        var camera = root?.Children.FirstOrDefault(e => e.Name == "camera");
         Assert.NotNull(camera);
 
         // Render a frame and await completion
-        await _service.RenderTickAsync();
+        await _service.RenderTickAsync(1);
 
         // Download the image
         int bufferSize = (int)(width * height * 4);
@@ -141,7 +141,7 @@ namespace AetherVk.Logic.Tests
         var entityMap =
           (Dictionary<ulong, Entity>)entityMapField.GetValue(_service)!;
 
-        var entity = new Entity(modelId, "model_999\n");
+        var entity = new Entity(modelId, "model_999");
         _service.RootEntities.Add(entity);
         entityMap[modelId] = entity;
 
@@ -209,15 +209,16 @@ namespace AetherVk.Logic.Tests
         var secondCamera = _service.CreateCamera(root);
         Assert.NotNull(secondCamera);
 
-        // Switch to the first camera and render
-        _service.SetActiveCamera(2); // First camera ID
-        // _service.SimulationTick(); TODO to still develop native method
-        Task first = _service.RenderTickAsync();
+        var firstCamera = _service.CreateCamera(root);
 
+        // Switch to the first camera and render
+
+        // _service.SimulationTick(); TODO to still develop native method
+        Task first = _service.RenderTickAsync(firstCamera.Id);
         // Switch to the second camera and render
-        _service.SetActiveCamera(secondCamera.Id);
+        
         // _service.SimulationTick();
-        Task second = _service.RenderTickAsync();
+        Task second = _service.RenderTickAsync(secondCamera.Id);
 
         Debug.WriteLine("Time To wait\n");
         await Task.WhenAll(first, second);
@@ -252,7 +253,7 @@ namespace AetherVk.Logic.Tests
           camTransform1.PosY = -20.0f;
           camTransform1.RotZ = 1.0f; // looking at origin
         }
-        service1.SetActiveCamera(camera1.Id);
+        
         
         var sun = service1.SpawnEntity("sun", root1);
         sun.Components.Add(new AetherVk.Logic.Models.SunComponent());
@@ -272,7 +273,7 @@ namespace AetherVk.Logic.Tests
           camTransform2.PosY = -5.0f;
           camTransform2.RotZ = 1.0f;
         }
-        service2.SetActiveCamera(camera2.Id);
+        
         var sun2 = service2.SpawnEntity("sun", root2);
         sun2.Components.Add(new AetherVk.Logic.Models.SunComponent());
         
@@ -287,8 +288,8 @@ namespace AetherVk.Logic.Tests
         // Render 3 frames on both
         for (int i = 0; i < 3; i++) {
           System.IO.File.AppendAllText("test_debug.txt", $"DEBUG: Frame {i}\n");
-          var t1 = service1.RenderTickAsync();
-          var t2 = service2.RenderTickAsync();
+          var t1 = service1.RenderTickAsync(camera1.Id);
+          var t2 = service2.RenderTickAsync(camera2.Id);
           await Task.WhenAll(t1, t2);
         }
 
@@ -351,7 +352,7 @@ namespace AetherVk.Logic.Tests
         Assert.True(_service.IsInitialized);
         _service.StartSimulation();
 
-        var renderTask = _service.RenderTickAsync();
+        var renderTask = _service.RenderTickAsync(1);
 
         // Close app
         _service.ShutdownSimulation();
@@ -399,7 +400,7 @@ namespace AetherVk.Logic.Tests
         // Render a few frames
         for (int i = 0; i < 3; i++)
         {
-          await _service.RenderTickAsync();
+          await _service.RenderTickAsync(1);
         }
 
         // If we reach here, no crashes occurred during render with all archetypes
@@ -439,13 +440,13 @@ namespace AetherVk.Logic.Tests
 
         for (int i = 0; i < 6; i++)
         {
-          System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Zoom v\n"); viewportService.ZoomCamera(-0.1f);
-          System.IO.File.AppendAllText("test_debug.txt", "DEBUG: RenderTick v\n"); await viewportService.RenderTickAsync();
+          System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Zoom v\n"); viewportService.ZoomCamera(1, -0.1f);
+          System.IO.File.AppendAllText("test_debug.txt", "DEBUG: RenderTick v\n"); await viewportService.RenderTickAsync(1);
           
           if (i < 3)
           {
-            System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Rotate m\n"); meshViewerService.RotateCamera(0.1f, 0.0f);
-            await meshViewerService.RenderTickAsync();
+            System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Rotate m\n"); meshViewerService.RotateCamera(1, 0.1f, 0.0f);
+            await meshViewerService.RenderTickAsync(1);
           }
         }
 
@@ -483,7 +484,7 @@ namespace AetherVk.Logic.Tests
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: meshViewer Shutdown\n");
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Shutdown m\n"); meshViewerService.ShutdownSimulation();
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: viewport RenderTickAsync\n");
-        System.IO.File.AppendAllText("test_debug.txt", "DEBUG: RenderTick v\n"); await viewportService.RenderTickAsync();
+        System.IO.File.AppendAllText("test_debug.txt", "DEBUG: RenderTick v\n"); await viewportService.RenderTickAsync(1);
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: viewport Shutdown\n");
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Shutdown v\n"); viewportService.ShutdownSimulation();
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Done\n");

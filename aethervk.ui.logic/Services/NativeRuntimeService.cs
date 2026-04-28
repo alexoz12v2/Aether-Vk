@@ -368,11 +368,11 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
   public ulong LastRenderTaskId { get; private set; } = 0;
 
-  public async Task RenderTickAsync()
+  public async Task RenderTickAsync(ulong cameraId)
   {
     if (_simulationContext == IntPtr.Zero || ActivePresentationEngineId == 0) return;
 
-    ulong taskId = NativeInterop.avkSimulationContext_renderTick(_simulationContext, ActivePresentationEngineId, ActiveSceneId, 800, 600);
+    ulong taskId = NativeInterop.avkSimulationContext_renderTick(_simulationContext, ActivePresentationEngineId, ActiveSceneId, cameraId, 800, 600);
     if (taskId == 0) return;
     LastRenderTaskId = taskId;
 
@@ -408,36 +408,30 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return success;
   }
 
-  public void SetActiveCamera(ulong cameraEntityId)
-  {
-    if (_simulationContext != IntPtr.Zero)
-    {
-      NativeInterop.avkSimulationContext_setActiveCamera(_simulationContext, ActiveSceneId, cameraEntityId);
-    }
-  }
 
-  public void RotateCamera(float deltaX, float deltaY)
+
+  public void RotateCamera(ulong cameraEntityId, float deltaX, float deltaY)
   {
     if (_simulationContext != IntPtr.Zero)
     {
       _ = NativeInterop.avkSimulationContext_rotateCamera(
         _simulationContext,
         ActiveSceneId,
-        GetActiveCameraId(),
+        cameraEntityId,
         deltaX,
         deltaY
       );
     }
   }
 
-  public void ZoomCamera(float amount)
+  public void ZoomCamera(ulong cameraEntityId, float amount)
   {
     if (_simulationContext != IntPtr.Zero)
     {
       _ = NativeInterop.avkSimulationContext_zoomCamera(
         _simulationContext,
         ActiveSceneId,
-        GetActiveCameraId(),
+        cameraEntityId,
         amount
       );
     }
@@ -470,14 +464,14 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
   }
 
-  public void PanCamera(float deltaX, float deltaY)
+  public void PanCamera(ulong cameraEntityId, float deltaX, float deltaY)
   {
     if (_simulationContext != IntPtr.Zero)
     {
       _ = NativeInterop.avkSimulationContext_panCamera(
         _simulationContext,
         ActiveSceneId,
-        GetActiveCameraId(),
+        cameraEntityId,
         deltaX,
         deltaY
       );
@@ -652,53 +646,53 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return (false, 0UL, 0f, 0f, 0f);
   }
 
-  public void ResetCamera()
+  public void ResetCamera(ulong cameraEntityId)
   {
     if (_simulationContext != IntPtr.Zero)
     {
       _ = NativeInterop.avkSimulationContext_resetCamera(
         _simulationContext,
         ActiveSceneId,
-        GetActiveCameraId()
+        cameraEntityId
       );
     }
   }
 
-  public void SnapToEntity(ulong entityId)
+  public void SnapToEntity(ulong cameraEntityId, ulong entityId)
   {
     if (_simulationContext != IntPtr.Zero)
     {
       _ = NativeInterop.avkSimulationContext_snapToEntity(
         _simulationContext,
         ActiveSceneId,
-        GetActiveCameraId(), // Use camera as snap entity for now
+        cameraEntityId,
         entityId
       );
     }
   }
 
-  public void FollowEntity(ulong entityId)
+  public void FollowEntity(ulong cameraEntityId, ulong entityId)
   {
     if (_simulationContext != IntPtr.Zero)
     {
       _ = NativeInterop.avkSimulationContext_followEntity(
         _simulationContext,
         ActiveSceneId,
-        GetActiveCameraId(),
+        cameraEntityId,
         entityId,
         true
       );
     }
   }
 
-  public void UnfollowEntity()
+  public void UnfollowEntity(ulong cameraEntityId)
   {
     if (_simulationContext != IntPtr.Zero)
     {
       _ = NativeInterop.avkSimulationContext_unfollowEntity(
         _simulationContext,
         ActiveSceneId,
-        GetActiveCameraId()
+        cameraEntityId
       );
     }
   }
@@ -743,24 +737,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     );
   }
 
-  public ulong GetActiveCameraId()
-  {
-    ulong fallbackId = 1;
-    foreach (var entity in _entityMap.Values)
-    {
-      var cam = entity.Components.OfType<CameraComponent>().FirstOrDefault();
-      if (cam != null)
-      {
-        fallbackId = entity.Id;
-        if (cam.IsActiveCamera)
-        {
-          return entity.Id;
-        }
-      }
-    }
 
-    return fallbackId;
-  }
 
   public void CreateScene(bool populateDefault = true)
   {
@@ -1116,7 +1093,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
 
     camera.Components.Add(new TransformComponent { PosY = -400.0f });
-    camera.Components.Add(new CameraComponent());
+    camera.Components.Add(new CameraComponent { IsActiveCamera = true });
 
     return camera;
   }

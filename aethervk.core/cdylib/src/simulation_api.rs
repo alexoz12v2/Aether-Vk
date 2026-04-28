@@ -554,6 +554,19 @@ pub unsafe extern "C" fn avkSimulationContext_importModel(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_unloadModel(
+  ctx: *mut SimulationContext,
+  model_id: u64,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.unload_model(model_id);
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_loadAlmanacFile(
   ctx: *mut SimulationContext,
   path: *const c_char,

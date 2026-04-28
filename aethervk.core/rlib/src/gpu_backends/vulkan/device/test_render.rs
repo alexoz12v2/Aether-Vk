@@ -507,12 +507,12 @@ fn test_render_text_system_font_async() {
           device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer_handle)?;
           device.render_text(
             cmd_buffer_handle,
-            "AetherVk Test",
-            [50.0, 50.0],
+            "AetherVk Async Test",
+            [-0.8, -0.8], // NDC space
             [width as f32, height as f32],
             (font_hash, font_id),
-            32.0,
-            [1.0, 1.0, 1.0, 1.0],
+            48.0,
+            [0.5, 1.0, 0.5, 1.0],
           )?;
 
           scoped_rp.end()?;
@@ -546,11 +546,27 @@ fn test_render_text_system_font_async() {
       let sum: u64 = buffer.iter().map(|&b| b as u64).sum();
       assert!(sum > 0, "Rendered text buffer is completely empty!");
       
+      let mut unique_colors = std::collections::HashSet::new();
+      for chunk in buffer.chunks_exact(4) {
+        unique_colors.insert((chunk[0], chunk[1], chunk[2], chunk[3]));
+      }
+      assert!(unique_colors.len() > 1, "Image is completely uniform color!");
+      
       // Convert BGRA to RGBA
       for chunk in buffer.chunks_exact_mut(4) {
         chunk.swap(0, 2);
       }
-      
+
+      // Flip vertically
+      let row_stride = (width * 4) as usize;
+      for y in 0..(height as usize / 2) {
+        let top_row_start = y * row_stride;
+        let bottom_row_start = ((height as usize) - 1 - y) * row_stride;
+        for x in 0..row_stride {
+          buffer.swap(top_row_start + x, bottom_row_start + x);
+        }
+      }
+
       // Export rendered text
       image::save_buffer(
           "rendered_system_text.png",
@@ -674,7 +690,7 @@ fn test_render_text_asset_font_async() {
           device.render_text(
             cmd_buffer_handle,
             "AetherVk Async Test",
-            [20.0, 100.0],
+            [-0.8, -0.8], // NDC space
             [width as f32, height as f32],
             (font_hash, font_id),
             48.0,
@@ -712,11 +728,27 @@ fn test_render_text_asset_font_async() {
       let sum: u64 = buffer.iter().map(|&b| b as u64).sum();
       assert!(sum > 0, "Rendered text buffer is completely empty!");
       
+      let mut unique_colors = std::collections::HashSet::new();
+      for chunk in buffer.chunks_exact(4) {
+        unique_colors.insert((chunk[0], chunk[1], chunk[2], chunk[3]));
+      }
+      assert!(unique_colors.len() > 1, "Image is completely uniform color!");
+      
       // Convert BGRA to RGBA
       for chunk in buffer.chunks_exact_mut(4) {
         chunk.swap(0, 2);
       }
-      
+
+      // Flip vertically
+      let row_stride = (width * 4) as usize;
+      for y in 0..(height as usize / 2) {
+        let top_row_start = y * row_stride;
+        let bottom_row_start = ((height as usize) - 1 - y) * row_stride;
+        for x in 0..row_stride {
+          buffer.swap(top_row_start + x, bottom_row_start + x);
+        }
+      }
+
       // Export rendered text
       image::save_buffer(
           "rendered_asset_text.png",

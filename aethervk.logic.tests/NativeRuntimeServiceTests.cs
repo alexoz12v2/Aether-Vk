@@ -63,7 +63,7 @@ namespace AetherVk.Logic.Tests
     {
       _service.InitializeSimulationContext("Vulkan", 800, 600, _assetPath);
       var initialCount = _service.RootEntities.FirstOrDefault()?.Children.Count ?? 0;
-      await _service.SpawnModelInstanceAsync(999, "TestSpawn");
+      await Assert.ThrowsAsync<Exception>(() => _service.SpawnModelInstanceAsync(999, "TestSpawn"));
     }
     catch (System.DllNotFoundException) {}
   }

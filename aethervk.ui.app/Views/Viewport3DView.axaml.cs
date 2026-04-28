@@ -140,11 +140,11 @@ public partial class Viewport3DView : UserControl
 
     if (_isRightDragging)
     {
-      _viewModel?.RuntimeService.RotateCamera(deltaX, deltaY);
+      _viewModel?.RuntimeService.RotateCamera(_viewModel.CameraId, deltaX, deltaY);
     }
     else if (_isMiddleDragging)
     {
-      _viewModel?.RuntimeService.PanCamera(deltaX, deltaY);
+      _viewModel?.RuntimeService.PanCamera(1 /* TODO */, deltaX, deltaY);
     }
 
     _lastPointerPos = currentPos;
@@ -152,7 +152,7 @@ public partial class Viewport3DView : UserControl
 
   private void OnPointerWheelChanged(object? sender, PointerWheelEventArgs e)
   {
-    _viewModel?.RuntimeService.ZoomCamera((float)e.Delta.Y * 10f);
+    _viewModel?.RuntimeService.ZoomCamera(1 /* TODO */, (float)e.Delta.Y * 10f);
   }
 
   private void OnKeyDown(object? sender, KeyEventArgs e)
@@ -173,7 +173,7 @@ public partial class Viewport3DView : UserControl
     }
 
     if (e.Key == Key.R)
-      _viewModel?.RuntimeService.ResetCamera();
+      _viewModel?.RuntimeService.ResetCamera(1 /* TODO */);
     else if (e.Key == Key.Up)
       _viewModel?.RuntimeService.MoveCursor(0.0f, -0.5f, 0.0f);
     else if (e.Key == Key.Down)

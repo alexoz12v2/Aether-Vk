@@ -110,7 +110,7 @@ public partial class MeshViewerWindow : Window
 
     if (_isRightDragging)
     {
-      _viewModel?.RuntimeService.RotateCamera(deltaX, deltaY);
+      _viewModel?.RuntimeService.RotateCamera(_viewModel.CameraId, deltaX, deltaY);
     }
     else if (_isMiddleDragging || _isLeftDragging)
     {
@@ -123,6 +123,6 @@ public partial class MeshViewerWindow : Window
   private void OnPointerWheelChanged(object? sender, PointerWheelEventArgs e)
   {
     var scroll_amount = (float)e.Delta.Y;
-    _viewModel?.RuntimeService.ZoomCamera(scroll_amount);
+    _viewModel?.RuntimeService.ZoomCamera(_viewModel.CameraId, scroll_amount);
   }
 }

@@ -286,11 +286,8 @@ public partial class Viewport3DViewModel
             }
 
             // Update camera
-            ulong activeCam = _runtimeService.GetActiveCameraId();
-            if (activeCam > 0)
-            {
-              _runtimeService.SetActiveCamera(activeCam);
-            }
+            ulong activeCam = 1; // TODO replace with actual camera state in VM
+            // active camera removed
 
             // Wait for previous render to finish before starting a new one
             if (_lastRenderTask != null)
@@ -300,7 +297,7 @@ public partial class Viewport3DViewModel
             }
 
             // Async Render - fire and forget, save task
-            _lastRenderTask = _runtimeService.RenderTickAsync();
+            _lastRenderTask = _runtimeService.RenderTickAsync(activeCam);
           }
 
           // Yield to prevent pegging the CPU, aiming for ~60 FPS render signal

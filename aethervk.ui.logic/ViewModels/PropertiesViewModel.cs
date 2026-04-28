@@ -31,11 +31,11 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
       
       if (value)
       {
-        runtimeService?.FollowEntity(SelectedEntity.Id);
+        runtimeService?.FollowEntity(1 /* TODO */, SelectedEntity.Id);
       }
       else
       {
-        runtimeService?.UnfollowEntity();
+        runtimeService?.UnfollowEntity(1 /* TODO */);
       }
     }
   }
@@ -71,7 +71,7 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
     {
       var runtimeService =
         ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-      runtimeService?.SnapToEntity(SelectedEntity.Id);
+      runtimeService?.SnapToEntity(1 /* TODO */, SelectedEntity.Id);
     }
   }
 
