@@ -74,7 +74,7 @@ namespace AetherVk.Logic.Tests
         IntPtr bufferPtr = Marshal.AllocHGlobal(bufferSize);
         try
         {
-          bool success = _service.DownloadImage(bufferPtr, (nuint)bufferSize);
+          bool success = await _service.DownloadImageAsync(bufferPtr, (nuint)bufferSize);
           Assert.True(success, "Failed to download image from GPU.\n");
 
           byte[] pixels = new byte[bufferSize];
@@ -457,7 +457,7 @@ namespace AetherVk.Logic.Tests
 
         int bufferSize = (int)(width * height * 4);
         IntPtr vPtr = Marshal.AllocHGlobal(bufferSize);
-        System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Download v\n"); bool vSuccess = viewportService.DownloadImage(vPtr, (nuint)bufferSize);
+        System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Download v\n"); bool vSuccess = await viewportService.DownloadImageAsync(vPtr, (nuint)bufferSize);
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Download v finished\n");
         Assert.True(vSuccess);
         byte[] vPixels = new byte[bufferSize];
@@ -469,7 +469,7 @@ namespace AetherVk.Logic.Tests
 
         IntPtr mPtr = Marshal.AllocHGlobal(bufferSize);
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Downloading mPtr\n");
-        System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Download m\n"); bool mSuccess = meshViewerService.DownloadImage(mPtr, (nuint)bufferSize);
+        System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Download m\n"); bool mSuccess = await meshViewerService.DownloadImageAsync(mPtr, (nuint)bufferSize);
         Assert.True(mSuccess);
         byte[] mPixels = new byte[bufferSize];
         Marshal.Copy(mPtr, mPixels, 0, bufferSize);
