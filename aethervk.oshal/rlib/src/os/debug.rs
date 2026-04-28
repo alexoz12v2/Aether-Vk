@@ -251,7 +251,6 @@ mod unix_debug {
     }
   }
 
-  #[cfg(not(feature = "std"))]
   pub fn log_message(args: fmt::Arguments) {
     let msg = alloc::fmt::format(args) + "\n";
     if let Ok(c_msg) = alloc::ffi::CString::new(msg.clone()) {

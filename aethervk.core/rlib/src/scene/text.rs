@@ -84,7 +84,7 @@ impl GlyphInfo {
 
 impl FontAtlas {
   pub fn scaled_height(&self, desired_points: f32) -> f32 {
-    let scale_factor = self.scale.y / desired_points;
+    let scale_factor = desired_points / self.scale.y;
     scale_factor * self.line_height
   }
 

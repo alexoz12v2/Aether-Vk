@@ -1,14 +1,19 @@
 use aethervk_oshal_rlib as oshal;
 use aethervk_core_rlib as rlib;
 use crate::simulation_api::SimulationContext;
-use crate::structs::{LogicThreadParams, RenderThreadParams, SimulationSceneData, SimulationThreads};
+use crate::structs::{
+  LogicState, LogicThreadParams, RenderCommand, RenderThreadParams, SimulationSceneData,
+  SimulationTaskManager, SimulationThreads,
+};
 use crate::{expect_scene, expect_scene_and_entity};
 use rlib::gpu::PresentationEngineHandle;
 use aethervk_oshal_rlib::os::time::{timeus_milliseconds, timeus_t};
 use alloc::{boxed::Box, sync::Arc};
 use alloc::collections::BTreeSet;
+use core::num::NonZero;
 use core::ptr::addr_of_mut;
 use spin::RwLock;
+use aethervk_core_rlib::gpu::WeakRenderFrontendExt;
 use aethervk_core_rlib::types::GpuError;
 use rlib::gpu;
 use rlib::types::{EngineError, EngineResult};
@@ -29,7 +34,12 @@ impl SimulationContext {
       let ptr = boxed_uninit.as_mut_ptr();
 
       // 1. Initialize scene data
-      SimulationSceneData::new_inplace(addr_of_mut!((*ptr).scenes));
+      let scenes = Arc::new(RwLock::new(SimulationSceneData::new()));
+      addr_of_mut!((*ptr).scenes).write(Arc::clone(&scenes));
+
+      // 1.5 Initialize task manager
+      let task_manager = Arc::new(RwLock::new(SimulationTaskManager::new()));
+      addr_of_mut!((*ptr).task_manager).write(Arc::clone(&task_manager));
 
       // 2. initialize presentation engine container
       addr_of_mut!((*ptr).presentation_engines).write(RwLock::new(BTreeSet::new()));
@@ -44,6 +54,10 @@ impl SimulationContext {
         Self::INITIAL_TIME_SCALE,
       )));
       let logic_thread_time_info = Arc::clone(&render_thread_time_info);
+
+      let logic_state = Arc::new(RwLock::new(LogicState::default()));
+      addr_of_mut!((*ptr).logic_state).write(Arc::clone(&logic_state));
+
       // TODO test: if this fails, render frontend should drop.
       let render_thread_params = RenderThreadParams::new(
         backend,
@@ -51,8 +65,13 @@ impl SimulationContext {
         render_thread_thread_pool,
         render_thread_time_info,
       )?;
-      let logic_thread_params =
-        LogicThreadParams::new(logic_thread_thread_pool, logic_thread_time_info);
+      let logic_thread_params = LogicThreadParams::new(
+        logic_thread_thread_pool,
+        logic_thread_time_info,
+        Arc::clone(&task_manager),
+        logic_state,
+        Arc::clone(&scenes),
+      );
       let render_proxy = (
         render_thread_params.render_frontend.weak_self(),
         render_thread_params.render_device_handle,
@@ -70,7 +89,7 @@ impl SimulationContext {
   }
 
   pub fn create_presentation_engine(
-    &mut self,
+    &self,
     width: u32,
     height: u32,
   ) -> EngineResult<PresentationEngineHandle> {
@@ -95,94 +114,107 @@ impl SimulationContext {
   }
 
   // TODO: async, return a task_id
-  pub fn simulation_tick(&mut self, scene_id: u64) -> EngineResult<()> {
-    // TODO: everything on logic thread, not here
-    // // Update time
-    // let current_time = {
-    //   let mut time = self.time_info.write();
-    //   time.ut_update();
-    //   time.current()
-    // };
-    // // TODO implement here fixed update (on thread?)
-    // // Concurrent physics rebuild
-    // let scene = expect_scene!(self.get_scene(scene_id), "core_api:simulation_tick");
-    // let ps = scene
-    //   .physics_scene
-    //   .as_ref()
-    //   .ok_or(EngineError::InvalidOperation(
-    //     "core_api:simulation_tick scene doesn't have a physics scene associated to it",
-    //   ))?;
-    // let workload = Box::new(PhysicsRebuildWorkload {
-    //   scene: Arc::clone(&scene.scene),
-    //   physics_scene: Arc::clone(ps),
-    // });
-    // let _ = self.thread_pool.scatter(vec![workload]);
-    // self.thread_pool.gather();
+  pub fn simulation_tick(&self, scene_id: u64, delta_time: f64) -> EngineResult<core::num::NonZero<u64>> {
+    let mut task_manager = self.task_manager.write();
+    let task_id = task_manager.create_task();
+    self.threads.logic_thread.tx().try_send(crate::structs::LogicCommand::SimulationTick {
+      task_id: task_id.get(),
+      scene_id,
+      delta_time,
+    }).map_err(|_| EngineError::InvalidOperation("logic thread closed"))?;
+    Ok(task_id)
+  }
+
+  // TODO all task methods throughout the whole crate return EngineResult<NonZero<u64>>
+  // TODO if task insertion failed, FFI wrapper returns 0
+  pub fn render_tick(
+    &self,
+    presentation_engine_handle: PresentationEngineHandle,
+    scene_id: u64,
+    window_extent: [u32; 2],
+  ) -> EngineResult<core::num::NonZero<u64>> {
+    let task_id = self
+      .render_proxy
+      .0
+      .as_frontend()
+      .ok_or(EngineError::InvalidOperation("render_frontend"))
+      .and_then(|context| {
+        context
+          .with_device(self.render_proxy.1, |device| Ok(device.create_task()))
+          .map_err(|e| EngineError::from(e))
+      })?;
+
+    let scenes = self.scenes.read();
+    let active = scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
+    let scene = Arc::clone(&active);
+    let _ = self
+      .threads
+      .render_thread
+      .tx()
+      .try_send(RenderCommand::RenderFrame(crate::structs::RenderFrame {
+        presentation_engine_handle,
+        scene,
+        render_physical_meshes_outline: active
+          .read()
+          .outlines_enabled
+          .load(core::sync::atomic::Ordering::Acquire),
+        camera_entity: active
+          .read()
+          .active_camera_entity
+          .unwrap_or_default(),
+        window_width: window_extent[0],
+        window_height: window_extent[1],
+        clear_color: [0.0, 0.0, 0.0, 1.0],
+        sun_entity: active.read().sun_entity,
+        sky_entity: active.read().sky_entity,
+        cursor_entity: active.read().cursor_entity,
+      }));
+
+    Ok(unsafe { core::num::NonZero::new_unchecked(task_id) })
+  }
+
+  pub fn set_active_camera(&self, scene_id: u64, camera: u64) -> EngineResult<()> {
+    let (mut scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      camera,
+      "core_api:set_active_camera"
+    );
+    scene.write().active_camera_entity = Some(entity_id);
     Ok(())
   }
 
-  pub fn render_tick(&mut self) -> u64 {
-    let mut task_id = 0;
-    let _ = self.render_frontend.take_and(|context| {
-      context
-        .deref_device_and(
-          self.render_device_handle,
-          &mut task_id as *mut _ as *mut core::ffi::c_void,
-          |device, data| {
-            let tid = unsafe { &mut *(data as *mut u64) };
-            *tid = device.create_task();
-            Ok(())
-          },
-        )
-        .ok_or(aethervk_core_rlib::types::EngineError::InvalidNullArgument)
-        .and_then(|r| r.map_err(aethervk_core_rlib::types::EngineError::from))
-    });
-
-    if let Some(packet) = collect_render_packet(self) {
-      if let Some(active) = self.active_scene() {
-        let scene = Arc::clone(&active.scene);
-        let _ = self.render_tx.try_send(RenderCommand::RenderFrame {
-          packet,
-          scene,
-          task_id,
-        });
-      }
+  // TODO if task insertion failed, use Option::None
+  pub fn download_image(&self, buffer_ptr: *mut u8, buffer_size: usize) -> u64 {
+    if buffer_ptr.is_null() {
+      return 0;
     }
+    let task_id = self
+      .render_proxy
+      .0
+      .as_frontend()
+      .and_then(|context| {
+        context
+          .with_device(self.render_proxy.1, |device| Ok(device.create_task()))
+          .ok()
+      })
+      .unwrap_or(0);
+
+    if task_id == 0 {
+      return 0;
+    }
+
+    let _ = self
+      .threads
+      .render_thread
+      .tx()
+      .try_send(RenderCommand::DownloadImage(
+        crate::structs::DownloadImage {
+          task_id,
+          buffer: crate::structs::SendPtrMut(buffer_ptr),
+          buffer_size,
+        },
+      ));
 
     task_id
-  }
-
-  pub fn set_active_camera(&mut self, scene_id: u64, camera: u64) -> EngineResult<()> {
-    let (mut scene, entity_id) = expect_scene_and_entity!(self.get_scene_mut(scene_id), camera, "core_api:set_active_camera");
-    scene.active_camera_entity = Some(entity_id);
-    Ok(())
-  }
-
-  // TODO return a result of task, this will be async
-  pub fn download_image(&mut self, buffer_ptr: *mut u8, buffer_size: usize) -> bool {
-    if buffer_ptr.is_null() {
-      return false;
-    }
-    let mut success = false;
-    let done_signal = Arc::new(AtomicBool::new(false));
-
-    if self
-      .render_tx
-      .try_send(RenderCommand::DownloadImage {
-        buffer: SendPtrMut(buffer_ptr),
-        buffer_size,
-        success: SendPtrMut(&mut success),
-        done_signal: Arc::clone(&done_signal),
-      })
-      .is_err()
-    {
-      return false;
-    }
-
-    while !done_signal.load(core::sync::atomic::Ordering::Acquire) {
-      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
-    }
-
-    success
   }
 }

@@ -60,14 +60,12 @@ void main() {
   
   vec4 clipPos = push.viewProj * vec4(worldPos, 1.0);
   
-  // Add a slight depth bias to the grid to prevent Z-fighting with objects exactly at z=0
-  clipPos.z -= 0.00001 * clipPos.w;
-  
   if (alpha < 0.01) {
     discard;
   }
   
   outColor = vec4(push.gridColor, alpha);
   
-  gl_FragDepth = (clipPos.z / clipPos.w);
+  // Use a small constant bias in NDC space [0, 1] to prevent Z-fighting with z=0 objects.
+  gl_FragDepth = clamp(clipPos.z / clipPos.w - 0.00001, 0.0, 1.0);
 }

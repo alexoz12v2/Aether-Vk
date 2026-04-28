@@ -663,10 +663,14 @@ impl RequiredFeatures<'_> {
     self
       .descriptor_indexing
       .shader_sampled_image_array_non_uniform_indexing = vk::TRUE;
+    self
+      .descriptor_indexing
+      .shader_storage_buffer_array_non_uniform_indexing = vk::TRUE;
     // TODO: check that these are baseline for low end devices
     self.descriptor_indexing.descriptor_binding_partially_bound = vk::TRUE;
     // TODO: check that these are baseline for low end devices
     self.descriptor_indexing.descriptor_binding_sampled_image_update_after_bind = vk::TRUE;
+    self.descriptor_indexing.descriptor_binding_storage_buffer_update_after_bind = vk::TRUE;
 
     self
   }
@@ -698,6 +702,13 @@ impl RequiredFeatures<'_> {
       != vk::TRUE
     {
       the_vec.push("descriptor_indexing_non_uniform_indexing".to_string());
+    }
+    if self
+      .descriptor_indexing
+      .shader_storage_buffer_array_non_uniform_indexing
+      != vk::TRUE
+    {
+      the_vec.push("descriptor_indexing_storage_buffer_non_uniform_indexing".to_string());
     }
     if self.descriptor_indexing.descriptor_binding_partially_bound != vk::TRUE {
       the_vec.push("descriptor_binding_partially_bound".to_string());

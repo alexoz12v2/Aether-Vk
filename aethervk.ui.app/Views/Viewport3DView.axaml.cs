@@ -76,7 +76,7 @@ public partial class Viewport3DView : UserControl
     }
   }
 
-  private void HandleFrameReady()
+  private async void HandleFrameReady()
   {
     if (_bitmap == null || _viewModel == null)
       return;
@@ -86,12 +86,11 @@ public partial class Viewport3DView : UserControl
     // Lock the bitmap memory to allow native C++ code to write pixels
     using (var frame = _bitmap.Lock())
     {
-      _viewModel.CopyFrameToBuffer(
+      await _viewModel.CopyFrameToBuffer(
         frame.Address,
         (nuint)(_viewModel.Width * _viewModel.Height * 4)
       );
     }
-
     // Notify the Avalonia rendering system that the bitmap has been updated
     Dispatcher.UIThread.Post(() => RenderTargetImage.InvalidateVisual());
   }

@@ -1,5 +1,5 @@
 use aethervk_core_rlib::{
-  scene::{CameraComponent, EntityId, Scene, SunComponent, TransformComponent},
+  scene::{AlmanacPlanet, CameraComponent, EntityId, Scene, SunComponent, TransformComponent},
 };
 use aethervk_oshal_rlib::{
   math::{
@@ -16,6 +16,45 @@ use std::time::Instant;
 use anise::almanac::Almanac;
 use anise::prelude::Epoch;
 use crate::{constants, utils};
+
+pub fn format_distance(distance_engine_units: f64, sig_digits: u32) -> String {
+  let distance_km = distance_engine_units * constants::DISTANCE_SCALE_FACTOR;
+  let abs_dist = distance_km.abs();
+
+  let au_in_km = 149_597_870.7;
+  let ly_in_km = 9_460_730_472_580.8;
+
+  let (value, unit) = if abs_dist < 1.0 {
+    (distance_km * 1000.0, "m")
+  } else if abs_dist < au_in_km * 0.1 {
+    (distance_km, "km")
+  } else if abs_dist < ly_in_km * 0.1 {
+    (distance_km / au_in_km, "AU")
+  } else {
+    (distance_km / ly_in_km, "ly")
+  };
+
+  // Calculate the magnitude (power of 10) of the number
+  let magnitude = if value == 0.0 { 0 } else { value.abs().log10().floor() as i32 };
+
+  // Determine if we should use scientific notation
+  // We use it if the number is very small (magnitude < -3) or very large (magnitude >= 6)
+  if magnitude < -3 || magnitude >= 6 {
+    // Determine precision (number of digits after decimal point) for scientific format
+    let precision = (sig_digits as i32 - 1).max(0) as usize;
+    format!("{:.*e} {}", precision, value, unit)
+  } else {
+    // For standard notation, we want a total of 'sig_digits' significant digits.
+    // The number of digits before the decimal is (magnitude + 1) for positive magnitudes.
+    let digits_before_decimal = (magnitude + 1).max(1) as usize;
+    let precision = if sig_digits as usize > digits_before_decimal {
+      sig_digits as usize - digits_before_decimal
+    } else {
+      0
+    };
+    format!("{:.*} {}", precision, value, unit)
+  }
+}
 
 pub struct CmdContext<'a> {
   pub scene_guard: &'a Scene,
@@ -54,6 +93,7 @@ fn register_commands(registry: &mut test_utils::command::CommandRegistry<CmdCont
     let _ = tx.send(
       "  following          - Prints the entity the camera is currently following".to_string(),
     );
+    let _ = tx.send("  showgizmo          - Toggles the gizmo of the currently selected entity".to_string());
     let _ = tx.send("  printbvh [min] [max]- Prints BVH nodes for the selected entity".to_string());
     let _ =
       tx.send("  bvh-show <range> [idx] - Shows BVH nodes (e.g. 0-3, 2-, -4, all)".to_string());
@@ -63,6 +103,25 @@ fn register_commands(registry: &mut test_utils::command::CommandRegistry<CmdCont
       "  bvh-node-dbgrender-get <depth> <idx>        - Gets BVH node debug render state"
         .to_string(),
     );
+  });
+
+  registry.register("showgizmo", |ctx, _args, tx| {
+    if let Some(id) = ctx.state.selected_entity {
+      let mut visible = false;
+      let mut found = false;
+      ctx.scene_guard.with_component_mut(id, |gizmo: &mut aethervk_core_rlib::scene::GizmoComponent| {
+        gizmo.gizmo_visible = !gizmo.gizmo_visible;
+        visible = gizmo.gizmo_visible;
+        found = true;
+      });
+      if found {
+        let _ = tx.send(format!("Gizmo visibility set to {}", visible));
+      } else {
+        let _ = tx.send("Selected entity does not have a GizmoComponent".to_string());
+      }
+    } else {
+      let _ = tx.send("No entity selected".to_string());
+    }
   });
   registry.register("scene", |ctx, _args, tx| {
     let _ = tx.send("Scene Hierarchy:".to_string());
@@ -233,11 +292,9 @@ fn register_commands(registry: &mut test_utils::command::CommandRegistry<CmdCont
 
       let view_dir = (p_pos - cam_pos).normalize();
 
-      let yaw = -f32::atan2(-view_dir.x(), view_dir.y());
-      let pitch = f32::asin(view_dir.z());
-
-      ctx.state.yaw = yaw;
-      ctx.state.pitch = pitch;
+      ctx.state.yaw = f32::atan2(view_dir.x(), -view_dir.y());
+      ctx.state.pitch = f32::asin(view_dir.z());
+      ctx.state.camera_distance = (p_pos - cam_pos).length();
 
       let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), ctx.state.yaw);
       let pitch_quat =
@@ -377,57 +434,90 @@ fn register_commands(registry: &mut test_utils::command::CommandRegistry<CmdCont
       let _ = tx.send("No entity selected".to_string());
     }
   });
-  registry.register("get-bvh-dbgrender", |ctx, args, tx| {
-    if let Some(id) = ctx.state.selected_entity {
-      let mut parts = args.iter();
-      let depth: u32 = parts.next().unwrap_or(&"0").parse().unwrap_or(0);
-      let child_index: u32 = parts.next().unwrap_or(&"0").parse().unwrap_or(0);
-
-      let mut flat_idx = None;
-      ctx.scene_guard.with_component(
-        id,
-        |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
-          if let Some(bvh) = &mesh.mesh.bvh {
-            let mut current_child_index = 0;
-            let mut node_stack = vec![(0, 0)];
-            while let Some((idx, d)) = node_stack.pop() {
-              if d == depth {
-                if current_child_index == child_index {
-                  flat_idx = Some(idx);
-                  break;
-                }
-                current_child_index += 1;
-              }
-              let node = &bvh.nodes[idx];
-              if node.primitive_count == 0 {
-                node_stack.push((node.right_child_offset as usize, d + 1));
-                node_stack.push((node.left_child_or_primitive_offset as usize, d + 1));
-              }
-            }
-          }
-        },
-      );
-
-      if let Some(idx) = flat_idx {
-        let mut render = false;
-        ctx.scene_guard.with_component(
-          id,
-          |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
-            if idx < dbg.node_render_states.len() {
-              render = dbg.node_render_states[idx];
-            }
-          },
-        );
-        let _ = tx.send(format!(
-          "Node at depth {}, index {} is {}",
-          depth, child_index, render
-        ));
-      } else {
-        let _ = tx.send("Node not found.".to_string());
-      }
-    } else {
-      let _ = tx.send("No entity selected".to_string());
+  registry.register("measure", |ctx, args, tx| {
+    if args.len() != 2 {
+      let _ = tx.send("Usage: measure <entity1> <entity2>".to_string());
+      return;
     }
+
+    let name1 = args[0];
+    let name2 = args[1];
+
+    let id1 = match ctx.scene_guard.get_entity_by_name(name1) {
+      Some(id) => id,
+      None => {
+        let _ = tx.send(format!("Entity {} not found", name1));
+        return;
+      }
+    };
+
+    let id2 = match ctx.scene_guard.get_entity_by_name(name2) {
+      Some(id) => id,
+      None => {
+        let _ = tx.send(format!("Entity {} not found", name2));
+        return;
+      }
+    };
+
+    let mut pos1 = None;
+    let mut has_mesh1 = false;
+    ctx.scene_guard.with_component(id1, |t: &TransformComponent| {
+      pos1 = Some(t.position);
+    });
+    ctx.scene_guard.with_component(id1, |_m: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+      has_mesh1 = true;
+    });
+
+    let mut pos2 = None;
+    let mut has_mesh2 = false;
+    ctx.scene_guard.with_component(id2, |t: &TransformComponent| {
+      pos2 = Some(t.position);
+    });
+    ctx.scene_guard.with_component(id2, |_m: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+      has_mesh2 = true;
+    });
+
+    if pos1.is_none() || pos2.is_none() {
+      let _ = tx.send("Both entities must have a TransformComponent".to_string());
+      return;
+    }
+
+    if !has_mesh1 || !has_mesh2 {
+      let _ = tx.send("Warning: one or both entities lack a PhysicalMeshComponent (using raw position instead of center of mass)".to_string());
+    }
+
+    // TODO: implement center of mass calculation using PhysicalMeshComponent if needed.
+    // For now, use the transform position.
+    let p1 = pos1.unwrap();
+    let p2 = pos2.unwrap();
+
+    let measure_name = format!("measure_{}", ctx.state.measure_counter);
+    ctx.state.measure_counter += 1;
+
+    let measure_id = ctx.scene_guard.spawn_entity(&measure_name);
+    let _ = ctx.scene_guard.add_component(
+      measure_id,
+      aethervk_core_rlib::scene::MeasurementComponent {
+        pos1: p1,
+        pos2: p2,
+        points: 12.0,
+        significant_digits: 4,
+      },
+    );
+    let _ = ctx.scene_guard.add_component(
+      measure_id,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    );
+    ctx.scene_guard.set_parent(measure_id, Some(ctx.root_entity));
+
+    let distance = (p1 - p2).length();
+    let formatted_dist = format_distance(distance as f64, 4);
+
+    let _ = tx.send(format!("Created measurement {} between {} and {}: {}", measure_name, name1, name2, formatted_dist));
   });
 }
 
@@ -541,6 +631,7 @@ pub struct LogicState {
   camera_distance: f32,
   selected_entity: Option<EntityId>,
   last_selected_entity: Option<EntityId>,
+  measure_counter: u32,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -589,8 +680,6 @@ pub fn start_logic_thread(
   cursor_entity: EntityId,
   grid_entity: EntityId,
   planets_ids: Vec<(i32, EntityId, f64, f32)>,
-  sun_entity: EntityId,
-  sun_radius: f32,
   assets_dir: std::path::PathBuf,
   outlines_enabled: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
@@ -598,9 +687,10 @@ pub fn start_logic_thread(
     let mut state = LogicState {
       yaw: std::f32::consts::PI,
       pitch: 0.0,
-      camera_distance: 60.0,
+      camera_distance: 400.0,
       selected_entity: None,
       last_selected_entity: None,
+      measure_counter: 0,
     };
 
     let mut last_time = Instant::now();
@@ -649,8 +739,6 @@ pub fn start_logic_thread(
           scene_shared.as_ref(),
           camera_entity,
           cursor_entity,
-          &planets_ids,
-          sun_entity,
           accumulator,
           &almanac.almanac,
           &mut current_scale,
@@ -724,8 +812,6 @@ fn logic_fixed_update_step(
   scene_guard: &Scene,
   camera_entity: EntityId,
   cursor_entity: EntityId,
-  planets_ids: &Vec<(i32, EntityId, f64, f32)>,
-  sun_entity: EntityId,
   accumulator: f32,
   almanac: &Almanac,
   current_scale: &mut TimeScale,
@@ -740,36 +826,8 @@ fn logic_fixed_update_step(
     *current_scale = TimeScale::Stopped;
   }
 
-  for (naif_id, entity, rot_period, planet_radius) in planets_ids.iter() {
-    let pos =
-      aethervk_core_rlib::simulation::almanac::get_almanac_pos(*naif_id, *current_epoch, &almanac);
-    scene_guard.with_component_mut(*entity, |c: &mut TransformComponent| {
-      c.position = pos;
-      c.scale = Vec3f32::splat(1.0);
-      let rotations = if *rot_period != 0.0 {
-        step_days * 24.0 / rot_period
-      } else {
-        0.0
-      };
-      let radians = (rotations * core::f64::consts::TAU) as f32;
-      let rot_delta = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), radians);
-      c.rotation = (c.rotation * rot_delta).normalize();
-    });
-  }
-
-  // Also update Sun
-  let pos = aethervk_core_rlib::simulation::almanac::get_almanac_pos(
-    constants::PlanetNaifId::SUN,
-    *current_epoch,
-    &almanac,
-  );
-  scene_guard.with_component_mut(sun_entity, |c: &mut TransformComponent| {
-    c.position = pos;
-    let rot_period = 25.05; // Sun's equatorial rotation period in days
-    let rotations = step_days * 24.0 / rot_period;
-    let radians = (rotations * core::f64::consts::TAU) as f32;
-    let rot_delta = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), radians);
-    c.rotation = (c.rotation * rot_delta).normalize();
+  scene_guard.query2_mut::<AlmanacPlanet, TransformComponent, _>(|_, planet, transform| {
+    planet.step(transform, *current_epoch, step_days, almanac);
   });
 
   if let Some(target) = *following_entity {
@@ -786,6 +844,8 @@ fn logic_fixed_update_step(
     });
 
     let offset = cam_pos - cursor_pos;
+  let mut dist = offset.length();
+  if dist < 0.1 { dist = 0.1; }
 
     scene_guard.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
       c.position = t_pos;
@@ -872,6 +932,8 @@ fn logic_update_command(
     dist = 0.1;
   }
 
+  state.camera_distance = dist;
+
   match command {
     LogicCommand::Exit => {} // handled above
     LogicCommand::TogglePlanetOutlines => {
@@ -881,63 +943,46 @@ fn logic_update_command(
     LogicCommand::ResetCamera => {
       *following_entity = None;
       let ssb = Vec3f32::from_components(0.0, 0.0, 0.0);
-      let offset = Vec3f32::from_components(
-        0.0,
-        -100000.0 / crate::constants::DISTANCE_SCALE_FACTOR as f32, // South
-        0.0,
-      );
+      state.camera_distance = 400.0;
 
-      state.yaw = std::f32::consts::PI; // Look North (towards origin)
+      state.yaw = 0.0; // Identity rotation looks South (Forward)
       state.pitch = 0.0;
-      let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), state.yaw);
-      let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
-      let new_rot = (yaw_quat * pitch_quat).normalize();
 
       scene_guard.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
         c.position = ssb;
       });
-      scene_guard.with_component_mut(camera_entity, |c: &mut TransformComponent| {
-        c.position = ssb + offset;
-        c.rotation = new_rot;
-      });
+      update_camera_from_state(state, scene_guard, camera_entity, ssb);
     }
     LogicCommand::RotateCamera { delta_x, delta_y } => {
       let rotation_speed = 0.005;
       state.yaw += delta_x * rotation_speed;
-      state.pitch -= delta_y * rotation_speed;
+      state.pitch += delta_y * rotation_speed;
 
       state.yaw = state.yaw.fmod(<f32 as FloatOps>::PI * 2.0);
       state.pitch = state.pitch.clamp(-1.55, 1.55);
 
-      let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), state.yaw);
-      let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
-      let new_rot = yaw_quat * pitch_quat;
-
-      let rot_delta = new_rot * cam_rot.conjugate();
-      let new_offset = rot_delta.rotate_vector(offset);
-
-      scene_guard.with_component_mut(camera_entity, |c: &mut TransformComponent| {
-        c.position = cursor_pos + new_offset;
-        c.rotation = new_rot;
-      });
+      update_camera_from_state(state, scene_guard, camera_entity, cursor_pos);
     }
     LogicCommand::ZoomCamera { amount } => {
-      let zoom_speed = dist * 0.1;
-      let mut new_dist = dist - amount * zoom_speed;
-      if new_dist < 0.1 {
-        new_dist = 0.1;
+      let zoom_speed = state.camera_distance * 0.1;
+      state.camera_distance -= amount * zoom_speed;
+      if state.camera_distance < 0.1 {
+        state.camera_distance = 0.1;
       }
-      let new_offset = offset.normalize() * new_dist;
-      scene_guard.with_component_mut(camera_entity, |c: &mut TransformComponent| {
-        c.position = cursor_pos + new_offset;
-      });
+      
+      update_camera_from_state(state, scene_guard, camera_entity, cursor_pos);
     }
     LogicCommand::PanCursor { delta_x, delta_y } => {
       *following_entity = None; // break following
-      let pan_speed = dist * 0.001;
+      let pan_speed = state.camera_distance * 0.001;
 
-      let right = cam_rot.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
-      let up = cam_rot.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
+      // Extract current basis from rotation to pan relative to camera view
+      let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), state.yaw);
+      let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
+      let current_rot = (yaw_quat * pitch_quat).normalize();
+
+      let right = current_rot.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
+      let up = current_rot.rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0));
       let translation = right * (-delta_x * pan_speed) + up * (delta_y * pan_speed);
 
       scene_guard.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
@@ -977,21 +1022,10 @@ fn logic_update_command(
     LogicCommand::RaycastCursor { ndc_x, ndc_y } => {
       *following_entity = None; // break following
       let mut view_proj_inv = Mat4x4f32::identity();
-      let mut cam_pos = Vec3f32::from_components(0.0, 0.0, 0.0);
 
       let mut view = Mat4x4f32::identity();
       scene_guard.with_component(camera_entity, |c: &TransformComponent| {
-        cam_pos = c.position;
-        // Look along Z axis as fallback if eye==center? No, in Z-up system, looking along Y.
-        let mut dir = cursor_pos - cam_pos;
-        if dir.length_squared() < 1e-6 {
-          dir = Vec3f32::from_components(0.0, 1.0, 0.0);
-        }
-        view = Mat4x4f32::look_at(
-          cam_pos,
-          cam_pos + dir,
-          Vec3f32::from_components(0.0, 0.0, 1.0),
-        );
+        view = c.to_mat4::<Mat4x4f32>().inverse().unwrap_or(Mat4x4f32::identity());
       });
 
       scene_guard.with_component(camera_entity, |cam: &CameraComponent| {
@@ -1020,7 +1054,7 @@ fn logic_update_command(
 
       let ray_dir = (ray_target - ray_origin).normalize();
 
-      let max_distance = 2.0;
+      let max_distance = 10.0;
       let mut target_pos = ray_origin + ray_dir * max_distance;
 
       if ray_dir.z().abs() > 1e-6 {
@@ -1050,16 +1084,10 @@ fn logic_update_command(
       }
     }
     LogicCommand::SnapCameraToCursor => {
-      let offset = Vec3f32::from_components(0.0, -60.0, 0.0);
       state.yaw = 0.0;
-      state.pitch = 0.0;
-      let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), state.yaw);
-      let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
-      let new_rot = (yaw_quat * pitch_quat).normalize();
-      scene_guard.with_component_mut(camera_entity, |c: &mut TransformComponent| {
-        c.position = cursor_pos + offset;
-        c.rotation = new_rot;
-      });
+      state.pitch = -0.3; // Slight top-down angle
+      state.camera_distance = 2.0;
+      update_camera_from_state(state, scene_guard, camera_entity, cursor_pos);
     }
     LogicCommand::ToggleGrid => {
       let has_grid = scene_guard
@@ -1138,42 +1166,28 @@ fn logic_update_command(
           almanac,
         );
 
-        let mut dir_to_sun = sun_pos - p_pos;
-        if dir_to_sun.length_squared() < 1e-6 {
-          dir_to_sun = Vec3f32::from_components(0.0, 1.0, 0.0);
-        } else {
-          dir_to_sun = dir_to_sun.normalize();
-        }
-
-        let offset_dist = (planet_radius as f32 * 3.0).max(60.0);
-
+        let dir_to_sun = (sun_pos - p_pos).normalize();
         let mut right = dir_to_sun.cross(Vec3f32::from_components(0.0, 0.0, 1.0));
         if right.length_squared() < 1e-6 {
           right = Vec3f32::from_components(1.0, 0.0, 0.0);
         } else {
           right = right.normalize();
         }
-        let up = right.cross(dir_to_sun).normalize();
 
-        let cam_pos =
-          p_pos - dir_to_sun * offset_dist + right * (offset_dist * 1.5) + up * (offset_dist * 0.5);
-
+        // Place camera at a 15 degree angle from the planet-sun line
+        // so both are in the 45 degree frustum.
+        let angle = 15.0f32.to_radians();
+        let cam_dir = (dir_to_sun * angle.cos() + right * angle.sin()).normalize();
+        
+        let offset_dist = (planet_radius as f32 * 4.0).max(0.5);
+        let cam_pos = p_pos - cam_dir * offset_dist;
         let view_dir = (p_pos - cam_pos).normalize();
 
-        let yaw = -f32::atan2(-view_dir.x(), view_dir.y());
-        let pitch = f32::asin(view_dir.z());
+        state.yaw = f32::atan2(view_dir.x(), -view_dir.y());
+        state.pitch = f32::asin(view_dir.z());
+        state.camera_distance = offset_dist;
 
-        state.yaw = yaw;
-        state.pitch = pitch;
-
-        let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), state.yaw);
-        let pitch_quat =
-          Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
-
-        scene_guard.with_component_mut(camera_entity, |c: &mut TransformComponent| {
-          c.position = cam_pos;
-          c.rotation = (yaw_quat * pitch_quat).normalize();
-        });
+        update_camera_from_state(state, scene_guard, camera_entity, p_pos);
       }
     }
   }
@@ -1189,6 +1203,26 @@ fn logic_update_command(
   let scale_factor = (new_dist * 0.01).clamp(0.02, 0.05);
   scene_guard.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
     c.scale = Vec3f32::from_components(scale_factor, scale_factor, scale_factor);
+  });
+}
+
+fn update_camera_from_state(
+  state: &LogicState,
+  scene_guard: &Scene,
+  camera_entity: EntityId,
+  cursor_pos: Vec3f32,
+) {
+  let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), state.yaw);
+  let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
+  let new_rot = (yaw_quat * pitch_quat).normalize();
+
+  // Offset starts at world North (+Y)
+  let initial_offset = Vec3f32::from_components(0.0, state.camera_distance, 0.0);
+  let new_offset = new_rot.rotate_vector(initial_offset);
+
+  scene_guard.with_component_mut(camera_entity, |c: &mut TransformComponent| {
+    c.position = cursor_pos + new_offset;
+    c.rotation = new_rot;
   });
 }
 
@@ -1221,71 +1255,86 @@ mod tests {
 
   #[test]
   fn test_camera_rotation_axes() {
-    // Reference frame: +z = up, -y = forward, +x = right
-    let forward_local = Vec3f32::from_components(0.0, -1.0, 0.0);
-    let right_local = Vec3f32::from_components(1.0, 0.0, 0.0);
-    let up_local = Vec3f32::from_components(0.0, 0.0, 1.0);
+    // Local axes in our new standard graphics view space mapping:
+    // Local X = Right, Local Y = Up, Local Z = Backward
+    let local_right = Vec3f32::from_components(1.0, 0.0, 0.0);
+    let local_up = Vec3f32::from_components(0.0, 1.0, 0.0);
+    let local_backward = Vec3f32::from_components(0.0, 0.0, 1.0);
+
+    // Expected world directions at identity rotation:
+    // World Right = [+1, 0, 0]
+    // World Up = [0, 0, 1]
+    // World Backward = [0, 1, 0]
+    let world_right_expected = Vec3f32::from_components(1.0, 0.0, 0.0);
+    let world_up_expected = Vec3f32::from_components(0.0, 0.0, 1.0);
+    let world_backward_expected = Vec3f32::from_components(0.0, 1.0, 0.0);
 
     let eps = 1e-5;
 
-    // 1. Identity rotation (yaw=0, pitch=0)
+    // 1. Identity rotation
     let rot = Quat::identity();
-    assert_vec_eq(
-      rot.rotate_vector(forward_local),
-      Vec3f32::from_components(0.0, -1.0, 0.0),
-      eps,
-    );
-    assert_vec_eq(
-      rot.rotate_vector(right_local),
-      Vec3f32::from_components(1.0, 0.0, 0.0),
-      eps,
-    );
+    let mat = Mat4x4f32::from_quat_custom_frame(rot);
+    
+    let rotated_right_v4 = mat.mul_vector(local_right.to_vec4(0.0));
+    let rotated_up_v4 = mat.mul_vector(local_up.to_vec4(0.0));
+    let rotated_backward_v4 = mat.mul_vector(local_backward.to_vec4(0.0));
 
-    // 2. Yaw 90 degrees (PI/2) - Right turn
-    // In our math lib, positive rotation around +Z moves +X to +Y if right handed,
-    // but let's see what the math gives: it gave Y=-1.0, meaning CW rotation!
-    // If it's CW, then -Y (Forward) rotated 90 around Z gives -X.
-    // Let's adjust expectations to match the actual math lib convention.
+    let rotated_right = Vec3f32::from_components(rotated_right_v4.x(), rotated_right_v4.y(), rotated_right_v4.z());
+    let rotated_up = Vec3f32::from_components(rotated_up_v4.x(), rotated_up_v4.y(), rotated_up_v4.z());
+    let rotated_backward = Vec3f32::from_components(rotated_backward_v4.x(), rotated_backward_v4.y(), rotated_backward_v4.z());
+
+    assert_vec_eq(rotated_right, world_right_expected, eps);
+    assert_vec_eq(rotated_up, world_up_expected, eps);
+    assert_vec_eq(rotated_backward, world_backward_expected, eps);
+
+    // 2. Yaw 90 degrees (around world Up [0, 0, 1])
     let yaw = core::f32::consts::FRAC_PI_2;
-    let rot = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), yaw);
-    let forward_world = rot.rotate_vector(forward_local);
-    let right_world = rot.rotate_vector(right_local);
+    let q = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), yaw);
+    let mat = Mat4x4f32::from_quat_custom_frame(q);
+    
+    // Rotating around Z: 
+    // Right [1,0,0] -> [0,1,0] (Backward)
+    // Backward [0,1,0] -> [-1,0,0] (Left)
+    // Up [0,0,1] stays Up [0,0,1]
+    
+    let rotated_right_v4 = mat.mul_vector(local_right.to_vec4(0.0));
+    let rotated_up_v4 = mat.mul_vector(local_up.to_vec4(0.0));
 
-    if right_world.y() < 0.0 {
-      // It seems Quat::from_axis_angle is CW or left-handed in this library
-      assert_vec_eq(forward_world, Vec3f32::from_components(-1.0, 0.0, 0.0), eps);
-      assert_vec_eq(right_world, Vec3f32::from_components(0.0, -1.0, 0.0), eps);
-    } else {
-      assert_vec_eq(forward_world, Vec3f32::from_components(1.0, 0.0, 0.0), eps);
-      assert_vec_eq(right_world, Vec3f32::from_components(0.0, 1.0, 0.0), eps);
-    }
+    let rotated_right = Vec3f32::from_components(rotated_right_v4.x(), rotated_right_v4.y(), rotated_right_v4.z());
+    let rotated_up = Vec3f32::from_components(rotated_up_v4.x(), rotated_up_v4.y(), rotated_up_v4.z());
+    
+    assert_vec_eq(rotated_right, world_backward_expected, eps);
+    assert_vec_eq(rotated_up, world_up_expected, eps);
+  }
 
-    // 3. Pitch 90 degrees (PI/2)
-    let pitch = core::f32::consts::FRAC_PI_2;
-    let rot = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), pitch);
-    let forward_world = rot.rotate_vector(forward_local);
-    let up_world = rot.rotate_vector(up_local);
+  #[test]
+  fn test_movement_directions() {
+    // Identity rotation
+    let rot = Quat::identity();
+    let mat = Mat4x4f32::from_quat_custom_frame(rot);
 
-    if up_world.y() < 0.0 {
-      assert_vec_eq(forward_world, Vec3f32::from_components(0.0, 0.0, -1.0), eps);
-      assert_vec_eq(up_world, Vec3f32::from_components(0.0, -1.0, 0.0), eps);
-    } else {
-      assert_vec_eq(forward_world, Vec3f32::from_components(0.0, 0.0, 1.0), eps);
-      assert_vec_eq(up_world, Vec3f32::from_components(0.0, 1.0, 0.0), eps);
-    }
+    // Local directions as used in standard movement logic
+    let local_right = Vec3f32::from_components(1.0, 0.0, 0.0);
+    let local_up = Vec3f32::from_components(0.0, 1.0, 0.0);
+    let local_backward = Vec3f32::from_components(0.0, 0.0, 1.0);
 
-    // 4. Reset orientation (yaw=PI, pitch=0) - Looking at +Y (towards origin)
-    let yaw = core::f32::consts::PI;
-    let rot = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), yaw);
-    assert_vec_eq(
-      rot.rotate_vector(forward_local),
-      Vec3f32::from_components(0.0, 1.0, 0.0),
-      eps,
-    );
-    assert_vec_eq(
-      rot.rotate_vector(right_local),
-      Vec3f32::from_components(-1.0, 0.0, 0.0),
-      eps,
-    );
+    // Rotate these local axes into world space
+    let rotated_right_v4 = mat.mul_vector(local_right.to_vec4(0.0));
+    let rotated_up_v4 = mat.mul_vector(local_up.to_vec4(0.0));
+    let rotated_backward_v4 = mat.mul_vector(local_backward.to_vec4(0.0));
+
+    let rotated_right = Vec3f32::from_components(rotated_right_v4.x(), rotated_right_v4.y(), rotated_right_v4.z());
+    let rotated_up = Vec3f32::from_components(rotated_up_v4.x(), rotated_up_v4.y(), rotated_up_v4.z());
+    let rotated_backward = Vec3f32::from_components(rotated_backward_v4.x(), rotated_backward_v4.y(), rotated_backward_v4.z());
+
+    let eps = 1e-5;
+
+    // Movement mappings:
+    // Right should be +X
+    assert_vec_eq(rotated_right, Vec3f32::from_components(1.0, 0.0, 0.0), eps);
+    // Up should be +Z
+    assert_vec_eq(rotated_up, Vec3f32::from_components(0.0, 0.0, 1.0), eps);
+    // Forward should be -Y (so Backward is +Y)
+    assert_vec_eq(rotated_backward, Vec3f32::from_components(0.0, 1.0, 0.0), eps);
   }
 }

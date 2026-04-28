@@ -1,11 +1,12 @@
-use aethervk_core_rlib::types::GpuResult;
 use aethervk_core_rlib::{
+  types::GpuResult,
   gpu::{self, frame::RenderScene, RenderDevice},
   scene::{
     CameraComponent, EntityId, PhysicalMeshComponent, RenderableDataRef, Scene, SunComponent,
     TransformComponent,
   },
   types::RuntimeParams,
+  gpu::{PresentationEngineHandle, ScopedCommandBuffer, ScopedRenderPass},
 };
 use aethervk_oshal_rlib::math::{
   matrix::{mat4::Mat4x4f32, Matrix4, SquareMatrix},
@@ -16,7 +17,8 @@ use heapless::index_map::FnvIndexMap;
 use rfd::FileDialog;
 use std::sync::Arc;
 use test_utils::{
-  cycle_get_asset_path_from_exe, get_handle_and_window_info, setup_resize_hook, AppEvent,
+  cycle_get_asset_path_from_exe, get_handle_and_window_info, scene_to_render_scene,
+  setup_resize_hook, AppEvent,
 };
 use winit::{event_loop::EventLoopBuilder, window::WindowBuilder};
 
@@ -25,17 +27,6 @@ struct AppState {
   is_exiting: bool,
   scene: Arc<Scene>,
   window: Option<winit::window::Window>,
-}
-
-#[repr(C)]
-struct RenderPayloadData<'a> {
-  presentation_engine: gpu::PresentationEngineHandle,
-  scene: &'a Scene,
-  camera_entity: EntityId,
-  mesh_entity: EntityId,
-  sun_entity: EntityId,
-  width: u32,
-  height: u32,
 }
 
 fn main() {
@@ -381,133 +372,74 @@ impl test_utils::app::App for MeshApp {
       return;
     }
 
-    let mut payload = RenderPayloadData {
-      presentation_engine: self.presentation_engine,
-      scene: &self.app_state.scene,
-      camera_entity: self.camera_entity,
-      mesh_entity: self.mesh_entity,
-      sun_entity: self.sun_entity,
-      width: self.width,
-      height: self.height,
-    };
-
-    self
+    let res = self
       .render_frontend
       .with_device(self.render_device_handle, |device| {
-        render_function(device, &mut payload).unwrap();
-        Ok(())
-      })
-      .unwrap();
+        let render_scene = scene_to_render_scene(
+          &self.app_state.scene,
+          device,
+          self.presentation_engine,
+          self.camera_entity,
+          false,
+        )?;
+        render_function(
+          device,
+          render_scene,
+          self.presentation_engine,
+          [self.width, self.height],
+        )
+      });
+    if let Err(err) = res {
+      aethervk_oshal_rlib::log!("Rendering Error: {}", err);
+    }
   }
 }
 
-fn render_function(device: &dyn RenderDevice, payload: &mut RenderPayloadData) -> GpuResult<()> {
+fn render_function(
+  device: &dyn RenderDevice,
+  render_scene: RenderScene,
+  presentation_engine_handle: PresentationEngineHandle,
+  screen_extent: [u32; 2],
+) -> GpuResult<()> {
   device.start_frame()?;
-  let acquire_result = device.acquire_next_image(payload.presentation_engine)?;
+  let acquire_result = device.acquire_next_image(presentation_engine_handle)?;
   if acquire_result.status.needs_resize() {
     device.resize_presentation_engine(
-      payload.presentation_engine,
-      payload.width,
-      payload.height,
+      presentation_engine_handle,
+      screen_extent[0],
+      screen_extent[1],
     )?;
     return Ok(());
   }
 
-  let mut camera_transform = TransformComponent {
-    position: Vec3f32::from_components(0.0, 0.0, 0.0),
-    rotation: Quat::identity(),
-    scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-  };
-  let mut camera_component = CameraComponent {
-    projection: Mat4x4f32::identity(),
-    near_plane: 0.1,
-    far_plane: 100.0,
-  };
-  payload
-    .scene
-    .with_component(payload.camera_entity, |c: &TransformComponent| {
-      camera_transform = *c
-    });
-  payload
-    .scene
-    .with_component(payload.camera_entity, |c: &CameraComponent| {
-      camera_component = *c
-    });
-
-  let mut render_scene = RenderScene::new((camera_transform, camera_component));
-
-  payload
-    .scene
-    .with_component(payload.mesh_entity, |mesh: &PhysicalMeshComponent| {
-      render_scene
-        .add_renderable(
-          device,
-          payload.mesh_entity,
-          Mat4x4f32::identity(),
-          RenderableDataRef::PhysicalMesh(mesh),
-          payload.presentation_engine,
-          "mesh",
-          false,
-          [1.0, 1.0, 1.0, 1.0],
-        )
-        .unwrap();
-    });
-
-  let mut sun_transform = TransformComponent {
-    position: Vec3f32::from_components(0.0, 0.0, 0.0),
-    rotation: Quat::identity(),
-    scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-  };
-  let mut sun_component = SunComponent {
-    resolution: (128, 128, 128),
-  };
-  payload
-    .scene
-    .with_component(payload.sun_entity, |c: &TransformComponent| {
-      sun_transform = *c
-    });
-  payload
-    .scene
-    .with_component(payload.sun_entity, |c: &SunComponent| sun_component = *c);
-  render_scene.sun = Some((payload.sun_entity, sun_component, sun_transform.into()));
-
   let cmd_buffer = device.get_command_buffer()?;
+  let cmd_guard = ScopedCommandBuffer::new(device, cmd_buffer, None)?;
   device.begin_command_buffer(cmd_buffer)?;
-  device.update_sun(cmd_buffer, payload.sun_entity, &sun_component)?;
-  device.begin_render_pass(cmd_buffer, payload.presentation_engine, &acquire_result)?;
+  if let Some(sun_call) = &render_scene.sun_call {
+    // TODO move to kernels
+    device.update_sun(cmd_buffer, sun_call.entity, (128, 128, 128))?;
+  }
+  device.begin_render_pass(cmd_buffer, presentation_engine_handle, &acquire_result)?;
+  let render_pass_guard = ScopedRenderPass::new(device, cmd_buffer);
 
-  let extent = device.get_presentation_engine_extent(payload.presentation_engine)?;
-  let root_viewport = gpu::Viewport {
-    x: 0.0,
-    y: 0.0,
-    width: extent[0] as f32,
-    height: extent[1] as f32,
-    min_depth: 0.0,
-    max_depth: 1.0,
-  };
-  device.set_viewport(cmd_buffer, &root_viewport)?;
-  device.set_scissor(
-    cmd_buffer,
-    &gpu::Rect2D {
-      offset: [0, 0],
-      extent,
-    },
-  )?;
+  let extent = device.get_presentation_engine_extent(presentation_engine_handle)?;
+  device.set_viewport(cmd_buffer, &gpu::Viewport::from_extent(extent))?;
+  device.set_scissor(cmd_buffer, &gpu::Rect2D::from_extent(extent))?;
 
   device.render_frame(cmd_buffer, &render_scene)?;
-  device.end_render_pass(cmd_buffer)?;
-  device.submit_command_buffer(cmd_buffer, None)?;
+  render_pass_guard.end()?;
+  cmd_guard.submit()?;
 
   let present_status = device.present(
-    payload.presentation_engine,
+    presentation_engine_handle,
     acquire_result.image_index as usize,
     acquire_result.frame_index as usize,
   )?;
   if present_status.needs_resize() {
     device.resize_presentation_engine(
-      payload.presentation_engine,
-      payload.width,
-      payload.height,
+      presentation_engine_handle,
+      screen_extent[0],
+      screen_extent[1],
     )?;
   }
 

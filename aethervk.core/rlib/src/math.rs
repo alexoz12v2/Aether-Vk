@@ -1,9 +1,33 @@
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
+use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4, vec3::Vec3f32};
 use aethervk_oshal_rlib::math::matrix::{Matrix, Matrix3, MatrixVectorMul, SquareMatrix, mat3::Mat3f32};
 use aethervk_oshal_rlib::math::{FloatLike, MulAddIdentity};
 use alloc::vec::Vec;
 
 pub mod collision;
+
+/// Converts a world-space point to screen space.
+pub fn from_world_space_to_screen_space(
+  world_pos: Vec3f32,
+  view_proj: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+  window_extent: (f32, f32),
+) -> Option<(f32, f32)> {
+  let world_vec4 = world_pos.to_point();
+  let mut clip = view_proj.mul_vector(world_vec4);
+  if clip.w() > 0.0 {
+    clip = clip / clip.w();
+    if clip.z() >= 0.0 && clip.z() <= 1.0 {
+      let ndc_x = clip.x();
+      let ndc_y = clip.y();
+
+      let screen_x = (ndc_x * 0.5 + 0.5) * window_extent.0;
+      let screen_y = (ndc_y * 0.5 + 0.5) * window_extent.1;
+
+      return Some((screen_x, screen_y));
+    }
+  }
+
+  None
+}
 
 pub fn compute_com_and_tensor(verts: &[Vec3f32], m: f32) -> (Vec3f32, Mat3f32) {
   let mut com = Vec3f32::zero();

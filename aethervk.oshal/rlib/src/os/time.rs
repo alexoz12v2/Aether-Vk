@@ -85,7 +85,7 @@ fn get_monotonic_time() -> timeus_t {
 
 impl TimeInfo {
   pub fn new(fixed_delta_time: timeus_t, maximum_delta_time: timeus_t, time_scale: f32) -> Self {
-    assert!(fixed_delta_time < maximum_delta_time);
+    assert!(fixed_delta_time <= maximum_delta_time);
     assert!(time_scale > 0.0);
 
     #[cfg(windows)]

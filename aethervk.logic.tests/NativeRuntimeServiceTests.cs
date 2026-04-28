@@ -90,23 +90,5 @@ namespace AetherVk.Logic.Tests
   {
     // Deprecated
   }
-      );
-      
-      // Zoom camera
-      AetherVk.Logic.Services.NativeInterop.avkSimulationContext_processCommand(
-        (IntPtr)typeof(NativeRuntimeService).GetField("_simulationContext", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(_service)!,
-        new AetherVk.Logic.Services.NativeInterop.FfiLogicCommand {
-          cmd_type = 1, // ZoomCamera
-          float_val_1 = 5.0f,
-        }
-      );
-
-      // Sleep briefly to let the logic thread process the commands
-      System.Threading.Thread.Sleep(50);
-      
-      Assert.True(true, "processCommand successfully executed without deadlock or crash");
-    }
-    catch (System.DllNotFoundException) {}
-  }
 }
 }

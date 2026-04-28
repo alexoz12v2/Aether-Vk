@@ -433,6 +433,9 @@ mod tests {
   use alloc::sync::Arc;
   use alloc::boxed::Box;
   use alloc::vec::Vec;
+  use crate::os::pool::chunked::ThreadPoolChunkedExt;
+  use crate::os::pool::persistent::{ThreadPoolPersistentExt, PersistentStatus};
+  use crate::os::pool::tasklet::ThreadPoolExt;
 
   struct TestWorkload {
     counter: Arc<AtomicUsize>,
@@ -463,5 +466,43 @@ mod tests {
     pool.gather();
 
     assert_eq!(counter.load(Ordering::SeqCst), 100);
+  }
+
+  #[test]
+  fn test_thread_pool_chunked() {
+    let pool = ThreadPool::new(4).expect("Failed to create thread pool");
+    let counter = Arc::new(AtomicUsize::new(0));
+    let c = Arc::clone(&counter);
+    let handle = pool.spawn_chunked(10, move |chunk_id| {
+      c.fetch_add(chunk_id, Ordering::SeqCst);
+    }).expect("Failed to spawn chunked");
+    handle.wait();
+    assert_eq!(counter.load(Ordering::SeqCst), 45); // Sum of 0..9
+  }
+
+  #[test]
+  fn test_thread_pool_persistent() {
+    let pool = ThreadPool::new(4).expect("Failed to create thread pool");
+    let mut i = 0;
+    let handle = pool.spawn_persistent(None, move || {
+      if i < 10 {
+        i += 1;
+        PersistentStatus::Yield
+      } else {
+        PersistentStatus::Complete(i)
+      }
+    }).expect("Failed to spawn persistent");
+    let res = handle.wait();
+    assert_eq!(res, 10);
+  }
+
+  #[test]
+  fn test_thread_pool_tasklet() {
+    let pool = ThreadPool::new(4).expect("Failed to create thread pool");
+    let handle = pool.spawn_tasklet(None, || {
+      42
+    }).expect("Failed to spawn tasklet");
+    let res = handle.wait();
+    assert_eq!(res, 42);
   }
 }

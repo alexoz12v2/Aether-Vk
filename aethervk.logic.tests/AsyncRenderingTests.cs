@@ -54,9 +54,6 @@ namespace AetherVk.Logic.Tests
         Assert.True(_service.IsInitialized);
         _service.StartSimulation();
 
-        // Set clear color to a specific value (e.g., green)
-        _service.SetClearColor(0.0f, 1.0f, 0.0f, 1.0f);
-
         // Spawn a procedural sphere to have something in the scene
         ulong sphereId = _service.SpawnProceduralSphere("TestSphere", 1.0f);
         Assert.NotEqual(0ul, sphereId);
@@ -302,8 +299,8 @@ namespace AetherVk.Logic.Tests
         IntPtr bufferPtr2 = Marshal.AllocHGlobal(bufferSize);
         try
         {
-          bool success1 = service1.DownloadImage(bufferPtr1, (nuint)bufferSize);
-          bool success2 = service2.DownloadImage(bufferPtr2, (nuint)bufferSize);
+          bool success1 = await service1.DownloadImageAsync(bufferPtr1, (nuint)bufferSize);
+          bool success2 = await service2.DownloadImageAsync(bufferPtr2, (nuint)bufferSize);
           
           Assert.True(success1, "Failed to download image from Main Viewport.\n");
           Assert.True(success2, "Failed to download image from Mesh Viewer.\n");
@@ -433,9 +430,6 @@ namespace AetherVk.Logic.Tests
 
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: StartSim v\n"); viewportService.StartSimulation();
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: StartSim m\n"); meshViewerService.StartSimulation();
-
-        viewportService.SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        meshViewerService.SetClearColor(0.5f, 0.5f, 0.5f, 1.0f);
 
         var root2 = System.Linq.Enumerable.FirstOrDefault(meshViewerService.RootEntities);
         var sun2 = meshViewerService.SpawnEntity("sun", root2);

@@ -4,6 +4,7 @@ use aethervk_oshal_rlib as oshal;
 use oshal::{hash::FnvHasher, os::native::ThreadId};
 use ash::{vk, Device};
 use alloc::{boxed::Box, collections::VecDeque, sync, vec::Vec};
+use core::sync::atomic::AtomicU32;
 use spirv_reflect::{ffi::SpvReflectResult_SPV_REFLECT_RESULT_SUCCESS, types::ReflectShaderStageFlags};
 use crate::gpu_backends::vulkan;
 use crate::gpu_backends::vulkan::device::{VmaDebugNameExt, VulkanDebugNameExt};
@@ -1612,6 +1613,267 @@ impl BillboardRenderResourceArchetype {
 
     discard_pool.discard_pipeline_layout(layout, timeline);
     discard_pool.discard_descriptor_set_layout(self.set_1_layout.get(), timeline);
+    discard_pool.discard_descriptor_set_layout(self.set_0_layout.get(), timeline);
+  }
+}
+
+pub(super) struct GizmoRenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub set_0_layout: NonZeroHandle<vk::DescriptorSetLayout>,
+  pub push_contant_ranges: Vec<vk::PushConstantRange>,
+  pub graphics_info: Option<GraphicsInfo>,
+  pub pipeline_key: Option<PipelineKey>,
+  pub descriptor_pool: NonZeroHandle<vk::DescriptorPool>,
+  pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
+  pub next_index: AtomicU32,
+  pub host_buffers: spin::RwLock<hashbrown::HashMap<u32, Buffer>>,
+  pub allocator_raw: vk_mem::ffi::VmaAllocator,
+}
+
+unsafe impl Sync for GizmoRenderResourceArchetype {}
+unsafe impl Send for GizmoRenderResourceArchetype {}
+
+impl GizmoRenderResourceArchetype {
+  pub fn with_graphics_info(self, graphics_info: GraphicsInfo) -> Self {
+    let pipeline_key = graphics_info.pipeline_key();
+    Self {
+      graphics_info: Some(graphics_info),
+      pipeline_key: Some(pipeline_key),
+      ..self
+    }
+  }
+
+  pub const MAX_BUFFER_COUNT: u32 = 256;
+
+  pub unsafe fn new(device: &vulkan::device::LogicalDevice, allocator_raw: vk_mem::ffi::VmaAllocator) -> GpuResult<Self> {
+    let push_contant_ranges = alloc::vec![vk::PushConstantRange {
+      stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+      offset: 0,
+      size: core::mem::size_of::<crate::gpu::GizmoPushConstants>() as u32,
+    }];
+
+    let bindings = [vk::DescriptorSetLayoutBinding {
+      binding: 0,
+      descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+      descriptor_count: Self::MAX_BUFFER_COUNT,
+      stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+      p_immutable_samplers: ptr::null(),
+      ..Default::default()
+    }];
+
+    let binding_flags =
+      [vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND];
+
+    let binding_flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
+      binding_count: binding_flags.len() as u32,
+      p_binding_flags: binding_flags.as_ptr(),
+      ..Default::default()
+    };
+
+    let bindless_layout_info = vk::DescriptorSetLayoutCreateInfo {
+      flags: vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL,
+      binding_count: bindings.len() as u32,
+      p_bindings: bindings.as_ptr(),
+      p_next: ptr::from_ref(&binding_flags_info) as *const _,
+      ..Default::default()
+    };
+
+    let set_0_layout = unsafe { device.create_descriptor_set_layout(&bindless_layout_info, None) }
+      .with_name(device, "VkDescriptorSetLayout_Gizmo")?;
+
+    let set_layouts = [set_0_layout];
+
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo {
+      p_set_layouts: set_layouts.as_ptr(),
+      set_layout_count: set_layouts.len() as u32,
+      p_push_constant_ranges: push_contant_ranges.as_ptr(),
+      push_constant_range_count: push_contant_ranges.len() as u32,
+      ..Default::default()
+    };
+
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
+      .with_name(device, "VkPipelineLayout_Gizmo")?;
+
+    let pool_sizes = [vk::DescriptorPoolSize::default()
+      .ty(vk::DescriptorType::STORAGE_BUFFER)
+      .descriptor_count(Self::MAX_BUFFER_COUNT)];
+    let create_info = vk::DescriptorPoolCreateInfo::default()
+      .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
+      .max_sets(1)
+      .pool_sizes(&pool_sizes);
+    let descriptor_pool = unsafe { device.create_descriptor_pool(&create_info, None) }.with_name(
+      device,
+      "VkDescriptorPool_Gizmo",
+    )?;
+
+    let layouts = [set_0_layout];
+    let alloc_info = vk::DescriptorSetAllocateInfo::default()
+      .descriptor_pool(descriptor_pool)
+      .set_layouts(&layouts);
+    let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?
+      .get(0)
+      .copied()
+      .unwrap();
+    device.set_debug_name(
+      descriptor_set,
+      "VkDescriptorSet_Gizmo",
+    );
+
+    Ok(Self {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      push_contant_ranges,
+      graphics_info: None,
+      pipeline_key: None,
+      set_0_layout: unsafe { NonZeroHandle::new_unchecked(set_0_layout) },
+      descriptor_pool: unsafe { NonZeroHandle::new_unchecked(descriptor_pool) },
+      descriptor_set: unsafe { NonZeroHandle::new_unchecked(descriptor_set) },
+      next_index: AtomicU32::new(0),
+      host_buffers: spin::RwLock::new(hashbrown::HashMap::new()),
+      allocator_raw,
+    })
+  }
+
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_type_erased(
+      FunctionalDeviceResource::new(self.descriptor_pool.get(), |pool, device| unsafe {
+        device.destroy_descriptor_pool(pool, None);
+      }),
+      timeline,
+    );
+
+    discard_pool.discard_pipeline_layout(layout, timeline);
+    discard_pool.discard_descriptor_set_layout(self.set_0_layout.get(), timeline);
+
+    let mut buffers = self.host_buffers.write();
+    for (_, buffer) in buffers.drain() {
+      discard_pool.discard_buffer(self.allocator_raw, buffer.buffer.get(), buffer.allocation, timeline);
+    }
+  }
+}
+
+pub(super) struct ParticleRenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub set_0_layout: NonZeroHandle<vk::DescriptorSetLayout>,
+  pub push_contant_ranges: Vec<vk::PushConstantRange>,
+  pub graphics_info: Option<GraphicsInfo>,
+  pub pipeline_key: Option<PipelineKey>,
+  pub descriptor_pool: NonZeroHandle<vk::DescriptorPool>,
+  pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
+  pub next_index: AtomicU32,
+}
+
+unsafe impl Sync for ParticleRenderResourceArchetype {}
+unsafe impl Send for ParticleRenderResourceArchetype {}
+
+impl ParticleRenderResourceArchetype {
+  pub fn with_graphics_info(self, graphics_info: GraphicsInfo) -> Self {
+    let pipeline_key = graphics_info.pipeline_key();
+    Self {
+      graphics_info: Some(graphics_info),
+      pipeline_key: Some(pipeline_key),
+      ..self
+    }
+  }
+
+  pub const MAX_BUFFER_COUNT: u32 = 256;
+
+  pub unsafe fn new(device: &vulkan::device::LogicalDevice) -> GpuResult<Self> {
+    let push_contant_ranges = alloc::vec![vk::PushConstantRange {
+      stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+      offset: 0,
+      size: core::mem::size_of::<crate::gpu::ParticlePushConstants>() as u32,
+    }];
+
+    let bindings = [vk::DescriptorSetLayoutBinding {
+      binding: 0,
+      descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+      descriptor_count: Self::MAX_BUFFER_COUNT,
+      stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+      p_immutable_samplers: ptr::null(),
+      ..Default::default()
+    }];
+
+    let binding_flags =
+      [vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND];
+
+    let binding_flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
+      binding_count: binding_flags.len() as u32,
+      p_binding_flags: binding_flags.as_ptr(),
+      ..Default::default()
+    };
+
+    let bindless_layout_info = vk::DescriptorSetLayoutCreateInfo {
+      flags: vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL,
+      binding_count: bindings.len() as u32,
+      p_bindings: bindings.as_ptr(),
+      p_next: ptr::from_ref(&binding_flags_info) as *const _,
+      ..Default::default()
+    };
+
+    let set_0_layout = unsafe { device.create_descriptor_set_layout(&bindless_layout_info, None) }
+      .with_name(device, "VkDescriptorSetLayout_BindlessParticleBuffers")?;
+
+    let set_layouts = [set_0_layout];
+
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo {
+      p_set_layouts: set_layouts.as_ptr(),
+      set_layout_count: set_layouts.len() as u32,
+      p_push_constant_ranges: push_contant_ranges.as_ptr(),
+      push_constant_range_count: push_contant_ranges.len() as u32,
+      ..Default::default()
+    };
+
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
+      .with_name(device, "VkPipelineLayout_ParticleRenderResourceArchetype")?;
+
+    let pool_sizes = [vk::DescriptorPoolSize::default()
+      .ty(vk::DescriptorType::STORAGE_BUFFER)
+      .descriptor_count(Self::MAX_BUFFER_COUNT)];
+    let create_info = vk::DescriptorPoolCreateInfo::default()
+      .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
+      .max_sets(1)
+      .pool_sizes(&pool_sizes);
+    let descriptor_pool = unsafe { device.create_descriptor_pool(&create_info, None) }.with_name(
+      device,
+      "VkDescriptorPoolCreateInfo_Dedicated_ParticleRenderResourceArchetype",
+    )?;
+
+    let layouts = [set_0_layout];
+    let alloc_info = vk::DescriptorSetAllocateInfo::default()
+      .descriptor_pool(descriptor_pool)
+      .set_layouts(&layouts);
+    let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?
+      .get(0)
+      .copied()
+      .unwrap();
+    device.set_debug_name(
+      descriptor_set,
+      "VkDescriptorSet_Dedicated_ParticleRenderResourceArchetype",
+    );
+
+    Ok(Self {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      push_contant_ranges,
+      graphics_info: None,
+      pipeline_key: None,
+      set_0_layout: unsafe { NonZeroHandle::new_unchecked(set_0_layout) },
+      descriptor_pool: unsafe { NonZeroHandle::new_unchecked(descriptor_pool) },
+      descriptor_set: unsafe { NonZeroHandle::new_unchecked(descriptor_set) },
+      next_index: AtomicU32::new(0),
+    })
+  }
+
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_type_erased(
+      FunctionalDeviceResource::new(self.descriptor_pool.get(), |pool, device| unsafe {
+        device.destroy_descriptor_pool(pool, None);
+      }),
+      timeline,
+    );
+
+    discard_pool.discard_pipeline_layout(layout, timeline);
     discard_pool.discard_descriptor_set_layout(self.set_0_layout.get(), timeline);
   }
 }

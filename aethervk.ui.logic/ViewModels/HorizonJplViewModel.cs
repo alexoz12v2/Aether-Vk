@@ -89,6 +89,26 @@ public partial class HorizonJplViewModel : TabItemViewModel
   }
 
   [RelayCommand]
+  private async Task DownloadSpkAsync()
+  {
+    if (SelectedComet == null || SelectedComet.Length < 4) return;
+
+    var spkid = SelectedComet[3].Trim();
+    string startStr = CometStartTime?.ToString("yyyy-MM-dd") ?? "2020-01-01";
+    string stopStr = CometStopTime?.ToString("yyyy-MM-dd") ?? "2030-01-01";
+
+    var filePath = await _horizonService.DownloadSpkAsync(spkid, startStr, stopStr);
+    if (filePath != null)
+    {
+      var runtimeService = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+      if (runtimeService != null && uint.TryParse(spkid, out uint id))
+      {
+        await runtimeService.LoadCometSpkAsync(filePath, id);
+      }
+    }
+  }
+
+  [RelayCommand]
   private void OpenDocumentation()
   {
     try

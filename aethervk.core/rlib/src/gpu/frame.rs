@@ -20,11 +20,13 @@ pub struct ResourceUploadResult {
   /// The pipeline to use for this draw call.
   pub pipeline: PipelineKey,
   pub outline_pipeline: Option<PipelineKey>,
-  /// The vertex buffer to bind.
+  /// The buffer group (vertex, index, ...) to bind.
   pub buffers: GpuResourceHandle,
+  pub indirect_buffer: Option<GpuResourceHandle>,
   pub texture_flags: TextureFlags,
   pub emissive_intensity: f32,
   pub emissive_color: [f32; 3],
+  pub descriptor_index: Option<u32>,
 }
 
 /// Represents a single draw call with all necessary information.
@@ -75,6 +77,7 @@ pub struct CursorDrawCall {
   pub pipeline: PipelineKey,
   pub vertex_count: u32,
   pub model_matrix: Mat4x4f32,
+  pub cursor_size: f32,
 }
 
 impl CursorDrawCall {
@@ -82,11 +85,13 @@ impl CursorDrawCall {
     result: ResourceUploadResult,
     vertex_count: u32,
     model_matrix: Mat4x4f32,
+    cursor_size: f32,
   ) -> Self {
     Self {
       pipeline: result.pipeline,
       vertex_count,
       model_matrix,
+      cursor_size,
     }
   }
 }
@@ -127,6 +132,7 @@ pub struct MeasurementDrawCall {
   pub p1: [f32; 3],
   pub p2: [f32; 3],
   pub points: f32, // TODO handle font size (since text used by text archetype too, need a font registry class)
+  pub significant_digits: u32,
 }
 
 impl MeasurementDrawCall {
@@ -136,14 +142,39 @@ impl MeasurementDrawCall {
     p1: Vec3f32,
     p2: Vec3f32,
     points: f32,
+    significant_digits: u32,
     pipeline_key: PipelineKey,
   ) -> Self {
     Self {
       pipeline: pipeline_key,
       vertex_count: Self::VERTEX_COUNT_VK,
-      p1: p1.into(),
-      p2: p2.into(),
+      p1: [p1.x(), p1.y(), p1.z()],
+      p2: [p2.x(), p2.y(), p2.z()],
       points,
+      significant_digits,
+    }
+  }
+}
+
+pub struct GizmoDrawCall {
+  pub pipeline: PipelineKey,
+  pub vertex_count: u32,
+  pub scale: f32,
+  pub buffer_index: u32,
+}
+
+impl GizmoDrawCall {
+  const VERTEX_COUNT_VK: u32 = 6;
+  pub fn from_values(
+    pipeline: PipelineKey,
+    scale: f32,
+    buffer_index: u32,
+  ) -> Self {
+    Self {
+      pipeline,
+      vertex_count: Self::VERTEX_COUNT_VK,
+      scale,
+      buffer_index,
     }
   }
 }
@@ -228,12 +259,7 @@ impl SkyDrawCall {
 
   pub fn from_camera(camera_data: &CameraRenderData, pipeline_key: PipelineKey) -> GpuResult<Self> {
     let sky_view_proj = {
-      let sky_view = Mat4x4f32::from_columns(
-        Vec4f32::from_components(1.0, 0.0, 0.0, 0.0),
-        Vec4f32::from_components(0.0, 0.0, -1.0, 0.0),
-        Vec4f32::from_components(0.0, 1.0, 0.0, 0.0),
-        Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
-      ) * Mat4x4f32::from_quat_custom_frame(camera_data.rot.conjugate());
+      let sky_view = camera_data.view.zeroed_translation();
       camera_data.proj * sky_view
     };
     let inv_view_proj_mat = camera_data
@@ -374,7 +400,7 @@ impl CameraRenderData {
       .rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
     let up = transform
       .rotation
-      .rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0));
+      .rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
 
     Self {
       pos: transform.position,
@@ -388,6 +414,36 @@ impl CameraRenderData {
       near: camera.near_plane,
     }
   }
+
+  pub fn with_far_plane(&self, new_far: f32) -> Self {
+    use aethervk_oshal_rlib::math::floating::FloatOps;
+    
+    // Extract aspect and fov from current projection
+    // proj.y.y = -f
+    // proj.x.x = f / aspect
+    let f = -self.proj.y.y();
+    let aspect = f / self.proj.x.x();
+    let fov = 2.0 * (1.0 / f).atan();
+
+    let new_proj = Mat4x4f32::perspective_vk(fov, aspect, self.near, new_far);
+    let new_view_proj = new_proj * self.view;
+
+    Self {
+      proj: new_proj,
+      view_proj: new_view_proj,
+      far: new_far,
+      ..*self
+    }
+  }
+}
+
+pub struct ParticleDrawCall {
+  pub pipeline: PipelineKey,
+  pub particle_count: u32,
+  pub particle_data_buffer: GpuResourceHandle,
+  pub indirect_buffer: GpuResourceHandle,
+  pub descriptor_index: u32,
+  pub config: crate::scene::particles::ParticleEmitterConfig,
 }
 
 pub struct RenderScene {
@@ -398,6 +454,8 @@ pub struct RenderScene {
   pub measurement_calls: Vec<MeasurementDrawCall>,
   pub billboard_calls: Vec<BillboardDrawCall>,
   pub bvh_draw_calls: Vec<BvhDrawCall>,
+  pub gizmo_calls: Vec<GizmoDrawCall>,
+  pub particle_calls: Vec<ParticleDrawCall>,
 
   pub cursor_call: Option<CursorDrawCall>,
   pub sun_call: Option<SunDrawCall>,
@@ -415,6 +473,8 @@ impl RenderScene {
       measurement_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
       billboard_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
       bvh_draw_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
+      gizmo_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
+      particle_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
       camera_data: CameraRenderData::new(&camera.0, &camera.1),
       sun_call: None,
       sky_call: None,
@@ -474,7 +534,7 @@ impl RenderScene {
         }
         let res: ResourceUploadResult =
           device.get_or_create_cursor_resources(presentation_engine_handle)?;
-        self.cursor_call = Some(CursorDrawCall::from_result_and_matrix(res, 4, model_matrix));
+        self.cursor_call = Some(CursorDrawCall::from_result_and_matrix(res, 4, model_matrix, 0.05));
       }
       RenderableDataRef::Markers(component) => {
         let res: ResourceUploadResult =
@@ -499,8 +559,10 @@ impl RenderScene {
           p1: [component.pos1.x(), component.pos1.y(), component.pos1.z()],
           p2: [component.pos2.x(), component.pos2.y(), component.pos2.z()],
           points: 12.0,
+          significant_digits: 2, // fallback
         });
       }
+      RenderableDataRef::Gizmo(_) => {} // Handled elsewhere
     }
     Ok(())
   }
@@ -519,7 +581,7 @@ pub fn do_draw_cursor(
     view: camera.view.into(),
     view_proj: camera.view_proj.into(),
     model: draw_call.model_matrix.into(),
-    cursor_size: 0.05, // TODO extract from draw call
+    cursor_size: draw_call.cursor_size,
   };
 
   device.push_cursor_constants(cmd_buffer, &push_constants)?;
@@ -591,6 +653,26 @@ pub fn do_draw_measurement(
 }
 
 /// Requires pipeline and descriptor sets to be already bound
+pub fn do_draw_gizmo(
+  device: &dyn RenderDevice,
+  camera: &CameraRenderData,
+  cmd_buffer: super::CommandBufferHandle,
+  draw_call: &GizmoDrawCall,
+) -> GpuResult<()> {
+  device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
+
+  let push_constants = crate::gpu::GizmoPushConstants {
+    view_proj: camera.view_proj.into(),
+    scale: draw_call.scale,
+    instance_id: draw_call.buffer_index,
+  };
+  device.push_gizmo_constants(cmd_buffer, &push_constants)?;
+  device.set_line_width(cmd_buffer, 1.0)?;
+  device.draw(cmd_buffer, draw_call.vertex_count)?;
+
+  Ok(())
+}
+
 pub fn do_draw_billboard(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
@@ -728,6 +810,32 @@ pub fn do_draw_sky(
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
   device.push_sky_constants(cmd_buffer, &push_constants)?;
   device.draw(cmd_buffer, draw_call.vertex_count)
+}
+
+pub fn do_draw_particle(
+  device: &dyn RenderDevice,
+  camera: &CameraRenderData,
+  cmd_buffer: super::CommandBufferHandle,
+  draw_call: &ParticleDrawCall,
+) -> GpuResult<()> {
+  device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
+
+  let push_constants = crate::gpu::ParticlePushConstants {
+    view_proj: camera.view_proj.into(),
+    camera_up: camera.up,
+    _pad0: 0.0,
+    camera_right: camera.right,
+    _pad1: 0.0,
+    color: draw_call.config.color,
+    radius: draw_call.config.particle_radius,
+    buffer_index: draw_call.descriptor_index,
+    _pad2: [0.0; 2],
+  };
+
+  device.push_constants(cmd_buffer, crate::gpu::ArchetypeId::Particle, &push_constants)?;
+  device.draw_indirect(cmd_buffer, draw_call.indirect_buffer, 0, 1, core::mem::size_of::<ash::vk::DrawIndirectCommand>() as u32)?;
+
+  Ok(())
 }
 
 pub fn do_draw_grid(

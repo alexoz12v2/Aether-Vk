@@ -206,6 +206,17 @@ impl RenderDevice for D3d12RenderDevice {
     unimplemented!()
   }
 
+  fn draw_indirect(
+    &self,
+    _cmd_buffer: CommandBufferHandle,
+    _indirect_buffer: GpuResourceHandle,
+    _offset: u64,
+    _draw_count: u32,
+    _stride: u32,
+  ) -> GpuResult<()> {
+    unimplemented!()
+  }
+
   fn update_sun(
     &self,
     _cmd_buffer: CommandBufferHandle,

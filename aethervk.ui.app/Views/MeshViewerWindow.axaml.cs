@@ -55,7 +55,7 @@ public partial class MeshViewerWindow : Window
     if (_bitmap == null || _viewModel == null)
       return;
 
-    Dispatcher.UIThread.Post(() => 
+    Dispatcher.UIThread.Post(async () =>
     {
       if (_bitmap == null || _viewModel == null)
         return;
@@ -64,12 +64,11 @@ public partial class MeshViewerWindow : Window
 
       using (var frame = _bitmap.Lock())
       {
-        _viewModel.CopyFrameToBuffer(
+        await _viewModel.CopyFrameToBuffer(
           frame.Address,
           (nuint)(_viewModel.Width * _viewModel.Height * 4)
         );
       }
-
       RenderTargetImage.InvalidateVisual();
     });
   }

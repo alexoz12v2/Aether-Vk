@@ -23,8 +23,19 @@ use heapless::index_map::FnvIndexMap;
 
 // TODO: test about text rendering in different fonts (system font and packaged font)
 
+fn setup_assets_dir() {
+    let mut home_dir = std::env::current_exe().unwrap();
+    let mut iter = 0;
+    while !home_dir.join("assets").is_dir() && iter < 32 {
+      home_dir.pop();
+      iter += 1;
+    }
+    *crate::gpu::ASSET_DIR.write() = Some(home_dir.join("assets").to_str().unwrap().to_string());
+}
+
 #[test]
 fn test_render_all_archetypes_windowless() {
+  setup_assets_dir();
   fn panic_on_validation_error(msg: &str) {
     panic!("Vulkan validation error occurred during testing: {}", msg);
   }
@@ -91,26 +102,33 @@ fn test_render_all_archetypes_windowless() {
         },
       ));
 
-      render_scene.sky = Some((sky_e, SkyComponent {}));
+      let sky_pipeline = device.get_sky_pipeline_key()?;
+      render_scene.sky_call = Some(gpu::frame::SkyDrawCall::from_camera(&render_scene.camera_data, sky_pipeline)?);
 
-      render_scene.sun = Some((
+      let sun_pipeline = device.get_sun_pipeline_key()?;
+      render_scene.sun_call = Some(gpu::frame::SunDrawCall::from_model_and_camera(
+        Mat4x4f32::identity(),
+        &render_scene.camera_data,
+        sun_pipeline,
         sun_e,
-        SunComponent {
-          resolution: (64, 64, 64),
-        },
-        TransformComponent {
-          position: Vec3f32::from_array([0.0, 0.0, 0.0]),
-          rotation: Quat::identity(),
-          scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
-        },
+      )?);
+
+      let grid_pipeline = device.get_grid_pipeline_kay()?;
+      render_scene.grid_call = Some(gpu::frame::GridDrawCall::new(grid_pipeline, 0.1, 1.0, [0.5, 0.5, 0.5]));
+
+      let gizmo_resources = device.get_or_create_gizmo_resources(presentation_engine)?;
+      let gizmo_idx = device.update_gizmo_instance(sun_e, Mat4x4f32::identity())?;
+      render_scene.gizmo_calls.push(gpu::frame::GizmoDrawCall::from_values(
+        gizmo_resources.pipeline,
+        2.0,
+        gizmo_idx,
       ));
 
-      render_scene.grid = Some((grid_e, GridComponent {}));
-
-      render_scene.cursor_calls.push(CursorDrawCall {
+      render_scene.cursor_call = Some(CursorDrawCall {
         pipeline: cursor_res.pipeline,
         vertex_count: 36,
         model_matrix: Mat4x4f32::identity(),
+        cursor_size: 0.05,
       });
 
       render_scene.billboard_calls.push(BillboardDrawCall {
@@ -127,10 +145,7 @@ fn test_render_all_archetypes_windowless() {
       {
         let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
 
-        let sun_comp = SunComponent {
-          resolution: (64, 64, 64),
-        };
-        device.update_sun(cmd_buffer_handle, sun_e, &sun_comp)?;
+        device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64))?;
 
         device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
         let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
@@ -163,6 +178,7 @@ fn test_render_all_archetypes_windowless() {
             e
           })?;
         scoped_rp.end()?;
+        device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
       }
 
       println!("Before present");
@@ -174,10 +190,13 @@ fn test_render_all_archetypes_windowless() {
       println!("After present");
 
       // Wait for completion
-      std::thread::sleep(std::time::Duration::from_millis(200));
+      while !device.is_task_completed(task_id)? {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+      }
+      
       // Download image
       let mut buffer = vec![0u8; (width * height * 4) as usize];
-      device.download_windowless_image(presentation_engine, &mut buffer, task_id)?;
+      device.read_windowless_download(task_id, &mut buffer)?;
 
       let sum: u32 = buffer.iter().map(|&b| b as u32).sum();
       println!("Sum of buffer is {}", sum);
@@ -204,6 +223,7 @@ fn test_render_all_archetypes_windowless() {
 
 #[test]
 fn test_render_empty_scene_graceful() {
+  setup_assets_dir();
   fn panic_on_validation_error(msg: &str) {
     panic!("Vulkan validation error occurred during testing: {}", msg);
   }
@@ -352,13 +372,14 @@ fn test_layout_transition_on_failed_update() {
 
         // This will fail because archetypes aren't initialized, but we catch/ignore it
         // just like the real `simulation_api.rs` does now.
-        let _ = device.update_sun(cmd_buffer_handle, sun_e, &sun_comp);
+        let _ = device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64));
 
         // Even if update_sun failed, begin_render_pass MUST succeed to transition the image!
         // But wait! begin_render_pass relies on rendering archetypes? NO, it relies on RenderPasses cache!
         device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
         let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
         scoped_rp.end()?;
+        device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
       }
 
       device.present(
@@ -367,10 +388,343 @@ fn test_layout_transition_on_failed_update() {
         acquire_result.frame_index as usize,
       )?;
 
-      std::thread::sleep(std::time::Duration::from_millis(50));
+      while !device.is_task_completed(task_id)? {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+      }
 
       let mut buffer = vec![0u8; (16 * 16 * 4) as usize];
-      device.download_windowless_image(presentation_engine, &mut buffer, task_id)?;
+      device.read_windowless_download(task_id, &mut buffer)?;
+
+      crate::types::GpuResult::Ok(())
+    })
+    .unwrap();
+
+  drop(render_frontend);
+}
+
+#[test]
+fn test_render_text_system_font_async() {
+  setup_assets_dir();
+  fn panic_on_validation_error(msg: &str) {
+    panic!("Vulkan validation error occurred during testing: {}", msg);
+  }
+  let runtime_params = Box::new(RuntimeParams {
+    render_backend_params: FnvIndexMap::new(),
+    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
+  });
+  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
+
+  let additional_params = DeviceAdditionalParams::new();
+  let render_device_handle = render_frontend
+    .write()
+    .init_device(0, &additional_params)
+    .unwrap();
+
+  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
+  let pool_arc = std::sync::Arc::new(pool);
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      device.wire_callbacks(pool_arc.clone())
+    })
+    .unwrap();
+
+  let width = 512;
+  let height = 256;
+
+  let presentation_engine = {
+    let params = PresentationEngineParams::windowless(width, height);
+    render_frontend
+      .with_device(render_device_handle, |device| {
+        let pe = device.create_presentation_engine(&params)?;
+        device.init_archetypes(pe)?;
+        crate::types::GpuResult::Ok(pe)
+      })
+      .unwrap()
+  };
+
+  // Run rendering and polling in separate threads to test async capability
+  let frontend_clone = render_frontend.clone();
+  
+  let render_thread = std::thread::spawn(move || {
+    frontend_clone
+      .with_device(render_device_handle, |device| {
+        let task_id = device.create_task();
+        device.start_frame()?;
+        let acquire_result = device.acquire_next_image(presentation_engine)?;
+        let cmd_buffer_handle = device.get_command_buffer()?;
+
+        // System font test
+        let atlas = crate::scene::text::FontAtlas::from_path(
+            aethervk_oshal_rlib::os::FONT_PATH,
+            32.0,
+        ).expect("Failed to load system font");
+        
+        let atlas_width = atlas.width;
+        let atlas_height = atlas.height;
+        let atlas_image_data = atlas.image_data.clone();
+        
+        // Export the atlas for verification
+        image::save_buffer(
+          "system_font_atlas.png",
+          &atlas_image_data,
+          atlas_width,
+          atlas_height,
+          image::ColorType::L8,
+        ).expect("Failed to save atlas png");
+
+        // Verify glyph presence
+        let glyph_info = atlas.glyphs.get(&'A').expect("A not found in font");
+        assert!(glyph_info.size[0] > 0.0 && glyph_info.size[1] > 0.0);
+
+        let font_hash = atlas.hash_metadata();
+        let font_id = device.allocate_rasterized_font_atlas(font_hash, atlas)?;
+
+        {
+          let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+          device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
+          let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
+
+          device.set_viewport(
+            cmd_buffer_handle,
+            &gpu::Viewport {
+              x: 0.0,
+              y: height as f32,
+              width: width as f32,
+              height: -(height as f32),
+              min_depth: 0.0,
+              max_depth: 1.0,
+            },
+          )?;
+
+          device.set_scissor(
+            cmd_buffer_handle,
+            &gpu::Rect2D {
+              offset: [0, 0],
+              extent: [width, height],
+            },
+          )?;
+
+          device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer_handle)?;
+          device.render_text(
+            cmd_buffer_handle,
+            "AetherVk Test",
+            [50.0, 50.0],
+            [width as f32, height as f32],
+            (font_hash, font_id),
+            32.0,
+            [1.0, 1.0, 1.0, 1.0],
+          )?;
+
+          scoped_rp.end()?;
+          device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
+        }
+
+        device.present(
+          presentation_engine,
+          acquire_result.image_index as usize,
+          acquire_result.frame_index as usize,
+        )?;
+
+        crate::types::GpuResult::Ok(task_id)
+      })
+      .unwrap()
+  });
+
+  let task_id = render_thread.join().unwrap();
+
+  // Async polling in the main thread
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      while !device.is_task_completed(task_id)? {
+        std::thread::yield_now();
+      }
+
+      let mut buffer = vec![0u8; (width * height * 4) as usize];
+      device.read_windowless_download(task_id, &mut buffer)?;
+
+      // Verify the rendering wasn't completely empty
+      let sum: u64 = buffer.iter().map(|&b| b as u64).sum();
+      assert!(sum > 0, "Rendered text buffer is completely empty!");
+      
+      // Convert BGRA to RGBA
+      for chunk in buffer.chunks_exact_mut(4) {
+        chunk.swap(0, 2);
+      }
+      
+      // Export rendered text
+      image::save_buffer(
+          "rendered_system_text.png",
+          &buffer,
+          width,
+          height,
+          image::ColorType::Rgba8,
+      ).expect("Failed to save rendered png");
+
+      crate::types::GpuResult::Ok(())
+    })
+    .unwrap();
+
+  drop(render_frontend);
+}
+
+#[test]
+fn test_render_text_asset_font_async() {
+  setup_assets_dir();
+  fn panic_on_validation_error(msg: &str) {
+    panic!("Vulkan validation error occurred during testing: {}", msg);
+  }
+  let runtime_params = Box::new(RuntimeParams {
+    render_backend_params: FnvIndexMap::new(),
+    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
+  });
+  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
+
+  let additional_params = DeviceAdditionalParams::new();
+  let render_device_handle = render_frontend
+    .write()
+    .init_device(0, &additional_params)
+    .unwrap();
+
+  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
+  let pool_arc = std::sync::Arc::new(pool);
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      device.wire_callbacks(pool_arc.clone())
+    })
+    .unwrap();
+
+  let width = 512;
+  let height = 256;
+
+  let presentation_engine = {
+    let params = PresentationEngineParams::windowless(width, height);
+    render_frontend
+      .with_device(render_device_handle, |device| {
+        let pe = device.create_presentation_engine(&params)?;
+        device.init_archetypes(pe)?;
+        crate::types::GpuResult::Ok(pe)
+      })
+      .unwrap()
+  };
+
+  // Run rendering and polling in separate threads to test async capability
+  let frontend_clone = render_frontend.clone();
+  
+  let render_thread = std::thread::spawn(move || {
+    frontend_clone
+      .with_device(render_device_handle, |device| {
+        let task_id = device.create_task();
+        device.start_frame()?;
+        let acquire_result = device.acquire_next_image(presentation_engine)?;
+        let cmd_buffer_handle = device.get_command_buffer()?;
+
+        // Use font under asset folder
+        let asset_font_path = format!("{}/fonts/JetBrainsMono-Regular.ttf", crate::gpu::ASSET_DIR.read().as_ref().unwrap());
+        let atlas = crate::scene::text::FontAtlas::from_path(
+            &asset_font_path,
+            32.0,
+        ).expect("Failed to load asset font");
+        
+        let atlas_width = atlas.width;
+        let atlas_height = atlas.height;
+        let atlas_image_data = atlas.image_data.clone();
+        
+        // Export the atlas for verification
+        image::save_buffer(
+          "asset_font_atlas.png",
+          &atlas_image_data,
+          atlas_width,
+          atlas_height,
+          image::ColorType::L8,
+        ).expect("Failed to save atlas png");
+
+        // Verify glyph presence
+        let glyph_info = atlas.glyphs.get(&'W').expect("W not found in font");
+        assert!(glyph_info.size[0] > 0.0 && glyph_info.size[1] > 0.0);
+
+        let font_hash = atlas.hash_metadata();
+        let font_id = device.allocate_rasterized_font_atlas(font_hash, atlas)?;
+
+        {
+          let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+          device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
+          let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
+
+          device.set_viewport(
+            cmd_buffer_handle,
+            &gpu::Viewport {
+              x: 0.0,
+              y: height as f32,
+              width: width as f32,
+              height: -(height as f32),
+              min_depth: 0.0,
+              max_depth: 1.0,
+            },
+          )?;
+
+          device.set_scissor(
+            cmd_buffer_handle,
+            &gpu::Rect2D {
+              offset: [0, 0],
+              extent: [width, height],
+            },
+          )?;
+
+          device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer_handle)?;
+          device.render_text(
+            cmd_buffer_handle,
+            "AetherVk Async Test",
+            [20.0, 100.0],
+            [width as f32, height as f32],
+            (font_hash, font_id),
+            48.0,
+            [0.5, 1.0, 0.5, 1.0],
+          )?;
+
+          scoped_rp.end()?;
+          device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
+        }
+
+        device.present(
+          presentation_engine,
+          acquire_result.image_index as usize,
+          acquire_result.frame_index as usize,
+        )?;
+
+        crate::types::GpuResult::Ok(task_id)
+      })
+      .unwrap()
+  });
+
+  let task_id = render_thread.join().unwrap();
+
+  // Async polling in the main thread
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      while !device.is_task_completed(task_id)? {
+        std::thread::yield_now();
+      }
+
+      let mut buffer = vec![0u8; (width * height * 4) as usize];
+      device.read_windowless_download(task_id, &mut buffer)?;
+
+      // Verify the rendering wasn't completely empty
+      let sum: u64 = buffer.iter().map(|&b| b as u64).sum();
+      assert!(sum > 0, "Rendered text buffer is completely empty!");
+      
+      // Convert BGRA to RGBA
+      for chunk in buffer.chunks_exact_mut(4) {
+        chunk.swap(0, 2);
+      }
+      
+      // Export rendered text
+      image::save_buffer(
+          "rendered_asset_text.png",
+          &buffer,
+          width,
+          height,
+          image::ColorType::Rgba8,
+      ).expect("Failed to save rendered png");
 
       crate::types::GpuResult::Ok(())
     })

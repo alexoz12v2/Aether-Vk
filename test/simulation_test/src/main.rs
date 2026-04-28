@@ -2,7 +2,7 @@ use aethervk_core_rlib::{
   gpu::ASSET_DIR,
   scene::text::FontAtlas,
   gpu::{self},
-  scene::{CameraComponent, CursorComponent, PhysicalMeshComponent, Scene, TransformComponent},
+  scene::{AlmanacPlanet, CameraComponent, CursorComponent, PhysicalMeshComponent, Scene, TransformComponent},
   simulation, types,
   types::RuntimeParams,
 };
@@ -22,6 +22,7 @@ use std::{
   sync::{atomic::AtomicBool, mpsc, Arc},
   time::Instant,
 };
+use std::any::TypeId;
 use test_utils::{
   create_winit_window_and_event_loop, cycle_get_asset_path_from_exe, get_handle_and_window_info,
   get_monospace_font_path_from_asset_path, SceneTestUtilsExt,
@@ -121,6 +122,7 @@ fn main() {
   );
 
   let scene = Scene::new().with_all_dbg_components();
+  scene.register_component::<AlmanacPlanet>(&[TypeId::of::<TransformComponent>()]);
   let model_path = assets_dir.join("Comet.glb");
   let comet = simulation::comet::load_comet_from_gltf(model_path.to_str().unwrap(), false)
     .expect("Failed to load comet");
@@ -129,14 +131,15 @@ fn main() {
 
   #[cfg(not(feature = "spotless_rendering"))]
   {
-    let mesh_entity = scene.spawn_entity("entity");
+    let mesh_entity = scene.spawn_entity("comet");
+    let comet_radius = (2.0 / constants::DISTANCE_SCALE_FACTOR as f32) * constants::PLANET_VISUAL_SCALE;
     scene
       .add_component(
         mesh_entity,
         TransformComponent {
-          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          position: Vec3f32::from_components(10.0, 0.0, 0.0),
           rotation: Quat::identity(),
-          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+          scale: Vec3f32::from_components(comet_radius, comet_radius, comet_radius),
         },
       )
       .unwrap();
@@ -229,6 +232,15 @@ fn main() {
       .with_mesh("", sphere)
       .build()
       .unwrap();
+    scene
+      .add_component(planet_entity, AlmanacPlanet::new(*naif_id, *rot_period))
+      .unwrap();
+    scene
+      .add_component(planet_entity, aethervk_core_rlib::scene::GizmoComponent {
+        gizmo_visible: false,
+        gizmo_scale: planet_radius * 2.0,
+      })
+      .unwrap();
     planets_ids.push((*naif_id, planet_entity, *rot_period, planet_radius));
   }
 
@@ -302,6 +314,12 @@ fn main() {
       aethervk_core_rlib::scene::SunComponent {
         resolution: (128, 128, 128),
       },
+    )
+    .unwrap();
+  scene
+    .add_component(
+      sun_entity,
+      AlmanacPlanet::new(constants::PlanetNaifId::SUN, 25.05),
     )
     .unwrap();
 
@@ -387,8 +405,6 @@ fn main() {
     cursor_entity,
     grid_entity,
     planets_ids,
-    sun_entity,
-    sun_radius,
     assets_dir,
     Arc::clone(&outlines_enabled),
   );

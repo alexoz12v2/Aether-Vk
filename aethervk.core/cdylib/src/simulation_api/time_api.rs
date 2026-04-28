@@ -1,9 +1,10 @@
+use crate::structs::{TimeScale};
 use crate::simulation_api::SimulationContext;
 use alloc::{format};
 use core::ffi::{c_char};
 
 impl SimulationContext {
-  pub fn set_time_scale(&mut self, scale: u32) {
+  pub fn set_time_scale(&self, scale: u32) {
     let mut logic = self.logic_state.write();
     logic.current_scale = match scale {
       1 => TimeScale::OneDay,
@@ -37,7 +38,7 @@ impl SimulationContext {
     true
   }
 
-  pub fn set_simulation_time(&mut self, time_tai: f64) {
+  pub fn set_simulation_time(&self, time_tai: f64) {
     let mut logic = self.logic_state.write();
     logic.current_epoch = anise::time::Epoch::from_tai_seconds(time_tai);
   }

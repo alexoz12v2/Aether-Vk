@@ -1,12 +1,14 @@
+pub mod simulation;
+
 use aethervk_core_rlib::{
   gpu::{self, RenderDevice, frame::RenderScene},
-  scene::{CameraComponent, EntityId, PhysicalMeshComponent, Scene, TransformComponent},
+  scene::{CameraComponent, EntityId, PhysicalMeshComponent, Scene, TransformComponent, SunComponent},
   types::RuntimeParams,
 };
 use aethervk_oshal_rlib::math::{
   matrix::{SquareMatrix, Matrix4, mat4::Mat4x4f32},
   quaternion::Quaternion,
-  vector::{vec3::Vec3f32, vec4::Quat, Vector3},
+  vector::{vec3::Vec3f32, vec4::Quat, Vector3, Vector},
 };
 use heapless::index_map::FnvIndexMap;
 use std::sync::Arc;
@@ -64,6 +66,7 @@ struct ParticleApp {
   presentation_engine: Option<gpu::PresentationEngineHandle>,
   camera_entity: EntityId,
   mesh_entity: EntityId,
+  sun_entity: EntityId,
   right_mouse_button_down: bool,
   cam_dist: f32,
   cam_yaw: f32,
@@ -71,7 +74,101 @@ struct ParticleApp {
   width: u32,
   height: u32,
   window_info: test_utils::WindowPlatformData,
+  time_info: aethervk_oshal_rlib::os::time::TimeInfo,
+  kernels: simulation::kernels::CpuKernels,
 }
+
+impl ParticleApp {
+  fn simulate_particles(&mut self, dt: f32) {
+    let mut sun_pos = Vec3f32::from_array([0.0, 0.0, 0.0]);
+    self.app_state.scene.with_component(self.sun_entity, |t: &TransformComponent| {
+      sun_pos = t.position;
+    });
+
+    let mut comet_pos = Vec3f32::from_array([0.0, 0.0, 0.0]);
+    let mut comet_rot = Quat::identity();
+    self.app_state.scene.with_component(self.mesh_entity, |t: &TransformComponent| {
+      comet_pos = t.position;
+      comet_rot = t.rotation;
+    });
+
+    let mesh_arc = self.app_state.scene.with_component(self.mesh_entity, |m: &PhysicalMeshComponent| {
+      m.mesh.clone()
+    }).unwrap();
+
+    // Cache UvGrid - in a real app this would be computed once per mesh
+    let uv_grid = aethervk_core_rlib::simulation::comet::uv_grid::UvGrid::new(&mesh_arc.vertices, &mesh_arc.indices, 64);
+
+    self.app_state.scene.query1_mut::<simulation::components::ParticleSystemComponent, _>(|_, sys| {
+      sys.accumulator += (dt * 1_000_000.0) as i64;
+
+      // Emission
+      while sys.accumulator >= sys.config.delta {
+        sys.accumulator -= sys.config.delta;
+
+        let u_emission = [rand::random::<f32>(), rand::random::<f32>()];
+        
+        let count = sys.config.emission_count.sample(&u_emission) as usize;
+        let mut u_particles = std::vec::Vec::with_capacity(count);
+        for _ in 0..count {
+            u_particles.push([
+                rand::random::<f32>(),
+                rand::random::<f32>(),
+                rand::random::<f32>(),
+                rand::random::<f32>(),
+            ]);
+        }
+        
+        sys.emit_particles(&mesh_arc, &uv_grid, comet_pos, comet_rot, &u_emission, &u_particles);
+      }
+
+      // Update
+      let mut u_roulette = std::vec::Vec::with_capacity(sys.particles.len());
+      for _ in 0..sys.particles.len() {
+          u_roulette.push(rand::random::<f32>());
+      }
+      
+      let mut roulette_idx = 0;
+      for p in sys.particles.iter_mut().filter(|p| p.active != 0) {
+        p.age += (dt * 1_000_000.0) as i64;
+        
+        // Russian roulette
+        if p.age > sys.config.lifetime as i64 {
+          let age_excess = (p.age - sys.config.lifetime as i64) as f32 / 1_000_000.0;
+          let death_prob = 1.0 - (-age_excess).exp(); // Exponential decay
+          
+          let u = if roulette_idx < u_roulette.len() { u_roulette[roulette_idx] } else { 0.5 };
+          roulette_idx += 1;
+          
+          if u < death_prob {
+              p.active = 0;
+              continue;
+          }
+        }
+      }
+      
+      // Clean up dead particles
+      if sys.particles.len() > sys.config.max_particles {
+          sys.particles.retain(|p| p.active == 0);
+      }
+
+      sys.update_bvh();
+    });
+
+    let mut physics_scene = aethervk_core_rlib::physics::physics_scene::PhysicsScene::build_from_scene(&self.app_state.scene);
+    let t0 = self.time_info.current().unscaled_time;
+    let t1 = t0 + (dt * 1_000_000.0) as i64;
+
+    aethervk_core_rlib::gpu_backends::simulation_step(
+      &self.kernels,
+      &mut physics_scene,
+      &self.app_state.scene,
+      t0,
+      t1,
+    ).unwrap();
+  }
+}
+
 
 impl test_utils::app::App for ParticleApp {
   fn window(&self) -> Option<&winit::window::Window> {
@@ -159,10 +256,10 @@ impl test_utils::app::App for ParticleApp {
     };
     self.cam_dist = (self.cam_dist - scroll_amount).max(0.1);
 
-    let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), self.cam_yaw);
-    let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), self.cam_pitch);
+    let yaw_quat = Quat::from_axis_angle(Vec3f32::from_array([0.0, 0.0, 1.0]), self.cam_yaw);
+    let pitch_quat = Quat::from_axis_angle(Vec3f32::from_array([1.0, 0.0, 0.0]), self.cam_pitch);
     let new_rot = yaw_quat * pitch_quat;
-    let offset = Vec3f32::from_components(0.0, -1.0, 0.0) * self.cam_dist;
+    let offset = Vec3f32::from_array([0.0, -1.0, 0.0]) * self.cam_dist;
     let new_offset = new_rot.rotate_vector(offset);
     self
       .app_state
@@ -184,11 +281,11 @@ impl test_utils::app::App for ParticleApp {
       self.cam_yaw = self.cam_yaw % (std::f32::consts::PI * 2.0);
       self.cam_pitch = self.cam_pitch.clamp(-1.55, 1.55);
 
-      let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), self.cam_yaw);
+      let yaw_quat = Quat::from_axis_angle(Vec3f32::from_array([0.0, 0.0, 1.0]), self.cam_yaw);
       let pitch_quat =
-        Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), self.cam_pitch);
+        Quat::from_axis_angle(Vec3f32::from_array([1.0, 0.0, 0.0]), self.cam_pitch);
       let new_rot = yaw_quat * pitch_quat;
-      let offset = Vec3f32::from_components(0.0, -1.0, 0.0) * self.cam_dist;
+      let offset = Vec3f32::from_array([0.0, -1.0, 0.0]) * self.cam_dist;
       let new_offset = new_rot.rotate_vector(offset);
       self
         .app_state
@@ -200,6 +297,18 @@ impl test_utils::app::App for ParticleApp {
       if let Some(w) = self.app_state.window.as_ref() {
         w.request_redraw();
       }
+    }
+  }
+
+  fn on_about_to_wait(&mut self) {
+    self.time_info.ut_update();
+    while self.time_info.needs_fixed_update() {
+      self.time_info.ut_fixed_update();
+      let dt = self.time_info.fixed_delta_time.load(core::sync::atomic::Ordering::Relaxed) as f32 / 1_000_000.0;
+      self.simulate_particles(dt);
+    }
+    if let Some(w) = self.app_state.window.as_ref() {
+      w.request_redraw();
     }
   }
 
@@ -242,9 +351,9 @@ fn render_function(device: &dyn RenderDevice, payload: &mut RenderPayloadData) -
   }
 
   let mut camera_transform = TransformComponent {
-    position: Vec3f32::from_components(0.0, 0.0, 0.0),
+    position: Vec3f32::from_array([0.0, 0.0, 0.0]),
     rotation: Quat::identity(),
-    scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+    scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
   };
   let mut camera_component = CameraComponent {
     projection: Mat4x4f32::identity(),
@@ -399,6 +508,7 @@ fn main() {
   scene
     .register_component::<PhysicalMeshComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
   scene.register_component::<CameraComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
+  scene.register_component::<simulation::components::ParticleSystemComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
 
   let camera_entity = scene.spawn_entity("camera");
   let cam_dist = 5.0;
@@ -409,12 +519,12 @@ fn main() {
     .add_component(
       camera_entity,
       TransformComponent {
-        position: Vec3f32::from_components(0.0, -cam_dist, 0.0),
+        position: Vec3f32::from_array([0.0, -cam_dist, 0.0]),
         rotation: Quat::from_axis_angle(
-          Vec3f32::from_components(0.0, 0.0, 1.0),
+          Vec3f32::from_array([0.0, 0.0, 1.0]),
           std::f32::consts::PI,
         ),
-        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
       },
     )
     .unwrap();
@@ -439,9 +549,9 @@ fn main() {
     .add_component(
       mesh_entity,
       TransformComponent {
-        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        position: Vec3f32::from_array([0.0, 0.0, 0.0]),
         rotation: Quat::identity(),
-        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
       },
     )
     .unwrap();
@@ -462,6 +572,61 @@ fn main() {
       },
     )
     .unwrap();
+
+  let particle_sys_1 = scene.spawn_entity("particle_sys_1");
+  scene.add_component(particle_sys_1, TransformComponent {
+    position: Vec3f32::from_array([0.0, 0.0, 0.0]),
+    rotation: Quat::identity(),
+    scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+  }).unwrap();
+  scene.add_component(particle_sys_1, simulation::components::ParticleSystemComponent::new(
+    simulation::components::ParticleEmitterConfig {
+      uv_center: [0.5, 0.5],
+      uv_radius: 0.1,
+      delta: 100_000,
+      max_particles: 1000,
+      velocity_intensity: simulation::components::GaussianParams { mean: 5.0, std_dev: 1.0, min: 0.0, max: 10.0 },
+      emission_count: simulation::components::GaussianParams { mean: 10.0, std_dev: 2.0, min: 1.0, max: 20.0 },
+      particle_radius: 0.1,
+      density: 1000.0,
+      lifetime: 5_000_000,
+      color: [1.0, 0.5, 0.0, 1.0],
+      beta: 0.1,
+    }
+  )).unwrap();
+
+  let particle_sys_2 = scene.spawn_entity("particle_sys_2");
+  scene.add_component(particle_sys_2, TransformComponent {
+    position: Vec3f32::from_array([0.0, 0.0, 0.0]),
+    rotation: Quat::identity(),
+    scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+  }).unwrap();
+  scene.add_component(particle_sys_2, simulation::components::ParticleSystemComponent::new(
+    simulation::components::ParticleEmitterConfig {
+      uv_center: [0.2, 0.8],
+      uv_radius: 0.05,
+      delta: 100_000,
+      max_particles: 500,
+      velocity_intensity: simulation::components::GaussianParams { mean: 3.0, std_dev: 0.5, min: 0.0, max: 5.0 },
+      emission_count: simulation::components::GaussianParams { mean: 5.0, std_dev: 1.0, min: 1.0, max: 10.0 },
+      particle_radius: 0.05,
+      density: 500.0,
+      lifetime: 3_000_000,
+      color: [0.0, 0.5, 1.0, 1.0],
+      beta: 0.5,
+    }
+  )).unwrap();
+
+  let sun_entity = scene.spawn_entity("sun");
+  scene.add_component(sun_entity, TransformComponent {
+    position: Vec3f32::from_array([100.0, 0.0, 0.0]),
+    rotation: Quat::identity(),
+    scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+  }).unwrap();
+  scene.add_component(sun_entity, SunComponent { resolution: (64, 64, 64) }).unwrap();
+
+  let kernels = simulation::kernels::CpuKernels::new();
+
 
   render_frontend
     .with_device(render_device_handle, |device| {
@@ -485,6 +650,7 @@ fn main() {
     presentation_engine: Some(presentation_engine),
     camera_entity,
     mesh_entity,
+    sun_entity,
     right_mouse_button_down: false,
     cam_dist,
     cam_yaw,
@@ -492,6 +658,8 @@ fn main() {
     width,
     height,
     window_info: _window_info,
+    time_info: aethervk_oshal_rlib::os::time::TimeInfo::new(16_666, 100_000, 1.0),
+    kernels,
   };
 
   test_utils::app::run_app(particle_app, event_loop);
