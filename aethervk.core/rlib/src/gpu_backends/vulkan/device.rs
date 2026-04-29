@@ -4511,6 +4511,50 @@ impl<'a> RenderDevice for Device<'a> {
     Ok(())
   }
 
+  fn prepare_particle_archetype_for_render_and_bind_pipeline(
+    &self,
+    cmd_buffer: gpu::CommandBufferHandle,
+  ) -> GpuResult<()> {
+    let res_guard = self.res.read();
+    let archetype_guard = res_guard.archetypes.particle_render_archetype.read();
+    if archetype_guard.is_none() {
+      return Err(GpuError::InvalidState(
+        "[Vulkan RenderDevice] prepare_particle_archetype_for_render_and_bind_pipeline | archetype absent",
+      ));
+    }
+    let archetype = archetype_guard.as_ref().unwrap();
+    let pipeline = archetype.pipeline_key.unwrap();
+
+    let cmd = {
+      let cmd_buffers = self.recording_command_buffers.read();
+      let data = cmd_buffers
+        .get(&cmd_buffer)
+        .ok_or(GpuError::InvalidArgument("[Vulkan RenderDevice] prepare_particle_archetype_for_render_and_bind_pipeline | invalid command buffer handle"))?;
+      data.command_buffer.get()
+    };
+
+    let p = res_guard
+      .pipeline_pool
+      .read()
+      .get_graphics_pipeline(pipeline)
+      .unwrap();
+
+    unsafe {
+      self
+        .device
+        .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, p.get());
+      self.device.cmd_bind_descriptor_sets(
+        cmd,
+        vk::PipelineBindPoint::GRAPHICS,
+        archetype.pipeline_layout.get(),
+        0,
+        &[archetype.descriptor_set.get()],
+        &[],
+      );
+    }
+    Ok(())
+  }
+
   fn prepare_sky_for_render(&self, cmd_buffer: gpu::CommandBufferHandle) -> GpuResult<()> {
     let res_guard = self.res.read();
     let sky_image_guard = res_guard.sky_image.read();

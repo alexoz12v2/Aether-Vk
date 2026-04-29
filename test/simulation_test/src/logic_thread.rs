@@ -1255,19 +1255,19 @@ mod tests {
 
   #[test]
   fn test_camera_rotation_axes() {
-    // Local axes in our new standard graphics view space mapping:
-    // Local X = Right, Local Y = Up, Local Z = Backward
+    // Local axes mapping for our world coordinate system:
+    // Local X = Right, Local Y = Backward, Local Z = Up
     let local_right = Vec3f32::from_components(1.0, 0.0, 0.0);
-    let local_up = Vec3f32::from_components(0.0, 1.0, 0.0);
-    let local_backward = Vec3f32::from_components(0.0, 0.0, 1.0);
+    let local_backward = Vec3f32::from_components(0.0, 1.0, 0.0);
+    let local_up = Vec3f32::from_components(0.0, 0.0, 1.0);
 
     // Expected world directions at identity rotation:
     // World Right = [+1, 0, 0]
-    // World Up = [0, 0, 1]
     // World Backward = [0, 1, 0]
+    // World Up = [0, 0, 1]
     let world_right_expected = Vec3f32::from_components(1.0, 0.0, 0.0);
-    let world_up_expected = Vec3f32::from_components(0.0, 0.0, 1.0);
     let world_backward_expected = Vec3f32::from_components(0.0, 1.0, 0.0);
+    let world_up_expected = Vec3f32::from_components(0.0, 0.0, 1.0);
 
     let eps = 1e-5;
 
@@ -1276,16 +1276,16 @@ mod tests {
     let mat = Mat4x4f32::from_quat_custom_frame(rot);
     
     let rotated_right_v4 = mat.mul_vector(local_right.to_vec4(0.0));
-    let rotated_up_v4 = mat.mul_vector(local_up.to_vec4(0.0));
     let rotated_backward_v4 = mat.mul_vector(local_backward.to_vec4(0.0));
+    let rotated_up_v4 = mat.mul_vector(local_up.to_vec4(0.0));
 
     let rotated_right = Vec3f32::from_components(rotated_right_v4.x(), rotated_right_v4.y(), rotated_right_v4.z());
-    let rotated_up = Vec3f32::from_components(rotated_up_v4.x(), rotated_up_v4.y(), rotated_up_v4.z());
     let rotated_backward = Vec3f32::from_components(rotated_backward_v4.x(), rotated_backward_v4.y(), rotated_backward_v4.z());
+    let rotated_up = Vec3f32::from_components(rotated_up_v4.x(), rotated_up_v4.y(), rotated_up_v4.z());
 
     assert_vec_eq(rotated_right, world_right_expected, eps);
-    assert_vec_eq(rotated_up, world_up_expected, eps);
     assert_vec_eq(rotated_backward, world_backward_expected, eps);
+    assert_vec_eq(rotated_up, world_up_expected, eps);
 
     // 2. Yaw 90 degrees (around world Up [0, 0, 1])
     let yaw = core::f32::consts::FRAC_PI_2;
@@ -1298,13 +1298,13 @@ mod tests {
     // Up [0,0,1] stays Up [0,0,1]
     
     let rotated_right_v4 = mat.mul_vector(local_right.to_vec4(0.0));
-    let rotated_up_v4 = mat.mul_vector(local_up.to_vec4(0.0));
+    let rotated_backward_v4 = mat.mul_vector(local_backward.to_vec4(0.0));
 
     let rotated_right = Vec3f32::from_components(rotated_right_v4.x(), rotated_right_v4.y(), rotated_right_v4.z());
-    let rotated_up = Vec3f32::from_components(rotated_up_v4.x(), rotated_up_v4.y(), rotated_up_v4.z());
+    let rotated_backward = Vec3f32::from_components(rotated_backward_v4.x(), rotated_backward_v4.y(), rotated_backward_v4.z());
     
     assert_vec_eq(rotated_right, world_backward_expected, eps);
-    assert_vec_eq(rotated_up, world_up_expected, eps);
+    assert_vec_eq(rotated_backward, Vec3f32::from_components(-1.0, 0.0, 0.0), eps);
   }
 
   #[test]
@@ -1315,8 +1315,8 @@ mod tests {
 
     // Local directions as used in standard movement logic
     let local_right = Vec3f32::from_components(1.0, 0.0, 0.0);
-    let local_up = Vec3f32::from_components(0.0, 1.0, 0.0);
-    let local_backward = Vec3f32::from_components(0.0, 0.0, 1.0);
+    let local_up = Vec3f32::from_components(0.0, 0.0, 1.0);
+    let local_backward = Vec3f32::from_components(0.0, 1.0, 0.0);
 
     // Rotate these local axes into world space
     let rotated_right_v4 = mat.mul_vector(local_right.to_vec4(0.0));
@@ -1334,7 +1334,7 @@ mod tests {
     assert_vec_eq(rotated_right, Vec3f32::from_components(1.0, 0.0, 0.0), eps);
     // Up should be +Z
     assert_vec_eq(rotated_up, Vec3f32::from_components(0.0, 0.0, 1.0), eps);
-    // Forward should be -Y (so Backward is +Y)
+    // Backward should be +Y
     assert_vec_eq(rotated_backward, Vec3f32::from_components(0.0, 1.0, 0.0), eps);
   }
 }

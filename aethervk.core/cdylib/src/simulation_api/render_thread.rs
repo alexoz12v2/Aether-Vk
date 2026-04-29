@@ -90,35 +90,16 @@ fn process_command(
       let render_scene = render_frame.prepare_scene(render_device)?;
       let task_id = render_frame.task_id;
       // `render_device.success_task` will be called by thread pool when timeline advances
-      match do_render_scene_async(
+      if let Err(err) = do_render_scene_async(
         render_device,
         render_scene,
         render_frame.presentation_engine_handle,
         task_id,
       ) {
-        Ok(()) => {
-          let success = channel_utils::retry_with_limit(
-            &ctx.render_feedback_tx,
-            RenderFeedback::TaskCreated(Some(task_id)),
-            max_attempts,
-            _1ms,
-          );
-          if success {
-            Ok(())
-          } else {
-            Err(GpuError::InvalidState("RenderFrame feedback failed"))
-          }
-        }
-        Err(err) => {
-          render_device.fail_task(task_id, err.clone());
-          channel_utils::retry_until_success(
-            &ctx.render_feedback_tx,
-            RenderFeedback::TaskCreated(None),
-            _1ms,
-          );
-          Err(err)
-        }
+        render_device.fail_task(task_id, err.clone());
+        return Err(err);
       }
+      Ok(())
     }
     RenderCommand::DownloadImage(download_image) => {
       // 1. Check completion. If true, try reading the download.

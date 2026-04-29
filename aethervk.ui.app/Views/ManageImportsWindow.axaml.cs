@@ -23,7 +23,9 @@ public partial class ManageImportsWindow : Window
             if (result && dialog.DataContext is SpawnMeshViewModel vm)
             {
                 var runtime = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-                runtime?.SpawnModelInstance(m.Model.Id, vm.EntityName, vm.PosX, vm.PosY, vm.PosZ);
+                if (runtime != null) {
+                    await runtime.SpawnModelInstanceAsync(m.Model.Id, vm.EntityName, vm.PosX, vm.PosY, vm.PosZ);
+                }
             }
         });
     }

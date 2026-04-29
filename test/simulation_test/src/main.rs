@@ -2,7 +2,10 @@ use aethervk_core_rlib::{
   gpu::ASSET_DIR,
   scene::text::FontAtlas,
   gpu::{self},
-  scene::{AlmanacPlanet, CameraComponent, CursorComponent, PhysicalMeshComponent, Scene, TransformComponent},
+  scene::{
+    AlmanacPlanet, CameraComponent, CursorComponent, PhysicalMeshComponent, Scene,
+    TransformComponent,
+  },
   simulation, types,
   types::RuntimeParams,
 };
@@ -23,15 +26,16 @@ use std::{
   time::Instant,
 };
 use std::any::TypeId;
+use aethervk_core_rlib::scene::GizmoComponent;
 use test_utils::{
   create_winit_window_and_event_loop, cycle_get_asset_path_from_exe, get_handle_and_window_info,
   get_monospace_font_path_from_asset_path, SceneTestUtilsExt,
 };
 
-pub mod constants;
+mod constants;
 mod logic_thread;
 mod render_thread;
-pub mod utils;
+mod utils;
 
 struct AppState {
   scene: Arc<Scene>,
@@ -69,6 +73,29 @@ impl simulation::Pausable for AppState {
   }
   fn set_time_scale(&mut self, scale: f32) {
     self.time_scale = scale;
+  }
+}
+
+fn add_gizmos_to_transforms(scene: &Scene) {
+  let mut entities = Vec::new();
+  scene.query1::<TransformComponent, _>(|id, _| {
+    entities.push(id);
+  });
+
+  for id in entities {
+    if scene.with_component(id, |_g: &GizmoComponent| {}).is_none() {
+      let mut scale = 1.0;
+      if let Some(t) = scene.global_transform(id) {
+        scale = t.scale.x().max(t.scale.y()).max(t.scale.z()) * 2.0;
+      }
+      let _ = scene.add_component(
+        id,
+        GizmoComponent {
+          gizmo_visible: false,
+          gizmo_scale: scale,
+        },
+      );
+    }
   }
 }
 
@@ -123,6 +150,7 @@ fn main() {
 
   let scene = Scene::new().with_all_dbg_components();
   scene.register_component::<AlmanacPlanet>(&[TypeId::of::<TransformComponent>()]);
+  scene.register_component::<GizmoComponent>(&[TypeId::of::<TransformComponent>()]);
   let model_path = assets_dir.join("Comet.glb");
   let comet = simulation::comet::load_comet_from_gltf(model_path.to_str().unwrap(), false)
     .expect("Failed to load comet");
@@ -132,7 +160,9 @@ fn main() {
   #[cfg(not(feature = "spotless_rendering"))]
   {
     let mesh_entity = scene.spawn_entity("comet");
-    let comet_radius = (2.0 / constants::DISTANCE_SCALE_FACTOR as f32) * constants::PLANET_VISUAL_SCALE;
+    // The comet is very small physically. To make it visible, we need to significantly
+    // boost its visual scale. Using a large constant for visibility.
+    let comet_radius = 50.0;
     scene
       .add_component(
         mesh_entity,
@@ -236,10 +266,13 @@ fn main() {
       .add_component(planet_entity, AlmanacPlanet::new(*naif_id, *rot_period))
       .unwrap();
     scene
-      .add_component(planet_entity, aethervk_core_rlib::scene::GizmoComponent {
-        gizmo_visible: false,
-        gizmo_scale: planet_radius * 2.0,
-      })
+      .add_component(
+        planet_entity,
+        GizmoComponent {
+          gizmo_visible: false,
+          gizmo_scale: planet_radius * 2.0,
+        },
+      )
       .unwrap();
     planets_ids.push((*naif_id, planet_entity, *rot_period, planet_radius));
   }
@@ -360,6 +393,8 @@ fn main() {
     .add_component(grid_entity, aethervk_core_rlib::scene::GridComponent {})
     .unwrap();
   scene.set_parent(sun_entity, Some(root_entity));
+
+  add_gizmos_to_transforms(&scene);
 
   let scene_shared = Arc::new(scene);
   let outlines_enabled = Arc::new(AtomicBool::new(true));

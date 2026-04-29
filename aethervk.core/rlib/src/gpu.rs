@@ -626,6 +626,11 @@ pub trait RenderDevice: Send + Sync {
 
   /// Allocates Descriptor (not image, that is done in `generate_sky`) and updates if not done yet
   /// TODO probably move into bridge between Kernels and RenderDevice when Kernels has generates_sky
+  fn prepare_particle_archetype_for_render_and_bind_pipeline(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+  ) -> GpuResult<()>;
+
   fn prepare_sky_for_render(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 
   /// Screen extent should be the chosen presentation engine extent to correctly display screen size and position
