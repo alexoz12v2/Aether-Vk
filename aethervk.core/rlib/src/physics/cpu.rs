@@ -1,4 +1,4 @@
-use crate::math::{compute_com_and_tensor, qr_diagonalization, hat, vee, expm_hat, solve_12x12};
+use crate::math::{compute_com_and_tensor, jacobi_diagonalization, hat, vee, expm_hat, solve_12x12};
 use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
 use aethervk_oshal_rlib::math::matrix::{Matrix, Matrix3, MatrixVectorMul, SquareMatrix, mat3::Mat3f32};
 use aethervk_oshal_rlib::math::{FloatLike, MulAddIdentity};
@@ -33,7 +33,7 @@ impl RigidBody {
   ) -> Self {
     let mass = mass_per_vertex * (raw_vertices.len() as f32);
     let (com_offset_body, raw_i) = compute_com_and_tensor(raw_vertices, mass_per_vertex);
-    let (principal_moments, principal_axes_r) = qr_diagonalization(raw_i, 1e-6, 1000);
+    let (principal_moments, principal_axes_r) = jacobi_diagonalization(raw_i, 1e-6, 1000);
 
     let inertia_tensor_body = Mat3f32 {
       x: Vec3f32::from_components(principal_moments.x(), 0.0, 0.0),

@@ -451,6 +451,8 @@ pub trait RenderDevice: Send + Sync {
   /// discard the frame, call resize, and try again next frame
   fn acquire_next_image(&self, handle: PresentationEngineHandle) -> GpuResult<AcquireResult>;
 
+  fn cancel_acquired_image(&self, handle: PresentationEngineHandle, image_index: u32, frame_index: u32) -> GpuResult<()>;
+
   // TODO: see how to refactor get_or_create functions
   /// Returns (pipeline, vertex_buffer, index_buffer)
   fn get_or_create_physical_mesh_resources(
@@ -865,6 +867,40 @@ impl<'a> Drop for ScopedRenderPass<'a> {
     if !self.ended {
       // Force end on early exit/panic.
       let _ = self.device.end_render_pass(self.cmd_buffer);
+    }
+  }
+}
+
+pub struct FrameCancelGuard<'a> {
+  device: &'a dyn RenderDevice,
+  engine: PresentationEngineHandle,
+  acquire_result: Option<AcquireResult>,
+}
+
+impl<'a> FrameCancelGuard<'a> {
+  pub fn new(device: &'a dyn RenderDevice, engine: PresentationEngineHandle, acquire_result: AcquireResult) -> Self {
+    Self {
+      device,
+      engine,
+      acquire_result: Some(acquire_result),
+    }
+  }
+
+  pub fn defuse(mut self) {
+    self.acquire_result = None;
+  }
+}
+
+impl<'a> Drop for FrameCancelGuard<'a> {
+  fn drop(&mut self) {
+    if let Some(ar) = self.acquire_result.take() {
+      // Guard fell out of scope without being defused. An error happened!
+      // Cancel the frame cleanly to avoid swapchain leaks and deadlocks.
+      let _ = self.device.cancel_acquired_image(
+        self.engine,
+        ar.image_index,
+        ar.frame_index as u32
+      );
     }
   }
 }

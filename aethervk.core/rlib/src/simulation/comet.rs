@@ -128,7 +128,7 @@ fn compute_comet_extras(
     .map(|v| Vec3f32::from_components(v.position[0], v.position[1], v.position[2]))
     .collect();
   let (_, mat) = compute_com_and_tensor(&raw_verts, 1.0); // Assume unit mass per vertex for geometry proxy
-  let (principal_moments, principal_axes) = crate::math::qr_diagonalization(mat, 1e-6, 100);
+  let (principal_moments, principal_axes) = crate::math::jacobi_diagonalization(mat, 1e-6, 100);
 
   // Update mass properties to match the new diagonalized tensor
   mass_properties.inertia.xx = principal_moments.x() as f64;

@@ -163,12 +163,19 @@ fn main() {
     // The comet is very small physically. To make it visible, we need to significantly
     // boost its visual scale. Using a large constant for visibility.
     let comet_radius = 50.0;
+
+    let initial_rotation = if let Some(ref axes) = comet.principal_axes {
+      Quat::from_rotation_matrix(axes)
+    } else {
+      Quat::identity()
+    };
+
     scene
       .add_component(
         mesh_entity,
         TransformComponent {
           position: Vec3f32::from_components(10.0, 0.0, 0.0),
-          rotation: Quat::identity(),
+          rotation: initial_rotation,
           scale: Vec3f32::from_components(comet_radius, comet_radius, comet_radius),
         },
       )

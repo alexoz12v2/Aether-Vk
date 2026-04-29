@@ -1,4 +1,4 @@
-use aethervk_core_rlib::gpu::{RenderScene, ScopedCommandBuffer, ScopedRenderPass};
+use aethervk_core_rlib::gpu::{FrameCancelGuard, RenderScene, ScopedCommandBuffer, ScopedRenderPass};
 use aethervk_core_rlib::{
   gpu::{self, RenderDevice},
   scene::{EntityId, Scene},
@@ -65,6 +65,7 @@ fn render_payload(
     )?;
     return Ok(());
   }
+  let present_guard = FrameCancelGuard::new(device, presentation_engine, acquire_result);
 
   // --- Start of safely scoped GPU Operations ---
 
@@ -95,14 +96,19 @@ fn render_payload(
 
     let view_proj = render_scene.camera_data.view_proj;
     for m in &render_scene.measurement_calls {
-      let p1 = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(m.p1[0], m.p1[1], m.p1[2]);
-      let p2 = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(m.p2[0], m.p2[1], m.p2[2]);
-      
+      let p1 = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+        m.p1[0], m.p1[1], m.p1[2],
+      );
+      let p2 = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+        m.p2[0], m.p2[1], m.p2[2],
+      );
+
       use aethervk_oshal_rlib::math::vector::Vector;
       let mid = p1 + (p2 - p1) * 0.5;
-      
+
       // Add a slight upward offset in world space
-      let offset_mid = mid + aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 5.0);
+      let offset_mid =
+        mid + aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 5.0);
 
       if let Some((screen_x, screen_y)) = aethervk_core_rlib::math::from_world_space_to_screen_space(
         offset_mid,
@@ -111,7 +117,7 @@ fn render_payload(
       ) {
         let distance = (p2 - p1).length() as f64;
         let text = crate::logic_thread::format_distance(distance, m.significant_digits);
-        
+
         // Convert screen coords to NDC for text renderer
         let ndc_x = (screen_x / screen_extent[0]) * 2.0 - 1.0;
         let ndc_y = (screen_y / screen_extent[1]) * 2.0 - 1.0;
@@ -203,6 +209,7 @@ fn render_payload(
   // Explictly end and submit. Bypasses the Drop trait's automatic closure.
   rp_guard.end()?;
   cmd_guard.submit()?;
+  present_guard.defuse();
 
   // --- End of safely scoped GPU Operations ---
 

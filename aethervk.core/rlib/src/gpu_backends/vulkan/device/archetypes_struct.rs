@@ -271,7 +271,11 @@ impl Archetypes {
     |archetype, device, write_pipeline, discard_pool, timeline, graphics_info| {
       let outline_graphics_info = graphics_info
         .clone()
-        .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
+        .with_pipeline_flags(
+          PipelineFlags::CULL_BACK
+            | PipelineFlags::STENCIL_ENABLE
+            | PipelineFlags::NO_DEPTH_TEST,
+        )
         .with_stencil_compare_op(StencilCompareOp::NotEqual)
         .with_stencil_logic_op(StencilLogicOp::None)
         .with_stencil_reference(255)
@@ -542,7 +546,7 @@ impl Archetypes {
           .clone(),
       )
       .with_pipeline_layout(res.pipeline_layout.get())
-      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
+      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::STENCIL_ENABLE)
       .with_render_pass(
         renderpasses
           .get_or_create_render_pass(
@@ -596,7 +600,6 @@ impl Archetypes {
       )
       .with_pipeline_flags(
         PipelineFlags::CULL_BACK
-          | PipelineFlags::INVERT_FRONT_FACE
           | PipelineFlags::STENCIL_ENABLE
           | PipelineFlags::NO_DEPTH_TEST,
       )

@@ -1,21 +1,12 @@
-use core::{mem, ptr, usize};
+use core::{mem, ptr};
 
-use alloc::string::ToString;
+use alloc::{string::ToString, vec::Vec};
 use ash::vk::{self, Handle};
-
 use crate::{
   gpu::{AcquireResult, OpaqueNativeHandleInfo, PresentationEngineParams, SwapchainStatus},
   gpu_backends::vulkan::{device::DeviceResource, utils::NonZeroHandle, device::LogicalDevice},
   types::{GpuError, GpuResult},
 };
-
-// TODO:
-// - Add Support for swapchainless presentation engine (basically render to a set of VkImages),
-//   which are then exported for Avalonia consumption (an enum or something similiar, probably split into
-//   more internal classes to make it more manageable)
-// - Fix resize, right now it panics cause it fills the heapless vectors
-
-use alloc::vec::Vec;
 
 pub(super) const MAX_FRAMES_IN_FLIGHT: usize = 8;
 
@@ -48,6 +39,9 @@ struct FrameDiscard {
   discarded_swapchains: Vec<NonZeroHandle<vk::SwapchainKHR>>,
   discarded_semaphores: Vec<NonZeroHandle<vk::Semaphore>>,
   discarded_image_views: Vec<NonZeroHandle<vk::ImageView>>,
+
+  // added
+  discarded_fences: Vec<NonZeroHandle<vk::Fence>>,
 }
 
 #[derive(Clone)]
@@ -137,6 +131,10 @@ impl SwapchainCleanable for FrameDiscard {
       unsafe { device.destroy_image_view(image_view.get(), None) };
     }
     self.discarded_image_views.clear();
+    for &fence in self.discarded_fences.iter() {
+      unsafe { device.destroy_fence(fence.get(), None) }
+    }
+    self.discarded_fences.clear();
   }
 }
 
@@ -188,6 +186,22 @@ unsafe impl Send for PresentationState {}
 unsafe impl Sync for PresentationState {}
 
 impl PresentationState {
+  /// Assumes command buffer completed, but still not submitted to queue.
+  pub fn cancel_image(
+    &mut self,
+    device: &LogicalDevice,
+    graphics_queue: vk::Queue,
+    image_index: u32,
+    frame_index: u32,
+  ) -> GpuResult<()> {
+    match self {
+      Self::Windowed(state) => state.cancel_image(device, graphics_queue, image_index, frame_index),
+      Self::Windowless(state) => {
+        state.cancel_image(device, graphics_queue, image_index, frame_index)
+      }
+    }
+  }
+
   pub(super) fn resize(
     &mut self,
     instance: &ash::Instance,
@@ -313,6 +327,65 @@ impl PresentationState {
 }
 
 impl WindowedPresentationState {
+  pub fn cancel_image(
+    &mut self,
+    device: &LogicalDevice,
+    graphics_queue: vk::Queue,
+    image_index: u32,
+    frame_index: u32,
+  ) -> GpuResult<()> {
+    let image = &mut self.images[image_index as usize];
+    let frame = &mut self.frames[frame_index as usize];
+
+    // If it hasn't been acquired (e.g., OUT_OF_DATE happened), do nothing
+    if image.eligible_for_acquisition() || frame.eligible_for_steal() {
+      return Ok(());
+    }
+
+    let acquire_sem = frame.acquire_semaphore.unwrap().get();
+    let present_sem = image.present_semaphore.get();
+    let fence = frame.submission_fence.unwrap().get();
+
+    // 1. Dummy Submit (0 cmd buffers) to advance Semaphores and Fences
+    let wait_semaphores = [acquire_sem];
+    let wait_dst_stage_mask = [vk::PipelineStageFlags::BOTTOM_OF_PIPE];
+    let signal_semaphores = [present_sem];
+
+    let submit_info = vk::SubmitInfo::default()
+      .wait_semaphores(&wait_semaphores)
+      .wait_dst_stage_mask(&wait_dst_stage_mask)
+      .signal_semaphores(&signal_semaphores);
+
+    unsafe {
+      device
+        .locked_queue_submit(graphics_queue, core::slice::from_ref(&submit_info), fence)
+        .map_err(GpuError::from)?;
+    }
+
+    // 2. Dummy Present to return WSI WSI image to Swapchain WSI
+    let swapchains = [self.swapchain.get()];
+    let image_indices = [image_index];
+    let present_info = vk::PresentInfoKHR::default()
+      .wait_semaphores(&signal_semaphores)
+      .swapchains(&swapchains)
+      .image_indices(&image_indices);
+
+    let present_result = unsafe {
+      let _guard = device.submission_lock.lock();
+      self
+        .swapchain_device
+        .queue_present(graphics_queue, &present_info)
+    };
+
+    // 3. Reset internal struct states
+    unsafe { image.reclaim_from_swapchain_frame(frame) };
+
+    match present_result {
+      Ok(_) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => Ok(()),
+      Err(e) => Err(e.into()),
+    }
+  }
+
   pub(super) fn resize(
     &mut self,
     device: &ash::Device,
@@ -905,7 +978,7 @@ impl WindowedPresentationState {
       );
       (index, vk_result)
     };
-    
+
     if image_index as usize != self.next_image {
       let next_fence = self.images[self.next_image].submission_fence.take();
       let next_sem = self.images[self.next_image].acquire_semaphore.take();
@@ -918,7 +991,9 @@ impl WindowedPresentationState {
       self.images[self.next_image].acquire_semaphore = actual_sem;
 
       if let Some(fence) = self.images[self.next_image].submission_fence {
-        unsafe { let _ = device.wait_for_fences(&[fence.get()], false, u64::MAX); }
+        unsafe {
+          let _ = device.wait_for_fences(&[fence.get()], false, u64::MAX);
+        }
       }
     }
 
@@ -958,7 +1033,10 @@ impl WindowedPresentationState {
   pub unsafe fn get_frame_resources(
     &self,
     index: usize,
-  ) -> (Option<NonZeroHandle<vk::Semaphore>>, NonZeroHandle<vk::Fence>) {
+  ) -> (
+    Option<NonZeroHandle<vk::Semaphore>>,
+    NonZeroHandle<vk::Fence>,
+  ) {
     debug_assert!(self.frames.len() > index);
     let frame = &self.frames[index];
     debug_assert!(!frame.eligible_for_steal());
@@ -1057,6 +1135,9 @@ impl FrameDiscard {
           self
             .discarded_semaphores
             .push(swapchain_image.acquire_semaphore.unwrap_unchecked());
+          self
+            .discarded_fences
+            .push(swapchain_image.submission_fence.unwrap_unchecked());
         }
       };
     }
@@ -1100,6 +1181,7 @@ impl Default for FrameDiscard {
       discarded_swapchains: Vec::new(),
       discarded_semaphores: Vec::new(),
       discarded_image_views: Vec::new(),
+      discarded_fences: Vec::new(),
     }
   }
 }
@@ -1197,6 +1279,41 @@ impl WindowlessPresentationState {
     Ok(this)
   }
 
+  pub fn cancel_image(
+    &mut self,
+    device: &LogicalDevice,
+    graphics_queue: vk::Queue,
+    image_index: u32,
+    frame_index: u32,
+  ) -> GpuResult<()> {
+    let image = &mut self.images[image_index as usize];
+    let frame = &mut self.frames[frame_index as usize];
+
+    if image.eligible_for_acquisition() || frame.eligible_for_steal() {
+      return Ok(());
+    }
+
+    let acquire_sem = frame.acquire_semaphore.unwrap().get();
+    let fence = frame.submission_fence.unwrap().get();
+
+    // Windowless doesn't present, but still needs to satisfy the semaphores/fence
+    let wait_semaphores = [acquire_sem];
+    let wait_dst_stage_mask = [vk::PipelineStageFlags::BOTTOM_OF_PIPE];
+
+    let submit_info = vk::SubmitInfo::default()
+      .wait_semaphores(&wait_semaphores)
+      .wait_dst_stage_mask(&wait_dst_stage_mask);
+
+    unsafe {
+      device
+        .locked_queue_submit(graphics_queue, core::slice::from_ref(&submit_info), fence)
+        .map_err(GpuError::from)?;
+      image.reclaim_from_swapchain_frame(frame);
+    }
+
+    Ok(())
+  }
+
   pub(super) fn resize(
     &mut self,
     instance: &ash::Instance,
@@ -1281,7 +1398,9 @@ impl WindowlessPresentationState {
     };
     let signal_info =
       vk::SubmitInfo::default().signal_semaphores(core::slice::from_ref(&sem_handle));
-    device.locked_queue_submit(graphics_queue, &[signal_info], vk::Fence::null()).map_err(GpuError::from)?;
+    device
+      .locked_queue_submit(graphics_queue, &[signal_info], vk::Fence::null())
+      .map_err(GpuError::from)?;
 
     self.next_image = (self.next_image + 1) % images_count;
     self.current_frame = (self.current_frame + 1) % frame_count;
@@ -1295,16 +1414,14 @@ impl WindowlessPresentationState {
   pub unsafe fn get_frame_resources(
     &self,
     index: usize,
-  ) -> (Option<NonZeroHandle<vk::Semaphore>>, NonZeroHandle<vk::Fence>) {
+  ) -> (
+    Option<NonZeroHandle<vk::Semaphore>>,
+    NonZeroHandle<vk::Fence>,
+  ) {
     debug_assert!(self.frames.len() > index);
     let frame = &self.frames[index];
     debug_assert!(!frame.eligible_for_steal());
-    unsafe {
-      (
-        None,
-        frame.submission_fence.unwrap_unchecked(),
-      )
-    }
+    unsafe { (Some(frame.acquire_semaphore.unwrap_unchecked()), frame.submission_fence.unwrap_unchecked()) }
   }
 
   pub unsafe fn get_image_resources(
@@ -1349,7 +1466,9 @@ impl WindowlessPresentationState {
   }
 
   pub fn get_last_submitted_timeline_value(&self) -> u64 {
-    self.last_timeline_value.load(core::sync::atomic::Ordering::Acquire)
+    self
+      .last_timeline_value
+      .load(core::sync::atomic::Ordering::Acquire)
   }
 
   fn recreate(

@@ -62,6 +62,8 @@ use vk_mem::Alloc;
 use aethervk_oshal_rlib::math::safe_div;
 use crate::gpu::vulkan::device::resources::ParticleRenderResourceArchetype;
 
+// TODO refactor queue to use a Mutex for VkQueue handle or a struct to ensure submits are sync
+
 mod archetypes_struct;
 mod commands;
 mod descriptors;
@@ -1478,7 +1480,7 @@ impl<'a> Drop for Device<'a> {
 
     // Wait for the timeline polling task to exit before destroying the device
     while Arc::strong_count(&self.callback_stop_signal) > 1 {
-        unsafe { oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1)) };
+      unsafe { oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1)) };
     }
 
     unsafe { self.device.device_wait_idle().unwrap_unchecked() };
@@ -1876,10 +1878,6 @@ impl<'a> RenderDevice for Device<'a> {
       gpu::frame::do_draw_sky(self, cmd_buffer, draw_call)?;
     }
 
-    if let Some(draw_call) = &render_scene.sun_call {
-      gpu::frame::do_draw_sun(self, &render_scene.camera_data, cmd_buffer, draw_call)?;
-    }
-
     let sun_pos = if let Some(draw_call) = &render_scene.sun_call {
       draw_call.sun_pos()
     } else {
@@ -1895,6 +1893,11 @@ impl<'a> RenderDevice for Device<'a> {
         cmd_buffer,
         draw_call,
       )?;
+    }
+
+    // Draw Sun Volume after opaque meshes so it properly blends over them instead of being overwritten
+    if let Some(draw_call) = &render_scene.sun_call {
+      gpu::frame::do_draw_sun(self, &render_scene.camera_data, cmd_buffer, draw_call)?;
     }
 
     if let Some(draw_call) = &render_scene.grid_call {
@@ -2090,6 +2093,27 @@ impl<'a> RenderDevice for Device<'a> {
         "[Vulkan RenderDevice] acquire_next_image",
       ))
     }
+  }
+
+  fn cancel_acquired_image(
+    &self,
+    handle: PresentationEngineHandle,
+    image_index: u32,
+    frame_index: u32,
+  ) -> GpuResult<()> {
+    let res_guard = self.res.read();
+    let live_engines_lock = res_guard.live_presentation_engines.read();
+    let engine = live_engines_lock
+      .get(&handle)
+      .ok_or(GpuError::InvalidArgument(
+        "Vulkan RenderDevice] cancel_aquired_image",
+      ))?;
+    engine.write().cancel_image(
+      &self.device,
+      self.queues.get_graphics_queue().handle,
+      image_index,
+      frame_index,
+    )
   }
 
   /// Note: This function may have the following side effects
@@ -5286,7 +5310,7 @@ impl<'a> RenderDevice for Device<'a> {
       let mut wait_semaphores = Vec::new();
       let mut wait_semaphore_values = Vec::new();
       let mut wait_dst_stage_mask = Vec::new();
-      
+
       if let Some(wait_semaphore) = wait_semaphore {
         wait_semaphores.push(wait_semaphore.get());
         wait_semaphore_values.push(0);
