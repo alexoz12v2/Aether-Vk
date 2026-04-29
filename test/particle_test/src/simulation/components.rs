@@ -159,20 +159,43 @@ impl ParticleEmitterConfig {
 #[repr(C)]
 #[derive(Clone, Debug)]
 pub struct ParticleData {
-  pub id: usize,
-  pub position: Vec3f32,
-  pub velocity: Vec3f32,
-  pub age: timeus_t,
+  pub id_low: u32,
+  pub id_high: u32,
+  pub _pad0: [u32; 2],
+  pub position: [f32; 3],
+  pub _pad1: u32,
+  pub velocity: [f32; 3],
+  pub age_low: u32,
+  pub age_high: u32,
   pub mass: f32,
   pub active: u32,
+  pub _pad2: u32,
 }
 
 impl ParticleData {
   pub fn as_particle(&self, radius: f32) -> Particle<Vec3f32> {
     Particle {
-      position: self.position,
+      position: Vec3f32::from_array(self.position),
       radius,
     }
+  }
+
+  pub fn set_id(&mut self, id: u64) {
+    self.id_low = (id & 0xFFFFFFFF) as u32;
+    self.id_high = (id >> 32) as u32;
+  }
+
+  pub fn get_id(&self) -> u64 {
+    (self.id_low as u64) | ((self.id_high as u64) << 32)
+  }
+
+  pub fn set_age(&mut self, age: timeus_t) {
+    self.age_low = (age as u64 & 0xFFFFFFFF) as u32;
+    self.age_high = ((age as u64) >> 32) as u32;
+  }
+
+  pub fn get_age(&self) -> timeus_t {
+    ((self.age_low as u64) | ((self.age_high as u64) << 32)) as timeus_t
   }
 }
 
@@ -247,7 +270,8 @@ impl ParticleSystemComponent {
         let mut intersecting = false;
         for p in self.particles.iter() {
           if p.active != 0 {
-             let dist_sq = (p.position - world_pos).length_squared();
+             let p_pos = Vec3f32::from_array(p.position);
+             let dist_sq = (p_pos - world_pos).length_squared();
              let min_dist = self.config.particle_radius * 2.0;
              if dist_sq < min_dist * min_dist {
                  intersecting = true;
@@ -307,11 +331,13 @@ impl ParticleSystemComponent {
   ) {
     let mut roulette_idx = 0;
     for p in self.particles.iter_mut().filter(|p| p.active != 0) {
-      p.age += (dt * 1_000_000.0) as i64;
+      let mut age = p.get_age();
+      age += (dt * 1_000_000.0) as i64;
+      p.set_age(age);
 
       // Russian roulette
-      if p.age > self.config.lifetime as i64 {
-        let age_excess = (p.age - self.config.lifetime as i64) as f32 / 1_000_000.0;
+      if age > self.config.lifetime as i64 {
+        let age_excess = (age - self.config.lifetime as i64) as f32 / 1_000_000.0;
         let death_prob = 1.0 - (-age_excess).exp(); // Exponential decay
 
         let u = if roulette_idx < u_roulette.len() {
@@ -327,21 +353,27 @@ impl ParticleSystemComponent {
         }
       }
 
+      let p_pos = Vec3f32::from_array(p.position);
+      let mut p_vel = Vec3f32::from_array(p.velocity);
+
       // Gravity
-      let to_sun = sun_pos - p.position;
+      let to_sun = sun_pos - p_pos;
       let dist_sq_sun = to_sun.length_squared().max(1e-4);
       let force_sun = to_sun.normalize()
         * (aethervk_core_rlib::physics::cpu::G * 100000000.0 * p.mass / dist_sq_sun)
         * (1.0 - self.config.beta);
 
-      let to_comet = comet_pos - p.position;
+      let to_comet = comet_pos - p_pos;
       let dist_sq_comet = to_comet.length_squared().max(1e-4);
       let force_comet = to_comet.normalize()
         * (aethervk_core_rlib::physics::cpu::G * comet_mass * p.mass / dist_sq_comet);
 
       let acceleration = (force_sun + force_comet) / p.mass;
-      p.velocity += acceleration * dt;
-      p.position += p.velocity * dt;
+      p_vel += acceleration * dt;
+      let new_pos = p_pos + p_vel * dt;
+
+      p.position = [new_pos.x(), new_pos.y(), new_pos.z()];
+      p.velocity = [p_vel.x(), p_vel.y(), p_vel.z()];
     }
 
     // Clean up dead particles

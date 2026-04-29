@@ -34,6 +34,199 @@ fn setup_assets_dir() {
 }
 
 #[test]
+fn test_render_particles_windowless() {
+  setup_assets_dir();
+  fn panic_on_validation_error(msg: &str) {
+    panic!("Vulkan validation error occurred during testing: {}", msg);
+  }
+  let runtime_params = Box::new(RuntimeParams {
+    render_backend_params: FnvIndexMap::new(),
+    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
+  });
+  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
+
+  let additional_params = DeviceAdditionalParams::new();
+  let render_device_handle = render_frontend
+    .write()
+    .init_device(0, &additional_params)
+    .unwrap();
+
+  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
+  let pool_arc = std::sync::Arc::new(pool);
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      device.wire_callbacks(pool_arc.clone())
+    })
+    .unwrap();
+
+  let width = 256;
+  let height = 256;
+
+  let presentation_engine = {
+    let params = PresentationEngineParams::windowless(width, height);
+    render_frontend
+      .with_device(render_device_handle, |device| {
+        let pe = device.create_presentation_engine(&params)?;
+        device.init_archetypes(pe)?;
+        crate::types::GpuResult::Ok(pe)
+      })
+      .unwrap()
+  };
+
+  let scene = Scene::new();
+
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      let task_id = device.create_task();
+      device.start_frame()?;
+      let acquire_result = device.acquire_next_image(presentation_engine)?;
+      let cmd_buffer_handle = device.get_command_buffer()?;
+
+      let mut render_scene = RenderScene::new((
+        TransformComponent {
+          position: Vec3f32::from_array([0.0, 10.0, 0.0]),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+        },
+        CameraComponent {
+          projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
+          near_plane: 0.1,
+          far_plane: 100.0,
+        },
+      ));
+
+      let particle_sys_e = scene.spawn_entity("particles");
+      let mut sys = crate::scene::particles::ParticleSystemComponent::new(
+        crate::scene::particles::ParticleEmitterConfig {
+          uv_center: [0.5, 0.5],
+          uv_radius: 0.1,
+          delta: 1000,
+          max_particles: 10,
+          velocity_intensity: crate::scene::particles::GaussianParams { mean: 1.0, std_dev: 0.0, min: 0.0, max: 1.0 },
+          emission_count: crate::scene::particles::GaussianParams { mean: 1.0, std_dev: 0.0, min: 0.0, max: 1.0 },
+          particle_radius: 2.0,
+          density: 1.0,
+          lifetime: 1000000,
+          color: [1.0, 0.5, 0.25, 1.0],
+          beta: 0.0,
+        }
+      );
+      
+      let mut p = crate::scene::particles::ParticleData {
+        id_low: 0,
+        id_high: 0,
+        _pad0: [0; 2],
+        position: [0.0, 0.0, 0.0],
+        _pad1: 0,
+        velocity: [0.0, 0.0, 0.0],
+        age_low: 0,
+        age_high: 0,
+        mass: 1.0,
+        active: 1,
+        _pad2: 0,
+      };
+      p.set_id(0);
+      p.set_age(0);
+      sys.particles.push(p);
+
+      render_scene.add_renderable(
+        device,
+        particle_sys_e,
+        Mat4x4f32::identity(),
+        crate::scene::RenderableDataRef::ParticleSystem(&sys),
+        presentation_engine,
+        "particle_sys_test",
+        false,
+        [0.0, 0.0, 0.0, 0.0],
+      )?;
+
+      {
+        let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+
+        device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
+        let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
+
+        let extent = device.get_presentation_engine_extent(presentation_engine)?;
+        device.set_viewport(
+          cmd_buffer_handle,
+          &gpu::Viewport {
+            x: 0.0,
+            y: extent[1] as f32,
+            width: extent[0] as f32,
+            height: -(extent[1] as f32),
+            min_depth: 0.0,
+            max_depth: 1.0,
+          },
+        )?;
+
+        device.set_scissor(
+          cmd_buffer_handle,
+          &gpu::Rect2D {
+            offset: [0, 0],
+            extent,
+          },
+        )?;
+
+        device.render_frame(cmd_buffer_handle, &render_scene)?;
+        scoped_rp.end()?;
+        device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
+      }
+
+      device.present(
+        presentation_engine,
+        acquire_result.image_index as usize,
+        acquire_result.frame_index as usize,
+      )?;
+
+      while !device.is_task_completed(task_id)? {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+      }
+
+      let mut buffer = vec![0u8; (width * height * 4) as usize];
+      device.read_windowless_download(task_id, &mut buffer)?;
+
+      let mut found_color = false;
+      for chunk in buffer.chunks_exact(4) {
+        // BGRA format
+        let b = chunk[0];
+        let g = chunk[1];
+        let r = chunk[2];
+        if r > 200 && g > 100 && b > 50 {
+          found_color = true;
+          break;
+        }
+      }
+
+      let mut export_buffer = buffer.clone();
+      for chunk in export_buffer.chunks_exact_mut(4) {
+        chunk.swap(0, 2); // BGRA to RGBA
+      }
+      let row_stride = (width * 4) as usize;
+      for y in 0..(height as usize / 2) {
+        let top_row_start = y * row_stride;
+        let bottom_row_start = ((height as usize) - 1 - y) * row_stride;
+        for x in 0..row_stride {
+          export_buffer.swap(top_row_start + x, bottom_row_start + x);
+        }
+      }
+      image::save_buffer(
+          "rendered_particles.png",
+          &export_buffer,
+          width,
+          height,
+          image::ColorType::Rgba8,
+      ).expect("Failed to save rendered png");
+
+      assert!(found_color, "Particle color not found in the rendered image!");
+
+      crate::types::GpuResult::Ok(())
+    })
+    .unwrap();
+
+  drop(render_frontend);
+}
+
+#[test]
 fn test_render_all_archetypes_windowless() {
   setup_assets_dir();
   fn panic_on_validation_error(msg: &str) {
@@ -91,7 +284,7 @@ fn test_render_all_archetypes_windowless() {
 
       let mut render_scene = RenderScene::new((
         TransformComponent {
-          position: Vec3f32::from_array([0.0, 0.0, -10.0]),
+          position: Vec3f32::from_array([0.0, 10.0, 0.0]),
           rotation: Quat::identity(),
           scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
         },

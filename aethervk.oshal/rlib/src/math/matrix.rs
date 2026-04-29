@@ -431,9 +431,9 @@ where
     let one = <Self::Scalar as MulAddIdentity>::one();
     let zero = <Self::Scalar as MulAddIdentity>::zero();
     let right = V::from_components(one, zero, zero);
-    let up = V::from_components(zero, zero, one);
     let backward = V::from_components(zero, one, zero);
-    Self::from_quat_and_axes(q, right, up, backward)
+    let up = V::from_components(zero, zero, one);
+    Self::from_quat_and_axes(q, right, backward, up)
   }
 
   fn from_scale<V>(v: V) -> Self

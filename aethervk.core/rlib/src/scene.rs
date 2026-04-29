@@ -317,6 +317,7 @@ pub enum RenderableDataRef<'a> {
   Markers(&'a MarkersComponent),
   Measurement(&'a MeasurementComponent),
   Gizmo(&'a GizmoComponent),
+  ParticleSystem(&'a particles::ParticleSystemComponent),
 }
 
 impl<'a> RenderableDataRef<'a> {
@@ -328,6 +329,7 @@ impl<'a> RenderableDataRef<'a> {
       RenderableDataRef::Markers(m) => (m.markers.len() * 4) as u32,
       RenderableDataRef::Measurement(_) => 6, // 6 vertices for line list
       RenderableDataRef::Gizmo(_) => 6,
+      RenderableDataRef::ParticleSystem(p) => (p.particles.len() * 4) as u32,
     }
   }
 }

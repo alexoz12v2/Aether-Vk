@@ -245,6 +245,13 @@ impl RenderDevice for MetalRenderDevice {
     Ok(())
   }
 
+  fn prepare_particle_archetype_for_render_and_bind_pipeline(
+    &self,
+    _cmd_buffer: gpu::CommandBufferHandle,
+  ) -> GpuResult<()> {
+    todo!()
+  }
+
   fn draw_indirect(
     &self,
     _cmd_buffer: CommandBufferHandle,

@@ -162,6 +162,21 @@ impl RenderSceneExtraction {
       }
     }
 
+    // Gizmos
+    if !self.extracted_gizmos.is_empty() {
+      let gizmo_resources = device.get_or_create_gizmo_resources(presentation_engine_handle)?;
+      for (entity_id, mat, scale) in self.extracted_gizmos {
+        let gizmo_idx = device.update_gizmo_instance(entity_id, mat)?;
+        render_scene
+          .gizmo_calls
+          .push(gpu::frame::GizmoDrawCall::from_values(
+            gizmo_resources.pipeline,
+            scale,
+            gizmo_idx,
+          ));
+      }
+    }
+
     // BVH
     if !self.extracted_bvhs.is_empty() {
       let pipeline_key = device.get_bvh_pipeline_kay()?;

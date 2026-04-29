@@ -159,20 +159,43 @@ impl ParticleEmitterConfig {
 #[repr(C)]
 #[derive(Clone, Debug)]
 pub struct ParticleData {
-  pub id: usize,
-  pub position: Vec3f32,
-  pub velocity: Vec3f32,
-  pub age: timeus_t,
+  pub id_low: u32,
+  pub id_high: u32,
+  pub _pad0: [u32; 2],
+  pub position: [f32; 3],
+  pub _pad1: u32,
+  pub velocity: [f32; 3],
+  pub age_low: u32,
+  pub age_high: u32,
   pub mass: f32,
   pub active: u32,
+  pub _pad2: u32,
 }
 
 impl ParticleData {
   pub fn as_particle(&self, radius: f32) -> Particle<Vec3f32> {
     Particle {
-      position: self.position,
+      position: Vec3f32::from_array(self.position),
       radius,
     }
+  }
+
+  pub fn set_id(&mut self, id: u64) {
+    self.id_low = (id & 0xFFFFFFFF) as u32;
+    self.id_high = (id >> 32) as u32;
+  }
+
+  pub fn get_id(&self) -> u64 {
+    (self.id_low as u64) | ((self.id_high as u64) << 32)
+  }
+
+  pub fn set_age(&mut self, age: timeus_t) {
+    self.age_low = (age as u64 & 0xFFFFFFFF) as u32;
+    self.age_high = ((age as u64) >> 32) as u32;
+  }
+
+  pub fn get_age(&self) -> timeus_t {
+    ((self.age_low as u64) | ((self.age_high as u64) << 32)) as timeus_t
   }
 }
 
@@ -245,8 +268,8 @@ impl ParticleSystemComponent {
       let mut intersecting = false;
       for p in self.particles.iter() {
         if p.active != 0 {
-           let dist_sq = (p.position - world_pos).length_squared();
-           let min_dist = self.config.particle_radius * 2.0;
+           let p_pos = Vec3f32::from_array(p.position);
+           let dist_sq = (p_pos - world_pos).length_squared();           let min_dist = self.config.particle_radius * 2.0;
            if dist_sq < min_dist * min_dist {
                intersecting = true;
                break;
@@ -280,14 +303,22 @@ impl ParticleSystemComponent {
       let intensity = self.config.velocity_intensity.sample(&[u[0], u[1]]);
       let velocity = world_dir * intensity;
 
-      self.particles.push(ParticleData {
-        id: self.next_id,
-        position: world_pos,
-        velocity,
-        age: 0,
+      let mut p = ParticleData {
+        id_low: 0,
+        id_high: 0,
+        _pad0: [0; 2],
+        position: [world_pos.x(), world_pos.y(), world_pos.z()],
+        _pad1: 0,
+        velocity: [velocity.x(), velocity.y(), velocity.z()],
+        age_low: 0,
+        age_high: 0,
         mass: self.config.density * (4.0 / 3.0) * core::f32::consts::PI * self.config.particle_radius.powi(3),
         active: 1,
-      });
+        _pad2: 0,
+      };
+      p.set_id(self.next_id as u64);
+      p.set_age(0);
+      self.particles.push(p);
       self.next_id += 1;
     }
   }

@@ -119,7 +119,7 @@ impl Archetypes {
 
 macro_rules! impl_update_archetype {
   (
-    $fn_name:ident, 
+    $fn_name:ident,
     $archetype_field:ident
     $(, |$arch:ident, $dev:ident, $wp:ident, $dp:ident, $tl:ident, $gi:ident| $extra:block)?
   ) => {
@@ -144,7 +144,7 @@ macro_rules! impl_update_archetype {
       }
 
       let old_pipeline_key = *unsafe { archetype.pipeline_key.as_ref().unwrap_unchecked() };
-      
+
       let new_pipeline_key;
       {
         let graphics_info = unsafe { archetype.graphics_info.as_mut().unwrap_unchecked() };
@@ -271,9 +271,7 @@ impl Archetypes {
     |archetype, device, write_pipeline, discard_pool, timeline, graphics_info| {
       let outline_graphics_info = graphics_info
         .clone()
-        .with_pipeline_flags(
-          PipelineFlags::CULL_BACK | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::STENCIL_ENABLE,
-        )
+        .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
         .with_stencil_compare_op(StencilCompareOp::NotEqual)
         .with_stencil_logic_op(StencilLogicOp::None)
         .with_stencil_reference(255)
@@ -290,9 +288,18 @@ impl Archetypes {
     }
   );
 
-  impl_update_archetype!(update_cursor_archetype_for_presentation_engine, cursor_render_archetype);
-  impl_update_archetype!(update_particle_archetype_for_presentation_engine, particle_render_archetype);
-  impl_update_archetype!(update_sun_archetype_for_presentation_engine, sun_render_archetype);
+  impl_update_archetype!(
+    update_cursor_archetype_for_presentation_engine,
+    cursor_render_archetype
+  );
+  impl_update_archetype!(
+    update_particle_archetype_for_presentation_engine,
+    particle_render_archetype
+  );
+  impl_update_archetype!(
+    update_sun_archetype_for_presentation_engine,
+    sun_render_archetype
+  );
 
   // ------------------------------------ Creation ------------------------------------
 
@@ -322,9 +329,7 @@ impl Archetypes {
           .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
           .clone(),
       )
-      .with_pipeline_flags(
-        PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE,
-      )
+      .with_pipeline_flags(PipelineFlags::CULL_ALL)
       .with_stencil_compare_op(StencilCompareOp::None)
       .with_stencil_logic_op(StencilLogicOp::Replace)
       .with_stencil_reference(255)
@@ -614,7 +619,6 @@ impl Archetypes {
 
     Ok(())
   }
-
 
   pub fn create_sky_archetype(
     &self,
@@ -927,11 +931,6 @@ impl Archetypes {
     Ok(())
   }
 
-
-
-
-
-
   pub fn create_text_archetype(
     &self,
     device: &vulkan::device::LogicalDevice,
@@ -964,14 +963,16 @@ impl Archetypes {
       .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
 
     // flags from descriptor_indexing
-    let binding_flags = [vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND];
-    let mut binding_flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
+    let binding_flags =
+      [vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND];
+    let mut binding_flags_info =
+      vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
 
     // inject flags allowing arrays with partial holes / after bind updates/writes
     let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
-        .bindings(&bindings)
-        .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
-        .push_next(&mut binding_flags_info);
+      .bindings(&bindings)
+      .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
+      .push_next(&mut binding_flags_info);
     let set_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }?;
     let set_layouts = [set_layout];
 
@@ -985,25 +986,25 @@ impl Archetypes {
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
 
     let sampler_info = vk::SamplerCreateInfo::default()
-        .mag_filter(vk::Filter::LINEAR)
-        .min_filter(vk::Filter::LINEAR)
-        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+      .mag_filter(vk::Filter::LINEAR)
+      .min_filter(vk::Filter::LINEAR)
+      .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+      .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+      .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
     let font_sampler = unsafe { device.create_sampler(&sampler_info, None) }?;
 
     let pool_sizes = [vk::DescriptorPoolSize::default()
-        .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .descriptor_count(max_fonts)];
+      .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+      .descriptor_count(max_fonts)];
     let pool_info = vk::DescriptorPoolCreateInfo::default()
-        .pool_sizes(&pool_sizes)
-        .max_sets(1)
-        .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
+      .pool_sizes(&pool_sizes)
+      .max_sets(1)
+      .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
     let pool = unsafe { device.create_descriptor_pool(&pool_info, None) }?;
 
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
-        .descriptor_pool(pool)
-        .set_layouts(&set_layouts);
+      .descriptor_pool(pool)
+      .set_layouts(&set_layouts);
     let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?[0];
 
     let mut arch = resources::TextRenderResourceArchetype {
@@ -1198,7 +1199,8 @@ impl Archetypes {
     if gizmo_render_archetype.is_some() {
       return Err(GpuError::InvalidState("device.rs"));
     }
-    *gizmo_render_archetype = Some(unsafe { resources::GizmoRenderResourceArchetype::new(device, allocator.get_raw()) }?);
+    *gizmo_render_archetype =
+      Some(unsafe { resources::GizmoRenderResourceArchetype::new(device, allocator.get_raw()) }?);
     let archetype = gizmo_render_archetype.as_mut().unwrap();
 
     let vertex_shader = shader_manager.get(vkey).unwrap();
@@ -1243,7 +1245,9 @@ impl Archetypes {
       )
       .with_pipeline_layout(archetype.pipeline_layout.get())
       .with_pipeline_flags(
-        pipelines::PipelineFlags::NO_DEPTH_TEST | pipelines::PipelineFlags::NO_DEPTH_WRITE | pipelines::PipelineFlags::INVERT_FRONT_FACE,
+        pipelines::PipelineFlags::NO_DEPTH_TEST
+          | pipelines::PipelineFlags::NO_DEPTH_WRITE
+          | pipelines::PipelineFlags::INVERT_FRONT_FACE,
       )
       .with_render_pass(
         renderpasses

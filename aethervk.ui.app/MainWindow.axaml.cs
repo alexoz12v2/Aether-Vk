@@ -160,7 +160,7 @@ public partial class MainWindow : Window
       
       if (runtime != null)
       {
-        var modelId = runtime.ImportModel(filePath);
+        var modelId = await runtime.ImportModelAsync(filePath);
         if (modelId > 0)
         {
           if (DataContext is MainWindowViewModel vm)

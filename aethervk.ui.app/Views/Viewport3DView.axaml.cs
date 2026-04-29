@@ -140,7 +140,7 @@ public partial class Viewport3DView : UserControl
 
     if (_isRightDragging)
     {
-      _viewModel?.RuntimeService.RotateCamera(_viewModel.CameraId, deltaX, deltaY);
+      _viewModel?.RuntimeService.RotateCamera(1 /* TODO */, deltaX, deltaY);
     }
     else if (_isMiddleDragging)
     {

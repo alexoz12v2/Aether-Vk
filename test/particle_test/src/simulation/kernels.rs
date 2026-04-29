@@ -355,8 +355,8 @@ impl Kernels for CpuKernels {
         let (e_id, particle_idx) = mapping[i];
         if e_id == entity {
           if let Some(p) = sys.particles.get_mut(particle_idx) {
-            p.position = dyn_body.transform.position;
-            p.velocity = dyn_body.velocity;
+            p.position = [dyn_body.transform.position.x(), dyn_body.transform.position.y(), dyn_body.transform.position.z()];
+            p.velocity = [dyn_body.velocity.x(), dyn_body.velocity.y(), dyn_body.velocity.z()];
           }
         }
       }

@@ -2,16 +2,16 @@ use crate::gpu::{
   GpuResourceHandle, GridPushConstants, PipelineKey, PresentationEngineHandle, PushConstants,
   RenderDevice, RenderDeviceExt, SkyPushConstants, SunPushConstants, TextureFlags,
 };
+use crate::math::collision::linear_bvh::LinearBound;
 use crate::scene::{CameraComponent, EntityId, RenderableDataRef, TransformComponent};
 use crate::types::{GpuError, GpuResult};
 use aethervk_oshal_rlib::math::vector::vec4::{Quat, Vec4f32};
 use aethervk_oshal_rlib::math::{
   matrix::{mat4::Mat4x4f32, Matrix, Matrix4, MatrixVectorMul, SquareMatrix},
   quaternion::Quaternion,
-  vector::{vec3::Vec3f32, Vector3, Vector4},
+  vector::{vec3::Vec3f32, Vector, Vector3, Vector4},
 };
 use alloc::vec::Vec;
-use crate::math::collision::linear_bvh::LinearBound;
 
 // TODO move render_frame here
 
@@ -165,11 +165,7 @@ pub struct GizmoDrawCall {
 
 impl GizmoDrawCall {
   const VERTEX_COUNT_VK: u32 = 6;
-  pub fn from_values(
-    pipeline: PipelineKey,
-    scale: f32,
-    buffer_index: u32,
-  ) -> Self {
+  pub fn from_values(pipeline: PipelineKey, scale: f32, buffer_index: u32) -> Self {
     Self {
       pipeline,
       vertex_count: Self::VERTEX_COUNT_VK,
@@ -316,7 +312,11 @@ pub struct BvhDrawCall {
 impl BvhDrawCall {
   const VERTEX_COUNT_VK: u32 = 24;
 
-  pub fn new(bound: &LinearBound<f32>, pipeline_key: PipelineKey, physical_mesh_call_index: usize) -> Self {
+  pub fn new(
+    bound: &LinearBound<f32>,
+    pipeline_key: PipelineKey,
+    physical_mesh_call_index: usize,
+  ) -> Self {
     let (center, extents, ax, ay, az) = match bound {
       LinearBound::AABB(aabb) => {
         let center = aabb.center();
@@ -352,13 +352,19 @@ impl BvhDrawCall {
     }
   }
 
-  pub fn to_push_constants(&self, mesh_draw_calls: &[DrawCall], camera_data: &CameraRenderData) -> Option<super::BvhPushConstants> {
+  pub fn to_push_constants(
+    &self,
+    mesh_draw_calls: &[DrawCall],
+    camera_data: &CameraRenderData,
+  ) -> Option<super::BvhPushConstants> {
     let center_arr: [f32; 3] = self.center.into();
     let extents_arr: [f32; 3] = self.extents.into();
     let ax = self.axes[0];
     let ay = self.axes[1];
     let az = self.axes[2];
-    let model = &mesh_draw_calls.get(self.physical_mesh_call_index)?.model_matrix;
+    let model = &mesh_draw_calls
+      .get(self.physical_mesh_call_index)?
+      .model_matrix;
     let view_proj = &camera_data.view_proj;
     let mvp_mat = *view_proj * *model;
     Some(super::BvhPushConstants {
@@ -387,20 +393,26 @@ pub struct CameraRenderData {
 impl CameraRenderData {
   /// Note: camera component should have been updated with presentation engine data
   pub fn new(transform: &TransformComponent, camera: &CameraComponent) -> Self {
-    // Compute view matrix (usually the inverse of the camera's global transform matrix)
-    let view = transform
-      .to_mat4::<Mat4x4f32>()
-      .inverse()
-      .unwrap_or_else(|| Mat4x4f32::identity());
-    let view_proj = camera.projection * view;
-
-    // Extract Right and Up from the quaternion directly in O(1). No matrix inversions!
+    // Extract camera's local axes in world space
     let right = transform
       .rotation
       .rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
+    let forward = transform
+      .rotation
+      .rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
     let up = transform
       .rotation
       .rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
+
+    let p = transform.position;
+    // View matrix translates by -p, then projects onto right, up, backward (-forward)
+    let c0 = Vec4f32::from_components(right.x(), up.x(), -forward.x(), 0.0);
+    let c1 = Vec4f32::from_components(right.y(), up.y(), -forward.y(), 0.0);
+    let c2 = Vec4f32::from_components(right.z(), up.z(), -forward.z(), 0.0);
+    let c3 = Vec4f32::from_components(-right.dot(p), -up.dot(p), forward.dot(p), 1.0);
+
+    let view = Mat4x4f32::from_columns(c0, c1, c2, c3);
+    let view_proj = camera.projection * view;
 
     Self {
       pos: transform.position,
@@ -416,8 +428,6 @@ impl CameraRenderData {
   }
 
   pub fn with_far_plane(&self, new_far: f32) -> Self {
-    use aethervk_oshal_rlib::math::floating::FloatOps;
-    
     // Extract aspect and fov from current projection
     // proj.y.y = -f
     // proj.x.x = f / aspect
@@ -534,7 +544,12 @@ impl RenderScene {
         }
         let res: ResourceUploadResult =
           device.get_or_create_cursor_resources(presentation_engine_handle)?;
-        self.cursor_call = Some(CursorDrawCall::from_result_and_matrix(res, 4, model_matrix, 0.05));
+        self.cursor_call = Some(CursorDrawCall::from_result_and_matrix(
+          res,
+          4,
+          model_matrix,
+          0.05,
+        ));
       }
       RenderableDataRef::Markers(component) => {
         let res: ResourceUploadResult =
@@ -560,6 +575,21 @@ impl RenderScene {
           p2: [component.pos2.x(), component.pos2.y(), component.pos2.z()],
           points: 12.0,
           significant_digits: 2, // fallback
+        });
+      }
+      RenderableDataRef::ParticleSystem(component) => {
+        let res: ResourceUploadResult = device.get_or_create_particle_resources(
+          entity_id,
+          &component.particles,
+          presentation_engine_handle,
+        )?;
+        self.particle_calls.push(ParticleDrawCall {
+          pipeline: res.pipeline,
+          particle_count: component.particles.len() as u32,
+          particle_data_buffer: res.buffers,
+          indirect_buffer: res.indirect_buffer.unwrap(),
+          descriptor_index: res.descriptor_index.unwrap(),
+          config: component.config.clone(),
         });
       }
       RenderableDataRef::Gizmo(_) => {} // Handled elsewhere
@@ -818,6 +848,7 @@ pub fn do_draw_particle(
   cmd_buffer: super::CommandBufferHandle,
   draw_call: &ParticleDrawCall,
 ) -> GpuResult<()> {
+  device.prepare_particle_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
 
   let push_constants = crate::gpu::ParticlePushConstants {
@@ -832,8 +863,18 @@ pub fn do_draw_particle(
     _pad2: [0.0; 2],
   };
 
-  device.push_constants(cmd_buffer, crate::gpu::ArchetypeId::Particle, &push_constants)?;
-  device.draw_indirect(cmd_buffer, draw_call.indirect_buffer, 0, 1, core::mem::size_of::<ash::vk::DrawIndirectCommand>() as u32)?;
+  device.push_constants(
+    cmd_buffer,
+    crate::gpu::ArchetypeId::Particle,
+    &push_constants,
+  )?;
+  device.draw_indirect(
+    cmd_buffer,
+    draw_call.indirect_buffer,
+    0,
+    1,
+    core::mem::size_of::<ash::vk::DrawIndirectCommand>() as u32,
+  )?;
 
   Ok(())
 }
@@ -867,7 +908,12 @@ pub fn do_bvh_draw_call(
   draw_call: &BvhDrawCall,
   mesh_draw_calls: &[DrawCall],
 ) -> GpuResult<()> {
-  let push_constants = draw_call.to_push_constants(mesh_draw_calls, camera).ok_or(GpuError::InvalidState("[Render Frame] Couldn't compute BVH push constants"))?;
+  let push_constants =
+    draw_call
+      .to_push_constants(mesh_draw_calls, camera)
+      .ok_or(GpuError::InvalidState(
+        "[Render Frame] Couldn't compute BVH push constants",
+      ))?;
   device.push_bvh_constants(cmd_buffer, &push_constants)?;
   device.draw(cmd_buffer, draw_call.vertex_count)
 }

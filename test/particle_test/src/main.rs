@@ -130,11 +130,13 @@ impl ParticleApp {
       
       let mut roulette_idx = 0;
       for p in sys.particles.iter_mut().filter(|p| p.active != 0) {
-        p.age += (dt * 1_000_000.0) as i64;
+        let mut age = p.get_age();
+        age += (dt * 1_000_000.0) as i64;
+        p.set_age(age);
         
         // Russian roulette
-        if p.age > sys.config.lifetime as i64 {
-          let age_excess = (p.age - sys.config.lifetime as i64) as f32 / 1_000_000.0;
+        if age > sys.config.lifetime as i64 {
+          let age_excess = (age - sys.config.lifetime as i64) as f32 / 1_000_000.0;
           let death_prob = 1.0 - (-age_excess).exp(); // Exponential decay
           
           let u = if roulette_idx < u_roulette.len() { u_roulette[roulette_idx] } else { 0.5 };
@@ -254,12 +256,13 @@ impl test_utils::app::App for ParticleApp {
       winit::event::MouseScrollDelta::LineDelta(_, y) => y,
       winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 10.0) as f32,
     };
-    self.cam_dist = (self.cam_dist - scroll_amount).max(0.1);
+    let zoom_speed = self.cam_dist * 0.1;
+    self.cam_dist = (self.cam_dist - scroll_amount * zoom_speed).max(0.1);
 
     let yaw_quat = Quat::from_axis_angle(Vec3f32::from_array([0.0, 0.0, 1.0]), self.cam_yaw);
     let pitch_quat = Quat::from_axis_angle(Vec3f32::from_array([1.0, 0.0, 0.0]), self.cam_pitch);
-    let new_rot = yaw_quat * pitch_quat;
-    let offset = Vec3f32::from_array([0.0, -1.0, 0.0]) * self.cam_dist;
+    let new_rot = (yaw_quat * pitch_quat).normalize();
+    let offset = Vec3f32::from_array([0.0, self.cam_dist, 0.0]);
     let new_offset = new_rot.rotate_vector(offset);
     self
       .app_state
@@ -277,15 +280,15 @@ impl test_utils::app::App for ParticleApp {
     if self.right_mouse_button_down {
       let rotation_speed = 0.005;
       self.cam_yaw += delta.0 as f32 * rotation_speed;
-      self.cam_pitch -= delta.1 as f32 * rotation_speed;
+      self.cam_pitch += delta.1 as f32 * rotation_speed;
       self.cam_yaw = self.cam_yaw % (std::f32::consts::PI * 2.0);
       self.cam_pitch = self.cam_pitch.clamp(-1.55, 1.55);
 
       let yaw_quat = Quat::from_axis_angle(Vec3f32::from_array([0.0, 0.0, 1.0]), self.cam_yaw);
       let pitch_quat =
         Quat::from_axis_angle(Vec3f32::from_array([1.0, 0.0, 0.0]), self.cam_pitch);
-      let new_rot = yaw_quat * pitch_quat;
-      let offset = Vec3f32::from_array([0.0, -1.0, 0.0]) * self.cam_dist;
+      let new_rot = (yaw_quat * pitch_quat).normalize();
+      let offset = Vec3f32::from_array([0.0, self.cam_dist, 0.0]);
       let new_offset = new_rot.rotate_vector(offset);
       self
         .app_state
@@ -390,6 +393,24 @@ fn render_function(device: &dyn RenderDevice, payload: &mut RenderPayloadData) -
         err = Some(e);
       }
     });
+  payload
+    .scene
+    .query2::<aethervk_core_rlib::scene::particles::ParticleSystemComponent, TransformComponent, _>(|entity, particle_sys, transform| {
+      let model_matrix = Mat4x4f32::from_translation(transform.position) * Mat4x4f32::from_quat_custom_frame(transform.rotation) * Mat4x4f32::from_scale(transform.scale);
+      if let Err(e) = render_scene.add_renderable(
+        device,
+        entity,
+        model_matrix,
+        aethervk_core_rlib::scene::RenderableDataRef::ParticleSystem(particle_sys),
+        payload.presentation_engine,
+        "particle_sys",
+        false,
+        [1.0, 1.0, 1.0, 1.0],
+      ) {
+        err = Some(e);
+      }
+    });
+
   if let Some(e) = err {
     return Err(e);
   }
@@ -509,6 +530,7 @@ fn main() {
     .register_component::<PhysicalMeshComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
   scene.register_component::<CameraComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
   scene.register_component::<simulation::components::ParticleSystemComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
+  scene.register_component::<SunComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
 
   let camera_entity = scene.spawn_entity("camera");
   let cam_dist = 5.0;
