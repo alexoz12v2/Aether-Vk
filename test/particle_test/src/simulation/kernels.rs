@@ -1,7 +1,5 @@
 extern crate alloc;
-use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
 
 use aethervk_core_rlib::gpu::{
   CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, Kernels, DynamicBody, KinematicBody,
@@ -10,7 +8,9 @@ use aethervk_core_rlib::gpu::{
 use aethervk_core_rlib::types::{EngineError, EngineResult};
 use aethervk_oshal_rlib::os::time::timeus_t;
 use aethervk_core_rlib::physics::physics_scene::PhysicsScene;
-use aethervk_core_rlib::scene::Scene;
+use aethervk_core_rlib::scene::{ParticleSystemComponent, Scene};
+use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+use aethervk_oshal_rlib::math::vector::Vector3;
 
 pub struct CpuCommandBuffer {
   pub submitted: bool,
@@ -177,17 +177,17 @@ impl Kernels for CpuKernels {
     let mut betas = Vec::new();
     let mut mapping = Vec::new();
 
-    scene0.query1::<super::components::ParticleSystemComponent, _>(|entity, sys| {
+    scene0.query1::<ParticleSystemComponent, _>(|entity, sys| {
       for (i, p) in sys.particles.iter().enumerate() {
         if p.active != 0 {
           bodies.push(DynamicBody {
             entity_id: entity,
             transform: aethervk_core_rlib::scene::TransformComponent {
-              position: p.position,
+              position: Vec3f32::from(p.position),
               rotation: Default::default(),
-              scale: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([1.0, 1.0, 1.0]),
+              scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
             },
-            velocity: p.velocity,
+            velocity: Vec3f32::from(p.velocity),
             mass: p.mass,
           });
           betas.push(sys.config.beta);
@@ -350,13 +350,21 @@ impl Kernels for CpuKernels {
   ) -> EngineResult<()> {
     let mapping = self.dynamic_mapping.read().unwrap();
 
-    scene.query1_mut::<super::components::ParticleSystemComponent, _>(|entity, sys| {
+    scene.query1_mut::<ParticleSystemComponent, _>(|entity, sys| {
       for (i, dyn_body) in dynamics.data.iter().enumerate() {
         let (e_id, particle_idx) = mapping[i];
         if e_id == entity {
           if let Some(p) = sys.particles.get_mut(particle_idx) {
-            p.position = [dyn_body.transform.position.x(), dyn_body.transform.position.y(), dyn_body.transform.position.z()];
-            p.velocity = [dyn_body.velocity.x(), dyn_body.velocity.y(), dyn_body.velocity.z()];
+            p.position = [
+              dyn_body.transform.position.x(),
+              dyn_body.transform.position.y(),
+              dyn_body.transform.position.z(),
+            ];
+            p.velocity = [
+              dyn_body.velocity.x(),
+              dyn_body.velocity.y(),
+              dyn_body.velocity.z(),
+            ];
           }
         }
       }

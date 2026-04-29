@@ -13,7 +13,7 @@ use aethervk_oshal_rlib::math::{
 };
 use heapless::index_map::FnvIndexMap;
 use std::sync::{Arc};
-use aethervk_core_rlib::gpu::{ScopedCommandBuffer, ScopedRenderPass};
+use aethervk_core_rlib::gpu::{FrameCancelGuard, ScopedCommandBuffer, ScopedRenderPass};
 use aethervk_core_rlib::types::GpuError;
 use test_utils::scene_to_render_scene;
 
@@ -214,6 +214,7 @@ fn main() {
             e
           })
         );
+        let present_guard = FrameCancelGuard::new(device, presentation_engine, acquire_result);
 
         let cmd_buffer = try_task!(task, device.get_command_buffer());
         let cmd_guard = ScopedCommandBuffer::new(device, cmd_buffer, Some(task.task_id))?;
@@ -246,8 +247,8 @@ fn main() {
 
         try_task!(task, device.render_frame(cmd_buffer, &render_scene));
         try_task!(task, render_pass_guard.end());
-
         cmd_guard.submit().unwrap();
+        present_guard.defuse();
 
         println!("Waiting for task {} to complete...", task.task_id);
         loop {

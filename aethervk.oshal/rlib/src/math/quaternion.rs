@@ -89,6 +89,58 @@ pub trait Quaternion:
     );
     T::from_columns(col0, col1, col2)
   }
+  fn from_rotation_matrix<M>(m: &M) -> Self
+  where
+    M: Matrix3<Scalar = Self::Scalar>,
+    M::Vector: Vector3,
+  {
+    let m00 = unsafe { m.column_unchecked(0).x() };
+    let m01 = unsafe { m.column_unchecked(1).x() };
+    let m02 = unsafe { m.column_unchecked(2).x() };
+    let m10 = unsafe { m.column_unchecked(0).y() };
+    let m11 = unsafe { m.column_unchecked(1).y() };
+    let m12 = unsafe { m.column_unchecked(2).y() };
+    let m20 = unsafe { m.column_unchecked(0).z() };
+    let m21 = unsafe { m.column_unchecked(1).z() };
+    let m22 = unsafe { m.column_unchecked(2).z() };
+
+    let trace = m00 + m11 + m22;
+    let _0 = Self::Scalar::from_f32(0.0);
+    let _1 = Self::Scalar::from_f32(1.0);
+    let _2 = Self::Scalar::from_f32(2.0);
+    let _0_5 = Self::Scalar::from_f32(0.5);
+    let _0_25 = Self::Scalar::from_f32(0.25);
+
+    if trace > _0 {
+      let s = (trace + _1).sqrt() * _2;
+      let inv_s = _1 / s;
+      Self::from_vector_and_scalar(
+        Self::Vector::from_components((m21 - m12) * inv_s, (m02 - m20) * inv_s, (m10 - m01) * inv_s),
+        _0_25 * s,
+      )
+    } else if m00 > m11 && m00 > m22 {
+      let s = (_1 + m00 - m11 - m22).sqrt() * _2;
+      let inv_s = _1 / s;
+      Self::from_vector_and_scalar(
+        Self::Vector::from_components(_0_25 * s, (m01 + m10) * inv_s, (m02 + m20) * inv_s),
+        (m21 - m12) * inv_s,
+      )
+    } else if m11 > m22 {
+      let s = (_1 + m11 - m00 - m22).sqrt() * _2;
+      let inv_s = _1 / s;
+      Self::from_vector_and_scalar(
+        Self::Vector::from_components((m01 + m10) * inv_s, _0_25 * s, (m12 + m21) * inv_s),
+        (m02 - m20) * inv_s,
+      )
+    } else {
+      let s = (_1 + m22 - m00 - m11).sqrt() * _2;
+      let inv_s = _1 / s;
+      Self::from_vector_and_scalar(
+        Self::Vector::from_components((m02 + m20) * inv_s, (m12 + m21) * inv_s, _0_25 * s),
+        (m10 - m01) * inv_s,
+      )
+    }
+  }
 
   fn pow(self, t: Self::Scalar) -> Self
   where

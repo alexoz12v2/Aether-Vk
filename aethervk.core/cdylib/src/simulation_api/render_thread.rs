@@ -17,6 +17,7 @@ use aethervk_oshal_rlib::{
   os::{thread, NativeError, ThreadingError},
 };
 use thingbuf::mpsc;
+use aethervk_core_rlib::gpu::{FrameCancelGuard, ScopedRenderPass};
 
 pub fn start_render_thread(
   render_rx: mpsc::Receiver<RenderCommand>,
@@ -179,6 +180,8 @@ fn do_render_scene_async(
     render_device.success_task(task_id);
     return Ok(());
   }
+  let present_guard =
+    FrameCancelGuard::new(render_device, presentation_engine_handle, acquire_result);
 
   let cmd_buffer = render_device.get_command_buffer()?;
   let cmd_scope = gpu::ScopedCommandBuffer::new(render_device, cmd_buffer, Some(task_id))?;
@@ -201,15 +204,18 @@ fn do_render_scene_async(
   render_pass_scope.end()?;
 
   // on `DownloadImage` Command, Query task status and copy data if completed with `render_device.read_windowless_download`
-  if let Err(e) = render_device.record_windowless_download(cmd_buffer, presentation_engine_handle, task_id) {
-      oshal::log!("record_windowless_download failed: {:?}", e);
-      return Err(e);
+  if let Err(e) =
+    render_device.record_windowless_download(cmd_buffer, presentation_engine_handle, task_id)
+  {
+    oshal::log!("record_windowless_download failed: {:?}", e);
+    return Err(e);
   }
 
   if let Err(e) = cmd_scope.submit() {
-      oshal::log!("cmd_scope.submit failed: {:?}", e);
-      return Err(e);
+    oshal::log!("cmd_scope.submit failed: {:?}", e);
+    return Err(e);
   }
+  present_guard.defuse();
 
   if SwapchainStatus::Optimal
     != render_device.present(

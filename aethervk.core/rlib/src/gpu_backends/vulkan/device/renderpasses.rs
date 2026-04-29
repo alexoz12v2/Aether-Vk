@@ -376,7 +376,7 @@ impl RenderPasses {
         .samples(vk::SampleCountFlags::TYPE_1)
         .load_op(vk::AttachmentLoadOp::CLEAR)
         .store_op(vk::AttachmentStoreOp::DONT_CARE) // combined with TRANSIENT usage, lets tiled GPUs not store depth image explicitly
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+        .stencil_load_op(vk::AttachmentLoadOp::CLEAR)
         .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL),

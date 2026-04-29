@@ -72,11 +72,27 @@ impl oshal::os::pool::Workload for LogicWorkload {
 
     let res = process_command_internal(self.cmd.clone(), &self.ctx);
 
+    let cmd_desc = match &self.cmd {
+      LogicCommand::ImportModel { path, .. } => alloc::format!("Import model {}", path),
+      LogicCommand::LoadAlmanac { path, .. } => alloc::format!("Load almanac {}", path),
+      LogicCommand::LoadCometSpk { path, .. } => alloc::format!("Load SPK {}", path),
+      LogicCommand::SpawnModelInstance { name, .. } => alloc::format!("Spawn instance {}", name),
+      LogicCommand::RaycastNdc { .. } => alloc::format!("Raycast NDC"),
+      LogicCommand::Raycast { .. } => alloc::format!("Raycast"),
+      _ => alloc::format!("Logic Task"),
+    };
+
     if let Some(tid) = task_id {
       let mut manager = self.ctx.task_manager.write();
       match res {
-        Ok(result) => manager.success_task(tid, result),
-        Err(e) => manager.fail_task(tid, e.to_string()),
+        Ok(result) => {
+          manager.success_task(tid, result);
+          crate::simulation_api::emit_breadcrumb(1, &alloc::format!("Success: {}", cmd_desc));
+        }
+        Err(e) => {
+          manager.fail_task(tid, e.to_string());
+          crate::simulation_api::emit_breadcrumb(3, &alloc::format!("Failed: {} - {}", cmd_desc, e));
+        }
       }
     }
 

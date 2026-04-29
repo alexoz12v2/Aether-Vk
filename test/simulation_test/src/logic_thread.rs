@@ -103,6 +103,7 @@ fn register_commands(registry: &mut test_utils::command::CommandRegistry<CmdCont
       "  bvh-node-dbgrender-get <depth> <idx>        - Gets BVH node debug render state"
         .to_string(),
     );
+    let _ = tx.send("  measure <entity1> <entity2> - Measures distance between two entities".to_string());
   });
 
   registry.register("showgizmo", |ctx, _args, tx| {
@@ -632,6 +633,8 @@ pub struct LogicState {
   selected_entity: Option<EntityId>,
   last_selected_entity: Option<EntityId>,
   measure_counter: u32,
+  window_width: u32,
+  window_height: u32,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -691,6 +694,8 @@ pub fn start_logic_thread(
       selected_entity: None,
       last_selected_entity: None,
       measure_counter: 0,
+      window_width: 800,
+      window_height: 600,
     };
 
     let mut last_time = Instant::now();
@@ -982,7 +987,7 @@ fn logic_update_command(
       let current_rot = (yaw_quat * pitch_quat).normalize();
 
       let right = current_rot.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
-      let up = current_rot.rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0));
+      let up = current_rot.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
       let translation = right * (-delta_x * pan_speed) + up * (delta_y * pan_speed);
 
       scene_guard.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
@@ -1008,6 +1013,8 @@ fn logic_update_command(
       });
     }
     LogicCommand::Resize { width, height } => {
+      state.window_width = width;
+      state.window_height = height;
       scene_guard.with_component_mut(camera_entity, |c: &mut CameraComponent| {
         c.near_plane = 0.1;
         c.far_plane = 1000000.0;
@@ -1200,7 +1207,7 @@ fn logic_update_command(
     .unwrap();
   let new_dist = (new_cam_pos - new_cursor_pos).length();
 
-  let scale_factor = (new_dist * 0.01).clamp(0.02, 0.05);
+  let scale_factor = new_dist * 0.01;
   scene_guard.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
     c.scale = Vec3f32::from_components(scale_factor, scale_factor, scale_factor);
   });

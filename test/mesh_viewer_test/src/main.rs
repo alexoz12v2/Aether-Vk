@@ -21,6 +21,7 @@ use test_utils::{
   setup_resize_hook, AppEvent,
 };
 use winit::{event_loop::EventLoopBuilder, window::WindowBuilder};
+use aethervk_core_rlib::gpu::FrameCancelGuard;
 
 struct AppState {
   is_resizing: bool,
@@ -107,6 +108,13 @@ fn main() {
   let mut guard = aethervk_core_rlib::gpu::ASSET_DIR.write();
   *guard = Some(asset_path.to_str().unwrap().to_string());
   drop(guard);
+
+  // archetypes need asset path to locate shaders TODO pass asset path as argument
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      device.init_archetypes(presentation_engine)
+    })
+    .unwrap();
 
   let scene = Scene::new();
   scene.register_component::<TransformComponent>(&[]);
@@ -411,6 +419,7 @@ fn render_function(
     )?;
     return Ok(());
   }
+  let present_guard = FrameCancelGuard::new(device, presentation_engine_handle, acquire_result);
 
   let cmd_buffer = device.get_command_buffer()?;
   let cmd_guard = ScopedCommandBuffer::new(device, cmd_buffer, None)?;
@@ -427,8 +436,11 @@ fn render_function(
   device.set_scissor(cmd_buffer, &gpu::Rect2D::from_extent(extent))?;
 
   device.render_frame(cmd_buffer, &render_scene)?;
+
+  // defuse of drop guards (Order *must* be like this)
   render_pass_guard.end()?;
   cmd_guard.submit()?;
+  present_guard.defuse();
 
   let present_status = device.present(
     presentation_engine_handle,
