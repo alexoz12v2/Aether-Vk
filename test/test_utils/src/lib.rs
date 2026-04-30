@@ -1,6 +1,7 @@
 pub mod app;
 pub mod command;
 pub mod threading;
+pub mod simulation;
 
 use aethervk_core_rlib::gpu::{
   OpaqueNativeHandleInfo, PresentationEngineHandle, RenderDevice, RenderDeviceHandle,

@@ -1,5 +1,8 @@
 use aethervk_core_rlib::{
-  scene::{AlmanacPlanet, CameraComponent, EntityId, Scene, SunComponent, TransformComponent},
+  scene::{
+    AlmanacPlanet, CameraComponent, EntityId, Scene, SunComponent, TransformComponent,
+    ParticleSystemComponent, PhysicalMeshComponent,
+  },
 };
 use aethervk_oshal_rlib::{
   math::{
@@ -15,6 +18,7 @@ use std::sync::{atomic::AtomicBool, Arc, mpsc};
 use std::time::Instant;
 use anise::almanac::Almanac;
 use anise::prelude::Epoch;
+use test_utils::simulation::kernels::CpuKernels;
 use crate::{constants, utils};
 
 pub fn format_distance(distance_engine_units: f64, sig_digits: u32) -> String {
@@ -35,7 +39,11 @@ pub fn format_distance(distance_engine_units: f64, sig_digits: u32) -> String {
   };
 
   // Calculate the magnitude (power of 10) of the number
-  let magnitude = if value == 0.0 { 0 } else { value.abs().log10().floor() as i32 };
+  let magnitude = if value == 0.0 {
+    0
+  } else {
+    value.abs().log10().floor() as i32
+  };
 
   // Determine if we should use scientific notation
   // We use it if the number is very small (magnitude < -3) or very large (magnitude >= 6)
@@ -93,7 +101,9 @@ fn register_commands(registry: &mut test_utils::command::CommandRegistry<CmdCont
     let _ = tx.send(
       "  following          - Prints the entity the camera is currently following".to_string(),
     );
-    let _ = tx.send("  showgizmo          - Toggles the gizmo of the currently selected entity".to_string());
+    let _ = tx.send(
+      "  showgizmo          - Toggles the gizmo of the currently selected entity".to_string(),
+    );
     let _ = tx.send("  printbvh [min] [max]- Prints BVH nodes for the selected entity".to_string());
     let _ =
       tx.send("  bvh-show <range> [idx] - Shows BVH nodes (e.g. 0-3, 2-, -4, all)".to_string());
@@ -103,18 +113,22 @@ fn register_commands(registry: &mut test_utils::command::CommandRegistry<CmdCont
       "  bvh-node-dbgrender-get <depth> <idx>        - Gets BVH node debug render state"
         .to_string(),
     );
-    let _ = tx.send("  measure <entity1> <entity2> - Measures distance between two entities".to_string());
+    let _ =
+      tx.send("  measure <entity1> <entity2> - Measures distance between two entities".to_string());
   });
 
   registry.register("showgizmo", |ctx, _args, tx| {
     if let Some(id) = ctx.state.selected_entity {
       let mut visible = false;
       let mut found = false;
-      ctx.scene_guard.with_component_mut(id, |gizmo: &mut aethervk_core_rlib::scene::GizmoComponent| {
-        gizmo.gizmo_visible = !gizmo.gizmo_visible;
-        visible = gizmo.gizmo_visible;
-        found = true;
-      });
+      ctx.scene_guard.with_component_mut(
+        id,
+        |gizmo: &mut aethervk_core_rlib::scene::GizmoComponent| {
+          gizmo.gizmo_visible = !gizmo.gizmo_visible;
+          visible = gizmo.gizmo_visible;
+          found = true;
+        },
+      );
       if found {
         let _ = tx.send(format!("Gizmo visibility set to {}", visible));
       } else {
@@ -370,10 +384,18 @@ fn register_commands(registry: &mut test_utils::command::CommandRegistry<CmdCont
     }
   });
 
-  registry.register("bvh-show", |ctx, args, tx| bvh_visibility(ctx, args, tx, true));
-  registry.register("show-bvh", |ctx, args, tx| bvh_visibility(ctx, args, tx, true));
-  registry.register("bvh-hide", |ctx, args, tx| bvh_visibility(ctx, args, tx, false));
-  registry.register("hide-bvh", |ctx, args, tx| bvh_visibility(ctx, args, tx, false));
+  registry.register("bvh-show", |ctx, args, tx| {
+    bvh_visibility(ctx, args, tx, true)
+  });
+  registry.register("show-bvh", |ctx, args, tx| {
+    bvh_visibility(ctx, args, tx, true)
+  });
+  registry.register("bvh-hide", |ctx, args, tx| {
+    bvh_visibility(ctx, args, tx, false)
+  });
+  registry.register("hide-bvh", |ctx, args, tx| {
+    bvh_visibility(ctx, args, tx, false)
+  });
   registry.register("bvh-node-dbgrender-set", |ctx, args, tx| {
     let is_show = args.last().unwrap_or(&"").parse::<bool>().unwrap_or(true);
     bvh_visibility(ctx, args, tx, is_show);
@@ -416,14 +438,13 @@ fn register_commands(registry: &mut test_utils::command::CommandRegistry<CmdCont
 
       if let Some(idx) = flat_idx {
         let mut render = false;
-        ctx.scene_guard.with_component(
-          id,
-          |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
+        ctx
+          .scene_guard
+          .with_component(id, |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
             if idx < dbg.node_render_states.len() {
               render = dbg.node_render_states[idx];
             }
-          },
-        );
+          });
         let _ = tx.send(format!(
           "Node at depth {}, index {} is {}",
           depth, child_index, render
@@ -522,12 +543,18 @@ fn register_commands(registry: &mut test_utils::command::CommandRegistry<CmdCont
   });
 }
 
-fn bvh_visibility(ctx: &mut CmdContext, args: &[&str], tx: &std::sync::mpsc::Sender<String>, is_show: bool) {
+fn bvh_visibility(
+  ctx: &mut CmdContext,
+  args: &[&str],
+  tx: &std::sync::mpsc::Sender<String>,
+  is_show: bool,
+) {
   if let Some(id) = ctx.state.selected_entity {
     let mut parts = args.iter();
     let depth_str = parts.next().unwrap_or(&"all");
     let idx_str = parts.next();
-    let target_idx: Option<u32> = idx_str.and_then(|s| if *s == "all" { None } else { s.parse().ok() });
+    let target_idx: Option<u32> =
+      idx_str.and_then(|s| if *s == "all" { None } else { s.parse().ok() });
 
     let mut min_d = 0;
     let mut max_d = u32::MAX;
@@ -536,8 +563,12 @@ fn bvh_visibility(ctx: &mut CmdContext, args: &[&str], tx: &std::sync::mpsc::Sen
       if let Some(dash_pos) = depth_str.find('-') {
         let (start, end) = depth_str.split_at(dash_pos);
         let end = &end[1..];
-        if !start.is_empty() { min_d = start.parse().unwrap_or(0); }
-        if !end.is_empty() { max_d = end.parse().unwrap_or(u32::MAX); }
+        if !start.is_empty() {
+          min_d = start.parse().unwrap_or(0);
+        }
+        if !end.is_empty() {
+          max_d = end.parse().unwrap_or(u32::MAX);
+        }
       } else {
         let d: u32 = depth_str.parse().unwrap_or(0);
         min_d = d;
@@ -547,57 +578,86 @@ fn bvh_visibility(ctx: &mut CmdContext, args: &[&str], tx: &std::sync::mpsc::Sen
 
     let mut flat_indices = Vec::new();
     let mut max_depth_found = 0;
-    ctx.scene_guard.with_component(id, |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
-      if let Some(bvh) = &mesh.mesh.bvh {
-        let mut node_stack = vec![(0, 0)];
-        let mut current_child_index_at_depth = std::collections::HashMap::new();
+    ctx.scene_guard.with_component(
+      id,
+      |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+        if let Some(bvh) = &mesh.mesh.bvh {
+          let mut node_stack = vec![(0, 0)];
+          let mut current_child_index_at_depth = std::collections::HashMap::new();
 
-        while let Some((idx, d)) = node_stack.pop() {
-          if d > max_depth_found { max_depth_found = d; }
-          if d >= min_d && d <= max_d {
-            let child_index = current_child_index_at_depth.entry(d).or_insert(0);
-            if target_idx.is_none() || target_idx == Some(*child_index) {
-              flat_indices.push((d, idx));
+          while let Some((idx, d)) = node_stack.pop() {
+            if d > max_depth_found {
+              max_depth_found = d;
             }
-            *child_index += 1;
-          }
-          let node = &bvh.nodes[idx];
-          if node.primitive_count == 0 {
-            node_stack.push((node.right_child_offset as usize, d + 1));
-            node_stack.push((node.left_child_or_primitive_offset as usize, d + 1));
+            if d >= min_d && d <= max_d {
+              let child_index = current_child_index_at_depth.entry(d).or_insert(0);
+              if target_idx.is_none() || target_idx == Some(*child_index) {
+                flat_indices.push((d, idx));
+              }
+              *child_index += 1;
+            }
+            let node = &bvh.nodes[idx];
+            if node.primitive_count == 0 {
+              node_stack.push((node.right_child_offset as usize, d + 1));
+              node_stack.push((node.left_child_or_primitive_offset as usize, d + 1));
+            }
           }
         }
-      }
-    });
+      },
+    );
 
     if flat_indices.is_empty() {
       if min_d > max_depth_found && min_d != u32::MAX {
-        let _ = tx.send(format!("Error: Max depth is {}, requested {}.", max_depth_found, min_d));
+        let _ = tx.send(format!(
+          "Error: Max depth is {}, requested {}.",
+          max_depth_found, min_d
+        ));
       } else {
         let _ = tx.send("No nodes found for the given criteria.".to_string());
       }
     } else {
       let mut bvh_len = 0;
-      ctx.scene_guard.with_component(id, |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
-        if let Some(bvh) = &mesh.mesh.bvh { bvh_len = bvh.nodes.len(); }
-      });
+      ctx.scene_guard.with_component(
+        id,
+        |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+          if let Some(bvh) = &mesh.mesh.bvh {
+            bvh_len = bvh.nodes.len();
+          }
+        },
+      );
 
       if bvh_len > 0 {
         let mut added = false;
-        ctx.scene_guard.with_component_mut(id, |dbg: &mut aethervk_core_rlib::scene::BvhDebugComponent| {
-          for &(_, idx) in &flat_indices {
-            if idx < dbg.node_render_states.len() { dbg.node_render_states[idx] = is_show; }
-          }
-          added = true;
-        });
+        ctx.scene_guard.with_component_mut(
+          id,
+          |dbg: &mut aethervk_core_rlib::scene::BvhDebugComponent| {
+            for &(_, idx) in &flat_indices {
+              if idx < dbg.node_render_states.len() {
+                dbg.node_render_states[idx] = is_show;
+              }
+            }
+            added = true;
+          },
+        );
         if !added {
           let mut states = vec![false; bvh_len];
           for &(_, idx) in &flat_indices {
-            if idx < states.len() { states[idx] = is_show; }
+            if idx < states.len() {
+              states[idx] = is_show;
+            }
           }
-          let _ = ctx.scene_guard.add_component(id, aethervk_core_rlib::scene::BvhDebugComponent { node_render_states: states });
+          let _ = ctx.scene_guard.add_component(
+            id,
+            aethervk_core_rlib::scene::BvhDebugComponent {
+              node_render_states: states,
+            },
+          );
         }
-        let _ = tx.send(format!("{} {} nodes.", if is_show { "Showing" } else { "Hiding" }, flat_indices.len()));
+        let _ = tx.send(format!(
+          "{} {} nodes.",
+          if is_show { "Showing" } else { "Hiding" },
+          flat_indices.len()
+        ));
       }
     }
   } else {
@@ -685,6 +745,7 @@ pub fn start_logic_thread(
   planets_ids: Vec<(i32, EntityId, f64, f32)>,
   assets_dir: std::path::PathBuf,
   outlines_enabled: Arc<AtomicBool>,
+  kernels: CpuKernels,
 ) -> std::thread::JoinHandle<()> {
   std::thread::spawn(move || {
     let mut state = LogicState {
@@ -753,6 +814,7 @@ pub fn start_logic_thread(
           &mut st_seconds_elapsed,
           &mut following_entity,
           step_days,
+          &kernels,
         );
         accumulator -= FIXED_TIME_STEP;
       }
@@ -826,6 +888,7 @@ fn logic_fixed_update_step(
   st_seconds_elapsed: &mut f64,
   following_entity: &mut Option<EntityId>,
   step_days: f64,
+  kernels: &CpuKernels,
 ) {
   if *current_epoch >= epoch_end && *current_scale != TimeScale::Stopped {
     *current_scale = TimeScale::Stopped;
@@ -849,8 +912,10 @@ fn logic_fixed_update_step(
     });
 
     let offset = cam_pos - cursor_pos;
-  let mut dist = offset.length();
-  if dist < 0.1 { dist = 0.1; }
+    let mut dist = offset.length();
+    if dist < 0.1 {
+      dist = 0.1;
+    }
 
     scene_guard.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
       c.position = t_pos;
@@ -879,14 +944,13 @@ fn logic_fixed_update_step(
     );
 
     let et = et_now;
-    let st = st_seconds_elapsed;
     let utc = format!("{}", current_epoch);
 
     print!(
       "\r[{}] ET: {:.0} | ST: {:.1}s | UTC: {} | Scale: {}   ",
       bar,
       et,
-      st,
+      st_seconds_elapsed,
       utc,
       current_scale.label()
     );
@@ -897,6 +961,110 @@ fn logic_fixed_update_step(
   if *current_scale != TimeScale::Stopped {
     *current_epoch += anise::time::Duration::from_days(step_days);
   }
+
+  // --- Particle Simulation ---
+  let dt = FIXED_TIME_STEP;
+
+  scene_guard.query1_mut::<ParticleSystemComponent, _>(|mesh_entity, sys| {
+    sys.accumulator += (dt * 1_000_000.0) as i64;
+
+    let mut comet_pos = Vec3f32::from_array([0.0, 0.0, 0.0]);
+    let mut comet_rot = Quat::identity();
+    let mut comet_scale = Vec3f32::from_components(1.0, 1.0, 1.0);
+    if let Some(t) = scene_guard.global_transform(mesh_entity) {
+      comet_pos = t.position;
+      comet_rot = t.rotation;
+      comet_scale = t.scale;
+    }
+
+    let mesh_arc =
+      scene_guard.with_component(mesh_entity, |m: &PhysicalMeshComponent| m.mesh.clone());
+
+    if let Some(mesh) = mesh_arc {
+      let uv_grid = aethervk_core_rlib::simulation::comet::uv_grid::UvGrid::new(
+        &mesh.vertices,
+        &mesh.indices,
+        64,
+      );
+
+      while sys.accumulator >= sys.config.delta {
+        sys.accumulator -= sys.config.delta;
+
+        let u_emission = [rand::random::<f32>(), rand::random::<f32>()];
+        let count = sys.config.emission_count.sample(&u_emission) as usize;
+        let mut u_particles = std::vec::Vec::with_capacity(count);
+        for _ in 0..count {
+          u_particles.push([
+            rand::random::<f32>(),
+            rand::random::<f32>(),
+            rand::random::<f32>(),
+            rand::random::<f32>(),
+          ]);
+        }
+
+        sys.emit_particles(
+          &mesh,
+          &uv_grid,
+          comet_pos,
+          comet_rot,
+          comet_scale,
+          &u_emission,
+          &u_particles,
+        );
+      }
+    }
+
+    let mut u_roulette = std::vec::Vec::with_capacity(sys.particles.len());
+    for _ in 0..sys.particles.len() {
+      u_roulette.push(rand::random::<f32>());
+    }
+
+    let mut roulette_idx = 0;
+    for p in sys.particles.iter_mut().filter(|p| p.active != 0) {
+      let mut age = p.get_age();
+      age += (dt * 1_000_000.0) as i64;
+      p.set_age(age);
+
+      if age > sys.config.lifetime as i64 {
+        let age_excess = (age - sys.config.lifetime as i64) as f32 / 1_000_000.0;
+        let death_prob = 1.0 - (-age_excess).exp();
+
+        let u = if roulette_idx < u_roulette.len() {
+          u_roulette[roulette_idx]
+        } else {
+          0.5
+        };
+        roulette_idx += 1;
+
+        if u < death_prob {
+          p.active = 0;
+          continue;
+        }
+      }
+    }
+
+    sys.particles.retain(|p| p.active != 0);
+
+    sys.update_bvh();
+
+    if sys.particles.len() > 0 {
+        println!("Active particles: {}", sys.particles.len());
+    }
+  });
+
+  let mut physics_scene =
+    aethervk_core_rlib::physics::physics_scene::PhysicsScene::build_from_scene(scene_guard);
+  let t0 = (*st_seconds_elapsed * 1_000_000.0) as i64;
+  let t1 = t0 + (dt * 1_000_000.0) as i64;
+
+  aethervk_core_rlib::gpu_backends::simulation_step(
+    kernels,
+    &mut physics_scene,
+    scene_guard,
+    t0,
+    t1,
+  )
+  .unwrap();
 }
 
 fn logic_update_command(
@@ -974,7 +1142,7 @@ fn logic_update_command(
       if state.camera_distance < 0.1 {
         state.camera_distance = 0.1;
       }
-      
+
       update_camera_from_state(state, scene_guard, camera_entity, cursor_pos);
     }
     LogicCommand::PanCursor { delta_x, delta_y } => {
@@ -1032,7 +1200,10 @@ fn logic_update_command(
 
       let mut view = Mat4x4f32::identity();
       scene_guard.with_component(camera_entity, |c: &TransformComponent| {
-        view = c.to_mat4::<Mat4x4f32>().inverse().unwrap_or(Mat4x4f32::identity());
+        view = c
+          .to_mat4::<Mat4x4f32>()
+          .inverse()
+          .unwrap_or(Mat4x4f32::identity());
       });
 
       scene_guard.with_component(camera_entity, |cam: &CameraComponent| {
@@ -1185,7 +1356,7 @@ fn logic_update_command(
         // so both are in the 45 degree frustum.
         let angle = 15.0f32.to_radians();
         let cam_dir = (dir_to_sun * angle.cos() + right * angle.sin()).normalize();
-        
+
         let offset_dist = (planet_radius as f32 * 4.0).max(0.5);
         let cam_pos = p_pos - cam_dir * offset_dist;
         let view_dir = (p_pos - cam_pos).normalize();
@@ -1207,7 +1378,22 @@ fn logic_update_command(
     .unwrap();
   let new_dist = (new_cam_pos - new_cursor_pos).length();
 
-  let scale_factor = new_dist * 0.01;
+  let fov = 45.0f32.to_radians();
+  let base_world_size = 5.0; // The physical world-space size of the cursor
+  let window_h = state.window_height as f32;
+
+  // Calculate what the screen size in pixels would be naturally
+  let natural_screen_pixels = (base_world_size / (new_dist * (fov / 2.0).tan())) * (window_h / 2.0);
+
+  // Clamp screen size between 1% and 5% of the window height
+  let min_pixels = window_h * 0.01;
+  let max_pixels = window_h * 0.05;
+  let clamped_screen_pixels = natural_screen_pixels.clamp(min_pixels, max_pixels);
+
+  // Convert the clamped screen size back into the cursorSize uniform scale factor
+  // The vertex shader multiplies by distance, so this factor represents the normalized screen size
+  let scale_factor = (clamped_screen_pixels * (fov / 2.0).tan()) / (window_h / 2.0);
+
   scene_guard.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
     c.scale = Vec3f32::from_components(scale_factor, scale_factor, scale_factor);
   });
@@ -1281,14 +1467,23 @@ mod tests {
     // 1. Identity rotation
     let rot = Quat::identity();
     let mat = Mat4x4f32::from_quat_custom_frame(rot);
-    
+
     let rotated_right_v4 = mat.mul_vector(local_right.to_vec4(0.0));
     let rotated_backward_v4 = mat.mul_vector(local_backward.to_vec4(0.0));
     let rotated_up_v4 = mat.mul_vector(local_up.to_vec4(0.0));
 
-    let rotated_right = Vec3f32::from_components(rotated_right_v4.x(), rotated_right_v4.y(), rotated_right_v4.z());
-    let rotated_backward = Vec3f32::from_components(rotated_backward_v4.x(), rotated_backward_v4.y(), rotated_backward_v4.z());
-    let rotated_up = Vec3f32::from_components(rotated_up_v4.x(), rotated_up_v4.y(), rotated_up_v4.z());
+    let rotated_right = Vec3f32::from_components(
+      rotated_right_v4.x(),
+      rotated_right_v4.y(),
+      rotated_right_v4.z(),
+    );
+    let rotated_backward = Vec3f32::from_components(
+      rotated_backward_v4.x(),
+      rotated_backward_v4.y(),
+      rotated_backward_v4.z(),
+    );
+    let rotated_up =
+      Vec3f32::from_components(rotated_up_v4.x(), rotated_up_v4.y(), rotated_up_v4.z());
 
     assert_vec_eq(rotated_right, world_right_expected, eps);
     assert_vec_eq(rotated_backward, world_backward_expected, eps);
@@ -1298,20 +1493,32 @@ mod tests {
     let yaw = core::f32::consts::FRAC_PI_2;
     let q = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), yaw);
     let mat = Mat4x4f32::from_quat_custom_frame(q);
-    
-    // Rotating around Z: 
+
+    // Rotating around Z:
     // Right [1,0,0] -> [0,1,0] (Backward)
     // Backward [0,1,0] -> [-1,0,0] (Left)
     // Up [0,0,1] stays Up [0,0,1]
-    
+
     let rotated_right_v4 = mat.mul_vector(local_right.to_vec4(0.0));
     let rotated_backward_v4 = mat.mul_vector(local_backward.to_vec4(0.0));
 
-    let rotated_right = Vec3f32::from_components(rotated_right_v4.x(), rotated_right_v4.y(), rotated_right_v4.z());
-    let rotated_backward = Vec3f32::from_components(rotated_backward_v4.x(), rotated_backward_v4.y(), rotated_backward_v4.z());
-    
+    let rotated_right = Vec3f32::from_components(
+      rotated_right_v4.x(),
+      rotated_right_v4.y(),
+      rotated_right_v4.z(),
+    );
+    let rotated_backward = Vec3f32::from_components(
+      rotated_backward_v4.x(),
+      rotated_backward_v4.y(),
+      rotated_backward_v4.z(),
+    );
+
     assert_vec_eq(rotated_right, world_backward_expected, eps);
-    assert_vec_eq(rotated_backward, Vec3f32::from_components(-1.0, 0.0, 0.0), eps);
+    assert_vec_eq(
+      rotated_backward,
+      Vec3f32::from_components(-1.0, 0.0, 0.0),
+      eps,
+    );
   }
 
   #[test]
@@ -1330,9 +1537,18 @@ mod tests {
     let rotated_up_v4 = mat.mul_vector(local_up.to_vec4(0.0));
     let rotated_backward_v4 = mat.mul_vector(local_backward.to_vec4(0.0));
 
-    let rotated_right = Vec3f32::from_components(rotated_right_v4.x(), rotated_right_v4.y(), rotated_right_v4.z());
-    let rotated_up = Vec3f32::from_components(rotated_up_v4.x(), rotated_up_v4.y(), rotated_up_v4.z());
-    let rotated_backward = Vec3f32::from_components(rotated_backward_v4.x(), rotated_backward_v4.y(), rotated_backward_v4.z());
+    let rotated_right = Vec3f32::from_components(
+      rotated_right_v4.x(),
+      rotated_right_v4.y(),
+      rotated_right_v4.z(),
+    );
+    let rotated_up =
+      Vec3f32::from_components(rotated_up_v4.x(), rotated_up_v4.y(), rotated_up_v4.z());
+    let rotated_backward = Vec3f32::from_components(
+      rotated_backward_v4.x(),
+      rotated_backward_v4.y(),
+      rotated_backward_v4.z(),
+    );
 
     let eps = 1e-5;
 
@@ -1342,6 +1558,10 @@ mod tests {
     // Up should be +Z
     assert_vec_eq(rotated_up, Vec3f32::from_components(0.0, 0.0, 1.0), eps);
     // Backward should be +Y
-    assert_vec_eq(rotated_backward, Vec3f32::from_components(0.0, 1.0, 0.0), eps);
+    assert_vec_eq(
+      rotated_backward,
+      Vec3f32::from_components(0.0, 1.0, 0.0),
+      eps,
+    );
   }
 }

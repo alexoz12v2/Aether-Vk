@@ -15,6 +15,7 @@ heapless = { version = "0.9" }
 image = "0.25.10"
 raw-window-handle = "0.6"
 winit = { version = "0.29.15", features = ["rwh_06"] }
+rand = "0.10.1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = ">=0.59, <= 0.62", default-features = false, features = [

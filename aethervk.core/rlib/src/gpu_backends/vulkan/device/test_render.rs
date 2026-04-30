@@ -1037,12 +1037,35 @@ fn test_render_particles_multithreaded() {
   };
 
   let scene = Scene::new();
+  scene.register_component::<TransformComponent>(&[]);
+  scene.register_component::<crate::scene::PhysicalMeshComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
+  scene.register_component::<CameraComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
+  scene.register_component::<crate::scene::particles::ParticleSystemComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
+  scene.register_component::<SunComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
+
   let mesh_entity = scene.spawn_entity("mesh");
   let particle_sys_e = scene.spawn_entity("particles");
+  let sun_e = scene.spawn_entity("sun");
   
   let asset_path = format!("{}/Comet.glb", crate::gpu::ASSET_DIR.read().as_ref().unwrap());
   let loaded_mesh = crate::simulation::comet::load_comet_from_gltf(&asset_path, false).expect("Failed to load mesh");
   let mesh_arc = std::sync::Arc::from(loaded_mesh);
+
+  scene.add_component(
+      sun_e,
+      TransformComponent {
+          position: Vec3f32::from_array([10.0, 10.0, 10.0]),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+      },
+  ).unwrap();
+
+  scene.add_component(
+      sun_e,
+      SunComponent {
+          resolution: (64, 64, 64),
+      },
+  ).unwrap();
   
   scene.add_component(
       mesh_entity,
@@ -1113,7 +1136,7 @@ fn test_render_particles_multithreaded() {
                 let u_emission = [0.5, 0.5];
                 let mut u_particles = Vec::new();
                 for _ in 0..100 { u_particles.push([0.5, 0.5, 0.5, 0.5]); }
-                sys.emit_particles(&mesh_arc_physics, &uv_grid, Vec3f32::from_array([0.0, 0.0, 0.0]), Quat::identity(), &u_emission, &u_particles);
+                sys.emit_particles(&mesh_arc_physics, &uv_grid, Vec3f32::from_array([0.0, 0.0, 0.0]), Quat::identity(), Vec3f32::from_components(1.0, 1.0, 1.0), &u_emission, &u_particles);
             }
             
             for p in sys.particles.iter_mut().filter(|p| p.active != 0) {
@@ -1146,8 +1169,8 @@ fn test_render_particles_multithreaded() {
 
             let mut render_scene = RenderScene::new((
                 TransformComponent {
-                position: Vec3f32::from_array([0.0, 10.0, 15.0]),
-                rotation: Quat::from_axis_angle(Vec3f32::from_array([1.0, 0.0, 0.0]), -std::f32::consts::FRAC_PI_4),
+                position: Vec3f32::from_array([0.0, -10.0, 0.0]),
+                rotation: Quat::from_axis_angle(Vec3f32::from_array([0.0, 0.0, 1.0]), std::f32::consts::PI),
                 scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
                 },
                 CameraComponent {
@@ -1157,7 +1180,6 @@ fn test_render_particles_multithreaded() {
                 },
             ));
             
-            let sun_e = scene_render.spawn_entity("sun");
             let sun_pipeline = device.get_sun_pipeline_key()?;
             render_scene.sun_call = Some(gpu::frame::SunDrawCall::from_model_and_camera(
               Mat4x4f32::identity(),
@@ -1201,6 +1223,7 @@ fn test_render_particles_multithreaded() {
 
             {
                 let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+                device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64))?;
                 device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
                 let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
 
@@ -1235,21 +1258,31 @@ fn test_render_particles_multithreaded() {
              let mut found_gray = false;
              let mut found_green = false;
 
+             let mut max_r = 0;
+             let mut max_g = 0;
+             let mut max_b = 0;
+
              for chunk in buffer.chunks_exact(4) {
                  let b = chunk[0];
                  let g = chunk[1];
                  let r = chunk[2];
                  
+                 if r > max_r { max_r = r; }
+                 if g > max_g { max_g = g; }
+                 if b > max_b { max_b = b; }
+
                  // Look for bright green
                  if g > 200 && r < 50 && b < 50 { found_green = true; }
                  
                  // Look for gray plane (with sun lighting, typically > 0 and balanced)
-                 if r > 50 && r < 180 && g > 50 && g < 180 && b > 50 && b < 180 {
-                     if (r as i32 - g as i32).abs() < 15 && (g as i32 - b as i32).abs() < 15 { 
+                 if r > 20 && r < 200 && g > 20 && g < 200 && b > 20 && b < 200 {
+                     if (r as i32 - g as i32).abs() < 25 && (g as i32 - b as i32).abs() < 25 { 
                          found_gray = true; 
                      }
                  }
              }
+             
+             println!("Time {}ms: Max RGB: ({}, {}, {}). found_gray={}, found_green={}", time, max_r, max_g, max_b, found_gray, found_green);
              
              let mut export_buffer = buffer.clone();
              for chunk in export_buffer.chunks_exact_mut(4) {

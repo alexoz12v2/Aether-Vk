@@ -1,14 +1,15 @@
-pub mod simulation;
-
 use aethervk_core_rlib::{
-  gpu::{self, RenderDevice, frame::RenderScene},
+  gpu::{self, RenderDevice},
   scene::{
     CameraComponent, EntityId, PhysicalMeshComponent, Scene, TransformComponent, SunComponent,
   },
   types::RuntimeParams,
+  gpu::{FrameCancelGuard, ScopedCommandBuffer, ScopedRenderPass},
+  scene::{GaussianParams, ParticleEmitterConfig, ParticleSystemComponent},
+  types::GpuResult,
 };
 use aethervk_oshal_rlib::math::{
-  matrix::{SquareMatrix, Matrix4, mat4::Mat4x4f32},
+  matrix::{Matrix4, mat4::Mat4x4f32},
   quaternion::Quaternion,
   vector::{vec3::Vec3f32, vec4::Quat, Vector3, Vector},
 };
@@ -18,11 +19,8 @@ use test_utils::{
   cycle_get_asset_path_from_exe, get_handle_and_window_info, scene_to_render_scene,
   setup_resize_hook, AppEvent,
 };
-use winit::event_loop::EventLoopBuilder;
-use winit::window::WindowBuilder;
-use aethervk_core_rlib::gpu::{FrameCancelGuard, ScopedCommandBuffer, ScopedRenderPass};
-use aethervk_core_rlib::scene::{GaussianParams, ParticleEmitterConfig, ParticleSystemComponent};
-use aethervk_core_rlib::types::GpuResult;
+use winit::{event_loop::EventLoopBuilder, window::WindowBuilder};
+use test_utils::simulation::kernels::CpuKernels;
 
 // Particle emitter component
 // - Note: the methods which require randomness receive a list of random numbers in input like in pbrt-v4
@@ -80,7 +78,7 @@ struct ParticleApp {
   height: u32,
   window_info: test_utils::WindowPlatformData,
   time_info: aethervk_oshal_rlib::os::time::TimeInfo,
-  kernels: simulation::kernels::CpuKernels,
+  kernels: CpuKernels,
 }
 
 impl ParticleApp {
@@ -144,6 +142,7 @@ impl ParticleApp {
             &uv_grid,
             comet_pos,
             comet_rot,
+            Vec3f32::from_components(1.0, 1.0, 1.0),
             &u_emission,
             &u_particles,
           );
@@ -180,10 +179,7 @@ impl ParticleApp {
           }
         }
 
-        // Clean up dead particles
-        if sys.particles.len() > sys.config.max_particles {
-          sys.particles.retain(|p| p.active == 0);
-        }
+        sys.particles.retain(|p| p.active != 0);
 
         sys.update_bvh();
       });
@@ -441,7 +437,10 @@ fn vulkan_rendering_validation_callback(err_msg: &str) {
   panic!("Vulkan Validation Error: {}", err_msg);
 }
 
-fn build_uv_distribution(comet: &aethervk_core_rlib::simulation::comet::Comet, resolution: usize) -> aethervk_core_rlib::math::distribution::Distribution2D {
+fn build_uv_distribution(
+  comet: &aethervk_core_rlib::simulation::comet::Comet,
+  resolution: usize,
+) -> aethervk_core_rlib::math::distribution::Distribution2D {
   let mut min_u = std::f32::MAX;
   let mut max_u = std::f32::MIN;
   let mut min_v = std::f32::MAX;
@@ -453,8 +452,12 @@ fn build_uv_distribution(comet: &aethervk_core_rlib::simulation::comet::Comet, r
     min_v = min_v.min(v.uv[1]);
     max_v = max_v.max(v.uv[1]);
   }
-  if max_u <= min_u { max_u = min_u + 1.0; }
-  if max_v <= min_v { max_v = min_v + 1.0; }
+  if max_u <= min_u {
+    max_u = min_u + 1.0;
+  }
+  if max_v <= min_v {
+    max_v = min_v + 1.0;
+  }
 
   let mut weights = vec![0.0; resolution * resolution];
   let inv_w = resolution as f32 / (max_u - min_u);
@@ -467,23 +470,35 @@ fn build_uv_distribution(comet: &aethervk_core_rlib::simulation::comet::Comet, r
     let v0 = &comet.vertices[i0];
     let v1 = &comet.vertices[i1];
     let v2 = &comet.vertices[i2];
-    
+
     let p0 = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(v0.position);
     let p1 = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(v1.position);
     let p2 = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(v2.position);
     let area = 0.5 * (p1 - p0).cross(p2 - p1).length();
-    
+
     let cu = (v0.uv[0] + v1.uv[0] + v2.uv[0]) / 3.0;
     let cv = (v0.uv[1] + v1.uv[1] + v2.uv[1]) / 3.0;
-    
-    let mut x = if cu < min_u { 0 } else { ((cu - min_u) * inv_w) as usize };
-    let mut y = if cv < min_v { 0 } else { ((cv - min_v) * inv_h) as usize };
-    if x >= resolution { x = resolution - 1; }
-    if y >= resolution { y = resolution - 1; }
-    
+
+    let mut x = if cu < min_u {
+      0
+    } else {
+      ((cu - min_u) * inv_w) as usize
+    };
+    let mut y = if cv < min_v {
+      0
+    } else {
+      ((cv - min_v) * inv_h) as usize
+    };
+    if x >= resolution {
+      x = resolution - 1;
+    }
+    if y >= resolution {
+      y = resolution - 1;
+    }
+
     weights[y * resolution + x] += area;
   }
-  
+
   aethervk_core_rlib::math::distribution::Distribution2D::new(&weights, resolution, resolution)
 }
 
@@ -611,7 +626,7 @@ fn main() {
     false,
   )
   .expect("Failed to load mesh");
-  
+
   let uv_dist = build_uv_distribution(&loaded_mesh, 64);
 
   scene
@@ -724,7 +739,7 @@ fn main() {
     )
     .unwrap();
 
-  let kernels = simulation::kernels::CpuKernels::new();
+  let kernels = CpuKernels::new();
 
   render_frontend
     .with_device(render_device_handle, |device| {
