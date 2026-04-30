@@ -450,10 +450,10 @@ impl CameraRenderData {
 pub struct ParticleDrawCall {
   pub pipeline: PipelineKey,
   pub particle_count: u32,
-  pub particle_data_buffer: GpuResourceHandle,
-  pub indirect_buffer: GpuResourceHandle,
-  pub descriptor_index: u32,
+  pub system_particle_offset: u32,
+  pub system_indirect_offset: u32,
   pub config: crate::scene::particles::ParticleEmitterConfig,
+  pub particles: alloc::vec::Vec<crate::scene::particles::ParticleData>,
 }
 
 pub struct RenderScene {
@@ -578,18 +578,17 @@ impl RenderScene {
         });
       }
       RenderableDataRef::ParticleSystem(component) => {
-        let res: ResourceUploadResult = device.get_or_create_particle_resources(
-          entity_id,
-          &component.particles,
-          presentation_engine_handle,
-        )?;
+        if component.particles.is_empty() {
+          return Ok(());
+        }
+        let particle_pipeline = device.get_particle_pipeline_key()?;
         self.particle_calls.push(ParticleDrawCall {
-          pipeline: res.pipeline,
+          pipeline: particle_pipeline,
           particle_count: component.particles.len() as u32,
-          particle_data_buffer: res.buffers,
-          indirect_buffer: res.indirect_buffer.unwrap(),
-          descriptor_index: res.descriptor_index.unwrap(),
+          system_particle_offset: 0,
+          system_indirect_offset: 0,
           config: component.config.clone(),
+          particles: component.particles.clone(),
         });
       }
       RenderableDataRef::Gizmo(_) => {} // Handled elsewhere
@@ -848,7 +847,7 @@ pub fn do_draw_particle(
   cmd_buffer: super::CommandBufferHandle,
   draw_call: &ParticleDrawCall,
 ) -> GpuResult<()> {
-  device.prepare_particle_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
+  // Bind pipeline (the descriptor set should have been bound once per frame)
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
 
   let push_constants = crate::gpu::ParticlePushConstants {
@@ -859,8 +858,7 @@ pub fn do_draw_particle(
     _pad1: 0.0,
     color: draw_call.config.color,
     radius: draw_call.config.particle_radius,
-    buffer_index: draw_call.descriptor_index,
-    _pad2: [0.0; 2],
+    _pad2: [0.0; 3],
   };
 
   device.push_constants(
@@ -868,12 +866,12 @@ pub fn do_draw_particle(
     crate::gpu::ArchetypeId::Particle,
     &push_constants,
   )?;
-  device.draw_indirect(
+  
+  // Notice we don't pass the indirect_buffer as a GpuResourceHandle anymore,
+  // we use a specific method that draws from the global mega buffer
+  device.draw_particle_indirect(
     cmd_buffer,
-    draw_call.indirect_buffer,
-    0,
-    1,
-    core::mem::size_of::<ash::vk::DrawIndirectCommand>() as u32,
+    draw_call.system_indirect_offset,
   )?;
 
   Ok(())

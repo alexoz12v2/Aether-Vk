@@ -311,6 +311,8 @@ struct DeviceResources {
 
   pending_downloads: spin::RwLock<hashbrown::HashMap<u64, PendingDownload>>,
 
+  frame_staging_arena: spin::RwLock<Option<memory::FrameStagingArena>>,
+
   archetypes: Archetypes,
 }
 
@@ -381,6 +383,9 @@ impl DeviceResource for DeviceResources {
       }
     }
 
+    if let Some(mut arena) = self.frame_staging_arena.write().take() {
+      arena.destroy(&self.allocator.allocator);
+    }
     self.allocator.cleanup(device);
   }
 }
@@ -1016,6 +1021,8 @@ impl DeviceResources {
     // timeline semaphore promoted to core after 1.2 (included)
     debug_assert!(instance.api_version() < vk::API_VERSION_1_2);
 
+    let frame_staging_arena = memory::FrameStagingArena::new(&allocator.allocator, 128 * 1024 * 1024)?;
+
     Ok(Self {
       allocator,
       command_pools: spin::RwLock::new(command_pools),
@@ -1034,6 +1041,7 @@ impl DeviceResources {
       sky_image: spin::RwLock::new(None),
       next_cmd_id: Arc::new(AtomicU64::new(1)),
       pending_downloads: spin::RwLock::new(hashbrown::HashMap::new()),
+      frame_staging_arena: spin::RwLock::new(Some(frame_staging_arena)),
     })
   }
 
@@ -2911,240 +2919,135 @@ impl<'a> RenderDevice for Device<'a> {
     })
   }
 
-  fn get_or_create_particle_resources(
+  fn upload_particle_systems(
     &self,
-    entity_id: EntityId,
-    particles: &[crate::scene::particles::ParticleData],
-    handle: PresentationEngineHandle,
-  ) -> GpuResult<crate::gpu::frame::ResourceUploadResult> {
+    cmd_buffer: CommandBufferHandle,
+    particle_calls: &mut [crate::gpu::frame::ParticleDrawCall],
+  ) -> GpuResult<()> {
     let res_guard = self.res.read();
-    let next_frame_timeline = res_guard.get_timeline_semaphore_cached_value() + 1;
-    let current_frame_timeline = next_frame_timeline - 1;
+    let archetype_guard = res_guard.archetypes.particle_render_archetype.read();
+    if archetype_guard.is_none() {
+      return Ok(());
+    }
+    let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
 
-    let pipeline_key = {
-      let archetype_guard = res_guard.archetypes.particle_render_archetype.read();
-      if archetype_guard.is_none() {
-        return Err(GpuError::InvalidState(
-          "[Vulkan RenderDevice] get_or_create_particle_resources | archetype absent",
-        ));
+    let mut staging_arena_guard = res_guard.frame_staging_arena.write();
+    let staging_arena = staging_arena_guard.as_mut().unwrap();
+
+    let cmd = {
+      let cmd_buffers = self.recording_command_buffers.read();
+      let data = cmd_buffers
+        .get(&cmd_buffer)
+        .ok_or(GpuError::InvalidArgument(
+          "[Vulkan RenderDevice] upload_particle_systems: invalid command buffer handle",
+        ))?;
+      data.command_buffer.get()
+    };
+
+    let particle_size = core::mem::size_of::<crate::scene::particles::ParticleData>();
+    let indirect_size = core::mem::size_of::<vk::DrawIndirectCommand>();
+
+    let mut current_particle_offset = 0;
+    let mut current_indirect_offset = 0;
+
+    for call in particle_calls.iter_mut() {
+      let particles = &call.particles;
+      if particles.is_empty() {
+        continue;
       }
+
+      call.system_particle_offset = current_particle_offset as u32;
+      call.system_indirect_offset = current_indirect_offset as u32;
+
+      let particle_data_size = particles.len() * particle_size;
+      let p_dst_offset = (current_particle_offset as usize * particle_size) as vk::DeviceSize;
+      
+      let i_dst_offset = (current_indirect_offset as usize * indirect_size) as vk::DeviceSize;
+
+      let total_size = particle_data_size + indirect_size;
+      let (staging_offset, ptr) = staging_arena.allocate(total_size, 16)
+          .ok_or(GpuError::InvalidState("Staging arena exhausted!"))?;
+
       unsafe {
-        archetype_guard
-          .as_ref()
-          .unwrap_unchecked()
-          .pipeline_key
-          .unwrap_unchecked()
+          core::ptr::copy_nonoverlapping(particles.as_ptr() as *const u8, ptr, particle_data_size);
+          
+          let indirect_cmd = vk::DrawIndirectCommand {
+              vertex_count: 4,
+              instance_count: particles.len() as u32,
+              first_vertex: 0,
+              first_instance: current_particle_offset as u32,
+          };
+          core::ptr::copy_nonoverlapping(&indirect_cmd as *const _ as *const u8, ptr.add(particle_data_size), indirect_size);
       }
-    };
 
-    let particle_data_size = (particles.len()
-      * core::mem::size_of::<crate::scene::particles::ParticleData>())
-      as vk::DeviceSize;
-    let indirect_cmd_size = core::mem::size_of::<vk::DrawIndirectCommand>() as vk::DeviceSize;
-    let total_staging_size = particle_data_size + indirect_cmd_size;
+      let p_copy = vk::BufferCopy::default().src_offset(staging_offset as u64).dst_offset(p_dst_offset).size(particle_data_size as u64);
+      let i_copy = vk::BufferCopy::default().src_offset((staging_offset + particle_data_size) as u64).dst_offset(i_dst_offset).size(indirect_size as u64);
 
-    let graphics_queue = self.queues.get_graphics_queue();
-    let command_pool = {
-      let create_info = vk::CommandPoolCreateInfo::default()
-        .queue_family_index(graphics_queue.family_index)
-        .flags(vk::CommandPoolCreateFlags::TRANSIENT);
-      unsafe { self.device.create_command_pool(&create_info, None) }
-    }?;
-
-    let command_buffer = {
-      let alloc_info = vk::CommandBufferAllocateInfo::default()
-        .command_pool(command_pool)
-        .level(vk::CommandBufferLevel::PRIMARY)
-        .command_buffer_count(1);
-      unsafe { self.device.allocate_command_buffers(&alloc_info) }?[0]
-    };
-
-    let begin_info =
-      vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-    unsafe {
-      self
-        .device
-        .begin_command_buffer(command_buffer, &begin_info)?
-    };
-
-    // Create Storage Buffer
-    let buffer_info = vk::BufferCreateInfo::default()
-      .size(particle_data_size)
-      .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
-    let mut alloc_info = vk_mem::AllocationCreateInfo::default();
-    alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
-    let (data_buffer, data_alloc) = unsafe {
-      res_guard
-        .allocator
-        .allocator
-        .create_buffer(&buffer_info, &alloc_info)
-    }?;
-
-    // Create Indirect Buffer
-    let indirect_buffer_info = vk::BufferCreateInfo::default()
-      .size(indirect_cmd_size)
-      .usage(vk::BufferUsageFlags::INDIRECT_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
-    let (indirect_buffer, indirect_alloc) = unsafe {
-      res_guard
-        .allocator
-        .allocator
-        .create_buffer(&indirect_buffer_info, &alloc_info)
-    }?;
-
-    // Staging Buffer
-    let staging_buffer_info = vk::BufferCreateInfo::default()
-      .size(total_staging_size)
-      .usage(vk::BufferUsageFlags::TRANSFER_SRC);
-    let staging_alloc_info = vk_mem::AllocationCreateInfo {
-      usage: vk_mem::MemoryUsage::Auto,
-      flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-        | vk_mem::AllocationCreateFlags::MAPPED,
-      required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE,
-      ..Default::default()
-    };
-    let (staging_buffer, staging_allocation, staging_alloc_info) = unsafe {
-      res_guard
-        .allocator
-        .allocator
-        .create_buffer_get_info(&staging_buffer_info, &staging_alloc_info)
-    }?;
-
-    unsafe {
-      core::ptr::copy_nonoverlapping(
-        particles.as_ptr() as *const u8,
-        staging_alloc_info.mapped_data as *mut u8,
-        particle_data_size as usize,
-      );
-
-      let indirect_cmd = vk::DrawIndirectCommand {
-        vertex_count: 4,
-        instance_count: particles.len() as u32,
-        first_vertex: 0,
-        first_instance: 0,
-      };
-
-      core::ptr::copy_nonoverlapping(
-        &indirect_cmd as *const vk::DrawIndirectCommand as *const u8,
-        (staging_alloc_info.mapped_data as *mut u8).add(particle_data_size as usize),
-        indirect_cmd_size as usize,
-      );
-    }
-
-    if !unsafe {
-      res_guard
-        .allocator
-        .allocator
-        .get_allocation_memory_properties(&staging_allocation)
-    }
-    .contains(vk::MemoryPropertyFlags::HOST_COHERENT)
-    {
-      res_guard
-        .allocator
-        .allocator
-        .flush_allocation(&staging_allocation, 0, vk::WHOLE_SIZE)?;
-    }
-
-    let copy_regions = [vk::BufferCopy::default()
-      .src_offset(0)
-      .dst_offset(0)
-      .size(particle_data_size)];
-    unsafe {
-      self
-        .device
-        .cmd_copy_buffer(command_buffer, staging_buffer, data_buffer, &copy_regions)
-    };
-    let indirect_copy_regions = [vk::BufferCopy::default()
-      .src_offset(particle_data_size)
-      .dst_offset(0)
-      .size(indirect_cmd_size)];
-    unsafe {
-      self.device.cmd_copy_buffer(
-        command_buffer,
-        staging_buffer,
-        indirect_buffer,
-        &indirect_copy_regions,
-      )
-    };
-
-    unsafe { self.device.end_command_buffer(command_buffer)? };
-
-    let command_buffers = [command_buffer];
-    let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
-    unsafe {
-      let fence = self
-        .device
-        .create_fence(&vk::FenceCreateInfo::default(), None)?;
-      self
-        .device
-        .locked_queue_submit(graphics_queue.handle, &[submit_info], fence)
-        .map_err(GpuError::from)?;
-      self.device.wait_for_fences(&[fence], true, u64::MAX)?;
-      self.device.destroy_fence(fence, None);
-      self.device.destroy_command_pool(command_pool, None);
-    }
-
-    // Schedule staging buffer for destruction immediately
-    res_guard.discard_pool.discard_buffer(
-      res_guard.allocator.allocator.get_raw(),
-      staging_buffer,
-      staging_allocation,
-      current_frame_timeline,
-    );
-
-    // Also schedule data_buffer and indirect_buffer to be discarded after use (next frame)
-    res_guard.discard_pool.discard_buffer(
-      res_guard.allocator.allocator.get_raw(),
-      data_buffer,
-      data_alloc,
-      next_frame_timeline,
-    );
-    res_guard.discard_pool.discard_buffer(
-      res_guard.allocator.allocator.get_raw(),
-      indirect_buffer,
-      indirect_alloc,
-      next_frame_timeline,
-    );
-
-    let descriptor_index = {
-      let mut archetype_guard = res_guard.archetypes.particle_render_archetype.write();
-      let arch = archetype_guard.as_mut().unwrap();
-      let idx = arch.next_index.load(core::sync::atomic::Ordering::Relaxed);
-      if idx == ParticleRenderResourceArchetype::MAX_BUFFER_COUNT {
-        // TODO
-        return Err(GpuError::InvalidState(
-          "TODO: full. Insert a remove function to create holes like we did on text archetype",
-        ));
+      unsafe {
+          self.device.cmd_copy_buffer(cmd, staging_arena.buffer, archetype.mega_particle_buffer, core::slice::from_ref(&p_copy));
+          self.device.cmd_copy_buffer(cmd, staging_arena.buffer, archetype.mega_indirect_buffer, core::slice::from_ref(&i_copy));
       }
-      arch
-        .next_index
-        .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
 
-      let buffer_info = vk::DescriptorBufferInfo::default()
-        .buffer(data_buffer)
-        .offset(0)
-        .range(vk::WHOLE_SIZE);
+      let mut p_barrier = vk::BufferMemoryBarrier::default().buffer(archetype.mega_particle_buffer).offset(p_dst_offset).size(particle_data_size as u64);
+      let mut i_barrier = vk::BufferMemoryBarrier::default().buffer(archetype.mega_indirect_buffer).offset(i_dst_offset).size(indirect_size as u64);
 
-      let write = vk::WriteDescriptorSet::default()
-        .dst_set(arch.descriptor_set.get())
-        .dst_binding(0)
-        .dst_array_element(idx)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .buffer_info(core::slice::from_ref(&buffer_info));
+      p_barrier.src_access_mask = vk::AccessFlags::TRANSFER_WRITE; p_barrier.dst_access_mask = vk::AccessFlags::SHADER_READ;
+      i_barrier.src_access_mask = vk::AccessFlags::TRANSFER_WRITE; i_barrier.dst_access_mask = vk::AccessFlags::INDIRECT_COMMAND_READ;
+      let src_stage = vk::PipelineStageFlags::TRANSFER;
+      let dst_stage = vk::PipelineStageFlags::VERTEX_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT;
 
-      unsafe { self.device.update_descriptor_sets(&[write], &[]) };
-      idx
+      unsafe {
+          self.device.cmd_pipeline_barrier(cmd, src_stage, dst_stage, vk::DependencyFlags::empty(), &[], &[p_barrier, i_barrier], &[]);
+      }
+
+      current_particle_offset += particles.len();
+      current_indirect_offset += 1;
+    }
+
+    Ok(())
+  }
+
+  fn draw_particle_indirect(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    indirect_offset: u32,
+  ) -> GpuResult<()> {
+    let cmd = {
+      let cmd_buffers = self.recording_command_buffers.read();
+      let data = cmd_buffers
+        .get(&cmd_buffer)
+        .ok_or(GpuError::InvalidArgument(
+          "[Vulkan RenderDevice] draw_particle_indirect: invalid command buffer handle",
+        ))?;
+      data.command_buffer.get()
     };
 
-    Ok(crate::gpu::frame::ResourceUploadResult {
-      pipeline: pipeline_key,
-      outline_pipeline: None,
-      buffers: GpuResourceHandle::from_raw(data_buffer.as_raw()),
-      indirect_buffer: Some(GpuResourceHandle::from_raw(indirect_buffer.as_raw())),
-      texture_flags: TextureFlags::empty(),
-      emissive_intensity: 0.0,
-      emissive_color: [0.0; 3],
-      descriptor_index: Some(descriptor_index),
-    })
+    let res_guard = self.res.read();
+    let archetype_guard = res_guard.archetypes.particle_render_archetype.read();
+    let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
+
+    let i_offset = (indirect_offset as usize * core::mem::size_of::<vk::DrawIndirectCommand>()) as vk::DeviceSize;
+    unsafe {
+        self.device.cmd_draw_indirect(
+            cmd, 
+            archetype.mega_indirect_buffer, 
+            i_offset, 
+            1, 
+            core::mem::size_of::<vk::DrawIndirectCommand>() as u32
+        );
+    }
+    Ok(())
+  }
+
+  fn get_particle_pipeline_key(&self) -> GpuResult<PipelineKey> {
+    let res_guard = self.res.read();
+    let archetype = res_guard.archetypes.particle_render_archetype.read();
+    archetype
+      .as_ref()
+      .and_then(|a| a.pipeline_key)
+      .ok_or(GpuError::InvalidState(
+        "[Vulkan RenderDevice] get_particle_pipeline_key failed",
+      ))
   }
 
   fn get_sun_pipeline_key(&self) -> GpuResult<PipelineKey> {

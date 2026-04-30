@@ -100,6 +100,10 @@ fn add_gizmos_to_transforms(scene: &Scene) {
   }
 }
 
+fn panic_error_callback(msg: &str) {
+  panic!("Vulkan Error: {}", msg);
+}
+
 fn main() {
   std::panic::set_hook(Box::new(|panic_info| {
     println!("CRASH DETECTED: {}", panic_info);
@@ -116,7 +120,7 @@ fn main() {
   let render_frontend = {
     let runtime_params = Box::new(RuntimeParams {
       render_backend_params: FnvIndexMap::new(),
-      validation_error_callback: None,
+      validation_error_callback: Some(panic_error_callback),
     });
     gpu::new_render_frontend(gpu::VULKAN_RENDER_BACKEND, &runtime_params).unwrap()
   };

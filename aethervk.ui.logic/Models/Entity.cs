@@ -24,6 +24,7 @@ public class EntityOutlineChangedMessage
 
 public partial class Entity : ObservableObject
 {
+  public ulong SceneId { get; }
   public ulong Id { get; }
 
   [ObservableProperty]
@@ -41,8 +42,9 @@ public partial class Entity : ObservableObject
   public bool IsRoot => Name == "root" || Id == 1;
   public bool IsMeasurement => Components.Any(c => c is MeasurementComponent);
 
-  public Entity(ulong id, string name)
+  public Entity(ulong sceneId, ulong id, string name)
   {
+    SceneId = sceneId;
     Id = id;
     _name = name;
   }
@@ -50,7 +52,7 @@ public partial class Entity : ObservableObject
   partial void OnNameChanged(string value)
   {
     var runtimeService = Services.ServiceLocator.Provider?.GetService(typeof(Services.NativeRuntimeService)) as Services.NativeRuntimeService;
-    runtimeService?.SetEntityName(Id, value);
+    runtimeService?.SetEntityName(SceneId, Id, value);
   }
 
   partial void OnIsVisibleChanged(bool value)

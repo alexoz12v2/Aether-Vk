@@ -74,6 +74,12 @@ public class ModelUnloadedMessage
   public ModelUnloadedMessage(ImportedModelItem model) => Model = model;
 }
 
+public struct CameraActionParams
+{
+  public ulong SceneId { get; set; }
+  public ulong CameraEntityId { get; set; }
+}
+
 public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnloadedMessage>
 {
   [ObservableProperty]
@@ -125,42 +131,42 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   }
 
   [RelayCommand]
-  private void RotateCameraLeft()
+  private void RotateCameraLeft(CameraActionParams p)
   {
     var runtimeService =
       ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-    runtimeService?.RotateCamera(1, 10.0f, 0.0f);
+    runtimeService?.RotateCamera(p.SceneId, p.CameraEntityId, 10.0f, 0.0f);
   }
 
   [RelayCommand]
-  private void RotateCameraRight()
+  private void RotateCameraRight(CameraActionParams p)
   {
     var runtimeService =
       ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-    runtimeService?.RotateCamera(1, -10.0f, 0.0f);
+    runtimeService?.RotateCamera(p.SceneId, p.CameraEntityId, -10.0f, 0.0f);
   }
 
   [RelayCommand]
-  private void ZoomIn()
+  private void ZoomIn(CameraActionParams p)
   {
     var runtimeService =
       ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-    runtimeService?.ZoomCamera(1, 2.0f);
+    runtimeService?.ZoomCamera(p.SceneId, p.CameraEntityId, 2.0f);
   }
 
   [RelayCommand]
-  private void ZoomOut()
+  private void ZoomOut(CameraActionParams p)
   {
     var runtimeService =
       ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-    runtimeService?.ZoomCamera(1, -2.0f);
+    runtimeService?.ZoomCamera(p.SceneId, p.CameraEntityId, -2.0f);
   }
 
   [RelayCommand]
-  private void ResetCamera()
+  private void ResetCamera(CameraActionParams p)
   {
     var runtimeService =
       ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-    runtimeService?.ResetCamera(1);
+    runtimeService?.ResetCamera(p.SceneId, p.CameraEntityId);
   }
 }

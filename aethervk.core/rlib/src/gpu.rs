@@ -239,8 +239,7 @@ pub struct ParticlePushConstants {
   pub _pad1: f32,
   pub color: [f32; 4],
   pub radius: f32,
-  pub buffer_index: u32,
-  pub _pad2: [f32; 2],
+  pub _pad2: [f32; 3],
 }
 
 #[repr(C)]
@@ -401,6 +400,17 @@ pub trait RenderCompute: Send + Sync {
 }
 
 /// Rule for rendering functions: They cannot take a [`crate::scene::EntityId`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParticleSyncMode {
+    /// CPU uploads data. Needs Transfer Write -> Vertex Read barrier.
+    CpuUpload,
+    /// Compute writes data on the same queue. Needs Compute Write -> Vertex Read.
+    SameQueueCompute,
+    /// Compute writes data on a different queue family.
+    /// `is_release_pass`: True when recording on the Compute Queue, False for Graphics Queue.
+    CrossQueueCompute { src_family: u32, dst_family: u32, is_release_pass: bool },
+}
+
 pub trait RenderDevice: Send + Sync {
   fn get_native_prop(&self, prop: NativeGpuProperty) -> Option<*mut core::ffi::c_void>;
 
@@ -500,13 +510,23 @@ pub trait RenderDevice: Send + Sync {
     model: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
   ) -> GpuResult<u32>;
 
-  fn get_or_create_particle_resources(
-    &self,
-    entity_id: EntityId,
-    particles: &[crate::scene::particles::ParticleData],
-    handle: PresentationEngineHandle,
-  ) -> GpuResult<crate::gpu::frame::ResourceUploadResult>;
+  // --- Removed get_or_create_particle_resources ---
 
+  /// Uploads particle systems into the mega-buffers. Should be called before rendering.
+  fn upload_particle_systems(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    particle_calls: &mut [crate::gpu::frame::ParticleDrawCall],
+  ) -> GpuResult<()>;
+
+  /// Draws a particle system using the mega-buffer
+  fn draw_particle_indirect(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    indirect_offset: u32,
+  ) -> GpuResult<()>;
+
+  fn get_particle_pipeline_key(&self) -> GpuResult<PipelineKey>;
   fn get_sun_pipeline_key(&self) -> GpuResult<PipelineKey>;
 
   fn get_sky_pipeline_key(&self) -> GpuResult<PipelineKey>;

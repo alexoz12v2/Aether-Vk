@@ -13,14 +13,13 @@
 
 // TODO add tests for new methods
 
-pub mod text;
 pub mod almanac_planet;
+pub mod camera;
 pub mod particles;
+pub mod text;
 
 pub use almanac_planet::AlmanacPlanet;
-pub use particles::{
-  ParticleEmitterConfig, ParticleSystemComponent, ParticleData, GaussianParams,
-};
+pub use particles::{ParticleEmitterConfig, ParticleSystemComponent, ParticleData, GaussianParams};
 
 use crate::simulation::comet::Comet;
 use aethervk_oshal_rlib::math::{safe_div, FloatLike};
@@ -122,12 +121,12 @@ impl TransformComponent {
     // Use the Matrix4 trait's custom frame constructor for rotation
     // then apply scaling and translation.
     let rot_mat = T::from(Mat4x4f32::from_quat_custom_frame(*q));
-    
+
     // Scaling is applied to the basis vectors (columns 0, 1, 2)
     let c0 = unsafe { rot_mat.column_unchecked(0) } * <T::Scalar as FloatLike>::from_f32(s.x());
     let c1 = unsafe { rot_mat.column_unchecked(1) } * <T::Scalar as FloatLike>::from_f32(s.y());
     let c2 = unsafe { rot_mat.column_unchecked(2) } * <T::Scalar as FloatLike>::from_f32(s.z());
-    
+
     // Translation (column 3)
     let c3 = <T::Vector as Vector4>::from_components(
       <T::Scalar as FloatLike>::from_f32(p.x()),

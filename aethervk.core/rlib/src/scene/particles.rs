@@ -44,15 +44,12 @@ pub struct ParticleEmitterConfig {
 pub struct ParticleData {
   pub id_low: u32,
   pub id_high: u32,
-  pub _pad0: [u32; 2],
-  pub position: [f32; 3],
-  pub _pad1: u32,
-  pub velocity: [f32; 3],
   pub age_low: u32,
   pub age_high: u32,
+  pub position: [f32; 3],
   pub mass: f32,
+  pub velocity: [f32; 3],
   pub active: u32,
-  pub _pad2: u32,
 }
 
 impl ParticleData {
@@ -203,18 +200,15 @@ impl ParticleSystemComponent {
       let mut p = ParticleData {
         id_low: 0,
         id_high: 0,
-        _pad0: [0; 2],
-        position: [world_pos.x(), world_pos.y(), world_pos.z()],
-        _pad1: 0,
-        velocity: [velocity.x(), velocity.y(), velocity.z()],
         age_low: 0,
         age_high: 0,
+        position: [world_pos.x(), world_pos.y(), world_pos.z()],
         mass: self.config.density
           * (4.0 / 3.0)
           * core::f32::consts::PI
           * self.config.particle_radius.powi(3),
+        velocity: [velocity.x(), velocity.y(), velocity.z()],
         active: 1,
-        _pad2: 0,
       };
       p.set_id(self.next_id as u64);
       p.set_age(0);

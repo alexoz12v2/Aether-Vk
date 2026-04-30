@@ -125,7 +125,7 @@ public partial class MainWindow : Window
           var runtime = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
           if (runtime != null)
           {
-            var entity = runtime.SpawnImageBillboard(vm.EntityName, vm.IsScreenSpace, vm.Width, vm.Height);
+            var entity = runtime.SpawnImageBillboard(1, vm.EntityName, vm.IsScreenSpace, vm.Width, vm.Height);
             
             var watcherService = ServiceLocator.Provider?.GetService(typeof(FileWatcherService)) as FileWatcherService;
             watcherService?.WatchImageFile(filePath, entity);

@@ -106,6 +106,79 @@ impl GlobalDeviceAllocator {
   // TODO: allocate buffer, image, ...
 }
 
+use core::sync::atomic::{AtomicUsize, Ordering};
+use vk_mem::Alloc;
+
+pub struct FrameStagingArena {
+  pub buffer: vk::Buffer,
+  pub mapped_ptr: *mut u8,
+  pub capacity: usize,
+  pub offset: AtomicUsize,
+  pub allocation: vk_mem::Allocation,
+}
+
+unsafe impl Send for FrameStagingArena {}
+unsafe impl Sync for FrameStagingArena {}
+
+impl FrameStagingArena {
+  pub fn new(allocator: &vk_mem::Allocator, capacity: usize) -> GpuResult<Self> {
+    let buffer_info = vk::BufferCreateInfo::default()
+      .size(capacity as u64)
+      .usage(vk::BufferUsageFlags::TRANSFER_SRC);
+    let alloc_info = vk_mem::AllocationCreateInfo {
+      usage: vk_mem::MemoryUsage::Auto,
+      flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+        | vk_mem::AllocationCreateFlags::MAPPED,
+      required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+        | vk::MemoryPropertyFlags::HOST_COHERENT,
+      ..Default::default()
+    };
+
+    let (buffer, allocation, alloc_info_res) =
+      unsafe { allocator.create_buffer_get_info(&buffer_info, &alloc_info) }
+        .map_err(|_| crate::types::GpuError::InvalidState("Failed to create staging arena"))?;
+
+    Ok(Self {
+      buffer,
+      mapped_ptr: alloc_info_res.mapped_data as *mut u8,
+      capacity,
+      offset: AtomicUsize::new(0),
+      allocation,
+    })
+  }
+
+  pub fn reset(&self) {
+    self.offset.store(0, Ordering::Relaxed);
+  }
+
+  pub fn allocate(&self, size: usize, alignment: usize) -> Option<(usize, *mut u8)> {
+    let mut current = self.offset.load(Ordering::Relaxed);
+    loop {
+      let padding = (alignment - (current % alignment)) % alignment;
+      let aligned = current + padding;
+      let next = aligned + size;
+
+      if next > self.capacity {
+        return None;
+      }
+
+      match self
+        .offset
+        .compare_exchange_weak(current, next, Ordering::SeqCst, Ordering::Relaxed)
+      {
+        Ok(_) => return Some((aligned, unsafe { self.mapped_ptr.add(aligned) })),
+        Err(val) => current = val,
+      }
+    }
+  }
+
+  pub fn destroy(&mut self, allocator: &vk_mem::Allocator) {
+    unsafe {
+      allocator.destroy_buffer(self.buffer, &mut self.allocation);
+    }
+  }
+}
+
 impl DeviceResource for GlobalDeviceAllocator {
   fn cleanup(&mut self, _device: &ash::Device) {
     unsafe { mem::ManuallyDrop::drop(&mut self.allocator) };

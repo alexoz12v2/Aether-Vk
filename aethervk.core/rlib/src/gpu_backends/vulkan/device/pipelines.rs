@@ -184,18 +184,18 @@ pub(super) struct VertexIn {
 }
 
 impl VertexIn {
-  pub(super) fn with_topology(&mut self, topology: vk::PrimitiveTopology) -> &mut Self {
+  pub fn with_topology(mut self, topology: vk::PrimitiveTopology) -> Self {
     self.topology = topology;
     self
   }
 
-  pub(super) fn add_attribute(
-    &mut self,
+  pub fn add_attribute(
+    mut self,
     binding: u32,
     location: u32,
     format: vk::Format,
     offset: u32,
-  ) -> &mut Self {
+  ) -> Self {
     self.attributes.push(
       vk::VertexInputAttributeDescription::default()
         .binding(binding)
@@ -206,12 +206,7 @@ impl VertexIn {
     self
   }
 
-  pub(super) fn add_binding(
-    &mut self,
-    binding: u32,
-    stride: u32,
-    input_rate: vk::VertexInputRate,
-  ) -> &mut Self {
+  pub fn add_binding(mut self, binding: u32, stride: u32, input_rate: vk::VertexInputRate) -> Self {
     self.bindings.push(
       vk::VertexInputBindingDescription::default()
         .binding(binding)
@@ -294,7 +289,7 @@ pub(super) struct PreRasterization {
 }
 
 impl PreRasterization {
-  pub(super) fn with_vertex_module(&mut self, vertex_module: vk::ShaderModule) -> &mut Self {
+  pub fn with_vertex_module(mut self, vertex_module: vk::ShaderModule) -> Self {
     self.vertex_module = vertex_module;
     self
   }
@@ -308,15 +303,15 @@ pub(super) struct FragmentShader {
 }
 
 impl FragmentShader {
-  pub(super) fn with_fragment_module(&mut self, fragment_module: vk::ShaderModule) -> &mut Self {
+  pub fn with_fragment_module(mut self, fragment_module: vk::ShaderModule) -> Self {
     self.fragment_module = fragment_module;
     self
   }
-  pub(super) fn add_viewport(&mut self, viewport: vk::Viewport) -> &mut Self {
+  pub fn add_viewport(mut self, viewport: vk::Viewport) -> Self {
     self.viewports.push(viewport);
     self
   }
-  pub(super) fn add_scissors(&mut self, scissors: vk::Rect2D) -> &mut Self {
+  pub fn add_scissors(mut self, scissors: vk::Rect2D) -> Self {
     self.scissors.push(scissors);
     self
   }
@@ -378,17 +373,17 @@ pub(super) struct FragmentOut {
 }
 
 impl FragmentOut {
-  pub(super) fn add_color_attachment_format(&mut self, format: vk::Format) -> &mut Self {
+  pub fn add_color_attachment_format(mut self, format: vk::Format) -> Self {
     self.color_attachment_formats.push(format);
     self
   }
 
-  pub(super) fn with_depth_attachment_format(&mut self, format: vk::Format) -> &mut Self {
+  pub fn with_depth_attachment_format(mut self, format: vk::Format) -> Self {
     self.depth_attachment_format = Some(format);
     self
   }
 
-  pub(super) fn with_stencil_attachment_format(&mut self, format: vk::Format) -> &mut Self {
+  pub fn with_stencil_attachment_format(mut self, format: vk::Format) -> Self {
     self.stencil_attachment_format = Some(format);
     self
   }
@@ -483,10 +478,16 @@ impl GraphicsInfo {
   ) -> Self {
     let (width, height) = pe.extent();
     self.fragment_shader.viewports.push(vk::Viewport {
-      width: width as f32, height: -(height as f32), x: 0.0, y: height as f32, min_depth: 0.0, max_depth: 1.0
+      width: width as f32,
+      height: -(height as f32),
+      x: 0.0,
+      y: height as f32,
+      min_depth: 0.0,
+      max_depth: 1.0,
     });
     self.fragment_shader.scissors.push(vk::Rect2D {
-      offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width, height }
+      offset: vk::Offset2D { x: 0, y: 0 },
+      extent: vk::Extent2D { width, height },
     });
 
     self.fragment_out.color_attachment_formats.push(pe.format());
@@ -501,11 +502,11 @@ impl GraphicsInfo {
     self
   }
 
-  pub(super) fn add_specialization_constant_u32(
-    &mut self,
+  pub fn add_specialization_constant_u32(
+    mut self,
     constant: vk::SpecializationMapEntry,
     value: u32,
-  ) -> &mut Self {
+  ) -> Self {
     self.specialization_constants.push(constant);
     // little endian right? TODO: query endianness of OS (oshal)
     for b in value.to_le_bytes() {
@@ -514,81 +515,75 @@ impl GraphicsInfo {
     self
   }
 
-  pub(super) fn with_vertex_in(&mut self, vertex_in: VertexIn) -> &mut Self {
+  pub fn with_vertex_in(mut self, vertex_in: VertexIn) -> Self {
     self.vertex_in = vertex_in;
     self
   }
 
-  pub(super) fn with_pre_rasterization(
-    &mut self,
-    pre_rasterization: PreRasterization,
-  ) -> &mut Self {
+  pub fn with_pre_rasterization(mut self, pre_rasterization: PreRasterization) -> Self {
     self.pre_rasterization = pre_rasterization;
     self
   }
 
-  pub(super) fn with_fragment_shader(&mut self, fragment_shader: FragmentShader) -> &mut Self {
+  pub fn with_fragment_shader(mut self, fragment_shader: FragmentShader) -> Self {
     self.fragment_shader = fragment_shader;
     self
   }
 
-  pub(super) fn with_fragment_out(&mut self, fragment_out: FragmentOut) -> &mut Self {
+  pub fn with_fragment_out(mut self, fragment_out: FragmentOut) -> Self {
     self.fragment_out = fragment_out;
     self
   }
 
-  pub(super) fn with_pipeline_layout(&mut self, pipeline_layout: vk::PipelineLayout) -> &mut Self {
+  pub fn with_pipeline_layout(mut self, pipeline_layout: vk::PipelineLayout) -> Self {
     self.pipeline_layout = pipeline_layout;
     self
   }
 
-  pub(super) fn with_pipeline_flags(&mut self, pipeline_flags: PipelineFlags) -> &mut Self {
+  pub fn with_pipeline_flags(mut self, pipeline_flags: PipelineFlags) -> Self {
     self.pipeline_flags = pipeline_flags;
     self
   }
 
-  pub(super) fn with_render_pass(&mut self, render_pass: vk::RenderPass) -> &mut Self {
+  pub fn with_render_pass(mut self, render_pass: vk::RenderPass) -> Self {
     self.render_pass = render_pass;
     self
   }
 
-  pub(super) fn with_subpass(&mut self, subpass: u32) -> &mut Self {
+  pub fn with_subpass(mut self, subpass: u32) -> Self {
     self.subpass = subpass;
     self
   }
 
-  pub(super) fn with_rasterization_polygon_mode(
-    &mut self,
+  pub fn with_rasterization_polygon_mode(
+    mut self,
     rasterization_polygon_mode: vk::PolygonMode,
-  ) -> &mut Self {
+  ) -> Self {
     self.rasterization_polygon_mode = rasterization_polygon_mode;
     self
   }
 
-  pub(super) fn with_stencil_compare_op(
-    &mut self,
-    stencil_compare_op: StencilCompareOp,
-  ) -> &mut Self {
+  pub fn with_stencil_compare_op(mut self, stencil_compare_op: StencilCompareOp) -> Self {
     self.stencil_compare_op = stencil_compare_op;
     self
   }
 
-  pub(super) fn with_stencil_logic_op(&mut self, stencil_logic_op: StencilLogicOp) -> &mut Self {
+  pub fn with_stencil_logic_op(mut self, stencil_logic_op: StencilLogicOp) -> Self {
     self.stencil_logic_op = stencil_logic_op;
     self
   }
 
-  pub(super) fn with_stencil_reference(&mut self, stencil_reference: u32) -> &mut Self {
+  pub fn with_stencil_reference(mut self, stencil_reference: u32) -> Self {
     self.stencil_reference = stencil_reference;
     self
   }
 
-  pub(super) fn with_stencil_compare_mask(&mut self, stencil_compare_mask: u32) -> &mut Self {
+  pub fn with_stencil_compare_mask(mut self, stencil_compare_mask: u32) -> Self {
     self.stencil_compare_mask = stencil_compare_mask;
     self
   }
 
-  pub(super) fn with_stencil_write_mask(&mut self, stencil_write_mask: u32) -> &mut Self {
+  pub fn with_stencil_write_mask(mut self, stencil_write_mask: u32) -> Self {
     self.stencil_write_mask = stencil_write_mask;
     self
   }

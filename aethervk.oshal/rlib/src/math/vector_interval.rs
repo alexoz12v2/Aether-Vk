@@ -435,4 +435,46 @@ where
     }
     Self { low, high }
   }
+
+  fn asin(self) -> Self {
+    let mut low = V::zero();
+    let mut high = V::zero();
+    for i in 0..V::DIM {
+      let a = unsafe { self.low.component_unchecked(i) };
+      let b = unsafe { self.high.component_unchecked(i) };
+      let result = (FloatInterval { low: a, high: b }).asin();
+      low.set_component(i, result.low);
+      high.set_component(i, result.high);
+    }
+    Self { low, high }
+  }
+
+  fn atan2(first: Self, second: Self) -> Self {
+    let mut low = V::zero();
+    let mut high = V::zero();
+    for i in 0..V::DIM {
+      let low_i = {
+        let low_first = unsafe { first.low.component_unchecked(i) };
+        let high_first = unsafe { first.high.component_unchecked(i) };
+        FloatInterval {
+          low: low_first,
+          high: high_first,
+        }
+      };
+
+      let high_i = {
+        let low_second = unsafe { second.low.component_unchecked(i) };
+        let high_second = unsafe { second.high.component_unchecked(i) };
+        FloatInterval {
+          low: low_second,
+          high: high_second,
+        }
+      };
+
+      let result = FloatInterval::atan2(low_i, high_i);
+      low.set_component(i, result.low);
+      high.set_component(i, result.high);
+    }
+    Self { low, high }
+  }
 }

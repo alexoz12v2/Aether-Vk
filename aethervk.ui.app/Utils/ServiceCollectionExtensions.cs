@@ -12,6 +12,7 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<ConsoleService>();
     collection.AddSingleton<BreadcrumbService>();
     collection.AddSingleton<HorizonJplService>();
+    collection.AddSingleton<SceneStateManager>();
     collection.AddSingleton<NativeRuntimeService>();
     collection.AddSingleton<FileWatcherService>();
   }
@@ -19,7 +20,5 @@ public static class ServiceCollectionExtensions
   public static void AddViewModels(this IServiceCollection collection)
   {
     collection.AddTransient<HomePageViewModel>();
-    collection.AddSingleton<OutlineViewModel>();
-    collection.AddSingleton<PropertiesViewModel>();
   }
 }

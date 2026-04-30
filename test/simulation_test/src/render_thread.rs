@@ -52,7 +52,7 @@ fn render_payload(
   device: &dyn RenderDevice,
   presentation_engine: gpu::PresentationEngineHandle,
   payload: RenderPacket,
-  render_scene: RenderScene,
+  mut render_scene: RenderScene,
   font_id: (u64, u32),
 ) -> GpuResult<()> {
   device.start_frame()?;
@@ -72,6 +72,13 @@ fn render_payload(
   let raw_cmd_buffer = device.get_command_buffer()?;
   let cmd_guard = ScopedCommandBuffer::new(device, raw_cmd_buffer, None)?;
   let cmd_buffer = cmd_guard.cmd();
+
+  // Upload particles first
+  // We need to bypass the strict borrowing rule or mutate a cloned render_scene
+  // Wait, upload_particle_systems needs a mut slice of particle_calls
+  // so let's make render_scene mut in render_payload parameters
+  device.upload_particle_systems(cmd_buffer, &mut render_scene.particle_calls)?;
+
   if let Some(sun_call) = &render_scene.sun_call {
     // TODO move to kernels
     device.update_sun(cmd_buffer, sun_call.entity, (128, 128, 128))?;

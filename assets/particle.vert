@@ -1,20 +1,20 @@
 #version 460
-#extension GL_EXT_nonuniform_qualifier : require
 
 struct Particle {
     uint id_low;
     uint id_high;
-    vec3 position;
-    vec3 velocity;
     uint age_low;
     uint age_high;
+    vec3 position;
     float mass;
+    vec3 velocity;
     uint active_flag;
 };
 
+// Bind this EXACTLY ONCE globally. No nonuniformEXT array needed!
 layout(std430, set = 0, binding = 0) readonly buffer ParticleDataBuffer {
     Particle particles[];
-} particleData[];
+};
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProj;
@@ -24,8 +24,7 @@ layout(push_constant) uniform PushConstants {
     float pad1;
     vec4 color;
     float radius;
-    uint bufferIndex;
-    vec2 pad2;
+    vec3 pad2;
 } pc;
 
 layout(location = 0) out vec2 outUV;
@@ -38,10 +37,7 @@ const vec2 quadVertices[4] = vec2[4](
 );
 
 void main() {
-    uint bufferIdx = pc.bufferIndex;
-    uint particleIdx = gl_InstanceIndex;
-    
-    Particle p = particleData[nonuniformEXT(bufferIdx)].particles[particleIdx];
+    Particle p = particles[gl_InstanceIndex];
     
     // If not active, draw degenerated
     if (p.active_flag == 0) {

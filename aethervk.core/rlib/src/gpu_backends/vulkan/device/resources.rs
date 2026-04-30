@@ -1259,7 +1259,10 @@ impl DiscardableResource for BvhRenderResourceArchetype {
 }
 
 impl BvhRenderResourceArchetype {
-  pub unsafe fn new(device: &vulkan::device::LogicalDevice) -> GpuResult<Self> {
+  pub unsafe fn new(
+    device: &vulkan::device::LogicalDevice,
+    _allocator_raw: vk_mem::ffi::VmaAllocator,
+  ) -> GpuResult<Self> {
     let push_constant_ranges = [vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
       .offset(0)
@@ -1305,7 +1308,10 @@ impl MeasurementRenderResourceArchetype {
     }
   }
 
-  pub unsafe fn new(device: &vulkan::device::LogicalDevice) -> GpuResult<Self> {
+  pub unsafe fn new(
+    device: &vulkan::device::LogicalDevice,
+    _allocator_raw: vk_mem::ffi::VmaAllocator,
+  ) -> GpuResult<Self> {
     let push_contant_ranges = alloc::vec![vk::PushConstantRange {
       stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
       offset: 0,
@@ -1358,7 +1364,10 @@ impl MarkerRenderResourceArchetype {
     }
   }
 
-  pub unsafe fn new(device: &vulkan::device::LogicalDevice) -> GpuResult<Self> {
+  pub unsafe fn new(
+    device: &vulkan::device::LogicalDevice,
+    _allocator_raw: vk_mem::ffi::VmaAllocator,
+  ) -> GpuResult<Self> {
     let push_contant_ranges = alloc::vec![vk::PushConstantRange {
       stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
       offset: 0,
@@ -1394,7 +1403,10 @@ pub(super) struct MinimapRenderResourceArchetype {
 }
 
 impl MinimapRenderResourceArchetype {
-  pub unsafe fn new(device: &vulkan::device::LogicalDevice) -> GpuResult<Self> {
+  pub unsafe fn new(
+    device: &vulkan::device::LogicalDevice,
+    _allocator_raw: vk_mem::ffi::VmaAllocator,
+  ) -> GpuResult<Self> {
     let push_constant_ranges = [vk::PushConstantRange {
       stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
       offset: 0,
@@ -1452,7 +1464,10 @@ impl BillboardRenderResourceArchetype {
   }
 
   /// Don't bother cleaning up cause it fails. TODO: Cleanup
-  pub unsafe fn new(device: &vulkan::device::LogicalDevice) -> GpuResult<Self> {
+  pub unsafe fn new(
+    device: &vulkan::device::LogicalDevice,
+    _allocator_raw: vk_mem::ffi::VmaAllocator,
+  ) -> GpuResult<Self> {
     const MAX_IMAGE_COUNT: u32 = 256;
     let push_contant_ranges = alloc::vec![vk::PushConstantRange {
       stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
@@ -1645,7 +1660,10 @@ impl GizmoRenderResourceArchetype {
 
   pub const MAX_BUFFER_COUNT: u32 = 256;
 
-  pub unsafe fn new(device: &vulkan::device::LogicalDevice, allocator_raw: vk_mem::ffi::VmaAllocator) -> GpuResult<Self> {
+  pub unsafe fn new(
+    device: &vulkan::device::LogicalDevice,
+    allocator_raw: vk_mem::ffi::VmaAllocator,
+  ) -> GpuResult<Self> {
     let push_contant_ranges = alloc::vec![vk::PushConstantRange {
       stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
       offset: 0,
@@ -1701,10 +1719,8 @@ impl GizmoRenderResourceArchetype {
       .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
       .max_sets(1)
       .pool_sizes(&pool_sizes);
-    let descriptor_pool = unsafe { device.create_descriptor_pool(&create_info, None) }.with_name(
-      device,
-      "VkDescriptorPool_Gizmo",
-    )?;
+    let descriptor_pool = unsafe { device.create_descriptor_pool(&create_info, None) }
+      .with_name(device, "VkDescriptorPool_Gizmo")?;
 
     let layouts = [set_0_layout];
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
@@ -1714,10 +1730,7 @@ impl GizmoRenderResourceArchetype {
       .get(0)
       .copied()
       .unwrap();
-    device.set_debug_name(
-      descriptor_set,
-      "VkDescriptorSet_Gizmo",
-    );
+    device.set_debug_name(descriptor_set, "VkDescriptorSet_Gizmo");
 
     Ok(Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
@@ -1747,7 +1760,12 @@ impl GizmoRenderResourceArchetype {
 
     let mut buffers = self.host_buffers.write();
     for (_, buffer) in buffers.drain() {
-      discard_pool.discard_buffer(self.allocator_raw, buffer.buffer.get(), buffer.allocation, timeline);
+      discard_pool.discard_buffer(
+        self.allocator_raw,
+        buffer.buffer.get(),
+        buffer.allocation,
+        timeline,
+      );
     }
   }
 }
@@ -1755,18 +1773,32 @@ impl GizmoRenderResourceArchetype {
 pub(super) struct ParticleRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub set_0_layout: NonZeroHandle<vk::DescriptorSetLayout>,
-  pub push_contant_ranges: Vec<vk::PushConstantRange>,
+  pub push_contant_ranges: alloc::vec::Vec<vk::PushConstantRange>,
   pub graphics_info: Option<GraphicsInfo>,
   pub pipeline_key: Option<PipelineKey>,
   pub descriptor_pool: NonZeroHandle<vk::DescriptorPool>,
   pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
-  pub next_index: AtomicU32,
+
+  // Replaces `next_index`: Track allocated slices lock-free in the Mega Buffers
+  pub allocated_particles: AtomicU32,
+  pub allocated_systems: AtomicU32,
+
+  pub mega_particle_buffer: vk::Buffer,
+  pub mega_particle_alloc: vk_mem::Allocation,
+  pub mega_indirect_buffer: vk::Buffer,
+  pub mega_indirect_alloc: vk_mem::Allocation,
+
+  // Stored purely so DiscardPool can destroy them properly later
+  pub allocator_raw: vk_mem::ffi::VmaAllocator,
 }
 
 unsafe impl Sync for ParticleRenderResourceArchetype {}
 unsafe impl Send for ParticleRenderResourceArchetype {}
 
 impl ParticleRenderResourceArchetype {
+  pub const MAX_PARTICLES: u32 = 1_000_000;
+  pub const MAX_SYSTEMS: u32 = 1000;
+
   pub fn with_graphics_info(self, graphics_info: GraphicsInfo) -> Self {
     let pipeline_key = graphics_info.pipeline_key();
     Self {
@@ -1776,9 +1808,11 @@ impl ParticleRenderResourceArchetype {
     }
   }
 
-  pub const MAX_BUFFER_COUNT: u32 = 256;
-
-  pub unsafe fn new(device: &vulkan::device::LogicalDevice) -> GpuResult<Self> {
+  /// Pass the safe `&vk_mem::Allocator` here instead of the raw `vk_mem::ffi::VmaAllocator`
+  pub unsafe fn new(
+    device: &vulkan::device::LogicalDevice,
+    allocator: &vk_mem::Allocator,
+  ) -> GpuResult<Self> {
     let push_contant_ranges = alloc::vec![vk::PushConstantRange {
       stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
       offset: 0,
@@ -1788,31 +1822,20 @@ impl ParticleRenderResourceArchetype {
     let bindings = [vk::DescriptorSetLayoutBinding {
       binding: 0,
       descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
-      descriptor_count: Self::MAX_BUFFER_COUNT,
+      descriptor_count: 1, // Only 1 static descriptor now!
       stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
       p_immutable_samplers: ptr::null(),
       ..Default::default()
     }];
 
-    let binding_flags =
-      [vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND];
-
-    let binding_flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
-      binding_count: binding_flags.len() as u32,
-      p_binding_flags: binding_flags.as_ptr(),
-      ..Default::default()
-    };
-
-    let bindless_layout_info = vk::DescriptorSetLayoutCreateInfo {
-      flags: vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL,
+    let layout_info = vk::DescriptorSetLayoutCreateInfo {
       binding_count: bindings.len() as u32,
       p_bindings: bindings.as_ptr(),
-      p_next: ptr::from_ref(&binding_flags_info) as *const _,
       ..Default::default()
     };
 
-    let set_0_layout = unsafe { device.create_descriptor_set_layout(&bindless_layout_info, None) }
-      .with_name(device, "VkDescriptorSetLayout_BindlessParticleBuffers")?;
+    let set_0_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }
+      .with_name(device, "VkDescriptorSetLayout_MegaParticleBuffer")?;
 
     let set_layouts = [set_0_layout];
 
@@ -1829,9 +1852,8 @@ impl ParticleRenderResourceArchetype {
 
     let pool_sizes = [vk::DescriptorPoolSize::default()
       .ty(vk::DescriptorType::STORAGE_BUFFER)
-      .descriptor_count(Self::MAX_BUFFER_COUNT)];
+      .descriptor_count(1)];
     let create_info = vk::DescriptorPoolCreateInfo::default()
-      .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
       .max_sets(1)
       .pool_sizes(&pool_sizes);
     let descriptor_pool = unsafe { device.create_descriptor_pool(&create_info, None) }.with_name(
@@ -1839,10 +1861,9 @@ impl ParticleRenderResourceArchetype {
       "VkDescriptorPoolCreateInfo_Dedicated_ParticleRenderResourceArchetype",
     )?;
 
-    let layouts = [set_0_layout];
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
       .descriptor_pool(descriptor_pool)
-      .set_layouts(&layouts);
+      .set_layouts(&set_layouts);
     let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?
       .get(0)
       .copied()
@@ -1852,6 +1873,59 @@ impl ParticleRenderResourceArchetype {
       "VkDescriptorSet_Dedicated_ParticleRenderResourceArchetype",
     );
 
+    // --- SAFE VMA ALLOCATIONS ---
+    let alloc_create_info = vk_mem::AllocationCreateInfo {
+      usage: vk_mem::MemoryUsage::AutoPreferDevice,
+      ..Default::default()
+    };
+
+    // 1. Create Mega Particle Buffer
+    let particle_buffer_size = (Self::MAX_PARTICLES as usize
+      * core::mem::size_of::<crate::scene::particles::ParticleData>())
+      as vk::DeviceSize;
+    let particle_buffer_info = vk::BufferCreateInfo::default()
+      .size(particle_buffer_size)
+      // I kept STORAGE_BUFFER here in case you want Async Compute Shaders to update physics in-place later!
+      .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
+
+    let (mega_particle_buffer, mega_particle_alloc) =
+      unsafe { allocator.create_buffer(&particle_buffer_info, &alloc_create_info) }
+        .map_err(|_| GpuError::InvalidState("Failed to allocate mega particle buffer"))?;
+
+    // 2. Create Mega Indirect Buffer
+    let indirect_buffer_size = (Self::MAX_SYSTEMS as usize
+      * core::mem::size_of::<vk::DrawIndirectCommand>())
+      as vk::DeviceSize;
+    let indirect_buffer_info = vk::BufferCreateInfo::default()
+      .size(indirect_buffer_size)
+      // Added STORAGE_BUFFER here so Compute Shaders can dynamically write DrawIndirectCommands as well
+      .usage(
+        vk::BufferUsageFlags::INDIRECT_BUFFER
+          | vk::BufferUsageFlags::TRANSFER_DST
+          | vk::BufferUsageFlags::STORAGE_BUFFER,
+      );
+
+    let (mega_indirect_buffer, mega_indirect_alloc) =
+      unsafe { allocator.create_buffer(&indirect_buffer_info, &alloc_create_info) }
+        .map_err(|_| GpuError::InvalidState("Failed to allocate mega indirect buffer"))?;
+
+    // --- BIND MEGA BUFFER TO DESCRIPTOR SET ONCE FOREVER ---
+    let buffer_info = vk::DescriptorBufferInfo::default()
+      .buffer(mega_particle_buffer)
+      .offset(0)
+      .range(vk::WHOLE_SIZE);
+
+    let write = vk::WriteDescriptorSet::default()
+      .dst_set(descriptor_set)
+      .dst_binding(0)
+      .dst_array_element(0)
+      .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+      .buffer_info(core::slice::from_ref(&buffer_info));
+
+    unsafe {
+      device.update_descriptor_sets(core::slice::from_ref(&write), &[]);
+    }
+
     Ok(Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
       push_contant_ranges,
@@ -1860,8 +1934,51 @@ impl ParticleRenderResourceArchetype {
       set_0_layout: unsafe { NonZeroHandle::new_unchecked(set_0_layout) },
       descriptor_pool: unsafe { NonZeroHandle::new_unchecked(descriptor_pool) },
       descriptor_set: unsafe { NonZeroHandle::new_unchecked(descriptor_set) },
-      next_index: AtomicU32::new(0),
+
+      allocated_particles: AtomicU32::new(0),
+      allocated_systems: AtomicU32::new(0),
+
+      mega_particle_buffer,
+      mega_particle_alloc,
+      mega_indirect_buffer,
+      mega_indirect_alloc,
+      allocator_raw: allocator.get_raw(),
     })
+  }
+
+  /// Lock-free allocation of a permanent slice inside the Mega Buffers for a Particle System.
+  /// Returns: (system_indirect_index, particle_start_index)
+  pub fn allocate_system_space(&self, particle_count: u32) -> Result<(u32, u32), GpuError> {
+    let sys_idx = self
+      .allocated_systems
+      .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    if sys_idx >= Self::MAX_SYSTEMS {
+      return Err(GpuError::InvalidState(
+        "Mega Buffer Full: Max Systems Reached",
+      ));
+    }
+
+    let particle_offset = self
+      .allocated_particles
+      .fetch_add(particle_count, core::sync::atomic::Ordering::Relaxed);
+    if particle_offset + particle_count > Self::MAX_PARTICLES {
+      return Err(GpuError::InvalidState(
+        "Mega Buffer Full: Max Particles Reached",
+      ));
+    }
+
+    Ok((sys_idx, particle_offset))
+  }
+
+  /// Call this when completely changing levels/scenes to instantly reset the architecture
+  /// without re-allocating or freeing memory!
+  pub fn reset_allocations(&self) {
+    self
+      .allocated_particles
+      .store(0, core::sync::atomic::Ordering::Relaxed);
+    self
+      .allocated_systems
+      .store(0, core::sync::atomic::Ordering::Relaxed);
   }
 
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
@@ -1875,6 +1992,19 @@ impl ParticleRenderResourceArchetype {
 
     discard_pool.discard_pipeline_layout(layout, timeline);
     discard_pool.discard_descriptor_set_layout(self.set_0_layout.get(), timeline);
+
+    discard_pool.discard_buffer(
+      self.allocator_raw,
+      self.mega_particle_buffer,
+      self.mega_particle_alloc,
+      timeline,
+    );
+    discard_pool.discard_buffer(
+      self.allocator_raw,
+      self.mega_indirect_buffer,
+      self.mega_indirect_alloc,
+      timeline,
+    );
   }
 }
 
@@ -1898,7 +2028,10 @@ impl CursorRenderResourceArchetype {
     }
   }
 
-  pub unsafe fn new(device: &vulkan::device::LogicalDevice) -> GpuResult<Self> {
+  pub unsafe fn new(
+    device: &vulkan::device::LogicalDevice,
+    _allocator_raw: vk_mem::ffi::VmaAllocator,
+  ) -> GpuResult<Self> {
     let push_contant_ranges = alloc::vec![vk::PushConstantRange {
       stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
       offset: 0,
@@ -1976,7 +2109,10 @@ impl SunRenderResourceArchetype {
     }
   }
 
-  pub unsafe fn new(device: &vulkan::device::LogicalDevice) -> GpuResult<Self> {
+  pub unsafe fn new(
+    device: &vulkan::device::LogicalDevice,
+    _allocator_raw: vk_mem::ffi::VmaAllocator,
+  ) -> GpuResult<Self> {
     let push_contant_ranges = alloc::vec![vk::PushConstantRange {
       stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
       offset: 0,

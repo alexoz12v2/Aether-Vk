@@ -506,6 +506,20 @@ where
       high: self.high.fmod_round_up(modulus.high, false),
     }
   }
+
+  fn asin(self) -> Self {
+    Self {
+      low: self.low.asin_round_down(false),
+      high: self.high.asin_round_up(false),
+    }
+  }
+
+  fn atan2(first: Self, second: Self) -> Self {
+    Self {
+      low: <T as FloatOps>::atan2_round_down(first.low, second.low, false),
+      high: <T as FloatOps>::atan2_round_up(second.high, first.high, false),
+    }
+  }
 }
 
 pub type Interval32 = FloatInterval<f32>;

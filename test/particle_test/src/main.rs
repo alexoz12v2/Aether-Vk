@@ -375,7 +375,7 @@ impl test_utils::app::App for ParticleApp {
 }
 
 fn render_function(device: &dyn RenderDevice, payload: &mut RenderPayloadData) -> GpuResult<()> {
-  let render_scene = scene_to_render_scene(
+  let mut render_scene = scene_to_render_scene(
     &payload.scene,
     device,
     payload.presentation_engine,
@@ -397,6 +397,8 @@ fn render_function(device: &dyn RenderDevice, payload: &mut RenderPayloadData) -
 
   let cmd_buffer = device.get_command_buffer()?;
   let cmd_guard = ScopedCommandBuffer::new(device, cmd_buffer, None)?;
+
+  device.upload_particle_systems(cmd_buffer, &mut render_scene.particle_calls)?;
 
   if let Some(sun_call) = &render_scene.sun_call {
     // TODO gather resolution from extraction

@@ -15,7 +15,9 @@ public partial class Viewport3DViewModel
 {
   private readonly NativeRuntimeService _runtimeService;
   private CancellationTokenSource? _cts;
-  private Task? _lastRenderTask;
+  private Task<ulong>? _lastRenderTask;
+  public ulong PresentationEngineId { get; private set; }
+  private ulong _lastRenderTaskId;
 
   public uint Width { get; } = 800;
   public uint Height { get; } = 600;
@@ -56,6 +58,9 @@ public partial class Viewport3DViewModel
   [ObservableProperty]
   private float _manualMeasurementZ;
 
+  [ObservableProperty]
+  private ulong _sceneId;
+
   private static int _measurementCounter = 1;
 
   public event Action? OnFrameReady;
@@ -71,6 +76,7 @@ public partial class Viewport3DViewModel
         IsInitialized = _runtimeService.IsInitialized;
         if (IsInitialized)
         {
+          SceneId = _runtimeService.CreateScene(true);
           StartGameLoop();
         }
       }
@@ -80,6 +86,7 @@ public partial class Viewport3DViewModel
 
     if (IsInitialized)
     {
+      SceneId = _runtimeService.CreateScene(true);
       StartGameLoop();
     }
   }
@@ -92,12 +99,9 @@ public partial class Viewport3DViewModel
   public async void PerformRaycast(double x, double y, double w, double h)
   {
     float ndcX = (float)((x / w) * 2.0 - 1.0);
-    // Y axis points down in UI, but Vulkan expects NDC Y up or down depending on viewport
-    // Our Viewport in Vulkan has negative height, meaning Y=0 is top, Y=height is bottom in screen space
-    // So NDC Y is -1 at top, +1 at bottom (same as screen space mapping)
     float ndcY = (float)((y / h) * 2.0 - 1.0);
 
-    var res = await _runtimeService.RaycastNdcAsync(ndcX, ndcY);
+    var res = await _runtimeService.RaycastNdcAsync(SceneId, ndcX, ndcY);
 
     var breadcrumb =
       ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
@@ -118,7 +122,7 @@ public partial class Viewport3DViewModel
     if (res.hit)
     {
       var outlineVm = ServiceLocator.Provider?.GetService(typeof(OutlineViewModel)) as OutlineViewModel;
-      var entity = _runtimeService.GetEntityById(res.entityId);
+      var entity = _runtimeService.GetEntityById(SceneId, res.entityId);
 
       if (entity != null)
       {
@@ -186,6 +190,7 @@ public partial class Viewport3DViewModel
     {
       var name = $"Measurement_{_measurementCounter++}";
       _runtimeService.CreateMeasurement(
+        SceneId,
         name,
         new[] { FirstMeasurementPointX, FirstMeasurementPointY, FirstMeasurementPointZ },
         new[] { x, y, z }
@@ -208,7 +213,9 @@ public partial class Viewport3DViewModel
   private void SubmitCursorMeasurement()
   {
     float cx = 0, cy = 0, cz = 0;
-    var cursor = _runtimeService.RootEntities.FirstOrDefault(e => e.Name == "cursor" || e.Components.Any(c => c.Name == "Cursor"));
+    var state = ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager;
+    var rootEntities = state?.GetOrCreateScene(SceneId).RootEntities;
+    var cursor = rootEntities?.FirstOrDefault(e => e.Name == "cursor" || e.Components.Any(c => c.Name == "Cursor"));
     if (cursor != null)
     {
       var transform = cursor.Components.OfType<AetherVk.Logic.Models.TransformComponent>().FirstOrDefault();
@@ -243,8 +250,12 @@ public partial class Viewport3DViewModel
     if (!_runtimeService.IsInitialized)
     {
       IsLoading = true;
-      await Task.Run(() => _runtimeService.InitializeSimulationContext("Vulkan", Width, Height));
+      await Task.Run(() => _runtimeService.InitializeSimulationContext("Vulkan", null, false));
       IsLoading = false;
+    }
+    if (PresentationEngineId == 0)
+    {
+      PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height);
     }
     IsInitialized = true;
     StartGameLoop();
@@ -292,12 +303,12 @@ public partial class Viewport3DViewModel
             // Wait for previous render to finish before starting a new one
             if (_lastRenderTask != null)
             {
-                await _lastRenderTask;
+                _lastRenderTaskId = await _lastRenderTask;
                 OnFrameReady?.Invoke();
             }
 
             // Async Render - fire and forget, save task
-            _lastRenderTask = _runtimeService.RenderTickAsync(activeCam);
+            _lastRenderTask = _runtimeService.RenderTickAsync(PresentationEngineId, SceneId, activeCam, Width, Height);
           }
 
           // Yield to prevent pegging the CPU, aiming for ~60 FPS render signal
@@ -310,7 +321,7 @@ public partial class Viewport3DViewModel
 
   public async Task CopyFrameToBuffer(IntPtr bufferPtr, nuint bufferSize)
   {
-    await _runtimeService.DownloadImageAsync(bufferPtr, bufferSize);
+    await _runtimeService.DownloadImageAsync(_lastRenderTaskId, bufferPtr, bufferSize);
   }
 
   public void Stop()
