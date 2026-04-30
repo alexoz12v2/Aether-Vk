@@ -1,6 +1,6 @@
 use core::{ops, f32, f64};
 
-use crate::math::MulAddIdentity;
+use crate::math::{FloatLike, MulAddIdentity};
 
 pub trait BitsStorage: Sized + Copy {
   type Bits: Sized
@@ -312,6 +312,38 @@ pub trait FloatOps: Sized + super::FloatLike {
     <Self as BitsStorage>::Bits: MulAddIdentity,
   {
     self.fmod(modulus).next_float_up(allow_subnormal)
+  }
+
+  fn asin_round_up(self, allow_subnormal: bool) -> Self
+  where
+    Self: FloatBits,
+    <Self as BitsStorage>::Bits: MulAddIdentity,
+  {
+    self.asin().next_float_up(allow_subnormal)
+  }
+
+  fn asin_round_down(self, allow_subnormal: bool) -> Self
+  where
+    Self: FloatBits,
+    <Self as BitsStorage>::Bits: MulAddIdentity,
+  {
+    self.asin().next_float_down(allow_subnormal)
+  }
+
+  fn atan2_round_up(first: Self, second: Self, allow_subnormal: bool) -> Self
+  where
+    Self: FloatBits,
+    <Self as BitsStorage>::Bits: MulAddIdentity,
+  {
+    <Self as FloatLike>::atan2(first, second).next_float_up(allow_subnormal)
+  }
+
+  fn atan2_round_down(first: Self, second: Self, allow_subnormal: bool) -> Self
+  where
+    Self: FloatBits,
+    <Self as BitsStorage>::Bits: MulAddIdentity,
+  {
+    <Self as FloatLike>::atan2(first, second).next_float_down(allow_subnormal)
   }
 
   // --------------------- Helpers ---------------------------------------

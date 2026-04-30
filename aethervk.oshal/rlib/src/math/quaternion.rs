@@ -113,28 +113,28 @@ pub trait Quaternion:
 
     if trace > _0 {
       let s = (trace + _1).sqrt() * _2;
-      let inv_s = _1 / s;
+      let inv_s: Self::Scalar = _1 / s;
       Self::from_vector_and_scalar(
         Self::Vector::from_components((m21 - m12) * inv_s, (m02 - m20) * inv_s, (m10 - m01) * inv_s),
         _0_25 * s,
       )
     } else if m00 > m11 && m00 > m22 {
       let s = (_1 + m00 - m11 - m22).sqrt() * _2;
-      let inv_s = _1 / s;
+      let inv_s: Self::Scalar = _1 / s;
       Self::from_vector_and_scalar(
         Self::Vector::from_components(_0_25 * s, (m01 + m10) * inv_s, (m02 + m20) * inv_s),
         (m21 - m12) * inv_s,
       )
     } else if m11 > m22 {
       let s = (_1 + m11 - m00 - m22).sqrt() * _2;
-      let inv_s = _1 / s;
+      let inv_s: Self::Scalar = _1 / s;
       Self::from_vector_and_scalar(
         Self::Vector::from_components((m01 + m10) * inv_s, _0_25 * s, (m12 + m21) * inv_s),
         (m02 - m20) * inv_s,
       )
     } else {
       let s = (_1 + m22 - m00 - m11).sqrt() * _2;
-      let inv_s = _1 / s;
+      let inv_s: Self::Scalar = _1 / s;
       Self::from_vector_and_scalar(
         Self::Vector::from_components((m02 + m20) * inv_s, (m12 + m21) * inv_s, _0_25 * s),
         (m10 - m01) * inv_s,

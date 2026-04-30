@@ -12,9 +12,12 @@ public partial class MeshViewerViewModel : TabItemViewModel
 {
     private readonly NativeRuntimeService _runtimeService;
     private CancellationTokenSource? _cts;
-    private Task? _lastRenderTask;
+    private Task<ulong>? _lastRenderTask;
+    public ulong PresentationEngineId { get; private set; }
+    private ulong _lastRenderTaskId;
     private readonly bool _isLightTheme;
     public ulong CameraId { get; private set; } = 1;
+    public ulong SceneId { get; private set; }
 
     public uint Width { get; } = 800;
     public uint Height { get; } = 600;
@@ -27,7 +30,7 @@ public partial class MeshViewerViewModel : TabItemViewModel
     public MeshViewerViewModel(string modelPath, string modelName, bool isLightTheme)
         : base(modelName)
     {
-        _runtimeService = new NativeRuntimeService();
+        _runtimeService = (ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService)!;
         _isLightTheme = isLightTheme;
         _ = InitializeSceneAsync(modelPath, modelName);
     }
@@ -42,17 +45,25 @@ public partial class MeshViewerViewModel : TabItemViewModel
             {
                 if (!_runtimeService.IsInitialized)
                 {
-                    _runtimeService.InitializeSimulationContext("Vulkan", Width, Height, null, false);
+                    _runtimeService.InitializeSimulationContext("Vulkan", null, false);
                 }
 
+                if (PresentationEngineId == 0)
+                {
+                    PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height);
+                }
+
+                SceneId = _runtimeService.CreateScene(false);
                 ulong modelId = await _runtimeService.ImportModelAsync(modelPath);
                 if (modelId > 0)
                 {
-                    await _runtimeService.SpawnModelInstanceAsync(modelId, modelName);
+                    await _runtimeService.SpawnModelInstanceAsync(SceneId, modelId, modelName);
                 }
                 
-                var root = System.Linq.Enumerable.FirstOrDefault(_runtimeService.RootEntities);
-                var camera = _runtimeService.CreateCamera(root);
+                var root = _runtimeService.GetEntityByName(SceneId, "root");
+                if (root == null) return;
+
+                var camera = _runtimeService.CreateCamera(SceneId, root);
                 
                 // Configure camera specifically for Mesh Viewer (like in the native test)
                 var camTransform = System.Linq.Enumerable.FirstOrDefault(System.Linq.Enumerable.OfType<AetherVk.Logic.Models.TransformComponent>(camera.Components));
@@ -68,8 +79,9 @@ public partial class MeshViewerViewModel : TabItemViewModel
                 }
                 
                 CameraId = camera.Id;
-                var sun = _runtimeService.SpawnEntity("sun", root);
-                sun.Components.Add(new AetherVk.Logic.Models.SunComponent());
+                
+                var sun = _runtimeService.CreateSun(SceneId, root);
+                var grid = _runtimeService.CreateGrid(SceneId, root);
             }
             catch (System.DllNotFoundException)
             {
@@ -107,15 +119,15 @@ public partial class MeshViewerViewModel : TabItemViewModel
                 {
                     lastTime = current;
 
-                    _runtimeService.SimulationTick();
+                    _runtimeService.SimulationTick(SceneId);
 
                     if (_lastRenderTask != null)
                     {
-                        await _lastRenderTask;
+                        _lastRenderTaskId = await _lastRenderTask;
                         OnFrameReady?.Invoke();
                     }
 
-                    _lastRenderTask = _runtimeService.RenderTickAsync(CameraId);
+                    _lastRenderTask = _runtimeService.RenderTickAsync(PresentationEngineId, SceneId, CameraId, Width, Height);
                 }
                 else
                 {
@@ -127,12 +139,11 @@ public partial class MeshViewerViewModel : TabItemViewModel
 
     public async Task CopyFrameToBuffer(IntPtr bufferPtr, nuint bufferSize)
     {
-        await _runtimeService.DownloadImageAsync(bufferPtr, bufferSize);
+        await _runtimeService.DownloadImageAsync(_lastRenderTaskId, bufferPtr, bufferSize);
     }
 
     public void Stop()
     {
         _cts?.Cancel();
-        Task.Run(() => _runtimeService.ShutdownSimulation());
     }
 }

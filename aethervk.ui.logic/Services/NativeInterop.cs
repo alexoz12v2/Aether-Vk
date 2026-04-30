@@ -8,7 +8,7 @@ public static class NativeInterop
   private const string DllName = "aethervk_core_cdylib";
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
-  public static extern IntPtr avkSimulationContext_startup(string backend, uint width, uint height);
+  public static extern IntPtr avkSimulationContext_startup(string backend);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern IntPtr avkGetAvailableRenderBackends(out uint count);

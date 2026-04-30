@@ -110,11 +110,11 @@ public partial class MeshViewerWindow : Window
 
     if (_isRightDragging)
     {
-      _viewModel?.RuntimeService.RotateCamera(_viewModel.CameraId, deltaX, deltaY);
+      _viewModel?.RuntimeService.RotateCamera(_viewModel.SceneId, _viewModel.CameraId, deltaX, deltaY);
     }
     else if (_isMiddleDragging || _isLeftDragging)
     {
-      _viewModel?.RuntimeService.PanCursor(deltaX, deltaY);
+      _viewModel?.RuntimeService.PanCursor(_viewModel.SceneId, deltaX, deltaY);
     }
 
     _lastPointerPos = currentPos;
@@ -123,6 +123,6 @@ public partial class MeshViewerWindow : Window
   private void OnPointerWheelChanged(object? sender, PointerWheelEventArgs e)
   {
     var scroll_amount = (float)e.Delta.Y;
-    _viewModel?.RuntimeService.ZoomCamera(_viewModel.CameraId, scroll_amount);
+    _viewModel?.RuntimeService.ZoomCamera(_viewModel.SceneId, _viewModel.CameraId, scroll_amount);
   }
 }

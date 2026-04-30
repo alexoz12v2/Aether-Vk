@@ -131,6 +131,7 @@ public enum BvhNodeType
 
 public partial class BvhNode : ObservableObject
 {
+  public ulong SceneId { get; set; }
   public ulong EntityId { get; set; }
   public uint Index { get; set; }
 
@@ -150,7 +151,7 @@ public partial class BvhNode : ObservableObject
     if (EntityId != 0)
     {
       var runtimeService = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-      runtimeService?.SetBvhNodeVisibility(EntityId, Index, value);
+      runtimeService?.SetBvhNodeVisibility(SceneId, EntityId, Index, value);
     }
   }
 }

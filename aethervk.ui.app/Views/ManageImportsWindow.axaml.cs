@@ -24,7 +24,7 @@ public partial class ManageImportsWindow : Window
             {
                 var runtime = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
                 if (runtime != null) {
-                    await runtime.SpawnModelInstanceAsync(m.Model.Id, vm.EntityName, vm.PosX, vm.PosY, vm.PosZ);
+                    await runtime.SpawnModelInstanceAsync(1, m.Model.Id, vm.EntityName, vm.PosX, vm.PosY, vm.PosZ);
                 }
             }
         });

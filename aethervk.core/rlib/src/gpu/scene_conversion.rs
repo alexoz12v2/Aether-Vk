@@ -140,7 +140,13 @@ impl RenderSceneExtraction {
         .pipeline;
       for (p1, p2, points, significant_digits) in self.extracted_measurements {
         render_scene.measurement_calls.push(
-          gpu::frame::MeasurementDrawCall::from_data_and_pipeline(p1, p2, points, significant_digits, pipeline),
+          gpu::frame::MeasurementDrawCall::from_data_and_pipeline(
+            p1,
+            p2,
+            points,
+            significant_digits,
+            pipeline,
+          ),
         );
       }
     }
@@ -219,6 +225,24 @@ impl RenderSceneExtraction {
       render_scene.grid_call = Some(gpu::frame::GridDrawCall::new(
         pipeline, density, grid_size, grid_color,
       ));
+    }
+
+    // Particles
+    let particle_pipeline = device.get_particle_pipeline_key()?;
+    for (entity_id, particles, config) in self.extracted_particles {
+      if particles.is_empty() { // TODO: ECS should filter these
+        continue;
+      }
+      render_scene
+        .particle_calls
+        .push(gpu::frame::ParticleDrawCall {
+          pipeline: particle_pipeline,
+          particle_count: particles.len() as u32,
+          system_particle_offset: 0,
+          system_indirect_offset: 0,
+          config,
+          particles,
+        });
     }
 
     // ... More components here

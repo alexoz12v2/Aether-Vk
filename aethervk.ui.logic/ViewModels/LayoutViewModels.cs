@@ -150,13 +150,13 @@ public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase,
         break;
       case "Outline":
         var outlineVm =
-          ServiceLocator.Provider?.GetService(typeof(OutlineViewModel)) as OutlineViewModel;
+          new OutlineViewModel(1, ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService, ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager);
         if (outlineVm != null)
           newTab = outlineVm;
         break;
       case "Properties":
         var propertiesVm =
-          ServiceLocator.Provider?.GetService(typeof(PropertiesViewModel)) as PropertiesViewModel;
+          new PropertiesViewModel(1, ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager);
         if (propertiesVm != null)
           newTab = propertiesVm;
         break;
@@ -229,7 +229,7 @@ public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase,
   [RelayCommand]
   private void AddNewOutlineTab()
   {
-    var newTab = ServiceLocator.Provider?.GetService(typeof(OutlineViewModel)) as OutlineViewModel;
+    var newTab = new OutlineViewModel(1, ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService, ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager);
     if (newTab != null && !Tabs.Contains(newTab))
     {
       Tabs.Add(newTab);
@@ -242,7 +242,7 @@ public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase,
   private void AddNewPropertiesTab()
   {
     var newTab =
-      ServiceLocator.Provider?.GetService(typeof(PropertiesViewModel)) as PropertiesViewModel;
+      new PropertiesViewModel(1, ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager);
     if (newTab != null && !Tabs.Contains(newTab))
     {
       Tabs.Add(newTab);
@@ -342,10 +342,8 @@ public partial class DockingManagerViewModel
     bottomGroup.Parent = split;
 
     var outlineTab =
-      new OutlineViewModel(
-        (ServiceLocator.Provider.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService)
-        !);
-    var propertiesTab = new PropertiesViewModel();
+      new OutlineViewModel(1, ServiceLocator.Provider.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService, ServiceLocator.Provider.GetService(typeof(SceneStateManager)) as SceneStateManager);
+    var propertiesTab = new PropertiesViewModel(1, ServiceLocator.Provider.GetService(typeof(SceneStateManager)) as SceneStateManager);
     var rightGroup = new TabGroupNodeViewModel(outlineTab);
     // TODO When I try to move this tab below, the left tab gets nuked. Fix that
     rightGroup.Tabs.Add(propertiesTab);

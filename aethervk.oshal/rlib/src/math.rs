@@ -188,6 +188,8 @@ pub trait FloatLike: Scalar + Copy {
   fn reciprocal(self) -> Self;
   fn floor(self) -> Self;
   fn fmod(self, modulus: Self) -> Self;
+  fn asin(self) -> Self;
+  fn atan2(first: Self, second: Self) -> Self;
 }
 macro_rules! impl_float_like {
   // Match a type, followed by zero or more items (Functions, ecc)
@@ -283,8 +285,15 @@ impl_float_like!(f32, {
   fn sin(self) -> Self {
     libm::sinf(self)
   }
+  fn asin(self) -> Self {
+    libm::asinf(self)
+  }
   fn fmod(self, modulus: Self) -> Self {
     libm::fmodf(self, modulus)
+  }
+
+  fn atan2(first: Self, second: Self) -> Self {
+    libm::atan2f(first, second)
   }
 
   fn reciprocal(self) -> Self {
@@ -406,6 +415,13 @@ impl_float_like!(f64, {
   }
   fn fmod(self, modulus: Self) -> Self {
     libm::fmod(self, modulus)
+  }
+  fn asin(self) -> Self {
+    libm::asin(self)
+  }
+
+  fn atan2(first: Self, second: Self) -> Self {
+    libm::atan2(first, second)
   }
 
   fn reciprocal(self) -> Self {

@@ -193,6 +193,81 @@ macro_rules! impl_update_archetype {
 }
 
 macro_rules! impl_create_archetype {
+  // 1. Match WITH the `ref_alloc` keyword (Passes `allocator` directly)
+  (
+    $fn_name:ident,
+    $archetype_field:ident,
+    $resource_struct:ident,
+    ref_alloc
+    $(, |$gi:ident| $extra:block)?
+  ) => {
+    pub fn $fn_name(
+      &self,
+      device: &LogicalDevice,
+      shader_manager: &shader_manager::ShaderManager,
+      vertex_shader_key: ShaderKey,
+      fragment_shader_key: ShaderKey,
+      depth_stencil_format: vk::Format,
+      presentation_engine_state: &swapchain::PresentationState,
+      allocator: &vk_mem::Allocator,
+      discard_pool: &resources::DiscardPool,
+      renderpasses: &renderpasses::RenderPasses,
+      pipeline_pool: &mut pipelines::PipelinePool,
+      timeline: u64,
+    ) -> GpuResult<()> {
+      let mut archetype_lock = self.$archetype_field.write();
+      if archetype_lock.is_some() {
+        return Err(GpuError::InvalidState("device.rs"));
+      }
+
+      let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
+
+      // -> USING allocator DIRECTLY <-
+      let res = unsafe { resources::$resource_struct::new(device, allocator) }?;
+      *archetype_lock = Some(res);
+
+      let layout = archetype_lock.as_ref().unwrap().pipeline_layout.get();
+      let render_pass = renderpasses
+        .get_or_create_render_pass(
+          RenderPassSpecification::single_pass(presentation_engine_state, depth_stencil_format),
+          0,
+          device,
+          allocator,
+          discard_pool,
+          timeline,
+        )?.0.get();
+
+      let graphics_info = GraphicsInfo::default()
+        .with_pre_rasterization(
+          PreRasterization::default().with_vertex_module(vertex_shader.module.get())
+        )
+        .with_fragment_shader(
+          FragmentShader::default().with_fragment_module(fragment_shader.module.get())
+        )
+        .with_rasterization_polygon_mode(vk::PolygonMode::FILL);
+
+      $(
+        let graphics_info = {
+          let $gi = graphics_info;
+          $extra // MAKE SURE THIS DOES NOT END WITH A SEMICOLON
+        };
+      )?
+
+      let pipeline_graphics_info = graphics_info.apply_presentation_defaults(
+        presentation_engine_state, depth_stencil_format, layout, render_pass
+      );
+
+      pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
+
+      let arch_mut = archetype_lock.as_mut().unwrap();
+      arch_mut.pipeline_key = Some(pipeline_graphics_info.pipeline_key());
+      arch_mut.graphics_info = Some(pipeline_graphics_info);
+
+      Ok(())
+    }
+  };
+
+  // 2. Match WITHOUT the keyword (Defaults to `allocator.get_raw()`)
   (
     $fn_name:ident,
     $archetype_field:ident,
@@ -220,7 +295,8 @@ macro_rules! impl_create_archetype {
 
       let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
 
-      let res = unsafe { resources::$resource_struct::new(device) }?;
+      // -> USING allocator.get_raw() <-
+      let res = unsafe { resources::$resource_struct::new(device, allocator.get_raw()) }?;
       *archetype_lock = Some(res);
 
       let layout = archetype_lock.as_ref().unwrap().pipeline_layout.get();
@@ -234,19 +310,20 @@ macro_rules! impl_create_archetype {
           timeline,
         )?.0.get();
 
-      let mut graphics_info = GraphicsInfo::default()
+      let graphics_info = GraphicsInfo::default()
         .with_pre_rasterization(
-          PreRasterization::default().with_vertex_module(vertex_shader.module.get()).clone()
+          PreRasterization::default().with_vertex_module(vertex_shader.module.get())
         )
         .with_fragment_shader(
-          FragmentShader::default().with_fragment_module(fragment_shader.module.get()).clone()
+          FragmentShader::default().with_fragment_module(fragment_shader.module.get())
         )
-        .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
-        .clone();
+        .with_rasterization_polygon_mode(vk::PolygonMode::FILL);
 
       $(
-        let $gi = &mut graphics_info;
-        $extra
+        let graphics_info = {
+          let $gi = graphics_info;
+          $extra // MAKE SURE THIS DOES NOT END WITH A SEMICOLON
+        };
       )?
 
       let pipeline_graphics_info = graphics_info.apply_presentation_defaults(
@@ -263,7 +340,6 @@ macro_rules! impl_create_archetype {
     }
   };
 }
-
 impl Archetypes {
   impl_update_archetype!(
     update_physical_mesh_archetype_for_presentation_engine,
@@ -272,9 +348,7 @@ impl Archetypes {
       let outline_graphics_info = graphics_info
         .clone()
         .with_pipeline_flags(
-          PipelineFlags::CULL_BACK
-            | PipelineFlags::STENCIL_ENABLE
-            | PipelineFlags::NO_DEPTH_TEST,
+          PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::NO_DEPTH_TEST,
         )
         .with_stencil_compare_op(StencilCompareOp::NotEqual)
         .with_stencil_logic_op(StencilLogicOp::None)
@@ -312,14 +386,12 @@ impl Archetypes {
     sun_render_archetype,
     SunRenderResourceArchetype,
     |gi| {
-      gi.with_vertex_in(
-        VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-          .clone(),
-      )
-      .with_pipeline_flags(
-        PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::NO_DEPTH_WRITE,
-      );
+      gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
+        .with_pipeline_flags(
+          PipelineFlags::CULL_ALL
+            | PipelineFlags::INVERT_FRONT_FACE
+            | PipelineFlags::NO_DEPTH_WRITE,
+        )
     }
   );
 
@@ -327,18 +399,15 @@ impl Archetypes {
     create_particle_archetype,
     particle_render_archetype,
     ParticleRenderResourceArchetype,
+    ref_alloc,
     |gi| {
-      gi.with_vertex_in(
-        VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-          .clone(),
-      )
-      .with_pipeline_flags(PipelineFlags::CULL_ALL)
-      .with_stencil_compare_op(StencilCompareOp::None)
-      .with_stencil_logic_op(StencilLogicOp::Replace)
-      .with_stencil_reference(255)
-      .with_stencil_compare_mask(0)
-      .with_stencil_write_mask(u32::MAX);
+      gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
+        .with_pipeline_flags(PipelineFlags::CULL_ALL)
+        .with_stencil_compare_op(StencilCompareOp::None)
+        .with_stencil_logic_op(StencilLogicOp::Replace)
+        .with_stencil_reference(255)
+        .with_stencil_compare_mask(0)
+        .with_stencil_write_mask(u32::MAX)
     }
   );
 
@@ -347,19 +416,15 @@ impl Archetypes {
     cursor_render_archetype,
     CursorRenderResourceArchetype,
     |gi| {
-      gi.with_vertex_in(
-        VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-          .clone(),
-      )
-      .with_pipeline_flags(
-        PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE,
-      )
-      .with_stencil_compare_op(StencilCompareOp::None)
-      .with_stencil_logic_op(StencilLogicOp::Replace)
-      .with_stencil_reference(255)
-      .with_stencil_compare_mask(0)
-      .with_stencil_write_mask(u32::MAX);
+      gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
+        .with_pipeline_flags(
+          PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE,
+        )
+        .with_stencil_compare_op(StencilCompareOp::None)
+        .with_stencil_logic_op(StencilLogicOp::Replace)
+        .with_stencil_reference(255)
+        .with_stencil_compare_mask(0)
+        .with_stencil_write_mask(u32::MAX)
     }
   );
 
@@ -368,22 +433,18 @@ impl Archetypes {
     measurement_render_archetype,
     MeasurementRenderResourceArchetype,
     |gi| {
-      gi.with_vertex_in(
-        VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::LINE_LIST)
-          .clone(),
-      )
-      .with_pipeline_flags(
-        PipelineFlags::CULL_ALL
-          | PipelineFlags::INVERT_FRONT_FACE
-          | PipelineFlags::NO_DEPTH_TEST
-          | PipelineFlags::NO_DEPTH_WRITE,
-      )
-      .with_stencil_compare_op(StencilCompareOp::None)
-      .with_stencil_logic_op(StencilLogicOp::Replace)
-      .with_stencil_reference(255)
-      .with_stencil_compare_mask(0)
-      .with_stencil_write_mask(u32::MAX);
+      gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::LINE_LIST))
+        .with_pipeline_flags(
+          PipelineFlags::CULL_ALL
+            | PipelineFlags::INVERT_FRONT_FACE
+            | PipelineFlags::NO_DEPTH_TEST
+            | PipelineFlags::NO_DEPTH_WRITE,
+        )
+        .with_stencil_compare_op(StencilCompareOp::None)
+        .with_stencil_logic_op(StencilLogicOp::Replace)
+        .with_stencil_reference(255)
+        .with_stencil_compare_mask(0)
+        .with_stencil_write_mask(u32::MAX)
     }
   );
 
@@ -392,17 +453,13 @@ impl Archetypes {
     marker_render_archetype,
     MarkerRenderResourceArchetype,
     |gi| {
-      gi.with_vertex_in(
-        VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-          .clone(),
-      )
-      .with_pipeline_flags(PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE)
-      .with_stencil_compare_op(StencilCompareOp::None)
-      .with_stencil_logic_op(StencilLogicOp::Replace)
-      .with_stencil_reference(255)
-      .with_stencil_compare_mask(0)
-      .with_stencil_write_mask(u32::MAX);
+      gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
+        .with_pipeline_flags(PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE)
+        .with_stencil_compare_op(StencilCompareOp::None)
+        .with_stencil_logic_op(StencilLogicOp::Replace)
+        .with_stencil_reference(255)
+        .with_stencil_compare_mask(0)
+        .with_stencil_write_mask(u32::MAX)
     }
   );
 
@@ -411,19 +468,15 @@ impl Archetypes {
     billboard_render_archetype,
     BillboardRenderResourceArchetype,
     |gi| {
-      gi.with_vertex_in(
-        VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-          .clone(),
-      )
-      .with_pipeline_flags(
-        PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE,
-      )
-      .with_stencil_compare_op(StencilCompareOp::None)
-      .with_stencil_logic_op(StencilLogicOp::Replace)
-      .with_stencil_reference(255)
-      .with_stencil_compare_mask(0)
-      .with_stencil_write_mask(u32::MAX);
+      gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
+        .with_pipeline_flags(
+          PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE,
+        )
+        .with_stencil_compare_op(StencilCompareOp::None)
+        .with_stencil_logic_op(StencilLogicOp::Replace)
+        .with_stencil_reference(255)
+        .with_stencil_compare_mask(0)
+        .with_stencil_write_mask(u32::MAX)
     }
   );
 
@@ -546,7 +599,9 @@ impl Archetypes {
           .clone(),
       )
       .with_pipeline_layout(res.pipeline_layout.get())
-      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::STENCIL_ENABLE)
+      .with_pipeline_flags(
+        PipelineFlags::CULL_BACK | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::STENCIL_ENABLE,
+      )
       .with_render_pass(
         renderpasses
           .get_or_create_render_pass(
@@ -599,9 +654,7 @@ impl Archetypes {
           .clone(),
       )
       .with_pipeline_flags(
-        PipelineFlags::CULL_BACK
-          | PipelineFlags::STENCIL_ENABLE
-          | PipelineFlags::NO_DEPTH_TEST,
+        PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::NO_DEPTH_TEST,
       )
       .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
       .with_stencil_compare_op(StencilCompareOp::NotEqual)
@@ -862,7 +915,7 @@ impl Archetypes {
       return Err(GpuError::InvalidState("device.rs"));
     }
     *minimap_render_archetype =
-      Some(unsafe { resources::MinimapRenderResourceArchetype::new(device)? });
+      Some(unsafe { resources::MinimapRenderResourceArchetype::new(device, allocator.get_raw())? });
     let arch_mut = minimap_render_archetype.as_mut().unwrap();
 
     let vertex_shader = shader_manager.get(vkey).unwrap();
@@ -870,14 +923,10 @@ impl Archetypes {
 
     let pipeline_graphics_info = pipelines::GraphicsInfo::default()
       .with_vertex_in(
-        pipelines::VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-          .clone(),
+        pipelines::VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP),
       )
       .with_pre_rasterization(
-        pipelines::PreRasterization::default()
-          .with_vertex_module(vertex_shader.module.get())
-          .clone(),
+        pipelines::PreRasterization::default().with_vertex_module(vertex_shader.module.get()),
       )
       .with_fragment_shader(
         pipelines::FragmentShader::default()
@@ -896,8 +945,7 @@ impl Archetypes {
               width: pe.extent().0,
               height: pe.extent().1,
             },
-          })
-          .clone(),
+          }),
       )
       .with_fragment_out(
         pipelines::FragmentOut::default()
@@ -1113,7 +1161,8 @@ impl Archetypes {
     if bvh_render_archetype.is_some() {
       return Err(GpuError::InvalidState("device.rs"));
     }
-    *bvh_render_archetype = Some(unsafe { resources::BvhRenderResourceArchetype::new(device) }?);
+    *bvh_render_archetype =
+      Some(unsafe { resources::BvhRenderResourceArchetype::new(device, allocator.get_raw()) }?);
     let archetype = bvh_render_archetype.as_mut().unwrap();
 
     let vertex_shader = shader_manager.get(vkey).unwrap();

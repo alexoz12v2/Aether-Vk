@@ -17,24 +17,49 @@ public class EntitySelectedMessage
   }
 }
 
-public partial class OutlineViewModel : TabItemViewModel
+public partial class OutlineViewModel : TabItemViewModel, IRecipient<EntitySelectedMessage>
 {
   private readonly NativeRuntimeService _runtimeService;
 
-  public ObservableCollection<Entity> RootEntities => _runtimeService.RootEntities;
+  public SceneStateManager StateManager { get; }
 
   [ObservableProperty]
-  private Entity? _selectedEntity;
+  private ulong _currentSceneId;
 
-  public OutlineViewModel(NativeRuntimeService runtimeService)
+  public ObservableCollection<Entity>? RootEntities => StateManager.GetOrCreateScene(CurrentSceneId).RootEntities;
+
+  private Entity? _selectedEntity;
+  public Entity? SelectedEntity
+  {
+    get => _selectedEntity;
+    set
+    {
+      if (SetProperty(ref _selectedEntity, value))
+      {
+        var state = StateManager.GetOrCreateScene(CurrentSceneId);
+        state.SelectedEntity = value;
+        WeakReferenceMessenger.Default.Send(new EntitySelectedMessage(value));
+      }
+    }
+  }
+
+  public OutlineViewModel(ulong sceneId, NativeRuntimeService runtimeService, SceneStateManager stateManager)
     : base("Outline")
   {
     _runtimeService = runtimeService;
+    StateManager = stateManager;
+    CurrentSceneId = sceneId;
+    
+    WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
   }
 
-  partial void OnSelectedEntityChanged(Entity? value)
+  public void Receive(EntitySelectedMessage message)
   {
-    WeakReferenceMessenger.Default.Send(new EntitySelectedMessage(value));
+      if (_selectedEntity != message.SelectedEntity)
+      {
+          _selectedEntity = message.SelectedEntity;
+          OnPropertyChanged(nameof(SelectedEntity));
+      }
   }
 
   [RelayCommand]
@@ -55,7 +80,7 @@ public partial class OutlineViewModel : TabItemViewModel
   {
     if (entity.IsMeasurement)
     {
-      _runtimeService.RemoveEntity(entity.Id);
+      _runtimeService.RemoveEntity(CurrentSceneId, entity.Id);
       
       var breadcrumb = ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
       breadcrumb?.ShowMessageAsync("Entity Deleted", $"Deleted measurement: {entity.Name}");

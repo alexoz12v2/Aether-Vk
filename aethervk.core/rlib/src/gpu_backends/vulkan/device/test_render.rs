@@ -18,7 +18,9 @@ use aethervk_oshal_rlib::math::{
   vector::{vec3::Vec3f32, vec4::Quat},
 };
 use heapless::index_map::FnvIndexMap;
+use aethervk_oshal_rlib::math::vector::Vector3;
 use crate::scene::PhysicalMeshComponent;
+
 // TODO: test about text rendering in different fonts (system font and packaged font)
 // TODO: move into integration tests folder
 
@@ -127,15 +129,12 @@ fn test_render_particles_windowless() {
       let mut p = crate::scene::particles::ParticleData {
         id_low: 0,
         id_high: 0,
-        _pad0: [0; 2],
-        position: [0.0, 0.0, 0.0],
-        _pad1: 0,
-        velocity: [0.0, 0.0, 0.0],
         age_low: 0,
         age_high: 0,
+        position: [0.0, 0.0, 0.0],
         mass: 1.0,
+        velocity: [0.0, 0.0, 0.0],
         active: 1,
-        _pad2: 0,
       };
       p.set_id(0);
       p.set_age(0);
@@ -1038,117 +1037,155 @@ fn test_render_particles_multithreaded() {
 
   let scene = Scene::new();
   scene.register_component::<TransformComponent>(&[]);
-  scene.register_component::<crate::scene::PhysicalMeshComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
+  scene.register_component::<crate::scene::PhysicalMeshComponent>(&[std::any::TypeId::of::<
+    TransformComponent,
+  >()]);
   scene.register_component::<CameraComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
-  scene.register_component::<crate::scene::particles::ParticleSystemComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
+  scene.register_component::<crate::scene::particles::ParticleSystemComponent>(&[
+    std::any::TypeId::of::<TransformComponent>(),
+  ]);
   scene.register_component::<SunComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
 
   let mesh_entity = scene.spawn_entity("mesh");
   let particle_sys_e = scene.spawn_entity("particles");
   let sun_e = scene.spawn_entity("sun");
-  
-  let asset_path = format!("{}/Comet.glb", crate::gpu::ASSET_DIR.read().as_ref().unwrap());
-  let loaded_mesh = crate::simulation::comet::load_comet_from_gltf(&asset_path, false).expect("Failed to load mesh");
+
+  let asset_path = format!(
+    "{}/Comet.glb",
+    crate::gpu::ASSET_DIR.read().as_ref().unwrap()
+  );
+  let loaded_mesh = crate::simulation::comet::load_comet_from_gltf(&asset_path, false)
+    .expect("Failed to load mesh");
   let mesh_arc = std::sync::Arc::from(loaded_mesh);
 
-  scene.add_component(
+  scene
+    .add_component(
       sun_e,
       TransformComponent {
-          position: Vec3f32::from_array([10.0, 10.0, 10.0]),
-          rotation: Quat::identity(),
-          scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+        position: Vec3f32::from_array([10.0, 10.0, 10.0]),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
       },
-  ).unwrap();
+    )
+    .unwrap();
 
-  scene.add_component(
+  scene
+    .add_component(
       sun_e,
       SunComponent {
-          resolution: (64, 64, 64),
+        resolution: (64, 64, 64),
       },
-  ).unwrap();
-  
-  scene.add_component(
+    )
+    .unwrap();
+
+  scene
+    .add_component(
       mesh_entity,
       TransformComponent {
-          position: Vec3f32::from_array([0.0, 0.0, 0.0]),
-          rotation: Quat::identity(),
-          scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+        position: Vec3f32::from_array([0.0, 0.0, 0.0]),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
       },
-  ).unwrap();
+    )
+    .unwrap();
 
-  scene.add_component(
+  scene
+    .add_component(
       mesh_entity,
       crate::scene::PhysicalMeshComponent {
-          asset_path: asset_path.clone(),
-          mesh: mesh_arc.clone(),
-          emissive_intensity: 1.0,
-          emissive_color: [0.5, 0.5, 0.5], // Emissive gray
+        asset_path: asset_path.clone(),
+        mesh: mesh_arc.clone(),
+        emissive_intensity: 1.0,
+        emissive_color: [0.5, 0.5, 0.5], // Emissive gray
       },
-  ).unwrap();
-  
+    )
+    .unwrap();
+
   let sys = crate::scene::particles::ParticleSystemComponent::new(
     crate::scene::particles::ParticleEmitterConfig {
       uv_distribution: crate::math::distribution::Distribution2D::new(&[1.0, 1.0, 1.0, 1.0], 2, 2),
       delta: 1000,
       max_particles: 100,
-      velocity_intensity: crate::scene::particles::GaussianParams { mean: 5.0, std_dev: 0.1, min: 0.0, max: 10.0 },
-      emission_count: crate::scene::particles::GaussianParams { mean: 50.0, std_dev: 0.0, min: 0.0, max: 100.0 },
+      velocity_intensity: crate::scene::particles::GaussianParams {
+        mean: 5.0,
+        std_dev: 0.1,
+        min: 0.0,
+        max: 10.0,
+      },
+      emission_count: crate::scene::particles::GaussianParams {
+        mean: 50.0,
+        std_dev: 0.0,
+        min: 0.0,
+        max: 100.0,
+      },
       particle_radius: 0.5,
       density: 1.0,
       lifetime: 10000000,
       color: [0.0, 1.0, 0.0, 1.0], // Green
       beta: 0.0,
-    }
+    },
   );
-  
-  scene.add_component(
-    particle_sys_e,
-    TransformComponent {
+
+  scene
+    .add_component(
+      particle_sys_e,
+      TransformComponent {
         position: Vec3f32::from_array([0.0, 0.0, 0.0]),
         rotation: Quat::identity(),
         scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
-    },
-  ).unwrap();
-  
+      },
+    )
+    .unwrap();
+
   scene.add_component(particle_sys_e, sys).unwrap();
 
   let scene_arc = std::sync::Arc::new(scene);
   let (tx, rx) = std::sync::mpsc::channel();
   let (done_tx, done_rx) = std::sync::mpsc::channel();
-  
+
   let scene_physics = scene_arc.clone();
   let mesh_arc_physics = mesh_arc.clone();
-  
+
   let physics_thread = std::thread::spawn(move || {
     let mut time = 0;
     let dt = 0.01; // 10ms
     let uv_grid = crate::simulation::comet::uv_grid::UvGrid::new(
-        &mesh_arc_physics.vertices,
-        &mesh_arc_physics.indices,
-        32,
+      &mesh_arc_physics.vertices,
+      &mesh_arc_physics.indices,
+      32,
     );
 
     while time <= 100 {
-        scene_physics.query1_mut::<crate::scene::particles::ParticleSystemComponent, _>(|_, sys| {
-            sys.accumulator += (dt * 1_000_000.0) as i64;
-            while sys.accumulator >= sys.config.delta {
-                sys.accumulator -= sys.config.delta;
-                let u_emission = [0.5, 0.5];
-                let mut u_particles = Vec::new();
-                for _ in 0..100 { u_particles.push([0.5, 0.5, 0.5, 0.5]); }
-                sys.emit_particles(&mesh_arc_physics, &uv_grid, Vec3f32::from_array([0.0, 0.0, 0.0]), Quat::identity(), Vec3f32::from_components(1.0, 1.0, 1.0), &u_emission, &u_particles);
-            }
-            
-            for p in sys.particles.iter_mut().filter(|p| p.active != 0) {
-               p.position[0] += p.velocity[0] * dt;
-               p.position[1] += p.velocity[1] * dt;
-               p.position[2] += p.velocity[2] * dt;
-            }
-        });
-        
-        tx.send(time).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        time += 10;
+      scene_physics.query1_mut::<crate::scene::particles::ParticleSystemComponent, _>(|_, sys| {
+        sys.accumulator += (dt * 1_000_000.0) as i64;
+        while sys.accumulator >= sys.config.delta {
+          sys.accumulator -= sys.config.delta;
+          let u_emission = [0.5, 0.5];
+          let mut u_particles = Vec::new();
+          for _ in 0..100 {
+            u_particles.push([0.5, 0.5, 0.5, 0.5]);
+          }
+          sys.emit_particles(
+            &mesh_arc_physics,
+            &uv_grid,
+            Vec3f32::from_array([0.0, 0.0, 0.0]),
+            Quat::identity(),
+            Vec3f32::from_components(1.0, 1.0, 1.0),
+            &u_emission,
+            &u_particles,
+          );
+        }
+
+        for p in sys.particles.iter_mut().filter(|p| p.active != 0) {
+          p.position[0] += p.velocity[0] * dt;
+          p.position[1] += p.velocity[1] * dt;
+          p.position[2] += p.velocity[2] * dt;
+        }
+      });
+
+      tx.send(time).unwrap();
+      std::thread::sleep(std::time::Duration::from_millis(50));
+      time += 10;
     }
     tx.send(-1).unwrap();
   });
@@ -1158,158 +1195,207 @@ fn test_render_particles_multithreaded() {
   let done_tx_clone = done_tx.clone();
 
   let render_thread = std::thread::spawn(move || {
-      while let Ok(time) = rx.recv() {
-          if time == -1 { break; }
-          
-          let task_id = render_frontend_clone.with_device(render_device_handle, |device| {
-            let task_id = device.create_task();
-            device.start_frame()?;
-            let acquire_result = device.acquire_next_image(presentation_engine)?;
-            let cmd_buffer_handle = device.get_command_buffer()?;
-
-            let mut render_scene = RenderScene::new((
-                TransformComponent {
-                position: Vec3f32::from_array([0.0, -10.0, 0.0]),
-                rotation: Quat::from_axis_angle(Vec3f32::from_array([0.0, 0.0, 1.0]), std::f32::consts::PI),
-                scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
-                },
-                CameraComponent {
-                projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
-                near_plane: 0.1,
-                far_plane: 100.0,
-                },
-            ));
-            
-            let sun_pipeline = device.get_sun_pipeline_key()?;
-            render_scene.sun_call = Some(gpu::frame::SunDrawCall::from_model_and_camera(
-              Mat4x4f32::identity(),
-              &render_scene.camera_data,
-              sun_pipeline,
-              sun_e,
-            )?);
-            
-            let res = device.get_or_create_physical_mesh_resources(
-                mesh_entity,
-                &crate::scene::PhysicalMeshComponent {
-                    asset_path: "".to_string(),
-                    mesh: mesh_arc.clone(),
-                    emissive_intensity: 1.0,
-                    emissive_color: [0.5, 0.5, 0.5],
-                },
-                presentation_engine,
-                "",
-            )?;
-            
-            let outline: Option<[f32; 4]> = None;
-            render_scene.draw_calls.push(gpu::frame::DrawCall::from_handles_and_matrix(
-                res,
-                mesh_arc.indices.len() as u32,
-                outline,
-                Mat4x4f32::identity(),
-            ));
-
-            scene_render.with_component(particle_sys_e, |sys: &crate::scene::particles::ParticleSystemComponent| {
-                render_scene.add_renderable(
-                    device,
-                    particle_sys_e,
-                    Mat4x4f32::identity(),
-                    crate::scene::RenderableDataRef::ParticleSystem(sys),
-                    presentation_engine,
-                    "particle_sys_test",
-                    false,
-                    [0.0, 0.0, 0.0, 0.0],
-                ).unwrap();
-            });
-
-            {
-                let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
-                device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64))?;
-                device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
-                let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
-
-                let extent = device.get_presentation_engine_extent(presentation_engine)?;
-                device.set_viewport(cmd_buffer_handle, &gpu::Viewport { x: 0.0, y: extent[1] as f32, width: extent[0] as f32, height: -(extent[1] as f32), min_depth: 0.0, max_depth: 1.0 })?;
-                device.set_scissor(cmd_buffer_handle, &gpu::Rect2D { offset: [0, 0], extent })?;
-                device.render_frame(cmd_buffer_handle, &render_scene)?;
-                scoped_rp.end()?;
-                device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
-            }
-
-            device.present(presentation_engine, acquire_result.image_index as usize, acquire_result.frame_index as usize)?;
-            crate::types::GpuResult::Ok(task_id)
-          }).unwrap();
-          
-          done_tx_clone.send((time, task_id)).unwrap();
+    while let Ok(time) = rx.recv() {
+      if time == -1 {
+        break;
       }
+
+      let task_id = render_frontend_clone
+        .with_device(render_device_handle, |device| {
+          let task_id = device.create_task();
+          device.start_frame()?;
+          let acquire_result = device.acquire_next_image(presentation_engine)?;
+          let cmd_buffer_handle = device.get_command_buffer()?;
+
+          let mut render_scene = RenderScene::new((
+            TransformComponent {
+              position: Vec3f32::from_array([0.0, -10.0, 0.0]),
+              rotation: Quat::from_axis_angle(
+                Vec3f32::from_array([0.0, 0.0, 1.0]),
+                std::f32::consts::PI,
+              ),
+              scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+            },
+            CameraComponent {
+              projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
+              near_plane: 0.1,
+              far_plane: 100.0,
+            },
+          ));
+
+          let sun_pipeline = device.get_sun_pipeline_key()?;
+          render_scene.sun_call = Some(gpu::frame::SunDrawCall::from_model_and_camera(
+            Mat4x4f32::identity(),
+            &render_scene.camera_data,
+            sun_pipeline,
+            sun_e,
+          )?);
+
+          let res = device.get_or_create_physical_mesh_resources(
+            mesh_entity,
+            &crate::scene::PhysicalMeshComponent {
+              asset_path: "".to_string(),
+              mesh: mesh_arc.clone(),
+              emissive_intensity: 1.0,
+              emissive_color: [0.5, 0.5, 0.5],
+            },
+            presentation_engine,
+            "",
+          )?;
+
+          let outline: Option<[f32; 4]> = None;
+          render_scene
+            .draw_calls
+            .push(gpu::frame::DrawCall::from_handles_and_matrix(
+              res,
+              mesh_arc.indices.len() as u32,
+              outline,
+              Mat4x4f32::identity(),
+            ));
+
+          scene_render.with_component(
+            particle_sys_e,
+            |sys: &crate::scene::particles::ParticleSystemComponent| {
+              render_scene
+                .add_renderable(
+                  device,
+                  particle_sys_e,
+                  Mat4x4f32::identity(),
+                  crate::scene::RenderableDataRef::ParticleSystem(sys),
+                  presentation_engine,
+                  "particle_sys_test",
+                  false,
+                  [0.0, 0.0, 0.0, 0.0],
+                )
+                .unwrap();
+            },
+          );
+
+          {
+            let _scoped_cmd =
+              gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+            device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64))?;
+            device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
+            let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
+
+            let extent = device.get_presentation_engine_extent(presentation_engine)?;
+            device.set_viewport(
+              cmd_buffer_handle,
+              &gpu::Viewport {
+                x: 0.0,
+                y: extent[1] as f32,
+                width: extent[0] as f32,
+                height: -(extent[1] as f32),
+                min_depth: 0.0,
+                max_depth: 1.0,
+              },
+            )?;
+            device.set_scissor(
+              cmd_buffer_handle,
+              &gpu::Rect2D {
+                offset: [0, 0],
+                extent,
+              },
+            )?;
+            device.render_frame(cmd_buffer_handle, &render_scene)?;
+            scoped_rp.end()?;
+            device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
+          }
+
+          device.present(
+            presentation_engine,
+            acquire_result.image_index as usize,
+            acquire_result.frame_index as usize,
+          )?;
+          crate::types::GpuResult::Ok(task_id)
+        })
+        .unwrap();
+
+      done_tx_clone.send((time, task_id)).unwrap();
+    }
   });
 
   let render_frontend_save = render_frontend.clone();
-  
+
   let save_thread = std::thread::spawn(move || {
-      while let Ok((time, task_id)) = done_rx.recv() {
-          render_frontend_save.with_device(render_device_handle, |device| {
-             while !device.is_task_completed(task_id)? {
-                 std::thread::yield_now();
-             }
-             
-             let mut buffer = vec![0u8; (width * height * 4) as usize];
-             device.read_windowless_download(task_id, &mut buffer)?;
+    while let Ok((time, task_id)) = done_rx.recv() {
+      render_frontend_save
+        .with_device(render_device_handle, |device| {
+          while !device.is_task_completed(task_id)? {
+            std::thread::yield_now();
+          }
 
-             let mut found_gray = false;
-             let mut found_green = false;
+          let mut buffer = vec![0u8; (width * height * 4) as usize];
+          device.read_windowless_download(task_id, &mut buffer)?;
 
-             let mut max_r = 0;
-             let mut max_g = 0;
-             let mut max_b = 0;
+          let mut found_gray = false;
+          let mut found_green = false;
 
-             for chunk in buffer.chunks_exact(4) {
-                 let b = chunk[0];
-                 let g = chunk[1];
-                 let r = chunk[2];
-                 
-                 if r > max_r { max_r = r; }
-                 if g > max_g { max_g = g; }
-                 if b > max_b { max_b = b; }
+          let mut max_r = 0;
+          let mut max_g = 0;
+          let mut max_b = 0;
 
-                 // Look for bright green
-                 if g > 200 && r < 50 && b < 50 { found_green = true; }
-                 
-                 // Look for gray plane (with sun lighting, typically > 0 and balanced)
-                 if r > 20 && r < 200 && g > 20 && g < 200 && b > 20 && b < 200 {
-                     if (r as i32 - g as i32).abs() < 25 && (g as i32 - b as i32).abs() < 25 { 
-                         found_gray = true; 
-                     }
-                 }
-             }
-             
-             println!("Time {}ms: Max RGB: ({}, {}, {}). found_gray={}, found_green={}", time, max_r, max_g, max_b, found_gray, found_green);
-             
-             let mut export_buffer = buffer.clone();
-             for chunk in export_buffer.chunks_exact_mut(4) {
-                 chunk.swap(0, 2); // BGRA to RGBA
-             }
-             let row_stride = (width * 4) as usize;
-             for y in 0..(height as usize / 2) {
-                 let top_row_start = y * row_stride;
-                 let bottom_row_start = ((height as usize) - 1 - y) * row_stride;
-                 for x in 0..row_stride {
-                     export_buffer.swap(top_row_start + x, bottom_row_start + x);
-                 }
-             }
-             image::save_buffer(
-                 &format!("rendered_particles_{}ms.png", time),
-                 &export_buffer,
-                 width,
-                 height,
-                 image::ColorType::Rgba8,
-             ).expect("Failed to save rendered png");
-             
-             assert!(found_gray, "Gray plane missing at {}ms", time);
-             assert!(found_green, "Green particles missing at {}ms", time);
+          for chunk in buffer.chunks_exact(4) {
+            let b = chunk[0];
+            let g = chunk[1];
+            let r = chunk[2];
 
-             crate::types::GpuResult::Ok(())
-          }).unwrap();
-      }
+            if r > max_r {
+              max_r = r;
+            }
+            if g > max_g {
+              max_g = g;
+            }
+            if b > max_b {
+              max_b = b;
+            }
+
+            // Look for bright green
+            if g > 200 && r < 50 && b < 50 {
+              found_green = true;
+            }
+
+            // Look for gray plane (with sun lighting, typically > 0 and balanced)
+            if r > 20 && r < 200 && g > 20 && g < 200 && b > 20 && b < 200 {
+              if (r as i32 - g as i32).abs() < 25 && (g as i32 - b as i32).abs() < 25 {
+                found_gray = true;
+              }
+            }
+          }
+
+          println!(
+            "Time {}ms: Max RGB: ({}, {}, {}). found_gray={}, found_green={}",
+            time, max_r, max_g, max_b, found_gray, found_green
+          );
+
+          let mut export_buffer = buffer.clone();
+          for chunk in export_buffer.chunks_exact_mut(4) {
+            chunk.swap(0, 2); // BGRA to RGBA
+          }
+          let row_stride = (width * 4) as usize;
+          for y in 0..(height as usize / 2) {
+            let top_row_start = y * row_stride;
+            let bottom_row_start = ((height as usize) - 1 - y) * row_stride;
+            for x in 0..row_stride {
+              export_buffer.swap(top_row_start + x, bottom_row_start + x);
+            }
+          }
+          image::save_buffer(
+            &format!("rendered_particles_{}ms.png", time),
+            &export_buffer,
+            width,
+            height,
+            image::ColorType::Rgba8,
+          )
+          .expect("Failed to save rendered png");
+
+          assert!(found_gray, "Gray plane missing at {}ms", time);
+          assert!(found_green, "Green particles missing at {}ms", time);
+
+          crate::types::GpuResult::Ok(())
+        })
+        .unwrap();
+    }
   });
 
   physics_thread.join().unwrap();
@@ -1321,6 +1407,6 @@ fn test_render_particles_multithreaded() {
 
   let errors = super::utils::VULKAN_ERROR_MESSAGES.lock().unwrap();
   if !errors.is_empty() {
-      panic!("Vulkan validation errors occurred during multithreaded testing");
+    panic!("Vulkan validation errors occurred during multithreaded testing");
   }
 }
