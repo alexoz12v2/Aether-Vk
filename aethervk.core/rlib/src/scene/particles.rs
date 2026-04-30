@@ -119,6 +119,7 @@ impl ParticleSystemComponent {
     uv_grid: &UvGrid,
     comet_pos: Vec3f32,
     comet_rot: aethervk_oshal_rlib::math::vector::vec4::Quat,
+    comet_scale: Vec3f32,
     u_emission: &[f32; 2],
     u_particles: &[[f32; 4]],
   ) {
@@ -134,12 +135,18 @@ impl ParticleSystemComponent {
       // TODO: why is pdf unused?
       let (uv_x, uv_y, _pdf) = self.config.uv_distribution.sample_continuous(&[u[0], u[1]]);
 
-      let (local_pos, local_norm) = uv_grid
-        .query([uv_x, uv_y], &comet.vertices, &comet.indices)
-        .unwrap_or(([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]));
+      let (local_pos, local_norm) = match uv_grid.query([uv_x, uv_y], &comet.vertices, &comet.indices) {
+        Some(res) => res,
+        None => continue,
+      };
 
       // Convert to world space
       let local_pos_vec: Vec3f32 = local_pos.into();
+      let local_pos_vec = Vec3f32::from_components(
+        local_pos_vec.x() * comet_scale.x(),
+        local_pos_vec.y() * comet_scale.y(),
+        local_pos_vec.z() * comet_scale.z(),
+      );
       let local_norm_vec: Vec3f32 = local_norm.into();
       let local_norm_vec = if local_norm_vec.length_squared() > 0.0001 {
         local_norm_vec.normalize()

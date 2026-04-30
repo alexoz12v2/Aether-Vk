@@ -6,7 +6,7 @@ use aethervk_core_rlib::{
     AlmanacPlanet, CameraComponent, CursorComponent, PhysicalMeshComponent, Scene,
     TransformComponent,
   },
-  simulation, types,
+  simulation as core_simulation, types,
   types::RuntimeParams,
 };
 use aethervk_oshal_rlib::{
@@ -31,6 +31,7 @@ use test_utils::{
   create_winit_window_and_event_loop, cycle_get_asset_path_from_exe, get_handle_and_window_info,
   get_monospace_font_path_from_asset_path, SceneTestUtilsExt,
 };
+use test_utils::simulation::kernels::CpuKernels;
 
 mod constants;
 mod logic_thread;
@@ -61,7 +62,7 @@ impl Drop for AppState {
   }
 }
 
-impl simulation::Pausable for AppState {
+impl core_simulation::Pausable for AppState {
   fn is_paused(&self) -> bool {
     self.is_paused
   }
@@ -151,8 +152,11 @@ fn main() {
   let scene = Scene::new().with_all_dbg_components();
   scene.register_component::<AlmanacPlanet>(&[TypeId::of::<TransformComponent>()]);
   scene.register_component::<GizmoComponent>(&[TypeId::of::<TransformComponent>()]);
+  scene.register_component::<aethervk_core_rlib::scene::ParticleSystemComponent>(&[TypeId::of::<
+    TransformComponent,
+  >()]);
   let model_path = assets_dir.join("Comet.glb");
-  let comet = simulation::comet::load_comet_from_gltf(model_path.to_str().unwrap(), false)
+  let comet = core_simulation::comet::load_comet_from_gltf(model_path.to_str().unwrap(), false)
     .expect("Failed to load comet");
 
   let root_entity = scene.add_root_entity().unwrap();
@@ -192,6 +196,37 @@ fn main() {
       )
       .unwrap();
     scene.set_parent(mesh_entity, Some(root_entity));
+
+    let uv_dist = utils::generate_gaussian_distribution(64, 0.5, 0.5, 0.5, 0.5);
+    scene
+      .add_component(
+        mesh_entity,
+        aethervk_core_rlib::scene::ParticleSystemComponent::new(
+          aethervk_core_rlib::scene::ParticleEmitterConfig {
+            uv_distribution: uv_dist,
+            delta: 100_000,
+            max_particles: 1000,
+            velocity_intensity: aethervk_core_rlib::scene::GaussianParams {
+              mean: 5.0,
+              std_dev: 1.0,
+              min: 0.0,
+              max: 10.0,
+            },
+            emission_count: aethervk_core_rlib::scene::GaussianParams {
+              mean: 10.0,
+              std_dev: 2.0,
+              min: 1.0,
+              max: 20.0,
+            },
+            particle_radius: 1.0,
+            density: 1000.0,
+            lifetime: 5_000_000,
+            color: [1.0, 0.5, 0.0, 1.0],
+            beta: 0.1,
+          },
+        ),
+      )
+      .unwrap();
   }
 
   #[cfg(not(feature = "spotless_rendering"))]
@@ -256,9 +291,9 @@ fn main() {
     let initial_pos = Vec3f32::zero();
 
     let sphere = {
-      let mut sphere = simulation::comet::generate_uv_sphere(planet_radius, 64, 64);
+      let mut sphere = core_simulation::comet::generate_uv_sphere(planet_radius, 64, 64);
       let tex =
-        simulation::comet::load_texture_from_file(assets_dir.join(tex_path).to_str().unwrap())
+        core_simulation::comet::load_texture_from_file(assets_dir.join(tex_path).to_str().unwrap())
           .expect(&format!("Failed to load texture for {}", name));
       sphere.albedo_map = Some(tex);
       Arc::from(sphere)
@@ -365,7 +400,7 @@ fn main() {
 
   // Add emissive core for the sun
   let sun_core_entity = scene.spawn_entity("sun_core");
-  let mut sun_sphere = simulation::comet::generate_uv_sphere(0.45 * 0.95, 64, 64);
+  let mut sun_sphere = core_simulation::comet::generate_uv_sphere(0.45 * 0.95, 64, 64);
   sun_sphere.albedo_map = None;
   scene
     .add_component(
@@ -434,6 +469,7 @@ fn main() {
     presentation_engine,
     font_id,
   );
+  let cpu_kernels = CpuKernels::new();
 
   // --- Start Logic Thread ---
   let (logic_tx, logic_rx) = mpsc::channel::<LogicCommand>();
@@ -449,6 +485,7 @@ fn main() {
     planets_ids,
     assets_dir,
     Arc::clone(&outlines_enabled),
+    cpu_kernels,
   );
 
   let _app_threads = test_utils::threading::AppThreads {

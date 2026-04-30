@@ -54,3 +54,26 @@ pub fn get_planet_radius(id: i32, assets_dir: &std::path::Path) -> f32 {
   }
 }
 
+pub fn generate_gaussian_distribution(
+  resolution: usize,
+  mean_x: f32,
+  mean_y: f32,
+  std_dev_x: f32,
+  std_dev_y: f32,
+) -> aethervk_core_rlib::math::distribution::Distribution2D {
+  let mut weights = std::vec::Vec::with_capacity(resolution * resolution);
+  
+  for y in 0..resolution {
+    for x in 0..resolution {
+      let dx = (x as f32 / resolution as f32) - mean_x;
+      let dy = (y as f32 / resolution as f32) - mean_y;
+      
+      let weight = (-(dx * dx) / (2.0 * std_dev_x * std_dev_x) 
+                   - (dy * dy) / (2.0 * std_dev_y * std_dev_y)).exp();
+      weights.push(weight);
+    }
+  }
+
+  aethervk_core_rlib::math::distribution::Distribution2D::new(&weights, resolution, resolution)
+}
+
