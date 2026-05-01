@@ -1,4 +1,4 @@
-#version 460
+#version 450 core
 
 layout(location = 0) in vec2 inUV;
 
@@ -12,8 +12,6 @@ layout(push_constant) uniform PushConstants {
     float pad1;
     vec4 color;
     float radius;
-    uint bufferIndex;
-    vec2 pad2;
 } pc;
 
 void main() {

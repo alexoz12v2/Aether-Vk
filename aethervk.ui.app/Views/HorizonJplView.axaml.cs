@@ -3,10 +3,11 @@ using System.Collections.Specialized;
 using AetherVk.Logic.ViewModels;
 using Avalonia.Controls;
 using Avalonia.Data;
+using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Views;
 
-public partial class HorizonJplView : UserControl
+public partial class HorizonJplView : UserControl, IRecipient<RequestSaveFileMessage>
 {
   private HorizonJplViewModel? _viewModel;
 
@@ -15,30 +16,37 @@ public partial class HorizonJplView : UserControl
     InitializeComponent();
   }
 
+  protected override void OnAttachedToVisualTree(Avalonia.VisualTreeAttachmentEventArgs e)
+  {
+      base.OnAttachedToVisualTree(e);
+      WeakReferenceMessenger.Default.Register<RequestSaveFileMessage>(this);
+  }
+
+  protected override void OnDetachedFromVisualTree(Avalonia.VisualTreeAttachmentEventArgs e)
+  {
+      base.OnDetachedFromVisualTree(e);
+      WeakReferenceMessenger.Default.Unregister<RequestSaveFileMessage>(this);
+  }
+
   protected override void OnDataContextChanged(EventArgs e)
   {
     base.OnDataContextChanged(e);
 
     if (_viewModel != null)
     {
-      _viewModel.Headers.CollectionChanged -= OnHeadersChanged;
       _viewModel.CometsHeaders.CollectionChanged -= OnCometsHeadersChanged;
+      _viewModel.SpkRecordsHeaders.CollectionChanged -= OnSpkRecordsHeadersChanged;
     }
 
     _viewModel = DataContext as HorizonJplViewModel;
 
     if (_viewModel != null)
     {
-      _viewModel.Headers.CollectionChanged += OnHeadersChanged;
       _viewModel.CometsHeaders.CollectionChanged += OnCometsHeadersChanged;
-      RebuildColumns();
+      _viewModel.SpkRecordsHeaders.CollectionChanged += OnSpkRecordsHeadersChanged;
       RebuildCometsColumns();
+      RebuildSpkRecordsColumns();
     }
-  }
-
-  private void OnHeadersChanged(object? sender, NotifyCollectionChangedEventArgs e)
-  {
-    RebuildColumns();
   }
 
   private void OnCometsHeadersChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -46,19 +54,9 @@ public partial class HorizonJplView : UserControl
     RebuildCometsColumns();
   }
 
-  private void RebuildColumns()
+  private void OnSpkRecordsHeadersChanged(object? sender, NotifyCollectionChangedEventArgs e)
   {
-    if (_viewModel == null || ResultDataGrid == null)
-      return;
-
-    ResultDataGrid.Columns.Clear();
-    for (int i = 0; i < _viewModel.Headers.Count; i++)
-    {
-      var header = _viewModel.Headers[i];
-      ResultDataGrid.Columns.Add(
-        new DataGridTextColumn { Header = header, Binding = new Binding($"[{i}]") }
-      );
-    }
+    RebuildSpkRecordsColumns();
   }
 
   private void RebuildCometsColumns()
@@ -76,11 +74,50 @@ public partial class HorizonJplView : UserControl
     }
   }
 
-  private void OnCometsGridDoubleTapped(object? sender, Avalonia.Input.TappedEventArgs e)
+  private void RebuildSpkRecordsColumns()
   {
-    if (_viewModel != null && _viewModel.SelectedComet != null)
+    if (_viewModel == null || SpkRecordsDataGrid == null)
+      return;
+
+    SpkRecordsDataGrid.Columns.Clear();
+    for (int i = 0; i < _viewModel.SpkRecordsHeaders.Count; i++)
     {
-      _viewModel.FetchDataCommand.Execute(null);
+      var header = _viewModel.SpkRecordsHeaders[i];
+      SpkRecordsDataGrid.Columns.Add(
+        new DataGridTextColumn { Header = header, Binding = new Binding($"[{i}]") }
+      );
     }
+  }
+
+  public async void Receive(RequestSaveFileMessage message)
+  {
+    var topLevel = TopLevel.GetTopLevel(this);
+    if (topLevel == null)
+    {
+      message.Result.SetResult(null);
+      return;
+    }
+
+    var file = await topLevel.StorageProvider.SaveFilePickerAsync(
+      new Avalonia.Platform.Storage.FilePickerSaveOptions
+      {
+        Title = "Save SPK File",
+        DefaultExtension = "bsp",
+        SuggestedFileName = message.DefaultFileName,
+        FileTypeChoices = new[]
+        {
+          new Avalonia.Platform.Storage.FilePickerFileType("BSP Files")
+          {
+            Patterns = new[] { "*.bsp" }
+          },
+          new Avalonia.Platform.Storage.FilePickerFileType("All Files")
+          {
+            Patterns = new[] { "*.*" }
+          }
+        }
+      }
+    );
+
+    message.Result.SetResult(file?.Path.LocalPath);
   }
 }

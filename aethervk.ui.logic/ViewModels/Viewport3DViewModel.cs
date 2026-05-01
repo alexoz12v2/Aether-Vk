@@ -61,6 +61,8 @@ public partial class Viewport3DViewModel
   [ObservableProperty]
   private ulong _sceneId;
 
+  public ulong CameraId { get; private set; } = 1;
+
   private static int _measurementCounter = 1;
 
   public event Action? OnFrameReady;
@@ -257,6 +259,7 @@ public partial class Viewport3DViewModel
     {
       PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height);
     }
+    SceneId = _runtimeService.CreateScene(true);
     IsInitialized = true;
     StartGameLoop();
   }
@@ -297,8 +300,12 @@ public partial class Viewport3DViewModel
             }
 
             // Update camera
-            ulong activeCam = 1; // TODO replace with actual camera state in VM
-            // active camera removed
+            var sceneState = ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager;
+            var camera = sceneState?.GetOrCreateScene(SceneId).EntityMap.Values.FirstOrDefault(e => e.Name == "camera" || e.Components.Any(c => c is AetherVk.Logic.Models.CameraComponent));
+            if (camera != null)
+            {
+               CameraId = camera.Id;
+            }
 
             // Wait for previous render to finish before starting a new one
             if (_lastRenderTask != null)
@@ -308,7 +315,7 @@ public partial class Viewport3DViewModel
             }
 
             // Async Render - fire and forget, save task
-            _lastRenderTask = _runtimeService.RenderTickAsync(PresentationEngineId, SceneId, activeCam, Width, Height);
+            _lastRenderTask = _runtimeService.RenderTickAsync(PresentationEngineId, SceneId, CameraId, Width, Height);
           }
 
           // Yield to prevent pegging the CPU, aiming for ~60 FPS render signal

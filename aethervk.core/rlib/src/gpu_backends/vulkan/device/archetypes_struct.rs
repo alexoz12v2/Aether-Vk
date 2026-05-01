@@ -574,6 +574,7 @@ impl Archetypes {
       .with_fragment_shader(
         FragmentShader::default()
           .with_fragment_module(fragment_shader.module.get())
+          // TODO Uniform to rest
           .add_viewport(vk::Viewport {
             width: presentation_engine_state.extent().0 as _,
             height: -(presentation_engine_state.extent().1 as f32), // Y axis points downwards in Vulkan, so flip it
@@ -582,6 +583,7 @@ impl Archetypes {
             min_depth: 0.0,
             max_depth: 1.0,
           })
+          // TODO Uniform to rest
           .add_scissors(vk::Rect2D {
             offset: vk::Offset2D { x: 0, y: 0 },
             extent: vk::Extent2D {

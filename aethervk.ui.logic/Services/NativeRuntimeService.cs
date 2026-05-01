@@ -871,7 +871,11 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
                   cc.Fov,
                   cc.AspectRatio,
                   cc.NearPlane,
-                  cc.FarPlane
+                  cc.FarPlane,
+                  cc.OrthoLeft,
+                  cc.OrthoRight,
+                  cc.OrthoBottom,
+                  cc.OrthoTop
                 );
               }
             };
@@ -1056,9 +1060,17 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   public Entity CreateSun(ulong sceneId, Entity parent, uint resX = 128, uint resY = 128, uint resZ = 128)
   {
     var sun = SpawnEntity(sceneId, "sun", parent);
+    sun.Components.Add(new TransformComponent());
     sun.Components.Add(new SunComponent());
     if (_simulationContext != IntPtr.Zero)
     {
+      NativeInterop.avkSimulationContext_addTransformComponent(
+        _simulationContext,
+        sceneId, sun.Id,
+        0f, 0f, 0f,
+        1f, 0f, 0f, 0f,
+        1f, 1f, 1f
+      );
       NativeInterop.avkSimulationContext_addSunComponent(_simulationContext, sceneId, sun.Id, resX, resY, resZ);
     }
     return sun;
@@ -1116,10 +1128,15 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       NativeInterop.avkSimulationContext_addCameraComponent(
         _simulationContext,
         sceneId, camera.Id,
+        false,
         45.0f,
         1.77f,
         0.1f,
-        10000.0f
+        10000.0f,
+        -10.0f,
+        10.0f,
+        -10.0f,
+        10.0f
       );
     }
 

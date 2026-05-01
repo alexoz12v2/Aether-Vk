@@ -18,6 +18,7 @@ public partial class Viewport3DView : UserControl
 
   private bool _isMiddleDragging = false;
   private bool _isRightDragging = false;
+  private bool _isZoomDragging = false;
   private Avalonia.Point _lastPointerPos;
 
   public Viewport3DView()
@@ -112,6 +113,14 @@ public partial class Viewport3DView : UserControl
       return;
     }
 
+    if (point.Properties.IsRightButtonPressed && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+    {
+      _isZoomDragging = true;
+      RenderTargetImage.Focus();
+      e.Handled = true;
+      return;
+    }
+
     if (point.Properties.IsMiddleButtonPressed)
       _isMiddleDragging = true;
     if (point.Properties.IsRightButtonPressed)
@@ -126,7 +135,10 @@ public partial class Viewport3DView : UserControl
     if (e.InitialPressMouseButton == MouseButton.Middle)
       _isMiddleDragging = false;
     if (e.InitialPressMouseButton == MouseButton.Right)
+    {
       _isRightDragging = false;
+      _isZoomDragging = false;
+    }
 
     e.Handled = true;
   }
@@ -138,13 +150,17 @@ public partial class Viewport3DView : UserControl
     var deltaX = (float)(currentPos.X - _lastPointerPos.X);
     var deltaY = (float)(currentPos.Y - _lastPointerPos.Y);
 
-    if (_isRightDragging)
+    if (_isZoomDragging)
     {
-      _viewModel?.RuntimeService.RotateCamera(_viewModel.SceneId, 1 /* TODO */, deltaX, deltaY);
+      _viewModel?.RuntimeService.ZoomCamera(_viewModel.SceneId, _viewModel.CameraId, deltaY * 2.0f);
+    }
+    else if (_isRightDragging)
+    {
+      _viewModel?.RuntimeService.RotateCamera(_viewModel.SceneId, _viewModel.CameraId, deltaX, deltaY);
     }
     else if (_isMiddleDragging)
     {
-      _viewModel?.RuntimeService.PanCamera(_viewModel.SceneId, 1 /* TODO */, deltaX, deltaY);
+      _viewModel?.RuntimeService.PanCamera(_viewModel.SceneId, _viewModel.CameraId, deltaX, deltaY);
     }
 
     _lastPointerPos = currentPos;
@@ -152,7 +168,7 @@ public partial class Viewport3DView : UserControl
 
   private void OnPointerWheelChanged(object? sender, PointerWheelEventArgs e)
   {
-    _viewModel?.RuntimeService.ZoomCamera(_viewModel.SceneId, 1 /* TODO */, (float)e.Delta.Y * 10f);
+    // Zoom moved to CTRL+RMB Drag
   }
 
   private void OnKeyDown(object? sender, KeyEventArgs e)
@@ -173,7 +189,7 @@ public partial class Viewport3DView : UserControl
     }
 
     if (e.Key == Key.R)
-      _viewModel?.RuntimeService.ResetCamera(_viewModel.SceneId, 1 /* TODO */);
+      _viewModel?.RuntimeService.ResetCamera(_viewModel.SceneId, _viewModel.CameraId);
     else if (e.Key == Key.Up)
       _viewModel?.RuntimeService.MoveCursor(_viewModel.SceneId, 0.0f, -0.5f, 0.0f);
     else if (e.Key == Key.Down)
