@@ -154,6 +154,8 @@ fn test_render_particles_windowless() {
       {
         let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
 
+        device.upload_particle_systems(cmd_buffer_handle, &mut render_scene.particle_calls)?;
+
         device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
         let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
 
@@ -1275,6 +1277,7 @@ fn test_render_particles_multithreaded() {
             let _scoped_cmd =
               gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
             device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64))?;
+            device.upload_particle_systems(cmd_buffer_handle, &mut render_scene.particle_calls)?;
             device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
             let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
 

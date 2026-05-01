@@ -43,8 +43,8 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
       var transform = SelectedEntity.Components.OfType<TransformComponent>().FirstOrDefault();
       if (transform != null)
       {
-        bool hasSunOrPlanet = SelectedEntity.Components.Any(c => c is SunComponent || c is PlanetComponent);
-        transform.IsEditable = !hasSunOrPlanet;
+        bool hasCameraOrCursor = SelectedEntity.Components.Any(c => c is CameraComponent || c is CursorComponent);
+        transform.IsEditable = hasCameraOrCursor;
       }
       
       var comet = SelectedEntity.Components.OfType<CometComponent>().FirstOrDefault();

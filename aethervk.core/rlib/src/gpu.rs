@@ -239,7 +239,6 @@ pub struct ParticlePushConstants {
   pub _pad1: f32,
   pub color: [f32; 4],
   pub radius: f32,
-  pub _pad2: [f32; 3],
 }
 
 #[repr(C)]

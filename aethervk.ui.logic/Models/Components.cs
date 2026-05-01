@@ -63,6 +63,18 @@ public partial class CameraComponent : ObservableObject, IComponent
   private float _farPlane = 10000.0f;
 
   [ObservableProperty]
+  private float _orthoLeft = -10.0f;
+
+  [ObservableProperty]
+  private float _orthoRight = 10.0f;
+
+  [ObservableProperty]
+  private float _orthoBottom = -10.0f;
+
+  [ObservableProperty]
+  private float _orthoTop = 10.0f;
+
+  [ObservableProperty]
   private bool _isOrthographic;
 
   [ObservableProperty]

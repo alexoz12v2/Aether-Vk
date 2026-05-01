@@ -1913,8 +1913,11 @@ impl<'a> RenderDevice for Device<'a> {
       gpu::frame::do_draw_grid(self, cmd_buffer, &grid_camera, draw_call)?;
     }
 
-    for particle_call in &render_scene.particle_calls {
-      gpu::frame::do_draw_particle(self, &render_scene.camera_data, cmd_buffer, particle_call)?;
+    if !render_scene.particle_calls.is_empty() {
+      self.prepare_particle_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
+      for particle_call in &render_scene.particle_calls {
+        gpu::frame::do_draw_particle(self, &render_scene.camera_data, cmd_buffer, particle_call)?;
+      }
     }
 
     if let Some(cursor_call) = &render_scene.cursor_call {
@@ -5064,6 +5067,23 @@ impl<'a> RenderDevice for Device<'a> {
         &[region],
       );
 
+      let image_barrier_back = vk::ImageMemoryBarrier2::default()
+        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+        .src_access_mask(vk::AccessFlags2::TRANSFER_READ)
+        .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+        .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+        .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+        .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        .image(image.get())
+        .subresource_range(
+          vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .base_mip_level(0)
+            .level_count(1)
+            .base_array_layer(0)
+            .layer_count(1),
+        );
+
       let buffer_barrier = vk::BufferMemoryBarrier2::default()
         .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
         .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
@@ -5074,7 +5094,8 @@ impl<'a> RenderDevice for Device<'a> {
         .offset(0);
 
       let buf_dep_info = vk::DependencyInfo::default()
-        .buffer_memory_barriers(core::slice::from_ref(&buffer_barrier));
+        .buffer_memory_barriers(core::slice::from_ref(&buffer_barrier))
+        .image_memory_barriers(core::slice::from_ref(&image_barrier_back));
       self
         .device
         .synchronization2

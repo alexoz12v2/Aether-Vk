@@ -81,6 +81,14 @@ public partial class MeshViewerViewModel : TabItemViewModel
                 CameraId = camera.Id;
                 
                 var sun = _runtimeService.CreateSun(SceneId, root);
+                var sunTransform = System.Linq.Enumerable.FirstOrDefault(System.Linq.Enumerable.OfType<AetherVk.Logic.Models.TransformComponent>(sun.Components));
+                if (sunTransform != null)
+                {
+                    sunTransform.PosX = 0.0f;
+                    sunTransform.PosY = 10.0f; // Behind the camera (camera is at -5, looking at -Y)
+                    sunTransform.PosZ = 0.0f;
+                }
+                
                 var grid = _runtimeService.CreateGrid(SceneId, root);
             }
             catch (System.DllNotFoundException)

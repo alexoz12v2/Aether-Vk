@@ -4,69 +4,46 @@ using System.Threading.Tasks;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.ViewModels;
+
+public class RequestSaveFileMessage
+{
+    public string DefaultFileName { get; }
+    public TaskCompletionSource<string?> Result { get; } = new();
+    public RequestSaveFileMessage(string defaultFileName) => DefaultFileName = defaultFileName;
+}
 
 public partial class HorizonJplViewModel : TabItemViewModel
 {
   private readonly HorizonJplService _horizonService;
 
-  [ObservableProperty]
-  private string _command = "499"; // Mars
+  [ObservableProperty] 
+  [NotifyPropertyChangedFor(nameof(IsStep2Enabled))]
+  [NotifyPropertyChangedFor(nameof(IsStep3Enabled))]
+  private int _currentStep = 1;
+  [ObservableProperty] private bool _isStep1Expanded = true;
+  [ObservableProperty] private bool _isStep2Expanded = false;
+  [ObservableProperty] private bool _isStep3Expanded = false;
 
-  [ObservableProperty]
-  private string _center = "500@399"; // Earth
+  public bool IsStep2Enabled => CurrentStep >= 2;
+  public bool IsStep3Enabled => CurrentStep >= 3;
 
-  public ObservableCollection<string> CenterOptions { get; } = new() { "500@399", "@sun", "@ssb", "500@499" };
-
-  [ObservableProperty]
-  private string _startTime = "2024-01-01";
-
-  [ObservableProperty]
-  private string _stopTime = "2024-01-31";
-
-  [ObservableProperty]
-  private string _stepSize = "1 d";
-
-  [ObservableProperty]
-  private DateTimeOffset? _cometStartTime = new DateTimeOffset(2020, 1, 1, 0, 0, 0, TimeSpan.Zero);
-
-  [ObservableProperty]
-  private DateTimeOffset? _cometStopTime = new DateTimeOffset(2020, 12, 31, 0, 0, 0, TimeSpan.Zero);
-
-  public ObservableCollection<string[]> Data => _horizonService.SessionData;
-  public ObservableCollection<string> Headers => _horizonService.Headers;
+  [ObservableProperty] private DateTimeOffset? _searchStartTime = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+  [ObservableProperty] private DateTimeOffset? _searchStopTime = new DateTimeOffset(2024, 1, 31, 0, 0, 0, TimeSpan.Zero);
 
   public ObservableCollection<string[]> CometsData => _horizonService.CometsData;
   public ObservableCollection<string> CometsHeaders => _horizonService.CometsHeaders;
 
-  [ObservableProperty]
-  private string[]? _selectedComet;
+  [ObservableProperty] private string[]? _selectedComet;
 
-  partial void OnSelectedCometChanged(string[]? value)
-  {
-    if (value != null && value.Length > 0)
-    {
-      if (value.Length > 3 && !string.IsNullOrWhiteSpace(value[3]))
-      {
-        Command = $"DES={value[3].Trim()}; CAP";
-      }
-      else
-      {
-        string target = value[0];
-        int startIdx = target.LastIndexOf('(');
-        int endIdx = target.LastIndexOf(')');
-        if (startIdx != -1 && endIdx != -1 && endIdx > startIdx)
-        {
-          Command = target.Substring(startIdx + 1, endIdx - startIdx - 1).Trim();
-        }
-        else
-        {
-          Command = target.Trim();
-        }
-      }
-    }
-  }
+  public ObservableCollection<string[]> SpkRecordsData => _horizonService.SpkRecordsData;
+  public ObservableCollection<string> SpkRecordsHeaders => _horizonService.SpkRecordsHeaders;
+
+  [ObservableProperty] private string[]? _selectedSpkRecord;
+
+  [ObservableProperty] private bool _isDownloading;
 
   public HorizonJplViewModel(HorizonJplService horizonService)
     : base("Horizon JPL")
@@ -75,37 +52,68 @@ public partial class HorizonJplViewModel : TabItemViewModel
   }
 
   [RelayCommand]
-  private async Task FetchDataAsync()
+  private async Task SearchCometsAsync()
   {
-    await _horizonService.FetchDataAsync(Command, StartTime, StopTime, StepSize, Center);
+      string startStr = SearchStartTime?.ToString("yyyy-MM-dd") ?? "2024-01-01";
+      string stopStr = SearchStopTime?.ToString("yyyy-MM-dd") ?? "2024-01-31";
+      await _horizonService.FetchCometsAsync(startStr, stopStr);
   }
 
   [RelayCommand]
-  private async Task FetchCometsAsync()
+  private async Task GoToStep2Async()
   {
-    string startStr = CometStartTime?.ToString("yyyy-MM-dd") ?? "2020-01-01";
-    string stopStr = CometStopTime?.ToString("yyyy-MM-dd") ?? "2020-12-31";
-    await _horizonService.FetchCometsAsync(startStr, stopStr);
+      if (SelectedComet == null || SelectedComet.Length < 2) return;
+      var pdes = SelectedComet[1].Trim();
+      string startStr = SearchStartTime?.ToString("yyyy-MM-dd") ?? "2024-01-01";
+      string stopStr = SearchStopTime?.ToString("yyyy-MM-dd") ?? "2024-01-31";
+      
+      await _horizonService.FetchSpkRecordsAsync(pdes, startStr, stopStr);
+      CurrentStep = 2;
+      IsStep1Expanded = false;
+      IsStep2Expanded = true;
   }
 
   [RelayCommand]
-  private async Task DownloadSpkAsync()
+  private void GoToStep3()
   {
-    if (SelectedComet == null || SelectedComet.Length < 4) return;
-
-    var spkid = SelectedComet[3].Trim();
-    string startStr = CometStartTime?.ToString("yyyy-MM-dd") ?? "2020-01-01";
-    string stopStr = CometStopTime?.ToString("yyyy-MM-dd") ?? "2030-01-01";
-
-    var filePath = await _horizonService.DownloadSpkAsync(spkid, startStr, stopStr);
-    if (filePath != null)
-    {
-      var runtimeService = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-      if (runtimeService != null && uint.TryParse(spkid, out uint id))
+      if (SelectedSpkRecord != null) 
       {
-        await runtimeService.LoadCometSpkAsync(filePath, id);
+          CurrentStep = 3;
+          IsStep2Expanded = false;
+          IsStep3Expanded = true;
       }
-    }
+  }
+
+  [RelayCommand]
+  private async Task DownloadAndSaveSpkAsync()
+  {
+      if (SelectedComet == null || SelectedSpkRecord == null) return;
+      
+      var pdes = SelectedComet[1].Trim();
+      var spkId = SelectedSpkRecord[0].Trim();
+      var defaultName = $"{pdes}_{spkId}.bsp";
+      
+      var msg = new RequestSaveFileMessage(defaultName);
+      WeakReferenceMessenger.Default.Send(msg);
+      
+      var savePath = await msg.Result.Task;
+      if (!string.IsNullOrEmpty(savePath))
+      {
+          IsDownloading = true;
+          await _horizonService.DownloadSpkByIdAsync(pdes, spkId, savePath!);
+          IsDownloading = false;
+      }
+  }
+
+  [RelayCommand]
+  private void ResetWizard()
+  {
+      CurrentStep = 1;
+      SelectedComet = null;
+      SelectedSpkRecord = null;
+      IsStep1Expanded = true;
+      IsStep2Expanded = false;
+      IsStep3Expanded = false;
   }
 
   [RelayCommand]

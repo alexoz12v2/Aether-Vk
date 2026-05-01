@@ -1039,19 +1039,28 @@ pub unsafe extern "C" fn avkSimulationContext_addCameraComponent(
   ctx: *mut SimulationContext,
   scene_id: u64,
   entity: u64,
+  is_orthographic: bool,
   fov: f32,
   aspect: f32,
   near: f32,
   far: f32,
+  ortho_left: f32,
+  ortho_right: f32,
+  ortho_bottom: f32,
+  ortho_top: f32,
 ) {
   if ctx.is_null() { return; }
   let ctx_ref = unsafe { &*ctx };
-  let _ = ctx_ref.add_camera_component(scene_id, entity, crate::simulation_api::components_api::CameraParams::Perspective(crate::simulation_api::components_api::PerspectiveCameraParams {
-    fov: fov.to_radians(),
-    aspect_ratio: aspect,
-    near_plane: near,
-    far_plane: far,
-  }));
+  let params = if is_orthographic {
+    crate::simulation_api::components_api::CameraParams::Orthographic(crate::simulation_api::components_api::OrthographicCameraParams {
+      left: ortho_left, right: ortho_right, bottom: ortho_bottom, top: ortho_top, near, far
+    })
+  } else {
+    crate::simulation_api::components_api::CameraParams::Perspective(crate::simulation_api::components_api::PerspectiveCameraParams {
+      fov: fov.to_radians(), aspect_ratio: aspect, near_plane: near, far_plane: far
+    })
+  };
+  let _ = ctx_ref.add_camera_component(scene_id, entity, params);
 }
 
 #[unsafe(no_mangle)]
@@ -1065,12 +1074,16 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraComponent(
   aspect: f32,
   near: f32,
   far: f32,
+  ortho_left: f32,
+  ortho_right: f32,
+  ortho_bottom: f32,
+  ortho_top: f32,
 ) {
   if ctx.is_null() { return; }
   let ctx_ref = unsafe { &*ctx };
   let params = if is_orthographic {
     crate::simulation_api::components_api::CameraParams::Orthographic(crate::simulation_api::components_api::OrthographicCameraParams {
-      left: -aspect, right: aspect, bottom: -1.0, top: 1.0, near, far
+      left: ortho_left, right: ortho_right, bottom: ortho_bottom, top: ortho_top, near, far
     })
   } else {
     crate::simulation_api::components_api::CameraParams::Perspective(crate::simulation_api::components_api::PerspectiveCameraParams {

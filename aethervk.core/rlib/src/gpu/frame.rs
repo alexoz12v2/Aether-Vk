@@ -858,7 +858,6 @@ pub fn do_draw_particle(
     _pad1: 0.0,
     color: draw_call.config.color,
     radius: draw_call.config.particle_radius,
-    _pad2: [0.0; 3],
   };
 
   device.push_constants(

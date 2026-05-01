@@ -1,4 +1,4 @@
-#version 460
+#version 450 core
 
 struct Particle {
     uint id_low;
@@ -15,7 +15,6 @@ struct Particle {
 layout(std430, set = 0, binding = 0) readonly buffer ParticleDataBuffer {
     Particle particles[];
 };
-
 layout(push_constant) uniform PushConstants {
     mat4 viewProj;
     vec3 cameraUp;
@@ -24,7 +23,6 @@ layout(push_constant) uniform PushConstants {
     float pad1;
     vec4 color;
     float radius;
-    vec3 pad2;
 } pc;
 
 layout(location = 0) out vec2 outUV;

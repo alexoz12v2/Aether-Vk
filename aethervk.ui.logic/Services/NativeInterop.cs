@@ -183,10 +183,15 @@ public static class NativeInterop
     IntPtr ctx,
     ulong sceneId,
     ulong entity,
+    [MarshalAs(UnmanagedType.I1)] bool isOrthographic,
     float fov,
     float aspect,
     float near,
-    float far
+    float far,
+    float orthoLeft,
+    float orthoRight,
+    float orthoBottom,
+    float orthoTop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -198,7 +203,11 @@ public static class NativeInterop
     float fov,
     float aspect,
     float near,
-    float far
+    float far,
+    float orthoLeft,
+    float orthoRight,
+    float orthoBottom,
+    float orthoTop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
