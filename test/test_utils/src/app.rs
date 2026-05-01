@@ -17,6 +17,7 @@ pub trait App {
   fn on_keyboard_input(&mut self, _event: &winit::event::KeyEvent, _modifiers: ModifiersState) {}
   fn on_mouse_wheel(&mut self, _delta: winit::event::MouseScrollDelta) {}
   fn on_mouse_motion(&mut self, _delta: (f64, f64)) {}
+  fn on_modifiers_changed(&mut self, _modifiers: ModifiersState) {}
   fn on_redraw(&mut self) {}
   fn on_about_to_wait(&mut self) {}
 }
@@ -52,6 +53,7 @@ pub fn run_app<A: App + 'static>(mut app: A, event_loop: EventLoop<AppEvent>) {
           }
           WindowEvent::ModifiersChanged(modifiers) => {
             modifiers_state = modifiers.state();
+            app.on_modifiers_changed(modifiers_state);
           }
           WindowEvent::CursorMoved { position, .. } => {
             app.on_cursor_moved(position);

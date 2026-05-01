@@ -34,13 +34,17 @@ public abstract class LayoutNodeViewModelBase(SplitNodeViewModel? parent) : View
 /// </summary>
 public partial class SplitNodeViewModel : LayoutNodeViewModelBase
 {
-  [ObservableProperty] private LayoutNodeViewModelBase _firstChild;
+  [ObservableProperty]
+  private LayoutNodeViewModelBase _firstChild;
 
-  [ObservableProperty] private LayoutNodeViewModelBase _secondChild;
+  [ObservableProperty]
+  private LayoutNodeViewModelBase _secondChild;
 
-  [ObservableProperty] private SplitOrientation _orientation;
+  [ObservableProperty]
+  private SplitOrientation _orientation;
 
-  [ObservableProperty] private double _splitRatio;
+  [ObservableProperty]
+  private double _splitRatio;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
   public SplitNodeViewModel(
@@ -63,14 +67,17 @@ public partial class SplitNodeViewModel : LayoutNodeViewModelBase
 /// <summary>
 /// Represents a "box" or leaf node that actually holds tabs
 /// </summary>
-public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase,
-  IRecipient<EntitySelectedMessage>
+public partial class TabGroupNodeViewModel
+  : LayoutNodeViewModelBase,
+    IRecipient<EntitySelectedMessage>
 {
   public ObservableCollection<TabItemViewModel> Tabs { get; } = [];
 
-  [ObservableProperty] private TabItemViewModel? _selectedTab;
+  [ObservableProperty]
+  private TabItemViewModel? _selectedTab;
 
-  [ObservableProperty] private bool _hasTabs;
+  [ObservableProperty]
+  private bool _hasTabs;
 
   public TabGroupNodeViewModel(TabItemViewModel defaultTab, SplitNodeViewModel? parent = null)
     : base(parent)
@@ -149,14 +156,19 @@ public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase,
           newTab = new HorizonJplViewModel(horizonService);
         break;
       case "Outline":
-        var outlineVm =
-          new OutlineViewModel(1, ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService, ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager);
+        var outlineVm = new OutlineViewModel(
+          1,
+          ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService,
+          ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager
+        );
         if (outlineVm != null)
           newTab = outlineVm;
         break;
       case "Properties":
-        var propertiesVm =
-          new PropertiesViewModel(1, ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager);
+        var propertiesVm = new PropertiesViewModel(
+          1,
+          ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager
+        );
         if (propertiesVm != null)
           newTab = propertiesVm;
         break;
@@ -229,26 +241,34 @@ public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase,
   [RelayCommand]
   private void AddNewOutlineTab()
   {
-    var newTab = new OutlineViewModel(1, ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService, ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager);
+    var newTab = new OutlineViewModel(
+      1,
+      ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService,
+      ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager
+    );
     if (newTab != null && !Tabs.Contains(newTab))
     {
       Tabs.Add(newTab);
     }
 
-    if (newTab != null) SelectedTab = newTab;
+    if (newTab != null)
+      SelectedTab = newTab;
   }
 
   [RelayCommand]
   private void AddNewPropertiesTab()
   {
-    var newTab =
-      new PropertiesViewModel(1, ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager);
+    var newTab = new PropertiesViewModel(
+      1,
+      ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager
+    );
     if (newTab != null && !Tabs.Contains(newTab))
     {
       Tabs.Add(newTab);
     }
 
-    if (newTab != null) SelectedTab = newTab;
+    if (newTab != null)
+      SelectedTab = newTab;
   }
 
   [RelayCommand]
@@ -296,11 +316,14 @@ public partial class TabGroupNodeViewModel : LayoutNodeViewModelBase,
 /// </summary>
 public partial class TabItemViewModel(string title) : ViewModelBase
 {
-  [ObservableProperty] private string _title = title;
+  [ObservableProperty]
+  private string _title = title;
 
-  [ObservableProperty] private string? _icon;
+  [ObservableProperty]
+  private string? _icon;
 
-  [ObservableProperty] private bool _canClose = true;
+  [ObservableProperty]
+  private bool _canClose = true;
 }
 
 /// <summary>
@@ -312,7 +335,8 @@ public partial class DockingManagerViewModel
     IRecipient<TabDragTaskMessage>,
     IRecipient<CoalesceGroupMessage>
 {
-  [ObservableProperty] private LayoutNodeViewModelBase _rootNode;
+  [ObservableProperty]
+  private LayoutNodeViewModelBase _rootNode;
 
   public DockingManagerViewModel(LayoutNodeViewModelBase? rootNode = null)
     : base()
@@ -326,33 +350,35 @@ public partial class DockingManagerViewModel
 
   private LayoutNodeViewModelBase CreateDefaultLayout()
   {
-    // Default layout: Viewport3D on top, Console and others on bottom
     var viewportTab = new Viewport3DViewModel(
       (ServiceLocator.Provider!.GetService(typeof(NativeRuntimeService))! as NativeRuntimeService)!
     );
     var viewportGroup = new TabGroupNodeViewModel(viewportTab);
 
-    var consoleTab = new ConsoleViewModel(
-      (ServiceLocator.Provider.GetService(typeof(ConsoleService))! as ConsoleService)!
+    var outlineTab = new OutlineViewModel(
+      1,
+      ServiceLocator.Provider.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService,
+      ServiceLocator.Provider.GetService(typeof(SceneStateManager)) as SceneStateManager
     );
-    var bottomGroup = new TabGroupNodeViewModel(consoleTab);
+    var outlineGroup = new TabGroupNodeViewModel(outlineTab);
 
-    var split = new SplitNodeViewModel(viewportGroup, bottomGroup, SplitOrientation.Vertical, 0.7);
-    viewportGroup.Parent = split;
-    bottomGroup.Parent = split;
+    var propertiesTab = new PropertiesViewModel(
+      1,
+      ServiceLocator.Provider.GetService(typeof(SceneStateManager)) as SceneStateManager
+    );
+    var propertiesGroup = new TabGroupNodeViewModel(propertiesTab);
 
-    var outlineTab =
-      new OutlineViewModel(1, ServiceLocator.Provider.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService, ServiceLocator.Provider.GetService(typeof(SceneStateManager)) as SceneStateManager);
-    var propertiesTab = new PropertiesViewModel(1, ServiceLocator.Provider.GetService(typeof(SceneStateManager)) as SceneStateManager);
-    var rightGroup = new TabGroupNodeViewModel(outlineTab);
-    // TODO When I try to move this tab below, the left tab gets nuked. Fix that
-    rightGroup.Tabs.Add(propertiesTab);
-    // TODO split ratio doesn't work
-    var halfSplit = new SplitNodeViewModel(split, rightGroup, SplitOrientation.Horizontal, 0.7);
-    split.Parent = halfSplit;
-    rightGroup.Parent = halfSplit;
+    // Vertical split: Outline on top, Properties on bottom
+    var rightSplit = new SplitNodeViewModel(outlineGroup, propertiesGroup, SplitOrientation.Vertical, 0.5);
+    outlineGroup.Parent = rightSplit;
+    propertiesGroup.Parent = rightSplit;
 
-    return halfSplit;
+    // Horizontal split: Viewport on left, rightSplit on right
+    var mainSplit = new SplitNodeViewModel(viewportGroup, rightSplit, SplitOrientation.Horizontal, 0.7);
+    viewportGroup.Parent = mainSplit;
+    rightSplit.Parent = mainSplit;
+
+    return mainSplit;
   }
 
   // --- Track your Task safely from within the ViewModel ---

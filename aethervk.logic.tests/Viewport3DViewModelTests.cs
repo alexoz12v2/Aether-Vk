@@ -12,7 +12,7 @@ public class Viewport3DViewModelTests
   public void Initialization_SetsUpDimensions_WithoutNativeCrash()
   {
     // Arrange
-    var runtimeService = new NativeRuntimeService();
+    var runtimeService = new NativeRuntimeService(new SceneStateManager());
     // Do not call InitializeSimulationContext so it stays in mock state
 
     try

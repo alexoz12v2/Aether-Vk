@@ -17,6 +17,8 @@ pub struct RenderPacket {
   pub console_scroll_offset: usize,
   pub command_history: std::collections::VecDeque<String>,
   pub current_command: String,
+  pub show_particle_count: bool,
+  pub particle_count: usize,
 }
 
 pub fn start_render_thread(
@@ -140,6 +142,20 @@ fn render_payload(
         );
       }
     }
+  }
+
+  if payload.show_particle_count {
+    let text = format!("Particles: {}", payload.particle_count);
+    device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
+    let _ = device.render_text(
+      cmd_buffer,
+      &text,
+      [-0.95, -0.95],
+      screen_extent,
+      font_id,
+      24.0,
+      [1.0, 1.0, 1.0, 1.0],
+    );
   }
 
   // TODO use Calculate slide-in animation offset

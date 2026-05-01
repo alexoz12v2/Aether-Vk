@@ -14,6 +14,7 @@ public enum AppTheme
 }
 
 public class ImportModelRequestMessage { }
+
 public class ImportImageRequestMessage { }
 
 public class OpenImportedModelsDialogMessage { }
@@ -33,6 +34,7 @@ public partial class ImportedModelItem : ObservableObject
     Name = name;
     FullPath = fullPath;
   }
+
   [RelayCommand]
   private void Spawn()
   {
@@ -48,9 +50,10 @@ public partial class ImportedModelItem : ObservableObject
   [RelayCommand]
   private void Unload()
   {
-    var runtime = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+    var runtime =
+      ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
     runtime?.UnloadModel(Id);
-    
+
     // Signal UI to remove from list
     WeakReferenceMessenger.Default.Send(new ModelUnloadedMessage(this));
   }
@@ -59,18 +62,21 @@ public partial class ImportedModelItem : ObservableObject
 public class OpenSpawnMeshDialogMessage
 {
   public ImportedModelItem Model { get; }
+
   public OpenSpawnMeshDialogMessage(ImportedModelItem model) => Model = model;
 }
 
 public class OpenMeshViewerMessage
 {
   public ImportedModelItem Model { get; }
+
   public OpenMeshViewerMessage(ImportedModelItem model) => Model = model;
 }
 
 public class ModelUnloadedMessage
 {
   public ImportedModelItem Model { get; }
+
   public ModelUnloadedMessage(ImportedModelItem model) => Model = model;
 }
 

@@ -158,22 +158,7 @@ impl ParticleSystemComponent {
         + comet_rot.rotate_vector(local_pos_vec)
         + world_norm * self.config.particle_radius * 1.5; // Push slightly outside
 
-      // Check intersection with other alive particles to avoid generating overlapping particles
-      let mut intersecting = false;
-      for p in self.particles.iter() {
-        if p.active != 0 {
-          let p_pos = Vec3f32::from_array(p.position);
-          let dist_sq = (p_pos - world_pos).length_squared();
-          let min_dist = self.config.particle_radius * 2.0;
-          if dist_sq < min_dist * min_dist {
-            intersecting = true;
-            break;
-          }
-        }
-      }
-      if intersecting {
-        continue;
-      }
+      // Intersection check removed for performance
 
       // Velocity in cosine hemisphere
       let phi = 2.0 * core::f32::consts::PI * u[2];

@@ -30,4 +30,10 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Update="Views\SplashWindow.axaml.cs">
+      <DependentUpon>SplashWindow.axaml</DependentUpon>
+    </Compile>
+  </ItemGroup>
 </Project>

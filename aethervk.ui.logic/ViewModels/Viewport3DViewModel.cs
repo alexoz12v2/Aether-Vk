@@ -123,7 +123,8 @@ public partial class Viewport3DViewModel
 
     if (res.hit)
     {
-      var outlineVm = ServiceLocator.Provider?.GetService(typeof(OutlineViewModel)) as OutlineViewModel;
+      var outlineVm =
+        ServiceLocator.Provider?.GetService(typeof(OutlineViewModel)) as OutlineViewModel;
       var entity = _runtimeService.GetEntityById(SceneId, res.entityId);
 
       if (entity != null)
@@ -155,15 +156,18 @@ public partial class Viewport3DViewModel
           }
           else
           {
-             breadcrumb?.ShowMessageAsync("Raycast Info", "Entity selected but it is not a comet, cannot add jets.");
+            breadcrumb?.ShowMessageAsync(
+              "Raycast Info",
+              "Entity selected but it is not a comet, cannot add jets."
+            );
           }
         }
         else
         {
           if (outlineVm != null)
           {
-             outlineVm.SelectedEntity = entity;
-             breadcrumb?.ShowMessageAsync("Raycast Hit", $"Selected {entity.Name}");
+            outlineVm.SelectedEntity = entity;
+            breadcrumb?.ShowMessageAsync("Raycast Hit", $"Selected {entity.Name}");
           }
         }
       }
@@ -171,7 +175,8 @@ public partial class Viewport3DViewModel
     else
     {
       // Deselect when clicking on empty space
-      var outlineVm = ServiceLocator.Provider?.GetService(typeof(OutlineViewModel)) as OutlineViewModel;
+      var outlineVm =
+        ServiceLocator.Provider?.GetService(typeof(OutlineViewModel)) as OutlineViewModel;
       if (outlineVm != null)
       {
         outlineVm.SelectedEntity = null;
@@ -214,13 +219,19 @@ public partial class Viewport3DViewModel
   [CommunityToolkit.Mvvm.Input.RelayCommand]
   private void SubmitCursorMeasurement()
   {
-    float cx = 0, cy = 0, cz = 0;
+    float cx = 0,
+      cy = 0,
+      cz = 0;
     var state = ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager;
     var rootEntities = state?.GetOrCreateScene(SceneId).RootEntities;
-    var cursor = rootEntities?.FirstOrDefault(e => e.Name == "cursor" || e.Components.Any(c => c.Name == "Cursor"));
+    var cursor = rootEntities?.FirstOrDefault(e =>
+      e.Name == "cursor" || e.Components.Any(c => c.Name == "Cursor")
+    );
     if (cursor != null)
     {
-      var transform = cursor.Components.OfType<AetherVk.Logic.Models.TransformComponent>().FirstOrDefault();
+      var transform = cursor
+        .Components.OfType<AetherVk.Logic.Models.TransformComponent>()
+        .FirstOrDefault();
       if (transform != null)
       {
         cx = transform.PosX;
@@ -300,22 +311,34 @@ public partial class Viewport3DViewModel
             }
 
             // Update camera
-            var sceneState = ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager;
-            var camera = sceneState?.GetOrCreateScene(SceneId).EntityMap.Values.FirstOrDefault(e => e.Name == "camera" || e.Components.Any(c => c is AetherVk.Logic.Models.CameraComponent));
+            var sceneState =
+              ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager;
+            var camera = sceneState
+              ?.GetOrCreateScene(SceneId)
+              .EntityMap.Values.FirstOrDefault(e =>
+                e.Name == "camera"
+                || e.Components.Any(c => c is AetherVk.Logic.Models.CameraComponent)
+              );
             if (camera != null)
             {
-               CameraId = camera.Id;
+              CameraId = camera.Id;
             }
 
             // Wait for previous render to finish before starting a new one
             if (_lastRenderTask != null)
             {
-                _lastRenderTaskId = await _lastRenderTask;
-                OnFrameReady?.Invoke();
+              _lastRenderTaskId = await _lastRenderTask;
+              OnFrameReady?.Invoke();
             }
 
             // Async Render - fire and forget, save task
-            _lastRenderTask = _runtimeService.RenderTickAsync(PresentationEngineId, SceneId, CameraId, Width, Height);
+            _lastRenderTask = _runtimeService.RenderTickAsync(
+              PresentationEngineId,
+              SceneId,
+              CameraId,
+              Width,
+              Height
+            );
           }
 
           // Yield to prevent pegging the CPU, aiming for ~60 FPS render signal

@@ -18,14 +18,14 @@ public partial class HorizonJplView : UserControl, IRecipient<RequestSaveFileMes
 
   protected override void OnAttachedToVisualTree(Avalonia.VisualTreeAttachmentEventArgs e)
   {
-      base.OnAttachedToVisualTree(e);
-      WeakReferenceMessenger.Default.Register<RequestSaveFileMessage>(this);
+    base.OnAttachedToVisualTree(e);
+    WeakReferenceMessenger.Default.Register<RequestSaveFileMessage>(this);
   }
 
   protected override void OnDetachedFromVisualTree(Avalonia.VisualTreeAttachmentEventArgs e)
   {
-      base.OnDetachedFromVisualTree(e);
-      WeakReferenceMessenger.Default.Unregister<RequestSaveFileMessage>(this);
+    base.OnDetachedFromVisualTree(e);
+    WeakReferenceMessenger.Default.Unregister<RequestSaveFileMessage>(this);
   }
 
   protected override void OnDataContextChanged(EventArgs e)
@@ -108,13 +108,13 @@ public partial class HorizonJplView : UserControl, IRecipient<RequestSaveFileMes
         {
           new Avalonia.Platform.Storage.FilePickerFileType("BSP Files")
           {
-            Patterns = new[] { "*.bsp" }
+            Patterns = new[] { "*.bsp" },
           },
           new Avalonia.Platform.Storage.FilePickerFileType("All Files")
           {
-            Patterns = new[] { "*.*" }
-          }
-        }
+            Patterns = new[] { "*.*" },
+          },
+        },
       }
     );
 

@@ -119,16 +119,23 @@ public class HorizonJplService
   {
     try
     {
-      using var request = new HttpRequestMessage(HttpMethod.Get, 
+      using var request = new HttpRequestMessage(
+        HttpMethod.Get,
         $"https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND='{Uri.EscapeDataString(command)}'&OBJ_DATA='YES'&MAKE_EPHEM='YES'&EPHEM_TYPE='OBSERVER'&CENTER='{Uri.EscapeDataString(center)}'&START_TIME='{Uri.EscapeDataString(startTime)}'&STOP_TIME='{Uri.EscapeDataString(stopTime)}'&STEP_SIZE='{Uri.EscapeDataString(stepSize)}'&CSV_FORMAT='YES'"
       );
 
       _console.Log($"[HorizonJpl] GET {request.RequestUri}");
 
       // Send the request. Using ResponseContentRead to avoid hanging on stream parsing of chunked encoding
-      using var cts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+      using var cts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(
+        cancellationToken
+      );
       cts.CancelAfter(TimeSpan.FromSeconds(5)); // Force 5s timeout on stream
-      var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseContentRead, cts.Token);
+      var response = await _httpClient.SendAsync(
+        request,
+        HttpCompletionOption.ResponseContentRead,
+        cts.Token
+      );
 
       _console.Log(
         $"[HorizonJpl] Response Status: {(int)response.StatusCode} {response.ReasonPhrase}"
@@ -167,98 +174,157 @@ public class HorizonJplService
 
   public async Task FetchSpkRecordsAsync(string pdes, string startTime, string stopTime)
   {
-      try
+    try
+    {
+      var command = Uri.EscapeDataString($"'DES={pdes};'");
+      var ephemType = Uri.EscapeDataString("'SPK'");
+      var start = Uri.EscapeDataString($"'{startTime}'");
+      var stop = Uri.EscapeDataString($"'{stopTime}'");
+      var makeEphem = Uri.EscapeDataString("'YES'");
+
+      var url =
+        $"https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND={command}&EPHEM_TYPE={ephemType}&START_TIME={start}&STOP_TIME={stop}&MAKE_EPHEM={makeEphem}";
+
+      _console.Log($"[HorizonJpl] GET SPK Records: {url}");
+      var response = await _httpClient.GetAsync(url);
+
+      if (response.IsSuccessStatusCode)
       {
-          var url = $"https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND='DES={Uri.EscapeDataString(pdes)};'&EPHEM_TYPE='SPK'&START_TIME='{Uri.EscapeDataString(startTime)}'&STOP_TIME='{Uri.EscapeDataString(stopTime)}'&MAKE_EPHEM='YES'";
-          
-          _console.Log($"[HorizonJpl] GET SPK Records: {url}");
-          var response = await _httpClient.GetAsync(url);
-          
-          if (response.IsSuccessStatusCode)
-          {
-              var json = await response.Content.ReadAsStringAsync();
-              ParseSpkRecordsJson(json);
-              await _breadcrumb.ShowMessageAsync("Horizon API (SPK Records)", $"Success: {SpkRecordsData.Count} records found.");
-          }
-          else
-          {
-              await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status: {(int)response.StatusCode}");
-          }
+        var json = await response.Content.ReadAsStringAsync();
+        ParseSpkRecordsJson(json);
+        await _breadcrumb.ShowMessageAsync(
+          "Horizon API (SPK Records)",
+          $"Success: {SpkRecordsData.Count} records found."
+        );
       }
-      catch (Exception ex)
+      else
       {
-          _console.Log($"[HorizonJpl] SPK Records Exception: {ex.Message}");
-          await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
+        await _breadcrumb.ShowMessageAsync(
+          "Horizon API Error",
+          $"Status: {(int)response.StatusCode}"
+        );
       }
+    }
+    catch (Exception ex)
+    {
+      _console.Log($"[HorizonJpl] SPK Records Exception: {ex.Message}");
+      await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
+    }
   }
 
   private void ParseSpkRecordsJson(string json)
   {
-      SpkRecordsData.Clear();
-      SpkRecordsHeaders.Clear();
-      
-      // Simple headers for now
-      SpkRecordsHeaders.Add("Record ID");
-      SpkRecordsHeaders.Add("Start Time");
-      SpkRecordsHeaders.Add("Stop Time");
-      
-      try
+    SpkRecordsData.Clear();
+    SpkRecordsHeaders.Clear();
+
+    SpkRecordsHeaders.Add("Record #");
+    SpkRecordsHeaders.Add("Epoch-yr");
+    SpkRecordsHeaders.Add("MATCH DESIG");
+    SpkRecordsHeaders.Add("Primary Desig");
+    SpkRecordsHeaders.Add("Name");
+
+    try
+    {
+      using var doc = System.Text.Json.JsonDocument.Parse(json);
+      var root = doc.RootElement;
+
+      if (root.TryGetProperty("result", out var resultElement))
       {
-          using var doc = System.Text.Json.JsonDocument.Parse(json);
-          var root = doc.RootElement;
-          
-          if (root.TryGetProperty("spk_records", out var records) && records.ValueKind == System.Text.Json.JsonValueKind.Array)
+        var resultStr = resultElement.GetString() ?? "";
+        var lines = resultStr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        bool inData = false;
+        foreach (var line in lines)
+        {
+          if (line.Trim().StartsWith("--------"))
           {
-              foreach (var record in records.EnumerateArray())
-              {
-                  var id = record.GetProperty("id").GetString() ?? "";
-                  var start = record.GetProperty("start").GetString() ?? "";
-                  var stop = record.GetProperty("stop").GetString() ?? "";
-                  SpkRecordsData.Add(new[] { id, start, stop });
-              }
+            inData = true;
+            continue;
           }
+          if (inData)
+          {
+            if (line.Trim().StartsWith("*") || string.IsNullOrWhiteSpace(line))
+              break;
+            var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 5)
+            {
+              var id = parts[0];
+              var epoch = parts[1];
+              var match = parts[2];
+              var primary = parts[3];
+              var name = string.Join(" ", parts.Skip(4));
+              SpkRecordsData.Add(new[] { id, epoch, match, primary, name });
+            }
+          }
+        }
       }
-      catch (Exception ex)
-      {
-          _console.Log($"[HorizonJpl] SPK JSON Parse Exception: {ex.Message}");
-      }
+    }
+    catch (Exception ex)
+    {
+      _console.Log($"[HorizonJpl] SPK JSON Parse Exception: {ex.Message}");
+    }
   }
 
-  public async Task<string?> DownloadSpkByIdAsync(string pdes, string spkId, string savePath)
+  public async Task<string?> DownloadSpkByIdAsync(
+    string pdes,
+    string spkId,
+    string savePath,
+    string startTime,
+    string stopTime
+  )
   {
-      try
+    try
+    {
+      var url = "https://ssd.jpl.nasa.gov/api/horizons.api";
+
+      var command = Uri.EscapeDataString($"'{spkId};'");
+      var objData = Uri.EscapeDataString("'NO'");
+      var makeEphem = Uri.EscapeDataString("'YES'");
+      var ephemType = Uri.EscapeDataString("'SPK'");
+      var start = Uri.EscapeDataString($"'{startTime}'");
+      var stop = Uri.EscapeDataString($"'{stopTime}'");
+
+      var query =
+        $"?format=json&COMMAND={command}&OBJ_DATA={objData}&MAKE_EPHEM={makeEphem}&EPHEM_TYPE={ephemType}&START_TIME={start}&STOP_TIME={stop}";
+
+      _console.Log($"[HorizonJpl] Requesting SPK: {url}{query}");
+      var response = await _httpClient.GetAsync(url + query);
+
+      if (!response.IsSuccessStatusCode)
+        return null;
+
+      var json = await response.Content.ReadAsStringAsync();
+      using var doc = System.Text.Json.JsonDocument.Parse(json);
+      var root = doc.RootElement;
+
+      if (root.TryGetProperty("spk", out var spkElement))
       {
-          var url = "https://ssd.jpl.nasa.gov/api/horizons.api";
-          var query = $"?format=json&COMMAND='DES={Uri.EscapeDataString(pdes)};'&OBJ_DATA=NO&MAKE_EPHEM=YES&EPHEM_TYPE=SPK&SPK_ID='{Uri.EscapeDataString(spkId)}'";
-          
-          _console.Log($"[HorizonJpl] Requesting SPK: {url}{query}");
-          var response = await _httpClient.GetAsync(url + query);
-          
-          if (!response.IsSuccessStatusCode) return null;
-          
-          var json = await response.Content.ReadAsStringAsync();
-          using var doc = System.Text.Json.JsonDocument.Parse(json);
-          var root = doc.RootElement;
-          
-          if (root.TryGetProperty("spk", out var spkElement))
-          {
-              var base64Spk = spkElement.GetString();
-              if (string.IsNullOrEmpty(base64Spk)) return null;
-              
-              var binarySpk = Convert.FromBase64String(base64Spk);
-              using (var fs = new FileStream(savePath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true))
-              {
-                  await fs.WriteAsync(binarySpk, 0, binarySpk.Length);
-              }
-              return savePath;
-          }
+        var base64Spk = spkElement.GetString();
+        if (string.IsNullOrEmpty(base64Spk))
           return null;
+
+        var binarySpk = Convert.FromBase64String(base64Spk);
+        using (
+          var fs = new FileStream(
+            savePath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            4096,
+            true
+          )
+        )
+        {
+          await fs.WriteAsync(binarySpk, 0, binarySpk.Length);
+        }
+        return savePath;
       }
-      catch (Exception ex)
-      {
-          _console.Log($"[HorizonJpl] SPK Download Exception: {ex.Message}");
-          return null;
-      }
+      return null;
+    }
+    catch (Exception ex)
+    {
+      _console.Log($"[HorizonJpl] SPK Download Exception: {ex.Message}");
+      return null;
+    }
   }
 
   public void ParseText(string text)
@@ -341,7 +407,8 @@ public class HorizonJplService
       }
 
       var url = "https://ssd.jpl.nasa.gov/api/horizons.api";
-      var query = $"?format=json&COMMAND='{Uri.EscapeDataString(spkid)}'&OBJ_DATA=NO&MAKE_EPHEM=YES&EPHEM_TYPE=SPK&START_TIME='{Uri.EscapeDataString(startTime)}'&STOP_TIME='{Uri.EscapeDataString(stopTime)}'";
+      var query =
+        $"?format=json&COMMAND='{Uri.EscapeDataString(spkid)}'&OBJ_DATA=NO&MAKE_EPHEM=YES&EPHEM_TYPE=SPK&START_TIME='{Uri.EscapeDataString(startTime)}'&STOP_TIME='{Uri.EscapeDataString(stopTime)}'";
 
       _console.Log($"[HorizonJpl] Requesting SPK: {url}{query}");
 
@@ -366,11 +433,22 @@ public class HorizonJplService
         }
 
         var binarySpk = Convert.FromBase64String(base64Spk);
-        using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true))
+        using (
+          var fs = new FileStream(
+            filePath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            4096,
+            true
+          )
+        )
         {
-            await fs.WriteAsync(binarySpk, 0, binarySpk.Length);
+          await fs.WriteAsync(binarySpk, 0, binarySpk.Length);
         }
-        _console.Log($"[HorizonJpl] Successfully saved SPK to {filePath} ({binarySpk.Length / 1024.0:F2} KB)");
+        _console.Log(
+          $"[HorizonJpl] Successfully saved SPK to {filePath} ({binarySpk.Length / 1024.0:F2} KB)"
+        );
         return filePath;
       }
       else

@@ -7,7 +7,7 @@ public class ConsoleServiceTests
 {
   public ConsoleServiceTests()
   {
-     ServiceLocator.DispatchToUI = a => a();
+    ServiceLocator.DispatchToUI = a => a();
   }
 
   [Fact]

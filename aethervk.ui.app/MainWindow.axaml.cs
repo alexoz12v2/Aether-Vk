@@ -1,6 +1,6 @@
 using System;
-using System.Diagnostics;
 using System;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using AetherVk.Logic.Services;
@@ -17,25 +17,40 @@ public partial class MainWindow : Window
   {
     InitializeComponent();
 
-    WeakReferenceMessenger.Default.Register<ImportModelRequestMessage>(this, async (r, m) =>
-    {
-      await ShowImportModelDialogAsync();
-    });
+    WeakReferenceMessenger.Default.Register<ImportModelRequestMessage>(
+      this,
+      async (r, m) =>
+      {
+        await ShowImportModelDialogAsync();
+      }
+    );
 
-    WeakReferenceMessenger.Default.Register<OpenImportedModelsDialogMessage>(this, (r, m) =>
-    {
-      ShowImportedModelsFlyout();
-    });
+    WeakReferenceMessenger.Default.Register<OpenImportedModelsDialogMessage>(
+      this,
+      (r, m) =>
+      {
+        ShowImportedModelsFlyout();
+      }
+    );
 
-    WeakReferenceMessenger.Default.Register<OpenMeshViewerMessage>(this, (r, m) =>
-    {
-       var isLightTheme = Avalonia.Application.Current?.ActualThemeVariant == Avalonia.Styling.ThemeVariant.Light;
-       var meshViewer = new Views.MeshViewerWindow
-       {
-           DataContext = new MeshViewerViewModel(m.Model.FullPath, m.Model.Name, isLightTheme)
-       };
-       meshViewer.Show(this);
-    });
+    WeakReferenceMessenger.Default.Register<OpenMeshViewerMessage>(
+      this,
+      (r, m) =>
+      {
+        var isLightTheme =
+          Avalonia.Application.Current?.ActualThemeVariant == Avalonia.Styling.ThemeVariant.Light;
+        var meshViewer = new Views.MeshViewerWindow
+        {
+          DataContext = new MeshViewerViewModel(
+            m.Model.Id,
+            m.Model.FullPath,
+            m.Model.Name,
+            isLightTheme
+          ),
+        };
+        meshViewer.Show(this);
+      }
+    );
 
     KeyDown += OnKeyDown;
   }
@@ -44,18 +59,17 @@ public partial class MainWindow : Window
   {
     if (DataContext is MainWindowViewModel vm)
     {
-      var window = new Views.ManageImportsWindow
-      {
-        DataContext = vm
-      };
+      var window = new Views.ManageImportsWindow { DataContext = vm };
       window.ShowDialog(this);
     }
   }
 
   private void OnKeyDown(object? sender, KeyEventArgs e)
   {
-    bool isMacOs = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX);
-    
+    bool isMacOs = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+      System.Runtime.InteropServices.OSPlatform.OSX
+    );
+
     if (isMacOs)
     {
       // Cmd + Ctrl + F
@@ -96,8 +110,12 @@ public partial class MainWindow : Window
       AllowMultiple = false,
       Filters = new System.Collections.Generic.List<FileDialogFilter>
       {
-        new FileDialogFilter { Name = "Images", Extensions = { "png", "jpg", "jpeg", "bmp", "tga" } }
-      }
+        new FileDialogFilter
+        {
+          Name = "Images",
+          Extensions = { "png", "jpg", "jpeg", "bmp", "tga" },
+        },
+      },
     };
 
     var result = await dialog.ShowAsync(this);
@@ -111,31 +129,46 @@ public partial class MainWindow : Window
         var bitmap = new Avalonia.Media.Imaging.Bitmap(stream);
         float width = (float)bitmap.Size.Width;
         float height = (float)bitmap.Size.Height;
-        
+
         var fileName = System.IO.Path.GetFileNameWithoutExtension(filePath);
 
         var spawnDialog = new Views.SpawnImageDialogWindow
         {
-          DataContext = new SpawnImageViewModel(fileName + " Billboard", width, height)
+          DataContext = new SpawnImageViewModel(fileName + " Billboard", width, height),
         };
 
         var dlgResult = await spawnDialog.ShowDialog<bool>(this);
         if (dlgResult && spawnDialog.DataContext is SpawnImageViewModel vm)
         {
-          var runtime = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+          var runtime =
+            ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService))
+            as NativeRuntimeService;
           if (runtime != null)
           {
-            var entity = runtime.SpawnImageBillboard(1, vm.EntityName, vm.IsScreenSpace, vm.Width, vm.Height);
-            
-            var watcherService = ServiceLocator.Provider?.GetService(typeof(FileWatcherService)) as FileWatcherService;
+            var entity = runtime.SpawnImageBillboard(
+              1,
+              vm.EntityName,
+              vm.IsScreenSpace,
+              vm.Width,
+              vm.Height
+            );
+
+            var watcherService =
+              ServiceLocator.Provider?.GetService(typeof(FileWatcherService)) as FileWatcherService;
             watcherService?.WatchImageFile(filePath, entity);
           }
         }
       }
       catch (System.Exception ex)
       {
-        var breadcrumb = ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
-        breadcrumb?.ShowMessageAsync("Import Error", $"Failed to load image: {ex.Message}", default, 3);
+        var breadcrumb =
+          ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
+        breadcrumb?.ShowMessageAsync(
+          "Import Error",
+          $"Failed to load image: {ex.Message}",
+          default,
+          3
+        );
       }
     }
   }
@@ -148,16 +181,17 @@ public partial class MainWindow : Window
       AllowMultiple = false,
       Filters = new System.Collections.Generic.List<FileDialogFilter>
       {
-        new FileDialogFilter { Name = "GLTF/GLB Models", Extensions = { "gltf", "glb" } }
-      }
+        new FileDialogFilter { Name = "GLTF/GLB Models", Extensions = { "gltf", "glb" } },
+      },
     };
 
     var result = await dialog.ShowAsync(this);
     if (result != null && result.Length > 0)
     {
       var filePath = result[0];
-      var runtime = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-      
+      var runtime =
+        ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+
       if (runtime != null)
       {
         var modelId = await runtime.ImportModelAsync(filePath);
