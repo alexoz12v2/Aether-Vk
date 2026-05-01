@@ -99,15 +99,22 @@ public partial class GridComponent : ObservableObject, IComponent
   [ObservableProperty]
   private bool _isVisible = true;
 }
+
 public partial class SunComponent : ObservableObject, IComponent
 {
   public string Name => "Sun";
 
-  public float PositionX { get; } = 0.0f;
-  public float PositionY { get; } = 0.0f;
-  public float PositionZ { get; } = 0.0f;
+  [ObservableProperty]
+  private float _positionX;
 
-  public float Temperature { get; } = 5778.0f; // K
+  [ObservableProperty]
+  private float _positionY;
+
+  [ObservableProperty]
+  private float _positionZ;
+
+  [ObservableProperty]
+  private float _temperature = 5778.0f; // K
 
   [ObservableProperty]
   private bool _showBoundingBox = false;
@@ -122,13 +129,23 @@ public partial class PlanetComponent : ObservableObject, IComponent
 {
   public string Name => "Planet (Ephemeris)";
 
-  public float PositionX { get; } = 150000000.0f;
-  public float PositionY { get; } = 0.0f;
-  public float PositionZ { get; } = 0.0f;
+  [ObservableProperty]
+  private float _positionX = 150000000.0f;
 
-  public float VelocityX { get; } = 0.0f;
-  public float VelocityY { get; } = 30.0f;
-  public float VelocityZ { get; } = 0.0f;
+  [ObservableProperty]
+  private float _positionY;
+
+  [ObservableProperty]
+  private float _positionZ;
+
+  [ObservableProperty]
+  private float _velocityX;
+
+  [ObservableProperty]
+  private float _velocityY = 30.0f;
+
+  [ObservableProperty]
+  private float _velocityZ;
 
   [ObservableProperty]
   private bool _showBoundingBox;
@@ -162,7 +179,8 @@ public partial class BvhNode : ObservableObject
   {
     if (EntityId != 0)
     {
-      var runtimeService = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+      var runtimeService =
+        ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
       runtimeService?.SetBvhNodeVisibility(SceneId, EntityId, Index, value);
     }
   }
@@ -199,25 +217,39 @@ public partial class CometComponent : ObservableObject, IComponent
 {
   public string Name => "Comet";
 
-  public float PositionX { get; } = 0.0f;
-  public float PositionY { get; } = 0.0f;
-  public float PositionZ { get; } = 0.0f;
+  [ObservableProperty]
+  private float _positionX;
 
-  public float VelocityX { get; } = 0.0f;
-  public float VelocityY { get; } = 0.0f;
-  public float VelocityZ { get; } = 0.0f;
+  [ObservableProperty]
+  private float _positionY;
 
-  public float AngularVelocityX { get; } = 0.1f;
-  public float AngularVelocityY { get; } = 0.2f;
-  public float AngularVelocityZ { get; } = 0.05f;
+  [ObservableProperty]
+  private float _positionZ;
 
-  public string InertiaTensor { get; } = "[[1.0, 0.0, 0.0],\n [0.0, 1.0, 0.0],\n [0.0, 0.0, 1.0]]";
+  [ObservableProperty]
+  private float _velocityX;
+
+  [ObservableProperty]
+  private float _velocityY;
+
+  [ObservableProperty]
+  private float _velocityZ;
+
+  [ObservableProperty]
+  private float _angularVelocityX = 0.1f;
+
+  [ObservableProperty]
+  private float _angularVelocityY = 0.2f;
+
+  [ObservableProperty]
+  private float _angularVelocityZ = 0.05f;
+
+  [ObservableProperty]
+  private string _inertiaTensor = "[[1.0, 0.0, 0.0],\n [0.0, 1.0, 0.0],\n [0.0, 0.0, 1.0]]";
 
   public ObservableCollection<BvhNode> BvhTree { get; } = new();
 
   public ObservableCollection<JetMarker> Jets { get; } = new();
 
-  public CometComponent()
-  {
-  }
+  public CometComponent() { }
 }

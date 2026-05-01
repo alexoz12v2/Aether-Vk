@@ -136,31 +136,16 @@ public partial class App : Application
       }
       else
       {
-        var mainWindowViewModel = new MainWindowViewModel();
-        desktop.MainWindow = new MainWindow { DataContext = mainWindowViewModel };
+        var splashWindow = new Views.SplashWindow();
+        desktop.MainWindow = splashWindow;
 
-        // Listen for theme changes in the ViewModel
-        mainWindowViewModel.PropertyChanged += (sender, e) =>
-        {
-          if (e.PropertyName == nameof(MainWindowViewModel.CurrentTheme))
-          {
-            if (sender is MainWindowViewModel vm)
-            {
-              RequestedThemeVariant = vm.CurrentTheme switch
-              {
-                AppTheme.Light => ThemeVariant.Light,
-                AppTheme.Dark => ThemeVariant.Dark,
-                _ => ThemeVariant.Default,
-              };
-            }
-          }
-        };
-        
         desktop.Exit += (sender, args) =>
         {
-           var runtimeService = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-           runtimeService?.Dispose();
-           System.Environment.Exit(0);
+          var runtimeService =
+            ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService))
+            as NativeRuntimeService;
+          runtimeService?.Dispose();
+          System.Environment.Exit(0);
         };
       }
     }

@@ -209,18 +209,18 @@ fn main() {
           aethervk_core_rlib::scene::ParticleEmitterConfig {
             uv_distribution: uv_dist,
             delta: 100_000,
-            max_particles: 1000,
+            max_particles: 100000,
             velocity_intensity: aethervk_core_rlib::scene::GaussianParams {
-              mean: 5.0,
-              std_dev: 1.0,
+              mean: 0.5,
+              std_dev: 0.1,
               min: 0.0,
-              max: 10.0,
+              max: 1.0,
             },
             emission_count: aethervk_core_rlib::scene::GaussianParams {
-              mean: 10.0,
-              std_dev: 2.0,
-              min: 1.0,
-              max: 20.0,
+              mean: 100.0,
+              std_dev: 20.0,
+              min: 10.0,
+              max: 200.0,
             },
             particle_radius: 1.0,
             density: 1000.0,
@@ -520,6 +520,7 @@ fn main() {
     response_rx,
     right_mouse_button_down: false,
     middle_mouse_button_down: false,
+    ctrl_down: false,
     mouse_x: 0.0,
     mouse_y: 0.0,
     last_log_time: std::time::Instant::now(),
@@ -554,6 +555,7 @@ struct SimApp {
   response_rx: std::sync::mpsc::Receiver<String>,
   right_mouse_button_down: bool,
   middle_mouse_button_down: bool,
+  ctrl_down: bool,
   mouse_x: f64,
   mouse_y: f64,
   last_log_time: std::time::Instant,
@@ -822,22 +824,25 @@ impl test_utils::app::App for SimApp {
       if let Some(w) = self.app_state.window.as_ref() {
         w.request_redraw();
       }
-    } else {
-      let _ = self.logic_tx.send(LogicCommand::ZoomCamera {
-        amount: scroll_amount,
-      });
-      if let Some(w) = self.app_state.window.as_ref() {
-        w.request_redraw();
-      }
     }
+  }
+
+  fn on_modifiers_changed(&mut self, modifiers: winit::keyboard::ModifiersState) {
+    self.ctrl_down = modifiers.control_key() || modifiers.super_key();
   }
 
   fn on_mouse_motion(&mut self, delta: (f64, f64)) {
     if self.right_mouse_button_down {
-      let _ = self.logic_tx.send(LogicCommand::RotateCamera {
-        delta_x: delta.0 as f32,
-        delta_y: delta.1 as f32,
-      });
+      if self.ctrl_down {
+        let _ = self.logic_tx.send(LogicCommand::ZoomCamera {
+          amount: delta.1 as f32,
+        });
+      } else {
+        let _ = self.logic_tx.send(LogicCommand::RotateCamera {
+          delta_x: delta.0 as f32,
+          delta_y: delta.1 as f32,
+        });
+      }
       if let Some(w) = self.app_state.window.as_ref() {
         w.request_redraw();
       }
@@ -853,6 +858,25 @@ impl test_utils::app::App for SimApp {
   }
 
   fn on_redraw(&mut self) {
+    let mut show_particle_count = false;
+    let mut particle_count = 0;
+
+    let _ = self.app_state.scene.with_component(
+      self.app_state.camera_entity,
+      |_c: &logic_thread::ParticleCountDisplayComponent| {
+        show_particle_count = true;
+      },
+    );
+
+    if show_particle_count {
+      self
+        .app_state
+        .scene
+        .query1::<aethervk_core_rlib::scene::ParticleSystemComponent, _>(|_, sys| {
+          particle_count += sys.particles.len();
+        });
+    }
+
     let packet = RenderPacket {
       camera_entity: self.app_state.camera_entity,
       window_size: self.app_state.window.as_ref().unwrap().inner_size(),
@@ -865,6 +889,8 @@ impl test_utils::app::App for SimApp {
       console_scroll_offset: self.app_state.console_scroll_offset,
       command_history: self.app_state.command_history.clone(),
       current_command: self.app_state.current_command.clone(),
+      show_particle_count,
+      particle_count,
     };
 
     match self.render_tx.try_send(Some(packet)) {

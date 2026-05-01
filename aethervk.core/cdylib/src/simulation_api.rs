@@ -617,6 +617,7 @@ pub unsafe extern "C" fn avkSimulationContext_loadCometSpk(
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_spawnModelInstance(
   ctx: *mut SimulationContext,
+  scene_id: u64,
   model_id: u64,
   name: *const c_char,
 ) -> u64 {
@@ -641,6 +642,7 @@ pub unsafe extern "C" fn avkSimulationContext_spawnModelInstance(
     .tx()
     .try_send(structs::LogicCommand::SpawnModelInstance {
       task_id,
+      scene_id,
       model_id,
       name: name_str,
     });

@@ -3,6 +3,13 @@
     <ResourceDictionary.ThemeDictionaries>
 
         <ResourceDictionary x:Key="Light">
+            <!-- Hero Background -->
+            <LinearGradientBrush x:Key="HeroBackgroundBrush" StartPoint="0%,0%" EndPoint="100%,100%">
+                <GradientStop Offset="0" Color="#4A5AF0"/>
+                <GradientStop Offset="0.5" Color="#EB6CFF"/>
+                <GradientStop Offset="1" Color="#2AD4C5"/>
+            </LinearGradientBrush>
+
             <!-- Neutral Foundation -->
             <SolidColorBrush x:Key="Bg.Canvas" Color="#F6F8FB" />
             <SolidColorBrush x:Key="Bg.Surface" Color="#FFFFFF" />
@@ -37,6 +44,13 @@
         </ResourceDictionary>
 
         <ResourceDictionary x:Key="Dark">
+            <!-- Hero Background -->
+            <LinearGradientBrush x:Key="HeroBackgroundBrush" StartPoint="0%,0%" EndPoint="100%,100%">
+                <GradientStop Offset="0" Color="#5F6DFF"/>
+                <GradientStop Offset="0.5" Color="#7C89FF"/>
+                <GradientStop Offset="1" Color="#39E6D8"/>
+            </LinearGradientBrush>
+
             <!-- Neutral Foundation -->
             <SolidColorBrush x:Key="Bg.Canvas" Color="#0F1117" />
             <SolidColorBrush x:Key="Bg.Surface" Color="#161A23" />

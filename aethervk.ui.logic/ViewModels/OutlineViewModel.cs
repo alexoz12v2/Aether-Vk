@@ -26,7 +26,8 @@ public partial class OutlineViewModel : TabItemViewModel, IRecipient<EntitySelec
   [ObservableProperty]
   private ulong _currentSceneId;
 
-  public ObservableCollection<Entity>? RootEntities => StateManager.GetOrCreateScene(CurrentSceneId).RootEntities;
+  public ObservableCollection<Entity>? RootEntities =>
+    StateManager.GetOrCreateScene(CurrentSceneId).RootEntities;
 
   private Entity? _selectedEntity;
   public Entity? SelectedEntity
@@ -43,23 +44,27 @@ public partial class OutlineViewModel : TabItemViewModel, IRecipient<EntitySelec
     }
   }
 
-  public OutlineViewModel(ulong sceneId, NativeRuntimeService runtimeService, SceneStateManager stateManager)
+  public OutlineViewModel(
+    ulong sceneId,
+    NativeRuntimeService runtimeService,
+    SceneStateManager stateManager
+  )
     : base("Outline")
   {
     _runtimeService = runtimeService;
     StateManager = stateManager;
     CurrentSceneId = sceneId;
-    
+
     WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
   }
 
   public void Receive(EntitySelectedMessage message)
   {
-      if (_selectedEntity != message.SelectedEntity)
-      {
-          _selectedEntity = message.SelectedEntity;
-          OnPropertyChanged(nameof(SelectedEntity));
-      }
+    if (_selectedEntity != message.SelectedEntity)
+    {
+      _selectedEntity = message.SelectedEntity;
+      OnPropertyChanged(nameof(SelectedEntity));
+    }
   }
 
   [RelayCommand]
@@ -81,8 +86,9 @@ public partial class OutlineViewModel : TabItemViewModel, IRecipient<EntitySelec
     if (entity.IsMeasurement)
     {
       _runtimeService.RemoveEntity(CurrentSceneId, entity.Id);
-      
-      var breadcrumb = ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
+
+      var breadcrumb =
+        ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
       breadcrumb?.ShowMessageAsync("Entity Deleted", $"Deleted measurement: {entity.Name}");
     }
   }

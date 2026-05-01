@@ -110,7 +110,12 @@ public partial class MeshViewerWindow : Window
 
     if (_isRightDragging)
     {
-      _viewModel?.RuntimeService.RotateCamera(_viewModel.SceneId, _viewModel.CameraId, deltaX, deltaY);
+      _viewModel?.RuntimeService.RotateCamera(
+        _viewModel.SceneId,
+        _viewModel.CameraId,
+        deltaX,
+        deltaY
+      );
     }
     else if (_isMiddleDragging || _isLeftDragging)
     {

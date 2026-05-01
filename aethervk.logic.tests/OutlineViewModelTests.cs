@@ -12,7 +12,7 @@ public class OutlineViewModelTests
   public void SelectionChanged_SendsMessage()
   {
     // Arrange
-    var runtimeService = new NativeRuntimeService();
+    var runtimeService = new NativeRuntimeService(new SceneStateManager());
     var outlineVm = new OutlineViewModel(runtimeService);
     var entity = new Entity(1, "TestEntity");
 

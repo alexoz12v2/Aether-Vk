@@ -26,6 +26,13 @@ pub trait SceneCameraExt {
     delta_yaw: f32,
     delta_pitch: f32,
   ) -> EngineResult<()>;
+
+  /// Translates the camera in its local space (x = right, y = backward, z = up)
+  fn translate_camera_local(
+    &self,
+    camera_entity: EntityId,
+    delta: Vec3f32,
+  ) -> EngineResult<()>;
 }
 
 impl SceneCameraExt for Scene {
@@ -74,14 +81,33 @@ impl SceneCameraExt for Scene {
         };
         let (pitch, yaw) = updated_pitch_yaw(&t, delta_pitch, delta_yaw);
         let q = Quat::from_pitch_and_yaw_radians(pitch, yaw);
-        // Offset at North. TODO Check sign cause forward is -Y
-        let offset = q.rotate_vector(Vec3f32::from_components(0.0, -distance, 0.0));
+        
+        // Offset starts at world North (+Y)
+        // Camera Forward is -Y, so placing it at +Y distance means it looks at origin
+        let offset = q.rotate_vector(Vec3f32::from_components(0.0, distance, 0.0));
 
         t.position = center_pos + offset;
         t.rotation = q;
       })
       .ok_or(EngineError::InvalidOperation(
-        "[SceneCameraExt] rotate_camera: camera entity not found",
+        "[SceneCameraExt] orbit_camera: camera entity not found",
+      ))
+  }
+
+  fn translate_camera_local(
+    &self,
+    camera_entity: EntityId,
+    delta: Vec3f32,
+  ) -> EngineResult<()> {
+    check_for_camera(&self, camera_entity)?;
+
+    self
+      .with_component_mut(camera_entity, |t: &mut TransformComponent| {
+        let global_delta = t.rotation.rotate_vector(delta);
+        t.position = t.position + global_delta;
+      })
+      .ok_or(EngineError::InvalidOperation(
+        "[SceneCameraExt] translate_camera_local: camera entity not found",
       ))
   }
 }
@@ -119,7 +145,7 @@ impl QuatToEulerAngles for Quat {
 
   fn from_pitch_and_yaw_radians(pitch: f32, yaw: f32) -> Quat {
     let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), yaw);
-    let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), pitch);
+    let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), -pitch);
     (yaw_quat * pitch_quat).normalize()
   }
 }
@@ -140,7 +166,40 @@ fn updated_pitch_yaw(t: &TransformComponent, delta_pitch: f32, delta_yaw: f32) -
   p += delta_pitch;
   y += delta_yaw;
   (
-    y.fmod(<f32 as FloatOps>::PI * 2.0),
     p.clamp(-<f32 as FloatOps>::PI_OVER_2, <f32 as FloatOps>::PI_OVER_2),
+    y.fmod(<f32 as FloatOps>::PI * 2.0),
   )
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use aethervk_oshal_rlib::math::floating::FloatOps;
+
+  #[test]
+  fn test_pitch_yaw_conversion() {
+    let test_cases = [
+      (0.0, 0.0),
+      (0.5, 0.0),
+      (-0.5, 0.0),
+      (0.0, 1.0),
+      (0.0, -1.0),
+      (1.0, 1.0),
+      (-1.0, -1.0),
+      (<f32 as FloatOps>::PI_OVER_2 - 0.01, <f32 as FloatOps>::PI),
+      (-<f32 as FloatOps>::PI_OVER_2 + 0.01, -<f32 as FloatOps>::PI),
+    ];
+
+    for (pitch, yaw) in test_cases {
+      let q = Quat::from_pitch_and_yaw_radians(pitch, yaw);
+      let (p_out, y_out) = q.to_pitch_yaw();
+      
+      assert!((pitch - p_out).abs() < 1e-4, "Pitch mismatch: expected {}, got {}", pitch, p_out);
+      
+      // Yaw can wrap around, so we check using complex representation
+      let y_diff = (yaw - y_out).abs();
+      let wraps = (y_diff - <f32 as FloatOps>::PI * 2.0).abs() < 1e-4 || y_diff < 1e-4;
+      assert!(wraps, "Yaw mismatch: expected {}, got {}", yaw, y_out);
+    }
+  }
 }

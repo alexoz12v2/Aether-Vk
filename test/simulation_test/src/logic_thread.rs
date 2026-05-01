@@ -18,6 +18,7 @@ use std::sync::{atomic::AtomicBool, Arc, mpsc};
 use std::time::Instant;
 use anise::almanac::Almanac;
 use anise::prelude::Epoch;
+use aethervk_core_rlib::scene::Component;
 use test_utils::simulation::kernels::CpuKernels;
 use crate::{constants, utils};
 
@@ -83,6 +84,13 @@ pub struct CmdContext<'a> {
   pub epoch_end: anise::time::Epoch,
 }
 
+#[derive(Debug)]
+pub(crate) struct ParticleCountDisplayComponent {
+  timer: f64
+}
+
+impl Component for ParticleCountDisplayComponent {}
+
 fn register_commands(registry: &mut test_utils::command::CommandRegistry<CmdContext>) {
   registry.register("clear", |ctx, _args, tx| {
     let _ = tx.send("___CLEAR___".to_string());
@@ -115,6 +123,12 @@ fn register_commands(registry: &mut test_utils::command::CommandRegistry<CmdCont
     );
     let _ =
       tx.send("  measure <entity1> <entity2> - Measures distance between two entities".to_string());
+    let _ = tx.send("  particle-count     - Displays the particle count on screen".to_string());
+  });
+
+  registry.register("particle-count", |ctx, _args, tx| {
+    let _ = ctx.scene_guard.add_component(ctx.camera_entity, ParticleCountDisplayComponent { timer: 5.0 });
+    let _ = tx.send("Particle count display activated for 5s".to_string());
   });
 
   registry.register("showgizmo", |ctx, _args, tx| {
@@ -747,6 +761,7 @@ pub fn start_logic_thread(
   outlines_enabled: Arc<AtomicBool>,
   kernels: CpuKernels,
 ) -> std::thread::JoinHandle<()> {
+  let kernels = Arc::new(kernels);
   std::thread::spawn(move || {
     let mut state = LogicState {
       yaw: std::f32::consts::PI,
@@ -787,6 +802,8 @@ pub fn start_logic_thread(
     let mut last_following_entity: Option<EntityId> = None;
     let mut focused_planet_idx: Option<usize> = None;
 
+    let thread_pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(4).expect("Failed to create thread pool");
+
     loop {
       let current_time = Instant::now();
       let delta_time = current_time.duration_since(last_time).as_secs_f32();
@@ -802,7 +819,7 @@ pub fn start_logic_thread(
 
       while accumulator >= FIXED_TIME_STEP {
         logic_fixed_update_step(
-          scene_shared.as_ref(),
+          Arc::clone(&scene_shared),
           camera_entity,
           cursor_entity,
           accumulator,
@@ -814,7 +831,8 @@ pub fn start_logic_thread(
           &mut st_seconds_elapsed,
           &mut following_entity,
           step_days,
-          &kernels,
+          Arc::clone(&kernels),
+          &thread_pool,
         );
         accumulator -= FIXED_TIME_STEP;
       }
@@ -876,7 +894,7 @@ pub fn start_logic_thread(
 }
 
 fn logic_fixed_update_step(
-  scene_guard: &Scene,
+  scene_guard: Arc<Scene>,
   camera_entity: EntityId,
   cursor_entity: EntityId,
   accumulator: f32,
@@ -888,7 +906,8 @@ fn logic_fixed_update_step(
   st_seconds_elapsed: &mut f64,
   following_entity: &mut Option<EntityId>,
   step_days: f64,
-  kernels: &CpuKernels,
+  kernels: Arc<CpuKernels>,
+  thread_pool: &aethervk_oshal_rlib::os::pool::ThreadPool,
 ) {
   if *current_epoch >= epoch_end && *current_scale != TimeScale::Stopped {
     *current_scale = TimeScale::Stopped;
@@ -981,17 +1000,33 @@ fn logic_fixed_update_step(
       scene_guard.with_component(mesh_entity, |m: &PhysicalMeshComponent| m.mesh.clone());
 
     if let Some(mesh) = mesh_arc {
-      let uv_grid = aethervk_core_rlib::simulation::comet::uv_grid::UvGrid::new(
-        &mesh.vertices,
-        &mesh.indices,
-        64,
-      );
+      // Cache the UV grid in a static thread-local to avoid reconstructing it every frame
+      thread_local! {
+        static UV_GRID_CACHE: std::cell::RefCell<std::collections::HashMap<usize, std::rc::Rc<aethervk_core_rlib::simulation::comet::uv_grid::UvGrid>>> = std::cell::RefCell::new(std::collections::HashMap::new());
+      }
+      
+      let uv_grid = UV_GRID_CACHE.with(|cache| {
+        let mut map = cache.borrow_mut();
+        let key = Arc::as_ptr(&mesh) as usize;
+        map.entry(key).or_insert_with(|| {
+          std::rc::Rc::new(aethervk_core_rlib::simulation::comet::uv_grid::UvGrid::new(
+            &mesh.vertices,
+            &mesh.indices,
+            64,
+          ))
+        }).clone()
+      });
 
       while sys.accumulator >= sys.config.delta {
         sys.accumulator -= sys.config.delta;
 
         let u_emission = [rand::random::<f32>(), rand::random::<f32>()];
-        let count = sys.config.emission_count.sample(&u_emission) as usize;
+        let mut count = sys.config.emission_count.sample(&u_emission) as usize;
+        
+        // Emitting N particles per emission. N = 100.
+        let n_multiplier = 100;
+        count *= n_multiplier;
+        
         let mut u_particles = std::vec::Vec::with_capacity(count);
         for _ in 0..count {
           u_particles.push([
@@ -1046,25 +1081,25 @@ fn logic_fixed_update_step(
     sys.particles.retain(|p| p.active != 0);
 
     sys.update_bvh();
-
-    if sys.particles.len() > 0 {
-        println!("Active particles: {}", sys.particles.len());
-    }
   });
 
   let mut physics_scene =
-    aethervk_core_rlib::physics::physics_scene::PhysicsScene::build_from_scene(scene_guard);
+    aethervk_core_rlib::physics::physics_scene::PhysicsScene::build_from_scene(&scene_guard);
   let t0 = (*st_seconds_elapsed * 1_000_000.0) as i64;
   let t1 = t0 + (dt * 1_000_000.0) as i64;
 
-  aethervk_core_rlib::gpu_backends::simulation_step(
-    kernels,
-    &mut physics_scene,
-    scene_guard,
-    t0,
-    t1,
-  )
-  .unwrap();
+  use aethervk_oshal_rlib::os::pool::tasklet::ThreadPoolExt;
+  let tasklet = thread_pool.spawn_tasklet(None, move || {
+    aethervk_core_rlib::gpu_backends::simulation_step(
+      kernels.as_ref(),
+      &mut physics_scene,
+      &scene_guard,
+      t0,
+      t1,
+    )
+  }).expect("Failed to spawn simulation_step tasklet");
+
+  tasklet.wait().unwrap();
 }
 
 fn logic_update_command(
@@ -1127,14 +1162,9 @@ fn logic_update_command(
       update_camera_from_state(state, scene_guard, camera_entity, ssb);
     }
     LogicCommand::RotateCamera { delta_x, delta_y } => {
+      use aethervk_core_rlib::scene::camera::SceneCameraExt;
       let rotation_speed = 0.005;
-      state.yaw += delta_x * rotation_speed;
-      state.pitch += delta_y * rotation_speed;
-
-      state.yaw = state.yaw.fmod(<f32 as FloatOps>::PI * 2.0);
-      state.pitch = state.pitch.clamp(-1.55, 1.55);
-
-      update_camera_from_state(state, scene_guard, camera_entity, cursor_pos);
+      let _ = scene_guard.orbit_camera(camera_entity, cursor_entity, delta_x * rotation_speed, delta_y * rotation_speed);
     }
     LogicCommand::ZoomCamera { amount } => {
       let zoom_speed = state.camera_distance * 0.1;
@@ -1143,16 +1173,22 @@ fn logic_update_command(
         state.camera_distance = 0.1;
       }
 
-      update_camera_from_state(state, scene_guard, camera_entity, cursor_pos);
+      let mut rot = Quat::identity();
+      scene_guard.with_component(camera_entity, |c: &TransformComponent| {
+        rot = c.rotation;
+      });
+      
+      let offset = rot.rotate_vector(Vec3f32::from_components(0.0, state.camera_distance, 0.0));
+      scene_guard.with_component_mut(camera_entity, |c: &mut TransformComponent| {
+        c.position = cursor_pos + offset;
+      });
     }
     LogicCommand::PanCursor { delta_x, delta_y } => {
       *following_entity = None; // break following
       let pan_speed = state.camera_distance * 0.001;
 
       // Extract current basis from rotation to pan relative to camera view
-      let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), state.yaw);
-      let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
-      let current_rot = (yaw_quat * pitch_quat).normalize();
+      let current_rot = cam_rot;
 
       let right = current_rot.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
       let up = current_rot.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
@@ -1406,7 +1442,7 @@ fn update_camera_from_state(
   cursor_pos: Vec3f32,
 ) {
   let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), state.yaw);
-  let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), state.pitch);
+  let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), -state.pitch);
   let new_rot = (yaw_quat * pitch_quat).normalize();
 
   // Offset starts at world North (+Y)

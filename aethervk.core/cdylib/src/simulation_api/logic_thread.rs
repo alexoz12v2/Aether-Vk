@@ -347,9 +347,15 @@ fn process_command_internal(
     LogicCommand::FeedbackGetDateTimeLimitsUTC => Ok(SimulationTaskResult::None),
 
     LogicCommand::ImportModel { task_id: _, path } => {
-      let mut scenes = ctx.scenes.write();
-      let model_id = scenes.import_model_internal(&path)?;
-      Ok(SimulationTaskResult::U64(model_id))
+      let mesh_res = aethervk_core_rlib::simulation::comet::load_comet_from_gltf(&path, false);
+      match mesh_res {
+        Ok(mesh) => {
+          let mut scenes = ctx.scenes.write();
+          let model_id = scenes.import_model_from_mesh(path, mesh);
+          Ok(SimulationTaskResult::U64(model_id))
+        }
+        Err(_) => Ok(SimulationTaskResult::U64(0)),
+      }
     }
     LogicCommand::LoadAlmanac { task_id: _, path } => {
       let success = ctx.load_almanac_file_internal(&path)?;
@@ -365,12 +371,35 @@ fn process_command_internal(
     }
     LogicCommand::SpawnModelInstance {
       task_id: _,
+      scene_id,
       model_id,
       name,
     } => {
-      let mut scenes = ctx.scenes.write();
-      let instance_id = scenes.spawn_model_instance_internal(model_id, &name)?;
-      Ok(SimulationTaskResult::U64(instance_id))
+      // Pre-load if not in cache (outside lock)
+      let path_opt = {
+        let scenes = ctx.scenes.read();
+        scenes.model_registry.get(&model_id).cloned()
+      };
+      
+      if let Some(path_str) = path_opt {
+        let needs_load = {
+          let scenes = ctx.scenes.read();
+          !scenes.mesh_cache.get(&path_str).is_some()
+        };
+        
+        if needs_load {
+          if let Ok(mesh) = aethervk_core_rlib::simulation::comet::load_comet_from_gltf(&path_str, false) {
+             let mut scenes = ctx.scenes.write();
+             scenes.mesh_cache.insert(path_str.clone(), mesh);
+          }
+        }
+        
+        let mut scenes = ctx.scenes.write();
+        let instance_id = scenes.spawn_model_instance_internal(scene_id, model_id, &name)?;
+        Ok(SimulationTaskResult::U64(instance_id))
+      } else {
+        Err(EngineError::InvalidOperation("model not found"))
+      }
     }
     LogicCommand::RaycastNdc {
       task_id: _,

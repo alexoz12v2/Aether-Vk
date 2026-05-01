@@ -396,7 +396,7 @@ pub struct SimulationSceneData {
   /// Scene state: next available id. Steadily incremented
   next_scene_id: u64,
   /// mesh cache shared among all scenes
-  mesh_cache: Arc<aethervk_core_rlib::scene::AssetCache<simulation::comet::Comet>>,
+  pub(crate) mesh_cache: Arc<aethervk_core_rlib::scene::AssetCache<simulation::comet::Comet>>,
   /// Loaded GLTF Models. Necessary with the asset cache because when a model is evicted,
   /// the string used as key in the cache is eliminated
   pub model_registry: BTreeMap<u64, String>,
@@ -658,18 +658,15 @@ impl LogicThreadContext {
 }
 
 impl SimulationSceneData {
-  pub fn import_model_internal(&mut self, path: &str) -> EngineResult<u64> {
-    if let Ok(mesh) = aethervk_core_rlib::simulation::comet::load_comet_from_gltf(path, false) {
-      let model_id = self.next_model_id;
-      self.next_model_id += 1;
-      self.mesh_cache.insert(path.to_string(), mesh);
-      self.model_registry.insert(model_id, path.to_string());
-      return Ok(model_id);
-    }
-    Ok(0)
+  pub fn import_model_from_mesh(&mut self, path: String, mesh: aethervk_core_rlib::simulation::comet::Comet) -> u64 {
+    let model_id = self.next_model_id;
+    self.next_model_id += 1;
+    self.mesh_cache.insert(path.clone(), mesh);
+    self.model_registry.insert(model_id, path);
+    model_id
   }
 
-  pub fn spawn_model_instance_internal(&mut self, model_id: u64, name: &str) -> EngineResult<u64> {
+  pub fn spawn_model_instance_internal(&mut self, scene_id: u64, model_id: u64, name: &str) -> EngineResult<u64> {
     let path_str = self
       .model_registry
       .get(&model_id)
@@ -678,13 +675,12 @@ impl SimulationSceneData {
     let mesh_arc = if let Some(cached) = self.mesh_cache.get(&path_str) {
       cached
     } else {
-      let loaded = aethervk_core_rlib::simulation::comet::load_comet_from_gltf(&path_str, false)?;
-      self.mesh_cache.insert(path_str.clone(), loaded)
+      return Err(EngineError::InvalidOperation("mesh not found in cache"));
     };
 
     let scene_ctx_lock = self
       .scenes
-      .get(&1)
+      .get(&scene_id)
       .ok_or(EngineError::InvalidOperation("no scene"))?;
     let mut scene_ctx = scene_ctx_lock.write();
     let entity_id = scene_ctx.scene.spawn_entity(name);
@@ -933,6 +929,7 @@ pub enum LogicCommand {
   },
   SpawnModelInstance {
     task_id: u64,
+    scene_id: u64,
     model_id: u64,
     name: String,
   },

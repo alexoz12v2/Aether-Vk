@@ -399,6 +399,7 @@ pub trait RenderCompute: Send + Sync {
 }
 
 /// Rule for rendering functions: They cannot take a [`crate::scene::EntityId`]
+/// TODO: Move to vulkan as this is vulkan specific?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParticleSyncMode {
     /// CPU uploads data. Needs Transfer Write -> Vertex Read barrier.

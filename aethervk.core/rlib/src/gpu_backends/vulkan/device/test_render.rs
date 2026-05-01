@@ -152,13 +152,11 @@ fn test_render_particles_windowless() {
       )?;
 
       {
-        let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
-
+        let _scoped_cmd =
+          gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
         device.upload_particle_systems(cmd_buffer_handle, &mut render_scene.particle_calls)?;
-
         device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
         let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
-
         let extent = device.get_presentation_engine_extent(presentation_engine)?;
         device.set_viewport(
           cmd_buffer_handle,
@@ -194,6 +192,7 @@ fn test_render_particles_windowless() {
       while !device.is_task_completed(task_id)? {
         std::thread::sleep(std::time::Duration::from_millis(10));
       }
+      device.success_task(task_id);
 
       let mut buffer = vec![0u8; (width * height * 4) as usize];
       device.read_windowless_download(task_id, &mut buffer)?;
@@ -413,6 +412,7 @@ fn test_render_all_archetypes_windowless() {
       while !device.is_task_completed(task_id)? {
         std::thread::sleep(std::time::Duration::from_millis(10));
       }
+      device.success_task(task_id);
 
       // Download image
       let mut buffer = vec![0u8; (width * height * 4) as usize];
@@ -611,6 +611,7 @@ fn test_layout_transition_on_failed_update() {
       while !device.is_task_completed(task_id)? {
         std::thread::sleep(std::time::Duration::from_millis(10));
       }
+      device.success_task(task_id);
 
       let mut buffer = vec![0u8; (16 * 16 * 4) as usize];
       device.read_windowless_download(task_id, &mut buffer)?;
@@ -1327,7 +1328,6 @@ fn test_render_particles_multithreaded() {
           while !device.is_task_completed(task_id)? {
             std::thread::yield_now();
           }
-
           let mut buffer = vec![0u8; (width * height * 4) as usize];
           device.read_windowless_download(task_id, &mut buffer)?;
 

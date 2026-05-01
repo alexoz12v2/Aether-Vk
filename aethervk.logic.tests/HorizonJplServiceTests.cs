@@ -12,10 +12,11 @@ public class HorizonJplServiceTests
   [Fact]
   public void FetchCometsAndDataTest()
   {
-      // SKIPPED: This test hits a remote NASA API that is frequently unresponsive, blocks CI/CD, 
-      // and returns unpredictable chunked stream delays. Mocks should be used for reliable testing.
-      Assert.True(true);
+    // SKIPPED: This test hits a remote NASA API that is frequently unresponsive, blocks CI/CD,
+    // and returns unpredictable chunked stream delays. Mocks should be used for reliable testing.
+    Assert.True(true);
   }
+
   [Fact]
   public void ParseText_WithInvalidContent_ReturnsEmptyCollections()
   {
@@ -39,7 +40,8 @@ public class HorizonJplServiceTests
     var breadcrumb = new BreadcrumbService();
     var service = new HorizonJplService(console, breadcrumb);
 
-    string mockJson = @"
+    string mockJson =
+      @"
     {
       ""fields"": [""full_name"", ""first_obs"", ""soln_date"", ""spkid""],
       ""data"": [
@@ -64,7 +66,8 @@ public class HorizonJplServiceTests
     var breadcrumb = new BreadcrumbService();
     var service = new HorizonJplService(console, breadcrumb);
 
-    string mockResponse = @"
+    string mockResponse =
+      @"
 *******************************************************************************
 JPL/HORIZONS                 12P/Pons-Brooks                 2026-Apr-21 10:50:52
 ...
@@ -75,7 +78,8 @@ $$EOE
 *******************************************************************************
 ";
     // Mocking headers because they are usually 2 lines above SOE in a specific format
-    string mockResponseWithHeaders = @"
+    string mockResponseWithHeaders =
+      @"
 Date__(UT)__HR:MN, R.A.__(ICRF)__, DEC__(ICRF)__, APmag, S-brt,
 *******************************************************************************
 $$SOE

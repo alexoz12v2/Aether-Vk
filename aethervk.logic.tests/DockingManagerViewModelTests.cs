@@ -1,8 +1,8 @@
 ﻿using AetherVk.Logic.Messages;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
-using Xunit;
 using Moq;
+using Xunit;
 
 namespace AetherVk.Logic.Tests;
 

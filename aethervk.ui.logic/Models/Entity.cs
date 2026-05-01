@@ -13,12 +13,14 @@ public interface IComponent
 public class EntityVisibilityChangedMessage
 {
   public Entity Entity { get; }
+
   public EntityVisibilityChangedMessage(Entity entity) => Entity = entity;
 }
 
 public class EntityOutlineChangedMessage
 {
   public Entity Entity { get; }
+
   public EntityOutlineChangedMessage(Entity entity) => Entity = entity;
 }
 
@@ -49,9 +51,16 @@ public partial class Entity : ObservableObject
     _name = name;
   }
 
+  public bool SuspendNameSync { get; set; }
+
   partial void OnNameChanged(string value)
   {
-    var runtimeService = Services.ServiceLocator.Provider?.GetService(typeof(Services.NativeRuntimeService)) as Services.NativeRuntimeService;
+    if (SuspendNameSync)
+      return;
+
+    var runtimeService =
+      Services.ServiceLocator.Provider?.GetService(typeof(Services.NativeRuntimeService))
+      as Services.NativeRuntimeService;
     runtimeService?.SetEntityName(SceneId, Id, value);
   }
 

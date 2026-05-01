@@ -44,7 +44,8 @@ public class HorizonJplEducationalTests
     // https://ssd-api.jpl.nasa.gov/sbdb_query.api?sb-kind=c&fields=full_name,first_obs,spkid
 
     // Mocking the SBDB API JSON response
-    string mockJsonResponse = @"
+    string mockJsonResponse =
+      @"
         {
             ""fields"": [""full_name"", ""first_obs"", ""spkid""],
             ""data"": [
@@ -96,7 +97,8 @@ public class HorizonJplEducationalTests
      * - i: Inclination (angle relative to the ecliptic plane).
      */
 
-    string mockHorizonsText = @"
+    string mockHorizonsText =
+      @"
 *******************************************************************************
 JPL/HORIZONS                 12P/Pons-Brooks                 2026-Apr-21
 ...
@@ -116,7 +118,8 @@ $$EOE";
     _output.WriteLine("Static data is usually manually extracted from the header text block.");
     _output.WriteLine("Key parameters for rendering 3D orbits:");
     _output.WriteLine(
-      "- Absolute Magnitude (H): Crucial for calculating apparent brightness in the shader.");
+      "- Absolute Magnitude (H): Crucial for calculating apparent brightness in the shader."
+    );
     _output.WriteLine("- Radius: Defines the 'point' size or the scale of the billboard.");
   }
 
@@ -183,7 +186,8 @@ $$EOE";
      */
 
     // Example of a VECTORS response (CSV format) from Horizons
-    string mockVectorsResponse = @"
+    string mockVectorsResponse =
+      @"
 Date__(UT)__HR:MN, , X, Y, Z, VX, VY, VZ,
 *******************************************************************************
 $$SOE

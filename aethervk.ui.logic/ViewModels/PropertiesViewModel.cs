@@ -27,7 +27,7 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
     _stateManager = stateManager;
     CurrentSceneId = sceneId;
     WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
-    
+
     // Initialize with current selection if any
     var state = _stateManager.GetOrCreateScene(CurrentSceneId);
     _selectedEntity = state.SelectedEntity;
@@ -37,20 +37,22 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
   {
     SelectedEntity = message.SelectedEntity;
 
-
     if (SelectedEntity != null)
     {
       var transform = SelectedEntity.Components.OfType<TransformComponent>().FirstOrDefault();
       if (transform != null)
       {
-        bool hasCameraOrCursor = SelectedEntity.Components.Any(c => c is CameraComponent || c is CursorComponent);
+        bool hasCameraOrCursor = SelectedEntity.Components.Any(c =>
+          c is CameraComponent || c is CursorComponent
+        );
         transform.IsEditable = hasCameraOrCursor;
       }
-      
+
       var comet = SelectedEntity.Components.OfType<CometComponent>().FirstOrDefault();
       if (comet != null)
       {
-        var runtimeService = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+        var runtimeService =
+          ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
         runtimeService?.RefreshBvhNodes(CurrentSceneId, SelectedEntity.Id, comet);
       }
     }
@@ -90,9 +92,13 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
   private void ToggleAddJetMode()
   {
     WeakReferenceMessenger.Default.Send(new AetherVk.Logic.Messages.ToggleAddJetModeMessage());
-    
-    var breadcrumb = ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
-    breadcrumb?.ShowMessageAsync("Add Jet Mode", "Hold Shift and Right Click on the comet to add a jet at the intersection point.");
+
+    var breadcrumb =
+      ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
+    breadcrumb?.ShowMessageAsync(
+      "Add Jet Mode",
+      "Hold Shift and Right Click on the comet to add a jet at the intersection point."
+    );
   }
 
   [RelayCommand]
@@ -100,13 +106,15 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
   {
     if (SelectedEntity != null && SelectedEntity.IsMeasurement)
     {
-      var runtimeService = ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
+      var runtimeService =
+        ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
       var name = SelectedEntity.Name;
       runtimeService?.RemoveEntity(CurrentSceneId, SelectedEntity.Id);
-      
-      var breadcrumb = ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
+
+      var breadcrumb =
+        ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
       breadcrumb?.ShowMessageAsync("Entity Deleted", $"Deleted measurement: {name}");
-      
+
       // Deselect
       WeakReferenceMessenger.Default.Send(new EntitySelectedMessage(null));
     }
