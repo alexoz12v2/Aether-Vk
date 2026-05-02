@@ -100,15 +100,39 @@ impl RenderDevice for D3d12RenderDevice {
     unimplemented!()
   }
 
-  fn get_or_create_billboard_resources(
+  fn get_marker_resources(
     &self,
     _handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
     unimplemented!()
   }
 
-  fn get_or_create_cursor_resources(
+  fn create_marker_resources(
     &self,
+    _cmd_buffer: CommandBufferHandle,
+    _handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult> {
+    unimplemented!()
+  }
+
+  fn create_billboard_resources(
+    &self,
+    _cmd_buffer: CommandBufferHandle,
+    _handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult> {
+    unimplemented!()
+  }
+
+  fn get_marker_resources(
+    &self,
+    _handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult> {
+    unimplemented!()
+  }
+
+  fn create_marker_resources(
+    &self,
+    _cmd_buffer: CommandBufferHandle,
     _handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
     unimplemented!()
@@ -359,6 +383,10 @@ impl RenderContext for D3d12RenderContext {
     _p_user_data: *mut ffi::c_void,
     _f: fn(dev: &dyn RenderDevice, p_user_data: *mut ffi::c_void) -> GpuResult<()>,
   ) -> Option<GpuResult<()>> {
+    unimplemented!()
+  }
+}
+ {
     unimplemented!()
   }
 }

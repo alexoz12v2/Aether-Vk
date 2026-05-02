@@ -7,10 +7,9 @@ use alloc::{
 use core::{cell::RefCell, sync::atomic::AtomicBool};
 use spin::{rwlock::RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thingbuf::mpsc;
-use aethervk_core_rlib::{
+use crate::{
   physics::physics_scene::math::PhysicsSceneMathExt,
   gpu::DeviceAdditionalParams,
-  self as rlib,
   types::{GpuError, RuntimeParams},
   gpu, physics, simulation,
   gpu::PresentationEngineHandle,
@@ -18,322 +17,20 @@ use aethervk_core_rlib::{
   simulation::almanac::AlmanacPackedData,
   types::{EngineError, EngineResult},
 };
-use aethervk_oshal_rlib::{
+use aethervk_oshal_rlib as oshal;
+use oshal::{
   math::vector::{Vector, Vector3, Vector4},
   math::vector::vec4::{Quat, Vec4f32},
   math::vector::vec3::Vec3f32,
   math::quaternion::Quaternion,
   math::matrix::{Matrix4, MatrixVectorMul, SquareMatrix},
-  self as oshal,
   math::matrix::mat4::Mat4x4f32,
   os,
   os::thread::Thread,
 };
-use crate::{logic_thread::start_logic_thread, render_thread::start_render_thread, expect_entity};
-
-// --------------------- FFI Types ---------------------------
-
-#[repr(u32)]
-pub enum FfiRenderTaskStatus {
-  Completed = 0,
-  Pending = 1,
-  Error = 2,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct FfiRaycastResult {
-  pub hit: bool,
-  pub entity: u64,
-  pub px: f32,
-  pub py: f32,
-  pub pz: f32,
-}
-
-pub enum SimulationTaskResult {
-  None,
-  U64(u64),
-  Bool(bool),
-  Raycast(FfiRaycastResult),
-}
-
-pub enum SimulationTaskStatus {
-  Pending,
-  Completed(SimulationTaskResult),
-  Error(String),
-}
-
-pub struct SimulationTaskManager {
-  next_task_id: u64,
-  tasks: BTreeMap<u64, SimulationTaskStatus>,
-}
-
-impl Drop for SimulationTaskManager {
-  fn drop(&mut self) {
-    oshal::log!("SimulationTaskManager drop started");
-  }
-}
-
-impl SimulationTaskManager {
-  pub fn new() -> Self {
-    Self {
-      next_task_id: 1,
-      tasks: BTreeMap::new(),
-    }
-  }
-
-  pub fn create_task(&mut self) -> core::num::NonZero<u64> {
-    let id = self.next_task_id | (1u64 << 63);
-    self.next_task_id += 1;
-    self.tasks.insert(id, SimulationTaskStatus::Pending);
-    unsafe { core::num::NonZero::new_unchecked(id) }
-  }
-
-  pub fn success_task(&mut self, id: u64, result: SimulationTaskResult) {
-    self
-      .tasks
-      .insert(id, SimulationTaskStatus::Completed(result));
-  }
-
-  pub fn fail_task(&mut self, id: u64, error: String) {
-    self.tasks.insert(id, SimulationTaskStatus::Error(error));
-  }
-
-  pub fn get_status(&self, id: u64) -> i32 {
-    match self.tasks.get(&id) {
-      Some(SimulationTaskStatus::Pending) => 0,
-      Some(SimulationTaskStatus::Completed(_)) => 1,
-      Some(SimulationTaskStatus::Error(_)) => 2,
-      None => -1,
-    }
-  }
-
-  pub fn take_result(&mut self, id: u64) -> Option<SimulationTaskResult> {
-    if let Some(SimulationTaskStatus::Completed(res)) = self.tasks.remove(&id) {
-      Some(res)
-    } else {
-      None
-    }
-  }
-}
-
-// TODO sync with C#
-#[repr(u32)]
-#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
-pub enum FfiLogicCommandType {
-  #[default]
-  Shutdown = 0,
-
-  RotateCamera = 1,
-  ZoomCamera = 2,
-  ResetCamera = 3,
-  PanCamera = 4,
-
-  PanCursor = 5,
-  MoveCursor = 6,
-
-  SnapToEntity = 7,
-  FollowEntity = 8,
-  UnfollowEntity = 9,
-
-  FeedbackGetTimeScale = 10,
-  FeedbackGetDateTimeUTC = 11,
-  FeedbackGetDateTimeLimitsUTC = 12,
-  // TODO: probably we'll need Ephemeris duration
-}
-
-// TODO modify in C#
-#[repr(C, align(4))]
-#[derive(Default, Clone, Copy, Debug)]
-pub struct FfiLogicCommand {
-  pub cmd_type: FfiLogicCommandType,
-  pub payload: [u8; 28],
-}
-
-impl FfiLogicCommand {
-  pub fn get_u32_u64x3_at_start(&self) -> Option<(u32, u64, u64, u64)> {
-    let first = self.get_u32_at_offset(0)?;
-    let second = self.get_u64_at_offset(4)?;
-    let third = self.get_u64_at_offset(12)?;
-    let fourth = self.get_u64_at_offset(20)?;
-    Some((first, second, third, fourth))
-  }
-
-  pub fn get_u64_f32x3_at_start(&self) -> Option<(u64, f32, f32, f32)> {
-    let first = self.get_u64_at_offset(4)?;
-    let second = self.get_f32_at_offset(12)?;
-    let third = self.get_f32_at_offset(16)?;
-    let fourth = self.get_f32_at_offset(20)?;
-    Some((first, second, third, fourth))
-  }
-
-  pub fn get_u64_f32x2_at_start(&self) -> Option<(u64, f32, f32)> {
-    let first = self.get_u64_at_offset(4)?;
-    let second = self.get_f32_at_offset(12)?;
-    let third = self.get_f32_at_offset(16)?;
-    Some((first, second, third))
-  }
-
-  pub fn get_u64x2_f32_at_start(&self) -> Option<(u64, u64, f32)> {
-    let first = self.get_u64_at_offset(4)?;
-    let second = self.get_u64_at_offset(12)?;
-    let third = self.get_f32_at_offset(20)?;
-    Some((first, second, third))
-  }
-
-  pub fn get_u64x2_f32x2_at_start(&self) -> Option<(u64, u64, f32, f32)> {
-    let first = self.get_u64_at_offset(4)?;
-    let second = self.get_u64_at_offset(12)?;
-    let third = self.get_f32_at_offset(20)?;
-    let fourth = self.get_f32_at_offset(24)?;
-    Some((first, second, third, fourth))
-  }
-
-  /// Utility for commands which take 2 u64 from start, aligned to 8 (eg 2 entities and a scene id)
-  pub fn get_u64x2_at_start(&self) -> Option<(u64, u64)> {
-    let first = self.get_u64_at_offset(4)?;
-    let second = self.get_u64_at_offset(12)?;
-    Some((first, second))
-  }
-
-  /// Utility for commands which take 3 u64 from start, aligned to 8 (eg 2 entities and a scene id)
-  pub fn get_u64x3_at_start(&self) -> Option<(u64, u64, u64)> {
-    let first = self.get_u64_at_offset(4)?;
-    let second = self.get_u64_at_offset(12)?;
-    let third = self.get_u64_at_offset(20)?;
-    Some((first, second, third))
-  }
-
-  /// Utility for commands which takes 3 floats from start (eg delta_x and delta_y)
-  pub fn get_f32x3_at_start(&self) -> Option<(f32, f32, f32)> {
-    let first = self.get_f32_at_offset(0)?;
-    let second = self.get_f32_at_offset(4)?;
-    let third = self.get_f32_at_offset(8)?;
-    Some((first, second, third))
-  }
-
-  /// Utility for commands which takes 2 floats from start (eg delta_x and delta_y)
-  pub fn get_f32x2_at_start(&self) -> Option<(f32, f32)> {
-    let first = self.get_f32_at_offset(0)?;
-    let second = self.get_f32_at_offset(4)?;
-    Some((first, second))
-  }
-
-  /// Safely reads a u32 from the payload.
-  /// Payload starts at struct offset 4, so payload offset must be a multiple of 4.
-  pub fn get_u32_at_offset(&self, offset: usize) -> Option<u32> {
-    let size = core::mem::size_of::<u32>();
-
-    // (offset + 4) % 4 == 0 simplifies down to offset % 4 == 0
-    if offset % 4 != 0 || offset + size > self.payload.len() {
-      return None;
-    }
-
-    let mut bytes = [0u8; 4];
-    bytes.copy_from_slice(&self.payload[offset..offset + size]);
-    Some(u32::from_ne_bytes(bytes))
-  }
-
-  /// Safely reads an f32 from the payload.
-  /// Payload starts at struct offset 4, so payload offset must be a multiple of 4.
-  pub fn get_f32_at_offset(&self, offset: usize) -> Option<f32> {
-    let size = core::mem::size_of::<f32>();
-
-    if offset % 4 != 0 || offset + size > self.payload.len() {
-      return None;
-    }
-
-    let mut bytes = [0u8; 4];
-    bytes.copy_from_slice(&self.payload[offset..offset + size]);
-    Some(f32::from_ne_bytes(bytes))
-  }
-
-  /// Safely reads a u64 from the payload.
-  /// Because the payload itself starts at struct offset 4,
-  /// the absolute memory offset is (offset + 4).
-  /// This absolute offset must be a multiple of 8.
-  pub fn get_u64_at_offset(&self, offset: usize) -> Option<u64> {
-    let size = core::mem::size_of::<u64>();
-
-    // Ensure the *absolute* struct offset is 8-byte aligned.
-    // Valid payload offsets for u64: 4, 12, 20.
-    if (offset + 4) % 8 != 0 || offset + size > self.payload.len() {
-      return None;
-    }
-
-    let mut bytes = [0u8; 8];
-    bytes.copy_from_slice(&self.payload[offset..offset + size]);
-    Some(u64::from_ne_bytes(bytes))
-  }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(C)] // Optional: Keeps memory layout predictable if interfacing with C
-pub struct FfiMarker {
-  pub position: [f32; 3], // [x, y, z]
-  pub color: [f32; 3],    // [r, g, b]
-  pub size: f32,
-}
-
-impl From<FfiMarker> for aethervk_core_rlib::scene::Marker {
-  fn from(value: FfiMarker) -> Self {
-    Self {
-      local_pos: value.position,
-      color: value.color,
-      size: value.size,
-    }
-  }
-}
-
-#[repr(u32)]
-pub enum FfiNodeType {
-  AABB = 0,
-  OBB = 1,
-}
-
-#[repr(C)]
-pub struct FfiBvhNode {
-  pub node_type: FfiNodeType,
-  pub min_x: f32,
-  pub min_y: f32,
-  pub min_z: f32,
-  pub max_x: f32,
-  pub max_y: f32,
-  pub max_z: f32,
-  pub center_x: f32,
-  pub center_y: f32,
-  pub center_z: f32,
-  pub extents_x: f32,
-  pub extents_y: f32,
-  pub extents_z: f32,
-  pub left_child: u32,
-  pub right_child: u32,
-  pub primitive_count: u32,
-}
-
-impl FfiBvhNode {
-  pub fn from_offsets(left_child: u32, right_child: u32, primitive_count: u32) -> Self {
-    Self {
-      node_type: FfiNodeType::AABB,
-      min_x: 0.0,
-      min_y: 0.0,
-      min_z: 0.0,
-      max_x: 0.0,
-      max_y: 0.0,
-      max_z: 0.0,
-      center_x: 0.0,
-      center_y: 0.0,
-      center_z: 0.0,
-      extents_x: 0.0,
-      extents_y: 0.0,
-      extents_z: 0.0,
-      left_child,
-      right_child,
-      primitive_count,
-    }
-  }
-}
-
+use crate::simulation_api::logic_thread::start_logic_thread;
+use crate::simulation_api::render_thread::start_render_thread;
+use crate::types::GpuResult;
 // --------------------- Drop Wrapper Types ---------------------------
 
 /// Drop wrapper for a thread whose function uses a receiver, and the struct wraps
@@ -396,7 +93,7 @@ pub struct SimulationSceneData {
   /// Scene state: next available id. Steadily incremented
   next_scene_id: u64,
   /// mesh cache shared among all scenes
-  pub(crate) mesh_cache: Arc<aethervk_core_rlib::scene::AssetCache<simulation::comet::Comet>>,
+  pub(crate) mesh_cache: Arc<crate::scene::AssetCache<simulation::comet::Comet>>,
   /// Loaded GLTF Models. Necessary with the asset cache because when a model is evicted,
   /// the string used as key in the cache is eliminated
   pub model_registry: BTreeMap<u64, String>,
@@ -413,7 +110,7 @@ impl SimulationSceneData {
     Self {
       scenes: BTreeMap::new(),
       next_scene_id: 1,
-      mesh_cache: Arc::new(aethervk_core_rlib::scene::AssetCache::new()),
+      mesh_cache: Arc::new(crate::scene::AssetCache::new()),
       model_registry: Default::default(),
       next_model_id: 1,
     }
@@ -538,7 +235,7 @@ impl LogicThreadContext {
     scene_id: u64,
     ndc_x: f32,
     ndc_y: f32,
-  ) -> EngineResult<FfiRaycastResult> {
+  ) -> EngineResult<RaycastResult> {
     let (ro, rd) = {
       let scenes = self.scenes.read();
       let active = scenes
@@ -597,8 +294,8 @@ impl LogicThreadContext {
     scene_id: u64,
     ro: Vec3f32,
     rd: Vec3f32,
-  ) -> EngineResult<FfiRaycastResult> {
-    use rlib::physics::physics_scene::math::closest_intersection;
+  ) -> EngineResult<RaycastResult> {
+    use crate::physics::physics_scene::math::closest_intersection;
     let scenes = self.scenes.read();
     let scene_ctx = scenes
       .get(&scene_id)
@@ -610,7 +307,7 @@ impl LogicThreadContext {
       .ok_or(EngineError::InvalidOperation("physics scene missing"))?;
     let ps = ps_lock.read();
 
-    let ray = aethervk_core_rlib::math::collision::intersection::Ray {
+    let ray = crate::math::collision::intersection::Ray {
       origin: ro,
       direction: rd,
       length: f32::MAX,
@@ -619,7 +316,7 @@ impl LogicThreadContext {
     let hit_instances = ps.intersect_world_bvh_math(&ray);
     let intersections: Vec<((f32, Vec3f32), EntityId)> = scene_ctx
       .scene
-      .query2_res::<aethervk_core_rlib::scene::PhysicalMeshComponent, TransformComponent, _, (f32, Vec3f32)>(
+      .query2_res::<crate::scene::PhysicalMeshComponent, TransformComponent, _, (f32, Vec3f32)>(
       |entity, mesh, transform| {
         if !hit_instances.contains(&entity) || mesh.mesh.bvh.is_none() {
           return None;
@@ -638,27 +335,22 @@ impl LogicThreadContext {
         .find(|&(_, v)| *v == hit_entity)
         .map(|(ext, _)| *ext)
         .unwrap_or(0);
-      return Ok(FfiRaycastResult {
-        hit: true,
-        entity: external_id,
-        px: hit_point.x(),
-        py: hit_point.y(),
-        pz: hit_point.z(),
-      });
+      return Ok(Some(RayCastHit {
+        entity_ext_id: external_id,
+        p: hit_point,
+      }));
     }
 
-    Ok(FfiRaycastResult {
-      hit: false,
-      entity: 0,
-      px: 0.0,
-      py: 0.0,
-      pz: 0.0,
-    })
+    Ok(None)
   }
 }
 
 impl SimulationSceneData {
-  pub fn import_model_from_mesh(&mut self, path: String, mesh: aethervk_core_rlib::simulation::comet::Comet) -> u64 {
+  pub fn import_model_from_mesh(
+    &mut self,
+    path: String,
+    mesh: crate::simulation::comet::Comet,
+  ) -> u64 {
     let model_id = self.next_model_id;
     self.next_model_id += 1;
     self.mesh_cache.insert(path.clone(), mesh);
@@ -666,7 +358,12 @@ impl SimulationSceneData {
     model_id
   }
 
-  pub fn spawn_model_instance_internal(&mut self, scene_id: u64, model_id: u64, name: &str) -> EngineResult<u64> {
+  pub fn spawn_model_instance_internal(
+    &mut self,
+    scene_id: u64,
+    model_id: u64,
+    name: &str,
+  ) -> EngineResult<u64> {
     let path_str = self
       .model_registry
       .get(&model_id)
@@ -694,7 +391,7 @@ impl SimulationSceneData {
     )?;
     scene_ctx.scene.add_component(
       entity_id,
-      aethervk_core_rlib::scene::PhysicalMeshComponent {
+      crate::scene::PhysicalMeshComponent {
         asset_path: path_str,
         mesh: mesh_arc,
         emissive_intensity: 0.0,
@@ -710,7 +407,9 @@ impl SimulationSceneData {
 impl SimulationThreads {
   pub fn render_thread_running(&self) -> bool {
     let result = self.render_thread.handle.is_some();
-    debug_assert!(!result || (self.render_thread.tx.is_some() && self.render_feedback_rx.is_some()));
+    debug_assert!(
+      !result || (self.render_thread.tx.is_some() && self.render_feedback_rx.is_some())
+    );
     result
   }
 
@@ -950,6 +649,10 @@ pub enum LogicCommand {
     scene_id: u64,
     delta_time: f64,
   },
+  Custom {
+    custom_fn: fn(&LogicThreadContext, *mut core::ffi::c_void),
+    user_data: Option<SendPtrMut<core::ffi::c_void>>,
+  }
 }
 
 impl Default for LogicCommand {
@@ -1014,16 +717,6 @@ pub enum RenderTaskStatus {
   Error(GpuError),
 }
 
-impl From<RenderTaskStatus> for FfiRenderTaskStatus {
-  fn from(value: RenderTaskStatus) -> Self {
-    match value {
-      RenderTaskStatus::Completed => FfiRenderTaskStatus::Completed,
-      RenderTaskStatus::Pending => FfiRenderTaskStatus::Pending,
-      RenderTaskStatus::Error(_) => FfiRenderTaskStatus::Error,
-    }
-  }
-}
-
 #[derive(Clone, Default)]
 pub enum RenderFeedback {
   #[default]
@@ -1031,6 +724,25 @@ pub enum RenderFeedback {
 
   TaskCreated(Option<u64>),
   TaskQueryStatus(RenderTaskStatus),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CustomRenderCallback {
+  pub after_render_frame_fn: fn(
+    &dyn crate::gpu::RenderDevice,
+    crate::gpu::CommandBufferHandle,
+    gpu::PresentationEngineHandle,
+    &crate::gpu::RenderScene,
+    *mut core::ffi::c_void,
+  ) -> GpuResult<()>,
+  pub on_first_render_fn: fn(
+    &dyn crate::gpu::RenderDevice,
+    crate::gpu::CommandBufferHandle,
+    gpu::PresentationEngineHandle,
+    &crate::gpu::RenderScene,
+    *mut core::ffi::c_void,
+  ) -> GpuResult<()>,
+  pub user_data: SendPtrMut<core::ffi::c_void>,
 }
 
 /// Invariant: presentation engine is not null and exists inside simulation context and render device
@@ -1047,13 +759,7 @@ pub struct RenderFrame {
   pub sun_entity: Option<EntityId>,
   pub sky_entity: Option<EntityId>,
   pub cursor_entity: Option<EntityId>,
-}
-
-#[derive(Clone, Debug)]
-pub struct DownloadImage {
-  pub task_id: u64,
-  pub buffer: SendPtrMut<u8>,
-  pub buffer_size: usize,
+  pub custom_render_callback: Option<CustomRenderCallback>,
 }
 
 /// Invariant: width and height are valid, presentation engine is inside simulation context and render device
@@ -1062,6 +768,7 @@ pub struct Resize {
   pub presentation_engine_handle: PresentationEngineHandle,
   pub width: u32,
   pub height: u32,
+  pub task_id: u64,
 }
 
 #[derive(Clone, Default)]
@@ -1070,8 +777,6 @@ pub enum RenderCommand {
   Shutdown,
 
   RenderFrame(RenderFrame),
-  
-  DownloadImage(DownloadImage),
 
   Resize(Resize),
 
@@ -1083,15 +788,31 @@ unsafe impl Send for RenderCommand {}
 
 // --------------------- Internal Types ---------------------------
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 struct SendPtr<T>(pub *const T);
 unsafe impl<T> Send for SendPtr<T> {}
 unsafe impl<T> Sync for SendPtr<T> {}
 
-#[derive(Clone, Copy, Debug)]
+impl<T> Clone for SendPtr<T> {
+  fn clone(&self) -> Self {
+    *self // This works because the underlying *const T is Copy
+  }
+}
+
+impl<T> Copy for SendPtr<T> {}
+
+#[derive(Debug)]
 pub struct SendPtrMut<T>(pub *mut T);
 unsafe impl<T> Send for SendPtrMut<T> {}
 unsafe impl<T> Sync for SendPtrMut<T> {}
+
+impl<T> Clone for SendPtrMut<T> {
+  fn clone(&self) -> Self {
+    *self // This works because the underlying *mut T is Copy
+  }
+}
+
+impl<T> Copy for SendPtrMut<T> {}
 
 #[derive(Clone, Debug)]
 pub struct SceneContext {
@@ -1134,7 +855,11 @@ impl SceneContext {
   }
 
   fn with_new_entity_inserted(mut self, entity_id: EntityId) -> EngineResult<Self> {
-    if self.entity_map.insert(self.next_entity_id, entity_id).is_some() {
+    if self
+      .entity_map
+      .insert(self.next_entity_id, entity_id)
+      .is_some()
+    {
       return Err(EngineError::InvalidOperation(
         "simulation_api:with_new_entity_inserted | Failed to insert entity into entity_map",
       ));
@@ -1311,7 +1036,11 @@ impl RenderThreadContext {
     let render_frontend = unsafe { render_frontend.as_ref().unwrap_unchecked() };
     let strong = Arc::strong_count(&render_frontend);
     let weak = Arc::weak_count(&render_frontend);
-    oshal::log!("is_render_single_ownership | strong: {}, weak: {}", strong, weak);
+    oshal::log!(
+      "is_render_single_ownership | strong: {}, weak: {}",
+      strong,
+      weak
+    );
     strong == 1 && weak == 1
   }
 }
@@ -1375,4 +1104,79 @@ pub struct LogicThreadContext {
   pub logic_feedback_tx: mpsc::Sender<LogicFeedback>,
   pub task_manager: Arc<RwLock<SimulationTaskManager>>,
   pub scenes: Arc<RwLock<SimulationSceneData>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RayCastHit {
+  pub entity_ext_id: u64,
+  pub p: Vec3f32,
+}
+
+pub type RaycastResult = Option<RayCastHit>;
+
+pub enum SimulationTaskResult {
+  None,
+  U64(u64),
+  Bool(bool),
+  Raycast(RaycastResult),
+}
+
+pub enum SimulationTaskStatus {
+  Pending,
+  Completed(SimulationTaskResult),
+  Error(String),
+}
+
+pub struct SimulationTaskManager {
+  next_task_id: u64,
+  tasks: BTreeMap<u64, SimulationTaskStatus>,
+}
+
+impl Drop for SimulationTaskManager {
+  fn drop(&mut self) {
+    oshal::log!("SimulationTaskManager drop started");
+  }
+}
+
+impl SimulationTaskManager {
+  pub fn new() -> Self {
+    Self {
+      next_task_id: 1,
+      tasks: BTreeMap::new(),
+    }
+  }
+
+  pub fn create_task(&mut self) -> core::num::NonZero<u64> {
+    let id = self.next_task_id | (1u64 << 63);
+    self.next_task_id += 1;
+    self.tasks.insert(id, SimulationTaskStatus::Pending);
+    unsafe { core::num::NonZero::new_unchecked(id) }
+  }
+
+  pub fn success_task(&mut self, id: u64, result: SimulationTaskResult) {
+    self
+      .tasks
+      .insert(id, SimulationTaskStatus::Completed(result));
+  }
+
+  pub fn fail_task(&mut self, id: u64, error: String) {
+    self.tasks.insert(id, SimulationTaskStatus::Error(error));
+  }
+
+  pub fn get_status(&self, id: u64) -> i32 {
+    match self.tasks.get(&id) {
+      Some(SimulationTaskStatus::Pending) => 0,
+      Some(SimulationTaskStatus::Completed(_)) => 1,
+      Some(SimulationTaskStatus::Error(_)) => 2,
+      None => -1,
+    }
+  }
+
+  pub fn take_result(&mut self, id: u64) -> Option<SimulationTaskResult> {
+    if let Some(SimulationTaskStatus::Completed(res)) = self.tasks.remove(&id) {
+      Some(res)
+    } else {
+      None
+    }
+  }
 }

@@ -567,6 +567,9 @@ public static class NativeInterop
   public static extern void avkSimulationContext_setAssetPath(string path);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern float avkSimulationContext_getBodyRadius(int bodyId);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.I1)]
   public static extern bool avkSimulationContext_downloadImage(
     IntPtr ctx,

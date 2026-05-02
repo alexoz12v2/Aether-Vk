@@ -1,30 +1,34 @@
-use crate::{expect_scene, expect_scene_and_entity, structs};
-use crate::simulation_api::SimulationContext;
-use aethervk_core_rlib::physics::physics_scene::math::{closest_intersection, PhysicsSceneMathExt};
-use aethervk_core_rlib::scene::{
-  AddComponentError, BvhDebugComponent, CameraComponent, CursorComponent, EntityId,
-  FollowingComponent, GridComponent, HiddenComponent, MarkersComponent, MeasurementComponent,
-  PhysicalMeshComponent, Scene, SelectedComponent, SkyComponent, SunComponent, TransformComponent,
+use crate::math::collision::linear_bvh::LinearBVHNode;
+use crate::{
+  expect_scene, expect_scene_and_entity,
+  scene::{
+    AddComponentError, BvhDebugComponent, CameraComponent, CursorComponent, EntityId,
+    FollowingComponent, GridComponent, HiddenComponent, MarkersComponent, MeasurementComponent,
+    PhysicalMeshComponent, Scene, SelectedComponent, SkyComponent, SunComponent,
+    TransformComponent,
+  },
+  simulation_api::structs::{self, SceneContext},
+  simulation_api::SimulationContext,
+  types::{EngineError, EngineResult},
 };
-use aethervk_core_rlib::types::{EngineError, EngineResult};
-use aethervk_oshal_rlib::math::vector::vec4::{Quat, Vec4f32};
+use aethervk_oshal_rlib as oshal;
 use alloc::{string::String, sync::Arc, vec::Vec};
-use core::any::TypeId;
-use core::cmp::min;
-use core::ffi::c_char;
-use core::num::NonZero;
+use core::{any::TypeId, ffi::c_char};
+use oshal::{
+  math::quaternion::Quaternion,
+  math::vector::vec3::Vec3f32,
+  math::vector::vec4::Quat,
+  math::vector::{Vector, Vector3},
+};
 use spin::{RwLock, RwLockReadGuard};
-use thingbuf::mpsc::errors::TrySendError;
-use aethervk_core_rlib::simulation;
-use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
-use aethervk_oshal_rlib::math::matrix::{Matrix4, MatrixVectorMul, SquareMatrix};
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
-use crate::structs::{FfiBvhNode, FfiNodeType, LogicCommand, SceneContext};
 
 impl SimulationContext {
-  pub fn raycast_ndc(&self, scene_id: u64, ndc_x: f32, ndc_y: f32) -> EngineResult<core::num::NonZero<u64>> {
+  pub fn raycast_ndc(
+    &self,
+    scene_id: u64,
+    ndc_x: f32,
+    ndc_y: f32,
+  ) -> EngineResult<core::num::NonZero<u64>> {
     let mut task_manager = self.task_manager.write();
     let task_id = task_manager.create_task();
     self
@@ -38,13 +42,21 @@ impl SimulationContext {
         ndc_y,
       })
       .map_err(|_| {
-        task_manager.fail_task(task_id.get(), alloc::string::String::from("logic thread closed"));
+        task_manager.fail_task(
+          task_id.get(),
+          alloc::string::String::from("logic thread closed"),
+        );
         EngineError::InvalidOperation("scene_api: failed to send raycast command")
       })?;
     Ok(task_id)
   }
 
-  pub fn raycast(&self, scene_id: u64, ro: Vec3f32, rd: Vec3f32) -> EngineResult<core::num::NonZero<u64>> {
+  pub fn raycast(
+    &self,
+    scene_id: u64,
+    ro: Vec3f32,
+    rd: Vec3f32,
+  ) -> EngineResult<core::num::NonZero<u64>> {
     let mut task_manager = self.task_manager.write();
     let task_id = task_manager.create_task();
     self
@@ -58,7 +70,10 @@ impl SimulationContext {
         rd,
       })
       .map_err(|_| {
-        task_manager.fail_task(task_id.get(), alloc::string::String::from("logic thread closed"));
+        task_manager.fail_task(
+          task_id.get(),
+          alloc::string::String::from("logic thread closed"),
+        );
         EngineError::InvalidOperation("scene_api: failed to send raycast command")
       })?;
     Ok(task_id)
@@ -104,49 +119,23 @@ impl SimulationContext {
     Ok(())
   }
 
-  pub fn get_bvh_nodes(
+  pub fn get_bvh_nodes<FFI: From<LinearBVHNode<f32>> + Copy>(
     &self,
     scene_id: u64,
     entity: u64,
     count: *mut u32,
-  ) -> EngineResult<*mut FfiBvhNode> {
+  ) -> EngineResult<*mut FFI> {
     let (active, entity_id) =
       expect_scene_and_entity!(self.get_scene(scene_id), entity, "scene_api:get_bvh_nodes");
     let mut ffi_nodes = Vec::new();
 
-    active.read()
+    active
+      .read()
       .scene
       .with_component(entity_id, |mesh: &PhysicalMeshComponent| {
         if let Some(bvh) = &mesh.mesh.bvh {
           for node in &bvh.nodes {
-            let mut ffi_node = FfiBvhNode::from_offsets(
-              node.left_child_or_primitive_offset,
-              node.right_child_offset,
-              node.primitive_count,
-            );
-
-            match &node.bound {
-              aethervk_core_rlib::math::collision::linear_bvh::LinearBound::AABB(aabb) => {
-                ffi_node.node_type = FfiNodeType::AABB;
-                ffi_node.min_x = aabb.min::<Vec3f32>().x();
-                ffi_node.min_y = aabb.min::<Vec3f32>().y();
-                ffi_node.min_z = aabb.min::<Vec3f32>().z();
-                ffi_node.max_x = aabb.max::<Vec3f32>().x();
-                ffi_node.max_y = aabb.max::<Vec3f32>().y();
-                ffi_node.max_z = aabb.max::<Vec3f32>().z();
-              }
-              aethervk_core_rlib::math::collision::linear_bvh::LinearBound::OBB(obb) => {
-                ffi_node.node_type = FfiNodeType::OBB;
-                let t: Vec3f32 = obb.translation();
-                let ext: Vec3f32 = obb.half_extent();
-                ffi_node.center_x = t.x();
-                ffi_node.center_y = t.y();
-                ffi_node.center_z = t.z();
-                ffi_node.extents_x = ext.x();
-                ffi_node.extents_y = ext.y();
-                ffi_node.extents_z = ext.z();
-              }
-            }
+            let ffi_node = node.clone().into();
             ffi_nodes.push(ffi_node);
           }
         }
@@ -168,7 +157,7 @@ impl SimulationContext {
     Ok(ptr)
   }
 
-  pub fn free_bvh_nodes(ptr: *mut FfiBvhNode, count: u32) {
+  pub fn free_bvh_nodes<FFI: From<LinearBVHNode<f32>> + Copy + Sized>(ptr: *mut FFI, count: u32) {
     if !ptr.is_null() {
       let _ = unsafe { Vec::from_raw_parts(ptr, count as usize, count as usize) };
     }
@@ -225,21 +214,25 @@ impl SimulationContext {
 
   pub fn get_entity_parent(&self, scene_id: u64, entity: u64) -> EngineResult<u64> {
     let scene = expect_scene!(self.get_scene(scene_id), "scene_api:get_entity_parent");
-    let internal_id = scene.read()
+    let internal_id = scene
+      .read()
       .get_entity(entity)
       .ok_or(EngineError::InvalidOperation(
         "scene_api:get_entity_parent child entity not found",
       ))?;
-    let parent_id = scene.read()
-      .scene
-      .get_parent(internal_id)
-      .ok_or(EngineError::InvalidOperation(
-        "scene_api:get_entity_parent parent not found",
-      ))?;
+    let parent_id =
+      scene
+        .read()
+        .scene
+        .get_parent(internal_id)
+        .ok_or(EngineError::InvalidOperation(
+          "scene_api:get_entity_parent parent not found",
+        ))?;
     // we don't maintain an inverse mapping, so we need to find it manually
     // precondition for unwrap: if entity exists, then the simulation api has its external id.
     Ok(
-      scene.read()
+      scene
+        .read()
         .entity_map
         .iter()
         .find(|&(_, v)| *v == parent_id)
@@ -252,12 +245,14 @@ impl SimulationContext {
     let camera_entity = scene.add_camera("camera", Self::camera_start_pos(), root_entity)?;
     let scene_ctx = Arc::new(RwLock::new(
       SceneContext::new_empty(Arc::new(scene), root_entity)
-        .with_active_camera_entity(camera_entity)?
+        .with_active_camera_entity(camera_entity)?,
     ));
     Ok(self.scenes.write().insert_scene(scene_ctx))
   }
 
-  pub fn camera_start_pos() -> Vec3f32 { Vec3f32::from_components(0.0, -400.0, 0.0) }
+  pub fn camera_start_pos() -> Vec3f32 {
+    Vec3f32::from_components(0.0, -400.0, 0.0)
+  }
 
   pub fn create_default_scene(&self) -> EngineResult<u64> {
     let (scene, root_entity) = empty_scene_object()?;
@@ -297,7 +292,15 @@ impl SimulationContext {
     )?;
     scene.set_parent(sun_entity, Some(root_entity));
 
-    let sun_sphere = aethervk_core_rlib::simulation::comet::generate_uv_sphere(0.45 * 0.95, 64, 64);
+    let mut sun_radius = 0.0696; // 696000 km / 10,000,000 km
+    if let Some(asset_dir) = crate::gpu::ASSET_DIR.read().as_ref() {
+      let pck_path = alloc::format!("{}/planets/pck00011.tpc", asset_dir);
+      if let Some(radii) = crate::simulation::pck::read_body_radii(&pck_path, 10) {
+        sun_radius = (radii[0] / crate::simulation::almanac::DISTANCE_SCALE_FACTOR) as f32;
+      }
+    }
+
+    let sun_sphere = crate::simulation::comet::generate_uv_sphere(sun_radius, 64, 64);
     scene.add_component(
       sun_entity,
       PhysicalMeshComponent {
@@ -341,14 +344,16 @@ impl SimulationContext {
       "scene_api:set_entity_visibility"
     );
     if visible {
-      scene.write()
+      scene
+        .write()
         .scene
-        .remove_component::<aethervk_core_rlib::scene::HiddenComponent>(id)
+        .remove_component::<crate::scene::HiddenComponent>(id)
         .map_err(|e| EngineError::InvalidOperation(e))?;
     } else {
-      scene.write()
+      scene
+        .write()
         .scene
-        .add_component(id, aethervk_core_rlib::scene::HiddenComponent {})
+        .add_component(id, crate::scene::HiddenComponent {})
         .map_err(|e| <AddComponentError as Into<EngineError>>::into(e.into()))?;
     }
     Ok(())
@@ -366,14 +371,16 @@ impl SimulationContext {
       "scene_api:set_entity_selected"
     );
     if selected {
-      scene.write()
+      scene
+        .write()
         .scene
-        .add_component(id, aethervk_core_rlib::scene::SelectedComponent {})
+        .add_component(id, crate::scene::SelectedComponent {})
         .map_err(|e| <AddComponentError as Into<EngineError>>::into(e.into()))?;
     } else {
-      scene.write()
+      scene
+        .write()
         .scene
-        .remove_component::<aethervk_core_rlib::scene::SelectedComponent>(id)
+        .remove_component::<crate::scene::SelectedComponent>(id)
         .map_err(|e| EngineError::InvalidOperation(e))?;
     }
     Ok(())
@@ -391,13 +398,15 @@ impl SimulationContext {
       "scene_api:set_entity_following"
     );
     if following {
-      active.write()
+      active
+        .write()
         .scene
-        .add_component(entity_id, aethervk_core_rlib::scene::FollowingComponent {})?;
+        .add_component(entity_id, crate::scene::FollowingComponent {})?;
     } else {
-      active.write()
+      active
+        .write()
         .scene
-        .remove_component::<aethervk_core_rlib::scene::FollowingComponent>(entity_id)
+        .remove_component::<crate::scene::FollowingComponent>(entity_id)
         .map_err(|s| EngineError::InvalidOperation(s))?;
     }
     Ok(())
@@ -435,9 +444,17 @@ pub(crate) fn empty_scene_object() -> EngineResult<(Scene, EntityId)> {
   scene.register_component::<HiddenComponent>(&[]);
   scene.register_component::<BvhDebugComponent>(&[]);
   scene.register_component::<MeasurementComponent>(&[]);
-  scene.register_component::<aethervk_core_rlib::scene::ImageBillboardComponent>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<aethervk_core_rlib::scene::GizmoComponent>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<aethervk_core_rlib::scene::ParticleStateComponent>(&[TypeId::of::<TransformComponent>()]);
+  scene.register_component::<crate::scene::ImageBillboardComponent>(&[TypeId::of::<
+    TransformComponent,
+  >()]);
+  scene.register_component::<crate::scene::GizmoComponent>(&[TypeId::of::<TransformComponent>()]);
+  scene.register_component::<crate::scene::ParticleStateComponent>(&[TypeId::of::<
+    TransformComponent,
+  >()]);
+  scene.register_component::<crate::scene::AlmanacPlanet>(&[TypeId::of::<TransformComponent>()]);
+  scene.register_component::<crate::scene::ParticleSystemComponent>(&[TypeId::of::<
+    TransformComponent,
+  >()]);
 
   let root_entity = scene.spawn_entity("root");
   scene

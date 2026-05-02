@@ -1,13 +1,13 @@
 use spin::RwLockReadGuard;
-use aethervk_core_rlib::{
+use crate::{
   self as rlib,
   scene::{CameraComponent, CursorComponent, EntityId, FollowingComponent, TransformComponent},
   types::{EngineError, EngineResult},
 };
 use thingbuf::mpsc;
-use aethervk_oshal_rlib::{
+use aethervk_oshal_rlib as oshal;
+use oshal::{
   os::{NativeError, ThreadingError},
-  self as oshal,
   math::floating::FloatOps,
   math::quaternion::Quaternion,
   math::vector::vec3::Vec3f32,
@@ -17,12 +17,9 @@ use aethervk_oshal_rlib::{
   os::thread,
   os::thread::Thread,
 };
-use crate::{
+use super::{
   SimulationContext,
-  structs::{
-    LogicCommand, LogicThreadContext, SceneContext, LogicWorkload, SimulationTaskResult,
-    FfiRaycastResult,
-  },
+  structs::{LogicCommand, LogicThreadContext, SceneContext, LogicWorkload, SimulationTaskResult},
 };
 use alloc::{boxed::Box, string::ToString};
 
@@ -77,9 +74,9 @@ impl oshal::os::pool::Workload for LogicWorkload {
       LogicCommand::LoadAlmanac { path, .. } => alloc::format!("Load almanac {}", path),
       LogicCommand::LoadCometSpk { path, .. } => alloc::format!("Load SPK {}", path),
       LogicCommand::SpawnModelInstance { name, .. } => alloc::format!("Spawn instance {}", name),
-      LogicCommand::RaycastNdc { .. } => alloc::format!("Raycast NDC"),
-      LogicCommand::Raycast { .. } => alloc::format!("Raycast"),
-      _ => alloc::format!("Logic Task"),
+      LogicCommand::RaycastNdc { .. } => "Raycast NDC".to_string(),
+      LogicCommand::Raycast { .. } => "Raycast".to_string(),
+      _ => "Logic Task".to_string(),
     };
 
     if let Some(tid) = task_id {
@@ -91,7 +88,10 @@ impl oshal::os::pool::Workload for LogicWorkload {
         }
         Err(e) => {
           manager.fail_task(tid, e.to_string());
-          crate::simulation_api::emit_breadcrumb(3, &alloc::format!("Failed: {} - {}", cmd_desc, e));
+          crate::simulation_api::emit_breadcrumb(
+            3,
+            &alloc::format!("Failed: {} - {}", cmd_desc, e),
+          );
         }
       }
     }
@@ -118,7 +118,8 @@ fn process_command_internal(
 ) -> EngineResult<SimulationTaskResult> {
   match command {
     LogicCommand::Shutdown => Ok(SimulationTaskResult::None),
-    LogicCommand::RotateCamera(crate::structs::RotateCamera {
+    // TODO camera movement commands should use methods from [`crate::scene::camera`]
+    LogicCommand::RotateCamera(crate::simulation_api::structs::RotateCamera {
       camera_entity,
       scene,
       delta_x,
@@ -172,7 +173,7 @@ fn process_command_internal(
         ))?;
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::ZoomCamera(crate::structs::ZoomCamera {
+    LogicCommand::ZoomCamera(crate::simulation_api::structs::ZoomCamera {
       camera_entity,
       scene,
       amount,
@@ -212,7 +213,7 @@ fn process_command_internal(
         ))?;
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::ResetCamera(crate::structs::ResetCamera {
+    LogicCommand::ResetCamera(crate::simulation_api::structs::ResetCamera {
       camera_entity,
       scene,
     }) => {
@@ -235,7 +236,7 @@ fn process_command_internal(
         ))?;
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::PanCamera(crate::structs::PanCamera {
+    LogicCommand::PanCamera(crate::simulation_api::structs::PanCamera {
       camera_entity,
       scene,
       delta_x,
@@ -269,7 +270,7 @@ fn process_command_internal(
       Ok(SimulationTaskResult::None)
     }
     LogicCommand::PanCursor(_) => Ok(SimulationTaskResult::None),
-    LogicCommand::MoveCursor(crate::structs::MoveCursor {
+    LogicCommand::MoveCursor(crate::simulation_api::structs::MoveCursor {
       scene,
       delta_x,
       delta_y,
@@ -290,7 +291,7 @@ fn process_command_internal(
         ))?;
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::SnapToEntity(crate::structs::SnapToEntity {
+    LogicCommand::SnapToEntity(crate::simulation_api::structs::SnapToEntity {
       snap_entity,
       target_entity,
       scene,
@@ -299,7 +300,7 @@ fn process_command_internal(
       try_snap_entity(snap_entity, target_entity, &scene_read)?;
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::FollowEntity(crate::structs::FollowEntity {
+    LogicCommand::FollowEntity(crate::simulation_api::structs::FollowEntity {
       snap_entity,
       entity_id,
       scene,
@@ -321,7 +322,10 @@ fn process_command_internal(
         .map_err(|e| EngineError::from(e))?;
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::UnfollowEntity(crate::structs::UnfollowEntity { entity_id, scene }) => {
+    LogicCommand::UnfollowEntity(crate::simulation_api::structs::UnfollowEntity {
+      entity_id,
+      scene,
+    }) => {
       let scene_read = scene.read();
       scene_read
         .scene
@@ -332,10 +336,10 @@ fn process_command_internal(
     LogicCommand::FeedbackGetTimeScale => {
       let scale = ctx.logic_state.read().current_scale;
       Ok(SimulationTaskResult::U64(match scale {
-        crate::structs::TimeScale::Stopped => 0,
-        crate::structs::TimeScale::OneDay => 1,
-        crate::structs::TimeScale::OneWeek => 2,
-        crate::structs::TimeScale::OneMonth => 3,
+        crate::simulation_api::structs::TimeScale::Stopped => 0,
+        crate::simulation_api::structs::TimeScale::OneDay => 1,
+        crate::simulation_api::structs::TimeScale::OneWeek => 2,
+        crate::simulation_api::structs::TimeScale::OneMonth => 3,
       }))
     }
     LogicCommand::FeedbackGetDateTimeUTC => {
@@ -347,7 +351,7 @@ fn process_command_internal(
     LogicCommand::FeedbackGetDateTimeLimitsUTC => Ok(SimulationTaskResult::None),
 
     LogicCommand::ImportModel { task_id: _, path } => {
-      let mesh_res = aethervk_core_rlib::simulation::comet::load_comet_from_gltf(&path, false);
+      let mesh_res = crate::simulation::comet::load_comet_from_gltf(&path, false);
       match mesh_res {
         Ok(mesh) => {
           let mut scenes = ctx.scenes.write();
@@ -380,20 +384,20 @@ fn process_command_internal(
         let scenes = ctx.scenes.read();
         scenes.model_registry.get(&model_id).cloned()
       };
-      
+
       if let Some(path_str) = path_opt {
         let needs_load = {
           let scenes = ctx.scenes.read();
           !scenes.mesh_cache.get(&path_str).is_some()
         };
-        
+
         if needs_load {
-          if let Ok(mesh) = aethervk_core_rlib::simulation::comet::load_comet_from_gltf(&path_str, false) {
-             let mut scenes = ctx.scenes.write();
-             scenes.mesh_cache.insert(path_str.clone(), mesh);
+          if let Ok(mesh) = crate::simulation::comet::load_comet_from_gltf(&path_str, false) {
+            let mut scenes = ctx.scenes.write();
+            scenes.mesh_cache.insert(path_str.clone(), mesh);
           }
         }
-        
+
         let mut scenes = ctx.scenes.write();
         let instance_id = scenes.spawn_model_instance_internal(scene_id, model_id, &name)?;
         Ok(SimulationTaskResult::U64(instance_id))
@@ -442,12 +446,19 @@ fn process_command_internal(
           .ok_or(EngineError::InvalidOperation("scene not found"))?
           .read();
         let logic_state = ctx.logic_state.read();
-        
-        scene_ctx.scene.query2_mut::<TransformComponent, rlib::scene::AlmanacPlanet, _>(
-          |_, transform, planet| {
-            planet.step(transform, current_epoch, step_days, &logic_state.almanac_data.almanac);
-          }
-        );
+
+        scene_ctx
+          .scene
+          .query2_mut::<TransformComponent, crate::scene::AlmanacPlanet, _>(
+            |_, transform, planet| {
+              planet.step(
+                transform,
+                current_epoch,
+                step_days,
+                &logic_state.almanac_data.almanac,
+              );
+            },
+          );
       }
 
       // 3. Physics rebuild
@@ -459,11 +470,16 @@ fn process_command_internal(
 
       if let Some(ps_lock) = &scene_ctx.physics_scene {
         let mut ps = ps_lock.write();
-        *ps = rlib::physics::physics_scene::PhysicsScene::build_from_scene(&scene_ctx.scene);
+        *ps = crate::physics::physics_scene::PhysicsScene::build_from_scene(&scene_ctx.scene);
       }
 
       // TODO: implement controllers update (camera, cursor, etc.)
-      
+
+      Ok(SimulationTaskResult::None)
+    }
+    LogicCommand::Custom { custom_fn, user_data } => {
+      let ptr = user_data.map(|p| p.0).unwrap_or(core::ptr::null_mut());
+      custom_fn(ctx, ptr);
       Ok(SimulationTaskResult::None)
     }
   }

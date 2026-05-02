@@ -47,23 +47,22 @@ layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer Co
 // Variation 2: Array of Structures of Arrays (AOSOA)
 // Optimized for Cooperative Subgroup operations (CUDA Warp coalescing logic)
 // ----------------------------------------------------------------------------
-#ifndef SUBGROUP_SIZE
-#define SUBGROUP_SIZE 32
-#endif
+// Injected by Rust to perfectly match the physical GPU's gl_SubgroupSize
+layout(constant_id = 0) const uint SG_SIZE = 32;
 
-// SOA block representing `SUBGROUP_SIZE` nodes. 
+// SOA block representing `SG_SIZE` nodes. 
 // When a warp accesses `block.minX[gl_SubgroupInvocationID]`, memory accesses are perfectly coalesced.
 struct BVHNodeBlockAABB {
-    float minX[SUBGROUP_SIZE];
-    float minY[SUBGROUP_SIZE];
-    float minZ[SUBGROUP_SIZE];
-    float maxX[SUBGROUP_SIZE];
-    float maxY[SUBGROUP_SIZE];
-    float maxZ[SUBGROUP_SIZE];
-    uint left_child_or_primitive_offset[SUBGROUP_SIZE];
-    uint right_child_offset[SUBGROUP_SIZE];
-    uint primitive_count[SUBGROUP_SIZE];
-    uint node_type[SUBGROUP_SIZE];
+    float minX[SG_SIZE];
+    float minY[SG_SIZE];
+    float minZ[SG_SIZE];
+    float maxX[SG_SIZE];
+    float maxY[SG_SIZE];
+    float maxZ[SG_SIZE];
+    uint left_child_or_primitive_offset[SG_SIZE];
+    uint right_child_offset[SG_SIZE];
+    uint primitive_count[SG_SIZE];
+    uint node_type[SG_SIZE];
 };
 
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer BVHBlockArray {
@@ -85,7 +84,7 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer BV
 #define CACHE_BLOCK_COLLABORATIVE(GLOBAL_BVH, BLOCK_IDX, SHARED_CACHE) \
     do { \
         uint _tid = gl_SubgroupInvocationID; \
-        if (_tid < SUBGROUP_SIZE) { \
+        if (_tid < SG_SIZE) { \
             SHARED_CACHE.minX[_tid] = GLOBAL_BVH.blocks[BLOCK_IDX].minX[_tid]; \
             SHARED_CACHE.minY[_tid] = GLOBAL_BVH.blocks[BLOCK_IDX].minY[_tid]; \
             SHARED_CACHE.minZ[_tid] = GLOBAL_BVH.blocks[BLOCK_IDX].minZ[_tid]; \

@@ -22,6 +22,7 @@ public class HorizonJplService
   public HorizonJplService(ConsoleService console, BreadcrumbService breadcrumb)
   {
     _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+    _httpClient.DefaultRequestHeaders.Add("User-Agent", "AetherVk/1.0");
     _console = console;
     _breadcrumb = breadcrumb;
   }

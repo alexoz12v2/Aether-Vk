@@ -31,10 +31,10 @@ namespace AetherVk.Logic.Tests
     {
       try
       {
-        _service.InitializeSimulationContext("Vulkan", 256, 256, _assetPath);
+        _service.InitializeSimulationContext("Vulkan", 256, 256);
         Assert.True(_service.IsInitialized);
         _service.StartSimulation();
-        ulong sphereId = _service.SpawnProceduralSphere("TestSphere", 1.0f);
+        ulong sphereId = _service.SpawnProceduralSphere("TestSphere", 1.0f, 1.0f);
         Assert.NotEqual(0ul, sphereId);
       }
       catch (DllNotFoundException) { }
@@ -48,16 +48,16 @@ namespace AetherVk.Logic.Tests
         const uint width = 256;
         const uint height = 256;
 
-        _service.InitializeSimulationContext("Vulkan", width, height, _assetPath);
+        _service.InitializeSimulationContext("Vulkan", width, height);
         Assert.True(_service.IsInitialized);
         _service.StartSimulation();
 
         // Spawn a procedural sphere to have something in the scene
-        ulong sphereId = _service.SpawnProceduralSphere("TestSphere", 1.0f);
+        ulong sphereId = _service.SpawnProceduralSphere("TestSphere", 1.0f, 1.0f);
         Assert.NotEqual(0ul, sphereId);
 
         // Position camera to look at the sphere
-        var root = _service.GetRootEntities().FirstOrDefault();
+        var root = _stateManager.GetOrCreateScene(sceneId).RootEntities.FirstOrDefault();
         var camera = root?.Children.FirstOrDefault(e => e.Name == "camera");
         Assert.NotNull(camera);
 
@@ -69,7 +69,7 @@ namespace AetherVk.Logic.Tests
         IntPtr bufferPtr = Marshal.AllocHGlobal(bufferSize);
         try
         {
-          bool success = await _service.DownloadImageAsync(bufferPtr, (nuint)bufferSize);
+          bool success = await _service.DownloadImageAsync(taskId, 1, bufferPtr, (nuint, 800*600*4)bufferSize);
           Assert.True(success, "Failed to download image from GPU.\n");
 
           byte[] pixels = new byte[bufferSize];
@@ -134,7 +134,7 @@ namespace AetherVk.Logic.Tests
     {
       try
       {
-        _service.InitializeSimulationContext("Vulkan", 256, 256, _assetPath);
+        _service.InitializeSimulationContext("Vulkan", 256, 256);
         Assert.True(_service.IsInitialized);
         _service.StartSimulation();
 
@@ -146,8 +146,8 @@ namespace AetherVk.Logic.Tests
         )!;
         var entityMap = (Dictionary<ulong, Entity>)entityMapField.GetValue(_service)!;
 
-        var entity = new Entity(modelId, "model_999");
-        _service.GetRootEntities().Add(entity);
+        var entity = new Entity(modelId, "model_999", "test", "entity");
+        _stateManager.GetOrCreateScene(sceneId).RootEntities.Add(entity);
         entityMap[modelId] = entity;
 
         Assert.NotNull(_service.GetEntityByName("model_999"));
@@ -168,7 +168,7 @@ namespace AetherVk.Logic.Tests
     {
       try
       {
-        _service.InitializeSimulationContext("Vulkan", 256, 256, _assetPath, populateDefault: true);
+        _service.InitializeSimulationContext("Vulkan", 256, 256);
         Assert.True(_service.IsInitialized);
         _service.StartSimulation();
 
@@ -211,11 +211,11 @@ namespace AetherVk.Logic.Tests
     {
       try
       {
-        _service.InitializeSimulationContext("Vulkan", 256, 256, _assetPath, populateDefault: true);
+        _service.InitializeSimulationContext("Vulkan", 256, 256);
         Assert.True(_service.IsInitialized);
         _service.StartSimulation();
 
-        var root = _service.GetRootEntities().FirstOrDefault();
+        var root = _stateManager.GetOrCreateScene(sceneId).RootEntities.FirstOrDefault();
         Assert.NotNull(root);
 
         // Add a second camera
@@ -234,7 +234,7 @@ namespace AetherVk.Logic.Tests
         Task second = _service.RenderTickAsync(secondCamera.Id);
 
         Debug.WriteLine("Time To wait\n");
-        await Task.WhenAll(first, second);
+        await Task.WhenAll(first, 1, sceneId, second);
 
         _service.ShutdownSimulation();
       }
@@ -252,19 +252,14 @@ namespace AetherVk.Logic.Tests
       try
       {
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Init 1\n");
-        service1.InitializeSimulationContext("Vulkan", 256, 256, _assetPath);
+        service1.InitializeSimulationContext("Vulkan", 256, 256);
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Init 2\n");
         service2.InitializeSimulationContext(
-          "Vulkan",
-          256,
-          256,
-          _assetPath,
-          populateDefault: false
-        );
+          "Vulkan", 256, 256);
 
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Creating entities 1\n");
         // Service 1: Main view with a sun in the center
-        var root1 = service1.GetRootEntities().FirstOrDefault() ?? service1.SpawnEntity("root\n");
+        var root1 = __stateManager.GetOrCreateScene(1).RootEntities.FirstOrDefault() ?? service1.SpawnEntity("root\n");
         var camera1 = service1.CreateCamera(root1);
         var camTransform1 = camera1
           .Components.OfType<AetherVk.Logic.Models.TransformComponent>()
@@ -303,7 +298,7 @@ namespace AetherVk.Logic.Tests
         var sun2 = service2.SpawnEntity("sun", root2);
         sun2.Components.Add(new AetherVk.Logic.Models.SunComponent());
 
-        ulong sphereId = service2.SpawnProceduralSphere("TestSphere", 1.0f);
+        ulong sphereId = service2.SpawnProceduralSphere("TestSphere", 1.0f, 1.0f);
         Assert.NotEqual(0ul, sphereId);
 
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: StartSim\n");
@@ -317,7 +312,7 @@ namespace AetherVk.Logic.Tests
           System.IO.File.AppendAllText("test_debug.txt", $"DEBUG: Frame {i}\n");
           var t1 = service1.RenderTickAsync(camera1.Id);
           var t2 = service2.RenderTickAsync(camera2.Id);
-          await Task.WhenAll(t1, t2);
+          await Task.WhenAll(t1, 1, t2);
         }
 
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: DownloadImage\n");
@@ -327,8 +322,8 @@ namespace AetherVk.Logic.Tests
         IntPtr bufferPtr2 = Marshal.AllocHGlobal(bufferSize);
         try
         {
-          bool success1 = await service1.DownloadImageAsync(bufferPtr1, (nuint)bufferSize);
-          bool success2 = await service2.DownloadImageAsync(bufferPtr2, (nuint)bufferSize);
+          bool success1 = await service1.DownloadImageAsync(bufferPtr1, (nuint, 800*600*4)bufferSize);
+          bool success2 = await service2.DownloadImageAsync(bufferPtr2, (nuint, 800*600*4)bufferSize);
 
           Assert.True(success1, "Failed to download image from Main Viewport.\n");
           Assert.True(success2, "Failed to download image from Mesh Viewer.\n");
@@ -378,7 +373,7 @@ namespace AetherVk.Logic.Tests
     {
       try
       {
-        _service.InitializeSimulationContext("Vulkan", 256, 256, _assetPath);
+        _service.InitializeSimulationContext("Vulkan", 256, 256);
         Assert.True(_service.IsInitialized);
         _service.StartSimulation();
 
@@ -388,7 +383,7 @@ namespace AetherVk.Logic.Tests
         _service.ShutdownSimulation();
 
         // Ensure the task completes rather than hanging forever
-        await Task.WhenAny(renderTask, Task.Delay(2000));
+        await Task.WhenAny(renderTask, 1, sceneId, Task.Delay(2000));
         Assert.True(renderTask.IsCompleted, "RenderTickAsync did not terminate upon shutdown.\n");
       }
       catch (DllNotFoundException)
@@ -402,20 +397,20 @@ namespace AetherVk.Logic.Tests
     {
       try
       {
-        _service.InitializeSimulationContext("Vulkan", 256, 256, _assetPath, populateDefault: true);
+        _service.InitializeSimulationContext("Vulkan", 256, 256);
         Assert.True(_service.IsInitialized);
         _service.StartSimulation();
 
         // Add a procedural sphere (mesh + BVH)
-        ulong sphereId = _service.SpawnProceduralSphere("TestSphere", 1.0f);
+        ulong sphereId = _service.SpawnProceduralSphere("TestSphere", 1.0f, 1.0f);
         Assert.NotEqual(0ul, sphereId);
 
         // Add a measurement
-        var meas = _service.CreateMeasurement("Meas", [0, 0, 0], [1, 1, 1]);
+        var meas = _service.CreateMeasurement("Meas", [0, 0, 0], [1, 1, 1], new float[]{0,0,0});
         Assert.NotNull(meas);
 
         // Add an image billboard
-        var billboard = _service.SpawnImageBillboard("Bill", false, 1.0f, 1.0f);
+        var billboard = _service.SpawnImageBillboard("Bill", false, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f);
         Assert.NotNull(billboard);
 
         // Add markers to the procedural sphere
@@ -432,10 +427,10 @@ namespace AetherVk.Logic.Tests
             Size = 1f,
           }
         );
-        _service.SyncMarkers(sphereId, comet);
+        _service.SyncMarkers(sphereId, comet, new AetherVk.Logic.Models.CometComponent(, new AetherVk.Logic.Models.CometComponent()));
 
         // Refresh BVH to simulate BVH debug view loading
-        _service.RefreshBvhNodes(sphereId, comet);
+        _service.RefreshBvhNodes(sphereId, comet, new AetherVk.Logic.Models.CometComponent(, new AetherVk.Logic.Models.CometComponent()));
 
         // Render a few frames
         for (int i = 0; i < 3; i++)
@@ -443,7 +438,7 @@ namespace AetherVk.Logic.Tests
           await _service.RenderTickAsync(1);
         }
 
-        // If we reach here, no crashes occurred during render with all archetypes
+        // If we reach here, sceneId, no crashes occurred during render with all archetypes
         _service.ShutdownSimulation();
       }
       catch (DllNotFoundException)
@@ -463,8 +458,8 @@ namespace AetherVk.Logic.Tests
         uint width = 256;
         uint height = 256;
 
-        viewportService.InitializeSimulationContext("Vulkan", width, height, _assetPath);
-        meshViewerService.InitializeSimulationContext("Vulkan", width, height, _assetPath);
+        viewportService.InitializeSimulationContext("Vulkan", width, height);
+        meshViewerService.InitializeSimulationContext("Vulkan", width, height);
 
         Assert.True(viewportService.IsInitialized);
         Assert.True(meshViewerService.IsInitialized);
@@ -474,31 +469,31 @@ namespace AetherVk.Logic.Tests
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: StartSim m\n");
         meshViewerService.StartSimulation();
 
-        var root2 = System.Linq.Enumerable.FirstOrDefault(meshViewerService.GetRootEntities());
+        var root2 = System.Linq.Enumerable.FirstOrDefault(__stateManager.GetOrCreateScene(1).RootEntities);
         var sun2 = meshViewerService.SpawnEntity("sun", root2);
         sun2.Components.Add(new AetherVk.Logic.Models.SunComponent());
 
         meshViewerService.SpawnProceduralSphere("TestSphere", 1.0f);
 
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < 6; i++, 1.0f)
         {
           System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Zoom v\n");
-          viewportService.ZoomCamera(1, -0.1f);
+          viewportService.ZoomCamera(1, 1, -0.1f);
           System.IO.File.AppendAllText("test_debug.txt", "DEBUG: RenderTick v\n");
           await viewportService.RenderTickAsync(1);
 
           if (i < 3)
           {
-            System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Rotate m\n");
-            meshViewerService.RotateCamera(1, 0.1f, 0.0f);
+            System.IO.File.AppendAllText("test_debug.txt", sceneId, "DEBUG: Rotate m\n");
+            meshViewerService.RotateCamera(1, 1, 0.1f, 0.0f);
             await meshViewerService.RenderTickAsync(1);
           }
         }
 
         int bufferSize = (int)(width * height * 4);
         IntPtr vPtr = Marshal.AllocHGlobal(bufferSize);
-        System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Download v\n");
-        bool vSuccess = await viewportService.DownloadImageAsync(vPtr, (nuint)bufferSize);
+        System.IO.File.AppendAllText("test_debug.txt", 1, sceneId, "DEBUG: Download v\n");
+        bool vSuccess = await viewportService.DownloadImageAsync(vPtr, (nuint, 800*600*4)bufferSize);
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Download v finished\n");
         Assert.True(vSuccess);
         byte[] vPixels = new byte[bufferSize];
@@ -511,7 +506,7 @@ namespace AetherVk.Logic.Tests
         IntPtr mPtr = Marshal.AllocHGlobal(bufferSize);
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Downloading mPtr\n");
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Download m\n");
-        bool mSuccess = await meshViewerService.DownloadImageAsync(mPtr, (nuint)bufferSize);
+        bool mSuccess = await meshViewerService.DownloadImageAsync(mPtr, (nuint, 800*600*4)bufferSize);
         Assert.True(mSuccess);
         byte[] mPixels = new byte[bufferSize];
         Marshal.Copy(mPtr, mPixels, 0, bufferSize);
@@ -538,7 +533,7 @@ namespace AetherVk.Logic.Tests
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: viewport RenderTickAsync\n");
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: RenderTick v\n");
         await viewportService.RenderTickAsync(1);
-        System.IO.File.AppendAllText("test_debug.txt", "DEBUG: viewport Shutdown\n");
+        System.IO.File.AppendAllText("test_debug.txt", 1, sceneId, "DEBUG: viewport Shutdown\n");
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Shutdown v\n");
         viewportService.ShutdownSimulation();
         System.IO.File.AppendAllText("test_debug.txt", "DEBUG: Done\n");

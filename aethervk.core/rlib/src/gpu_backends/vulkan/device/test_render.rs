@@ -141,6 +141,7 @@ fn test_render_particles_windowless() {
       sys.particles.push(p);
 
       render_scene.add_renderable(
+        cmd_buffer_handle,
         device,
         particle_sys_e,
         Mat4x4f32::identity(),
@@ -178,7 +179,7 @@ fn test_render_particles_windowless() {
           },
         )?;
 
-        device.render_frame(cmd_buffer_handle, &render_scene)?;
+        gpu::frame::render_frame(device, cmd_buffer_handle, &render_scene, presentation_engine)?;
         scoped_rp.end()?;
         device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
       }
@@ -295,8 +296,8 @@ fn test_render_all_archetypes_windowless() {
       let acquire_result = device.acquire_next_image(presentation_engine)?;
       let cmd_buffer_handle = device.get_command_buffer()?;
 
-      let cursor_res = device.get_or_create_cursor_resources(presentation_engine)?;
-      let billboard_res = device.get_or_create_billboard_resources(presentation_engine)?;
+      let cursor_res = device.get_cursor_resources(presentation_engine)?;
+      let billboard_res = device.get_billboard_resources(presentation_engine)?;
 
       let mut render_scene = RenderScene::new((
         TransformComponent {
@@ -311,13 +312,13 @@ fn test_render_all_archetypes_windowless() {
         },
       ));
 
-      let sky_pipeline = device.get_sky_pipeline_key()?;
+      let sky_pipeline = device.get_sky_pipeline_key(presentation_engine)?;
       render_scene.sky_call = Some(gpu::frame::SkyDrawCall::from_camera(
         &render_scene.camera_data,
         sky_pipeline,
       )?);
 
-      let sun_pipeline = device.get_sun_pipeline_key()?;
+      let sun_pipeline = device.get_sun_pipeline_key(presentation_engine)?;
       render_scene.sun_call = Some(gpu::frame::SunDrawCall::from_model_and_camera(
         Mat4x4f32::identity(),
         &render_scene.camera_data,
@@ -325,7 +326,7 @@ fn test_render_all_archetypes_windowless() {
         sun_e,
       )?);
 
-      let grid_pipeline = device.get_grid_pipeline_kay()?;
+      let grid_pipeline = device.get_grid_pipeline_kay(presentation_engine)?;
       render_scene.grid_call = Some(gpu::frame::GridDrawCall::new(
         grid_pipeline,
         0.1,
@@ -333,7 +334,7 @@ fn test_render_all_archetypes_windowless() {
         [0.5, 0.5, 0.5],
       ));
 
-      let gizmo_resources = device.get_or_create_gizmo_resources(presentation_engine)?;
+      let gizmo_resources = device.get_gizmo_resources(presentation_engine)?;
       let gizmo_idx = device.update_gizmo_instance(sun_e, Mat4x4f32::identity())?;
       render_scene
         .gizmo_calls
@@ -390,8 +391,7 @@ fn test_render_all_archetypes_windowless() {
           },
         )?;
 
-        device
-          .render_frame(cmd_buffer_handle, &render_scene)
+        gpu::frame::render_frame(device, cmd_buffer_handle, &render_scene, presentation_engine)
           .map_err(|e| {
             println!("TR: render_frame failed {:?}", e);
             e
@@ -518,8 +518,7 @@ fn test_render_empty_scene_graceful() {
             extent: [16, 16],
           },
         )?;
-        device
-          .render_frame(cmd_buffer_handle, &render_scene)
+        gpu::frame::render_frame(device, cmd_buffer_handle, &render_scene, presentation_engine)
           .map_err(|e| {
             println!("TR: render_frame failed {:?}", e);
             e
@@ -698,11 +697,13 @@ fn test_render_text_system_font_async() {
         assert!(glyph_info.size[0] > 0.0 && glyph_info.size[1] > 0.0);
 
         let font_hash = atlas.hash_metadata();
-        let font_id = device.allocate_rasterized_font_atlas(font_hash, atlas)?;
 
         {
           let _scoped_cmd =
             gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+
+          let font_id = device.allocate_rasterized_font_atlas(cmd_buffer_handle, font_hash, atlas)?;
+
           device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
           let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
 
@@ -726,7 +727,7 @@ fn test_render_text_system_font_async() {
             },
           )?;
 
-          device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer_handle)?;
+          device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer_handle, presentation_engine)?;
           device.render_text(
             cmd_buffer_handle,
             "AetherVk Async Test",
@@ -887,11 +888,13 @@ fn test_render_text_asset_font_async() {
         assert!(glyph_info.size[0] > 0.0 && glyph_info.size[1] > 0.0);
 
         let font_hash = atlas.hash_metadata();
-        let font_id = device.allocate_rasterized_font_atlas(font_hash, atlas)?;
 
         {
           let _scoped_cmd =
             gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+
+          let font_id = device.allocate_rasterized_font_atlas(cmd_buffer_handle, font_hash, atlas)?;
+
           device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
           let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
 
@@ -915,7 +918,7 @@ fn test_render_text_asset_font_async() {
             },
           )?;
 
-          device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer_handle)?;
+          device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer_handle, presentation_engine)?;
           device.render_text(
             cmd_buffer_handle,
             "AetherVk Async Test",
@@ -1209,6 +1212,7 @@ fn test_render_particles_multithreaded() {
           device.start_frame()?;
           let acquire_result = device.acquire_next_image(presentation_engine)?;
           let cmd_buffer_handle = device.get_command_buffer()?;
+          let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
 
           let mut render_scene = RenderScene::new((
             TransformComponent {
@@ -1226,7 +1230,7 @@ fn test_render_particles_multithreaded() {
             },
           ));
 
-          let sun_pipeline = device.get_sun_pipeline_key()?;
+          let sun_pipeline = device.get_sun_pipeline_key(presentation_engine)?;
           render_scene.sun_call = Some(gpu::frame::SunDrawCall::from_model_and_camera(
             Mat4x4f32::identity(),
             &render_scene.camera_data,
@@ -1234,17 +1238,23 @@ fn test_render_particles_multithreaded() {
             sun_e,
           )?);
 
-          let res = device.get_or_create_physical_mesh_resources(
-            mesh_entity,
-            &crate::scene::PhysicalMeshComponent {
-              asset_path: "".to_string(),
-              mesh: mesh_arc.clone(),
-              emissive_intensity: 1.0,
-              emissive_color: [0.5, 0.5, 0.5],
-            },
-            presentation_engine,
-            "",
-          )?;
+          let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+
+          let res = match device.get_physical_mesh_resources(mesh_entity, presentation_engine) {
+            Ok(r) => r,
+            Err(_) => device.create_physical_mesh_resources(
+              cmd_buffer_handle,
+              mesh_entity,
+              &crate::scene::PhysicalMeshComponent {
+                asset_path: "".to_string(),
+                mesh: mesh_arc.clone(),
+                emissive_intensity: 0.0,
+                emissive_color: [0.0; 3],
+              },
+              presentation_engine,
+              "",
+            )?,
+          };
 
           let outline: Option<[f32; 4]> = None;
           render_scene
@@ -1254,6 +1264,8 @@ fn test_render_particles_multithreaded() {
               mesh_arc.indices.len() as u32,
               outline,
               Mat4x4f32::identity(),
+              1.0,
+              [0.5, 0.5, 0.5],
             ));
 
           scene_render.with_component(
@@ -1261,6 +1273,7 @@ fn test_render_particles_multithreaded() {
             |sys: &crate::scene::particles::ParticleSystemComponent| {
               render_scene
                 .add_renderable(
+                  cmd_buffer_handle,
                   device,
                   particle_sys_e,
                   Mat4x4f32::identity(),
@@ -1275,8 +1288,6 @@ fn test_render_particles_multithreaded() {
           );
 
           {
-            let _scoped_cmd =
-              gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
             device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64))?;
             device.upload_particle_systems(cmd_buffer_handle, &mut render_scene.particle_calls)?;
             device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
@@ -1301,16 +1312,19 @@ fn test_render_particles_multithreaded() {
                 extent,
               },
             )?;
-            device.render_frame(cmd_buffer_handle, &render_scene)?;
+            gpu::frame::render_frame(device, cmd_buffer_handle, &render_scene, presentation_engine)?;
             scoped_rp.end()?;
             device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
           }
+          _scoped_cmd.submit()?;
+          println!("TR: submitted task {}", task_id);
 
           device.present(
             presentation_engine,
             acquire_result.image_index as usize,
             acquire_result.frame_index as usize,
           )?;
+          println!("TR: presented task {}", task_id);
           crate::types::GpuResult::Ok(task_id)
         })
         .unwrap();
@@ -1383,15 +1397,6 @@ fn test_render_particles_multithreaded() {
               export_buffer.swap(top_row_start + x, bottom_row_start + x);
             }
           }
-          image::save_buffer(
-            &format!("rendered_particles_{}ms.png", time),
-            &export_buffer,
-            width,
-            height,
-            image::ColorType::Rgba8,
-          )
-          .expect("Failed to save rendered png");
-
           assert!(found_gray, "Gray plane missing at {}ms", time);
           assert!(found_green, "Green particles missing at {}ms", time);
 

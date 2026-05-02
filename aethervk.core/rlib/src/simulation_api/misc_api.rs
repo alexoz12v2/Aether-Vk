@@ -1,11 +1,11 @@
 use super::*;
 use crate::simulation_api::{SimulationContext, BREADCRUMB_CALLBACK};
-use crate::structs::RenderCommand;
-use aethervk_core_rlib::scene::CameraComponent;
-use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
-use aethervk_core_rlib::types::EngineError;
+use crate::simulation_api::structs::{RaycastResult, RenderCommand, Resize};
+use crate::scene::CameraComponent;
+use oshal::math::matrix::mat4::Mat4x4f32;
+use crate::types::EngineError;
 use core::ffi::c_char;
-use aethervk_core_rlib::gpu::PresentationEngineHandle;
+use crate::gpu::PresentationEngineHandle;
 use crate::expect_scene;
 
 impl SimulationContext {
@@ -14,8 +14,7 @@ impl SimulationContext {
       Some(f) => f as *mut (),
       None => core::ptr::null_mut(),
     };
-    aethervk_oshal_rlib::os::debug::LOGGER_CALLBACK
-      .store(ptr, core::sync::atomic::Ordering::Relaxed);
+    oshal::os::debug::LOGGER_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
   }
 
   pub fn set_breadcrumb_callback(cb: Option<extern "C" fn(u32, *const c_char)>) {
@@ -26,6 +25,7 @@ impl SimulationContext {
     BREADCRUMB_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
   }
 
+  // TODO enum for task status
   pub fn get_task_status(&self, task_id: u64) -> i32 {
     if (task_id & (1u64 << 63)) != 0 {
       // Logic task
@@ -46,7 +46,7 @@ impl SimulationContext {
                 Err(e) => {
                   oshal::log!("is_task_completed err: {:?}", e);
                   Ok(2)
-                },
+                }
               }
             })
             .ok()
@@ -71,12 +71,17 @@ impl SimulationContext {
     }
   }
 
-  pub fn get_task_result_raycast(&self, task_id: u64, out_hit: *mut FfiRaycastResult) -> bool {
+  /// Generic so that FFI type can be in cdylib crate
+  pub fn get_task_result_raycast<T: From<RaycastResult>>(
+    &self,
+    task_id: u64,
+    out_hit: *mut T,
+  ) -> bool {
     if let Some(SimulationTaskResult::Raycast(res)) = self.task_manager.write().take_result(task_id)
     {
       if !out_hit.is_null() {
         unsafe {
-          *out_hit = res;
+          *out_hit = res.into();
         }
       }
       true
@@ -91,11 +96,22 @@ impl SimulationContext {
     presentation_engine_handle: PresentationEngineHandle,
     width: u32,
     height: u32,
-  ) -> EngineResult<()> {
+  ) -> EngineResult<core::num::NonZero<u64>> {
+    let task_id = self
+      .render_proxy
+      .0
+      .as_frontend()
+      .ok_or(EngineError::InvalidOperation("render_frontend"))
+      .and_then(|context| {
+        context
+          .with_device(self.render_proxy.1, |device| Ok(device.create_task()))
+          .map_err(|e| EngineError::from(e))
+      })?;
+
     let scene_data = self.scenes.read();
     let scene = expect_scene!(scene_data.get_scene(scene_id), "scene_api:resize");
     {
-      let mut scene_write = scene.write();
+      let scene_write = scene.read();
       let target_entity = scene_write
         .active_camera_entity
         .ok_or(EngineError::InvalidOperation(
@@ -117,31 +133,41 @@ impl SimulationContext {
       .threads
       .render_thread
       .tx()
-      .try_send(RenderCommand::Resize(crate::structs::Resize {
+      .try_send(RenderCommand::Resize(Resize {
         presentation_engine_handle,
         width,
         height,
+        task_id,
       }));
-    Ok(())
+    Ok(unsafe { core::num::NonZero::new_unchecked(task_id) })
   }
 
-  pub fn set_asset_path(path: *const c_char) {
-    if path.is_null() {
-      return;
-    }
+  pub fn download_image(&self, task_id: u64, buffer_ptr: *mut u8, buffer_size: usize) -> bool {
+    let result = self
+      .render_proxy
+      .0
+      .as_frontend()
+      .ok_or(EngineError::InvalidOperation("render_frontend"))
+      .and_then(|frontend| {
+        frontend.with_device(self.render_proxy.1, |device| {
+          device.read_windowless_download(task_id, unsafe {
+            core::slice::from_raw_parts_mut(buffer_ptr, buffer_size)
+          })
+        })
+        .map_err(|e| EngineError::from(e))
+      });
 
-    if let Ok(c_str) = unsafe { core::ffi::CStr::from_ptr(path) }.to_str() {
-      let mut guard = aethervk_core_rlib::gpu::ASSET_DIR.write();
-      *guard = Some(alloc::string::String::from(c_str));
+    match result {
+      Ok(_) => true,
+      Err(e) => {
+        oshal::log!("download_image err: {:?}", e);
+        false
+      }
     }
   }
 
-  pub fn log(msg: *const c_char) {
-    let fptr =
-      aethervk_oshal_rlib::os::debug::LOGGER_CALLBACK.load(core::sync::atomic::Ordering::Relaxed);
-    if !fptr.is_null() {
-      let cb: extern "C" fn(*const c_char) = unsafe { core::mem::transmute(fptr) };
-      cb(msg);
-    }
+  pub fn set_asset_path(path: &str) {
+    let mut guard = crate::gpu::ASSET_DIR.write();
+    *guard = Some(alloc::string::String::from(path));
   }
 }

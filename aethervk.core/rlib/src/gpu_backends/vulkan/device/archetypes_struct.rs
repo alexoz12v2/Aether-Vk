@@ -19,11 +19,11 @@ use alloc::vec::Vec;
 
 // TODO rewrite error messages
 
-fn get_validated_shaders<'a>(
-  shader_manager: &'a shader_manager::ShaderManager,
+fn get_validated_shaders(
+  shader_manager: &shader_manager::ShaderManager,
   vertex_shader_key: ShaderKey,
   fragment_shader_key: ShaderKey,
-) -> GpuResult<(&'a shader_manager::Shader, &'a shader_manager::Shader)> {
+) -> GpuResult<(&shader_manager::Shader, &shader_manager::Shader)> {
   let vertex_shader = shader_manager
     .get(vertex_shader_key)
     .ok_or(GpuError::InvalidShader)?;
@@ -121,7 +121,7 @@ macro_rules! impl_update_archetype {
   (
     $fn_name:ident,
     $archetype_field:ident
-    $(, |$arch:ident, $dev:ident, $wp:ident, $dp:ident, $tl:ident, $gi:ident| $extra:block)?
+    $(, |$arch:ident, $dev:ident, $wp:ident, $dp:ident, $tl:ident, $gi:ident, $fmt:ident| $extra:block)?
   ) => {
     pub fn $fn_name(
       &self,
@@ -136,18 +136,15 @@ macro_rules! impl_update_archetype {
       let mut archetype_lock = self.$archetype_field.write();
       let archetype = {
         let mut_arch: Option<&mut _> = archetype_lock.as_mut();
-        mut_arch.ok_or(GpuError::InvalidState("device.rs"))?
+        mut_arch.ok_or(crate::gpu_err!("device error"))?
       };
 
-      if archetype.graphics_info.is_none() || archetype.pipeline_key.is_none() {
-        return Err(GpuError::InvalidState("device.rs"));
-      }
+      let mut graphics_info = archetype.get_any_graphics_info().ok_or(crate::gpu_err!("device error"))?;
 
-      let old_pipeline_key = *unsafe { archetype.pipeline_key.as_ref().unwrap_unchecked() };
+      let format = presentation_engine.format();
 
-      let new_pipeline_key;
-      {
-        let graphics_info = unsafe { archetype.graphics_info.as_mut().unwrap_unchecked() };
+      let mut new_pipeline_key = None;
+      if !archetype.has_format(format) {
         let depth_stencil_format = graphics_info
           .fragment_out
           .depth_attachment_format
@@ -157,7 +154,7 @@ macro_rules! impl_update_archetype {
         graphics_info
           .fragment_out
           .color_attachment_formats
-          .push(presentation_engine.format());
+          .push(format);
         graphics_info.render_pass = renderpasses
           .get_or_create_render_pass(
             RenderPassSpecification::single_pass(presentation_engine, depth_stencil_format),
@@ -169,13 +166,14 @@ macro_rules! impl_update_archetype {
           )?
           .0
           .get();
-        // Note: don't care about viewport and scissor cause they are dynamic state
-        write_pipeline.get_or_create_graphics_pipeline(device, graphics_info)?;
-        new_pipeline_key = graphics_info.pipeline_key();
+        write_pipeline.get_or_create_graphics_pipeline(device, &graphics_info)?;
+        let key = graphics_info.pipeline_key();
+        new_pipeline_key = Some(key);
       }
 
-      write_pipeline.discard_graphics_pipeline_if_present(old_pipeline_key, discard_pool, timeline);
-      archetype.pipeline_key = Some(new_pipeline_key);
+      if let Some(key) = new_pipeline_key {
+        archetype.insert_graphics_info(format, graphics_info.clone(), key);
+      }
 
       $(
         let $arch = &mut *archetype;
@@ -183,7 +181,8 @@ macro_rules! impl_update_archetype {
         let $wp = &mut *write_pipeline;
         let $dp = discard_pool;
         let $tl = timeline;
-        let $gi = $arch.graphics_info.as_ref().unwrap();
+        let $gi = &graphics_info;
+        let $fmt = format;
         $extra
       )?
 
@@ -217,7 +216,7 @@ macro_rules! impl_create_archetype {
     ) -> GpuResult<()> {
       let mut archetype_lock = self.$archetype_field.write();
       if archetype_lock.is_some() {
-        return Err(GpuError::InvalidState("device.rs"));
+        return Err(crate::gpu_err!("device error"));
       }
 
       let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
@@ -226,7 +225,7 @@ macro_rules! impl_create_archetype {
       let res = unsafe { resources::$resource_struct::new(device, allocator) }?;
       *archetype_lock = Some(res);
 
-      let layout = archetype_lock.as_ref().unwrap().pipeline_layout.get();
+      let layout = archetype_lock.as_ref().ok_or(crate::gpu_err!("device error"))?.pipeline_layout.get();
       let render_pass = renderpasses
         .get_or_create_render_pass(
           RenderPassSpecification::single_pass(presentation_engine_state, depth_stencil_format),
@@ -259,9 +258,8 @@ macro_rules! impl_create_archetype {
 
       pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
 
-      let arch_mut = archetype_lock.as_mut().unwrap();
-      arch_mut.pipeline_key = Some(pipeline_graphics_info.pipeline_key());
-      arch_mut.graphics_info = Some(pipeline_graphics_info);
+      let arch_mut = archetype_lock.as_mut().ok_or(crate::gpu_err!("device error"))?;
+      arch_mut.insert_graphics_info(presentation_engine_state.format(), pipeline_graphics_info.clone(), pipeline_graphics_info.pipeline_key());
 
       Ok(())
     }
@@ -290,7 +288,7 @@ macro_rules! impl_create_archetype {
     ) -> GpuResult<()> {
       let mut archetype_lock = self.$archetype_field.write();
       if archetype_lock.is_some() {
-        return Err(GpuError::InvalidState("device.rs"));
+        return Err(crate::gpu_err!("device error"));
       }
 
       let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
@@ -299,7 +297,7 @@ macro_rules! impl_create_archetype {
       let res = unsafe { resources::$resource_struct::new(device, allocator.get_raw()) }?;
       *archetype_lock = Some(res);
 
-      let layout = archetype_lock.as_ref().unwrap().pipeline_layout.get();
+      let layout = archetype_lock.as_ref().ok_or(crate::gpu_err!("device error"))?.pipeline_layout.get();
       let render_pass = renderpasses
         .get_or_create_render_pass(
           RenderPassSpecification::single_pass(presentation_engine_state, depth_stencil_format),
@@ -332,9 +330,8 @@ macro_rules! impl_create_archetype {
 
       pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
 
-      let arch_mut = archetype_lock.as_mut().unwrap();
-      arch_mut.pipeline_key = Some(pipeline_graphics_info.pipeline_key());
-      arch_mut.graphics_info = Some(pipeline_graphics_info);
+      let arch_mut = archetype_lock.as_mut().ok_or(crate::gpu_err!("device error"))?;
+      arch_mut.insert_graphics_info(presentation_engine_state.format(), pipeline_graphics_info.clone(), pipeline_graphics_info.pipeline_key());
 
       Ok(())
     }
@@ -344,9 +341,8 @@ impl Archetypes {
   impl_update_archetype!(
     update_physical_mesh_archetype_for_presentation_engine,
     physical_mesh_render_archetype,
-    |archetype, device, write_pipeline, discard_pool, timeline, graphics_info| {
-      let outline_graphics_info = graphics_info
-        .clone()
+    |archetype, device, write_pipeline, discard_pool, timeline, graphics_info, format| {
+      let outline_graphics_info = graphics_info.clone()
         .with_pipeline_flags(
           PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::NO_DEPTH_TEST,
         )
@@ -354,15 +350,12 @@ impl Archetypes {
         .with_stencil_logic_op(StencilLogicOp::None)
         .with_stencil_reference(255)
         .with_stencil_compare_mask(255)
-        .with_stencil_write_mask(0)
-        .clone();
+        .with_stencil_write_mask(0);
 
-      if let Some(outline_key) = archetype.outline_pipeline_key {
-        write_pipeline.discard_graphics_pipeline_if_present(outline_key, discard_pool, timeline);
-      }
+      // TODO discard old pipeline (also for others)
       let outline_pipeline_key = outline_graphics_info.pipeline_key();
       write_pipeline.get_or_create_graphics_pipeline(device, &outline_graphics_info)?;
-      archetype.outline_pipeline_key = Some(outline_pipeline_key);
+      archetype.insert_graphics_info_outline_pipeline_map(format, outline_graphics_info, outline_pipeline_key);
     }
   );
 
@@ -378,6 +371,51 @@ impl Archetypes {
     update_sun_archetype_for_presentation_engine,
     sun_render_archetype
   );
+  impl_update_archetype!(
+    update_sky_archetype_for_presentation_engine,
+    sky_render_archetype
+  );
+
+  impl_update_archetype!(
+    update_grid_archetype_for_presentation_engine,
+    grid_render_archetype
+  );
+
+  impl_update_archetype!(
+    update_minimap_archetype_for_presentation_engine,
+    minimap_render_archetype
+  );
+
+  impl_update_archetype!(
+    update_text_archetype_for_presentation_engine,
+    text_render_archetype
+  );
+
+  impl_update_archetype!(
+    update_bvh_archetype_for_presentation_engine,
+    bvh_render_archetype
+  );
+
+  impl_update_archetype!(
+    update_gizmo_archetype_for_presentation_engine,
+    gizmo_render_archetype
+  );
+
+  impl_update_archetype!(
+    update_measurement_archetype_for_presentation_engine,
+    measurement_render_archetype
+  );
+
+  impl_update_archetype!(
+    update_marker_archetype_for_presentation_engine,
+    marker_render_archetype
+  );
+
+  impl_update_archetype!(
+    update_billboard_archetype_for_presentation_engine,
+    billboard_render_archetype
+  );
+
 
   // ------------------------------------ Creation ------------------------------------
 
@@ -493,12 +531,13 @@ impl Archetypes {
     presentation_engine_state: &swapchain::PresentationState,
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
+    staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool: &mut pipelines::PipelinePool,
     timeline: u64,
   ) -> GpuResult<()> {
     if self.physical_mesh_render_archetype.read().is_some() {
-      return Err(GpuError::InvalidState("device.rs"));
+      return Err(crate::gpu_err!("device error"));
     }
 
     let vertex_shader = shader_manager
@@ -535,6 +574,7 @@ impl Archetypes {
         &fragment_shader,
         allocator,
         discard_pool,
+        staging_arena,
         &queue,
       )
     }?;
@@ -668,11 +708,19 @@ impl Archetypes {
 
     let outline_pipeline_key = outline_graphics_info.pipeline_key();
     pipeline_pool.get_or_create_graphics_pipeline(&device, &outline_graphics_info)?;
+    let pipeline_key = pipeline_graphics_info.pipeline_key();
 
     let final_res = res
-      .with_graphics_info(pipeline_graphics_info)
-      .with_outline_pipeline_key(outline_pipeline_key);
-
+      .with_graphics_info(
+        presentation_engine_state.format(),
+        pipeline_graphics_info,
+        pipeline_key,
+      )
+      .with_graphics_info(
+        presentation_engine_state.format(),
+        outline_graphics_info,
+        outline_pipeline_key,
+      );
     *self.physical_mesh_render_archetype.write() = Some(final_res);
 
     Ok(())
@@ -694,10 +742,9 @@ impl Archetypes {
   ) -> GpuResult<()> {
     let mut sky_render_archetype = self.sky_render_archetype.write();
     if sky_render_archetype.is_some() {
-      return Err(GpuError::InvalidState("device.rs"));
+      return Err(crate::gpu_err!("device error"));
     }
-    let vertex_shader = shader_manager.get(vertex_shader_key).unwrap();
-    let fragment_shader = shader_manager.get(fragment_shader_key).unwrap();
+    let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
 
     let bindings = [vk::DescriptorSetLayoutBinding::default()
       .binding(0)
@@ -717,28 +764,18 @@ impl Archetypes {
       .push_constant_ranges(&push_constant_ranges);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
 
-    let mut arch = resources::SkyRenderResourceArchetype {
-      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
-      pipeline_key: None,
-      descriptor_set_layout: unsafe { NonZeroHandle::new_unchecked(set_layout) },
-      descriptor_set: None,
-    };
+    let mut arch = resources::SkyRenderResourceArchetype::new(pipeline_layout, set_layout);
 
     let pipeline_graphics_info = GraphicsInfo::default()
-      .with_vertex_in(
-        VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-          .clone(),
-      )
+      .with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_LIST))
       .with_pre_rasterization(
-        PreRasterization::default()
-          .with_vertex_module(vertex_shader.module.get())
-          .clone(),
+        PreRasterization::default().with_vertex_module(vertex_shader.module.get()),
       )
       .with_fragment_shader(
         FragmentShader::default()
           .with_fragment_module(fragment_shader.module.get())
           .add_viewport(vk::Viewport {
+            // TODO check why inversion is necessary
             width: presentation_engine_state.extent().0 as _,
             height: -(presentation_engine_state.extent().1 as f32),
             x: 0.0,
@@ -752,14 +789,12 @@ impl Archetypes {
               width: presentation_engine_state.extent().0,
               height: presentation_engine_state.extent().1,
             },
-          })
-          .clone(),
+          }),
       )
       .with_fragment_out(
         FragmentOut::default()
           .add_color_attachment_format(presentation_engine_state.format())
-          .with_depth_attachment_format(depth_stencil_format)
-          .clone(),
+          .with_depth_attachment_format(depth_stencil_format),
       )
       .with_pipeline_layout(pipeline_layout)
       .with_pipeline_flags(
@@ -782,12 +817,15 @@ impl Archetypes {
           .get(),
       )
       .with_subpass(0)
-      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
-      .clone();
+      .with_rasterization_polygon_mode(vk::PolygonMode::FILL);
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
     pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
-    arch.pipeline_key = Some(pipeline_key);
+    arch = arch.with_graphics_info(
+      presentation_engine_state.format(),
+      pipeline_graphics_info,
+      pipeline_key,
+    );
 
     *sky_render_archetype = Some(arch);
 
@@ -810,10 +848,9 @@ impl Archetypes {
   ) -> GpuResult<()> {
     let mut grid_render_archetype = self.grid_render_archetype.write();
     if grid_render_archetype.is_some() {
-      return Err(GpuError::InvalidState("device.rs"));
+      return Err(crate::gpu_err!("device error"));
     }
-    let vertex_shader = shader_manager.get(vertex_shader_key).unwrap();
-    let fragment_shader = shader_manager.get(fragment_shader_key).unwrap();
+    let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
 
     let push_constant_ranges = [vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
@@ -823,10 +860,7 @@ impl Archetypes {
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
 
-    *grid_render_archetype = Some(resources::GridRenderResourceArchetype {
-      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
-      pipeline_key: None,
-    });
+    *grid_render_archetype = Some(resources::GridRenderResourceArchetype::new(pipeline_layout));
 
     let pipeline_graphics_info = GraphicsInfo::default()
       .with_vertex_in(
@@ -892,8 +926,11 @@ impl Archetypes {
     let pipeline_key = pipeline_graphics_info.pipeline_key();
     pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
 
-    let arch = grid_render_archetype.as_mut().unwrap();
-    arch.pipeline_key = Some(pipeline_key);
+    grid_render_archetype.as_mut().unwrap().insert_graphics_info(
+      presentation_engine_state.format(),
+      pipeline_graphics_info,
+      pipeline_key,
+    );
 
     Ok(())
   }
@@ -914,14 +951,13 @@ impl Archetypes {
   ) -> GpuResult<()> {
     let mut minimap_render_archetype = self.minimap_render_archetype.write();
     if minimap_render_archetype.is_some() {
-      return Err(GpuError::InvalidState("device.rs"));
+      return Err(crate::gpu_err!("device error"));
     }
     *minimap_render_archetype =
       Some(unsafe { resources::MinimapRenderResourceArchetype::new(device, allocator.get_raw())? });
-    let arch_mut = minimap_render_archetype.as_mut().unwrap();
+    let arch_mut = minimap_render_archetype.as_mut().ok_or(crate::gpu_err!("device error"))?;
 
-    let vertex_shader = shader_manager.get(vkey).unwrap();
-    let fragment_shader = shader_manager.get(fkey).unwrap();
+    let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vkey, fkey)?;
 
     let pipeline_graphics_info = pipelines::GraphicsInfo::default()
       .with_vertex_in(
@@ -979,7 +1015,7 @@ impl Archetypes {
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
     pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
-    arch_mut.pipeline_key = Some(pipeline_key);
+    arch_mut.insert_graphics_info(pe.format(), pipeline_graphics_info, pipeline_key);
 
     Ok(())
   }
@@ -1001,11 +1037,10 @@ impl Archetypes {
   ) -> GpuResult<()> {
     let mut text_render_archetype = self.text_render_archetype.write();
     if text_render_archetype.is_some() {
-      return Err(GpuError::InvalidState("device.rs"));
+      return Err(crate::gpu_err!("device error"));
     }
 
-    let vertex_shader = shader_manager.get(vertex_shader_key).unwrap();
-    let fragment_shader = shader_manager.get(fragment_shader_key).unwrap();
+    let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
 
     let max_fonts = 256; // Array limit
 
@@ -1060,19 +1095,15 @@ impl Archetypes {
       .set_layouts(&set_layouts);
     let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?[0];
 
-    let mut arch = resources::TextRenderResourceArchetype {
-      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
-      pipeline_key: None,
-      descriptor_set_layout: unsafe { NonZeroHandle::new_unchecked(set_layout) },
-      descriptor_pool: Some(unsafe { NonZeroHandle::new_unchecked(pool) }),
-      descriptor_set: Some(descriptor_set),
-      font_sampler: Some(font_sampler),
-      uploaded_fonts: hashbrown::HashMap::new(),
-      free_descriptor_indices: Vec::new(),
-      next_descriptor_index: 0,
+    let mut arch = resources::TextRenderResourceArchetype::new(
+      pipeline_layout,
+      set_layout,
+      pool,
+      descriptor_set,
+      font_sampler,
       max_fonts,
-      allocator_raw: Some(allocator.get_raw()),
-    };
+      allocator,
+    );
 
     let pipeline_graphics_info = GraphicsInfo::default()
       .with_vertex_in(
@@ -1138,9 +1169,11 @@ impl Archetypes {
     let pipeline_key = pipeline_graphics_info.pipeline_key();
     pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
 
-    arch.pipeline_key = Some(pipeline_key);
-
-    *text_render_archetype = Some(arch);
+    *text_render_archetype = Some(arch.with_graphics_info(
+      presentation_engine_state.format(),
+      pipeline_graphics_info,
+      pipeline_key,
+    ));
 
     Ok(())
   }
@@ -1161,14 +1194,13 @@ impl Archetypes {
   ) -> GpuResult<()> {
     let mut bvh_render_archetype = self.bvh_render_archetype.write();
     if bvh_render_archetype.is_some() {
-      return Err(GpuError::InvalidState("device.rs"));
+      return Err(crate::gpu_err!("device error"));
     }
     *bvh_render_archetype =
       Some(unsafe { resources::BvhRenderResourceArchetype::new(device, allocator.get_raw()) }?);
-    let archetype = bvh_render_archetype.as_mut().unwrap();
+    let archetype = bvh_render_archetype.as_mut().ok_or(crate::gpu_err!("device error"))?;
 
-    let vertex_shader = shader_manager.get(vkey).unwrap();
-    let fragment_shader = shader_manager.get(fkey).unwrap();
+    let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vkey, fkey)?;
 
     let pipeline_graphics_info = pipelines::GraphicsInfo::default()
       .with_vertex_in(
@@ -1230,7 +1262,7 @@ impl Archetypes {
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
     pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
-    archetype.pipeline_key = Some(pipeline_key);
+    archetype.insert_graphics_info(pe.format(), pipeline_graphics_info, pipeline_key);
 
     Ok(())
   }
@@ -1251,14 +1283,13 @@ impl Archetypes {
   ) -> GpuResult<()> {
     let mut gizmo_render_archetype = self.gizmo_render_archetype.write();
     if gizmo_render_archetype.is_some() {
-      return Err(GpuError::InvalidState("device.rs"));
+      return Err(crate::gpu_err!("device error"));
     }
     *gizmo_render_archetype =
       Some(unsafe { resources::GizmoRenderResourceArchetype::new(device, allocator.get_raw()) }?);
-    let archetype = gizmo_render_archetype.as_mut().unwrap();
+    let archetype = gizmo_render_archetype.as_mut().ok_or(crate::gpu_err!("device error"))?;
 
-    let vertex_shader = shader_manager.get(vkey).unwrap();
-    let fragment_shader = shader_manager.get(fkey).unwrap();
+    let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vkey, fkey)?;
 
     let pipeline_graphics_info = pipelines::GraphicsInfo::default()
       .with_vertex_in(
@@ -1322,7 +1353,7 @@ impl Archetypes {
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
     pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
-    archetype.pipeline_key = Some(pipeline_key);
+    archetype.insert_graphics_info(pe.format(), pipeline_graphics_info, pipeline_key);
 
     Ok(())
   }

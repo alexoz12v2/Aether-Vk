@@ -27,6 +27,21 @@ pub struct ResourceHandle {
   generation: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncMode {
+  /// CPU uploads data. Needs Transfer Write -> Vertex Read barrier.
+  CpuUpload,
+  /// Compute writes data on the same queue. Needs Compute Write -> Vertex Read.
+  SameQueueCompute,
+  /// Compute writes data on a different queue family.
+  /// `is_release_pass`: True when recording on the Compute Queue, False for Graphics Queue.
+  CrossQueueCompute {
+    src_family: u32,
+    dst_family: u32,
+    is_release_pass: bool,
+  },
+}
+
 // ---------------------------- Runtime Params ----------------------------
 pub mod constants {
   pub const RUNTIME_PARAM_VULKAN_ENTRY_BASE_DIR: super::RuntimeParamsIndex = 1000;

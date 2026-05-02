@@ -32,20 +32,28 @@ public partial class SplashWindow : Window
       );
       return;
     }
-
-    try
+try
+{
+    await Task.Run(() =>
     {
-      await Task.Run(() =>
-      {
         // Init native simulation engine
         runtimeService.InitializeSimulationContext("Vulkan", null, false);
 
-        // Create default scene natively
-        runtimeService.CreateScene(false);
-      });
+        // Create an empty scene
+        ulong sceneId = runtimeService.CreateScene(false);
 
-      success = true;
-    }
+        var root = runtimeService.GetEntityByName(sceneId, "root");
+        if (root != null)
+        {
+            runtimeService.CreateSun(sceneId, root);
+            runtimeService.CreateSky(sceneId, root);
+            runtimeService.CreateCursor(sceneId, root);
+            runtimeService.CreateGrid(sceneId, root);
+        }
+    });
+
+    success = true;
+}
     catch (Exception ex)
     {
       errorMessage = ex.Message;

@@ -1,10 +1,9 @@
 use super::*;
 use crate::simulation_api::SimulationContext;
 use alloc::{vec::Vec, sync::Arc};
-use aethervk_core_rlib::scene::AddComponentError;
-use aethervk_oshal_rlib::os::fs;
+use crate::scene::{AddComponentError, Marker};
+use oshal::os::fs;
 use crate::{expect_scene, expect_scene_and_entity};
-use crate::structs::FfiMarker;
 
 impl SimulationContext {
   pub fn add_transform_component(
@@ -20,7 +19,10 @@ impl SimulationContext {
       entity,
       "component_api:add_transform_component"
     );
-    scene.write().scene.add_component(
+    scene
+      .write()
+      .scene
+      .add_component(
         entity_id,
         TransformComponent {
           position,
@@ -44,7 +46,10 @@ impl SimulationContext {
       entity,
       "component_api:set_transform_component"
     );
-    scene.write().scene.with_component_mut(entity_id, |c: &mut TransformComponent| {
+    scene
+      .write()
+      .scene
+      .with_component_mut(entity_id, |c: &mut TransformComponent| {
         c.position = position;
         c.rotation = rotation;
         c.scale = scale;
@@ -75,7 +80,10 @@ impl SimulationContext {
       "component_api:get_transform_component"
     );
     let transform =
-      scene.read().scene.global_transform(entity_id)
+      scene
+        .read()
+        .scene
+        .global_transform(entity_id)
         .ok_or(EngineError::InvalidOperation(
           "component_api:get_transform_component couldn't compute global transform",
         ))?;
@@ -128,7 +136,10 @@ impl SimulationContext {
       "component_api:set_bvh_node_visibility"
     );
     let mut bvh_len = 0;
-    scene.read().scene.with_component(entity_id, |mesh: &PhysicalMeshComponent| {
+    scene
+      .read()
+      .scene
+      .with_component(entity_id, |mesh: &PhysicalMeshComponent| {
         if let Some(bvh) = &mesh.mesh.bvh {
           bvh_len = bvh.nodes.len();
         }
@@ -139,12 +150,13 @@ impl SimulationContext {
 
     if (node_index as usize) < bvh_len {
       let mut dbg_opt = None;
-      let _ = scene.read().scene.with_component(
-        entity_id,
-        |dbg: &aethervk_core_rlib::scene::BvhDebugComponent| {
-          dbg_opt = Some(dbg.node_render_states.clone());
-        },
-      );
+      let _ =
+        scene
+          .read()
+          .scene
+          .with_component(entity_id, |dbg: &crate::scene::BvhDebugComponent| {
+            dbg_opt = Some(dbg.node_render_states.clone());
+          });
 
       let mut states = match dbg_opt {
         Some(s) => s,
@@ -160,7 +172,7 @@ impl SimulationContext {
 
         let res = scene.write().scene.add_component(
           entity_id,
-          aethervk_core_rlib::scene::BvhDebugComponent {
+          crate::scene::BvhDebugComponent {
             node_render_states: states,
           },
         );
@@ -191,7 +203,10 @@ impl SimulationContext {
       entity,
       "component_api:add_camera_component"
     );
-    scene.write().scene.add_component(
+    scene
+      .write()
+      .scene
+      .add_component(
         entity_id,
         CameraComponent {
           projection: match params {
@@ -228,7 +243,10 @@ impl SimulationContext {
       entity,
       "component_api:set_camera_component"
     );
-    scene.write().scene.with_component_mut(entity_id, |c: &mut CameraComponent| {
+    scene
+      .write()
+      .scene
+      .with_component_mut(entity_id, |c: &mut CameraComponent| {
         match params {
           CameraParams::Perspective(PerspectiveCameraParams {
             fov,
@@ -268,7 +286,10 @@ impl SimulationContext {
       entity,
       "component_api:get_camera_component"
     );
-    scene.read().scene.with_component(entity_id, |c: &CameraComponent| {
+    scene
+      .read()
+      .scene
+      .with_component(entity_id, |c: &CameraComponent| {
         *proj_out = c.projection.into();
       })
       .ok_or(EngineError::InvalidOperation(
@@ -292,7 +313,10 @@ impl SimulationContext {
     let path_str = gltf_path.to_str_unified().unwrap().to_string();
     let mesh = simulation::comet::load_comet_from_gltf(&path_str, false)?;
     let mesh_arc = Arc::from(mesh);
-    scene.write().scene.add_component(
+    scene
+      .write()
+      .scene
+      .add_component(
         entity_id,
         PhysicalMeshComponent {
           asset_path: path_str,
@@ -310,13 +334,16 @@ impl SimulationContext {
       entity,
       "component_api:add_sky_component"
     );
-    scene.write().scene.add_component(entity_id, SkyComponent {})
+    scene
+      .write()
+      .scene
+      .add_component(entity_id, SkyComponent {})
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?;
-    
+
     if let Some(tx) = self.threads.render_thread.tx_opt() {
       let _ = tx.try_send(crate::simulation_api::structs::RenderCommand::GenerateSky);
     }
-    
+
     Ok(())
   }
 
@@ -326,7 +353,10 @@ impl SimulationContext {
       entity,
       "component_api:add_cursor_component"
     );
-    scene.write().scene.add_component(entity_id, CursorComponent {})
+    scene
+      .write()
+      .scene
+      .add_component(entity_id, CursorComponent {})
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
@@ -341,7 +371,10 @@ impl SimulationContext {
       entity,
       "component_api:add_sun_component"
     );
-    scene.write().scene.add_component(entity_id, SunComponent { resolution })
+    scene
+      .write()
+      .scene
+      .add_component(entity_id, SunComponent { resolution })
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
@@ -351,7 +384,10 @@ impl SimulationContext {
       entity,
       "component_api:add_grid_component"
     );
-    scene.write().scene.add_component(entity_id, GridComponent {})
+    scene
+      .write()
+      .scene
+      .add_component(entity_id, GridComponent {})
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
@@ -367,9 +403,12 @@ impl SimulationContext {
       entity,
       "component_api:add_measurement_component"
     );
-    scene.write().scene.add_component(
+    scene
+      .write()
+      .scene
+      .add_component(
         entity_id,
-        aethervk_core_rlib::scene::MeasurementComponent {
+        crate::scene::MeasurementComponent {
           significant_digits: 2,
           pos1,
           pos2,
@@ -393,16 +432,19 @@ impl SimulationContext {
       "component_api:add_image_billboard"
     );
     let billboard_type = if is_screen_space {
-      aethervk_core_rlib::scene::BillboardType::ScreenSpace {
+      crate::scene::BillboardType::ScreenSpace {
         pct_width: width,
         pct_height: height,
       }
     } else {
-      aethervk_core_rlib::scene::BillboardType::WorldSpace { width, height }
+      crate::scene::BillboardType::WorldSpace { width, height }
     };
-    scene.write().scene.add_component(
+    scene
+      .write()
+      .scene
+      .add_component(
         entity_id,
-        aethervk_core_rlib::scene::ImageBillboardComponent {
+        crate::scene::ImageBillboardComponent {
           texture_id: 0,
           billboard_type,
         },
@@ -410,17 +452,22 @@ impl SimulationContext {
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
-  pub fn set_markers(&self, scene_id: u64, entity: u64, markers: &[FfiMarker]) -> EngineResult<()> {
+  pub fn set_markers<T: Into<Marker> + Copy>(
+    &self,
+    scene_id: u64,
+    entity: u64,
+    markers: &[T],
+  ) -> EngineResult<()> {
     let (scene, entity_id) = expect_scene_and_entity!(
       self.get_scene(scene_id),
       entity,
       "component_api:set_markers"
     );
-    let markers: Vec<aethervk_core_rlib::scene::Marker> = markers.iter().map(|m| (*m).into()).collect();
+    let markers: Vec<crate::scene::Marker> = markers.iter().map(|m| (*m).into()).collect();
     let mut found = false;
     let _ = scene.write().scene.with_component_mut(
       entity_id,
-      |m: &mut aethervk_core_rlib::scene::MarkersComponent| {
+      |m: &mut crate::scene::MarkersComponent| {
         // TODO can I avoid copying? Probably if I wrap into an mut Option
         m.markers = markers.clone();
         found = true;
@@ -428,12 +475,10 @@ impl SimulationContext {
     );
 
     if !found {
-      scene.write()
+      scene
+        .write()
         .scene
-        .add_component(
-          entity_id,
-          aethervk_core_rlib::scene::MarkersComponent { markers },
-        )
+        .add_component(entity_id, crate::scene::MarkersComponent { markers })
         .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?
     }
     Ok(())

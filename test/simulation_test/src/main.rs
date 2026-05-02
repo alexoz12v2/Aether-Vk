@@ -1,102 +1,62 @@
 use aethervk_core_rlib::{
-  gpu::ASSET_DIR,
-  scene::text::FontAtlas,
+  scene::GizmoComponent,
+  simulation::constants,
+  simulation_api::{structs, SimulationContext},
   gpu::{self},
-  scene::{
-    AlmanacPlanet, CameraComponent, CursorComponent, PhysicalMeshComponent, Scene,
-    TransformComponent,
-  },
-  simulation as core_simulation, types,
-  types::RuntimeParams,
+  scene::{AlmanacPlanet, PhysicalMeshComponent, TransformComponent},
 };
 use aethervk_oshal_rlib::{
   math::vector::Vector,
   math::{
-    matrix::{mat4::Mat4x4f32, Matrix4},
     quaternion::Quaternion,
     vector::{vec3::Vec3f32, vec4::Quat, Vector3},
   },
 };
-use heapless::index_map::FnvIndexMap;
-use logic_thread::{start_logic_thread, LogicCommand};
-use render_thread::{start_render_thread, RenderPacket};
-use std::{
-  io::Read,
-  sync::{atomic::AtomicBool, mpsc, Arc},
-  time::Instant,
-};
-use std::any::TypeId;
-use aethervk_core_rlib::scene::GizmoComponent;
+use std::{sync::Arc, time::Instant};
+use std::sync::atomic::AtomicBool;
+use aethervk_core_rlib::gpu::PresentationEngineHandle;
+use aethervk_core_rlib::scene::text::FontAtlas;
+use aethervk_core_rlib::simulation_api::structs::{CustomRenderCallback, SendPtrMut};
+use aethervk_core_rlib::types::GpuResult;
 use test_utils::{
   create_winit_window_and_event_loop, cycle_get_asset_path_from_exe, get_handle_and_window_info,
-  get_monospace_font_path_from_asset_path, SceneTestUtilsExt,
 };
-use test_utils::simulation::kernels::CpuKernels;
-
-mod constants;
-mod logic_thread;
-mod render_thread;
-mod utils;
 
 struct AppState {
-  scene: Arc<Scene>,
+  ctx: Box<SimulationContext>,
+  custom_data_ring: [CustomRenderData; 3],
+  scene_id: u64,
   presentation_engine: gpu::PresentationEngineHandle,
-  camera_entity: aethervk_core_rlib::scene::EntityId,
-  is_paused: bool,
-  time_scale: f32,
-  root_entity: aethervk_core_rlib::scene::EntityId,
+  camera_entity: u64,
   window: Option<winit::window::Window>,
   is_resizing: bool,
   is_exiting: bool,
-  outlines_enabled: Arc<AtomicBool>,
   is_command_prompt_open: bool,
+  font_atlas: Arc<std::sync::Mutex<Option<FontAtlas>>>, // uploaded then dropped
+  // TODO reuse it as before in rendering function, which therefore should be customizable in simulation context
   console_open_progress: f32,
   console_scroll_offset: usize,
   command_history: std::collections::VecDeque<String>,
   current_command: String,
 }
 
+impl AppState {
+  fn cycle_first_free_render_custom_data(&mut self) -> &'_ mut CustomRenderData {
+    let mut index: usize = 0;
+    loop {
+      if self.custom_data_ring[index].is_free_relaxed() {
+        let _ = self.custom_data_ring[index].is_free_acquire();
+        return unsafe { self.custom_data_ring.get_unchecked_mut(index) };
+      }
+      index = (index + 1) % self.custom_data_ring.len();
+      std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+  }
+}
+
 impl Drop for AppState {
   fn drop(&mut self) {
     println!("Dropping AppState");
-  }
-}
-
-impl core_simulation::Pausable for AppState {
-  fn is_paused(&self) -> bool {
-    self.is_paused
-  }
-  fn set_paused(&mut self) {
-    self.is_paused = true;
-  }
-  fn time_scale(&self) -> f32 {
-    self.time_scale
-  }
-  fn set_time_scale(&mut self, scale: f32) {
-    self.time_scale = scale;
-  }
-}
-
-fn add_gizmos_to_transforms(scene: &Scene) {
-  let mut entities = Vec::new();
-  scene.query1::<TransformComponent, _>(|id, _| {
-    entities.push(id);
-  });
-
-  for id in entities {
-    if scene.with_component(id, |_g: &GizmoComponent| {}).is_none() {
-      let mut scale = 1.0;
-      if let Some(t) = scene.global_transform(id) {
-        scale = t.scale.x().max(t.scale.y()).max(t.scale.z()) * 2.0;
-      }
-      let _ = scene.add_component(
-        id,
-        GizmoComponent {
-          gizmo_visible: false,
-          gizmo_scale: scale,
-        },
-      );
-    }
   }
 }
 
@@ -108,7 +68,8 @@ fn main() {
   std::panic::set_hook(Box::new(|panic_info| {
     println!("CRASH DETECTED: {}", panic_info);
     println!("Press Enter to close the application...");
-    let _ = std::io::stdin().read(&mut [0u8]);
+    let mut buf = [0u8; 1];
+    let _ = std::io::Read::read(&mut std::io::stdin(), &mut buf);
   }));
 
   let assets_dir = cycle_get_asset_path_from_exe(true);
@@ -117,59 +78,37 @@ fn main() {
 
   let (window, event_loop) = create_winit_window_and_event_loop("AetherVk Simulation");
 
-  let render_frontend = {
-    let runtime_params = Box::new(RuntimeParams {
-      render_backend_params: FnvIndexMap::new(),
-      validation_error_callback: Some(panic_error_callback),
-    });
-    gpu::new_render_frontend(gpu::VULKAN_RENDER_BACKEND, &runtime_params).unwrap()
-  };
+  let simulation_context =
+    SimulationContext::startup(gpu::VULKAN_RENDER_BACKEND, Some(panic_error_callback)).unwrap();
 
-  let additional_params = gpu::DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend
-    .write()
-    .init_device(0, &additional_params)
-    .unwrap();
-
+  let render_frontend = simulation_context.render_frontend().unwrap();
+  let render_device_handle = simulation_context.render_device_handle();
   let (native_handles, window_info) =
     get_handle_and_window_info(&render_frontend, render_device_handle, &window);
 
-  let (presentation_engine, font_id) = {
-    let params = gpu::PresentationEngineParams {
-      width: window.inner_size().width,
-      height: window.inner_size().height,
-      vsync: true,
-      ty: gpu::PresentationEngineType::Window,
-      window_info: native_handles,
-    };
-    render_frontend
-      .with_device(render_device_handle, |device| {
-        create_presentation_engine_and_init_archetypes(device, &params)
-      })
-      .unwrap()
-  };
-  println!(
-    "[{:.2?}] GPU initialization complete.",
-    start_time.elapsed()
-  );
+  let width = window.inner_size().width;
+  let height = window.inner_size().height;
 
-  let scene = Scene::new().with_all_dbg_components();
-  scene.register_component::<AlmanacPlanet>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<GizmoComponent>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<aethervk_core_rlib::scene::ParticleSystemComponent>(&[TypeId::of::<
-    TransformComponent,
-  >()]);
-  let model_path = assets_dir.join("Comet.glb");
-  let comet = core_simulation::comet::load_comet_from_gltf(model_path.to_str().unwrap(), false)
+  let presentation_engine = simulation_context
+    .create_presentation_engine_windowed(width, height, native_handles)
+    .unwrap();
+
+  let scene_id = simulation_context.create_default_scene().unwrap();
+
+  // Populate scene with custom planets and comet
+  {
+    let scene_ctx = simulation_context.get_scene(scene_id).unwrap();
+    let mut active_scene = scene_ctx.write();
+    let root_entity = active_scene.root_entity;
+
+    let model_path = assets_dir.join("Comet.glb");
+    let comet = aethervk_core_rlib::simulation::comet::load_comet_from_gltf(
+      model_path.to_str().unwrap(),
+      false,
+    )
     .expect("Failed to load comet");
 
-  let root_entity = scene.add_root_entity().unwrap();
-
-  #[cfg(not(feature = "spotless_rendering"))]
-  {
-    let mesh_entity = scene.spawn_entity("comet");
-    // The comet is very small physically. To make it visible, we need to significantly
-    // boost its visual scale. Using a large constant for visibility.
+    let mesh_entity = active_scene.scene.spawn_entity("comet");
     let comet_radius = 50.0;
 
     let initial_rotation = if let Some(ref axes) = comet.principal_axes {
@@ -178,7 +117,8 @@ fn main() {
       Quat::identity()
     };
 
-    scene
+    active_scene
+      .scene
       .add_component(
         mesh_entity,
         TransformComponent {
@@ -188,7 +128,8 @@ fn main() {
         },
       )
       .unwrap();
-    scene
+    active_scene
+      .scene
       .add_component(
         mesh_entity,
         PhysicalMeshComponent {
@@ -199,10 +140,15 @@ fn main() {
         },
       )
       .unwrap();
-    scene.set_parent(mesh_entity, Some(root_entity));
+    active_scene
+      .scene
+      .set_parent(mesh_entity, Some(root_entity));
+    active_scene.register_entity(mesh_entity);
 
-    let uv_dist = utils::generate_gaussian_distribution(64, 0.5, 0.5, 0.5, 0.5);
-    scene
+    let uv_dist =
+      aethervk_core_rlib::simulation::utils::generate_gaussian_distribution(64, 0.5, 0.5, 0.5, 0.5);
+    active_scene
+      .scene
       .add_component(
         mesh_entity,
         aethervk_core_rlib::scene::ParticleSystemComponent::new(
@@ -231,335 +177,185 @@ fn main() {
         ),
       )
       .unwrap();
+
+    let planets = [
+      (
+        "Mercury",
+        "planets/textures/Mercury.jpg",
+        anise::constants::celestial_objects::MERCURY,
+        1407.6,
+      ),
+      (
+        "Venus",
+        "planets/textures/Venus.jpg",
+        anise::constants::celestial_objects::VENUS,
+        -5832.6,
+      ),
+      (
+        "Earth",
+        "planets/textures/Earth.jpg",
+        anise::constants::celestial_objects::EARTH,
+        23.93,
+      ),
+      (
+        "Mars",
+        "planets/textures/Mars.jpg",
+        anise::constants::celestial_objects::MARS,
+        24.62,
+      ),
+      (
+        "Jupiter",
+        "planets/textures/Jupiter.jpg",
+        anise::constants::celestial_objects::JUPITER,
+        9.92,
+      ),
+      (
+        "Saturn",
+        "planets/textures/Saturn.jpg",
+        anise::constants::celestial_objects::SATURN,
+        10.65,
+      ),
+      (
+        "Uranus",
+        "planets/textures/Uranus.jpg",
+        anise::constants::celestial_objects::URANUS,
+        -17.24,
+      ),
+      (
+        "Neptune",
+        "planets/textures/Neptune.jpg",
+        anise::constants::celestial_objects::NEPTUNE,
+        16.11,
+      ),
+    ];
+
+    for (name, tex_path, naif_id, rot_period) in planets.iter() {
+      let planet_radius = (aethervk_core_rlib::simulation::utils::get_planet_radius(
+        *naif_id,
+        assets_dir.to_str().unwrap(),
+      ) / constants::DISTANCE_SCALE_FACTOR as f32)
+        * constants::PLANET_VISUAL_SCALE;
+      let initial_pos = Vec3f32::zero();
+
+      let sphere = {
+        let mut sphere =
+          aethervk_core_rlib::simulation::comet::generate_uv_sphere(planet_radius, 64, 64);
+        let tex = aethervk_core_rlib::simulation::comet::load_texture_from_file(
+          assets_dir.join(tex_path).to_str().unwrap(),
+        )
+        .expect(&format!("Failed to load texture for {}", name));
+        sphere.albedo_map = Some(tex);
+        Arc::from(sphere)
+      };
+
+      let planet_entity = active_scene.scene.spawn_entity(*name);
+      active_scene
+        .scene
+        .set_parent(planet_entity, Some(root_entity));
+      active_scene
+        .scene
+        .add_component(
+          planet_entity,
+          TransformComponent {
+            position: initial_pos,
+            rotation: Quat::identity(),
+            scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+          },
+        )
+        .unwrap();
+      active_scene
+        .scene
+        .add_component(
+          planet_entity,
+          PhysicalMeshComponent {
+            asset_path: "".to_string(),
+            mesh: sphere,
+            emissive_intensity: 0.0,
+            emissive_color: [0.0, 0.0, 0.0],
+          },
+        )
+        .unwrap();
+      active_scene
+        .scene
+        .add_component(planet_entity, AlmanacPlanet::new(*naif_id, *rot_period))
+        .unwrap();
+      active_scene
+        .scene
+        .add_component(
+          planet_entity,
+          GizmoComponent {
+            gizmo_visible: false,
+            gizmo_scale: planet_radius * 2.0,
+          },
+        )
+        .unwrap();
+      active_scene.register_entity(planet_entity);
+    }
   }
 
-  #[cfg(not(feature = "spotless_rendering"))]
-  let planets = [
-    (
-      "Mercury",
-      "planets/textures/Mercury.jpg",
-      crate::constants::PlanetNaifId::MERCURY,
-      1407.6,
-    ),
-    (
-      "Venus",
-      "planets/textures/Venus.jpg",
-      crate::constants::PlanetNaifId::VENUS,
-      -5832.6,
-    ),
-    (
-      "Earth",
-      "planets/textures/Earth.jpg",
-      crate::constants::PlanetNaifId::EARTH,
-      23.93,
-    ),
-    (
-      "Mars",
-      "planets/textures/Mars.jpg",
-      crate::constants::PlanetNaifId::MARS,
-      24.62,
-    ),
-    (
-      "Jupiter",
-      "planets/textures/Jupiter.jpg",
-      crate::constants::PlanetNaifId::JUPITER,
-      9.92,
-    ),
-    (
-      "Saturn",
-      "planets/textures/Saturn.jpg",
-      crate::constants::PlanetNaifId::SATURN,
-      10.65,
-    ),
-    (
-      "Uranus",
-      "planets/textures/Uranus.jpg",
-      crate::constants::PlanetNaifId::URANUS,
-      -17.24,
-    ),
-    (
-      "Neptune",
-      "planets/textures/Neptune.jpg",
-      crate::constants::PlanetNaifId::NEPTUNE,
-      16.11,
-    ),
-  ];
+  let ext_camera_entity = {
+    let scene_ctx = simulation_context.get_scene(scene_id).unwrap();
+    let read_ctx = scene_ctx.read();
+    let int_cam = read_ctx.active_camera_entity.unwrap();
+    read_ctx
+      .entity_map
+      .iter()
+      .find(|&(_, &v)| v == int_cam)
+      .map(|(&k, _)| k)
+      .unwrap()
+  };
 
-  let mut planets_ids = Vec::new();
+  let font_path = assets_dir.join("fonts/JetBrainsMono-Regular.ttf");
+  let atlas =
+    aethervk_core_rlib::scene::text::FontAtlas::from_path(font_path.to_str().unwrap(), 32.0)
+      .expect("Failed to load asset font");
 
-  #[cfg(not(feature = "spotless_rendering"))]
-  for (name, tex_path, naif_id, rot_period) in planets.iter() {
-    let planet_radius = (utils::get_planet_radius(*naif_id, &assets_dir)
-      / constants::DISTANCE_SCALE_FACTOR as f32)
-      * constants::PLANET_VISUAL_SCALE;
-    let initial_pos = Vec3f32::zero();
-
-    let sphere = {
-      let mut sphere = core_simulation::comet::generate_uv_sphere(planet_radius, 64, 64);
-      let tex =
-        core_simulation::comet::load_texture_from_file(assets_dir.join(tex_path).to_str().unwrap())
-          .expect(&format!("Failed to load texture for {}", name));
-      sphere.albedo_map = Some(tex);
-      Arc::from(sphere)
-    };
-    let planet_entity = scene
-      .add_mesh(*name, root_entity)
-      .with_position(initial_pos)
-      .with_mesh("", sphere)
-      .build()
-      .unwrap();
-    scene
-      .add_component(planet_entity, AlmanacPlanet::new(*naif_id, *rot_period))
-      .unwrap();
-    scene
-      .add_component(
-        planet_entity,
-        GizmoComponent {
-          gizmo_visible: false,
-          gizmo_scale: planet_radius * 2.0,
-        },
-      )
-      .unwrap();
-    planets_ids.push((*naif_id, planet_entity, *rot_period, planet_radius));
-  }
-
-  let cursor_entity = scene.spawn_entity("entity");
-  scene
-    .add_component(
-      cursor_entity,
-      TransformComponent {
-        position: Vec3f32::from_components(0.0, 0.0, 0.0),
-        rotation: Quat::identity(),
-        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-      },
-    )
-    .unwrap();
-  scene
-    .add_component(cursor_entity, CursorComponent {})
-    .unwrap();
-  scene.set_parent(cursor_entity, Some(root_entity));
-
-  let camera_entity = scene.spawn_entity("entity");
-  scene
-    .add_component(
-      camera_entity,
-      TransformComponent {
-        position: Vec3f32::from_components(0.0, -400.0, 0.0),
-        rotation: Quat::from_axis_angle(
-          Vec3f32::from_components(0.0, 0.0, 1.0),
-          std::f32::consts::PI,
-        ),
-        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-      },
-    )
-    .unwrap();
-  scene
-    .add_component(
-      camera_entity,
-      CameraComponent {
-        projection: Mat4x4f32::perspective_vk(
-          45.0f32.to_radians(),
-          800.0 / 600.0, // Default aspect ratio, will be updated by resize
-          0.1,
-          1000000.0,
-        ),
-        near_plane: 0.1,
-        far_plane: 1000000.0,
-      },
-    )
-    .unwrap();
-  scene.set_parent(camera_entity, Some(root_entity));
-
-  let sun_entity = scene.spawn_entity("sun");
-  let sun_radius = (utils::get_planet_radius(constants::PlanetNaifId::SUN, &assets_dir)
-    / constants::DISTANCE_SCALE_FACTOR as f32)
-    * constants::UNIVERSAL_VISUAL_SCALE;
-  let sun_scale = sun_radius / 0.45;
-  let sun_pos = Vec3f32::zero();
-
-  scene
-    .add_component(
-      sun_entity,
-      TransformComponent {
-        position: sun_pos,
-        rotation: Quat::identity(),
-        scale: Vec3f32::from_components(sun_scale, sun_scale, sun_scale),
-      },
-    )
-    .unwrap();
-  scene
-    .add_component(
-      sun_entity,
-      aethervk_core_rlib::scene::SunComponent {
-        resolution: (128, 128, 128),
-      },
-    )
-    .unwrap();
-  scene
-    .add_component(
-      sun_entity,
-      AlmanacPlanet::new(constants::PlanetNaifId::SUN, 25.05),
-    )
-    .unwrap();
-
-  // Add emissive core for the sun
-  let sun_core_entity = scene.spawn_entity("sun_core");
-  let mut sun_sphere = core_simulation::comet::generate_uv_sphere(0.45 * 0.95, 64, 64);
-  sun_sphere.albedo_map = None;
-  scene
-    .add_component(
-      sun_core_entity,
-      TransformComponent {
-        position: Vec3f32::from_components(0.0, 0.0, 0.0),
-        rotation: Quat::identity(),
-        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-      },
-    )
-    .unwrap();
-  scene
-    .add_component(
-      sun_core_entity,
-      PhysicalMeshComponent {
-        asset_path: "".to_string(),
-        mesh: Arc::from(sun_sphere),
-        emissive_intensity: 0.9, // Reduced to prevent SDR whiteout clamp
-        emissive_color: [1.0, 0.35, 0.02], // Pure rich orange/red
-      },
-    )
-    .unwrap();
-  scene.set_parent(sun_core_entity, Some(sun_entity));
-
-  let sky_entity = scene.spawn_entity("entity");
-  scene
-    .add_component(sky_entity, aethervk_core_rlib::scene::SkyComponent {})
-    .unwrap();
-
-  let grid_entity = scene.spawn_entity("grid");
-  scene
-    .add_component(grid_entity, aethervk_core_rlib::scene::GridComponent {})
-    .unwrap();
-  scene.set_parent(sun_entity, Some(root_entity));
-
-  add_gizmos_to_transforms(&scene);
-
-  let scene_shared = Arc::new(scene);
-  let outlines_enabled = Arc::new(AtomicBool::new(true));
-
-  let mut app_state = AppState {
-    scene: Arc::clone(&scene_shared),
+  let app_state = AppState {
+    ctx: simulation_context,
+    custom_data_ring: [
+      CustomRenderData::default(),
+      CustomRenderData::default(),
+      CustomRenderData::default(),
+    ],
+    scene_id,
     presentation_engine,
-    camera_entity,
-    is_paused: false,
-    time_scale: 1.0,
-    root_entity,
+    camera_entity: ext_camera_entity,
+    window: Some(window),
     is_resizing: false,
     is_exiting: false,
-    window: Some(window),
-    outlines_enabled: Arc::clone(&outlines_enabled),
     is_command_prompt_open: false,
+    font_atlas: Arc::new(std::sync::Mutex::new(Some(atlas))),
     console_open_progress: 0.0,
     console_scroll_offset: 0,
     command_history: std::collections::VecDeque::with_capacity(1000),
     current_command: String::new(),
   };
 
-  // --- Start Render Thread ---
-  let (render_tx, render_rx) = mpsc::sync_channel::<Option<RenderPacket>>(1);
-  let render_thread_handle = start_render_thread(
-    render_rx,
-    Arc::clone(&scene_shared),
-    render_frontend,
-    render_device_handle,
-    presentation_engine,
-    font_id,
-  );
-  let cpu_kernels = CpuKernels::new();
-
-  // --- Start Logic Thread ---
-  let (logic_tx, logic_rx) = mpsc::channel::<LogicCommand>();
-  let (response_tx, response_rx) = mpsc::channel::<String>();
-  let logic_thread_handle = start_logic_thread(
-    logic_rx,
-    response_tx,
-    Arc::clone(&scene_shared),
-    root_entity,
-    camera_entity,
-    cursor_entity,
-    grid_entity,
-    planets_ids,
-    assets_dir,
-    Arc::clone(&outlines_enabled),
-    cpu_kernels,
-  );
-
-  let _app_threads = test_utils::threading::AppThreads {
-    logic_thread: Some(logic_thread_handle),
-    render_thread: Some(render_thread_handle),
-  };
-
-  let mut initial_width = app_state.window.as_ref().unwrap().inner_size().width;
-  let mut initial_height = app_state.window.as_ref().unwrap().inner_size().height;
-  if initial_width == 0 {
-    initial_width = 800;
-  }
-  if initial_height == 0 {
-    initial_height = 600;
-  }
-
-  let _ = logic_tx.send(LogicCommand::Resize {
-    width: initial_width,
-    height: initial_height,
-  });
-
-  // --- Main Event Loop ---
-
   let sim_app = SimApp {
     app_state,
-    logic_tx,
-    render_tx,
-    response_rx,
     right_mouse_button_down: false,
     middle_mouse_button_down: false,
     ctrl_down: false,
     mouse_x: 0.0,
     mouse_y: 0.0,
     last_log_time: std::time::Instant::now(),
-    _app_threads,
+    last_sim_time: std::time::Instant::now(),
     window_info,
   };
 
   test_utils::app::run_app(sim_app, event_loop);
-  println!("Event loop returned. AppThreads will join threads on drop. Exiting main().");
-}
-
-fn create_presentation_engine_and_init_archetypes(
-  device: &dyn gpu::RenderDevice,
-  params: &gpu::PresentationEngineParams,
-) -> types::GpuResult<(gpu::PresentationEngineHandle, (u64, u32))> {
-  let asset_dir = ASSET_DIR.read();
-  let mono_font = get_monospace_font_path_from_asset_path(asset_dir.as_ref().unwrap());
-  assert!(mono_font.is_file());
-  let mono_font = FontAtlas::from_path(mono_font.to_str().unwrap(), 12.0).unwrap();
-  let pe = device.create_presentation_engine(params)?;
-  device.init_archetypes(pe)?;
-  device.generate_sky()?;
-  let mono_font_hash = mono_font.hash_metadata();
-  let mono_font_id = device.allocate_rasterized_font_atlas(mono_font_hash, mono_font)?;
-  Ok((pe, (mono_font_hash, mono_font_id)))
+  println!("Event loop returned. Exiting main().");
 }
 
 struct SimApp {
   app_state: AppState,
-  logic_tx: std::sync::mpsc::Sender<LogicCommand>,
-  render_tx: std::sync::mpsc::SyncSender<Option<RenderPacket>>,
-  response_rx: std::sync::mpsc::Receiver<String>,
   right_mouse_button_down: bool,
   middle_mouse_button_down: bool,
   ctrl_down: bool,
   mouse_x: f64,
   mouse_y: f64,
   last_log_time: std::time::Instant,
-  _app_threads: test_utils::threading::AppThreads,
+  last_sim_time: std::time::Instant,
   window_info: test_utils::WindowPlatformData,
 }
 
@@ -585,7 +381,12 @@ impl test_utils::app::App for SimApp {
   }
 
   fn on_resize(&mut self, width: u32, height: u32) {
-    let _ = self.logic_tx.send(LogicCommand::Resize { width, height });
+    let _ = self.app_state.ctx.resize(
+      self.app_state.scene_id,
+      self.app_state.presentation_engine,
+      width,
+      height,
+    );
     #[cfg(target_os = "macos")]
     {
       self
@@ -600,8 +401,6 @@ impl test_utils::app::App for SimApp {
 
   fn on_close_requested(&mut self) {
     self.app_state.window = None;
-    let _ = self.logic_tx.send(LogicCommand::Exit);
-    let _ = self.render_tx.try_send(None);
   }
 
   fn on_mouse_input(
@@ -622,12 +421,11 @@ impl test_utils::app::App for SimApp {
           if size.width > 0 && size.height > 0 {
             let ndc_x = (self.mouse_x as f32 / size.width as f32) * 2.0 - 1.0;
             let ndc_y = (self.mouse_y as f32 / size.height as f32) * 2.0 - 1.0;
+            // TODO select intersected object (insert selected component, remove the other selected component if present. Add an extension method to scene in rlib to handle this)
             let _ = self
-              .logic_tx
-              .send(LogicCommand::RaycastCursor { ndc_x, ndc_y });
-            if let Some(w) = self.app_state.window.as_ref() {
-              w.request_redraw();
-            }
+              .app_state
+              .ctx
+              .raycast_ndc(self.app_state.scene_id, ndc_x, ndc_y);
           }
         }
       }
@@ -651,30 +449,18 @@ impl test_utils::app::App for SimApp {
           event.physical_key
         {
           self.app_state.is_command_prompt_open = false;
-          if let Some(w) = self.app_state.window.as_ref() {
-            w.request_redraw();
-          }
         } else {
           match &event.logical_key {
             winit::keyboard::Key::Named(winit::keyboard::NamedKey::Backspace) => {
               self.app_state.current_command.pop();
-              if let Some(w) = self.app_state.window.as_ref() {
-                w.request_redraw();
-              }
             }
             winit::keyboard::Key::Named(winit::keyboard::NamedKey::PageUp) => {
               self.app_state.console_scroll_offset =
                 self.app_state.console_scroll_offset.saturating_add(1);
-              if let Some(w) = self.app_state.window.as_ref() {
-                w.request_redraw();
-              }
             }
             winit::keyboard::Key::Named(winit::keyboard::NamedKey::PageDown) => {
               self.app_state.console_scroll_offset =
                 self.app_state.console_scroll_offset.saturating_sub(1);
-              if let Some(w) = self.app_state.window.as_ref() {
-                w.request_redraw();
-              }
             }
             winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
               if !self.app_state.current_command.is_empty() {
@@ -683,28 +469,22 @@ impl test_utils::app::App for SimApp {
                   .app_state
                   .command_history
                   .push_back(format!("> {}", cmd));
-                let _ = self.logic_tx.send(LogicCommand::ExecuteCommand(cmd));
+
+                // TODO: Execute Command functionality
+                // Currently omitted as it requires C FFI or direct parsing implementation in main.rs
+
                 if self.app_state.command_history.len() > 1000 {
                   self.app_state.command_history.pop_front();
                 }
                 self.app_state.current_command.clear();
                 self.app_state.console_scroll_offset = 0;
               }
-              if let Some(w) = self.app_state.window.as_ref() {
-                w.request_redraw();
-              }
             }
             winit::keyboard::Key::Named(winit::keyboard::NamedKey::Space) => {
               self.app_state.current_command.push(' ');
-              if let Some(w) = self.app_state.window.as_ref() {
-                w.request_redraw();
-              }
             }
             winit::keyboard::Key::Character(c) => {
               self.app_state.current_command.push_str(c.as_str());
-              if let Some(w) = self.app_state.window.as_ref() {
-                w.request_redraw();
-              }
             }
             _ => {}
           }
@@ -721,84 +501,24 @@ impl test_utils::app::App for SimApp {
           }
 
           if let Some(axis) = test_utils::command::get_camera_movement_axis(keycode) {
-            let _ = self.logic_tx.send(LogicCommand::MoveCursor {
-              axis,
-              amount: speed,
-            });
-            if let Some(w) = self.app_state.window.as_ref() {
-              w.request_redraw();
-            }
+            let scene = self
+              .app_state
+              .ctx
+              .get_scene(self.app_state.scene_id)
+              .unwrap();
+            // TODO check success
+            let _ = self.app_state.ctx.threads.logic_thread.tx().try_send(
+              structs::LogicCommand::MoveCursor(structs::MoveCursor {
+                scene,
+                delta_x: axis.x() * speed,
+                delta_y: axis.y() * speed,
+                delta_z: axis.z() * speed,
+              }),
+            );
           } else {
             match keycode {
               winit::keyboard::KeyCode::KeyM => {
                 self.app_state.is_command_prompt_open = true;
-                if let Some(w) = self.app_state.window.as_ref() {
-                  w.request_redraw();
-                }
-              }
-              winit::keyboard::KeyCode::KeyX => {
-                let _ = self.logic_tx.send(LogicCommand::CycleTimeScale);
-                if let Some(w) = self.app_state.window.as_ref() {
-                  w.request_redraw();
-                }
-              }
-              winit::keyboard::KeyCode::KeyA => {
-                let _ = self
-                  .logic_tx
-                  .send(LogicCommand::CyclePlanet { forward: false });
-                if let Some(w) = self.app_state.window.as_ref() {
-                  w.request_redraw();
-                }
-              }
-              winit::keyboard::KeyCode::KeyD => {
-                let _ = self
-                  .logic_tx
-                  .send(LogicCommand::CyclePlanet { forward: true });
-                if let Some(w) = self.app_state.window.as_ref() {
-                  w.request_redraw();
-                }
-              }
-              winit::keyboard::KeyCode::KeyG => {
-                let _ = self.logic_tx.send(LogicCommand::ToggleGrid);
-                if let Some(w) = self.app_state.window.as_ref() {
-                  w.request_redraw();
-                }
-              }
-              winit::keyboard::KeyCode::KeyH => {
-                let _ = self.logic_tx.send(LogicCommand::TogglePlanetOutlines);
-                if let Some(w) = self.app_state.window.as_ref() {
-                  w.request_redraw();
-                }
-              }
-              winit::keyboard::KeyCode::KeyT => {
-                let _ = self.logic_tx.send(LogicCommand::ResetCamera);
-                if let Some(w) = self.app_state.window.as_ref() {
-                  w.request_redraw();
-                }
-              }
-              winit::keyboard::KeyCode::Digit0 | winit::keyboard::KeyCode::Numpad0 => {
-                let _ = self.logic_tx.send(LogicCommand::ResetCursor);
-                if let Some(w) = self.app_state.window.as_ref() {
-                  w.request_redraw();
-                }
-              }
-              winit::keyboard::KeyCode::Digit1 | winit::keyboard::KeyCode::Numpad1 => {
-                let _ = self.logic_tx.send(LogicCommand::SnapCursorToSun);
-                if let Some(w) = self.app_state.window.as_ref() {
-                  w.request_redraw();
-                }
-              }
-              winit::keyboard::KeyCode::Digit2 | winit::keyboard::KeyCode::Numpad2 => {
-                let _ = self.logic_tx.send(LogicCommand::SnapCameraToCursor);
-                if let Some(w) = self.app_state.window.as_ref() {
-                  w.request_redraw();
-                }
-              }
-              winit::keyboard::KeyCode::KeyV => {
-                let _ = self.logic_tx.send(LogicCommand::ToggleMeasureTool);
-                if let Some(w) = self.app_state.window.as_ref() {
-                  w.request_redraw();
-                }
               }
               _ => {}
             }
@@ -821,9 +541,45 @@ impl test_utils::app::App for SimApp {
         self.app_state.console_scroll_offset =
           self.app_state.console_scroll_offset.saturating_sub(1);
       }
-      if let Some(w) = self.app_state.window.as_ref() {
-        w.request_redraw();
+    }
+  }
+
+  fn on_mouse_motion(&mut self, delta: (f64, f64)) {
+    let ctx = &self.app_state.ctx;
+    let scene = ctx.get_scene(self.app_state.scene_id).unwrap();
+    let camera_entity = scene
+      .read()
+      .get_entity(self.app_state.camera_entity)
+      .unwrap();
+
+    let logic_command = if self.right_mouse_button_down {
+      if self.ctrl_down {
+        Some(structs::LogicCommand::ZoomCamera(structs::ZoomCamera {
+          camera_entity,
+          scene,
+          amount: delta.1 as f32,
+        }))
+      } else {
+        Some(structs::LogicCommand::RotateCamera(structs::RotateCamera {
+          camera_entity,
+          scene,
+          delta_x: delta.0 as f32,
+          delta_y: delta.1 as f32,
+        }))
       }
+    } else if self.middle_mouse_button_down {
+      Some(structs::LogicCommand::PanCursor(structs::PanCursor {
+        scene,
+        delta_x: delta.0 as f32,
+        delta_y: delta.1 as f32,
+      }))
+    } else {
+      None
+    };
+
+    // TODO proper feedback
+    if let Some(logic_command) = logic_command {
+      let _ = ctx.threads.logic_thread.tx().try_send(logic_command);
     }
   }
 
@@ -831,124 +587,274 @@ impl test_utils::app::App for SimApp {
     self.ctrl_down = modifiers.control_key() || modifiers.super_key();
   }
 
-  fn on_mouse_motion(&mut self, delta: (f64, f64)) {
-    if self.right_mouse_button_down {
-      if self.ctrl_down {
-        let _ = self.logic_tx.send(LogicCommand::ZoomCamera {
-          amount: delta.1 as f32,
-        });
-      } else {
-        let _ = self.logic_tx.send(LogicCommand::RotateCamera {
-          delta_x: delta.0 as f32,
-          delta_y: delta.1 as f32,
-        });
-      }
-      if let Some(w) = self.app_state.window.as_ref() {
-        w.request_redraw();
-      }
-    } else if self.middle_mouse_button_down {
-      let _ = self.logic_tx.send(LogicCommand::PanCursor {
-        delta_x: delta.0 as f32,
-        delta_y: delta.1 as f32,
-      });
-      if let Some(w) = self.app_state.window.as_ref() {
-        w.request_redraw();
-      }
-    }
-  }
-
   fn on_redraw(&mut self) {
-    let mut show_particle_count = false;
-    let mut particle_count = 0;
+    let size = self.app_state.window.as_ref().unwrap().inner_size();
+    let console_open_progress = self.app_state.console_open_progress;
+    let console_scroll_offset = self.app_state.console_scroll_offset;
+    let command_history = self.app_state.command_history.clone();
+    let current_command = self.app_state.current_command.clone();
 
-    let _ = self.app_state.scene.with_component(
-      self.app_state.camera_entity,
-      |_c: &logic_thread::ParticleCountDisplayComponent| {
-        show_particle_count = true;
-      },
-    );
+    let callback = {
+      let atlas = { self.app_state.font_atlas.lock().unwrap().take() };
+      let current_custom_data = self.app_state.cycle_first_free_render_custom_data();
+      assert_eq!(
+        current_custom_data
+          .mt_sent_not_received
+          .load(std::sync::atomic::Ordering::Relaxed),
+        false
+      );
 
-    if show_particle_count {
-      self
-        .app_state
-        .scene
-        .query1::<aethervk_core_rlib::scene::ParticleSystemComponent, _>(|_, sys| {
-          particle_count += sys.particles.len();
-        });
-    }
+      current_custom_data.console_open_progress = console_open_progress;
+      current_custom_data.console_scroll_offset = console_scroll_offset;
+      current_custom_data.command_history = command_history;
+      current_custom_data.current_command = current_command;
+      current_custom_data.font_atlas = atlas;
+      current_custom_data.size = size;
+      current_custom_data
+        .mt_sent_not_received
+        .store(true, std::sync::atomic::Ordering::Relaxed);
 
-    let packet = RenderPacket {
-      camera_entity: self.app_state.camera_entity,
-      window_size: self.app_state.window.as_ref().unwrap().inner_size(),
-      outlines_enabled: self
-        .app_state
-        .outlines_enabled
-        .load(std::sync::atomic::Ordering::Relaxed),
-      is_command_prompt_open: self.app_state.is_command_prompt_open,
-      console_open_progress: self.app_state.console_open_progress,
-      console_scroll_offset: self.app_state.console_scroll_offset,
-      command_history: self.app_state.command_history.clone(),
-      current_command: self.app_state.current_command.clone(),
-      show_particle_count,
-      particle_count,
+      current_custom_data.make_callback()
     };
 
-    match self.render_tx.try_send(Some(packet)) {
-      Ok(_) => {}
-      Err(mpsc::TrySendError::Full(_)) => {}
-      Err(mpsc::TrySendError::Disconnected(_)) => {
-        self.app_state.is_exiting = true;
-      }
-    }
+    let ctx = &self.app_state.ctx;
+    let _ = ctx.render_tick_custom(
+      self.app_state.presentation_engine,
+      self.app_state.scene_id,
+      [size.width, size.height],
+      Some(callback),
+    );
   }
 
   fn on_about_to_wait(&mut self) {
-    let dt = 0.016;
-    if self.app_state.is_command_prompt_open {
-      self.app_state.console_open_progress += dt * 5.0;
-      if self.app_state.console_open_progress > 1.0 {
-        self.app_state.console_open_progress = 1.0;
-      } else {
-        if let Some(w) = self.app_state.window.as_ref() {
-          w.request_redraw();
-        }
-      }
-    } else {
-      self.app_state.console_open_progress -= dt * 5.0;
-      if self.app_state.console_open_progress < 0.0 {
-        self.app_state.console_open_progress = 0.0;
-      } else {
-        if let Some(w) = self.app_state.window.as_ref() {
-          w.request_redraw();
-        }
-      }
-    }
+    let current_time = std::time::Instant::now();
+    let delta_time = current_time
+      .duration_since(self.last_sim_time)
+      .as_secs_f64();
+    self.last_sim_time = current_time;
 
-    let mut got_responses = false;
-    while let Ok(response) = self.response_rx.try_recv() {
-      if response == "___CLEAR___" {
-        self.app_state.command_history.clear();
-      } else {
-        self.app_state.command_history.push_back(response);
-        if self.app_state.command_history.len() > 1000 {
-          self.app_state.command_history.pop_front();
-        }
-      }
-      got_responses = true;
-    }
-    if got_responses && self.app_state.is_command_prompt_open {
-      if let Some(w) = self.app_state.window.as_ref() {
-        w.request_redraw();
-      }
-    }
+    let ctx = &self.app_state.ctx;
+    let _ = ctx.simulation_tick(self.app_state.scene_id, delta_time);
 
-    if self.last_log_time.elapsed().as_secs() >= 5 {
-      self.last_log_time = std::time::Instant::now();
+    if let Some(w) = self.app_state.window.as_ref() {
+      w.request_redraw();
     }
-    if !self.app_state.is_resizing {
-      if let Some(w) = self.app_state.window.as_ref() {
-        w.request_redraw();
+  }
+}
+
+#[derive(Default)]
+struct CustomRenderData {
+  console_open_progress: f32,
+  console_scroll_offset: usize,
+  command_history: std::collections::VecDeque<String>,
+  current_command: String,
+  font_atlas: Option<FontAtlas>,
+  font_id: (u64, u32),
+  size: winit::dpi::PhysicalSize<u32>,
+  rt_in_use: AtomicBool,
+  rt_first_in_use: AtomicBool,
+  mt_sent_not_received: AtomicBool,
+}
+
+impl CustomRenderData {
+  fn make_callback(&mut self) -> CustomRenderCallback {
+    CustomRenderCallback {
+      after_render_frame_fn: ui_custom_render_fn,
+      on_first_render_fn: first_render_update_atlas,
+      user_data: SendPtrMut(self as *mut Self as *mut core::ffi::c_void),
+    }
+  }
+
+  fn is_free_relaxed(&self) -> bool {
+    !self.rt_in_use.load(std::sync::atomic::Ordering::Relaxed)
+      && !self
+        .rt_first_in_use
+        .load(std::sync::atomic::Ordering::Relaxed)
+      && !self
+        .mt_sent_not_received
+        .load(std::sync::atomic::Ordering::Relaxed)
+  }
+
+  fn is_free_acquire(&self) -> bool {
+    !self.rt_in_use.load(std::sync::atomic::Ordering::Acquire)
+      && !self
+        .rt_first_in_use
+        .load(std::sync::atomic::Ordering::Acquire)
+      && !self
+        .mt_sent_not_received
+        .load(std::sync::atomic::Ordering::Acquire)
+  }
+}
+
+struct AtomicCounterGuard<'a> {
+  value: &'a AtomicBool,
+}
+
+impl<'a> AtomicCounterGuard<'a> {
+  fn new(value: &'a AtomicBool) -> Self {
+    value.store(true, std::sync::atomic::Ordering::Release);
+    Self { value }
+  }
+}
+
+impl<'a> Drop for AtomicCounterGuard<'a> {
+  fn drop(&mut self) {
+    self
+      .value
+      .store(false, std::sync::atomic::Ordering::Release);
+  }
+}
+
+static FONT_HASH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static FONT_INTERNAL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn first_render_update_atlas(
+  device: &dyn aethervk_core_rlib::gpu::RenderDevice,
+  cmd_buffer: aethervk_core_rlib::gpu::CommandBufferHandle,
+  _presentation_engine_handle: PresentationEngineHandle,
+  _render_scene: &aethervk_core_rlib::gpu::RenderScene,
+  user_data: *mut core::ffi::c_void,
+) -> GpuResult<()> {
+  let data = unsafe { &mut *(user_data as *mut CustomRenderData) };
+  let _use_guard = AtomicCounterGuard::new(&data.rt_first_in_use);
+  data
+    .mt_sent_not_received
+    .store(false, std::sync::atomic::Ordering::Relaxed);
+
+  if let Some(atlas) = data.font_atlas.take() {
+    let font_hash = atlas.hash_metadata();
+    let font_internal = device.allocate_rasterized_font_atlas(cmd_buffer, font_hash, atlas)?;
+    FONT_HASH.store(font_hash, std::sync::atomic::Ordering::Relaxed);
+    FONT_INTERNAL.store(font_internal, std::sync::atomic::Ordering::Relaxed);
+  }
+  Ok(())
+}
+
+fn ui_custom_render_fn(
+  device: &dyn aethervk_core_rlib::gpu::RenderDevice,
+  cmd_buffer: aethervk_core_rlib::gpu::CommandBufferHandle,
+  presentation_engine_handle: PresentationEngineHandle,
+  render_scene: &aethervk_core_rlib::gpu::RenderScene,
+  user_data: *mut core::ffi::c_void,
+) -> GpuResult<()> {
+  let data = unsafe { &mut *(user_data as *mut CustomRenderData) };
+  let _use_guard = AtomicCounterGuard::new(&data.rt_in_use);
+  data
+    .mt_sent_not_received
+    .store(false, std::sync::atomic::Ordering::Relaxed);
+  let size = data.size;
+  let screen_extent = [size.width as f32, size.height as f32];
+  let font_id = (
+    FONT_HASH.load(std::sync::atomic::Ordering::Relaxed),
+    FONT_INTERNAL.load(std::sync::atomic::Ordering::Relaxed),
+  );
+
+  if !render_scene.measurement_calls.is_empty() {
+    let _ = device
+      .prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer, presentation_engine_handle);
+
+    let view_proj = render_scene.camera_data.view_proj;
+    for m in &render_scene.measurement_calls {
+      let p1 = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+        m.p1[0], m.p1[1], m.p1[2],
+      );
+      let p2 = Vec3f32::from_components(m.p2[0], m.p2[1], m.p2[2]);
+
+      use aethervk_oshal_rlib::math::vector::Vector;
+      let mid = p1 + (p2 - p1) * 0.5;
+
+      let offset_mid = mid + Vec3f32::from_components(0.0, 0.0, 5.0);
+
+      if let Some((screen_x, screen_y)) = aethervk_core_rlib::math::from_world_space_to_screen_space(
+        offset_mid,
+        view_proj,
+        (screen_extent[0], screen_extent[1]),
+      ) {
+        let distance = (p2 - p1).length() as f64;
+        let text = format!("{:.1}", distance);
+
+        let ndc_x = (screen_x / screen_extent[0]) * 2.0 - 1.0;
+        let ndc_y = (screen_y / screen_extent[1]) * 2.0 - 1.0;
+
+        let _ = device.render_text(
+          cmd_buffer,
+          &text,
+          [ndc_x, ndc_y],
+          screen_extent,
+          font_id,
+          m.points,
+          [1.0, 1.0, 1.0, 1.0],
+        );
       }
     }
   }
+
+  let console_open_progress = data.console_open_progress;
+  let slide_y = -1.0 + (console_open_progress * 1.0);
+  let base_y = 0.18 + slide_y;
+
+  if console_open_progress > 0.0 {
+    let width = 2.0;
+    let height = 1.0;
+    let box_y = -1.0 - height + (console_open_progress * height);
+
+    let _ = device.render_ui_rect(
+      cmd_buffer,
+      presentation_engine_handle,
+      [0.05, 0.1, 0.05, 0.7],
+      [-1.0, box_y],
+      [width, height],
+    );
+
+    let mut console_text = String::new();
+    let max_lines = 12;
+    let history_len = data.command_history.len();
+    let scroll = data
+      .console_scroll_offset
+      .min(history_len.saturating_sub(max_lines));
+    let start_idx = history_len.saturating_sub(max_lines + scroll);
+    let end_idx = history_len.saturating_sub(scroll);
+
+    for cmd in data
+      .command_history
+      .iter()
+      .skip(start_idx)
+      .take(end_idx - start_idx)
+    {
+      console_text.push_str(cmd);
+      console_text.push('\n');
+    }
+
+    let prompt_y = box_y + height - 0.08;
+    let text_start_y = box_y + 0.05;
+
+    let _ = device
+      .prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer, presentation_engine_handle);
+
+    let _ = device.render_text(
+      cmd_buffer,
+      &console_text,
+      [-0.98, text_start_y],
+      screen_extent,
+      font_id,
+      14.0,
+      [0.8, 0.8, 0.8, 1.0],
+    );
+
+    let mut prompt_text = String::from("> ");
+    prompt_text.push_str(&data.current_command);
+    prompt_text.push('_');
+
+    let _ = device.render_text(
+      cmd_buffer,
+      &prompt_text,
+      [-0.98, prompt_y],
+      screen_extent,
+      font_id,
+      16.0,
+      [1.0, 1.0, 0.2, 1.0],
+    );
+  }
+
+  Ok(())
 }

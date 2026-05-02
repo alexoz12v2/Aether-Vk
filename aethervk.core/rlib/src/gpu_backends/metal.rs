@@ -146,8 +146,16 @@ impl RenderDevice for MetalRenderDevice {
     Err(GpuError::UnsupportedFeature)
   }
 
-  fn get_or_create_cursor_resources(
+  fn get_cursor_resources(
     &self,
+    _handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult> {
+    Err(GpuError::UnsupportedFeature)
+  }
+
+  fn create_cursor_resources(
+    &self,
+    _cmd_buffer: CommandBufferHandle,
     _handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
     Err(GpuError::UnsupportedFeature)
@@ -408,21 +416,20 @@ impl RenderDevice for MetalRenderDevice {
     todo!()
   }
 
-  fn get_or_create_marker_resources(
+  fn get_marker_resources(
     &self,
     _handle: PresentationEngineHandle,
-  ) -> GpuResult<crate::gpu::frame::ResourceUploadResult> {
-    Ok(crate::gpu::frame::ResourceUploadResult {
-      pipeline: crate::gpu::PipelineKey(0),
-      outline_pipeline: None,
-      buffers: crate::gpu::GpuResourceHandle(0),
-      texture_flags: Default::default(),
-      emissive_intensity: 0.0,
-      emissive_color: [0.0; 3],
-    })
+  ) -> GpuResult<ResourceUploadResult> {
+    Err(GpuError::UnsupportedFeature)
   }
 
-  fn push_marker_constants(
+  fn create_marker_resources(
+    &self,
+    _cmd_buffer: CommandBufferHandle,
+    _handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult> {
+    Err(GpuError::UnsupportedFeature)
+  }
     &self,
     _cmd_buffer: CommandBufferHandle,
     _push_constants: &crate::gpu::MarkerPushConstants,
@@ -470,6 +477,35 @@ impl RenderDevice for MetalRenderDevice {
   }
 
   fn destroy_presentation_engine(&self, handle: PresentationEngineHandle) -> GpuResult<()> {
+    todo!()
+  }
+}
+
+}
+esult<()> {
+    todo!()
+  }
+}
+self, texture_id: u64) -> GpuResult<()> {
+    todo!()
+  }
+
+  fn add_billboard_texture(&self, texture: &Texture) -> GpuResult<()> {
+    todo!()
+  }
+
+  fn destroy_presentation_engine(&self, handle: PresentationEngineHandle) -> GpuResult<()> {
+    todo!()
+  }
+}
+
+}
+esult<()> {
+    todo!()
+  }
+}
+}
+esult<()> {
     todo!()
   }
 }

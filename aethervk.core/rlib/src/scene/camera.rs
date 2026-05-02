@@ -28,11 +28,7 @@ pub trait SceneCameraExt {
   ) -> EngineResult<()>;
 
   /// Translates the camera in its local space (x = right, y = backward, z = up)
-  fn translate_camera_local(
-    &self,
-    camera_entity: EntityId,
-    delta: Vec3f32,
-  ) -> EngineResult<()>;
+  fn translate_camera_local(&self, camera_entity: EntityId, delta: Vec3f32) -> EngineResult<()>;
 }
 
 impl SceneCameraExt for Scene {
@@ -81,7 +77,7 @@ impl SceneCameraExt for Scene {
         };
         let (pitch, yaw) = updated_pitch_yaw(&t, delta_pitch, delta_yaw);
         let q = Quat::from_pitch_and_yaw_radians(pitch, yaw);
-        
+
         // Offset starts at world North (+Y)
         // Camera Forward is -Y, so placing it at +Y distance means it looks at origin
         let offset = q.rotate_vector(Vec3f32::from_components(0.0, distance, 0.0));
@@ -94,11 +90,7 @@ impl SceneCameraExt for Scene {
       ))
   }
 
-  fn translate_camera_local(
-    &self,
-    camera_entity: EntityId,
-    delta: Vec3f32,
-  ) -> EngineResult<()> {
+  fn translate_camera_local(&self, camera_entity: EntityId, delta: Vec3f32) -> EngineResult<()> {
     check_for_camera(&self, camera_entity)?;
 
     self
@@ -134,11 +126,13 @@ impl QuatToEulerAngles for Quat {
     // 2. Calculate Pitch
     // Clamp to [-1.0, 1.0] to prevent NaNs from floating point errors
     let pitch_clamped = fwd_z.clamp(-1.0, 1.0);
-    let pitch = FloatLike::asin(pitch_clamped);
+    // fully qualified path to trait necessary otherwise compiler error -> Universal Function Call Syntax (UFCS)
+    let pitch = <f32 as aethervk_oshal_rlib::math::FloatLike>::asin(pitch_clamped);
 
     // 3. Calculate Yaw
     // we use atan2(x, -y) when facing forward (-Y), x = 0, y = -1 | atan2(0, -(-1)) = 0 rad
-    let yaw = FloatLike::atan2(fwd_x, -fwd_y);
+    // fully qualified path to trait necessary otherwise compiler error -> Universal Function Call Syntax (UFCS)
+    let yaw = <f32 as aethervk_oshal_rlib::math::FloatLike>::atan2(fwd_x, -fwd_y);
 
     (pitch, yaw)
   }
@@ -193,9 +187,14 @@ mod tests {
     for (pitch, yaw) in test_cases {
       let q = Quat::from_pitch_and_yaw_radians(pitch, yaw);
       let (p_out, y_out) = q.to_pitch_yaw();
-      
-      assert!((pitch - p_out).abs() < 1e-4, "Pitch mismatch: expected {}, got {}", pitch, p_out);
-      
+
+      assert!(
+        (pitch - p_out).abs() < 1e-4,
+        "Pitch mismatch: expected {}, got {}",
+        pitch,
+        p_out
+      );
+
       // Yaw can wrap around, so we check using complex representation
       let y_diff = (yaw - y_out).abs();
       let wraps = (y_diff - <f32 as FloatOps>::PI * 2.0).abs() < 1e-4 || y_diff < 1e-4;

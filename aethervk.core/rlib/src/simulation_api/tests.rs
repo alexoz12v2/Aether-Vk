@@ -4,18 +4,21 @@ use super::*;
 use std::println;
 use core::ffi::c_char;
 use core::ffi::CStr;
-use std::sync::Arc;
 use alloc::format;
-use aethervk_core_rlib::gpu;
+use crate::gpu;
+use crate::scene::Marker;
 use super::components_api::CameraParams;
+
+fn panic_error_callback(msg: &str) {
+  panic!("Vulkan Error: {}", msg);
+}
 
 fn get_test_context() -> Option<*mut SimulationContext> {
   // Set asset path before startup so it's available for shaders
   let asset_dir = format!("{}/../../assets", env!("CARGO_MANIFEST_DIR"));
-  let path = alloc::ffi::CString::new(asset_dir).unwrap();
-  SimulationContext::set_asset_path(path.as_ptr());
+  SimulationContext::set_asset_path(&asset_dir);
 
-  let ctx_ptr = SimulationContext::startup(gpu::VULKAN_RENDER_BACKEND);
+  let ctx_ptr = SimulationContext::startup(gpu::VULKAN_RENDER_BACKEND, Some(panic_error_callback));
   if let Ok(boxed) = ctx_ptr {
     return Some(alloc::boxed::Box::into_raw(boxed));
   }
@@ -48,10 +51,16 @@ fn test_time_api() {
 
       // Time scale
       ctx.set_time_scale(1); // OneDay
-      assert_eq!(ctx.logic_state.read().current_scale, crate::structs::TimeScale::OneDay);
+      assert_eq!(
+        ctx.logic_state.read().current_scale,
+        crate::simulation_api::structs::TimeScale::OneDay
+      );
 
       ctx.set_time_scale(0); // Stopped
-      assert_eq!(ctx.logic_state.read().current_scale, crate::structs::TimeScale::Stopped);
+      assert_eq!(
+        ctx.logic_state.read().current_scale,
+        crate::simulation_api::structs::TimeScale::Stopped
+      );
 
       let _ = alloc::boxed::Box::from_raw(ctx_ptr);
     }
@@ -73,10 +82,11 @@ fn test_entity_transform_api() {
 
       // Add transform
       let res = ctx.add_transform_component(
-        scene_id, entity_id, 
-        Vec3f32::from_components(1.0, 2.0, 3.0), 
-        Quat::from_components(1.0, 0.0, 0.0, 0.0), 
-        Vec3f32::from_components(1.0, 1.0, 1.0)
+        scene_id,
+        entity_id,
+        Vec3f32::from_components(1.0, 2.0, 3.0),
+        Quat::from_components(1.0, 0.0, 0.0, 0.0),
+        Vec3f32::from_components(1.0, 1.0, 1.0),
       );
       assert!(res.is_ok());
 
@@ -103,10 +113,11 @@ fn test_entity_transform_api() {
 
       // Set transform
       let res = ctx.set_transform_component(
-        scene_id, entity_id, 
-        Vec3f32::from_components(4.0, 5.0, 6.0), 
-        Quat::from_components(1.0, 0.0, 0.0, 0.0), 
-        Vec3f32::from_components(2.0, 2.0, 2.0)
+        scene_id,
+        entity_id,
+        Vec3f32::from_components(4.0, 5.0, 6.0),
+        Quat::from_components(1.0, 0.0, 0.0, 0.0),
+        Vec3f32::from_components(2.0, 2.0, 2.0),
       );
       assert!(res.is_ok());
 
@@ -135,13 +146,18 @@ fn test_camera_api() {
 
       // Transform is required before adding camera
       let _ = ctx.add_transform_component(
-        scene_id, entity_id, 
-        Vec3f32::from_components(0.0, 0.0, 0.0), 
-        Quat::from_components(1.0, 0.0, 0.0, 0.0), 
-        Vec3f32::from_components(1.0, 1.0, 1.0)
+        scene_id,
+        entity_id,
+        Vec3f32::from_components(0.0, 0.0, 0.0),
+        Quat::from_components(1.0, 0.0, 0.0, 0.0),
+        Vec3f32::from_components(1.0, 1.0, 1.0),
       );
 
-      let res = ctx.add_camera_component(scene_id, entity_id, CameraParams::new_perspective(60.0f32.to_radians(), 16.0 / 9.0, 0.1, 1000.0));
+      let res = ctx.add_camera_component(
+        scene_id,
+        entity_id,
+        CameraParams::new_perspective(60.0f32.to_radians(), 16.0 / 9.0, 0.1, 1000.0),
+      );
       assert!(res.is_ok());
 
       let mut proj = [0.0f32; 16];
@@ -149,7 +165,11 @@ fn test_camera_api() {
       assert!(res.is_ok());
 
       // Set camera
-      let res = ctx.set_camera_component(scene_id, entity_id, CameraParams::new_perspective(90.0f32.to_radians(), 1.0, 0.1, 500.0));
+      let res = ctx.set_camera_component(
+        scene_id,
+        entity_id,
+        CameraParams::new_perspective(90.0f32.to_radians(), 1.0, 0.1, 500.0),
+      );
       assert!(res.is_ok());
 
       let res = ctx.set_active_camera(scene_id, entity_id);
@@ -175,7 +195,9 @@ fn test_scene_entities_api() {
       assert_eq!(ctx.get_entity_count(scene_id).unwrap(), initial_count + 1);
 
       let mut out_name = [0i8; 64];
-      let _missing = ctx.get_entity_name(scene_id, entity_id, &mut out_name).unwrap();
+      let _missing = ctx
+        .get_entity_name(scene_id, entity_id, &mut out_name)
+        .unwrap();
       let name_str = CStr::from_ptr(out_name.as_ptr() as *const c_char)
         .to_str()
         .unwrap();
@@ -204,28 +226,44 @@ fn test_misc_and_models_api() {
   if let Some(ctx_ptr) = get_test_context() {
     unsafe {
       let ctx = &mut *ctx_ptr;
-      let path = alloc::ffi::CString::new("/dummy/path").unwrap();
-      SimulationContext::set_asset_path(path.as_ptr());
+      let path = String::from("/dummy/path");
+      SimulationContext::set_asset_path(&path);
 
       // Models API async dummy test
-      let model_id = avkSimulationContext_importModel(ctx_ptr, path.as_ptr());
-      assert!(model_id > 0); 
+      let task_id = ctx.task_manager.write().create_task().get();
+      let _ = ctx
+        .threads
+        .logic_thread
+        .tx()
+        .try_send(structs::LogicCommand::ImportModel {
+          task_id,
+          path: path.clone(),
+        });
+      assert!(task_id > 0);
       let mut attempts = 0;
-      while ctx.get_task_status(model_id) == 0 && attempts < 20 {
+      while ctx.get_task_status(task_id) == 0 && attempts < 20 {
         oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
         attempts += 1;
       }
-      assert!(ctx.get_task_status(model_id) != 0);
+      assert_ne!(ctx.get_task_status(task_id), 0);
 
       // Test almanac file
-      let almanac_id = avkSimulationContext_loadAlmanacFile(ctx_ptr, path.as_ptr());
+      let almanac_id = ctx.task_manager.write().create_task().get();
+      let _ = ctx
+        .threads
+        .logic_thread
+        .tx()
+        .try_send(structs::LogicCommand::LoadAlmanac {
+          task_id: almanac_id,
+          path: path.clone(),
+        });
       assert!(almanac_id > 0);
       let mut attempts = 0;
       while ctx.get_task_status(almanac_id) == 0 && attempts < 20 {
         oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
         attempts += 1;
       }
-      assert!(ctx.get_task_status(almanac_id) != 0);
+      assert_ne!(ctx.get_task_status(almanac_id), 0);
 
       let _ = alloc::boxed::Box::from_raw(ctx_ptr);
     }
@@ -239,15 +277,19 @@ fn test_render_tick_and_download() {
       let ctx = &mut *ctx_ptr;
       let scene_id = ctx.create_default_scene().unwrap();
       let name = alloc::ffi::CString::new("TestSphere").unwrap();
-      let sphere_id = ctx.spawn_procedural_sphere(scene_id, name.as_ptr() as *const _, 1.0).unwrap();
+      let sphere_id = ctx
+        .spawn_procedural_sphere(scene_id, name.as_ptr() as *const _, 1.0)
+        .unwrap();
       assert!(sphere_id > 0);
 
       let width = 256;
       let height = 256;
-      
+
       let pe_handle = ctx.create_presentation_engine(width, height).unwrap();
 
-      let task_id_nonzero = ctx.render_tick(pe_handle, scene_id, [width, height]).unwrap();
+      let task_id_nonzero = ctx
+        .render_tick(pe_handle, scene_id, [width, height])
+        .unwrap();
       let task_id = task_id_nonzero.get();
 
       // Allow thread to process
@@ -267,11 +309,11 @@ fn test_render_tick_and_download() {
       let mut buffer = vec![0u8; (width * height * 4) as usize];
       let success = ctx.download_image(task_id, buffer.as_mut_ptr(), buffer.len());
       if success {
-          let mut attempts = 0;
-          while ctx.get_task_status(task_id) == 0 && attempts < 20 {
-            oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
-            attempts += 1;
-          }
+        let mut attempts = 0;
+        while ctx.get_task_status(task_id) == 0 && attempts < 20 {
+          oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
+          attempts += 1;
+        }
       }
 
       let _ = alloc::boxed::Box::from_raw(ctx_ptr);
@@ -285,13 +327,52 @@ fn test_async_camera_commands() {
     unsafe {
       let ctx = &mut *ctx_ptr;
       let scene_id = ctx.create_default_scene().unwrap();
-      let cam_id = ctx.scenes.read().get_scene(scene_id).unwrap().read().active_camera_entity.unwrap();
-      let ext_cam_id = ctx.scenes.read().get_scene(scene_id).unwrap().read().entity_map.iter().find(|&(_, &v)| v == cam_id).map(|(&k, _)| k).unwrap();
+      let cam_id = ctx
+        .scenes
+        .read()
+        .get_scene(scene_id)
+        .unwrap()
+        .read()
+        .active_camera_entity
+        .unwrap();
+      let ext_cam_id = ctx
+        .scenes
+        .read()
+        .get_scene(scene_id)
+        .unwrap()
+        .read()
+        .entity_map
+        .iter()
+        .find(|&(_, &v)| v == cam_id)
+        .map(|(&k, _)| k)
+        .unwrap();
 
-      let task1 = avkSimulationContext_panCamera(ctx_ptr, scene_id, ext_cam_id, 10.0, -5.0);
+      let scene = ctx.get_scene(scene_id).unwrap();
+      let camera_entity = scene.read().get_entity(ext_cam_id).unwrap();
+
+      let task1 = ctx.task_manager.write().create_task().get();
+      let _ = ctx
+        .threads
+        .logic_thread
+        .tx()
+        .try_send(structs::LogicCommand::PanCamera(structs::PanCamera {
+          camera_entity,
+          scene: scene.clone(),
+          delta_x: 10.0,
+          delta_y: -5.0,
+        }));
       assert!(task1 > 0);
 
-      let task2 = avkSimulationContext_zoomCamera(ctx_ptr, scene_id, ext_cam_id, 5.0);
+      let task2 = ctx.task_manager.write().create_task().get();
+      let _ = ctx
+        .threads
+        .logic_thread
+        .tx()
+        .try_send(structs::LogicCommand::ZoomCamera(structs::ZoomCamera {
+          camera_entity,
+          scene: scene.clone(),
+          amount: 5.0,
+        }));
       assert!(task2 > 0);
 
       oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
@@ -310,7 +391,7 @@ fn test_multiple_scenes() {
       let new_scene_id = ctx.create_default_scene().unwrap();
       assert!(new_scene_id > 0);
 
-      let count = avkSimulationContext_getEntityCount(ctx_ptr, new_scene_id);
+      let count = ctx.get_entity_count(new_scene_id).unwrap();
       assert!(count > 0);
 
       let _ = alloc::boxed::Box::from_raw(ctx_ptr);
@@ -326,36 +407,44 @@ fn test_all_archetypes() {
       let scene_id = ctx.create_default_scene().unwrap();
 
       let name = alloc::ffi::CString::new("TestSphere").unwrap();
-      let sphere_id = ctx.spawn_procedural_sphere(scene_id, name.as_ptr() as *const _, 1.0).unwrap();
+      let sphere_id = ctx
+        .spawn_procedural_sphere(scene_id, name.as_ptr() as *const _, 1.0)
+        .unwrap();
       assert!(sphere_id > 0);
 
       let meas_name = alloc::ffi::CString::new("Meas").unwrap();
-      let meas_id = ctx.spawn_entity(scene_id, meas_name.to_str().unwrap()).unwrap();
-      let _ = ctx.add_measurement_component(scene_id, meas_id, Vec3f32::from_components(0.0, 0.0, 0.0), Vec3f32::from_components(1.0, 1.0, 1.0));
+      let meas_id = ctx
+        .spawn_entity(scene_id, meas_name.to_str().unwrap())
+        .unwrap();
+      let _ = ctx.add_measurement_component(
+        scene_id,
+        meas_id,
+        Vec3f32::from_components(0.0, 0.0, 0.0),
+        Vec3f32::from_components(1.0, 1.0, 1.0),
+      );
 
       let bill_name = alloc::ffi::CString::new("Bill").unwrap();
-      let bill_id = ctx.spawn_entity(scene_id, bill_name.to_str().unwrap()).unwrap();
+      let bill_id = ctx
+        .spawn_entity(scene_id, bill_name.to_str().unwrap())
+        .unwrap();
       let _ = ctx.add_image_billboard_component(scene_id, bill_id, false, 1.0, 1.0);
 
-      let markers = [
-          crate::structs::FfiMarker {
-              position: [1.0, 1.0, 1.0],
-              color: [1.0, 0.0, 0.0],
-              size: 1.0,
-          }
-      ];
-      let _ = ctx.set_markers(
-        scene_id,
-        sphere_id,
-        &markers
-      );
+      let markers = [Marker {
+        local_pos: [1.0, 1.0, 1.0],
+        color: [1.0, 0.0, 0.0],
+        size: 1.0,
+      }];
+      let _ = ctx.set_markers(scene_id, sphere_id, &markers);
 
       let _ = ctx.set_bvh_node_visibility(scene_id, sphere_id, 0, true);
 
       let pe_handle = ctx.create_presentation_engine(256, 256).unwrap();
 
       for _ in 0..3 {
-        let task_id = ctx.render_tick(pe_handle, scene_id, [256, 256]).unwrap().get();
+        let task_id = ctx
+          .render_tick(pe_handle, scene_id, [256, 256])
+          .unwrap()
+          .get();
         let mut status = ctx.get_task_status(task_id);
         let mut attempts = 0;
         while status == 0 && attempts < 20 {

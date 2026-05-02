@@ -32,7 +32,7 @@ impl TimelineManager {
     let sem_create_info = vk::SemaphoreCreateInfo::default().push_next(&mut sem_type_info);
 
     let semaphore = unsafe { device.create_semaphore(&sem_create_info, None) }
-      .map_err(|_| GpuError::InvalidState("Failed to create timeline semaphore"))?;
+      .map_err(|_| crate::gpu_err!("device error"))?;
 
     let sem_device = ash::khr::timeline_semaphore::Device::new(instance, device);
 
@@ -64,7 +64,7 @@ impl TimelineManager {
         .sem_device
         .get_semaphore_counter_value(self.semaphore.get())
     }
-    .map_err(|_| GpuError::InvalidState("Failed to get semaphore counter value"))?;
+    .map_err(|_| crate::gpu_err!("device error"))?;
 
     self
       .cached_completed_value
@@ -120,13 +120,13 @@ impl TimelineManager {
           .error
           .read()
           .clone()
-          .unwrap_or(GpuError::InvalidState("Task Failed"));
+          .unwrap_or(crate::gpu_err!("device error"));
         Err(err)
       } else {
         Ok(false)
       }
     } else {
-      Err(GpuError::InvalidArgument("Invalid task id"))
+      Err(crate::gpu_invalid_arg!("invalid argument"))
     }
   }
 
