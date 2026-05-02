@@ -25,9 +25,6 @@ public partial class App : Application
 
   public override void OnFrameworkInitializationCompleted()
   {
-    AetherVk.Logic.Services.ServiceLocator.DispatchToUI = action =>
-      Avalonia.Threading.Dispatcher.UIThread.Post(action);
-
     // CommunityToolkit has its own data validation. we don't need data validation from Avalonia Too
     var dataValidationPluginsToRemove = BindingPlugins
       .DataValidators.OfType<DataAnnotationsValidationPlugin>()
@@ -136,15 +133,72 @@ public partial class App : Application
       }
       else
       {
-        var splashWindow = new Views.SplashWindow();
+        var runtimeService = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<NativeRuntimeService>(App.Host!.Services);
+        var splashViewModel = new SplashViewModel(runtimeService);
+        var splashWindow = new Views.SplashWindow { DataContext = splashViewModel };
+
+        splashViewModel.OnInitializationCompleted += () =>
+        {
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                var mainWindowViewModel = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<MainWindowViewModel>(App.Host!.Services);
+                var mainWindow = new MainWindow { DataContext = mainWindowViewModel };
+
+                // Listen for theme changes in the ViewModel
+                mainWindowViewModel.PropertyChanged += (vmSender, vmArgs) =>
+                {
+                    if (vmArgs.PropertyName == nameof(MainWindowViewModel.CurrentTheme))
+                    {
+                        if (vmSender is MainWindowViewModel vm)
+                        {
+                            Application.Current!.RequestedThemeVariant = vm.CurrentTheme switch
+                            {
+                                AppTheme.Light => Avalonia.Styling.ThemeVariant.Light,
+                                AppTheme.Dark => Avalonia.Styling.ThemeVariant.Dark,
+                                _ => Avalonia.Styling.ThemeVariant.Default,
+                            };
+                        }
+                    }
+                };
+
+                desktop.MainWindow = mainWindow;
+                mainWindow.Show();
+                splashWindow.Close();
+            });
+        };
+
+        splashViewModel.OnInitializationFailed += (errorMessage) =>
+        {
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                var errorWindow = new Avalonia.Controls.Window
+                {
+                    Title = "Critical Failure",
+                    Width = 600,
+                    Height = 200,
+                    WindowStartupLocation = Avalonia.Controls.WindowStartupLocation.CenterScreen,
+                    Content = new Avalonia.Controls.TextBlock
+                    {
+                        Text = $"CRITICAL ERROR:\n{errorMessage}\n\nThe application cannot run without the core simulation engine.",
+                        Foreground = Avalonia.Media.Brushes.Red,
+                        FontWeight = Avalonia.Media.FontWeight.Bold,
+                        FontSize = 16,
+                        Margin = new Avalonia.Thickness(20),
+                        TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                    },
+                };
+                desktop.MainWindow = errorWindow;
+                errorWindow.Show();
+                splashWindow.Close();
+            });
+        };
+
         desktop.MainWindow = splashWindow;
+        _ = splashViewModel.InitializeAsync();
 
         desktop.Exit += (sender, args) =>
         {
-          var runtimeService =
-            ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService))
-            as NativeRuntimeService;
-          runtimeService?.Dispose();
+          runtimeService.Dispose();
           System.Environment.Exit(0);
         };
       }

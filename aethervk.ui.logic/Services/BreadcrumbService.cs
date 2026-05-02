@@ -13,7 +13,13 @@ public class BreadcrumbMessage
 
 public class BreadcrumbService
 {
+  private readonly IUiThreadDispatcher _dispatcher;
   public ObservableCollection<BreadcrumbMessage> Messages { get; } = new();
+
+  public BreadcrumbService(IUiThreadDispatcher dispatcher)
+  {
+    _dispatcher = dispatcher;
+  }
 
   public async Task ShowMessageAsync(
     string title,
@@ -34,24 +40,10 @@ public class BreadcrumbService
       Status = status,
     };
 
-    if (ServiceLocator.DispatchToUI != null)
-    {
-      ServiceLocator.DispatchToUI(() => Messages.Add(msg));
-    }
-    else
-    {
-      Messages.Add(msg);
-    }
+    _dispatcher.Dispatch(() => Messages.Add(msg));
 
     await Task.Delay(duration);
 
-    if (ServiceLocator.DispatchToUI != null)
-    {
-      ServiceLocator.DispatchToUI(() => Messages.Remove(msg));
-    }
-    else
-    {
-      Messages.Remove(msg);
-    }
+    _dispatcher.Dispatch(() => Messages.Remove(msg));
   }
 }

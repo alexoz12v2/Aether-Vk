@@ -34,9 +34,11 @@ struct ChunkWorkload<F> {
   state: Arc<ChunkedState>,
 }
 
+/// Requires `Sync` exclusively here because `F` is inherently wrapped in an `Arc` for threading dispatch
+/// closure has to be potentially `static cause threads might live forever. Any attempt to shorten
+/// lifetime of this closure should be done through type erasure
 impl<F> Workload for ChunkWorkload<F>
 where
-  // Requires `Sync` exclusively here because `F` is inherently wrapped in an `Arc` for threading dispatch
   F: Fn(usize) + Send + Sync + 'static,
 {
   fn execute(&mut self) -> WorkloadStatus {

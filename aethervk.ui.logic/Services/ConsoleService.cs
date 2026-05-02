@@ -21,8 +21,11 @@ public class ConsoleService : ObservableObject, IDisposable
   // Prevent overlapping timer executions if the thread pool is busy
   private int _isFlushing;
 
-  public ConsoleService()
+  private readonly IUiThreadDispatcher? _uiThreadDispatcher;
+
+  public ConsoleService(IUiThreadDispatcher? uiThreadDispatcher = null)
   {
+    _uiThreadDispatcher = uiThreadDispatcher;
     _flushTimer = new Timer(FlushMessages, null, 100, 100);
   }
 
@@ -68,8 +71,8 @@ public class ConsoleService : ObservableObject, IDisposable
         batch.RemoveRange(0, batch.Count - MaxLogLines);
       }
 
-      if (ServiceLocator.DispatchToUI != null)
-        ServiceLocator.DispatchToUI(UpdateUi);
+      if (_uiThreadDispatcher != null)
+        _uiThreadDispatcher.Dispatch(UpdateUi);
       else
         UpdateUi();
 
@@ -101,9 +104,9 @@ public class ConsoleService : ObservableObject, IDisposable
     _messageQueue.Clear();
 #endif
 
-    if (ServiceLocator.DispatchToUI != null)
+    if (_uiThreadDispatcher != null)
     {
-      ServiceLocator.DispatchToUI(ClearUi);
+      _uiThreadDispatcher.Dispatch(ClearUi);
     }
     else
     {

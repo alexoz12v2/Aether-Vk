@@ -12,9 +12,10 @@ public class OutlineViewModelTests
   public void SelectionChanged_SendsMessage()
   {
     // Arrange
-    var runtimeService = new NativeRuntimeService(new SceneStateManager());
-    var outlineVm = new OutlineViewModel(runtimeService);
-    var entity = new Entity(1, "TestEntity", "test", "entity");
+    var stateManager = new SceneStateManager();
+    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>(); dispatcherMock.Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>())).Callback<System.Action>(a => a()); var runtimeService = new NativeRuntimeService(stateManager, new ConsoleService(dispatcherMock.Object), new BreadcrumbService(dispatcherMock.Object), dispatcherMock.Object);
+    var outlineVm = new OutlineViewModel(1, runtimeService, stateManager);
+    var entity = new Entity(1, 100, "TestEntity");
 
     EntitySelectedMessage? receivedMessage = null;
     WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(

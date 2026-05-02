@@ -375,14 +375,6 @@ impl test_utils::app::App for ParticleApp {
 }
 
 fn render_function(device: &dyn RenderDevice, payload: &mut RenderPayloadData) -> GpuResult<()> {
-  let mut render_scene = scene_to_render_scene(
-    &payload.scene,
-    device,
-    payload.presentation_engine,
-    payload.camera_entity,
-    false,
-  )?;
-
   device.start_frame()?;
   let acquire_result = device.acquire_next_image(payload.presentation_engine)?;
   if acquire_result.status.needs_resize() {
@@ -397,6 +389,14 @@ fn render_function(device: &dyn RenderDevice, payload: &mut RenderPayloadData) -
 
   let cmd_buffer = device.get_command_buffer()?;
   let cmd_guard = ScopedCommandBuffer::new(device, cmd_buffer, None)?;
+  let mut render_scene = scene_to_render_scene(
+    &payload.scene,
+    device,
+    payload.presentation_engine,
+    payload.camera_entity,
+    false,
+    cmd_buffer,
+  )?;
 
   device.upload_particle_systems(cmd_buffer, &mut render_scene.particle_calls)?;
 
@@ -412,7 +412,12 @@ fn render_function(device: &dyn RenderDevice, payload: &mut RenderPayloadData) -
   device.set_viewport(cmd_buffer, &gpu::Viewport::from_extent(extent))?;
   device.set_scissor(cmd_buffer, &gpu::Rect2D::from_extent(extent))?;
 
-  device.render_frame(cmd_buffer, &render_scene)?;
+  gpu::frame::render_frame(
+    device,
+    cmd_buffer,
+    &render_scene,
+    payload.presentation_engine,
+  )?;
 
   // defuse of drop guards (Order *must* be like this)
   render_pass_guard.end()?;

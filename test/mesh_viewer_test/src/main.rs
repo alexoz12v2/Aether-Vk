@@ -383,16 +383,10 @@ impl test_utils::app::App for MeshApp {
     let res = self
       .render_frontend
       .with_device(self.render_device_handle, |device| {
-        let render_scene = scene_to_render_scene(
-          &self.app_state.scene,
-          device,
-          self.presentation_engine,
-          self.camera_entity,
-          false,
-        )?;
         render_function(
           device,
-          render_scene,
+          &self.app_state.scene,
+          self.camera_entity,
           self.presentation_engine,
           [self.width, self.height],
         )
@@ -405,7 +399,8 @@ impl test_utils::app::App for MeshApp {
 
 fn render_function(
   device: &dyn RenderDevice,
-  render_scene: RenderScene,
+  scene: &Scene,
+  camera_entity: EntityId,
   presentation_engine_handle: PresentationEngineHandle,
   screen_extent: [u32; 2],
 ) -> GpuResult<()> {
@@ -423,7 +418,15 @@ fn render_function(
 
   let cmd_buffer = device.get_command_buffer()?;
   let cmd_guard = ScopedCommandBuffer::new(device, cmd_buffer, None)?;
-  device.begin_command_buffer(cmd_buffer)?;
+  let render_scene = scene_to_render_scene(
+    &scene,
+    device,
+    presentation_engine_handle,
+    camera_entity,
+    false,
+    cmd_buffer,
+  )?;
+
   if let Some(sun_call) = &render_scene.sun_call {
     // TODO move to kernels
     device.update_sun(cmd_buffer, sun_call.entity, (128, 128, 128))?;
@@ -435,7 +438,12 @@ fn render_function(
   device.set_viewport(cmd_buffer, &gpu::Viewport::from_extent(extent))?;
   device.set_scissor(cmd_buffer, &gpu::Rect2D::from_extent(extent))?;
 
-  device.render_frame(cmd_buffer, &render_scene)?;
+  gpu::frame::render_frame(
+    device,
+    cmd_buffer,
+    &render_scene,
+    presentation_engine_handle,
+  )?;
 
   // defuse of drop guards (Order *must* be like this)
   render_pass_guard.end()?;

@@ -93,7 +93,7 @@ fn process_command(
     RenderCommand::RenderFrame(render_frame) => {
       // The FFI Caller thread, before launching this command, should have already
       // updated the camera's projection matrix.
-      let extracted_scene = render_frame.extract_scene()?;
+      let extracted_scene = render_frame.extract_scene(Some(&ctx.thread_pool))?;
       let task_id = render_frame.task_id;
       let is_first_render =
         if first_render_map.contains_key(&render_frame.presentation_engine_handle) {
@@ -250,11 +250,11 @@ fn do_render_scene_async(
 
 // TODO possibly, group by pipeline if necessary
 impl super::structs::RenderFrame {
-  pub fn extract_scene(&self) -> GpuResult<RenderSceneExtraction> {
+  pub fn extract_scene(&self, pool: Option<&oshal::os::pool::ThreadPool>) -> GpuResult<RenderSceneExtraction> {
     let scene = self.scene.read();
     scene
       .scene
-      .convert_scene(self.camera_entity, self.render_physical_meshes_outline)
+      .convert_scene(self.camera_entity, self.render_physical_meshes_outline, pool)
   }
 }
 

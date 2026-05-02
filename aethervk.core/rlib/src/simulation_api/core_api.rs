@@ -19,6 +19,8 @@ use oshal::{
 use alloc::{boxed::Box, sync::Arc, collections::BTreeSet};
 use core::{num::NonZero, ptr::addr_of_mut};
 use spin::RwLock;
+use aethervk_oshal_rlib::os::native::this_thread;
+use aethervk_oshal_rlib::os::time::{TimeInfo, TimeReadings};
 use crate::simulation_api::structs::CustomRenderCallback;
 // TODO add scene validate
 
@@ -29,10 +31,24 @@ impl SimulationContext {
   const INITIAL_FIXED_DELTA_TIME: timeus_t = timeus_milliseconds(16);
   const INITIAL_TIME_SCALE: f32 = 1.0;
 
-  pub fn startup(backend: gpu::RenderBackendId, error_debug_callback: Option<fn(&str)>) -> EngineResult<Box<SimulationContext>> {
+  pub fn startup(
+    backend: gpu::RenderBackendId,
+    error_debug_callback: Option<fn(&str)>,
+  ) -> EngineResult<Box<SimulationContext>> {
+    let render_thread_time_info = Arc::new(RwLock::new(os::time::TimeInfo::new(
+      Self::INITIAL_FIXED_DELTA_TIME,
+      Self::INITIAL_MAXIMUM_DELTA_TIME,
+      Self::INITIAL_TIME_SCALE,
+    )));
+    let logic_thread_time_info = Arc::clone(&render_thread_time_info);
+    let simulation_context_time_info = Arc::clone(&render_thread_time_info);
+    debug_assert_eq!(Arc::strong_count(&simulation_context_time_info), 3);
+
     let mut boxed_uninit = Box::<SimulationContext>::new_uninit();
     unsafe {
       let ptr = boxed_uninit.as_mut_ptr();
+
+      addr_of_mut!((*ptr).time_info).write(simulation_context_time_info);
 
       // 1. Initialize scene data
       let scenes = Arc::new(RwLock::new(SimulationSceneData::new()));
@@ -49,12 +65,6 @@ impl SimulationContext {
       let render_thread_thread_pool =
         Arc::new(os::pool::ThreadPool::new(Self::NUM_WORKERS).map_err(|e| EngineError::from(e))?);
       let logic_thread_thread_pool = Arc::clone(&render_thread_thread_pool);
-      let render_thread_time_info = Arc::new(RwLock::new(os::time::TimeInfo::new(
-        Self::INITIAL_FIXED_DELTA_TIME,
-        Self::INITIAL_MAXIMUM_DELTA_TIME,
-        Self::INITIAL_TIME_SCALE,
-      )));
-      let logic_thread_time_info = Arc::clone(&render_thread_time_info);
 
       let logic_state = Arc::new(RwLock::new(LogicState::default()));
       addr_of_mut!((*ptr).logic_state).write(Arc::clone(&logic_state));
@@ -241,7 +251,7 @@ impl SimulationContext {
   }
 
   pub fn set_active_camera(&self, scene_id: u64, camera: u64) -> EngineResult<()> {
-    let (mut scene, entity_id) = expect_scene_and_entity!(
+    let (scene, entity_id) = expect_scene_and_entity!(
       self.get_scene(scene_id),
       camera,
       "core_api:set_active_camera"
@@ -264,5 +274,57 @@ impl SimulationContext {
         user_data,
       })
       .map_err(|_| EngineError::InvalidOperation("logic thread closed"))
+  }
+}
+
+pub trait SimulationContextExt {
+  /// Waits until a given task is completed (status 1) or failed (status 2).
+  fn wait_for_task(&self, task_id: core::num::NonZero<u64>);
+
+  /// Governs the frame rate to ensure the main loop doesn't exceed the target frame time
+  /// and waits for necessary tasks to complete before proceeding with the next frame.
+  fn govern_frame_rate_and_tasks(
+    &self,
+    last_sim_tick: &mut Option<core::num::NonZero<u64>>,
+    last_render_tick: &mut Option<core::num::NonZero<u64>>,
+    time_readings: TimeReadings,
+    target_frame_time: timeus_t,
+  );
+}
+
+impl SimulationContextExt for SimulationContext {
+  fn wait_for_task(&self, task_id: core::num::NonZero<u64>) {
+    loop {
+      let status = self.get_task_status(task_id.get());
+      if status == 1 || status == 2 {
+        break; // completed or failed
+      }
+      this_thread::yield_now();
+    }
+  }
+
+  fn govern_frame_rate_and_tasks(
+    &self,
+    last_sim_tick: &mut Option<core::num::NonZero<u64>>,
+    last_render_tick: &mut Option<core::num::NonZero<u64>>,
+    time_readings: TimeReadings,
+    target_frame_time: timeus_t,
+  ) {
+    let elapsed = time_readings.delta_time;
+    if elapsed < target_frame_time {
+      this_thread::sleep_for(core::time::Duration::from_nanos(
+        (target_frame_time - elapsed) as u64,
+      ))
+    }
+
+    // Wait for the previous simulation tick to complete
+    if let Some(sim_tick) = last_sim_tick {
+      self.wait_for_task(*sim_tick);
+    }
+
+    // Wait for the previous render tick to complete
+    if let Some(render_tick) = last_render_tick {
+      self.wait_for_task(*render_tick);
+    }
   }
 }

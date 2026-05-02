@@ -279,6 +279,7 @@ pub trait SceneConversionExt {
     &self,
     camera_entity: EntityId,
     render_outline: bool,
+    pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>,
   ) -> GpuResult<RenderSceneExtraction>;
 }
 
@@ -287,6 +288,7 @@ impl SceneConversionExt for crate::scene::Scene {
     &self,
     camera_entity: EntityId,
     render_outline: bool,
+    pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>,
   ) -> GpuResult<RenderSceneExtraction> {
     const START_VEC_CAPACITY: usize = 32;
     let mut extracted_meshes: Vec<PhysicalMeshSceneData> = Vec::with_capacity(START_VEC_CAPACITY);
@@ -331,73 +333,166 @@ impl SceneConversionExt for crate::scene::Scene {
       .map(|(t, id)| t);
 
     // Meshes
-    self.query1_without::<_, HiddenComponent, _>(|id, mesh: &PhysicalMeshComponent| {
-      if let Some(t) = self.global_transform(id) {
-        let mesh_clone = mesh.clone();
-        let is_selected: bool = self.has_component::<SelectedComponent>(id).into();
-        let is_following: bool = self.has_component::<FollowingComponent>(id).into();
-        let outline = get_mesh_outline(is_selected, is_following, render_outline);
-        let m = PhysicalMeshSceneData::new(id, mesh_clone, t, outline);
-        // BVH debug rendering
-        let bvh = m
-          .mesh
-          .mesh
-          .bvh
-          .as_ref()
-          .map(|bvh| &bvh.nodes)
-          .and_then(|nodes| {
-            let bvh_dbg_states = {
-              let mut dbg_states = None;
-              self.with_component(id, |dbg: &BvhDebugComponent| {
-                dbg_states = Some(dbg.node_render_states.clone());
-              });
-              dbg_states
-            };
-            if let Some(bvh_dbg_states) = bvh_dbg_states {
-              Some((nodes, bvh_dbg_states))
-            } else {
-              None
-            }
-          });
-        if let Some((nodes, states)) = bvh {
-          extracted_bvhs.push((Vec::with_capacity(nodes.len()), extracted_meshes.len()));
-          let inserted_bvh = extracted_bvhs.last_mut().unwrap();
-          states
-            .iter()
-            .zip(nodes.iter())
-            .filter(|&(show, _)| *show)
-            .for_each(|(_, node)| {
-              inserted_bvh.0.push(node.bound.clone());
+    let should_par = self.should_parallelize() && pool.is_some();
+    if should_par {
+      let results = self.query1_res_without_par::<PhysicalMeshComponent, HiddenComponent, _, _>(pool.unwrap(), |id, mesh| {
+        if let Some(t) = self.global_transform(id) {
+          let mesh_clone = mesh.clone();
+          let is_selected: bool = self.has_component::<SelectedComponent>(id).into();
+          let is_following: bool = self.has_component::<FollowingComponent>(id).into();
+          let outline = get_mesh_outline(is_selected, is_following, render_outline);
+          let m = PhysicalMeshSceneData::new(id, mesh_clone, t, outline);
+          // BVH debug rendering
+          let bvh = m
+            .mesh
+            .mesh
+            .bvh
+            .as_ref()
+            .map(|bvh| &bvh.nodes)
+            .and_then(|nodes| {
+              let bvh_dbg_states = {
+                let mut dbg_states = None;
+                self.with_component(id, |dbg: &BvhDebugComponent| {
+                  dbg_states = Some(dbg.node_render_states.clone());
+                });
+                dbg_states
+              };
+              if let Some(bvh_dbg_states) = bvh_dbg_states {
+                Some((nodes, bvh_dbg_states))
+              } else {
+                None
+              }
             });
+            
+          let bvh_data = if let Some((nodes, states)) = bvh {
+            let mut extracted = Vec::with_capacity(nodes.len());
+            states
+              .iter()
+              .zip(nodes.iter())
+              .filter(|&(show, _)| *show)
+              .for_each(|(_, node)| {
+                extracted.push(node.bound.clone());
+              });
+            Some(extracted)
+          } else {
+            None
+          };
+          
+          Some((m, bvh_data))
+        } else {
+          None
+        }
+      });
+      for ((m, bvh_data), _) in results {
+        if let Some(bvh) = bvh_data {
+          extracted_bvhs.push((bvh, extracted_meshes.len()));
         }
         extracted_meshes.push(m);
       }
-    });
+    } else {
+      self.query1_without::<_, HiddenComponent, _>(|id, mesh: &PhysicalMeshComponent| {
+        if let Some(t) = self.global_transform(id) {
+          let mesh_clone = mesh.clone();
+          let is_selected: bool = self.has_component::<SelectedComponent>(id).into();
+          let is_following: bool = self.has_component::<FollowingComponent>(id).into();
+          let outline = get_mesh_outline(is_selected, is_following, render_outline);
+          let m = PhysicalMeshSceneData::new(id, mesh_clone, t, outline);
+          // BVH debug rendering
+          let bvh = m
+            .mesh
+            .mesh
+            .bvh
+            .as_ref()
+            .map(|bvh| &bvh.nodes)
+            .and_then(|nodes| {
+              let bvh_dbg_states = {
+                let mut dbg_states = None;
+                self.with_component(id, |dbg: &BvhDebugComponent| {
+                  dbg_states = Some(dbg.node_render_states.clone());
+                });
+                dbg_states
+              };
+              if let Some(bvh_dbg_states) = bvh_dbg_states {
+                Some((nodes, bvh_dbg_states))
+              } else {
+                None
+              }
+            });
+          if let Some((nodes, states)) = bvh {
+            extracted_bvhs.push((Vec::with_capacity(nodes.len()), extracted_meshes.len()));
+            let inserted_bvh = extracted_bvhs.last_mut().unwrap();
+            states
+              .iter()
+              .zip(nodes.iter())
+              .filter(|&(show, _)| *show)
+              .for_each(|(_, node)| {
+                inserted_bvh.0.push(node.bound.clone());
+              });
+          }
+          extracted_meshes.push(m);
+        }
+      });
+    }
 
     // Markers
-    self.query1_without::<_, HiddenComponent, _>(|id, m: &MarkersComponent| {
-      if let Some(t) = self.global_transform(id) {
-        extracted_markers.push((t, m.clone()));
+    if should_par {
+      let results = self.query1_res_without_par::<MarkersComponent, HiddenComponent, _, _>(pool.unwrap(), |id, m| {
+        self.global_transform(id).map(|t| (t, m.clone()))
+      });
+      for (res, _) in results {
+        extracted_markers.push(res);
       }
-    });
+    } else {
+      self.query1_without::<_, HiddenComponent, _>(|id, m: &MarkersComponent| {
+        if let Some(t) = self.global_transform(id) {
+          extracted_markers.push((t, m.clone()));
+        }
+      });
+    }
 
     // Measurements
-    self.query1_without::<_, HiddenComponent, _>(|id, m: &MeasurementComponent| {
-      if let Some(t) = self.global_transform(id) {
-        let mat: Mat4x4f32 = t.to_mat4();
-        let p1 = Vec3f32(mat.mul_vector(m.pos1.to_point()));
-        let p2 = Vec3f32(mat.mul_vector(m.pos2.to_point()));
-        extracted_measurements.push((p1, p2, m.points, m.significant_digits));
+    if should_par {
+      let results = self.query1_res_without_par::<MeasurementComponent, HiddenComponent, _, _>(pool.unwrap(), |id, m| {
+        self.global_transform(id).map(|t| {
+          let mat: Mat4x4f32 = t.to_mat4();
+          let p1 = Vec3f32(mat.mul_vector(m.pos1.to_point()));
+          let p2 = Vec3f32(mat.mul_vector(m.pos2.to_point()));
+          (p1, p2, m.points, m.significant_digits)
+        })
+      });
+      for (res, _) in results {
+        extracted_measurements.push(res);
       }
-    });
+    } else {
+      self.query1_without::<_, HiddenComponent, _>(|id, m: &MeasurementComponent| {
+        if let Some(t) = self.global_transform(id) {
+          let mat: Mat4x4f32 = t.to_mat4();
+          let p1 = Vec3f32(mat.mul_vector(m.pos1.to_point()));
+          let p2 = Vec3f32(mat.mul_vector(m.pos2.to_point()));
+          extracted_measurements.push((p1, p2, m.points, m.significant_digits));
+        }
+      });
+    }
 
     // Billboards
-    self.query1_without::<_, HiddenComponent, _>(|id, i: &ImageBillboardComponent| {
-      if let Some(t) = self.global_transform(id) {
-        let mat: Mat4x4f32 = t.to_mat4();
-        extracted_billboards.push((mat, i.texture_id, i.billboard_type));
+    if should_par {
+      let results = self.query1_res_without_par::<ImageBillboardComponent, HiddenComponent, _, _>(pool.unwrap(), |id, i| {
+        self.global_transform(id).map(|t| {
+          let mat: Mat4x4f32 = t.to_mat4();
+          (mat, i.texture_id, i.billboard_type)
+        })
+      });
+      for (res, _) in results {
+        extracted_billboards.push(res);
       }
-    });
+    } else {
+      self.query1_without::<_, HiddenComponent, _>(|id, i: &ImageBillboardComponent| {
+        if let Some(t) = self.global_transform(id) {
+          let mat: Mat4x4f32 = t.to_mat4();
+          extracted_billboards.push((mat, i.texture_id, i.billboard_type));
+        }
+      });
+    }
 
     // Sun
     extracted_sun = self.query2_first_res_without::<_, _, HiddenComponent, _, _>(

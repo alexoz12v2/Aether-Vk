@@ -1,4 +1,5 @@
-use crate::os::{FsError, fs::Path};
+use crate::os;
+use crate::os::{FsError, fs::Path, NativeResult, NativeError};
 
 pub struct MappedFile {
   ptr: *mut core::ffi::c_void,
@@ -213,3 +214,176 @@ impl core::borrow::Borrow<[u8]> for MappedFile {
     self.as_slice()
   }
 }
+
+/// A cross-platform zero-copy memory mappeed file abstraction
+pub struct Mmap {
+  ptr: *mut u8,
+  len: usize,
+}
+
+// memory mappings are thread safe for immutable read-only access
+unsafe impl Send for Mmap {}
+unsafe impl Sync for Mmap {}
+
+// Required by `bytes::Bytes::from_owner()` so it knows the extent of the memory region
+impl AsRef<[u8]> for Mmap {
+  #[inline]
+  fn as_ref(&self) -> &[u8] {
+    if self.len == 0 {
+      &[]
+    } else {
+      unsafe { core::slice::from_raw_parts(self.ptr as *const u8, self.len) }
+    }
+  }
+}
+
+#[cfg(target_family = "unix")]
+impl Mmap {
+  pub fn open<P: AsRef<os::fs::Path>>(path: P) -> NativeResult<Self> {
+    use libc::{open, fstat, mmap, close, O_RDONLY, PROT_READ, MAP_PRIVATE, MAP_FAILED};
+    use core::{mem, ptr};
+    use alloc::string::{ToString};
+
+    let path_str = path
+      .as_ref()
+      .to_str_unified()
+      .ok_or(NativeError::InvalidArgument)?
+      .to_string();
+    let c_path = alloc::ffi::CString::new(path_str).map_err(|_| NativeError::InvalidArgument)?;
+    let fd = unsafe { open(c_path.as_ptr(), O_RDONLY) };
+    if fd < 0 {
+      return Err(NativeError::OsFsError(FsError::CouldNotOpenFile));
+    }
+
+    let mut stat_buf: libc::stat = unsafe { mem::zeroed() };
+    if unsafe { fstat(fd, &mut stat_buf) } != 0 {
+      unsafe { close(fd) };
+      return Err(NativeError::OsFsError(FsError::CouldNotGetFileSize));
+    }
+
+    let size = stat_buf.st_size as usize;
+    if size == 0 {
+      unsafe { close(fd) };
+      return Ok(Self {
+        ptr: ptr::NonNull::dangling().as_ptr(),
+        len: 0,
+      });
+    }
+
+    let ptr = unsafe { mmap(ptr::null_mut(), size, PROT_READ, MAP_PRIVATE, fd, 0) };
+    // POSIX docs: mapping survives even after closing the file descriptor
+    unsafe { close(fd) };
+
+    if ptr == MAP_FAILED {
+      return Err(NativeError::OsFsError(FsError::CouldNotReadFile));
+    }
+    Ok(Self {
+      ptr: ptr as *mut u8,
+      len: size,
+    })
+  }
+}
+
+#[cfg(target_family = "unix")]
+impl Drop for Mmap {
+  fn drop(&mut self) {
+    if self.len > 0 {
+      unsafe { libc::munmap(self.ptr as *mut libc::c_void, self.len) };
+    }
+  }
+}
+
+#[cfg(windows)]
+impl Mmap {
+  pub fn open<P: AsRef<os::fs::Path>>(path: P) -> NativeResult<Self> {
+    use windows::Win32::Storage::FileSystem::{
+      CreateFileW, GetFileSizeEx, FILE_SHARE_READ, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+    };
+    use windows::Win32::Foundation::{GENERIC_READ, CloseHandle, INVALID_HANDLE_VALUE};
+    use windows::Win32::System::Memory::{
+      CreateFileMappingW, MapViewOfFile, PAGE_READONLY, FILE_MAP_READ,
+    };
+    let path = {
+      let mut p: alloc::vec::Vec<u16> = path
+        .as_ref()
+        .to_str_unified()
+        .map(|cow| cow.into_string().encode_utf16().collect())
+        .ok_or(NativeError::InvalidArgument)?;
+      p.push(0u16);
+      p
+    };
+    let handle = unsafe {
+      CreateFileW(
+        windows::core::PCWSTR(path.as_ptr()),
+        GENERIC_READ.0,
+        FILE_SHARE_READ,
+        None,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        None,
+      )
+    }
+    .map_err(|_| NativeError::OsFsError(FsError::CouldNotOpenFile))?;
+
+    if handle == INVALID_HANDLE_VALUE || handle.is_invalid() {
+      return Err(NativeError::OsFsError(FsError::CouldNotOpenFile));
+    }
+
+    let size = {
+      let mut sz: i64 = 0;
+      if unsafe { GetFileSizeEx(handle, &mut sz) }.is_err() {
+        let _ = unsafe { CloseHandle(handle) };
+        return Err(NativeError::OsFsError(FsError::CouldNotGetFileSize));
+      }
+      sz as usize
+    };
+
+    if size == 0 {
+      let _ = unsafe { CloseHandle(handle) };
+      return Ok(Self {
+        ptr: core::ptr::NonNull::dangling().as_ptr(),
+        len: 0,
+      });
+    }
+
+    let mapping = unsafe {
+      CreateFileMappingW(handle, None, PAGE_READONLY, 0, 0, None).map_err(|_| {
+        let _ = CloseHandle(handle);
+        NativeError::OsFsError(FsError::CouldNotReadFile)
+      })?
+    };
+
+    // View retains reference to the mapping. It is safe to close the file
+    let _ = unsafe { CloseHandle(handle) };
+
+    let view = unsafe { MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0) };
+
+    // Mapped memory view holds reference to mapping. Close mapping
+    let _ = unsafe { CloseHandle(mapping) };
+
+    if view.Value.is_null() {
+      return Err(NativeError::OsFsError(FsError::CouldNotReadFile));
+    }
+
+    Ok(Self {
+      ptr: view.Value as *mut u8,
+      len: size,
+    })
+  }
+}
+
+#[cfg(windows)]
+impl Drop for Mmap {
+  fn drop(&mut self) {
+    if self.len > 0 {
+      use windows::Win32::System::Memory::{UnmapViewOfFile, MEMORY_MAPPED_VIEW_ADDRESS};
+      unsafe {
+        let _ = UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
+          Value: self.ptr as *mut core::ffi::c_void,
+        });
+      }
+    }
+  }
+}
+
+// TODO add tests for Mmap

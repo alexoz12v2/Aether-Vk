@@ -3,7 +3,7 @@
 use core::time::Duration;
 
 #[cfg(windows)]
-use windows::Win32::System::Threading::{GetCurrentThreadId, Sleep};
+use windows::Win32::System::Threading::{GetCurrentThreadId, Sleep, SwitchToThread};
 #[cfg(any(unix, target_os = "macos"))]
 use libc;
 
@@ -25,6 +25,18 @@ pub mod this_thread {
     }
 
     id
+  }
+
+  /// different than [`core::hint::spin_loop`], which instead inserts instructions such as pause.
+  pub fn yield_now() {
+    #[cfg(target_family = "unix")]
+    {
+      unsafe { libc::sched_yield() };
+    }
+    #[cfg(windows)]
+    {
+      let _ = unsafe { SwitchToThread() };
+    }
   }
 
   pub fn sleep_for(duration: Duration) {

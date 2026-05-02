@@ -21,8 +21,8 @@ public class HorizonJplEducationalTests
   {
     _output = output;
     // Mocking services for testing purposes
-    var console = new ConsoleService();
-    var breadcrumb = new BreadcrumbService();
+    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>(); dispatcherMock.Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>())).Callback<System.Action>(a => a()); var console = new ConsoleService(dispatcherMock.Object);
+    var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
     _service = new HorizonJplService(console, breadcrumb);
   }
 

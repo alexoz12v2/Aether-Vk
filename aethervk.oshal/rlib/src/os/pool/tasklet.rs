@@ -41,6 +41,8 @@ struct ClosureWorkload<F, R> {
   tasklet_id: Option<usize>,
 }
 
+/// closure has to be potentially `static cause threads might live forever. Any attempt to shorten
+/// lifetime of this closure should be done through type erasure
 impl<F, R> Workload for ClosureWorkload<F, R>
 where
   F: FnOnce() -> R + Send + 'static,

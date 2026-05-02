@@ -200,18 +200,23 @@ public static class NativeInterop
   public struct FfiBvhNode
   {
     public uint NodeType;
+
     public float MinX,
       MinY,
       MinZ;
+
     public float MaxX,
       MaxY,
       MaxZ;
+
     public float CenterX,
       CenterY,
       CenterZ;
+
     public float ExtentsX,
       ExtentsY,
       ExtentsZ;
+
     public uint LeftChild;
     public uint RightChild;
     public uint PrimitiveCount;
@@ -310,7 +315,7 @@ public static class NativeInterop
   public static extern ulong avkSimulationContext_loadAlmanacFile(IntPtr ctx, string path);
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
-  public static extern ulong avkSimulationContext_loadCometSpk(IntPtr ctx, string path, uint spkid);
+  public static extern ulong avkSimulationContext_loadCometSpk(IntPtr ctx, int spkid, string epoch_raw);
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_importModel(IntPtr ctx, string path);
@@ -451,9 +456,9 @@ public static class NativeInterop
   [StructLayout(LayoutKind.Sequential)]
   public struct FfiRaycastResult
   {
-    [MarshalAs(UnmanagedType.I1)]
-    public bool Hit;
+    [MarshalAs(UnmanagedType.I1)] public bool Hit;
     public ulong Entity;
+
     public float Px,
       Py,
       Pz;
@@ -465,6 +470,25 @@ public static class NativeInterop
     IntPtr ctx,
     ulong taskId,
     out FfiRaycastResult result
+  );
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct FfiKinematicState
+  {
+    public float PosX, PosY, PosZ;
+    public float VelX, VelY, VelZ;
+    [MarshalAs(UnmanagedType.I1)] public bool HasRotation;
+    public float RotW, RotX, RotY, RotZ;
+    [MarshalAs(UnmanagedType.I1)] public bool HasAngularVelocity;
+    public float AngVelX, AngVelY, AngVelZ;
+  }
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_getTaskResultKinematicState(
+    IntPtr ctx,
+    ulong taskId,
+    out FfiKinematicState result
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -551,10 +575,20 @@ public static class NativeInterop
     ulong entityId
   );
 
+#if NETSTANDARD2_0
   [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+#else // .NET (Core) 10
+  [UnmanagedCallersOnly(CallConvs =
+ new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
+#endif
   public delegate void LoggerCallback(IntPtr message);
 
+#if NETSTANDARD2_0
   [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+#else // .NET (Core) 10
+  [UnmanagedCallersOnly(CallConvs =
+ new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
+#endif
   public delegate void BreadcrumbCallback(uint status, IntPtr message);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

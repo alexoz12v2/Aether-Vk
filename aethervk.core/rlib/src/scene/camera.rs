@@ -68,8 +68,8 @@ impl SceneCameraExt for Scene {
     self
       .with_component_mut(camera_entity, |t: &mut TransformComponent| {
         let distance = {
-          let v = center_pos - t.position;
-          if v.length_squared() < 0.01 {
+          let v = t.position - center_pos;
+          if v.length_squared() > 0.001 {
             v.length()
           } else {
             0.1_f32

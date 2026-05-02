@@ -3,17 +3,19 @@ use aethervk_core_rlib::simulation_api::structs::*;
 use aethervk_oshal_rlib as oshal;
 use core::ffi::{c_char, CStr};
 use alloc::{boxed::Box, string::ToString};
+use core::str::FromStr;
 use aethervk_core_rlib::gpu;
 use aethervk_core_rlib::math::collision::linear_bvh;
 use aethervk_core_rlib::math::collision::linear_bvh::LinearBVHNode;
 use aethervk_core_rlib::scene::Marker;
+use aethervk_core_rlib::simulation::almanac::SUN_ECLIPJ200;
 use aethervk_core_rlib::simulation_api::components_api::{
   CameraParams, OrthographicCameraParams, PerspectiveCameraParams,
 };
 use aethervk_core_rlib::types::EngineError;
 use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
 use aethervk_oshal_rlib::math::vector::vec4::Quat;
-use aethervk_oshal_rlib::math::vector::Vector3;
+use aethervk_oshal_rlib::math::vector::{Vector3, Vector4};
 // -------------------- C Exposed API (Async & Stateless) ----------------------------
 
 fn backend_id_from_str(backend_std: &str) -> Option<gpu::RenderBackendId> {
@@ -107,6 +109,20 @@ pub unsafe extern "C" fn avkSimulationContext_getTaskResultRaycast(
   }
   let ctx_ref = unsafe { &*ctx };
   ctx_ref.get_task_result_raycast(task_id, out_hit)
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getTaskResultKinematicState(
+  ctx: *mut SimulationContext,
+  task_id: u64,
+  out_state: *mut FfiKinematicState,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.get_task_result_kinematic_state(task_id, out_state)
 }
 
 // --- Scene Management ---
@@ -455,18 +471,30 @@ pub unsafe extern "C" fn avkSimulationContext_loadAlmanacFile(
   task_id
 }
 
+// TODO C# side: builder/helper functions for strings suppoerted by `anise::time::Epoch::from_str("2024-03-24 12:00:00 TDB")`
+// alternative (nah): Epoch::from_gregorian_utc_at_midnight(2000, 1, 1). But string is more precise
+// TODO C# side: update
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_loadCometSpk(
   ctx: *mut SimulationContext,
-  path: *const c_char,
-  spkid: u32,
+  spk_id: i32,
+  epoch_raw: *const c_char,
 ) -> u64 {
-  if ctx.is_null() || path.is_null() {
+  if ctx.is_null() || epoch_raw.is_null() {
     return 0;
   }
+  let epoch_opt = unsafe { CStr::from_ptr(epoch_raw) }
+    .to_str()
+    .ok()
+    .and_then(|epoch_str| anise::time::Epoch::from_str(epoch_str).ok());
+  if epoch_opt.is_none() {
+    // TODO log/breadcrumb?
+    return 0;
+  }
+  let epoch = unsafe { epoch_opt.unwrap_unchecked() };
   let ctx_ref = unsafe { &*ctx };
-  let path_str = unsafe { CStr::from_ptr(path).to_str().unwrap_or("").to_string() };
+
   let task_id = ctx_ref.task_manager.write().create_task().get();
   let _ = ctx_ref
     .threads
@@ -474,8 +502,9 @@ pub unsafe extern "C" fn avkSimulationContext_loadCometSpk(
     .tx()
     .try_send(structs::LogicCommand::LoadCometSpk {
       task_id,
-      path: path_str,
-      spkid,
+      spk_id,
+      frame: SUN_ECLIPJ200,
+      epoch,
     });
   task_id
 }
@@ -1294,6 +1323,65 @@ impl From<RaycastResult> for FfiRaycastResult {
       res.px = hit.p.x();
       res.py = hit.p.y();
       res.pz = hit.p.z();
+    }
+
+    res
+  }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct FfiKinematicState {
+  pub pos_x: f32,
+  pub pos_y: f32,
+  pub pos_z: f32,
+  pub vel_x: f32,
+  pub vel_y: f32,
+  pub vel_z: f32,
+  pub has_rotation: bool,
+  pub rot_w: f32,
+  pub rot_x: f32,
+  pub rot_y: f32,
+  pub rot_z: f32,
+  pub has_angular_velocity: bool,
+  pub ang_vel_x: f32,
+  pub ang_vel_y: f32,
+  pub ang_vel_z: f32,
+}
+
+impl From<aethervk_core_rlib::simulation::almanac::KinematicState> for FfiKinematicState {
+  fn from(value: aethervk_core_rlib::simulation::almanac::KinematicState) -> Self {
+    let mut res = Self {
+      pos_x: value.position.x(),
+      pos_y: value.position.y(),
+      pos_z: value.position.z(),
+      vel_x: value.velocity.x(),
+      vel_y: value.velocity.y(),
+      vel_z: value.velocity.z(),
+      has_rotation: false,
+      rot_w: 1.0,
+      rot_x: 0.0,
+      rot_y: 0.0,
+      rot_z: 0.0,
+      has_angular_velocity: false,
+      ang_vel_x: 0.0,
+      ang_vel_y: 0.0,
+      ang_vel_z: 0.0,
+    };
+
+    if let Some(rot) = value.rotation {
+      res.has_rotation = true;
+      res.rot_w = rot.0.w();
+      res.rot_x = rot.0.x();
+      res.rot_y = rot.0.y();
+      res.rot_z = rot.0.z();
+    }
+
+    if let Some(ang_vel) = value.angular_velocity {
+      res.has_angular_velocity = true;
+      res.ang_vel_x = ang_vel.x();
+      res.ang_vel_y = ang_vel.y();
+      res.ang_vel_z = ang_vel.z();
     }
 
     res

@@ -269,7 +269,7 @@ impl SimulationContext {
       TransformComponent {
         position: Vec3f32::from_components(0.0, 0.0, 0.0),
         rotation: Quat::identity(),
-        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        scale: Vec3f32::from_components(0.02, 0.02, 0.02),
       },
     )?;
     scene.add_component(cursor_entity, CursorComponent {})?;
@@ -292,11 +292,11 @@ impl SimulationContext {
     )?;
     scene.set_parent(sun_entity, Some(root_entity));
 
-    let mut sun_radius = 0.0696; // 696000 km / 10,000,000 km
+    let mut sun_radius = 0.0696 * crate::simulation::constants::PLANET_VISUAL_SCALE; // 696000 km / 10,000,000 km
     if let Some(asset_dir) = crate::gpu::ASSET_DIR.read().as_ref() {
       let pck_path = alloc::format!("{}/planets/pck00011.tpc", asset_dir);
       if let Some(radii) = crate::simulation::pck::read_body_radii(&pck_path, 10) {
-        sun_radius = (radii[0] / crate::simulation::almanac::DISTANCE_SCALE_FACTOR) as f32;
+        sun_radius = (radii[0] / crate::simulation::constants::DISTANCE_SCALE_FACTOR) as f32 * crate::simulation::constants::PLANET_VISUAL_SCALE;
       }
     }
 

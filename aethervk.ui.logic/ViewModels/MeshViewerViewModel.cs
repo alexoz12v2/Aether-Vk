@@ -25,14 +25,15 @@ public partial class MeshViewerViewModel : TabItemViewModel
   [ObservableProperty]
   private bool _isInitialized;
 
+  private readonly ConsoleService? _consoleService;
+
   public event Action? OnFrameReady;
 
-  public MeshViewerViewModel(ulong modelId, string modelPath, string modelName, bool isLightTheme)
+  public MeshViewerViewModel(ulong modelId, string modelPath, string modelName, bool isLightTheme, NativeRuntimeService runtimeService, ConsoleService? consoleService)
     : base(modelName)
   {
-    _runtimeService = (
-      ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService
-    )!;
+    _runtimeService = runtimeService;
+    _consoleService = consoleService;
     _isLightTheme = isLightTheme;
     _ = InitializeSceneAsync(modelId, modelPath, modelName);
   }
@@ -42,52 +43,51 @@ public partial class MeshViewerViewModel : TabItemViewModel
     if (IsInitialized)
       return;
 
-    var console = ServiceLocator.Provider?.GetService(typeof(ConsoleService)) as ConsoleService;
-    console?.Log($"[MeshViewer] Starting InitializeSceneAsync for {modelName}...");
+    _consoleService?.Log($"[MeshViewer] Starting InitializeSceneAsync for {modelName}...");
 
     await Task.Run(async () =>
     {
       try
       {
-        console?.Log($"[MeshViewer] Checking IsInitialized...");
+        _consoleService?.Log($"[MeshViewer] Checking IsInitialized...");
         if (!_runtimeService.IsInitialized)
         {
-          console?.Log($"[MeshViewer] Initializing Simulation Context...");
+          _consoleService?.Log($"[MeshViewer] Initializing Simulation Context...");
           _runtimeService.InitializeSimulationContext("Vulkan", null, false);
         }
 
-        console?.Log($"[MeshViewer] Checking PresentationEngineId...");
+        _consoleService?.Log($"[MeshViewer] Checking PresentationEngineId...");
         if (PresentationEngineId == 0)
         {
-          console?.Log($"[MeshViewer] Creating PresentationEngine...");
+          _consoleService?.Log($"[MeshViewer] Creating PresentationEngine...");
           PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height);
         }
 
-        console?.Log($"[MeshViewer] Creating Scene...");
+        _consoleService?.Log($"[MeshViewer] Creating Scene...");
         SceneId = _runtimeService.CreateScene(false);
 
         if (modelId == 0)
         {
-          console?.Log($"[MeshViewer] Importing Model (path={modelPath})...");
+          _consoleService?.Log($"[MeshViewer] Importing Model (path={modelPath})...");
           modelId = await _runtimeService.ImportModelAsync(modelPath);
-          console?.Log($"[MeshViewer] ImportModelAsync returned {modelId}");
+          _consoleService?.Log($"[MeshViewer] ImportModelAsync returned {modelId}");
         }
 
         if (modelId > 0)
         {
-          console?.Log($"[MeshViewer] Spawning Model Instance...");
+          _consoleService?.Log($"[MeshViewer] Spawning Model Instance...");
           await _runtimeService.SpawnModelInstanceAsync(SceneId, modelId, modelName);
         }
 
-        console?.Log($"[MeshViewer] Getting root entity...");
+        _consoleService?.Log($"[MeshViewer] Getting root entity...");
         var root = _runtimeService.GetEntityByName(SceneId, "root");
         if (root == null)
         {
-          console?.Log($"[MeshViewer] Root entity not found! Returning.");
+          _consoleService?.Log($"[MeshViewer] Root entity not found! Returning.");
           return;
         }
 
-        console?.Log($"[MeshViewer] Creating camera...");
+        _consoleService?.Log($"[MeshViewer] Creating camera...");
         var camera = _runtimeService.CreateCamera(SceneId, root);
 
         // Configure camera specifically for Mesh Viewer (like in the native test)
@@ -107,7 +107,7 @@ public partial class MeshViewerViewModel : TabItemViewModel
 
         CameraId = camera.Id;
 
-        console?.Log($"[MeshViewer] Creating sun...");
+        _consoleService?.Log($"[MeshViewer] Creating sun...");
         var sun = _runtimeService.CreateSun(SceneId, root);
         var sunTransform = System.Linq.Enumerable.FirstOrDefault(
           System.Linq.Enumerable.OfType<AetherVk.Logic.Models.TransformComponent>(sun.Components)
@@ -119,21 +119,21 @@ public partial class MeshViewerViewModel : TabItemViewModel
           sunTransform.PosZ = 0.0f;
         }
 
-        console?.Log($"[MeshViewer] Creating sky and cursor...");
+        _consoleService?.Log($"[MeshViewer] Creating sky and cursor...");
         _runtimeService.CreateSky(SceneId, root);
         _runtimeService.CreateCursor(SceneId, root);
 
-        console?.Log($"[MeshViewer] Creating grid...");        var grid = _runtimeService.CreateGrid(SceneId, root);
-        console?.Log($"[MeshViewer] Initialization complete!");
+        _consoleService?.Log($"[MeshViewer] Creating grid...");        var grid = _runtimeService.CreateGrid(SceneId, root);
+        _consoleService?.Log($"[MeshViewer] Initialization complete!");
       }
       catch (System.Exception ex)
       {
-        console?.Log($"[MeshViewer] Exception: {ex.Message}");
+        _consoleService?.Log($"[MeshViewer] Exception: {ex.Message}");
         // Ignored for testing without vulkan
       }
     });
 
-    console?.Log($"[MeshViewer] Exiting InitializeSceneAsync!");
+    _consoleService?.Log($"[MeshViewer] Exiting InitializeSceneAsync!");
     IsInitialized = true;
     StartGameLoop();
   }

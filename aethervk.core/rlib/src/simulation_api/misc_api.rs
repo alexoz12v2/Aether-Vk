@@ -90,6 +90,25 @@ impl SimulationContext {
     }
   }
 
+  /// Generic so that FFI type can be in cdylib crate
+  pub fn get_task_result_kinematic_state<T: From<crate::simulation::almanac::KinematicState>>(
+    &self,
+    task_id: u64,
+    out_state: *mut T,
+  ) -> bool {
+    if let Some(SimulationTaskResult::KinematicState(state)) = self.task_manager.write().take_result(task_id)
+    {
+      if !out_state.is_null() {
+        unsafe {
+          *out_state = state.into();
+        }
+      }
+      true
+    } else {
+      false
+    }
+  }
+
   pub fn resize(
     &mut self,
     scene_id: u64,

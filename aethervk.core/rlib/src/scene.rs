@@ -6,6 +6,12 @@
 //! - **Archetype-based ECS:** Inspired by Bevy's architecture for efficient memory layout and querying.
 //!   - Entities with the same set of components (an archetype) are stored together in contiguous memory.
 //!   - This is a simplified implementation focusing on the core concepts.
+//!
+//! The ECS is therefore a virtual "SQL-like" table, stored sparsely as a set of archetypes, each of which
+//! is a *Sparse-Dense Tombstone Array* `Vec<Option<_>>`
+//! 1. O(1) Hole Creation: Removing an entity or component simply calls .take() and pushes the index to a free_slots stack. Nothing shifts.
+//! 2. Generational Compaction: The Archetype organically monitors its own fragmentation. When holes exceed a calculated threshold (e.g. >25% and >64 elements), it performs an ultra-fast Two-Pointer defragmentation (compact()) that seamlessly sorts the holes to the end, shifts active rows left, and correctly resyncs your SlotMap.
+//! 3. Column Dropping: Safely stripping a component (with or without ThreadPool) becomes virtually instantaneous.
 
 // TODO add the cache class for meshes and billboard data as specified in simulation api
 
@@ -13,28 +19,66 @@
 
 // TODO add tests for new methods
 
+use thiserror::Error;
+use crate::{
+  types,
+  types::{EngineError, EngineResult},
+  simulation::comet::Comet,
+};
+use aethervk_oshal_rlib::{
+  math::matrix::Matrix4,
+  math::{safe_div, FloatLike},
+  os::pool::ThreadPool,
+  os::pool::chunked::ThreadPoolChunkedExt,
+  math::quaternion::Quaternion,
+  math::vector::{Vector3, Vector4},
+  math::{matrix::mat4::Mat4x4f32, vector::vec4::Quat},
+  math::vector::vec3::Vec3f32,
+};
+use slotmap::{new_key_type, SlotMap};
+use spin::RwLock;
+use alloc::{
+  boxed::Box,
+  vec::Vec,
+  string::{String},
+};
+use core::any::{Any, TypeId};
+use hashbrown::{HashMap, HashSet};
+
 pub mod almanac_planet;
 pub mod camera;
+pub mod interaction;
 pub mod particles;
 pub mod text;
 
 pub use almanac_planet::AlmanacPlanet;
 pub use particles::{ParticleEmitterConfig, ParticleSystemComponent, ParticleData, GaussianParams};
 
-use crate::simulation::comet::Comet;
-use aethervk_oshal_rlib::math::{safe_div, FloatLike};
-use aethervk_oshal_rlib::math::matrix::Matrix4;
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::{Vector3, Vector4};
-use aethervk_oshal_rlib::math::{matrix::mat4::Mat4x4f32, vector::vec4::Quat};
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use slotmap::{new_key_type, SlotMap};
-use spin::RwLock;
-use alloc::boxed::Box;
-use alloc::vec::Vec;
-use alloc::string::{String};
-use core::any::{Any, TypeId};
-use hashbrown::{HashMap, HashSet};
+/// An error that can occur when adding a component.
+#[derive(Error, Debug, PartialEq, Eq)]
+pub enum AddComponentError {
+  #[error("Entity not found.")]
+  EntityNotFound,
+  #[error("Component already exists for this entity.")]
+  ComponentAlreadyExists,
+  #[error("Component type not registered.")]
+  ComponentNotRegistered,
+  #[error("A dependency is not satisfied: '{missing}'")]
+  DependencyNotSatisfied { missing: &'static str },
+}
+
+impl From<AddComponentError> for types::EngineError {
+  fn from(value: AddComponentError) -> Self {
+    Self::InvalidOperation(match value {
+      AddComponentError::EntityNotFound => "AddComponentError::EntityNotFound",
+      AddComponentError::ComponentAlreadyExists => "AddComponentError::ComponentAlreadyExists",
+      AddComponentError::ComponentNotRegistered => "AddComponentError::ComponentNotRegistered",
+      AddComponentError::DependencyNotSatisfied { .. } => {
+        "AddComponentError::DependencyNotSatisfied"
+      }
+    })
+  }
+}
 
 // === Core ECS Types ===
 
@@ -343,51 +387,33 @@ pub struct EntityComponentInfo {
 
 // === ECS Storage ===
 
-use thiserror::Error;
-use crate::types;
-use crate::types::{EngineError, EngineResult};
-
-/// An error that can occur when adding a component.
-#[derive(Error, Debug, PartialEq, Eq)]
-pub enum AddComponentError {
-  #[error("Entity not found.")]
-  EntityNotFound,
-  #[error("Component already exists for this entity.")]
-  ComponentAlreadyExists,
-  #[error("Component type not registered.")]
-  ComponentNotRegistered,
-  #[error("A dependency is not satisfied: '{missing}'")]
-  DependencyNotSatisfied { missing: &'static str },
-}
-
-impl From<AddComponentError> for types::EngineError {
-  fn from(value: AddComponentError) -> Self {
-    Self::InvalidOperation(match value {
-      AddComponentError::EntityNotFound => "AddComponentError::EntityNotFound",
-      AddComponentError::ComponentAlreadyExists => "AddComponentError::ComponentAlreadyExists",
-      AddComponentError::ComponentNotRegistered => "AddComponentError::ComponentNotRegistered",
-      AddComponentError::DependencyNotSatisfied { .. } => {
-        "AddComponentError::DependencyNotSatisfied"
-      }
-    })
-  }
-}
-
-/// A trait for type-erased component storage.
+/// A trait for type-erased component storage handling Sparse Arrays (Option wrapping).
 trait ComponentStorage: Send + Sync + core::fmt::Debug {
   fn as_any(&self) -> &dyn Any;
   fn as_mut_any(&mut self) -> &mut dyn Any;
-  /// Moves a component from this storage to another, using swap_remove for efficiency.
-  fn swap_remove_and_push_to(&mut self, index: usize, other: &mut dyn ComponentStorage);
-  /// Removes a component from this storage, using swap_remove for efficiency.
-  fn swap_remove(&mut self, index: usize);
-  /// Pushes a type-erased component into this storage.
-  fn push_any(&mut self, component: Box<dyn Any + Send + Sync>);
-  /// The `TypeId` of the component stored.
+
+  /// Appends a hole (None) to the end of the storage.
+  fn push_none(&mut self);
+
+  /// Inserts a component dynamically at an exact index, expanding storage if needed.
+  fn insert_any(&mut self, index: usize, component: Box<dyn Any + Send + Sync>);
+
+  /// Migrates a component out of this storage into another, explicitly targeting a new slot.
+  fn move_to(&mut self, src_index: usize, target_index: usize, other: &mut dyn ComponentStorage);
+
+  /// Leaves a hole at the given index, dropping the component.
+  fn remove(&mut self, index: usize);
+
+  /// Swaps two elements. Essential for the high-performance memory defragmenter.
+  fn swap_elements(&mut self, a: usize, b: usize);
+
+  /// Truncates the underlying array to chop off empty trailing space.
+  fn truncate(&mut self, len: usize);
+
   fn component_type_id(&self) -> TypeId;
 }
 
-impl<T: Component> ComponentStorage for Vec<T> {
+impl<T: Component> ComponentStorage for Vec<Option<T>> {
   fn as_any(&self) -> &dyn Any {
     self
   }
@@ -395,21 +421,41 @@ impl<T: Component> ComponentStorage for Vec<T> {
     self
   }
 
-  fn swap_remove_and_push_to(&mut self, index: usize, other: &mut dyn ComponentStorage) {
-    let removed = self.swap_remove(index);
-    if let Some(other_vec) = other.as_mut_any().downcast_mut::<Vec<T>>() {
-      other_vec.push(removed);
-    }
+  fn push_none(&mut self) {
+    self.push(None);
   }
 
-  fn swap_remove(&mut self, index: usize) {
-    self.swap_remove(index);
-  }
-
-  fn push_any(&mut self, component: Box<dyn Any + Send + Sync>) {
+  fn insert_any(&mut self, index: usize, component: Box<dyn Any + Send + Sync>) {
     if let Ok(c) = component.downcast::<T>() {
-      self.push(*c);
+      if index >= self.len() {
+        self.resize_with(index + 1, || None);
+      }
+      self[index] = Some(*c);
     }
+  }
+
+  fn move_to(&mut self, src_index: usize, dest_index: usize, other: &mut dyn ComponentStorage) {
+    let item = self[src_index].take();
+    if let Some(other_vec) = other.as_mut_any().downcast_mut::<Vec<Option<T>>>() {
+      if dest_index >= other_vec.len() {
+        other_vec.resize_with(dest_index + 1, || None);
+      }
+      other_vec[dest_index] = item;
+    }
+  }
+
+  fn remove(&mut self, index: usize) {
+    if index < self.len() {
+      self[index] = None;
+    }
+  }
+
+  fn swap_elements(&mut self, a: usize, b: usize) {
+    self.swap(a, b);
+  }
+
+  fn truncate(&mut self, len: usize) {
+    self.truncate(len);
   }
 
   fn component_type_id(&self) -> TypeId {
@@ -417,22 +463,19 @@ impl<T: Component> ComponentStorage for Vec<T> {
   }
 }
 
-/// Metadata about a registered component type.
 #[derive(Debug)]
 struct ComponentMeta {
   dependencies: Vec<TypeId>,
-  /// A function pointer to create a new, empty storage for this component type.
-  /// TODO: remove double indirection by storing an "inline", Not Sized, StableVector, which uses OS's Virtual Memory system to reserve an enormous amount of space and commit what it needs
   new_storage: fn() -> RwLock<Box<dyn ComponentStorage>>,
   type_name: &'static str,
 }
 
-/// An Archetype represents a unique set of component types.
 #[derive(Debug)]
 struct Archetype {
   components: HashMap<TypeId, RwLock<Box<dyn ComponentStorage>>>,
   component_types: HashSet<TypeId>,
-  entities: Vec<EntityId>,
+  entities: Vec<Option<EntityId>>, // Option natively models O(1) allocation holes
+  free_slots: Vec<usize>,          // Stack of reusable memory rows
 }
 
 impl Archetype {
@@ -440,6 +483,75 @@ impl Archetype {
     component_types
       .iter()
       .all(|t| self.component_types.contains(t))
+  }
+
+  /// Allocates a new row, recycling a hole if available to keep cache packed.
+  fn allocate_slot(&mut self) -> usize {
+    if let Some(idx) = self.free_slots.pop() {
+      idx
+    } else {
+      let idx = self.entities.len();
+      self.entities.push(None);
+      for storage in self.components.values_mut() {
+        storage.get_mut().push_none();
+      }
+      idx
+    }
+  }
+
+  /// Reclaims a row, erasing the entity and all associated component memory.
+  fn free_slot(&mut self, index: usize) {
+    self.entities[index] = None;
+    for storage in self.components.values_mut() {
+      storage.get_mut().remove(index);
+    }
+    self.free_slots.push(index);
+  }
+
+  /// Check if holes exceed a logical fragmentation limit.
+  fn needs_compaction(&self) -> bool {
+    self.free_slots.len() >= 64 && self.free_slots.len() > self.entities.len() / 4
+  }
+
+  /// Generational GC: Sweeps memory efficiently using Two-Pointers when fragmentation exceeds thresholds.
+  fn compact(&mut self, entities_map: &mut SlotMap<EntityId, EntityLocation>) {
+    if !self.needs_compaction() {
+      return;
+    }
+
+    let mut left = 0;
+    let mut right = self.entities.len();
+    let mut comp_guards: Vec<_> = self.components.values().map(|c| c.write()).collect();
+
+    while left < right {
+      if self.entities[left].is_none() {
+        right -= 1;
+        while left < right && self.entities[right].is_none() {
+          right -= 1;
+        }
+        if left < right {
+          self.entities.swap(left, right);
+          for guard in &mut comp_guards {
+            guard.swap_elements(left, right);
+          }
+
+          // Correctly update the SlotMap pointer for the trailing Entity that just got dragged forwards
+          if let Some(moved_entity) = self.entities[left] {
+            if let Some(loc) = entities_map.get_mut(moved_entity) {
+              loc.row_index = left;
+            }
+          }
+        }
+      }
+      left += 1;
+    }
+
+    let new_len = right;
+    self.entities.truncate(new_len);
+    for guard in &mut comp_guards {
+      guard.truncate(new_len);
+    }
+    self.free_slots.clear();
   }
 }
 
@@ -456,7 +568,6 @@ pub struct Scene {
   entities: RwLock<SlotMap<EntityId, EntityLocation>>,
   archetypes: RwLock<Vec<Archetype>>,
   component_meta: RwLock<HashMap<TypeId, ComponentMeta>>,
-  // TODO: add a hierarchy of EntityIds. Challenge: consistency with entities SlotMap
   hierarchy: RwLock<SceneHierarchy>,
   names: RwLock<HashMap<EntityId, String>>,
 }
@@ -469,13 +580,11 @@ pub struct SceneHierarchy {
 
 impl SceneHierarchy {
   fn set_parent(&mut self, child: EntityId, parent: Option<EntityId>) {
-    // Remove from old parent's children list
     if let Some(old_parent) = self.parents.remove(&child) {
       if let Some(children) = self.children.get_mut(&old_parent) {
         children.retain(|c| *c != child);
       }
     }
-
     if let Some(new_parent) = parent {
       self.parents.insert(child, new_parent);
       self.children.entry(new_parent).or_default().push(child);
@@ -483,14 +592,11 @@ impl SceneHierarchy {
   }
 
   fn remove_entity(&mut self, entity: EntityId) {
-    // Remove from parent's children list
     if let Some(parent) = self.parents.remove(&entity) {
       if let Some(children) = self.children.get_mut(&parent) {
         children.retain(|c| *c != entity);
       }
     }
-
-    // Remove entity as a parent from its children and recursively remove them
     if let Some(children) = self.children.remove(&entity) {
       for child in children {
         self.remove_entity(child);
@@ -519,6 +625,7 @@ impl Scene {
       components: HashMap::new(),
       component_types: HashSet::new(),
       entities: Vec::new(),
+      free_slots: Vec::new(),
     };
 
     Self {
@@ -528,6 +635,45 @@ impl Scene {
       hierarchy: RwLock::new(SceneHierarchy::default()),
       names: RwLock::new(HashMap::new()),
     }
+  }
+
+  pub fn entity_count(&self) -> usize {
+    self.entities.read().len()
+  }
+
+  pub fn hierarchy_depth(&self) -> usize {
+    let hierarchy = self.hierarchy.read();
+    let mut max_depth = 0;
+    for entity in self.entities.read().keys() {
+      let mut depth = 0;
+      let mut curr = entity;
+      while let Some(&parent) = hierarchy.parents.get(&curr) {
+        depth += 1;
+        curr = parent;
+      }
+      max_depth = max_depth.max(depth);
+    }
+    max_depth
+  }
+
+  pub fn hierarchy_breadth(&self) -> usize {
+    let hierarchy = self.hierarchy.read();
+    hierarchy
+      .children
+      .values()
+      .map(|children| children.len())
+      .max()
+      .unwrap_or(0)
+  }
+
+  pub fn should_parallelize(&self) -> bool {
+    let size = self.entity_count();
+    let depth = self.hierarchy_depth();
+    let breadth = self.hierarchy_breadth();
+
+    // Simple heuristic for parallelization threshold
+    // Parallelize if we have a lot of entities, or if the scene graph is very wide
+    size > 1000 || breadth > 100
   }
 
   pub fn add_camera<S>(
@@ -550,6 +696,7 @@ impl Scene {
         "scene:add_camera name already exists",
       ));
     }
+
     let camera_entity = self.spawn_entity(&name);
     self.add_component(
       camera_entity,
@@ -562,7 +709,6 @@ impl Scene {
     self.add_component(
       camera_entity,
       CameraComponent {
-        // this is to be set every frame in the rendering code. Just give a reasonable default here
         projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 800.0 / 600.0, 0.1, 10000.0),
         near_plane: 0.1,
         far_plane: 10000.0,
@@ -572,16 +718,13 @@ impl Scene {
     Ok(camera_entity)
   }
 
-  // TODO: probably return a result
   pub fn set_parent(&self, child: EntityId, parent: Option<EntityId>) {
-    // Ensure both entities exist.
     let entities = self.entities.read();
     if !entities.contains_key(child)
       || (parent.is_some() && !entities.contains_key(parent.unwrap()))
     {
       return;
     }
-
     self.hierarchy.write().set_parent(child, parent);
   }
 
@@ -590,8 +733,7 @@ impl Scene {
     if !entities.contains_key(entity) {
       return None;
     }
-    let hierarchy = self.hierarchy.read();
-    hierarchy.parents.get(&entity).cloned()
+    self.hierarchy.read().parents.get(&entity).cloned()
   }
 
   pub fn get_entity_component_names(&self, entity: EntityId) -> Vec<&'static str> {
@@ -600,7 +742,6 @@ impl Scene {
       Some(l) => l,
       None => return Vec::new(),
     };
-
     let archetypes = self.archetypes.read();
     let archetype = &archetypes[location.archetype_index];
     let component_meta = self.component_meta.read();
@@ -613,6 +754,904 @@ impl Scene {
     }
     names
   }
+
+  pub fn spawn_entity(&self, name: impl Into<alloc::string::String>) -> EntityId {
+    let mut actual_name = name.into();
+    {
+      let names = self.names.read();
+      if names.values().any(|n| *n == actual_name) {
+        let mut counter = 1;
+        loop {
+          let try_name = alloc::format!("{}_{}", actual_name, counter);
+          if !names.values().any(|n| *n == try_name) {
+            actual_name = try_name;
+            break;
+          }
+          counter += 1;
+        }
+      }
+    }
+
+    let entity_id = {
+      let mut entities = self.entities.write();
+      let mut archetypes = self.archetypes.write();
+
+      let archetype = &mut archetypes[0];
+      let row_index = archetype.allocate_slot();
+
+      let entity_location = EntityLocation {
+        archetype_index: 0,
+        row_index,
+      };
+      let entity_id = entities.insert(entity_location);
+      archetype.entities[row_index] = Some(entity_id);
+      entity_id
+    };
+
+    self.names.write().insert(entity_id, actual_name);
+    entity_id
+  }
+
+  pub fn get_entity_by_name(&self, name: &str) -> Option<EntityId> {
+    self
+      .names
+      .read()
+      .iter()
+      .find(|(_, n)| *n == name)
+      .map(|(id, _)| *id)
+  }
+
+  pub fn get_name(&self, entity: EntityId) -> Option<alloc::string::String> {
+    self.names.read().get(&entity).cloned()
+  }
+
+  pub fn set_name(&self, entity: EntityId, name: impl Into<alloc::string::String>) {
+    let mut actual_name = name.into();
+    {
+      let names = self.names.read();
+      if names.values().any(|n| *n == actual_name) {
+        let mut counter = 1;
+        loop {
+          let try_name = alloc::format!("{}_{}", actual_name, counter);
+          if !names.values().any(|n| *n == try_name) {
+            actual_name = try_name;
+            break;
+          }
+          counter += 1;
+        }
+      }
+    }
+    self.names.write().insert(entity, actual_name);
+  }
+
+  pub fn register_component<T: Component>(&self, dependencies: &[TypeId]) {
+    let mut meta = self.component_meta.write();
+    meta.insert(
+      TypeId::of::<T>(),
+      ComponentMeta {
+        dependencies: dependencies.to_vec(),
+        new_storage: || RwLock::new(Box::new(Vec::<Option<T>>::new())),
+        type_name: core::any::type_name::<T>(),
+      },
+    );
+  }
+
+  pub fn add_component<T: Component>(
+    &self,
+    entity_id: EntityId,
+    component: T,
+  ) -> Result<(), AddComponentError> {
+    let new_component_type = TypeId::of::<T>();
+
+    let src_location = {
+      let entities = self.entities.read();
+      *entities
+        .get(entity_id)
+        .ok_or(AddComponentError::EntityNotFound)?
+    };
+
+    let (target_archetype_index, is_new_archetype) = {
+      let archetypes = self.archetypes.read();
+      let src_archetype = &archetypes[src_location.archetype_index];
+
+      if src_archetype.component_types.contains(&new_component_type) {
+        return Err(AddComponentError::ComponentAlreadyExists);
+      }
+
+      let meta = self.component_meta.read();
+      let component_meta = meta
+        .get(&new_component_type)
+        .ok_or(AddComponentError::ComponentNotRegistered)?;
+
+      if !src_archetype.has_components(&component_meta.dependencies) {
+        let missing_dep = component_meta
+          .dependencies
+          .iter()
+          .find(|t| !src_archetype.component_types.contains(*t))
+          .unwrap();
+        let missing_name = meta.get(missing_dep).map_or("Unknown", |m| m.type_name);
+        return Err(AddComponentError::DependencyNotSatisfied {
+          missing: missing_name,
+        });
+      }
+
+      let mut target_component_types = src_archetype.component_types.clone();
+      target_component_types.insert(new_component_type);
+
+      let found_index = archetypes
+        .iter()
+        .position(|arch| arch.component_types == target_component_types);
+      (found_index, found_index.is_none())
+    };
+
+    let target_archetype_index = if is_new_archetype {
+      let mut archetypes = self.archetypes.write();
+      let meta = self.component_meta.read();
+
+      let src_archetype = &archetypes[src_location.archetype_index];
+      let mut target_component_types = src_archetype.component_types.clone();
+      target_component_types.insert(new_component_type);
+
+      if let Some(index) = archetypes
+        .iter()
+        .position(|arch| arch.component_types == target_component_types)
+      {
+        index
+      } else {
+        let mut new_arch = Archetype {
+          component_types: target_component_types,
+          components: HashMap::new(),
+          entities: Vec::new(),
+          free_slots: Vec::new(),
+        };
+        for type_id in &new_arch.component_types {
+          let storage_fn = meta.get(type_id).unwrap().new_storage;
+          new_arch.components.insert(*type_id, storage_fn());
+        }
+        archetypes.push(new_arch);
+        archetypes.len() - 1
+      }
+    } else {
+      target_archetype_index.unwrap()
+    };
+
+    if src_location.archetype_index != target_archetype_index {
+      let mut entities = self.entities.write();
+      let mut archetypes = self.archetypes.write();
+
+      let (src_arch, target_arch) = if src_location.archetype_index < target_archetype_index {
+        let (left, right) = archetypes.split_at_mut(target_archetype_index);
+        (&mut left[src_location.archetype_index], &mut right[0])
+      } else {
+        let (left, right) = archetypes.split_at_mut(src_location.archetype_index);
+        (&mut right[0], &mut left[target_archetype_index])
+      };
+
+      let target_row_index = target_arch.allocate_slot();
+      target_arch.entities[target_row_index] = Some(entity_id);
+
+      for (type_id, target_storage_lock) in target_arch.components.iter() {
+        if *type_id == new_component_type {
+          continue;
+        }
+        let mut src_storage = src_arch.components[type_id].write();
+        let mut target_storage = target_storage_lock.write();
+        src_storage.move_to(
+          src_location.row_index,
+          target_row_index,
+          &mut **target_storage,
+        );
+      }
+
+      target_arch.components[&new_component_type]
+        .write()
+        .insert_any(target_row_index, Box::new(component));
+
+      // Frees the src slot and drops its trailing components without shifting memory!
+      src_arch.free_slot(src_location.row_index);
+
+      *entities.get_mut(entity_id).unwrap() = EntityLocation {
+        archetype_index: target_archetype_index,
+        row_index: target_row_index,
+      };
+
+      src_arch.compact(&mut entities);
+    }
+
+    Ok(())
+  }
+
+  pub fn remove_entity(&self, entity_id: EntityId) {
+    let src_location = {
+      let mut entities = self.entities.write();
+      if let Some(loc) = entities.remove(entity_id) {
+        loc
+      } else {
+        return;
+      }
+    };
+
+    self.hierarchy.write().remove_entity(entity_id);
+    self.names.write().remove(&entity_id);
+
+    let mut entities = self.entities.write();
+    let mut archetypes = self.archetypes.write();
+    let src_arch = &mut archetypes[src_location.archetype_index];
+
+    src_arch.free_slot(src_location.row_index);
+    src_arch.compact(&mut entities); // Organically triggers when arrays begin resembling swiss-cheese
+  }
+
+  pub fn remove_component<T: Component>(&self, entity_id: EntityId) -> Result<(), &'static str> {
+    let type_id_to_remove = TypeId::of::<T>();
+
+    let src_location = {
+      let entities = self.entities.read();
+      *entities.get(entity_id).ok_or("Entity not found")?
+    };
+
+    // 1. Identify Target Archetype layout or flag if it needs creation
+    let (target_archetype_index, is_new_archetype) = {
+      let archetypes = self.archetypes.read();
+      let src_archetype = &archetypes[src_location.archetype_index];
+
+      if !src_archetype.component_types.contains(&type_id_to_remove) {
+        return Err("Component not found on entity");
+      }
+
+      let mut target_component_types = src_archetype.component_types.clone();
+      target_component_types.remove(&type_id_to_remove);
+
+      let found_index = archetypes
+        .iter()
+        .position(|arch| arch.component_types == target_component_types);
+      (found_index, found_index.is_none())
+    };
+
+    // 2. Dynamically create the Target Archetype if it didn't exist!
+    let target_archetype_index = if is_new_archetype {
+      let mut archetypes = self.archetypes.write();
+      let meta = self.component_meta.read();
+
+      let src_archetype = &archetypes[src_location.archetype_index];
+      let mut target_component_types = src_archetype.component_types.clone();
+      target_component_types.remove(&type_id_to_remove);
+
+      // Re-check to prevent race conditions during write lock acquisition
+      if let Some(index) = archetypes
+        .iter()
+        .position(|arch| arch.component_types == target_component_types)
+      {
+        index
+      } else {
+        let mut new_arch = Archetype {
+          component_types: target_component_types,
+          components: HashMap::new(),
+          entities: Vec::new(),
+          free_slots: Vec::new(), // Threshold tracker initializes at 0
+        };
+
+        // Initialize empty storage arrays for the new signature
+        for type_id in &new_arch.component_types {
+          let storage_fn = meta.get(type_id).unwrap().new_storage;
+          new_arch.components.insert(*type_id, storage_fn());
+        }
+        archetypes.push(new_arch);
+        archetypes.len() - 1
+      }
+    } else {
+      target_archetype_index.unwrap()
+    };
+
+    // 3. Perform the migration safely
+    if src_location.archetype_index != target_archetype_index {
+      let mut entities = self.entities.write();
+      let mut archetypes = self.archetypes.write();
+
+      let (src_arch, target_arch) = if src_location.archetype_index < target_archetype_index {
+        let (left, right) = archetypes.split_at_mut(target_archetype_index);
+        (&mut left[src_location.archetype_index], &mut right[0])
+      } else {
+        let (left, right) = archetypes.split_at_mut(src_location.archetype_index);
+        (&mut right[0], &mut left[target_archetype_index])
+      };
+
+      let target_row_index = target_arch.allocate_slot();
+
+      for (type_id, target_storage_lock) in target_arch.components.iter() {
+        // target_arch's components are a strict mathematical subset of src_arch, so unwrap is infallible
+        let mut src_storage = src_arch.components.get(type_id).unwrap().write();
+        let mut target_storage = target_storage_lock.write();
+
+        // Move valid components to the new archetype array slot using Option::take()
+        src_storage.move_to(
+          src_location.row_index,
+          target_row_index,
+          &mut **target_storage,
+        );
+      }
+
+      target_arch.entities[target_row_index] = Some(entity_id);
+
+      // PERFECT HOLE CREATION:
+      // Frees the source slot. Because `move_to` already migrated the surviving elements,
+      // this natively drops the removed `T` component without executing any memory shifts!
+      src_arch.free_slot(src_location.row_index);
+
+      // Update global map
+      *entities.get_mut(entity_id).unwrap() = EntityLocation {
+        archetype_index: target_archetype_index,
+        row_index: target_row_index,
+      };
+
+      // Compaction will intelligently absorb the hole generated in `src_arch` only if limits are exceeded
+      src_arch.compact(&mut entities);
+    }
+
+    Ok(())
+  }
+
+  /// Removes an entire column (all components of type `T`) natively skipping entity tracking mapping.
+  pub fn remove_column<T: Component>(&self) {
+    let type_id = TypeId::of::<T>();
+    let mut archetypes = self.archetypes.write();
+    for arch in archetypes.iter_mut() {
+      if arch.component_types.contains(&type_id) {
+        arch.component_types.remove(&type_id);
+        arch.components.remove(&type_id);
+      }
+    }
+  }
+
+  /// Extinguishes a component selectively from entities passing the target filter algorithm.
+  pub fn remove_column_if<T: Component, F>(&self, mut filter: F)
+  where
+    F: FnMut(EntityId, &T) -> bool,
+  {
+    let to_remove = self.query1_res(|e, c: &T| if filter(e, c) { Some(e) } else { None });
+    for (e, _) in to_remove {
+      let _ = self.remove_component::<T>(e);
+    }
+  }
+
+  /// Parallelized bulk drop - evaluates columns structurally using the ThreadPool filter mapping!
+  pub fn remove_column_par<T: Component>(&self, pool: &ThreadPool) {
+    let to_remove = self.query1_res_par(pool, |e, _: &T| Some(e));
+    for (e, _) in to_remove {
+      let _ = self.remove_component::<T>(e);
+    }
+  }
+
+  pub fn remove_column_if_par<T: Component, F>(&self, pool: &ThreadPool, filter: F)
+  where
+    F: Fn(EntityId, &T) -> bool + Send + Sync,
+  {
+    let to_remove = self.query1_res_par(pool, |e, c: &T| if filter(e, c) { Some(e) } else { None });
+    for (e, _) in to_remove {
+      let _ = self.remove_component::<T>(e);
+    }
+  }
+
+  pub fn remove_first_component<T: Component>(&self) -> Option<EntityId> {
+    let target_entity = self.query1_first_res(|e, _: &T| Some(e));
+    if let Some((e, _)) = target_entity {
+      if self.remove_component::<T>(e).is_ok() {
+        return Some(e);
+      }
+    }
+    None
+  }
+
+  pub fn has_component<T: Component>(&self, entity_id: EntityId) -> HasComponentResultEnum {
+    let archetypes = self.archetypes.read();
+    let archetype = archetypes
+      .iter()
+      .find(|archetype| archetype.entities.iter().any(|e| *e == Some(entity_id)));
+    if archetype.is_none() {
+      return HasComponentResultEnum::EntityNotFound;
+    }
+
+    let archetype = unsafe { archetype.unwrap_unchecked() };
+    if archetype.has_components(&[TypeId::of::<T>()]) {
+      HasComponentResultEnum::EntityHasComponent
+    } else {
+      HasComponentResultEnum::ComponentNotFound
+    }
+  }
+
+  pub fn with_component<T: Component, F, R>(&self, entity_id: EntityId, f: F) -> Option<R>
+  where
+    F: FnOnce(&T) -> R,
+  {
+    let entities = self.entities.read();
+    let location = entities.get(entity_id)?;
+    let archetypes = self.archetypes.read();
+    let archetype = &archetypes[location.archetype_index];
+
+    let components_lock = archetype.components.get(&TypeId::of::<T>())?.read();
+    let components = components_lock.as_any().downcast_ref::<Vec<Option<T>>>()?;
+
+    Some(f(components[location.row_index].as_ref()?))
+  }
+
+  pub fn with_component_mut<T: Component, F, R>(&self, entity_id: EntityId, f: F) -> Option<R>
+  where
+    F: FnOnce(&mut T) -> R,
+  {
+    let entities = self.entities.read();
+    let location = entities.get(entity_id)?;
+    let archetypes = self.archetypes.read();
+    let archetype = &archetypes[location.archetype_index];
+
+    let mut components_lock = archetype.components.get(&TypeId::of::<T>())?.write();
+    let components = components_lock
+      .as_mut_any()
+      .downcast_mut::<Vec<Option<T>>>()?;
+
+    Some(f(components[location.row_index].as_mut()?))
+  }
+
+  // === Sequential Single-Threaded Queries ===
+
+  pub fn query1<T: Component, F>(&self, mut f: F)
+  where
+    F: FnMut(EntityId, &T),
+  {
+    let archetypes = self.archetypes.read();
+    let type_t = TypeId::of::<T>();
+
+    for archetype in archetypes.iter() {
+      if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
+        let comp_storage = comp_storage_lock.read();
+        if let Some(components) = comp_storage.as_any().downcast_ref::<Vec<Option<T>>>() {
+          for (i, opt_entity) in archetype.entities.iter().enumerate() {
+            if let (Some(entity_id), Some(comp)) = (opt_entity, &components[i]) {
+              f(*entity_id, comp);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  pub fn query2<T1: Component, T2: Component, F>(&self, mut f: F)
+  where
+    F: FnMut(EntityId, &T1, &T2),
+  {
+    let archetypes = self.archetypes.read();
+    let type_t1 = TypeId::of::<T1>();
+    let type_t2 = TypeId::of::<T2>();
+
+    for archetype in archetypes.iter() {
+      if archetype.components.contains_key(&type_t1) && archetype.components.contains_key(&type_t2)
+      {
+        let comp_storage1_lock = archetype.components[&type_t1].read();
+        let comp_storage2_lock = archetype.components[&type_t2].read();
+
+        let components1 = comp_storage1_lock
+          .as_any()
+          .downcast_ref::<Vec<Option<T1>>>()
+          .unwrap();
+        let components2 = comp_storage2_lock
+          .as_any()
+          .downcast_ref::<Vec<Option<T2>>>()
+          .unwrap();
+
+        for (i, opt_entity) in archetype.entities.iter().enumerate() {
+          if let (Some(entity_id), Some(c1), Some(c2)) =
+            (opt_entity, &components1[i], &components2[i])
+          {
+            f(*entity_id, c1, c2);
+          }
+        }
+      }
+    }
+  }
+
+  pub fn query1_mut<T: Component, F>(&self, mut f: F)
+  where
+    F: FnMut(EntityId, &mut T),
+  {
+    let archetypes = self.archetypes.read();
+    let type_t = TypeId::of::<T>();
+
+    for archetype in archetypes.iter() {
+      if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
+        let mut comp_storage = comp_storage_lock.write();
+        if let Some(components) = comp_storage.as_mut_any().downcast_mut::<Vec<Option<T>>>() {
+          for (i, opt_entity) in archetype.entities.iter().enumerate() {
+            if let (Some(entity_id), Some(comp)) = (opt_entity, &mut components[i]) {
+              f(*entity_id, comp);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  pub fn query2_mut<T1: Component, T2: Component, F>(&self, mut f: F)
+  where
+    F: FnMut(EntityId, &mut T1, &mut T2),
+  {
+    let type_t1 = TypeId::of::<T1>();
+    let type_t2 = TypeId::of::<T2>();
+
+    let archetypes = self.archetypes.read();
+
+    for archetype in archetypes.iter() {
+      if archetype.components.contains_key(&type_t1) && archetype.components.contains_key(&type_t2)
+      {
+        let mut comp_storage1_lock = archetype.components[&type_t1].write();
+        let mut comp_storage2_lock = archetype.components[&type_t2].write();
+
+        let components1 = comp_storage1_lock
+          .as_mut_any()
+          .downcast_mut::<Vec<Option<T1>>>()
+          .unwrap();
+        let components2 = comp_storage2_lock
+          .as_mut_any()
+          .downcast_mut::<Vec<Option<T2>>>()
+          .unwrap();
+
+        for (i, opt_entity) in archetype.entities.iter().enumerate() {
+          if let (Some(entity_id), Some(c1), Some(c2)) =
+            (opt_entity, &mut components1[i], &mut components2[i])
+          {
+            f(*entity_id, c1, c2);
+          }
+        }
+      }
+    }
+  }
+
+  pub fn query1_res<T: Component, F, R>(&self, mut f: F) -> Vec<(R, EntityId)>
+  where
+    F: FnMut(EntityId, &T) -> Option<R>,
+  {
+    let mut results = Vec::new();
+    let archetypes = self.archetypes.read();
+    let type_t = TypeId::of::<T>();
+
+    for archetype in archetypes.iter() {
+      if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
+        let comp_storage = comp_storage_lock.read();
+        if let Some(components) = comp_storage.as_any().downcast_ref::<Vec<Option<T>>>() {
+          for (i, opt_entity) in archetype.entities.iter().enumerate() {
+            if let (Some(entity_id), Some(comp)) = (opt_entity, &components[i]) {
+              if let Some(result) = f(*entity_id, comp) {
+                results.push((result, *entity_id));
+              }
+            }
+          }
+        }
+      }
+    }
+    results
+  }
+
+  pub fn query2_res<T1: Component, T2: Component, F, R>(&self, mut f: F) -> Vec<(R, EntityId)>
+  where
+    F: FnMut(EntityId, &T1, &T2) -> Option<R>,
+  {
+    let mut results = Vec::new();
+    let archetypes = self.archetypes.read();
+    let type_t1 = TypeId::of::<T1>();
+    let type_t2 = TypeId::of::<T2>();
+
+    for archetype in archetypes.iter() {
+      if archetype.components.contains_key(&type_t1) && archetype.components.contains_key(&type_t2)
+      {
+        let comp_storage1_lock = archetype.components[&type_t1].read();
+        let comp_storage2_lock = archetype.components[&type_t2].read();
+
+        let components1 = comp_storage1_lock
+          .as_any()
+          .downcast_ref::<Vec<Option<T1>>>()
+          .unwrap();
+        let components2 = comp_storage2_lock
+          .as_any()
+          .downcast_ref::<Vec<Option<T2>>>()
+          .unwrap();
+
+        for (i, opt_entity) in archetype.entities.iter().enumerate() {
+          if let (Some(entity_id), Some(c1), Some(c2)) =
+            (opt_entity, &components1[i], &components2[i])
+          {
+            if let Some(result) = f(*entity_id, c1, c2) {
+              results.push((result, *entity_id));
+            }
+          }
+        }
+      }
+    }
+    results
+  }
+
+  pub fn query1_res_mut<T: Component, F, R>(&self, mut f: F) -> Vec<(R, EntityId)>
+  where
+    F: FnMut(EntityId, &mut T) -> Option<R>,
+  {
+    let mut results = Vec::new();
+    let archetypes = self.archetypes.read();
+    let type_t = TypeId::of::<T>();
+
+    for archetype in archetypes.iter() {
+      if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
+        let mut comp_storage = comp_storage_lock.write();
+        if let Some(components) = comp_storage.as_mut_any().downcast_mut::<Vec<Option<T>>>() {
+          for (i, opt_entity) in archetype.entities.iter().enumerate() {
+            if let (Some(entity_id), Some(comp)) = (opt_entity, &mut components[i]) {
+              if let Some(result) = f(*entity_id, comp) {
+                results.push((result, *entity_id));
+              }
+            }
+          }
+        }
+      }
+    }
+    results
+  }
+
+  pub fn query2_res_mut<T1: Component, T2: Component, F, R>(&self, mut f: F) -> Vec<(R, EntityId)>
+  where
+    F: FnMut(EntityId, &mut T1, &mut T2) -> Option<R>,
+  {
+    let mut results = Vec::new();
+    let archetypes = self.archetypes.read();
+    let type_t1 = TypeId::of::<T1>();
+    let type_t2 = TypeId::of::<T2>();
+
+    for archetype in archetypes.iter() {
+      if archetype.components.contains_key(&type_t1) && archetype.components.contains_key(&type_t2)
+      {
+        let mut comp_storage1_lock = archetype.components[&type_t1].write();
+        let mut comp_storage2_lock = archetype.components[&type_t2].write();
+
+        let components1 = comp_storage1_lock
+          .as_mut_any()
+          .downcast_mut::<Vec<Option<T1>>>()
+          .unwrap();
+        let components2 = comp_storage2_lock
+          .as_mut_any()
+          .downcast_mut::<Vec<Option<T2>>>()
+          .unwrap();
+
+        for (i, opt_entity) in archetype.entities.iter().enumerate() {
+          if let (Some(entity_id), Some(c1), Some(c2)) =
+            (opt_entity, &mut components1[i], &mut components2[i])
+          {
+            if let Some(result) = f(*entity_id, c1, c2) {
+              results.push((result, *entity_id));
+            }
+          }
+        }
+      }
+    }
+    results
+  }
+
+  pub fn query1_first_res<T: Component, F, R>(&self, mut f: F) -> Option<(R, EntityId)>
+  where
+    F: FnMut(EntityId, &T) -> Option<R>,
+  {
+    let archetypes = self.archetypes.read();
+    let type_t = TypeId::of::<T>();
+
+    for archetype in archetypes.iter() {
+      if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
+        let comp_storage = comp_storage_lock.read();
+        if let Some(components) = comp_storage.as_any().downcast_ref::<Vec<Option<T>>>() {
+          for (i, opt_entity) in archetype.entities.iter().enumerate() {
+            if let (Some(entity_id), Some(comp)) = (opt_entity, &components[i]) {
+              if let Some(result) = f(*entity_id, comp) {
+                return Some((result, *entity_id));
+              }
+            }
+          }
+        }
+      }
+    }
+    None
+  }
+
+  pub fn query2_first_res<T1: Component, T2: Component, F, R>(
+    &self,
+    mut f: F,
+  ) -> Option<(R, EntityId)>
+  where
+    F: FnMut(EntityId, &T1, &T2) -> Option<R>,
+  {
+    let archetypes = self.archetypes.read();
+    let type_t1 = TypeId::of::<T1>();
+    let type_t2 = TypeId::of::<T2>();
+
+    for archetype in archetypes.iter() {
+      if archetype.components.contains_key(&type_t1) && archetype.components.contains_key(&type_t2)
+      {
+        let comp_storage1_lock = archetype.components[&type_t1].read();
+        let comp_storage2_lock = archetype.components[&type_t2].read();
+
+        let components1 = comp_storage1_lock
+          .as_any()
+          .downcast_ref::<Vec<Option<T1>>>()
+          .unwrap();
+        let components2 = comp_storage2_lock
+          .as_any()
+          .downcast_ref::<Vec<Option<T2>>>()
+          .unwrap();
+
+        for (i, opt_entity) in archetype.entities.iter().enumerate() {
+          if let (Some(entity_id), Some(c1), Some(c2)) =
+            (opt_entity, &components1[i], &components2[i])
+          {
+            if let Some(result) = f(*entity_id, c1, c2) {
+              return Some((result, *entity_id));
+            }
+          }
+        }
+      }
+    }
+    None
+  }
+
+  pub fn query1_res_first_mut<T: Component, F, R>(&self, mut f: F) -> Option<(R, EntityId)>
+  where
+    F: FnMut(EntityId, &mut T) -> Option<R>,
+  {
+    let archetypes = self.archetypes.read();
+    let type_t = TypeId::of::<T>();
+
+    for archetype in archetypes.iter() {
+      if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
+        let mut comp_storage = comp_storage_lock.write();
+        if let Some(components) = comp_storage.as_mut_any().downcast_mut::<Vec<Option<T>>>() {
+          for (i, opt_entity) in archetype.entities.iter().enumerate() {
+            if let (Some(entity_id), Some(comp)) = (opt_entity, &mut components[i]) {
+              if let Some(result) = f(*entity_id, comp) {
+                return Some((result, *entity_id));
+              }
+            }
+          }
+        }
+      }
+    }
+    None
+  }
+
+  pub fn query2_res_first_mut<T1: Component, T2: Component, F, R>(
+    &self,
+    mut f: F,
+  ) -> Option<(R, EntityId)>
+  where
+    F: FnMut(EntityId, &mut T1, &mut T2) -> Option<R>,
+  {
+    let archetypes = self.archetypes.read();
+    let type_t1 = TypeId::of::<T1>();
+    let type_t2 = TypeId::of::<T2>();
+
+    for archetype in archetypes.iter() {
+      if archetype.components.contains_key(&type_t1) && archetype.components.contains_key(&type_t2)
+      {
+        let mut comp_storage1_lock = archetype.components[&type_t1].write();
+        let mut comp_storage2_lock = archetype.components[&type_t2].write();
+
+        let components1 = comp_storage1_lock
+          .as_mut_any()
+          .downcast_mut::<Vec<Option<T1>>>()
+          .unwrap();
+        let components2 = comp_storage2_lock
+          .as_mut_any()
+          .downcast_mut::<Vec<Option<T2>>>()
+          .unwrap();
+
+        for (i, opt_entity) in archetype.entities.iter().enumerate() {
+          if let (Some(entity_id), Some(c1), Some(c2)) =
+            (opt_entity, &mut components1[i], &mut components2[i])
+          {
+            if let Some(result) = f(*entity_id, c1, c2) {
+              return Some((result, *entity_id));
+            }
+          }
+        }
+      }
+    }
+    None
+  }
+
+  pub fn query1_without<T: Component, U: Component, F>(&self, mut f: F)
+  where
+    F: FnMut(EntityId, &T),
+  {
+    let type_t = TypeId::of::<T>();
+    let type_u = TypeId::of::<U>();
+    let archetypes = self.archetypes.read();
+
+    for archetype in archetypes.iter() {
+      if archetype.components.contains_key(&type_t) && !archetype.components.contains_key(&type_u) {
+        let comp_storage_lock = archetype.components.get(&type_t).unwrap().read();
+        if let Some(components) = comp_storage_lock.as_any().downcast_ref::<Vec<Option<T>>>() {
+          for (i, opt_entity) in archetype.entities.iter().enumerate() {
+            if let (Some(entity_id), Some(comp)) = (opt_entity, &components[i]) {
+              f(*entity_id, comp);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  pub fn query1_first_res_without<T: Component, U: Component, F, R>(
+    &self,
+    mut f: F,
+  ) -> Option<(R, EntityId)>
+  where
+    F: FnMut(EntityId, &T) -> Option<R>,
+  {
+    let type_t = TypeId::of::<T>();
+    let type_u = TypeId::of::<U>();
+    let archetypes = self.archetypes.read();
+
+    for archetype in archetypes.iter() {
+      if archetype.components.contains_key(&type_t) && !archetype.components.contains_key(&type_u) {
+        let comp_storage_lock = archetype.components.get(&type_t).unwrap().read();
+        if let Some(components) = comp_storage_lock.as_any().downcast_ref::<Vec<Option<T>>>() {
+          for (i, opt_entity) in archetype.entities.iter().enumerate() {
+            if let (Some(entity_id), Some(comp)) = (opt_entity, &components[i]) {
+              if let Some(result) = f(*entity_id, comp) {
+                return Some((result, *entity_id));
+              }
+            }
+          }
+        }
+      }
+    }
+    None
+  }
+
+  pub fn query2_first_res_without<T1: Component, T2: Component, U: Component, F, R>(
+    &self,
+    mut f: F,
+  ) -> Option<(R, EntityId)>
+  where
+    F: FnMut(EntityId, &T1, &T2) -> Option<R>,
+  {
+    let type_t1 = TypeId::of::<T1>();
+    let type_t2 = TypeId::of::<T2>();
+    let type_u = TypeId::of::<U>();
+    let archetypes = self.archetypes.read();
+
+    for archetype in archetypes.iter() {
+      if archetype.components.contains_key(&type_t1)
+        && archetype.components.contains_key(&type_t2)
+        && !archetype.components.contains_key(&type_u)
+      {
+        let comp_storage1_lock = archetype.components.get(&type_t1).unwrap().read();
+        let comp_storage2_lock = archetype.components.get(&type_t2).unwrap().read();
+
+        let components1 = comp_storage1_lock
+          .as_any()
+          .downcast_ref::<Vec<Option<T1>>>()
+          .unwrap();
+        let components2 = comp_storage2_lock
+          .as_any()
+          .downcast_ref::<Vec<Option<T2>>>()
+          .unwrap();
+
+        for (i, opt_entity) in archetype.entities.iter().enumerate() {
+          if let (Some(entity_id), Some(c1), Some(c2)) =
+            (opt_entity, &components1[i], &components2[i])
+          {
+            if let Some(result) = f(*entity_id, c1, c2) {
+              return Some((result, *entity_id));
+            }
+          }
+        }
+      }
+    }
+    None
+  }
+
+  // === Advanced Scene Traversal Logic ===
 
   pub fn traverse_dfs_pre_order<A, F, C>(
     &self,
@@ -643,22 +1682,19 @@ impl Scene {
     C: FnMut(&Scene, EntityId, &mut A) -> bool,
   {
     if !visited.insert(current_entity) {
-      return; // Cycle detected
+      return;
     }
-
     if !filter(self, current_entity) {
       return;
     }
-
     if !callback(self, current_entity, accumulator) {
-      return; // Stop traversal down this branch if callback returns false
+      return;
     }
 
     let hierarchy = self.hierarchy.read();
     if let Some(children) = hierarchy.children.get(&current_entity) {
-      // Must clone children to avoid holding lock during recursive call
       let children_clone = children.clone();
-      drop(hierarchy); // Release lock before recursive calls
+      drop(hierarchy);
       for &child in &children_clone {
         self.traverse_recursive(child, accumulator, filter, callback, visited);
       }
@@ -702,13 +1738,10 @@ impl Scene {
     T: Component,
   {
     if !visited.insert(current_entity) {
-      return; // Cycle detected
+      return;
     }
 
     let transform = self.with_component(current_entity, |c: &TransformComponent| *c);
-    // This is tricky. We can't return a reference from with_component due to lifetimes.
-    // So we get a pointer, and use it within an unsafe block. This is safe because
-    // we are single-threaded here and nothing will deallocate the component.
     let mesh_ptr = self.with_component(current_entity, |c: &T| c as *const _);
 
     let continue_traversal = unsafe {
@@ -721,7 +1754,6 @@ impl Scene {
     };
 
     if !continue_traversal {
-      // If pre_visit returns false, we still need to call post_visit to balance the stack.
       post_visit(accumulator, current_entity);
       return;
     }
@@ -740,37 +1772,24 @@ impl Scene {
     post_visit(accumulator, current_entity);
   }
 
-  /// Computes the global transform of an entity by traversing up the hierarchy.
-  /// Returns `None` if the target entity does not have a `TransformComponent`.
-  /// Skips any ancestors that do not possess a `TransformComponent`.
   pub fn global_transform(&self, entity_id: EntityId) -> Option<TransformComponent> {
-    // 1. Get the entity's local transform. If it doesn't have one, bail out.
     let mut accumulated_transform = self.with_component(entity_id, |c: &TransformComponent| *c)?;
-
     let mut current_entity = entity_id;
 
-    // 2. Traverse up the hierarchy
     loop {
-      // Scope the hierarchy read lock tightly. We do NOT want to hold this
-      // while calling `with_component`, as that grabs `entities` and `archetypes`
-      // locks, which could lead to deadlocks if other threads lock in a different order.
       let parent_opt = {
         let hierarchy = self.hierarchy.read();
         hierarchy.parents.get(&current_entity).copied()
       };
 
       if let Some(parent_id) = parent_opt {
-        // 3. If the parent has a transform, accumulate it. Otherwise, it simply skips.
         if let Some(parent_transform) = self.with_component(parent_id, |c: &TransformComponent| *c)
         {
           accumulated_transform =
             Self::combine_transforms(&parent_transform, &accumulated_transform);
         }
-
-        // Move up to the next ancestor
         current_entity = parent_id;
       } else {
-        // No more parents, we've reached the root of this tree.
         break;
       }
     }
@@ -778,17 +1797,10 @@ impl Scene {
     Some(accumulated_transform)
   }
 
-  /// Helper to combine a parent's transform with a child's transform.
-  /// TODO: Move elsewhere if needed
   fn combine_transforms(
     parent: &TransformComponent,
     child: &TransformComponent,
   ) -> TransformComponent {
-    // Typical TRS (Translation, Rotation, Scale) combination logic:
-    // Global Scale = Parent Scale * Child Scale (Component-wise)
-    // Global Rotation = Parent Rotation * Child Rotation
-    // Global Position = Parent Position + (Parent Rotation * (Parent Scale * Child Position))
-
     TransformComponent {
       scale: parent.scale * child.scale,
       rotation: parent.rotation * child.rotation,
@@ -799,753 +1811,6 @@ impl Scene {
     }
   }
 
-  /// Registers a component type, its dependencies, and its storage constructor.
-  pub fn register_component<T: Component>(&self, dependencies: &[TypeId]) {
-    let mut meta = self.component_meta.write();
-    meta.insert(
-      TypeId::of::<T>(),
-      ComponentMeta {
-        dependencies: dependencies.to_vec(),
-        new_storage: || RwLock::new(Box::new(Vec::<T>::new())),
-        type_name: core::any::type_name::<T>(),
-      },
-    );
-  }
-
-  pub fn add_component<T: Component>(
-    &self,
-    entity_id: EntityId,
-    component: T,
-  ) -> Result<(), AddComponentError> {
-    let new_component_type = TypeId::of::<T>();
-
-    // --- 1. Find entity and source archetype, and perform all checks ---
-    let src_location = {
-      let entities = self.entities.read();
-      *entities
-        .get(entity_id)
-        .ok_or(AddComponentError::EntityNotFound)?
-    };
-
-    let (target_archetype_index, is_new_archetype) = {
-      let archetypes = self.archetypes.read();
-      let src_archetype = &archetypes[src_location.archetype_index];
-
-      // TODO: Support for checking whether the new component type is present but its place in the entity
-      // is with a none-like value. This implies that archetype grouping can be loose to some extent based on some
-      // cost factor which determines whether it's worth it to migrate and entity to a new Archetype or not
-      if src_archetype.component_types.contains(&new_component_type) {
-        return Err(AddComponentError::ComponentAlreadyExists);
-      }
-
-      // requested component is a new type, therefore check for presence of its dependencies
-      let meta = self.component_meta.read();
-      // if we are in a proper state, and the component type has been already registered, then
-      // its metadata should alsow be there. Checking regardless
-      let component_meta = meta
-        .get(&new_component_type)
-        .ok_or(AddComponentError::ComponentNotRegistered)?;
-
-      if !src_archetype.has_components(&component_meta.dependencies) {
-        let missing_dependency_type_id = component_meta
-          .dependencies
-          .iter()
-          .find(|type_id| !src_archetype.component_types.contains(*type_id))
-          .unwrap(); // This is safe because we know a dependency is missing.
-
-        let missing_component_name = meta
-          .get(missing_dependency_type_id)
-          .map_or("Unknown Component", |meta| meta.type_name);
-
-        return Err(AddComponentError::DependencyNotSatisfied {
-          missing: missing_component_name,
-        });
-      }
-
-      // To check whether we already have an archetype with this new component set,
-      // we must iterate through existing archetypes.
-      // NOTE: This could be optimized with a bloom filter or by hashing the component set.
-      let mut target_component_types = src_archetype.component_types.clone();
-      target_component_types.insert(new_component_type);
-
-      // Find a target archetype that matches the new component set
-      let mut found_index = None;
-      for (i, arch) in archetypes.iter().enumerate() {
-        if arch.component_types == target_component_types {
-          found_index = Some(i);
-          break;
-        }
-      }
-      (found_index, found_index.is_none())
-    };
-
-    let target_archetype_index = if is_new_archetype {
-      // --- Create a new archetype if none was found ---
-      let mut archetypes = self.archetypes.write();
-      let meta = self.component_meta.read();
-
-      let src_archetype = &archetypes[src_location.archetype_index];
-      let mut target_component_types = src_archetype.component_types.clone();
-      target_component_types.insert(new_component_type);
-
-      // Re-check if another thread created it in the meantime
-      let mut re_check_index = None;
-      for (i, arch) in archetypes.iter().enumerate() {
-        if arch.component_types == target_component_types {
-          re_check_index = Some(i);
-          break;
-        }
-      }
-
-      if let Some(index) = re_check_index {
-        index
-      } else {
-        let mut new_arch = Archetype {
-          component_types: target_component_types,
-          components: HashMap::new(),
-          entities: Vec::new(),
-        };
-
-        for type_id in &new_arch.component_types {
-          let storage_fn = meta.get(type_id).unwrap().new_storage;
-          new_arch.components.insert(*type_id, storage_fn());
-        }
-
-        archetypes.push(new_arch);
-        archetypes.len() - 1
-      }
-    } else {
-      target_archetype_index.unwrap()
-    };
-
-    // --- 3. Move the entity and its components ---
-    if src_location.archetype_index != target_archetype_index {
-      let mut entities = self.entities.write();
-      let mut archetypes = self.archetypes.write();
-
-      // Hacky syntax to get two `&mut` out of a single `&mut Vec`
-      let (src_arch, target_arch) = if src_location.archetype_index < target_archetype_index {
-        let (left, right) = archetypes.split_at_mut(target_archetype_index);
-        (&mut left[src_location.archetype_index], &mut right[0])
-      } else {
-        let (left, right) = archetypes.split_at_mut(src_location.archetype_index);
-        (&mut right[0], &mut left[target_archetype_index])
-      };
-
-      let moved_entity_id = src_arch.entities.swap_remove(src_location.row_index);
-      let swapped_entity_id_opt = src_arch.entities.get(src_location.row_index).copied();
-
-      for (type_id, target_storage_lock) in target_arch.components.iter() {
-        if *type_id == new_component_type {
-          continue;
-        }
-        let mut src_storage = src_arch.components[type_id].write();
-        let mut target_storage = target_storage_lock.write();
-        src_storage.swap_remove_and_push_to(src_location.row_index, &mut **target_storage);
-      }
-
-      target_arch.components[&new_component_type]
-        .write()
-        .push_any(Box::new(component));
-      target_arch.entities.push(moved_entity_id);
-
-      let new_location = EntityLocation {
-        archetype_index: target_archetype_index,
-        row_index: target_arch.entities.len() - 1,
-      };
-
-      // entity location bookkeeping
-      *entities.get_mut(moved_entity_id).unwrap() = new_location;
-      if let Some(swapped_id) = swapped_entity_id_opt {
-        entities.get_mut(swapped_id).unwrap().row_index = src_location.row_index;
-      }
-    }
-
-    Ok(())
-  }
-
-  pub fn spawn_entity(&self, name: impl Into<alloc::string::String>) -> EntityId {
-    let mut actual_name = name.into();
-    {
-      let names = self.names.read();
-      if names.values().any(|n| *n == actual_name) {
-        let mut counter = 1;
-        loop {
-          let try_name = alloc::format!("{}_{}", actual_name, counter);
-          if !names.values().any(|n| *n == try_name) {
-            actual_name = try_name;
-            break;
-          }
-          counter += 1;
-        }
-      }
-    }
-
-    let entity_id = {
-      let mut entities = self.entities.write();
-      let mut archetypes = self.archetypes.write();
-
-      let archetype = &mut archetypes[0];
-      let entity_location = EntityLocation {
-        archetype_index: 0,
-        row_index: archetype.entities.len(),
-      };
-
-      let entity_id = entities.insert(entity_location);
-      archetype.entities.push(entity_id);
-      entity_id
-    };
-
-    self.names.write().insert(entity_id, actual_name);
-
-    entity_id
-  }
-
-  pub fn get_entity_by_name(&self, name: &str) -> Option<EntityId> {
-    self
-      .names
-      .read()
-      .iter()
-      .find(|(_, n)| *n == name)
-      .map(|(id, _)| *id)
-  }
-
-  pub fn get_name(&self, entity: EntityId) -> Option<alloc::string::String> {
-    self.names.read().get(&entity).cloned()
-  }
-
-  pub fn set_name(&self, entity: EntityId, name: impl Into<alloc::string::String>) {
-    let mut actual_name = name.into();
-    {
-      let names = self.names.read();
-      if names.values().any(|n| *n == actual_name) {
-        let mut counter = 1;
-        loop {
-          let try_name = alloc::format!("{}_{}", actual_name, counter);
-          if !names.values().any(|n| *n == try_name) {
-            actual_name = try_name;
-            break;
-          }
-          counter += 1;
-        }
-      }
-    }
-    self.names.write().insert(entity, actual_name);
-  }
-
-  pub fn with_component<T: Component, F, R>(&self, entity_id: EntityId, f: F) -> Option<R>
-  where
-    F: FnOnce(&T) -> R,
-  {
-    let entities = self.entities.read();
-    let location = entities.get(entity_id)?;
-
-    let archetypes = self.archetypes.read();
-    let archetype = &archetypes[location.archetype_index];
-
-    let components_lock = archetype.components.get(&TypeId::of::<T>())?.read();
-    let components = components_lock.as_any().downcast_ref::<Vec<T>>()?;
-
-    Some(f(&components[location.row_index]))
-  }
-
-  pub fn with_component_mut<T: Component, F, R>(&self, entity_id: EntityId, f: F) -> Option<R>
-  where
-    F: FnOnce(&mut T) -> R,
-  {
-    let entities = self.entities.read();
-    let location = entities.get(entity_id)?;
-
-    let archetypes = self.archetypes.read();
-    let archetype = &archetypes[location.archetype_index];
-
-    let mut components_lock = archetype.components.get(&TypeId::of::<T>())?.write();
-    let components = components_lock.as_mut_any().downcast_mut::<Vec<T>>()?;
-
-    Some(f(&mut components[location.row_index]))
-  }
-
-  // TODO error or option?
-  pub fn remove_entity(&self, entity_id: EntityId) {
-    let src_location = {
-      let mut entities = self.entities.write();
-      if let Some(loc) = entities.remove(entity_id) {
-        loc
-      } else {
-        return;
-      }
-    };
-
-    self.hierarchy.write().remove_entity(entity_id);
-    self.names.write().remove(&entity_id);
-
-    let mut archetypes = self.archetypes.write();
-    let src_arch = &mut archetypes[src_location.archetype_index];
-
-    let swapped_entity_id_opt = src_arch.entities.get(src_location.row_index).copied();
-    src_arch.entities.swap_remove(src_location.row_index);
-
-    for (_, storage_lock) in src_arch.components.iter() {
-      let mut storage = storage_lock.write();
-      storage.swap_remove(src_location.row_index);
-    }
-
-    if let Some(swapped_id) = swapped_entity_id_opt {
-      // The entity that was swapped in now has row_index = src_location.row_index
-      if let Some(loc) = self.entities.write().get_mut(swapped_id) {
-        loc.row_index = src_location.row_index;
-      }
-    }
-  }
-
-  pub fn remove_component<T: Component>(&self, entity_id: EntityId) -> Result<(), &'static str> {
-    let type_id_to_remove = TypeId::of::<T>();
-
-    let src_location = {
-      let entities = self.entities.read();
-      *entities.get(entity_id).ok_or("Entity not found")?
-    };
-
-    let target_archetype_index = {
-      let archetypes = self.archetypes.read();
-      let src_archetype = &archetypes[src_location.archetype_index];
-
-      if !src_archetype.component_types.contains(&type_id_to_remove) {
-        return Err("Component not found on entity");
-      }
-
-      let mut target_component_types = src_archetype.component_types.clone();
-      target_component_types.remove(&type_id_to_remove);
-
-      archetypes
-        .iter()
-        .position(|arch| arch.component_types == target_component_types)
-        .ok_or(
-          "Target archetype not found. This should not happen if an empty archetype always exists.",
-        )?
-    };
-
-    if src_location.archetype_index != target_archetype_index {
-      let mut entities = self.entities.write();
-      let mut archetypes = self.archetypes.write();
-
-      let (src_arch, target_arch) = if src_location.archetype_index < target_archetype_index {
-        let (left, right) = archetypes.split_at_mut(target_archetype_index);
-        (&mut left[src_location.archetype_index], &mut right[0])
-      } else {
-        let (left, right) = archetypes.split_at_mut(src_location.archetype_index);
-        (&mut right[0], &mut left[target_archetype_index])
-      };
-
-      let moved_entity_id = src_arch.entities.swap_remove(src_location.row_index);
-      let swapped_entity_id_opt = src_arch.entities.get(src_location.row_index).copied();
-
-      // The component to be removed is handled separately to avoid moving it.
-      src_arch
-        .components
-        .get(&type_id_to_remove)
-        .unwrap()
-        .write()
-        .as_mut_any()
-        .downcast_mut::<Vec<T>>()
-        .unwrap()
-        .swap_remove(src_location.row_index);
-
-      for (type_id, src_storage_lock) in src_arch.components.iter() {
-        if *type_id == type_id_to_remove {
-          continue;
-        }
-
-        if let Some(target_storage_lock) = target_arch.components.get(type_id) {
-          let mut src_storage = src_storage_lock.write();
-          let mut target_storage = target_storage_lock.write();
-          src_storage.swap_remove_and_push_to(src_location.row_index, &mut **target_storage);
-        }
-      }
-
-      target_arch.entities.push(moved_entity_id);
-      let new_location = EntityLocation {
-        archetype_index: target_archetype_index,
-        row_index: target_arch.entities.len() - 1,
-      };
-
-      *entities.get_mut(moved_entity_id).unwrap() = new_location;
-      if let Some(swapped_id) = swapped_entity_id_opt {
-        entities.get_mut(swapped_id).unwrap().row_index = src_location.row_index;
-      }
-    }
-
-    Ok(())
-  }
-
-  pub fn has_component<T: Component>(&self, entity_id: EntityId) -> HasComponentResultEnum {
-    let archetypes = self.archetypes.read();
-    // 1. find the archetype which contains the entity. not found means Err
-    let archetype = archetypes
-      .iter()
-      .find(|archetype| archetype.entities.iter().any(|e| *e == entity_id));
-    if archetype.is_none() {
-      return HasComponentResultEnum::EntityNotFound;
-    }
-    // 2. Check if archetype has component in question
-    let archetype = unsafe { archetype.unwrap_unchecked() };
-    if archetype.has_components(&[TypeId::of::<T>()]) {
-      HasComponentResultEnum::EntityHasComponent
-    } else {
-      HasComponentResultEnum::ComponentNotFound
-    }
-  }
-
-  pub fn query1<T: Component, F>(&self, mut f: F)
-  where
-    F: FnMut(EntityId, &T),
-  {
-    let archetypes = self.archetypes.read();
-    let type_t = TypeId::of::<T>();
-
-    for archetype in archetypes.iter() {
-      if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
-        let comp_storage = comp_storage_lock.read();
-        if let Some(components) = comp_storage.as_any().downcast_ref::<Vec<T>>() {
-          for (i, entity_id) in archetype.entities.iter().enumerate() {
-            f(*entity_id, &components[i]);
-          }
-        }
-      }
-    }
-  }
-
-  pub fn query2<T1: Component, T2: Component, F>(&self, mut f: F)
-  where
-    F: FnMut(EntityId, &T1, &T2),
-  {
-    let archetypes = self.archetypes.read();
-    let type_t1 = TypeId::of::<T1>();
-    let type_t2 = TypeId::of::<T2>();
-
-    for archetype in archetypes.iter() {
-      if archetype.components.contains_key(&type_t1) && archetype.components.contains_key(&type_t2)
-      {
-        let comp_storage1_lock = archetype.components[&type_t1].read();
-        let comp_storage2_lock = archetype.components[&type_t2].read();
-        let components1 = comp_storage1_lock
-          .as_any()
-          .downcast_ref::<Vec<T1>>()
-          .unwrap();
-        let components2 = comp_storage2_lock
-          .as_any()
-          .downcast_ref::<Vec<T2>>()
-          .unwrap();
-
-        for (i, entity_id) in archetype.entities.iter().enumerate() {
-          f(*entity_id, &components1[i], &components2[i]);
-        }
-      }
-    }
-  }
-
-  pub fn query1_mut<T: Component, F>(&self, mut f: F)
-  where
-    F: FnMut(EntityId, &mut T),
-  {
-    let archetypes = self.archetypes.read();
-    let type_t = TypeId::of::<T>();
-
-    for archetype in archetypes.iter() {
-      if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
-        let mut comp_storage = comp_storage_lock.write();
-        if let Some(components) = comp_storage.as_mut_any().downcast_mut::<Vec<T>>() {
-          for (i, entity_id) in archetype.entities.iter().enumerate() {
-            f(*entity_id, &mut components[i]);
-          }
-        }
-      }
-    }
-  }
-
-  pub fn query2_mut<T1: Component, T2: Component, F>(&self, mut f: F)
-  where
-    F: FnMut(EntityId, &mut T1, &mut T2),
-  {
-    let type_t1 = TypeId::of::<T1>();
-    let type_t2 = TypeId::of::<T2>();
-    assert_ne!(
-      type_t1, type_t2,
-      "Cannot mutably query the same component type twice."
-    );
-
-    let archetypes = self.archetypes.read();
-
-    for archetype in archetypes.iter() {
-      if archetype.components.contains_key(&type_t1) && archetype.components.contains_key(&type_t2)
-      {
-        let mut comp_storage1_lock = archetype.components[&type_t1].write();
-        let mut comp_storage2_lock = archetype.components[&type_t2].write();
-        let components1 = comp_storage1_lock
-          .as_mut_any()
-          .downcast_mut::<Vec<T1>>()
-          .unwrap();
-        let components2 = comp_storage2_lock
-          .as_mut_any()
-          .downcast_mut::<Vec<T2>>()
-          .unwrap();
-
-        for (i, entity_id) in archetype.entities.iter().enumerate() {
-          f(*entity_id, &mut components1[i], &mut components2[i]);
-        }
-      }
-    }
-  }
-
-  // TODO: unit tests for _res version of query methods
-  pub fn query1_res<T: Component, F, R>(&self, mut f: F) -> Vec<(R, EntityId)>
-  where
-    F: FnMut(EntityId, &T) -> Option<R>,
-  {
-    let mut results = Vec::new();
-    let archetypes = self.archetypes.read();
-    let type_t = TypeId::of::<T>();
-
-    for archetype in archetypes.iter() {
-      if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
-        let comp_storage = comp_storage_lock.read();
-        if let Some(components) = comp_storage.as_any().downcast_ref::<Vec<T>>() {
-          for (i, entity_id) in archetype.entities.iter().enumerate() {
-            // Only keep the result if the closure returns Some(R)
-            if let Some(result) = f(*entity_id, &components[i]) {
-              results.push((result, *entity_id));
-            }
-          }
-        }
-      }
-    }
-
-    results
-  }
-
-  pub fn query2_res<T1: Component, T2: Component, F, R>(&self, mut f: F) -> Vec<(R, EntityId)>
-  where
-    F: FnMut(EntityId, &T1, &T2) -> Option<R>,
-  {
-    let mut results = Vec::new();
-    let archetypes = self.archetypes.read();
-    let type_t1 = TypeId::of::<T1>();
-    let type_t2 = TypeId::of::<T2>();
-
-    for archetype in archetypes.iter() {
-      if archetype.components.contains_key(&type_t1) && archetype.components.contains_key(&type_t2)
-      {
-        let comp_storage1_lock = archetype.components[&type_t1].read();
-        let comp_storage2_lock = archetype.components[&type_t2].read();
-        let components1 = comp_storage1_lock
-          .as_any()
-          .downcast_ref::<Vec<T1>>()
-          .unwrap();
-        let components2 = comp_storage2_lock
-          .as_any()
-          .downcast_ref::<Vec<T2>>()
-          .unwrap();
-
-        for (i, entity_id) in archetype.entities.iter().enumerate() {
-          if let Some(result) = f(*entity_id, &components1[i], &components2[i]) {
-            results.push((result, *entity_id));
-          }
-        }
-      }
-    }
-
-    results
-  }
-
-  pub fn query1_res_mut<T: Component, F, R>(&self, mut f: F) -> Vec<(R, EntityId)>
-  where
-    F: FnMut(EntityId, &mut T) -> Option<R>,
-  {
-    let mut results = Vec::new();
-    let archetypes = self.archetypes.read();
-    let type_t = TypeId::of::<T>();
-
-    for archetype in archetypes.iter() {
-      if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
-        let mut comp_storage = comp_storage_lock.write();
-        if let Some(components) = comp_storage.as_mut_any().downcast_mut::<Vec<T>>() {
-          for (i, entity_id) in archetype.entities.iter().enumerate() {
-            if let Some(result) = f(*entity_id, &mut components[i]) {
-              results.push((result, *entity_id));
-            }
-          }
-        }
-      }
-    }
-
-    results
-  }
-
-  pub fn query2_res_mut<T1: Component, T2: Component, F, R>(&self, mut f: F) -> Vec<(R, EntityId)>
-  where
-    F: FnMut(EntityId, &mut T1, &mut T2) -> Option<R>,
-  {
-    let type_t1 = TypeId::of::<T1>();
-    let type_t2 = TypeId::of::<T2>();
-    assert_ne!(
-      type_t1, type_t2,
-      "Cannot mutably query the same component type twice."
-    );
-
-    let mut results = Vec::new();
-    let archetypes = self.archetypes.read();
-
-    for archetype in archetypes.iter() {
-      if archetype.components.contains_key(&type_t1) && archetype.components.contains_key(&type_t2)
-      {
-        let mut comp_storage1_lock = archetype.components[&type_t1].write();
-        let mut comp_storage2_lock = archetype.components[&type_t2].write();
-        let components1 = comp_storage1_lock
-          .as_mut_any()
-          .downcast_mut::<Vec<T1>>()
-          .unwrap();
-        let components2 = comp_storage2_lock
-          .as_mut_any()
-          .downcast_mut::<Vec<T2>>()
-          .unwrap();
-
-        for (i, entity_id) in archetype.entities.iter().enumerate() {
-          if let Some(result) = f(*entity_id, &mut components1[i], &mut components2[i]) {
-            results.push((result, *entity_id));
-          }
-        }
-      }
-    }
-
-    results
-  }
-
-  pub fn query1_first_res<T: Component, F, R>(&self, mut f: F) -> Option<(R, EntityId)>
-  where
-    F: FnMut(EntityId, &T) -> Option<R>,
-  {
-    let archetypes = self.archetypes.read();
-    let type_t = TypeId::of::<T>();
-
-    for archetype in archetypes.iter() {
-      if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
-        let comp_storage = comp_storage_lock.read();
-        if let Some(components) = comp_storage.as_any().downcast_ref::<Vec<T>>() {
-          for (i, entity_id) in archetype.entities.iter().enumerate() {
-            // Only keep the result if the closure returns Some(R)
-            if let Some(result) = f(*entity_id, &components[i]) {
-              return Some((result, *entity_id));
-            }
-          }
-        }
-      }
-    }
-
-    None
-  }
-
-  pub fn query2_first_res<T1: Component, T2: Component, F, R>(
-    &self,
-    mut f: F,
-  ) -> Option<(R, EntityId)>
-  where
-    F: FnMut(EntityId, &T1, &T2) -> Option<R>,
-  {
-    let archetypes = self.archetypes.read();
-    let type_t1 = TypeId::of::<T1>();
-    let type_t2 = TypeId::of::<T2>();
-
-    for archetype in archetypes.iter() {
-      if archetype.components.contains_key(&type_t1) && archetype.components.contains_key(&type_t2)
-      {
-        let comp_storage1_lock = archetype.components[&type_t1].read();
-        let comp_storage2_lock = archetype.components[&type_t2].read();
-        let components1 = comp_storage1_lock
-          .as_any()
-          .downcast_ref::<Vec<T1>>()
-          .unwrap();
-        let components2 = comp_storage2_lock
-          .as_any()
-          .downcast_ref::<Vec<T2>>()
-          .unwrap();
-
-        for (i, entity_id) in archetype.entities.iter().enumerate() {
-          if let Some(result) = f(*entity_id, &components1[i], &components2[i]) {
-            Some((result, *entity_id));
-          }
-        }
-      }
-    }
-
-    None
-  }
-
-  pub fn query1_res_first_mut<T: Component, F, R>(&self, mut f: F) -> Option<(R, EntityId)>
-  where
-    F: FnMut(EntityId, &mut T) -> Option<R>,
-  {
-    let archetypes = self.archetypes.read();
-    let type_t = TypeId::of::<T>();
-
-    for archetype in archetypes.iter() {
-      if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
-        let mut comp_storage = comp_storage_lock.write();
-        if let Some(components) = comp_storage.as_mut_any().downcast_mut::<Vec<T>>() {
-          for (i, entity_id) in archetype.entities.iter().enumerate() {
-            if let Some(result) = f(*entity_id, &mut components[i]) {
-              return Some((result, *entity_id));
-            }
-          }
-        }
-      }
-    }
-
-    None
-  }
-
-  pub fn query2_res_first_mut<T1: Component, T2: Component, F, R>(
-    &self,
-    mut f: F,
-  ) -> Option<(R, EntityId)>
-  where
-    F: FnMut(EntityId, &mut T1, &mut T2) -> Option<R>,
-  {
-    let type_t1 = TypeId::of::<T1>();
-    let type_t2 = TypeId::of::<T2>();
-    assert_ne!(
-      type_t1, type_t2,
-      "Cannot mutably query the same component type twice."
-    );
-
-    let archetypes = self.archetypes.read();
-
-    for archetype in archetypes.iter() {
-      if archetype.components.contains_key(&type_t1) && archetype.components.contains_key(&type_t2)
-      {
-        let mut comp_storage1_lock = archetype.components[&type_t1].write();
-        let mut comp_storage2_lock = archetype.components[&type_t2].write();
-        let components1 = comp_storage1_lock
-          .as_mut_any()
-          .downcast_mut::<Vec<T1>>()
-          .unwrap();
-        let components2 = comp_storage2_lock
-          .as_mut_any()
-          .downcast_mut::<Vec<T2>>()
-          .unwrap();
-
-        for (i, entity_id) in archetype.entities.iter().enumerate() {
-          if let Some(result) = f(*entity_id, &mut components1[i], &mut components2[i]) {
-            return Some((result, *entity_id));
-          }
-        }
-      }
-    }
-
-    None
-  }
-
-  /// Computes the effective parent global transform by walking up the hierarchy
-  /// until an ancestor with a `TransformComponent` is found.
   pub fn parent_global_transform(&self, entity_id: EntityId) -> Option<TransformComponent> {
     let mut current_parent = self.get_parent(entity_id);
     while let Some(parent_id) = current_parent {
@@ -1557,38 +1822,25 @@ impl Scene {
     None
   }
 
-  /// Efficiently sets the global transform of an entity.
-  ///
-  /// This dynamically computes the required local transform so that when evaluated against
-  /// its parents, it produces the desired global transform without 4x4 matrix inversions.
   pub fn set_global_transform(
     &self,
     entity_id: EntityId,
     new_global: TransformComponent,
   ) -> EngineResult<()> {
-    // 1. Traverse upwards to get the effective parent global transform.
-    // Executed BEFORE acquiring the component mutation lock to prevent deadlocks.
     let parent_global = self.parent_global_transform(entity_id);
 
-    // 2. Mathematically isolate and apply the new local transform.
     self
       .with_component_mut(entity_id, |t: &mut TransformComponent| {
         if let Some(pg) = parent_global {
-          // Local Scale = Target Scale / Parent Scale
           t.scale = Vec3f32::from_components(
             safe_div(new_global.scale.x(), pg.scale.x()),
             safe_div(new_global.scale.y(), pg.scale.y()),
             safe_div(new_global.scale.z(), pg.scale.z()),
           );
 
-          // Local Rotation = Parent Rotation^-1 * Target Rotation
-          // Note: Assumes `Quat` has `.inverse()`. If your math lib uses `.conjugate()`
-          // for unit quaternions instead, you can safely substitute it here.
           let inv_rot = pg.rotation.inverse();
           t.rotation = inv_rot * new_global.rotation;
 
-          // Local Position = Parent Rotation^-1 * (Target Position - Parent Position) / Parent Scale
-          // Extracted component-wise to avoid assuming a `Sub` operator overload on `Vec3f32`.
           let diff_pos = Vec3f32::from_components(
             new_global.position.x() - pg.position.x(),
             new_global.position.y() - pg.position.y(),
@@ -1602,19 +1854,16 @@ impl Scene {
             safe_div(unrotated_diff.z(), pg.scale.z()),
           );
         } else {
-          // No parent hierarchy implies local space perfectly equals global space
           *t = new_global;
         }
       })
       .ok_or(EngineError::InvalidOperation(
-        "set_global_transform: Entity not found or missing TransformComponent",
+        "set_global_transform: Entity missing TransformComponent",
       ))?;
 
     Ok(())
   }
 
-  /// Sets only the global position and rotation of an entity.
-  /// The local scale configuration is preserved securely intact.
   pub fn set_global_position_and_rotation(
     &self,
     entity_id: EntityId,
@@ -1626,7 +1875,7 @@ impl Scene {
     self
       .with_component_mut(entity_id, |t: &mut TransformComponent| {
         if let Some(pg) = parent_global {
-          let safe_div = |a: f32, b: f32| {
+          let safe_div_zero = |a: f32, b: f32| {
             if b > -1e-6_f32 && b < 1e-6_f32 {
               0.0
             } else {
@@ -1635,11 +1884,8 @@ impl Scene {
           };
 
           let inv_rot = pg.rotation.inverse();
-
-          // Local Rotation
           t.rotation = inv_rot * new_rotation;
 
-          // Local Position
           let diff_pos = Vec3f32::from_components(
             new_position.x() - pg.position.x(),
             new_position.y() - pg.position.y(),
@@ -1648,196 +1894,24 @@ impl Scene {
           let unrotated_diff = inv_rot.rotate_vector(diff_pos);
 
           t.position = Vec3f32::from_components(
-            safe_div(unrotated_diff.x(), pg.scale.x()),
-            safe_div(unrotated_diff.y(), pg.scale.y()),
-            safe_div(unrotated_diff.z(), pg.scale.z()),
+            safe_div_zero(unrotated_diff.x(), pg.scale.x()),
+            safe_div_zero(unrotated_diff.y(), pg.scale.y()),
+            safe_div_zero(unrotated_diff.z(), pg.scale.z()),
           );
-          // Note: `t.scale` is deliberately unmodified!
         } else {
           t.position = new_position;
           t.rotation = new_rotation;
         }
       })
       .ok_or(EngineError::InvalidOperation(
-        "set_global_position_and_rotation: Entity not found or missing TransformComponent",
+        "set_global_position_and_rotation: Entity missing TransformComponent",
       ))?;
 
     Ok(())
   }
 
-  /// Searches for the first instance of a component of type `T` and deletes it.
-  ///
-  /// Returns `Some(EntityId)` containing the affected entity if the component
-  /// was successfully found and removed, or `None` if it was not found.
-  pub fn remove_first_component<T: Component>(&self) -> Option<EntityId> {
-    let type_id = TypeId::of::<T>();
-
-    // 1. Locate the first entity possessing the component.
-    // We tightly scope this block to ensure the `archetypes.read()` lock is explicitly
-    // dropped BEFORE we call `remove_component`. This prevents thread deadlocks.
-    let target_entity = {
-      let archetypes = self.archetypes.read();
-      archetypes.iter().find_map(|arch| {
-        // Check if the archetype has the component.
-        // If it does, we try to grab the first entity.
-        // If the archetype is empty, `.first()` evaluates to None and find_map continues.
-        if arch.component_types.contains(&type_id) {
-          arch.entities.first().copied()
-        } else {
-          None
-        }
-      })
-    };
-
-    // 2. Attempt to remove it using existing archetype migration logic.
-    if let Some(entity_id) = target_entity {
-      // We check `.is_ok()` to protect against concurrent modifications in the
-      // microsecond gap between step 1 and step 2, and to handle potential ECS structural
-      // errors (like missing empty target archetypes).
-      if self.remove_component::<T>(entity_id).is_ok() {
-        return Some(entity_id);
-      }
-    }
-
-    None
-  }
-
-  /// Queries all entities that have component `T` but DO NOT have component `U`.
-  pub fn query1_without<T: Component, U: Component, F>(&self, mut f: F)
-  where
-    F: FnMut(EntityId, &T),
-  {
-    let type_t = TypeId::of::<T>();
-    let type_u = TypeId::of::<U>();
-    assert_ne!(
-      type_t, type_u,
-      "Included and excluded component types must be distinct."
-    );
-
-    let archetypes = self.archetypes.read();
-
-    for archetype in archetypes.iter() {
-      // Check that the archetype has T, but crucially, does NOT have U
-      if archetype.components.contains_key(&type_t) && !archetype.components.contains_key(&type_u) {
-        let comp_storage_lock = archetype.components.get(&type_t).unwrap();
-        let comp_storage = comp_storage_lock.read();
-
-        if let Some(components) = comp_storage.as_any().downcast_ref::<Vec<T>>() {
-          for (i, entity_id) in archetype.entities.iter().enumerate() {
-            f(*entity_id, &components[i]);
-          }
-        }
-      }
-    }
-  }
-
-  /// Queries entities that have component `T` but DO NOT have component `U`,
-  /// stopping and returning the first result where the closure returns `Some`.
-  pub fn query1_first_res_without<T: Component, U: Component, F, R>(
-    &self,
-    mut f: F,
-  ) -> Option<(R, EntityId)>
-  where
-    F: FnMut(EntityId, &T) -> Option<R>,
-  {
-    let type_t = TypeId::of::<T>();
-    let type_u = TypeId::of::<U>();
-    assert_ne!(
-      type_t, type_u,
-      "Included and excluded component types must be distinct."
-    );
-
-    let archetypes = self.archetypes.read();
-
-    for archetype in archetypes.iter() {
-      // Check that the archetype has T, but crucially, does NOT have U
-      if archetype.components.contains_key(&type_t) && !archetype.components.contains_key(&type_u) {
-        let comp_storage_lock = archetype.components.get(&type_t).unwrap();
-        let comp_storage = comp_storage_lock.read();
-
-        if let Some(components) = comp_storage.as_any().downcast_ref::<Vec<T>>() {
-          for (i, entity_id) in archetype.entities.iter().enumerate() {
-            if let Some(result) = f(*entity_id, &components[i]) {
-              return Some((result, *entity_id));
-            }
-          }
-        }
-      }
-    }
-
-    None
-  }
-
-  /// Queries entities that have components `T1` and `T2`, but DO NOT have component `U`.
-  /// Stops and returns the first result where the closure returns `Some`.
-  pub fn query2_first_res_without<T1: Component, T2: Component, U: Component, F, R>(
-    &self,
-    mut f: F,
-  ) -> Option<(R, EntityId)>
-  where
-    F: FnMut(EntityId, &T1, &T2) -> Option<R>,
-  {
-    let type_t1 = TypeId::of::<T1>();
-    let type_t2 = TypeId::of::<T2>();
-    let type_u = TypeId::of::<U>();
-
-    assert_ne!(
-      type_t1, type_t2,
-      "Included component types must be distinct."
-    );
-    assert_ne!(
-      type_t1, type_u,
-      "Included component T1 and excluded component U must be distinct."
-    );
-    assert_ne!(
-      type_t2, type_u,
-      "Included component T2 and excluded component U must be distinct."
-    );
-
-    let archetypes = self.archetypes.read();
-
-    for archetype in archetypes.iter() {
-      // Check that the archetype has T1 and T2, but crucially, does NOT have U
-      if archetype.components.contains_key(&type_t1)
-        && archetype.components.contains_key(&type_t2)
-        && !archetype.components.contains_key(&type_u)
-      {
-        let comp_storage1_lock = archetype.components.get(&type_t1).unwrap().read();
-        let comp_storage2_lock = archetype.components.get(&type_t2).unwrap().read();
-
-        let components1 = comp_storage1_lock
-          .as_any()
-          .downcast_ref::<Vec<T1>>()
-          .unwrap();
-        let components2 = comp_storage2_lock
-          .as_any()
-          .downcast_ref::<Vec<T2>>()
-          .unwrap();
-
-        for (i, entity_id) in archetype.entities.iter().enumerate() {
-          if let Some(result) = f(*entity_id, &components1[i], &components2[i]) {
-            return Some((result, *entity_id));
-          }
-        }
-      }
-    }
-
-    None
-  }
-
-  /// Validates the scene against specific structural constraints.
-  ///
-  /// Constraints:
-  /// - Maximum of 1 `SunComponent`
-  /// - Maximum of 1 `CursorComponent`
-  /// - Maximum of 1 `SkyComponent`
-  /// - Maximum of 1 `GridComponent`
-  /// TODO constraints on following component and selected component
-  /// Multiple instances of other components are permitted.
   pub fn validate(&self) -> EngineResult<()> {
     let archetypes = self.archetypes.read();
-
-    // Cache the TypeIds to avoid recalculating them in the loop
     let sun_type = TypeId::of::<SunComponent>();
     let cursor_type = TypeId::of::<CursorComponent>();
     let sky_type = TypeId::of::<SkyComponent>();
@@ -1848,51 +1922,710 @@ impl Scene {
     let mut sky_count = 0;
     let mut grid_count = 0;
 
-    // Single pass over archetypes avoids multiple lock acquisitions
     for arch in archetypes.iter() {
-      let num_entities = arch.entities.len();
-
-      // Skip empty archetypes
-      if num_entities == 0 {
+      let alive_count = arch.entities.len() - arch.free_slots.len();
+      if alive_count == 0 {
         continue;
       }
 
       if arch.component_types.contains(&sun_type) {
-        sun_count += num_entities;
+        sun_count += alive_count;
       }
       if arch.component_types.contains(&cursor_type) {
-        cursor_count += num_entities;
+        cursor_count += alive_count;
       }
       if arch.component_types.contains(&sky_type) {
-        sky_count += num_entities;
+        sky_count += alive_count;
       }
       if arch.component_types.contains(&grid_type) {
-        grid_count += num_entities;
+        grid_count += alive_count;
       }
     }
 
-    // Enforce constraints (0 or 1 instances)
     if sun_count > 1 {
-      return Err(EngineError::InvalidOperation(
-        "scene validation failed: multiple SunComponent found (expected 0 or 1)",
-      ));
+      return Err(EngineError::InvalidOperation("multiple SunComponent"));
     }
     if cursor_count > 1 {
-      return Err(EngineError::InvalidOperation(
-        "scene validation failed: multiple CursorComponent found (expected 0 or 1)",
-      ));
+      return Err(EngineError::InvalidOperation("multiple CursorComponent"));
     }
     if sky_count > 1 {
-      return Err(EngineError::InvalidOperation(
-        "scene validation failed: multiple SkyComponent found (expected 0 or 1)",
-      ));
+      return Err(EngineError::InvalidOperation("multiple SkyComponent"));
     }
     if grid_count > 1 {
-      return Err(EngineError::InvalidOperation(
-        "scene validation failed: multiple GridComponent found (expected 0 or 1)",
-      ));
+      return Err(EngineError::InvalidOperation("multiple GridComponent"));
     }
 
     Ok(())
+  }
+
+  // === Parallel Load-Balanced Query Execution Engine ===
+
+  #[inline(always)]
+  pub fn iter_par_archetypes<F>(&self, pool: &ThreadPool, f: F)
+  where
+    F: Fn(usize, &Archetype) + Send + Sync,
+  {
+    let archetypes = self.archetypes.read();
+    let num_archetypes = archetypes.len();
+
+    if num_archetypes == 0 {
+      return;
+    }
+
+    let archetypes_ptr = ErasedPtr::new(archetypes.as_ptr());
+    let f_ptr = ErasedPtr::new(&f);
+
+    let handle_res = pool.spawn_chunked(num_archetypes, move |chunk_id| {
+      let archetype_slice =
+        unsafe { core::slice::from_raw_parts(archetypes_ptr.get::<Archetype>(), num_archetypes) };
+      let archetype = &archetype_slice[chunk_id];
+      let func = unsafe { &*f_ptr.get::<F>() };
+      func(chunk_id, archetype);
+    });
+
+    if let Ok(handle) = handle_res {
+      handle.wait();
+    } else {
+      for (i, archetype) in archetypes.iter().enumerate() {
+        f(i, archetype);
+      }
+    }
+  }
+
+  pub fn query1_first_res_par<T: Component, F, R>(
+    &self,
+    pool: &ThreadPool,
+    f: F,
+  ) -> Option<(R, EntityId)>
+  where
+    F: Fn(EntityId, &T) -> Option<R> + Send + Sync,
+    R: Send,
+  {
+    let type_t = core::any::TypeId::of::<T>();
+    let found = core::sync::atomic::AtomicBool::new(false);
+    let result: spin::Mutex<Option<(R, EntityId)>> = spin::Mutex::new(None);
+
+    let found_ptr = ErasedPtr::new(&found);
+    let result_ptr = ErasedPtr::new(&result);
+
+    self.iter_par_archetypes(pool, |_, archetype| {
+      let found_ref = unsafe { &*found_ptr.get::<core::sync::atomic::AtomicBool>() };
+      if found_ref.load(core::sync::atomic::Ordering::Relaxed) {
+        return;
+      }
+
+      if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
+        let comp_storage = comp_storage_lock.read();
+        if let Some(components_vec) = comp_storage
+          .as_any()
+          .downcast_ref::<alloc::vec::Vec<Option<T>>>()
+        {
+          for (i, opt_entity) in archetype.entities.iter().enumerate() {
+            if i % 16 == 0 && found_ref.load(core::sync::atomic::Ordering::Relaxed) {
+              return;
+            }
+            if let (Some(entity), Some(comp)) = (opt_entity, &components_vec[i]) {
+              if let Some(res) = f(*entity, comp) {
+                let result_mut =
+                  unsafe { &*result_ptr.get::<spin::Mutex<Option<(R, EntityId)>>>() };
+                let mut lock = result_mut.lock();
+                if lock.is_none() {
+                  *lock = Some((res, *entity));
+                  found_ref.store(true, core::sync::atomic::Ordering::Relaxed);
+                }
+                return;
+              }
+            }
+          }
+        }
+      }
+    });
+
+    result.into_inner()
+  }
+
+  pub fn query1_res_par<T: Component, F, R>(
+    &self,
+    pool: &ThreadPool,
+    f: F,
+  ) -> alloc::vec::Vec<(R, EntityId)>
+  where
+    F: Fn(EntityId, &T) -> Option<R> + Send + Sync,
+    R: Send,
+  {
+    let type_t = core::any::TypeId::of::<T>();
+    let num_archetypes = self.archetypes.read().len();
+
+    if num_archetypes == 0 {
+      return alloc::vec::Vec::new();
+    }
+
+    let mut chunk_results: alloc::vec::Vec<alloc::vec::Vec<(R, EntityId)>> =
+      core::iter::repeat_with(alloc::vec::Vec::new)
+        .take(num_archetypes)
+        .collect();
+
+    let results_ptr = ErasedMutPtr::new(chunk_results.as_mut_ptr());
+
+    self.iter_par_archetypes(pool, |arch_id, archetype| {
+      if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
+        let comp_storage = comp_storage_lock.read();
+        if let Some(components_vec) = comp_storage
+          .as_any()
+          .downcast_ref::<alloc::vec::Vec<Option<T>>>()
+        {
+          let result_vec = unsafe {
+            &mut *results_ptr
+              .get::<alloc::vec::Vec<(R, EntityId)>>()
+              .add(arch_id)
+          };
+          for (i, opt_entity) in archetype.entities.iter().enumerate() {
+            if let (Some(entity), Some(comp)) = (opt_entity, &components_vec[i]) {
+              if let Some(res) = f(*entity, comp) {
+                result_vec.push((res, *entity));
+              }
+            }
+          }
+        }
+      }
+    });
+
+    let mut final_results = alloc::vec::Vec::new();
+    for mut res in chunk_results {
+      final_results.append(&mut res);
+    }
+    final_results
+  }
+
+  pub fn query1_mut_par<T: Component, F>(&self, pool: &ThreadPool, f: F)
+  where
+    F: Fn(EntityId, &mut T) + Send + Sync,
+  {
+    let type_t = core::any::TypeId::of::<T>();
+
+    self.iter_par_archetypes(pool, |_, archetype| {
+      if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
+        let mut comp_storage = comp_storage_lock.write();
+        if let Some(components_vec) = comp_storage
+          .as_mut_any()
+          .downcast_mut::<alloc::vec::Vec<Option<T>>>()
+        {
+          for (i, opt_entity) in archetype.entities.iter().enumerate() {
+            if let (Some(entity), Some(comp)) = (opt_entity, &mut components_vec[i]) {
+              f(*entity, comp);
+            }
+          }
+        }
+      }
+    });
+  }
+
+  pub fn query2_mut_par<T1: Component, T2: Component, F>(&self, pool: &ThreadPool, f: F)
+  where
+    F: Fn(EntityId, &mut T1, &mut T2) + Send + Sync,
+  {
+    let type_t1 = core::any::TypeId::of::<T1>();
+    let type_t2 = core::any::TypeId::of::<T2>();
+    assert_ne!(
+      type_t1, type_t2,
+      "Cannot mutably query the same component type twice."
+    );
+
+    self.iter_par_archetypes(pool, |_, archetype| {
+      if archetype.components.contains_key(&type_t1) && archetype.components.contains_key(&type_t2)
+      {
+        let mut comp_storage1 = archetype.components.get(&type_t1).unwrap().write();
+        let mut comp_storage2 = archetype.components.get(&type_t2).unwrap().write();
+
+        let components_vec1 = comp_storage1
+          .as_mut_any()
+          .downcast_mut::<alloc::vec::Vec<Option<T1>>>()
+          .unwrap();
+        let components_vec2 = comp_storage2
+          .as_mut_any()
+          .downcast_mut::<alloc::vec::Vec<Option<T2>>>()
+          .unwrap();
+
+        for (i, opt_entity) in archetype.entities.iter().enumerate() {
+          if let (Some(entity), Some(c1), Some(c2)) =
+            (opt_entity, &mut components_vec1[i], &mut components_vec2[i])
+          {
+            f(*entity, c1, c2);
+          }
+        }
+      }
+    });
+  }
+
+  // ------------------------------------------------------------------------------------------------
+
+  pub fn query1_res_without_par<T: Component, U: Component, F, R>(
+    &self,
+    pool: &ThreadPool,
+    f: F,
+  ) -> alloc::vec::Vec<(R, EntityId)>
+  where
+    F: Fn(EntityId, &T) -> Option<R> + Send + Sync,
+    R: Send,
+  {
+    let type_t = core::any::TypeId::of::<T>();
+    let type_u = core::any::TypeId::of::<U>();
+    assert_ne!(
+      type_t, type_u,
+      "Included and excluded component types must be distinct."
+    );
+
+    let num_archetypes = self.archetypes.read().len();
+
+    if num_archetypes == 0 {
+      return alloc::vec::Vec::new();
+    }
+
+    let mut chunk_results: alloc::vec::Vec<alloc::vec::Vec<(R, EntityId)>> =
+      core::iter::repeat_with(alloc::vec::Vec::new)
+        .take(num_archetypes)
+        .collect();
+
+    let results_ptr = crate::scene::ErasedMutPtr::new(chunk_results.as_mut_ptr());
+
+    self.iter_par_archetypes(pool, |arch_id, archetype| {
+      if archetype.components.contains_key(&type_t) && !archetype.components.contains_key(&type_u) {
+        let comp_storage_lock = archetype.components.get(&type_t).unwrap();
+        let comp_storage = comp_storage_lock.read();
+        if let Some(components_vec) = comp_storage.as_any().downcast_ref::<alloc::vec::Vec<T>>() {
+          let result_vec = unsafe {
+            &mut *results_ptr
+              .get::<alloc::vec::Vec<(R, EntityId)>>()
+              .add(arch_id)
+          };
+
+          for (i, &entity) in archetype.entities.iter().enumerate() {
+            if let Some(ent) = entity {
+              if let Some(res) = f(ent, &components_vec[i]) {
+                result_vec.push((res, ent));
+              }
+            }
+          }
+        }
+      }
+    });
+
+    let mut final_results = alloc::vec::Vec::new();
+    for mut res in chunk_results {
+      final_results.append(&mut res);
+    }
+    final_results
+  }
+
+  // === Archetype Iteration Abstractions ===
+
+  /// Sequentially iterates over all archetypes.
+  #[inline(always)]
+  fn iter_archetypes<F>(&self, mut f: F)
+  // TODO refactor sequential query function with this
+  where
+    F: FnMut(usize, &Archetype),
+  {
+    let archetypes = self.archetypes.read();
+    for (i, archetype) in archetypes.iter().enumerate() {
+      f(i, archetype);
+    }
+  }
+}
+
+/// Type-erased safe wrappers to transfer pointer provenance across thread boundaries.
+/// By erasing `T` into `()`, we hide non-'static lifetimes from the ThreadPool's strict bounds.
+/// Soundness is strictly guaranteed by the synchronous `handle.wait()` barrier.
+#[derive(Clone, Copy)]
+struct ErasedPtr(*const ());
+unsafe impl Send for ErasedPtr {}
+unsafe impl Sync for ErasedPtr {}
+
+impl ErasedPtr {
+  #[inline(always)]
+  pub fn new<T>(ptr: *const T) -> Self {
+    Self(ptr as *const ())
+  }
+  #[inline(always)]
+  pub fn get<T>(self) -> *const T {
+    self.0 as *const T
+  }
+}
+
+#[derive(Clone, Copy)]
+struct ErasedMutPtr(*mut ());
+unsafe impl Send for ErasedMutPtr {}
+unsafe impl Sync for ErasedMutPtr {}
+
+impl ErasedMutPtr {
+  #[inline(always)]
+  pub fn new<T>(ptr: *mut T) -> Self {
+    Self(ptr as *mut ())
+  }
+  #[inline(always)]
+  pub fn get<T>(self) -> *mut T {
+    self.0 as *mut T
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  extern crate std; // Allow std for testing harness environment
+
+  use super::*;
+  use core::any::TypeId;
+  use alloc::format;
+
+  // Replace with the exact path where your ThreadPool is exposed in your library
+  use aethervk_oshal_rlib::os::pool::ThreadPool;
+
+  // === Mock Components ===
+
+  #[derive(Debug, Clone, PartialEq)]
+  struct HealthComp {
+    hp: i32,
+  }
+  impl Component for HealthComp {}
+
+  #[derive(Debug, Clone, PartialEq)]
+  struct VelocityComp {
+    speed: i32,
+  }
+  impl Component for VelocityComp {}
+
+  #[derive(Debug, Clone, PartialEq)]
+  struct ShieldComp;
+  impl Component for ShieldComp {}
+
+  // Helper function to build a pre-registered testing scene
+  fn setup_scene() -> Scene {
+    let scene = Scene::new();
+    scene.register_component::<HealthComp>(&[]);
+    scene.register_component::<VelocityComp>(&[]);
+    scene.register_component::<TransformComponent>(&[]);
+    scene.register_component::<SunComponent>(&[]);
+    scene.register_component::<CursorComponent>(&[]);
+
+    // Dependent components: ShieldComp REQUIRES HealthComp to be present first
+    scene.register_component::<ShieldComp>(&[TypeId::of::<HealthComp>()]);
+
+    scene
+  }
+
+  // === Tests ===
+
+  #[test]
+  fn test_entity_spawn_and_names() {
+    let scene = setup_scene();
+
+    let e1 = scene.spawn_entity("Player");
+    let e2 = scene.spawn_entity("Player");
+    let e3 = scene.spawn_entity("Enemy");
+
+    // Proves string deduplication logic correctly appends index counters
+    assert_eq!(scene.get_name(e1).unwrap(), "Player");
+    assert_eq!(scene.get_name(e2).unwrap(), "Player_1");
+    assert_eq!(scene.get_name(e3).unwrap(), "Enemy");
+
+    // Proves reverse lookup works
+    assert_eq!(scene.get_entity_by_name("Player"), Some(e1));
+    assert_eq!(scene.get_entity_by_name("Player_1"), Some(e2));
+
+    // Proves string renaming memory safety and old name liberation
+    scene.set_name(e1, "Hero");
+    assert_eq!(scene.get_name(e1).unwrap(), "Hero");
+    assert_eq!(scene.get_entity_by_name("Player"), None);
+  }
+
+  #[test]
+  fn test_add_and_remove_components() {
+    let scene = setup_scene();
+    let e = scene.spawn_entity("e1");
+
+    assert_eq!(
+      scene.has_component::<HealthComp>(e),
+      HasComponentResultEnum::ComponentNotFound
+    );
+
+    // Tests Component Insert
+    scene.add_component(e, HealthComp { hp: 100 }).unwrap();
+    assert_eq!(
+      scene.has_component::<HealthComp>(e),
+      HasComponentResultEnum::EntityHasComponent
+    );
+
+    let val = scene.with_component(e, |h: &HealthComp| h.hp).unwrap();
+    assert_eq!(val, 100);
+
+    // Tests single Component Mutate safely without moving Archetypes
+    scene.with_component_mut(e, |h: &mut HealthComp| h.hp = 50);
+    assert_eq!(scene.with_component(e, |h: &HealthComp| h.hp), Some(50));
+
+    // Adding second component shifts memory correctly into a composite Archetype
+    scene.add_component(e, VelocityComp { speed: 10 }).unwrap();
+    assert_eq!(
+      scene.has_component::<VelocityComp>(e),
+      HasComponentResultEnum::EntityHasComponent
+    );
+
+    // Removing component cleanly shifts out into a different Archetype map entirely
+    scene.remove_component::<HealthComp>(e).unwrap();
+    assert_eq!(
+      scene.has_component::<HealthComp>(e),
+      HasComponentResultEnum::ComponentNotFound
+    );
+    assert_eq!(
+      scene.has_component::<VelocityComp>(e),
+      HasComponentResultEnum::EntityHasComponent
+    );
+  }
+
+  #[test]
+  fn test_dependencies() {
+    let scene = setup_scene();
+    let e = scene.spawn_entity("e");
+
+    // Trying to add `ShieldComp` which demands `HealthComp` first should throw an error.
+    let err = scene.add_component(e, ShieldComp);
+    assert!(matches!(
+      err,
+      Err(AddComponentError::DependencyNotSatisfied { .. })
+    ));
+
+    // Fullfilling dependency works!
+    scene.add_component(e, HealthComp { hp: 100 }).unwrap();
+    assert!(scene.add_component(e, ShieldComp).is_ok());
+  }
+
+  #[test]
+  fn test_entity_removal() {
+    let scene = setup_scene();
+    let e1 = scene.spawn_entity("e1");
+    let e2 = scene.spawn_entity("e2");
+    let e3 = scene.spawn_entity("e3");
+
+    scene.add_component(e1, HealthComp { hp: 10 }).unwrap();
+    scene.add_component(e2, HealthComp { hp: 20 }).unwrap();
+    scene.add_component(e3, HealthComp { hp: 30 }).unwrap();
+
+    // Ensures `swap_remove` in inner architecture does not pollute remaining rows locally
+    scene.remove_entity(e2);
+
+    assert_eq!(
+      scene.has_component::<HealthComp>(e2),
+      HasComponentResultEnum::EntityNotFound
+    );
+    assert_eq!(scene.get_name(e2), None);
+    assert_eq!(scene.with_component(e1, |h: &HealthComp| h.hp), Some(10));
+    assert_eq!(scene.with_component(e3, |h: &HealthComp| h.hp), Some(30));
+  }
+
+  #[test]
+  fn test_hierarchy() {
+    let scene = setup_scene();
+    let parent = scene.spawn_entity("Parent");
+    let child = scene.spawn_entity("Child");
+
+    scene.set_parent(child, Some(parent));
+    assert_eq!(scene.get_parent(child), Some(parent));
+
+    // Entity removal recursively tears down parent maps mapping
+    scene.remove_entity(parent);
+    assert_eq!(scene.get_parent(child), None);
+  }
+
+  #[test]
+  fn test_scene_validation() {
+    let scene = setup_scene();
+    assert!(scene.validate().is_ok());
+
+    let sun1 = scene.spawn_entity("sun1");
+    scene
+      .add_component(
+        sun1,
+        SunComponent {
+          resolution: (1, 1, 1),
+        },
+      )
+      .unwrap();
+    assert!(scene.validate().is_ok());
+
+    let sun2 = scene.spawn_entity("sun2");
+    scene
+      .add_component(
+        sun2,
+        SunComponent {
+          resolution: (1, 1, 1),
+        },
+      )
+      .unwrap();
+
+    // Scene throws if multiple 1-instance components are found (Renderer restrictions on the scene graph)
+    assert!(scene.validate().is_err());
+  }
+
+  #[test]
+  fn test_sequential_queries() {
+    let scene = setup_scene();
+    for i in 0..5 {
+      let e = scene.spawn_entity(format!("e{}", i));
+      scene.add_component(e, HealthComp { hp: 10 }).unwrap();
+      if i % 2 == 0 {
+        scene.add_component(e, VelocityComp { speed: 5 }).unwrap();
+      }
+    }
+
+    let mut sum_hp = 0;
+    scene.query1(|_e, h: &HealthComp| sum_hp += h.hp);
+    assert_eq!(sum_hp, 50);
+
+    let mut count_both = 0;
+    scene.query2(|_e, _h: &HealthComp, _v: &VelocityComp| count_both += 1);
+    assert_eq!(count_both, 3); // 0, 2, 4
+
+    let mut without_vel = 0;
+    scene.query1_without::<HealthComp, VelocityComp, _>(|_e, _h| without_vel += 1);
+    assert_eq!(without_vel, 2); // 1, 3
+
+    scene.query1_mut(|_e, h: &mut HealthComp| h.hp += 5);
+    let first = scene
+      .query1_first_res(|_e, h: &HealthComp| Some(h.hp))
+      .unwrap();
+    assert_eq!(first.0, 15);
+  }
+
+  // === Parallel Load-Balancing Execution Tests ===
+
+  #[test]
+  fn test_parallel_queries() {
+    let scene = setup_scene();
+    let pool = ThreadPool::new(4).unwrap();
+
+    // Spawning 5000 entities to guarantee we utilize multiple archetype memory chunks
+    for i in 0..5000 {
+      let e = scene.spawn_entity(format!("e{}", i));
+      scene.add_component(e, HealthComp { hp: 100 }).unwrap();
+
+      // By staggering logic heavily we create entirely isolated memory layouts which tests
+      // parallel thread dispersion on `iter_par_archetypes` across hardware queues efficiently!
+      if i % 2 == 0 {
+        scene.add_component(e, VelocityComp { speed: 10 }).unwrap();
+      }
+      if i % 3 == 0 {
+        scene.add_component(e, ShieldComp).unwrap();
+      }
+    }
+
+    // 1. Parallel Mutable Map
+    scene.query1_mut_par(&pool, |_e, h: &mut HealthComp| {
+      h.hp -= 10; // All drop to 90 internally lock-free
+    });
+
+    // 2. Parallel Result Gathering (Lock-Free Thread Array Condensing)
+    let results = scene.query1_res_par(
+      &pool,
+      |_e, h: &HealthComp| {
+        if h.hp == 90 { Some(h.hp) } else { None }
+      },
+    );
+    assert_eq!(results.len(), 5000);
+
+    // 3. Parallel Dual Mutate Map
+    scene.query2_mut_par(&pool, |_e, h: &mut HealthComp, v: &mut VelocityComp| {
+      h.hp -= v.speed;
+    });
+
+    // Validating OS-managed memory mutations were operated on successfully across workers
+    let mut count_80 = 0;
+    scene.query1(|_e, h: &HealthComp| {
+      if h.hp == 80 {
+        count_80 += 1;
+      }
+    });
+    assert_eq!(count_80, 2500); // Only even entities took velocity damage
+
+    // 4. Parallel First Find
+    let first_res = scene.query1_first_res_par(&pool, |e, h: &HealthComp| {
+      if scene.get_name(e).unwrap() == "e500" {
+        Some(h.hp)
+      } else {
+        None
+      }
+    });
+    assert!(first_res.is_some());
+    assert_eq!(first_res.unwrap().0, 80); // e500 is an even number!
+  }
+
+  #[test]
+  fn test_entity_removal_with_compaction_holes() {
+    let scene = setup_scene();
+    let e1 = scene.spawn_entity("e1");
+    let e2 = scene.spawn_entity("e2");
+    let e3 = scene.spawn_entity("e3");
+
+    scene.add_component(e1, HealthComp { hp: 10 }).unwrap();
+    scene.add_component(e2, HealthComp { hp: 20 }).unwrap();
+    scene.add_component(e3, HealthComp { hp: 30 }).unwrap();
+
+    // The core requested fix. Deleting an entity only frees the slot natively,
+    // it DOES NOT blindly shift the array anymore!
+    scene.remove_entity(e2);
+
+    assert_eq!(
+      scene.has_component::<HealthComp>(e2),
+      HasComponentResultEnum::EntityNotFound
+    );
+    assert_eq!(scene.get_name(e2), None);
+    assert_eq!(scene.with_component(e1, |h: &HealthComp| h.hp), Some(10));
+    assert_eq!(scene.with_component(e3, |h: &HealthComp| h.hp), Some(30)); // 3 remains absolutely perfect!
+
+    // Validate a new entity beautifully slips back into the hole in Memory
+    let e4 = scene.spawn_entity("e4");
+    scene.add_component(e4, HealthComp { hp: 40 }).unwrap();
+    assert_eq!(scene.with_component(e4, |h: &HealthComp| h.hp), Some(40));
+  }
+
+  #[test]
+  fn test_remove_column_bulk() {
+    let scene = setup_scene();
+    for _ in 0..100 {
+      let e = scene.spawn_entity("Ent");
+      scene.add_component(e, HealthComp { hp: 100 }).unwrap();
+      scene.add_component(e, VelocityComp { speed: 5 }).unwrap();
+    }
+
+    // Instantly delete Health component without moving any Memory/Entities
+    scene.remove_column::<HealthComp>();
+
+    let mut health_count = 0;
+    scene.query1(|_e, _h: &HealthComp| health_count += 1);
+    assert_eq!(health_count, 0);
+
+    let mut vel_count = 0;
+    scene.query1(|_e, _v: &VelocityComp| vel_count += 1);
+    assert_eq!(vel_count, 100);
+  }
+
+  #[test]
+  fn test_compaction() {
+    let scene = setup_scene();
+    let mut ents = Vec::new();
+
+    // Spawn enough to surpass threshold (>64 elements)
+    for _ in 0..100 {
+      let e = scene.spawn_entity("Comp");
+      scene.add_component(e, HealthComp { hp: 1 }).unwrap();
+      ents.push(e);
+    }
+
+    // Remove 50% randomly, crossing the >25% hole-count Threshold limit
+    for i in 0..50 {
+      scene.remove_entity(ents[i]);
+    }
+
+    // All active entities should still execute properly, compacted sequentially backwards!
+    let mut sum = 0;
+    scene.query1(|_e, h: &HealthComp| sum += h.hp);
+    assert_eq!(sum, 50);
   }
 }

@@ -28,6 +28,7 @@ use oshal::{
   os,
   os::thread::Thread,
 };
+use crate::simulation::almanac::KinematicState;
 use crate::simulation_api::logic_thread::start_logic_thread;
 use crate::simulation_api::render_thread::start_render_thread;
 use crate::types::GpuResult;
@@ -189,45 +190,18 @@ impl Drop for SimulationThreads {
 
 pub struct LogicWorkload {
   pub cmd: LogicCommand,
-  pub ctx: LogicThreadContext,
+  pub ctx: alloc::sync::Arc<LogicThreadContext>,
 }
 
 impl LogicThreadContext {
-  pub fn load_almanac_file_internal(&self, path: &str) -> EngineResult<bool> {
+  pub fn load_almanac_file_internal(&self, path: &str) -> EngineResult<()> {
     let mut logic = self.logic_state.write();
     if logic.almanac_data.file_names.iter().any(|f| f == path) {
-      return Ok(true);
+      return Ok(());
     }
 
-    let mut path_buf = oshal::os::fs::PathBuf::new();
-    path_buf.push(path);
-
-    if let Ok(data) = oshal::os::fs::read(path_buf.as_ref()) {
-      logic.almanac_data.data.push(data);
-      if let Some(last_data) = logic.almanac_data.data.last() {
-        let bytes = bytes::BytesMut::from(last_data.as_slice());
-        logic.almanac_data.file_names.push(path.to_string());
-        if let Ok(new_almanac) = logic
-          .almanac_data
-          .almanac
-          .clone()
-          .load_from_bytes(bytes, path)
-        {
-          logic.almanac_data.almanac = new_almanac;
-          return Ok(true);
-        } else {
-          logic.almanac_data.data.pop();
-          logic.almanac_data.file_names.pop();
-        }
-      }
-    }
-    Ok(false)
-  }
-
-  pub fn load_comet_spk_internal(&self, path: &str, _spkid: u32) -> EngineResult<bool> {
-    // Currently, loading a comet SPK is identical to loading any other almanac file.
-    // The `spkid` can be used for logging or specific metadata management in the future.
-    self.load_almanac_file_internal(path)
+    let path_buf = oshal::os::fs::PathBuf::from(path);
+    logic.almanac_data.load_almanac(&path_buf)
   }
 
   pub fn raycast_ndc_internal(
@@ -470,7 +444,7 @@ impl SimulationThreads {
 
     let (logic_tx, logic_rx) = mpsc::channel(params.channel_capacity);
     let (logic_feedback_tx, logic_feedback_rx) = mpsc::channel(params.channel_capacity);
-    let logic_thread_handle = start_logic_thread(logic_rx, params.to_context(logic_feedback_tx))?;
+    let logic_thread_handle = start_logic_thread(logic_rx, alloc::sync::Arc::new(params.to_context(logic_feedback_tx)))?;
     self.logic_thread.tx = Some(logic_tx);
     self.logic_thread.handle = Some(logic_thread_handle);
     self.logic_feedback_rx = Some(logic_feedback_rx);
@@ -623,8 +597,9 @@ pub enum LogicCommand {
   },
   LoadCometSpk {
     task_id: u64,
-    path: String,
-    spkid: u32,
+    spk_id: i32,
+    frame: anise::frames::Frame,
+    epoch: anise::time::Epoch,
   },
   SpawnModelInstance {
     task_id: u64,
@@ -652,7 +627,7 @@ pub enum LogicCommand {
   Custom {
     custom_fn: fn(&LogicThreadContext, *mut core::ffi::c_void),
     user_data: Option<SendPtrMut<core::ffi::c_void>>,
-  }
+  },
 }
 
 impl Default for LogicCommand {
@@ -789,30 +764,48 @@ unsafe impl Send for RenderCommand {}
 // --------------------- Internal Types ---------------------------
 
 #[derive(Debug)]
-struct SendPtr<T>(pub *const T);
-unsafe impl<T> Send for SendPtr<T> {}
-unsafe impl<T> Sync for SendPtr<T> {}
+pub struct SendPtr<T: ?Sized>(pub *const T);
+unsafe impl<T: ?Sized> Send for SendPtr<T> {}
+unsafe impl<T: ?Sized> Sync for SendPtr<T> {}
 
-impl<T> Clone for SendPtr<T> {
+impl<T: ?Sized> Clone for SendPtr<T> {
   fn clone(&self) -> Self {
     *self // This works because the underlying *const T is Copy
   }
 }
 
-impl<T> Copy for SendPtr<T> {}
+impl<T: ?Sized> Copy for SendPtr<T> {}
+
+/// After rust edition 2021, the compiler captures in closures only used fields, not the entire
+/// struct, therefore, you cannot access with .0 the inner pointer otherwise you bypass Sync + Send
+impl<T: ?Sized> SendPtr<T> {
+  #[inline(always)]
+  pub fn get(self) -> *const T {
+    self.0
+  }
+}
 
 #[derive(Debug)]
-pub struct SendPtrMut<T>(pub *mut T);
-unsafe impl<T> Send for SendPtrMut<T> {}
-unsafe impl<T> Sync for SendPtrMut<T> {}
+pub struct SendPtrMut<T: ?Sized>(pub *mut T);
+unsafe impl<T: ?Sized> Send for SendPtrMut<T> {}
+unsafe impl<T: ?Sized> Sync for SendPtrMut<T> {}
 
-impl<T> Clone for SendPtrMut<T> {
+impl<T: ?Sized> Clone for SendPtrMut<T> {
   fn clone(&self) -> Self {
     *self // This works because the underlying *mut T is Copy
   }
 }
 
-impl<T> Copy for SendPtrMut<T> {}
+impl<T: ?Sized> Copy for SendPtrMut<T> {}
+
+/// After rust edition 2021, the compiler captures in closures only used fields, not the entire
+/// struct, therefore, you cannot access with .0 the inner pointer otherwise you bypass Sync + Send
+impl<T: ?Sized> SendPtrMut<T> {
+  #[inline(always)]
+  pub fn get(self) -> *mut T {
+    self.0
+  }
+}
 
 #[derive(Clone, Debug)]
 pub struct SceneContext {
@@ -1119,6 +1112,8 @@ pub enum SimulationTaskResult {
   U64(u64),
   Bool(bool),
   Raycast(RaycastResult),
+  Vec3(Vec3f32), // TODO more vector types in oshal (design first by me)
+  KinematicState(KinematicState),
 }
 
 pub enum SimulationTaskStatus {

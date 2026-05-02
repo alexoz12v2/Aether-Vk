@@ -199,9 +199,6 @@ fn main() {
     render_frontend
       .with_device(render_device_handle, |device| {
         device.init_archetypes(presentation_engine).unwrap();
-        let render_scene =
-          scene_to_render_scene(&scene, device, presentation_engine, camera_entity, false)?;
-
         device.start_frame().map_err(|e| {
           println!("start_frame failed: {:?}", e);
           e
@@ -217,6 +214,15 @@ fn main() {
         let present_guard = FrameCancelGuard::new(device, presentation_engine, acquire_result);
 
         let cmd_buffer = try_task!(task, device.get_command_buffer());
+        let render_scene = scene_to_render_scene(
+          &scene,
+          device,
+          presentation_engine,
+          camera_entity,
+          false,
+          cmd_buffer,
+        )?;
+
         let cmd_guard = ScopedCommandBuffer::new(device, cmd_buffer, Some(task.task_id))?;
         try_task!(task, device.begin_command_buffer(cmd_buffer));
         if let Some(sun_call) = &render_scene.sun_call {
@@ -245,7 +251,10 @@ fn main() {
           device.set_scissor(cmd_buffer, &gpu::Rect2D::from_extent(extent))
         );
 
-        try_task!(task, device.render_frame(cmd_buffer, &render_scene));
+        try_task!(
+          task,
+          gpu::frame::render_frame(device, cmd_buffer, &render_scene, presentation_engine)
+        );
         try_task!(task, render_pass_guard.end());
         cmd_guard.submit().unwrap();
         present_guard.defuse();

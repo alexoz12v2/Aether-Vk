@@ -11,6 +11,8 @@ namespace AetherVk.Logic.ViewModels;
 public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySelectedMessage>
 {
   private readonly SceneStateManager _stateManager;
+  private readonly NativeRuntimeService? _runtimeService;
+  private readonly BreadcrumbService? _breadcrumbService;
 
   [ObservableProperty]
   private Entity? _selectedEntity;
@@ -21,10 +23,12 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
   [ObservableProperty]
   private ulong _currentSceneId;
 
-  public PropertiesViewModel(ulong sceneId, SceneStateManager stateManager)
+  public PropertiesViewModel(ulong sceneId, SceneStateManager stateManager, NativeRuntimeService? runtimeService = null, BreadcrumbService? breadcrumbService = null)
     : base("Properties")
   {
     _stateManager = stateManager;
+    _runtimeService = runtimeService;
+    _breadcrumbService = breadcrumbService;
     CurrentSceneId = sceneId;
     WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
 
@@ -36,6 +40,7 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
   public void Receive(EntitySelectedMessage message)
   {
     SelectedEntity = message.SelectedEntity;
+    IsFollowingEntity = false;
 
     if (SelectedEntity != null)
     {
@@ -51,9 +56,7 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
       var comet = SelectedEntity.Components.OfType<CometComponent>().FirstOrDefault();
       if (comet != null)
       {
-        var runtimeService =
-          ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-        runtimeService?.RefreshBvhNodes(CurrentSceneId, SelectedEntity.Id, comet);
+        _runtimeService?.RefreshBvhNodes(CurrentSceneId, SelectedEntity.Id, comet);
       }
     }
   }
@@ -63,9 +66,7 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
   {
     if (SelectedEntity != null)
     {
-      var runtimeService =
-        ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-      runtimeService?.SnapToEntity(p.SceneId, p.CameraEntityId, SelectedEntity.Id);
+      _runtimeService?.SnapToEntity(p.SceneId, p.CameraEntityId, SelectedEntity.Id);
     }
   }
 
@@ -74,18 +75,14 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
   {
     if (SelectedEntity != null)
     {
-      var runtimeService =
-        ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-      runtimeService?.FollowEntity(p.SceneId, p.CameraEntityId, SelectedEntity.Id);
+      _runtimeService?.FollowEntity(p.SceneId, p.CameraEntityId, SelectedEntity.Id);
     }
   }
 
   [RelayCommand]
   private void UnfollowSelectedEntity(CameraActionParams p)
   {
-    var runtimeService =
-      ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-    runtimeService?.UnfollowEntity(p.SceneId, p.CameraEntityId);
+    _runtimeService?.UnfollowEntity(p.SceneId, p.CameraEntityId);
   }
 
   [RelayCommand]
@@ -93,9 +90,7 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
   {
     WeakReferenceMessenger.Default.Send(new AetherVk.Logic.Messages.ToggleAddJetModeMessage());
 
-    var breadcrumb =
-      ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
-    breadcrumb?.ShowMessageAsync(
+    _breadcrumbService?.ShowMessageAsync(
       "Add Jet Mode",
       "Hold Shift and Right Click on the comet to add a jet at the intersection point."
     );
@@ -106,14 +101,10 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
   {
     if (SelectedEntity != null && SelectedEntity.IsMeasurement)
     {
-      var runtimeService =
-        ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
       var name = SelectedEntity.Name;
-      runtimeService?.RemoveEntity(CurrentSceneId, SelectedEntity.Id);
+      _runtimeService?.RemoveEntity(CurrentSceneId, SelectedEntity.Id);
 
-      var breadcrumb =
-        ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
-      breadcrumb?.ShowMessageAsync("Entity Deleted", $"Deleted measurement: {name}");
+      _breadcrumbService?.ShowMessageAsync("Entity Deleted", $"Deleted measurement: {name}");
 
       // Deselect
       WeakReferenceMessenger.Default.Send(new EntitySelectedMessage(null));

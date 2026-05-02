@@ -12,41 +12,55 @@ namespace AetherVk.Logic.Services;
 
 public partial class NativeRuntimeService : ObservableObject, IDisposable
 {
-  [ObservableProperty]
-  private bool _isInitialized;
+  [ObservableProperty] private bool _isInitialized;
 
-  [ObservableProperty]
-  private bool _isRunning;
+  [ObservableProperty] private bool _isRunning;
 
   private IntPtr _simulationContext = IntPtr.Zero;
   private readonly object _nativeLock = new object();
 
   private readonly SceneStateManager _sceneStateManager;
+  private readonly ConsoleService _consoleService;
+  private readonly BreadcrumbService _breadcrumbService;
+  private readonly IUiThreadDispatcher _uiThreadDispatcher;
 
-  private static readonly NativeInterop.LoggerCallback _loggerCallbackDelegate =
-    new NativeInterop.LoggerCallback(NativeLogCallback);
-  private static readonly NativeInterop.BreadcrumbCallback _breadcrumbCallbackDelegate =
-    new NativeInterop.BreadcrumbCallback(NativeBreadcrumbCallback);
+  // Keep a weak reference to the instance so we don't artificially keep it alive
+  private static WeakReference<NativeRuntimeService>? s_currentInstance;
+
+  //  Keep static references to the delegates so they act as GC roots and are NEVER Garbage Collected
+  private static readonly NativeInterop.LoggerCallback s_loggerCallbackDelegate = NativeLogCallbackStatic;
+  private static readonly NativeInterop.BreadcrumbCallback s_breadcrumbCallbackDelegate = NativeBreadcrumbCallbackStatic;
 
   public void Dispose()
   {
     lock (_nativeLock)
     {
-      if (_simulationContext != IntPtr.Zero)
-      {
-        NativeInterop.avkSimulationContext_shutdown(_simulationContext);
-        _simulationContext = IntPtr.Zero;
-      }
+      // Detach from the weak reference to stop processing incoming logs (TODO: potential error here)
+      s_currentInstance = null;
+
+      if (_simulationContext == IntPtr.Zero) return;
+
+      NativeInterop.avkSimulationContext_shutdown(_simulationContext);
+      _simulationContext = IntPtr.Zero;
     }
   }
 
-  public NativeRuntimeService(SceneStateManager sceneStateManager)
+  public NativeRuntimeService(SceneStateManager sceneStateManager, ConsoleService consoleService,
+    BreadcrumbService breadcrumbService, IUiThreadDispatcher uiThreadDispatcher)
   {
     _sceneStateManager = sceneStateManager;
+    _consoleService = consoleService;
+    _breadcrumbService = breadcrumbService;
+    _uiThreadDispatcher = uiThreadDispatcher;
+
+    // Register the active instance
+    s_currentInstance = new WeakReference<NativeRuntimeService>(this);
+
     try
     {
-      NativeInterop.avkSimulationContext_setLoggerCallback(_loggerCallbackDelegate);
-      NativeInterop.avkSimulationContext_setBreadcrumbCallback(_breadcrumbCallbackDelegate);
+      // Register the STATIC delegates with the native code
+      NativeInterop.avkSimulationContext_setLoggerCallback(s_loggerCallbackDelegate);
+      NativeInterop.avkSimulationContext_setBreadcrumbCallback(s_breadcrumbCallbackDelegate);
     }
     catch (System.DllNotFoundException)
     {
@@ -91,6 +105,45 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       }
     );
 
+    WeakReferenceMessenger.Default.Register<EntityNameChangedMessage>(
+      this,
+      (r, m) =>
+      {
+        lock (_nativeLock)
+        {
+          if (_simulationContext != IntPtr.Zero)
+          {
+            NativeInterop.avkSimulationContext_setEntityName(
+              _simulationContext,
+              m.Entity.SceneId,
+              m.Entity.Id,
+              m.NewName
+            );
+          }
+        }
+      }
+    );
+
+    WeakReferenceMessenger.Default.Register<BvhNodeVisibilityChangedMessage>(
+      this,
+      (r, m) =>
+      {
+        lock (_nativeLock)
+        {
+          if (_simulationContext != IntPtr.Zero)
+          {
+            NativeInterop.avkSimulationContext_setBvhNodeVisibility(
+              _simulationContext,
+              m.SceneId,
+              m.EntityId,
+              m.NodeIndex,
+              m.IsVisible
+            );
+          }
+        }
+      }
+    );
+
     WeakReferenceMessenger.Default.Register<AetherVk.Logic.ViewModels.EntitySelectedMessage>(
       this,
       (r, m) =>
@@ -129,21 +182,19 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     );
   }
 
-  private static void NativeBreadcrumbCallback(uint status, IntPtr messagePtr)
+  private void NativeBreadcrumbCallback(uint status, IntPtr messagePtr)
   {
     if (messagePtr != IntPtr.Zero)
     {
       string? message = System.Runtime.InteropServices.Marshal.PtrToStringAnsi(messagePtr);
       if (message != null)
       {
-        var breadcrumb =
-          ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
-        breadcrumb?.ShowMessageAsync("Simulation Context", message, default, (int)status);
+        _breadcrumbService?.ShowMessageAsync("Simulation Context", message, default, (int)status);
       }
     }
   }
 
-  private static void NativeLogCallback(IntPtr messagePtr)
+  private void NativeLogCallback(IntPtr messagePtr)
   {
     if (messagePtr != IntPtr.Zero)
     {
@@ -151,10 +202,25 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       if (message != null)
       {
         System.Console.Error.WriteLine($"[Native] {message}");
-        var consoleService =
-          ServiceLocator.Provider?.GetService(typeof(ConsoleService)) as ConsoleService;
-        consoleService?.Log(message);
+        _consoleService?.Log(message);
       }
+    }
+  }
+
+  private static void NativeLogCallbackStatic(IntPtr messagePtr)
+  {
+    // TryGetTarget safely fetches the instance only if it hasn't been Garbage Collected/Disposed.
+    if (s_currentInstance != null && s_currentInstance.TryGetTarget(out var service))
+    {
+      service.NativeLogCallback(messagePtr);
+    }
+  }
+
+  private static void NativeBreadcrumbCallbackStatic(uint status, IntPtr messagePtr)
+  {
+    if (s_currentInstance != null && s_currentInstance.TryGetTarget(out var service))
+    {
+      service.NativeBreadcrumbCallback(status, messagePtr);
     }
   }
 
@@ -285,9 +351,9 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
       IsInitialized = true;
 
-      if (ServiceLocator.DispatchToUI != null)
+      if (_uiThreadDispatcher != null)
       {
-        ServiceLocator.DispatchToUI(() => _ = CreateScene(populateDefault));
+        _uiThreadDispatcher.Dispatch(() => _ = CreateScene(populateDefault));
       }
       else
       {
@@ -512,6 +578,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       NativeInterop.avkSimulationContext_shutdown(_simulationContext);
       _simulationContext = IntPtr.Zero;
     }
+
     IsInitialized = false;
   }
 
@@ -595,13 +662,17 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return NativeInterop.avkSimulationContext_getTaskResultBool(_simulationContext, taskId);
   }
 
-  public async Task<bool> LoadCometSpkAsync(string path, uint spkid)
+  public async Task<NativeInterop.FfiKinematicState?> LoadCometSpkAsync(int spkid, string epoch_raw)
   {
     if (_simulationContext == IntPtr.Zero)
-      return false;
-    ulong taskId = NativeInterop.avkSimulationContext_loadCometSpk(_simulationContext, path, spkid);
+      return null;
+    ulong taskId = NativeInterop.avkSimulationContext_loadCometSpk(_simulationContext, spkid, epoch_raw);
     await PollTaskAsync(taskId);
-    return NativeInterop.avkSimulationContext_getTaskResultBool(_simulationContext, taskId);
+    if (NativeInterop.avkSimulationContext_getTaskResultKinematicState(_simulationContext, taskId, out var result))
+    {
+        return result;
+    }
+    return null;
   }
 
   public async Task<ulong> ImportModelAsync(string path)
@@ -678,6 +749,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       );
       entity.Components.Add(new CometComponent()); // Assume it spawns as a comet for now
     }
+
     return instanceId;
   }
 
@@ -793,6 +865,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     {
       return (result.Hit, result.Entity, result.Px, result.Py, result.Pz);
     }
+
     return (false, 0UL, 0f, 0f, 0f);
   }
 
@@ -901,6 +974,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       {
         sceneId = NativeInterop.avkSimulationContext_createEmptyScene(_simulationContext);
       }
+
       var state = _sceneStateManager.GetOrCreateScene(sceneId);
       state.Clear();
 
@@ -936,6 +1010,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
           state.EntityMap[id] = entity;
           WireEntityComponents(sceneId, entity);
         }
+
         Marshal.FreeHGlobal(namePtr);
 
         // Build hierarchy & default components based on FFI entity type heuristics
@@ -979,8 +1054,10 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
         SyncEntities(sceneId); // Immediately populate real positions
       }
+
       return sceneId;
     }
+
     return 0;
   }
 
@@ -1054,10 +1131,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
               {
                 foreach (JetMarker jet in e.NewItems)
                 {
-                  jet.PropertyChanged += (js, je) =>
-                  {
-                    SyncMarkers(sceneId, entity.Id, comet);
-                  };
+                  jet.PropertyChanged += (js, je) => { SyncMarkers(sceneId, entity.Id, comet); };
                 }
               }
             };
@@ -1238,6 +1312,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     {
       NativeInterop.avkSimulationContext_addGridComponent(_simulationContext, sceneId, grid.Id);
     }
+
     return grid;
   }
 
@@ -1248,6 +1323,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     {
       NativeInterop.avkSimulationContext_addSkyComponent(_simulationContext, sceneId, sky.Id);
     }
+
     return sky;
   }
 
@@ -1264,6 +1340,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       );
       NativeInterop.avkSimulationContext_addCursorComponent(_simulationContext, sceneId, cursor.Id);
     }
+
     return cursor;
   }
 
@@ -1281,7 +1358,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     ulong sunId = 0;
     if (_simulationContext != IntPtr.Zero)
     {
-      sunId = NativeInterop.avkSimulationContext_spawnProceduralSphere(_simulationContext, sceneId, "sun", radius);
+      sunId = NativeInterop.avkSimulationContext_spawnProceduralSphere(_simulationContext, sceneId,
+        "sun", radius);
       NativeInterop.avkSimulationContext_addSunComponent(
         _simulationContext,
         sceneId,
