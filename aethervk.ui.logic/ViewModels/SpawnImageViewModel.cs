@@ -5,7 +5,7 @@ namespace AetherVk.Logic.ViewModels;
 public partial class SpawnImageViewModel : ViewModelBase
 {
   [ObservableProperty]
-  private string _entityName;
+  private string _entityName = "";
 
   [ObservableProperty]
   private bool _isScreenSpace;

@@ -48,7 +48,7 @@ use core::{
   ptr::{self, NonNull},
   sync::atomic::{AtomicU64, Ordering},
 };
-use std::ops::Deref;
+use core::ops::Deref;
 use heapless::index_map::FnvIndexMap;
 use oshal::{
   hash::FnvHasher,

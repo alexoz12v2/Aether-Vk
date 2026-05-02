@@ -1,12 +1,14 @@
 use spin::RwLockReadGuard;
 use crate::{
-  self as rlib,
-  scene::{CameraComponent, CursorComponent, EntityId, FollowingComponent, TransformComponent},
+  scene::{
+    camera::SceneCameraExt, CameraComponent, CursorComponent, EntityId, FollowingComponent,
+    TransformComponent,
+  },
   types::{EngineError, EngineResult},
 };
 use thingbuf::mpsc;
-use aethervk_oshal_rlib as oshal;
-use oshal::{
+use aethervk_oshal_rlib::{
+  self as oshal,
   os::{NativeError, ThreadingError},
   math::floating::FloatOps,
   math::quaternion::Quaternion,
@@ -25,7 +27,7 @@ use alloc::{boxed::Box, string::ToString};
 
 pub fn start_logic_thread(
   logic_rx: mpsc::Receiver<LogicCommand>,
-  context: LogicThreadContext,
+  context: alloc::sync::Arc<LogicThreadContext>,
 ) -> EngineResult<Thread> {
   thread::spawn(move || {
     loop {
@@ -64,6 +66,7 @@ impl oshal::os::pool::Workload for LogicWorkload {
       LogicCommand::SpawnModelInstance { task_id, .. } => Some(*task_id),
       LogicCommand::RaycastNdc { task_id, .. } => Some(*task_id),
       LogicCommand::Raycast { task_id, .. } => Some(*task_id),
+      LogicCommand::SimulationTick { task_id, .. } => Some(*task_id),
       _ => None,
     };
 
@@ -72,10 +75,15 @@ impl oshal::os::pool::Workload for LogicWorkload {
     let cmd_desc = match &self.cmd {
       LogicCommand::ImportModel { path, .. } => alloc::format!("Import model {}", path),
       LogicCommand::LoadAlmanac { path, .. } => alloc::format!("Load almanac {}", path),
-      LogicCommand::LoadCometSpk { path, .. } => alloc::format!("Load SPK {}", path),
+      LogicCommand::LoadCometSpk { spk_id, epoch, .. } => alloc::format!(
+        "Load Ephemeris data for SPK ID: {} at epoch {}",
+        spk_id,
+        epoch
+      ),
       LogicCommand::SpawnModelInstance { name, .. } => alloc::format!("Spawn instance {}", name),
       LogicCommand::RaycastNdc { .. } => "Raycast NDC".to_string(),
       LogicCommand::Raycast { .. } => "Raycast".to_string(),
+      LogicCommand::SimulationTick { .. } => "Simulation Tick".to_string(),
       _ => "Logic Task".to_string(),
     };
 
@@ -126,51 +134,19 @@ fn process_command_internal(
       delta_y,
     }) => {
       let scene_read = scene.read();
-      let (cam_pos, cam_rot) = scene_read
+      let (cursor_entity, _) = scene_read
         .scene
-        .with_component::<TransformComponent, _, _>(
-          camera_entity,
-          |transform_component: &TransformComponent| {
-            (transform_component.position, transform_component.rotation)
-          },
-        )
-        .ok_or(EngineError::InvalidOperation(
-          "logic_thread:RotateCamera | entity doesn't have TransformComponent",
-        ))?;
-      let (cursor_pos, _) = scene_read
-        .scene
-        .query1_first_res::<TransformComponent, _, _>(|_, t| Some(t.position))
+        .query1_first_res::<CursorComponent, _, _>(|id, _| Some(id))
         .ok_or(EngineError::InvalidOperation(
           "logic_thread:RotateCamera | scene doesn't have cursor",
         ))?;
-      let offset = cam_pos - cursor_pos;
       let rotation_speed: f32 = 0.005;
-      let yaw_quat = Quat::from_axis_angle(
-        Vec3f32::from_components(0.0, 0.0, 1.0),
-        -delta_x * rotation_speed,
-      );
-
-      let local_right = cam_rot.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
-      let pitch_quat = Quat::from_axis_angle(local_right, -delta_y * rotation_speed);
-
-      let combined = pitch_quat * yaw_quat * cam_rot;
-      let len_sq = combined.0.dot(combined.0);
-      if len_sq < 1e-6 {
-        return Ok(SimulationTaskResult::None);
-      }
-      let new_rot = combined.normalize();
-
-      let rot_delta = new_rot * cam_rot.conjugate();
-      let new_offset = rot_delta.rotate_vector(offset);
-      scene_read
-        .scene
-        .with_component_mut(camera_entity, |c: &mut TransformComponent| {
-          c.position = cursor_pos + new_offset;
-          c.rotation = new_rot;
-        })
-        .ok_or(EngineError::InvalidOperation(
-          "logic_thread:RotateCamera | failed to update transform",
-        ))?;
+      scene_read.scene.orbit_camera(
+        camera_entity,
+        cursor_entity,
+        -delta_x * rotation_speed, // negate for natural mouse drag
+        -delta_y * rotation_speed,
+      )?;
       Ok(SimulationTaskResult::None)
     }
     LogicCommand::ZoomCamera(crate::simulation_api::structs::ZoomCamera {
@@ -200,8 +176,8 @@ fn process_command_internal(
         .scene
         .with_component_mut(camera_entity, |c: &mut TransformComponent| {
           let offset = c.position - cursor_pos;
-          let dist = offset.length().min(0.1);
-          let zoom_speed = dist * 0.01;
+          let dist = offset.length().max(0.1);
+          let zoom_speed = dist * 1.0;
           let forward = c
             .rotation
             .rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
@@ -361,17 +337,23 @@ fn process_command_internal(
         Err(_) => Ok(SimulationTaskResult::U64(0)),
       }
     }
-    LogicCommand::LoadAlmanac { task_id: _, path } => {
-      let success = ctx.load_almanac_file_internal(&path)?;
-      Ok(SimulationTaskResult::Bool(success))
+    // TODO: async tasklet. this should return the task_id, not take it, while a new command QueryLoadAlmanacFinished should poll the task id and return EngineResult<bool> true in case it finished
+    LogicCommand::LoadAlmanac { task_id, path } => {
+      ctx.load_almanac_file_internal(&path)?;
+      Ok(SimulationTaskResult::None)
     }
+    // TODO: async tasklet. this should return the task_id, not take it, while a new command QueryLoadCometSpkFinished should poll the task id and return EngineResult<bool> true in case it finished
     LogicCommand::LoadCometSpk {
-      task_id: _,
-      path,
-      spkid,
+      task_id,
+      spk_id,
+      frame,
+      epoch,
     } => {
-      let success = ctx.load_comet_spk_internal(&path, spkid)?;
-      Ok(SimulationTaskResult::Bool(success))
+      let logic_state = ctx.logic_state.read();
+      let state = logic_state
+        .almanac_data
+        .get_ephem_full(spk_id, frame, epoch, false, false)?;
+      Ok(SimulationTaskResult::KinematicState(state))
     }
     LogicCommand::SpawnModelInstance {
       task_id: _,
@@ -379,7 +361,7 @@ fn process_command_internal(
       model_id,
       name,
     } => {
-      // Pre-load if not in cache (outside lock)
+      // Preload if not in cache (outside lock)
       let path_opt = {
         let scenes = ctx.scenes.read();
         scenes.model_registry.get(&model_id).cloned()
@@ -393,7 +375,7 @@ fn process_command_internal(
 
         if needs_load {
           if let Ok(mesh) = crate::simulation::comet::load_comet_from_gltf(&path_str, false) {
-            let mut scenes = ctx.scenes.write();
+            let scenes = ctx.scenes.read();
             scenes.mesh_cache.insert(path_str.clone(), mesh);
           }
         }
@@ -430,6 +412,8 @@ fn process_command_internal(
     } => {
       // 1. Update time
       let (current_epoch, step_days) = {
+        // TODO remove when fixed
+        assert_eq!(alloc::sync::Arc::strong_count(&ctx.time_info), 3); // time info is owned by logic thread context, render thread context, simulation context. That's it.
         let mut time_info = ctx.time_info.write();
         time_info.ut_update();
         let mut logic_state = ctx.logic_state.write();
@@ -447,18 +431,35 @@ fn process_command_internal(
           .read();
         let logic_state = ctx.logic_state.read();
 
-        scene_ctx
-          .scene
-          .query2_mut::<TransformComponent, crate::scene::AlmanacPlanet, _>(
-            |_, transform, planet| {
-              planet.step(
-                transform,
-                current_epoch,
-                step_days,
-                &logic_state.almanac_data.almanac,
-              );
-            },
-          );
+        if scene_ctx.scene.should_parallelize() {
+          scene_ctx
+            .scene
+            .query2_mut_par::<TransformComponent, crate::scene::AlmanacPlanet, _>(
+              &ctx.thread_pool,
+              |_, transform, planet| {
+                let _ = planet.step(
+                  // TODO error management necessary? yes I guess (later)
+                  transform,
+                  current_epoch,
+                  step_days,
+                  &logic_state.almanac_data,
+                );
+              },
+            );
+        } else {
+          scene_ctx
+            .scene
+            .query2_mut::<TransformComponent, crate::scene::AlmanacPlanet, _>(
+              |_, transform, planet| {
+                let _ = planet.step(
+                  transform,
+                  current_epoch,
+                  step_days,
+                  &logic_state.almanac_data,
+                );
+              },
+            );
+        }
       }
 
       // 3. Physics rebuild
@@ -477,7 +478,10 @@ fn process_command_internal(
 
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::Custom { custom_fn, user_data } => {
+    LogicCommand::Custom {
+      custom_fn,
+      user_data,
+    } => {
       let ptr = user_data.map(|p| p.0).unwrap_or(core::ptr::null_mut());
       custom_fn(ctx, ptr);
       Ok(SimulationTaskResult::None)

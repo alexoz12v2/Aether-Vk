@@ -11,7 +11,7 @@ use aethervk_oshal_rlib::log;
 use aethervk_oshal_rlib::os::fs;
 use anise::almanac::Almanac;
 use anise::time::{Epoch, Duration};
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
@@ -39,7 +39,7 @@ pub extern "C" fn main(_argc: isize, _argv: *const *const u8) -> isize {
     }
   };
 
-  let bytes = BytesMut::from(file_data.as_slice());
+  let bytes = Bytes::from_owner(file_data);
 
   let almanac = match Almanac::default().load_from_bytes(bytes, "Default") {
     Ok(a) => a,

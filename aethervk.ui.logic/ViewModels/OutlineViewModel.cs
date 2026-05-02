@@ -20,16 +20,18 @@ public class EntitySelectedMessage
 public partial class OutlineViewModel : TabItemViewModel, IRecipient<EntitySelectedMessage>
 {
   private readonly NativeRuntimeService _runtimeService;
+  private readonly BreadcrumbService? _breadcrumbService;
+  private readonly ConsoleService? _consoleService;
 
   public SceneStateManager StateManager { get; }
 
-  [ObservableProperty]
-  private ulong _currentSceneId;
+  [ObservableProperty] private ulong _currentSceneId;
 
   public ObservableCollection<Entity>? RootEntities =>
     StateManager.GetOrCreateScene(CurrentSceneId).RootEntities;
 
   private Entity? _selectedEntity;
+
   public Entity? SelectedEntity
   {
     get => _selectedEntity;
@@ -47,13 +49,17 @@ public partial class OutlineViewModel : TabItemViewModel, IRecipient<EntitySelec
   public OutlineViewModel(
     ulong sceneId,
     NativeRuntimeService runtimeService,
-    SceneStateManager stateManager
+    SceneStateManager stateManager,
+    BreadcrumbService? breadcrumbService = null,
+    ConsoleService? consoleService = null
   )
     : base("Outline")
   {
     _runtimeService = runtimeService;
     StateManager = stateManager;
     CurrentSceneId = sceneId;
+    _breadcrumbService = breadcrumbService;
+    _consoleService = consoleService;
 
     WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
   }
@@ -72,12 +78,9 @@ public partial class OutlineViewModel : TabItemViewModel, IRecipient<EntitySelec
   {
     WeakReferenceMessenger.Default.Send(new AetherVk.Logic.Messages.CopyToClipboardMessage(name));
 
-    var breadcrumb =
-      ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
-    breadcrumb?.ShowMessageAsync("Copied", $"Copied entity name to clipboard: {name}");
+    _breadcrumbService?.ShowMessageAsync("Copied", $"Copied entity name to clipboard: {name}");
 
-    var console = ServiceLocator.Provider?.GetService(typeof(ConsoleService)) as ConsoleService;
-    console?.Log($"Copied entity name to clipboard: {name}");
+    _consoleService?.Log($"Copied entity name to clipboard: {name}");
   }
 
   [RelayCommand]
@@ -87,9 +90,7 @@ public partial class OutlineViewModel : TabItemViewModel, IRecipient<EntitySelec
     {
       _runtimeService.RemoveEntity(CurrentSceneId, entity.Id);
 
-      var breadcrumb =
-        ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
-      breadcrumb?.ShowMessageAsync("Entity Deleted", $"Deleted measurement: {entity.Name}");
+      _breadcrumbService?.ShowMessageAsync("Entity Deleted", $"Deleted measurement: {entity.Name}");
     }
   }
 }

@@ -1,4 +1,6 @@
-﻿using AetherVk.Logic.Messages;
+using System;
+using System.Linq;
+using AetherVk.Logic.Messages;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
 using Moq;
@@ -10,59 +12,44 @@ namespace AetherVk.Logic.Tests;
 [CollectionDefinition("Non-Parallel Collection", DisableParallelization = true)]
 public class DockingManagerViewModelTests : IDisposable
 {
-  private readonly Mock<IServiceProvider> _mockServiceProvider;
-  private readonly Mock<NativeRuntimeService> _mockRuntimeService;
-  private readonly Mock<ConsoleService> _mockConsoleService;
+  private readonly Mock<IViewModelFactory> _mockFactory;
 
   public DockingManagerViewModelTests()
   {
-    // 1. Create the mocks
-    _mockServiceProvider = new Mock<IServiceProvider>();
-    _mockRuntimeService = new Mock<NativeRuntimeService>();
-    _mockConsoleService = new Mock<ConsoleService>();
-
-    // 2. Setup the Service Provider to return your mocked services
-    _mockServiceProvider
-      .Setup(sp => sp.GetService(typeof(NativeRuntimeService)))
-      .Returns(_mockRuntimeService.Object);
-
-    _mockServiceProvider
-      .Setup(sp => sp.GetService(typeof(ConsoleService)))
-      .Returns(_mockConsoleService.Object);
-
-    // 3. Hijack the global locator
-    // (Assuming Provider has a setter. If it has an Initialize method, use that instead)
-    ServiceLocator.Provider = _mockServiceProvider.Object;
+    _mockFactory = new Mock<IViewModelFactory>();
+    _mockFactory.Setup(f => f.CreateViewModel("UITestPanel")).Returns(new UITestPanelViewModel());
+    _mockFactory.Setup(f => f.CreateViewModel("Console")).Returns(new ConsoleViewModel(new ConsoleService(new Mock<IUiThreadDispatcher>().Object)));
+    _mockFactory.Setup(f => f.CreateViewModel("Viewport3D")).Returns(new DebugUiViewModel());
+    _mockFactory.Setup(f => f.CreateViewModel("Outline")).Returns(new DebugUiViewModel());
+    _mockFactory.Setup(f => f.CreateViewModel("Properties")).Returns(new DebugUiViewModel());
   }
 
   public void Dispose()
   {
-    // CRITICAL: Clean up the static state after the test finishes
-    ServiceLocator.Provider = null;
   }
 
   [Fact]
   public void DockingManager_InitializesWithDefaultTab()
   {
     var defaultTab = new DebugUiViewModel();
-    var rootGroup = new TabGroupNodeViewModel(defaultTab);
-    var vm = new DockingManagerViewModel(rootGroup);
+    var rootGroup = new TabGroupNodeViewModel(defaultTab, _mockFactory.Object);
+    var vm = new DockingManagerViewModel(_mockFactory.Object, rootGroup);
 
     Assert.NotNull(vm.RootNode);
     Assert.IsType<TabGroupNodeViewModel>(vm.RootNode);
     var currentRootGroup = (TabGroupNodeViewModel)vm.RootNode;
-    Assert.Equal(1, currentRootGroup.Tabs.Count);
+    Assert.Single(currentRootGroup.Tabs);
     Assert.Equal("Debug UI", currentRootGroup.Tabs[0].Title);
   }
 
   [Fact]
   public void AddNewTabCommand_AddsNewUITestPanelTab()
   {
-    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
-    var vm = new DockingManagerViewModel(rootGroup);
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel(), _mockFactory.Object);
+    var vm = new DockingManagerViewModel(_mockFactory.Object, rootGroup);
     var initialTabCount = rootGroup.Tabs.Count;
 
-    rootGroup.AddNewTabCommand.Execute(null);
+    rootGroup.AddNewTabCommand.Execute("UITestPanel");
 
     Assert.Equal(initialTabCount + 1, rootGroup.Tabs.Count);
     Assert.IsType<UITestPanelViewModel>(rootGroup.SelectedTab);
@@ -72,11 +59,11 @@ public class DockingManagerViewModelTests : IDisposable
   [Fact]
   public void AddNewConsoleTabCommand_AddsNewConsoleTab()
   {
-    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
-    var vm = new DockingManagerViewModel(rootGroup);
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel(), _mockFactory.Object);
+    var vm = new DockingManagerViewModel(_mockFactory.Object, rootGroup);
     var initialTabCount = rootGroup.Tabs.Count;
 
-    rootGroup.AddNewConsoleTabCommand.Execute(null);
+    rootGroup.AddNewTabCommand.Execute("Console");
 
     Assert.Equal(initialTabCount + 1, rootGroup.Tabs.Count);
     Assert.IsType<ConsoleViewModel>(rootGroup.SelectedTab);
@@ -86,8 +73,8 @@ public class DockingManagerViewModelTests : IDisposable
   [Fact]
   public void ReceiveTabDroppedMessage_CenterZone_AddsTabToTarget()
   {
-    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
-    var vm = new DockingManagerViewModel(rootGroup);
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel(), _mockFactory.Object);
+    var vm = new DockingManagerViewModel(_mockFactory.Object, rootGroup);
 
     var newTab = new TabItemViewModel("New Tab");
     var message = new TabDroppedMessage(newTab, rootGroup, DockZone.Center);
@@ -100,8 +87,8 @@ public class DockingManagerViewModelTests : IDisposable
   [Fact]
   public void ReceiveTabDroppedMessage_LeftZone_SplitsHorizontally()
   {
-    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
-    var vm = new DockingManagerViewModel(rootGroup);
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel(), _mockFactory.Object);
+    var vm = new DockingManagerViewModel(_mockFactory.Object, rootGroup);
     var originalTab = rootGroup.SelectedTab;
     var newTab = new TabItemViewModel("New Left Tab");
 
@@ -126,8 +113,8 @@ public class DockingManagerViewModelTests : IDisposable
   [Fact]
   public void ReceiveTabDroppedMessage_RightZone_SplitsHorizontally()
   {
-    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
-    var vm = new DockingManagerViewModel(rootGroup);
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel(), _mockFactory.Object);
+    var vm = new DockingManagerViewModel(_mockFactory.Object, rootGroup);
     var originalTab = rootGroup.SelectedTab;
     var newTab = new TabItemViewModel("New Right Tab");
 
@@ -152,8 +139,8 @@ public class DockingManagerViewModelTests : IDisposable
   [Fact]
   public void ReceiveTabDroppedMessage_TopZone_SplitsVertically()
   {
-    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
-    var vm = new DockingManagerViewModel(rootGroup);
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel(), _mockFactory.Object);
+    var vm = new DockingManagerViewModel(_mockFactory.Object, rootGroup);
     var originalTab = rootGroup.SelectedTab;
     var newTab = new TabItemViewModel("New Top Tab");
 
@@ -178,8 +165,8 @@ public class DockingManagerViewModelTests : IDisposable
   [Fact]
   public void ReceiveTabDroppedMessage_BottomZone_SplitsVertically()
   {
-    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
-    var vm = new DockingManagerViewModel(rootGroup);
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel(), _mockFactory.Object);
+    var vm = new DockingManagerViewModel(_mockFactory.Object, rootGroup);
     var originalTab = rootGroup.SelectedTab;
     var newTab = new TabItemViewModel("New Bottom Tab");
 
@@ -204,8 +191,8 @@ public class DockingManagerViewModelTests : IDisposable
   [Fact]
   public void RemoveTabAndCoalesce_RemovesTabAndCoalescesNode()
   {
-    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
-    var vm = new DockingManagerViewModel(rootGroup);
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel(), _mockFactory.Object);
+    var vm = new DockingManagerViewModel(_mockFactory.Object, rootGroup);
 
     // Split the root to create a more complex structure
     var newTab = new TabItemViewModel("New Tab");
@@ -230,24 +217,23 @@ public class DockingManagerViewModelTests : IDisposable
   [Fact]
   public void RemoveTabAndCoalesce_DoesNotCoalesceIfTabsRemain()
   {
-    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel(), _mockFactory.Object);
     rootGroup.Tabs.Add(new UITestPanelViewModel());
-    var vm = new DockingManagerViewModel(rootGroup);
+    var vm = new DockingManagerViewModel(_mockFactory.Object, rootGroup);
     var tab1 = rootGroup.Tabs[0];
-    var tab2 = rootGroup.Tabs[1];
 
     // Remove one tab, but another remains
     rootGroup.Tabs.Remove(tab1);
 
-    Assert.Equal(1, rootGroup.Tabs.Count);
+    Assert.Single(rootGroup.Tabs);
     Assert.NotNull(vm.RootNode); // Root node should still be the same TabGroup
   }
 
   [Fact]
   public void RemoveTabAndCoalesce_DoesNotCoalesceRootIfOnlyOneTab()
   {
-    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
-    var vm = new DockingManagerViewModel(rootGroup);
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel(), _mockFactory.Object);
+    var vm = new DockingManagerViewModel(_mockFactory.Object, rootGroup);
     var tab1 = rootGroup.Tabs[0];
 
     // Remove all tabs
@@ -261,8 +247,8 @@ public class DockingManagerViewModelTests : IDisposable
   [Fact]
   public void FindNodeContainingTab_FindsTabInRootGroup()
   {
-    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
-    var vm = new DockingManagerViewModel(rootGroup);
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel(), _mockFactory.Object);
+    var vm = new DockingManagerViewModel(_mockFactory.Object, rootGroup);
     var tabToFind = rootGroup.Tabs[0];
 
     var foundNode = vm.FindNodeContainingTab(vm.RootNode, tabToFind);
@@ -272,9 +258,8 @@ public class DockingManagerViewModelTests : IDisposable
   [Fact]
   public void FindNodeContainingTab_FindsTabInSplitNodeChild()
   {
-    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel());
-    var vm = new DockingManagerViewModel(rootGroup);
-    var originalTab = rootGroup.SelectedTab;
+    var rootGroup = new TabGroupNodeViewModel(new DebugUiViewModel(), _mockFactory.Object);
+    var vm = new DockingManagerViewModel(_mockFactory.Object, rootGroup);
     var newTab = new TabItemViewModel("New Tab");
 
     // Split the root to create a split node
@@ -291,7 +276,7 @@ public class DockingManagerViewModelTests : IDisposable
   [Fact]
   public void FindNodeContainingTab_ReturnsNullIfTabNotFound()
   {
-    var vm = new DockingManagerViewModel();
+    var vm = new DockingManagerViewModel(_mockFactory.Object);
     var tabToFind = new TabItemViewModel("Non Existent Tab");
 
     var foundNode = vm.FindNodeContainingTab(vm.RootNode, tabToFind);

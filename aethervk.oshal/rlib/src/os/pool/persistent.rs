@@ -54,6 +54,8 @@ struct PersistentWorkload<F, R> {
   tasklet_id: Option<usize>,
 }
 
+/// closure has to be potentially `static cause threads might live forever. Any attempt to shorten
+/// lifetime of this closure should be done through type erasure
 impl<F, R> Workload for PersistentWorkload<F, R>
 where
   F: FnMut() -> PersistentStatus<R> + Send + 'static, // Note: Sync dropped entirely for mutability

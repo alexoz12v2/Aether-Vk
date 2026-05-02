@@ -24,6 +24,18 @@ public class EntityOutlineChangedMessage
   public EntityOutlineChangedMessage(Entity entity) => Entity = entity;
 }
 
+public class EntityNameChangedMessage
+{
+  public Entity Entity { get; }
+  public string NewName { get; }
+
+  public EntityNameChangedMessage(Entity entity, string newName)
+  {
+    Entity = entity;
+    NewName = newName;
+  }
+}
+
 public partial class Entity : ObservableObject
 {
   public ulong SceneId { get; }
@@ -58,10 +70,7 @@ public partial class Entity : ObservableObject
     if (SuspendNameSync)
       return;
 
-    var runtimeService =
-      Services.ServiceLocator.Provider?.GetService(typeof(Services.NativeRuntimeService))
-      as Services.NativeRuntimeService;
-    runtimeService?.SetEntityName(SceneId, Id, value);
+    WeakReferenceMessenger.Default.Send(new EntityNameChangedMessage(this, value));
   }
 
   partial void OnIsVisibleChanged(bool value)

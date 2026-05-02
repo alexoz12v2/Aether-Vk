@@ -271,6 +271,7 @@ pub fn jacobi_diagonalization(mut a: Mat3f32, tol: f32, max_iter: usize) -> (Vec
   (Vec3f32::from_components(a.x.x(), a.y.y(), a.z.z()), v)
 }
 
+/// From lie algebra (pseudovector) representation of the angular velocity to its matrix hat representation (lie group, SO(3))
 pub fn hat(v: Vec3f32) -> Mat3f32 {
   Mat3f32 {
     x: Vec3f32::from_components(0.0, v.z(), -v.y()),
@@ -279,8 +280,16 @@ pub fn hat(v: Vec3f32) -> Mat3f32 {
   }
 }
 
+/// From matrix hat representation (lie group, SO(3)) of the angular velocity to its lie algebra (pseudovector) representation
+/// - while mathematically dR/dt `matmul` R^T produces a skew symmetric matrix, we guard
+/// against float imprecision by averaging opposite elements
 pub fn vee(s: Mat3f32) -> Vec3f32 {
-  Vec3f32::from_components(s.y.z(), s.z.x(), s.x.y())
+  // Vec3f32::from_components(s.y.z(), s.z.x(), s.x.y())
+  Vec3f32::from_components(
+    (s.y.z() - s.z.y()) * 0.5,
+    (s.z.x() - s.x.z()) * 0.5,
+    (s.x.y() - s.y.x()) * 0.5,
+  )
 }
 
 pub fn expm_hat(w: Vec3f32) -> Mat3f32 {

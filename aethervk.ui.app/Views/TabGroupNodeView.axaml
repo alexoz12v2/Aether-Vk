@@ -72,14 +72,14 @@
                       Classes="accent">
                 <Button.Flyout>
                   <MenuFlyout>
-                    <MenuItem Header="UI Test Panel" Command="{Binding AddNewTabCommand}" />
-                    <MenuItem Header="Console" Command="{Binding AddNewConsoleTabCommand}" />
-                    <MenuItem Header="Horizon JPL Data Viewer" Command="{Binding AddNewHorizonJplTabCommand}" />
-                    <MenuItem Header="Timeline Editor" Command="{Binding AddNewTimelineTabCommand}" />
-                    <MenuItem Header="Almanac Explorer" Command="{Binding AddNewAlmanacTabCommand}" />
-                    <MenuItem Header="Outline" Command="{Binding AddNewOutlineTabCommand}" />
-                    <MenuItem Header="Properties" Command="{Binding AddNewPropertiesTabCommand}" />
-                    <MenuItem Header="Viewport 3D" Command="{Binding AddNewViewport3DTabCommand}" />
+                    <MenuItem Header="UI Test Panel" Command="{Binding AddNewTabCommand}" CommandParameter="UITestPanel" />
+                    <MenuItem Header="Console" Command="{Binding AddNewTabCommand}" CommandParameter="Console" />
+                    <MenuItem Header="Horizon JPL Data Viewer" Command="{Binding AddNewTabCommand}" CommandParameter="HorizonJpl" />
+                    <MenuItem Header="Timeline Editor" Command="{Binding AddNewTabCommand}" CommandParameter="Timeline" />
+                    <MenuItem Header="Almanac Explorer" Command="{Binding AddNewTabCommand}" CommandParameter="Almanac" />
+                    <MenuItem Header="Outline" Command="{Binding AddNewTabCommand}" CommandParameter="Outline" />
+                    <MenuItem Header="Properties" Command="{Binding AddNewTabCommand}" CommandParameter="Properties" />
+                    <MenuItem Header="Viewport 3D" Command="{Binding AddNewTabCommand}" CommandParameter="Viewport3D" />
                   </MenuFlyout>
                 </Button.Flyout>
               </Button>
@@ -125,14 +125,14 @@
               IsVisible="{Binding !HasTabs}" HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
           <Button.Flyout>
               <MenuFlyout>
-                  <MenuItem Header="UI Test Panel" Command="{Binding AddNewTabCommand}" />
-                  <MenuItem Header="Console" Command="{Binding AddNewConsoleTabCommand}" />
-                  <MenuItem Header="Horizon JPL Data Viewer" Command="{Binding AddNewHorizonJplTabCommand}" />
-                  <MenuItem Header="Timeline Editor" Command="{Binding AddNewTimelineTabCommand}" />
-                  <MenuItem Header="Almanac Explorer" Command="{Binding AddNewAlmanacTabCommand}" />
-                  <MenuItem Header="Outline" Command="{Binding AddNewOutlineTabCommand}" />
-                  <MenuItem Header="Properties" Command="{Binding AddNewPropertiesTabCommand}" />
-                  <MenuItem Header="Viewport 3D" Command="{Binding AddNewViewport3DTabCommand}" />
+                  <MenuItem Header="UI Test Panel" Command="{Binding AddNewTabCommand}" CommandParameter="UITestPanel" />
+                  <MenuItem Header="Console" Command="{Binding AddNewTabCommand}" CommandParameter="Console" />
+                  <MenuItem Header="Horizon JPL Data Viewer" Command="{Binding AddNewTabCommand}" CommandParameter="HorizonJpl" />
+                  <MenuItem Header="Timeline Editor" Command="{Binding AddNewTabCommand}" CommandParameter="Timeline" />
+                  <MenuItem Header="Almanac Explorer" Command="{Binding AddNewTabCommand}" CommandParameter="Almanac" />
+                  <MenuItem Header="Outline" Command="{Binding AddNewTabCommand}" CommandParameter="Outline" />
+                  <MenuItem Header="Properties" Command="{Binding AddNewTabCommand}" CommandParameter="Properties" />
+                  <MenuItem Header="Viewport 3D" Command="{Binding AddNewTabCommand}" CommandParameter="Viewport3D" />
               </MenuFlyout>
           </Button.Flyout>
       </Button>

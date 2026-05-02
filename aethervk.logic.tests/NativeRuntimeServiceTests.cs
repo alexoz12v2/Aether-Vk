@@ -9,16 +9,18 @@ namespace AetherVk.Logic.Tests
   [Collection("Sequential")]
   public class NativeRuntimeServiceTests : IDisposable
   {
-    private NativeRuntimeService _service;
-    private string _assetPath;
+    private readonly NativeRuntimeService _service;
+    private readonly SceneStateManager _stateManager;
+    private readonly string _assetPath;
 
     public NativeRuntimeServiceTests()
     {
-      _service = new NativeRuntimeService(new SceneStateManager());
+      var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
+      dispatcherMock.Setup(d => d.Dispatch(Moq.It.IsAny<Action>())).Callback<Action>(a => a());
+      _stateManager = new SceneStateManager();
+      _service = new NativeRuntimeService(_stateManager, new ConsoleService(dispatcherMock.Object), new BreadcrumbService(dispatcherMock.Object), dispatcherMock.Object);
       var baseDir = AppDomain.CurrentDomain.BaseDirectory;
-      _assetPath = System.IO.Path.GetFullPath(
-        System.IO.Path.Combine(baseDir, "../../../../assets")
-      );
+      _assetPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, "../../../../assets"));
     }
 
     public void Dispose()
@@ -33,17 +35,19 @@ namespace AetherVk.Logic.Tests
       {
         _service.InitializeSimulationContext("Vulkan", _assetPath, false);
         Assert.True(_service.IsInitialized);
-        Assert.NotEmpty(new System.Collections.ObjectModel.ObservableCollection<AetherVk.Logic.Models.Entity>()());
-        Assert.Contains(new System.Collections.ObjectModel.ObservableCollection<AetherVk.Logic.Models.Entity>()());
+        
+        ulong sceneId = _service.CreateScene(true);
+        var rootEntities = _stateManager.GetOrCreateScene(sceneId).RootEntities;
+        
+        Assert.NotEmpty(rootEntities);
 
-        var root = new System.Collections.ObjectModel.ObservableCollection<AetherVk.Logic.Models.Entity>()().FirstOrDefault();
+        var root = rootEntities.FirstOrDefault();
         Assert.NotNull(root);
         Assert.Contains(root.Children, e => e.Name == "sun");
+        
+        TestSceneExporter.ExportScene(sceneId, _stateManager, "Initialization_DefaultScene");
       }
-      catch (System.DllNotFoundException)
-      {
-        // Headless CI or missing libraries, acceptable skip
-      }
+      catch (System.DllNotFoundException) { }
     }
 
     [Fact]
@@ -53,7 +57,8 @@ namespace AetherVk.Logic.Tests
       {
         _service.InitializeSimulationContext("Vulkan", _assetPath, false);
         ulong modelId = await _service.ImportModelAsync("dummy/path/to/model.glb");
-        Assert.Equal(0ul);
+        // Without an actual GLB it returns 0.
+        Assert.Equal(0ul, modelId);
       }
       catch (System.DllNotFoundException) { }
     }
@@ -64,9 +69,11 @@ namespace AetherVk.Logic.Tests
       try
       {
         _service.InitializeSimulationContext("Vulkan", _assetPath, false);
-        var initialCount = new System.Collections.ObjectModel.ObservableCollection<AetherVk.Logic.Models.Entity>()().FirstOrDefault()?.Children.Count ?? 0;
+        ulong sceneId = _service.CreateScene(true);
+        var initialCount = _stateManager.GetOrCreateScene(sceneId).RootEntities.FirstOrDefault()?.Children.Count ?? 0;
+        
         await Assert.ThrowsAsync<Exception>(() =>
-          _service.SpawnModelInstanceAsync(999)
+          _service.SpawnModelInstanceAsync(sceneId, 999, "test")
         );
       }
       catch (System.DllNotFoundException) { }
@@ -77,21 +84,21 @@ namespace AetherVk.Logic.Tests
     {
       try
       {
-        _service.InitializeSimulationContext("Vulkan", _assetPath);
+        _service.InitializeSimulationContext("Vulkan", _assetPath, false);
+        ulong sceneId = _service.CreateScene(true);
+        
+        var entity = _service.CreateMeasurement(sceneId, "TestMeasure", new float[]{0,0,0}, new float[]{1,1,1});
+        
         Assert.NotNull(entity);
         Assert.Equal("TestMeasure", entity.Name);
 
-        var root = new System.Collections.ObjectModel.ObservableCollection<AetherVk.Logic.Models.Entity>()().FirstOrDefault();
+        var root = _stateManager.GetOrCreateScene(sceneId).RootEntities.FirstOrDefault();
         Assert.NotNull(root);
-        Assert.Contains(root.Children);
+        Assert.Contains(root.Children, e => e.Id == entity.Id);
+        
+        TestSceneExporter.ExportScene(sceneId, _stateManager, "CreateMeasurement_Scene");
       }
       catch (System.DllNotFoundException) { }
-    }
-
-    [Fact]
-    public void ProcessCommand_ShouldExecuteWithoutCrashing()
-    {
-      // Deprecated
     }
   }
 }

@@ -1,99 +1,266 @@
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::vec4::Quat;
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::Vector3;
-use aethervk_oshal_rlib::os;
-use aethervk_oshal_rlib::os::fs::{ExtensionToStr, FileSystemObject};
-use alloc::vec::Vec;
-use alloc::string::String;
+use aethervk_oshal_rlib::{
+  math::vector::vec3::Vec3f32,
+  math::vector::vec4::Quat,
+  math::quaternion::Quaternion,
+  math::vector::Vector3,
+  os,
+  os::fs::{ExtensionToStr, FileSystemObject},
+  math::matrix::mat3::Mat3f32,
+  math::matrix::{Matrix, Matrix3},
+  os::files::Mmap
+};
+use alloc::{
+  vec::Vec,
+  string::String
+};
+use crate::{
+  math::vee,
+  types::{EngineError, EngineResult}
+};
 
-pub const DISTANCE_SCALE_FACTOR: f64 = 10000000.0;
+// TODO: type safety between simulation units and real units, eg SimUnit<Vec3f32> vs RealUnit<Vec3f32>. Major refactoring here for these deref types
 
+/// scale factor between coordinates from SPK ephemeris and simulation space, *in km*
+pub const DISTANCE_SCALE_FACTOR: f64 = 10_000_000.0; // in km
+
+/// Defined a frame whose origin is the sun, and whose orientation (equatorial plane) is the plane
+/// which contains the Sun's orbit (rotated ~23 degrees with respect to J2000, which is the plane
+/// containing Earth's orbit in year 2000)
+pub const SUN_ECLIPJ200: anise::frames::Frame = anise::frames::Frame::new(
+  anise::constants::celestial_objects::SUN,
+  anise::constants::orientations::ECLIPJ2000,
+);
+
+/// Stores `position` and `velocity`, after being scaled by a factor of [`DISTANCE_SCALE_FACTOR`]
+/// to get to *simulation units*
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KinematicState {
+  pub position: Vec3f32,
+  pub velocity: Vec3f32,
+  pub rotation: Option<Quat>,
+  pub angular_velocity: Option<Vec3f32>,
+}
+
+/// There is no need to track [`bytes::Bytes`] of SPK data cause it's an Arc based type, meaning
+/// as long as ['anise::almanac::Almanac'] holds onto it, we are fine
 #[derive(Default)]
 pub struct AlmanacPackedData {
-  /// loaded SPKs. TODO: mapped file and implement whatever to do bytes::BytesMut::from_iter
-  pub data: Vec<Vec<u8>>,
   pub file_names: Vec<String>,
   /// the almanac itself
   pub almanac: anise::almanac::Almanac,
 }
 
-pub fn load_almanac(path: &os::fs::Path) -> anise::errors::AlmanacResult<AlmanacPackedData> {
-  let mut result = AlmanacPackedData::default();
-  if let Ok(entries) = os::fs::read_dir(path) {
-    for entry in entries.flatten() {
-      let path = entry.path();
-      if path.is_file() {
-        if let Some(ext) = path.extension() {
-          if ext == "bsp" {
-            if let Some(path_cow) = path.to_str_unified() {
-              let path_str = path_cow.to_str().unwrap();
-              let path: &os::fs::Path = path_str.into();
-              result.data.push(
-                os::fs::read(path).expect(&alloc::format!("Couldn't read file {}", path_str)),
-              );
-              let bytes = bytes::BytesMut::from(result.data.last().unwrap().as_slice());
-              result.almanac = result.almanac.load_from_bytes(bytes, path_str)?;
-            }
+impl AlmanacPackedData {
+  // TODO `celestial_name_from_id` to create planet/sun entities
+  pub fn load_almanac<P: AsRef<os::fs::Path>>(&mut self, path: P) -> EngineResult<()> {
+    if let Ok(entries) = os::fs::read_dir(path.as_ref()) {
+      for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && path.extension() == Some("bsp") {
+          if let Some(path_cow) = path.to_str_unified() {
+            let path_str = path_cow.to_str().unwrap();
+            let path_ref: &os::fs::Path = path_str.into();
+
+            // 1. Map the file natively into the Virtual Address Space. 0 RAM Overhead!
+            let mmap = Mmap::open(path_ref).map_err(|e| EngineError::from(e))?;
+
+            // 2. Safely wrap into zero-copy `bytes::Bytes` utilizing your Mmap Drop handler constraint.
+            // `Bytes::from_owner` natively works since Mmap implements `AsRef<[u8]> + Send + 'static`
+            let bytes = bytes::Bytes::from_owner(mmap);
+
+            // 3. Mutates safely in place. If returns an error, `bytes` goes out of scope and is dropped,
+            // while `self.almanac` remains in its previous state
+            self
+              .almanac
+              .load_from_bytes_mut(bytes, path_str)
+              .map_err(|_| EngineError::InvalidOperation("[Almanac] Error loading SPK file"))?;
+            // TODO err if no counters (spk counter, bpc counter, ...) has increased
+            // TODO remove
+
+            self.file_names.push(alloc::string::String::from(path_str));
           }
         }
       }
     }
+
+    aethervk_oshal_rlib::log!("Loaded {} SPK files", self.almanac.num_loaded_spk());
+
+    Ok(())
   }
 
-  if result.almanac.num_loaded_spk() == 0 {
-    panic!("No SPK files found");
+  pub fn get_ephem_full(
+    &self,
+    spk_id: i32,
+    frame: anise::frames::Frame,
+    epoch: anise::time::Epoch,
+    allow_barycentre_fallback: bool,
+    mandatory_rotation: bool,
+  ) -> EngineResult<KinematicState> {
+    let cartesian_state = self.get_cartesian_state(
+      spk_id,
+      frame.orientation_id,
+      frame.ephemeris_id,
+      epoch,
+      allow_barycentre_fallback,
+    )?;
+    let pos = Vec3f32::from_nalgebra_scaled(cartesian_state.radius_km, DISTANCE_SCALE_FACTOR);
+    let vel = Vec3f32::from_nalgebra_scaled(cartesian_state.velocity_km_s, DISTANCE_SCALE_FACTOR);
+
+    // In SPICE, body-fixed IAU frame IDs conventionally match their base body ID (e.g. Earth = 399)
+    let body_frame = anise::frames::Frame::new(spk_id, spk_id);
+    // ask the almanac for the rotation matrix from body frame to inertial world space
+    let (rotation, angular_velocity) =
+      if let Ok(dcm) = self.almanac.rotate(body_frame, frame, epoch) {
+        // direction cosine matrix present, extract rotational information
+        let r = Mat3f32::from_nalgebra(dcm.rot_mat);
+
+        let angular_velocity_rad_s = if let Some(rot_mat_dt_anise) = dcm.rot_mat_dt {
+          // TODO CRITICAL: This was computed in TDB. we need to compute it in simulation time (does it change?)
+          // Map Anise's time derivative to your Mat3f32
+          let r_dt = Mat3f32::from_nalgebra(rot_mat_dt_anise);
+
+          // 1. Get the Hat Matrix (assuming your Mat3f32 implements Mul and Transpose)
+          let omega_hat_world = r_dt * r.transpose();
+
+          // 2. Extract the Vec3f32
+          Some(vee(omega_hat_world))
+        } else {
+          // Fallback: Some static or low-fidelity frames don't have angular velocity
+          None
+        };
+
+        (Some(Quat::from_rotation_matrix(&r)), angular_velocity_rad_s)
+      } else {
+        (None, None)
+      };
+
+    match (rotation, mandatory_rotation) {
+      (None, true) => Err(EngineError::InvalidOperation(
+        "[Almanac] get_ephem_full: Rotation was mandatory but not found",
+      )),
+      (maybe_rot, _) => Ok(KinematicState {
+        position: pos,
+        velocity: vel,
+        rotation: maybe_rot,
+        angular_velocity,
+      }),
+    }
   }
 
-  aethervk_oshal_rlib::log!("Loaded {} SPK files", result.almanac.num_loaded_spk());
+  pub fn get_ephem_frame(
+    &self,
+    spk_id: i32,
+    frame: anise::frames::Frame,
+    epoch: anise::time::Epoch,
+    allow_barycentre_fallback: bool,
+  ) -> EngineResult<Vec3f32> {
+    self.get_ephem(
+      spk_id,
+      frame.orientation_id,
+      frame.ephemeris_id,
+      epoch,
+      allow_barycentre_fallback,
+    )
+  }
 
-  Ok(result)
+  /// `spk_id` should be a valid celestial body identifier, eg, if planet, use [`anise::constants::celestial_objects`] constants
+  /// `orientation` should be a axes orientation identifier from [`anise::constants::orientations`]
+  /// `observer` should be a valid barycenter identifier from [`anise::constants::celestial_objects`]
+  pub fn get_ephem(
+    &self,
+    spk_id: i32,
+    orientation: i32,
+    observer: i32,
+    epoch: anise::time::Epoch,
+    allow_barycentre_fallback: bool,
+  ) -> EngineResult<Vec3f32> {
+    let cartesian_state = self.get_cartesian_state(
+      spk_id,
+      orientation,
+      observer,
+      epoch,
+      allow_barycentre_fallback,
+    )?;
+
+    let pos = Vec3f32::from_nalgebra_scaled(cartesian_state.radius_km, DISTANCE_SCALE_FACTOR);
+
+    Ok(pos)
+  }
+
+  fn get_cartesian_state(
+    &self,
+    spk_id: i32,
+    orientation: i32,
+    observer: i32,
+    epoch: anise::time::Epoch,
+    allow_barycentre_fallback: bool,
+  ) -> EngineResult<anise::math::cartesian::CartesianState> {
+    let cartesian_state = 'cartesian_state: {
+      // 1. Attempt to get the precise planet center (e.g., 399 for Earth)
+      let res = self
+        .almanac
+        .spk_ezr(spk_id, epoch, orientation, observer, None);
+      if res.is_err() && allow_barycentre_fallback {
+        // 2. FALLBACK: If the precise ID fails, fall back to the planet's system
+        // Barycentre (e.g., 199 / 100 = 1 for Mercury).
+        let barycentre = spk_id / 100;
+        if barycentre > 0 {
+          break 'cartesian_state self.almanac.spk_ezr(
+            barycentre,
+            epoch,
+            orientation,
+            observer,
+            None,
+          );
+        }
+      }
+      res
+    }
+    .map_err(|e| {
+      aethervk_oshal_rlib::log!("[Almanac] error: {}", e);
+      EngineError::InvalidOperation("[Almanac] couldn't get ephemeris data")
+    })?;
+    Ok(cartesian_state)
+  }
 }
 
-pub fn get_almanac_pos(
-  id: i32,
-  current_epoch: anise::time::Epoch,
-  almanac: &anise::almanac::Almanac,
-) -> Vec3f32 {
-  // 1. Attempt to get the precise planet center (e.g., 399 for Earth)
-  let state = almanac
-    .spk_ezr(
-      id,
-      current_epoch,
-      1, /* J2000 */
-      0, /* SSB */
-      None,
+// utils
+trait VecTypeConversion<T> {
+  fn from_nalgebra(v: T) -> Self;
+}
+
+trait VecTypeConversionScaled<T> {
+  fn from_nalgebra_scaled(v: T, factor: f64) -> Self;
+}
+
+impl VecTypeConversion<anise::math::Matrix3> for Mat3f32 {
+  fn from_nalgebra(value: anise::math::Matrix3) -> Self {
+    Mat3f32::from_columns(
+      Vec3f32::from_components(
+        value[(0, 0)] as f32,
+        value[(1, 0)] as f32,
+        value[(2, 0)] as f32,
+      ),
+      Vec3f32::from_components(
+        value[(0, 1)] as f32,
+        value[(1, 1)] as f32,
+        value[(2, 1)] as f32,
+      ),
+      Vec3f32::from_components(
+        value[(0, 2)] as f32,
+        value[(1, 2)] as f32,
+        value[(2, 2)] as f32,
+      ),
     )
-    // 2. FALLBACK: If the precise ID fails, fall back to the planet's system
-    // Barycenter (e.g., 199 / 100 = 1 for Mercury).
-    .or_else(|e| {
-      let barycenter = id / 100;
-      if barycenter > 0 {
-        almanac.spk_ezr(
-          barycenter,
-          current_epoch,
-          1, /* J2000 */
-          0, /* SSB */
-          None,
-        )
-      } else {
-        Err(e)
-      }
-    });
+  }
+}
 
-  match state {
-    Ok(st) => {
-      let pos = Vec3f32::from_components(
-        (st.radius_km[0] / DISTANCE_SCALE_FACTOR) as f32,
-        (st.radius_km[1] / DISTANCE_SCALE_FACTOR) as f32,
-        (st.radius_km[2] / DISTANCE_SCALE_FACTOR) as f32,
-      );
-
-      // Obliquity of the Ecliptic (~23.4 degrees)
-      let inclination_rad = -0.4090928f32; // -23.4392811 degrees in radians
-      let rot = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), inclination_rad);
-      rot.rotate_vector(pos)
-    }
-    Err(_) => Vec3f32::from_components(0.0, 0.0, 0.0),
+impl VecTypeConversionScaled<anise::math::Vector3> for Vec3f32 {
+  fn from_nalgebra_scaled(value: anise::math::Vector3, factor: f64) -> Self {
+    Vec3f32::from_components(
+      (value[0] / DISTANCE_SCALE_FACTOR) as f32,
+      (value[1] / DISTANCE_SCALE_FACTOR) as f32,
+      (value[2] / DISTANCE_SCALE_FACTOR) as f32,
+    )
   }
 }

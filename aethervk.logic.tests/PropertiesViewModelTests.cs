@@ -1,4 +1,5 @@
 using AetherVk.Logic.Models;
+using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
 using CommunityToolkit.Mvvm.Messaging;
 using Xunit;
@@ -11,8 +12,9 @@ public class PropertiesViewModelTests
   public void ReceivesMessage_SetsSelectedEntity()
   {
     // Arrange
-    var propertiesVm = new PropertiesViewModel(1, _stateManager);
-    var entity = new Entity(1, "TestEntity", "test", "entity");
+    var stateManager = new SceneStateManager();
+    var propertiesVm = new PropertiesViewModel(1, stateManager);
+    var entity = new Entity(1, 100, "TestEntity");
 
     // Act
     WeakReferenceMessenger.Default.Send(new EntitySelectedMessage(entity));
@@ -26,9 +28,10 @@ public class PropertiesViewModelTests
   public void ReceivesMessage_ResetsFollowingState()
   {
     // Arrange
-    var propertiesVm = new PropertiesViewModel(1, _stateManager);
+    var stateManager = new SceneStateManager();
+    var propertiesVm = new PropertiesViewModel(1, stateManager);
     propertiesVm.IsFollowingEntity = true;
-    var entity = new Entity(1, "TestEntity", "test", "entity");
+    var entity = new Entity(1, 100, "TestEntity");
 
     // Act
     WeakReferenceMessenger.Default.Send(new EntitySelectedMessage(entity));

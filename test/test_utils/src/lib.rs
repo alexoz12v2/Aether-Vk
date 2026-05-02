@@ -555,6 +555,6 @@ pub fn scene_to_render_scene(
   render_outlines: bool,
   cmd_buffer: gpu::CommandBufferHandle,
 ) -> GpuResult<RenderScene> {
-  let render_scene_extraction = scene.convert_scene(camera_entity, render_outlines)?;
+  let render_scene_extraction = scene.convert_scene(camera_entity, render_outlines, None)?; // TODO
   render_scene_extraction.build_render_scene(device, presentation_engine_handle, cmd_buffer)
 }

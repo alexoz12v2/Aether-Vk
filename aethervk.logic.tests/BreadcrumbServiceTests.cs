@@ -10,7 +10,9 @@ public class BreadcrumbServiceTests
   public async Task ShowMessageAsync_AddsAndRemovesMessage()
   {
     // Arrange
-    var service = new BreadcrumbService();
+    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
+    dispatcherMock.Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>())).Callback<System.Action>(a => a());
+    var service = new BreadcrumbService(dispatcherMock.Object);
 
     // Act
     var task = service.ShowMessageAsync("Title", "Content", System.TimeSpan.FromMilliseconds(50));

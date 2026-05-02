@@ -79,9 +79,12 @@ public partial class TabGroupNodeViewModel
   [ObservableProperty]
   private bool _hasTabs;
 
-  public TabGroupNodeViewModel(TabItemViewModel defaultTab, SplitNodeViewModel? parent = null)
+  private readonly IViewModelFactory _viewModelFactory;
+
+  public TabGroupNodeViewModel(TabItemViewModel defaultTab, IViewModelFactory viewModelFactory, SplitNodeViewModel? parent = null)
     : base(parent)
   {
+    _viewModelFactory = viewModelFactory;
     Tabs.Add(defaultTab);
     SelectedTab = defaultTab;
     HasTabs = true;
@@ -134,66 +137,7 @@ public partial class TabGroupNodeViewModel
     if (index == -1)
       return;
 
-    TabItemViewModel? newTab = null;
-    // TODO BAD. This inhibits persistence. Introduce a service which registers live tabs
-    switch (tabType)
-    {
-      case "UITestPanel":
-        newTab = new UITestPanelViewModel();
-        break;
-      case "Console":
-        var consoleService =
-          ServiceLocator.Provider?.GetService(typeof(ConsoleService)) as ConsoleService;
-        newTab =
-          consoleService != null
-            ? new ConsoleViewModel(consoleService)
-            : new ConsoleViewModel(new ConsoleService());
-        break;
-      case "HorizonJpl":
-        var horizonService =
-          ServiceLocator.Provider?.GetService(typeof(HorizonJplService)) as HorizonJplService;
-        if (horizonService != null)
-          newTab = new HorizonJplViewModel(horizonService);
-        break;
-      case "Outline":
-        var outlineVm = new OutlineViewModel(
-          1,
-          ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService,
-          ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager
-        );
-        if (outlineVm != null)
-          newTab = outlineVm;
-        break;
-      case "Properties":
-        var propertiesVm = new PropertiesViewModel(
-          1,
-          ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager
-        );
-        if (propertiesVm != null)
-          newTab = propertiesVm;
-        break;
-      case "DebugUI":
-        newTab = new DebugUiViewModel();
-        break;
-      case "Timeline":
-        var timelineService =
-          ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-        if (timelineService != null)
-          newTab = new TimelineViewModel(timelineService);
-        break;
-      case "Almanac":
-        var almanacService =
-          ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-        if (almanacService != null)
-          newTab = new AlmanacExplorerViewModel(almanacService);
-        break;
-      case "Viewport3D":
-        var viewportRuntimeService =
-          ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-        if (viewportRuntimeService != null)
-          newTab = new Viewport3DViewModel(viewportRuntimeService);
-        break;
-    }
+    TabItemViewModel? newTab = _viewModelFactory.CreateViewModel(tabType) as TabItemViewModel;
 
     if (newTab != null)
     {
@@ -202,109 +146,12 @@ public partial class TabGroupNodeViewModel
     }
   }
 
-  // TODO Remove all these stupid commands and leave just one which receives the view model and does proper dependency injection
   [RelayCommand]
-  private void AddNewTab()
+  private void AddNewTab(string tabType = "UITestPanel")
   {
-    var newTab = new UITestPanelViewModel(); // Default to UITestPanelViewModel
-    Tabs.Add(newTab);
-    SelectedTab = newTab;
-  }
-
-  [RelayCommand]
-  private void AddNewConsoleTab()
-  {
-    // Resolve ConsoleService from ServiceLocator so it shares the same instance across tabs
-    var consoleService =
-      ServiceLocator.Provider?.GetService(typeof(ConsoleService)) as ConsoleService;
-    var newTab =
-      consoleService != null
-        ? new ConsoleViewModel(consoleService)
-        : new ConsoleViewModel(new ConsoleService());
-    Tabs.Add(newTab);
-    SelectedTab = newTab;
-  }
-
-  [RelayCommand]
-  private void AddNewHorizonJplTab()
-  {
-    var horizonService =
-      ServiceLocator.Provider?.GetService(typeof(HorizonJplService)) as HorizonJplService;
-    if (horizonService != null)
-    {
-      var newTab = new HorizonJplViewModel(horizonService);
-      Tabs.Add(newTab);
-      SelectedTab = newTab;
-    }
-  }
-
-  [RelayCommand]
-  private void AddNewOutlineTab()
-  {
-    var newTab = new OutlineViewModel(
-      1,
-      ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService,
-      ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager
-    );
+    var newTab = _viewModelFactory.CreateViewModel(tabType) as TabItemViewModel;
     if (newTab != null && !Tabs.Contains(newTab))
     {
-      Tabs.Add(newTab);
-    }
-
-    if (newTab != null)
-      SelectedTab = newTab;
-  }
-
-  [RelayCommand]
-  private void AddNewPropertiesTab()
-  {
-    var newTab = new PropertiesViewModel(
-      1,
-      ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager
-    );
-    if (newTab != null && !Tabs.Contains(newTab))
-    {
-      Tabs.Add(newTab);
-    }
-
-    if (newTab != null)
-      SelectedTab = newTab;
-  }
-
-  [RelayCommand]
-  private void AddNewTimelineTab()
-  {
-    var runtimeService =
-      ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-    if (runtimeService != null)
-    {
-      var newTab = new TimelineViewModel(runtimeService);
-      Tabs.Add(newTab);
-      SelectedTab = newTab;
-    }
-  }
-
-  [RelayCommand]
-  private void AddNewAlmanacTab()
-  {
-    var runtimeService =
-      ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-    if (runtimeService != null)
-    {
-      var newTab = new AlmanacExplorerViewModel(runtimeService);
-      Tabs.Add(newTab);
-      SelectedTab = newTab;
-    }
-  }
-
-  [RelayCommand]
-  private void AddNewViewport3DTab()
-  {
-    var runtimeService =
-      ServiceLocator.Provider?.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService;
-    if (runtimeService != null)
-    {
-      var newTab = new Viewport3DViewModel(runtimeService);
       Tabs.Add(newTab);
       SelectedTab = newTab;
     }
@@ -338,9 +185,12 @@ public partial class DockingManagerViewModel
   [ObservableProperty]
   private LayoutNodeViewModelBase _rootNode;
 
-  public DockingManagerViewModel(LayoutNodeViewModelBase? rootNode = null)
+  private readonly IViewModelFactory _viewModelFactory;
+
+  public DockingManagerViewModel(IViewModelFactory viewModelFactory, LayoutNodeViewModelBase? rootNode = null)
     : base()
   {
+    _viewModelFactory = viewModelFactory;
     WeakReferenceMessenger.Default.Register<TabDroppedMessage>(this);
     WeakReferenceMessenger.Default.Register<TabDragTaskMessage>(this);
     WeakReferenceMessenger.Default.Register<CoalesceGroupMessage>(this);
@@ -350,23 +200,14 @@ public partial class DockingManagerViewModel
 
   private LayoutNodeViewModelBase CreateDefaultLayout()
   {
-    var viewportTab = new Viewport3DViewModel(
-      (ServiceLocator.Provider!.GetService(typeof(NativeRuntimeService))! as NativeRuntimeService)!
-    );
-    var viewportGroup = new TabGroupNodeViewModel(viewportTab);
+    var viewportTab = _viewModelFactory.CreateViewModel("Viewport3D") as TabItemViewModel;
+    var viewportGroup = new TabGroupNodeViewModel(viewportTab!, _viewModelFactory);
 
-    var outlineTab = new OutlineViewModel(
-      1,
-      ServiceLocator.Provider.GetService(typeof(NativeRuntimeService)) as NativeRuntimeService,
-      ServiceLocator.Provider.GetService(typeof(SceneStateManager)) as SceneStateManager
-    );
-    var outlineGroup = new TabGroupNodeViewModel(outlineTab);
+    var outlineTab = _viewModelFactory.CreateViewModel("Outline") as TabItemViewModel;
+    var outlineGroup = new TabGroupNodeViewModel(outlineTab!, _viewModelFactory);
 
-    var propertiesTab = new PropertiesViewModel(
-      1,
-      ServiceLocator.Provider.GetService(typeof(SceneStateManager)) as SceneStateManager
-    );
-    var propertiesGroup = new TabGroupNodeViewModel(propertiesTab);
+    var propertiesTab = _viewModelFactory.CreateViewModel("Properties") as TabItemViewModel;
+    var propertiesGroup = new TabGroupNodeViewModel(propertiesTab!, _viewModelFactory);
 
     // Vertical split: Outline on top, Properties on bottom
     var rightSplit = new SplitNodeViewModel(outlineGroup, propertiesGroup, SplitOrientation.Vertical, 0.5);
@@ -500,7 +341,7 @@ public partial class DockingManagerViewModel
     DockZone zone
   )
   {
-    var newGroup = new TabGroupNodeViewModel(tab);
+    var newGroup = new TabGroupNodeViewModel(tab, _viewModelFactory);
     var orientation =
       (zone == DockZone.Left || zone == DockZone.Right)
         ? SplitOrientation.Horizontal

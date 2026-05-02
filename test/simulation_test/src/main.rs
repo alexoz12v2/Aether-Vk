@@ -14,10 +14,12 @@ use aethervk_oshal_rlib::{
 };
 use std::{sync::Arc, time::Instant};
 use std::sync::atomic::AtomicBool;
+use winit::keyboard::KeyCode;
 use aethervk_core_rlib::gpu::PresentationEngineHandle;
 use aethervk_core_rlib::scene::text::FontAtlas;
 use aethervk_core_rlib::simulation_api::structs::{CustomRenderCallback, SendPtrMut};
 use aethervk_core_rlib::types::GpuResult;
+use aethervk_core_rlib::simulation_api::core_api::SimulationContextExt;
 use test_utils::{
   create_winit_window_and_event_loop, cycle_get_asset_path_from_exe, get_handle_and_window_info,
 };
@@ -38,6 +40,8 @@ struct AppState {
   console_scroll_offset: usize,
   command_history: std::collections::VecDeque<String>,
   current_command: String,
+  current_epoch: anise::time::Epoch,
+  step_days: f64,
 }
 
 impl AppState {
@@ -65,12 +69,12 @@ fn panic_error_callback(msg: &str) {
 }
 
 fn main() {
-  std::panic::set_hook(Box::new(|panic_info| {
-    println!("CRASH DETECTED: {}", panic_info);
-    println!("Press Enter to close the application...");
-    let mut buf = [0u8; 1];
-    let _ = std::io::Read::read(&mut std::io::stdin(), &mut buf);
-  }));
+  // std::panic::set_hook(Box::new(|panic_info| {
+  //   println!("CRASH DETECTED: {}", panic_info);
+  //   println!("Press Enter to close the application...");
+  //   let mut buf = [0u8; 1];
+  //   let _ = std::io::Read::read(&mut std::io::stdin(), &mut buf);
+  // }));
 
   let assets_dir = cycle_get_asset_path_from_exe(true);
   let start_time = Instant::now();
@@ -109,7 +113,10 @@ fn main() {
     .expect("Failed to load comet");
 
     let mesh_entity = active_scene.scene.spawn_entity("comet");
-    let comet_radius = 50.0;
+    // Scale comet so its size represents 1.7km (radius ~0.85km).
+    let comet_radius = (0.85
+      / aethervk_core_rlib::simulation::constants::DISTANCE_SCALE_FACTOR as f32)
+      * aethervk_core_rlib::simulation::constants::PLANET_VISUAL_SCALE;
 
     let initial_rotation = if let Some(ref axes) = comet.principal_axes {
       Quat::from_rotation_matrix(axes)
@@ -310,6 +317,20 @@ fn main() {
     aethervk_core_rlib::scene::text::FontAtlas::from_path(font_path.to_str().unwrap(), 32.0)
       .expect("Failed to load asset font");
 
+  let almanac_path = assets_dir.join("planets");
+  simulation_context
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::LoadAlmanac {
+      task_id: 0, // TODO when switching to async API
+      path: almanac_path.to_str().unwrap().to_string(),
+    })
+    .unwrap();
+
+  use core::str::FromStr;
+  let current_epoch = anise::time::Epoch::from_str("2024-03-24 12:00:00 TDB").unwrap();
+
   let app_state = AppState {
     ctx: simulation_context,
     custom_data_ring: [
@@ -329,6 +350,8 @@ fn main() {
     console_scroll_offset: 0,
     command_history: std::collections::VecDeque::with_capacity(1000),
     current_command: String::new(),
+    current_epoch,
+    step_days: 0.016,
   };
 
   let sim_app = SimApp {
@@ -341,6 +364,9 @@ fn main() {
     last_log_time: std::time::Instant::now(),
     last_sim_time: std::time::Instant::now(),
     window_info,
+    last_frame_start_time: std::time::Instant::now(),
+    last_sim_tick_task: None,
+    last_render_tick_task: None,
   };
 
   test_utils::app::run_app(sim_app, event_loop);
@@ -357,6 +383,9 @@ struct SimApp {
   last_log_time: std::time::Instant,
   last_sim_time: std::time::Instant,
   window_info: test_utils::WindowPlatformData,
+  last_frame_start_time: std::time::Instant,
+  last_sim_tick_task: Option<core::num::NonZero<u64>>,
+  last_render_tick_task: Option<core::num::NonZero<u64>>,
 }
 
 impl test_utils::app::App for SimApp {
@@ -520,6 +549,80 @@ impl test_utils::app::App for SimApp {
               winit::keyboard::KeyCode::KeyM => {
                 self.app_state.is_command_prompt_open = true;
               }
+              winit::keyboard::KeyCode::KeyH => {
+                let scene_id = self.app_state.scene_id;
+                if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
+                  let read_ctx = scene_ctx.read();
+                  let current = read_ctx
+                    .outlines_enabled
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                  read_ctx
+                    .outlines_enabled
+                    .store(!current, std::sync::atomic::Ordering::Relaxed);
+                }
+              }
+              winit::keyboard::KeyCode::KeyA | winit::keyboard::KeyCode::KeyD => {
+                let forward = keycode == winit::keyboard::KeyCode::KeyD;
+                let scene_id = self.app_state.scene_id;
+                if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
+                  let read_ctx = scene_ctx.read();
+                  let mut entities: Vec<aethervk_core_rlib::scene::EntityId> = Vec::new();
+
+                  read_ctx
+                    .scene
+                    .query1_first_res::<aethervk_core_rlib::scene::PhysicalMeshComponent, _, _>(
+                      |id, _| {
+                        entities.push(id);
+                        None::<()>
+                      },
+                    );
+
+                  entities.sort_by_key(|e| *e);
+
+                  if !entities.is_empty() {
+                    let mut current_idx = 0;
+                    read_ctx
+                      .scene
+                      .query1_first_res::<aethervk_core_rlib::scene::FollowingComponent, _, _>(
+                        |id, _| {
+                          if let Ok(idx) = entities.binary_search_by_key(&id, |e| *e) {
+                            current_idx = idx;
+                          }
+                          Some(())
+                        },
+                      );
+
+                    let next_idx = if forward {
+                      (current_idx + 1) % entities.len()
+                    } else {
+                      if current_idx == 0 {
+                        entities.len() - 1
+                      } else {
+                        current_idx - 1
+                      }
+                    };
+
+                    let target_entity = entities[next_idx];
+                    if let Some((snap_entity, _)) = read_ctx
+                      .scene
+                      .query1_first_res::<aethervk_core_rlib::scene::CursorComponent, _, _>(
+                      |id, _| Some(id),
+                    ) {
+                      let scene = scene_ctx.clone();
+                      let _ = self.app_state.ctx.threads.logic_thread.tx().try_send(
+                        aethervk_core_rlib::simulation_api::structs::LogicCommand::FollowEntity(
+                          aethervk_core_rlib::simulation_api::structs::FollowEntity {
+                            snap_entity,
+                            entity_id: target_entity,
+                            scene,
+                            unfollow_other: true,
+                          },
+                        ),
+                      );
+                    }
+                  }
+                }
+              }
               _ => {}
             }
           }
@@ -553,26 +656,26 @@ impl test_utils::app::App for SimApp {
       .unwrap();
 
     let logic_command = if self.right_mouse_button_down {
+      Some(structs::LogicCommand::RotateCamera(structs::RotateCamera {
+        camera_entity,
+        scene: scene.clone(),
+        delta_x: delta.0 as f32,
+        delta_y: delta.1 as f32,
+      }))
+    } else if self.middle_mouse_button_down {
       if self.ctrl_down {
         Some(structs::LogicCommand::ZoomCamera(structs::ZoomCamera {
           camera_entity,
-          scene,
+          scene: scene.clone(),
           amount: delta.1 as f32,
         }))
       } else {
-        Some(structs::LogicCommand::RotateCamera(structs::RotateCamera {
-          camera_entity,
-          scene,
+        Some(structs::LogicCommand::PanCursor(structs::PanCursor {
+          scene: scene.clone(),
           delta_x: delta.0 as f32,
           delta_y: delta.1 as f32,
         }))
       }
-    } else if self.middle_mouse_button_down {
-      Some(structs::LogicCommand::PanCursor(structs::PanCursor {
-        scene,
-        delta_x: delta.0 as f32,
-        delta_y: delta.1 as f32,
-      }))
     } else {
       None
     };
@@ -618,23 +721,71 @@ impl test_utils::app::App for SimApp {
     };
 
     let ctx = &self.app_state.ctx;
-    let _ = ctx.render_tick_custom(
+    if let Ok(task) = ctx.render_tick_custom(
       self.app_state.presentation_engine,
       self.app_state.scene_id,
       [size.width, size.height],
       Some(callback),
-    );
+    ) {
+      self.last_render_tick_task = Some(task);
+    }
   }
 
   fn on_about_to_wait(&mut self) {
+    let time_readings = self.app_state.ctx.time_info.read().current();
+    self.app_state.ctx.govern_frame_rate_and_tasks(
+      &mut self.last_sim_tick_task,
+      &mut self.last_render_tick_task,
+      time_readings,
+      16_667,
+    );
+
     let current_time = std::time::Instant::now();
     let delta_time = current_time
       .duration_since(self.last_sim_time)
       .as_secs_f64();
     self.last_sim_time = current_time;
 
+    let dt = delta_time as f32;
+    if self.app_state.is_command_prompt_open {
+      self.app_state.console_open_progress += dt * 5.0;
+      if self.app_state.console_open_progress > 1.0 {
+        self.app_state.console_open_progress = 1.0;
+      }
+    } else {
+      self.app_state.console_open_progress -= dt * 5.0;
+      if self.app_state.console_open_progress < 0.0 {
+        self.app_state.console_open_progress = 0.0;
+      }
+    }
+
+    struct StepData {
+      scene_id: u64,
+      epoch: anise::time::Epoch,
+      step_days: f64,
+    }
+
+    let step_data = Box::new(StepData {
+      scene_id: self.app_state.scene_id,
+      epoch: self.app_state.current_epoch,
+      step_days: self.app_state.step_days,
+    });
+
+    let _ = self.app_state.ctx.dispatch_logic_command_custom(
+      |ctx, user_data| {
+        let step_data = unsafe { Box::from_raw(user_data as *mut StepData) };
+      },
+      Some(aethervk_core_rlib::simulation_api::structs::SendPtrMut(
+        Box::into_raw(step_data) as *mut core::ffi::c_void,
+      )),
+    );
+
+    self.app_state.current_epoch += anise::time::Duration::from_days(self.app_state.step_days);
+
     let ctx = &self.app_state.ctx;
-    let _ = ctx.simulation_tick(self.app_state.scene_id, delta_time);
+    if let Ok(task) = ctx.simulation_tick(self.app_state.scene_id, delta_time) {
+      self.last_sim_tick_task = Some(task);
+    }
 
     if let Some(w) = self.app_state.window.as_ref() {
       w.request_redraw();

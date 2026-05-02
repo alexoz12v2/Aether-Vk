@@ -67,10 +67,21 @@ public partial class Viewport3DViewModel
 
   public event Action? OnFrameReady;
 
-  public Viewport3DViewModel(NativeRuntimeService runtimeService)
+  private readonly BreadcrumbService _breadcrumbService;
+  private readonly OutlineViewModel _outlineViewModel;
+  private readonly SceneStateManager _sceneStateManager;
+
+  public Viewport3DViewModel(
+    NativeRuntimeService runtimeService,
+    BreadcrumbService breadcrumbService,
+    OutlineViewModel outlineViewModel,
+    SceneStateManager sceneStateManager)
     : base("Viewport 3D")
   {
     _runtimeService = runtimeService;
+    _breadcrumbService = breadcrumbService;
+    _outlineViewModel = outlineViewModel;
+    _sceneStateManager = sceneStateManager;
     _runtimeService.PropertyChanged += (s, e) =>
     {
       if (e.PropertyName == nameof(NativeRuntimeService.IsInitialized))
@@ -105,8 +116,7 @@ public partial class Viewport3DViewModel
 
     var res = await _runtimeService.RaycastNdcAsync(SceneId, ndcX, ndcY);
 
-    var breadcrumb =
-      ServiceLocator.Provider?.GetService(typeof(BreadcrumbService)) as BreadcrumbService;
+    var breadcrumb = _breadcrumbService;
 
     if (IsMeasuringMode)
     {
@@ -123,8 +133,7 @@ public partial class Viewport3DViewModel
 
     if (res.hit)
     {
-      var outlineVm =
-        ServiceLocator.Provider?.GetService(typeof(OutlineViewModel)) as OutlineViewModel;
+      var outlineVm = _outlineViewModel;
       var entity = _runtimeService.GetEntityById(SceneId, res.entityId);
 
       if (entity != null)
@@ -175,8 +184,7 @@ public partial class Viewport3DViewModel
     else
     {
       // Deselect when clicking on empty space
-      var outlineVm =
-        ServiceLocator.Provider?.GetService(typeof(OutlineViewModel)) as OutlineViewModel;
+      var outlineVm = _outlineViewModel;
       if (outlineVm != null)
       {
         outlineVm.SelectedEntity = null;
@@ -222,7 +230,7 @@ public partial class Viewport3DViewModel
     float cx = 0,
       cy = 0,
       cz = 0;
-    var state = ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager;
+    var state = _sceneStateManager;
     var rootEntities = state?.GetOrCreateScene(SceneId).RootEntities;
     var cursor = rootEntities?.FirstOrDefault(e =>
       e.Name == "cursor" || e.Components.Any(c => c.Name == "Cursor")
@@ -311,8 +319,7 @@ public partial class Viewport3DViewModel
             }
 
             // Update camera
-            var sceneState =
-              ServiceLocator.Provider?.GetService(typeof(SceneStateManager)) as SceneStateManager;
+            var sceneState = _sceneStateManager;
             var camera = sceneState
               ?.GetOrCreateScene(SceneId)
               .EntityMap.Values.FirstOrDefault(e =>

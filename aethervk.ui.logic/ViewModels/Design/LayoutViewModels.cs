@@ -4,7 +4,7 @@ namespace AetherVk.Logic.ViewModels.Design;
 public class TabGroupNodeViewModelDesign : TabGroupNodeViewModel
 {
   public TabGroupNodeViewModelDesign()
-    : base(new TabItemViewModel(title: "Home"))
+    : base(new TabItemViewModel(title: "Home"), null!)
   {
     Tabs.Add(new TabItemViewModel(title: "Settings"));
     Tabs.Add(new TabItemViewModel(title: "Logs"));

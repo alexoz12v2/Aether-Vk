@@ -7,14 +7,15 @@ public class ConsoleServiceTests
 {
   public ConsoleServiceTests()
   {
-    ServiceLocator.DispatchToUI = a => a();
   }
 
   [Fact]
   public void Log_AddsMessageToCollection()
   {
+    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
+    dispatcherMock.Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>())).Callback<System.Action>(a => a());
     // Arrange
-    var service = new ConsoleService();
+    var service = new ConsoleService(dispatcherMock.Object);
 
     // Act
     service.Log("Test Message");
@@ -28,8 +29,10 @@ public class ConsoleServiceTests
   [Fact]
   public void Clear_RemovesAllMessages()
   {
+    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
+    dispatcherMock.Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>())).Callback<System.Action>(a => a());
     // Arrange
-    var service = new ConsoleService();
+    var service = new ConsoleService(dispatcherMock.Object);
     service.Log("Msg 1");
     service.Log("Msg 2");
     System.Threading.Thread.Sleep(200);

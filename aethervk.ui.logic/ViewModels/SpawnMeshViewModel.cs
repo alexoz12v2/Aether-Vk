@@ -5,7 +5,7 @@ namespace AetherVk.Logic.ViewModels;
 public partial class SpawnMeshViewModel : ViewModelBase
 {
   [ObservableProperty]
-  private string _entityName;
+  private string _entityName = "";
 
   [ObservableProperty]
   private float _posX;

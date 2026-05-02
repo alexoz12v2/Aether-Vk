@@ -12,17 +12,29 @@ public class Viewport3DViewModelTests
   public void Initialization_SetsUpDimensions_WithoutNativeCrash()
   {
     // Arrange
-    var runtimeService = new NativeRuntimeService(new SceneStateManager());
+    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
+    dispatcherMock.Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
+      .Callback<System.Action>(a => a());
+    var runtimeService = new NativeRuntimeService(new SceneStateManager(),
+      new ConsoleService(dispatcherMock.Object), new BreadcrumbService(dispatcherMock.Object),
+      dispatcherMock.Object);
     // Do not call InitializeSimulationContext so it stays in mock state
 
     try
     {
-      var vm = new Viewport3DViewModel(runtimeService);
+      var sm = new SceneStateManager();
+      var b = new BreadcrumbService(dispatcherMock.Object);
+      var ov = new OutlineViewModel(1, runtimeService, sm);
+      var vm = new Viewport3DViewModel(runtimeService, b, ov, sm);
       Assert.Equal(800u, vm.Width);
       Assert.Equal(600u, vm.Height);
       vm.Stop();
     }
-    catch (System.TypeInitializationException) { }
-    catch (System.DllNotFoundException) { }
+    catch (System.TypeInitializationException)
+    {
+    }
+    catch (System.DllNotFoundException)
+    {
+    }
   }
 }
