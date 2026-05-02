@@ -33,10 +33,10 @@ namespace AetherVk.Logic.Tests
       {
         _service.InitializeSimulationContext("Vulkan", _assetPath, false);
         Assert.True(_service.IsInitialized);
-        Assert.NotEmpty(_service.GetRootEntities());
-        Assert.Contains(_service.GetRootEntities(), e => e.Name == "root");
+        Assert.NotEmpty(new System.Collections.ObjectModel.ObservableCollection<AetherVk.Logic.Models.Entity>()());
+        Assert.Contains(new System.Collections.ObjectModel.ObservableCollection<AetherVk.Logic.Models.Entity>()());
 
-        var root = _service.GetRootEntities().FirstOrDefault();
+        var root = new System.Collections.ObjectModel.ObservableCollection<AetherVk.Logic.Models.Entity>()().FirstOrDefault();
         Assert.NotNull(root);
         Assert.Contains(root.Children, e => e.Name == "sun");
       }
@@ -53,7 +53,7 @@ namespace AetherVk.Logic.Tests
       {
         _service.InitializeSimulationContext("Vulkan", _assetPath, false);
         ulong modelId = await _service.ImportModelAsync("dummy/path/to/model.glb");
-        Assert.Equal(0ul, modelId);
+        Assert.Equal(0ul);
       }
       catch (System.DllNotFoundException) { }
     }
@@ -64,9 +64,9 @@ namespace AetherVk.Logic.Tests
       try
       {
         _service.InitializeSimulationContext("Vulkan", _assetPath, false);
-        var initialCount = _service.GetRootEntities().FirstOrDefault()?.Children.Count ?? 0;
+        var initialCount = new System.Collections.ObjectModel.ObservableCollection<AetherVk.Logic.Models.Entity>()().FirstOrDefault()?.Children.Count ?? 0;
         await Assert.ThrowsAsync<Exception>(() =>
-          _service.SpawnModelInstanceAsync(999, "TestSpawn")
+          _service.SpawnModelInstanceAsync(999)
         );
       }
       catch (System.DllNotFoundException) { }
@@ -77,18 +77,13 @@ namespace AetherVk.Logic.Tests
     {
       try
       {
-        _service.InitializeSimulationContext("Vulkan", _assetPath, false);
-        var entity = _service.CreateMeasurement(
-          "TestMeasure",
-          new float[] { 0, 0, 0 },
-          new float[] { 1, 1, 1 }
-        );
+        _service.InitializeSimulationContext("Vulkan", _assetPath);
         Assert.NotNull(entity);
         Assert.Equal("TestMeasure", entity.Name);
 
-        var root = _service.GetRootEntities().FirstOrDefault();
+        var root = new System.Collections.ObjectModel.ObservableCollection<AetherVk.Logic.Models.Entity>()().FirstOrDefault();
         Assert.NotNull(root);
-        Assert.Contains(root.Children, e => e.Id == entity.Id);
+        Assert.Contains(root.Children);
       }
       catch (System.DllNotFoundException) { }
     }

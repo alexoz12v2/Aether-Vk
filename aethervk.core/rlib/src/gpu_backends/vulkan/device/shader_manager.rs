@@ -109,7 +109,7 @@ impl Shader {
 
     Ok(Self {
       module,
-      entry_point: CString::new(entry_point).map_err(|_| GpuError::InvalidState("shader_manager.rs:110"))?,
+      entry_point: CString::new(entry_point).map_err(|_| crate::gpu_err!("device error"))?,
       shader_stage: execution_model_to_shader_flags(execution_model),
       spv_module,
     })
@@ -146,7 +146,7 @@ impl ShaderManager {
     }
 
     // Load the SPIR-V shader code from the file.
-    let spirv_code = fs::read(&path).map_err(|_| GpuError::InvalidArgument("shader_manager.rs:147"))?;
+    let spirv_code = fs::read(&path).map_err(|_| crate::gpu_invalid_arg!("invalid argument"))?;
 
     // Ensure the code is aligned to 4 bytes (u32).
     let (prefix, code, suffix) = unsafe { spirv_code.align_to::<u32>() };

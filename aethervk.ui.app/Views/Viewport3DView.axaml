@@ -12,40 +12,38 @@
                KeyDown="OnKeyDown" />
 
         <StackPanel HorizontalAlignment="Right" VerticalAlignment="Top" Margin="10" Spacing="5" IsVisible="{Binding IsInitialized}">
-            <!-- TODO: Use Theme resources as background colors-->
-            <Border Padding="5" CornerRadius="4" Background="#80000000">
-                <Rectangle x:Name="LivelinessIndicator" Width="16" Height="16" Fill="Red" RadiusX="2" RadiusY="2" />
+            <Border Padding="5" CornerRadius="4" Background="{DynamicResource Bg.Surface}" Opacity="0.8" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1">
+                <Rectangle x:Name="LivelinessIndicator" Width="16" Height="16" Fill="{DynamicResource Sem.Error}" RadiusX="2" RadiusY="2" />
             </Border>
 
-            <Border Padding="10,5" CornerRadius="4" Background="#80000000">
+            <Border Padding="10,5" CornerRadius="4" Background="{DynamicResource Bg.Surface}" Opacity="0.8" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1">
                 <StackPanel>
-                    <TextBlock Text="{Binding IsMeasuringMode, Converter={x:Static ObjectConverters.IsNull}}" FontSize="14" FontWeight="Bold" Foreground="White" />
-                    <TextBlock Text="Measuring Mode" IsVisible="{Binding IsMeasuringMode}" FontSize="14" FontWeight="Bold" Foreground="Yellow" />
-                    <TextBlock Text="Normal Mode" IsVisible="{Binding !IsMeasuringMode}" FontSize="14" FontWeight="Bold" Foreground="LightGray" />
-                    <TextBlock IsVisible="{Binding HasFirstMeasurementPoint}" Text="{Binding FirstMeasurementPointX, StringFormat='{}Point 1: [{0:F2}, '}" Foreground="White" FontSize="12"/>
-                    <TextBlock IsVisible="{Binding HasFirstMeasurementPoint}" Text="{Binding FirstMeasurementPointY, StringFormat='{}{0:F2}, '}" Foreground="White" FontSize="12"/>
-                    <TextBlock IsVisible="{Binding HasFirstMeasurementPoint}" Text="{Binding FirstMeasurementPointZ, StringFormat='{}{0:F2}]'}" Foreground="White" FontSize="12"/>
+                    <TextBlock Text="{Binding IsMeasuringMode, Converter={x:Static ObjectConverters.IsNull}}" FontSize="14" FontWeight="Bold" Foreground="{DynamicResource Text.Primary}" />
+                    <TextBlock Text="Measuring Mode" IsVisible="{Binding IsMeasuringMode}" FontSize="14" FontWeight="Bold" Foreground="{DynamicResource Sem.Warning}" />
+                    <TextBlock Text="Normal Mode" IsVisible="{Binding !IsMeasuringMode}" FontSize="14" FontWeight="Bold" Foreground="{DynamicResource Text.Secondary}" />
+                    <TextBlock IsVisible="{Binding HasFirstMeasurementPoint}" Text="{Binding FirstMeasurementPointX, StringFormat='{}Point 1: [{0:F2}, '}" Foreground="{DynamicResource Text.Primary}" FontSize="12"/>
+                    <TextBlock IsVisible="{Binding HasFirstMeasurementPoint}" Text="{Binding FirstMeasurementPointY, StringFormat='{}{0:F2}, '}" Foreground="{DynamicResource Text.Primary}" FontSize="12"/>
+                    <TextBlock IsVisible="{Binding HasFirstMeasurementPoint}" Text="{Binding FirstMeasurementPointZ, StringFormat='{}{0:F2}]'}" Foreground="{DynamicResource Text.Primary}" FontSize="12"/>
                 </StackPanel>
             </Border>
         </StackPanel>
 
-        <!-- TODO: Use Theme resources as background colors-->
-        <Border Background="#F0202020" BorderBrush="Gray" BorderThickness="1" CornerRadius="8" Padding="20" HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding ShowNoIntersectionFlyout}">
+        <Border Background="{DynamicResource Bg.Surface}" Opacity="0.95" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="8" Padding="20" HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding ShowNoIntersectionFlyout}">
             <StackPanel Spacing="15">
-                <TextBlock Text="No intersection found." FontWeight="Bold" FontSize="16" Foreground="Yellow"/>
+                <TextBlock Text="No intersection found." FontWeight="Bold" FontSize="16" Foreground="{DynamicResource Sem.Warning}"/>
 
-                <TextBlock Text="Do you want to place a point at arbitrary coordinates?" Foreground="White"/>
+                <TextBlock Text="Do you want to place a point at arbitrary coordinates?" Foreground="{DynamicResource Text.Primary}"/>
                 <StackPanel Orientation="Horizontal" Spacing="5">
                     <TextBox Text="{Binding ManualMeasurementX}" Width="80" Watermark="X" />
                     <TextBox Text="{Binding ManualMeasurementY}" Width="80" Watermark="Y" />
                     <TextBox Text="{Binding ManualMeasurementZ}" Width="80" Watermark="Z" />
-                    <Button Content="Submit Coordinates" Command="{Binding SubmitManualMeasurementCommand}" />
+                    <Button Content="Submit Coordinates" Command="{Binding SubmitManualMeasurementCommand}" Classes="accent" />
                 </StackPanel>
 
-                <TextBlock Text="Do you want to place it under cursor?" Foreground="White" Margin="0,10,0,0"/>
+                <TextBlock Text="Do you want to place it under cursor?" Foreground="{DynamicResource Text.Primary}" Margin="0,10,0,0"/>
                 <Button Content="Place Under Cursor" Command="{Binding SubmitCursorMeasurementCommand}" />
 
-                <TextBlock Text="Do you want to undo the raycast?" Foreground="White" Margin="0,10,0,0"/>
+                <TextBlock Text="Do you want to undo the raycast?" Foreground="{DynamicResource Text.Primary}" Margin="0,10,0,0"/>
                 <Button Content="Undo Raycast" Command="{Binding UndoMeasurementRaycastCommand}" />
             </StackPanel>
         </Border>

@@ -1,7 +1,7 @@
 pub mod app;
 pub mod command;
-pub mod threading;
 pub mod simulation;
+pub mod threading;
 
 use aethervk_core_rlib::gpu::{
   OpaqueNativeHandleInfo, PresentationEngineHandle, RenderDevice, RenderDeviceHandle,
@@ -47,6 +47,7 @@ use aethervk_core_rlib::scene::{
   PhysicalMeshComponent, Scene, SkyComponent, SunComponent, TransformComponent,
 };
 use aethervk_core_rlib::simulation::comet::Comet;
+use aethervk_core_rlib::simulation_api::SimulationContext;
 use aethervk_core_rlib::types::{EngineError, GpuResult};
 use aethervk_oshal_rlib::math::quaternion::Quaternion;
 use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
@@ -552,7 +553,8 @@ pub fn scene_to_render_scene(
   presentation_engine_handle: PresentationEngineHandle,
   camera_entity: EntityId,
   render_outlines: bool,
+  cmd_buffer: gpu::CommandBufferHandle,
 ) -> GpuResult<RenderScene> {
   let render_scene_extraction = scene.convert_scene(camera_entity, render_outlines)?;
-  render_scene_extraction.build_render_scene(device, presentation_engine_handle)
+  render_scene_extraction.build_render_scene(device, presentation_engine_handle, cmd_buffer)
 }

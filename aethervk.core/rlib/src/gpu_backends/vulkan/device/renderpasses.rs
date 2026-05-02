@@ -60,7 +60,6 @@ struct RenderPassBundle {
   attachments: heapless::Vec<RenderPassAttachment, MAX_ATTACHMENTS>,
 }
 
-#[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum RenderPassType {
   ColorDepthSingleSubpass,
@@ -170,10 +169,10 @@ impl RenderPasses {
       RenderPassType::ColorDepthSingleSubpass => {
         let read_render_passes = self.render_passes.read();
         if !read_render_passes.contains_key(&RenderPassType::ColorDepthSingleSubpass) {
-          return Err(crate::types::GpuError::InvalidState("renderpasses.rs:173"));
+          return Err(crate::gpu_err!("device error"));
         }
         if out_values.len() != 2 {
-          return Err(crate::types::GpuError::InvalidArgument("renderpasses.rs:176"));
+          return Err(crate::gpu_invalid_arg!("invalid argument"));
         }
         let bundle = unsafe {
           read_render_passes
@@ -211,7 +210,8 @@ impl RenderPasses {
           .read()
           .get(&RenderPassType::ColorDepthSingleSubpass)
         {
-          if bundle.swapchain_generation == swapchain.swapchain_generation() {
+          let (width, height) = swapchain.extent();
+          if bundle.swapchain_generation == swapchain.swapchain_generation() && bundle.width == width && bundle.height == height {
             return Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]));
           }
         }
@@ -272,7 +272,7 @@ impl RenderPasses {
         // Safety: This is empty and cap is 8
         unsafe {
           write_render_passes
-            .get_mut(&mut RenderPassType::ColorDepthSingleSubpass)
+            .get_mut(&RenderPassType::ColorDepthSingleSubpass)
             .unwrap_unchecked()
             .attachments
             .push_unchecked(RenderPassAttachment::SwapchainColorImage)

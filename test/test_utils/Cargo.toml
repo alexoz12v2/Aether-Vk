@@ -32,7 +32,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSResponder",
     "NSView",
     "objc2-quartz-core", # set layer function
-    "NSWindow",          # needed to lock the observer on our window
+    "NSWindow", # needed to lock the observer on our window
 ] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
     "CALayer",
@@ -42,7 +42,7 @@ objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
 ] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSNotification", # NSNotification & NSNotificationCenter
-    "NSString",       # NSString
+    "NSString", # NSString
 ] }
 objc2-metal = { version = "0.3.2", default-features = false, features = [
     "MTLDevice",

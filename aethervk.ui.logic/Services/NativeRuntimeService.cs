@@ -1241,6 +1241,32 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return grid;
   }
 
+  public Entity CreateSky(ulong sceneId, Entity parent)
+  {
+    var sky = SpawnEntity(sceneId, "sky", parent);
+    if (_simulationContext != IntPtr.Zero)
+    {
+      NativeInterop.avkSimulationContext_addSkyComponent(_simulationContext, sceneId, sky.Id);
+    }
+    return sky;
+  }
+
+  public Entity CreateCursor(ulong sceneId, Entity parent)
+  {
+    var cursor = SpawnEntity(sceneId, "cursor", parent);
+    cursor.Components.Add(new TransformComponent());
+    cursor.Components.Add(new CursorComponent());
+    if (_simulationContext != IntPtr.Zero)
+    {
+      NativeInterop.avkSimulationContext_addTransformComponent(
+        _simulationContext, sceneId, cursor.Id,
+        0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f, 1f, 1f
+      );
+      NativeInterop.avkSimulationContext_addCursorComponent(_simulationContext, sceneId, cursor.Id);
+    }
+    return cursor;
+  }
+
   public Entity CreateSun(
     ulong sceneId,
     Entity parent,
@@ -1249,35 +1275,43 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     uint resZ = 128
   )
   {
-    var sun = SpawnEntity(sceneId, "sun", parent);
-    sun.Components.Add(new TransformComponent());
-    sun.Components.Add(new SunComponent());
+    float radius = NativeInterop.avkSimulationContext_getBodyRadius(10);
+    if (radius <= 0.0001f) radius = 0.0696f; // Default 696000 km scaled
+
+    ulong sunId = 0;
     if (_simulationContext != IntPtr.Zero)
     {
-      NativeInterop.avkSimulationContext_addTransformComponent(
-        _simulationContext,
-        sceneId,
-        sun.Id,
-        0f,
-        0f,
-        0f,
-        1f,
-        0f,
-        0f,
-        0f,
-        1f,
-        1f,
-        1f
-      );
+      sunId = NativeInterop.avkSimulationContext_spawnProceduralSphere(_simulationContext, sceneId, "sun", radius);
       NativeInterop.avkSimulationContext_addSunComponent(
         _simulationContext,
         sceneId,
-        sun.Id,
+        sunId,
         resX,
         resY,
         resZ
       );
     }
+
+    if (sunId == 0) return SpawnEntity(sceneId, "sun", parent); // Fallback if no context
+
+    var sun = new Entity(sceneId, sunId, "sun");
+    var state = _sceneStateManager.GetOrCreateScene(sceneId);
+    state.EntityMap[sunId] = sun;
+    WireEntityComponents(sceneId, sun);
+
+    sun.Components.Add(new TransformComponent());
+    sun.Components.Add(new SunComponent());
+
+    if (parent != null)
+    {
+      NativeInterop.avkSimulationContext_setParent(_simulationContext, sceneId, sunId, parent.Id);
+      parent.Children.Add(sun);
+    }
+    else
+    {
+      state.RootEntities.Add(sun);
+    }
+
     return sun;
   }
 

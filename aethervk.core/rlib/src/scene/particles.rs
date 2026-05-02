@@ -1,4 +1,3 @@
-extern crate alloc;
 use crate::scene::Component;
 use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
 use aethervk_oshal_rlib::math::vector::{Vector, Vector3};

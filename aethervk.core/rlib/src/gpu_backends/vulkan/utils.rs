@@ -155,6 +155,7 @@ pub(super) struct PhysicalDeviceQueryResult {
   pub graphics_queue_family_index: u32,
   pub compute_queue_family_index: u32,
   pub transfer_queue_family_index: u32,
+  pub subgroup_size: u32,
   pub score: i32,
 }
 

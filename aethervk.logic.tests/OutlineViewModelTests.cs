@@ -14,7 +14,7 @@ public class OutlineViewModelTests
     // Arrange
     var runtimeService = new NativeRuntimeService(new SceneStateManager());
     var outlineVm = new OutlineViewModel(runtimeService);
-    var entity = new Entity(1, "TestEntity");
+    var entity = new Entity(1, "TestEntity", "test", "entity");
 
     EntitySelectedMessage? receivedMessage = null;
     WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(

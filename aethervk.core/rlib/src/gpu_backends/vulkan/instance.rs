@@ -232,7 +232,8 @@ impl Instance {
     let mut eligible_devices =
       Vec::from_iter(physical_devices.iter().filter_map(|&physical_device| {
         // a. properties (TODO: Subgroup information)
-        let mut props = vk::PhysicalDeviceProperties2::default();
+        let mut subgroup_props = vk::PhysicalDeviceSubgroupProperties::default();
+        let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut subgroup_props);
         unsafe {
           self
             .instance
@@ -364,6 +365,7 @@ impl Instance {
           graphics_queue_family_index,
           compute_queue_family_index,
           transfer_queue_family_index,
+          subgroup_size: subgroup_props.subgroup_size,
           score,
         })
       }));

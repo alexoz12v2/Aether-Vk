@@ -70,6 +70,7 @@ impl RenderSceneExtraction {
     self,
     device: &dyn RenderDevice,
     presentation_engine_handle: gpu::PresentationEngineHandle,
+    cmd_buffer: gpu::CommandBufferHandle,
   ) -> GpuResult<gpu::RenderScene> {
     let mut render_scene = gpu::RenderScene {
       draw_calls: Vec::with_capacity(self.extracted_meshes.len()),
@@ -88,24 +89,36 @@ impl RenderSceneExtraction {
 
     // Populate Meshes
     for mesh_data in &self.extracted_meshes {
-      let res = device.get_or_create_physical_mesh_resources(
+      let res = match device.get_physical_mesh_resources(
         mesh_data.entity_id,
-        &mesh_data.mesh,
         presentation_engine_handle,
-        &mesh_data.mesh.asset_path,
-      )?;
+      ) {
+        Ok(r) => r,
+        Err(_) => device.create_physical_mesh_resources(
+          cmd_buffer,
+          mesh_data.entity_id,
+          &mesh_data.mesh,
+          presentation_engine_handle,
+          &mesh_data.mesh.asset_path,
+        )?,
+      };
       let dc = gpu::frame::DrawCall::from_handles_and_matrix(
         res,
         mesh_data.mesh.mesh.indices.len() as u32,
         mesh_data.outline,
         mesh_data.global_transform.to_mat4(),
+        mesh_data.mesh.emissive_intensity,
+        mesh_data.mesh.emissive_color,
       );
       render_scene.draw_calls.push(dc);
     }
 
     // Populate Cursor
     if let Some(t) = self.cursor_transform {
-      let res = device.get_or_create_cursor_resources(presentation_engine_handle)?;
+      let res = match device.get_cursor_resources(presentation_engine_handle) {
+        Ok(r) => r,
+        Err(_) => device.create_cursor_resources(cmd_buffer, presentation_engine_handle)?,
+      };
       render_scene.cursor_call = Some(gpu::frame::CursorDrawCall::from_result_and_matrix(
         res,
         4,
@@ -116,7 +129,10 @@ impl RenderSceneExtraction {
 
     // Populate Markers
     if !self.extracted_markers.is_empty() {
-      let res = device.get_or_create_marker_resources(presentation_engine_handle)?;
+      let res = match device.get_marker_resources(presentation_engine_handle) {
+        Ok(r) => r,
+        Err(_) => device.create_marker_resources(cmd_buffer, presentation_engine_handle)?,
+      };
       for (t, markers_comp) in self.extracted_markers {
         let model_matrix = t.to_mat4();
         for marker in markers_comp.markers {
@@ -135,9 +151,10 @@ impl RenderSceneExtraction {
 
     // Measurements
     if !self.extracted_measurements.is_empty() {
-      let pipeline = device
-        .get_or_create_measurement_resources(presentation_engine_handle)?
-        .pipeline;
+      let pipeline = match device.get_measurement_resources(presentation_engine_handle) {
+        Ok(r) => r.pipeline,
+        Err(_) => device.create_measurement_resources(cmd_buffer, presentation_engine_handle)?.pipeline,
+      };
       for (p1, p2, points, significant_digits) in self.extracted_measurements {
         render_scene.measurement_calls.push(
           gpu::frame::MeasurementDrawCall::from_data_and_pipeline(
@@ -153,9 +170,10 @@ impl RenderSceneExtraction {
 
     // Billboards
     if !self.extracted_billboards.is_empty() {
-      let pipeline = device
-        .get_or_create_billboard_resources(presentation_engine_handle)?
-        .pipeline;
+      let pipeline = match device.get_billboard_resources(presentation_engine_handle) {
+        Ok(r) => r.pipeline,
+        Err(_) => device.create_billboard_resources(cmd_buffer, presentation_engine_handle)?.pipeline,
+      };
       for (mat, texture_id, billboard_type) in self.extracted_billboards {
         render_scene
           .billboard_calls
@@ -170,7 +188,10 @@ impl RenderSceneExtraction {
 
     // Gizmos
     if !self.extracted_gizmos.is_empty() {
-      let gizmo_resources = device.get_or_create_gizmo_resources(presentation_engine_handle)?;
+      let gizmo_resources = match device.get_gizmo_resources(presentation_engine_handle) {
+        Ok(r) => r,
+        Err(_) => device.create_gizmo_resources(cmd_buffer, presentation_engine_handle)?,
+      };
       for (entity_id, mat, scale) in self.extracted_gizmos {
         let gizmo_idx = device.update_gizmo_instance(entity_id, mat)?;
         render_scene
@@ -185,7 +206,7 @@ impl RenderSceneExtraction {
 
     // BVH
     if !self.extracted_bvhs.is_empty() {
-      let pipeline_key = device.get_bvh_pipeline_kay()?;
+      let pipeline_key = device.get_bvh_pipeline_kay(presentation_engine_handle)?;
       for (nodes, mesh_index) in &self.extracted_bvhs {
         for node in nodes {
           render_scene
@@ -201,7 +222,7 @@ impl RenderSceneExtraction {
 
     // Sun
     if let Some((global_model, entity_id)) = self.extracted_sun {
-      let pipeline = device.get_sun_pipeline_key()?;
+      let pipeline = device.get_sun_pipeline_key(presentation_engine_handle)?;
       render_scene.sun_call = Some(gpu::frame::SunDrawCall::from_model_and_camera(
         global_model,
         &render_scene.camera_data,
@@ -212,7 +233,7 @@ impl RenderSceneExtraction {
 
     // Sky
     if let Some(()) = self.extracted_sky {
-      let pipeline = device.get_sky_pipeline_key()?;
+      let pipeline = device.get_sky_pipeline_key(presentation_engine_handle)?;
       render_scene.sky_call = Some(gpu::frame::SkyDrawCall::from_camera(
         &render_scene.camera_data,
         pipeline,
@@ -221,14 +242,14 @@ impl RenderSceneExtraction {
 
     // Grid
     if let Some((density, grid_size, grid_color)) = self.extracted_grid {
-      let pipeline = device.get_grid_pipeline_kay()?;
+      let pipeline = device.get_grid_pipeline_kay(presentation_engine_handle)?;
       render_scene.grid_call = Some(gpu::frame::GridDrawCall::new(
         pipeline, density, grid_size, grid_color,
       ));
     }
 
     // Particles
-    let particle_pipeline = device.get_particle_pipeline_key()?;
+    let particle_pipeline = device.get_particle_pipeline_key(presentation_engine_handle)?;
     for (entity_id, particles, config) in self.extracted_particles {
       if particles.is_empty() { // TODO: ECS should filter these
         continue;

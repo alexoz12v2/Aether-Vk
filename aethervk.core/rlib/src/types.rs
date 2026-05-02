@@ -80,6 +80,9 @@ pub enum GpuError {
 
   #[error("Backend error: {0}")]
   BackendSpecific(String),
+  
+  #[error("Resource not found")]
+  NotFound,
 }
 
 pub type GpuResult<T> = core::result::Result<T, GpuError>;

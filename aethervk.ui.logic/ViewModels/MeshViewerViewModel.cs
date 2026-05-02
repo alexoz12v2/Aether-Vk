@@ -119,8 +119,11 @@ public partial class MeshViewerViewModel : TabItemViewModel
           sunTransform.PosZ = 0.0f;
         }
 
-        console?.Log($"[MeshViewer] Creating grid...");
-        var grid = _runtimeService.CreateGrid(SceneId, root);
+        console?.Log($"[MeshViewer] Creating sky and cursor...");
+        _runtimeService.CreateSky(SceneId, root);
+        _runtimeService.CreateCursor(SceneId, root);
+
+        console?.Log($"[MeshViewer] Creating grid...");        var grid = _runtimeService.CreateGrid(SceneId, root);
         console?.Log($"[MeshViewer] Initialization complete!");
       }
       catch (System.Exception ex)

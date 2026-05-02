@@ -342,9 +342,9 @@ impl WindowedPresentationState {
       return Ok(());
     }
 
-    let acquire_sem = frame.acquire_semaphore.unwrap().get();
+    let acquire_sem = frame.acquire_semaphore.ok_or(crate::gpu_err!("device error"))?.get();
     let present_sem = image.present_semaphore.get();
-    let fence = frame.submission_fence.unwrap().get();
+    let fence = frame.submission_fence.ok_or(crate::gpu_err!("device error"))?.get();
 
     // 1. Dummy Submit (0 cmd buffers) to advance Semaphores and Fences
     let wait_semaphores = [acquire_sem];
@@ -939,7 +939,7 @@ impl WindowedPresentationState {
     if !swapchain_image.eligible_for_acquisition()
       || !self.frames[self.current_frame].eligible_for_steal()
     {
-      return Err(GpuError::InvalidState("swapchain.rs:866"));
+      return Err(crate::gpu_err!("windowless_acquire: not eligible"));
     }
     let fences: &[vk::Fence] = unsafe {
       core::slice::from_ref(&swapchain_image.submission_fence.as_ref().unwrap_unchecked())
@@ -1084,7 +1084,7 @@ impl WindowedPresentationState {
     let image = &mut self.images[image_index as usize];
     let frame = &mut self.frames[frame_index as usize];
     if image.eligible_for_acquisition() || frame.eligible_for_steal() {
-      return Err(GpuError::InvalidState("swapchain.rs:989"));
+      return Err(crate::gpu_err!("window_submit: still eligible"));
     }
 
     let wait_semaphores = [image.present_semaphore.get()];
@@ -1293,8 +1293,8 @@ impl WindowlessPresentationState {
       return Ok(());
     }
 
-    let acquire_sem = frame.acquire_semaphore.unwrap().get();
-    let fence = frame.submission_fence.unwrap().get();
+    let acquire_sem = frame.acquire_semaphore.ok_or(crate::gpu_err!("device error"))?.get();
+    let fence = frame.submission_fence.ok_or(crate::gpu_err!("device error"))?.get();
 
     // Windowless doesn't present, but still needs to satisfy the semaphores/fence
     let wait_semaphores = [acquire_sem];
@@ -1358,7 +1358,7 @@ impl WindowlessPresentationState {
     if !swapchain_image.eligible_for_acquisition()
       || !self.frames[self.current_frame].eligible_for_steal()
     {
-      return Err(GpuError::InvalidState("swapchain.rs:1222"));
+      return Err(crate::gpu_err!("windowless_acquire: not eligible"));
     }
     if swapchain_image.submission_fence.is_none() {
       unsafe { swapchain_image.reclaim_from_swapchain_frame(&mut self.frames[self.current_frame]) };
@@ -1447,7 +1447,7 @@ impl WindowlessPresentationState {
     let image = &mut self.images[image_index as usize];
     let frame = &mut self.frames[frame_index as usize];
     if image.eligible_for_acquisition() || frame.eligible_for_steal() {
-      return Err(GpuError::InvalidState("swapchain.rs:1308"));
+      return Err(crate::gpu_err!("window_submit: still eligible"));
     }
     unsafe { image.reclaim_from_swapchain_frame(frame) };
     self.submitted_frames += 1;
@@ -1456,10 +1456,10 @@ impl WindowlessPresentationState {
 
   pub fn get_last_submitted_image(&self) -> GpuResult<NonZeroHandle<vk::Image>> {
     if self.submitted_frames == 0 {
-      return Err(GpuError::InvalidState("swapchain.rs:1317"));
+      return Err(crate::gpu_err!("get_last: no submissions"));
     }
     if self.images.is_empty() {
-      return Err(GpuError::InvalidState("swapchain.rs:1320"));
+      return Err(crate::gpu_err!("get_last: no images"));
     }
     let last_index = (self.next_image + self.images.len() - 1) % self.images.len();
     Ok(self.images[last_index].image)

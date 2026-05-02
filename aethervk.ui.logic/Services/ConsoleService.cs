@@ -51,7 +51,7 @@ public class ConsoleService : ObservableObject, IDisposable
         batch.Add(msg);
       }
 
-      if (batch.Count > 0)
+      if (batch.Count == 0)
         return;
 
       // Do slow I/O printing safely on background

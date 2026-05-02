@@ -1,4 +1,4 @@
-use crate::structs::{TimeScale};
+use crate::simulation_api::structs::{TimeScale};
 use crate::simulation_api::SimulationContext;
 use alloc::{format};
 use core::ffi::{c_char};

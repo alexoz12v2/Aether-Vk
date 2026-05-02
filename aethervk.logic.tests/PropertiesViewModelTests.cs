@@ -11,8 +11,8 @@ public class PropertiesViewModelTests
   public void ReceivesMessage_SetsSelectedEntity()
   {
     // Arrange
-    var propertiesVm = new PropertiesViewModel();
-    var entity = new Entity(1, "TestEntity");
+    var propertiesVm = new PropertiesViewModel(1, _stateManager);
+    var entity = new Entity(1, "TestEntity", "test", "entity");
 
     // Act
     WeakReferenceMessenger.Default.Send(new EntitySelectedMessage(entity));
@@ -26,9 +26,9 @@ public class PropertiesViewModelTests
   public void ReceivesMessage_ResetsFollowingState()
   {
     // Arrange
-    var propertiesVm = new PropertiesViewModel();
+    var propertiesVm = new PropertiesViewModel(1, _stateManager);
     propertiesVm.IsFollowingEntity = true;
-    var entity = new Entity(1, "TestEntity");
+    var entity = new Entity(1, "TestEntity", "test", "entity");
 
     // Act
     WeakReferenceMessenger.Default.Send(new EntitySelectedMessage(entity));

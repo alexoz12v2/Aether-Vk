@@ -1,24 +1,25 @@
-use aethervk_oshal_rlib as oshal;
-use aethervk_core_rlib as rlib;
-use crate::simulation_api::SimulationContext;
-use crate::structs::{
-  LogicState, LogicThreadParams, RenderCommand, RenderThreadParams, SimulationSceneData,
-  SimulationTaskManager, SimulationThreads,
+use crate::{
+  gpu::PresentationEngineHandle,
+  expect_scene, expect_scene_and_entity,
+  simulation_api::structs::{
+    LogicState, LogicThreadParams, RenderCommand, RenderThreadParams, SimulationSceneData,
+    SimulationTaskManager, SimulationThreads,
+  },
+  simulation_api::SimulationContext,
+  gpu::WeakRenderFrontendExt,
+  types::GpuError,
+  gpu,
+  types::{EngineError, EngineResult},
 };
-use crate::{expect_scene, expect_scene_and_entity};
-use rlib::gpu::PresentationEngineHandle;
-use aethervk_oshal_rlib::os::time::{timeus_milliseconds, timeus_t};
-use alloc::{boxed::Box, sync::Arc};
-use alloc::collections::BTreeSet;
-use core::num::NonZero;
-use core::ptr::addr_of_mut;
+use aethervk_oshal_rlib as oshal;
+use oshal::{
+  os::time::{timeus_milliseconds, timeus_t},
+  os,
+};
+use alloc::{boxed::Box, sync::Arc, collections::BTreeSet};
+use core::{num::NonZero, ptr::addr_of_mut};
 use spin::RwLock;
-use aethervk_core_rlib::gpu::WeakRenderFrontendExt;
-use aethervk_core_rlib::types::GpuError;
-use rlib::gpu;
-use rlib::types::{EngineError, EngineResult};
-use oshal::os;
-
+use crate::simulation_api::structs::CustomRenderCallback;
 // TODO add scene validate
 
 impl SimulationContext {
@@ -28,7 +29,7 @@ impl SimulationContext {
   const INITIAL_FIXED_DELTA_TIME: timeus_t = timeus_milliseconds(16);
   const INITIAL_TIME_SCALE: f32 = 1.0;
 
-  pub fn startup(backend: gpu::RenderBackendId) -> EngineResult<Box<SimulationContext>> {
+  pub fn startup(backend: gpu::RenderBackendId, error_debug_callback: Option<fn(&str)>) -> EngineResult<Box<SimulationContext>> {
     let mut boxed_uninit = Box::<SimulationContext>::new_uninit();
     unsafe {
       let ptr = boxed_uninit.as_mut_ptr();
@@ -88,6 +89,47 @@ impl SimulationContext {
     }
   }
 
+  pub fn render_frontend(&self) -> Option<gpu::RenderFrontend> {
+    self.render_proxy.0.as_frontend()
+  }
+
+  pub fn render_device_handle(&self) -> gpu::RenderDeviceHandle {
+    self.render_proxy.1
+  }
+
+  pub fn create_presentation_engine_windowed(
+    &self,
+    width: u32,
+    height: u32,
+    window_info: crate::gpu::OpaqueNativeHandleInfo,
+  ) -> EngineResult<PresentationEngineHandle> {
+    self.with_device(|render_device| {
+      let params = gpu::PresentationEngineParams {
+        width,
+        height,
+        vsync: true,
+        ty: gpu::PresentationEngineType::Window,
+        window_info,
+      };
+      let h = render_device.create_presentation_engine(&params)?;
+      render_device.init_archetypes(h)?;
+      let mut presentation_engines = self.presentation_engines.write();
+      if presentation_engines.insert(h) {
+        Ok(h)
+      } else {
+        if let Err(e) = render_device.destroy_presentation_engine(h) {
+          oshal::log!(
+            "core_api:create_presentation_engine_windowed | failed to destroy presentation engine: {:?}",
+            e
+          );
+        }
+        Err(GpuError::InvalidState(
+          "core_api:create_presentation_engine_windowed | couldn't insert presentation engine inside map",
+        ))
+      }
+    })
+  }
+
   pub fn create_presentation_engine(
     &self,
     width: u32,
@@ -115,14 +157,25 @@ impl SimulationContext {
   }
 
   // TODO: async, return a task_id
-  pub fn simulation_tick(&self, scene_id: u64, delta_time: f64) -> EngineResult<core::num::NonZero<u64>> {
+  pub fn simulation_tick(
+    &self,
+    scene_id: u64,
+    delta_time: f64,
+  ) -> EngineResult<core::num::NonZero<u64>> {
     let mut task_manager = self.task_manager.write();
     let task_id = task_manager.create_task();
-    self.threads.logic_thread.tx().try_send(crate::structs::LogicCommand::SimulationTick {
-      task_id: task_id.get(),
-      scene_id,
-      delta_time,
-    }).map_err(|_| EngineError::InvalidOperation("logic thread closed"))?;
+    self
+      .threads
+      .logic_thread
+      .tx()
+      .try_send(
+        crate::simulation_api::structs::LogicCommand::SimulationTick {
+          task_id: task_id.get(),
+          scene_id,
+          delta_time,
+        },
+      )
+      .map_err(|_| EngineError::InvalidOperation("logic thread closed"))?;
     Ok(task_id)
   }
 
@@ -133,6 +186,16 @@ impl SimulationContext {
     presentation_engine_handle: PresentationEngineHandle,
     scene_id: u64,
     window_extent: [u32; 2],
+  ) -> EngineResult<core::num::NonZero<u64>> {
+    self.render_tick_custom(presentation_engine_handle, scene_id, window_extent, None)
+  }
+
+  pub fn render_tick_custom(
+    &self,
+    presentation_engine_handle: PresentationEngineHandle,
+    scene_id: u64,
+    window_extent: [u32; 2],
+    custom: Option<CustomRenderCallback>,
   ) -> EngineResult<core::num::NonZero<u64>> {
     let task_id = self
       .render_proxy
@@ -146,31 +209,33 @@ impl SimulationContext {
       })?;
 
     let scenes = self.scenes.read();
-    let active = scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
+    let active = scenes
+      .get(&scene_id)
+      .ok_or(EngineError::InvalidOperation("scene not found"))?;
     let scene = Arc::clone(&active);
     let _ = self
       .threads
       .render_thread
       .tx()
-      .try_send(RenderCommand::RenderFrame(crate::structs::RenderFrame {
-        presentation_engine_handle,
-        task_id,
-        scene,
-        render_physical_meshes_outline: active
-          .read()
-          .outlines_enabled
-          .load(core::sync::atomic::Ordering::Acquire),
-        camera_entity: active
-          .read()
-          .active_camera_entity
-          .unwrap_or_default(),
-        window_width: window_extent[0],
-        window_height: window_extent[1],
-        clear_color: [0.0, 0.0, 0.0, 1.0],
-        sun_entity: active.read().sun_entity,
-        sky_entity: active.read().sky_entity,
-        cursor_entity: active.read().cursor_entity,
-      }));
+      .try_send(RenderCommand::RenderFrame(
+        crate::simulation_api::structs::RenderFrame {
+          presentation_engine_handle,
+          task_id,
+          scene,
+          render_physical_meshes_outline: active
+            .read()
+            .outlines_enabled
+            .load(core::sync::atomic::Ordering::Acquire),
+          camera_entity: active.read().active_camera_entity.unwrap_or_default(),
+          window_width: window_extent[0],
+          window_height: window_extent[1],
+          clear_color: [0.0, 0.0, 0.0, 1.0],
+          sun_entity: active.read().sun_entity,
+          sky_entity: active.read().sky_entity,
+          cursor_entity: active.read().cursor_entity,
+          custom_render_callback: custom,
+        },
+      ));
 
     Ok(unsafe { core::num::NonZero::new_unchecked(task_id) })
   }
@@ -185,13 +250,19 @@ impl SimulationContext {
     Ok(())
   }
 
-  pub fn download_image(&self, task_id: u64, buffer_ptr: *mut u8, buffer_size: usize) -> bool {
-    if buffer_ptr.is_null() {
-      return false;
-    }
-    self.with_device(|device| {
-      let buffer = unsafe { core::slice::from_raw_parts_mut(buffer_ptr, buffer_size) };
-      device.read_windowless_download(task_id, buffer)
-    }).map(|_| true).unwrap_or(false)
+  pub fn dispatch_logic_command_custom(
+    &self,
+    custom_fn: fn(&crate::simulation_api::structs::LogicThreadContext, *mut core::ffi::c_void),
+    user_data: Option<crate::simulation_api::structs::SendPtrMut<core::ffi::c_void>>,
+  ) -> EngineResult<()> {
+    self
+      .threads
+      .logic_thread
+      .tx()
+      .try_send(crate::simulation_api::structs::LogicCommand::Custom {
+        custom_fn,
+        user_data,
+      })
+      .map_err(|_| EngineError::InvalidOperation("logic thread closed"))
   }
 }

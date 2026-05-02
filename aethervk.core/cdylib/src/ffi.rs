@@ -1,167 +1,19 @@
-use crate::structs::{
-  SceneContext, SimulationSceneData, SimulationTaskManager, SimulationTaskResult, FfiRaycastResult,
-};
-use aethervk_core_rlib as rlib;
-use aethervk_core_rlib::gpu::{RenderDeviceHandle, WeakRenderFrontend, WeakRenderFrontendExt};
-use aethervk_core_rlib::types::GpuResult;
+use aethervk_core_rlib::simulation_api::*;
+use aethervk_core_rlib::simulation_api::structs::*;
 use aethervk_oshal_rlib as oshal;
-use aethervk_oshal_rlib::os;
-use aethervk_oshal_rlib::os::pool::WorkloadStatus;
-use alloc::collections::BTreeSet;
-use alloc::string::ToString;
-use alloc::{boxed::Box, string::String, sync::Arc, vec, vec::Vec};
 use core::ffi::{c_char, CStr};
-use oshal::math::matrix::{Matrix4};
-use oshal::math::vector::Vector3;
-use oshal::math::{
-  matrix::{mat4::Mat4x4f32},
-  quaternion::Quaternion,
-  vector::{vec3::Vec3f32, vec4::Quat},
+use alloc::{boxed::Box, string::ToString};
+use aethervk_core_rlib::gpu;
+use aethervk_core_rlib::math::collision::linear_bvh;
+use aethervk_core_rlib::math::collision::linear_bvh::LinearBVHNode;
+use aethervk_core_rlib::scene::Marker;
+use aethervk_core_rlib::simulation_api::components_api::{
+  CameraParams, OrthographicCameraParams, PerspectiveCameraParams,
 };
-use rlib::types::EngineResult;
-use rlib::{
-  gpu::{self, RenderDevice},
-  physics,
-  scene::{
-    CameraComponent, CursorComponent, GridComponent, PhysicalMeshComponent, Scene, SkyComponent,
-    SunComponent, TransformComponent,
-  },
-  simulation,
-  types::EngineError,
-};
-use spin::rwlock::RwLock;
-use spin::{RwLockReadGuard, RwLockWriteGuard};
-
-pub mod components_api;
-pub mod core_api;
-pub mod logic_thread;
-pub mod misc_api;
-pub mod models_api;
-pub mod render_thread;
-pub mod scene_api;
-pub mod structs;
-pub mod time_api;
-
-/// Holds State for the whole simulation. For now, default drop order (from first to last)
-/// is fine. Threads are first shut down, then data is deallocated.
-/// if this grows more complicated, implement `Drop`
-/// creation in [`core_api::SimulationContext::startup`] is in reverse
-pub struct SimulationContext {
-  /// Necessary evil to let the render thread own a strong reference to render frontend, but
-  /// still having the possibility for FFI caller threads to create presentation engines
-  pub(crate) render_proxy: (WeakRenderFrontend, RenderDeviceHandle),
-  pub(crate) threads: structs::SimulationThreads,
-  pub(crate) presentation_engines: RwLock<BTreeSet<gpu::PresentationEngineHandle>>,
-  pub(crate) scenes: Arc<RwLock<SimulationSceneData>>,
-  pub(crate) task_manager: Arc<RwLock<SimulationTaskManager>>,
-  pub(crate) logic_state: Arc<RwLock<structs::LogicState>>,
-}
-
-impl Drop for SimulationContext {
-  fn drop(&mut self) {
-    oshal::log!("SimulationContext drop started");
-  }
-}
-
-unsafe impl Sync for SimulationContext {}
-
-impl SimulationContext {
-  /// Necessary evil function so that FFI caller threads can create a presentation engine on demand
-  /// even though render device is owned by render thread
-  pub fn with_device<F, R>(&self, f: F) -> EngineResult<R>
-  where
-    F: FnOnce(&dyn RenderDevice) -> GpuResult<R>,
-  {
-    let render_device_handle = self.render_proxy.1;
-    let render_frontend =
-      self
-        .render_proxy
-        .0
-        .as_frontend()
-        .ok_or(EngineError::InvalidOperation(
-          "SimulationContext::with_device | couldn't upgrade weak pointer to render context",
-        ))?;
-    render_frontend
-      .with_device(render_device_handle, f)
-      .map_err(|e| EngineError::from(e))
-  }
-
-  pub fn get_scene(&self, scene_id: u64) -> Option<Arc<RwLock<SceneContext>>> {
-    self.scenes.read().get(&scene_id).cloned()
-  }
-
-}
-
-/// Macro to quickly extract scene, convert option to result and produce a `&'static str` error message
-#[macro_export]
-macro_rules! expect_scene {
-  ($expr:expr, $context:expr) => {
-    $expr.ok_or(EngineError::InvalidOperation(concat!(
-      $context,
-      " | scene not found"
-    )))?
-  };
-}
-/// Macro to quickly extract an entity from a scene, convert option to result and produce a `&'static str` error message
-#[macro_export]
-macro_rules! expect_entity {
-  ($scene:expr, $entity:expr, $context:expr) => {
-    $scene
-      .get_entity($entity)
-      .ok_or(EngineError::InvalidOperation(concat!(
-        $context,
-        " | child entity not found"
-      )))?
-  };
-}
-/// Macro to quickly extract both a scene and an entity, returning a tuple (scene, entity_id),
-/// while converting options to results with `&'static str` error messages.
-#[macro_export]
-macro_rules! expect_scene_and_entity {
-  ($scene_expr:expr, $entity_expr:expr, $context:expr) => {{
-    // Re-use your existing scene macro
-    let scene = expect_scene!($scene_expr, $context);
-
-    // Extract the entity
-    let entity = scene.read()
-      .get_entity($entity_expr)
-      .ok_or(EngineError::InvalidOperation(concat!(
-        $context,
-        " | child entity not found"
-      )))?;
-
-    // Return both so they can be destructured
-    (scene, entity)
-  }};
-}
-
-struct PhysicsRebuildWorkload {
-  scene: Arc<Scene>,
-  physics_scene: Arc<RwLock<physics::physics_scene::PhysicsScene>>,
-}
-
-impl os::pool::Workload for PhysicsRebuildWorkload {
-  fn execute(&mut self) -> WorkloadStatus {
-    let new_physics = physics::physics_scene::PhysicsScene::build_from_scene(&self.scene);
-    let mut guard = self.physics_scene.write();
-    *guard = new_physics;
-    WorkloadStatus::Complete
-  }
-}
-
-pub(crate) static BREADCRUMB_CALLBACK: core::sync::atomic::AtomicPtr<()> =
-  core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
-
-pub(crate) fn emit_breadcrumb(status: u32, msg: &str) {
-  let fptr = BREADCRUMB_CALLBACK.load(core::sync::atomic::Ordering::Relaxed);
-  if !fptr.is_null() {
-    if let Ok(c_msg) = alloc::ffi::CString::new(msg) {
-      let cb: extern "C" fn(u32, *const c_char) = unsafe { core::mem::transmute(fptr) };
-      cb(status, c_msg.as_ptr());
-    }
-  }
-}
-
+use aethervk_core_rlib::types::EngineError;
+use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+use aethervk_oshal_rlib::math::vector::vec4::Quat;
+use aethervk_oshal_rlib::math::vector::Vector3;
 // -------------------- C Exposed API (Async & Stateless) ----------------------------
 
 fn backend_id_from_str(backend_std: &str) -> Option<gpu::RenderBackendId> {
@@ -183,7 +35,7 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
     unsafe { CStr::from_ptr(backend).to_str().unwrap_or("") }
   };
   if let Some(backend) = backend_id_from_str(backend_str) {
-    SimulationContext::startup(backend)
+    SimulationContext::startup(backend, None)
       .map(|boxed| Box::into_raw(boxed))
       .unwrap_or_else(|e| {
         oshal::log!("avkSimulationContext_startup failed: {}", e.to_string());
@@ -248,7 +100,7 @@ pub unsafe extern "C" fn avkSimulationContext_getTaskResultBool(
 pub unsafe extern "C" fn avkSimulationContext_getTaskResultRaycast(
   ctx: *mut SimulationContext,
   task_id: u64,
-  out_hit: *mut structs::FfiRaycastResult,
+  out_hit: *mut FfiRaycastResult,
 ) -> bool {
   if ctx.is_null() {
     return false;
@@ -279,14 +131,21 @@ pub unsafe extern "C" fn avkSimulationContext_createPresentationEngine(
   width: u32,
   height: u32,
 ) -> u64 {
-  if ctx.is_null() { return 0; }
+  if ctx.is_null() {
+    return 0;
+  }
   let ctx_ref = unsafe { &*ctx };
-  ctx_ref.create_presentation_engine(width, height).map(|h| h.0).unwrap_or(0)
+  ctx_ref
+    .create_presentation_engine(width, height)
+    .map(|h| h.0)
+    .unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_createDefaultScene(ctx: *mut SimulationContext) -> u64 {
+pub unsafe extern "C" fn avkSimulationContext_createDefaultScene(
+  ctx: *mut SimulationContext,
+) -> u64 {
   if ctx.is_null() {
     return 0;
   }
@@ -317,10 +176,12 @@ pub unsafe extern "C" fn avkSimulationContext_spawnEntity(
   }
   let ctx_ref = unsafe { &*ctx };
   let name_str = unsafe { CStr::from_ptr(name).to_str().unwrap_or("Entity") };
-  ctx_ref.spawn_entity(scene_id, name_str).unwrap_or_else(|e| {
-    oshal::log!("spawn_entity failed: {}", e);
-    0
-  })
+  ctx_ref
+    .spawn_entity(scene_id, name_str)
+    .unwrap_or_else(|e| {
+      oshal::log!("spawn_entity failed: {}", e);
+      0
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -471,13 +332,16 @@ pub unsafe extern "C" fn avkSimulationContext_getEntityCount(
     return 0;
   }
   let ctx_ref = unsafe { &*ctx };
-  ctx_ref.get_entity_count(scene_id).map(|c| {
-    oshal::log!("getEntityCount for scene_id {} returned {}", scene_id, c);
-    c
-  }).unwrap_or_else(|e| {
-    oshal::log!("getEntityCount failed for scene_id {}: {}", scene_id, e);
-    0
-  })
+  ctx_ref
+    .get_entity_count(scene_id)
+    .map(|c| {
+      oshal::log!("getEntityCount for scene_id {} returned {}", scene_id, c);
+      c
+    })
+    .unwrap_or_else(|e| {
+      oshal::log!("getEntityCount failed for scene_id {}: {}", scene_id, e);
+      0
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -493,7 +357,10 @@ pub unsafe extern "C" fn avkSimulationContext_getEntityIds(
   }
   let ctx_ref = unsafe { &*ctx };
   let ids = unsafe { core::slice::from_raw_parts_mut(out_ids, max_count as usize) };
-  ctx_ref.get_entity_ids(scene_id, ids).map(|(n, _)| n).unwrap_or(0)
+  ctx_ref
+    .get_entity_ids(scene_id, ids)
+    .map(|(n, _)| n)
+    .unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
@@ -711,15 +578,21 @@ pub unsafe extern "C" fn avkSimulationContext_rotateCamera(
     None => return 0,
   };
   let task_id = ctx_ref.task_manager.write().create_task().get();
-  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::RotateCamera(structs::RotateCamera {
-    camera_entity: internal_entity,
-    scene,
-    delta_x,
-    delta_y,
-  }));
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::RotateCamera(structs::RotateCamera {
+      camera_entity: internal_entity,
+      scene,
+      delta_x,
+      delta_y,
+    }));
   task_id
 }
 
+// TODO pass the task_id to the command so that logic thread can give feedback. apply this to all functions
+// TODO: since this try_send functions are used in test/simulation_test and tests of simulation_api, refactor these commands into methods
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_zoomCamera(
@@ -741,11 +614,15 @@ pub unsafe extern "C" fn avkSimulationContext_zoomCamera(
     None => return 0,
   };
   let task_id = ctx_ref.task_manager.write().create_task().get();
-  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::ZoomCamera(structs::ZoomCamera {
-    camera_entity: internal_entity,
-    scene,
-    amount,
-  }));
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::ZoomCamera(structs::ZoomCamera {
+      camera_entity: internal_entity,
+      scene,
+      amount,
+    }));
   task_id
 }
 
@@ -769,10 +646,14 @@ pub unsafe extern "C" fn avkSimulationContext_resetCamera(
     None => return 0,
   };
   let task_id = ctx_ref.task_manager.write().create_task().get();
-  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::ResetCamera(structs::ResetCamera {
-    camera_entity: internal_entity,
-    scene,
-  }));
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::ResetCamera(structs::ResetCamera {
+      camera_entity: internal_entity,
+      scene,
+    }));
   task_id
 }
 
@@ -798,12 +679,16 @@ pub unsafe extern "C" fn avkSimulationContext_panCamera(
     None => return 0,
   };
   let task_id = ctx_ref.task_manager.write().create_task().get();
-  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::PanCamera(structs::PanCamera {
-    camera_entity: internal_entity,
-    scene,
-    delta_x,
-    delta_y,
-  }));
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::PanCamera(structs::PanCamera {
+      camera_entity: internal_entity,
+      scene,
+      delta_x,
+      delta_y,
+    }));
   task_id
 }
 
@@ -824,11 +709,15 @@ pub unsafe extern "C" fn avkSimulationContext_panCursor(
     Some(s) => s,
     None => return 0,
   };
-  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::PanCursor(structs::PanCursor {
-    scene,
-    delta_x,
-    delta_y,
-  }));
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::PanCursor(structs::PanCursor {
+      scene,
+      delta_x,
+      delta_y,
+    }));
   task_id
 }
 
@@ -850,12 +739,18 @@ pub unsafe extern "C" fn avkSimulationContext_moveCursor(
     Some(s) => s,
     None => return 0,
   };
-  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::MoveCursor(structs::MoveCursor {
-    scene,
-    delta_x,
-    delta_y,
-    delta_z,
-  }));
+  // TODO pass the task_id to the command so that logic thread can give feedback. apply this to all functions
+  // TODO: since this try_send functions are used in test/simulation_test and tests of simulation_api, refactor these commands into methods
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::MoveCursor(structs::MoveCursor {
+      scene,
+      delta_x,
+      delta_y,
+      delta_z,
+    }));
   task_id
 }
 
@@ -884,11 +779,15 @@ pub unsafe extern "C" fn avkSimulationContext_snapToEntity(
     None => return 0,
   };
   let task_id = ctx_ref.task_manager.write().create_task().get();
-  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::SnapToEntity(structs::SnapToEntity {
-    snap_entity: internal_snap,
-    target_entity: internal_target,
-    scene,
-  }));
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::SnapToEntity(structs::SnapToEntity {
+      snap_entity: internal_snap,
+      target_entity: internal_target,
+      scene,
+    }));
   task_id
 }
 
@@ -918,12 +817,16 @@ pub unsafe extern "C" fn avkSimulationContext_followEntity(
     None => return 0,
   };
   let task_id = ctx_ref.task_manager.write().create_task().get();
-  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::FollowEntity(structs::FollowEntity {
-    snap_entity: internal_snap,
-    entity_id: internal_target,
-    scene,
-    unfollow_other,
-  }));
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::FollowEntity(structs::FollowEntity {
+      snap_entity: internal_snap,
+      entity_id: internal_target,
+      scene,
+      unfollow_other,
+    }));
   task_id
 }
 
@@ -947,10 +850,16 @@ pub unsafe extern "C" fn avkSimulationContext_unfollowEntity(
     None => return 0,
   };
   let task_id = ctx_ref.task_manager.write().create_task().get();
-  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::UnfollowEntity(structs::UnfollowEntity {
-    entity_id: internal_entity,
-    scene,
-  }));
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::UnfollowEntity(
+      structs::UnfollowEntity {
+        entity_id: internal_entity,
+        scene,
+      },
+    ));
   task_id
 }
 
@@ -959,7 +868,25 @@ pub unsafe extern "C" fn avkSimulationContext_unfollowEntity(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_setAssetPath(path: *const c_char) {
-  SimulationContext::set_asset_path(path)
+  if path.is_null() {
+    return;
+  }
+
+  if let Ok(path_str) = unsafe { core::ffi::CStr::from_ptr(path) }.to_str() {
+    SimulationContext::set_asset_path(path_str)
+  }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getBodyRadius(body_id: i32) -> f32 {
+  if let Some(asset_dir) = aethervk_core_rlib::gpu::ASSET_DIR.read().as_ref() {
+    let pck_path = alloc::format!("{}/planets/pck00011.tpc", asset_dir);
+    if let Some(radii) = aethervk_core_rlib::simulation::pck::read_body_radii(&pck_path, body_id) {
+      return (radii[0] / aethervk_core_rlib::simulation::almanac::DISTANCE_SCALE_FACTOR) as f32;
+    }
+  }
+  0.0
 }
 
 #[unsafe(no_mangle)]
@@ -1020,6 +947,11 @@ pub unsafe extern "C" fn avkSimulationContext_renderTick(
     .unwrap_or(0)
 }
 
+/// the C# caller should be responsible for polling getTaskStatus and only calling download_image once the status is completed.
+/// Given the architecture of the C# async API and the fact that Vulkan windowless downloads are placed in persistently mapped memory buffers, bouncing the download request through the RenderCommand channel was actually an anti-pattern. Here is why:
+/// 1. Thread Safety: is_task_completed and read_windowless_download only acquire read/write locks (self.res.read() and pending_downloads.write()). They don't actually need to execute on the Render Thread.
+/// 2. No Render Thread Blocking: By having C# call download_image synchronously after polling confirms it's ready, the memory copy happens on the caller thread (e.g., C#'s worker pool), freeing the Render Thread to continue pushing Vulkan commands without stalling
+///   during the memory copy.
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_downloadImage(
@@ -1035,6 +967,7 @@ pub unsafe extern "C" fn avkSimulationContext_downloadImage(
   ctx_ref.download_image(task_id, buffer_ptr, buffer_size)
 }
 
+/// fov is in radians
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_addCameraComponent(
@@ -1051,15 +984,25 @@ pub unsafe extern "C" fn avkSimulationContext_addCameraComponent(
   ortho_bottom: f32,
   ortho_top: f32,
 ) {
-  if ctx.is_null() { return; }
+  if ctx.is_null() {
+    return;
+  }
   let ctx_ref = unsafe { &*ctx };
   let params = if is_orthographic {
-    crate::simulation_api::components_api::CameraParams::Orthographic(crate::simulation_api::components_api::OrthographicCameraParams {
-      left: ortho_left, right: ortho_right, bottom: ortho_bottom, top: ortho_top, near, far
+    CameraParams::Orthographic(OrthographicCameraParams {
+      left: ortho_left,
+      right: ortho_right,
+      bottom: ortho_bottom,
+      top: ortho_top,
+      near,
+      far,
     })
   } else {
-    crate::simulation_api::components_api::CameraParams::Perspective(crate::simulation_api::components_api::PerspectiveCameraParams {
-      fov: fov.to_radians(), aspect_ratio: aspect, near_plane: near, far_plane: far
+    CameraParams::Perspective(PerspectiveCameraParams {
+      fov: fov,
+      aspect_ratio: aspect,
+      near_plane: near,
+      far_plane: far,
     })
   };
   let _ = ctx_ref.add_camera_component(scene_id, entity, params);
@@ -1081,15 +1024,25 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraComponent(
   ortho_bottom: f32,
   ortho_top: f32,
 ) {
-  if ctx.is_null() { return; }
+  if ctx.is_null() {
+    return;
+  }
   let ctx_ref = unsafe { &*ctx };
   let params = if is_orthographic {
-    crate::simulation_api::components_api::CameraParams::Orthographic(crate::simulation_api::components_api::OrthographicCameraParams {
-      left: ortho_left, right: ortho_right, bottom: ortho_bottom, top: ortho_top, near, far
+    CameraParams::Orthographic(OrthographicCameraParams {
+      left: ortho_left,
+      right: ortho_right,
+      bottom: ortho_bottom,
+      top: ortho_top,
+      near,
+      far,
     })
   } else {
-    crate::simulation_api::components_api::CameraParams::Perspective(crate::simulation_api::components_api::PerspectiveCameraParams {
-      fov: fov.to_radians(), aspect_ratio: aspect, near_plane: near, far_plane: far
+    CameraParams::Perspective(PerspectiveCameraParams {
+      fov: fov.to_radians(),
+      aspect_ratio: aspect,
+      near_plane: near,
+      far_plane: far,
     })
   };
   let _ = ctx_ref.set_camera_component(scene_id, entity, params);
@@ -1103,10 +1056,15 @@ pub unsafe extern "C" fn avkSimulationContext_getCameraComponent(
   entity: u64,
   proj_out: *mut f32,
 ) -> bool {
-  if ctx.is_null() || proj_out.is_null() { return false; }
+  if ctx.is_null() || proj_out.is_null() {
+    return false;
+  }
   let ctx_ref = unsafe { &*ctx };
   let mut arr = [0.0; 16];
-  if ctx_ref.get_camera_component(scene_id, entity, &mut arr).is_ok() {
+  if ctx_ref
+    .get_camera_component(scene_id, entity, &mut arr)
+    .is_ok()
+  {
     unsafe { core::ptr::copy_nonoverlapping(arr.as_ptr(), proj_out, 16) };
     true
   } else {
@@ -1120,13 +1078,24 @@ pub unsafe extern "C" fn avkSimulationContext_addMeasurementComponent(
   ctx: *mut SimulationContext,
   scene_id: u64,
   entity: u64,
-  p1x: f32, p1y: f32, p1z: f32,
-  p2x: f32, p2y: f32, p2z: f32,
+  p1x: f32,
+  p1y: f32,
+  p1z: f32,
+  p2x: f32,
+  p2y: f32,
+  p2z: f32,
 ) {
-  if ctx.is_null() { return; }
+  if ctx.is_null() {
+    return;
+  }
   let ctx_ref = unsafe { &*ctx };
   use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-  let _ = ctx_ref.add_measurement_component(scene_id, entity, Vec3f32::from_components(p1x, p1y, p1z), Vec3f32::from_components(p2x, p2y, p2z));
+  let _ = ctx_ref.add_measurement_component(
+    scene_id,
+    entity,
+    Vec3f32::from_components(p1x, p1y, p1z),
+    Vec3f32::from_components(p2x, p2y, p2z),
+  );
 }
 
 #[unsafe(no_mangle)]
@@ -1139,7 +1108,9 @@ pub unsafe extern "C" fn avkSimulationContext_addImageBillboardComponent(
   width: f32,
   height: f32,
 ) {
-  if ctx.is_null() { return; }
+  if ctx.is_null() {
+    return;
+  }
   let ctx_ref = unsafe { &*ctx };
   let _ = ctx_ref.add_image_billboard_component(scene_id, entity, is_screen_space, width, height);
 }
@@ -1151,7 +1122,9 @@ pub unsafe extern "C" fn avkSimulationContext_setActiveCamera(
   scene_id: u64,
   camera_entity: u64,
 ) {
-  if ctx.is_null() { return; }
+  if ctx.is_null() {
+    return;
+  }
   let ctx_ref = unsafe { &*ctx };
   let _ = ctx_ref.set_active_camera(scene_id, camera_entity);
 }
@@ -1171,18 +1144,29 @@ pub unsafe extern "C" fn avkSimulationContext_setMarkers(
   cb: *const f32,
   sizes: *const f32,
 ) {
-  if ctx.is_null() || px.is_null() || py.is_null() || pz.is_null() || cr.is_null() || cg.is_null() || cb.is_null() || sizes.is_null() {
+  if ctx.is_null()
+    || px.is_null()
+    || py.is_null()
+    || pz.is_null()
+    || cr.is_null()
+    || cg.is_null()
+    || cb.is_null()
+    || sizes.is_null()
+  {
     return;
   }
   let ctx_ref = unsafe { &*ctx };
-  use crate::structs::FfiMarker;
   use alloc::vec::Vec;
 
   let mut markers = Vec::with_capacity(count as usize);
   for i in 0..(count as usize) {
     markers.push(FfiMarker {
-      position: [unsafe { *px.add(i) }, unsafe { *py.add(i) }, unsafe { *pz.add(i) }],
-      color: [unsafe { *cr.add(i) }, unsafe { *cg.add(i) }, unsafe { *cb.add(i) }],
+      position: [unsafe { *px.add(i) }, unsafe { *py.add(i) }, unsafe {
+        *pz.add(i)
+      }],
+      color: [unsafe { *cr.add(i) }, unsafe { *cg.add(i) }, unsafe {
+        *cb.add(i)
+      }],
       size: unsafe { *sizes.add(i) },
     });
   }
@@ -1197,20 +1181,55 @@ pub unsafe extern "C" fn avkSimulationContext_getBvhNodes(
   scene_id: u64,
   entity: u64,
   count: *mut u32,
-) -> *mut crate::structs::FfiBvhNode {
-  if ctx.is_null() || count.is_null() { return core::ptr::null_mut(); }
+) -> *mut FfiBvhNode {
+  if ctx.is_null() || count.is_null() {
+    return core::ptr::null_mut();
+  }
   let ctx_ref = unsafe { &*ctx };
-  ctx_ref.get_bvh_nodes(scene_id, entity, count).unwrap_or(core::ptr::null_mut())
+  ctx_ref
+    .get_bvh_nodes(scene_id, entity, count)
+    .unwrap_or(core::ptr::null_mut())
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_freeBvhNodes(
-  ptr: *mut crate::structs::FfiBvhNode,
-  count: u32,
-) {
+pub unsafe extern "C" fn avkSimulationContext_freeBvhNodes(ptr: *mut FfiBvhNode, count: u32) {
   if !ptr.is_null() && count > 0 {
     let _ = unsafe { alloc::vec::Vec::from_raw_parts(ptr, count as usize, count as usize) };
+  }
+}
+
+impl From<LinearBVHNode<f32>> for FfiBvhNode {
+  fn from(node: LinearBVHNode<f32>) -> Self {
+    let mut ffi_node = FfiBvhNode::from_offsets(
+      node.left_child_or_primitive_offset,
+      node.right_child_offset,
+      node.primitive_count,
+    );
+
+    match &node.bound {
+      linear_bvh::LinearBound::AABB(aabb) => {
+        ffi_node.node_type = FfiNodeType::AABB;
+        ffi_node.min_x = aabb.min::<Vec3f32>().x();
+        ffi_node.min_y = aabb.min::<Vec3f32>().y();
+        ffi_node.min_z = aabb.min::<Vec3f32>().z();
+        ffi_node.max_x = aabb.max::<Vec3f32>().x();
+        ffi_node.max_y = aabb.max::<Vec3f32>().y();
+        ffi_node.max_z = aabb.max::<Vec3f32>().z();
+      }
+      linear_bvh::LinearBound::OBB(obb) => {
+        ffi_node.node_type = FfiNodeType::OBB;
+        let t: Vec3f32 = obb.translation();
+        let ext: Vec3f32 = obb.half_extent();
+        ffi_node.center_x = t.x();
+        ffi_node.center_y = t.y();
+        ffi_node.center_z = t.z();
+        ffi_node.extents_x = ext.x();
+        ffi_node.extents_y = ext.y();
+        ffi_node.extents_z = ext.z();
+      }
+    }
+    ffi_node
   }
 }
 
@@ -1223,10 +1242,279 @@ pub unsafe extern "C" fn avkSimulationContext_setBvhNodeVisibility(
   node_index: u32,
   visible: bool,
 ) {
-  if ctx.is_null() { return; }
+  if ctx.is_null() {
+    return;
+  }
   let ctx_ref = unsafe { &*ctx };
   let _ = ctx_ref.set_bvh_node_visibility(scene_id, entity, node_index, visible);
 }
 
-#[cfg(test)]
-mod tests;
+// --------------------- FFI Types ---------------------------
+
+#[repr(u32)]
+pub enum FfiRenderTaskStatus {
+  Completed = 0,
+  Pending = 1,
+  Error = 2,
+}
+
+impl From<RenderTaskStatus> for FfiRenderTaskStatus {
+  fn from(value: RenderTaskStatus) -> Self {
+    match value {
+      RenderTaskStatus::Completed => FfiRenderTaskStatus::Completed,
+      RenderTaskStatus::Pending => FfiRenderTaskStatus::Pending,
+      RenderTaskStatus::Error(_) => FfiRenderTaskStatus::Error,
+    }
+  }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct FfiRaycastResult {
+  pub hit: bool,
+  pub entity: u64,
+  pub px: f32,
+  pub py: f32,
+  pub pz: f32,
+}
+
+impl From<RaycastResult> for FfiRaycastResult {
+  fn from(value: RaycastResult) -> Self {
+    let mut res = Self {
+      hit: false,
+      entity: 0,
+      px: 0.0,
+      py: 0.0,
+      pz: 0.0,
+    };
+
+    if let Some(hit) = value {
+      res.hit = true;
+      res.entity = hit.entity_ext_id;
+      res.px = hit.p.x();
+      res.py = hit.p.y();
+      res.pz = hit.p.z();
+    }
+
+    res
+  }
+}
+
+// TODO sync with C#
+#[repr(u32)]
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FfiLogicCommandType {
+  #[default]
+  Shutdown = 0,
+
+  RotateCamera = 1,
+  ZoomCamera = 2,
+  ResetCamera = 3,
+  PanCamera = 4,
+
+  PanCursor = 5,
+  MoveCursor = 6,
+
+  SnapToEntity = 7,
+  FollowEntity = 8,
+  UnfollowEntity = 9,
+
+  FeedbackGetTimeScale = 10,
+  FeedbackGetDateTimeUTC = 11,
+  FeedbackGetDateTimeLimitsUTC = 12,
+  // TODO: probably we'll need Ephemeris duration
+}
+
+// TODO modify in C#
+#[repr(C, align(4))]
+#[derive(Default, Clone, Copy, Debug)]
+pub struct FfiLogicCommand {
+  pub cmd_type: FfiLogicCommandType,
+  pub payload: [u8; 28],
+}
+
+impl FfiLogicCommand {
+  pub fn get_u32_u64x3_at_start(&self) -> Option<(u32, u64, u64, u64)> {
+    let first = self.get_u32_at_offset(0)?;
+    let second = self.get_u64_at_offset(4)?;
+    let third = self.get_u64_at_offset(12)?;
+    let fourth = self.get_u64_at_offset(20)?;
+    Some((first, second, third, fourth))
+  }
+
+  pub fn get_u64_f32x3_at_start(&self) -> Option<(u64, f32, f32, f32)> {
+    let first = self.get_u64_at_offset(4)?;
+    let second = self.get_f32_at_offset(12)?;
+    let third = self.get_f32_at_offset(16)?;
+    let fourth = self.get_f32_at_offset(20)?;
+    Some((first, second, third, fourth))
+  }
+
+  pub fn get_u64_f32x2_at_start(&self) -> Option<(u64, f32, f32)> {
+    let first = self.get_u64_at_offset(4)?;
+    let second = self.get_f32_at_offset(12)?;
+    let third = self.get_f32_at_offset(16)?;
+    Some((first, second, third))
+  }
+
+  pub fn get_u64x2_f32_at_start(&self) -> Option<(u64, u64, f32)> {
+    let first = self.get_u64_at_offset(4)?;
+    let second = self.get_u64_at_offset(12)?;
+    let third = self.get_f32_at_offset(20)?;
+    Some((first, second, third))
+  }
+
+  pub fn get_u64x2_f32x2_at_start(&self) -> Option<(u64, u64, f32, f32)> {
+    let first = self.get_u64_at_offset(4)?;
+    let second = self.get_u64_at_offset(12)?;
+    let third = self.get_f32_at_offset(20)?;
+    let fourth = self.get_f32_at_offset(24)?;
+    Some((first, second, third, fourth))
+  }
+
+  /// Utility for commands which take 2 u64 from start, aligned to 8 (eg 2 entities and a scene id)
+  pub fn get_u64x2_at_start(&self) -> Option<(u64, u64)> {
+    let first = self.get_u64_at_offset(4)?;
+    let second = self.get_u64_at_offset(12)?;
+    Some((first, second))
+  }
+
+  /// Utility for commands which take 3 u64 from start, aligned to 8 (eg 2 entities and a scene id)
+  pub fn get_u64x3_at_start(&self) -> Option<(u64, u64, u64)> {
+    let first = self.get_u64_at_offset(4)?;
+    let second = self.get_u64_at_offset(12)?;
+    let third = self.get_u64_at_offset(20)?;
+    Some((first, second, third))
+  }
+
+  /// Utility for commands which takes 3 floats from start (eg delta_x and delta_y)
+  pub fn get_f32x3_at_start(&self) -> Option<(f32, f32, f32)> {
+    let first = self.get_f32_at_offset(0)?;
+    let second = self.get_f32_at_offset(4)?;
+    let third = self.get_f32_at_offset(8)?;
+    Some((first, second, third))
+  }
+
+  /// Utility for commands which takes 2 floats from start (eg delta_x and delta_y)
+  pub fn get_f32x2_at_start(&self) -> Option<(f32, f32)> {
+    let first = self.get_f32_at_offset(0)?;
+    let second = self.get_f32_at_offset(4)?;
+    Some((first, second))
+  }
+
+  /// Safely reads a u32 from the payload.
+  /// Payload starts at struct offset 4, so payload offset must be a multiple of 4.
+  pub fn get_u32_at_offset(&self, offset: usize) -> Option<u32> {
+    let size = core::mem::size_of::<u32>();
+
+    // (offset + 4) % 4 == 0 simplifies down to offset % 4 == 0
+    if offset % 4 != 0 || offset + size > self.payload.len() {
+      return None;
+    }
+
+    let mut bytes = [0u8; 4];
+    bytes.copy_from_slice(&self.payload[offset..offset + size]);
+    Some(u32::from_ne_bytes(bytes))
+  }
+
+  /// Safely reads an f32 from the payload.
+  /// Payload starts at struct offset 4, so payload offset must be a multiple of 4.
+  pub fn get_f32_at_offset(&self, offset: usize) -> Option<f32> {
+    let size = core::mem::size_of::<f32>();
+
+    if offset % 4 != 0 || offset + size > self.payload.len() {
+      return None;
+    }
+
+    let mut bytes = [0u8; 4];
+    bytes.copy_from_slice(&self.payload[offset..offset + size]);
+    Some(f32::from_ne_bytes(bytes))
+  }
+
+  /// Safely reads a u64 from the payload.
+  /// Because the payload itself starts at struct offset 4,
+  /// the absolute memory offset is (offset + 4).
+  /// This absolute offset must be a multiple of 8.
+  pub fn get_u64_at_offset(&self, offset: usize) -> Option<u64> {
+    let size = core::mem::size_of::<u64>();
+
+    // Ensure the *absolute* struct offset is 8-byte aligned.
+    // Valid payload offsets for u64: 4, 12, 20.
+    if (offset + 4) % 8 != 0 || offset + size > self.payload.len() {
+      return None;
+    }
+
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&self.payload[offset..offset + size]);
+    Some(u64::from_ne_bytes(bytes))
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(C)] // Optional: Keeps memory layout predictable if interfacing with C
+pub struct FfiMarker {
+  pub position: [f32; 3], // [x, y, z]
+  pub color: [f32; 3],    // [r, g, b]
+  pub size: f32,
+}
+
+impl From<FfiMarker> for Marker {
+  fn from(value: FfiMarker) -> Self {
+    Self {
+      local_pos: value.position,
+      color: value.color,
+      size: value.size,
+    }
+  }
+}
+
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum FfiNodeType {
+  AABB = 0,
+  OBB = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FfiBvhNode {
+  pub node_type: FfiNodeType,
+  pub min_x: f32,
+  pub min_y: f32,
+  pub min_z: f32,
+  pub max_x: f32,
+  pub max_y: f32,
+  pub max_z: f32,
+  pub center_x: f32,
+  pub center_y: f32,
+  pub center_z: f32,
+  pub extents_x: f32,
+  pub extents_y: f32,
+  pub extents_z: f32,
+  pub left_child: u32,
+  pub right_child: u32,
+  pub primitive_count: u32,
+}
+
+impl FfiBvhNode {
+  pub fn from_offsets(left_child: u32, right_child: u32, primitive_count: u32) -> Self {
+    Self {
+      node_type: FfiNodeType::AABB,
+      min_x: 0.0,
+      min_y: 0.0,
+      min_z: 0.0,
+      max_x: 0.0,
+      max_y: 0.0,
+      max_z: 0.0,
+      center_x: 0.0,
+      center_y: 0.0,
+      center_z: 0.0,
+      extents_x: 0.0,
+      extents_y: 0.0,
+      extents_z: 0.0,
+      left_child,
+      right_child,
+      primitive_count,
+    }
+  }
+}

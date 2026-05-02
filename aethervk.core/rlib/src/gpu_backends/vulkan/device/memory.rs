@@ -136,7 +136,7 @@ impl FrameStagingArena {
 
     let (buffer, allocation, alloc_info_res) =
       unsafe { allocator.create_buffer_get_info(&buffer_info, &alloc_info) }
-        .map_err(|_| crate::types::GpuError::InvalidState("Failed to create staging arena"))?;
+        .map_err(|_| crate::gpu_err!("device error"))?;
 
     Ok(Self {
       buffer,

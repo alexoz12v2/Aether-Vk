@@ -11,7 +11,7 @@ extern crate core;
 extern crate alloc;
 
 pub mod oshal;
-pub mod simulation_api;
+pub mod ffi;
 
 // ----------- Allocator Setup --------------------------------------
 #[cfg(not(target_env = "msvc"))]
@@ -41,7 +41,7 @@ fn the_panic(_info: &PanicInfo) -> ! {
 
 // -------------------- Linker Functions ----------------------------
 pub use oshal::*;
-pub use simulation_api::*;
+pub use ffi::*;
 
 // -------------------- Necessary Evilness --------------------------
 // `liballoc` expects some symbols for unwinding panic even though we specified abort.

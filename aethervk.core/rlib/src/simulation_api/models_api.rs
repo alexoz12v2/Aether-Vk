@@ -2,9 +2,9 @@ use super::*;
 use crate::simulation_api::SimulationContext;
 use alloc::{vec::Vec, string::String, sync::Arc};
 use core::ffi::{c_char, CStr};
-use aethervk_core_rlib::scene::{PhysicalMeshComponent, TransformComponent};
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::vec4::Quat;
+use crate::scene::{PhysicalMeshComponent, TransformComponent};
+use oshal::math::vector::vec3::Vec3f32;
+use oshal::math::vector::vec4::Quat;
 
 impl SimulationContext {
   pub fn unload_model(&self, model_id: u64) {
@@ -45,7 +45,7 @@ impl SimulationContext {
       unsafe { CStr::from_ptr(name).to_str().unwrap_or("ProceduralSphere") }
     };
 
-    let sphere = aethervk_core_rlib::simulation::comet::generate_uv_sphere(radius, 32, 32);
+    let sphere = crate::simulation::comet::generate_uv_sphere(radius, 32, 32);
     let mut scenes = self.scenes.write();
     let scene_ctx_lock = scenes
       .get(&scene_id)
