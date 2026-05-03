@@ -46,7 +46,25 @@ public partial class MeshViewerWindow : Window
       );
 
       RenderTargetImage.Source = _bitmap;
+    }
+  }
+
+  protected override void OnOpened(EventArgs e)
+  {
+    base.OnOpened(e);
+    if (_viewModel != null)
+    {
+      _viewModel.OnFrameReady -= HandleFrameReady;
       _viewModel.OnFrameReady += HandleFrameReady;
+    }
+  }
+
+  protected override void OnClosed(EventArgs e)
+  {
+    base.OnClosed(e);
+    if (_viewModel != null)
+    {
+      _viewModel.OnFrameReady -= HandleFrameReady;
     }
   }
 

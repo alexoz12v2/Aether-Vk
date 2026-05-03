@@ -90,6 +90,7 @@ impl SceneCameraExt for Scene {
       ))
   }
 
+  // TODO: clamp to a limit position (zoom can get out of hand)
   fn translate_camera_local(&self, camera_entity: EntityId, delta: Vec3f32) -> EngineResult<()> {
     check_for_camera(&self, camera_entity)?;
 
@@ -105,7 +106,7 @@ impl SceneCameraExt for Scene {
 }
 
 // TODO probably move somewhere
-trait QuatToEulerAngles {
+pub trait QuatToEulerAngles {
   /// Converts the quaternion to pitch and yaw angles (in radians)
   /// Pitch: Rotation around the X axis (elevation). Positive is looking up (+X)
   /// Yaw: Rotation around the Z axis (heading). 0 is looking forward (-Y)

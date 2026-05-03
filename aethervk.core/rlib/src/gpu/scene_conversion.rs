@@ -71,8 +71,10 @@ impl RenderSceneExtraction {
     device: &dyn RenderDevice,
     presentation_engine_handle: gpu::PresentationEngineHandle,
     cmd_buffer: gpu::CommandBufferHandle,
+    time_readings: aethervk_oshal_rlib::os::time::TimeReadings,
   ) -> GpuResult<gpu::RenderScene> {
     let mut render_scene = gpu::RenderScene {
+      time_readings,
       draw_calls: Vec::with_capacity(self.extracted_meshes.len()),
       cursor_call: None,
       marker_calls: Vec::with_capacity(self.extracted_markers.len()),

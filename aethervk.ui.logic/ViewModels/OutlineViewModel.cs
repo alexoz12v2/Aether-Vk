@@ -39,6 +39,7 @@ public partial class OutlineViewModel : TabItemViewModel, IRecipient<EntitySelec
     {
       if (SetProperty(ref _selectedEntity, value))
       {
+        _consoleService?.Log($"[Outline] SelectedEntity changed to: {value?.Name ?? "null"}");
         var state = StateManager.GetOrCreateScene(CurrentSceneId);
         state.SelectedEntity = value;
         WeakReferenceMessenger.Default.Send(new EntitySelectedMessage(value));
@@ -62,6 +63,9 @@ public partial class OutlineViewModel : TabItemViewModel, IRecipient<EntitySelec
     _consoleService = consoleService;
 
     WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
+
+    var state = StateManager.GetOrCreateScene(CurrentSceneId);
+    SelectedEntity = state.SelectedEntity;
   }
 
   public void Receive(EntitySelectedMessage message)

@@ -11,7 +11,8 @@ namespace AetherVk.Logic.ViewModels;
 
 public partial class Viewport3DViewModel
   : TabItemViewModel,
-    IRecipient<AetherVk.Logic.Messages.ToggleAddJetModeMessage>
+    IRecipient<AetherVk.Logic.Messages.ToggleAddJetModeMessage>,
+    IDisposable
 {
   private readonly NativeRuntimeService _runtimeService;
   private CancellationTokenSource? _cts;
@@ -68,19 +69,16 @@ public partial class Viewport3DViewModel
   public event Action? OnFrameReady;
 
   private readonly BreadcrumbService _breadcrumbService;
-  private readonly OutlineViewModel _outlineViewModel;
   private readonly SceneStateManager _sceneStateManager;
 
   public Viewport3DViewModel(
     NativeRuntimeService runtimeService,
     BreadcrumbService breadcrumbService,
-    OutlineViewModel outlineViewModel,
     SceneStateManager sceneStateManager)
     : base("Viewport 3D")
   {
     _runtimeService = runtimeService;
     _breadcrumbService = breadcrumbService;
-    _outlineViewModel = outlineViewModel;
     _sceneStateManager = sceneStateManager;
     _runtimeService.PropertyChanged += (s, e) =>
     {
@@ -89,7 +87,12 @@ public partial class Viewport3DViewModel
         IsInitialized = _runtimeService.IsInitialized;
         if (IsInitialized)
         {
-          SceneId = _runtimeService.CreateScene(true);
+          if (PresentationEngineId == 0)
+          {
+            PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height);
+          }
+          var existingScene = _sceneStateManager.AllScenes.FirstOrDefault();
+          SceneId = existingScene != null ? existingScene.SceneId : _runtimeService.CreateScene(true);
           StartGameLoop();
         }
       }
@@ -99,8 +102,23 @@ public partial class Viewport3DViewModel
 
     if (IsInitialized)
     {
-      SceneId = _runtimeService.CreateScene(true);
+      if (PresentationEngineId == 0)
+      {
+        PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height);
+      }
+      var existingScene = _sceneStateManager.AllScenes.FirstOrDefault();
+      SceneId = existingScene != null ? existingScene.SceneId : _runtimeService.CreateScene(true);
       StartGameLoop();
+    }
+  }
+
+  public void Dispose()
+  {
+    Stop();
+    if (PresentationEngineId != 0)
+    {
+      _runtimeService.DestroyPresentationEngine(PresentationEngineId);
+      PresentationEngineId = 0;
     }
   }
 
@@ -133,12 +151,12 @@ public partial class Viewport3DViewModel
 
     if (res.hit)
     {
-      var outlineVm = _outlineViewModel;
+      var state = _sceneStateManager.GetOrCreateScene(SceneId);
       var entity = _runtimeService.GetEntityById(SceneId, res.entityId);
 
       if (entity != null)
       {
-        if (outlineVm?.SelectedEntity?.Id == entity.Id)
+        if (state.SelectedEntity?.Id == entity.Id)
         {
           var comet = entity
             .Components.OfType<AetherVk.Logic.Models.CometComponent>()
@@ -173,21 +191,20 @@ public partial class Viewport3DViewModel
         }
         else
         {
-          if (outlineVm != null)
-          {
-            outlineVm.SelectedEntity = entity;
-            breadcrumb?.ShowMessageAsync("Raycast Hit", $"Selected {entity.Name}");
-          }
+          state.SelectedEntity = entity;
+          CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(new AetherVk.Logic.ViewModels.EntitySelectedMessage(entity));
+          breadcrumb?.ShowMessageAsync("Raycast Hit", $"Selected {entity.Name}");
         }
       }
     }
     else
     {
       // Deselect when clicking on empty space
-      var outlineVm = _outlineViewModel;
-      if (outlineVm != null)
+      var state = _sceneStateManager.GetOrCreateScene(SceneId);
+      if (state.SelectedEntity != null)
       {
-        outlineVm.SelectedEntity = null;
+        state.SelectedEntity = null;
+        CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(new AetherVk.Logic.ViewModels.EntitySelectedMessage(null));
       }
     }
   }
@@ -310,14 +327,6 @@ public partial class Viewport3DViewModel
 
           if (IsInitialized)
           {
-            // Fixed Update: Simulation stepping
-            while (accumulatedTime >= fixedTimeStep)
-            {
-              // TODO: still to be implemented
-              // _runtimeService.SimulationTick();
-              accumulatedTime -= fixedTimeStep;
-            }
-
             // Update camera
             var sceneState = _sceneStateManager;
             var camera = sceneState

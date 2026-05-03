@@ -68,7 +68,7 @@ pub unsafe extern "C" fn avkSimulationContext_getTaskStatus(
     return -1;
   }
   let ctx_ref = unsafe { &*ctx };
-  ctx_ref.get_task_status(task_id)
+  ctx_ref.get_task_status(task_id).into()
 }
 
 #[unsafe(no_mangle)]
@@ -155,6 +155,19 @@ pub unsafe extern "C" fn avkSimulationContext_createPresentationEngine(
     .create_presentation_engine(width, height)
     .map(|h| h.0)
     .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_destroyPresentationEngine(
+  ctx: *mut SimulationContext,
+  handle: u64,
+) {
+  if ctx.is_null() || handle == 0 {
+    return;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let _ = ctx_ref.destroy_presentation_engine(gpu::PresentationEngineHandle(handle));
 }
 
 #[unsafe(no_mangle)]
@@ -996,6 +1009,65 @@ pub unsafe extern "C" fn avkSimulationContext_downloadImage(
   ctx_ref.download_image(task_id, buffer_ptr, buffer_size)
 }
 
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_addSunComponent(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  res_x: u32,
+  res_y: u32,
+  res_z: u32,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let _ = ctx_ref.add_sun_component(scene_id, entity, (res_x, res_y, res_z));
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_addCursorComponent(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let _ = ctx_ref.add_cursor_component(scene_id, entity);
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_addSkyComponent(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let _ = ctx_ref.add_sky_component(scene_id, entity);
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_addGridComponent(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let _ = ctx_ref.add_grid_component(scene_id, entity);
+}
+
 /// fov is in radians
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -1028,7 +1100,7 @@ pub unsafe extern "C" fn avkSimulationContext_addCameraComponent(
     })
   } else {
     CameraParams::Perspective(PerspectiveCameraParams {
-      fov: fov,
+      fov: fov.to_radians(),
       aspect_ratio: aspect,
       near_plane: near,
       far_plane: far,

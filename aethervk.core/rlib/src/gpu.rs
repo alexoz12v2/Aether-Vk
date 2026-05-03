@@ -1001,6 +1001,7 @@ pub trait WeakRenderFrontendExt {
 }
 impl WeakRenderFrontendExt for WeakRenderFrontend {
   fn as_frontend(&self) -> Option<RenderFrontend> {
+    aethervk_oshal_rlib::log!("--- as_frontend ---");
     self.upgrade().map(|s| RenderFrontend { backend: s })
   }
 }

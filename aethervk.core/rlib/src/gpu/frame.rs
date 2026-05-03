@@ -457,6 +457,7 @@ pub struct ParticleDrawCall {
 }
 
 pub struct RenderScene {
+  pub time_readings: aethervk_oshal_rlib::os::time::TimeReadings,
   pub camera_data: CameraRenderData,
 
   pub draw_calls: Vec<DrawCall>,
@@ -475,8 +476,9 @@ pub struct RenderScene {
 
 impl RenderScene {
   const START_VEC_CAPACITY: usize = 32;
-  pub fn new(camera: (TransformComponent, CameraComponent)) -> Self {
+  pub fn new(camera: (TransformComponent, CameraComponent), time_readings: aethervk_oshal_rlib::os::time::TimeReadings) -> Self {
     Self {
+      time_readings,
       draw_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
       cursor_call: None,
       marker_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),

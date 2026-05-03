@@ -7,7 +7,7 @@
     <Grid RowDefinitions="Auto, *">
         <TextBlock Grid.Row="0" Text="Scene Hierarchy" FontWeight="Bold" Margin="8"/>
 
-        <TreeView Grid.Row="1" ItemsSource="{Binding RootEntities}" SelectedItem="{Binding SelectedEntity}" Margin="4">
+        <TreeView Grid.Row="1" ItemsSource="{Binding RootEntities}" SelectedItem="{Binding SelectedEntity, Mode=TwoWay}" Margin="4">
             <TreeView.Styles>
                 <Style Selector="TreeViewItem">
                     <Setter Property="HorizontalAlignment" Value="Stretch" />

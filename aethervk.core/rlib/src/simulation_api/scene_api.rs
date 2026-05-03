@@ -275,13 +275,23 @@ impl SimulationContext {
     scene.add_component(cursor_entity, CursorComponent {})?;
     scene.set_parent(cursor_entity, Some(root_entity));
 
+    let mut sun_radius = 0.0696 * crate::simulation::constants::PLANET_VISUAL_SCALE; // 696000 km / 10,000,000 km
+    if let Some(asset_dir) = crate::gpu::ASSET_DIR.read().as_ref() {
+      let pck_path = alloc::format!("{}/planets/pck00011.tpc", asset_dir);
+      if let Some(radii) = crate::simulation::pck::read_body_radii(&pck_path, 10) {
+        sun_radius = (radii[0] / crate::simulation::constants::DISTANCE_SCALE_FACTOR) as f32 * crate::simulation::constants::PLANET_VISUAL_SCALE;
+      }
+    }
+
+    let sun_scale = sun_radius / 0.6; // Core is 0.6 of the sun volume cube
+
     let sun_entity = scene.spawn_entity("sun");
     scene.add_component(
       sun_entity,
       TransformComponent {
         position: Vec3f32::from_components(0.0, 0.0, 0.0),
         rotation: Quat::identity(),
-        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        scale: Vec3f32::from_components(sun_scale, sun_scale, sun_scale),
       },
     )?;
     scene.add_component(
@@ -292,15 +302,7 @@ impl SimulationContext {
     )?;
     scene.set_parent(sun_entity, Some(root_entity));
 
-    let mut sun_radius = 0.0696 * crate::simulation::constants::PLANET_VISUAL_SCALE; // 696000 km / 10,000,000 km
-    if let Some(asset_dir) = crate::gpu::ASSET_DIR.read().as_ref() {
-      let pck_path = alloc::format!("{}/planets/pck00011.tpc", asset_dir);
-      if let Some(radii) = crate::simulation::pck::read_body_radii(&pck_path, 10) {
-        sun_radius = (radii[0] / crate::simulation::constants::DISTANCE_SCALE_FACTOR) as f32 * crate::simulation::constants::PLANET_VISUAL_SCALE;
-      }
-    }
-
-    let sun_sphere = crate::simulation::comet::generate_uv_sphere(sun_radius, 64, 64);
+    let sun_sphere = crate::simulation::comet::generate_uv_sphere(0.6, 64, 64);
     scene.add_component(
       sun_entity,
       PhysicalMeshComponent {

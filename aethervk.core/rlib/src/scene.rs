@@ -773,8 +773,8 @@ impl Scene {
     }
 
     let entity_id = {
-      let mut entities = self.entities.write();
       let mut archetypes = self.archetypes.write();
+      let mut entities = self.entities.write();
 
       let archetype = &mut archetypes[0];
       let row_index = archetype.allocate_slot();
@@ -916,8 +916,8 @@ impl Scene {
     };
 
     if src_location.archetype_index != target_archetype_index {
+      let mut archetypes = self.archetypes.write(); // TODO deadlock
       let mut entities = self.entities.write();
-      let mut archetypes = self.archetypes.write();
 
       let (src_arch, target_arch) = if src_location.archetype_index < target_archetype_index {
         let (left, right) = archetypes.split_at_mut(target_archetype_index);
@@ -974,8 +974,8 @@ impl Scene {
     self.hierarchy.write().remove_entity(entity_id);
     self.names.write().remove(&entity_id);
 
-    let mut entities = self.entities.write();
     let mut archetypes = self.archetypes.write();
+    let mut entities = self.entities.write();
     let src_arch = &mut archetypes[src_location.archetype_index];
 
     src_arch.free_slot(src_location.row_index);
@@ -1045,8 +1045,8 @@ impl Scene {
 
     // 3. Perform the migration safely
     if src_location.archetype_index != target_archetype_index {
-      let mut entities = self.entities.write();
       let mut archetypes = self.archetypes.write();
+      let mut entities = self.entities.write();
 
       let (src_arch, target_arch) = if src_location.archetype_index < target_archetype_index {
         let (left, right) = archetypes.split_at_mut(target_archetype_index);
@@ -1163,9 +1163,9 @@ impl Scene {
   where
     F: FnOnce(&T) -> R,
   {
+    let archetypes = self.archetypes.read();
     let entities = self.entities.read();
     let location = entities.get(entity_id)?;
-    let archetypes = self.archetypes.read();
     let archetype = &archetypes[location.archetype_index];
 
     let components_lock = archetype.components.get(&TypeId::of::<T>())?.read();
@@ -1178,9 +1178,9 @@ impl Scene {
   where
     F: FnOnce(&mut T) -> R,
   {
+    let archetypes = self.archetypes.read();
     let entities = self.entities.read();
     let location = entities.get(entity_id)?;
-    let archetypes = self.archetypes.read();
     let archetype = &archetypes[location.archetype_index];
 
     let mut components_lock = archetype.components.get(&TypeId::of::<T>())?.write();

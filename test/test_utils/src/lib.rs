@@ -556,5 +556,15 @@ pub fn scene_to_render_scene(
   cmd_buffer: gpu::CommandBufferHandle,
 ) -> GpuResult<RenderScene> {
   let render_scene_extraction = scene.convert_scene(camera_entity, render_outlines, None)?; // TODO
-  render_scene_extraction.build_render_scene(device, presentation_engine_handle, cmd_buffer)
+  
+  let time_readings = aethervk_oshal_rlib::os::time::TimeReadings {
+    time: 0,
+    delta_time: 0,
+    unscaled_time: 0,
+    unscaled_delta_time: 0,
+    fixed_time: 0,
+    smooth_delta_time: 0,
+  };
+  
+  render_scene_extraction.build_render_scene(device, presentation_engine_handle, cmd_buffer, time_readings)
 }

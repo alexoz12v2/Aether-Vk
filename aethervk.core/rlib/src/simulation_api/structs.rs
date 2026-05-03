@@ -4,7 +4,10 @@ use alloc::{
   sync::Arc,
   vec::Vec,
 };
-use core::{cell::RefCell, sync::atomic::AtomicBool};
+use core::{cell::UnsafeCell, sync::atomic::AtomicBool};
+use core::mem::MaybeUninit;
+use core::sync::atomic::AtomicU64;
+use core::cell::RefCell;
 use spin::{rwlock::RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thingbuf::mpsc;
 use crate::{
@@ -444,7 +447,10 @@ impl SimulationThreads {
 
     let (logic_tx, logic_rx) = mpsc::channel(params.channel_capacity);
     let (logic_feedback_tx, logic_feedback_rx) = mpsc::channel(params.channel_capacity);
-    let logic_thread_handle = start_logic_thread(logic_rx, alloc::sync::Arc::new(params.to_context(logic_feedback_tx)))?;
+    let logic_thread_handle = start_logic_thread(
+      logic_rx,
+      alloc::sync::Arc::new(params.to_context(logic_feedback_tx)),
+    )?;
     self.logic_thread.tx = Some(logic_tx);
     self.logic_thread.handle = Some(logic_thread_handle);
     self.logic_feedback_rx = Some(logic_feedback_rx);
@@ -583,9 +589,34 @@ pub enum LogicCommand {
   FollowEntity(FollowEntity),
   UnfollowEntity(UnfollowEntity),
 
-  FeedbackGetTimeScale,
-  FeedbackGetDateTimeUTC,
-  FeedbackGetDateTimeLimitsUTC,
+  FeedbackGetSceneTimeScale {
+    scene_id: u64,
+  },
+  FeedbackGetSceneDateTimeUTC {
+    scene_id: u64,
+  },
+  FeedbackGetSceneDateTimeLimitsUTC {
+    scene_id: u64,
+  },
+
+  SetSceneTimeScale {
+    scene_id: u64,
+    scale: TimeScale,
+  },
+  SetSceneEpoch {
+    scene_id: u64,
+    epoch_tai_seconds: f64,
+  },
+  PlayScene {
+    scene_id: u64,
+  },
+  PauseScene {
+    scene_id: u64,
+  },
+  StepScene {
+    scene_id: u64,
+    step_days: f64,
+  },
 
   ImportModel {
     task_id: u64,
@@ -662,22 +693,12 @@ impl TimeScale {
 
 pub struct LogicState {
   pub almanac_data: AlmanacPackedData,
-  pub current_scale: TimeScale,
-  pub current_epoch: anise::time::Epoch,
-  pub epoch_start: anise::time::Epoch,
-  pub epoch_end: anise::time::Epoch,
-  pub st_seconds_elapsed: f64,
 }
 
 impl Default for LogicState {
   fn default() -> Self {
     Self {
       almanac_data: AlmanacPackedData::default(),
-      current_scale: TimeScale::Stopped,
-      current_epoch: anise::time::Epoch::from_gregorian_utc_at_midnight(2000, 1, 1),
-      epoch_start: anise::time::Epoch::from_gregorian_utc_at_midnight(2000, 1, 1),
-      epoch_end: anise::time::Epoch::from_gregorian_utc_at_midnight(2100, 1, 1),
-      st_seconds_elapsed: 0.0,
     }
   }
 }
@@ -690,6 +711,12 @@ pub enum RenderTaskStatus {
   Completed,
   Pending,
   Error(GpuError),
+}
+
+impl AsRef<RenderTaskStatus> for RenderTaskStatus {
+  fn as_ref(&self) -> &RenderTaskStatus {
+    self
+  }
 }
 
 #[derive(Clone, Default)]
@@ -724,7 +751,7 @@ pub struct CustomRenderCallback {
 #[derive(Clone, Debug)]
 pub struct RenderFrame {
   pub presentation_engine_handle: PresentationEngineHandle,
-  pub task_id: u64,
+  pub task_id: Arc<AtomicU64>,
   pub scene: Arc<RwLock<SceneContext>>,
   pub render_physical_meshes_outline: bool,
   pub camera_entity: EntityId,
@@ -743,7 +770,6 @@ pub struct Resize {
   pub presentation_engine_handle: PresentationEngineHandle,
   pub width: u32,
   pub height: u32,
-  pub task_id: u64,
 }
 
 #[derive(Clone, Default)]
@@ -754,6 +780,11 @@ pub enum RenderCommand {
   RenderFrame(RenderFrame),
 
   Resize(Resize),
+
+  GetTaskStatus {
+    task_id: u64,
+    output: SharedDataWrapper<RenderTaskStatus>,
+  },
 
   /// TODO move to compute
   GenerateSky,
@@ -808,6 +839,37 @@ impl<T: ?Sized> SendPtrMut<T> {
 }
 
 #[derive(Clone, Debug)]
+pub struct SceneTimeState {
+  pub time_info: alloc::sync::Arc<spin::RwLock<aethervk_oshal_rlib::os::time::TimeInfo>>,
+  pub current_scale: TimeScale,
+  pub current_epoch: anise::time::Epoch,
+  pub epoch_start: anise::time::Epoch,
+  pub epoch_end: anise::time::Epoch,
+  pub st_seconds_elapsed: f64,
+  pub is_playing: bool,
+}
+
+impl Default for SceneTimeState {
+  fn default() -> Self {
+    Self {
+      time_info: alloc::sync::Arc::new(spin::RwLock::new(
+        aethervk_oshal_rlib::os::time::TimeInfo::new(
+          aethervk_oshal_rlib::os::time::timeus_milliseconds(16),
+          aethervk_oshal_rlib::os::time::timeus_milliseconds(100),
+          1.0,
+        ),
+      )),
+      current_scale: TimeScale::Stopped,
+      current_epoch: anise::time::Epoch::from_gregorian_utc_at_midnight(2000, 1, 1),
+      epoch_start: anise::time::Epoch::from_gregorian_utc_at_midnight(2000, 1, 1),
+      epoch_end: anise::time::Epoch::from_gregorian_utc_at_midnight(2100, 1, 1),
+      st_seconds_elapsed: 0.0,
+      is_playing: false,
+    }
+  }
+}
+
+#[derive(Clone, Debug)]
 pub struct SceneContext {
   pub scene: Arc<Scene>,
   pub entity_map: BTreeMap<u64, EntityId>,
@@ -820,6 +882,7 @@ pub struct SceneContext {
   pub sky_entity: Option<EntityId>,
   pub outlines_enabled: Arc<AtomicBool>,
   pub physics_scene: Option<Arc<RwLock<physics::physics_scene::PhysicsScene>>>,
+  pub time_state: SceneTimeState,
 }
 
 impl SceneContext {
@@ -935,6 +998,7 @@ impl SceneContext {
       sky_entity: None,
       outlines_enabled: Arc::new(AtomicBool::new(false)),
       physics_scene: None,
+      time_state: SceneTimeState::default(),
     }
   }
 
@@ -957,7 +1021,6 @@ pub struct RenderThreadParams {
   pub render_device_handle: gpu::RenderDeviceHandle,
   pub render_frontend: gpu::RenderFrontend,
   thread_pool: Arc<os::pool::ThreadPool>,
-  time_info: Arc<RwLock<os::time::TimeInfo>>,
 }
 
 impl RenderThreadParams {
@@ -967,7 +1030,6 @@ impl RenderThreadParams {
     backend: gpu::RenderBackendId,
     error_debug_callback: Option<fn(&str)>,
     thread_pool: Arc<os::pool::ThreadPool>,
-    time_info: Arc<RwLock<os::time::TimeInfo>>,
   ) -> EngineResult<Self> {
     let render_frontend = {
       let params = RuntimeParams::new_with_callback(error_debug_callback);
@@ -992,7 +1054,6 @@ impl RenderThreadParams {
       render_frontend,
       render_device_handle,
       thread_pool,
-      time_info,
     })
   }
 
@@ -1002,7 +1063,6 @@ impl RenderThreadParams {
       render_frontend: RefCell::new(Some(self.render_frontend)),
       render_device_handle: self.render_device_handle,
       thread_pool: self.thread_pool,
-      time_info: self.time_info,
     }
   }
 }
@@ -1014,10 +1074,6 @@ pub struct RenderThreadContext {
   pub render_device_handle: gpu::RenderDeviceHandle,
   /// Thread pool for task submission shared between render thread and logic thread
   pub thread_pool: Arc<os::pool::ThreadPool>,
-  /// Timing state shared between render thread, simulation thread, and all caller threads
-  /// from FFI
-  /// TODO: Alternative: Render and Logic Commands take TimeReadings as param. is it better?
-  pub time_info: Arc<RwLock<os::time::TimeInfo>>,
 }
 
 impl RenderThreadContext {
@@ -1042,10 +1098,6 @@ pub struct LogicThreadParams {
   channel_capacity: usize,
   /// Thread pool for task submission shared between render thread and logic thread
   pub thread_pool: Arc<os::pool::ThreadPool>,
-  /// Timing state shared between render thread, simulation thread, and all caller threads
-  /// from FFI
-  /// TODO: Alternative: Render and Logic Commands take TimeReadings as param. is it better?
-  pub time_info: Arc<RwLock<os::time::TimeInfo>>,
   pub task_manager: Arc<RwLock<SimulationTaskManager>>,
   pub logic_state: Arc<RwLock<LogicState>>,
   pub scenes: Arc<RwLock<SimulationSceneData>>,
@@ -1056,7 +1108,6 @@ impl LogicThreadParams {
 
   pub fn new(
     thread_pool: Arc<os::pool::ThreadPool>,
-    time_info: Arc<RwLock<os::time::TimeInfo>>,
     task_manager: Arc<RwLock<SimulationTaskManager>>,
     logic_state: Arc<RwLock<LogicState>>,
     scenes: Arc<RwLock<SimulationSceneData>>,
@@ -1064,7 +1115,6 @@ impl LogicThreadParams {
     Self {
       channel_capacity: Self::DEFAULT_CHANNEL_CAPACITY,
       thread_pool,
-      time_info,
       task_manager,
       logic_state,
       scenes,
@@ -1075,7 +1125,6 @@ impl LogicThreadParams {
     LogicThreadContext {
       logic_state: self.logic_state,
       thread_pool: self.thread_pool,
-      time_info: self.time_info,
       logic_feedback_tx,
       task_manager: self.task_manager,
       scenes: self.scenes,
@@ -1089,10 +1138,6 @@ pub struct LogicThreadContext {
   pub logic_state: Arc<RwLock<LogicState>>,
   /// Thread pool for task submission shared between render thread and logic thread
   pub thread_pool: Arc<os::pool::ThreadPool>,
-  /// Timing state shared between render thread, simulation thread, and all caller threads
-  /// from FFI
-  /// TODO: Alternative: Render and Logic Commands take TimeReadings as param. is it better?
-  pub time_info: Arc<RwLock<os::time::TimeInfo>>,
   /// Transmission channel to send back data to FFI caller threads
   pub logic_feedback_tx: mpsc::Sender<LogicFeedback>,
   pub task_manager: Arc<RwLock<SimulationTaskManager>>,
@@ -1120,6 +1165,12 @@ pub enum SimulationTaskStatus {
   Pending,
   Completed(SimulationTaskResult),
   Error(String),
+}
+
+impl AsRef<SimulationTaskStatus> for SimulationTaskStatus {
+  fn as_ref(&self) -> &SimulationTaskStatus {
+    self
+  }
 }
 
 pub struct SimulationTaskManager {
@@ -1158,13 +1209,12 @@ impl SimulationTaskManager {
     self.tasks.insert(id, SimulationTaskStatus::Error(error));
   }
 
-  pub fn get_status(&self, id: u64) -> i32 {
-    match self.tasks.get(&id) {
-      Some(SimulationTaskStatus::Pending) => 0,
-      Some(SimulationTaskStatus::Completed(_)) => 1,
-      Some(SimulationTaskStatus::Error(_)) => 2,
-      None => -1,
-    }
+  pub fn get_status(&self, id: u64) -> TaskStatusCode {
+    self
+      .tasks
+      .get(&id)
+      .map(|t| TaskStatusCode::from_sim(t))
+      .unwrap_or(TaskStatusCode::Invalid)
   }
 
   pub fn take_result(&mut self, id: u64) -> Option<SimulationTaskResult> {
@@ -1173,5 +1223,102 @@ impl SimulationTaskManager {
     } else {
       None
     }
+  }
+}
+
+#[repr(i32)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub enum TaskStatusCode {
+  #[default]
+  Pending = 0,
+  Completed = 1,
+  Error = 2,
+  Invalid = -1,
+}
+
+impl TaskStatusCode {
+  pub fn from_sim(value: &SimulationTaskStatus) -> Self {
+    match value.as_ref() {
+      SimulationTaskStatus::Pending => TaskStatusCode::Pending,
+      SimulationTaskStatus::Completed(_) => TaskStatusCode::Completed,
+      SimulationTaskStatus::Error(_) => TaskStatusCode::Error,
+    }
+  }
+  pub fn from_render(value: &RenderTaskStatus) -> Self {
+    match value.as_ref() {
+      RenderTaskStatus::Completed => TaskStatusCode::Completed,
+      RenderTaskStatus::Pending => TaskStatusCode::Pending,
+      RenderTaskStatus::Error(_) => TaskStatusCode::Error,
+    }
+  }
+}
+
+// 1. Group the shared data and the atomic signal into a single struct
+pub struct SharedState<T> {
+  pub done_signal: AtomicBool,
+  pub data: UnsafeCell<MaybeUninit<T>>,
+}
+
+// We promise the compiler we are handling thread safety manually via the AtomicBool
+unsafe impl<T: Send> Sync for SharedState<T> {}
+unsafe impl<T: Send> Send for SharedState<T> {}
+
+// 2. The wrapper is now just a single Arc
+pub struct SharedDataWrapper<T> {
+  inner: Arc<SharedState<T>>,
+}
+
+// 3. Implement Default
+impl<T> Default for SharedDataWrapper<T> {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+// 4. Implement Clone (This now safely shares BOTH the data and the signal)
+impl<T> Clone for SharedDataWrapper<T> {
+  fn clone(&self) -> Self {
+    Self {
+      inner: Arc::clone(&self.inner),
+    }
+  }
+}
+
+impl<T> SharedDataWrapper<T> {
+  pub fn new() -> Self {
+    Self {
+      inner: Arc::new(SharedState {
+        done_signal: AtomicBool::new(false),
+        data: UnsafeCell::new(MaybeUninit::uninit()),
+      }),
+    }
+  }
+
+  pub unsafe fn write_value(&self, v: T) {
+    debug_assert_eq!(self.inner.done_signal.load(core::sync::atomic::Ordering::Relaxed), false);
+
+    // Write the data first
+    unsafe { (*self.inner.data.get()).write(v) };
+
+    // Release ordering ensures the memory write is visible to other threads 
+    // before the flag is set to true.
+    self.inner.done_signal.store(true, core::sync::atomic::Ordering::Release);
+  }
+
+  // TODO error timeout after 10 ms
+  pub unsafe fn read_value(self) -> T {
+    loop {
+      // Acquire ordering pairs with Release to ensure cache coherency.
+      // We can just load with Acquire directly in the loop.
+      if self.inner.done_signal.load(core::sync::atomic::Ordering::Acquire) {
+        break;
+      }
+      core::hint::spin_loop();
+    }
+
+    // Safely extract the value without waiting for the writer thread to drop its Arc.
+    // Since MaybeUninit does not drop its contents, ptr::read safely transfers ownership 
+    // to us. The Arc will eventually deallocate the wrapper memory later.
+    unsafe { core::ptr::read(self.inner.data.get()).assume_init() }
   }
 }
