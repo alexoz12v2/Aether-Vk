@@ -49,6 +49,12 @@ public static class NativeInterop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_destroyPresentationEngine(
+    IntPtr ctx,
+    ulong handle
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_createDefaultScene(IntPtr ctx);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

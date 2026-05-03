@@ -1,5 +1,6 @@
 using System;
 using AetherVk.Logic.ViewModels;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
@@ -46,7 +47,7 @@ public partial class Viewport3DView : UserControl
   protected override void OnDataContextChanged(EventArgs e)
   {
     base.OnDataContextChanged(e);
-
+    
     if (_viewModel != null)
     {
       _viewModel.OnFrameReady -= HandleFrameReady;
@@ -64,16 +65,25 @@ public partial class Viewport3DView : UserControl
       );
 
       RenderTargetImage.Source = _bitmap;
+    }
+  }
+
+  protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+  {
+    base.OnAttachedToVisualTree(e);
+    if (_viewModel != null)
+    {
+      _viewModel.OnFrameReady -= HandleFrameReady;
       _viewModel.OnFrameReady += HandleFrameReady;
-      _viewModel.PropertyChanged += (s, args) =>
-      {
-        if (args.PropertyName == nameof(Viewport3DViewModel.IsAddingJet))
-        {
-          Cursor = _viewModel.IsAddingJet
-            ? new Cursor(StandardCursorType.Hand)
-            : new Cursor(StandardCursorType.Arrow);
-        }
-      };
+    }
+  }
+
+  protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+  {
+    base.OnDetachedFromVisualTree(e);
+    if (_viewModel != null)
+    {
+      _viewModel.OnFrameReady -= HandleFrameReady;
     }
   }
 
@@ -173,7 +183,8 @@ public partial class Viewport3DView : UserControl
 
   private void OnPointerWheelChanged(object? sender, PointerWheelEventArgs e)
   {
-    // Zoom moved to CTRL+RMB Drag
+    var scroll_amount = (float)e.Delta.Y;
+    _viewModel?.RuntimeService.ZoomCamera(_viewModel.SceneId, _viewModel.CameraId, scroll_amount);
   }
 
   private void OnKeyDown(object? sender, KeyEventArgs e)

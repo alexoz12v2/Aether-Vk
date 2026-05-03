@@ -1,3 +1,4 @@
+using System;
 using System.Collections.ObjectModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
@@ -109,6 +110,10 @@ public partial class TabGroupNodeViewModel
   private void CloseTab(TabItemViewModel tab)
   {
     Tabs.Remove(tab);
+    if (tab is IDisposable disposable)
+    {
+      disposable.Dispose();
+    }
     if (Tabs.Count > 0 && SelectedTab == tab)
     {
       SelectedTab = Tabs[Tabs.Count - 1];
@@ -123,6 +128,13 @@ public partial class TabGroupNodeViewModel
   [RelayCommand]
   private void CloseAllTabs()
   {
+    foreach (var tab in Tabs)
+    {
+      if (tab is IDisposable disposable)
+      {
+        disposable.Dispose();
+      }
+    }
     Tabs.Clear();
     SelectedTab = null;
     WeakReferenceMessenger.Default.Send(new CoalesceGroupMessage(this));

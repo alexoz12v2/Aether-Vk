@@ -1,12 +1,19 @@
-use super::*;
-use crate::simulation_api::{SimulationContext, BREADCRUMB_CALLBACK};
-use crate::simulation_api::structs::{RaycastResult, RenderCommand, Resize};
-use crate::scene::CameraComponent;
-use oshal::math::matrix::mat4::Mat4x4f32;
-use crate::types::EngineError;
+use aethervk_oshal_rlib::{self as oshal, math::matrix::mat4::Mat4x4f32};
 use core::ffi::c_char;
-use crate::gpu::PresentationEngineHandle;
-use crate::expect_scene;
+use aethervk_oshal_rlib::math::matrix::Matrix4;
+use crate::{
+  gpu::WeakRenderFrontendExt,
+  simulation_api::structs::{
+    RaycastResult, RenderCommand, RenderTaskStatus, Resize, SharedDataWrapper, TaskStatusCode,
+  },
+  simulation_api::{SimulationContext, BREADCRUMB_CALLBACK},
+  scene::CameraComponent,
+  types::EngineError,
+  gpu::PresentationEngineHandle,
+  expect_scene,
+  simulation_api::structs::SimulationTaskResult,
+  types::EngineResult,
+};
 
 impl SimulationContext {
   pub fn set_logger_callback(cb: Option<extern "C" fn(*const c_char)>) {
@@ -25,33 +32,27 @@ impl SimulationContext {
     BREADCRUMB_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
   }
 
-  // TODO enum for task status
-  pub fn get_task_status(&self, task_id: u64) -> i32 {
+  pub fn get_task_status(&self, task_id: u64) -> TaskStatusCode {
     if (task_id & (1u64 << 63)) != 0 {
       // Logic task
       self.task_manager.read().get_status(task_id)
     } else {
       // Render task
-      self
-        .render_proxy
-        .0
-        .as_frontend()
-        .and_then(|frontend| {
-          frontend
-            .with_device(self.render_proxy.1, |device| {
-              let res = device.is_task_completed(task_id);
-              match res {
-                Ok(true) => Ok(1),
-                Ok(false) => Ok(0),
-                Err(e) => {
-                  oshal::log!("is_task_completed err: {:?}", e);
-                  Ok(2)
-                }
-              }
-            })
-            .ok()
-        })
-        .unwrap_or(-1)
+      let value = {
+        let output = SharedDataWrapper::<RenderTaskStatus>::new();
+        // TODO if full retry for 10 millis
+        self
+          .threads
+          .render_thread
+          .tx()
+          .try_send(RenderCommand::GetTaskStatus {
+            task_id,
+            output: output.clone(),
+          })
+          .unwrap();
+        unsafe { output.read_value() }
+      };
+      TaskStatusCode::from_render(&value)
     }
   }
 
@@ -96,7 +97,8 @@ impl SimulationContext {
     task_id: u64,
     out_state: *mut T,
   ) -> bool {
-    if let Some(SimulationTaskResult::KinematicState(state)) = self.task_manager.write().take_result(task_id)
+    if let Some(SimulationTaskResult::KinematicState(state)) =
+      self.task_manager.write().take_result(task_id)
     {
       if !out_state.is_null() {
         unsafe {
@@ -115,18 +117,7 @@ impl SimulationContext {
     presentation_engine_handle: PresentationEngineHandle,
     width: u32,
     height: u32,
-  ) -> EngineResult<core::num::NonZero<u64>> {
-    let task_id = self
-      .render_proxy
-      .0
-      .as_frontend()
-      .ok_or(EngineError::InvalidOperation("render_frontend"))
-      .and_then(|context| {
-        context
-          .with_device(self.render_proxy.1, |device| Ok(device.create_task()))
-          .map_err(|e| EngineError::from(e))
-      })?;
-
+  ) -> EngineResult<()> {
     let scene_data = self.scenes.read();
     let scene = expect_scene!(scene_data.get_scene(scene_id), "scene_api:resize");
     {
@@ -148,7 +139,8 @@ impl SimulationContext {
         });
     }
 
-    let _ = self
+    // TODO retry if full up to a threshold
+    self
       .threads
       .render_thread
       .tx()
@@ -156,9 +148,12 @@ impl SimulationContext {
         presentation_engine_handle,
         width,
         height,
-        task_id,
-      }));
-    Ok(unsafe { core::num::NonZero::new_unchecked(task_id) })
+      }))
+      .map_err(|_| {
+        EngineError::InvalidOperation(
+          "[SimulationContext] resize: failed to send resize message to render_thread",
+        )
+      })
   }
 
   pub fn download_image(&self, task_id: u64, buffer_ptr: *mut u8, buffer_size: usize) -> bool {
@@ -168,12 +163,13 @@ impl SimulationContext {
       .as_frontend()
       .ok_or(EngineError::InvalidOperation("render_frontend"))
       .and_then(|frontend| {
-        frontend.with_device(self.render_proxy.1, |device| {
-          device.read_windowless_download(task_id, unsafe {
-            core::slice::from_raw_parts_mut(buffer_ptr, buffer_size)
+        frontend
+          .with_device(self.render_proxy.1, |device| {
+            device.read_windowless_download(task_id, unsafe {
+              core::slice::from_raw_parts_mut(buffer_ptr, buffer_size)
+            })
           })
-        })
-        .map_err(|e| EngineError::from(e))
+          .map_err(|e| EngineError::from(e))
       });
 
     match result {

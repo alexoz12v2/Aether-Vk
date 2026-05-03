@@ -69,11 +69,12 @@ impl SceneInteractionExt for Scene {
         to_remove.push(id);
       }
     } else {
-      self.query1::<FollowingComponent, _>(|id, _| {
-        if id != entity {
-          to_remove.push(id);
-        }
+      let results = self.query1_res::<FollowingComponent, _, _>(|id, _| {
+        if id != entity { Some(id) } else { None }
       });
+      for (id, _) in results {
+        to_remove.push(id);
+      }
     }
     for id in to_remove {
       let _ = self.remove_component::<FollowingComponent>(id);

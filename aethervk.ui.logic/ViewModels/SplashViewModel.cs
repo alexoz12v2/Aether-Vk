@@ -26,20 +26,8 @@ public partial class SplashViewModel : ViewModelBase
     {
       await Task.Run(() =>
       {
-        // Init native simulation engine
-        _runtimeService.InitializeSimulationContext("Vulkan", null, false);
-
-        // Create an empty scene
-        ulong sceneId = _runtimeService.CreateScene(false);
-
-        var root = _runtimeService.GetEntityByName(sceneId, "root");
-        if (root != null)
-        {
-          _runtimeService.CreateSun(sceneId, root);
-          _runtimeService.CreateSky(sceneId, root);
-          _runtimeService.CreateCursor(sceneId, root);
-          _runtimeService.CreateGrid(sceneId, root);
-        }
+        // Init native simulation engine with default scene
+        _runtimeService.InitializeSimulationContext("Vulkan", null, true);
       });
 
       success = true;

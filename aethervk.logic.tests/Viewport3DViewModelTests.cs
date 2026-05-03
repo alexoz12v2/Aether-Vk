@@ -24,8 +24,7 @@ public class Viewport3DViewModelTests
     {
       var sm = new SceneStateManager();
       var b = new BreadcrumbService(dispatcherMock.Object);
-      var ov = new OutlineViewModel(1, runtimeService, sm);
-      var vm = new Viewport3DViewModel(runtimeService, b, ov, sm);
+      var vm = new Viewport3DViewModel(runtimeService, b, sm);
       Assert.Equal(800u, vm.Width);
       Assert.Equal(600u, vm.Height);
       vm.Stop();

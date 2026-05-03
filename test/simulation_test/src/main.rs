@@ -14,7 +14,6 @@ use aethervk_oshal_rlib::{
 };
 use std::{sync::Arc, time::Instant};
 use std::sync::atomic::AtomicBool;
-use winit::keyboard::KeyCode;
 use aethervk_core_rlib::gpu::PresentationEngineHandle;
 use aethervk_core_rlib::scene::text::FontAtlas;
 use aethervk_core_rlib::simulation_api::structs::{CustomRenderCallback, SendPtrMut};
@@ -40,8 +39,6 @@ struct AppState {
   console_scroll_offset: usize,
   command_history: std::collections::VecDeque<String>,
   current_command: String,
-  current_epoch: anise::time::Epoch,
-  step_days: f64,
 }
 
 impl AppState {
@@ -85,10 +82,11 @@ fn main() {
   let simulation_context =
     SimulationContext::startup(gpu::VULKAN_RENDER_BACKEND, Some(panic_error_callback)).unwrap();
 
-  let render_frontend = simulation_context.render_frontend().unwrap();
-  let render_device_handle = simulation_context.render_device_handle();
-  let (native_handles, window_info) =
-    get_handle_and_window_info(&render_frontend, render_device_handle, &window);
+  let (native_handles, window_info) = {
+    let render_frontend = simulation_context.render_frontend().unwrap();
+    let render_device_handle = simulation_context.render_device_handle();
+    get_handle_and_window_info(&render_frontend, render_device_handle, &window)
+  };
 
   let width = window.inner_size().width;
   let height = window.inner_size().height;
@@ -328,9 +326,6 @@ fn main() {
     })
     .unwrap();
 
-  use core::str::FromStr;
-  let current_epoch = anise::time::Epoch::from_str("2024-03-24 12:00:00 TDB").unwrap();
-
   let app_state = AppState {
     ctx: simulation_context,
     custom_data_ring: [
@@ -350,8 +345,6 @@ fn main() {
     console_scroll_offset: 0,
     command_history: std::collections::VecDeque::with_capacity(1000),
     current_command: String::new(),
-    current_epoch,
-    step_days: 0.016,
   };
 
   let sim_app = SimApp {
@@ -361,10 +354,9 @@ fn main() {
     ctrl_down: false,
     mouse_x: 0.0,
     mouse_y: 0.0,
-    last_log_time: std::time::Instant::now(),
     last_sim_time: std::time::Instant::now(),
     window_info,
-    last_frame_start_time: std::time::Instant::now(),
+    last_frame_start_time: aethervk_oshal_rlib::os::time::get_monotonic_time(),
     last_sim_tick_task: None,
     last_render_tick_task: None,
   };
@@ -380,10 +372,9 @@ struct SimApp {
   ctrl_down: bool,
   mouse_x: f64,
   mouse_y: f64,
-  last_log_time: std::time::Instant,
   last_sim_time: std::time::Instant,
   window_info: test_utils::WindowPlatformData,
-  last_frame_start_time: std::time::Instant,
+  last_frame_start_time: aethervk_oshal_rlib::os::time::timeus_t,
   last_sim_tick_task: Option<core::num::NonZero<u64>>,
   last_render_tick_task: Option<core::num::NonZero<u64>>,
 }
@@ -546,8 +537,63 @@ impl test_utils::app::App for SimApp {
             );
           } else {
             match keycode {
+              winit::keyboard::KeyCode::Digit0 => {
+                let scene_id = self.app_state.scene_id;
+                if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
+                  let scene = scene_ctx.clone();
+                  let camera_entity = scene_ctx.read().active_camera_entity.unwrap();
+                  let _ = self.app_state.ctx.threads.logic_thread.tx().try_send(
+                    aethervk_core_rlib::simulation_api::structs::LogicCommand::ResetCamera(
+                      aethervk_core_rlib::simulation_api::structs::ResetCamera {
+                        camera_entity,
+                        scene,
+                      },
+                    ),
+                  );
+                }
+              }
               winit::keyboard::KeyCode::KeyM => {
                 self.app_state.is_command_prompt_open = true;
+              }
+              winit::keyboard::KeyCode::KeyP => {
+                let scene_id = self.app_state.scene_id;
+                let is_playing = {
+                  let scene = self.app_state.ctx.get_scene(scene_id).unwrap();
+                  scene.read().time_state.is_playing
+                };
+                let cmd = if is_playing {
+                  aethervk_core_rlib::simulation_api::structs::LogicCommand::PauseScene { scene_id }
+                } else {
+                  aethervk_core_rlib::simulation_api::structs::LogicCommand::PlayScene { scene_id }
+                };
+                let _ = self.app_state.ctx.threads.logic_thread.tx().try_send(cmd);
+              }
+              winit::keyboard::KeyCode::KeyX => {
+                let scene_id = self.app_state.scene_id;
+                let current_scale = {
+                  let scene = self.app_state.ctx.get_scene(scene_id).unwrap();
+                  scene.read().time_state.current_scale
+                };
+                let next_scale = match current_scale {
+                  aethervk_core_rlib::simulation_api::structs::TimeScale::Stopped => {
+                    aethervk_core_rlib::simulation_api::structs::TimeScale::OneDay
+                  }
+                  aethervk_core_rlib::simulation_api::structs::TimeScale::OneDay => {
+                    aethervk_core_rlib::simulation_api::structs::TimeScale::OneWeek
+                  }
+                  aethervk_core_rlib::simulation_api::structs::TimeScale::OneWeek => {
+                    aethervk_core_rlib::simulation_api::structs::TimeScale::OneMonth
+                  }
+                  aethervk_core_rlib::simulation_api::structs::TimeScale::OneMonth => {
+                    aethervk_core_rlib::simulation_api::structs::TimeScale::Stopped
+                  }
+                };
+                let _ = self.app_state.ctx.threads.logic_thread.tx().try_send(
+                  aethervk_core_rlib::simulation_api::structs::LogicCommand::SetSceneTimeScale {
+                    scene_id,
+                    scale: next_scale,
+                  },
+                );
               }
               winit::keyboard::KeyCode::KeyH => {
                 let scene_id = self.app_state.scene_id;
@@ -655,14 +701,7 @@ impl test_utils::app::App for SimApp {
       .get_entity(self.app_state.camera_entity)
       .unwrap();
 
-    let logic_command = if self.right_mouse_button_down {
-      Some(structs::LogicCommand::RotateCamera(structs::RotateCamera {
-        camera_entity,
-        scene: scene.clone(),
-        delta_x: delta.0 as f32,
-        delta_y: delta.1 as f32,
-      }))
-    } else if self.middle_mouse_button_down {
+    let logic_command = if self.middle_mouse_button_down {
       if self.ctrl_down {
         Some(structs::LogicCommand::ZoomCamera(structs::ZoomCamera {
           camera_entity,
@@ -670,12 +709,19 @@ impl test_utils::app::App for SimApp {
           amount: delta.1 as f32,
         }))
       } else {
-        Some(structs::LogicCommand::PanCursor(structs::PanCursor {
+        Some(structs::LogicCommand::RotateCamera(structs::RotateCamera {
+          camera_entity,
           scene: scene.clone(),
           delta_x: delta.0 as f32,
           delta_y: delta.1 as f32,
         }))
       }
+    } else if self.right_mouse_button_down {
+      Some(structs::LogicCommand::PanCursor(structs::PanCursor {
+        scene: scene.clone(),
+        delta_x: delta.0 as f32,
+        delta_y: delta.1 as f32,
+      }))
     } else {
       None
     };
@@ -732,11 +778,10 @@ impl test_utils::app::App for SimApp {
   }
 
   fn on_about_to_wait(&mut self) {
-    let time_readings = self.app_state.ctx.time_info.read().current();
     self.app_state.ctx.govern_frame_rate_and_tasks(
       &mut self.last_sim_tick_task,
       &mut self.last_render_tick_task,
-      time_readings,
+      &mut self.last_frame_start_time,
       16_667,
     );
 
@@ -759,29 +804,6 @@ impl test_utils::app::App for SimApp {
       }
     }
 
-    struct StepData {
-      scene_id: u64,
-      epoch: anise::time::Epoch,
-      step_days: f64,
-    }
-
-    let step_data = Box::new(StepData {
-      scene_id: self.app_state.scene_id,
-      epoch: self.app_state.current_epoch,
-      step_days: self.app_state.step_days,
-    });
-
-    let _ = self.app_state.ctx.dispatch_logic_command_custom(
-      |ctx, user_data| {
-        let step_data = unsafe { Box::from_raw(user_data as *mut StepData) };
-      },
-      Some(aethervk_core_rlib::simulation_api::structs::SendPtrMut(
-        Box::into_raw(step_data) as *mut core::ffi::c_void,
-      )),
-    );
-
-    self.app_state.current_epoch += anise::time::Duration::from_days(self.app_state.step_days);
-
     let ctx = &self.app_state.ctx;
     if let Ok(task) = ctx.simulation_tick(self.app_state.scene_id, delta_time) {
       self.last_sim_tick_task = Some(task);
@@ -800,7 +822,6 @@ struct CustomRenderData {
   command_history: std::collections::VecDeque<String>,
   current_command: String,
   font_atlas: Option<FontAtlas>,
-  font_id: (u64, u32),
   size: winit::dpi::PhysicalSize<u32>,
   rt_in_use: AtomicBool,
   rt_first_in_use: AtomicBool,
@@ -941,8 +962,6 @@ fn ui_custom_render_fn(
   }
 
   let console_open_progress = data.console_open_progress;
-  let slide_y = -1.0 + (console_open_progress * 1.0);
-  let base_y = 0.18 + slide_y;
 
   if console_open_progress > 0.0 {
     let width = 2.0;

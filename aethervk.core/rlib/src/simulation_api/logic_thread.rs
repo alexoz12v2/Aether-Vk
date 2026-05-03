@@ -1,7 +1,7 @@
 use spin::RwLockReadGuard;
 use crate::{
   scene::{
-    camera::SceneCameraExt, CameraComponent, CursorComponent, EntityId, FollowingComponent,
+    camera::{SceneCameraExt, QuatToEulerAngles}, CameraComponent, CursorComponent, EntityId, FollowingComponent,
     TransformComponent,
   },
   types::{EngineError, EngineResult},
@@ -166,18 +166,17 @@ fn process_command_internal(
       if is_ortho {
         return Ok(SimulationTaskResult::None);
       }
-      let (cursor_pos, _) = scene_read
+      let cursor_pos = scene_read
         .scene
-        .query1_first_res::<TransformComponent, _, _>(|_, t| Some(t.position))
-        .ok_or(EngineError::InvalidOperation(
-          "logic_thread:RotateCamera | scene doesn't have cursor",
-        ))?;
+        .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
+        .and_then(|(id, _)| scene_read.scene.with_component(id, |t: &TransformComponent| t.position))
+        .unwrap_or(Vec3f32::zero());
       scene_read
         .scene
         .with_component_mut(camera_entity, |c: &mut TransformComponent| {
           let offset = c.position - cursor_pos;
           let dist = offset.length().max(0.1);
-          let zoom_speed = dist * 1.0;
+          let zoom_speed = dist * 0.1;
           let forward = c
             .rotation
             .rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
@@ -193,19 +192,23 @@ fn process_command_internal(
       camera_entity,
       scene,
     }) => {
-      let ssb = Vec3f32::from_components(0.0, 0.0, 0.0);
-      let offset = SimulationContext::camera_start_pos();
-      let yaw = <f32 as FloatOps>::PI;
-      let pitch = 0.0;
-      let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), yaw);
-      let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), pitch);
-      let new_rot = (yaw_quat * pitch_quat).normalize();
       let scene_read = scene.read();
+      let cursor_pos = scene_read
+        .scene
+        .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
+        .and_then(|(id, _)| scene_read.scene.with_component(id, |t: &TransformComponent| t.position))
+        .unwrap_or(Vec3f32::zero());
+
+      let pitch = (-1.0_f32 / 3.0_f32.sqrt()).asin();
+      let yaw = -core::f32::consts::FRAC_PI_4;
+      let q = Quat::from_pitch_and_yaw_radians(pitch, yaw);
+      let offset = q.rotate_vector(Vec3f32::from_components(0.0, 10.0, 0.0));
+
       scene_read
         .scene
         .with_component_mut(camera_entity, |c: &mut TransformComponent| {
-          c.position = ssb + offset;
-          c.rotation = new_rot;
+          c.position = cursor_pos + offset;
+          c.rotation = q;
         })
         .ok_or(EngineError::InvalidOperation(
           "logic_thread:ResetCamera | camera entity doesn't have TransformComponent",
@@ -219,12 +222,11 @@ fn process_command_internal(
       delta_y,
     }) => {
       let scene_read = scene.read();
-      let (cursor_pos, _) = scene_read
+      let cursor_pos = scene_read
         .scene
-        .query1_first_res::<TransformComponent, _, _>(|_, t| Some(t.position))
-        .ok_or(EngineError::InvalidOperation(
-          "logic_thread:RotateCamera | scene doesn't have cursor",
-        ))?;
+        .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
+        .and_then(|(id, _)| scene_read.scene.with_component(id, |t: &TransformComponent| t.position))
+        .unwrap_or(Vec3f32::zero());
       scene_read
         .scene
         .with_component_mut(camera_entity, |c: &mut TransformComponent| {
@@ -280,22 +282,12 @@ fn process_command_internal(
       snap_entity,
       entity_id,
       scene,
-      unfollow_other,
+      unfollow_other: _,
     }) => {
       let scene_read = scene.read();
-
-      if unfollow_other {
-        scene_read
-          .scene
-          .remove_component::<FollowingComponent>(entity_id)
-          .map_err(|e| EngineError::InvalidOperation(e))?;
-      }
-
+      use crate::scene::interaction::SceneInteractionExt;
+      scene_read.scene.follow_entity(entity_id, None)?;
       try_snap_entity(snap_entity, entity_id, &scene_read)?;
-      scene_read
-        .scene
-        .add_component(entity_id, FollowingComponent {})
-        .map_err(|e| EngineError::from(e))?;
       Ok(SimulationTaskResult::None)
     }
     LogicCommand::UnfollowEntity(crate::simulation_api::structs::UnfollowEntity {
@@ -309,8 +301,10 @@ fn process_command_internal(
         .map_err(|e| EngineError::InvalidOperation(e))?;
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::FeedbackGetTimeScale => {
-      let scale = ctx.logic_state.read().current_scale;
+    LogicCommand::FeedbackGetSceneTimeScale { scene_id } => {
+      let scenes = ctx.scenes.read();
+      let scene_ctx = scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
+      let scale = scene_ctx.read().time_state.current_scale;
       Ok(SimulationTaskResult::U64(match scale {
         crate::simulation_api::structs::TimeScale::Stopped => 0,
         crate::simulation_api::structs::TimeScale::OneDay => 1,
@@ -318,13 +312,52 @@ fn process_command_internal(
         crate::simulation_api::structs::TimeScale::OneMonth => 3,
       }))
     }
-    LogicCommand::FeedbackGetDateTimeUTC => {
-      let utc_str = ctx.logic_state.read().current_epoch.to_string();
+    LogicCommand::FeedbackGetSceneDateTimeUTC { scene_id } => {
+      let scenes = ctx.scenes.read();
+      let scene_ctx = scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
+      let _utc_str = scene_ctx.read().time_state.current_epoch.to_string();
       // Return success with None, as this is currently handled by get_simulation_time_utc
       // TODO: decide if we want to return strings as results
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::FeedbackGetDateTimeLimitsUTC => Ok(SimulationTaskResult::None),
+    LogicCommand::FeedbackGetSceneDateTimeLimitsUTC { scene_id: _ } => Ok(SimulationTaskResult::None),
+
+    LogicCommand::SetSceneTimeScale { scene_id, scale } => {
+      let scenes = ctx.scenes.read();
+      if let Some(scene_ctx) = scenes.get(&scene_id) {
+        scene_ctx.write().time_state.current_scale = scale;
+      }
+      Ok(SimulationTaskResult::None)
+    }
+    LogicCommand::SetSceneEpoch { scene_id, epoch_tai_seconds } => {
+      let scenes = ctx.scenes.read();
+      if let Some(scene_ctx) = scenes.get(&scene_id) {
+        scene_ctx.write().time_state.current_epoch = anise::time::Epoch::from_tai_seconds(epoch_tai_seconds);
+      }
+      Ok(SimulationTaskResult::None)
+    }
+    LogicCommand::PlayScene { scene_id } => {
+      let scenes = ctx.scenes.read();
+      if let Some(scene_ctx) = scenes.get(&scene_id) {
+        scene_ctx.write().time_state.is_playing = true;
+      }
+      Ok(SimulationTaskResult::None)
+    }
+    LogicCommand::PauseScene { scene_id } => {
+      let scenes = ctx.scenes.read();
+      if let Some(scene_ctx) = scenes.get(&scene_id) {
+        scene_ctx.write().time_state.is_playing = false;
+      }
+      Ok(SimulationTaskResult::None)
+    }
+    LogicCommand::StepScene { scene_id, step_days } => {
+      let scenes = ctx.scenes.read();
+      if let Some(scene_ctx) = scenes.get(&scene_id) {
+        let mut write_ctx = scene_ctx.write();
+        write_ctx.time_state.current_epoch = write_ctx.time_state.current_epoch + anise::time::Unit::Day * step_days;
+      }
+      Ok(SimulationTaskResult::None)
+    }
 
     LogicCommand::ImportModel { task_id: _, path } => {
       let mesh_res = crate::simulation::comet::load_comet_from_gltf(&path, false);
@@ -410,56 +443,63 @@ fn process_command_internal(
       scene_id,
       delta_time,
     } => {
+      let scenes = ctx.scenes.read();
+      let scene_ctx = scenes
+        .get(&scene_id)
+        .ok_or(EngineError::InvalidOperation("scene not found"))?
+        .read();
+
       // 1. Update time
       let (current_epoch, step_days) = {
-        // TODO remove when fixed
-        assert_eq!(alloc::sync::Arc::strong_count(&ctx.time_info), 3); // time info is owned by logic thread context, render thread context, simulation context. That's it.
-        let mut time_info = ctx.time_info.write();
-        time_info.ut_update();
-        let mut logic_state = ctx.logic_state.write();
-        let step_days = logic_state.current_scale.to_days_per_st_second() * delta_time;
-        logic_state.current_epoch = logic_state.current_epoch + anise::time::Unit::Day * step_days;
-        (logic_state.current_epoch, step_days)
+        let mut time_state = scene_ctx.time_state.time_info.write();
+        time_state.ut_update();
+        drop(time_state);
+        
+        // Use write to update state since we are mutating it
+        drop(scene_ctx);
+        let mut scene_ctx_write = scenes.get(&scene_id).unwrap().write();
+        
+        let step_days = if scene_ctx_write.time_state.is_playing {
+          scene_ctx_write.time_state.current_scale.to_days_per_st_second() * delta_time
+        } else {
+          0.0
+        };
+        
+        scene_ctx_write.time_state.current_epoch = scene_ctx_write.time_state.current_epoch + anise::time::Unit::Day * step_days;
+        (scene_ctx_write.time_state.current_epoch, step_days)
       };
 
       // 2. Update Almanac bodies
-      {
-        let scenes = ctx.scenes.read();
-        let scene_ctx = scenes
-          .get(&scene_id)
-          .ok_or(EngineError::InvalidOperation("scene not found"))?
-          .read();
-        let logic_state = ctx.logic_state.read();
+      let scene_ctx = scenes.get(&scene_id).unwrap().read();
+      let logic_state = ctx.logic_state.read();
 
-        if scene_ctx.scene.should_parallelize() {
-          scene_ctx
-            .scene
-            .query2_mut_par::<TransformComponent, crate::scene::AlmanacPlanet, _>(
-              &ctx.thread_pool,
-              |_, transform, planet| {
-                let _ = planet.step(
-                  // TODO error management necessary? yes I guess (later)
-                  transform,
-                  current_epoch,
-                  step_days,
-                  &logic_state.almanac_data,
-                );
-              },
-            );
-        } else {
-          scene_ctx
-            .scene
-            .query2_mut::<TransformComponent, crate::scene::AlmanacPlanet, _>(
-              |_, transform, planet| {
-                let _ = planet.step(
-                  transform,
-                  current_epoch,
-                  step_days,
-                  &logic_state.almanac_data,
-                );
-              },
-            );
-        }
+      if scene_ctx.scene.should_parallelize() {
+        scene_ctx
+          .scene
+          .query2_mut_par::<TransformComponent, crate::scene::AlmanacPlanet, _>(
+            &ctx.thread_pool,
+            |_, transform, planet| {
+              let _ = planet.step(
+                transform,
+                current_epoch,
+                step_days,
+                &logic_state.almanac_data,
+              );
+            },
+          );
+      } else {
+        scene_ctx
+          .scene
+          .query2_mut::<TransformComponent, crate::scene::AlmanacPlanet, _>(
+            |_, transform, planet| {
+              let _ = planet.step(
+                transform,
+                current_epoch,
+                step_days,
+                &logic_state.almanac_data,
+              );
+            },
+          );
       }
 
       // 3. Physics rebuild
@@ -469,9 +509,23 @@ fn process_command_internal(
         .ok_or(EngineError::InvalidOperation("scene not found"))?
         .read();
 
-      if let Some(ps_lock) = &scene_ctx.physics_scene {
-        let mut ps = ps_lock.write();
-        *ps = crate::physics::physics_scene::PhysicsScene::build_from_scene(&scene_ctx.scene);
+      let time_info_lock = scene_ctx.time_state.time_info.clone();
+      let time_info = time_info_lock.read();
+
+      while time_info.needs_fixed_update() {
+        if let Some(ps_lock) = &scene_ctx.physics_scene {
+          let mut ps = ps_lock.write();
+          *ps = crate::physics::physics_scene::PhysicsScene::build_from_scene(&scene_ctx.scene);
+        }
+        
+        // Advance fixed clock step
+        time_info.ut_fixed_update();
+      }
+
+      if let Some((target_id, _)) = scene_ctx.scene.query1_first_res::<FollowingComponent, _, _>(|id, _| Some(id)) {
+        if let Some((cursor_id, _)) = scene_ctx.scene.query1_first_res::<CursorComponent, _, _>(|id, _| Some(id)) {
+          let _ = try_snap_entity(cursor_id, target_id, &scene_ctx);
+        }
       }
 
       // TODO: implement controllers update (camera, cursor, etc.)

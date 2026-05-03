@@ -29,7 +29,6 @@ use oshal::{
   os::pool::WorkloadStatus,
 };
 use spin::rwlock::RwLock;
-use aethervk_oshal_rlib::os::time::TimeInfo;
 
 pub mod components_api;
 pub mod core_api;
@@ -57,8 +56,6 @@ pub struct SimulationContext {
   pub scenes: Arc<RwLock<SimulationSceneData>>,
   pub task_manager: Arc<RwLock<SimulationTaskManager>>,
   pub logic_state: Arc<RwLock<structs::LogicState>>,
-  // see if can be removed
-  pub time_info: Arc<RwLock<TimeInfo>>,
 }
 
 impl Drop for SimulationContext {

@@ -27,7 +27,12 @@ void main() {
   vec3 cursorPos = push.model[3].xyz;
   vec4 viewPos = push.view * vec4(cursorPos, 1.0);
 
-  float scale = -viewPos.z * push.cursorSize;
+  float dist = max(-viewPos.z, 0.001);
+  float wSize = push.cursorSize * 150.0;
+  float screenSize = wSize / dist;
+  screenSize = clamp(screenSize, 0.01, 0.08);
+
+  float scale = screenSize * dist;
 
   vec3 worldPos = cursorPos
                 + right * uv.x * scale * 1.8

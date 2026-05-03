@@ -26,6 +26,7 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
   public PropertiesViewModel(ulong sceneId, SceneStateManager stateManager, NativeRuntimeService? runtimeService = null, BreadcrumbService? breadcrumbService = null)
     : base("Properties")
   {
+    System.Console.WriteLine($"[PropertiesViewModel] Constructor called for Scene {sceneId}");
     _stateManager = stateManager;
     _runtimeService = runtimeService;
     _breadcrumbService = breadcrumbService;
@@ -34,11 +35,14 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
 
     // Initialize with current selection if any
     var state = _stateManager.GetOrCreateScene(CurrentSceneId);
-    _selectedEntity = state.SelectedEntity;
+    SelectedEntity = state.SelectedEntity;
   }
 
   public void Receive(EntitySelectedMessage message)
   {
+    System.Console.WriteLine($"[PropertiesViewModel] Received selection: {message.SelectedEntity?.Name ?? "null"}");
+    
+    _breadcrumbService?.ShowMessageAsync("Properties", $"Received selection: {message.SelectedEntity?.Name ?? "null"}");
     SelectedEntity = message.SelectedEntity;
     IsFollowingEntity = false;
 

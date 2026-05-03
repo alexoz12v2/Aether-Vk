@@ -146,10 +146,10 @@ impl oshal::os::pool::Workload for TimelinePollingWorkload {
         }
       }
 
-      // TODO testing
-      return WorkloadStatus::Yield;
-      // Yield/Sleep ~16.67ms
-      // oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(16));
+      // Yield/Sleep ~16.67ms to avoid pegging the CPU, allowing other tasks to run if they are queued
+      // but without returning WorkloadStatus::Yield, which would drop this specific workload instance back
+      // into the queue causing high contention and infinite spinning.
+      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(16));
     }
     oshal::os::pool::WorkloadStatus::Complete
   }

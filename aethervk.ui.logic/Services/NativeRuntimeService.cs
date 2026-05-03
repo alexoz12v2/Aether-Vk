@@ -359,6 +359,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       {
         _ = CreateScene(populateDefault);
       }
+
+      StartSimulation();
     }
   }
 
@@ -371,6 +373,14 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       width,
       height
     );
+  }
+
+  public void DestroyPresentationEngine(ulong handle)
+  {
+    if (_simulationContext != IntPtr.Zero && handle != 0)
+    {
+      NativeInterop.avkSimulationContext_destroyPresentationEngine(_simulationContext, handle);
+    }
   }
 
   public void LoadDefaultAlmanacs()
@@ -443,18 +453,17 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
         if (success)
         {
-          // Suspend event handling to avoid circular updates
           transform.SuspendNotifications = true;
-          transform.PosX = px;
-          transform.PosY = py;
-          transform.PosZ = pz;
-          transform.RotW = rw;
-          transform.RotX = rx;
-          transform.RotY = ry;
-          transform.RotZ = rz;
-          transform.ScaleX = sx;
-          transform.ScaleY = sy;
-          transform.ScaleZ = sz;
+          if (Math.Abs(transform.PosX - px) > 0.001f) transform.PosX = px;
+          if (Math.Abs(transform.PosY - py) > 0.001f) transform.PosY = py;
+          if (Math.Abs(transform.PosZ - pz) > 0.001f) transform.PosZ = pz;
+          if (Math.Abs(transform.RotW - rw) > 0.001f) transform.RotW = rw;
+          if (Math.Abs(transform.RotX - rx) > 0.001f) transform.RotX = rx;
+          if (Math.Abs(transform.RotY - ry) > 0.001f) transform.RotY = ry;
+          if (Math.Abs(transform.RotZ - rz) > 0.001f) transform.RotZ = rz;
+          if (Math.Abs(transform.ScaleX - sx) > 0.001f) transform.ScaleX = sx;
+          if (Math.Abs(transform.ScaleY - sy) > 0.001f) transform.ScaleY = sy;
+          if (Math.Abs(transform.ScaleZ - sz) > 0.001f) transform.ScaleZ = sz;
           transform.SuspendNotifications = false;
 
           var sun = entity.Components.OfType<SunComponent>().FirstOrDefault();
@@ -519,6 +528,34 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       return;
 
     IsRunning = true;
+    Task.Run(async () =>
+    {
+      var sw = System.Diagnostics.Stopwatch.StartNew();
+      var lastTime = sw.Elapsed;
+      var fixedTimeStep = TimeSpan.FromSeconds(1.0 / 60.0);
+      var accumulatedTime = TimeSpan.Zero;
+
+      while (IsRunning)
+      {
+        var currentTime = sw.Elapsed;
+        var deltaTime = currentTime - lastTime;
+        lastTime = currentTime;
+        accumulatedTime += deltaTime;
+
+        if (IsInitialized)
+        {
+          while (accumulatedTime >= fixedTimeStep)
+          {
+            foreach (var state in _sceneStateManager.AllScenes)
+            {
+               SimulationTick(state.SceneId, fixedTimeStep.TotalSeconds);
+            }
+            accumulatedTime -= fixedTimeStep;
+          }
+        }
+        await Task.Delay(16);
+      }
+    });
   }
 
   public void StopSimulation()
@@ -529,13 +566,13 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     IsRunning = false;
   }
 
-  public void SimulationTick(ulong sceneId)
+  public void SimulationTick(ulong sceneId, double deltaTime)
   {
     lock (_nativeLock)
     {
       if (_simulationContext != IntPtr.Zero)
       {
-        NativeInterop.avkSimulationContext_simulationTick(_simulationContext, sceneId, 0.0);
+        NativeInterop.avkSimulationContext_simulationTick(_simulationContext, sceneId, deltaTime);
         SyncEntities(sceneId);
       }
     }

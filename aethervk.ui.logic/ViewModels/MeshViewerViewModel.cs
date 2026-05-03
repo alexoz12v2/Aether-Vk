@@ -8,7 +8,7 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace AetherVk.Logic.ViewModels;
 
-public partial class MeshViewerViewModel : TabItemViewModel
+public partial class MeshViewerViewModel : TabItemViewModel, IDisposable
 {
   private readonly NativeRuntimeService _runtimeService;
   private CancellationTokenSource? _cts;
@@ -36,6 +36,16 @@ public partial class MeshViewerViewModel : TabItemViewModel
     _consoleService = consoleService;
     _isLightTheme = isLightTheme;
     _ = InitializeSceneAsync(modelId, modelPath, modelName);
+  }
+
+  public void Dispose()
+  {
+    Stop();
+    if (PresentationEngineId != 0)
+    {
+      _runtimeService.DestroyPresentationEngine(PresentationEngineId);
+      PresentationEngineId = 0;
+    }
   }
 
   private async Task InitializeSceneAsync(ulong modelId, string modelPath, string modelName)
@@ -164,8 +174,6 @@ public partial class MeshViewerViewModel : TabItemViewModel
           if (dt.TotalMilliseconds >= 16.66)
           {
             lastTime = current;
-
-            _runtimeService.SimulationTick(SceneId);
 
             if (_lastRenderTask != null)
             {

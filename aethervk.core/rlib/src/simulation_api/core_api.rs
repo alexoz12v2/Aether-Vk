@@ -18,10 +18,11 @@ use oshal::{
 };
 use alloc::{boxed::Box, sync::Arc, collections::BTreeSet};
 use core::{num::NonZero, ptr::addr_of_mut};
+use core::sync::atomic::AtomicU64;
 use spin::RwLock;
 use aethervk_oshal_rlib::os::native::this_thread;
 use aethervk_oshal_rlib::os::time::{TimeInfo, TimeReadings};
-use crate::simulation_api::structs::CustomRenderCallback;
+use crate::simulation_api::structs::{CustomRenderCallback, TaskStatusCode};
 // TODO add scene validate
 
 impl SimulationContext {
@@ -35,20 +36,9 @@ impl SimulationContext {
     backend: gpu::RenderBackendId,
     error_debug_callback: Option<fn(&str)>,
   ) -> EngineResult<Box<SimulationContext>> {
-    let render_thread_time_info = Arc::new(RwLock::new(os::time::TimeInfo::new(
-      Self::INITIAL_FIXED_DELTA_TIME,
-      Self::INITIAL_MAXIMUM_DELTA_TIME,
-      Self::INITIAL_TIME_SCALE,
-    )));
-    let logic_thread_time_info = Arc::clone(&render_thread_time_info);
-    let simulation_context_time_info = Arc::clone(&render_thread_time_info);
-    debug_assert_eq!(Arc::strong_count(&simulation_context_time_info), 3);
-
     let mut boxed_uninit = Box::<SimulationContext>::new_uninit();
     unsafe {
       let ptr = boxed_uninit.as_mut_ptr();
-
-      addr_of_mut!((*ptr).time_info).write(simulation_context_time_info);
 
       // 1. Initialize scene data
       let scenes = Arc::new(RwLock::new(SimulationSceneData::new()));
@@ -74,11 +64,9 @@ impl SimulationContext {
         backend,
         None,
         render_thread_thread_pool,
-        render_thread_time_info,
       )?;
       let logic_thread_params = LogicThreadParams::new(
         logic_thread_thread_pool,
-        logic_thread_time_info,
         Arc::clone(&task_manager),
         logic_state,
         Arc::clone(&scenes),
@@ -166,6 +154,20 @@ impl SimulationContext {
     })
   }
 
+  pub fn destroy_presentation_engine(&self, handle: PresentationEngineHandle) -> EngineResult<()> {
+    self.with_device(|render_device| {
+      let mut presentation_engines = self.presentation_engines.write();
+      if presentation_engines.remove(&handle) {
+        render_device.destroy_presentation_engine(handle)?;
+        Ok(())
+      } else {
+        Err(GpuError::InvalidState(
+          "core_api:destroy_presentation_engine | presentation engine not found",
+        ))
+      }
+    })
+  }
+
   // TODO: async, return a task_id
   pub fn simulation_tick(
     &self,
@@ -207,16 +209,7 @@ impl SimulationContext {
     window_extent: [u32; 2],
     custom: Option<CustomRenderCallback>,
   ) -> EngineResult<core::num::NonZero<u64>> {
-    let task_id = self
-      .render_proxy
-      .0
-      .as_frontend()
-      .ok_or(EngineError::InvalidOperation("render_frontend"))
-      .and_then(|context| {
-        context
-          .with_device(self.render_proxy.1, |device| Ok(device.create_task()))
-          .map_err(|e| EngineError::from(e))
-      })?;
+    let task_id = Arc::new(AtomicU64::new(0));
 
     let scenes = self.scenes.read();
     let active = scenes
@@ -230,7 +223,7 @@ impl SimulationContext {
       .try_send(RenderCommand::RenderFrame(
         crate::simulation_api::structs::RenderFrame {
           presentation_engine_handle,
-          task_id,
+          task_id: Arc::clone(&task_id),
           scene,
           render_physical_meshes_outline: active
             .read()
@@ -246,6 +239,15 @@ impl SimulationContext {
           custom_render_callback: custom,
         },
       ));
+
+    let task_id = loop {
+      let value = task_id.load(core::sync::atomic::Ordering::Relaxed);
+      if value != 0 && value != u64::MAX {
+        // ensure memory coherence among caches
+        let _ = task_id.load(core::sync::atomic::Ordering::Acquire);
+        break value;
+      }
+    };
 
     Ok(unsafe { core::num::NonZero::new_unchecked(task_id) })
   }
@@ -287,7 +289,7 @@ pub trait SimulationContextExt {
     &self,
     last_sim_tick: &mut Option<core::num::NonZero<u64>>,
     last_render_tick: &mut Option<core::num::NonZero<u64>>,
-    time_readings: TimeReadings,
+    last_frame_start: &mut timeus_t,
     target_frame_time: timeus_t,
   );
 }
@@ -296,7 +298,7 @@ impl SimulationContextExt for SimulationContext {
   fn wait_for_task(&self, task_id: core::num::NonZero<u64>) {
     loop {
       let status = self.get_task_status(task_id.get());
-      if status == 1 || status == 2 {
+      if status == TaskStatusCode::Completed || status == TaskStatusCode::Error {
         break; // completed or failed
       }
       this_thread::yield_now();
@@ -307,15 +309,17 @@ impl SimulationContextExt for SimulationContext {
     &self,
     last_sim_tick: &mut Option<core::num::NonZero<u64>>,
     last_render_tick: &mut Option<core::num::NonZero<u64>>,
-    time_readings: TimeReadings,
+    last_frame_start: &mut timeus_t,
     target_frame_time: timeus_t,
   ) {
-    let elapsed = time_readings.delta_time;
+    let now = oshal::os::time::get_monotonic_time();
+    let elapsed = now.saturating_sub(*last_frame_start);
     if elapsed < target_frame_time {
-      this_thread::sleep_for(core::time::Duration::from_nanos(
+      this_thread::sleep_for(core::time::Duration::from_micros(
         (target_frame_time - elapsed) as u64,
       ))
     }
+    *last_frame_start = oshal::os::time::get_monotonic_time();
 
     // Wait for the previous simulation tick to complete
     if let Some(sim_tick) = last_sim_tick {

@@ -23,7 +23,7 @@
                     <!-- Transform Component -->
                     <DataTemplate DataType="models:TransformComponent">
                         <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">
-                            <StackPanel Spacing="4">
+                            <StackPanel Spacing="4" IsEnabled="{Binding IsEditable}">
                                 <Expander Header="Position" HorizontalAlignment="Stretch">
                                     <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
                                         <TextBlock Grid.Column="0" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>

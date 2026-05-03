@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use crate::simulation_api::structs::{
   CustomRenderCallback, RenderCommand, RenderFeedback, RenderTaskStatus, RenderThreadContext,
 };
@@ -28,7 +29,6 @@ pub fn start_render_thread(
   thread::spawn(move || {
     let mut first_render_map: hashbrown::HashMap<PresentationEngineHandle, bool> =
       hashbrown::HashMap::new();
-    let _ = render_params.is_render_single_ownership();
     let render_device_handle = render_params.render_device_handle;
     let render_frontend = {
       let r = render_params
@@ -56,6 +56,7 @@ pub fn start_render_thread(
     loop {
       match render_rx.try_recv() {
         Ok(cmd) => {
+          debug_assert_eq!(alloc::sync::Arc::strong_count(&render_frontend), 1);
           if let RenderCommand::Shutdown = cmd {
             break;
           }
@@ -94,7 +95,8 @@ fn process_command(
       // The FFI Caller thread, before launching this command, should have already
       // updated the camera's projection matrix.
       let extracted_scene = render_frame.extract_scene(Some(&ctx.thread_pool))?;
-      let task_id = render_frame.task_id;
+      let task_id_feedback = render_frame.task_id;
+      let task_id = render_device.create_task();
       let is_first_render =
         if first_render_map.contains_key(&render_frame.presentation_engine_handle) {
           *unsafe {
@@ -107,6 +109,14 @@ fn process_command(
           true
         };
       // `render_device.success_task` will be called by thread pool when timeline advances
+      let time_readings = render_frame
+        .scene
+        .read()
+        .time_state
+        .time_info
+        .read()
+        .current();
+
       let res = do_render_scene_async(
         render_device,
         extracted_scene,
@@ -114,6 +124,7 @@ fn process_command(
         task_id,
         render_frame.custom_render_callback,
         is_first_render,
+        time_readings,
       );
 
       match res {
@@ -125,10 +136,12 @@ fn process_command(
                 .unwrap_unchecked()
             } = false;
           }
+          task_id_feedback.store(task_id, core::sync::atomic::Ordering::Release);
           Ok(())
         }
         Err(err) => {
           render_device.fail_task(task_id, err.clone());
+          task_id_feedback.store(task_id, core::sync::atomic::Ordering::Release);
           Err(err)
         }
       }
@@ -140,6 +153,20 @@ fn process_command(
     ),
     // TODO: maybe async? No, add it as a resource upload in scene extraction
     RenderCommand::GenerateSky => render_device.generate_sky(),
+    RenderCommand::GetTaskStatus { task_id, output } => {
+      let res = render_device.is_task_completed(task_id);
+      let status = match res {
+        Ok(true) => RenderTaskStatus::Completed,
+        Ok(false) => RenderTaskStatus::Pending,
+        Err(e) => {
+          oshal::log!("is_task_completed err: {:?}", e);
+          RenderTaskStatus::Error(e)
+        }
+      };
+      unsafe { output.write_value(status) };
+
+      Ok(())
+    }
   }
 }
 
@@ -150,6 +177,7 @@ fn do_render_scene_async(
   task_id: u64,
   custom_render_callback: Option<CustomRenderCallback>,
   is_first_render: bool,
+  time_readings: oshal::os::time::TimeReadings,
 ) -> GpuResult<bool> {
   render_device.start_frame()?;
 
@@ -164,8 +192,12 @@ fn do_render_scene_async(
 
   let cmd_buffer = render_device.get_command_buffer()?;
   let cmd_scope = gpu::ScopedCommandBuffer::new(render_device, cmd_buffer, Some(task_id))?;
-  let render_scene =
-    extracted_scene.build_render_scene(render_device, presentation_engine_handle, cmd_buffer)?;
+  let render_scene = extracted_scene.build_render_scene(
+    render_device,
+    presentation_engine_handle,
+    cmd_buffer,
+    time_readings,
+  )?;
   if let Some(sun_call) = &render_scene.sun_call {
     // TODO move to kernels
     render_device.update_sun(cmd_buffer, sun_call.entity, (128, 128, 128))?;
@@ -250,11 +282,16 @@ fn do_render_scene_async(
 
 // TODO possibly, group by pipeline if necessary
 impl super::structs::RenderFrame {
-  pub fn extract_scene(&self, pool: Option<&oshal::os::pool::ThreadPool>) -> GpuResult<RenderSceneExtraction> {
+  pub fn extract_scene(
+    &self,
+    pool: Option<&oshal::os::pool::ThreadPool>,
+  ) -> GpuResult<RenderSceneExtraction> {
     let scene = self.scene.read();
-    scene
-      .scene
-      .convert_scene(self.camera_entity, self.render_physical_meshes_outline, pool)
+    scene.scene.convert_scene(
+      self.camera_entity,
+      self.render_physical_meshes_outline,
+      pool,
+    )
   }
 }
 
