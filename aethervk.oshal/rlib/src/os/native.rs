@@ -2,10 +2,10 @@
 
 use core::time::Duration;
 
-#[cfg(windows)]
-use windows::Win32::System::Threading::{GetCurrentThreadId, Sleep, SwitchToThread};
 #[cfg(any(unix, target_os = "macos"))]
 use libc;
+#[cfg(windows)]
+use windows::Win32::System::Threading::{GetCurrentThreadId, Sleep, SwitchToThread};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ThreadId(u64);

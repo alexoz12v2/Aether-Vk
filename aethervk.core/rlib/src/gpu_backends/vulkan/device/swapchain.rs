@@ -1,12 +1,12 @@
 use core::{mem, ptr};
 
-use alloc::{string::ToString, vec::Vec};
-use ash::vk::{self, Handle};
 use crate::{
   gpu::{AcquireResult, OpaqueNativeHandleInfo, PresentationEngineParams, SwapchainStatus},
-  gpu_backends::vulkan::{device::DeviceResource, utils::NonZeroHandle, device::LogicalDevice},
+  gpu_backends::vulkan::{device::DeviceResource, device::LogicalDevice, utils::NonZeroHandle},
   types::{GpuError, GpuResult},
 };
+use alloc::{string::ToString, vec::Vec};
+use ash::vk::{self, Handle};
 
 pub(super) const MAX_FRAMES_IN_FLIGHT: usize = 8;
 
@@ -120,6 +120,8 @@ impl DeviceResource for SwapchainImage {
 impl SwapchainCleanable for FrameDiscard {
   fn cleanup(&mut self, swapchain_device: &ash::khr::swapchain::Device, device: &ash::Device) {
     for &swapchain in self.discarded_swapchains.iter() {
+      #[cfg(test)]
+      std::println!("Destroying DISCARDED swapchain: {:?}", swapchain.get());
       unsafe { swapchain_device.destroy_swapchain(swapchain.get(), None) };
     }
     self.discarded_swapchains.clear();
@@ -169,16 +171,10 @@ impl DeviceResource for WindowedPresentationState {
     for image in &mut self.images {
       image.cleanup(device);
     }
-    unsafe {
-      self
-        .swapchain_device
-        .destroy_swapchain(self.swapchain.get(), None)
-    };
-    unsafe {
-      self
-        .surface_instance
-        .destroy_surface(self.surface.get(), None)
-    };
+    #[cfg(test)]
+    std::println!("Destroying MAIN swapchain: {:?}", self.swapchain.get());
+    unsafe { self.swapchain_device.destroy_swapchain(self.swapchain.get(), None) };
+    unsafe { self.surface_instance.destroy_surface(self.surface.get(), None) };
   }
 }
 
@@ -372,9 +368,7 @@ impl WindowedPresentationState {
 
     let present_result = unsafe {
       let _guard = device.submission_lock.lock();
-      self
-        .swapchain_device
-        .queue_present(graphics_queue, &present_info)
+      self.swapchain_device.queue_present(graphics_queue, &present_info)
     };
 
     // 3. Reset internal struct states
@@ -393,14 +387,14 @@ impl WindowedPresentationState {
     width: u32,
     height: u32,
   ) -> GpuResult<()> {
+    if self.width == width && self.height == height {
+      return Ok(());
+    }
     self.width = width;
     self.height = height;
     unsafe {
-      let fences: Vec<_> = self
-        .frames
-        .iter()
-        .filter_map(|f| f.submission_fence.map(|h| h.get()))
-        .collect();
+      let fences: Vec<_> =
+        self.frames.iter().filter_map(|f| f.submission_fence.map(|h| h.get())).collect();
       if !fences.is_empty() {
         device.wait_for_fences(&fences, true, u64::MAX)?;
       }
@@ -471,27 +465,55 @@ impl WindowedPresentationState {
       self.create_swapchain_internal(physical_device, use_old_swapchain)?;
     let mut swapchain_images =
       self.recreate_swapchain_images(device, swapchain, surface_format.format)?;
+
+    // Swap early so `swapchain` now holds the OLD swapchain, and `self.swapchain` holds the NEW swapchain.
+    mem::swap(&mut swapchain, &mut self.swapchain);
+
+    if self.frames.len() > self.current_frame {
+      // Place the discards into the bin of the frame we just finished submitting,
+      // which is the furthest point away in the upcoming cycle (to delay destruction until GPU is done).
+      let prev_frame = (self.current_frame + self.frames.len() - 1) % self.frames.len();
+      let frame_discard = &mut self.frame_discards[prev_frame];
+
+      // Salvage the active fences from in-flight images so they aren't replaced
+      // by dummy signaled fences when recreating the frame resources
+      let mut salvaged_fences = alloc::vec::Vec::new();
+      for image in &mut self.images {
+        if let Some(fence) = image.submission_fence.take() {
+          salvaged_fences.push(fence);
+        }
+      }
+      for frame in &mut self.frames {
+        if frame.submission_fence.is_none() {
+          frame.submission_fence = salvaged_fences.pop();
+        }
+      }
+      // Safely discard any leftovers if swapchain shrank
+      for fence in salvaged_fences {
+        frame_discard.discarded_fences.push(fence);
+      }
+
+      // discard image resources
+      if !self.images.is_empty() {
+        frame_discard.discard_swapchain_images(&mut self.images);
+        self.images.clear();
+      }
+      // discard decommissioned swapchain if it wasn't re-used by the driver
+      if swapchain.get() != self.swapchain.get() {
+        unsafe { frame_discard.discard_decommissioned_swapchain(swapchain) };
+      }
+      // discard all frame acquire semaphores
+      frame_discard.discard_swapchain_frame_keep_fences(&mut self.frames);
+    }
+
     let (frame_semaphores, mut frame_fences) =
       self.recreate_swapchain_frame_resources(device, swapchain_images.len())?;
     // - END
 
     // bookkeping
     self.next_image = 0;
-    mem::swap(&mut swapchain, &mut self.swapchain);
     self.update_metadata(extent, transform, surface_format);
 
-    if self.frames.len() > self.current_frame {
-      let frame_discard = &mut self.frame_discards[self.current_frame];
-      // discard image resources
-      if !self.images.is_empty() {
-        frame_discard.discard_swapchain_images(&mut self.images);
-        self.images.clear();
-      }
-      // discard decommissioned swapchain
-      unsafe { frame_discard.discard_decommissioned_swapchain(swapchain) };
-      // discard all frame acquire semaphores
-      frame_discard.discard_swapchain_frame_keep_fences(&mut self.frames);
-    }
     // refresh image and frame data
     self.images = swapchain_images;
 
@@ -503,6 +525,7 @@ impl WindowedPresentationState {
       for i in self.images.len()..self.frames.len() {
         let mut orphaned_frame = self.frames[i].clone();
         orphaned_frame.cleanup(&self.swapchain_device, device);
+        self.frame_discards[i].cleanup(&self.swapchain_device, device);
       }
       self.frames.truncate(self.images.len());
       self.frame_discards.truncate(self.images.len());
@@ -679,13 +702,11 @@ impl WindowedPresentationState {
       .push_next(&mut present_mode_ext);
     let mut surf_caps = vk::SurfaceCapabilities2KHR::default();
     unsafe {
-      self
-        .surface_capabilities
-        .get_physical_device_surface_capabilities2(
-          physical_device.get(),
-          &surf_info,
-          &mut surf_caps,
-        )
+      self.surface_capabilities.get_physical_device_surface_capabilities2(
+        physical_device.get(),
+        &surf_info,
+        &mut surf_caps,
+      )
     }?;
     let (extent, transform, image_count) =
       self.extent_transform_imagecount(&surf_caps, present_mode);
@@ -888,6 +909,13 @@ impl WindowedPresentationState {
     instance: &ash::Instance,
     native_handle: OpaqueNativeHandleInfo,
   ) -> ash::prelude::VkResult<vk::SurfaceKHR> {
+    #[cfg(test)]
+    if native_handle.ptr0 == core::ptr::null_mut() && native_handle.ptr1 == core::ptr::null_mut() {
+      let headless_instance = ash::ext::headless_surface::Instance::new(entry, instance);
+      let create_info = vk::HeadlessSurfaceCreateInfoEXT::default();
+      return unsafe { headless_instance.create_headless_surface(&create_info, None) };
+    }
+
     #[cfg(windows)]
     {
       let win32_instance = ash::khr::win32_surface::Instance::new(entry, instance);
@@ -939,7 +967,12 @@ impl WindowedPresentationState {
     if !swapchain_image.eligible_for_acquisition()
       || !self.frames[self.current_frame].eligible_for_steal()
     {
-      return Err(crate::gpu_err!("windowless_acquire: not eligible"));
+      return Err(crate::types::GpuError::BackendSpecific(alloc::format!(
+        "[Vulkan RenderDevice] window_acquire: not eligible. img_elig={} frame_elig={} current_frame={}",
+        swapchain_image.eligible_for_acquisition(),
+        self.frames[self.current_frame].eligible_for_steal(),
+        self.current_frame
+      )));
     }
     let fences: &[vk::Fence] = unsafe {
       core::slice::from_ref(&swapchain_image.submission_fence.as_ref().unwrap_unchecked())
@@ -1098,11 +1131,7 @@ impl WindowedPresentationState {
 
     let result = {
       let _guard = device.submission_lock.lock();
-      unsafe {
-        self
-          .swapchain_device
-          .queue_present(graphics_queue, &present_info)
-      }
+      unsafe { self.swapchain_device.queue_present(graphics_queue, &present_info) }
     };
 
     match result {
@@ -1122,35 +1151,21 @@ impl FrameDiscard {
     for swapchain_image in swapchain_images {
       unsafe {
         self.discarded_image_views.push(swapchain_image.image_view);
-        self
-          .discarded_semaphores
-          .push(swapchain_image.present_semaphore);
-        debug_assert!(
-          !(swapchain_image.submission_fence.is_some()
-            ^ swapchain_image.acquire_semaphore.is_some())
-        );
-        if swapchain_image.eligible_for_acquisition() {
-          // there must be only one frame and one frame only which is not eligible
-          // for steal. That frame is the one associated with the current image
-          self
-            .discarded_semaphores
-            .push(swapchain_image.acquire_semaphore.unwrap_unchecked());
-          self
-            .discarded_fences
-            .push(swapchain_image.submission_fence.unwrap_unchecked());
+        self.discarded_semaphores.push(swapchain_image.present_semaphore);
+        
+        if let Some(sem) = swapchain_image.acquire_semaphore.take() {
+          self.discarded_semaphores.push(sem);
         }
-      };
+        if let Some(fence) = swapchain_image.submission_fence.take() {
+          self.discarded_fences.push(fence);
+        }
+      }
     }
   }
 
   fn discard_swapchain_frame_keep_fences(&mut self, swapchain_frames: &mut [SwapchainFrame]) {
     for swapchain_frame in swapchain_frames {
       unsafe {
-        debug_assert!(
-          !(swapchain_frame.acquire_semaphore.is_some()
-            ^ swapchain_frame.submission_fence.is_some())
-        );
-
         if let Some(acquire_semaphore) = swapchain_frame.acquire_semaphore.take() {
           self.discarded_semaphores.push(acquire_semaphore);
         }
@@ -1237,10 +1252,10 @@ pub(super) struct WindowlessPresentationState {
 impl DeviceResource for WindowlessPresentationState {
   fn cleanup(&mut self, device: &ash::Device) {
     for frame in &mut self.frames {
-      if let Some(fence) = frame.submission_fence {
+      if let Some(fence) = frame.submission_fence.take() {
         unsafe { device.destroy_fence(fence.get(), None) };
       }
-      if let Some(sem) = frame.acquire_semaphore {
+      if let Some(sem) = frame.acquire_semaphore.take() {
         unsafe { device.destroy_semaphore(sem.get(), None) };
       }
     }
@@ -1293,16 +1308,9 @@ impl WindowlessPresentationState {
       return Ok(());
     }
 
-    let acquire_sem = frame.acquire_semaphore.ok_or(crate::gpu_err!("device error"))?.get();
     let fence = frame.submission_fence.ok_or(crate::gpu_err!("device error"))?.get();
 
-    // Windowless doesn't present, but still needs to satisfy the semaphores/fence
-    let wait_semaphores = [acquire_sem];
-    let wait_dst_stage_mask = [vk::PipelineStageFlags::BOTTOM_OF_PIPE];
-
-    let submit_info = vk::SubmitInfo::default()
-      .wait_semaphores(&wait_semaphores)
-      .wait_dst_stage_mask(&wait_dst_stage_mask);
+    let submit_info = vk::SubmitInfo::default();
 
     unsafe {
       device
@@ -1322,6 +1330,23 @@ impl WindowlessPresentationState {
     width: u32,
     height: u32,
   ) -> GpuResult<()> {
+    if self.width == width && self.height == height {
+      return Ok(());
+    }
+
+    unsafe {
+      let mut fences: alloc::vec::Vec<vk::Fence> = self.frames.iter()
+        .filter_map(|f| f.submission_fence.map(|h| h.get()))
+        .collect();
+      
+      fences.extend(self.images.iter()
+        .filter_map(|i| i.submission_fence.map(|h| h.get())));
+        
+      if !fences.is_empty() {
+        let _ = device.wait_for_fences(&fences, true, u64::MAX);
+      }
+    }
+
     self.recreate(instance, device, physical_device, width, height)
   }
 
@@ -1360,9 +1385,6 @@ impl WindowlessPresentationState {
     {
       return Err(crate::gpu_err!("windowless_acquire: not eligible"));
     }
-    if swapchain_image.submission_fence.is_none() {
-      unsafe { swapchain_image.reclaim_from_swapchain_frame(&mut self.frames[self.current_frame]) };
-    }
     let fences: &[vk::Fence] = unsafe {
       core::slice::from_ref(&swapchain_image.submission_fence.as_ref().unwrap_unchecked())
     };
@@ -1387,21 +1409,6 @@ impl WindowlessPresentationState {
     let frame_idx_for_submission = self.current_frame;
     let image_index = self.next_image as u32;
 
-    // Signal the acquire semaphore manually since there's no vkAcquireNextImageKHR
-    // We can just submit an empty batch to the queue.
-    let sem_handle = unsafe {
-      self.frames[self.current_frame]
-        .acquire_semaphore
-        .as_ref()
-        .unwrap_unchecked()
-        .get()
-    };
-    let signal_info =
-      vk::SubmitInfo::default().signal_semaphores(core::slice::from_ref(&sem_handle));
-    device
-      .locked_queue_submit(graphics_queue, &[signal_info], vk::Fence::null())
-      .map_err(GpuError::from)?;
-
     self.next_image = (self.next_image + 1) % images_count;
     self.current_frame = (self.current_frame + 1) % frame_count;
     Ok(AcquireResult {
@@ -1421,7 +1428,12 @@ impl WindowlessPresentationState {
     debug_assert!(self.frames.len() > index);
     let frame = &self.frames[index];
     debug_assert!(!frame.eligible_for_steal());
-    unsafe { (Some(frame.acquire_semaphore.unwrap_unchecked()), frame.submission_fence.unwrap_unchecked()) }
+    unsafe {
+      (
+        None, // Windowless does not use an acquire semaphore for submission wait
+        frame.submission_fence.unwrap_unchecked(),
+      )
+    }
   }
 
   pub unsafe fn get_image_resources(
@@ -1466,9 +1478,7 @@ impl WindowlessPresentationState {
   }
 
   pub fn get_last_submitted_timeline_value(&self) -> u64 {
-    self
-      .last_timeline_value
-      .load(core::sync::atomic::Ordering::Acquire)
+    self.last_timeline_value.load(core::sync::atomic::Ordering::Acquire)
   }
 
   fn recreate(
@@ -1489,6 +1499,7 @@ impl WindowlessPresentationState {
 
     self.next_image = 0;
     self.current_frame = 0;
+    self.submitted_frames = 0;
 
     let image_count = 3;
     let format = self.format;

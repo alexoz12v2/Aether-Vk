@@ -17,6 +17,7 @@ public class PropertiesViewModelTests
     var entity = new Entity(1, 100, "TestEntity");
 
     // Act
+    stateManager.GetOrCreateScene(1).SelectedEntity = entity;
     WeakReferenceMessenger.Default.Send(new EntitySelectedMessage(entity));
 
     // Assert
@@ -34,6 +35,7 @@ public class PropertiesViewModelTests
     var entity = new Entity(1, 100, "TestEntity");
 
     // Act
+    stateManager.GetOrCreateScene(1).SelectedEntity = entity;
     WeakReferenceMessenger.Default.Send(new EntitySelectedMessage(entity));
 
     // Assert

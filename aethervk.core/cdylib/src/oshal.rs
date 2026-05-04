@@ -1,13 +1,13 @@
 use aethervk_oshal_rlib as r#impl;
-pub use r#impl::{AvkSystemInfo};
+pub use r#impl::AvkSystemInfo;
 
-extern crate core;
 extern crate alloc;
+extern crate core;
 
-use core::{ptr, mem};
+use core::{mem, ptr};
 
 // -------------------- Static Storage (From rlib) ------------------
-pub use r#impl::{SYSTEM_INFO};
+pub use r#impl::SYSTEM_INFO;
 
 // -------------------- C Exposed API -------------------------------
 #[unsafe(no_mangle)]

@@ -16,7 +16,7 @@ use crate::{
 };
 use aethervk_oshal_rlib as oshal;
 use alloc::{collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
-use core::ffi::{c_char, CStr};
+use core::ffi::{CStr, c_char};
 use oshal::{
   math::matrix::Matrix4,
   math::vector::Vector3,
@@ -52,7 +52,6 @@ pub struct SimulationContext {
   /// still having the possibility for FFI caller threads to create presentation engines
   pub render_proxy: (WeakRenderFrontend, RenderDeviceHandle),
   pub threads: structs::SimulationThreads,
-  pub presentation_engines: RwLock<BTreeSet<gpu::PresentationEngineHandle>>,
   pub scenes: Arc<RwLock<SimulationSceneData>>,
   pub task_manager: Arc<RwLock<SimulationTaskManager>>,
   pub logic_state: Arc<RwLock<structs::LogicState>>,
@@ -75,16 +74,10 @@ impl SimulationContext {
   {
     let render_device_handle = self.render_proxy.1;
     let render_frontend =
-      self
-        .render_proxy
-        .0
-        .as_frontend()
-        .ok_or(EngineError::InvalidOperation(
-          "SimulationContext::with_device | couldn't upgrade weak pointer to render context",
-        ))?;
-    render_frontend
-      .with_device(render_device_handle, f)
-      .map_err(|e| EngineError::from(e))
+      self.render_proxy.0.as_frontend().ok_or(EngineError::InvalidOperation(
+        "SimulationContext::with_device | couldn't upgrade weak pointer to render context",
+      ))?;
+    render_frontend.with_device(render_device_handle, f).map_err(|e| EngineError::from(e))
   }
 
   pub fn get_scene(&self, scene_id: u64) -> Option<Arc<RwLock<SceneContext>>> {
@@ -106,12 +99,10 @@ macro_rules! expect_scene {
 #[macro_export]
 macro_rules! expect_entity {
   ($scene:expr, $entity:expr, $context:expr) => {
-    $scene
-      .get_entity($entity)
-      .ok_or(EngineError::InvalidOperation(concat!(
-        $context,
-        " | child entity not found"
-      )))?
+    $scene.get_entity($entity).ok_or(EngineError::InvalidOperation(concat!(
+      $context,
+      " | child entity not found"
+    )))?
   };
 }
 /// Macro to quickly extract both a scene and an entity, returning a tuple (scene, entity_id),
@@ -123,13 +114,9 @@ macro_rules! expect_scene_and_entity {
     let scene = expect_scene!($scene_expr, $context);
 
     // Extract the entity
-    let entity = scene
-      .read()
-      .get_entity($entity_expr)
-      .ok_or(EngineError::InvalidOperation(concat!(
-        $context,
-        " | child entity not found"
-      )))?;
+    let entity = scene.read().get_entity($entity_expr).ok_or(EngineError::InvalidOperation(
+      concat!($context, " | child entity not found"),
+    ))?;
 
     // Return both so they can be destructured
     (scene, entity)
@@ -150,7 +137,13 @@ impl os::pool::Workload for PhysicsRebuildWorkload {
   }
 }
 
-pub(crate) static BREADCRUMB_CALLBACK: core::sync::atomic::AtomicPtr<()> =
+pub static BREADCRUMB_CALLBACK: core::sync::atomic::AtomicPtr<()> =
+  core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+
+pub static SIMULATION_CALLBACK: core::sync::atomic::AtomicPtr<()> =
+  core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+
+pub static RENDER_CALLBACK: core::sync::atomic::AtomicPtr<()> =
   core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 
 pub fn emit_breadcrumb(status: u32, msg: &str) {

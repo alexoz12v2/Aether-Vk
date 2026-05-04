@@ -9,17 +9,17 @@ compile_error!("Target Must be a 64-bit machine");
 extern crate std;
 
 // panic_handler and global allocator declared for non tests at cdylib/FFI level
-extern crate core;
 extern crate alloc;
+extern crate core;
 
 use spin::once;
 
+use crate::os::debug;
 #[cfg(windows)]
 use windows::{
   Win32::Foundation::HANDLE,
   Win32::System::Threading::{GetCurrentProcess, TerminateProcess},
 };
-use crate::os::debug;
 
 // --------------- Centralized Panic Handler Implementation ---------
 #[inline]
@@ -215,7 +215,7 @@ impl AvkSystemInfo {
 pub mod os;
 
 pub mod hash {
-  use core::hash::{Hasher, Hash};
+  use core::hash::{Hash, Hasher};
   use core::marker;
 
   pub struct FnvHasher {
@@ -269,8 +269,8 @@ pub mod hash {
 // -------------------- Unit Testing Implementation ------------------------
 #[cfg(test)]
 mod tests {
-  use std::println;
   use super::*;
+  use std::println;
 
   #[test]
   fn should_support_baseline_on_any_reasonable_machine() {

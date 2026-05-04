@@ -80,12 +80,16 @@ public partial class TabGroupNodeViewModel
   [ObservableProperty]
   private bool _hasTabs;
 
-  private readonly IViewModelFactory _viewModelFactory;
+  private readonly ITabFactory _tabFactory;
 
-  public TabGroupNodeViewModel(TabItemViewModel defaultTab, IViewModelFactory viewModelFactory, SplitNodeViewModel? parent = null)
+  public TabGroupNodeViewModel(
+    TabItemViewModel defaultTab,
+    ITabFactory tabFactory,
+    SplitNodeViewModel? parent = null
+  )
     : base(parent)
   {
-    _viewModelFactory = viewModelFactory;
+    _tabFactory = tabFactory;
     Tabs.Add(defaultTab);
     SelectedTab = defaultTab;
     HasTabs = true;
@@ -149,7 +153,7 @@ public partial class TabGroupNodeViewModel
     if (index == -1)
       return;
 
-    TabItemViewModel? newTab = _viewModelFactory.CreateViewModel(tabType) as TabItemViewModel;
+    TabItemViewModel? newTab = _tabFactory.CreateTab(tabType) as TabItemViewModel;
 
     if (newTab != null)
     {
@@ -161,7 +165,7 @@ public partial class TabGroupNodeViewModel
   [RelayCommand]
   private void AddNewTab(string tabType = "UITestPanel")
   {
-    var newTab = _viewModelFactory.CreateViewModel(tabType) as TabItemViewModel;
+    var newTab = _tabFactory.CreateTab(tabType) as TabItemViewModel;
     if (newTab != null && !Tabs.Contains(newTab))
     {
       Tabs.Add(newTab);
@@ -197,12 +201,12 @@ public partial class DockingManagerViewModel
   [ObservableProperty]
   private LayoutNodeViewModelBase _rootNode;
 
-  private readonly IViewModelFactory _viewModelFactory;
+  private readonly ITabFactory _tabFactory;
 
-  public DockingManagerViewModel(IViewModelFactory viewModelFactory, LayoutNodeViewModelBase? rootNode = null)
+  public DockingManagerViewModel(ITabFactory tabFactory, LayoutNodeViewModelBase? rootNode = null)
     : base()
   {
-    _viewModelFactory = viewModelFactory;
+    _tabFactory = tabFactory;
     WeakReferenceMessenger.Default.Register<TabDroppedMessage>(this);
     WeakReferenceMessenger.Default.Register<TabDragTaskMessage>(this);
     WeakReferenceMessenger.Default.Register<CoalesceGroupMessage>(this);
@@ -212,22 +216,32 @@ public partial class DockingManagerViewModel
 
   private LayoutNodeViewModelBase CreateDefaultLayout()
   {
-    var viewportTab = _viewModelFactory.CreateViewModel("Viewport3D") as TabItemViewModel;
-    var viewportGroup = new TabGroupNodeViewModel(viewportTab!, _viewModelFactory);
+    var viewportTab = _tabFactory.CreateTab("Viewport3D") as TabItemViewModel;
+    var viewportGroup = new TabGroupNodeViewModel(viewportTab!, _tabFactory);
 
-    var outlineTab = _viewModelFactory.CreateViewModel("Outline") as TabItemViewModel;
-    var outlineGroup = new TabGroupNodeViewModel(outlineTab!, _viewModelFactory);
+    var outlineTab = _tabFactory.CreateTab("Outline") as TabItemViewModel;
+    var outlineGroup = new TabGroupNodeViewModel(outlineTab!, _tabFactory);
 
-    var propertiesTab = _viewModelFactory.CreateViewModel("Properties") as TabItemViewModel;
-    var propertiesGroup = new TabGroupNodeViewModel(propertiesTab!, _viewModelFactory);
+    var propertiesTab = _tabFactory.CreateTab("Properties") as TabItemViewModel;
+    var propertiesGroup = new TabGroupNodeViewModel(propertiesTab!, _tabFactory);
 
     // Vertical split: Outline on top, Properties on bottom
-    var rightSplit = new SplitNodeViewModel(outlineGroup, propertiesGroup, SplitOrientation.Vertical, 0.5);
+    var rightSplit = new SplitNodeViewModel(
+      outlineGroup,
+      propertiesGroup,
+      SplitOrientation.Vertical,
+      0.5
+    );
     outlineGroup.Parent = rightSplit;
     propertiesGroup.Parent = rightSplit;
 
     // Horizontal split: Viewport on left, rightSplit on right
-    var mainSplit = new SplitNodeViewModel(viewportGroup, rightSplit, SplitOrientation.Horizontal, 0.7);
+    var mainSplit = new SplitNodeViewModel(
+      viewportGroup,
+      rightSplit,
+      SplitOrientation.Horizontal,
+      0.7
+    );
     viewportGroup.Parent = mainSplit;
     rightSplit.Parent = mainSplit;
 
@@ -353,7 +367,7 @@ public partial class DockingManagerViewModel
     DockZone zone
   )
   {
-    var newGroup = new TabGroupNodeViewModel(tab, _viewModelFactory);
+    var newGroup = new TabGroupNodeViewModel(tab, _tabFactory);
     var orientation =
       (zone == DockZone.Left || zone == DockZone.Right)
         ? SplitOrientation.Horizontal

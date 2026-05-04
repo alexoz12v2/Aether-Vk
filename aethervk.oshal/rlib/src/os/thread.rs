@@ -2,7 +2,7 @@
 
 use alloc::boxed::Box;
 use alloc::string::String;
-use core::ffi::{c_void};
+use core::ffi::c_void;
 
 #[cfg(any(unix, target_os = "macos"))]
 use core::ptr;
@@ -12,11 +12,9 @@ use libc;
 
 #[cfg(windows)]
 use windows::Win32::{
+  Foundation::WAIT_OBJECT_0,
   Security::SECURITY_ATTRIBUTES,
-  Foundation::{WAIT_OBJECT_0},
-  System::{
-    Threading::{CreateThread, WaitForSingleObject},
-  },
+  System::Threading::{CreateThread, WaitForSingleObject},
 };
 
 use crate::os::ThreadingResult;
@@ -175,34 +173,34 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use core::sync::atomic::{AtomicBool, Ordering};
-    use alloc::sync::Arc;
+  use super::*;
+  use alloc::sync::Arc;
+  use core::sync::atomic::{AtomicBool, Ordering};
 
-    #[test]
-    fn test_thread_spawn_and_join() {
-        let flag = Arc::new(AtomicBool::new(false));
-        let flag_clone = Arc::clone(&flag);
+  #[test]
+  fn test_thread_spawn_and_join() {
+    let flag = Arc::new(AtomicBool::new(false));
+    let flag_clone = Arc::clone(&flag);
 
-        let thread = spawn(move || {
-            flag_clone.store(true, Ordering::SeqCst);
-        }).expect("Failed to spawn thread");
+    let thread = spawn(move || {
+      flag_clone.store(true, Ordering::SeqCst);
+    })
+    .expect("Failed to spawn thread");
 
-        thread.join();
-        assert!(flag.load(Ordering::SeqCst));
-    }
+    thread.join();
+    assert!(flag.load(Ordering::SeqCst));
+  }
 
-    #[test]
-    fn test_thread_builder() {
-        let thread = Builder::new()
-            .name(String::from("test_thread"))
-            .stack_size(1024 * 1024)
-            .spawn(|| {
-                // do nothing
-            })
-            .expect("Failed to spawn thread with builder");
+  #[test]
+  fn test_thread_builder() {
+    let thread = Builder::new()
+      .name(String::from("test_thread"))
+      .stack_size(1024 * 1024)
+      .spawn(|| {
+        // do nothing
+      })
+      .expect("Failed to spawn thread with builder");
 
-        thread.join();
-    }
+    thread.join();
+  }
 }
-

@@ -3,21 +3,33 @@ pub mod command;
 pub mod simulation;
 pub mod threading;
 
+use aethervk_core_rlib::gpu;
+use aethervk_core_rlib::gpu::scene_conversion::SceneConversionExt;
 use aethervk_core_rlib::gpu::{
   OpaqueNativeHandleInfo, PresentationEngineHandle, RenderDevice, RenderDeviceHandle,
   RenderFrontend, RenderScene,
 };
+use aethervk_core_rlib::scene::{
+  AddComponentError, CameraComponent, CursorComponent, EntityId, GridComponent,
+  PhysicalMeshComponent, Scene, SkyComponent, SunComponent, TransformComponent,
+};
+use aethervk_core_rlib::simulation::comet::Comet;
+use aethervk_core_rlib::simulation_api::SimulationContext;
+use aethervk_core_rlib::types::{EngineError, GpuResult};
+use aethervk_oshal_rlib::math::quaternion::Quaternion;
+use aethervk_oshal_rlib::math::vector::Vector3;
+use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+use aethervk_oshal_rlib::math::vector::vec4::Quat;
 #[cfg(target_os = "linux")]
 use core::ffi;
 #[cfg(windows)]
 use core::ffi;
-use std::any::TypeId;
 #[cfg(target_os = "macos")]
-use objc2::{msg_send, rc::Retained, sel, ClassType, DeclaredClass};
+use objc2::{ClassType, DeclaredClass, msg_send, rc::Retained, sel};
 #[cfg(target_os = "macos")]
 use objc2_app_kit::NSView;
 #[cfg(target_os = "macos")]
-use objc2_foundation::{ns_string, NSNotification, NSNotificationCenter, NSObject};
+use objc2_foundation::{NSNotification, NSNotificationCenter, NSObject, ns_string};
 #[cfg(target_os = "macos")]
 use objc2_quartz_core::CAAutoresizingMask;
 #[cfg(target_os = "macos")]
@@ -29,6 +41,7 @@ use raw_window_handle::RawWindowHandle;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 #[cfg(target_os = "linux")]
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
+use std::any::TypeId;
 #[cfg(target_os = "macos")]
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -40,19 +53,6 @@ use winit::event_loop::{EventLoop, EventLoopBuilder};
 use winit::platform::macos::EventLoopBuilderExtMacOS;
 use winit::window::WindowBuilder;
 use winit::{event_loop::EventLoopProxy, window::Window};
-use aethervk_core_rlib::gpu;
-use aethervk_core_rlib::gpu::scene_conversion::SceneConversionExt;
-use aethervk_core_rlib::scene::{
-  AddComponentError, CameraComponent, CursorComponent, EntityId, GridComponent,
-  PhysicalMeshComponent, Scene, SkyComponent, SunComponent, TransformComponent,
-};
-use aethervk_core_rlib::simulation::comet::Comet;
-use aethervk_core_rlib::simulation_api::SimulationContext;
-use aethervk_core_rlib::types::{EngineError, GpuResult};
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::vec4::Quat;
-use aethervk_oshal_rlib::math::vector::Vector3;
 
 /// Custom event type to handle resizing start and stop
 pub enum AppEvent {
@@ -158,10 +158,7 @@ pub fn extract_native_handles(
     #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
     (RawWindowHandle::Xlib(w), RawDisplayHandle::Xlib(d)) => (
       OpaqueNativeHandleInfo {
-        ptr0: d
-          .display
-          .map(|d| d.as_ptr())
-          .unwrap_or(std::ptr::null_mut()) as *mut ffi::c_void,
+        ptr0: d.display.map(|d| d.as_ptr()).unwrap_or(std::ptr::null_mut()) as *mut ffi::c_void,
         ptr1: w.window as usize as *mut ffi::c_void,
       },
       WindowPlatformData {},
@@ -170,10 +167,7 @@ pub fn extract_native_handles(
     #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
     (RawWindowHandle::Xcb(w), RawDisplayHandle::Xcb(d)) => (
       OpaqueNativeHandleInfo {
-        ptr0: d
-          .connection
-          .map(|c| c.as_ptr())
-          .unwrap_or(std::ptr::null_mut()) as *mut ffi::c_void,
+        ptr0: d.connection.map(|c| c.as_ptr()).unwrap_or(std::ptr::null_mut()) as *mut ffi::c_void,
         ptr1: w.window.get() as usize as *mut ffi::c_void,
       },
       WindowPlatformData {},
@@ -334,11 +328,7 @@ pub fn cycle_get_asset_path_from_exe(use_args: bool) -> PathBuf {
       let _ = args.next().unwrap();
       std::path::PathBuf::from(args.next().unwrap())
     } else {
-      let mut path = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_owned();
+      let mut path = std::env::current_exe().unwrap().parent().unwrap().to_owned();
       while !path.join("assets").exists() {
         path = path.parent().unwrap().to_owned();
       }
@@ -370,9 +360,8 @@ pub fn get_handle_and_window_info(
   {
     let mtl_device_id = render_frontend
       .with_device(render_device_handle, |device| {
-        let mtl_device_id = device
-          .get_native_prop(gpu::NativeGpuProperty::VulkanMetalDeviceId)
-          .unwrap();
+        let mtl_device_id =
+          device.get_native_prop(gpu::NativeGpuProperty::VulkanMetalDeviceId).unwrap();
         let dev_ptr =
           mtl_device_id as *mut objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>;
         let metal_device = unsafe { objc2::rc::Retained::retain(dev_ptr).unwrap() };
@@ -397,10 +386,7 @@ where
   let proxy = event_loop.create_proxy();
   let proxy_ptr = unsafe { std::ptr::NonNull::new_unchecked(Box::into_raw(Box::new(proxy))) };
 
-  let window = WindowBuilder::new()
-    .with_title(title)
-    .build(&event_loop)
-    .unwrap();
+  let window = WindowBuilder::new().with_title(title).build(&event_loop).unwrap();
   setup_resize_hook(&window, proxy_ptr);
 
   (window, event_loop)
@@ -476,11 +462,7 @@ impl<'a> SceneMeshEntityBuilder<'a> {
   where
     S: Into<String>,
   {
-    if self
-      .scene
-      .has_component::<PhysicalMeshComponent>(self.entity_id)
-      .into()
-    {
+    if self.scene.has_component::<PhysicalMeshComponent>(self.entity_id).into() {
       let mut error = self.error.borrow_mut();
       *error = Some(Box::new(EngineError::InvalidOperation(
         "Cannot add a component which is already present",
@@ -501,11 +483,7 @@ impl<'a> SceneMeshEntityBuilder<'a> {
   }
 
   pub fn with_position(self, position: Vec3f32) -> Self {
-    if self
-      .scene
-      .has_component::<TransformComponent>(self.entity_id)
-      .into()
-    {
+    if self.scene.has_component::<TransformComponent>(self.entity_id).into() {
       let mut error = self.error.borrow_mut();
       *error = Some(Box::new(EngineError::InvalidOperation(
         "Cannot add a component which is already present",
@@ -525,14 +503,8 @@ impl<'a> SceneMeshEntityBuilder<'a> {
   }
 
   pub fn build(self) -> Result<EntityId, Box<dyn Error>> {
-    let has_transform: bool = self
-      .scene
-      .has_component::<TransformComponent>(self.entity_id)
-      .into();
-    let has_mesh: bool = self
-      .scene
-      .has_component::<PhysicalMeshComponent>(self.entity_id)
-      .into();
+    let has_transform: bool = self.scene.has_component::<TransformComponent>(self.entity_id).into();
+    let has_mesh: bool = self.scene.has_component::<PhysicalMeshComponent>(self.entity_id).into();
     if !has_transform || !has_mesh {
       return Err(Box::new(EngineError::InvalidOperation(
         "Missing `TransformComponent` or `PhysicalMeshComponent`",
@@ -555,8 +527,10 @@ pub fn scene_to_render_scene(
   render_outlines: bool,
   cmd_buffer: gpu::CommandBufferHandle,
 ) -> GpuResult<RenderScene> {
-  let render_scene_extraction = scene.convert_scene(camera_entity, render_outlines, None)?; // TODO
-  
+  let extent = device.get_presentation_engine_extent(presentation_engine_handle)?;
+  let render_scene_extraction =
+    scene.convert_scene(camera_entity, render_outlines, None, extent)?;
+
   let time_readings = aethervk_oshal_rlib::os::time::TimeReadings {
     time: 0,
     delta_time: 0,
@@ -565,6 +539,12 @@ pub fn scene_to_render_scene(
     fixed_time: 0,
     smooth_delta_time: 0,
   };
-  
-  render_scene_extraction.build_render_scene(device, presentation_engine_handle, cmd_buffer, time_readings)
+
+  render_scene_extraction.build_render_scene(
+    device,
+    presentation_engine_handle,
+    cmd_buffer,
+    time_readings,
+    extent,
+  )
 }

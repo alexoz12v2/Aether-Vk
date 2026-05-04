@@ -1,22 +1,19 @@
-use aethervk_oshal_rlib::{
-  math::vector::vec3::Vec3f32,
-  math::vector::vec4::Quat,
-  math::quaternion::Quaternion,
-  math::vector::Vector3,
-  os,
-  os::fs::{ExtensionToStr, FileSystemObject},
-  math::matrix::mat3::Mat3f32,
-  math::matrix::{Matrix, Matrix3},
-  os::files::Mmap
-};
-use alloc::{
-  vec::Vec,
-  string::String
-};
 use crate::{
   math::vee,
-  types::{EngineError, EngineResult}
+  types::{EngineError, EngineResult},
 };
+use aethervk_oshal_rlib::{
+  math::matrix::mat3::Mat3f32,
+  math::matrix::{Matrix, Matrix3},
+  math::quaternion::Quaternion,
+  math::vector::Vector3,
+  math::vector::vec3::Vec3f32,
+  math::vector::vec4::Quat,
+  os,
+  os::files::Mmap,
+  os::fs::{ExtensionToStr, FileSystemObject},
+};
+use alloc::{string::String, vec::Vec};
 
 // TODO: type safety between simulation units and real units, eg SimUnit<Vec3f32> vs RealUnit<Vec3f32>. Major refactoring here for these deref types
 
@@ -26,14 +23,14 @@ pub const DISTANCE_SCALE_FACTOR: f64 = 10_000_000.0; // in km
 /// Defined a frame whose origin is the sun, and whose orientation (equatorial plane) is the plane
 /// which contains the Sun's orbit (rotated ~23 degrees with respect to J2000, which is the plane
 /// containing Earth's orbit in year 2000)
-pub const SUN_ECLIPJ200: anise::frames::Frame = anise::frames::Frame::new(
+pub const SUN_ECLIPJ2000: anise::frames::Frame = anise::frames::Frame::new(
   anise::constants::celestial_objects::SUN,
   anise::constants::orientations::ECLIPJ2000,
 );
 
 /// Stores `position` and `velocity`, after being scaled by a factor of [`DISTANCE_SCALE_FACTOR`]
 /// to get to *simulation units*
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct KinematicState {
   pub position: Vec3f32,
   pub velocity: Vec3f32,
@@ -197,9 +194,7 @@ impl AlmanacPackedData {
   ) -> EngineResult<anise::math::cartesian::CartesianState> {
     let cartesian_state = 'cartesian_state: {
       // 1. Attempt to get the precise planet center (e.g., 399 for Earth)
-      let res = self
-        .almanac
-        .spk_ezr(spk_id, epoch, orientation, observer, None);
+      let res = self.almanac.spk_ezr(spk_id, epoch, orientation, observer, None);
       if res.is_err() && allow_barycentre_fallback {
         // 2. FALLBACK: If the precise ID fails, fall back to the planet's system
         // Barycentre (e.g., 199 / 100 = 1 for Mercury).

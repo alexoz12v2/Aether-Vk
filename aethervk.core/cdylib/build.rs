@@ -67,20 +67,12 @@ fn process_vulkan_sdk(sdk_path: &Path) {
   #[cfg(target_os = "macos")]
   {
     // directory structure (just for debug builds, `xtask` for avalonia packaging later)
-    let search_path = src_lib_dir
-      .join("libvulkan*.dylib")
-      .into_os_string()
-      .into_string()
-      .unwrap();
+    let search_path = src_lib_dir.join("libvulkan*.dylib").into_os_string().into_string().unwrap();
 
     for entry in glob::glob(&search_path).unwrap() {
       let path = entry.unwrap();
       let dest_path = lib_dir.join(path.file_name().unwrap());
-      if fs::symlink_metadata(&path)
-        .unwrap()
-        .file_type()
-        .is_symlink()
-      {
+      if fs::symlink_metadata(&path).unwrap().file_type().is_symlink() {
         let target = fs::read_link(&path).unwrap();
         println!(
           "Symlink: {:?} -> {:?}",
@@ -107,11 +99,7 @@ fn process_vulkan_sdk(sdk_path: &Path) {
     const MOLTENVK_NAME: &str = "libMoltenVK.dylib";
     fs::copy(src_lib_dir.join(MOLTENVK_NAME), lib_dir.join(MOLTENVK_NAME)).unwrap();
 
-    let icd_file = sdk_path
-      .join("share")
-      .join("vulkan")
-      .join("icd.d")
-      .join("MoltenVK_icd.json");
+    let icd_file = sdk_path.join("share").join("vulkan").join("icd.d").join("MoltenVK_icd.json");
 
     if !icd_file.exists() {
       panic!("{} doesn't exist", icd_file.display());
@@ -127,10 +115,7 @@ fn process_vulkan_sdk(sdk_path: &Path) {
     let src_explicit_layer_dir = if cfg!(windows) {
       sdk_path.join("Bin")
     } else {
-      sdk_path
-        .join("share")
-        .join("vulkan")
-        .join("explicit_layer.d")
+      sdk_path.join("share").join("vulkan").join("explicit_layer.d")
     };
 
     let explicit_layer_dir = binary_root.join("vulkan").join("explicit_layer");

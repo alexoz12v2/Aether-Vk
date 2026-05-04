@@ -1,25 +1,25 @@
-use core::{
-  ffi,
-  hash::{Hash, Hasher},
-};
-use ahash::AHasher;
-use crate::{
-  gpu::frame::ResourceUploadResult,
-  scene::{EntityId, PhysicalMeshComponent, TransformComponent},
-};
-use crate::types::{EngineResult, GpuError, GpuResult};
-use heapless::index_map::FnvIndexMap;
-use alloc::sync::Weak;
-#[cfg(debug_assertions)]
-use alloc::string::String;
-use alloc::sync::Arc;
-use ab_glyph::PxScale;
-use bitflags::bitflags;
-use aethervk_oshal_rlib::os::time::timeus_t;
 use crate::physics::physics_scene::PhysicsScene;
 use crate::scene::Scene;
 use crate::scene::text::{FontAtlas, GlyphInfo};
 use crate::simulation::comet::Texture;
+use crate::types::{EngineResult, GpuError, GpuResult};
+use crate::{
+  gpu::frame::ResourceUploadResult,
+  scene::{EntityId, PhysicalMeshComponent, TransformComponent},
+};
+use ab_glyph::PxScale;
+use aethervk_oshal_rlib::os::time::timeus_t;
+use ahash::AHasher;
+#[cfg(debug_assertions)]
+use alloc::string::String;
+use alloc::sync::Arc;
+use alloc::sync::Weak;
+use bitflags::bitflags;
+use core::{
+  ffi,
+  hash::{Hash, Hasher},
+};
+use heapless::index_map::FnvIndexMap;
 
 pub use super::gpu_backends::*;
 
@@ -152,6 +152,8 @@ pub struct CursorPushConstants {
   pub view_proj: [f32; 16],
   pub model: [f32; 16],
   pub cursor_size: f32,
+  pub _padding: f32,
+  pub window_extent: [f32; 2],
 }
 
 #[repr(C)]
@@ -403,7 +405,9 @@ pub trait RenderCompute: Send + Sync {
   // Future visual compute passes can be added here (e.g. post-processing, light culling)
 }
 
-pub trait RenderDevice: Send + Sync {
+pub trait RenderDevice: Send + Sync + core::any::Any {
+  fn as_any(&self) -> &dyn core::any::Any; 
+  
   fn get_native_prop(&self, prop: NativeGpuProperty) -> Option<*mut core::ffi::c_void>;
 
   fn print_info(&self) -> String;
@@ -880,9 +884,7 @@ impl<'a> ScopedCommandBuffer<'a> {
   /// Explicitly submits the command buffer.
   pub fn submit(mut self) -> GpuResult<()> {
     self.submitted = true;
-    self
-      .device
-      .submit_command_buffer(self.cmd_buffer, self.task_id)
+    self.device.submit_command_buffer(self.cmd_buffer, self.task_id)
   }
 }
 
@@ -890,9 +892,7 @@ impl<'a> Drop for ScopedCommandBuffer<'a> {
   fn drop(&mut self) {
     if !self.submitted {
       // Force submission on early exit/panic. Result is ignored to prevent double panics.
-      let _ = self
-        .device
-        .submit_command_buffer(self.cmd_buffer, self.task_id);
+      let _ = self.device.submit_command_buffer(self.cmd_buffer, self.task_id);
     }
   }
 }
@@ -958,9 +958,7 @@ impl<'a> Drop for FrameCancelGuard<'a> {
     if let Some(ar) = self.acquire_result.take() {
       // Guard fell out of scope without being defused. An error happened!
       // Cancel the frame cleanly to avoid swapchain leaks and deadlocks.
-      let _ = self
-        .device
-        .cancel_acquired_image(self.engine, ar.image_index, ar.frame_index as u32);
+      let _ = self.device.cancel_acquired_image(self.engine, ar.image_index, ar.frame_index as u32);
     }
   }
 }
@@ -1001,7 +999,7 @@ pub trait WeakRenderFrontendExt {
 }
 impl WeakRenderFrontendExt for WeakRenderFrontend {
   fn as_frontend(&self) -> Option<RenderFrontend> {
-    aethervk_oshal_rlib::log!("--- as_frontend ---");
+    // aethervk_oshal_rlib::log!("--- as_frontend ---");
     self.upgrade().map(|s| RenderFrontend { backend: s })
   }
 }

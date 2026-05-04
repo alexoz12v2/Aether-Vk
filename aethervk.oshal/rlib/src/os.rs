@@ -112,4 +112,3 @@ pub const FONT_PATH: &str = if cfg!(target_os = "windows") {
   // TODO check that this exists in any common linux distro
   "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 };
-

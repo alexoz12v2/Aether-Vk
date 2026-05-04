@@ -19,10 +19,51 @@ public partial class MeshViewerWindow : Window
   private bool _isMiddleDragging = false;
   private Avalonia.Point _lastPointerPos;
 
+  private DispatcherTimer? _resizeTimer;
+  private Avalonia.Size _pendingSize;
+
   public MeshViewerWindow()
   {
     InitializeComponent();
     Closing += (s, e) => _viewModel?.Stop();
+    
+    _resizeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+    _resizeTimer.Tick += OnResizeTimerTick;
+    
+    SizeChanged += OnSizeChanged;
+  }
+
+  private void OnSizeChanged(object? sender, SizeChangedEventArgs e)
+  {
+    _pendingSize = e.NewSize;
+    _resizeTimer?.Stop();
+    _resizeTimer?.Start();
+  }
+
+  private void OnResizeTimerTick(object? sender, EventArgs e)
+  {
+    _resizeTimer?.Stop();
+
+    if (_viewModel == null || _pendingSize.Width <= 0 || _pendingSize.Height <= 0) return;
+
+    uint newWidth = (uint)_pendingSize.Width;
+    uint newHeight = (uint)_pendingSize.Height;
+
+    if (newWidth == _viewModel.Width && newHeight == _viewModel.Height) return;
+
+    _viewModel.Width = newWidth;
+    _viewModel.Height = newHeight;
+
+    _bitmap = new WriteableBitmap(
+      new Avalonia.PixelSize((int)newWidth, (int)newHeight),
+      new Avalonia.Vector(96, 96),
+      PixelFormat.Bgra8888,
+      AlphaFormat.Opaque
+    );
+
+    RenderTargetImage.Source = _bitmap;
+
+    _viewModel.RuntimeService.ResizePresentationEngine(_viewModel.SceneId, _viewModel.PresentationEngineId, newWidth, newHeight);
   }
 
   protected override void OnDataContextChanged(EventArgs e)
@@ -65,30 +106,48 @@ public partial class MeshViewerWindow : Window
     if (_viewModel != null)
     {
       _viewModel.OnFrameReady -= HandleFrameReady;
+      _viewModel.Dispose();
     }
   }
 
-  private void HandleFrameReady()
+  private async void HandleFrameReady()
   {
     if (_bitmap == null || _viewModel == null)
       return;
 
-    Dispatcher.UIThread.Post(async () =>
+    _lastFrameTime = DateTime.Now;
+
+    nuint bufferSize = (nuint)(_viewModel.Width * _viewModel.Height * 4);
+    IntPtr unmanagedBuffer = System.Runtime.InteropServices.Marshal.AllocHGlobal((int)bufferSize);
+
+    try
     {
-      if (_bitmap == null || _viewModel == null)
-        return;
+      await _viewModel.CopyFrameToBuffer(unmanagedBuffer, bufferSize);
 
-      _lastFrameTime = DateTime.Now;
-
-      using (var frame = _bitmap.Lock())
+      await Dispatcher.UIThread.InvokeAsync(() =>
       {
-        await _viewModel.CopyFrameToBuffer(
-          frame.Address,
-          (nuint)(_viewModel.Width * _viewModel.Height * 4)
-        );
-      }
-      RenderTargetImage.InvalidateVisual();
-    });
+        if (_bitmap != null)
+        {
+          using (var frame = _bitmap.Lock())
+          {
+            unsafe
+            {
+              System.Buffer.MemoryCopy(
+                unmanagedBuffer.ToPointer(),
+                frame.Address.ToPointer(),
+                bufferSize,
+                bufferSize
+              );
+            }
+          }
+          RenderTargetImage.InvalidateVisual();
+        }
+      });
+    }
+    finally
+    {
+      System.Runtime.InteropServices.Marshal.FreeHGlobal(unmanagedBuffer);
+    }
   }
 
   private void OnPointerPressed(object? sender, PointerPressedEventArgs e)

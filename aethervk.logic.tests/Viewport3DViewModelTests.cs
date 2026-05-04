@@ -13,11 +13,15 @@ public class Viewport3DViewModelTests
   {
     // Arrange
     var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
-    dispatcherMock.Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
+    dispatcherMock
+      .Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
       .Callback<System.Action>(a => a());
-    var runtimeService = new NativeRuntimeService(new SceneStateManager(),
-      new ConsoleService(dispatcherMock.Object), new BreadcrumbService(dispatcherMock.Object),
-      dispatcherMock.Object);
+    var runtimeService = new NativeRuntimeService(
+      new SceneStateManager(),
+      new ConsoleService(dispatcherMock.Object),
+      new BreadcrumbService(dispatcherMock.Object),
+      dispatcherMock.Object
+    );
     // Do not call InitializeSimulationContext so it stays in mock state
 
     try
@@ -29,11 +33,7 @@ public class Viewport3DViewModelTests
       Assert.Equal(600u, vm.Height);
       vm.Stop();
     }
-    catch (System.TypeInitializationException)
-    {
-    }
-    catch (System.DllNotFoundException)
-    {
-    }
+    catch (System.TypeInitializationException) { }
+    catch (System.DllNotFoundException) { }
   }
 }

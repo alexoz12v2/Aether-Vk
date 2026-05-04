@@ -5,16 +5,16 @@ using Avalonia.Threading;
 
 namespace AetherVk.Services
 {
-    public class AvaloniaUiThreadDispatcher : IUiThreadDispatcher
+  public class AvaloniaUiThreadDispatcher : IUiThreadDispatcher
+  {
+    public void Dispatch(Action action)
     {
-        public void Dispatch(Action action)
-        {
-            Dispatcher.UIThread.Post(action);
-        }
-
-        public Task DispatchAsync(Func<Task> action)
-        {
-            return Dispatcher.UIThread.InvokeAsync(action);
-        }
+      Dispatcher.UIThread.Post(action);
     }
+
+    public Task DispatchAsync(Func<Task> action)
+    {
+      return Dispatcher.UIThread.InvokeAsync(action);
+    }
+  }
 }

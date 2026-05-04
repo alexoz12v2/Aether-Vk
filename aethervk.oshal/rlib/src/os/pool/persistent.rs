@@ -3,8 +3,8 @@ use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
-use crate::os::NativeResult;
 use super::{ThreadPool, Workload, WorkloadStatus};
+use crate::os::NativeResult;
 
 /// Controls the lifecycle sequence during persistent tasklet executions.
 pub enum PersistentStatus<R> {

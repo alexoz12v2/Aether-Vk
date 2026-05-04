@@ -11,7 +11,11 @@ public class HorizonJplViewModelTests
   public void Initialization_SetsDefaultValues()
   {
     // Arrange
-    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>(); dispatcherMock.Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>())).Callback<System.Action>(a => a()); var consoleService = new ConsoleService(dispatcherMock.Object);
+    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
+    dispatcherMock
+      .Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
+      .Callback<System.Action>(a => a());
+    var consoleService = new ConsoleService(dispatcherMock.Object);
     var breadcrumbService = new BreadcrumbService(dispatcherMock.Object);
     var service = new HorizonJplService(consoleService, breadcrumbService);
 

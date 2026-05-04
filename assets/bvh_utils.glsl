@@ -32,6 +32,9 @@ struct BVHNodeAABB {
     uint right_child_offset;
     uint primitive_count;
     uint node_type; // e.g. 0 for AABB, 1 for OBB. Padding in strictly AABB case.
+    uint parent_idx;
+    float mass;
+    vec3 center_of_mass;
 };
 
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer BVHArray {
@@ -52,6 +55,7 @@ layout(constant_id = 0) const uint SG_SIZE = 32;
 
 // SOA block representing `SG_SIZE` nodes. 
 // When a warp accesses `block.minX[gl_SubgroupInvocationID]`, memory accesses are perfectly coalesced.
+// We can use this struct for shared memory, but NOT for SSBO due to GLSL spec limitation.
 struct BVHNodeBlockAABB {
     float minX[SG_SIZE];
     float minY[SG_SIZE];
@@ -65,8 +69,10 @@ struct BVHNodeBlockAABB {
     uint node_type[SG_SIZE];
 };
 
+// Flattened 1D array to bypass GLSL limitation on SSBO array sizing with specialization constants.
+// 10 attributes per block: 6 floats, 4 uints. We use uint[] and floatBitsToUint/uintBitsToFloat.
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer BVHBlockArray {
-    BVHNodeBlockAABB blocks[];
+    uint data[];
 };
 
 // ----------------------------------------------------------------------------
@@ -85,16 +91,18 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer BV
     do { \
         uint _tid = gl_SubgroupInvocationID; \
         if (_tid < SG_SIZE) { \
-            SHARED_CACHE.minX[_tid] = GLOBAL_BVH.blocks[BLOCK_IDX].minX[_tid]; \
-            SHARED_CACHE.minY[_tid] = GLOBAL_BVH.blocks[BLOCK_IDX].minY[_tid]; \
-            SHARED_CACHE.minZ[_tid] = GLOBAL_BVH.blocks[BLOCK_IDX].minZ[_tid]; \
-            SHARED_CACHE.maxX[_tid] = GLOBAL_BVH.blocks[BLOCK_IDX].maxX[_tid]; \
-            SHARED_CACHE.maxY[_tid] = GLOBAL_BVH.blocks[BLOCK_IDX].maxY[_tid]; \
-            SHARED_CACHE.maxZ[_tid] = GLOBAL_BVH.blocks[BLOCK_IDX].maxZ[_tid]; \
-            SHARED_CACHE.left_child_or_primitive_offset[_tid] = GLOBAL_BVH.blocks[BLOCK_IDX].left_child_or_primitive_offset[_tid]; \
-            SHARED_CACHE.right_child_offset[_tid] = GLOBAL_BVH.blocks[BLOCK_IDX].right_child_offset[_tid]; \
-            SHARED_CACHE.primitive_count[_tid] = GLOBAL_BVH.blocks[BLOCK_IDX].primitive_count[_tid]; \
-            SHARED_CACHE.node_type[_tid] = GLOBAL_BVH.blocks[BLOCK_IDX].node_type[_tid]; \
+            uint _stride = 10 * SG_SIZE; \
+            uint _base = BLOCK_IDX * _stride + _tid; \
+            SHARED_CACHE.minX[_tid] = uintBitsToFloat(GLOBAL_BVH.data[_base + 0 * SG_SIZE]); \
+            SHARED_CACHE.minY[_tid] = uintBitsToFloat(GLOBAL_BVH.data[_base + 1 * SG_SIZE]); \
+            SHARED_CACHE.minZ[_tid] = uintBitsToFloat(GLOBAL_BVH.data[_base + 2 * SG_SIZE]); \
+            SHARED_CACHE.maxX[_tid] = uintBitsToFloat(GLOBAL_BVH.data[_base + 3 * SG_SIZE]); \
+            SHARED_CACHE.maxY[_tid] = uintBitsToFloat(GLOBAL_BVH.data[_base + 4 * SG_SIZE]); \
+            SHARED_CACHE.maxZ[_tid] = uintBitsToFloat(GLOBAL_BVH.data[_base + 5 * SG_SIZE]); \
+            SHARED_CACHE.left_child_or_primitive_offset[_tid] = GLOBAL_BVH.data[_base + 6 * SG_SIZE]; \
+            SHARED_CACHE.right_child_offset[_tid] = GLOBAL_BVH.data[_base + 7 * SG_SIZE]; \
+            SHARED_CACHE.primitive_count[_tid] = GLOBAL_BVH.data[_base + 8 * SG_SIZE]; \
+            SHARED_CACHE.node_type[_tid] = GLOBAL_BVH.data[_base + 9 * SG_SIZE]; \
         } \
     } while(false)
 

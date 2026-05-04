@@ -133,64 +133,71 @@ public partial class App : Application
       }
       else
       {
-        var runtimeService = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<NativeRuntimeService>(App.Host!.Services);
+        var runtimeService =
+          Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<NativeRuntimeService>(
+            App.Host!.Services
+          );
         var splashViewModel = new SplashViewModel(runtimeService);
         var splashWindow = new Views.SplashWindow { DataContext = splashViewModel };
 
         splashViewModel.OnInitializationCompleted += () =>
         {
-            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+          Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+          {
+            var mainWindowViewModel =
+              Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<MainWindowViewModel>(
+                App.Host!.Services
+              );
+            var mainWindow = new MainWindow { DataContext = mainWindowViewModel };
+
+            // Listen for theme changes in the ViewModel
+            mainWindowViewModel.PropertyChanged += (vmSender, vmArgs) =>
             {
-                var mainWindowViewModel = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<MainWindowViewModel>(App.Host!.Services);
-                var mainWindow = new MainWindow { DataContext = mainWindowViewModel };
-
-                // Listen for theme changes in the ViewModel
-                mainWindowViewModel.PropertyChanged += (vmSender, vmArgs) =>
+              if (vmArgs.PropertyName == nameof(MainWindowViewModel.CurrentTheme))
+              {
+                if (vmSender is MainWindowViewModel vm)
                 {
-                    if (vmArgs.PropertyName == nameof(MainWindowViewModel.CurrentTheme))
-                    {
-                        if (vmSender is MainWindowViewModel vm)
-                        {
-                            Application.Current!.RequestedThemeVariant = vm.CurrentTheme switch
-                            {
-                                AppTheme.Light => Avalonia.Styling.ThemeVariant.Light,
-                                AppTheme.Dark => Avalonia.Styling.ThemeVariant.Dark,
-                                _ => Avalonia.Styling.ThemeVariant.Default,
-                            };
-                        }
-                    }
-                };
+                  Application.Current!.RequestedThemeVariant = vm.CurrentTheme switch
+                  {
+                    AppTheme.Light => Avalonia.Styling.ThemeVariant.Light,
+                    AppTheme.Dark => Avalonia.Styling.ThemeVariant.Dark,
+                    _ => Avalonia.Styling.ThemeVariant.Default,
+                  };
+                }
+              }
+            };
 
-                desktop.MainWindow = mainWindow;
-                mainWindow.Show();
-                splashWindow.Close();
-            });
+            desktop.MainWindow = mainWindow;
+            mainWindow.Show();
+            splashWindow.Close();
+          });
         };
 
         splashViewModel.OnInitializationFailed += (errorMessage) =>
         {
-            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+          Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+          {
+            var errorWindow = new Avalonia.Controls.Window
             {
-                var errorWindow = new Avalonia.Controls.Window
-                {
-                    Title = "Critical Failure",
-                    Width = 600,
-                    Height = 200,
-                    WindowStartupLocation = Avalonia.Controls.WindowStartupLocation.CenterScreen,
-                    Content = new Avalonia.Controls.TextBlock
-                    {
-                        Text = $"CRITICAL ERROR:\n{errorMessage}\n\nThe application cannot run without the core simulation engine.",
-                        Foreground = Avalonia.Media.Brushes.Red,
-                        FontWeight = Avalonia.Media.FontWeight.Bold,
-                        FontSize = 16,
-                        Margin = new Avalonia.Thickness(20),
-                        TextWrapping = Avalonia.Media.TextWrapping.Wrap,
-                    },
-                };
-                desktop.MainWindow = errorWindow;
-                errorWindow.Show();
-                splashWindow.Close();
-            });
+              Title = "Critical Failure",
+              Width = 600,
+              Height = 200,
+              WindowStartupLocation = Avalonia.Controls.WindowStartupLocation.CenterScreen,
+              Content = new Avalonia.Controls.TextBlock
+              {
+                Text =
+                  $"CRITICAL ERROR:\n{errorMessage}\n\nThe application cannot run without the core simulation engine.",
+                Foreground = Avalonia.Media.Brushes.Red,
+                FontWeight = Avalonia.Media.FontWeight.Bold,
+                FontSize = 16,
+                Margin = new Avalonia.Thickness(20),
+                TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+              },
+            };
+            desktop.MainWindow = errorWindow;
+            errorWindow.Show();
+            splashWindow.Close();
+          });
         };
 
         desktop.MainWindow = splashWindow;

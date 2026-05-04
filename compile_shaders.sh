@@ -12,7 +12,7 @@ if [ ! -x "$GLSLC" ]; then
     exit 1
 fi
 
-for file in assets/*.vert assets/*.frag assets/*.comp; do
+for file in assets/*.vert assets/*.frag assets/*.comp assets/sim/*.comp; do
     [ -e "$file" ] || continue
     ext="${file##*.}"
     echo "Compiling $file..."

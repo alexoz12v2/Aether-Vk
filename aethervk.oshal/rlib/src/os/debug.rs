@@ -7,34 +7,35 @@ macro_rules! log {
   };
 }
 
-#[cfg(target_os = "windows")]
-pub use windows_debug::*;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use unix_debug::*;
+#[cfg(target_os = "windows")]
+pub use windows_debug::*;
 
-pub static LOGGER_CALLBACK: core::sync::atomic::AtomicPtr<()> = core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+pub static LOGGER_CALLBACK: core::sync::atomic::AtomicPtr<()> =
+  core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 
 #[cfg(target_os = "windows")]
 mod windows_debug {
   use core::fmt;
-  use windows::core::HSTRING;
   use windows::Win32::System::Diagnostics::Debug::OutputDebugStringW;
+  use windows::core::HSTRING;
 
   #[cfg(feature = "console_log")]
   use spin::Once;
   #[cfg(feature = "console_log")]
-  use windows::core::w;
-  #[cfg(feature = "console_log")]
   use windows::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
   #[cfg(feature = "console_log")]
   use windows::Win32::Storage::FileSystem::{
-    CreateFileW, WriteFile, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, WriteFile,
   };
   #[cfg(feature = "console_log")]
   use windows::Win32::System::Console::{
-    GetConsoleMode, SetConsoleMode, SetConsoleOutputCP, CONSOLE_MODE,
-    ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+    CONSOLE_MODE, ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode, SetConsoleMode,
+    SetConsoleOutputCP,
   };
+  #[cfg(feature = "console_log")]
+  use windows::core::w;
 
   #[cfg(feature = "console_log")]
   struct SyncHandle(HANDLE);
@@ -68,7 +69,7 @@ mod windows_debug {
         FILE_ATTRIBUTE_NORMAL,
         None,
       )
-          .unwrap_or(INVALID_HANDLE_VALUE);
+      .unwrap_or(INVALID_HANDLE_VALUE);
 
       if handle.is_invalid() {
         return None;
@@ -130,7 +131,7 @@ mod windows_debug {
   }
 
   pub fn print_stacktrace() {
-    use core::mem::{size_of, MaybeUninit};
+    use core::mem::{MaybeUninit, size_of};
 
     // We define standard Win32 structures to circumvent differing
     // pointer/handle types mapped across versions of the windows-rs crate.
@@ -224,7 +225,13 @@ mod windows_debug {
           let name_slice = core::slice::from_raw_parts(name_ptr, name_len);
 
           if let Ok(name_str) = core::str::from_utf8(name_slice) {
-            crate::log!("  [{:2}] {} +0x{:x} ({:p})", i, name_str, displacement, addr);
+            crate::log!(
+              "  [{:2}] {} +0x{:x} ({:p})",
+              i,
+              name_str,
+              displacement,
+              addr
+            );
             continue;
           }
         }
@@ -283,7 +290,8 @@ mod unix_debug {
   pub fn print_stacktrace() {
     unsafe extern "C" {
       // Exposed by default in libc without any std dependencies
-      fn backtrace(buffer: *mut *mut core::ffi::c_void, size: core::ffi::c_int) -> core::ffi::c_int;
+      fn backtrace(buffer: *mut *mut core::ffi::c_void, size: core::ffi::c_int)
+      -> core::ffi::c_int;
       fn backtrace_symbols(
         buffer: *const *mut core::ffi::c_void,
         size: core::ffi::c_int,

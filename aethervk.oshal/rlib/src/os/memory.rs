@@ -2,12 +2,12 @@
 
 use core::{alloc::Layout, cell::Cell, mem::MaybeUninit, ptr::NonNull};
 
-#[cfg(target_os = "windows")]
-pub use windows_memory::*;
-#[cfg(target_os = "macos")]
-pub use macos_memory::*;
 #[cfg(target_os = "linux")]
 pub use linux_memory::*;
+#[cfg(target_os = "macos")]
+pub use macos_memory::*;
+#[cfg(target_os = "windows")]
+pub use windows_memory::*;
 
 #[cfg(target_os = "windows")]
 mod windows_memory {
@@ -120,9 +120,7 @@ impl StackAllocator {
     let align_offset = current_ptr.align_offset(layout.align());
 
     let aligned_start = start.checked_add(align_offset).ok_or("Math overflow")?;
-    let end = aligned_start
-      .checked_add(layout.size())
-      .ok_or("Math overflow")?;
+    let end = aligned_start.checked_add(layout.size()).ok_or("Math overflow")?;
 
     if end > len {
       return Err("Janitor out of memory");
@@ -141,28 +139,27 @@ impl StackAllocator {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn test_query_memory_status() {
-        let status = query_memory_status();
-        // Since different platforms return different things, just check it doesn't crash
-        // and if it returns total > 0 on supported platforms
-        #[cfg(not(target_os = "linux"))]
-        assert!(status.total_bytes > 0);
-    }
+  #[test]
+  fn test_query_memory_status() {
+    let status = query_memory_status();
+    // Since different platforms return different things, just check it doesn't crash
+    // and if it returns total > 0 on supported platforms
+    #[cfg(not(target_os = "linux"))]
+    assert!(status.total_bytes > 0);
+  }
 
-    #[test]
-    fn test_stack_allocator() {
-        let allocator = StackAllocator::new();
-        let mut buffer = [0u8; 1024];
-        let base_ptr = buffer.as_mut_ptr();
-        
-        let val_ptr = unsafe { allocator.allocate(base_ptr, 1024, 42u32).unwrap() };
-        unsafe { assert_eq!(*val_ptr, 42) };
-        
-        let val_ptr2 = unsafe { allocator.allocate(base_ptr, 1024, 100u64).unwrap() };
-        unsafe { assert_eq!(*val_ptr2, 100) };
-    }
+  #[test]
+  fn test_stack_allocator() {
+    let allocator = StackAllocator::new();
+    let mut buffer = [0u8; 1024];
+    let base_ptr = buffer.as_mut_ptr();
+
+    let val_ptr = unsafe { allocator.allocate(base_ptr, 1024, 42u32).unwrap() };
+    unsafe { assert_eq!(*val_ptr, 42) };
+
+    let val_ptr2 = unsafe { allocator.allocate(base_ptr, 1024, 100u64).unwrap() };
+    unsafe { assert_eq!(*val_ptr2, 100) };
+  }
 }
-

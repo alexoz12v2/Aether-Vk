@@ -1,10 +1,6 @@
-use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
-use aethervk_oshal_rlib::math::matrix::{MatrixVectorMul, Matrix4};
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
 use crate::gpu;
-use crate::gpu::frame::CameraRenderData;
 use crate::gpu::RenderDevice;
+use crate::gpu::frame::CameraRenderData;
 use crate::math::collision::linear_bvh::LinearBound;
 use crate::scene::{
   BillboardType, BvhDebugComponent, CameraComponent, CursorComponent, EntityId, FollowingComponent,
@@ -12,6 +8,10 @@ use crate::scene::{
   PhysicalMeshComponent, SelectedComponent, SkyComponent, SunComponent, TransformComponent,
 };
 use crate::types::{GpuError, GpuResult};
+use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
+use aethervk_oshal_rlib::math::matrix::{Matrix4, MatrixVectorMul};
+use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
 use alloc::vec::Vec;
 
 // TODO extensive unit testing. (with valid scenes of course scene.validate)
@@ -60,6 +60,7 @@ pub struct RenderSceneExtraction {
   pub extracted_grid: Option<(f32, f32, [f32; 3])>,
   // ... more components here
   pub camera_data: CameraRenderData,
+  pub window_extent: [u32; 2],
   pub cursor_transform: Option<TransformComponent>,
 }
 
@@ -72,9 +73,11 @@ impl RenderSceneExtraction {
     presentation_engine_handle: gpu::PresentationEngineHandle,
     cmd_buffer: gpu::CommandBufferHandle,
     time_readings: aethervk_oshal_rlib::os::time::TimeReadings,
+    window_extent: [u32; 2],
   ) -> GpuResult<gpu::RenderScene> {
     let mut render_scene = gpu::RenderScene {
       time_readings,
+      window_extent,
       draw_calls: Vec::with_capacity(self.extracted_meshes.len()),
       cursor_call: None,
       marker_calls: Vec::with_capacity(self.extracted_markers.len()),
@@ -91,19 +94,17 @@ impl RenderSceneExtraction {
 
     // Populate Meshes
     for mesh_data in &self.extracted_meshes {
-      let res = match device.get_physical_mesh_resources(
-        mesh_data.entity_id,
-        presentation_engine_handle,
-      ) {
-        Ok(r) => r,
-        Err(_) => device.create_physical_mesh_resources(
-          cmd_buffer,
-          mesh_data.entity_id,
-          &mesh_data.mesh,
-          presentation_engine_handle,
-          &mesh_data.mesh.asset_path,
-        )?,
-      };
+      let res =
+        match device.get_physical_mesh_resources(mesh_data.entity_id, presentation_engine_handle) {
+          Ok(r) => r,
+          Err(_) => device.create_physical_mesh_resources(
+            cmd_buffer,
+            mesh_data.entity_id,
+            &mesh_data.mesh,
+            presentation_engine_handle,
+            &mesh_data.mesh.asset_path,
+          )?,
+        };
       let dc = gpu::frame::DrawCall::from_handles_and_matrix(
         res,
         mesh_data.mesh.mesh.indices.len() as u32,
@@ -138,15 +139,13 @@ impl RenderSceneExtraction {
       for (t, markers_comp) in self.extracted_markers {
         let model_matrix = t.to_mat4();
         for marker in markers_comp.markers {
-          render_scene
-            .marker_calls
-            .push(gpu::frame::MarkerDrawCall::from_values(
-              res.pipeline,
-              model_matrix,
-              marker.local_pos,
-              marker.size,
-              marker.color,
-            ));
+          render_scene.marker_calls.push(gpu::frame::MarkerDrawCall::from_values(
+            res.pipeline,
+            model_matrix,
+            marker.local_pos,
+            marker.size,
+            marker.color,
+          ));
         }
       }
     }
@@ -155,7 +154,9 @@ impl RenderSceneExtraction {
     if !self.extracted_measurements.is_empty() {
       let pipeline = match device.get_measurement_resources(presentation_engine_handle) {
         Ok(r) => r.pipeline,
-        Err(_) => device.create_measurement_resources(cmd_buffer, presentation_engine_handle)?.pipeline,
+        Err(_) => {
+          device.create_measurement_resources(cmd_buffer, presentation_engine_handle)?.pipeline
+        }
       };
       for (p1, p2, points, significant_digits) in self.extracted_measurements {
         render_scene.measurement_calls.push(
@@ -174,17 +175,17 @@ impl RenderSceneExtraction {
     if !self.extracted_billboards.is_empty() {
       let pipeline = match device.get_billboard_resources(presentation_engine_handle) {
         Ok(r) => r.pipeline,
-        Err(_) => device.create_billboard_resources(cmd_buffer, presentation_engine_handle)?.pipeline,
+        Err(_) => {
+          device.create_billboard_resources(cmd_buffer, presentation_engine_handle)?.pipeline
+        }
       };
       for (mat, texture_id, billboard_type) in self.extracted_billboards {
-        render_scene
-          .billboard_calls
-          .push(gpu::frame::BillboardDrawCall::from_data(
-            pipeline,
-            mat,
-            texture_id,
-            billboard_type,
-          ));
+        render_scene.billboard_calls.push(gpu::frame::BillboardDrawCall::from_data(
+          pipeline,
+          mat,
+          texture_id,
+          billboard_type,
+        ));
       }
     }
 
@@ -196,13 +197,11 @@ impl RenderSceneExtraction {
       };
       for (entity_id, mat, scale) in self.extracted_gizmos {
         let gizmo_idx = device.update_gizmo_instance(entity_id, mat)?;
-        render_scene
-          .gizmo_calls
-          .push(gpu::frame::GizmoDrawCall::from_values(
-            gizmo_resources.pipeline,
-            scale,
-            gizmo_idx,
-          ));
+        render_scene.gizmo_calls.push(gpu::frame::GizmoDrawCall::from_values(
+          gizmo_resources.pipeline,
+          scale,
+          gizmo_idx,
+        ));
       }
     }
 
@@ -211,13 +210,11 @@ impl RenderSceneExtraction {
       let pipeline_key = device.get_bvh_pipeline_kay(presentation_engine_handle)?;
       for (nodes, mesh_index) in &self.extracted_bvhs {
         for node in nodes {
-          render_scene
-            .bvh_draw_calls
-            .push(gpu::frame::BvhDrawCall::new(
-              node,
-              pipeline_key,
-              *mesh_index,
-            ));
+          render_scene.bvh_draw_calls.push(gpu::frame::BvhDrawCall::new(
+            node,
+            pipeline_key,
+            *mesh_index,
+          ));
         }
       }
     }
@@ -253,19 +250,18 @@ impl RenderSceneExtraction {
     // Particles
     let particle_pipeline = device.get_particle_pipeline_key(presentation_engine_handle)?;
     for (entity_id, particles, config) in self.extracted_particles {
-      if particles.is_empty() { // TODO: ECS should filter these
+      if particles.is_empty() {
+        // TODO: ECS should filter these
         continue;
       }
-      render_scene
-        .particle_calls
-        .push(gpu::frame::ParticleDrawCall {
-          pipeline: particle_pipeline,
-          particle_count: particles.len() as u32,
-          system_particle_offset: 0,
-          system_indirect_offset: 0,
-          config,
-          particles,
-        });
+      render_scene.particle_calls.push(gpu::frame::ParticleDrawCall {
+        pipeline: particle_pipeline,
+        particle_count: particles.len() as u32,
+        system_particle_offset: 0,
+        system_indirect_offset: 0,
+        config,
+        particles,
+      });
     }
 
     // ... More components here
@@ -282,6 +278,7 @@ pub trait SceneConversionExt {
     camera_entity: EntityId,
     render_outline: bool,
     pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>,
+    window_extent: [u32; 2],
   ) -> GpuResult<RenderSceneExtraction>;
 }
 
@@ -291,6 +288,7 @@ impl SceneConversionExt for crate::scene::Scene {
     camera_entity: EntityId,
     render_outline: bool,
     pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>,
+    window_extent: [u32; 2],
   ) -> GpuResult<RenderSceneExtraction> {
     const START_VEC_CAPACITY: usize = 32;
     let mut extracted_meshes: Vec<PhysicalMeshSceneData> = Vec::with_capacity(START_VEC_CAPACITY);
@@ -320,11 +318,11 @@ impl SceneConversionExt for crate::scene::Scene {
 
     // Camera
     let cam_transform = self.global_transform(camera_entity).unwrap_or_default();
-    let cam_comp = self
-      .with_component(camera_entity, |c: &CameraComponent| *c)
-      .ok_or(GpuError::InvalidArgument(
+    let cam_comp = self.with_component(camera_entity, |c: &CameraComponent| *c).ok_or(
+      GpuError::InvalidArgument(
         "[RenderDevice] convert_scene: Scene has no camera component in the specified entity",
-      ))?;
+      ),
+    )?;
     camera_data = CameraRenderData::new(&cam_transform, &cam_comp);
 
     // Cursor
@@ -337,21 +335,17 @@ impl SceneConversionExt for crate::scene::Scene {
     // Meshes
     let should_par = self.should_parallelize() && pool.is_some();
     if should_par {
-      let results = self.query1_res_without_par::<PhysicalMeshComponent, HiddenComponent, _, _>(pool.unwrap(), |id, mesh| {
-        if let Some(t) = self.global_transform(id) {
-          let mesh_clone = mesh.clone();
-          let is_selected: bool = self.has_component::<SelectedComponent>(id).into();
-          let is_following: bool = self.has_component::<FollowingComponent>(id).into();
-          let outline = get_mesh_outline(is_selected, is_following, render_outline);
-          let m = PhysicalMeshSceneData::new(id, mesh_clone, t, outline);
-          // BVH debug rendering
-          let bvh = m
-            .mesh
-            .mesh
-            .bvh
-            .as_ref()
-            .map(|bvh| &bvh.nodes)
-            .and_then(|nodes| {
+      let results = self.query1_res_without_par::<PhysicalMeshComponent, HiddenComponent, _, _>(
+        pool.unwrap(),
+        |id, mesh| {
+          if let Some(t) = self.global_transform(id) {
+            let mesh_clone = mesh.clone();
+            let is_selected: bool = self.has_component::<SelectedComponent>(id).into();
+            let is_following: bool = self.has_component::<FollowingComponent>(id).into();
+            let outline = get_mesh_outline(is_selected, is_following, render_outline);
+            let m = PhysicalMeshSceneData::new(id, mesh_clone, t, outline);
+            // BVH debug rendering
+            let bvh = m.mesh.mesh.bvh.as_ref().map(|bvh| &bvh.nodes).and_then(|nodes| {
               let bvh_dbg_states = {
                 let mut dbg_states = None;
                 self.with_component(id, |dbg: &BvhDebugComponent| {
@@ -365,26 +359,23 @@ impl SceneConversionExt for crate::scene::Scene {
                 None
               }
             });
-            
-          let bvh_data = if let Some((nodes, states)) = bvh {
-            let mut extracted = Vec::with_capacity(nodes.len());
-            states
-              .iter()
-              .zip(nodes.iter())
-              .filter(|&(show, _)| *show)
-              .for_each(|(_, node)| {
+
+            let bvh_data = if let Some((nodes, states)) = bvh {
+              let mut extracted = Vec::with_capacity(nodes.len());
+              states.iter().zip(nodes.iter()).filter(|&(show, _)| *show).for_each(|(_, node)| {
                 extracted.push(node.bound.clone());
               });
-            Some(extracted)
+              Some(extracted)
+            } else {
+              None
+            };
+
+            Some((m, bvh_data))
           } else {
             None
-          };
-          
-          Some((m, bvh_data))
-        } else {
-          None
-        }
-      });
+          }
+        },
+      );
       for ((m, bvh_data), _) in results {
         if let Some(bvh) = bvh_data {
           extracted_bvhs.push((bvh, extracted_meshes.len()));
@@ -400,36 +391,26 @@ impl SceneConversionExt for crate::scene::Scene {
           let outline = get_mesh_outline(is_selected, is_following, render_outline);
           let m = PhysicalMeshSceneData::new(id, mesh_clone, t, outline);
           // BVH debug rendering
-          let bvh = m
-            .mesh
-            .mesh
-            .bvh
-            .as_ref()
-            .map(|bvh| &bvh.nodes)
-            .and_then(|nodes| {
-              let bvh_dbg_states = {
-                let mut dbg_states = None;
-                self.with_component(id, |dbg: &BvhDebugComponent| {
-                  dbg_states = Some(dbg.node_render_states.clone());
-                });
-                dbg_states
-              };
-              if let Some(bvh_dbg_states) = bvh_dbg_states {
-                Some((nodes, bvh_dbg_states))
-              } else {
-                None
-              }
-            });
+          let bvh = m.mesh.mesh.bvh.as_ref().map(|bvh| &bvh.nodes).and_then(|nodes| {
+            let bvh_dbg_states = {
+              let mut dbg_states = None;
+              self.with_component(id, |dbg: &BvhDebugComponent| {
+                dbg_states = Some(dbg.node_render_states.clone());
+              });
+              dbg_states
+            };
+            if let Some(bvh_dbg_states) = bvh_dbg_states {
+              Some((nodes, bvh_dbg_states))
+            } else {
+              None
+            }
+          });
           if let Some((nodes, states)) = bvh {
             extracted_bvhs.push((Vec::with_capacity(nodes.len()), extracted_meshes.len()));
             let inserted_bvh = extracted_bvhs.last_mut().unwrap();
-            states
-              .iter()
-              .zip(nodes.iter())
-              .filter(|&(show, _)| *show)
-              .for_each(|(_, node)| {
-                inserted_bvh.0.push(node.bound.clone());
-              });
+            states.iter().zip(nodes.iter()).filter(|&(show, _)| *show).for_each(|(_, node)| {
+              inserted_bvh.0.push(node.bound.clone());
+            });
           }
           extracted_meshes.push(m);
         }
@@ -438,9 +419,10 @@ impl SceneConversionExt for crate::scene::Scene {
 
     // Markers
     if should_par {
-      let results = self.query1_res_without_par::<MarkersComponent, HiddenComponent, _, _>(pool.unwrap(), |id, m| {
-        self.global_transform(id).map(|t| (t, m.clone()))
-      });
+      let results = self.query1_res_without_par::<MarkersComponent, HiddenComponent, _, _>(
+        pool.unwrap(),
+        |id, m| self.global_transform(id).map(|t| (t, m.clone())),
+      );
       for (res, _) in results {
         extracted_markers.push(res);
       }
@@ -454,14 +436,17 @@ impl SceneConversionExt for crate::scene::Scene {
 
     // Measurements
     if should_par {
-      let results = self.query1_res_without_par::<MeasurementComponent, HiddenComponent, _, _>(pool.unwrap(), |id, m| {
-        self.global_transform(id).map(|t| {
-          let mat: Mat4x4f32 = t.to_mat4();
-          let p1 = Vec3f32(mat.mul_vector(m.pos1.to_point()));
-          let p2 = Vec3f32(mat.mul_vector(m.pos2.to_point()));
-          (p1, p2, m.points, m.significant_digits)
-        })
-      });
+      let results = self.query1_res_without_par::<MeasurementComponent, HiddenComponent, _, _>(
+        pool.unwrap(),
+        |id, m| {
+          self.global_transform(id).map(|t| {
+            let mat: Mat4x4f32 = t.to_mat4();
+            let p1 = Vec3f32(mat.mul_vector(m.pos1.to_point()));
+            let p2 = Vec3f32(mat.mul_vector(m.pos2.to_point()));
+            (p1, p2, m.points, m.significant_digits)
+          })
+        },
+      );
       for (res, _) in results {
         extracted_measurements.push(res);
       }
@@ -478,12 +463,15 @@ impl SceneConversionExt for crate::scene::Scene {
 
     // Billboards
     if should_par {
-      let results = self.query1_res_without_par::<ImageBillboardComponent, HiddenComponent, _, _>(pool.unwrap(), |id, i| {
-        self.global_transform(id).map(|t| {
-          let mat: Mat4x4f32 = t.to_mat4();
-          (mat, i.texture_id, i.billboard_type)
-        })
-      });
+      let results = self.query1_res_without_par::<ImageBillboardComponent, HiddenComponent, _, _>(
+        pool.unwrap(),
+        |id, i| {
+          self.global_transform(id).map(|t| {
+            let mat: Mat4x4f32 = t.to_mat4();
+            (mat, i.texture_id, i.billboard_type)
+          })
+        },
+      );
       for (res, _) in results {
         extracted_billboards.push(res);
       }
@@ -556,6 +544,7 @@ impl SceneConversionExt for crate::scene::Scene {
       extracted_sun,
       extracted_grid,
       camera_data,
+      window_extent,
       cursor_transform,
     })
   }

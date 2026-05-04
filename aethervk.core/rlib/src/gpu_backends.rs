@@ -1,16 +1,16 @@
+use crate::gpu::{CommandBuffer, DeviceBuffer, Kernels, WaitHandle};
+use crate::physics::physics_scene::PhysicsScene;
+use crate::scene::Scene;
 use crate::{
   gpu::{
-    RenderBackendId, RenderFrontend, VULKAN_RENDER_BACKEND, METAL_RENDER_BACKEND,
-    D3D12_RENDER_BACKEND,
+    D3D12_RENDER_BACKEND, METAL_RENDER_BACKEND, RenderBackendId, RenderFrontend,
+    VULKAN_RENDER_BACKEND,
   },
   traits::InitWithRuntime,
   types::{EngineError, EngineResult, GpuError, RuntimeParams},
 };
-use alloc::vec::Vec;
 use aethervk_oshal_rlib::os::time::{timeus_milliseconds, timeus_t};
-use crate::gpu::{CommandBuffer, DeviceBuffer, Kernels, WaitHandle};
-use crate::physics::physics_scene::PhysicsScene;
-use crate::scene::Scene;
+use alloc::vec::Vec;
 
 #[cfg(all(
   not(target_arch = "wasm32"),
@@ -82,10 +82,7 @@ pub fn get_available_render_backends() -> Vec<&'static str> {
     };
     if let Ok(mut context) = vulkan::VulkanRenderContext::init_with_runtime(&params) {
       use crate::gpu::RenderContext;
-      if context
-        .init_device(0, &crate::gpu::DeviceAdditionalParams::new())
-        .is_ok()
-      {
+      if context.init_device(0, &crate::gpu::DeviceAdditionalParams::new()).is_ok() {
         backends.push("Vulkan");
       }
     }
@@ -120,10 +117,7 @@ pub fn get_available_kernels() -> Vec<&'static str> {
     };
     if let Ok(mut context) = vulkan::VulkanRenderContext::init_with_runtime(&params) {
       use crate::gpu::RenderContext;
-      if context
-        .init_device(0, &crate::gpu::DeviceAdditionalParams::new())
-        .is_ok()
-      {
+      if context.init_device(0, &crate::gpu::DeviceAdditionalParams::new()).is_ok() {
         kernels.push("Vulkan Compute");
       }
     }

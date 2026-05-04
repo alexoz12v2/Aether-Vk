@@ -1,12 +1,12 @@
-use core::{
-  char::MAX,
-  ffi::{CStr, c_char, c_void},
-  mem, ops, ptr,
-};
 use alloc::{
   string::{self, ToString},
   sync::{Arc, Weak},
   vec::Vec,
+};
+use core::{
+  char::MAX,
+  ffi::{CStr, c_char, c_void},
+  mem, ops, ptr,
 };
 
 use ash::{
@@ -15,18 +15,18 @@ use ash::{
 };
 use bitflags::bitflags;
 
-use itertools::Itertools;
-use vk_mem::Alloc;
-use aethervk_oshal_rlib::os::debug;
-#[cfg(windows)]
-use windows::{
-  core::{w, s},
-  Win32::System::LibraryLoader::{LoadLibraryExW, GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32},
-  core::PCSTR,
-};
 use crate::{
   gpu::{DeviceAdditionalParams, OpaqueNativeHandleInfo},
   types::{EngineError, EngineResult, GpuError, GpuResult},
+};
+use aethervk_oshal_rlib::os::debug;
+use itertools::Itertools;
+use vk_mem::Alloc;
+#[cfg(windows)]
+use windows::{
+  Win32::System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
+  core::PCSTR,
+  core::{s, w},
 };
 
 // -------------------------------- Helper Types -----------------------------
@@ -172,15 +172,9 @@ impl PhysicalDeviceQueryResult {
     &self,
   ) -> heapless::index_set::FnvIndexSet<u32, MAX_QUEUE_FAMILY_COUNT> {
     let mut unique_queue_families = heapless::index_set::FnvIndexSet::new();
-    unique_queue_families
-      .insert(self.graphics_queue_family_index)
-      .unwrap();
-    unique_queue_families
-      .insert(self.compute_queue_family_index)
-      .unwrap();
-    unique_queue_families
-      .insert(self.transfer_queue_family_index)
-      .unwrap();
+    unique_queue_families.insert(self.graphics_queue_family_index).unwrap();
+    unique_queue_families.insert(self.compute_queue_family_index).unwrap();
+    unique_queue_families.insert(self.transfer_queue_family_index).unwrap();
 
     unique_queue_families
   }
@@ -197,10 +191,7 @@ impl PhysicalDeviceQueryResult {
   }
 
   pub(super) fn enabled_extension_names(&self) -> Vec<*const c_char> {
-    let the_vec = required_device_extensions()
-      .iter()
-      .map(|cstr| cstr.as_ptr())
-      .collect();
+    let the_vec = required_device_extensions().iter().map(|cstr| cstr.as_ptr()).collect();
     // TODO optional extensions if needed
 
     the_vec
@@ -231,7 +222,7 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
         errors.push(msg.to_string_lossy().into_owned());
       }
     }
-    
+
     if !_p_user_data.is_null() {
       let callback: fn(&str) = unsafe { core::mem::transmute(_p_user_data) };
       let s = msg.to_str().unwrap_or("Invalid UTF-8");
@@ -269,12 +260,12 @@ impl EntryWrapper {
       let get_instance_proc_addr: PFN_vkGetInstanceProcAddr;
       #[cfg(windows)]
       {
-        use windows::Win32::System::LibraryLoader::{
-          GetModuleHandleExW, GetProcAddress, LoadLibraryExW,
-          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, LOAD_LIBRARY_SEARCH_SYSTEM32,
-        };
         use windows::Win32::Foundation::HMODULE;
-        use windows::core::{s, w, PCSTR, PCWSTR};
+        use windows::Win32::System::LibraryLoader::{
+          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleHandleExW, GetProcAddress,
+          LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+        };
+        use windows::core::{PCSTR, PCWSTR, s, w};
 
         const VK_GET_INSTANCE_PROC_ADDR_NAME: PCSTR = s!("vkGetInstanceProcAddr");
         const VULKAN_DLL_NAME: PCWSTR = w!("vulkan-1.dll");
@@ -504,6 +495,12 @@ pub(super) fn required_instance_extensions() -> &'static Vec<&'static CStr> {
     // surface
     the_vec.push(ash::khr::surface::NAME);
     the_vec.push(ash::khr::get_surface_capabilities2::NAME);
+    
+    #[cfg(test)]
+    {
+      the_vec.push(ash::ext::headless_surface::NAME);
+    }
+    
     #[cfg(windows)]
     {
       the_vec.push(ash::khr::win32_surface::NAME);
@@ -596,9 +593,8 @@ pub(super) fn first_unsupported_extension<'a>(
   properties: &'a [vk::ExtensionProperties],
 ) -> Option<&'a CStr> {
   for desired_name in desired_names {
-    if let None = properties
-      .iter()
-      .find(|&prop| *desired_name == prop.extension_name_as_c_str().unwrap())
+    if let None =
+      properties.iter().find(|&prop| *desired_name == prop.extension_name_as_c_str().unwrap())
     {
       return Some(desired_name);
     }
@@ -661,12 +657,8 @@ impl RequiredFeatures<'_> {
     // TODO: check that these are baseline for low end devices
     self.descriptor_indexing.runtime_descriptor_array = vk::TRUE;
     // TODO: check that these are baseline for low end devices
-    self
-      .descriptor_indexing
-      .shader_sampled_image_array_non_uniform_indexing = vk::TRUE;
-    self
-      .descriptor_indexing
-      .shader_storage_buffer_array_non_uniform_indexing = vk::TRUE;
+    self.descriptor_indexing.shader_sampled_image_array_non_uniform_indexing = vk::TRUE;
+    self.descriptor_indexing.shader_storage_buffer_array_non_uniform_indexing = vk::TRUE;
     // TODO: check that these are baseline for low end devices
     self.descriptor_indexing.descriptor_binding_partially_bound = vk::TRUE;
     // TODO: check that these are baseline for low end devices
@@ -697,18 +689,10 @@ impl RequiredFeatures<'_> {
     if self.descriptor_indexing.runtime_descriptor_array != vk::TRUE {
       the_vec.push("descriptor_indexing".to_string());
     }
-    if self
-      .descriptor_indexing
-      .shader_sampled_image_array_non_uniform_indexing
-      != vk::TRUE
-    {
+    if self.descriptor_indexing.shader_sampled_image_array_non_uniform_indexing != vk::TRUE {
       the_vec.push("descriptor_indexing_non_uniform_indexing".to_string());
     }
-    if self
-      .descriptor_indexing
-      .shader_storage_buffer_array_non_uniform_indexing
-      != vk::TRUE
-    {
+    if self.descriptor_indexing.shader_storage_buffer_array_non_uniform_indexing != vk::TRUE {
       the_vec.push("descriptor_indexing_storage_buffer_non_uniform_indexing".to_string());
     }
     if self.descriptor_indexing.descriptor_binding_partially_bound != vk::TRUE {
@@ -841,6 +825,41 @@ pub(super) fn create_transient_attachment(
     if cfg!(not(target_os = "macos")) {
       x.preferred_flags = vk::MemoryPropertyFlags::LAZILY_ALLOCATED;
     }
+    x.priority = 1.0;
+    x
+  };
+
+  unsafe { allocator.create_image(&image_create_info, &allocation_info) }
+    .map(|(i, a)| (unsafe { NonZeroHandle::new_unchecked(i) }, a))
+    .map_err(|e| e.into())
+}
+
+#[cfg(test)]
+pub(super) fn create_test_attachment(
+  allocator: &vk_mem::Allocator,
+  extent: vk::Extent2D,
+  format: vk::Format,
+  usage: vk::ImageUsageFlags,
+  samples: vk::SampleCountFlags,
+) -> GpuResult<(NonZeroHandle<vk::Image>, vk_mem::Allocation)> {
+  let image_create_info = vk::ImageCreateInfo::default()
+    .extent(vk::Extent3D {
+      width: extent.width,
+      height: extent.height,
+      depth: 1,
+    })
+    .format(format)
+    .image_type(vk::ImageType::TYPE_2D)
+    .mip_levels(1)
+    .array_layers(1)
+    .samples(samples)
+    .usage(usage)
+    .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+  let allocation_info = {
+    let mut x = vk_mem::AllocationCreateInfo::default();
+    x.usage = vk_mem::MemoryUsage::AutoPreferDevice;
+    x.required_flags = vk::MemoryPropertyFlags::DEVICE_LOCAL;
     x.priority = 1.0;
     x
   };

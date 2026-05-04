@@ -1,10 +1,10 @@
 use crate::scene::{Component, TransformComponent};
-use aethervk_oshal_rlib::math::vector::{Vector, vec3::Vec3f32};
-use aethervk_oshal_rlib::math::vector::vec4::Quat;
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::Vector3;
 use crate::simulation::almanac::AlmanacPackedData;
 use crate::types::EngineResult;
+use aethervk_oshal_rlib::math::quaternion::Quaternion;
+use aethervk_oshal_rlib::math::vector::Vector3;
+use aethervk_oshal_rlib::math::vector::vec4::Quat;
+use aethervk_oshal_rlib::math::vector::{Vector, vec3::Vec3f32};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AlmanacPlanet {
@@ -29,10 +29,9 @@ impl AlmanacPlanet {
     step_days: f64,
     almanac: &AlmanacPackedData,
   ) -> EngineResult<()> {
-    // TODO switch to SUN_ECLIPJ2000
     let kinematic_state = almanac.get_ephem_full(
       self.naif_id,
-      anise::constants::frames::SSB_J2000,
+      anise::constants::frames::SUN_J2000, // crate::simulation::almanac::SUN_ECLIPJ2000, // TODO test if absent
       epoch,
       true,
       false,

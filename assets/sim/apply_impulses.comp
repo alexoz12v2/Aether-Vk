@@ -1,0 +1,74 @@
+#version 450 core
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
+
+// Particles data mapped as uint to perform CAS loop for float atomicAdd
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleData {
+    uint data[];
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer PackedCollisions {
+    uint count;
+    uvec2 pairs[];
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer ImpulseOutput {
+    vec3 impulses[];
+};
+
+layout(push_constant, scalar) uniform PushConstants {
+    ParticleData particles;
+    PackedCollisions collisions;
+    ImpulseOutput impulses;
+} pc;
+
+void atomicAddFloat(uint index, float val) {
+    uint old_val = pc.particles.data[index];
+    uint assumed_val;
+    do {
+        assumed_val = old_val;
+        uint new_val = floatBitsToUint(uintBitsToFloat(assumed_val) + val);
+        old_val = atomicCompSwap(pc.particles.data[index], assumed_val, new_val);
+    } while (assumed_val != old_val);
+}
+
+void main() {
+    uint global_id = gl_GlobalInvocationID.x;
+    if (global_id >= pc.collisions.count) return;
+
+    uvec2 pair = pc.collisions.pairs[global_id];
+    vec3 impulse = pc.impulses.impulses[global_id];
+
+    uint pA_id = pair.x;
+    uint pB_id = pair.y;
+
+    uint blockA = pA_id / SUBGROUP_SIZE;
+    uint locA = pA_id % SUBGROUP_SIZE;
+    uint baseA = blockA * (10 * SUBGROUP_SIZE) + locA;
+
+    uint blockB = pB_id / SUBGROUP_SIZE;
+    uint locB = pB_id % SUBGROUP_SIZE;
+    uint baseB = blockB * (10 * SUBGROUP_SIZE) + locB;
+
+    // Apply positive impulse to particle A
+    float m_A = uintBitsToFloat(pc.particles.data[baseA + 6 * SUBGROUP_SIZE]);
+    if (m_A > 0.0) {
+        vec3 dvA = impulse / m_A;
+        atomicAddFloat(baseA + 3 * SUBGROUP_SIZE, dvA.x);
+        atomicAddFloat(baseA + 4 * SUBGROUP_SIZE, dvA.y);
+        atomicAddFloat(baseA + 5 * SUBGROUP_SIZE, dvA.z);
+    }
+
+    // Apply negative impulse to particle B
+    float m_B = uintBitsToFloat(pc.particles.data[baseB + 6 * SUBGROUP_SIZE]);
+    if (m_B > 0.0) {
+        vec3 dvB = -impulse / m_B;
+        atomicAddFloat(baseB + 3 * SUBGROUP_SIZE, dvB.x);
+        atomicAddFloat(baseB + 4 * SUBGROUP_SIZE, dvB.y);
+        atomicAddFloat(baseB + 5 * SUBGROUP_SIZE, dvB.z);
+    }
+}

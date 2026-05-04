@@ -1,13 +1,13 @@
 use super::utils;
 use crate::types::{GpuError, GpuResult};
 
+use aethervk_oshal_rlib as oshal;
+use alloc::{string::ToString, vec::Vec};
 use ash::vk;
 use core::{
-  result::Result::{Err, Ok},
   ffi::CStr,
+  result::Result::{Err, Ok},
 };
-use alloc::{string::ToString, vec::Vec};
-use aethervk_oshal_rlib as oshal;
 
 // -------------------------------- Instance --------------------------------
 
@@ -22,12 +22,12 @@ pub(super) struct Instance {
 impl Instance {
   /// ## Safety
   /// See `utils::vk_entry` and `ash::Entry::create_instance`
-  pub(super) unsafe fn new(base_path_override: Option<&CStr>, validation_error_callback: Option<fn(&str)>) -> GpuResult<Self> {
+  pub(super) unsafe fn new(
+    base_path_override: Option<&CStr>,
+    validation_error_callback: Option<fn(&str)>,
+  ) -> GpuResult<Self> {
     let entry_wrapper = utils::EntryWrapper::new(base_path_override)?;
-    let vk_entry = entry_wrapper
-      .weak_entry()
-      .upgrade()
-      .ok_or(GpuError::UnsupportedFeature)?;
+    let vk_entry = entry_wrapper.weak_entry().upgrade().ok_or(GpuError::UnsupportedFeature)?;
 
     let app_info = vk::ApplicationInfo::default()
       .application_name(c"AetherVk")
@@ -57,9 +57,7 @@ impl Instance {
     {
       let layer_properties = unsafe { vk_entry.enumerate_instance_layer_properties() }?;
       for desired_layer_name in &LAYER_NAMES {
-        if layer_properties
-          .iter()
-          .any(|p| p.layer_name_as_c_str().unwrap() == *desired_layer_name)
+        if layer_properties.iter().any(|p| p.layer_name_as_c_str().unwrap() == *desired_layer_name)
         {
           desired_layer_names.push(desired_layer_name);
           if *desired_layer_name == c"VK_LAYER_KHRONOS_validation" {
@@ -132,7 +130,9 @@ impl Instance {
       vk::ValidationFeaturesEXT::default().enabled_validation_features(&printf_features);
 
     #[cfg(debug_assertions)]
-    let p_user_data = validation_error_callback.map(|f| f as *mut core::ffi::c_void).unwrap_or(core::ptr::null_mut());
+    let p_user_data = validation_error_callback
+      .map(|f| f as *mut core::ffi::c_void)
+      .unwrap_or(core::ptr::null_mut());
 
     #[cfg(debug_assertions)]
     let mut msg_create_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
@@ -153,11 +153,8 @@ impl Instance {
     // =========================================================================
     // 4. Create Instance
     // =========================================================================
-    let instance_extensions = Vec::from_iter(
-      desired_instance_extensions
-        .iter()
-        .map(|&c_str| c_str.as_ptr()),
-    );
+    let instance_extensions =
+      Vec::from_iter(desired_instance_extensions.iter().map(|&c_str| c_str.as_ptr()));
 
     let mut instance_create_info = vk::InstanceCreateInfo::default()
       .application_info(&app_info)
@@ -178,9 +175,8 @@ impl Instance {
 
     #[cfg(debug_assertions)]
     {
-      instance_create_info = instance_create_info
-        .enabled_layer_names(&enabled_layers)
-        .push_next(&mut msg_create_info);
+      instance_create_info =
+        instance_create_info.enabled_layer_names(&enabled_layers).push_next(&mut msg_create_info);
 
       // Only attach the features struct if the extension is actually supported/visible
       if has_validation_features {
@@ -203,7 +199,10 @@ impl Instance {
     }
     #[cfg(not(debug_assertions))]
     {
-      Ok(Self { instance, entry_wrapper })
+      Ok(Self {
+        instance,
+        entry_wrapper,
+      })
     }
   }
 
@@ -216,11 +215,7 @@ impl Instance {
     &self,
     query_input: &utils::PhysicalDeviceQueryInput,
   ) -> GpuResult<Vec<utils::PhysicalDeviceQueryResult>> {
-    let entry = self
-      .entry_wrapper
-      .weak_entry()
-      .upgrade()
-      .ok_or(GpuError::DeviceLost)?;
+    let entry = self.entry_wrapper.weak_entry().upgrade().ok_or(GpuError::DeviceLost)?;
     // 1. enumerate vulkan capable devices
     let physical_devices = unsafe { self.instance.enumerate_physical_devices() }?;
     if physical_devices.is_empty() {
@@ -234,18 +229,12 @@ impl Instance {
         // a. properties (TODO: Subgroup information)
         let mut subgroup_props = vk::PhysicalDeviceSubgroupProperties::default();
         let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut subgroup_props);
-        unsafe {
-          self
-            .instance
-            .get_physical_device_properties2(physical_device, &mut props)
-        };
+        unsafe { self.instance.get_physical_device_properties2(physical_device, &mut props) };
         // TODO log
 
         // b. supported queue families
         let queue_family_properties_len = unsafe {
-          self
-            .instance
-            .get_physical_device_queue_family_properties2_len(physical_device)
+          self.instance.get_physical_device_queue_family_properties2_len(physical_device)
         };
         let mut queue_family_properties: Vec<_> =
           core::iter::repeat_with(|| vk::QueueFamilyProperties2::default())
@@ -261,10 +250,7 @@ impl Instance {
         let graphics_queue_family_index = queue_family_properties.iter().enumerate().position(
           |(queue_family_index, queue_props)| {
             // first queue family supporting graphics and presentation
-            queue_props
-              .queue_family_properties
-              .queue_flags
-              .contains(vk::QueueFlags::GRAPHICS)
+            queue_props.queue_family_properties.queue_flags.contains(vk::QueueFlags::GRAPHICS)
               && query_input.supports_presentation(
                 entry.as_ref(),
                 physical_device,
@@ -316,12 +302,8 @@ impl Instance {
         // c. required device extensions and optional device extensions (TODO)
         let mut desired_device_extensions = Vec::with_capacity(64);
         desired_device_extensions.extend_from_slice(utils::required_device_extensions());
-        let device_extension_properties = unsafe {
-          self
-            .instance
-            .enumerate_device_extension_properties(physical_device)
-        }
-        .ok()?;
+        let device_extension_properties =
+          unsafe { self.instance.enumerate_device_extension_properties(physical_device) }.ok()?;
 
         if utils::first_unsupported_extension(
           &desired_device_extensions,
@@ -336,11 +318,7 @@ impl Instance {
         // d. device features
         let mut required_features = utils::RequiredFeatures::new();
         let mut features2 = required_features.as_features2();
-        unsafe {
-          self
-            .instance
-            .get_physical_device_features2(physical_device, &mut features2)
-        };
+        unsafe { self.instance.get_physical_device_features2(physical_device, &mut features2) };
         required_features.features = features2.features;
         if required_features.any_missing().is_some() {
           // TODO Log

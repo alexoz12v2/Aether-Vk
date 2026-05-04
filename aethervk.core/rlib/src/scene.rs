@@ -19,31 +19,27 @@
 
 // TODO add tests for new methods
 
-use thiserror::Error;
 use crate::{
+  simulation::comet::Comet,
   types,
   types::{EngineError, EngineResult},
-  simulation::comet::Comet,
 };
 use aethervk_oshal_rlib::{
   math::matrix::Matrix4,
-  math::{safe_div, FloatLike},
+  math::quaternion::Quaternion,
+  math::vector::vec3::Vec3f32,
+  math::vector::{Vector3, Vector4},
+  math::{FloatLike, safe_div},
+  math::{matrix::mat4::Mat4x4f32, vector::vec4::Quat},
   os::pool::ThreadPool,
   os::pool::chunked::ThreadPoolChunkedExt,
-  math::quaternion::Quaternion,
-  math::vector::{Vector3, Vector4},
-  math::{matrix::mat4::Mat4x4f32, vector::vec4::Quat},
-  math::vector::vec3::Vec3f32,
 };
-use slotmap::{new_key_type, SlotMap};
-use spin::RwLock;
-use alloc::{
-  boxed::Box,
-  vec::Vec,
-  string::{String},
-};
+use alloc::{boxed::Box, string::String, vec::Vec};
 use core::any::{Any, TypeId};
 use hashbrown::{HashMap, HashSet};
+use slotmap::{SlotMap, new_key_type};
+use spin::RwLock;
+use thiserror::Error;
 
 pub mod almanac_planet;
 pub mod camera;
@@ -52,7 +48,7 @@ pub mod particles;
 pub mod text;
 
 pub use almanac_planet::AlmanacPlanet;
-pub use particles::{ParticleEmitterConfig, ParticleSystemComponent, ParticleData, GaussianParams};
+pub use particles::{GaussianParams, ParticleData, ParticleEmitterConfig, ParticleSystemComponent};
 
 /// An error that can occur when adding a component.
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -480,9 +476,7 @@ struct Archetype {
 
 impl Archetype {
   fn has_components(&self, component_types: &[TypeId]) -> bool {
-    component_types
-      .iter()
-      .all(|t| self.component_types.contains(t))
+    component_types.iter().all(|t| self.component_types.contains(t))
   }
 
   /// Allocates a new row, recycling a hole if available to keep cache packed.
@@ -658,12 +652,7 @@ impl Scene {
 
   pub fn hierarchy_breadth(&self) -> usize {
     let hierarchy = self.hierarchy.read();
-    hierarchy
-      .children
-      .values()
-      .map(|children| children.len())
-      .max()
-      .unwrap_or(0)
+    hierarchy.children.values().map(|children| children.len()).max().unwrap_or(0)
   }
 
   pub fn should_parallelize(&self) -> bool {
@@ -737,12 +726,12 @@ impl Scene {
   }
 
   pub fn get_entity_component_names(&self, entity: EntityId) -> Vec<&'static str> {
+    let archetypes = self.archetypes.read();
     let entities = self.entities.read();
     let location = match entities.get(entity) {
       Some(l) => l,
       None => return Vec::new(),
     };
-    let archetypes = self.archetypes.read();
     let archetype = &archetypes[location.archetype_index];
     let component_meta = self.component_meta.read();
 
@@ -793,12 +782,7 @@ impl Scene {
   }
 
   pub fn get_entity_by_name(&self, name: &str) -> Option<EntityId> {
-    self
-      .names
-      .read()
-      .iter()
-      .find(|(_, n)| *n == name)
-      .map(|(id, _)| *id)
+    self.names.read().iter().find(|(_, n)| *n == name).map(|(id, _)| *id)
   }
 
   pub fn get_name(&self, entity: EntityId) -> Option<alloc::string::String> {
@@ -845,9 +829,7 @@ impl Scene {
 
     let src_location = {
       let entities = self.entities.read();
-      *entities
-        .get(entity_id)
-        .ok_or(AddComponentError::EntityNotFound)?
+      *entities.get(entity_id).ok_or(AddComponentError::EntityNotFound)?
     };
 
     let (target_archetype_index, is_new_archetype) = {
@@ -859,9 +841,8 @@ impl Scene {
       }
 
       let meta = self.component_meta.read();
-      let component_meta = meta
-        .get(&new_component_type)
-        .ok_or(AddComponentError::ComponentNotRegistered)?;
+      let component_meta =
+        meta.get(&new_component_type).ok_or(AddComponentError::ComponentNotRegistered)?;
 
       if !src_archetype.has_components(&component_meta.dependencies) {
         let missing_dep = component_meta
@@ -878,9 +859,8 @@ impl Scene {
       let mut target_component_types = src_archetype.component_types.clone();
       target_component_types.insert(new_component_type);
 
-      let found_index = archetypes
-        .iter()
-        .position(|arch| arch.component_types == target_component_types);
+      let found_index =
+        archetypes.iter().position(|arch| arch.component_types == target_component_types);
       (found_index, found_index.is_none())
     };
 
@@ -892,9 +872,8 @@ impl Scene {
       let mut target_component_types = src_archetype.component_types.clone();
       target_component_types.insert(new_component_type);
 
-      if let Some(index) = archetypes
-        .iter()
-        .position(|arch| arch.component_types == target_component_types)
+      if let Some(index) =
+        archetypes.iter().position(|arch| arch.component_types == target_component_types)
       {
         index
       } else {
@@ -1002,9 +981,8 @@ impl Scene {
       let mut target_component_types = src_archetype.component_types.clone();
       target_component_types.remove(&type_id_to_remove);
 
-      let found_index = archetypes
-        .iter()
-        .position(|arch| arch.component_types == target_component_types);
+      let found_index =
+        archetypes.iter().position(|arch| arch.component_types == target_component_types);
       (found_index, found_index.is_none())
     };
 
@@ -1018,9 +996,8 @@ impl Scene {
       target_component_types.remove(&type_id_to_remove);
 
       // Re-check to prevent race conditions during write lock acquisition
-      if let Some(index) = archetypes
-        .iter()
-        .position(|arch| arch.component_types == target_component_types)
+      if let Some(index) =
+        archetypes.iter().position(|arch| arch.component_types == target_component_types)
       {
         index
       } else {
@@ -1144,9 +1121,8 @@ impl Scene {
 
   pub fn has_component<T: Component>(&self, entity_id: EntityId) -> HasComponentResultEnum {
     let archetypes = self.archetypes.read();
-    let archetype = archetypes
-      .iter()
-      .find(|archetype| archetype.entities.iter().any(|e| *e == Some(entity_id)));
+    let archetype =
+      archetypes.iter().find(|archetype| archetype.entities.iter().any(|e| *e == Some(entity_id)));
     if archetype.is_none() {
       return HasComponentResultEnum::EntityNotFound;
     }
@@ -1184,9 +1160,7 @@ impl Scene {
     let archetype = &archetypes[location.archetype_index];
 
     let mut components_lock = archetype.components.get(&TypeId::of::<T>())?.write();
-    let components = components_lock
-      .as_mut_any()
-      .downcast_mut::<Vec<Option<T>>>()?;
+    let components = components_lock.as_mut_any().downcast_mut::<Vec<Option<T>>>()?;
 
     Some(f(components[location.row_index].as_mut()?))
   }
@@ -1228,14 +1202,8 @@ impl Scene {
         let comp_storage1_lock = archetype.components[&type_t1].read();
         let comp_storage2_lock = archetype.components[&type_t2].read();
 
-        let components1 = comp_storage1_lock
-          .as_any()
-          .downcast_ref::<Vec<Option<T1>>>()
-          .unwrap();
-        let components2 = comp_storage2_lock
-          .as_any()
-          .downcast_ref::<Vec<Option<T2>>>()
-          .unwrap();
+        let components1 = comp_storage1_lock.as_any().downcast_ref::<Vec<Option<T1>>>().unwrap();
+        let components2 = comp_storage2_lock.as_any().downcast_ref::<Vec<Option<T2>>>().unwrap();
 
         for (i, opt_entity) in archetype.entities.iter().enumerate() {
           if let (Some(entity_id), Some(c1), Some(c2)) =
@@ -1284,14 +1252,10 @@ impl Scene {
         let mut comp_storage1_lock = archetype.components[&type_t1].write();
         let mut comp_storage2_lock = archetype.components[&type_t2].write();
 
-        let components1 = comp_storage1_lock
-          .as_mut_any()
-          .downcast_mut::<Vec<Option<T1>>>()
-          .unwrap();
-        let components2 = comp_storage2_lock
-          .as_mut_any()
-          .downcast_mut::<Vec<Option<T2>>>()
-          .unwrap();
+        let components1 =
+          comp_storage1_lock.as_mut_any().downcast_mut::<Vec<Option<T1>>>().unwrap();
+        let components2 =
+          comp_storage2_lock.as_mut_any().downcast_mut::<Vec<Option<T2>>>().unwrap();
 
         for (i, opt_entity) in archetype.entities.iter().enumerate() {
           if let (Some(entity_id), Some(c1), Some(c2)) =
@@ -1344,14 +1308,8 @@ impl Scene {
         let comp_storage1_lock = archetype.components[&type_t1].read();
         let comp_storage2_lock = archetype.components[&type_t2].read();
 
-        let components1 = comp_storage1_lock
-          .as_any()
-          .downcast_ref::<Vec<Option<T1>>>()
-          .unwrap();
-        let components2 = comp_storage2_lock
-          .as_any()
-          .downcast_ref::<Vec<Option<T2>>>()
-          .unwrap();
+        let components1 = comp_storage1_lock.as_any().downcast_ref::<Vec<Option<T1>>>().unwrap();
+        let components2 = comp_storage2_lock.as_any().downcast_ref::<Vec<Option<T2>>>().unwrap();
 
         for (i, opt_entity) in archetype.entities.iter().enumerate() {
           if let (Some(entity_id), Some(c1), Some(c2)) =
@@ -1407,14 +1365,10 @@ impl Scene {
         let mut comp_storage1_lock = archetype.components[&type_t1].write();
         let mut comp_storage2_lock = archetype.components[&type_t2].write();
 
-        let components1 = comp_storage1_lock
-          .as_mut_any()
-          .downcast_mut::<Vec<Option<T1>>>()
-          .unwrap();
-        let components2 = comp_storage2_lock
-          .as_mut_any()
-          .downcast_mut::<Vec<Option<T2>>>()
-          .unwrap();
+        let components1 =
+          comp_storage1_lock.as_mut_any().downcast_mut::<Vec<Option<T1>>>().unwrap();
+        let components2 =
+          comp_storage2_lock.as_mut_any().downcast_mut::<Vec<Option<T2>>>().unwrap();
 
         for (i, opt_entity) in archetype.entities.iter().enumerate() {
           if let (Some(entity_id), Some(c1), Some(c2)) =
@@ -1471,14 +1425,8 @@ impl Scene {
         let comp_storage1_lock = archetype.components[&type_t1].read();
         let comp_storage2_lock = archetype.components[&type_t2].read();
 
-        let components1 = comp_storage1_lock
-          .as_any()
-          .downcast_ref::<Vec<Option<T1>>>()
-          .unwrap();
-        let components2 = comp_storage2_lock
-          .as_any()
-          .downcast_ref::<Vec<Option<T2>>>()
-          .unwrap();
+        let components1 = comp_storage1_lock.as_any().downcast_ref::<Vec<Option<T1>>>().unwrap();
+        let components2 = comp_storage2_lock.as_any().downcast_ref::<Vec<Option<T2>>>().unwrap();
 
         for (i, opt_entity) in archetype.entities.iter().enumerate() {
           if let (Some(entity_id), Some(c1), Some(c2)) =
@@ -1535,14 +1483,10 @@ impl Scene {
         let mut comp_storage1_lock = archetype.components[&type_t1].write();
         let mut comp_storage2_lock = archetype.components[&type_t2].write();
 
-        let components1 = comp_storage1_lock
-          .as_mut_any()
-          .downcast_mut::<Vec<Option<T1>>>()
-          .unwrap();
-        let components2 = comp_storage2_lock
-          .as_mut_any()
-          .downcast_mut::<Vec<Option<T2>>>()
-          .unwrap();
+        let components1 =
+          comp_storage1_lock.as_mut_any().downcast_mut::<Vec<Option<T1>>>().unwrap();
+        let components2 =
+          comp_storage2_lock.as_mut_any().downcast_mut::<Vec<Option<T2>>>().unwrap();
 
         for (i, opt_entity) in archetype.entities.iter().enumerate() {
           if let (Some(entity_id), Some(c1), Some(c2)) =
@@ -1628,14 +1572,8 @@ impl Scene {
         let comp_storage1_lock = archetype.components.get(&type_t1).unwrap().read();
         let comp_storage2_lock = archetype.components.get(&type_t2).unwrap().read();
 
-        let components1 = comp_storage1_lock
-          .as_any()
-          .downcast_ref::<Vec<Option<T1>>>()
-          .unwrap();
-        let components2 = comp_storage2_lock
-          .as_any()
-          .downcast_ref::<Vec<Option<T2>>>()
-          .unwrap();
+        let components1 = comp_storage1_lock.as_any().downcast_ref::<Vec<Option<T1>>>().unwrap();
+        let components2 = comp_storage2_lock.as_any().downcast_ref::<Vec<Option<T2>>>().unwrap();
 
         for (i, opt_entity) in archetype.entities.iter().enumerate() {
           if let (Some(entity_id), Some(c1), Some(c2)) =
@@ -1804,10 +1742,7 @@ impl Scene {
     TransformComponent {
       scale: parent.scale * child.scale,
       rotation: parent.rotation * child.rotation,
-      position: parent.position
-        + (parent
-          .rotation
-          .rotate_vector((parent.scale * child.position))),
+      position: parent.position + (parent.rotation.rotate_vector((parent.scale * child.position))),
     }
   }
 
@@ -2016,9 +1951,8 @@ impl Scene {
 
       if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
         let comp_storage = comp_storage_lock.read();
-        if let Some(components_vec) = comp_storage
-          .as_any()
-          .downcast_ref::<alloc::vec::Vec<Option<T>>>()
+        if let Some(components_vec) =
+          comp_storage.as_any().downcast_ref::<alloc::vec::Vec<Option<T>>>()
         {
           for (i, opt_entity) in archetype.entities.iter().enumerate() {
             if i % 16 == 0 && found_ref.load(core::sync::atomic::Ordering::Relaxed) {
@@ -2061,24 +1995,18 @@ impl Scene {
     }
 
     let mut chunk_results: alloc::vec::Vec<alloc::vec::Vec<(R, EntityId)>> =
-      core::iter::repeat_with(alloc::vec::Vec::new)
-        .take(num_archetypes)
-        .collect();
+      core::iter::repeat_with(alloc::vec::Vec::new).take(num_archetypes).collect();
 
     let results_ptr = ErasedMutPtr::new(chunk_results.as_mut_ptr());
 
     self.iter_par_archetypes(pool, |arch_id, archetype| {
       if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
         let comp_storage = comp_storage_lock.read();
-        if let Some(components_vec) = comp_storage
-          .as_any()
-          .downcast_ref::<alloc::vec::Vec<Option<T>>>()
+        if let Some(components_vec) =
+          comp_storage.as_any().downcast_ref::<alloc::vec::Vec<Option<T>>>()
         {
-          let result_vec = unsafe {
-            &mut *results_ptr
-              .get::<alloc::vec::Vec<(R, EntityId)>>()
-              .add(arch_id)
-          };
+          let result_vec =
+            unsafe { &mut *results_ptr.get::<alloc::vec::Vec<(R, EntityId)>>().add(arch_id) };
           for (i, opt_entity) in archetype.entities.iter().enumerate() {
             if let (Some(entity), Some(comp)) = (opt_entity, &components_vec[i]) {
               if let Some(res) = f(*entity, comp) {
@@ -2106,9 +2034,8 @@ impl Scene {
     self.iter_par_archetypes(pool, |_, archetype| {
       if let Some(comp_storage_lock) = archetype.components.get(&type_t) {
         let mut comp_storage = comp_storage_lock.write();
-        if let Some(components_vec) = comp_storage
-          .as_mut_any()
-          .downcast_mut::<alloc::vec::Vec<Option<T>>>()
+        if let Some(components_vec) =
+          comp_storage.as_mut_any().downcast_mut::<alloc::vec::Vec<Option<T>>>()
         {
           for (i, opt_entity) in archetype.entities.iter().enumerate() {
             if let (Some(entity), Some(comp)) = (opt_entity, &mut components_vec[i]) {
@@ -2137,14 +2064,10 @@ impl Scene {
         let mut comp_storage1 = archetype.components.get(&type_t1).unwrap().write();
         let mut comp_storage2 = archetype.components.get(&type_t2).unwrap().write();
 
-        let components_vec1 = comp_storage1
-          .as_mut_any()
-          .downcast_mut::<alloc::vec::Vec<Option<T1>>>()
-          .unwrap();
-        let components_vec2 = comp_storage2
-          .as_mut_any()
-          .downcast_mut::<alloc::vec::Vec<Option<T2>>>()
-          .unwrap();
+        let components_vec1 =
+          comp_storage1.as_mut_any().downcast_mut::<alloc::vec::Vec<Option<T1>>>().unwrap();
+        let components_vec2 =
+          comp_storage2.as_mut_any().downcast_mut::<alloc::vec::Vec<Option<T2>>>().unwrap();
 
         for (i, opt_entity) in archetype.entities.iter().enumerate() {
           if let (Some(entity), Some(c1), Some(c2)) =
@@ -2182,9 +2105,7 @@ impl Scene {
     }
 
     let mut chunk_results: alloc::vec::Vec<alloc::vec::Vec<(R, EntityId)>> =
-      core::iter::repeat_with(alloc::vec::Vec::new)
-        .take(num_archetypes)
-        .collect();
+      core::iter::repeat_with(alloc::vec::Vec::new).take(num_archetypes).collect();
 
     let results_ptr = crate::scene::ErasedMutPtr::new(chunk_results.as_mut_ptr());
 
@@ -2193,11 +2114,8 @@ impl Scene {
         let comp_storage_lock = archetype.components.get(&type_t).unwrap();
         let comp_storage = comp_storage_lock.read();
         if let Some(components_vec) = comp_storage.as_any().downcast_ref::<alloc::vec::Vec<T>>() {
-          let result_vec = unsafe {
-            &mut *results_ptr
-              .get::<alloc::vec::Vec<(R, EntityId)>>()
-              .add(arch_id)
-          };
+          let result_vec =
+            unsafe { &mut *results_ptr.get::<alloc::vec::Vec<(R, EntityId)>>().add(arch_id) };
 
           for (i, &entity) in archetype.entities.iter().enumerate() {
             if let Some(ent) = entity {
@@ -2273,8 +2191,8 @@ mod tests {
   extern crate std; // Allow std for testing harness environment
 
   use super::*;
-  use core::any::TypeId;
   use alloc::format;
+  use core::any::TypeId;
 
   // Replace with the exact path where your ThreadPool is exposed in your library
   use aethervk_oshal_rlib::os::pool::ThreadPool;
@@ -2488,9 +2406,7 @@ mod tests {
     assert_eq!(without_vel, 2); // 1, 3
 
     scene.query1_mut(|_e, h: &mut HealthComp| h.hp += 5);
-    let first = scene
-      .query1_first_res(|_e, h: &HealthComp| Some(h.hp))
-      .unwrap();
+    let first = scene.query1_first_res(|_e, h: &HealthComp| Some(h.hp)).unwrap();
     assert_eq!(first.0, 15);
   }
 

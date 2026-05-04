@@ -5,15 +5,15 @@ namespace AetherVk.Logic.Tests;
 
 public class ConsoleServiceTests
 {
-  public ConsoleServiceTests()
-  {
-  }
+  public ConsoleServiceTests() { }
 
   [Fact]
   public void Log_AddsMessageToCollection()
   {
     var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
-    dispatcherMock.Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>())).Callback<System.Action>(a => a());
+    dispatcherMock
+      .Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
+      .Callback<System.Action>(a => a());
     // Arrange
     var service = new ConsoleService(dispatcherMock.Object);
 
@@ -30,7 +30,9 @@ public class ConsoleServiceTests
   public void Clear_RemovesAllMessages()
   {
     var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
-    dispatcherMock.Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>())).Callback<System.Action>(a => a());
+    dispatcherMock
+      .Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
+      .Callback<System.Action>(a => a());
     // Arrange
     var service = new ConsoleService(dispatcherMock.Object);
     service.Log("Msg 1");

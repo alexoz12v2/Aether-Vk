@@ -25,23 +25,23 @@ public partial class OutlineViewModel : TabItemViewModel, IRecipient<EntitySelec
 
   public SceneStateManager StateManager { get; }
 
-  [ObservableProperty] private ulong _currentSceneId;
+  [ObservableProperty]
+  private ulong _currentSceneId;
 
   public ObservableCollection<Entity>? RootEntities =>
     StateManager.GetOrCreateScene(CurrentSceneId).RootEntities;
 
-  private Entity? _selectedEntity;
-
   public Entity? SelectedEntity
   {
-    get => _selectedEntity;
+    get => StateManager.GetOrCreateScene(CurrentSceneId).SelectedEntity;
     set
     {
-      if (SetProperty(ref _selectedEntity, value))
+      var state = StateManager.GetOrCreateScene(CurrentSceneId);
+      if (state.SelectedEntity != value)
       {
-        _consoleService?.Log($"[Outline] SelectedEntity changed to: {value?.Name ?? "null"}");
-        var state = StateManager.GetOrCreateScene(CurrentSceneId);
         state.SelectedEntity = value;
+        _consoleService?.Log($"[Outline] SelectedEntity changed to: {value?.Name ?? "null"}");
+        OnPropertyChanged();
         WeakReferenceMessenger.Default.Send(new EntitySelectedMessage(value));
       }
     }
@@ -63,18 +63,11 @@ public partial class OutlineViewModel : TabItemViewModel, IRecipient<EntitySelec
     _consoleService = consoleService;
 
     WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
-
-    var state = StateManager.GetOrCreateScene(CurrentSceneId);
-    SelectedEntity = state.SelectedEntity;
   }
 
   public void Receive(EntitySelectedMessage message)
   {
-    if (_selectedEntity != message.SelectedEntity)
-    {
-      _selectedEntity = message.SelectedEntity;
-      OnPropertyChanged(nameof(SelectedEntity));
-    }
+    OnPropertyChanged(nameof(SelectedEntity));
   }
 
   [RelayCommand]

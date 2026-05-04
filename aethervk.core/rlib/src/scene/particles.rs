@@ -1,11 +1,11 @@
+use crate::math::collision::linear_bvh::LinearBVH;
+use crate::physics::particle::Particle;
 use crate::scene::Component;
+use crate::simulation::comet::Comet;
+use crate::simulation::comet::uv_grid::UvGrid;
 use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
 use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
 use aethervk_oshal_rlib::os::time::timeus_t;
-use crate::math::collision::linear_bvh::LinearBVH;
-use crate::physics::particle::Particle;
-use crate::simulation::comet::Comet;
-use crate::simulation::comet::uv_grid::UvGrid;
 
 #[derive(Clone, Debug)]
 pub struct GaussianParams {
@@ -131,10 +131,11 @@ impl ParticleSystemComponent {
       // TODO: why is pdf unused?
       let (uv_x, uv_y, _pdf) = self.config.uv_distribution.sample_continuous(&[u[0], u[1]]);
 
-      let (local_pos, local_norm) = match uv_grid.query([uv_x, uv_y], &comet.vertices, &comet.indices) {
-        Some(res) => res,
-        None => continue,
-      };
+      let (local_pos, local_norm) =
+        match uv_grid.query([uv_x, uv_y], &comet.vertices, &comet.indices) {
+          Some(res) => res,
+          None => continue,
+        };
 
       // Convert to world space
       let local_pos_vec: Vec3f32 = local_pos.into();
@@ -202,9 +203,9 @@ impl ParticleSystemComponent {
   }
 
   pub fn update_bvh(&mut self) {
-    use crate::physics::particle::ParticleBVHBuilder;
     use crate::math::collision::bvh_builder::BVHBuilderParams;
     use crate::math::collision::linear_bvh::LinearBVH;
+    use crate::physics::particle::ParticleBVHBuilder;
     use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
 
     let active_particles: alloc::vec::Vec<_> = self

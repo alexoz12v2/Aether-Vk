@@ -342,9 +342,10 @@ impl Archetypes {
     update_physical_mesh_archetype_for_presentation_engine,
     physical_mesh_render_archetype,
     |archetype, device, write_pipeline, discard_pool, timeline, graphics_info, format| {
-      let outline_graphics_info = graphics_info.clone()
+      let outline_graphics_info = graphics_info
+        .clone()
         .with_pipeline_flags(
-          PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::NO_DEPTH_TEST,
+          PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::NO_DEPTH_TEST | PipelineFlags::INVERT_FRONT_FACE,
         )
         .with_stencil_compare_op(StencilCompareOp::NotEqual)
         .with_stencil_logic_op(StencilLogicOp::None)
@@ -642,7 +643,7 @@ impl Archetypes {
       )
       .with_pipeline_layout(res.pipeline_layout.get())
       .with_pipeline_flags(
-        PipelineFlags::CULL_BACK | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::STENCIL_ENABLE,
+        PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE,
       )
       .with_render_pass(
         renderpasses
@@ -696,7 +697,7 @@ impl Archetypes {
           .clone(),
       )
       .with_pipeline_flags(
-        PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::NO_DEPTH_TEST,
+        PipelineFlags::CULL_BACK | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::STENCIL_ENABLE | PipelineFlags::NO_DEPTH_TEST,
       )
       .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
       .with_stencil_compare_op(StencilCompareOp::NotEqual)

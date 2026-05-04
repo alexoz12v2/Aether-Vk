@@ -14,7 +14,7 @@ if (-not (Test-Path $glslc)) {
     }
 }
 
-$files = Get-ChildItem -Path "assets" -File | Where-Object { $_.Extension -match "\.(vert|frag|comp)$" }
+$files = Get-ChildItem -Path "assets", "assets/sim" -File | Where-Object { $_.Extension -match "\.(vert|frag|comp)$" }
 
 foreach ($file in $files) {
     $ext = $file.Extension.TrimStart('.')

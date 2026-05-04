@@ -5,10 +5,10 @@ use crate::os::NativeResult;
 pub fn args() -> NativeResult<Vec<String>> {
   #[cfg(windows)]
   {
-    use windows::Win32::Foundation::{LocalFree, HLOCAL};
+    use crate::os::NativeError;
+    use windows::Win32::Foundation::{HLOCAL, LocalFree};
     use windows::Win32::System::Environment::GetCommandLineW;
     use windows::Win32::UI::Shell::CommandLineToArgvW;
-    use crate::os::NativeError;
 
     unsafe {
       let cmd_line = GetCommandLineW();
@@ -117,16 +117,15 @@ pub fn args() -> NativeResult<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn test_args() {
-        let cmd_args = args().expect("Failed to get command line arguments");
-        // At least the executable name should be present in args
-        assert!(!cmd_args.is_empty());
-        
-        // The first argument is typically the path to the executable
-        println!("Executable arg: {}", cmd_args[0]);
-    }
+  #[test]
+  fn test_args() {
+    let cmd_args = args().expect("Failed to get command line arguments");
+    // At least the executable name should be present in args
+    assert!(!cmd_args.is_empty());
+
+    // The first argument is typically the path to the executable
+    println!("Executable arg: {}", cmd_args[0]);
+  }
 }
-

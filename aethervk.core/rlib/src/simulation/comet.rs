@@ -1,15 +1,11 @@
-use alloc::vec::Vec;
 use aethervk_oshal_rlib::{
   self as oshal,
-  math::{
-    vector::{Vector, Vector3, vec3::Vec3f32},
-  },
+  math::vector::{Vector, Vector3, vec3::Vec3f32},
   os::FsError,
 };
-use oshal::os::{
-  fs::{self, FileSystemObject, PathBuf},
-};
+use alloc::vec::Vec;
 use ktx2;
+use oshal::os::fs::{self, FileSystemObject, PathBuf};
 use polyhedral_mass_properties::{MassProperties, TriangleContrib};
 use zune_core::bytestream::ZCursor;
 use zune_jpeg;
@@ -97,9 +93,9 @@ pub struct Texture {
   pub has_mipmaps: bool,
 }
 
-use aethervk_oshal_rlib::math::matrix::{Matrix3, mat3::Mat3f32};
 use crate::math::collision::bvh_builder::{BVHBuilder, BVHBuilderParams};
 use crate::math::collision::linear_bvh::LinearBVH;
+use aethervk_oshal_rlib::math::matrix::{Matrix3, mat3::Mat3f32};
 
 #[derive(Clone)]
 pub struct Comet {
@@ -217,10 +213,7 @@ impl Triangle {
 
   #[inline]
   pub fn area(&self) -> f32 {
-    0.5
-      * (*self.v1() - *self.v0())
-        .cross(*self.v2() - *self.v1())
-        .length()
+    0.5 * (*self.v1() - *self.v0()).cross(*self.v2() - *self.v1()).length()
   }
 }
 
@@ -333,9 +326,7 @@ fn get_texture_data(
       "image/jpeg" => {
         let mut decoder = zune_jpeg::JpegDecoder::new(ZCursor::new(&encoded_data));
         let info = decoder.info().ok_or(CometLoadError::ImageDecodingError)?;
-        let data = decoder
-          .decode()
-          .map_err(|_| CometLoadError::ImageDecodingError)?;
+        let data = decoder.decode().map_err(|_| CometLoadError::ImageDecodingError)?;
         let format = match info.components {
           1 => TexelFormat::R8_UNORM,
           3 => TexelFormat::R8G8B8_UNORM,
@@ -438,8 +429,8 @@ fn calculate_mass_properties(
   unit_mass_properties.with_density(density)
 }
 
-use alloc::collections::BTreeMap;
 use crate::types::EngineError;
+use alloc::collections::BTreeMap;
 // Assuming Vec, PathBuf, etc. are already in scope
 
 /// Function to load a GLTF/GLB file
@@ -527,13 +518,10 @@ pub fn load_comet_from_gltf(path: &str, verbose: bool) -> Result<Comet, CometLoa
       CometLoadError::UnsupportedNormalData
     })?;
 
-    let uvs = reader
-      .read_tex_coords(0)
-      .map(|v| v.into_f32())
-      .ok_or_else(|| {
-        oshal::log!("  ERROR: Primitive {} is missing TEXCOORD_0 (UV) data.", i);
-        CometLoadError::UnsupportedNormalData
-      })?;
+    let uvs = reader.read_tex_coords(0).map(|v| v.into_f32()).ok_or_else(|| {
+      oshal::log!("  ERROR: Primitive {} is missing TEXCOORD_0 (UV) data.", i);
+      CometLoadError::UnsupportedNormalData
+    })?;
 
     let tangents = reader.read_tangents().ok_or_else(|| {
       oshal::log!("  ERROR: Primitive {} is missing TANGENT data.", i);

@@ -5,7 +5,7 @@ use core::arch::x86_64::*;
 use core::arch::aarch64::*;
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-use crate::math::{min_two, max_two};
+use crate::math::{max_two, min_two};
 
 use core::ops;
 
@@ -794,11 +794,7 @@ impl Quaternion for Quat {
   #[inline]
   fn normalize(self) -> Self {
     let n = self.norm();
-    if n > 0.0 {
-      self / n
-    } else {
-      Self::identity()
-    }
+    if n > 0.0 { self / n } else { Self::identity() }
   }
 
   /// The inverse of the quaternion. For unit quaternions, this is just the conjugate.

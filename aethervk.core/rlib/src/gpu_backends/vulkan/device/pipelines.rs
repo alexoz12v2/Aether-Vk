@@ -1,14 +1,15 @@
+use aethervk_oshal_rlib::hash::FnvHasher;
+use alloc::vec::Vec;
+use ash::vk;
+use bitflags::bitflags;
 use core::{
   ffi,
   hash::{Hash, Hasher},
   ptr,
 };
-use aethervk_oshal_rlib::hash::FnvHasher;
-use alloc::vec::Vec;
-use ash::vk;
-use bitflags::bitflags;
 use hashbrown::HashMap;
 
+use crate::gpu::vulkan::device::swapchain;
 use crate::{
   gpu::{PipelineKey, PipelineKeyable},
   gpu_backends::vulkan::{
@@ -17,7 +18,6 @@ use crate::{
   },
   types::GpuResult,
 };
-use crate::gpu::vulkan::device::swapchain;
 
 // ---------------- COMPUTE PIPELINE HASH ------------------------------------
 fn eq_specialization_constants(
@@ -713,11 +713,7 @@ struct RawGraphicsInfo<'a> {
 impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
   fn from(graphics_info: &'a GraphicsInfo) -> Self {
     let mut color_blend_attachments = Vec::with_capacity(
-      if graphics_info
-        .fragment_out
-        .color_attachment_formats
-        .is_empty()
-      {
+      if graphics_info.fragment_out.color_attachment_formats.is_empty() {
         1
       } else {
         graphics_info.fragment_out.color_attachment_formats.len()
@@ -747,9 +743,7 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
       || topology == vk::PrimitiveTopology::LINE_LIST_WITH_ADJACENCY
       || topology == vk::PrimitiveTopology::LINE_STRIP_WITH_ADJACENCY
       || graphics_info.rasterization_polygon_mode == vk::PolygonMode::LINE
-      || !graphics_info
-        .pipeline_flags
-        .contains(PipelineFlags::NO_LINE_DYNAMIC_STATE)
+      || !graphics_info.pipeline_flags.contains(PipelineFlags::NO_LINE_DYNAMIC_STATE)
     {
       dynamic_states.push(vk::DynamicState::LINE_WIDTH);
     }
@@ -799,24 +793,15 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
       },
       rasterization_state_builder: |graphics_info: &_| {
         let mut cull_mode = vk::CullModeFlags::BACK;
-        if graphics_info
-          .pipeline_flags
-          .contains(PipelineFlags::CULL_ALL)
-        {
+        if graphics_info.pipeline_flags.contains(PipelineFlags::CULL_ALL) {
           cull_mode = vk::CullModeFlags::NONE;
-        } else if graphics_info
-          .pipeline_flags
-          .contains(PipelineFlags::CULL_FRONT)
-        {
+        } else if graphics_info.pipeline_flags.contains(PipelineFlags::CULL_FRONT) {
           cull_mode = vk::CullModeFlags::FRONT;
         }
 
-        let mut front_face = vk::FrontFace::COUNTER_CLOCKWISE;
-        if graphics_info
-          .pipeline_flags
-          .contains(PipelineFlags::INVERT_FRONT_FACE)
-        {
-          front_face = vk::FrontFace::CLOCKWISE;
+        let mut front_face = vk::FrontFace::CLOCKWISE;
+        if graphics_info.pipeline_flags.contains(PipelineFlags::INVERT_FRONT_FACE) {
+          front_face = vk::FrontFace::COUNTER_CLOCKWISE;
         }
 
         vk::PipelineRasterizationStateCreateInfo::default()
@@ -825,11 +810,7 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
           .polygon_mode(graphics_info.rasterization_polygon_mode)
           .cull_mode(cull_mode)
           .front_face(front_face)
-          .depth_bias_enable(
-            graphics_info
-              .pipeline_flags
-              .contains(PipelineFlags::DEPTH_BIAS),
-          )
+          .depth_bias_enable(graphics_info.pipeline_flags.contains(PipelineFlags::DEPTH_BIAS))
           .line_width(1.0)
       },
       multisample_state_builder: |_| {
@@ -841,25 +822,14 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
       },
       depth_stencil_state_builder: |graphics_info: &_| {
         let mut info = vk::PipelineDepthStencilStateCreateInfo::default()
-          .depth_test_enable(
-            !graphics_info
-              .pipeline_flags
-              .contains(PipelineFlags::NO_DEPTH_TEST),
-          )
-          .depth_write_enable(
-            !graphics_info
-              .pipeline_flags
-              .contains(PipelineFlags::NO_DEPTH_WRITE),
-          )
+          .depth_test_enable(!graphics_info.pipeline_flags.contains(PipelineFlags::NO_DEPTH_TEST))
+          .depth_write_enable(!graphics_info.pipeline_flags.contains(PipelineFlags::NO_DEPTH_WRITE))
           .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL)
           .depth_bounds_test_enable(false)
           .min_depth_bounds(0.0)
           .max_depth_bounds(1.0);
 
-        if graphics_info
-          .pipeline_flags
-          .contains(PipelineFlags::STENCIL_ENABLE)
-        {
+        if graphics_info.pipeline_flags.contains(PipelineFlags::STENCIL_ENABLE) {
           info = info.stencil_test_enable(true);
           let mut front = vk::StencilOpState::default();
           front.reference = graphics_info.stencil_reference;
@@ -1049,11 +1019,7 @@ impl PipelinePool {
         .result_with_success(pipeline)?,
       )
     };
-    unsafe {
-      self
-        .compute_pipelines
-        .insert_unique_unchecked(key, pipeline)
-    };
+    unsafe { self.compute_pipelines.insert_unique_unchecked(key, pipeline) };
     Ok(pipeline)
   }
 
@@ -1083,9 +1049,7 @@ impl PipelinePool {
       )
     };
     unsafe {
-      self
-        .graphics_pipelines
-        .insert_unique_unchecked(key, pipeline);
+      self.graphics_pipelines.insert_unique_unchecked(key, pipeline);
     }
     Ok(pipeline)
   }

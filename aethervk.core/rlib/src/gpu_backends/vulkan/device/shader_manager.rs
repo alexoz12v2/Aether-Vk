@@ -1,12 +1,10 @@
 use ash::vk;
-use slotmap::{new_key_type, SlotMap};
+use slotmap::{SlotMap, new_key_type};
 
-use alloc::{ffi::CString};
+use alloc::ffi::CString;
 use hashbrown::HashMap;
 
-use aethervk_oshal_rlib::{
-  os::fs::{self, Path, PathBuf},
-};
+use aethervk_oshal_rlib::os::fs::{self, Path, PathBuf};
 
 use crate::{
   gpu_backends::vulkan::utils::NonZeroHandle,

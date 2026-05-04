@@ -18,14 +18,14 @@ vec2 intersectSphere(vec3 ro, vec3 rd, float radius) {
 }
 
 void main() {
-    bool isInside = all(lessThan(abs(inLocalCameraPos), vec3(1.0001)));
+    bool isInside = all(lessThan(abs(inLocalCameraPos), vec3(2.0001)));
     if (isInside && !gl_FrontFacing) discard;
     if (!isInside && gl_FrontFacing) discard;
 
     vec3 rayDir = normalize(inLocalPos - inLocalCameraPos);
     
-    // Intersect with a unit sphere (radius 1.0) in local space
-    vec2 t = intersectSphere(inLocalCameraPos, rayDir, 1.0);
+    // Intersect with a sphere (radius 2.0) in local space
+    vec2 t = intersectSphere(inLocalCameraPos, rayDir, 2.0);
     if (t.y < 0.0) discard; // Ray missed the sphere entirely
     
     // Clamp start distance to 0 if the camera is inside the sun
@@ -33,7 +33,7 @@ void main() {
     float tMax = t.y;
     
     // Raymarching setup
-    float stepSize = 0.015625; // fixed step size for stable integration
+    float stepSize = 0.03125; // doubled fixed step size for 2x volume
     int steps = min(int(ceil((tMax - tMin) / stepSize)), 128);
     float currentT = tMin;
     
@@ -42,8 +42,8 @@ void main() {
     for (int i = 0; i < steps; i++) {
         vec3 localPos = inLocalCameraPos + rayDir * currentT;
         
-        // Map local position [-1, 1] to UVW [0, 1] for texture sampling
-        vec3 uvw = localPos * 0.5 + 0.5;
+        // Map local position [-2, 2] to UVW [0, 1] for texture sampling
+        vec3 uvw = localPos * 0.25 + 0.5;
         
         // Sample your generated volume
         // voxel.rgb = emission, voxel.a = density/opacity

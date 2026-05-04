@@ -2,15 +2,15 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use aethervk_core_rlib::gpu::{
-  CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, Kernels, DynamicBody, KinematicBody,
-  CollisionPair, WaitHandle,
+  CollisionPair, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, DynamicBody, Kernels,
+  KinematicBody, WaitHandle,
 };
-use aethervk_core_rlib::types::{EngineError, EngineResult};
-use aethervk_oshal_rlib::os::time::timeus_t;
 use aethervk_core_rlib::physics::physics_scene::PhysicsScene;
 use aethervk_core_rlib::scene::{ParticleSystemComponent, Scene};
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+use aethervk_core_rlib::types::{EngineError, EngineResult};
 use aethervk_oshal_rlib::math::vector::Vector3;
+use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+use aethervk_oshal_rlib::os::time::timeus_t;
 
 pub struct CpuCommandBuffer {
   pub submitted: bool,
@@ -249,10 +249,8 @@ impl Kernels for CpuKernels {
     dt: timeus_t,
   ) -> EngineResult<()> {
     let dt_sec = dt as f32 / 1_000_000.0;
-    let accels = self
-      .dynamic_accelerations
-      .read()
-      .map_err(|_| EngineError::InvalidOperation("fail lock"))?;
+    let accels =
+      self.dynamic_accelerations.read().map_err(|_| EngineError::InvalidOperation("fail lock"))?;
 
     for (i, dyn_body) in dynamics.data.iter_mut().enumerate() {
       dyn_body.velocity += accels[i] * dt_sec;

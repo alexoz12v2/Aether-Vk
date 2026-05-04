@@ -1,13 +1,13 @@
-use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
-use aethervk_oshal_rlib::math::matrix::{MatrixVectorMul, SquareMatrix};
-use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
-use aethervk_oshal_rlib::math::vector::vec4::Vec4f32;
 use crate::math::collision::intersection::Ray;
 use crate::math::collision::{intersection, linear_bvh};
 use crate::physics::physics_scene::PhysicsScene;
 use crate::scene::{EntityId, PhysicalMeshComponent};
+use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
+use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
+use aethervk_oshal_rlib::math::matrix::{MatrixVectorMul, SquareMatrix};
+use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+use aethervk_oshal_rlib::math::vector::vec4::Vec4f32;
+use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
 use alloc::vec::Vec;
 
 // TODO unit tests
@@ -215,11 +215,6 @@ pub fn closest_intersection(
     .as_ref() // Converts the input into a slice: &[(...)]
     .iter() // Iterates over references to the items
     .filter(|item| item.0.0 > 0.0)
-    .min_by(|a, b| {
-      a.0
-        .0
-        .partial_cmp(&b.0.0)
-        .unwrap_or(core::cmp::Ordering::Equal)
-    })
+    .min_by(|a, b| a.0.0.partial_cmp(&b.0.0).unwrap_or(core::cmp::Ordering::Equal))
     .map(|&((t, p), e_id)| (t, p, e_id))
 }

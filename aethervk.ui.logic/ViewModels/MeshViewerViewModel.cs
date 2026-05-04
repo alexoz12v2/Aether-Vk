@@ -5,22 +5,27 @@ using System.Threading.Tasks;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.ViewModels;
 
-public partial class MeshViewerViewModel : TabItemViewModel, IDisposable
+public partial class MeshViewerViewModel
+  : TabItemViewModel,
+    CommunityToolkit.Mvvm.Messaging.IRecipient<AetherVk.Logic.Messages.RenderFrameReadyMessage>,
+    IDisposable
 {
   private readonly NativeRuntimeService _runtimeService;
-  private CancellationTokenSource? _cts;
-  private Task<ulong>? _lastRenderTask;
   public ulong PresentationEngineId { get; private set; }
   private ulong _lastRenderTaskId;
   private readonly bool _isLightTheme;
   public ulong CameraId { get; private set; } = 1;
   public ulong SceneId { get; private set; }
 
-  public uint Width { get; } = 800;
-  public uint Height { get; } = 600;
+  [ObservableProperty]
+  private uint _width = 800;
+
+  [ObservableProperty]
+  private uint _height = 600;
 
   [ObservableProperty]
   private bool _isInitialized;
@@ -29,7 +34,14 @@ public partial class MeshViewerViewModel : TabItemViewModel, IDisposable
 
   public event Action? OnFrameReady;
 
-  public MeshViewerViewModel(ulong modelId, string modelPath, string modelName, bool isLightTheme, NativeRuntimeService runtimeService, ConsoleService? consoleService)
+  public MeshViewerViewModel(
+    ulong modelId,
+    string modelPath,
+    string modelName,
+    bool isLightTheme,
+    NativeRuntimeService runtimeService,
+    ConsoleService? consoleService
+  )
     : base(modelName)
   {
     _runtimeService = runtimeService;
@@ -43,7 +55,7 @@ public partial class MeshViewerViewModel : TabItemViewModel, IDisposable
     Stop();
     if (PresentationEngineId != 0)
     {
-      _runtimeService.DestroyPresentationEngine(PresentationEngineId);
+      _runtimeService.DestroyPresentationEngine(SceneId, PresentationEngineId);
       PresentationEngineId = 0;
     }
   }
@@ -66,15 +78,15 @@ public partial class MeshViewerViewModel : TabItemViewModel, IDisposable
           _runtimeService.InitializeSimulationContext("Vulkan", null, false);
         }
 
+        _consoleService?.Log($"[MeshViewer] Creating Scene...");
+        SceneId = _runtimeService.CreateScene(false);
+
         _consoleService?.Log($"[MeshViewer] Checking PresentationEngineId...");
         if (PresentationEngineId == 0)
         {
           _consoleService?.Log($"[MeshViewer] Creating PresentationEngine...");
-          PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height);
+          PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height, SceneId);
         }
-
-        _consoleService?.Log($"[MeshViewer] Creating Scene...");
-        SceneId = _runtimeService.CreateScene(false);
 
         if (modelId == 0)
         {
@@ -133,7 +145,8 @@ public partial class MeshViewerViewModel : TabItemViewModel, IDisposable
         _runtimeService.CreateSky(SceneId, root);
         _runtimeService.CreateCursor(SceneId, root);
 
-        _consoleService?.Log($"[MeshViewer] Creating grid...");        var grid = _runtimeService.CreateGrid(SceneId, root);
+        _consoleService?.Log($"[MeshViewer] Creating grid...");
+        var grid = _runtimeService.CreateGrid(SceneId, root);
         _consoleService?.Log($"[MeshViewer] Initialization complete!");
       }
       catch (System.Exception ex)
@@ -145,58 +158,18 @@ public partial class MeshViewerViewModel : TabItemViewModel, IDisposable
 
     _consoleService?.Log($"[MeshViewer] Exiting InitializeSceneAsync!");
     IsInitialized = true;
-    StartGameLoop();
+    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(this, (r, m) => ((MeshViewerViewModel)r).Receive(m));
   }
 
   public NativeRuntimeService RuntimeService => _runtimeService;
 
-  private void StartGameLoop()
+  public void Receive(AetherVk.Logic.Messages.RenderFrameReadyMessage message)
   {
-    _cts = new CancellationTokenSource();
-    var token = _cts.Token;
-
-    // TODO: Correct render and simulation loop to be independent with each other, ie both
-    // of them contain tasks with "generation sync"
-    // Simulation Task i | Before | Render Task i
-    // Simulation Task i | Before | Simulation Task i + 1
-    // Render Task i | Before | Render Task i + 1
-    Task.Run(
-      async () =>
-      {
-        var sw = Stopwatch.StartNew();
-        TimeSpan lastTime = sw.Elapsed;
-
-        while (!token.IsCancellationRequested && _runtimeService.IsInitialized)
-        {
-          TimeSpan current = sw.Elapsed;
-          TimeSpan dt = current - lastTime;
-
-          if (dt.TotalMilliseconds >= 16.66)
-          {
-            lastTime = current;
-
-            if (_lastRenderTask != null)
-            {
-              _lastRenderTaskId = await _lastRenderTask;
-              OnFrameReady?.Invoke();
-            }
-
-            _lastRenderTask = _runtimeService.RenderTickAsync(
-              PresentationEngineId,
-              SceneId,
-              CameraId,
-              Width,
-              Height
-            );
-          }
-          else
-          {
-            await Task.Delay(16, token);
-          }
-        }
-      },
-      token
-    );
+    if (message.PresentationEngineId == PresentationEngineId && message.SceneId == SceneId)
+    {
+      _lastRenderTaskId = message.RenderGeneration;
+      OnFrameReady?.Invoke();
+    }
   }
 
   public async Task CopyFrameToBuffer(IntPtr bufferPtr, nuint bufferSize)
@@ -204,8 +177,5 @@ public partial class MeshViewerViewModel : TabItemViewModel, IDisposable
     await _runtimeService.DownloadImageAsync(_lastRenderTaskId, bufferPtr, bufferSize);
   }
 
-  public void Stop()
-  {
-    _cts?.Cancel();
-  }
+  public void Stop() { }
 }

@@ -5,6 +5,7 @@ layout(push_constant) uniform Push {
   mat4 viewProj;     
   mat4 model;
   float cursorSize;  
+  vec2 window_extent;
 } push;
 
 layout(location = 0) out vec3 outRo;
@@ -28,11 +29,19 @@ void main() {
   vec4 viewPos = push.view * vec4(cursorPos, 1.0);
 
   float dist = max(-viewPos.z, 0.001);
-  float wSize = push.cursorSize * 150.0;
-  float screenSize = wSize / dist;
-  screenSize = clamp(screenSize, 0.01, 0.08);
-
-  float scale = screenSize * dist;
+  
+  mat4 invView = inverse(push.view);
+  mat4 proj = push.viewProj * invView;
+  float proj11 = proj[1][1];
+  
+  float pixelsPerUnit = push.window_extent.y * abs(proj11) * 0.5;
+  float pixelSize = (push.cursorSize * 150.0 * pixelsPerUnit) / dist;
+  
+  float minPixels = push.window_extent.y * 0.01;
+  float maxPixels = push.window_extent.y * 0.08;
+  pixelSize = clamp(pixelSize, minPixels, maxPixels);
+  
+  float scale = (pixelSize * dist) / pixelsPerUnit;
 
   vec3 worldPos = cursorPos
                 + right * uv.x * scale * 1.8
@@ -40,7 +49,6 @@ void main() {
 
   gl_Position = push.viewProj * vec4(worldPos, 1.0);
 
-  mat4 invView = inverse(push.view);
   vec3 camPos = invView[3].xyz;
 
   outRo = camPos - cursorPos;

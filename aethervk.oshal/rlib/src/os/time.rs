@@ -1,16 +1,16 @@
 #![allow(non_camel_case_types)]
 
-use core::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use core::cmp::min;
+use core::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 
 #[cfg(windows)]
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-use libc::{clock_gettime, timespec, CLOCK_MONOTONIC};
+use libc::{CLOCK_MONOTONIC, clock_gettime, timespec};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use libc::{clock_gettime, timespec, CLOCK_MONOTONIC_RAW};
+use libc::{CLOCK_MONOTONIC_RAW, clock_gettime, timespec};
 
 pub type timeus_t = i64;
 
@@ -117,9 +117,7 @@ impl TimeInfo {
 
   pub fn set_time_scale(&mut self, time_scale: f32) {
     let time_scale = if time_scale > 0.0 { time_scale } else { 0.0 };
-    self
-      .time_scale
-      .store(f32::to_bits(time_scale), Ordering::Relaxed);
+    self.time_scale.store(f32::to_bits(time_scale), Ordering::Relaxed);
   }
 
   pub fn get_time_scale(&mut self) -> f32 {
@@ -151,9 +149,7 @@ impl TimeInfo {
 
     let idx = self.m_deltas_index.load(Ordering::Relaxed) as usize;
     self.m_deltas[idx] = delta;
-    self
-      .m_deltas_index
-      .store(((idx + 1) % DELTAS_WINDOW_COUNT) as u32, Ordering::Release);
+    self.m_deltas_index.store(((idx + 1) % DELTAS_WINDOW_COUNT) as u32, Ordering::Release);
 
     self.m_last_raw_delta.store(delta_raw, Ordering::Release);
     self.m_last_real_update.store(time_raw, Ordering::Release);
@@ -201,29 +197,28 @@ fn smooth(deltas: &[timeus_t; DELTAS_WINDOW_COUNT], start: usize) -> timeus_t {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn test_time_info_initialization() {
-        let fixed_dt = timeus_milliseconds(16);
-        let max_dt = timeus_milliseconds(33);
-        let time_info = TimeInfo::new(fixed_dt, max_dt, 1.0);
-        
-        let readings = time_info.current();
-        assert_eq!(readings.delta_time, IDEAL_DELTA_TIME);
-    }
+  #[test]
+  fn test_time_info_initialization() {
+    let fixed_dt = timeus_milliseconds(16);
+    let max_dt = timeus_milliseconds(33);
+    let time_info = TimeInfo::new(fixed_dt, max_dt, 1.0);
 
-    #[test]
-    fn test_time_scale() {
-        let fixed_dt = timeus_milliseconds(16);
-        let max_dt = timeus_milliseconds(33);
-        let mut time_info = TimeInfo::new(fixed_dt, max_dt, 1.0);
-        
-        time_info.set_time_scale(2.0);
-        assert_eq!(time_info.get_time_scale(), 2.0);
-        
-        time_info.set_time_scale(-1.0); // should clamp to 0
-        assert_eq!(time_info.get_time_scale(), 0.0);
-    }
+    let readings = time_info.current();
+    assert_eq!(readings.delta_time, IDEAL_DELTA_TIME);
+  }
+
+  #[test]
+  fn test_time_scale() {
+    let fixed_dt = timeus_milliseconds(16);
+    let max_dt = timeus_milliseconds(33);
+    let mut time_info = TimeInfo::new(fixed_dt, max_dt, 1.0);
+
+    time_info.set_time_scale(2.0);
+    assert_eq!(time_info.get_time_scale(), 2.0);
+
+    time_info.set_time_scale(-1.0); // should clamp to 0
+    assert_eq!(time_info.get_time_scale(), 0.0);
+  }
 }
-

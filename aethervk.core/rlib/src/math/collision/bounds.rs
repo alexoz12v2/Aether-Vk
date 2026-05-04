@@ -208,14 +208,8 @@ where
 
     for tri in iter {
       count += 1;
-      min = min
-        .min((*tri.v0()).into())
-        .min((*tri.v1()).into())
-        .min((*tri.v2()).into());
-      max = max
-        .max((*tri.v0()).into())
-        .max((*tri.v1()).into())
-        .max((*tri.v2()).into());
+      min = min.min((*tri.v0()).into()).min((*tri.v1()).into()).min((*tri.v2()).into());
+      max = max.max((*tri.v0()).into()).max((*tri.v1()).into()).max((*tri.v2()).into());
     }
 
     if count == 0 {
@@ -921,8 +915,8 @@ impl OBB<f32> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
   use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
+  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
 
   #[test]
   fn test_aabb_contains() {

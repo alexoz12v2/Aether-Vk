@@ -27,7 +27,7 @@ const vec3 cube_vertices[14] = vec3[](
 );
 
 void main() {
-    vec3 inPosition = cube_vertices[gl_VertexIndex];
+    vec3 inPosition = cube_vertices[gl_VertexIndex] * 2.0;
     outLocalPos = inPosition;
     
     outLocalCameraPos = push.localCameraPos;

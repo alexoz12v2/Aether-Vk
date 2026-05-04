@@ -43,7 +43,7 @@ mod windows_pool {
   use super::*;
   use windows::Win32::Foundation::{CloseHandle, HANDLE};
   use windows::Win32::System::Threading::{
-    CreateThread, SwitchToThread, WaitForSingleObject, INFINITE, THREAD_CREATION_FLAGS,
+    CreateThread, INFINITE, SwitchToThread, THREAD_CREATION_FLAGS, WaitForSingleObject,
   };
 
   struct ThreadPoolState {
@@ -124,10 +124,7 @@ mod windows_pool {
 
     pub fn scatter(&self, workloads: Vec<Box<dyn Workload>>) -> NativeResult<()> {
       let num_threads = self.state.local_queues.len();
-      self
-        .state
-        .pending_tasks
-        .fetch_add(workloads.len(), Ordering::SeqCst);
+      self.state.pending_tasks.fetch_add(workloads.len(), Ordering::SeqCst);
 
       for workload in workloads {
         if let Some(id) = workload.tasklet_id() {
@@ -318,10 +315,7 @@ mod pthread_pool {
 
     pub fn scatter(&self, workloads: Vec<Box<dyn Workload>>) -> NativeResult<()> {
       let num_threads = self.state.local_queues.len();
-      self
-        .state
-        .pending_tasks
-        .fetch_add(workloads.len(), Ordering::SeqCst);
+      self.state.pending_tasks.fetch_add(workloads.len(), Ordering::SeqCst);
 
       for workload in workloads {
         if let Some(id) = workload.tasklet_id() {
@@ -421,21 +415,21 @@ mod pthread_pool {
   }
 }
 
-#[cfg(target_os = "windows")]
-pub use windows_pool::ThreadPool;
 #[cfg(unix)]
 pub use pthread_pool::ThreadPool;
+#[cfg(target_os = "windows")]
+pub use windows_pool::ThreadPool;
 
 #[cfg(test)]
 mod tests {
   use super::*;
-  use core::sync::atomic::{AtomicUsize, Ordering};
-  use alloc::sync::Arc;
-  use alloc::boxed::Box;
-  use alloc::vec::Vec;
   use crate::os::pool::chunked::ThreadPoolChunkedExt;
-  use crate::os::pool::persistent::{ThreadPoolPersistentExt, PersistentStatus};
+  use crate::os::pool::persistent::{PersistentStatus, ThreadPoolPersistentExt};
   use crate::os::pool::tasklet::ThreadPoolExt;
+  use alloc::boxed::Box;
+  use alloc::sync::Arc;
+  use alloc::vec::Vec;
+  use core::sync::atomic::{AtomicUsize, Ordering};
 
   struct TestWorkload {
     counter: Arc<AtomicUsize>,
@@ -460,9 +454,7 @@ mod tests {
       }));
     }
 
-    pool
-      .scatter(workloads)
-      .expect("Failed to scatter workloads");
+    pool.scatter(workloads).expect("Failed to scatter workloads");
     pool.gather();
 
     assert_eq!(counter.load(Ordering::SeqCst), 100);
@@ -473,9 +465,11 @@ mod tests {
     let pool = ThreadPool::new(4).expect("Failed to create thread pool");
     let counter = Arc::new(AtomicUsize::new(0));
     let c = Arc::clone(&counter);
-    let handle = pool.spawn_chunked(10, move |chunk_id| {
-      c.fetch_add(chunk_id, Ordering::SeqCst);
-    }).expect("Failed to spawn chunked");
+    let handle = pool
+      .spawn_chunked(10, move |chunk_id| {
+        c.fetch_add(chunk_id, Ordering::SeqCst);
+      })
+      .expect("Failed to spawn chunked");
     handle.wait();
     assert_eq!(counter.load(Ordering::SeqCst), 45); // Sum of 0..9
   }
@@ -484,14 +478,16 @@ mod tests {
   fn test_thread_pool_persistent() {
     let pool = ThreadPool::new(4).expect("Failed to create thread pool");
     let mut i = 0;
-    let handle = pool.spawn_persistent(None, move || {
-      if i < 10 {
-        i += 1;
-        PersistentStatus::Yield
-      } else {
-        PersistentStatus::Complete(i)
-      }
-    }).expect("Failed to spawn persistent");
+    let handle = pool
+      .spawn_persistent(None, move || {
+        if i < 10 {
+          i += 1;
+          PersistentStatus::Yield
+        } else {
+          PersistentStatus::Complete(i)
+        }
+      })
+      .expect("Failed to spawn persistent");
     let res = handle.wait();
     assert_eq!(res, 10);
   }
@@ -499,9 +495,7 @@ mod tests {
   #[test]
   fn test_thread_pool_tasklet() {
     let pool = ThreadPool::new(4).expect("Failed to create thread pool");
-    let handle = pool.spawn_tasklet(None, || {
-      42
-    }).expect("Failed to spawn tasklet");
+    let handle = pool.spawn_tasklet(None, || 42).expect("Failed to spawn tasklet");
     let res = handle.wait();
     assert_eq!(res, 42);
   }

@@ -1,11 +1,11 @@
-use alloc::sync::Arc;
-use core::sync::atomic::{AtomicU64, Ordering, AtomicU32};
-use alloc::collections::BTreeMap;
-use ash::vk;
 use crate::gpu_backends::vulkan::device::{
-  TaskEntry, TimelinePollingWorkload, TASK_STATUS_FAILED, TASK_STATUS_PENDING, TASK_STATUS_SUCCESS,
+  TASK_STATUS_FAILED, TASK_STATUS_PENDING, TASK_STATUS_SUCCESS, TaskEntry, TimelinePollingWorkload,
 };
 use crate::types::{GpuError, GpuResult};
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
+use ash::vk;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 pub(super) struct TimelineManager {
   pub sem_device: ash::khr::timeline_semaphore::Device,
@@ -59,16 +59,10 @@ impl TimelineManager {
 
   /// Polls the GPU and updates the cache safely
   pub fn refresh_cached_value(&self) -> GpuResult<u64> {
-    let gpu_value = unsafe {
-      self
-        .sem_device
-        .get_semaphore_counter_value(self.semaphore.get())
-    }
-    .map_err(|_| crate::gpu_err!("device error"))?;
+    let gpu_value = unsafe { self.sem_device.get_semaphore_counter_value(self.semaphore.get()) }
+      .map_err(|_| crate::gpu_err!("device error"))?;
 
-    self
-      .cached_completed_value
-      .fetch_max(gpu_value, Ordering::Relaxed);
+    self.cached_completed_value.fetch_max(gpu_value, Ordering::Relaxed);
     Ok(gpu_value)
   }
 
@@ -116,11 +110,7 @@ impl TimelineManager {
       if status == TASK_STATUS_SUCCESS {
         Ok(true)
       } else if status == TASK_STATUS_FAILED {
-        let err = entry
-          .error
-          .read()
-          .clone()
-          .unwrap_or(crate::gpu_err!("device error"));
+        let err = entry.error.read().clone().unwrap_or(crate::gpu_err!("device error"));
         Err(err)
       } else {
         Ok(false)

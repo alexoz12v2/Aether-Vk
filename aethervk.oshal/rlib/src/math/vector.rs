@@ -1,4 +1,4 @@
-use core::{ops};
+use core::ops;
 
 use crate::math::{FloatLike, MulAddIdentity, Scalar, floating::FloatOps};
 

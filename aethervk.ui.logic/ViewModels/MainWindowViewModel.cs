@@ -30,8 +30,15 @@ public partial class ImportedModelItem : ObservableObject
   public string FullPath { get; }
   private readonly NativeRuntimeService _runtimeService;
   private readonly IWindowService _windowService;
+  public System.Collections.Generic.List<ulong> SpawnedInstanceIds { get; } = new();
 
-  public ImportedModelItem(ulong id, string name, string fullPath, NativeRuntimeService runtimeService, IWindowService windowService)
+  public ImportedModelItem(
+    ulong id,
+    string name,
+    string fullPath,
+    NativeRuntimeService runtimeService,
+    IWindowService windowService
+  )
   {
     Id = id;
     Name = name;
@@ -43,7 +50,11 @@ public partial class ImportedModelItem : ObservableObject
   [RelayCommand]
   private async Task SpawnAsync()
   {
-    await _windowService.ShowSpawnMeshDialogAsync(Id.ToString(), Name);
+    var instanceId = await _windowService.ShowSpawnMeshDialogAsync(Id.ToString(), Name);
+    if (instanceId > 0)
+    {
+      SpawnedInstanceIds.Add(instanceId);
+    }
   }
 
   [RelayCommand]
@@ -55,6 +66,14 @@ public partial class ImportedModelItem : ObservableObject
   [RelayCommand]
   private void Unload()
   {
+    // Clean up instances across all known scenes
+    // For now, we only spawn into Scene 1 via ShowSpawnMeshDialogAsync, but let's assume we remove them generally.
+    foreach (var instanceId in SpawnedInstanceIds)
+    {
+       _runtimeService.RemoveEntity(1, instanceId); // Assuming Scene 1 since it's hardcoded in AvaloniaWindowService
+    }
+    SpawnedInstanceIds.Clear();
+
     _runtimeService.UnloadModel(Id);
     WeakReferenceMessenger.Default.Send(new ModelUnloadedMessage(this));
   }
@@ -109,14 +128,15 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
     BreadcrumbService breadcrumbService,
     IFileDialogService fileDialogService,
     IWindowService windowService,
-    DockingManagerViewModel dockingManager)
+    DockingManagerViewModel dockingManager
+  )
   {
     _runtimeService = runtimeService;
     _breadcrumbService = breadcrumbService;
     _fileDialogService = fileDialogService;
     _windowService = windowService;
     _dockingManager = dockingManager;
-    
+
     // Set initial theme to system default
     CurrentTheme = AppTheme.System;
     WeakReferenceMessenger.Default.Register<ModelUnloadedMessage>(this);
@@ -132,7 +152,7 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   {
     var filters = new[] { "gltf", "glb" };
     var result = await _fileDialogService.ShowOpenFileDialogAsync("Import 3D Model", filters);
-    
+
     if (!string.IsNullOrEmpty(result))
     {
       var modelId = await _runtimeService.ImportModelAsync(result);
@@ -141,7 +161,9 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
         if (!System.Linq.Enumerable.Any(ImportedModels, m => m.Id == modelId))
         {
           var fileName = System.IO.Path.GetFileName(result);
-          ImportedModels.Add(new ImportedModelItem(modelId, fileName, result, _runtimeService, _windowService));
+          ImportedModels.Add(
+            new ImportedModelItem(modelId, fileName, result, _runtimeService, _windowService)
+          );
         }
       }
     }
@@ -152,19 +174,24 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   {
     var filters = new[] { "png", "jpg", "jpeg", "bmp", "tga" };
     var result = await _fileDialogService.ShowOpenFileDialogAsync("Import Image", filters);
-    
+
     if (!string.IsNullOrEmpty(result))
     {
       try
       {
         // Actually, Avalonia isn't allowed here, but System.Drawing isn't either.
-        // We might need an interface to get image dimensions. 
+        // We might need an interface to get image dimensions.
         // For now, let's keep the actual logic from MainWindow.axaml.cs inside an ImageService, or use IWindowService.ShowSpawnImageDialogAsync(result)
         await _windowService.ShowSpawnImageDialogAsync(result);
       }
       catch (System.Exception ex)
       {
-        _breadcrumbService.ShowMessageAsync("Import Error", $"Failed to load image: {ex.Message}", default, 3);
+        _breadcrumbService.ShowMessageAsync(
+          "Import Error",
+          $"Failed to load image: {ex.Message}",
+          default,
+          3
+        );
       }
     }
   }

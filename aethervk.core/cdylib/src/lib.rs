@@ -5,21 +5,21 @@ extern crate std;
 
 use aethervk_core_rlib as r#impl;
 
-use core::{panic::PanicInfo};
+use core::panic::PanicInfo;
 
-extern crate core;
 extern crate alloc;
+extern crate core;
 
-pub mod oshal;
 pub mod ffi;
+pub mod oshal;
 
 // ----------- Allocator Setup --------------------------------------
-#[cfg(not(target_env = "msvc"))]
-#[cfg(not(feature = "std"))]
-use tikv_jemallocator::Jemalloc;
 #[cfg(target_env = "msvc")]
 #[cfg(not(feature = "std"))]
 use mimalloc::MiMalloc;
+#[cfg(not(target_env = "msvc"))]
+#[cfg(not(feature = "std"))]
+use tikv_jemallocator::Jemalloc;
 
 #[cfg(not(target_env = "msvc"))]
 #[cfg(not(feature = "std"))]
@@ -40,8 +40,8 @@ fn the_panic(_info: &PanicInfo) -> ! {
 }
 
 // -------------------- Linker Functions ----------------------------
-pub use oshal::*;
 pub use ffi::*;
+pub use oshal::*;
 
 // -------------------- Necessary Evilness --------------------------
 // `liballoc` expects some symbols for unwinding panic even though we specified abort.

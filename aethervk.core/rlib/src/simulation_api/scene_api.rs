@@ -7,8 +7,8 @@ use crate::{
     PhysicalMeshComponent, Scene, SelectedComponent, SkyComponent, SunComponent,
     TransformComponent,
   },
-  simulation_api::structs::{self, SceneContext},
   simulation_api::SimulationContext,
+  simulation_api::structs::{self, SceneContext},
   types::{EngineError, EngineResult},
 };
 use aethervk_oshal_rlib as oshal;
@@ -80,22 +80,23 @@ impl SimulationContext {
   }
 
   pub fn spawn_entity(&self, scene_id: u64, name: &str) -> EngineResult<u64> {
-    let mut scene_data = self.scenes.write();
+    let scene_data = self.scenes.read();
     let active = expect_scene!(scene_data.get_scene(scene_id), "scene_api:spawn_entity");
     let id = active.write().scene.spawn_entity(name);
     Ok(active.write().register_entity(id))
   }
 
   pub fn remove_entity(&self, scene_id: u64, entity: u64) -> EngineResult<()> {
-    let mut scene_data = self.scenes.write();
-    let (mut active, entity_id) = expect_scene_and_entity!(
+    let scene_data = self.scenes.read();
+    let (active, entity_id) = expect_scene_and_entity!(
       scene_data.get_scene(scene_id),
       entity,
       "scene_api:remove_entity"
     );
-    active.write().scene.remove_entity(entity_id);
+    let mut write_active = active.write();
+    write_active.scene.remove_entity(entity_id);
 
-    if active.write().entity_map.remove(&entity).is_some() {
+    if write_active.entity_map.remove(&entity).is_some() {
       Ok(())
     } else {
       Err(EngineError::InvalidOperation(
@@ -129,17 +130,14 @@ impl SimulationContext {
       expect_scene_and_entity!(self.get_scene(scene_id), entity, "scene_api:get_bvh_nodes");
     let mut ffi_nodes = Vec::new();
 
-    active
-      .read()
-      .scene
-      .with_component(entity_id, |mesh: &PhysicalMeshComponent| {
-        if let Some(bvh) = &mesh.mesh.bvh {
-          for node in &bvh.nodes {
-            let ffi_node = node.clone().into();
-            ffi_nodes.push(ffi_node);
-          }
+    active.read().scene.with_component(entity_id, |mesh: &PhysicalMeshComponent| {
+      if let Some(bvh) = &mesh.mesh.bvh {
+        for node in &bvh.nodes {
+          let ffi_node = node.clone().into();
+          ffi_nodes.push(ffi_node);
         }
-      });
+      }
+    });
 
     if !count.is_null() {
       unsafe {
@@ -214,31 +212,15 @@ impl SimulationContext {
 
   pub fn get_entity_parent(&self, scene_id: u64, entity: u64) -> EngineResult<u64> {
     let scene = expect_scene!(self.get_scene(scene_id), "scene_api:get_entity_parent");
-    let internal_id = scene
-      .read()
-      .get_entity(entity)
-      .ok_or(EngineError::InvalidOperation(
-        "scene_api:get_entity_parent child entity not found",
-      ))?;
-    let parent_id =
-      scene
-        .read()
-        .scene
-        .get_parent(internal_id)
-        .ok_or(EngineError::InvalidOperation(
-          "scene_api:get_entity_parent parent not found",
-        ))?;
+    let internal_id = scene.read().get_entity(entity).ok_or(EngineError::InvalidOperation(
+      "scene_api:get_entity_parent child entity not found",
+    ))?;
+    let parent_id = scene.read().scene.get_parent(internal_id).ok_or(
+      EngineError::InvalidOperation("scene_api:get_entity_parent parent not found"),
+    )?;
     // we don't maintain an inverse mapping, so we need to find it manually
     // precondition for unwrap: if entity exists, then the simulation api has its external id.
-    Ok(
-      scene
-        .read()
-        .entity_map
-        .iter()
-        .find(|&(_, v)| *v == parent_id)
-        .map(|(ext, _)| *ext)
-        .unwrap(),
-    )
+    Ok(scene.read().entity_map.iter().find(|&(_, v)| *v == parent_id).map(|(ext, _)| *ext).unwrap())
   }
   pub fn create_empty_scene(&self) -> EngineResult<u64> {
     let (scene, root_entity) = empty_scene_object()?;
@@ -254,6 +236,7 @@ impl SimulationContext {
     Vec3f32::from_components(0.0, -400.0, 0.0)
   }
 
+  // TODO remove
   pub fn create_default_scene(&self) -> EngineResult<u64> {
     let (scene, root_entity) = empty_scene_object()?;
 
@@ -279,7 +262,8 @@ impl SimulationContext {
     if let Some(asset_dir) = crate::gpu::ASSET_DIR.read().as_ref() {
       let pck_path = alloc::format!("{}/planets/pck00011.tpc", asset_dir);
       if let Some(radii) = crate::simulation::pck::read_body_radii(&pck_path, 10) {
-        sun_radius = (radii[0] / crate::simulation::constants::DISTANCE_SCALE_FACTOR) as f32 * crate::simulation::constants::PLANET_VISUAL_SCALE;
+        sun_radius = (radii[0] / crate::simulation::constants::DISTANCE_SCALE_FACTOR) as f32
+          * crate::simulation::constants::PLANET_VISUAL_SCALE;
       }
     }
 
@@ -400,10 +384,7 @@ impl SimulationContext {
       "scene_api:set_entity_following"
     );
     if following {
-      active
-        .write()
-        .scene
-        .add_component(entity_id, crate::scene::FollowingComponent {})?;
+      active.write().scene.add_component(entity_id, crate::scene::FollowingComponent {})?;
     } else {
       active
         .write()

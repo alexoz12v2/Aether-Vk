@@ -20,7 +20,11 @@ public class HorizonJplServiceTests
   [Fact]
   public void ParseText_WithInvalidContent_ReturnsEmptyCollections()
   {
-    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>(); dispatcherMock.Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>())).Callback<System.Action>(a => a()); var console = new ConsoleService(dispatcherMock.Object);
+    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
+    dispatcherMock
+      .Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
+      .Callback<System.Action>(a => a());
+    var console = new ConsoleService(dispatcherMock.Object);
     var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
     var service = new HorizonJplService(console, breadcrumb);
 
@@ -36,7 +40,11 @@ public class HorizonJplServiceTests
   [Fact]
   public void ParseCometsJson_CorrectlyParsesFieldsAndData()
   {
-    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>(); dispatcherMock.Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>())).Callback<System.Action>(a => a()); var console = new ConsoleService(dispatcherMock.Object);
+    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
+    dispatcherMock
+      .Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
+      .Callback<System.Action>(a => a());
+    var console = new ConsoleService(dispatcherMock.Object);
     var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
     var service = new HorizonJplService(console, breadcrumb);
 
@@ -62,7 +70,11 @@ public class HorizonJplServiceTests
   [Fact]
   public void ParseText_CorrectlyParsesEphemerisData()
   {
-    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>(); dispatcherMock.Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>())).Callback<System.Action>(a => a()); var console = new ConsoleService(dispatcherMock.Object);
+    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
+    dispatcherMock
+      .Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
+      .Callback<System.Action>(a => a());
+    var console = new ConsoleService(dispatcherMock.Object);
     var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
     var service = new HorizonJplService(console, breadcrumb);
 

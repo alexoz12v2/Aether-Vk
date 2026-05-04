@@ -1,11 +1,11 @@
+use crate::scene::{CameraComponent, EntityId, HasComponentResultEnum, Scene, TransformComponent};
+use crate::types::{EngineError, EngineResult};
+use aethervk_oshal_rlib::math::FloatLike;
 use aethervk_oshal_rlib::math::floating::FloatOps;
 use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::FloatLike;
 use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
 use aethervk_oshal_rlib::math::vector::vec4::Quat;
 use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
-use crate::scene::{CameraComponent, EntityId, HasComponentResultEnum, Scene, TransformComponent};
-use crate::types::{EngineError, EngineResult};
 
 // TODO add unit tests
 
@@ -90,14 +90,21 @@ impl SceneCameraExt for Scene {
       ))
   }
 
-  // TODO: clamp to a limit position (zoom can get out of hand)
   fn translate_camera_local(&self, camera_entity: EntityId, delta: Vec3f32) -> EngineResult<()> {
     check_for_camera(&self, camera_entity)?;
 
     self
       .with_component_mut(camera_entity, |t: &mut TransformComponent| {
         let global_delta = t.rotation.rotate_vector(delta);
-        t.position = t.position + global_delta;
+        let new_pos = t.position + global_delta;
+
+        let dist = new_pos.length();
+        let max_dist = 1_000.0; // TODO parameter
+        if dist > max_dist {
+          t.position = (new_pos / dist) * max_dist;
+        } else {
+          t.position = new_pos;
+        }
       })
       .ok_or(EngineError::InvalidOperation(
         "[SceneCameraExt] translate_camera_local: camera entity not found",

@@ -1,19 +1,19 @@
-use aethervk_oshal_rlib::{self as oshal, math::matrix::mat4::Mat4x4f32};
-use core::ffi::c_char;
-use aethervk_oshal_rlib::math::matrix::Matrix4;
 use crate::{
+  expect_scene,
+  gpu::PresentationEngineHandle,
   gpu::WeakRenderFrontendExt,
+  scene::CameraComponent,
+  simulation_api::structs::SimulationTaskResult,
   simulation_api::structs::{
     RaycastResult, RenderCommand, RenderTaskStatus, Resize, SharedDataWrapper, TaskStatusCode,
   },
-  simulation_api::{SimulationContext, BREADCRUMB_CALLBACK},
-  scene::CameraComponent,
+  simulation_api::{BREADCRUMB_CALLBACK, SimulationContext},
   types::EngineError,
-  gpu::PresentationEngineHandle,
-  expect_scene,
-  simulation_api::structs::SimulationTaskResult,
   types::EngineResult,
 };
+use aethervk_oshal_rlib::math::matrix::Matrix4;
+use aethervk_oshal_rlib::{self as oshal, math::matrix::mat4::Mat4x4f32};
+use core::ffi::c_char;
 
 impl SimulationContext {
   pub fn set_logger_callback(cb: Option<extern "C" fn(*const c_char)>) {
@@ -32,8 +32,28 @@ impl SimulationContext {
     BREADCRUMB_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
   }
 
+  pub fn set_simulation_callback(cb: Option<extern "C" fn(u64, *mut core::ffi::c_void)>) {
+    let ptr = match cb {
+      Some(f) => f as *mut (),
+      None => core::ptr::null_mut(),
+    };
+    crate::simulation_api::SIMULATION_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
+  }
+
+  pub fn set_render_callback(cb: Option<extern "C" fn(u64, u64, u64)>) {
+    let ptr = match cb {
+      Some(f) => f as *mut (),
+      None => core::ptr::null_mut(),
+    };
+    crate::simulation_api::RENDER_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
+  }
+
   pub fn get_task_status(&self, task_id: u64) -> TaskStatusCode {
-    if (task_id & (1u64 << 63)) != 0 {
+    if (task_id == 0 || task_id == u64::MAX) {
+      return TaskStatusCode::Invalid;
+    }
+
+    if (task_id & (1u64 << 63)) != 0 { // TODO check correctness for task id construction in logic thread. If so, create RenderTaskId(u64) and LogicTaskId(u64) with new function with debug_assert!
       // Logic task
       self.task_manager.read().get_status(task_id)
     } else {
@@ -122,21 +142,17 @@ impl SimulationContext {
     let scene = expect_scene!(scene_data.get_scene(scene_id), "scene_api:resize");
     {
       let scene_write = scene.read();
-      let target_entity = scene_write
-        .active_camera_entity
-        .ok_or(EngineError::InvalidOperation(
-          "scene_api: no active camera in scene",
-        ))?;
-      scene_write
-        .scene
-        .with_component_mut(target_entity, |c: &mut CameraComponent| {
-          c.projection = Mat4x4f32::perspective_vk(
-            45.0f32.to_radians(),
-            width as f32 / height as f32,
-            0.1,
-            10000.0,
-          );
-        });
+      let target_entity = scene_write.active_camera_entity.ok_or(EngineError::InvalidOperation(
+        "scene_api: no active camera in scene",
+      ))?;
+      scene_write.scene.with_component_mut(target_entity, |c: &mut CameraComponent| {
+        c.projection = Mat4x4f32::perspective_vk(
+          45.0f32.to_radians(),
+          width as f32 / height as f32,
+          0.1,
+          10000.0,
+        );
+      });
     }
 
     // TODO retry if full up to a threshold

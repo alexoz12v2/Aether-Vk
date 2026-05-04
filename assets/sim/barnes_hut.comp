@@ -1,0 +1,110 @@
+#version 450 core
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
+
+// ============================================================================
+// Barnes-Hut Self-Gravity
+// ============================================================================
+// Computes self-gravity in O(N log N) using the LBVH built previously.
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+#include "../bvh_utils.glsl"
+
+// Particles data mapped as uint to perform CAS loop for float atomicAdd
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleData {
+    uint data[];
+};
+
+layout(push_constant, scalar) uniform PushConstants {
+    ParticleData particles;
+    BVHArray bvh;
+    uint root_index;
+    uint total_particles;
+    float theta; // Barnes-Hut MAC (Multipole Acceptance Criterion) threshold, e.g. 0.5
+    float G;     // Gravitational constant
+} pc;
+
+void atomicAddFloat(uint index, float val) {
+    uint old_val = pc.particles.data[index];
+    uint assumed_val;
+    do {
+        assumed_val = old_val;
+        uint new_val = floatBitsToUint(uintBitsToFloat(assumed_val) + val);
+        old_val = atomicCompSwap(pc.particles.data[index], assumed_val, new_val);
+    } while (assumed_val != old_val);
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.total_particles) return;
+
+    // Use the leaf node to find our particle
+    uint leaf_idx = pc.total_particles - 1 + idx; // In our LBVH, leaves are in the second half
+    uint my_p_id = pc.bvh.nodes[leaf_idx].left_child_or_primitive_offset;
+    
+    uint blockA = my_p_id / SG_SIZE;
+    uint locA = my_p_id % SG_SIZE;
+    uint baseA = blockA * (10 * SG_SIZE) + locA;
+
+    vec3 my_pos = vec3(
+        uintBitsToFloat(pc.particles.data[baseA + 0 * SG_SIZE]),
+        uintBitsToFloat(pc.particles.data[baseA + 1 * SG_SIZE]),
+        uintBitsToFloat(pc.particles.data[baseA + 2 * SG_SIZE])
+    );
+    float my_mass = uintBitsToFloat(pc.particles.data[baseA + 6 * SG_SIZE]);
+    
+    if (my_mass <= 0.0) return;
+
+    vec3 total_force = vec3(0.0);
+
+    // Stack-based traversal of the BVH
+    uint stack[32];
+    int stackPtr = 0;
+    stack[stackPtr++] = pc.root_index;
+
+    while (stackPtr > 0) {
+        uint node_idx = stack[--stackPtr];
+        BVHNodeAABB node = pc.bvh.nodes[node_idx];
+        
+        bool isLeaf = (node.primitive_count > 0);
+        
+        if (isLeaf) {
+            uint other_p_id = node.left_child_or_primitive_offset;
+            if (my_p_id != other_p_id) {
+                // Exact particle-particle gravity
+                vec3 r = node.center_of_mass - my_pos;
+                float dist_sq = dot(r, r);
+                if (dist_sq > 1e-6) {
+                    float dist = sqrt(dist_sq);
+                    total_force += r * (pc.G * my_mass * node.mass / (dist_sq * dist));
+                }
+            }
+        } else {
+            // Check MAC (Multipole Acceptance Criterion)
+            vec3 r = node.center_of_mass - my_pos;
+            float dist_sq = dot(r, r);
+            float dist = sqrt(max(dist_sq, 1e-6));
+            
+            // Calculate size of the node's bounding box
+            vec3 extents = node.bound.maxBounds - node.bound.minBounds;
+            float size = max(extents.x, max(extents.y, extents.z));
+            
+            if (size / dist < pc.theta) {
+                // Node is far enough, use center of mass
+                total_force += r * (pc.G * my_mass * node.mass / (dist_sq * dist));
+            } else {
+                // Node is too close, traverse children
+                stack[stackPtr++] = node.left_child_or_primitive_offset;
+                stack[stackPtr++] = node.right_child_offset;
+            }
+        }
+    }
+
+    // Accumulate the computed force back into the particles buffer F_n
+    // Using atomicAdd since other shaders might also add forces
+    atomicAddFloat(baseA + 7 * SG_SIZE, total_force.x);
+    atomicAddFloat(baseA + 8 * SG_SIZE, total_force.y);
+    atomicAddFloat(baseA + 9 * SG_SIZE, total_force.z);
+}

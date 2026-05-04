@@ -1,4 +1,4 @@
-use core::{ops, f32, f64};
+use core::{f32, f64, ops};
 
 use crate::math::{FloatLike, MulAddIdentity};
 

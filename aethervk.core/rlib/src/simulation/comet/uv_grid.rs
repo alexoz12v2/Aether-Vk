@@ -1,7 +1,7 @@
 extern crate alloc;
+use crate::simulation::comet::Vertex;
 use alloc::vec;
 use alloc::vec::Vec;
-use crate::simulation::comet::Vertex;
 
 /// Uniform Spatial Grid backed by a flat CSR (Compressed Sparse Row) array.
 #[derive(Clone)]
@@ -138,7 +138,12 @@ impl UvGrid {
   }
 
   /// Queries the mapper for an O(1) interpolated 3D object space position and normal.
-  pub fn query(&self, uv: [f32; 2], vertices: &[Vertex], indices: &[u32]) -> Option<([f32; 3], [f32; 3])> {
+  pub fn query(
+    &self,
+    uv: [f32; 2],
+    vertices: &[Vertex],
+    indices: &[u32],
+  ) -> Option<([f32; 3], [f32; 3])> {
     if uv[0] < self.min_uv[0]
       || uv[0] > self.max_uv[0]
       || uv[1] < self.min_uv[1]
