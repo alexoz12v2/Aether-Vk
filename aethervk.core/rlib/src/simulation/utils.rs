@@ -29,14 +29,15 @@ pub fn generate_gaussian_distribution(
   std_dev_y: f32,
 ) -> crate::math::distribution::Distribution2D {
   let mut weights = alloc::vec::Vec::with_capacity(resolution * resolution);
-  
+
   for y in 0..resolution {
     for x in 0..resolution {
       let dx = (x as f32 / resolution as f32) - mean_x;
       let dy = (y as f32 / resolution as f32) - mean_y;
-      
-      let weight = aethervk_oshal_rlib::math::FloatLike::exp(-(dx * dx) / (2.0 * std_dev_x * std_dev_x) 
-                   - (dy * dy) / (2.0 * std_dev_y * std_dev_y));
+
+      let weight = aethervk_oshal_rlib::math::FloatLike::exp(
+        -(dx * dx) / (2.0 * std_dev_x * std_dev_x) - (dy * dy) / (2.0 * std_dev_y * std_dev_y),
+      );
       weights.push(weight);
     }
   }

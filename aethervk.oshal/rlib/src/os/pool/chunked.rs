@@ -3,8 +3,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::os::NativeResult;
 use super::{ThreadPool, Workload, WorkloadStatus};
+use crate::os::NativeResult;
 
 pub struct ChunkedState {
   completed: AtomicUsize,

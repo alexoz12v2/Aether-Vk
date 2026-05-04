@@ -28,7 +28,7 @@ impl Vec3f32 {
   pub fn from_array(data: [f32; 3]) -> Self {
     Self(Vec4f32::from_components(data[0], data[1], data[2], 0.0))
   }
-  
+
   #[inline]
   pub fn to_point(&self) -> Vec4f32 {
     Vec4f32::from_components(self.x(), self.y(), self.z(), 1.0)

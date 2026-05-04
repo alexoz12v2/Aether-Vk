@@ -1,11 +1,4 @@
-use core::{ptr, slice};
-
-use aethervk_oshal_rlib::panic_handler_impl;
-use ash::{khr::create_renderpass2, vk};
-use spin::RwLock;
-
 use crate::{
-  gpu::frame,
   gpu_backends::vulkan::{
     device::{
       DeviceResource,
@@ -16,6 +9,12 @@ use crate::{
   },
   types::GpuResult,
 };
+use ash::vk;
+use core::slice;
+use spin::RwLock;
+
+#[cfg(test)]
+use crate::gpu_backends::vulkan::utils::create_test_attachment;
 
 /// Struct which encapsulates what we are interested about a render pass, namely
 /// - color attachment format and depth/stencil format
@@ -63,6 +62,17 @@ struct RenderPassBundle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum RenderPassType {
   ColorDepthSingleSubpass,
+  #[cfg(test)]
+  TestColorDepthSingleSubpass,
+}
+
+impl RenderPassType {
+  pub fn color_depth_single_subpass() -> Self {
+    #[cfg(not(test))]
+    return Self::ColorDepthSingleSubpass;
+    #[cfg(test)]
+    return Self::TestColorDepthSingleSubpass;
+  }
 }
 
 pub(super) enum RenderPassSpecification<'a> {
@@ -71,15 +81,29 @@ pub(super) enum RenderPassSpecification<'a> {
     depth_stencil_format: vk::Format,
     swapchain: &'a PresentationState,
   },
+  #[cfg(test)]
+  TestColorDepthSingleSubpass {
+    color_format: vk::Format,
+    depth_stencil_format: vk::Format,
+    swapchain: &'a PresentationState,
+  },
 }
 
 impl<'a> RenderPassSpecification<'a> {
   pub fn single_pass(presentation_engine: &'a PresentationState, d: vk::Format) -> Self {
-    Self::ColorDepthSingleSubpass {
+    #[cfg(not(test))]
+    return Self::ColorDepthSingleSubpass {
       color_format: presentation_engine.format(),
       depth_stencil_format: d,
       swapchain: presentation_engine,
-    }
+    };
+
+    #[cfg(test)]
+    return Self::TestColorDepthSingleSubpass {
+      color_format: presentation_engine.format(),
+      depth_stencil_format: d,
+      swapchain: presentation_engine,
+    };
   }
 }
 
@@ -175,9 +199,24 @@ impl RenderPasses {
           return Err(crate::gpu_invalid_arg!("invalid argument"));
         }
         let bundle = unsafe {
-          read_render_passes
-            .get(&RenderPassType::ColorDepthSingleSubpass)
-            .unwrap_unchecked()
+          read_render_passes.get(&RenderPassType::ColorDepthSingleSubpass).unwrap_unchecked()
+        };
+        out_values[0] = bundle.clear_value[0];
+        out_values[1] = bundle.clear_value[1];
+
+        Ok(())
+      }
+      #[cfg(test)]
+      RenderPassType::TestColorDepthSingleSubpass => {
+        let read_render_passes = self.render_passes.read();
+        if !read_render_passes.contains_key(&RenderPassType::TestColorDepthSingleSubpass) {
+          return Err(crate::gpu_err!("device error"));
+        }
+        if out_values.len() != 2 {
+          return Err(crate::gpu_invalid_arg!("invalid argument"));
+        }
+        let bundle = unsafe {
+          read_render_passes.get(&RenderPassType::TestColorDepthSingleSubpass).unwrap_unchecked()
         };
         out_values[0] = bundle.clear_value[0];
         out_values[1] = bundle.clear_value[1];
@@ -205,13 +244,14 @@ impl RenderPasses {
         depth_stencil_format,
         swapchain,
       } => {
-        if let Some(bundle) = self
-          .render_passes
-          .read()
-          .get(&RenderPassType::ColorDepthSingleSubpass)
+        if let Some(bundle) =
+          self.render_passes.read().get(&RenderPassType::ColorDepthSingleSubpass)
         {
           let (width, height) = swapchain.extent();
-          if bundle.swapchain_generation == swapchain.swapchain_generation() && bundle.width == width && bundle.height == height {
+          if bundle.swapchain_generation == swapchain.swapchain_generation()
+            && bundle.width == width
+            && bundle.height == height
+          {
             return Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]));
           }
         }
@@ -345,9 +385,153 @@ impl RenderPasses {
         drop(write_render_passes);
         let read_render_passes = self.render_passes.read();
         let bundle = unsafe {
-          read_render_passes
-            .get(&RenderPassType::ColorDepthSingleSubpass)
+          read_render_passes.get(&RenderPassType::ColorDepthSingleSubpass).unwrap_unchecked()
+        };
+
+        Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]))
+      }
+      #[cfg(test)]
+      RenderPassSpecification::TestColorDepthSingleSubpass {
+        color_format,
+        depth_stencil_format,
+        swapchain,
+      } => {
+        if let Some(bundle) =
+          self.render_passes.read().get(&RenderPassType::TestColorDepthSingleSubpass)
+        {
+          let (width, height) = swapchain.extent();
+          if bundle.swapchain_generation == swapchain.swapchain_generation()
+            && bundle.width == width
+            && bundle.height == height
+          {
+            return Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]));
+          }
+        }
+
+        let mut write_render_passes = self.render_passes.write();
+        if let Some(mut bundle) =
+          write_render_passes.remove(&RenderPassType::TestColorDepthSingleSubpass)
+        {
+          bundle.discard(discard_pool, self.allocator, timeline);
+        }
+
+        let final_layout = match swapchain {
+          PresentationState::Windowed(_) => vk::ImageLayout::PRESENT_SRC_KHR,
+          PresentationState::Windowless(_) => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        };
+
+        let render_pass = Self::create_test_color_depth_render_pass(
+          &self.render_pass_device,
+          color_format,
+          depth_stencil_format,
+        )
+        .or_else(|e| {
+          let _ = (&mut write_render_passes).remove(&RenderPassType::TestColorDepthSingleSubpass);
+          Err(e)
+        })?;
+        let (width, height) = swapchain.extent();
+
+        let black_value = vk::ClearValue {
+          color: vk::ClearColorValue {
+            float32: [0.0, 0.0, 0.0, 1.0],
+          },
+        };
+        let white_value = vk::ClearValue {
+          depth_stencil: vk::ClearDepthStencilValue {
+            depth: 1.0,
+            stencil: 0,
+          },
+        };
+        unsafe {
+          write_render_passes.insert_unique_unchecked(
+            RenderPassType::TestColorDepthSingleSubpass,
+            RenderPassBundle {
+              render_pass,
+              clear_value: [black_value, white_value],
+              swapchain_generation: swapchain.swapchain_generation(),
+              framebuffer: heapless::Vec::new(),
+              width,
+              height,
+              attachments: heapless::Vec::new(),
+            },
+          )
+        };
+
+        unsafe {
+          write_render_passes
+            .get_mut(&RenderPassType::TestColorDepthSingleSubpass)
             .unwrap_unchecked()
+            .attachments
+            .push_unchecked(RenderPassAttachment::SwapchainColorImage)
+        };
+
+        let (image, alloc) = create_test_attachment(
+          allocator,
+          vk::Extent2D { width, height },
+          depth_stencil_format,
+          vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC,
+          vk::SampleCountFlags::TYPE_1,
+        )
+        .or_else(|e| {
+          let _ = write_render_passes.remove(&RenderPassType::TestColorDepthSingleSubpass);
+          Err(e)
+        })?;
+        let view_create_info = vk::ImageViewCreateInfo::default()
+          .image(image.get())
+          .view_type(vk::ImageViewType::TYPE_2D)
+          .format(depth_stencil_format)
+          .subresource_range(
+            vk::ImageSubresourceRange::default()
+              .aspect_mask(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL)
+              .level_count(1)
+              .layer_count(1),
+          );
+        let view = unsafe { device.create_image_view(&view_create_info, None) }.or_else(|e| {
+          let _ = write_render_passes.remove(&RenderPassType::TestColorDepthSingleSubpass);
+          Err(e)
+        })?;
+        let view = unsafe { NonZeroHandle::new_unchecked(view) };
+        unsafe {
+          write_render_passes
+            .get_mut(&RenderPassType::TestColorDepthSingleSubpass)
+            .unwrap_unchecked()
+            .attachments
+            .push_unchecked(RenderPassAttachment::DepthStencilAttachment(
+              image, alloc, view,
+            ));
+        }
+
+        swapchain
+          .for_each_swapchain_image(|image_view| {
+            let attachments = [image_view.get(), view.get()];
+            let framebuffer_create_info = vk::FramebufferCreateInfo::default()
+              .render_pass(render_pass.get())
+              .width(width)
+              .height(height)
+              .layers(1)
+              .attachments(&attachments);
+            let framebuffer = unsafe {
+              NonZeroHandle::new_unchecked(
+                device.create_framebuffer(&framebuffer_create_info, None)?,
+              )
+            };
+            unsafe {
+              write_render_passes
+                .get_mut(&RenderPassType::TestColorDepthSingleSubpass)
+                .unwrap_unchecked()
+                .framebuffer
+                .push_unchecked(framebuffer);
+            };
+            Ok(())
+          })
+          .or_else(|e| {
+            let _ = write_render_passes.remove(&RenderPassType::TestColorDepthSingleSubpass);
+            Err(e)
+          })?;
+        drop(write_render_passes);
+        let read_render_passes = self.render_passes.read();
+        let bundle = unsafe {
+          read_render_passes.get(&RenderPassType::TestColorDepthSingleSubpass).unwrap_unchecked()
         };
 
         Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]))
@@ -464,5 +648,73 @@ impl RenderPasses {
     };
 
     Ok(render_pass)
+  }
+
+  #[cfg(test)]
+  pub(crate) fn create_test_color_depth_render_pass(
+    render_pass_device: &ash::khr::create_renderpass2::Device,
+    color_format: vk::Format,
+    depth_stencil_format: vk::Format,
+  ) -> GpuResult<NonZeroHandle<vk::RenderPass>> {
+    let attachments = [
+      vk::AttachmentDescription2::default()
+        .format(color_format)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::STORE)
+        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+      vk::AttachmentDescription2::default()
+        .format(depth_stencil_format)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::STORE)
+        .stencil_load_op(vk::AttachmentLoadOp::CLEAR)
+        .stencil_store_op(vk::AttachmentStoreOp::STORE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL),
+    ];
+
+    let subpass_0_output_attachment_refs = [
+      vk::AttachmentReference2::default()
+        .attachment(0)
+        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        .aspect_mask(vk::ImageAspectFlags::COLOR),
+      vk::AttachmentReference2::default()
+        .attachment(1)
+        .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+        .aspect_mask(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL),
+    ];
+
+    let subpass_0 = vk::SubpassDescription2::default()
+      .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+      .color_attachments(slice::from_ref(&subpass_0_output_attachment_refs[0]))
+      .depth_stencil_attachment(&subpass_0_output_attachment_refs[1]);
+
+    let render_pass_create_info = vk::RenderPassCreateInfo2::default()
+      .attachments(&attachments)
+      .subpasses(slice::from_ref(&subpass_0));
+
+    let render_pass = unsafe {
+      NonZeroHandle::new_unchecked(
+        render_pass_device.create_render_pass2(&render_pass_create_info, None)?,
+      )
+    };
+
+    Ok(render_pass)
+  }
+
+  #[cfg(test)]
+  pub(crate) fn get_test_depth_stencil_image(&self) -> Option<NonZeroHandle<vk::Image>> {
+    let read_render_passes = self.render_passes.read();
+    let bundle = read_render_passes.get(&RenderPassType::TestColorDepthSingleSubpass)?;
+    for attachment in bundle.attachments.iter() {
+      if let RenderPassAttachment::DepthStencilAttachment(image, _, _) = attachment {
+        return Some(*image);
+      }
+    }
+    None
   }
 }

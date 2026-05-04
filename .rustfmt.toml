@@ -1,3 +1,16 @@
 indent_style = "Block"
-reorder_imports = false
 tab_spaces = 2
+
+# --- 1. Fix the Method Chain Sprawl ---
+# By default, rustfmt wraps method chains if they exceed 60 characters.
+# Increasing this value forces rustfmt to keep them on a single line longer.
+chain_width = 100
+
+# --- 2. Force Nested Imports ---
+# Groups imports from the same crate/module into nested brackets (e.g., `use std::{fs, io};`)
+unstable_features = true
+imports_granularity = "Crate" # "Module" is also valid depending on how tight you want the grouping
+
+# CRITICAL FIX: You cannot force nested imports if you restrict rustfmt from reordering them.
+# You must set this to true (or remove it entirely, as true is the default) for granularity to work.
+reorder_imports = true

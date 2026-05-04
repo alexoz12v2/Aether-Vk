@@ -45,12 +45,14 @@ public static class NativeInterop
   public static extern ulong avkSimulationContext_createPresentationEngine(
     IntPtr ctx,
     uint width,
-    uint height
+    uint height,
+    ulong sceneId
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_destroyPresentationEngine(
     IntPtr ctx,
+    ulong sceneId,
     ulong handle
   );
 
@@ -321,7 +323,11 @@ public static class NativeInterop
   public static extern ulong avkSimulationContext_loadAlmanacFile(IntPtr ctx, string path);
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
-  public static extern ulong avkSimulationContext_loadCometSpk(IntPtr ctx, int spkid, string epoch_raw);
+  public static extern ulong avkSimulationContext_loadCometSpk(
+    IntPtr ctx,
+    int spkid,
+    string epoch_raw
+  );
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_importModel(IntPtr ctx, string path);
@@ -343,26 +349,38 @@ public static class NativeInterop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_setTimeScale(IntPtr ctx, uint scale);
+  public static extern void avkSimulationContext_setTimeScale(
+    IntPtr ctx,
+    ulong sceneId,
+    uint scale
+  );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern double avkSimulationContext_getSimulationTime(IntPtr ctx);
+  public static extern void avkSimulationContext_playScene(IntPtr ctx, ulong sceneId);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_pauseScene(IntPtr ctx, ulong sceneId);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern double avkSimulationContext_getSimulationTime(IntPtr ctx, ulong sceneId);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.I1)]
   public static extern bool avkSimulationContext_getSimulationTimeUtc(
     IntPtr ctx,
+    ulong sceneId,
     IntPtr buffer,
     uint bufferLen
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_setSimulationTime(IntPtr ctx, double timeTai);
+  public static extern void avkSimulationContext_setSimulationTime(IntPtr ctx, ulong sceneId, double timeTai);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.I1)]
   public static extern bool avkSimulationContext_getEpochLimits(
     IntPtr ctx,
+    ulong sceneId,
     out double startTai,
     out double endTai
   );
@@ -433,23 +451,6 @@ public static class NativeInterop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern ulong avkSimulationContext_simulationTick(
-    IntPtr ctx,
-    ulong sceneId,
-    double deltaTime
-  );
-
-  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern ulong avkSimulationContext_renderTick(
-    IntPtr ctx,
-    ulong presentationEngineHandle,
-    ulong sceneId,
-    ulong cameraId,
-    uint width,
-    uint height
-  );
-
-  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern int avkSimulationContext_getTaskStatus(IntPtr ctx, ulong taskId);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -462,7 +463,8 @@ public static class NativeInterop
   [StructLayout(LayoutKind.Sequential)]
   public struct FfiRaycastResult
   {
-    [MarshalAs(UnmanagedType.I1)] public bool Hit;
+    [MarshalAs(UnmanagedType.I1)]
+    public bool Hit;
     public ulong Entity;
 
     public float Px,
@@ -481,12 +483,25 @@ public static class NativeInterop
   [StructLayout(LayoutKind.Sequential)]
   public struct FfiKinematicState
   {
-    public float PosX, PosY, PosZ;
-    public float VelX, VelY, VelZ;
-    [MarshalAs(UnmanagedType.I1)] public bool HasRotation;
-    public float RotW, RotX, RotY, RotZ;
-    [MarshalAs(UnmanagedType.I1)] public bool HasAngularVelocity;
-    public float AngVelX, AngVelY, AngVelZ;
+    public float PosX,
+      PosY,
+      PosZ;
+    public float VelX,
+      VelY,
+      VelZ;
+
+    [MarshalAs(UnmanagedType.I1)]
+    public bool HasRotation;
+    public float RotW,
+      RotX,
+      RotY,
+      RotZ;
+
+    [MarshalAs(UnmanagedType.I1)]
+    public bool HasAngularVelocity;
+    public float AngVelX,
+      AngVelY,
+      AngVelZ;
   }
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -498,7 +513,7 @@ public static class NativeInterop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_resize(IntPtr ctx, uint width, uint height);
+  public static extern void avkSimulationContext_resize(IntPtr ctx, ulong sceneId, ulong handle, uint width, uint height);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_setActiveCamera(
@@ -584,16 +599,18 @@ public static class NativeInterop
 #if NETSTANDARD2_0
   [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 #else // .NET (Core) 10
-  [UnmanagedCallersOnly(CallConvs =
- new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
+  [UnmanagedCallersOnly(
+    CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) }
+  )]
 #endif
   public delegate void LoggerCallback(IntPtr message);
 
 #if NETSTANDARD2_0
   [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 #else // .NET (Core) 10
-  [UnmanagedCallersOnly(CallConvs =
- new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
+  [UnmanagedCallersOnly(
+    CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) }
+  )]
 #endif
   public delegate void BreadcrumbCallback(uint status, IntPtr message);
 
@@ -602,6 +619,64 @@ public static class NativeInterop
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_setBreadcrumbCallback(BreadcrumbCallback cb);
+
+#if NETSTANDARD2_0
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+#else // .NET (Core) 10
+  [UnmanagedCallersOnly(
+    CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) }
+  )]
+#endif
+  public delegate void SimulationCallback(ulong sceneId, IntPtr ctx);
+
+#if NETSTANDARD2_0
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+#else // .NET (Core) 10
+  [UnmanagedCallersOnly(
+    CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) }
+  )]
+#endif
+  public delegate void RenderCallback(
+    ulong sceneId,
+    ulong presentationEngineId,
+    ulong renderGeneration
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_setSimulationCallback(SimulationCallback cb);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_setRenderCallback(RenderCallback cb);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern uint avkSimulationContext_getChangedEntityCount(IntPtr ctx, ulong sceneId);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern uint avkSimulationContext_getChangedEntityIds(
+    IntPtr ctx,
+    ulong sceneId,
+    IntPtr outIds,
+    uint maxCount
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern uint avkSimulationContext_getChangedComponentCount(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern uint avkSimulationContext_getChangedComponentNames(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId,
+    IntPtr outNames,
+    uint maxCount
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_freeComponentNames(IntPtr names, uint count);
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_setAssetPath(string path);

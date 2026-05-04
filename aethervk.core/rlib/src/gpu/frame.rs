@@ -1,3 +1,4 @@
+use crate::gpu;
 use crate::gpu::{
   GpuResourceHandle, GridPushConstants, PipelineKey, PresentationEngineHandle, PushConstants,
   RenderDevice, RenderDeviceExt, SkyPushConstants, SunPushConstants, TextureFlags,
@@ -7,12 +8,11 @@ use crate::scene::{CameraComponent, EntityId, RenderableDataRef, TransformCompon
 use crate::types::{GpuError, GpuResult};
 use aethervk_oshal_rlib::math::vector::vec4::{Quat, Vec4f32};
 use aethervk_oshal_rlib::math::{
-  matrix::{mat4::Mat4x4f32, Matrix, Matrix4, MatrixVectorMul, SquareMatrix},
+  matrix::{Matrix, Matrix4, MatrixVectorMul, SquareMatrix, mat4::Mat4x4f32},
   quaternion::Quaternion,
-  vector::{vec3::Vec3f32, Vector, Vector3, Vector4},
+  vector::{Vector, Vector3, Vector4, vec3::Vec3f32},
 };
 use alloc::vec::Vec;
-use crate::gpu;
 // TODO move render_frame here
 
 #[derive(Clone, Copy, PartialEq)]
@@ -222,12 +222,10 @@ impl SunDrawCall {
     pipeline_key: PipelineKey,
     entity: EntityId,
   ) -> GpuResult<Self> {
-    let model_inv = model
-      .inverse()
-      .ok_or(GpuError::BackendSpecific(alloc::format!(
-        "SunDrawCall: Couldn't invert model matrix {:?}",
-        model
-      )))?;
+    let model_inv = model.inverse().ok_or(GpuError::BackendSpecific(alloc::format!(
+      "SunDrawCall: Couldn't invert model matrix {:?}",
+      model
+    )))?;
     let local_camera_pos = Vec3f32(model_inv.mul_vector(c.pos.to_point()));
     Ok(Self {
       entity,
@@ -258,12 +256,9 @@ impl SkyDrawCall {
       let sky_view = camera_data.view.zeroed_translation();
       camera_data.proj * sky_view
     };
-    let inv_view_proj_mat = camera_data
-      .view_proj
-      .inverse()
-      .ok_or(GpuError::InvalidState(
-        "SkyDrawCall: couldn't invert view_proj matrix",
-      ))?;
+    let inv_view_proj_mat = camera_data.view_proj.inverse().ok_or(GpuError::InvalidState(
+      "SkyDrawCall: couldn't invert view_proj matrix",
+    ))?;
 
     Ok(Self {
       sky_view_proj,
@@ -362,9 +357,7 @@ impl BvhDrawCall {
     let ax = self.axes[0];
     let ay = self.axes[1];
     let az = self.axes[2];
-    let model = &mesh_draw_calls
-      .get(self.physical_mesh_call_index)?
-      .model_matrix;
+    let model = &mesh_draw_calls.get(self.physical_mesh_call_index)?.model_matrix;
     let view_proj = &camera_data.view_proj;
     let mvp_mat = *view_proj * *model;
     Some(super::BvhPushConstants {
@@ -394,15 +387,9 @@ impl CameraRenderData {
   /// Note: camera component should have been updated with presentation engine data
   pub fn new(transform: &TransformComponent, camera: &CameraComponent) -> Self {
     // Extract camera's local axes in world space
-    let right = transform
-      .rotation
-      .rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
-    let forward = transform
-      .rotation
-      .rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
-    let up = transform
-      .rotation
-      .rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
+    let right = transform.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
+    let forward = transform.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
+    let up = transform.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
 
     let p = transform.position;
     // View matrix translates by -p, then projects onto right, up, backward (-forward)
@@ -459,6 +446,7 @@ pub struct ParticleDrawCall {
 pub struct RenderScene {
   pub time_readings: aethervk_oshal_rlib::os::time::TimeReadings,
   pub camera_data: CameraRenderData,
+  pub window_extent: [u32; 2],
 
   pub draw_calls: Vec<DrawCall>,
   pub marker_calls: Vec<MarkerDrawCall>,
@@ -476,8 +464,13 @@ pub struct RenderScene {
 
 impl RenderScene {
   const START_VEC_CAPACITY: usize = 32;
-  pub fn new(camera: (TransformComponent, CameraComponent), time_readings: aethervk_oshal_rlib::os::time::TimeReadings) -> Self {
+  pub fn new(
+    camera: (TransformComponent, CameraComponent),
+    time_readings: aethervk_oshal_rlib::os::time::TimeReadings,
+    window_extent: [u32; 2],
+  ) -> Self {
     Self {
+      window_extent,
       time_readings,
       draw_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
       cursor_call: None,
@@ -509,10 +502,11 @@ impl RenderScene {
   ) -> GpuResult<()> {
     match renderable {
       RenderableDataRef::ImageBillboard(component) => {
-        let res: ResourceUploadResult = match device.get_billboard_resources(presentation_engine_handle) {
-          Ok(r) => r,
-          Err(_) => device.create_billboard_resources(cmd_buffer, presentation_engine_handle)?,
-        };
+        let res: ResourceUploadResult =
+          match device.get_billboard_resources(presentation_engine_handle) {
+            Ok(r) => r,
+            Err(_) => device.create_billboard_resources(cmd_buffer, presentation_engine_handle)?,
+          };
         self.billboard_calls.push(BillboardDrawCall {
           pipeline: res.pipeline,
           vertex_count: 4,
@@ -522,10 +516,17 @@ impl RenderScene {
         });
       }
       RenderableDataRef::PhysicalMesh(component) => {
-        let res: ResourceUploadResult = match device.get_physical_mesh_resources(entity_id, presentation_engine_handle) {
-          Ok(r) => r,
-          Err(_) => device.create_physical_mesh_resources(cmd_buffer, entity_id, &component, presentation_engine_handle, debug_name)?,
-        };
+        let res: ResourceUploadResult =
+          match device.get_physical_mesh_resources(entity_id, presentation_engine_handle) {
+            Ok(r) => r,
+            Err(_) => device.create_physical_mesh_resources(
+              cmd_buffer,
+              entity_id,
+              &component,
+              presentation_engine_handle,
+              debug_name,
+            )?,
+          };
         let index_count = component.mesh.indices.len() as u32;
         let dc = DrawCall::from_handles_and_matrix(
           res,
@@ -547,10 +548,11 @@ impl RenderScene {
             "[Vulkan] RenderScene:add_renderable cursor call already present",
           ));
         }
-        let res: ResourceUploadResult = match device.get_cursor_resources(presentation_engine_handle) {
-          Ok(r) => r,
-          Err(_) => device.create_cursor_resources(cmd_buffer, presentation_engine_handle)?,
-        };
+        let res: ResourceUploadResult =
+          match device.get_cursor_resources(presentation_engine_handle) {
+            Ok(r) => r,
+            Err(_) => device.create_cursor_resources(cmd_buffer, presentation_engine_handle)?,
+          };
         self.cursor_call = Some(CursorDrawCall::from_result_and_matrix(
           res,
           4,
@@ -559,10 +561,11 @@ impl RenderScene {
         ));
       }
       RenderableDataRef::Markers(component) => {
-        let res: ResourceUploadResult = match device.get_marker_resources(presentation_engine_handle) {
-          Ok(r) => r,
-          Err(_) => device.create_marker_resources(cmd_buffer, presentation_engine_handle)?,
-        };
+        let res: ResourceUploadResult =
+          match device.get_marker_resources(presentation_engine_handle) {
+            Ok(r) => r,
+            Err(_) => device.create_marker_resources(cmd_buffer, presentation_engine_handle)?,
+          };
         for marker in &component.markers {
           self.marker_calls.push(MarkerDrawCall {
             pipeline: res.pipeline,
@@ -575,7 +578,9 @@ impl RenderScene {
         }
       }
       RenderableDataRef::Measurement(component) => {
-        let res: ResourceUploadResult = match device.get_measurement_resources(presentation_engine_handle) {
+        let res: ResourceUploadResult = match device
+          .get_measurement_resources(presentation_engine_handle)
+        {
           Ok(r) => r,
           Err(_) => device.create_measurement_resources(cmd_buffer, presentation_engine_handle)?,
         };
@@ -613,6 +618,7 @@ pub fn do_draw_cursor(
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
   draw_call: &CursorDrawCall,
+  window_extent: [u32; 2],
 ) -> GpuResult<()> {
   // 2. Bind pipeline
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
@@ -622,6 +628,8 @@ pub fn do_draw_cursor(
     view_proj: camera.view_proj.into(),
     model: draw_call.model_matrix.into(),
     cursor_size: draw_call.cursor_size,
+    _padding: 0.0,
+    window_extent: [window_extent[0] as f32, window_extent[1] as f32],
   };
 
   device.push_cursor_constants(cmd_buffer, &push_constants)?;
@@ -719,10 +727,7 @@ pub fn do_draw_billboard(
   cmd_buffer: super::CommandBufferHandle,
   draw_call: &BillboardDrawCall,
 ) -> GpuResult<()> {
-  if device
-    .check_billboard_texture_id(draw_call.texture_id)
-    .is_err()
-  {
+  if device.check_billboard_texture_id(draw_call.texture_id).is_err() {
     return Ok(());
   }
 
@@ -876,13 +881,10 @@ pub fn do_draw_particle(
     crate::gpu::ArchetypeId::Particle,
     &push_constants,
   )?;
-  
+
   // Notice we don't pass the indirect_buffer as a GpuResourceHandle anymore,
   // we use a specific method that draws from the global mega buffer
-  device.draw_particle_indirect(
-    cmd_buffer,
-    draw_call.system_indirect_offset,
-  )?;
+  device.draw_particle_indirect(cmd_buffer, draw_call.system_indirect_offset)?;
 
   Ok(())
 }
@@ -916,12 +918,9 @@ pub fn do_bvh_draw_call(
   draw_call: &BvhDrawCall,
   mesh_draw_calls: &[DrawCall],
 ) -> GpuResult<()> {
-  let push_constants =
-    draw_call
-      .to_push_constants(mesh_draw_calls, camera)
-      .ok_or(GpuError::InvalidState(
-        "[Render Frame] Couldn't compute BVH push constants",
-      ))?;
+  let push_constants = draw_call.to_push_constants(mesh_draw_calls, camera).ok_or(
+    GpuError::InvalidState("[Render Frame] Couldn't compute BVH push constants"),
+  )?;
   device.push_bvh_constants(cmd_buffer, &push_constants)?;
   device.draw(cmd_buffer, draw_call.vertex_count)
 }
@@ -973,7 +972,13 @@ pub fn render_frame(
   }
 
   if let Some(cursor_call) = &render_scene.cursor_call {
-    gpu::frame::do_draw_cursor(device, &render_scene.camera_data, cmd_buffer, cursor_call)?;
+    gpu::frame::do_draw_cursor(
+      device,
+      &render_scene.camera_data,
+      cmd_buffer,
+      cursor_call,
+      render_scene.window_extent,
+    )?;
   }
 
   for marker_call in &render_scene.marker_calls {
@@ -1001,7 +1006,12 @@ pub fn render_frame(
     device.prepare_billboard_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
   }
   for billboard_call in &render_scene.billboard_calls {
-    gpu::frame::do_draw_billboard(device, &render_scene.camera_data, cmd_buffer, billboard_call)?;
+    gpu::frame::do_draw_billboard(
+      device,
+      &render_scene.camera_data,
+      cmd_buffer,
+      billboard_call,
+    )?;
     // TODO draw associated text
   }
 
@@ -1020,4 +1030,3 @@ pub fn render_frame(
 
   Ok(())
 }
-

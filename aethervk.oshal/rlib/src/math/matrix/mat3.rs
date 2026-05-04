@@ -281,7 +281,7 @@ impl Mat3f32 {
 mod tests {
   extern crate std;
   use super::*;
-  use crate::math::{vector::Vector3};
+  use crate::math::vector::Vector3;
 
   // Helper macro to easily define a 3x3 column-major matrix
   // TODO: expose probably

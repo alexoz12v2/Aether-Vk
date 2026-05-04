@@ -1,10 +1,14 @@
-use crate::math::{compute_com_and_tensor, jacobi_diagonalization, hat, vee, expm_hat, solve_12x12};
+use crate::math::{
+  compute_com_and_tensor, expm_hat, hat, jacobi_diagonalization, solve_12x12, vee,
+};
+use aethervk_oshal_rlib::math::matrix::{
+  Matrix, Matrix3, MatrixVectorMul, SquareMatrix, mat3::Mat3f32,
+};
 use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
-use aethervk_oshal_rlib::math::matrix::{Matrix, Matrix3, MatrixVectorMul, SquareMatrix, mat3::Mat3f32};
 use aethervk_oshal_rlib::math::{FloatLike, MulAddIdentity};
 use aethervk_oshal_rlib::os::pool::{ThreadPool, Workload, WorkloadStatus};
-use alloc::vec::Vec;
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 
 pub const G: f32 = 1.0;
 pub const ANELASTIC_LOOP_COUNT_THRESHOLD: usize = 10;
@@ -81,12 +85,9 @@ impl RigidBody {
 
   pub fn body_origin_world(&self) -> Vec3f32 {
     self.position
-      - self.orientation.mul_vector(
-        self
-          .principal_axes_r
-          .transpose()
-          .mul_vector(self.com_offset_body),
-      )
+      - self
+        .orientation
+        .mul_vector(self.principal_axes_r.transpose().mul_vector(self.com_offset_body))
   }
 
   pub fn get_world_vertices(&self) -> Vec<Vec3f32> {
@@ -439,8 +440,8 @@ pub fn update_particles_multi_threaded(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
   use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
+  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
 
   #[test]
   fn test_gravitational_force() {
@@ -498,7 +499,7 @@ mod tests {
       lifetime: 10.0,
       collided: false,
     };
-    
+
     let verts = vec![
       Vec3f32::from_components(-1.0, -1.0, 0.0),
       Vec3f32::from_components(1.0, -1.0, 0.0),
@@ -512,7 +513,7 @@ mod tests {
       &verts,
       1.0,
     );
-    
+
     let (toi, normal) = continuous_collision_detection(&p, &comet, 0.5);
     assert!(toi.is_some());
     assert!(normal.is_some());

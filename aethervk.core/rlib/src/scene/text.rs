@@ -1,11 +1,11 @@
-use hashbrown::HashMap;
-use alloc::vec::Vec;
-use core::hash::Hasher;
-use ab_glyph::{FontRef, Font, PxScale, ScaleFont, point};
+use crate::types::{IoError, IoResult};
+use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
 use aethervk_oshal_rlib::hash::FnvHasher;
 use aethervk_oshal_rlib::os;
 use aethervk_oshal_rlib::os::fs::Path;
-use crate::types::{IoError, IoResult};
+use alloc::vec::Vec;
+use core::hash::Hasher;
+use hashbrown::HashMap;
 
 pub struct FontAtlas {
   pub image_data: Vec<u8>,
@@ -129,9 +129,7 @@ impl FontAtlas {
     }
 
     let mut placed = Vec::new();
-    let chars = (32..=126)
-      .map(|c| c as u8 as char)
-      .chain(core::iter::once('█'));
+    let chars = (32..=126).map(|c| c as u8 as char).chain(core::iter::once('█'));
 
     for c in chars {
       let glyph = font.glyph_id(c).with_scale(scale);

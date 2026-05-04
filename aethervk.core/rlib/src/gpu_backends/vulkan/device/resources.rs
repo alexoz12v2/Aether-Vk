@@ -1,21 +1,23 @@
-use core::ptr;
-use core::hash::{Hash, Hasher};
-use aethervk_oshal_rlib as oshal;
-use oshal::{hash::FnvHasher, os::native::ThreadId};
-use ash::{vk, Device};
-use alloc::{boxed::Box, collections::VecDeque, sync, vec::Vec};
-use core::sync::atomic::AtomicU32;
-use spirv_reflect::{ffi::SpvReflectResult_SPV_REFLECT_RESULT_SUCCESS, types::ReflectShaderStageFlags};
 use crate::gpu_backends::vulkan;
 use crate::gpu_backends::vulkan::device::{VmaDebugNameExt, VulkanDebugNameExt};
 use crate::simulation::comet::Texture;
+use aethervk_oshal_rlib as oshal;
+use alloc::{boxed::Box, collections::VecDeque, sync, vec::Vec};
+use ash::{Device, vk};
+use core::hash::{Hash, Hasher};
+use core::ptr;
+use core::sync::atomic::AtomicU32;
+use oshal::{hash::FnvHasher, os::native::ThreadId};
+use spirv_reflect::{
+  ffi::SpvReflectResult_SPV_REFLECT_RESULT_SUCCESS, types::ReflectShaderStageFlags,
+};
 use vk_mem::Alloc;
 
 use crate::gpu::{PipelineKeyable, PresentationEngineHandle, TextureFlags};
 use crate::gpu_backends::vulkan::device::commands::{self, CommandBufferId};
 use crate::gpu_backends::vulkan::device::pipelines::GraphicsInfo;
 use crate::{
-  gpu::{PipelineKey},
+  gpu::PipelineKey,
   gpu_backends::vulkan::{
     device::{
       DeviceResource, DeviceResourceJanitor, FunctionalDeviceResource,
@@ -529,9 +531,8 @@ impl Image {
     }
 
     // 1. Allocate staging memory
-    let (staging_offset, staging_ptr) = staging_arena
-      .allocate(image_size as usize, 16)
-      .ok_or(crate::gpu_err!("device error"))?;
+    let (staging_offset, staging_ptr) =
+      staging_arena.allocate(image_size as usize, 16).ok_or(crate::gpu_err!("device error"))?;
 
     unsafe {
       core::ptr::copy_nonoverlapping(texture.data.as_ptr(), staging_ptr, texture.data.len());
@@ -607,9 +608,7 @@ impl Image {
     let dependency_info_to_transfer = vk::DependencyInfo::default()
       .image_memory_barriers(core::slice::from_ref(&image_barrier_to_transfer));
     unsafe {
-      device
-        .synchronization2
-        .cmd_pipeline_barrier2(command_buffer, &dependency_info_to_transfer);
+      device.synchronization2.cmd_pipeline_barrier2(command_buffer, &dependency_info_to_transfer);
     }
 
     // 4. Copy buffer to image
@@ -1058,7 +1057,7 @@ macro_rules! impl_pipeline_map_methods {
     pub fn insert_graphics_info(&mut self, color_format: vk::Format, graphics_info: GraphicsInfo, pipeline_key: PipelineKey) {
       self.pipeline_map.insert(color_format, (graphics_info, pipeline_key));
     }
-    
+
     pub fn has_format(&self, color_format: vk::Format) -> bool {
       self.pipeline_map.contains_key(&color_format)
     }
@@ -1098,7 +1097,7 @@ macro_rules! impl_pipeline_map_methods {
       pub fn [<insert_graphics_info_ $name>](&mut self, color_format: vk::Format, graphics_info: GraphicsInfo, pipeline_key: PipelineKey) {
         self.$name.insert(color_format, (graphics_info, pipeline_key));
       }
-      
+
       pub fn [<has_format_ $name>](&self, color_format: vk::Format) -> bool {
         self.$name.contains_key(&color_format)
       }
@@ -1164,7 +1163,15 @@ impl DiscardableResource for TextRenderResourceArchetype {
 }
 
 impl TextRenderResourceArchetype {
-  pub fn new(pipeline_layout: vk::PipelineLayout, set_layout: vk::DescriptorSetLayout, pool: vk::DescriptorPool, descriptor_set: vk::DescriptorSet, font_sampler: vk::Sampler, max_fonts: u32, allocator: &vk_mem::Allocator) -> Self {
+  pub fn new(
+    pipeline_layout: vk::PipelineLayout,
+    set_layout: vk::DescriptorSetLayout,
+    pool: vk::DescriptorPool,
+    descriptor_set: vk::DescriptorSet,
+    font_sampler: vk::Sampler,
+    max_fonts: u32,
+    allocator: &vk_mem::Allocator,
+  ) -> Self {
     Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
       pipeline_map: hashbrown::HashMap::new(),
@@ -1551,10 +1558,8 @@ impl BillboardRenderResourceArchetype {
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
       .descriptor_pool(descriptor_pool)
       .set_layouts(&layouts);
-    let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?
-      .get(0)
-      .copied()
-      .unwrap();
+    let descriptor_set =
+      unsafe { device.allocate_descriptor_sets(&alloc_info) }?.get(0).copied().unwrap();
     device.set_debug_name(
       descriptor_set,
       "VkDescriptorSet_Dedicated_BillboardRenderResourceArchetype",
@@ -1722,10 +1727,8 @@ impl GizmoRenderResourceArchetype {
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
       .descriptor_pool(descriptor_pool)
       .set_layouts(&layouts);
-    let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?
-      .get(0)
-      .copied()
-      .unwrap();
+    let descriptor_set =
+      unsafe { device.allocate_descriptor_sets(&alloc_info) }?.get(0).copied().unwrap();
     device.set_debug_name(descriptor_set, "VkDescriptorSet_Gizmo");
 
     Ok(Self {
@@ -1841,9 +1844,7 @@ impl ParticleRenderResourceArchetype {
     let pool_sizes = [vk::DescriptorPoolSize::default()
       .ty(vk::DescriptorType::STORAGE_BUFFER)
       .descriptor_count(1)];
-    let create_info = vk::DescriptorPoolCreateInfo::default()
-      .max_sets(1)
-      .pool_sizes(&pool_sizes);
+    let create_info = vk::DescriptorPoolCreateInfo::default().max_sets(1).pool_sizes(&pool_sizes);
     let descriptor_pool = unsafe { device.create_descriptor_pool(&create_info, None) }.with_name(
       device,
       "VkDescriptorPoolCreateInfo_Dedicated_ParticleRenderResourceArchetype",
@@ -1852,10 +1853,8 @@ impl ParticleRenderResourceArchetype {
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
       .descriptor_pool(descriptor_pool)
       .set_layouts(&set_layouts);
-    let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?
-      .get(0)
-      .copied()
-      .unwrap();
+    let descriptor_set =
+      unsafe { device.allocate_descriptor_sets(&alloc_info) }?.get(0).copied().unwrap();
     device.set_debug_name(
       descriptor_set,
       "VkDescriptorSet_Dedicated_ParticleRenderResourceArchetype",
@@ -1936,18 +1935,15 @@ impl ParticleRenderResourceArchetype {
   /// Lock-free allocation of a permanent slice inside the Mega Buffers for a Particle System.
   /// Returns: (system_indirect_index, particle_start_index)
   pub fn allocate_system_space(&self, particle_count: u32) -> Result<(u32, u32), GpuError> {
-    let sys_idx = self
-      .allocated_systems
-      .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    let sys_idx = self.allocated_systems.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     if sys_idx >= Self::MAX_SYSTEMS {
       return Err(GpuError::InvalidState(
         "Mega Buffer Full: Max Systems Reached",
       ));
     }
 
-    let particle_offset = self
-      .allocated_particles
-      .fetch_add(particle_count, core::sync::atomic::Ordering::Relaxed);
+    let particle_offset =
+      self.allocated_particles.fetch_add(particle_count, core::sync::atomic::Ordering::Relaxed);
     if particle_offset + particle_count > Self::MAX_PARTICLES {
       return Err(GpuError::InvalidState(
         "Mega Buffer Full: Max Particles Reached",
@@ -1960,12 +1956,8 @@ impl ParticleRenderResourceArchetype {
   /// Call this when completely changing levels/scenes to instantly reset the architecture
   /// without re-allocating or freeing memory!
   pub fn reset_allocations(&self) {
-    self
-      .allocated_particles
-      .store(0, core::sync::atomic::Ordering::Relaxed);
-    self
-      .allocated_systems
-      .store(0, core::sync::atomic::Ordering::Relaxed);
+    self.allocated_particles.store(0, core::sync::atomic::Ordering::Relaxed);
+    self.allocated_systems.store(0, core::sync::atomic::Ordering::Relaxed);
   }
 
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
@@ -2187,14 +2179,8 @@ impl ForwardMeshRenderResourceArchetype {
     // TODO Implement a special value for the janitor which means "DYNAMIC_SIZE"
     let mut janitor = DeviceResourceJanitor::<'_, 256>::new(device);
 
-    if !vertex_shader
-      .spv_module
-      .get_shader_stage()
-      .contains(ReflectShaderStageFlags::VERTEX)
-      || !fragment_shader
-        .spv_module
-        .get_shader_stage()
-        .contains(ReflectShaderStageFlags::FRAGMENT)
+    if !vertex_shader.spv_module.get_shader_stage().contains(ReflectShaderStageFlags::VERTEX)
+      || !fragment_shader.spv_module.get_shader_stage().contains(ReflectShaderStageFlags::FRAGMENT)
     {
       return Err(GpuError::InvalidShader);
     }
@@ -2208,10 +2194,8 @@ impl ForwardMeshRenderResourceArchetype {
 
     for shader in [vertex_shader, fragment_shader] {
       let shader_stage = shader.shader_stage;
-      let sets = shader
-        .spv_module
-        .enumerate_descriptor_sets(None)
-        .map_err(|_| GpuError::InvalidShader)?;
+      let sets =
+        shader.spv_module.enumerate_descriptor_sets(None).map_err(|_| GpuError::InvalidShader)?;
 
       for set in sets {
         let bindings_map = merged_sets.entry(set.set).or_default();
@@ -2286,9 +2270,8 @@ impl ForwardMeshRenderResourceArchetype {
 
       for block in blocks {
         // Find a range with the same offset and size to merge stage flags.
-        if let Some(range) = push_constant_ranges
-          .iter_mut()
-          .find(|r| r.offset == block.offset && r.size == block.size)
+        if let Some(range) =
+          push_constant_ranges.iter_mut().find(|r| r.offset == block.offset && r.size == block.size)
         {
           // Merge shader stages into the existing range.
           range.stage_flags |= shader.shader_stage;
@@ -2354,10 +2337,7 @@ impl ForwardMeshRenderResourceArchetype {
         if res != SpvReflectResult_SPV_REFLECT_RESULT_SUCCESS {
           return Err(GpuError::InvalidShader);
         }
-        let mut the_vec: Vec<_> = the_vec
-          .iter()
-          .map(|c| c.as_ref().unwrap_unchecked())
-          .collect();
+        let mut the_vec: Vec<_> = the_vec.iter().map(|c| c.as_ref().unwrap_unchecked()).collect();
         the_vec.sort_by_key(|&c| c.constant_id);
         Ok::<Vec<_>, GpuError>(the_vec)
       }?;
@@ -2379,9 +2359,7 @@ impl ForwardMeshRenderResourceArchetype {
           if spec_const.name.is_null() {
             ""
           } else {
-            core::ffi::CStr::from_ptr(spec_const.name)
-              .to_str()
-              .unwrap_or("")
+            core::ffi::CStr::from_ptr(spec_const.name).to_str().unwrap_or("")
           }
         };
 
@@ -2458,9 +2436,7 @@ impl ForwardMeshRenderResourceArchetype {
         let command_buffers = [command_buffer];
         let submits = [vk::SubmitInfo::default().command_buffers(&command_buffers)];
         let fence = device.create_fence(&vk::FenceCreateInfo::default(), None)?;
-        device
-          .locked_queue_submit(queue.handle, &submits, fence)
-          .map_err(GpuError::from)?;
+        device.locked_queue_submit(queue.handle, &submits, fence).map_err(GpuError::from)?;
         device.wait_for_fences(&[fence], true, u64::MAX)?;
         device.destroy_fence(fence, None);
       };

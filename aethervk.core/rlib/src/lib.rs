@@ -8,8 +8,8 @@ extern crate std;
 extern crate static_assertions as sa;
 
 // panic_handler and global allocator declared for non tests at cdylib/FFI level
-extern crate core;
 extern crate alloc;
+extern crate core;
 
 // publish panic_handler for our own cdylib
 pub use aethervk_oshal_rlib::panic_handler_impl;

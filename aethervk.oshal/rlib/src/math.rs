@@ -232,11 +232,7 @@ impl_float_like!(f32, {
         out
       }
 
-      let can_vex = crate::SYSTEM_INFO
-        .get()
-        .as_ref()
-        .map(|s| s.has_avx())
-        .unwrap_or(false);
+      let can_vex = crate::SYSTEM_INFO.get().as_ref().map(|s| s.has_avx()).unwrap_or(false);
       if can_vex {
         unsafe { avx(self) }
       } else {
@@ -318,11 +314,7 @@ impl_float_like!(f32, {
         out
       }
 
-      let can_vex = crate::SYSTEM_INFO
-        .get()
-        .as_ref()
-        .map(|s| s.has_avx())
-        .unwrap_or(false);
+      let can_vex = crate::SYSTEM_INFO.get().as_ref().map(|s| s.has_avx()).unwrap_or(false);
       if can_vex {
         unsafe { avx(self) }
       } else {
@@ -362,11 +354,7 @@ impl_float_like!(f64, {
         out
       }
 
-      let can_vex = crate::SYSTEM_INFO
-        .get()
-        .as_ref()
-        .map(|s| s.has_avx())
-        .unwrap_or(false);
+      let can_vex = crate::SYSTEM_INFO.get().as_ref().map(|s| s.has_avx()).unwrap_or(false);
       if can_vex {
         unsafe { avx(self) }
       } else {
@@ -444,11 +432,7 @@ impl_float_like!(f64, {
         out
       }
 
-      let can_vex = crate::SYSTEM_INFO
-        .get()
-        .as_ref()
-        .map(|s| s.has_avx())
-        .unwrap_or(false);
+      let can_vex = crate::SYSTEM_INFO.get().as_ref().map(|s| s.has_avx()).unwrap_or(false);
       if can_vex {
         unsafe { avx(self) }
       } else {

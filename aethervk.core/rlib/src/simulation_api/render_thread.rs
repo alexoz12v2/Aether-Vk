@@ -1,26 +1,26 @@
-use itertools::Itertools;
+use crate::gpu::{FrameCancelGuard, ScopedRenderPass};
 use crate::simulation_api::structs::{
   CustomRenderCallback, RenderCommand, RenderFeedback, RenderTaskStatus, RenderThreadContext,
 };
 use crate::{
-  gpu::scene_conversion::{RenderSceneExtraction, SceneConversionExt},
   gpu,
+  gpu::scene_conversion::{RenderSceneExtraction, SceneConversionExt},
   gpu::{PresentationEngineHandle, RenderDevice, RenderScene, SwapchainStatus},
   types::{EngineError, EngineResult, GpuError, GpuResult},
 };
 use aethervk_oshal_rlib as oshal;
+use itertools::Itertools;
 use oshal::{
   math::matrix::mat4::Mat4x4f32,
   math::matrix::{MatrixVectorMul, SquareMatrix},
   math::quaternion::Quaternion,
+  math::vector::Vector4,
   math::vector::vec3::Vec3f32,
-  math::vector::{Vector4},
   os,
   os::thread::Thread,
-  os::{thread, NativeError, ThreadingError},
+  os::{NativeError, ThreadingError, thread},
 };
 use thingbuf::mpsc;
-use crate::gpu::{FrameCancelGuard, ScopedRenderPass};
 
 pub fn start_render_thread(
   render_rx: mpsc::Receiver<RenderCommand>,
@@ -39,11 +39,9 @@ pub fn start_render_thread(
         oshal::log!("render_thread | render_frontend borrow: {:?}", e);
         return;
       }
-      let frontend = unsafe { r.unwrap_unchecked() }
-        .take()
-        .ok_or(EngineError::InvalidOperation(
-          "render_frontend was already None",
-        ));
+      let frontend = unsafe { r.unwrap_unchecked() }.take().ok_or(EngineError::InvalidOperation(
+        "render_frontend was already None",
+      ));
       if let Ok(render_frontend) = frontend {
         render_frontend
       } else {
@@ -56,10 +54,14 @@ pub fn start_render_thread(
     loop {
       match render_rx.try_recv() {
         Ok(cmd) => {
-          debug_assert_eq!(alloc::sync::Arc::strong_count(&render_frontend), 1);
           if let RenderCommand::Shutdown = cmd {
+            // while during normal operation we might have multiple due to creation/manipulation
+            // of presentation engines, when we shutdown, there should be only one
+            debug_assert_eq!(alloc::sync::Arc::strong_count(&render_frontend), 1);
             break;
           }
+          // maximum presentation engine operation manipulation: 16
+          debug_assert!(alloc::sync::Arc::strong_count(&render_frontend) < 16);
           if let Err(e) = render_frontend.with_device(render_device_handle, |render_device| {
             process_command(cmd, render_device, &render_params, &mut first_render_map)
           }) {
@@ -94,28 +96,38 @@ fn process_command(
     RenderCommand::RenderFrame(render_frame) => {
       // The FFI Caller thread, before launching this command, should have already
       // updated the camera's projection matrix.
-      let extracted_scene = render_frame.extract_scene(Some(&ctx.thread_pool))?;
-      let task_id_feedback = render_frame.task_id;
+      let task_id_feedback = alloc::sync::Arc::clone(&render_frame.task_id);
+      let extent_res =
+        render_device.get_presentation_engine_extent(render_frame.presentation_engine_handle);
+      let extent = match extent_res {
+        Ok(e) => e,
+        Err(err) => {
+          task_id_feedback.store(u64::MAX, core::sync::atomic::Ordering::Release);
+          return Err(err);
+        }
+      };
+      
+      let extracted_scene_res = render_frame.extract_scene(extent, Some(&ctx.thread_pool));
+      let extracted_scene = match extracted_scene_res {
+        Ok(s) => s,
+        Err(err) => {
+          task_id_feedback.store(u64::MAX, core::sync::atomic::Ordering::Release);
+          return Err(err);
+        }
+      };
+      
       let task_id = render_device.create_task();
       let is_first_render =
         if first_render_map.contains_key(&render_frame.presentation_engine_handle) {
           *unsafe {
-            first_render_map
-              .get(&render_frame.presentation_engine_handle)
-              .unwrap_unchecked()
+            first_render_map.get(&render_frame.presentation_engine_handle).unwrap_unchecked()
           }
         } else {
           let _ = first_render_map.insert(render_frame.presentation_engine_handle, true);
           true
         };
       // `render_device.success_task` will be called by thread pool when timeline advances
-      let time_readings = render_frame
-        .scene
-        .read()
-        .time_state
-        .time_info
-        .read()
-        .current();
+      let time_readings = render_frame.scene.read().time_state.read().time_info.read().current();
 
       let res = do_render_scene_async(
         render_device,
@@ -129,17 +141,16 @@ fn process_command(
 
       match res {
         Ok(did_render) => {
-          if did_render && is_first_render {
+          if did_render && is_first_render && render_frame.custom_render_callback.is_some() {
             *unsafe {
-              first_render_map
-                .get_mut(&render_frame.presentation_engine_handle)
-                .unwrap_unchecked()
+              first_render_map.get_mut(&render_frame.presentation_engine_handle).unwrap_unchecked()
             } = false;
           }
           task_id_feedback.store(task_id, core::sync::atomic::Ordering::Release);
           Ok(())
         }
         Err(err) => {
+          oshal::log!("Render thread error: {:?}", err);
           render_device.fail_task(task_id, err.clone());
           task_id_feedback.store(task_id, core::sync::atomic::Ordering::Release);
           Err(err)
@@ -180,6 +191,11 @@ fn do_render_scene_async(
   time_readings: oshal::os::time::TimeReadings,
 ) -> GpuResult<bool> {
   render_device.start_frame()?;
+  let extent = render_device.get_presentation_engine_extent(presentation_engine_handle)?;
+  if extent[0] == 0 || extent[1] == 0 {
+    render_device.success_task(task_id);
+    return Ok(false);
+  }
 
   let acquire_result = render_device.acquire_next_image(presentation_engine_handle)?;
   if acquire_result.status.needs_resize() {
@@ -192,11 +208,13 @@ fn do_render_scene_async(
 
   let cmd_buffer = render_device.get_command_buffer()?;
   let cmd_scope = gpu::ScopedCommandBuffer::new(render_device, cmd_buffer, Some(task_id))?;
+
   let render_scene = extracted_scene.build_render_scene(
     render_device,
     presentation_engine_handle,
     cmd_buffer,
     time_readings,
+    extent.into(),
   )?;
   if let Some(sun_call) = &render_scene.sun_call {
     // TODO move to kernels
@@ -217,7 +235,6 @@ fn do_render_scene_async(
   render_device.begin_render_pass(cmd_buffer, presentation_engine_handle, &acquire_result)?;
   let render_pass_scope = gpu::ScopedRenderPass::new(render_device, cmd_buffer);
 
-  let extent = render_device.get_presentation_engine_extent(presentation_engine_handle)?;
   render_device.set_viewport(cmd_buffer, &gpu::Viewport::from_extent(extent))?;
   render_device.set_scissor(cmd_buffer, &gpu::Rect2D::from_extent(extent))?;
 
@@ -246,9 +263,7 @@ fn do_render_scene_async(
   // on `DownloadImage` Command, Query task status and copy data if completed with `render_device.read_windowless_download`
   // if you are here, then presentation engine is valid
   let is_windowless = unsafe {
-    render_device
-      .is_presentation_engine_windowless(presentation_engine_handle)
-      .unwrap_unchecked()
+    render_device.is_presentation_engine_windowless(presentation_engine_handle).unwrap_unchecked()
   };
   if is_windowless {
     if let Err(e) =
@@ -284,6 +299,7 @@ fn do_render_scene_async(
 impl super::structs::RenderFrame {
   pub fn extract_scene(
     &self,
+    window_extent: [u32; 2],
     pool: Option<&oshal::os::pool::ThreadPool>,
   ) -> GpuResult<RenderSceneExtraction> {
     let scene = self.scene.read();
@@ -291,6 +307,7 @@ impl super::structs::RenderFrame {
       self.camera_entity,
       self.render_physical_meshes_outline,
       pool,
+      window_extent,
     )
   }
 }

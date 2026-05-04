@@ -113,8 +113,8 @@ void main() {
   ivec3 texelCoord = ivec3(gl_GlobalInvocationID);
   ivec3 size = imageSize(sunVolume);
 
-  // Normalized coordinates from -1.0 to 1.0 (0,0,0 is the center of the sun)
-  vec3 uvw = (vec3(texelCoord) + 0.5) / vec3(size) * 2.0 - 1.0;
+  // Normalized coordinates from -2.0 to 2.0 (0,0,0 is the center of the sun)
+  vec3 uvw = (vec3(texelCoord) + 0.5) / vec3(size) * 4.0 - 2.0;
   float distFromCenter = length(uvw);
 
   // Subgroup Intrinsics Demonstration:

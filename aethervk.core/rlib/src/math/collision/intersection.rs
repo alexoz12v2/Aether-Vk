@@ -1,6 +1,11 @@
 //! Intersection tests
 //! Contains logic for checking intersections between different shapes
 
+use crate::{
+  math::collision::bounds::{AABB, BS, OBB},
+  simulation::comet::Triangle,
+};
+use aethervk_oshal_rlib::math::matrix::MatrixVectorMul;
 use aethervk_oshal_rlib::math::{
   FloatLike, MulAddIdentity,
   floating::{FloatBits, FloatOps},
@@ -8,11 +13,6 @@ use aethervk_oshal_rlib::math::{
   vector::{Vector, Vector2, Vector3, vec3::Vec3f32},
 };
 use itertools::Itertools;
-use aethervk_oshal_rlib::math::matrix::MatrixVectorMul;
-use crate::{
-  math::collision::bounds::{AABB, BS, OBB},
-  simulation::comet::Triangle,
-};
 
 /// A line segment / ray defined by an origin and a direction vector and length
 #[derive(Debug, Clone, Copy)]
@@ -202,18 +202,8 @@ where
 {
   let eps = S::from_f32(1e-6);
 
-  let a: [Vec3; 3] = t_a
-    .vertices
-    .iter()
-    .map(|v| (*v).into())
-    .collect_array()
-    .unwrap();
-  let b: [Vec3; 3] = t_b
-    .vertices
-    .iter()
-    .map(|v| (*v).into())
-    .collect_array()
-    .unwrap();
+  let a: [Vec3; 3] = t_a.vertices.iter().map(|v| (*v).into()).collect_array().unwrap();
+  let b: [Vec3; 3] = t_b.vertices.iter().map(|v| (*v).into()).collect_array().unwrap();
 
   // 1. Compute plane A and signed distances of B's vertices
   let n_a = (a[1] - a[0]).cross(a[2] - a[1]); // TODO should this be normalized?
@@ -486,11 +476,7 @@ where
   let aabb_vertices = aabb.vertices();
   let aabb_segment_indices = AABB::<Vec3::Scalar>::edges();
   let aabb_signed_distances: [S; 8] = unsafe {
-    aabb_vertices
-      .iter()
-      .map(|&vert| n.dot(vert - vs[0]))
-      .collect_array()
-      .unwrap_unchecked()
+    aabb_vertices.iter().map(|&vert| n.dot(vert - vs[0])).collect_array().unwrap_unchecked()
   };
   //  If all boxes have signed distances of same sign, no intersection
   if all_same_sign_fold(&aabb_signed_distances) {
@@ -883,11 +869,11 @@ where
 #[cfg(test)]
 mod tests {
   use super::*;
-  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-  use aethervk_oshal_rlib::math::vector::vec2::Vec2f32;
-  use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
   use crate::math::collision::bounds::{AABB, BS, OBB};
   use crate::simulation::comet::Triangle;
+  use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
+  use aethervk_oshal_rlib::math::vector::vec2::Vec2f32;
+  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
 
   fn mk_vec(x: f32, y: f32, z: f32) -> Vec3f32 {
     Vec3f32::from_components(x, y, z)

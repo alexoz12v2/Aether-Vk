@@ -11,7 +11,9 @@ public class BreadcrumbServiceTests
   {
     // Arrange
     var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
-    dispatcherMock.Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>())).Callback<System.Action>(a => a());
+    dispatcherMock
+      .Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
+      .Callback<System.Action>(a => a());
     var service = new BreadcrumbService(dispatcherMock.Object);
 
     // Act

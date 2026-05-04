@@ -12,16 +12,18 @@ namespace AetherVk.Logic.ViewModels;
 public partial class Viewport3DViewModel
   : TabItemViewModel,
     IRecipient<AetherVk.Logic.Messages.ToggleAddJetModeMessage>,
+    IRecipient<AetherVk.Logic.Messages.RenderFrameReadyMessage>,
     IDisposable
 {
   private readonly NativeRuntimeService _runtimeService;
-  private CancellationTokenSource? _cts;
-  private Task<ulong>? _lastRenderTask;
   public ulong PresentationEngineId { get; private set; }
   private ulong _lastRenderTaskId;
 
-  public uint Width { get; } = 800;
-  public uint Height { get; } = 600;
+  [ObservableProperty]
+  private uint _width = 800;
+
+  [ObservableProperty]
+  private uint _height = 600;
 
   [ObservableProperty]
   private bool _isInitialized;
@@ -62,7 +64,7 @@ public partial class Viewport3DViewModel
   [ObservableProperty]
   private ulong _sceneId;
 
-  public ulong CameraId { get; private set; } = 1;
+  public ulong CameraId { get; private set; }
 
   private static int _measurementCounter = 1;
 
@@ -71,10 +73,33 @@ public partial class Viewport3DViewModel
   private readonly BreadcrumbService _breadcrumbService;
   private readonly SceneStateManager _sceneStateManager;
 
+  private void SetupViewport()
+  {
+    var existingScene = _sceneStateManager.AllScenes.FirstOrDefault();
+    SceneId = existingScene != null ? existingScene.SceneId : _runtimeService.CreateScene(true);
+    
+    if (PresentationEngineId == 0)
+    {
+      PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height, SceneId);
+    }
+    
+    var root = _runtimeService.GetEntityByName(SceneId, "root");
+    if (root != null)
+    {
+        var camera = _runtimeService.CreateCamera(SceneId, root);
+        CameraId = camera.Id;
+    }
+    else
+    {
+        CameraId = 1;
+    }
+  }
+
   public Viewport3DViewModel(
     NativeRuntimeService runtimeService,
     BreadcrumbService breadcrumbService,
-    SceneStateManager sceneStateManager)
+    SceneStateManager sceneStateManager
+  )
     : base("Viewport 3D")
   {
     _runtimeService = runtimeService;
@@ -87,28 +112,17 @@ public partial class Viewport3DViewModel
         IsInitialized = _runtimeService.IsInitialized;
         if (IsInitialized)
         {
-          if (PresentationEngineId == 0)
-          {
-            PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height);
-          }
-          var existingScene = _sceneStateManager.AllScenes.FirstOrDefault();
-          SceneId = existingScene != null ? existingScene.SceneId : _runtimeService.CreateScene(true);
-          StartGameLoop();
+          SetupViewport();
         }
       }
     };
     IsInitialized = _runtimeService.IsInitialized;
-    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Register(this);
+    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(this, (r, m) => ((Viewport3DViewModel)r).Receive(m));
+    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.ToggleAddJetModeMessage>(this, (r, m) => ((Viewport3DViewModel)r).Receive(m));
 
     if (IsInitialized)
     {
-      if (PresentationEngineId == 0)
-      {
-        PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height);
-      }
-      var existingScene = _sceneStateManager.AllScenes.FirstOrDefault();
-      SceneId = existingScene != null ? existingScene.SceneId : _runtimeService.CreateScene(true);
-      StartGameLoop();
+      SetupViewport();
     }
   }
 
@@ -117,7 +131,7 @@ public partial class Viewport3DViewModel
     Stop();
     if (PresentationEngineId != 0)
     {
-      _runtimeService.DestroyPresentationEngine(PresentationEngineId);
+      _runtimeService.DestroyPresentationEngine(SceneId, PresentationEngineId);
       PresentationEngineId = 0;
     }
   }
@@ -192,7 +206,9 @@ public partial class Viewport3DViewModel
         else
         {
           state.SelectedEntity = entity;
-          CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(new AetherVk.Logic.ViewModels.EntitySelectedMessage(entity));
+          CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+            new AetherVk.Logic.ViewModels.EntitySelectedMessage(entity)
+          );
           breadcrumb?.ShowMessageAsync("Raycast Hit", $"Selected {entity.Name}");
         }
       }
@@ -204,7 +220,9 @@ public partial class Viewport3DViewModel
       if (state.SelectedEntity != null)
       {
         state.SelectedEntity = null;
-        CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(new AetherVk.Logic.ViewModels.EntitySelectedMessage(null));
+        CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+          new AetherVk.Logic.ViewModels.EntitySelectedMessage(null)
+        );
       }
     }
   }
@@ -291,78 +309,21 @@ public partial class Viewport3DViewModel
       await Task.Run(() => _runtimeService.InitializeSimulationContext("Vulkan", null, false));
       IsLoading = false;
     }
-    if (PresentationEngineId == 0)
-    {
-      PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height);
-    }
-    SceneId = _runtimeService.CreateScene(true);
+    
+    SetupViewport();
+
     IsInitialized = true;
-    StartGameLoop();
   }
 
   public NativeRuntimeService RuntimeService => _runtimeService;
 
-  private void StartGameLoop()
+  public void Receive(AetherVk.Logic.Messages.RenderFrameReadyMessage message)
   {
-    if (_cts != null)
-      return;
-
-    _cts = new CancellationTokenSource();
-    var token = _cts.Token;
-
-    Task.Run(
-      async () =>
-      {
-        var sw = Stopwatch.StartNew();
-        var lastTime = sw.Elapsed;
-        var accumulatedTime = TimeSpan.Zero;
-        var fixedTimeStep = TimeSpan.FromSeconds(1.0 / 60.0);
-
-        while (!token.IsCancellationRequested)
-        {
-          var currentTime = sw.Elapsed;
-          var deltaTime = currentTime - lastTime;
-          lastTime = currentTime;
-          accumulatedTime += deltaTime;
-
-          if (IsInitialized)
-          {
-            // Update camera
-            var sceneState = _sceneStateManager;
-            var camera = sceneState
-              ?.GetOrCreateScene(SceneId)
-              .EntityMap.Values.FirstOrDefault(e =>
-                e.Name == "camera"
-                || e.Components.Any(c => c is AetherVk.Logic.Models.CameraComponent)
-              );
-            if (camera != null)
-            {
-              CameraId = camera.Id;
-            }
-
-            // Wait for previous render to finish before starting a new one
-            if (_lastRenderTask != null)
-            {
-              _lastRenderTaskId = await _lastRenderTask;
-              OnFrameReady?.Invoke();
-            }
-
-            // Async Render - fire and forget, save task
-            _lastRenderTask = _runtimeService.RenderTickAsync(
-              PresentationEngineId,
-              SceneId,
-              CameraId,
-              Width,
-              Height
-            );
-          }
-
-          // Yield to prevent pegging the CPU, aiming for ~60 FPS render signal
-          await Task.Delay(16, token);
-        }
-      },
-      token
-    );
+    if (message.PresentationEngineId == PresentationEngineId && message.SceneId == SceneId)
+    {
+      _lastRenderTaskId = message.RenderGeneration;
+      OnFrameReady?.Invoke();
+    }
   }
 
   public async Task CopyFrameToBuffer(IntPtr bufferPtr, nuint bufferSize)
@@ -370,8 +331,5 @@ public partial class Viewport3DViewModel
     await _runtimeService.DownloadImageAsync(_lastRenderTaskId, bufferPtr, bufferSize);
   }
 
-  public void Stop()
-  {
-    _cts?.Cancel();
-  }
+  public void Stop() { }
 }

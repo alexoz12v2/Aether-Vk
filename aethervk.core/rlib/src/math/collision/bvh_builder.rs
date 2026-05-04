@@ -3,13 +3,13 @@
 //! Provides algorithms to build Bounding Volume Hierarchies using Top-down approach
 //! with Surface Area Heuristic (SAH), supporting multiple bounding types.
 
-use alloc::{boxed::Box, vec::Vec};
 use aethervk_oshal_rlib::math::{
+  FloatLike,
   floating::{FloatBits, FloatOps},
   matrix::{Matrix3, MatrixVectorMul, mat3::Mat3f32},
   vector::{Vector, Vector3, vec3::Vec3f32},
-  FloatLike,
 };
+use alloc::{boxed::Box, vec::Vec};
 
 use crate::{
   math::collision::bounds::{AABB, BS, OBB},
@@ -404,8 +404,8 @@ where
 #[cfg(test)]
 mod tests {
   use super::*;
-  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
   use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
+  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
 
   #[test]
   fn test_bvh_builder_empty() {

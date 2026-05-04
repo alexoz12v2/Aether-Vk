@@ -1,0 +1,195 @@
+#version 450 core
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_GOOGLE_include_directive : require
+
+// ============================================================================
+// LBVH Construction: Topology and AABB Refitting (with Mass/CoM)
+// ============================================================================
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+#include "../bvh_utils.glsl"
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer MortonArray {
+    uvec2 entries[]; // x = morton_code, y = primitive_index
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer AtomicCounters {
+    uint flags[];
+};
+
+// Particles data (AOSOA flattened)
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer ParticleData {
+    float data[];
+};
+
+layout(push_constant, scalar) uniform PushConstants {
+    BVHArray bvh;
+    MortonArray sorted_morton;
+    AtomicCounters counters;
+    ParticleData particles;
+    uint num_primitives;
+    float particle_radius;
+} pc;
+
+int common_prefix(uint num_primitives, int i, int j) {
+    if (j < 0 || j >= num_primitives) return -1;
+    
+    uint key1 = pc.sorted_morton.entries[i].x;
+    uint key2 = pc.sorted_morton.entries[j].x;
+    
+    if (key1 == key2) {
+        uint idx1 = pc.sorted_morton.entries[i].y;
+        uint idx2 = pc.sorted_morton.entries[j].y;
+        return 32 + findMSB(idx1 ^ idx2);
+    }
+    return 31 - findMSB(key1 ^ key2);
+}
+
+vec2 determine_range(uint num_primitives, int i) {
+    int d = sign(common_prefix(num_primitives, i, i + 1) - common_prefix(num_primitives, i, i - 1));
+    int min_prefix = common_prefix(num_primitives, i, i - d);
+    
+    int l_max = 2;
+    while (common_prefix(num_primitives, i, i + l_max * d) > min_prefix) {
+        l_max *= 2;
+    }
+    
+    int l = 0;
+    int t = l_max / 2;
+    while (t >= 1) {
+        if (common_prefix(num_primitives, i, i + (l + t) * d) > min_prefix) {
+            l += t;
+        }
+        t /= 2;
+    }
+    
+    int j = i + l * d;
+    return vec2(min(i, j), max(i, j));
+}
+
+int find_split(uint num_primitives, int first, int last) {
+    int common_prefix_node = common_prefix(num_primitives, first, last);
+    int split = first;
+    int step = last - first;
+    
+    do {
+        step = (step + 1) >> 1;
+        int new_split = split + step;
+        
+        if (new_split < last) {
+            int split_prefix = common_prefix(num_primitives, first, new_split);
+            if (split_prefix > common_prefix_node) {
+                split = new_split;
+            }
+        }
+    } while (step > 1);
+    
+    return split;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    uint n = pc.num_primitives;
+    
+    if (idx >= n) return;
+
+    uint num_internal_nodes = n - 1;
+
+    // ------------------------------------------------------------------------
+    // Part 1: Construct Topology (Internal Nodes)
+    // ------------------------------------------------------------------------
+    if (idx < num_internal_nodes) {
+        vec2 range = determine_range(n, int(idx));
+        int first = int(range.x);
+        int last = int(range.y);
+        
+        int split = find_split(n, first, last);
+        
+        uint left_child = (split == first) ? (num_internal_nodes + split) : uint(split);
+        uint right_child = (split + 1 == last) ? (num_internal_nodes + split + 1) : uint(split + 1);
+        
+        pc.bvh.nodes[idx].left_child_or_primitive_offset = left_child;
+        pc.bvh.nodes[idx].right_child_offset = right_child;
+        pc.bvh.nodes[idx].primitive_count = 0;
+        pc.bvh.nodes[idx].node_type = 0;
+        
+        pc.bvh.nodes[left_child].parent_idx = idx;
+        pc.bvh.nodes[right_child].parent_idx = idx;
+    }
+
+    // ------------------------------------------------------------------------
+    // Part 2: Setup Leaves
+    // ------------------------------------------------------------------------
+    uint leaf_idx = num_internal_nodes + idx;
+    uint p_id = pc.sorted_morton.entries[idx].y;
+    
+    uint block_idx = p_id / SG_SIZE;
+    uint local_idx = p_id % SG_SIZE;
+    uint base = block_idx * (10 * SG_SIZE) + local_idx;
+
+    vec3 pos = vec3(
+        pc.particles.data[base + 0 * SG_SIZE],
+        pc.particles.data[base + 1 * SG_SIZE],
+        pc.particles.data[base + 2 * SG_SIZE]
+    );
+    float mass = pc.particles.data[base + 6 * SG_SIZE];
+    float r = pc.particle_radius;
+    
+    pc.bvh.nodes[leaf_idx].bound.minBounds = pos - vec3(r);
+    pc.bvh.nodes[leaf_idx].bound.maxBounds = pos + vec3(r);
+    pc.bvh.nodes[leaf_idx].left_child_or_primitive_offset = p_id;
+    pc.bvh.nodes[leaf_idx].primitive_count = 1;
+    pc.bvh.nodes[leaf_idx].center_of_mass = pos;
+    pc.bvh.nodes[leaf_idx].mass = mass;
+
+    // Special case for root node parent (to safely stop traversal)
+    if (idx == 0) {
+        pc.bvh.nodes[0].parent_idx = 0xFFFFFFFF;
+    }
+
+    memoryBarrierBuffer();
+    
+    // ------------------------------------------------------------------------
+    // Part 3: Bottom-Up AABB and Mass/CoM Refitting
+    // ------------------------------------------------------------------------
+    uint current = pc.bvh.nodes[leaf_idx].parent_idx;
+    while (current != 0xFFFFFFFF) {
+        uint old_val = atomicAdd(pc.counters.flags[current], 1);
+        if (old_val == 0) {
+            // First thread to arrive. Terminate.
+            break;
+        }
+        
+        // Second thread to arrive processes the parent.
+        uint left = pc.bvh.nodes[current].left_child_or_primitive_offset;
+        uint right = pc.bvh.nodes[current].right_child_offset;
+        
+        vec3 l_min = pc.bvh.nodes[left].bound.minBounds;
+        vec3 l_max = pc.bvh.nodes[left].bound.maxBounds;
+        float l_mass = pc.bvh.nodes[left].mass;
+        vec3 l_com = pc.bvh.nodes[left].center_of_mass;
+        
+        vec3 r_min = pc.bvh.nodes[right].bound.minBounds;
+        vec3 r_max = pc.bvh.nodes[right].bound.maxBounds;
+        float r_mass = pc.bvh.nodes[right].mass;
+        vec3 r_com = pc.bvh.nodes[right].center_of_mass;
+        
+        pc.bvh.nodes[current].bound.minBounds = min(l_min, r_min);
+        pc.bvh.nodes[current].bound.maxBounds = max(l_max, r_max);
+        
+        float total_mass = l_mass + r_mass;
+        pc.bvh.nodes[current].mass = total_mass;
+        if (total_mass > 0.0) {
+            pc.bvh.nodes[current].center_of_mass = (l_com * l_mass + r_com * r_mass) / total_mass;
+        } else {
+            pc.bvh.nodes[current].center_of_mass = (l_com + r_com) * 0.5;
+        }
+        
+        memoryBarrierBuffer();
+        
+        current = pc.bvh.nodes[current].parent_idx;
+    }
+}

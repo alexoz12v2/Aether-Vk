@@ -1,0 +1,58 @@
+#version 450 core
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "../bvh_utils.glsl"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, scalar) uniform PushConstants {
+    BVHArray particle_bvh;
+    CollisionPairList output_list;
+    uint root_index;
+    uint total_particles;
+} pc;
+
+void main() {
+    // Usually, we could parallelize by having each thread traverse the tree
+    // for its assigned particle.
+    // In this basic version, thread 0 just does the whole self-intersection 
+    // using the stack-based traversal defined in bvh_utils.glsl.
+    // A more optimal approach is for each thread to traverse from root down to
+    // find intersections with its own particle's AABB.
+
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.total_particles) return;
+
+    // For each particle, we traverse the BVH to find overlaps with OTHER particles.
+    // To avoid duplicates, we only report pairs where idA < idB.
+
+    BVHNodeAABB my_node = pc.particle_bvh.nodes[pc.total_particles - 1 + idx]; // Leaf node
+    uint my_prim_id = my_node.left_child_or_primitive_offset;
+    AABB my_aabb = my_node.bound;
+
+    uvec2 stack[32];
+    int stackPtr = 0;
+    stack[stackPtr++] = uvec2(pc.root_index, 0); // node index, unused
+
+    while (stackPtr > 0) {
+        uint node_idx = stack[--stackPtr].x;
+        BVHNodeAABB node = pc.particle_bvh.nodes[node_idx];
+
+        if (intersectAABB(my_aabb, node.bound)) {
+            bool isLeaf = (node.primitive_count > 0);
+            if (isLeaf) {
+                uint other_prim_id = node.left_child_or_primitive_offset;
+                if (my_prim_id < other_prim_id) {
+                    // Report collision pair
+                    uint outIdx = atomicAdd(pc.output_list.count, 1, gl_ScopeQueueFamily, gl_StorageSemanticsBuffer, gl_SemanticsRelaxed);
+                    pc.output_list.pairs[outIdx] = uvec2(my_prim_id, other_prim_id);
+                }
+            } else {
+                stack[stackPtr++] = uvec2(node.left_child_or_primitive_offset, 0);
+                stack[stackPtr++] = uvec2(node.right_child_offset, 0);
+            }
+        }
+    }
+}

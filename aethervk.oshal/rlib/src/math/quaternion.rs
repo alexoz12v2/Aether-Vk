@@ -3,7 +3,7 @@ use core::ops;
 use crate::math::{
   FloatLike, MulAddIdentity, Scalar,
   matrix::Matrix3,
-  vector::{Vector3, Vector},
+  vector::{Vector, Vector3},
 };
 
 pub trait Quaternion:
@@ -115,7 +115,11 @@ pub trait Quaternion:
       let s = (trace + _1).sqrt() * _2;
       let inv_s: Self::Scalar = _1 / s;
       Self::from_vector_and_scalar(
-        Self::Vector::from_components((m21 - m12) * inv_s, (m02 - m20) * inv_s, (m10 - m01) * inv_s),
+        Self::Vector::from_components(
+          (m21 - m12) * inv_s,
+          (m02 - m20) * inv_s,
+          (m10 - m01) * inv_s,
+        ),
         _0_25 * s,
       )
     } else if m00 > m11 && m00 > m22 {
@@ -150,10 +154,7 @@ pub trait Quaternion:
     let v = self.vector_part();
     let a = self.scalar_part();
     let v_norm = v.length();
-    let theta = a
-      .min(Self::Scalar::from_f32(1.0))
-      .max(Self::Scalar::from_f32(-1.0))
-      .acos();
+    let theta = a.min(Self::Scalar::from_f32(1.0)).max(Self::Scalar::from_f32(-1.0)).acos();
     let new_theta = theta * t;
     let new_a = new_theta.cos();
     let new_v = if v_norm > Self::Scalar::from_f32(1e-6) {
@@ -187,10 +188,7 @@ pub trait Quaternion:
       return Self::from_vector_and_scalar(v, s).normalize();
     }
 
-    let theta_0 = dot
-      .min(Self::Scalar::from_f32(1.0))
-      .max(Self::Scalar::from_f32(-1.0))
-      .acos();
+    let theta_0 = dot.min(Self::Scalar::from_f32(1.0)).max(Self::Scalar::from_f32(-1.0)).acos();
     let theta = theta_0 * t;
 
     let sin_theta = theta.sin();

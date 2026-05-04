@@ -1,8 +1,8 @@
+use alloc::{sync, vec::Vec};
 use ash::vk::{
   self, Handle, PFN_vkAllocateDescriptorSets, PFN_vkCreateDescriptorPool, PFN_vkResetDescriptorPool,
 };
-use alloc::{sync, vec::Vec};
-use core::{ptr};
+use core::ptr;
 
 use crate::{
   gpu_backends::vulkan::{
@@ -97,9 +97,8 @@ impl DescriptorPools {
       }
 
       let layouts = [layout];
-      let alloc_info = vk::DescriptorSetAllocateInfo::default()
-        .descriptor_pool(pool)
-        .set_layouts(&layouts);
+      let alloc_info =
+        vk::DescriptorSetAllocateInfo::default().descriptor_pool(pool).set_layouts(&layouts);
 
       let mut descriptor_set = vk::DescriptorSet::null();
       let res = unsafe {
@@ -182,7 +181,7 @@ impl DescriptorPoolsInner {
 
     let pool_sizes = POOL_SIZES;
     let create_info = vk::DescriptorPoolCreateInfo::default()
-        // flag to allow allocations of bindless sets. from VK_EXT_descriptor_indexing
+      // flag to allow allocations of bindless sets. from VK_EXT_descriptor_indexing
       .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
       .max_sets(MAX_DESCRIPTOR_SETS)
       .pool_sizes(&pool_sizes);

@@ -1,14 +1,14 @@
-use alloc::boxed::Box;
-use alloc::vec::Vec;
 use aethervk_oshal_rlib::math::{
+  FloatLike,
   floating::{FloatBits, FloatOps},
   matrix::{Matrix3, Matrix4, mat3::Mat3f32, mat4::Mat4x4f32},
   vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec4::Vec4f32},
-  FloatLike,
 };
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 
 use crate::math::collision::bounds::{AABB, OBB};
-use crate::math::collision::bvh_builder::{BVHNode, BoundNode, BVHBuilderParams};
+use crate::math::collision::bvh_builder::{BVHBuilderParams, BVHNode, BoundNode};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Particle<V>
@@ -252,9 +252,7 @@ mod tests {
 
     let old_particles = vec![p1, p2, p3];
     let builder = ParticleBVHBuilder::new(BVHBuilderParams::default());
-    let mut bvh = builder
-      .build::<_, Vec3f32, Mat3f32>(&old_particles)
-      .unwrap();
+    let mut bvh = builder.build::<_, Vec3f32, Mat3f32>(&old_particles).unwrap();
 
     let mut new_particles = old_particles.clone();
     new_particles[0].position = Vec3f32::from_components(-1.0, 0.0, 0.0);

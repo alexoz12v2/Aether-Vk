@@ -3,8 +3,8 @@ use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
-use crate::os::NativeResult;
 use super::{ThreadPool, Workload, WorkloadStatus};
+use crate::os::NativeResult;
 
 pub struct TaskletState<R> {
   result: Mutex<Option<R>>,
@@ -26,12 +26,7 @@ impl<R> TaskletHandle<R> {
       core::hint::spin_loop();
     }
 
-    self
-      .state
-      .result
-      .lock()
-      .take()
-      .expect("Result missing (tasklet panicked or was dropped)")
+    self.state.result.lock().take().expect("Result missing (tasklet panicked or was dropped)")
   }
 }
 

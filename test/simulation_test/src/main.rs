@@ -1,31 +1,31 @@
+use aethervk_core_rlib::gpu::PresentationEngineHandle;
+use aethervk_core_rlib::scene::text::FontAtlas;
+use aethervk_core_rlib::scene::{GridComponent, HiddenComponent};
+use aethervk_core_rlib::simulation_api::structs::{CustomRenderCallback, SendPtrMut};
+use aethervk_core_rlib::types::GpuResult;
 use aethervk_core_rlib::{
-  scene::GizmoComponent,
-  simulation::constants,
-  simulation_api::{structs, SimulationContext},
   gpu::{self},
+  scene::GizmoComponent,
   scene::{AlmanacPlanet, PhysicalMeshComponent, TransformComponent},
+  simulation::constants,
+  simulation_api::{SimulationContext, structs},
 };
 use aethervk_oshal_rlib::{
   math::vector::Vector,
   math::{
     quaternion::Quaternion,
-    vector::{vec3::Vec3f32, vec4::Quat, Vector3},
+    vector::{Vector3, vec3::Vec3f32, vec4::Quat},
   },
 };
-use std::{sync::Arc, time::Instant};
 use std::sync::atomic::AtomicBool;
-use aethervk_core_rlib::gpu::PresentationEngineHandle;
-use aethervk_core_rlib::scene::text::FontAtlas;
-use aethervk_core_rlib::simulation_api::structs::{CustomRenderCallback, SendPtrMut};
-use aethervk_core_rlib::types::GpuResult;
-use aethervk_core_rlib::simulation_api::core_api::SimulationContextExt;
+use std::{sync::Arc, time::Instant};
 use test_utils::{
   create_winit_window_and_event_loop, cycle_get_asset_path_from_exe, get_handle_and_window_info,
 };
 
 struct AppState {
   ctx: Box<SimulationContext>,
-  custom_data_ring: [CustomRenderData; 3],
+  custom_data: Arc<std::sync::Mutex<CustomRenderData>>,
   scene_id: u64,
   presentation_engine: gpu::PresentationEngineHandle,
   camera_entity: u64,
@@ -33,26 +33,11 @@ struct AppState {
   is_resizing: bool,
   is_exiting: bool,
   is_command_prompt_open: bool,
-  font_atlas: Arc<std::sync::Mutex<Option<FontAtlas>>>, // uploaded then dropped
   // TODO reuse it as before in rendering function, which therefore should be customizable in simulation context
   console_open_progress: f32,
   console_scroll_offset: usize,
   command_history: std::collections::VecDeque<String>,
   current_command: String,
-}
-
-impl AppState {
-  fn cycle_first_free_render_custom_data(&mut self) -> &'_ mut CustomRenderData {
-    let mut index: usize = 0;
-    loop {
-      if self.custom_data_ring[index].is_free_relaxed() {
-        let _ = self.custom_data_ring[index].is_free_acquire();
-        return unsafe { self.custom_data_ring.get_unchecked_mut(index) };
-      }
-      index = (index + 1) % self.custom_data_ring.len();
-      std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-  }
 }
 
 impl Drop for AppState {
@@ -91,16 +76,16 @@ fn main() {
   let width = window.inner_size().width;
   let height = window.inner_size().height;
 
-  let presentation_engine = simulation_context
-    .create_presentation_engine_windowed(width, height, native_handles)
-    .unwrap();
-
   let scene_id = simulation_context.create_default_scene().unwrap();
+
+  let presentation_engine = simulation_context
+    .create_presentation_engine_windowed(scene_id, width, height, native_handles)
+    .unwrap();
 
   // Populate scene with custom planets and comet
   {
     let scene_ctx = simulation_context.get_scene(scene_id).unwrap();
-    let mut active_scene = scene_ctx.write();
+    let mut active_scene = scene_ctx.write(); // TODO DEADLOCK with SimulationTick
     let root_entity = active_scene.root_entity;
 
     let model_path = assets_dir.join("Comet.glb");
@@ -145,9 +130,7 @@ fn main() {
         },
       )
       .unwrap();
-    active_scene
-      .scene
-      .set_parent(mesh_entity, Some(root_entity));
+    active_scene.scene.set_parent(mesh_entity, Some(root_entity));
     active_scene.register_entity(mesh_entity);
 
     let uv_dist =
@@ -254,9 +237,7 @@ fn main() {
       };
 
       let planet_entity = active_scene.scene.spawn_entity(*name);
-      active_scene
-        .scene
-        .set_parent(planet_entity, Some(root_entity));
+      active_scene.scene.set_parent(planet_entity, Some(root_entity));
       active_scene
         .scene
         .add_component(
@@ -302,12 +283,7 @@ fn main() {
     let scene_ctx = simulation_context.get_scene(scene_id).unwrap();
     let read_ctx = scene_ctx.read();
     let int_cam = read_ctx.active_camera_entity.unwrap();
-    read_ctx
-      .entity_map
-      .iter()
-      .find(|&(_, &v)| v == int_cam)
-      .map(|(&k, _)| k)
-      .unwrap()
+    read_ctx.entity_map.iter().find(|&(_, &v)| v == int_cam).map(|(&k, _)| k).unwrap()
   };
 
   let font_path = assets_dir.join("fonts/JetBrainsMono-Regular.ttf");
@@ -326,13 +302,32 @@ fn main() {
     })
     .unwrap();
 
+  let _ = simulation_context.threads.logic_thread.tx().try_send(
+    aethervk_core_rlib::simulation_api::structs::LogicCommand::SetSceneTimeScale {
+      scene_id,
+      scale: aethervk_core_rlib::simulation_api::structs::TimeScale::OneDay,
+    },
+  );
+  let _ = simulation_context
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(aethervk_core_rlib::simulation_api::structs::LogicCommand::PlayScene { scene_id });
+
+  let mut custom_render_data = CustomRenderData::default();
+  custom_render_data.font_atlas = Some(atlas);
+  let custom_data = Arc::new(std::sync::Mutex::new(custom_render_data));
+
+  let arc_scenes = simulation_context.get_scene(scene_id).unwrap();
+  let mut scene_write = arc_scenes.write();
+  let cb = custom_data.lock().unwrap().make_callback(Arc::clone(&custom_data));
+  scene_write.register_custom_render_callback(Some(cb));
+  drop(scene_write);
+  drop(arc_scenes);
+
   let app_state = AppState {
     ctx: simulation_context,
-    custom_data_ring: [
-      CustomRenderData::default(),
-      CustomRenderData::default(),
-      CustomRenderData::default(),
-    ],
+    custom_data,
     scene_id,
     presentation_engine,
     camera_entity: ext_camera_entity,
@@ -340,7 +335,6 @@ fn main() {
     is_resizing: false,
     is_exiting: false,
     is_command_prompt_open: false,
-    font_atlas: Arc::new(std::sync::Mutex::new(Some(atlas))),
     console_open_progress: 0.0,
     console_scroll_offset: 0,
     command_history: std::collections::VecDeque::with_capacity(1000),
@@ -356,9 +350,6 @@ fn main() {
     mouse_y: 0.0,
     last_sim_time: std::time::Instant::now(),
     window_info,
-    last_frame_start_time: aethervk_oshal_rlib::os::time::get_monotonic_time(),
-    last_sim_tick_task: None,
-    last_render_tick_task: None,
   };
 
   test_utils::app::run_app(sim_app, event_loop);
@@ -374,9 +365,6 @@ struct SimApp {
   mouse_y: f64,
   last_sim_time: std::time::Instant,
   window_info: test_utils::WindowPlatformData,
-  last_frame_start_time: aethervk_oshal_rlib::os::time::timeus_t,
-  last_sim_tick_task: Option<core::num::NonZero<u64>>,
-  last_render_tick_task: Option<core::num::NonZero<u64>>,
 }
 
 impl test_utils::app::App for SimApp {
@@ -409,13 +397,10 @@ impl test_utils::app::App for SimApp {
     );
     #[cfg(target_os = "macos")]
     {
-      self
-        .window_info
-        .metal_layer
-        .setDrawableSize(objc2_core_foundation::CGSize {
-          width: width as f64,
-          height: height as f64,
-        });
+      self.window_info.metal_layer.setDrawableSize(objc2_core_foundation::CGSize {
+        width: width as f64,
+        height: height as f64,
+      });
     }
   }
 
@@ -442,10 +427,7 @@ impl test_utils::app::App for SimApp {
             let ndc_x = (self.mouse_x as f32 / size.width as f32) * 2.0 - 1.0;
             let ndc_y = (self.mouse_y as f32 / size.height as f32) * 2.0 - 1.0;
             // TODO select intersected object (insert selected component, remove the other selected component if present. Add an extension method to scene in rlib to handle this)
-            let _ = self
-              .app_state
-              .ctx
-              .raycast_ndc(self.app_state.scene_id, ndc_x, ndc_y);
+            let _ = self.app_state.ctx.raycast_ndc(self.app_state.scene_id, ndc_x, ndc_y);
           }
         }
       }
@@ -485,16 +467,496 @@ impl test_utils::app::App for SimApp {
             winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
               if !self.app_state.current_command.is_empty() {
                 let cmd = self.app_state.current_command.clone();
-                self
-                  .app_state
-                  .command_history
-                  .push_back(format!("> {}", cmd));
+                self.app_state.command_history.push_back(format!("> {}", cmd));
 
-                // TODO: Execute Command functionality
-                // Currently omitted as it requires C FFI or direct parsing implementation in main.rs
+                let mut responses = Vec::new();
+                let parts: Vec<&str> = cmd.split_whitespace().collect();
+                if let Some(&command) = parts.first() {
+                  match command {
+                    "help" => {
+                      responses.push("Commands:".to_string());
+                      responses.push("  help               - Shows this help message".to_string());
+                      responses
+                        .push("  clear              - Clears the console output".to_string());
+                      responses.push("  play               - Plays the simulation".to_string());
+                      responses.push("  pause              - Pauses the simulation".to_string());
+                      responses.push("  scale <0|1|2|3>    - Sets the time scale (0=Stopped, 1=Day, 2=Week, 3=Month)".to_string());
+                      responses.push(
+                        "  step <days>        - Steps the simulation by the given number of days"
+                          .to_string(),
+                      );
+                    }
+                    "clear" => {
+                      self.app_state.command_history.clear();
+                    }
+                    "play" => {
+                      let scene_id = self.app_state.scene_id;
+                      let _ = self.app_state.ctx.threads.logic_thread.tx().try_send(
+                        aethervk_core_rlib::simulation_api::structs::LogicCommand::PlayScene {
+                          scene_id,
+                        },
+                      );
+                      responses.push("Simulation playing.".to_string());
+                    }
+                    "pause" => {
+                      let scene_id = self.app_state.scene_id;
+                      let _ = self.app_state.ctx.threads.logic_thread.tx().try_send(
+                        aethervk_core_rlib::simulation_api::structs::LogicCommand::PauseScene {
+                          scene_id,
+                        },
+                      );
+                      responses.push("Simulation paused.".to_string());
+                    }
+                    "scale" => {
+                      if parts.len() > 1 {
+                        let scale_val = parts[1].parse::<u32>().unwrap_or(0);
+                        let next_scale = match scale_val {
+                          1 => aethervk_core_rlib::simulation_api::structs::TimeScale::OneDay,
+                          2 => aethervk_core_rlib::simulation_api::structs::TimeScale::OneWeek,
+                          3 => aethervk_core_rlib::simulation_api::structs::TimeScale::OneMonth,
+                          _ => aethervk_core_rlib::simulation_api::structs::TimeScale::Stopped,
+                        };
+                        let scene_id = self.app_state.scene_id;
+                        let _ = self.app_state.ctx.threads.logic_thread.tx().try_send(
+                          aethervk_core_rlib::simulation_api::structs::LogicCommand::SetSceneTimeScale {
+                            scene_id,
+                            scale: next_scale,
+                          }
+                        );
+                        responses.push(format!("Time scale set to {}.", scale_val));
+                      } else {
+                        responses.push("Usage: scale <0|1|2|3>".to_string());
+                      }
+                    }
+                    "step" => {
+                      if parts.len() > 1 {
+                        if let Ok(days) = parts[1].parse::<f64>() {
+                          let scene_id = self.app_state.scene_id;
+                          let _ = self.app_state.ctx.threads.logic_thread.tx().try_send(
+                            aethervk_core_rlib::simulation_api::structs::LogicCommand::StepScene {
+                              scene_id,
+                              step_days: days,
+                            },
+                          );
+                          responses.push(format!("Stepped simulation by {} days.", days));
+                        } else {
+                          responses.push("Invalid number of days.".to_string());
+                        }
+                      } else {
+                        responses.push("Usage: step <days>".to_string());
+                      }
+                    }
+
+                    "scene" => {
+                      let scene_id = self.app_state.scene_id;
+                      if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
+                        let read_ctx = scene_ctx.read();
+                        responses.push(format!(
+                          "Scene has {} entities",
+                          read_ctx.scene.entity_count()
+                        ));
+                      }
+                    }
+                    "select" => {
+                      if parts.len() > 1 {
+                        let name = parts[1..].join(" ");
+                        let scene_id = self.app_state.scene_id;
+                        if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
+                          let read_ctx = scene_ctx.read();
+                          if let Some(id) = read_ctx.scene.get_entity_by_name(&name) {
+                            use aethervk_core_rlib::scene::interaction::SceneInteractionExt;
+                            let _ = read_ctx.scene.select_entity(id, None);
+                            responses.push(format!("Selected entity '{}'.", name));
+                          } else {
+                            responses.push(format!("Entity '{}' not found.", name));
+                          }
+                        }
+                      } else {
+                        responses.push("Usage: select <entity>".to_string());
+                      }
+                    }
+                    "printsel" => {
+                      let scene_id = self.app_state.scene_id;
+                      if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
+                        let read_ctx = scene_ctx.read();
+                        let sel = read_ctx
+                          .scene
+                          .query1_first_res::<aethervk_core_rlib::scene::SelectedComponent, _, _>(
+                            |id, _| Some(id),
+                          );
+                        if let Some((id, _)) = sel {
+                          if let Some(name) = read_ctx.scene.get_name(id) {
+                            responses.push(format!("Currently selected: {}", name));
+                          }
+                        } else {
+                          responses.push("No entity selected.".to_string());
+                        }
+                      }
+                    }
+                    "deselect" => {
+                      let scene_id = self.app_state.scene_id;
+                      if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
+                        let read_ctx = scene_ctx.read();
+                        use aethervk_core_rlib::scene::interaction::SceneInteractionExt;
+                        let sel = read_ctx
+                          .scene
+                          .query1_first_res::<aethervk_core_rlib::scene::SelectedComponent, _, _>(
+                            |id, _| Some(id),
+                          );
+                        if let Some((id, _)) = sel {
+                          let _ = read_ctx.scene.unselect_entity(id);
+                          responses.push("Deselected entity.".to_string());
+                        }
+                      }
+                    }
+                    "goto" => {
+                      if parts.len() > 1 {
+                        let name = parts[1..].join(" ");
+                        let scene_id = self.app_state.scene_id;
+                        if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
+                          let read_ctx = scene_ctx.read();
+                          if let Some(id) = read_ctx.scene.get_entity_by_name(&name) {
+                            use aethervk_core_rlib::scene::interaction::SceneInteractionExt;
+                            let _ = read_ctx.scene.select_entity(id, None);
+                            let _ = read_ctx.scene.follow_entity(id, None);
+                            responses.push(format!("Selected and following '{}'.", name));
+                          } else {
+                            responses.push(format!("Entity '{}' not found.", name));
+                          }
+                        }
+                      } else {
+                        responses.push("Usage: goto <entity>".to_string());
+                      }
+                    }
+                    "unfollow" => {
+                      let scene_id = self.app_state.scene_id;
+                      if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
+                        let read_ctx = scene_ctx.read();
+                        use aethervk_core_rlib::scene::interaction::SceneInteractionExt;
+                        let f = read_ctx
+                          .scene
+                          .query1_first_res::<aethervk_core_rlib::scene::FollowingComponent, _, _>(
+                            |id, _| Some(id),
+                          );
+                        if let Some((id, _)) = f {
+                          let _ = read_ctx.scene.unfollow_entity(id);
+                          responses.push("Unfollowed entity.".to_string());
+                        }
+                      }
+                    }
+                    "following" => {
+                      let scene_id = self.app_state.scene_id;
+                      if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
+                        let read_ctx = scene_ctx.read();
+                        let f = read_ctx
+                          .scene
+                          .query1_first_res::<aethervk_core_rlib::scene::FollowingComponent, _, _>(
+                            |id, _| Some(id),
+                          );
+                        if let Some((id, _)) = f {
+                          if let Some(name) = read_ctx.scene.get_name(id) {
+                            responses.push(format!("Currently following: {}", name));
+                          }
+                        } else {
+                          responses.push("Not following any entity.".to_string());
+                        }
+                      }
+                    }
+                    "showgizmo" => {
+                      let scene_id = self.app_state.scene_id;
+                      if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
+                        let read_ctx = scene_ctx.read();
+                        let sel = read_ctx
+                          .scene
+                          .query1_first_res::<aethervk_core_rlib::scene::SelectedComponent, _, _>(
+                            |id, _| Some(id),
+                          );
+                        if let Some((id, _)) = sel {
+                          let mut is_visible = false;
+                          let _ = read_ctx.scene.with_component_mut(
+                            id,
+                            |g: &mut aethervk_core_rlib::scene::GizmoComponent| {
+                              g.gizmo_visible = !g.gizmo_visible;
+                              is_visible = g.gizmo_visible;
+                            },
+                          );
+                          responses.push(format!("Gizmo visibility set to {}.", is_visible));
+                        } else {
+                          responses.push("No entity selected.".to_string());
+                        }
+                      }
+                    }
+                    "printbvh" => {
+                      let scene_id = self.app_state.scene_id;
+                      if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
+                        let read_ctx = scene_ctx.read();
+                        let sel = read_ctx
+                          .scene
+                          .query1_first_res::<aethervk_core_rlib::scene::SelectedComponent, _, _>(
+                            |id, _| Some(id),
+                          );
+                        if let Some((id, _)) = sel {
+                          let min_depth: i32 = parts.get(1).unwrap_or(&"-1").parse().unwrap_or(-1);
+                          let max_depth: i32 = parts.get(2).unwrap_or(&"-1").parse().unwrap_or(-1);
+                          if min_depth != -1 && max_depth != -1 && min_depth > max_depth {
+                            responses.push("illegal arguments: min_depth > max_depth".to_string());
+                          } else {
+                            read_ctx.scene.with_component(
+                              id,
+                              |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+                                if let Some(bvh) = &mesh.mesh.bvh {
+                                  responses.push("BVH Nodes:".to_string());
+                                  let mut node_stack = vec![(0, 0)]; // (node_idx, depth)
+                                  while let Some((idx, depth)) = node_stack.pop() {
+                                    let node = &bvh.nodes[idx];
+                                    if (min_depth == -1 || depth as i32 >= min_depth)
+                                      && (max_depth == -1 || depth as i32 <= max_depth)
+                                    {
+                                      responses.push(format!(
+                                        "{}Node {} (Depth: {}) - Bound: {:?}",
+                                        "  ".repeat(depth),
+                                        idx,
+                                        depth,
+                                        node.bound
+                                      ));
+                                    }
+                                    if node.primitive_count == 0 {
+                                      node_stack
+                                        .push((node.right_child_offset as usize, depth + 1));
+                                      node_stack.push((
+                                        node.left_child_or_primitive_offset as usize,
+                                        depth + 1,
+                                      ));
+                                    }
+                                  }
+                                } else {
+                                  responses.push("Entity has no BVH.".to_string());
+                                }
+                              },
+                            );
+                          }
+                        } else {
+                          responses.push("No entity selected.".to_string());
+                        }
+                      }
+                    }
+                    "bvh-show"
+                    | "show-bvh"
+                    | "bvh-hide"
+                    | "hide-bvh"
+                    | "bvh-node-dbgrender-set"
+                    | "set-bvh-dbgrender" => {
+                      let is_show = command.contains("show") || command.contains("set");
+                      let scene_id = self.app_state.scene_id;
+                      if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
+                        let read_ctx = scene_ctx.read();
+                        let sel = read_ctx
+                          .scene
+                          .query1_first_res::<aethervk_core_rlib::scene::SelectedComponent, _, _>(
+                            |id, _| Some(id),
+                          );
+                        if let Some((id, _)) = sel {
+                          let mut parts_iter = parts.iter().skip(1);
+                          let depth_str = parts_iter.next().unwrap_or(&"all");
+                          let idx_str = parts_iter.next();
+                          let target_idx: Option<u32> =
+                            idx_str.and_then(|s| if *s == "all" { None } else { s.parse().ok() });
+
+                          let mut min_d = 0;
+                          let mut max_d = u32::MAX;
+
+                          if *depth_str != "all" {
+                            if let Some(dash_pos) = depth_str.find('-') {
+                              let (start, end) = depth_str.split_at(dash_pos);
+                              let end = &end[1..];
+                              if !start.is_empty() {
+                                min_d = start.parse().unwrap_or(0);
+                              }
+                              if !end.is_empty() {
+                                max_d = end.parse().unwrap_or(u32::MAX);
+                              }
+                            } else {
+                              let d: u32 = depth_str.parse().unwrap_or(0);
+                              min_d = d;
+                              max_d = d;
+                            }
+                          }
+
+                          let mut flat_indices = Vec::new();
+                          let mut max_depth_found = 0;
+                          read_ctx.scene.with_component(
+                            id,
+                            |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+                              if let Some(bvh) = &mesh.mesh.bvh {
+                                let mut node_stack = vec![(0, 0)];
+                                let mut current_child_index_at_depth =
+                                  std::collections::HashMap::new();
+
+                                while let Some((idx, d)) = node_stack.pop() {
+                                  if d > max_depth_found {
+                                    max_depth_found = d;
+                                  }
+                                  if d >= min_d && d <= max_d {
+                                    let child_index =
+                                      current_child_index_at_depth.entry(d).or_insert(0);
+                                    if target_idx.is_none() || target_idx == Some(*child_index) {
+                                      flat_indices.push((d, idx));
+                                    }
+                                    *child_index += 1;
+                                  }
+                                  let node = &bvh.nodes[idx];
+                                  if node.primitive_count == 0 {
+                                    node_stack.push((node.right_child_offset as usize, d + 1));
+                                    node_stack
+                                      .push((node.left_child_or_primitive_offset as usize, d + 1));
+                                  }
+                                }
+                              }
+                            },
+                          );
+
+                          if flat_indices.is_empty() {
+                            if min_d > max_depth_found && min_d != u32::MAX {
+                              responses.push(format!(
+                                "Error: Max depth is {}, requested {}.",
+                                max_depth_found, min_d
+                              ));
+                            } else {
+                              responses.push("No nodes found for the given criteria.".to_string());
+                            }
+                          } else {
+                            let mut bvh_len = 0;
+                            read_ctx.scene.with_component(
+                              id,
+                              |mesh: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+                                if let Some(bvh) = &mesh.mesh.bvh {
+                                  bvh_len = bvh.nodes.len();
+                                }
+                              },
+                            );
+
+                            if bvh_len > 0 {
+                              let mut added = false;
+                              let _ = read_ctx.scene.with_component_mut(
+                                id,
+                                |dbg: &mut aethervk_core_rlib::scene::BvhDebugComponent| {
+                                  for &(_, idx) in &flat_indices {
+                                    if idx < dbg.node_render_states.len() {
+                                      dbg.node_render_states[idx] = is_show;
+                                    }
+                                  }
+                                  added = true;
+                                },
+                              );
+                              if !added {
+                                let mut states = vec![false; bvh_len];
+                                for &(_, idx) in &flat_indices {
+                                  if idx < states.len() {
+                                    states[idx] = is_show;
+                                  }
+                                }
+                                let _ = read_ctx.scene.add_component(
+                                  id,
+                                  aethervk_core_rlib::scene::BvhDebugComponent {
+                                    node_render_states: states,
+                                  },
+                                );
+                              }
+                              responses.push(format!(
+                                "Updated visibility for {} nodes.",
+                                flat_indices.len()
+                              ));
+                            }
+                          }
+                        } else {
+                          responses.push("No entity selected.".to_string());
+                        }
+                      }
+                    }
+                    "measure" => {
+                      if parts.len() != 3 {
+                        responses.push("Usage: measure <entity1> <entity2>".to_string());
+                      } else {
+                        let name1 = parts[1];
+                        let name2 = parts[2];
+                        let scene_id = self.app_state.scene_id;
+                        if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
+                          let read_ctx = scene_ctx.read();
+                          let id1 = read_ctx.scene.get_entity_by_name(name1);
+                          let id2 = read_ctx.scene.get_entity_by_name(name2);
+
+                          if id1.is_none() || id2.is_none() {
+                            responses.push("One or both entities not found.".to_string());
+                          } else {
+                            let id1 = id1.unwrap();
+                            let id2 = id2.unwrap();
+                            let mut pos1 = None;
+                            let mut pos2 = None;
+                            read_ctx.scene.with_component(
+                              id1,
+                              |t: &aethervk_core_rlib::scene::TransformComponent| {
+                                pos1 = Some(t.position)
+                              },
+                            );
+                            read_ctx.scene.with_component(
+                              id2,
+                              |t: &aethervk_core_rlib::scene::TransformComponent| {
+                                pos2 = Some(t.position)
+                              },
+                            );
+
+                            if let (Some(p1), Some(p2)) = (pos1, pos2) {
+                              let measure_name = format!("measure_{}_{}", name1, name2);
+                              let measure_id = read_ctx.scene.spawn_entity(&measure_name);
+                              let _ = read_ctx.scene.add_component(
+                                measure_id,
+                                aethervk_core_rlib::scene::MeasurementComponent {
+                                  pos1: p1,
+                                  pos2: p2,
+                                  points: 12.0,
+                                  significant_digits: 4,
+                                },
+                              );
+                              let _ = read_ctx.scene.add_component(
+                                            measure_id,
+                                            aethervk_core_rlib::scene::TransformComponent {
+                                                position: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 0.0),
+                                                rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+                                                scale: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(1.0, 1.0, 1.0),
+                                            },
+                                        );
+                              let root_entity = read_ctx.root_entity;
+                              read_ctx.scene.set_parent(measure_id, Some(root_entity));
+
+                              use aethervk_oshal_rlib::math::vector::Vector;
+                              let distance = (p1 - p2).length();
+                              responses.push(format!(
+                                "Created measurement {} between {} and {}: {:.4}",
+                                measure_name, name1, name2, distance
+                              ));
+                            } else {
+                              responses
+                                .push("Both entities must have a TransformComponent.".to_string());
+                            }
+                          }
+                        }
+                      }
+                    }
+                    _ => {
+                      responses.push(format!("Unrecognized command: {}", command));
+                    }
+                  }
+                }
+
+                for resp in responses {
+                  self.app_state.command_history.push_back(resp);
+                }
 
                 if self.app_state.command_history.len() > 1000 {
-                  self.app_state.command_history.pop_front();
+                  // Keep the last 1000 elements
+                  while self.app_state.command_history.len() > 1000 {
+                    self.app_state.command_history.pop_front();
+                  }
                 }
                 self.app_state.current_command.clear();
                 self.app_state.console_scroll_offset = 0;
@@ -521,11 +983,7 @@ impl test_utils::app::App for SimApp {
           }
 
           if let Some(axis) = test_utils::command::get_camera_movement_axis(keycode) {
-            let scene = self
-              .app_state
-              .ctx
-              .get_scene(self.app_state.scene_id)
-              .unwrap();
+            let scene = self.app_state.ctx.get_scene(self.app_state.scene_id).unwrap();
             // TODO check success
             let _ = self.app_state.ctx.threads.logic_thread.tx().try_send(
               structs::LogicCommand::MoveCursor(structs::MoveCursor {
@@ -559,7 +1017,7 @@ impl test_utils::app::App for SimApp {
                 let scene_id = self.app_state.scene_id;
                 let is_playing = {
                   let scene = self.app_state.ctx.get_scene(scene_id).unwrap();
-                  scene.read().time_state.is_playing
+                  scene.read().time_state.read().is_playing
                 };
                 let cmd = if is_playing {
                   aethervk_core_rlib::simulation_api::structs::LogicCommand::PauseScene { scene_id }
@@ -572,7 +1030,7 @@ impl test_utils::app::App for SimApp {
                 let scene_id = self.app_state.scene_id;
                 let current_scale = {
                   let scene = self.app_state.ctx.get_scene(scene_id).unwrap();
-                  scene.read().time_state.current_scale
+                  scene.read().time_state.read().current_scale
                 };
                 let next_scale = match current_scale {
                   aethervk_core_rlib::simulation_api::structs::TimeScale::Stopped => {
@@ -595,16 +1053,31 @@ impl test_utils::app::App for SimApp {
                   },
                 );
               }
+              winit::keyboard::KeyCode::KeyG => {
+                let scene_id = self.app_state.scene_id;
+                if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
+                  let read_ctx = scene_ctx.read();
+                  let grid_entity = read_ctx
+                    .scene
+                    .query1_first_res(|_, _g: &GridComponent| Some(()))
+                    .map(|(_, e)| e)
+                    .unwrap();
+                  if read_ctx.scene.has_component::<HiddenComponent>(grid_entity).into() {
+                    let _ = read_ctx.scene.remove_component::<HiddenComponent>(grid_entity);
+                  } else {
+                    let _ = read_ctx
+                      .scene
+                      .add_component::<HiddenComponent>(grid_entity, HiddenComponent {});
+                  }
+                }
+              }
               winit::keyboard::KeyCode::KeyH => {
                 let scene_id = self.app_state.scene_id;
                 if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
                   let read_ctx = scene_ctx.read();
-                  let current = read_ctx
-                    .outlines_enabled
-                    .load(std::sync::atomic::Ordering::Relaxed);
-                  read_ctx
-                    .outlines_enabled
-                    .store(!current, std::sync::atomic::Ordering::Relaxed);
+                  let current =
+                    read_ctx.outlines_enabled.load(std::sync::atomic::Ordering::Relaxed);
+                  read_ctx.outlines_enabled.store(!current, std::sync::atomic::Ordering::Relaxed);
                 }
               }
               winit::keyboard::KeyCode::KeyA | winit::keyboard::KeyCode::KeyD => {
@@ -614,14 +1087,14 @@ impl test_utils::app::App for SimApp {
                   let read_ctx = scene_ctx.read();
                   let mut entities: Vec<aethervk_core_rlib::scene::EntityId> = Vec::new();
 
-                  read_ctx
+                  let res = read_ctx
                     .scene
-                    .query1_first_res::<aethervk_core_rlib::scene::PhysicalMeshComponent, _, _>(
-                      |id, _| {
-                        entities.push(id);
-                        None::<()>
-                      },
+                    .query1_res::<aethervk_core_rlib::scene::PhysicalMeshComponent, _, ()>(
+                      |_id, _| Some(()),
                     );
+                  for (_, id) in res {
+                    entities.push(id);
+                  }
 
                   entities.sort_by_key(|e| *e);
 
@@ -696,25 +1169,30 @@ impl test_utils::app::App for SimApp {
   fn on_mouse_motion(&mut self, delta: (f64, f64)) {
     let ctx = &self.app_state.ctx;
     let scene = ctx.get_scene(self.app_state.scene_id).unwrap();
-    let camera_entity = scene
-      .read()
-      .get_entity(self.app_state.camera_entity)
-      .unwrap();
+    let camera_entity = scene.read().get_entity(self.app_state.camera_entity).unwrap();
 
     let logic_command = if self.middle_mouse_button_down {
       if self.ctrl_down {
-        Some(structs::LogicCommand::ZoomCamera(structs::ZoomCamera {
-          camera_entity,
-          scene: scene.clone(),
-          amount: delta.1 as f32,
-        }))
+        Some(
+          aethervk_core_rlib::simulation_api::structs::LogicCommand::ZoomCamera(
+            aethervk_core_rlib::simulation_api::structs::ZoomCamera {
+              camera_entity,
+              scene: scene.clone(),
+              amount: (delta.1 * 0.1) as f32,
+            },
+          ),
+        )
       } else {
-        Some(structs::LogicCommand::RotateCamera(structs::RotateCamera {
-          camera_entity,
-          scene: scene.clone(),
-          delta_x: delta.0 as f32,
-          delta_y: delta.1 as f32,
-        }))
+        Some(
+          aethervk_core_rlib::simulation_api::structs::LogicCommand::RotateCamera(
+            aethervk_core_rlib::simulation_api::structs::RotateCamera {
+              camera_entity,
+              scene: scene.clone(),
+              delta_x: delta.0 as f32,
+              delta_y: delta.1 as f32,
+            },
+          ),
+        )
       }
     } else if self.right_mouse_button_down {
       Some(structs::LogicCommand::PanCursor(structs::PanCursor {
@@ -737,58 +1215,12 @@ impl test_utils::app::App for SimApp {
   }
 
   fn on_redraw(&mut self) {
-    let size = self.app_state.window.as_ref().unwrap().inner_size();
-    let console_open_progress = self.app_state.console_open_progress;
-    let console_scroll_offset = self.app_state.console_scroll_offset;
-    let command_history = self.app_state.command_history.clone();
-    let current_command = self.app_state.current_command.clone();
-
-    let callback = {
-      let atlas = { self.app_state.font_atlas.lock().unwrap().take() };
-      let current_custom_data = self.app_state.cycle_first_free_render_custom_data();
-      assert_eq!(
-        current_custom_data
-          .mt_sent_not_received
-          .load(std::sync::atomic::Ordering::Relaxed),
-        false
-      );
-
-      current_custom_data.console_open_progress = console_open_progress;
-      current_custom_data.console_scroll_offset = console_scroll_offset;
-      current_custom_data.command_history = command_history;
-      current_custom_data.current_command = current_command;
-      current_custom_data.font_atlas = atlas;
-      current_custom_data.size = size;
-      current_custom_data
-        .mt_sent_not_received
-        .store(true, std::sync::atomic::Ordering::Relaxed);
-
-      current_custom_data.make_callback()
-    };
-
-    let ctx = &self.app_state.ctx;
-    if let Ok(task) = ctx.render_tick_custom(
-      self.app_state.presentation_engine,
-      self.app_state.scene_id,
-      [size.width, size.height],
-      Some(callback),
-    ) {
-      self.last_render_tick_task = Some(task);
-    }
+    // Rendering is now handled in on_about_to_wait via play_control
   }
 
   fn on_about_to_wait(&mut self) {
-    self.app_state.ctx.govern_frame_rate_and_tasks(
-      &mut self.last_sim_tick_task,
-      &mut self.last_render_tick_task,
-      &mut self.last_frame_start_time,
-      16_667,
-    );
-
     let current_time = std::time::Instant::now();
-    let delta_time = current_time
-      .duration_since(self.last_sim_time)
-      .as_secs_f64();
+    let delta_time = current_time.duration_since(self.last_sim_time).as_secs_f64();
     self.last_sim_time = current_time;
 
     let dt = delta_time as f32;
@@ -804,13 +1236,26 @@ impl test_utils::app::App for SimApp {
       }
     }
 
-    let ctx = &self.app_state.ctx;
-    if let Ok(task) = ctx.simulation_tick(self.app_state.scene_id, delta_time) {
-      self.last_sim_tick_task = Some(task);
+    if self.app_state.window.is_none() {
+      return;
     }
 
-    if let Some(w) = self.app_state.window.as_ref() {
-      w.request_redraw();
+    let size = self.app_state.window.as_ref().unwrap().inner_size();
+    let console_open_progress = self.app_state.console_open_progress;
+    let console_scroll_offset = self.app_state.console_scroll_offset;
+    let command_history = self.app_state.command_history.clone();
+    let current_command = self.app_state.current_command.clone();
+
+    let should_render = size.width > 0 && size.height > 0;
+
+    if should_render {
+      let mut lock = self.app_state.custom_data.lock().unwrap();
+      lock.console_open_progress = console_open_progress;
+      lock.console_scroll_offset = console_scroll_offset;
+      lock.command_history = command_history;
+      lock.current_command = current_command;
+      lock.size = size;
+      // We don't tick here, logic thread ticks autonomously
     }
   }
 }
@@ -823,57 +1268,15 @@ struct CustomRenderData {
   current_command: String,
   font_atlas: Option<FontAtlas>,
   size: winit::dpi::PhysicalSize<u32>,
-  rt_in_use: AtomicBool,
-  rt_first_in_use: AtomicBool,
-  mt_sent_not_received: AtomicBool,
 }
 
 impl CustomRenderData {
-  fn make_callback(&mut self) -> CustomRenderCallback {
+  fn make_callback(&mut self, arc_self: Arc<std::sync::Mutex<Self>>) -> CustomRenderCallback {
     CustomRenderCallback {
       after_render_frame_fn: ui_custom_render_fn,
       on_first_render_fn: first_render_update_atlas,
-      user_data: SendPtrMut(self as *mut Self as *mut core::ffi::c_void),
+      user_data: SendPtrMut(Arc::into_raw(arc_self) as *mut core::ffi::c_void),
     }
-  }
-
-  fn is_free_relaxed(&self) -> bool {
-    !self.rt_in_use.load(std::sync::atomic::Ordering::Relaxed)
-      && !self
-        .rt_first_in_use
-        .load(std::sync::atomic::Ordering::Relaxed)
-      && !self
-        .mt_sent_not_received
-        .load(std::sync::atomic::Ordering::Relaxed)
-  }
-
-  fn is_free_acquire(&self) -> bool {
-    !self.rt_in_use.load(std::sync::atomic::Ordering::Acquire)
-      && !self
-        .rt_first_in_use
-        .load(std::sync::atomic::Ordering::Acquire)
-      && !self
-        .mt_sent_not_received
-        .load(std::sync::atomic::Ordering::Acquire)
-  }
-}
-
-struct AtomicCounterGuard<'a> {
-  value: &'a AtomicBool,
-}
-
-impl<'a> AtomicCounterGuard<'a> {
-  fn new(value: &'a AtomicBool) -> Self {
-    value.store(true, std::sync::atomic::Ordering::Release);
-    Self { value }
-  }
-}
-
-impl<'a> Drop for AtomicCounterGuard<'a> {
-  fn drop(&mut self) {
-    self
-      .value
-      .store(false, std::sync::atomic::Ordering::Release);
   }
 }
 
@@ -887,11 +1290,8 @@ fn first_render_update_atlas(
   _render_scene: &aethervk_core_rlib::gpu::RenderScene,
   user_data: *mut core::ffi::c_void,
 ) -> GpuResult<()> {
-  let data = unsafe { &mut *(user_data as *mut CustomRenderData) };
-  let _use_guard = AtomicCounterGuard::new(&data.rt_first_in_use);
-  data
-    .mt_sent_not_received
-    .store(false, std::sync::atomic::Ordering::Relaxed);
+  let data_mutex = unsafe { &*(user_data as *const std::sync::Mutex<CustomRenderData>) };
+  let mut data = data_mutex.lock().unwrap();
 
   if let Some(atlas) = data.font_atlas.take() {
     let font_hash = atlas.hash_metadata();
@@ -909,17 +1309,18 @@ fn ui_custom_render_fn(
   render_scene: &aethervk_core_rlib::gpu::RenderScene,
   user_data: *mut core::ffi::c_void,
 ) -> GpuResult<()> {
-  let data = unsafe { &mut *(user_data as *mut CustomRenderData) };
-  let _use_guard = AtomicCounterGuard::new(&data.rt_in_use);
-  data
-    .mt_sent_not_received
-    .store(false, std::sync::atomic::Ordering::Relaxed);
+  let data_mutex = unsafe { &*(user_data as *const std::sync::Mutex<CustomRenderData>) };
+  let data = data_mutex.lock().unwrap();
+
   let size = data.size;
   let screen_extent = [size.width as f32, size.height as f32];
   let font_id = (
     FONT_HASH.load(std::sync::atomic::Ordering::Relaxed),
     FONT_INTERNAL.load(std::sync::atomic::Ordering::Relaxed),
   );
+  if font_id.0 == 0 {
+    panic!("font_id is 0! first_render_update_atlas wasn't called?");
+  }
 
   if !render_scene.measurement_calls.is_empty() {
     let _ = device
@@ -948,7 +1349,7 @@ fn ui_custom_render_fn(
         let ndc_x = (screen_x / screen_extent[0]) * 2.0 - 1.0;
         let ndc_y = (screen_y / screen_extent[1]) * 2.0 - 1.0;
 
-        let _ = device.render_text(
+        if let Err(e) = device.render_text(
           cmd_buffer,
           &text,
           [ndc_x, ndc_y],
@@ -956,7 +1357,9 @@ fn ui_custom_render_fn(
           font_id,
           m.points,
           [1.0, 1.0, 1.0, 1.0],
-        );
+        ) {
+          println!("Render text error: {:?}", e);
+        }
       }
     }
   }
@@ -979,18 +1382,11 @@ fn ui_custom_render_fn(
     let mut console_text = String::new();
     let max_lines = 12;
     let history_len = data.command_history.len();
-    let scroll = data
-      .console_scroll_offset
-      .min(history_len.saturating_sub(max_lines));
+    let scroll = data.console_scroll_offset.min(history_len.saturating_sub(max_lines));
     let start_idx = history_len.saturating_sub(max_lines + scroll);
     let end_idx = history_len.saturating_sub(scroll);
 
-    for cmd in data
-      .command_history
-      .iter()
-      .skip(start_idx)
-      .take(end_idx - start_idx)
-    {
+    for cmd in data.command_history.iter().skip(start_idx).take(end_idx - start_idx) {
       console_text.push_str(cmd);
       console_text.push('\n');
     }
@@ -1001,7 +1397,7 @@ fn ui_custom_render_fn(
     let _ = device
       .prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer, presentation_engine_handle);
 
-    let _ = device.render_text(
+    if let Err(e) = device.render_text(
       cmd_buffer,
       &console_text,
       [-0.98, text_start_y],
@@ -1009,13 +1405,15 @@ fn ui_custom_render_fn(
       font_id,
       14.0,
       [0.8, 0.8, 0.8, 1.0],
-    );
+    ) {
+      println!("Render text error console: {:?}", e);
+    }
 
     let mut prompt_text = String::from("> ");
     prompt_text.push_str(&data.current_command);
     prompt_text.push('_');
 
-    let _ = device.render_text(
+    if let Err(e) = device.render_text(
       cmd_buffer,
       &prompt_text,
       [-0.98, prompt_y],
@@ -1023,8 +1421,319 @@ fn ui_custom_render_fn(
       font_id,
       16.0,
       [1.0, 1.0, 0.2, 1.0],
-    );
+    ) {
+      println!("Render text error prompt: {:?}", e);
+    }
   }
 
   Ok(())
+}
+
+#[cfg(test)]
+mod depth_tests {
+  use super::*;
+  use aethervk_core_rlib::simulation::comet::{TexelFormat, Texture};
+  use aethervk_core_rlib::simulation_api::components_api::CameraParams;
+  use std::sync::atomic::{AtomicU64, Ordering};
+
+  static LAST_RENDER_TASK_ID: AtomicU64 = AtomicU64::new(0);
+
+  extern "C" fn render_callback_impl(_scene_id: u64, _pe_id: u64, render_generation: u64) {
+    LAST_RENDER_TASK_ID.store(render_generation, Ordering::Release);
+  }
+
+  fn debug_color(color: [f32; 3]) -> Option<Texture> {
+    let u8_color = vec![
+      (color[0] * 255.0).clamp(0.0, 255.0) as u8,
+      (color[1] * 255.0).clamp(0.0, 255.0) as u8,
+      (color[2] * 255.0).clamp(0.0, 255.0) as u8,
+      255,
+    ];
+    Some(Texture {
+      data: u8_color,
+      format: TexelFormat::R8G8B8A8_UNORM,
+      width: 1,
+      height: 1,
+      has_mipmaps: false,
+    })
+  }
+
+  fn setup_test_scene(name: &str, front_emissive: bool, back_emissive: bool, test_outlines: bool) {
+    LAST_RENDER_TASK_ID.store(0, Ordering::Release);
+    let mut home_dir = std::env::current_exe().unwrap();
+    let mut iter = 0;
+    while !home_dir.join("assets").is_dir() && iter < 32 {
+      home_dir.pop();
+      iter += 1;
+    }
+    let assets_dir = home_dir.join("assets");
+    aethervk_core_rlib::simulation_api::SimulationContext::set_asset_path(
+      assets_dir.to_str().unwrap(),
+    );
+
+    fn panic_cb(msg: &str) {
+      panic!("{}", msg);
+    }
+    let mut ctx_box =
+      SimulationContext::startup(gpu::VULKAN_RENDER_BACKEND, Some(panic_cb)).unwrap();
+    let ctx = ctx_box.as_mut();
+
+    let scene_id = ctx.create_empty_scene().unwrap();
+    let width = 64;
+    let height = 64;
+    let _pe = ctx.create_presentation_engine(scene_id, width, height).unwrap();
+
+    // Add a sun so non-emissive meshes are visible
+    let sun_entity = ctx.spawn_entity(scene_id, "sun").unwrap();
+    ctx
+      .add_transform_component(
+        scene_id,
+        sun_entity,
+        Vec3f32::from_components(0.0, 0.0, 100.0),
+        Quat::identity(),
+        Vec3f32::from_components(1.0, 1.0, 1.0),
+      )
+      .unwrap();
+    ctx.add_sun_component(scene_id, sun_entity, (128, 128, 128)).unwrap();
+    {
+      let scene_data_opt = ctx.get_scene(scene_id).unwrap();
+      let mut write_scene_context = scene_data_opt.write();
+      let sun_entity = write_scene_context.get_entity(sun_entity).unwrap();
+      write_scene_context.sun_entity = Some(sun_entity);
+    }
+
+    let ext_red = ctx.spawn_procedural_sphere(scene_id, std::ptr::null(), 5.0).unwrap();
+    let int_red = ctx.get_scene(scene_id).unwrap().read().get_entity(ext_red).unwrap();
+    let red_pos = Vec3f32::from_components(-2.0, -10.0, -2.0);
+    ctx
+      .set_transform_component(
+        scene_id,
+        ext_red,
+        red_pos,
+        Quat::identity(),
+        Vec3f32::from_components(1.0, 1.0, 1.0),
+      )
+      .unwrap();
+    ctx.get_scene(scene_id).unwrap().write().scene.with_component_mut(
+      int_red,
+      |c: &mut aethervk_core_rlib::scene::PhysicalMeshComponent| {
+        c.emissive_color = [1.0, 0.0, 0.0];
+        c.emissive_intensity = if front_emissive { 1.0 } else { 0.0 };
+        // set albedo so sun light works
+        if let Some(mesh) = Arc::get_mut(&mut c.mesh) {
+          mesh.albedo_map = debug_color([1.0, 0.0, 0.0]);
+        }
+      },
+    );
+
+    if test_outlines {
+      ctx.set_entity_selected(scene_id, ext_red, true).unwrap();
+      ctx.get_scene(scene_id).unwrap().read().outlines_enabled.store(true, Ordering::Relaxed);
+    } else {
+      ctx.get_scene(scene_id).unwrap().read().outlines_enabled.store(false, Ordering::Relaxed);
+    }
+
+    let ext_blue = ctx.spawn_procedural_sphere(scene_id, std::ptr::null(), 5.0).unwrap();
+    let int_blue = ctx.get_scene(scene_id).unwrap().read().get_entity(ext_blue).unwrap();
+    let blue_pos = Vec3f32::from_components(2.0, -20.0, 2.0);
+    ctx
+      .set_transform_component(
+        scene_id,
+        ext_blue,
+        blue_pos,
+        Quat::identity(),
+        Vec3f32::from_components(1.0, 1.0, 1.0),
+      )
+      .unwrap();
+    ctx.get_scene(scene_id).unwrap().write().scene.with_component_mut(
+      int_blue,
+      |c: &mut aethervk_core_rlib::scene::PhysicalMeshComponent| {
+        c.emissive_color = [0.0, 0.0, 1.0];
+        c.emissive_intensity = if back_emissive { 1.0 } else { 0.0 };
+        if let Some(mesh) = Arc::get_mut(&mut c.mesh) {
+          mesh.albedo_map = debug_color([0.0, 0.0, 1.0]);
+        }
+      },
+    );
+
+    let cam_entity = ctx.get_scene(scene_id).unwrap().read().active_camera_entity.unwrap();
+    let ext_cam = ctx
+      .get_scene(scene_id)
+      .unwrap()
+      .read()
+      .entity_map
+      .iter()
+      .find(|(_, v)| **v == cam_entity)
+      .unwrap()
+      .0
+      .clone();
+    ctx
+      .set_transform_component(
+        scene_id,
+        ext_cam,
+        Vec3f32::from_components(0.0, 0.0, 0.0),
+        Quat::identity(),
+        Vec3f32::from_components(1.0, 1.0, 1.0),
+      )
+      .unwrap();
+    ctx
+      .set_camera_component(
+        scene_id,
+        ext_cam,
+        CameraParams::new_orthographic(-10.0, 10.0, -10.0, 10.0, 0.1, 100.0),
+      )
+      .unwrap();
+
+    SimulationContext::set_render_callback(Some(render_callback_impl));
+
+    let _ =
+      ctx.threads.logic_thread.tx().try_send(
+        aethervk_core_rlib::simulation_api::structs::LogicCommand::PlayScene { scene_id },
+      );
+
+    let mut attempts = 0;
+    let mut task_id = 0;
+    while attempts < 100 {
+      task_id = LAST_RENDER_TASK_ID.load(Ordering::Acquire);
+      if task_id != 0 {
+        break;
+      }
+      aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(
+        10,
+      ));
+      attempts += 1;
+    }
+
+    assert!(task_id > 0, "Render task was never completed");
+
+    let mut status = ctx.get_task_status(task_id);
+    attempts = 0;
+    while matches!(status, structs::TaskStatusCode::Pending) && attempts < 50 {
+      aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(
+        10,
+      ));
+      status = ctx.get_task_status(task_id);
+      attempts += 1;
+    }
+
+    assert!(
+      matches!(status, structs::TaskStatusCode::Completed),
+      "Render task did not complete successfully"
+    );
+
+    let mut buffer = vec![0u8; (width * height * 4) as usize];
+    let success = ctx.download_image(task_id, buffer.as_mut_ptr(), buffer.len());
+    assert!(success, "Download image failed");
+
+    let mut img = image::ImageBuffer::new(width, height);
+    for (x, y, pixel) in img.enumerate_pixels_mut() {
+      let idx = ((y * width + x) * 4) as usize;
+      let b = buffer[idx];
+      let g = buffer[idx + 1];
+      let r = buffer[idx + 2];
+      let a = buffer[idx + 3];
+      *pixel = image::Rgba([r, g, b, a]);
+    }
+    let out_path = assets_dir.join(format!("../test_output_{}.png", name));
+    img.save(&out_path).expect("Failed to save debug image");
+
+    // X=-2, Y=-2 -> NDC ~ (-0.2, -0.2) -> pixel ~ (25, 25)
+    // Red sphere overlaps here natively
+    let r_idx = ((25 * width + 25) * 4) as usize;
+    let b_r = buffer[r_idx];
+    let g_r = buffer[r_idx + 1];
+    let r_r = buffer[r_idx + 2];
+    assert!(
+      r_r > 50 && b_r < 50 && g_r < 50,
+      "({name}) Red sphere area should be red, found r:{}, g:{}, b:{}",
+      r_r,
+      g_r,
+      b_r
+    );
+
+    // X=2, Y=2 -> NDC ~ (0.2, 0.2) -> pixel ~ (38, 38)
+    // Blue sphere overlaps here natively (unoccluded)
+    let b_idx = ((38 * width + 38) * 4) as usize;
+    let b_b = buffer[b_idx];
+    let g_b = buffer[b_idx + 1];
+    let r_b = buffer[b_idx + 2];
+    assert!(
+      b_b > 50 && r_b < 50 && g_b < 50,
+      "({name}) Blue sphere area should be blue, found r:{}, g:{}, b:{}",
+      r_b,
+      g_b,
+      b_b
+    );
+
+    // Center (0,0) -> NDC (0,0) -> pixel (32, 32)
+    // Both overlap, red is in front. So it should be red.
+    let center_idx = ((32 * width + 32) * 4) as usize;
+    let b_c = buffer[center_idx];
+    let g_c = buffer[center_idx + 1];
+    let r_c = buffer[center_idx + 2];
+    assert!(
+      r_c > 50 && b_c < 50 && g_c < 50,
+      "({name}) Center pixel (overlap) should be red, found r:{}, g:{}, b:{}",
+      r_c,
+      g_c,
+      b_c
+    );
+
+    if test_outlines {
+      // Outline is drawn around the red sphere.
+      // Sphere at (-2, -2). Radius 5. Edge around X = -7. -> NDC X = -0.7. pixel X ~ 9.
+      let left_edge_idx = ((25 * width + 8) * 4) as usize;
+      let b_ol = buffer[left_edge_idx];
+      let g_ol = buffer[left_edge_idx + 1];
+      let r_ol = buffer[left_edge_idx + 2];
+
+      // Outline default is Yellow (r > 0, g > 0, b < 50)
+      assert!(
+        r_ol > 100 && g_ol > 100 && b_ol < 50,
+        "({name}) Outline pixel should be yellow, found r:{}, g:{}, b:{}",
+        r_ol,
+        g_ol,
+        b_ol
+      );
+
+      // Verify outline doesn't render ON the red sphere (e.g. at its center X=25, Y=25)
+      assert!(
+        g_r < 50,
+        "({name}) Outline should not render inside the red sphere, but found G={}",
+        g_r
+      );
+    }
+    
+    ctx.destroy_presentation_engine(scene_id, _pe).unwrap();
+  }
+
+  #[test]
+  fn test_depth_emissive_emissive() {
+    setup_test_scene("depth_ee", true, true, false);
+  }
+
+  #[test]
+  fn test_depth_emissive_nonemissive() {
+    setup_test_scene("depth_en", true, false, false);
+  }
+
+  #[test]
+  fn test_depth_nonemissive_emissive() {
+    setup_test_scene("depth_ne", false, true, false);
+  }
+
+  #[test]
+  fn test_depth_nonemissive_nonemissive() {
+    setup_test_scene("depth_nn", false, false, false);
+  }
+
+  #[test]
+  fn test_outline_emissive() {
+    setup_test_scene("outline_e", true, false, true);
+  }
+
+  #[test]
+  fn test_outline_nonemissive() {
+    setup_test_scene("outline_n", false, false, true);
+  }
 }

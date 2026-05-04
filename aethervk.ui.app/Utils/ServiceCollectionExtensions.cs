@@ -13,7 +13,7 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<IUiThreadDispatcher, AvaloniaUiThreadDispatcher>();
     collection.AddSingleton<IWindowService, AvaloniaWindowService>();
     collection.AddSingleton<IFileDialogService, AvaloniaFileDialogService>();
-    collection.AddSingleton<IViewModelFactory, ViewModelFactory>();
+    collection.AddSingleton<ITabFactory, TabFactory>();
 
     collection.AddSingleton<ConsoleService>();
     collection.AddSingleton<BreadcrumbService>();
@@ -29,5 +29,16 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<DockingManagerViewModel>();
     collection.AddSingleton<MainWindowViewModel>();
     collection.AddTransient<SplashViewModel>();
+
+    // Tabs
+    collection.AddTransient<UITestPanelViewModel>();
+    collection.AddTransient<ConsoleViewModel>();
+    collection.AddTransient<DebugUiViewModel>();
+    collection.AddTransient<HorizonJplViewModel>();
+    collection.AddTransient<TimelineViewModel>();
+    collection.AddTransient<AlmanacExplorerViewModel>();
+    collection.AddTransient<Viewport3DViewModel>();
+    collection.AddTransient<OutlineViewModel>();
+    collection.AddTransient<PropertiesViewModel>();
   }
 }

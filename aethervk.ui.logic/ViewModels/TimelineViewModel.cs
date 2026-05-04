@@ -13,6 +13,9 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   private bool _isDragging;
 
   [ObservableProperty]
+  private ulong _currentSceneId;
+
+  [ObservableProperty]
   private string _utcTime = "Loading...";
 
   [ObservableProperty]
@@ -24,10 +27,11 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   [ObservableProperty]
   private double _maxTai = 100;
 
-  public TimelineViewModel(NativeRuntimeService runtimeService)
+  public TimelineViewModel(ulong sceneId, NativeRuntimeService runtimeService)
     : base("Timeline")
   {
     _runtimeService = runtimeService;
+    CurrentSceneId = sceneId;
     _timer = new Timer(UpdateFromRuntime, null, 33, 33);
   }
 
@@ -38,7 +42,7 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
 
     if (MinTai == 0 && MaxTai == 100)
     {
-      if (_runtimeService.GetEpochLimits(out double min, out double max))
+      if (_runtimeService.GetEpochLimits(CurrentSceneId, out double min, out double max))
       {
         MinTai = min;
         MaxTai = max;
@@ -47,10 +51,10 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
 
     if (!_isDragging)
     {
-      TimeTai = _runtimeService.GetSimulationTime();
+      TimeTai = _runtimeService.GetSimulationTime(CurrentSceneId);
     }
 
-    UtcTime = _runtimeService.GetSimulationTimeUtc();
+    UtcTime = _runtimeService.GetSimulationTimeUtc(CurrentSceneId);
   }
 
   public void BeginDrag()
@@ -63,7 +67,7 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
     _isDragging = false;
     if (_runtimeService.IsInitialized)
     {
-      _runtimeService.SetSimulationTime(TimeTai);
+      _runtimeService.SetSimulationTime(CurrentSceneId, TimeTai);
     }
   }
 
@@ -71,7 +75,7 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   {
     if (_isDragging && _runtimeService.IsInitialized)
     {
-      _runtimeService.SetSimulationTime(value);
+      _runtimeService.SetSimulationTime(CurrentSceneId, value);
     }
   }
 
@@ -80,7 +84,11 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   {
     if (uint.TryParse(speedStr, out uint speed) && _runtimeService.IsInitialized)
     {
-      _runtimeService.SetTimeScale(speed);
+      _runtimeService.SetTimeScale(CurrentSceneId, speed);
+      if (speed == 0)
+        _runtimeService.PauseScene(CurrentSceneId);
+      else
+        _runtimeService.PlayScene(CurrentSceneId);
     }
   }
 

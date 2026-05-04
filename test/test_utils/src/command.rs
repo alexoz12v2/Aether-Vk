@@ -34,8 +34,8 @@ impl<T> CommandRegistry<T> {
   }
 }
 
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
 use aethervk_oshal_rlib::math::vector::Vector3;
+use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
 use winit::keyboard::KeyCode;
 
 pub fn get_camera_movement_axis(keycode: KeyCode) -> Option<Vec3f32> {
@@ -49,4 +49,3 @@ pub fn get_camera_movement_axis(keycode: KeyCode) -> Option<Vec3f32> {
     _ => None,
   }
 }
-

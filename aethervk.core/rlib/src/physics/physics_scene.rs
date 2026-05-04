@@ -1,8 +1,8 @@
-use crate::scene::{Scene, EntityId};
 use crate::math::collision::linear_bvh::{LinearBVH, LinearBVHHeader, LinearBVHNode, LinearBound};
+use crate::scene::{EntityId, Scene};
 use aethervk_oshal_rlib::math::{
   matrix::{Matrix4, mat4::Mat4x4f32},
-  vector::{vec3::Vec3f32, Vector, Vector3},
+  vector::{Vector, Vector3, vec3::Vec3f32},
 };
 
 pub mod math;
@@ -89,10 +89,11 @@ impl PhysicsScene {
     for (_, bound) in &instances[1..] {
       match bound {
         LinearBound::AABB(aabb) => aggregate_aabb.encapsulate_aabb::<Vec3f32>(aabb),
-        LinearBound::OBB(obb) => aggregate_aabb.encapsulate_aabb::<Vec3f32>(&obb.to_aabb::<Vec3f32>()),
+        LinearBound::OBB(obb) => {
+          aggregate_aabb.encapsulate_aabb::<Vec3f32>(&obb.to_aabb::<Vec3f32>())
+        }
       }
     }
-
 
     // Placeholder
     nodes.push(LinearBVHNode {
@@ -143,9 +144,7 @@ impl PhysicsScene {
           LinearBound::AABB(aabb) => aabb.center(),
           LinearBound::OBB(obb) => obb.translation(),
         };
-        ca[axis]
-          .partial_cmp(&cb[axis])
-          .unwrap_or(core::cmp::Ordering::Equal)
+        ca[axis].partial_cmp(&cb[axis]).unwrap_or(core::cmp::Ordering::Equal)
       });
 
       let mid = instances.len() / 2;

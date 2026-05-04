@@ -1,0 +1,105 @@
+#version 450 core
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_KHR_shader_subgroup_basic : require
+
+// ============================================================================
+// Phase 5: Particle Explicit Final Kick & Next Force Evaluation
+// ============================================================================
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// Use specialization constant for subgroup size
+layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
+
+// AOSOA Block Layout flattened into a 1D array
+// 10 attributes per particle block:
+// px, py, pz, vx, vy, vz, mass, fx, fy, fz
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleData {
+    float data[];
+};
+
+// AOS Emitter data
+struct ForceEmitter {
+    vec3 position;
+    float mu; // G * M
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer EmitterArray {
+    ForceEmitter emitters[];
+};
+
+layout(push_constant, scalar) uniform PushConstants {
+    ParticleData particles;
+    EmitterArray emitters;
+    float dt;
+    uint total_particles;
+    uint num_emitters;
+} pc;
+
+void main() {
+    uint global_id = gl_GlobalInvocationID.x;
+    if (global_id >= pc.total_particles) {
+        return;
+    }
+
+    uint block_idx = global_id / SUBGROUP_SIZE;
+    uint local_idx = global_id % SUBGROUP_SIZE;
+
+    uint stride = 10 * SUBGROUP_SIZE;
+    uint base = block_idx * stride + local_idx;
+
+    float mass = pc.particles.data[base + 6 * SUBGROUP_SIZE];
+    if (mass <= 0.0) return;
+
+    float inv_mass = 1.0 / mass;
+    float half_dt = pc.dt * 0.5;
+
+    // Load velocity (v_{n+1/2}) and position (q_mid)
+    vec3 v_half = vec3(
+        pc.particles.data[base + 3 * SUBGROUP_SIZE],
+        pc.particles.data[base + 4 * SUBGROUP_SIZE],
+        pc.particles.data[base + 5 * SUBGROUP_SIZE]
+    );
+
+    vec3 q_mid = vec3(
+        pc.particles.data[base + 0 * SUBGROUP_SIZE],
+        pc.particles.data[base + 1 * SUBGROUP_SIZE],
+        pc.particles.data[base + 2 * SUBGROUP_SIZE]
+    );
+
+    // Phase 5: Second Drift
+    // q_{n+1} = q_mid + (h/2) * v_{n+1/2}
+    vec3 q_next = q_mid + v_half * half_dt;
+
+    // Evaluate Forces at q_{n+1}
+    vec3 f_next = vec3(0.0);
+    for (uint e = 0; e < pc.num_emitters; ++e) {
+        ForceEmitter em = pc.emitters.emitters[e];
+        vec3 r = em.position - q_next;
+        float dist_sq = dot(r, r);
+        if (dist_sq > 1e-6) {
+            float dist = sqrt(dist_sq);
+            f_next += r * (em.mu * mass / (dist_sq * dist));
+        }
+    }
+
+    // Final Kick
+    // v_{n+1} = v_{n+1/2} + (h/2) * M^{-1} * F_{n+1}
+    vec3 v_next = v_half + (f_next * inv_mass) * half_dt;
+
+    // Write back q_{n+1} and v_{n+1}
+    pc.particles.data[base + 0 * SUBGROUP_SIZE] = q_next.x;
+    pc.particles.data[base + 1 * SUBGROUP_SIZE] = q_next.y;
+    pc.particles.data[base + 2 * SUBGROUP_SIZE] = q_next.z;
+
+    pc.particles.data[base + 3 * SUBGROUP_SIZE] = v_next.x;
+    pc.particles.data[base + 4 * SUBGROUP_SIZE] = v_next.y;
+    pc.particles.data[base + 5 * SUBGROUP_SIZE] = v_next.z;
+
+    // VERY IMPORTANT: Write F_{n+1} into the force buffer
+    // This prepares the buffer perfectly for Phase 1 of the next integration tick.
+    pc.particles.data[base + 7 * SUBGROUP_SIZE] = f_next.x;
+    pc.particles.data[base + 8 * SUBGROUP_SIZE] = f_next.y;
+    pc.particles.data[base + 9 * SUBGROUP_SIZE] = f_next.z;
+}

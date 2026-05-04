@@ -12,21 +12,21 @@ namespace AetherVk.Logic.Tests;
 [CollectionDefinition("Non-Parallel Collection", DisableParallelization = true)]
 public class DockingManagerViewModelTests : IDisposable
 {
-  private readonly Mock<IViewModelFactory> _mockFactory;
+  private readonly Mock<ITabFactory> _mockFactory;
 
   public DockingManagerViewModelTests()
   {
-    _mockFactory = new Mock<IViewModelFactory>();
-    _mockFactory.Setup(f => f.CreateViewModel("UITestPanel")).Returns(new UITestPanelViewModel());
-    _mockFactory.Setup(f => f.CreateViewModel("Console")).Returns(new ConsoleViewModel(new ConsoleService(new Mock<IUiThreadDispatcher>().Object)));
-    _mockFactory.Setup(f => f.CreateViewModel("Viewport3D")).Returns(new DebugUiViewModel());
-    _mockFactory.Setup(f => f.CreateViewModel("Outline")).Returns(new DebugUiViewModel());
-    _mockFactory.Setup(f => f.CreateViewModel("Properties")).Returns(new DebugUiViewModel());
+    _mockFactory = new Mock<ITabFactory>();
+    _mockFactory.Setup(f => f.CreateTab("UITestPanel")).Returns(new UITestPanelViewModel());
+    _mockFactory
+      .Setup(f => f.CreateTab("Console"))
+      .Returns(new ConsoleViewModel(new ConsoleService(new Mock<IUiThreadDispatcher>().Object)));
+    _mockFactory.Setup(f => f.CreateTab("Viewport3D")).Returns(new DebugUiViewModel());
+    _mockFactory.Setup(f => f.CreateTab("Outline")).Returns(new DebugUiViewModel());
+    _mockFactory.Setup(f => f.CreateTab("Properties")).Returns(new DebugUiViewModel());
   }
 
-  public void Dispose()
-  {
-  }
+  public void Dispose() { }
 
   [Fact]
   public void DockingManager_InitializesWithDefaultTab()

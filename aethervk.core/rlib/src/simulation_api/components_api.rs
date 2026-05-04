@@ -1,9 +1,9 @@
 use super::*;
-use crate::simulation_api::SimulationContext;
-use alloc::{vec::Vec, sync::Arc};
 use crate::scene::{AddComponentError, Marker};
-use oshal::os::fs;
+use crate::simulation_api::SimulationContext;
 use crate::{expect_scene, expect_scene_and_entity};
+use alloc::{sync::Arc, vec::Vec};
+use oshal::os::fs;
 
 impl SimulationContext {
   pub fn add_transform_component(
@@ -80,13 +80,9 @@ impl SimulationContext {
       "component_api:get_transform_component"
     );
     let transform =
-      scene
-        .read()
-        .scene
-        .global_transform(entity_id)
-        .ok_or(EngineError::InvalidOperation(
-          "component_api:get_transform_component couldn't compute global transform",
-        ))?;
+      scene.read().scene.global_transform(entity_id).ok_or(EngineError::InvalidOperation(
+        "component_api:get_transform_component couldn't compute global transform",
+      ))?;
     unsafe {
       if !pos_x.is_null() {
         *pos_x = transform.position.x();
@@ -151,12 +147,9 @@ impl SimulationContext {
     if (node_index as usize) < bvh_len {
       let mut dbg_opt = None;
       let _ =
-        scene
-          .read()
-          .scene
-          .with_component(entity_id, |dbg: &crate::scene::BvhDebugComponent| {
-            dbg_opt = Some(dbg.node_render_states.clone());
-          });
+        scene.read().scene.with_component(entity_id, |dbg: &crate::scene::BvhDebugComponent| {
+          dbg_opt = Some(dbg.node_render_states.clone());
+        });
 
       let mut states = match dbg_opt {
         Some(s) => s,

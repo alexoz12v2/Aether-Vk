@@ -22,6 +22,9 @@ public partial class Viewport3DView : UserControl
   private bool _isZoomDragging = false;
   private Avalonia.Point _lastPointerPos;
 
+  private DispatcherTimer? _resizeTimer;
+  private Avalonia.Size _pendingSize;
+
   public Viewport3DView()
   {
     InitializeComponent();
@@ -29,6 +32,44 @@ public partial class Viewport3DView : UserControl
     _livelinessTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
     _livelinessTimer.Tick += OnLivelinessTick;
     _livelinessTimer.Start();
+    
+    _resizeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+    _resizeTimer.Tick += OnResizeTimerTick;
+    
+    SizeChanged += OnSizeChanged;
+  }
+
+  private void OnSizeChanged(object? sender, SizeChangedEventArgs e)
+  {
+    _pendingSize = e.NewSize;
+    _resizeTimer?.Stop();
+    _resizeTimer?.Start();
+  }
+
+  private void OnResizeTimerTick(object? sender, EventArgs e)
+  {
+    _resizeTimer?.Stop();
+
+    if (_viewModel == null || _pendingSize.Width <= 0 || _pendingSize.Height <= 0) return;
+
+    uint newWidth = (uint)_pendingSize.Width;
+    uint newHeight = (uint)_pendingSize.Height;
+
+    if (newWidth == _viewModel.Width && newHeight == _viewModel.Height) return;
+
+    _viewModel.Width = newWidth;
+    _viewModel.Height = newHeight;
+
+    _bitmap = new WriteableBitmap(
+      new Avalonia.PixelSize((int)newWidth, (int)newHeight),
+      new Avalonia.Vector(96, 96),
+      PixelFormat.Bgra8888,
+      AlphaFormat.Opaque
+    );
+
+    RenderTargetImage.Source = _bitmap;
+
+    _viewModel.RuntimeService.ResizePresentationEngine(_viewModel.SceneId, _viewModel.PresentationEngineId, newWidth, newHeight);
   }
 
   private void OnLivelinessTick(object? sender, EventArgs e)
@@ -47,7 +88,7 @@ public partial class Viewport3DView : UserControl
   protected override void OnDataContextChanged(EventArgs e)
   {
     base.OnDataContextChanged(e);
-    
+
     if (_viewModel != null)
     {
       _viewModel.OnFrameReady -= HandleFrameReady;
@@ -94,16 +135,37 @@ public partial class Viewport3DView : UserControl
 
     _lastFrameTime = DateTime.Now;
 
-    // Lock the bitmap memory to allow native C++ code to write pixels
-    using (var frame = _bitmap.Lock())
+    nuint bufferSize = (nuint)(_viewModel.Width * _viewModel.Height * 4);
+    IntPtr unmanagedBuffer = System.Runtime.InteropServices.Marshal.AllocHGlobal((int)bufferSize);
+
+    try
     {
-      await _viewModel.CopyFrameToBuffer(
-        frame.Address,
-        (nuint)(_viewModel.Width * _viewModel.Height * 4)
-      );
+      await _viewModel.CopyFrameToBuffer(unmanagedBuffer, bufferSize);
+
+      await Dispatcher.UIThread.InvokeAsync(() =>
+      {
+        if (_bitmap != null)
+        {
+          using (var frame = _bitmap.Lock())
+          {
+            unsafe
+            {
+              System.Buffer.MemoryCopy(
+                unmanagedBuffer.ToPointer(),
+                frame.Address.ToPointer(),
+                bufferSize,
+                bufferSize
+              );
+            }
+          }
+          RenderTargetImage.InvalidateVisual();
+        }
+      });
     }
-    // Notify the Avalonia rendering system that the bitmap has been updated
-    Dispatcher.UIThread.Post(() => RenderTargetImage.InvalidateVisual());
+    finally
+    {
+      System.Runtime.InteropServices.Marshal.FreeHGlobal(unmanagedBuffer);
+    }
   }
 
   private void OnPointerPressed(object? sender, PointerPressedEventArgs e)

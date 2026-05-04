@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using AetherVk.Logic.Models;
 using AetherVk.Logic.Services;
+using CommunityToolkit.Mvvm.Messaging;
 using Xunit;
 
 namespace AetherVk.Logic.Tests
@@ -25,9 +26,16 @@ namespace AetherVk.Logic.Tests
       var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
 
       _stateManager = new SceneStateManager();
-      _service = new NativeRuntimeService(_stateManager, console, breadcrumb, dispatcherMock.Object);
+      _service = new NativeRuntimeService(
+        _stateManager,
+        console,
+        breadcrumb,
+        dispatcherMock.Object
+      );
       var baseDir = AppDomain.CurrentDomain.BaseDirectory;
-      _assetPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, "../../../../assets"));
+      _assetPath = System.IO.Path.GetFullPath(
+        System.IO.Path.Combine(baseDir, "../../../../assets")
+      );
     }
 
     public void Dispose()
@@ -60,8 +68,8 @@ namespace AetherVk.Logic.Tests
         _service.InitializeSimulationContext("Vulkan", _assetPath, false);
         Assert.True(_service.IsInitialized);
 
-        ulong peId = _service.CreatePresentationEngine(width, height);
         ulong sceneId = _service.CreateScene(true);
+        ulong peId = _service.CreatePresentationEngine(width, height, sceneId);
 
         ulong sphereId = _service.SpawnProceduralSphere(sceneId, "TestSphere", 1.0f);
         Assert.NotEqual(0ul, sphereId);
@@ -69,7 +77,21 @@ namespace AetherVk.Logic.Tests
         var camera = _service.GetEntityByName(sceneId, "camera");
         Assert.NotNull(camera);
 
-        ulong taskId = await _service.RenderTickAsync(peId, sceneId, camera!.Id, width, height);
+        TaskCompletionSource<ulong> tcs = new();
+        WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(this, (r, m) => {
+            tcs.TrySetResult(m.RenderGeneration);
+        });
+        _service.PlayScene(sceneId);
+        
+        ulong taskId;
+        try 
+        {
+            taskId = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            WeakReferenceMessenger.Default.Unregister<AetherVk.Logic.Messages.RenderFrameReadyMessage>(this);
+        }
 
         int bufferSize = (int)(width * height * 4);
         IntPtr bufferPtr = Marshal.AllocHGlobal(bufferSize);
@@ -113,8 +135,8 @@ namespace AetherVk.Logic.Tests
         const uint height = 256;
 
         _service.InitializeSimulationContext("Vulkan", _assetPath, false);
-        ulong peId = _service.CreatePresentationEngine(width, height);
         ulong sceneId = _service.CreateScene(true);
+        ulong peId = _service.CreatePresentationEngine(width, height, sceneId);
 
         var root = _stateManager.GetOrCreateScene(sceneId).RootEntities.FirstOrDefault();
         Assert.NotNull(root);
@@ -122,10 +144,23 @@ namespace AetherVk.Logic.Tests
         var firstCamera = _service.CreateCamera(sceneId, root!);
         var secondCamera = _service.CreateCamera(sceneId, root!);
 
-        Task t1 = _service.RenderTickAsync(peId, sceneId, firstCamera.Id, width, height);
-        Task t2 = _service.RenderTickAsync(peId, sceneId, secondCamera.Id, width, height);
+        TaskCompletionSource<ulong> tcs = new();
+        int msgCount = 0;
+        WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(this, (r, m) => {
+            msgCount++;
+            if (msgCount >= 2) tcs.TrySetResult(m.RenderGeneration);
+        });
+        
+        _service.PlayScene(sceneId);
 
-        await Task.WhenAll(t1, t2);
+        try 
+        {
+            await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            WeakReferenceMessenger.Default.Unregister<AetherVk.Logic.Messages.RenderFrameReadyMessage>(this);
+        }
       }
       catch (DllNotFoundException) { }
     }
@@ -139,31 +174,60 @@ namespace AetherVk.Logic.Tests
         const uint height = 256;
 
         _service.InitializeSimulationContext("Vulkan", _assetPath, false);
-        ulong peId = _service.CreatePresentationEngine(width, height);
         ulong sceneId = _service.CreateScene(true);
+        ulong peId = _service.CreatePresentationEngine(width, height, sceneId);
 
         ulong sphereId = _service.SpawnProceduralSphere(sceneId, "TestSphere", 1.0f);
         Assert.NotEqual(0ul, sphereId);
 
-        var meas = _service.CreateMeasurement(sceneId, "Meas", new float[]{0,0,0}, new float[]{1,1,1});
+        var meas = _service.CreateMeasurement(
+          sceneId,
+          "Meas",
+          new float[] { 0, 0, 0 },
+          new float[] { 1, 1, 1 }
+        );
         Assert.NotNull(meas);
 
         var billboard = _service.SpawnImageBillboard(sceneId, "Bill", false, 1.0f, 1.0f);
         Assert.NotNull(billboard);
 
         var comet = new CometComponent();
-        comet.Jets.Add(new JetMarker { PosX = 1f, PosY = 1f, PosZ = 1f, ColorR = 1f, ColorG = 0f, ColorB = 0f, Size = 1f });
-        
+        comet.Jets.Add(
+          new JetMarker
+          {
+            PosX = 1f,
+            PosY = 1f,
+            PosZ = 1f,
+            ColorR = 1f,
+            ColorG = 0f,
+            ColorB = 0f,
+            Size = 1f,
+          }
+        );
+
         _service.SyncMarkers(sceneId, sphereId, comet);
         _service.RefreshBvhNodes(sceneId, sphereId, comet);
 
         var camera = _service.GetEntityByName(sceneId, "camera");
 
-        for (int i = 0; i < 3; i++)
-        {
-          await _service.RenderTickAsync(peId, sceneId, camera!.Id, width, height);
-        }
+        TaskCompletionSource<ulong> tcs = new();
+        int msgCount = 0;
+        WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(this, (r, m) => {
+            msgCount++;
+            if (msgCount >= 3) tcs.TrySetResult(m.RenderGeneration);
+        });
         
+        _service.PlayScene(sceneId);
+
+        try 
+        {
+            await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            WeakReferenceMessenger.Default.Unregister<AetherVk.Logic.Messages.RenderFrameReadyMessage>(this);
+        }
+
         TestSceneExporter.ExportScene(sceneId, _stateManager, "AllArchetypes");
       }
       catch (DllNotFoundException) { }

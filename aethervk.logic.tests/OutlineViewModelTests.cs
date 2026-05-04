@@ -13,7 +13,16 @@ public class OutlineViewModelTests
   {
     // Arrange
     var stateManager = new SceneStateManager();
-    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>(); dispatcherMock.Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>())).Callback<System.Action>(a => a()); var runtimeService = new NativeRuntimeService(stateManager, new ConsoleService(dispatcherMock.Object), new BreadcrumbService(dispatcherMock.Object), dispatcherMock.Object);
+    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
+    dispatcherMock
+      .Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
+      .Callback<System.Action>(a => a());
+    var runtimeService = new NativeRuntimeService(
+      stateManager,
+      new ConsoleService(dispatcherMock.Object),
+      new BreadcrumbService(dispatcherMock.Object),
+      dispatcherMock.Object
+    );
     var outlineVm = new OutlineViewModel(1, runtimeService, stateManager);
     var entity = new Entity(1, 100, "TestEntity");
 

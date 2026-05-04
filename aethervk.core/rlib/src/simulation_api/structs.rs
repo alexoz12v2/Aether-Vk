@@ -1,40 +1,42 @@
-use alloc::{
-  string::{String, ToString},
-  collections::BTreeMap,
-  sync::Arc,
-  vec::Vec,
-};
-use core::{cell::UnsafeCell, sync::atomic::AtomicBool};
-use core::mem::MaybeUninit;
-use core::sync::atomic::AtomicU64;
-use core::cell::RefCell;
-use spin::{rwlock::RwLock, RwLockReadGuard, RwLockWriteGuard};
-use thingbuf::mpsc;
-use crate::{
-  physics::physics_scene::math::PhysicsSceneMathExt,
-  gpu::DeviceAdditionalParams,
-  types::{GpuError, RuntimeParams},
-  gpu, physics, simulation,
-  gpu::PresentationEngineHandle,
-  scene::{CameraComponent, EntityId, Scene, TransformComponent},
-  simulation::almanac::AlmanacPackedData,
-  types::{EngineError, EngineResult},
-};
-use aethervk_oshal_rlib as oshal;
-use oshal::{
-  math::vector::{Vector, Vector3, Vector4},
-  math::vector::vec4::{Quat, Vec4f32},
-  math::vector::vec3::Vec3f32,
-  math::quaternion::Quaternion,
-  math::matrix::{Matrix4, MatrixVectorMul, SquareMatrix},
-  math::matrix::mat4::Mat4x4f32,
-  os,
-  os::thread::Thread,
-};
 use crate::simulation::almanac::KinematicState;
 use crate::simulation_api::logic_thread::start_logic_thread;
 use crate::simulation_api::render_thread::start_render_thread;
 use crate::types::GpuResult;
+use crate::{
+  gpu,
+  gpu::DeviceAdditionalParams,
+  gpu::PresentationEngineHandle,
+  physics,
+  physics::physics_scene::math::PhysicsSceneMathExt,
+  scene::{CameraComponent, EntityId, Scene, TransformComponent},
+  simulation,
+  simulation::almanac::AlmanacPackedData,
+  types::{EngineError, EngineResult},
+  types::{GpuError, RuntimeParams},
+};
+use aethervk_oshal_rlib as oshal;
+use alloc::{
+  collections::{BTreeMap, BTreeSet},
+  string::{String, ToString},
+  sync::Arc,
+  vec::Vec,
+};
+use core::cell::RefCell;
+use core::mem::MaybeUninit;
+use core::sync::atomic::AtomicU64;
+use core::{cell::UnsafeCell, sync::atomic::AtomicBool};
+use oshal::{
+  math::matrix::mat4::Mat4x4f32,
+  math::matrix::{Matrix4, MatrixVectorMul, SquareMatrix},
+  math::quaternion::Quaternion,
+  math::vector::vec3::Vec3f32,
+  math::vector::vec4::{Quat, Vec4f32},
+  math::vector::{Vector, Vector3, Vector4},
+  os,
+  os::thread::Thread,
+};
+use spin::{RwLockReadGuard, RwLockWriteGuard, rwlock::RwLock};
+use thingbuf::mpsc;
 // --------------------- Drop Wrapper Types ---------------------------
 
 /// Drop wrapper for a thread whose function uses a receiver, and the struct wraps
@@ -171,20 +173,19 @@ pub struct SimulationThreads {
 impl Drop for SimulationThreads {
   fn drop(&mut self) {
     oshal::log!("SimulationThreads drop started");
-    if let Some(tx) = self.render_thread.tx.take() {
-      let _ = tx.try_send(RenderCommand::Shutdown);
-    }
     if let Some(tx) = self.logic_thread.tx.take() {
       let _ = tx.try_send(LogicCommand::Shutdown);
     }
-
-    self.render_feedback_rx = None;
     self.logic_feedback_rx = None;
-
-    if let Some(handle) = self.render_thread.handle.take() {
+    if let Some(handle) = self.logic_thread.handle.take() {
       let _ = handle.join();
     }
-    if let Some(handle) = self.logic_thread.handle.take() {
+
+    if let Some(tx) = self.render_thread.tx.take() {
+      let _ = tx.try_send(RenderCommand::Shutdown);
+    }
+    self.render_feedback_rx = None;
+    if let Some(handle) = self.render_thread.handle.take() {
       let _ = handle.join();
     }
     oshal::log!("SimulationThreads drop finished");
@@ -215,13 +216,10 @@ impl LogicThreadContext {
   ) -> EngineResult<RaycastResult> {
     let (ro, rd) = {
       let scenes = self.scenes.read();
-      let active = scenes
-        .get(&scene_id)
-        .ok_or(EngineError::InvalidOperation("scene not found"))?
-        .read();
-      let active_camera_entity = active
-        .active_camera_entity
-        .ok_or(EngineError::InvalidOperation("no active camera"))?;
+      let active =
+        scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?.read();
+      let active_camera_entity =
+        active.active_camera_entity.ok_or(EngineError::InvalidOperation("no active camera"))?;
 
       let mut view = Mat4x4f32::identity();
       active
@@ -274,10 +272,8 @@ impl LogicThreadContext {
   ) -> EngineResult<RaycastResult> {
     use crate::physics::physics_scene::math::closest_intersection;
     let scenes = self.scenes.read();
-    let scene_ctx = scenes
-      .get(&scene_id)
-      .ok_or(EngineError::InvalidOperation("scene not found"))?
-      .read();
+    let scene_ctx =
+      scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?.read();
     let ps_lock = scene_ctx
       .physics_scene
       .as_ref()
@@ -352,10 +348,8 @@ impl SimulationSceneData {
       return Err(EngineError::InvalidOperation("mesh not found in cache"));
     };
 
-    let scene_ctx_lock = self
-      .scenes
-      .get(&scene_id)
-      .ok_or(EngineError::InvalidOperation("no scene"))?;
+    let scene_ctx_lock =
+      self.scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("no scene"))?;
     let mut scene_ctx = scene_ctx_lock.write();
     let entity_id = scene_ctx.scene.spawn_entity(name);
     scene_ctx.scene.add_component(
@@ -439,9 +433,9 @@ impl SimulationThreads {
   }
 
   pub fn start_logic_thread(&mut self, params: LogicThreadParams) -> EngineResult<()> {
-    if self.logic_thread_running() {
+    if self.logic_thread_running() || !self.render_thread_running() {
       return Err(EngineError::InvalidOperation(
-        "SimulationThreads::start_logic_thread | logic thread already running",
+        "SimulationThreads::start_logic_thread | logic thread already running | should start after render thread",
       ));
     }
 
@@ -449,7 +443,10 @@ impl SimulationThreads {
     let (logic_feedback_tx, logic_feedback_rx) = mpsc::channel(params.channel_capacity);
     let logic_thread_handle = start_logic_thread(
       logic_rx,
-      alloc::sync::Arc::new(params.to_context(logic_feedback_tx)),
+      alloc::sync::Arc::new(params.to_context(
+        logic_feedback_tx,
+        self.render_thread.tx.as_ref().unwrap().clone(),
+      )),
     )?;
     self.logic_thread.tx = Some(logic_tx);
     self.logic_thread.handle = Some(logic_thread_handle);
@@ -650,13 +647,10 @@ pub enum LogicCommand {
     ro: Vec3f32,
     rd: Vec3f32,
   },
-  SimulationTick {
-    task_id: u64,
-    scene_id: u64,
-    delta_time: f64,
-  },
   Custom {
-    custom_fn: fn(&LogicThreadContext, *mut core::ffi::c_void),
+    task_id: u64,
+    custom_fn:
+      fn(&LogicThreadContext, *mut core::ffi::c_void) -> EngineResult<SimulationTaskResult>,
     user_data: Option<SendPtrMut<core::ffi::c_void>>,
   },
 }
@@ -755,8 +749,6 @@ pub struct RenderFrame {
   pub scene: Arc<RwLock<SceneContext>>,
   pub render_physical_meshes_outline: bool,
   pub camera_entity: EntityId,
-  pub window_width: u32,
-  pub window_height: u32,
   pub clear_color: [f32; 4],
   pub sun_entity: Option<EntityId>,
   pub sky_entity: Option<EntityId>,
@@ -847,6 +839,7 @@ pub struct SceneTimeState {
   pub epoch_end: anise::time::Epoch,
   pub st_seconds_elapsed: f64,
   pub is_playing: bool,
+  pub is_ticking: alloc::sync::Arc<core::sync::atomic::AtomicBool>,
 }
 
 impl Default for SceneTimeState {
@@ -865,6 +858,7 @@ impl Default for SceneTimeState {
       epoch_end: anise::time::Epoch::from_gregorian_utc_at_midnight(2100, 1, 1),
       st_seconds_elapsed: 0.0,
       is_playing: false,
+      is_ticking: alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false)),
     }
   }
 }
@@ -882,7 +876,23 @@ pub struct SceneContext {
   pub sky_entity: Option<EntityId>,
   pub outlines_enabled: Arc<AtomicBool>,
   pub physics_scene: Option<Arc<RwLock<physics::physics_scene::PhysicsScene>>>,
-  pub time_state: SceneTimeState,
+  pub time_state: Arc<RwLock<SceneTimeState>>,
+  /// boolean: is windowless or not
+  pub presentation_engines: Arc<RwLock<BTreeMap<PresentationEngineHandle, bool>>>,
+  pub changed_entities: Arc<RwLock<BTreeMap<u64, BTreeSet<String>>>>,
+  pub custom_render_callback: Option<CustomRenderCallback>,
+}
+
+impl Drop for SceneContext {
+  fn drop(&mut self) {
+    let pes = self.presentation_engines.read();
+    if !pes.is_empty() {
+      oshal::log!(
+        "WARNING: SceneContext dropped but {} presentation engines are still attached!",
+        pes.len()
+      );
+    }
+  }
 }
 
 impl SceneContext {
@@ -910,12 +920,12 @@ impl SceneContext {
     }
   }
 
+  pub fn register_custom_render_callback(&mut self, callback: Option<CustomRenderCallback>) {
+    self.custom_render_callback = callback;
+  }
+
   fn with_new_entity_inserted(mut self, entity_id: EntityId) -> EngineResult<Self> {
-    if self
-      .entity_map
-      .insert(self.next_entity_id, entity_id)
-      .is_some()
-    {
+    if self.entity_map.insert(self.next_entity_id, entity_id).is_some() {
       return Err(EngineError::InvalidOperation(
         "simulation_api:with_new_entity_inserted | Failed to insert entity into entity_map",
       ));
@@ -974,13 +984,11 @@ impl SceneContext {
     self.with_new_entity_inserted(sky_entity)
   }
 
-  pub fn with_physics_scene(self) -> Self {
-    Self {
-      physics_scene: Some(Arc::new(RwLock::new(
-        physics::physics_scene::PhysicsScene::build_from_scene(self.scene.as_ref()),
-      ))),
-      ..self
-    }
+  pub fn with_physics_scene(mut self) -> Self {
+    self.physics_scene = Some(Arc::new(RwLock::new(
+      physics::physics_scene::PhysicsScene::build_from_scene(self.scene.as_ref()),
+    )));
+    self
   }
 
   pub fn new_empty(scene: Arc<Scene>, root_entity: EntityId) -> Self {
@@ -998,7 +1006,10 @@ impl SceneContext {
       sky_entity: None,
       outlines_enabled: Arc::new(AtomicBool::new(false)),
       physics_scene: None,
-      time_state: SceneTimeState::default(),
+      time_state: Arc::new(RwLock::new(SceneTimeState::default())),
+      presentation_engines: Arc::new(RwLock::new(BTreeMap::new())),
+      changed_entities: Arc::new(RwLock::new(BTreeMap::new())),
+      custom_render_callback: None,
     }
   }
 
@@ -1011,6 +1022,11 @@ impl SceneContext {
 
   pub fn get_entity(&self, external_id: u64) -> Option<EntityId> {
     self.entity_map.get(&external_id).copied()
+  }
+
+  pub fn mark_component_changed(&self, entity_id: u64, component_name: &str) {
+    let mut changed = self.changed_entities.write();
+    changed.entry(entity_id).or_insert_with(BTreeSet::new).insert(component_name.to_string());
   }
 }
 
@@ -1037,10 +1053,7 @@ impl RenderThreadParams {
     };
     let render_device_handle = {
       let params = DeviceAdditionalParams::new();
-      render_frontend
-        .write()
-        .init_device(0, &params)
-        .map_err(|e| EngineError::from(e))?
+      render_frontend.write().init_device(0, &params).map_err(|e| EngineError::from(e))?
     };
 
     render_frontend
@@ -1101,6 +1114,7 @@ pub struct LogicThreadParams {
   pub task_manager: Arc<RwLock<SimulationTaskManager>>,
   pub logic_state: Arc<RwLock<LogicState>>,
   pub scenes: Arc<RwLock<SimulationSceneData>>,
+  pub ctx_ptr: SendPtrMut<core::ffi::c_void>,
 }
 
 impl LogicThreadParams {
@@ -1111,6 +1125,7 @@ impl LogicThreadParams {
     task_manager: Arc<RwLock<SimulationTaskManager>>,
     logic_state: Arc<RwLock<LogicState>>,
     scenes: Arc<RwLock<SimulationSceneData>>,
+    ctx_ptr: SendPtrMut<core::ffi::c_void>,
   ) -> Self {
     Self {
       channel_capacity: Self::DEFAULT_CHANNEL_CAPACITY,
@@ -1118,16 +1133,23 @@ impl LogicThreadParams {
       task_manager,
       logic_state,
       scenes,
+      ctx_ptr,
     }
   }
 
-  pub fn to_context(self, logic_feedback_tx: mpsc::Sender<LogicFeedback>) -> LogicThreadContext {
+  pub fn to_context(
+    self,
+    logic_feedback_tx: mpsc::Sender<LogicFeedback>,
+    render_tx: mpsc::Sender<RenderCommand>,
+  ) -> LogicThreadContext {
     LogicThreadContext {
       logic_state: self.logic_state,
       thread_pool: self.thread_pool,
       logic_feedback_tx,
       task_manager: self.task_manager,
       scenes: self.scenes,
+      ctx_ptr: self.ctx_ptr,
+      render_tx,
     }
   }
 }
@@ -1142,6 +1164,8 @@ pub struct LogicThreadContext {
   pub logic_feedback_tx: mpsc::Sender<LogicFeedback>,
   pub task_manager: Arc<RwLock<SimulationTaskManager>>,
   pub scenes: Arc<RwLock<SimulationSceneData>>,
+  pub ctx_ptr: SendPtrMut<core::ffi::c_void>,
+  pub render_tx: mpsc::Sender<RenderCommand>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1159,6 +1183,7 @@ pub enum SimulationTaskResult {
   Raycast(RaycastResult),
   Vec3(Vec3f32), // TODO more vector types in oshal (design first by me)
   KinematicState(KinematicState),
+  String(String),
 }
 
 pub enum SimulationTaskStatus {
@@ -1200,9 +1225,7 @@ impl SimulationTaskManager {
   }
 
   pub fn success_task(&mut self, id: u64, result: SimulationTaskResult) {
-    self
-      .tasks
-      .insert(id, SimulationTaskStatus::Completed(result));
+    self.tasks.insert(id, SimulationTaskStatus::Completed(result));
   }
 
   pub fn fail_task(&mut self, id: u64, error: String) {
@@ -1210,11 +1233,7 @@ impl SimulationTaskManager {
   }
 
   pub fn get_status(&self, id: u64) -> TaskStatusCode {
-    self
-      .tasks
-      .get(&id)
-      .map(|t| TaskStatusCode::from_sim(t))
-      .unwrap_or(TaskStatusCode::Invalid)
+    self.tasks.get(&id).map(|t| TaskStatusCode::from_sim(t)).unwrap_or(TaskStatusCode::Invalid)
   }
 
   pub fn take_result(&mut self, id: u64) -> Option<SimulationTaskResult> {
@@ -1295,12 +1314,15 @@ impl<T> SharedDataWrapper<T> {
   }
 
   pub unsafe fn write_value(&self, v: T) {
-    debug_assert_eq!(self.inner.done_signal.load(core::sync::atomic::Ordering::Relaxed), false);
+    debug_assert_eq!(
+      self.inner.done_signal.load(core::sync::atomic::Ordering::Relaxed),
+      false
+    );
 
     // Write the data first
     unsafe { (*self.inner.data.get()).write(v) };
 
-    // Release ordering ensures the memory write is visible to other threads 
+    // Release ordering ensures the memory write is visible to other threads
     // before the flag is set to true.
     self.inner.done_signal.store(true, core::sync::atomic::Ordering::Release);
   }
@@ -1317,7 +1339,7 @@ impl<T> SharedDataWrapper<T> {
     }
 
     // Safely extract the value without waiting for the writer thread to drop its Arc.
-    // Since MaybeUninit does not drop its contents, ptr::read safely transfers ownership 
+    // Since MaybeUninit does not drop its contents, ptr::read safely transfers ownership
     // to us. The Arc will eventually deallocate the wrapper memory later.
     unsafe { core::ptr::read(self.inner.data.get()).assume_init() }
   }

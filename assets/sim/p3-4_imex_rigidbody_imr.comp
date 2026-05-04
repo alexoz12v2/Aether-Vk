@@ -1,0 +1,234 @@
+#version 450 core
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+
+// ============================================================================
+// Phase 3 & 4: Rigid Body Implicit Midpoint Rule (Lie Group Integration)
+// ============================================================================
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+// Standard AOS layout since we only have a few rigid bodies.
+struct RigidBody {
+    vec3 position;
+    float mass;
+    
+    // Stored column-major by std430/scalar
+    mat3 rotation;
+    
+    vec3 linear_velocity;
+    float _pad0;
+    
+    vec3 angular_velocity;
+    float _pad1;
+    
+    mat3 inertia_tensor;
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer RigidBodyArray {
+    RigidBody bodies[];
+};
+
+// AOS Emitter data
+struct ForceEmitter {
+    vec3 position;
+    float mu; // G * M
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer EmitterArray {
+    ForceEmitter emitters[];
+};
+
+layout(push_constant, scalar) uniform PushConstants {
+    RigidBodyArray rigid_bodies;
+    EmitterArray emitters;
+    uint total_bodies;
+    uint num_emitters;
+    float dt;
+} pc;
+
+// --- Math Utilities ---
+
+mat3 hat(vec3 v) {
+    return mat3(
+        0.0,  v.z, -v.y,
+       -v.z,  0.0,  v.x,
+        v.y, -v.x,  0.0
+    );
+}
+
+mat3 expm_hat(vec3 w) {
+    float theta = length(w);
+    mat3 id = mat3(1.0);
+    if (theta < 1e-8) {
+        return id;
+    }
+    mat3 w_hat = hat(w);
+    mat3 w_hat2 = w_hat * w_hat;
+
+    float a = sin(theta) / theta;
+    float b = (1.0 - cos(theta)) / (theta * theta);
+
+    return id + w_hat * a + w_hat2 * b;
+}
+
+mat3 right_jacobian(vec3 w) {
+    float theta = length(w);
+    mat3 id = mat3(1.0);
+    if (theta < 1e-8) {
+        return id;
+    }
+    
+    mat3 hat_w = hat(w);
+    mat3 hat_w2 = hat_w * hat_w;
+
+    float a = (1.0 - cos(theta)) / (theta * theta);
+    float b = (theta - sin(theta)) / (theta * theta * theta);
+
+    return id - (hat_w * a) + (hat_w2 * b);
+}
+
+// Naive 6x6 Gaussian Elimination with partial pivoting
+// In a true compute shader, this could be highly optimized using shared memory 
+// and subgroup operations if solved cooperatively. Here we do it per-thread for simplicity.
+bool solve_6x6(inout float a[6][6], inout float b[6]) {
+    for (int i = 0; i < 6; ++i) {
+        float max_el = abs(a[i][i]);
+        int max_row = i;
+        for (int k = i + 1; k < 6; ++k) {
+            if (abs(a[k][i]) > max_el) {
+                max_el = abs(a[k][i]);
+                max_row = k;
+            }
+        }
+        if (max_el < 1e-8) return false;
+
+        if (max_row != i) {
+            for (int j = i; j < 6; ++j) {
+                float tmp = a[i][j];
+                a[i][j] = a[max_row][j];
+                a[max_row][j] = tmp;
+            }
+            float tmp_b = b[i];
+            b[i] = b[max_row];
+            b[max_row] = tmp_b;
+        }
+
+        for (int k = i + 1; k < 6; ++k) {
+            float c = -a[k][i] / a[i][i];
+            for (int j = i; j < 6; ++j) {
+                if (i == j) {
+                    a[k][j] = 0.0;
+                } else {
+                    a[k][j] += c * a[i][j];
+                }
+            }
+            b[k] += c * b[i];
+        }
+    }
+
+    for (int i = 5; i >= 0; --i) {
+        float sum = 0.0;
+        for (int j = i + 1; j < 6; ++j) {
+            sum += a[i][j] * b[j];
+        }
+        b[i] = (b[i] - sum) / a[i][i];
+    }
+    return true;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.total_bodies) return;
+
+    RigidBody rb = pc.rigid_bodies.bodies[idx];
+    
+    vec3 v_mid = rb.linear_velocity;
+    vec3 w_mid = rb.angular_velocity;
+    
+    float h = pc.dt;
+    float half_h = h * 0.5;
+
+    // Phase 3: Implicit Solve
+    for (int iter = 0; iter < 10; ++iter) {
+        vec3 x_mid = rb.position + v_mid * half_h;
+        mat3 r_mid = rb.rotation * expm_hat(w_mid * half_h);
+
+        // Evaluate Force at midpoint
+        vec3 f_world = vec3(0.0);
+        mat3 k_trans = mat3(0.0);
+        
+        for (uint e = 0; e < pc.num_emitters; ++e) {
+            ForceEmitter em = pc.emitters.emitters[e];
+            vec3 r = em.position - x_mid;
+            float dist_sq = dot(r, r);
+            if (dist_sq > 1e-6) {
+                float dist = sqrt(dist_sq);
+                float dist3 = dist_sq * dist;
+                float dist5 = dist3 * dist_sq;
+                
+                float coeff = em.mu * rb.mass / dist3;
+                f_world += r * coeff;
+
+                mat3 term1 = mat3(1.0) * (-coeff);
+                
+                // Outer product r * r^T
+                mat3 rr_t = mat3(
+                    r * r.x,
+                    r * r.y,
+                    r * r.z
+                );
+                
+                mat3 term2 = rr_t * (3.0 * em.mu * rb.mass / dist5);
+                k_trans += term1 + term2;
+            }
+        }
+
+        // Residuals
+        vec3 g_v = (v_mid - rb.linear_velocity) * (2.0 * rb.mass / h) - f_world;
+        vec3 j_w_mid = rb.inertia_tensor * w_mid;
+        vec3 g_w = rb.inertia_tensor * (w_mid - rb.angular_velocity) * (2.0 / h) + cross(w_mid, j_w_mid); // tau_body = 0 for uniform gravity
+
+        if (dot(g_v, g_v) < 1e-10 && dot(g_w, g_w) < 1e-10) {
+            break;
+        }
+
+        // Jacobian Blocks
+        mat3 jr = right_jacobian(w_mid * half_h);
+        mat3 id = mat3(1.0);
+        vec3 p_body = vec3(0.0);
+
+        mat3 j_vv = id * (2.0 * rb.mass / h) - k_trans * half_h;
+        mat3 j_vw = k_trans * r_mid * hat(p_body) * jr * half_h;
+        mat3 j_wv = hat(p_body) * transpose(r_mid) * k_trans * (-half_h);
+        
+        mat3 d_coriolis = hat(w_mid) * rb.inertia_tensor - hat(j_w_mid);
+        vec3 f_world_body = transpose(r_mid) * f_world;
+        mat3 geom_stiff = hat(p_body) * hat(f_world_body) - hat(p_body) * transpose(r_mid) * k_trans * r_mid * hat(p_body);
+        mat3 j_ww = rb.inertia_tensor * (2.0 / h) + d_coriolis - geom_stiff * jr * half_h;
+
+        float a[6][6];
+        float b[6];
+
+        for (int c = 0; c < 3; ++c) {
+            a[0][c] = j_vv[c][0]; a[1][c] = j_vv[c][1]; a[2][c] = j_vv[c][2];
+            a[0][c+3] = j_vw[c][0]; a[1][c+3] = j_vw[c][1]; a[2][c+3] = j_vw[c][2];
+            a[3][c] = j_wv[c][0]; a[4][c] = j_wv[c][1]; a[5][c] = j_wv[c][2];
+            a[3][c+3] = j_ww[c][0]; a[4][c+3] = j_ww[c][1]; a[5][c+3] = j_ww[c][2];
+        }
+
+        b[0] = g_v.x; b[1] = g_v.y; b[2] = g_v.z;
+        b[3] = g_w.x; b[4] = g_w.y; b[5] = g_w.z;
+
+        if (!solve_6x6(a, b)) break;
+
+        v_mid -= vec3(b[0], b[1], b[2]);
+        w_mid -= vec3(b[3], b[4], b[5]);
+    }
+
+    // Phase 4: Finalize Rigid Body State Update
+    pc.rigid_bodies.bodies[idx].position = rb.position + v_mid * h;
+    pc.rigid_bodies.bodies[idx].rotation = rb.rotation * expm_hat(w_mid * h);
+    pc.rigid_bodies.bodies[idx].linear_velocity = v_mid * 2.0 - rb.linear_velocity;
+    pc.rigid_bodies.bodies[idx].angular_velocity = w_mid * 2.0 - rb.angular_velocity;
+}

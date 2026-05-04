@@ -7,8 +7,8 @@ use crate::{
 };
 use aethervk_oshal_rlib::os::native::ThreadId;
 use alloc::{boxed::Box, collections::btree_map::BTreeMap};
-use core::fmt::{Formatter, Pointer};
 use ash::vk;
+use core::fmt::{Formatter, Pointer};
 
 // TODO: implement trait/function to hash some compile time string
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -38,9 +38,7 @@ pub(super) struct CommandPools {
 impl fmt::Debug for CommandPools {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
     f.write_str("CommandPools")?;
-    f.debug_map()
-      .entries(self.registry.read().iter())
-      .finish()?;
+    f.debug_map().entries(self.registry.read().iter()).finish()?;
     f.write_str(&alloc::format!(
       "queue_family_index: {}",
       self.queue_family_index

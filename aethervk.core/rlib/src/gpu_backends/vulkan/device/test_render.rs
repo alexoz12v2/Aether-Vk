@@ -1,9 +1,11 @@
-use std::any::TypeId;
+use super::*;
+use crate::gpu::{ScopedCommandBuffer, ScopedRenderPass};
+use crate::scene::PhysicalMeshComponent;
 use crate::{
   gpu::{
-    self, new_render_frontend, DeviceAdditionalParams, PresentationEngineParams,
+    self, DeviceAdditionalParams, PresentationEngineParams, VULKAN_RENDER_BACKEND,
     frame::{BillboardDrawCall, CursorDrawCall, RenderScene},
-    VULKAN_RENDER_BACKEND,
+    new_render_frontend,
   },
   // TODO render module shouldn't be aware of ECS
   scene::{
@@ -12,14 +14,15 @@ use crate::{
   },
   types::RuntimeParams,
 };
+use aethervk_oshal_rlib::math::vector::Vector3;
 use aethervk_oshal_rlib::math::{
-  matrix::{mat4::Mat4x4f32, Matrix4, SquareMatrix},
+  matrix::{Matrix4, SquareMatrix, mat4::Mat4x4f32},
   quaternion::Quaternion,
   vector::{vec3::Vec3f32, vec4::Quat},
 };
 use heapless::index_map::FnvIndexMap;
-use aethervk_oshal_rlib::math::vector::Vector3;
-use crate::scene::PhysicalMeshComponent;
+use std::any::Any;
+use std::sync::Arc;
 
 // TODO: test about text rendering in different fonts (system font and packaged font)
 // TODO: move into integration tests folder
@@ -47,10 +50,7 @@ fn test_render_particles_windowless() {
   let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
 
   let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend
-    .write()
-    .init_device(0, &additional_params)
-    .unwrap();
+  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
 
   let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
   let pool_arc = std::sync::Arc::new(pool);
@@ -83,18 +83,22 @@ fn test_render_particles_windowless() {
       let acquire_result = device.acquire_next_image(presentation_engine)?;
       let cmd_buffer_handle = device.get_command_buffer()?;
 
-      let mut render_scene = RenderScene::new((
-        TransformComponent {
-          position: Vec3f32::from_array([0.0, 10.0, 0.0]),
-          rotation: Quat::identity(),
-          scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
-        },
-        CameraComponent {
-          projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
-          near_plane: 0.1,
-          far_plane: 100.0,
-        },
-      ));
+      let mut render_scene = RenderScene::new(
+        (
+          TransformComponent {
+            position: Vec3f32::from_array([0.0, 10.0, 0.0]),
+            rotation: Quat::identity(),
+            scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+          },
+          CameraComponent {
+            projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
+            near_plane: 0.1,
+            far_plane: 100.0,
+          },
+        ),
+        aethervk_oshal_rlib::os::time::TimeReadings::default(),
+        [width, height],
+      );
 
       let particle_sys_e = scene.spawn_entity("particles");
       let mut sys = crate::scene::particles::ParticleSystemComponent::new(
@@ -153,8 +157,7 @@ fn test_render_particles_windowless() {
       )?;
 
       {
-        let _scoped_cmd =
-          gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+        let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
         device.upload_particle_systems(cmd_buffer_handle, &mut render_scene.particle_calls)?;
         device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
         let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
@@ -179,7 +182,12 @@ fn test_render_particles_windowless() {
           },
         )?;
 
-        gpu::frame::render_frame(device, cmd_buffer_handle, &render_scene, presentation_engine)?;
+        gpu::frame::render_frame(
+          device,
+          cmd_buffer_handle,
+          &render_scene,
+          presentation_engine,
+        )?;
         scoped_rp.end()?;
         device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
       }
@@ -256,10 +264,7 @@ fn test_render_all_archetypes_windowless() {
   let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
 
   let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend
-    .write()
-    .init_device(0, &additional_params)
-    .unwrap();
+  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
 
   let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
   let pool_arc = std::sync::Arc::new(pool);
@@ -299,18 +304,22 @@ fn test_render_all_archetypes_windowless() {
       let cursor_res = device.get_cursor_resources(presentation_engine)?;
       let billboard_res = device.get_billboard_resources(presentation_engine)?;
 
-      let mut render_scene = RenderScene::new((
-        TransformComponent {
-          position: Vec3f32::from_array([0.0, 10.0, 0.0]),
-          rotation: Quat::identity(),
-          scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
-        },
-        CameraComponent {
-          projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
-          near_plane: 0.1,
-          far_plane: 100.0,
-        },
-      ));
+      let mut render_scene = RenderScene::new(
+        (
+          TransformComponent {
+            position: Vec3f32::from_array([0.0, 10.0, 0.0]),
+            rotation: Quat::identity(),
+            scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+          },
+          CameraComponent {
+            projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
+            near_plane: 0.1,
+            far_plane: 100.0,
+          },
+        ),
+        aethervk_oshal_rlib::os::time::TimeReadings::default(),
+        [width, height],
+      );
 
       let sky_pipeline = device.get_sky_pipeline_key(presentation_engine)?;
       render_scene.sky_call = Some(gpu::frame::SkyDrawCall::from_camera(
@@ -336,13 +345,11 @@ fn test_render_all_archetypes_windowless() {
 
       let gizmo_resources = device.get_gizmo_resources(presentation_engine)?;
       let gizmo_idx = device.update_gizmo_instance(sun_e, Mat4x4f32::identity())?;
-      render_scene
-        .gizmo_calls
-        .push(gpu::frame::GizmoDrawCall::from_values(
-          gizmo_resources.pipeline,
-          2.0,
-          gizmo_idx,
-        ));
+      render_scene.gizmo_calls.push(gpu::frame::GizmoDrawCall::from_values(
+        gizmo_resources.pipeline,
+        2.0,
+        gizmo_idx,
+      ));
 
       render_scene.cursor_call = Some(CursorDrawCall {
         pipeline: cursor_res.pipeline,
@@ -391,11 +398,16 @@ fn test_render_all_archetypes_windowless() {
           },
         )?;
 
-        gpu::frame::render_frame(device, cmd_buffer_handle, &render_scene, presentation_engine)
-          .map_err(|e| {
-            println!("TR: render_frame failed {:?}", e);
-            e
-          })?;
+        gpu::frame::render_frame(
+          device,
+          cmd_buffer_handle,
+          &render_scene,
+          presentation_engine,
+        )
+        .map_err(|e| {
+          println!("TR: render_frame failed {:?}", e);
+          e
+        })?;
         scoped_rp.end()?;
         device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
       }
@@ -454,10 +466,7 @@ fn test_render_empty_scene_graceful() {
   let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
 
   let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend
-    .write()
-    .init_device(0, &additional_params)
-    .unwrap();
+  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
 
   let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
   let pool_arc = std::sync::Arc::new(pool);
@@ -483,18 +492,22 @@ fn test_render_empty_scene_graceful() {
       let acquire_result = device.acquire_next_image(presentation_engine)?;
       let cmd_buffer_handle = device.get_command_buffer()?;
 
-      let render_scene = RenderScene::new((
-        TransformComponent {
-          position: Vec3f32::from_array([0.0, 0.0, 0.0]),
-          rotation: Quat::identity(),
-          scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
-        },
-        CameraComponent {
-          projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
-          near_plane: 0.1,
-          far_plane: 100.0,
-        },
-      ));
+      let render_scene = RenderScene::new(
+        (
+          TransformComponent {
+            position: Vec3f32::from_array([0.0, 0.0, 0.0]),
+            rotation: Quat::identity(),
+            scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+          },
+          CameraComponent {
+            projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
+            near_plane: 0.1,
+            far_plane: 100.0,
+          },
+        ),
+        aethervk_oshal_rlib::os::time::TimeReadings::default(),
+        [16, 16],
+      );
 
       {
         let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
@@ -518,11 +531,16 @@ fn test_render_empty_scene_graceful() {
             extent: [16, 16],
           },
         )?;
-        gpu::frame::render_frame(device, cmd_buffer_handle, &render_scene, presentation_engine)
-          .map_err(|e| {
-            println!("TR: render_frame failed {:?}", e);
-            e
-          })?;
+        gpu::frame::render_frame(
+          device,
+          cmd_buffer_handle,
+          &render_scene,
+          presentation_engine,
+        )
+        .map_err(|e| {
+          println!("TR: render_frame failed {:?}", e);
+          e
+        })?;
         scoped_rp.end()?;
       }
       device.present(
@@ -550,10 +568,7 @@ fn test_layout_transition_on_failed_update() {
   });
   let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
   let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend
-    .write()
-    .init_device(0, &additional_params)
-    .unwrap();
+  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
 
   let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
   let pool_arc = std::sync::Arc::new(pool);
@@ -635,10 +650,7 @@ fn test_render_text_system_font_async() {
   let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
 
   let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend
-    .write()
-    .init_device(0, &additional_params)
-    .unwrap();
+  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
 
   let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
   let pool_arc = std::sync::Arc::new(pool);
@@ -702,7 +714,8 @@ fn test_render_text_system_font_async() {
           let _scoped_cmd =
             gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
 
-          let font_id = device.allocate_rasterized_font_atlas(cmd_buffer_handle, font_hash, atlas)?;
+          let font_id =
+            device.allocate_rasterized_font_atlas(cmd_buffer_handle, font_hash, atlas)?;
 
           device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
           let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
@@ -727,7 +740,10 @@ fn test_render_text_system_font_async() {
             },
           )?;
 
-          device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer_handle, presentation_engine)?;
+          device.prepare_text_archetype_for_render_and_bind_pipeline(
+            cmd_buffer_handle,
+            presentation_engine,
+          )?;
           device.render_text(
             cmd_buffer_handle,
             "AetherVk Async Test",
@@ -823,10 +839,7 @@ fn test_render_text_asset_font_async() {
   let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
 
   let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend
-    .write()
-    .init_device(0, &additional_params)
-    .unwrap();
+  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
 
   let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
   let pool_arc = std::sync::Arc::new(pool);
@@ -893,7 +906,8 @@ fn test_render_text_asset_font_async() {
           let _scoped_cmd =
             gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
 
-          let font_id = device.allocate_rasterized_font_atlas(cmd_buffer_handle, font_hash, atlas)?;
+          let font_id =
+            device.allocate_rasterized_font_atlas(cmd_buffer_handle, font_hash, atlas)?;
 
           device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
           let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
@@ -918,7 +932,10 @@ fn test_render_text_asset_font_async() {
             },
           )?;
 
-          device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer_handle, presentation_engine)?;
+          device.prepare_text_archetype_for_render_and_bind_pipeline(
+            cmd_buffer_handle,
+            presentation_engine,
+          )?;
           device.render_text(
             cmd_buffer_handle,
             "AetherVk Async Test",
@@ -1014,10 +1031,7 @@ fn test_render_particles_multithreaded() {
   let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
 
   let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend
-    .write()
-    .init_device(0, &additional_params)
-    .unwrap();
+  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
 
   let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(3).unwrap();
   let pool_arc = std::sync::Arc::new(pool);
@@ -1212,24 +1226,28 @@ fn test_render_particles_multithreaded() {
           device.start_frame()?;
           let acquire_result = device.acquire_next_image(presentation_engine)?;
           let cmd_buffer_handle = device.get_command_buffer()?;
-          let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+          let _scoped_cmd =
+            gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
 
-          let mut render_scene = RenderScene::new((
-            TransformComponent {
-              position: Vec3f32::from_array([0.0, -10.0, 0.0]),
-              rotation: Quat::from_axis_angle(
-                Vec3f32::from_array([0.0, 0.0, 1.0]),
-                std::f32::consts::PI,
-              ),
-              scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
-            },
-            CameraComponent {
-              projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
-              near_plane: 0.1,
-              far_plane: 100.0,
-            },
-          ));
-
+          let mut render_scene = RenderScene::new(
+            (
+              TransformComponent {
+                position: Vec3f32::from_array([0.0, -10.0, 0.0]),
+                rotation: Quat::from_axis_angle(
+                  Vec3f32::from_array([0.0, 0.0, 1.0]),
+                  std::f32::consts::PI,
+                ),
+                scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+              },
+              CameraComponent {
+                projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
+                near_plane: 0.1,
+                far_plane: 100.0,
+              },
+            ),
+            aethervk_oshal_rlib::os::time::TimeReadings::default(),
+            [width, height],
+          );
           let sun_pipeline = device.get_sun_pipeline_key(presentation_engine)?;
           render_scene.sun_call = Some(gpu::frame::SunDrawCall::from_model_and_camera(
             Mat4x4f32::identity(),
@@ -1238,7 +1256,8 @@ fn test_render_particles_multithreaded() {
             sun_e,
           )?);
 
-          let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+          let _scoped_cmd =
+            gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
 
           let res = match device.get_physical_mesh_resources(mesh_entity, presentation_engine) {
             Ok(r) => r,
@@ -1257,16 +1276,14 @@ fn test_render_particles_multithreaded() {
           };
 
           let outline: Option<[f32; 4]> = None;
-          render_scene
-            .draw_calls
-            .push(gpu::frame::DrawCall::from_handles_and_matrix(
-              res,
-              mesh_arc.indices.len() as u32,
-              outline,
-              Mat4x4f32::identity(),
-              1.0,
-              [0.5, 0.5, 0.5],
-            ));
+          render_scene.draw_calls.push(gpu::frame::DrawCall::from_handles_and_matrix(
+            res,
+            mesh_arc.indices.len() as u32,
+            outline,
+            Mat4x4f32::identity(),
+            1.0,
+            [0.5, 0.5, 0.5],
+          ));
 
           scene_render.with_component(
             particle_sys_e,
@@ -1312,7 +1329,12 @@ fn test_render_particles_multithreaded() {
                 extent,
               },
             )?;
-            gpu::frame::render_frame(device, cmd_buffer_handle, &render_scene, presentation_engine)?;
+            gpu::frame::render_frame(
+              device,
+              cmd_buffer_handle,
+              &render_scene,
+              presentation_engine,
+            )?;
             scoped_rp.end()?;
             device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
           }
@@ -1417,4 +1439,281 @@ fn test_render_particles_multithreaded() {
   if !errors.is_empty() {
     panic!("Vulkan validation errors occurred during multithreaded testing");
   }
+}
+
+#[test]
+// Note: comment when debugging.
+// #[ntest::timeout(20_000)] // 20s timeout in case you don't run cargo nextest run (there's a busy loop here)
+fn test_depth_stencil_separation() {
+  setup_assets_dir();
+  fn panic_on_validation_error(msg: &str) {
+    panic!("Vulkan validation error occurred during testing: {}", msg);
+  }
+  let runtime_params = Box::new(RuntimeParams {
+    render_backend_params: FnvIndexMap::new(),
+    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
+  });
+  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
+
+  let additional_params = DeviceAdditionalParams::new();
+  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
+
+  let width = 256;
+  let height = 256;
+
+  let presentation_engine = {
+    let params = PresentationEngineParams::windowless(width, height);
+    render_frontend
+      .with_device(render_device_handle, |device| {
+        let pe = device.create_presentation_engine(&params)?;
+        device.init_archetypes(pe)?;
+        crate::types::GpuResult::Ok(pe)
+      })
+      .unwrap()
+  };
+
+  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
+  let pool_arc = std::sync::Arc::new(pool);
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      device.wire_callbacks(pool_arc.clone())
+    })
+    .unwrap();
+
+  let scene = Scene::new();
+  let entity_id = scene.spawn_entity("mesh");
+  let mesh = Arc::new(crate::simulation::comet::generate_uv_sphere(2.0, 10, 10));
+  let mesh_comp = PhysicalMeshComponent {
+    mesh,
+    emissive_intensity: 0.0,
+    emissive_color: [0.0; 3],
+    asset_path: "test".to_string(),
+  };
+  let transform = TransformComponent {
+    position: Vec3f32::from_array([0.0, 0.0, -5.0]), // place it in front of camera
+    rotation: Quat::identity(),
+    scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+  };
+
+  // 1. Perspective
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      let task_id = device.create_task();
+      device.start_frame().unwrap();
+      let acquire_result = device.acquire_next_image(presentation_engine).unwrap();
+      let cmd_buffer_handle = device.get_command_buffer().unwrap();
+
+      let mut render_scene = RenderScene::new(
+        (
+          TransformComponent {
+            position: Vec3f32::from_array([0.0, 0.0, 0.0]),
+            rotation: Quat::identity(),
+            scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+          },
+          CameraComponent {
+            projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
+            near_plane: 0.1,
+            far_plane: 100.0,
+          },
+        ),
+        aethervk_oshal_rlib::os::time::TimeReadings::default(),
+        [width, height],
+      );
+
+      let extent = device.get_presentation_engine_extent(presentation_engine)?;
+      let model_matrix = transform.to_mat4();
+
+      let cmd_buf_guard =
+        ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id)).unwrap();
+      render_scene
+        .add_renderable(
+          cmd_buffer_handle,
+          device,
+          entity_id,
+          model_matrix,
+          crate::scene::RenderableDataRef::PhysicalMesh(&mesh_comp),
+          presentation_engine,
+          "debug_name",
+          false,    // draw_outline
+          [0.0; 4], // outline_color
+        )
+        .unwrap();
+
+      device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result).unwrap();
+      let render_pass_guard = ScopedRenderPass::new(device, cmd_buffer_handle);
+
+      device.set_viewport(cmd_buffer_handle, &gpu::Viewport::from_extent(extent))?;
+      device.set_scissor(cmd_buffer_handle, &gpu::Rect2D::from_extent(extent))?;
+      crate::gpu::frame::render_frame(
+        device,
+        cmd_buffer_handle,
+        &render_scene,
+        presentation_engine,
+      )
+      .unwrap();
+
+      render_pass_guard.end().unwrap();
+
+      let actual_device =
+        device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+      actual_device
+        .record_test_depth_stencil_download(cmd_buffer_handle, presentation_engine, task_id)
+        .unwrap();
+
+      cmd_buf_guard.submit().unwrap();
+
+      while !device.is_task_completed(task_id).unwrap() {
+        core::hint::spin_loop();
+      }
+
+      let depth_size = (width * height * 4) as usize;
+      let stencil_size = (width * height * 1) as usize;
+      let mut buffer = vec![0u8; depth_size + stencil_size];
+      actual_device.read_windowless_download(task_id, &mut buffer).unwrap();
+
+      let (depth, stencil) = actual_device.separate_depth_stencil(&buffer, width, height);
+
+      let mut found_mesh = false;
+      for i in 0..(width * height) as usize {
+        if depth[i] < 1.0 {
+          found_mesh = true;
+          // check stencil
+          assert_eq!(stencil[i], 255, "Stencil should be 255 where mesh is drawn");
+        } else {
+          // background
+          assert_eq!(stencil[i], 0, "Stencil should be 0 where mesh is NOT drawn");
+        }
+      }
+      assert!(
+        found_mesh,
+        "Mesh should be visible in perspective projection"
+      );
+
+      let depth_u8: Vec<u8> = depth.iter().map(|&d| (d * 255.0).clamp(0.0, 255.0) as u8).collect();
+      image::save_buffer(
+        "test_output_depth_perspective.png",
+        &depth_u8,
+        width,
+        height,
+        image::ColorType::L8,
+      )
+      .unwrap();
+      image::save_buffer(
+        "test_output_stencil_perspective.png",
+        &stencil,
+        width,
+        height,
+        image::ColorType::L8,
+      )
+      .unwrap();
+
+      crate::types::GpuResult::Ok(())
+    })
+    .unwrap();
+
+  // 2. Orthographic
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      let task_id = device.create_task();
+      device.start_frame()?;
+      let acquire_result = device.acquire_next_image(presentation_engine)?;
+      let cmd_buffer_handle = device.get_command_buffer()?;
+
+      let mut render_scene = RenderScene::new(
+        (
+          TransformComponent {
+            position: Vec3f32::from_array([0.0, 0.0, 0.0]),
+            rotation: Quat::identity(),
+            scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+          },
+          CameraComponent {
+            projection: Mat4x4f32::orthographic_vk(-5.0, 5.0, -5.0, 5.0, 0.1, 100.0),
+            near_plane: 0.1,
+            far_plane: 100.0,
+          },
+        ),
+        aethervk_oshal_rlib::os::time::TimeReadings::default(),
+        [width, height],
+      );
+
+      let model_matrix = transform.to_mat4();
+
+      render_scene.add_renderable(
+        cmd_buffer_handle,
+        device,
+        entity_id,
+        model_matrix,
+        crate::scene::RenderableDataRef::PhysicalMesh(&mesh_comp),
+        presentation_engine,
+        "debug_name",
+        false,    // draw_outline
+        [0.0; 4], // outline_color
+      )?;
+
+      let cmd_scope = ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+      device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
+      let render_pass_guard = ScopedRenderPass::new(device, cmd_buffer_handle);
+      crate::gpu::frame::render_frame(
+        device,
+        cmd_buffer_handle,
+        &render_scene,
+        presentation_engine,
+      )?;
+
+      render_pass_guard.end()?;
+
+      let actual_device =
+        device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+      actual_device.record_test_depth_stencil_download(
+        cmd_buffer_handle,
+        presentation_engine,
+        task_id,
+      )?;
+
+      cmd_scope.submit()?;
+      while device.is_task_completed(task_id)? {
+        core::hint::spin_loop();
+      }
+
+      let depth_size = (width * height * 4) as usize;
+      let stencil_size = (width * height * 1) as usize;
+      let mut buffer = vec![0u8; depth_size + stencil_size];
+      actual_device.read_windowless_download(task_id, &mut buffer)?;
+
+      let (depth, stencil) = actual_device.separate_depth_stencil(&buffer, width, height);
+
+      let mut found_mesh = false;
+      for i in 0..(width * height) as usize {
+        if depth[i] < 1.0 {
+          found_mesh = true;
+          // check stencil
+          assert_eq!(stencil[i], 255, "Stencil should be 255 where mesh is drawn");
+        }
+      }
+      assert!(
+        found_mesh,
+        "Mesh should be visible in orthographic projection"
+      );
+
+      let depth_u8: Vec<u8> = depth.iter().map(|&d| (d * 255.0).clamp(0.0, 255.0) as u8).collect();
+      image::save_buffer(
+        "test_output_depth_orthographic.png",
+        &depth_u8,
+        width,
+        height,
+        image::ColorType::L8,
+      )
+      .unwrap();
+      image::save_buffer(
+        "test_output_stencil_orthographic.png",
+        &stencil,
+        width,
+        height,
+        image::ColorType::L8,
+      )
+      .unwrap();
+
+      crate::types::GpuResult::Ok(())
+    })
+    .unwrap();
 }

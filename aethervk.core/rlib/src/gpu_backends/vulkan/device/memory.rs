@@ -1,11 +1,8 @@
-use core::{mem, ptr};
-use alloc::{boxed::Box};
+use alloc::boxed::Box;
 use ash::vk;
+use core::{mem, ptr};
 
-use crate::{
-  types::{GpuResult},
-  gpu_backends::{vulkan::device::DeviceResource},
-};
+use crate::{gpu_backends::vulkan::device::DeviceResource, types::GpuResult};
 use aethervk_oshal_rlib as oshal;
 
 pub(super) struct GlobalDeviceAllocator {
@@ -90,11 +87,7 @@ impl GlobalDeviceAllocator {
   }
 
   pub fn refresh_vma_budgets(&mut self) {
-    unsafe {
-      self
-        .allocator
-        .get_heap_budgets_cached(&mut self.memory_budgets)
-    };
+    unsafe { self.allocator.get_heap_budgets_cached(&mut self.memory_budgets) };
   }
 
   pub fn set_current_frame_index(&self, frame_index: u32) {
@@ -162,10 +155,7 @@ impl FrameStagingArena {
         return None;
       }
 
-      match self
-        .offset
-        .compare_exchange_weak(current, next, Ordering::SeqCst, Ordering::Relaxed)
-      {
+      match self.offset.compare_exchange_weak(current, next, Ordering::SeqCst, Ordering::Relaxed) {
         Ok(_) => return Some((aligned, unsafe { self.mapped_ptr.add(aligned) })),
         Err(val) => current = val,
       }

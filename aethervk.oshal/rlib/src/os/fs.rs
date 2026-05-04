@@ -1,10 +1,10 @@
 use alloc::borrow::Cow;
 use core::borrow::Borrow;
 
+use crate::os::FsError;
 use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Formatter;
-use crate::os::FsError;
 
 #[cfg(windows)]
 #[allow(non_camel_case_types)]
@@ -88,9 +88,7 @@ impl Path {
     #[cfg(windows)]
     {
       // Windows: We must allocate a String to convert UTF-16 to UTF-8
-      alloc::string::String::from_utf16(strip_nul(&self.inner))
-        .ok()
-        .map(Cow::Owned)
+      alloc::string::String::from_utf16(strip_nul(&self.inner)).ok().map(Cow::Owned)
     }
 
     #[cfg(not(windows))]
@@ -139,7 +137,7 @@ impl FileSystemObject for Path {
     #[cfg(windows)]
     {
       use windows::Win32::Storage::FileSystem::{
-        GetFileAttributesW, FILE_ATTRIBUTE_DIRECTORY, INVALID_FILE_ATTRIBUTES,
+        FILE_ATTRIBUTE_DIRECTORY, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
       };
 
       let mut path_buf = self.to_pathbuf();
@@ -162,7 +160,7 @@ impl FileSystemObject for Path {
     #[cfg(windows)]
     {
       use windows::Win32::Storage::FileSystem::{
-        GetFileAttributesW, FILE_ATTRIBUTE_DIRECTORY, INVALID_FILE_ATTRIBUTES,
+        FILE_ATTRIBUTE_DIRECTORY, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
       };
 
       let mut path_buf = self.to_pathbuf();
@@ -552,10 +550,10 @@ pub fn current_exe() -> Result<PathBuf, FsError> {
 pub fn read<T: AsRef<Path>>(path: T) -> Result<Vec<u8>, FsError> {
   #[cfg(windows)]
   {
+    use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, INVALID_HANDLE_VALUE};
     use windows::Win32::Storage::FileSystem::{
-      CreateFileW, ReadFile, GetFileSizeEx, FILE_SHARE_READ, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+      CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, GetFileSizeEx, OPEN_EXISTING, ReadFile,
     };
-    use windows::Win32::Foundation::{GENERIC_READ, CloseHandle, INVALID_HANDLE_VALUE};
 
     let mut path_buf = path.to_pathbuf();
     let handle = unsafe {
@@ -608,8 +606,8 @@ pub fn read<T: AsRef<Path>>(path: T) -> Result<Vec<u8>, FsError> {
   }
   #[cfg(not(windows))]
   {
-    use libc::{open, fstat, read, close, O_RDONLY};
     use core::mem;
+    use libc::{O_RDONLY, close, fstat, open, read};
 
     let mut path_buf: PathBuf = path.as_ref().to_pathbuf();
     let fd = unsafe { open(path_buf.as_ptr_mut(), O_RDONLY) };
@@ -644,10 +642,10 @@ pub fn read<T: AsRef<Path>>(path: T) -> Result<Vec<u8>, FsError> {
 pub fn write(path: &Path, content: &[u8]) -> Result<(), FsError> {
   #[cfg(windows)]
   {
+    use windows::Win32::Foundation::{CloseHandle, GENERIC_WRITE, INVALID_HANDLE_VALUE};
     use windows::Win32::Storage::FileSystem::{
-      CreateFileW, WriteFile, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
+      CREATE_ALWAYS, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, WriteFile,
     };
-    use windows::Win32::Foundation::{GENERIC_WRITE, CloseHandle, INVALID_HANDLE_VALUE};
 
     let mut path_buf = path.to_pathbuf();
     let handle = unsafe {
@@ -687,7 +685,7 @@ pub fn write(path: &Path, content: &[u8]) -> Result<(), FsError> {
   }
   #[cfg(not(windows))]
   {
-    use libc::{open, write, close, O_WRONLY, O_CREAT, O_TRUNC};
+    use libc::{O_CREAT, O_TRUNC, O_WRONLY, close, open, write};
 
     let mut path_buf = path.to_pathbuf();
     // 0o666 = read and write for owner, group, and others
@@ -853,8 +851,8 @@ impl Drop for ReadDir {
 pub fn read_dir(path: &Path) -> Result<ReadDir, FsError> {
   #[cfg(windows)]
   {
-    use windows::Win32::Storage::FileSystem::{FindFirstFileW, WIN32_FIND_DATAW};
     use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows::Win32::Storage::FileSystem::{FindFirstFileW, WIN32_FIND_DATAW};
 
     let mut search_path = path.to_pathbuf();
     search_path.push_slice(&[SEP, b'*' as os_char]);

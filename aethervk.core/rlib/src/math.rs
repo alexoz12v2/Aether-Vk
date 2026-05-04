@@ -1,10 +1,14 @@
+use aethervk_oshal_rlib::math::matrix::{
+  Matrix, Matrix3, MatrixVectorMul, SquareMatrix, mat3::Mat3f32,
+};
 use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4, vec3::Vec3f32};
-use aethervk_oshal_rlib::math::matrix::{Matrix, Matrix3, MatrixVectorMul, SquareMatrix, mat3::Mat3f32};
 use aethervk_oshal_rlib::math::{FloatLike, MulAddIdentity};
 use alloc::vec::Vec;
 
 pub mod collision;
 pub mod distribution;
+pub mod particles_edu;
+pub mod physics;
 
 /// Converts a world-space point to screen space.
 pub fn from_world_space_to_screen_space(

@@ -14,8 +14,7 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
   private readonly NativeRuntimeService? _runtimeService;
   private readonly BreadcrumbService? _breadcrumbService;
 
-  [ObservableProperty]
-  private Entity? _selectedEntity;
+  public Entity? SelectedEntity => _stateManager.GetOrCreateScene(CurrentSceneId).SelectedEntity;
 
   [ObservableProperty]
   private bool _isFollowingEntity;
@@ -23,7 +22,12 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
   [ObservableProperty]
   private ulong _currentSceneId;
 
-  public PropertiesViewModel(ulong sceneId, SceneStateManager stateManager, NativeRuntimeService? runtimeService = null, BreadcrumbService? breadcrumbService = null)
+  public PropertiesViewModel(
+    ulong sceneId,
+    SceneStateManager stateManager,
+    NativeRuntimeService? runtimeService = null,
+    BreadcrumbService? breadcrumbService = null
+  )
     : base("Properties")
   {
     System.Console.WriteLine($"[PropertiesViewModel] Constructor called for Scene {sceneId}");
@@ -32,18 +36,19 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
     _breadcrumbService = breadcrumbService;
     CurrentSceneId = sceneId;
     WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
-
-    // Initialize with current selection if any
-    var state = _stateManager.GetOrCreateScene(CurrentSceneId);
-    SelectedEntity = state.SelectedEntity;
   }
 
   public void Receive(EntitySelectedMessage message)
   {
-    System.Console.WriteLine($"[PropertiesViewModel] Received selection: {message.SelectedEntity?.Name ?? "null"}");
-    
-    _breadcrumbService?.ShowMessageAsync("Properties", $"Received selection: {message.SelectedEntity?.Name ?? "null"}");
-    SelectedEntity = message.SelectedEntity;
+    System.Console.WriteLine(
+      $"[PropertiesViewModel] Received selection: {message.SelectedEntity?.Name ?? "null"}"
+    );
+
+    _breadcrumbService?.ShowMessageAsync(
+      "Properties",
+      $"Received selection: {message.SelectedEntity?.Name ?? "null"}"
+    );
+    OnPropertyChanged(nameof(SelectedEntity));
     IsFollowingEntity = false;
 
     if (SelectedEntity != null)

@@ -1,5 +1,5 @@
 use crate::os;
-use crate::os::{FsError, fs::Path, NativeResult, NativeError};
+use crate::os::{FsError, NativeError, NativeResult, fs::Path};
 
 pub struct MappedFile {
   ptr: *mut core::ffi::c_void,
@@ -21,10 +21,10 @@ impl MappedFile {
 
       use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE};
       use windows::Win32::Storage::FileSystem::{
-        CreateFileW, GetFileSizeEx, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, OPEN_EXISTING,
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, GetFileSizeEx, OPEN_EXISTING,
       };
       use windows::Win32::System::Memory::{
-        CreateFileMappingW, MapViewOfFile, FILE_MAP_READ, PAGE_READONLY,
+        CreateFileMappingW, FILE_MAP_READ, MapViewOfFile, PAGE_READONLY,
       };
 
       // Polyfill traits to cleanly handle API breaks between `windows` >=0.59 and <=0.62
@@ -118,7 +118,7 @@ impl MappedFile {
 
     #[cfg(not(windows))]
     {
-      use libc::{close, fstat, mmap, open, MAP_FAILED, MAP_PRIVATE, O_RDONLY, PROT_READ};
+      use libc::{MAP_FAILED, MAP_PRIVATE, O_RDONLY, PROT_READ, close, fstat, mmap, open};
 
       let fd = unsafe { open(path_buf.as_ptr_mut(), O_RDONLY) };
       if fd < 0 {
@@ -174,7 +174,7 @@ impl Drop for MappedFile {
 
     #[cfg(windows)]
     {
-      use windows::Win32::System::Memory::{UnmapViewOfFile, MEMORY_MAPPED_VIEW_ADDRESS};
+      use windows::Win32::System::Memory::{MEMORY_MAPPED_VIEW_ADDRESS, UnmapViewOfFile};
 
       let _ = unsafe {
         UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
@@ -240,15 +240,11 @@ impl AsRef<[u8]> for Mmap {
 #[cfg(target_family = "unix")]
 impl Mmap {
   pub fn open<P: AsRef<os::fs::Path>>(path: P) -> NativeResult<Self> {
-    use libc::{open, fstat, mmap, close, O_RDONLY, PROT_READ, MAP_PRIVATE, MAP_FAILED};
+    use alloc::string::ToString;
     use core::{mem, ptr};
-    use alloc::string::{ToString};
+    use libc::{MAP_FAILED, MAP_PRIVATE, O_RDONLY, PROT_READ, close, fstat, mmap, open};
 
-    let path_str = path
-      .as_ref()
-      .to_str_unified()
-      .ok_or(NativeError::InvalidArgument)?
-      .to_string();
+    let path_str = path.as_ref().to_str_unified().ok_or(NativeError::InvalidArgument)?.to_string();
     let c_path = alloc::ffi::CString::new(path_str).map_err(|_| NativeError::InvalidArgument)?;
     let fd = unsafe { open(c_path.as_ptr(), O_RDONLY) };
     if fd < 0 {
@@ -296,12 +292,12 @@ impl Drop for Mmap {
 #[cfg(windows)]
 impl Mmap {
   pub fn open<P: AsRef<os::fs::Path>>(path: P) -> NativeResult<Self> {
+    use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, INVALID_HANDLE_VALUE};
     use windows::Win32::Storage::FileSystem::{
-      CreateFileW, GetFileSizeEx, FILE_SHARE_READ, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+      CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, GetFileSizeEx, OPEN_EXISTING,
     };
-    use windows::Win32::Foundation::{GENERIC_READ, CloseHandle, INVALID_HANDLE_VALUE};
     use windows::Win32::System::Memory::{
-      CreateFileMappingW, MapViewOfFile, PAGE_READONLY, FILE_MAP_READ,
+      CreateFileMappingW, FILE_MAP_READ, MapViewOfFile, PAGE_READONLY,
     };
     let path = {
       let mut p: alloc::vec::Vec<u16> = path
@@ -376,7 +372,7 @@ impl Mmap {
 impl Drop for Mmap {
   fn drop(&mut self) {
     if self.len > 0 {
-      use windows::Win32::System::Memory::{UnmapViewOfFile, MEMORY_MAPPED_VIEW_ADDRESS};
+      use windows::Win32::System::Memory::{MEMORY_MAPPED_VIEW_ADDRESS, UnmapViewOfFile};
       unsafe {
         let _ = UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
           Value: self.ptr as *mut core::ffi::c_void,

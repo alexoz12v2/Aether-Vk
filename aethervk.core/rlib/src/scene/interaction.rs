@@ -1,7 +1,7 @@
 use crate::scene::{
-  EntityId, Scene, HiddenComponent, SelectedComponent, FollowingComponent, AddComponentError,
+  AddComponentError, EntityId, FollowingComponent, HiddenComponent, Scene, SelectedComponent,
 };
-use crate::types::{EngineResult, EngineError};
+use crate::types::{EngineError, EngineResult};
 use alloc::vec::Vec;
 
 // TODO parallel with option pool (all trait functions)
@@ -9,18 +9,23 @@ use alloc::vec::Vec;
 pub trait SceneInteractionExt {
   fn hide_entity(&self, entity: EntityId) -> EngineResult<()>;
   fn show_entity(&self, entity: EntityId) -> EngineResult<()>;
-  fn select_entity(&self, entity: EntityId, pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>) -> EngineResult<()>;
+  fn select_entity(
+    &self,
+    entity: EntityId,
+    pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>,
+  ) -> EngineResult<()>;
   fn unselect_entity(&self, entity: EntityId) -> EngineResult<()>;
-  fn follow_entity(&self, entity: EntityId, pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>) -> EngineResult<()>;
+  fn follow_entity(
+    &self,
+    entity: EntityId,
+    pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>,
+  ) -> EngineResult<()>;
   fn unfollow_entity(&self, entity: EntityId) -> EngineResult<()>;
 }
 
 impl SceneInteractionExt for Scene {
   fn hide_entity(&self, entity: EntityId) -> EngineResult<()> {
-    if self
-      .with_component::<HiddenComponent, _, _>(entity, |_| ())
-      .is_none()
-    {
+    if self.with_component::<HiddenComponent, _, _>(entity, |_| ()).is_none() {
       self
         .add_component(entity, HiddenComponent {})
         .map_err(|e| <AddComponentError as Into<EngineError>>::into(e.into()))?;
@@ -33,7 +38,11 @@ impl SceneInteractionExt for Scene {
     Ok(())
   }
 
-  fn select_entity(&self, entity: EntityId, pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>) -> EngineResult<()> {
+  fn select_entity(
+    &self,
+    entity: EntityId,
+    pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>,
+  ) -> EngineResult<()> {
     let mut to_remove = Vec::new();
     self.query1::<SelectedComponent, _>(|id, _| {
       if id != entity {
@@ -43,10 +52,7 @@ impl SceneInteractionExt for Scene {
     for id in to_remove {
       let _ = self.remove_component::<SelectedComponent>(id);
     }
-    if self
-      .with_component::<SelectedComponent, _, _>(entity, |_| ())
-      .is_none()
-    {
+    if self.with_component::<SelectedComponent, _, _>(entity, |_| ()).is_none() {
       self
         .add_component(entity, SelectedComponent {})
         .map_err(|e| <AddComponentError as Into<EngineError>>::into(e.into()))?;
@@ -59,7 +65,11 @@ impl SceneInteractionExt for Scene {
     Ok(())
   }
 
-  fn follow_entity(&self, entity: EntityId, pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>) -> EngineResult<()> {
+  fn follow_entity(
+    &self,
+    entity: EntityId,
+    pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>,
+  ) -> EngineResult<()> {
     let mut to_remove = Vec::new();
     if self.should_parallelize() && pool.is_some() {
       let results = self.query1_res_par::<FollowingComponent, _, _>(pool.unwrap(), |id, _| {
@@ -69,9 +79,8 @@ impl SceneInteractionExt for Scene {
         to_remove.push(id);
       }
     } else {
-      let results = self.query1_res::<FollowingComponent, _, _>(|id, _| {
-        if id != entity { Some(id) } else { None }
-      });
+      let results = self
+        .query1_res::<FollowingComponent, _, _>(|id, _| if id != entity { Some(id) } else { None });
       for (id, _) in results {
         to_remove.push(id);
       }
@@ -79,10 +88,7 @@ impl SceneInteractionExt for Scene {
     for id in to_remove {
       let _ = self.remove_component::<FollowingComponent>(id);
     }
-    if self
-      .with_component::<FollowingComponent, _, _>(entity, |_| ())
-      .is_none()
-    {
+    if self.with_component::<FollowingComponent, _, _>(entity, |_| ()).is_none() {
       self
         .add_component(entity, FollowingComponent {})
         .map_err(|e| <AddComponentError as Into<EngineError>>::into(e.into()))?;

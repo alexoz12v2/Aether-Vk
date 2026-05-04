@@ -2,9 +2,9 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use alloc::{boxed::Box, string::String, vec::Vec};
 
+use aethervk_oshal_rlib::os::{FsError, NativeError};
 use heapless::index_map::FnvIndexMap;
 use thiserror::Error;
-use aethervk_oshal_rlib::os::{FsError, NativeError};
 
 pub const RUNTIME_PARAMS_MAX_COUNT: usize = 16;
 pub(super) type RuntimeParamsIndex = u32;
@@ -43,7 +43,7 @@ pub enum EngineError {
 
   #[error("null argument")]
   InvalidNullArgument,
-  
+
   #[error("Native Error: {0}")]
   Native(#[from] NativeError),
 }
@@ -80,7 +80,7 @@ pub enum GpuError {
 
   #[error("Backend error: {0}")]
   BackendSpecific(String),
-  
+
   #[error("Resource not found")]
   NotFound,
 }

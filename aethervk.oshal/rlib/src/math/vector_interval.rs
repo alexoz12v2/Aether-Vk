@@ -1,10 +1,10 @@
-use core::{cmp, ops};
 use crate::math::{
+  FloatLike, Fma, FmaAssign, MulAddIdentity,
   floating::{FloatBits, FloatOps},
   scalar_interval::FloatInterval,
   vector::Vector,
-  FloatLike, Fma, FmaAssign, MulAddIdentity,
 };
+use core::{cmp, ops};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VectorInterval<V: Vector> {

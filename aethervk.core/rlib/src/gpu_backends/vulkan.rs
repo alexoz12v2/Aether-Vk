@@ -1,6 +1,6 @@
 use core::{
-  str::FromStr,
   ffi::{self, CStr},
+  str::FromStr,
 };
 
 use crate::{
@@ -14,18 +14,11 @@ use crate::{
 };
 
 use alloc::{ffi::CString, string::ToString, sync};
-use ash::vk;
 use heapless::index_map::FnvIndexMap;
 
 mod device;
 mod instance;
 mod utils;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ResourceHandle {
-  index: u32,
-  generation: u32,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyncMode {
@@ -48,13 +41,10 @@ pub mod constants {
 }
 
 /// Structure containing main vulkan handles. Shared by both Runtime Interface and compute interface
-/// - Massive in size, supposed to be heap allocated and constructed on the heap in-place
-#[ouroboros::self_referencing]
+/// - Massive, supposed to be heap allocated and constructed on the heap in-place
 pub(super) struct VulkanCore {
-  instance: instance::Instance,
-  #[borrows(instance)]
-  #[covariant]
-  live_devices: FnvIndexMap<RenderDeviceHandle, device::Device<'this>, MAX_DEVICES>,
+  instance: alloc::sync::Arc<instance::Instance>,
+  live_devices: FnvIndexMap<RenderDeviceHandle, device::Device, MAX_DEVICES>,
 }
 
 unsafe impl Sync for VulkanCore {}
@@ -73,17 +63,15 @@ impl VulkanCore {
     base_override_path: Option<&CStr>,
     validation_error_callback: Option<fn(&str)>,
   ) -> GpuResult<Self> {
-    let instance =
-      unsafe { instance::Instance::new(base_override_path, validation_error_callback) }?;
+    let instance = alloc::sync::Arc::new(unsafe {
+      instance::Instance::new(base_override_path, validation_error_callback)
+    }?);
     let live_devices = FnvIndexMap::new();
 
-    Ok(
-      VulkanCoreBuilder {
-        instance,
-        live_devices_builder: |_| live_devices,
-      }
-      .build(),
-    )
+    Ok(Self {
+      instance,
+      live_devices,
+    })
   }
 }
 
@@ -147,32 +135,34 @@ impl RenderContext for VulkanRenderContext {
     let query_input = PhysicalDeviceQueryInput::from_params(additional_params)
       .ok_or(GpuError::InvalidArgument("vulkan.rs:128"))?;
 
-    self.core.write().with_mut(|fields| {
-      if !fields.live_devices.contains_key(&handle) {
-        // 1. We need to reserve space in the heapless map.
-        // Since heapless doesn't have an 'entry' API for uninitialized memory,
-        // we insert a "dummy" (zeroed) value first.
-        // To avoid 1.5KB of zeros on the stack, we use unsafe to bit-copy an uninit value.
-        unsafe {
-          #[allow(invalid_value)]
-          let uninit_val = core::mem::MaybeUninit::<device::Device>::uninit().assume_init();
-          fields
-            .live_devices
-            .insert(handle, uninit_val)
-            .unwrap_unchecked();
-        }
+    let mut core = self.core.write();
 
-        // 2. Get a mutable pointer to the slot we just created in the heap-resident map.
-        let dst_ptr = fields.live_devices.get_mut(&handle).unwrap() as *mut device::Device;
-
-        // 3. Construct the device directly into that heap location.
-        unsafe {
-          device::Device::init_at_ptr(dst_ptr, fields.instance, index, &query_input)?;
-        }
+    if !core.live_devices.contains_key(&handle) {
+      // 1. We need to reserve space in the heapless map.
+      // Since heapless doesn't have an 'entry' API for uninitialized memory,
+      // we insert a "dummy" (zeroed) value first.
+      // To avoid 1.5KB of zeros on the stack, we use unsafe to bit-copy an uninit value.
+      unsafe {
+        #[allow(invalid_value)]
+        let uninit_val = core::mem::MaybeUninit::<device::Device>::uninit().assume_init();
+        core.live_devices.insert(handle, uninit_val).unwrap_unchecked();
       }
 
-      Ok(handle)
-    })
+      // 2. Get a mutable pointer to the slot we just created in the heap-resident map.
+      let dst_ptr = core.live_devices.get_mut(&handle).unwrap() as *mut device::Device;
+
+      // 3. Construct the device directly into that heap location.
+      unsafe {
+        device::Device::init_at_ptr(
+          dst_ptr,
+          alloc::sync::Arc::clone(&core.instance),
+          index,
+          &query_input,
+        )?;
+      }
+    }
+
+    Ok(handle)
   }
 
   fn deref_device_and(
@@ -181,10 +171,7 @@ impl RenderContext for VulkanRenderContext {
     p_user_data: *mut ffi::c_void,
     f: fn(dev: &dyn RenderDevice, p_user_data: *mut ffi::c_void) -> GpuResult<()>,
   ) -> Option<GpuResult<()>> {
-    self.core.read().with_live_devices(|live_devices| {
-      live_devices
-        .get(&dev_handle)
-        .map(|device| f(device, p_user_data))
-    })
+    let core = self.core.read();
+    core.live_devices.get(&dev_handle).map(|device| f(device, p_user_data))
   }
 }
