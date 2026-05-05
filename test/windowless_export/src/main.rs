@@ -1,3 +1,5 @@
+use aethervk_core_rlib::gpu::{FrameCancelGuard, ScopedCommandBuffer, ScopedRenderPass};
+use aethervk_core_rlib::types::GpuError;
 use aethervk_core_rlib::{
   gpu::{self, RenderDevice},
   scene::{
@@ -9,12 +11,10 @@ use aethervk_core_rlib::{
 use aethervk_oshal_rlib::math::{
   matrix::{Matrix4, mat4::Mat4x4f32},
   quaternion::Quaternion,
-  vector::{vec3::Vec3f32, vec4::Quat, Vector3},
+  vector::{Vector3, vec3::Vec3f32, vec4::Quat},
 };
 use heapless::index_map::FnvIndexMap;
-use std::sync::{Arc};
-use aethervk_core_rlib::gpu::{FrameCancelGuard, ScopedCommandBuffer, ScopedRenderPass};
-use aethervk_core_rlib::types::GpuError;
+use std::sync::Arc;
 use test_utils::scene_to_render_scene;
 
 macro_rules! try_task {
@@ -52,10 +52,7 @@ fn main() {
   {
     let render_frontend =
       gpu::new_render_frontend(gpu::VULKAN_RENDER_BACKEND, runtime_params).unwrap();
-    let render_device_handle = render_frontend
-      .write()
-      .init_device(0, &additional_params)
-      .unwrap();
+    let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
     render_frontend
       .with_device(render_device_handle, |device| {
         device.wire_callbacks(Arc::clone(&thread_pool))
@@ -66,11 +63,7 @@ fn main() {
     let height = 600;
 
     let asset_path = {
-      let mut path = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_owned();
+      let mut path = std::env::current_exe().unwrap().parent().unwrap().to_owned();
       while !path.join("assets").exists() {
         path = path.parent().unwrap().to_owned();
       }
@@ -87,9 +80,7 @@ fn main() {
         .with_device(render_device_handle, |device| {
           let res = device.create_presentation_engine(&params);
           println!("create_presentation_engine result: {:?}", res);
-          device
-            .generate_sky()
-            .expect("Failed to generate background sky map!");
+          device.generate_sky().expect("Failed to generate background sky map!");
           res
         })
         .unwrap()
@@ -192,6 +183,7 @@ fn main() {
         sun_entity,
         SunComponent {
           resolution: (128, 128, 128),
+          radius: 1.0,
         },
       )
       .unwrap();
@@ -226,10 +218,9 @@ fn main() {
         let cmd_guard = ScopedCommandBuffer::new(device, cmd_buffer, Some(task.task_id))?;
         try_task!(task, device.begin_command_buffer(cmd_buffer));
         if let Some(sun_call) = &render_scene.sun_call {
-          // TODO move to kernels
           try_task!(
             task,
-            device.update_sun(cmd_buffer, sun_call.entity, (128, 128, 128))
+            device.update_sun(cmd_buffer, sun_call.entity, (128, 128, 128), 1.0)
           );
         }
         try_task!(
@@ -287,12 +278,12 @@ fn main() {
           })?;
 
         let mut buffer = vec![0u8; (width * height * 4) as usize];
-        device
-          .download_windowless_image(presentation_engine, &mut buffer, Some(1))
-          .map_err(|e| {
+        device.download_windowless_image(presentation_engine, &mut buffer, Some(1)).map_err(
+          |e| {
             println!("download_windowless_image failed: {:?}", e);
             e
-          })?;
+          },
+        )?;
 
         println!("First few bytes: {:?}", &buffer[0..16]);
         let mut unique_pixels = std::collections::HashSet::new();
@@ -309,11 +300,7 @@ fn main() {
         println!("Unique pixels count: {:?}", unique_pixels.len());
         println!("Blue pixels count: {}", blue_count);
 
-        let out_path = std::env::current_exe()
-          .unwrap()
-          .parent()
-          .unwrap()
-          .join("output.png");
+        let out_path = std::env::current_exe().unwrap().parent().unwrap().join("output.png");
         image::save_buffer(
           out_path.clone(),
           &buffer,

@@ -233,7 +233,7 @@ impl SimulationContext {
   }
 
   pub fn camera_start_pos() -> Vec3f32 {
-    Vec3f32::from_components(0.0, -400.0, 0.0)
+    Vec3f32::from_components(0.0, -7.07, 7.07)
   }
 
   // TODO remove
@@ -282,11 +282,12 @@ impl SimulationContext {
       sun_entity,
       SunComponent {
         resolution: (128, 128, 128),
+        radius: 0.6,
       },
     )?;
     scene.set_parent(sun_entity, Some(root_entity));
 
-    let sun_sphere = crate::simulation::comet::generate_uv_sphere(0.6, 64, 64);
+    let sun_sphere = crate::simulation::comet::generate_uv_sphere(0.6, 64, 64, 1.989e30_f32);
     scene.add_component(
       sun_entity,
       PhysicalMeshComponent {

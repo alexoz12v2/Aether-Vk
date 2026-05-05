@@ -38,6 +38,7 @@ impl SimulationContext {
     scene_id: u64,
     name: *const c_char,
     radius: f32,
+    mass: f32,
   ) -> Result<u64, EngineError> {
     let name_str = if name.is_null() {
       "ProceduralSphere"
@@ -45,7 +46,7 @@ impl SimulationContext {
       unsafe { CStr::from_ptr(name).to_str().unwrap_or("ProceduralSphere") }
     };
 
-    let sphere = crate::simulation::comet::generate_uv_sphere(radius, 32, 32);
+    let sphere = crate::simulation::comet::generate_uv_sphere(radius, 32, 32, mass);
     let mut scenes = self.scenes.write();
     let scene_ctx_lock =
       scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;

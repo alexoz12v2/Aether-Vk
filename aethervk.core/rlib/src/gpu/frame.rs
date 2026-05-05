@@ -209,6 +209,7 @@ pub struct SunDrawCall {
   /// camera position in local space of the sun
   pub local_camera_pos: Vec3f32,
   pub vertex_count: u32,
+  pub radius: f32,
 }
 
 impl SunDrawCall {
@@ -221,6 +222,7 @@ impl SunDrawCall {
     c: &CameraRenderData,
     pipeline_key: PipelineKey,
     entity: EntityId,
+    radius: f32,
   ) -> GpuResult<Self> {
     let model_inv = model.inverse().ok_or(GpuError::BackendSpecific(alloc::format!(
       "SunDrawCall: Couldn't invert model matrix {:?}",
@@ -233,6 +235,7 @@ impl SunDrawCall {
       model_matrix: model,
       local_camera_pos,
       vertex_count: Self::VERTEX_COUNT_TRIANGLE_STRIP_VK,
+      radius,
     })
   }
 
@@ -388,17 +391,10 @@ impl CameraRenderData {
   pub fn new(transform: &TransformComponent, camera: &CameraComponent) -> Self {
     // Extract camera's local axes in world space
     let right = transform.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
-    let forward = transform.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
     let up = transform.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
+    let forward = transform.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
 
-    let p = transform.position;
-    // View matrix translates by -p, then projects onto right, up, backward (-forward)
-    let c0 = Vec4f32::from_components(right.x(), up.x(), -forward.x(), 0.0);
-    let c1 = Vec4f32::from_components(right.y(), up.y(), -forward.y(), 0.0);
-    let c2 = Vec4f32::from_components(right.z(), up.z(), -forward.z(), 0.0);
-    let c3 = Vec4f32::from_components(-right.dot(p), -up.dot(p), forward.dot(p), 1.0);
-
-    let view = Mat4x4f32::from_columns(c0, c1, c2, c3);
+    let view = Mat4x4f32::look_at_axes(right, forward, up, transform.position);
     let view_proj = camera.projection * view;
 
     Self {
@@ -413,34 +409,14 @@ impl CameraRenderData {
       near: camera.near_plane,
     }
   }
-
-  pub fn with_far_plane(&self, new_far: f32) -> Self {
-    // Extract aspect and fov from current projection
-    // proj.y.y = -f
-    // proj.x.x = f / aspect
-    let f = -self.proj.y.y();
-    let aspect = f / self.proj.x.x();
-    let fov = 2.0 * (1.0 / f).atan();
-
-    let new_proj = Mat4x4f32::perspective_vk(fov, aspect, self.near, new_far);
-    let new_view_proj = new_proj * self.view;
-
-    Self {
-      proj: new_proj,
-      view_proj: new_view_proj,
-      far: new_far,
-      ..*self
-    }
-  }
 }
 
 pub struct ParticleDrawCall {
   pub pipeline: PipelineKey,
-  pub particle_count: u32,
   pub system_particle_offset: u32,
   pub system_indirect_offset: u32,
   pub config: crate::scene::particles::ParticleEmitterConfig,
-  pub particles: alloc::vec::Vec<crate::scene::particles::ParticleData>,
+  pub particles: alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
 }
 
 pub struct RenderScene {
@@ -537,8 +513,8 @@ impl RenderScene {
             None
           },
           model_matrix,
-          0.0,
-          [0.0; 3],
+          component.emissive_intensity,
+          component.emissive_color,
         );
         self.draw_calls.push(dc);
       }
@@ -594,17 +570,17 @@ impl RenderScene {
         });
       }
       RenderableDataRef::ParticleSystem(component) => {
-        if component.particles.is_empty() {
+        let count = component.particles.read().len() as u32;
+        if count == 0 {
           return Ok(());
         }
         let particle_pipeline = device.get_particle_pipeline_key(presentation_engine_handle)?;
         self.particle_calls.push(ParticleDrawCall {
           pipeline: particle_pipeline,
-          particle_count: component.particles.len() as u32,
           system_particle_offset: 0,
           system_indirect_offset: 0,
           config: component.config.clone(),
-          particles: component.particles.clone(),
+          particles: alloc::sync::Arc::downgrade(&component.particles),
         });
       }
       RenderableDataRef::Gizmo(_) => {} // Handled elsewhere
@@ -933,8 +909,12 @@ pub fn render_frame(
   render_scene: &gpu::RenderScene,
   handle: PresentationEngineHandle,
 ) -> GpuResult<()> {
+  // First sky and grid
   if let Some(draw_call) = &render_scene.sky_call {
     do_draw_sky(device, cmd_buffer, draw_call)?;
+  }
+  if let Some(draw_call) = &render_scene.grid_call {
+    do_draw_grid(device, cmd_buffer, &render_scene.camera_data, draw_call)?;
   }
 
   let sun_pos = if let Some(draw_call) = &render_scene.sun_call {
@@ -948,20 +928,17 @@ pub fn render_frame(
       device,
       &render_scene.camera_data,
       sun_pos,
-      [1.0, 1.0, 1.0, 1.0],
+      [1.0, 1.0, 1.0, 1.0], // TODO
       cmd_buffer,
       draw_call,
     )?;
   }
 
+  // End of opaque Stuff, beginning semitransparent/transparent stuff
+
   // Draw Sun Volume after opaque meshes so it properly blends over them instead of being overwritten
   if let Some(draw_call) = &render_scene.sun_call {
     gpu::frame::do_draw_sun(device, &render_scene.camera_data, cmd_buffer, draw_call)?;
-  }
-
-  if let Some(draw_call) = &render_scene.grid_call {
-    let grid_camera = render_scene.camera_data.with_far_plane(10000.0);
-    gpu::frame::do_draw_grid(device, cmd_buffer, &grid_camera, draw_call)?;
   }
 
   if !render_scene.particle_calls.is_empty() {
@@ -970,6 +947,8 @@ pub fn render_frame(
       gpu::frame::do_draw_particle(device, &render_scene.camera_data, cmd_buffer, particle_call)?;
     }
   }
+
+  // end of scene, begin rendering UI elements
 
   if let Some(cursor_call) = &render_scene.cursor_call {
     gpu::frame::do_draw_cursor(

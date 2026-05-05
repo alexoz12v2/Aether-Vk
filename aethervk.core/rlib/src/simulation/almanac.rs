@@ -15,10 +15,9 @@ use aethervk_oshal_rlib::{
 };
 use alloc::{string::String, vec::Vec};
 
-// TODO: type safety between simulation units and real units, eg SimUnit<Vec3f32> vs RealUnit<Vec3f32>. Major refactoring here for these deref types
-
-/// scale factor between coordinates from SPK ephemeris and simulation space, *in km*
-pub const DISTANCE_SCALE_FACTOR: f64 = 10_000_000.0; // in km
+/// scale factor between coordinates from SPK ephemeris and simulation space
+/// basically 1 km / 1 AU
+pub const DISTANCE_SCALE_FACTOR: f64 = 1.0 / 6.6846e-9;
 
 /// Defined a frame whose origin is the sun, and whose orientation (equatorial plane) is the plane
 /// which contains the Sun's orbit (rotated ~23 degrees with respect to J2000, which is the plane

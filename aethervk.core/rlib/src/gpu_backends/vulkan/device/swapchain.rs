@@ -212,6 +212,10 @@ impl PresentationState {
     }
   }
 
+  pub(super) fn is_windowless(&self) -> bool {
+    matches!(self, Self::Windowless(_))
+  }
+
   pub(super) fn extent(&self) -> (u32, u32) {
     match self {
       Self::Windowed(state) => state.extent(),

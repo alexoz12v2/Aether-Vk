@@ -406,8 +406,8 @@ pub trait RenderCompute: Send + Sync {
 }
 
 pub trait RenderDevice: Send + Sync + core::any::Any {
-  fn as_any(&self) -> &dyn core::any::Any; 
-  
+  fn as_any(&self) -> &dyn core::any::Any;
+
   fn get_native_prop(&self, prop: NativeGpuProperty) -> Option<*mut core::ffi::c_void>;
 
   fn print_info(&self) -> String;
@@ -655,6 +655,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     cmd_buffer: CommandBufferHandle,
     entity_id: crate::scene::EntityId,
     resolution: (u32, u32, u32),
+    radius: f32,
   ) -> GpuResult<()>;
 
   fn prepare_billboard_archetype_for_render_and_bind_pipeline(

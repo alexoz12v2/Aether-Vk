@@ -22,34 +22,35 @@ const vec2 quad[4] = vec2[] (
 void main() {
   vec2 uv = quad[gl_VertexIndex];
 
-  vec3 right = vec3(push.view[0][0], push.view[1][0], push.view[2][0]);
-  vec3 up    = vec3(push.view[0][1], push.view[1][1], push.view[2][1]);
-
-  vec3 cursorPos = push.model[3].xyz;
-  vec4 viewPos = push.view * vec4(cursorPos, 1.0);
-
-  float dist = max(-viewPos.z, 0.001);
-  
   mat4 invView = inverse(push.view);
-  mat4 proj = push.viewProj * invView;
-  float proj11 = proj[1][1];
+  vec3 camPos = invView[3].xyz;
+  vec3 cursorPos = push.model[3].xyz;
+
+  vec3 right = normalize(invView[0].xyz);
+  vec3 up    = normalize(invView[2].xyz);
+
+  float dist = max(length(camPos - cursorPos), 0.001);
   
-  float pixelsPerUnit = push.window_extent.y * abs(proj11) * 0.5;
-  float pixelSize = (push.cursorSize * 150.0 * pixelsPerUnit) / dist;
+  float t = clamp((dist - 3.3) / (10.0 - 3.3), 0.0, 1.0);
+  float pct = mix(0.12, 0.07, t);
   
-  float minPixels = push.window_extent.y * 0.01;
-  float maxPixels = push.window_extent.y * 0.08;
-  pixelSize = clamp(pixelSize, minPixels, maxPixels);
+  float min_axis = min(push.window_extent.x, push.window_extent.y);
+  float desiredSizePixels = pct * min_axis;
   
-  float scale = (pixelSize * dist) / pixelsPerUnit;
+  vec4 centerClip = push.viewProj * vec4(cursorPos, 1.0);
+  float w = max(abs(centerClip.w), 0.0001);
+  
+  vec4 upClip = push.viewProj * vec4(up, 0.0);
+  vec2 upNDC = upClip.xy / w;
+  float upLenPixels = length(upNDC * (push.window_extent / 2.0));
+  
+  float scale = (desiredSizePixels / 2.0) / max(upLenPixels, 0.0001);
 
   vec3 worldPos = cursorPos
                 + right * uv.x * scale * 1.8
                 + up    * uv.y * scale * 1.8;
 
   gl_Position = push.viewProj * vec4(worldPos, 1.0);
-
-  vec3 camPos = invView[3].xyz;
 
   outRo = camPos - cursorPos;
   outWorldPos = worldPos - cursorPos;

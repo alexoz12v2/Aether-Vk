@@ -25,7 +25,7 @@ impl ParticleSystemExt for ParticleSystemComponent {
     u_roulette: &[f32],
   ) {
     let mut roulette_idx = 0;
-    for p in self.particles.iter_mut().filter(|p| p.active != 0) {
+    for p in self.particles.write().iter_mut().filter(|p| p.active != 0) {
       let mut age = p.get_age();
       age += (dt * 1_000_000.0) as i64;
       p.set_age(age);
@@ -72,8 +72,8 @@ impl ParticleSystemExt for ParticleSystemComponent {
     }
 
     // Clean up dead particles
-    if self.particles.len() > self.config.max_particles {
-      self.particles.retain(|p| p.active == 0);
+    if self.particles.read().len() > self.config.max_particles {
+      self.particles.write().retain(|p| p.active == 0);
     }
   }
 }

@@ -868,10 +868,3 @@ pub(super) fn create_test_attachment(
     .map(|(i, a)| (unsafe { NonZeroHandle::new_unchecked(i) }, a))
     .map_err(|e| e.into())
 }
-
-// -------------------------------- Unit Testing -------------------------------
-#[cfg(test)]
-mod tests {
-  use super::*;
-  // TODO: Test that vulkan loader library is dropped only when arc count is zero
-}

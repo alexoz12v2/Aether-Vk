@@ -193,35 +193,84 @@ where
     }
   }
 
-  /// Creates a standard right-handed perspective projection matrix
-  /// This is the general OpenGL column-major matrix formula from scratchapixel with
-  /// special case left = -right, top = -bottom
-  fn perspective_gl(
-    fov: Self::Scalar,
-    aspect: Self::Scalar,
-    near: Self::Scalar,
+  /// Creates a view matrix for the custom coordinate system:
+  /// +x = right, -y = forward, +z = up
+  fn look_at<VecType3>(eye: VecType3, center: VecType3, up: VecType3) -> Self
+  where
+    VecType3: Vector3<Scalar = Self::Scalar>,
+    Self::Scalar: FloatLike,
+  {
+    let _0 = <Self::Scalar as MulAddIdentity>::zero();
+    let _1 = <Self::Scalar as MulAddIdentity>::one();
+
+    let f = (center - eye).normalize();
+    let s = up.cross(f).normalize();
+    let u = f.cross(s);
+
+    Self::look_at_axes(s, f, u, eye)
+  }
+
+  fn look_at_axes<VecType3>(s: VecType3, f: VecType3, u: VecType3, eye: VecType3) -> Self
+  where
+    VecType3: Vector3<Scalar = Self::Scalar>,
+    Self::Scalar: FloatLike,
+  {
+    let _0 = <Self::Scalar as MulAddIdentity>::zero();
+    let _1 = <Self::Scalar as MulAddIdentity>::one();
+
+    // Row 0: View +X maps to Right (s)
+    let c0 = Self::Vector::from_components(s.x(), s.y(), s.z(), -s.dot(eye));
+
+    // Row 1: View +Y maps to Backward (-f) ensuring -Y is Forward!
+    // Note: Since the axis is -f, the translation is -(-f.dot(eye)) = f.dot(eye)
+    let c1 = Self::Vector::from_components(-f.x(), -f.y(), -f.z(), f.dot(eye));
+
+    // Row 2: View +Z maps to Up (u)
+    let c2 = Self::Vector::from_components(u.x(), u.y(), u.z(), -u.dot(eye));
+
+    let c3 = Self::Vector::from_components(_0, _0, _0, _1);
+
+    Self::from_columns(c0, c1, c2, c3).transpose()
+  }
+
+  /// Creates a Vulkan-ready orthographic projection matrix
+  /// +x = right, -y = forward, +z = up
+  fn orthographic_vk(
+    left: Self::Scalar,
+    right: Self::Scalar,
+    bottom: Self::Scalar, // Minimum Z value (physical bottom)
+    top: Self::Scalar,    // Maximum Z value (physical top)
+    near: Self::Scalar,   // Depth distance
     far: Self::Scalar,
   ) -> Self
   where
     Self::Scalar: FloatLike,
   {
-    let _0 = Self::Scalar::from_f32(0.0);
-    let _1 = Self::Scalar::from_f32(1.0);
-    let _2 = Self::Scalar::from_f32(2.0);
+    let _0 = <Self::Scalar as MulAddIdentity>::zero();
+    let _1 = <Self::Scalar as MulAddIdentity>::one();
+    let _2 = <Self::Scalar as FloatLike>::from_f32(2.0);
 
-    // f = 1.0 / tan(fov / 2.0)
-    let half_fov = fov / _2;
-    let f = half_fov.tan().reciprocal(); // cotangent
+    // Col 0: Maps View X (Right) -> Clip X
+    let c0 = Self::Vector::from_components(_2 / (right - left), _0, _0, _0);
 
-    let c0 = Self::Vector::from_components(f / aspect, _0, _0, _0);
-    let c1 = Self::Vector::from_components(_0, f, _0, _0);
-    // OpenGL: Map z from [near, far] to [-1, 1]
-    let c2 = Self::Vector::from_components(_0, _0, (far + near) / (near - far), -_1);
-    let c3 = Self::Vector::from_components(_0, _0, _2 * far * near / (near - far), _0);
+    // Col 1: Maps View Y (Forward) -> Clip Z (Vulkan Depth [0, 1])
+    let c1 = Self::Vector::from_components(_0, _0, -_1 / (far - near), _0);
+
+    // Col 2: Maps View Z (Up) -> Clip Y (Inverted for Vulkan Down)
+    let c2 = Self::Vector::from_components(_0, -_2 / (top - bottom), _0, _0);
+
+    let c3 = Self::Vector::from_components(
+      -(right + left) / (right - left),
+      (top + bottom) / (top - bottom), // FIX: Notice this translation is now positive!
+      -near / (far - near),
+      _1,
+    );
 
     Self::from_columns(c0, c1, c2, c3)
   }
 
+  /// Column major perspective projection matrix for coordinate system:
+  /// +x = right, -y = forward, +z = up
   fn perspective_vk(
     fov: Self::Scalar,
     aspect: Self::Scalar,
@@ -235,95 +284,76 @@ where
     let _1 = Self::Scalar::from_f32(1.0);
     let _2 = Self::Scalar::from_f32(2.0);
 
-    // f = 1.0 / tan(fov / 2.0)
     let half_fov = fov / _2;
-    let f = half_fov.tan().reciprocal(); // cotangent
+    let f = half_fov.tan().reciprocal();
 
+    // Col 0: Maps View +X (Right) to Vulkan NDC X
     let c0 = Self::Vector::from_components(f / aspect, _0, _0, _0);
-    // Vulkan: Invert Y to fix upside down projection when using Z-up RH view space
-    let c1 = Self::Vector::from_components(_0, _0 - f, _0, _0);
-    // Vulkan: Map z from [near, far] to [0, 1]
-    let c2 = Self::Vector::from_components(_0, _0, far / (near - far), -_1);
+
+    // Col 1: Maps View -Y (Forward) to Vulkan NDC Z and Clip W (Depth)
+    // Notice that -1 is now in the W row of the Y column. W_clip = -Y_view
+    let c1 = Self::Vector::from_components(_0, _0, far / (near - far), -_1);
+
+    // Col 2: Maps View +Z (Up) to Vulkan NDC Y
+    // Vulkan Clip space +Y is down, so we map +Z to -Y using -f
+    let c2 = Self::Vector::from_components(_0, -f, _0, _0);
+
+    // Col 3: Depth Translation
     let c3 = Self::Vector::from_components(_0, _0, far * near / (near - far), _0);
 
     Self::from_columns(c0, c1, c2, c3)
   }
 
-  /// Creates a right-handed view matrix
-  fn look_at<VecType3>(eye: VecType3, center: VecType3, up: VecType3) -> Self
-  where
-    // scalar type must be the same
-    VecType3: Vector3<Scalar = Self::Scalar>,
-    // vector's `normalize` requires the scalar to be float-like
-    Self::Scalar: FloatLike,
-  {
-    let _0 = <Self::Scalar as MulAddIdentity>::zero();
-    let _1 = <Self::Scalar as MulAddIdentity>::one();
-
-    let f = (center - eye).normalize();
-    let s = up.cross(f).normalize();
-    let u = f.cross(s);
-
-    let c0 = Self::Vector::from_components(s.x(), s.y(), s.z(), -s.dot(eye));
-    let c1 = Self::Vector::from_components(u.x(), u.y(), u.z(), -u.dot(eye));
-    let c2 = Self::Vector::from_components(-f.x(), -f.y(), -f.z(), f.dot(eye));
-    let c3 = Self::Vector::from_components(_0, _0, _0, _1);
-
-    Self::from_columns(c0, c1, c2, c3).transpose()
-  }
-
-  /// Creates an orthographic projection matrix
-  fn orthographic(
-    left: Self::Scalar,
-    right: Self::Scalar,
-    bottom: Self::Scalar,
-    top: Self::Scalar,
+  // Updated to map from Custom View Space -> OpenGL NDC [-1, 1]
+  fn perspective_gl(
+    fov: Self::Scalar,
+    aspect: Self::Scalar,
     near: Self::Scalar,
     far: Self::Scalar,
   ) -> Self
   where
     Self::Scalar: FloatLike,
   {
-    let _0 = <Self::Scalar as MulAddIdentity>::zero();
-    let _1 = <Self::Scalar as MulAddIdentity>::one();
-    let _2 = <Self::Scalar as FloatLike>::from_f32(2.0);
+    let _0 = Self::Scalar::from_f32(0.0);
+    let _1 = Self::Scalar::from_f32(1.0);
+    let _2 = Self::Scalar::from_f32(2.0);
+    let f = (fov / _2).tan().reciprocal();
 
+    let c0 = Self::Vector::from_components(f / aspect, _0, _0, _0);
+    // View Y (Backward) -> OpenGL Z (Depth) and W
+    let c1 = Self::Vector::from_components(_0, _0, (far + near) / (near - far), -_1);
+    // View Z (Up) -> OpenGL Y (Up is +1)
+    let c2 = Self::Vector::from_components(_0, f, _0, _0);
+    let c3 = Self::Vector::from_components(_0, _0, _2 * far * near / (near - far), _0);
+
+    Self::from_columns(c0, c1, c2, c3)
+  }
+
+  // Updated to map from Custom View Space -> OpenGL NDC [-1, 1]
+  fn orthographic_gl(
+    left: Self::Scalar,
+    right: Self::Scalar,
+    bottom: Self::Scalar, // Minimum Z value (physical bottom)
+    top: Self::Scalar,    // Maximum Z value (physical top)
+    near: Self::Scalar,   // Depth distance
+    far: Self::Scalar,
+  ) -> Self
+  where
+    Self::Scalar: FloatLike,
+  {
+    let _0 = Self::Scalar::from_f32(0.0);
+    let _1 = Self::Scalar::from_f32(1.0);
+    let _2 = Self::Scalar::from_f32(2.0);
     let c0 = Self::Vector::from_components(_2 / (right - left), _0, _0, _0);
-    let c1 = Self::Vector::from_components(_0, _2 / (top - bottom), _0, _0);
-    let c2 = Self::Vector::from_components(_0, _0, _2 / (near - far), _0);
+    // View Y (Backward) -> OpenGL Z (Depth)
+    let c1 = Self::Vector::from_components(_0, _0, -_2 / (far - near), _0);
+    // View Z (Up) -> OpenGL Y (Up is +1)
+    let c2 = Self::Vector::from_components(_0, _2 / (top - bottom), _0, _0);
+
     let c3 = Self::Vector::from_components(
       -(right + left) / (right - left),
       -(top + bottom) / (top - bottom),
       -(far + near) / (far - near),
-      _1,
-    );
-    Self::from_columns(c0, c1, c2, c3)
-  }
-
-  /// Creates a Vulkan-ready orthographic projection matrix
-  fn orthographic_vk(
-    left: Self::Scalar,
-    right: Self::Scalar,
-    bottom: Self::Scalar,
-    top: Self::Scalar,
-    near: Self::Scalar,
-    far: Self::Scalar,
-  ) -> Self
-  where
-    Self::Scalar: FloatLike,
-  {
-    let _0 = <Self::Scalar as MulAddIdentity>::zero();
-    let _1 = <Self::Scalar as MulAddIdentity>::one();
-    let _2 = <Self::Scalar as FloatLike>::from_f32(2.0);
-
-    let c0 = Self::Vector::from_components(_2 / (right - left), _0, _0, _0);
-    let c1 = Self::Vector::from_components(_0, _0 - _2 / (top - bottom), _0, _0); // Y flipped
-    // Vulkan Z is [0, 1]
-    let c2 = Self::Vector::from_components(_0, _0, -_1 / (far - near), _0);
-    let c3 = Self::Vector::from_components(
-      -(right + left) / (right - left),
-      -(top + bottom) / (top - bottom),
-      -near / (far - near),
       _1,
     );
     Self::from_columns(c0, c1, c2, c3)

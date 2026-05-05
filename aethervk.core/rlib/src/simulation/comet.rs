@@ -653,8 +653,13 @@ pub fn load_comet_from_gltf(path: &str, verbose: bool) -> Result<Comet, CometLoa
   })
 }
 
-// TODO: inertia tensor for a sphere is a closed formula. See Computer Animation Book at appendix
-pub fn generate_uv_sphere(radius: f32, lat_segments: u32, lon_segments: u32) -> Comet {
+/// Produces `6 * lon_segments * (lat_segments - 1)` indices
+pub fn generate_uv_sphere(
+  radius: f32,
+  lat_segments: u32,
+  lon_segments: u32,
+  total_mass: f32,
+) -> Comet {
   let mut vertices = Vec::new();
   let mut indices = Vec::new();
 
@@ -700,22 +705,63 @@ pub fn generate_uv_sphere(radius: f32, lat_segments: u32, lon_segments: u32) -> 
       let first = lat * (lon_segments + 1) + lon;
       let second = first + lon_segments + 1;
 
-      indices.push(first);
-      indices.push(second);
-      indices.push(first + 1);
-
-      indices.push(second);
-      indices.push(second + 1);
-      indices.push(first + 1);
+      // 3. FIXED: Strictly Enforcing Vulkan CCW Front-Face Winding.
+      // Additionally, if the geometry is evaluated at the South or North pole,
+      // the respective index evaluation drops the degenerate zero-area triangle.
+      if lat != 0 {
+        indices.push(first);
+        indices.push(first + 1);
+        indices.push(second);
+      }
+      if lat != lat_segments - 1 {
+        indices.push(second);
+        indices.push(first + 1);
+        indices.push(second + 1);
+      }
     }
   }
 
-  let mut mass_properties = calculate_mass_properties(&vertices, &indices, 1.0);
-  let (bvh, principal_axes, local_vertices) =
-    compute_comet_extras(&vertices, &indices, &mut mass_properties);
+  let mut mass_properties = calculate_mass_properties(&vertices, &indices, total_mass);
+
+  // 2. FIXED: Apply the exact closed-form diagonal solid-sphere inertia properties.
+  // Bypass numeric precision drift stemming from iterative integration.
+  let i_diag = (2.0 / 5.0) * (total_mass as f64) * (radius as f64).powi(2);
+  mass_properties.center_of_mass = [0.0, 0.0, 0.0];
+  mass_properties.inertia.xx = i_diag;
+  mass_properties.inertia.yy = i_diag;
+  mass_properties.inertia.zz = i_diag;
+  mass_properties.inertia.xy = 0.0;
+  mass_properties.inertia.xz = 0.0;
+  mass_properties.inertia.yz = 0.0;
+
+  // Symmetrical Solid Spheres naturally assert the Identity Matrix for local principal axes
+  let principal_axes = Mat3f32 {
+    x: Vec3f32::from_components(1.0, 0.0, 0.0),
+    y: Vec3f32::from_components(0.0, 1.0, 0.0),
+    z: Vec3f32::from_components(0.0, 0.0, 1.0),
+  };
+
+  // We completely bypass `compute_comet_extras` here because the sphere is already diagonalized
+  // and perfectly centered physically around the internal [0,0,0] origin point.
+  let mut tris = Vec::with_capacity(indices.len() / 3);
+  for chunk in indices.chunks_exact(3) {
+    let v0 = vertices[chunk[0] as usize].position;
+    let v1 = vertices[chunk[1] as usize].position;
+    let v2 = vertices[chunk[2] as usize].position;
+    tris.push(Triangle {
+      vertices: [
+        Vec3f32::from_components(v0[0], v0[1], v0[2]),
+        Vec3f32::from_components(v1[0], v1[1], v1[2]),
+        Vec3f32::from_components(v2[0], v2[1], v2[2]),
+      ],
+    });
+  }
+
+  let builder = BVHBuilder::<f32, Vec3f32, Mat3f32>::new(BVHBuilderParams::default());
+  let bvh = builder.build(&tris).map(|root| LinearBVH::from_build_node(&root, 0));
 
   Comet {
-    vertices: local_vertices,
+    vertices,
     indices,
     albedo_map: None,
     normal_map: None,
@@ -723,7 +769,7 @@ pub fn generate_uv_sphere(radius: f32, lat_segments: u32, lon_segments: u32) -> 
     ao_map: None,
     mass_properties,
     bvh,
-    principal_axes,
+    principal_axes: Some(principal_axes),
   }
 }
 
@@ -902,11 +948,12 @@ mod tests {
 
   #[test]
   fn test_uv_sphere_generation() {
-    let sphere = generate_uv_sphere(2.0, 10, 10);
+    let sphere = generate_uv_sphere(2.0, 10, 10, 1.0);
+    let expected_indices = 6 * 10 * (10 - 1);
 
     // Check if the number of vertices and indices is correct
     assert_eq!(sphere.vertices.len(), (10 + 1) * (10 + 1));
-    assert_eq!(sphere.indices.len(), 10 * 10 * 6);
+    assert_eq!(sphere.indices.len(), expected_indices);
 
     // Check that the mass properties are reasonable
     assert!(sphere.mass_properties.mass > 0.0);

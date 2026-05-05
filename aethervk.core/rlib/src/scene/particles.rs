@@ -80,7 +80,7 @@ impl ParticleData {
 
 pub struct ParticleSystemComponent {
   pub config: ParticleEmitterConfig,
-  pub particles: alloc::vec::Vec<ParticleData>,
+  pub particles: alloc::sync::Arc<spin::RwLock<alloc::vec::Vec<ParticleData>>>,
   pub bvh: Option<LinearBVH<f32>>,
   pub accumulator: timeus_t,
   pub next_id: usize,
@@ -90,7 +90,7 @@ impl core::fmt::Debug for ParticleSystemComponent {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("ParticleSystemComponent")
       .field("config", &self.config)
-      .field("particles_count", &self.particles.len())
+      .field("particles_count", &self.particles.read().len())
       .field("bvh_is_some", &self.bvh.is_some())
       .finish()
   }
@@ -101,7 +101,7 @@ impl Component for ParticleSystemComponent {}
 impl ParticleSystemComponent {
   pub fn new(config: ParticleEmitterConfig) -> Self {
     Self {
-      particles: alloc::vec::Vec::with_capacity(config.max_particles),
+      particles: alloc::sync::Arc::new(spin::RwLock::new(alloc::vec::Vec::with_capacity(config.max_particles))),
       config,
       bvh: None,
       accumulator: 0,
@@ -120,10 +120,10 @@ impl ParticleSystemComponent {
     u_particles: &[[f32; 4]],
   ) {
     let count = self.config.emission_count.sample(u_emission) as usize;
-    let actual_count = count.min(u_particles.len());
 
-    for i in 0..actual_count {
-      if self.particles.len() >= self.config.max_particles {
+    let mut particles = self.particles.write(); // TODO this might be slow
+    for i in 0..count {
+      if particles.len() >= self.config.max_particles {
         break;
       }
 
@@ -197,7 +197,7 @@ impl ParticleSystemComponent {
       };
       p.set_id(self.next_id as u64);
       p.set_age(0);
-      self.particles.push(p);
+      particles.push(p);
       self.next_id += 1;
     }
   }
@@ -210,6 +210,7 @@ impl ParticleSystemComponent {
 
     let active_particles: alloc::vec::Vec<_> = self
       .particles
+      .read()
       .iter()
       .filter(|p| p.active != 0)
       .map(|p| p.as_particle(self.config.particle_radius))

@@ -12,11 +12,9 @@ namespace AetherVk.Logic.Services;
 
 public partial class NativeRuntimeService : ObservableObject, IDisposable
 {
-  [ObservableProperty]
-  private bool _isInitialized;
+  [ObservableProperty] private bool _isInitialized;
 
-  [ObservableProperty]
-  private bool _isRunning;
+  [ObservableProperty] private bool _isRunning;
 
   private IntPtr _simulationContext = IntPtr.Zero;
   private readonly object _nativeLock = new object();
@@ -32,10 +30,13 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   // Keep static references to the delegates so they act as GC roots and are NEVER Garbage Collected
   private static readonly NativeInterop.LoggerCallback s_loggerCallbackDelegate =
     NativeLogCallbackStatic;
+
   private static readonly NativeInterop.BreadcrumbCallback s_breadcrumbCallbackDelegate =
     NativeBreadcrumbCallbackStatic;
+
   private static readonly NativeInterop.SimulationCallback s_simulationCallbackDelegate =
     NativeSimulationCallbackStatic;
+
   private static readonly NativeInterop.RenderCallback s_renderCallbackDelegate =
     NativeRenderCallbackStatic;
 
@@ -266,7 +267,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         _uiThreadDispatcher.Dispatch(() =>
         {
           // Re-use SyncEntities on the changed entities
-          SyncEntities(sceneId); // Optimally, this should only sync `ids`, but syncing all is fine for now
+          SyncEntities(
+            sceneId); // Optimally, this should only sync `ids`, but syncing all is fine for now
 
           WeakReferenceMessenger.Default.Send(
             new AetherVk.Logic.Messages.SimulationStateUpdatedMessage(sceneId)
@@ -784,6 +786,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     {
       return result;
     }
+
     return null;
   }
 
@@ -917,7 +920,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     if (_simulationContext != IntPtr.Zero)
     {
       IntPtr ptr = Marshal.AllocHGlobal(256);
-      if (NativeInterop.avkSimulationContext_getSimulationTimeUtc(_simulationContext, sceneId, ptr, 256))
+      if (NativeInterop.avkSimulationContext_getSimulationTimeUtc(_simulationContext, sceneId, ptr,
+            256))
       {
         var result = Marshal.PtrToStringAnsi(ptr) ?? "";
         Marshal.FreeHGlobal(ptr);
@@ -1248,10 +1252,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
               {
                 foreach (JetMarker jet in e.NewItems)
                 {
-                  jet.PropertyChanged += (js, je) =>
-                  {
-                    SyncMarkers(sceneId, entity.Id, comet);
-                  };
+                  jet.PropertyChanged += (js, je) => { SyncMarkers(sceneId, entity.Id, comet); };
                 }
               }
             };
@@ -1344,7 +1345,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
   }
 
-  public ulong SpawnProceduralSphere(ulong sceneId, string name, float radius)
+  public ulong SpawnProceduralSphere(ulong sceneId, string name, float radius, float mass)
   {
     lock (_nativeLock)
     {
@@ -1354,8 +1355,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
           _simulationContext,
           sceneId,
           name,
-          radius
-        );
+          radius,
+          mass);
         if (id > 0)
         {
           var entity = new Entity(sceneId, id, name);
@@ -1490,12 +1491,13 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     ulong sunId = 0;
     if (_simulationContext != IntPtr.Zero)
     {
+      // TODO this is in kilogram. If we decide to use reference frames, scale accordingly
       sunId = NativeInterop.avkSimulationContext_spawnProceduralSphere(
         _simulationContext,
         sceneId,
         "sun",
-        radius
-      );
+        radius,
+        1.989e30f);
       NativeInterop.avkSimulationContext_addSunComponent(
         _simulationContext,
         sceneId,

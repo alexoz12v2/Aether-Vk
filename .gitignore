@@ -879,3 +879,9 @@ earth_trajectory_log.csv
 # coverage files from llvm-cov?
 *.profraw
 
+# test generated images
+test_*.png
+
+# working assets
+*.blend
+

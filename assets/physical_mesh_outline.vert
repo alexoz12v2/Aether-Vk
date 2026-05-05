@@ -19,21 +19,27 @@ layout(push_constant) uniform Push {
 layout(location = 0) out vec3 outColor;
 
 void main() {
-    mat3 normalMatrix = mat3(push.model);
-    vec3 worldNormal = normalize(normalMatrix * inNormal);
-
     vec4 clipPos = push.modelViewProj * vec4(inPosition, 1.0);
-    
-    // Transform normal to clip space
-    vec4 normalClip = push.modelViewProj * vec4(worldNormal, 0.0);
 
-    float len = length(normalClip.xy);
+    // Transform the normal to clip space.
+    // Setting W to 0.0 applies rotation/scaling but ignores translation.
+    vec4 clipNormal = push.modelViewProj * vec4(inNormal, 0.0);
+
+    // We only care about the 2D direction on the screen
+    float len = length(clipNormal.xy);
+
     if (len > 0.0001) {
-        vec2 offset = (normalClip.xy / len) * 0.015 * clipPos.w;
+        vec2 screenNormalDir = clipNormal.xy / len;
+        float outlineThickness = 0.15;
+
+        // Multiply back by clipPos.w to keep the outline thickness constant
+        // in screen-space, regardless of distance from the camera.
+        vec2 offset = screenNormalDir * outlineThickness * clipPos.w;
+
+        // offset.x /= aspectRatio; // Apply aspect ratio correction here if needed
         clipPos.xy += offset;
     }
 
     gl_Position = clipPos;
-
     outColor = push.emissiveColor;
 }

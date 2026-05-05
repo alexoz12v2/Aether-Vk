@@ -178,7 +178,7 @@ impl Kernels for CpuKernels {
     let mut mapping = Vec::new();
 
     scene0.query1::<ParticleSystemComponent, _>(|entity, sys| {
-      for (i, p) in sys.particles.iter().enumerate() {
+      for (i, p) in sys.particles.read().iter().enumerate() {
         if p.active != 0 {
           bodies.push(DynamicBody {
             entity_id: entity,
@@ -352,7 +352,7 @@ impl Kernels for CpuKernels {
       for (i, dyn_body) in dynamics.data.iter().enumerate() {
         let (e_id, particle_idx) = mapping[i];
         if e_id == entity {
-          if let Some(p) = sys.particles.get_mut(particle_idx) {
+          if let Some(p) = sys.particles.write().get_mut(particle_idx) {
             p.position = [
               dyn_body.transform.position.x(),
               dyn_body.transform.position.y(),

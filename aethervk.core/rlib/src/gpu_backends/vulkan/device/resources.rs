@@ -472,7 +472,7 @@ impl Image {
       .format(format)
       .tiling(vk::ImageTiling::OPTIMAL)
       .initial_layout(vk::ImageLayout::UNDEFINED)
-      .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED)
+      .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
       .sharing_mode(sharing_mode)
       .queue_family_indices(&queue_family_indices[..queue_count])
       .samples(vk::SampleCountFlags::TYPE_1);
@@ -680,13 +680,17 @@ impl Hash for Image {
 
 #[repr(C)]
 pub(super) struct ForwardMeshRenderResourcePushData {
-  model_view_projection: [f32; 16],
-  model: [f32; 16],
-  sun_pos: [f32; 3],
-  texture_flags: TextureFlags,
-  sun_color: [f32; 4],
+  pub model_view_projection: [f32; 16],
+  pub model: [f32; 16],
+  pub sun_pos: [f32; 3],
+  pub texture_flags: TextureFlags,
+  pub sun_color: [f32; 4],
+  pub camera_pos: [f32; 3],
+  pub emissive_intensity: f32,
+  pub emissive_color: [f32; 3],
+  pub _padding: f32,
 }
-sa::const_assert!(core::mem::size_of::<ForwardMeshRenderResourcePushData>() == 160);
+sa::const_assert!(core::mem::size_of::<ForwardMeshRenderResourcePushData>() == 192);
 
 impl Default for ForwardMeshRenderResourcePushData {
   fn default() -> Self {
@@ -696,6 +700,10 @@ impl Default for ForwardMeshRenderResourcePushData {
       sun_pos: Default::default(),
       texture_flags: TextureFlags::empty(),
       sun_color: Default::default(),
+      camera_pos: Default::default(),
+      emissive_intensity: 0.0,
+      emissive_color: Default::default(),
+      _padding: 0.0,
     }
   }
 }
