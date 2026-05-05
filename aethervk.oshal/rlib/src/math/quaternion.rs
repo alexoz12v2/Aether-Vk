@@ -55,6 +55,14 @@ pub trait Quaternion:
   }
 
   fn rotate_vector(self, v: Self::Vector) -> Self::Vector {
+    // optimized version (later)
+    //   let q_vec = self.vector_part();
+    //   let q_scalar = self.scalar_part();
+    //   // t = 2 * cross(q.xyz, v)
+    //   let t = q_vec.cross(v);
+    //   let t2 = t + t; // t + t is mathematically identical to t * 2.0
+    //   // v' = v + q.w * t2 + cross(q.xyz, t2)
+    //   v + (t2 * q_scalar) + q_vec.cross(t2)
     let qv = Self::from_vector(v);
     let r = self * qv * self.conjugate();
     r.vector_part()

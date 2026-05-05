@@ -41,7 +41,7 @@ use alloc::{
   vec,
   vec::Vec,
 };
-use ash::vk::{self, Handle, PhysicalDeviceProperties};
+use ash::vk::{self, Format, Handle, PhysicalDeviceProperties};
 use core::any::Any;
 use core::ops::Deref;
 use core::{
@@ -88,7 +88,6 @@ mod shader_manager;
 mod swapchain;
 mod timeline_manager;
 
-// TODO standardize error strings with prefix used in all modules. Use concat! for &'static str messages and possibly write some macros to diminish repeated code
 // TODO No vulkan calls while holding locks
 // TODO remove all unwrap and unwrap_unchecked (unless absolutely necessary or sure)
 
@@ -1865,6 +1864,11 @@ impl RenderDevice for Device {
       let engine = engine_lock.get(&handle).ok_or(GpuError::InvalidArgument(
         "[Vulkan RenderDevice] resize_presentation_engine",
       ))?;
+      let extent = engine.read().extent();
+      if extent.0 == width && extent.1 == height {
+        return Ok(());
+      }
+
       engine.write().resize(
         &self.instance.instance,
         &self.device,
@@ -2794,7 +2798,12 @@ impl RenderDevice for Device {
     let mut current_indirect_offset = 0;
 
     for call in particle_calls.iter_mut() {
-      let particles = &call.particles;
+      let particles_arc = call.particles.upgrade();
+      if particles_arc.is_none() {
+        continue;
+      }
+      let particles_arc = unsafe { particles_arc.unwrap_unchecked() };
+      let particles = particles_arc.read();
       if particles.is_empty() {
         continue;
       }
@@ -3777,6 +3786,7 @@ impl RenderDevice for Device {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     entity_id: crate::scene::EntityId,
     resolution: (u32, u32, u32),
+    radius: f32,
   ) -> GpuResult<()> {
     let res_guard = self.res.read();
     let timeline = res_guard.get_timeline_semaphore_cached_value();
@@ -3897,7 +3907,7 @@ impl RenderDevice for Device {
           timeline as f32 * 0.016, // time
           5778.0,                  // photosphereTemp
           1000000.0,               // coronaTemp
-          0.6,                     // radius
+          radius,                  // radius
           0.05,                    // scaleHeight
           15.0,                    // noiseScale
         ];
@@ -4800,7 +4810,7 @@ impl RenderDevice for Device {
       let image_barrier = vk::ImageMemoryBarrier2::default()
         .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
         .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+        .dst_stage_mask(vk::PipelineStageFlags2::COPY)
         .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
         .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
         .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
@@ -4841,7 +4851,7 @@ impl RenderDevice for Device {
       );
 
       let image_barrier_back = vk::ImageMemoryBarrier2::default()
-        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+        .src_stage_mask(vk::PipelineStageFlags2::COPY)
         .src_access_mask(vk::AccessFlags2::TRANSFER_READ)
         .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
         .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
@@ -5112,6 +5122,7 @@ impl Device {
 
     let depth_image = res_guard.renderpasses.get_test_depth_stencil_image().unwrap();
 
+    // even with format D24, when copy to buffer, depth format D24_UNORM_S8_UINT is equivalent to X8_D24_UNORM_PACK32 (meaning 4 bytes) (see docs, 1.4, chapter 56)
     let depth_size = width * height * 4;
     let stencil_size = width * height * 1;
     let buffer_size = (depth_size + stencil_size) as vk::DeviceSize;
@@ -5119,22 +5130,34 @@ impl Device {
     let buffer_info =
       vk::BufferCreateInfo::default().size(buffer_size).usage(vk::BufferUsageFlags::TRANSFER_DST);
 
+    // Note: allocation create flags was HOST_ACCESS_SEQUENTIAL_WRITE. swapped to HOST_ACCESS_RANDOM
+    // For readbacks/downloads, you are reading memory sequentially on the CPU, not writing to it.
+    // - SEQUENTIAL_WRITE typically tells the allocator to assign uncached Write-Combined memory. Iterating byte-by-byte over Write-Combined memory on the CPU is incredibly slow because every read crosses the PCIe bus.
+    // - Swap this to HOST_ACCESS_RANDOM so the VMA allocator gives you Host-Cached memory instead. This will make the separate_depth_stencil loop execute almost instantaneously:
     let mut alloc_info = vk_mem::AllocationCreateInfo::default();
     alloc_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
-    alloc_info.flags = vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-      | vk_mem::AllocationCreateFlags::MAPPED;
+    alloc_info.flags =
+      vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM | vk_mem::AllocationCreateFlags::MAPPED;
 
     let (staging_buffer, alloc) =
       unsafe { res_guard.allocator.allocator.create_buffer(&buffer_info, &alloc_info) }?;
 
     unsafe {
       let image_barrier = vk::ImageMemoryBarrier2::default()
-        .src_stage_mask(vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS)
-        .src_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+        .src_stage_mask(
+          vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS
+            | vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS,
+        )
+        .src_access_mask(
+          vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
+            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+        )
+        .dst_stage_mask(vk::PipelineStageFlags2::COPY)
         .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
         .old_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
         .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
         .image(depth_image.get())
         .subresource_range(
           vk::ImageSubresourceRange::default()
@@ -5144,7 +5167,6 @@ impl Device {
             .base_array_layer(0)
             .layer_count(1),
         );
-
       let dep_info =
         vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&image_barrier));
       self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info);
@@ -5164,7 +5186,7 @@ impl Device {
           depth: 1,
         });
       let stencil_region = vk::BufferImageCopy::default()
-        .buffer_offset(0)
+        .buffer_offset(depth_size as u64)
         .image_subresource(
           vk::ImageSubresourceLayers::default()
             .aspect_mask(vk::ImageAspectFlags::STENCIL)
@@ -5188,15 +5210,20 @@ impl Device {
 
       // image barrier for the next frame
       let image_barrier_back = vk::ImageMemoryBarrier2::default()
-        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+        .src_stage_mask(vk::PipelineStageFlags2::COPY)
         .src_access_mask(vk::AccessFlags2::TRANSFER_READ)
-        .dst_stage_mask(vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS)
+        .dst_stage_mask(
+          vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+            | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
+        )
         .dst_access_mask(
           vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE
             | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ,
         )
         .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
         .new_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
         .image(depth_image.get())
         .subresource_range(
           vk::ImageSubresourceRange::default()
@@ -5235,8 +5262,142 @@ impl Device {
   }
 
   #[cfg(test)]
+  fn record_test_sun_download(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    entity_id: crate::scene::EntityId,
+    task_id: u64,
+  ) -> GpuResult<()> {
+    let cmd = {
+      let cmd_buffers = self.recording_command_buffers.read();
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
+        "[Vulkan RenderDevice] record_test_sun_download: command buffer handle invalid",
+      ))?;
+      data.command_buffer.get()
+    };
+
+    let res_guard = self.res.read();
+
+    let sun_lock = res_guard.sun_resources.read();
+    let sun_map = sun_lock.as_ref().ok_or(GpuError::InvalidState(
+      "[Vulkan RenderDevice] record_test_sun_download: no sun resources",
+    ))?;
+    let sun_res = sun_map.get(&entity_id).ok_or(GpuError::InvalidArgument(
+      "[Vulkan RenderDevice] record_test_sun_download: invalid sun entity",
+    ))?;
+
+    let (width, height, depth) = sun_res.resolution;
+    // R16G16B16A16_SFLOAT is 8 bytes per texel
+    let buffer_size = (width * height * depth * 8) as vk::DeviceSize;
+
+    let buffer_info =
+      vk::BufferCreateInfo::default().size(buffer_size).usage(vk::BufferUsageFlags::TRANSFER_DST);
+
+    let mut alloc_info = vk_mem::AllocationCreateInfo::default();
+    alloc_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
+    alloc_info.flags =
+      vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM | vk_mem::AllocationCreateFlags::MAPPED;
+
+    let (staging_buffer, alloc) =
+      unsafe { res_guard.allocator.allocator.create_buffer(&buffer_info, &alloc_info) }?;
+
+    unsafe {
+      let image_barrier = vk::ImageMemoryBarrier2::default()
+        .src_stage_mask(
+          vk::PipelineStageFlags2::COMPUTE_SHADER | vk::PipelineStageFlags2::FRAGMENT_SHADER,
+        )
+        .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE | vk::AccessFlags2::SHADER_READ)
+        .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+        .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+        .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .image(sun_res.image.as_ref().unwrap().image.get())
+        .subresource_range(
+          vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .base_mip_level(0)
+            .level_count(1)
+            .base_array_layer(0)
+            .layer_count(1),
+        );
+      let dep_info =
+        vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&image_barrier));
+      self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info);
+
+      let copy_region = vk::BufferImageCopy::default()
+        .buffer_offset(0)
+        .image_subresource(
+          vk::ImageSubresourceLayers::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .mip_level(0)
+            .base_array_layer(0)
+            .layer_count(1),
+        )
+        .image_extent(vk::Extent3D {
+          width,
+          height,
+          depth,
+        });
+
+      self.device.cmd_copy_image_to_buffer(
+        cmd,
+        sun_res.image.as_ref().unwrap().image.get(),
+        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        staging_buffer,
+        &[copy_region],
+      );
+
+      let image_barrier_back = vk::ImageMemoryBarrier2::default()
+        .src_stage_mask(vk::PipelineStageFlags2::COPY)
+        .src_access_mask(vk::AccessFlags2::TRANSFER_READ)
+        .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+        .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+        .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .image(sun_res.image.as_ref().unwrap().image.get())
+        .subresource_range(
+          vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .base_mip_level(0)
+            .level_count(1)
+            .base_array_layer(0)
+            .layer_count(1),
+        );
+
+      let buffer_barrier = vk::BufferMemoryBarrier2::default()
+        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+        .dst_stage_mask(vk::PipelineStageFlags2::HOST)
+        .dst_access_mask(vk::AccessFlags2::HOST_READ)
+        .buffer(staging_buffer)
+        .size(buffer_size)
+        .offset(0);
+
+      let buf_dep_info = vk::DependencyInfo::default()
+        .buffer_memory_barriers(core::slice::from_ref(&buffer_barrier))
+        .image_memory_barriers(core::slice::from_ref(&image_barrier_back));
+      self.device.synchronization2.cmd_pipeline_barrier2(cmd, &buf_dep_info);
+    }
+
+    res_guard.pending_downloads.write().insert(
+      task_id,
+      PendingDownload {
+        staging_buffer,
+        allocation: alloc,
+        size: buffer_size as usize,
+      },
+    );
+
+    Ok(())
+  }
+
+  #[cfg(test)]
   fn separate_depth_stencil(&self, buffer: &[u8], width: u32, height: u32) -> (Vec<f32>, Vec<u8>) {
-    let depth_size = (width * height * 4) as usize;
+    let depth_size = (width * height * 4) as usize; // we'll adapt it to float
     let stencil_size = (width * height * 1) as usize;
     assert_eq!(buffer.len(), depth_size + stencil_size);
 
@@ -5245,7 +5406,12 @@ impl Device {
 
     if self.depth_stencil_format == vk::Format::D24_UNORM_S8_UINT {
       for i in 0..(width * height) as usize {
-        let val_bytes = [buffer[i * 4], buffer[i * 4 + 1], buffer[i * 4 + 2], 0];
+        let val_bytes = [
+          buffer[i * 4],
+          buffer[i * 4 + 1],
+          buffer[i * 4 + 2],
+          buffer[i * 4 + 3],
+        ];
         let val = u32::from_le_bytes(val_bytes);
         // Convert [0, 2^24-1] to [0.0, 1.0]
         depth_buffer.push((val & 0xFFFFFF) as f32 / 16777215.0);

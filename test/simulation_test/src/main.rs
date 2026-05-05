@@ -226,8 +226,9 @@ fn main() {
       let initial_pos = Vec3f32::zero();
 
       let sphere = {
+        // TODO insert true mass of planet (hard code or from constants kernel)
         let mut sphere =
-          aethervk_core_rlib::simulation::comet::generate_uv_sphere(planet_radius, 64, 64);
+          aethervk_core_rlib::simulation::comet::generate_uv_sphere(planet_radius, 64, 64, 1.0);
         let tex = aethervk_core_rlib::simulation::comet::load_texture_from_file(
           assets_dir.join(tex_path).to_str().unwrap(),
         )
@@ -1494,7 +1495,7 @@ mod depth_tests {
         Vec3f32::from_components(1.0, 1.0, 1.0),
       )
       .unwrap();
-    ctx.add_sun_component(scene_id, sun_entity, (128, 128, 128)).unwrap();
+    ctx.add_sun_component(scene_id, sun_entity, (128, 128, 128), 1.2).unwrap();
     {
       let scene_data_opt = ctx.get_scene(scene_id).unwrap();
       let mut write_scene_context = scene_data_opt.write();

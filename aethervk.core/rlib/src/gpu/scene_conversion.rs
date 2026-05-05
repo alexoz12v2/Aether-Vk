@@ -50,13 +50,13 @@ pub struct RenderSceneExtraction {
   pub extracted_bvhs: Vec<(Vec<LinearBound<f32>>, usize)>,
   pub extracted_particles: Vec<(
     EntityId,
-    Vec<crate::scene::particles::ParticleData>,
+    alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
     crate::scene::particles::ParticleEmitterConfig,
   )>,
   pub extracted_gizmos: Vec<(EntityId, Mat4x4f32, f32)>,
 
   pub extracted_sky: Option<()>,
-  pub extracted_sun: Option<(Mat4x4f32, EntityId)>,
+  pub extracted_sun: Option<((Mat4x4f32, f32), EntityId)>,
   pub extracted_grid: Option<(f32, f32, [f32; 3])>,
   // ... more components here
   pub camera_data: CameraRenderData,
@@ -220,13 +220,14 @@ impl RenderSceneExtraction {
     }
 
     // Sun
-    if let Some((global_model, entity_id)) = self.extracted_sun {
+    if let Some(((global_model, radius), entity_id)) = self.extracted_sun {
       let pipeline = device.get_sun_pipeline_key(presentation_engine_handle)?;
       render_scene.sun_call = Some(gpu::frame::SunDrawCall::from_model_and_camera(
         global_model,
         &render_scene.camera_data,
         pipeline,
         entity_id,
+        radius,
       )?);
     }
 
@@ -250,13 +251,8 @@ impl RenderSceneExtraction {
     // Particles
     let particle_pipeline = device.get_particle_pipeline_key(presentation_engine_handle)?;
     for (entity_id, particles, config) in self.extracted_particles {
-      if particles.is_empty() {
-        // TODO: ECS should filter these
-        continue;
-      }
       render_scene.particle_calls.push(gpu::frame::ParticleDrawCall {
         pipeline: particle_pipeline,
-        particle_count: particles.len() as u32,
         system_particle_offset: 0,
         system_indirect_offset: 0,
         config,
@@ -302,14 +298,14 @@ impl SceneConversionExt for crate::scene::Scene {
       Vec::with_capacity(START_VEC_CAPACITY);
     let mut extracted_particles: Vec<(
       EntityId,
-      Vec<crate::scene::particles::ParticleData>,
+      alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
       crate::scene::particles::ParticleEmitterConfig,
     )> = Vec::with_capacity(START_VEC_CAPACITY);
     let mut extracted_gizmos: Vec<(EntityId, Mat4x4f32, f32)> =
       Vec::with_capacity(START_VEC_CAPACITY);
 
     let extracted_sky: Option<()>;
-    let extracted_sun: Option<(Mat4x4f32, EntityId)>;
+    let extracted_sun: Option<((Mat4x4f32, f32), EntityId)>;
     let extracted_grid: Option<(f32, f32, [f32; 3])>;
     // ... more components here
 
@@ -486,8 +482,8 @@ impl SceneConversionExt for crate::scene::Scene {
 
     // Sun
     extracted_sun = self.query2_first_res_without::<_, _, HiddenComponent, _, _>(
-      |id, _t: &TransformComponent, _s: &SunComponent| {
-        self.global_transform(id).map(|t| t.to_mat4::<Mat4x4f32>())
+      |id, _t: &TransformComponent, s: &SunComponent| {
+        self.global_transform(id).map(|t| (t.to_mat4::<Mat4x4f32>(), s.radius))
       },
     );
 
@@ -510,7 +506,11 @@ impl SceneConversionExt for crate::scene::Scene {
     // Particles
     self.query1_without::<_, HiddenComponent, _>(
       |id, sys: &crate::scene::particles::ParticleSystemComponent| {
-        extracted_particles.push((id, sys.particles.clone(), sys.config.clone()));
+        extracted_particles.push((
+          id,
+          alloc::sync::Arc::downgrade(&sys.particles),
+          sys.config.clone(),
+        ));
       },
     );
 

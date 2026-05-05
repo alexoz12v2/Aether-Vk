@@ -252,7 +252,8 @@ impl RenderDevice for D3d12RenderDevice {
     &self,
     _cmd_buffer: CommandBufferHandle,
     _entity_id: EntityId,
-    _component: &SunComponent,
+    _resolution: (u32, u32, u32),
+    _radius: f32,
   ) -> GpuResult<()> {
     unimplemented!()
   }

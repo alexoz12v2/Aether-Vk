@@ -147,8 +147,8 @@ namespace AetherVk.Logic.Tests
 
         // This usually requires an active camera which is created by CreateScene
         var result = await _service.RaycastNdcAsync(sceneId, 0.5f, 0.5f);
-        
-        // As long as the task completes without crashing, we are good. 
+
+        // As long as the task completes without crashing, we are good.
         // It might not hit anything in an empty scene.
         Assert.False(result.hit);
       }
@@ -163,7 +163,7 @@ namespace AetherVk.Logic.Tests
         _service.InitializeSimulationContext("Vulkan", _assetPath, false);
         ulong sceneId = _service.CreateScene(true);
 
-        ulong sphereId = _service.SpawnProceduralSphere(sceneId, "MySphere", 5.0f);
+        ulong sphereId = _service.SpawnProceduralSphere(sceneId, "MySphere", 5.0f, 1.0f);
         Assert.NotEqual(0ul, sphereId);
 
         var entity = _service.GetEntityByName(sceneId, "MySphere");

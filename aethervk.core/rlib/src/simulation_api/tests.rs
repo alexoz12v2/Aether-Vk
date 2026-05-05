@@ -285,7 +285,7 @@ fn test_components_api() {
 
       assert!(ctx.add_sky_component(scene_id, entity_id).is_ok());
       assert!(ctx.add_cursor_component(scene_id, entity_id).is_ok());
-      assert!(ctx.add_sun_component(scene_id, entity_id, (128, 128, 128)).is_ok());
+      assert!(ctx.add_sun_component(scene_id, entity_id, (128, 128, 128), 0.6).is_ok());
       assert!(ctx.add_grid_component(scene_id, entity_id).is_ok());
 
       assert!(
@@ -428,7 +428,7 @@ fn test_misc_and_models_api_direct() {
         let _ = alloc::ffi::CString::from_raw(*ptr);
       }
 
-      let sphere_id = ctx.spawn_procedural_sphere(scene_id, core::ptr::null(), 1.0).unwrap();
+      let sphere_id = ctx.spawn_procedural_sphere(scene_id, core::ptr::null(), 1.0, 1.0).unwrap();
       assert!(sphere_id > 0);
 
       // test unload model (model 0 doesn't exist, but it covers the branch)

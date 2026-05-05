@@ -1,7 +1,4 @@
-use ash::vk;
 use crate::gpu;
-use crate::gpu::{vulkan, PipelineKeyable, PresentationEngineHandle};
-use crate::gpu::vulkan::device::{renderpasses, resources, shader_manager, LogicalDevice, Queue};
 use crate::gpu::vulkan::device::pipelines::{
   FragmentOut, FragmentShader, GraphicsInfo, PipelineFlags, PreRasterization, StencilCompareOp,
   StencilLogicOp, VertexIn,
@@ -11,11 +8,14 @@ use crate::gpu::vulkan::device::resources::{
   DiscardableResource, ForwardMeshRenderResourceArchetype, Image,
 };
 use crate::gpu::vulkan::device::shader_manager::ShaderKey;
+use crate::gpu::vulkan::device::{LogicalDevice, Queue, renderpasses, resources, shader_manager};
 use crate::gpu::vulkan::utils::NonZeroHandle;
+use crate::gpu::{PipelineKeyable, PresentationEngineHandle, vulkan};
 use crate::gpu_backends::vulkan::device::{pipelines, swapchain};
 use crate::simulation::comet::{NORMAL_COMPONENTS, POSITION_COMPONENTS, UV_COMPONENTS};
 use crate::types::{GpuError, GpuResult};
 use alloc::vec::Vec;
+use ash::vk;
 
 // TODO rewrite error messages
 
@@ -24,15 +24,11 @@ fn get_validated_shaders(
   vertex_shader_key: ShaderKey,
   fragment_shader_key: ShaderKey,
 ) -> GpuResult<(&shader_manager::Shader, &shader_manager::Shader)> {
-  let vertex_shader = shader_manager
-    .get(vertex_shader_key)
-    .ok_or(GpuError::InvalidShader)?;
+  let vertex_shader = shader_manager.get(vertex_shader_key).ok_or(GpuError::InvalidShader)?;
   if vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
     return Err(GpuError::InvalidShader);
   }
-  let fragment_shader = shader_manager
-    .get(fragment_shader_key)
-    .ok_or(GpuError::InvalidShader)?;
+  let fragment_shader = shader_manager.get(fragment_shader_key).ok_or(GpuError::InvalidShader)?;
   if fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
     return Err(GpuError::InvalidShader);
   }
@@ -342,21 +338,19 @@ impl Archetypes {
     update_physical_mesh_archetype_for_presentation_engine,
     physical_mesh_render_archetype,
     |archetype, device, write_pipeline, discard_pool, timeline, graphics_info, format| {
-      let outline_graphics_info = graphics_info
-        .clone()
-        .with_pipeline_flags(
-          PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::NO_DEPTH_TEST | PipelineFlags::INVERT_FRONT_FACE,
-        )
-        .with_stencil_compare_op(StencilCompareOp::NotEqual)
-        .with_stencil_logic_op(StencilLogicOp::None)
-        .with_stencil_reference(255)
-        .with_stencil_compare_mask(255)
-        .with_stencil_write_mask(0);
+      let mut outline_graphics_info = archetype.get_any_graphics_info_outline_pipeline_map().unwrap();
+      outline_graphics_info.fragment_out.color_attachment_formats.clear();
+      outline_graphics_info.fragment_out.color_attachment_formats.push(format);
+      outline_graphics_info.render_pass = graphics_info.render_pass;
 
       // TODO discard old pipeline (also for others)
       let outline_pipeline_key = outline_graphics_info.pipeline_key();
       write_pipeline.get_or_create_graphics_pipeline(device, &outline_graphics_info)?;
-      archetype.insert_graphics_info_outline_pipeline_map(format, outline_graphics_info, outline_pipeline_key);
+      archetype.insert_graphics_info_outline_pipeline_map(
+        format,
+        outline_graphics_info,
+        outline_pipeline_key,
+      );
     }
   );
 
@@ -417,7 +411,6 @@ impl Archetypes {
     billboard_render_archetype
   );
 
-
   // ------------------------------------ Creation ------------------------------------
 
   impl_create_archetype!(
@@ -426,11 +419,7 @@ impl Archetypes {
     SunRenderResourceArchetype,
     |gi| {
       gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
-        .with_pipeline_flags(
-          PipelineFlags::CULL_ALL
-            | PipelineFlags::INVERT_FRONT_FACE
-            | PipelineFlags::NO_DEPTH_WRITE,
-        )
+        .with_pipeline_flags(PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::NO_DEPTH_WRITE)
     }
   );
 
@@ -441,7 +430,7 @@ impl Archetypes {
     ref_alloc,
     |gi| {
       gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
-        .with_pipeline_flags(PipelineFlags::CULL_ALL)
+        .with_pipeline_flags(PipelineFlags::empty())
         .with_stencil_compare_op(StencilCompareOp::None)
         .with_stencil_logic_op(StencilLogicOp::Replace)
         .with_stencil_reference(255)
@@ -456,9 +445,7 @@ impl Archetypes {
     CursorRenderResourceArchetype,
     |gi| {
       gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
-        .with_pipeline_flags(
-          PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE,
-        )
+        .with_pipeline_flags(PipelineFlags::NO_DEPTH_TEST)
         .with_stencil_compare_op(StencilCompareOp::None)
         .with_stencil_logic_op(StencilLogicOp::Replace)
         .with_stencil_reference(255)
@@ -473,12 +460,7 @@ impl Archetypes {
     MeasurementRenderResourceArchetype,
     |gi| {
       gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::LINE_LIST))
-        .with_pipeline_flags(
-          PipelineFlags::CULL_ALL
-            | PipelineFlags::INVERT_FRONT_FACE
-            | PipelineFlags::NO_DEPTH_TEST
-            | PipelineFlags::NO_DEPTH_WRITE,
-        )
+        .with_pipeline_flags(PipelineFlags::NO_DEPTH_TEST | PipelineFlags::NO_DEPTH_WRITE)
         .with_stencil_compare_op(StencilCompareOp::None)
         .with_stencil_logic_op(StencilLogicOp::Replace)
         .with_stencil_reference(255)
@@ -493,7 +475,7 @@ impl Archetypes {
     MarkerRenderResourceArchetype,
     |gi| {
       gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
-        .with_pipeline_flags(PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE)
+        .with_pipeline_flags(PipelineFlags::empty())
         .with_stencil_compare_op(StencilCompareOp::None)
         .with_stencil_logic_op(StencilLogicOp::Replace)
         .with_stencil_reference(255)
@@ -508,9 +490,7 @@ impl Archetypes {
     BillboardRenderResourceArchetype,
     |gi| {
       gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
-        .with_pipeline_flags(
-          PipelineFlags::NO_DEPTH_TEST | PipelineFlags::CULL_ALL | PipelineFlags::INVERT_FRONT_FACE,
-        )
+        .with_pipeline_flags(PipelineFlags::NO_DEPTH_TEST)
         .with_stencil_compare_op(StencilCompareOp::None)
         .with_stencil_logic_op(StencilLogicOp::Replace)
         .with_stencil_reference(255)
@@ -541,28 +521,22 @@ impl Archetypes {
       return Err(crate::gpu_err!("device error"));
     }
 
-    let vertex_shader = shader_manager
-      .get(vertex_shader_key)
-      .ok_or(GpuError::InvalidShader)?;
+    let vertex_shader = shader_manager.get(vertex_shader_key).ok_or(GpuError::InvalidShader)?;
     if vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
       return Err(GpuError::InvalidShader);
     }
-    let fragment_shader = shader_manager
-      .get(fragment_shader_key)
-      .ok_or(GpuError::InvalidShader)?;
+    let fragment_shader = shader_manager.get(fragment_shader_key).ok_or(GpuError::InvalidShader)?;
     if fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
       return Err(GpuError::InvalidShader);
     }
 
-    let outline_vertex_shader = shader_manager
-      .get(outline_vertex_shader_key)
-      .ok_or(GpuError::InvalidShader)?;
+    let outline_vertex_shader =
+      shader_manager.get(outline_vertex_shader_key).ok_or(GpuError::InvalidShader)?;
     if outline_vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
       return Err(GpuError::InvalidShader);
     }
-    let outline_fragment_shader = shader_manager
-      .get(outline_fragment_shader_key)
-      .ok_or(GpuError::InvalidShader)?;
+    let outline_fragment_shader =
+      shader_manager.get(outline_fragment_shader_key).ok_or(GpuError::InvalidShader)?;
     if outline_fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
       return Err(GpuError::InvalidShader);
     }
@@ -604,47 +578,35 @@ impl Archetypes {
             3,
             vk::Format::R32G32B32A32_SFLOAT,
             (NORMAL_COMPONENTS + UV_COMPONENTS) * size_of::<f32>() as u32,
-          ) // inTangent
-          .clone(),
+          ), // inTangent
       )
       .with_pre_rasterization(
-        PreRasterization::default()
-          .with_vertex_module(vertex_shader.module.get())
-          .clone(),
+        PreRasterization::default().with_vertex_module(vertex_shader.module.get()),
       )
       .with_fragment_shader(
         FragmentShader::default()
           .with_fragment_module(fragment_shader.module.get())
-          // TODO Uniform to rest
-          .add_viewport(vk::Viewport {
-            width: presentation_engine_state.extent().0 as _,
-            height: -(presentation_engine_state.extent().1 as f32), // Y axis points downwards in Vulkan, so flip it
-            x: 0.0,
-            y: presentation_engine_state.extent().1 as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-          })
-          // TODO Uniform to rest
-          .add_scissors(vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-              width: presentation_engine_state.extent().0,
-              height: presentation_engine_state.extent().1,
-            },
-          })
-          .clone(),
+          // NOTE: Viewport and Scissor setup here is generally ignored during command buffer recording
+          // because they are bound as DYNAMIC_STATE. We provide them here as fallback.
+          // necessary to call add because count is not a dynamic state
+          .add_viewport(ignored_viewport())
+          // NOTE: Viewport and Scissor setup here is generally ignored during command buffer recording
+          // because they are bound as DYNAMIC_STATE. We provide them here as fallback.
+          // necessary to call add because count is not a dynamic state
+          .add_scissors(ignored_scissor()),
       )
       .with_fragment_out(
         FragmentOut::default()
           .add_color_attachment_format(presentation_engine_state.format())
           .with_depth_attachment_format(depth_stencil_format)
-          .with_stencil_attachment_format(depth_stencil_format)
-          .clone(),
+          .with_stencil_attachment_format(depth_stencil_format),
       )
       .with_pipeline_layout(res.pipeline_layout.get())
-      .with_pipeline_flags(
-        PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE,
-      )
+      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
+      .with_stencil_compare_op(StencilCompareOp::Always)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(255)
+      .with_stencil_write_mask(u32::MAX)
       .with_render_pass(
         renderpasses
           .get_or_create_render_pass(
@@ -669,35 +631,25 @@ impl Archetypes {
 
     pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
 
+    // Note: old code rendered outlines with back faces and stencil buffer. But:
+    // - That is the traditional technique because traditional pipelines don't use Stencil Masks.
+    // - The flaw with backfaces is that they sit behind the mesh. If your character stands against a wall, the expanded backfaces will clip into the wall, fail the depth test, and the outline will awkwardly disappear.
+    // - Because you use a Stencil Mask, you are already stopping the outline from rendering over the mesh itself. Therefore, you can safely change your outline pipeline to render Front Faces. This projects the outline forward, preventing it from clipping into nearby background walls!
     let outline_graphics_info = pipeline_graphics_info
       .clone()
       .with_pre_rasterization(
-        PreRasterization::default()
-          .with_vertex_module(outline_vertex_shader.module.get())
-          .clone(),
+        PreRasterization::default().with_vertex_module(outline_vertex_shader.module.get()),
       )
       .with_fragment_shader(
         FragmentShader::default()
           .with_fragment_module(outline_fragment_shader.module.get())
-          .add_viewport(vk::Viewport {
-            width: presentation_engine_state.extent().0 as _,
-            height: -(presentation_engine_state.extent().1 as f32), // Y axis points downwards in Vulkan, so flip it
-            x: 0.0,
-            y: presentation_engine_state.extent().1 as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-          })
-          .add_scissors(vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-              width: presentation_engine_state.extent().0,
-              height: presentation_engine_state.extent().1,
-            },
-          })
-          .clone(),
+          .add_viewport(ignored_viewport())
+          .add_scissors(ignored_scissor()),
       )
       .with_pipeline_flags(
-        PipelineFlags::CULL_BACK | PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::STENCIL_ENABLE | PipelineFlags::NO_DEPTH_TEST,
+        PipelineFlags::STENCIL_ENABLE
+          | PipelineFlags::NO_DEPTH_TEST
+          | PipelineFlags::NO_DEPTH_WRITE,
       )
       .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
       .with_stencil_compare_op(StencilCompareOp::NotEqual)
@@ -717,7 +669,7 @@ impl Archetypes {
         pipeline_graphics_info,
         pipeline_key,
       )
-      .with_graphics_info(
+      .with_graphics_info_outline_pipeline_map(
         presentation_engine_state.format(),
         outline_graphics_info,
         outline_pipeline_key,
@@ -745,7 +697,8 @@ impl Archetypes {
     if sky_render_archetype.is_some() {
       return Err(crate::gpu_err!("device error"));
     }
-    let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
+    let (vertex_shader, fragment_shader) =
+      get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
 
     let bindings = [vk::DescriptorSetLayoutBinding::default()
       .binding(0)
@@ -798,12 +751,7 @@ impl Archetypes {
           .with_depth_attachment_format(depth_stencil_format),
       )
       .with_pipeline_layout(pipeline_layout)
-      .with_pipeline_flags(
-        PipelineFlags::CULL_ALL
-          | PipelineFlags::NO_DEPTH_WRITE
-          | PipelineFlags::NO_DEPTH_TEST
-          | PipelineFlags::INVERT_FRONT_FACE,
-      )
+      .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST)
       .with_render_pass(
         renderpasses
           .get_or_create_render_pass(
@@ -851,7 +799,8 @@ impl Archetypes {
     if grid_render_archetype.is_some() {
       return Err(crate::gpu_err!("device error"));
     }
-    let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
+    let (vertex_shader, fragment_shader) =
+      get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
 
     let push_constant_ranges = [vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
@@ -865,14 +814,10 @@ impl Archetypes {
 
     let pipeline_graphics_info = GraphicsInfo::default()
       .with_vertex_in(
-        VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-          .clone(),
+        VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP).clone(),
       )
       .with_pre_rasterization(
-        PreRasterization::default()
-          .with_vertex_module(vertex_shader.module.get())
-          .clone(),
+        PreRasterization::default().with_vertex_module(vertex_shader.module.get()).clone(),
       )
       .with_fragment_shader(
         FragmentShader::default()
@@ -901,12 +846,7 @@ impl Archetypes {
           .clone(),
       )
       .with_pipeline_layout(pipeline_layout)
-      .with_pipeline_flags(
-        PipelineFlags::CULL_ALL
-          | PipelineFlags::NO_DEPTH_WRITE
-          | PipelineFlags::NO_DEPTH_TEST
-          | PipelineFlags::INVERT_FRONT_FACE,
-      )
+      .with_pipeline_flags(PipelineFlags::empty())
       .with_render_pass(
         renderpasses
           .get_or_create_render_pass(
@@ -987,15 +927,11 @@ impl Archetypes {
           }),
       )
       .with_fragment_out(
-        pipelines::FragmentOut::default()
-          .add_color_attachment_format(pe.format())
-          .clone(),
+        pipelines::FragmentOut::default().add_color_attachment_format(pe.format()).clone(),
       )
       .with_pipeline_layout(arch_mut.pipeline_layout.get())
       .with_pipeline_flags(
-        pipelines::PipelineFlags::CULL_ALL
-          | pipelines::PipelineFlags::NO_DEPTH_TEST
-          | pipelines::PipelineFlags::NO_DEPTH_WRITE,
+        pipelines::PipelineFlags::NO_DEPTH_TEST | pipelines::PipelineFlags::NO_DEPTH_WRITE,
       )
       .with_render_pass(
         renderpasses
@@ -1041,7 +977,8 @@ impl Archetypes {
       return Err(crate::gpu_err!("device error"));
     }
 
-    let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
+    let (vertex_shader, fragment_shader) =
+      get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
 
     let max_fonts = 256; // Array limit
 
@@ -1091,9 +1028,8 @@ impl Archetypes {
       .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
     let pool = unsafe { device.create_descriptor_pool(&pool_info, None) }?;
 
-    let alloc_info = vk::DescriptorSetAllocateInfo::default()
-      .descriptor_pool(pool)
-      .set_layouts(&set_layouts);
+    let alloc_info =
+      vk::DescriptorSetAllocateInfo::default().descriptor_pool(pool).set_layouts(&set_layouts);
     let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?[0];
 
     let mut arch = resources::TextRenderResourceArchetype::new(
@@ -1107,49 +1043,23 @@ impl Archetypes {
     );
 
     let pipeline_graphics_info = GraphicsInfo::default()
-      .with_vertex_in(
-        VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-          .clone(),
-      )
+      .with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
       .with_pre_rasterization(
-        PreRasterization::default()
-          .with_vertex_module(vertex_shader.module.get())
-          .clone(),
+        PreRasterization::default().with_vertex_module(vertex_shader.module.get()),
       )
       .with_fragment_shader(
         FragmentShader::default()
           .with_fragment_module(fragment_shader.module.get())
-          .add_viewport(vk::Viewport {
-            width: presentation_engine_state.extent().0 as _,
-            height: -(presentation_engine_state.extent().1 as f32),
-            x: 0.0,
-            y: presentation_engine_state.extent().1 as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-          })
-          .add_scissors(vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-              width: presentation_engine_state.extent().0,
-              height: presentation_engine_state.extent().1,
-            },
-          })
-          .clone(),
+          .add_viewport(ignored_viewport())
+          .add_scissors(ignored_scissor()),
       )
       .with_fragment_out(
         FragmentOut::default()
           .add_color_attachment_format(presentation_engine_state.format())
-          .with_depth_attachment_format(depth_stencil_format)
-          .clone(),
+          .with_depth_attachment_format(depth_stencil_format),
       )
       .with_pipeline_layout(pipeline_layout)
-      .with_pipeline_flags(
-        PipelineFlags::CULL_ALL
-          | PipelineFlags::NO_DEPTH_WRITE
-          | PipelineFlags::NO_DEPTH_TEST
-          | PipelineFlags::INVERT_FRONT_FACE,
-      )
+      .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST)
       .with_render_pass(
         renderpasses
           .get_or_create_render_pass(
@@ -1205,9 +1115,7 @@ impl Archetypes {
 
     let pipeline_graphics_info = pipelines::GraphicsInfo::default()
       .with_vertex_in(
-        pipelines::VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::LINE_LIST)
-          .clone(),
+        pipelines::VertexIn::default().with_topology(vk::PrimitiveTopology::LINE_LIST).clone(),
       )
       .with_pre_rasterization(
         pipelines::PreRasterization::default()
@@ -1294,9 +1202,7 @@ impl Archetypes {
 
     let pipeline_graphics_info = pipelines::GraphicsInfo::default()
       .with_vertex_in(
-        pipelines::VertexIn::default()
-          .with_topology(vk::PrimitiveTopology::LINE_LIST)
-          .clone(),
+        pipelines::VertexIn::default().with_topology(vk::PrimitiveTopology::LINE_LIST).clone(),
       )
       .with_pre_rasterization(
         pipelines::PreRasterization::default()
@@ -1358,4 +1264,12 @@ impl Archetypes {
 
     Ok(())
   }
+}
+
+fn ignored_viewport() -> vk::Viewport {
+  vk::Viewport::default()
+}
+
+fn ignored_scissor() -> vk::Rect2D {
+  vk::Rect2D::default()
 }

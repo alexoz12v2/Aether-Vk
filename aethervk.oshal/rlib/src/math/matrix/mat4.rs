@@ -6,10 +6,8 @@ use core::arch::aarch64::*;
 
 use core::ops;
 
-use crate::math::{
-  matrix::{Matrix, Matrix4, MatrixVectorMul, SquareMatrix},
-  vector::{Vector, Vector4, vec4::Vec4f32},
-};
+use crate::math::{matrix::{Matrix, Matrix4, MatrixVectorMul, SquareMatrix}, vector::{Vector, Vector4, vec4::Vec4f32}, FloatLike};
+use crate::os::debug;
 
 /// Column-Major, f32 storage for 4x4 matrices
 #[derive(Copy, Clone, PartialEq, Debug, Default)]
@@ -29,6 +27,15 @@ impl Into<[f32; 16]> for Mat4x4f32 {
     (&mut result[4..8]).copy_from_slice(&Into::<[f32; 4]>::into(self.y));
     (&mut result[8..12]).copy_from_slice(&Into::<[f32; 4]>::into(self.z));
     (&mut result[12..16]).copy_from_slice(&Into::<[f32; 4]>::into(self.w));
+    #[cfg(any(debug_assertions, test))]
+    {
+      for f in result {
+        if !f.is_finite() {
+          debug::print_stacktrace();
+          panic!("unexpected non finite number inside Mat4x4f32 (column major): {:?}", result);
+        }
+      }
+    }
 
     result
   }
@@ -42,6 +49,15 @@ impl Into<[[f32; 4]; 4]> for Mat4x4f32 {
     result[1] = Into::<[f32; 4]>::into(self.y);
     result[2] = Into::<[f32; 4]>::into(self.z);
     result[3] = Into::<[f32; 4]>::into(self.w);
+    #[cfg(any(debug_assertions, test))]
+    {
+      for f in result.iter().flatten() {
+        if !f.is_finite() {
+          debug::print_stacktrace();
+          panic!("unexpected non finite number inside Mat4x4f32 (column major): {:?}", result);
+        }
+      }
+    }
 
     result
   }

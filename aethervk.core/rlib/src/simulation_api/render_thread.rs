@@ -218,7 +218,7 @@ fn do_render_scene_async(
   )?;
   if let Some(sun_call) = &render_scene.sun_call {
     // TODO move to kernels
-    render_device.update_sun(cmd_buffer, sun_call.entity, (128, 128, 128))?;
+    render_device.update_sun(cmd_buffer, sun_call.entity, (128, 128, 128), sun_call.radius)?;
   }
 
   if is_first_render && custom_render_callback.is_some() {

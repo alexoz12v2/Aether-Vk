@@ -82,7 +82,8 @@ public static class NativeInterop
     IntPtr ctx,
     ulong sceneId,
     string name,
-    float radius
+    float radius,
+    float mass
   );
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]

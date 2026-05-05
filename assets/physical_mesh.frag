@@ -168,8 +168,7 @@ void main() {
 
   if (push.emissiveIntensity > 0.0) {
       outColor = vec4(emission, 1.0);
-      return;
+  } else {
+      outColor = vec4(diffuse * lightColor * ao + ambient + emission, 1.0);
   }
-
-  outColor = vec4(diffuse * lightColor * ao + ambient + emission, 1.0);
 }

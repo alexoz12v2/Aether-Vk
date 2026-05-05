@@ -358,6 +358,7 @@ impl SimulationContext {
     scene_id: u64,
     entity: u64,
     resolution: (u32, u32, u32),
+    radius: f32,
   ) -> EngineResult<()> {
     let (scene, entity_id) = expect_scene_and_entity!(
       self.get_scene(scene_id),
@@ -367,7 +368,7 @@ impl SimulationContext {
     scene
       .write()
       .scene
-      .add_component(entity_id, SunComponent { resolution })
+      .add_component(entity_id, SunComponent { resolution, radius })
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 

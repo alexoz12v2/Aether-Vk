@@ -569,12 +569,13 @@ pub unsafe extern "C" fn avkSimulationContext_spawnProceduralSphere(
   scene_id: u64,
   name: *const c_char,
   radius: f32,
+  mass: f32,
 ) -> u64 {
-  if ctx.is_null() {
+  if ctx.is_null() || mass <= 0.0 || name.is_null() || radius <= 0.0 {
     return 0;
   }
   let ctx_ref = unsafe { &*ctx };
-  ctx_ref.spawn_procedural_sphere(scene_id, name, radius).unwrap_or_else(|e| {
+  ctx_ref.spawn_procedural_sphere(scene_id, name, radius, mass).unwrap_or_else(|e| {
     oshal::log!("spawn_procedural_sphere failed: {}", e);
     0
   })
@@ -1141,7 +1142,7 @@ pub unsafe extern "C" fn avkSimulationContext_addSunComponent(
     return;
   }
   let ctx_ref = unsafe { &*ctx };
-  let _ = ctx_ref.add_sun_component(scene_id, entity, (res_x, res_y, res_z));
+  let _ = ctx_ref.add_sun_component(scene_id, entity, (res_x, res_y, res_z), 0.6);
 }
 
 #[unsafe(no_mangle)]

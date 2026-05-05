@@ -51,7 +51,7 @@ namespace AetherVk.Logic.Tests
         _service.InitializeSimulationContext("Vulkan", _assetPath, false);
         Assert.True(_service.IsInitialized);
         ulong sceneId = _service.CreateScene(true);
-        ulong sphereId = _service.SpawnProceduralSphere(sceneId, "TestSphere", 1.0f);
+        ulong sphereId = _service.SpawnProceduralSphere(sceneId, "TestSphere", 1.0f, 1.0f);
         Assert.NotEqual(0ul, sphereId);
       }
       catch (DllNotFoundException) { }
@@ -71,7 +71,7 @@ namespace AetherVk.Logic.Tests
         ulong sceneId = _service.CreateScene(true);
         ulong peId = _service.CreatePresentationEngine(width, height, sceneId);
 
-        ulong sphereId = _service.SpawnProceduralSphere(sceneId, "TestSphere", 1.0f);
+        ulong sphereId = _service.SpawnProceduralSphere(sceneId, "TestSphere", 1.0f, 1.0f);
         Assert.NotEqual(0ul, sphereId);
 
         var camera = _service.GetEntityByName(sceneId, "camera");
@@ -82,9 +82,9 @@ namespace AetherVk.Logic.Tests
             tcs.TrySetResult(m.RenderGeneration);
         });
         _service.PlayScene(sceneId);
-        
+
         ulong taskId;
-        try 
+        try
         {
             taskId = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }
@@ -150,10 +150,10 @@ namespace AetherVk.Logic.Tests
             msgCount++;
             if (msgCount >= 2) tcs.TrySetResult(m.RenderGeneration);
         });
-        
+
         _service.PlayScene(sceneId);
 
-        try 
+        try
         {
             await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }
@@ -177,7 +177,7 @@ namespace AetherVk.Logic.Tests
         ulong sceneId = _service.CreateScene(true);
         ulong peId = _service.CreatePresentationEngine(width, height, sceneId);
 
-        ulong sphereId = _service.SpawnProceduralSphere(sceneId, "TestSphere", 1.0f);
+        ulong sphereId = _service.SpawnProceduralSphere(sceneId, "TestSphere", 1.0f, 1.0f);
         Assert.NotEqual(0ul, sphereId);
 
         var meas = _service.CreateMeasurement(
@@ -216,10 +216,10 @@ namespace AetherVk.Logic.Tests
             msgCount++;
             if (msgCount >= 3) tcs.TrySetResult(m.RenderGeneration);
         });
-        
+
         _service.PlayScene(sceneId);
 
-        try 
+        try
         {
             await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }

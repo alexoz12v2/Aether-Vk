@@ -201,6 +201,7 @@ fn main() {
       sun_entity,
       SunComponent {
         resolution: (128, 128, 128),
+        radius: 1.0,
       },
     )
     .unwrap();
@@ -428,8 +429,7 @@ fn render_function(
   )?;
 
   if let Some(sun_call) = &render_scene.sun_call {
-    // TODO move to kernels
-    device.update_sun(cmd_buffer, sun_call.entity, (128, 128, 128))?;
+    device.update_sun(cmd_buffer, sun_call.entity, (128, 128, 128), 1.0)?;
   }
   device.begin_render_pass(cmd_buffer, presentation_engine_handle, &acquire_result)?;
   let render_pass_guard = ScopedRenderPass::new(device, cmd_buffer);

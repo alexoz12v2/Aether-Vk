@@ -259,6 +259,7 @@ impl Component for ImageBillboardComponent {}
 #[derive(Clone, Copy, Debug)]
 pub struct SunComponent {
   pub resolution: (u32, u32, u32),
+  pub radius: f32,
 }
 impl Component for SunComponent {}
 
@@ -368,7 +369,7 @@ impl<'a> RenderableDataRef<'a> {
       RenderableDataRef::Markers(m) => (m.markers.len() * 4) as u32,
       RenderableDataRef::Measurement(_) => 6, // 6 vertices for line list
       RenderableDataRef::Gizmo(_) => 6,
-      RenderableDataRef::ParticleSystem(p) => (p.particles.len() * 4) as u32,
+      RenderableDataRef::ParticleSystem(p) => (p.particles.read().len() * 4) as u32,
     }
   }
 }
@@ -2363,6 +2364,7 @@ mod tests {
         sun1,
         SunComponent {
           resolution: (1, 1, 1),
+          radius: 0.6,
         },
       )
       .unwrap();
@@ -2374,6 +2376,7 @@ mod tests {
         sun2,
         SunComponent {
           resolution: (1, 1, 1),
+          radius: 0.6,
         },
       )
       .unwrap();

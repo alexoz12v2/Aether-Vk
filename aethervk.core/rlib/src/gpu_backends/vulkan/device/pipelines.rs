@@ -113,16 +113,15 @@ impl Hash for ComputeInfo {
 bitflags! {
   #[derive(PartialEq, Eq, Hash, Default, Clone, Copy)]
   pub struct PipelineFlags: u32 {
-    const DEPTH_BIAS = 0x1u32 << 0;
-    const CULL = 0x1u32 << 1;
-    const CULL_FRONT = 0x3u32 << 1;
-    const CULL_BACK = 0x1u32 << 1;
-    const CULL_ALL = 0x2u32 << 1;
-    const INVERT_FRONT_FACE = 0x1u32 << 3;
-    const NO_DEPTH_WRITE = 0x1u32 << 4;
-    const STENCIL_ENABLE = 0x1u32 << 5;
-    const NO_DEPTH_TEST = 0x1u32 << 6;
-    const NO_LINE_DYNAMIC_STATE = 0x1u32 << 7;
+    const DEPTH_BIAS = 1 << 0;
+    const CULL_FRONT = 1 << 1;
+    const CULL_BACK  = 1 << 2;
+    const CULL_ALL   = Self::CULL_FRONT.bits() | Self::CULL_BACK.bits();
+    const INVERT_FRONT_FACE = 1 << 3;
+    const NO_DEPTH_WRITE = 1 << 4;
+    const STENCIL_ENABLE = 1 << 5;
+    const NO_DEPTH_TEST = 1 << 6;
+    const NO_LINE_DYNAMIC_STATE = 1 << 7;
   }
 }
 
@@ -792,16 +791,18 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
           .scissors(&graphics_info.fragment_shader.scissors)
       },
       rasterization_state_builder: |graphics_info: &_| {
-        let mut cull_mode = vk::CullModeFlags::BACK;
+        let mut cull_mode = vk::CullModeFlags::NONE;
         if graphics_info.pipeline_flags.contains(PipelineFlags::CULL_ALL) {
-          cull_mode = vk::CullModeFlags::NONE;
+          cull_mode = vk::CullModeFlags::FRONT_AND_BACK;
+        } else if graphics_info.pipeline_flags.contains(PipelineFlags::CULL_BACK) {
+          cull_mode = vk::CullModeFlags::BACK;
         } else if graphics_info.pipeline_flags.contains(PipelineFlags::CULL_FRONT) {
           cull_mode = vk::CullModeFlags::FRONT;
         }
 
-        let mut front_face = vk::FrontFace::CLOCKWISE;
+        let mut front_face = vk::FrontFace::COUNTER_CLOCKWISE;
         if graphics_info.pipeline_flags.contains(PipelineFlags::INVERT_FRONT_FACE) {
-          front_face = vk::FrontFace::COUNTER_CLOCKWISE;
+          front_face = vk::FrontFace::CLOCKWISE;
         }
 
         vk::PipelineRasterizationStateCreateInfo::default()
@@ -996,9 +997,10 @@ impl PipelinePool {
 
   pub fn get_or_create_compute_pipeline(
     &mut self,
-    device: &ash::Device,
+    device: &crate::gpu_backends::vulkan::device::LogicalDevice,
     info: &ComputeInfo,
   ) -> GpuResult<NonZeroHandle<vk::Pipeline>> {
+    use crate::gpu_backends::vulkan::device::VulkanDebugNameExt;
     let key = info.pipeline_key();
     if let Some(&pipeline) = self.compute_pipelines.get(&key) {
       return Ok(pipeline);
@@ -1007,17 +1009,15 @@ impl PipelinePool {
     let pipeline = unsafe {
       let mut pipeline = vk::Pipeline::null();
       let compute_info = raw_info.borrow_compute_pipeline_create_info();
-      NonZeroHandle::new_unchecked(
-        (device.fp_v1_0().create_compute_pipelines)(
-          device.handle(),
-          self.vk_pipeline_cache.get(),
-          1u32,
-          ptr::from_ref(&compute_info),
-          ptr::null(),
-          ptr::from_mut(&mut pipeline),
-        )
-        .result_with_success(pipeline)?,
-      )
+      let res = (device.fp_v1_0().create_compute_pipelines)(
+        device.handle(),
+        self.vk_pipeline_cache.get(),
+        1u32,
+        ptr::from_ref(&compute_info),
+        ptr::null(),
+        ptr::from_mut(&mut pipeline),
+      );
+      NonZeroHandle::new_unchecked(res.result_with_success(pipeline).with_name(device, "VkPipeline_Compute")?)
     };
     unsafe { self.compute_pipelines.insert_unique_unchecked(key, pipeline) };
     Ok(pipeline)
@@ -1025,9 +1025,10 @@ impl PipelinePool {
 
   pub fn get_or_create_graphics_pipeline(
     &mut self,
-    device: &ash::Device,
+    device: &crate::gpu_backends::vulkan::device::LogicalDevice,
     info: &GraphicsInfo,
   ) -> GpuResult<NonZeroHandle<vk::Pipeline>> {
+    use crate::gpu_backends::vulkan::device::VulkanDebugNameExt;
     let key = info.pipeline_key();
     if let Some(&pipeline) = self.graphics_pipelines.get(&key) {
       return Ok(pipeline);
@@ -1036,17 +1037,15 @@ impl PipelinePool {
     let pipeline = unsafe {
       let mut pipeline = vk::Pipeline::null();
       let graphics_info = raw_info.borrow_graphics_pipeline_create_info();
-      NonZeroHandle::new_unchecked(
-        (device.fp_v1_0().create_graphics_pipelines)(
-          device.handle(),
-          self.vk_pipeline_cache.get(),
-          1,
-          ptr::from_ref(&graphics_info),
-          ptr::null(),
-          ptr::from_mut(&mut pipeline),
-        )
-        .result_with_success(pipeline)?,
-      )
+      let res = (device.fp_v1_0().create_graphics_pipelines)(
+        device.handle(),
+        self.vk_pipeline_cache.get(),
+        1,
+        ptr::from_ref(&graphics_info),
+        ptr::null(),
+        ptr::from_mut(&mut pipeline),
+      );
+      NonZeroHandle::new_unchecked(res.result_with_success(pipeline).with_name(device, "VkPipeline_Graphics")?)
     };
     unsafe {
       self.graphics_pipelines.insert_unique_unchecked(key, pipeline);
