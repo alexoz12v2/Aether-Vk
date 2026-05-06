@@ -885,7 +885,13 @@ impl<'a> ScopedCommandBuffer<'a> {
   /// Explicitly submits the command buffer.
   pub fn submit(mut self) -> GpuResult<()> {
     self.submitted = true;
-    self.device.submit_command_buffer(self.cmd_buffer, self.task_id)
+    let res = self.device.submit_command_buffer(self.cmd_buffer, self.task_id);
+    if let Err(e) = &res {
+      if let Some(task_id) = self.task_id {
+        self.device.fail_task(task_id, e.clone());
+      }
+    }
+    res
   }
 }
 
@@ -893,7 +899,12 @@ impl<'a> Drop for ScopedCommandBuffer<'a> {
   fn drop(&mut self) {
     if !self.submitted {
       // Force submission on early exit/panic. Result is ignored to prevent double panics.
-      let _ = self.device.submit_command_buffer(self.cmd_buffer, self.task_id);
+      let res = self.device.submit_command_buffer(self.cmd_buffer, self.task_id);
+      if let Err(e) = res {
+        if let Some(task_id) = self.task_id {
+          self.device.fail_task(task_id, e);
+        }
+      }
     }
   }
 }
@@ -1139,6 +1150,7 @@ pub struct AcquireResult {
   pub status: SwapchainStatus,
   /// handle to frame synchronization resources recognized by the presentation engine
   pub frame_index: u64,
+  pub swapchain_generation: u64,
 }
 
 #[derive(Debug, Clone, Copy)]

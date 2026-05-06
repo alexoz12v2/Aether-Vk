@@ -122,6 +122,7 @@ impl RenderDevice for MetalRenderDevice {
       image_index: 0,
       status: SwapchainStatus::Optimal,
       frame_index: 0,
+      swapchain_generation: 0,
     })
   }
 

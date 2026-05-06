@@ -1147,6 +1147,7 @@ fn test_render_particles_multithreaded() {
           let task_id = device.create_task();
           device.start_frame()?;
           let acquire_result = device.acquire_next_image(presentation_engine)?;
+          println!("Thread: acquired. getting command buffer...");
           let cmd_buffer_handle = device.get_command_buffer()?;
           let _scoped_cmd =
             gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
@@ -3012,4 +3013,249 @@ fn test_outline_toggled_after_upload() {
       Ok(())
     })
     .unwrap();
+}
+
+#[test]
+fn test_render_concurrent_resize() {
+  setup_assets_dir();
+  fn panic_on_validation_error(msg: &str) {
+    panic!("Vulkan validation error occurred during testing: {}", msg);
+  }
+  let runtime_params = Box::new(RuntimeParams {
+    render_backend_params: FnvIndexMap::new(),
+    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
+  });
+  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
+  let pool_arc = std::sync::Arc::new(pool);
+  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
+
+  let additional_params = DeviceAdditionalParams::new();
+  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
+
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      device.wire_callbacks(pool_arc.clone())
+    })
+    .unwrap();
+
+  let width = 800;
+  let height = 600;
+
+  // Create 3 presentation engines: two windowless, one windowed (headless)
+  let (pe1, pe2, pe3) = render_frontend
+    .with_device(render_device_handle, |device| {
+      let params_wl1 = PresentationEngineParams::windowless(width, height);
+      let pe1 = device.create_presentation_engine(&params_wl1)?;
+
+      let params_wl2 = PresentationEngineParams::windowless(width, height);
+      let pe2 = device.create_presentation_engine(&params_wl2)?;
+
+      let params_win = PresentationEngineParams {
+        width,
+        height,
+        vsync: false,
+        window_info: gpu::OpaqueNativeHandleInfo {
+          ptr0: core::ptr::null_mut(),
+          ptr1: core::ptr::null_mut(),
+        },
+        ty: gpu::PresentationEngineType::Window,
+      };
+      let pe3 = device.create_presentation_engine(&params_win)?;
+
+      device.init_archetypes(pe1)?;
+      device.init_archetypes(pe2)?;
+      device.init_archetypes(pe3)?;
+      
+      device.generate_sky()?;
+      
+      crate::types::GpuResult::Ok((pe1, pe2, pe3))
+    })
+    .unwrap();
+    
+  let engines = [pe1, pe2, pe3];
+
+  let scene = Scene::new();
+  scene.register_component::<TransformComponent>(&[]);
+  scene.register_component::<PhysicalMeshComponent>(&[TypeId::of::<TransformComponent>()]);
+  let entity_id = scene.spawn_entity("mesh");
+  let mesh = Arc::new(crate::simulation::comet::generate_uv_sphere(
+    2.0, 10, 10, 1.0,
+  ));
+  let mesh_comp = PhysicalMeshComponent {
+    mesh,
+    emissive_intensity: 1.0,
+    emissive_color: [1.0, 1.0, 1.0],
+    asset_path: "test".to_string(),
+  };
+  let transform = TransformComponent {
+    position: Vec3f32::from_array([0.0, -5.0, 0.0]),
+    rotation: Quat::identity(),
+    scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+  };
+  scene.add_component(entity_id, transform.clone()).unwrap();
+  scene.add_component(entity_id, mesh_comp.clone()).unwrap();
+
+  let stop_signal = Arc::new(core::sync::atomic::AtomicBool::new(false));
+
+  let render_frontend_render = render_frontend.clone();
+  let stop_signal_render = stop_signal.clone();
+  let render_thread = std::thread::spawn(move || {
+    let mut pe_idx = 0;
+    while !stop_signal_render.load(core::sync::atomic::Ordering::Relaxed) {
+      let pe = engines[pe_idx];
+      pe_idx = (pe_idx + 1) % engines.len();
+      
+      let _ = render_frontend_render
+        .with_device(render_device_handle, |device| {
+          let task_id = device.create_task();
+          device.start_frame()?;
+          
+          let extent = device.get_presentation_engine_extent(pe)?;
+          println!("Thread: acquire_next_image...");
+          let acquire_result = match device.acquire_next_image(pe) {
+            Ok(res) => res,
+            Err(e) => return Err(e),
+          };
+          println!("Thread: acquired. getting command buffer...");
+          let cmd_buffer_handle = device.get_command_buffer()?;
+
+          let mut render_scene = RenderScene::new(
+            (
+              TransformComponent {
+                position: Vec3f32::from_array([0.0, 0.0, 0.0]),
+                rotation: Quat::identity(),
+                scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+              },
+              CameraComponent {
+                projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), extent[0] as f32 / extent[1] as f32, 0.1, 100.0),
+                near_plane: 0.1,
+                far_plane: 100.0,
+              },
+            ),
+            aethervk_oshal_rlib::os::time::TimeReadings::default(),
+            extent,
+          );
+
+          let sky_pipeline = device.get_sky_pipeline_key(pe)?;
+          render_scene.sky_call = Some(gpu::frame::SkyDrawCall::from_camera(
+            &render_scene.camera_data,
+            sky_pipeline,
+          )?);
+
+          let model_matrix = transform.to_mat4();
+
+          let cmd_scope = ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+
+          println!("Thread: add_renderable...");
+          render_scene.add_renderable(
+            cmd_buffer_handle,
+            device,
+            entity_id,
+            model_matrix,
+            crate::scene::RenderableDataRef::PhysicalMesh(&mesh_comp),
+            pe,
+            "emissive_sphere",
+            false,
+            [0.0; 4],
+          )?;
+
+          {
+            device.begin_render_pass(cmd_buffer_handle, pe, &acquire_result)?;
+            let mut render_pass_guard = ScopedRenderPass::new(device, cmd_buffer_handle);
+
+            device.set_viewport(cmd_buffer_handle, &gpu::Viewport::from_extent(extent))?;
+            device.set_scissor(cmd_buffer_handle, &gpu::Rect2D::from_extent(extent))?;
+            
+            crate::gpu::frame::render_frame(
+              device,
+              cmd_buffer_handle,
+              &render_scene,
+              pe,
+            )?;
+            render_pass_guard.end()?;
+            if device.is_presentation_engine_windowless(pe)? {
+               device.record_windowless_download(cmd_buffer_handle, pe, task_id)?;
+            }
+            println!("Thread: submitting...");
+            cmd_scope.submit()?;
+          }
+          
+          println!("Thread: presenting...");
+          device.present(pe, acquire_result.image_index as usize, acquire_result.frame_index as usize)?;
+          println!("Thread: reading download...");
+          
+          if device.is_presentation_engine_windowless(pe)? {
+            let actual_device = device.as_any().downcast_ref::<Device>().unwrap();
+            let size = (extent[0] * extent[1] * 4) as usize;
+            let mut buffer = alloc::vec::Vec::with_capacity(size);
+            unsafe { buffer.set_len(size) };
+            
+            let start_time = std::time::Instant::now();
+            while !device.is_task_completed(task_id)? {
+              if start_time.elapsed().as_secs() > 2 {
+                println!("Task {} is stuck! Timeline cached: {}", task_id, actual_device.res.read().timeline_manager.get_cached_value());
+                break;
+              }
+              core::hint::spin_loop();
+            }
+            actual_device.read_windowless_download(task_id, &mut buffer)?;
+          }
+          
+          crate::types::GpuResult::Ok(())
+        });
+    }
+  });
+
+  let render_frontend_resize = render_frontend.clone();
+  let stop_signal_resize = stop_signal.clone();
+  let resize_thread = std::thread::spawn(move || {
+    let mut counter = 0;
+    let mut dims = [800, 600];
+    while !stop_signal_resize.load(core::sync::atomic::Ordering::Relaxed) {
+      let pe = engines[counter % engines.len()];
+      let width = dims[0];
+      let height = dims[1];
+      
+      dims.swap(0, 1);
+      
+      let res = render_frontend_resize
+        .with_device(render_device_handle, |device| {
+          device.resize_presentation_engine(pe, width, height)
+        });
+      if let Err(e) = res {
+        println!("Resize thread error: {:?}", e);
+      }
+        
+      counter += 1;
+      std::thread::sleep(std::time::Duration::from_millis(3));
+    }
+  });
+
+  std::thread::sleep(std::time::Duration::from_secs(5));
+  println!("Main thread: setting stop_signal");
+  stop_signal.store(true, core::sync::atomic::Ordering::Relaxed);
+
+  println!("Main thread: waiting for render_thread");
+  render_thread.join().unwrap();
+  println!("Main thread: waiting for resize_thread");
+  match resize_thread.join() {
+      Ok(_) => println!("Resize thread joined successfully"),
+      Err(e) => {
+          if let Some(s) = e.downcast_ref::<&str>() {
+              println!("Resize thread panicked with: {}", s);
+          } else if let Some(s) = e.downcast_ref::<String>() {
+              println!("Resize thread panicked with: {}", s);
+          } else {
+              println!("Resize thread panicked with unknown type");
+          }
+      }
+  }
+  println!("Main thread: all joined");
+
+  drop(render_frontend);
+
+  let errors = super::utils::VULKAN_ERROR_MESSAGES.lock().unwrap();
+  if !errors.is_empty() {
+    panic!("Vulkan validation errors occurred during testing");
+  }
 }

@@ -66,6 +66,10 @@ impl TimelineManager {
     Ok(gpu_value)
   }
 
+  pub fn get_next_submit_value(&self) -> u64 {
+    self.next_submit_value.load(Ordering::SeqCst)
+  }
+
   /// Gets a unique, strictly increasing sequence number for a new submission.
   /// MUST be called inside the vkQueueSubmit lock.
   pub fn allocate_submit_value(&self) -> u64 {

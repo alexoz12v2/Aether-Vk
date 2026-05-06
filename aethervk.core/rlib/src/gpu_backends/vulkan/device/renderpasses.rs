@@ -1,9 +1,10 @@
 use crate::{
+  gpu::PresentationEngineHandle,
   gpu_backends::vulkan::{
     device::{
       DeviceResource,
       resources::DiscardPool,
-      swapchain::{MAX_FRAMES_IN_FLIGHT, PresentationState},
+      swapchain::{PresentationState},
     },
     utils::{NonZeroHandle, create_transient_attachment},
   },
@@ -12,7 +13,7 @@ use crate::{
 use ash::vk;
 use core::slice;
 use spin::RwLock;
-
+use crate::gpu::vulkan::device::swapchain;
 #[cfg(test)]
 use crate::gpu_backends::vulkan::utils::create_test_attachment;
 
@@ -36,25 +37,11 @@ struct RenderPassBundle {
   swapchain_generation: u64,
   // VkFramebufferCreateInfo
   /// 1-1 correspondance with swapchain_image
-  framebuffer: heapless::Vec<NonZeroHandle<vk::Framebuffer>, { MAX_FRAMES_IN_FLIGHT }>,
+  framebuffer: heapless::Vec<NonZeroHandle<vk::Framebuffer>, { swapchain::MAX_FRAMES }>,
   width: u32,
   height: u32,
   /// attachments handle: Note that they are 1 per graphics queue, which is just one per device in our setup
   attachments: heapless::Vec<RenderPassAttachment, MAX_ATTACHMENTS>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum RenderPassType {
-  ColorDepthSingleSubpass,
-}
-
-impl RenderPassType {
-  pub fn color_depth_single_subpass() -> Self {
-    #[cfg(not(test))]
-    return Self::ColorDepthSingleSubpass;
-    #[cfg(test)]
-    return Self::ColorDepthSingleSubpass;
-  }
 }
 
 pub(super) enum RenderPassSpecification<'a> {
@@ -76,7 +63,8 @@ impl<'a> RenderPassSpecification<'a> {
 }
 
 pub(super) struct RenderPasses {
-  render_passes: RwLock<hashbrown::HashMap<RenderPassType, RenderPassBundle>>,
+  render_passes: RwLock<hashbrown::HashMap<PresentationEngineHandle, RenderPassBundle>>,
+  pipeline_render_passes: RwLock<hashbrown::HashMap<(vk::Format, vk::Format), NonZeroHandle<vk::RenderPass>>>,
   render_pass_device: ash::khr::create_renderpass2::Device,
   // this is bad but I've got no other clue
   allocator: vk_mem::ffi::VmaAllocator,
@@ -131,6 +119,9 @@ impl DeviceResource for RenderPasses {
     for (_, mut bundle) in self.render_passes.write().drain() {
       bundle.clean(&device, self.allocator);
     }
+    for (_, rp) in self.pipeline_render_passes.write().drain() {
+      unsafe { device.destroy_render_pass(rp.get(), None) };
+    }
   }
 }
 
@@ -147,38 +138,56 @@ impl RenderPasses {
   ) -> Self {
     Self {
       render_passes: RwLock::new(hashbrown::HashMap::with_capacity(8)),
+      pipeline_render_passes: RwLock::new(hashbrown::HashMap::with_capacity(8)),
       render_pass_device: ash::khr::create_renderpass2::Device::new(instance, device),
       allocator: allocator.get_raw(),
     }
   }
 
+  pub fn get_pipeline_render_pass(
+    &self,
+    color_format: vk::Format,
+    depth_stencil_format: vk::Format,
+  ) -> GpuResult<NonZeroHandle<vk::RenderPass>> {
+    let key = (color_format, depth_stencil_format);
+    if let Some(&rp) = self.pipeline_render_passes.read().get(&key) {
+      return Ok(rp);
+    }
+
+    let rp = Self::create_color_depth_single_render_pass(
+      &self.render_pass_device,
+      color_format,
+      depth_stencil_format,
+      vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+    )?;
+
+    self.pipeline_render_passes.write().insert(key, rp);
+    Ok(rp)
+  }
+
   pub fn get_clear_values_render_pass(
     &self,
-    ty: RenderPassType,
+    pe_handle: PresentationEngineHandle,
     out_values: &mut [vk::ClearValue],
   ) -> GpuResult<()> {
-    match ty {
-      RenderPassType::ColorDepthSingleSubpass => {
-        let read_render_passes = self.render_passes.read();
-        if !read_render_passes.contains_key(&RenderPassType::ColorDepthSingleSubpass) {
-          return Err(crate::gpu_err!("device error"));
-        }
-        if out_values.len() != 2 {
-          return Err(crate::gpu_invalid_arg!("invalid argument"));
-        }
-        let bundle = unsafe {
-          read_render_passes.get(&RenderPassType::ColorDepthSingleSubpass).unwrap_unchecked()
-        };
-        out_values[0] = bundle.clear_value[0];
-        out_values[1] = bundle.clear_value[1];
-
-        Ok(())
-      }
+    let read_render_passes = self.render_passes.read();
+    if !read_render_passes.contains_key(&pe_handle) {
+      return Err(crate::gpu_err!("device error"));
     }
+    if out_values.len() != 2 {
+      return Err(crate::gpu_invalid_arg!("invalid argument"));
+    }
+    let bundle = unsafe {
+      read_render_passes.get(&pe_handle).unwrap_unchecked()
+    };
+    out_values[0] = bundle.clear_value[0];
+    out_values[1] = bundle.clear_value[1];
+    Ok(())
   }
 
   pub fn get_or_create_render_pass(
     &self,
+    pe_handle: PresentationEngineHandle,
     ty: RenderPassSpecification,
     image_index: u32,
     device: &ash::Device,
@@ -197,7 +206,7 @@ impl RenderPasses {
         swapchain,
       } => {
         if let Some(bundle) =
-          self.render_passes.read().get(&RenderPassType::ColorDepthSingleSubpass)
+          self.render_passes.read().get(&pe_handle)
         {
           let (width, height) = swapchain.extent();
           if bundle.swapchain_generation == swapchain.swapchain_generation()
@@ -210,7 +219,7 @@ impl RenderPasses {
 
         let mut write_render_passes = self.render_passes.write();
         if let Some(mut bundle) =
-          write_render_passes.remove(&RenderPassType::ColorDepthSingleSubpass)
+          write_render_passes.remove(&pe_handle)
         {
           bundle.discard(discard_pool, self.allocator, timeline);
         }
@@ -227,7 +236,7 @@ impl RenderPasses {
           final_layout,
         )
         .or_else(|e| {
-          let _ = (&mut write_render_passes).remove(&RenderPassType::ColorDepthSingleSubpass);
+          let _ = (&mut write_render_passes).remove(&pe_handle);
           Err(e)
         })?;
         let (width, height) = swapchain.extent();
@@ -246,7 +255,7 @@ impl RenderPasses {
         };
         unsafe {
           write_render_passes.insert_unique_unchecked(
-            RenderPassType::ColorDepthSingleSubpass,
+            pe_handle,
             RenderPassBundle {
               render_pass,
               clear_value: [black_value, white_value],
@@ -263,7 +272,7 @@ impl RenderPasses {
         // Safety: This is empty and cap is 8
         unsafe {
           write_render_passes
-            .get_mut(&RenderPassType::ColorDepthSingleSubpass)
+            .get_mut(&pe_handle)
             .unwrap_unchecked()
             .attachments
             .push_unchecked(RenderPassAttachment::SwapchainColorImage)
@@ -277,7 +286,7 @@ impl RenderPasses {
           vk::SampleCountFlags::TYPE_1,
         )
         .or_else(|e| {
-          let _ = write_render_passes.remove(&RenderPassType::ColorDepthSingleSubpass);
+          let _ = write_render_passes.remove(&pe_handle);
           Err(e)
         })?;
         let view_create_info = vk::ImageViewCreateInfo::default()
@@ -291,13 +300,13 @@ impl RenderPasses {
               .layer_count(1),
           );
         let view = unsafe { device.create_image_view(&view_create_info, None) }.or_else(|e| {
-          let _ = write_render_passes.remove(&RenderPassType::ColorDepthSingleSubpass);
+          let _ = write_render_passes.remove(&pe_handle);
           Err(e)
         })?;
         let view = unsafe { NonZeroHandle::new_unchecked(view) };
         unsafe {
           write_render_passes
-            .get_mut(&RenderPassType::ColorDepthSingleSubpass)
+            .get_mut(&pe_handle)
             .unwrap_unchecked()
             .attachments
             .push_unchecked(RenderPassAttachment::DepthStencilAttachment(
@@ -322,7 +331,7 @@ impl RenderPasses {
             };
             unsafe {
               write_render_passes
-                .get_mut(&RenderPassType::ColorDepthSingleSubpass)
+                .get_mut(&pe_handle)
                 .unwrap_unchecked()
                 .framebuffer
                 .push_unchecked(framebuffer);
@@ -330,13 +339,13 @@ impl RenderPasses {
             Ok(())
           })
           .or_else(|e| {
-            let _ = write_render_passes.remove(&RenderPassType::ColorDepthSingleSubpass);
+            let _ = write_render_passes.remove(&pe_handle);
             Err(e)
           })?;
         drop(write_render_passes);
         let read_render_passes = self.render_passes.read();
         let bundle = unsafe {
-          read_render_passes.get(&RenderPassType::ColorDepthSingleSubpass).unwrap_unchecked()
+          read_render_passes.get(&pe_handle).unwrap_unchecked()
         };
 
         Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]))
@@ -348,7 +357,7 @@ impl RenderPasses {
         swapchain,
       } => {
         if let Some(bundle) =
-          self.render_passes.read().get(&RenderPassType::ColorDepthSingleSubpass)
+          self.render_passes.read().get(&pe_handle)
         {
           let (width, height) = swapchain.extent();
           if bundle.swapchain_generation == swapchain.swapchain_generation()
@@ -361,7 +370,7 @@ impl RenderPasses {
 
         let mut write_render_passes = self.render_passes.write();
         if let Some(mut bundle) =
-          write_render_passes.remove(&RenderPassType::ColorDepthSingleSubpass)
+          write_render_passes.remove(&pe_handle)
         {
           bundle.discard(discard_pool, self.allocator, timeline);
         }
@@ -378,7 +387,7 @@ impl RenderPasses {
           final_layout,
         )
         .or_else(|e| {
-          let _ = (&mut write_render_passes).remove(&RenderPassType::ColorDepthSingleSubpass);
+          let _ = (&mut write_render_passes).remove(&pe_handle);
           Err(e)
         })?;
         let (width, height) = swapchain.extent();
@@ -396,7 +405,7 @@ impl RenderPasses {
         };
         unsafe {
           write_render_passes.insert_unique_unchecked(
-            RenderPassType::ColorDepthSingleSubpass,
+            pe_handle,
             RenderPassBundle {
               render_pass,
               clear_value: [black_value, white_value],
@@ -411,7 +420,7 @@ impl RenderPasses {
 
         unsafe {
           write_render_passes
-            .get_mut(&RenderPassType::ColorDepthSingleSubpass)
+            .get_mut(&pe_handle)
             .unwrap_unchecked()
             .attachments
             .push_unchecked(RenderPassAttachment::SwapchainColorImage)
@@ -427,7 +436,7 @@ impl RenderPasses {
           vk::SampleCountFlags::TYPE_1,
         )
         .or_else(|e| {
-          let _ = write_render_passes.remove(&RenderPassType::ColorDepthSingleSubpass);
+          let _ = write_render_passes.remove(&pe_handle);
           Err(e)
         })?;
         let view_create_info = vk::ImageViewCreateInfo::default()
@@ -441,13 +450,13 @@ impl RenderPasses {
               .layer_count(1),
           );
         let view = unsafe { device.create_image_view(&view_create_info, None) }.or_else(|e| {
-          let _ = write_render_passes.remove(&RenderPassType::ColorDepthSingleSubpass);
+          let _ = write_render_passes.remove(&pe_handle);
           Err(e)
         })?;
         let view = unsafe { NonZeroHandle::new_unchecked(view) };
         unsafe {
           write_render_passes
-            .get_mut(&RenderPassType::ColorDepthSingleSubpass)
+            .get_mut(&pe_handle)
             .unwrap_unchecked()
             .attachments
             .push_unchecked(RenderPassAttachment::DepthStencilAttachment(
@@ -471,7 +480,7 @@ impl RenderPasses {
             };
             unsafe {
               write_render_passes
-                .get_mut(&RenderPassType::ColorDepthSingleSubpass)
+                .get_mut(&pe_handle)
                 .unwrap_unchecked()
                 .framebuffer
                 .push_unchecked(framebuffer);
@@ -479,13 +488,13 @@ impl RenderPasses {
             Ok(())
           })
           .or_else(|e| {
-            let _ = write_render_passes.remove(&RenderPassType::ColorDepthSingleSubpass);
+            let _ = write_render_passes.remove(&pe_handle);
             Err(e)
           })?;
         drop(write_render_passes);
         let read_render_passes = self.render_passes.read();
         let bundle = unsafe {
-          read_render_passes.get(&RenderPassType::ColorDepthSingleSubpass).unwrap_unchecked()
+          read_render_passes.get(&pe_handle).unwrap_unchecked()
         };
 
         Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]))
@@ -615,9 +624,9 @@ impl RenderPasses {
   }
 
   #[cfg(test)]
-  pub(crate) fn get_test_depth_stencil_image(&self) -> Option<NonZeroHandle<vk::Image>> {
+  pub(crate) fn get_test_depth_stencil_image(&self, pe_handle: PresentationEngineHandle) -> Option<NonZeroHandle<vk::Image>> {
     let read_render_passes = self.render_passes.read();
-    let bundle = read_render_passes.get(&RenderPassType::ColorDepthSingleSubpass)?;
+    let bundle = read_render_passes.get(&pe_handle)?;
     for attachment in bundle.attachments.iter() {
       if let RenderPassAttachment::DepthStencilAttachment(image, _, _) = attachment {
         return Some(*image);
