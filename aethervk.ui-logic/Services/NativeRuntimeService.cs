@@ -474,6 +474,14 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
   }
 
+  public void SetSceneDebugName(ulong sceneId, string name)
+  {
+    if (_simulationContext != IntPtr.Zero)
+    {
+      NativeInterop.avkSimulationContext_setSceneDebugName(_simulationContext, sceneId, name);
+    }
+  }
+
   public ulong CreatePresentationEngine(uint width, uint height, ulong sceneId)
   {
     if (_simulationContext == IntPtr.Zero)

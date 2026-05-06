@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 test_utils = { path = "../test_utils" }
-aethervk-core-rlib = { path = "../../aethervk.core/rlib", default-features = false, features = ["std"] }
+aethervk-core-rlib = { path = "../../aethervk.core/rlib", default-features = false, features = ["std", "debug_gpu"] }
 aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = [
   "console_log",
 ] }

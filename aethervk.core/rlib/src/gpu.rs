@@ -10,7 +10,6 @@ use crate::{
 use ab_glyph::PxScale;
 use aethervk_oshal_rlib::os::time::timeus_t;
 use ahash::AHasher;
-#[cfg(debug_assertions)]
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::sync::Weak;
@@ -20,7 +19,7 @@ use core::{
   hash::{Hash, Hasher},
 };
 use heapless::index_map::FnvIndexMap;
-
+use aethervk_oshal_rlib::log;
 pub use super::gpu_backends::*;
 
 pub mod frame;
@@ -236,9 +235,9 @@ pub struct BvhPushConstants {
 pub struct ParticlePushConstants {
   pub view_proj: [f32; 16],
   pub camera_up: [f32; 3],
-  pub _pad0: f32,
+  pub time: f32,
   pub camera_right: [f32; 3],
-  pub _pad1: f32,
+  pub seed: f32,
   pub color: [f32; 4],
   pub radius: f32,
 }
@@ -284,9 +283,7 @@ impl TextPushConstants {
 
 impl RenderableInstanceId {
   pub fn from_physical_mesh(entity_id: EntityId) -> Self {
-    let mut hasher = AHasher::default();
-    entity_id.hash(&mut hasher);
-    Self(hasher.finish())
+    Self(slotmap::Key::data(&entity_id).as_ffi())
   }
 }
 
@@ -410,7 +407,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
 
   fn get_native_prop(&self, prop: NativeGpuProperty) -> Option<*mut core::ffi::c_void>;
 
-  fn print_info(&self) -> String;
+  fn print_info(&self) -> alloc::string::String;
 
   fn context_id(&self) -> u64;
 

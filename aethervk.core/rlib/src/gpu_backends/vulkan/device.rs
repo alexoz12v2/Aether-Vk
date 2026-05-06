@@ -25,13 +25,7 @@ use crate::{
   types::{GpuError, GpuResult},
 };
 use aethervk_oshal_rlib::math::safe_div;
-use aethervk_oshal_rlib::{
-  self as oshal,
-  math::vector::vec3::Vec3f32,
-  math::vector::{Vector, Vector3},
-  os::fs::FileSystemObject,
-  os::pool::WorkloadStatus,
-};
+use aethervk_oshal_rlib::{self as oshal, log, math::vector::vec3::Vec3f32, math::vector::{Vector, Vector3}, os::fs::FileSystemObject, os::pool::WorkloadStatus};
 use alloc::{
   boxed::Box,
   collections::BTreeMap,
@@ -392,7 +386,7 @@ impl DeviceResources {
   /// update [`pipelines::FragmentOut`] and [`vk::RenderPass`] inside [`pipelines::GraphicsInfo`]
   /// disard old and create updated graphics [`vk::Pipeline`]
   /// Note: Update is performed only if archetype initialized once
-  fn update_physical_mesh_archetype_for_presentation_engine(
+  fn update_all_archetypes_for_presentation_engine(
     &self,
     device: &LogicalDevice,
     presentation_engine_handle: PresentationEngineHandle,
@@ -401,67 +395,27 @@ impl DeviceResources {
     let presentation_engines = self.live_presentation_engines.read();
     let presentation_engine_state_lock =
       presentation_engines.get(&presentation_engine_handle).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] update_physical_mesh_archetype_for_presentation_engine",
+        "[Vulkan RenderDevice] update_all_archetypes_for_presentation_engine",
       ))?;
     let presentation_engine_state = presentation_engine_state_lock.read();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.update_physical_mesh_archetype_for_presentation_engine(
-      device,
-      presentation_engine_state.format(),
-      &mut write_pipeline,
-      &self.renderpasses,
-      &self.allocator.allocator,
-      &self.discard_pool,
-      timeline,
-    )
-  }
+    let format = presentation_engine_state.format();
 
-  fn update_cursor_archetype_for_presentation_engine(
-    &self,
-    device: &LogicalDevice,
-    presentation_engine_handle: PresentationEngineHandle,
-    timeline: u64,
-  ) -> GpuResult<()> {
-    let presentation_engines = self.live_presentation_engines.read();
-    let presentation_engine_state_lock =
-      presentation_engines.get(&presentation_engine_handle).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] update_cursor_archetype_for_presentation_engine",
-      ))?;
-    let presentation_engine_state = presentation_engine_state_lock.read();
-    let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.update_cursor_archetype_for_presentation_engine(
-      device,
-      presentation_engine_state.format(),
-      &mut write_pipeline,
-      &self.renderpasses,
-      &self.allocator.allocator,
-      &self.discard_pool,
-      timeline,
-    )
-  }
+    self.archetypes.update_physical_mesh_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
+    self.archetypes.update_cursor_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
+    self.archetypes.update_sun_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
+    self.archetypes.update_particle_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
+    self.archetypes.update_billboard_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
+    self.archetypes.update_sky_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
+    self.archetypes.update_grid_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
+    self.archetypes.update_minimap_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
+    self.archetypes.update_measurement_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
+    self.archetypes.update_marker_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
+    self.archetypes.update_text_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
+    self.archetypes.update_bvh_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
+    self.archetypes.update_gizmo_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
 
-  fn update_sun_archetype_for_presentation_engine(
-    &self,
-    device: &LogicalDevice,
-    presentation_engine_handle: PresentationEngineHandle,
-    timeline: u64,
-  ) -> GpuResult<()> {
-    let presentation_engines = self.live_presentation_engines.read();
-    let presentation_engine_state_lock =
-      presentation_engines.get(&presentation_engine_handle).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] update_sun_archetype_for_presentation_engine",
-      ))?;
-    let presentation_engine_state = presentation_engine_state_lock.read();
-    let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.update_sun_archetype_for_presentation_engine(
-      device,
-      presentation_engine_state.format(),
-      &mut write_pipeline,
-      &self.renderpasses,
-      &self.allocator.allocator,
-      &self.discard_pool,
-      timeline,
-    )
+    Ok(())
   }
 
   fn create_physical_mesh_archetype(
@@ -1193,7 +1147,7 @@ where
   }
 }
 
-pub(super) struct Device {
+pub struct Device {
   query_result: utils::PhysicalDeviceQueryResult,
   queues: Queues,
   instance: Arc<instance::Instance>,
@@ -1517,7 +1471,12 @@ impl RenderDevice for Device {
   }
 
   fn start_frame(&self) -> GpuResult<()> {
-    self.res.read().timeline_manager.refresh_cached_value().map(|_| ())
+    let res = self.res.read();
+    let timeline_val = res.timeline_manager.refresh_cached_value()?;
+    unsafe {
+      let _ = res.discard_pool.destroy_discarded_resources_value(&self.device, timeline_val);
+    }
+    Ok(())
   }
 
   /// Initializes all archetypes in the order they are declared inside `DeviceResources`
@@ -1883,13 +1842,11 @@ impl RenderDevice for Device {
 
     let res_guard = self.res.read();
     let timeline = res_guard.timeline_manager.get_next_submit_value() - 1;
-    res_guard.update_physical_mesh_archetype_for_presentation_engine(
+    res_guard.update_all_archetypes_for_presentation_engine(
       &self.device,
       handle,
       timeline,
     )?;
-    res_guard.update_cursor_archetype_for_presentation_engine(&self.device, handle, timeline)?;
-    res_guard.update_sun_archetype_for_presentation_engine(&self.device, handle, timeline)?;
 
     Ok(())
   }
@@ -5060,7 +5017,7 @@ impl RenderDevice for Device {
         )
       };
       if let Err(e) = res {
-        println!("Queue submit failed: {:?}", e);
+        log!("Queue submit failed: {:?}", e);
         return Err(GpuError::from(e));
       }
       // safely drop lock here
@@ -5119,6 +5076,22 @@ impl RenderDevice for Device {
 }
 
 impl Device {
+  pub fn get_vma_budget_usage(&self) -> (u64, u64) {
+    let mut res = self.res.write();
+    res.allocator.refresh_vma_budgets();
+    // VmaBudget struct has 'budget' and 'usage' properties, both vk::DeviceSize
+    let mut total_budget = 0;
+    let mut total_usage = 0;
+    // Assuming we can access the underlying slice of memory_budgets
+    unsafe {
+      for budget in res.allocator.memory_budgets.iter() {
+        total_budget += budget.budget;
+        total_usage += budget.usage;
+      }
+    }
+    (total_budget, total_usage)
+  }
+
   #[cfg(test)]
   fn record_test_depth_stencil_download(
     &self,

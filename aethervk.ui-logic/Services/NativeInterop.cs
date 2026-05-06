@@ -63,6 +63,13 @@ public static class NativeInterop
   public static extern ulong avkSimulationContext_createEmptyScene(IntPtr ctx);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_setSceneDebugName(
+    IntPtr ctx,
+    ulong sceneId,
+    [MarshalAs(UnmanagedType.LPStr)] string name
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern IntPtr avkGetAvailableKernels(out uint count);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

@@ -511,10 +511,8 @@ impl RenderPasses {
     // In production, we don't care about memory after rendering (tiled GPU optimization).
     // In tests, we MUST STORE it back to memory so the copy command can read it.
     let (depth_store_op, stencil_store_op) = if cfg!(test) {
-      println!("CFG TEST IS TRUE!");
       (vk::AttachmentStoreOp::STORE, vk::AttachmentStoreOp::STORE)
     } else {
-      println!("CFG TEST IS FALSE!");
       (
         vk::AttachmentStoreOp::DONT_CARE,
         vk::AttachmentStoreOp::DONT_CARE,

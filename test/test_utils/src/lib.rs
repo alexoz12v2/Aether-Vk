@@ -546,5 +546,6 @@ pub fn scene_to_render_scene(
     cmd_buffer,
     time_readings,
     extent,
+    "scene"
   )
 }

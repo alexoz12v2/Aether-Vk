@@ -881,6 +881,7 @@ pub struct SceneContext {
   pub presentation_engines: Arc<RwLock<BTreeMap<PresentationEngineHandle, bool>>>,
   pub changed_entities: Arc<RwLock<BTreeMap<u64, BTreeSet<String>>>>,
   pub custom_render_callback: Option<CustomRenderCallback>,
+  pub debug_name: alloc::string::String,
 }
 
 impl Drop for SceneContext {
@@ -1010,6 +1011,7 @@ impl SceneContext {
       presentation_engines: Arc::new(RwLock::new(BTreeMap::new())),
       changed_entities: Arc::new(RwLock::new(BTreeMap::new())),
       custom_render_callback: None,
+      debug_name: alloc::string::String::new(),
     }
   }
 

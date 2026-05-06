@@ -97,9 +97,8 @@ fn main() {
 
     let mesh_entity = active_scene.scene.spawn_entity("comet");
     // Scale comet so its size represents 1.7km (radius ~0.85km).
-    let comet_radius = (0.85
-      / aethervk_core_rlib::simulation::constants::DISTANCE_SCALE_FACTOR as f32)
-      * aethervk_core_rlib::simulation::constants::PLANET_VISUAL_SCALE;
+    // Using an artificially larger scale so it's visible.
+    let comet_radius = 1.0;
 
     let initial_rotation = if let Some(ref axes) = comet.principal_axes {
       Quat::from_rotation_matrix(axes)
@@ -1323,6 +1322,39 @@ fn ui_custom_render_fn(
     panic!("font_id is 0! first_render_update_atlas wasn't called?");
   }
 
+  let mut mem_text = String::new();
+  if let Some(vk_dev) =
+    device.as_any().downcast_ref::<aethervk_core_rlib::gpu_backends::vulkan::device::Device>()
+  {
+    let (budget, usage) = vk_dev.get_vma_budget_usage();
+    mem_text.push_str(&format!(
+      "VMA Usage: {:.2} MB / {:.2} MB\n",
+      usage as f32 / 1048576.0,
+      budget as f32 / 1048576.0
+    ));
+  }
+  let os_mem = aethervk_oshal_rlib::os::memory::query_process_memory();
+  mem_text.push_str(&format!(
+    "OS Virt: {:.2} MB / Phys: {:.2} MB\nFile-backed: {:.2} MB",
+    os_mem.virtual_bytes as f32 / 1048576.0,
+    os_mem.physical_bytes as f32 / 1048576.0,
+    os_mem.file_backed_bytes as f32 / 1048576.0
+  ));
+
+  let _ = device
+    .prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer, presentation_engine_handle);
+  if let Err(e) = device.render_text(
+    cmd_buffer,
+    &mem_text,
+    [-0.98, -0.95],
+    screen_extent,
+    font_id,
+    16.0,
+    [0.0, 1.0, 0.0, 1.0],
+  ) {
+    println!("Render text error mem: {:?}", e);
+  }
+
   if !render_scene.measurement_calls.is_empty() {
     let _ = device
       .prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer, presentation_engine_handle);
@@ -1503,7 +1535,7 @@ mod depth_tests {
       write_scene_context.sun_entity = Some(sun_entity);
     }
 
-    let ext_red = ctx.spawn_procedural_sphere(scene_id, std::ptr::null(), 5.0).unwrap();
+    let ext_red = ctx.spawn_procedural_sphere(scene_id, std::ptr::null(), 5.0, 1.0).unwrap();
     let int_red = ctx.get_scene(scene_id).unwrap().read().get_entity(ext_red).unwrap();
     let red_pos = Vec3f32::from_components(-2.0, -10.0, -2.0);
     ctx
@@ -1534,7 +1566,7 @@ mod depth_tests {
       ctx.get_scene(scene_id).unwrap().read().outlines_enabled.store(false, Ordering::Relaxed);
     }
 
-    let ext_blue = ctx.spawn_procedural_sphere(scene_id, std::ptr::null(), 5.0).unwrap();
+    let ext_blue = ctx.spawn_procedural_sphere(scene_id, std::ptr::null(), 5.0, 1.0).unwrap();
     let int_blue = ctx.get_scene(scene_id).unwrap().read().get_entity(ext_blue).unwrap();
     let blue_pos = Vec3f32::from_components(2.0, -20.0, 2.0);
     ctx
@@ -1704,7 +1736,7 @@ mod depth_tests {
         g_r
       );
     }
-    
+
     ctx.destroy_presentation_engine(scene_id, _pe).unwrap();
   }
 
@@ -1736,5 +1768,164 @@ mod depth_tests {
   #[test]
   fn test_outline_nonemissive() {
     setup_test_scene("outline_n", false, false, true);
+  }
+
+  #[test]
+  fn test_comet_rendering() {
+    LAST_RENDER_TASK_ID.store(0, Ordering::Release);
+    let mut home_dir = std::env::current_exe().unwrap();
+    let mut iter = 0;
+    while !home_dir.join("assets").is_dir() && iter < 32 {
+      home_dir.pop();
+      iter += 1;
+    }
+    let assets_dir = home_dir.join("assets");
+    aethervk_core_rlib::simulation_api::SimulationContext::set_asset_path(
+      assets_dir.to_str().unwrap(),
+    );
+
+    fn panic_cb(msg: &str) {
+      panic!("{}", msg);
+    }
+    let mut ctx_box =
+      SimulationContext::startup(gpu::VULKAN_RENDER_BACKEND, Some(panic_cb)).unwrap();
+    let ctx = ctx_box.as_mut();
+
+    let scene_id = ctx.create_empty_scene().unwrap();
+    let width = 256;
+    let height = 256;
+    let _pe = ctx.create_presentation_engine(scene_id, width, height).unwrap();
+
+    // Add a sun
+    let sun_entity = ctx.spawn_entity(scene_id, "sun").unwrap();
+    ctx
+      .add_transform_component(
+        scene_id,
+        sun_entity,
+        Vec3f32::from_components(100.0, 100.0, 100.0),
+        Quat::identity(),
+        Vec3f32::from_components(1.0, 1.0, 1.0),
+      )
+      .unwrap();
+    ctx.add_sun_component(scene_id, sun_entity, (128, 128, 128), 1.2).unwrap();
+    {
+      let scene_data_opt = ctx.get_scene(scene_id).unwrap();
+      let mut write_scene_context = scene_data_opt.write();
+      let sun_entity = write_scene_context.get_entity(sun_entity).unwrap();
+      write_scene_context.sun_entity = Some(sun_entity);
+    }
+
+    // Load comet
+    let model_path = assets_dir.join("Comet.glb");
+    let comet = aethervk_core_rlib::simulation::comet::load_comet_from_gltf(
+      model_path.to_str().unwrap(),
+      false,
+    )
+    .expect("Failed to load comet");
+
+    let mesh_entity = ctx.spawn_entity(scene_id, "comet").unwrap();
+    ctx
+      .set_transform_component(
+        scene_id,
+        mesh_entity,
+        Vec3f32::zero(),
+        Quat::identity(),
+        Vec3f32::from_components(1.0, 1.0, 1.0),
+      )
+      .unwrap();
+
+    let scene_ctx = ctx.get_scene(scene_id).unwrap();
+    {
+      let mut write_ctx = scene_ctx.write();
+      let internal_id = write_ctx.get_entity(mesh_entity).unwrap();
+      write_ctx
+        .scene
+        .add_component(
+          internal_id,
+          PhysicalMeshComponent {
+            asset_path: "".to_string(),
+            mesh: Arc::from(comet),
+            emissive_intensity: 0.0,
+            emissive_color: [0.0, 0.0, 0.0],
+          },
+        )
+        .unwrap();
+    }
+
+    // Position camera
+    let cam_entity = scene_ctx.read().active_camera_entity.unwrap();
+    let ext_cam =
+      scene_ctx.read().entity_map.iter().find(|&(_, &v)| v == cam_entity).map(|(&k, _)| k).unwrap();
+    ctx
+      .set_transform_component(
+        scene_id,
+        ext_cam,
+        Vec3f32::from_components(0.0, -3.0, 0.0),
+        Quat::identity(), // Looks in -Y natively? Let's use look_at if possible, or just ortho camera.
+        Vec3f32::from_components(1.0, 1.0, 1.0),
+      )
+      .unwrap();
+    ctx
+      .set_camera_component(
+        scene_id,
+        ext_cam,
+        CameraParams::new_orthographic(-2.0, 2.0, -2.0, 2.0, 0.1, 100.0),
+      )
+      .unwrap();
+
+    SimulationContext::set_render_callback(Some(render_callback_impl));
+
+    let _ =
+      ctx.threads.logic_thread.tx().try_send(
+        aethervk_core_rlib::simulation_api::structs::LogicCommand::PlayScene { scene_id },
+      );
+
+    let mut attempts = 0;
+    let mut task_id = 0;
+    while attempts < 100 {
+      task_id = LAST_RENDER_TASK_ID.load(Ordering::Acquire);
+      if task_id != 0 {
+        break;
+      }
+      aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(
+        10,
+      ));
+      attempts += 1;
+    }
+
+    assert!(task_id > 0, "Render task was never completed");
+
+    let mut status = ctx.get_task_status(task_id);
+    attempts = 0;
+    while matches!(status, structs::TaskStatusCode::Pending) && attempts < 50 {
+      aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(
+        10,
+      ));
+      status = ctx.get_task_status(task_id);
+      attempts += 1;
+    }
+
+    let mut buffer = vec![0u8; (width * height * 4) as usize];
+    let success = ctx.download_image(task_id, buffer.as_mut_ptr(), buffer.len());
+    assert!(success, "Download image failed");
+
+    let mut img = image::ImageBuffer::new(width, height);
+    let mut non_empty_pixels = 0;
+    for (x, y, pixel) in img.enumerate_pixels_mut() {
+      let idx = ((y * width + x) * 4) as usize;
+      let b = buffer[idx];
+      let g = buffer[idx + 1];
+      let r = buffer[idx + 2];
+      let a = buffer[idx + 3];
+      *pixel = image::Rgba([r, g, b, a]);
+      if r > 10 || g > 10 || b > 10 {
+        non_empty_pixels += 1;
+      }
+    }
+    let out_path = assets_dir.join(format!("../test_output_comet.png"));
+    img.save(&out_path).expect("Failed to save debug image");
+
+    assert!(non_empty_pixels > 100, "Comet did not render anything!");
+    ctx.destroy_presentation_engine(scene_id, _pe).unwrap();
   }
 }

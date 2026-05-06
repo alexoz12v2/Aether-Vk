@@ -251,13 +251,12 @@ impl DiscardPool {
   }
 
   /// safety: `sem` needs to be a valid timeline semaphore
-  pub unsafe fn destroy_discarded_resources_timeline(
+  pub unsafe fn destroy_discarded_resources_value(
     &self,
     device: &ash::Device,
-    sem: vk::Semaphore,
+    timeline_value: u64,
   ) -> ash::prelude::VkResult<()> {
-    let timeline = unsafe { device.get_semaphore_counter_value(sem) }?;
-    self.destroy_discarded_resources_internal(device, timeline);
+    self.destroy_discarded_resources_internal(device, timeline_value);
     Ok(())
   }
 
