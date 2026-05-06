@@ -15,6 +15,16 @@
     <CargoArgs Condition="'$(Configuration)' != 'Release'"></CargoArgs>
     <CargoOutDir Condition="'$(Configuration)' == 'Release'">release</CargoOutDir>
     <CargoOutDir Condition="'$(Configuration)' != 'Release'">debug</CargoOutDir>
+
+    <!-- Cargo Target Mapping for Cross-Platform Publishing -->
+    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'linux-x64'">x86_64-unknown-linux-gnu</CargoTarget>
+    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'linux-arm64'">aarch64-unknown-linux-gnu</CargoTarget>
+    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'win-x64'">x86_64-pc-windows-msvc</CargoTarget>
+    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'osx-x64'">x86_64-apple-darwin</CargoTarget>
+    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">aarch64-apple-darwin</CargoTarget>
+
+    <CargoArgs Condition="'$(CargoTarget)' != ''">$(CargoArgs) --target $(CargoTarget)</CargoArgs>
+    <CargoOutDir Condition="'$(CargoTarget)' != ''">$(CargoTarget)/$(CargoOutDir)</CargoOutDir>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(OS)' == 'Unix'">
@@ -88,16 +98,19 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content
-      Include="$(VkMacLib)/libVkLayer_khronos_synchronization2.dylib"
-      Link="vulkan/lib/libVkLayer_khronos_synchronization2.dylib"
-      Condition="Exists('$(VkMacLib)/libVkLayer_khronos_synchronization2.dylib')"
-    >
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content
       Include="$(VkMacShare)/explicit_layer.d/VkLayer_khronos_validation.json"
       Link="vulkan/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json"
       Condition="Exists('$(VkMacShare)/explicit_layer.d/VkLayer_khronos_validation.json')"
+    >
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(OS)' == 'Unix' And '$(VkMacShare)' != ''">
+    <Content
+      Include="$(VkMacLib)/libVkLayer_khronos_synchronization2.dylib"
+      Link="vulkan/lib/libVkLayer_khronos_synchronization2.dylib"
+      Condition="Exists('$(VkMacLib)/libVkLayer_khronos_synchronization2.dylib')"
     >
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
@@ -120,7 +133,12 @@
     </Content>
   </ItemGroup>
 
-  <Target Name="BuildNativeLibrary" BeforeTargets="BeforeBuild">
+  <ItemGroup>
+    <RustFiles Include="..\**\*.rs;..\Cargo.toml;..\Cargo.lock;..\**\*.toml;..\**\*.glsl;..\**\*.vert;..\**\*.frag;..\**\*.comp;..\**\*.spv" Exclude="..\target\**;..\.git\**;..\**\bin\**;..\**\obj\**" />
+    <UpToDateCheckInput Include="@(RustFiles)" />
+  </ItemGroup>
+
+  <Target Name="BuildNativeLibrary" BeforeTargets="BeforeBuild" Inputs="@(RustFiles)" Outputs="..\target\$(CargoOutDir)\.cargo-build-successful">
     <Exec
       Command="cargo build $(CargoArgs)"
       WorkingDirectory="../aethervk.core/cdylib"
@@ -132,6 +150,7 @@
       Condition="'$(CargoExitCode)' != '0'"
       Text="Cargo build failed or cargo not found. Native library might be missing."
     />
+    <Touch Files="..\target\$(CargoOutDir)\.cargo-build-successful" AlwaysCreate="true" Condition="'$(CargoExitCode)' == '0' Or '$(CargoExitCode)' == ''" />
   </Target>
 
   <Target Name="InjectNativeLibraryContent" BeforeTargets="AssignTargetPaths">

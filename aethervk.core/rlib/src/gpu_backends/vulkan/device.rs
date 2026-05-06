@@ -11,7 +11,7 @@ use crate::{
     device::{
       commands::CommandBufferId,
       memory::GlobalDeviceAllocator,
-      renderpasses::{RenderPassSpecification, RenderPassType},
+      renderpasses::RenderPassSpecification,
       resources::{DiscardableResource, ForwardMeshRenderResource, Image},
       shader_manager::ShaderKey,
     },
@@ -407,7 +407,7 @@ impl DeviceResources {
     let mut write_pipeline = self.pipeline_pool.write();
     self.archetypes.update_physical_mesh_archetype_for_presentation_engine(
       device,
-      &presentation_engine_state,
+      presentation_engine_state.format(),
       &mut write_pipeline,
       &self.renderpasses,
       &self.allocator.allocator,
@@ -431,7 +431,7 @@ impl DeviceResources {
     let mut write_pipeline = self.pipeline_pool.write();
     self.archetypes.update_cursor_archetype_for_presentation_engine(
       device,
-      &presentation_engine_state,
+      presentation_engine_state.format(),
       &mut write_pipeline,
       &self.renderpasses,
       &self.allocator.allocator,
@@ -455,7 +455,7 @@ impl DeviceResources {
     let mut write_pipeline = self.pipeline_pool.write();
     self.archetypes.update_sun_archetype_for_presentation_engine(
       device,
-      &presentation_engine_state,
+      presentation_engine_state.format(),
       &mut write_pipeline,
       &self.renderpasses,
       &self.allocator.allocator,
@@ -493,7 +493,7 @@ impl DeviceResources {
       outline_fragment_shader_key,
       depth_stencil_format,
       queue,
-      &presentation_engine_state,
+      presentation_engine_state.format(),
       &self.allocator.allocator,
       &self.discard_pool,
       staging_arena,
@@ -525,7 +525,7 @@ impl DeviceResources {
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      &presentation_engine_state,
+      presentation_engine_state.format(),
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -553,7 +553,7 @@ impl DeviceResources {
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      &presentation_engine_state,
+      presentation_engine_state.format(),
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -581,7 +581,7 @@ impl DeviceResources {
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      &presentation_engine_state,
+      presentation_engine_state.format(),
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -609,7 +609,7 @@ impl DeviceResources {
       vkey,
       fkey,
       depth_stencil_format,
-      &pe,
+      pe.format(),
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -640,7 +640,7 @@ impl DeviceResources {
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      &presentation_engine_state,
+      presentation_engine_state.format(),
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -671,7 +671,7 @@ impl DeviceResources {
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      &presentation_engine_state,
+      presentation_engine_state.format(),
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -702,7 +702,7 @@ impl DeviceResources {
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      &presentation_engine_state,
+      presentation_engine_state.format(),
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -734,7 +734,7 @@ impl DeviceResources {
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      &presentation_engine_state,
+      presentation_engine_state.format(),
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -765,7 +765,7 @@ impl DeviceResources {
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      &presentation_engine_state,
+      presentation_engine_state.format(),
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -795,7 +795,7 @@ impl DeviceResources {
       fragment_shader_key,
       depth_stencil_format,
       queue,
-      &presentation_engine_state,
+      presentation_engine_state.format(),
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -823,7 +823,7 @@ impl DeviceResources {
       vkey,
       fkey,
       depth_stencil_format,
-      &pe,
+      pe.format(),
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -1018,6 +1018,10 @@ impl DeviceResources {
 struct RecordingCmdBufferDataPresentation {
   acquire_result: AcquireResult,
   presentation_engine: PresentationEngineHandle,
+  swapchain_generation: u64,
+  wait_semaphore: Option<NonZeroHandle<vk::Semaphore>>,
+  signal_semaphore: Option<NonZeroHandle<vk::Semaphore>>,
+  submission_fence: NonZeroHandle<vk::Fence>,
 }
 
 struct RecordingCmdBufferData {
@@ -1604,7 +1608,7 @@ impl RenderDevice for Device {
         vkey,
         fkey,
         self.depth_stencil_format,
-        &pe,
+        pe.format(),
         &res_guard.allocator.allocator,
         &res_guard.discard_pool,
         &res_guard.renderpasses,
@@ -1756,7 +1760,7 @@ impl RenderDevice for Device {
         vkey,
         fkey,
         self.depth_stencil_format,
-        &pe,
+        pe.format(),
         &res_guard.allocator.allocator,
         &res_guard.discard_pool,
         &res_guard.renderpasses,
@@ -1836,10 +1840,9 @@ impl RenderDevice for Device {
     let timeline = res_read.timeline_manager.get_cached_value();
 
     // Add an offset to ensure any in-flight frames are fully completed by the GPU
-    res_read.discard_pool.discard_type_erased(
-      presentation_engine,
-      timeline + swapchain::MAX_FRAMES_IN_FLIGHT as u64,
-    );
+    res_read
+      .discard_pool
+      .discard_type_erased(presentation_engine, timeline + swapchain::MAX_FRAMES as u64);
 
     Ok(())
   }
@@ -1852,24 +1855,23 @@ impl RenderDevice for Device {
   ) -> GpuResult<()> {
     let physical_device_handle = unsafe { NonZeroHandle::new_unchecked(self.physical_device()) };
 
-    // Acquire a single write lock to perform the entire resize operation atomically.
-    // This prevents deadlocks and satisfies the borrow checker.
     let res_guard = self.res.read();
-    let timeline = res_guard.get_timeline_semaphore_cached_value();
 
     // Get a mutable reference to the presentation engine to resize it.
-    // borrow checker enforces us to reacquire the lock after we call a mutating method
     {
       let engine_lock = res_guard.live_presentation_engines.read();
       let engine = engine_lock.get(&handle).ok_or(GpuError::InvalidArgument(
         "[Vulkan RenderDevice] resize_presentation_engine",
       ))?;
-      let extent = engine.read().extent();
+
+      let mut engine_write = engine.write();
+
+      let extent = engine_write.extent();
       if extent.0 == width && extent.1 == height {
         return Ok(());
       }
 
-      engine.write().resize(
+      engine_write.resize(
         &self.instance.instance,
         &self.device,
         physical_device_handle,
@@ -1879,10 +1881,8 @@ impl RenderDevice for Device {
     }
     drop(res_guard);
 
-    // After resizing, update dependent resources like pipelines/renderpasses.
-    // `update_physical_mesh_archetype_for_presentation_engine` takes `&mut self` (for `wres`)
-    // and an immutable `&PresentationState` (for `engine`). This is a valid borrow pattern.
     let res_guard = self.res.read();
+    let timeline = res_guard.timeline_manager.get_next_submit_value() - 1;
     res_guard.update_physical_mesh_archetype_for_presentation_engine(
       &self.device,
       handle,
@@ -2456,7 +2456,7 @@ impl RenderDevice for Device {
     let next_timeline = res_guard.get_timeline_semaphore_cached_value() + 1;
     res_guard.archetypes.update_billboard_archetype_for_presentation_engine(
       &self.device,
-      &pe,
+      pe.format(),
       &mut res_guard.pipeline_pool.write(),
       &res_guard.renderpasses,
       &res_guard.allocator.allocator,
@@ -2512,7 +2512,7 @@ impl RenderDevice for Device {
     let next_timeline = res_guard.get_timeline_semaphore_cached_value() + 1;
     res_guard.archetypes.update_cursor_archetype_for_presentation_engine(
       &self.device,
-      &*pe,
+      pe.format(),
       &mut res_guard.pipeline_pool.write(),
       &res_guard.renderpasses,
       &res_guard.allocator.allocator,
@@ -2565,7 +2565,7 @@ impl RenderDevice for Device {
     let next_timeline = res_guard.get_timeline_semaphore_cached_value() + 1;
     res_guard.archetypes.update_measurement_archetype_for_presentation_engine(
       &self.device,
-      &pe,
+      pe.format(),
       &mut res_guard.pipeline_pool.write(),
       &res_guard.renderpasses,
       &res_guard.allocator.allocator,
@@ -2619,7 +2619,7 @@ impl RenderDevice for Device {
     let next_timeline = res_guard.get_timeline_semaphore_cached_value() + 1;
     res_guard.archetypes.update_marker_archetype_for_presentation_engine(
       &self.device,
-      &*pe,
+      pe.format(),
       &mut res_guard.pipeline_pool.write(),
       &res_guard.renderpasses,
       &res_guard.allocator.allocator,
@@ -2668,7 +2668,7 @@ impl RenderDevice for Device {
     let next_timeline = res_guard.get_timeline_semaphore_cached_value() + 1;
     res_guard.archetypes.update_gizmo_archetype_for_presentation_engine(
       &self.device,
-      &*pe,
+      pe.format(),
       &mut res_guard.pipeline_pool.write(),
       &res_guard.renderpasses,
       &res_guard.allocator.allocator,
@@ -3039,6 +3039,12 @@ impl RenderDevice for Device {
     let res_guard = self.res.read();
     let live_engines_lock = res_guard.live_presentation_engines.read();
     if let Some(engine) = live_engines_lock.get(&handle) {
+      {
+        let rpe = engine.read();
+        // Since we don't have the recorded generation here (it's in the cmd buffer data which was just consumed),
+        // we rely on the fact that if a resize happened, `submit_command_buffer` would have caught it.
+        // However, for extra safety, we can just let `submit_image` handle any internal mismatches.
+      }
       let graphics_queue = self.queues.get_graphics_queue().handle;
       unsafe {
         engine.write().submit_image(
@@ -3333,17 +3339,32 @@ impl RenderDevice for Device {
       // The caller should handle the resize.
       return Err(GpuError::ResizeRequired);
     }
+    if wpresentation_engine.swapchain_generation() != acquire_result.swapchain_generation {
+      return Err(GpuError::ResizeRequired);
+    }
     drop(cmd_buffers);
+
+    let (wait_semaphore, submission_fence) =
+      unsafe { wpresentation_engine.get_frame_resources(acquire_result.frame_index as usize) };
+    let (_, _, signal_semaphore) =
+      unsafe { wpresentation_engine.get_image_resources(acquire_result.image_index as usize) };
+
+    let timeline = res_guard.timeline_manager.get_next_submit_value() - 1;
 
     let mut cmd_buffers = self.recording_command_buffers.write();
     let data = unsafe { cmd_buffers.get_mut(&cmd_buffer).unwrap_unchecked() };
     data.presentation = Some(RecordingCmdBufferDataPresentation {
       acquire_result: *acquire_result,
       presentation_engine,
+      swapchain_generation: acquire_result.swapchain_generation,
+      wait_semaphore,
+      signal_semaphore,
+      submission_fence,
     });
     let (render_pass, framebuffer) = self.res.read().renderpasses.get_or_create_render_pass(
+      presentation_engine,
       RenderPassSpecification::single_pass(&wpresentation_engine, self.depth_stencil_format),
-      acquire_result.frame_index as u32,
+      acquire_result.image_index,
       &self.device,
       &self.res.read().allocator.allocator,
       &self.res.read().discard_pool,
@@ -3352,11 +3373,7 @@ impl RenderDevice for Device {
 
     let cmd = data.command_buffer.get();
     let mut black = [vk::ClearValue::default(), vk::ClearValue::default()]; // 2 attachments
-    self
-      .res
-      .read()
-      .renderpasses
-      .get_clear_values_render_pass(RenderPassType::color_depth_single_subpass(), &mut black)?;
+    self.res.read().renderpasses.get_clear_values_render_pass(presentation_engine, &mut black)?;
 
     let render_pass_begin_info = vk::RenderPassBeginInfo::default()
       .render_pass(render_pass.get())
@@ -4972,12 +4989,15 @@ impl RenderDevice for Device {
       .ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
 
     let rpresentation_engine = presentation_engine.read();
-    let (wait_semaphore, submission_fence) = unsafe {
-      rpresentation_engine.get_frame_resources(presentation.acquire_result.frame_index as usize)
-    };
-    let (_, _, signal_semaphore) = unsafe {
-      rpresentation_engine.get_image_resources(presentation.acquire_result.image_index as usize)
-    };
+
+    let mut is_resize_required = false;
+    if rpresentation_engine.swapchain_generation() != presentation.swapchain_generation {
+      is_resize_required = true;
+    }
+
+    let wait_semaphore = presentation.wait_semaphore;
+    let submission_fence = presentation.submission_fence;
+    let signal_semaphore = presentation.signal_semaphore;
     let res_guard = self.res.read();
     let graphics_queue = self.queues.get_graphics_queue();
 
@@ -5032,14 +5052,17 @@ impl RenderDevice for Device {
         }
       }
 
-      unsafe {
+      let res = unsafe {
         self.device.queue_submit(
           graphics_queue.handle,
           &[submit_info],
           submission_fence.get(),
         )
+      };
+      if let Err(e) = res {
+        println!("Queue submit failed: {:?}", e);
+        return Err(GpuError::from(e));
       }
-      .map_err(GpuError::from)?;
       // safely drop lock here
       next_timeline_value
     };
@@ -5061,7 +5084,11 @@ impl RenderDevice for Device {
       next_timeline_value,
     );
 
-    Ok(())
+    if is_resize_required {
+      Err(GpuError::ResizeRequired)
+    } else {
+      Ok(())
+    }
   }
 
   fn wire_callbacks(&self, pool: Arc<aethervk_oshal_rlib::os::pool::ThreadPool>) -> GpuResult<()> {
@@ -5120,7 +5147,7 @@ impl Device {
 
     let (width, height) = state.extent();
 
-    let depth_image = res_guard.renderpasses.get_test_depth_stencil_image().unwrap();
+    let depth_image = res_guard.renderpasses.get_test_depth_stencil_image(handle).unwrap();
 
     // even with format D24, when copy to buffer, depth format D24_UNORM_S8_UINT is equivalent to X8_D24_UNORM_PACK32 (meaning 4 bytes) (see docs, 1.4, chapter 56)
     let depth_size = width * height * 4;

@@ -329,21 +329,8 @@ impl Default for FragmentShader {
 impl PartialEq for FragmentShader {
   fn eq(&self, other: &Self) -> bool {
     self.fragment_module == other.fragment_module
-      && self
-        .viewports
-        .iter()
-        .zip(other.viewports.iter())
-        .map(|(a, b)| {
-          a.height == b.height
-            && a.width == b.width
-            && a.x == b.x
-            && a.y == b.y
-            && a.max_depth == b.max_depth
-            && a.min_depth == b.min_depth
-        })
-        .reduce(|acc, x| acc && x)
-        .unwrap_or(true)
-      && self.scissors == other.scissors
+      && self.viewports.len() == other.viewports.len()
+      && self.scissors.len() == other.scissors.len()
   }
 }
 
@@ -352,15 +339,8 @@ impl Eq for FragmentShader {}
 impl Hash for FragmentShader {
   fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
     self.fragment_module.hash(state);
-    for v in &self.viewports {
-      v.x.to_bits().hash(state);
-      v.y.to_bits().hash(state);
-      v.width.to_bits().hash(state);
-      v.height.to_bits().hash(state);
-      v.max_depth.to_bits().hash(state);
-      v.min_depth.to_bits().hash(state);
-    }
-    self.scissors.hash(state);
+    self.viewports.len().hash(state);
+    self.scissors.len().hash(state);
   }
 }
 
@@ -470,26 +450,19 @@ impl GraphicsInfo {
   // TODO: Add methods to diminish code duplication in [`super::archetypes_struct`]
   pub fn apply_presentation_defaults(
     mut self,
-    pe: &swapchain::PresentationState,
+    color_format: vk::Format,
     depth_format: vk::Format,
     layout: vk::PipelineLayout,
     render_pass: vk::RenderPass,
   ) -> Self {
-    let (width, height) = pe.extent();
-    self.fragment_shader.viewports.push(vk::Viewport {
-      width: width as f32,
-      height: -(height as f32),
-      x: 0.0,
-      y: height as f32,
-      min_depth: 0.0,
-      max_depth: 1.0,
-    });
-    self.fragment_shader.scissors.push(vk::Rect2D {
-      offset: vk::Offset2D { x: 0, y: 0 },
-      extent: vk::Extent2D { width, height },
-    });
+    if self.fragment_shader.viewports.is_empty() {
+      self.fragment_shader.viewports.push(vk::Viewport::default());
+    }
+    if self.fragment_shader.scissors.is_empty() {
+      self.fragment_shader.scissors.push(vk::Rect2D::default());
+    }
 
-    self.fragment_out.color_attachment_formats.push(pe.format());
+    self.fragment_out.color_attachment_formats.push(color_format);
     self.fragment_out.depth_attachment_format = Some(depth_format);
     if self.pipeline_flags.contains(PipelineFlags::STENCIL_ENABLE) {
       self.fragment_out.stencil_attachment_format = Some(depth_format);

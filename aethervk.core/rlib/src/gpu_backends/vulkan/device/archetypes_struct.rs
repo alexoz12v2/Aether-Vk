@@ -122,7 +122,7 @@ macro_rules! impl_update_archetype {
     pub fn $fn_name(
       &self,
       device: &LogicalDevice,
-      presentation_engine: &swapchain::PresentationState,
+      color_format: vk::Format,
       write_pipeline: &mut pipelines::PipelinePool,
       renderpasses: &renderpasses::RenderPasses,
       allocator: &vk_mem::Allocator,
@@ -137,7 +137,7 @@ macro_rules! impl_update_archetype {
 
       let mut graphics_info = archetype.get_any_graphics_info().ok_or(crate::gpu_err!("device error"))?;
 
-      let format = presentation_engine.format();
+      let format = color_format;
 
       let mut new_pipeline_key = None;
       if !archetype.has_format(format) {
@@ -152,15 +152,10 @@ macro_rules! impl_update_archetype {
           .color_attachment_formats
           .push(format);
         graphics_info.render_pass = renderpasses
-          .get_or_create_render_pass(
-            RenderPassSpecification::single_pass(presentation_engine, depth_stencil_format),
-            0,
-            device,
-            allocator,
-            discard_pool,
-            timeline,
+          .get_pipeline_render_pass(
+            color_format,
+            depth_stencil_format,
           )?
-          .0
           .get();
         write_pipeline.get_or_create_graphics_pipeline(device, &graphics_info)?;
         let key = graphics_info.pipeline_key();
@@ -203,7 +198,7 @@ macro_rules! impl_create_archetype {
       vertex_shader_key: ShaderKey,
       fragment_shader_key: ShaderKey,
       depth_stencil_format: vk::Format,
-      presentation_engine_state: &swapchain::PresentationState,
+      color_format: vk::Format,
       allocator: &vk_mem::Allocator,
       discard_pool: &resources::DiscardPool,
       renderpasses: &renderpasses::RenderPasses,
@@ -223,14 +218,7 @@ macro_rules! impl_create_archetype {
 
       let layout = archetype_lock.as_ref().ok_or(crate::gpu_err!("device error"))?.pipeline_layout.get();
       let render_pass = renderpasses
-        .get_or_create_render_pass(
-          RenderPassSpecification::single_pass(presentation_engine_state, depth_stencil_format),
-          0,
-          device,
-          allocator,
-          discard_pool,
-          timeline,
-        )?.0.get();
+        .get_pipeline_render_pass(color_format, depth_stencil_format)?.get();
 
       let graphics_info = GraphicsInfo::default()
         .with_pre_rasterization(
@@ -249,13 +237,13 @@ macro_rules! impl_create_archetype {
       )?
 
       let pipeline_graphics_info = graphics_info.apply_presentation_defaults(
-        presentation_engine_state, depth_stencil_format, layout, render_pass
+        color_format, depth_stencil_format, layout, render_pass
       );
 
       pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
 
       let arch_mut = archetype_lock.as_mut().ok_or(crate::gpu_err!("device error"))?;
-      arch_mut.insert_graphics_info(presentation_engine_state.format(), pipeline_graphics_info.clone(), pipeline_graphics_info.pipeline_key());
+      arch_mut.insert_graphics_info(color_format, pipeline_graphics_info.clone(), pipeline_graphics_info.pipeline_key());
 
       Ok(())
     }
@@ -275,7 +263,7 @@ macro_rules! impl_create_archetype {
       vertex_shader_key: ShaderKey,
       fragment_shader_key: ShaderKey,
       depth_stencil_format: vk::Format,
-      presentation_engine_state: &swapchain::PresentationState,
+      color_format: vk::Format,
       allocator: &vk_mem::Allocator,
       discard_pool: &resources::DiscardPool,
       renderpasses: &renderpasses::RenderPasses,
@@ -295,14 +283,7 @@ macro_rules! impl_create_archetype {
 
       let layout = archetype_lock.as_ref().ok_or(crate::gpu_err!("device error"))?.pipeline_layout.get();
       let render_pass = renderpasses
-        .get_or_create_render_pass(
-          RenderPassSpecification::single_pass(presentation_engine_state, depth_stencil_format),
-          0,
-          device,
-          allocator,
-          discard_pool,
-          timeline,
-        )?.0.get();
+        .get_pipeline_render_pass(color_format, depth_stencil_format)?.get();
 
       let graphics_info = GraphicsInfo::default()
         .with_pre_rasterization(
@@ -321,13 +302,13 @@ macro_rules! impl_create_archetype {
       )?
 
       let pipeline_graphics_info = graphics_info.apply_presentation_defaults(
-        presentation_engine_state, depth_stencil_format, layout, render_pass
+        color_format, depth_stencil_format, layout, render_pass
       );
 
       pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
 
       let arch_mut = archetype_lock.as_mut().ok_or(crate::gpu_err!("device error"))?;
-      arch_mut.insert_graphics_info(presentation_engine_state.format(), pipeline_graphics_info.clone(), pipeline_graphics_info.pipeline_key());
+      arch_mut.insert_graphics_info(color_format, pipeline_graphics_info.clone(), pipeline_graphics_info.pipeline_key());
 
       Ok(())
     }
@@ -338,19 +319,21 @@ impl Archetypes {
     update_physical_mesh_archetype_for_presentation_engine,
     physical_mesh_render_archetype,
     |archetype, device, write_pipeline, discard_pool, timeline, graphics_info, format| {
-      let mut outline_graphics_info = archetype.get_any_graphics_info_outline_pipeline_map().unwrap();
-      outline_graphics_info.fragment_out.color_attachment_formats.clear();
-      outline_graphics_info.fragment_out.color_attachment_formats.push(format);
-      outline_graphics_info.render_pass = graphics_info.render_pass;
+      if !archetype.has_format_outline_pipeline_map(format) {
+        let mut outline_graphics_info = archetype.get_any_graphics_info_outline_pipeline_map().unwrap();
+        outline_graphics_info.fragment_out.color_attachment_formats.clear();
+        outline_graphics_info.fragment_out.color_attachment_formats.push(format);
+        outline_graphics_info.render_pass = graphics_info.render_pass;
 
-      // TODO discard old pipeline (also for others)
-      let outline_pipeline_key = outline_graphics_info.pipeline_key();
-      write_pipeline.get_or_create_graphics_pipeline(device, &outline_graphics_info)?;
-      archetype.insert_graphics_info_outline_pipeline_map(
-        format,
-        outline_graphics_info,
-        outline_pipeline_key,
-      );
+        // TODO discard old pipeline (also for others)
+        let outline_pipeline_key = outline_graphics_info.pipeline_key();
+        write_pipeline.get_or_create_graphics_pipeline(device, &outline_graphics_info)?;
+        archetype.insert_graphics_info_outline_pipeline_map(
+          format,
+          outline_graphics_info,
+          outline_pipeline_key,
+        );
+      }
     }
   );
 
@@ -509,7 +492,7 @@ impl Archetypes {
     outline_fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
     queue: &Queue,
-    presentation_engine_state: &swapchain::PresentationState,
+    color_format: vk::Format,
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
@@ -597,7 +580,7 @@ impl Archetypes {
       )
       .with_fragment_out(
         FragmentOut::default()
-          .add_color_attachment_format(presentation_engine_state.format())
+          .add_color_attachment_format(color_format)
           .with_depth_attachment_format(depth_stencil_format)
           .with_stencil_attachment_format(depth_stencil_format),
       )
@@ -609,15 +592,7 @@ impl Archetypes {
       .with_stencil_write_mask(u32::MAX)
       .with_render_pass(
         renderpasses
-          .get_or_create_render_pass(
-            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
-            0,
-            device,
-            allocator,
-            discard_pool,
-            timeline,
-          )?
-          .0
+          .get_pipeline_render_pass(color_format, depth_stencil_format)?
           .get(),
       )
       .with_subpass(0)
@@ -665,12 +640,12 @@ impl Archetypes {
 
     let final_res = res
       .with_graphics_info(
-        presentation_engine_state.format(),
+        color_format,
         pipeline_graphics_info,
         pipeline_key,
       )
       .with_graphics_info_outline_pipeline_map(
-        presentation_engine_state.format(),
+        color_format,
         outline_graphics_info,
         outline_pipeline_key,
       );
@@ -686,7 +661,7 @@ impl Archetypes {
     vertex_shader_key: ShaderKey,
     fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
-    presentation_engine_state: &swapchain::PresentationState,
+    color_format: vk::Format,
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
@@ -728,41 +703,19 @@ impl Archetypes {
       .with_fragment_shader(
         FragmentShader::default()
           .with_fragment_module(fragment_shader.module.get())
-          .add_viewport(vk::Viewport {
-            // TODO check why inversion is necessary
-            width: presentation_engine_state.extent().0 as _,
-            height: -(presentation_engine_state.extent().1 as f32),
-            x: 0.0,
-            y: presentation_engine_state.extent().1 as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-          })
-          .add_scissors(vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-              width: presentation_engine_state.extent().0,
-              height: presentation_engine_state.extent().1,
-            },
-          }),
+          .add_viewport(ignored_viewport())
+          .add_scissors(ignored_scissor()),
       )
       .with_fragment_out(
         FragmentOut::default()
-          .add_color_attachment_format(presentation_engine_state.format())
+          .add_color_attachment_format(color_format)
           .with_depth_attachment_format(depth_stencil_format),
       )
       .with_pipeline_layout(pipeline_layout)
       .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST)
       .with_render_pass(
         renderpasses
-          .get_or_create_render_pass(
-            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
-            0,
-            device,
-            allocator,
-            discard_pool,
-            0,
-          )?
-          .0
+          .get_pipeline_render_pass(color_format, depth_stencil_format)?
           .get(),
       )
       .with_subpass(0)
@@ -771,7 +724,7 @@ impl Archetypes {
     let pipeline_key = pipeline_graphics_info.pipeline_key();
     pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
     arch = arch.with_graphics_info(
-      presentation_engine_state.format(),
+      color_format,
       pipeline_graphics_info,
       pipeline_key,
     );
@@ -788,7 +741,7 @@ impl Archetypes {
     vertex_shader_key: ShaderKey,
     fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
-    presentation_engine_state: &swapchain::PresentationState,
+    color_format: vk::Format,
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
@@ -822,26 +775,13 @@ impl Archetypes {
       .with_fragment_shader(
         FragmentShader::default()
           .with_fragment_module(fragment_shader.module.get())
-          .add_viewport(vk::Viewport {
-            width: presentation_engine_state.extent().0 as _,
-            height: -(presentation_engine_state.extent().1 as f32),
-            x: 0.0,
-            y: presentation_engine_state.extent().1 as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-          })
-          .add_scissors(vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-              width: presentation_engine_state.extent().0,
-              height: presentation_engine_state.extent().1,
-            },
-          })
+          .add_viewport(ignored_viewport())
+          .add_scissors(ignored_scissor())
           .clone(),
       )
       .with_fragment_out(
         FragmentOut::default()
-          .add_color_attachment_format(presentation_engine_state.format())
+          .add_color_attachment_format(color_format)
           .with_depth_attachment_format(depth_stencil_format)
           .clone(),
       )
@@ -849,15 +789,7 @@ impl Archetypes {
       .with_pipeline_flags(PipelineFlags::empty())
       .with_render_pass(
         renderpasses
-          .get_or_create_render_pass(
-            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
-            0,
-            device,
-            allocator,
-            discard_pool,
-            0,
-          )?
-          .0
+          .get_pipeline_render_pass(color_format, depth_stencil_format)?
           .get(),
       )
       .with_subpass(0)
@@ -868,7 +800,7 @@ impl Archetypes {
     pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
 
     grid_render_archetype.as_mut().unwrap().insert_graphics_info(
-      presentation_engine_state.format(),
+      color_format,
       pipeline_graphics_info,
       pipeline_key,
     );
@@ -883,7 +815,7 @@ impl Archetypes {
     vkey: ShaderKey,
     fkey: ShaderKey,
     depth_stencil_format: vk::Format,
-    pe: &swapchain::PresentationState,
+    color_format: vk::Format,
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
@@ -910,24 +842,11 @@ impl Archetypes {
       .with_fragment_shader(
         pipelines::FragmentShader::default()
           .with_fragment_module(fragment_shader.module.get())
-          .add_viewport(vk::Viewport {
-            width: pe.extent().0 as f32,
-            height: -(pe.extent().1 as f32),
-            x: 0.0,
-            y: pe.extent().1 as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-          })
-          .add_scissors(vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-              width: pe.extent().0,
-              height: pe.extent().1,
-            },
-          }),
+          .add_viewport(ignored_viewport())
+          .add_scissors(ignored_scissor()),
       )
       .with_fragment_out(
-        pipelines::FragmentOut::default().add_color_attachment_format(pe.format()).clone(),
+        pipelines::FragmentOut::default().add_color_attachment_format(color_format).clone(),
       )
       .with_pipeline_layout(arch_mut.pipeline_layout.get())
       .with_pipeline_flags(
@@ -935,15 +854,7 @@ impl Archetypes {
       )
       .with_render_pass(
         renderpasses
-          .get_or_create_render_pass(
-            renderpasses::RenderPassSpecification::single_pass(&pe, depth_stencil_format),
-            0,
-            &device,
-            allocator,
-            discard_pool,
-            timeline,
-          )?
-          .0
+          .get_pipeline_render_pass(color_format, depth_stencil_format)?
           .get(),
       )
       .with_subpass(0)
@@ -952,7 +863,7 @@ impl Archetypes {
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
     pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
-    arch_mut.insert_graphics_info(pe.format(), pipeline_graphics_info, pipeline_key);
+    arch_mut.insert_graphics_info(color_format, pipeline_graphics_info, pipeline_key);
 
     Ok(())
   }
@@ -965,7 +876,7 @@ impl Archetypes {
     fragment_shader_key: ShaderKey,
     depth_stencil_format: vk::Format,
     queue: &Queue,
-    presentation_engine_state: &swapchain::PresentationState,
+    color_format: vk::Format,
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
@@ -1055,22 +966,14 @@ impl Archetypes {
       )
       .with_fragment_out(
         FragmentOut::default()
-          .add_color_attachment_format(presentation_engine_state.format())
+          .add_color_attachment_format(color_format)
           .with_depth_attachment_format(depth_stencil_format),
       )
       .with_pipeline_layout(pipeline_layout)
       .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST)
       .with_render_pass(
         renderpasses
-          .get_or_create_render_pass(
-            RenderPassSpecification::single_pass(&presentation_engine_state, depth_stencil_format),
-            0,
-            device,
-            allocator,
-            discard_pool,
-            0,
-          )?
-          .0
+          .get_pipeline_render_pass(color_format, depth_stencil_format)?
           .get(),
       )
       .with_subpass(0)
@@ -1081,7 +984,7 @@ impl Archetypes {
     pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
 
     *text_render_archetype = Some(arch.with_graphics_info(
-      presentation_engine_state.format(),
+      color_format,
       pipeline_graphics_info,
       pipeline_key,
     ));
@@ -1096,7 +999,7 @@ impl Archetypes {
     vkey: ShaderKey,
     fkey: ShaderKey,
     depth_stencil_format: vk::Format,
-    pe: &swapchain::PresentationState,
+    color_format: vk::Format,
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
@@ -1125,26 +1028,13 @@ impl Archetypes {
       .with_fragment_shader(
         pipelines::FragmentShader::default()
           .with_fragment_module(fragment_shader.module.get())
-          .add_viewport(vk::Viewport {
-            width: pe.extent().0 as f32,
-            height: -(pe.extent().1 as f32),
-            x: 0.0,
-            y: pe.extent().1 as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-          })
-          .add_scissors(vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-              width: pe.extent().0,
-              height: pe.extent().1,
-            },
-          })
+          .add_viewport(ignored_viewport())
+          .add_scissors(ignored_scissor())
           .clone(),
       )
       .with_fragment_out(
         pipelines::FragmentOut::default()
-          .add_color_attachment_format(pe.format())
+          .add_color_attachment_format(color_format)
           .with_depth_attachment_format(depth_stencil_format)
           .clone(),
       )
@@ -1154,15 +1044,7 @@ impl Archetypes {
       )
       .with_render_pass(
         renderpasses
-          .get_or_create_render_pass(
-            renderpasses::RenderPassSpecification::single_pass(&pe, depth_stencil_format),
-            0,
-            &device,
-            allocator,
-            discard_pool,
-            timeline,
-          )?
-          .0
+          .get_pipeline_render_pass(color_format, depth_stencil_format)?
           .get(),
       )
       .with_subpass(0)
@@ -1171,7 +1053,7 @@ impl Archetypes {
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
     pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
-    archetype.insert_graphics_info(pe.format(), pipeline_graphics_info, pipeline_key);
+    archetype.insert_graphics_info(color_format, pipeline_graphics_info, pipeline_key);
 
     Ok(())
   }
@@ -1183,7 +1065,7 @@ impl Archetypes {
     vkey: ShaderKey,
     fkey: ShaderKey,
     depth_stencil_format: vk::Format,
-    pe: &swapchain::PresentationState,
+    color_format: vk::Format,
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
@@ -1212,26 +1094,13 @@ impl Archetypes {
       .with_fragment_shader(
         pipelines::FragmentShader::default()
           .with_fragment_module(fragment_shader.module.get())
-          .add_viewport(vk::Viewport {
-            width: pe.extent().0 as f32,
-            height: -(pe.extent().1 as f32),
-            x: 0.0,
-            y: pe.extent().1 as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-          })
-          .add_scissors(vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-              width: pe.extent().0,
-              height: pe.extent().1,
-            },
-          })
+          .add_viewport(ignored_viewport())
+          .add_scissors(ignored_scissor())
           .clone(),
       )
       .with_fragment_out(
         pipelines::FragmentOut::default()
-          .add_color_attachment_format(pe.format())
+          .add_color_attachment_format(color_format)
           .with_depth_attachment_format(depth_stencil_format)
           .clone(),
       )
@@ -1243,15 +1112,7 @@ impl Archetypes {
       )
       .with_render_pass(
         renderpasses
-          .get_or_create_render_pass(
-            renderpasses::RenderPassSpecification::single_pass(&pe, depth_stencil_format),
-            0,
-            &device,
-            allocator,
-            discard_pool,
-            timeline,
-          )?
-          .0
+          .get_pipeline_render_pass(color_format, depth_stencil_format)?
           .get(),
       )
       .with_subpass(0)
@@ -1260,7 +1121,7 @@ impl Archetypes {
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
     pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
-    archetype.insert_graphics_info(pe.format(), pipeline_graphics_info, pipeline_key);
+    archetype.insert_graphics_info(color_format, pipeline_graphics_info, pipeline_key);
 
     Ok(())
   }
