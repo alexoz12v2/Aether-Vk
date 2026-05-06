@@ -22,7 +22,7 @@ use alloc::vec::Vec;
     target_os = "ios"
   )
 ))]
-pub(super) mod vulkan;
+pub mod vulkan;
 
 // #[cfg(target_os = "macos")]
 // pub(super) mod metal;

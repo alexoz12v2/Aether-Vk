@@ -74,6 +74,7 @@ impl RenderSceneExtraction {
     cmd_buffer: gpu::CommandBufferHandle,
     time_readings: aethervk_oshal_rlib::os::time::TimeReadings,
     window_extent: [u32; 2],
+    debug_name: &str,
   ) -> GpuResult<gpu::RenderScene> {
     let mut render_scene = gpu::RenderScene {
       time_readings,
@@ -97,13 +98,18 @@ impl RenderSceneExtraction {
       let res =
         match device.get_physical_mesh_resources(mesh_data.entity_id, presentation_engine_handle) {
           Ok(r) => r,
-          Err(_) => device.create_physical_mesh_resources(
-            cmd_buffer,
-            mesh_data.entity_id,
-            &mesh_data.mesh,
-            presentation_engine_handle,
-            &mesh_data.mesh.asset_path,
-          )?,
+          Err(_) => {
+            if debug_name.contains("MeshViewer") {
+              aethervk_oshal_rlib::log!("[MeshViewer Debug] Creating physical mesh resources for entity {:?}", mesh_data.entity_id);
+            }
+            device.create_physical_mesh_resources(
+              cmd_buffer,
+              mesh_data.entity_id,
+              &mesh_data.mesh,
+              presentation_engine_handle,
+              &mesh_data.mesh.asset_path,
+            )?
+          }
         };
       let dc = gpu::frame::DrawCall::from_handles_and_matrix(
         res,

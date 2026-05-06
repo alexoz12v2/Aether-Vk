@@ -206,6 +206,23 @@ pub unsafe extern "C" fn avkSimulationContext_createDefaultScene(
   }
 }
 
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setSceneDebugName(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  name: *const c_char,
+) {
+  if ctx.is_null() || name.is_null() {
+    return;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let name_str = unsafe { core::ffi::CStr::from_ptr(name).to_str().unwrap_or("") };
+  if let Some(scene) = ctx_ref.get_scene(scene_id) {
+    scene.write().debug_name = alloc::string::String::from(name_str);
+  }
+}
+
 // --- Entity Management (Async) ---
 
 #[unsafe(no_mangle)]

@@ -1180,9 +1180,6 @@ fn test_render_particles_multithreaded() {
             0.6,
           )?);
 
-          let _scoped_cmd =
-            gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
-
           let res = match device.get_physical_mesh_resources(mesh_entity, presentation_engine) {
             Ok(r) => r,
             Err(_) => device.create_physical_mesh_resources(

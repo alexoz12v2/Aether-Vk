@@ -10,6 +10,7 @@ use alloc::{string::ToString, vec::Vec};
 use ash::vk::{self, Handle};
 
 pub(super) const MAX_FRAMES: usize = 8;
+pub(super) const MAX_DISCARDS: usize = 32;
 
 /// Handles and data relative to an image acquired through a swapchain
 /// These data are ephimeral and are associated to a swapchain. Initially, there's
@@ -128,7 +129,7 @@ impl DeviceResource for SwapchainImage {
 impl SwapchainCleanable for FrameDiscard {
   fn cleanup_windowless(&mut self, device: &ash::Device) {
     if !self.discarded_fences.is_empty() {
-      let fences: Vec<vk::Fence> = self.discarded_fences.iter().map(|f| f.get()).collect();
+      let fences: heapless::Vec<vk::Fence, MAX_DISCARDS> = self.discarded_fences.iter().map(|f| f.get()).collect();
       unsafe {
         let _ = device.wait_for_fences(&fences, true, u64::MAX);
       }
@@ -158,7 +159,7 @@ impl SwapchainCleanable for FrameDiscard {
 
   fn cleanup(&mut self, swapchain_device: &ash::khr::swapchain::Device, device: &ash::Device) {
     if !self.discarded_fences.is_empty() {
-      let fences: Vec<vk::Fence> = self.discarded_fences.iter().map(|f| f.get()).collect();
+      let fences: heapless::Vec<vk::Fence, MAX_DISCARDS> = self.discarded_fences.iter().map(|f| f.get()).collect();
       unsafe {
         let _ = device.wait_for_fences(&fences, true, u64::MAX);
       }
@@ -511,10 +512,10 @@ impl WindowedPresentationState {
       // No longer scrambling fences! Fences are safely tied to the frame they were used in.
       for frame in &mut self.frames {
         if let Some(fence) = frame.submission_fence.take() {
-          frame_discard.discarded_fences.push(fence);
+          let _ = frame_discard.discarded_fences.push(fence);
         }
         if let Some(sem) = frame.acquire_semaphore.take() {
-          frame_discard.discarded_semaphores.push(sem);
+          let _ = frame_discard.discarded_semaphores.push(sem);
         }
       }
 
@@ -559,10 +560,10 @@ impl WindowedPresentationState {
 
         let mut orphaned_frame = core::mem::take(&mut self.frames[i]);
         if let Some(f) = orphaned_frame.submission_fence.take() {
-          self.frame_discards[0].discarded_fences.push(f);
+          let _ = self.frame_discards[0].discarded_fences.push(f);
         }
         if let Some(s) = orphaned_frame.acquire_semaphore.take() {
-          self.frame_discards[0].discarded_semaphores.push(s);
+          let _ = self.frame_discards[0].discarded_semaphores.push(s);
         }
       }
       self.frames.truncate(new_len);
@@ -1199,17 +1200,21 @@ impl WindowedPresentationState {
     unsafe { image.reclaim_from_swapchain_frame(frame) };
 
     match result {
-      Ok(suboptimal) => Ok(if suboptimal {
-        SwapchainStatus::Suboptimal
-      } else {
-        SwapchainStatus::Optimal
-      }),
-      Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => Ok(SwapchainStatus::NeedsRecreation),
+      Ok(suboptimal) if suboptimal => {
+        // AUTO-HEAL: Queue a recreation for the next cycle
+        self.pending_resize = Some((self.width, self.height));
+        Ok(SwapchainStatus::Suboptimal)
+      }
+      Ok(_) => Ok(SwapchainStatus::Optimal),
+      Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+        // AUTO-HEAL
+        self.pending_resize = Some((self.width, self.height));
+        Ok(SwapchainStatus::NeedsRecreation)
+      }
       Err(e) => Err(e.into()),
     }
   }
 }
-
 impl FrameDiscard {
   fn discard_swapchain_images(
     &mut self,
@@ -1219,16 +1224,16 @@ impl FrameDiscard {
     for swapchain_image in swapchain_images {
       unsafe {
         if is_windowless {
-          self.discarded_images.push(swapchain_image.image);
+          let _ = self.discarded_images.push(swapchain_image.image);
         }
-        self.discarded_image_views.push(swapchain_image.image_view);
-        self.discarded_semaphores.push(swapchain_image.present_semaphore);
+        let _ = self.discarded_image_views.push(swapchain_image.image_view);
+        let _ = self.discarded_semaphores.push(swapchain_image.present_semaphore);
 
         if let Some(sem) = swapchain_image.acquire_semaphore.take() {
-          self.discarded_semaphores.push(sem);
+          let _ = self.discarded_semaphores.push(sem);
         }
         if let Some(fence) = swapchain_image.submission_fence.take() {
-          self.discarded_fences.push(fence);
+          let _ = self.discarded_fences.push(fence);
         }
       }
     }
@@ -1238,7 +1243,7 @@ impl FrameDiscard {
     for swapchain_frame in swapchain_frames {
       unsafe {
         if let Some(acquire_semaphore) = swapchain_frame.acquire_semaphore.take() {
-          self.discarded_semaphores.push(acquire_semaphore);
+          let _ = self.discarded_semaphores.push(acquire_semaphore);
         }
       }
     }
@@ -1248,7 +1253,7 @@ impl FrameDiscard {
     &mut self,
     swapchain: NonZeroHandle<vk::SwapchainKHR>,
   ) {
-    self.discarded_swapchains.push(swapchain);
+    let _ = self.discarded_swapchains.push(swapchain);
   }
 }
 
@@ -1570,10 +1575,10 @@ impl WindowlessPresentationState {
 
       for frame in &mut self.frames {
         if let Some(fence) = frame.submission_fence.take() {
-          frame_discard.discarded_fences.push(fence);
+          let _ = frame_discard.discarded_fences.push(fence);
         }
         if let Some(sem) = frame.acquire_semaphore.take() {
-          frame_discard.discarded_semaphores.push(sem);
+          let _ = frame_discard.discarded_semaphores.push(sem);
         }
       }
 
@@ -1583,7 +1588,7 @@ impl WindowlessPresentationState {
       }
 
       for mem in &mut self.memories {
-        frame_discard.discarded_memories.push(*mem);
+        let _ = frame_discard.discarded_memories.push(*mem);
       }
       self.memories.clear();
     }

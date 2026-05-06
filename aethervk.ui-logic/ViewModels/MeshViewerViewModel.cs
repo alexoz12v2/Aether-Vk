@@ -80,6 +80,7 @@ public partial class MeshViewerViewModel
 
         _consoleService?.Log($"[MeshViewer] Creating Scene...");
         SceneId = _runtimeService.CreateScene(false);
+        _runtimeService.SetSceneDebugName(SceneId, $"MeshViewer_{modelName}");
 
         _consoleService?.Log($"[MeshViewer] Checking PresentationEngineId...");
         if (PresentationEngineId == 0)

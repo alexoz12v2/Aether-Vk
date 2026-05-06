@@ -7,7 +7,7 @@ use aethervk_oshal_rlib as oshal;
 
 pub(super) struct GlobalDeviceAllocator {
   pub allocator: mem::ManuallyDrop<vk_mem::Allocator>,
-  memory_budgets: Box<[vk_mem::ffi::VmaBudget]>,
+  pub memory_budgets: Box<[vk_mem::ffi::VmaBudget]>,
 }
 
 #[cfg(debug_assertions)]

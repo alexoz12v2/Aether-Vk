@@ -1,0 +1,199 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>enable</Nullable>
+
+    <!-- Allow Assembly name and Root Namespace to be independent from csproj file -->
+    <AssemblyName>AetherVk.Logic</AssemblyName>
+    <RootNamespace>AetherVk.Logic</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0"/>
+    <PackageReference Include="System.Text.Json" Version="10.0.6"/>
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!--
+      Build cargo command. Example
+      ```
+      cargo build -p aethervk-core-cdylib -\-profile release -\-target aarch64-apple-darwin
+      ```
+     -->
+    <CargoArgs Condition="'$(Configuration)' == 'Release'">--profile release</CargoArgs>
+
+    <!-- Cargo Target Mapping for Cross-Platform Publishing -->
+    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'linux-x64'">x86_64-unknown-linux-gnu</CargoTarget>
+    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'linux-arm64'">aarch64-unknown-linux-gnu</CargoTarget>
+    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'win-x64'">x86_64-pc-windows-msvc</CargoTarget>
+    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'osx-x64'">x86_64-apple-darwin</CargoTarget>
+    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">aarch64-apple-darwin</CargoTarget>
+
+    <CargoArgs Condition="'$(CargoTarget)' != ''">-p aethervk-core-cdylib $(CargoArgs) --target $(CargoTarget)</CargoArgs>
+    <CargoOutDir Condition="'$(CargoTarget)' != ''">$(CargoTarget)/$(CargoOutDir)</CargoOutDir>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Determine platform specifically to help with VULKAN_SDK -->
+    <IsWindows>false</IsWindows>
+    <IsLinux>false</IsLinux>
+    <IsMac>false</IsMac>
+    <IsWindows Condition="$([MSBuild]::IsOSPlatform('Windows'))">true</IsWindows>
+    <IsLinux Condition="$([MSBuild]::IsOSPlatform('Linux'))">true</IsLinux>
+    <IsMac Condition="$([MSBuild]::IsOSPlatform('OSX'))">true</IsMac>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsMac)' == 'true'">
+    <VkMacLib Condition="'$(VULKAN_SDK)' != '' And Exists('$(VULKAN_SDK)/lib/libvulkan.dylib')">$(VULKAN_SDK)/lib</VkMacLib>
+    <VkMacShare Condition="'$(VULKAN_SDK)' != '' And Exists('$(VULKAN_SDK)/share/vulkan/icd.d/MoltenVK_icd.json')">$(VULKAN_SDK)/share/vulkan</VkMacShare>
+
+    <VkMacLib Condition="'$(VkMacLib)' == '' And '$(VULKAN_SDK)' != '' And Exists('$(VULKAN_SDK)/macOS/lib/libvulkan.dylib')">$(VULKAN_SDK)/macOS/lib</VkMacLib>
+    <VkMacShare Condition="'$(VkMacShare)' == '' And '$(VULKAN_SDK)' != '' And Exists('$(VULKAN_SDK)/macOS/share/vulkan/icd.d/MoltenVK_icd.json')">$(VULKAN_SDK)/macOS/share/vulkan</VkMacShare>
+
+    <VkMacLib Condition="'$(VkMacLib)' == '' And Exists('/usr/local/lib/libvulkan.dylib')">/usr/local/lib</VkMacLib>
+    <VkMacShare Condition="'$(VkMacShare)' == '' And Exists('/usr/local/share/vulkan/icd.d/MoltenVK_icd.json')">/usr/local/share/vulkan</VkMacShare>
+    
+    <!-- Allow fallback to VULKAN_SDK directly -->
+    <VkMacLib Condition="'$(VkMacLib)' == ''">$(VULKAN_SDK)/lib</VkMacLib>
+    <VkMacShare Condition="'$(VkMacShare)' == ''">$(VULKAN_SDK)/share/vulkan</VkMacShare>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsLinux)' == 'true'">
+    <VkLinuxLib Condition="'$(VULKAN_SDK)' != '' And Exists('$(VULKAN_SDK)/lib/libvulkan.so')">$(VULKAN_SDK)/lib</VkLinuxLib>
+    <VkLinuxShare Condition="'$(VULKAN_SDK)' != '' And Exists('$(VULKAN_SDK)/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json')">$(VULKAN_SDK)/share/vulkan</VkLinuxShare>
+    
+    <!-- Allow fallback -->
+    <VkLinuxLib Condition="'$(VkLinuxLib)' == ''">$(VULKAN_SDK)/lib</VkLinuxLib>
+    <VkLinuxShare Condition="'$(VkLinuxShare)' == ''">$(VULKAN_SDK)/share/vulkan</VkLinuxShare>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsWindows)' == 'true'">
+    <VkWinLib Condition="'$(VULKAN_SDK)' != '' And Exists('$(VULKAN_SDK)/Bin/vulkan-1.dll')">$(VULKAN_SDK)/Bin</VkWinLib>
+    <VkWinShare Condition="'$(VULKAN_SDK)' != '' And Exists('$(VULKAN_SDK)/Config/vk_layer_settings.txt')">$(VULKAN_SDK)/Config</VkWinShare>
+    
+    <!-- Allow fallback -->
+    <VkWinLib Condition="'$(VkWinLib)' == ''">$(VULKAN_SDK)/Bin</VkWinLib>
+    <!-- Windows has explicitly layer jsons in Bin usually, but config files in Config -->
+    <VkWinShare Condition="'$(VkWinShare)' == ''">$(VULKAN_SDK)/Bin</VkWinShare>
+  </PropertyGroup>
+
+  <Target Name="CheckVulkanSdk" BeforeTargets="BeforeBuild">
+    <Error Condition="'$(VULKAN_SDK)' == ''" Text="VULKAN_SDK environment variable is not set. Please install the Vulkan SDK and restart your IDE/terminal."/>
+
+    <!-- macOS Specific Checks -->
+    <Error Condition="'$(IsMac)' == 'true' And !Exists('$(VkMacLib)/libvulkan.dylib')" Text="Vulkan SDK libvulkan.dylib not found at $(VkMacLib)/libvulkan.dylib."/>
+    <Error Condition="'$(IsMac)' == 'true' And !Exists('$(VkMacLib)/libMoltenVK.dylib')" Text="Vulkan SDK libMoltenVK.dylib not found at $(VkMacLib)/libMoltenVK.dylib."/>
+    <Error Condition="'$(IsMac)' == 'true' And !Exists('$(VkMacShare)/icd.d/MoltenVK_icd.json')" Text="MoltenVK_icd.json not found at $(VkMacShare)/icd.d/MoltenVK_icd.json."/>
+    <Error Condition="'$(IsMac)' == 'true' And !Exists('$(VkMacShare)/explicit_layer.d/VkLayer_khronos_synchronization2.json')" Text="Synchronization2 layer json not found at $(VkMacShare)/explicit_layer.d/VkLayer_khronos_synchronization2.json."/>
+    <Error Condition="'$(IsMac)' == 'true' And '$(Configuration)' != 'Release' And !Exists('$(VkMacShare)/explicit_layer.d/VkLayer_khronos_validation.json')" Text="Validation layer json not found at $(VkMacShare)/explicit_layer.d/VkLayer_khronos_validation.json."/>
+
+    <!-- Linux Specific Checks -->
+    <Error Condition="'$(IsLinux)' == 'true' And !Exists('$(VkLinuxShare)/explicit_layer.d/VkLayer_khronos_synchronization2.json')" Text="Synchronization2 layer json not found."/>
+    <Error Condition="'$(IsLinux)' == 'true' And '$(Configuration)' != 'Release' And !Exists('$(VkLinuxShare)/explicit_layer.d/VkLayer_khronos_validation.json')" Text="Validation layer json not found."/>
+    <!-- Assuming libVkLayer_*.so exists next to the json, or system resolves it -->
+
+    <!-- Windows Specific Checks -->
+    <Error Condition="'$(IsWindows)' == 'true' And !Exists('$(VkWinShare)/VkLayer_khronos_synchronization2.json')" Text="Synchronization2 layer json not found in Bin directory."/>
+    <Error Condition="'$(IsWindows)' == 'true' And '$(Configuration)' != 'Release' And !Exists('$(VkWinShare)/VkLayer_khronos_validation.json')" Text="Validation layer json not found in Bin directory."/>
+  </Target>
+
+  <!-- macOS Bundling (Includes libvulkan and MoltenVK) -->
+  <ItemGroup Condition="'$(IsMac)' == 'true'">
+    <Content Include="$(VkMacLib)/libvulkan.dylib" Link="vulkan/lib/libvulkan.dylib" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(VkMacLib)/libvulkan.1.dylib" Link="vulkan/lib/libvulkan.1.dylib" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(VkMacLib)/libvulkan.1.dylib')" />
+    <Content Include="$(VkMacLib)/libvulkan.1.*.dylib" Link="vulkan/lib/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    
+    <Content Include="$(VkMacLib)/libMoltenVK.dylib" Link="vulkan/lib/libMoltenVK.dylib" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(VkMacShare)/icd.d/MoltenVK_icd.json" Link="vulkan/share/vulkan/icd.d/MoltenVK_icd.json" CopyToOutputDirectory="PreserveNewest" />
+
+    <Content Include="$(VkMacLib)/libVkLayer_khronos_synchronization2.dylib" Link="vulkan/lib/libVkLayer_khronos_synchronization2.dylib" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(VkMacShare)/explicit_layer.d/VkLayer_khronos_synchronization2.json" Link="vulkan/share/vulkan/explicit_layer.d/VkLayer_khronos_synchronization2.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(IsMac)' == 'true' And '$(Configuration)' != 'Release'">
+    <Content Include="$(VkMacLib)/libVkLayer_khronos_validation.dylib" Link="vulkan/lib/libVkLayer_khronos_validation.dylib" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(VkMacShare)/explicit_layer.d/VkLayer_khronos_validation.json" Link="vulkan/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Linux Bundling (Only Layers) -->
+  <ItemGroup Condition="'$(IsLinux)' == 'true'">
+    <Content Include="$(VkLinuxShare)/explicit_layer.d/VkLayer_khronos_synchronization2.json" Link="vulkan/share/vulkan/explicit_layer.d/VkLayer_khronos_synchronization2.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(VkLinuxLib)/libVkLayer_khronos_synchronization2.so" Link="vulkan/lib/libVkLayer_khronos_synchronization2.so" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(VkLinuxLib)/libVkLayer_khronos_synchronization2.so')" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(IsLinux)' == 'true' And '$(Configuration)' != 'Release'">
+    <Content Include="$(VkLinuxShare)/explicit_layer.d/VkLayer_khronos_validation.json" Link="vulkan/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(VkLinuxLib)/libVkLayer_khronos_validation.so" Link="vulkan/lib/libVkLayer_khronos_validation.so" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(VkLinuxLib)/libVkLayer_khronos_validation.so')" />
+  </ItemGroup>
+
+  <!-- Windows Bundling (Only Layers) -->
+  <ItemGroup Condition="'$(IsWindows)' == 'true'">
+    <Content Include="$(VkWinShare)/VkLayer_khronos_synchronization2.json" Link="vulkan/share/vulkan/explicit_layer.d/VkLayer_khronos_synchronization2.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(VkWinLib)/VkLayer_khronos_synchronization2.dll" Link="vulkan/lib/VkLayer_khronos_synchronization2.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(VkWinLib)/VkLayer_khronos_synchronization2.dll')" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(IsWindows)' == 'true' And '$(Configuration)' != 'Release'">
+    <Content Include="$(VkWinShare)/VkLayer_khronos_validation.json" Link="vulkan/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(VkWinLib)/VkLayer_khronos_validation.dll" Link="vulkan/lib/VkLayer_khronos_validation.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(VkWinLib)/VkLayer_khronos_validation.dll')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <RustFiles Include="..\**\*.rs;..\Cargo.toml;..\Cargo.lock;..\**\*.toml;..\**\*.glsl;..\**\*.vert;..\**\*.frag;..\**\*.comp;..\**\*.spv" Exclude="..\target\**;..\.git\**;..\**\bin\**;..\**\obj\**"/>
+    <UpToDateCheckInput Include="@(RustFiles)"/>
+  </ItemGroup>
+
+  <Target Name="BuildNativeLibrary" BeforeTargets="BeforeBuild" Inputs="@(RustFiles)" Outputs="..\target\$(CargoOutDir)\.cargo-build-successful">
+    <Exec
+      Command="cargo build $(CargoArgs)"
+      WorkingDirectory="$(MSBuildProjectDirectory)/../aethervk.core/cdylib"
+      ContinueOnError="false"
+    >
+      <Output TaskParameter="ExitCode" PropertyName="CargoExitCode"/>
+    </Exec>
+    <Warning
+      Condition="'$(CargoExitCode)' != '0'"
+      Text="Cargo build failed or cargo not found. Native library might be missing."
+    />
+    <!-- TODO Touch file on completion -->
+  </Target>
+
+  <Target Name="InjectNativeLibraryContent" BeforeTargets="AssignTargetPaths">
+    <PropertyGroup>
+      <!-- Doesn't support cross compilation (later) -->
+      <CargoTargetProfile Condition="'$(Configuration)' == 'Release'">release</CargoTargetProfile>
+      <CargoTargetProfile Condition="'$(Configuration)' != 'Release'">debug</CargoTargetProfile>
+      <CargoTargetBaseDirectory>$(MSBuildProjectDirectory)/../target/$(CargoTarget)/$(CargoTargetProfile)</CargoTargetBaseDirectory>
+    </PropertyGroup>
+    <ItemGroup>
+      <Content
+        Include="$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll"
+        Link="aethervk_core_cdylib.dll"
+        Condition="Exists('$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll')"
+      >
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+      <Content
+        Include="$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll.lib"
+        Link="aethervk_core_cdylib.dll.lib"
+        Condition="Exists('$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll.lib')"
+      >
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+      <Content
+        Include="$(CargoTargetBaseDirectory)/libaethervk_core_cdylib.so"
+        Link="libaethervk_core_cdylib.so"
+        Condition="Exists('$(CargoTargetBaseDirectory)/libaethervk_core_cdylib.so')"
+      >
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+      <Content
+        Include="$(CargoTargetBaseDirectory)/libaethervk_core_cdylib.dylib"
+        Link="libaethervk_core_cdylib.dylib"
+        Condition="Exists('$(CargoTargetBaseDirectory)/libaethervk_core_cdylib.dylib')"
+      >
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+    </ItemGroup>
+  </Target>
+</Project>

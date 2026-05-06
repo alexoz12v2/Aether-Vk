@@ -845,9 +845,9 @@ pub fn do_draw_particle(
   let push_constants = crate::gpu::ParticlePushConstants {
     view_proj: camera.view_proj.into(),
     camera_up: camera.up,
-    _pad0: 0.0,
+    time: 0.0,
     camera_right: camera.right,
-    _pad1: 0.0,
+    seed: 0.0,
     color: draw_call.config.color,
     radius: draw_call.config.particle_radius,
   };

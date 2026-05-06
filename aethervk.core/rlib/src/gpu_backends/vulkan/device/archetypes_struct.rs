@@ -130,9 +130,9 @@ macro_rules! impl_update_archetype {
       timeline: u64,
     ) -> GpuResult<()> {
       let mut archetype_lock = self.$archetype_field.write();
-      let archetype = {
-        let mut_arch: Option<&mut _> = archetype_lock.as_mut();
-        mut_arch.ok_or(crate::gpu_err!("device error"))?
+      let archetype = match archetype_lock.as_mut() {
+        Some(a) => a,
+        None => return Ok(()), // if it's not there, there's nothing to update (TODO check if correct)
       };
 
       let mut graphics_info = archetype.get_any_graphics_info().ok_or(crate::gpu_err!("device error"))?;

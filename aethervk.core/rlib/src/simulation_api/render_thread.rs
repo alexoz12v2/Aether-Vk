@@ -128,6 +128,7 @@ fn process_command(
         };
       // `render_device.success_task` will be called by thread pool when timeline advances
       let time_readings = render_frame.scene.read().time_state.read().time_info.read().current();
+      let debug_name = render_frame.scene.read().debug_name.clone();
 
       let res = do_render_scene_async(
         render_device,
@@ -137,6 +138,7 @@ fn process_command(
         render_frame.custom_render_callback,
         is_first_render,
         time_readings,
+        &debug_name,
       );
 
       match res {
@@ -189,6 +191,7 @@ fn do_render_scene_async(
   custom_render_callback: Option<CustomRenderCallback>,
   is_first_render: bool,
   time_readings: oshal::os::time::TimeReadings,
+  debug_name: &str,
 ) -> GpuResult<bool> {
   render_device.start_frame()?;
   let extent = render_device.get_presentation_engine_extent(presentation_engine_handle)?;
@@ -215,6 +218,7 @@ fn do_render_scene_async(
     cmd_buffer,
     time_readings,
     extent.into(),
+    debug_name,
   )?;
   if let Some(sun_call) = &render_scene.sun_call {
     // TODO move to kernels

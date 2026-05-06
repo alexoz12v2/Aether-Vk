@@ -381,9 +381,10 @@ impl EntryWrapper {
                   [sdk_bytes, slash, b"share/vulkan/explicit_layer.d"].concat(),
                 )
                 .unwrap();
-                let sdk_icd =
-                  alloc::ffi::CString::new([sdk_bytes, slash, b"share/vulkan/icd.d"].concat())
-                    .unwrap();
+                let sdk_icd = alloc::ffi::CString::new(
+                  [sdk_bytes, slash, b"share/vulkan/icd.d/MoltenVK_icd.json"].concat(),
+                )
+                .unwrap();
                 let sdk_loader =
                   alloc::ffi::CString::new([sdk_bytes, slash, b"lib/libvulkan.dylib"].concat())
                     .unwrap();
@@ -410,6 +411,11 @@ impl EntryWrapper {
             libc::setenv(
               b"VK_LAYER_PATH\0".as_ptr().cast(),
               vk_layer_path.as_ptr(),
+              1,
+            );
+            libc::setenv(
+              b"VK_ICD_FILENAMES\0".as_ptr().cast(),
+              vk_icd_path.as_ptr(),
               1,
             );
             libc::setenv(
@@ -495,12 +501,12 @@ pub(super) fn required_instance_extensions() -> &'static Vec<&'static CStr> {
     // surface
     the_vec.push(ash::khr::surface::NAME);
     the_vec.push(ash::khr::get_surface_capabilities2::NAME);
-    
+
     #[cfg(test)]
     {
       the_vec.push(ash::ext::headless_surface::NAME);
     }
-    
+
     #[cfg(windows)]
     {
       the_vec.push(ash::khr::win32_surface::NAME);

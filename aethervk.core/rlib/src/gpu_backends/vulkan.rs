@@ -16,7 +16,7 @@ use crate::{
 use alloc::{ffi::CString, string::ToString, sync};
 use heapless::index_map::FnvIndexMap;
 
-mod device;
+pub mod device;
 mod instance;
 mod utils;
 
