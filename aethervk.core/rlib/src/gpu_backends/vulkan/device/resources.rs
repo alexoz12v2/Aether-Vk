@@ -1,6 +1,6 @@
 use crate::gpu_backends::vulkan;
 use crate::gpu_backends::vulkan::device::{VmaDebugNameExt, VulkanDebugNameExt};
-use crate::simulation::comet::Texture;
+use crate::simulation::comet::{TexelFormat, Texture};
 use aethervk_oshal_rlib as oshal;
 use alloc::{boxed::Box, collections::VecDeque, sync, vec::Vec};
 use ash::{Device, vk};
@@ -439,6 +439,72 @@ impl Image {
     })
   }
 
+  pub fn new_paint_image(
+    device: &vulkan::device::LogicalDevice,
+    allocator: &vk_mem::Allocator,
+    width: u32,
+    height: u32,
+    debug_name: &str,
+  ) -> GpuResult<Self> {
+    let image_info = vk::ImageCreateInfo::default()
+      .image_type(vk::ImageType::TYPE_2D)
+      .extent(vk::Extent3D {
+        width,
+        height,
+        depth: 1,
+      })
+      .mip_levels(1)
+      .array_layers(1)
+      .format(vk::Format::R8G8B8A8_UNORM)
+      .tiling(vk::ImageTiling::LINEAR)
+      .initial_layout(vk::ImageLayout::UNDEFINED)
+      .usage(
+        vk::ImageUsageFlags::SAMPLED
+          | vk::ImageUsageFlags::TRANSFER_SRC
+          | vk::ImageUsageFlags::TRANSFER_DST,
+      )
+      .sharing_mode(vk::SharingMode::EXCLUSIVE)
+      .samples(vk::SampleCountFlags::TYPE_1);
+
+    let mut allocation_create_info = vk_mem::AllocationCreateInfo::default();
+    allocation_create_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
+    allocation_create_info.flags =
+      vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM | vk_mem::AllocationCreateFlags::MAPPED;
+
+    let (image, mut alloc, _alloc_info) =
+      unsafe { allocator.create_image_with_alloc_info(&image_info, &allocation_create_info) }
+        .with_name(device, &alloc::format!("VkImage_Paint_{}", debug_name))?;
+
+    let image_view_info = vk::ImageViewCreateInfo::default()
+      .image(image)
+      .view_type(vk::ImageViewType::TYPE_2D)
+      .format(vk::Format::R8G8B8A8_UNORM)
+      .components(vk::ComponentMapping::default())
+      .subresource_range(
+        vk::ImageSubresourceRange::default()
+          .aspect_mask(vk::ImageAspectFlags::COLOR)
+          .base_array_layer(0)
+          .layer_count(1)
+          .base_mip_level(0)
+          .level_count(1),
+      );
+    let image_view = unsafe {
+      let res = device
+        .create_image_view(&image_view_info, None)
+        .with_name(device, &alloc::format!("VkImageView_Paint_{}", debug_name));
+      if res.is_err() {
+        allocator.destroy_image(image, &mut alloc);
+      }
+      res
+    }?;
+
+    Ok(Self {
+      image: unsafe { NonZeroHandle::new_unchecked(image) },
+      image_view: unsafe { NonZeroHandle::new_unchecked(image_view) },
+      allocation: alloc,
+    })
+  }
+
   pub fn new_storage_3d(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -471,7 +537,11 @@ impl Image {
       .format(format)
       .tiling(vk::ImageTiling::OPTIMAL)
       .initial_layout(vk::ImageLayout::UNDEFINED)
-      .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
+      .usage(
+        vk::ImageUsageFlags::STORAGE
+          | vk::ImageUsageFlags::SAMPLED
+          | vk::ImageUsageFlags::TRANSFER_SRC,
+      )
       .sharing_mode(sharing_mode)
       .queue_family_indices(&queue_family_indices[..queue_count])
       .samples(vk::SampleCountFlags::TYPE_1);
@@ -560,6 +630,10 @@ impl Image {
 
     let (image, mut alloc, _alloc_info) =
       unsafe { allocator.create_image_with_alloc_info(&image_info, &allocation_create_info) }
+        .map_err(|e| {
+          aethervk_oshal_rlib::log!("create_image_with_alloc_info failed: {:?}", e);
+          e
+        })
         .with_name(device, &alloc::format!("VkImage_New2D_{}", debug_name))?;
 
     // 2.1 Create Image View, then start recording upload data commands
@@ -579,6 +653,10 @@ impl Image {
     let image_view = unsafe {
       let res = device
         .create_image_view(&image_view_info, None)
+        .map_err(|e| {
+          aethervk_oshal_rlib::log!("create_image_view failed: {:?}", e);
+          e
+        })
         .with_name(device, &alloc::format!("VkImageView_New2D_{}", debug_name));
       if res.is_err() {
         allocator.destroy_image(image, &mut alloc);
@@ -738,6 +816,430 @@ pub(super) struct ForwardMeshRenderResource {
   pub sky_image: Option<Image>,
   /// Note: Purposefully leaked! (TODO: if this creates problems, do better.)
   pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
+}
+
+pub(super) struct ForwardMesh2RenderResource {
+  pub allocator: vk_mem::ffi::VmaAllocator, // necessary evil. TODO: Edit DeviceResource trait and remove this.
+  pub position_vertex_buffer: Buffer,
+  pub attributes_vertex_buffer: Buffer,
+  pub index_buffer: Buffer,
+
+  pub material_buffer: Buffer,
+  pub object_buffer: Buffer,
+
+  /// layout(binding = 0) uniform sampler2D albedoMap;
+  pub albedo_image: Option<Image>,
+  /// layout(binding = 1) uniform sampler2D normalMap;
+  pub normal_image: Option<Image>,
+  /// layout(binding = 2) uniform sampler2D roughnessMap;
+  pub roughness_image: Option<Image>,
+  /// layout(binding = 3) uniform sampler2D aoMap;
+  pub ao_image: Option<Image>,
+  /// layout(binding = 4) uniform sampler2D skyMap;
+  pub sky_image: Option<Image>,
+  /// layout(binding = 5) uniform sampler2D emissivePaintMap;
+  pub emissive_paint_image: Option<Image>,
+
+  /// Note: Purposefully leaked! (TODO: if this creates problems, do better.)
+  pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
+}
+
+unsafe impl Sync for ForwardMesh2RenderResource {}
+unsafe impl Send for ForwardMesh2RenderResource {}
+
+impl DiscardableResource for ForwardMesh2RenderResource {
+  fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    discard_pool.discard_buffer(
+      self.allocator,
+      self.position_vertex_buffer.buffer.get(),
+      self.position_vertex_buffer.allocation,
+      timeline,
+    );
+    discard_pool.discard_buffer(
+      self.allocator,
+      self.attributes_vertex_buffer.buffer.get(),
+      self.attributes_vertex_buffer.allocation,
+      timeline,
+    );
+    discard_pool.discard_buffer(
+      self.allocator,
+      self.index_buffer.buffer.get(),
+      self.index_buffer.allocation,
+      timeline,
+    );
+    discard_pool.discard_buffer(
+      self.allocator,
+      self.material_buffer.buffer.get(),
+      self.material_buffer.allocation,
+      timeline,
+    );
+    discard_pool.discard_buffer(
+      self.allocator,
+      self.object_buffer.buffer.get(),
+      self.object_buffer.allocation,
+      timeline,
+    );
+
+    if let Some(albedo_image) = &self.albedo_image {
+      discard_pool.discard_image(
+        self.allocator,
+        albedo_image.image.get(),
+        albedo_image.allocation,
+        timeline,
+      );
+      discard_pool.discard_image_view(albedo_image.image_view.get(), timeline);
+    }
+    if let Some(normal_image) = &self.normal_image {
+      discard_pool.discard_image(
+        self.allocator,
+        normal_image.image.get(),
+        normal_image.allocation,
+        timeline,
+      );
+      discard_pool.discard_image_view(normal_image.image_view.get(), timeline);
+    }
+    if let Some(roughness_image) = &self.roughness_image {
+      discard_pool.discard_image(
+        self.allocator,
+        roughness_image.image.get(),
+        roughness_image.allocation,
+        timeline,
+      );
+      discard_pool.discard_image_view(roughness_image.image_view.get(), timeline);
+    }
+    if let Some(ao_image) = &self.ao_image {
+      discard_pool.discard_image(
+        self.allocator,
+        ao_image.image.get(),
+        ao_image.allocation,
+        timeline,
+      );
+      discard_pool.discard_image_view(ao_image.image_view.get(), timeline);
+    }
+    if let Some(emissive_paint_image) = &self.emissive_paint_image {
+      discard_pool.discard_image(
+        self.allocator,
+        emissive_paint_image.image.get(),
+        emissive_paint_image.allocation,
+        timeline,
+      );
+      discard_pool.discard_image_view(emissive_paint_image.image_view.get(), timeline);
+    }
+  }
+}
+
+impl ForwardMesh2RenderResource {
+  pub fn frontend_texture_flags(&self) -> TextureFlags {
+    let mut flags = TextureFlags::empty();
+    if self.albedo_image.is_some() {
+      flags |= TextureFlags::ALBEDO;
+    }
+    if self.normal_image.is_some() {
+      flags |= TextureFlags::NORMAL;
+    }
+    if self.roughness_image.is_some() {
+      flags |= TextureFlags::ROUGHNESS;
+    }
+    if self.ao_image.is_some() {
+      flags |= TextureFlags::AO;
+    }
+    if self.emissive_paint_image.is_some() {
+      // NOTE: We don't have a FLAG_EMISSIVE defined in TextureFlags yet,
+      // but if we did, we'd add it here.
+    }
+    flags
+  }
+
+  pub fn buffers_hash(&self) -> u64 {
+    let mut hasher = FnvHasher::new();
+    self.position_vertex_buffer.hash(&mut hasher);
+    self.attributes_vertex_buffer.hash(&mut hasher);
+    self.index_buffer.hash(&mut hasher);
+    hasher.finish()
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub(super) unsafe fn new(
+    device: &vulkan::device::LogicalDevice,
+    allocator: &vk_mem::Allocator,
+    command_buffer: vk::CommandBuffer,
+    staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
+    position_data: &[f32],
+    attribute_data: &[f32],
+    index_data: &[u32],
+    material_data: &crate::gpu::MaterialData,
+    object_data: &crate::gpu::ObjectData,
+    albedo_image: Option<Image>,
+    normal_image: Option<Image>,
+    roughness_image: Option<Image>,
+    ao_image: Option<Image>,
+    sky_image: Option<Image>,
+    emissive_paint_image: Option<Image>,
+    sampler: NonZeroHandle<vk::Sampler>,
+    descriptor_set: NonZeroHandle<vk::DescriptorSet>,
+    dummy_texture: &Image,
+    debug_name: &str,
+  ) -> GpuResult<Self> {
+    let mut janitor = DeviceResourceJanitor::<'_, 9>::new(device);
+    let vma_allocator = allocator.get_raw();
+
+    // Create position buffer
+    let position_vertex_buffer = create_buffer_with_staging(
+      device,
+      allocator,
+      command_buffer,
+      staging_arena,
+      position_data,
+      vk::BufferUsageFlags::VERTEX_BUFFER,
+      &alloc::format!("PositionBuffer_{}", debug_name),
+    )?;
+    let pos_alloc = position_vertex_buffer.allocation;
+    janitor
+      .push(FunctionalDeviceResource::new(
+        position_vertex_buffer.buffer.get(),
+        move |h, _| unsafe {
+          vk_mem::ffi::vmaDestroyBuffer(vma_allocator, h, pos_alloc.get_raw());
+        },
+      ))
+      .map_err(|s| GpuError::BackendSpecific(s.into()))?;
+
+    // Create attributes buffer
+    let attributes_vertex_buffer = create_buffer_with_staging(
+      device,
+      allocator,
+      command_buffer,
+      staging_arena,
+      attribute_data,
+      vk::BufferUsageFlags::VERTEX_BUFFER,
+      &alloc::format!("AttributesBuffer_{}", debug_name),
+    )?;
+    let attr_alloc = attributes_vertex_buffer.allocation;
+    janitor
+      .push(FunctionalDeviceResource::new(
+        attributes_vertex_buffer.buffer.get(),
+        move |h, _| unsafe {
+          vk_mem::ffi::vmaDestroyBuffer(vma_allocator, h, attr_alloc.get_raw());
+        },
+      ))
+      .map_err(|s| GpuError::BackendSpecific(s.into()))?;
+
+    // Create index buffer
+    let index_buffer = create_buffer_with_staging(
+      device,
+      allocator,
+      command_buffer,
+      staging_arena,
+      index_data,
+      vk::BufferUsageFlags::INDEX_BUFFER,
+      &alloc::format!("IndexBuffer_{}", debug_name),
+    )?;
+    let idx_alloc = index_buffer.allocation;
+    janitor
+      .push(FunctionalDeviceResource::new(
+        index_buffer.buffer.get(),
+        move |h, _| unsafe {
+          vk_mem::ffi::vmaDestroyBuffer(vma_allocator, h, idx_alloc.get_raw());
+        },
+      ))
+      .map_err(|s| GpuError::BackendSpecific(s.into()))?;
+
+    let material_slice = core::slice::from_raw_parts(
+      material_data as *const _ as *const u32,
+      core::mem::size_of::<crate::gpu::MaterialData>() / 4,
+    );
+    let material_buffer = create_buffer_with_staging(
+      device,
+      allocator,
+      command_buffer,
+      staging_arena,
+      material_slice,
+      vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+      &alloc::format!("MaterialBuffer_{}", debug_name),
+    )?;
+    let mat_alloc = material_buffer.allocation;
+    janitor
+      .push(FunctionalDeviceResource::new(
+        material_buffer.buffer.get(),
+        move |h, _| unsafe {
+          vk_mem::ffi::vmaDestroyBuffer(vma_allocator, h, mat_alloc.get_raw());
+        },
+      ))
+      .map_err(|s| GpuError::BackendSpecific(s.into()))?;
+
+    let object_slice = core::slice::from_raw_parts(
+      object_data as *const _ as *const u32,
+      core::mem::size_of::<crate::gpu::ObjectData>() / 4,
+    );
+    let object_buffer = create_buffer_with_staging(
+      device,
+      allocator,
+      command_buffer,
+      staging_arena,
+      object_slice,
+      vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+      &alloc::format!("ObjectBuffer_{}", debug_name),
+    )?;
+    let obj_alloc = object_buffer.allocation;
+    janitor
+      .push(FunctionalDeviceResource::new(
+        object_buffer.buffer.get(),
+        move |h, _| unsafe {
+          vk_mem::ffi::vmaDestroyBuffer(vma_allocator, h, obj_alloc.get_raw());
+        },
+      ))
+      .map_err(|s| GpuError::BackendSpecific(s.into()))?;
+
+    if let Some(image) = &albedo_image {
+      let alloc = image.allocation;
+      janitor
+        .push(FunctionalDeviceResource::new(
+          image.image.get(),
+          move |h, _| unsafe {
+            vk_mem::ffi::vmaDestroyImage(vma_allocator, h, alloc.get_raw());
+          },
+        ))
+        .map_err(|s| GpuError::BackendSpecific(s.into()))?;
+    }
+    if let Some(image) = &normal_image {
+      let alloc = image.allocation;
+      janitor
+        .push(FunctionalDeviceResource::new(
+          image.image.get(),
+          move |h, _| unsafe {
+            vk_mem::ffi::vmaDestroyImage(vma_allocator, h, alloc.get_raw());
+          },
+        ))
+        .map_err(|s| GpuError::BackendSpecific(s.into()))?;
+    }
+    if let Some(image) = &roughness_image {
+      let alloc = image.allocation;
+      janitor
+        .push(FunctionalDeviceResource::new(
+          image.image.get(),
+          move |h, _| unsafe {
+            vk_mem::ffi::vmaDestroyImage(vma_allocator, h, alloc.get_raw());
+          },
+        ))
+        .map_err(|s| GpuError::BackendSpecific(s.into()))?;
+    }
+    if let Some(image) = &ao_image {
+      let alloc = image.allocation;
+      janitor
+        .push(FunctionalDeviceResource::new(
+          image.image.get(),
+          move |h, _| unsafe {
+            vk_mem::ffi::vmaDestroyImage(vma_allocator, h, alloc.get_raw());
+          },
+        ))
+        .map_err(|s| GpuError::BackendSpecific(s.into()))?;
+    }
+    if let Some(image) = &sky_image {
+      let alloc = image.allocation;
+      janitor
+        .push(FunctionalDeviceResource::new(
+          image.image.get(),
+          move |h, _| unsafe {
+            vk_mem::ffi::vmaDestroyImage(vma_allocator, h, alloc.get_raw());
+          },
+        ))
+        .map_err(|s| GpuError::BackendSpecific(s.into()))?;
+    }
+    if let Some(image) = &emissive_paint_image {
+      let alloc = image.allocation;
+      janitor
+        .push(FunctionalDeviceResource::new(
+          image.image.get(),
+          move |h, _| unsafe {
+            vk_mem::ffi::vmaDestroyImage(vma_allocator, h, alloc.get_raw());
+          },
+        ))
+        .map_err(|s| GpuError::BackendSpecific(s.into()))?;
+    }
+
+    let mut image_infos = Vec::with_capacity(6);
+    let dummy_info = dummy_texture.to_descriptor_image_info(sampler);
+    image_infos.push((
+      0,
+      if let Some(image) = &albedo_image {
+        image.to_descriptor_image_info(sampler)
+      } else {
+        dummy_info
+      },
+    ));
+    image_infos.push((
+      1,
+      if let Some(image) = &normal_image {
+        image.to_descriptor_image_info(sampler)
+      } else {
+        dummy_info
+      },
+    ));
+    image_infos.push((
+      2,
+      if let Some(image) = &roughness_image {
+        image.to_descriptor_image_info(sampler)
+      } else {
+        dummy_info
+      },
+    ));
+    image_infos.push((
+      3,
+      if let Some(image) = &ao_image {
+        image.to_descriptor_image_info(sampler)
+      } else {
+        dummy_info
+      },
+    ));
+    image_infos.push((
+      4,
+      if let Some(image) = &sky_image {
+        image.to_descriptor_image_info(sampler)
+      } else {
+        dummy_info
+      },
+    ));
+    image_infos.push((
+      5,
+      if let Some(image) = &emissive_paint_image {
+        image.to_descriptor_image_info(sampler)
+      } else {
+        dummy_info
+      },
+    ));
+    let write_descriptor_sets: Vec<_> = image_infos
+      .iter()
+      .map(|(binding, info)| {
+        vk::WriteDescriptorSet::default()
+          .dst_set(descriptor_set.get())
+          .dst_binding(*binding)
+          .dst_array_element(0)
+          .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+          .image_info(core::slice::from_ref(info))
+      })
+      .collect();
+
+    unsafe {
+      device.update_descriptor_sets(&write_descriptor_sets, &[]);
+    }
+
+    janitor.clear();
+
+    Ok(Self {
+      allocator: vma_allocator,
+      position_vertex_buffer,
+      attributes_vertex_buffer,
+      index_buffer,
+      material_buffer,
+      object_buffer,
+      albedo_image,
+      normal_image,
+      roughness_image,
+      ao_image,
+      sky_image,
+      emissive_paint_image,
+      descriptor_set,
+    })
+  }
 }
 
 unsafe impl Sync for ForwardMeshRenderResource {}
@@ -1323,7 +1825,11 @@ impl BvhRenderResourceArchetype {
     let pipeline_layout_info =
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
 
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None)? };
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
+      .map_err(|e| {
+        aethervk_oshal_rlib::log!("create_pipeline_layout failed: {:?}", e);
+        e
+      })?;
 
     Ok(Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
@@ -1446,7 +1952,11 @@ impl MinimapRenderResourceArchetype {
     }];
     let pipeline_layout_info =
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None)? };
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
+      .map_err(|e| {
+        aethervk_oshal_rlib::log!("create_pipeline_layout failed: {:?}", e);
+        e
+      })?;
     Ok(Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
       pipeline_map: PipelineMap::new(),
@@ -1464,6 +1974,187 @@ impl MinimapRenderResourceArchetype {
 /// Archetype has a list of textures, then each instance, when push constants, chooses one
 /// with the textureId.
 /// `NonZeroHandle` constraint satisfied until you call `discard`
+pub(super) struct TrajectoryRenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub set_0_layout: NonZeroHandle<vk::DescriptorSetLayout>,
+  pub push_contant_ranges: Vec<vk::PushConstantRange>,
+  pub descriptor_pool: NonZeroHandle<vk::DescriptorPool>,
+  pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
+
+  pub segments_buffer: NonZeroHandle<vk::Buffer>,
+  pub segments_alloc: vk_mem::Allocation,
+  pub segments_ptr: u64,
+
+  pub trajectories_buffer: NonZeroHandle<vk::Buffer>,
+  pub trajectories_alloc: vk_mem::Allocation,
+  pub trajectories_ptr: u64,
+
+  pub map_buffer: NonZeroHandle<vk::Buffer>,
+  pub map_alloc: vk_mem::Allocation,
+  pub map_ptr: u64,
+
+  allocator_raw: vk_mem::ffi::VmaAllocator,
+
+  pipeline_map: PipelineMap,
+}
+
+unsafe impl Sync for TrajectoryRenderResourceArchetype {}
+unsafe impl Send for TrajectoryRenderResourceArchetype {}
+
+impl TrajectoryRenderResourceArchetype {
+  impl_pipeline_map_methods!();
+
+  pub unsafe fn new(
+    device: &vulkan::device::LogicalDevice,
+    allocator: &vk_mem::Allocator,
+  ) -> GpuResult<Self> {
+    const MAX_IMAGE_COUNT: u32 = 256;
+    let push_contant_ranges = alloc::vec![vk::PushConstantRange {
+      stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+      offset: 0,
+      size: core::mem::size_of::<crate::gpu::TrajectoryPushConstants>() as u32,
+    }];
+
+    // Create the bindless layout for set = 0
+    let bindings = [vk::DescriptorSetLayoutBinding {
+      binding: 0,
+      descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+      descriptor_count: MAX_IMAGE_COUNT,
+      stage_flags: vk::ShaderStageFlags::FRAGMENT,
+      p_immutable_samplers: ptr::null(),
+      ..Default::default()
+    }];
+
+    let binding_flags =
+      [vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND];
+
+    let binding_flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
+      binding_count: binding_flags.len() as u32,
+      p_binding_flags: binding_flags.as_ptr(),
+      ..Default::default()
+    };
+
+    let bindless_layout_info = vk::DescriptorSetLayoutCreateInfo {
+      flags: vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL,
+      binding_count: bindings.len() as u32,
+      p_bindings: bindings.as_ptr(),
+      p_next: ptr::from_ref(&binding_flags_info) as *const _,
+      ..Default::default()
+    };
+
+    let set_0_layout = unsafe { device.create_descriptor_set_layout(&bindless_layout_info, None) }
+      .with_name(device, "VkDescriptorSetLayout_TrajectoryBindlessTextures")?;
+
+    let set_layouts = [set_0_layout];
+
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo {
+      p_set_layouts: set_layouts.as_ptr(),
+      set_layout_count: set_layouts.len() as u32,
+      p_push_constant_ranges: push_contant_ranges.as_ptr(),
+      push_constant_range_count: push_contant_ranges.len() as u32,
+      ..Default::default()
+    };
+
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
+      .with_name(device, "VkPipelineLayout_TrajectoryRenderResourceArchetype")?;
+
+    let pool_sizes = [vk::DescriptorPoolSize::default()
+      .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+      .descriptor_count(MAX_IMAGE_COUNT)];
+    let create_info = vk::DescriptorPoolCreateInfo::default()
+      .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
+      .max_sets(1)
+      .pool_sizes(&pool_sizes);
+
+    let descriptor_pool = unsafe { device.create_descriptor_pool(&create_info, None) }
+      .with_name(device, "VkDescriptorPool_TrajectoryArchetype")?;
+
+    let alloc_info = vk::DescriptorSetAllocateInfo::default()
+      .descriptor_pool(descriptor_pool)
+      .set_layouts(&set_layouts);
+
+    let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?[0];
+
+    let segments_size = (1_000_000 * core::mem::size_of::<crate::gpu::RationalBezierGpu>()) as u64;
+    let traj_size = (100_000 * core::mem::size_of::<crate::gpu::TrajectoryGpu>()) as u64;
+    let map_size = (1_000_000 * core::mem::size_of::<crate::gpu::SegmentMapGpu>()) as u64;
+
+    let create_mega_buffer =
+      |size: u64,
+       debug_name: &str|
+       -> GpuResult<(NonZeroHandle<vk::Buffer>, vk_mem::Allocation, u64)> {
+        let buffer_info = vk::BufferCreateInfo::default().size(size).usage(
+          vk::BufferUsageFlags::STORAGE_BUFFER
+            | vk::BufferUsageFlags::TRANSFER_DST
+            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+        );
+        let mut alloc_info = vk_mem::AllocationCreateInfo::default();
+        alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
+
+        let (buffer, alloc) = unsafe { allocator.create_buffer(&buffer_info, &alloc_info) }
+            .map_err(|_| GpuError::OutOfMemory)?;
+        device.set_debug_name(buffer, debug_name);
+
+        let addr_info = ash::vk::BufferDeviceAddressInfo::default().buffer(buffer);
+        let ptr = unsafe { device.buffer_device_address.get_buffer_device_address(&addr_info) };
+        Ok((unsafe { NonZeroHandle::new_unchecked(buffer) }, alloc, ptr))
+      };
+
+    let (segments_buffer, segments_alloc, segments_ptr) =
+      create_mega_buffer(segments_size, "MegaBuffer_TrajectorySegments")?;
+    let (trajectories_buffer, trajectories_alloc, trajectories_ptr) =
+      create_mega_buffer(traj_size, "MegaBuffer_Trajectories")?;
+    let (map_buffer, map_alloc, map_ptr) =
+      create_mega_buffer(map_size, "MegaBuffer_TrajectoryMaps")?;
+
+    Ok(Self {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      set_0_layout: unsafe { NonZeroHandle::new_unchecked(set_0_layout) },
+      push_contant_ranges,
+      descriptor_pool: unsafe { NonZeroHandle::new_unchecked(descriptor_pool) },
+      descriptor_set: unsafe { NonZeroHandle::new_unchecked(descriptor_set) },
+      segments_buffer,
+      segments_alloc,
+      segments_ptr,
+      trajectories_buffer,
+      trajectories_alloc,
+      trajectories_ptr,
+      map_buffer,
+      map_alloc,
+      map_ptr,
+      allocator_raw: allocator.get_raw(),
+      pipeline_map: PipelineMap::new(),
+    })
+  }
+
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_pipeline_layout(layout, timeline);
+    discard_pool.discard_descriptor_set_layout(self.set_0_layout.get(), timeline);
+    unsafe {
+      device.destroy_descriptor_pool(self.descriptor_pool.get(), None);
+    }
+    discard_pool.discard_buffer(
+      self.allocator_raw,
+      self.segments_buffer.get(),
+      self.segments_alloc,
+      timeline,
+    );
+    discard_pool.discard_buffer(
+      self.allocator_raw,
+      self.trajectories_buffer.get(),
+      self.trajectories_alloc,
+      timeline,
+    );
+    discard_pool.discard_buffer(
+      self.allocator_raw,
+      self.map_buffer.get(),
+      self.map_alloc,
+      timeline,
+    );
+  }
+}
+
 pub(super) struct BillboardRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub set_0_layout: NonZeroHandle<vk::DescriptorSetLayout>,
@@ -1994,6 +2685,225 @@ impl ParticleRenderResourceArchetype {
   }
 }
 
+pub(super) struct Particle2RenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub set_0_layout: NonZeroHandle<vk::DescriptorSetLayout>,
+  pub push_contant_ranges: alloc::vec::Vec<vk::PushConstantRange>,
+  pub descriptor_pool: NonZeroHandle<vk::DescriptorPool>,
+  pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
+
+  // Replaces `next_index`: Track allocated slices lock-free in the Mega Buffers
+  pub allocated_particles: AtomicU32,
+  pub allocated_systems: AtomicU32,
+
+  pub mega_particle_buffer: vk::Buffer,
+  pub mega_particle_alloc: vk_mem::Allocation,
+  pub mega_indirect_buffer: vk::Buffer,
+  pub mega_indirect_alloc: vk_mem::Allocation,
+
+  // Stored purely so DiscardPool can destroy them properly later
+  pub allocator_raw: vk_mem::ffi::VmaAllocator,
+
+  pipeline_map: PipelineMap,
+}
+
+unsafe impl Sync for Particle2RenderResourceArchetype {}
+unsafe impl Send for Particle2RenderResourceArchetype {}
+
+impl Particle2RenderResourceArchetype {
+  pub const MAX_PARTICLES: u32 = 1_000_000;
+  pub const MAX_SYSTEMS: u32 = 1000;
+
+  impl_pipeline_map_methods!();
+
+  /// Pass the safe `&vk_mem::Allocator` here instead of the raw `vk_mem::ffi::VmaAllocator`
+  pub unsafe fn new(
+    device: &vulkan::device::LogicalDevice,
+    allocator: &vk_mem::Allocator,
+  ) -> GpuResult<Self> {
+    let push_contant_ranges = alloc::vec![vk::PushConstantRange {
+      stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+      offset: 0,
+      size: core::mem::size_of::<crate::gpu::Particle2PushConstants>() as u32,
+    }];
+
+    let bindings = [vk::DescriptorSetLayoutBinding {
+      binding: 0,
+      descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+      descriptor_count: 1, // Only 1 static descriptor now!
+      stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+      p_immutable_samplers: ptr::null(),
+      ..Default::default()
+    }];
+
+    let layout_info = vk::DescriptorSetLayoutCreateInfo {
+      binding_count: bindings.len() as u32,
+      p_bindings: bindings.as_ptr(),
+      ..Default::default()
+    };
+
+    let set_0_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }
+      .with_name(device, "VkDescriptorSetLayout_MegaParticleBuffer")?;
+
+    let set_layouts = [set_0_layout];
+
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo {
+      p_set_layouts: set_layouts.as_ptr(),
+      set_layout_count: set_layouts.len() as u32,
+      p_push_constant_ranges: push_contant_ranges.as_ptr(),
+      push_constant_range_count: push_contant_ranges.len() as u32,
+      ..Default::default()
+    };
+
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
+      .with_name(device, "VkPipelineLayout_Particle2RenderResourceArchetype")?;
+
+    let pool_sizes = [vk::DescriptorPoolSize::default()
+      .ty(vk::DescriptorType::STORAGE_BUFFER)
+      .descriptor_count(1)];
+    let create_info = vk::DescriptorPoolCreateInfo::default().max_sets(1).pool_sizes(&pool_sizes);
+    let descriptor_pool = unsafe { device.create_descriptor_pool(&create_info, None) }.with_name(
+      device,
+      "VkDescriptorPoolCreateInfo_Dedicated_Particle2RenderResourceArchetype",
+    )?;
+
+    let alloc_info = vk::DescriptorSetAllocateInfo::default()
+      .descriptor_pool(descriptor_pool)
+      .set_layouts(&set_layouts);
+    let descriptor_set =
+      unsafe { device.allocate_descriptor_sets(&alloc_info) }?.get(0).copied().unwrap();
+    device.set_debug_name(
+      descriptor_set,
+      "VkDescriptorSet_Dedicated_Particle2RenderResourceArchetype",
+    );
+
+    // --- SAFE VMA ALLOCATIONS ---
+    let alloc_create_info = vk_mem::AllocationCreateInfo {
+      usage: vk_mem::MemoryUsage::AutoPreferDevice,
+      ..Default::default()
+    };
+
+    // 1. Create Mega Particle Buffer
+    let particle_buffer_size = (Self::MAX_PARTICLES as usize
+      * core::mem::size_of::<crate::scene::particles::ParticleData>())
+      as vk::DeviceSize;
+    let particle_buffer_info = vk::BufferCreateInfo::default()
+      .size(particle_buffer_size)
+      // I kept STORAGE_BUFFER here in case you want Async Compute Shaders to update physics in-place later!
+      .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
+
+    let (mega_particle_buffer, mega_particle_alloc) =
+      unsafe { allocator.create_buffer(&particle_buffer_info, &alloc_create_info) }
+        .map_err(|_| crate::gpu_err!("device error"))?;
+
+    // 2. Create Mega Indirect Buffer
+    let indirect_buffer_size = (Self::MAX_SYSTEMS as usize
+      * core::mem::size_of::<vk::DrawIndirectCommand>())
+      as vk::DeviceSize;
+    let indirect_buffer_info = vk::BufferCreateInfo::default()
+      .size(indirect_buffer_size)
+      // Added STORAGE_BUFFER here so Compute Shaders can dynamically write DrawIndirectCommands as well
+      .usage(
+        vk::BufferUsageFlags::INDIRECT_BUFFER
+          | vk::BufferUsageFlags::TRANSFER_DST
+          | vk::BufferUsageFlags::STORAGE_BUFFER,
+      );
+
+    let (mega_indirect_buffer, mega_indirect_alloc) =
+      unsafe { allocator.create_buffer(&indirect_buffer_info, &alloc_create_info) }
+        .map_err(|_| crate::gpu_err!("device error"))?;
+
+    // --- BIND MEGA BUFFER TO DESCRIPTOR SET ONCE FOREVER ---
+    let buffer_info = vk::DescriptorBufferInfo::default()
+      .buffer(mega_particle_buffer)
+      .offset(0)
+      .range(vk::WHOLE_SIZE);
+
+    let write = vk::WriteDescriptorSet::default()
+      .dst_set(descriptor_set)
+      .dst_binding(0)
+      .dst_array_element(0)
+      .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+      .buffer_info(core::slice::from_ref(&buffer_info));
+
+    unsafe {
+      device.update_descriptor_sets(core::slice::from_ref(&write), &[]);
+    }
+
+    Ok(Self {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      push_contant_ranges,
+      pipeline_map: PipelineMap::new(),
+      set_0_layout: unsafe { NonZeroHandle::new_unchecked(set_0_layout) },
+      descriptor_pool: unsafe { NonZeroHandle::new_unchecked(descriptor_pool) },
+      descriptor_set: unsafe { NonZeroHandle::new_unchecked(descriptor_set) },
+
+      allocated_particles: AtomicU32::new(0),
+      allocated_systems: AtomicU32::new(0),
+
+      mega_particle_buffer,
+      mega_particle_alloc,
+      mega_indirect_buffer,
+      mega_indirect_alloc,
+      allocator_raw: allocator.get_raw(),
+    })
+  }
+
+  /// Lock-free allocation of a permanent slice inside the Mega Buffers for a Particle System.
+  /// Returns: (system_indirect_index, particle_start_index)
+  pub fn allocate_system_space(&self, particle_count: u32) -> Result<(u32, u32), GpuError> {
+    let sys_idx = self.allocated_systems.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    if sys_idx >= Self::MAX_SYSTEMS {
+      return Err(GpuError::InvalidState(
+        "Mega Buffer Full: Max Systems Reached",
+      ));
+    }
+
+    let particle_offset =
+      self.allocated_particles.fetch_add(particle_count, core::sync::atomic::Ordering::Relaxed);
+    if particle_offset + particle_count > Self::MAX_PARTICLES {
+      return Err(GpuError::InvalidState(
+        "Mega Buffer Full: Max Particles Reached",
+      ));
+    }
+
+    Ok((sys_idx, particle_offset))
+  }
+
+  /// Call this when completely changing levels/scenes to instantly reset the architecture
+  /// without re-allocating or freeing memory!
+  pub fn reset_allocations(&self) {
+    self.allocated_particles.store(0, core::sync::atomic::Ordering::Relaxed);
+    self.allocated_systems.store(0, core::sync::atomic::Ordering::Relaxed);
+  }
+
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_type_erased(
+      FunctionalDeviceResource::new(self.descriptor_pool.get(), |pool, device| unsafe {
+        device.destroy_descriptor_pool(pool, None);
+      }),
+      timeline,
+    );
+
+    discard_pool.discard_pipeline_layout(layout, timeline);
+    discard_pool.discard_descriptor_set_layout(self.set_0_layout.get(), timeline);
+
+    discard_pool.discard_buffer(
+      self.allocator_raw,
+      self.mega_particle_buffer,
+      self.mega_particle_alloc,
+      timeline,
+    );
+    discard_pool.discard_buffer(
+      self.allocator_raw,
+      self.mega_indirect_buffer,
+      self.mega_indirect_alloc,
+      timeline,
+    );
+  }
+}
+
 pub(super) struct CursorRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub push_contant_ranges: Vec<vk::PushConstantRange>,
@@ -2164,12 +3074,54 @@ pub(super) struct ForwardMeshRenderResourceArchetype {
   outline_pipeline_map: PipelineMap,
 }
 
+/// To be destroyed before descriptor pool
+pub(super) struct ForwardMesh2RenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub descriptor_set_layouts: Vec<NonZeroHandle<vk::DescriptorSetLayout>>,
+  pub push_contant_ranges: Vec<vk::PushConstantRange>,
+  // 0 = vertex, 1 = fragment
+  pub specialization_constants: [Vec<vk::SpecializationMapEntry>; 2],
+  // 0 = vertex, 1 = fragment
+  pub specialization_constants_values: [Vec<u8>; 2],
+
+  pub dummy_texture_handle: Image,
+  /// Necessary evil for discard. assumes it outlives this object
+  allocator_raw: vk_mem::ffi::VmaAllocator,
+
+  pipeline_map: PipelineMap,
+  outline_pipeline_map: PipelineMap,
+}
+
 unsafe impl Sync for ForwardMeshRenderResourceArchetype {}
 unsafe impl Send for ForwardMeshRenderResourceArchetype {}
 
 impl ForwardMeshRenderResourceArchetype {
   impl_pipeline_map_methods!();
   impl_pipeline_map_methods!(outline_pipeline_map);
+
+  pub fn create_descriptor_set_from_layout_at_index(
+    &self,
+    device: &vulkan::device::LogicalDevice,
+    descriptor_pools: &sync::Arc<DescriptorPools>,
+    discard_pool: &DiscardPool,
+    index: usize,
+    debug_name: &str,
+  ) -> GpuResult<NonZeroHandle<vk::DescriptorSet>> {
+    const NEVER_DISCARD_TIMELINE: u64 = u64::MAX;
+
+    let layout = self
+      .descriptor_set_layouts
+      .get(index)
+      .ok_or(crate::gpu_invalid_arg!("invalid argument"))?
+      .get();
+    descriptor_pools.allocate(
+      device,
+      layout,
+      discard_pool,
+      NEVER_DISCARD_TIMELINE,
+      debug_name,
+    )
+  }
 
   /// Safety:
   /// - `pipeline_key` must refer to a pipeline created with `vertex_shader` and `fragment_shader`,
@@ -2467,30 +3419,6 @@ impl ForwardMeshRenderResourceArchetype {
       outline_pipeline_map: PipelineMap::new(),
     })
   }
-
-  pub fn create_descriptor_set_from_layout_at_index(
-    &self,
-    device: &vulkan::device::LogicalDevice,
-    descriptor_pools: &sync::Arc<DescriptorPools>,
-    discard_pool: &DiscardPool,
-    index: usize,
-    debug_name: &str,
-  ) -> GpuResult<NonZeroHandle<vk::DescriptorSet>> {
-    const NEVER_DISCARD_TIMELINE: u64 = u64::MAX;
-
-    let layout = self
-      .descriptor_set_layouts
-      .get(index)
-      .ok_or(crate::gpu_invalid_arg!("invalid argument"))?
-      .get();
-    descriptor_pools.allocate(
-      device,
-      layout,
-      discard_pool,
-      NEVER_DISCARD_TIMELINE,
-      debug_name,
-    )
-  }
 }
 
 impl DiscardableResource for ForwardMeshRenderResourceArchetype {
@@ -2521,7 +3449,7 @@ impl DiscardableResource for ForwardMeshRenderResourceArchetype {
 }
 
 /// Reusable helper function to perform the explicit staging buffer upload pattern.
-fn create_buffer_with_staging<T: Copy>(
+pub(super) fn create_buffer_with_staging<T: Copy>(
   device: &vulkan::device::LogicalDevice,
   allocator: &vk_mem::Allocator,
   command_buffer: vk::CommandBuffer,
@@ -2626,6 +3554,226 @@ fn create_buffer_with_staging<T: Copy>(
 type PipelineMap = hashbrown::HashMap<vk::Format, (GraphicsInfo, PipelineKey)>;
 
 /// Helper to map descriptor types from spirv-reflect to ash and handle unsupported cases.
+unsafe impl Sync for ForwardMesh2RenderResourceArchetype {}
+unsafe impl Send for ForwardMesh2RenderResourceArchetype {}
+
+impl ForwardMesh2RenderResourceArchetype {
+  impl_pipeline_map_methods!();
+  impl_pipeline_map_methods!(outline_pipeline_map);
+
+  pub fn create_descriptor_set_from_layout_at_index(
+    &self,
+    device: &vulkan::device::LogicalDevice,
+    descriptor_pools: &sync::Arc<DescriptorPools>,
+    discard_pool: &DiscardPool,
+    index: usize,
+    debug_name: &str,
+  ) -> GpuResult<NonZeroHandle<vk::DescriptorSet>> {
+    const NEVER_DISCARD_TIMELINE: u64 = u64::MAX;
+
+    let layout = self
+      .descriptor_set_layouts
+      .get(index)
+      .ok_or(crate::gpu_invalid_arg!("invalid argument"))?
+      .get();
+    descriptor_pools.allocate(
+      device,
+      layout,
+      discard_pool,
+      NEVER_DISCARD_TIMELINE,
+      debug_name,
+    )
+  }
+
+  pub unsafe fn new(
+    device: &vulkan::device::LogicalDevice,
+    vertex_shader: &Shader,
+    fragment_shader: &Shader,
+    allocator: &vk_mem::Allocator,
+    discard_pool: &DiscardPool,
+    staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
+    queue: &vulkan::device::Queue,
+  ) -> GpuResult<Self> {
+    let push_contant_ranges = alloc::vec![vk::PushConstantRange {
+      stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+      offset: 0,
+      size: core::mem::size_of::<crate::gpu::PhysicalMesh2PushConstants>() as u32,
+    }];
+
+    let specialization_constants = [Vec::new(), Vec::new()];
+    let specialization_constants_values = [Vec::new(), Vec::new()];
+
+    let mut bindings = Vec::new();
+    let max_images = 6;
+    for i in 0..max_images {
+      bindings.push(vk::DescriptorSetLayoutBinding {
+        binding: i as u32,
+        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+        descriptor_count: 1,
+        stage_flags: vk::ShaderStageFlags::FRAGMENT,
+        p_immutable_samplers: ptr::null(),
+        ..Default::default()
+      });
+    }
+
+    let layout_info = vk::DescriptorSetLayoutCreateInfo {
+      binding_count: bindings.len() as u32,
+      p_bindings: bindings.as_ptr(),
+      ..Default::default()
+    };
+
+    let set_layout_1 = match unsafe { device.create_descriptor_set_layout(&layout_info, None) } {
+      Ok(layout) => layout,
+      Err(e) => {
+        aethervk_oshal_rlib::log!("ERROR: create_descriptor_set_layout failed: {:?}", e);
+        return Err(e.into());
+      }
+    };
+
+    let descriptor_set_layouts = alloc::vec![unsafe { NonZeroHandle::new_unchecked(set_layout_1) }];
+
+    let set_layouts_raw: Vec<_> = descriptor_set_layouts.iter().map(|l| l.get()).collect();
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo {
+      p_set_layouts: set_layouts_raw.as_ptr(),
+      set_layout_count: set_layouts_raw.len() as u32,
+      p_push_constant_ranges: push_contant_ranges.as_ptr(),
+      push_constant_range_count: push_contant_ranges.len() as u32,
+      ..Default::default()
+    };
+
+    let pipeline_layout =
+      match unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) } {
+        Ok(layout) => layout,
+        Err(e) => {
+          aethervk_oshal_rlib::log!("ERROR: create_pipeline_layout failed: {:?}", e);
+          return Err(e.into());
+        }
+      };
+
+    let mut tex = Texture::default();
+    tex.data.push(0);
+    tex.data.push(0);
+    tex.data.push(0);
+    tex.data.push(1);
+    tex.width = 1;
+    tex.height = 1;
+    tex.format = crate::simulation::comet::TexelFormat::R8G8B8A8_UNORM;
+
+    let cmd_pool_info = vk::CommandPoolCreateInfo::default()
+      .queue_family_index(queue.family_index)
+      .flags(vk::CommandPoolCreateFlags::TRANSIENT);
+
+    let temp_cmd_pool = match unsafe { device.create_command_pool(&cmd_pool_info, None) } {
+      Ok(pool) => pool,
+      Err(e) => {
+        aethervk_oshal_rlib::log!("ERROR: create_command_pool failed: {:?}", e);
+        return Err(e.into());
+      }
+    };
+
+    let alloc_info = vk::CommandBufferAllocateInfo::default()
+      .command_pool(temp_cmd_pool)
+      .level(vk::CommandBufferLevel::PRIMARY)
+      .command_buffer_count(1);
+
+    let cmd = match unsafe { device.allocate_command_buffers(&alloc_info) } {
+      Ok(bufs) => bufs[0],
+      Err(e) => {
+        aethervk_oshal_rlib::log!("ERROR: allocate_command_buffers failed: {:?}", e);
+        return Err(e.into());
+      }
+    };
+
+    let begin_info =
+      vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+    if let Err(e) = unsafe { device.begin_command_buffer(cmd, &begin_info) } {
+      aethervk_oshal_rlib::log!("ERROR: begin_command_buffer failed: {:?}", e);
+      return Err(e.into());
+    }
+
+    let dummy_texture_handle = match Image::new_2d(
+      device,
+      allocator,
+      cmd,
+      staging_arena,
+      &tex,
+      vk::ImageUsageFlags::SAMPLED,
+      "DummyPhysicalMesh2",
+    ) {
+      Ok(img) => img,
+      Err(e) => {
+        aethervk_oshal_rlib::log!("ERROR: Image::new_2d failed: {:?}", e);
+        unsafe {
+          device.destroy_command_pool(temp_cmd_pool, None);
+        }
+        return Err(e);
+      }
+    };
+
+    if let Err(e) = unsafe { device.end_command_buffer(cmd) } {
+      aethervk_oshal_rlib::log!("ERROR: end_command_buffer failed: {:?}", e);
+      return Err(e.into());
+    }
+
+    let submit_info = vk::SubmitInfo::default().command_buffers(core::slice::from_ref(&cmd));
+    let fence = match unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) } {
+      Ok(f) => f,
+      Err(e) => {
+        aethervk_oshal_rlib::log!("ERROR: create_fence failed: {:?}", e);
+        return Err(e.into());
+      }
+    };
+
+    if let Err(e) = unsafe {
+      device.locked_queue_submit(queue.handle, core::slice::from_ref(&submit_info), fence)
+    } {
+      aethervk_oshal_rlib::log!("ERROR: locked_queue_submit failed: {:?}", e);
+      return Err(e.into());
+    }
+
+    if let Err(e) = unsafe { device.wait_for_fences(core::slice::from_ref(&fence), true, u64::MAX) }
+    {
+      aethervk_oshal_rlib::log!("ERROR: wait_for_fences failed: {:?}", e);
+      return Err(e.into());
+    }
+
+    unsafe {
+      device.destroy_fence(fence, None);
+      device.free_command_buffers(temp_cmd_pool, core::slice::from_ref(&cmd));
+      device.destroy_command_pool(temp_cmd_pool, None);
+    }
+
+    Ok(Self {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      descriptor_set_layouts,
+      push_contant_ranges,
+      specialization_constants,
+      specialization_constants_values,
+      dummy_texture_handle,
+      allocator_raw: allocator.get_raw(),
+      pipeline_map: PipelineMap::new(),
+      outline_pipeline_map: PipelineMap::new(),
+    })
+  }
+
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_pipeline_layout(layout, timeline);
+
+    for set_layout in self.descriptor_set_layouts.iter() {
+      discard_pool.discard_descriptor_set_layout(set_layout.get(), timeline);
+    }
+
+    discard_pool.discard_image_view(self.dummy_texture_handle.image_view.get(), timeline);
+    discard_pool.discard_image(
+      self.allocator_raw,
+      self.dummy_texture_handle.image.get(),
+      self.dummy_texture_handle.allocation,
+      timeline,
+    );
+  }
+}
+
 fn map_descriptor_type(
   reflect_type: spirv_reflect::types::ReflectDescriptorType,
 ) -> GpuResult<vk::DescriptorType> {

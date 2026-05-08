@@ -542,6 +542,31 @@ fn process_command_internal(
         .map_err(|e| EngineError::InvalidOperation(e))?;
       Ok(SimulationTaskResult::None)
     }
+    LogicCommand::TogglePaintMode(crate::simulation_api::structs::TogglePaintMode {
+      scene_id,
+      entity_id,
+    }) => {
+      let scenes = ctx.scenes.read();
+      if let Some(scene_ctx) = scenes.get(&scene_id) {
+        let read_ctx = scene_ctx.read();
+        let mut changed = false;
+        let _ = read_ctx.scene.with_component_mut(
+          entity_id,
+          |mesh: &mut crate::scene::PhysicalMeshComponent| {
+            mesh.paint_display_mode = (mesh.paint_display_mode + 1) % 3;
+            changed = true;
+          },
+        );
+        if changed {
+          // Tell the system the transform or something changed so it re-renders/updates
+          // But actually we just need to re-record the command buffer. Since we don't have a direct "re-record"
+          // signal, marking Transform as changed will trigger it.
+          let ext_id = read_ctx.entity_map.iter().find(|&(_, &v)| v == entity_id).map(|(&k, _)| k).unwrap_or(0);
+          read_ctx.mark_component_changed(ext_id, "Transform");
+        }
+      }
+      Ok(SimulationTaskResult::None)
+    }
     LogicCommand::FeedbackGetSceneTimeScale { scene_id } => {
       let scenes = ctx.scenes.read();
       let scene_ctx =
@@ -696,7 +721,7 @@ fn process_command_internal(
     } => {
       let ptr = user_data.map(|p| p.0).unwrap_or(core::ptr::null_mut());
       custom_fn(ctx, ptr)
-    }
+    },
   }
 }
 
@@ -749,6 +774,7 @@ fn execute_simulation_tick(
 
     if step_days > 0.0 {
       let logic_state = ctx.logic_state.read();
+      // 1. Update Macro Bodies First (Planets/Comets via SPICE)
       if scene_arc.should_parallelize() {
         scene_arc.query2_mut_par::<TransformComponent, crate::scene::AlmanacPlanet, _>(
           &ctx.thread_pool,
@@ -773,6 +799,25 @@ fn execute_simulation_tick(
           },
         );
       }
+
+      // 2. Update Micro Bodies Second & 4. Resolve Collisions
+      if let Some(ps_lock) = &physics_scene_arc {
+          let mut ps = ps_lock.write();
+          let kernels = crate::physics::cpu_kernels::CpuScalarKernels {};
+          // Convert current epoch to timeus_t (u64)
+          // For this example, let's use a dummy dt of step_days * 86400 * 1_000_000
+          let dt_us = (step_days * 86400.0 * 1_000_000.0) as aethervk_oshal_rlib::os::time::timeus_t;
+          let _ = crate::gpu_backends::simulation_step(
+              &kernels,
+              &mut ps,
+              scene_arc.as_ref(),
+              0,
+              dt_us
+          );
+      }
+
+      // 3. Process Handoffs
+      crate::physics::handoff::SpheresOfInfluenceSystem::process_handoffs_par(scene_arc.as_ref(), &ctx.thread_pool);
     }
 
     // Advance fixed clock step

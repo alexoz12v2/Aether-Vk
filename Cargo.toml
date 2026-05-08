@@ -2,7 +2,7 @@
 members = [
   "aethervk.core/cdylib",
   "aethervk.core/rlib",
-  "aethervk.oshal/rlib", "test/test_utils",
+  "aethervk.oshal/rlib", "test/ellipse_rendering",
 ]
 resolver = "3"
 exclude = [
@@ -15,6 +15,10 @@ exclude = [
   # `once_cell` feature = "std" sneaks into the rlib build, breaking it. Therefore, tests are excluded from our workspace
   "test/simulation_test",
   "test/anise_test",
+  "test/compute_shaders_test",
+  "test/test_utils",
+  "test/bezier_test",
+  "test/particles_motion_test",
 ]
 
 # settings to strip and optimize release

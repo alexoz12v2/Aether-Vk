@@ -28,7 +28,7 @@ void main() {
     // For each particle, we traverse the BVH to find overlaps with OTHER particles.
     // To avoid duplicates, we only report pairs where idA < idB.
 
-    BVHNodeAABB my_node = pc.particle_bvh.nodes[pc.total_particles - 1 + idx]; // Leaf node
+    BVHNodeAABB my_node = read_bvh_node(pc.particle_bvh, pc.total_particles - 1 + idx); // Leaf node
     uint my_prim_id = my_node.left_child_or_primitive_offset;
     AABB my_aabb = my_node.bound;
 

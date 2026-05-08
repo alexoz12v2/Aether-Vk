@@ -406,7 +406,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
   public void InitializeSimulationContext(
     string backend = "Vulkan",
-    string assetOverride = null,
+    string? assetOverride = null,
     bool populateDefault = true
   )
   {

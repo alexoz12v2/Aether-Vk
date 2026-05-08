@@ -311,11 +311,14 @@ impl SimulationContext {
       .scene
       .add_component(
         entity_id,
+        // TODO first test this extensively, once stable transition to new rendering
         PhysicalMeshComponent {
           asset_path: path_str,
           mesh: mesh_arc,
           emissive_intensity,
           emissive_color,
+          use_new_path: false,
+          paint_display_mode: 0,
         },
       )
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))

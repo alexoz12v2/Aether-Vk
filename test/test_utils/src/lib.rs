@@ -1,5 +1,7 @@
 pub mod app;
 pub mod command;
+pub mod horizon_jpl;
+pub mod sim_app;
 pub mod simulation;
 pub mod threading;
 
@@ -473,7 +475,7 @@ impl<'a> SceneMeshEntityBuilder<'a> {
         asset_path: asset_path.into(),
         mesh,
         emissive_intensity: 0.0,
-        emissive_color: [0.0, 0.0, 0.0],
+        emissive_color: [0.0, 0.0, 0.0], use_new_path: false, paint_display_mode: 0,
       },
     ) {
       let mut error = self.error.borrow_mut();

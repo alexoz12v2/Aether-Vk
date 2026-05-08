@@ -25,7 +25,13 @@ use crate::{
   types::{GpuError, GpuResult},
 };
 use aethervk_oshal_rlib::math::safe_div;
-use aethervk_oshal_rlib::{self as oshal, log, math::vector::vec3::Vec3f32, math::vector::{Vector, Vector3}, os::fs::FileSystemObject, os::pool::WorkloadStatus};
+use aethervk_oshal_rlib::{
+  self as oshal, log,
+  math::vector::vec3::Vec3f32,
+  math::vector::{Vector, Vector3},
+  os::fs::FileSystemObject,
+  os::pool::WorkloadStatus,
+};
 use alloc::{
   boxed::Box,
   collections::BTreeMap,
@@ -278,9 +284,8 @@ pub(super) struct PendingDownload {
 /// - implementing `Sync`
 /// - Wrapped into a RwLock/Mutex
 /// - Native Vulkan Handle, externally synchronized
-struct DeviceResources {
-  // TODO remove the GlobalDeviceAllocator struct as it adds nothing
-  allocator: memory::GlobalDeviceAllocator,
+pub struct DeviceResources {
+  pub allocator: memory::GlobalDeviceAllocator,
   discard_pool: resources::DiscardPool,
   live_presentation_engines: spin::RwLock<
     hashbrown::HashMap<PresentationEngineHandle, spin::RwLock<swapchain::PresentationState>>,
@@ -300,6 +305,9 @@ struct DeviceResources {
 
   physical_mesh_resources:
     spin::RwLock<Option<hashbrown::HashMap<RenderableInstanceId, ForwardMeshRenderResource>>>,
+  physical_mesh2_resources: spin::RwLock<
+    Option<hashbrown::HashMap<RenderableInstanceId, resources::ForwardMesh2RenderResource>>,
+  >,
   sun_resources: spin::RwLock<Option<hashbrown::HashMap<EntityId, resources::SunRenderResource>>>,
   sky_image: spin::RwLock<Option<Image>>,
   billboard_resources: spin::RwLock<Vec<Image>>,
@@ -401,19 +409,123 @@ impl DeviceResources {
     let mut write_pipeline = self.pipeline_pool.write();
     let format = presentation_engine_state.format();
 
-    self.archetypes.update_physical_mesh_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
-    self.archetypes.update_cursor_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
-    self.archetypes.update_sun_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
-    self.archetypes.update_particle_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
-    self.archetypes.update_billboard_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
-    self.archetypes.update_sky_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
-    self.archetypes.update_grid_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
-    self.archetypes.update_minimap_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
-    self.archetypes.update_measurement_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
-    self.archetypes.update_marker_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
-    self.archetypes.update_text_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
-    self.archetypes.update_bvh_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
-    self.archetypes.update_gizmo_archetype_for_presentation_engine(device, format, &mut write_pipeline, &self.renderpasses, &self.allocator.allocator, &self.discard_pool, timeline)?;
+    self.archetypes.update_physical_mesh_archetype_for_presentation_engine(
+      device,
+      format,
+      &mut write_pipeline,
+      &self.renderpasses,
+      &self.allocator.allocator,
+      &self.discard_pool,
+      timeline,
+    )?;
+    self.archetypes.update_cursor_archetype_for_presentation_engine(
+      device,
+      format,
+      &mut write_pipeline,
+      &self.renderpasses,
+      &self.allocator.allocator,
+      &self.discard_pool,
+      timeline,
+    )?;
+    self.archetypes.update_sun_archetype_for_presentation_engine(
+      device,
+      format,
+      &mut write_pipeline,
+      &self.renderpasses,
+      &self.allocator.allocator,
+      &self.discard_pool,
+      timeline,
+    )?;
+    self.archetypes.update_particle_archetype_for_presentation_engine(
+      device,
+      format,
+      &mut write_pipeline,
+      &self.renderpasses,
+      &self.allocator.allocator,
+      &self.discard_pool,
+      timeline,
+    )?;
+    self.archetypes.update_billboard_archetype_for_presentation_engine(
+      device,
+      format,
+      &mut write_pipeline,
+      &self.renderpasses,
+      &self.allocator.allocator,
+      &self.discard_pool,
+      timeline,
+    )?;
+    self.archetypes.update_sky_archetype_for_presentation_engine(
+      device,
+      format,
+      &mut write_pipeline,
+      &self.renderpasses,
+      &self.allocator.allocator,
+      &self.discard_pool,
+      timeline,
+    )?;
+    self.archetypes.update_grid_archetype_for_presentation_engine(
+      device,
+      format,
+      &mut write_pipeline,
+      &self.renderpasses,
+      &self.allocator.allocator,
+      &self.discard_pool,
+      timeline,
+    )?;
+    self.archetypes.update_minimap_archetype_for_presentation_engine(
+      device,
+      format,
+      &mut write_pipeline,
+      &self.renderpasses,
+      &self.allocator.allocator,
+      &self.discard_pool,
+      timeline,
+    )?;
+    self.archetypes.update_measurement_archetype_for_presentation_engine(
+      device,
+      format,
+      &mut write_pipeline,
+      &self.renderpasses,
+      &self.allocator.allocator,
+      &self.discard_pool,
+      timeline,
+    )?;
+    self.archetypes.update_marker_archetype_for_presentation_engine(
+      device,
+      format,
+      &mut write_pipeline,
+      &self.renderpasses,
+      &self.allocator.allocator,
+      &self.discard_pool,
+      timeline,
+    )?;
+    self.archetypes.update_text_archetype_for_presentation_engine(
+      device,
+      format,
+      &mut write_pipeline,
+      &self.renderpasses,
+      &self.allocator.allocator,
+      &self.discard_pool,
+      timeline,
+    )?;
+    self.archetypes.update_bvh_archetype_for_presentation_engine(
+      device,
+      format,
+      &mut write_pipeline,
+      &self.renderpasses,
+      &self.allocator.allocator,
+      &self.discard_pool,
+      timeline,
+    )?;
+    self.archetypes.update_gizmo_archetype_for_presentation_engine(
+      device,
+      format,
+      &mut write_pipeline,
+      &self.renderpasses,
+      &self.allocator.allocator,
+      &self.discard_pool,
+      timeline,
+    )?;
 
     Ok(())
   }
@@ -697,6 +809,68 @@ impl DeviceResources {
     )
   }
 
+  fn create_particle2_archetype(
+    &self,
+    device: &LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
+    vertex_shader_key: ShaderKey,
+    fragment_shader_key: ShaderKey,
+    depth_stencil_format: vk::Format,
+    handle: PresentationEngineHandle,
+    timeline: u64,
+  ) -> GpuResult<()> {
+    let live_presentation_engines_lock = self.live_presentation_engines.read();
+    let presentation_engine_lock = live_presentation_engines_lock.get(&handle).ok_or(
+      GpuError::InvalidArgument("[Vulkan RenderDevice] create_particle2_archetype"),
+    )?;
+    let presentation_engine_state = presentation_engine_lock.read();
+    let mut write_pipeline = self.pipeline_pool.write();
+    self.archetypes.create_particle2_archetype(
+      device,
+      shader_manager,
+      vertex_shader_key,
+      fragment_shader_key,
+      depth_stencil_format,
+      presentation_engine_state.format(),
+      &self.allocator.allocator,
+      &self.discard_pool,
+      &self.renderpasses,
+      &mut write_pipeline,
+      timeline,
+    )
+  }
+
+  fn create_trajectory_archetype(
+    &self,
+    device: &LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
+    vertex_shader_key: ShaderKey,
+    fragment_shader_key: ShaderKey,
+    depth_stencil_format: vk::Format,
+    handle: PresentationEngineHandle,
+    timeline: u64,
+  ) -> GpuResult<()> {
+    let live_presentation_engines_lock = self.live_presentation_engines.read();
+    let presentation_engine_lock = live_presentation_engines_lock.get(&handle).ok_or(
+      GpuError::InvalidArgument("[Vulkan RenderDevice] create_trajectory_archetype"),
+    )?;
+    let presentation_engine_state = presentation_engine_lock.read();
+    let mut write_pipeline = self.pipeline_pool.write();
+    self.archetypes.create_trajectory_archetype(
+      device,
+      shader_manager,
+      vertex_shader_key,
+      fragment_shader_key,
+      depth_stencil_format,
+      presentation_engine_state.format(),
+      &self.allocator.allocator,
+      &self.discard_pool,
+      &self.renderpasses,
+      &mut write_pipeline,
+      timeline,
+    )
+  }
+
   fn create_cursor_archetype(
     &self,
     device: &LogicalDevice,
@@ -796,6 +970,11 @@ impl DeviceResources {
   fn clear_discardables(&mut self, device: &ash::Device) {
     debug_assert!(self.has_discardables());
     if let Some(mut resources) = self.physical_mesh_resources.write().take() {
+      for (_, mut resource) in resources.drain() {
+        resource.discard(device, &self.discard_pool, u64::MAX);
+      }
+    }
+    if let Some(mut resources) = self.physical_mesh2_resources.write().take() {
       for (_, mut resource) in resources.drain() {
         resource.discard(device, &self.discard_pool, u64::MAX);
       }
@@ -953,6 +1132,7 @@ impl DeviceResources {
       linear_sampler: unsafe { NonZeroHandle::new_unchecked(linear_sampler) },
       timeline_manager,
       physical_mesh_resources: spin::RwLock::new(None),
+      physical_mesh2_resources: spin::RwLock::new(None),
       sun_resources: spin::RwLock::new(None),
       billboard_resources: spin::RwLock::new(Vec::with_capacity(16)),
       archetypes: Archetypes::default(),
@@ -1019,7 +1199,7 @@ impl RecordingCmdBufferData {
   }
 }
 
-pub(super) struct LogicalDevice {
+pub struct LogicalDevice {
   pub handle: ash::Device,
   pub submission_lock: Mutex<()>,
   /// Note: Remove if API_VERSION_1_2
@@ -1148,13 +1328,13 @@ where
 }
 
 pub struct Device {
-  query_result: utils::PhysicalDeviceQueryResult,
+  pub query_result: utils::PhysicalDeviceQueryResult,
   queues: Queues,
-  instance: Arc<instance::Instance>,
+  pub instance: Arc<instance::Instance>,
 
-  device: LogicalDevice,
+  pub device: LogicalDevice,
 
-  res: Arc<spin::rwlock::RwLock<DeviceResources>>,
+  pub res: Arc<spin::rwlock::RwLock<DeviceResources>>,
   callback_stop_signal: Arc<core::sync::atomic::AtomicBool>,
 
   // Some bookkeeping I don't know where to put
@@ -1476,6 +1656,9 @@ impl RenderDevice for Device {
     unsafe {
       let _ = res.discard_pool.destroy_discarded_resources_value(&self.device, timeline_val);
     }
+    if let Some(arena) = res.frame_staging_arena.write().as_mut() {
+      arena.reset();
+    }
     Ok(())
   }
 
@@ -1491,7 +1674,7 @@ impl RenderDevice for Device {
       let (vkey, fkey, ovkey, ofkey) =
         ensure_physical_mesh_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("create_physical_mesh_archetype after shaders shaders");
-      res_guard.create_physical_mesh_archetype(
+      self.res.read().archetypes.create_physical_mesh_archetype(
         &self.device,
         &shader_manager,
         vkey,
@@ -1500,11 +1683,91 @@ impl RenderDevice for Device {
         ofkey,
         self.depth_stencil_format,
         &self.queues.get_graphics_queue(),
-        handle,
+        {
+          let pe_lock = res_guard.live_presentation_engines.read();
+          pe_lock.get(&handle).unwrap().read().format()
+        },
+        &res_guard.allocator.allocator,
+        &res_guard.discard_pool,
         res_guard.frame_staging_arena.write().as_mut().unwrap(),
+        &res_guard.renderpasses,
+        &mut res_guard.pipeline_pool.write(),
         timeline,
       )?;
       oshal::log!("create_physical_mesh_archetype archetype created");
+    }
+
+    if res_guard.archetypes.physical_mesh2_render_archetype.read().is_none() {
+      oshal::log!("create_physical_mesh2_archetype before shaders");
+
+      let vkey = shader_manager
+        .get_or_load(
+          &self.device,
+          &oshal::os::fs::PathBuf::from(format!(
+            "{}/physical_mesh2.vert.spv",
+            crate::gpu::ASSET_DIR.read().as_ref().unwrap()
+          )),
+          "main",
+          spirv::ExecutionModel::Vertex,
+        )
+        .unwrap();
+      let fkey = shader_manager
+        .get_or_load(
+          &self.device,
+          &oshal::os::fs::PathBuf::from(format!(
+            "{}/physical_mesh2.frag.spv",
+            crate::gpu::ASSET_DIR.read().as_ref().unwrap()
+          )),
+          "main",
+          spirv::ExecutionModel::Fragment,
+        )
+        .unwrap();
+      let ovkey = shader_manager
+        .get_or_load(
+          &self.device,
+          &oshal::os::fs::PathBuf::from(format!(
+            "{}/physical_mesh2_outline.vert.spv",
+            crate::gpu::ASSET_DIR.read().as_ref().unwrap()
+          )),
+          "main",
+          spirv::ExecutionModel::Vertex,
+        )
+        .unwrap();
+      let ofkey = shader_manager
+        .get_or_load(
+          &self.device,
+          &oshal::os::fs::PathBuf::from(format!(
+            "{}/physical_mesh2_outline.frag.spv",
+            crate::gpu::ASSET_DIR.read().as_ref().unwrap()
+          )),
+          "main",
+          spirv::ExecutionModel::Fragment,
+        )
+        .unwrap();
+
+      oshal::log!("create_physical_mesh2_archetype after shaders shaders");
+
+      let pe_lock = res_guard.live_presentation_engines.read();
+      let pe = pe_lock.get(&handle).unwrap().read();
+
+      self.res.read().archetypes.create_physical_mesh2_archetype(
+        &self.device,
+        &shader_manager,
+        vkey,
+        fkey,
+        ovkey,
+        ofkey,
+        self.depth_stencil_format,
+        &self.queues.get_graphics_queue(),
+        pe.format(),
+        &res_guard.allocator.allocator,
+        &res_guard.discard_pool,
+        res_guard.frame_staging_arena.write().as_mut().unwrap(),
+        &res_guard.renderpasses,
+        &mut res_guard.pipeline_pool.write(),
+        timeline,
+      )?;
+      oshal::log!("create_physical_mesh2_archetype archetype created");
     }
 
     if res_guard.archetypes.sun_render_archetype.read().is_none() {
@@ -1544,6 +1807,21 @@ impl RenderDevice for Device {
       let (vkey, fkey) = ensure_particle_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("particle_render_archetype after shaders");
       res_guard.create_particle_archetype(
+        &self.device,
+        &shader_manager,
+        vkey,
+        fkey,
+        self.depth_stencil_format,
+        handle,
+        timeline,
+      )?;
+    }
+
+    if res_guard.archetypes.particle2_render_archetype.read().is_none() {
+      oshal::log!("particle2_render_archetype before shaders");
+      let (vkey, fkey) = ensure_particle2_shader_modules(&self.device, &mut shader_manager)?;
+      oshal::log!("particle2_render_archetype after shaders");
+      res_guard.create_particle2_archetype(
         &self.device,
         &shader_manager,
         vkey,
@@ -1729,6 +2007,22 @@ impl RenderDevice for Device {
       oshal::log!("gizmo_render_archetype archetype created");
     }
 
+    if res_guard.archetypes.trajectory_render_archetype.read().is_none() {
+      oshal::log!("trajectory_render_archetype before shaders");
+      let (vkey, fkey) = ensure_trajectory_shader_modules(&self.device, &mut shader_manager)?;
+      oshal::log!("trajectory_render_archetype after shaders");
+      res_guard.create_trajectory_archetype(
+        &self.device,
+        &shader_manager,
+        vkey,
+        fkey,
+        self.depth_stencil_format,
+        handle,
+        timeline,
+      )?;
+      oshal::log!("trajectory_render_archetype archetype created");
+    }
+
     Ok(())
   }
 
@@ -1796,12 +2090,12 @@ impl RenderDevice for Device {
     let presentation_engine = presentation_engine_lock.into_inner();
 
     let res_read = self.res.read();
-    let timeline = res_read.timeline_manager.get_cached_value();
+    let timeline = res_read.timeline_manager.get_next_submit_value();
 
-    // Add an offset to ensure any in-flight frames are fully completed by the GPU
+    // Discard using the next submit value to ensure all currently queued frames are completed
     res_read
       .discard_pool
-      .discard_type_erased(presentation_engine, timeline + swapchain::MAX_FRAMES as u64);
+      .discard_type_erased(presentation_engine, timeline);
 
     Ok(())
   }
@@ -1842,11 +2136,7 @@ impl RenderDevice for Device {
 
     let res_guard = self.res.read();
     let timeline = res_guard.timeline_manager.get_next_submit_value() - 1;
-    res_guard.update_all_archetypes_for_presentation_engine(
-      &self.device,
-      handle,
-      timeline,
-    )?;
+    res_guard.update_all_archetypes_for_presentation_engine(&self.device, handle, timeline)?;
 
     Ok(())
   }
@@ -2133,6 +2423,423 @@ impl RenderDevice for Device {
       indirect_buffer: None,
       descriptor_index: None,
     })
+  }
+
+  fn get_physical_mesh2_resources(
+    &self,
+    entity_id: EntityId,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult> {
+    let res_guard = self.res.read();
+    let (pipeline_key, outline_pipeline_key) = {
+      let color_format = {
+        let pe_lock = res_guard.live_presentation_engines.read();
+        let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+        pe.format()
+      };
+
+      let archetype_guard = res_guard.archetypes.physical_mesh2_render_archetype.read();
+      if archetype_guard.is_none() {
+        return Err(GpuError::InvalidState(
+          "[Vulkan RenderDevice] get_or_create_physical_mesh2_resources",
+        ));
+      }
+      let archetype_ref = archetype_guard.as_ref().unwrap();
+      let pipeline_key = archetype_ref.pipeline_key(color_format).ok_or(GpuError::NotFound)?;
+      let outline_pipeline_key = archetype_ref.pipeline_key_outline_pipeline_map(color_format);
+      (pipeline_key, outline_pipeline_key)
+    };
+
+    let physical_mesh_id = RenderableInstanceId::from_physical_mesh(entity_id);
+
+    let read_resources = res_guard.physical_mesh2_resources.read();
+    read_resources
+      .as_ref()
+      .and_then(|resources| resources.get(&physical_mesh_id))
+      .map(|resource| ResourceUploadResult {
+        pipeline: pipeline_key,
+        outline_pipeline: outline_pipeline_key,
+        buffers: physical_mesh_id.into(),
+        texture_flags: resource.frontend_texture_flags(),
+        indirect_buffer: None,
+        descriptor_index: None,
+      })
+      .ok_or(GpuError::NotFound)
+  }
+
+  fn create_physical_mesh2_resources(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    entity_id: EntityId,
+    component: &PhysicalMeshComponent,
+    handle: PresentationEngineHandle,
+    debug_name: &str,
+  ) -> GpuResult<ResourceUploadResult> {
+    let res_guard = self.res.read();
+    let physical_mesh_id = RenderableInstanceId::from_physical_mesh(entity_id);
+
+    let cmd = {
+      let cmd_buffers = self.recording_command_buffers.read();
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
+        "[Vulkan RenderDevice] set_line_width: invalid command buffer handle",
+      ))?;
+      data.command_buffer.get()
+    };
+
+    let (resource, texture_flags) = 'resource_creation: {
+      let res_guard = self.res.read();
+
+      let position_data = extract_position_data(&component.mesh);
+      let attribute_data = extract_attribute_data(&component.mesh);
+      let mut texture_flags: TextureFlags = TextureFlags::empty();
+      let albedo_image = component.mesh.albedo_map.as_ref().and_then(|t| {
+        texture_flags |= TextureFlags::ALBEDO;
+        Image::new_2d(
+          &self.device,
+          &res_guard.allocator.allocator,
+          cmd,
+          res_guard.frame_staging_arena.write().as_mut().unwrap(),
+          &t,
+          vk::ImageUsageFlags::SAMPLED,
+          &alloc::format!("TextureAlbedo_{}", debug_name),
+        )
+        .ok()
+      });
+      let normal_image = component.mesh.normal_map.as_ref().and_then(|t| {
+        texture_flags |= TextureFlags::NORMAL;
+        Image::new_2d(
+          &self.device,
+          &res_guard.allocator.allocator,
+          cmd,
+          res_guard.frame_staging_arena.write().as_mut().unwrap(),
+          &t,
+          vk::ImageUsageFlags::SAMPLED,
+          &alloc::format!("TextureNormal_{}", debug_name),
+        )
+        .ok()
+      });
+      let roughness_image = component.mesh.roughness_map.as_ref().and_then(|t| {
+        texture_flags |= TextureFlags::ROUGHNESS;
+        Image::new_2d(
+          &self.device,
+          &res_guard.allocator.allocator,
+          cmd,
+          res_guard.frame_staging_arena.write().as_mut().unwrap(),
+          &t,
+          vk::ImageUsageFlags::SAMPLED,
+          &alloc::format!("TextureRoughness_{}", debug_name),
+        )
+        .ok()
+      });
+      let ao_image = component.mesh.ao_map.as_ref().and_then(|t| {
+        texture_flags |= TextureFlags::AO;
+        Image::new_2d(
+          &self.device,
+          &res_guard.allocator.allocator,
+          cmd,
+          res_guard.frame_staging_arena.write().as_mut().unwrap(),
+          &t,
+          vk::ImageUsageFlags::SAMPLED,
+          &alloc::format!("TextureAO_{}", debug_name),
+        )
+        .ok()
+      });
+
+      let archetype = res_guard.archetypes.physical_mesh2_render_archetype.read();
+      let archetype_ref = archetype.as_ref().unwrap();
+
+      let material_data = crate::gpu::MaterialData {
+        base_albedo: [1.0, 1.0, 1.0, 1.0],
+        emissive_color: [
+          component.emissive_color[0],
+          component.emissive_color[1],
+          component.emissive_color[2],
+          component.emissive_intensity,
+        ],
+        base_ao: 1.0,
+        paint_display_mode: component.paint_display_mode,
+        texture_flags: texture_flags.bits(),
+        _pad0: 0.0,
+      };
+
+      let object_data = crate::gpu::ObjectData {
+        model: [
+          1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ],
+      };
+
+      let resource = unsafe {
+        let dp_lock = res_guard.descriptor_pool.read();
+        let descriptor_set = archetype_ref.create_descriptor_set_from_layout_at_index(
+          &self.device,
+          dp_lock.as_ref().unwrap_unchecked(),
+          &res_guard.discard_pool,
+          0,
+          debug_name,
+        )?;
+
+        crate::gpu_backends::vulkan::device::resources::ForwardMesh2RenderResource::new(
+          &self.device,
+          &res_guard.allocator.allocator,
+          cmd,
+          res_guard.frame_staging_arena.write().as_mut().unwrap(),
+          &position_data,
+          &attribute_data,
+          &component.mesh.indices,
+          &material_data,
+          &object_data,
+          albedo_image,
+          normal_image,
+          roughness_image,
+          ao_image,
+          res_guard
+            .sky_image
+            .read()
+            .as_ref()
+            .map(|sky| resources::Image {
+              image: sky.image,
+              image_view: sky.image_view,
+              allocation: sky.allocation,
+            })
+            .or_else(|| {
+              Some(resources::Image {
+                image: archetype_ref.dummy_texture_handle.image,
+                image_view: archetype_ref.dummy_texture_handle.image_view,
+                allocation: archetype_ref.dummy_texture_handle.allocation,
+              })
+            }),
+          Some({
+            let img = crate::gpu_backends::vulkan::device::resources::Image::new_paint_image(
+              &self.device,
+              &res_guard.allocator.allocator,
+              1024,
+              1024,
+              &alloc::format!("EmissivePaint_{}", debug_name),
+            )?;
+
+            let image_barrier = ash::vk::ImageMemoryBarrier2::default()
+              .src_stage_mask(ash::vk::PipelineStageFlags2::NONE)
+              .src_access_mask(ash::vk::AccessFlags2::NONE)
+              .dst_stage_mask(ash::vk::PipelineStageFlags2::FRAGMENT_SHADER)
+              .dst_access_mask(ash::vk::AccessFlags2::SHADER_READ)
+              .old_layout(ash::vk::ImageLayout::UNDEFINED)
+              .new_layout(ash::vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+              .image(img.image.get())
+              .subresource_range(
+                ash::vk::ImageSubresourceRange::default()
+                  .aspect_mask(ash::vk::ImageAspectFlags::COLOR)
+                  .base_mip_level(0)
+                  .level_count(1)
+                  .base_array_layer(0)
+                  .layer_count(1),
+              );
+
+            let dep_info = ash::vk::DependencyInfo::default()
+              .image_memory_barriers(core::slice::from_ref(&image_barrier));
+            unsafe {
+              self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info);
+            }
+            img
+          }), // emissive_paint_image
+          res_guard.linear_sampler,
+          descriptor_set,
+          &archetype_ref.dummy_texture_handle,
+          debug_name,
+        )?
+      };
+
+      break 'resource_creation (resource, texture_flags);
+    };
+
+    let res_guard = self.res.read();
+    let (pipeline_key, outline_pipeline_key) = {
+      let color_format = {
+        let pe_lock = res_guard.live_presentation_engines.read();
+        let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+        pe.format()
+      };
+
+      let archetype_guard = res_guard.archetypes.physical_mesh2_render_archetype.read();
+      if archetype_guard.is_none() {
+        return Err(GpuError::InvalidState(
+          "[Vulkan RenderDevice] create_physical_mesh2_resources",
+        ));
+      }
+      let archetype_ref = archetype_guard.as_ref().unwrap();
+      let pipeline_key = archetype_ref.pipeline_key(color_format).ok_or(GpuError::NotFound)?;
+      let outline_pipeline_key = archetype_ref.pipeline_key_outline_pipeline_map(color_format);
+      (pipeline_key, outline_pipeline_key)
+    };
+
+    let mut write_resources = res_guard.physical_mesh2_resources.write();
+    if write_resources.is_none() {
+      *write_resources = Some(hashbrown::HashMap::new());
+    }
+
+    let old_resource = write_resources.as_mut().unwrap().insert(physical_mesh_id, resource);
+
+    if let Some(mut old) = old_resource {
+      let timeline = res_guard.timeline_manager.get_next_submit_value();
+      old.discard(&self.device, &res_guard.discard_pool, timeline);
+    }
+
+    Ok(ResourceUploadResult {
+      pipeline: pipeline_key,
+      outline_pipeline: outline_pipeline_key,
+      buffers: physical_mesh_id.into(),
+      texture_flags,
+      indirect_buffer: None,
+      descriptor_index: None,
+    })
+  }
+
+  fn draw_physical_mesh2(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    pipeline: PipelineKey,
+    buffers: GpuResourceHandle,
+    camera: &crate::gpu::frame::CameraRenderData,
+    sun_pos: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
+    sun_color: [f32; 4],
+    window_extent: [f32; 2],
+    draw_call: &crate::gpu::frame::DrawCall,
+  ) -> GpuResult<()> {
+    let res_guard = self.res.read();
+
+    let physical_mesh_id = RenderableInstanceId(buffers.0);
+    let read_resources = res_guard.physical_mesh2_resources.read();
+    let resource = read_resources
+      .as_ref()
+      .and_then(|r| r.get(&physical_mesh_id))
+      .ok_or(GpuError::InvalidState("Physical mesh 2 resource missing"))?;
+
+    // Wait, the plan was to use FrameStagingArena to dynamically allocate SceneData, MaterialData, ObjectData per frame.
+    // However, I created MaterialData and ObjectData inside ForwardMesh2RenderResource instead of FrameStagingArena during draw_call!
+    // So I need to use the buffers stored in the resource, but update them, or just use the device addresses directly if they are static.
+
+    // Ah, wait. ObjectData needs to change per frame (it has model matrix). SceneData changes per frame.
+    // So doing them inside ForwardMesh2RenderResource.new is WRONG, since it only runs once per entity creation!
+    // We MUST allocate them per frame in draw_physical_mesh2 using FrameStagingArena.
+
+    let mut staging_arena = res_guard.frame_staging_arena.write();
+    let arena = staging_arena.as_mut().unwrap();
+
+    let scene_data = crate::gpu::SceneData {
+      view_proj: (camera.view_proj).into(),
+      camera_pos: [camera.pos.x(), camera.pos.y(), camera.pos.z(), 0.0],
+      sun_pos: [sun_pos.x(), sun_pos.y(), sun_pos.z(), 0.0],
+      sun_color,
+      window_extent,
+      _pad: [0.0, 0.0],
+    };
+
+    let material_data = crate::gpu::MaterialData {
+      base_albedo: [1.0, 1.0, 1.0, 1.0],
+      emissive_color: [
+        draw_call.emissive_color[0],
+        draw_call.emissive_color[1],
+        draw_call.emissive_color[2],
+        draw_call.emissive_intensity,
+      ],
+      base_ao: 1.0,
+      paint_display_mode: draw_call.paint_display_mode,
+      texture_flags: draw_call.texture_flags.bits(),
+      _pad0: 0.0,
+    };
+
+    let object_data = crate::gpu::ObjectData {
+      model: draw_call.model_matrix.into(),
+    };
+
+    // Allocate from staging arena
+    let (scene_offset, scene_ptr) = arena
+      .allocate(core::mem::size_of::<crate::gpu::SceneData>(), 8)
+      .ok_or(GpuError::OutOfMemory)?;
+    unsafe {
+      core::ptr::copy_nonoverlapping(
+        &scene_data as *const _ as *const u8,
+        scene_ptr,
+        core::mem::size_of::<crate::gpu::SceneData>(),
+      );
+    }
+
+    let (material_offset, material_ptr) = arena
+      .allocate(core::mem::size_of::<crate::gpu::MaterialData>(), 8)
+      .ok_or(GpuError::OutOfMemory)?;
+    unsafe {
+      core::ptr::copy_nonoverlapping(
+        &material_data as *const _ as *const u8,
+        material_ptr,
+        core::mem::size_of::<crate::gpu::MaterialData>(),
+      );
+    }
+
+    let (object_offset, object_ptr) = arena
+      .allocate(core::mem::size_of::<crate::gpu::ObjectData>(), 8)
+      .ok_or(GpuError::OutOfMemory)?;
+    unsafe {
+      core::ptr::copy_nonoverlapping(
+        &object_data as *const _ as *const u8,
+        object_ptr,
+        core::mem::size_of::<crate::gpu::ObjectData>(),
+      );
+    }
+
+    // Get device address of arena
+    let base_addr = unsafe {
+      self
+        .device
+        .buffer_device_address
+        .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(arena.buffer))
+    };
+
+    let push = crate::gpu::PhysicalMesh2PushConstants {
+      scene_addr: base_addr + scene_offset as u64,
+      material_addr: base_addr + material_offset as u64,
+      object_addr: base_addr + object_offset as u64,
+    };
+
+    let cmd = {
+      let cmd_buffers = self.recording_command_buffers.read();
+      cmd_buffers.get(&cmd_buffer).unwrap().command_buffer.get()
+    };
+
+    // bind the single bindless descriptor set
+    unsafe {
+      self.device.cmd_bind_descriptor_sets(
+        cmd,
+        vk::PipelineBindPoint::GRAPHICS,
+        res_guard
+          .archetypes
+          .physical_mesh2_render_archetype
+          .read()
+          .as_ref()
+          .unwrap()
+          .pipeline_layout
+          .get(),
+        0,
+        core::slice::from_ref(&resource.descriptor_set.get()),
+        &[],
+      );
+
+      let vertex_buffers = [
+        resource.position_vertex_buffer.buffer.get(),
+        resource.attributes_vertex_buffer.buffer.get(),
+      ];
+      let offsets = [0, 0];
+      self.device.cmd_bind_vertex_buffers(cmd, 0, &vertex_buffers, &offsets);
+      self.device.cmd_bind_index_buffer(
+        cmd,
+        resource.index_buffer.buffer.get(),
+        0,
+        vk::IndexType::UINT32,
+      );
+    }
+
+    self.push_constants_mesh2(cmd_buffer, &push)?;
+    self.draw_indexed(cmd_buffer, draw_call.index_count)?;
+
+    Ok(())
   }
 
   fn generate_sky(&self) -> GpuResult<()> {
@@ -2883,6 +3590,352 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  fn upload_trajectories(
+    &self,
+    cmd_buffer: gpu::CommandBufferHandle,
+    handle: PresentationEngineHandle,
+    trajectories: &[(
+      crate::scene::EntityId,
+      crate::scene::trajectory::TrajectoryComponent,
+      aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+    )],
+  ) -> GpuResult<Option<crate::gpu::frame::TrajectoryBatchCall>> {
+    if trajectories.is_empty() {
+      return Ok(None);
+    }
+
+    #[repr(C, align(16))]
+    #[derive(Copy, Clone)]
+    struct RationalBezierGpu {
+      cp0: [f32; 4],
+      cp1: [f32; 4],
+      cp2: [f32; 4],
+      cp3: [f32; 4],
+    }
+
+    #[repr(C, align(8))]
+    #[derive(Copy, Clone)]
+    struct TrajectoryGpu {
+      segments_ptr: u64,
+      color: [f32; 4],
+      line_width: f32,
+      texture_id: u32,
+    }
+
+    #[repr(C, align(4))]
+    #[derive(Copy, Clone)]
+    struct SegmentMapGpu {
+      trajectory_id: u32,
+      local_segment_id: u32,
+      subdivisions: u32,
+    }
+
+    let mut segment_maps = alloc::vec::Vec::new();
+    let mut traj_gpus = alloc::vec::Vec::new();
+    let mut all_segments = alloc::vec::Vec::new();
+
+    let mut total_segments = 0;
+    for (i, (_, traj_comp, model_mat)) in trajectories.iter().enumerate() {
+      let local_segments_count = traj_comp.control_points.len() / 4;
+      for j in 0..local_segments_count {
+        segment_maps.push(SegmentMapGpu {
+          trajectory_id: i as u32,
+          local_segment_id: j as u32,
+          subdivisions: traj_comp.subdivisions_per_segment,
+        });
+
+        use aethervk_oshal_rlib::math::matrix::MatrixVectorMul;
+        use aethervk_oshal_rlib::math::vector::{Vector4, vec4::Vec4f32};
+
+        let pt0 = traj_comp.control_points[j * 4];
+        let pt1 = traj_comp.control_points[j * 4 + 1];
+        let pt2 = traj_comp.control_points[j * 4 + 2];
+        let pt3 = traj_comp.control_points[j * 4 + 3];
+
+        all_segments.push(RationalBezierGpu {
+          cp0: pt0,
+          cp1: pt1,
+          cp2: pt2,
+          cp3: pt3,
+        });
+      }
+
+      traj_gpus.push(TrajectoryGpu {
+        segments_ptr: 0, // Will be filled later
+        color: traj_comp.color,
+        line_width: traj_comp.line_width,
+        texture_id: traj_comp.texture_id,
+      });
+
+      total_segments += local_segments_count as u32;
+    }
+
+    if total_segments == 0 {
+      return Ok(None);
+    }
+
+    let res_guard = self.res.read();
+    let archetype_guard = res_guard.archetypes.trajectory_render_archetype.read();
+    if archetype_guard.is_none() {
+      return Err(GpuError::InvalidState(
+        "[Vulkan RenderDevice] upload_trajectories | archetype absent",
+      ));
+    }
+    let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
+
+    let cmd = {
+      let cmd_buffers = self.recording_command_buffers.read();
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
+      data.command_buffer.get()
+    };
+
+    let segments_size = (all_segments.len() * core::mem::size_of::<crate::gpu::RationalBezierGpu>()) as vk::DeviceSize;
+    let traj_size = (traj_gpus.len() * core::mem::size_of::<crate::gpu::TrajectoryGpu>()) as vk::DeviceSize;
+    let map_size = (segment_maps.len() * core::mem::size_of::<crate::gpu::SegmentMapGpu>()) as vk::DeviceSize;
+    
+    let total_size = segments_size + traj_size + map_size;
+
+    let (staging_offset, staging_ptr) = res_guard
+        .frame_staging_arena
+        .write()
+        .as_mut()
+        .unwrap()
+        .allocate(total_size as usize, 16)
+        .ok_or(crate::gpu_err!("device error"))?;
+
+    let mut current_offset = 0;
+    for (i, (_, traj_comp, _)) in trajectories.iter().enumerate() {
+      traj_gpus[i].segments_ptr = archetype.segments_ptr
+        + (current_offset as u64 * core::mem::size_of::<crate::gpu::RationalBezierGpu>() as u64);
+      current_offset += traj_comp.control_points.len() / 4;
+    }
+
+    unsafe {
+      core::ptr::copy_nonoverlapping(
+        all_segments.as_ptr() as *const u8,
+        staging_ptr,
+        segments_size as usize,
+      );
+      core::ptr::copy_nonoverlapping(
+        traj_gpus.as_ptr() as *const u8,
+        staging_ptr.add(segments_size as usize),
+        traj_size as usize,
+      );
+      core::ptr::copy_nonoverlapping(
+        segment_maps.as_ptr() as *const u8,
+        staging_ptr.add((segments_size + traj_size) as usize),
+        map_size as usize,
+      );
+    }
+
+    let staging_buffer = res_guard.frame_staging_arena.read().as_ref().unwrap().buffer;
+
+    let segments_copy = vk::BufferCopy::default()
+        .src_offset(staging_offset as vk::DeviceSize)
+        .dst_offset(0)
+        .size(segments_size);
+    let traj_copy = vk::BufferCopy::default()
+        .src_offset(staging_offset as vk::DeviceSize + segments_size)
+        .dst_offset(0)
+        .size(traj_size);
+    let map_copy = vk::BufferCopy::default()
+        .src_offset(staging_offset as vk::DeviceSize + segments_size + traj_size)
+        .dst_offset(0)
+        .size(map_size);
+
+    unsafe {
+      self.device.cmd_copy_buffer(cmd, staging_buffer, archetype.segments_buffer.get(), &[segments_copy]);
+      self.device.cmd_copy_buffer(cmd, staging_buffer, archetype.trajectories_buffer.get(), &[traj_copy]);
+      self.device.cmd_copy_buffer(cmd, staging_buffer, archetype.map_buffer.get(), &[map_copy]);
+
+      let memory_barrier = vk::MemoryBarrier2::default()
+          .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+          .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+          .dst_stage_mask(vk::PipelineStageFlags2::VERTEX_SHADER | vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::COMPUTE_SHADER)
+          .dst_access_mask(vk::AccessFlags2::SHADER_READ);
+
+      let dependency_info = vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&memory_barrier));
+      self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dependency_info);
+    }
+
+    let pe_lock = res_guard.live_presentation_engines.read();
+    let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+    let pipeline = archetype.pipeline_key(pe.format()).unwrap();
+
+    let mut max_subdivs = 0;
+    for map in &segment_maps {
+      if map.subdivisions > max_subdivs {
+        max_subdivs = map.subdivisions;
+      }
+    }
+
+    Ok(Some(crate::gpu::frame::TrajectoryBatchCall {
+      pipeline,
+      total_vertices: (max_subdivs + 1) * 2,
+      total_segments: total_segments,
+      map_ptr: archetype.map_ptr,
+      traj_ptr: archetype.trajectories_ptr,
+    }))
+  }
+
+  fn upload_particle2_systems(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    particle_calls: &mut [crate::gpu::frame::Particle2DrawCall],
+  ) -> GpuResult<()> {
+    let res_guard = self.res.read();
+    let archetype_guard = res_guard.archetypes.particle2_render_archetype.read();
+    if archetype_guard.is_none() {
+      return Ok(());
+    }
+    let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
+
+    let mut staging_arena_guard = res_guard.frame_staging_arena.write();
+    let staging_arena = staging_arena_guard.as_mut().unwrap();
+
+    let cmd = {
+      let cmd_buffers = self.recording_command_buffers.read();
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
+        "[Vulkan RenderDevice] upload_particle2_systems: invalid command buffer handle",
+      ))?;
+      data.command_buffer.get()
+    };
+
+    let particle_size = core::mem::size_of::<crate::scene::particles::ParticleData>();
+    let indirect_size = core::mem::size_of::<vk::DrawIndirectCommand>();
+
+    let mut current_particle_offset = 0;
+    let mut current_indirect_offset = 0;
+
+    for call in particle_calls.iter_mut() {
+      let particles_arc = call.particles.upgrade();
+      if particles_arc.is_none() {
+        continue;
+      }
+      let particles_arc = unsafe { particles_arc.unwrap_unchecked() };
+      let particles = particles_arc.read();
+      if particles.is_empty() {
+        continue;
+      }
+
+      call.system_particle_offset = current_particle_offset as u32;
+      call.system_indirect_offset = current_indirect_offset as u32;
+
+      let particle_data_size = particles.len() * particle_size;
+      let p_dst_offset = (current_particle_offset as usize * particle_size) as vk::DeviceSize;
+
+      let i_dst_offset = (current_indirect_offset as usize * indirect_size) as vk::DeviceSize;
+
+      let total_size = particle_data_size + indirect_size;
+      let (staging_offset, ptr) =
+        staging_arena.allocate(total_size, 16).ok_or(crate::gpu_err!("device error"))?;
+
+      unsafe {
+        core::ptr::copy_nonoverlapping(particles.as_ptr() as *const u8, ptr, particle_data_size);
+
+        let indirect_cmd = vk::DrawIndirectCommand {
+          vertex_count: 4,
+          instance_count: particles.len() as u32,
+          first_vertex: 0,
+          first_instance: current_particle_offset as u32,
+        };
+        core::ptr::copy_nonoverlapping(
+          &indirect_cmd as *const _ as *const u8,
+          ptr.add(particle_data_size),
+          indirect_size,
+        );
+      }
+
+      let p_copy = vk::BufferCopy::default()
+        .src_offset(staging_offset as u64)
+        .dst_offset(p_dst_offset)
+        .size(particle_data_size as u64);
+      let i_copy = vk::BufferCopy::default()
+        .src_offset((staging_offset + particle_data_size) as u64)
+        .dst_offset(i_dst_offset)
+        .size(indirect_size as u64);
+
+      unsafe {
+        self.device.cmd_copy_buffer(
+          cmd,
+          staging_arena.buffer,
+          archetype.mega_particle_buffer,
+          core::slice::from_ref(&p_copy),
+        );
+        self.device.cmd_copy_buffer(
+          cmd,
+          staging_arena.buffer,
+          archetype.mega_indirect_buffer,
+          core::slice::from_ref(&i_copy),
+        );
+      }
+
+      let mut p_barrier = vk::BufferMemoryBarrier::default()
+        .buffer(archetype.mega_particle_buffer)
+        .offset(p_dst_offset)
+        .size(particle_data_size as u64);
+      let mut i_barrier = vk::BufferMemoryBarrier::default()
+        .buffer(archetype.mega_indirect_buffer)
+        .offset(i_dst_offset)
+        .size(indirect_size as u64);
+
+      p_barrier.src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+      p_barrier.dst_access_mask = vk::AccessFlags::SHADER_READ;
+      i_barrier.src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+      i_barrier.dst_access_mask = vk::AccessFlags::INDIRECT_COMMAND_READ;
+      let src_stage = vk::PipelineStageFlags::TRANSFER;
+      let dst_stage = vk::PipelineStageFlags::VERTEX_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT;
+
+      unsafe {
+        self.device.cmd_pipeline_barrier(
+          cmd,
+          src_stage,
+          dst_stage,
+          vk::DependencyFlags::empty(),
+          &[],
+          &[p_barrier, i_barrier],
+          &[],
+        );
+      }
+
+      current_particle_offset += particles.len();
+      current_indirect_offset += 1;
+    }
+
+    Ok(())
+  }
+
+  fn draw_particle2_indirect(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    indirect_offset: u32,
+  ) -> GpuResult<()> {
+    let cmd = {
+      let cmd_buffers = self.recording_command_buffers.read();
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
+        "[Vulkan RenderDevice] draw_particle2_indirect: invalid command buffer handle",
+      ))?;
+      data.command_buffer.get()
+    };
+
+    let res_guard = self.res.read();
+    let archetype_guard = res_guard.archetypes.particle2_render_archetype.read();
+    let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
+
+    let i_offset = (indirect_offset as usize * core::mem::size_of::<vk::DrawIndirectCommand>())
+      as vk::DeviceSize;
+    unsafe {
+      self.device.cmd_draw_indirect(
+        cmd,
+        archetype.mega_indirect_buffer,
+        i_offset,
+        1,
+        core::mem::size_of::<vk::DrawIndirectCommand>() as u32,
+      );
+    }
+    Ok(())
+  }
+
   fn get_particle_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey> {
     let res_guard = self.res.read();
     let pe_lock = res_guard.live_presentation_engines.read();
@@ -2890,6 +3943,29 @@ impl RenderDevice for Device {
     let archetype = res_guard.archetypes.particle_render_archetype.read();
     archetype.as_ref().and_then(|a| a.pipeline_key(pe.format())).ok_or(GpuError::InvalidState(
       "[Vulkan RenderDevice] get_particle_pipeline_key failed",
+    ))
+  }
+
+  fn get_particle2_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey> {
+    let res_guard = self.res.read();
+    let pe_lock = res_guard.live_presentation_engines.read();
+    let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+    let archetype = res_guard.archetypes.particle2_render_archetype.read();
+    archetype.as_ref().and_then(|a| a.pipeline_key(pe.format())).ok_or(GpuError::InvalidState(
+      "[Vulkan RenderDevice] get_particle2_pipeline_key failed",
+    ))
+  }
+
+  fn get_trajectory_pipeline_key(
+    &self,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<PipelineKey> {
+    let res_guard = self.res.read();
+    let pe_lock = res_guard.live_presentation_engines.read();
+    let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+    let archetype = res_guard.archetypes.trajectory_render_archetype.read();
+    archetype.as_ref().and_then(|a| a.pipeline_key(pe.format())).ok_or(GpuError::InvalidState(
+      "[Vulkan RenderDevice] get_trajectory_pipeline_key failed",
     ))
   }
 
@@ -3680,6 +4756,24 @@ impl RenderDevice for Device {
       ArchetypeId::Gizmo => {
         res_guard.archetypes.gizmo_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
       }
+      ArchetypeId::PhysicalMesh2 => res_guard
+        .archetypes
+        .physical_mesh2_render_archetype
+        .read()
+        .as_ref()
+        .map(|a| a.pipeline_layout.get()),
+      ArchetypeId::Particle2 => res_guard
+        .archetypes
+        .particle2_render_archetype
+        .read()
+        .as_ref()
+        .map(|a| a.pipeline_layout.get()),
+      ArchetypeId::Trajectory => res_guard
+        .archetypes
+        .trajectory_render_archetype
+        .read()
+        .as_ref()
+        .map(|a| a.pipeline_layout.get()),
     }
     .ok_or(GpuError::InvalidArgument(
       "[Vulkan RenderDevice] push_constant_raw | archetype not initialized",
@@ -3727,6 +4821,26 @@ impl RenderDevice for Device {
 
     unsafe {
       self.device.cmd_draw(cmd, vertex_count, 1, 0, 0);
+    }
+
+    Ok(())
+  }
+
+  fn draw_instanced(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    vertex_count: u32,
+    instance_count: u32,
+  ) -> GpuResult<()> {
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
+      "[Vulkan RenderDevice] draw_instanced: invalid command buffer handle",
+    ))?;
+
+    let cmd = data.command_buffer.get();
+
+    unsafe {
+      self.device.cmd_draw(cmd, vertex_count, instance_count, 0, 0);
     }
 
     Ok(())
@@ -4239,6 +5353,88 @@ impl RenderDevice for Device {
     if archetype_guard.is_none() {
       return Err(GpuError::InvalidState(
         "[Vulkan RenderDevice] prepare_particle_archetype_for_render_and_bind_pipeline | archetype absent",
+      ));
+    }
+    let archetype = archetype_guard.as_ref().unwrap();
+    let pipeline = {
+      let pe_lock = res_guard.live_presentation_engines.read();
+      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+      archetype.pipeline_key(pe.format()).ok_or(GpuError::NotFound)?
+    };
+
+    let cmd = {
+      let cmd_buffers = self.recording_command_buffers.read();
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
+      data.command_buffer.get()
+    };
+
+    let p = res_guard.pipeline_pool.read().get_graphics_pipeline(pipeline).unwrap();
+
+    unsafe {
+      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, p.get());
+      self.device.cmd_bind_descriptor_sets(
+        cmd,
+        vk::PipelineBindPoint::GRAPHICS,
+        archetype.pipeline_layout.get(),
+        0,
+        &[archetype.descriptor_set.get()],
+        &[],
+      );
+    }
+    Ok(())
+  }
+
+  fn prepare_particle2_archetype_for_render_and_bind_pipeline(
+    &self,
+    cmd_buffer: gpu::CommandBufferHandle,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()> {
+    let res_guard = self.res.read();
+    let archetype_guard = res_guard.archetypes.particle2_render_archetype.read();
+    if archetype_guard.is_none() {
+      return Err(GpuError::InvalidState(
+        "[Vulkan RenderDevice] prepare_particle2_archetype_for_render_and_bind_pipeline | archetype absent",
+      ));
+    }
+    let archetype = archetype_guard.as_ref().unwrap();
+    let pipeline = {
+      let pe_lock = res_guard.live_presentation_engines.read();
+      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+      archetype.pipeline_key(pe.format()).ok_or(GpuError::NotFound)?
+    };
+
+    let cmd = {
+      let cmd_buffers = self.recording_command_buffers.read();
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
+      data.command_buffer.get()
+    };
+
+    let p = res_guard.pipeline_pool.read().get_graphics_pipeline(pipeline).unwrap();
+
+    unsafe {
+      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, p.get());
+      self.device.cmd_bind_descriptor_sets(
+        cmd,
+        vk::PipelineBindPoint::GRAPHICS,
+        archetype.pipeline_layout.get(),
+        0,
+        &[archetype.descriptor_set.get()],
+        &[],
+      );
+    }
+    Ok(())
+  }
+
+  fn prepare_trajectory_archetype_for_render_and_bind_pipeline(
+    &self,
+    cmd_buffer: gpu::CommandBufferHandle,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()> {
+    let res_guard = self.res.read();
+    let archetype_guard = res_guard.archetypes.trajectory_render_archetype.read();
+    if archetype_guard.is_none() {
+      return Err(GpuError::InvalidState(
+        "[Vulkan RenderDevice] prepare_trajectory_archetype_for_render_and_bind_pipeline | archetype absent",
       ));
     }
     let archetype = archetype_guard.as_ref().unwrap();
@@ -5010,7 +6206,7 @@ impl RenderDevice for Device {
       }
 
       let res = unsafe {
-        self.device.queue_submit(
+        self.device.locked_queue_submit(
           graphics_queue.handle,
           &[submit_info],
           submission_fence.get(),
@@ -5644,6 +6840,26 @@ fn ensure_particle_shader_modules(
   Ok((vert_key, frag_key))
 }
 
+fn ensure_particle2_shader_modules(
+  device: &LogicalDevice,
+  shader_manager: &mut shader_manager::ShaderManager,
+) -> GpuResult<(ShaderKey, ShaderKey)> {
+  let vert_path: PathBuf;
+  let frag_path: PathBuf;
+
+  let assets_dir = shaders_asset_dir()?;
+
+  vert_path = assets_dir.join("particle2.vert.spv");
+  frag_path = assets_dir.join("particle2.frag.spv");
+
+  let vert_key =
+    shader_manager.get_or_load(&device, &vert_path, "main", spirv::ExecutionModel::Vertex)?;
+  let frag_key =
+    shader_manager.get_or_load(&device, &frag_path, "main", spirv::ExecutionModel::Fragment)?;
+
+  Ok((vert_key, frag_key))
+}
+
 fn ensure_marker_shader_modules(
   device: &LogicalDevice,
   shader_manager: &mut shader_manager::ShaderManager,
@@ -5727,6 +6943,33 @@ fn ensure_cursor_shader_modules(
     shader_manager.get_or_load(&device, &frag_path, "main", spirv::ExecutionModel::Fragment)?;
 
   Ok((vert_key, frag_key))
+}
+
+fn ensure_trajectory_shader_modules(
+  device: &LogicalDevice,
+  shader_manager: &mut shader_manager::ShaderManager,
+) -> GpuResult<(shader_manager::ShaderKey, shader_manager::ShaderKey)> {
+  let vert_path: aethervk_oshal_rlib::os::fs::PathBuf;
+  let frag_path: aethervk_oshal_rlib::os::fs::PathBuf;
+
+  let assets_dir = shaders_asset_dir()?;
+  vert_path = assets_dir.join("trajectory.vert.spv");
+  frag_path = assets_dir.join("trajectory.frag.spv");
+
+  let vkey = shader_manager.get_or_load(
+    device,
+    vert_path.as_ref(),
+    "main",
+    spirv::ExecutionModel::Vertex,
+  )?;
+  let fkey = shader_manager.get_or_load(
+    device,
+    frag_path.as_ref(),
+    "main",
+    spirv::ExecutionModel::Fragment,
+  )?;
+
+  Ok((vkey, fkey))
 }
 
 fn ensure_gizmo_shader_modules(

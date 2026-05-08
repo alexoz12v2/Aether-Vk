@@ -95,6 +95,22 @@ namespace AetherVk.Services
       await window.ShowDialog(mainWindow);
     }
 
+    public async Task ShowSettingsDialogAsync()
+    {
+      var mainWindow = GetMainWindow();
+      if (mainWindow == null)
+        return;
+
+      var inputRegistry = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<AetherVk.Logic.Input.InputRegistry>(App.Host!.Services);
+      
+      var settingsWindow = new Views.SettingsWindow
+      {
+          DataContext = new SettingsViewModel(inputRegistry)
+      };
+
+      await settingsWindow.ShowDialog(mainWindow);
+    }
+
     public Task OpenMeshViewerAsync(string meshId)
     {
       var mainWindow = GetMainWindow();
@@ -122,6 +138,8 @@ namespace AetherVk.Services
             _consoleService
           ),
         };
+        var inputRegistry = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<AetherVk.Logic.Input.InputRegistry>(App.Host!.Services);
+        _ = new AetherVk.Input.GlobalInputRouter(meshViewer, inputRegistry);
         meshViewer.Show(mainWindow);
       }
       return Task.CompletedTask;

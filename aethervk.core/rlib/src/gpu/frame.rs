@@ -46,6 +46,8 @@ pub struct DrawCall {
   pub emissive_color: [f32; 3],
   pub draw_outline: bool,
   pub outline_color: [f32; 4],
+  pub use_new_path: bool,
+  pub paint_display_mode: u32,
 }
 
 impl DrawCall {
@@ -56,6 +58,8 @@ impl DrawCall {
     model_matrix: Mat4x4f32,
     emissive_intensity: f32,
     emissive_color: [f32; 3],
+    use_new_path: bool,
+    paint_display_mode: u32,
   ) -> Self {
     Self {
       pipeline: result.pipeline,
@@ -68,6 +72,8 @@ impl DrawCall {
       emissive_color,
       draw_outline: outline.is_some(),
       outline_color: outline.unwrap_or([0.0; 4]),
+      use_new_path,
+      paint_display_mode,
     }
   }
 }
@@ -419,6 +425,23 @@ pub struct ParticleDrawCall {
   pub particles: alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
 }
 
+pub struct Particle2DrawCall {
+  pub pipeline: PipelineKey,
+  pub system_particle_offset: u32,
+  pub system_indirect_offset: u32,
+  pub config: crate::scene::particles::ParticleEmitterConfig,
+  pub particles: alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
+}
+
+#[derive(Clone)]
+pub struct TrajectoryBatchCall {
+    pub pipeline: PipelineKey,
+    pub total_vertices: u32, // (MAX_STEPS + 1) * 2
+    pub total_segments: u32, // TOTAL_SEGMENTS_ACROSS_ALL_TRAJECTORIES
+    pub map_ptr: u64,
+    pub traj_ptr: u64,
+}
+
 pub struct RenderScene {
   pub time_readings: aethervk_oshal_rlib::os::time::TimeReadings,
   pub camera_data: CameraRenderData,
@@ -431,11 +454,13 @@ pub struct RenderScene {
   pub bvh_draw_calls: Vec<BvhDrawCall>,
   pub gizmo_calls: Vec<GizmoDrawCall>,
   pub particle_calls: Vec<ParticleDrawCall>,
+  pub particle2_calls: Vec<Particle2DrawCall>,
 
   pub cursor_call: Option<CursorDrawCall>,
   pub sun_call: Option<SunDrawCall>,
   pub sky_call: Option<SkyDrawCall>,
   pub grid_call: Option<GridDrawCall>,
+  pub trajectory_call: Option<TrajectoryBatchCall>,
 }
 
 impl RenderScene {
@@ -456,10 +481,12 @@ impl RenderScene {
       bvh_draw_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
       gizmo_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
       particle_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
+      particle2_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
       camera_data: CameraRenderData::new(&camera.0, &camera.1),
       sun_call: None,
       sky_call: None,
       grid_call: None,
+      trajectory_call: None,
     }
   }
 
@@ -492,7 +519,18 @@ impl RenderScene {
         });
       }
       RenderableDataRef::PhysicalMesh(component) => {
-        let res: ResourceUploadResult =
+        let res: ResourceUploadResult = if component.use_new_path {
+          match device.get_physical_mesh2_resources(entity_id, presentation_engine_handle) {
+            Ok(r) => r,
+            Err(_) => device.create_physical_mesh2_resources(
+              cmd_buffer,
+              entity_id,
+              &component,
+              presentation_engine_handle,
+              debug_name,
+            )?,
+          }
+        } else {
           match device.get_physical_mesh_resources(entity_id, presentation_engine_handle) {
             Ok(r) => r,
             Err(_) => device.create_physical_mesh_resources(
@@ -502,7 +540,8 @@ impl RenderScene {
               presentation_engine_handle,
               debug_name,
             )?,
-          };
+          }
+        };
         let index_count = component.mesh.indices.len() as u32;
         let dc = DrawCall::from_handles_and_matrix(
           res,
@@ -515,6 +554,8 @@ impl RenderScene {
           model_matrix,
           component.emissive_intensity,
           component.emissive_color,
+          component.use_new_path,
+          component.paint_display_mode,
         );
         self.draw_calls.push(dc);
       }
@@ -574,14 +615,25 @@ impl RenderScene {
         if count == 0 {
           return Ok(());
         }
-        let particle_pipeline = device.get_particle_pipeline_key(presentation_engine_handle)?;
-        self.particle_calls.push(ParticleDrawCall {
-          pipeline: particle_pipeline,
-          system_particle_offset: 0,
-          system_indirect_offset: 0,
-          config: component.config.clone(),
-          particles: alloc::sync::Arc::downgrade(&component.particles),
-        });
+        if component.config.use_particle2 {
+          let particle_pipeline = device.get_particle2_pipeline_key(presentation_engine_handle)?;
+          self.particle2_calls.push(Particle2DrawCall {
+            pipeline: particle_pipeline,
+            system_particle_offset: 0,
+            system_indirect_offset: 0,
+            config: component.config.clone(),
+            particles: alloc::sync::Arc::downgrade(&component.particles),
+          });
+        } else {
+          let particle_pipeline = device.get_particle_pipeline_key(presentation_engine_handle)?;
+          self.particle_calls.push(ParticleDrawCall {
+            pipeline: particle_pipeline,
+            system_particle_offset: 0,
+            system_indirect_offset: 0,
+            config: component.config.clone(),
+            particles: alloc::sync::Arc::downgrade(&component.particles),
+          });
+        }
       }
       RenderableDataRef::Gizmo(_) => {} // Handled elsewhere
     }
@@ -697,6 +749,27 @@ pub fn do_draw_gizmo(
   Ok(())
 }
 
+pub fn do_draw_trajectory_batch(
+  device: &dyn RenderDevice,
+  camera: &CameraRenderData,
+  cmd_buffer: super::CommandBufferHandle,
+  draw_call: &TrajectoryBatchCall,
+  window_extent: [f32; 2],
+  handle: PresentationEngineHandle,
+) -> GpuResult<()> {
+  device.prepare_trajectory_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
+  let push_constants = crate::gpu::TrajectoryPushConstants {
+    map_ptr: draw_call.map_ptr,
+    traj_ptr: draw_call.traj_ptr,
+    view_proj: camera.view_proj.into(),
+    viewport_size: window_extent,
+    _pad: [0.0, 0.0],
+  };
+  device.push_trajectory_constants(cmd_buffer, &push_constants)?;
+  device.draw_instanced(cmd_buffer, draw_call.total_vertices, draw_call.total_segments)?;
+  Ok(())
+}
+
 pub fn do_draw_billboard(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
@@ -735,6 +808,33 @@ pub fn do_draw_billboard(
 
   device.push_billboard_constants(cmd_buffer, &push_constants)?;
   device.draw(cmd_buffer, draw_call.vertex_count)?;
+
+  Ok(())
+}
+
+pub fn do_draw_call2(
+  device: &dyn RenderDevice,
+  camera: &CameraRenderData,
+  sun_pos: Vec3f32,
+  sun_color: [f32; 4],
+  cmd_buffer: super::CommandBufferHandle,
+  draw_call: &DrawCall,
+  window_extent: [f32; 2],
+) -> GpuResult<()> {
+  device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
+  device.draw_physical_mesh2(cmd_buffer, draw_call.pipeline, draw_call.buffers, camera, sun_pos, sun_color, window_extent, draw_call)?;
+
+  if draw_call.draw_outline {
+    if let Some(outline_pipeline) = draw_call.outline_pipeline {
+      device.bind_pipeline(cmd_buffer, outline_pipeline)?;
+      
+      let mut outline_call = draw_call.clone();
+      outline_call.emissive_intensity = -1.0;
+      outline_call.emissive_color = [draw_call.outline_color[0], draw_call.outline_color[1], draw_call.outline_color[2]];
+      
+      device.draw_physical_mesh2(cmd_buffer, outline_pipeline, draw_call.buffers, camera, sun_pos, sun_color, window_extent, &outline_call)?;
+    }
+  }
 
   Ok(())
 }
@@ -865,6 +965,38 @@ pub fn do_draw_particle(
   Ok(())
 }
 
+pub fn do_draw_particle2(
+  device: &dyn RenderDevice,
+  camera: &CameraRenderData,
+  cmd_buffer: super::CommandBufferHandle,
+  draw_call: &Particle2DrawCall,
+  time: f32,
+) -> GpuResult<()> {
+  // Bind pipeline (the descriptor set should have been bound once per frame)
+  device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
+
+  let push_constants = crate::gpu::Particle2PushConstants {
+    view_proj: camera.view_proj.into(),
+    camera_up: camera.up,
+    time,
+    camera_right: camera.right,
+    seed: draw_call.system_particle_offset as f32,
+    color: draw_call.config.color,
+    radius: draw_call.config.particle_radius,
+  };
+
+  device.push_particle2_constants(
+    cmd_buffer,
+    &push_constants,
+  )?;
+
+  // Notice we don't pass the indirect_buffer as a GpuResourceHandle anymore,
+  // we use a specific method that draws from the global mega buffer
+  device.draw_particle2_indirect(cmd_buffer, draw_call.system_indirect_offset)?;
+
+  Ok(())
+}
+
 pub fn do_draw_grid(
   device: &dyn RenderDevice,
   cmd_buffer: super::CommandBufferHandle,
@@ -924,14 +1056,26 @@ pub fn render_frame(
   };
   // TODO setup method (binds pipeline, descriptor set, ...)
   for draw_call in &render_scene.draw_calls {
-    do_draw_call(
-      device,
-      &render_scene.camera_data,
-      sun_pos,
-      [1.0, 1.0, 1.0, 1.0], // TODO
-      cmd_buffer,
-      draw_call,
-    )?;
+    if draw_call.use_new_path {
+      do_draw_call2(
+        device,
+        &render_scene.camera_data,
+        sun_pos,
+        [1.0, 1.0, 1.0, 1.0], // TODO
+        cmd_buffer,
+        draw_call,
+        [render_scene.window_extent[0] as f32, render_scene.window_extent[1] as f32],
+      )?;
+    } else {
+      do_draw_call(
+        device,
+        &render_scene.camera_data,
+        sun_pos,
+        [1.0, 1.0, 1.0, 1.0], // TODO
+        cmd_buffer,
+        draw_call,
+      )?;
+    }
   }
 
   // End of opaque Stuff, beginning semitransparent/transparent stuff
@@ -946,6 +1090,25 @@ pub fn render_frame(
     for particle_call in &render_scene.particle_calls {
       gpu::frame::do_draw_particle(device, &render_scene.camera_data, cmd_buffer, particle_call)?;
     }
+  }
+
+  if !render_scene.particle2_calls.is_empty() {
+    device.prepare_particle2_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
+    let time = (render_scene.time_readings.time as f64 / 1_000_000.0) as f32;
+    for particle_call in &render_scene.particle2_calls {
+      gpu::frame::do_draw_particle2(device, &render_scene.camera_data, cmd_buffer, particle_call, time)?;
+    }
+  }
+
+  if let Some(draw_call) = &render_scene.trajectory_call {
+    gpu::frame::do_draw_trajectory_batch(
+      device,
+      &render_scene.camera_data,
+      cmd_buffer,
+      draw_call,
+      [render_scene.window_extent[0] as f32, render_scene.window_extent[1] as f32],
+      handle,
+    )?;
   }
 
   // end of scene, begin rendering UI elements

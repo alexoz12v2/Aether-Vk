@@ -366,7 +366,7 @@ impl SimulationSceneData {
         asset_path: path_str,
         mesh: mesh_arc,
         emissive_intensity: 0.0,
-        emissive_color: [0.0, 0.0, 0.0],
+        emissive_color: [0.0, 0.0, 0.0], use_new_path: false, paint_display_mode: 0,
       },
     )?;
     let root = scene_ctx.root_entity;
@@ -571,6 +571,12 @@ pub struct UnfollowEntity {
 }
 
 #[derive(Clone, Debug)]
+pub struct TogglePaintMode {
+  pub scene_id: u64,
+  pub entity_id: EntityId,
+}
+
+#[derive(Clone, Debug)]
 pub enum LogicCommand {
   Shutdown,
 
@@ -585,6 +591,8 @@ pub enum LogicCommand {
   SnapToEntity(SnapToEntity),
   FollowEntity(FollowEntity),
   UnfollowEntity(UnfollowEntity),
+
+  TogglePaintMode(TogglePaintMode),
 
   FeedbackGetSceneTimeScale {
     scene_id: u64,

@@ -3,9 +3,17 @@
              xmlns:vm="using:AetherVk.Logic.ViewModels"
              xmlns:models="using:AetherVk.Logic.Models"
              xmlns:controls="using:AetherVk.Controls"
+             xmlns:input="using:AetherVk.Input"
              x:DataType="vm:PropertiesViewModel"
-             x:Class="AetherVk.Views.PropertiesView">
+             x:Class="AetherVk.Views.PropertiesView"
+             input:ActionContext.Id="PropertiesPanel"
+             input:ActionContext.Handler="{Binding}">
     <Grid RowDefinitions="Auto, *">
+        <FlyoutBase.AttachedFlyout>
+            <Flyout IsOpen="{Binding IsFlyoutMenuOpen}" Placement="Right">
+                 <TextBlock Text="1: Add Cube" />
+            </Flyout>
+        </FlyoutBase.AttachedFlyout>
         <Grid Grid.Row="0" Margin="8">
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <TextBlock Text="Properties -" FontWeight="Bold" VerticalAlignment="Center" />

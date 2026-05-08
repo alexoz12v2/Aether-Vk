@@ -620,7 +620,7 @@ impl Vec4f32 {
 
   #[inline(always)]
   #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-  pub(crate) fn from_array(v: [f32; 4]) -> Self {
+  pub fn from_array(v: [f32; 4]) -> Self {
     Self { data: v }
   }
 }

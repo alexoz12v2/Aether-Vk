@@ -46,6 +46,7 @@ pub mod camera;
 pub mod interaction;
 pub mod particles;
 pub mod text;
+pub mod trajectory;
 
 pub use almanac_planet::AlmanacPlanet;
 pub use particles::{GaussianParams, ParticleData, ParticleEmitterConfig, ParticleSystemComponent};
@@ -213,6 +214,9 @@ pub struct PhysicalMeshComponent {
   pub mesh: alloc::sync::Arc<Comet>,
   pub emissive_intensity: f32,
   pub emissive_color: [f32; 3],
+  pub use_new_path: bool,
+  /// 0 = off, 1 = RGB color, 2 = alpha distribution, (see physical_mesh2.frag)
+  pub paint_display_mode: u32,
 }
 
 impl Clone for PhysicalMeshComponent {
@@ -222,6 +226,8 @@ impl Clone for PhysicalMeshComponent {
       mesh: self.mesh.clone(),
       emissive_intensity: self.emissive_intensity,
       emissive_color: self.emissive_color,
+      use_new_path: self.use_new_path,
+      paint_display_mode: self.paint_display_mode,
     }
   }
 }
@@ -348,6 +354,60 @@ pub struct ParticleStateComponent {
   pub velocity: Vec3f32,
 }
 impl Component for ParticleStateComponent {}
+
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ReferenceFrameType {
+  Macro = 0,
+  Micro = 1,
+}
+
+#[repr(C, align(16))]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReferenceFrameComponent {
+  pub frame_type: ReferenceFrameType,
+  pub scale: f32,
+  pub soi_radius: f32,
+  pub _padding: u32,
+}
+
+impl ReferenceFrameComponent {
+  #[inline(always)]
+  pub fn micro_to_macro(
+    p_micro: Vec3f32,
+    v_micro: Vec3f32,
+    c_macro: Vec3f32,
+    c_vel_macro: Vec3f32,
+    scale: f32,
+  ) -> (Vec3f32, Vec3f32) {
+    let p_macro = c_macro + (p_micro * scale);
+    let v_macro = c_vel_macro + (v_micro * scale);
+    (p_macro, v_macro)
+  }
+
+  #[inline(always)]
+  pub fn macro_to_micro(
+    p_macro: Vec3f32,
+    v_macro: Vec3f32,
+    c_macro: Vec3f32,
+    c_vel_macro: Vec3f32,
+    scale: f32,
+  ) -> (Vec3f32, Vec3f32) {
+    let p_micro = (p_macro - c_macro) / scale;
+    let v_micro = (v_macro - c_vel_macro) / scale;
+    (p_micro, v_micro)
+  }
+}
+
+impl Component for ReferenceFrameComponent {}
+
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct KinematicComponent {
+  pub velocity: Vec3f32,
+  pub angular_velocity: Vec3f32,
+}
+impl Component for KinematicComponent {}
 
 /// Necessary boilerplate for rendering system
 pub enum RenderableDataRef<'a> {
@@ -2156,7 +2216,7 @@ impl Scene {
 /// By erasing `T` into `()`, we hide non-'static lifetimes from the ThreadPool's strict bounds.
 /// Soundness is strictly guaranteed by the synchronous `handle.wait()` barrier.
 #[derive(Clone, Copy)]
-struct ErasedPtr(*const ());
+pub struct ErasedPtr(*const ());
 unsafe impl Send for ErasedPtr {}
 unsafe impl Sync for ErasedPtr {}
 
@@ -2172,7 +2232,7 @@ impl ErasedPtr {
 }
 
 #[derive(Clone, Copy)]
-struct ErasedMutPtr(*mut ());
+pub struct ErasedMutPtr(*mut ());
 unsafe impl Send for ErasedMutPtr {}
 unsafe impl Sync for ErasedMutPtr {}
 

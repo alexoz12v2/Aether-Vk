@@ -1,0 +1,17 @@
+[package]
+name = "compute_shaders_test"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = ["console_log"] }
+aethervk-core-rlib = { path = "../../aethervk.core/rlib", default-features = false, features = ["std"] }
+test_utils = { path = "../test_utils" }
+ash = { version = "0.38", default-features = false }
+vk-mem = { version = "0.5", path = "../../external/vk-mem", default-features = false, features = ["force-loaded"] }
+bytemuck = { version = "1.15", default-features = false, features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+heapless = "0.9.3"
+
+[workspace]

@@ -375,6 +375,7 @@ fn render_function(device: &dyn RenderDevice, payload: &mut RenderPayloadData) -
   )?;
 
   device.upload_particle_systems(cmd_buffer, &mut render_scene.particle_calls)?;
+  device.upload_particle2_systems(cmd_buffer, &mut render_scene.particle2_calls)?;
 
   if let Some(sun_call) = &render_scene.sun_call {
     device.update_sun(cmd_buffer, sun_call.entity, (128, 128, 128), 1.0)?;
@@ -616,7 +617,7 @@ fn main() {
         asset_path: asset_path.join("Comet.glb").to_str().unwrap().to_string(),
         mesh: Arc::from(loaded_mesh),
         emissive_intensity: 0.0,
-        emissive_color: [0.0, 0.0, 0.0],
+        emissive_color: [0.0, 0.0, 0.0], use_new_path: false, paint_display_mode: 0,
       },
     )
     .unwrap();
@@ -656,6 +657,7 @@ fn main() {
         lifetime: 5_000_000,
         color: [1.0, 0.5, 0.0, 1.0],
         beta: 0.1,
+        use_particle2: false,
       }),
     )
     .unwrap();
@@ -695,6 +697,7 @@ fn main() {
         lifetime: 3_000_000,
         color: [0.0, 0.5, 1.0, 1.0],
         beta: 0.5,
+        use_particle2: false,
       }),
     )
     .unwrap();

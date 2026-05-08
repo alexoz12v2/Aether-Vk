@@ -17,8 +17,8 @@ use alloc::{ffi::CString, string::ToString, sync};
 use heapless::index_map::FnvIndexMap;
 
 pub mod device;
-mod instance;
-mod utils;
+pub mod instance;
+pub mod utils;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyncMode {

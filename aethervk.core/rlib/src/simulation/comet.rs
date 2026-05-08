@@ -35,7 +35,7 @@ impl core::hash::Hash for Vertex {
   }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[allow(non_camel_case_types)]
 pub enum TexelFormat {
   // Basic formats
@@ -49,6 +49,7 @@ pub enum TexelFormat {
   ASTC_4x4_UNORM_BLOCK,
   // Catch-all for other formats
   Unsupported(u32),
+  #[default]
   Undefined,
 }
 
@@ -84,7 +85,7 @@ impl TexelFormat {
   }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Texture {
   pub data: Vec<u8>,
   pub format: TexelFormat,
