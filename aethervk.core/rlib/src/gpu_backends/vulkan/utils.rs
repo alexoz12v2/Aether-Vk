@@ -147,7 +147,7 @@ impl PhysicalDeviceQueryInput {
 pub(super) const MAX_QUEUE_FAMILY_COUNT: usize = 4;
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct PhysicalDeviceQueryResult {
+pub struct PhysicalDeviceQueryResult {
   pub physical_device: vk::PhysicalDevice,
   pub physical_device_properties: vk::PhysicalDeviceProperties,
   pub family_count: usize,
@@ -552,6 +552,8 @@ pub(super) fn required_device_extensions() -> &'static Vec<&'static CStr> {
     // This extension allows the use of the SPV_KHR_non_semantic_info extension in SPIR-V shader modules. (eg printf)
     the_vec.push(ash::khr::shader_non_semantic_info::NAME);
 
+    the_vec.push(ash::ext::scalar_block_layout::NAME);
+
     // TODO: put this into an optional extension, as the `nullDescriptors` feature is not supported
     // by everybody (namely, Apple M4)
     // This extension also adds support for “null descriptors”, where VK_NULL_HANDLE can be used
@@ -622,7 +624,7 @@ pub(super) struct RequiredFeatures<'a> {
   pub synchronization2: vk::PhysicalDeviceSynchronization2Features<'a>,
   /// promoted to 1.2
   pub descriptor_indexing: vk::PhysicalDeviceDescriptorIndexingFeatures<'a>,
-  // TODO add VK_KHR_variable_pointers (promoted to 1.1)
+  pub scalar_block_layout: vk::PhysicalDeviceScalarBlockLayoutFeatures<'a>,
 }
 
 impl RequiredFeatures<'_> {
@@ -633,6 +635,7 @@ impl RequiredFeatures<'_> {
     let timeline_semaphore = vk::PhysicalDeviceTimelineSemaphoreFeatures::default();
     let synchronization2 = vk::PhysicalDeviceSynchronization2Features::default();
     let descriptor_indexing = vk::PhysicalDeviceDescriptorIndexingFeatures::default();
+    let scalar_block_layout = vk::PhysicalDeviceScalarBlockLayoutFeatures::default();
 
     Self {
       features,
@@ -641,6 +644,7 @@ impl RequiredFeatures<'_> {
       timeline_semaphore,
       synchronization2,
       descriptor_indexing,
+      scalar_block_layout,
     }
   }
 
@@ -652,14 +656,17 @@ impl RequiredFeatures<'_> {
       .push_next(&mut self.timeline_semaphore)
       .push_next(&mut self.synchronization2)
       .push_next(&mut self.descriptor_indexing)
+      .push_next(&mut self.scalar_block_layout)
   }
 
   pub fn populate(&mut self) -> &mut Self {
     self.features.fill_mode_non_solid = vk::TRUE;
     self.buffer_device_address.buffer_device_address = vk::TRUE;
     self.vulkan_memory_model.vulkan_memory_model = vk::TRUE;
+    self.vulkan_memory_model.vulkan_memory_model_device_scope = vk::TRUE;
     self.timeline_semaphore.timeline_semaphore = vk::TRUE;
     self.synchronization2.synchronization2 = vk::TRUE;
+    self.scalar_block_layout.scalar_block_layout = vk::TRUE;
     // TODO: check that these are baseline for low end devices
     self.descriptor_indexing.runtime_descriptor_array = vk::TRUE;
     // TODO: check that these are baseline for low end devices
@@ -686,11 +693,17 @@ impl RequiredFeatures<'_> {
     if self.vulkan_memory_model.vulkan_memory_model != vk::TRUE {
       the_vec.push("vulkan_memory_model".to_string());
     }
+    if self.vulkan_memory_model.vulkan_memory_model_device_scope != vk::TRUE {
+      the_vec.push("vulkan_memory_model_device_scope".to_string());
+    }
     if self.timeline_semaphore.timeline_semaphore != vk::TRUE {
       the_vec.push("timeline_semaphore".to_string());
     }
     if self.synchronization2.synchronization2 != vk::TRUE {
       the_vec.push("synchronization2".to_string());
+    }
+    if self.scalar_block_layout.scalar_block_layout != vk::TRUE {
+      the_vec.push("scalar_block_layout".to_string());
     }
     if self.descriptor_indexing.runtime_descriptor_array != vk::TRUE {
       the_vec.push("descriptor_indexing".to_string());
@@ -731,6 +744,7 @@ impl From<vk::Result> for GpuError {
 
 /// Necessary wrapper struct as `ptr::NonNull` cannot be used with ash's
 /// implementation of Vulkan's non dispatchable handles
+#[repr(transparent)]
 pub(super) struct NonZeroHandle<T>
 where
   T: ash::vk::Handle + Copy,

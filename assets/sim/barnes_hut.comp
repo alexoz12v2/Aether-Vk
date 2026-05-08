@@ -66,7 +66,7 @@ void main() {
 
     while (stackPtr > 0) {
         uint node_idx = stack[--stackPtr];
-        BVHNodeAABB node = pc.bvh.nodes[node_idx];
+        BVHNodeAABB node = read_bvh_node(pc.bvh, node_idx);
         
         bool isLeaf = (node.primitive_count > 0);
         

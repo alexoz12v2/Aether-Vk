@@ -155,27 +155,11 @@ public partial class MeshViewerWindow : Window
     var point = e.GetCurrentPoint(RenderTargetImage);
     _lastPointerPos = point.Position;
 
-    if (point.Properties.IsLeftButtonPressed)
-      _isLeftDragging = true;
-    if (point.Properties.IsRightButtonPressed)
-      _isRightDragging = true;
-    if (point.Properties.IsMiddleButtonPressed)
-      _isMiddleDragging = true;
-
     RenderTargetImage.Focus();
-    e.Handled = true;
   }
 
   private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
   {
-    if (e.InitialPressMouseButton == MouseButton.Left)
-      _isLeftDragging = false;
-    if (e.InitialPressMouseButton == MouseButton.Right)
-      _isRightDragging = false;
-    if (e.InitialPressMouseButton == MouseButton.Middle)
-      _isMiddleDragging = false;
-
-    e.Handled = true;
   }
 
   private void OnPointerMoved(object? sender, PointerEventArgs e)
@@ -185,19 +169,7 @@ public partial class MeshViewerWindow : Window
     var deltaX = (float)(currentPos.X - _lastPointerPos.X);
     var deltaY = (float)(currentPos.Y - _lastPointerPos.Y);
 
-    if (_isRightDragging)
-    {
-      _viewModel?.RuntimeService.RotateCamera(
-        _viewModel.SceneId,
-        _viewModel.CameraId,
-        deltaX,
-        deltaY
-      );
-    }
-    else if (_isMiddleDragging || _isLeftDragging)
-    {
-      _viewModel?.RuntimeService.PanCursor(_viewModel.SceneId, deltaX, deltaY);
-    }
+    _viewModel?.OperatorStack.ProcessPointerDelta(deltaX, deltaY);
 
     _lastPointerPos = currentPos;
   }
@@ -205,6 +177,6 @@ public partial class MeshViewerWindow : Window
   private void OnPointerWheelChanged(object? sender, PointerWheelEventArgs e)
   {
     var scroll_amount = (float)e.Delta.Y;
-    _viewModel?.RuntimeService.ZoomCamera(_viewModel.SceneId, _viewModel.CameraId, scroll_amount);
+    _viewModel?.OperatorStack.ProcessPointerWheel(scroll_amount);
   }
 }

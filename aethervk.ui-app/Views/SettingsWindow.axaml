@@ -1,0 +1,57 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:AetherVk.Logic.ViewModels"
+        x:DataType="vm:SettingsViewModel"
+        x:Class="AetherVk.Views.SettingsWindow"
+        Title="Settings" Width="800" Height="600"
+        WindowStartupLocation="CenterOwner">
+    <Grid ColumnDefinitions="250, *">
+        <Border Grid.Column="0" Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="0,0,1,0">
+            <ListBox ItemsSource="{Binding Categories}" SelectedItem="{Binding SelectedCategory}" Background="Transparent" BorderThickness="0">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding Name}" Padding="10" />
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Border>
+
+        <ContentControl Grid.Column="1" Content="{Binding SelectedCategory}" Margin="20">
+            <ContentControl.DataTemplates>
+                <DataTemplate DataType="{x:Type vm:KeyBindingsViewModel}">
+                    <ScrollViewer>
+                        <StackPanel Spacing="20">
+                            <TextBlock Text="Keymap" FontSize="24" FontWeight="Bold" Margin="0,0,0,10"/>
+                            
+                            <ItemsControl ItemsSource="{Binding Groups}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ShortcutGroup">
+                                        <StackPanel Spacing="10" Margin="0,0,0,20">
+                                            <TextBlock Text="{Binding ContextName}" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource Accent.Primary}"/>
+                                            
+                                            <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="6">
+                                                <ItemsControl ItemsSource="{Binding Mappings}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate x:DataType="vm:ShortcutDisplay">
+                                                            <Border BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="0,0,0,1" Padding="10">
+                                                                <Grid ColumnDefinitions="*, *, 2*">
+                                                                    <TextBlock Grid.Column="0" Text="{Binding ActionName}" FontWeight="Bold" VerticalAlignment="Center"/>
+                                                                    <TextBlock Grid.Column="1" Text="{Binding ShortcutText}" VerticalAlignment="Center" FontFamily="Consolas, JetBrains Mono, monospace" Foreground="{DynamicResource Text.Secondary}"/>
+                                                                    <TextBlock Grid.Column="2" Text="{Binding Description}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Tertiary}" TextWrapping="Wrap"/>
+                                                                </Grid>
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </Border>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </ScrollViewer>
+                </DataTemplate>
+            </ContentControl.DataTemplates>
+        </ContentControl>
+    </Grid>
+</Window>

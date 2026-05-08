@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using AetherVk.Logic.Input;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -11,6 +12,7 @@ namespace AetherVk.Logic.ViewModels;
 
 public partial class MeshViewerViewModel
   : TabItemViewModel,
+    IActionHandler,
     CommunityToolkit.Mvvm.Messaging.IRecipient<AetherVk.Logic.Messages.RenderFrameReadyMessage>,
     IDisposable
 {
@@ -20,6 +22,8 @@ public partial class MeshViewerViewModel
   private readonly bool _isLightTheme;
   public ulong CameraId { get; private set; } = 1;
   public ulong SceneId { get; private set; }
+
+  public OperatorStack OperatorStack { get; }
 
   [ObservableProperty]
   private uint _width = 800;
@@ -47,8 +51,18 @@ public partial class MeshViewerViewModel
     _runtimeService = runtimeService;
     _consoleService = consoleService;
     _isLightTheme = isLightTheme;
+    OperatorStack = new OperatorStack(new MeshViewerBaseOperator(this));
     _ = InitializeSceneAsync(modelId, modelPath, modelName);
   }
+
+  public bool ProcessAction(AppAction action, bool isPressed)
+  {
+    return OperatorStack.ProcessAction(action, isPressed);
+  }
+
+  public bool ProcessPointerDelta(float dx, float dy) => OperatorStack.ProcessPointerDelta(dx, dy);
+
+  public bool ProcessPointerWheel(float deltaY) => OperatorStack.ProcessPointerWheel(deltaY);
 
   public void Dispose()
   {

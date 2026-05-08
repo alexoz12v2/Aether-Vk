@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using AetherVk.Logic.Input;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Messaging;
@@ -11,6 +12,7 @@ namespace AetherVk.Logic.ViewModels;
 
 public partial class Viewport3DViewModel
   : TabItemViewModel,
+    IActionHandler,
     IRecipient<AetherVk.Logic.Messages.ToggleAddJetModeMessage>,
     IRecipient<AetherVk.Logic.Messages.RenderFrameReadyMessage>,
     IDisposable
@@ -18,6 +20,8 @@ public partial class Viewport3DViewModel
   private readonly NativeRuntimeService _runtimeService;
   public ulong PresentationEngineId { get; private set; }
   private ulong _lastRenderTaskId;
+
+  public OperatorStack OperatorStack { get; }
 
   [ObservableProperty]
   private uint _width = 800;
@@ -105,6 +109,9 @@ public partial class Viewport3DViewModel
     _runtimeService = runtimeService;
     _breadcrumbService = breadcrumbService;
     _sceneStateManager = sceneStateManager;
+    
+    OperatorStack = new OperatorStack(new ViewportBaseOperator(this));
+
     _runtimeService.PropertyChanged += (s, e) =>
     {
       if (e.PropertyName == nameof(NativeRuntimeService.IsInitialized))
@@ -140,6 +147,15 @@ public partial class Viewport3DViewModel
   {
     IsAddingJet = true;
   }
+
+  public bool ProcessAction(AppAction action, bool isPressed)
+  {
+    return OperatorStack.ProcessAction(action, isPressed);
+  }
+
+  public bool ProcessPointerDelta(float dx, float dy) => OperatorStack.ProcessPointerDelta(dx, dy);
+
+  public bool ProcessPointerWheel(float deltaY) => OperatorStack.ProcessPointerWheel(deltaY);
 
   public async void PerformRaycast(double x, double y, double w, double h)
   {

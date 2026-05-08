@@ -75,7 +75,9 @@ void main() {
     // Evaluate Forces at q_{n+1}
     vec3 f_next = vec3(0.0);
     for (uint e = 0; e < pc.num_emitters; ++e) {
-        ForceEmitter em = pc.emitters.emitters[e];
+        ForceEmitter em;
+        em.position = pc.emitters.emitters[e].position;
+        em.mu = pc.emitters.emitters[e].mu;
         vec3 r = em.position - q_next;
         float dist_sq = dot(r, r);
         if (dist_sq > 1e-6) {

@@ -1,4 +1,5 @@
 using System;
+using AetherVk.Logic.Input;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
 using AetherVk.Services;
@@ -21,6 +22,7 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<SceneStateManager>();
     collection.AddSingleton<NativeRuntimeService>();
     collection.AddSingleton<FileWatcherService>();
+    collection.AddSingleton<InputRegistry>();
   }
 
   public static void AddViewModels(this IServiceCollection collection)

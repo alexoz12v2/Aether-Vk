@@ -5,7 +5,7 @@ use core::{mem, ptr};
 use crate::{gpu_backends::vulkan::device::DeviceResource, types::GpuResult};
 use aethervk_oshal_rlib as oshal;
 
-pub(super) struct GlobalDeviceAllocator {
+pub struct GlobalDeviceAllocator {
   pub allocator: mem::ManuallyDrop<vk_mem::Allocator>,
   pub memory_budgets: Box<[vk_mem::ffi::VmaBudget]>,
 }
@@ -117,7 +117,7 @@ impl FrameStagingArena {
   pub fn new(allocator: &vk_mem::Allocator, capacity: usize) -> GpuResult<Self> {
     let buffer_info = vk::BufferCreateInfo::default()
       .size(capacity as u64)
-      .usage(vk::BufferUsageFlags::TRANSFER_SRC);
+      .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
     let alloc_info = vk_mem::AllocationCreateInfo {
       usage: vk_mem::MemoryUsage::Auto,
       flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE

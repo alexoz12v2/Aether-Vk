@@ -203,6 +203,12 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   }
 
   [RelayCommand]
+  private async Task OpenSettingsAsync()
+  {
+      await _windowService.ShowSettingsDialogAsync();
+  }
+
+  [RelayCommand]
   private void ToggleTheme()
   {
     // Simple toggle: if Dark -> Light, otherwise -> Dark (covers Light and System)

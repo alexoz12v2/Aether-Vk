@@ -5,7 +5,7 @@ use crate::{
   gpu_backends::vulkan::{device::DeviceResource, device::LogicalDevice, utils::NonZeroHandle},
   types::{GpuError, GpuResult},
 };
-use aethervk_oshal_rlib::log;
+use aethervk_oshal_rlib::{log, os};
 use alloc::{string::ToString, vec::Vec};
 use ash::vk::{self, Handle};
 
@@ -89,28 +89,13 @@ pub(super) struct WindowedPresentationState {
   swapchain_generation: u64,
   physical_device: NonZeroHandle<vk::PhysicalDevice>,
   pending_resize: Option<(u32, u32)>,
+
+  was_resized: u32,
 }
 
 trait SwapchainCleanable {
   fn cleanup_windowless(&mut self, device: &ash::Device);
   fn cleanup(&mut self, swapchain_device: &ash::khr::swapchain::Device, device: &ash::Device);
-}
-
-struct SwapchainWrapper<'a, T>
-where
-  T: SwapchainCleanable,
-{
-  swapchain_device: &'a ash::khr::swapchain::Device,
-  wrapped: &'a mut T,
-}
-
-impl<'a, T> DeviceResource for SwapchainWrapper<'a, T>
-where
-  T: SwapchainCleanable,
-{
-  fn cleanup(&mut self, device: &ash::Device) {
-    self.wrapped.cleanup(self.swapchain_device, device);
-  }
 }
 
 impl DeviceResource for SwapchainImage {
@@ -129,8 +114,11 @@ impl DeviceResource for SwapchainImage {
 impl SwapchainCleanable for FrameDiscard {
   fn cleanup_windowless(&mut self, device: &ash::Device) {
     if !self.discarded_fences.is_empty() {
-      let fences: heapless::Vec<vk::Fence, MAX_DISCARDS> = self.discarded_fences.iter().map(|f| f.get()).collect();
       unsafe {
+        let fences: &[vk::Fence] = core::slice::from_raw_parts(
+          self.discarded_fences.as_ptr() as *const vk::Fence,
+          self.discarded_fences.len(),
+        );
         let _ = device.wait_for_fences(&fences, true, u64::MAX);
       }
     }
@@ -158,12 +146,7 @@ impl SwapchainCleanable for FrameDiscard {
   }
 
   fn cleanup(&mut self, swapchain_device: &ash::khr::swapchain::Device, device: &ash::Device) {
-    if !self.discarded_fences.is_empty() {
-      let fences: heapless::Vec<vk::Fence, MAX_DISCARDS> = self.discarded_fences.iter().map(|f| f.get()).collect();
-      unsafe {
-        let _ = device.wait_for_fences(&fences, true, u64::MAX);
-      }
-    }
+    self.cleanup_windowless(device);
 
     for &swapchain in self.discarded_swapchains.iter() {
       #[cfg(test)]
@@ -171,7 +154,6 @@ impl SwapchainCleanable for FrameDiscard {
       unsafe { swapchain_device.destroy_swapchain(swapchain.get(), None) };
     }
     self.discarded_swapchains.clear();
-    self.cleanup_windowless(device);
   }
 }
 
@@ -475,6 +457,7 @@ impl WindowedPresentationState {
       swapchain_generation: 0,
       physical_device,
       pending_resize: None,
+      was_resized: 0,
     };
 
     this.recreate_swapchain(device, false, physical_device)?;
@@ -536,8 +519,7 @@ impl WindowedPresentationState {
     // - END
 
     // bookkeping
-    self.next_image = 0;
-    self.current_frame = 0;
+    // FIX 2: Do NOT reset `self.current_frame` and `self.next_image` to 0. Let the ring buffer wrap gracefully.
     self.update_metadata(extent, transform, surface_format);
 
     // refresh image and frame data
@@ -547,23 +529,30 @@ impl WindowedPresentationState {
       let _ = self.frames.resize_default(self.images.len());
       let _ = self.frame_discards.resize_default(self.images.len());
     } else if self.images.len() < self.frames.len() {
-      // Fold orphaned discards into index 0 to ensure they wait for the fence
+      // FIX 3: Fold orphaned discards into the furthest valid frame instead of hardcoded 0
       let new_len = self.images.len();
+      let target = if new_len > 0 {
+        (self.current_frame + new_len - 1) % new_len
+      } else {
+        0
+      };
       for i in new_len..self.frames.len() {
         let mut orphaned = core::mem::take(&mut self.frame_discards[i]);
-        self.frame_discards[0].discarded_swapchains.append(&mut orphaned.discarded_swapchains);
-        self.frame_discards[0].discarded_semaphores.append(&mut orphaned.discarded_semaphores);
-        self.frame_discards[0].discarded_image_views.append(&mut orphaned.discarded_image_views);
-        self.frame_discards[0].discarded_fences.append(&mut orphaned.discarded_fences);
-        self.frame_discards[0].discarded_images.append(&mut orphaned.discarded_images);
-        self.frame_discards[0].discarded_memories.append(&mut orphaned.discarded_memories);
+        self.frame_discards[target].discarded_swapchains.append(&mut orphaned.discarded_swapchains);
+        self.frame_discards[target].discarded_semaphores.append(&mut orphaned.discarded_semaphores);
+        self.frame_discards[target]
+          .discarded_image_views
+          .append(&mut orphaned.discarded_image_views);
+        self.frame_discards[target].discarded_fences.append(&mut orphaned.discarded_fences);
+        self.frame_discards[target].discarded_images.append(&mut orphaned.discarded_images);
+        self.frame_discards[target].discarded_memories.append(&mut orphaned.discarded_memories);
 
         let mut orphaned_frame = core::mem::take(&mut self.frames[i]);
         if let Some(f) = orphaned_frame.submission_fence.take() {
-          let _ = self.frame_discards[0].discarded_fences.push(f);
+          let _ = self.frame_discards[target].discarded_fences.push(f);
         }
         if let Some(s) = orphaned_frame.acquire_semaphore.take() {
-          let _ = self.frame_discards[0].discarded_semaphores.push(s);
+          let _ = self.frame_discards[target].discarded_semaphores.push(s);
         }
       }
       self.frames.truncate(new_len);
@@ -598,7 +587,10 @@ impl WindowedPresentationState {
       self.frame_discards.len() == self.frames.len()
         && self.frame_discards.len() >= self.images.len()
     );
+
     self.swapchain_generation += 1;
+    self.was_resized += 1;
+
     Ok(())
   }
 
@@ -1009,6 +1001,14 @@ impl WindowedPresentationState {
     if let Some((w, h)) = self.pending_resize.take() {
       self.width = w;
       self.height = h;
+      // debounce time
+      if self.was_resized != 0 {
+        os::native::this_thread::sleep_for(core::time::Duration::from_millis(5));
+      }
+      if self.was_resized > 1 {
+        self.frame_discards[self.current_frame].cleanup(&self.swapchain_device, device);
+        self.was_resized -= 1;
+      }
       self.recreate_swapchain(device, true, self.physical_device)?;
     }
 
@@ -1051,7 +1051,11 @@ impl WindowedPresentationState {
     }
 
     // Clean up discarded resources for this frame, since its previous submission is now fully complete
-    self.frame_discards[self.current_frame].cleanup(&self.swapchain_device, device);
+    if self.was_resized == 0 {
+      self.frame_discards[self.current_frame].cleanup(&self.swapchain_device, device);
+    } else {
+      self.was_resized = 0;
+    }
 
     // 2. Reset submission hence
     unsafe { device.reset_fences(fences) }?;
@@ -1566,6 +1570,9 @@ impl WindowlessPresentationState {
   }
 
   fn recreate(&mut self, device: &ash::Device, width: u32, height: u32) -> GpuResult<()> {
+    // FIX: Safely flush everything before destruction on a resize event
+    unsafe { device.device_wait_idle() }?;
+
     self.width = width;
     self.height = height;
 

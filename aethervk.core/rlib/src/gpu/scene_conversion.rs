@@ -22,6 +22,8 @@ pub struct PhysicalMeshSceneData {
   mesh: PhysicalMeshComponent,
   global_transform: TransformComponent,
   outline: Option<[f32; 4]>,
+  use_new_path: bool,
+  paint_display_mode: u32,
 }
 
 impl PhysicalMeshSceneData {
@@ -30,12 +32,16 @@ impl PhysicalMeshSceneData {
     mesh: PhysicalMeshComponent,
     global_transform: TransformComponent,
     outline: Option<[f32; 4]>,
+    use_new_path: bool,
+    paint_display_mode: u32,
   ) -> Self {
     Self {
       entity_id,
       mesh,
       global_transform,
       outline,
+      use_new_path,
+      paint_display_mode,
     }
   }
 }
@@ -54,6 +60,7 @@ pub struct RenderSceneExtraction {
     crate::scene::particles::ParticleEmitterConfig,
   )>,
   pub extracted_gizmos: Vec<(EntityId, Mat4x4f32, f32)>,
+  pub extracted_trajectories: Vec<(EntityId, crate::scene::trajectory::TrajectoryComponent, Mat4x4f32)>,
 
   pub extracted_sky: Option<()>,
   pub extracted_sun: Option<((Mat4x4f32, f32), EntityId)>,
@@ -91,16 +98,40 @@ impl RenderSceneExtraction {
       sun_call: None,
       sky_call: None,
       grid_call: None,
+      particle2_calls: Vec::with_capacity(self.extracted_particles.len()),
+      trajectory_call: None,
     };
 
     // Populate Meshes
     for mesh_data in &self.extracted_meshes {
-      let res =
+      let res = if mesh_data.use_new_path {
+        match device.get_physical_mesh2_resources(mesh_data.entity_id, presentation_engine_handle) {
+          Ok(r) => r,
+          Err(_) => {
+            if debug_name.contains("MeshViewer") {
+              aethervk_oshal_rlib::log!(
+                "[MeshViewer Debug] Creating physical mesh2 resources for entity {:?}",
+                mesh_data.entity_id
+              );
+            }
+            device.create_physical_mesh2_resources(
+              cmd_buffer,
+              mesh_data.entity_id,
+              &mesh_data.mesh,
+              presentation_engine_handle,
+              &mesh_data.mesh.asset_path,
+            )?
+          }
+        }
+      } else {
         match device.get_physical_mesh_resources(mesh_data.entity_id, presentation_engine_handle) {
           Ok(r) => r,
           Err(_) => {
             if debug_name.contains("MeshViewer") {
-              aethervk_oshal_rlib::log!("[MeshViewer Debug] Creating physical mesh resources for entity {:?}", mesh_data.entity_id);
+              aethervk_oshal_rlib::log!(
+                "[MeshViewer Debug] Creating physical mesh resources for entity {:?}",
+                mesh_data.entity_id
+              );
             }
             device.create_physical_mesh_resources(
               cmd_buffer,
@@ -110,7 +141,8 @@ impl RenderSceneExtraction {
               &mesh_data.mesh.asset_path,
             )?
           }
-        };
+        }
+      };
       let dc = gpu::frame::DrawCall::from_handles_and_matrix(
         res,
         mesh_data.mesh.mesh.indices.len() as u32,
@@ -118,6 +150,8 @@ impl RenderSceneExtraction {
         mesh_data.global_transform.to_mat4(),
         mesh_data.mesh.emissive_intensity,
         mesh_data.mesh.emissive_color,
+        mesh_data.use_new_path,
+        mesh_data.mesh.paint_display_mode,
       );
       render_scene.draw_calls.push(dc);
     }
@@ -266,6 +300,13 @@ impl RenderSceneExtraction {
       });
     }
 
+    // Trajectories
+    render_scene.trajectory_call = device.upload_trajectories(
+      cmd_buffer,
+      presentation_engine_handle,
+      &self.extracted_trajectories,
+    )?;
+
     // ... More components here
 
     Ok(render_scene)
@@ -309,6 +350,8 @@ impl SceneConversionExt for crate::scene::Scene {
     )> = Vec::with_capacity(START_VEC_CAPACITY);
     let mut extracted_gizmos: Vec<(EntityId, Mat4x4f32, f32)> =
       Vec::with_capacity(START_VEC_CAPACITY);
+    let mut extracted_trajectories: Vec<(EntityId, crate::scene::trajectory::TrajectoryComponent, Mat4x4f32)> =
+      Vec::with_capacity(START_VEC_CAPACITY);
 
     let extracted_sky: Option<()>;
     let extracted_sun: Option<((Mat4x4f32, f32), EntityId)>;
@@ -345,7 +388,7 @@ impl SceneConversionExt for crate::scene::Scene {
             let is_selected: bool = self.has_component::<SelectedComponent>(id).into();
             let is_following: bool = self.has_component::<FollowingComponent>(id).into();
             let outline = get_mesh_outline(is_selected, is_following, render_outline);
-            let m = PhysicalMeshSceneData::new(id, mesh_clone, t, outline);
+            let m = PhysicalMeshSceneData::new(id, mesh_clone, t, outline, mesh.use_new_path, mesh.paint_display_mode);
             // BVH debug rendering
             let bvh = m.mesh.mesh.bvh.as_ref().map(|bvh| &bvh.nodes).and_then(|nodes| {
               let bvh_dbg_states = {
@@ -391,7 +434,7 @@ impl SceneConversionExt for crate::scene::Scene {
           let is_selected: bool = self.has_component::<SelectedComponent>(id).into();
           let is_following: bool = self.has_component::<FollowingComponent>(id).into();
           let outline = get_mesh_outline(is_selected, is_following, render_outline);
-          let m = PhysicalMeshSceneData::new(id, mesh_clone, t, outline);
+          let m = PhysicalMeshSceneData::new(id, mesh_clone, t, outline, mesh.use_new_path, mesh.paint_display_mode);
           // BVH debug rendering
           let bvh = m.mesh.mesh.bvh.as_ref().map(|bvh| &bvh.nodes).and_then(|nodes| {
             let bvh_dbg_states = {
@@ -536,6 +579,13 @@ impl SceneConversionExt for crate::scene::Scene {
       }
     });
 
+    // Trajectories
+    self.query1_without::<_, HiddenComponent, _>(|id, traj: &crate::scene::trajectory::TrajectoryComponent| {
+      if let Some(t) = self.global_transform(id) {
+        extracted_trajectories.push((id, traj.clone(), t.to_mat4()));
+      }
+    });
+
     // ... More components here
 
     Ok(RenderSceneExtraction {
@@ -546,6 +596,7 @@ impl SceneConversionExt for crate::scene::Scene {
       extracted_bvhs,
       extracted_particles,
       extracted_gizmos,
+      extracted_trajectories,
       extracted_sky,
       extracted_sun,
       extracted_grid,

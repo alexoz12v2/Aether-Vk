@@ -82,6 +82,8 @@ fn main() {
     .create_presentation_engine_windowed(scene_id, width, height, native_handles)
     .unwrap();
 
+  let jpl_service = test_utils::horizon_jpl::HorizonJplService::new().unwrap();
+
   // Populate scene with custom planets and comet
   {
     let scene_ctx = simulation_context.get_scene(scene_id).unwrap();
@@ -95,10 +97,23 @@ fn main() {
     )
     .expect("Failed to load comet");
 
+    // Fetch Comet 67P SPK and physical constants using Horizon JPL Service
+    let spk_dir = assets_dir.join("planets");
+    let spk_filename = "67P.bsp";
+    let _ = jpl_service.download_spk("90000702", "2024-01-01", "2025-01-01", &spk_dir, spk_filename);
+
+    let mut comet_radius_km = 1.7; // default 67P radius
+    let mut comet_rot_period = 12.4043;
+    if let Ok(c_str) = jpl_service.download_object_constants("90000702") {
+      let (r, rot, _) = jpl_service.parse_object_constants(&c_str);
+      if let Some(rad) = r { comet_radius_km = rad; }
+      if let Some(rot) = rot { comet_rot_period = rot as f64; }
+    }
+
+    let comet_visual_radius = (comet_radius_km / constants::DISTANCE_SCALE_FACTOR as f32)
+      * constants::PLANET_VISUAL_SCALE;
+
     let mesh_entity = active_scene.scene.spawn_entity("comet");
-    // Scale comet so its size represents 1.7km (radius ~0.85km).
-    // Using an artificially larger scale so it's visible.
-    let comet_radius = 1.0;
 
     let initial_rotation = if let Some(ref axes) = comet.principal_axes {
       Quat::from_rotation_matrix(axes)
@@ -113,7 +128,7 @@ fn main() {
         TransformComponent {
           position: Vec3f32::from_components(10.0, 0.0, 0.0),
           rotation: initial_rotation,
-          scale: Vec3f32::from_components(comet_radius, comet_radius, comet_radius),
+          scale: Vec3f32::from_components(comet_visual_radius, comet_visual_radius, comet_visual_radius),
         },
       )
       .unwrap();
@@ -125,9 +140,13 @@ fn main() {
           asset_path: "".to_string(),
           mesh: Arc::from(comet),
           emissive_intensity: 0.0,
-          emissive_color: [0.0, 0.0, 0.0],
+          emissive_color: [0.0, 0.0, 0.0], use_new_path: false, paint_display_mode: 0,
         },
       )
+      .unwrap();
+    active_scene
+      .scene
+      .add_component(mesh_entity, AlmanacPlanet::new(1000012, comet_rot_period, 1.0))
       .unwrap();
     active_scene.scene.set_parent(mesh_entity, Some(root_entity));
     active_scene.register_entity(mesh_entity);
@@ -160,10 +179,93 @@ fn main() {
             lifetime: 5_000_000,
             color: [1.0, 0.5, 0.0, 1.0],
             beta: 0.1,
+            use_particle2: false,
           },
         ),
       )
       .unwrap();
+
+    // -------------------------------------------------------------
+    // Add physical_mesh2 variants
+    // -------------------------------------------------------------
+    let sphere_variant =
+      aethervk_core_rlib::simulation::comet::generate_uv_sphere(0.5, 32, 32, 1.0);
+    let sphere_variant_arc = Arc::from(sphere_variant);
+
+    let mut add_variant = |name: &str,
+                           pos: Vec3f32,
+                           intensity: f32,
+                           color: [f32; 3],
+                           paint_mode: u32,
+                           is_outline: bool| {
+      let entity = active_scene.scene.spawn_entity(name);
+      active_scene.scene.set_parent(entity, Some(root_entity));
+      active_scene
+        .scene
+        .add_component(
+          entity,
+          TransformComponent {
+            position: pos,
+            rotation: Quat::identity(),
+            scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+          },
+        )
+        .unwrap();
+      active_scene
+        .scene
+        .add_component(
+          entity,
+          PhysicalMeshComponent {
+            asset_path: "".to_string(),
+            mesh: sphere_variant_arc.clone(),
+            emissive_intensity: intensity,
+            emissive_color: color,
+            use_new_path: true,
+            paint_display_mode: paint_mode,
+          },
+        )
+        .unwrap();
+      if is_outline {
+        active_scene
+          .scene
+          .add_component(entity, aethervk_core_rlib::scene::SelectedComponent {})
+          .unwrap();
+      }
+      active_scene.register_entity(entity);
+    };
+
+    add_variant(
+      "pm2_normal",
+      Vec3f32::from_components(10.0, -5.0, 0.0),
+      0.0,
+      [0.0, 0.0, 0.0],
+      0,
+      false,
+    );
+    add_variant(
+      "pm2_emissive",
+      Vec3f32::from_components(10.0, -2.5, 0.0),
+      5.0,
+      [1.0, 0.0, 0.0],
+      0,
+      false,
+    );
+    add_variant(
+      "pm2_painted",
+      Vec3f32::from_components(10.0, 0.0, 0.0),
+      0.0,
+      [0.0, 1.0, 0.0],
+      1,
+      false,
+    );
+    add_variant(
+      "pm2_outlined",
+      Vec3f32::from_components(10.0, 2.5, 0.0),
+      0.0,
+      [0.0, 0.0, 1.0],
+      0,
+      true,
+    );
 
     let planets = [
       (
@@ -217,11 +319,22 @@ fn main() {
     ];
 
     for (name, tex_path, naif_id, rot_period) in planets.iter() {
-      let planet_radius = (aethervk_core_rlib::simulation::utils::get_planet_radius(
+      let mut planet_radius = (aethervk_core_rlib::simulation::utils::get_planet_radius(
         *naif_id,
         assets_dir.to_str().unwrap(),
       ) / constants::DISTANCE_SCALE_FACTOR as f32)
         * constants::PLANET_VISUAL_SCALE;
+
+      let mut planet_rot_period = *rot_period;
+
+      if let Ok(c_str) = jpl_service.download_object_constants(&naif_id.to_string()) {
+        let (r, rot, _) = jpl_service.parse_object_constants(&c_str);
+        if let Some(rad) = r { 
+          planet_radius = (rad / constants::DISTANCE_SCALE_FACTOR as f32) * constants::PLANET_VISUAL_SCALE; 
+        }
+        if let Some(rot) = rot { planet_rot_period = rot as f64; }
+      }
+
       let initial_pos = Vec3f32::zero();
 
       let sphere = {
@@ -257,13 +370,13 @@ fn main() {
             asset_path: "".to_string(),
             mesh: sphere,
             emissive_intensity: 0.0,
-            emissive_color: [0.0, 0.0, 0.0],
+            emissive_color: [0.0, 0.0, 0.0], use_new_path: false, paint_display_mode: 0,
           },
         )
         .unwrap();
       active_scene
         .scene
-        .add_component(planet_entity, AlmanacPlanet::new(*naif_id, *rot_period))
+        .add_component(planet_entity, AlmanacPlanet::new(*naif_id, planet_rot_period, 1.0))
         .unwrap();
       active_scene
         .scene
@@ -1080,6 +1193,27 @@ impl test_utils::app::App for SimApp {
                   read_ctx.outlines_enabled.store(!current, std::sync::atomic::Ordering::Relaxed);
                 }
               }
+              winit::keyboard::KeyCode::KeyT => {
+                let scene_id = self.app_state.scene_id;
+                if let Some(scene_ctx) = self.app_state.ctx.get_scene(scene_id) {
+                  let read_ctx = scene_ctx.read();
+                  let sel = read_ctx
+                    .scene
+                    .query1_first_res::<aethervk_core_rlib::scene::SelectedComponent, _, _>(
+                      |id, _| Some(id),
+                    );
+                  if let Some((id, _)) = sel {
+                    let _ = self.app_state.ctx.threads.logic_thread.tx().try_send(
+                      aethervk_core_rlib::simulation_api::structs::LogicCommand::TogglePaintMode(
+                        aethervk_core_rlib::simulation_api::structs::TogglePaintMode {
+                          scene_id,
+                          entity_id: id,
+                        },
+                      ),
+                    );
+                  }
+                }
+              }
               winit::keyboard::KeyCode::KeyA | winit::keyboard::KeyCode::KeyD => {
                 let forward = keycode == winit::keyboard::KeyCode::KeyD;
                 let scene_id = self.app_state.scene_id;
@@ -1847,6 +1981,8 @@ mod depth_tests {
             mesh: Arc::from(comet),
             emissive_intensity: 0.0,
             emissive_color: [0.0, 0.0, 0.0],
+            use_new_path: false,
+            paint_display_mode: 0,
           },
         )
         .unwrap();

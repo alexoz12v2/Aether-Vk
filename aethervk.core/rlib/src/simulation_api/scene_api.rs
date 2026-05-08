@@ -294,7 +294,7 @@ impl SimulationContext {
         asset_path: String::new(),
         mesh: Arc::from(sun_sphere),
         emissive_intensity: 0.9,
-        emissive_color: [1.0, 0.35, 0.02],
+        emissive_color: [1.0, 0.35, 0.02], use_new_path: false, paint_display_mode: 0,
       },
     )?;
 

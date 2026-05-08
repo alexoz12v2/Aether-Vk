@@ -11,7 +11,7 @@ use core::{
 
 // -------------------------------- Instance --------------------------------
 
-pub(super) struct Instance {
+pub struct Instance {
   pub instance: ash::Instance,
   #[cfg(debug_assertions)]
   debug_messenger: vk::DebugUtilsMessengerEXT,
@@ -22,7 +22,7 @@ pub(super) struct Instance {
 impl Instance {
   /// ## Safety
   /// See `utils::vk_entry` and `ash::Entry::create_instance`
-  pub(super) unsafe fn new(
+  pub unsafe fn new(
     base_path_override: Option<&CStr>,
     validation_error_callback: Option<fn(&str)>,
   ) -> GpuResult<Self> {
@@ -206,12 +206,12 @@ impl Instance {
     }
   }
 
-  pub(super) fn api_version(&self) -> u32 {
+  pub fn api_version(&self) -> u32 {
     // TODO if changed
     vk::API_VERSION_1_1
   }
 
-  pub(super) fn get_eligible_devices(
+  pub fn get_eligible_devices(
     &self,
     query_input: &utils::PhysicalDeviceQueryInput,
   ) -> GpuResult<Vec<utils::PhysicalDeviceQueryResult>> {

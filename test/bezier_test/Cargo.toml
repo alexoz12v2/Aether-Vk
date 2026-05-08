@@ -1,0 +1,48 @@
+[package]
+name = "bezier_test"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+windowed = []
+
+[dependencies]
+aethervk-core-rlib = { path = "../../aethervk.core/rlib" }
+aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib" }
+spin = "0.9.8"
+heapless = "0.8.0"
+test_utils = { path = "../test_utils" }
+winit = { version = "0.29.15", features = ["rwh_06"] }
+image = "0.25.10"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = ">=0.59, <= 0.62", default-features = false, features = [
+  "Win32_Foundation",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+windows-strings = { version = "0.5", default-features = false }
+wchar = "0.11"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6.4", default-features = false }
+objc2-core-foundation = { version = "0.3.2", default-features = false }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+  "NSResponder",
+  "NSView",
+  "objc2-quartz-core", # set layer function
+  "NSWindow",          # needed to lock the observer on our window
+] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
+  "CALayer",
+  "CAMetalLayer",
+  "objc2-metal",
+  "objc2-core-foundation", # setDrawableSize for layer
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+  "NSNotification", # NSNotification & NSNotificationCenter
+  "NSString",       # NSString
+] }
+objc2-metal = { version = "0.3.2", default-features = false, features = [
+  "MTLDevice",
+] }

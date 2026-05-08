@@ -41,6 +41,21 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer BV
     BVHNodeAABB nodes[];
 };
 
+// Helper to safely read from scalar storage without triggering cross-compiler padding mismatch bugs
+BVHNodeAABB read_bvh_node(BVHArray bvh, uint idx) {
+    BVHNodeAABB node;
+    node.bound.minBounds = bvh.nodes[idx].bound.minBounds;
+    node.bound.maxBounds = bvh.nodes[idx].bound.maxBounds;
+    node.left_child_or_primitive_offset = bvh.nodes[idx].left_child_or_primitive_offset;
+    node.right_child_offset = bvh.nodes[idx].right_child_offset;
+    node.primitive_count = bvh.nodes[idx].primitive_count;
+    node.node_type = bvh.nodes[idx].node_type;
+    node.parent_idx = bvh.nodes[idx].parent_idx;
+    node.mass = bvh.nodes[idx].mass;
+    node.center_of_mass = bvh.nodes[idx].center_of_mass;
+    return node;
+}
+
 layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer CollisionPairList {
     uint count;
     uvec2 pairs[]; // Pair of primitive/entity indices
@@ -202,8 +217,8 @@ void computeSelfIntersections(
         uint idxA = nodePair.x;
         uint idxB = nodePair.y;
 
-        BVHNodeAABB nodeA = bvh.nodes[idxA];
-        BVHNodeAABB nodeB = bvh.nodes[idxB];
+        BVHNodeAABB nodeA = read_bvh_node(bvh, idxA);
+        BVHNodeAABB nodeB = read_bvh_node(bvh, idxB);
 
         if (intersectAABB(nodeA.bound, nodeB.bound)) {
             bool aIsLeaf = (nodeA.primitive_count > 0);
@@ -257,8 +272,8 @@ void intersectTwoHierarchies(
 
     while (stackPtr > 0) {
         uvec2 pair = stack[--stackPtr];
-        BVHNodeAABB nodeA = bvhA.nodes[pair.x];
-        BVHNodeAABB nodeB = bvhB.nodes[pair.y];
+        BVHNodeAABB nodeA = read_bvh_node(bvhA, pair.x);
+        BVHNodeAABB nodeB = read_bvh_node(bvhB, pair.y);
 
         if (intersectAABB(nodeA.bound, nodeB.bound)) {
             bool aIsLeaf = (nodeA.primitive_count > 0);

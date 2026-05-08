@@ -33,48 +33,45 @@ impl PhysicsSceneMathExt for PhysicsScene {
   fn intersect_world_bvh_math(&self, ray: &Ray<Vec3f32>) -> Vec<EntityId> {
     let mut hit_instances = Vec::new();
 
-    if self.world_bvh.nodes.is_empty() {
-      return hit_instances;
-    }
+    for frame in &self.gpu_frames {
+      let root_idx = frame.bvh_root_index;
+      if root_idx == u32::MAX {
+        continue;
+      }
 
-    let mut stack = Vec::new();
-    stack.push(0usize); // Start at the root node
+      let mut stack = Vec::new();
+      stack.push(root_idx as usize);
 
-    while let Some(node_idx) = stack.pop() {
-      let node = &self.world_bvh.nodes[node_idx];
+      while let Some(node_idx) = stack.pop() {
+        let node = &self.gpu_bvh_nodes[node_idx];
 
-      let hits_bound = match &node.bound {
-        linear_bvh::LinearBound::AABB(aabb) => intersection::intersect_ray_aabb(ray, aabb),
-        linear_bvh::LinearBound::OBB(obb) => {
-          intersection::intersect_ray_obb::<_, _, Mat3f32>(ray, obb)
-        }
-      };
+        let min_bound = Vec3f32::from_array(node.aabb_min);
+        let max_bound = Vec3f32::from_array(node.aabb_max);
+        let aabb = crate::math::collision::bounds::AABB::<f32>::new(min_bound, max_bound);
 
-      if hits_bound {
-        if node.primitive_count > 0 {
-          // It's a LEAF node. Extract instances from the primitive array mapping.
-          let prim_start = node.left_child_or_primitive_offset as usize;
-          let prim_end = prim_start + node.primitive_count as usize;
+        let hits_bound = intersection::intersect_ray_aabb(ray, &aabb);
 
-          for i in prim_start..prim_end {
-            // We must fetch the actual primitive index from the offset array
-            let prim_idx = self.world_bvh.primitives[i];
+        if hits_bound {
+          if node.prim_count > 0 {
+            // Leaf node. Extract instances from the primitive array mapping.
+            let prim_start = node.left_child_or_prim as usize;
+            let prim_end = prim_start + node.prim_count as usize;
 
-            // Map the primitive ID to the actual EntityId
-            if let Some(&entity) = self.entity_mappings.get(prim_idx) {
+            for i in prim_start..prim_end {
+              let prim_idx = self.gpu_primitives[i];
+              let entity = self.gpu_entity_mappings[prim_idx as usize];
               if !hit_instances.contains(&entity) {
                 hit_instances.push(entity);
               }
             }
-          }
-        } else {
-          // It's an INTERNAL node. Push valid children to the stack to traverse downwards.
-          // We push the right child first so the left child is popped first.
-          if node.right_child_offset != u32::MAX {
-            stack.push(node.right_child_offset as usize);
-          }
-          if node.left_child_or_primitive_offset != u32::MAX {
-            stack.push(node.left_child_or_primitive_offset as usize);
+          } else {
+            // Internal node. Push valid children to the stack.
+            if node.right_child_offset != u32::MAX {
+              stack.push(node.right_child_offset as usize);
+            }
+            if node.left_child_or_prim != u32::MAX {
+              stack.push(node.left_child_or_prim as usize);
+            }
           }
         }
       }
@@ -126,7 +123,7 @@ impl PhysicsSceneMathExt for PhysicsScene {
       let local_node = &bvh.nodes[node_idx];
 
       let hit_local_node = match &local_node.bound {
-        linear_bvh::LinearBound::AABB(aabb) => intersection::intersect_ray_aabb(&local_ray, aabb),
+        linear_bvh::LinearBound::AABB(aabb) => intersection::intersect_ray_aabb(&local_ray, &aabb),
         linear_bvh::LinearBound::OBB(obb) => {
           intersection::intersect_ray_obb::<_, _, Mat3f32>(&local_ray, &obb)
         }

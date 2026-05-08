@@ -1,3 +1,4 @@
+pub use super::gpu_backends::*;
 use crate::physics::physics_scene::PhysicsScene;
 use crate::scene::Scene;
 use crate::scene::text::{FontAtlas, GlyphInfo};
@@ -8,6 +9,7 @@ use crate::{
   scene::{EntityId, PhysicalMeshComponent, TransformComponent},
 };
 use ab_glyph::PxScale;
+use aethervk_oshal_rlib::log;
 use aethervk_oshal_rlib::os::time::timeus_t;
 use ahash::AHasher;
 use alloc::string::String;
@@ -19,8 +21,6 @@ use core::{
   hash::{Hash, Hasher},
 };
 use heapless::index_map::FnvIndexMap;
-use aethervk_oshal_rlib::log;
-pub use super::gpu_backends::*;
 
 pub mod frame;
 pub mod scene_conversion;
@@ -50,6 +50,11 @@ impl GpuResourceHandle {
 pub struct KinematicBody {
   pub entity_id: EntityId,
   pub transform: TransformComponent,
+  pub parent_frame_id: u32,
+  pub mu: f32,
+  pub own_frame_id: u32,
+  pub frame_type: u32,
+  pub scale: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -58,6 +63,15 @@ pub struct DynamicBody {
   pub transform: TransformComponent,
   pub velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
   pub mass: f32,
+  pub parent_frame_id: u32,
+  pub force: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ForceEmitter {
+  pub position: [f32; 3],
+  pub mu: f32,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
@@ -102,6 +116,42 @@ bitflags! {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct TrajectoryPushConstants {
+  pub map_ptr: u64,
+  pub traj_ptr: u64,
+  pub view_proj: [f32; 16],
+  pub viewport_size: [f32; 2],
+  pub _pad: [f32; 2],
+}
+
+#[repr(C, align(16))]
+#[derive(Copy, Clone)]
+pub struct RationalBezierGpu {
+  pub cp0: [f32; 4],
+  pub cp1: [f32; 4],
+  pub cp2: [f32; 4],
+  pub cp3: [f32; 4],
+}
+
+#[repr(C, align(8))]
+#[derive(Copy, Clone)]
+pub struct TrajectoryGpu {
+  pub segments_ptr: u64,
+  pub color: [f32; 4],
+  pub line_width: f32,
+  pub texture_id: u32,
+}
+
+#[repr(C, align(4))]
+#[derive(Copy, Clone)]
+pub struct SegmentMapGpu {
+  pub trajectory_id: u32,
+  pub local_segment_id: u32,
+  pub subdivisions: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct PushConstants {
   pub model_view_proj: [[f32; 4]; 4],
   pub model: [[f32; 4]; 4],
@@ -112,6 +162,42 @@ pub struct PushConstants {
   pub emissive_intensity: f32,
   pub emissive_color: [f32; 3],
   pub _unused_pad: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SceneData {
+  pub view_proj: [f32; 16],
+  pub camera_pos: [f32; 4], // w is padding
+  pub sun_pos: [f32; 4],    // w is padding
+  pub sun_color: [f32; 4],
+  pub window_extent: [f32; 2],
+  pub _pad: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct MaterialData {
+  pub base_albedo: [f32; 4],    // w is base_roughness
+  pub emissive_color: [f32; 4], // w is emissive_intensity
+  pub base_ao: f32,
+  pub paint_display_mode: u32,
+  pub texture_flags: u32,
+  pub _pad0: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ObjectData {
+  pub model: [f32; 16],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct PhysicalMesh2PushConstants {
+  pub scene_addr: u64,
+  pub material_addr: u64,
+  pub object_addr: u64,
 }
 
 #[repr(C)]
@@ -244,6 +330,18 @@ pub struct ParticlePushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct Particle2PushConstants {
+  pub view_proj: [f32; 16],
+  pub camera_up: [f32; 3],
+  pub time:  f32,
+  pub camera_right: [f32; 3],
+  pub seed: f32,
+  pub color: [f32; 4],
+  pub radius: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct GizmoPushConstants {
   pub view_proj: [f32; 16],
   pub scale: f32,
@@ -351,6 +449,7 @@ pub enum NativeGpuProperty {
 pub enum ArchetypeId {
   Sun,
   PhysicalMesh,
+  PhysicalMesh2,
   Billboard,
   Cursor,
   Marker,
@@ -362,6 +461,8 @@ pub enum ArchetypeId {
   Bvh,
   Particle,
   Gizmo,
+  Particle2,
+  Trajectory,
 }
 
 /// `RenderCompute` bridges the gap between purely physical workloads (`Kernels`) and
@@ -475,6 +576,33 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     debug_name: &str,
   ) -> GpuResult<ResourceUploadResult>;
 
+  fn get_physical_mesh2_resources(
+    &self,
+    entity_id: EntityId,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<ResourceUploadResult>;
+  fn create_physical_mesh2_resources(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    entity_id: EntityId,
+    component: &PhysicalMeshComponent,
+    handle: PresentationEngineHandle,
+    debug_name: &str,
+  ) -> GpuResult<ResourceUploadResult>;
+
+  #[allow(clippy::too_many_arguments)]
+  fn draw_physical_mesh2(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    pipeline: PipelineKey,
+    buffers: GpuResourceHandle,
+    camera: &crate::gpu::frame::CameraRenderData,
+    sun_pos: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
+    sun_color: [f32; 4],
+    window_extent: [f32; 2],
+    draw_call: &crate::gpu::frame::DrawCall,
+  ) -> GpuResult<()>;
+
   /// Generates the background sky image using compute shader
   fn generate_sky(&self) -> GpuResult<()>;
 
@@ -549,6 +677,19 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     particle_calls: &mut [crate::gpu::frame::ParticleDrawCall],
   ) -> GpuResult<()>;
 
+  fn upload_particle2_systems(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    particle_calls: &mut [crate::gpu::frame::Particle2DrawCall],
+  ) -> GpuResult<()>;
+
+  fn upload_trajectories(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
+    trajectories: &[(crate::scene::EntityId, crate::scene::trajectory::TrajectoryComponent, aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32)],
+  ) -> GpuResult<Option<crate::gpu::frame::TrajectoryBatchCall>>;
+
   /// Draws a particle system using the mega-buffer
   fn draw_particle_indirect(
     &self,
@@ -556,7 +697,15 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     indirect_offset: u32,
   ) -> GpuResult<()>;
 
+  fn draw_particle2_indirect(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    indirect_offset: u32,
+  ) -> GpuResult<()>;
+
   fn get_particle_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
+  fn get_particle2_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
+  fn get_trajectory_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
   fn get_sun_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
   fn get_sky_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
   fn get_grid_pipeline_kay(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
@@ -637,6 +786,8 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
 
   fn draw(&self, cmd_buffer: CommandBufferHandle, vertex_count: u32) -> GpuResult<()>;
 
+  fn draw_instanced(&self, cmd_buffer: CommandBufferHandle, vertex_count: u32, instance_count: u32) -> GpuResult<()>;
+
   fn draw_indirect(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -685,6 +836,18 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   /// Allocates Descriptor (not image, that is done in `generate_sky`) and updates if not done yet
   /// TODO probably move into bridge between Kernels and RenderDevice when Kernels has generates_sky
   fn prepare_particle_archetype_for_render_and_bind_pipeline(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()>;
+
+  fn prepare_particle2_archetype_for_render_and_bind_pipeline(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()>;
+
+  fn prepare_trajectory_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
     handle: PresentationEngineHandle,
@@ -835,6 +998,7 @@ macro_rules! implement_render_device_ext {
 implement_render_device_ext! {
   fn push_sun_constants(Sun, SunPushConstants);
   fn push_constants_mesh(PhysicalMesh, PushConstants);
+  fn push_constants_mesh2(PhysicalMesh2, PhysicalMesh2PushConstants);
   fn push_billboard_constants(Billboard, BillboardPushConstants);
   fn push_cursor_constants(Cursor, CursorPushConstants);
   fn push_marker_constants(Marker, MarkerPushConstants);
@@ -848,6 +1012,9 @@ implement_render_device_ext! {
   fn push_text_constants(Text, TextPushConstants);
   // Bvh,
   fn push_bvh_constants(Bvh, BvhPushConstants);
+  fn push_particle_constants(Particle, ParticlePushConstants);
+  fn push_particle2_constants(Particle2, Particle2PushConstants);
+  fn push_trajectory_constants(Trajectory, TrajectoryPushConstants);
 
   // to add new archetypes, add one line here:
 }

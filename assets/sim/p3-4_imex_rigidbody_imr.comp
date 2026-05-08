@@ -141,7 +141,14 @@ void main() {
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= pc.total_bodies) return;
 
-    RigidBody rb = pc.rigid_bodies.bodies[idx];
+    // Critical fix: Copy field-by-field to avoid SPIRV-Cross struct padding mismatch
+    RigidBody rb;
+    rb.position = pc.rigid_bodies.bodies[idx].position;
+    rb.mass = pc.rigid_bodies.bodies[idx].mass;
+    rb.rotation = pc.rigid_bodies.bodies[idx].rotation;
+    rb.linear_velocity = pc.rigid_bodies.bodies[idx].linear_velocity;
+    rb.angular_velocity = pc.rigid_bodies.bodies[idx].angular_velocity;
+    rb.inertia_tensor = pc.rigid_bodies.bodies[idx].inertia_tensor;
     
     vec3 v_mid = rb.linear_velocity;
     vec3 w_mid = rb.angular_velocity;
@@ -159,7 +166,9 @@ void main() {
         mat3 k_trans = mat3(0.0);
         
         for (uint e = 0; e < pc.num_emitters; ++e) {
-            ForceEmitter em = pc.emitters.emitters[e];
+            ForceEmitter em;
+            em.position = pc.emitters.emitters[e].position;
+            em.mu = pc.emitters.emitters[e].mu;
             vec3 r = em.position - x_mid;
             float dist_sq = dot(r, r);
             if (dist_sq > 1e-6) {

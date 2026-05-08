@@ -39,6 +39,7 @@ fn get_validated_shaders(
 pub(super) struct Archetypes {
   pub sun_render_archetype: spin::RwLock<Option<resources::SunRenderResourceArchetype>>,
   pub physical_mesh_render_archetype: spin::RwLock<Option<ForwardMeshRenderResourceArchetype>>,
+  pub physical_mesh2_render_archetype: spin::RwLock<Option<resources::ForwardMesh2RenderResourceArchetype>>,
   pub billboard_render_archetype: spin::RwLock<Option<resources::BillboardRenderResourceArchetype>>,
   pub particle_render_archetype: spin::RwLock<Option<resources::ParticleRenderResourceArchetype>>,
   pub cursor_render_archetype: spin::RwLock<Option<resources::CursorRenderResourceArchetype>>,
@@ -51,12 +52,15 @@ pub(super) struct Archetypes {
   pub text_render_archetype: spin::RwLock<Option<resources::TextRenderResourceArchetype>>,
   pub bvh_render_archetype: spin::RwLock<Option<resources::BvhRenderResourceArchetype>>,
   pub gizmo_render_archetype: spin::RwLock<Option<resources::GizmoRenderResourceArchetype>>,
+  pub particle2_render_archetype: spin::RwLock<Option<resources::Particle2RenderResourceArchetype>>,
+  pub trajectory_render_archetype: spin::RwLock<Option<resources::TrajectoryRenderResourceArchetype>>,
 }
 
 impl Archetypes {
   pub fn has_discardables(&self) -> bool {
     self.sun_render_archetype.read().is_some()
       || self.physical_mesh_render_archetype.read().is_some()
+      || self.physical_mesh2_render_archetype.read().is_some()
       || self.billboard_render_archetype.read().is_some()
       || self.particle_render_archetype.read().is_some()
       || self.cursor_render_archetype.read().is_some()
@@ -68,6 +72,7 @@ impl Archetypes {
       || self.text_render_archetype.read().is_some()
       || self.bvh_render_archetype.read().is_some()
       || self.gizmo_render_archetype.read().is_some()
+      || self.trajectory_render_archetype.read().is_some()
   }
 
   pub fn discard(&self, device: &ash::Device, discard_pool: &resources::DiscardPool) {
@@ -75,6 +80,9 @@ impl Archetypes {
       archetype.discard(device, &discard_pool, u64::MAX);
     }
     if let Some(mut archetype) = self.physical_mesh_render_archetype.write().take() {
+      archetype.discard(device, discard_pool, u64::MAX);
+    }
+    if let Some(mut archetype) = self.physical_mesh2_render_archetype.write().take() {
       archetype.discard(device, discard_pool, u64::MAX);
     }
     if let Some(mut archetype) = self.billboard_render_archetype.write().take() {
@@ -108,6 +116,12 @@ impl Archetypes {
       archetype.discard(device, discard_pool, u64::MAX);
     }
     if let Some(mut archetype) = self.gizmo_render_archetype.write().take() {
+      archetype.discard(device, discard_pool, u64::MAX);
+    }
+    if let Some(mut archetype) = self.particle2_render_archetype.write().take() {
+      archetype.discard(device, discard_pool, u64::MAX);
+    }
+    if let Some(mut archetype) = self.trajectory_render_archetype.write().take() {
       archetype.discard(device, discard_pool, u64::MAX);
     }
   }
@@ -338,6 +352,27 @@ impl Archetypes {
   );
 
   impl_update_archetype!(
+    update_physical_mesh2_archetype_for_presentation_engine,
+    physical_mesh2_render_archetype,
+    |archetype, device, write_pipeline, discard_pool, timeline, graphics_info, format| {
+      if !archetype.has_format_outline_pipeline_map(format) {
+        let mut outline_graphics_info = archetype.get_any_graphics_info_outline_pipeline_map().unwrap();
+        outline_graphics_info.fragment_out.color_attachment_formats.clear();
+        outline_graphics_info.fragment_out.color_attachment_formats.push(format);
+        outline_graphics_info.render_pass = graphics_info.render_pass;
+
+        let outline_pipeline_key = outline_graphics_info.pipeline_key();
+        write_pipeline.get_or_create_graphics_pipeline(device, &outline_graphics_info)?;
+        archetype.insert_graphics_info_outline_pipeline_map(
+          format,
+          outline_graphics_info,
+          outline_pipeline_key,
+        );
+      }
+    }
+  );
+
+  impl_update_archetype!(
     update_cursor_archetype_for_presentation_engine,
     cursor_render_archetype
   );
@@ -394,6 +429,11 @@ impl Archetypes {
     billboard_render_archetype
   );
 
+  impl_update_archetype!(
+    update_trajectory_archetype_for_presentation_engine,
+    trajectory_render_archetype
+  );
+
   // ------------------------------------ Creation ------------------------------------
 
   impl_create_archetype!(
@@ -419,6 +459,39 @@ impl Archetypes {
         .with_stencil_reference(255)
         .with_stencil_compare_mask(0)
         .with_stencil_write_mask(u32::MAX)
+    }
+  );
+
+  impl_create_archetype!(
+    create_particle2_archetype,
+    particle2_render_archetype,
+    Particle2RenderResourceArchetype,
+    ref_alloc,
+    |gi| {
+      gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
+        .with_pipeline_flags(PipelineFlags::empty())
+        .with_stencil_compare_op(StencilCompareOp::None)
+        .with_stencil_logic_op(StencilLogicOp::Replace)
+        .with_stencil_reference(255)
+        .with_stencil_compare_mask(0)
+        .with_stencil_write_mask(u32::MAX)
+    }
+  );
+
+  impl_create_archetype!(
+    create_trajectory_archetype,
+    trajectory_render_archetype,
+    TrajectoryRenderResourceArchetype,
+    ref_alloc,
+    |gi| {
+        gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
+          .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::empty())
+          .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+          .with_stencil_compare_op(StencilCompareOp::None)
+          .with_stencil_logic_op(StencilLogicOp::Replace)
+          .with_stencil_reference(255)
+          .with_stencil_compare_mask(0)
+          .with_stencil_write_mask(u32::MAX)
     }
   );
 
@@ -604,7 +677,10 @@ impl Archetypes {
       .with_stencil_write_mask(u32::MAX)
       .clone();
 
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
+
+    aethervk_oshal_rlib::log!("Creating graphics pipeline for physical_mesh2...");
+    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info).inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
+
 
     // Note: old code rendered outlines with back faces and stencil buffer. But:
     // - That is the traditional technique because traditional pipelines don't use Stencil Masks.
@@ -635,7 +711,10 @@ impl Archetypes {
       .clone();
 
     let outline_pipeline_key = outline_graphics_info.pipeline_key();
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &outline_graphics_info)?;
+
+    aethervk_oshal_rlib::log!("Creating outline graphics pipeline for physical_mesh2...");
+    pipeline_pool.get_or_create_graphics_pipeline(&device, &outline_graphics_info).inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create outline graphics pipeline: {:?}", e))?;
+
     let pipeline_key = pipeline_graphics_info.pipeline_key();
 
     let final_res = res
@@ -650,6 +729,177 @@ impl Archetypes {
         outline_pipeline_key,
       );
     *self.physical_mesh_render_archetype.write() = Some(final_res);
+
+    Ok(())
+  }
+
+  pub fn create_physical_mesh2_archetype(
+    &self,
+    device: &LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
+    vertex_shader_key: ShaderKey,
+    fragment_shader_key: ShaderKey,
+    outline_vertex_shader_key: ShaderKey,
+    outline_fragment_shader_key: ShaderKey,
+    depth_stencil_format: vk::Format,
+    queue: &Queue,
+    color_format: vk::Format,
+    allocator: &vk_mem::Allocator,
+    discard_pool: &resources::DiscardPool,
+    staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
+    renderpasses: &renderpasses::RenderPasses,
+    pipeline_pool: &mut pipelines::PipelinePool,
+    timeline: u64,
+  ) -> GpuResult<()> {
+    if self.physical_mesh2_render_archetype.read().is_some() {
+      return Err(crate::gpu_err!("device error"));
+    }
+
+    let vertex_shader = shader_manager.get(vertex_shader_key).ok_or(GpuError::InvalidShader)?;
+    if vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
+      return Err(GpuError::InvalidShader);
+    }
+    let fragment_shader = shader_manager.get(fragment_shader_key).ok_or(GpuError::InvalidShader)?;
+    if fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
+      return Err(GpuError::InvalidShader);
+    }
+
+    let outline_vertex_shader =
+      shader_manager.get(outline_vertex_shader_key).ok_or(GpuError::InvalidShader)?;
+    if outline_vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
+      return Err(GpuError::InvalidShader);
+    }
+    let outline_fragment_shader =
+      shader_manager.get(outline_fragment_shader_key).ok_or(GpuError::InvalidShader)?;
+    if outline_fragment_shader.shader_stage != vk::ShaderStageFlags::FRAGMENT {
+      return Err(GpuError::InvalidShader);
+    }
+
+    // Create initial struct
+    aethervk_oshal_rlib::log!("Creating ForwardMesh2RenderResourceArchetype...");
+    let res = unsafe {
+      resources::ForwardMesh2RenderResourceArchetype::new(
+        device,
+        &vertex_shader,
+        &fragment_shader,
+        allocator,
+        discard_pool,
+        staging_arena,
+        &queue,
+      )
+    }.inspect_err(|e| aethervk_oshal_rlib::log!("ForwardMesh2RenderResourceArchetype::new failed: {:?}", e))?;
+
+    aethervk_oshal_rlib::log!("Populating GraphicsInfo...");
+    // then populate graphics info and pipeline key
+
+    let pipeline_graphics_info = GraphicsInfo::default()
+      .with_vertex_in(
+        VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+          .add_binding(
+            0,
+            POSITION_COMPONENTS * size_of::<f32>() as u32,
+            vk::VertexInputRate::VERTEX,
+          )
+          .add_binding(1, 9 * size_of::<f32>() as u32, vk::VertexInputRate::VERTEX)
+          .add_attribute(0, 0, vk::Format::R32G32B32_SFLOAT, 0) // inPosition
+          .add_attribute(1, 1, vk::Format::R32G32B32_SFLOAT, 0) // inNormal
+          .add_attribute(
+            1,
+            2,
+            vk::Format::R32G32_SFLOAT,
+            NORMAL_COMPONENTS * size_of::<f32>() as u32,
+          ) // inUV
+          .add_attribute(
+            1,
+            3,
+            vk::Format::R32G32B32A32_SFLOAT,
+            (NORMAL_COMPONENTS + UV_COMPONENTS) * size_of::<f32>() as u32,
+          ), // inTangent
+      )
+      .with_pre_rasterization(
+        PreRasterization::default().with_vertex_module(vertex_shader.module.get()),
+      )
+      .with_fragment_shader(
+        FragmentShader::default()
+          .with_fragment_module(fragment_shader.module.get())
+          .add_viewport(ignored_viewport())
+          .add_scissors(ignored_scissor()),
+      )
+      .with_fragment_out(
+        FragmentOut::default()
+          .add_color_attachment_format(color_format)
+          .with_depth_attachment_format(depth_stencil_format)
+          .with_stencil_attachment_format(depth_stencil_format),
+      )
+      .with_pipeline_layout(res.pipeline_layout.get())
+      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
+      .with_stencil_compare_op(StencilCompareOp::Always)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(255)
+      .with_stencil_write_mask(u32::MAX)
+      .with_render_pass(
+        renderpasses
+          .get_pipeline_render_pass(color_format, depth_stencil_format)?
+          .get(),
+      )
+      .with_subpass(0)
+      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+      .with_stencil_compare_op(StencilCompareOp::None)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(255)
+      .with_stencil_compare_mask(0)
+      .with_stencil_write_mask(u32::MAX)
+      .clone();
+
+
+    aethervk_oshal_rlib::log!("Creating graphics pipeline for physical_mesh2...");
+    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info).inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
+
+
+    let outline_graphics_info = pipeline_graphics_info
+      .clone()
+      .with_pre_rasterization(
+        PreRasterization::default().with_vertex_module(outline_vertex_shader.module.get()),
+      )
+      .with_fragment_shader(
+        FragmentShader::default()
+          .with_fragment_module(outline_fragment_shader.module.get())
+          .add_viewport(ignored_viewport())
+          .add_scissors(ignored_scissor()),
+      )
+      .with_pipeline_flags(
+        PipelineFlags::STENCIL_ENABLE
+          | PipelineFlags::NO_DEPTH_TEST
+          | PipelineFlags::NO_DEPTH_WRITE,
+      )
+      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+      .with_stencil_compare_op(StencilCompareOp::NotEqual)
+      .with_stencil_logic_op(StencilLogicOp::None)
+      .with_stencil_reference(255)
+      .with_stencil_compare_mask(255)
+      .with_stencil_write_mask(0)
+      .clone();
+
+    let outline_pipeline_key = outline_graphics_info.pipeline_key();
+
+    aethervk_oshal_rlib::log!("Creating outline graphics pipeline for physical_mesh2...");
+    pipeline_pool.get_or_create_graphics_pipeline(&device, &outline_graphics_info).inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create outline graphics pipeline: {:?}", e))?;
+
+    let pipeline_key = pipeline_graphics_info.pipeline_key();
+
+    let final_res = res
+      .with_graphics_info(
+        color_format,
+        pipeline_graphics_info,
+        pipeline_key,
+      )
+      .with_graphics_info_outline_pipeline_map(
+        color_format,
+        outline_graphics_info,
+        outline_pipeline_key,
+      );
+    *self.physical_mesh2_render_archetype.write() = Some(final_res);
 
     Ok(())
   }
@@ -862,7 +1112,10 @@ impl Archetypes {
       .clone();
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
+
+    aethervk_oshal_rlib::log!("Creating graphics pipeline for physical_mesh2...");
+    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info).inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
+
     arch_mut.insert_graphics_info(color_format, pipeline_graphics_info, pipeline_key);
 
     Ok(())
@@ -1052,7 +1305,10 @@ impl Archetypes {
       .clone();
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
+
+    aethervk_oshal_rlib::log!("Creating graphics pipeline for physical_mesh2...");
+    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info).inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
+
     archetype.insert_graphics_info(color_format, pipeline_graphics_info, pipeline_key);
 
     Ok(())
@@ -1120,7 +1376,10 @@ impl Archetypes {
       .clone();
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
+
+    aethervk_oshal_rlib::log!("Creating graphics pipeline for physical_mesh2...");
+    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info).inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
+
     archetype.insert_graphics_info(color_format, pipeline_graphics_info, pipeline_key);
 
     Ok(())
@@ -1134,3 +1393,4 @@ fn ignored_viewport() -> vk::Viewport {
 fn ignored_scissor() -> vk::Rect2D {
   vk::Rect2D::default()
 }
+// Dummy implementation of create_physical_mesh2_archetype needs to be appended appropriately.

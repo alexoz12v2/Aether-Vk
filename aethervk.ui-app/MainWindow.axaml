@@ -34,38 +34,7 @@
                         <NativeMenuItem Header="Copy"/>
                         <NativeMenuItem Header="Paste"/>
                         <NativeMenuItemSeparator/>
-                        <NativeMenuItem Header="Settings">
-                            <NativeMenuItem.Menu>
-                                <NativeMenu>
-                                    <NativeMenuItem Header="Mappings">
-                                        <NativeMenuItem.Menu>
-                                            <NativeMenu>
-                                                <NativeMenuItem Header="Rotate Camera : Shift + RMB" />
-                                                <NativeMenuItem Header="Pan Cursor : LMB" />
-                                                <NativeMenuItem Header="Zoom : Mouse Wheel" />
-                                                <NativeMenuItem Header="Reset Camera : R" />
-                                                <NativeMenuItem Header="Add Jet Raycast : Shift + RMB (in Add Mode)" />
-                                                <NativeMenuItem Header="Cancel Add Jet : Esc" />
-                                                <NativeMenuItem Header="Move Cursor Z-Up : E" />
-                                                <NativeMenuItem Header="Move Cursor Z-Down : Q" />
-                                                <NativeMenuItem Header="Move Cursor Y-Forward : Up Arrow" />
-                                                <NativeMenuItem Header="Move Cursor Y-Backward : Down Arrow" />
-                                                <NativeMenuItem Header="Move Cursor X-Left : Left Arrow" />
-                                                <NativeMenuItem Header="Move Cursor X-Right : Right Arrow" />
-                                            </NativeMenu>
-                                        </NativeMenuItem.Menu>
-                                    </NativeMenuItem>
-                                    <NativeMenuItem Header="Imported Models">
-                                        <!-- Bound in code-behind or dynamically, but Avalonia native menu items don't support ItemsSource easily without a custom behavior, we will use normal Menu below for now and leave this as placeholder or bind to a command that opens a dialog -->
-                                        <NativeMenuItem.Menu>
-                                            <NativeMenu>
-                                                 <NativeMenuItem Header="Manage Models..." Command="{Binding OpenImportedModelsDialogCommand}" />
-                                            </NativeMenu>
-                                        </NativeMenuItem.Menu>
-                                    </NativeMenuItem>
-                                </NativeMenu>
-                            </NativeMenuItem.Menu>
-                        </NativeMenuItem>
+                        <NativeMenuItem Header="Settings..." Gesture="Cmd+OemComma" Command="{Binding OpenSettingsCommand}" />
                     </NativeMenu>
                 </NativeMenuItem.Menu>
             </NativeMenuItem>
@@ -89,35 +58,8 @@
                     <MenuItem Header="Copy" />
                     <MenuItem Header="Paste" />
                     <Separator />
-                    <MenuItem Header="Settings">
-                        <MenuItem Header="Mappings">
-                            <MenuItem Header="Rotate Camera : Shift + RMB" />
-                            <MenuItem Header="Pan Cursor : LMB" />
-                            <MenuItem Header="Zoom : Mouse Wheel" />
-                            <MenuItem Header="Reset Camera : R" />
-                            <MenuItem Header="Add Jet Raycast : Shift + RMB (in Add Mode)" />
-                            <MenuItem Header="Cancel Add Jet : Esc" />
-                            <MenuItem Header="Move Cursor Z-Up : E" />
-                            <MenuItem Header="Move Cursor Z-Down : Q" />
-                            <MenuItem Header="Move Cursor Y-Forward : Up Arrow" />
-                            <MenuItem Header="Move Cursor Y-Backward : Down Arrow" />
-                            <MenuItem Header="Move Cursor X-Left : Left Arrow" />
-                            <MenuItem Header="Move Cursor X-Right : Right Arrow" />
-                        </MenuItem>
-                        <MenuItem Header="Imported Models">
-                            <MenuItem Header="Manage Models..." Command="{Binding OpenImportedModelsDialogCommand}" />
-                            <MenuItem Header="Active Models" ItemsSource="{Binding ImportedModels}">
-                                <MenuItem.ItemTemplate>
-                                    <DataTemplate>
-                                        <MenuItem Header="{Binding Name}">
-                                            <MenuItem Header="Spawn Instance" Command="{Binding SpawnCommand}" />
-                                            <MenuItem Header="Unload" Command="{Binding UnloadCommand}" />
-                                        </MenuItem>
-                                    </DataTemplate>
-                                </MenuItem.ItemTemplate>
-                            </MenuItem>
-                        </MenuItem>
-                    </MenuItem>
+                    <MenuItem Header="Settings..." HotKey="Ctrl+OemComma" Command="{Binding OpenSettingsCommand}" />
+                    <MenuItem Header="Imported Models" Command="{Binding OpenImportedModelsDialogCommand}" />
                 </MenuItem>
             </Menu>
             <Button Content="Toggle Theme" Command="{Binding ToggleThemeCommand}" DockPanel.Dock="Right" Margin="5" />

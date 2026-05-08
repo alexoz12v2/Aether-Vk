@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Linq;
+using AetherVk.Logic.Input;
 using AetherVk.Logic.Models;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -8,11 +9,13 @@ using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.ViewModels;
 
-public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySelectedMessage>
+public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySelectedMessage>, IActionHandler
 {
   private readonly SceneStateManager _stateManager;
   private readonly NativeRuntimeService? _runtimeService;
   private readonly BreadcrumbService? _breadcrumbService;
+
+  public OperatorStack OperatorStack { get; }
 
   public Entity? SelectedEntity => _stateManager.GetOrCreateScene(CurrentSceneId).SelectedEntity;
 
@@ -21,6 +24,12 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
 
   [ObservableProperty]
   private ulong _currentSceneId;
+
+  [ObservableProperty]
+  private bool _areAllExpanded;
+
+  [ObservableProperty]
+  private bool _isFlyoutMenuOpen;
 
   public PropertiesViewModel(
     ulong sceneId,
@@ -35,8 +44,18 @@ public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySe
     _runtimeService = runtimeService;
     _breadcrumbService = breadcrumbService;
     CurrentSceneId = sceneId;
+    OperatorStack = new OperatorStack(new PropertiesBaseOperator(this));
     WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
   }
+
+  public bool ProcessAction(AppAction action, bool isPressed)
+  {
+    return OperatorStack.ProcessAction(action, isPressed);
+  }
+
+  public bool ProcessPointerDelta(float dx, float dy) => OperatorStack.ProcessPointerDelta(dx, dy);
+
+  public bool ProcessPointerWheel(float deltaY) => OperatorStack.ProcessPointerWheel(deltaY);
 
   public void Receive(EntitySelectedMessage message)
   {

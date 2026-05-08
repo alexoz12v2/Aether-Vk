@@ -180,7 +180,7 @@ fn main() {
         asset_path: file_path.to_str().unwrap().to_string(),
         mesh: Arc::from(loaded_mesh),
         emissive_intensity: 0.0,
-        emissive_color: [0.0, 0.0, 0.0],
+        emissive_color: [0.0, 0.0, 0.0], use_new_path: false, paint_display_mode: 0,
       },
     )
     .unwrap();

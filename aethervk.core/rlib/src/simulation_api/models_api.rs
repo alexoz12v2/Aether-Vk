@@ -68,7 +68,7 @@ impl SimulationContext {
         asset_path: alloc::string::String::new(),
         mesh: Arc::from(sphere),
         emissive_intensity: 0.0,
-        emissive_color: [0.0, 0.0, 0.0],
+        emissive_color: [0.0, 0.0, 0.0], use_new_path: false, paint_display_mode: 0,
       },
     );
 

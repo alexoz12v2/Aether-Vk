@@ -10,15 +10,17 @@ use aethervk_oshal_rlib::math::vector::{Vector, vec3::Vec3f32};
 pub struct AlmanacPlanet {
   pub naif_id: i32,
   pub rot_period: f64, // TODO useful?
+  pub mu: f32,
 }
 
 impl Component for AlmanacPlanet {}
 
 impl AlmanacPlanet {
-  pub fn new(naif_id: i32, rot_period: f64) -> Self {
+  pub fn new(naif_id: i32, rot_period: f64, mu: f32) -> Self {
     Self {
       naif_id,
       rot_period,
+      mu,
     }
   }
 
@@ -37,7 +39,6 @@ impl AlmanacPlanet {
       false,
     )?;
     transform.position = kinematic_state.position;
-    transform.scale = Vec3f32::splat(1.0);
     if let Some(rot) = kinematic_state.rotation {
       transform.rotation = rot.normalize();
     }

@@ -144,6 +144,11 @@ impl Kernels for CpuKernels {
         bodies.push(KinematicBody {
           entity_id: entity,
           transform,
+          parent_frame_id: 0,
+          mu: 0.0,
+          own_frame_id: 0,
+          frame_type: 0,
+          scale: 0.0,
         });
         masses.push(100000000.0);
         is_sun.push(true);
@@ -155,6 +160,11 @@ impl Kernels for CpuKernels {
         bodies.push(KinematicBody {
           entity_id: entity,
           transform,
+          parent_frame_id: 0,
+          mu: 0.0,
+          own_frame_id: 0,
+          frame_type: 0,
+          scale: 0.0,
         });
         masses.push(mesh_comp.mesh.mass_properties.mass as f32 * 5000000.0);
         is_sun.push(false);
@@ -189,6 +199,8 @@ impl Kernels for CpuKernels {
             },
             velocity: Vec3f32::from(p.velocity),
             mass: p.mass,
+            parent_frame_id: 0,
+            force: Default::default(),
           });
           betas.push(sys.config.beta);
           mapping.push((entity, i));

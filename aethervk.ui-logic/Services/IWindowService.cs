@@ -6,6 +6,7 @@ namespace AetherVk.Logic.Services
   {
     Task ShowSpawnImageDialogAsync(string imagePath);
     Task ShowManageImportsDialogAsync();
+    Task ShowSettingsDialogAsync();
     Task OpenMeshViewerAsync(string meshId);
     Task<ulong> ShowSpawnMeshDialogAsync(string modelId, string modelName);
   }

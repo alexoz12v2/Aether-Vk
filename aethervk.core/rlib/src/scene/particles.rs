@@ -36,6 +36,7 @@ pub struct ParticleEmitterConfig {
   pub lifetime: timeus_t,
   pub color: [f32; 4],
   pub beta: f32,
+  pub use_particle2: bool,
 }
 
 #[repr(C)]
