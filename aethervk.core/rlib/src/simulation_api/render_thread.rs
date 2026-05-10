@@ -1,3 +1,5 @@
+//! render_thread module.
+
 use crate::gpu::{FrameCancelGuard, ScopedRenderPass};
 use crate::simulation_api::structs::{
   CustomRenderCallback, RenderCommand, RenderFeedback, RenderTaskStatus, RenderThreadContext,
@@ -22,6 +24,7 @@ use oshal::{
 };
 use thingbuf::mpsc;
 
+/// TODO: Document this item
 pub fn start_render_thread(
   render_rx: mpsc::Receiver<RenderCommand>,
   render_params: RenderThreadContext,
@@ -106,7 +109,7 @@ fn process_command(
           return Err(err);
         }
       };
-      
+
       let extracted_scene_res = render_frame.extract_scene(extent, Some(&ctx.thread_pool));
       let extracted_scene = match extracted_scene_res {
         Ok(s) => s,
@@ -115,7 +118,7 @@ fn process_command(
           return Err(err);
         }
       };
-      
+
       let task_id = render_device.create_task();
       let is_first_render =
         if first_render_map.contains_key(&render_frame.presentation_engine_handle) {
@@ -222,7 +225,12 @@ fn do_render_scene_async(
   )?;
   if let Some(sun_call) = &render_scene.sun_call {
     // TODO move to kernels
-    render_device.update_sun(cmd_buffer, sun_call.entity, (128, 128, 128), sun_call.radius)?;
+    render_device.update_sun(
+      cmd_buffer,
+      sun_call.entity,
+      (128, 128, 128),
+      sun_call.radius,
+    )?;
   }
 
   if is_first_render && custom_render_callback.is_some() {
@@ -301,6 +309,7 @@ fn do_render_scene_async(
 
 // TODO possibly, group by pipeline if necessary
 impl super::structs::RenderFrame {
+  /// TODO: Document this item
   pub fn extract_scene(
     &self,
     window_extent: [u32; 2],

@@ -1,3 +1,5 @@
+//! cpu module.
+
 use crate::math::{
   compute_com_and_tensor, expm_hat, hat, jacobi_diagonalization, solve_12x12, vee,
 };
@@ -10,10 +12,14 @@ use aethervk_oshal_rlib::os::pool::{ThreadPool, Workload, WorkloadStatus};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
+/// TODO: Document this item
 pub const G: f32 = 1.0;
+/// TODO: Document this item
 pub const ANELASTIC_LOOP_COUNT_THRESHOLD: usize = 10;
+/// TODO: Document this item
 pub const PARTICLE_NUCLEUS_RESTITUTION: f32 = 0.8;
 
+/// TODO: Document this item
 pub struct RigidBody {
   pub position: Vec3f32,
   pub linear_momentum: Vec3f32,
@@ -28,6 +34,7 @@ pub struct RigidBody {
 }
 
 impl RigidBody {
+  /// TODO: Document this item
   pub fn new(
     initial_pos_com: Vec3f32,
     initial_vel: Vec3f32,
@@ -75,14 +82,17 @@ impl RigidBody {
     }
   }
 
+  /// TODO: Document this item
   pub fn velocity(&self) -> Vec3f32 {
     self.linear_momentum / self.mass
   }
 
+  /// TODO: Document this item
   pub fn angular_velocity_body(&self) -> Vec3f32 {
     self.inertia_tensor_body_inv.mul_vector(self.pi)
   }
 
+  /// TODO: Document this item
   pub fn body_origin_world(&self) -> Vec3f32 {
     self.position
       - self
@@ -90,6 +100,7 @@ impl RigidBody {
         .mul_vector(self.principal_axes_r.transpose().mul_vector(self.com_offset_body))
   }
 
+  /// TODO: Document this item
   pub fn get_world_vertices(&self) -> Vec<Vec3f32> {
     let mut world_verts = Vec::with_capacity(self.vertices_com_frame.len());
     for v in &self.vertices_com_frame {
@@ -98,6 +109,7 @@ impl RigidBody {
     world_verts
   }
 
+  /// TODO: Document this item
   pub fn get_comet_triangles(&self) -> Vec<(Vec3f32, Vec3f32, Vec3f32)> {
     let verts = self.get_world_vertices();
     if verts.len() < 3 {
@@ -111,6 +123,7 @@ impl RigidBody {
   }
 }
 
+/// TODO: Document this item
 pub struct Particle {
   pub position: Vec3f32,
   pub velocity: Vec3f32,
@@ -122,15 +135,18 @@ pub struct Particle {
 }
 
 impl Particle {
+  /// TODO: Document this item
   pub fn update(&mut self, dt: f32) {
     self.lifetime -= dt;
   }
 
+  /// TODO: Document this item
   pub fn is_alive(&self) -> bool {
     self.lifetime > 0.0
   }
 }
 
+/// TODO: Document this item
 pub fn gravitational_force(pos: Vec3f32, sun_pos: Vec3f32, m: f32, sun_m: f32) -> Vec3f32 {
   let r_vec = sun_pos - pos;
   let dist = r_vec.length();
@@ -140,6 +156,7 @@ pub fn gravitational_force(pos: Vec3f32, sun_pos: Vec3f32, m: f32, sun_m: f32) -
   r_vec * (G * m * sun_m / (dist * dist * dist))
 }
 
+/// TODO: Document this item
 pub fn get_force_and_torque(
   pos: Vec3f32,
   mass: f32,
@@ -151,6 +168,7 @@ pub fn get_force_and_torque(
   (force_world, torque_body)
 }
 
+/// TODO: Document this item
 pub fn calculate_total_energy(body: &RigidBody, sun_pos: Vec3f32, sun_mass: f32) -> f32 {
   let r_dist = (sun_pos - body.position).length();
   let potential_energy = if r_dist > 0.0 {
@@ -164,6 +182,7 @@ pub fn calculate_total_energy(body: &RigidBody, sun_pos: Vec3f32, sun_mass: f32)
   potential_energy + trans_ke + rot_ke
 }
 
+/// TODO: Document this item
 pub fn particle_implicit_midpoint_step(
   p: &mut Particle,
   dt: f32,
@@ -195,6 +214,7 @@ pub fn particle_implicit_midpoint_step(
   p.velocity = v_guess;
 }
 
+/// TODO: Document this item
 pub fn implicit_midpoint_step(body: &mut RigidBody, h: f32, sun_pos: Vec3f32, sun_mass: f32) {
   let x_n = body.position;
   let p_n = body.linear_momentum;
@@ -285,6 +305,7 @@ pub fn implicit_midpoint_step(body: &mut RigidBody, h: f32, sun_pos: Vec3f32, su
   body.pi = pi_guess;
 }
 
+/// TODO: Document this item
 pub fn sphere_triangle_intersection(
   p: Vec3f32,
   p_next: Vec3f32,
@@ -305,6 +326,7 @@ pub fn sphere_triangle_intersection(
   (None, None)
 }
 
+/// TODO: Document this item
 pub fn continuous_collision_detection(
   particle: &Particle,
   comet: &RigidBody,
@@ -333,6 +355,7 @@ pub fn continuous_collision_detection(
   (None, None)
 }
 
+/// TODO: Document this item
 pub fn rewind_and_resolve_collision(particle: &mut Particle, toi: f32, normal: Vec3f32, dt: f32) {
   particle.position -= particle.velocity * ((1.0 - toi) * dt);
 
@@ -343,6 +366,7 @@ pub fn rewind_and_resolve_collision(particle: &mut Particle, toi: f32, normal: V
   particle.collided = true;
 }
 
+/// TODO: Document this item
 pub fn update_particles_single_threaded(
   particles: &mut [Particle],
   comet: &RigidBody,
@@ -396,6 +420,7 @@ impl Workload for ParticleUpdateWorkload {
   }
 }
 
+/// TODO: Document this item
 pub fn update_particles_multi_threaded(
   particles: &mut [Particle],
   comet: &RigidBody,

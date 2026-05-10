@@ -1,3 +1,5 @@
+//! particles_edu module.
+
 use crate::math::collision::bounds::AABB;
 use crate::math::collision::linear_bvh::{LinearBVH, LinearBVHHeader, LinearBVHNode, LinearBound};
 use crate::math::physics::Particle;

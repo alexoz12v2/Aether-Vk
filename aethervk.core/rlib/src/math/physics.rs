@@ -1,3 +1,5 @@
+//! physics module.
+
 use crate::math::{expm_hat, hat, vee};
 use aethervk_oshal_rlib::math::{
   FloatLike, MulAddIdentity,

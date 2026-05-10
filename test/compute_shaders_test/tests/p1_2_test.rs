@@ -46,7 +46,7 @@ fn test_p1_2_imex_particles() {
     };
 
     let spv_path = "../../assets/sim/p1-2_imex_particles.comp.spv";
-    let dispatch_x = (test_data.total_particles + 255) / 256;
+    let dispatch_x = (test_data.total_particles + 127) / 128;
 
     run_compute_shader(&ctx, spv_path, push_constants_bytes, dispatch_x, 1, 1);
 

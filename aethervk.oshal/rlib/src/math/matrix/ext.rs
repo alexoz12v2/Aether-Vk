@@ -1,3 +1,5 @@
+//! ext module.
+
 use crate::math::{
   FloatLike, MulAddIdentity,
   floating::{FloatBits, FloatOps},

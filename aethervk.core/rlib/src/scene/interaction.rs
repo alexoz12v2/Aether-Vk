@@ -1,3 +1,5 @@
+//! interaction module.
+
 use crate::scene::{
   AddComponentError, EntityId, FollowingComponent, HiddenComponent, Scene, SelectedComponent,
 };
@@ -6,6 +8,7 @@ use alloc::vec::Vec;
 
 // TODO parallel with option pool (all trait functions)
 
+/// TODO: Document this item
 pub trait SceneInteractionExt {
   fn hide_entity(&self, entity: EntityId) -> EngineResult<()>;
   fn show_entity(&self, entity: EntityId) -> EngineResult<()>;

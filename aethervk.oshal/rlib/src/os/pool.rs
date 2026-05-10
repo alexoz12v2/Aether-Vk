@@ -68,6 +68,7 @@ mod windows_pool {
   unsafe impl Sync for ThreadPool {}
 
   impl ThreadPool {
+    /// TODO: Document this item
     pub fn new(num_threads: usize) -> NativeResult<Self> {
       let mut local_queues = Vec::with_capacity(num_threads);
       for _ in 0..num_threads {
@@ -122,6 +123,7 @@ mod windows_pool {
       Ok(Self { threads, state })
     }
 
+    /// TODO: Document this item
     pub fn scatter(&self, workloads: Vec<Box<dyn Workload>>) -> NativeResult<()> {
       let num_threads = self.state.local_queues.len();
       self.state.pending_tasks.fetch_add(workloads.len(), Ordering::SeqCst);
@@ -140,6 +142,7 @@ mod windows_pool {
       Ok(())
     }
 
+    /// TODO: Document this item
     pub fn gather(&self) {
       while self.state.pending_tasks.load(Ordering::Acquire) > 0 {
         unsafe {
@@ -268,6 +271,7 @@ mod pthread_pool {
   unsafe impl Sync for ThreadPool {}
 
   impl ThreadPool {
+    /// TODO: Document this item
     pub fn new(num_threads: usize) -> NativeResult<Self> {
       let mut local_queues = Vec::with_capacity(num_threads);
       for _ in 0..num_threads {
@@ -313,6 +317,7 @@ mod pthread_pool {
       Ok(Self { threads, state })
     }
 
+    /// TODO: Document this item
     pub fn scatter(&self, workloads: Vec<Box<dyn Workload>>) -> NativeResult<()> {
       let num_threads = self.state.local_queues.len();
       self.state.pending_tasks.fetch_add(workloads.len(), Ordering::SeqCst);
@@ -331,6 +336,7 @@ mod pthread_pool {
       Ok(())
     }
 
+    /// TODO: Document this item
     pub fn gather(&self) {
       while self.state.pending_tasks.load(Ordering::Acquire) > 0 {
         unsafe { libc::sched_yield() };

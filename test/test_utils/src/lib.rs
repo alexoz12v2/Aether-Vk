@@ -69,6 +69,8 @@ pub unsafe fn setup_metal_layer(
 ) -> Retained<objc2_quartz_core::CAMetalLayer> {
   use objc2_app_kit::NSView;
   use objc2_quartz_core::CAMetalLayer;
+  use objc2::ClassType;
+  use objc2_foundation::NSObjectProtocol;
   let raw_handle = window.window_handle().unwrap().as_raw();
   let view_ptr = match raw_handle {
     RawWindowHandle::AppKit(w) => w.ns_view.as_ptr(),
@@ -76,6 +78,13 @@ pub unsafe fn setup_metal_layer(
   };
 
   let view: &NSView = unsafe { (view_ptr as *const NSView).as_ref() }.unwrap();
+
+  if let Some(existing_layer) = view.layer() {
+    if existing_layer.is_kind_of::<CAMetalLayer>() {
+      let ptr = objc2::rc::Retained::as_ptr(&existing_layer) as *mut CAMetalLayer;
+      return unsafe { objc2::rc::Retained::retain(ptr).unwrap() };
+    }
+  }
 
   let layer = CAMetalLayer::new();
   layer.setDevice(Some(device));
@@ -348,7 +357,7 @@ pub fn get_monospace_font_path_from_asset_path<T: AsRef<Path>>(asset_dir: T) -> 
   asset_dir.as_ref().join("fonts/JetBrainsMono-Bold.ttf")
 }
 
-pub fn get_handle_and_window_info(
+pub fn get_handle_and_window_info_create_layer(
   render_frontend: &RenderFrontend,
   render_device_handle: RenderDeviceHandle,
   window: &Window,
@@ -475,7 +484,9 @@ impl<'a> SceneMeshEntityBuilder<'a> {
         asset_path: asset_path.into(),
         mesh,
         emissive_intensity: 0.0,
-        emissive_color: [0.0, 0.0, 0.0], use_new_path: false, paint_display_mode: 0,
+        emissive_color: [0.0, 0.0, 0.0],
+        use_new_path: false,
+        paint_display_mode: 0,
       },
     ) {
       let mut error = self.error.borrow_mut();
@@ -548,6 +559,6 @@ pub fn scene_to_render_scene(
     cmd_buffer,
     time_readings,
     extent,
-    "scene"
+    "scene",
   )
 }

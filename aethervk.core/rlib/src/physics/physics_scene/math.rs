@@ -1,3 +1,5 @@
+//! math module.
+
 use crate::math::collision::intersection::Ray;
 use crate::math::collision::{intersection, linear_bvh};
 use crate::physics::physics_scene::PhysicsScene;
@@ -12,6 +14,7 @@ use alloc::vec::Vec;
 
 // TODO unit tests
 
+/// TODO: Document this item
 pub trait PhysicsSceneMathExt {
   /// Broadphase: Traverses the top-level World BVH using a stack to find all
   /// entities whose bounding volumes intersect the ray.
@@ -205,6 +208,7 @@ impl PhysicsSceneMathExt for PhysicsScene {
   }
 }
 
+/// TODO: Document this item
 pub fn closest_intersection(
   intersections: impl AsRef<[((f32, Vec3f32), EntityId)]>,
 ) -> Option<(f32, Vec3f32, EntityId)> {

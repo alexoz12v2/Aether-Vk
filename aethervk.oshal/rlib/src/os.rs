@@ -1,3 +1,5 @@
+//! os module.
+
 use thiserror::Error;
 
 pub mod debug;
@@ -12,6 +14,7 @@ pub mod time;
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub enum ThreadingError {
   /// - Too many threads already exist
   /// - stack allocation fails
@@ -34,6 +37,7 @@ pub enum ThreadingError {
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub enum FsError {
   CouldNotOpenFile,
   CouldNotReadFile,
@@ -44,6 +48,7 @@ pub enum FsError {
 }
 
 #[derive(Debug, Error)]
+/// TODO: Document this item
 pub enum NativeError {
   #[error("Unknown Error")]
   UnknownError,
@@ -59,6 +64,7 @@ pub enum NativeError {
 }
 
 impl NativeError {
+  /// TODO: Document this item
   pub fn threading_from_raw_os_error(error: i32) -> ThreadingError {
     let threading_error: ThreadingError;
     #[cfg(windows)]
@@ -94,7 +100,9 @@ impl NativeError {
   }
 }
 
+/// TODO: Document this item
 pub type NativeResult<T> = core::result::Result<T, NativeError>;
+/// TODO: Document this item
 pub type ThreadingResult<T> = core::result::Result<T, ThreadingError>;
 
 // maybe this is not necessary
@@ -104,6 +112,7 @@ impl From<ThreadingError> for NativeError {
   }
 }
 
+/// TODO: Document this item
 pub const FONT_PATH: &str = if cfg!(target_os = "windows") {
   "C:/Windows/Fonts/segoeui.ttf"
 } else if cfg!(target_os = "macos") {

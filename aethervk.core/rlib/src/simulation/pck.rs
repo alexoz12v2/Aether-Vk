@@ -1,7 +1,10 @@
+//! pck module.
+
 use aethervk_oshal_rlib::os::fs;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+/// TODO: Document this item
 pub fn read_body_radii(pck_path: &str, body_id: i32) -> Option<[f64; 3]> {
   let content = String::from_utf8(fs::read(&fs::PathBuf::from(pck_path)).ok()?).ok()?;
   let target = alloc::format!("BODY{}_RADII", body_id);

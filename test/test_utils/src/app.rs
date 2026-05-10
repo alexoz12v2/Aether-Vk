@@ -11,6 +11,7 @@ pub trait App {
   fn set_exiting(&mut self, exiting: bool);
 
   fn on_resize(&mut self, width: u32, height: u32) {}
+  fn on_resize_ended(&mut self) {}
   fn on_close_requested(&mut self) {}
   fn on_mouse_input(&mut self, _button: MouseButton, _state: ElementState) {}
   fn on_cursor_moved(&mut self, _position: winit::dpi::PhysicalPosition<f64>) {}
@@ -34,6 +35,7 @@ pub fn run_app<A: App + 'static>(mut app: A, event_loop: EventLoop<AppEvent>) {
         }
         AppEvent::ResizeEnded => {
           app.set_resizing(false);
+          app.on_resize_ended();
           if let Some(w) = app.window() {
             w.request_redraw();
           }

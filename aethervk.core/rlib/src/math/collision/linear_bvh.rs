@@ -1,3 +1,5 @@
+//! linear_bvh module.
+
 use aethervk_oshal_rlib::math::{
   FloatLike,
   floating::{FloatBits, FloatOps},
@@ -10,6 +12,7 @@ use crate::math::collision::bounds::{AABB, OBB};
 use crate::math::collision::bvh_builder::{BVHNode, BoundNode};
 
 #[derive(Debug, Clone)]
+/// TODO: Document this item
 pub struct LinearBVHHeader {
   /// How many levels from the bottom of the tree use OBB instead of AABB.
   pub preciseness: u32,
@@ -20,6 +23,7 @@ pub struct LinearBVHHeader {
 }
 
 #[derive(Debug, Clone)]
+/// TODO: Document this item
 pub enum LinearBound<S>
 where
   S: FloatLike + FloatOps + FloatBits + From<f32>,
@@ -29,6 +33,7 @@ where
 }
 
 #[derive(Debug, Clone)]
+/// TODO: Document this item
 pub struct LinearBVHNode<S>
 where
   S: FloatLike + FloatOps + FloatBits + From<f32>,
@@ -44,6 +49,7 @@ where
 }
 
 #[derive(Debug, Clone)]
+/// TODO: Document this item
 pub struct LinearBVH<S>
 where
   S: FloatLike + FloatOps + FloatBits + From<f32>,
@@ -57,6 +63,7 @@ impl<S> LinearBVH<S>
 where
   S: FloatLike + FloatOps + FloatBits + From<f32>,
 {
+  /// TODO: Document this item
   pub fn from_build_node(root: &BVHNode<S>, preciseness: u32) -> Self {
     let mut nodes = Vec::new();
     let mut primitives = Vec::new();
@@ -124,6 +131,7 @@ where
 }
 
 impl LinearBound<f32> {
+  /// TODO: Document this item
   pub fn intersects(&self, other: &Self) -> bool {
     match (self, other) {
       (LinearBound::AABB(a), LinearBound::AABB(b)) => {

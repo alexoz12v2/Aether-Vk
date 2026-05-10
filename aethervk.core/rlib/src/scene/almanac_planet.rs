@@ -1,3 +1,5 @@
+//! almanac_planet module.
+
 use crate::scene::{Component, TransformComponent};
 use crate::simulation::almanac::AlmanacPackedData;
 use crate::types::EngineResult;
@@ -7,6 +9,7 @@ use aethervk_oshal_rlib::math::vector::vec4::Quat;
 use aethervk_oshal_rlib::math::vector::{Vector, vec3::Vec3f32};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+/// TODO: Document this item
 pub struct AlmanacPlanet {
   pub naif_id: i32,
   pub rot_period: f64, // TODO useful?
@@ -16,6 +19,7 @@ pub struct AlmanacPlanet {
 impl Component for AlmanacPlanet {}
 
 impl AlmanacPlanet {
+  /// TODO: Document this item
   pub fn new(naif_id: i32, rot_period: f64, mu: f32) -> Self {
     Self {
       naif_id,
@@ -24,6 +28,7 @@ impl AlmanacPlanet {
     }
   }
 
+  /// TODO: Document this item
   pub fn step(
     &self,
     transform: &mut TransformComponent,

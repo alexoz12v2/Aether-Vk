@@ -1,3 +1,5 @@
+//! metal module.
+
 use crate::gpu::{
   AcquireResult, CommandBufferHandle, CursorPushConstants, DeviceAdditionalParams,
   GpuResourceHandle, NativeGpuProperty, PipelineKey, PresentationEngineHandle,
@@ -23,6 +25,7 @@ use core::ffi;
 use alloc::sync::Arc;
 use spin::rwlock::RwLock;
 
+/// TODO: Document this item
 pub struct MetalRenderContext {}
 
 impl InitWithRuntime<Self> for MetalRenderContext {
@@ -55,6 +58,7 @@ impl RenderContext for MetalRenderContext {
   }
 }
 
+/// TODO: Document this item
 pub struct MetalRenderDevice {}
 
 impl RenderDevice for MetalRenderDevice {

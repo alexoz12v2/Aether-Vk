@@ -1,3 +1,5 @@
+//! resources module.
+
 use crate::gpu_backends::vulkan;
 use crate::gpu_backends::vulkan::device::{VmaDebugNameExt, VulkanDebugNameExt};
 use crate::simulation::comet::{TexelFormat, Texture};
@@ -29,21 +31,29 @@ use crate::{
   types::{GpuError, GpuResult},
 };
 
+/// TODO: Document this item
 pub struct TimelineQueue<T> {
   items: VecDeque<(u64, T)>,
 }
 
 impl<T> TimelineQueue<T> {
+  /// TODO: Document this item
   pub fn with_capacity(cap: usize) -> Self {
     Self {
       items: VecDeque::with_capacity(cap),
     }
   }
 
+  /// TODO: Document this item
   pub fn push(&mut self, timeline: u64, item: T) {
-    self.items.push_back((timeline, item));
+    let mut i = self.items.len();
+    while i > 0 && self.items[i - 1].0 > timeline {
+      i -= 1;
+    }
+    self.items.insert(i, (timeline, item));
   }
 
+  /// TODO: Document this item
   pub fn drain_ready<F>(&mut self, current: u64, mut f: F)
   where
     F: FnMut(T),
@@ -115,6 +125,7 @@ struct CmdBufDiscard {
   id: CommandBufferId,
 }
 
+/// TODO: Document this item
 pub trait DiscardableResource {
   fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64);
 }
@@ -155,19 +166,23 @@ impl DiscardPool {
     q.push(timeline, item);
   }
 
+  /// TODO: Document this item
   pub fn discard_type_erased<T: DeviceResource + 'static>(&self, item: T, timeline: u64) {
     self.push_item(timeline, DiscardItem::GenericHandle(Box::new(item)));
   }
 
   // TODO all other types of resources as needed
+  /// TODO: Document this item
   pub fn discard_render_pass(&self, render_pass: vk::RenderPass, timeline: u64) {
     self.push_item(timeline, DiscardItem::RenderPass(render_pass));
   }
 
+  /// TODO: Document this item
   pub fn discard_framebuffer(&self, framebuffer: vk::Framebuffer, timeline: u64) {
     self.push_item(timeline, DiscardItem::Framebuffer(framebuffer));
   }
 
+  /// TODO: Document this item
   pub fn discard_buffer(
     &self,
     allocator: vk_mem::ffi::VmaAllocator,
@@ -185,6 +200,7 @@ impl DiscardPool {
     );
   }
 
+  /// TODO: Document this item
   pub fn discard_command_buffer(
     &self,
     thread_id: ThreadId,
@@ -204,6 +220,7 @@ impl DiscardPool {
     );
   }
 
+  /// TODO: Document this item
   pub fn discard_image(
     &self,
     allocator: vk_mem::ffi::VmaAllocator,
@@ -221,14 +238,17 @@ impl DiscardPool {
     );
   }
 
+  /// TODO: Document this item
   pub fn discard_image_view(&self, image_view: vk::ImageView, timeline: u64) {
     self.push_item(timeline, DiscardItem::ImageView(image_view));
   }
 
+  /// TODO: Document this item
   pub fn discard_descriptor_set_layout(&self, layout: vk::DescriptorSetLayout, timeline: u64) {
     self.push_item(timeline, DiscardItem::DescriptorSetLayout(layout));
   }
 
+  /// TODO: Document this item
   pub fn discard_descriptor_pool(
     &self,
     pool: vk::DescriptorPool,
@@ -238,14 +258,17 @@ impl DiscardPool {
     self.push_item(timeline, DiscardItem::DescriptorPool(pool, manager));
   }
 
+  /// TODO: Document this item
   pub fn discard_pipeline(&self, pipeline: vk::Pipeline, timeline: u64) {
     self.push_item(timeline, DiscardItem::Pipeline(pipeline));
   }
 
+  /// TODO: Document this item
   pub fn discard_pipeline_layout(&self, pipeline_layout: vk::PipelineLayout, timeline: u64) {
     self.push_item(timeline, DiscardItem::PipelineLayout(pipeline_layout));
   }
 
+  /// TODO: Document this item
   pub fn destroy_discarded_resources_all(&self, device: &ash::Device) {
     self.destroy_discarded_resources_internal(device, u64::MAX);
   }
@@ -336,6 +359,7 @@ impl super::DeviceResource for DiscardPool {
   }
 }
 
+/// TODO: Document this item
 pub(super) struct Buffer {
   pub buffer: NonZeroHandle<vk::Buffer>,
   pub allocation: vk_mem::Allocation,
@@ -347,6 +371,7 @@ impl Hash for Buffer {
   }
 }
 
+/// TODO: Document this item
 pub(super) struct Image {
   pub image: NonZeroHandle<vk::Image>,
   pub image_view: NonZeroHandle<vk::ImageView>,
@@ -354,6 +379,7 @@ pub(super) struct Image {
 }
 
 impl Image {
+  /// TODO: Document this item
   pub fn to_descriptor_image_info(
     &self,
     sampler: NonZeroHandle<vk::Sampler>,
@@ -364,6 +390,7 @@ impl Image {
       .sampler(sampler.get())
   }
 
+  /// TODO: Document this item
   pub fn new_storage_2d(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -439,6 +466,7 @@ impl Image {
     })
   }
 
+  /// TODO: Document this item
   pub fn new_paint_image(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -505,6 +533,7 @@ impl Image {
     })
   }
 
+  /// TODO: Document this item
   pub fn new_storage_3d(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -585,6 +614,7 @@ impl Image {
     })
   }
 
+  /// TODO: Document this item
   pub fn new_2d(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -756,6 +786,7 @@ impl Hash for Image {
 }
 
 #[repr(C)]
+/// TODO: Document this item
 pub(super) struct ForwardMeshRenderResourcePushData {
   pub model_view_projection: [f32; 16],
   pub model: [f32; 16],
@@ -785,6 +816,7 @@ impl Default for ForwardMeshRenderResourcePushData {
   }
 }
 
+/// TODO: Document this item
 pub(super) struct SunRenderResource {
   pub resolution: (u32, u32, u32),
   pub image: Option<Image>,
@@ -799,6 +831,7 @@ pub(super) struct SunRenderResource {
   pub params_alloc: Option<vk_mem::Allocation>,
 }
 
+/// TODO: Document this item
 pub(super) struct ForwardMeshRenderResource {
   pub allocator: vk_mem::ffi::VmaAllocator, // necessary evil. TODO: Edit DeviceResource trait and remove this.
   pub position_vertex_buffer: Buffer,
@@ -818,6 +851,7 @@ pub(super) struct ForwardMeshRenderResource {
   pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
 }
 
+/// TODO: Document this item
 pub(super) struct ForwardMesh2RenderResource {
   pub allocator: vk_mem::ffi::VmaAllocator, // necessary evil. TODO: Edit DeviceResource trait and remove this.
   pub position_vertex_buffer: Buffer,
@@ -929,6 +963,7 @@ impl DiscardableResource for ForwardMesh2RenderResource {
 }
 
 impl ForwardMesh2RenderResource {
+  /// TODO: Document this item
   pub fn frontend_texture_flags(&self) -> TextureFlags {
     let mut flags = TextureFlags::empty();
     if self.albedo_image.is_some() {
@@ -950,6 +985,7 @@ impl ForwardMesh2RenderResource {
     flags
   }
 
+  /// TODO: Document this item
   pub fn buffers_hash(&self) -> u64 {
     let mut hasher = FnvHasher::new();
     self.position_vertex_buffer.hash(&mut hasher);
@@ -959,6 +995,7 @@ impl ForwardMesh2RenderResource {
   }
 
   #[allow(clippy::too_many_arguments)]
+  /// TODO: Document this item
   pub(super) unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -1305,6 +1342,7 @@ impl DiscardableResource for ForwardMeshRenderResource {
 }
 
 impl ForwardMeshRenderResource {
+  /// TODO: Document this item
   pub fn frontend_texture_flags(&self) -> TextureFlags {
     let mut flags = TextureFlags::empty();
     if self.albedo_image.is_some() {
@@ -1322,6 +1360,7 @@ impl ForwardMeshRenderResource {
     flags
   }
 
+  /// TODO: Document this item
   pub fn buffers_hash(&self) -> u64 {
     let mut hasher = FnvHasher::new();
     self.position_vertex_buffer.hash(&mut hasher);
@@ -1525,6 +1564,7 @@ impl DiscardableResource for FrameResource {
   }
 }
 
+/// TODO: Document this item
 pub struct UploadedFont {
   pub texture: Image,
   pub atlas: crate::scene::text::FontAtlas,
@@ -1534,6 +1574,7 @@ pub struct UploadedFont {
 macro_rules! impl_pipeline_map_methods {
   // Arm 1: Default pipeline_map
   () => {
+    /// TODO: Document this item
     pub fn with_graphics_info(
       mut self,
       color_format: vk::Format,
@@ -1546,10 +1587,12 @@ macro_rules! impl_pipeline_map_methods {
       self
     }
 
+    /// TODO: Document this item
     pub fn pipeline_key(&self, color_format: vk::Format) -> Option<PipelineKey> {
       self.pipeline_map.get(&color_format).map(|(_, p)| *p)
     }
 
+    /// TODO: Document this item
     pub fn update_from_key(&mut self, pipeline_key: PipelineKey, graphics_info: GraphicsInfo) {
       // FIX 2: Use |(_, v)| instead of |&(k, v)|
       // FIX 3: Safe unwrapping using if let
@@ -1559,14 +1602,17 @@ macro_rules! impl_pipeline_map_methods {
       }
     }
 
+    /// TODO: Document this item
     pub fn get_any_graphics_info(&self) -> Option<GraphicsInfo> {
       self.pipeline_map.values().next().map(|(g, _)| g.clone())
     }
 
+    /// TODO: Document this item
     pub fn insert_graphics_info(&mut self, color_format: vk::Format, graphics_info: GraphicsInfo, pipeline_key: PipelineKey) {
       self.pipeline_map.insert(color_format, (graphics_info, pipeline_key));
     }
 
+    /// TODO: Document this item
     pub fn has_format(&self, color_format: vk::Format) -> bool {
       self.pipeline_map.contains_key(&color_format)
     }
@@ -1576,6 +1622,7 @@ macro_rules! impl_pipeline_map_methods {
   ($name:ident) => {
     // FIX 1: Use the paste! macro to safely generate dynamic function names
     paste::paste! {
+      /// TODO: Document this item
       pub fn [<with_graphics_info_ $name>](
         mut self,
         color_format: vk::Format,
@@ -1588,10 +1635,12 @@ macro_rules! impl_pipeline_map_methods {
         self
       }
 
+      /// TODO: Document this item
       pub fn [<pipeline_key_ $name>](&self, color_format: vk::Format) -> Option<PipelineKey> {
         self.$name.get(&color_format).map(|(_, p)| *p)
       }
 
+      /// TODO: Document this item
       pub fn [<update_from_key_ $name>](&mut self, pipeline_key: PipelineKey, graphics_info: GraphicsInfo) {
         if let Some((_, v)) = self.$name.iter_mut().find(|(_, v)| v.0.pipeline_layout == graphics_info.pipeline_layout) {
           v.1 = pipeline_key;
@@ -1599,20 +1648,24 @@ macro_rules! impl_pipeline_map_methods {
         }
       }
 
+      /// TODO: Document this item
       pub fn [<get_any_graphics_info_ $name>](&self) -> Option<GraphicsInfo> {
         self.$name.values().next().map(|(g, _)| g.clone())
       }
 
+      /// TODO: Document this item
       pub fn [<insert_graphics_info_ $name>](&mut self, color_format: vk::Format, graphics_info: GraphicsInfo, pipeline_key: PipelineKey) {
         self.$name.insert(color_format, (graphics_info, pipeline_key));
       }
 
+      /// TODO: Document this item
       pub fn [<has_format_ $name>](&self, color_format: vk::Format) -> bool {
         self.$name.contains_key(&color_format)
       }
     }
   };
 }
+/// TODO: Document this item
 pub(super) struct TextRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub descriptor_set_layout: NonZeroHandle<vk::DescriptorSetLayout>,
@@ -1672,6 +1725,7 @@ impl DiscardableResource for TextRenderResourceArchetype {
 }
 
 impl TextRenderResourceArchetype {
+  /// TODO: Document this item
   pub fn new(
     pipeline_layout: vk::PipelineLayout,
     set_layout: vk::DescriptorSetLayout,
@@ -1698,6 +1752,7 @@ impl TextRenderResourceArchetype {
 
   impl_pipeline_map_methods!();
 
+  /// TODO: Document this item
   pub fn upload_font_atlas(
     &mut self,
     device: &vulkan::device::LogicalDevice,
@@ -1773,6 +1828,7 @@ impl TextRenderResourceArchetype {
     Ok(descriptor_index)
   }
 
+  /// TODO: Document this item
   pub fn remove_font_atlas(
     &mut self,
     font_hash: u64,
@@ -1801,6 +1857,7 @@ impl TextRenderResourceArchetype {
   }
 }
 
+/// TODO: Document this item
 pub(super) struct BvhRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pipeline_map: PipelineMap,
@@ -1813,6 +1870,7 @@ impl DiscardableResource for BvhRenderResourceArchetype {
 }
 
 impl BvhRenderResourceArchetype {
+  /// TODO: Document this item
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     _allocator_raw: vk_mem::ffi::VmaAllocator,
@@ -1841,6 +1899,7 @@ impl BvhRenderResourceArchetype {
 }
 
 #[derive(Clone)]
+/// TODO: Document this item
 pub(super) struct MeasurementRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub push_contant_ranges: Vec<vk::PushConstantRange>,
@@ -1854,6 +1913,7 @@ unsafe impl Send for MeasurementRenderResourceArchetype {}
 impl MeasurementRenderResourceArchetype {
   impl_pipeline_map_methods!();
 
+  /// TODO: Document this item
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     _allocator_raw: vk_mem::ffi::VmaAllocator,
@@ -1883,12 +1943,14 @@ impl MeasurementRenderResourceArchetype {
     })
   }
 
+  /// TODO: Document this item
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, u64::MAX);
   }
 }
 
+/// TODO: Document this item
 pub(super) struct MarkerRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub push_contant_ranges: Vec<vk::PushConstantRange>,
@@ -1902,6 +1964,7 @@ unsafe impl Send for MarkerRenderResourceArchetype {}
 impl MarkerRenderResourceArchetype {
   impl_pipeline_map_methods!();
 
+  /// TODO: Document this item
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     _allocator_raw: vk_mem::ffi::VmaAllocator,
@@ -1928,12 +1991,14 @@ impl MarkerRenderResourceArchetype {
     })
   }
 
+  /// TODO: Document this item
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
   }
 }
 
+/// TODO: Document this item
 pub(super) struct MinimapRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
 
@@ -1941,6 +2006,7 @@ pub(super) struct MinimapRenderResourceArchetype {
 }
 
 impl MinimapRenderResourceArchetype {
+  /// TODO: Document this item
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     _allocator_raw: vk_mem::ffi::VmaAllocator,
@@ -1965,10 +2031,114 @@ impl MinimapRenderResourceArchetype {
 
   impl_pipeline_map_methods!();
 
+  /// TODO: Document this item
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
   }
+}
+
+use alloc::collections::BTreeMap;
+
+#[derive(Clone, Debug)]
+pub struct Range {
+  pub offset: u64,
+  pub size: u64,
+}
+
+pub struct RangeAllocator {
+  pub free_ranges: Vec<Range>,
+}
+
+impl RangeAllocator {
+  pub fn new(capacity: u64) -> Self {
+    Self {
+      free_ranges: alloc::vec![Range {
+        offset: 0,
+        size: capacity
+      }],
+    }
+  }
+
+  pub fn allocate(&mut self, size: u64) -> Option<u64> {
+    if size == 0 {
+      return Some(0);
+    }
+    let mut best_idx: Option<usize> = None;
+    for (i, range) in self.free_ranges.iter().enumerate() {
+      if range.size >= size {
+        if best_idx.is_none() || self.free_ranges[best_idx.unwrap()].size > range.size {
+          best_idx = Some(i);
+        }
+      }
+    }
+
+    if let Some(i) = best_idx {
+      let offset = self.free_ranges[i].offset;
+      self.free_ranges[i].offset += size;
+      self.free_ranges[i].size -= size;
+      if self.free_ranges[i].size == 0 {
+        self.free_ranges.remove(i);
+      }
+      Some(offset)
+    } else {
+      None
+    }
+  }
+
+  pub fn free(&mut self, offset: u64, size: u64) {
+    if size == 0 {
+      return;
+    }
+    self.free_ranges.push(Range { offset, size });
+    self.free_ranges.sort_unstable_by_key(|r| r.offset);
+
+    let mut merged = Vec::new();
+    let mut current = self.free_ranges[0].clone();
+    for range in self.free_ranges.iter().skip(1) {
+      if current.offset + current.size == range.offset {
+        current.size += range.size;
+      } else {
+        merged.push(current);
+        current = range.clone();
+      }
+    }
+    merged.push(current);
+    self.free_ranges = merged;
+  }
+}
+
+pub struct CurveAllocation {
+  pub segments_offset: u64,
+  pub segment_capacity: usize, // Measured in RationalBezierGpu chunks
+  pub last_seen_tick: u64,
+  pub last_hash: u64,
+}
+
+// Fast hash evaluator (Control points & Model Matrix)
+pub(super) fn hash_trajectory(
+  points: &[[f32; 4]],
+  model_mat: &aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+) -> u64 {
+  let mut hash = 0xcbf29ce484222325_u64;
+  let prime = 0x100000001b3_u64;
+  for arr in points {
+    for &f in arr {
+      hash ^= f.to_bits() as u64;
+      hash = hash.wrapping_mul(prime);
+    }
+  }
+  let mat_bytes = unsafe {
+    core::slice::from_raw_parts(
+      model_mat as *const _ as *const u8,
+      core::mem::size_of_val(model_mat),
+    )
+  };
+  for &b in mat_bytes {
+    hash ^= b as u64;
+    hash = hash.wrapping_mul(prime);
+  }
+  hash
 }
 
 /// Archetype has a list of textures, then each instance, when push constants, chooses one
@@ -1993,6 +2163,10 @@ pub(super) struct TrajectoryRenderResourceArchetype {
   pub map_alloc: vk_mem::Allocation,
   pub map_ptr: u64,
 
+  pub segment_allocator: RangeAllocator,
+  pub curves: BTreeMap<crate::scene::EntityId, CurveAllocation>,
+  pub tick: u64,
+
   allocator_raw: vk_mem::ffi::VmaAllocator,
 
   pipeline_map: PipelineMap,
@@ -2004,6 +2178,7 @@ unsafe impl Send for TrajectoryRenderResourceArchetype {}
 impl TrajectoryRenderResourceArchetype {
   impl_pipeline_map_methods!();
 
+  /// TODO: Document this item
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -2092,7 +2267,7 @@ impl TrajectoryRenderResourceArchetype {
         alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
 
         let (buffer, alloc) = unsafe { allocator.create_buffer(&buffer_info, &alloc_info) }
-            .map_err(|_| GpuError::OutOfMemory)?;
+          .map_err(|_| GpuError::OutOfMemory)?;
         device.set_debug_name(buffer, debug_name);
 
         let addr_info = ash::vk::BufferDeviceAddressInfo::default().buffer(buffer);
@@ -2122,11 +2297,15 @@ impl TrajectoryRenderResourceArchetype {
       map_buffer,
       map_alloc,
       map_ptr,
+      segment_allocator: RangeAllocator::new(1_000_000),
+      curves: BTreeMap::new(),
+      tick: 0,
       allocator_raw: allocator.get_raw(),
       pipeline_map: PipelineMap::new(),
     })
   }
 
+  /// TODO: Document this item
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
@@ -2155,6 +2334,7 @@ impl TrajectoryRenderResourceArchetype {
   }
 }
 
+/// TODO: Document this item
 pub(super) struct BillboardRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub set_0_layout: NonZeroHandle<vk::DescriptorSetLayout>,
@@ -2322,6 +2502,7 @@ impl BillboardRenderResourceArchetype {
     Ok(image)
   }
 
+  /// TODO: Document this item
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     // we don't care about descriptor set. discard the pool
@@ -2338,6 +2519,7 @@ impl BillboardRenderResourceArchetype {
   }
 }
 
+/// TODO: Document this item
 pub(super) struct GizmoRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub set_0_layout: NonZeroHandle<vk::DescriptorSetLayout>,
@@ -2357,8 +2539,10 @@ unsafe impl Send for GizmoRenderResourceArchetype {}
 impl GizmoRenderResourceArchetype {
   impl_pipeline_map_methods!();
 
+  /// TODO: Document this item
   pub const MAX_BUFFER_COUNT: u32 = 256;
 
+  /// TODO: Document this item
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     allocator_raw: vk_mem::ffi::VmaAllocator,
@@ -2442,6 +2626,7 @@ impl GizmoRenderResourceArchetype {
     })
   }
 
+  /// TODO: Document this item
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_type_erased(
@@ -2466,6 +2651,7 @@ impl GizmoRenderResourceArchetype {
   }
 }
 
+/// TODO: Document this item
 pub(super) struct ParticleRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub set_0_layout: NonZeroHandle<vk::DescriptorSetLayout>,
@@ -2492,7 +2678,9 @@ unsafe impl Sync for ParticleRenderResourceArchetype {}
 unsafe impl Send for ParticleRenderResourceArchetype {}
 
 impl ParticleRenderResourceArchetype {
+  /// TODO: Document this item
   pub const MAX_PARTICLES: u32 = 1_000_000;
+  /// TODO: Document this item
   pub const MAX_SYSTEMS: u32 = 1000;
 
   impl_pipeline_map_methods!();
@@ -2658,6 +2846,7 @@ impl ParticleRenderResourceArchetype {
     self.allocated_systems.store(0, core::sync::atomic::Ordering::Relaxed);
   }
 
+  /// TODO: Document this item
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_type_erased(
@@ -2685,6 +2874,7 @@ impl ParticleRenderResourceArchetype {
   }
 }
 
+/// TODO: Document this item
 pub(super) struct Particle2RenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub set_0_layout: NonZeroHandle<vk::DescriptorSetLayout>,
@@ -2711,7 +2901,9 @@ unsafe impl Sync for Particle2RenderResourceArchetype {}
 unsafe impl Send for Particle2RenderResourceArchetype {}
 
 impl Particle2RenderResourceArchetype {
+  /// TODO: Document this item
   pub const MAX_PARTICLES: u32 = 1_000_000;
+  /// TODO: Document this item
   pub const MAX_SYSTEMS: u32 = 1000;
 
   impl_pipeline_map_methods!();
@@ -2877,6 +3069,7 @@ impl Particle2RenderResourceArchetype {
     self.allocated_systems.store(0, core::sync::atomic::Ordering::Relaxed);
   }
 
+  /// TODO: Document this item
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_type_erased(
@@ -2904,6 +3097,7 @@ impl Particle2RenderResourceArchetype {
   }
 }
 
+/// TODO: Document this item
 pub(super) struct CursorRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub push_contant_ranges: Vec<vk::PushConstantRange>,
@@ -2917,6 +3111,7 @@ unsafe impl Send for CursorRenderResourceArchetype {}
 impl CursorRenderResourceArchetype {
   impl_pipeline_map_methods!();
 
+  /// TODO: Document this item
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     _allocator_raw: vk_mem::ffi::VmaAllocator,
@@ -2943,12 +3138,14 @@ impl CursorRenderResourceArchetype {
     })
   }
 
+  /// TODO: Document this item
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
   }
 }
 
+/// TODO: Document this item
 pub(super) struct SkyRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub descriptor_set_layout: NonZeroHandle<vk::DescriptorSetLayout>,
@@ -2958,6 +3155,7 @@ pub(super) struct SkyRenderResourceArchetype {
 }
 
 impl SkyRenderResourceArchetype {
+  /// TODO: Document this item
   pub fn new(pipeline_layout: vk::PipelineLayout, set_layout: vk::DescriptorSetLayout) -> Self {
     Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
@@ -2969,6 +3167,7 @@ impl SkyRenderResourceArchetype {
 
   impl_pipeline_map_methods!();
 
+  /// TODO: Document this item
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
@@ -2976,6 +3175,7 @@ impl SkyRenderResourceArchetype {
   }
 }
 
+/// TODO: Document this item
 pub(super) struct GridRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
 
@@ -2983,6 +3183,7 @@ pub(super) struct GridRenderResourceArchetype {
 }
 
 impl GridRenderResourceArchetype {
+  /// TODO: Document this item
   pub fn new(pipeline_layout: vk::PipelineLayout) -> Self {
     Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
@@ -2992,12 +3193,14 @@ impl GridRenderResourceArchetype {
 
   impl_pipeline_map_methods!();
 
+  /// TODO: Document this item
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
   }
 }
 
+/// TODO: Document this item
 pub(super) struct SunRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
   pub descriptor_set_layout: NonZeroHandle<vk::DescriptorSetLayout>,
@@ -3012,6 +3215,7 @@ unsafe impl Send for SunRenderResourceArchetype {}
 impl SunRenderResourceArchetype {
   impl_pipeline_map_methods!();
 
+  /// TODO: Document this item
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     _allocator_raw: vk_mem::ffi::VmaAllocator,
@@ -3049,6 +3253,7 @@ impl SunRenderResourceArchetype {
     })
   }
 
+  /// TODO: Document this item
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
@@ -3099,6 +3304,7 @@ impl ForwardMeshRenderResourceArchetype {
   impl_pipeline_map_methods!();
   impl_pipeline_map_methods!(outline_pipeline_map);
 
+  /// TODO: Document this item
   pub fn create_descriptor_set_from_layout_at_index(
     &self,
     device: &vulkan::device::LogicalDevice,
@@ -3561,6 +3767,7 @@ impl ForwardMesh2RenderResourceArchetype {
   impl_pipeline_map_methods!();
   impl_pipeline_map_methods!(outline_pipeline_map);
 
+  /// TODO: Document this item
   pub fn create_descriptor_set_from_layout_at_index(
     &self,
     device: &vulkan::device::LogicalDevice,
@@ -3585,6 +3792,7 @@ impl ForwardMesh2RenderResourceArchetype {
     )
   }
 
+  /// TODO: Document this item
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     vertex_shader: &Shader,
@@ -3756,6 +3964,7 @@ impl ForwardMesh2RenderResourceArchetype {
     })
   }
 
+  /// TODO: Document this item
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);

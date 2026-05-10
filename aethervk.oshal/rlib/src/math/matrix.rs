@@ -1,3 +1,5 @@
+//! matrix module.
+
 use core::ops;
 
 use crate::math::{
@@ -8,6 +10,7 @@ use crate::math::{
 };
 
 // Note: We are taking by copy everything (almost) cause these are supposed to be small dimensional
+/// TODO: Document this item
 pub trait Matrix:
   Copy
   + Sized
@@ -32,6 +35,7 @@ pub trait Matrix:
   fn transpose(self) -> Self;
 }
 
+/// TODO: Document this item
 pub trait SquareMatrix: Matrix + ops::Mul<Self, Output = Self> {
   fn identity() -> Self;
   fn determinant(self) -> Self::Scalar;
@@ -40,11 +44,13 @@ pub trait SquareMatrix: Matrix + ops::Mul<Self, Output = Self> {
     Self::Scalar: FloatLike;
 }
 
+/// TODO: Document this item
 pub trait MatrixVectorMul: Matrix {
   fn mul_vector(self, v: Self::Vector) -> Self::Vector;
 }
 
 // 3x3 for linear/normal transforms and tangent frames
+/// TODO: Document this item
 pub trait Matrix3: SquareMatrix
 where
   Self::Vector: Vector3,
@@ -131,6 +137,7 @@ where
 // 4x4 for affine transforms, projection matrices
 // Note: These implementations assume standard graphics column-major memory layout and a
 // Right-Handed coordinate system (like OpenGL).
+/// TODO: Document this item
 pub trait Matrix4: SquareMatrix
 where
   Self::Vector: Vector4,

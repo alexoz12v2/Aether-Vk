@@ -1,8 +1,12 @@
 #version 450 core
+
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
 
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+#include "../debug_utils.glsl"
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
 layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
 
@@ -12,6 +16,9 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleDat
 };
 
 layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer PackedCollisions {
+    uint dispatch_x;
+    uint dispatch_y;
+    uint dispatch_z;
     uint count;
     uvec2 pairs[];
 };
@@ -37,6 +44,9 @@ void atomicAddFloat(uint index, float val) {
 }
 
 void main() {
+    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("Hello from apply_impulses.comp!\n");
+    }
     uint global_id = gl_GlobalInvocationID.x;
     if (global_id >= pc.collisions.count) return;
 
@@ -70,5 +80,10 @@ void main() {
         atomicAddFloat(baseB + 3 * SUBGROUP_SIZE, dvB.x);
         atomicAddFloat(baseB + 4 * SUBGROUP_SIZE, dvB.y);
         atomicAddFloat(baseB + 5 * SUBGROUP_SIZE, dvB.z);
+    }
+
+    if (SHOULD_DEBUG_PRINT) {
+        debugPrintfEXT("ApplyImpulses Contact %d (Pairs: %d, %d): impulse=(%f, %f, %f)", 
+            global_id, pA_id, pB_id, impulse.x, impulse.y, impulse.z);
     }
 }

@@ -2,12 +2,15 @@
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_KHR_shader_subgroup_basic : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "../debug_utils.glsl"
 
 // ============================================================================
 // Phase 5: Particle Explicit Final Kick & Next Force Evaluation
 // ============================================================================
 
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
 // Use specialization constant for subgroup size
 layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
@@ -38,6 +41,9 @@ layout(push_constant, scalar) uniform PushConstants {
 } pc;
 
 void main() {
+    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("Hello from p5_imex_particles.comp!\n");
+    }
     uint global_id = gl_GlobalInvocationID.x;
     if (global_id >= pc.total_particles) {
         return;
@@ -104,4 +110,9 @@ void main() {
     pc.particles.data[base + 7 * SUBGROUP_SIZE] = f_next.x;
     pc.particles.data[base + 8 * SUBGROUP_SIZE] = f_next.y;
     pc.particles.data[base + 9 * SUBGROUP_SIZE] = f_next.z;
+
+    if (SHOULD_DEBUG_PRINT) {
+        debugPrintfEXT("P5 Particle %d: q_next=(%f, %f, %f), v_next=(%f, %f, %f), f_next=(%f, %f, %f)", 
+            global_id, q_next.x, q_next.y, q_next.z, v_next.x, v_next.y, v_next.z, f_next.x, f_next.y, f_next.z);
+    }
 }

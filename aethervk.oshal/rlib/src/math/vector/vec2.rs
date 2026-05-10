@@ -1,8 +1,11 @@
+//! vec2 module.
+
 use core::ops;
 
 use crate::math::vector::{Vector, Vector2};
 
 // Helper to keep test setup clean
+/// TODO: Document this item
 pub fn vec2(x: f32, y: f32) -> Vec2f32 {
   Vec2f32::from_components(x, y)
 }
@@ -10,12 +13,14 @@ pub fn vec2(x: f32, y: f32) -> Vec2f32 {
 // Note: For a 2 component vector, it seemed useless vectorizing with SIMD instructions
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
+/// TODO: Document this item
 pub struct Vec2f32 {
   pub data: [f32; 2],
 }
 
 impl Vec2f32 {
   #[inline]
+  /// TODO: Document this item
   pub fn from_array(data: [f32; 2]) -> Self {
     Self { data }
   }

@@ -1,3 +1,5 @@
+//! persistent module.
+
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -94,6 +96,7 @@ impl<F, R> Drop for PersistentWorkload<F, R> {
   }
 }
 
+/// TODO: Document this item
 pub trait ThreadPoolPersistentExt {
   /// Spawns a cooperative, long-lasting mutating closure object (`FnMut`) to cycle on the
   /// thread pool. Returning `PersistentStatus::Yield` will gracefully queue it onto the tail of the scheduling

@@ -1,3 +1,5 @@
+//! archetypes_struct module.
+
 use crate::gpu;
 use crate::gpu::vulkan::device::pipelines::{
   FragmentOut, FragmentShader, GraphicsInfo, PipelineFlags, PreRasterization, StencilCompareOp,
@@ -36,10 +38,12 @@ fn get_validated_shaders(
 }
 
 #[derive(Default)]
+/// TODO: Document this item
 pub(super) struct Archetypes {
   pub sun_render_archetype: spin::RwLock<Option<resources::SunRenderResourceArchetype>>,
   pub physical_mesh_render_archetype: spin::RwLock<Option<ForwardMeshRenderResourceArchetype>>,
-  pub physical_mesh2_render_archetype: spin::RwLock<Option<resources::ForwardMesh2RenderResourceArchetype>>,
+  pub physical_mesh2_render_archetype:
+    spin::RwLock<Option<resources::ForwardMesh2RenderResourceArchetype>>,
   pub billboard_render_archetype: spin::RwLock<Option<resources::BillboardRenderResourceArchetype>>,
   pub particle_render_archetype: spin::RwLock<Option<resources::ParticleRenderResourceArchetype>>,
   pub cursor_render_archetype: spin::RwLock<Option<resources::CursorRenderResourceArchetype>>,
@@ -53,10 +57,12 @@ pub(super) struct Archetypes {
   pub bvh_render_archetype: spin::RwLock<Option<resources::BvhRenderResourceArchetype>>,
   pub gizmo_render_archetype: spin::RwLock<Option<resources::GizmoRenderResourceArchetype>>,
   pub particle2_render_archetype: spin::RwLock<Option<resources::Particle2RenderResourceArchetype>>,
-  pub trajectory_render_archetype: spin::RwLock<Option<resources::TrajectoryRenderResourceArchetype>>,
+  pub trajectory_render_archetype:
+    spin::RwLock<Option<resources::TrajectoryRenderResourceArchetype>>,
 }
 
 impl Archetypes {
+  /// TODO: Document this item
   pub fn has_discardables(&self) -> bool {
     self.sun_render_archetype.read().is_some()
       || self.physical_mesh_render_archetype.read().is_some()
@@ -75,6 +81,7 @@ impl Archetypes {
       || self.trajectory_render_archetype.read().is_some()
   }
 
+  /// TODO: Document this item
   pub fn discard(&self, device: &ash::Device, discard_pool: &resources::DiscardPool) {
     if let Some(mut archetype) = self.sun_render_archetype.write().take() {
       archetype.discard(device, &discard_pool, u64::MAX);
@@ -133,6 +140,7 @@ macro_rules! impl_update_archetype {
     $archetype_field:ident
     $(, |$arch:ident, $dev:ident, $wp:ident, $dp:ident, $tl:ident, $gi:ident, $fmt:ident| $extra:block)?
   ) => {
+    /// TODO: Document this item
     pub fn $fn_name(
       &self,
       device: &LogicalDevice,
@@ -205,6 +213,7 @@ macro_rules! impl_create_archetype {
     ref_alloc
     $(, |$gi:ident| $extra:block)?
   ) => {
+    /// TODO: Document this item
     pub fn $fn_name(
       &self,
       device: &LogicalDevice,
@@ -270,6 +279,7 @@ macro_rules! impl_create_archetype {
     $resource_struct:ident
     $(, |$gi:ident| $extra:block)?
   ) => {
+    /// TODO: Document this item
     pub fn $fn_name(
       &self,
       device: &LogicalDevice,
@@ -334,7 +344,8 @@ impl Archetypes {
     physical_mesh_render_archetype,
     |archetype, device, write_pipeline, discard_pool, timeline, graphics_info, format| {
       if !archetype.has_format_outline_pipeline_map(format) {
-        let mut outline_graphics_info = archetype.get_any_graphics_info_outline_pipeline_map().unwrap();
+        let mut outline_graphics_info =
+          archetype.get_any_graphics_info_outline_pipeline_map().unwrap();
         outline_graphics_info.fragment_out.color_attachment_formats.clear();
         outline_graphics_info.fragment_out.color_attachment_formats.push(format);
         outline_graphics_info.render_pass = graphics_info.render_pass;
@@ -356,7 +367,8 @@ impl Archetypes {
     physical_mesh2_render_archetype,
     |archetype, device, write_pipeline, discard_pool, timeline, graphics_info, format| {
       if !archetype.has_format_outline_pipeline_map(format) {
-        let mut outline_graphics_info = archetype.get_any_graphics_info_outline_pipeline_map().unwrap();
+        let mut outline_graphics_info =
+          archetype.get_any_graphics_info_outline_pipeline_map().unwrap();
         outline_graphics_info.fragment_out.color_attachment_formats.clear();
         outline_graphics_info.fragment_out.color_attachment_formats.push(format);
         outline_graphics_info.render_pass = graphics_info.render_pass;
@@ -484,14 +496,14 @@ impl Archetypes {
     TrajectoryRenderResourceArchetype,
     ref_alloc,
     |gi| {
-        gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
-          .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::empty())
-          .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
-          .with_stencil_compare_op(StencilCompareOp::None)
-          .with_stencil_logic_op(StencilLogicOp::Replace)
-          .with_stencil_reference(255)
-          .with_stencil_compare_mask(0)
-          .with_stencil_write_mask(u32::MAX)
+      gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
+        .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::empty())
+        .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+        .with_stencil_compare_op(StencilCompareOp::None)
+        .with_stencil_logic_op(StencilLogicOp::Replace)
+        .with_stencil_reference(255)
+        .with_stencil_compare_mask(0)
+        .with_stencil_write_mask(u32::MAX)
     }
   );
 
@@ -555,6 +567,7 @@ impl Archetypes {
     }
   );
 
+  /// TODO: Document this item
   pub fn create_physical_mesh_archetype(
     &self,
     device: &LogicalDevice,
@@ -664,9 +677,7 @@ impl Archetypes {
       .with_stencil_reference(255)
       .with_stencil_write_mask(u32::MAX)
       .with_render_pass(
-        renderpasses
-          .get_pipeline_render_pass(color_format, depth_stencil_format)?
-          .get(),
+        renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
       )
       .with_subpass(0)
       .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
@@ -677,10 +688,10 @@ impl Archetypes {
       .with_stencil_write_mask(u32::MAX)
       .clone();
 
-
     aethervk_oshal_rlib::log!("Creating graphics pipeline for physical_mesh2...");
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info).inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
-
+    pipeline_pool
+      .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)
+      .inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
 
     // Note: old code rendered outlines with back faces and stencil buffer. But:
     // - That is the traditional technique because traditional pipelines don't use Stencil Masks.
@@ -713,16 +724,14 @@ impl Archetypes {
     let outline_pipeline_key = outline_graphics_info.pipeline_key();
 
     aethervk_oshal_rlib::log!("Creating outline graphics pipeline for physical_mesh2...");
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &outline_graphics_info).inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create outline graphics pipeline: {:?}", e))?;
+    pipeline_pool.get_or_create_graphics_pipeline(&device, &outline_graphics_info).inspect_err(
+      |e| aethervk_oshal_rlib::log!("Failed to create outline graphics pipeline: {:?}", e),
+    )?;
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
 
     let final_res = res
-      .with_graphics_info(
-        color_format,
-        pipeline_graphics_info,
-        pipeline_key,
-      )
+      .with_graphics_info(color_format, pipeline_graphics_info, pipeline_key)
       .with_graphics_info_outline_pipeline_map(
         color_format,
         outline_graphics_info,
@@ -733,6 +742,7 @@ impl Archetypes {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn create_physical_mesh2_archetype(
     &self,
     device: &LogicalDevice,
@@ -787,7 +797,10 @@ impl Archetypes {
         staging_arena,
         &queue,
       )
-    }.inspect_err(|e| aethervk_oshal_rlib::log!("ForwardMesh2RenderResourceArchetype::new failed: {:?}", e))?;
+    }
+    .inspect_err(|e| {
+      aethervk_oshal_rlib::log!("ForwardMesh2RenderResourceArchetype::new failed: {:?}", e)
+    })?;
 
     aethervk_oshal_rlib::log!("Populating GraphicsInfo...");
     // then populate graphics info and pipeline key
@@ -839,9 +852,7 @@ impl Archetypes {
       .with_stencil_reference(255)
       .with_stencil_write_mask(u32::MAX)
       .with_render_pass(
-        renderpasses
-          .get_pipeline_render_pass(color_format, depth_stencil_format)?
-          .get(),
+        renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
       )
       .with_subpass(0)
       .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
@@ -852,10 +863,10 @@ impl Archetypes {
       .with_stencil_write_mask(u32::MAX)
       .clone();
 
-
     aethervk_oshal_rlib::log!("Creating graphics pipeline for physical_mesh2...");
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info).inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
-
+    pipeline_pool
+      .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)
+      .inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
 
     let outline_graphics_info = pipeline_graphics_info
       .clone()
@@ -884,16 +895,14 @@ impl Archetypes {
     let outline_pipeline_key = outline_graphics_info.pipeline_key();
 
     aethervk_oshal_rlib::log!("Creating outline graphics pipeline for physical_mesh2...");
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &outline_graphics_info).inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create outline graphics pipeline: {:?}", e))?;
+    pipeline_pool.get_or_create_graphics_pipeline(&device, &outline_graphics_info).inspect_err(
+      |e| aethervk_oshal_rlib::log!("Failed to create outline graphics pipeline: {:?}", e),
+    )?;
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
 
     let final_res = res
-      .with_graphics_info(
-        color_format,
-        pipeline_graphics_info,
-        pipeline_key,
-      )
+      .with_graphics_info(color_format, pipeline_graphics_info, pipeline_key)
       .with_graphics_info_outline_pipeline_map(
         color_format,
         outline_graphics_info,
@@ -904,6 +913,7 @@ impl Archetypes {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn create_sky_archetype(
     &self,
     device: &LogicalDevice,
@@ -964,26 +974,21 @@ impl Archetypes {
       .with_pipeline_layout(pipeline_layout)
       .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST)
       .with_render_pass(
-        renderpasses
-          .get_pipeline_render_pass(color_format, depth_stencil_format)?
-          .get(),
+        renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
       )
       .with_subpass(0)
       .with_rasterization_polygon_mode(vk::PolygonMode::FILL);
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
     pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
-    arch = arch.with_graphics_info(
-      color_format,
-      pipeline_graphics_info,
-      pipeline_key,
-    );
+    arch = arch.with_graphics_info(color_format, pipeline_graphics_info, pipeline_key);
 
     *sky_render_archetype = Some(arch);
 
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn create_grid_archetype(
     &self,
     device: &LogicalDevice,
@@ -1038,9 +1043,7 @@ impl Archetypes {
       .with_pipeline_layout(pipeline_layout)
       .with_pipeline_flags(PipelineFlags::empty())
       .with_render_pass(
-        renderpasses
-          .get_pipeline_render_pass(color_format, depth_stencil_format)?
-          .get(),
+        renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
       )
       .with_subpass(0)
       .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
@@ -1058,6 +1061,7 @@ impl Archetypes {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn create_minimap_archetype(
     &self,
     device: &LogicalDevice,
@@ -1103,9 +1107,7 @@ impl Archetypes {
         pipelines::PipelineFlags::NO_DEPTH_TEST | pipelines::PipelineFlags::NO_DEPTH_WRITE,
       )
       .with_render_pass(
-        renderpasses
-          .get_pipeline_render_pass(color_format, depth_stencil_format)?
-          .get(),
+        renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
       )
       .with_subpass(0)
       .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
@@ -1114,13 +1116,16 @@ impl Archetypes {
     let pipeline_key = pipeline_graphics_info.pipeline_key();
 
     aethervk_oshal_rlib::log!("Creating graphics pipeline for physical_mesh2...");
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info).inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
+    pipeline_pool
+      .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)
+      .inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
 
     arch_mut.insert_graphics_info(color_format, pipeline_graphics_info, pipeline_key);
 
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn create_text_archetype(
     &self,
     device: &vulkan::device::LogicalDevice,
@@ -1225,9 +1230,7 @@ impl Archetypes {
       .with_pipeline_layout(pipeline_layout)
       .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST)
       .with_render_pass(
-        renderpasses
-          .get_pipeline_render_pass(color_format, depth_stencil_format)?
-          .get(),
+        renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
       )
       .with_subpass(0)
       .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
@@ -1236,15 +1239,13 @@ impl Archetypes {
     let pipeline_key = pipeline_graphics_info.pipeline_key();
     pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
 
-    *text_render_archetype = Some(arch.with_graphics_info(
-      color_format,
-      pipeline_graphics_info,
-      pipeline_key,
-    ));
+    *text_render_archetype =
+      Some(arch.with_graphics_info(color_format, pipeline_graphics_info, pipeline_key));
 
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn create_bvh_archetype(
     &self,
     device: &LogicalDevice,
@@ -1296,9 +1297,7 @@ impl Archetypes {
         pipelines::PipelineFlags::NO_DEPTH_WRITE | pipelines::PipelineFlags::INVERT_FRONT_FACE,
       )
       .with_render_pass(
-        renderpasses
-          .get_pipeline_render_pass(color_format, depth_stencil_format)?
-          .get(),
+        renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
       )
       .with_subpass(0)
       .with_rasterization_polygon_mode(vk::PolygonMode::LINE)
@@ -1307,13 +1306,16 @@ impl Archetypes {
     let pipeline_key = pipeline_graphics_info.pipeline_key();
 
     aethervk_oshal_rlib::log!("Creating graphics pipeline for physical_mesh2...");
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info).inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
+    pipeline_pool
+      .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)
+      .inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
 
     archetype.insert_graphics_info(color_format, pipeline_graphics_info, pipeline_key);
 
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn create_gizmo_archetype(
     &self,
     device: &LogicalDevice,
@@ -1367,9 +1369,7 @@ impl Archetypes {
           | pipelines::PipelineFlags::INVERT_FRONT_FACE,
       )
       .with_render_pass(
-        renderpasses
-          .get_pipeline_render_pass(color_format, depth_stencil_format)?
-          .get(),
+        renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
       )
       .with_subpass(0)
       .with_rasterization_polygon_mode(vk::PolygonMode::LINE)
@@ -1378,7 +1378,9 @@ impl Archetypes {
     let pipeline_key = pipeline_graphics_info.pipeline_key();
 
     aethervk_oshal_rlib::log!("Creating graphics pipeline for physical_mesh2...");
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info).inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
+    pipeline_pool
+      .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)
+      .inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
 
     archetype.insert_graphics_info(color_format, pipeline_graphics_info, pipeline_key);
 

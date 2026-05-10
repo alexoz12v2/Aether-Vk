@@ -168,32 +168,131 @@ public partial class App : Application
             };
 
             desktop.MainWindow = mainWindow;
-            
-            var inputRegistry = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<AetherVk.Logic.Input.InputRegistry>(App.Host!.Services);
-            
-            inputRegistry.Register("PropertiesPanel", new AetherVk.Logic.Input.InputChord(Key: "S", Shift: true), new AetherVk.Logic.Input.AppAction("ui.expand_all", "Toggle Expanders", "Expands all sections"));
-            inputRegistry.Register("PropertiesPanel", new AetherVk.Logic.Input.InputChord(Key: "G", Shift: true), new AetherVk.Logic.Input.AppAction("ui.show_flyout", "Quick Menu", "Opens context menu"));
-            inputRegistry.Register("PropertiesPanel", new AetherVk.Logic.Input.InputChord(Key: "D1"), new AetherVk.Logic.Input.AppAction("ui.add_cube", "Add Cube"));
-            inputRegistry.Register("PropertiesPanel", new AetherVk.Logic.Input.InputChord(Key: "Escape"), new AetherVk.Logic.Input.AppAction("global.cancel", "Cancel Menu"));
-            
-            inputRegistry.Register("Viewport", new AetherVk.Logic.Input.InputChord(Key: "Escape"), new AetherVk.Logic.Input.AppAction("viewport.cancel_add_jet", "Cancel Add Jet"));
-            inputRegistry.Register("Viewport", new AetherVk.Logic.Input.InputChord(Key: "Tab"), new AetherVk.Logic.Input.AppAction("viewport.toggle_measuring", "Toggle Measuring Mode"));
-            inputRegistry.Register("Viewport", new AetherVk.Logic.Input.InputChord(Key: "R"), new AetherVk.Logic.Input.AppAction("viewport.reset_camera", "Reset Camera"));
-            inputRegistry.Register("Viewport", new AetherVk.Logic.Input.InputChord(Key: "Up"), new AetherVk.Logic.Input.AppAction("viewport.move_cursor_up", "Move Cursor Y-Forward"));
-            inputRegistry.Register("Viewport", new AetherVk.Logic.Input.InputChord(Key: "Down"), new AetherVk.Logic.Input.AppAction("viewport.move_cursor_down", "Move Cursor Y-Backward"));
-            inputRegistry.Register("Viewport", new AetherVk.Logic.Input.InputChord(Key: "Left"), new AetherVk.Logic.Input.AppAction("viewport.move_cursor_left", "Move Cursor X-Left"));
-            inputRegistry.Register("Viewport", new AetherVk.Logic.Input.InputChord(Key: "Right"), new AetherVk.Logic.Input.AppAction("viewport.move_cursor_right", "Move Cursor X-Right"));
-            inputRegistry.Register("Viewport", new AetherVk.Logic.Input.InputChord(Key: "E"), new AetherVk.Logic.Input.AppAction("viewport.move_cursor_z_up", "Move Cursor Z-Up"));
-            inputRegistry.Register("Viewport", new AetherVk.Logic.Input.InputChord(Key: "Q"), new AetherVk.Logic.Input.AppAction("viewport.move_cursor_z_down", "Move Cursor Z-Down"));
-            
+
+            var inputRegistry =
+              Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<AetherVk.Logic.Input.InputRegistry>(
+                App.Host!.Services
+              );
+
+            inputRegistry.Register(
+              "PropertiesPanel",
+              new AetherVk.Logic.Input.InputChord(Key: "S", Shift: true),
+              new AetherVk.Logic.Input.AppAction(
+                "ui.expand_all",
+                "Toggle Expanders",
+                "Expands all sections"
+              )
+            );
+            inputRegistry.Register(
+              "PropertiesPanel",
+              new AetherVk.Logic.Input.InputChord(Key: "G", Shift: true),
+              new AetherVk.Logic.Input.AppAction(
+                "ui.show_flyout",
+                "Quick Menu",
+                "Opens context menu"
+              )
+            );
+            inputRegistry.Register(
+              "PropertiesPanel",
+              new AetherVk.Logic.Input.InputChord(Key: "D1"),
+              new AetherVk.Logic.Input.AppAction("ui.add_cube", "Add Cube")
+            );
+            inputRegistry.Register(
+              "PropertiesPanel",
+              new AetherVk.Logic.Input.InputChord(Key: "Escape"),
+              new AetherVk.Logic.Input.AppAction("global.cancel", "Cancel Menu")
+            );
+
+            inputRegistry.Register(
+              "Viewport",
+              new AetherVk.Logic.Input.InputChord(Key: "Escape"),
+              new AetherVk.Logic.Input.AppAction("viewport.cancel_add_jet", "Cancel Add Jet")
+            );
+            inputRegistry.Register(
+              "Viewport",
+              new AetherVk.Logic.Input.InputChord(Key: "Tab"),
+              new AetherVk.Logic.Input.AppAction(
+                "viewport.toggle_measuring",
+                "Toggle Measuring Mode"
+              )
+            );
+            inputRegistry.Register(
+              "Viewport",
+              new AetherVk.Logic.Input.InputChord(Key: "R"),
+              new AetherVk.Logic.Input.AppAction("viewport.reset_camera", "Reset Camera")
+            );
+            inputRegistry.Register(
+              "Viewport",
+              new AetherVk.Logic.Input.InputChord(Key: "Up"),
+              new AetherVk.Logic.Input.AppAction("viewport.move_cursor_up", "Move Cursor Y-Forward")
+            );
+            inputRegistry.Register(
+              "Viewport",
+              new AetherVk.Logic.Input.InputChord(Key: "Down"),
+              new AetherVk.Logic.Input.AppAction(
+                "viewport.move_cursor_down",
+                "Move Cursor Y-Backward"
+              )
+            );
+            inputRegistry.Register(
+              "Viewport",
+              new AetherVk.Logic.Input.InputChord(Key: "Left"),
+              new AetherVk.Logic.Input.AppAction("viewport.move_cursor_left", "Move Cursor X-Left")
+            );
+            inputRegistry.Register(
+              "Viewport",
+              new AetherVk.Logic.Input.InputChord(Key: "Right"),
+              new AetherVk.Logic.Input.AppAction(
+                "viewport.move_cursor_right",
+                "Move Cursor X-Right"
+              )
+            );
+            inputRegistry.Register(
+              "Viewport",
+              new AetherVk.Logic.Input.InputChord(Key: "E"),
+              new AetherVk.Logic.Input.AppAction("viewport.move_cursor_z_up", "Move Cursor Z-Up")
+            );
+            inputRegistry.Register(
+              "Viewport",
+              new AetherVk.Logic.Input.InputChord(Key: "Q"),
+              new AetherVk.Logic.Input.AppAction(
+                "viewport.move_cursor_z_down",
+                "Move Cursor Z-Down"
+              )
+            );
+
             // Blender style camera controls
-            inputRegistry.Register("Viewport", new AetherVk.Logic.Input.InputChord(Pointer: "MiddleButtonPressed"), new AetherVk.Logic.Input.AppAction("viewport.start_orbit", "Orbit Camera", "Orbit camera around 3D cursor"));
-            inputRegistry.Register("Viewport", new AetherVk.Logic.Input.InputChord(Pointer: "MiddleButtonPressed", Shift: true), new AetherVk.Logic.Input.AppAction("viewport.start_pan", "Pan Camera", "Translate camera along view plane"));
-            inputRegistry.Register("Viewport", new AetherVk.Logic.Input.InputChord(Pointer: "MiddleButtonPressed", Ctrl: true), new AetherVk.Logic.Input.AppAction("viewport.start_zoom_drag", "Zoom Camera (Drag)", "Smooth zoom camera"));
+            inputRegistry.Register(
+              "Viewport",
+              new AetherVk.Logic.Input.InputChord(Pointer: "MiddleButtonPressed"),
+              new AetherVk.Logic.Input.AppAction(
+                "viewport.start_orbit",
+                "Orbit Camera",
+                "Orbit camera around 3D cursor"
+              )
+            );
+            inputRegistry.Register(
+              "Viewport",
+              new AetherVk.Logic.Input.InputChord(Pointer: "MiddleButtonPressed", Shift: true),
+              new AetherVk.Logic.Input.AppAction(
+                "viewport.start_pan",
+                "Pan Camera",
+                "Translate camera along view plane"
+              )
+            );
+            inputRegistry.Register(
+              "Viewport",
+              new AetherVk.Logic.Input.InputChord(Pointer: "MiddleButtonPressed", Ctrl: true),
+              new AetherVk.Logic.Input.AppAction(
+                "viewport.start_zoom_drag",
+                "Zoom Camera (Drag)",
+                "Smooth zoom camera"
+              )
+            );
 
             // Attach global router
             var globalRouter = new AetherVk.Input.GlobalInputRouter(mainWindow, inputRegistry);
-            
+
             mainWindow.Show();
             splashWindow.Close();
           });

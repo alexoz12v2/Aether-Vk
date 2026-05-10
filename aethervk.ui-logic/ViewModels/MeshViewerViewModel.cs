@@ -173,7 +173,10 @@ public partial class MeshViewerViewModel
 
     _consoleService?.Log($"[MeshViewer] Exiting InitializeSceneAsync!");
     IsInitialized = true;
-    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(this, (r, m) => ((MeshViewerViewModel)r).Receive(m));
+    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(
+      this,
+      (r, m) => ((MeshViewerViewModel)r).Receive(m)
+    );
   }
 
   public NativeRuntimeService RuntimeService => _runtimeService;

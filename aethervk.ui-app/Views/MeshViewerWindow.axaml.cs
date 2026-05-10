@@ -26,10 +26,10 @@ public partial class MeshViewerWindow : Window
   {
     InitializeComponent();
     Closing += (s, e) => _viewModel?.Stop();
-    
+
     _resizeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
     _resizeTimer.Tick += OnResizeTimerTick;
-    
+
     SizeChanged += OnSizeChanged;
   }
 
@@ -44,12 +44,14 @@ public partial class MeshViewerWindow : Window
   {
     _resizeTimer?.Stop();
 
-    if (_viewModel == null || _pendingSize.Width <= 0 || _pendingSize.Height <= 0) return;
+    if (_viewModel == null || _pendingSize.Width <= 0 || _pendingSize.Height <= 0)
+      return;
 
     uint newWidth = (uint)_pendingSize.Width;
     uint newHeight = (uint)_pendingSize.Height;
 
-    if (newWidth == _viewModel.Width && newHeight == _viewModel.Height) return;
+    if (newWidth == _viewModel.Width && newHeight == _viewModel.Height)
+      return;
 
     _viewModel.Width = newWidth;
     _viewModel.Height = newHeight;
@@ -63,7 +65,12 @@ public partial class MeshViewerWindow : Window
 
     RenderTargetImage.Source = _bitmap;
 
-    _viewModel.RuntimeService.ResizePresentationEngine(_viewModel.SceneId, _viewModel.PresentationEngineId, newWidth, newHeight);
+    _viewModel.RuntimeService.ResizePresentationEngine(
+      _viewModel.SceneId,
+      _viewModel.PresentationEngineId,
+      newWidth,
+      newHeight
+    );
   }
 
   protected override void OnDataContextChanged(EventArgs e)
@@ -158,9 +165,7 @@ public partial class MeshViewerWindow : Window
     RenderTargetImage.Focus();
   }
 
-  private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
-  {
-  }
+  private void OnPointerReleased(object? sender, PointerReleasedEventArgs e) { }
 
   private void OnPointerMoved(object? sender, PointerEventArgs e)
   {

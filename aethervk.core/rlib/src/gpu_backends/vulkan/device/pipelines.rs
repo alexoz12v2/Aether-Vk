@@ -1,3 +1,5 @@
+//! pipelines module.
+
 use aethervk_oshal_rlib::hash::FnvHasher;
 use alloc::vec::Vec;
 use ash::vk;
@@ -27,6 +29,7 @@ fn eq_specialization_constants(
   a.size == b.size && a.offset == b.offset && a.constant_id == b.constant_id
 }
 
+/// TODO: Document this item
 pub struct ComputeInfo {
   pub shader_module: vk::ShaderModule,
   pub pipeline_layout: vk::PipelineLayout,
@@ -46,16 +49,19 @@ impl Default for ComputeInfo {
 }
 
 impl ComputeInfo {
+  /// TODO: Document this item
   pub fn with_shader_module(&mut self, shader_module: vk::ShaderModule) -> &mut Self {
     self.shader_module = shader_module;
     self
   }
 
+  /// TODO: Document this item
   pub fn with_pipeline_layout(&mut self, pipeline_layout: vk::PipelineLayout) -> &mut Self {
     self.pipeline_layout = pipeline_layout;
     self
   }
 
+  /// TODO: Document this item
   pub fn add_specialization_constant_u32(
     &mut self,
     constant: vk::SpecializationMapEntry,
@@ -112,6 +118,7 @@ impl Hash for ComputeInfo {
 // ---------------- GRAPHICS PIPELINE HASH -----------------------------------
 bitflags! {
   #[derive(PartialEq, Eq, Hash, Default, Clone, Copy)]
+  /// TODO: Document this item
   pub struct PipelineFlags: u32 {
     const DEPTH_BIAS = 1 << 0;
     const CULL_FRONT = 1 << 1;
@@ -127,6 +134,7 @@ bitflags! {
 
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+/// TODO: Document this item
 pub enum StencilCompareOp {
   None = 0,
   Equal,
@@ -142,6 +150,7 @@ impl Default for StencilCompareOp {
 
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+/// TODO: Document this item
 pub enum StencilLogicOp {
   // synonym for KEEP in both back and front always
   None = 0,
@@ -170,6 +179,7 @@ fn eq_vertex_input_attribute_description(
 }
 
 #[derive(Clone)]
+/// TODO: Document this item
 pub(super) struct VertexIn {
   // adjacency requires `geometryShader` feature, patch requires `tessellationShader` feature
   pub topology: vk::PrimitiveTopology,
@@ -183,11 +193,13 @@ pub(super) struct VertexIn {
 }
 
 impl VertexIn {
+  /// TODO: Document this item
   pub fn with_topology(mut self, topology: vk::PrimitiveTopology) -> Self {
     self.topology = topology;
     self
   }
 
+  /// TODO: Document this item
   pub fn add_attribute(
     mut self,
     binding: u32,
@@ -205,6 +217,7 @@ impl VertexIn {
     self
   }
 
+  /// TODO: Document this item
   pub fn add_binding(mut self, binding: u32, stride: u32, input_rate: vk::VertexInputRate) -> Self {
     self.bindings.push(
       vk::VertexInputBindingDescription::default()
@@ -288,6 +301,7 @@ pub(super) struct PreRasterization {
 }
 
 impl PreRasterization {
+  /// TODO: Document this item
   pub fn with_vertex_module(mut self, vertex_module: vk::ShaderModule) -> Self {
     self.vertex_module = vertex_module;
     self
@@ -295,6 +309,7 @@ impl PreRasterization {
 }
 
 #[derive(Clone)]
+/// TODO: Document this item
 pub(super) struct FragmentShader {
   pub fragment_module: vk::ShaderModule,
   pub viewports: Vec<vk::Viewport>,
@@ -302,14 +317,17 @@ pub(super) struct FragmentShader {
 }
 
 impl FragmentShader {
+  /// TODO: Document this item
   pub fn with_fragment_module(mut self, fragment_module: vk::ShaderModule) -> Self {
     self.fragment_module = fragment_module;
     self
   }
+  /// TODO: Document this item
   pub fn add_viewport(mut self, viewport: vk::Viewport) -> Self {
     self.viewports.push(viewport);
     self
   }
+  /// TODO: Document this item
   pub fn add_scissors(mut self, scissors: vk::Rect2D) -> Self {
     self.scissors.push(scissors);
     self
@@ -345,6 +363,7 @@ impl Hash for FragmentShader {
 }
 
 #[derive(PartialEq, Eq, Hash, Default, Clone)]
+/// TODO: Document this item
 pub(super) struct FragmentOut {
   pub color_attachment_formats: Vec<vk::Format>,
   pub depth_attachment_format: Option<vk::Format>,
@@ -352,16 +371,19 @@ pub(super) struct FragmentOut {
 }
 
 impl FragmentOut {
+  /// TODO: Document this item
   pub fn add_color_attachment_format(mut self, format: vk::Format) -> Self {
     self.color_attachment_formats.push(format);
     self
   }
 
+  /// TODO: Document this item
   pub fn with_depth_attachment_format(mut self, format: vk::Format) -> Self {
     self.depth_attachment_format = Some(format);
     self
   }
 
+  /// TODO: Document this item
   pub fn with_stencil_attachment_format(mut self, format: vk::Format) -> Self {
     self.stencil_attachment_format = Some(format);
     self
@@ -369,6 +391,7 @@ impl FragmentOut {
 }
 
 #[derive(Default, Clone)]
+/// TODO: Document this item
 pub struct GraphicsInfo {
   pub specialization_constants: Vec<vk::SpecializationMapEntry>,
   pub specialization_constants_values: Vec<u8>,
@@ -448,6 +471,7 @@ impl Hash for GraphicsInfo {
 
 impl GraphicsInfo {
   // TODO: Add methods to diminish code duplication in [`super::archetypes_struct`]
+  /// TODO: Document this item
   pub fn apply_presentation_defaults(
     mut self,
     color_format: vk::Format,
@@ -474,6 +498,7 @@ impl GraphicsInfo {
     self
   }
 
+  /// TODO: Document this item
   pub fn add_specialization_constant_u32(
     mut self,
     constant: vk::SpecializationMapEntry,
@@ -487,46 +512,55 @@ impl GraphicsInfo {
     self
   }
 
+  /// TODO: Document this item
   pub fn with_vertex_in(mut self, vertex_in: VertexIn) -> Self {
     self.vertex_in = vertex_in;
     self
   }
 
+  /// TODO: Document this item
   pub fn with_pre_rasterization(mut self, pre_rasterization: PreRasterization) -> Self {
     self.pre_rasterization = pre_rasterization;
     self
   }
 
+  /// TODO: Document this item
   pub fn with_fragment_shader(mut self, fragment_shader: FragmentShader) -> Self {
     self.fragment_shader = fragment_shader;
     self
   }
 
+  /// TODO: Document this item
   pub fn with_fragment_out(mut self, fragment_out: FragmentOut) -> Self {
     self.fragment_out = fragment_out;
     self
   }
 
+  /// TODO: Document this item
   pub fn with_pipeline_layout(mut self, pipeline_layout: vk::PipelineLayout) -> Self {
     self.pipeline_layout = pipeline_layout;
     self
   }
 
+  /// TODO: Document this item
   pub fn with_pipeline_flags(mut self, pipeline_flags: PipelineFlags) -> Self {
     self.pipeline_flags = pipeline_flags;
     self
   }
 
+  /// TODO: Document this item
   pub fn with_render_pass(mut self, render_pass: vk::RenderPass) -> Self {
     self.render_pass = render_pass;
     self
   }
 
+  /// TODO: Document this item
   pub fn with_subpass(mut self, subpass: u32) -> Self {
     self.subpass = subpass;
     self
   }
 
+  /// TODO: Document this item
   pub fn with_rasterization_polygon_mode(
     mut self,
     rasterization_polygon_mode: vk::PolygonMode,
@@ -535,26 +569,31 @@ impl GraphicsInfo {
     self
   }
 
+  /// TODO: Document this item
   pub fn with_stencil_compare_op(mut self, stencil_compare_op: StencilCompareOp) -> Self {
     self.stencil_compare_op = stencil_compare_op;
     self
   }
 
+  /// TODO: Document this item
   pub fn with_stencil_logic_op(mut self, stencil_logic_op: StencilLogicOp) -> Self {
     self.stencil_logic_op = stencil_logic_op;
     self
   }
 
+  /// TODO: Document this item
   pub fn with_stencil_reference(mut self, stencil_reference: u32) -> Self {
     self.stencil_reference = stencil_reference;
     self
   }
 
+  /// TODO: Document this item
   pub fn with_stencil_compare_mask(mut self, stencil_compare_mask: u32) -> Self {
     self.stencil_compare_mask = stencil_compare_mask;
     self
   }
 
+  /// TODO: Document this item
   pub fn with_stencil_write_mask(mut self, stencil_write_mask: u32) -> Self {
     self.stencil_write_mask = stencil_write_mask;
     self
@@ -926,6 +965,7 @@ impl PipelinePool {
     Ok(data)
   }
 
+  /// TODO: Document this item
   pub fn get_graphics_pipeline(
     &self,
     pipeline_key: PipelineKey,
@@ -933,6 +973,7 @@ impl PipelinePool {
     self.graphics_pipelines.get(&pipeline_key).copied()
   }
 
+  /// TODO: Document this item
   pub fn get_compute_pipeline(
     &self,
     pipeline_key: PipelineKey,
@@ -940,6 +981,7 @@ impl PipelinePool {
     self.compute_pipelines.get(&pipeline_key).copied()
   }
 
+  /// TODO: Document this item
   pub fn discard_graphics_pipeline_if_present(
     &mut self,
     pipeline_key: PipelineKey,
@@ -954,6 +996,7 @@ impl PipelinePool {
     }
   }
 
+  /// TODO: Document this item
   pub fn discard_compute_pipeline_if_present(
     &mut self,
     pipeline_key: PipelineKey,
@@ -968,6 +1011,7 @@ impl PipelinePool {
     }
   }
 
+  /// TODO: Document this item
   pub fn get_or_create_compute_pipeline(
     &mut self,
     device: &crate::gpu_backends::vulkan::device::LogicalDevice,
@@ -990,12 +1034,15 @@ impl PipelinePool {
         ptr::null(),
         ptr::from_mut(&mut pipeline),
       );
-      NonZeroHandle::new_unchecked(res.result_with_success(pipeline).with_name(device, "VkPipeline_Compute")?)
+      NonZeroHandle::new_unchecked(
+        res.result_with_success(pipeline).with_name(device, "VkPipeline_Compute")?,
+      )
     };
     unsafe { self.compute_pipelines.insert_unique_unchecked(key, pipeline) };
     Ok(pipeline)
   }
 
+  /// TODO: Document this item
   pub fn get_or_create_graphics_pipeline(
     &mut self,
     device: &crate::gpu_backends::vulkan::device::LogicalDevice,
@@ -1018,7 +1065,9 @@ impl PipelinePool {
         ptr::null(),
         ptr::from_mut(&mut pipeline),
       );
-      NonZeroHandle::new_unchecked(res.result_with_success(pipeline).with_name(device, "VkPipeline_Graphics")?)
+      NonZeroHandle::new_unchecked(
+        res.result_with_success(pipeline).with_name(device, "VkPipeline_Graphics")?,
+      )
     };
     unsafe {
       self.graphics_pipelines.insert_unique_unchecked(key, pipeline);

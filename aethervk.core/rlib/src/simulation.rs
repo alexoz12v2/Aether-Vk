@@ -1,3 +1,5 @@
+//! simulation module.
+
 use crate::gpu::{RenderDeviceHandle, RenderFrontend};
 use aethervk_oshal_rlib::os::{
   native::this_thread,
@@ -12,6 +14,7 @@ pub mod almanac;
 pub mod comet;
 pub mod pck;
 
+/// TODO: Document this item
 pub trait Pausable {
   fn is_paused(&self) -> bool {
     self.time_scale() == 0.0
@@ -23,6 +26,7 @@ pub trait Pausable {
   fn set_time_scale(&mut self, scale: f32);
 }
 
+/// TODO: Document this item
 pub struct MultithreadedLoop<S> {
   pub state: Arc<RwLock<S>>,
   pub generation: Arc<AtomicU64>,
@@ -30,6 +34,7 @@ pub struct MultithreadedLoop<S> {
   pub render_thread: thread::Thread,
 }
 
+/// TODO: Document this item
 pub fn run_multithreaded<S, R>(state: S, mut render_closure: R) -> MultithreadedLoop<S>
 where
   S: Send + Sync + 'static,
@@ -142,5 +147,5 @@ pub fn run<'a, S, SR, PE, U, F>(
 }
 
 pub mod constants;
-pub mod utils;
 mod units;
+pub mod utils;

@@ -1,3 +1,5 @@
+//! vulkan module.
+
 use core::{
   ffi::{self, CStr},
   str::FromStr,
@@ -37,6 +39,7 @@ enum SyncMode {
 
 // ---------------------------- Runtime Params ----------------------------
 pub mod constants {
+  /// TODO: Document this item
   pub const RUNTIME_PARAM_VULKAN_ENTRY_BASE_DIR: super::RuntimeParamsIndex = 1000;
 }
 
@@ -53,6 +56,7 @@ unsafe impl Send for VulkanCore {}
 static S_VULKAN_CORE: spin::Mutex<sync::Weak<spin::RwLock<VulkanCore>>> =
   spin::Mutex::new(sync::Weak::new());
 
+/// TODO: Document this item
 pub(super) struct VulkanRenderContext {
   core: sync::Arc<spin::RwLock<VulkanCore>>,
   // graphics specific members
@@ -93,33 +97,53 @@ impl InitWithRuntime<VulkanRenderContext> for VulkanRenderContext {
         GpuError::BackendSpecific("Invalid RUNTIME_PARAM_VULKAN_ENTRY_BASE_DIR".to_string())
       })?;
 
-    let mut s_core = S_VULKAN_CORE.lock();
-    let core = if let Some(core) = s_core.upgrade() {
-      core
-    } else {
-      let new_core = sync::Arc::new(spin::RwLock::new(VulkanCore::from_path(
+    // --- TEST FIX: Bypass the global cache so every test gets an isolated GPU Device ---
+    #[cfg(test)]
+    {
+      let core = sync::Arc::new(spin::RwLock::new(VulkanCore::from_path(
         base_override_path.as_deref(),
         params.validation_error_callback,
       )?));
-      *s_core = sync::Arc::downgrade(&new_core);
-      new_core
-    };
+      return Ok(Self { core });
+    }
 
-    Ok(Self { core })
+    // --- PRODUCTION BEHAVIOR ---
+    #[cfg(not(test))]
+    {
+      let mut s_core = S_VULKAN_CORE.lock();
+      let core = if let Some(core) = s_core.upgrade() {
+        core
+      } else {
+        let new_core = sync::Arc::new(spin::RwLock::new(VulkanCore::from_path(
+          base_override_path.as_deref(),
+          params.validation_error_callback,
+        )?));
+        *s_core = sync::Arc::downgrade(&new_core);
+        new_core
+      };
+
+      Ok(Self { core })
+    }
   }
 }
 
 // reference utils/PhysicalDeviceQueryInput
 #[allow(unused)]
+/// TODO: Document this item
 pub const DEVICE_ADDIDITIONAL_PARAM_WL_DISPLAY: u64 = 0;
 #[allow(unused)]
+/// TODO: Document this item
 pub const DEVICE_ADDIDITIONAL_PARAM_XCB_CONNECTION: u64 = 1;
 #[allow(unused)]
+/// TODO: Document this item
 pub const DEVICE_ADDIDITIONAL_PARAM_XCB_VISUALID: u64 = 2;
 #[allow(unused)]
+/// TODO: Document this item
 pub const DEVICE_ADDIDITIONAL_PARAM_DPY: u64 = 3;
 #[allow(unused)]
+/// TODO: Document this item
 pub const DEVICE_ADDIDITIONAL_PARAM_VISUAL_ID: u64 = 4;
+pub const DEVICE_ADDIDITIONAL_PARAM_DEBUG_SHADERS: u64 = 5;
 
 impl RenderContext for VulkanRenderContext {
   fn backend_id(&self) -> RenderBackendId {

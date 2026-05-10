@@ -148,113 +148,114 @@ impl HorizonJplService {
 
   /// Download object constants
   pub fn download_object_constants(
-      &self,
-      command_id: &str,
+    &self,
+    command_id: &str,
   ) -> Result<String, Box<dyn std::error::Error>> {
-      let command = format!("'{}'", command_id); // Removed the forced ';' so we can pass '399' or 'DES=1000012;' as needed
-      let url = format!(
-          "https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND={}&MAKE_EPHEM='NO'&OBJ_DATA='YES'",
-          urlencoding::encode(&command)
-      );
-      let resp = self.client.get(&url).send()?;
-      if !resp.status().is_success() {
-          return Err(format!("API request failed with status: {}", resp.status()).into());
-      }
-      let json = resp.json::<HorizonsJsonResponse>()?;
+    let command = format!("'{}'", command_id); // Removed the forced ';' so we can pass '399' or 'DES=1000012;' as needed
+    let url = format!(
+      "https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND={}&MAKE_EPHEM='NO'&OBJ_DATA='YES'",
+      urlencoding::encode(&command)
+    );
+    let resp = self.client.get(&url).send()?;
+    if !resp.status().is_success() {
+      return Err(format!("API request failed with status: {}", resp.status()).into());
+    }
+    let json = resp.json::<HorizonsJsonResponse>()?;
 
-      if let Some(result) = json.result {
-          Ok(result)
-      } else if let Some(error) = json.error {
-          Err(format!("API Error: {}", error).into())
-      } else {
-          Err("No result or error in response".into())
-      }
+    if let Some(result) = json.result {
+      Ok(result)
+    } else if let Some(error) = json.error {
+      Err(format!("API Error: {}", error).into())
+    } else {
+      Err("No result or error in response".into())
+    }
   }
 
   pub fn parse_object_constants(&self, text: &str) -> (Option<f32>, Option<f32>, Option<f32>) {
-      let mut radius_km = None;
-      let mut rot_period_hours = None;
-      let mut mass_kg = None;
+    let mut radius_km = None;
+    let mut rot_period_hours = None;
+    let mut mass_kg = None;
 
-      for line in text.lines() {
-          let line_lower = line.to_lowercase();
-          // Parse Radius
-          if radius_km.is_none() {
-              if let Some(idx) = line_lower.find("rad=") {
-                  let rem = &line[idx + 4..];
-                  if let Some(val) = rem.split_whitespace().next() {
-                      radius_km = val.parse::<f32>().ok();
-                  }
-              } else if let Some(idx) = line_lower.find("equ. radius, km") {
-                  if let Some(eq_idx) = line_lower[idx..].find('=') {
-                      let rem = &line[idx + eq_idx + 1..];
-                      if let Some(val) = rem.split_whitespace().next() {
-                          radius_km = val.parse::<f32>().ok();
-                      }
-                  }
-              }
+    for line in text.lines() {
+      let line_lower = line.to_lowercase();
+      // Parse Radius
+      if radius_km.is_none() {
+        if let Some(idx) = line_lower.find("rad=") {
+          let rem = &line[idx + 4..];
+          if let Some(val) = rem.split_whitespace().next() {
+            radius_km = val.parse::<f32>().ok();
           }
-
-          // Parse Rotational Period
-          if rot_period_hours.is_none() {
-              if let Some(idx) = line_lower.find("rotper=") {
-                  let rem = &line[idx + 7..];
-                  if let Some(val) = rem.split_whitespace().next() {
-                      rot_period_hours = val.parse::<f32>().ok();
-                  }
-              } else if let Some(idx) = line_lower.find("rot. rate (rad/s)") {
-                  if let Some(eq_idx) = line_lower[idx..].find('=') {
-                      let rem = &line[idx + eq_idx + 1..];
-                      if let Some(val) = rem.split_whitespace().next() {
-                          if let Ok(rad_per_s) = val.parse::<f32>() {
-                              rot_period_hours = Some(2.0 * std::f32::consts::PI / rad_per_s / 3600.0);                          }
-                      }
-                  }
-              } else if let Some(idx) = line_lower.find("mean sidereal day, hr") {
-                  if let Some(eq_idx) = line_lower[idx..].find('=') {
-                      let rem = &line[idx + eq_idx + 1..];
-                      if let Some(val) = rem.split_whitespace().next() {
-                          rot_period_hours = val.parse::<f32>().ok();
-                      }
-                  }
-              }
+        } else if let Some(idx) = line_lower.find("equ. radius, km") {
+          if let Some(eq_idx) = line_lower[idx..].find('=') {
+            let rem = &line[idx + eq_idx + 1..];
+            if let Some(val) = rem.split_whitespace().next() {
+              radius_km = val.parse::<f32>().ok();
+            }
           }
-
-          // Parse Mass
-          if mass_kg.is_none() {
-              if let Some(idx) = line_lower.find("mass x10^24 (kg)") {
-                  if let Some(eq_idx) = line_lower[idx..].find('=') {
-                      let rem = &line[idx + eq_idx + 1..];
-                      if let Some(val) = rem.split_whitespace().next() {
-                          // Some values are like 5.97219+-0.0006, take the part before +-
-                          let val = val.split("+-").next().unwrap_or(val);
-                          if let Ok(mass) = val.parse::<f32>() {
-                              mass_kg = Some(mass * 1e24);
-                          }
-                      }
-                  }
-              } else if let Some(idx) = line_lower.find("gm=") {
-                  // Try to deduce mass from GM
-                  let rem = &line[idx + 3..];
-                  if let Some(val) = rem.split_whitespace().next() {
-                      if let Ok(gm) = val.parse::<f32>() {
-                          let g = 6.67430e-20; // km^3 / (kg * s^2)
-                          mass_kg = Some(gm / g);
-                      }
-                  }
-              } else if let Some(idx) = line_lower.find("gm, km^3/s^2") {
-                  if let Some(eq_idx) = line_lower[idx..].find('=') {
-                      let rem = &line[idx + eq_idx + 1..];
-                      if let Some(val) = rem.split_whitespace().next() {
-                          if let Ok(gm) = val.parse::<f32>() {
-                              let g = 6.67430e-20; // km^3 / (kg * s^2)
-                              mass_kg = Some(gm / g);
-                          }
-                      }
-                  }
-              }
-          }
+        }
       }
-      (radius_km, rot_period_hours, mass_kg)
+
+      // Parse Rotational Period
+      if rot_period_hours.is_none() {
+        if let Some(idx) = line_lower.find("rotper=") {
+          let rem = &line[idx + 7..];
+          if let Some(val) = rem.split_whitespace().next() {
+            rot_period_hours = val.parse::<f32>().ok();
+          }
+        } else if let Some(idx) = line_lower.find("rot. rate (rad/s)") {
+          if let Some(eq_idx) = line_lower[idx..].find('=') {
+            let rem = &line[idx + eq_idx + 1..];
+            if let Some(val) = rem.split_whitespace().next() {
+              if let Ok(rad_per_s) = val.parse::<f32>() {
+                rot_period_hours = Some(2.0 * std::f32::consts::PI / rad_per_s / 3600.0);
+              }
+            }
+          }
+        } else if let Some(idx) = line_lower.find("mean sidereal day, hr") {
+          if let Some(eq_idx) = line_lower[idx..].find('=') {
+            let rem = &line[idx + eq_idx + 1..];
+            if let Some(val) = rem.split_whitespace().next() {
+              rot_period_hours = val.parse::<f32>().ok();
+            }
+          }
+        }
+      }
+
+      // Parse Mass
+      if mass_kg.is_none() {
+        if let Some(idx) = line_lower.find("mass x10^24 (kg)") {
+          if let Some(eq_idx) = line_lower[idx..].find('=') {
+            let rem = &line[idx + eq_idx + 1..];
+            if let Some(val) = rem.split_whitespace().next() {
+              // Some values are like 5.97219+-0.0006, take the part before +-
+              let val = val.split("+-").next().unwrap_or(val);
+              if let Ok(mass) = val.parse::<f32>() {
+                mass_kg = Some(mass * 1e24);
+              }
+            }
+          }
+        } else if let Some(idx) = line_lower.find("gm=") {
+          // Try to deduce mass from GM
+          let rem = &line[idx + 3..];
+          if let Some(val) = rem.split_whitespace().next() {
+            if let Ok(gm) = val.parse::<f32>() {
+              let g = 6.67430e-20; // km^3 / (kg * s^2)
+              mass_kg = Some(gm / g);
+            }
+          }
+        } else if let Some(idx) = line_lower.find("gm, km^3/s^2") {
+          if let Some(eq_idx) = line_lower[idx..].find('=') {
+            let rem = &line[idx + eq_idx + 1..];
+            if let Some(val) = rem.split_whitespace().next() {
+              if let Ok(gm) = val.parse::<f32>() {
+                let g = 6.67430e-20; // km^3 / (kg * s^2)
+                mass_kg = Some(gm / g);
+              }
+            }
+          }
+        }
+      }
+    }
+    (radius_km, rot_period_hours, mass_kg)
   }
-  }
+}

@@ -1,3 +1,5 @@
+pub mod cpu_clustering;
+
 use aethervk_core_rlib::gpu::{VULKAN_RENDER_BACKEND, new_render_frontend, RenderFrontend, RenderContext, DeviceAdditionalParams};
 use aethervk_core_rlib::gpu_backends::vulkan::device::Device;
 use aethervk_core_rlib::types::RuntimeParams;
@@ -34,7 +36,9 @@ impl VulkanContext {
         let pool_arc = std::sync::Arc::new(pool);
 
         let frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
-        let device_handle = frontend.write().init_device(0, &DeviceAdditionalParams::new()).unwrap();
+        let mut additional_params = DeviceAdditionalParams::new();
+        additional_params.insert(aethervk_core_rlib::gpu_backends::vulkan::DEVICE_ADDIDITIONAL_PARAM_DEBUG_SHADERS, 1).unwrap();
+        let device_handle = frontend.write().init_device(0, &additional_params).unwrap();
 
         frontend.with_device(device_handle, |device| {
             device.wire_callbacks(pool_arc.clone())
@@ -145,6 +149,14 @@ pub fn run_compute_shader(
         });
         spec_data.extend_from_slice(&sg_size.to_le_bytes());
 
+        let debug_shaders = 1u32;
+        spec_map_entries.push(vk::SpecializationMapEntry {
+            constant_id: 10,
+            offset: 4,
+            size: 4,
+        });
+        spec_data.extend_from_slice(&debug_shaders.to_le_bytes());
+
         let spec_info = vk::SpecializationInfo::default()
             .map_entries(&spec_map_entries)
             .data(&spec_data);
@@ -184,13 +196,25 @@ pub fn run_compute_shader(
             ash_dev.cmd_bind_pipeline(cmd_buffer, vk::PipelineBindPoint::COMPUTE, pipeline);
             ash_dev.cmd_push_constants(cmd_buffer, pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, push_constants);
             ash_dev.cmd_dispatch(cmd_buffer, dispatch_x, dispatch_y, dispatch_z);
+
+            let memory_barrier = vk::MemoryBarrier2::default()
+                .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_READ);
+
+            let dependency_info = vk::DependencyInfo::default()
+                .memory_barriers(std::slice::from_ref(&memory_barrier));
+
+            actual_device.device.synchronization2.cmd_pipeline_barrier2(cmd_buffer, &dependency_info);
+
             ash_dev.end_command_buffer(cmd_buffer).unwrap();
 
             let submit_info = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd_buffer));
             let fence_create_info = vk::FenceCreateInfo::default();
             let fence = ash_dev.create_fence(&fence_create_info, None).unwrap();
             
-            ash_dev.queue_submit(queue, std::slice::from_ref(&submit_info), fence).unwrap();
+            actual_device.device.locked_queue_submit(queue, std::slice::from_ref(&submit_info), fence).unwrap();
             ash_dev.wait_for_fences(std::slice::from_ref(&fence), true, u64::MAX).unwrap();
 
             ash_dev.destroy_fence(fence, None);

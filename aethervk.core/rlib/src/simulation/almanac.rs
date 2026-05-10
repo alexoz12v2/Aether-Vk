@@ -1,3 +1,5 @@
+//! almanac module.
+
 use crate::{
   math::vee,
   types::{EngineError, EngineResult},
@@ -48,6 +50,7 @@ pub struct AlmanacPackedData {
 
 impl AlmanacPackedData {
   // TODO `celestial_name_from_id` to create planet/sun entities
+  /// TODO: Document this item
   pub fn load_almanac<P: AsRef<os::fs::Path>>(&mut self, path: P) -> EngineResult<()> {
     if let Ok(entries) = os::fs::read_dir(path.as_ref()) {
       for entry in entries.flatten() {
@@ -84,6 +87,7 @@ impl AlmanacPackedData {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn get_ephem_full(
     &self,
     spk_id: i32,
@@ -143,6 +147,7 @@ impl AlmanacPackedData {
     }
   }
 
+  /// TODO: Document this item
   pub fn get_ephem_frame(
     &self,
     spk_id: i32,

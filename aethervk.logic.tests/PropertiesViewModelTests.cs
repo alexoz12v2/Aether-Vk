@@ -1,7 +1,7 @@
+using AetherVk.Logic.Input;
 using AetherVk.Logic.Models;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
-using AetherVk.Logic.Input;
 using CommunityToolkit.Mvvm.Messaging;
 using Xunit;
 
@@ -46,32 +46,32 @@ public class PropertiesViewModelTests
   [Fact]
   public void ProcessAction_ExpandAll_TogglesState()
   {
-      var stateManager = new SceneStateManager();
-      var vm = new PropertiesViewModel(1, stateManager);
-      
-      Assert.False(vm.AreAllExpanded);
-      
-      bool handled = vm.ProcessAction(new AppAction("ui.expand_all", "Expand"), true);
-      
-      Assert.True(handled);
-      Assert.True(vm.AreAllExpanded);
+    var stateManager = new SceneStateManager();
+    var vm = new PropertiesViewModel(1, stateManager);
+
+    Assert.False(vm.AreAllExpanded);
+
+    bool handled = vm.ProcessAction(new AppAction("ui.expand_all", "Expand"), true);
+
+    Assert.True(handled);
+    Assert.True(vm.AreAllExpanded);
   }
-  
+
   [Fact]
   public void ProcessAction_ShowFlyout_PushesOperator()
   {
-      var stateManager = new SceneStateManager();
-      var vm = new PropertiesViewModel(1, stateManager);
-      
-      Assert.False(vm.IsFlyoutMenuOpen);
-      
-      bool handled = vm.ProcessAction(new AppAction("ui.show_flyout", "Flyout"), true);
-      
-      Assert.True(handled);
-      Assert.True(vm.IsFlyoutMenuOpen);
-      
-      // Cancel should close it
-      vm.ProcessAction(new AppAction("global.cancel", "Cancel"), true);
-      Assert.False(vm.IsFlyoutMenuOpen);
+    var stateManager = new SceneStateManager();
+    var vm = new PropertiesViewModel(1, stateManager);
+
+    Assert.False(vm.IsFlyoutMenuOpen);
+
+    bool handled = vm.ProcessAction(new AppAction("ui.show_flyout", "Flyout"), true);
+
+    Assert.True(handled);
+    Assert.True(vm.IsFlyoutMenuOpen);
+
+    // Cancel should close it
+    vm.ProcessAction(new AppAction("global.cancel", "Cancel"), true);
+    Assert.False(vm.IsFlyoutMenuOpen);
   }
 }

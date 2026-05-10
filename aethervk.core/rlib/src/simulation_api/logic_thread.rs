@@ -1,3 +1,5 @@
+//! logic_thread module.
+
 use super::{
   SimulationContext,
   structs::{LogicCommand, LogicThreadContext, LogicWorkload, SceneContext, SimulationTaskResult},
@@ -45,6 +47,7 @@ impl PlayControl {
   }
 }
 
+/// TODO: Document this item
 pub fn start_logic_thread(
   logic_rx: mpsc::Receiver<LogicCommand>,
   context: alloc::sync::Arc<LogicThreadContext>,
@@ -64,7 +67,7 @@ pub fn start_logic_thread(
       for scene_id in scene_ids {
         let pc = play_controls
           .entry(scene_id)
-          .or_insert_with(|| PlayControl::new(scene_id, target_frame_time.try_into().unwrap()));
+          .or_insert_with(|| PlayControl::new(scene_id, target_frame_time));
         let now = oshal::os::time::get_monotonic_time();
         let last = pc.last_frame_start;
         let elapsed = now.saturating_sub(last);
@@ -138,8 +141,8 @@ pub fn start_logic_thread(
                 oshal::os::native::this_thread::yield_now();
               };
               if task_id_val == u64::MAX {
-                  // Render failed, continue to next
-                  continue;
+                // Render failed, continue to next
+                continue;
               }
               last_task = core::num::NonZero::new(task_id_val);
 
@@ -152,18 +155,27 @@ pub fn start_logic_thread(
                   let _ = context.thread_pool.spawn_tasklet(None, move || {
                     let fptr = crate::simulation_api::RENDER_CALLBACK
                       .load(core::sync::atomic::Ordering::Relaxed);
-                    let ctx = unsafe { &*(ctx_ptr.get() as *mut crate::simulation_api::SimulationContext) };
+                    let ctx =
+                      unsafe { &*(ctx_ptr.get() as *mut crate::simulation_api::SimulationContext) };
                     loop {
-                      let completed = ctx.render_proxy.0.as_frontend().and_then(|f| {
-                        f.with_device(ctx.render_proxy.1, |device| {
-                          Ok(device.is_task_completed(task_id_val).unwrap_or(true))
-                        }).ok()
-                      }).unwrap_or(true);
-                      
+                      let completed = ctx
+                        .render_proxy
+                        .0
+                        .as_frontend()
+                        .and_then(|f| {
+                          f.with_device(ctx.render_proxy.1, |device| {
+                            Ok(device.is_task_completed(task_id_val).unwrap_or(true))
+                          })
+                          .ok()
+                        })
+                        .unwrap_or(true);
+
                       if completed {
                         break;
                       }
-                      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
+                      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(
+                        1,
+                      ));
                     }
                     let cb: extern "C" fn(u64, u64, u64) = unsafe { core::mem::transmute(fptr) };
                     cb(scene_id, pe.0, task_id_val);
@@ -430,13 +442,19 @@ fn process_command_internal(
       let scene_read = scene.read();
 
       let mut cursor_pos = Vec3f32::zero();
-      if let Some((sun_id, _)) = scene_read.scene.query1_first_res::<crate::scene::SunComponent, _, _>(|id, _| Some(id)) {
-        if let Some(pos) = scene_read.scene.with_component(sun_id, |t: &TransformComponent| t.position) {
+      if let Some((sun_id, _)) =
+        scene_read.scene.query1_first_res::<crate::scene::SunComponent, _, _>(|id, _| Some(id))
+      {
+        if let Some(pos) =
+          scene_read.scene.with_component(sun_id, |t: &TransformComponent| t.position)
+        {
           cursor_pos = pos;
         }
       }
 
-      if let Some((cursor_id, _)) = scene_read.scene.query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id)) {
+      if let Some((cursor_id, _)) =
+        scene_read.scene.query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
+      {
         let _ = scene_read.scene.with_component_mut(cursor_id, |c: &mut TransformComponent| {
           c.position = cursor_pos;
         });
@@ -465,27 +483,12 @@ fn process_command_internal(
       delta_y,
     }) => {
       let scene_read = scene.read();
-      let cursor_pos = scene_read
-        .scene
-        .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
-        .and_then(|(id, _)| {
-          scene_read.scene.with_component(id, |t: &TransformComponent| t.position)
-        })
-        .unwrap_or(Vec3f32::zero());
-      scene_read
-        .scene
-        .with_component_mut(camera_entity, |c: &mut TransformComponent| {
-          let offset = c.position - cursor_pos;
-          let dist = offset.length().min(0.1);
-          let pan_speed = dist * 0.001;
-          let right = c.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
-          let up = c.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
-          let translation = right * (-delta_x * pan_speed) + up * (delta_y * pan_speed);
-          c.position = c.position + translation;
-        })
-        .ok_or(EngineError::InvalidOperation(
-          "logic_thread:PanCamera | camera doesn't have TranformComponent",
-        ))?;
+      let (cursor_entity, _) =
+        scene_read.scene.query1_first_res::<CursorComponent, _, _>(|id, _| Some(id)).ok_or(
+          EngineError::InvalidOperation("logic_thread:PanCamera | scene doesn't have cursor"),
+        )?;
+      use crate::scene::camera::SceneCameraExt;
+      scene_read.scene.pan_camera_and_cursor(camera_entity, cursor_entity, delta_x, delta_y)?;
       Ok(SimulationTaskResult::None)
     }
     LogicCommand::PanCursor(_) => Ok(SimulationTaskResult::None),
@@ -561,7 +564,12 @@ fn process_command_internal(
           // Tell the system the transform or something changed so it re-renders/updates
           // But actually we just need to re-record the command buffer. Since we don't have a direct "re-record"
           // signal, marking Transform as changed will trigger it.
-          let ext_id = read_ctx.entity_map.iter().find(|&(_, &v)| v == entity_id).map(|(&k, _)| k).unwrap_or(0);
+          let ext_id = read_ctx
+            .entity_map
+            .iter()
+            .find(|&(_, &v)| v == entity_id)
+            .map(|(&k, _)| k)
+            .unwrap_or(0);
           read_ctx.mark_component_changed(ext_id, "Transform");
         }
       }
@@ -721,7 +729,7 @@ fn process_command_internal(
     } => {
       let ptr = user_data.map(|p| p.0).unwrap_or(core::ptr::null_mut());
       custom_fn(ctx, ptr)
-    },
+    }
   }
 }
 
@@ -802,22 +810,27 @@ fn execute_simulation_tick(
 
       // 2. Update Micro Bodies Second & 4. Resolve Collisions
       if let Some(ps_lock) = &physics_scene_arc {
-          let mut ps = ps_lock.write();
+        let mut ps = ps_lock.write();
+        let dt_us = (step_days * 86400.0 * 1_000_000.0) as aethervk_oshal_rlib::os::time::timeus_t;
+
+        if scene_arc.should_parallelize() {
+          let kernels = crate::physics::cpu_kernels::CpuSimdKernels {
+            thread_pool: alloc::sync::Arc::clone(&ctx.thread_pool),
+          };
+          let _ =
+            crate::gpu_backends::simulation_step(&kernels, &mut ps, scene_arc.as_ref(), 0, dt_us);
+        } else {
           let kernels = crate::physics::cpu_kernels::CpuScalarKernels {};
-          // Convert current epoch to timeus_t (u64)
-          // For this example, let's use a dummy dt of step_days * 86400 * 1_000_000
-          let dt_us = (step_days * 86400.0 * 1_000_000.0) as aethervk_oshal_rlib::os::time::timeus_t;
-          let _ = crate::gpu_backends::simulation_step(
-              &kernels,
-              &mut ps,
-              scene_arc.as_ref(),
-              0,
-              dt_us
-          );
+          let _ =
+            crate::gpu_backends::simulation_step(&kernels, &mut ps, scene_arc.as_ref(), 0, dt_us);
+        }
       }
 
       // 3. Process Handoffs
-      crate::physics::handoff::SpheresOfInfluenceSystem::process_handoffs_par(scene_arc.as_ref(), &ctx.thread_pool);
+      crate::physics::handoff::SpheresOfInfluenceSystem::process_handoffs_par(
+        scene_arc.as_ref(),
+        &ctx.thread_pool,
+      );
     }
 
     // Advance fixed clock step

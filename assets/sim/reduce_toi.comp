@@ -3,8 +3,11 @@
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_GOOGLE_include_directive : require
 
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+#include "../debug_utils.glsl"
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
 layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
 
@@ -14,6 +17,9 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Pa
 };
 
 layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer PackedCollisions {
+    uint dispatch_x;
+    uint dispatch_y;
+    uint dispatch_z;
     uint count;
     uvec2 pairs[];
 };
@@ -31,9 +37,12 @@ layout(push_constant, scalar) uniform PushConstants {
 } pc;
 
 // We can use the specialization constant to precisely size the shared array
-shared uint shared_min_toi[256 / SUBGROUP_SIZE];
+shared uint shared_min_toi[128 / SUBGROUP_SIZE];
 
 void main() {
+    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("Hello from reduce_toi.comp!\n");
+    }
     uint global_id = gl_GlobalInvocationID.x;
     uint local_id = gl_LocalInvocationID.x;
     uint subgroup_id = gl_SubgroupID;

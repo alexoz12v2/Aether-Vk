@@ -1,3 +1,5 @@
+//! d3d12 module.
+
 use core::ffi;
 #[cfg(debug_assertions)]
 use alloc::string::String;
@@ -20,6 +22,7 @@ use crate::{
 
 use aethervk_oshal_rlib::math::{matrix::mat4::Mat4x4f32, vector::vec3::Vec3f32};
 
+/// TODO: Document this item
 pub struct D3d12RenderDevice;
 
 impl RenderDevice for D3d12RenderDevice {
@@ -353,6 +356,7 @@ impl RenderDevice for D3d12RenderDevice {
   }
 }
 
+/// TODO: Document this item
 pub struct D3d12RenderContext {
   device: D3d12RenderDevice,
 }

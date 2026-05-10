@@ -1,6 +1,9 @@
+//! distribution module.
+
 use alloc::vec::Vec;
 
 #[derive(Debug, Clone)]
+/// TODO: Document this item
 pub struct Distribution1D {
   pub func: Vec<f32>,
   pub cdf: Vec<f32>,
@@ -8,6 +11,7 @@ pub struct Distribution1D {
 }
 
 impl Distribution1D {
+  /// TODO: Document this item
   pub fn new(f: &[f32]) -> Self {
     let n = f.len();
     let mut func = Vec::with_capacity(n);
@@ -40,6 +44,7 @@ impl Distribution1D {
     }
   }
 
+  /// TODO: Document this item
   pub fn count(&self) -> usize {
     self.func.len()
   }
@@ -72,12 +77,14 @@ impl Distribution1D {
 }
 
 #[derive(Debug, Clone)]
+/// TODO: Document this item
 pub struct Distribution2D {
   pub conditional_v: Vec<Distribution1D>,
   pub marginal: Distribution1D,
 }
 
 impl Distribution2D {
+  /// TODO: Document this item
   pub fn new(data: &[f32], nu: usize, nv: usize) -> Self {
     let mut conditional_v = Vec::with_capacity(nv);
     for v in 0..nv {

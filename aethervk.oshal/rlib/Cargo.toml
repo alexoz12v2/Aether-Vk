@@ -12,6 +12,7 @@ crate-type = ["rlib"]
 default = ["console_log"]
 std = []
 console_log = []
+debug_gpu = []
 
 [dependencies]
 heapless = { version = "0.9" }

@@ -1,9 +1,12 @@
+//! time_api module.
+
 use crate::simulation_api::SimulationContext;
 use crate::simulation_api::structs::TimeScale;
 use alloc::format;
 use core::ffi::c_char;
 
 impl SimulationContext {
+  /// TODO: Document this item
   pub fn set_time_scale(&self, scene_id: u64, scale: u32) {
     if let Some(scene) = self.get_scene(scene_id) {
       let scene_read = scene.read();
@@ -17,6 +20,7 @@ impl SimulationContext {
     }
   }
 
+  /// TODO: Document this item
   pub fn get_simulation_time(&self, scene_id: u64) -> f64 {
     if let Some(scene) = self.get_scene(scene_id) {
       let scene_read = scene.read();
@@ -26,6 +30,7 @@ impl SimulationContext {
     }
   }
 
+  /// TODO: Document this item
   pub fn get_simulation_time_utc(
     &self,
     scene_id: u64,
@@ -55,6 +60,7 @@ impl SimulationContext {
     }
   }
 
+  /// TODO: Document this item
   pub fn set_simulation_time(&self, scene_id: u64, time_tai: f64) {
     if let Some(scene) = self.get_scene(scene_id) {
       let scene_read = scene.read();
@@ -63,6 +69,7 @@ impl SimulationContext {
     }
   }
 
+  /// TODO: Document this item
   pub fn get_epoch_limits(&self, scene_id: u64, start_tai: *mut f64, end_tai: *mut f64) -> bool {
     if let Some(scene) = self.get_scene(scene_id) {
       let scene_read = scene.read();

@@ -1,3 +1,5 @@
+//! scene_api module.
+
 use crate::math::collision::linear_bvh::LinearBVHNode;
 use crate::{
   expect_scene, expect_scene_and_entity,
@@ -23,6 +25,7 @@ use oshal::{
 use spin::{RwLock, RwLockReadGuard};
 
 impl SimulationContext {
+  /// TODO: Document this item
   pub fn raycast_ndc(
     &self,
     scene_id: u64,
@@ -51,6 +54,7 @@ impl SimulationContext {
     Ok(task_id)
   }
 
+  /// TODO: Document this item
   pub fn raycast(
     &self,
     scene_id: u64,
@@ -79,6 +83,7 @@ impl SimulationContext {
     Ok(task_id)
   }
 
+  /// TODO: Document this item
   pub fn spawn_entity(&self, scene_id: u64, name: &str) -> EngineResult<u64> {
     let scene_data = self.scenes.read();
     let active = expect_scene!(scene_data.get_scene(scene_id), "scene_api:spawn_entity");
@@ -86,6 +91,7 @@ impl SimulationContext {
     Ok(active.write().register_entity(id))
   }
 
+  /// TODO: Document this item
   pub fn remove_entity(&self, scene_id: u64, entity: u64) -> EngineResult<()> {
     let scene_data = self.scenes.read();
     let (active, entity_id) = expect_scene_and_entity!(
@@ -105,6 +111,7 @@ impl SimulationContext {
     }
   }
 
+  /// TODO: Document this item
   pub fn set_parent(&self, scene_id: u64, entity: u64, parent: u64) -> EngineResult<()> {
     let (active, entity_id) =
       expect_scene_and_entity!(self.get_scene(scene_id), entity, "scene_api:set_parent");
@@ -120,6 +127,7 @@ impl SimulationContext {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn get_bvh_nodes<FFI: From<LinearBVHNode<f32>> + Copy>(
     &self,
     scene_id: u64,
@@ -155,12 +163,14 @@ impl SimulationContext {
     Ok(ptr)
   }
 
+  /// TODO: Document this item
   pub fn free_bvh_nodes<FFI: From<LinearBVHNode<f32>> + Copy + Sized>(ptr: *mut FFI, count: u32) {
     if !ptr.is_null() {
       let _ = unsafe { Vec::from_raw_parts(ptr, count as usize, count as usize) };
     }
   }
 
+  /// TODO: Document this item
   pub fn get_entity_count(&self, scene_id: u64) -> EngineResult<u32> {
     let scene = expect_scene!(self.get_scene(scene_id), "scene_api:get_entity_count");
     Ok(scene.read().entity_map.len() as u32)
@@ -210,6 +220,7 @@ impl SimulationContext {
     Ok(missing)
   }
 
+  /// TODO: Document this item
   pub fn get_entity_parent(&self, scene_id: u64, entity: u64) -> EngineResult<u64> {
     let scene = expect_scene!(self.get_scene(scene_id), "scene_api:get_entity_parent");
     let internal_id = scene.read().get_entity(entity).ok_or(EngineError::InvalidOperation(
@@ -222,6 +233,7 @@ impl SimulationContext {
     // precondition for unwrap: if entity exists, then the simulation api has its external id.
     Ok(scene.read().entity_map.iter().find(|&(_, v)| *v == parent_id).map(|(ext, _)| *ext).unwrap())
   }
+  /// TODO: Document this item
   pub fn create_empty_scene(&self) -> EngineResult<u64> {
     let (scene, root_entity) = empty_scene_object()?;
     let camera_entity = scene.add_camera("camera", Self::camera_start_pos(), root_entity)?;
@@ -232,11 +244,13 @@ impl SimulationContext {
     Ok(self.scenes.write().insert_scene(scene_ctx))
   }
 
+  /// TODO: Document this item
   pub fn camera_start_pos() -> Vec3f32 {
     Vec3f32::from_components(0.0, -7.07, 7.07)
   }
 
   // TODO remove
+  /// TODO: Document this item
   pub fn create_default_scene(&self) -> EngineResult<u64> {
     let (scene, root_entity) = empty_scene_object()?;
 
@@ -294,7 +308,9 @@ impl SimulationContext {
         asset_path: String::new(),
         mesh: Arc::from(sun_sphere),
         emissive_intensity: 0.9,
-        emissive_color: [1.0, 0.35, 0.02], use_new_path: false, paint_display_mode: 0,
+        emissive_color: [1.0, 0.35, 0.02],
+        use_new_path: false,
+        paint_display_mode: 0,
       },
     )?;
 
@@ -319,6 +335,7 @@ impl SimulationContext {
     Ok(self.scenes.write().insert_scene(scene_ctx))
   }
 
+  /// TODO: Document this item
   pub fn set_entity_visibility(
     &self,
     scene_id: u64,
@@ -346,6 +363,7 @@ impl SimulationContext {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn set_entity_selected(
     &self,
     scene_id: u64,
@@ -373,6 +391,7 @@ impl SimulationContext {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn set_entity_following(
     &self,
     scene_id: u64,
@@ -413,6 +432,7 @@ impl SimulationContext {
 }
 
 // TODO probably to move in scene.rs in rlib
+/// TODO: Document this item
 pub(crate) fn empty_scene_object() -> EngineResult<(Scene, EntityId)> {
   let scene = Scene::new();
   scene.register_component::<TransformComponent>(&[]);
@@ -439,6 +459,7 @@ pub(crate) fn empty_scene_object() -> EngineResult<(Scene, EntityId)> {
   scene.register_component::<crate::scene::ParticleSystemComponent>(&[TypeId::of::<
     TransformComponent,
   >()]);
+  scene.register_component::<crate::scene::ReferenceFrameComponent>(&[]);
 
   let root_entity = scene.spawn_entity("root");
   scene
@@ -448,6 +469,18 @@ pub(crate) fn empty_scene_object() -> EngineResult<(Scene, EntityId)> {
         position: Vec3f32::from_components(0.0, 0.0, 0.0),
         rotation: Quat::identity(),
         scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    )
+    .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?;
+
+  scene
+    .add_component(
+      root_entity,
+      crate::scene::ReferenceFrameComponent {
+        frame_type: crate::scene::ReferenceFrameType::Macro,
+        scale: 1.0,
+        soi_radius: core::f32::MAX,
+        _padding: 0,
       },
     )
     .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?;

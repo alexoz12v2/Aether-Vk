@@ -144,6 +144,7 @@ impl Kernels for CpuKernels {
         bodies.push(KinematicBody {
           entity_id: entity,
           transform,
+          velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0]),
           parent_frame_id: 0,
           mu: 0.0,
           own_frame_id: 0,
@@ -160,6 +161,7 @@ impl Kernels for CpuKernels {
         bodies.push(KinematicBody {
           entity_id: entity,
           transform,
+          velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0]),
           parent_frame_id: 0,
           mu: 0.0,
           own_frame_id: 0,
@@ -218,18 +220,54 @@ impl Kernels for CpuKernels {
     Ok(CpuDeviceBuffer { data: bodies })
   }
 
-  fn compute_forces(
+  fn step_ode_p1_p2(
+    &self,
+    _cmd: &mut Self::Cmd,
+    dynamics: &mut Self::Buffer<DynamicBody>,
+    dt: timeus_t,
+  ) -> EngineResult<()> {
+    let dt_sec = dt as f32 / 1_000_000.0;
+    let half_dt = dt_sec * 0.5;
+    let accels =
+      self.dynamic_accelerations.read().map_err(|_| EngineError::InvalidOperation("fail lock"))?;
+
+    for (i, dyn_body) in dynamics.data.iter_mut().enumerate() {
+      dyn_body.velocity += accels[i] * half_dt;
+      dyn_body.transform.position += dyn_body.velocity * half_dt;
+    }
+
+    Ok(())
+  }
+
+  fn step_ode_p3_p4(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _kinematics: &mut Self::Buffer<KinematicBody>,
+    _dynamics: &mut Self::Buffer<DynamicBody>,
+    _dt: timeus_t,
+  ) -> EngineResult<()> {
+    Ok(())
+  }
+
+  fn step_ode_p5(
     &self,
     _cmd: &mut Self::Cmd,
     kinematics: &Self::Buffer<KinematicBody>,
     dynamics: &mut Self::Buffer<DynamicBody>,
+    _bvh: &Self::MotionBvh,
+    dt: timeus_t,
   ) -> EngineResult<()> {
+    let dt_sec = dt as f32 / 1_000_000.0;
+    let half_dt = dt_sec * 0.5;
+
     let masses = self.kinematic_masses.read().unwrap();
     let is_sun = self.kinematic_is_sun.read().unwrap();
     let betas = self.dynamic_betas.read().unwrap();
     let mut accels = self.dynamic_accelerations.write().unwrap();
 
-    for (i, dyn_body) in dynamics.data.iter().enumerate() {
+    for (i, dyn_body) in dynamics.data.iter_mut().enumerate() {
+      dyn_body.transform.position += dyn_body.velocity * half_dt;
+
       let mut total_force =
         aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0]);
       let beta = betas[i];
@@ -250,23 +288,7 @@ impl Kernels for CpuKernels {
       }
 
       accels[i] = total_force / dyn_body.mass;
-    }
-    Ok(())
-  }
-
-  fn step_ode(
-    &self,
-    _cmd: &mut Self::Cmd,
-    dynamics: &mut Self::Buffer<DynamicBody>,
-    dt: timeus_t,
-  ) -> EngineResult<()> {
-    let dt_sec = dt as f32 / 1_000_000.0;
-    let accels =
-      self.dynamic_accelerations.read().map_err(|_| EngineError::InvalidOperation("fail lock"))?;
-
-    for (i, dyn_body) in dynamics.data.iter_mut().enumerate() {
-      dyn_body.velocity += accels[i] * dt_sec;
-      dyn_body.transform.position += dyn_body.velocity * dt_sec;
+      dyn_body.velocity += accels[i] * half_dt;
     }
 
     Ok(())

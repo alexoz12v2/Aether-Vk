@@ -1,3 +1,5 @@
+//! scalar_interval module.
+
 use core::{cmp, ops};
 
 use crate::math::{
@@ -5,6 +7,7 @@ use crate::math::{
   floating::{BitsStorage, FloatBits, FloatOps},
 };
 
+/// TODO: Document this item
 pub trait Interval<T: FloatOps + FloatBits>:
   Scalar + ops::Index<usize, Output = T> + ops::IndexMut<usize, Output = T>
 {
@@ -44,6 +47,7 @@ pub trait Interval<T: FloatOps + FloatBits>:
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+/// TODO: Document this item
 pub struct FloatInterval<T: FloatOps + FloatBits> {
   pub low: T,
   pub high: T,
@@ -522,5 +526,7 @@ where
   }
 }
 
+/// TODO: Document this item
 pub type Interval32 = FloatInterval<f32>;
+/// TODO: Document this item
 pub type Interval64 = FloatInterval<f64>;

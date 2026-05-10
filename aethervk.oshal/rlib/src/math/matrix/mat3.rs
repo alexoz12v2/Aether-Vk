@@ -1,3 +1,5 @@
+//! mat3 module.
+
 use core::ops;
 
 use crate::math::{
@@ -272,6 +274,7 @@ impl Matrix3 for Mat3f32 {
 }
 
 impl Mat3f32 {
+  /// TODO: Document this item
   pub fn identity() -> Self {
     Mat3f32::from_array(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
   }

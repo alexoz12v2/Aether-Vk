@@ -1,3 +1,5 @@
+//! core_api module.
+
 use crate::{
   expect_scene, expect_scene_and_entity, gpu,
   gpu::PresentationEngineHandle,
@@ -27,6 +29,7 @@ impl SimulationContext {
   const INITIAL_FIXED_DELTA_TIME: timeus_t = timeus_milliseconds(16);
   const INITIAL_TIME_SCALE: f32 = 1.0;
 
+  /// TODO: Document this item
   pub fn startup(
     backend: gpu::RenderBackendId,
     error_debug_callback: Option<fn(&str)>,
@@ -76,14 +79,17 @@ impl SimulationContext {
     }
   }
 
+  /// TODO: Document this item
   pub fn render_frontend(&self) -> Option<gpu::RenderFrontend> {
     self.render_proxy.0.as_frontend()
   }
 
+  /// TODO: Document this item
   pub fn render_device_handle(&self) -> gpu::RenderDeviceHandle {
     self.render_proxy.1
   }
 
+  /// TODO: Document this item
   pub fn create_presentation_engine_windowed(
     &self,
     scene_id: u64,
@@ -123,6 +129,7 @@ impl SimulationContext {
     })
   }
 
+  /// TODO: Document this item
   pub fn create_presentation_engine(
     &self,
     scene_id: u64,
@@ -155,6 +162,7 @@ impl SimulationContext {
     })
   }
 
+  /// TODO: Document this item
   pub fn destroy_presentation_engine(
     &self,
     scene_id: u64,
@@ -178,6 +186,7 @@ impl SimulationContext {
     })
   }
 
+  /// TODO: Document this item
   pub fn set_active_camera(&self, scene_id: u64, camera: u64) -> EngineResult<()> {
     let (scene, entity_id) = expect_scene_and_entity!(
       self.get_scene(scene_id),
@@ -188,6 +197,7 @@ impl SimulationContext {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn dispatch_logic_command_custom(
     &self,
     custom_fn: fn(

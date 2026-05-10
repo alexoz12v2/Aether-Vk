@@ -1,3 +1,5 @@
+//! components_api module.
+
 use super::*;
 use crate::scene::{AddComponentError, Marker};
 use crate::simulation_api::SimulationContext;
@@ -6,6 +8,7 @@ use alloc::{sync::Arc, vec::Vec};
 use oshal::os::fs;
 
 impl SimulationContext {
+  /// TODO: Document this item
   pub fn add_transform_component(
     &self,
     scene_id: u64,
@@ -33,6 +36,7 @@ impl SimulationContext {
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
+  /// TODO: Document this item
   pub fn set_transform_component(
     &self,
     scene_id: u64,
@@ -59,6 +63,7 @@ impl SimulationContext {
       ))
   }
 
+  /// TODO: Document this item
   pub fn get_transform_component(
     &self,
     scene_id: u64,
@@ -119,6 +124,7 @@ impl SimulationContext {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn set_bvh_node_visibility(
     &self,
     scene_id: u64,
@@ -185,6 +191,7 @@ impl SimulationContext {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn add_camera_component(
     &self,
     scene_id: u64,
@@ -225,6 +232,7 @@ impl SimulationContext {
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
+  /// TODO: Document this item
   pub fn set_camera_component(
     &self,
     scene_id: u64,
@@ -268,6 +276,7 @@ impl SimulationContext {
       ))
   }
 
+  /// TODO: Document this item
   pub fn get_camera_component(
     &self,
     scene_id: u64,
@@ -290,6 +299,7 @@ impl SimulationContext {
       ))
   }
 
+  /// TODO: Document this item
   pub fn add_physical_mesh_component(
     &self,
     scene_id: u64,
@@ -324,6 +334,7 @@ impl SimulationContext {
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
+  /// TODO: Document this item
   pub fn add_sky_component(&self, scene_id: u64, entity: u64) -> EngineResult<()> {
     let (scene, entity_id) = expect_scene_and_entity!(
       self.get_scene(scene_id),
@@ -343,6 +354,7 @@ impl SimulationContext {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn add_cursor_component(&self, scene_id: u64, entity: u64) -> EngineResult<()> {
     let (scene, entity_id) = expect_scene_and_entity!(
       self.get_scene(scene_id),
@@ -356,6 +368,7 @@ impl SimulationContext {
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
+  /// TODO: Document this item
   pub fn add_sun_component(
     &self,
     scene_id: u64,
@@ -375,6 +388,7 @@ impl SimulationContext {
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
+  /// TODO: Document this item
   pub fn add_grid_component(&self, scene_id: u64, entity: u64) -> EngineResult<()> {
     let (scene, entity_id) = expect_scene_and_entity!(
       self.get_scene(scene_id),
@@ -388,6 +402,7 @@ impl SimulationContext {
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
+  /// TODO: Document this item
   pub fn add_measurement_component(
     &self,
     scene_id: u64,
@@ -415,6 +430,7 @@ impl SimulationContext {
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
+  /// TODO: Document this item
   pub fn add_image_billboard_component(
     &self,
     scene_id: u64,
@@ -449,6 +465,7 @@ impl SimulationContext {
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
+  /// TODO: Document this item
   pub fn set_markers<T: Into<Marker> + Copy>(
     &self,
     scene_id: u64,
@@ -483,6 +500,7 @@ impl SimulationContext {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct PerspectiveCameraParams {
   /// Should already be in radians!
   pub fov: f32,
@@ -492,6 +510,7 @@ pub struct PerspectiveCameraParams {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct OrthographicCameraParams {
   pub left: f32,
   pub right: f32,
@@ -502,12 +521,14 @@ pub struct OrthographicCameraParams {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub enum CameraParams {
   Perspective(PerspectiveCameraParams),
   Orthographic(OrthographicCameraParams),
 }
 
 impl CameraParams {
+  /// TODO: Document this item
   pub fn new_perspective(fov: f32, aspect_ratio: f32, near_plane: f32, far_plane: f32) -> Self {
     Self::Perspective(PerspectiveCameraParams {
       fov,
@@ -517,6 +538,7 @@ impl CameraParams {
     })
   }
 
+  /// TODO: Document this item
   pub fn new_orthographic(
     left: f32,
     right: f32,
@@ -535,6 +557,7 @@ impl CameraParams {
     })
   }
 
+  /// TODO: Document this item
   pub fn near(&self) -> f32 {
     match self {
       CameraParams::Perspective(PerspectiveCameraParams { near_plane, .. }) => *near_plane,
@@ -542,6 +565,7 @@ impl CameraParams {
     }
   }
 
+  /// TODO: Document this item
   pub fn far(&self) -> f32 {
     match self {
       CameraParams::Perspective(PerspectiveCameraParams { far_plane, .. }) => *far_plane,

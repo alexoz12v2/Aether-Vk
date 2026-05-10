@@ -1,3 +1,5 @@
+//! simulation_api module.
+
 use crate::{
   gpu::{self, RenderDevice},
   gpu::{RenderDeviceHandle, WeakRenderFrontend, WeakRenderFrontendExt},
@@ -80,6 +82,7 @@ impl SimulationContext {
     render_frontend.with_device(render_device_handle, f).map_err(|e| EngineError::from(e))
   }
 
+  /// TODO: Document this item
   pub fn get_scene(&self, scene_id: u64) -> Option<Arc<RwLock<SceneContext>>> {
     self.scenes.read().get(&scene_id).cloned()
   }
@@ -137,15 +140,19 @@ impl os::pool::Workload for PhysicsRebuildWorkload {
   }
 }
 
+/// TODO: Document this item
 pub static BREADCRUMB_CALLBACK: core::sync::atomic::AtomicPtr<()> =
   core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 
+/// TODO: Document this item
 pub static SIMULATION_CALLBACK: core::sync::atomic::AtomicPtr<()> =
   core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 
+/// TODO: Document this item
 pub static RENDER_CALLBACK: core::sync::atomic::AtomicPtr<()> =
   core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 
+/// TODO: Document this item
 pub fn emit_breadcrumb(status: u32, msg: &str) {
   let fptr = BREADCRUMB_CALLBACK.load(core::sync::atomic::Ordering::Relaxed);
   if !fptr.is_null() {

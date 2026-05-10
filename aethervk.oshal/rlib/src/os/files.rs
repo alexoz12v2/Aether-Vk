@@ -1,6 +1,9 @@
+//! files module.
+
 use crate::os;
 use crate::os::{FsError, NativeError, NativeResult, fs::Path};
 
+/// TODO: Document this item
 pub struct MappedFile {
   ptr: *mut core::ffi::c_void,
   len: usize,
@@ -12,6 +15,7 @@ unsafe impl Send for MappedFile {}
 unsafe impl Sync for MappedFile {}
 
 impl MappedFile {
+  /// TODO: Document this item
   pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, FsError> {
     let mut path_buf = path.as_ref().to_pathbuf();
 
@@ -157,6 +161,7 @@ impl MappedFile {
   }
 
   #[inline(always)]
+  /// TODO: Document this item
   pub fn as_slice(&self) -> &[u8] {
     if self.len == 0 || self.ptr.is_null() {
       &[]
@@ -239,6 +244,7 @@ impl AsRef<[u8]> for Mmap {
 
 #[cfg(target_family = "unix")]
 impl Mmap {
+  /// TODO: Document this item
   pub fn open<P: AsRef<os::fs::Path>>(path: P) -> NativeResult<Self> {
     use alloc::string::ToString;
     use core::{mem, ptr};
@@ -291,6 +297,7 @@ impl Drop for Mmap {
 
 #[cfg(windows)]
 impl Mmap {
+  /// TODO: Document this item
   pub fn open<P: AsRef<os::fs::Path>>(path: P) -> NativeResult<Self> {
     use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, INVALID_HANDLE_VALUE};
     use windows::Win32::Storage::FileSystem::{

@@ -1,3 +1,5 @@
+//! math module.
+
 use core::{arch::asm, cmp, ops};
 
 // target_pointer_width = "64" assumed, as done in lib.rs
@@ -69,6 +71,7 @@ pub mod scalar_interval;
 pub mod vector;
 pub mod vector_interval;
 
+/// TODO: Document this item
 pub trait MulAddIdentity {
   fn one() -> Self;
   fn zero() -> Self;
@@ -90,6 +93,7 @@ macro_rules! impl_mul_add_identity {
 // left out unsigned values cause they are not scalars
 impl_mul_add_identity!(i8, i16, i32, i64, i128, f32, f64);
 
+/// TODO: Document this item
 pub trait Fma {
   fn fma(self, b: Self, c: Self) -> Self
   where
@@ -99,6 +103,7 @@ pub trait Fma {
   }
 }
 
+/// TODO: Document this item
 pub trait FmaAssign {
   fn fma_assign(&mut self, a: Self, b: Self)
   where
@@ -119,6 +124,7 @@ macro_rules! impl_fma_fma_assign {
 }
 impl_fma_fma_assign!(f32, f64, i8, i16, i32, i64, i128);
 
+/// TODO: Document this item
 pub trait Scalar:
   Copy
   + Sized
@@ -159,6 +165,7 @@ impl<T> Scalar for T where
 {
 }
 
+/// TODO: Document this item
 pub trait FloatLike: Scalar + Copy {
   fn is_nan(self) -> bool;
   fn is_infinite(self) -> bool;

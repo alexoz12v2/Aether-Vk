@@ -118,7 +118,7 @@ fn test_lbvh_build() {
     };
 
     let spv_path = "../../assets/sim/lbvh_build.comp.spv";
-    let dispatch_x = (num_primitives + 255) / 256;
+    let dispatch_x = (num_primitives + 127) / 128;
 
     run_compute_shader(&ctx, spv_path, push_constants_bytes, dispatch_x, 1, 1);
 

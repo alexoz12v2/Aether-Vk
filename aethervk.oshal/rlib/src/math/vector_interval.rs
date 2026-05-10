@@ -1,3 +1,5 @@
+//! vector_interval module.
+
 use crate::math::{
   FloatLike, Fma, FmaAssign, MulAddIdentity,
   floating::{FloatBits, FloatOps},
@@ -7,6 +9,7 @@ use crate::math::{
 use core::{cmp, ops};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+/// TODO: Document this item
 pub struct VectorInterval<V: Vector> {
   pub low: V,
   pub high: V,

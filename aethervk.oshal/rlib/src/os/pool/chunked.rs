@@ -1,3 +1,5 @@
+//! chunked module.
+
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -6,16 +8,19 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use super::{ThreadPool, Workload, WorkloadStatus};
 use crate::os::NativeResult;
 
+/// TODO: Document this item
 pub struct ChunkedState {
   completed: AtomicUsize,
   total: usize,
 }
 
+/// TODO: Document this item
 pub struct ChunkedHandle {
   state: Arc<ChunkedState>,
 }
 
 impl ChunkedHandle {
+  /// TODO: Document this item
   pub fn wait(self) {
     while self.state.completed.load(Ordering::Acquire) < self.state.total {
       #[cfg(any(unix, target_os = "macos"))]
@@ -57,6 +62,7 @@ impl<F> Drop for ChunkWorkload<F> {
   }
 }
 
+/// TODO: Document this item
 pub trait ThreadPoolChunkedExt {
   fn spawn_chunked<F>(&self, num_chunks: usize, f: F) -> NativeResult<ChunkedHandle>
   where

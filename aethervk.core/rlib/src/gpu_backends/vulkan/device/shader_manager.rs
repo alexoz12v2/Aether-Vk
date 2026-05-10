@@ -1,3 +1,5 @@
+//! shader_manager module.
+
 use ash::vk;
 use slotmap::{SlotMap, new_key_type};
 
@@ -13,6 +15,7 @@ use crate::{
 
 new_key_type! { pub struct ShaderKey; }
 
+/// TODO: Document this item
 pub fn execution_model_to_shader_flags(
   execution_model: spirv::ExecutionModel,
 ) -> vk::ShaderStageFlags {
@@ -37,6 +40,7 @@ pub fn execution_model_to_shader_flags(
   }
 }
 
+/// TODO: Document this item
 pub fn shader_flags_to_execution_model(
   stage_flags: vk::ShaderStageFlags,
 ) -> Option<spirv::ExecutionModel> {
@@ -63,6 +67,7 @@ pub fn shader_flags_to_execution_model(
 }
 
 // This struct holds the Vulkan shader module and other relevant data.
+/// TODO: Document this item
 pub struct Shader {
   pub module: NonZeroHandle<vk::ShaderModule>,
   pub entry_point: CString,
@@ -72,12 +77,14 @@ pub struct Shader {
 
 impl Shader {
   // Destroys the shader module.
+  /// TODO: Document this item
   pub fn destroy(&self, device: &ash::Device) {
     unsafe {
       device.destroy_shader_module(self.module.get(), None);
     }
   }
 
+  /// TODO: Document this item
   pub fn new(
     device: &ash::Device,
     code: &[u32],
@@ -115,6 +122,7 @@ impl Shader {
 }
 
 // Manages loading and storing shaders to avoid duplicates.
+/// TODO: Document this item
 pub struct ShaderManager {
   shaders: SlotMap<ShaderKey, Shader>,
   shader_paths: HashMap<PathBuf, ShaderKey>,
@@ -124,6 +132,7 @@ unsafe impl Sync for ShaderManager {}
 unsafe impl Send for ShaderManager {}
 
 impl ShaderManager {
+  /// TODO: Document this item
   pub fn new() -> Self {
     Self {
       shaders: SlotMap::with_key(),

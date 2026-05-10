@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
+default = ["debug_gpu"]
 windowed = []
+debug_gpu = ["aethervk-core-rlib/debug_gpu"]
 
 [dependencies]
 aethervk-core-rlib = { path = "../../aethervk.core/rlib" }

@@ -1,3 +1,5 @@
+//! ffi module.
+
 use aethervk_core_rlib::gpu;
 use aethervk_core_rlib::math::collision::linear_bvh;
 use aethervk_core_rlib::math::collision::linear_bvh::LinearBVHNode;
@@ -182,7 +184,12 @@ pub unsafe extern "C" fn avkSimulationContext_resize(
     return;
   }
   let ctx_ref = unsafe { &mut *ctx };
-  let _ = ctx_ref.resize(scene_id, gpu::PresentationEngineHandle(handle), width, height);
+  let _ = ctx_ref.resize(
+    scene_id,
+    gpu::PresentationEngineHandle(handle),
+    width,
+    height,
+  );
 }
 
 #[unsafe(no_mangle)]
@@ -1484,6 +1491,7 @@ pub unsafe extern "C" fn avkSimulationContext_setBvhNodeVisibility(
 // --------------------- FFI Types ---------------------------
 
 #[repr(u32)]
+/// TODO: Document this item
 pub enum FfiRenderTaskStatus {
   Completed = 0,
   Pending = 1,
@@ -1502,6 +1510,7 @@ impl From<RenderTaskStatus> for FfiRenderTaskStatus {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
+/// TODO: Document this item
 pub struct FfiRaycastResult {
   pub hit: bool,
   pub entity: u64,
@@ -1534,6 +1543,7 @@ impl From<RaycastResult> for FfiRaycastResult {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
+/// TODO: Document this item
 pub struct FfiKinematicState {
   pub pos_x: f32,
   pub pos_y: f32,
@@ -1594,6 +1604,7 @@ impl From<aethervk_core_rlib::simulation::almanac::KinematicState> for FfiKinema
 // TODO sync with C#
 #[repr(u32)]
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+/// TODO: Document this item
 pub enum FfiLogicCommandType {
   #[default]
   Shutdown = 0,
@@ -1619,12 +1630,14 @@ pub enum FfiLogicCommandType {
 // TODO modify in C#
 #[repr(C, align(4))]
 #[derive(Default, Clone, Copy, Debug)]
+/// TODO: Document this item
 pub struct FfiLogicCommand {
   pub cmd_type: FfiLogicCommandType,
   pub payload: [u8; 28],
 }
 
 impl FfiLogicCommand {
+  /// TODO: Document this item
   pub fn get_u32_u64x3_at_start(&self) -> Option<(u32, u64, u64, u64)> {
     let first = self.get_u32_at_offset(0)?;
     let second = self.get_u64_at_offset(4)?;
@@ -1633,6 +1646,7 @@ impl FfiLogicCommand {
     Some((first, second, third, fourth))
   }
 
+  /// TODO: Document this item
   pub fn get_u64_f32x3_at_start(&self) -> Option<(u64, f32, f32, f32)> {
     let first = self.get_u64_at_offset(4)?;
     let second = self.get_f32_at_offset(12)?;
@@ -1641,6 +1655,7 @@ impl FfiLogicCommand {
     Some((first, second, third, fourth))
   }
 
+  /// TODO: Document this item
   pub fn get_u64_f32x2_at_start(&self) -> Option<(u64, f32, f32)> {
     let first = self.get_u64_at_offset(4)?;
     let second = self.get_f32_at_offset(12)?;
@@ -1648,6 +1663,7 @@ impl FfiLogicCommand {
     Some((first, second, third))
   }
 
+  /// TODO: Document this item
   pub fn get_u64x2_f32_at_start(&self) -> Option<(u64, u64, f32)> {
     let first = self.get_u64_at_offset(4)?;
     let second = self.get_u64_at_offset(12)?;
@@ -1655,6 +1671,7 @@ impl FfiLogicCommand {
     Some((first, second, third))
   }
 
+  /// TODO: Document this item
   pub fn get_u64x2_f32x2_at_start(&self) -> Option<(u64, u64, f32, f32)> {
     let first = self.get_u64_at_offset(4)?;
     let second = self.get_u64_at_offset(12)?;
@@ -1743,6 +1760,7 @@ impl FfiLogicCommand {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C)] // Optional: Keeps memory layout predictable if interfacing with C
+/// TODO: Document this item
 pub struct FfiMarker {
   pub position: [f32; 3], // [x, y, z]
   pub color: [f32; 3],    // [r, g, b]
@@ -1761,6 +1779,7 @@ impl From<FfiMarker> for Marker {
 
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+/// TODO: Document this item
 pub enum FfiNodeType {
   AABB = 0,
   OBB = 1,
@@ -1768,6 +1787,7 @@ pub enum FfiNodeType {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct FfiBvhNode {
   pub node_type: FfiNodeType,
   pub min_x: f32,
@@ -1788,6 +1808,7 @@ pub struct FfiBvhNode {
 }
 
 impl FfiBvhNode {
+  /// TODO: Document this item
   pub fn from_offsets(left_child: u32, right_child: u32, primitive_count: u32) -> Self {
     Self {
       node_type: FfiNodeType::AABB,
@@ -1811,39 +1832,42 @@ impl FfiBvhNode {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn avkSimulationContext_getSimulationTime(ctx: *mut SimulationContext, scene_id: u64) -> f64 {
-    let ctx = unsafe { &*ctx };
-    ctx.get_simulation_time(scene_id)
+pub unsafe extern "C" fn avkSimulationContext_getSimulationTime(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+) -> f64 {
+  let ctx = unsafe { &*ctx };
+  ctx.get_simulation_time(scene_id)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn avkSimulationContext_getSimulationTimeUtc(
-    ctx: *mut SimulationContext,
-    scene_id: u64,
-    buffer: *mut core::ffi::c_char,
-    buffer_len: u32,
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  buffer: *mut core::ffi::c_char,
+  buffer_len: u32,
 ) -> bool {
-    let ctx = unsafe { &*ctx };
-    ctx.get_simulation_time_utc(scene_id, buffer, buffer_len)
+  let ctx = unsafe { &*ctx };
+  ctx.get_simulation_time_utc(scene_id, buffer, buffer_len)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn avkSimulationContext_setSimulationTime(
-    ctx: *mut SimulationContext,
-    scene_id: u64,
-    time_tai: f64,
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  time_tai: f64,
 ) {
-    let ctx = unsafe { &*ctx };
-    ctx.set_simulation_time(scene_id, time_tai);
+  let ctx = unsafe { &*ctx };
+  ctx.set_simulation_time(scene_id, time_tai);
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn avkSimulationContext_getEpochLimits(
-    ctx: *mut SimulationContext,
-    scene_id: u64,
-    start_tai: *mut f64,
-    end_tai: *mut f64,
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  start_tai: *mut f64,
+  end_tai: *mut f64,
 ) -> bool {
-    let ctx = unsafe { &*ctx };
-    ctx.get_epoch_limits(scene_id, start_tai, end_tai)
+  let ctx = unsafe { &*ctx };
+  ctx.get_epoch_limits(scene_id, start_tai, end_tai)
 }

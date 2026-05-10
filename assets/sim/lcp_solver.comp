@@ -3,6 +3,9 @@
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_memory_scope_semantics : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "../debug_utils.glsl"
 
 // ============================================================================
 // LCP Solver: Dantzig / Baraff Algorithm
@@ -11,7 +14,7 @@
 // Assumes Stream Compaction has already grouped collisions into independent clusters (islands).
 // Each workgroup solves one island.
 
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
 layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
 
@@ -22,6 +25,9 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleDat
 
 // Packed input from stream compaction
 layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer PackedCollisions {
+    uint dispatch_x;
+    uint dispatch_y;
+    uint dispatch_z;
     uint count;
     uvec2 pairs[]; // Pair of particle IDs
 };
@@ -39,7 +45,7 @@ layout(push_constant, scalar) uniform PushConstants {
 } pc;
 
 // Shared memory for Dantzig LCP solver
-#define MAX_CONTACTS_PER_ISLAND 256
+#define MAX_CONTACTS_PER_ISLAND 32
 
 shared float A[MAX_CONTACTS_PER_ISLAND][MAX_CONTACTS_PER_ISLAND];
 shared float B[MAX_CONTACTS_PER_ISLAND];
@@ -86,6 +92,9 @@ void solve_lcp_pgs(uint num_contacts) {
 }
 
 void main() {
+    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("Hello from lcp_solver.comp!\n");
+    }
     uint island_id = gl_WorkGroupID.x;
     uint local_id = gl_LocalInvocationID.x;
     
@@ -211,6 +220,11 @@ void main() {
         float Pn = X[local_id];
         vec3 impulse = normal * Pn;
         pc.outputs.impulses[contact_idx] = impulse;
+        
+        if (SHOULD_DEBUG_PRINT) {
+            debugPrintfEXT("LCP Solver Contact %d (Pairs: %d, %d): Pn=%f, impulse=(%f, %f, %f)", 
+                contact_idx, pA_id, pB_id, Pn, impulse.x, impulse.y, impulse.z);
+        }
         
         // In a complete implementation, we would use atomic adds on the velocities 
         // directly in the ParticleData buffer to apply the impulses.

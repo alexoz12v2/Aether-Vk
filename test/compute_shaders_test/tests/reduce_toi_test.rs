@@ -65,7 +65,7 @@ fn test_reduce_toi() {
     };
 
     let spv_path = "../../assets/sim/reduce_toi.comp.spv";
-    let dispatch_x = (test_data.total_pairs + 255) / 256;
+    let dispatch_x = (test_data.total_pairs + 127) / 128;
 
     run_compute_shader(&ctx, spv_path, push_constants_bytes, dispatch_x, 1, 1);
 

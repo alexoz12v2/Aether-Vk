@@ -1,24 +1,25 @@
 [workspace]
 members = [
-  "aethervk.core/cdylib",
-  "aethervk.core/rlib",
-  "aethervk.oshal/rlib", "test/ellipse_rendering",
+    "aethervk.core/cdylib",
+    "aethervk.core/rlib",
+    "aethervk.oshal/rlib",
 ]
 resolver = "3"
 exclude = [
-  "external/anise",
-  "external/gltf",
-  "external/vk-mem",
-  "external/spirv-reflect",
-  # this depends implicitly on `once_cell` which is also a dependency on `aethervk-oshal-rlib`.
-  # `cargo check --all-targets` tries to be smart and unify all dependencies(normal, dev, build), including used features
-  # `once_cell` feature = "std" sneaks into the rlib build, breaking it. Therefore, tests are excluded from our workspace
-  "test/simulation_test",
-  "test/anise_test",
-  "test/compute_shaders_test",
-  "test/test_utils",
-  "test/bezier_test",
-  "test/particles_motion_test",
+    "external/anise",
+    "external/gltf",
+    "external/vk-mem",
+    "external/spirv-reflect",
+    # this depends implicitly on `once_cell` which is also a dependency on `aethervk-oshal-rlib`.
+    # `cargo check --all-targets` tries to be smart and unify all dependencies(normal, dev, build), including used features
+    # `once_cell` feature = "std" sneaks into the rlib build, breaking it. Therefore, tests are excluded from our workspace
+    "test/simulation_test",
+    "test/anise_test",
+    "test/compute_shaders_test",
+    "test/test_utils",
+    "test/bezier_test",
+    "test/particles_motion_test",
+    "test/ellipse_rendering",
 ]
 
 # settings to strip and optimize release

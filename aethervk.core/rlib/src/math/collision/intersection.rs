@@ -29,6 +29,7 @@ where
 // ----------------------------------------------------------------------------
 // Sphere vs Sphere
 // ----------------------------------------------------------------------------
+/// TODO: Document this item
 pub fn intersect_sphere_sphere<V>(a: &BS<V::Scalar>, b: &BS<V::Scalar>) -> bool
 where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
@@ -44,6 +45,7 @@ where
 // ----------------------------------------------------------------------------
 // TODO: AABB vs AABB, AABB vs OBB, OBB vs OBB (15 combinations)
 
+/// TODO: Document this item
 pub fn intersect_aabb_aabb<V>(a: &AABB<V::Scalar>, b: &AABB<V::Scalar>) -> bool
 where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
@@ -194,6 +196,7 @@ where
 // ----------------------------------------------------------------------------
 // Triangle vs Triangle
 // ----------------------------------------------------------------------------
+/// TODO: Document this item
 pub fn intersect_triangle_triangle<S, Vec3, Vec2>(t_a: &Triangle, t_b: &Triangle) -> bool
 where
   Vec3: Vector3<Scalar = S> + From<Vec3f32>,
@@ -436,6 +439,7 @@ where
 // ----------------------------------------------------------------------------
 // Box vs Sphere
 // ----------------------------------------------------------------------------
+/// TODO: Document this item
 pub fn intersect_aabb_sphere<V>(aabb: &AABB<V::Scalar>, bs: &BS<V::Scalar>) -> bool
 where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
@@ -526,6 +530,7 @@ where
 // ----------------------------------------------------------------------------
 // Sphere vs Triangle
 // ----------------------------------------------------------------------------
+/// TODO: Document this item
 pub fn intersect_sphere_triangle<Vec3>(sphere: &BS<Vec3::Scalar>, tri: &Triangle) -> bool
 where
   Vec3: Vector3 + From<Vec3f32> + From<[Vec3::Scalar; 3]> + Into<[Vec3::Scalar; 3]>,
@@ -642,6 +647,7 @@ where
 // ----------------------------------------------------------------------------
 // Ray vs Sphere
 // ----------------------------------------------------------------------------
+/// TODO: Document this item
 pub fn intersect_ray_sphere<V>(ray: &Ray<V>, bs: &BS<V::Scalar>) -> bool
 where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
@@ -672,6 +678,7 @@ where
 // ----------------------------------------------------------------------------
 // Ray vs Triangle
 // ----------------------------------------------------------------------------
+/// TODO: Document this item
 pub fn intersect_ray_triangle<V>(ray: &Ray<V>, tri: &Triangle) -> bool
 where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
@@ -721,6 +728,7 @@ where
 // ----------------------------------------------------------------------------
 // Ray vs OBB
 // ----------------------------------------------------------------------------
+/// TODO: Document this item
 pub fn intersect_ray_obb<S, V, M>(ray: &Ray<V>, obb: &OBB<S>) -> bool
 where
   M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
@@ -776,6 +784,7 @@ where
 // ----------------------------------------------------------------------------
 // Ray vs Box
 // ----------------------------------------------------------------------------
+/// TODO: Document this item
 pub fn intersect_ray_aabb<V>(ray: &Ray<V>, aabb: &AABB<V::Scalar>) -> bool
 where
   V: Vector3 + From<Vec3f32> + From<[V::Scalar; 3]> + Into<[V::Scalar; 3]>,
