@@ -59,7 +59,11 @@ void main() {
 
     // Critical: Copy one field at a time. Seems to be an issue of SPIRV-Cross?
     SegmentArray segArray = pc.trajPtr.trajectories[trajId].segmentsPtr;
-    RationalBezier seg = segArray.segments[map.localSegmentId];
+    vec4 cp0 = segArray.segments[map.localSegmentId].cp0;
+    vec4 cp1 = segArray.segments[map.localSegmentId].cp1;
+    vec4 cp2 = segArray.segments[map.localSegmentId].cp2;
+    vec4 cp3 = segArray.segments[map.localSegmentId].cp3;
+    
     float lineWidth = pc.trajPtr.trajectories[trajId].lineWidth;
     vec4 color = pc.trajPtr.trajectories[trajId].color;
     uint textureId = pc.trajPtr.trajectories[trajId].textureId;
@@ -77,10 +81,10 @@ void main() {
     float db2 = 3.0 * t * (2.0 - 3.0 * t);
     float db3 = 3.0 * t * t;
 
-    vec4 v0 = pc.viewProj * seg.cp0;
-    vec4 v1 = pc.viewProj * seg.cp1;
-    vec4 v2 = pc.viewProj * seg.cp2;
-    vec4 v3 = pc.viewProj * seg.cp3;
+    vec4 v0 = pc.viewProj * cp0;
+    vec4 v1 = pc.viewProj * cp1;
+    vec4 v2 = pc.viewProj * cp2;
+    vec4 v3 = pc.viewProj * cp3;
 
     vec4 vClip = v0 * b0 + v1 * b1 + v2 * b2 + v3 * b3;
     vec4 dvClip = v0 * db0 + v1 * db1 + v2 * db2 + v3 * db3;

@@ -1,3 +1,5 @@
+//! vec3 module.
+
 use core::ops;
 
 #[cfg(target_arch = "x86_64")]
@@ -9,12 +11,14 @@ use core::arch::aarch64::*;
 use crate::math::vector::{Vector, Vector3, Vector4, vec4::Vec4f32};
 
 // Helper to keep test setup clean
+/// TODO: Document this item
 pub fn vec3(x: f32, y: f32, z: f32) -> Vec3f32 {
   Vec3f32::from_components(x, y, z)
 }
 
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug)]
+/// TODO: Document this item
 pub struct Vec3f32(pub Vec4f32);
 
 impl Default for Vec3f32 {
@@ -24,12 +28,18 @@ impl Default for Vec3f32 {
 }
 
 impl Vec3f32 {
+  pub fn one() -> Self {
+    Self::from_components(1.0, 1.0, 1.0)
+  }
+  
   #[inline]
+  /// TODO: Document this item
   pub fn from_array(data: [f32; 3]) -> Self {
     Self(Vec4f32::from_components(data[0], data[1], data[2], 0.0))
   }
 
   #[inline]
+  /// TODO: Document this item
   pub fn to_point(&self) -> Vec4f32 {
     Vec4f32::from_components(self.x(), self.y(), self.z(), 1.0)
   }

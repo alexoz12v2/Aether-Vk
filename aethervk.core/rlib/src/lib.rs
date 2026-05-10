@@ -1,3 +1,5 @@
+//! lib module.
+
 // disable std only for non tests
 #![cfg_attr(all(not(test), not(feature = "std")), no_std)]
 

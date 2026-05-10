@@ -9,7 +9,10 @@ using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.ViewModels;
 
-public partial class PropertiesViewModel : TabItemViewModel, IRecipient<EntitySelectedMessage>, IActionHandler
+public partial class PropertiesViewModel
+  : TabItemViewModel,
+    IRecipient<EntitySelectedMessage>,
+    IActionHandler
 {
   private readonly SceneStateManager _stateManager;
   private readonly NativeRuntimeService? _runtimeService;

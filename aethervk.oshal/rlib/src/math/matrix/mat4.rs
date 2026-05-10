@@ -1,3 +1,5 @@
+//! mat4 module.
+
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
@@ -6,7 +8,11 @@ use core::arch::aarch64::*;
 
 use core::ops;
 
-use crate::math::{matrix::{Matrix, Matrix4, MatrixVectorMul, SquareMatrix}, vector::{Vector, Vector4, vec4::Vec4f32}, FloatLike};
+use crate::math::{
+  FloatLike,
+  matrix::{Matrix, Matrix4, MatrixVectorMul, SquareMatrix},
+  vector::{Vector, Vector4, vec4::Vec4f32},
+};
 use crate::os::debug;
 
 /// Column-Major, f32 storage for 4x4 matrices
@@ -32,7 +38,10 @@ impl Into<[f32; 16]> for Mat4x4f32 {
       for f in result {
         if !f.is_finite() {
           debug::print_stacktrace();
-          panic!("unexpected non finite number inside Mat4x4f32 (column major): {:?}", result);
+          panic!(
+            "unexpected non finite number inside Mat4x4f32 (column major): {:?}",
+            result
+          );
         }
       }
     }
@@ -54,7 +63,10 @@ impl Into<[[f32; 4]; 4]> for Mat4x4f32 {
       for f in result.iter().flatten() {
         if !f.is_finite() {
           debug::print_stacktrace();
-          panic!("unexpected non finite number inside Mat4x4f32 (column major): {:?}", result);
+          panic!(
+            "unexpected non finite number inside Mat4x4f32 (column major): {:?}",
+            result
+          );
         }
       }
     }

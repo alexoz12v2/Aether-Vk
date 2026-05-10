@@ -17,6 +17,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
+/// TODO: Document this item
 pub enum BoundNode<S>
 where
   S: FloatLike + FloatOps + FloatBits + From<f32>,
@@ -30,6 +31,7 @@ impl<S> BoundNode<S>
 where
   S: FloatLike + FloatOps + FloatBits + From<f32>,
 {
+  /// TODO: Document this item
   pub fn contains<V, M>(&self, other: &Self) -> bool
   where
     V: Vector3<Scalar = S> + From<[S; 3]>,
@@ -44,6 +46,7 @@ where
     }
   }
 
+  /// TODO: Document this item
   pub fn encapsulate_bound<V, M>(&mut self, other: &Self)
   where
     V: Vector3<Scalar = S> + From<[S; 3]>,
@@ -60,6 +63,7 @@ where
 }
 
 #[derive(Debug, Clone)]
+/// TODO: Document this item
 pub struct BVHNode<S>
 where
   S: FloatLike + FloatOps + FloatBits + From<f32>,
@@ -71,6 +75,7 @@ where
   pub primitive_indices: Vec<usize>,
 }
 
+/// TODO: Document this item
 pub struct BVHBuilderParams {
   pub aabb_levels: usize,
   pub max_primitives_per_node: usize,
@@ -78,6 +83,7 @@ pub struct BVHBuilderParams {
 }
 
 impl BVHBuilderParams {
+  /// TODO: Document this item
   pub fn aabb_levels(&self, value: usize) -> Self {
     Self {
       aabb_levels: value,
@@ -85,6 +91,7 @@ impl BVHBuilderParams {
     }
   }
 
+  /// TODO: Document this item
   pub fn max_primitives_per_node(&self, value: usize) -> Self {
     Self {
       max_primitives_per_node: value,
@@ -92,6 +99,7 @@ impl BVHBuilderParams {
     }
   }
 
+  /// TODO: Document this item
   pub fn bin_count(&self, value: usize) -> Self {
     Self {
       bin_count: value,
@@ -110,6 +118,7 @@ impl Default for BVHBuilderParams {
   }
 }
 
+/// TODO: Document this item
 pub struct BVHBuilder<S, V, M>
 where
   M: Matrix3<Scalar = S, Vector = V> + From<Mat3f32> + MatrixVectorMul,
@@ -136,6 +145,7 @@ where
     + core::ops::Mul<V, Output = V>
     + core::ops::Mul<M, Output = M>,
 {
+  /// TODO: Document this item
   pub fn new(params: BVHBuilderParams) -> Self {
     Self {
       params,
@@ -143,6 +153,7 @@ where
     }
   }
 
+  /// TODO: Document this item
   pub fn build(&self, triangles: &[Triangle]) -> Option<Box<BVHNode<S>>> {
     if triangles.is_empty() {
       return None;

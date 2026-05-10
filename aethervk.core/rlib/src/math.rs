@@ -1,3 +1,5 @@
+//! math module.
+
 use aethervk_oshal_rlib::math::matrix::{
   Matrix, Matrix3, MatrixVectorMul, SquareMatrix, mat3::Mat3f32,
 };
@@ -34,6 +36,7 @@ pub fn from_world_space_to_screen_space(
   None
 }
 
+/// TODO: Document this item
 pub fn compute_com_and_tensor(verts: &[Vec3f32], m: f32) -> (Vec3f32, Mat3f32) {
   let mut com = Vec3f32::zero();
   for v in verts {
@@ -85,6 +88,7 @@ pub fn compute_com_and_tensor(verts: &[Vec3f32], m: f32) -> (Vec3f32, Mat3f32) {
   (com, i)
 }
 
+/// TODO: Document this item
 pub trait Mat3Ext {
   fn off_diagonal_sum(&self) -> f32;
 }
@@ -142,6 +146,7 @@ pub fn qr_decomposition(mat: Mat3f32) -> (Mat3f32, Mat3f32) {
   (q, r)
 }
 
+/// TODO: Document this item
 pub fn qr_diagonalization(mat: Mat3f32, tol: f32, max_iter: usize) -> (Mat3f32, Mat3f32) {
   let mut ak = mat;
   let mut qk = Mat3f32::identity();
@@ -158,6 +163,7 @@ pub fn qr_diagonalization(mat: Mat3f32, tol: f32, max_iter: usize) -> (Mat3f32, 
   (ak, qk)
 }
 
+/// TODO: Document this item
 pub fn jacobi_diagonalization(mut a: Mat3f32, tol: f32, max_iter: usize) -> (Vec3f32, Mat3f32) {
   let mut v = Mat3f32::identity();
 
@@ -296,6 +302,7 @@ pub fn vee(s: Mat3f32) -> Vec3f32 {
   )
 }
 
+/// TODO: Document this item
 pub fn expm_hat(w: Vec3f32) -> Mat3f32 {
   let theta = w.length();
   let id = Mat3f32::identity();
@@ -311,6 +318,7 @@ pub fn expm_hat(w: Vec3f32) -> Mat3f32 {
   id + w_hat * a + w_hat2 * b
 }
 
+/// TODO: Document this item
 pub fn solve_12x12(a: &mut [[f32; 12]; 12], b: &mut [f32; 12]) -> bool {
   let n = 12;
   for i in 0..n {

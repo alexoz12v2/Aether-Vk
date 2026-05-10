@@ -19,6 +19,7 @@ use crate::{math::jacobi_diagonalization, simulation::comet::Triangle};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct AABB<S>
 where
   S: FloatLike + FloatOps + FloatBits,
@@ -32,6 +33,7 @@ where
   S: FloatLike + FloatOps + FloatBits,
 {
   #[inline]
+  /// TODO: Document this item
   pub fn vertices<V>(&self) -> [V; 8]
   where
     V: Vector3<Scalar = S>,
@@ -49,6 +51,7 @@ where
   }
 
   #[inline]
+  /// TODO: Document this item
   pub fn edges() -> [[usize; 2]; 12] {
     [
       [0, 1],
@@ -66,6 +69,7 @@ where
     ]
   }
 
+  /// TODO: Document this item
   pub fn new<V>(min: V, max: V) -> Self
   where
     V: Vector3<Scalar = S> + Into<[S; 3]>,
@@ -76,6 +80,7 @@ where
     }
   }
 
+  /// TODO: Document this item
   pub fn min<V>(&self) -> V
   where
     V: Vector3<Scalar = S> + From<[S; 3]>,
@@ -83,6 +88,7 @@ where
     self.min.into()
   }
 
+  /// TODO: Document this item
   pub fn max<V>(&self) -> V
   where
     V: Vector3<Scalar = S> + From<[S; 3]>,
@@ -90,6 +96,7 @@ where
     self.max.into()
   }
 
+  /// TODO: Document this item
   pub fn center<V>(&self) -> V
   where
     V: Vector3<Scalar = S> + From<[S; 3]>,
@@ -97,6 +104,7 @@ where
     (self.min::<V>() + self.max()) * S::from_f32(0.5)
   }
 
+  /// TODO: Document this item
   pub fn half_extents<V>(&self) -> V
   where
     V: Vector3<Scalar = S> + From<[S; 3]>,
@@ -105,6 +113,7 @@ where
     ex * S::from_f32(0.5)
   }
 
+  /// TODO: Document this item
   pub fn contains_aabb<V>(&self, other: &Self) -> bool
   where
     V: Vector3<Scalar = S> + From<[S; 3]>,
@@ -123,6 +132,7 @@ where
       && o_max.z() <= s_max.z() + eps
   }
 
+  /// TODO: Document this item
   pub fn contains_obb<V>(&self, other: &OBB<S>) -> bool
   where
     V: Vector3<Scalar = S> + From<[S; 3]>,
@@ -146,6 +156,7 @@ where
     true
   }
 
+  /// TODO: Document this item
   pub fn encapsulate_aabb<V>(&mut self, other: &Self)
   where
     V: Vector3<Scalar = S> + From<[S; 3]>,
@@ -162,6 +173,7 @@ where
     self.max = [s_max.x(), s_max.y(), s_max.z()];
   }
 
+  /// TODO: Document this item
   pub fn encapsulate_obb<V>(&mut self, other: &OBB<S>)
   where
     V: Vector3<Scalar = S> + From<[S; 3]>,
@@ -178,6 +190,7 @@ where
     self.max = [s_max.x(), s_max.y(), s_max.z()];
   }
 
+  /// TODO: Document this item
   pub fn contains_point<V>(&self, p: V) -> bool
   where
     V: Vector3<Scalar = S> + From<[S; 3]>,
@@ -195,6 +208,7 @@ where
       && p.z() <= s_max.z() + eps
   }
 
+  /// TODO: Document this item
   pub fn from_tris<V, I>(triangles: I) -> Self
   where
     I: IntoIterator<Item = Triangle>,
@@ -223,6 +237,7 @@ where
     }
   }
 
+  /// TODO: Document this item
   pub fn transform<V, M2>(&self, transform: &M2) -> Self
   where
     M2: Matrix4<Scalar = S> + MatrixVectorMul + From<Mat4x4f32>,
@@ -259,6 +274,7 @@ where
   }
 
   // TODO unit test (eg 45 deg rotation and translation)
+  /// TODO: Document this item
   pub fn transform_to_obb<M, V, M2>(&self, transform: &M2) -> OBB<S>
   where
     M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
@@ -289,39 +305,51 @@ where
 }
 
 impl AABB<f32> {
+  /// TODO: Document this item
   pub fn vertices_f32(&self) -> [Vec3f32; 8] {
     self.vertices::<Vec3f32>()
   }
+  /// TODO: Document this item
   pub fn min_f32(&self) -> Vec3f32 {
     self.min.into()
   }
+  /// TODO: Document this item
   pub fn max_f32(&self) -> Vec3f32 {
     self.max.into()
   }
+  /// TODO: Document this item
   pub fn center_f32(&self) -> Vec3f32 {
     self.center()
   }
+  /// TODO: Document this item
   pub fn half_extents_f32(&self) -> Vec3f32 {
     self.half_extents()
   }
+  /// TODO: Document this item
   pub fn contains_aabb_f32(&self, other: &Self) -> bool {
     self.contains_aabb::<Vec3f32>(other)
   }
+  /// TODO: Document this item
   pub fn contains_obb_f32(&self, other: &OBB<f32>) -> bool {
     self.contains_obb::<Vec3f32>(other)
   }
+  /// TODO: Document this item
   pub fn encapsulate_aabb_f32(&mut self, other: &Self) {
     self.encapsulate_aabb::<Vec3f32>(other)
   }
+  /// TODO: Document this item
   pub fn encapsulate_obb_f32(&mut self, other: &OBB<f32>) {
     self.encapsulate_obb::<Vec3f32>(other)
   }
+  /// TODO: Document this item
   pub fn contains_point_f32(&self, point: Vec3f32) -> bool {
     self.contains_point(point)
   }
+  /// TODO: Document this item
   pub fn transform_f32(&self, transform: &Mat4x4f32) -> Self {
     self.transform::<Vec3f32, Mat4x4f32>(transform)
   }
+  /// TODO: Document this item
   pub fn transform_to_obb_f32(&self, transform: &Mat4x4f32) -> OBB<f32> {
     self.transform_to_obb::<Mat3f32, Vec3f32, Mat4x4f32>(transform)
   }
@@ -329,6 +357,7 @@ impl AABB<f32> {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct BS<S>
 where
   S: FloatLike + FloatOps + FloatBits,
@@ -340,6 +369,7 @@ impl<S> BS<S>
 where
   S: FloatLike + FloatOps + FloatBits,
 {
+  /// TODO: Document this item
   pub fn center<V>(&self) -> V
   where
     V: Vector3<Scalar = S>,
@@ -351,10 +381,12 @@ where
     )
   }
 
+  /// TODO: Document this item
   pub fn radius(&self) -> S {
     self.center_radius[3]
   }
 
+  /// TODO: Document this item
   pub fn new<V>(center: V, radius: S) -> Self
   where
     V: Vector3<Scalar = S>,
@@ -364,6 +396,7 @@ where
     }
   }
 
+  /// TODO: Document this item
   pub fn from_tris<V, I>(triangles: I) -> Self
   where
     I: IntoIterator<Item = Triangle>,
@@ -452,6 +485,7 @@ where
     Self::new(center, radius)
   }
 
+  /// TODO: Document this item
   pub fn transform<V, M2>(&self, transform: &M2) -> Self
   where
     M2: Matrix4<Scalar = S> + MatrixVectorMul,
@@ -485,6 +519,7 @@ where
 }
 
 impl BS<f32> {
+  /// TODO: Document this item
   pub fn transform_f32(&self, transform: &Mat4x4f32) -> Self {
     self.transform::<Vec3f32, Mat4x4f32>(transform)
   }
@@ -492,6 +527,7 @@ impl BS<f32> {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct OBB<S>
 where
   S: FloatLike + FloatOps + FloatBits,
@@ -506,6 +542,7 @@ impl<S> OBB<S>
 where
   S: FloatLike + FloatOps + FloatBits,
 {
+  /// TODO: Document this item
   pub fn translation<V>(&self) -> V
   where
     V: Vector3<Scalar = S>,
@@ -513,6 +550,7 @@ where
     V::from_components(self._origin[0], self._origin[1], self._origin[2])
   }
 
+  /// TODO: Document this item
   pub fn axes<V>(&self) -> [V; 3]
   where
     V: Vector3<Scalar = S>,
@@ -524,6 +562,7 @@ where
       V::from_components(flat[6], flat[7], flat[8]),
     ]
   }
+  /// TODO: Document this item
   pub fn rotation3<M>(&self) -> M
   where
     M: Matrix3<Scalar = S>,
@@ -533,6 +572,7 @@ where
     M::from_array(flat)
   }
 
+  /// TODO: Document this item
   pub fn half_extent<V>(&self) -> V
   where
     V: Vector3<Scalar = S>,
@@ -544,6 +584,7 @@ where
     )
   }
 
+  /// TODO: Document this item
   pub fn half_extents<V>(&self) -> V
   where
     V: Vector3<Scalar = S>,
@@ -551,6 +592,7 @@ where
     self.half_extent()
   }
 
+  /// TODO: Document this item
   pub fn center<V>(&self) -> V
   where
     V: Vector3<Scalar = S>,
@@ -558,6 +600,7 @@ where
     V::from_components(self._origin[0], self._origin[1], self._origin[2])
   }
 
+  /// TODO: Document this item
   pub fn vertices<V>(&self) -> [V; 8]
   where
     V: Vector3<Scalar = S>,
@@ -580,6 +623,7 @@ where
     ]
   }
 
+  /// TODO: Document this item
   pub fn contains_aabb<V, M>(&self, other: &AABB<S>) -> bool
   where
     V: Vector3<Scalar = S>,
@@ -601,6 +645,7 @@ where
     true
   }
 
+  /// TODO: Document this item
   pub fn contains_obb<V, M>(&self, other: &Self) -> bool
   where
     V: Vector3<Scalar = S>,
@@ -622,6 +667,7 @@ where
     true
   }
 
+  /// TODO: Document this item
   pub fn encapsulate_aabb<V, M>(&mut self, other: &AABB<S>)
   where
     V: Vector3<Scalar = S>,
@@ -663,6 +709,7 @@ where
     ];
   }
 
+  /// TODO: Document this item
   pub fn encapsulate_obb<V, M>(&mut self, other: &Self)
   where
     V: Vector3<Scalar = S>,
@@ -704,6 +751,7 @@ where
     ];
   }
 
+  /// TODO: Document this item
   pub fn contains_point<V, M>(&self, p: V) -> bool
   where
     V: Vector3<Scalar = S>,
@@ -719,6 +767,7 @@ where
       && local_v.z().abs() <= self._half_extents[2] + eps
   }
 
+  /// TODO: Document this item
   pub fn new<V, M>(center: V, rot: M, half_extent: V) -> Self
   where
     V: Vector3<Scalar = S> + Into<[S; 3]>,
@@ -733,6 +782,7 @@ where
     }
   }
 
+  /// TODO: Document this item
   pub fn from_tris<V, M, I>(triangles: I) -> Self
   where
     M: Matrix3<Scalar = S, Vector = V> + From<Mat3f32>,
@@ -807,6 +857,7 @@ where
     Self::new(c, pure_rotation_matrix, h.into())
   }
 
+  /// TODO: Document this item
   pub fn transform<V, M, M2>(&self, transform: &M2) -> Self
   where
     M2: Matrix4<Scalar = S> + MatrixVectorMul,
@@ -856,6 +907,7 @@ where
     Self::new(new_c, new_rot, new_he)
   }
 
+  /// TODO: Document this item
   pub fn to_aabb<V>(&self) -> AABB<S>
   where
     V: Vector3<Scalar = S> + From<[S; 3]> + Into<[S; 3]>,
@@ -871,42 +923,55 @@ where
 }
 
 impl OBB<f32> {
+  /// TODO: Document this item
   pub fn translation_f32(&self) -> Vec3f32 {
     self.translation()
   }
+  /// TODO: Document this item
   pub fn axes_f32(&self) -> [Vec3f32; 3] {
     self.axes()
   }
+  /// TODO: Document this item
   pub fn rotation3_f32(&self) -> Mat3f32 {
     self.rotation3()
   }
+  /// TODO: Document this item
   pub fn half_extent_f32(&self) -> Vec3f32 {
     self.half_extent()
   }
+  /// TODO: Document this item
   pub fn half_extents_f32(&self) -> Vec3f32 {
     self.half_extents()
   }
+  /// TODO: Document this item
   pub fn center_f32(&self) -> Vec3f32 {
     self.center()
   }
+  /// TODO: Document this item
   pub fn vertices_f32(&self) -> [Vec3f32; 8] {
     self.vertices()
   }
+  /// TODO: Document this item
   pub fn contains_aabb_f32(&self, other: &AABB<f32>) -> bool {
     self.contains_aabb::<Vec3f32, Mat3f32>(other)
   }
+  /// TODO: Document this item
   pub fn contains_obb_f32(&self, other: &Self) -> bool {
     self.contains_obb::<Vec3f32, Mat3f32>(other)
   }
+  /// TODO: Document this item
   pub fn encapsulate_aabb_f32(&mut self, other: &AABB<f32>) {
     self.encapsulate_aabb::<Vec3f32, Mat3f32>(other)
   }
+  /// TODO: Document this item
   pub fn encapsulate_obb_f32(&mut self, other: &Self) {
     self.encapsulate_obb::<Vec3f32, Mat3f32>(other)
   }
+  /// TODO: Document this item
   pub fn contains_point_f32(&self, p: Vec3f32) -> bool {
     self.contains_point::<_, Mat3f32>(p)
   }
+  /// TODO: Document this item
   pub fn transform_f32(&self, transform: &Mat4x4f32) -> Self {
     self.transform::<Vec3f32, Mat3f32, _>(transform)
   }

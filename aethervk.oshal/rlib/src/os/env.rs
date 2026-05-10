@@ -1,7 +1,10 @@
+//! env module.
+
 use alloc::{string::String, vec::Vec};
 
 use crate::os::NativeResult;
 
+/// TODO: Document this item
 pub fn args() -> NativeResult<Vec<String>> {
   #[cfg(windows)]
   {

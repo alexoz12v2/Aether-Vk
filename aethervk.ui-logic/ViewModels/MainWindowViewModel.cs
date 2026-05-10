@@ -70,7 +70,7 @@ public partial class ImportedModelItem : ObservableObject
     // For now, we only spawn into Scene 1 via ShowSpawnMeshDialogAsync, but let's assume we remove them generally.
     foreach (var instanceId in SpawnedInstanceIds)
     {
-       _runtimeService.RemoveEntity(1, instanceId); // Assuming Scene 1 since it's hardcoded in AvaloniaWindowService
+      _runtimeService.RemoveEntity(1, instanceId); // Assuming Scene 1 since it's hardcoded in AvaloniaWindowService
     }
     SpawnedInstanceIds.Clear();
 
@@ -205,7 +205,7 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   [RelayCommand]
   private async Task OpenSettingsAsync()
   {
-      await _windowService.ShowSettingsDialogAsync();
+    await _windowService.ShowSettingsDialogAsync();
   }
 
   [RelayCommand]

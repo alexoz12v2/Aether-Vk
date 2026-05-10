@@ -199,7 +199,7 @@ bool ccdSphereTriangle(
 // Parallel BVH Traversal (Subgroup Optimized)
 // ----------------------------------------------------------------------------
 
-#define STACK_SIZE 32
+#define STACK_SIZE 64
 
 // Traverses a single BVH to find self-intersections (Motion bounds).
 void computeSelfIntersections(

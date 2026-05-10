@@ -1,3 +1,5 @@
+//! camera module.
+
 use crate::scene::{CameraComponent, EntityId, HasComponentResultEnum, Scene, TransformComponent};
 use crate::types::{EngineError, EngineResult};
 use aethervk_oshal_rlib::math::FloatLike;
@@ -9,6 +11,7 @@ use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
 
 // TODO add unit tests
 
+/// TODO: Document this item
 pub trait SceneCameraExt {
   /// yaw fmod to 2pi, while pitch clamped from -pi/2 to +pi/2
   fn rotate_camera(
@@ -29,6 +32,15 @@ pub trait SceneCameraExt {
 
   /// Translates the camera in its local space (x = right, y = backward, z = up)
   fn translate_camera_local(&self, camera_entity: EntityId, delta: Vec3f32) -> EngineResult<()>;
+
+  /// Pans both the camera and the cursor (pivot) along the camera's local X and Y axes
+  fn pan_camera_and_cursor(
+    &self,
+    camera_entity: EntityId,
+    cursor_entity: EntityId,
+    delta_x: f32,
+    delta_y: f32,
+  ) -> EngineResult<()>;
 }
 
 impl SceneCameraExt for Scene {
@@ -110,9 +122,49 @@ impl SceneCameraExt for Scene {
         "[SceneCameraExt] translate_camera_local: camera entity not found",
       ))
   }
+
+  fn pan_camera_and_cursor(
+    &self,
+    camera_entity: EntityId,
+    cursor_entity: EntityId,
+    delta_x: f32,
+    delta_y: f32,
+  ) -> EngineResult<()> {
+    check_for_camera(&self, camera_entity)?;
+
+    let cursor_pos = self
+      .with_component(cursor_entity, |t: &TransformComponent| t.position)
+      .ok_or(EngineError::InvalidOperation(
+        "[SceneCameraExt] pan_camera_and_cursor: cursor entity not found",
+      ))?;
+
+    let translation = self
+      .with_component(camera_entity, |c: &TransformComponent| {
+        let offset = c.position - cursor_pos;
+        let dist = offset.length().max(0.1);
+        let pan_speed = dist * 0.002;
+        let right = c.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
+        let up = c.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
+        right * (-delta_x * pan_speed) + up * (delta_y * pan_speed)
+      })
+      .ok_or(EngineError::InvalidOperation(
+        "[SceneCameraExt] pan_camera_and_cursor: camera entity not found",
+      ))?;
+
+    let _ = self.with_component_mut(camera_entity, |c: &mut TransformComponent| {
+      c.position = c.position + translation;
+    });
+
+    let _ = self.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
+      c.position = c.position + translation;
+    });
+
+    Ok(())
+  }
 }
 
 // TODO probably move somewhere
+/// TODO: Document this item
 pub trait QuatToEulerAngles {
   /// Converts the quaternion to pitch and yaw angles (in radians)
   /// Pitch: Rotation around the X axis (elevation). Positive is looking up (+X)

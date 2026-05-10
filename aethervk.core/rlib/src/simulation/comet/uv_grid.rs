@@ -1,3 +1,5 @@
+//! uv_grid module.
+
 extern crate alloc;
 use crate::simulation::comet::Vertex;
 use alloc::vec;

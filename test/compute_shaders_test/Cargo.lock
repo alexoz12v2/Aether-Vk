@@ -593,6 +593,7 @@ version = "0.1.0"
 dependencies = [
  "aethervk-core-rlib",
  "aethervk-oshal-rlib",
+ "anise",
  "ash",
  "bytemuck",
  "heapless",

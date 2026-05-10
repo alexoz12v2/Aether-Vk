@@ -1,3 +1,5 @@
+//! lib module.
+
 // disable std only for non tests
 #![cfg_attr(all(not(test), not(feature = "std")), no_std)]
 
@@ -23,6 +25,7 @@ use windows::{
 
 // --------------- Centralized Panic Handler Implementation ---------
 #[inline]
+/// TODO: Document this item
 pub fn panic_handler_impl() -> ! {
   #[cfg(debug_assertions)]
   {
@@ -47,6 +50,7 @@ pub fn panic_handler_impl() -> ! {
 }
 
 // -------------------- Static Storage ------------------------------
+/// TODO: Document this item
 pub static SYSTEM_INFO: once::Once<AvkSystemInfo> = once::Once::new();
 
 pub mod math;
@@ -54,6 +58,7 @@ pub mod math;
 // -------------------- Initialization Types ------------------------
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+/// TODO: Document this item
 pub struct AvkSystemInfo {
   pub arch_features: u32,
 }
@@ -82,6 +87,7 @@ const NEON_MASK: u32 = 1 << 0;
 
 // -------------------- Initialization Impl ------------------------
 impl AvkSystemInfo {
+  /// TODO: Document this item
   pub fn new() -> AvkSystemInfo {
     #[cfg(target_arch = "x86_64")]
     {
@@ -160,52 +166,62 @@ impl AvkSystemInfo {
 
   #[inline]
   #[cfg(target_arch = "x86_64")]
+  /// TODO: Document this item
   pub fn has_sse(&self) -> bool {
     self.arch_features & SSE_MASK != 0
   }
   #[inline]
   #[cfg(target_arch = "x86_64")]
+  /// TODO: Document this item
   pub fn has_sse2(&self) -> bool {
     self.arch_features & SSE2_MASK != 0
   }
   #[inline]
   #[cfg(target_arch = "x86_64")]
+  /// TODO: Document this item
   pub fn has_sse3(&self) -> bool {
     self.arch_features & SSE3_MASK != 0
   }
   #[inline]
   #[cfg(target_arch = "x86_64")]
+  /// TODO: Document this item
   pub fn has_ssse3(&self) -> bool {
     self.arch_features & SSSE3_MASK != 0
   }
   #[inline]
   #[cfg(target_arch = "x86_64")]
+  /// TODO: Document this item
   pub fn has_sse4_1(&self) -> bool {
     self.arch_features & SSE4_1_MASK != 0
   }
   #[inline]
   #[cfg(target_arch = "x86_64")]
+  /// TODO: Document this item
   pub fn has_sse4_2(&self) -> bool {
     self.arch_features & SSE4_2_MASK != 0
   }
   #[inline]
   #[cfg(target_arch = "x86_64")]
+  /// TODO: Document this item
   pub fn has_fma(&self) -> bool {
     self.arch_features & FMA_MASK != 0
   }
   #[inline]
   #[cfg(target_arch = "x86_64")]
+  /// TODO: Document this item
   pub fn has_avx(&self) -> bool {
     self.arch_features & AVX_MASK != 0
   }
   #[inline]
   #[cfg(target_arch = "x86_64")]
+  /// TODO: Document this item
   pub fn has_avx2(&self) -> bool {
     self.arch_features & AVX2_MASK != 0
   }
 
   #[inline]
   #[cfg(target_arch = "aarch64")]
+  /// TODO: Document this item
   pub fn has_neon(&self) -> bool {
     self.arch_features & NEON_MASK != 0
   }
@@ -218,11 +234,13 @@ pub mod hash {
   use core::hash::{Hash, Hasher};
   use core::marker;
 
+  /// TODO: Document this item
   pub struct FnvHasher {
     hash: u64,
   }
 
   impl FnvHasher {
+    /// TODO: Document this item
     pub const fn new() -> Self {
       Self {
         hash: 0xcbf29ce484222325, // FNV offset basis
@@ -243,6 +261,7 @@ pub mod hash {
     }
   }
 
+  /// TODO: Document this item
   pub struct Key<T>
   where
     T: Hash,

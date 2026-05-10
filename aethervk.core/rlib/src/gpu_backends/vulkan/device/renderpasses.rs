@@ -1,11 +1,12 @@
+//! renderpasses module.
+
+use crate::gpu::vulkan::device::swapchain;
+#[cfg(test)]
+use crate::gpu_backends::vulkan::utils::create_test_attachment;
 use crate::{
   gpu::PresentationEngineHandle,
   gpu_backends::vulkan::{
-    device::{
-      DeviceResource,
-      resources::DiscardPool,
-      swapchain::{PresentationState},
-    },
+    device::{DeviceResource, resources::DiscardPool, swapchain::PresentationState},
     utils::{NonZeroHandle, create_transient_attachment},
   },
   types::GpuResult,
@@ -13,9 +14,6 @@ use crate::{
 use ash::vk;
 use core::slice;
 use spin::RwLock;
-use crate::gpu::vulkan::device::swapchain;
-#[cfg(test)]
-use crate::gpu_backends::vulkan::utils::create_test_attachment;
 
 enum RenderPassAttachment {
   SwapchainColorImage,
@@ -44,6 +42,7 @@ struct RenderPassBundle {
   attachments: heapless::Vec<RenderPassAttachment, MAX_ATTACHMENTS>,
 }
 
+/// TODO: Document this item
 pub(super) enum RenderPassSpecification<'a> {
   ColorDepthSingleSubpass {
     color_format: vk::Format,
@@ -53,6 +52,7 @@ pub(super) enum RenderPassSpecification<'a> {
 }
 
 impl<'a> RenderPassSpecification<'a> {
+  /// TODO: Document this item
   pub fn single_pass(presentation_engine: &'a PresentationState, d: vk::Format) -> Self {
     Self::ColorDepthSingleSubpass {
       color_format: presentation_engine.format(),
@@ -62,9 +62,11 @@ impl<'a> RenderPassSpecification<'a> {
   }
 }
 
+/// TODO: Document this item
 pub(super) struct RenderPasses {
   render_passes: RwLock<hashbrown::HashMap<PresentationEngineHandle, RenderPassBundle>>,
-  pipeline_render_passes: RwLock<hashbrown::HashMap<(vk::Format, vk::Format), NonZeroHandle<vk::RenderPass>>>,
+  pipeline_render_passes:
+    RwLock<hashbrown::HashMap<(vk::Format, vk::Format), NonZeroHandle<vk::RenderPass>>>,
   render_pass_device: ash::khr::create_renderpass2::Device,
   // this is bad but I've got no other clue
   allocator: vk_mem::ffi::VmaAllocator,
@@ -131,6 +133,7 @@ unsafe impl Send for RenderPasses {}
 /// Thin abstraction over render pass creation and management.
 /// Note: It Implicitly requires to not outlive the VmaAllocator
 impl RenderPasses {
+  /// TODO: Document this item
   pub fn new(
     instance: &ash::Instance,
     device: &ash::Device,
@@ -144,6 +147,7 @@ impl RenderPasses {
     }
   }
 
+  /// TODO: Document this item
   pub fn get_pipeline_render_pass(
     &self,
     color_format: vk::Format,
@@ -165,6 +169,7 @@ impl RenderPasses {
     Ok(rp)
   }
 
+  /// TODO: Document this item
   pub fn get_clear_values_render_pass(
     &self,
     pe_handle: PresentationEngineHandle,
@@ -177,14 +182,13 @@ impl RenderPasses {
     if out_values.len() != 2 {
       return Err(crate::gpu_invalid_arg!("invalid argument"));
     }
-    let bundle = unsafe {
-      read_render_passes.get(&pe_handle).unwrap_unchecked()
-    };
+    let bundle = unsafe { read_render_passes.get(&pe_handle).unwrap_unchecked() };
     out_values[0] = bundle.clear_value[0];
     out_values[1] = bundle.clear_value[1];
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn get_or_create_render_pass(
     &self,
     pe_handle: PresentationEngineHandle,
@@ -205,9 +209,7 @@ impl RenderPasses {
         depth_stencil_format,
         swapchain,
       } => {
-        if let Some(bundle) =
-          self.render_passes.read().get(&pe_handle)
-        {
+        if let Some(bundle) = self.render_passes.read().get(&pe_handle) {
           let (width, height) = swapchain.extent();
           if bundle.swapchain_generation == swapchain.swapchain_generation()
             && bundle.width == width
@@ -218,9 +220,7 @@ impl RenderPasses {
         }
 
         let mut write_render_passes = self.render_passes.write();
-        if let Some(mut bundle) =
-          write_render_passes.remove(&pe_handle)
-        {
+        if let Some(mut bundle) = write_render_passes.remove(&pe_handle) {
           bundle.discard(discard_pool, self.allocator, timeline);
         }
 
@@ -305,13 +305,9 @@ impl RenderPasses {
         })?;
         let view = unsafe { NonZeroHandle::new_unchecked(view) };
         unsafe {
-          write_render_passes
-            .get_mut(&pe_handle)
-            .unwrap_unchecked()
-            .attachments
-            .push_unchecked(RenderPassAttachment::DepthStencilAttachment(
-              image, alloc, view,
-            ));
+          write_render_passes.get_mut(&pe_handle).unwrap_unchecked().attachments.push_unchecked(
+            RenderPassAttachment::DepthStencilAttachment(image, alloc, view),
+          );
         }
 
         // create framebuffers
@@ -344,9 +340,7 @@ impl RenderPasses {
           })?;
         drop(write_render_passes);
         let read_render_passes = self.render_passes.read();
-        let bundle = unsafe {
-          read_render_passes.get(&pe_handle).unwrap_unchecked()
-        };
+        let bundle = unsafe { read_render_passes.get(&pe_handle).unwrap_unchecked() };
 
         Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]))
       }
@@ -356,9 +350,7 @@ impl RenderPasses {
         depth_stencil_format,
         swapchain,
       } => {
-        if let Some(bundle) =
-          self.render_passes.read().get(&pe_handle)
-        {
+        if let Some(bundle) = self.render_passes.read().get(&pe_handle) {
           let (width, height) = swapchain.extent();
           if bundle.swapchain_generation == swapchain.swapchain_generation()
             && bundle.width == width
@@ -369,9 +361,7 @@ impl RenderPasses {
         }
 
         let mut write_render_passes = self.render_passes.write();
-        if let Some(mut bundle) =
-          write_render_passes.remove(&pe_handle)
-        {
+        if let Some(mut bundle) = write_render_passes.remove(&pe_handle) {
           bundle.discard(discard_pool, self.allocator, timeline);
         }
 
@@ -455,13 +445,9 @@ impl RenderPasses {
         })?;
         let view = unsafe { NonZeroHandle::new_unchecked(view) };
         unsafe {
-          write_render_passes
-            .get_mut(&pe_handle)
-            .unwrap_unchecked()
-            .attachments
-            .push_unchecked(RenderPassAttachment::DepthStencilAttachment(
-              image, alloc, view,
-            ));
+          write_render_passes.get_mut(&pe_handle).unwrap_unchecked().attachments.push_unchecked(
+            RenderPassAttachment::DepthStencilAttachment(image, alloc, view),
+          );
         }
 
         swapchain
@@ -493,9 +479,7 @@ impl RenderPasses {
           })?;
         drop(write_render_passes);
         let read_render_passes = self.render_passes.read();
-        let bundle = unsafe {
-          read_render_passes.get(&pe_handle).unwrap_unchecked()
-        };
+        let bundle = unsafe { read_render_passes.get(&pe_handle).unwrap_unchecked() };
 
         Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]))
       }
@@ -622,7 +606,11 @@ impl RenderPasses {
   }
 
   #[cfg(test)]
-  pub(crate) fn get_test_depth_stencil_image(&self, pe_handle: PresentationEngineHandle) -> Option<NonZeroHandle<vk::Image>> {
+  /// TODO: Document this item
+  pub(crate) fn get_test_depth_stencil_image(
+    &self,
+    pe_handle: PresentationEngineHandle,
+  ) -> Option<NonZeroHandle<vk::Image>> {
     let read_render_passes = self.render_passes.read();
     let bundle = read_render_passes.get(&pe_handle)?;
     for attachment in bundle.attachments.iter() {

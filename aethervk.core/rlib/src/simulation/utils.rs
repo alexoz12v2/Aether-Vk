@@ -1,5 +1,8 @@
+//! utils module.
+
 use crate::simulation::constants;
 
+/// TODO: Document this item
 pub fn get_planet_radius(id: i32, assets_dir: &str) -> f32 {
   let pck_path = alloc::format!("{}/planets/pck00011.tpc", assets_dir);
   if let Some(radii) = crate::simulation::pck::read_body_radii(&pck_path, id) {
@@ -21,6 +24,7 @@ pub fn get_planet_radius(id: i32, assets_dir: &str) -> f32 {
   }
 }
 
+/// TODO: Document this item
 pub fn generate_gaussian_distribution(
   resolution: usize,
   mean_x: f32,

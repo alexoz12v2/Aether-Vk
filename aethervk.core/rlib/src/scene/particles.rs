@@ -1,3 +1,5 @@
+//! particles module.
+
 use crate::math::collision::linear_bvh::LinearBVH;
 use crate::physics::particle::Particle;
 use crate::scene::Component;
@@ -8,6 +10,7 @@ use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
 use aethervk_oshal_rlib::os::time::timeus_t;
 
 #[derive(Clone, Debug)]
+/// TODO: Document this item
 pub struct GaussianParams {
   pub mean: f32,
   pub std_dev: f32,
@@ -16,6 +19,7 @@ pub struct GaussianParams {
 }
 
 impl GaussianParams {
+  /// TODO: Document this item
   pub fn sample(&self, u: &[f32; 2]) -> f32 {
     let r = (-2.0 * u[0].max(1e-8).ln()).sqrt();
     let theta = 2.0 * core::f32::consts::PI * u[1];
@@ -25,6 +29,7 @@ impl GaussianParams {
 }
 
 #[derive(Clone, Debug)]
+/// TODO: Document this item
 pub struct ParticleEmitterConfig {
   pub uv_distribution: crate::math::distribution::Distribution2D,
   pub delta: timeus_t,
@@ -41,6 +46,7 @@ pub struct ParticleEmitterConfig {
 
 #[repr(C)]
 #[derive(Clone, Debug)]
+/// TODO: Document this item
 pub struct ParticleData {
   pub id_low: u32,
   pub id_high: u32,
@@ -53,6 +59,7 @@ pub struct ParticleData {
 }
 
 impl ParticleData {
+  /// TODO: Document this item
   pub fn as_particle(&self, radius: f32) -> Particle<Vec3f32> {
     Particle {
       position: Vec3f32::from_array(self.position),
@@ -60,25 +67,30 @@ impl ParticleData {
     }
   }
 
+  /// TODO: Document this item
   pub fn set_id(&mut self, id: u64) {
     self.id_low = (id & 0xFFFFFFFF) as u32;
     self.id_high = (id >> 32) as u32;
   }
 
+  /// TODO: Document this item
   pub fn get_id(&self) -> u64 {
     (self.id_low as u64) | ((self.id_high as u64) << 32)
   }
 
+  /// TODO: Document this item
   pub fn set_age(&mut self, age: timeus_t) {
     self.age_low = (age as u64 & 0xFFFFFFFF) as u32;
     self.age_high = ((age as u64) >> 32) as u32;
   }
 
+  /// TODO: Document this item
   pub fn get_age(&self) -> timeus_t {
     ((self.age_low as u64) | ((self.age_high as u64) << 32)) as timeus_t
   }
 }
 
+/// TODO: Document this item
 pub struct ParticleSystemComponent {
   pub config: ParticleEmitterConfig,
   pub particles: alloc::sync::Arc<spin::RwLock<alloc::vec::Vec<ParticleData>>>,
@@ -100,9 +112,12 @@ impl core::fmt::Debug for ParticleSystemComponent {
 impl Component for ParticleSystemComponent {}
 
 impl ParticleSystemComponent {
+  /// TODO: Document this item
   pub fn new(config: ParticleEmitterConfig) -> Self {
     Self {
-      particles: alloc::sync::Arc::new(spin::RwLock::new(alloc::vec::Vec::with_capacity(config.max_particles))),
+      particles: alloc::sync::Arc::new(spin::RwLock::new(alloc::vec::Vec::with_capacity(
+        config.max_particles,
+      ))),
       config,
       bvh: None,
       accumulator: 0,
@@ -110,6 +125,7 @@ impl ParticleSystemComponent {
     }
   }
 
+  /// TODO: Document this item
   pub fn emit_particles(
     &mut self,
     comet: &Comet,
@@ -203,6 +219,7 @@ impl ParticleSystemComponent {
     }
   }
 
+  /// TODO: Document this item
   pub fn update_bvh(&mut self) {
     use crate::math::collision::bvh_builder::BVHBuilderParams;
     use crate::math::collision::linear_bvh::LinearBVH;

@@ -1,3 +1,5 @@
+//! physics module.
+
 pub mod cpu;
 pub mod cpu_kernels;
 pub mod handoff;

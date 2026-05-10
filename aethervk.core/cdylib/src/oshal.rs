@@ -1,3 +1,5 @@
+//! oshal module.
+
 use aethervk_oshal_rlib as r#impl;
 pub use r#impl::AvkSystemInfo;
 

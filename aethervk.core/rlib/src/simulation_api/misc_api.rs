@@ -1,3 +1,5 @@
+//! misc_api module.
+
 use crate::{
   expect_scene,
   gpu::PresentationEngineHandle,
@@ -16,6 +18,7 @@ use aethervk_oshal_rlib::{self as oshal, math::matrix::mat4::Mat4x4f32};
 use core::ffi::c_char;
 
 impl SimulationContext {
+  /// TODO: Document this item
   pub fn set_logger_callback(cb: Option<extern "C" fn(*const c_char)>) {
     let ptr = match cb {
       Some(f) => f as *mut (),
@@ -24,6 +27,7 @@ impl SimulationContext {
     oshal::os::debug::LOGGER_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
   }
 
+  /// TODO: Document this item
   pub fn set_breadcrumb_callback(cb: Option<extern "C" fn(u32, *const c_char)>) {
     let ptr = match cb {
       Some(f) => f as *mut (),
@@ -32,6 +36,7 @@ impl SimulationContext {
     BREADCRUMB_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
   }
 
+  /// TODO: Document this item
   pub fn set_simulation_callback(cb: Option<extern "C" fn(u64, *mut core::ffi::c_void)>) {
     let ptr = match cb {
       Some(f) => f as *mut (),
@@ -40,6 +45,7 @@ impl SimulationContext {
     crate::simulation_api::SIMULATION_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
   }
 
+  /// TODO: Document this item
   pub fn set_render_callback(cb: Option<extern "C" fn(u64, u64, u64)>) {
     let ptr = match cb {
       Some(f) => f as *mut (),
@@ -48,12 +54,14 @@ impl SimulationContext {
     crate::simulation_api::RENDER_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
   }
 
+  /// TODO: Document this item
   pub fn get_task_status(&self, task_id: u64) -> TaskStatusCode {
     if (task_id == 0 || task_id == u64::MAX) {
       return TaskStatusCode::Invalid;
     }
 
-    if (task_id & (1u64 << 63)) != 0 { // TODO check correctness for task id construction in logic thread. If so, create RenderTaskId(u64) and LogicTaskId(u64) with new function with debug_assert!
+    if (task_id & (1u64 << 63)) != 0 {
+      // TODO check correctness for task id construction in logic thread. If so, create RenderTaskId(u64) and LogicTaskId(u64) with new function with debug_assert!
       // Logic task
       self.task_manager.read().get_status(task_id)
     } else {
@@ -76,6 +84,7 @@ impl SimulationContext {
     }
   }
 
+  /// TODO: Document this item
   pub fn get_task_result_u64(&self, task_id: u64) -> u64 {
     if let Some(SimulationTaskResult::U64(val)) = self.task_manager.write().take_result(task_id) {
       val
@@ -84,6 +93,7 @@ impl SimulationContext {
     }
   }
 
+  /// TODO: Document this item
   pub fn get_task_result_bool(&self, task_id: u64) -> bool {
     if let Some(SimulationTaskResult::Bool(val)) = self.task_manager.write().take_result(task_id) {
       val
@@ -131,6 +141,7 @@ impl SimulationContext {
     }
   }
 
+  /// TODO: Document this item
   pub fn resize(
     &mut self,
     scene_id: u64,
@@ -172,6 +183,7 @@ impl SimulationContext {
       })
   }
 
+  /// TODO: Document this item
   pub fn download_image(&self, task_id: u64, buffer_ptr: *mut u8, buffer_size: usize) -> bool {
     let result = self
       .render_proxy
@@ -197,6 +209,7 @@ impl SimulationContext {
     }
   }
 
+  /// TODO: Document this item
   pub fn set_asset_path(path: &str) {
     let mut guard = crate::gpu::ASSET_DIR.write();
     *guard = Some(alloc::string::String::from(path));

@@ -1,6 +1,9 @@
 #version 450 core
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "../debug_utils.glsl"
 
 // ============================================================================
 // Phase 3 & 4: Rigid Body Implicit Midpoint Rule (Lie Group Integration)
@@ -240,4 +243,10 @@ void main() {
     pc.rigid_bodies.bodies[idx].rotation = rb.rotation * expm_hat(w_mid * h);
     pc.rigid_bodies.bodies[idx].linear_velocity = v_mid * 2.0 - rb.linear_velocity;
     pc.rigid_bodies.bodies[idx].angular_velocity = w_mid * 2.0 - rb.angular_velocity;
+
+    if (SHOULD_DEBUG_PRINT) {
+        debugPrintfEXT("P3-4 RigidBody %d: pos=(%f, %f, %f), lin_vel=(%f, %f, %f)", 
+            idx, pc.rigid_bodies.bodies[idx].position.x, pc.rigid_bodies.bodies[idx].position.y, pc.rigid_bodies.bodies[idx].position.z,
+            pc.rigid_bodies.bodies[idx].linear_velocity.x, pc.rigid_bodies.bodies[idx].linear_velocity.y, pc.rigid_bodies.bodies[idx].linear_velocity.z);
+    }
 }

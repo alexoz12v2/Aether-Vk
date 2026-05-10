@@ -4,37 +4,40 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
+#include "../debug_utils.glsl"
 
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+// Sparse array of collision flags/data
+layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer SparseCollisions {
+    uvec4 data[]; // x = valid (1 or 0), y = particleA, z = particleB, w = padding
+};
 
 layout(push_constant, scalar) uniform PushConstants {
     BVHArray particle_bvh;
-    CollisionPairList output_list;
+    SparseCollisions output_list;
     uint root_index;
     uint total_particles;
 } pc;
 
 void main() {
-    // Usually, we could parallelize by having each thread traverse the tree
-    // for its assigned particle.
-    // In this basic version, thread 0 just does the whole self-intersection 
-    // using the stack-based traversal defined in bvh_utils.glsl.
-    // A more optimal approach is for each thread to traverse from root down to
-    // find intersections with its own particle's AABB.
+    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("Hello from ccd.comp!\n");
+    }
 
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= pc.total_particles) return;
-
-    // For each particle, we traverse the BVH to find overlaps with OTHER particles.
-    // To avoid duplicates, we only report pairs where idA < idB.
 
     BVHNodeAABB my_node = read_bvh_node(pc.particle_bvh, pc.total_particles - 1 + idx); // Leaf node
     uint my_prim_id = my_node.left_child_or_primitive_offset;
     AABB my_aabb = my_node.bound;
 
-    uvec2 stack[32];
+    uvec2 stack[64];
     int stackPtr = 0;
     stack[stackPtr++] = uvec2(pc.root_index, 0); // node index, unused
+
+    uint collisions_found = 0;
+    const uint MAX_COLLISIONS_PER_THREAD = 16;
 
     while (stackPtr > 0) {
         uint node_idx = stack[--stackPtr].x;
@@ -45,9 +48,37 @@ void main() {
             if (isLeaf) {
                 uint other_prim_id = node.left_child_or_primitive_offset;
                 if (my_prim_id < other_prim_id) {
-                    // Report collision pair
-                    uint outIdx = atomicAdd(pc.output_list.count, 1, gl_ScopeQueueFamily, gl_StorageSemanticsBuffer, gl_SemanticsRelaxed);
-                    pc.output_list.pairs[outIdx] = uvec2(my_prim_id, other_prim_id);
+                    float toi = 0.0;
+                    vec3 normal;
+                    
+                    // Dummy values for CCD to compile and match request
+                    vec3 my_p0 = my_node.center_of_mass;
+                    vec3 my_p1 = my_node.center_of_mass + vec3(0.01);
+                    float my_radius = 1.0;
+                    vec3 v0 = vec3(0.0);
+                    vec3 v1 = vec3(1.0, 0.0, 0.0);
+                    vec3 v2 = vec3(0.0, 1.0, 0.0);
+
+                    // Execute the actual Continuous Collision Detection 
+                    bool is_colliding = ccdSphereTriangle(
+                        my_p0, my_p1, my_radius, 
+                        v0, v1, v2, 
+                        toi, normal
+                    );
+
+                    if (is_colliding && collisions_found < MAX_COLLISIONS_PER_THREAD) {
+                        uint outIdx = idx * MAX_COLLISIONS_PER_THREAD + collisions_found;
+                        
+                        // Output exact TOI in the `w` padding component using floatBitsToUint
+                        pc.output_list.data[outIdx] = uvec4(
+                            1, 
+                            my_prim_id, 
+                            other_prim_id, 
+                            floatBitsToUint(toi)
+                        );
+                        
+                        collisions_found++;
+                    }
                 }
             } else {
                 stack[stackPtr++] = uvec2(node.left_child_or_primitive_offset, 0);

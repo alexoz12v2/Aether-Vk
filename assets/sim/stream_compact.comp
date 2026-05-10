@@ -3,12 +3,15 @@
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "../debug_utils.glsl"
 
 // ============================================================================
 // Stream Compaction: Subgroup-based Parallel Prefix Sum
 // ============================================================================
 
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
 layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
 
@@ -17,10 +20,19 @@ layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Spa
     uvec4 data[]; // x = valid (1 or 0), y = particleA, z = particleB, w = padding
 };
 
+struct PackedPair {
+    uint entity_a;
+    uint entity_b;
+    uint toi;
+};
+
 // Tightly packed output array
-layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer PackedCollisions {
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer PackedCollisions {
+    uint dispatch_x;
+    uint dispatch_y;
+    uint dispatch_z;
     uint count;
-    uvec2 pairs[];
+    PackedPair pairs[];
 };
 
 // Workgroup shared memory for prefix sum across subgroups
@@ -34,6 +46,9 @@ layout(push_constant, scalar) uniform PushConstants {
 } pc;
 
 void main() {
+    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("Hello from stream_compact.comp!\n");
+    }
     uint global_id = gl_GlobalInvocationID.x;
     uint local_id = gl_LocalInvocationID.x;
     uint subgroup_id = gl_SubgroupID;
@@ -41,11 +56,11 @@ void main() {
 
     // 1. Load element
     uint valid = 0;
-    uvec2 pair = uvec2(0);
+    uvec3 pair = uvec3(0);
     if (global_id < pc.total_elements) {
         uvec4 elem = pc.sparse_in.data[global_id];
         valid = elem.x;
-        pair = elem.yz;
+        pair = elem.yzw;
     }
 
     // 2. Subgroup-level exclusive scan
@@ -60,9 +75,13 @@ void main() {
     barrier();
 
     // 4. Workgroup-level scan of subgroup totals (done by first subgroup)
+    uint sg_tot = 0;
     if (subgroup_id == 0 && subgroup_local_id < gl_NumSubgroups) {
-        uint sg_tot = shared_sums[subgroup_local_id];
-        shared_sums[subgroup_local_id] = subgroupExclusiveAdd(sg_tot);
+        sg_tot = shared_sums[subgroup_local_id];
+    }
+    sg_tot = subgroupExclusiveAdd(sg_tot);
+    if (subgroup_id == 0 && subgroup_local_id < gl_NumSubgroups) {
+        shared_sums[subgroup_local_id] = sg_tot;
     }
 
     barrier();
@@ -73,6 +92,13 @@ void main() {
         uint total_wg_sum = shared_sums[subgroup_id] + subgroup_total;
         if (total_wg_sum > 0) {
             workgroup_offset = atomicAdd(pc.packed_out.count, total_wg_sum);
+            
+            // Set the indirect dispatch limits (atomic max to ensure highest block count is captured)
+            uint current_total = workgroup_offset + total_wg_sum;
+            uint blocks = (current_total + 127) / 128;
+            atomicMax(pc.packed_out.dispatch_x, blocks);
+            pc.packed_out.dispatch_y = 1;
+            pc.packed_out.dispatch_z = 1;
         } else {
             workgroup_offset = 0;
         }
@@ -83,6 +109,8 @@ void main() {
     // 6. Write valid elements to packed array
     if (valid == 1) {
         uint final_idx = workgroup_offset + shared_sums[subgroup_id] + subgroup_prefix;
-        pc.packed_out.pairs[final_idx] = pair;
+        pc.packed_out.pairs[final_idx].entity_a = pair.x;
+        pc.packed_out.pairs[final_idx].entity_b = pair.y;
+        pc.packed_out.pairs[final_idx].toi = pair.z;
     }
 }

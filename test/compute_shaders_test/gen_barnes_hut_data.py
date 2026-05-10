@@ -77,7 +77,7 @@ def generate_test_data(out_path):
         while len(stack) > 0:
             node_idx = stack.pop()
             node = nodes[node_idx]
-            is_leaf = struct.unpack('<I', struct.pack('<f', node[7]))[0] > 0
+            is_leaf = struct.unpack('<I', struct.pack('<f', node[8]))[0] > 0
             
             if is_leaf:
                 other_p_id = struct.unpack('<I', struct.pack('<f', node[6]))[0]

@@ -1,3 +1,5 @@
+//! memory module.
+
 use alloc::boxed::Box;
 use ash::vk;
 use core::{mem, ptr};
@@ -5,12 +7,13 @@ use core::{mem, ptr};
 use crate::{gpu_backends::vulkan::device::DeviceResource, types::GpuResult};
 use aethervk_oshal_rlib as oshal;
 
+/// TODO: Document this item
 pub struct GlobalDeviceAllocator {
   pub allocator: mem::ManuallyDrop<vk_mem::Allocator>,
   pub memory_budgets: Box<[vk_mem::ffi::VmaBudget]>,
 }
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "debug_gpu"))]
 #[allow(unused)]
 unsafe extern "C" fn on_device_alloc(
   allocator: vk_mem::ffi::VmaAllocator,
@@ -21,6 +24,7 @@ unsafe extern "C" fn on_device_alloc(
 ) {
   use ash::vk::Handle;
 
+  oshal::track_gpu_alloc!(size);
   oshal::log!(
     "[VMA] Alloc: size: {} bytes, type: {}, mem: {:#X}",
     size,
@@ -28,7 +32,7 @@ unsafe extern "C" fn on_device_alloc(
     memory.as_raw()
   );
 }
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "debug_gpu"))]
 #[allow(unused)]
 unsafe extern "C" fn on_device_free(
   allocator: vk_mem::ffi::VmaAllocator,
@@ -49,6 +53,7 @@ unsafe extern "C" fn on_device_free(
 
 impl GlobalDeviceAllocator {
   // safety: expects instance and device to have their function pointers already loaded
+  /// TODO: Document this item
   pub unsafe fn new(
     instance: &ash::Instance,
     device: &ash::Device,
@@ -61,13 +66,13 @@ impl GlobalDeviceAllocator {
     allocator_create_info.flags = vk_mem::AllocatorCreateFlags::EXT_MEMORY_BUDGET
       | vk_mem::AllocatorCreateFlags::KHR_DEDICATED_ALLOCATION
       | vk_mem::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, feature = "debug_gpu"))]
     let callbacks = vk_mem::ffi::VmaDeviceMemoryCallbacks {
       pfnAllocate: Some(on_device_alloc),
       pfnFree: Some(on_device_free),
       pUserData: ptr::null_mut(),
     };
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, feature = "debug_gpu"))]
     {
       allocator_create_info.device_memory_callbacks = Some(&callbacks);
     }
@@ -86,10 +91,12 @@ impl GlobalDeviceAllocator {
     })
   }
 
+  /// TODO: Document this item
   pub fn refresh_vma_budgets(&mut self) {
     unsafe { self.allocator.get_heap_budgets_cached(&mut self.memory_budgets) };
   }
 
+  /// TODO: Document this item
   pub fn set_current_frame_index(&self, frame_index: u32) {
     unsafe {
       self.allocator.set_current_frame_index(frame_index);
@@ -102,6 +109,7 @@ impl GlobalDeviceAllocator {
 use core::sync::atomic::{AtomicUsize, Ordering};
 use vk_mem::Alloc;
 
+/// TODO: Document this item
 pub struct FrameStagingArena {
   pub buffer: vk::Buffer,
   pub mapped_ptr: *mut u8,
@@ -114,6 +122,7 @@ unsafe impl Send for FrameStagingArena {}
 unsafe impl Sync for FrameStagingArena {}
 
 impl FrameStagingArena {
+  /// TODO: Document this item
   pub fn new(allocator: &vk_mem::Allocator, capacity: usize) -> GpuResult<Self> {
     let buffer_info = vk::BufferCreateInfo::default()
       .size(capacity as u64)
@@ -140,10 +149,12 @@ impl FrameStagingArena {
     })
   }
 
+  /// TODO: Document this item
   pub fn reset(&self) {
     self.offset.store(0, Ordering::Relaxed);
   }
 
+  /// TODO: Document this item
   pub fn allocate(&self, size: usize, alignment: usize) -> Option<(usize, *mut u8)> {
     let mut current = self.offset.load(Ordering::Relaxed);
     loop {
@@ -162,6 +173,7 @@ impl FrameStagingArena {
     }
   }
 
+  /// TODO: Document this item
   pub fn destroy(&mut self, allocator: &vk_mem::Allocator) {
     unsafe {
       allocator.destroy_buffer(self.buffer, &mut self.allocation);

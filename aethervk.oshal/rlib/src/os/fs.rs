@@ -1,3 +1,5 @@
+//! fs module.
+
 use alloc::borrow::Cow;
 use core::borrow::Borrow;
 
@@ -8,11 +10,14 @@ use core::fmt::Formatter;
 
 #[cfg(windows)]
 #[allow(non_camel_case_types)]
+/// TODO: Document this item
 pub type os_char = u16;
 #[cfg(not(windows))]
 #[allow(non_camel_case_types)]
+/// TODO: Document this item
 pub type os_char = core::ffi::c_char;
 
+/// TODO: Document this item
 pub const SEP: os_char = if cfg!(windows) {
   b'\\' as os_char
 } else {
@@ -29,12 +34,14 @@ pub(crate) fn strip_nul(slice: &[os_char]) -> &[os_char] {
   slice
 }
 
+/// TODO: Document this item
 pub trait FileSystemObject {
   fn is_valid(&self) -> bool;
   fn is_dir(&self) -> bool;
   fn is_file(&self) -> bool;
 }
 
+/// TODO: Document this item
 pub struct Path {
   inner: [os_char],
 }
@@ -101,11 +108,13 @@ impl Path {
     }
   }
 
+  /// TODO: Document this item
   pub fn from_slice(slice: &[os_char]) -> &Self {
     let ptr: *const Self = (slice as *const [os_char]) as *const Path;
     unsafe { &*ptr }
   }
 
+  /// TODO: Document this item
   pub fn to_pathbuf(&self) -> PathBuf {
     let mut the_pathbuf = PathBuf::new();
     the_pathbuf.push_slice(&self.inner);
@@ -204,6 +213,7 @@ fn utf8_to_utf16(s: &str, out: &mut Vec<u16>) {
 }
 
 #[derive(Clone, Debug)]
+/// TODO: Document this item
 pub struct PathBuf {
   storage: PathStorage,
 }
@@ -247,18 +257,21 @@ impl fmt::Debug for PathStorage {
 }
 
 impl PathBuf {
+  /// TODO: Document this item
   pub fn new() -> Self {
     Self {
       storage: PathStorage::Inline(heapless::Vec::new()),
     }
   }
 
+  /// TODO: Document this item
   pub fn clone(&self) -> Self {
     Self {
       storage: self.storage.clone(),
     }
   }
 
+  /// TODO: Document this item
   pub fn parent(&self) -> Option<PathBuf> {
     let slice = self.as_slice();
     if let Some(pos) = slice.iter().rposition(|&c| c == SEP) {
@@ -270,6 +283,7 @@ impl PathBuf {
     }
   }
 
+  /// TODO: Document this item
   pub fn join(&self, path: &str) -> PathBuf {
     let mut p = self.clone();
     p.pop_nul_if_present();
@@ -280,6 +294,7 @@ impl PathBuf {
     p
   }
 
+  /// TODO: Document this item
   pub fn push_slice(&mut self, s: &[os_char]) {
     self.pop_nul_if_present();
     for &unit in s {
@@ -293,6 +308,7 @@ impl PathBuf {
     }
   }
 
+  /// TODO: Document this item
   pub fn push(&mut self, s: &str) {
     self.pop_nul_if_present();
     #[cfg(windows)]
@@ -311,11 +327,13 @@ impl PathBuf {
   }
 
   // nul terminated for ffi/os api compatibility
+  /// TODO: Document this item
   pub(crate) fn as_ptr_mut(&mut self) -> *const os_char {
     self.ensure_nul_terminated();
     self.as_slice().as_ptr()
   }
 
+  /// TODO: Document this item
   pub fn as_slice(&self) -> &[os_char] {
     match &self.storage {
       PathStorage::Inline(vec_inner) => &vec_inner,
@@ -323,6 +341,7 @@ impl PathBuf {
     }
   }
 
+  /// TODO: Document this item
   pub fn pop(&mut self) {
     while let Some(c) = self.pop_unit() {
       if c == SEP {
@@ -331,6 +350,7 @@ impl PathBuf {
     }
   }
 
+  /// TODO: Document this item
   pub fn extension(&self) -> Option<&str> {
     let slice = self.as_slice();
     if let Some(pos) = slice.iter().rposition(|&c| c == b'.' as os_char) {
@@ -455,6 +475,7 @@ impl AsRef<Path> for PathBuf {
   }
 }
 
+/// TODO: Document this item
 pub fn current_exe() -> Result<PathBuf, FsError> {
   #[cfg(windows)]
   {
@@ -547,6 +568,7 @@ pub fn current_exe() -> Result<PathBuf, FsError> {
   }
 }
 
+/// TODO: Document this item
 pub fn read<T: AsRef<Path>>(path: T) -> Result<Vec<u8>, FsError> {
   #[cfg(windows)]
   {
@@ -639,6 +661,7 @@ pub fn read<T: AsRef<Path>>(path: T) -> Result<Vec<u8>, FsError> {
   }
 }
 
+/// TODO: Document this item
 pub fn write(path: &Path, content: &[u8]) -> Result<(), FsError> {
   #[cfg(windows)]
   {
@@ -724,16 +747,19 @@ impl core::ops::Deref for PathBuf {
 
 // --- Directory Iteration Types ---
 
+/// TODO: Document this item
 pub struct DirEntry {
   path: PathBuf,
 }
 
 impl DirEntry {
+  /// TODO: Document this item
   pub fn path(&self) -> PathBuf {
     self.path.clone()
   }
 }
 
+/// TODO: Document this item
 pub struct ReadDir {
   #[cfg(windows)]
   handle: windows::Win32::Foundation::HANDLE,
@@ -848,6 +874,7 @@ impl Drop for ReadDir {
 
 // --- Implement read_dir ---
 
+/// TODO: Document this item
 pub fn read_dir(path: &Path) -> Result<ReadDir, FsError> {
   #[cfg(windows)]
   {

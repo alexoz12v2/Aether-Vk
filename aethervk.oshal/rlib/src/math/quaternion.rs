@@ -1,3 +1,5 @@
+//! quaternion module.
+
 use core::ops;
 
 use crate::math::{
@@ -6,6 +8,7 @@ use crate::math::{
   vector::{Vector, Vector3},
 };
 
+/// TODO: Document this item
 pub trait Quaternion:
   Copy
   + Sized

@@ -1,3 +1,5 @@
+//! gpu module.
+
 pub use super::gpu_backends::*;
 use crate::physics::physics_scene::PhysicsScene;
 use crate::scene::Scene;
@@ -27,37 +29,48 @@ pub mod scene_conversion;
 
 pub use self::frame::RenderScene;
 
+/// TODO: Document this item
 pub type RwLock<T> = spin::rwlock::RwLock<T>;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+/// TODO: Document this item
 pub struct RenderBackendId(pub u64);
+/// TODO: Document this item
 pub const NULL_RENDER_BACKEND: RenderBackendId = RenderBackendId(0);
+/// TODO: Document this item
 pub const VULKAN_RENDER_BACKEND: RenderBackendId = RenderBackendId(1);
+/// TODO: Document this item
 pub const METAL_RENDER_BACKEND: RenderBackendId = RenderBackendId(2);
+/// TODO: Document this item
 pub const D3D12_RENDER_BACKEND: RenderBackendId = RenderBackendId(3);
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
+/// TODO: Document this item
 pub struct GpuResourceHandle(pub u64);
+/// TODO: Document this item
 pub const NULL_GPU_RESOURCE: GpuResourceHandle = GpuResourceHandle(0);
 
 impl GpuResourceHandle {
+  /// TODO: Document this item
   pub fn from_raw(raw: u64) -> Self {
     Self(raw)
   }
 }
 
+/// TODO: Document this item
 #[derive(Clone, Copy)]
 pub struct KinematicBody {
   pub entity_id: EntityId,
   pub transform: TransformComponent,
+  pub velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
   pub parent_frame_id: u32,
   pub mu: f32,
   pub own_frame_id: u32,
   pub frame_type: u32,
   pub scale: f32,
 }
-
 #[derive(Clone, Copy)]
+/// TODO: Document this item
 pub struct DynamicBody {
   pub entity_id: EntityId,
   pub transform: TransformComponent,
@@ -69,17 +82,21 @@ pub struct DynamicBody {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
+/// TODO: Document this item
 pub struct ForceEmitter {
   pub position: [f32; 3],
   pub mu: f32,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
+/// TODO: Document this item
 pub struct CommandBufferHandle(pub u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// TODO: Document this item
 pub struct RenderableInstanceId(pub u64);
 
+/// TODO: Document this item
 pub trait GpuCometExt {
   fn texture_flags(&self) -> TextureFlags;
 }
@@ -106,6 +123,7 @@ impl GpuCometExt for crate::simulation::comet::Comet {
 bitflags! {
   #[repr(C)]
   #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+  /// TODO: Document this item
   pub struct TextureFlags: u32 {
     const ALBEDO    = 1 << 0;
     const NORMAL    = 1 << 1;
@@ -116,6 +134,7 @@ bitflags! {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct TrajectoryPushConstants {
   pub map_ptr: u64,
   pub traj_ptr: u64,
@@ -126,6 +145,7 @@ pub struct TrajectoryPushConstants {
 
 #[repr(C, align(16))]
 #[derive(Copy, Clone)]
+/// TODO: Document this item
 pub struct RationalBezierGpu {
   pub cp0: [f32; 4],
   pub cp1: [f32; 4],
@@ -135,6 +155,7 @@ pub struct RationalBezierGpu {
 
 #[repr(C, align(8))]
 #[derive(Copy, Clone)]
+/// TODO: Document this item
 pub struct TrajectoryGpu {
   pub segments_ptr: u64,
   pub color: [f32; 4],
@@ -144,6 +165,7 @@ pub struct TrajectoryGpu {
 
 #[repr(C, align(4))]
 #[derive(Copy, Clone)]
+/// TODO: Document this item
 pub struct SegmentMapGpu {
   pub trajectory_id: u32,
   pub local_segment_id: u32,
@@ -152,6 +174,7 @@ pub struct SegmentMapGpu {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct PushConstants {
   pub model_view_proj: [[f32; 4]; 4],
   pub model: [[f32; 4]; 4],
@@ -166,6 +189,7 @@ pub struct PushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct SceneData {
   pub view_proj: [f32; 16],
   pub camera_pos: [f32; 4], // w is padding
@@ -177,6 +201,7 @@ pub struct SceneData {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct MaterialData {
   pub base_albedo: [f32; 4],    // w is base_roughness
   pub emissive_color: [f32; 4], // w is emissive_intensity
@@ -188,12 +213,14 @@ pub struct MaterialData {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct ObjectData {
   pub model: [f32; 16],
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct PhysicalMesh2PushConstants {
   pub scene_addr: u64,
   pub material_addr: u64,
@@ -202,6 +229,7 @@ pub struct PhysicalMesh2PushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct CometSpecializationConstants {
   pub base_albedo_r: f32,
   pub base_albedo_g: f32,
@@ -224,6 +252,7 @@ impl Default for CometSpecializationConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct SunPushConstants {
   pub model_view_proj: [f32; 16],
   pub local_camera_pos: [f32; 3],
@@ -232,6 +261,7 @@ pub struct SunPushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct CursorPushConstants {
   pub view: [f32; 16],
   pub view_proj: [f32; 16],
@@ -243,12 +273,14 @@ pub struct CursorPushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct SkyPushConstants {
   pub inv_view_proj: [f32; 16],
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct MeasurementPushConstants {
   pub view_proj: [f32; 16],
   pub p1: [f32; 3],
@@ -265,6 +297,7 @@ pub struct MeasurementPushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct BillboardPushConstants {
   pub view_proj: [f32; 16],
   pub center_pos: [f32; 3],
@@ -280,6 +313,7 @@ pub struct BillboardPushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct MarkerPushConstants {
   pub view_proj: [f32; 16],
   pub center_pos: [f32; 3],
@@ -294,6 +328,7 @@ pub struct MarkerPushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct GridPushConstants {
   pub view_proj: [f32; 16],
   pub camera_pos: [f32; 3],
@@ -307,6 +342,7 @@ pub struct GridPushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct BvhPushConstants {
   pub mvp_arr: [f32; 16],
   pub center_type: [f32; 4],
@@ -318,6 +354,7 @@ pub struct BvhPushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct ParticlePushConstants {
   pub view_proj: [f32; 16],
   pub camera_up: [f32; 3],
@@ -330,10 +367,11 @@ pub struct ParticlePushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct Particle2PushConstants {
   pub view_proj: [f32; 16],
   pub camera_up: [f32; 3],
-  pub time:  f32,
+  pub time: f32,
   pub camera_right: [f32; 3],
   pub seed: f32,
   pub color: [f32; 4],
@@ -342,6 +380,7 @@ pub struct Particle2PushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct GizmoPushConstants {
   pub view_proj: [f32; 16],
   pub scale: f32,
@@ -351,6 +390,7 @@ pub struct GizmoPushConstants {
 // TODO remove on text rendering v2
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct TextPushConstants {
   pub pos: [f32; 2],
   pub scale: [f32; 2],
@@ -360,6 +400,7 @@ pub struct TextPushConstants {
 }
 
 impl TextPushConstants {
+  /// TODO: Document this item
   pub(crate) fn from_glyph(
     glyph: &GlyphInfo,
     cursor_position: [f32; 2],
@@ -380,8 +421,9 @@ impl TextPushConstants {
 }
 
 impl RenderableInstanceId {
-  pub fn from_physical_mesh(entity_id: EntityId) -> Self {
-    Self(slotmap::Key::data(&entity_id).as_ffi())
+  /// TODO: Document this item
+  pub fn from_physical_mesh(asset_hash: u64) -> Self {
+    Self(asset_hash)
   }
 }
 
@@ -392,22 +434,27 @@ impl From<RenderableInstanceId> for GpuResourceHandle {
 }
 
 // Allow the host application to configure the core assets path uniformly
+/// TODO: Document this item
 pub static ASSET_DIR: spin::RwLock<Option<alloc::string::String>> = spin::RwLock::new(None);
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct PipelineKey(pub u64);
 
+/// TODO: Document this item
 pub trait PipelineKeyable {
   fn pipeline_key(&self) -> PipelineKey;
 }
 
 #[derive(Default, Clone, Copy)]
+/// TODO: Document this item
 pub struct Rect2D {
   pub offset: [i32; 2],
   pub extent: [u32; 2],
 }
 
 impl Rect2D {
+  /// TODO: Document this item
   pub fn from_extent(extent: [u32; 2]) -> Self {
     Self {
       offset: [0, 0],
@@ -417,6 +464,7 @@ impl Rect2D {
 }
 
 #[derive(Clone, Copy)]
+/// TODO: Document this item
 pub struct Viewport {
   pub x: f32,
   pub y: f32,
@@ -427,6 +475,7 @@ pub struct Viewport {
 }
 
 impl Viewport {
+  /// TODO: Document this item
   pub fn from_extent(extent: [u32; 2]) -> Self {
     Self {
       x: 0.0,
@@ -441,11 +490,13 @@ impl Viewport {
 
 #[repr(u32)]
 #[derive(Copy, Clone, Eq, PartialEq)]
+/// TODO: Document this item
 pub enum NativeGpuProperty {
   VulkanMetalDeviceId = 0,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+/// TODO: Document this item
 pub enum ArchetypeId {
   Sun,
   PhysicalMesh,
@@ -503,12 +554,15 @@ pub trait RenderCompute: Send + Sync {
   // Future visual compute passes can be added here (e.g. post-processing, light culling)
 }
 
+/// TODO: Document this item
 pub trait RenderDevice: Send + Sync + core::any::Any {
   fn as_any(&self) -> &dyn core::any::Any;
 
   fn get_native_prop(&self, prop: NativeGpuProperty) -> Option<*mut core::ffi::c_void>;
 
   fn print_info(&self) -> alloc::string::String;
+
+  fn dump_memory_stats(&self);
 
   fn context_id(&self) -> u64;
 
@@ -564,13 +618,13 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   /// Returns (pipeline, vertex_buffer, index_buffer)
   fn get_physical_mesh_resources(
     &self,
-    entity_id: EntityId,
+    asset_hash: u64,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult>;
   fn create_physical_mesh_resources(
     &self,
     cmd_buffer: CommandBufferHandle,
-    entity_id: EntityId,
+    asset_hash: u64,
     component: &PhysicalMeshComponent,
     handle: PresentationEngineHandle,
     debug_name: &str,
@@ -578,13 +632,13 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
 
   fn get_physical_mesh2_resources(
     &self,
-    entity_id: EntityId,
+    asset_hash: u64,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult>;
   fn create_physical_mesh2_resources(
     &self,
     cmd_buffer: CommandBufferHandle,
-    entity_id: EntityId,
+    asset_hash: u64,
     component: &PhysicalMeshComponent,
     handle: PresentationEngineHandle,
     debug_name: &str,
@@ -687,7 +741,11 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     &self,
     cmd_buffer: CommandBufferHandle,
     handle: PresentationEngineHandle,
-    trajectories: &[(crate::scene::EntityId, crate::scene::trajectory::TrajectoryComponent, aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32)],
+    trajectories: &[(
+      crate::scene::EntityId,
+      crate::scene::trajectory::TrajectoryComponent,
+      aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+    )],
   ) -> GpuResult<Option<crate::gpu::frame::TrajectoryBatchCall>>;
 
   /// Draws a particle system using the mega-buffer
@@ -705,7 +763,8 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
 
   fn get_particle_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
   fn get_particle2_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
-  fn get_trajectory_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
+  fn get_trajectory_pipeline_key(&self, handle: PresentationEngineHandle)
+  -> GpuResult<PipelineKey>;
   fn get_sun_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
   fn get_sky_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
   fn get_grid_pipeline_kay(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
@@ -786,7 +845,12 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
 
   fn draw(&self, cmd_buffer: CommandBufferHandle, vertex_count: u32) -> GpuResult<()>;
 
-  fn draw_instanced(&self, cmd_buffer: CommandBufferHandle, vertex_count: u32, instance_count: u32) -> GpuResult<()>;
+  fn draw_instanced(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    vertex_count: u32,
+    instance_count: u32,
+  ) -> GpuResult<()>;
 
   fn draw_indirect(
     &self,
@@ -1028,6 +1092,7 @@ pub struct ScopedCommandBuffer<'a> {
 }
 
 impl<'a> ScopedCommandBuffer<'a> {
+  /// TODO: Document this item
   pub fn new(
     device: &'a dyn RenderDevice,
     cmd_buffer: CommandBufferHandle,
@@ -1042,6 +1107,7 @@ impl<'a> ScopedCommandBuffer<'a> {
     })
   }
 
+  /// TODO: Document this item
   pub fn cmd(&self) -> CommandBufferHandle {
     self.cmd_buffer
   }
@@ -1081,6 +1147,7 @@ pub struct ScopedRenderPass<'a> {
 }
 
 impl<'a> ScopedRenderPass<'a> {
+  /// TODO: Document this item
   pub fn new(device: &'a dyn RenderDevice, cmd_buffer: CommandBufferHandle) -> Self {
     Self {
       device,
@@ -1105,6 +1172,7 @@ impl<'a> Drop for ScopedRenderPass<'a> {
   }
 }
 
+/// TODO: Document this item
 pub struct FrameCancelGuard<'a> {
   device: &'a dyn RenderDevice,
   engine: PresentationEngineHandle,
@@ -1112,6 +1180,7 @@ pub struct FrameCancelGuard<'a> {
 }
 
 impl<'a> FrameCancelGuard<'a> {
+  /// TODO: Document this item
   pub fn new(
     device: &'a dyn RenderDevice,
     engine: PresentationEngineHandle,
@@ -1124,6 +1193,7 @@ impl<'a> FrameCancelGuard<'a> {
     }
   }
 
+  /// TODO: Document this item
   pub fn defuse(mut self) {
     self.acquire_result = None;
   }
@@ -1140,11 +1210,13 @@ impl<'a> Drop for FrameCancelGuard<'a> {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+/// TODO: Document this item
 pub struct RenderDeviceHandle(pub u64);
 
 /// backend specific additional device init parameters
 pub type DeviceAdditionalParams = FnvIndexMap<u64, usize, 8>;
 
+/// TODO: Document this item
 pub trait RenderContext: Send + Sync {
   fn backend_id(&self) -> RenderBackendId;
 
@@ -1165,11 +1237,14 @@ pub trait RenderContext: Send + Sync {
 // NOTE: This is a box like type, so we don't need to box it when returning it to cdylib,
 // we can instead use the ManualDrop mechanism
 #[derive(Clone)]
+/// TODO: Document this item
 pub struct RenderFrontend {
   backend: Arc<spin::RwLock<dyn RenderContext + 'static>>,
 }
 
+/// TODO: Document this item
 pub type WeakRenderFrontend = Weak<spin::RwLock<dyn RenderContext + 'static>>;
+/// TODO: Document this item
 pub trait WeakRenderFrontendExt {
   fn as_frontend(&self) -> Option<RenderFrontend>;
 }
@@ -1192,6 +1267,7 @@ unsafe impl Sync for RenderFrontend {}
 unsafe impl Send for RenderFrontend {}
 
 impl RenderFrontend {
+  /// TODO: Document this item
   pub fn weak_self(&self) -> WeakRenderFrontend {
     Arc::downgrade(&self.backend)
   }
@@ -1248,6 +1324,7 @@ impl RenderFrontend {
       None => Err(GpuError::DeviceLost),
     }
   }
+  /// TODO: Document this item
   pub fn take_and<T>(
     &self,
     f: impl FnOnce(&dyn RenderContext) -> EngineResult<T>,
@@ -1258,6 +1335,7 @@ impl RenderFrontend {
     }
   }
 
+  /// TODO: Document this item
   pub fn take_mut_and<T>(
     &self,
     f: impl FnOnce(&mut dyn RenderContext) -> EngineResult<T>,
@@ -1282,9 +1360,11 @@ where
 }
 
 #[derive(Default, Debug, Copy, Clone, Eq, Ord, PartialOrd, PartialEq, Hash)]
+/// TODO: Document this item
 pub struct PresentationEngineHandle(pub u64);
 
 impl PresentationEngineHandle {
+  /// TODO: Document this item
   pub fn is_valid(self) -> bool {
     self.0 != 0
   }
@@ -1302,6 +1382,7 @@ pub enum SwapchainStatus {
 }
 
 impl SwapchainStatus {
+  /// TODO: Document this item
   pub fn needs_resize(self) -> bool {
     self != Self::Optimal
   }
@@ -1309,6 +1390,7 @@ impl SwapchainStatus {
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
+/// TODO: Document this item
 pub struct AcquireResult {
   pub image_index: u32,
   pub status: SwapchainStatus,
@@ -1319,6 +1401,7 @@ pub struct AcquireResult {
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
+/// TODO: Document this item
 pub struct OpaqueNativeHandleInfo {
   pub ptr0: *mut ffi::c_void,
   pub ptr1: *mut ffi::c_void,
@@ -1332,6 +1415,7 @@ pub enum PresentationEngineType {
   WindowLess,
 }
 
+/// TODO: Document this item
 pub struct PresentationEngineParams {
   pub width: u32,
   pub height: u32,
@@ -1341,6 +1425,7 @@ pub struct PresentationEngineParams {
 }
 
 impl PresentationEngineParams {
+  /// TODO: Document this item
   pub fn windowless(width: u32, height: u32) -> Self {
     Self {
       width,
@@ -1402,6 +1487,7 @@ pub trait DeviceBvh: Send + Sync {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+/// TODO: Document this item
 pub struct ColliderId {
   pub entity_id: u32,
   /// Set to `u32::MAX` if it's a monolithic body. Otherwise, it is the particle instance index.
@@ -1410,6 +1496,7 @@ pub struct ColliderId {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+/// TODO: Document this item
 pub struct CollisionPair {
   pub a: ColliderId,
   pub b: ColliderId,
@@ -1441,19 +1528,30 @@ pub trait Kernels: Send + Sync {
     scene0: &Scene,
   ) -> EngineResult<Self::Buffer<DynamicBody>>;
 
-  // 3. Apply gravitational / position-dependent forces
-  fn compute_forces(
+  // 3. IMEX Phase 1 & 2
+  fn step_ode_p1_p2(
+    &self,
+    cmd: &mut Self::Cmd,
+    dynamics: &mut Self::Buffer<DynamicBody>,
+    dt: timeus_t,
+  ) -> EngineResult<()>;
+
+  // 4. IMEX Phase 3 & 4
+  fn step_ode_p3_p4(
+    &self,
+    cmd: &mut Self::Cmd,
+    kinematics: &mut Self::Buffer<KinematicBody>,
+    dynamics: &mut Self::Buffer<DynamicBody>,
+    dt: timeus_t,
+  ) -> EngineResult<()>;
+
+  // 5. IMEX Phase 5
+  fn step_ode_p5(
     &self,
     cmd: &mut Self::Cmd,
     kinematics: &Self::Buffer<KinematicBody>,
     dynamics: &mut Self::Buffer<DynamicBody>,
-  ) -> EngineResult<()>;
-
-  // 4. ODE Solver Substep
-  fn step_ode(
-    &self,
-    cmd: &mut Self::Cmd,
-    dynamics: &mut Self::Buffer<DynamicBody>,
+    bvh: &Self::MotionBvh,
     dt: timeus_t,
   ) -> EngineResult<()>;
 

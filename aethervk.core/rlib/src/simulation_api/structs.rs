@@ -1,3 +1,5 @@
+//! structs module.
+
 use crate::simulation::almanac::KinematicState;
 use crate::simulation_api::logic_thread::start_logic_thread;
 use crate::simulation_api::render_thread::start_render_thread;
@@ -63,10 +65,12 @@ impl<T> ThreadTxContainer<T> {
     }
   }
 
+  /// TODO: Document this item
   pub fn tx(&self) -> &mpsc::Sender<T> {
     self.tx.as_ref().unwrap()
   }
 
+  /// TODO: Document this item
   pub fn tx_opt(&self) -> Option<&mpsc::Sender<T>> {
     self.tx.as_ref()
   }
@@ -93,6 +97,7 @@ impl<T> Drop for ThreadTxContainer<T> {
 
 // --------------------- Members of SimulationContext ---------------------------
 
+/// TODO: Document this item
 pub struct SimulationSceneData {
   /// Scene state: Scene map
   pub scenes: BTreeMap<u64, Arc<RwLock<SceneContext>>>,
@@ -108,10 +113,12 @@ pub struct SimulationSceneData {
 }
 
 impl SimulationSceneData {
+  /// TODO: Document this item
   pub fn new_inplace(ptr: *mut Self) {
     unsafe { ptr.write(Self::new()) }
   }
 
+  /// TODO: Document this item
   pub fn new() -> Self {
     Self {
       scenes: BTreeMap::new(),
@@ -122,6 +129,7 @@ impl SimulationSceneData {
     }
   }
 
+  /// TODO: Document this item
   pub fn get_scene(&self, scene_id: u64) -> Option<Arc<RwLock<SceneContext>>> {
     self.scenes.get(&scene_id).cloned()
   }
@@ -192,12 +200,14 @@ impl Drop for SimulationThreads {
   }
 }
 
+/// TODO: Document this item
 pub struct LogicWorkload {
   pub cmd: LogicCommand,
   pub ctx: alloc::sync::Arc<LogicThreadContext>,
 }
 
 impl LogicThreadContext {
+  /// TODO: Document this item
   pub fn load_almanac_file_internal(&self, path: &str) -> EngineResult<()> {
     let mut logic = self.logic_state.write();
     if logic.almanac_data.file_names.iter().any(|f| f == path) {
@@ -208,6 +218,7 @@ impl LogicThreadContext {
     logic.almanac_data.load_almanac(&path_buf)
   }
 
+  /// TODO: Document this item
   pub fn raycast_ndc_internal(
     &self,
     scene_id: u64,
@@ -264,6 +275,7 @@ impl LogicThreadContext {
     self.raycast_internal(scene_id, ro, rd)
   }
 
+  /// TODO: Document this item
   pub fn raycast_internal(
     &self,
     scene_id: u64,
@@ -319,6 +331,7 @@ impl LogicThreadContext {
 }
 
 impl SimulationSceneData {
+  /// TODO: Document this item
   pub fn import_model_from_mesh(
     &mut self,
     path: String,
@@ -331,6 +344,7 @@ impl SimulationSceneData {
     model_id
   }
 
+  /// TODO: Document this item
   pub fn spawn_model_instance_internal(
     &mut self,
     scene_id: u64,
@@ -366,7 +380,9 @@ impl SimulationSceneData {
         asset_path: path_str,
         mesh: mesh_arc,
         emissive_intensity: 0.0,
-        emissive_color: [0.0, 0.0, 0.0], use_new_path: false, paint_display_mode: 0,
+        emissive_color: [0.0, 0.0, 0.0],
+        use_new_path: false,
+        paint_display_mode: 0,
       },
     )?;
     let root = scene_ctx.root_entity;
@@ -376,6 +392,7 @@ impl SimulationSceneData {
 }
 
 impl SimulationThreads {
+  /// TODO: Document this item
   pub fn render_thread_running(&self) -> bool {
     let result = self.render_thread.handle.is_some();
     debug_assert!(
@@ -384,12 +401,14 @@ impl SimulationThreads {
     result
   }
 
+  /// TODO: Document this item
   pub fn logic_thread_running(&self) -> bool {
     let result = self.logic_thread.handle.is_some();
     debug_assert!(!result || (self.logic_thread.tx.is_some() && self.logic_feedback_rx.is_some()));
     result
   }
 
+  /// TODO: Document this item
   pub fn new_running(
     render_thread_params: RenderThreadParams,
     logic_thread_params: LogicThreadParams,
@@ -416,6 +435,7 @@ impl SimulationThreads {
     })
   }
 
+  /// TODO: Document this item
   pub fn start_render_thread(&mut self, params: RenderThreadParams) -> EngineResult<()> {
     if self.render_thread_running() {
       return Err(EngineError::InvalidOperation(
@@ -432,6 +452,7 @@ impl SimulationThreads {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn start_logic_thread(&mut self, params: LogicThreadParams) -> EngineResult<()> {
     if self.logic_thread_running() || !self.render_thread_running() {
       return Err(EngineError::InvalidOperation(
@@ -454,6 +475,7 @@ impl SimulationThreads {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn stop_render_thread(&mut self) -> EngineResult<()> {
     if !self.render_thread_running() {
       return Err(EngineError::InvalidOperation(
@@ -472,6 +494,7 @@ impl SimulationThreads {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn stop_logic_thread(&mut self) -> EngineResult<()> {
     if !self.logic_thread_running() {
       return Err(EngineError::InvalidOperation(
@@ -495,6 +518,7 @@ impl SimulationThreads {
 
 // --------------------- Internal Types: Logic Thread ---------------------------
 #[derive(Clone, Default)]
+/// TODO: Document this item
 pub enum LogicFeedback {
   #[default]
   Empty,
@@ -571,12 +595,14 @@ pub struct UnfollowEntity {
 }
 
 #[derive(Clone, Debug)]
+/// TODO: Document this item
 pub struct TogglePaintMode {
   pub scene_id: u64,
   pub entity_id: EntityId,
 }
 
 #[derive(Clone, Debug)]
+/// TODO: Document this item
 pub enum LogicCommand {
   Shutdown,
 
@@ -674,6 +700,7 @@ impl LogicCommand {
 }
 
 #[derive(Clone, Copy, PartialEq, Default, Debug)]
+/// TODO: Document this item
 pub enum TimeScale {
   Stopped,
   #[default]
@@ -683,6 +710,7 @@ pub enum TimeScale {
 }
 
 impl TimeScale {
+  /// TODO: Document this item
   pub fn to_days_per_st_second(self) -> f64 {
     match self {
       TimeScale::Stopped => 0.0,
@@ -693,6 +721,7 @@ impl TimeScale {
   }
 }
 
+/// TODO: Document this item
 pub struct LogicState {
   pub almanac_data: AlmanacPackedData,
 }
@@ -708,6 +737,7 @@ impl Default for LogicState {
 // --------------------- Internal Types: Render Thread ---------------------------
 
 #[derive(Clone, Default)]
+/// TODO: Document this item
 pub enum RenderTaskStatus {
   #[default]
   Completed,
@@ -722,6 +752,7 @@ impl AsRef<RenderTaskStatus> for RenderTaskStatus {
 }
 
 #[derive(Clone, Default)]
+/// TODO: Document this item
 pub enum RenderFeedback {
   #[default]
   Empty,
@@ -731,6 +762,7 @@ pub enum RenderFeedback {
 }
 
 #[derive(Clone, Copy, Debug)]
+/// TODO: Document this item
 pub struct CustomRenderCallback {
   pub after_render_frame_fn: fn(
     &dyn crate::gpu::RenderDevice,
@@ -773,6 +805,7 @@ pub struct Resize {
 }
 
 #[derive(Clone, Default)]
+/// TODO: Document this item
 pub enum RenderCommand {
   #[default]
   Shutdown,
@@ -795,6 +828,7 @@ unsafe impl Send for RenderCommand {}
 // --------------------- Internal Types ---------------------------
 
 #[derive(Debug)]
+/// TODO: Document this item
 pub struct SendPtr<T: ?Sized>(pub *const T);
 unsafe impl<T: ?Sized> Send for SendPtr<T> {}
 unsafe impl<T: ?Sized> Sync for SendPtr<T> {}
@@ -811,12 +845,14 @@ impl<T: ?Sized> Copy for SendPtr<T> {}
 /// struct, therefore, you cannot access with .0 the inner pointer otherwise you bypass Sync + Send
 impl<T: ?Sized> SendPtr<T> {
   #[inline(always)]
+  /// TODO: Document this item
   pub fn get(self) -> *const T {
     self.0
   }
 }
 
 #[derive(Debug)]
+/// TODO: Document this item
 pub struct SendPtrMut<T: ?Sized>(pub *mut T);
 unsafe impl<T: ?Sized> Send for SendPtrMut<T> {}
 unsafe impl<T: ?Sized> Sync for SendPtrMut<T> {}
@@ -833,12 +869,14 @@ impl<T: ?Sized> Copy for SendPtrMut<T> {}
 /// struct, therefore, you cannot access with .0 the inner pointer otherwise you bypass Sync + Send
 impl<T: ?Sized> SendPtrMut<T> {
   #[inline(always)]
+  /// TODO: Document this item
   pub fn get(self) -> *mut T {
     self.0
   }
 }
 
 #[derive(Clone, Debug)]
+/// TODO: Document this item
 pub struct SceneTimeState {
   pub time_info: alloc::sync::Arc<spin::RwLock<aethervk_oshal_rlib::os::time::TimeInfo>>,
   pub current_scale: TimeScale,
@@ -872,6 +910,7 @@ impl Default for SceneTimeState {
 }
 
 #[derive(Clone, Debug)]
+/// TODO: Document this item
 pub struct SceneContext {
   pub scene: Arc<Scene>,
   pub entity_map: BTreeMap<u64, EntityId>,
@@ -905,6 +944,7 @@ impl Drop for SceneContext {
 }
 
 impl SceneContext {
+  /// TODO: Document this item
   pub(crate) fn register_present_entities(&mut self) {
     self.register_entity(self.root_entity);
     if self.active_camera_entity.is_some() {
@@ -929,6 +969,7 @@ impl SceneContext {
     }
   }
 
+  /// TODO: Document this item
   pub fn register_custom_render_callback(&mut self, callback: Option<CustomRenderCallback>) {
     self.custom_render_callback = callback;
   }
@@ -943,6 +984,7 @@ impl SceneContext {
     Ok(self)
   }
 
+  /// TODO: Document this item
   pub fn with_active_camera_entity(mut self, active_camera_entity: EntityId) -> EngineResult<Self> {
     if self.active_camera_entity.is_some() {
       return Err(EngineError::InvalidOperation(
@@ -953,6 +995,7 @@ impl SceneContext {
     self.with_new_entity_inserted(active_camera_entity)
   }
 
+  /// TODO: Document this item
   pub fn with_cursor_entity(mut self, cursor_entity: EntityId) -> EngineResult<Self> {
     if self.cursor_entity.is_some() {
       return Err(EngineError::InvalidOperation(
@@ -963,6 +1006,7 @@ impl SceneContext {
     self.with_new_entity_inserted(cursor_entity)
   }
 
+  /// TODO: Document this item
   pub fn with_sun_entity(mut self, sun_entity: EntityId) -> EngineResult<Self> {
     if self.sun_entity.is_some() {
       return Err(EngineError::InvalidOperation(
@@ -973,6 +1017,7 @@ impl SceneContext {
     self.with_new_entity_inserted(sun_entity)
   }
 
+  /// TODO: Document this item
   pub fn with_grid_entity(mut self, grid_entity: EntityId) -> EngineResult<Self> {
     if self.grid_entity.is_some() {
       return Err(EngineError::InvalidOperation(
@@ -983,6 +1028,7 @@ impl SceneContext {
     self.with_new_entity_inserted(grid_entity)
   }
 
+  /// TODO: Document this item
   pub fn with_sky_entity(mut self, sky_entity: EntityId) -> EngineResult<Self> {
     if self.sky_entity.is_some() {
       return Err(EngineError::InvalidOperation(
@@ -993,6 +1039,7 @@ impl SceneContext {
     self.with_new_entity_inserted(sky_entity)
   }
 
+  /// TODO: Document this item
   pub fn with_physics_scene(mut self) -> Self {
     self.physics_scene = Some(Arc::new(RwLock::new(
       physics::physics_scene::PhysicsScene::build_from_scene(self.scene.as_ref()),
@@ -1000,6 +1047,7 @@ impl SceneContext {
     self
   }
 
+  /// TODO: Document this item
   pub fn new_empty(scene: Arc<Scene>, root_entity: EntityId) -> Self {
     let mut entity_map = BTreeMap::new();
     entity_map.insert(1, root_entity);
@@ -1023,6 +1071,7 @@ impl SceneContext {
     }
   }
 
+  /// TODO: Document this item
   pub fn register_entity(&mut self, id: EntityId) -> u64 {
     let external_id = self.next_entity_id;
     self.next_entity_id += 1;
@@ -1030,10 +1079,12 @@ impl SceneContext {
     external_id
   }
 
+  /// TODO: Document this item
   pub fn get_entity(&self, external_id: u64) -> Option<EntityId> {
     self.entity_map.get(&external_id).copied()
   }
 
+  /// TODO: Document this item
   pub fn mark_component_changed(&self, entity_id: u64, component_name: &str) {
     let mut changed = self.changed_entities.write();
     changed.entry(entity_id).or_insert_with(BTreeSet::new).insert(component_name.to_string());
@@ -1042,6 +1093,7 @@ impl SceneContext {
 
 // -------------------- Render And Logic Threads Main Data ----------------------------
 
+/// TODO: Document this item
 pub struct RenderThreadParams {
   channel_capacity: usize,
   pub render_device_handle: gpu::RenderDeviceHandle,
@@ -1052,6 +1104,7 @@ pub struct RenderThreadParams {
 impl RenderThreadParams {
   const DEFAULT_CHANNEL_CAPACITY: usize = 128;
 
+  /// TODO: Document this item
   pub(crate) fn new(
     backend: gpu::RenderBackendId,
     error_debug_callback: Option<fn(&str)>,
@@ -1080,6 +1133,7 @@ impl RenderThreadParams {
     })
   }
 
+  /// TODO: Document this item
   pub fn to_context(self, render_feedback_tx: mpsc::Sender<RenderFeedback>) -> RenderThreadContext {
     RenderThreadContext {
       render_feedback_tx,
@@ -1100,6 +1154,7 @@ pub struct RenderThreadContext {
 }
 
 impl RenderThreadContext {
+  /// TODO: Document this item
   pub(crate) fn is_render_single_ownership(&self) -> bool {
     let render_frontend = self.render_frontend.borrow();
     if render_frontend.is_none() {
@@ -1117,6 +1172,7 @@ impl RenderThreadContext {
   }
 }
 
+/// TODO: Document this item
 pub struct LogicThreadParams {
   channel_capacity: usize,
   /// Thread pool for task submission shared between render thread and logic thread
@@ -1130,6 +1186,7 @@ pub struct LogicThreadParams {
 impl LogicThreadParams {
   const DEFAULT_CHANNEL_CAPACITY: usize = 128;
 
+  /// TODO: Document this item
   pub fn new(
     thread_pool: Arc<os::pool::ThreadPool>,
     task_manager: Arc<RwLock<SimulationTaskManager>>,
@@ -1147,6 +1204,7 @@ impl LogicThreadParams {
     }
   }
 
+  /// TODO: Document this item
   pub fn to_context(
     self,
     logic_feedback_tx: mpsc::Sender<LogicFeedback>,
@@ -1179,13 +1237,16 @@ pub struct LogicThreadContext {
 }
 
 #[derive(Clone, Copy, Debug)]
+/// TODO: Document this item
 pub struct RayCastHit {
   pub entity_ext_id: u64,
   pub p: Vec3f32,
 }
 
+/// TODO: Document this item
 pub type RaycastResult = Option<RayCastHit>;
 
+/// TODO: Document this item
 pub enum SimulationTaskResult {
   None,
   U64(u64),
@@ -1196,6 +1257,7 @@ pub enum SimulationTaskResult {
   String(String),
 }
 
+/// TODO: Document this item
 pub enum SimulationTaskStatus {
   Pending,
   Completed(SimulationTaskResult),
@@ -1208,6 +1270,7 @@ impl AsRef<SimulationTaskStatus> for SimulationTaskStatus {
   }
 }
 
+/// TODO: Document this item
 pub struct SimulationTaskManager {
   next_task_id: u64,
   tasks: BTreeMap<u64, SimulationTaskStatus>,
@@ -1220,6 +1283,7 @@ impl Drop for SimulationTaskManager {
 }
 
 impl SimulationTaskManager {
+  /// TODO: Document this item
   pub fn new() -> Self {
     Self {
       next_task_id: 1,
@@ -1227,6 +1291,7 @@ impl SimulationTaskManager {
     }
   }
 
+  /// TODO: Document this item
   pub fn create_task(&mut self) -> core::num::NonZero<u64> {
     let id = self.next_task_id | (1u64 << 63);
     self.next_task_id += 1;
@@ -1234,18 +1299,22 @@ impl SimulationTaskManager {
     unsafe { core::num::NonZero::new_unchecked(id) }
   }
 
+  /// TODO: Document this item
   pub fn success_task(&mut self, id: u64, result: SimulationTaskResult) {
     self.tasks.insert(id, SimulationTaskStatus::Completed(result));
   }
 
+  /// TODO: Document this item
   pub fn fail_task(&mut self, id: u64, error: String) {
     self.tasks.insert(id, SimulationTaskStatus::Error(error));
   }
 
+  /// TODO: Document this item
   pub fn get_status(&self, id: u64) -> TaskStatusCode {
     self.tasks.get(&id).map(|t| TaskStatusCode::from_sim(t)).unwrap_or(TaskStatusCode::Invalid)
   }
 
+  /// TODO: Document this item
   pub fn take_result(&mut self, id: u64) -> Option<SimulationTaskResult> {
     if let Some(SimulationTaskStatus::Completed(res)) = self.tasks.remove(&id) {
       Some(res)
@@ -1257,6 +1326,7 @@ impl SimulationTaskManager {
 
 #[repr(i32)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+/// TODO: Document this item
 pub enum TaskStatusCode {
   #[default]
   Pending = 0,
@@ -1266,6 +1336,7 @@ pub enum TaskStatusCode {
 }
 
 impl TaskStatusCode {
+  /// TODO: Document this item
   pub fn from_sim(value: &SimulationTaskStatus) -> Self {
     match value.as_ref() {
       SimulationTaskStatus::Pending => TaskStatusCode::Pending,
@@ -1273,6 +1344,7 @@ impl TaskStatusCode {
       SimulationTaskStatus::Error(_) => TaskStatusCode::Error,
     }
   }
+  /// TODO: Document this item
   pub fn from_render(value: &RenderTaskStatus) -> Self {
     match value.as_ref() {
       RenderTaskStatus::Completed => TaskStatusCode::Completed,
@@ -1283,6 +1355,7 @@ impl TaskStatusCode {
 }
 
 // 1. Group the shared data and the atomic signal into a single struct
+/// TODO: Document this item
 pub struct SharedState<T> {
   pub done_signal: AtomicBool,
   pub data: UnsafeCell<MaybeUninit<T>>,
@@ -1293,6 +1366,7 @@ unsafe impl<T: Send> Sync for SharedState<T> {}
 unsafe impl<T: Send> Send for SharedState<T> {}
 
 // 2. The wrapper is now just a single Arc
+/// TODO: Document this item
 pub struct SharedDataWrapper<T> {
   inner: Arc<SharedState<T>>,
 }
@@ -1314,6 +1388,7 @@ impl<T> Clone for SharedDataWrapper<T> {
 }
 
 impl<T> SharedDataWrapper<T> {
+  /// TODO: Document this item
   pub fn new() -> Self {
     Self {
       inner: Arc::new(SharedState {
@@ -1323,6 +1398,7 @@ impl<T> SharedDataWrapper<T> {
     }
   }
 
+  /// TODO: Document this item
   pub unsafe fn write_value(&self, v: T) {
     debug_assert_eq!(
       self.inner.done_signal.load(core::sync::atomic::Ordering::Relaxed),
@@ -1338,6 +1414,7 @@ impl<T> SharedDataWrapper<T> {
   }
 
   // TODO error timeout after 10 ms
+  /// TODO: Document this item
   pub unsafe fn read_value(self) -> T {
     loop {
       // Acquire ordering pairs with Release to ensure cache coherency.

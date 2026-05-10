@@ -81,21 +81,21 @@ public partial class Viewport3DViewModel
   {
     var existingScene = _sceneStateManager.AllScenes.FirstOrDefault();
     SceneId = existingScene != null ? existingScene.SceneId : _runtimeService.CreateScene(true);
-    
+
     if (PresentationEngineId == 0)
     {
       PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height, SceneId);
     }
-    
+
     var root = _runtimeService.GetEntityByName(SceneId, "root");
     if (root != null)
     {
-        var camera = _runtimeService.CreateCamera(SceneId, root);
-        CameraId = camera.Id;
+      var camera = _runtimeService.CreateCamera(SceneId, root);
+      CameraId = camera.Id;
     }
     else
     {
-        CameraId = 1;
+      CameraId = 1;
     }
   }
 
@@ -109,7 +109,7 @@ public partial class Viewport3DViewModel
     _runtimeService = runtimeService;
     _breadcrumbService = breadcrumbService;
     _sceneStateManager = sceneStateManager;
-    
+
     OperatorStack = new OperatorStack(new ViewportBaseOperator(this));
 
     _runtimeService.PropertyChanged += (s, e) =>
@@ -124,8 +124,14 @@ public partial class Viewport3DViewModel
       }
     };
     IsInitialized = _runtimeService.IsInitialized;
-    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(this, (r, m) => ((Viewport3DViewModel)r).Receive(m));
-    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.ToggleAddJetModeMessage>(this, (r, m) => ((Viewport3DViewModel)r).Receive(m));
+    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(
+      this,
+      (r, m) => ((Viewport3DViewModel)r).Receive(m)
+    );
+    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.ToggleAddJetModeMessage>(
+      this,
+      (r, m) => ((Viewport3DViewModel)r).Receive(m)
+    );
 
     if (IsInitialized)
     {
@@ -325,7 +331,7 @@ public partial class Viewport3DViewModel
       await Task.Run(() => _runtimeService.InitializeSimulationContext("Vulkan", null, false));
       IsLoading = false;
     }
-    
+
     SetupViewport();
 
     IsInitialized = true;

@@ -1,3 +1,5 @@
+//! comet module.
+
 use aethervk_oshal_rlib::{
   self as oshal,
   math::vector::{Vector, Vector3, vec3::Vec3f32},
@@ -13,6 +15,7 @@ use zune_jpeg;
 pub mod uv_grid;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+/// TODO: Document this item
 pub struct Vertex {
   pub position: [f32; 3],
   pub normal: [f32; 3],
@@ -20,10 +23,15 @@ pub struct Vertex {
   pub tangent: [f32; 4],
 }
 
+/// TODO: Document this item
 pub const POSITION_COMPONENTS: u32 = 3;
+/// TODO: Document this item
 pub const NORMAL_COMPONENTS: u32 = 3;
+/// TODO: Document this item
 pub const UV_COMPONENTS: u32 = 2;
+/// TODO: Document this item
 pub const TANGENT_COMPONENTS: u32 = 4;
+/// TODO: Document this item
 pub const ATTRIBUTES_COMPONENTS: u32 = 9;
 
 impl core::hash::Hash for Vertex {
@@ -37,6 +45,7 @@ impl core::hash::Hash for Vertex {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[allow(non_camel_case_types)]
+/// TODO: Document this item
 pub enum TexelFormat {
   // Basic formats
   R8_UNORM,
@@ -54,6 +63,7 @@ pub enum TexelFormat {
 }
 
 impl TexelFormat {
+  /// TODO: Document this item
   pub fn to_vk_format(self) -> ash::vk::Format {
     use ash::vk;
     match self {
@@ -69,6 +79,7 @@ impl TexelFormat {
     }
   }
 
+  /// TODO: Document this item
   pub fn from_vk_format(vk_format: u32) -> Self {
     use ash::vk;
     match vk::Format::from_raw(vk_format as i32) {
@@ -86,6 +97,7 @@ impl TexelFormat {
 }
 
 #[derive(Clone, Default)]
+/// TODO: Document this item
 pub struct Texture {
   pub data: Vec<u8>,
   pub format: TexelFormat,
@@ -98,8 +110,12 @@ use crate::math::collision::bvh_builder::{BVHBuilder, BVHBuilderParams};
 use crate::math::collision::linear_bvh::LinearBVH;
 use aethervk_oshal_rlib::math::matrix::{Matrix3, mat3::Mat3f32};
 
+static NEXT_COMET_ID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
+
 #[derive(Clone)]
+/// TODO: Document this item
 pub struct Comet {
+  pub id: u64,
   pub vertices: Vec<Vertex>,
   pub indices: Vec<u32>,
   pub albedo_map: Option<Texture>,
@@ -180,24 +196,29 @@ fn compute_comet_extras(
 }
 
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct Triangle {
   pub vertices: [Vec3f32; 3],
 }
 
 impl Triangle {
   #[inline]
+  /// TODO: Document this item
   pub fn v0(&self) -> &Vec3f32 {
     &self.vertices[0]
   }
   #[inline]
+  /// TODO: Document this item
   pub fn v1(&self) -> &Vec3f32 {
     &self.vertices[1]
   }
   #[inline]
+  /// TODO: Document this item
   pub fn v2(&self) -> &Vec3f32 {
     &self.vertices[2]
   }
   #[inline]
+  /// TODO: Document this item
   pub fn mean_vector(&self) -> Vec3f32 {
     (*self.v0() + *self.v1() + *self.v2()) / 3.0
   }
@@ -213,6 +234,7 @@ impl Triangle {
   }
 
   #[inline]
+  /// TODO: Document this item
   pub fn area(&self) -> f32 {
     0.5 * (*self.v1() - *self.v0()).cross(*self.v2() - *self.v1()).length()
   }
@@ -256,6 +278,7 @@ impl core::fmt::Debug for Comet {
 }
 
 #[derive(Debug)]
+/// TODO: Document this item
 pub enum CometLoadError {
   PathNotFound,
   TextureNotFound,
@@ -642,6 +665,7 @@ pub fn load_comet_from_gltf(path: &str, verbose: bool) -> Result<Comet, CometLoa
     compute_comet_extras(&vertices, &indices, &mut mass_properties);
 
   Ok(Comet {
+    id: NEXT_COMET_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
     vertices: local_vertices,
     indices,
     albedo_map,
@@ -762,6 +786,7 @@ pub fn generate_uv_sphere(
   let bvh = builder.build(&tris).map(|root| LinearBVH::from_build_node(&root, 0));
 
   Comet {
+    id: NEXT_COMET_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
     vertices,
     indices,
     albedo_map: None,
@@ -774,6 +799,7 @@ pub fn generate_uv_sphere(
   }
 }
 
+/// TODO: Document this item
 pub fn load_texture_from_file(path: &str) -> Result<Texture, CometLoadError> {
   let path_buf = PathBuf::from(path);
   if !path_buf.is_file() {

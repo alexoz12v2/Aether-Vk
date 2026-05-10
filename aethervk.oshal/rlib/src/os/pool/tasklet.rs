@@ -1,3 +1,5 @@
+//! tasklet module.
+
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -6,16 +8,19 @@ use spin::Mutex;
 use super::{ThreadPool, Workload, WorkloadStatus};
 use crate::os::NativeResult;
 
+/// TODO: Document this item
 pub struct TaskletState<R> {
   result: Mutex<Option<R>>,
   done: AtomicBool,
 }
 
+/// TODO: Document this item
 pub struct TaskletHandle<R> {
   state: Arc<TaskletState<R>>,
 }
 
 impl<R> TaskletHandle<R> {
+  /// TODO: Document this item
   pub fn wait(self) -> R {
     while !self.state.done.load(Ordering::Acquire) {
       #[cfg(any(unix, target_os = "macos"))]
@@ -64,6 +69,7 @@ impl<F, R> Drop for ClosureWorkload<F, R> {
   }
 }
 
+/// TODO: Document this item
 pub trait ThreadPoolExt {
   fn spawn_tasklet<F, R>(&self, tasklet_id: Option<usize>, f: F) -> NativeResult<TaskletHandle<R>>
   where

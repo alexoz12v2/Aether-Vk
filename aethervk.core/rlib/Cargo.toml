@@ -17,7 +17,7 @@ linux_xcb = []
 linux_wayland = []
 physical_mesh_debug_normals = []
 cursor_debug = []
-debug_gpu = ["vk-mem/vma-debug", "ash/debug"]
+debug_gpu = ["vk-mem/vma-debug", "ash/debug", "aethervk-oshal-rlib/debug_gpu"]
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 objc = { version = "0.2.7" }

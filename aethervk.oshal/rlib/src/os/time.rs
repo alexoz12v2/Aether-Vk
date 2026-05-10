@@ -1,3 +1,5 @@
+//! time module.
+
 #![allow(non_camel_case_types)]
 
 use core::cmp::min;
@@ -12,8 +14,10 @@ use libc::{CLOCK_MONOTONIC, clock_gettime, timespec};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use libc::{CLOCK_MONOTONIC_RAW, clock_gettime, timespec};
 
+/// TODO: Document this item
 pub type timeus_t = i64;
 
+/// TODO: Document this item
 pub const fn timeus_milliseconds(millis: u32) -> timeus_t {
   (millis as timeus_t) * 1_000
 }
@@ -55,6 +59,7 @@ pub struct TimeInfo {
 unsafe impl Sync for TimeInfo {}
 unsafe impl Send for TimeInfo {}
 
+/// TODO: Document this item
 pub fn get_monotonic_time() -> timeus_t {
   #[cfg(windows)]
   {
@@ -85,6 +90,7 @@ pub fn get_monotonic_time() -> timeus_t {
 }
 
 impl TimeInfo {
+  /// TODO: Document this item
   pub fn new(fixed_delta_time: timeus_t, maximum_delta_time: timeus_t, time_scale: f32) -> Self {
     assert!(fixed_delta_time <= maximum_delta_time);
     assert!(time_scale > 0.0);
@@ -115,11 +121,13 @@ impl TimeInfo {
     }
   }
 
+  /// TODO: Document this item
   pub fn set_time_scale(&mut self, time_scale: f32) {
     let time_scale = if time_scale > 0.0 { time_scale } else { 0.0 };
     self.time_scale.store(f32::to_bits(time_scale), Ordering::Relaxed);
   }
 
+  /// TODO: Document this item
   pub fn get_time_scale(&mut self) -> f32 {
     f32::from_bits(self.time_scale.load(Ordering::Relaxed))
   }
@@ -148,6 +156,7 @@ impl TimeInfo {
     );
 
     let idx = self.m_deltas_index.load(Ordering::Relaxed) as usize;
+    // TODO array of refcells cause delta_index load protects this acces
     self.m_deltas[idx] = delta;
     self.m_deltas_index.store(((idx + 1) % DELTAS_WINDOW_COUNT) as u32, Ordering::Release);
 
@@ -162,12 +171,14 @@ impl TimeInfo {
     self.m_last_fixed_update.fetch_add(added, Ordering::Relaxed);
   }
 
+  /// TODO: Document this item
   pub fn needs_fixed_update(&self) -> bool {
     let fixed_delta = self.fixed_delta_time.load(Ordering::Relaxed);
     self.m_last_fixed_update.load(Ordering::Relaxed) + fixed_delta
       <= self.m_last_update.load(Ordering::Relaxed)
   }
 
+  /// TODO: Document this item
   pub fn current(&self) -> TimeReadings {
     let idx = self.m_deltas_index.load(Ordering::Acquire) as usize;
 

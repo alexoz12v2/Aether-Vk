@@ -1,3 +1,5 @@
+//! gpu_backends module.
+
 use crate::gpu::{CommandBuffer, DeviceBuffer, Kernels, WaitHandle};
 use crate::physics::physics_scene::PhysicsScene;
 use crate::scene::Scene;
@@ -30,8 +32,10 @@ pub mod vulkan;
 // #[cfg(target_os = "windows")]
 // pub(super) mod d3d12;
 
+/// TODO: Document this item
 pub(self) const MAX_DEVICES: usize = 4;
 
+/// TODO: Document this item
 pub fn new_render_frontend(
   ty: RenderBackendId,
   params: &'_ RuntimeParams,
@@ -62,6 +66,7 @@ pub fn new_render_frontend(
   }
 }
 
+/// TODO: Document this item
 pub fn get_available_render_backends() -> Vec<&'static str> {
   let mut backends = Vec::new();
 
@@ -97,6 +102,7 @@ pub fn get_available_render_backends() -> Vec<&'static str> {
   backends
 }
 
+/// TODO: Document this item
 pub fn get_available_kernels() -> Vec<&'static str> {
   let mut kernels = alloc::vec!["CPU Scalar", "CPU SSE/AVX", "CPU NEON"];
 
@@ -151,7 +157,7 @@ where
 
   // 1. Build List of Kinematic Bodies, whose step is simulated exclusively on CPU, by using an almanac,
   // which is a SPICE data kernel which should contain the data for the next position given the current time instance
-  let kinematics = kernels.build_kinematic_bodies(&mut cmd, physical_scene, scene)?;
+  let mut kinematics = kernels.build_kinematic_bodies(&mut cmd, physical_scene, scene)?;
 
   // 2. Build List of Dynamic Bodies (comets and particle systems)
   let mut dynamics = kernels.build_dynamic_bodies(&mut cmd, physical_scene, scene)?;
@@ -162,12 +168,8 @@ where
     // Snapshot state for Continuous Collision Detection (CCD) rewinding
     let snapshot = kernels.snapshot_dynamics(&mut cmd, &dynamics)?;
 
-    // 3. Given list of kinematic bodies, dynamic bodies, and their positions in the scene,
-    // compute all gravitation force pairs between all bodies. Inside particle system, this translates into applying
-    // gravitational/position dependent forces to batches of particles (i.e. to a node of BVH whose number of embedded particles is less than a threshold)
-    // 4. For Each Dynamic Body, simulate a step for it by using ODE Solver.
-    kernels.compute_forces(&mut cmd, &kinematics, &mut dynamics)?;
-    kernels.step_ode(&mut cmd, &mut dynamics, dt)?;
+    // 3. IMEX Phase 1 & 2: Explicit particle kick and drift to midpoint
+    kernels.step_ode_p1_p2(&mut cmd, &mut dynamics, dt)?;
 
     // 5. Collision detection and response loop
     // - Build backend specific motionPhysicalScene, containing a BVH whose leaf nodes are AABB bounding the motion of
@@ -183,6 +185,10 @@ where
     // - given the earliest collision time $t_c$, rewind the simulation to that time and simulate again till $t_1$
     // after N collisions, all impacts become inelastic collisions, such that we don't get stuck on a loop
     let bvh = kernels.build_motion_bvh(&mut cmd, &dynamics)?;
+
+    // 4. IMEX Phase 5: Final particle drift and force evaluation
+    kernels.step_ode_p5(&mut cmd, &kinematics, &mut dynamics, &bvh, dt)?;
+
     let potentials = kernels.self_intersect_scene(&mut cmd, &bvh)?;
     let globals = kernels.intersect_instances(&mut cmd, &potentials)?;
     let compacted = kernels.compact_collisions(&mut cmd, &globals, time_collision_delta)?;
@@ -207,8 +213,11 @@ where
       kernels.restore_dynamics(&mut cmd, &mut dynamics, &snapshot)?;
 
       // Re-simulate precisely up to impact
-      kernels.compute_forces(&mut cmd, &kinematics, &mut dynamics)?;
-      kernels.step_ode(&mut cmd, &mut dynamics, t_c)?;
+      kernels.step_ode_p1_p2(&mut cmd, &mut dynamics, t_c)?;
+      kernels.step_ode_p3_p4(&mut cmd, &mut kinematics, &mut dynamics, t_c)?;
+      
+      let rewind_bvh = kernels.build_motion_bvh(&mut cmd, &dynamics)?;
+      kernels.step_ode_p5(&mut cmd, &kinematics, &mut dynamics, &rewind_bvh, t_c)?;
 
       // Apply impacts exactly at t_c
       kernels.apply_collision_responses(&mut cmd, &mut dynamics, &compacted, inelastic)?;

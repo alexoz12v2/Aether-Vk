@@ -1,3 +1,5 @@
+//! commands module.
+
 use core::{fmt, ptr};
 
 use crate::{
@@ -12,6 +14,7 @@ use core::fmt::{Formatter, Pointer};
 
 // TODO: implement trait/function to hash some compile time string
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// TODO: Document this item
 pub(super) struct CommandBufferId(pub u64);
 
 impl From<CommandBufferHandle> for CommandBufferId {
@@ -51,6 +54,7 @@ unsafe impl Sync for CommandPools {}
 unsafe impl Send for CommandPools {}
 
 impl CommandPools {
+  /// TODO: Document this item
   pub(super) fn new(queue_family_index: u32) -> Self {
     Self {
       registry: spin::RwLock::new(BTreeMap::new()),
@@ -59,6 +63,7 @@ impl CommandPools {
     }
   }
 
+  /// TODO: Document this item
   pub(super) fn allocate_primary(
     &self,
     device: &ash::Device,
@@ -68,6 +73,7 @@ impl CommandPools {
     self.allocate_internal(device, tid, id, true)
   }
 
+  /// TODO: Document this item
   pub fn recycle(
     &self,
     tid: ThreadId,
@@ -132,10 +138,21 @@ impl CommandPools {
 
       // 2. Check cache
       let pool_cache = tp.cmd_cache.entry(*active_pool).or_default();
-      if let Some(&cmd) = pool_cache.get(&id)
-        && !cmd.1
-      {
-        return Ok(cmd.0);
+      
+      // Find the first unused command buffer in the cache
+      let mut found_recycled = None;
+      for (&old_id, pair) in pool_cache.iter() {
+        if !pair.1 {
+          found_recycled = Some((old_id, pair.0));
+          break;
+        }
+      }
+
+      if let Some((old_id, cmd_buf)) = found_recycled {
+        // Remove from old ID and insert with the new ID
+        pool_cache.remove(&old_id);
+        pool_cache.insert(id, (cmd_buf, true));
+        return Ok(cmd_buf);
       }
 
       // 3. Allocate new buffer

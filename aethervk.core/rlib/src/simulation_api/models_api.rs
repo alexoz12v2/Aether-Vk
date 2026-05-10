@@ -1,3 +1,5 @@
+//! models_api module.
+
 use super::*;
 use crate::scene::{PhysicalMeshComponent, TransformComponent};
 use crate::simulation_api::SimulationContext;
@@ -7,12 +9,14 @@ use oshal::math::vector::vec3::Vec3f32;
 use oshal::math::vector::vec4::Quat;
 
 impl SimulationContext {
+  /// TODO: Document this item
   pub fn unload_model(&self, model_id: u64) {
     if self.scenes.write().model_registry.remove(&model_id).is_some() {
       emit_breadcrumb(1, &alloc::format!("Unloaded model {}", model_id));
     }
   }
 
+  /// TODO: Document this item
   pub fn get_almanac_loaded_files(&self, count: *mut u32) -> *mut *mut c_char {
     let logic = self.logic_state.read();
     if !count.is_null() {
@@ -33,6 +37,7 @@ impl SimulationContext {
     ptr
   }
 
+  /// TODO: Document this item
   pub fn spawn_procedural_sphere(
     &self,
     scene_id: u64,
@@ -68,7 +73,9 @@ impl SimulationContext {
         asset_path: alloc::string::String::new(),
         mesh: Arc::from(sphere),
         emissive_intensity: 0.0,
-        emissive_color: [0.0, 0.0, 0.0], use_new_path: false, paint_display_mode: 0,
+        emissive_color: [0.0, 0.0, 0.0],
+        use_new_path: false,
+        paint_display_mode: 0,
       },
     );
 

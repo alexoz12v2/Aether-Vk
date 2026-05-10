@@ -1,3 +1,5 @@
+//! vec4 module.
+
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
@@ -15,12 +17,14 @@ use crate::math::{
 };
 
 // A helper function to easily create our vector for testing
+/// TODO: Document this item
 pub fn vec(x: f32, y: f32, z: f32, w: f32) -> Vec4f32 {
   Vec4f32::from_components(x, y, z, w)
 }
 
 #[repr(C, align(16))] // vital for proper alignment
 #[derive(Copy, Clone, Debug)]
+/// TODO: Document this item
 pub struct Vec4f32 {
   #[cfg(target_arch = "x86_64")]
   pub simd: __m128,
@@ -38,6 +42,7 @@ impl Default for Vec4f32 {
 
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug, PartialEq)]
+/// TODO: Document this item
 pub struct Quat(pub Vec4f32);
 
 impl Default for Quat {
@@ -47,6 +52,7 @@ impl Default for Quat {
 }
 
 impl Quat {
+  /// TODO: Document this item
   pub fn from_components(p0: f32, p1: f32, p2: f32, p3: f32) -> Quat {
     Self {
       0: Vec4f32::from_components(p0, p1, p2, p3),
@@ -608,18 +614,21 @@ impl ops::IndexMut<usize> for Vec4f32 {
 impl Vec4f32 {
   #[inline(always)]
   #[cfg(target_arch = "aarch64")]
+  /// TODO: Document this item
   pub(crate) fn from_neon(v: float32x4_t) -> Self {
     Self { simd: v }
   }
 
   #[inline(always)]
   #[cfg(target_arch = "x86_64")]
+  /// TODO: Document this item
   pub(crate) fn from_sse(v: __m128) -> Self {
     Self { simd: v }
   }
 
   #[inline(always)]
   #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+  /// TODO: Document this item
   pub fn from_array(v: [f32; 4]) -> Self {
     Self { data: v }
   }

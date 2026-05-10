@@ -1,3 +1,5 @@
+//! timeline_manager module.
+
 use crate::gpu_backends::vulkan::device::{
   TASK_STATUS_FAILED, TASK_STATUS_PENDING, TASK_STATUS_SUCCESS, TaskEntry, TimelinePollingWorkload,
 };
@@ -7,6 +9,7 @@ use alloc::sync::Arc;
 use ash::vk;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+/// TODO: Document this item
 pub(super) struct TimelineManager {
   pub sem_device: ash::khr::timeline_semaphore::Device,
   pub semaphore: crate::gpu_backends::vulkan::utils::NonZeroHandle<vk::Semaphore>,
@@ -24,6 +27,7 @@ pub(super) struct TimelineManager {
 }
 
 impl TimelineManager {
+  /// TODO: Document this item
   pub fn new(instance: &ash::Instance, device: &ash::Device) -> GpuResult<Self> {
     let mut sem_type_info = vk::SemaphoreTypeCreateInfo::default()
       .initial_value(0)
@@ -48,6 +52,7 @@ impl TimelineManager {
     })
   }
 
+  /// TODO: Document this item
   pub fn cleanup(&mut self, device: &ash::Device) {
     unsafe { device.destroy_semaphore(self.semaphore.get(), None) };
   }
@@ -66,6 +71,7 @@ impl TimelineManager {
     Ok(gpu_value)
   }
 
+  /// TODO: Document this item
   pub fn get_next_submit_value(&self) -> u64 {
     self.next_submit_value.load(Ordering::SeqCst)
   }
@@ -77,6 +83,7 @@ impl TimelineManager {
   }
 
   // --- Task Management API ---
+  /// TODO: Document this item
   pub fn create_task(&self) -> u64 {
     let id = self.next_task_id.fetch_add(1, Ordering::SeqCst);
     let entry = Arc::new(TaskEntry {
@@ -88,12 +95,14 @@ impl TimelineManager {
     id
   }
 
+  /// TODO: Document this item
   pub fn assign_task_target(&self, task_id: u64, target_timeline: u64) {
     if let Some(entry) = self.task_registry.read().get(&task_id) {
       entry.target_value.store(target_timeline, Ordering::Release);
     }
   }
 
+  /// TODO: Document this item
   pub fn fail_task(&self, task_id: u64, error: GpuError) {
     if let Some(entry) = self.task_registry.read().get(&task_id) {
       *entry.error.write() = Some(error);
@@ -101,12 +110,14 @@ impl TimelineManager {
     }
   }
 
+  /// TODO: Document this item
   pub fn success_task(&self, task_id: u64) {
     if let Some(entry) = self.task_registry.read().get(&task_id) {
       entry.status.store(TASK_STATUS_SUCCESS, Ordering::Release);
     }
   }
 
+  /// TODO: Document this item
   pub fn is_task_completed(&self, task_id: u64) -> GpuResult<bool> {
     let registry = self.task_registry.read();
     if let Some(entry) = registry.get(&task_id) {
@@ -124,6 +135,7 @@ impl TimelineManager {
     }
   }
 
+  /// TODO: Document this item
   pub fn create_polling_workload(
     &self,
     stop_signal: Arc<core::sync::atomic::AtomicBool>,

@@ -1,3 +1,5 @@
+//! utils module.
+
 use alloc::{
   string::{self, ToString},
   sync::{Arc, Weak},
@@ -32,14 +34,17 @@ use windows::{
 // -------------------------------- Helper Types -----------------------------
 bitflags! {
   #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+  /// TODO: Document this item
   pub(super) struct OptionalExtensionSupportFlags: u64 {
     const NONE = 0;
     // TODO
     const SOME_EXTENSION = 1 << 0;
+    const SWAPCHAIN_MAINTENANCE1 = 1 << 1;
   }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// TODO: Document this item
 pub(super) struct PhysicalDeviceQueryInput {
   #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
   wl_display: core::ptr::NonNull<vk::wl_display>,
@@ -51,8 +56,10 @@ pub(super) struct PhysicalDeviceQueryInput {
   dpy: core::ptr::NonNull<vk::Display>,
   #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
   visual_id: vk::VisualID,
+  pub debug_shaders: bool,
 }
 impl PhysicalDeviceQueryInput {
+  /// TODO: Document this item
   pub(super) fn from_params(_value: &DeviceAdditionalParams) -> Option<Self> {
     #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
     let wl_display: ptr::NonNull<vk::wl_display> = _value
@@ -72,6 +79,9 @@ impl PhysicalDeviceQueryInput {
     #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
     let visual_id: vk::VisualID = *_value.get(&super::DEVICE_ADDIDITIONAL_PARAM_VISUAL_ID)? as _;
 
+    let debug_shaders =
+      _value.get(&super::DEVICE_ADDIDITIONAL_PARAM_DEBUG_SHADERS).map_or(false, |v| *v != 0);
+
     Some(Self {
       #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
       wl_display,
@@ -83,9 +93,11 @@ impl PhysicalDeviceQueryInput {
       dpy,
       #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
       visual_id,
+      debug_shaders,
     })
   }
 
+  /// TODO: Document this item
   pub(super) fn supports_presentation(
     &self,
     _entry: &ash::Entry,
@@ -147,6 +159,7 @@ impl PhysicalDeviceQueryInput {
 pub(super) const MAX_QUEUE_FAMILY_COUNT: usize = 4;
 
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct PhysicalDeviceQueryResult {
   pub physical_device: vk::PhysicalDevice,
   pub physical_device_properties: vk::PhysicalDeviceProperties,
@@ -157,17 +170,21 @@ pub struct PhysicalDeviceQueryResult {
   pub transfer_queue_family_index: u32,
   pub subgroup_size: u32,
   pub score: i32,
+  pub debug_shaders: bool,
 }
 
 impl PhysicalDeviceQueryResult {
+  /// TODO: Document this item
   pub(super) fn has_valid_score(&self) -> bool {
     self.score > 0
   }
 
+  /// TODO: Document this item
   pub(super) fn family_count(&self) -> usize {
     self.family_count
   }
 
+  /// TODO: Document this item
   pub(super) fn unique_family_indices_set(
     &self,
   ) -> heapless::index_set::FnvIndexSet<u32, MAX_QUEUE_FAMILY_COUNT> {
@@ -179,6 +196,7 @@ impl PhysicalDeviceQueryResult {
     unique_queue_families
   }
 
+  /// TODO: Document this item
   pub(super) fn used_family_count(&self) -> usize {
     let mut families = [
       self.graphics_queue_family_index,
@@ -190,9 +208,14 @@ impl PhysicalDeviceQueryResult {
     families.into_iter().dedup().count()
   }
 
+  /// TODO: Document this item
   pub(super) fn enabled_extension_names(&self) -> Vec<*const c_char> {
-    let the_vec = required_device_extensions().iter().map(|cstr| cstr.as_ptr()).collect();
-    // TODO optional extensions if needed
+    let mut the_vec: Vec<*const c_char> =
+      required_device_extensions().iter().map(|cstr| cstr.as_ptr()).collect();
+
+    if self.optional_extensions.contains(OptionalExtensionSupportFlags::SWAPCHAIN_MAINTENANCE1) {
+      the_vec.push(ash::ext::swapchain_maintenance1::NAME.as_ptr());
+    }
 
     the_vec
   }
@@ -202,6 +225,7 @@ impl PhysicalDeviceQueryResult {
 // TODO: copy from mac
 // TODO: Printer
 #[cfg(test)]
+/// TODO: Document this item
 pub static VULKAN_ERROR_MESSAGES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(debug_assertions)]
@@ -238,23 +262,51 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
 
 // -------------------------------- Startup Functions --------------------------
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+/// TODO: Document this item
 pub(super) struct VkLibHandle(pub ptr::NonNull<c_void>);
 // safety: Ensure thread safety on this, achieved through checking ref count in Drop
 unsafe impl Send for VkLibHandle {}
 unsafe impl Sync for VkLibHandle {}
 
 #[derive(Clone)]
+/// TODO: Document this item
 pub(super) struct EntryWrapper {
   vk_entry: Arc<ash::Entry>,
   vulkan_loader_module: VkLibHandle,
 }
 
 impl EntryWrapper {
+  /// TODO: Document this item
   pub(super) fn weak_entry(&self) -> Weak<ash::Entry> {
     Arc::downgrade(&self.vk_entry)
   }
 
+  /// TODO: Document this item
   pub(super) fn new(base_path_override: Option<&CStr>) -> GpuResult<Self> {
+    // MoltenVK on macOS requires a massive amount of stack space during its C++ static initialization
+    // and Metal driver boot sequence via dlopen. To prevent stack overflows on background worker threads
+    // (like those spawned by cargo test), we isolate the entire Vulkan loader initialization in a dedicated
+    // throwaway thread with an 8MB stack.
+    let base_path_override_owned = base_path_override.map(|p| alloc::ffi::CString::from(p));
+    let result_arc = alloc::sync::Arc::new(spin::Mutex::new(None));
+    let result_arc_clone = result_arc.clone();
+
+    let th = aethervk_oshal_rlib::os::thread::Builder::new()
+      .name("vulkan_loader".into())
+      .stack_size(8 * 1024 * 1024)
+      .spawn(move || {
+        let base_path_override_ref = base_path_override_owned.as_deref();
+        let res = Self::new_internal(base_path_override_ref);
+        *result_arc_clone.lock() = Some(res);
+      })
+      .map_err(|_| GpuError::InvalidState("Couldn't start vulkan_loader thread"))?;
+
+    th.join();
+    let mut guard = result_arc.lock();
+    guard.take().unwrap()
+  }
+
+  fn new_internal(base_path_override: Option<&CStr>) -> GpuResult<Self> {
     let mut vulkan_loader_module = ptr::NonNull::dangling();
     let static_fn: ash::StaticFn = {
       let get_instance_proc_addr: PFN_vkGetInstanceProcAddr;
@@ -487,6 +539,7 @@ impl Drop for EntryWrapper {
   }
 }
 
+/// TODO: Document this item
 pub(super) fn required_instance_extensions() -> &'static Vec<&'static CStr> {
   static INSTANCE_EXTENSIONS: spin::Once<Vec<&'static CStr>> = spin::Once::new();
   INSTANCE_EXTENSIONS.call_once(|| {
@@ -527,6 +580,7 @@ pub(super) fn required_instance_extensions() -> &'static Vec<&'static CStr> {
   })
 }
 
+/// TODO: Document this item
 pub(super) fn required_device_extensions() -> &'static Vec<&'static CStr> {
   static DEVICE_EXTENSIONS: spin::Once<Vec<&'static CStr>> = spin::Once::new();
   DEVICE_EXTENSIONS.call_once(|| {
@@ -596,6 +650,7 @@ pub(super) fn required_device_extensions() -> &'static Vec<&'static CStr> {
 }
 
 // -------------------------------- Extensions Handling ------------------------
+/// TODO: Document this item
 pub(super) fn first_unsupported_extension<'a>(
   desired_names: &'a [&'_ CStr],
   properties: &'a [vk::ExtensionProperties],
@@ -612,6 +667,7 @@ pub(super) fn first_unsupported_extension<'a>(
 
 // -------------------------------- Device Features Handling -------------------
 #[derive(Copy, Clone, Debug)]
+/// TODO: Document this item
 pub(super) struct RequiredFeatures<'a> {
   pub features: vk::PhysicalDeviceFeatures,
   /// promoted to 1.2
@@ -628,6 +684,7 @@ pub(super) struct RequiredFeatures<'a> {
 }
 
 impl RequiredFeatures<'_> {
+  /// TODO: Document this item
   pub fn new() -> Self {
     let features = vk::PhysicalDeviceFeatures::default();
     let buffer_device_address = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
@@ -648,6 +705,7 @@ impl RequiredFeatures<'_> {
     }
   }
 
+  /// TODO: Document this item
   pub fn as_features2(&mut self) -> vk::PhysicalDeviceFeatures2<'_> {
     vk::PhysicalDeviceFeatures2::default()
       .features(self.features)
@@ -659,6 +717,7 @@ impl RequiredFeatures<'_> {
       .push_next(&mut self.scalar_block_layout)
   }
 
+  /// TODO: Document this item
   pub fn populate(&mut self) -> &mut Self {
     self.features.fill_mode_non_solid = vk::TRUE;
     self.buffer_device_address.buffer_device_address = vk::TRUE;
@@ -681,6 +740,7 @@ impl RequiredFeatures<'_> {
     self
   }
 
+  /// TODO: Document this item
   pub fn any_missing(&self) -> Option<Vec<string::String>> {
     use string::ToString;
     let mut the_vec = Vec::with_capacity(64);
@@ -757,11 +817,13 @@ where
   T: ash::vk::Handle + Copy,
 {
   #[inline(always)]
+  /// TODO: Document this item
   pub(super) unsafe fn new_unchecked(value: T) -> Self {
     Self { handle: value }
   }
 
   #[inline(always)]
+  /// TODO: Document this item
   pub(super) fn dangling() -> Self {
     Self {
       handle: <T as ash::vk::Handle>::from_raw(u64::MAX),
@@ -769,6 +831,7 @@ where
   }
 
   #[inline(always)]
+  /// TODO: Document this item
   pub(super) fn new(value: T) -> Option<Self> {
     if value.is_null() {
       None
@@ -778,6 +841,7 @@ where
   }
 
   #[inline(always)]
+  /// TODO: Document this item
   pub(super) fn get(&self) -> T {
     self.handle
   }
@@ -808,6 +872,7 @@ where
   }
 }
 
+/// TODO: Document this item
 pub(super) fn create_transient_attachment(
   allocator: &vk_mem::Allocator,
   extent: vk::Extent2D,
@@ -855,6 +920,7 @@ pub(super) fn create_transient_attachment(
 }
 
 #[cfg(test)]
+/// TODO: Document this item
 pub(super) fn create_test_attachment(
   allocator: &vk_mem::Allocator,
   extent: vk::Extent2D,

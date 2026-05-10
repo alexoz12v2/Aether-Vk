@@ -1,3 +1,5 @@
+//! frame module.
+
 use crate::gpu;
 use crate::gpu::{
   GpuResourceHandle, GridPushConstants, PipelineKey, PresentationEngineHandle, PushConstants,
@@ -16,6 +18,7 @@ use alloc::vec::Vec;
 // TODO move render_frame here
 
 #[derive(Clone, Copy, PartialEq)]
+/// TODO: Document this item
 pub struct ResourceUploadResult {
   /// The pipeline to use for this draw call.
   pub pipeline: PipelineKey,
@@ -51,6 +54,7 @@ pub struct DrawCall {
 }
 
 impl DrawCall {
+  /// TODO: Document this item
   pub fn from_handles_and_matrix(
     result: ResourceUploadResult,
     index_count: u32,
@@ -87,6 +91,7 @@ pub struct CursorDrawCall {
 }
 
 impl CursorDrawCall {
+  /// TODO: Document this item
   pub fn from_result_and_matrix(
     result: ResourceUploadResult,
     vertex_count: u32,
@@ -114,6 +119,7 @@ pub struct MarkerDrawCall {
 
 impl MarkerDrawCall {
   const VERTEX_COUNT_VK: u32 = 4;
+  /// TODO: Document this item
   pub fn from_values(
     pipeline: PipelineKey,
     model_matrix: Mat4x4f32,
@@ -132,6 +138,7 @@ impl MarkerDrawCall {
   }
 }
 
+/// TODO: Document this item
 pub struct MeasurementDrawCall {
   pub pipeline: PipelineKey,
   pub vertex_count: u32,
@@ -144,6 +151,7 @@ pub struct MeasurementDrawCall {
 impl MeasurementDrawCall {
   const VERTEX_COUNT_VK: u32 = 6;
 
+  /// TODO: Document this item
   pub fn from_data_and_pipeline(
     p1: Vec3f32,
     p2: Vec3f32,
@@ -162,6 +170,7 @@ impl MeasurementDrawCall {
   }
 }
 
+/// TODO: Document this item
 pub struct GizmoDrawCall {
   pub pipeline: PipelineKey,
   pub vertex_count: u32,
@@ -171,6 +180,7 @@ pub struct GizmoDrawCall {
 
 impl GizmoDrawCall {
   const VERTEX_COUNT_VK: u32 = 6;
+  /// TODO: Document this item
   pub fn from_values(pipeline: PipelineKey, scale: f32, buffer_index: u32) -> Self {
     Self {
       pipeline,
@@ -181,6 +191,7 @@ impl GizmoDrawCall {
   }
 }
 
+/// TODO: Document this item
 pub struct BillboardDrawCall {
   pub pipeline: PipelineKey,
   pub vertex_count: u32,
@@ -191,6 +202,7 @@ pub struct BillboardDrawCall {
 
 impl BillboardDrawCall {
   const VERTEX_COUNT_VK: u32 = 4;
+  /// TODO: Document this item
   pub fn from_data(
     pipeline: PipelineKey,
     model_matrix: Mat4x4f32,
@@ -207,6 +219,7 @@ impl BillboardDrawCall {
   }
 }
 
+/// TODO: Document this item
 pub struct SunDrawCall {
   // TODO: remove. This is needed because the RenderDevice maps entity id to pipeline layout and descriptor set.
   pub entity: EntityId,
@@ -245,11 +258,13 @@ impl SunDrawCall {
     })
   }
 
+  /// TODO: Document this item
   pub fn sun_pos(&self) -> Vec3f32 {
     Vec3f32(self.model_matrix.w)
   }
 }
 
+/// TODO: Document this item
 pub struct SkyDrawCall {
   pub sky_view_proj: Mat4x4f32,
   pub pipeline: PipelineKey,
@@ -260,6 +275,7 @@ pub struct SkyDrawCall {
 impl SkyDrawCall {
   const VERTEX_COUNT_VK: u32 = 3;
 
+  /// TODO: Document this item
   pub fn from_camera(camera_data: &CameraRenderData, pipeline_key: PipelineKey) -> GpuResult<Self> {
     let sky_view_proj = {
       let sky_view = camera_data.view.zeroed_translation();
@@ -278,6 +294,7 @@ impl SkyDrawCall {
   }
 }
 
+/// TODO: Document this item
 pub struct GridDrawCall {
   pub pipeline: PipelineKey,
   pub density: f32,
@@ -288,6 +305,7 @@ pub struct GridDrawCall {
 
 impl GridDrawCall {
   const VERTEX_COUNT_VK: u32 = 4;
+  /// TODO: Document this item
   pub fn new(pipeline: PipelineKey, density: f32, grid_size: f32, grid_color: [f32; 3]) -> Self {
     Self {
       pipeline,
@@ -316,6 +334,7 @@ pub struct BvhDrawCall {
 impl BvhDrawCall {
   const VERTEX_COUNT_VK: u32 = 24;
 
+  /// TODO: Document this item
   pub fn new(
     bound: &LinearBound<f32>,
     pipeline_key: PipelineKey,
@@ -356,6 +375,7 @@ impl BvhDrawCall {
     }
   }
 
+  /// TODO: Document this item
   pub fn to_push_constants(
     &self,
     mesh_draw_calls: &[DrawCall],
@@ -380,6 +400,7 @@ impl BvhDrawCall {
   }
 }
 
+/// TODO: Document this item
 pub struct CameraRenderData {
   pub pos: Vec3f32,
   pub rot: Quat,
@@ -417,6 +438,7 @@ impl CameraRenderData {
   }
 }
 
+/// TODO: Document this item
 pub struct ParticleDrawCall {
   pub pipeline: PipelineKey,
   pub system_particle_offset: u32,
@@ -425,6 +447,7 @@ pub struct ParticleDrawCall {
   pub particles: alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
 }
 
+/// TODO: Document this item
 pub struct Particle2DrawCall {
   pub pipeline: PipelineKey,
   pub system_particle_offset: u32,
@@ -434,14 +457,16 @@ pub struct Particle2DrawCall {
 }
 
 #[derive(Clone)]
+/// TODO: Document this item
 pub struct TrajectoryBatchCall {
-    pub pipeline: PipelineKey,
-    pub total_vertices: u32, // (MAX_STEPS + 1) * 2
-    pub total_segments: u32, // TOTAL_SEGMENTS_ACROSS_ALL_TRAJECTORIES
-    pub map_ptr: u64,
-    pub traj_ptr: u64,
+  pub pipeline: PipelineKey,
+  pub total_vertices: u32, // (MAX_STEPS + 1) * 2
+  pub total_segments: u32, // TOTAL_SEGMENTS_ACROSS_ALL_TRAJECTORIES
+  pub map_ptr: u64,
+  pub traj_ptr: u64,
 }
 
+/// TODO: Document this item
 pub struct RenderScene {
   pub time_readings: aethervk_oshal_rlib::os::time::TimeReadings,
   pub camera_data: CameraRenderData,
@@ -465,6 +490,7 @@ pub struct RenderScene {
 
 impl RenderScene {
   const START_VEC_CAPACITY: usize = 32;
+  /// TODO: Document this item
   pub fn new(
     camera: (TransformComponent, CameraComponent),
     time_readings: aethervk_oshal_rlib::os::time::TimeReadings,
@@ -519,23 +545,24 @@ impl RenderScene {
         });
       }
       RenderableDataRef::PhysicalMesh(component) => {
+        let asset_hash = component.mesh.id;
         let res: ResourceUploadResult = if component.use_new_path {
-          match device.get_physical_mesh2_resources(entity_id, presentation_engine_handle) {
+          match device.get_physical_mesh2_resources(asset_hash, presentation_engine_handle) {
             Ok(r) => r,
             Err(_) => device.create_physical_mesh2_resources(
               cmd_buffer,
-              entity_id,
+              asset_hash,
               &component,
               presentation_engine_handle,
               debug_name,
             )?,
           }
         } else {
-          match device.get_physical_mesh_resources(entity_id, presentation_engine_handle) {
+          match device.get_physical_mesh_resources(asset_hash, presentation_engine_handle) {
             Ok(r) => r,
             Err(_) => device.create_physical_mesh_resources(
               cmd_buffer,
-              entity_id,
+              asset_hash,
               &component,
               presentation_engine_handle,
               debug_name,
@@ -641,6 +668,7 @@ impl RenderScene {
   }
 }
 
+/// TODO: Document this item
 pub fn do_draw_cursor(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
@@ -666,6 +694,7 @@ pub fn do_draw_cursor(
   Ok(())
 }
 
+/// TODO: Document this item
 pub fn do_draw_marker(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
@@ -701,6 +730,7 @@ pub fn do_draw_marker(
   Ok(())
 }
 
+/// TODO: Document this item
 pub fn do_draw_measurement(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
@@ -749,6 +779,7 @@ pub fn do_draw_gizmo(
   Ok(())
 }
 
+/// TODO: Document this item
 pub fn do_draw_trajectory_batch(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
@@ -766,10 +797,15 @@ pub fn do_draw_trajectory_batch(
     _pad: [0.0, 0.0],
   };
   device.push_trajectory_constants(cmd_buffer, &push_constants)?;
-  device.draw_instanced(cmd_buffer, draw_call.total_vertices, draw_call.total_segments)?;
+  device.draw_instanced(
+    cmd_buffer,
+    draw_call.total_vertices,
+    draw_call.total_segments,
+  )?;
   Ok(())
 }
 
+/// TODO: Document this item
 pub fn do_draw_billboard(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
@@ -812,6 +848,7 @@ pub fn do_draw_billboard(
   Ok(())
 }
 
+/// TODO: Document this item
 pub fn do_draw_call2(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
@@ -822,23 +859,46 @@ pub fn do_draw_call2(
   window_extent: [f32; 2],
 ) -> GpuResult<()> {
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
-  device.draw_physical_mesh2(cmd_buffer, draw_call.pipeline, draw_call.buffers, camera, sun_pos, sun_color, window_extent, draw_call)?;
+  device.draw_physical_mesh2(
+    cmd_buffer,
+    draw_call.pipeline,
+    draw_call.buffers,
+    camera,
+    sun_pos,
+    sun_color,
+    window_extent,
+    draw_call,
+  )?;
 
   if draw_call.draw_outline {
     if let Some(outline_pipeline) = draw_call.outline_pipeline {
       device.bind_pipeline(cmd_buffer, outline_pipeline)?;
-      
+
       let mut outline_call = draw_call.clone();
       outline_call.emissive_intensity = -1.0;
-      outline_call.emissive_color = [draw_call.outline_color[0], draw_call.outline_color[1], draw_call.outline_color[2]];
-      
-      device.draw_physical_mesh2(cmd_buffer, outline_pipeline, draw_call.buffers, camera, sun_pos, sun_color, window_extent, &outline_call)?;
+      outline_call.emissive_color = [
+        draw_call.outline_color[0],
+        draw_call.outline_color[1],
+        draw_call.outline_color[2],
+      ];
+
+      device.draw_physical_mesh2(
+        cmd_buffer,
+        outline_pipeline,
+        draw_call.buffers,
+        camera,
+        sun_pos,
+        sun_color,
+        window_extent,
+        &outline_call,
+      )?;
     }
   }
 
   Ok(())
 }
 
+/// TODO: Document this item
 pub fn do_draw_call(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
@@ -918,6 +978,7 @@ pub fn do_draw_sun(
   device.draw(cmd_buffer, draw_call.vertex_count)
 }
 
+/// TODO: Document this item
 pub fn do_draw_sky(
   device: &dyn RenderDevice,
   cmd_buffer: super::CommandBufferHandle,
@@ -933,6 +994,7 @@ pub fn do_draw_sky(
   device.draw(cmd_buffer, draw_call.vertex_count)
 }
 
+/// TODO: Document this item
 pub fn do_draw_particle(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
@@ -965,6 +1027,7 @@ pub fn do_draw_particle(
   Ok(())
 }
 
+/// TODO: Document this item
 pub fn do_draw_particle2(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
@@ -985,10 +1048,7 @@ pub fn do_draw_particle2(
     radius: draw_call.config.particle_radius,
   };
 
-  device.push_particle2_constants(
-    cmd_buffer,
-    &push_constants,
-  )?;
+  device.push_particle2_constants(cmd_buffer, &push_constants)?;
 
   // Notice we don't pass the indirect_buffer as a GpuResourceHandle anymore,
   // we use a specific method that draws from the global mega buffer
@@ -997,6 +1057,7 @@ pub fn do_draw_particle2(
   Ok(())
 }
 
+/// TODO: Document this item
 pub fn do_draw_grid(
   device: &dyn RenderDevice,
   cmd_buffer: super::CommandBufferHandle,
@@ -1035,6 +1096,7 @@ pub fn do_bvh_draw_call(
 
 // TODO: all of the do_draw_* functions should have a rollback mechanism
 // TODO trait type for internal command buffer so that you get it once
+/// TODO: Document this item
 pub fn render_frame(
   device: &dyn RenderDevice,
   cmd_buffer: gpu::CommandBufferHandle,
@@ -1064,7 +1126,10 @@ pub fn render_frame(
         [1.0, 1.0, 1.0, 1.0], // TODO
         cmd_buffer,
         draw_call,
-        [render_scene.window_extent[0] as f32, render_scene.window_extent[1] as f32],
+        [
+          render_scene.window_extent[0] as f32,
+          render_scene.window_extent[1] as f32,
+        ],
       )?;
     } else {
       do_draw_call(
@@ -1096,7 +1161,13 @@ pub fn render_frame(
     device.prepare_particle2_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
     let time = (render_scene.time_readings.time as f64 / 1_000_000.0) as f32;
     for particle_call in &render_scene.particle2_calls {
-      gpu::frame::do_draw_particle2(device, &render_scene.camera_data, cmd_buffer, particle_call, time)?;
+      gpu::frame::do_draw_particle2(
+        device,
+        &render_scene.camera_data,
+        cmd_buffer,
+        particle_call,
+        time,
+      )?;
     }
   }
 
@@ -1106,7 +1177,10 @@ pub fn render_frame(
       &render_scene.camera_data,
       cmd_buffer,
       draw_call,
-      [render_scene.window_extent[0] as f32, render_scene.window_extent[1] as f32],
+      [
+        render_scene.window_extent[0] as f32,
+        render_scene.window_extent[1] as f32,
+      ],
       handle,
     )?;
   }

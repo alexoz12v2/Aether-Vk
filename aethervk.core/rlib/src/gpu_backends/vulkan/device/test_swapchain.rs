@@ -1,3 +1,5 @@
+//! test_swapchain module.
+
 #[cfg(test)]
 mod tests {
   extern crate std;
@@ -8,7 +10,9 @@ mod tests {
   use ash::vk;
 
   // Helper to get real Vulkan device objects for testing swapchain directly
-  fn setup_test_render() -> (
+  fn setup_test_render(
+    enable_maintenance1: bool,
+  ) -> (
     alloc::sync::Arc<ash::Entry>,
     crate::gpu_backends::vulkan::instance::Instance,
     ash::Device,
@@ -75,6 +79,17 @@ mod tests {
     let log_device = LogicalDevice {
       timeline_semaphore: ash::khr::timeline_semaphore::Device::new(&instance.instance, &device),
       create_renderpass2: ash::khr::create_renderpass2::Device::new(&instance.instance, &device),
+      swapchain_maintenance1: if enable_maintenance1
+        && phys_device.optional_extensions.contains(
+          crate::gpu_backends::vulkan::utils::OptionalExtensionSupportFlags::SWAPCHAIN_MAINTENANCE1,
+        ) {
+        Some(ash::ext::swapchain_maintenance1::Device::new(
+          &instance.instance,
+          &device,
+        ))
+      } else {
+        None
+      },
       buffer_device_address: ash::khr::buffer_device_address::Device::new(
         &instance.instance,
         &device,
@@ -330,12 +345,18 @@ mod tests {
     }
   }
 
-  #[test]
-  fn test_lifecycle_wraparound() {
+  fn test_lifecycle_wraparound_internal(enable_maintenance1: bool) {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, params) =
-      setup_test_render();
-    let mut engine =
-      PresentationState::new(&entry, &instance.instance, &device, phys_device, &params).unwrap();
+      setup_test_render(enable_maintenance1);
+    let mut engine = PresentationState::new(
+      &entry,
+      &instance.instance,
+      &device,
+      phys_device,
+      log_device.swapchain_maintenance1.clone(),
+      &params,
+    )
+    .unwrap();
 
     for _ in 0..20 {
       let acq = engine.acquire_next_image(&log_device, queue).unwrap();
@@ -367,11 +388,27 @@ mod tests {
   }
 
   #[test]
-  fn test_cancel_image_recovery() {
+  fn test_lifecycle_wraparound_legacy() {
+    test_lifecycle_wraparound_internal(false);
+  }
+
+  #[test]
+  fn test_lifecycle_wraparound_modern() {
+    test_lifecycle_wraparound_internal(true);
+  }
+
+  fn test_cancel_image_recovery_internal(enable_maintenance1: bool) {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, params) =
-      setup_test_render();
-    let mut engine =
-      PresentationState::new(&entry, &instance.instance, &device, phys_device, &params).unwrap();
+      setup_test_render(enable_maintenance1);
+    let mut engine = PresentationState::new(
+      &entry,
+      &instance.instance,
+      &device,
+      phys_device,
+      log_device.swapchain_maintenance1.clone(),
+      &params,
+    )
+    .unwrap();
 
     let acq1 = engine.acquire_next_image(&log_device, queue).unwrap();
 
@@ -420,11 +457,27 @@ mod tests {
   }
 
   #[test]
-  fn test_resize_in_flight_discard_bins() {
+  fn test_cancel_image_recovery_legacy() {
+    test_cancel_image_recovery_internal(false);
+  }
+
+  #[test]
+  fn test_cancel_image_recovery_modern() {
+    test_cancel_image_recovery_internal(true);
+  }
+
+  fn test_resize_in_flight_discard_bins_internal(enable_maintenance1: bool) {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, mut params) =
-      setup_test_render();
-    let mut engine =
-      PresentationState::new(&entry, &instance.instance, &device, phys_device, &params).unwrap();
+      setup_test_render(enable_maintenance1);
+    let mut engine = PresentationState::new(
+      &entry,
+      &instance.instance,
+      &device,
+      phys_device,
+      log_device.swapchain_maintenance1.clone(),
+      &params,
+    )
+    .unwrap();
 
     let acq = engine.acquire_next_image(&log_device, queue).unwrap();
     unsafe {
@@ -490,15 +543,31 @@ mod tests {
   }
 
   #[test]
-  fn test_windowless_export_png() {
+  fn test_resize_in_flight_discard_bins_legacy() {
+    test_resize_in_flight_discard_bins_internal(false);
+  }
+
+  #[test]
+  fn test_resize_in_flight_discard_bins_modern() {
+    test_resize_in_flight_discard_bins_internal(true);
+  }
+
+  fn test_windowless_export_png_internal(enable_maintenance1: bool) {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, mut params) =
-      setup_test_render();
+      setup_test_render(enable_maintenance1);
     params.ty = crate::gpu::PresentationEngineType::WindowLess;
     params.width = 128;
     params.height = 128;
 
-    let mut engine =
-      PresentationState::new(&entry, &instance.instance, &device, phys_device, &params).unwrap();
+    let mut engine = PresentationState::new(
+      &entry,
+      &instance.instance,
+      &device,
+      phys_device,
+      log_device.swapchain_maintenance1.clone(),
+      &params,
+    )
+    .unwrap();
 
     let acq = engine.acquire_next_image(&log_device, queue).unwrap();
     unsafe {
@@ -552,20 +621,39 @@ mod tests {
   }
 
   #[test]
-  fn test_windowed_presentation() {
+  fn test_windowless_export_png_legacy() {
+    test_windowless_export_png_internal(false);
+  }
+
+  #[test]
+  fn test_windowless_export_png_modern() {
+    test_windowless_export_png_internal(true);
+  }
+
+  fn test_windowed_presentation_internal(enable_maintenance1: bool) {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, _) =
-      setup_test_render();
-        
+      setup_test_render(enable_maintenance1);
+
     let params = crate::gpu::PresentationEngineParams {
       ty: crate::gpu::PresentationEngineType::Window,
-      window_info: crate::gpu::OpaqueNativeHandleInfo { ptr0: core::ptr::null_mut(), ptr1: core::ptr::null_mut() },
+      window_info: crate::gpu::OpaqueNativeHandleInfo {
+        ptr0: core::ptr::null_mut(),
+        ptr1: core::ptr::null_mut(),
+      },
       width: 800,
       height: 600,
       vsync: false,
     };
 
-    let mut engine =
-      PresentationState::new(&entry, &instance.instance, &device, phys_device, &params).unwrap();
+    let mut engine = PresentationState::new(
+      &entry,
+      &instance.instance,
+      &device,
+      phys_device,
+      log_device.swapchain_maintenance1.clone(),
+      &params,
+    )
+    .unwrap();
 
     for _ in 0..20 {
       let acq = engine.acquire_next_image(&log_device, queue).unwrap();
@@ -584,14 +672,13 @@ mod tests {
           submit_fence,
           [0.0, 1.0, 0.0, 1.0],
         );
-        let _ = engine
-          .submit_image(&log_device, queue, acq.image_index, acq.frame_index as u32)
-          .unwrap();
+        let _ =
+          engine.submit_image(&log_device, queue, acq.image_index, acq.frame_index as u32).unwrap();
       }
     }
-    
+
     engine.resize(&instance.instance, &device, phys_device, 1024, 768).unwrap();
-        
+
     let acq2 = engine.acquire_next_image(&log_device, queue).unwrap();
     unsafe {
       let (image, _, present_sem) = engine.get_image_resources(acq2.image_index as usize);
@@ -609,7 +696,12 @@ mod tests {
         [0.0, 0.0, 1.0, 1.0],
       );
       let _ = engine
-        .submit_image(&log_device, queue, acq2.image_index, acq2.frame_index as u32)
+        .submit_image(
+          &log_device,
+          queue,
+          acq2.image_index,
+          acq2.frame_index as u32,
+        )
         .unwrap();
     }
 
@@ -622,39 +714,78 @@ mod tests {
   }
 
   #[test]
-  fn test_multiple_viewports_and_mesh_viewer() {
+  fn test_windowed_presentation_legacy() {
+    test_windowed_presentation_internal(false);
+  }
+
+  #[test]
+  fn test_windowed_presentation_modern() {
+    test_windowed_presentation_internal(true);
+  }
+
+  fn test_multiple_viewports_and_mesh_viewer_internal(enable_maintenance1: bool) {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, _) =
-      setup_test_render();
+      setup_test_render(enable_maintenance1);
 
     let params1 = crate::gpu::PresentationEngineParams {
       ty: crate::gpu::PresentationEngineType::Window,
-      window_info: crate::gpu::OpaqueNativeHandleInfo { ptr0: core::ptr::null_mut(), ptr1: core::ptr::null_mut() },
+      window_info: crate::gpu::OpaqueNativeHandleInfo {
+        ptr0: core::ptr::null_mut(),
+        ptr1: core::ptr::null_mut(),
+      },
       width: 800,
       height: 600,
       vsync: false,
     };
-    let mut vp1 =
-      PresentationState::new(&entry, &instance.instance, &device, phys_device, &params1).unwrap();
+    let mut vp1 = PresentationState::new(
+      &entry,
+      &instance.instance,
+      &device,
+      phys_device,
+      log_device.swapchain_maintenance1.clone(),
+      &params1,
+    )
+    .unwrap();
 
     let params2 = crate::gpu::PresentationEngineParams {
       ty: crate::gpu::PresentationEngineType::Window,
-      window_info: crate::gpu::OpaqueNativeHandleInfo { ptr0: core::ptr::null_mut(), ptr1: core::ptr::null_mut() },
+      window_info: crate::gpu::OpaqueNativeHandleInfo {
+        ptr0: core::ptr::null_mut(),
+        ptr1: core::ptr::null_mut(),
+      },
       width: 800,
       height: 600,
       vsync: false,
     };
-    let mut vp2 =
-      PresentationState::new(&entry, &instance.instance, &device, phys_device, &params2).unwrap();
+    let mut vp2 = PresentationState::new(
+      &entry,
+      &instance.instance,
+      &device,
+      phys_device,
+      log_device.swapchain_maintenance1.clone(),
+      &params2,
+    )
+    .unwrap();
 
     let params3 = crate::gpu::PresentationEngineParams {
       ty: crate::gpu::PresentationEngineType::Window,
-      window_info: crate::gpu::OpaqueNativeHandleInfo { ptr0: core::ptr::null_mut(), ptr1: core::ptr::null_mut() },
+      window_info: crate::gpu::OpaqueNativeHandleInfo {
+        ptr0: core::ptr::null_mut(),
+        ptr1: core::ptr::null_mut(),
+      },
       width: 400,
       height: 400,
       vsync: false,
     };
-    let mut mv =
-      PresentationState::new(&entry, &instance.instance, &device, phys_device, &params3).unwrap();
+    let mut mv = PresentationState::new(
+      &entry,
+      &instance.instance,
+      &device,
+      phys_device,
+      log_device.swapchain_maintenance1.clone(),
+      &params3,
+    )
+    .unwrap();
 
     for _ in 0..5 {
       // VP1
@@ -662,8 +793,25 @@ mod tests {
       unsafe {
         let (image, _, present_sem) = vp1.get_image_resources(acq1.image_index as usize);
         let (acquire_sem, submit_fence) = vp1.get_frame_resources(acq1.frame_index as usize);
-        simulate_gpu_frame(&device, &log_device, queue, cmd_pool, image.get(), acquire_sem, present_sem, submit_fence, [1.0, 0.0, 0.0, 1.0]);
-        vp1.submit_image(&log_device, queue, acq1.image_index, acq1.frame_index as u32).unwrap();
+        simulate_gpu_frame(
+          &device,
+          &log_device,
+          queue,
+          cmd_pool,
+          image.get(),
+          acquire_sem,
+          present_sem,
+          submit_fence,
+          [1.0, 0.0, 0.0, 1.0],
+        );
+        vp1
+          .submit_image(
+            &log_device,
+            queue,
+            acq1.image_index,
+            acq1.frame_index as u32,
+          )
+          .unwrap();
       }
 
       // VP2
@@ -671,8 +819,25 @@ mod tests {
       unsafe {
         let (image, _, present_sem) = vp2.get_image_resources(acq2.image_index as usize);
         let (acquire_sem, submit_fence) = vp2.get_frame_resources(acq2.frame_index as usize);
-        simulate_gpu_frame(&device, &log_device, queue, cmd_pool, image.get(), acquire_sem, present_sem, submit_fence, [0.0, 1.0, 0.0, 1.0]);
-        vp2.submit_image(&log_device, queue, acq2.image_index, acq2.frame_index as u32).unwrap();
+        simulate_gpu_frame(
+          &device,
+          &log_device,
+          queue,
+          cmd_pool,
+          image.get(),
+          acquire_sem,
+          present_sem,
+          submit_fence,
+          [0.0, 1.0, 0.0, 1.0],
+        );
+        vp2
+          .submit_image(
+            &log_device,
+            queue,
+            acq2.image_index,
+            acq2.frame_index as u32,
+          )
+          .unwrap();
       }
 
       // MV
@@ -680,8 +845,24 @@ mod tests {
       unsafe {
         let (image, _, present_sem) = mv.get_image_resources(acq3.image_index as usize);
         let (acquire_sem, submit_fence) = mv.get_frame_resources(acq3.frame_index as usize);
-        simulate_gpu_frame(&device, &log_device, queue, cmd_pool, image.get(), acquire_sem, present_sem, submit_fence, [0.0, 0.0, 1.0, 1.0]);
-        mv.submit_image(&log_device, queue, acq3.image_index, acq3.frame_index as u32).unwrap();
+        simulate_gpu_frame(
+          &device,
+          &log_device,
+          queue,
+          cmd_pool,
+          image.get(),
+          acquire_sem,
+          present_sem,
+          submit_fence,
+          [0.0, 0.0, 1.0, 1.0],
+        );
+        mv.submit_image(
+          &log_device,
+          queue,
+          acq3.image_index,
+          acq3.frame_index as u32,
+        )
+        .unwrap();
       }
     }
 
@@ -695,18 +876,120 @@ mod tests {
     unsafe {
       let (image, _, present_sem) = vp1.get_image_resources(acq1.image_index as usize);
       let (acquire_sem, submit_fence) = vp1.get_frame_resources(acq1.frame_index as usize);
-      simulate_gpu_frame(&device, &log_device, queue, cmd_pool, image.get(), acquire_sem, present_sem, submit_fence, [1.0, 1.0, 1.0, 1.0]);
-      vp1.submit_image(&log_device, queue, acq1.image_index, acq1.frame_index as u32).unwrap();
+      simulate_gpu_frame(
+        &device,
+        &log_device,
+        queue,
+        cmd_pool,
+        image.get(),
+        acquire_sem,
+        present_sem,
+        submit_fence,
+        [1.0, 1.0, 1.0, 1.0],
+      );
+      vp1
+        .submit_image(
+          &log_device,
+          queue,
+          acq1.image_index,
+          acq1.frame_index as u32,
+        )
+        .unwrap();
     }
 
     unsafe { device.device_wait_idle().unwrap() };
     vp1.cleanup(&device);
     vp2.cleanup(&device);
     mv.cleanup(&device);
-    
+
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
       device.destroy_device(None);
     }
+  }
+
+  #[test]
+  fn test_multiple_viewports_and_mesh_viewer_legacy() {
+    test_multiple_viewports_and_mesh_viewer_internal(false);
+  }
+
+  #[test]
+  fn test_multiple_viewports_and_mesh_viewer_modern() {
+    test_multiple_viewports_and_mesh_viewer_internal(true);
+  }
+
+  fn test_rapid_resize_stress_internal(enable_maintenance1: bool) {
+    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, _) =
+      setup_test_render(enable_maintenance1);
+
+    let mut params = crate::gpu::PresentationEngineParams {
+      ty: crate::gpu::PresentationEngineType::Window,
+      window_info: crate::gpu::OpaqueNativeHandleInfo {
+        ptr0: core::ptr::null_mut(),
+        ptr1: core::ptr::null_mut(),
+      },
+      width: 800,
+      height: 600,
+      vsync: false,
+    };
+
+    let mut engine = PresentationState::new(
+      &entry,
+      &instance.instance,
+      &device,
+      phys_device,
+      log_device.swapchain_maintenance1.clone(),
+      &params,
+    )
+    .unwrap();
+
+    let mut width = 800;
+    let mut height = 600;
+
+    for i in 0..50 {
+      if i % 3 == 0 {
+        width += 10;
+        height += 10;
+        engine.resize(&instance.instance, &device, phys_device, width, height).unwrap();
+      }
+
+      let acq = engine.acquire_next_image(&log_device, queue).unwrap();
+      unsafe {
+        let (image, _, present_sem) = engine.get_image_resources(acq.image_index as usize);
+        let (acquire_sem, submit_fence) = engine.get_frame_resources(acq.frame_index as usize);
+
+        simulate_gpu_frame(
+          &device,
+          &log_device,
+          queue,
+          cmd_pool,
+          image.get(),
+          acquire_sem,
+          present_sem,
+          submit_fence,
+          [0.0, 1.0, 0.0, 1.0],
+        );
+        let _ =
+          engine.submit_image(&log_device, queue, acq.image_index, acq.frame_index as u32).unwrap();
+      }
+    }
+
+    unsafe { device.device_wait_idle().unwrap() };
+    engine.cleanup(&device);
+
+    unsafe {
+      device.destroy_command_pool(cmd_pool, None);
+      device.destroy_device(None);
+    }
+  }
+
+  #[test]
+  fn test_rapid_resize_stress_legacy() {
+    test_rapid_resize_stress_internal(false);
+  }
+
+  #[test]
+  fn test_rapid_resize_stress_modern() {
+    test_rapid_resize_stress_internal(true);
   }
 }

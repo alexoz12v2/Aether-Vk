@@ -101,11 +101,14 @@ namespace AetherVk.Services
       if (mainWindow == null)
         return;
 
-      var inputRegistry = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<AetherVk.Logic.Input.InputRegistry>(App.Host!.Services);
-      
+      var inputRegistry =
+        Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<AetherVk.Logic.Input.InputRegistry>(
+          App.Host!.Services
+        );
+
       var settingsWindow = new Views.SettingsWindow
       {
-          DataContext = new SettingsViewModel(inputRegistry)
+        DataContext = new SettingsViewModel(inputRegistry),
       };
 
       await settingsWindow.ShowDialog(mainWindow);
@@ -138,7 +141,10 @@ namespace AetherVk.Services
             _consoleService
           ),
         };
-        var inputRegistry = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<AetherVk.Logic.Input.InputRegistry>(App.Host!.Services);
+        var inputRegistry =
+          Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<AetherVk.Logic.Input.InputRegistry>(
+            App.Host!.Services
+          );
         _ = new AetherVk.Input.GlobalInputRouter(meshViewer, inputRegistry);
         meshViewer.Show(mainWindow);
       }
@@ -168,7 +174,7 @@ namespace AetherVk.Services
           vm.PosZ
         );
       }
-      
+
       return 0;
     }
   }

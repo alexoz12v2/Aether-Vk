@@ -1,3 +1,5 @@
+//! particle module.
+
 use aethervk_oshal_rlib::math::{
   FloatLike,
   floating::{FloatBits, FloatOps},
@@ -11,6 +13,7 @@ use crate::math::collision::bounds::{AABB, OBB};
 use crate::math::collision::bvh_builder::{BVHBuilderParams, BVHNode, BoundNode};
 
 #[derive(Debug, Clone, Copy)]
+/// TODO: Document this item
 pub struct Particle<V>
 where
   V: Vector3,
@@ -25,6 +28,7 @@ where
   V: Vector3,
   V::Scalar: FloatLike + FloatOps + FloatBits,
 {
+  /// TODO: Document this item
   pub fn aabb(&self) -> AABB<V::Scalar>
   where
     V: Into<[V::Scalar; 3]>,
@@ -34,15 +38,18 @@ where
   }
 }
 
+/// TODO: Document this item
 pub struct ParticleBVHBuilder {
   params: BVHBuilderParams,
 }
 
 impl ParticleBVHBuilder {
+  /// TODO: Document this item
   pub fn new(params: BVHBuilderParams) -> Self {
     Self { params }
   }
 
+  /// TODO: Document this item
   pub fn build<'a, I, V, M>(&self, particles: I) -> Option<Box<BVHNode<V::Scalar>>>
   where
     I: IntoIterator<Item = &'a Particle<V>>,

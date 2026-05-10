@@ -1,3 +1,5 @@
+//! vector module.
+
 use core::ops;
 
 use crate::math::{FloatLike, MulAddIdentity, Scalar, floating::FloatOps};
@@ -5,6 +7,7 @@ use crate::math::{FloatLike, MulAddIdentity, Scalar, floating::FloatOps};
 // shuffle is unstable
 #[cfg(target_arch = "x86_64")]
 #[allow(non_snake_case)]
+/// TODO: Document this item
 pub(crate) const fn _MM_SHUFFLE(z: u32, y: u32, x: u32, w: u32) -> i32 {
   ((z << 6) | (y << 4) | (x << 2) | w) as i32
 }
@@ -13,6 +16,7 @@ pub(crate) const fn _MM_SHUFFLE(z: u32, y: u32, x: u32, w: u32) -> i32 {
 
 // Note: Indexing is to be implemented by concrete types, not strictly required here
 // Note: many functions take the vector by value as this is supposed to be a small dimensional vector
+/// TODO: Document this item
 pub trait Vector:
   Copy
   + Sized
@@ -68,6 +72,7 @@ pub trait Vector:
   fn max(self, other: Self) -> Self;
 }
 
+/// TODO: Document this item
 pub trait Vector2: Vector
 where
   Self::Scalar: Scalar,
@@ -91,6 +96,7 @@ where
   }
 }
 
+/// TODO: Document this item
 pub trait Vector3: Vector
 where
   Self::Scalar: Scalar,
@@ -128,6 +134,7 @@ where
   }
 }
 
+/// TODO: Document this item
 pub trait Vector4: Vector
 where
   Self::Scalar: Scalar,

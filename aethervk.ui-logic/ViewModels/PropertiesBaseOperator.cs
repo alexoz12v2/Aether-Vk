@@ -4,68 +4,74 @@ namespace AetherVk.Logic.ViewModels;
 
 public class PropertiesBaseOperator : IActionOperator
 {
-    private readonly PropertiesViewModel _vm;
+  private readonly PropertiesViewModel _vm;
 
-    public PropertiesBaseOperator(PropertiesViewModel vm)
+  public PropertiesBaseOperator(PropertiesViewModel vm)
+  {
+    _vm = vm;
+  }
+
+  public void OnEnter() { }
+
+  public void OnExit() { }
+
+  public bool ProcessAction(AppAction action, bool isPressed)
+  {
+    if (!isPressed)
+      return false;
+
+    if (action.Id == "ui.expand_all")
     {
-        _vm = vm;
+      _vm.AreAllExpanded = !_vm.AreAllExpanded;
+      return true;
     }
-
-    public void OnEnter() { }
-    public void OnExit() { }
-
-    public bool ProcessAction(AppAction action, bool isPressed)
+    if (action.Id == "ui.show_flyout")
     {
-        if (!isPressed) return false;
-
-        if (action.Id == "ui.expand_all") 
-        { 
-            _vm.AreAllExpanded = !_vm.AreAllExpanded; 
-            return true; 
-        }
-        if (action.Id == "ui.show_flyout") 
-        { 
-            _vm.OperatorStack.Push(new FlyoutMenuOperator(_vm));
-            return true; 
-        }
-        return false;
+      _vm.OperatorStack.Push(new FlyoutMenuOperator(_vm));
+      return true;
     }
+    return false;
+  }
 
-    public bool ProcessPointerDelta(float dx, float dy) => false;
-    public bool ProcessPointerWheel(float deltaY) => false;
+  public bool ProcessPointerDelta(float dx, float dy) => false;
+
+  public bool ProcessPointerWheel(float deltaY) => false;
 }
 
 public class FlyoutMenuOperator : IActionOperator
 {
-    private readonly PropertiesViewModel _vm;
+  private readonly PropertiesViewModel _vm;
 
-    public FlyoutMenuOperator(PropertiesViewModel vm)
+  public FlyoutMenuOperator(PropertiesViewModel vm)
+  {
+    _vm = vm;
+  }
+
+  public void OnEnter() => _vm.IsFlyoutMenuOpen = true;
+
+  public void OnExit() => _vm.IsFlyoutMenuOpen = false;
+
+  public bool ProcessAction(AppAction action, bool isPressed)
+  {
+    if (!isPressed)
+      return false;
+
+    if (action.Id == "ui.add_cube")
     {
-        _vm = vm;
+      // Mock logic for adding a cube
+      _vm.OperatorStack.Pop();
+      return true;
+    }
+    if (action.Id == "global.cancel" || action.Id == "ui.show_flyout")
+    {
+      _vm.OperatorStack.Pop();
+      return true;
     }
 
-    public void OnEnter() => _vm.IsFlyoutMenuOpen = true;
-    public void OnExit() => _vm.IsFlyoutMenuOpen = false;
+    return true;
+  }
 
-    public bool ProcessAction(AppAction action, bool isPressed)
-    {
-        if (!isPressed) return false;
-        
-        if (action.Id == "ui.add_cube") 
-        { 
-            // Mock logic for adding a cube
-            _vm.OperatorStack.Pop(); 
-            return true; 
-        }
-        if (action.Id == "global.cancel" || action.Id == "ui.show_flyout") 
-        { 
-            _vm.OperatorStack.Pop(); 
-            return true; 
-        }
+  public bool ProcessPointerDelta(float dx, float dy) => false;
 
-        return true; 
-    }
-
-    public bool ProcessPointerDelta(float dx, float dy) => false;
-    public bool ProcessPointerWheel(float deltaY) => false;
+  public bool ProcessPointerWheel(float deltaY) => false;
 }

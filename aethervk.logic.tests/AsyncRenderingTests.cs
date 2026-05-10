@@ -78,19 +78,25 @@ namespace AetherVk.Logic.Tests
         Assert.NotNull(camera);
 
         TaskCompletionSource<ulong> tcs = new();
-        WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(this, (r, m) => {
+        WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(
+          this,
+          (r, m) =>
+          {
             tcs.TrySetResult(m.RenderGeneration);
-        });
+          }
+        );
         _service.PlayScene(sceneId);
 
         ulong taskId;
         try
         {
-            taskId = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+          taskId = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }
         finally
         {
-            WeakReferenceMessenger.Default.Unregister<AetherVk.Logic.Messages.RenderFrameReadyMessage>(this);
+          WeakReferenceMessenger.Default.Unregister<AetherVk.Logic.Messages.RenderFrameReadyMessage>(
+            this
+          );
         }
 
         int bufferSize = (int)(width * height * 4);
@@ -146,20 +152,27 @@ namespace AetherVk.Logic.Tests
 
         TaskCompletionSource<ulong> tcs = new();
         int msgCount = 0;
-        WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(this, (r, m) => {
+        WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(
+          this,
+          (r, m) =>
+          {
             msgCount++;
-            if (msgCount >= 2) tcs.TrySetResult(m.RenderGeneration);
-        });
+            if (msgCount >= 2)
+              tcs.TrySetResult(m.RenderGeneration);
+          }
+        );
 
         _service.PlayScene(sceneId);
 
         try
         {
-            await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+          await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }
         finally
         {
-            WeakReferenceMessenger.Default.Unregister<AetherVk.Logic.Messages.RenderFrameReadyMessage>(this);
+          WeakReferenceMessenger.Default.Unregister<AetherVk.Logic.Messages.RenderFrameReadyMessage>(
+            this
+          );
         }
       }
       catch (DllNotFoundException) { }
@@ -212,20 +225,27 @@ namespace AetherVk.Logic.Tests
 
         TaskCompletionSource<ulong> tcs = new();
         int msgCount = 0;
-        WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(this, (r, m) => {
+        WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(
+          this,
+          (r, m) =>
+          {
             msgCount++;
-            if (msgCount >= 3) tcs.TrySetResult(m.RenderGeneration);
-        });
+            if (msgCount >= 3)
+              tcs.TrySetResult(m.RenderGeneration);
+          }
+        );
 
         _service.PlayScene(sceneId);
 
         try
         {
-            await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+          await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }
         finally
         {
-            WeakReferenceMessenger.Default.Unregister<AetherVk.Logic.Messages.RenderFrameReadyMessage>(this);
+          WeakReferenceMessenger.Default.Unregister<AetherVk.Logic.Messages.RenderFrameReadyMessage>(
+            this
+          );
         }
 
         TestSceneExporter.ExportScene(sceneId, _stateManager, "AllArchetypes");

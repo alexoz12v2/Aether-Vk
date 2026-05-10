@@ -19,6 +19,7 @@ use windows::Win32::{
 
 use crate::os::ThreadingResult;
 
+/// TODO: Document this item
 pub struct Thread {
   #[cfg(any(unix, target_os = "macos"))]
   native: libc::pthread_t,
@@ -27,6 +28,7 @@ pub struct Thread {
 }
 
 impl Thread {
+  /// TODO: Document this item
   pub fn join(self) {
     #[cfg(any(unix, target_os = "macos"))]
     unsafe {
@@ -45,12 +47,14 @@ impl Thread {
   }
 }
 
+/// TODO: Document this item
 pub struct Builder {
   name: Option<String>,
   stack_size: Option<usize>,
 }
 
 impl Builder {
+  /// TODO: Document this item
   pub fn new() -> Builder {
     Builder {
       name: None,
@@ -58,16 +62,19 @@ impl Builder {
     }
   }
 
+  /// TODO: Document this item
   pub fn name(mut self, name: String) -> Builder {
     self.name = Some(name);
     self
   }
 
+  /// TODO: Document this item
   pub fn stack_size(mut self, size: usize) -> Builder {
     self.stack_size = Some(size);
     self
   }
 
+  /// TODO: Document this item
   pub fn spawn<F>(self, f: F) -> ThreadingResult<Thread>
   where
     F: FnOnce(),
@@ -163,6 +170,7 @@ impl Builder {
   }
 }
 
+/// TODO: Document this item
 pub fn spawn<F>(f: F) -> ThreadingResult<Thread>
 where
   F: FnOnce(),

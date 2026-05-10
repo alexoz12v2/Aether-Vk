@@ -96,16 +96,19 @@ pub struct AssetCache<T> {
 }
 
 impl<T> AssetCache<T> {
+  /// TODO: Document this item
   pub fn new() -> Self {
     Self {
       assets: RwLock::new(HashMap::new()),
     }
   }
 
+  /// TODO: Document this item
   pub fn get(&self, path: &str) -> Option<alloc::sync::Arc<T>> {
     self.assets.read().get(path).cloned()
   }
 
+  /// TODO: Document this item
   pub fn insert(&self, path: String, asset: T) -> alloc::sync::Arc<T> {
     let mut map = self.assets.write();
     let arc = alloc::sync::Arc::new(asset);
@@ -113,10 +116,12 @@ impl<T> AssetCache<T> {
     arc
   }
 
+  /// TODO: Document this item
   pub fn remove(&self, path: &str) -> Option<alloc::sync::Arc<T>> {
     self.assets.write().remove(path)
   }
 
+  /// TODO: Document this item
   pub fn clear(&self) {
     self.assets.write().clear();
   }
@@ -195,6 +200,7 @@ pub struct CursorComponent {}
 impl Component for CursorComponent {}
 
 #[derive(Debug, PartialEq, Clone, Copy)]
+/// TODO: Document this item
 pub struct Marker {
   pub local_pos: [f32; 3],
   pub color: [f32; 3],
@@ -202,6 +208,7 @@ pub struct Marker {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+/// TODO: Document this item
 pub struct MarkersComponent {
   pub markers: alloc::vec::Vec<Marker>,
 }
@@ -255,6 +262,7 @@ pub enum BillboardType {
 }
 
 #[derive(Debug)]
+/// TODO: Document this item
 pub struct ImageBillboardComponent {
   pub texture_id: u64,
   pub billboard_type: BillboardType,
@@ -357,6 +365,7 @@ impl Component for ParticleStateComponent {}
 
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// TODO: Document this item
 pub enum ReferenceFrameType {
   Macro = 0,
   Micro = 1,
@@ -364,6 +373,7 @@ pub enum ReferenceFrameType {
 
 #[repr(C, align(16))]
 #[derive(Clone, Debug, PartialEq)]
+/// TODO: Document this item
 pub struct ReferenceFrameComponent {
   pub frame_type: ReferenceFrameType,
   pub scale: f32,
@@ -373,6 +383,7 @@ pub struct ReferenceFrameComponent {
 
 impl ReferenceFrameComponent {
   #[inline(always)]
+  /// TODO: Document this item
   pub fn micro_to_macro(
     p_micro: Vec3f32,
     v_micro: Vec3f32,
@@ -386,6 +397,7 @@ impl ReferenceFrameComponent {
   }
 
   #[inline(always)]
+  /// TODO: Document this item
   pub fn macro_to_micro(
     p_macro: Vec3f32,
     v_macro: Vec3f32,
@@ -403,6 +415,7 @@ impl Component for ReferenceFrameComponent {}
 
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
+/// TODO: Document this item
 pub struct KinematicComponent {
   pub velocity: Vec3f32,
   pub angular_velocity: Vec3f32,
@@ -421,6 +434,7 @@ pub enum RenderableDataRef<'a> {
 }
 
 impl<'a> RenderableDataRef<'a> {
+  /// TODO: Document this item
   pub fn index_count(&self) -> u32 {
     match self {
       RenderableDataRef::ImageBillboard(_) => 4,
@@ -628,6 +642,7 @@ pub struct Scene {
 }
 
 #[derive(Default, Debug)]
+/// TODO: Document this item
 pub struct SceneHierarchy {
   parents: HashMap<EntityId, EntityId>,
   children: HashMap<EntityId, Vec<EntityId>>,
@@ -662,6 +677,7 @@ impl SceneHierarchy {
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// TODO: Document this item
 pub enum HasComponentResultEnum {
   EntityHasComponent = 0,
   EntityNotFound = 1,
@@ -675,6 +691,7 @@ impl Into<bool> for HasComponentResultEnum {
 }
 
 impl Scene {
+  /// TODO: Document this item
   pub fn new() -> Self {
     let empty_archetype = Archetype {
       components: HashMap::new(),
@@ -692,10 +709,12 @@ impl Scene {
     }
   }
 
+  /// TODO: Document this item
   pub fn entity_count(&self) -> usize {
     self.entities.read().len()
   }
 
+  /// TODO: Document this item
   pub fn hierarchy_depth(&self) -> usize {
     let hierarchy = self.hierarchy.read();
     let mut max_depth = 0;
@@ -711,11 +730,13 @@ impl Scene {
     max_depth
   }
 
+  /// TODO: Document this item
   pub fn hierarchy_breadth(&self) -> usize {
     let hierarchy = self.hierarchy.read();
     hierarchy.children.values().map(|children| children.len()).max().unwrap_or(0)
   }
 
+  /// TODO: Document this item
   pub fn should_parallelize(&self) -> bool {
     let size = self.entity_count();
     let depth = self.hierarchy_depth();
@@ -726,6 +747,7 @@ impl Scene {
     size > 1000 || breadth > 100
   }
 
+  /// TODO: Document this item
   pub fn add_camera<S>(
     &self,
     name: S,
@@ -768,6 +790,7 @@ impl Scene {
     Ok(camera_entity)
   }
 
+  /// TODO: Document this item
   pub fn set_parent(&self, child: EntityId, parent: Option<EntityId>) {
     let entities = self.entities.read();
     if !entities.contains_key(child)
@@ -778,6 +801,7 @@ impl Scene {
     self.hierarchy.write().set_parent(child, parent);
   }
 
+  /// TODO: Document this item
   pub fn get_parent(&self, entity: EntityId) -> Option<EntityId> {
     let entities = self.entities.read();
     if !entities.contains_key(entity) {
@@ -786,6 +810,7 @@ impl Scene {
     self.hierarchy.read().parents.get(&entity).cloned()
   }
 
+  /// TODO: Document this item
   pub fn get_entity_component_names(&self, entity: EntityId) -> Vec<&'static str> {
     let archetypes = self.archetypes.read();
     let entities = self.entities.read();
@@ -805,6 +830,7 @@ impl Scene {
     names
   }
 
+  /// TODO: Document this item
   pub fn spawn_entity(&self, name: impl Into<alloc::string::String>) -> EntityId {
     let mut actual_name = name.into();
     {
@@ -842,14 +868,17 @@ impl Scene {
     entity_id
   }
 
+  /// TODO: Document this item
   pub fn get_entity_by_name(&self, name: &str) -> Option<EntityId> {
     self.names.read().iter().find(|(_, n)| *n == name).map(|(id, _)| *id)
   }
 
+  /// TODO: Document this item
   pub fn get_name(&self, entity: EntityId) -> Option<alloc::string::String> {
     self.names.read().get(&entity).cloned()
   }
 
+  /// TODO: Document this item
   pub fn set_name(&self, entity: EntityId, name: impl Into<alloc::string::String>) {
     let mut actual_name = name.into();
     {
@@ -869,6 +898,7 @@ impl Scene {
     self.names.write().insert(entity, actual_name);
   }
 
+  /// TODO: Document this item
   pub fn register_component<T: Component>(&self, dependencies: &[TypeId]) {
     let mut meta = self.component_meta.write();
     meta.insert(
@@ -881,6 +911,7 @@ impl Scene {
     );
   }
 
+  /// TODO: Document this item
   pub fn add_component<T: Component>(
     &self,
     entity_id: EntityId,
@@ -1001,6 +1032,7 @@ impl Scene {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn remove_entity(&self, entity_id: EntityId) {
     let src_location = {
       let mut entities = self.entities.write();
@@ -1022,6 +1054,7 @@ impl Scene {
     src_arch.compact(&mut entities); // Organically triggers when arrays begin resembling swiss-cheese
   }
 
+  /// TODO: Document this item
   pub fn remove_component<T: Component>(&self, entity_id: EntityId) -> Result<(), &'static str> {
     let type_id_to_remove = TypeId::of::<T>();
 
@@ -1160,6 +1193,7 @@ impl Scene {
     }
   }
 
+  /// TODO: Document this item
   pub fn remove_column_if_par<T: Component, F>(&self, pool: &ThreadPool, filter: F)
   where
     F: Fn(EntityId, &T) -> bool + Send + Sync,
@@ -1170,6 +1204,7 @@ impl Scene {
     }
   }
 
+  /// TODO: Document this item
   pub fn remove_first_component<T: Component>(&self) -> Option<EntityId> {
     let target_entity = self.query1_first_res(|e, _: &T| Some(e));
     if let Some((e, _)) = target_entity {
@@ -1180,6 +1215,7 @@ impl Scene {
     None
   }
 
+  /// TODO: Document this item
   pub fn has_component<T: Component>(&self, entity_id: EntityId) -> HasComponentResultEnum {
     let archetypes = self.archetypes.read();
     let archetype =
@@ -1196,6 +1232,7 @@ impl Scene {
     }
   }
 
+  /// TODO: Document this item
   pub fn with_component<T: Component, F, R>(&self, entity_id: EntityId, f: F) -> Option<R>
   where
     F: FnOnce(&T) -> R,
@@ -1211,6 +1248,7 @@ impl Scene {
     Some(f(components[location.row_index].as_ref()?))
   }
 
+  /// TODO: Document this item
   pub fn with_component_mut<T: Component, F, R>(&self, entity_id: EntityId, f: F) -> Option<R>
   where
     F: FnOnce(&mut T) -> R,
@@ -1228,6 +1266,7 @@ impl Scene {
 
   // === Sequential Single-Threaded Queries ===
 
+  /// TODO: Document this item
   pub fn query1<T: Component, F>(&self, mut f: F)
   where
     F: FnMut(EntityId, &T),
@@ -1249,6 +1288,7 @@ impl Scene {
     }
   }
 
+  /// TODO: Document this item
   pub fn query2<T1: Component, T2: Component, F>(&self, mut f: F)
   where
     F: FnMut(EntityId, &T1, &T2),
@@ -1277,6 +1317,7 @@ impl Scene {
     }
   }
 
+  /// TODO: Document this item
   pub fn query1_mut<T: Component, F>(&self, mut f: F)
   where
     F: FnMut(EntityId, &mut T),
@@ -1298,6 +1339,7 @@ impl Scene {
     }
   }
 
+  /// TODO: Document this item
   pub fn query2_mut<T1: Component, T2: Component, F>(&self, mut f: F)
   where
     F: FnMut(EntityId, &mut T1, &mut T2),
@@ -1329,6 +1371,7 @@ impl Scene {
     }
   }
 
+  /// TODO: Document this item
   pub fn query1_res<T: Component, F, R>(&self, mut f: F) -> Vec<(R, EntityId)>
   where
     F: FnMut(EntityId, &T) -> Option<R>,
@@ -1354,6 +1397,7 @@ impl Scene {
     results
   }
 
+  /// TODO: Document this item
   pub fn query2_res<T1: Component, T2: Component, F, R>(&self, mut f: F) -> Vec<(R, EntityId)>
   where
     F: FnMut(EntityId, &T1, &T2) -> Option<R>,
@@ -1386,6 +1430,7 @@ impl Scene {
     results
   }
 
+  /// TODO: Document this item
   pub fn query1_res_mut<T: Component, F, R>(&self, mut f: F) -> Vec<(R, EntityId)>
   where
     F: FnMut(EntityId, &mut T) -> Option<R>,
@@ -1411,6 +1456,7 @@ impl Scene {
     results
   }
 
+  /// TODO: Document this item
   pub fn query2_res_mut<T1: Component, T2: Component, F, R>(&self, mut f: F) -> Vec<(R, EntityId)>
   where
     F: FnMut(EntityId, &mut T1, &mut T2) -> Option<R>,
@@ -1445,6 +1491,7 @@ impl Scene {
     results
   }
 
+  /// TODO: Document this item
   pub fn query1_first_res<T: Component, F, R>(&self, mut f: F) -> Option<(R, EntityId)>
   where
     F: FnMut(EntityId, &T) -> Option<R>,
@@ -1469,6 +1516,7 @@ impl Scene {
     None
   }
 
+  /// TODO: Document this item
   pub fn query2_first_res<T1: Component, T2: Component, F, R>(
     &self,
     mut f: F,
@@ -1503,6 +1551,7 @@ impl Scene {
     None
   }
 
+  /// TODO: Document this item
   pub fn query1_res_first_mut<T: Component, F, R>(&self, mut f: F) -> Option<(R, EntityId)>
   where
     F: FnMut(EntityId, &mut T) -> Option<R>,
@@ -1527,6 +1576,7 @@ impl Scene {
     None
   }
 
+  /// TODO: Document this item
   pub fn query2_res_first_mut<T1: Component, T2: Component, F, R>(
     &self,
     mut f: F,
@@ -1563,6 +1613,7 @@ impl Scene {
     None
   }
 
+  /// TODO: Document this item
   pub fn query1_without<T: Component, U: Component, F>(&self, mut f: F)
   where
     F: FnMut(EntityId, &T),
@@ -1585,6 +1636,7 @@ impl Scene {
     }
   }
 
+  /// TODO: Document this item
   pub fn query1_first_res_without<T: Component, U: Component, F, R>(
     &self,
     mut f: F,
@@ -1613,6 +1665,7 @@ impl Scene {
     None
   }
 
+  /// TODO: Document this item
   pub fn query2_first_res_without<T1: Component, T2: Component, U: Component, F, R>(
     &self,
     mut f: F,
@@ -1652,6 +1705,7 @@ impl Scene {
 
   // === Advanced Scene Traversal Logic ===
 
+  /// TODO: Document this item
   pub fn traverse_dfs_pre_order<A, F, C>(
     &self,
     start_entity: EntityId,
@@ -1700,6 +1754,7 @@ impl Scene {
     }
   }
 
+  /// TODO: Document this item
   pub fn traverse_with_hooks<A, Pre, Post, T>(
     &self,
     start_entity: EntityId,
@@ -1771,6 +1826,7 @@ impl Scene {
     post_visit(accumulator, current_entity);
   }
 
+  /// TODO: Document this item
   pub fn global_transform(&self, entity_id: EntityId) -> Option<TransformComponent> {
     let mut accumulated_transform = self.with_component(entity_id, |c: &TransformComponent| *c)?;
     let mut current_entity = entity_id;
@@ -1796,6 +1852,133 @@ impl Scene {
     Some(accumulated_transform)
   }
 
+  /// TODO: Document this item
+  pub fn get_relative_transform(
+    &self,
+    target_entity: EntityId,
+    reference_entity: EntityId,
+  ) -> Option<TransformComponent> {
+    if target_entity == reference_entity {
+      return Some(TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      });
+    }
+
+    let mut target_path = Vec::new();
+    let mut curr = target_entity;
+    target_path.push(curr);
+    while let Some(parent) = self.get_parent(curr) {
+      curr = parent;
+      target_path.push(curr);
+    }
+
+    let mut ref_path = Vec::new();
+    let mut curr = reference_entity;
+    ref_path.push(curr);
+    while let Some(parent) = self.get_parent(curr) {
+      curr = parent;
+      ref_path.push(curr);
+    }
+
+    let mut lca = None;
+    let mut t_idx = target_path.len() as isize - 1;
+    let mut r_idx = ref_path.len() as isize - 1;
+
+    while t_idx >= 0 && r_idx >= 0 && target_path[t_idx as usize] == ref_path[r_idx as usize] {
+      lca = Some(target_path[t_idx as usize]);
+      t_idx -= 1;
+      r_idx -= 1;
+    }
+
+    if lca.is_none() {
+      return None;
+    }
+
+    let mut target_to_lca = TransformComponent {
+      position: Vec3f32::from_components(0.0, 0.0, 0.0),
+      rotation: Quat::identity(),
+      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+    };
+
+    if t_idx >= 0 {
+      for i in 0..=(t_idx as usize) {
+        let node_id = target_path[i];
+        let node_transform = self.with_component(node_id, |c: &TransformComponent| *c)?;
+
+        let mut frame_scale = 1.0;
+        let _ = self.with_component(node_id, |c: &ReferenceFrameComponent| {
+          frame_scale = c.scale;
+        });
+
+        let scaled_child_pos = target_to_lca.position * frame_scale;
+        let scaled_child_scale = target_to_lca.scale * frame_scale;
+
+        target_to_lca = TransformComponent {
+          scale: node_transform.scale * scaled_child_scale,
+          rotation: node_transform.rotation * target_to_lca.rotation,
+          position: node_transform.position
+            + node_transform.rotation.rotate_vector(node_transform.scale * scaled_child_pos),
+        };
+      }
+    }
+
+    let mut ref_to_lca = TransformComponent {
+      position: Vec3f32::from_components(0.0, 0.0, 0.0),
+      rotation: Quat::identity(),
+      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+    };
+
+    if r_idx >= 0 {
+      for i in 0..=(r_idx as usize) {
+        let node_id = ref_path[i];
+        let node_transform = self.with_component(node_id, |c: &TransformComponent| *c)?;
+
+        let mut frame_scale = 1.0;
+        let _ = self.with_component(node_id, |c: &ReferenceFrameComponent| {
+          frame_scale = c.scale;
+        });
+
+        let scaled_child_pos = ref_to_lca.position * frame_scale;
+        let scaled_child_scale = ref_to_lca.scale * frame_scale;
+
+        ref_to_lca = TransformComponent {
+          scale: node_transform.scale * scaled_child_scale,
+          rotation: node_transform.rotation * ref_to_lca.rotation,
+          position: node_transform.position
+            + node_transform.rotation.rotate_vector(node_transform.scale * scaled_child_pos),
+        };
+      }
+    }
+
+    let safe_div_zero = |a: f32, b: f32| {
+      if b > -1e-15_f32 && b < 1e-15_f32 {
+        0.0
+      } else {
+        a / b
+      }
+    };
+
+    let inv_rot = ref_to_lca.rotation.inverse();
+    let diff_pos = target_to_lca.position - ref_to_lca.position;
+    let unrotated_diff = inv_rot.rotate_vector(diff_pos);
+
+    Some(TransformComponent {
+      scale: Vec3f32::from_components(
+        safe_div_zero(target_to_lca.scale.x(), ref_to_lca.scale.x()),
+        safe_div_zero(target_to_lca.scale.y(), ref_to_lca.scale.y()),
+        safe_div_zero(target_to_lca.scale.z(), ref_to_lca.scale.z()),
+      ),
+      rotation: inv_rot * target_to_lca.rotation,
+      position: Vec3f32::from_components(
+        safe_div_zero(unrotated_diff.x(), ref_to_lca.scale.x()),
+        safe_div_zero(unrotated_diff.y(), ref_to_lca.scale.y()),
+        safe_div_zero(unrotated_diff.z(), ref_to_lca.scale.z()),
+      ),
+    })
+  }
+
   fn combine_transforms(
     parent: &TransformComponent,
     child: &TransformComponent,
@@ -1807,6 +1990,7 @@ impl Scene {
     }
   }
 
+  /// TODO: Document this item
   pub fn parent_global_transform(&self, entity_id: EntityId) -> Option<TransformComponent> {
     let mut current_parent = self.get_parent(entity_id);
     while let Some(parent_id) = current_parent {
@@ -1818,6 +2002,7 @@ impl Scene {
     None
   }
 
+  /// TODO: Document this item
   pub fn set_global_transform(
     &self,
     entity_id: EntityId,
@@ -1860,6 +2045,7 @@ impl Scene {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn set_global_position_and_rotation(
     &self,
     entity_id: EntityId,
@@ -1872,7 +2058,7 @@ impl Scene {
       .with_component_mut(entity_id, |t: &mut TransformComponent| {
         if let Some(pg) = parent_global {
           let safe_div_zero = |a: f32, b: f32| {
-            if b > -1e-6_f32 && b < 1e-6_f32 {
+            if b > -1e-15_f32 && b < 1e-15_f32 {
               0.0
             } else {
               a / b
@@ -1906,6 +2092,7 @@ impl Scene {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub fn validate(&self) -> EngineResult<()> {
     let archetypes = self.archetypes.read();
     let sun_type = TypeId::of::<SunComponent>();
@@ -1957,6 +2144,7 @@ impl Scene {
   // === Parallel Load-Balanced Query Execution Engine ===
 
   #[inline(always)]
+  /// TODO: Document this item
   pub fn iter_par_archetypes<F>(&self, pool: &ThreadPool, f: F)
   where
     F: Fn(usize, &Archetype) + Send + Sync,
@@ -1988,6 +2176,7 @@ impl Scene {
     }
   }
 
+  /// TODO: Document this item
   pub fn query1_first_res_par<T: Component, F, R>(
     &self,
     pool: &ThreadPool,
@@ -2039,6 +2228,7 @@ impl Scene {
     result.into_inner()
   }
 
+  /// TODO: Document this item
   pub fn query1_res_par<T: Component, F, R>(
     &self,
     pool: &ThreadPool,
@@ -2086,6 +2276,7 @@ impl Scene {
     final_results
   }
 
+  /// TODO: Document this item
   pub fn query1_mut_par<T: Component, F>(&self, pool: &ThreadPool, f: F)
   where
     F: Fn(EntityId, &mut T) + Send + Sync,
@@ -2108,6 +2299,7 @@ impl Scene {
     });
   }
 
+  /// TODO: Document this item
   pub fn query2_mut_par<T1: Component, T2: Component, F>(&self, pool: &ThreadPool, f: F)
   where
     F: Fn(EntityId, &mut T1, &mut T2) + Send + Sync,
@@ -2143,6 +2335,7 @@ impl Scene {
 
   // ------------------------------------------------------------------------------------------------
 
+  /// TODO: Document this item
   pub fn query1_res_without_par<T: Component, U: Component, F, R>(
     &self,
     pool: &ThreadPool,
@@ -2222,26 +2415,31 @@ unsafe impl Sync for ErasedPtr {}
 
 impl ErasedPtr {
   #[inline(always)]
+  /// TODO: Document this item
   pub fn new<T>(ptr: *const T) -> Self {
     Self(ptr as *const ())
   }
   #[inline(always)]
+  /// TODO: Document this item
   pub fn get<T>(self) -> *const T {
     self.0 as *const T
   }
 }
 
 #[derive(Clone, Copy)]
+/// TODO: Document this item
 pub struct ErasedMutPtr(*mut ());
 unsafe impl Send for ErasedMutPtr {}
 unsafe impl Sync for ErasedMutPtr {}
 
 impl ErasedMutPtr {
   #[inline(always)]
+  /// TODO: Document this item
   pub fn new<T>(ptr: *mut T) -> Self {
     Self(ptr as *mut ())
   }
   #[inline(always)]
+  /// TODO: Document this item
   pub fn get<T>(self) -> *mut T {
     self.0 as *mut T
   }
@@ -2606,5 +2804,106 @@ mod tests {
     let mut sum = 0;
     scene.query1(|_e, h: &HealthComp| sum += h.hp);
     assert_eq!(sum, 50);
+  }
+
+  #[test]
+  fn test_relative_transform() {
+    let scene = Scene::new();
+    scene.register_component::<TransformComponent>(&[]);
+    scene.register_component::<ReferenceFrameComponent>(&[]);
+
+    let macro_frame = scene.spawn_entity("macro_frame");
+    scene
+      .add_component(
+        macro_frame,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        macro_frame,
+        ReferenceFrameComponent {
+          frame_type: ReferenceFrameType::Macro,
+          scale: 1.0,
+          soi_radius: core::f32::MAX,
+          _padding: 0,
+        },
+      )
+      .unwrap();
+
+    let planet = scene.spawn_entity("planet");
+    scene
+      .add_component(
+        planet,
+        TransformComponent {
+          position: Vec3f32::from_components(1.0, 0.0, 0.0), // 1 AU away
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    // Assuming a smaller scale for test to avoid f32 precision loss
+    let au_to_km = 100_000.0_f32;
+    scene
+      .add_component(
+        planet,
+        ReferenceFrameComponent {
+          frame_type: ReferenceFrameType::Micro,
+          scale: 1.0 / au_to_km, // 1 km in AU
+          soi_radius: 1000000.0,
+          _padding: 0,
+        },
+      )
+      .unwrap();
+    scene.set_parent(planet, Some(macro_frame));
+
+    let camera = scene.spawn_entity("camera");
+    scene
+      .add_component(
+        camera,
+        TransformComponent {
+          position: Vec3f32::from_components(1000.0, 0.0, 0.0), // 1000 km away from planet center
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene.set_parent(camera, Some(planet));
+
+    let sun = scene.spawn_entity("sun");
+    scene
+      .add_component(
+        sun,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0), // at origin of macro frame
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene.set_parent(sun, Some(macro_frame));
+
+    // Get transform of sun relative to camera
+    // Camera is at global AU = 1.0 + (1000.0 / 149597870.7) = 1.00000668458
+    // Sun is at global AU = 0.0
+    // Relative position should be - (1.0 * au_to_km + 1000.0) km
+    let rel_transform = scene.get_relative_transform(sun, camera).unwrap();
+
+    // Test the output position in camera's frame (which is Micro -> km)
+    // The relative transform calculates position in the target's coordinate space (camera), wait no,
+    // It's the transform of `target_entity` (sun) relative to `reference_entity` (camera).
+    // So the coordinate space is the reference entity's coordinate space (km).
+    // Let's check diff
+    let sun_pos_in_km = rel_transform.position;
+    assert!(
+      (sun_pos_in_km.x() - (-au_to_km - 1000.0)).abs() < 10.0,
+      "Expected {}, got {}",
+      -au_to_km - 1000.0,
+      sun_pos_in_km.x()
+    );
   }
 }

@@ -1,3 +1,5 @@
+//! scene_conversion module.
+
 use crate::gpu;
 use crate::gpu::RenderDevice;
 use crate::gpu::frame::CameraRenderData;
@@ -17,6 +19,7 @@ use alloc::vec::Vec;
 // TODO extensive unit testing. (with valid scenes of course scene.validate)
 // TODO first step shouldn't be done in render thread? (cdylib and simulation_test)
 
+/// TODO: Document this item
 pub struct PhysicalMeshSceneData {
   entity_id: EntityId,
   mesh: PhysicalMeshComponent,
@@ -60,7 +63,11 @@ pub struct RenderSceneExtraction {
     crate::scene::particles::ParticleEmitterConfig,
   )>,
   pub extracted_gizmos: Vec<(EntityId, Mat4x4f32, f32)>,
-  pub extracted_trajectories: Vec<(EntityId, crate::scene::trajectory::TrajectoryComponent, Mat4x4f32)>,
+  pub extracted_trajectories: Vec<(
+    EntityId,
+    crate::scene::trajectory::TrajectoryComponent,
+    Mat4x4f32,
+  )>,
 
   pub extracted_sky: Option<()>,
   pub extracted_sun: Option<((Mat4x4f32, f32), EntityId)>,
@@ -104,8 +111,9 @@ impl RenderSceneExtraction {
 
     // Populate Meshes
     for mesh_data in &self.extracted_meshes {
+      let asset_hash = mesh_data.mesh.mesh.id;
       let res = if mesh_data.use_new_path {
-        match device.get_physical_mesh2_resources(mesh_data.entity_id, presentation_engine_handle) {
+        match device.get_physical_mesh2_resources(asset_hash, presentation_engine_handle) {
           Ok(r) => r,
           Err(_) => {
             if debug_name.contains("MeshViewer") {
@@ -116,7 +124,7 @@ impl RenderSceneExtraction {
             }
             device.create_physical_mesh2_resources(
               cmd_buffer,
-              mesh_data.entity_id,
+              asset_hash,
               &mesh_data.mesh,
               presentation_engine_handle,
               &mesh_data.mesh.asset_path,
@@ -124,7 +132,7 @@ impl RenderSceneExtraction {
           }
         }
       } else {
-        match device.get_physical_mesh_resources(mesh_data.entity_id, presentation_engine_handle) {
+        match device.get_physical_mesh_resources(asset_hash, presentation_engine_handle) {
           Ok(r) => r,
           Err(_) => {
             if debug_name.contains("MeshViewer") {
@@ -135,7 +143,7 @@ impl RenderSceneExtraction {
             }
             device.create_physical_mesh_resources(
               cmd_buffer,
-              mesh_data.entity_id,
+              asset_hash,
               &mesh_data.mesh,
               presentation_engine_handle,
               &mesh_data.mesh.asset_path,
@@ -313,6 +321,7 @@ impl RenderSceneExtraction {
   }
 }
 
+/// TODO: Document this item
 pub trait SceneConversionExt {
   /// First step of scene to render scene conversion
   /// query the ECS scene to gather rendering data
@@ -350,8 +359,11 @@ impl SceneConversionExt for crate::scene::Scene {
     )> = Vec::with_capacity(START_VEC_CAPACITY);
     let mut extracted_gizmos: Vec<(EntityId, Mat4x4f32, f32)> =
       Vec::with_capacity(START_VEC_CAPACITY);
-    let mut extracted_trajectories: Vec<(EntityId, crate::scene::trajectory::TrajectoryComponent, Mat4x4f32)> =
-      Vec::with_capacity(START_VEC_CAPACITY);
+    let mut extracted_trajectories: Vec<(
+      EntityId,
+      crate::scene::trajectory::TrajectoryComponent,
+      Mat4x4f32,
+    )> = Vec::with_capacity(START_VEC_CAPACITY);
 
     let extracted_sky: Option<()>;
     let extracted_sun: Option<((Mat4x4f32, f32), EntityId)>;
@@ -383,12 +395,19 @@ impl SceneConversionExt for crate::scene::Scene {
       let results = self.query1_res_without_par::<PhysicalMeshComponent, HiddenComponent, _, _>(
         pool.unwrap(),
         |id, mesh| {
-          if let Some(t) = self.global_transform(id) {
+          if let Some(t) = self.get_relative_transform(id, camera_entity) {
             let mesh_clone = mesh.clone();
             let is_selected: bool = self.has_component::<SelectedComponent>(id).into();
             let is_following: bool = self.has_component::<FollowingComponent>(id).into();
             let outline = get_mesh_outline(is_selected, is_following, render_outline);
-            let m = PhysicalMeshSceneData::new(id, mesh_clone, t, outline, mesh.use_new_path, mesh.paint_display_mode);
+            let m = PhysicalMeshSceneData::new(
+              id,
+              mesh_clone,
+              t,
+              outline,
+              mesh.use_new_path,
+              mesh.paint_display_mode,
+            );
             // BVH debug rendering
             let bvh = m.mesh.mesh.bvh.as_ref().map(|bvh| &bvh.nodes).and_then(|nodes| {
               let bvh_dbg_states = {
@@ -429,12 +448,19 @@ impl SceneConversionExt for crate::scene::Scene {
       }
     } else {
       self.query1_without::<_, HiddenComponent, _>(|id, mesh: &PhysicalMeshComponent| {
-        if let Some(t) = self.global_transform(id) {
+        if let Some(t) = self.get_relative_transform(id, camera_entity) {
           let mesh_clone = mesh.clone();
           let is_selected: bool = self.has_component::<SelectedComponent>(id).into();
           let is_following: bool = self.has_component::<FollowingComponent>(id).into();
           let outline = get_mesh_outline(is_selected, is_following, render_outline);
-          let m = PhysicalMeshSceneData::new(id, mesh_clone, t, outline, mesh.use_new_path, mesh.paint_display_mode);
+          let m = PhysicalMeshSceneData::new(
+            id,
+            mesh_clone,
+            t,
+            outline,
+            mesh.use_new_path,
+            mesh.paint_display_mode,
+          );
           // BVH debug rendering
           let bvh = m.mesh.mesh.bvh.as_ref().map(|bvh| &bvh.nodes).and_then(|nodes| {
             let bvh_dbg_states = {
@@ -466,14 +492,14 @@ impl SceneConversionExt for crate::scene::Scene {
     if should_par {
       let results = self.query1_res_without_par::<MarkersComponent, HiddenComponent, _, _>(
         pool.unwrap(),
-        |id, m| self.global_transform(id).map(|t| (t, m.clone())),
+        |id, m| self.get_relative_transform(id, camera_entity).map(|t| (t, m.clone())),
       );
       for (res, _) in results {
         extracted_markers.push(res);
       }
     } else {
       self.query1_without::<_, HiddenComponent, _>(|id, m: &MarkersComponent| {
-        if let Some(t) = self.global_transform(id) {
+        if let Some(t) = self.get_relative_transform(id, camera_entity) {
           extracted_markers.push((t, m.clone()));
         }
       });
@@ -484,7 +510,7 @@ impl SceneConversionExt for crate::scene::Scene {
       let results = self.query1_res_without_par::<MeasurementComponent, HiddenComponent, _, _>(
         pool.unwrap(),
         |id, m| {
-          self.global_transform(id).map(|t| {
+          self.get_relative_transform(id, camera_entity).map(|t| {
             let mat: Mat4x4f32 = t.to_mat4();
             let p1 = Vec3f32(mat.mul_vector(m.pos1.to_point()));
             let p2 = Vec3f32(mat.mul_vector(m.pos2.to_point()));
@@ -497,7 +523,7 @@ impl SceneConversionExt for crate::scene::Scene {
       }
     } else {
       self.query1_without::<_, HiddenComponent, _>(|id, m: &MeasurementComponent| {
-        if let Some(t) = self.global_transform(id) {
+        if let Some(t) = self.get_relative_transform(id, camera_entity) {
           let mat: Mat4x4f32 = t.to_mat4();
           let p1 = Vec3f32(mat.mul_vector(m.pos1.to_point()));
           let p2 = Vec3f32(mat.mul_vector(m.pos2.to_point()));
@@ -511,7 +537,7 @@ impl SceneConversionExt for crate::scene::Scene {
       let results = self.query1_res_without_par::<ImageBillboardComponent, HiddenComponent, _, _>(
         pool.unwrap(),
         |id, i| {
-          self.global_transform(id).map(|t| {
+          self.get_relative_transform(id, camera_entity).map(|t| {
             let mat: Mat4x4f32 = t.to_mat4();
             (mat, i.texture_id, i.billboard_type)
           })
@@ -522,7 +548,7 @@ impl SceneConversionExt for crate::scene::Scene {
       }
     } else {
       self.query1_without::<_, HiddenComponent, _>(|id, i: &ImageBillboardComponent| {
-        if let Some(t) = self.global_transform(id) {
+        if let Some(t) = self.get_relative_transform(id, camera_entity) {
           let mat: Mat4x4f32 = t.to_mat4();
           extracted_billboards.push((mat, i.texture_id, i.billboard_type));
         }
@@ -532,7 +558,7 @@ impl SceneConversionExt for crate::scene::Scene {
     // Sun
     extracted_sun = self.query2_first_res_without::<_, _, HiddenComponent, _, _>(
       |id, _t: &TransformComponent, s: &SunComponent| {
-        self.global_transform(id).map(|t| (t.to_mat4::<Mat4x4f32>(), s.radius))
+        self.get_relative_transform(id, camera_entity).map(|t| (t.to_mat4::<Mat4x4f32>(), s.radius))
       },
     );
 
@@ -566,7 +592,7 @@ impl SceneConversionExt for crate::scene::Scene {
     // Gizmos
     self.query1_without::<_, HiddenComponent, _>(|id, gizmo: &crate::scene::GizmoComponent| {
       if gizmo.gizmo_visible {
-        if let Some(t) = self.global_transform(id) {
+        if let Some(t) = self.get_relative_transform(id, camera_entity) {
           let t_mat = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::translation(t.position)
             * aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_quat_custom_frame(
               t.rotation,
@@ -580,11 +606,13 @@ impl SceneConversionExt for crate::scene::Scene {
     });
 
     // Trajectories
-    self.query1_without::<_, HiddenComponent, _>(|id, traj: &crate::scene::trajectory::TrajectoryComponent| {
-      if let Some(t) = self.global_transform(id) {
-        extracted_trajectories.push((id, traj.clone(), t.to_mat4()));
-      }
-    });
+    self.query1_without::<_, HiddenComponent, _>(
+      |id, traj: &crate::scene::trajectory::TrajectoryComponent| {
+        if let Some(t) = self.get_relative_transform(id, camera_entity) {
+          extracted_trajectories.push((id, traj.clone(), t.to_mat4()));
+        }
+      },
+    );
 
     // ... More components here
 

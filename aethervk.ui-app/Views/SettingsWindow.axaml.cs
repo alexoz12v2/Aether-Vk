@@ -4,8 +4,8 @@ namespace AetherVk.Views;
 
 public partial class SettingsWindow : Window
 {
-    public SettingsWindow()
-    {
-        InitializeComponent();
-    }
+  public SettingsWindow()
+  {
+    InitializeComponent();
+  }
 }

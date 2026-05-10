@@ -1,3 +1,5 @@
+//! descriptors module.
+
 use alloc::{sync, vec::Vec};
 use ash::vk::{
   self, Handle, PFN_vkAllocateDescriptorSets, PFN_vkCreateDescriptorPool, PFN_vkResetDescriptorPool,
@@ -57,6 +59,7 @@ struct DescriptorPoolsInner {
 }
 
 #[derive(Debug)]
+/// TODO: Document this item
 pub(super) struct DescriptorPools {
   inner: spin::Mutex<DescriptorPoolsInner>,
 }
@@ -65,6 +68,7 @@ unsafe impl Sync for DescriptorPools {}
 unsafe impl Send for DescriptorPools {}
 
 impl DescriptorPools {
+  /// TODO: Document this item
   pub(super) fn new(
     device: &ash::Device,
     _fixed_capacity_pow2: usize,
@@ -81,6 +85,7 @@ impl DescriptorPools {
     }))
   }
 
+  /// TODO: Document this item
   pub(super) fn allocate(
     self: &sync::Arc<Self>,
     device: &vulkan::device::LogicalDevice,
@@ -128,6 +133,7 @@ impl DescriptorPools {
     }
   }
 
+  /// TODO: Document this item
   pub(super) fn recycle(&self, device: &ash::Device, pool: vk::DescriptorPool) {
     if pool.is_null() {
       return;

@@ -1,3 +1,5 @@
+//! tests module.
+
 extern crate std;
 
 use super::components_api::CameraParams;

@@ -1,16 +1,18 @@
 #version 450 core
+
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
+
+#include "../debug_utils.glsl"
+#include "../bvh_utils.glsl"
 
 // ============================================================================
 // Barnes-Hut Self-Gravity
 // ============================================================================
 // Computes self-gravity in O(N log N) using the LBVH built previously.
 
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
-
-#include "../bvh_utils.glsl"
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
 // Particles data mapped as uint to perform CAS loop for float atomicAdd
 layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleData {
@@ -37,6 +39,9 @@ void atomicAddFloat(uint index, float val) {
 }
 
 void main() {
+    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("Hello from barnes_hut.comp!\n");
+    }
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= pc.total_particles) return;
 
@@ -60,7 +65,7 @@ void main() {
     vec3 total_force = vec3(0.0);
 
     // Stack-based traversal of the BVH
-    uint stack[32];
+    uint stack[64];
     int stackPtr = 0;
     stack[stackPtr++] = pc.root_index;
 
@@ -107,4 +112,9 @@ void main() {
     atomicAddFloat(baseA + 7 * SG_SIZE, total_force.x);
     atomicAddFloat(baseA + 8 * SG_SIZE, total_force.y);
     atomicAddFloat(baseA + 9 * SG_SIZE, total_force.z);
+
+    if (SHOULD_DEBUG_PRINT) {
+        debugPrintfEXT("BarnesHut Particle %d: total_force=(%f, %f, %f)", 
+            my_p_id, total_force.x, total_force.y, total_force.z);
+    }
 }

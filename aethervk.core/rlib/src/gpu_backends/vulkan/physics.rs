@@ -17,6 +17,7 @@ pub struct PhysicsPipelineConfig {
   pub hardware_subgroup_size: u32,
 }
 
+/// TODO: Document this item
 pub struct PhysicsDeviceAddresses {
   pub particle_data: u64,
   pub sorted_morton: u64,
@@ -31,6 +32,7 @@ pub struct PhysicsDeviceAddresses {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+/// TODO: Document this item
 pub struct P12PushConstants {
     pub particles: u64,
     pub dt: f32,
@@ -39,6 +41,7 @@ pub struct P12PushConstants {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+/// TODO: Document this item
 pub struct LbvhPushConstants {
     pub bvh: u64,
     pub sorted_morton: u64,
@@ -50,6 +53,7 @@ pub struct LbvhPushConstants {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+/// TODO: Document this item
 pub struct CcdPushConstants {
     pub particle_bvh: u64,
     pub output_list: u64,
@@ -59,6 +63,7 @@ pub struct CcdPushConstants {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+/// TODO: Document this item
 pub struct StreamCompactPushConstants {
     pub sparse_in: u64,
     pub packed_out: u64,
@@ -68,6 +73,7 @@ pub struct StreamCompactPushConstants {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+/// TODO: Document this item
 pub struct ReduceToiPushConstants {
     pub particles: u64,
     pub collisions: u64,
@@ -78,6 +84,7 @@ pub struct ReduceToiPushConstants {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+/// TODO: Document this item
 pub struct LcpPushConstants {
     pub particles: u64,
     pub collisions: u64,
@@ -87,6 +94,7 @@ pub struct LcpPushConstants {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+/// TODO: Document this item
 pub struct BarnesHutPushConstants {
     pub particles: u64,
     pub bvh: u64,
@@ -98,6 +106,7 @@ pub struct BarnesHutPushConstants {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+/// TODO: Document this item
 pub struct P5PushConstants {
     pub particles: u64,
     pub emitters: u64,
@@ -107,6 +116,7 @@ pub struct P5PushConstants {
     pub _pad: u32,
 }
 
+/// TODO: Document this item
 pub struct PhysicsPipelines {
   pub pipeline_layout: vk::PipelineLayout,
   pub p1_2_imex: vk::Pipeline,
@@ -122,6 +132,7 @@ pub struct PhysicsPipelines {
 }
 
 impl PhysicsPipelines {
+  /// TODO: Document this item
   pub fn new(_config: &PhysicsPipelineConfig) -> Self {
     // Placeholder, in reality this would compile shaders and create pipelines
     Self {
@@ -140,6 +151,7 @@ impl PhysicsPipelines {
   }
 }
 
+/// TODO: Document this item
 pub struct VulkanCommandBuffer {
     pub cmd: vk::CommandBuffer,
 }
@@ -151,6 +163,7 @@ impl CommandBuffer for VulkanCommandBuffer {
     }
 }
 
+/// TODO: Document this item
 pub struct VulkanWaitHandle<T> {
     _marker: core::marker::PhantomData<T>,
 }
@@ -161,6 +174,7 @@ impl<T: Send + Sync> WaitHandle<T> for VulkanWaitHandle<T> {
     }
 }
 
+/// TODO: Document this item
 pub struct VulkanBuffer<T> {
     pub buffer: vk::Buffer,
     pub address: u64,
@@ -179,6 +193,7 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for VulkanBuffer<T> {
     }
 }
 
+/// TODO: Document this item
 pub struct VulkanList<T> {
     pub buffer: vk::Buffer,
     pub address: u64,
@@ -203,6 +218,7 @@ impl<T: Copy + Send + Sync> DeviceList<T> for VulkanList<T> {
     }
 }
 
+/// TODO: Document this item
 pub struct VulkanMotionBvh {
     pub buffer: vk::Buffer,
 }
@@ -211,6 +227,7 @@ impl DeviceBvh for VulkanMotionBvh {
     type Cmd = VulkanCommandBuffer;
 }
 
+/// TODO: Document this item
 pub struct VulkanComputeKernels {
     pub device: ash::Device,
     pub pipelines: PhysicsPipelines,
@@ -245,16 +262,7 @@ impl Kernels for VulkanComputeKernels {
         Ok(VulkanBuffer { buffer: vk::Buffer::null(), address: 0, capacity: 0, _marker: core::marker::PhantomData })
     }
 
-    fn compute_forces(
-        &self,
-        _cmd: &mut Self::Cmd,
-        _kinematics: &Self::Buffer<KinematicBody>,
-        _dynamics: &mut Self::Buffer<DynamicBody>,
-    ) -> EngineResult<()> {
-        Ok(())
-    }
-
-    fn step_ode(
+    fn step_ode_p1_p2(
         &self,
         cmd: &mut Self::Cmd,
         dynamics: &mut Self::Buffer<DynamicBody>,
@@ -283,6 +291,43 @@ impl Kernels for VulkanComputeKernels {
             self.device.cmd_pipeline_barrier(cmd.cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
         }
         
+        Ok(())
+    }
+
+    fn step_ode_p5(
+        &self,
+        cmd: &mut Self::Cmd,
+        _kinematics: &Self::Buffer<KinematicBody>,
+        dynamics: &mut Self::Buffer<DynamicBody>,
+        _bvh: &Self::MotionBvh,
+        dt: timeus_t,
+    ) -> EngineResult<()> {
+        let wg_size = 256;
+        let total_particles = dynamics.capacity() as u32;
+        let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
+        let dt_sec = dt as f32 / 1_000_000.0;
+        
+        let pc = P5PushConstants {
+            particles: self.addresses.particle_data,
+            emitters: self.addresses.emitters,
+            dt: dt_sec,
+            total_particles,
+            num_emitters: 1, // TODO dynamic
+            _pad: 0,
+        };
+        let bytes = unsafe { core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of::<P5PushConstants>()) };
+
+        unsafe {
+            self.device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.p5_imex);
+            self.device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytes);
+            self.device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+            
+            let barrier = vk::MemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ);
+            self.device.cmd_pipeline_barrier(cmd.cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+        }
+
         Ok(())
     }
 
@@ -394,10 +439,6 @@ impl Kernels for VulkanComputeKernels {
         cmd: &mut Self::Cmd,
         _compacted: &Self::List<CollisionPair>,
     ) -> EngineResult<Self::Buffer<timeus_t>> {
-        let total_packed = 10000; // Placeholder
-        let wg_size = 256;
-        let dispatch_groups = (total_packed + wg_size - 1) / wg_size;
-
         let pc = ReduceToiPushConstants {
             particles: self.addresses.particle_data,
             collisions: self.addresses.packed_collisions,
@@ -410,7 +451,12 @@ impl Kernels for VulkanComputeKernels {
         unsafe {
             self.device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.reduce_toi);
             self.device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytes);
-            self.device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+            // Packed collisions buffer is passed in via the struct or globals buffer somehow.
+            // Since `packed_collisions` is just an address, we can't `cmd_dispatch_indirect` off of `u64` directly.
+            // We need the actual `vk::Buffer`. 
+            // Wait, we can't directly get the buffer from the address here without it being passed.
+            // But we can just use the `compacted.buffer`.
+            self.device.cmd_dispatch_indirect(cmd.cmd, _compacted.buffer, 0);
             
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -424,11 +470,11 @@ impl Kernels for VulkanComputeKernels {
         &self,
         cmd: &mut Self::Cmd,
         _dynamics: &mut Self::Buffer<DynamicBody>,
-        _collisions: &Self::List<CollisionPair>,
+        collisions: &Self::List<CollisionPair>,
         _force_inelastic: bool,
     ) -> EngineResult<()> {
         // LCP Solver
-        let total_clusters = 100; // Placeholder
+        let total_clusters = 100; // Unused when using indirect
         let pc_lcp = LcpPushConstants {
             particles: self.addresses.particle_data,
             collisions: self.addresses.packed_collisions,
@@ -440,7 +486,7 @@ impl Kernels for VulkanComputeKernels {
         unsafe {
             self.device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.lcp_solver);
             self.device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytes_lcp);
-            self.device.cmd_dispatch(cmd.cmd, total_clusters, 1, 1);
+            self.device.cmd_dispatch_indirect(cmd.cmd, collisions.buffer, 0);
             
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -451,8 +497,7 @@ impl Kernels for VulkanComputeKernels {
         // Apply Impulses
         unsafe {
             self.device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.apply_impulses);
-            // Uses same PushConstants, or we could define ApplyImpulsesPushConstants
-            self.device.cmd_dispatch(cmd.cmd, (10000 + 255) / 256, 1, 1);
+            self.device.cmd_dispatch_indirect(cmd.cmd, collisions.buffer, 0);
             
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -460,12 +505,15 @@ impl Kernels for VulkanComputeKernels {
             self.device.cmd_pipeline_barrier(cmd.cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
         }
 
+        let total_particles = _dynamics.capacity() as u32;
+        let dispatch_groups = (total_particles + 127) / 128;
+
         // Barnes Hut Self Gravity
         let pc_bh = BarnesHutPushConstants {
             particles: self.addresses.particle_data,
             bvh: self.addresses.bvh_nodes,
             root_index: 0,
-            total_particles: 1000, // Placeholder
+            total_particles,
             theta: 0.5,
             g: 6.67430e-11,
         };
@@ -474,7 +522,7 @@ impl Kernels for VulkanComputeKernels {
         unsafe {
             self.device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.barnes_hut);
             self.device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytes_bh);
-            self.device.cmd_dispatch(cmd.cmd, (1000 + 255) / 256, 1, 1);
+            self.device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
             
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -487,7 +535,7 @@ impl Kernels for VulkanComputeKernels {
             particles: self.addresses.particle_data,
             emitters: self.addresses.emitters,
             dt: 0.016,
-            total_particles: 1000,
+            total_particles,
             num_emitters: 1,
             _pad: 0,
         };
@@ -496,7 +544,7 @@ impl Kernels for VulkanComputeKernels {
         unsafe {
             self.device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.p5_imex);
             self.device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytes_p5);
-            self.device.cmd_dispatch(cmd.cmd, (1000 + 255) / 256, 1, 1);
+            self.device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
             
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)

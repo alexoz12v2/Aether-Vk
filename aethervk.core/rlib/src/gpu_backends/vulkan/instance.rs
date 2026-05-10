@@ -1,3 +1,5 @@
+//! instance module.
+
 use super::utils;
 use crate::types::{GpuError, GpuResult};
 
@@ -11,12 +13,14 @@ use core::{
 
 // -------------------------------- Instance --------------------------------
 
+/// TODO: Document this item
 pub struct Instance {
   pub instance: ash::Instance,
   #[cfg(debug_assertions)]
   debug_messenger: vk::DebugUtilsMessengerEXT,
 
   pub entry_wrapper: utils::EntryWrapper,
+  pub has_surface_maintenance1: bool,
 }
 
 impl Instance {
@@ -110,6 +114,17 @@ impl Instance {
       }
     }
 
+    // --- Dynamically check for surface_maintenance1 ---
+    let mut has_surface_maintenance1 = false;
+    let surface_maint_ext = ash::ext::surface_maintenance1::NAME;
+    if available_extensions
+      .iter()
+      .any(|e| unsafe { CStr::from_ptr(e.extension_name.as_ptr()) } == surface_maint_ext)
+    {
+      desired_instance_extensions.push(surface_maint_ext);
+      has_surface_maintenance1 = true;
+    }
+
     // Now check support against the merged pool
     if let Some(unsupported) =
       utils::first_unsupported_extension(&desired_instance_extensions, &available_extensions)
@@ -195,22 +210,24 @@ impl Instance {
         instance,
         debug_messenger,
         entry_wrapper,
+        has_surface_maintenance1,
       })
     }
     #[cfg(not(debug_assertions))]
-    {
-      Ok(Self {
-        instance,
-        entry_wrapper,
-      })
-    }
+    Ok(Self {
+      instance,
+      entry_wrapper,
+      has_surface_maintenance1,
+    })
   }
 
+  /// TODO: Document this item
   pub fn api_version(&self) -> u32 {
     // TODO if changed
     vk::API_VERSION_1_1
   }
 
+  /// TODO: Document this item
   pub fn get_eligible_devices(
     &self,
     query_input: &utils::PhysicalDeviceQueryInput,
@@ -334,17 +351,23 @@ impl Instance {
         };
 
         // f. TODO: optional extension and features bookkeeping and score increase/decrease
+        let mut optional_extensions = utils::OptionalExtensionSupportFlags::NONE;
+
+        let supports_swapchain_maintenance1 = device_extension_properties.iter().any(|prop| {
+          prop.extension_name_as_c_str().unwrap() == ash::ext::swapchain_maintenance1::NAME
+        });
 
         Some(utils::PhysicalDeviceQueryResult {
           physical_device,
           physical_device_properties: props.properties,
           family_count: queue_family_properties_len,
-          optional_extensions: utils::OptionalExtensionSupportFlags::NONE, // TODO
+          optional_extensions,
           graphics_queue_family_index,
           compute_queue_family_index,
           transfer_queue_family_index,
           subgroup_size: subgroup_props.subgroup_size,
           score,
+          debug_shaders: query_input.debug_shaders,
         })
       }));
 

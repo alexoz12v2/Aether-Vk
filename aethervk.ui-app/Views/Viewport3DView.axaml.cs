@@ -32,10 +32,10 @@ public partial class Viewport3DView : UserControl
     _livelinessTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
     _livelinessTimer.Tick += OnLivelinessTick;
     _livelinessTimer.Start();
-    
+
     _resizeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
     _resizeTimer.Tick += OnResizeTimerTick;
-    
+
     SizeChanged += OnSizeChanged;
   }
 
@@ -50,12 +50,14 @@ public partial class Viewport3DView : UserControl
   {
     _resizeTimer?.Stop();
 
-    if (_viewModel == null || _pendingSize.Width <= 0 || _pendingSize.Height <= 0) return;
+    if (_viewModel == null || _pendingSize.Width <= 0 || _pendingSize.Height <= 0)
+      return;
 
     uint newWidth = (uint)_pendingSize.Width;
     uint newHeight = (uint)_pendingSize.Height;
 
-    if (newWidth == _viewModel.Width && newHeight == _viewModel.Height) return;
+    if (newWidth == _viewModel.Width && newHeight == _viewModel.Height)
+      return;
 
     _viewModel.Width = newWidth;
     _viewModel.Height = newHeight;
@@ -69,7 +71,12 @@ public partial class Viewport3DView : UserControl
 
     RenderTargetImage.Source = _bitmap;
 
-    _viewModel.RuntimeService.ResizePresentationEngine(_viewModel.SceneId, _viewModel.PresentationEngineId, newWidth, newHeight);
+    _viewModel.RuntimeService.ResizePresentationEngine(
+      _viewModel.SceneId,
+      _viewModel.PresentationEngineId,
+      newWidth,
+      newHeight
+    );
   }
 
   private void OnLivelinessTick(object? sender, EventArgs e)
@@ -188,9 +195,7 @@ public partial class Viewport3DView : UserControl
     RenderTargetImage.Focus();
   }
 
-  private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
-  {
-  }
+  private void OnPointerReleased(object? sender, PointerReleasedEventArgs e) { }
 
   private void OnPointerMoved(object? sender, PointerEventArgs e)
   {

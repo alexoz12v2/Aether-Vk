@@ -7,11 +7,34 @@ macro_rules! log {
   };
 }
 
+#[cfg(all(debug_assertions, feature = "debug_gpu"))]
+#[macro_export]
+macro_rules! track_gpu_alloc {
+  ($size:expr) => {
+    {
+      $crate::os::memory::tracking::GPU_ALLOCATED.fetch_add($size as usize, core::sync::atomic::Ordering::Relaxed);
+      $crate::os::memory::tracking::track_hotspot($size as usize);
+      $crate::os::memory::tracking::check_memory_threshold();
+    }
+  };
+}
+
+#[cfg(all(debug_assertions, feature = "debug_gpu"))]
+#[macro_export]
+macro_rules! track_gpu_free {
+  ($size:expr) => {
+    {
+      $crate::os::memory::tracking::GPU_ALLOCATED.fetch_sub($size as usize, core::sync::atomic::Ordering::Relaxed);
+    }
+  };
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use unix_debug::*;
 #[cfg(target_os = "windows")]
 pub use windows_debug::*;
 
+/// TODO: Document this item
 pub static LOGGER_CALLBACK: core::sync::atomic::AtomicPtr<()> =
   core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 
@@ -91,6 +114,11 @@ mod windows_debug {
     }
   }
 
+  pub fn capture_aethervk_trace() -> Option<[usize; 3]> {
+    None
+  }
+
+  /// TODO: Document this item
   pub fn log_message(args: fmt::Arguments) {
     let msg = alloc::fmt::format(args) + "\r\n";
 
@@ -130,6 +158,7 @@ mod windows_debug {
     }
   }
 
+  /// TODO: Document this item
   pub fn print_stacktrace() {
     use core::mem::{MaybeUninit, size_of};
 
@@ -258,6 +287,7 @@ mod unix_debug {
     }
   }
 
+  /// TODO: Document this item
   pub fn log_message(args: fmt::Arguments) {
     let msg = alloc::fmt::format(args) + "\n";
     if let Ok(c_msg) = alloc::ffi::CString::new(msg.clone()) {
@@ -287,6 +317,46 @@ mod unix_debug {
   }
 
   #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
+  pub fn capture_aethervk_trace() -> Option<[usize; 3]> {
+    unsafe extern "C" {
+      fn backtrace(buffer: *mut *mut core::ffi::c_void, size: core::ffi::c_int) -> core::ffi::c_int;
+    }
+    unsafe {
+      let mut buffer: [*mut core::ffi::c_void; 64] = [core::ptr::null_mut(); 64];
+      let size = backtrace(buffer.as_mut_ptr(), 64);
+
+      let mut trace = [0usize; 3];
+      let mut count = 0;
+
+      for i in 0..size {
+        let addr = buffer[i as usize];
+        let mut info: libc::Dl_info = core::mem::zeroed();
+        if libc::dladdr(addr, &mut info) != 0 {
+          if !info.dli_fname.is_null() {
+            let c_str = core::ffi::CStr::from_ptr(info.dli_fname);
+            if let Ok(s) = c_str.to_str() {
+              if s.contains("aethervk") {
+                trace[count] = addr as usize;
+                count += 1;
+                if count == 3 {
+                  return Some(trace);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if count > 0 {
+        Some(trace)
+      } else {
+        None
+      }
+    }
+  }
+
+  #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
+  /// TODO: Document this item
   pub fn print_stacktrace() {
     unsafe extern "C" {
       // Exposed by default in libc without any std dependencies
@@ -334,6 +404,10 @@ mod unix_debug {
   }
 
   #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
+  pub fn capture_aethervk_trace() -> Option<[usize; 3]> { None }
+
+  #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
+  /// TODO: Document this item
   pub fn print_stacktrace() {
     crate::log!("Stacktrace: Not natively supported by libc in this target environment.");
   }

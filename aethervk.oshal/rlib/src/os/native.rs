@@ -8,11 +8,13 @@ use libc;
 use windows::Win32::System::Threading::{GetCurrentThreadId, Sleep, SwitchToThread};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// TODO: Document this item
 pub struct ThreadId(u64);
 
 pub mod this_thread {
   use super::*;
 
+  /// TODO: Document this item
   pub fn id() -> ThreadId {
     let id: ThreadId;
     #[cfg(any(unix, target_os = "macos"))]
@@ -39,6 +41,7 @@ pub mod this_thread {
     }
   }
 
+  /// TODO: Document this item
   pub fn sleep_for(duration: Duration) {
     #[cfg(windows)]
     {

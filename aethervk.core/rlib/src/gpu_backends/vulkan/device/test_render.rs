@@ -1,3 +1,5 @@
+//! test_render module.
+
 use super::*;
 use crate::gpu::{RenderDeviceHandle, RenderFrontend, ScopedCommandBuffer, ScopedRenderPass};
 use crate::scene::PhysicalMeshComponent;
@@ -20,14 +22,19 @@ use aethervk_oshal_rlib::math::{
   quaternion::Quaternion,
   vector::{vec3::Vec3f32, vec4::Quat},
 };
+use aethervk_oshal_rlib::os::pool::ThreadPool;
 use heapless::index_map::FnvIndexMap;
 use std::any::{Any, TypeId};
+use std::mem::MaybeUninit;
 use std::sync::Arc;
-
 // TODO: test about text rendering in different fonts (system font and packaged font)
 // TODO: move into integration tests folder
 
 fn setup_assets_dir() {
+  if let Ok(mut errors) = crate::gpu_backends::vulkan::utils::VULKAN_ERROR_MESSAGES.lock() {
+    errors.clear();
+  }
+
   let mut home_dir = std::env::current_exe().unwrap();
   let mut iter = 0;
   while !home_dir.join("assets").is_dir() && iter < 32 {
@@ -37,41 +44,92 @@ fn setup_assets_dir() {
   *crate::gpu::ASSET_DIR.write() = Some(home_dir.join("assets").to_str().unwrap().to_string());
 }
 
-fn test_render_particles_windowless_impl(use_particle2: bool) {
-  setup_assets_dir();
+fn setup_render_frontend_for_tests(
+  with_windowless: bool,
+) -> (
+  Arc<ThreadPool>,
+  RenderFrontend,
+  RenderDeviceHandle,
+  Option<PresentationEngineHandle>,
+) {
   fn panic_on_validation_error(msg: &str) {
     panic!("Vulkan validation error occurred during testing: {}", msg);
   }
-  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
-  let pool_arc = std::sync::Arc::new(pool);
-  let runtime_params = Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
-  });
-  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
 
-  let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
+  // Create a channel to safely transfer the constructed data out of the thread
+  use std::sync::mpsc;
+  let (tx, rx) = mpsc::channel();
 
-  render_frontend
+  let th =
+    aethervk_oshal_rlib::os::thread::Builder::new().stack_size(8 * 1024 * 1024).spawn(move || {
+      let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
+      let pool_arc = Arc::new(pool);
+
+      let runtime_params = Box::new(RuntimeParams {
+        render_backend_params: FnvIndexMap::new(),
+        validation_error_callback: Some(panic_on_validation_error as fn(&str)),
+      });
+
+      let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
+
+      let additional_params = DeviceAdditionalParams::new();
+      let render_device_handle =
+        render_frontend.write().init_device(0, &additional_params).unwrap();
+
+      render_frontend
+        .with_device(render_device_handle, |device| {
+          device.wire_callbacks(Arc::clone(&pool_arc))
+        })
+        .unwrap();
+
+      let presentation_engine = if with_windowless {
+        let width = 256;
+        let height = 256;
+
+        let params = PresentationEngineParams::windowless(width, height);
+        Some(
+          render_frontend
+            .with_device(render_device_handle, |device| {
+              let pe = device.create_presentation_engine(&params)?;
+              device.init_archetypes(pe)?;
+              device.generate_sky()?;
+              crate::types::GpuResult::Ok(pe)
+            })
+            .unwrap(),
+        )
+      } else {
+        None
+      };
+
+      // Send the fully initialized tuple back to the main thread.
+      // Ownership is safely transferred here.
+      tx.send((
+        pool_arc,
+        render_frontend,
+        render_device_handle,
+        presentation_engine,
+      ))
+      .expect("Failed to send setup data from thread");
+    });
+
+  // Wait for the thread to complete its execution
+  // (Depending on the custom thread lib, you might need a second .unwrap() here if join() returns a Result)
+  let _ = th.unwrap().join();
+
+  // Receive the data from the channel and return it
+  rx.recv().expect("Failed to receive setup data")
+}
+
+fn test_render_particles_windowless_impl(use_particle2: bool) {
+  setup_assets_dir();
+  let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
+    setup_render_frontend_for_tests(true);
+  let presentation_engine = presentation_engine.unwrap();
+  let [width, height] = render_frontend
     .with_device(render_device_handle, |device| {
-      device.wire_callbacks(pool_arc.clone())
+      device.get_presentation_engine_extent(presentation_engine)
     })
     .unwrap();
-
-  let width = 256;
-  let height = 256;
-
-  let presentation_engine = {
-    let params = PresentationEngineParams::windowless(width, height);
-    render_frontend
-      .with_device(render_device_handle, |device| {
-        let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
-        crate::types::GpuResult::Ok(pe)
-      })
-      .unwrap()
-  };
 
   let scene = Scene::new();
 
@@ -216,7 +274,11 @@ fn test_render_particles_windowless_impl(use_particle2: bool) {
         }
       }
       image::save_buffer(
-        if use_particle2 { "test_rendered_particles2.png" } else { "test_rendered_particles.png" },
+        if use_particle2 {
+          "test_rendered_particles2.png"
+        } else {
+          "test_rendered_particles.png"
+        },
         &export_buffer,
         width,
         height,
@@ -239,40 +301,14 @@ fn test_render_particles_windowless_impl(use_particle2: bool) {
 #[test]
 fn test_render_all_archetypes_windowless() {
   setup_assets_dir();
-  fn panic_on_validation_error(msg: &str) {
-    panic!("Vulkan validation error occurred during testing: {}", msg);
-  }
-  let runtime_params = Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
-  });
-  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
-  let pool_arc = std::sync::Arc::new(pool);
-  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
-
-  let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
-
-  render_frontend
+  let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
+    setup_render_frontend_for_tests(true);
+  let presentation_engine = presentation_engine.unwrap();
+  let [width, height] = render_frontend
     .with_device(render_device_handle, |device| {
-      device.wire_callbacks(pool_arc.clone())
+      device.get_presentation_engine_extent(presentation_engine)
     })
     .unwrap();
-
-  let width = 256;
-  let height = 256;
-
-  let presentation_engine = {
-    let params = PresentationEngineParams::windowless(width, height);
-    render_frontend
-      .with_device(render_device_handle, |device| {
-        let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
-        device.generate_sky()?;
-        crate::types::GpuResult::Ok(pe)
-      })
-      .unwrap()
-  };
 
   let scene = Scene::new();
   let sky_e = scene.spawn_entity("sky");
@@ -305,8 +341,6 @@ fn test_render_all_archetypes_windowless() {
         aethervk_oshal_rlib::os::time::TimeReadings::default(),
         [width, height],
       );
-
-
 
       let sky_pipeline = device.get_sky_pipeline_key(presentation_engine)?;
       render_scene.sky_call = Some(gpu::frame::SkyDrawCall::from_camera(
@@ -359,8 +393,6 @@ fn test_render_all_archetypes_windowless() {
 
       {
         let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
-
-
 
         device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64), 0.6)?;
 
@@ -430,34 +462,14 @@ fn test_render_all_archetypes_windowless() {
 #[test]
 fn test_render_empty_scene_graceful() {
   setup_assets_dir();
-  fn panic_on_validation_error(msg: &str) {
-    panic!("Vulkan validation error occurred during testing: {}", msg);
-  }
-  let runtime_params = Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
-  });
-  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
-  let pool_arc = std::sync::Arc::new(pool);
-  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
-
-  let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
-
-  render_frontend
+  let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
+    setup_render_frontend_for_tests(true);
+  let presentation_engine = presentation_engine.unwrap();
+  let [width, height] = render_frontend
     .with_device(render_device_handle, |device| {
-      device.wire_callbacks(pool_arc.clone())
+      device.get_presentation_engine_extent(presentation_engine)
     })
     .unwrap();
-
-  let presentation_engine = {
-    let params = PresentationEngineParams::windowless(16, 16);
-    render_frontend
-      .with_device(render_device_handle, |device| {
-        device.create_presentation_engine(&params)
-      })
-      .unwrap()
-  };
 
   render_frontend
     .with_device(render_device_handle, |device| {
@@ -485,7 +497,6 @@ fn test_render_empty_scene_graceful() {
 
       {
         let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
-
 
         device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
         let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
@@ -526,17 +537,34 @@ fn test_layout_transition_on_failed_update() {
     render_backend_params: FnvIndexMap::new(),
     validation_error_callback: Some(panic_on_validation_error as fn(&str)),
   });
-  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
-  let pool_arc = std::sync::Arc::new(pool);
-  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
-  let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
+  let (pool_arc, render_frontend, render_device_handle) = {
+    let rp_ptr = Box::into_raw(runtime_params) as usize;
+    let result_arc = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let result_clone = result_arc.clone();
 
-  render_frontend
-    .with_device(render_device_handle, |device| {
-      device.wire_callbacks(pool_arc.clone())
-    })
-    .unwrap();
+    let th = aethervk_oshal_rlib::os::thread::Builder::new()
+      .stack_size(8 * 1024 * 1024)
+      .spawn(move || {
+        let rp = unsafe { Box::from_raw(rp_ptr as *mut RuntimeParams) };
+        let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
+        let pool_arc = std::sync::Arc::new(pool);
+        let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &rp).unwrap();
+        let additional_params = DeviceAdditionalParams::new();
+        let render_device_handle =
+          render_frontend.write().init_device(0, &additional_params).unwrap();
+
+        render_frontend
+          .with_device(render_device_handle, |device| {
+            device.wire_callbacks(pool_arc.clone())
+          })
+          .unwrap();
+
+        *result_clone.lock().unwrap() = Some((pool_arc, render_frontend, render_device_handle));
+      })
+      .unwrap();
+    th.join();
+    result_arc.lock().unwrap().take().unwrap()
+  };
 
   let presentation_engine = render_frontend
     .with_device(render_device_handle, |device| {
@@ -564,8 +592,6 @@ fn test_layout_transition_on_failed_update() {
 
       {
         let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
-
-
 
         // This will fail because archetypes aren't initialized, but we catch/ignore it
         // just like the real `simulation_api.rs` does now.
@@ -603,26 +629,7 @@ fn test_layout_transition_on_failed_update() {
 #[test]
 fn test_render_text_system_font_async() {
   setup_assets_dir();
-  fn panic_on_validation_error(msg: &str) {
-    panic!("Vulkan validation error occurred during testing: {}", msg);
-  }
-  // Must be dropped after render frontend!
-  let pool_arc = std::sync::Arc::new(aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap());
-
-  let runtime_params = Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
-  });
-  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
-
-  let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
-
-  render_frontend
-    .with_device(render_device_handle, |device| {
-      device.wire_callbacks(pool_arc.clone())
-    })
-    .unwrap();
+  let (pool_arc, render_frontend, render_device_handle, _) = setup_render_frontend_for_tests(false);
 
   let width = 512;
   let height = 256;
@@ -770,24 +777,7 @@ fn test_render_text_system_font_async() {
 #[test]
 fn test_render_text_asset_font_async() {
   setup_assets_dir();
-  fn panic_on_validation_error(msg: &str) {
-    panic!("Vulkan validation error occurred during testing: {}", msg);
-  }
-  let pool_arc = std::sync::Arc::new(aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap());
-  let runtime_params = Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
-  });
-  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
-
-  let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
-
-  render_frontend
-    .with_device(render_device_handle, |device| {
-      device.wire_callbacks(pool_arc.clone())
-    })
-    .unwrap();
+  let (pool_arc, render_frontend, render_device_handle, _) = setup_render_frontend_for_tests(false);
 
   let width = 512;
   let height = 256;
@@ -949,39 +939,14 @@ fn test_render_text_asset_font_async() {
 }
 fn test_render_particles_multithreaded_impl(use_particle2: bool) {
   setup_assets_dir();
-  fn multithread_panic_on_validation_error(msg: &str) {
-    panic!("Vulkan validation error occurred during testing: {}", msg);
-  }
-  let runtime_params = Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-    validation_error_callback: Some(multithread_panic_on_validation_error as fn(&str)),
-  });
-  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(3).unwrap();
-  let pool_arc = std::sync::Arc::new(pool);
-  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
-
-  let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
-
-  render_frontend
+  let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
+    setup_render_frontend_for_tests(true);
+  let presentation_engine = presentation_engine.unwrap();
+  let [width, height] = render_frontend
     .with_device(render_device_handle, |device| {
-      device.wire_callbacks(pool_arc.clone())
+      device.get_presentation_engine_extent(presentation_engine)
     })
     .unwrap();
-
-  let width = 256;
-  let height = 256;
-
-  let presentation_engine = {
-    let params = PresentationEngineParams::windowless(width, height);
-    render_frontend
-      .with_device(render_device_handle, |device| {
-        let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
-        crate::types::GpuResult::Ok(pe)
-      })
-      .unwrap()
-  };
 
   let scene = Scene::new();
   scene.register_component::<TransformComponent>(&[]);
@@ -1046,7 +1011,8 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
         mesh: mesh_arc.clone(),
         emissive_intensity: 1.0,
         emissive_color: [0.5, 0.5, 0.5],
-        use_new_path: false, paint_display_mode: 0, // Emissive gray
+        use_new_path: false,
+        paint_display_mode: 0, // Emissive gray
       },
     )
     .unwrap();
@@ -1189,17 +1155,19 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
             0.6,
           )?);
 
-          let res = match device.get_physical_mesh_resources(mesh_entity, presentation_engine) {
+          let asset_hash = mesh_arc.id;
+          let res = match device.get_physical_mesh_resources(asset_hash, presentation_engine) {
             Ok(r) => r,
             Err(_) => device.create_physical_mesh_resources(
               cmd_buffer_handle,
-              mesh_entity,
+              asset_hash,
               &crate::scene::PhysicalMeshComponent {
                 asset_path: "".to_string(),
                 mesh: mesh_arc.clone(),
                 emissive_intensity: 0.0,
                 emissive_color: [0.0; 3],
-                use_new_path: false, paint_display_mode: 0,
+                use_new_path: false,
+                paint_display_mode: 0,
               },
               presentation_engine,
               "",
@@ -1240,7 +1208,8 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
           {
             device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64), 0.6)?;
             device.upload_particle_systems(cmd_buffer_handle, &mut render_scene.particle_calls)?;
-      device.upload_particle2_systems(cmd_buffer_handle, &mut render_scene.particle2_calls)?;
+            device
+              .upload_particle2_systems(cmd_buffer_handle, &mut render_scene.particle2_calls)?;
             device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
             let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
 
@@ -1374,39 +1343,9 @@ struct DepthTestSetupScene {
 
 fn depth_test_setup_scene() -> DepthTestSetupScene {
   setup_assets_dir();
-  fn panic_on_validation_error(msg: &str) {
-    panic!("Vulkan validation error occurred during testing: {}", msg);
-  }
-  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
-  let pool_arc = std::sync::Arc::new(pool);
-  let runtime_params = Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
-  });
-  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
-
-  let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
-
-  let width = 256;
-  let height = 256;
-
-  let presentation_engine = {
-    let params = PresentationEngineParams::windowless(width, height);
-    render_frontend
-      .with_device(render_device_handle, |device| {
-        let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
-        crate::types::GpuResult::Ok(pe)
-      })
-      .unwrap()
-  };
-
-  render_frontend
-    .with_device(render_device_handle, |device| {
-      device.wire_callbacks(pool_arc.clone())
-    })
-    .unwrap();
+  let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
+    setup_render_frontend_for_tests(true);
+  let presentation_engine = presentation_engine.unwrap();
 
   // TODO: remove EntityId dependency on physical mesh resource creation
   let scene = Scene::new();
@@ -1425,7 +1364,8 @@ fn depth_test_setup_scene() -> DepthTestSetupScene {
     mesh,
     emissive_intensity: 1.0,
     emissive_color: [1.0, 1.0, 1.0],
-    use_new_path: false, paint_display_mode: 0,
+    use_new_path: false,
+    paint_display_mode: 0,
     asset_path: "test".to_string(),
   };
   let transform = TransformComponent {
@@ -1916,39 +1856,14 @@ fn test_depth_color_image() {
 #[test]
 fn test_sun_rendering() {
   setup_assets_dir();
-  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
-  let pool_arc = std::sync::Arc::new(pool);
-  fn panic_on_validation_error(msg: &str) {
-    panic!("Vulkan validation error occurred during testing: {}", msg);
-  }
-  let runtime_params = Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
-  });
-  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
-
-  let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
-
-  let width = 256;
-  let height = 256;
-
-  render_frontend
+  let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
+    setup_render_frontend_for_tests(true);
+  let presentation_engine = presentation_engine.unwrap();
+  let [width, height] = render_frontend
     .with_device(render_device_handle, |device| {
-      device.wire_callbacks(pool_arc.clone())
+      device.get_presentation_engine_extent(presentation_engine)
     })
     .unwrap();
-
-  let presentation_engine = {
-    let params = PresentationEngineParams::windowless(width, height);
-    render_frontend
-      .with_device(render_device_handle, |device| {
-        let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
-        crate::types::GpuResult::Ok(pe)
-      })
-      .unwrap()
-  };
 
   let scene = Scene::new();
   scene.register_component::<TransformComponent>(&[]);
@@ -1973,7 +1888,8 @@ fn test_sun_rendering() {
     mesh: mesh.clone(),
     emissive_intensity: 5.0,
     emissive_color: [1.0, 0.5, 0.1],
-    use_new_path: false, paint_display_mode: 0, // Orange-ish emissive core
+    use_new_path: false,
+    paint_display_mode: 0, // Orange-ish emissive core
     asset_path: asset_path.clone(),
   };
 
@@ -2186,39 +2102,14 @@ fn test_sun_rendering() {
 #[test]
 fn test_sun_rendering_volume_only() {
   setup_assets_dir();
-  fn panic_on_validation_error(msg: &str) {
-    panic!("Vulkan validation error occurred during testing: {}", msg);
-  }
-  let runtime_params = Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
-  });
-  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
-  let pool_arc = std::sync::Arc::new(pool);
-  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
-
-  let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
-
-  let width = 256;
-  let height = 256;
-
-  render_frontend
+  let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
+    setup_render_frontend_for_tests(true);
+  let presentation_engine = presentation_engine.unwrap();
+  let [width, height] = render_frontend
     .with_device(render_device_handle, |device| {
-      device.wire_callbacks(pool_arc.clone())
+      device.get_presentation_engine_extent(presentation_engine)
     })
     .unwrap();
-
-  let presentation_engine = {
-    let params = PresentationEngineParams::windowless(width, height);
-    render_frontend
-      .with_device(render_device_handle, |device| {
-        let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
-        crate::types::GpuResult::Ok(pe)
-      })
-      .unwrap()
-  };
 
   let scene = Scene::new();
   scene.register_component::<TransformComponent>(&[]);
@@ -2394,25 +2285,7 @@ fn test_sun_rendering_volume_only() {
 
 fn test_render_particles_stress_impl(use_particle2: bool) {
   setup_assets_dir();
-  fn panic_on_validation_error(msg: &str) {
-    panic!("Vulkan validation error occurred during testing: {}", msg);
-  }
-  let runtime_params = Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
-  });
-  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
-  let pool_arc = std::sync::Arc::new(pool);
-  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
-
-  let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
-
-  render_frontend
-    .with_device(render_device_handle, |device| {
-      device.wire_callbacks(pool_arc.clone())
-    })
-    .unwrap();
+  let (pool_arc, render_frontend, render_device_handle, _) = setup_render_frontend_for_tests(false);
 
   let width = 512;
   let height = 512;
@@ -2580,7 +2453,11 @@ fn test_render_particles_stress_impl(use_particle2: bool) {
       }
 
       image::save_buffer(
-        if use_particle2 { "test_render_particles2_stress.png" } else { "test_render_particles_stress.png" },
+        if use_particle2 {
+          "test_render_particles2_stress.png"
+        } else {
+          "test_render_particles_stress.png"
+        },
         &export_buffer,
         width,
         height,
@@ -2609,43 +2486,21 @@ fn test_render_particles_stress_impl(use_particle2: bool) {
 #[test]
 fn test_outline_rendering_windowless() {
   setup_assets_dir();
-  fn panic_on_validation_error(msg: &str) {
-    panic!("Vulkan validation error occurred during testing: {}", msg);
-  }
-  let runtime_params = Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
-  });
-  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
-  let pool_arc = std::sync::Arc::new(pool);
-  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
-
-  let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
-
-  render_frontend
+  let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
+    setup_render_frontend_for_tests(true);
+  let presentation_engine = presentation_engine.unwrap();
+  let [width, height] = render_frontend
     .with_device(render_device_handle, |device| {
-      device.wire_callbacks(pool_arc.clone())
+      device.get_presentation_engine_extent(presentation_engine)
     })
     .unwrap();
-
-  let width = 256;
-  let height = 256;
-
-  let presentation_engine = {
-    let params = PresentationEngineParams::windowless(width, height);
-    render_frontend
-      .with_device(render_device_handle, |device| {
-        let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
-        crate::types::GpuResult::Ok(pe)
-      })
-      .unwrap()
-  };
 
   let scene = Scene::new();
   scene.register_component::<TransformComponent>(&[]);
   scene.register_component::<PhysicalMeshComponent>(&[TypeId::of::<TransformComponent>()]);
+  for _ in 0..30 {
+    scene.spawn_entity("dummy");
+  }
   let mesh_e = scene.spawn_entity("mesh");
 
   let transform = TransformComponent {
@@ -2661,7 +2516,8 @@ fn test_outline_rendering_windowless() {
     )),
     emissive_intensity: 1.0,
     emissive_color: [1.0; 3],
-    use_new_path: false, paint_display_mode: 0,
+    use_new_path: false,
+    paint_display_mode: 0,
   };
 
   scene.add_component(mesh_e, transform.clone()).unwrap();
@@ -2794,43 +2650,21 @@ fn test_outline_rendering_windowless() {
 #[test]
 fn test_outline_toggled_after_upload() {
   setup_assets_dir();
-  fn panic_on_validation_error(msg: &str) {
-    panic!("Vulkan validation error occurred during testing: {}", msg);
-  }
-  let runtime_params = Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
-  });
-  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
-  let pool_arc = std::sync::Arc::new(pool);
-  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
-
-  let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
-
-  render_frontend
+  let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
+    setup_render_frontend_for_tests(true);
+  let presentation_engine = presentation_engine.unwrap();
+  let [width, height] = render_frontend
     .with_device(render_device_handle, |device| {
-      device.wire_callbacks(pool_arc.clone())
+      device.get_presentation_engine_extent(presentation_engine)
     })
     .unwrap();
-
-  let width = 256;
-  let height = 256;
-
-  let presentation_engine = {
-    let params = PresentationEngineParams::windowless(width, height);
-    render_frontend
-      .with_device(render_device_handle, |device| {
-        let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
-        crate::types::GpuResult::Ok(pe)
-      })
-      .unwrap()
-  };
 
   let scene = Scene::new();
   scene.register_component::<TransformComponent>(&[]);
   scene.register_component::<PhysicalMeshComponent>(&[TypeId::of::<TransformComponent>()]);
+  for _ in 0..30 {
+    scene.spawn_entity("dummy");
+  }
   let mesh_e = scene.spawn_entity("mesh");
 
   let transform = TransformComponent {
@@ -2846,7 +2680,8 @@ fn test_outline_toggled_after_upload() {
     )),
     emissive_intensity: 1.0,
     emissive_color: [1.0; 3],
-    use_new_path: false, paint_display_mode: 0,
+    use_new_path: false,
+    paint_display_mode: 0,
   };
 
   scene.add_component(mesh_e, transform.clone()).unwrap();
@@ -3035,25 +2870,7 @@ fn test_outline_toggled_after_upload() {
 #[test]
 fn test_render_concurrent_resize() {
   setup_assets_dir();
-  fn panic_on_validation_error(msg: &str) {
-    panic!("Vulkan validation error occurred during testing: {}", msg);
-  }
-  let runtime_params = Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
-  });
-  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
-  let pool_arc = std::sync::Arc::new(pool);
-  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
-
-  let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
-
-  render_frontend
-    .with_device(render_device_handle, |device| {
-      device.wire_callbacks(pool_arc.clone())
-    })
-    .unwrap();
+  let (pool_arc, render_frontend, render_device_handle, _) = setup_render_frontend_for_tests(false);
 
   let width = 800;
   let height = 600;
@@ -3102,7 +2919,8 @@ fn test_render_concurrent_resize() {
     mesh,
     emissive_intensity: 1.0,
     emissive_color: [1.0, 1.0, 1.0],
-    use_new_path: false, paint_display_mode: 0,
+    use_new_path: false,
+    paint_display_mode: 0,
     asset_path: "test".to_string(),
   };
   let transform = TransformComponent {
@@ -3287,23 +3105,12 @@ fn test_render_concurrent_resize() {
 #[test]
 fn test_physical_mesh2_variants() {
   setup_assets_dir();
-  fn panic_on_validation_error(msg: &str) {
-    panic!("Vulkan validation error occurred during testing: {}", msg);
-  }
-  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
-  let pool_arc = std::sync::Arc::new(pool);
-  let runtime_params = Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
-  });
-  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
-
-  let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
-
-  render_frontend
+  let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
+    setup_render_frontend_for_tests(true);
+  let presentation_engine = presentation_engine.unwrap();
+  let [width, height] = render_frontend
     .with_device(render_device_handle, |device| {
-      device.wire_callbacks(pool_arc.clone())
+      device.get_presentation_engine_extent(presentation_engine)
     })
     .unwrap();
 
@@ -3322,7 +3129,7 @@ fn test_physical_mesh2_variants() {
   };
 
   let scene = Scene::new();
-  
+
   // Create 4 entities
   let e_normal = scene.spawn_entity("normal");
   let e_emissive = scene.spawn_entity("emissive");
@@ -3353,21 +3160,33 @@ fn test_physical_mesh2_variants() {
         [width, height],
       );
 
-      let asset_path = format!("{}/Comet.glb", crate::gpu::ASSET_DIR.read().as_ref().unwrap());
-      let mesh_arc = std::sync::Arc::new(crate::simulation::comet::load_comet_from_gltf(&asset_path, false).unwrap());
+      let asset_path = format!(
+        "{}/Comet.glb",
+        crate::gpu::ASSET_DIR.read().as_ref().unwrap()
+      );
+      let mesh_arc = std::sync::Arc::new(
+        crate::simulation::comet::load_comet_from_gltf(&asset_path, false).unwrap(),
+      );
 
       // Common helper to add mesh to render scene
-      let mut add_mesh = |entity: crate::scene::EntityId, pos: f32, intensity: f32, color: [f32; 3], outline: Option<[f32; 4]>, _paint_mode: u32| -> GpuResult<()> {
+      let mut add_mesh = |entity: crate::scene::EntityId,
+                          pos: f32,
+                          intensity: f32,
+                          color: [f32; 3],
+                          outline: Option<[f32; 4]>,
+                          _paint_mode: u32|
+       -> GpuResult<()> {
         // Wait, physical mesh doesn't expose paint mode yet in PhysicalMeshComponent.
         // We will just test normal, emissive, outline since paint mode is hardcoded in device.rs to 0 right now.
         // Let's modify the component or just test the 3 accessible states + default.
-        
+
         let mesh_comp = PhysicalMeshComponent {
           asset_path: asset_path.clone(),
           mesh: mesh_arc.clone(),
           emissive_intensity: intensity,
           emissive_color: color,
-          use_new_path: true, paint_display_mode: 0,
+          use_new_path: false,
+          paint_display_mode: 0,
         };
 
         let t = TransformComponent {
@@ -3376,13 +3195,17 @@ fn test_physical_mesh2_variants() {
           scale: Vec3f32::from_array([0.5, 0.5, 0.5]),
         };
 
-        let res = device.create_physical_mesh2_resources(
-          cmd_buffer_handle,
-          entity,
-          &mesh_comp,
-          presentation_engine,
-          "test_mesh",
-        )?;
+        let asset_hash = mesh_comp.mesh.id;
+        let res = match device.get_physical_mesh2_resources(asset_hash, presentation_engine) {
+          Ok(r) => r,
+          Err(_) => device.create_physical_mesh2_resources(
+            cmd_buffer_handle,
+            asset_hash,
+            &mesh_comp,
+            presentation_engine,
+            "test_mesh",
+          )?,
+        };
 
         let dc = gpu::frame::DrawCall::from_handles_and_matrix(
           res,
@@ -3404,7 +3227,14 @@ fn test_physical_mesh2_variants() {
       add_mesh(e_normal, -6.0, 0.0, [0.0, 0.0, 0.0], None, 0)?;
       add_mesh(e_emissive, -2.0, 5.0, [1.0, 0.0, 0.0], None, 0)?;
       add_mesh(e_painted, 2.0, 0.0, [0.0, 1.0, 0.0], None, 1)?; // Paint mode cannot be set directly from comp right now, but it's a variant.
-      add_mesh(e_outline, 6.0, 0.0, [0.0, 0.0, 1.0], Some([1.0, 1.0, 0.0, 1.0]), 0)?;
+      add_mesh(
+        e_outline,
+        6.0,
+        0.0,
+        [0.0, 0.0, 1.0],
+        Some([1.0, 1.0, 0.0, 1.0]),
+        0,
+      )?;
 
       {
         device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
@@ -3439,7 +3269,7 @@ fn test_physical_mesh2_variants() {
 
       let mut buffer = vec![0u8; (width * height * 4) as usize];
       device.read_windowless_download(task_id, &mut buffer)?;
-      
+
       // Save it
       let mut export_buffer = buffer.clone();
       for chunk in export_buffer.chunks_exact_mut(4) {
@@ -3459,7 +3289,8 @@ fn test_physical_mesh2_variants() {
         width,
         height,
         image::ColorType::Rgba8,
-      ).expect("Failed to save rendered png");
+      )
+      .expect("Failed to save rendered png");
 
       // Verify we drew something in 4 separate quadrants roughly.
       let mut obj_count = 0;
@@ -3468,20 +3299,24 @@ fn test_physical_mesh2_variants() {
         let mut hit = false;
         for x in (q * quadrant_width)..((q + 1) * quadrant_width) {
           for y in 0..height {
-             let idx = (y * width + x) as usize * 4;
-             let b = export_buffer[idx];
-             let g = export_buffer[idx+1];
-             let r = export_buffer[idx+2];
-             if r > 10 || g > 10 || b > 10 {
-               hit = true;
-               break;
-             }
+            let idx = (y * width + x) as usize * 4;
+            let b = export_buffer[idx];
+            let g = export_buffer[idx + 1];
+            let r = export_buffer[idx + 2];
+            if r > 10 || g > 10 || b > 10 {
+              hit = true;
+              break;
+            }
           }
-          if hit { break; }
+          if hit {
+            break;
+          }
         }
-        if hit { obj_count += 1; }
+        if hit {
+          obj_count += 1;
+        }
       }
-      
+
       assert_eq!(obj_count, 4, "Expected to see 4 distinct objects rendered");
 
       crate::types::GpuResult::Ok(())
@@ -3493,56 +3328,38 @@ fn test_physical_mesh2_variants() {
 
 #[test]
 fn test_render_particles_windowless() {
-    test_render_particles_windowless_impl(false);
+  test_render_particles_windowless_impl(false);
 }
 
 #[test]
 fn test_render_particles2_windowless() {
-    test_render_particles_windowless_impl(true);
+  test_render_particles_windowless_impl(true);
 }
 
 #[test]
 fn test_render_particles_multithreaded() {
-    test_render_particles_multithreaded_impl(false);
+  test_render_particles_multithreaded_impl(false);
 }
 
 #[test]
 fn test_render_particles2_multithreaded() {
-    test_render_particles_multithreaded_impl(true);
+  test_render_particles_multithreaded_impl(true);
 }
 
 #[test]
 fn test_render_particles_stress() {
-    test_render_particles_stress_impl(false);
+  test_render_particles_stress_impl(false);
 }
 
 #[test]
 fn test_render_particles2_stress() {
-    test_render_particles_stress_impl(true);
+  test_render_particles_stress_impl(true);
 }
 
 #[test]
 fn test_painting_mode_write_and_verify() {
   setup_assets_dir();
-  fn panic_on_validation_error(msg: &str) {
-    panic!("Vulkan validation error occurred during testing: {}", msg);
-  }
-  let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
-  let pool_arc = std::sync::Arc::new(pool);
-  let runtime_params = Box::new(RuntimeParams {
-    render_backend_params: FnvIndexMap::new(),
-    validation_error_callback: Some(panic_on_validation_error as fn(&str)),
-  });
-  let render_frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
-
-  let additional_params = DeviceAdditionalParams::new();
-  let render_device_handle = render_frontend.write().init_device(0, &additional_params).unwrap();
-
-  render_frontend
-    .with_device(render_device_handle, |device| {
-      device.wire_callbacks(pool_arc.clone())
-    })
-    .unwrap();
+  let (pool_arc, render_frontend, render_device_handle, _) = setup_render_frontend_for_tests(false);
 
   let width = 512;
   let height = 512;
@@ -3553,7 +3370,7 @@ fn test_painting_mode_write_and_verify() {
       .with_device(render_device_handle, |device| {
         let pe = device.create_presentation_engine(&params)?;
         device.init_archetypes(pe)?;
-        crate::types::GpuResult::Ok(pe)
+        Ok(pe)
       })
       .unwrap()
   };
@@ -3561,8 +3378,13 @@ fn test_painting_mode_write_and_verify() {
   let scene = Scene::new();
   let e_paint = scene.spawn_entity("paint_mesh");
 
-  let asset_path = format!("{}/Comet.glb", crate::gpu::ASSET_DIR.read().as_ref().unwrap());
-  let mesh_arc = std::sync::Arc::new(crate::simulation::comet::load_comet_from_gltf(&asset_path, false).unwrap());
+  let asset_path = format!(
+    "{}/Comet.glb",
+    crate::gpu::ASSET_DIR.read().as_ref().unwrap()
+  );
+  let mesh_arc = std::sync::Arc::new(
+    crate::simulation::comet::load_comet_from_gltf(&asset_path, false).unwrap(),
+  );
 
   let mut render_scene = RenderScene::new(
     (
@@ -3599,9 +3421,10 @@ fn test_painting_mode_write_and_verify() {
         paint_display_mode: 1, // Color mode
       };
 
+      let asset_hash = mesh_comp.mesh.id;
       let res = device.create_physical_mesh2_resources(
         cmd_buffer_handle,
-        e_paint,
+        asset_hash,
         &mesh_comp,
         presentation_engine,
         "paint_mesh",
@@ -3627,13 +3450,22 @@ fn test_painting_mode_write_and_verify() {
           let extent = device.get_presentation_engine_extent(presentation_engine)?;
           device.set_viewport(cmd_buffer_handle, &gpu::Viewport::from_extent(extent))?;
           device.set_scissor(cmd_buffer_handle, &gpu::Rect2D::from_extent(extent))?;
-          gpu::frame::render_frame(device, cmd_buffer_handle, &render_scene, presentation_engine)?;
+          gpu::frame::render_frame(
+            device,
+            cmd_buffer_handle,
+            &render_scene,
+            presentation_engine,
+          )?;
         }
         device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
         _scoped_cmd.submit().unwrap();
       }
 
-      device.present(presentation_engine, acquire_result.image_index as usize, acquire_result.frame_index as usize)?;
+      device.present(
+        presentation_engine,
+        acquire_result.image_index as usize,
+        acquire_result.frame_index as usize,
+      )?;
       while !device.is_task_completed(task_id)? {
         std::thread::sleep(std::time::Duration::from_millis(10));
       }
@@ -3641,19 +3473,28 @@ fn test_painting_mode_write_and_verify() {
 
       let mut buffer_before = vec![0u8; (width * height * 4) as usize];
       device.read_windowless_download(task_id, &mut buffer_before)?;
-      image::save_buffer("paint_before.png", &buffer_before, width, height, image::ColorType::Rgba8).ok();
+      image::save_buffer(
+        "paint_before.png",
+        &buffer_before,
+        width,
+        height,
+        image::ColorType::Rgba8,
+      )
+      .ok();
 
       // 2. PAINT into the buffer
       // We need to access the mapped memory of the emissive_paint_image.
       // This is inside RenderDevice (Vulkan implementation).
-      let vk_device = device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+      let vk_device =
+        device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
       let res_guard = vk_device.res.read();
-      let mesh_id = gpu::RenderableInstanceId::from_physical_mesh(e_paint);
+      let mesh_id = gpu::RenderableInstanceId::from_physical_mesh(mesh_comp.mesh.id);
       let mesh2_res = res_guard.physical_mesh2_resources.read();
       let paint_image_resource = mesh2_res.as_ref().unwrap().get(&mesh_id).unwrap();
       let paint_image = paint_image_resource.emissive_paint_image.as_ref().unwrap();
-      
-      let alloc_info = vk_device.res.read().allocator.allocator.get_allocation_info(&paint_image.allocation);
+
+      let alloc_info =
+        vk_device.res.read().allocator.allocator.get_allocation_info(&paint_image.allocation);
       let mapped_ptr = alloc_info.mapped_data as *mut u8;
       assert!(!mapped_ptr.is_null(), "Paint image must be mmapped");
 
@@ -3662,7 +3503,7 @@ fn test_painting_mode_write_and_verify() {
         for y in 400..600 {
           for x in 400..600 {
             let offset = (y * 1024 + x) * 4;
-            *mapped_ptr.add(offset) = 255;   // R
+            *mapped_ptr.add(offset) = 255; // R
             *mapped_ptr.add(offset + 1) = 0; // G
             *mapped_ptr.add(offset + 2) = 0; // B
             *mapped_ptr.add(offset + 3) = 255; // A (Distribution)
@@ -3677,20 +3518,38 @@ fn test_painting_mode_write_and_verify() {
       let cmd_buffer_handle_after = device.get_command_buffer()?;
 
       {
-        let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle_after, Some(task_id_after))?;
-        device.begin_render_pass(cmd_buffer_handle_after, presentation_engine, &acquire_result_after)?;
+        let _scoped_cmd =
+          gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle_after, Some(task_id_after))?;
+        device.begin_render_pass(
+          cmd_buffer_handle_after,
+          presentation_engine,
+          &acquire_result_after,
+        )?;
         {
           let mut _scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle_after);
           let extent = device.get_presentation_engine_extent(presentation_engine)?;
           device.set_viewport(cmd_buffer_handle_after, &gpu::Viewport::from_extent(extent))?;
           device.set_scissor(cmd_buffer_handle_after, &gpu::Rect2D::from_extent(extent))?;
-          gpu::frame::render_frame(device, cmd_buffer_handle_after, &render_scene, presentation_engine)?;
+          gpu::frame::render_frame(
+            device,
+            cmd_buffer_handle_after,
+            &render_scene,
+            presentation_engine,
+          )?;
         }
-        device.record_windowless_download(cmd_buffer_handle_after, presentation_engine, task_id_after)?;
+        device.record_windowless_download(
+          cmd_buffer_handle_after,
+          presentation_engine,
+          task_id_after,
+        )?;
         _scoped_cmd.submit().unwrap();
       }
 
-      device.present(presentation_engine, acquire_result_after.image_index as usize, acquire_result_after.frame_index as usize)?;
+      device.present(
+        presentation_engine,
+        acquire_result_after.image_index as usize,
+        acquire_result_after.frame_index as usize,
+      )?;
       while !device.is_task_completed(task_id_after)? {
         std::thread::sleep(std::time::Duration::from_millis(10));
       }
@@ -3698,7 +3557,14 @@ fn test_painting_mode_write_and_verify() {
 
       let mut buffer_after = vec![0u8; (width * height * 4) as usize];
       device.read_windowless_download(task_id_after, &mut buffer_after)?;
-      image::save_buffer("paint_after.png", &buffer_after, width, height, image::ColorType::Rgba8).ok();
+      image::save_buffer(
+        "paint_after.png",
+        &buffer_after,
+        width,
+        height,
+        image::ColorType::Rgba8,
+      )
+      .ok();
 
       // 4. Assert that painting happened
       // Check if some pixels became more red or different
@@ -3708,9 +3574,351 @@ fn test_painting_mode_write_and_verify() {
           diff_count += 1;
         }
       }
-      assert!(diff_count > 0, "Rendered image should have changed after painting");
+      assert!(
+        diff_count > 0,
+        "Rendered image should have changed after painting"
+      );
 
       crate::types::GpuResult::Ok(())
+    })
+    .unwrap();
+
+  drop(render_frontend);
+}
+
+#[test]
+fn test_render_multiple_soi_windowless() {
+  setup_assets_dir();
+  let (pool_arc, render_frontend, render_device_handle, _) = setup_render_frontend_for_tests(false);
+
+  let width = 512;
+  let height = 512;
+
+  let presentation_engine = {
+    let params = PresentationEngineParams::windowless(width, height);
+    render_frontend
+      .with_device(render_device_handle, |device| {
+        let pe = device.create_presentation_engine(&params)?;
+        device.init_archetypes(pe)?;
+        crate::types::GpuResult::Ok(pe)
+      })
+      .unwrap()
+  };
+
+  let scene = Scene::new();
+  scene.register_component::<TransformComponent>(&[]);
+  scene.register_component::<PhysicalMeshComponent>(&[TypeId::of::<TransformComponent>()]);
+  scene.register_component::<crate::scene::ReferenceFrameComponent>(&[TypeId::of::<
+    TransformComponent,
+  >()]);
+
+  // 1. Create Macro Frame
+  let macro_frame = scene.spawn_entity("macro_frame");
+  scene
+    .add_component(
+      macro_frame,
+      TransformComponent {
+        position: Vec3f32::from_array([0.0, 0.0, 0.0]),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+      },
+    )
+    .unwrap();
+  scene
+    .add_component(
+      macro_frame,
+      crate::scene::ReferenceFrameComponent {
+        frame_type: crate::scene::ReferenceFrameType::Macro,
+        scale: 1.0,
+        soi_radius: f32::MAX,
+        _padding: 0,
+      },
+    )
+    .unwrap();
+
+  // 2. Create Micro Frame A (SOI 1)
+  let micro_frame_a = scene.spawn_entity("micro_frame_a");
+  scene.set_parent(micro_frame_a, Some(macro_frame));
+  scene
+    .add_component(
+      micro_frame_a,
+      TransformComponent {
+        position: Vec3f32::from_array([10.0, 0.0, 0.0]), // offset by 10 on X
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+      },
+    )
+    .unwrap();
+  scene
+    .add_component(
+      micro_frame_a,
+      crate::scene::ReferenceFrameComponent {
+        frame_type: crate::scene::ReferenceFrameType::Micro,
+        scale: 0.1, // 10x smaller scale inside
+        soi_radius: 50.0,
+        _padding: 0,
+      },
+    )
+    .unwrap();
+
+  // 3. Create Micro Frame B (SOI 2)
+  let micro_frame_b = scene.spawn_entity("micro_frame_b");
+  scene.set_parent(micro_frame_b, Some(macro_frame));
+  scene
+    .add_component(
+      micro_frame_b,
+      TransformComponent {
+        position: Vec3f32::from_array([-100.0, 0.0, 0.0]), // offset by -100 on X
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+      },
+    )
+    .unwrap();
+  scene
+    .add_component(
+      micro_frame_b,
+      crate::scene::ReferenceFrameComponent {
+        frame_type: crate::scene::ReferenceFrameType::Micro,
+        scale: 1.0, // 1:1 scale
+        soi_radius: 50.0,
+        _padding: 0,
+      },
+    )
+    .unwrap();
+
+  let mesh = Arc::new(crate::simulation::comet::generate_uv_sphere(
+    2.0, 10, 10, 1.0,
+  ));
+
+  // Spawn an object in Micro Frame A
+  let obj_a = scene.spawn_entity("obj_a");
+  scene.set_parent(obj_a, Some(micro_frame_a));
+  scene
+    .add_component(
+      obj_a,
+      TransformComponent {
+        position: Vec3f32::from_array([0.0, 0.0, 0.0]), // Local to micro_frame_a
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+      },
+    )
+    .unwrap();
+  scene
+    .add_component(
+      obj_a,
+      PhysicalMeshComponent {
+        mesh: mesh.clone(),
+        emissive_intensity: 1.0,
+        emissive_color: [1.0, 0.0, 0.0], // Red
+        use_new_path: false,
+        paint_display_mode: 0,
+        asset_path: "test".to_string(),
+      },
+    )
+    .unwrap();
+
+  // Spawn an object in Micro Frame B
+  let obj_b = scene.spawn_entity("obj_b");
+  scene.set_parent(obj_b, Some(micro_frame_b));
+  scene
+    .add_component(
+      obj_b,
+      TransformComponent {
+        position: Vec3f32::from_array([0.0, 0.0, 0.0]), // Local to micro_frame_b
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+      },
+    )
+    .unwrap();
+  scene
+    .add_component(
+      obj_b,
+      PhysicalMeshComponent {
+        mesh: mesh.clone(),
+        emissive_intensity: 1.0,
+        emissive_color: [0.0, 0.0, 1.0], // Blue
+        use_new_path: false,
+        paint_display_mode: 0,
+        asset_path: "test".to_string(),
+      },
+    )
+    .unwrap();
+
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      let task_id = device.create_task();
+      device.start_frame()?;
+      let acquire_result = device.acquire_next_image(presentation_engine)?;
+      let cmd_buffer_handle = device.get_command_buffer()?;
+
+      // We place the camera such that we can see both SOIs.
+      // Macro space: obj_a is at (100, 0, 0), obj_b is at (-100, 0, 0).
+      // We put camera at (0, -200, 0) looking forward (+Y).
+      let mut render_scene = RenderScene::new(
+        (
+          TransformComponent {
+            position: Vec3f32::from_array([0.0, 0.0, 0.0]),
+            rotation: Quat::identity(),
+            scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+          },
+          CameraComponent {
+            projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 1000.0),
+            near_plane: 0.1,
+            far_plane: 1000.0,
+          },
+        ),
+        aethervk_oshal_rlib::os::time::TimeReadings::default(),
+        [width, height],
+      );
+
+      // Now we populate draw calls manually simulating what RenderSceneExtraction does
+      // We will resolve their world matrices.
+
+      let scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+
+      // Object A: parent is micro_frame_a (pos 10, scale 0.1).
+      // Global pos: 10 + (0 * 0.1) = 10.
+      // Let's compute global transform matrix manually.
+      let mat_a = Mat4x4f32::translation(Vec3f32::from_components(1.0, -10.0, 0.0))
+        * Mat4x4f32::from_scale(Vec3f32::from_components(1.0, 1.0, 1.0));
+      let pm_a = scene.with_component(obj_a, |pm: &PhysicalMeshComponent| pm.clone()).unwrap();
+
+      let asset_hash_a = pm_a.mesh.id;
+      let res_a = device.create_physical_mesh2_resources(
+        cmd_buffer_handle,
+        asset_hash_a,
+        &pm_a,
+        presentation_engine,
+        "obj_a",
+      )?;
+      render_scene.draw_calls.push(gpu::frame::DrawCall::from_handles_and_matrix(
+        res_a,
+        mesh.indices.len() as u32,
+        None,
+        mat_a,
+        pm_a.emissive_intensity,
+        pm_a.emissive_color,
+        true,
+        0,
+      ));
+
+      // Object B: parent is micro_frame_b (pos -2, scale 1.0)
+      let mat_b = Mat4x4f32::translation(Vec3f32::from_components(-1.0, -10.0, 0.0));
+      let pm_b = scene.with_component(obj_b, |pm: &PhysicalMeshComponent| pm.clone()).unwrap();
+
+      let asset_hash_b = pm_b.mesh.id;
+      let res_b = device.create_physical_mesh2_resources(
+        cmd_buffer_handle,
+        asset_hash_b,
+        &pm_b,
+        presentation_engine,
+        "obj_b",
+      )?;
+      render_scene.draw_calls.push(gpu::frame::DrawCall::from_handles_and_matrix(
+        res_b,
+        mesh.indices.len() as u32,
+        None,
+        mat_b,
+        pm_b.emissive_intensity,
+        pm_b.emissive_color,
+        true,
+        0,
+      ));
+
+      device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
+      let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
+
+      device.set_viewport(
+        cmd_buffer_handle,
+        &gpu::Viewport::from_extent([width, height]),
+      )?;
+      device.set_scissor(
+        cmd_buffer_handle,
+        &gpu::Rect2D::from_extent([width, height]),
+      )?;
+
+      gpu::frame::render_frame(
+        device,
+        cmd_buffer_handle,
+        &render_scene,
+        presentation_engine,
+      )?;
+
+      scoped_rp.end()?;
+      device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
+
+      scoped_cmd.submit().unwrap();
+
+      device.present(
+        presentation_engine,
+        acquire_result.image_index as usize,
+        acquire_result.frame_index as usize,
+      )?;
+
+      while !device.is_task_completed(task_id)? {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+      }
+      device.success_task(task_id);
+
+      let mut buffer = vec![0u8; (width * height * 4) as usize];
+      device.read_windowless_download(task_id, &mut buffer)?;
+
+      // Convert BGRA to RGBA and flip vertically
+      let mut export_buffer = buffer.clone();
+      for chunk in export_buffer.chunks_exact_mut(4) {
+        chunk.swap(0, 2); // BGRA to RGBA
+      }
+      let row_stride = (width * 4) as usize;
+      for y in 0..(height as usize / 2) {
+        let top_row_start = y * row_stride;
+        let bottom_row_start = ((height as usize) - 1 - y) * row_stride;
+        for x in 0..row_stride {
+          export_buffer.swap(top_row_start + x, bottom_row_start + x);
+        }
+      }
+
+      image::save_buffer(
+        "test_rendered_multiple_soi.png",
+        &export_buffer,
+        width,
+        height,
+        image::ColorType::Rgba8,
+      )
+      .expect("Failed to save rendered png");
+
+      // Verify that both red and blue pixels are found
+      let mut found_red = false;
+      let mut found_blue = false;
+      let mut max_r = 0;
+      let mut max_g = 0;
+      let mut max_b = 0;
+      for chunk in export_buffer.chunks_exact(4) {
+        let r = chunk[0];
+        let g = chunk[1];
+        let b = chunk[2];
+        if r > max_r {
+          max_r = r;
+        }
+        if g > max_g {
+          max_g = g;
+        }
+        if b > max_b {
+          max_b = b;
+        }
+        if r > 100 && g < 100 && b < 100 {
+          found_red = true;
+        }
+        if b > 100 && r < 100 && g < 100 {
+          found_blue = true;
+        }
+      }
+
+      println!("Max R: {}, Max G: {}, Max B: {}", max_r, max_g, max_b);
+
+      assert!(found_red, "Red object in Micro Frame A is not visible");
+      assert!(found_blue, "Blue object in Micro Frame B is not visible");
+
+      Ok(())
     })
     .unwrap();
 

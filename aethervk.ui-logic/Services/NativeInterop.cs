@@ -382,7 +382,11 @@ public static class NativeInterop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_setSimulationTime(IntPtr ctx, ulong sceneId, double timeTai);
+  public static extern void avkSimulationContext_setSimulationTime(
+    IntPtr ctx,
+    ulong sceneId,
+    double timeTai
+  );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.I1)]
@@ -521,7 +525,13 @@ public static class NativeInterop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_resize(IntPtr ctx, ulong sceneId, ulong handle, uint width, uint height);
+  public static extern void avkSimulationContext_resize(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong handle,
+    uint width,
+    uint height
+  );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_setActiveCamera(

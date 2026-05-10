@@ -17,7 +17,7 @@ use heapless::index_map::FnvIndexMap;
 use std::sync::Arc;
 use test_utils::simulation::kernels::CpuKernels;
 use test_utils::{
-  AppEvent, cycle_get_asset_path_from_exe, get_handle_and_window_info, scene_to_render_scene,
+  AppEvent, cycle_get_asset_path_from_exe, get_handle_and_window_info_create_layer, scene_to_render_scene,
   setup_resize_hook,
 };
 use winit::{event_loop::EventLoopBuilder, window::WindowBuilder};
@@ -529,7 +529,7 @@ fn main() {
   setup_resize_hook(&window, proxy_ptr);
 
   let (native_handles, _window_info) =
-    get_handle_and_window_info(&render_frontend, render_device_handle, &window);
+    get_handle_and_window_info_create_layer(&render_frontend, render_device_handle, &window);
 
   let width = window.inner_size().width;
   let height = window.inner_size().height;

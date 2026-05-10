@@ -1,10 +1,11 @@
+//! device module.
+
 use crate::gpu::vulkan::device::swapchain::PresentationState;
 use crate::{
   gpu::{
     self, AcquireResult, ArchetypeId, CommandBufferHandle, GpuResourceHandle, NativeGpuProperty,
-    PipelineKey, PipelineKeyable, PresentationEngineHandle, RenderDevice, RenderDeviceExt,
-    RenderableInstanceId, TextureFlags, frame::ResourceUploadResult,
-    vulkan::device::archetypes_struct::Archetypes,
+    PipelineKey, PresentationEngineHandle, RenderDevice, RenderDeviceExt, RenderableInstanceId,
+    TextureFlags, frame::ResourceUploadResult, vulkan::device::archetypes_struct::Archetypes,
   },
   gpu_backends::vulkan::{
     self,
@@ -24,12 +25,8 @@ use crate::{
   simulation::comet::Texture,
   types::{GpuError, GpuResult},
 };
-use aethervk_oshal_rlib::math::safe_div;
 use aethervk_oshal_rlib::{
-  self as oshal, log,
-  math::vector::vec3::Vec3f32,
-  math::vector::{Vector, Vector3},
-  os::fs::FileSystemObject,
+  self as oshal, log, math::vector::Vector3, math::vector::vec3::Vec3f32, os::fs::FileSystemObject,
   os::pool::WorkloadStatus,
 };
 use alloc::{
@@ -41,27 +38,23 @@ use alloc::{
   vec,
   vec::Vec,
 };
-use ash::vk::{self, Format, Handle, PhysicalDeviceProperties};
-use core::any::Any;
-use core::ops::Deref;
+use ash::vk;
 use core::{
+  any::Any,
   fmt,
   fmt::Formatter,
-  hash::{Hash, Hasher},
+  hash::Hash,
   ptr::{self, NonNull},
   sync::atomic::AtomicU32,
   sync::atomic::{AtomicU64, Ordering},
 };
 use heapless::index_map::FnvIndexMap;
-use oshal::{
-  hash::FnvHasher,
-  os::{
-    fs::PathBuf,
-    memory::{MaxAlignedStorage, StackAllocator},
-    native::this_thread,
-  },
+use oshal::os::{
+  fs::PathBuf,
+  memory::{MaxAlignedStorage, StackAllocator},
+  native::this_thread,
 };
-use spin::{Mutex, RwLockReadGuard};
+use spin::Mutex;
 use vk_mem::Alloc;
 // TODO refactor queue to use a Mutex for VkQueue handle or a struct to ensure submits are sync
 
@@ -92,6 +85,7 @@ mod timeline_manager;
 // TODO remove all unwrap and unwrap_unchecked (unless absolutely necessary or sure)
 
 #[derive(Debug)]
+/// TODO: Document this item
 pub(super) struct TaskEntry {
   pub(super) target_value: AtomicU64,
   pub(super) status: AtomicU32, // 0: Pending, 1: Success, 2: Failed
@@ -144,9 +138,9 @@ impl oshal::os::pool::Workload for TimelinePollingWorkload {
       // Yield/Sleep ~16.67ms to avoid pegging the CPU, allowing other tasks to run if they are queued
       // but without returning WorkloadStatus::Yield, which would drop this specific workload instance back
       // into the queue causing high contention and infinite spinning.
-      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(16));
+      this_thread::sleep_for(core::time::Duration::from_millis(16));
     }
-    oshal::os::pool::WorkloadStatus::Complete
+    WorkloadStatus::Complete
   }
 }
 
@@ -158,12 +152,12 @@ trait DeviceResource {
   fn cleanup(&mut self, device: &ash::Device);
 }
 
-struct FunctionalDeviceResource<H: ash::vk::Handle + Copy, F: FnOnce(H, &ash::Device)> {
+struct FunctionalDeviceResource<H: vk::Handle + Copy, F: FnOnce(H, &ash::Device)> {
   handle: H,
   cleanup: Option<F>,
 }
 
-impl<H: ash::vk::Handle + Copy, F: FnOnce(H, &ash::Device)> FunctionalDeviceResource<H, F> {
+impl<H: vk::Handle + Copy, F: FnOnce(H, &ash::Device)> FunctionalDeviceResource<H, F> {
   fn new(handle: H, cleanup: F) -> Self {
     Self {
       handle,
@@ -172,7 +166,7 @@ impl<H: ash::vk::Handle + Copy, F: FnOnce(H, &ash::Device)> FunctionalDeviceReso
   }
 }
 
-impl<H: ash::vk::Handle + Copy, F: FnOnce(H, &ash::Device)> DeviceResource
+impl<H: vk::Handle + Copy, F: FnOnce(H, &ash::Device)> DeviceResource
   for FunctionalDeviceResource<H, F>
 {
   fn cleanup(&mut self, device: &ash::Device) {
@@ -202,6 +196,7 @@ impl<'a, const N: usize> DeviceResourceJanitor<'a, N> {
     }
   }
 
+  /// TODO: Document this item
   pub fn clear(&mut self) {
     // The `drop` implementation will handle cleanup of existing resources.
     // Here we just need to reset the state.
@@ -210,6 +205,7 @@ impl<'a, const N: usize> DeviceResourceJanitor<'a, N> {
     self.heap_resources.clear();
   }
 
+  /// TODO: Document this item
   pub fn push<T: DeviceResource + 'a>(&mut self, resource: T) -> Result<(), &'static str> {
     // Check if there's space in the inline allocator
     let layout = core::alloc::Layout::new::<T>();
@@ -268,12 +264,13 @@ impl<'a, const N: usize> Drop for DeviceResourceJanitor<'a, N> {
         let resource = resource.as_mut();
         resource.cleanup(self.device);
 
-        core::ptr::drop_in_place(ptr::from_mut(resource));
+        ptr::drop_in_place(ptr::from_mut(resource));
       }
     }
   }
 }
 
+/// TODO: Document this item
 pub(super) struct PendingDownload {
   pub(super) staging_buffer: vk::Buffer,
   pub(super) allocation: vk_mem::Allocation,
@@ -285,11 +282,10 @@ pub(super) struct PendingDownload {
 /// - Wrapped into a RwLock/Mutex
 /// - Native Vulkan Handle, externally synchronized
 pub struct DeviceResources {
-  pub allocator: memory::GlobalDeviceAllocator,
+  pub allocator: GlobalDeviceAllocator,
   discard_pool: resources::DiscardPool,
-  live_presentation_engines: spin::RwLock<
-    hashbrown::HashMap<PresentationEngineHandle, spin::RwLock<swapchain::PresentationState>>,
-  >,
+  live_presentation_engines:
+    spin::RwLock<hashbrown::HashMap<PresentationEngineHandle, spin::RwLock<PresentationState>>>,
   command_pools: spin::RwLock<
     heapless::Vec<Option<Arc<commands::CommandPools>>, { utils::MAX_QUEUE_FAMILY_COUNT }>,
   >,
@@ -541,7 +537,7 @@ impl DeviceResources {
     depth_stencil_format: vk::Format,
     queue: &Queue,
     handle: PresentationEngineHandle,
-    staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
+    staging_arena: &memory::FrameStagingArena,
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
@@ -1199,6 +1195,7 @@ impl RecordingCmdBufferData {
   }
 }
 
+/// TODO: Document this item
 pub struct LogicalDevice {
   pub handle: ash::Device,
   pub submission_lock: Mutex<()>,
@@ -1208,6 +1205,8 @@ pub struct LogicalDevice {
   pub timeline_semaphore: ash::khr::timeline_semaphore::Device,
   /// Note: Remove if API_VERSION_1_3
   pub synchronization2: ash::khr::synchronization2::Device,
+
+  pub swapchain_maintenance1: Option<ash::ext::swapchain_maintenance1::Device>,
 
   #[cfg(debug_assertions)]
   pub debug_utils: ash::ext::debug_utils::Device,
@@ -1226,6 +1225,7 @@ impl core::ops::Deref for LogicalDevice {
 
 impl LogicalDevice {
   #[cfg(debug_assertions)]
+  /// TODO: Document this item
   pub fn set_debug_name<T: vk::Handle>(&self, object: T, name: &str) {
     use core::str::FromStr;
 
@@ -1246,10 +1246,12 @@ impl LogicalDevice {
 
   #[cfg(not(debug_assertions))]
   #[inline]
+  /// TODO: Document this item
   pub fn set_debug_name<T: vk::Handle>(&self, _object: T, _name: &str) {
     // This is a no-op in release builds, and should be optimized away.
   }
 
+  /// TODO: Document this item
   pub fn locked_queue_submit(
     &self,
     queue: vk::Queue,
@@ -1260,6 +1262,7 @@ impl LogicalDevice {
     unsafe { self.handle.queue_submit(queue, submits, fence) }
   }
 
+  /// TODO: Document this item
   pub fn wait_for_semaphore_value(
     &self,
     semaphore: vk::Semaphore,
@@ -1274,9 +1277,11 @@ impl LogicalDevice {
   }
 }
 
+/// TODO: Document this item
 pub trait VulkanDebugNameExt: Sized {
   fn with_name(self, device: &LogicalDevice, name: &str) -> Self;
 }
+/// TODO: Document this item
 pub trait VmaDebugNameExt: Sized {
   fn with_name(self, device: &LogicalDevice, name: &str) -> Self;
 }
@@ -1327,6 +1332,7 @@ where
   }
 }
 
+/// TODO: Document this item
 pub struct Device {
   pub query_result: utils::PhysicalDeviceQueryResult,
   queues: Queues,
@@ -1453,6 +1459,7 @@ impl Device {
     Ok(())
   }
 
+  /// TODO: Document this item
   pub(super) fn new(
     instance: Arc<instance::Instance>,
     index: usize,
@@ -1533,6 +1540,18 @@ impl Device {
       ash::khr::buffer_device_address::Device::new(&instance.instance, &device);
     let timeline_semaphore = ash::khr::timeline_semaphore::Device::new(&instance.instance, &device);
 
+    let swapchain_maintenance1 = if chosen_physical_device_query_result
+      .optional_extensions
+      .contains(utils::OptionalExtensionSupportFlags::SWAPCHAIN_MAINTENANCE1)
+    {
+      Some(ash::ext::swapchain_maintenance1::Device::new(
+        &instance.instance,
+        &device,
+      ))
+    } else {
+      None
+    };
+
     #[cfg(debug_assertions)]
     let debug_utils = ash::ext::debug_utils::Device::new(&instance.instance, &device);
     #[cfg(target_vendor = "apple")]
@@ -1547,6 +1566,7 @@ impl Device {
         create_renderpass2,
         synchronization2,
         buffer_device_address,
+        swapchain_maintenance1,
         #[cfg(target_vendor = "apple")]
         metal_objects,
         #[cfg(debug_assertions)]
@@ -1562,6 +1582,7 @@ impl Device {
     })
   }
 
+  /// TODO: Document this item
   pub(super) fn physical_device(&self) -> vk::PhysicalDevice {
     self.query_result.physical_device
   }
@@ -1578,7 +1599,9 @@ impl Drop for Device {
       unsafe { oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1)) };
     }
 
-    unsafe { self.device.device_wait_idle().unwrap_unchecked() };
+    if let Err(e) = unsafe { self.device.device_wait_idle() } {
+      aethervk_oshal_rlib::log!("Device::drop device_wait_idle failed: {:?}", e);
+    }
     aethervk_oshal_rlib::log!("Device::drop device_wait_idle complete. Starting cleanup...");
 
     self.res.write().cleanup(&self.device);
@@ -1640,6 +1663,15 @@ impl RenderDevice for Device {
       api_minor,
       api_patch,
     )
+  }
+
+  fn dump_memory_stats(&self) {
+    #[cfg(all(debug_assertions, feature = "debug_gpu"))]
+    {
+      if let Ok(stats) = self.res.read().allocator.allocator.build_stats_string(true) {
+        aethervk_oshal_rlib::log!("[VMA STATS DUMP]\n{}", stats);
+      }
+    }
   }
 
   fn context_id(&self) -> u64 {
@@ -2053,6 +2085,7 @@ impl RenderDevice for Device {
       &self.instance.instance,
       &self.device,
       physical_device_handle,
+      self.device.swapchain_maintenance1.clone(),
       params,
     )?;
 
@@ -2093,9 +2126,7 @@ impl RenderDevice for Device {
     let timeline = res_read.timeline_manager.get_next_submit_value();
 
     // Discard using the next submit value to ensure all currently queued frames are completed
-    res_read
-      .discard_pool
-      .discard_type_erased(presentation_engine, timeline);
+    res_read.discard_pool.discard_type_erased(presentation_engine, timeline);
 
     Ok(())
   }
@@ -2203,7 +2234,7 @@ impl RenderDevice for Device {
 
   fn get_physical_mesh_resources(
     &self,
-    entity_id: EntityId,
+    asset_hash: u64,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
     let res_guard = self.res.read();
@@ -2228,7 +2259,7 @@ impl RenderDevice for Device {
     };
 
     // Get rendering system Internal Mesh Identifier
-    let physical_mesh_id = RenderableInstanceId::from_physical_mesh(entity_id);
+    let physical_mesh_id = RenderableInstanceId::from_physical_mesh(asset_hash);
 
     // Does the mesh already exist? If so, return cached resource
     let read_resources = res_guard.physical_mesh_resources.read();
@@ -2261,13 +2292,12 @@ impl RenderDevice for Device {
   fn create_physical_mesh_resources(
     &self,
     cmd_buffer: CommandBufferHandle,
-    entity_id: EntityId,
+    asset_hash: u64,
     component: &PhysicalMeshComponent,
     handle: PresentationEngineHandle,
     debug_name: &str,
   ) -> GpuResult<ResourceUploadResult> {
-    let res_guard = self.res.read();
-    let physical_mesh_id = RenderableInstanceId::from_physical_mesh(entity_id);
+    let physical_mesh_id = RenderableInstanceId::from_physical_mesh(asset_hash);
 
     let cmd = {
       let cmd_buffers = self.recording_command_buffers.read();
@@ -2427,7 +2457,7 @@ impl RenderDevice for Device {
 
   fn get_physical_mesh2_resources(
     &self,
-    entity_id: EntityId,
+    asset_hash: u64,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
     let res_guard = self.res.read();
@@ -2450,7 +2480,7 @@ impl RenderDevice for Device {
       (pipeline_key, outline_pipeline_key)
     };
 
-    let physical_mesh_id = RenderableInstanceId::from_physical_mesh(entity_id);
+    let physical_mesh_id = RenderableInstanceId::from_physical_mesh(asset_hash);
 
     let read_resources = res_guard.physical_mesh2_resources.read();
     read_resources
@@ -2470,13 +2500,12 @@ impl RenderDevice for Device {
   fn create_physical_mesh2_resources(
     &self,
     cmd_buffer: CommandBufferHandle,
-    entity_id: EntityId,
+    asset_hash: u64,
     component: &PhysicalMeshComponent,
     handle: PresentationEngineHandle,
     debug_name: &str,
   ) -> GpuResult<ResourceUploadResult> {
-    let res_guard = self.res.read();
-    let physical_mesh_id = RenderableInstanceId::from_physical_mesh(entity_id);
+    let physical_mesh_id = RenderableInstanceId::from_physical_mesh(asset_hash);
 
     let cmd = {
       let cmd_buffers = self.recording_command_buffers.read();
@@ -2936,6 +2965,18 @@ impl RenderDevice for Device {
           size: 4,
         },
         16,
+      );
+      compute_info.add_specialization_constant_u32(
+        vk::SpecializationMapEntry {
+          constant_id: 10,
+          offset: 8,
+          size: 4,
+        },
+        if self.query_result.debug_shaders && cfg!(debug_assertions) {
+          1
+        } else {
+          0
+        },
       );
 
       let compute_pipeline = res_guard
@@ -3612,7 +3653,6 @@ impl RenderDevice for Device {
       cp2: [f32; 4],
       cp3: [f32; 4],
     }
-
     #[repr(C, align(8))]
     #[derive(Copy, Clone)]
     struct TrajectoryGpu {
@@ -3621,7 +3661,6 @@ impl RenderDevice for Device {
       line_width: f32,
       texture_id: u32,
     }
-
     #[repr(C, align(4))]
     #[derive(Copy, Clone)]
     struct SegmentMapGpu {
@@ -3630,43 +3669,166 @@ impl RenderDevice for Device {
       subdivisions: u32,
     }
 
+    let res_guard = self.res.read();
+
+    // NOTE: Changed to `.write()` because we mutate the allocator cache state!
+    let mut archetype_guard = res_guard.archetypes.trajectory_render_archetype.write();
+    if archetype_guard.is_none() {
+      return Err(GpuError::InvalidState(
+        "[Vulkan RenderDevice] upload_trajectories | archetype absent",
+      ));
+    }
+    let archetype = unsafe { archetype_guard.as_mut().unwrap_unchecked() };
+
+    archetype.tick = archetype.tick.wrapping_add(1);
+    let current_tick = archetype.tick;
+
+    // 1. GARBAGE COLLECTION: Purge curves missing for > 10 frames
+    let mut to_remove = alloc::vec::Vec::new();
+    for (id, alloc) in archetype.curves.iter() {
+      if current_tick.saturating_sub(alloc.last_seen_tick) > 10 {
+        to_remove.push(*id);
+      }
+    }
+    for id in to_remove {
+      if let Some(alloc) = archetype.curves.remove(&id) {
+        archetype.segment_allocator.free(alloc.segments_offset, alloc.segment_capacity as u64);
+      }
+    }
+
     let mut segment_maps = alloc::vec::Vec::new();
     let mut traj_gpus = alloc::vec::Vec::new();
-    let mut all_segments = alloc::vec::Vec::new();
+
+    let mut all_segments_to_upload = alloc::vec::Vec::new();
+    let mut segment_copies = alloc::vec::Vec::new(); // Tracks sparse uploads
 
     let mut total_segments = 0;
-    for (i, (_, traj_comp, model_mat)) in trajectories.iter().enumerate() {
+    let mut max_subdivs = 0;
+
+    for (i, (entity_id, traj_comp, model_mat)) in trajectories.iter().enumerate() {
       let local_segments_count = traj_comp.control_points.len() / 4;
+      if local_segments_count == 0 {
+        continue;
+      }
+
+      let current_hash = crate::gpu_backends::vulkan::device::resources::hash_trajectory(
+        &traj_comp.control_points,
+        model_mat,
+      );
+      let mut needs_upload = false;
+      let mut offset = 0;
+
+      // 2. RECOGNIZE & ALLOCATE
+      if let Some(alloc) = archetype.curves.get_mut(entity_id) {
+        alloc.last_seen_tick = current_tick;
+
+        if alloc.segment_capacity < local_segments_count {
+          // Curve grew -> Free old and allocate bigger block (+ 50% padding to prevent endless reallocation stutter)
+          archetype.segment_allocator.free(alloc.segments_offset, alloc.segment_capacity as u64);
+          let new_cap = local_segments_count + local_segments_count / 2;
+          offset = archetype.segment_allocator.allocate(new_cap as u64).unwrap_or(0); // Safely fallback to 0 if OOM
+
+          alloc.segments_offset = offset;
+          alloc.segment_capacity = new_cap;
+          alloc.last_hash = current_hash;
+          needs_upload = true;
+        } else {
+          offset = alloc.segments_offset;
+          if alloc.last_hash != current_hash {
+            alloc.last_hash = current_hash;
+            needs_upload = true; // Control points physically moved via Animation System
+          }
+        }
+      } else {
+        let new_cap = local_segments_count + local_segments_count / 2;
+        offset = archetype.segment_allocator.allocate(new_cap as u64).unwrap_or(0);
+
+        archetype.curves.insert(
+          *entity_id,
+          crate::gpu_backends::vulkan::device::resources::CurveAllocation {
+            segments_offset: offset,
+            segment_capacity: new_cap,
+            last_seen_tick: current_tick,
+            last_hash: current_hash,
+          },
+        );
+        needs_upload = true;
+      }
+
+      // 3. STAGE GEOMETRY (Only runs when genuinely modified!)
+      if needs_upload {
+        use aethervk_oshal_rlib::math::matrix::MatrixVectorMul;
+        use aethervk_oshal_rlib::math::vector::{Vector4, vec4::Vec4f32};
+
+        let start_idx = all_segments_to_upload.len();
+        for j in 0..local_segments_count {
+          let pt0 = model_mat
+            .mul_vector(Vec4f32::from_components(
+              traj_comp.control_points[j * 4][0],
+              traj_comp.control_points[j * 4][1],
+              traj_comp.control_points[j * 4][2],
+              traj_comp.control_points[j * 4][3],
+            ))
+            .into();
+          let pt1 = model_mat
+            .mul_vector(Vec4f32::from_components(
+              traj_comp.control_points[j * 4 + 1][0],
+              traj_comp.control_points[j * 4 + 1][1],
+              traj_comp.control_points[j * 4 + 1][2],
+              traj_comp.control_points[j * 4 + 1][3],
+            ))
+            .into();
+          let pt2 = model_mat
+            .mul_vector(Vec4f32::from_components(
+              traj_comp.control_points[j * 4 + 2][0],
+              traj_comp.control_points[j * 4 + 2][1],
+              traj_comp.control_points[j * 4 + 2][2],
+              traj_comp.control_points[j * 4 + 2][3],
+            ))
+            .into();
+          let pt3 = model_mat
+            .mul_vector(Vec4f32::from_components(
+              traj_comp.control_points[j * 4 + 3][0],
+              traj_comp.control_points[j * 4 + 3][1],
+              traj_comp.control_points[j * 4 + 3][2],
+              traj_comp.control_points[j * 4 + 3][3],
+            ))
+            .into();
+          all_segments_to_upload.push(RationalBezierGpu {
+            cp0: pt0,
+            cp1: pt1,
+            cp2: pt2,
+            cp3: pt3,
+          });
+        }
+
+        segment_copies.push((
+          start_idx as u64 * core::mem::size_of::<RationalBezierGpu>() as u64, // src offset in staging
+          offset * core::mem::size_of::<RationalBezierGpu>() as u64, // dest offset in Device Local Memory
+          (local_segments_count * core::mem::size_of::<RationalBezierGpu>()) as u64,
+        ));
+      }
+
+      // 4. METADATA (Small arrays densely rebuilt per frame for flawless sequential instanced rendering)
+      traj_gpus.push(TrajectoryGpu {
+        segments_ptr: archetype.segments_ptr
+          + (offset * core::mem::size_of::<RationalBezierGpu>() as u64),
+        color: traj_comp.color,
+        line_width: traj_comp.line_width,
+        texture_id: traj_comp.texture_id,
+      });
+
       for j in 0..local_segments_count {
         segment_maps.push(SegmentMapGpu {
           trajectory_id: i as u32,
           local_segment_id: j as u32,
           subdivisions: traj_comp.subdivisions_per_segment,
         });
-
-        use aethervk_oshal_rlib::math::matrix::MatrixVectorMul;
-        use aethervk_oshal_rlib::math::vector::{Vector4, vec4::Vec4f32};
-
-        let pt0 = traj_comp.control_points[j * 4];
-        let pt1 = traj_comp.control_points[j * 4 + 1];
-        let pt2 = traj_comp.control_points[j * 4 + 2];
-        let pt3 = traj_comp.control_points[j * 4 + 3];
-
-        all_segments.push(RationalBezierGpu {
-          cp0: pt0,
-          cp1: pt1,
-          cp2: pt2,
-          cp3: pt3,
-        });
       }
 
-      traj_gpus.push(TrajectoryGpu {
-        segments_ptr: 0, // Will be filled later
-        color: traj_comp.color,
-        line_width: traj_comp.line_width,
-        texture_id: traj_comp.texture_id,
-      });
-
+      if traj_comp.subdivisions_per_segment > max_subdivs {
+        max_subdivs = traj_comp.subdivisions_per_segment;
+      }
       total_segments += local_segments_count as u32;
     }
 
@@ -3674,14 +3836,11 @@ impl RenderDevice for Device {
       return Ok(None);
     }
 
-    let res_guard = self.res.read();
-    let archetype_guard = res_guard.archetypes.trajectory_render_archetype.read();
-    if archetype_guard.is_none() {
-      return Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] upload_trajectories | archetype absent",
-      ));
-    }
-    let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
+    let segments_upload_size =
+      (all_segments_to_upload.len() * core::mem::size_of::<RationalBezierGpu>()) as vk::DeviceSize;
+    let traj_size = (traj_gpus.len() * core::mem::size_of::<TrajectoryGpu>()) as vk::DeviceSize;
+    let map_size = (segment_maps.len() * core::mem::size_of::<SegmentMapGpu>()) as vk::DeviceSize;
+    let total_staging_size = segments_upload_size + traj_size + map_size;
 
     let cmd = {
       let cmd_buffers = self.recording_command_buffers.read();
@@ -3689,90 +3848,106 @@ impl RenderDevice for Device {
       data.command_buffer.get()
     };
 
-    let segments_size = (all_segments.len() * core::mem::size_of::<crate::gpu::RationalBezierGpu>()) as vk::DeviceSize;
-    let traj_size = (traj_gpus.len() * core::mem::size_of::<crate::gpu::TrajectoryGpu>()) as vk::DeviceSize;
-    let map_size = (segment_maps.len() * core::mem::size_of::<crate::gpu::SegmentMapGpu>()) as vk::DeviceSize;
-    
-    let total_size = segments_size + traj_size + map_size;
-
-    let (staging_offset, staging_ptr) = res_guard
+    // 5. COPY OPERATIONS (Only copying dirtied buffers)
+    if total_staging_size > 0 {
+      let (staging_offset, staging_ptr) = res_guard
         .frame_staging_arena
         .write()
         .as_mut()
         .unwrap()
-        .allocate(total_size as usize, 16)
+        .allocate(total_staging_size as usize, 16)
         .ok_or(crate::gpu_err!("device error"))?;
 
-    let mut current_offset = 0;
-    for (i, (_, traj_comp, _)) in trajectories.iter().enumerate() {
-      traj_gpus[i].segments_ptr = archetype.segments_ptr
-        + (current_offset as u64 * core::mem::size_of::<crate::gpu::RationalBezierGpu>() as u64);
-      current_offset += traj_comp.control_points.len() / 4;
-    }
+      unsafe {
+        if segments_upload_size > 0 {
+          core::ptr::copy_nonoverlapping(
+            all_segments_to_upload.as_ptr() as *const u8,
+            staging_ptr,
+            segments_upload_size as usize,
+          );
+        }
+        if traj_size > 0 {
+          core::ptr::copy_nonoverlapping(
+            traj_gpus.as_ptr() as *const u8,
+            staging_ptr.add(segments_upload_size as usize),
+            traj_size as usize,
+          );
+        }
+        if map_size > 0 {
+          core::ptr::copy_nonoverlapping(
+            segment_maps.as_ptr() as *const u8,
+            staging_ptr.add((segments_upload_size + traj_size) as usize),
+            map_size as usize,
+          );
+        }
+      }
 
-    unsafe {
-      core::ptr::copy_nonoverlapping(
-        all_segments.as_ptr() as *const u8,
-        staging_ptr,
-        segments_size as usize,
-      );
-      core::ptr::copy_nonoverlapping(
-        traj_gpus.as_ptr() as *const u8,
-        staging_ptr.add(segments_size as usize),
-        traj_size as usize,
-      );
-      core::ptr::copy_nonoverlapping(
-        segment_maps.as_ptr() as *const u8,
-        staging_ptr.add((segments_size + traj_size) as usize),
-        map_size as usize,
-      );
-    }
+      let staging_buffer = res_guard.frame_staging_arena.read().as_ref().unwrap().buffer;
 
-    let staging_buffer = res_guard.frame_staging_arena.read().as_ref().unwrap().buffer;
+      let mut vk_buffer_copies = alloc::vec::Vec::new();
+      for (src_offset, dst_offset, size) in segment_copies {
+        vk_buffer_copies.push(
+          vk::BufferCopy::default()
+            .src_offset(staging_offset as vk::DeviceSize + src_offset as vk::DeviceSize)
+            .dst_offset(dst_offset)
+            .size(size),
+        );
+      }
 
-    let segments_copy = vk::BufferCopy::default()
-        .src_offset(staging_offset as vk::DeviceSize)
-        .dst_offset(0)
-        .size(segments_size);
-    let traj_copy = vk::BufferCopy::default()
-        .src_offset(staging_offset as vk::DeviceSize + segments_size)
+      let traj_copy = vk::BufferCopy::default()
+        .src_offset(staging_offset as vk::DeviceSize + segments_upload_size)
         .dst_offset(0)
         .size(traj_size);
-    let map_copy = vk::BufferCopy::default()
-        .src_offset(staging_offset as vk::DeviceSize + segments_size + traj_size)
+      let map_copy = vk::BufferCopy::default()
+        .src_offset(staging_offset as vk::DeviceSize + segments_upload_size + traj_size)
         .dst_offset(0)
         .size(map_size);
 
-    unsafe {
-      self.device.cmd_copy_buffer(cmd, staging_buffer, archetype.segments_buffer.get(), &[segments_copy]);
-      self.device.cmd_copy_buffer(cmd, staging_buffer, archetype.trajectories_buffer.get(), &[traj_copy]);
-      self.device.cmd_copy_buffer(cmd, staging_buffer, archetype.map_buffer.get(), &[map_copy]);
+      unsafe {
+        if !vk_buffer_copies.is_empty() {
+          self.device.cmd_copy_buffer(
+            cmd,
+            staging_buffer,
+            archetype.segments_buffer.get(),
+            &vk_buffer_copies,
+          );
+        }
+        if traj_size > 0 {
+          self.device.cmd_copy_buffer(
+            cmd,
+            staging_buffer,
+            archetype.trajectories_buffer.get(),
+            &[traj_copy],
+          );
+        }
+        if map_size > 0 {
+          self.device.cmd_copy_buffer(cmd, staging_buffer, archetype.map_buffer.get(), &[map_copy]);
+        }
 
-      let memory_barrier = vk::MemoryBarrier2::default()
+        let memory_barrier = vk::MemoryBarrier2::default()
           .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
           .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-          .dst_stage_mask(vk::PipelineStageFlags2::VERTEX_SHADER | vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::COMPUTE_SHADER)
+          .dst_stage_mask(
+            vk::PipelineStageFlags2::VERTEX_SHADER
+              | vk::PipelineStageFlags2::FRAGMENT_SHADER
+              | vk::PipelineStageFlags2::COMPUTE_SHADER,
+          )
           .dst_access_mask(vk::AccessFlags2::SHADER_READ);
 
-      let dependency_info = vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&memory_barrier));
-      self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dependency_info);
+        let dependency_info =
+          vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&memory_barrier));
+        self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dependency_info);
+      }
     }
 
     let pe_lock = res_guard.live_presentation_engines.read();
     let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
     let pipeline = archetype.pipeline_key(pe.format()).unwrap();
 
-    let mut max_subdivs = 0;
-    for map in &segment_maps {
-      if map.subdivisions > max_subdivs {
-        max_subdivs = map.subdivisions;
-      }
-    }
-
     Ok(Some(crate::gpu::frame::TrajectoryBatchCall {
       pipeline,
       total_vertices: (max_subdivs + 1) * 2,
-      total_segments: total_segments,
+      total_segments,
       map_ptr: archetype.map_ptr,
       traj_ptr: archetype.trajectories_ptr,
     }))
@@ -4073,6 +4248,7 @@ impl RenderDevice for Device {
     let live_engines_lock = res_guard.live_presentation_engines.read();
     if let Some(engine) = live_engines_lock.get(&handle) {
       {
+        // TODO fix this
         let rpe = engine.read();
         // Since we don't have the recorded generation here (it's in the cmd buffer data which was just consumed),
         // we rely on the fact that if a resize happened, `submit_command_buffer` would have caught it.
@@ -4344,7 +4520,6 @@ impl RenderDevice for Device {
     acquire_result: &AcquireResult,
   ) -> GpuResult<()> {
     let res_guard = self.res.read();
-    let timeline = res_guard.get_timeline_semaphore_cached_value();
     let presentation_engines_guard = res_guard.live_presentation_engines.read();
     let cmd_buffers = self.recording_command_buffers.read();
     if !cmd_buffers.contains_key(&cmd_buffer) {
@@ -4536,7 +4711,6 @@ impl RenderDevice for Device {
 
     let command_buffer = {
       let res = self.res.read();
-      let timeline = res.get_timeline_semaphore_cached_value();
       let mut billboard_resources = res.billboard_resources.write();
       let billboard_render_archetype = res.archetypes.billboard_render_archetype.read();
 
@@ -4860,7 +5034,9 @@ impl RenderDevice for Device {
     ))?;
 
     let cmd = data.command_buffer.get();
-    let buffer = ash::vk::Buffer::from_raw(indirect_buffer.0);
+
+    use ash::vk::Handle;
+    let buffer = vk::Buffer::from_raw(indirect_buffer.0);
 
     unsafe {
       self.device.cmd_draw_indirect(cmd, buffer, offset, draw_count, stride);
@@ -4966,6 +5142,19 @@ impl RenderDevice for Device {
       let mut compute_info = pipelines::ComputeInfo::default();
       compute_info.shader_module = shader_module;
       compute_info.pipeline_layout = pipeline_layout;
+
+      compute_info.add_specialization_constant_u32(
+        vk::SpecializationMapEntry {
+          constant_id: 10,
+          offset: 0,
+          size: 4,
+        },
+        if self.query_result.debug_shaders && cfg!(debug_assertions) {
+          1
+        } else {
+          0
+        },
+      );
 
       let compute_pipeline = res_guard
         .pipeline_pool
@@ -5486,6 +5675,7 @@ impl RenderDevice for Device {
         ));
       }
 
+      use ash::vk::Handle;
       let needs_desc =
         sky_render_archetype_guard.as_ref().unwrap().descriptor_set.is_none_or(|d| d.is_null());
 
@@ -6206,7 +6396,7 @@ impl RenderDevice for Device {
       }
 
       let res = unsafe {
-        self.device.locked_queue_submit(
+        self.device.queue_submit(
           graphics_queue.handle,
           &[submit_info],
           submission_fence.get(),
@@ -6272,6 +6462,7 @@ impl RenderDevice for Device {
 }
 
 impl Device {
+  /// TODO: Document this item
   pub fn get_vma_budget_usage(&self) -> (u64, u64) {
     let mut res = self.res.write();
     res.allocator.refresh_vma_budgets();
@@ -7072,7 +7263,7 @@ fn shaders_asset_dir() -> GpuResult<PathBuf> {
 }
 
 fn pretty_print_vulkan_device(
-  props: &PhysicalDeviceProperties,
+  props: &vk::PhysicalDeviceProperties,
   device_name: &str,
   device_type: &str,
   family_count: u32,

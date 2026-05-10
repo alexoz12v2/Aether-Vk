@@ -31,9 +31,9 @@ fn test_stream_compact() {
         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
     );
 
-    // output array size: count (1 uint) + pairs (2 uints * total_elements)
+    // output array size: dispatch (3) + count (1) + pairs (2 uints * total_elements)
     // we initialize it to 0
-    let mut packed_out_init = vec![0u32; 1 + test_data.total_elements as usize * 2];
+    let mut packed_out_init = vec![0u32; 4 + test_data.total_elements as usize * 3];
 
     let (packed_buffer, mut packed_alloc, packed_addr) = ctx.create_buffer(
         &packed_out_init,
@@ -54,21 +54,22 @@ fn test_stream_compact() {
     };
 
     let spv_path = "../../assets/sim/stream_compact.comp.spv";
-    let dispatch_x = (test_data.total_elements + 255) / 256;
+    let dispatch_x = (test_data.total_elements + 127) / 128;
 
     run_compute_shader(&ctx, spv_path, push_constants_bytes, dispatch_x, 1, 1);
 
-    let output_data: Vec<u32> = ctx.read_buffer(packed_buffer, &mut packed_alloc, 1 + test_data.total_elements as usize * 2);
+    let output_data: Vec<u32> = ctx.read_buffer(packed_buffer, &mut packed_alloc, 4 + test_data.total_elements as usize * 3);
 
     ctx.destroy_buffer(sparse_buffer, sparse_alloc);
     ctx.destroy_buffer(packed_buffer, packed_alloc);
 
-    let count = output_data[0];
+    let count = output_data[3];
+    println!("First 10 elements: {:?}", &output_data[0..10]);
     assert_eq!(count, test_data.expected_count, "Expected {} items, but got {}", test_data.expected_count, count);
 
     let mut actual_pairs = Vec::new();
     for i in 0..count as usize {
-        actual_pairs.push((output_data[1 + i * 2], output_data[1 + i * 2 + 1]));
+        actual_pairs.push((output_data[4 + i * 3], output_data[4 + i * 3 + 1]));
     }
     actual_pairs.sort_by_key(|p| p.0);
 
