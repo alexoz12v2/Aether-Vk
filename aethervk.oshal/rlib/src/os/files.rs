@@ -310,7 +310,7 @@ impl Mmap {
       let mut p: alloc::vec::Vec<u16> = path
         .as_ref()
         .to_str_unified()
-        .map(|cow| cow.into_string().encode_utf16().collect())
+        .map(|cow| cow.into_owned().encode_utf16().collect())
         .ok_or(NativeError::InvalidArgument)?;
       p.push(0u16);
       p

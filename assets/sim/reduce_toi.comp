@@ -41,7 +41,7 @@ shared uint shared_min_toi[128 / SUBGROUP_SIZE];
 
 void main() {
     if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
-        debugPrintfEXT("Hello from reduce_toi.comp!\n");
+        debugPrintfEXT("Hello from reduce_toi.comp! count=%d\n", pc.collisions.count);
     }
     uint global_id = gl_GlobalInvocationID.x;
     uint local_id = gl_LocalInvocationID.x;

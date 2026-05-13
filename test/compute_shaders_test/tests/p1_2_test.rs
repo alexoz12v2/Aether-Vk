@@ -22,6 +22,7 @@ struct PushConstants {
 
 #[test]
 fn test_p1_2_imex_particles() {
+    compute_shaders_test::ensure_test_data("test_data/p1_2.json", "gen_p1_2_data.py");
     let json_data = fs::read_to_string("test_data/p1_2.json").expect("Failed to read JSON");
     let test_data: P1_2_Data = serde_json::from_str(&json_data).expect("Failed to parse JSON");
 

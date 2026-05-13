@@ -11,10 +11,7 @@ use aethervk_core_rlib::gpu::{
   OpaqueNativeHandleInfo, PresentationEngineHandle, RenderDevice, RenderDeviceHandle,
   RenderFrontend, RenderScene,
 };
-use aethervk_core_rlib::scene::{
-  AddComponentError, CameraComponent, CursorComponent, EntityId, GridComponent,
-  PhysicalMeshComponent, Scene, SkyComponent, SunComponent, TransformComponent,
-};
+use aethervk_core_rlib::scene::{AddComponentError, BvhDebugComponent, CameraComponent, CursorComponent, EntityId, FollowingComponent, GridComponent, PhysicalMeshComponent, Scene, SelectedComponent, SkyComponent, SunComponent, TransformComponent};
 use aethervk_core_rlib::simulation::comet::Comet;
 use aethervk_core_rlib::simulation_api::SimulationContext;
 use aethervk_core_rlib::types::{EngineError, GpuResult};
@@ -414,16 +411,7 @@ pub trait SceneTestUtilsExt {
 
 impl SceneTestUtilsExt for Scene {
   fn with_all_dbg_components(self) -> Self {
-    self.register_component::<TransformComponent>(&[]);
-    self.register_component::<PhysicalMeshComponent>(&[TypeId::of::<TransformComponent>()]);
-    self.register_component::<CameraComponent>(&[TypeId::of::<TransformComponent>()]);
-    self.register_component::<CursorComponent>(&[TypeId::of::<TransformComponent>()]);
-    self.register_component::<SunComponent>(&[TypeId::of::<TransformComponent>()]);
-    self.register_component::<SkyComponent>(&[]);
-    self.register_component::<GridComponent>(&[]);
-    self.register_component::<aethervk_core_rlib::scene::BvhDebugComponent>(&[]);
-    self.register_component::<aethervk_core_rlib::scene::SelectedComponent>(&[]);
-    self.register_component::<aethervk_core_rlib::scene::FollowingComponent>(&[]);
+    self.register_all_crate_components();
     self
   }
 

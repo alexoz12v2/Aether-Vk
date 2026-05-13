@@ -34,6 +34,7 @@ fn save_snapshot(name: &str, data: &[f32]) {
 
 #[test]
 fn test_imex_integration_all_shaders() {
+    compute_shaders_test::ensure_test_data("test_data/imex_integration.json", "gen_imex_integration_data.py");
     let json_data = fs::read_to_string("test_data/imex_integration.json").unwrap();
     let mut test_data: ImexIntegrationData = serde_json::from_str(&json_data).unwrap();
 

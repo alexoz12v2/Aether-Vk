@@ -25,6 +25,7 @@ struct PushConstants {
 
 #[test]
 fn test_reduce_toi() {
+    compute_shaders_test::ensure_test_data("test_data/reduce_toi.json", "gen_reduce_toi_data.py");
     let json_data = fs::read_to_string("test_data/reduce_toi.json").expect("Failed to read JSON");
     let test_data: ReduceToiData = serde_json::from_str(&json_data).expect("Failed to parse JSON");
 
@@ -35,7 +36,7 @@ fn test_reduce_toi() {
         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
     );
 
-    let mut packed_collisions = vec![test_data.total_pairs];
+    let mut packed_collisions = vec![0, 0, 0, test_data.total_pairs];
     packed_collisions.extend_from_slice(&test_data.pairs);
 
     let (collisions_buffer, mut collisions_alloc, collisions_addr) = ctx.create_buffer(

@@ -125,10 +125,8 @@ fn main() {
     }
   };
 
-  let scene = Scene::new();
-  scene.register_component::<TransformComponent>(&[]);
-  scene.register_component::<CameraComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
-  scene.register_component::<TrajectoryComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
+  let scene = Scene::new(std::sync::Arc::new(spin::RwLock::new(aethervk_core_rlib::simulation::texture_cache::TextureCache::new("AetherVk"))));
+  scene.register_all_crate_components();
 
   let root_e = scene.spawn_entity("root");
   scene
@@ -170,16 +168,9 @@ fn main() {
   scene
     .add_component(
       cam_e,
-      CameraComponent {
-        projection: Mat4x4f32::perspective_vk(
-          45.0f32.to_radians(),
-          width as f32 / height as f32,
-          0.1,
-          100.0,
+      CameraComponent::new_persp(
+          45.0f32.to_radians(), width as f32 / height as f32, 0.1, 100.0,
         ),
-        near_plane: 0.1,
-        far_plane: 100.0,
-      },
     )
     .unwrap();
 
@@ -217,123 +208,254 @@ fn main() {
     )
     .unwrap();
 
-  let mut frames = 0;
-  let mut time_readings = aethervk_oshal_rlib::os::time::TimeInfo::new(
-    timeus_milliseconds(16),
-    timeus_milliseconds(100),
-    1.0,
-  );
-  let mut total_time_us: aethervk_oshal_rlib::os::time::timeus_t = 0;
+  let shared_width = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(width));
+  let shared_height = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(height));
+  let quit_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
+  let r_width = shared_width.clone();
+  let r_height = shared_height.clone();
+  let r_quit = quit_flag.clone();
+  let render_frontend_bg = render_frontend.clone();
   let pool_arc_clone = pool_arc.clone();
 
-  let mut render_frame_fn = move |device: &dyn aethervk_core_rlib::gpu::RenderDevice,
-                                  width: u32,
-                                  height: u32,
-                                  is_windowed: bool,
-                                  frame_count: u32|
-        -> aethervk_core_rlib::types::GpuResult<()> {
-    time_readings.ut_update();
+  let render_thread = std::thread::spawn(move || {
+    let mut frames = 0;
+    let mut time_readings = aethervk_oshal_rlib::os::time::TimeInfo::new(
+      timeus_milliseconds(16),
+      timeus_milliseconds(100),
+      1.0,
+    );
+    let mut total_time_us: aethervk_oshal_rlib::os::time::timeus_t = 0;
 
-    // Animate the orbits!
-    let dt_us = 16_666; // Smooth 60 FPS animation fixed timestep
-
-    scene.with_component_mut(traj_e, |traj: &mut TrajectoryComponent| {
-      let scale_x = 10.0;
-      let scale_y = 5.0;
-      let speed = 2.0;
-      traj.animate_infinity_chase(dt_us, &mut total_time_us, scale_x, scale_y, speed);
-    });
-
-    let task_id = device.create_task();
-    device.start_frame()?;
-    let acquire_result = device.acquire_next_image(presentation_engine)?;
-    if acquire_result.status.needs_resize() {
-      device.success_task(task_id);
-      return Ok(());
-    }
-    let cmd_buffer_handle = device.get_command_buffer()?;
-    let _scoped_cmd =
-      aethervk_core_rlib::gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
-
-    use aethervk_core_rlib::gpu::scene_conversion::SceneConversionExt;
-    let extracted =
-      scene.convert_scene(cam_e, false, Some(&*pool_arc_clone), [width, height]).unwrap();
-    let render_scene = extracted
-      .build_render_scene(
-        device,
-        presentation_engine,
-        cmd_buffer_handle,
-        time_readings.current(),
-        [width, height],
-        "bezier_test",
-      )
-      .unwrap();
-
-    device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
-    let scoped_rp = aethervk_core_rlib::gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
-
-    device.set_viewport(
-      cmd_buffer_handle,
-      &aethervk_core_rlib::gpu::Viewport::from_extent([width, height]),
-    )?;
-    device.set_scissor(
-      cmd_buffer_handle,
-      &aethervk_core_rlib::gpu::Rect2D::from_extent([width, height]),
-    )?;
-
-    aethervk_core_rlib::gpu::frame::render_frame(
-      device,
-      cmd_buffer_handle,
-      &render_scene,
-      presentation_engine,
-    )?;
-    scoped_rp.end()?;
-
-    if !is_windowed && frame_count < 3 {
-      device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
+    let mut is_windowed = true;
+    #[cfg(not(feature = "windowed"))]
+    {
+      is_windowed = false;
     }
 
-    _scoped_cmd.submit()?;
+    while !r_quit.load(std::sync::atomic::Ordering::Relaxed) {
+      let loop_start = std::time::Instant::now();
+      time_readings.ut_update();
+      let dt_us = 16_666;
 
-    let _present_status = device.present(
-      presentation_engine,
-      acquire_result.image_index as usize,
-      acquire_result.frame_index as usize,
-    )?;
+      let current_width = r_width.load(std::sync::atomic::Ordering::Relaxed);
+      let current_height = r_height.load(std::sync::atomic::Ordering::Relaxed);
 
-    if !is_windowed {
-      while !device.is_task_completed(task_id)? {
-        std::thread::yield_now();
-      }
+      if current_width > 0 && current_height > 0 {
+        scene.with_component_mut(traj_e, |traj: &mut TrajectoryComponent| {
+          let scale_x = 10.0;
+          let scale_y = 5.0;
+          let speed = 2.0;
+          traj.animate_infinity_chase(dt_us, &mut total_time_us, scale_x, scale_y, speed);
+        });
 
-      if frame_count < 3 {
-        let mut buffer = vec![0u8; (width * height * 4) as usize];
-        device.read_windowless_download(task_id, &mut buffer)?;
+        let mut should_exit_headless = false;
+        #[cfg(target_os = "macos")]
+        objc2::rc::autoreleasepool(|_| {
+          render_frontend_bg.with_device(render_device_handle, |device| {
+            let task_id = device.create_task();
+            device.start_frame()?;
+            let acquire_result = device.acquire_next_image(presentation_engine)?;
+            if acquire_result.status.needs_resize() {
+              device.success_task(task_id);
+              return Ok(());
+            }
+            let cmd_buffer_handle = device.get_command_buffer()?;
+            let _scoped_cmd =
+              aethervk_core_rlib::gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
 
-        let mut export_buffer = buffer.clone();
-        for chunk in export_buffer.chunks_exact_mut(4) {
-          chunk.swap(0, 2);
+            use aethervk_core_rlib::gpu::scene_conversion::SceneConversionExt;
+            let extracted =
+              scene.convert_scene(cam_e, false, Some(&*pool_arc_clone), [current_width, current_height]).unwrap();
+            let render_scene = extracted
+              .build_render_scene(
+                device,
+                presentation_engine,
+                cmd_buffer_handle,
+                time_readings.current(),
+                [current_width, current_height],
+                "bezier_test",
+              )
+              .unwrap();
+
+            device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
+            let scoped_rp = aethervk_core_rlib::gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
+
+            device.set_viewport(
+              cmd_buffer_handle,
+              &aethervk_core_rlib::gpu::Viewport::from_extent([current_width, current_height]),
+            )?;
+            device.set_scissor(
+              cmd_buffer_handle,
+              &aethervk_core_rlib::gpu::Rect2D::from_extent([current_width, current_height]),
+            )?;
+
+            aethervk_core_rlib::gpu::frame::render_frame(
+              device,
+              cmd_buffer_handle,
+              &render_scene,
+              presentation_engine,
+            )?;
+            scoped_rp.end()?;
+
+            if !is_windowed && frames < 3 {
+              device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
+            }
+
+            _scoped_cmd.submit()?;
+
+            let _present_status = device.present(
+              presentation_engine,
+              acquire_result.image_index as usize,
+              acquire_result.frame_index as usize,
+            )?;
+
+            if !is_windowed {
+              while !device.is_task_completed(task_id)? {
+                std::thread::yield_now();
+              }
+
+              if frames < 3 {
+                let mut buffer = vec![0u8; (current_width * current_height * 4) as usize];
+                device.read_windowless_download(task_id, &mut buffer)?;
+
+                let mut export_buffer = buffer.clone();
+                for chunk in export_buffer.chunks_exact_mut(4) {
+                  chunk.swap(0, 2);
+                }
+
+                image::save_buffer(
+                  &format!("test_frame_{}.png", frames),
+                  &export_buffer,
+                  current_width,
+                  current_height,
+                  image::ColorType::Rgba8,
+                )
+                .unwrap();
+              }
+              if frames >= 3 {
+                  should_exit_headless = true;
+              }
+            }
+
+            Ok::<(), aethervk_core_rlib::types::GpuError>(())
+          }).unwrap();
+        });
+
+        #[cfg(not(target_os = "macos"))]
+        render_frontend_bg.with_device(render_device_handle, |device| {
+          let task_id = device.create_task();
+          device.start_frame()?;
+          let acquire_result = device.acquire_next_image(presentation_engine)?;
+          if acquire_result.status.needs_resize() {
+            device.success_task(task_id);
+            return Ok(());
+          }
+          let cmd_buffer_handle = device.get_command_buffer()?;
+          let _scoped_cmd =
+            aethervk_core_rlib::gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+
+          use aethervk_core_rlib::gpu::scene_conversion::SceneConversionExt;
+          let extracted =
+            scene.convert_scene(cam_e, false, Some(&*pool_arc_clone), [current_width, current_height]).unwrap();
+          let render_scene = extracted
+            .build_render_scene(
+              device,
+              presentation_engine,
+              cmd_buffer_handle,
+              time_readings.current(),
+              [current_width, current_height],
+              "bezier_test",
+            )
+            .unwrap();
+
+          device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
+          let scoped_rp = aethervk_core_rlib::gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
+
+          device.set_viewport(
+            cmd_buffer_handle,
+            &aethervk_core_rlib::gpu::Viewport::from_extent([current_width, current_height]),
+          )?;
+          device.set_scissor(
+            cmd_buffer_handle,
+            &aethervk_core_rlib::gpu::Rect2D::from_extent([current_width, current_height]),
+          )?;
+
+          aethervk_core_rlib::gpu::frame::render_frame(
+            device,
+            cmd_buffer_handle,
+            &render_scene,
+            presentation_engine,
+          )?;
+          scoped_rp.end()?;
+
+          if !is_windowed && frames < 3 {
+            device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
+          }
+
+          _scoped_cmd.submit()?;
+
+          let _present_status = device.present(
+            presentation_engine,
+            acquire_result.image_index as usize,
+            acquire_result.frame_index as usize,
+          )?;
+
+          if !is_windowed {
+            while !device.is_task_completed(task_id)? {
+              std::thread::yield_now();
+            }
+
+            if frames < 3 {
+              let mut buffer = vec![0u8; (current_width * current_height * 4) as usize];
+              device.read_windowless_download(task_id, &mut buffer)?;
+
+              let mut export_buffer = buffer.clone();
+              for chunk in export_buffer.chunks_exact_mut(4) {
+                chunk.swap(0, 2);
+              }
+
+              image::save_buffer(
+                &format!("test_frame_{}.png", frames),
+                &export_buffer,
+                current_width,
+                current_height,
+                image::ColorType::Rgba8,
+              )
+              .unwrap();
+            }
+            if frames >= 3 {
+                should_exit_headless = true;
+            }
+          }
+
+          Ok::<(), aethervk_core_rlib::types::GpuError>(())
+        }).unwrap();
+
+        if should_exit_headless {
+            r_quit.store(true, std::sync::atomic::Ordering::Relaxed);
         }
 
-        image::save_buffer(
-          &format!("test_frame_{}.png", frame_count),
-          &export_buffer,
-          width,
-          height,
-          image::ColorType::Rgba8,
-        )
-        .unwrap();
+        frames += 1;
+        if frames % 60 == 0 {
+          let mem = aethervk_oshal_rlib::os::memory::query_process_memory();
+          println!("Frame {}: Resident memory: {} MB", frames, mem.physical_bytes / 1024 / 1024);
+        }
+        #[cfg(all(debug_assertions, feature = "debug_gpu"))]
+        {
+          if frames % 120 == 0 {
+            aethervk_oshal_rlib::os::memory::tracking::print_memory_state();
+          }
+        }
+      }
+
+      let elapsed = loop_start.elapsed();
+      let target_dt = std::time::Duration::from_millis(16);
+      if elapsed < target_dt {
+          std::thread::sleep(target_dt - elapsed);
       }
     }
-
-    if frame_count % 60 == 0 {
-      let mem = aethervk_oshal_rlib::os::memory::query_process_memory();
-      println!("Frame {}: Resident memory: {} MB", frame_count, mem.physical_bytes / 1024 / 1024);
-    }
-
-    Ok(())
-  };
+  });
 
   #[cfg(feature = "windowed")]
   {
@@ -345,7 +467,7 @@ fn main() {
     let mut resize_width = 0;
     let mut resize_height = 0;
 
-    event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+    event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
 
     event_loop
       .run(move |event, elwt| {
@@ -361,7 +483,10 @@ fn main() {
           Event::WindowEvent {
             event: WindowEvent::CloseRequested,
             ..
-          } => elwt.exit(),
+          } => {
+            quit_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            elwt.exit();
+          }
           Event::AboutToWait => {
             if needs_resize && !is_resizing {
               if resize_width > 0 && resize_height > 0 {
@@ -374,32 +499,10 @@ fn main() {
                     )
                   })
                   .unwrap();
+                shared_width.store(resize_width, std::sync::atomic::Ordering::Relaxed);
+                shared_height.store(resize_height, std::sync::atomic::Ordering::Relaxed);
               }
               needs_resize = false;
-            }
-            window.request_redraw();
-          }
-          Event::WindowEvent {
-            event: WindowEvent::RedrawRequested,
-            ..
-          } => {
-            let inner_size = window.inner_size();
-            let current_width = inner_size.width;
-            let current_height = inner_size.height;
-
-            if current_width > 0 && current_height > 0 && !is_resizing {
-              render_frontend
-                .with_device(render_device_handle, |device| {
-                  render_frame_fn(device, current_width, current_height, true, frames)
-                })
-                .unwrap();
-              frames += 1;
-              #[cfg(all(debug_assertions, feature = "debug_gpu"))]
-              {
-                if frames % 120 == 0 {
-                  aethervk_oshal_rlib::os::memory::tracking::print_memory_state();
-                }
-              }
             }
           }
           Event::WindowEvent {
@@ -425,42 +528,15 @@ fn main() {
         }
       })
       .unwrap();
+
+    render_thread.join().unwrap();
   }
 
   #[cfg(not(feature = "windowed"))]
   {
-    let start = std::time::Instant::now();
-    loop {
-      // if start.elapsed().as_secs() > 3 {
-      //   break;
-      // }
-      #[cfg(target_os = "macos")]
-      objc2::rc::autoreleasepool(|_| {
-        render_frontend
-          .with_device(render_device_handle, |device| {
-            render_frame_fn(device, width, height, false, frames)
-          })
-          .unwrap();
-      });
-      #[cfg(not(target_os = "macos"))]
-      render_frontend
-        .with_device(render_device_handle, |device| {
-          render_frame_fn(device, width, height, false, frames)
-        })
-        .unwrap();
-      frames += 1;
-      #[cfg(all(debug_assertions, feature = "debug_gpu"))]
-      {
-        if frames % 120 == 0 {
-          aethervk_oshal_rlib::os::memory::tracking::print_memory_state();
-          render_frontend.with_device(render_device_handle, |device| {
-            device.dump_memory_stats();
-            Ok::<(), aethervk_core_rlib::types::GpuError>(())
-          }).unwrap();
-        }
-      }
-    }
-    println!("Rendered {} frames in 3 seconds", frames);
+    // Wait for the render thread to finish its 3 frames
+    render_thread.join().unwrap();
+    println!("Rendered 3 frames in headless mode");
 
     // Verify animation by comparing pixels
     let img0 = image::open("test_frame_0.png").unwrap().into_rgba8();

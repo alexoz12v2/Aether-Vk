@@ -1,21 +1,21 @@
 #[cfg(all(debug_assertions, feature = "debug_gpu"))]
 #[global_allocator]
-static ALLOC: aethervk_oshal_rlib::os::memory::tracking::TrackingAllocator<std::alloc::System> = 
+static ALLOC: aethervk_oshal_rlib::os::memory::tracking::TrackingAllocator<std::alloc::System> =
   aethervk_oshal_rlib::os::memory::tracking::TrackingAllocator(std::alloc::System);
 
-use aethervk_core_rlib::gpu::PresentationEngineHandle;
-use aethervk_core_rlib::scene::text::FontAtlas;
-use aethervk_core_rlib::scene::{GridComponent, HiddenComponent};
-use aethervk_core_rlib::simulation_api::structs::{CustomRenderCallback, SendPtrMut};
-use aethervk_core_rlib::types::{EngineResult, GpuResult};
 use aethervk_core_rlib::{
-  gpu::{self},
+  gpu::PresentationEngineHandle,
   scene::GizmoComponent,
+  scene::text::FontAtlas,
   scene::{AlmanacPlanet, PhysicalMeshComponent, TransformComponent},
+  scene::{GridComponent, HiddenComponent},
   simulation::constants,
+  simulation_api::structs::{CustomRenderCallback, SendPtrMut},
   simulation_api::{SimulationContext, structs},
+  types::{EngineResult, GpuResult},
 };
 use aethervk_oshal_rlib::{
+  math::matrix::SquareMatrix,
   math::vector::Vector,
   math::{
     quaternion::Quaternion,
@@ -63,7 +63,8 @@ fn first_render_update_atlas(
 
   if let Some(atlas) = data.font_atlas.take() {
     let font_hash = atlas.hash_metadata();
-    let font_internal = device.allocate_rasterized_font_atlas(cmd_buffer, font_hash, atlas)?;
+    let font_internal =
+      device.allocate_rasterized_font_atlas(cmd_buffer, font_hash, std::sync::Arc::new(atlas))?;
     FONT_HASH.store(font_hash, std::sync::atomic::Ordering::Relaxed);
     FONT_INTERNAL.store(font_internal, std::sync::atomic::Ordering::Relaxed);
   }
@@ -81,7 +82,6 @@ fn ui_custom_render_fn(
   let data = data_mutex.lock().unwrap();
 
   let size = data.size;
-  let screen_extent = [size.width as f32, size.height as f32];
   let font_id = (
     FONT_HASH.load(std::sync::atomic::Ordering::Relaxed),
     FONT_INTERNAL.load(std::sync::atomic::Ordering::Relaxed),
@@ -89,6 +89,14 @@ fn ui_custom_render_fn(
   if font_id.0 == 0 {
     return Ok(()); // Font not ready yet
   }
+
+  #[rustfmt::skip]
+  let view_proj_arr: [f32; 16] = [
+    2.0 / size.width as f32, 0.0, 0.0, 0.0,
+    0.0, 2.0 / size.height as f32, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    -1.0, -1.0, 0.0, 1.0,
+  ];
 
   let mut mem_text = String::new();
   if let Some(vk_dev) =
@@ -107,8 +115,8 @@ fn ui_custom_render_fn(
   let _ = device.render_text(
     cmd_buffer,
     &mem_text,
-    [-0.98, -0.95],
-    screen_extent,
+    [10.0, 10.0],
+    view_proj_arr,
     font_id,
     16.0,
     [0.0, 1.0, 0.0, 1.0],
@@ -150,8 +158,8 @@ fn ui_custom_render_fn(
     if let Err(e) = device.render_text(
       cmd_buffer,
       &console_text,
-      [-0.98, text_start_y],
-      screen_extent,
+      [10.0, (size.height as f32) / 2.0], // Arbitrary position for UI coordinates
+      view_proj_arr,
       font_id,
       14.0,
       [0.8, 0.8, 0.8, 1.0],
@@ -166,8 +174,8 @@ fn ui_custom_render_fn(
     if let Err(e) = device.render_text(
       cmd_buffer,
       &prompt_text,
-      [-0.98, prompt_y],
-      screen_extent,
+      [10.0, (size.height as f32) - 30.0],
+      view_proj_arr,
       font_id,
       16.0,
       [1.0, 1.0, 0.2, 1.0],
@@ -198,6 +206,7 @@ impl SimulationDelegate for SimulationPlaygroundDelegate {
     &mut self,
     simulation_context: &mut SimulationContext,
     scene_id: u64,
+    presentation_engine_handle: PresentationEngineHandle,
     window: &Window,
   ) -> EngineResult<()> {
     let assets_dir = cycle_get_asset_path_from_exe(true);
@@ -296,31 +305,37 @@ impl SimulationDelegate for SimulationPlaygroundDelegate {
         .scene
         .add_component(
           mesh_entity,
-          aethervk_core_rlib::scene::ParticleSystemComponent::new(
-            aethervk_core_rlib::scene::ParticleEmitterConfig {
-              uv_distribution: uv_dist,
-              delta: 100_000,
-              max_particles: 100000,
-              velocity_intensity: aethervk_core_rlib::scene::GaussianParams {
-                mean: 0.5,
-                std_dev: 0.1,
-                min: 0.0,
-                max: 1.0,
-              },
-              emission_count: aethervk_core_rlib::scene::GaussianParams {
-                mean: 100.0,
-                std_dev: 20.0,
-                min: 10.0,
-                max: 200.0,
-              },
-              particle_radius: 1.0,
-              density: 1000.0,
-              lifetime: 5_000_000,
-              color: [1.0, 0.5, 0.0, 1.0],
-              beta: 0.1,
-              use_particle2: false,
+          aethervk_core_rlib::scene::ParticleSystemComponent::new(100_000),
+        )
+        .unwrap();
+
+      active_scene
+        .scene
+        .add_component(
+          mesh_entity,
+          aethervk_core_rlib::scene::ParticleEmitterComponent {
+            uv_distribution: uv_dist,
+            delta: 100_000,
+            max_particles: 100000,
+            velocity_intensity: aethervk_core_rlib::scene::GaussianParams {
+              mean: 0.5,
+              std_dev: 0.1,
+              min: 0.0,
+              max: 1.0,
             },
-          ),
+            emission_count: aethervk_core_rlib::scene::GaussianParams {
+              mean: 100.0,
+              std_dev: 20.0,
+              min: 10.0,
+              max: 200.0,
+            },
+            particle_radius: 1.0,
+            density: 1000.0,
+            lifetime: 5_000_000,
+            color: [1.0, 0.5, 0.0, 1.0],
+            beta: 0.1,
+            use_particle2: false,
+          },
         )
         .unwrap();
 
@@ -542,7 +557,13 @@ impl SimulationDelegate for SimulationPlaygroundDelegate {
     self.ext_camera_entity = {
       let scene_ctx = simulation_context.get_scene(scene_id).unwrap();
       let read_ctx = scene_ctx.read();
-      let int_cam = read_ctx.active_camera_entity.unwrap();
+      let int_cam = read_ctx
+        .presentation_engines
+        .read()
+        .get(&presentation_engine_handle)
+        .unwrap()
+        .camera_entity
+        .unwrap();
       read_ctx.entity_map.iter().find(|&(_, &v)| v == int_cam).map(|(&k, _)| k).unwrap()
     };
 
@@ -579,7 +600,6 @@ impl SimulationDelegate for SimulationPlaygroundDelegate {
 
     let arc_scenes = simulation_context.get_scene(scene_id).unwrap();
     let mut scene_write = arc_scenes.write();
-    scene_write.active_camera_entity = scene_write.get_entity(self.ext_camera_entity);
     let cb = self.custom_data.lock().unwrap().make_callback(Arc::clone(&self.custom_data));
     scene_write.register_custom_render_callback(Some(cb));
     drop(scene_write);
@@ -617,79 +637,6 @@ impl SimulationDelegate for SimulationPlaygroundDelegate {
     lock.console_scroll_offset = self.console_scroll_offset;
     lock.command_history = self.command_history.clone();
     lock.current_command = self.current_command.clone();
-  }
-
-  fn on_resize(&mut self, ctx: &mut SimulationContext, scene_id: u64, width: u32, height: u32) {
-    let mut lock = self.custom_data.lock().unwrap();
-    lock.size = winit::dpi::PhysicalSize::new(width, height);
-  }
-
-  fn on_mouse_motion(
-    &mut self,
-    ctx: &mut SimulationContext,
-    scene_id: u64,
-    delta: (f64, f64),
-    middle_mouse_down: bool,
-    shift_down: bool,
-    ctrl_down: bool,
-  ) {
-    let scene = ctx.get_scene(scene_id).unwrap();
-    let camera_entity = scene.read().get_entity(self.ext_camera_entity).expect(&format!(
-      "There is not camera entity with id {} in scene {}",
-      self.ext_camera_entity, scene_id
-    ));
-
-    let logic_command = test_utils::command::process_mouse_motion_camera_commands(
-      delta,
-      middle_mouse_down,
-      shift_down,
-      ctrl_down,
-      camera_entity,
-      scene.clone(),
-    );
-
-    if let Some(logic_command) = logic_command {
-      let _ = ctx.threads.logic_thread.tx().try_send(logic_command);
-    }
-  }
-
-  fn on_mouse_input(
-    &mut self,
-    ctx: &mut SimulationContext,
-    scene_id: u64,
-    button: winit::event::MouseButton,
-    state: winit::event::ElementState,
-    mouse_pos: (f64, f64),
-  ) {
-    if button == winit::event::MouseButton::Left {
-      if state == winit::event::ElementState::Pressed {
-        let size = self.custom_data.lock().unwrap().size;
-        if size.width > 0 && size.height > 0 {
-          let ndc_x = (mouse_pos.0 as f32 / size.width as f32) * 2.0 - 1.0;
-          let ndc_y = (mouse_pos.1 as f32 / size.height as f32) * 2.0 - 1.0;
-          let _ = ctx.raycast_ndc(scene_id, ndc_x, ndc_y);
-        }
-      }
-    }
-  }
-
-  fn on_mouse_wheel(
-    &mut self,
-    ctx: &mut SimulationContext,
-    scene_id: u64,
-    delta: winit::event::MouseScrollDelta,
-  ) {
-    let scroll_amount = match delta {
-      winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-      winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 10.0) as f32,
-    };
-    if self.is_command_prompt_open {
-      if scroll_amount > 0.0 {
-        self.console_scroll_offset = self.console_scroll_offset.saturating_add(1);
-      } else if scroll_amount < 0.0 {
-        self.console_scroll_offset = self.console_scroll_offset.saturating_sub(1);
-      }
-    }
   }
 
   fn on_keyboard_input(
@@ -888,7 +835,7 @@ impl SimulationDelegate for SimulationPlaygroundDelegate {
               winit::keyboard::KeyCode::Digit0 => {
                 if let Some(scene_ctx) = ctx.get_scene(scene_id) {
                   let scene = scene_ctx.clone();
-                  let camera_entity = scene_ctx.read().active_camera_entity.unwrap();
+                  let camera_entity = scene_ctx.read().get_entity(self.ext_camera_entity).unwrap();
                   let _ = ctx.threads.logic_thread.tx().try_send(
                     aethervk_core_rlib::simulation_api::structs::LogicCommand::ResetCamera(
                       aethervk_core_rlib::simulation_api::structs::ResetCamera {
@@ -937,6 +884,79 @@ impl SimulationDelegate for SimulationPlaygroundDelegate {
       }
     }
   }
+
+  fn on_mouse_input(
+    &mut self,
+    ctx: &mut SimulationContext,
+    scene_id: u64,
+    button: winit::event::MouseButton,
+    state: winit::event::ElementState,
+    mouse_pos: (f64, f64),
+  ) {
+    if button == winit::event::MouseButton::Left {
+      if state == winit::event::ElementState::Pressed {
+        let size = self.custom_data.lock().unwrap().size;
+        if size.width > 0 && size.height > 0 {
+          let ndc_x = (mouse_pos.0 as f32 / size.width as f32) * 2.0 - 1.0;
+          let ndc_y = (mouse_pos.1 as f32 / size.height as f32) * 2.0 - 1.0;
+          let _ = ctx.raycast_ndc(scene_id, self.ext_camera_entity, ndc_x, ndc_y);
+        }
+      }
+    }
+  }
+
+  fn on_mouse_motion(
+    &mut self,
+    ctx: &mut SimulationContext,
+    scene_id: u64,
+    delta: (f64, f64),
+    middle_mouse_down: bool,
+    shift_down: bool,
+    ctrl_down: bool,
+  ) {
+    let scene = ctx.get_scene(scene_id).unwrap();
+    let camera_entity = scene.read().get_entity(self.ext_camera_entity).expect(&format!(
+      "There is not camera entity with id {} in scene {}",
+      self.ext_camera_entity, scene_id
+    ));
+
+    let logic_command = test_utils::command::process_mouse_motion_camera_commands(
+      delta,
+      middle_mouse_down,
+      shift_down,
+      ctrl_down,
+      camera_entity,
+      scene.clone(),
+    );
+
+    if let Some(logic_command) = logic_command {
+      let _ = ctx.threads.logic_thread.tx().try_send(logic_command);
+    }
+  }
+
+  fn on_mouse_wheel(
+    &mut self,
+    ctx: &mut SimulationContext,
+    scene_id: u64,
+    delta: winit::event::MouseScrollDelta,
+  ) {
+    let scroll_amount = match delta {
+      winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+      winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 10.0) as f32,
+    };
+    if self.is_command_prompt_open {
+      if scroll_amount > 0.0 {
+        self.console_scroll_offset = self.console_scroll_offset.saturating_add(1);
+      } else if scroll_amount < 0.0 {
+        self.console_scroll_offset = self.console_scroll_offset.saturating_sub(1);
+      }
+    }
+  }
+
+  fn on_resize(&mut self, ctx: &mut SimulationContext, scene_id: u64, width: u32, height: u32) {
+    let mut lock = self.custom_data.lock().unwrap();
+    lock.size = winit::dpi::PhysicalSize::new(width, height);
+  }
 }
 
 fn main() {
@@ -959,6 +979,8 @@ mod depth_tests {
   use aethervk_core_rlib::simulation::comet::{TexelFormat, Texture};
   use aethervk_core_rlib::simulation_api::components_api::CameraParams;
   use std::sync::atomic::{AtomicU64, Ordering};
+  use bytes::Bytes;
+  use aethervk_core_rlib::gpu;
 
   static LAST_RENDER_TASK_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -974,7 +996,7 @@ mod depth_tests {
       255,
     ];
     Some(Texture {
-      data: u8_color,
+      data: Bytes::from(u8_color),
       format: TexelFormat::R8G8B8A8_UNORM,
       width: 1,
       height: 1,
@@ -1006,6 +1028,17 @@ mod depth_tests {
     let width = 64;
     let height = 64;
     let _pe = ctx.create_presentation_engine(scene_id, width, height).unwrap();
+    let ext_cam =
+      ctx.add_orthographic_camera(scene_id, _pe, "camera", -10.0, -10.0, 0.1, 100.0).unwrap().get();
+    ctx
+      .set_transform_component(
+        scene_id,
+        ext_cam,
+        Vec3f32::from_components(0.0, 0.0, 0.0),
+        Quat::identity(),
+        Vec3f32::from_components(1.0, 1.0, 1.0),
+      )
+      .unwrap();
 
     // Add a sun so non-emissive meshes are visible
     let sun_entity = ctx.spawn_entity(scene_id, "sun").unwrap();
@@ -1080,33 +1113,7 @@ mod depth_tests {
       },
     );
 
-    let cam_entity = ctx.get_scene(scene_id).unwrap().read().active_camera_entity.unwrap();
-    let ext_cam = ctx
-      .get_scene(scene_id)
-      .unwrap()
-      .read()
-      .entity_map
-      .iter()
-      .find(|(_, v)| **v == cam_entity)
-      .unwrap()
-      .0
-      .clone();
-    ctx
-      .set_transform_component(
-        scene_id,
-        ext_cam,
-        Vec3f32::from_components(0.0, 0.0, 0.0),
-        Quat::identity(),
-        Vec3f32::from_components(1.0, 1.0, 1.0),
-      )
-      .unwrap();
-    ctx
-      .set_camera_component(
-        scene_id,
-        ext_cam,
-        CameraParams::new_orthographic(-10.0, 10.0, -10.0, 10.0, 0.1, 100.0),
-      )
-      .unwrap();
+    // Camera setup moved up
 
     SimulationContext::set_render_callback(Some(render_callback_impl));
 
@@ -1345,26 +1352,7 @@ mod depth_tests {
         .unwrap();
     }
 
-    // Position camera
-    let cam_entity = scene_ctx.read().active_camera_entity.unwrap();
-    let ext_cam =
-      scene_ctx.read().entity_map.iter().find(|&(_, &v)| v == cam_entity).map(|(&k, _)| k).unwrap();
-    ctx
-      .set_transform_component(
-        scene_id,
-        ext_cam,
-        Vec3f32::from_components(0.0, -3.0, 0.0),
-        Quat::identity(), // Looks in -Y natively? Let's use look_at if possible, or just ortho camera.
-        Vec3f32::from_components(1.0, 1.0, 1.0),
-      )
-      .unwrap();
-    ctx
-      .set_camera_component(
-        scene_id,
-        ext_cam,
-        CameraParams::new_orthographic(-2.0, 2.0, -2.0, 2.0, 0.1, 100.0),
-      )
-      .unwrap();
+    // Camera setup moved up
 
     SimulationContext::set_render_callback(Some(render_callback_impl));
 

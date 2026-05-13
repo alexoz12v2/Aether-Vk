@@ -23,6 +23,9 @@ layout(push_constant, scalar) uniform PushConstants {
     float seed;
     vec4 color;
     float radius;
+    float cameraPos_x;
+    float cameraPos_y;
+    float cameraPos_z;
 } pc;
 
 // --- Dithering Math ---

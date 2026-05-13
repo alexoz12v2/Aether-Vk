@@ -65,5 +65,3 @@ spotless_rendering = []
 # 
 # The Solution: The "Nested" Workspace
 # To fix this, you need to tell Cargo that test/simulation_test is the root of its own independent workspace. This stops Cargo from traversing up the directory tree and getting confused by the exclusion rule.
-# Simply add an empty [workspace] table to the bottom
-[workspace]

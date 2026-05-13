@@ -94,6 +94,7 @@ dependencies = [
  "paste",
  "png-decoder",
  "polyhedral_mass_properties",
+ "rand 0.8.6",
  "slotmap",
  "spin 0.10.0",
  "spirv",

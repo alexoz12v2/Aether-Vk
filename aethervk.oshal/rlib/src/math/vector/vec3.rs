@@ -31,7 +31,7 @@ impl Vec3f32 {
   pub fn one() -> Self {
     Self::from_components(1.0, 1.0, 1.0)
   }
-  
+
   #[inline]
   /// TODO: Document this item
   pub fn from_array(data: [f32; 3]) -> Self {

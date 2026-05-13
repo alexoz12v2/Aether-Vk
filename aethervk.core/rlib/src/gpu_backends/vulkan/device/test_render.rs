@@ -1,7 +1,10 @@
 //! test_render module.
 
 use super::*;
+use crate::gpu::scene_conversion::SceneConversionExt;
 use crate::gpu::{RenderDeviceHandle, RenderFrontend, ScopedCommandBuffer, ScopedRenderPass};
+use crate::math::collision::bounds::AABB;
+use crate::math::collision::linear_bvh::{LinearBVH, LinearBVHHeader, LinearBVHNode, LinearBound};
 use crate::scene::PhysicalMeshComponent;
 use crate::{
   gpu::{
@@ -9,7 +12,7 @@ use crate::{
     frame::{BillboardDrawCall, CursorDrawCall, RenderScene},
     new_render_frontend,
   },
-  // TODO render module shouldn't be aware of ECS
+  scene,
   scene::{
     BillboardType, CameraComponent, GridComponent, Scene, SkyComponent, SunComponent,
     TransformComponent,
@@ -131,7 +134,9 @@ fn test_render_particles_windowless_impl(use_particle2: bool) {
     })
     .unwrap();
 
-  let scene = Scene::new();
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
 
   render_frontend
     .with_device(render_device_handle, |device| {
@@ -147,46 +152,41 @@ fn test_render_particles_windowless_impl(use_particle2: bool) {
             rotation: Quat::identity(),
             scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
           },
-          CameraComponent {
-            projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
-            near_plane: 0.1,
-            far_plane: 100.0,
-          },
+          CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 0.1, 100.0),
         ),
         aethervk_oshal_rlib::os::time::TimeReadings::default(),
         [width, height],
       );
 
       let particle_sys_e = scene.spawn_entity("particles");
-      let mut sys = crate::scene::particles::ParticleSystemComponent::new(
-        crate::scene::particles::ParticleEmitterConfig {
-          uv_distribution: crate::math::distribution::Distribution2D::new(
-            &[1.0, 1.0, 1.0, 1.0],
-            2,
-            2,
-          ),
-          delta: 1000,
-          max_particles: 10,
-          velocity_intensity: crate::scene::particles::GaussianParams {
-            mean: 1.0,
-            std_dev: 0.0,
-            min: 0.0,
-            max: 1.0,
-          },
-          emission_count: crate::scene::particles::GaussianParams {
-            mean: 1.0,
-            std_dev: 0.0,
-            min: 0.0,
-            max: 1.0,
-          },
-          particle_radius: 2.0,
-          density: 1.0,
-          lifetime: 1000000,
-          color: [1.0, 0.5, 0.25, 1.0],
-          beta: 0.0,
-          use_particle2,
+      let config = crate::scene::particles::ParticleEmitterComponent {
+        uv_distribution: crate::math::distribution::Distribution2D::new(
+          &[1.0, 1.0, 1.0, 1.0],
+          2,
+          2,
+        ),
+        delta: 1000,
+        max_particles: 10,
+        velocity_intensity: crate::scene::particles::GaussianParams {
+          mean: 1.0,
+          std_dev: 0.0,
+          min: 0.0,
+          max: 1.0,
         },
-      );
+        emission_count: crate::scene::particles::GaussianParams {
+          mean: 1.0,
+          std_dev: 0.0,
+          min: 0.0,
+          max: 1.0,
+        },
+        particle_radius: 2.0,
+        density: 1.0,
+        lifetime: 1000000,
+        color: [1.0, 0.5, 0.25, 1.0],
+        beta: 0.0,
+        use_particle2,
+      };
+      let mut sys = crate::scene::particles::ParticleSystemComponent::new(config.max_particles);
 
       let mut p = crate::scene::particles::ParticleData {
         id_low: 0,
@@ -207,7 +207,7 @@ fn test_render_particles_windowless_impl(use_particle2: bool) {
         device,
         particle_sys_e,
         Mat4x4f32::identity(),
-        crate::scene::RenderableDataRef::ParticleSystem(&sys),
+        crate::scene::RenderableDataRef::ParticleSystem(&sys, &config),
         presentation_engine,
         "particle_sys_test",
         false,
@@ -250,16 +250,32 @@ fn test_render_particles_windowless_impl(use_particle2: bool) {
       device.read_windowless_download(task_id, &mut buffer)?;
 
       let mut found_color = false;
+      let mut max_r = 0;
+      let mut max_g = 0;
+      let mut max_b = 0;
       for chunk in buffer.chunks_exact(4) {
         // BGRA format
         let b = chunk[0];
         let g = chunk[1];
         let r = chunk[2];
+        if r > max_r {
+          max_r = r;
+        }
+        if g > max_g {
+          max_g = g;
+        }
+        if b > max_b {
+          max_b = b;
+        }
         if r > 200 && g > 100 && b > 50 {
           found_color = true;
           break;
         }
       }
+      println!(
+        "Windowless particle test: Max RGB: ({}, {}, {})",
+        max_r, max_g, max_b
+      );
 
       let mut export_buffer = buffer.clone();
       for chunk in export_buffer.chunks_exact_mut(4) {
@@ -310,7 +326,9 @@ fn test_render_all_archetypes_windowless() {
     })
     .unwrap();
 
-  let scene = Scene::new();
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
   let sky_e = scene.spawn_entity("sky");
   let sun_e = scene.spawn_entity("sun");
   let grid_e = scene.spawn_entity("grid");
@@ -332,11 +350,7 @@ fn test_render_all_archetypes_windowless() {
             rotation: Quat::identity(),
             scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
           },
-          CameraComponent {
-            projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
-            near_plane: 0.1,
-            far_plane: 100.0,
-          },
+          CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 0.1, 100.0),
         ),
         aethervk_oshal_rlib::os::time::TimeReadings::default(),
         [width, height],
@@ -485,11 +499,7 @@ fn test_render_empty_scene_graceful() {
             rotation: Quat::identity(),
             scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
           },
-          CameraComponent {
-            projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
-            near_plane: 0.1,
-            far_plane: 100.0,
-          },
+          CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 0.1, 100.0),
         ),
         aethervk_oshal_rlib::os::time::TimeReadings::default(),
         [16, 16],
@@ -575,7 +585,9 @@ fn test_layout_transition_on_failed_update() {
     })
     .unwrap();
 
-  let scene = Scene::new();
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
   let sun_e = scene.spawn_entity("sun");
 
   render_frontend
@@ -685,8 +697,11 @@ fn test_render_text_system_font_async() {
           let _scoped_cmd =
             gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
 
-          let font_id =
-            device.allocate_rasterized_font_atlas(cmd_buffer_handle, font_hash, atlas)?;
+          let font_id = device.allocate_rasterized_font_atlas(
+            cmd_buffer_handle,
+            font_hash,
+            alloc::sync::Arc::new(atlas),
+          )?;
 
           device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
           let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
@@ -705,11 +720,32 @@ fn test_render_text_system_font_async() {
             cmd_buffer_handle,
             presentation_engine,
           )?;
+          let w = width as f32;
+          let h = height as f32;
+          let view_proj = [
+            2.0 / w,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            2.0 / h,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            -1.0,
+            -1.0,
+            0.0,
+            1.0,
+          ];
+
           device.render_text(
             cmd_buffer_handle,
             "AetherVk Async Test",
-            [-0.8, 0.0], // NDC space
-            [width as f32, height as f32],
+            [10.0, 50.0], // Pixel space
+            view_proj,
             (font_hash, font_id),
             48.0,
             [0.5, 1.0, 0.5, 1.0],
@@ -836,8 +872,11 @@ fn test_render_text_asset_font_async() {
           let _scoped_cmd =
             gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
 
-          let font_id =
-            device.allocate_rasterized_font_atlas(cmd_buffer_handle, font_hash, atlas)?;
+          let font_id = device.allocate_rasterized_font_atlas(
+            cmd_buffer_handle,
+            font_hash,
+            alloc::sync::Arc::new(atlas),
+          )?;
 
           device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
           let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
@@ -856,11 +895,32 @@ fn test_render_text_asset_font_async() {
             cmd_buffer_handle,
             presentation_engine,
           )?;
+          let w = width as f32;
+          let h = height as f32;
+          let view_proj = [
+            2.0 / w,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            2.0 / h,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            -1.0,
+            -1.0,
+            0.0,
+            1.0,
+          ];
+
           device.render_text(
             cmd_buffer_handle,
             "AetherVk Async Test",
-            [-0.8, -0.8], // NDC space
-            [width as f32, height as f32],
+            [10.0, 10.0], // Pixel space
+            view_proj,
             (font_hash, font_id),
             48.0,
             [0.5, 1.0, 0.5, 1.0],
@@ -948,16 +1008,10 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
     })
     .unwrap();
 
-  let scene = Scene::new();
-  scene.register_component::<TransformComponent>(&[]);
-  scene.register_component::<crate::scene::PhysicalMeshComponent>(&[std::any::TypeId::of::<
-    TransformComponent,
-  >()]);
-  scene.register_component::<CameraComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
-  scene.register_component::<crate::scene::particles::ParticleSystemComponent>(&[
-    std::any::TypeId::of::<TransformComponent>(),
-  ]);
-  scene.register_component::<SunComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
+  scene.register_all_crate_components();
 
   let mesh_entity = scene.spawn_entity("mesh");
   let particle_sys_e = scene.spawn_entity("particles");
@@ -996,7 +1050,7 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
     .add_component(
       mesh_entity,
       TransformComponent {
-        position: Vec3f32::from_array([0.0, 0.0, 0.0]),
+        position: Vec3f32::from_array([0.0, 5.0, 0.0]),
         rotation: Quat::identity(),
         scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
       },
@@ -1017,31 +1071,30 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
     )
     .unwrap();
 
-  let sys = crate::scene::particles::ParticleSystemComponent::new(
-    crate::scene::particles::ParticleEmitterConfig {
-      uv_distribution: crate::math::distribution::Distribution2D::new(&[1.0, 1.0, 1.0, 1.0], 2, 2),
-      delta: 1000,
-      max_particles: 100,
-      velocity_intensity: crate::scene::particles::GaussianParams {
-        mean: 5.0,
-        std_dev: 0.1,
-        min: 0.0,
-        max: 10.0,
-      },
-      emission_count: crate::scene::particles::GaussianParams {
-        mean: 50.0,
-        std_dev: 0.0,
-        min: 0.0,
-        max: 100.0,
-      },
-      particle_radius: 0.5,
-      density: 1.0,
-      lifetime: 10000000,
-      color: [0.0, 1.0, 0.0, 1.0], // Green
-      beta: 0.0,
-      use_particle2,
+  let config = crate::scene::particles::ParticleEmitterComponent {
+    uv_distribution: crate::math::distribution::Distribution2D::new(&[1.0, 1.0, 1.0, 1.0], 2, 2),
+    delta: 1000,
+    max_particles: 100,
+    velocity_intensity: crate::scene::particles::GaussianParams {
+      mean: 5.0,
+      std_dev: 0.1,
+      min: 0.0,
+      max: 10.0,
     },
-  );
+    emission_count: crate::scene::particles::GaussianParams {
+      mean: 50.0,
+      std_dev: 0.0,
+      min: 0.0,
+      max: 100.0,
+    },
+    particle_radius: 0.5,
+    density: 1.0,
+    lifetime: 10000000,
+    color: [0.0, 1.0, 0.0, 1.0], // Green
+    beta: 0.0,
+    use_particle2,
+  };
+  let sys = crate::scene::particles::ParticleSystemComponent::new(config.max_particles);
 
   scene
     .add_component(
@@ -1054,6 +1107,21 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
     )
     .unwrap();
 
+  scene
+    .add_component(
+      particle_sys_e,
+      crate::scene::PhysicalMeshComponent {
+        asset_path: "".to_string(),
+        mesh: mesh_arc.clone(),
+        emissive_intensity: 0.0,
+        emissive_color: [0.0; 3],
+        use_new_path: false,
+        paint_display_mode: 0,
+      },
+    )
+    .unwrap();
+
+  scene.add_component(particle_sys_e, config.clone()).unwrap();
   scene.add_component(particle_sys_e, sys).unwrap();
 
   let scene_arc = std::sync::Arc::new(scene);
@@ -1073,21 +1141,23 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
     );
 
     while time <= 100 {
-      scene_physics.query1_mut::<crate::scene::particles::ParticleSystemComponent, _>(|_, sys| {
+      scene_physics.query2_mut::<crate::scene::particles::ParticleSystemComponent, crate::scene::particles::ParticleEmitterComponent, _>(|_, sys, config| {
         sys.accumulator += (dt * 1_000_000.0) as i64;
-        while sys.accumulator >= sys.config.delta {
-          sys.accumulator -= sys.config.delta;
+        while sys.accumulator >= config.delta {
+          sys.accumulator -= config.delta;
           let u_emission = [0.5, 0.5];
           let mut u_particles = Vec::new();
-          for _ in 0..100 {
-            u_particles.push([0.5, 0.5, 0.5, 0.5]);
+          for i in 0..100 {
+            u_particles.push([((i * 13) % 100) as f32 / 100.0, ((i * 27) % 100) as f32 / 100.0, 0.5, 0.5]);
           }
+          let mesh_transform = scene_physics.global_transform(mesh_entity).unwrap();
           sys.emit_particles(
+            config,
             &mesh_arc_physics,
             &uv_grid,
-            Vec3f32::from_array([0.0, 0.0, 0.0]),
-            Quat::identity(),
-            Vec3f32::from_components(1.0, 1.0, 1.0),
+            mesh_transform.position,
+            mesh_transform.rotation,
+            mesh_transform.scale,
             &u_emission,
             &u_particles,
           );
@@ -1130,18 +1200,11 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
           let mut render_scene = RenderScene::new(
             (
               TransformComponent {
-                position: Vec3f32::from_array([0.0, -10.0, 0.0]),
-                rotation: Quat::from_axis_angle(
-                  Vec3f32::from_array([0.0, 0.0, 1.0]),
-                  std::f32::consts::PI,
-                ),
+                position: Vec3f32::from_array([0.0, 10.0, 0.0]),
+                rotation: Quat::identity(),
                 scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
               },
-              CameraComponent {
-                projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
-                near_plane: 0.1,
-                far_plane: 100.0,
-              },
+              CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 0.1, 100.0),
             ),
             aethervk_oshal_rlib::os::time::TimeReadings::default(),
             [width, height],
@@ -1174,18 +1237,27 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
             )?,
           };
 
+          let mesh_transform = scene_render.global_transform(mesh_entity).unwrap();
+          let mut rel_transform = mesh_transform.clone();
+          rel_transform.position = mesh_transform.position - render_scene.camera_data.absolute_pos;
           let outline: Option<[f32; 4]> = None;
           render_scene.draw_calls.push(gpu::frame::DrawCall::from_handles_and_matrix(
             res,
             mesh_arc.indices.len() as u32,
             outline,
-            Mat4x4f32::identity(),
+            rel_transform.to_mat4(),
             1.0,
             [0.5, 0.5, 0.5],
             false,
             0,
           ));
 
+          let config = scene_render
+            .with_component(
+              particle_sys_e,
+              |c: &crate::scene::particles::ParticleEmitterComponent| c.clone(),
+            )
+            .unwrap();
           scene_render.with_component(
             particle_sys_e,
             |sys: &crate::scene::particles::ParticleSystemComponent| {
@@ -1195,7 +1267,7 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
                   device,
                   particle_sys_e,
                   Mat4x4f32::identity(),
-                  crate::scene::RenderableDataRef::ParticleSystem(sys),
+                  crate::scene::RenderableDataRef::ParticleSystem(sys, &config),
                   presentation_engine,
                   "particle_sys_test",
                   false,
@@ -1348,9 +1420,10 @@ fn depth_test_setup_scene() -> DepthTestSetupScene {
   let presentation_engine = presentation_engine.unwrap();
 
   // TODO: remove EntityId dependency on physical mesh resource creation
-  let scene = Scene::new();
-  scene.register_component::<TransformComponent>(&[]);
-  scene.register_component::<PhysicalMeshComponent>(&[TypeId::of::<TransformComponent>()]);
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
+  scene.register_all_crate_components();
   let entity_id = scene.spawn_entity("mesh");
   let mesh = Arc::new(crate::simulation::comet::generate_uv_sphere(
     2.0, 10, 10, 1.0,
@@ -1413,11 +1486,7 @@ fn test_depth_stencil_separation() {
             rotation: Quat::identity(),
             scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
           },
-          CameraComponent {
-            projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
-            near_plane: 0.1,
-            far_plane: 100.0,
-          },
+          CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 0.1, 100.0),
         ),
         aethervk_oshal_rlib::os::time::TimeReadings::default(),
         [width, height],
@@ -1584,11 +1653,7 @@ fn test_depth_stencil_separation() {
             rotation: Quat::identity(),
             scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
           },
-          CameraComponent {
-            projection: Mat4x4f32::orthographic_vk(-5.0, 5.0, -5.0, 5.0, 0.1, 100.0),
-            near_plane: 0.1,
-            far_plane: 100.0,
-          },
+          CameraComponent::new_ortho(-5.0, 5.0, -5.0, 5.0, 0.1, 100.0),
         ),
         aethervk_oshal_rlib::os::time::TimeReadings::default(),
         [width, height],
@@ -1724,11 +1789,7 @@ fn test_depth_color_image() {
             rotation: Quat::identity(),
             scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
           },
-          CameraComponent {
-            projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
-            near_plane: 0.1,
-            far_plane: 100.0,
-          },
+          CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 0.1, 100.0),
         ),
         aethervk_oshal_rlib::os::time::TimeReadings::default(),
         [width, height],
@@ -1865,10 +1926,10 @@ fn test_sun_rendering() {
     })
     .unwrap();
 
-  let scene = Scene::new();
-  scene.register_component::<TransformComponent>(&[]);
-  scene.register_component::<PhysicalMeshComponent>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<SunComponent>(&[TypeId::of::<TransformComponent>()]);
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
+  scene.register_all_crate_components();
   let sun_e = scene.spawn_entity("sun");
 
   let asset_path = format!(
@@ -1925,11 +1986,7 @@ fn test_sun_rendering() {
               rotation: Quat::identity(),
               scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
             },
-            CameraComponent {
-              projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
-              near_plane: 0.1,
-              far_plane: 100.0,
-            },
+            CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 0.1, 100.0),
           ),
           aethervk_oshal_rlib::os::time::TimeReadings::default(),
           [width, height],
@@ -2111,9 +2168,10 @@ fn test_sun_rendering_volume_only() {
     })
     .unwrap();
 
-  let scene = Scene::new();
-  scene.register_component::<TransformComponent>(&[]);
-  scene.register_component::<SunComponent>(&[TypeId::of::<TransformComponent>()]);
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
+  scene.register_all_crate_components();
   let sun_e = scene.spawn_entity("sun");
 
   let transform = TransformComponent {
@@ -2148,11 +2206,7 @@ fn test_sun_rendering_volume_only() {
             rotation: Quat::identity(),
             scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
           },
-          CameraComponent {
-            projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 100.0),
-            near_plane: 0.1,
-            far_plane: 100.0,
-          },
+          CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 0.1, 100.0),
         ),
         aethervk_oshal_rlib::os::time::TimeReadings::default(),
         [width, height],
@@ -2301,7 +2355,9 @@ fn test_render_particles_stress_impl(use_particle2: bool) {
       .unwrap()
   };
 
-  let scene = Scene::new();
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
 
   render_frontend
     .with_device(render_device_handle, |device| {
@@ -2317,51 +2373,46 @@ fn test_render_particles_stress_impl(use_particle2: bool) {
             rotation: Quat::identity(),
             scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
           },
-          CameraComponent {
-            projection: Mat4x4f32::perspective_vk(
-              45.0f32.to_radians(),
-              width as f32 / height as f32,
-              0.1,
-              1000.0,
-            ),
-            near_plane: 0.1,
-            far_plane: 1000.0,
-          },
+          CameraComponent::new_persp(
+            45.0f32.to_radians(),
+            width as f32 / height as f32,
+            0.1,
+            1000.0,
+          ),
         ),
         aethervk_oshal_rlib::os::time::TimeReadings::default(),
         [width, height],
       );
 
       let particle_sys_e = scene.spawn_entity("stress_particles");
-      let mut sys = crate::scene::particles::ParticleSystemComponent::new(
-        crate::scene::particles::ParticleEmitterConfig {
-          uv_distribution: crate::math::distribution::Distribution2D::new(
-            &[1.0, 1.0, 1.0, 1.0],
-            2,
-            2,
-          ),
-          delta: 1000,
-          max_particles: 1_000_000,
-          velocity_intensity: crate::scene::particles::GaussianParams {
-            mean: 1.0,
-            std_dev: 0.0,
-            min: 0.0,
-            max: 1.0,
-          },
-          emission_count: crate::scene::particles::GaussianParams {
-            mean: 1.0,
-            std_dev: 0.0,
-            min: 0.0,
-            max: 1.0,
-          },
-          particle_radius: 0.5,
-          density: 1.0,
-          lifetime: 1000000,
-          color: [1.0, 0.8, 0.2, 1.0],
-          beta: 0.0,
-          use_particle2,
+      let config = crate::scene::particles::ParticleEmitterComponent {
+        uv_distribution: crate::math::distribution::Distribution2D::new(
+          &[1.0, 1.0, 1.0, 1.0],
+          2,
+          2,
+        ),
+        delta: 1000,
+        max_particles: 1_000_000,
+        velocity_intensity: crate::scene::particles::GaussianParams {
+          mean: 1.0,
+          std_dev: 0.0,
+          min: 0.0,
+          max: 1.0,
         },
-      );
+        emission_count: crate::scene::particles::GaussianParams {
+          mean: 1.0,
+          std_dev: 0.0,
+          min: 0.0,
+          max: 1.0,
+        },
+        particle_radius: 0.5,
+        density: 1.0,
+        lifetime: 1000000,
+        color: [1.0, 0.8, 0.2, 1.0],
+        beta: 0.0,
+        use_particle2,
+      };
+      let mut sys = crate::scene::particles::ParticleSystemComponent::new(config.max_particles);
 
       let mut seed = 12345u32;
       let mut next_rand = || {
@@ -2397,7 +2448,7 @@ fn test_render_particles_stress_impl(use_particle2: bool) {
         device,
         particle_sys_e,
         Mat4x4f32::identity(),
-        crate::scene::RenderableDataRef::ParticleSystem(&sys),
+        crate::scene::RenderableDataRef::ParticleSystem(&sys, &config),
         presentation_engine,
         "particle_sys_stress",
         false,
@@ -2495,9 +2546,10 @@ fn test_outline_rendering_windowless() {
     })
     .unwrap();
 
-  let scene = Scene::new();
-  scene.register_component::<TransformComponent>(&[]);
-  scene.register_component::<PhysicalMeshComponent>(&[TypeId::of::<TransformComponent>()]);
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
+  scene.register_all_crate_components();
   for _ in 0..30 {
     scene.spawn_entity("dummy");
   }
@@ -2541,22 +2593,20 @@ fn test_outline_rendering_windowless() {
             rotation: Quat::identity(), // identity looks towards -Y (forward)
             scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
           },
-          CameraComponent {
-            projection: Mat4x4f32::perspective_vk(
-              45.0f32.to_radians(),
-              width as f32 / height as f32,
-              0.1,
-              100.0,
-            ),
-            near_plane: 0.1,
-            far_plane: 100.0,
-          },
+          CameraComponent::new_persp(
+            45.0f32.to_radians(),
+            width as f32 / height as f32,
+            0.1,
+            100.0,
+          ),
         ),
         aethervk_oshal_rlib::os::time::TimeReadings::default(),
         [width, height],
       );
 
-      let model_matrix = transform.to_mat4();
+      let mut relative_transform = transform.clone();
+      relative_transform.position = transform.position - Vec3f32::from_array([5.0, 0.0, 0.0]);
+      let model_matrix = relative_transform.to_mat4();
 
       render_scene.add_renderable(
         cmd_buffer_handle,
@@ -2569,6 +2619,13 @@ fn test_outline_rendering_windowless() {
         true,                 // draw_outline (YES)
         [1.0, 0.0, 0.0, 1.0], // outline_color (RED)
       )?;
+
+      let draw_call = render_scene.draw_calls.last().unwrap();
+      println!(
+        "outline_pipeline is some: {}",
+        draw_call.outline_pipeline.is_some()
+      );
+      println!("draw_outline is: {}", draw_call.draw_outline);
 
       device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
       let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
@@ -2659,9 +2716,10 @@ fn test_outline_toggled_after_upload() {
     })
     .unwrap();
 
-  let scene = Scene::new();
-  scene.register_component::<TransformComponent>(&[]);
-  scene.register_component::<PhysicalMeshComponent>(&[TypeId::of::<TransformComponent>()]);
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
+  scene.register_all_crate_components();
   for _ in 0..30 {
     scene.spawn_entity("dummy");
   }
@@ -2705,22 +2763,20 @@ fn test_outline_toggled_after_upload() {
               rotation: Quat::identity(),
               scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
             },
-            CameraComponent {
-              projection: Mat4x4f32::perspective_vk(
-                45.0f32.to_radians(),
-                width as f32 / height as f32,
-                0.1,
-                100.0,
-              ),
-              near_plane: 0.1,
-              far_plane: 100.0,
-            },
+            CameraComponent::new_persp(
+              45.0f32.to_radians(),
+              width as f32 / height as f32,
+              0.1,
+              100.0,
+            ),
           ),
           aethervk_oshal_rlib::os::time::TimeReadings::default(),
           [width, height],
         );
 
-        let model_matrix = transform.to_mat4();
+        let mut relative_transform = transform.clone();
+        relative_transform.position = transform.position - Vec3f32::from_array([5.0, 0.0, 0.0]);
+        let model_matrix = relative_transform.to_mat4();
 
         render_scene.add_renderable(
           cmd_buffer_handle,
@@ -2784,22 +2840,20 @@ fn test_outline_toggled_after_upload() {
               rotation: Quat::identity(),
               scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
             },
-            CameraComponent {
-              projection: Mat4x4f32::perspective_vk(
-                45.0f32.to_radians(),
-                width as f32 / height as f32,
-                0.1,
-                100.0,
-              ),
-              near_plane: 0.1,
-              far_plane: 100.0,
-            },
+            CameraComponent::new_persp(
+              45.0f32.to_radians(),
+              width as f32 / height as f32,
+              0.1,
+              100.0,
+            ),
           ),
           aethervk_oshal_rlib::os::time::TimeReadings::default(),
           [width, height],
         );
 
-        let model_matrix = transform.to_mat4();
+        let mut relative_transform = transform.clone();
+        relative_transform.position = transform.position - Vec3f32::from_array([5.0, 0.0, 0.0]);
+        let model_matrix = relative_transform.to_mat4();
 
         // This triggers `get_physical_mesh_resources` instead of `create_physical_mesh_resources`
         render_scene.add_renderable(
@@ -2908,9 +2962,10 @@ fn test_render_concurrent_resize() {
 
   let engines = [pe1, pe2, pe3];
 
-  let scene = Scene::new();
-  scene.register_component::<TransformComponent>(&[]);
-  scene.register_component::<PhysicalMeshComponent>(&[TypeId::of::<TransformComponent>()]);
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
+  scene.register_all_crate_components();
   let entity_id = scene.spawn_entity("mesh");
   let mesh = Arc::new(crate::simulation::comet::generate_uv_sphere(
     2.0, 10, 10, 1.0,
@@ -2961,16 +3016,12 @@ fn test_render_concurrent_resize() {
               rotation: Quat::identity(),
               scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
             },
-            CameraComponent {
-              projection: Mat4x4f32::perspective_vk(
-                45.0f32.to_radians(),
-                extent[0] as f32 / extent[1] as f32,
-                0.1,
-                100.0,
-              ),
-              near_plane: 0.1,
-              far_plane: 100.0,
-            },
+            CameraComponent::new_persp(
+              45.0f32.to_radians(),
+              extent[0] as f32 / extent[1] as f32,
+              0.1,
+              100.0,
+            ),
           ),
           aethervk_oshal_rlib::os::time::TimeReadings::default(),
           extent,
@@ -3128,7 +3179,9 @@ fn test_physical_mesh2_variants() {
       .unwrap()
   };
 
-  let scene = Scene::new();
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
 
   // Create 4 entities
   let e_normal = scene.spawn_entity("normal");
@@ -3150,11 +3203,7 @@ fn test_physical_mesh2_variants() {
             rotation: Quat::identity(),
             scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
           },
-          CameraComponent {
-            projection: Mat4x4f32::orthographic_vk(-8.0, 8.0, -2.0, 2.0, 0.1, 100.0),
-            near_plane: 0.1,
-            far_plane: 100.0,
-          },
+          CameraComponent::new_ortho(-8.0, 8.0, -2.0, 2.0, 0.1, 100.0),
         ),
         aethervk_oshal_rlib::os::time::TimeReadings::default(),
         [width, height],
@@ -3375,7 +3424,9 @@ fn test_painting_mode_write_and_verify() {
       .unwrap()
   };
 
-  let scene = Scene::new();
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
   let e_paint = scene.spawn_entity("paint_mesh");
 
   let asset_path = format!(
@@ -3393,11 +3444,7 @@ fn test_painting_mode_write_and_verify() {
         rotation: Quat::identity(),
         scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
       },
-      CameraComponent {
-        projection: Mat4x4f32::orthographic_vk(-2.0, 2.0, -2.0, 2.0, 0.1, 100.0),
-        near_plane: 0.1,
-        far_plane: 100.0,
-      },
+      CameraComponent::new_ortho(-2.0, 2.0, -2.0, 2.0, 0.1, 100.0),
     ),
     aethervk_oshal_rlib::os::time::TimeReadings::default(),
     [width, height],
@@ -3605,12 +3652,10 @@ fn test_render_multiple_soi_windowless() {
       .unwrap()
   };
 
-  let scene = Scene::new();
-  scene.register_component::<TransformComponent>(&[]);
-  scene.register_component::<PhysicalMeshComponent>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<crate::scene::ReferenceFrameComponent>(&[TypeId::of::<
-    TransformComponent,
-  >()]);
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
+  scene.register_all_crate_components();
 
   // 1. Create Macro Frame
   let macro_frame = scene.spawn_entity("macro_frame");
@@ -3686,6 +3731,31 @@ fn test_render_multiple_soi_windowless() {
     )
     .unwrap();
 
+  // 4. Create Micro Frame C (SOI 3) - Centered in front
+  let micro_frame_c = scene.spawn_entity("micro_frame_c");
+  scene.set_parent(micro_frame_c, Some(macro_frame));
+  scene
+    .add_component(
+      micro_frame_c,
+      TransformComponent {
+        position: Vec3f32::from_array([0.0, -5.0, 0.0]),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+      },
+    )
+    .unwrap();
+  scene
+    .add_component(
+      micro_frame_c,
+      crate::scene::ReferenceFrameComponent {
+        frame_type: crate::scene::ReferenceFrameType::Micro,
+        scale: 0.01,
+        soi_radius: 50.0,
+        _padding: 0,
+      },
+    )
+    .unwrap();
+
   let mesh = Arc::new(crate::simulation::comet::generate_uv_sphere(
     2.0, 10, 10, 1.0,
   ));
@@ -3744,6 +3814,33 @@ fn test_render_multiple_soi_windowless() {
     )
     .unwrap();
 
+  // Spawn an object in Micro Frame C
+  let obj_c = scene.spawn_entity("obj_c");
+  scene.set_parent(obj_c, Some(micro_frame_c));
+  scene
+    .add_component(
+      obj_c,
+      TransformComponent {
+        position: Vec3f32::from_array([0.0, 0.0, 0.0]),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_array([3.2, 3.2, 3.2]), // 3.2 * 0.01 = 0.032 radius
+      },
+    )
+    .unwrap();
+  scene
+    .add_component(
+      obj_c,
+      PhysicalMeshComponent {
+        mesh: mesh.clone(),
+        emissive_intensity: 1.0,
+        emissive_color: [0.0, 1.0, 0.0], // Green
+        use_new_path: false,
+        paint_display_mode: 0,
+        asset_path: "test".to_string(),
+      },
+    )
+    .unwrap();
+
   render_frontend
     .with_device(render_device_handle, |device| {
       let task_id = device.create_task();
@@ -3761,11 +3858,7 @@ fn test_render_multiple_soi_windowless() {
             rotation: Quat::identity(),
             scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
           },
-          CameraComponent {
-            projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 1.0, 0.1, 1000.0),
-            near_plane: 0.1,
-            far_plane: 1000.0,
-          },
+          CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 0.1, 1000.0),
         ),
         aethervk_oshal_rlib::os::time::TimeReadings::default(),
         [width, height],
@@ -3821,6 +3914,30 @@ fn test_render_multiple_soi_windowless() {
         mat_b,
         pm_b.emissive_intensity,
         pm_b.emissive_color,
+        true,
+        0,
+      ));
+
+      // Object C: parent is micro_frame_c (pos 0, -5, scale 0.01)
+      let mat_c = Mat4x4f32::translation(Vec3f32::from_components(0.0, -5.0, 0.0))
+        * Mat4x4f32::from_scale(Vec3f32::from_components(0.032, 0.032, 0.032));
+      let pm_c = scene.with_component(obj_c, |pm: &PhysicalMeshComponent| pm.clone()).unwrap();
+
+      let asset_hash_c = pm_c.mesh.id;
+      let res_c = device.create_physical_mesh2_resources(
+        cmd_buffer_handle,
+        asset_hash_c,
+        &pm_c,
+        presentation_engine,
+        "obj_c",
+      )?;
+      render_scene.draw_calls.push(gpu::frame::DrawCall::from_handles_and_matrix(
+        res_c,
+        mesh.indices.len() as u32,
+        None,
+        mat_c,
+        pm_c.emissive_intensity,
+        pm_c.emissive_color,
         true,
         0,
       ));
@@ -3886,9 +4003,10 @@ fn test_render_multiple_soi_windowless() {
       )
       .expect("Failed to save rendered png");
 
-      // Verify that both red and blue pixels are found
+      // Verify that red, blue, and green pixels are found
       let mut found_red = false;
       let mut found_blue = false;
+      let mut found_green = false;
       let mut max_r = 0;
       let mut max_g = 0;
       let mut max_b = 0;
@@ -3911,16 +4029,1433 @@ fn test_render_multiple_soi_windowless() {
         if b > 100 && r < 100 && g < 100 {
           found_blue = true;
         }
+        if g > 100 && r < 100 && b < 100 {
+          found_green = true;
+        }
       }
 
       println!("Max R: {}, Max G: {}, Max B: {}", max_r, max_g, max_b);
 
       assert!(found_red, "Red object in Micro Frame A is not visible");
       assert!(found_blue, "Blue object in Micro Frame B is not visible");
+      assert!(found_green, "Green object in Micro Frame C is not visible");
 
       Ok(())
     })
     .unwrap();
 
   drop(render_frontend);
+}
+
+#[test]
+fn test_render_weather_ui() {
+  setup_assets_dir();
+  let (_pool_arc, render_frontend, render_device_handle, _) =
+    setup_render_frontend_for_tests(false);
+  let width = 800;
+  let height = 600;
+
+  let presentation_engine = {
+    let params = PresentationEngineParams::windowless(width, height);
+    render_frontend
+      .with_device(render_device_handle, |device| {
+        let pe = device.create_presentation_engine(&params)?;
+        device.init_archetypes(pe)?;
+        crate::types::GpuResult::Ok(pe)
+      })
+      .unwrap()
+  };
+
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+        crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+      )));
+      scene.register_all_crate_components();
+
+      let root_e = scene.spawn_entity("root");
+      scene
+        .add_component(
+          root_e,
+          TransformComponent {
+            position: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0]),
+            rotation: Quat::identity(),
+            scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+          },
+        )
+        .unwrap();
+
+      let camera_e = scene.spawn_entity("camera");
+      scene.set_parent(camera_e, Some(root_e));
+
+      // We need an orthographic projection mapping [0, width] and [0, height] to NDC [-1, 1].
+      // Actually, since Y points down in Vulkan NDC, mapping [0, height] to [-1, 1] means Top=0, Bottom=height.
+      scene
+        .add_component(
+          camera_e,
+          TransformComponent {
+            position: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0]),
+            rotation: Quat::identity(),
+            scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+          },
+        )
+        .unwrap();
+      scene
+        .add_component(
+          camera_e,
+          CameraComponent::new_ortho(0.0, width as f32, 0.0, height as f32, -1.0, 1.0),
+        )
+        .unwrap();
+
+      // Background Gradient UI
+      let bg_e = scene.spawn_entity("bg_gradient");
+      scene
+        .add_component(
+          bg_e,
+          crate::scene::ui::Transform2DComponent {
+            size: [width as f32, height as f32],
+            local_position: [0.0, 0.0],
+            global_depth: 0, // bottom-most
+            local_z_index: -100,
+            ..Default::default()
+          },
+        )
+        .unwrap();
+      scene
+        .add_component(
+          bg_e,
+          crate::scene::ui::UiComponent {
+            color_start: [0.5, 0.8, 1.0, 1.0], // light sky blue
+            color_end: [0.1, 0.4, 0.8, 1.0],   // darker blue
+            gradient_dir: [0.0, 1.0],          // vertical gradient
+            opacity: 1.0,
+            texture_id: 0xFFFFFFFF,
+            ..Default::default()
+          },
+        )
+        .unwrap();
+
+      // UI Widget 1: Main Panel
+      let panel_e = scene.spawn_entity("panel");
+      scene
+        .add_component(
+          panel_e,
+          crate::scene::ui::Transform2DComponent {
+            size: [400.0, 300.0],
+            local_position: [100.0, 100.0],
+            global_depth: 1,
+            ..Default::default()
+          },
+        )
+        .unwrap();
+      scene
+        .add_component(
+          panel_e,
+          crate::scene::ui::UiComponent {
+            color_start: [0.8, 0.9, 1.0, 0.8], // Light blue transparent
+            color_end: [0.5, 0.7, 1.0, 0.8],
+            gradient_dir: [0.0, 1.0],
+            border_radius: [20.0, 20.0, 20.0, 20.0],
+            shadow_params: [0.0, 10.0, 20.0, 5.0],
+            color_shadow: [0.0, 0.0, 0.0, 0.3],
+            ..Default::default()
+          },
+        )
+        .unwrap();
+
+      // UI Widget 2: Side Panel (Saved Locations)
+      let side_panel_e = scene.spawn_entity("side_panel");
+      scene
+        .add_component(
+          side_panel_e,
+          crate::scene::ui::Transform2DComponent {
+            local_position: [520.0, 100.0],
+            size: [200.0, 140.0],
+            global_depth: 1,
+            ..Default::default()
+          },
+        )
+        .unwrap();
+      scene
+        .add_component(
+          side_panel_e,
+          crate::scene::ui::UiComponent {
+            color_start: [0.9, 0.95, 1.0, 0.8],
+            border_radius: [15.0, 15.0, 15.0, 15.0],
+            shadow_params: [0.0, 5.0, 10.0, 0.0],
+            color_shadow: [0.0, 0.0, 0.0, 0.15],
+            ..Default::default()
+          },
+        )
+        .unwrap();
+
+      // Load icons
+      fn load_texture(path: &str, id: u64) -> Option<(u64, Texture)> {
+        if let Ok(img) = image::open(path) {
+          let img = img.into_rgba8();
+          let tex = crate::simulation::comet::Texture {
+            width: img.width(),
+            height: img.height(),
+            data: img.into_raw().into(),
+            format: crate::simulation::comet::TexelFormat::R8G8B8A8_UNORM,
+            has_mipmaps: false,
+          };
+          Some((id, tex))
+        } else {
+          None
+        }
+      };
+
+      let mut sun_tex = load_texture("../../test_assets/sun.png", 1);
+      let mut cloud_tex = load_texture("../../test_assets/cloud.png", 2);
+
+      let sun_e = scene.spawn_entity("sun_icon");
+      scene.set_parent(sun_e, Some(root_e));
+      // NDC coordinates: Top-left of panel is (100, 100). Center of sun icon around (180, 200)
+      // NDC X: (180 / 800) * 2 - 1 = -0.55
+      // NDC Y: (200 / 600) * 2 - 1 = -0.33
+      // Size pct: 100 / 800 = 0.125
+      let mut t = TransformComponent::default();
+      t.position = Vec3f32::from_array([-0.55, -0.33, 0.0]);
+      scene.add_component(sun_e, t).unwrap();
+      scene
+        .add_component(
+          sun_e,
+          crate::scene::ImageBillboardComponent {
+            texture_id: 0, // sun_tex, TODO refactor: this should hold file mapped texture data.
+            billboard_type: BillboardType::ScreenSpace {
+              pct_width: 0.15,
+              pct_height: 0.2,
+            },
+          },
+        )
+        .unwrap();
+
+      let cloud_e = scene.spawn_entity("cloud_icon");
+      scene.set_parent(cloud_e, Some(root_e));
+      let mut t = TransformComponent::default();
+      t.position = Vec3f32::from_array([-0.45, -0.25, 0.0]); // overlapping sun
+      scene.add_component(cloud_e, t).unwrap();
+      scene
+        .add_component(
+          cloud_e,
+          crate::scene::ImageBillboardComponent {
+            texture_id: 0, // cloud_tex, TODO ECS shouldn't store RenderDevice handles directly!
+            billboard_type: BillboardType::ScreenSpace {
+              pct_width: 0.15,
+              pct_height: 0.2,
+            },
+          },
+        )
+        .unwrap();
+
+      // -- Commands --
+      let task_id = device.create_task();
+      device.start_frame().unwrap();
+      let acquire_result = device.acquire_next_image(presentation_engine).unwrap();
+      let cmd_buffer_handle = device.get_command_buffer().unwrap();
+
+      {
+        let _scoped_cmd =
+          gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id)).unwrap();
+
+        // Ensure billboard resources are created TODO: check move to first frame in scene_extraction. create should do nothing if already existing
+        device.create_billboard_resources(cmd_buffer_handle, presentation_engine).unwrap();
+
+        let sun_id = if let Some((id, tex)) = sun_tex.take() {
+          Some(device.add_billboard_texture(cmd_buffer_handle, id, &tex, 0).unwrap())
+        } else {
+          None
+        }
+        .unwrap();
+        let cloud_id = if let Some((id, tex)) = cloud_tex.take() {
+          Some(device.add_billboard_texture(cmd_buffer_handle, id, &tex, 0).unwrap())
+        } else {
+          None
+        }
+        .unwrap();
+        scene
+          .with_component_mut(sun_e, |c: &mut scene::ImageBillboardComponent| {
+            c.texture_id = sun_id as _
+          })
+          .unwrap();
+        scene
+          .with_component_mut(cloud_e, |c: &mut scene::ImageBillboardComponent| {
+            c.texture_id = cloud_id as _
+          })
+          .unwrap();
+
+        // We need Font
+        let atlas =
+          crate::scene::text::FontAtlas::from_path(aethervk_oshal_rlib::os::FONT_PATH, 32.0)
+            .unwrap();
+        let font_hash = atlas.hash_metadata();
+        let font_id = device
+          .allocate_rasterized_font_atlas(
+            cmd_buffer_handle,
+            font_hash,
+            alloc::sync::Arc::new(atlas),
+          )
+          .unwrap();
+
+        crate::scene::ui::update_ui_layouts(&scene, [width as f32, height as f32]);
+
+        let render_scene = scene
+          .convert_scene(camera_e, false, None, [width, height])
+          .unwrap()
+          .build_render_scene(
+            device,
+            presentation_engine,
+            cmd_buffer_handle,
+            aethervk_oshal_rlib::os::time::TimeReadings::default(),
+            [width, height],
+            "test_weather",
+          )
+          .unwrap();
+
+        device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result).unwrap();
+        let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
+
+        device
+          .set_viewport(
+            cmd_buffer_handle,
+            &gpu::Viewport::from_extent([width, height]),
+          )
+          .unwrap();
+        device
+          .set_scissor(
+            cmd_buffer_handle,
+            &gpu::Rect2D::from_extent([width, height]),
+          )
+          .unwrap();
+
+        gpu::frame::render_frame(
+          device,
+          cmd_buffer_handle,
+          &render_scene,
+          presentation_engine,
+        )
+        .unwrap();
+
+        // Draw Text Manually for now over the UI
+        device
+          .prepare_text_archetype_for_render_and_bind_pipeline(
+            cmd_buffer_handle,
+            presentation_engine,
+          )
+          .unwrap();
+
+        let w = width as f32;
+        let h = height as f32;
+        let view_proj = [
+          2.0 / w,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          2.0 / h,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          -1.0,
+          -1.0,
+          0.0,
+          1.0,
+        ];
+
+        // "San Francisco, CA"
+        // Top-left is 120, 130
+        device
+          .render_text(
+            cmd_buffer_handle,
+            "San Francisco, CA",
+            [120.0, 130.0],
+            view_proj,
+            (font_hash, font_id),
+            24.0,
+            [0.0, 0.0, 0.0, 1.0],
+          )
+          .unwrap();
+
+        // "21 C"
+        device
+          .render_text(
+            cmd_buffer_handle,
+            "21 C",
+            [360.0, 210.0],
+            view_proj,
+            (font_hash, font_id),
+            48.0,
+            [0.0, 0.0, 0.0, 1.0],
+          )
+          .unwrap();
+
+        // "Partly Cloudy"
+        device
+          .render_text(
+            cmd_buffer_handle,
+            "Partly Cloudy",
+            [360.0, 255.0],
+            view_proj,
+            (font_hash, font_id),
+            18.0,
+            [0.0, 0.0, 0.0, 1.0],
+          )
+          .unwrap();
+
+        scoped_rp.end().unwrap();
+        device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id).unwrap();
+      }
+
+      device
+        .present(
+          presentation_engine,
+          acquire_result.image_index as usize,
+          acquire_result.frame_index as usize,
+        )
+        .unwrap();
+
+      while !device.is_task_completed(task_id).unwrap() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+      }
+      device.success_task(task_id);
+
+      let mut buffer = vec![0u8; (width * height * 4) as usize];
+      device.read_windowless_download(task_id, &mut buffer).unwrap();
+
+      let out_path = std::path::Path::new("test_ui_rendering.png");
+      if let Some(p) = out_path.parent() {
+        std::fs::create_dir_all(p).unwrap();
+      }
+
+      // 2. Efficiently swap the Blue and Red channels in-place (BGRA -> RGBA)
+      for pixel in buffer.chunks_exact_mut(4) {
+        // pixel[0] is B, pixel[1] is G, pixel[2] is R, pixel[3] is A
+        pixel.swap(0, 2);
+      }
+      image::save_buffer(out_path, &buffer, width, height, image::ColorType::Rgba8).unwrap();
+
+      // TODO Determine format mapping (BGRA vs RGBA) based on standard Vulkan swapchain/download behavior
+      // In windowless, the format might be BGRA8_UNORM. Let's provide a flexible check.
+      let get_pixel = |x: u32, y: u32| -> (u8, u8, u8, u8) {
+        let idx = ((y * width + x) * 4) as usize;
+        // Return raw layout (could be BGRA)
+        (
+          buffer[idx],
+          buffer[idx + 1],
+          buffer[idx + 2],
+          buffer[idx + 3],
+        )
+      };
+
+      // 1. Background Check (Expected Gradient)
+      let bg = get_pixel(10, 10);
+      assert!(
+        bg.2 > 200 && bg.0 < 150,
+        "Background should be sky blue gradient, got {:?}",
+        bg
+      );
+
+      // 2. Main Panel Check (Expected Light Blue blended over Gradient)
+      let main_panel = get_pixel(300, 250);
+      assert!(
+        main_panel.2 > 200 && main_panel.1 > 150 && main_panel.0 > 100,
+        "Main panel mismatch: {:?}",
+        main_panel
+      );
+
+      // 3. Side Panel Check
+      let side_panel = get_pixel(620, 170);
+
+      // 4. Sun Check
+      let sun_pixel = get_pixel(180, 201);
+      assert!(
+        sun_pixel.0 > 200 && sun_pixel.1 > 150 && sun_pixel.2 < 180,
+        "Sun pixel mismatch: {:?}",
+        sun_pixel
+      );
+
+      assert!(
+        side_panel.0 > 200 && side_panel.1 > 200 && side_panel.2 > 200,
+        "Side panel should be light grey/white, got {:?}",
+        side_panel
+      );
+
+      // Save for visual verification (Note: if format is BGRA, it will look reddish in standard image viewers if saved directly as RGBA)
+      // We'll flip BGRA to RGBA if necessary for the saved png.
+      // Usually Vulkan on Mac with windowless creates BGRA8Unorm.
+      for chunk in buffer.chunks_exact_mut(4) {
+        let b = chunk[0];
+        let r = chunk[2];
+        chunk[0] = r;
+        chunk[2] = b;
+      }
+
+      crate::types::GpuResult::Ok(())
+    })
+    .unwrap();
+
+  drop(render_frontend);
+}
+
+#[test]
+fn test_render_bvhwire2_windowless() {
+  setup_assets_dir();
+  let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
+    setup_render_frontend_for_tests(true);
+  let presentation_engine = presentation_engine.unwrap();
+  let [width, height] = render_frontend
+    .with_device(render_device_handle, |device| {
+      device.get_presentation_engine_extent(presentation_engine)
+    })
+    .unwrap();
+
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
+  scene.register_all_crate_components();
+  let mesh_entity = scene.spawn_entity("mesh");
+
+  let asset_path = format!(
+    "{}/Comet.glb",
+    crate::gpu::ASSET_DIR.read().as_ref().unwrap()
+  );
+  let mut mesh = crate::simulation::comet::load_comet_from_gltf(&asset_path, false).unwrap();
+
+  // Add a dummy BVH to the mesh to ensure something is drawn
+  mesh.bvh = Some(LinearBVH::<f32> {
+    header: LinearBVHHeader {
+      preciseness: 0,
+      node_count: 1,
+      primitive_count: 0,
+    },
+    nodes: vec![LinearBVHNode::<f32> {
+      left_child_or_primitive_offset: 0,
+      right_child_offset: 0,
+      bound: LinearBound::<f32>::AABB(AABB::new(
+        Vec3f32::from_array([-1.0, -1.0, -1.0]),
+        Vec3f32::from_array([1.0, 1.0, 1.0]),
+      )),
+      primitive_count: 0,
+    }],
+    primitives: vec![],
+  });
+
+  let mesh_arc = std::sync::Arc::from(mesh);
+
+  scene
+    .add_component(
+      mesh_entity,
+      TransformComponent {
+        position: Vec3f32::from_array([0.0, -10.0, 0.0]),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+      },
+    )
+    .unwrap();
+
+  scene
+    .add_component(
+      mesh_entity,
+      crate::scene::PhysicalMeshComponent {
+        asset_path: asset_path.clone(),
+        mesh: mesh_arc.clone(),
+        emissive_intensity: 0.0,
+        emissive_color: [0.0; 3],
+        use_new_path: true,
+        paint_display_mode: 0,
+      },
+    )
+    .unwrap();
+
+  scene
+    .add_component(
+      mesh_entity,
+      crate::scene::BvhDebugComponent {
+        node_render_states: vec![true],
+        use_new_path: true,
+      },
+    )
+    .unwrap();
+
+  let camera_entity = scene.spawn_entity("camera");
+  scene
+    .add_component(
+      camera_entity,
+      TransformComponent {
+        position: Vec3f32::from_array([0.0, 0.0, 0.0]),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+      },
+    )
+    .unwrap();
+  scene
+    .add_component(
+      camera_entity,
+      CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 0.1, 100.0),
+    )
+    .unwrap();
+
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      let task_id = device.create_task();
+      device.start_frame()?;
+      let acquire_result = device.acquire_next_image(presentation_engine)?;
+      let cmd_buffer_handle = device.get_command_buffer()?;
+
+      let mut extracted = scene.convert_scene(camera_entity, false, None, [width, height])?;
+
+      let scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+
+      let render_scene = extracted.build_render_scene(
+        device,
+        presentation_engine,
+        cmd_buffer_handle,
+        aethervk_oshal_rlib::os::time::TimeReadings::default(),
+        [width, height],
+        "test_bvhwire2",
+      )?;
+
+      device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
+      let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
+
+      let extent = device.get_presentation_engine_extent(presentation_engine)?;
+      device.set_viewport(cmd_buffer_handle, &gpu::Viewport::from_extent(extent))?;
+      device.set_scissor(cmd_buffer_handle, &gpu::Rect2D::from_extent(extent))?;
+
+      gpu::frame::render_frame(
+        device,
+        cmd_buffer_handle,
+        &render_scene,
+        presentation_engine,
+      )?;
+      scoped_rp.end()?;
+      device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
+
+      scoped_cmd.submit().unwrap();
+
+      device.present(
+        presentation_engine,
+        acquire_result.image_index as usize,
+        acquire_result.frame_index as usize,
+      )?;
+
+      while !device.is_task_completed(task_id)? {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+      }
+      device.success_task(task_id);
+
+      let mut buffer = vec![0u8; (width * height * 4) as usize];
+      device.read_windowless_download(task_id, &mut buffer)?;
+
+      let mut max_r = 0;
+      let mut max_g = 0;
+      let mut max_b = 0;
+
+      let mut found_green = false;
+      for chunk in buffer.chunks_exact(4) {
+        let b = chunk[0];
+        let g = chunk[1];
+        let r = chunk[2];
+        if r > max_r {
+          max_r = r;
+        }
+        if g > max_g {
+          max_g = g;
+        }
+        if b > max_b {
+          max_b = b;
+        }
+        if g > 200 && r < 50 && b < 50 {
+          found_green = true;
+        }
+      }
+
+      println!("Bvhwire2 Max RGB: ({}, {}, {})", max_r, max_g, max_b);
+
+      let mut export_buffer = buffer.clone();
+      for chunk in export_buffer.chunks_exact_mut(4) {
+        chunk.swap(0, 2); // BGRA to RGBA
+      }
+      let row_stride = (width * 4) as usize;
+      for y in 0..(height as usize / 2) {
+        let top_row_start = y * row_stride;
+        let bottom_row_start = ((height as usize) - 1 - y) * row_stride;
+        for x in 0..row_stride {
+          export_buffer.swap(top_row_start + x, bottom_row_start + x);
+        }
+      }
+      image::save_buffer(
+        "test_rendered_bvhwire2.png",
+        &export_buffer,
+        width,
+        height,
+        image::ColorType::Rgba8,
+      )
+      .expect("Failed to save rendered png");
+
+      assert!(
+        found_green,
+        "BVH wireframe color (green) not found in the rendered image!"
+      );
+
+      crate::types::GpuResult::Ok(())
+    })
+    .unwrap();
+
+  drop(render_frontend);
+}
+
+#[test]
+fn test_render_uniform_background() {
+  setup_assets_dir();
+  let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
+    setup_render_frontend_for_tests(true);
+  let presentation_engine = presentation_engine.unwrap();
+  let [width, height] = render_frontend
+    .with_device(render_device_handle, |device| {
+      device.get_presentation_engine_extent(presentation_engine)
+    })
+    .unwrap();
+
+  let frames_to_render = [
+    // Frame 0: Solid Red
+    crate::gpu::BackgroundPushConstants {
+      color_top: [1.0, 0.0, 0.0, 1.0],
+      color_bottom: [1.0, 0.0, 0.0, 1.0],
+    },
+    // Frame 1: Gradient Blue to Green
+    crate::gpu::BackgroundPushConstants {
+      color_top: [0.0, 0.0, 1.0, 1.0],
+      color_bottom: [0.0, 1.0, 0.0, 1.0],
+    },
+  ];
+
+  for (frame_index, bg_constants) in frames_to_render.iter().enumerate() {
+    render_frontend
+      .with_device(render_device_handle, |device| {
+        let task_id = device.create_task();
+        device.start_frame()?;
+        let acquire_result = device.acquire_next_image(presentation_engine)?;
+        let cmd_buffer_handle = device.get_command_buffer()?;
+
+        let mut render_scene = RenderScene::new(
+          (
+            TransformComponent {
+              position: Vec3f32::from_array([0.0, 0.0, 0.0]),
+              rotation: Quat::identity(),
+              scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+            },
+            CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 0.1, 100.0),
+          ),
+          aethervk_oshal_rlib::os::time::TimeReadings::default(),
+          [width, height],
+        );
+
+        let pipeline = device.get_background_pipeline_key(presentation_engine)?;
+        render_scene.background_call = Some(gpu::frame::BackgroundDrawCall {
+          pipeline,
+          color_top: bg_constants.color_top,
+          color_bottom: bg_constants.color_bottom,
+        });
+
+        {
+          let _scoped_cmd =
+            gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+          device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
+          let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
+
+          device.set_viewport(
+            cmd_buffer_handle,
+            &gpu::Viewport::from_extent([width, height]),
+          )?;
+          device.set_scissor(
+            cmd_buffer_handle,
+            &gpu::Rect2D::from_extent([width, height]),
+          )?;
+
+          gpu::frame::render_frame(
+            device,
+            cmd_buffer_handle,
+            &render_scene,
+            presentation_engine,
+          )?;
+
+          scoped_rp.end()?;
+          device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
+        }
+
+        device.present(
+          presentation_engine,
+          acquire_result.image_index as usize,
+          acquire_result.frame_index as usize,
+        )?;
+
+        while !device.is_task_completed(task_id)? {
+          std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        device.success_task(task_id);
+
+        let mut buffer = vec![0u8; (width * height * 4) as usize];
+        device.read_windowless_download(task_id, &mut buffer)?;
+
+        let mut export_buffer = buffer.clone();
+        for chunk in export_buffer.chunks_exact_mut(4) {
+          chunk.swap(0, 2); // BGRA to RGBA
+        }
+
+        let file_name = format!("test_rendered_background_{}.png", frame_index);
+        image::save_buffer(
+          &file_name,
+          &export_buffer,
+          width,
+          height,
+          image::ColorType::Rgba8,
+        )
+        .unwrap_or_else(|e| panic!("Failed to save rendered png: {:?}", e));
+
+        // TODO: Vulkan already renders top -> bottom, don't flip. Also, we need support for different pixel formats on download
+        let get_pixel = |x: u32, y: u32| -> (u8, u8, u8, u8) {
+          let idx = ((y * width + x) * 4) as usize;
+          (
+            buffer[idx + 2],
+            buffer[idx + 1],
+            buffer[idx + 0],
+            buffer[idx + 3],
+          ) // Returns RGBA
+        };
+
+        if frame_index == 0 {
+          let center = get_pixel(width / 2, height / 2);
+          assert!(
+            center.0 > 200 && center.1 < 50 && center.2 < 50,
+            "Background should be solid red, got {:?}",
+            center
+          );
+        } else if frame_index == 1 {
+          let top = get_pixel(width / 2, height - 10);
+          let bottom = get_pixel(width / 2, 10);
+          assert!(
+            top.2 > 200 && top.0 < 50,
+            "Top should be blue, got {:?}",
+            top
+          );
+          assert!(
+            bottom.1 > 200 && bottom.0 < 50,
+            "Bottom should be green, got {:?}",
+            bottom
+          );
+        }
+
+        crate::types::GpuResult::Ok(())
+      })
+      .unwrap();
+  }
+  drop(render_frontend);
+}
+
+#[test]
+fn test_render_text2_basic() {
+  setup_assets_dir();
+  let (pool_arc, render_frontend, render_device_handle, _) = setup_render_frontend_for_tests(false);
+
+  let width = 512;
+  let height = 256;
+
+  let presentation_engine = {
+    let params = PresentationEngineParams::windowless(width, height);
+    render_frontend
+      .with_device(render_device_handle, |device| {
+        let pe = device.create_presentation_engine(&params)?;
+        device.init_archetypes(pe)?;
+        Ok(pe)
+      })
+      .unwrap()
+  };
+
+  let frontend_clone = render_frontend.clone();
+
+  let render_thread = std::thread::spawn(move || {
+    frontend_clone
+      .with_device(render_device_handle, |device| {
+        let task_id = device.create_task();
+        device.start_frame()?;
+        let acquire_result = device.acquire_next_image(presentation_engine)?;
+        let cmd_buffer_handle = device.get_command_buffer()?;
+
+        let atlas = alloc::sync::Arc::new(
+          crate::scene::text::FontAtlas::from_path(aethervk_oshal_rlib::os::FONT_PATH, 32.0)
+            .expect("Failed to load system font"),
+        );
+        let font_hash = atlas.hash_metadata();
+
+        {
+          let _scoped_cmd =
+            gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+
+          let font_id =
+            device.allocate_rasterized_font_atlas(cmd_buffer_handle, font_hash, atlas.clone())?;
+
+          let style = crate::scene::text::TextStyle {
+            size_pt: 48.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            style_flags: 0,
+          };
+          let mut text_batch = Vec::new();
+          crate::scene::text::push_text_to_batch(
+            "Hello Text2!",
+            [10.0, 50.0],
+            &style,
+            &atlas,
+            font_id,
+            &mut text_batch,
+          );
+
+          let batch_call =
+            device.upload_text2(cmd_buffer_handle, presentation_engine, &text_batch)?.unwrap();
+
+          device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
+          let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
+
+          device.set_viewport(
+            cmd_buffer_handle,
+            &gpu::Viewport::from_extent([width, height]),
+          )?;
+          device.set_scissor(
+            cmd_buffer_handle,
+            &gpu::Rect2D::from_extent([width, height]),
+          )?;
+
+          let camera_data = crate::gpu::frame::CameraRenderData {
+            pos: Vec3f32::from_components(0.0, 0.0, 0.0),
+            absolute_pos: Vec3f32::from_components(0.0, 0.0, 0.0),
+            rot: Quat::identity(),
+            view: Mat4x4f32::identity(),
+            proj: Mat4x4f32::identity(),
+            view_proj: Mat4x4f32::identity(),
+            up: [0.0, 1.0, 0.0],
+            right: [1.0, 0.0, 0.0],
+            near: 0.1,
+            far: 100.0,
+          };
+
+          crate::gpu::frame::do_draw_text2_batch(
+            device,
+            &camera_data,
+            cmd_buffer_handle,
+            &batch_call,
+            [width as f32, height as f32],
+            presentation_engine,
+          )?;
+
+          scoped_rp.end()?;
+          device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
+        }
+
+        device.present(
+          presentation_engine,
+          acquire_result.image_index as usize,
+          acquire_result.frame_index as usize,
+        )?;
+
+        crate::types::GpuResult::Ok(task_id)
+      })
+      .unwrap()
+  });
+
+  let task_id = render_thread.join().unwrap();
+
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      while !device.is_task_completed(task_id)? {
+        std::thread::yield_now();
+      }
+
+      let mut buffer = vec![0u8; (width * height * 4) as usize];
+      device.read_windowless_download(task_id, &mut buffer)?;
+
+      let sum: u64 = buffer.iter().map(|&b| b as u64).sum();
+      assert!(sum > 0, "Rendered text buffer is completely empty!");
+
+      for chunk in buffer.chunks_exact_mut(4) {
+        chunk.swap(0, 2);
+      }
+
+      image::save_buffer(
+        "test_rendered_text2_basic.png",
+        &buffer,
+        width,
+        height,
+        image::ColorType::Rgba8,
+      )
+      .expect("Failed to save rendered png");
+
+      Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn test_render_text2_styled() {
+  setup_assets_dir();
+  let (pool_arc, render_frontend, render_device_handle, _) = setup_render_frontend_for_tests(false);
+
+  let width = 512;
+  let height = 512;
+
+  let presentation_engine = {
+    let params = PresentationEngineParams::windowless(width, height);
+    render_frontend
+      .with_device(render_device_handle, |device| {
+        let pe = device.create_presentation_engine(&params)?;
+        device.init_archetypes(pe)?;
+        Ok(pe)
+      })
+      .unwrap()
+  };
+
+  let frontend_clone = render_frontend.clone();
+
+  let render_thread = std::thread::spawn(move || {
+    frontend_clone
+      .with_device(render_device_handle, |device| {
+        let task_id = device.create_task();
+        device.start_frame()?;
+        let acquire_result = device.acquire_next_image(presentation_engine)?;
+        let cmd_buffer_handle = device.get_command_buffer()?;
+
+        let atlas = Arc::new(
+          FontAtlas::from_path(aethervk_oshal_rlib::os::FONT_PATH, 32.0)
+            .expect("Failed to load system font"),
+        );
+        let font_hash = atlas.hash_metadata();
+
+        {
+          let _scoped_cmd =
+            gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+
+          let font_id = device.allocate_rasterized_font_atlas(
+            cmd_buffer_handle,
+            font_hash,
+            Arc::clone(&atlas),
+          )?;
+
+          let style1 = crate::scene::text::TextStyle {
+            size_pt: 48.0,
+            color: [1.0, 0.0, 0.0, 1.0],
+            style_flags: 1,
+          }; // Italic
+          let style2 = crate::scene::text::TextStyle {
+            size_pt: 48.0,
+            color: [0.0, 1.0, 0.0, 1.0],
+            style_flags: 2,
+          }; // Bold
+          let style3 = crate::scene::text::TextStyle {
+            size_pt: 48.0,
+            color: [0.0, 0.0, 1.0, 1.0],
+            style_flags: 3,
+          }; // Bold Italic
+
+          let mut text_batch = Vec::new();
+          crate::scene::text::push_text_to_batch(
+            "Italic Text",
+            [10.0, 50.0],
+            &style1,
+            &atlas,
+            font_id,
+            &mut text_batch,
+          );
+          crate::scene::text::push_text_to_batch(
+            "Bold Text",
+            [10.0, 150.0],
+            &style2,
+            &atlas,
+            font_id,
+            &mut text_batch,
+          );
+          crate::scene::text::push_text_to_batch(
+            "Bold Italic Text",
+            [10.0, 250.0],
+            &style3,
+            &atlas,
+            font_id,
+            &mut text_batch,
+          );
+
+          let batch_call =
+            device.upload_text2(cmd_buffer_handle, presentation_engine, &text_batch)?.unwrap();
+
+          device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
+          let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
+
+          device.set_viewport(
+            cmd_buffer_handle,
+            &gpu::Viewport::from_extent([width, height]),
+          )?;
+          device.set_scissor(
+            cmd_buffer_handle,
+            &gpu::Rect2D::from_extent([width, height]),
+          )?;
+
+          let camera_data = crate::gpu::frame::CameraRenderData {
+            pos: Vec3f32::from_components(0.0, 0.0, 0.0),
+            absolute_pos: Vec3f32::from_components(0.0, 0.0, 0.0),
+            rot: Quat::identity(),
+            view: Mat4x4f32::identity(),
+            proj: Mat4x4f32::identity(),
+            view_proj: Mat4x4f32::identity(),
+            up: [0.0, 1.0, 0.0],
+            right: [1.0, 0.0, 0.0],
+            near: 0.1,
+            far: 100.0,
+          };
+
+          crate::gpu::frame::do_draw_text2_batch(
+            device,
+            &camera_data,
+            cmd_buffer_handle,
+            &batch_call,
+            [width as f32, height as f32],
+            presentation_engine,
+          )?;
+
+          scoped_rp.end()?;
+          device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
+        }
+
+        device.present(
+          presentation_engine,
+          acquire_result.image_index as usize,
+          acquire_result.frame_index as usize,
+        )?;
+
+        crate::types::GpuResult::Ok(task_id)
+      })
+      .unwrap()
+  });
+
+  let task_id = render_thread.join().unwrap();
+
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      while !device.is_task_completed(task_id)? {
+        std::thread::yield_now();
+      }
+
+      let mut buffer = vec![0u8; (width * height * 4) as usize];
+      device.read_windowless_download(task_id, &mut buffer)?;
+
+      for chunk in buffer.chunks_exact_mut(4) {
+        chunk.swap(0, 2);
+      }
+
+      image::save_buffer(
+        "test_rendered_text2_styled.png",
+        &buffer,
+        width,
+        height,
+        image::ColorType::Rgba8,
+      )
+      .expect("Failed to save rendered png");
+
+      Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn test_text2_descriptor_allocation() {
+  setup_assets_dir();
+  let (_pool_arc, render_frontend, render_device_handle, _presentation_engine) =
+    setup_render_frontend_for_tests(true);
+
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      let task_id = device.create_task();
+      device.start_frame()?;
+      let cmd_buffer_handle = device.get_command_buffer()?;
+
+      let atlas = alloc::sync::Arc::new(
+        crate::scene::text::FontAtlas::from_path(aethervk_oshal_rlib::os::FONT_PATH, 32.0).unwrap(),
+      );
+
+      {
+        let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+
+        let id1 =
+          device.allocate_rasterized_font_atlas(cmd_buffer_handle, 1111, Arc::clone(&atlas))?;
+        let id2 =
+          device.allocate_rasterized_font_atlas(cmd_buffer_handle, 2222, Arc::clone(&atlas))?;
+
+        assert_ne!(id1, id2);
+
+        device.free_rasterized_font_atlas(1111, id1)?;
+
+        // This should reuse id1's slot if the pipeline advances
+        let id3 = device.allocate_rasterized_font_atlas(
+          cmd_buffer_handle,
+          3333,
+          alloc::sync::Arc::clone(&atlas),
+        )?;
+
+        // Either it's new or reused, both are valid, but usually free_descriptor_indices acts as LIFO stack
+        assert_eq!(id1, id3);
+      }
+      device.success_task(task_id);
+
+      Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn test_render_text2_street_art() {
+  setup_assets_dir();
+  let (pool_arc, render_frontend, render_device_handle, _) = setup_render_frontend_for_tests(false);
+
+  let width = 800;
+  let height = 600;
+
+  let presentation_engine = {
+    let params = PresentationEngineParams::windowless(width, height);
+    render_frontend
+      .with_device(render_device_handle, |device| {
+        let pe = device.create_presentation_engine(&params)?;
+        device.init_archetypes(pe)?;
+        Ok(pe)
+      })
+      .unwrap()
+  };
+
+  let frontend_clone = render_frontend.clone();
+
+  let render_thread = std::thread::spawn(move || {
+    frontend_clone
+      .with_device(render_device_handle, |device| {
+        let task_id = device.create_task();
+        device.start_frame()?;
+        let acquire_result = device.acquire_next_image(presentation_engine)?;
+        let cmd_buffer_handle = device.get_command_buffer()?;
+
+        let sys_atlas = Arc::new(
+          FontAtlas::from_path(aethervk_oshal_rlib::os::FONT_PATH, 48.0)
+            .expect("Failed to load system font"),
+        );
+
+        let asset_font_path = format!(
+          "{}/fonts/JetBrainsMono-Regular.ttf",
+          crate::gpu::ASSET_DIR.read().as_ref().unwrap()
+        );
+        let asset_atlas = Arc::new(
+          FontAtlas::from_path(&asset_font_path, 48.0).expect("Failed to load asset font"),
+        );
+
+        let sys_hash = sys_atlas.hash_metadata();
+        let asset_hash = asset_atlas.hash_metadata();
+
+        {
+          let _scoped_cmd =
+            gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+
+          let sys_id = device.allocate_rasterized_font_atlas(
+            cmd_buffer_handle,
+            sys_hash,
+            Arc::clone(&sys_atlas),
+          )?;
+
+          let asset_id = device.allocate_rasterized_font_atlas(
+            cmd_buffer_handle,
+            asset_hash,
+            Arc::clone(&asset_atlas),
+          )?;
+
+          let mut text_batch = Vec::new();
+
+          // Background layer (system font, bold italic, large, gray shadow)
+          let style_bg = crate::scene::text::TextStyle {
+            size_pt: 120.0,
+            color: [0.2, 0.2, 0.2, 1.0],
+            style_flags: 3,
+          };
+          crate::scene::text::push_text_to_batch(
+            "VULKAN",
+            [50.0, 150.0],
+            &style_bg,
+            &sys_atlas,
+            sys_id,
+            &mut text_batch,
+          );
+          crate::scene::text::push_text_to_batch(
+            "AETHER",
+            [100.0, 300.0],
+            &style_bg,
+            &sys_atlas,
+            sys_id,
+            &mut text_batch,
+          );
+
+          // Foreground layer (asset font, italic, colorful)
+          let style_fg1 = crate::scene::text::TextStyle {
+            size_pt: 100.0,
+            color: [1.0, 0.0, 0.5, 1.0],
+            style_flags: 1,
+          };
+          crate::scene::text::push_text_to_batch(
+            "VULKAN",
+            [40.0, 140.0],
+            &style_fg1,
+            &asset_atlas,
+            asset_id,
+            &mut text_batch,
+          );
+
+          let style_fg2 = crate::scene::text::TextStyle {
+            size_pt: 100.0,
+            color: [0.0, 1.0, 0.8, 1.0],
+            style_flags: 1,
+          };
+          crate::scene::text::push_text_to_batch(
+            "AETHER",
+            [90.0, 290.0],
+            &style_fg2,
+            &asset_atlas,
+            asset_id,
+            &mut text_batch,
+          );
+
+          // Details/Tags (system font, bold, small)
+          let style_tag = crate::scene::text::TextStyle {
+            size_pt: 30.0,
+            color: [1.0, 1.0, 0.0, 1.0],
+            style_flags: 2,
+          };
+          crate::scene::text::push_text_to_batch(
+            "street art edition",
+            [300.0, 200.0],
+            &style_tag,
+            &sys_atlas,
+            sys_id,
+            &mut text_batch,
+          );
+
+          let style_tag2 = crate::scene::text::TextStyle {
+            size_pt: 20.0,
+            color: [1.0, 1.0, 1.0, 0.8],
+            style_flags: 0,
+          };
+          crate::scene::text::push_text_to_batch(
+            "Text2 Archetype",
+            [600.0, 550.0],
+            &style_tag2,
+            &asset_atlas,
+            asset_id,
+            &mut text_batch,
+          );
+
+          // Lots of overlapping "graffiti" tags
+          for i in 0..10 {
+            let style_random = crate::scene::text::TextStyle {
+              size_pt: 40.0 + (i as f32 * 10.0),
+              color: [
+                0.5 + (i as f32 * 0.05),
+                0.1 * i as f32,
+                1.0 - (i as f32 * 0.05),
+                0.6,
+              ],
+              style_flags: i % 4,
+            };
+            let atlas = if i % 2 == 0 { &sys_atlas } else { &asset_atlas };
+            let id = if i % 2 == 0 { sys_id } else { asset_id };
+            crate::scene::text::push_text_to_batch(
+              "TAG",
+              [20.0 * i as f32, 400.0 + (i as f32 * 15.0)],
+              &style_random,
+              atlas,
+              id,
+              &mut text_batch,
+            );
+          }
+
+          let batch_call =
+            device.upload_text2(cmd_buffer_handle, presentation_engine, &text_batch)?.unwrap();
+
+          device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
+          let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
+
+          device.set_viewport(
+            cmd_buffer_handle,
+            &gpu::Viewport::from_extent([width, height]),
+          )?;
+          device.set_scissor(
+            cmd_buffer_handle,
+            &gpu::Rect2D::from_extent([width, height]),
+          )?;
+
+          let camera_data = crate::gpu::frame::CameraRenderData {
+            pos: Vec3f32::from_components(0.0, 0.0, 0.0),
+            absolute_pos: Vec3f32::from_components(0.0, 0.0, 0.0),
+            rot: Quat::identity(),
+            view: Mat4x4f32::identity(),
+            proj: Mat4x4f32::identity(),
+            view_proj: Mat4x4f32::identity(),
+            up: [0.0, 1.0, 0.0],
+            right: [1.0, 0.0, 0.0],
+            near: 0.1,
+            far: 100.0,
+          };
+
+          crate::gpu::frame::do_draw_text2_batch(
+            device,
+            &camera_data,
+            cmd_buffer_handle,
+            &batch_call,
+            [width as f32, height as f32],
+            presentation_engine,
+          )?;
+
+          scoped_rp.end()?;
+          device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
+        }
+
+        device.present(
+          presentation_engine,
+          acquire_result.image_index as usize,
+          acquire_result.frame_index as usize,
+        )?;
+
+        crate::types::GpuResult::Ok(task_id)
+      })
+      .unwrap()
+  });
+
+  let task_id = render_thread.join().unwrap();
+
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      while !device.is_task_completed(task_id)? {
+        std::thread::yield_now();
+      }
+
+      let mut buffer = vec![0u8; (width * height * 4) as usize];
+      device.read_windowless_download(task_id, &mut buffer)?;
+
+      for chunk in buffer.chunks_exact_mut(4) {
+        chunk.swap(0, 2);
+      }
+
+      image::save_buffer(
+        "test_rendered_text2_street_art.png",
+        &buffer,
+        width,
+        height,
+        image::ColorType::Rgba8,
+      )
+      .expect("Failed to save rendered png");
+
+      Ok(())
+    })
+    .unwrap();
 }

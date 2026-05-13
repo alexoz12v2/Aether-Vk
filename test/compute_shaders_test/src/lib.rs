@@ -1,6 +1,6 @@
 pub mod cpu_clustering;
 
-use aethervk_core_rlib::gpu::{VULKAN_RENDER_BACKEND, new_render_frontend, RenderFrontend, RenderContext, DeviceAdditionalParams};
+use aethervk_core_rlib::gpu::{VULKAN_RENDER_BACKEND, new_render_frontend, RenderFrontend, DeviceAdditionalParams};
 use aethervk_core_rlib::gpu_backends::vulkan::device::Device;
 use aethervk_core_rlib::types::RuntimeParams;
 use ash::vk;
@@ -92,7 +92,7 @@ impl VulkanContext {
         self.frontend.with_device(self.device_handle, |dev| {
             let actual_device = dev.as_any().downcast_ref::<Device>().unwrap();
             let allocator = &*actual_device.res.read().allocator.allocator;
-            let info = unsafe { allocator.get_allocation_info(alloc) };
+            let info = allocator.get_allocation_info(alloc);
             
             let mut result = Vec::with_capacity(count);
             if count > 0 {
@@ -226,5 +226,18 @@ pub fn run_compute_shader(
         }
         
         aethervk_core_rlib::types::GpuResult::Ok(())
-    }).unwrap()
-}
+        }).unwrap()
+        }
+
+        pub fn ensure_test_data(json_path: &str, python_script: &str) {
+        if !std::path::Path::new(json_path).exists() {
+        println!("Generating test data using {}", python_script);
+        let status = std::process::Command::new("python")
+            .arg(python_script)
+            .arg("--out")
+            .arg(json_path)
+            .status()
+            .expect("Failed to execute python script to generate test data");
+        assert!(status.success(), "Python script failed with status: {}", status);
+        }
+        }

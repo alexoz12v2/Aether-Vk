@@ -1,5 +1,6 @@
 //! simulation_api module.
 
+use crate::simulation::texture_cache::TextureCache;
 use crate::{
   gpu::{self, RenderDevice},
   gpu::{RenderDeviceHandle, WeakRenderFrontend, WeakRenderFrontendExt},
@@ -57,6 +58,7 @@ pub struct SimulationContext {
   pub scenes: Arc<RwLock<SimulationSceneData>>,
   pub task_manager: Arc<RwLock<SimulationTaskManager>>,
   pub logic_state: Arc<RwLock<structs::LogicState>>,
+  texture_cache: Arc<RwLock<TextureCache>>,
 }
 
 impl Drop for SimulationContext {

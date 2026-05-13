@@ -36,7 +36,8 @@ public partial class MeshViewerViewModel
 
   private readonly ConsoleService? _consoleService;
 
-  public event Action? OnFrameReady;
+  public IViewportRenderer? Renderer { get; set; }
+  private readonly IUiThreadDispatcher _uiThreadDispatcher;
 
   public MeshViewerViewModel(
     ulong modelId,
@@ -44,13 +45,15 @@ public partial class MeshViewerViewModel
     string modelName,
     bool isLightTheme,
     NativeRuntimeService runtimeService,
-    ConsoleService? consoleService
+    ConsoleService? consoleService,
+    IUiThreadDispatcher uiThreadDispatcher
   )
     : base(modelName)
   {
     _runtimeService = runtimeService;
     _consoleService = consoleService;
     _isLightTheme = isLightTheme;
+    _uiThreadDispatcher = uiThreadDispatcher;
     OperatorStack = new OperatorStack(new MeshViewerBaseOperator(this));
     _ = InitializeSceneAsync(modelId, modelPath, modelName);
   }
@@ -69,8 +72,13 @@ public partial class MeshViewerViewModel
     Stop();
     if (PresentationEngineId != 0)
     {
-      _runtimeService.DestroyPresentationEngine(SceneId, PresentationEngineId);
+      _runtimeService.DestroyPresentationEngine(SceneId, PresentationEngineId, CameraId);
       PresentationEngineId = 0;
+    }
+    if (SceneId != 0)
+    {
+      _runtimeService.DestroyScene(SceneId);
+      SceneId = 0;
     }
   }
 
@@ -96,13 +104,6 @@ public partial class MeshViewerViewModel
         SceneId = _runtimeService.CreateScene(false);
         _runtimeService.SetSceneDebugName(SceneId, $"MeshViewer_{modelName}");
 
-        _consoleService?.Log($"[MeshViewer] Checking PresentationEngineId...");
-        if (PresentationEngineId == 0)
-        {
-          _consoleService?.Log($"[MeshViewer] Creating PresentationEngine...");
-          PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height, SceneId);
-        }
-
         if (modelId == 0)
         {
           _consoleService?.Log($"[MeshViewer] Importing Model (path={modelPath})...");
@@ -124,25 +125,34 @@ public partial class MeshViewerViewModel
           return;
         }
 
-        _consoleService?.Log($"[MeshViewer] Creating camera...");
-        var camera = _runtimeService.CreateCamera(SceneId, root);
-
-        // Configure camera specifically for Mesh Viewer (like in the native test)
-        var camTransform = System.Linq.Enumerable.FirstOrDefault(
-          System.Linq.Enumerable.OfType<AetherVk.Logic.Models.TransformComponent>(camera.Components)
-        );
-        if (camTransform != null)
+        _consoleService?.Log($"[MeshViewer] Checking PresentationEngineId...");
+        if (PresentationEngineId == 0)
         {
-          camTransform.PosX = 0.0f;
-          camTransform.PosY = -5.0f;
-          camTransform.PosZ = 0.0f;
-          camTransform.RotW = 0.0f;
-          camTransform.RotX = 0.0f;
-          camTransform.RotY = 0.0f;
-          camTransform.RotZ = 1.0f;
+          _consoleService?.Log($"[MeshViewer] Creating PresentationEngine...");
+          PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height, SceneId);
         }
 
-        CameraId = camera.Id;
+        _consoleService?.Log($"[MeshViewer] Creating camera...");
+        CameraId = _runtimeService.AddPerspectiveCamera(SceneId, PresentationEngineId, "camera", 45.0f, 0.1f, 10000.0f);
+        
+        // Fetch the new camera entity to configure transform
+        var camera = _runtimeService.GetEntityById(SceneId, CameraId);
+        if (camera != null)
+        {
+          var camTransform = System.Linq.Enumerable.FirstOrDefault(
+            System.Linq.Enumerable.OfType<AetherVk.Logic.Models.TransformComponent>(camera.Components)
+          );
+          if (camTransform != null)
+          {
+            camTransform.PosX = 0.0f;
+            camTransform.PosY = -5.0f;
+            camTransform.PosZ = 0.0f;
+            camTransform.RotW = 0.0f;
+            camTransform.RotX = 0.0f;
+            camTransform.RotY = 0.0f;
+            camTransform.RotZ = 1.0f;
+          }
+        }
 
         _consoleService?.Log($"[MeshViewer] Creating sun...");
         var sun = _runtimeService.CreateSun(SceneId, root);
@@ -186,13 +196,31 @@ public partial class MeshViewerViewModel
     if (message.PresentationEngineId == PresentationEngineId && message.SceneId == SceneId)
     {
       _lastRenderTaskId = message.RenderGeneration;
-      OnFrameReady?.Invoke();
+      if (Renderer != null && Width > 0 && Height > 0)
+      {
+        _ = ProcessFrameAsync();
+      }
     }
   }
 
-  public async Task CopyFrameToBuffer(IntPtr bufferPtr, nuint bufferSize)
+  private async Task ProcessFrameAsync()
   {
-    await _runtimeService.DownloadImageAsync(_lastRenderTaskId, bufferPtr, bufferSize);
+    nuint bufferSize = (nuint)(Width * Height * 4);
+    IntPtr unmanagedBuffer = System.Runtime.InteropServices.Marshal.AllocHGlobal((int)bufferSize);
+
+    try
+    {
+      await _runtimeService.DownloadImageAsync(_lastRenderTaskId, unmanagedBuffer, bufferSize);
+      await _uiThreadDispatcher.DispatchAsync(() =>
+      {
+        Renderer?.UpdateFrame(unmanagedBuffer, bufferSize);
+        return Task.CompletedTask;
+      });
+    }
+    finally
+    {
+      System.Runtime.InteropServices.Marshal.FreeHGlobal(unmanagedBuffer);
+    }
   }
 
   public void Stop() { }

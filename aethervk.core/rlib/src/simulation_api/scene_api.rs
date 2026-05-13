@@ -29,6 +29,7 @@ impl SimulationContext {
   pub fn raycast_ndc(
     &self,
     scene_id: u64,
+    camera_id: u64,
     ndc_x: f32,
     ndc_y: f32,
   ) -> EngineResult<core::num::NonZero<u64>> {
@@ -41,6 +42,7 @@ impl SimulationContext {
       .try_send(structs::LogicCommand::RaycastNdc {
         task_id: task_id.get(),
         scene_id,
+        camera_id,
         ndc_x,
         ndc_y,
       })
@@ -233,14 +235,40 @@ impl SimulationContext {
     // precondition for unwrap: if entity exists, then the simulation api has its external id.
     Ok(scene.read().entity_map.iter().find(|&(_, v)| *v == parent_id).map(|(ext, _)| *ext).unwrap())
   }
+  pub fn destroy_scene(&self, scene_id: u64) -> EngineResult<()> {
+    let mut pes_to_destroy = Vec::new();
+    if let Some(scene_ctx) = self.scenes.read().get(&scene_id) {
+      let read_scene = scene_ctx.read();
+      for (&handle, _) in read_scene.presentation_engines.read().iter() {
+        pes_to_destroy.push(handle);
+      }
+    } else {
+      return Err(EngineError::InvalidOperation(
+        "scene_api:destroy_scene | scene not found",
+      ));
+    }
+
+    for pe in pes_to_destroy {
+      // Ignore errors if the PE was already destroyed or is invalid
+      let _ = self.destroy_presentation_engine(scene_id, pe);
+    }
+
+    if self.scenes.write().remove(&scene_id).is_some() {
+      Ok(())
+    } else {
+      Err(EngineError::InvalidOperation(
+        "scene_api:destroy_scene | scene not found on remove",
+      ))
+    }
+  }
+
   /// TODO: Document this item
   pub fn create_empty_scene(&self) -> EngineResult<u64> {
-    let (scene, root_entity) = empty_scene_object()?;
-    let camera_entity = scene.add_camera("camera", Self::camera_start_pos(), root_entity)?;
-    let scene_ctx = Arc::new(RwLock::new(
-      SceneContext::new_empty(Arc::new(scene), root_entity)
-        .with_active_camera_entity(camera_entity)?,
-    ));
+    let (scene, root_entity) = empty_scene_object(Arc::clone(&self.texture_cache))?;
+    let scene_ctx = Arc::new(RwLock::new(SceneContext::new_empty(
+      Arc::new(scene),
+      root_entity,
+    ).with_physics_scene()));
     Ok(self.scenes.write().insert_scene(scene_ctx))
   }
 
@@ -252,9 +280,7 @@ impl SimulationContext {
   // TODO remove
   /// TODO: Document this item
   pub fn create_default_scene(&self) -> EngineResult<u64> {
-    let (scene, root_entity) = empty_scene_object()?;
-
-    let camera_entity = scene.add_camera("camera", Self::camera_start_pos(), root_entity)?;
+    let (scene, root_entity) = empty_scene_object(Arc::clone(&self.texture_cache))?;
 
     let sky_entity = scene.spawn_entity("sky");
     scene.add_component(sky_entity, SkyComponent {})?;
@@ -315,18 +341,24 @@ impl SimulationContext {
     )?;
 
     let grid_entity = scene.spawn_entity("grid");
+    scene.add_component(
+      grid_entity,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    )?;
     scene.add_component(grid_entity, GridComponent {})?;
     scene.set_parent(grid_entity, Some(root_entity));
 
-    let scene_ctx = Arc::new(RwLock::new(
-      SceneContext::new_empty(Arc::new(scene), root_entity)
-        .with_active_camera_entity(camera_entity)?
-        .with_cursor_entity(cursor_entity)?
-        .with_sun_entity(sun_entity)?
-        .with_grid_entity(grid_entity)?
-        .with_sky_entity(sky_entity)?
-        .with_physics_scene(),
-    ));
+    let mut scene_ctx_obj = SceneContext::new_empty(Arc::new(scene), root_entity)
+      .with_cursor_entity(cursor_entity)?
+      .with_sun_entity(sun_entity)?
+      .with_grid_entity(grid_entity)?
+      .with_sky_entity(sky_entity)?
+      .with_physics_scene();
+    let scene_ctx = Arc::new(RwLock::new(scene_ctx_obj));
 
     if let Some(tx) = self.threads.render_thread.tx_opt() {
       let _ = tx.try_send(crate::simulation_api::structs::RenderCommand::GenerateSky);
@@ -414,52 +446,17 @@ impl SimulationContext {
     }
     Ok(())
   }
-
-  // ------------------------- INTERNAL --------------------------------------
-  fn raycast_internal(
-    &self,
-    _scene: RwLockReadGuard<SceneContext>,
-    _ro: Vec3f32,
-    _dir: Vec3f32,
-    _out_hit_entity: *mut u64,
-    _out_px: *mut f32,
-    _out_py: *mut f32,
-    _out_pz: *mut f32,
-  ) -> EngineResult<bool> {
-    // This is now redundant as it's implemented in logic_thread.rs via structs.rs
-    Ok(false)
-  }
 }
+
+// ------------------------- INTERNAL --------------------------------------
 
 // TODO probably to move in scene.rs in rlib
 /// TODO: Document this item
-pub(crate) fn empty_scene_object() -> EngineResult<(Scene, EntityId)> {
-  let scene = Scene::new();
-  scene.register_component::<TransformComponent>(&[]);
-  scene.register_component::<PhysicalMeshComponent>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<CameraComponent>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<CursorComponent>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<SunComponent>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<SkyComponent>(&[]);
-  scene.register_component::<GridComponent>(&[]);
-  scene.register_component::<MarkersComponent>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<SelectedComponent>(&[]);
-  scene.register_component::<FollowingComponent>(&[]);
-  scene.register_component::<HiddenComponent>(&[]);
-  scene.register_component::<BvhDebugComponent>(&[]);
-  scene.register_component::<MeasurementComponent>(&[]);
-  scene.register_component::<crate::scene::ImageBillboardComponent>(&[TypeId::of::<
-    TransformComponent,
-  >()]);
-  scene.register_component::<crate::scene::GizmoComponent>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<crate::scene::ParticleStateComponent>(&[TypeId::of::<
-    TransformComponent,
-  >()]);
-  scene.register_component::<crate::scene::AlmanacPlanet>(&[TypeId::of::<TransformComponent>()]);
-  scene.register_component::<crate::scene::ParticleSystemComponent>(&[TypeId::of::<
-    TransformComponent,
-  >()]);
-  scene.register_component::<crate::scene::ReferenceFrameComponent>(&[]);
+pub(crate) fn empty_scene_object(
+  texture_cache: alloc::sync::Arc<spin::RwLock<crate::simulation::texture_cache::TextureCache>>,
+) -> EngineResult<(Scene, EntityId)> {
+  let scene = Scene::new(texture_cache);
+  scene.register_all_crate_components();
 
   let root_entity = scene.spawn_entity("root");
   scene
@@ -479,7 +476,7 @@ pub(crate) fn empty_scene_object() -> EngineResult<(Scene, EntityId)> {
       crate::scene::ReferenceFrameComponent {
         frame_type: crate::scene::ReferenceFrameType::Macro,
         scale: 1.0,
-        soi_radius: core::f32::MAX,
+        soi_radius: f32::MAX,
         _padding: 0,
       },
     )

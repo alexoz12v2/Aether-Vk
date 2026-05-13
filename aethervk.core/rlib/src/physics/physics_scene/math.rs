@@ -29,7 +29,7 @@ pub trait PhysicsSceneMathExt {
     model_matrix: Mat4x4f32,
     mesh_comp: &PhysicalMeshComponent,
     max_t: f32,
-  ) -> Option<(f32, Vec3f32)>;
+  ) -> Option<(f32, Vec3f32, [f32; 2])>;
 }
 
 impl PhysicsSceneMathExt for PhysicsScene {
@@ -47,12 +47,16 @@ impl PhysicsSceneMathExt for PhysicsScene {
 
       while let Some(node_idx) = stack.pop() {
         let node = &self.gpu_bvh_nodes[node_idx];
-
         let min_bound = Vec3f32::from_array(node.aabb_min);
         let max_bound = Vec3f32::from_array(node.aabb_max);
         let aabb = crate::math::collision::bounds::AABB::<f32>::new(min_bound, max_bound);
 
         let hits_bound = intersection::intersect_ray_aabb(ray, &aabb);
+        
+        if node_idx == 0 {
+            aethervk_oshal_rlib::log!("DEBUG: root node AABB min=[{},{},{}] max=[{},{},{}] hits_bound={}", min_bound.x(), min_bound.y(), min_bound.z(), max_bound.x(), max_bound.y(), max_bound.z(), hits_bound);
+            aethervk_oshal_rlib::log!("DEBUG: ray origin=[{},{},{}] direction=[{},{},{}]", ray.origin.x(), ray.origin.y(), ray.origin.z(), ray.direction.x(), ray.direction.y(), ray.direction.z());
+        }
 
         if hits_bound {
           if node.prim_count > 0 {
@@ -80,17 +84,19 @@ impl PhysicsSceneMathExt for PhysicsScene {
       }
     }
 
-    hit_instances
-  }
+    aethervk_oshal_rlib::log!("DEBUG: intersect_world_bvh_math hit_instances.len() = {}", hit_instances.len());
 
-  fn intersect_mesh_bvh_math(
+    hit_instances
+    }
+
+    fn intersect_mesh_bvh_math(
     &self,
     ro: Vec3f32,
     rd: Vec3f32,
     model_matrix: Mat4x4f32,
     mesh_comp: &PhysicalMeshComponent,
     max_t: f32,
-  ) -> Option<(f32, Vec3f32)> {
+    ) -> Option<(f32, Vec3f32, [f32; 2])> {
     let bvh = mesh_comp.mesh.bvh.as_ref()?; // Early exit if there is no BVH
 
     // 1. Transform Ray into Local Space
@@ -103,6 +109,7 @@ impl PhysicsSceneMathExt for PhysicsScene {
     let local_rd_vec = Vec3f32::from_components(local_rd.x(), local_rd.y(), local_rd.z());
 
     if local_rd_vec.dot(local_rd_vec) < 1e-6 {
+      aethervk_oshal_rlib::log!("DEBUG: intersect_mesh_bvh_math aborted, local_rd is 0");
       return None;
     }
 
@@ -116,11 +123,14 @@ impl PhysicsSceneMathExt for PhysicsScene {
     // 2. BVH Traversal & Möller–Trumbore Math
     let mut closest_t = max_t;
     let mut hit_point = None;
+    let mut hit_uv = [0.0, 0.0];
 
     let mut stack = Vec::new();
     if !bvh.nodes.is_empty() {
       stack.push(0);
     }
+
+    let mut tri_tests = 0;
 
     while let Some(node_idx) = stack.pop() {
       let local_node = &bvh.nodes[node_idx];
@@ -138,13 +148,15 @@ impl PhysicsSceneMathExt for PhysicsScene {
           let prim_end = prim_start + local_node.primitive_count as usize;
 
           for j in prim_start..prim_end {
+            tri_tests += 1;
             let tri_idx = bvh.primitives[j];
+            let idx0 = mesh_comp.mesh.indices[tri_idx * 3] as usize;
+            let idx1 = mesh_comp.mesh.indices[tri_idx * 3 + 1] as usize;
+            let idx2 = mesh_comp.mesh.indices[tri_idx * 3 + 2] as usize;
 
-            let v0 = mesh_comp.mesh.vertices[mesh_comp.mesh.indices[tri_idx * 3] as usize].position;
-            let v1 =
-              mesh_comp.mesh.vertices[mesh_comp.mesh.indices[tri_idx * 3 + 1] as usize].position;
-            let v2 =
-              mesh_comp.mesh.vertices[mesh_comp.mesh.indices[tri_idx * 3 + 2] as usize].position;
+            let v0 = mesh_comp.mesh.vertices[idx0].position;
+            let v1 = mesh_comp.mesh.vertices[idx1].position;
+            let v2 = mesh_comp.mesh.vertices[idx2].position;
 
             let v0 = Vec3f32::from_components(v0[0], v0[1], v0[2]);
             let v1 = Vec3f32::from_components(v1[0], v1[1], v1[2]);
@@ -155,7 +167,7 @@ impl PhysicsSceneMathExt for PhysicsScene {
             let h = local_rd.cross(edge2);
             let a = edge1.dot(h);
 
-            if a > -1e-6 && a < 1e-6 {
+            if a < 1e-6 {
               continue;
             }
 
@@ -191,6 +203,15 @@ impl PhysicsSceneMathExt for PhysicsScene {
                 global_hit.y(),
                 global_hit.z(),
               ));
+
+              let uv0 = mesh_comp.mesh.vertices[idx0].uv;
+              let uv1 = mesh_comp.mesh.vertices[idx1].uv;
+              let uv2 = mesh_comp.mesh.vertices[idx2].uv;
+              let w = 1.0 - u - v;
+              hit_uv = [
+                w * uv0[0] + u * uv1[0] + v * uv2[0],
+                w * uv0[1] + u * uv1[1] + v * uv2[1],
+              ];
             }
           }
         } else {
@@ -204,18 +225,20 @@ impl PhysicsSceneMathExt for PhysicsScene {
       }
     }
 
-    hit_point.map(|point| (closest_t, point))
-  }
+    aethervk_oshal_rlib::log!("DEBUG: intersect_mesh_bvh_math tri_tests={} hit={}", tri_tests, hit_point.is_some());
+
+    hit_point.map(|point| (closest_t, point, hit_uv))
+    }
 }
 
 /// TODO: Document this item
 pub fn closest_intersection(
-  intersections: impl AsRef<[((f32, Vec3f32), EntityId)]>,
-) -> Option<(f32, Vec3f32, EntityId)> {
+  intersections: impl AsRef<[((f32, Vec3f32, [f32; 2]), EntityId)]>,
+) -> Option<(f32, Vec3f32, [f32; 2], EntityId)> {
   intersections
     .as_ref() // Converts the input into a slice: &[(...)]
     .iter() // Iterates over references to the items
     .filter(|item| item.0.0 > 0.0)
     .min_by(|a, b| a.0.0.partial_cmp(&b.0.0).unwrap_or(core::cmp::Ordering::Equal))
-    .map(|&((t, p), e_id)| (t, p, e_id))
+    .map(|&((t, p, uv), e_id)| (t, p, uv, e_id))
 }

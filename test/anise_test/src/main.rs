@@ -10,7 +10,7 @@ use alloc::string::String;
 use aethervk_oshal_rlib::log;
 use aethervk_oshal_rlib::os::fs;
 use anise::almanac::Almanac;
-use anise::time::{Epoch, Duration};
+use anise::time::{Duration, Epoch};
 use bytes::{Bytes, BytesMut};
 
 #[cfg(not(target_env = "msvc"))]

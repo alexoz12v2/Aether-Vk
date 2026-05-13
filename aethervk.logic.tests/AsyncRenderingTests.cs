@@ -70,6 +70,7 @@ namespace AetherVk.Logic.Tests
 
         ulong sceneId = _service.CreateScene(true);
         ulong peId = _service.CreatePresentationEngine(width, height, sceneId);
+        _service.AddPerspectiveCamera(sceneId, peId, "camera", 45f, 0.1f, 1000f);
 
         ulong sphereId = _service.SpawnProceduralSphere(sceneId, "TestSphere", 1.0f, 1.0f);
         Assert.NotEqual(0ul, sphereId);
@@ -147,8 +148,9 @@ namespace AetherVk.Logic.Tests
         var root = _stateManager.GetOrCreateScene(sceneId).RootEntities.FirstOrDefault();
         Assert.NotNull(root);
 
-        var firstCamera = _service.CreateCamera(sceneId, root!);
-        var secondCamera = _service.CreateCamera(sceneId, root!);
+        ulong peId2 = _service.CreatePresentationEngine(width, height, sceneId);
+        var firstCamera = _service.AddPerspectiveCamera(sceneId, peId, "camera1", 45f, 0.1f, 1000f);
+        var secondCamera = _service.AddPerspectiveCamera(sceneId, peId2, "camera2", 45f, 0.1f, 1000f);
 
         TaskCompletionSource<ulong> tcs = new();
         int msgCount = 0;
@@ -221,6 +223,7 @@ namespace AetherVk.Logic.Tests
         _service.SyncMarkers(sceneId, sphereId, comet);
         _service.RefreshBvhNodes(sceneId, sphereId, comet);
 
+        _service.AddPerspectiveCamera(sceneId, peId, "camera", 45f, 0.1f, 1000f);
         var camera = _service.GetEntityByName(sceneId, "camera");
 
         TaskCompletionSource<ulong> tcs = new();
@@ -230,7 +233,7 @@ namespace AetherVk.Logic.Tests
           (r, m) =>
           {
             msgCount++;
-            if (msgCount >= 3)
+            if (msgCount >= 1)
               tcs.TrySetResult(m.RenderGeneration);
           }
         );

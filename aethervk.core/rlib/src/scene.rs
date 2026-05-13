@@ -24,6 +24,8 @@ use crate::{
   types,
   types::{EngineError, EngineResult},
 };
+use aethervk_oshal_rlib::math::vector::Vector;
+use aethervk_oshal_rlib::os::pool::tasklet::ThreadPoolExt;
 use aethervk_oshal_rlib::{
   math::matrix::Matrix4,
   math::quaternion::Quaternion,
@@ -45,11 +47,17 @@ pub mod almanac_planet;
 pub mod camera;
 pub mod interaction;
 pub mod particles;
+pub mod script_components;
 pub mod text;
 pub mod trajectory;
+pub mod ui;
 
+use crate::simulation_api::structs::SendPtrMut;
 pub use almanac_planet::AlmanacPlanet;
-pub use particles::{GaussianParams, ParticleData, ParticleEmitterConfig, ParticleSystemComponent};
+pub use particles::{
+  GaussianParams, ParticleData, ParticleEmitterComponent, ParticleSystemComponent,
+};
+pub use ui::{Transform2DComponent, UiComponent};
 
 /// An error that can occur when adding a component.
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -143,14 +151,26 @@ pub trait Component: 'static + Send + Sync + core::fmt::Debug {
 // === Component Definitions ===
 
 /// Defines the position, rotation, and scale of an entity.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TransformComponent {
   pub position: Vec3f32,
   /// Stored as a quaternion.
   pub rotation: Quat,
   pub scale: Vec3f32,
 }
+
+impl Default for TransformComponent {
+  fn default() -> Self {
+    Self {
+      position: Vec3f32::zero(),
+      rotation: Quat::identity(),
+      scale: Vec3f32::one(),
+    }
+  }
+}
+
 impl Component for TransformComponent {}
+
 impl TransformComponent {
   /// Constructs a 4x4 transformation matrix from the component's TRS
   /// (Translation, Rotation, Scale) properties.
@@ -185,14 +205,129 @@ impl TransformComponent {
   }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CameraProjection {
+  Perspective {
+    fov: f32,
+    aspect_ratio: f32,
+    near: f32,
+    far: f32,
+  },
+  Orthographic {
+    left: f32,
+    right: f32,
+    bottom: f32,
+    top: f32,
+    near: f32,
+    far: f32,
+  },
+}
+
+impl Default for CameraProjection {
+  fn default() -> Self {
+    Self::Perspective {
+      fov: 45.0_f32.to_radians(),
+      aspect_ratio: 800.0 / 600.0,
+      near: 0.1,
+      far: 10000.0,
+    }
+  }
+}
+
 /// Represents a camera in the scene.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct CameraComponent {
-  pub projection: Mat4x4f32,
-  pub near_plane: f32,
-  pub far_plane: f32,
+  pub projection: CameraProjection,
 }
 impl Component for CameraComponent {}
+
+impl CameraComponent {
+  pub fn new_persp(fov: f32, aspect_ratio: f32, near: f32, far: f32) -> Self {
+    Self {
+      projection: CameraProjection::Perspective {
+        fov,
+        aspect_ratio,
+        near,
+        far,
+      },
+    }
+  }
+
+  pub fn new_ortho(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
+    Self {
+      projection: CameraProjection::Orthographic {
+        left,
+        right,
+        bottom,
+        top,
+        near,
+        far,
+      },
+    }
+  }
+
+  pub fn update_for_extent(&mut self, width: u32, height: u32) {
+    let aspect_ratio = if height == 0 {
+      1.0
+    } else {
+      width as f32 / height as f32
+    };
+    match &mut self.projection {
+      CameraProjection::Perspective {
+        aspect_ratio: aspect,
+        ..
+      } => {
+        *aspect = aspect_ratio;
+      }
+      CameraProjection::Orthographic {
+        left,
+        right,
+        bottom,
+        top,
+        ..
+      } => {
+        let current_height = *top - *bottom;
+        let half_w = (current_height * aspect_ratio) / 2.0;
+        let center_x = (*right + *left) / 2.0;
+        *left = center_x - half_w;
+        *right = center_x + half_w;
+      }
+    }
+  }
+
+  pub fn get_projection_matrix(&self) -> Mat4x4f32 {
+    match self.projection {
+      CameraProjection::Perspective {
+        fov,
+        aspect_ratio,
+        near,
+        far,
+      } => Mat4x4f32::perspective_vk(fov, aspect_ratio, near, far),
+      CameraProjection::Orthographic {
+        left,
+        right,
+        bottom,
+        top,
+        near,
+        far,
+      } => Mat4x4f32::orthographic_vk(left, right, bottom, top, near, far),
+    }
+  }
+
+  pub fn near_plane(&self) -> f32 {
+    match self.projection {
+      CameraProjection::Perspective { near, .. } => near,
+      CameraProjection::Orthographic { near, .. } => near,
+    }
+  }
+
+  pub fn far_plane(&self) -> f32 {
+    match self.projection {
+      CameraProjection::Perspective { far, .. } => far,
+      CameraProjection::Orthographic { far, .. } => far,
+    }
+  }
+}
 
 /// A marker component for entities that should be rendered as a cursor.
 #[derive(Debug, PartialEq)]
@@ -248,11 +383,6 @@ impl PartialEq for PhysicalMeshComponent {
 }
 
 impl Component for PhysicalMeshComponent {}
-
-/// A marker component for entities that should be rendered.
-#[derive(Debug)]
-pub struct Renderable;
-impl Component for Renderable {}
 
 /// Represents a 2D texture billboard.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -310,10 +440,25 @@ impl Component for FollowingComponent {}
 pub struct HiddenComponent {}
 impl Component for HiddenComponent {}
 
+/// A custom force emitter applying physics on rigid bodies and particles
+#[derive(Clone, Copy, Debug)]
+pub enum ForceEmitterComponent {
+  Gravity {
+    mu: f32,
+  },
+  Planar {
+    normal: Vec3f32,
+    base_force: f32,
+    trunc_distance: f32,
+  },
+}
+impl Component for ForceEmitterComponent {}
+
 /// A component that stores debug render states for BVH nodes
 #[derive(Clone, Debug)]
 pub struct BvhDebugComponent {
   pub node_render_states: alloc::vec::Vec<bool>,
+  pub use_new_path: bool,
 }
 impl Component for BvhDebugComponent {}
 
@@ -339,29 +484,14 @@ impl Default for MeasurementComponent {
   }
 }
 
-/// A particle emitter, defining the properties of particles to be spawned.
-#[derive(Clone, Debug)]
-pub struct ParticleEmitterComponent {
-  /// Number of particles to spawn per second.
-  pub rate: f32,
-  /// The lifetime of each particle, in seconds.
-  pub lifetime: f32,
-  /// Initial velocity of spawned particles.
-  pub initial_velocity: Vec3f32,
+/// A component that defines a uniform or gradient background color
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct BackgroundComponent {
+  pub color_top: [f32; 4],
+  pub color_bottom: [f32; 4],
 }
-impl Component for ParticleEmitterComponent {}
 
-/// State of an individual particle in the simulation.
-#[derive(Clone, Debug)]
-pub struct ParticleStateComponent {
-  /// The simulation time when the particle was created.
-  pub created_at: f32,
-  /// The total lifetime of this particle.
-  pub lifetime: f32,
-  /// The current velocity of the particle.
-  pub velocity: Vec3f32,
-}
-impl Component for ParticleStateComponent {}
+impl Component for BackgroundComponent {}
 
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -430,7 +560,14 @@ pub enum RenderableDataRef<'a> {
   Markers(&'a MarkersComponent),
   Measurement(&'a MeasurementComponent),
   Gizmo(&'a GizmoComponent),
-  ParticleSystem(&'a particles::ParticleSystemComponent),
+  BvhWireframe(
+    &'a BvhDebugComponent,
+    &'a [crate::math::collision::linear_bvh::LinearBound<f32>],
+  ),
+  ParticleSystem(
+    &'a particles::ParticleSystemComponent,
+    &'a particles::ParticleEmitterComponent,
+  ),
 }
 
 impl<'a> RenderableDataRef<'a> {
@@ -443,7 +580,8 @@ impl<'a> RenderableDataRef<'a> {
       RenderableDataRef::Markers(m) => (m.markers.len() * 4) as u32,
       RenderableDataRef::Measurement(_) => 6, // 6 vertices for line list
       RenderableDataRef::Gizmo(_) => 6,
-      RenderableDataRef::ParticleSystem(p) => (p.particles.read().len() * 4) as u32,
+      RenderableDataRef::BvhWireframe(_, nodes) => (nodes.len() * 24) as u32, // Approximation
+      RenderableDataRef::ParticleSystem(p, _) => (p.particles.read().len() * 4) as u32,
     }
   }
 }
@@ -639,6 +777,7 @@ pub struct Scene {
   component_meta: RwLock<HashMap<TypeId, ComponentMeta>>,
   hierarchy: RwLock<SceneHierarchy>,
   names: RwLock<HashMap<EntityId, String>>,
+  pub texture_cache: alloc::sync::Arc<spin::RwLock<crate::simulation::texture_cache::TextureCache>>,
 }
 
 #[derive(Default, Debug)]
@@ -673,6 +812,12 @@ impl SceneHierarchy {
       }
     }
   }
+
+  /// Returns the root entity of the scene.
+  /// If the hierarchy is empty, it returns `None`.
+  pub fn get_first_root(&self) -> Option<EntityId> {
+    self.children.keys().copied().find(|id| !self.parents.contains_key(id))
+  }
 }
 
 #[repr(u32)]
@@ -692,7 +837,9 @@ impl Into<bool> for HasComponentResultEnum {
 
 impl Scene {
   /// TODO: Document this item
-  pub fn new() -> Self {
+  pub fn new(
+    texture_cache: alloc::sync::Arc<spin::RwLock<crate::simulation::texture_cache::TextureCache>>,
+  ) -> Self {
     let empty_archetype = Archetype {
       components: HashMap::new(),
       component_types: HashSet::new(),
@@ -706,7 +853,13 @@ impl Scene {
       component_meta: RwLock::new(HashMap::new()),
       hierarchy: RwLock::new(SceneHierarchy::default()),
       names: RwLock::new(HashMap::new()),
+      texture_cache,
     }
+  }
+
+  pub fn get_root(&self) -> Option<EntityId> {
+    let hierarchy = self.hierarchy.read();
+    hierarchy.get_first_root()
   }
 
   /// TODO: Document this item
@@ -748,7 +901,7 @@ impl Scene {
   }
 
   /// TODO: Document this item
-  pub fn add_camera<S>(
+  pub fn add_default_camera<S>(
     &self,
     name: S,
     inital_pos: Vec3f32,
@@ -778,14 +931,7 @@ impl Scene {
         scale: Vec3f32::from_components(1.0, 1.0, 1.0),
       },
     )?;
-    self.add_component(
-      camera_entity,
-      CameraComponent {
-        projection: Mat4x4f32::perspective_vk(45.0f32.to_radians(), 800.0 / 600.0, 0.1, 10000.0),
-        near_plane: 0.1,
-        far_plane: 10000.0,
-      },
-    )?;
+    self.add_component(camera_entity, CameraComponent::default())?;
     self.set_parent(camera_entity, Some(parent));
     Ok(camera_entity)
   }
@@ -811,6 +957,15 @@ impl Scene {
   }
 
   /// TODO: Document this item
+  pub fn get_children(&self, entity: EntityId) -> Option<alloc::vec::Vec<EntityId>> {
+    let entities = self.entities.read();
+    if !entities.contains_key(entity) {
+      return None;
+    }
+    self.hierarchy.read().children.get(&entity).cloned()
+  }
+
+  /// TODO: Document this item
   pub fn get_entity_component_names(&self, entity: EntityId) -> Vec<&'static str> {
     let archetypes = self.archetypes.read();
     let entities = self.entities.read();
@@ -831,6 +986,64 @@ impl Scene {
   }
 
   /// TODO: Document this item
+  pub fn spawn_reference_frame(
+    &self,
+    name: &str,
+    parent: Option<EntityId>,
+    transform: TransformComponent,
+    frame_type: ReferenceFrameType,
+    scale: f32,
+    soi_radius: f32,
+  ) -> EntityId {
+    let entity = self.spawn_entity(name);
+    if let Some(p) = parent {
+      self.set_parent(entity, Some(p));
+    }
+    let _ = self.add_component(entity, transform);
+    let _ = self.add_component(
+      entity,
+      ReferenceFrameComponent {
+        frame_type,
+        scale,
+        soi_radius,
+        _padding: 0,
+      },
+    );
+    entity
+  }
+
+  // TODO error report with rollback (ie removal)
+  pub fn spawn_camera(
+    &self,
+    name: &str,
+    parent: Option<EntityId>,
+    t: TransformComponent,
+    c: CameraComponent,
+  ) -> EntityId {
+    let entity = self.spawn_entity(name);
+    if let Some(p) = parent {
+      self.set_parent(entity, Some(p));
+    }
+    let _ = self.add_component(entity, t);
+    let _ = self.add_component(entity, c);
+    entity
+  }
+
+  pub fn spawn_rigidbody(
+    &self,
+    name: &str,
+    parent: Option<EntityId>,
+    transform: TransformComponent,
+  ) -> EntityId {
+    let entity = self.spawn_entity(name);
+    if let Some(p) = parent {
+      self.set_parent(entity, Some(p));
+    }
+    let _ = self.add_component(entity, transform);
+    // Dynamic physics state would be initialized elsewhere based on this
+    entity
+  }
+
   pub fn spawn_entity(&self, name: impl Into<alloc::string::String>) -> EntityId {
     let mut actual_name = name.into();
     {
@@ -898,6 +1111,53 @@ impl Scene {
     self.names.write().insert(entity, actual_name);
   }
 
+  pub fn register_all_crate_components(&self) {
+    let transform_type_id = [TypeId::of::<TransformComponent>()];
+    let transform_and_mesh = [
+      TypeId::of::<TransformComponent>(),
+      TypeId::of::<PhysicalMeshComponent>(),
+    ];
+
+    // this module
+    self.register_component::<TransformComponent>(&[]);
+    self.register_component::<CameraComponent>(&transform_type_id);
+    self.register_component::<CursorComponent>(&transform_type_id);
+    self.register_component::<MarkersComponent>(&transform_type_id);
+    self.register_component::<PhysicalMeshComponent>(&transform_type_id);
+    self.register_component::<ImageBillboardComponent>(&transform_type_id);
+    self.register_component::<SunComponent>(&transform_type_id);
+    self.register_component::<SkyComponent>(&[]);
+    self.register_component::<BackgroundComponent>(&[]);
+    self.register_component::<GizmoComponent>(&transform_type_id);
+    self.register_component::<GridComponent>(&transform_type_id);
+    self.register_component::<SelectedComponent>(&transform_type_id);
+    self.register_component::<FollowingComponent>(&transform_type_id);
+    self.register_component::<HiddenComponent>(&[]);
+    self.register_component::<ForceEmitterComponent>(&transform_type_id);
+    self.register_component::<BvhDebugComponent>(&transform_type_id);
+    self.register_component::<MeasurementComponent>(&[]);
+    self.register_component::<ParticleEmitterComponent>(&transform_and_mesh);
+    self.register_component::<particles::ParticleSystemComponent>(&transform_type_id);
+    self.register_component::<ReferenceFrameComponent>(&[]);
+    self.register_component::<KinematicComponent>(&transform_and_mesh);
+
+    // ui module
+    self.register_component::<ui::Transform2DComponent>(&[]);
+    self.register_component::<ui::UiComponent>(&[]);
+    self.register_component::<ui::ScreenSpaceTextComponent>(&[TypeId::of::<
+      ui::Transform2DComponent,
+    >()]);
+
+    // trajectory module
+    self.register_component::<trajectory::TrajectoryComponent>(&transform_type_id);
+
+    // script components module
+    self.register_component::<script_components::UpdateComponent>(&[]);
+
+    // almanac planet module
+    self.register_component::<almanac_planet::AlmanacPlanet>(&transform_and_mesh);
+  }
+
   /// TODO: Document this item
   pub fn register_component<T: Component>(&self, dependencies: &[TypeId]) {
     let mut meta = self.component_meta.write();
@@ -943,6 +1203,11 @@ impl Scene {
           .find(|t| !src_archetype.component_types.contains(*t))
           .unwrap();
         let missing_name = meta.get(missing_dep).map_or("Unknown", |m| m.type_name);
+        aethervk_oshal_rlib::log!(
+          "Missing dependency: {} when adding {}",
+          missing_name,
+          core::any::type_name::<T>()
+        );
         return Err(AddComponentError::DependencyNotSatisfied {
           missing: missing_name,
         });
@@ -1372,6 +1637,138 @@ impl Scene {
   }
 
   /// TODO: Document this item
+  pub fn query3_mut<T1: Component, T2: Component, T3: Component, F>(&self, mut f: F)
+  where
+    F: FnMut(EntityId, &mut T1, &mut T2, &mut T3),
+  {
+    let type_t1 = TypeId::of::<T1>();
+    let type_t2 = TypeId::of::<T2>();
+    let type_t3 = TypeId::of::<T3>();
+    let archetypes = self.archetypes.read();
+
+    for archetype in archetypes.iter() {
+      if archetype.components.contains_key(&type_t1)
+        && archetype.components.contains_key(&type_t2)
+        && archetype.components.contains_key(&type_t3)
+      {
+        let mut comp_storage1_lock = archetype.components.get(&type_t1).unwrap().write();
+        let mut comp_storage2_lock = archetype.components.get(&type_t2).unwrap().write();
+        let mut comp_storage3_lock = archetype.components.get(&type_t3).unwrap().write();
+
+        let components1 =
+          comp_storage1_lock.as_mut_any().downcast_mut::<Vec<Option<T1>>>().unwrap();
+        let components2 =
+          comp_storage2_lock.as_mut_any().downcast_mut::<Vec<Option<T2>>>().unwrap();
+        let components3 =
+          comp_storage3_lock.as_mut_any().downcast_mut::<Vec<Option<T3>>>().unwrap();
+
+        for (i, opt_entity) in archetype.entities.iter().enumerate() {
+          if let (Some(entity_id), Some(c1), Some(c2), Some(c3)) = (
+            opt_entity,
+            &mut components1[i],
+            &mut components2[i],
+            &mut components3[i],
+          ) {
+            f(*entity_id, c1, c2, c3);
+          }
+        }
+      }
+    }
+  }
+
+  pub fn query3_mut_par<T1: Component, T2: Component, T3: Component, F>(
+    &self,
+    pool: &ThreadPool,
+    f: F,
+  ) where
+    F: Fn(EntityId, &mut T1, &mut T2, &mut T3) + Send + Sync,
+    T1: Send,
+    T2: Send,
+    T3: Send,
+  {
+    let type_t1 = TypeId::of::<T1>();
+    let type_t2 = TypeId::of::<T2>();
+    let type_t3 = TypeId::of::<T3>();
+    let archetypes = self.archetypes.read();
+
+    // 1. Completely erase the type and lifetime by casting the thin pointer to a usize.
+    // usize is completely detached from the borrow checker and is Send + Sync + 'static.
+    let f_ptr = &f as *const F as usize;
+
+    let mut tasks = Vec::new();
+    let mut held_locks = Vec::new();
+
+    for archetype in archetypes.iter() {
+      if archetype.components.contains_key(&type_t1)
+        && archetype.components.contains_key(&type_t2)
+        && archetype.components.contains_key(&type_t3)
+      {
+        let mut comp_storage1_lock = archetype.components.get(&type_t1).unwrap().write();
+        let mut comp_storage2_lock = archetype.components.get(&type_t2).unwrap().write();
+        let mut comp_storage3_lock = archetype.components.get(&type_t3).unwrap().write();
+
+        let components1 =
+          comp_storage1_lock.as_mut_any().downcast_mut::<Vec<Option<T1>>>().unwrap();
+        let components2 =
+          comp_storage2_lock.as_mut_any().downcast_mut::<Vec<Option<T2>>>().unwrap();
+        let components3 =
+          comp_storage3_lock.as_mut_any().downcast_mut::<Vec<Option<T3>>>().unwrap();
+
+        struct Ptrs<A, B, C> {
+          id: EntityId,
+          c1: *mut A,
+          c2: *mut B,
+          c3: *mut C,
+        }
+        struct SendWrapped<A, B, C>(Ptrs<A, B, C>);
+        unsafe impl<A, B, C> Send for SendWrapped<A, B, C> {}
+        unsafe impl<A, B, C> Sync for SendWrapped<A, B, C> {}
+
+        let mut ptrs: Vec<SendWrapped<T1, T2, T3>> = Vec::with_capacity(archetype.entities.len());
+        for (i, opt_entity) in archetype.entities.iter().enumerate() {
+          if let (Some(entity_id), Some(c1), Some(c2), Some(c3)) = (
+            opt_entity,
+            &mut components1[i],
+            &mut components2[i],
+            &mut components3[i],
+          ) {
+            ptrs.push(SendWrapped(Ptrs {
+              id: *entity_id,
+              c1: c1 as *mut _,
+              c2: c2 as *mut _,
+              c3: c3 as *mut _,
+            }));
+          }
+        }
+
+        // Copy the usize so it can be moved into the closure
+        let f_ptr_clone = f_ptr;
+
+        if !ptrs.is_empty() {
+          if let Ok(task) = pool.spawn_tasklet(None, move || {
+            // 2. Cast the usize back to a pointer, then to a reference safely inside the thread
+            let f_ref = unsafe { &*(f_ptr_clone as *const F) };
+
+            for ptr in ptrs {
+              let c1 = unsafe { &mut *ptr.0.c1 };
+              let c2 = unsafe { &mut *ptr.0.c2 };
+              let c3 = unsafe { &mut *ptr.0.c3 };
+
+              f_ref(ptr.0.id, c1, c2, c3);
+            }
+          }) {
+            tasks.push(task);
+            held_locks.push((comp_storage1_lock, comp_storage2_lock, comp_storage3_lock));
+          }
+        }
+      }
+    }
+
+    for task in tasks {
+      let _ = task.wait();
+    }
+  }
+
   pub fn query1_res<T: Component, F, R>(&self, mut f: F) -> Vec<(R, EntityId)>
   where
     F: FnMut(EntityId, &T) -> Option<R>,
@@ -1838,8 +2235,15 @@ impl Scene {
       };
 
       if let Some(parent_id) = parent_opt {
-        if let Some(parent_transform) = self.with_component(parent_id, |c: &TransformComponent| *c)
+        if let Some(mut parent_transform) =
+          self.with_component(parent_id, |c: &TransformComponent| *c)
         {
+          let mut frame_scale = 1.0;
+          let _ = self.with_component(parent_id, |c: &ReferenceFrameComponent| {
+            frame_scale = c.scale;
+          });
+          parent_transform.scale = parent_transform.scale * frame_scale;
+
           accumulated_transform =
             Self::combine_transforms(&parent_transform, &accumulated_transform);
         }
@@ -1861,8 +2265,14 @@ impl Scene {
     if target_entity == reference_entity {
       return Some(TransformComponent {
         position: Vec3f32::from_components(0.0, 0.0, 0.0),
-        rotation: Quat::identity(),
-        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        rotation: self
+          .global_transform(target_entity)
+          .map(|t| t.rotation)
+          .unwrap_or(Quat::identity()),
+        scale: self
+          .global_transform(target_entity)
+          .map(|t| t.scale)
+          .unwrap_or(Vec3f32::from_components(1.0, 1.0, 1.0)),
       });
     }
 
@@ -1893,7 +2303,27 @@ impl Scene {
     }
 
     if lca.is_none() {
-      return None;
+      // Fallback to old behavior: absolute global transforms
+      let target_global = self.global_transform(target_entity)?;
+      let ref_global = self.global_transform(reference_entity)?;
+
+      let safe_div_zero = |a: f32, b: f32| {
+        if b > -1e-15_f32 && b < 1e-15_f32 {
+          0.0
+        } else {
+          a / b
+        }
+      };
+
+      return Some(TransformComponent {
+        scale: Vec3f32::from_components(
+          safe_div_zero(target_global.scale.x(), ref_global.scale.x()),
+          safe_div_zero(target_global.scale.y(), ref_global.scale.y()),
+          safe_div_zero(target_global.scale.z(), ref_global.scale.z()),
+        ),
+        rotation: target_global.rotation, // World rotation
+        position: target_global.position - ref_global.position, // RTE World Position
+      });
     }
 
     let mut target_to_lca = TransformComponent {
@@ -1960,21 +2390,21 @@ impl Scene {
       }
     };
 
-    let inv_rot = ref_to_lca.rotation.inverse();
     let diff_pos = target_to_lca.position - ref_to_lca.position;
-    let unrotated_diff = inv_rot.rotate_vector(diff_pos);
 
+    // RTE Approach: Keep the orientation in the world (LCA) space!
+    // Do NOT unrotate it by the camera's rotation. The Camera View Matrix will handle rotation.
     Some(TransformComponent {
       scale: Vec3f32::from_components(
         safe_div_zero(target_to_lca.scale.x(), ref_to_lca.scale.x()),
         safe_div_zero(target_to_lca.scale.y(), ref_to_lca.scale.y()),
         safe_div_zero(target_to_lca.scale.z(), ref_to_lca.scale.z()),
       ),
-      rotation: inv_rot * target_to_lca.rotation,
+      rotation: target_to_lca.rotation,
       position: Vec3f32::from_components(
-        safe_div_zero(unrotated_diff.x(), ref_to_lca.scale.x()),
-        safe_div_zero(unrotated_diff.y(), ref_to_lca.scale.y()),
-        safe_div_zero(unrotated_diff.z(), ref_to_lca.scale.z()),
+        safe_div_zero(diff_pos.x(), ref_to_lca.scale.x()),
+        safe_div_zero(diff_pos.y(), ref_to_lca.scale.y()),
+        safe_div_zero(diff_pos.z(), ref_to_lca.scale.z()),
       ),
     })
   }
@@ -2277,6 +2707,71 @@ impl Scene {
   }
 
   /// TODO: Document this item
+  pub fn query2_res_par<T1: Component, T2: Component, F, R>(
+    &self,
+    pool: &ThreadPool,
+    f: F,
+  ) -> alloc::vec::Vec<(R, EntityId)>
+  where
+    F: Fn(EntityId, &T1, &T2) -> Option<R> + Send + Sync,
+    R: Send,
+  {
+    let type_t1 = core::any::TypeId::of::<T1>();
+    let type_t2 = core::any::TypeId::of::<T2>();
+
+    assert_ne!(
+      type_t1, type_t2,
+      "Cannot query the same component type twice in a single pass."
+    );
+
+    let num_archetypes = self.archetypes.read().len();
+
+    if num_archetypes == 0 {
+      return alloc::vec::Vec::new();
+    }
+
+    let mut chunk_results: alloc::vec::Vec<alloc::vec::Vec<(R, EntityId)>> =
+      core::iter::repeat_with(alloc::vec::Vec::new).take(num_archetypes).collect();
+
+    let results_ptr = ErasedMutPtr::new(chunk_results.as_mut_ptr());
+
+    self.iter_par_archetypes(pool, |arch_id, archetype| {
+      if archetype.components.contains_key(&type_t1) && archetype.components.contains_key(&type_t2)
+      {
+        let comp_storage1_lock = archetype.components.get(&type_t1).unwrap();
+        let comp_storage2_lock = archetype.components.get(&type_t2).unwrap();
+
+        let comp_storage1 = comp_storage1_lock.read();
+        let comp_storage2 = comp_storage2_lock.read();
+
+        if let (Some(components_vec1), Some(components_vec2)) = (
+          comp_storage1.as_any().downcast_ref::<alloc::vec::Vec<Option<T1>>>(),
+          comp_storage2.as_any().downcast_ref::<alloc::vec::Vec<Option<T2>>>(),
+        ) {
+          let result_vec =
+            unsafe { &mut *results_ptr.get::<alloc::vec::Vec<(R, EntityId)>>().add(arch_id) };
+
+          for (i, opt_entity) in archetype.entities.iter().enumerate() {
+            if let (Some(entity), Some(c1), Some(c2)) =
+              (opt_entity, &components_vec1[i], &components_vec2[i])
+            {
+              if let Some(res) = f(*entity, c1, c2) {
+                result_vec.push((res, *entity));
+              }
+            }
+          }
+        }
+      }
+    });
+
+    let mut final_results = alloc::vec::Vec::new();
+    for mut res in chunk_results {
+      final_results.append(&mut res);
+    }
+    final_results
+  }
+
+  /// TODO: Document this item
   pub fn query1_mut_par<T: Component, F>(&self, pool: &ThreadPool, f: F)
   where
     F: Fn(EntityId, &mut T) + Send + Sync,
@@ -2476,7 +2971,9 @@ mod tests {
 
   // Helper function to build a pre-registered testing scene
   fn setup_scene() -> Scene {
-    let scene = Scene::new();
+    let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+      crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
     scene.register_component::<HealthComp>(&[]);
     scene.register_component::<VelocityComp>(&[]);
     scene.register_component::<TransformComponent>(&[]);
@@ -2808,7 +3305,9 @@ mod tests {
 
   #[test]
   fn test_relative_transform() {
-    let scene = Scene::new();
+    let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+      crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
     scene.register_component::<TransformComponent>(&[]);
     scene.register_component::<ReferenceFrameComponent>(&[]);
 
@@ -2905,5 +3404,155 @@ mod tests {
       -au_to_km - 1000.0,
       sun_pos_in_km.x()
     );
+  }
+
+  #[test]
+  fn test_hidden_component_subtree() {
+    let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+      crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
+    scene.register_component::<TransformComponent>(&[]);
+    scene.register_component::<HiddenComponent>(&[]);
+    let root = scene.spawn_entity("root");
+    let child = scene.spawn_entity("child");
+    scene.set_parent(child, Some(root));
+    scene.add_component(root, HiddenComponent {}).unwrap();
+
+    let mut hidden_set = hashbrown::HashSet::new();
+    scene.query1::<HiddenComponent, _>(|id, _| {
+      scene.traverse_dfs_pre_order(
+        id,
+        &mut hidden_set,
+        &|_, _| true,
+        &mut |_, child_id, set| {
+          set.insert(child_id);
+          true
+        },
+      );
+    });
+
+    assert!(hidden_set.contains(&child));
+  }
+
+  #[test]
+  fn test_remove_column_if() {
+    let scene = setup_scene();
+    for i in 0..10 {
+      let e = scene.spawn_entity("Ent");
+      scene.add_component(e, HealthComp { hp: i }).unwrap();
+    }
+    scene.remove_column_if(|_, h: &HealthComp| h.hp % 2 == 0);
+
+    let mut count = 0;
+    scene.query1(|_, h: &HealthComp| {
+      assert!(h.hp % 2 != 0);
+      count += 1;
+    });
+    assert_eq!(count, 5);
+  }
+
+  #[test]
+  fn test_remove_column_par() {
+    let pool = ThreadPool::new(4).unwrap();
+    let scene = setup_scene();
+    for _ in 0..100 {
+      let e = scene.spawn_entity("Ent");
+      scene.add_component(e, HealthComp { hp: 100 }).unwrap();
+      scene.add_component(e, VelocityComp { speed: 5 }).unwrap();
+    }
+
+    scene.remove_column_par::<HealthComp>(&pool);
+
+    let mut health_count = 0;
+    scene.query1(|_e, _h: &HealthComp| health_count += 1);
+    assert_eq!(health_count, 0);
+
+    let mut vel_count = 0;
+    scene.query1(|_e, _v: &VelocityComp| vel_count += 1);
+    assert_eq!(vel_count, 100);
+  }
+
+  #[test]
+  fn test_remove_column_if_par() {
+    let pool = ThreadPool::new(4).unwrap();
+    let scene = setup_scene();
+    for i in 0..100 {
+      let e = scene.spawn_entity("Ent");
+      scene.add_component(e, HealthComp { hp: i }).unwrap();
+    }
+
+    scene.remove_column_if_par::<HealthComp, _>(&pool, |_, h| h.hp < 50);
+
+    let mut health_count = 0;
+    scene.query1(|_e, h: &HealthComp| {
+      assert!(h.hp >= 50);
+      health_count += 1;
+    });
+    assert_eq!(health_count, 50);
+  }
+
+  #[test]
+  fn test_remove_first_component() {
+    let scene = setup_scene();
+    let e1 = scene.spawn_entity("Ent1");
+    scene.add_component(e1, HealthComp { hp: 10 }).unwrap();
+    let e2 = scene.spawn_entity("Ent2");
+    scene.add_component(e2, HealthComp { hp: 20 }).unwrap();
+
+    let removed = scene.remove_first_component::<HealthComp>();
+    assert!(removed.is_some());
+    let removed_id = removed.unwrap();
+
+    let mut count = 0;
+    scene.query1(|_e, _h: &HealthComp| count += 1);
+    assert_eq!(count, 1);
+    assert_eq!(
+      scene.has_component::<HealthComp>(removed_id),
+      HasComponentResultEnum::ComponentNotFound
+    );
+  }
+
+  #[test]
+  fn test_has_component() {
+    let scene = setup_scene();
+    let e1 = scene.spawn_entity("Ent1");
+    scene.add_component(e1, HealthComp { hp: 10 }).unwrap();
+
+    assert_eq!(
+      scene.has_component::<HealthComp>(e1),
+      HasComponentResultEnum::EntityHasComponent
+    );
+    assert_eq!(
+      scene.has_component::<VelocityComp>(e1),
+      HasComponentResultEnum::ComponentNotFound
+    );
+
+    scene.remove_entity(e1);
+    assert_eq!(
+      scene.has_component::<HealthComp>(e1),
+      HasComponentResultEnum::EntityNotFound
+    );
+  }
+
+  #[test]
+  fn test_with_component() {
+    let scene = setup_scene();
+    let e1 = scene.spawn_entity("Ent1");
+    scene.add_component(e1, HealthComp { hp: 42 }).unwrap();
+
+    let val = scene.with_component(e1, |h: &HealthComp| h.hp);
+    assert_eq!(val, Some(42));
+
+    let none_val = scene.with_component(e1, |v: &VelocityComp| v.speed);
+    assert_eq!(none_val, None);
+
+    let val_mut = scene.with_component_mut(e1, |h: &mut HealthComp| {
+      h.hp += 1;
+      h.hp
+    });
+    assert_eq!(val_mut, Some(43));
+
+    let val_after = scene.with_component(e1, |h: &HealthComp| h.hp);
+    assert_eq!(val_after, Some(43));
   }
 }

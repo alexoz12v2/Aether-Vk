@@ -5,15 +5,16 @@ use crate::gpu::RenderDevice;
 use crate::gpu::frame::CameraRenderData;
 use crate::math::collision::linear_bvh::LinearBound;
 use crate::scene::{
-  BillboardType, BvhDebugComponent, CameraComponent, CursorComponent, EntityId, FollowingComponent,
-  GridComponent, HiddenComponent, ImageBillboardComponent, MarkersComponent, MeasurementComponent,
-  PhysicalMeshComponent, SelectedComponent, SkyComponent, SunComponent, TransformComponent,
+  BackgroundComponent, BillboardType, BvhDebugComponent, CameraComponent, CursorComponent,
+  EntityId, FollowingComponent, GridComponent, HiddenComponent, ImageBillboardComponent,
+  MarkersComponent, MeasurementComponent, PhysicalMeshComponent, SelectedComponent, SkyComponent,
+  SunComponent, TransformComponent,
 };
 use crate::types::{GpuError, GpuResult};
 use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
 use aethervk_oshal_rlib::math::matrix::{Matrix4, MatrixVectorMul};
 use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
+use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
 use alloc::vec::Vec;
 
 // TODO extensive unit testing. (with valid scenes of course scene.validate)
@@ -56,11 +57,16 @@ pub struct RenderSceneExtraction {
   pub extracted_markers: Vec<(TransformComponent, MarkersComponent)>,
   pub extracted_billboards: Vec<(Mat4x4f32, u64, BillboardType)>,
   pub extracted_measurements: Vec<(Vec3f32, Vec3f32, f32, u32)>,
-  pub extracted_bvhs: Vec<(Vec<LinearBound<f32>>, usize)>,
+  pub extracted_bvhs: Vec<(
+    BvhDebugComponent,
+    Vec<LinearBound<f32>>,
+    Mat4x4f32,
+    EntityId,
+  )>,
   pub extracted_particles: Vec<(
     EntityId,
     alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
-    crate::scene::particles::ParticleEmitterConfig,
+    crate::scene::particles::ParticleEmitterComponent,
   )>,
   pub extracted_gizmos: Vec<(EntityId, Mat4x4f32, f32)>,
   pub extracted_trajectories: Vec<(
@@ -68,6 +74,12 @@ pub struct RenderSceneExtraction {
     crate::scene::trajectory::TrajectoryComponent,
     Mat4x4f32,
   )>,
+  pub extracted_ui: Vec<crate::gpu::UiElementGpu>,
+  pub extracted_texts: Vec<(
+    crate::scene::ui::Transform2DComponent,
+    crate::scene::ui::ScreenSpaceTextComponent,
+  )>,
+  pub extracted_background: Option<([f32; 4], [f32; 4])>,
 
   pub extracted_sky: Option<()>,
   pub extracted_sun: Option<((Mat4x4f32, f32), EntityId)>,
@@ -99,14 +111,20 @@ impl RenderSceneExtraction {
       measurement_calls: Vec::with_capacity(self.extracted_measurements.len()),
       billboard_calls: Vec::with_capacity(self.extracted_billboards.len()),
       bvh_draw_calls: Vec::with_capacity(self.extracted_bvhs.len()),
+      bvhwire2_data: Vec::with_capacity(self.extracted_bvhs.len()),
       gizmo_calls: Vec::with_capacity(self.extracted_gizmos.len()),
       particle_calls: Vec::with_capacity(self.extracted_particles.len()),
+      text_calls: Vec::with_capacity(self.extracted_texts.len()),
       camera_data: self.camera_data,
       sun_call: None,
       sky_call: None,
       grid_call: None,
       particle2_calls: Vec::with_capacity(self.extracted_particles.len()),
       trajectory_call: None,
+      bvhwire2_batch_call: None,
+      ui_call: None,
+      text2_call: None,
+      background_call: None,
     };
 
     // Populate Meshes
@@ -255,15 +273,26 @@ impl RenderSceneExtraction {
 
     // BVH
     if !self.extracted_bvhs.is_empty() {
-      let pipeline_key = device.get_bvh_pipeline_kay(presentation_engine_handle)?;
-      for (nodes, mesh_index) in &self.extracted_bvhs {
-        for node in nodes {
-          render_scene.bvh_draw_calls.push(gpu::frame::BvhDrawCall::new(
-            node,
-            pipeline_key,
-            *mesh_index,
-          ));
-        }
+      for (dbg_comp, nodes, global_model, entity_id) in &self.extracted_bvhs {
+        render_scene.add_renderable(
+          cmd_buffer,
+          device,
+          *entity_id,
+          *global_model,
+          crate::scene::RenderableDataRef::BvhWireframe(dbg_comp, nodes),
+          presentation_engine_handle,
+          "bvh_wireframe",
+          false,
+          [0.0; 4],
+        )?;
+      }
+
+      if !render_scene.bvhwire2_data.is_empty() {
+        render_scene.bvhwire2_batch_call = device.upload_bvhwire2_batch(
+          cmd_buffer,
+          presentation_engine_handle,
+          &render_scene.bvhwire2_data,
+        )?;
       }
     }
 
@@ -288,6 +317,16 @@ impl RenderSceneExtraction {
       )?);
     }
 
+    // Background
+    if let Some((color_top, color_bottom)) = self.extracted_background {
+      let pipeline = device.get_background_pipeline_key(presentation_engine_handle)?;
+      render_scene.background_call = Some(gpu::frame::BackgroundDrawCall {
+        color_top,
+        color_bottom,
+        pipeline,
+      });
+    }
+
     // Grid
     if let Some((density, grid_size, grid_color)) = self.extracted_grid {
       let pipeline = device.get_grid_pipeline_kay(presentation_engine_handle)?;
@@ -298,14 +337,25 @@ impl RenderSceneExtraction {
 
     // Particles
     let particle_pipeline = device.get_particle_pipeline_key(presentation_engine_handle)?;
-    for (entity_id, particles, config) in self.extracted_particles {
-      render_scene.particle_calls.push(gpu::frame::ParticleDrawCall {
-        pipeline: particle_pipeline,
-        system_particle_offset: 0,
-        system_indirect_offset: 0,
-        config,
-        particles,
-      });
+    let particle2_pipeline = device.get_particle2_pipeline_key(presentation_engine_handle)?;
+    for (_entity_id, particles, config) in self.extracted_particles {
+      if config.use_particle2 {
+        render_scene.particle2_calls.push(gpu::frame::Particle2DrawCall {
+          pipeline: particle2_pipeline,
+          system_particle_offset: 0,
+          system_indirect_offset: 0,
+          config,
+          particles,
+        });
+      } else {
+        render_scene.particle_calls.push(gpu::frame::ParticleDrawCall {
+          pipeline: particle_pipeline,
+          system_particle_offset: 0,
+          system_indirect_offset: 0,
+          config,
+          particles,
+        });
+      }
     }
 
     // Trajectories
@@ -314,6 +364,54 @@ impl RenderSceneExtraction {
       presentation_engine_handle,
       &self.extracted_trajectories,
     )?;
+
+    // UI
+    render_scene.ui_call =
+      device.upload_ui(cmd_buffer, presentation_engine_handle, &self.extracted_ui)?;
+
+    // Texts
+    if !self.extracted_texts.is_empty() {
+      let mut text_batch = Vec::new();
+
+      for (t2d, text_comp) in self.extracted_texts {
+        let descriptor_index = device.allocate_rasterized_font_atlas(
+          cmd_buffer,
+          text_comp.font_hash,
+          text_comp.font_atlas.clone(),
+        )?;
+
+        if text_comp.use_new_path {
+          let style = crate::scene::text::TextStyle {
+            size_pt: text_comp.points,
+            color: text_comp.color,
+            style_flags: 0, // Normal by default
+          };
+
+          crate::scene::text::push_text_to_batch(
+            &text_comp.text,
+            [t2d.global_bounds[0], t2d.global_bounds[1]],
+            &style,
+            &text_comp.font_atlas,
+            descriptor_index,
+            &mut text_batch,
+          );
+        } else {
+          render_scene.text_calls.push(gpu::frame::TextDrawCall {
+            text: text_comp.text.clone(),
+            font_atlas: text_comp.font_atlas.clone(),
+            font_id: (text_comp.font_hash, descriptor_index),
+            start_cursor_position: [t2d.global_bounds[0], t2d.global_bounds[1]],
+            desired_points: text_comp.points,
+            color: text_comp.color,
+          });
+        }
+      }
+
+      if !text_batch.is_empty() {
+        render_scene.text2_call =
+          device.upload_text2(cmd_buffer, presentation_engine_handle, &text_batch)?;
+      }
+    }
 
     // ... More components here
 
@@ -342,6 +440,8 @@ impl SceneConversionExt for crate::scene::Scene {
     pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>,
     window_extent: [u32; 2],
   ) -> GpuResult<RenderSceneExtraction> {
+    crate::scene::ui::update_ui_layouts(self, [window_extent[0] as f32, window_extent[1] as f32]);
+
     const START_VEC_CAPACITY: usize = 32;
     let mut extracted_meshes: Vec<PhysicalMeshSceneData> = Vec::with_capacity(START_VEC_CAPACITY);
     let mut extracted_markers: Vec<(TransformComponent, MarkersComponent)> =
@@ -350,12 +450,16 @@ impl SceneConversionExt for crate::scene::Scene {
       Vec::with_capacity(START_VEC_CAPACITY);
     let mut extracted_measurements: Vec<(Vec3f32, Vec3f32, f32, u32)> =
       Vec::with_capacity(START_VEC_CAPACITY);
-    let mut extracted_bvhs: Vec<(Vec<LinearBound<f32>>, usize)> =
-      Vec::with_capacity(START_VEC_CAPACITY);
+    let mut extracted_bvhs: Vec<(
+      BvhDebugComponent,
+      Vec<LinearBound<f32>>,
+      Mat4x4f32,
+      EntityId,
+    )> = Vec::with_capacity(START_VEC_CAPACITY);
     let mut extracted_particles: Vec<(
       EntityId,
       alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
-      crate::scene::particles::ParticleEmitterConfig,
+      crate::scene::particles::ParticleEmitterComponent,
     )> = Vec::with_capacity(START_VEC_CAPACITY);
     let mut extracted_gizmos: Vec<(EntityId, Mat4x4f32, f32)> =
       Vec::with_capacity(START_VEC_CAPACITY);
@@ -364,10 +468,16 @@ impl SceneConversionExt for crate::scene::Scene {
       crate::scene::trajectory::TrajectoryComponent,
       Mat4x4f32,
     )> = Vec::with_capacity(START_VEC_CAPACITY);
+    let mut extracted_ui: Vec<crate::gpu::UiElementGpu> = Vec::with_capacity(START_VEC_CAPACITY);
+    let mut extracted_texts: Vec<(
+      crate::scene::ui::Transform2DComponent,
+      crate::scene::ui::ScreenSpaceTextComponent,
+    )> = Vec::with_capacity(START_VEC_CAPACITY);
 
     let extracted_sky: Option<()>;
     let extracted_sun: Option<((Mat4x4f32, f32), EntityId)>;
     let extracted_grid: Option<(f32, f32, [f32; 3])>;
+    let extracted_background: Option<([f32; 4], [f32; 4])>;
     // ... more components here
 
     let camera_data: CameraRenderData;
@@ -382,10 +492,32 @@ impl SceneConversionExt for crate::scene::Scene {
     )?;
     camera_data = CameraRenderData::new(&cam_transform, &cam_comp);
 
+    let hidden_roots = if let Some(p) = pool {
+      self.query1_res_par::<HiddenComponent, _, _>(p, |id, _| Some(id))
+    } else {
+      self.query1_res::<HiddenComponent, _, _>(|id, _| Some(id))
+    };
+
+    let mut hidden_set = hashbrown::HashSet::new();
+    for (root_id, _) in hidden_roots {
+      self.traverse_dfs_pre_order(
+        root_id,
+        &mut hidden_set,
+        &|_, _| true,
+        &mut |_, child_id, set| {
+          set.insert(child_id);
+          true
+        },
+      );
+    }
+
     // Cursor
     cursor_transform = self
-      .query1_first_res_without::<_, HiddenComponent, _, _>(|_id, _c: &CursorComponent| {
-        self.global_transform(_id)
+      .query1_first_res_without::<_, HiddenComponent, _, _>(|id, _c: &CursorComponent| {
+        if hidden_set.contains(&id) {
+          return None;
+        }
+        self.global_transform(id)
       })
       .map(|(t, id)| t);
 
@@ -395,6 +527,9 @@ impl SceneConversionExt for crate::scene::Scene {
       let results = self.query1_res_without_par::<PhysicalMeshComponent, HiddenComponent, _, _>(
         pool.unwrap(),
         |id, mesh| {
+          if hidden_set.contains(&id) {
+            return None;
+          }
           if let Some(t) = self.get_relative_transform(id, camera_entity) {
             let mesh_clone = mesh.clone();
             let is_selected: bool = self.has_component::<SelectedComponent>(id).into();
@@ -410,26 +545,21 @@ impl SceneConversionExt for crate::scene::Scene {
             );
             // BVH debug rendering
             let bvh = m.mesh.mesh.bvh.as_ref().map(|bvh| &bvh.nodes).and_then(|nodes| {
-              let bvh_dbg_states = {
-                let mut dbg_states = None;
-                self.with_component(id, |dbg: &BvhDebugComponent| {
-                  dbg_states = Some(dbg.node_render_states.clone());
-                });
-                dbg_states
-              };
-              if let Some(bvh_dbg_states) = bvh_dbg_states {
-                Some((nodes, bvh_dbg_states))
-              } else {
-                None
-              }
+              let mut dbg_comp = None;
+              self.with_component(id, |dbg: &BvhDebugComponent| {
+                dbg_comp = Some(dbg.clone());
+              });
+              dbg_comp.map(|c| (nodes, c))
             });
 
-            let bvh_data = if let Some((nodes, states)) = bvh {
+            let bvh_data = if let Some((nodes, comp)) = bvh {
               let mut extracted = Vec::with_capacity(nodes.len());
-              states.iter().zip(nodes.iter()).filter(|&(show, _)| *show).for_each(|(_, node)| {
-                extracted.push(node.bound.clone());
-              });
-              Some(extracted)
+              comp.node_render_states.iter().zip(nodes.iter()).filter(|&(show, _)| *show).for_each(
+                |(_, node)| {
+                  extracted.push(node.bound.clone());
+                },
+              );
+              Some((comp, extracted, t.to_mat4(), id))
             } else {
               None
             };
@@ -442,12 +572,15 @@ impl SceneConversionExt for crate::scene::Scene {
       );
       for ((m, bvh_data), _) in results {
         if let Some(bvh) = bvh_data {
-          extracted_bvhs.push((bvh, extracted_meshes.len()));
+          extracted_bvhs.push(bvh);
         }
         extracted_meshes.push(m);
       }
     } else {
       self.query1_without::<_, HiddenComponent, _>(|id, mesh: &PhysicalMeshComponent| {
+        if hidden_set.contains(&id) {
+          return;
+        }
         if let Some(t) = self.get_relative_transform(id, camera_entity) {
           let mesh_clone = mesh.clone();
           let is_selected: bool = self.has_component::<SelectedComponent>(id).into();
@@ -463,25 +596,20 @@ impl SceneConversionExt for crate::scene::Scene {
           );
           // BVH debug rendering
           let bvh = m.mesh.mesh.bvh.as_ref().map(|bvh| &bvh.nodes).and_then(|nodes| {
-            let bvh_dbg_states = {
-              let mut dbg_states = None;
-              self.with_component(id, |dbg: &BvhDebugComponent| {
-                dbg_states = Some(dbg.node_render_states.clone());
-              });
-              dbg_states
-            };
-            if let Some(bvh_dbg_states) = bvh_dbg_states {
-              Some((nodes, bvh_dbg_states))
-            } else {
-              None
-            }
-          });
-          if let Some((nodes, states)) = bvh {
-            extracted_bvhs.push((Vec::with_capacity(nodes.len()), extracted_meshes.len()));
-            let inserted_bvh = extracted_bvhs.last_mut().unwrap();
-            states.iter().zip(nodes.iter()).filter(|&(show, _)| *show).for_each(|(_, node)| {
-              inserted_bvh.0.push(node.bound.clone());
+            let mut dbg_comp = None;
+            self.with_component(id, |dbg: &BvhDebugComponent| {
+              dbg_comp = Some(dbg.clone());
             });
+            dbg_comp.map(|c| (nodes, c))
+          });
+          if let Some((nodes, comp)) = bvh {
+            let mut extracted = Vec::with_capacity(nodes.len());
+            comp.node_render_states.iter().zip(nodes.iter()).filter(|&(show, _)| *show).for_each(
+              |(_, node)| {
+                extracted.push(node.bound.clone());
+              },
+            );
+            extracted_bvhs.push((comp, extracted, t.to_mat4(), id));
           }
           extracted_meshes.push(m);
         }
@@ -492,13 +620,21 @@ impl SceneConversionExt for crate::scene::Scene {
     if should_par {
       let results = self.query1_res_without_par::<MarkersComponent, HiddenComponent, _, _>(
         pool.unwrap(),
-        |id, m| self.get_relative_transform(id, camera_entity).map(|t| (t, m.clone())),
+        |id, m| {
+          if hidden_set.contains(&id) {
+            return None;
+          }
+          self.get_relative_transform(id, camera_entity).map(|t| (t, m.clone()))
+        },
       );
       for (res, _) in results {
         extracted_markers.push(res);
       }
     } else {
       self.query1_without::<_, HiddenComponent, _>(|id, m: &MarkersComponent| {
+        if hidden_set.contains(&id) {
+          return;
+        }
         if let Some(t) = self.get_relative_transform(id, camera_entity) {
           extracted_markers.push((t, m.clone()));
         }
@@ -510,6 +646,9 @@ impl SceneConversionExt for crate::scene::Scene {
       let results = self.query1_res_without_par::<MeasurementComponent, HiddenComponent, _, _>(
         pool.unwrap(),
         |id, m| {
+          if hidden_set.contains(&id) {
+            return None;
+          }
           self.get_relative_transform(id, camera_entity).map(|t| {
             let mat: Mat4x4f32 = t.to_mat4();
             let p1 = Vec3f32(mat.mul_vector(m.pos1.to_point()));
@@ -523,6 +662,9 @@ impl SceneConversionExt for crate::scene::Scene {
       }
     } else {
       self.query1_without::<_, HiddenComponent, _>(|id, m: &MeasurementComponent| {
+        if hidden_set.contains(&id) {
+          return;
+        }
         if let Some(t) = self.get_relative_transform(id, camera_entity) {
           let mat: Mat4x4f32 = t.to_mat4();
           let p1 = Vec3f32(mat.mul_vector(m.pos1.to_point()));
@@ -537,6 +679,9 @@ impl SceneConversionExt for crate::scene::Scene {
       let results = self.query1_res_without_par::<ImageBillboardComponent, HiddenComponent, _, _>(
         pool.unwrap(),
         |id, i| {
+          if hidden_set.contains(&id) {
+            return None;
+          }
           self.get_relative_transform(id, camera_entity).map(|t| {
             let mat: Mat4x4f32 = t.to_mat4();
             (mat, i.texture_id, i.billboard_type)
@@ -548,6 +693,9 @@ impl SceneConversionExt for crate::scene::Scene {
       }
     } else {
       self.query1_without::<_, HiddenComponent, _>(|id, i: &ImageBillboardComponent| {
+        if hidden_set.contains(&id) {
+          return;
+        }
         if let Some(t) = self.get_relative_transform(id, camera_entity) {
           let mat: Mat4x4f32 = t.to_mat4();
           extracted_billboards.push((mat, i.texture_id, i.billboard_type));
@@ -555,21 +703,29 @@ impl SceneConversionExt for crate::scene::Scene {
       });
     }
 
-    // Sun
     extracted_sun = self.query2_first_res_without::<_, _, HiddenComponent, _, _>(
       |id, _t: &TransformComponent, s: &SunComponent| {
+        if hidden_set.contains(&id) {
+          return None;
+        }
         self.get_relative_transform(id, camera_entity).map(|t| (t.to_mat4::<Mat4x4f32>(), s.radius))
       },
     );
 
-    // Sky
     extracted_sky = self
-      .query1_first_res_without::<_, HiddenComponent, _, _>(|_id, _s: &SkyComponent| Some(()))
+      .query1_first_res_without::<_, HiddenComponent, _, _>(|id, _s: &SkyComponent| {
+        if hidden_set.contains(&id) {
+          return None;
+        }
+        Some(())
+      })
       .map(|_| ());
 
-    // Grid
     extracted_grid = self
-      .query1_first_res_without::<_, HiddenComponent, _, _>(|_id, _s: &GridComponent| {
+      .query1_first_res_without::<_, HiddenComponent, _, _>(|id, _s: &GridComponent| {
+        if hidden_set.contains(&id) {
+          return None;
+        }
         // TODO grid component should have data (adjust these values for now)
         let density: f32 = 0.1;
         let grid_size: f32 = 1.0;
@@ -579,18 +735,24 @@ impl SceneConversionExt for crate::scene::Scene {
       .map(|(d, _)| d);
 
     // Particles
-    self.query1_without::<_, HiddenComponent, _>(
-      |id, sys: &crate::scene::particles::ParticleSystemComponent| {
+    self.query2::<crate::scene::particles::ParticleSystemComponent, crate::scene::particles::ParticleEmitterComponent, _>(
+      |id, sys, config| {
+        if hidden_set.contains(&id) {
+          return;
+        }
         extracted_particles.push((
           id,
           alloc::sync::Arc::downgrade(&sys.particles),
-          sys.config.clone(),
+          config.clone(),
         ));
       },
     );
 
     // Gizmos
     self.query1_without::<_, HiddenComponent, _>(|id, gizmo: &crate::scene::GizmoComponent| {
+      if hidden_set.contains(&id) {
+        return;
+      }
       if gizmo.gizmo_visible {
         if let Some(t) = self.get_relative_transform(id, camera_entity) {
           let t_mat = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::translation(t.position)
@@ -608,11 +770,109 @@ impl SceneConversionExt for crate::scene::Scene {
     // Trajectories
     self.query1_without::<_, HiddenComponent, _>(
       |id, traj: &crate::scene::trajectory::TrajectoryComponent| {
+        if hidden_set.contains(&id) {
+          return;
+        }
         if let Some(t) = self.get_relative_transform(id, camera_entity) {
           extracted_trajectories.push((id, traj.clone(), t.to_mat4()));
         }
       },
     );
+
+    // UI
+    let mut ui_items = if should_par {
+      self.query2_res_par::<crate::scene::ui::Transform2DComponent, crate::scene::ui::UiComponent, _, _>(
+        pool.unwrap(),
+        |id, t2d, ui| {
+          if hidden_set.contains(&id) { return None; }
+          Some((id, *t2d, ui.clone()))
+        },
+      )
+    } else {
+      self
+        .query2_res::<crate::scene::ui::Transform2DComponent, crate::scene::ui::UiComponent, _, _>(
+          |id, t2d, ui| {
+            if hidden_set.contains(&id) {
+              return None;
+            }
+            Some((id, *t2d, ui.clone()))
+          },
+        )
+    };
+
+    ui_items.sort_unstable_by(|a, b| {
+      a.0
+        .1
+        .global_depth
+        .cmp(&b.0.1.global_depth)
+        .then(a.0.1.local_z_index.cmp(&b.0.1.local_z_index))
+    });
+
+    for ((_, t2d, ui), _) in ui_items {
+      let mut flags = 0;
+      if t2d.global_clip[0] > -9999.0 {
+        flags |= crate::gpu::UI_FLAG_HAS_CLIP;
+      }
+      extracted_ui.push(crate::gpu::UiElementGpu {
+        bounds: t2d.global_bounds,
+        clip_rect: t2d.global_clip,
+        color_start: ui.color_start,
+        color_end: ui.color_end,
+        color_border: ui.color_border,
+        color_shadow: ui.color_shadow,
+        border_radius: ui.border_radius,
+        shadow_params: ui.shadow_params,
+        gradient_dir: ui.gradient_dir,
+        border_width: ui.border_width,
+        texture_id: ui.texture_id,
+        flags,
+        opacity: ui.opacity,
+        rotation: t2d.rotation,
+        _pad: 0,
+      });
+    }
+
+    // Texts
+    let mut text_items = if should_par {
+      self.query2_res_par::<crate::scene::ui::Transform2DComponent, crate::scene::ui::ScreenSpaceTextComponent, _, _>(
+        pool.unwrap(),
+        |id, t2d, txt| {
+          if hidden_set.contains(&id) { return None; }
+          Some((id, *t2d, txt.clone()))
+        },
+      )
+    } else {
+      self
+        .query2_res::<crate::scene::ui::Transform2DComponent, crate::scene::ui::ScreenSpaceTextComponent, _, _>(
+          |id, t2d, txt| {
+            if hidden_set.contains(&id) {
+              return None;
+            }
+            Some((id, *t2d, txt.clone()))
+          },
+        )
+    };
+
+    text_items.sort_unstable_by(|a, b| {
+      a.0
+        .1
+        .global_depth
+        .cmp(&b.0.1.global_depth)
+        .then(a.0.1.local_z_index.cmp(&b.0.1.local_z_index))
+    });
+
+    for ((_, t2d, txt), _) in text_items {
+      extracted_texts.push((t2d, txt));
+    }
+
+    extracted_background = self
+      .query1_first_res_without::<_, HiddenComponent, _, _>(|id, b: &BackgroundComponent| {
+        if hidden_set.contains(&id) {
+          return None;
+        }
+        Some((b.color_top, b.color_bottom))
+      })
+      .map(|(b, _)| b);
 
     // ... More components here
 
@@ -625,6 +885,9 @@ impl SceneConversionExt for crate::scene::Scene {
       extracted_particles,
       extracted_gizmos,
       extracted_trajectories,
+      extracted_ui,
+      extracted_texts,
+      extracted_background,
       extracted_sky,
       extracted_sun,
       extracted_grid,
@@ -655,5 +918,79 @@ const fn get_mesh_outline(
     Some(GENERAL_OUTLINE_COLOR)
   } else {
     None
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::scene::ui::{Transform2DComponent, UiComponent};
+  use crate::scene::{CameraComponent, Scene, TransformComponent};
+  use crate::simulation::texture_cache::TextureCache;
+  use alloc::sync::Arc;
+  use spin::RwLock;
+
+  #[test]
+  fn test_ui_layout_relative_placement() {
+    let tex_cache = Arc::new(RwLock::new(TextureCache::new("test_tex_cache_ui")));
+    let scene = Scene::new(tex_cache);
+    scene.register_all_crate_components();
+
+    // 1. Root Background Panel
+    let bg_entity = scene.spawn_entity("Background");
+    let mut bg_t2d = Transform2DComponent::default();
+    bg_t2d.local_position = [0.0, 0.0];
+    bg_t2d.size = [1000.0, 1000.0];
+    scene.add_component(bg_entity, bg_t2d).unwrap();
+    scene.add_component(bg_entity, UiComponent::default()).unwrap();
+
+    // 2. Child Panel
+    let child_panel = scene.spawn_entity("Child");
+    scene.set_parent(child_panel, Some(bg_entity));
+    let mut child_t2d = Transform2DComponent::default();
+    child_t2d.local_position = [100.0, 50.0];
+    child_t2d.size = [200.0, 200.0];
+    scene.add_component(child_panel, child_t2d).unwrap();
+    scene.add_component(child_panel, UiComponent::default()).unwrap();
+
+    // 3. Grandchild Panel (Anchored to Bottom-Right of Child)
+    let gc_panel = scene.spawn_entity("GrandChild");
+    scene.set_parent(gc_panel, Some(child_panel));
+    let mut gc_t2d = Transform2DComponent::default();
+    gc_t2d.anchor_min = [1.0, 1.0];
+    gc_t2d.pivot = [1.0, 1.0];
+    gc_t2d.local_position = [-10.0, -10.0]; // 10px padding from right-bottom corner
+    gc_t2d.size = [50.0, 50.0];
+    scene.add_component(gc_panel, gc_t2d).unwrap();
+    scene.add_component(gc_panel, UiComponent::default()).unwrap();
+
+    // Run layout pass directly
+    crate::scene::ui::update_ui_layouts(&scene, [1000.0, 1000.0]);
+
+    // Verify background
+    scene
+      .with_component::<Transform2DComponent, _, _>(bg_entity, |t| {
+        assert_eq!(t.global_bounds, [0.0, 0.0, 1000.0, 1000.0]);
+      })
+      .unwrap();
+
+    // Verify child
+    scene
+      .with_component::<Transform2DComponent, _, _>(child_panel, |t| {
+        assert_eq!(t.global_bounds, [100.0, 50.0, 200.0, 200.0]);
+      })
+      .unwrap();
+
+    // Verify grandchild
+    scene
+      .with_component::<Transform2DComponent, _, _>(gc_panel, |t| {
+        // Child absolute is [100, 50, 200, 200].
+        // Anchor (1.0, 1.0) gives start pos: 100 + 200 = 300 (X), 50 + 200 = 250 (Y).
+        // Local pos [-10, -10] gives pos: 290, 240.
+        // Pivot (1.0, 1.0) gives offset: size(50) * pivot(1.0) = 50.
+        // Final pos: 290 - 50 = 240, 240 - 50 = 190.
+        assert_eq!(t.global_bounds, [240.0, 190.0, 50.0, 50.0]);
+      })
+      .unwrap();
   }
 }

@@ -1,7 +1,7 @@
 //! components_api module.
 
 use super::*;
-use crate::scene::{AddComponentError, Marker};
+use crate::scene::{AddComponentError, CameraProjection, Marker};
 use crate::simulation_api::SimulationContext;
 use crate::{expect_scene, expect_scene_and_entity};
 use alloc::{sync::Arc, vec::Vec};
@@ -173,6 +173,7 @@ impl SimulationContext {
           entity_id,
           crate::scene::BvhDebugComponent {
             node_render_states: states,
+            use_new_path: true, // TODO test first
           },
         );
         if let Err(err) = res {
@@ -209,24 +210,7 @@ impl SimulationContext {
       .add_component(
         entity_id,
         CameraComponent {
-          projection: match params {
-            CameraParams::Perspective(PerspectiveCameraParams {
-              fov,
-              aspect_ratio,
-              near_plane,
-              far_plane,
-            }) => Mat4x4f32::perspective_vk(fov, aspect_ratio, near_plane, far_plane),
-            CameraParams::Orthographic(OrthographicCameraParams {
-              left,
-              right,
-              bottom,
-              top,
-              near,
-              far,
-            }) => Mat4x4f32::orthographic_vk(left, right, bottom, top, near, far),
-          },
-          near_plane: params.near(),
-          far_plane: params.far(),
+          projection: params.into(),
         },
       )
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
@@ -248,28 +232,9 @@ impl SimulationContext {
       .write()
       .scene
       .with_component_mut(entity_id, |c: &mut CameraComponent| {
-        match params {
-          CameraParams::Perspective(PerspectiveCameraParams {
-            fov,
-            aspect_ratio,
-            near_plane,
-            far_plane,
-          }) => {
-            c.projection = Mat4x4f32::perspective_vk(fov, aspect_ratio, near_plane, far_plane);
-          }
-          CameraParams::Orthographic(OrthographicCameraParams {
-            left,
-            right,
-            bottom,
-            top,
-            near,
-            far,
-          }) => {
-            c.projection = Mat4x4f32::orthographic_vk(left, right, bottom, top, near, far);
-          }
-        }
-        c.near_plane = params.near();
-        c.far_plane = params.far();
+        *c = CameraComponent {
+          projection: params.into(),
+        };
       })
       .ok_or(EngineError::InvalidOperation(
         "components_api:set_camera_component couldn't find camera component",
@@ -277,12 +242,7 @@ impl SimulationContext {
   }
 
   /// TODO: Document this item
-  pub fn get_camera_component(
-    &self,
-    scene_id: u64,
-    entity: u64,
-    proj_out: &mut [f32; 16],
-  ) -> EngineResult<()> {
+  pub fn get_camera_component(&self, scene_id: u64, entity: u64) -> EngineResult<CameraParams> {
     let (scene, entity_id) = expect_scene_and_entity!(
       self.get_scene(scene_id),
       entity,
@@ -291,8 +251,33 @@ impl SimulationContext {
     scene
       .read()
       .scene
-      .with_component(entity_id, |c: &CameraComponent| {
-        *proj_out = c.projection.into();
+      .with_component(entity_id, |c: &CameraComponent| match &c.projection {
+        crate::scene::CameraProjection::Perspective {
+          fov,
+          aspect_ratio,
+          near,
+          far,
+        } => CameraParams::Perspective(PerspectiveCameraParams {
+          fov: *fov,
+          aspect_ratio: *aspect_ratio,
+          near_plane: *near,
+          far_plane: *far,
+        }),
+        crate::scene::CameraProjection::Orthographic {
+          left,
+          right,
+          bottom,
+          top,
+          near,
+          far,
+        } => CameraParams::Orthographic(OrthographicCameraParams {
+          left: *left,
+          right: *right,
+          bottom: *bottom,
+          top: *top,
+          near: *near,
+          far: *far,
+        }),
       })
       .ok_or(EngineError::InvalidOperation(
         "component_api:get_camera_component couldn't find camera component",
@@ -525,6 +510,27 @@ pub struct OrthographicCameraParams {
 pub enum CameraParams {
   Perspective(PerspectiveCameraParams),
   Orthographic(OrthographicCameraParams),
+}
+
+impl From<CameraParams> for CameraProjection {
+  fn from(value: CameraParams) -> Self {
+    match value {
+      CameraParams::Perspective(persp) => CameraProjection::Perspective {
+        fov: persp.fov,
+        aspect_ratio: persp.aspect_ratio,
+        near: persp.near_plane,
+        far: persp.far_plane,
+      },
+      CameraParams::Orthographic(ortho) => CameraProjection::Orthographic {
+        left: ortho.left,
+        right: ortho.right,
+        bottom: ortho.bottom,
+        top: ortho.top,
+        near: ortho.near,
+        far: ortho.far,
+      },
+    }
+  }
 }
 
 impl CameraParams {

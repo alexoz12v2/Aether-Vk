@@ -64,9 +64,10 @@ impl ComputeInfo {
   /// TODO: Document this item
   pub fn add_specialization_constant_u32(
     &mut self,
-    constant: vk::SpecializationMapEntry,
+    mut constant: vk::SpecializationMapEntry,
     value: u32,
   ) -> &mut Self {
+    constant.offset = self.specialization_constants_values.len() as u32;
     self.specialization_constants.push(constant);
     // little endian right?
     for b in value.to_le_bytes() {
@@ -501,9 +502,10 @@ impl GraphicsInfo {
   /// TODO: Document this item
   pub fn add_specialization_constant_u32(
     mut self,
-    constant: vk::SpecializationMapEntry,
+    mut constant: vk::SpecializationMapEntry,
     value: u32,
   ) -> Self {
+    constant.offset = self.specialization_constants_values.len() as u32;
     self.specialization_constants.push(constant);
     // little endian right? TODO: query endianness of OS (oshal)
     for b in value.to_le_bytes() {

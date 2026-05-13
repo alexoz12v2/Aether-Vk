@@ -23,6 +23,9 @@ layout(push_constant) uniform PushConstants {
     float pad1;
     vec4 color;
     float radius;
+    float cameraPos_x;
+    float cameraPos_y;
+    float cameraPos_z;
 } pc;
 
 layout(location = 0) out vec2 outUV;
@@ -46,6 +49,8 @@ void main() {
     vec2 localPos = quadVertices[gl_VertexIndex];
     outUV = localPos;
     
-    vec3 worldPos = p.position + (pc.cameraRight * localPos.x + pc.cameraUp * localPos.y) * pc.radius;
+    vec3 cameraPos = vec3(pc.cameraPos_x, pc.cameraPos_y, pc.cameraPos_z);
+    vec3 relativePos = p.position - cameraPos;
+    vec3 worldPos = relativePos + (pc.cameraRight * localPos.x + pc.cameraUp * localPos.y) * pc.radius;
     gl_Position = pc.viewProj * vec4(worldPos, 1.0);
 }

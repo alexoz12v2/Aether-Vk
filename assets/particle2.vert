@@ -18,8 +18,7 @@ struct Particle {
 layout(std430, set = 0, binding = 0) readonly buffer ParticleDataBuffer {
     Particle particles[];
 };
-
-layout(push_constant, scalar) uniform PushConstants {
+layout(push_constant) uniform PushConstants {
     mat4 viewProj;
     vec3 cameraUp;
     float time;
@@ -27,6 +26,9 @@ layout(push_constant, scalar) uniform PushConstants {
     float seed;
     vec4 color;
     float radius;
+    float cameraPos_x;
+    float cameraPos_y;
+    float cameraPos_z;
 } pc;
 
 layout(location = 0) out vec2 outUV;
@@ -50,6 +52,9 @@ void main() {
     vec2 localPos = quadVertices[gl_VertexIndex];
     outUV = localPos;
     
-    vec3 worldPos = p.position + (pc.cameraRight * localPos.x + pc.cameraUp * localPos.y) * pc.radius;
+    vec3 currentPos = p.position; // DO NOT extrapolate using uptime!
+    vec3 cameraPos = vec3(pc.cameraPos_x, pc.cameraPos_y, pc.cameraPos_z);
+    vec3 relativePos = currentPos - cameraPos;
+    vec3 worldPos = relativePos + (pc.cameraRight * localPos.x + pc.cameraUp * localPos.y) * pc.radius;
     gl_Position = pc.viewProj * vec4(worldPos, 1.0);
 }

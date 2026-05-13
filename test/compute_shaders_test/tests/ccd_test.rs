@@ -23,6 +23,7 @@ struct PushConstants {
 
 #[test]
 fn test_ccd() {
+  compute_shaders_test::ensure_test_data("test_data/ccd.json", "gen_ccd_data.py");
   let json_data = fs::read_to_string("test_data/ccd.json").expect("Failed to read JSON");
   let test_data: CcdData = serde_json::from_str(&json_data).expect("Failed to parse JSON");
 

@@ -1,9 +1,11 @@
-use aethervk_core_rlib::gpu;
-use aethervk_core_rlib::gpu::{PresentationEngineHandle, ASSET_DIR};
-use aethervk_core_rlib::simulation_api::SimulationContext;
-use aethervk_core_rlib::types::{EngineError, EngineResult, GpuResult};
-use winit::window::Window;
 use crate::cycle_get_asset_path_from_exe;
+use aethervk_core_rlib::{
+  gpu,
+  gpu::{ASSET_DIR, PresentationEngineHandle},
+  simulation_api::SimulationContext,
+  types::EngineResult,
+};
+use winit::window::Window;
 
 pub trait SimulationDelegate {
   fn create_scene(&mut self, ctx: &mut SimulationContext) -> EngineResult<u64> {
@@ -14,56 +16,59 @@ pub trait SimulationDelegate {
     &mut self,
     ctx: &mut SimulationContext,
     scene_id: u64,
+    pe_handle: PresentationEngineHandle,
     window: &Window,
   ) -> EngineResult<()>;
 
-  fn on_about_to_wait(&mut self, ctx: &mut SimulationContext, scene_id: u64, delta_time: f32) {}
+  fn on_about_to_wait(&mut self, _ctx: &mut SimulationContext, _scene_id: u64, _delta_time: f32) {}
 
   fn on_keyboard_input(
     &mut self,
-    ctx: &mut SimulationContext,
-    scene_id: u64,
-    event: &winit::event::KeyEvent,
-    modifiers: winit::keyboard::ModifiersState,
+    _ctx: &mut SimulationContext,
+    _scene_id: u64,
+    _event: &winit::event::KeyEvent,
+    _modifiers: winit::keyboard::ModifiersState,
   ) {
   }
 
   fn on_mouse_input(
     &mut self,
-    ctx: &mut SimulationContext,
-    scene_id: u64,
-    button: winit::event::MouseButton,
-    state: winit::event::ElementState,
-    mouse_pos: (f64, f64),
+    _ctx: &mut SimulationContext,
+    _scene_id: u64,
+    _button: winit::event::MouseButton,
+    _state: winit::event::ElementState,
+    _mouse_pos: (f64, f64),
+  ) {
+  }
+
+  fn on_cursor_moved(
+    &mut self,
+    _ctx: &mut SimulationContext,
+    _scene_id: u64,
+    _position: winit::dpi::PhysicalPosition<f64>,
   ) {
   }
 
   fn on_mouse_motion(
     &mut self,
-    ctx: &mut SimulationContext,
-    scene_id: u64,
-    delta: (f64, f64),
-    middle_mouse_down: bool,
-    shift_down: bool,
-    ctrl_down: bool,
+    _ctx: &mut SimulationContext,
+    _scene_id: u64,
+    _delta: (f64, f64),
+    _middle_mouse_down: bool,
+    _shift_down: bool,
+    _ctrl_down: bool,
   ) {
   }
 
   fn on_mouse_wheel(
     &mut self,
-    ctx: &mut SimulationContext,
-    scene_id: u64,
-    delta: winit::event::MouseScrollDelta,
+    _ctx: &mut SimulationContext,
+    _scene_id: u64,
+    _delta: winit::event::MouseScrollDelta,
   ) {
   }
 
-  fn on_resize(
-    &mut self,
-    ctx: &mut SimulationContext,
-    scene_id: u64,
-    width: u32,
-    height: u32,
-  ) {
+  fn on_resize(&mut self, _ctx: &mut SimulationContext, _scene_id: u64, _width: u32, _height: u32) {
   }
 }
 
@@ -76,6 +81,8 @@ pub fn run_simulation_app<D: SimulationDelegate + 'static>(title: &str, mut dele
   );
 
   let (window, event_loop) = crate::create_winit_window_and_event_loop(title);
+
+  *ASSET_DIR.write() = Some(cycle_get_asset_path_from_exe(true).to_string_lossy().to_string());
 
   let mut simulation_context = SimulationContext::startup(
     gpu::VULKAN_RENDER_BACKEND,
@@ -94,12 +101,18 @@ pub fn run_simulation_app<D: SimulationDelegate + 'static>(title: &str, mut dele
 
   let scene_id = delegate.create_scene(&mut simulation_context).unwrap();
 
-  *ASSET_DIR.write() = Some(cycle_get_asset_path_from_exe(true).to_string_lossy().to_string());
   let presentation_engine = simulation_context
     .create_presentation_engine_windowed(scene_id, width, height, native_handles)
     .unwrap();
 
-  delegate.on_setup(&mut simulation_context, scene_id, &window).unwrap();
+  delegate
+    .on_setup(
+      &mut simulation_context,
+      scene_id,
+      presentation_engine,
+      &window,
+    )
+    .unwrap();
 
   let sim_app = GenericSimApp {
     ctx: simulation_context,
@@ -212,6 +225,7 @@ impl<D: SimulationDelegate> crate::app::App for GenericSimApp<D> {
   fn on_cursor_moved(&mut self, position: winit::dpi::PhysicalPosition<f64>) {
     self.mouse_x = position.x;
     self.mouse_y = position.y;
+    self.delegate.on_cursor_moved(&mut self.ctx, self.scene_id, position);
   }
 
   fn on_keyboard_input(

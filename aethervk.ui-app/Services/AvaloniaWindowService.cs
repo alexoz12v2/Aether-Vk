@@ -14,18 +14,21 @@ namespace AetherVk.Services
     private readonly BreadcrumbService _breadcrumbService;
     private readonly FileWatcherService _fileWatcherService;
     private readonly ConsoleService _consoleService;
+    private readonly IUiThreadDispatcher _uiThreadDispatcher;
 
     public AvaloniaWindowService(
       NativeRuntimeService runtimeService,
       BreadcrumbService breadcrumbService,
       FileWatcherService fileWatcherService,
-      ConsoleService consoleService
+      ConsoleService consoleService,
+      IUiThreadDispatcher uiThreadDispatcher
     )
     {
       _runtimeService = runtimeService;
       _breadcrumbService = breadcrumbService;
       _fileWatcherService = fileWatcherService;
       _consoleService = consoleService;
+      _uiThreadDispatcher = uiThreadDispatcher;
     }
 
     private Window? GetMainWindow()
@@ -138,7 +141,8 @@ namespace AetherVk.Services
             model.Name,
             isLightTheme,
             _runtimeService,
-            _consoleService
+            _consoleService,
+            _uiThreadDispatcher
           ),
         };
         var inputRegistry =

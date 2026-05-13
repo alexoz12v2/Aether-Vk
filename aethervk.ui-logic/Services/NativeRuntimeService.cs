@@ -12,11 +12,9 @@ namespace AetherVk.Logic.Services;
 
 public partial class NativeRuntimeService : ObservableObject, IDisposable
 {
-  [ObservableProperty]
-  private bool _isInitialized;
+  [ObservableProperty] private bool _isInitialized;
 
-  [ObservableProperty]
-  private bool _isRunning;
+  [ObservableProperty] private bool _isRunning;
 
   private IntPtr _simulationContext = IntPtr.Zero;
   private readonly object _nativeLock = new object();
@@ -46,14 +44,24 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   {
     lock (_nativeLock)
     {
-      // Detach from the weak reference to stop processing incoming logs (TODO: potential error here)
+      // Detach from the weak reference to stop processing incoming logs
       s_currentInstance = null;
 
-      if (_simulationContext == IntPtr.Zero)
-        return;
+      if (_simulationContext != IntPtr.Zero)
+      {
+        NativeInterop.avkSimulationContext_shutdown(_simulationContext);
+        _simulationContext = IntPtr.Zero;
+      }
 
-      NativeInterop.avkSimulationContext_shutdown(_simulationContext);
-      _simulationContext = IntPtr.Zero;
+      // Empty scene manager
+      foreach (var scene in _sceneStateManager.AllScenes.ToList())
+      {
+        WeakReferenceMessenger.Default.Send(
+          new AetherVk.Logic.Messages.SimulationStateUpdatedMessage(scene.SceneId));
+      }
+
+      _sceneStateManager.Clear();
+      IsInitialized = false;
     }
   }
 
@@ -269,7 +277,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         _uiThreadDispatcher.Dispatch(() =>
         {
           // Re-use SyncEntities on the changed entities
-          SyncEntities(sceneId); // Optimally, this should only sync `ids`, but syncing all is fine for now
+          SyncEntities(
+            sceneId); // Optimally, this should only sync `ids`, but syncing all is fine for now
 
           WeakReferenceMessenger.Default.Send(
             new AetherVk.Logic.Messages.SimulationStateUpdatedMessage(sceneId)
@@ -495,7 +504,100 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     );
   }
 
-  public void DestroyPresentationEngine(ulong sceneId, ulong handle)
+  public ulong AddPerspectiveCamera(ulong sceneId, ulong presentationEngineId, string name, float fov, float near, float far)
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return 0;
+    
+    // Create camera natively. FFI handles adding it to presentation engine
+    ulong id = NativeInterop.avkSimulationContext_addPerspectiveCamera(
+      _simulationContext,
+      sceneId,
+      presentationEngineId,
+      name,
+      fov,
+      near,
+      far
+    );
+
+    if (id > 0)
+    {
+      var entity = new Entity(sceneId, id, name);
+      var state = _sceneStateManager.GetOrCreateScene(sceneId);
+      state.EntityMap[id] = entity;
+      WireEntityComponents(sceneId, entity);
+      
+      var root = GetEntityByName(sceneId, "root");
+      if (root != null)
+      {
+        root.Children.Add(entity);
+      }
+      else
+      {
+        state.RootEntities.Add(entity);
+      }
+
+      entity.Components.Add(new TransformComponent());
+      entity.Components.Add(new CameraComponent());
+    }
+
+    return id;
+  }
+
+  public ulong AddOrthographicCamera(ulong sceneId, ulong presentationEngineId, string name, float left, float bottom, float near, float far)
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return 0;
+    
+    ulong id = NativeInterop.avkSimulationContext_addOrthographicCamera(
+      _simulationContext,
+      sceneId,
+      presentationEngineId,
+      name,
+      left,
+      bottom,
+      near,
+      far
+    );
+
+    if (id > 0)
+    {
+      var entity = new Entity(sceneId, id, name);
+      var state = _sceneStateManager.GetOrCreateScene(sceneId);
+      state.EntityMap[id] = entity;
+      WireEntityComponents(sceneId, entity);
+
+      var root = GetEntityByName(sceneId, "root");
+      if (root != null)
+      {
+        root.Children.Add(entity);
+      }
+      else
+      {
+        state.RootEntities.Add(entity);
+      }
+
+      entity.Components.Add(new TransformComponent());
+      entity.Components.Add(new CameraComponent { IsOrthographic = true });
+    }
+
+    return id;
+  }
+
+  public void DestroyScene(ulong sceneId)
+  {
+    lock (_nativeLock)
+    {
+      if (_simulationContext != IntPtr.Zero)
+      {
+        NativeInterop.avkSimulationContext_destroyScene(_simulationContext, sceneId);
+      }
+      
+      _sceneStateManager.RemoveScene(sceneId);
+    }
+  }
+
+  public void DestroyPresentationEngine(ulong sceneId, ulong handle, ulong cameraId = 0)
   {
     if (_simulationContext != IntPtr.Zero && handle != 0)
     {
@@ -504,6 +606,34 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         sceneId,
         handle
       );
+      
+      if (cameraId != 0)
+      {
+        RemoveEntityLocal(sceneId, cameraId);
+      }
+    }
+  }
+
+  private void RemoveEntityLocal(ulong sceneId, ulong id)
+  {
+    var state = _sceneStateManager.GetOrCreateScene(sceneId);
+    if (state.EntityMap.TryGetValue(id, out var entity))
+    {
+      foreach (var parent in state.EntityMap.Values)
+      {
+        if (parent.Children.Contains(entity))
+        {
+          parent.Children.Remove(entity);
+          break;
+        }
+      }
+
+      if (state.RootEntities.Contains(entity))
+      {
+        state.RootEntities.Remove(entity);
+      }
+
+      state.EntityMap.Remove(id);
     }
   }
 
@@ -570,100 +700,41 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         }
       }
 
+      // Propagate NativeComponent sync manually here only as a fallback, 
+      // but ideally NativeSimulationCallback delta-syncs it.
+      // E.g., at initial load.
+      foreach (var comp in entity.Components.OfType<NativeComponent>())
+      {
+          comp.PullFromNative();
+      }
+
+      // Sync non-NativeComponent types that depend on Transform locally for now (e.g. Sun, Planet, Comet)
       var transform = entity.Components.OfType<TransformComponent>().FirstOrDefault();
       if (transform != null)
       {
-        bool success = NativeInterop.avkSimulationContext_getTransformComponent(
-          _simulationContext,
-          sceneId,
-          entity.Id,
-          out float px,
-          out float py,
-          out float pz,
-          out float rw,
-          out float rx,
-          out float ry,
-          out float rz,
-          out float sx,
-          out float sy,
-          out float sz
-        );
-
-        if (success)
-        {
-          transform.SuspendNotifications = true;
-          if (Math.Abs(transform.PosX - px) > 0.001f)
-            transform.PosX = px;
-          if (Math.Abs(transform.PosY - py) > 0.001f)
-            transform.PosY = py;
-          if (Math.Abs(transform.PosZ - pz) > 0.001f)
-            transform.PosZ = pz;
-          if (Math.Abs(transform.RotW - rw) > 0.001f)
-            transform.RotW = rw;
-          if (Math.Abs(transform.RotX - rx) > 0.001f)
-            transform.RotX = rx;
-          if (Math.Abs(transform.RotY - ry) > 0.001f)
-            transform.RotY = ry;
-          if (Math.Abs(transform.RotZ - rz) > 0.001f)
-            transform.RotZ = rz;
-          if (Math.Abs(transform.ScaleX - sx) > 0.001f)
-            transform.ScaleX = sx;
-          if (Math.Abs(transform.ScaleY - sy) > 0.001f)
-            transform.ScaleY = sy;
-          if (Math.Abs(transform.ScaleZ - sz) > 0.001f)
-            transform.ScaleZ = sz;
-          transform.SuspendNotifications = false;
-
           var sun = entity.Components.OfType<SunComponent>().FirstOrDefault();
           if (sun != null)
           {
-            sun.PositionX = px;
-            sun.PositionY = py;
-            sun.PositionZ = pz;
+            sun.PositionX = transform.PosX;
+            sun.PositionY = transform.PosY;
+            sun.PositionZ = transform.PosZ;
           }
 
           var planet = entity.Components.OfType<PlanetComponent>().FirstOrDefault();
           if (planet != null)
           {
-            planet.PositionX = px;
-            planet.PositionY = py;
-            planet.PositionZ = pz;
+            planet.PositionX = transform.PosX;
+            planet.PositionY = transform.PosY;
+            planet.PositionZ = transform.PosZ;
           }
 
           var comet = entity.Components.OfType<CometComponent>().FirstOrDefault();
           if (comet != null)
           {
-            comet.PositionX = px;
-            comet.PositionY = py;
-            comet.PositionZ = pz;
+            comet.PositionX = transform.PosX;
+            comet.PositionY = transform.PosY;
+            comet.PositionZ = transform.PosZ;
           }
-        }
-      }
-
-      var camera = entity.Components.OfType<CameraComponent>().FirstOrDefault();
-      if (camera != null)
-      {
-        IntPtr projPtr = Marshal.AllocHGlobal(16 * sizeof(float));
-        bool camSuccess = NativeInterop.avkSimulationContext_getCameraComponent(
-          _simulationContext,
-          sceneId,
-          entity.Id,
-          projPtr
-        );
-        if (camSuccess)
-        {
-          float[] projArray = new float[16];
-          Marshal.Copy(projPtr, projArray, 0, 16);
-          camera.SuspendNotifications = true;
-          camera.ProjectionMatrixPreview =
-            $"[{projArray[0]:F2}, {projArray[4]:F2}, {projArray[8]:F2}, {projArray[12]:F2}]\n"
-            + $"[{projArray[1]:F2}, {projArray[5]:F2}, {projArray[9]:F2}, {projArray[13]:F2}]\n"
-            + $"[{projArray[2]:F2}, {projArray[6]:F2}, {projArray[10]:F2}, {projArray[14]:F2}]\n"
-            + $"[{projArray[3]:F2}, {projArray[7]:F2}, {projArray[11]:F2}, {projArray[15]:F2}]";
-          camera.SuspendNotifications = false;
-        }
-
-        Marshal.FreeHGlobal(projPtr);
       }
     }
 
@@ -976,6 +1047,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
   public async Task<(bool hit, ulong entityId, float px, float py, float pz)> RaycastNdcAsync(
     ulong sceneId,
+    ulong cameraId,
     float ndcX,
     float ndcY
   )
@@ -986,6 +1058,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     ulong taskId = NativeInterop.avkSimulationContext_raycastNdc(
       _simulationContext,
       sceneId,
+      cameraId,
       ndcX,
       ndcY
     );
@@ -1199,85 +1272,37 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
   private void WireEntityComponents(ulong sceneId, Entity entity)
   {
-    entity.Components.CollectionChanged += (sender, args) =>
-    {
-      if (args.NewItems != null)
+      entity.Components.CollectionChanged += (sender, args) =>
       {
-        foreach (var item in args.NewItems)
-        {
-          if (item is TransformComponent tc)
+          if (args.NewItems == null) return;
+          foreach (var item in args.NewItems)
           {
-            tc.PropertyChanged += (s, e) =>
-            {
-              if (tc.SuspendNotifications)
-                return;
-
-              if (_simulationContext != IntPtr.Zero)
+              // Polymorphic Auto-Wiring!
+              if (item is NativeComponent nativeComp)
               {
-                NativeInterop.avkSimulationContext_setTransformComponent(
-                  _simulationContext,
-                  sceneId,
-                  entity.Id,
-                  tc.PosX,
-                  tc.PosY,
-                  tc.PosZ,
-                  tc.RotW,
-                  tc.RotX,
-                  tc.RotY,
-                  tc.RotZ,
-                  tc.ScaleX,
-                  tc.ScaleY,
-                  tc.ScaleZ
-                );
+                  nativeComp.BindToNative(_simulationContext, sceneId, entity.Id);
+                  
+                  // Fetch initial state immediately upon UI creation
+                  if (_simulationContext != IntPtr.Zero)
+                      nativeComp.PullFromNative();
               }
-            };
-          }
-          else if (item is CameraComponent cc)
-          {
-            cc.PropertyChanged += (s, e) =>
-            {
-              if (cc.SuspendNotifications)
-                return;
-
-              if (_simulationContext != IntPtr.Zero)
+              
+              // Retain custom nested sub-collection bindings like Jets if needed
+              if (item is CometComponent comet)
               {
-                NativeInterop.avkSimulationContext_setCameraComponent(
-                  _simulationContext,
-                  sceneId,
-                  entity.Id,
-                  cc.IsOrthographic,
-                  cc.Fov,
-                  cc.AspectRatio,
-                  cc.NearPlane,
-                  cc.FarPlane,
-                  cc.OrthoLeft,
-                  cc.OrthoRight,
-                  cc.OrthoBottom,
-                  cc.OrthoTop
-                );
-              }
-            };
-          }
-          else if (item is CometComponent comet)
-          {
-            comet.Jets.CollectionChanged += (s, e) =>
-            {
-              SyncMarkers(sceneId, entity.Id, comet);
-              if (e.NewItems != null)
-              {
-                foreach (JetMarker jet in e.NewItems)
-                {
-                  jet.PropertyChanged += (js, je) =>
-                  {
-                    SyncMarkers(sceneId, entity.Id, comet);
+                  comet.Jets.CollectionChanged += (s, e) => {
+                      if (_simulationContext != IntPtr.Zero) SyncMarkers(sceneId, entity.Id, comet);
+                      if (e.NewItems != null)
+                      {
+                        foreach (JetMarker jet in e.NewItems)
+                        {
+                          jet.PropertyChanged += (js, je) => { SyncMarkers(sceneId, entity.Id, comet); };
+                        }
+                      }
                   };
-                }
               }
-            };
           }
-        }
-      }
-    };
+      };
   }
 
   public void RefreshBvhNodes(ulong sceneId, ulong entityId, CometComponent comet)
@@ -1646,7 +1671,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
 
     camera.Components.Add(new TransformComponent { PosY = -400.0f });
-    camera.Components.Add(new CameraComponent { IsActiveCamera = true });
+    camera.Components.Add(new CameraComponent());
 
     return camera;
   }

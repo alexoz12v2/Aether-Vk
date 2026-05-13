@@ -215,7 +215,7 @@ fn do_render_scene_async(
   let cmd_buffer = render_device.get_command_buffer()?;
   let cmd_scope = gpu::ScopedCommandBuffer::new(render_device, cmd_buffer, Some(task_id))?;
 
-  let render_scene = extracted_scene.build_render_scene(
+  let mut render_scene = extracted_scene.build_render_scene(
     render_device,
     presentation_engine_handle,
     cmd_buffer,
@@ -232,6 +232,9 @@ fn do_render_scene_async(
       sun_call.radius,
     )?;
   }
+  
+  render_device.upload_particle_systems(cmd_buffer, &mut render_scene.particle_calls)?;
+  render_device.upload_particle2_systems(cmd_buffer, &mut render_scene.particle2_calls)?;
 
   if is_first_render && custom_render_callback.is_some() {
     let c = unsafe { custom_render_callback.as_ref().unwrap_unchecked() };

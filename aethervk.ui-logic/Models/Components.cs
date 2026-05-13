@@ -5,9 +5,9 @@ using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.Models;
 
-public partial class TransformComponent : ObservableObject, IComponent
+public partial class TransformComponent : NativeComponent
 {
-  public string Name => "Transform";
+  public override string Name => "Transform";
 
   public bool SuspendNotifications { get; set; } = false;
 
@@ -43,13 +43,38 @@ public partial class TransformComponent : ObservableObject, IComponent
 
   [ObservableProperty]
   private float _scaleZ = 1.0f;
+
+  protected override bool ShouldPushToNative(string? propertyName)
+  {
+      return propertyName != nameof(IsEditable) && propertyName != nameof(SuspendNotifications);
+  }
+
+  protected override void PushToNativeImpl()
+  {
+      if (SuspendNotifications) return;
+      var data = new NativeInterop.FfiTransform
+      {
+          Px = PosX, Py = PosY, Pz = PosZ,
+          Rw = RotW, Rx = RotX, Ry = RotY, Rz = RotZ,
+          Sx = ScaleX, Sy = ScaleY, Sz = ScaleZ
+      };
+      NativeInterop.avkSimulationContext_setTransformComponent(SimulationContext, SceneId, EntityId, in data);
+  }
+
+  protected override void PullFromNativeImpl()
+  {
+      if (NativeInterop.avkSimulationContext_getTransformComponent(SimulationContext, SceneId, EntityId, out var data))
+      {
+          PosX = data.Px; PosY = data.Py; PosZ = data.Pz;
+          RotW = data.Rw; RotX = data.Rx; RotY = data.Ry; RotZ = data.Rz;
+          ScaleX = data.Sx; ScaleY = data.Sy; ScaleZ = data.Sz;
+      }
+  }
 }
 
-public partial class CameraComponent : ObservableObject, IComponent
+public partial class CameraComponent : NativeComponent
 {
-  public string Name => "Camera";
-
-  public bool SuspendNotifications { get; set; } = false;
+  public override string Name => "Camera";
 
   [ObservableProperty]
   private float _fov = 45.0f;
@@ -79,10 +104,45 @@ public partial class CameraComponent : ObservableObject, IComponent
   private bool _isOrthographic;
 
   [ObservableProperty]
-  private bool _isActiveCamera;
-
-  [ObservableProperty]
   private string _projectionMatrixPreview = "View / Projection Matrix Readonly Data";
+
+  protected override bool ShouldPushToNative(string? propertyName)
+  {
+      return propertyName != nameof(ProjectionMatrixPreview);
+  }
+
+  protected override void PushToNativeImpl()
+  {
+      var data = new NativeInterop.FfiCamera
+      {
+          IsOrthographic = IsOrthographic,
+          Fov = Fov, Aspect = AspectRatio,
+          Near = NearPlane, Far = FarPlane,
+          OrthoLeft = OrthoLeft, OrthoRight = OrthoRight,
+          OrthoBottom = OrthoBottom, OrthoTop = OrthoTop,
+          // proj array doesn't matter for pushing
+      };
+      NativeInterop.avkSimulationContext_setCameraComponent(SimulationContext, SceneId, EntityId, in data);
+  }
+
+  protected override void PullFromNativeImpl()
+  {
+      if (NativeInterop.avkSimulationContext_getCameraComponent(SimulationContext, SceneId, EntityId, out var data))
+      {
+          IsOrthographic = data.IsOrthographic;
+          Fov = data.Fov; AspectRatio = data.Aspect;
+          NearPlane = data.Near; FarPlane = data.Far;
+          OrthoLeft = data.OrthoLeft; OrthoRight = data.OrthoRight;
+          OrthoBottom = data.OrthoBottom; OrthoTop = data.OrthoTop;
+
+          // Safe unpacking of the projection matrix
+          ProjectionMatrixPreview = 
+              $"[{data.Proj[0]:F2}, {data.Proj[4]:F2}, {data.Proj[8]:F2}, {data.Proj[12]:F2}]\n" +
+              $"[{data.Proj[1]:F2}, {data.Proj[5]:F2}, {data.Proj[9]:F2}, {data.Proj[13]:F2}]\n" +
+              $"[{data.Proj[2]:F2}, {data.Proj[6]:F2}, {data.Proj[10]:F2}, {data.Proj[14]:F2}]\n" +
+              $"[{data.Proj[3]:F2}, {data.Proj[7]:F2}, {data.Proj[11]:F2}, {data.Proj[15]:F2}]";
+      }
+  }
 }
 
 public partial class CursorComponent : ObservableObject, IComponent

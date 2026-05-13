@@ -1,5 +1,6 @@
 //! misc_api module.
 
+use crate::scene::EntityId;
 use crate::{
   expect_scene,
   gpu::PresentationEngineHandle,
@@ -152,17 +153,9 @@ impl SimulationContext {
     let scene_data = self.scenes.read();
     let scene = expect_scene!(scene_data.get_scene(scene_id), "scene_api:resize");
     {
-      let scene_write = scene.read();
-      let target_entity = scene_write.active_camera_entity.ok_or(EngineError::InvalidOperation(
-        "scene_api: no active camera in scene",
-      ))?;
-      scene_write.scene.with_component_mut(target_entity, |c: &mut CameraComponent| {
-        c.projection = Mat4x4f32::perspective_vk(
-          45.0f32.to_radians(),
-          width as f32 / height as f32,
-          0.1,
-          10000.0,
-        );
+      let scene_write = scene.write();
+      scene_write.scene.query1_mut(|e: EntityId, c: &mut CameraComponent| {
+        c.update_for_extent(width, height);
       });
     }
 

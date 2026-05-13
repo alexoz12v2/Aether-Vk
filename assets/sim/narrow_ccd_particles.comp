@@ -1,0 +1,157 @@
+#version 450 core
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "../bvh_utils.glsl"
+
+#define TYPE_PARTICLE_SYSTEM 0
+#define TYPE_RIGID_BODY      1
+#define TYPE_KINEMATIC_BODY  2
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+struct Entity {
+    BVHArray bvh;
+    mat4 transform;
+    mat4 inv_transform;
+    uint root_index;
+    uint type;              
+    uint primitive_offset;
+    uint total_primitives;  
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer EntityArray {
+    Entity entities[];
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer SparseCollisions {
+    uvec4 data[];
+};
+
+layout(push_constant, scalar) uniform PushConstants {
+    EntityArray scene_entities;
+    SparseCollisions output_list;
+    uint entity_A_idx;
+    uint entity_B_idx;
+} pc;
+
+bool ccdSphereSphere(
+    vec3 pA0, vec3 pA1, float rA, 
+    vec3 pB0, vec3 pB1, float rB, 
+    out float toi
+) {
+    vec3 p0 = pA0 - pB0;
+    vec3 p1 = pA1 - pB1;
+    vec3 v = p1 - p0;    
+    
+    float dv = dot(v, v);
+    float r = rA + rB;
+    float r2 = r * r;
+    float c = dot(p0, p0) - r2;
+    
+    if (dv < 1e-6) {
+        if (c <= 0.0) { toi = 0.0; return true; }
+        return false;
+    }
+    
+    float half_b = dot(p0, v);
+    float disc = half_b * half_b - dv * c;
+    
+    if (disc < 0.0) return false; 
+    
+    float t = (-half_b - sqrt(disc)) / dv;
+    if (t >= 0.0 && t <= 1.0) {
+        toi = t;
+        return true;
+    }
+    return false;
+}
+
+AABB transformAABB(AABB aabb, mat4 m) {
+    vec3 center = (aabb.maxBounds + aabb.minBounds) * 0.5;
+    vec3 extents = (aabb.maxBounds - aabb.minBounds) * 0.5;
+    vec3 tCenter = (m * vec4(center, 1.0)).xyz;
+    mat3 absM = mat3(abs(m[0].xyz), abs(m[1].xyz), abs(m[2].xyz));
+    vec3 tExtents = absM * extents;
+    return AABB(tCenter - tExtents, tCenter + tExtents);
+}
+
+void main() {
+    uint local_idx_A = gl_GlobalInvocationID.x;
+    Entity ent_A = pc.scene_entities.entities[pc.entity_A_idx];
+    Entity ent_B = pc.scene_entities.entities[pc.entity_B_idx];
+
+    if (local_idx_A >= ent_A.total_primitives) return;
+
+    BVHNodeAABB node_A = read_bvh_node(ent_A.bvh, ent_A.total_primitives - 1 + local_idx_A);
+    uint my_prim_id = node_A.left_child_or_primitive_offset;
+    
+    // Calculate matrix to transform Primitive A into Entity B's Local Space
+    mat4 A_to_B = ent_B.inv_transform * ent_A.transform;
+    AABB search_aabb_B = transformAABB(node_A.bound, A_to_B);
+
+    uint collisions_found = 0;
+    const uint MAX_COLLISIONS = 16;
+
+    // BLAS Traversal of Entity B
+    uint stack[32];
+    int stackPtr = 0;
+    stack[stackPtr++] = ent_B.root_index;
+
+    while (stackPtr > 0) {
+        uint node_idx = stack[--stackPtr];
+        BVHNodeAABB node_B = read_bvh_node(ent_B.bvh, node_idx);
+
+        if (intersectAABB(search_aabb_B, node_B.bound)) {
+            if (node_B.primitive_count > 0) {
+                uint other_prim_id = node_B.left_child_or_primitive_offset;
+                
+                // Prevent self-intersection duplicates
+                if (pc.entity_A_idx == pc.entity_B_idx && my_prim_id >= other_prim_id) continue;
+
+                float toi = 1.0; 
+                vec3 normal = vec3(0.0);
+                bool is_colliding = false;
+
+                // Transform my start/end points into Entity B's local space
+                vec3 pA0_localB = (A_to_B * vec4(node_A.center_of_mass, 1.0)).xyz;
+                vec3 pA1_localB = (A_to_B * vec4(node_A.center_of_mass + vec3(0.01), 1.0)).xyz;
+
+                if (ent_A.type == TYPE_PARTICLE_SYSTEM && ent_B.type == TYPE_PARTICLE_SYSTEM) {
+                    vec3 pB0 = node_B.center_of_mass;
+                    vec3 pB1 = node_B.center_of_mass + vec3(0.01); 
+
+                    is_colliding = ccdSphereSphere(
+                        pA0_localB, pA1_localB, node_A.mass,
+                        pB0, pB1, node_B.mass,
+                        toi
+                    );
+                } 
+                else if (ent_A.type == TYPE_PARTICLE_SYSTEM && (ent_B.type == TYPE_RIGID_BODY || ent_B.type == TYPE_KINEMATIC_BODY)) {
+                    // Triangle is STATIC in its own local space!
+                    vec3 v0 = vec3(0.0); vec3 v1 = vec3(1.0, 0.0, 0.0); vec3 v2 = vec3(0.0, 1.0, 0.0);
+                    
+                    is_colliding = ccdSphereTriangle(
+                        pA0_localB, pA1_localB, node_A.mass,
+                        v0, v1, v2, toi, normal
+                    );
+                }
+
+                if (is_colliding && collisions_found < MAX_COLLISIONS) {
+                    uint outIdx = local_idx_A * MAX_COLLISIONS + collisions_found;
+                    pc.output_list.data[outIdx] = uvec4(
+                        1, 
+                        ent_A.primitive_offset + my_prim_id, 
+                        ent_B.primitive_offset + other_prim_id, 
+                        floatBitsToUint(toi)
+                    );
+                    collisions_found++;
+                }
+            } else {
+                stack[stackPtr++] = node_B.left_child_or_primitive_offset;
+                stack[stackPtr++] = node_B.right_child_offset;
+            }
+        }
+    }
+}

@@ -26,6 +26,10 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleDat
 struct ForceEmitter {
     vec3 position;
     float mu; // G * M
+    vec3 normal;
+    uint type_id; // 0 = Gravity, 1 = Planar
+    float trunc_distance;
+    uint _pad[3];
 };
 
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer EmitterArray {
@@ -84,11 +88,24 @@ void main() {
         ForceEmitter em;
         em.position = pc.emitters.emitters[e].position;
         em.mu = pc.emitters.emitters[e].mu;
-        vec3 r = em.position - q_next;
-        float dist_sq = dot(r, r);
-        if (dist_sq > 1e-6) {
-            float dist = sqrt(dist_sq);
-            f_next += r * (em.mu * mass / (dist_sq * dist));
+        em.normal = pc.emitters.emitters[e].normal;
+        em.type_id = pc.emitters.emitters[e].type_id;
+        em.trunc_distance = pc.emitters.emitters[e].trunc_distance;
+        
+        if (em.type_id == 0) {
+            vec3 r = em.position - q_next;
+            float dist_sq = dot(r, r);
+            if (dist_sq > 1e-6) {
+                float dist = sqrt(dist_sq);
+                f_next += r * (em.mu * mass / (dist_sq * dist));
+            }
+        } else if (em.type_id == 1) {
+            vec3 r = q_next - em.position;
+            float dist = dot(r, em.normal);
+            if (dist >= 0.0 && dist < em.trunc_distance) {
+                float force_mag = em.mu / (1.0 + dist * dist);
+                f_next += em.normal * force_mag;
+            }
         }
     }
 

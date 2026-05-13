@@ -7,25 +7,13 @@ using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Views;
 
-public partial class HorizonJplView : UserControl, IRecipient<RequestSaveFileMessage>
+public partial class HorizonJplView : UserControl
 {
   private HorizonJplViewModel? _viewModel;
 
   public HorizonJplView()
   {
     InitializeComponent();
-  }
-
-  protected override void OnAttachedToVisualTree(Avalonia.VisualTreeAttachmentEventArgs e)
-  {
-    base.OnAttachedToVisualTree(e);
-    WeakReferenceMessenger.Default.Register<RequestSaveFileMessage>(this);
-  }
-
-  protected override void OnDetachedFromVisualTree(Avalonia.VisualTreeAttachmentEventArgs e)
-  {
-    base.OnDetachedFromVisualTree(e);
-    WeakReferenceMessenger.Default.Unregister<RequestSaveFileMessage>(this);
   }
 
   protected override void OnDataContextChanged(EventArgs e)
@@ -87,37 +75,5 @@ public partial class HorizonJplView : UserControl, IRecipient<RequestSaveFileMes
         new DataGridTextColumn { Header = header, Binding = new Binding($"[{i}]") }
       );
     }
-  }
-
-  public async void Receive(RequestSaveFileMessage message)
-  {
-    var topLevel = TopLevel.GetTopLevel(this);
-    if (topLevel == null)
-    {
-      message.Result.SetResult(null);
-      return;
-    }
-
-    var file = await topLevel.StorageProvider.SaveFilePickerAsync(
-      new Avalonia.Platform.Storage.FilePickerSaveOptions
-      {
-        Title = "Save SPK File",
-        DefaultExtension = "bsp",
-        SuggestedFileName = message.DefaultFileName,
-        FileTypeChoices = new[]
-        {
-          new Avalonia.Platform.Storage.FilePickerFileType("BSP Files")
-          {
-            Patterns = new[] { "*.bsp" },
-          },
-          new Avalonia.Platform.Storage.FilePickerFileType("All Files")
-          {
-            Patterns = new[] { "*.*" },
-          },
-        },
-      }
-    );
-
-    message.Result.SetResult(file?.Path.LocalPath);
   }
 }

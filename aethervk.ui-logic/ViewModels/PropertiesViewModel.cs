@@ -34,6 +34,8 @@ public partial class PropertiesViewModel
   [ObservableProperty]
   private bool _isFlyoutMenuOpen;
 
+  private readonly System.Collections.Generic.List<IComponentRule> _componentRules = new();
+
   public PropertiesViewModel(
     ulong sceneId,
     SceneStateManager stateManager,
@@ -48,6 +50,11 @@ public partial class PropertiesViewModel
     _breadcrumbService = breadcrumbService;
     CurrentSceneId = sceneId;
     OperatorStack = new OperatorStack(new PropertiesBaseOperator(this));
+    
+    // Register composable rules
+    _componentRules.Add(new TransformEditableRule());
+    _componentRules.Add(new CometBvhRefreshRule(_runtimeService));
+
     WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
   }
 
@@ -75,19 +82,9 @@ public partial class PropertiesViewModel
 
     if (SelectedEntity != null)
     {
-      var transform = SelectedEntity.Components.OfType<TransformComponent>().FirstOrDefault();
-      if (transform != null)
+      foreach (var rule in _componentRules)
       {
-        bool hasCameraOrCursor = SelectedEntity.Components.Any(c =>
-          c is CameraComponent || c is CursorComponent
-        );
-        transform.IsEditable = hasCameraOrCursor;
-      }
-
-      var comet = SelectedEntity.Components.OfType<CometComponent>().FirstOrDefault();
-      if (comet != null)
-      {
-        _runtimeService?.RefreshBvhNodes(CurrentSceneId, SelectedEntity.Id, comet);
+        rule.Apply(SelectedEntity);
       }
     }
   }

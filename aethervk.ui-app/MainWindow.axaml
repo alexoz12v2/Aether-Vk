@@ -73,9 +73,12 @@
             <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="services:BreadcrumbMessage">
                     <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,10" BoxShadow="0 4 8 0 #40000000">
-                        <StackPanel>
-                            <TextBlock Text="{Binding Title}" FontWeight="Bold" Foreground="{DynamicResource Text.Primary}"/>
-                            <TextBlock Text="{Binding Content}" Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap" MaxWidth="250"/>
+                        <StackPanel Orientation="Horizontal">
+                            <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsLoading}" Width="20" Height="20" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="{Binding Title}" FontWeight="Bold" Foreground="{DynamicResource Text.Primary}"/>
+                                <TextBlock Text="{Binding Content}" Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap" MaxWidth="250"/>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
                 </DataTemplate>

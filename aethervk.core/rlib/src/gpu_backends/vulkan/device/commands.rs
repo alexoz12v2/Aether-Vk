@@ -3,14 +3,14 @@
 use core::{fmt, ptr};
 
 use crate::{
-  gpu::{CommandBufferHandle, GpuResourceHandle},
-  gpu_backends::vulkan::device::DeviceResource,
+  gpu::CommandBufferHandle,
+  gpu_backends::vulkan::device::{DeviceResource, LogicalDevice, VulkanDebugNameExt},
   types::{GpuError, GpuResult, SpscQueue},
 };
 use aethervk_oshal_rlib::os::native::ThreadId;
 use alloc::{boxed::Box, collections::btree_map::BTreeMap};
 use ash::vk;
-use core::fmt::{Formatter, Pointer};
+use core::fmt::Formatter;
 
 // TODO: implement trait/function to hash some compile time string
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -66,7 +66,7 @@ impl CommandPools {
   /// TODO: Document this item
   pub(super) fn allocate_primary(
     &self,
-    device: &ash::Device,
+    device: &LogicalDevice,
     tid: ThreadId,
     id: CommandBufferId,
   ) -> GpuResult<vk::CommandBuffer> {
@@ -111,7 +111,7 @@ impl CommandPools {
 
   fn allocate_internal(
     &self,
-    device: &ash::Device,
+    device: &LogicalDevice,
     tid: ThreadId,
     id: CommandBufferId,
     is_primary: bool,
@@ -138,7 +138,7 @@ impl CommandPools {
 
       // 2. Check cache
       let pool_cache = tp.cmd_cache.entry(*active_pool).or_default();
-      
+
       // Find the first unused command buffer in the cache
       let mut found_recycled = None;
       for (&old_id, pair) in pool_cache.iter() {
@@ -168,7 +168,8 @@ impl CommandPools {
           ptr::from_mut(&mut cmd),
         );
         vk_res.result_with_success(cmd)
-      }?;
+      }
+      .with_name(device, &alloc::format!("PrimaryCommandBuffer_{}", id.0))?;
       // fails if there's already something, don't care
       let _ = pool_cache.insert(id, (new_cmd, true));
 

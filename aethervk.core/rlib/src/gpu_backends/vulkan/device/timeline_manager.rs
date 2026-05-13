@@ -115,6 +115,7 @@ impl TimelineManager {
     if let Some(entry) = self.task_registry.read().get(&task_id) {
       entry.status.store(TASK_STATUS_SUCCESS, Ordering::Release);
     }
+    self.task_registry.write().remove(&task_id);
   }
 
   /// TODO: Document this item
@@ -131,7 +132,11 @@ impl TimelineManager {
         Ok(false)
       }
     } else {
-      Err(crate::gpu_invalid_arg!("invalid argument"))
+      if task_id > 0 && task_id < self.next_task_id.load(Ordering::SeqCst) {
+        Ok(true)
+      } else {
+        Err(crate::gpu_invalid_arg!("invalid argument"))
+      }
     }
   }
 

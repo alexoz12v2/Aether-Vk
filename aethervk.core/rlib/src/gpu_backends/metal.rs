@@ -360,11 +360,11 @@ impl RenderDevice for MetalRenderDevice {
     &self,
     _cmd_buffer: CommandBufferHandle,
     _text: &str,
-    _font_path: &str,
-    _points: f32,
+    _start_cursor_position: [f32; 2],
+    _view_proj: [f32; 16],
+    _atlas_id: (u64, u32),
+    _desired_points: f32,
     _color: [f32; 4],
-    _position: [f32; 2],
-    _presentation_engine: PresentationEngineHandle,
   ) -> GpuResult<()> {
     Ok(())
   }
@@ -478,7 +478,7 @@ impl RenderDevice for MetalRenderDevice {
     todo!()
   }
 
-  fn add_billboard_texture(&self, texture: &Texture) -> GpuResult<()> {
+  fn add_billboard_texture(&self, _cmd_buffer: crate::gpu::CommandBufferHandle, texture: &Texture) -> GpuResult<()> {
     todo!()
   }
 
@@ -496,7 +496,7 @@ self, texture_id: u64) -> GpuResult<()> {
     todo!()
   }
 
-  fn add_billboard_texture(&self, texture: &Texture) -> GpuResult<()> {
+  fn add_billboard_texture(&self, _cmd_buffer: crate::gpu::CommandBufferHandle, texture: &Texture) -> GpuResult<()> {
     todo!()
   }
 

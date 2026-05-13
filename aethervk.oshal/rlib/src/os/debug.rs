@@ -10,23 +10,21 @@ macro_rules! log {
 #[cfg(all(debug_assertions, feature = "debug_gpu"))]
 #[macro_export]
 macro_rules! track_gpu_alloc {
-  ($size:expr) => {
-    {
-      $crate::os::memory::tracking::GPU_ALLOCATED.fetch_add($size as usize, core::sync::atomic::Ordering::Relaxed);
-      $crate::os::memory::tracking::track_hotspot($size as usize);
-      $crate::os::memory::tracking::check_memory_threshold();
-    }
-  };
+  ($size:expr) => {{
+    $crate::os::memory::tracking::GPU_ALLOCATED
+      .fetch_add($size as usize, core::sync::atomic::Ordering::Relaxed);
+    $crate::os::memory::tracking::track_hotspot($size as usize);
+    $crate::os::memory::tracking::check_memory_threshold();
+  }};
 }
 
 #[cfg(all(debug_assertions, feature = "debug_gpu"))]
 #[macro_export]
 macro_rules! track_gpu_free {
-  ($size:expr) => {
-    {
-      $crate::os::memory::tracking::GPU_ALLOCATED.fetch_sub($size as usize, core::sync::atomic::Ordering::Relaxed);
-    }
-  };
+  ($size:expr) => {{
+    $crate::os::memory::tracking::GPU_ALLOCATED
+      .fetch_sub($size as usize, core::sync::atomic::Ordering::Relaxed);
+  }};
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -319,7 +317,8 @@ mod unix_debug {
   #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
   pub fn capture_aethervk_trace() -> Option<[usize; 3]> {
     unsafe extern "C" {
-      fn backtrace(buffer: *mut *mut core::ffi::c_void, size: core::ffi::c_int) -> core::ffi::c_int;
+      fn backtrace(buffer: *mut *mut core::ffi::c_void, size: core::ffi::c_int)
+      -> core::ffi::c_int;
     }
     unsafe {
       let mut buffer: [*mut core::ffi::c_void; 64] = [core::ptr::null_mut(); 64];
@@ -347,11 +346,7 @@ mod unix_debug {
         }
       }
 
-      if count > 0 {
-        Some(trace)
-      } else {
-        None
-      }
+      if count > 0 { Some(trace) } else { None }
     }
   }
 
@@ -404,7 +399,9 @@ mod unix_debug {
   }
 
   #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
-  pub fn capture_aethervk_trace() -> Option<[usize; 3]> { None }
+  pub fn capture_aethervk_trace() -> Option<[usize; 3]> {
+    None
+  }
 
   #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
   /// TODO: Document this item

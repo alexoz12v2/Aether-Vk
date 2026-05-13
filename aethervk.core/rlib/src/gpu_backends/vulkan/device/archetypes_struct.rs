@@ -54,11 +54,16 @@ pub(super) struct Archetypes {
   pub grid_render_archetype: spin::RwLock<Option<resources::GridRenderResourceArchetype>>,
   pub minimap_render_archetype: spin::RwLock<Option<resources::MinimapRenderResourceArchetype>>,
   pub text_render_archetype: spin::RwLock<Option<resources::TextRenderResourceArchetype>>,
+  pub text2_render_archetype: spin::RwLock<Option<resources::Text2RenderResourceArchetype>>,
   pub bvh_render_archetype: spin::RwLock<Option<resources::BvhRenderResourceArchetype>>,
+  pub bvhwire2_render_archetype: spin::RwLock<Option<resources::Bvhwire2RenderResourceArchetype>>,
   pub gizmo_render_archetype: spin::RwLock<Option<resources::GizmoRenderResourceArchetype>>,
   pub particle2_render_archetype: spin::RwLock<Option<resources::Particle2RenderResourceArchetype>>,
   pub trajectory_render_archetype:
     spin::RwLock<Option<resources::TrajectoryRenderResourceArchetype>>,
+  pub ui_render_archetype: spin::RwLock<Option<resources::UiRenderResourceArchetype>>,
+  pub background_render_archetype:
+    spin::RwLock<Option<resources::BackgroundRenderResourceArchetype>>,
 }
 
 impl Archetypes {
@@ -76,9 +81,13 @@ impl Archetypes {
       || self.grid_render_archetype.read().is_some()
       || self.minimap_render_archetype.read().is_some()
       || self.text_render_archetype.read().is_some()
+      || self.text2_render_archetype.read().is_some()
       || self.bvh_render_archetype.read().is_some()
+      || self.bvhwire2_render_archetype.read().is_some()
+      || self.ui_render_archetype.read().is_some()
       || self.gizmo_render_archetype.read().is_some()
       || self.trajectory_render_archetype.read().is_some()
+      || self.background_render_archetype.read().is_some()
   }
 
   /// TODO: Document this item
@@ -116,7 +125,13 @@ impl Archetypes {
     if let Some(mut archetype) = self.text_render_archetype.write().take() {
       archetype.discard(device, discard_pool, u64::MAX);
     }
+    if let Some(mut archetype) = self.text2_render_archetype.write().take() {
+      archetype.discard(device, discard_pool, u64::MAX);
+    }
     if let Some(mut archetype) = self.bvh_render_archetype.write().take() {
+      archetype.discard(device, discard_pool, u64::MAX);
+    }
+    if let Some(mut archetype) = self.bvhwire2_render_archetype.write().take() {
       archetype.discard(device, discard_pool, u64::MAX);
     }
     if let Some(mut archetype) = self.measurement_render_archetype.write().take() {
@@ -129,6 +144,12 @@ impl Archetypes {
       archetype.discard(device, discard_pool, u64::MAX);
     }
     if let Some(mut archetype) = self.trajectory_render_archetype.write().take() {
+      archetype.discard(device, discard_pool, u64::MAX);
+    }
+    if let Some(mut archetype) = self.ui_render_archetype.write().take() {
+      archetype.discard(device, discard_pool, u64::MAX);
+    }
+    if let Some(mut archetype) = self.background_render_archetype.write().take() {
       archetype.discard(device, discard_pool, u64::MAX);
     }
   }
@@ -393,6 +414,10 @@ impl Archetypes {
     particle_render_archetype
   );
   impl_update_archetype!(
+    update_particle2_archetype_for_presentation_engine,
+    particle2_render_archetype
+  );
+  impl_update_archetype!(
     update_sun_archetype_for_presentation_engine,
     sun_render_archetype
   );
@@ -417,8 +442,18 @@ impl Archetypes {
   );
 
   impl_update_archetype!(
+    update_text2_archetype_for_presentation_engine,
+    text2_render_archetype
+  );
+
+  impl_update_archetype!(
     update_bvh_archetype_for_presentation_engine,
     bvh_render_archetype
+  );
+
+  impl_update_archetype!(
+    update_bvhwire2_archetype_for_presentation_engine,
+    bvhwire2_render_archetype
   );
 
   impl_update_archetype!(
@@ -444,6 +479,16 @@ impl Archetypes {
   impl_update_archetype!(
     update_trajectory_archetype_for_presentation_engine,
     trajectory_render_archetype
+  );
+
+  impl_update_archetype!(
+    update_ui_archetype_for_presentation_engine,
+    ui_render_archetype
+  );
+
+  impl_update_archetype!(
+    update_background_archetype_for_presentation_engine,
+    background_render_archetype
   );
 
   // ------------------------------------ Creation ------------------------------------
@@ -506,6 +551,97 @@ impl Archetypes {
         .with_stencil_write_mask(u32::MAX)
     }
   );
+
+  impl_create_archetype!(
+    create_ui_archetype,
+    ui_render_archetype,
+    UiRenderResourceArchetype,
+    ref_alloc,
+    |gi| {
+      gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_LIST))
+        .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST)
+        .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+        .with_stencil_compare_op(StencilCompareOp::None)
+        .with_stencil_logic_op(StencilLogicOp::Replace)
+        .with_stencil_reference(255)
+        .with_stencil_compare_mask(0)
+        .with_stencil_write_mask(u32::MAX)
+    }
+  );
+
+  pub fn create_background_archetype(
+    &self,
+    device: &LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
+    vertex_shader_key: ShaderKey,
+    fragment_shader_key: ShaderKey,
+    depth_stencil_format: vk::Format,
+    color_format: vk::Format,
+    allocator: &vk_mem::Allocator,
+    discard_pool: &resources::DiscardPool,
+    renderpasses: &renderpasses::RenderPasses,
+    pipeline_pool: &mut pipelines::PipelinePool,
+    timeline: u64,
+  ) -> GpuResult<()> {
+    let mut bg_render_archetype = self.background_render_archetype.write();
+    if bg_render_archetype.is_some() {
+      return Err(crate::gpu_err!("device error"));
+    }
+    let (vertex_shader, fragment_shader) =
+      get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
+
+    let push_constant_ranges = [vk::PushConstantRange::default()
+      .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+      .offset(0)
+      .size(32)]; // 2x vec4 (2 * 4 * 4 = 32 bytes)
+    let pipeline_layout_info =
+      vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
+
+    *bg_render_archetype = Some(resources::BackgroundRenderResourceArchetype::new(
+      pipeline_layout,
+    ));
+
+    let pipeline_graphics_info = GraphicsInfo::default()
+      .with_vertex_in(
+        VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_LIST).clone(),
+      )
+      .with_pre_rasterization(
+        PreRasterization::default().with_vertex_module(vertex_shader.module.get()).clone(),
+      )
+      .with_fragment_shader(
+        FragmentShader::default()
+          .with_fragment_module(fragment_shader.module.get())
+          .add_viewport(ignored_viewport())
+          .add_scissors(ignored_scissor())
+          .clone(),
+      )
+      .with_fragment_out(
+        FragmentOut::default()
+          .add_color_attachment_format(color_format)
+          .with_depth_attachment_format(depth_stencil_format)
+          .clone(),
+      )
+      .with_pipeline_layout(pipeline_layout)
+      .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST)
+      .with_render_pass(
+        renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
+      )
+      .with_subpass(0)
+      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+      .clone();
+
+    let pipeline_key = pipeline_graphics_info.pipeline_key();
+    pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
+
+    bg_render_archetype.as_mut().unwrap().insert_graphics_info(
+      color_format,
+      pipeline_graphics_info,
+      pipeline_key,
+    );
+
+    Ok(())
+  }
 
   impl_create_archetype!(
     create_cursor_archetype,
@@ -671,7 +807,7 @@ impl Archetypes {
           .with_stencil_attachment_format(depth_stencil_format),
       )
       .with_pipeline_layout(res.pipeline_layout.get())
-      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
+      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::INVERT_FRONT_FACE)
       .with_stencil_compare_op(StencilCompareOp::Always)
       .with_stencil_logic_op(StencilLogicOp::Replace)
       .with_stencil_reference(255)
@@ -846,7 +982,7 @@ impl Archetypes {
           .with_stencil_attachment_format(depth_stencil_format),
       )
       .with_pipeline_layout(res.pipeline_layout.get())
-      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
+      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::INVERT_FRONT_FACE)
       .with_stencil_compare_op(StencilCompareOp::Always)
       .with_stencil_logic_op(StencilLogicOp::Replace)
       .with_stencil_reference(255)
@@ -1246,6 +1382,135 @@ impl Archetypes {
   }
 
   /// TODO: Document this item
+  pub fn create_text2_archetype(
+    &self,
+    device: &LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
+    vertex_shader_key: ShaderKey,
+    fragment_shader_key: ShaderKey,
+    depth_stencil_format: vk::Format,
+    queue: &Queue,
+    color_format: vk::Format,
+    allocator: &vk_mem::Allocator,
+    discard_pool: &resources::DiscardPool,
+    renderpasses: &renderpasses::RenderPasses,
+    pipeline_pool: &mut pipelines::PipelinePool,
+    timeline: u64,
+  ) -> GpuResult<()> {
+    let mut text2_render_archetype = self.text2_render_archetype.write();
+    if text2_render_archetype.is_some() {
+      return Err(crate::gpu_err!("device error"));
+    }
+
+    let (vertex_shader, fragment_shader) =
+      get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
+
+    let max_fonts = 256;
+
+    let bindings = [vk::DescriptorSetLayoutBinding::default()
+      .binding(0)
+      .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+      .descriptor_count(max_fonts)
+      .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+
+    let binding_flags =
+      [vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND];
+    let mut binding_flags_info =
+      vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
+
+    let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
+      .bindings(&bindings)
+      .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
+      .push_next(&mut binding_flags_info);
+    let set_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }?;
+    let set_layouts = [set_layout];
+
+    let push_constant_ranges = [vk::PushConstantRange::default()
+      .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+      .offset(0)
+      .size(72)]; // 72 bytes Push Constant
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
+      .set_layouts(&set_layouts)
+      .push_constant_ranges(&push_constant_ranges);
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
+
+    let sampler_info = vk::SamplerCreateInfo::default()
+      .mag_filter(vk::Filter::LINEAR)
+      .min_filter(vk::Filter::LINEAR)
+      .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+      .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+      .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+    let font_sampler = unsafe { device.create_sampler(&sampler_info, None) }?;
+
+    let pool_sizes = [vk::DescriptorPoolSize::default()
+      .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+      .descriptor_count(max_fonts)];
+    let pool_info = vk::DescriptorPoolCreateInfo::default()
+      .pool_sizes(&pool_sizes)
+      .max_sets(1)
+      .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
+    let pool = unsafe { device.create_descriptor_pool(&pool_info, None) }?;
+
+    let alloc_info =
+      vk::DescriptorSetAllocateInfo::default().descriptor_pool(pool).set_layouts(&set_layouts);
+    let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?[0];
+
+    let mut arch = resources::Text2RenderResourceArchetype::new(
+      pipeline_layout,
+      set_layout,
+      pool,
+      descriptor_set,
+      font_sampler,
+      max_fonts,
+      allocator,
+      device,
+    )?;
+
+    let pipeline_graphics_info = GraphicsInfo::default()
+      .with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
+      .with_pre_rasterization(
+        PreRasterization::default().with_vertex_module(vertex_shader.module.get()),
+      )
+      .with_fragment_shader(
+        FragmentShader::default()
+          .with_fragment_module(fragment_shader.module.get())
+          .add_viewport(ignored_viewport())
+          .add_scissors(ignored_scissor()),
+      )
+      .with_fragment_out(
+        FragmentOut::default()
+          .add_color_attachment_format(color_format)
+          .with_depth_attachment_format(depth_stencil_format)
+          .with_stencil_attachment_format(depth_stencil_format),
+      )
+      .with_pipeline_layout(pipeline_layout)
+      .with_pipeline_flags(
+        PipelineFlags::NO_DEPTH_WRITE
+          | PipelineFlags::NO_DEPTH_TEST
+          | PipelineFlags::STENCIL_ENABLE,
+      )
+      .with_stencil_compare_op(StencilCompareOp::None)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(255)
+      .with_stencil_compare_mask(0)
+      .with_stencil_write_mask(u32::MAX)
+      .with_render_pass(
+        renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
+      )
+      .with_subpass(0)
+      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
+      .clone();
+
+    let pipeline_key = pipeline_graphics_info.pipeline_key();
+    pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
+
+    *text2_render_archetype =
+      Some(arch.with_graphics_info(color_format, pipeline_graphics_info, pipeline_key));
+
+    Ok(())
+  }
+
+  /// TODO: Document this item
   pub fn create_bvh_archetype(
     &self,
     device: &LogicalDevice,
@@ -1305,7 +1570,77 @@ impl Archetypes {
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
 
-    aethervk_oshal_rlib::log!("Creating graphics pipeline for physical_mesh2...");
+    aethervk_oshal_rlib::log!("Creating graphics pipeline for bvh...");
+    pipeline_pool
+      .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)
+      .inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
+
+    archetype.insert_graphics_info(color_format, pipeline_graphics_info, pipeline_key);
+
+    Ok(())
+  }
+
+  /// TODO: Document this item
+  pub fn create_bvhwire2_archetype(
+    &self,
+    device: &LogicalDevice,
+    shader_manager: &shader_manager::ShaderManager,
+    vkey: ShaderKey,
+    fkey: ShaderKey,
+    depth_stencil_format: vk::Format,
+    color_format: vk::Format,
+    allocator: &vk_mem::Allocator,
+    discard_pool: &resources::DiscardPool,
+    renderpasses: &renderpasses::RenderPasses,
+    pipeline_pool: &mut pipelines::PipelinePool,
+    timeline: u64,
+  ) -> GpuResult<()> {
+    let mut bvhwire2_render_archetype = self.bvhwire2_render_archetype.write();
+    if bvhwire2_render_archetype.is_some() {
+      return Err(crate::gpu_err!("device error"));
+    }
+    *bvhwire2_render_archetype =
+      Some(unsafe { resources::Bvhwire2RenderResourceArchetype::new(device, allocator) }?);
+    let archetype = bvhwire2_render_archetype.as_mut().ok_or(crate::gpu_err!("device error"))?;
+
+    let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vkey, fkey)?;
+
+    let pipeline_graphics_info = pipelines::GraphicsInfo::default()
+      .with_vertex_in(
+        pipelines::VertexIn::default().with_topology(vk::PrimitiveTopology::LINE_LIST).clone(),
+      )
+      .with_pre_rasterization(
+        pipelines::PreRasterization::default()
+          .with_vertex_module(vertex_shader.module.get())
+          .clone(),
+      )
+      .with_fragment_shader(
+        pipelines::FragmentShader::default()
+          .with_fragment_module(fragment_shader.module.get())
+          .add_viewport(ignored_viewport())
+          .add_scissors(ignored_scissor())
+          .clone(),
+      )
+      .with_fragment_out(
+        pipelines::FragmentOut::default()
+          .add_color_attachment_format(color_format)
+          .with_depth_attachment_format(depth_stencil_format)
+          .clone(),
+      )
+      .with_pipeline_layout(archetype.pipeline_layout.get())
+      .with_pipeline_flags(
+        pipelines::PipelineFlags::NO_DEPTH_WRITE | pipelines::PipelineFlags::INVERT_FRONT_FACE,
+      )
+      .with_render_pass(
+        renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
+      )
+      .with_subpass(0)
+      .with_rasterization_polygon_mode(vk::PolygonMode::LINE)
+      .clone();
+
+    let pipeline_key = pipeline_graphics_info.pipeline_key();
+
+    aethervk_oshal_rlib::log!("Creating graphics pipeline for bvhwire2...");
     pipeline_pool
       .get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)
       .inspect_err(|e| aethervk_oshal_rlib::log!("Failed to create graphics pipeline: {:?}", e))?;
@@ -1395,4 +1730,3 @@ fn ignored_viewport() -> vk::Viewport {
 fn ignored_scissor() -> vk::Rect2D {
   vk::Rect2D::default()
 }
-// Dummy implementation of create_physical_mesh2_archetype needs to be appended appropriately.

@@ -22,6 +22,7 @@ struct PushConstants {
 
 #[test]
 fn test_apply_impulses() {
+  compute_shaders_test::ensure_test_data("test_data/apply_impulses.json", "gen_apply_impulses_data.py");
   let json_data = fs::read_to_string("test_data/apply_impulses.json").expect("Failed to read JSON");
   let test_data: ApplyImpulsesData =
     serde_json::from_str(&json_data).expect("Failed to parse JSON");

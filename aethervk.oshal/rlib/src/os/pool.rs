@@ -146,7 +146,7 @@ mod windows_pool {
     pub fn gather(&self) {
       while self.state.pending_tasks.load(Ordering::Acquire) > 0 {
         unsafe {
-          let _ = SwitchToThread();
+          let _ = unsafe { SwitchToThread() };
         }
       }
     }
@@ -223,12 +223,12 @@ mod windows_pool {
             let local_len = state.local_queues[id].lock().len();
             let shared_len = state.shared_queue.lock().len();
             if local_len + shared_len <= 1 {
-              let _ = SwitchToThread();
+              let _ = unsafe { SwitchToThread() };
             }
           }
         }
       } else {
-        let _ = SwitchToThread();
+        let _ = unsafe { SwitchToThread() };
       }
     }
 

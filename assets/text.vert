@@ -6,6 +6,8 @@ layout(push_constant) uniform Push {
     vec4 color;
     vec4 uv_bounds; // xy = min, zw = max
     uint texture_id;
+    uint _pad[3];
+    mat4 viewProj;
 } push;
 
 layout(location = 0) out vec2 outUV;
@@ -26,6 +28,6 @@ void main() {
     
     vec2 screenPos = push.pos + (inPosition * push.scale);
     
-    gl_Position = vec4(screenPos, 0.0, 1.0);
+    gl_Position = push.viewProj * vec4(screenPos, 0.0, 1.0);
     outTextureId = push.texture_id;
 }

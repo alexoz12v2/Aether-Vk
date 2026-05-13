@@ -8,17 +8,10 @@ using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.ViewModels;
 
-public class RequestSaveFileMessage
-{
-  public string DefaultFileName { get; }
-  public TaskCompletionSource<string?> Result { get; } = new();
-
-  public RequestSaveFileMessage(string defaultFileName) => DefaultFileName = defaultFileName;
-}
-
 public partial class HorizonJplViewModel : TabItemViewModel
 {
   private readonly HorizonJplService _horizonService;
+  private readonly IFileDialogService _fileDialogService;
 
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(IsStep2Enabled))]
@@ -58,22 +51,31 @@ public partial class HorizonJplViewModel : TabItemViewModel
   [ObservableProperty]
   private bool _isDownloading;
 
-  public HorizonJplViewModel(HorizonJplService horizonService)
+  public HorizonJplViewModel(HorizonJplService horizonService, IFileDialogService fileDialogService)
     : base("Horizon JPL")
   {
     _horizonService = horizonService;
+    _fileDialogService = fileDialogService;
   }
 
   [RelayCommand]
   private async Task SearchCometsAsync()
   {
-    string startStr = SearchStartTime?.ToString("yyyy-MM-dd") ?? "2024-01-01";
-    string stopStr = SearchStopTime?.ToString("yyyy-MM-dd") ?? "2024-01-31";
-    await _horizonService.FetchCometsAsync(startStr, stopStr);
+    await _horizonService.FetchCometsAsync();
   }
 
   [RelayCommand]
-  private async Task GoToStep2Async()
+  private void GoToStep2()
+  {
+    if (SelectedComet == null || SelectedComet.Length < 2)
+      return;
+    CurrentStep = 2;
+    IsStep1Expanded = false;
+    IsStep2Expanded = true;
+  }
+
+  [RelayCommand]
+  private async Task SearchRecordsAsync()
   {
     if (SelectedComet == null || SelectedComet.Length < 2)
       return;
@@ -82,9 +84,6 @@ public partial class HorizonJplViewModel : TabItemViewModel
     string stopStr = SearchStopTime?.ToString("yyyy-MM-dd") ?? "2024-01-31";
 
     await _horizonService.FetchSpkRecordsAsync(pdes, startStr, stopStr);
-    CurrentStep = 2;
-    IsStep1Expanded = false;
-    IsStep2Expanded = true;
   }
 
   [RelayCommand]
@@ -98,6 +97,18 @@ public partial class HorizonJplViewModel : TabItemViewModel
     }
   }
 
+  public ObservableCollection<string[]> ObjectData => _horizonService.ObjectData;
+
+  [RelayCommand]
+  private async Task DownloadObjectDataAsync()
+  {
+    if (SelectedSpkRecord == null) return;
+    var spkId = SelectedSpkRecord[0].Trim();
+    IsDownloading = true;
+    await _horizonService.FetchObjectDataAsync(spkId);
+    IsDownloading = false;
+  }
+
   [RelayCommand]
   private async Task DownloadAndSaveSpkAsync()
   {
@@ -108,10 +119,12 @@ public partial class HorizonJplViewModel : TabItemViewModel
     var spkId = SelectedSpkRecord[0].Trim();
     var defaultName = $"{pdes}_{spkId}.bsp";
 
-    var msg = new RequestSaveFileMessage(defaultName);
-    WeakReferenceMessenger.Default.Send(msg);
+    var savePath = await _fileDialogService.ShowSaveFileDialogAsync(
+        "Save SPK File",
+        "bsp",
+        new[] { "*.bsp", "*.*" }
+    );
 
-    var savePath = await msg.Result.Task;
     if (!string.IsNullOrEmpty(savePath))
     {
       IsDownloading = true;

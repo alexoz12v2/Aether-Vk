@@ -55,4 +55,3 @@ physical_mesh_debug_normals = ["aethervk-core-rlib/physical_mesh_debug_normals"]
 cursor_debug = ["aethervk-core-rlib/cursor_debug"]
 spotless_rendering = []
 
-[workspace]

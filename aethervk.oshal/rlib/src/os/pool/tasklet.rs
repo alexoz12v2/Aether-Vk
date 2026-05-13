@@ -9,12 +9,14 @@ use super::{ThreadPool, Workload, WorkloadStatus};
 use crate::os::NativeResult;
 
 /// TODO: Document this item
+#[derive(Debug)]
 pub struct TaskletState<R> {
   result: Mutex<Option<R>>,
   done: AtomicBool,
 }
 
 /// TODO: Document this item
+#[derive(Debug)]
 pub struct TaskletHandle<R> {
   state: Arc<TaskletState<R>>,
 }

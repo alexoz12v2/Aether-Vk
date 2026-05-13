@@ -309,15 +309,16 @@ pub mod tracking {
   pub struct TrackingAllocator<A: GlobalAlloc>(pub A);
 
   pub fn track_hotspot(size: usize) {
-    if let Some(trace) = crate::os::debug::capture_aethervk_trace() {
-      let mut lock = HOTSPOTS.lock();
-      if lock.is_none() {
-        *lock = Some(BTreeMap::new());
-      }
-      if let Some(map) = lock.as_mut() {
-        let trace_key = AllocTrace(trace);
-        let current = map.get(&trace_key).copied().unwrap_or(0);
-        map.insert(trace_key, current + size);
+    if let Some(mut lock) = HOTSPOTS.try_lock() {
+      if let Some(trace) = crate::os::debug::capture_aethervk_trace() {
+        if lock.is_none() {
+          *lock = Some(BTreeMap::new());
+        }
+        if let Some(map) = lock.as_mut() {
+          let trace_key = AllocTrace(trace);
+          let current = map.get(&trace_key).copied().unwrap_or(0);
+          map.insert(trace_key, current + size);
+        }
       }
     }
   }
@@ -336,6 +337,11 @@ pub mod tracking {
   }
 
   pub fn check_memory_threshold() {
+    static CHECK_COUNTER: AtomicUsize = AtomicUsize::new(0);
+    if CHECK_COUNTER.fetch_add(1, Ordering::Relaxed) % 1024 != 0 {
+      return;
+    }
+
     let process_mem = super::query_process_memory();
     let real_mem = process_mem.physical_bytes as usize;
     let gpu_mem = GPU_ALLOCATED.load(Ordering::Relaxed);
@@ -354,6 +360,7 @@ pub mod tracking {
   unsafe impl<A: GlobalAlloc> GlobalAlloc for TrackingAllocator<A> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
       CPU_ALLOCATED.fetch_add(layout.size(), Ordering::Relaxed);
+      track_hotspot(layout.size());
       check_memory_threshold();
       self.0.alloc(layout)
     }

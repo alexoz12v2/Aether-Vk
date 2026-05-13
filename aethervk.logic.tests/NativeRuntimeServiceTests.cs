@@ -144,13 +144,18 @@ namespace AetherVk.Logic.Tests
       {
         _service.InitializeSimulationContext("Vulkan", _assetPath, false);
         ulong sceneId = _service.CreateScene(true);
+        ulong peId = _service.CreatePresentationEngine(256, 256, sceneId);
+        
+        // The default scene contains a camera, grid, sun, sky, etc.
+        // We need to pass a valid camera ID. Let's find the default camera.
+        var state = _stateManager.GetOrCreateScene(sceneId);
+        var camera = state.EntityMap.Values.FirstOrDefault(e => e.Name == "camera");
+        ulong camId = camera != null ? camera.Id : _service.AddPerspectiveCamera(sceneId, peId, "testcam", 45f, 0.1f, 1000f);
 
-        // This usually requires an active camera which is created by CreateScene
-        var result = await _service.RaycastNdcAsync(sceneId, 0.5f, 0.5f);
+        var result = await _service.RaycastNdcAsync(sceneId, camId, 0.5f, 0.5f);
 
-        // As long as the task completes without crashing, we are good.
-        // It might not hit anything in an empty scene.
-        Assert.False(result.hit);
+        // It hits the sky or grid in the default scene.
+        Assert.True(result.hit);
       }
       catch (System.DllNotFoundException) { }
     }
@@ -168,6 +173,168 @@ namespace AetherVk.Logic.Tests
 
         var entity = _service.GetEntityByName(sceneId, "MySphere");
         Assert.NotNull(entity);
+      }
+      catch (System.DllNotFoundException) { }
+    }
+    [Fact]
+    public void CameraAndCursorManipulations_ShouldExecuteWithoutCrashing()
+    {
+      try
+      {
+        _service.InitializeSimulationContext("Vulkan", _assetPath, false);
+        ulong sceneId = _service.CreateScene(true);
+        ulong peId = _service.CreatePresentationEngine(256, 256, sceneId);
+        ulong camId = _service.AddPerspectiveCamera(sceneId, peId, "cam", 45f, 0.1f, 1000f);
+
+        _service.RotateCamera(sceneId, camId, 10f, 10f);
+        _service.ZoomCamera(sceneId, camId, 5f);
+        _service.PanCamera(sceneId, camId, 1f, 1f);
+        _service.ResetCamera(sceneId, camId);
+
+        _service.PanCursor(sceneId, 1f, 1f);
+        _service.MoveCursor(sceneId, 1f, 1f, 1f);
+
+        Assert.True(true);
+      }
+      catch (System.DllNotFoundException) { }
+    }
+
+    [Fact]
+    public void EntityFollowing_ShouldExecuteWithoutCrashing()
+    {
+      try
+      {
+        _service.InitializeSimulationContext("Vulkan", _assetPath, false);
+        ulong sceneId = _service.CreateScene(true);
+        ulong peId = _service.CreatePresentationEngine(256, 256, sceneId);
+        ulong camId = _service.AddPerspectiveCamera(sceneId, peId, "cam", 45f, 0.1f, 1000f);
+        ulong targetId = _service.SpawnProceduralSphere(sceneId, "target", 1f, 1f);
+
+        _service.SnapToEntity(sceneId, camId, targetId);
+        _service.FollowEntity(sceneId, camId, targetId);
+        _service.UnfollowEntity(sceneId, camId);
+
+        Assert.True(true);
+      }
+      catch (System.DllNotFoundException) { }
+    }
+
+    [Fact]
+    public void AddOrthographicCamera_ShouldAddEntity()
+    {
+      try
+      {
+        _service.InitializeSimulationContext("Vulkan", _assetPath, false);
+        ulong sceneId = _service.CreateScene(true);
+        ulong peId = _service.CreatePresentationEngine(256, 256, sceneId);
+
+        ulong camId = _service.AddOrthographicCamera(sceneId, peId, "orthoCam", -10f, -10f, 0.1f, 1000f);
+        Assert.NotEqual(0ul, camId);
+
+        var entity = _service.GetEntityByName(sceneId, "orthoCam");
+        Assert.NotNull(entity);
+      }
+      catch (System.DllNotFoundException) { }
+    }
+
+    [Fact]
+    public void SpawnImageBillboard_ShouldExecuteWithoutCrashing()
+    {
+      try
+      {
+        _service.InitializeSimulationContext("Vulkan", _assetPath, false);
+        ulong sceneId = _service.CreateScene(true);
+
+        var billboard = _service.SpawnImageBillboard(sceneId, "MyBillboard", true, 100f, 100f);
+        Assert.NotNull(billboard);
+        Assert.Equal("MyBillboard", billboard.Name);
+      }
+      catch (System.DllNotFoundException) { }
+    }
+
+    [Fact]
+    public void DestroySceneAndPresentationEngine_ShouldCleanupResources()
+    {
+      try
+      {
+        _service.InitializeSimulationContext("Vulkan", _assetPath, false);
+        ulong sceneId = _service.CreateScene(true);
+        ulong peId = _service.CreatePresentationEngine(256, 256, sceneId);
+
+        _service.DestroyPresentationEngine(sceneId, peId, 0);
+        _service.DestroyScene(sceneId);
+
+        Assert.Null(_service.GetEntityByName(sceneId, "root"));
+      }
+      catch (System.DllNotFoundException) { }
+    }
+    [Fact]
+    public void TwoWayBinding_NativeComponent_ShouldSyncChanges()
+    {
+      try
+      {
+        _service.InitializeSimulationContext("Vulkan", _assetPath, false);
+        ulong sceneId = _service.CreateScene(true);
+        ulong peId = _service.CreatePresentationEngine(256, 256, sceneId);
+
+        ulong camId = _service.AddPerspectiveCamera(sceneId, peId, "testCam", 45f, 0.1f, 1000f);
+        var cameraEntity = _service.GetEntityById(sceneId, camId);
+        Assert.NotNull(cameraEntity);
+
+        var camComp = cameraEntity.Components.OfType<AetherVk.Logic.Models.CameraComponent>().FirstOrDefault();
+        Assert.NotNull(camComp);
+
+        // 1. Mutate C# property (should trigger PushToNativeImpl via PropertyChanged)
+        camComp.Fov = 90f;
+
+        // Directly mutate native to test Pull
+        var ctx = typeof(AetherVk.Logic.Services.NativeRuntimeService).GetField("_simulationContext", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(_service) as IntPtr? ?? IntPtr.Zero;
+        
+        var camData = new AetherVk.Logic.Services.NativeInterop.FfiCamera
+        {
+            IsOrthographic = false,
+            Fov = 120f,
+            Aspect = 1.77f,
+            Near = 0.1f,
+            Far = 1000f,
+            OrthoLeft = -10f, OrthoRight = 10f, OrthoBottom = -10f, OrthoTop = 10f
+        };
+        AetherVk.Logic.Services.NativeInterop.avkSimulationContext_setCameraComponent(ctx, sceneId, camId, in camData);
+
+        // 2. Pull from native
+        camComp.PullFromNative();
+
+        // 3. Assert value is restored from native
+        Assert.Equal(120f, camComp.Fov, 3);
+
+        var transformComp = cameraEntity.Components.OfType<AetherVk.Logic.Models.TransformComponent>().FirstOrDefault();
+        Assert.NotNull(transformComp);
+
+        // 1. Mutate Transform properties via C#
+        transformComp.PosX = 100f;
+        transformComp.PosY = 200f;
+        transformComp.PosZ = 300f;
+
+        // Verify native was updated automatically
+        var nativeHasTransform = AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getTransformComponent(
+            ctx,
+            sceneId,
+            camId,
+            out var ffiTransform
+        );
+
+        Assert.True(nativeHasTransform);
+        Assert.Equal(100f, ffiTransform.Px);
+        Assert.Equal(200f, ffiTransform.Py);
+        Assert.Equal(300f, ffiTransform.Pz);
+        
+        // 2. Reset locally and Pull from native to verify it reads back correctly
+        transformComp.SuspendNotifications = true;
+        transformComp.PosX = 0f;
+        transformComp.SuspendNotifications = false;
+
+        transformComp.PullFromNative();
+        Assert.Equal(100f, transformComp.PosX);
       }
       catch (System.DllNotFoundException) { }
     }

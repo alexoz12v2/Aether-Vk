@@ -111,8 +111,10 @@ impl PhysicsScene {
       .position(|f| f.frame_type == crate::scene::ReferenceFrameType::Macro as u32)
       .unwrap_or(0) as u32;
 
+    let mut num_meshes = 0;
     scene.query2::<TransformComponent, crate::scene::PhysicalMeshComponent, _>(
       |entity, transform, mesh| {
+        num_meshes += 1;
         if let Some(bvh) = &mesh.mesh.bvh {
           if !bvh.nodes.is_empty() {
             let root_bound = &bvh.nodes[0].bound;
@@ -143,10 +145,15 @@ impl PhysicsScene {
               .entry(target_frame_idx)
               .or_default()
               .push((entity, LinearBound::AABB(transformed_aabb)));
+          } else {
+             aethervk_oshal_rlib::log!("DEBUG: bvh.nodes.is_empty for mesh");
           }
+        } else {
+          aethervk_oshal_rlib::log!("DEBUG: mesh.mesh.bvh is None");
         }
       },
     );
+    aethervk_oshal_rlib::log!("DEBUG: build_from_scene found {} meshes total", num_meshes);
 
     let mut gpu_bvh_nodes = alloc::vec::Vec::new();
     let mut gpu_primitives = alloc::vec::Vec::new();

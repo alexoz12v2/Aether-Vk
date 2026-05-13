@@ -72,8 +72,9 @@ public partial class Viewport3DViewModel
 
   private static int _measurementCounter = 1;
 
-  public event Action? OnFrameReady;
+  public IViewportRenderer? Renderer { get; set; }
 
+  private readonly IUiThreadDispatcher _uiThreadDispatcher;
   private readonly BreadcrumbService _breadcrumbService;
   private readonly SceneStateManager _sceneStateManager;
 
@@ -88,12 +89,12 @@ public partial class Viewport3DViewModel
     }
 
     var root = _runtimeService.GetEntityByName(SceneId, "root");
-    if (root != null)
+    if (root != null && CameraId == 0)
     {
-      var camera = _runtimeService.CreateCamera(SceneId, root);
-      CameraId = camera.Id;
+      // Note: check if fov should be in radians or degrees. The native ffi historically expected degrees, or handled the conversion.
+      CameraId = _runtimeService.AddPerspectiveCamera(SceneId, PresentationEngineId, "camera", 45f, 0.1f, 10000.0f);
     }
-    else
+    else if (CameraId == 0)
     {
       CameraId = 1;
     }
@@ -102,13 +103,15 @@ public partial class Viewport3DViewModel
   public Viewport3DViewModel(
     NativeRuntimeService runtimeService,
     BreadcrumbService breadcrumbService,
-    SceneStateManager sceneStateManager
+    SceneStateManager sceneStateManager,
+    IUiThreadDispatcher uiThreadDispatcher
   )
     : base("Viewport 3D")
   {
     _runtimeService = runtimeService;
     _breadcrumbService = breadcrumbService;
     _sceneStateManager = sceneStateManager;
+    _uiThreadDispatcher = uiThreadDispatcher;
 
     OperatorStack = new OperatorStack(new ViewportBaseOperator(this));
 
@@ -144,7 +147,7 @@ public partial class Viewport3DViewModel
     Stop();
     if (PresentationEngineId != 0)
     {
-      _runtimeService.DestroyPresentationEngine(SceneId, PresentationEngineId);
+      _runtimeService.DestroyPresentationEngine(SceneId, PresentationEngineId, CameraId);
       PresentationEngineId = 0;
     }
   }
@@ -168,7 +171,7 @@ public partial class Viewport3DViewModel
     float ndcX = (float)((x / w) * 2.0 - 1.0);
     float ndcY = (float)((y / h) * 2.0 - 1.0);
 
-    var res = await _runtimeService.RaycastNdcAsync(SceneId, ndcX, ndcY);
+    var res = await _runtimeService.RaycastNdcAsync(SceneId, CameraId, ndcX, ndcY);
 
     var breadcrumb = _breadcrumbService;
 
@@ -344,13 +347,31 @@ public partial class Viewport3DViewModel
     if (message.PresentationEngineId == PresentationEngineId && message.SceneId == SceneId)
     {
       _lastRenderTaskId = message.RenderGeneration;
-      OnFrameReady?.Invoke();
+      if (Renderer != null && Width > 0 && Height > 0)
+      {
+        _ = ProcessFrameAsync();
+      }
     }
   }
 
-  public async Task CopyFrameToBuffer(IntPtr bufferPtr, nuint bufferSize)
+  private async Task ProcessFrameAsync()
   {
-    await _runtimeService.DownloadImageAsync(_lastRenderTaskId, bufferPtr, bufferSize);
+    nuint bufferSize = (nuint)(Width * Height * 4);
+    IntPtr unmanagedBuffer = System.Runtime.InteropServices.Marshal.AllocHGlobal((int)bufferSize);
+
+    try
+    {
+      await _runtimeService.DownloadImageAsync(_lastRenderTaskId, unmanagedBuffer, bufferSize);
+      await _uiThreadDispatcher.DispatchAsync(() =>
+      {
+        Renderer?.UpdateFrame(unmanagedBuffer, bufferSize);
+        return Task.CompletedTask;
+      });
+    }
+    finally
+    {
+      System.Runtime.InteropServices.Marshal.FreeHGlobal(unmanagedBuffer);
+    }
   }
 
   public void Stop() { }

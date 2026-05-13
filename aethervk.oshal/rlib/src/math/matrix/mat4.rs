@@ -8,6 +8,7 @@ use core::arch::aarch64::*;
 
 use core::ops;
 
+use crate::math::vector::vec3::Vec3f32;
 use crate::math::{
   FloatLike,
   matrix::{Matrix, Matrix4, MatrixVectorMul, SquareMatrix},
@@ -452,6 +453,21 @@ impl Matrix4 for Mat4x4f32 {
 }
 
 impl Mat4x4f32 {
+  /// Rotates a 3D vector using the matrix.
+  /// This multiplies the vector by the upper-left 3x3 portion of the matrix,
+  /// ignoring the translation component (the `w` column).
+  #[inline]
+  pub fn rotate_vector(&self, v: Vec3f32) -> Vec3f32 {
+    // Approach 1: Leverage your existing SIMD-optimized mul_vector
+    // By setting w = 0.0, we cleanly zero out the influence of the translation column (self.w).
+    let v4 = Vec4f32::from_components(v[0], v[1], v[2], 0.0);
+    let res = self.mul_vector(v4);
+
+    // Truncate back to Vec3f32.
+    // Note: Change `from_array` to however you initialize Vec3f32 in your codebase.
+    Vec3f32::from_array([res[0], res[1], res[2]])
+  }
+
   /// Helper: Scalar default 4x4 determinant with Laplace expansion
   #[inline]
   fn scalar_determinant(&self) -> f32 {

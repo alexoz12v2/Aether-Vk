@@ -351,7 +351,7 @@ impl PathBuf {
   }
 
   /// TODO: Document this item
-  pub fn extension(&self) -> Option<&str> {
+  pub fn extension(&self) -> Option<alloc::borrow::Cow<'_, str>> {
     let slice = self.as_slice();
     if let Some(pos) = slice.iter().rposition(|&c| c == b'.' as os_char) {
       #[cfg(windows)]
@@ -359,7 +359,7 @@ impl PathBuf {
         let s = unsafe {
           core::slice::from_raw_parts(slice.as_ptr().add(pos + 1), slice.len() - pos - 1)
         };
-        Some(alloc::string::String::from_utf16_lossy(s))
+        Some(alloc::borrow::Cow::Owned(alloc::string::String::from_utf16_lossy(s)))
       }
       #[cfg(not(windows))]
       {
@@ -369,7 +369,7 @@ impl PathBuf {
             slice.len() - pos - 1,
           ))
         };
-        Some(s)
+        Some(alloc::borrow::Cow::Borrowed(s))
       }
     } else {
       None
@@ -577,7 +577,7 @@ pub fn read<T: AsRef<Path>>(path: T) -> Result<Vec<u8>, FsError> {
       CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, GetFileSizeEx, OPEN_EXISTING, ReadFile,
     };
 
-    let mut path_buf = path.to_pathbuf();
+    let mut path_buf = path.as_ref().to_pathbuf();
     let handle = unsafe {
       CreateFileW(
         windows::core::PCWSTR(path_buf.as_ptr_mut()),
@@ -670,7 +670,7 @@ pub fn write(path: &Path, content: &[u8]) -> Result<(), FsError> {
       CREATE_ALWAYS, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, WriteFile,
     };
 
-    let mut path_buf = path.to_pathbuf();
+    let mut path_buf = path.as_ref().to_pathbuf();
     let handle = unsafe {
       CreateFileW(
         windows::core::PCWSTR(path_buf.as_ptr_mut()),
@@ -710,7 +710,7 @@ pub fn write(path: &Path, content: &[u8]) -> Result<(), FsError> {
   {
     use libc::{O_CREAT, O_TRUNC, O_WRONLY, close, open, write};
 
-    let mut path_buf = path.to_pathbuf();
+    let mut path_buf = path.as_ref().to_pathbuf();
     // 0o666 = read and write for owner, group, and others
     let fd = unsafe { open(path_buf.as_ptr_mut(), O_WRONLY | O_CREAT | O_TRUNC, 0o666) };
     if fd < 0 {
@@ -881,7 +881,7 @@ pub fn read_dir(path: &Path) -> Result<ReadDir, FsError> {
     use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows::Win32::Storage::FileSystem::{FindFirstFileW, WIN32_FIND_DATAW};
 
-    let mut search_path = path.to_pathbuf();
+    let mut search_path = path.as_ref().to_pathbuf();
     search_path.push_slice(&[SEP, b'*' as os_char]);
     search_path.ensure_nul_terminated();
 
@@ -893,6 +893,8 @@ pub fn read_dir(path: &Path) -> Result<ReadDir, FsError> {
       )
     };
 
+    let handle = handle.map_err(|_| FsError::CouldNotReadFile)?;
+
     if handle == INVALID_HANDLE_VALUE {
       return Err(FsError::CouldNotReadFile);
     }
@@ -901,20 +903,20 @@ pub fn read_dir(path: &Path) -> Result<ReadDir, FsError> {
       handle,
       find_data,
       first: true,
-      parent: path.to_pathbuf(),
+      parent: path.as_ref().to_pathbuf(),
     })
   }
 
   #[cfg(not(windows))]
   {
-    let mut path_buf = path.to_pathbuf();
+    let mut path_buf = path.as_ref().to_pathbuf();
     let dirp = unsafe { libc::opendir(path_buf.as_ptr_mut()) };
     if dirp.is_null() {
       return Err(FsError::CouldNotReadFile);
     }
     Ok(ReadDir {
       dirp,
-      parent: path.to_pathbuf(),
+      parent: path.as_ref().to_pathbuf(),
     })
   }
 }
@@ -950,7 +952,7 @@ mod tests {
   #[test]
   fn test_pathbuf_extension() {
     let p = PathBuf::from("file.txt");
-    assert_eq!(p.extension(), Some("txt"));
+    assert_eq!(p.extension().as_deref(), Some("txt"));
 
     let p2 = PathBuf::from("file_no_ext");
     assert_eq!(p2.extension(), None);

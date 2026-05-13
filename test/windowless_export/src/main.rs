@@ -86,13 +86,8 @@ fn main() {
         .unwrap()
     };
 
-    let mut scene = Scene::new();
-    scene.register_component::<TransformComponent>(&[]);
-    scene
-      .register_component::<PhysicalMeshComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
-    scene.register_component::<CameraComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
-    scene.register_component::<SunComponent>(&[std::any::TypeId::of::<TransformComponent>()]);
-    scene.register_component::<SkyComponent>(&[]);
+    let mut scene = Scene::new(std::sync::Arc::new(gpu::RwLock::new(aethervk_core_rlib::simulation::texture_cache::TextureCache::new("AetherVk"))));
+    scene.register_all_crate_components();
 
     let camera_entity = scene.spawn_entity("entity");
     scene
@@ -108,16 +103,9 @@ fn main() {
     scene
       .add_component(
         camera_entity,
-        CameraComponent {
-          projection: Mat4x4f32::perspective_vk(
-            std::f32::consts::FRAC_PI_4,
-            width as f32 / height as f32,
-            0.1,
-            100.0,
+        CameraComponent::new_persp(
+            std::f32::consts::FRAC_PI_4, width as f32 / height as f32, 0.1, 100.0,
           ),
-          near_plane: 0.1,
-          far_plane: 100.0,
-        },
       )
       .unwrap();
 
