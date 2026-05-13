@@ -3,7 +3,7 @@
 use crate::gpu;
 use crate::gpu::{
   GpuResourceHandle, GridPushConstants, PipelineKey, PresentationEngineHandle, PushConstants,
-  RenderDevice, RenderDeviceExt, SkyPushConstants, SunPushConstants, TextureFlags,
+  RenderDevice, RenderDeviceExt, SkyPushConstants, SunPushConstants, TextureFlags, UiBatchCall,
 };
 use crate::math::collision::linear_bvh::LinearBound;
 use crate::scene::{CameraComponent, EntityId, RenderableDataRef, TransformComponent};
@@ -105,6 +105,12 @@ impl CursorDrawCall {
       cursor_size,
     }
   }
+}
+
+pub struct BackgroundDrawCall {
+  pub pipeline: PipelineKey,
+  pub color_top: [f32; 4],
+  pub color_bottom: [f32; 4],
 }
 
 /// Represents a draw call for a marker.
@@ -319,8 +325,7 @@ impl GridDrawCall {
 
 /// Model is not stored here cause it's shared with its physical mesh
 pub struct BvhDrawCall {
-  /// "weak reference" to physical mesh draw call (to take model)
-  pub physical_mesh_call_index: usize,
+  pub model_matrix: Mat4x4f32,
   pub pipeline: PipelineKey,
   pub vertex_count: u32, // 24
   /// object space axes
@@ -335,11 +340,7 @@ impl BvhDrawCall {
   const VERTEX_COUNT_VK: u32 = 24;
 
   /// TODO: Document this item
-  pub fn new(
-    bound: &LinearBound<f32>,
-    pipeline_key: PipelineKey,
-    physical_mesh_call_index: usize,
-  ) -> Self {
+  pub fn new(bound: &LinearBound<f32>, pipeline_key: PipelineKey, model_matrix: Mat4x4f32) -> Self {
     let (center, extents, ax, ay, az) = match bound {
       LinearBound::AABB(aabb) => {
         let center = aabb.center();
@@ -366,7 +367,7 @@ impl BvhDrawCall {
       }
     };
     Self {
-      physical_mesh_call_index,
+      model_matrix,
       pipeline: pipeline_key,
       vertex_count: Self::VERTEX_COUNT_VK,
       axes: [ax, ay, az],
@@ -378,7 +379,6 @@ impl BvhDrawCall {
   /// TODO: Document this item
   pub fn to_push_constants(
     &self,
-    mesh_draw_calls: &[DrawCall],
     camera_data: &CameraRenderData,
   ) -> Option<super::BvhPushConstants> {
     let center_arr: [f32; 3] = self.center.into();
@@ -386,7 +386,7 @@ impl BvhDrawCall {
     let ax = self.axes[0];
     let ay = self.axes[1];
     let az = self.axes[2];
-    let model = &mesh_draw_calls.get(self.physical_mesh_call_index)?.model_matrix;
+    let model = &self.model_matrix;
     let view_proj = &camera_data.view_proj;
     let mvp_mat = *view_proj * *model;
     Some(super::BvhPushConstants {
@@ -403,6 +403,7 @@ impl BvhDrawCall {
 /// TODO: Document this item
 pub struct CameraRenderData {
   pub pos: Vec3f32,
+  pub absolute_pos: Vec3f32,
   pub rot: Quat,
   pub view: Mat4x4f32,
   pub proj: Mat4x4f32,
@@ -421,19 +422,23 @@ impl CameraRenderData {
     let up = transform.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
     let forward = transform.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
 
-    let view = Mat4x4f32::look_at_axes(right, forward, up, transform.position);
-    let view_proj = camera.projection * view;
+    // RTE View Matrix: Camera is at the center [0,0,0], only rotating.
+    let view = Mat4x4f32::look_at_axes(right, forward, up, Vec3f32::from_components(0.0, 0.0, 0.0));
+    let proj = camera.get_projection_matrix();
+    let view_proj = proj * view;
 
     Self {
-      pos: transform.position,
+      // In RTE rendering, the camera is strictly at the origin in the shader's "world" space.
+      pos: Vec3f32::from_components(0.0, 0.0, 0.0),
+      absolute_pos: transform.position,
       rot: transform.rotation,
       view,
-      proj: camera.projection,
+      proj,
       view_proj,
       up: [up.x(), up.y(), up.z()],
       right: [right.x(), right.y(), right.z()],
-      far: camera.far_plane,
-      near: camera.near_plane,
+      near: camera.near_plane(),
+      far: camera.far_plane(),
     }
   }
 }
@@ -443,7 +448,7 @@ pub struct ParticleDrawCall {
   pub pipeline: PipelineKey,
   pub system_particle_offset: u32,
   pub system_indirect_offset: u32,
-  pub config: crate::scene::particles::ParticleEmitterConfig,
+  pub config: crate::scene::particles::ParticleEmitterComponent,
   pub particles: alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
 }
 
@@ -452,7 +457,7 @@ pub struct Particle2DrawCall {
   pub pipeline: PipelineKey,
   pub system_particle_offset: u32,
   pub system_indirect_offset: u32,
-  pub config: crate::scene::particles::ParticleEmitterConfig,
+  pub config: crate::scene::particles::ParticleEmitterComponent,
   pub particles: alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
 }
 
@@ -466,6 +471,23 @@ pub struct TrajectoryBatchCall {
   pub traj_ptr: u64,
 }
 
+#[derive(Clone)]
+/// TODO: Document this item
+pub struct Bvhwire2BatchCall {
+  pub pipeline: PipelineKey,
+  pub total_boxes: u32,
+  pub data_ptr: u64,
+}
+
+pub struct TextDrawCall {
+  pub text: alloc::string::String,
+  pub font_atlas: alloc::sync::Arc<crate::scene::text::FontAtlas>,
+  pub font_id: (u64, u32),
+  pub start_cursor_position: [f32; 2],
+  pub desired_points: f32,
+  pub color: [f32; 4],
+}
+
 /// TODO: Document this item
 pub struct RenderScene {
   pub time_readings: aethervk_oshal_rlib::os::time::TimeReadings,
@@ -477,15 +499,21 @@ pub struct RenderScene {
   pub measurement_calls: Vec<MeasurementDrawCall>,
   pub billboard_calls: Vec<BillboardDrawCall>,
   pub bvh_draw_calls: Vec<BvhDrawCall>,
+  pub bvhwire2_data: Vec<crate::gpu::Bvhwire2DataGpu>,
   pub gizmo_calls: Vec<GizmoDrawCall>,
   pub particle_calls: Vec<ParticleDrawCall>,
   pub particle2_calls: Vec<Particle2DrawCall>,
+  pub text_calls: Vec<TextDrawCall>,
 
   pub cursor_call: Option<CursorDrawCall>,
   pub sun_call: Option<SunDrawCall>,
   pub sky_call: Option<SkyDrawCall>,
   pub grid_call: Option<GridDrawCall>,
   pub trajectory_call: Option<TrajectoryBatchCall>,
+  pub bvhwire2_batch_call: Option<Bvhwire2BatchCall>,
+  pub ui_call: Option<UiBatchCall>,
+  pub text2_call: Option<crate::gpu::Text2BatchCall>,
+  pub background_call: Option<BackgroundDrawCall>,
 }
 
 impl RenderScene {
@@ -505,14 +533,20 @@ impl RenderScene {
       measurement_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
       billboard_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
       bvh_draw_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
+      bvhwire2_data: Vec::with_capacity(Self::START_VEC_CAPACITY),
       gizmo_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
+      text_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
       particle_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
       particle2_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
       camera_data: CameraRenderData::new(&camera.0, &camera.1),
       sun_call: None,
       sky_call: None,
+      background_call: None,
       grid_call: None,
       trajectory_call: None,
+      bvhwire2_batch_call: None,
+      ui_call: None,
+      text2_call: None,
     }
   }
 
@@ -637,18 +671,18 @@ impl RenderScene {
           significant_digits: 2, // fallback
         });
       }
-      RenderableDataRef::ParticleSystem(component) => {
+      RenderableDataRef::ParticleSystem(component, config) => {
         let count = component.particles.read().len() as u32;
         if count == 0 {
           return Ok(());
         }
-        if component.config.use_particle2 {
+        if config.use_particle2 {
           let particle_pipeline = device.get_particle2_pipeline_key(presentation_engine_handle)?;
           self.particle2_calls.push(Particle2DrawCall {
             pipeline: particle_pipeline,
             system_particle_offset: 0,
             system_indirect_offset: 0,
-            config: component.config.clone(),
+            config: config.clone(),
             particles: alloc::sync::Arc::downgrade(&component.particles),
           });
         } else {
@@ -657,12 +691,84 @@ impl RenderScene {
             pipeline: particle_pipeline,
             system_particle_offset: 0,
             system_indirect_offset: 0,
-            config: component.config.clone(),
+            config: config.clone(),
             particles: alloc::sync::Arc::downgrade(&component.particles),
           });
         }
       }
       RenderableDataRef::Gizmo(_) => {} // Handled elsewhere
+      RenderableDataRef::BvhWireframe(dbg_comp, nodes) => {
+        if dbg_comp.use_new_path {
+          let global_model = model_matrix;
+          for node in nodes {
+            let (center, extents, ax, ay, az, type_val) = match node {
+              LinearBound::AABB(aabb) => {
+                let local_center: Vec3f32 = aabb.center();
+                let global_center = global_model.mul_vector(Vec4f32::from_components(
+                  local_center.x(),
+                  local_center.y(),
+                  local_center.z(),
+                  1.0,
+                ));
+                let he: Vec3f32 = aabb.half_extents();
+
+                let cx = global_center.x();
+                let cy = global_center.y();
+                let cz = global_center.z();
+
+                let world_ax = global_model.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
+                let world_ay = global_model.rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0));
+                let world_az = global_model.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
+
+                (
+                  [cx, cy, cz],
+                  [he.x(), he.y(), he.z()],
+                  [world_ax.x(), world_ax.y(), world_ax.z()],
+                  [world_ay.x(), world_ay.y(), world_ay.z()],
+                  [world_az.x(), world_az.y(), world_az.z()],
+                  1.0,
+                )
+              }
+              LinearBound::OBB(obb) => {
+                let local_center: Vec3f32 = obb.center();
+                let global_center = global_model.mul_vector(Vec4f32::from_components(
+                  local_center.x(),
+                  local_center.y(),
+                  local_center.z(),
+                  1.0,
+                ));
+                let he: Vec3f32 = obb.half_extents();
+                let axes: [Vec3f32; 3] = obb.axes();
+
+                let world_ax = global_model.rotate_vector(axes[0]);
+                let world_ay = global_model.rotate_vector(axes[1]);
+                let world_az = global_model.rotate_vector(axes[2]);
+
+                (
+                  [global_center.x(), global_center.y(), global_center.z()],
+                  [he.x(), he.y(), he.z()],
+                  [world_ax.x(), world_ax.y(), world_ax.z()],
+                  [world_ay.x(), world_ay.y(), world_ay.z()],
+                  [world_az.x(), world_az.y(), world_az.z()],
+                  1.0,
+                )
+              }
+            };
+            self.bvhwire2_data.push(crate::gpu::Bvhwire2DataGpu {
+              center_type: [center[0], center[1], center[2], type_val],
+              extents: [extents[0], extents[1], extents[2], 0.0],
+              axes_x: [ax[0], ax[1], ax[2], 0.0],
+              axes_y: [ay[0], ay[1], ay[2], 0.0],
+              axes_z: [az[0], az[1], az[2], 0.0],
+            });
+          }
+        } else {
+          let pipeline_key = device.get_bvh_pipeline_kay(presentation_engine_handle)?;
+          for node in nodes {
+            self.bvh_draw_calls.push(BvhDrawCall::new(node, pipeline_key, model_matrix));
+          }
+        }
+      }
     }
     Ok(())
   }
@@ -1012,6 +1118,11 @@ pub fn do_draw_particle(
     seed: 0.0,
     color: draw_call.config.color,
     radius: draw_call.config.particle_radius,
+    camera_pos: [
+      camera.absolute_pos.x(),
+      camera.absolute_pos.y(),
+      camera.absolute_pos.z(),
+    ],
   };
 
   device.push_constants(
@@ -1046,9 +1157,18 @@ pub fn do_draw_particle2(
     seed: draw_call.system_particle_offset as f32,
     color: draw_call.config.color,
     radius: draw_call.config.particle_radius,
+    camera_pos: [
+      camera.absolute_pos.x(),
+      camera.absolute_pos.y(),
+      camera.absolute_pos.z(),
+    ],
   };
 
-  device.push_particle2_constants(cmd_buffer, &push_constants)?;
+  device.push_constants(
+    cmd_buffer,
+    crate::gpu::ArchetypeId::Particle2,
+    &push_constants,
+  )?;
 
   // Notice we don't pass the indirect_buffer as a GpuResourceHandle anymore,
   // we use a specific method that draws from the global mega buffer
@@ -1066,7 +1186,7 @@ pub fn do_draw_grid(
 ) -> GpuResult<()> {
   let push_constants = GridPushConstants {
     view_proj: camera.view_proj.into(),
-    camera_pos: camera.pos.into(),
+    camera_pos: camera.absolute_pos.into(),
     near_plane: camera.near,
     far_plane: camera.far,
     density: draw_call.density,
@@ -1085,13 +1205,105 @@ pub fn do_bvh_draw_call(
   cmd_buffer: super::CommandBufferHandle,
   camera: &CameraRenderData,
   draw_call: &BvhDrawCall,
-  mesh_draw_calls: &[DrawCall],
 ) -> GpuResult<()> {
-  let push_constants = draw_call.to_push_constants(mesh_draw_calls, camera).ok_or(
-    GpuError::InvalidState("[Render Frame] Couldn't compute BVH push constants"),
-  )?;
+  let push_constants = draw_call.to_push_constants(camera).ok_or(GpuError::InvalidState(
+    "[Render Frame] Couldn't compute BVH push constants",
+  ))?;
   device.push_bvh_constants(cmd_buffer, &push_constants)?;
   device.draw(cmd_buffer, draw_call.vertex_count)
+}
+
+pub fn do_draw_bvhwire2_batch(
+  device: &dyn RenderDevice,
+  camera: &CameraRenderData,
+  cmd_buffer: super::CommandBufferHandle,
+  draw_call: &Bvhwire2BatchCall,
+  handle: PresentationEngineHandle,
+) -> GpuResult<()> {
+  device.prepare_bvhwire2_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
+  let push_constants = crate::gpu::Bvhwire2PushConstants {
+    bvh_ptr: draw_call.data_ptr,
+    view_proj: camera.view_proj.into(),
+  };
+  device.push_bvhwire2_constants(cmd_buffer, &push_constants)?;
+  device.draw_instanced(cmd_buffer, 216, draw_call.total_boxes)?;
+  Ok(())
+}
+
+pub fn do_draw_ui_batch(
+  device: &dyn RenderDevice,
+  _camera: &CameraRenderData,
+  cmd_buffer: super::CommandBufferHandle,
+  draw_call: &crate::gpu::UiBatchCall,
+  window_extent: [f32; 2],
+  handle: PresentationEngineHandle,
+) -> GpuResult<()> {
+  device.prepare_ui_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
+
+  // Standard Vulkan 2D orthographic matrix (Top-Left = 0,0, Bottom-Right = w,h)
+  let w = window_extent[0];
+  let h = window_extent[1];
+  let proj = [
+    [2.0 / w, 0.0, 0.0, 0.0],
+    [0.0, 2.0 / h, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [-1.0, -1.0, 0.0, 1.0],
+  ];
+
+  let push_constants = crate::gpu::UiPushConstants {
+    elements_ptr: draw_call.elements_ptr,
+    view_proj: proj,
+    viewport_size: window_extent,
+    _pad: [0.0, 0.0],
+  };
+  device.push_ui_constants(cmd_buffer, &push_constants)?;
+  device.draw_instanced(cmd_buffer, 6, draw_call.total_elements)?;
+  Ok(())
+}
+
+pub fn do_draw_text2_batch(
+  device: &dyn RenderDevice,
+  _camera: &CameraRenderData,
+  cmd_buffer: super::CommandBufferHandle,
+  draw_call: &crate::gpu::Text2BatchCall,
+  window_extent: [f32; 2],
+  handle: PresentationEngineHandle,
+) -> GpuResult<()> {
+  device.prepare_text2_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
+
+  let w = window_extent[0];
+  let h = window_extent[1];
+  let proj = [
+    [2.0 / w, 0.0, 0.0, 0.0],
+    [0.0, 2.0 / h, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [-1.0, -1.0, 0.0, 1.0],
+  ];
+
+  let push_constants = crate::gpu::Text2PushConstants {
+    glyphs_ptr: draw_call.glyphs_ptr,
+    view_proj: proj,
+  };
+  device.push_text2_constants(cmd_buffer, &push_constants)?;
+  device.draw_instanced(cmd_buffer, 4, draw_call.total_glyphs)?;
+  Ok(())
+}
+
+pub fn do_draw_background(
+  device: &dyn RenderDevice,
+  cmd_buffer: super::CommandBufferHandle,
+  draw_call: &BackgroundDrawCall,
+  handle: PresentationEngineHandle,
+) -> GpuResult<()> {
+  device.prepare_background_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?; // Handle not actually used for descriptor sets in this archetype
+  device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
+
+  let push_constants = crate::gpu::BackgroundPushConstants {
+    color_top: draw_call.color_top,
+    color_bottom: draw_call.color_bottom,
+  };
+  device.push_background_constants(cmd_buffer, &push_constants)?;
+  device.draw(cmd_buffer, 3)
 }
 
 // TODO: all of the do_draw_* functions should have a rollback mechanism
@@ -1103,7 +1315,10 @@ pub fn render_frame(
   render_scene: &gpu::RenderScene,
   handle: PresentationEngineHandle,
 ) -> GpuResult<()> {
-  // First sky and grid
+  // First sky and background and grid
+  if let Some(draw_call) = &render_scene.background_call {
+    do_draw_background(device, cmd_buffer, draw_call, handle)?;
+  }
   if let Some(draw_call) = &render_scene.sky_call {
     do_draw_sky(device, cmd_buffer, draw_call)?;
   }
@@ -1114,7 +1329,7 @@ pub fn render_frame(
   let sun_pos = if let Some(draw_call) = &render_scene.sun_call {
     draw_call.sun_pos()
   } else {
-    Vec3f32::zero()
+    Vec3f32::from_components(100.0, 100.0, 100.0)
   };
   // TODO setup method (binds pipeline, descriptor set, ...)
   for draw_call in &render_scene.draw_calls {
@@ -1185,6 +1400,61 @@ pub fn render_frame(
     )?;
   }
 
+  if let Some(draw_call) = &render_scene.ui_call {
+    gpu::frame::do_draw_ui_batch(
+      device,
+      &render_scene.camera_data,
+      cmd_buffer,
+      draw_call,
+      [
+        render_scene.window_extent[0] as f32,
+        render_scene.window_extent[1] as f32,
+      ],
+      handle,
+    )?;
+  }
+
+  if let Some(draw_call) = &render_scene.text2_call {
+    gpu::frame::do_draw_text2_batch(
+      device,
+      &render_scene.camera_data,
+      cmd_buffer,
+      draw_call,
+      [
+        render_scene.window_extent[0] as f32,
+        render_scene.window_extent[1] as f32,
+      ],
+      handle,
+    )?;
+  }
+
+  if !render_scene.text_calls.is_empty() {
+    device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
+
+    let w = render_scene.window_extent[0] as f32;
+    let h = render_scene.window_extent[1] as f32;
+    #[rustfmt::skip]
+    let view_proj = [
+      2.0 / w, 0.0, 0.0, 0.0,
+      0.0, 2.0 / h, 0.0, 0.0,
+      0.0, 0.0, 1.0, 0.0,
+      -1.0, -1.0, 0.0, 1.0,
+    ];
+
+    for text_call in &render_scene.text_calls {
+      // NOTE: Here we assume that `font_hash` has been appropriately tracked by the user to represent a valid texture_id (e.g. u32) on the render device.
+      device.render_text(
+        cmd_buffer,
+        &text_call.text,
+        text_call.start_cursor_position,
+        view_proj,
+        text_call.font_id,
+        text_call.desired_points,
+        text_call.color,
+      )?;
+    }
+  }
+
   // end of scene, begin rendering UI elements
 
   if let Some(cursor_call) = &render_scene.cursor_call {
@@ -1234,14 +1504,18 @@ pub fn render_frame(
   if !render_scene.bvh_draw_calls.is_empty() {
     device.prepare_bvh_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
     for bvh_call in &render_scene.bvh_draw_calls {
-      gpu::frame::do_bvh_draw_call(
-        device,
-        cmd_buffer,
-        &render_scene.camera_data,
-        bvh_call,
-        &render_scene.draw_calls,
-      )?
+      gpu::frame::do_bvh_draw_call(device, cmd_buffer, &render_scene.camera_data, bvh_call)?
     }
+  }
+
+  if let Some(draw_call) = &render_scene.bvhwire2_batch_call {
+    gpu::frame::do_draw_bvhwire2_batch(
+      device,
+      &render_scene.camera_data,
+      cmd_buffer,
+      draw_call,
+      handle,
+    )?;
   }
 
   Ok(())

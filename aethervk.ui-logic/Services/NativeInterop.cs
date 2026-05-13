@@ -42,6 +42,29 @@ public static class NativeInterop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern ulong avkSimulationContext_addPerspectiveCamera(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong presentationEngine,
+    string name,
+    float fov,
+    float near,
+    float far
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern ulong avkSimulationContext_addOrthographicCamera(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong presentationEngine,
+    string name,
+    float left,
+    float bottom,
+    float near,
+    float far
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_createPresentationEngine(
     IntPtr ctx,
     uint width,
@@ -77,6 +100,9 @@ public static class NativeInterop
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_shutdown(IntPtr ctx);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_destroyScene(IntPtr ctx, ulong sceneId);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_startThreads(IntPtr ctx);
@@ -176,22 +202,37 @@ public static class NativeInterop
     float scaleZ
   );
 
+  [StructLayout(LayoutKind.Sequential)]
+  public struct FfiTransform 
+  {
+      public float Px, Py, Pz;
+      public float Rw, Rx, Ry, Rz;
+      public float Sx, Sy, Sz;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct FfiCamera
+  {
+      [MarshalAs(UnmanagedType.I1)] public bool IsOrthographic;
+      public float Fov;
+      public float Aspect;
+      public float Near;
+      public float Far;
+      public float OrthoLeft;
+      public float OrthoRight;
+      public float OrthoBottom;
+      public float OrthoTop;
+      [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+      public float[] Proj;
+  }
+
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.I1)]
   public static extern bool avkSimulationContext_setTransformComponent(
     IntPtr ctx,
     ulong sceneId,
     ulong entity,
-    float posX,
-    float posY,
-    float posZ,
-    float rotW,
-    float rotX,
-    float rotY,
-    float rotZ,
-    float scaleX,
-    float scaleY,
-    float scaleZ
+    in FfiTransform transform
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -200,16 +241,7 @@ public static class NativeInterop
     IntPtr ctx,
     ulong sceneId,
     ulong entity,
-    out float posX,
-    out float posY,
-    out float posZ,
-    out float rotW,
-    out float rotX,
-    out float rotY,
-    out float rotZ,
-    out float scaleX,
-    out float scaleY,
-    out float scaleZ
+    out FfiTransform transform
   );
 
   [StructLayout(LayoutKind.Sequential)]
@@ -290,15 +322,7 @@ public static class NativeInterop
     IntPtr ctx,
     ulong sceneId,
     ulong entity,
-    [MarshalAs(UnmanagedType.I1)] bool isOrthographic,
-    float fov,
-    float aspect,
-    float near,
-    float far,
-    float orthoLeft,
-    float orthoRight,
-    float orthoBottom,
-    float orthoTop
+    in FfiCamera camera
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -307,7 +331,7 @@ public static class NativeInterop
     IntPtr ctx,
     ulong sceneId,
     ulong entity,
-    IntPtr projOut
+    out FfiCamera camera
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -413,6 +437,7 @@ public static class NativeInterop
   public static extern ulong avkSimulationContext_raycastNdc(
     IntPtr ctx,
     ulong sceneId,
+    ulong cameraId,
     float ndcX,
     float ndcY
   );
@@ -531,13 +556,6 @@ public static class NativeInterop
     ulong handle,
     uint width,
     uint height
-  );
-
-  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_setActiveCamera(
-    IntPtr ctx,
-    ulong sceneId,
-    ulong camera
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

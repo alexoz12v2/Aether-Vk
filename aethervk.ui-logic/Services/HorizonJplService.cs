@@ -27,12 +27,12 @@ public class HorizonJplService
     _breadcrumb = breadcrumb;
   }
 
-  public async Task FetchCometsAsync(string startTime, string stopTime)
+  public async Task FetchCometsAsync()
   {
+    var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Downloading list of comets...");
     try
     {
-      var url =
-        $"https://ssd-api.jpl.nasa.gov/sbdb_query.api?sb-kind=c&fields=full_name,pdes&sb-cdata=%7B%22AND%22%3A%5B%22first_obs%7CGE%7C{Uri.EscapeDataString(startTime)}%22%2C%22first_obs%7CLE%7C{Uri.EscapeDataString(stopTime)}%22%5D%7D";
+      var url = "https://ssd-api.jpl.nasa.gov/sbdb_query.api?sb-kind=c&fields=full_name,pdes";
 
       _console.Log($"[HorizonJpl] GET {url}");
 
@@ -63,6 +63,10 @@ public class HorizonJplService
     {
       _console.Log($"[HorizonJpl] Exception: {ex.Message}");
       await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
+    }
+    finally
+    {
+      _breadcrumb.RemoveMessage(loadMsg);
     }
   }
 
@@ -170,11 +174,83 @@ public class HorizonJplService
     }
   }
 
+  public ObservableCollection<string[]> ObjectData { get; } = new();
+
+  public async Task FetchObjectDataAsync(string spkId)
+  {
+    var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Downloading object data...");
+    try
+    {
+      var command = Uri.EscapeDataString($"'{spkId};'");
+      var url = $"https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND={command}&MAKE_EPHEM='NO'&OBJ_DATA='YES'";
+      _console.Log($"[HorizonJpl] GET Object Data: {url}");
+      
+      var response = await _httpClient.GetAsync(url);
+      if (response.IsSuccessStatusCode)
+      {
+        var json = await response.Content.ReadAsStringAsync();
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        if (doc.RootElement.TryGetProperty("result", out var resultElement))
+        {
+           var text = resultElement.GetString() ?? "";
+           ParseObjectDataText(text);
+           await _breadcrumb.ShowMessageAsync("Horizon API (Object Data)", "Success: Object data fetched.");
+        }
+      }
+      else
+      {
+         await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status: {(int)response.StatusCode}");
+      }
+    }
+    catch (Exception ex)
+    {
+       _console.Log($"[HorizonJpl] Object Data Exception: {ex.Message}");
+       await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
+    }
+    finally
+    {
+       _breadcrumb.RemoveMessage(loadMsg);
+    }
+  }
+
+  private void ParseObjectDataText(string text)
+  {
+     ObjectData.Clear();
+     var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+     foreach(var line in lines)
+     {
+        if (line.StartsWith("*") || string.IsNullOrWhiteSpace(line)) continue;
+        
+        // Simple heuristic: if line contains '=', it might have key-values
+        if (line.Contains("="))
+        {
+           // Split by spaces, but carefully
+           var parts = line.Split(new[] {"   ", "\t"}, StringSplitOptions.RemoveEmptyEntries);
+           foreach(var part in parts)
+           {
+              var kv = part.Split(new[] {'='}, 2, StringSplitOptions.RemoveEmptyEntries);
+              if (kv.Length == 2)
+              {
+                 ObjectData.Add(new string[] { kv[0].Trim(), kv[1].Trim() });
+              }
+              else
+              {
+                 ObjectData.Add(new string[] { "Info", part.Trim() });
+              }
+           }
+        }
+        else
+        {
+           ObjectData.Add(new string[] { "Info", line.Trim() });
+        }
+     }
+  }
   public ObservableCollection<string[]> SpkRecordsData { get; } = new();
   public ObservableCollection<string> SpkRecordsHeaders { get; } = new();
 
   public async Task FetchSpkRecordsAsync(string pdes, string startTime, string stopTime)
   {
+    var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Downloading list of observation records...");
     try
     {
       var command = Uri.EscapeDataString($"'DES={pdes};'");
@@ -210,6 +286,10 @@ public class HorizonJplService
     {
       _console.Log($"[HorizonJpl] SPK Records Exception: {ex.Message}");
       await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
+    }
+    finally
+    {
+      _breadcrumb.RemoveMessage(loadMsg);
     }
   }
 

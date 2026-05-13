@@ -1,10 +1,23 @@
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CollisionEvent {
   pub time_of_impact: f32, // Time of Impact (t_c) from 0.0 to 1.0
   pub entity_a: u32,
   pub entity_b: u32,
+}
+
+pub fn parse_gpu_packed_pairs(gpu_data: &[u32], count: usize) -> Vec<CollisionEvent> {
+  let mut events = Vec::with_capacity(count);
+  for i in 0..count {
+    let base = 4 + i * 3;
+    events.push(CollisionEvent {
+      entity_a: gpu_data[base],
+      entity_b: gpu_data[base + 1],
+      time_of_impact: f32::from_bits(gpu_data[base + 2]),
+    });
+  }
+  events
 }
 
 pub type CollisionCluster = Vec<CollisionEvent>;

@@ -9,6 +9,7 @@ public class BreadcrumbMessage
   public int Status { get; set; } // 0=Info, 1=Success, 2=Warning, 3=Error
   public string Title { get; set; } = string.Empty;
   public string Content { get; set; } = string.Empty;
+  public bool IsLoading { get; set; }
 }
 
 public class BreadcrumbService
@@ -19,6 +20,23 @@ public class BreadcrumbService
   public BreadcrumbService(IUiThreadDispatcher dispatcher)
   {
     _dispatcher = dispatcher;
+  }
+
+  public BreadcrumbMessage ShowLoadingMessage(string title, string content)
+  {
+    var msg = new BreadcrumbMessage
+    {
+      Title = title,
+      Content = content,
+      IsLoading = true
+    };
+    _dispatcher.Dispatch(() => Messages.Add(msg));
+    return msg;
+  }
+
+  public void RemoveMessage(BreadcrumbMessage msg)
+  {
+    _dispatcher.Dispatch(() => Messages.Remove(msg));
   }
 
   public async Task ShowMessageAsync(

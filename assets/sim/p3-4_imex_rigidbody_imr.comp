@@ -32,10 +32,14 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) buffer RigidBodyAr
     RigidBody bodies[];
 };
 
-// AOS Emitter data
+// AOS Emitter data (TODO)
 struct ForceEmitter {
     vec3 position;
-    float mu; // G * M
+    float mu; // type_id = 0 -> G * M, type_id = 1 -> base force
+    vec3 normal; // type_id = 0 -> unused, type_id = 1 -> plane normal
+    uint type_id; // 0 = Gravity, 1 = Planar
+    float trunc_distance; // type_id = 0 -> unused, type_id = 1 -> max distance point - plane over which force is applied
+    uint _pad[3];
 };
 
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer EmitterArray {
@@ -45,9 +49,9 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Em
 layout(push_constant, scalar) uniform PushConstants {
     RigidBodyArray rigid_bodies;
     EmitterArray emitters;
-    uint total_bodies;
-    uint num_emitters;
     float dt;
+    uint num_bodies;
+    uint num_emitters;
 } pc;
 
 // --- Math Utilities ---
@@ -142,7 +146,7 @@ bool solve_6x6(inout float a[6][6], inout float b[6]) {
 
 void main() {
     uint idx = gl_GlobalInvocationID.x;
-    if (idx >= pc.total_bodies) return;
+    if (idx >= pc.num_bodies) return;
 
     // Critical fix: Copy field-by-field to avoid SPIRV-Cross struct padding mismatch
     RigidBody rb;
@@ -172,27 +176,50 @@ void main() {
             ForceEmitter em;
             em.position = pc.emitters.emitters[e].position;
             em.mu = pc.emitters.emitters[e].mu;
-            vec3 r = em.position - x_mid;
-            float dist_sq = dot(r, r);
-            if (dist_sq > 1e-6) {
-                float dist = sqrt(dist_sq);
-                float dist3 = dist_sq * dist;
-                float dist5 = dist3 * dist_sq;
-                
-                float coeff = em.mu * rb.mass / dist3;
-                f_world += r * coeff;
+            em.normal = pc.emitters.emitters[e].normal;
+            em.type_id = pc.emitters.emitters[e].type_id;
+            em.trunc_distance = pc.emitters.emitters[e].trunc_distance;
 
-                mat3 term1 = mat3(1.0) * (-coeff);
-                
-                // Outer product r * r^T
-                mat3 rr_t = mat3(
-                    r * r.x,
-                    r * r.y,
-                    r * r.z
-                );
-                
-                mat3 term2 = rr_t * (3.0 * em.mu * rb.mass / dist5);
-                k_trans += term1 + term2;
+            if (em.type_id == 0) {
+                // Type 0: Point Gravity
+                vec3 r = em.position - x_mid;
+                float dist_sq = dot(r, r);
+                if (dist_sq > 1e-6) {
+                    float dist = sqrt(dist_sq);
+                    float dist3 = dist_sq * dist;
+                    float dist5 = dist3 * dist_sq;
+
+                    float coeff = em.mu * rb.mass / dist3;
+                    f_world += r * coeff;
+
+                    mat3 term1 = mat3(1.0) * (-coeff);
+
+                    // Outer product r * r^T
+                    mat3 rr_t = mat3(
+                        r * r.x,
+                        r * r.y,
+                        r * r.z
+                    );
+
+                    mat3 term2 = rr_t * (3.0 * em.mu * rb.mass / dist5);
+                    k_trans += term1 + term2;
+                }
+            }
+            else if (em.type_id == 1) {
+                // Type 1: Planar Force Field
+                vec3 r = x_mid - em.position;
+
+                // Using absolute distance to the plane.
+                // (Remove abs() if the force should only apply to the "positive" half-space defined by the normal)
+                float dist_to_plane = abs(dot(r, em.normal));
+
+                if (dist_to_plane <= em.trunc_distance) {
+                    f_world += em.normal * (em.mu * rb.mass);
+
+                    // Note: k_trans remains unchanged!
+                    // The force is constant within the truncation bounds,
+                    // so its derivative with respect to position is a zero matrix.
+                }
             }
         }
 

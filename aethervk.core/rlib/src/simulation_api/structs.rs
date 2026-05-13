@@ -189,6 +189,10 @@ impl Drop for SimulationThreads {
       let _ = handle.join();
     }
 
+    // Ensure all logic-launched tasklets are finished before shutting down the renderer
+    oshal::log!("SimulationThreads waiting for thread pool tasks to complete...");
+    self.pool.gather();
+
     if let Some(tx) = self.render_thread.tx.take() {
       let _ = tx.try_send(RenderCommand::Shutdown);
     }
@@ -222,6 +226,7 @@ impl LogicThreadContext {
   pub fn raycast_ndc_internal(
     &self,
     scene_id: u64,
+    camera_id: u64,
     ndc_x: f32,
     ndc_y: f32,
   ) -> EngineResult<RaycastResult> {
@@ -230,19 +235,16 @@ impl LogicThreadContext {
       let active =
         scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?.read();
       let active_camera_entity =
-        active.active_camera_entity.ok_or(EngineError::InvalidOperation("no active camera"))?;
+        active.get_entity(camera_id).ok_or(EngineError::InvalidOperation("no camera found"))?;
 
       let mut view = Mat4x4f32::identity();
       active
         .scene
         .with_component(active_camera_entity, |c: &TransformComponent| {
-          view = Mat4x4f32::from_columns(
-            Vec4f32::from_components(1.0, 0.0, 0.0, 0.0),
-            Vec4f32::from_components(0.0, 0.0, -1.0, 0.0),
-            Vec4f32::from_components(0.0, -1.0, 0.0, 0.0),
-            Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
-          ) * Mat4x4f32::from_quat_custom_frame(c.rotation.conjugate())
-            * Mat4x4f32::translation(c.position * -1.0);
+          let right = c.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
+          let up = c.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
+          let forward = c.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
+          view = Mat4x4f32::look_at_axes(right, forward, up, c.position);
         })
         .ok_or(EngineError::InvalidOperation("camera transform missing"))?;
 
@@ -250,7 +252,7 @@ impl LogicThreadContext {
       active
         .scene
         .with_component(active_camera_entity, |cam: &CameraComponent| {
-          let proj = cam.projection;
+          let proj = cam.get_projection_matrix();
           let view_proj = proj * view;
           view_proj_inv = view_proj.inverse().unwrap_or(Mat4x4f32::identity());
         })
@@ -271,6 +273,8 @@ impl LogicThreadContext {
       let delta = target - ro;
       (ro, delta.normalize())
     };
+
+    aethervk_oshal_rlib::log!("DEBUG: raycast_ndc_internal ro=[{},{},{}] rd=[{},{},{}]", ro.x(), ro.y(), ro.z(), rd.x(), rd.y(), rd.z());
 
     self.raycast_internal(scene_id, ro, rd)
   }
@@ -299,9 +303,9 @@ impl LogicThreadContext {
     };
 
     let hit_instances = ps.intersect_world_bvh_math(&ray);
-    let intersections: Vec<((f32, Vec3f32), EntityId)> = scene_ctx
+    let intersections: Vec<((f32, Vec3f32, [f32; 2]), EntityId)> = scene_ctx
       .scene
-      .query2_res::<crate::scene::PhysicalMeshComponent, TransformComponent, _, (f32, Vec3f32)>(
+      .query2_res::<crate::scene::PhysicalMeshComponent, TransformComponent, _, (f32, Vec3f32, [f32; 2])>(
       |entity, mesh, transform| {
         if !hit_instances.contains(&entity) || mesh.mesh.bvh.is_none() {
           return None;
@@ -313,7 +317,7 @@ impl LogicThreadContext {
       },
     );
 
-    if let Some((_, hit_point, hit_entity)) = closest_intersection(&intersections) {
+    if let Some((_, hit_point, hit_uv, hit_entity)) = closest_intersection(&intersections) {
       let external_id = scene_ctx
         .entity_map
         .iter()
@@ -323,6 +327,7 @@ impl LogicThreadContext {
       return Ok(Some(RayCastHit {
         entity_ext_id: external_id,
         p: hit_point,
+        uv: hit_uv,
       }));
     }
 
@@ -638,8 +643,9 @@ pub enum LogicCommand {
     scene_id: u64,
     epoch_tai_seconds: f64,
   },
-  PlayScene {
+  SetPhysicsEngineType {
     scene_id: u64,
+    engine_type: PhysicsEngineType,
   },
   PauseScene {
     scene_id: u64,
@@ -672,6 +678,7 @@ pub enum LogicCommand {
   RaycastNdc {
     task_id: u64,
     scene_id: u64,
+    camera_id: u64,
     ndc_x: f32,
     ndc_y: f32,
   },
@@ -686,6 +693,9 @@ pub enum LogicCommand {
     custom_fn:
       fn(&LogicThreadContext, *mut core::ffi::c_void) -> EngineResult<SimulationTaskResult>,
     user_data: Option<SendPtrMut<core::ffi::c_void>>,
+  },
+  PlayScene {
+    scene_id: u64,
   },
 }
 
@@ -703,6 +713,7 @@ impl LogicCommand {
 /// TODO: Document this item
 pub enum TimeScale {
   Stopped,
+  RealTime,
   #[default]
   OneDay,
   OneWeek,
@@ -714,6 +725,7 @@ impl TimeScale {
   pub fn to_days_per_st_second(self) -> f64 {
     match self {
       TimeScale::Stopped => 0.0,
+      TimeScale::RealTime => 1.0 / 86400.0,
       TimeScale::OneDay => 1.0,
       TimeScale::OneWeek => 7.0,
       TimeScale::OneMonth => 30.436875,
@@ -794,6 +806,11 @@ pub struct RenderFrame {
   pub sky_entity: Option<EntityId>,
   pub cursor_entity: Option<EntityId>,
   pub custom_render_callback: Option<CustomRenderCallback>,
+  pub active_physics_task: alloc::sync::Arc<
+    spin::Mutex<
+      Option<aethervk_oshal_rlib::os::pool::tasklet::TaskletHandle<crate::types::EngineResult<()>>>,
+    >,
+  >,
 }
 
 /// Invariant: width and height are valid, presentation engine is inside simulation context and render device
@@ -885,6 +902,7 @@ pub struct SceneTimeState {
   pub epoch_end: anise::time::Epoch,
   pub st_seconds_elapsed: f64,
   pub is_playing: bool,
+  pub manual_step_requests: f64,
   pub is_ticking: alloc::sync::Arc<core::sync::atomic::AtomicBool>,
 }
 
@@ -904,28 +922,51 @@ impl Default for SceneTimeState {
       epoch_end: anise::time::Epoch::from_gregorian_utc_at_midnight(2100, 1, 1),
       st_seconds_elapsed: 0.0,
       is_playing: false,
+      manual_step_requests: 0.0,
       is_ticking: alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false)),
     }
   }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PhysicsEngineType {
+  CpuScalar,
+  CpuSimd,
+  VulkanCompute,
+}
+
+impl Default for PhysicsEngineType {
+  fn default() -> Self {
+    Self::CpuSimd
+  }
+}
+
 #[derive(Clone, Debug)]
-/// TODO: Document this item
+pub struct PresentationEngineData {
+  pub is_windowless: bool,
+  pub camera_entity: Option<EntityId>,
+}
+
+#[derive(Debug)]
 pub struct SceneContext {
   pub scene: Arc<Scene>,
   pub entity_map: BTreeMap<u64, EntityId>,
   next_entity_id: u64,
   pub root_entity: EntityId,
-  pub active_camera_entity: Option<EntityId>,
   pub cursor_entity: Option<EntityId>,
   pub sun_entity: Option<EntityId>,
   pub grid_entity: Option<EntityId>,
   pub sky_entity: Option<EntityId>,
   pub outlines_enabled: Arc<AtomicBool>,
   pub physics_scene: Option<Arc<RwLock<physics::physics_scene::PhysicsScene>>>,
+  pub active_physics_task: alloc::sync::Arc<
+    spin::Mutex<
+      Option<aethervk_oshal_rlib::os::pool::tasklet::TaskletHandle<crate::types::EngineResult<()>>>,
+    >,
+  >,
+  pub physics_engine_type: Arc<RwLock<PhysicsEngineType>>,
   pub time_state: Arc<RwLock<SceneTimeState>>,
-  /// boolean: is windowless or not
-  pub presentation_engines: Arc<RwLock<BTreeMap<PresentationEngineHandle, bool>>>,
+  pub presentation_engines: Arc<RwLock<BTreeMap<PresentationEngineHandle, PresentationEngineData>>>,
   pub changed_entities: Arc<RwLock<BTreeMap<u64, BTreeSet<String>>>>,
   pub custom_render_callback: Option<CustomRenderCallback>,
   pub debug_name: alloc::string::String,
@@ -947,10 +988,6 @@ impl SceneContext {
   /// TODO: Document this item
   pub(crate) fn register_present_entities(&mut self) {
     self.register_entity(self.root_entity);
-    if self.active_camera_entity.is_some() {
-      let active_camera_entity = unsafe { self.active_camera_entity.unwrap_unchecked() };
-      self.register_entity(active_camera_entity);
-    }
     if self.cursor_entity.is_some() {
       let cursor_entity = unsafe { self.cursor_entity.unwrap_unchecked() };
       self.register_entity(cursor_entity);
@@ -982,17 +1019,6 @@ impl SceneContext {
     }
     self.next_entity_id += 1;
     Ok(self)
-  }
-
-  /// TODO: Document this item
-  pub fn with_active_camera_entity(mut self, active_camera_entity: EntityId) -> EngineResult<Self> {
-    if self.active_camera_entity.is_some() {
-      return Err(EngineError::InvalidOperation(
-        "simulation_api:with_active_camera_entity | active_camera_entity already present in scene context",
-      ));
-    }
-    self.active_camera_entity = Some(active_camera_entity);
-    self.with_new_entity_inserted(active_camera_entity)
   }
 
   /// TODO: Document this item
@@ -1056,13 +1082,14 @@ impl SceneContext {
       entity_map,
       next_entity_id: 2,
       root_entity,
-      active_camera_entity: None,
       cursor_entity: None,
       sun_entity: None,
       grid_entity: None,
       sky_entity: None,
       outlines_enabled: Arc::new(AtomicBool::new(false)),
       physics_scene: None,
+      active_physics_task: alloc::sync::Arc::new(spin::Mutex::new(None)),
+      physics_engine_type: Arc::new(RwLock::new(PhysicsEngineType::default())),
       time_state: Arc::new(RwLock::new(SceneTimeState::default())),
       presentation_engines: Arc::new(RwLock::new(BTreeMap::new())),
       changed_entities: Arc::new(RwLock::new(BTreeMap::new())),
@@ -1241,6 +1268,7 @@ pub struct LogicThreadContext {
 pub struct RayCastHit {
   pub entity_ext_id: u64,
   pub p: Vec3f32,
+  pub uv: [f32; 2],
 }
 
 /// TODO: Document this item

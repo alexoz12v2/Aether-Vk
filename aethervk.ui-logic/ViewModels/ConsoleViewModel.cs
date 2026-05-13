@@ -10,6 +10,7 @@ namespace AetherVk.Logic.ViewModels;
 public partial class ConsoleViewModel : TabItemViewModel, IRecipient<ConsoleMessage>
 {
   private readonly ConsoleService _consoleService;
+  private readonly IFileDialogService _fileDialogService;
 
   [ObservableProperty]
   private string _fullText = string.Empty;
@@ -19,10 +20,11 @@ public partial class ConsoleViewModel : TabItemViewModel, IRecipient<ConsoleMess
 
   public ObservableCollection<string> Messages => _consoleService.Messages;
 
-  public ConsoleViewModel(ConsoleService consoleService)
+  public ConsoleViewModel(ConsoleService consoleService, IFileDialogService fileDialogService)
     : base("Console")
   {
     _consoleService = consoleService;
+    _fileDialogService = fileDialogService;
     _consoleService.Messages.CollectionChanged += OnMessagesChanged;
 
     // Initial load
@@ -68,6 +70,27 @@ public partial class ConsoleViewModel : TabItemViewModel, IRecipient<ConsoleMess
     if (ConsoleFontSize > 6.0)
     {
       ConsoleFontSize -= 1.0;
+    }
+  }
+
+  [RelayCommand]
+  private async System.Threading.Tasks.Task ExportLogsAsync()
+  {
+    var savePath = await _fileDialogService.ShowSaveFileDialogAsync("Export Console Logs", "txt", new[] { "*.txt" });
+    if (!string.IsNullOrEmpty(savePath))
+    {
+      try
+      {
+        var text = string.Join(System.Environment.NewLine, Messages);
+        using (var stream = new System.IO.StreamWriter(savePath, false))
+        {
+          await stream.WriteAsync(text);
+        }
+      }
+      catch (System.Exception)
+      {
+        // Ignore or log
+      }
     }
   }
 

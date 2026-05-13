@@ -121,6 +121,13 @@ impl TimeInfo {
     }
   }
 
+  /// Discards the accumulated time debt to prevent a spiral of death.
+  /// This aligns the fixed update tracker with the current simulated time.
+  pub fn ut_discard_accumulator(&self) {
+    let current_sim_time = self.m_last_update.load(Ordering::Relaxed);
+    self.m_last_fixed_update.store(current_sim_time, Ordering::Relaxed);
+  }
+
   /// TODO: Document this item
   pub fn set_time_scale(&mut self, time_scale: f32) {
     let time_scale = if time_scale > 0.0 { time_scale } else { 0.0 };

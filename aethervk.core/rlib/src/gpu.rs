@@ -7,6 +7,7 @@ use crate::scene::text::{FontAtlas, GlyphInfo};
 use crate::simulation::comet::Texture;
 use crate::types::{EngineResult, GpuError, GpuResult};
 use crate::{
+  gpu,
   gpu::frame::ResourceUploadResult,
   scene::{EntityId, PhysicalMeshComponent, TransformComponent},
 };
@@ -17,6 +18,7 @@ use ahash::AHasher;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::sync::Weak;
+use ash::vk;
 use bitflags::bitflags;
 use core::{
   ffi,
@@ -24,6 +26,7 @@ use core::{
 };
 use heapless::index_map::FnvIndexMap;
 
+pub mod compute_push_constants;
 pub mod frame;
 pub mod scene_conversion;
 
@@ -85,7 +88,11 @@ pub struct DynamicBody {
 /// TODO: Document this item
 pub struct ForceEmitter {
   pub position: [f32; 3],
-  pub mu: f32,
+  pub mu: f32, // or base_force
+  pub normal: [f32; 3],
+  pub type_id: u32, // 0 = Gravity, 1 = Planar
+  pub trunc_distance: f32,
+  pub _pad: [u32; 3],
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
@@ -353,6 +360,23 @@ pub struct BvhPushConstants {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Bvhwire2DataGpu {
+  pub center_type: [f32; 4],
+  pub extents: [f32; 4],
+  pub axes_x: [f32; 4],
+  pub axes_y: [f32; 4],
+  pub axes_z: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct Bvhwire2PushConstants {
+  pub bvh_ptr: u64,
+  pub view_proj: [f32; 16],
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 /// TODO: Document this item
 pub struct ParticlePushConstants {
@@ -363,6 +387,7 @@ pub struct ParticlePushConstants {
   pub seed: f32,
   pub color: [f32; 4],
   pub radius: f32,
+  pub camera_pos: [f32; 3],
 }
 
 #[repr(C)]
@@ -376,6 +401,7 @@ pub struct Particle2PushConstants {
   pub seed: f32,
   pub color: [f32; 4],
   pub radius: f32,
+  pub camera_pos: [f32; 3],
 }
 
 #[repr(C)]
@@ -385,6 +411,25 @@ pub struct GizmoPushConstants {
   pub view_proj: [f32; 16],
   pub scale: f32,
   pub instance_id: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct TextGlyphGpu {
+  pub pos: [f32; 2],
+  pub size: [f32; 2],
+  pub uv_bounds: [f32; 4],
+  pub color: [f32; 4],
+  pub texture_id: u32,
+  pub style: u32,
+  pub _pad: [u32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct Text2PushConstants {
+  pub glyphs_ptr: u64,
+  pub view_proj: [[f32; 4]; 4],
 }
 
 // TODO remove on text rendering v2
@@ -397,6 +442,8 @@ pub struct TextPushConstants {
   pub color: [f32; 4],
   pub uv_bounds: [f32; 4],
   pub texture_id: u32,
+  pub _padding: [u32; 3],
+  pub view_proj: [f32; 16],
 }
 
 impl TextPushConstants {
@@ -404,18 +451,20 @@ impl TextPushConstants {
   pub(crate) fn from_glyph(
     glyph: &GlyphInfo,
     cursor_position: [f32; 2],
-    screen_extent: [f32; 2],
+    view_proj: [f32; 16],
     desired_points: f32,
     atlas_scale: PxScale,
     texture_id: u32,
     color: [f32; 4],
   ) -> Self {
     Self {
-      pos: glyph.screen_position(cursor_position, screen_extent, desired_points, atlas_scale),
-      scale: glyph.screen_size(screen_extent, desired_points, atlas_scale),
+      pos: glyph.screen_position(cursor_position, desired_points, atlas_scale),
+      scale: glyph.screen_size(desired_points, atlas_scale),
       color,
       uv_bounds: glyph.uv_bounds(),
       texture_id,
+      _padding: [0; 3],
+      view_proj,
     }
   }
 }
@@ -488,6 +537,54 @@ impl Viewport {
   }
 }
 
+pub const UI_FLAG_HAS_CLIP: u32 = 1 << 0;
+
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Debug)]
+pub struct UiElementGpu {
+  pub bounds: [f32; 4],
+  pub clip_rect: [f32; 4],
+  pub color_start: [f32; 4],
+  pub color_end: [f32; 4],
+  pub color_border: [f32; 4],
+  pub color_shadow: [f32; 4],
+  pub border_radius: [f32; 4],
+  pub shadow_params: [f32; 4],
+  pub gradient_dir: [f32; 2],
+  pub border_width: f32,
+  pub texture_id: u32,
+  pub flags: u32,
+  pub opacity: f32,
+  pub rotation: f32,
+  pub _pad: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiPushConstants {
+  pub elements_ptr: u64,
+  pub view_proj: [[f32; 4]; 4],
+  pub viewport_size: [f32; 2],
+  pub _pad: [f32; 2],
+}
+
+pub struct UiBatchCall {
+  pub elements_ptr: u64,
+  pub total_elements: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct BackgroundPushConstants {
+  pub color_top: [f32; 4],
+  pub color_bottom: [f32; 4],
+}
+
+pub struct Text2BatchCall {
+  pub glyphs_ptr: u64,
+  pub total_glyphs: u32,
+}
+
 #[repr(u32)]
 #[derive(Copy, Clone, Eq, PartialEq)]
 /// TODO: Document this item
@@ -509,11 +606,15 @@ pub enum ArchetypeId {
   Grid,
   Minimap,
   Text,
+  Text2,
   Bvh,
+  Bvhwire2,
   Particle,
   Gizmo,
   Particle2,
   Trajectory,
+  Ui,
+  Background,
 }
 
 /// `RenderCompute` bridges the gap between purely physical workloads (`Kernels`) and
@@ -748,6 +849,20 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     )],
   ) -> GpuResult<Option<crate::gpu::frame::TrajectoryBatchCall>>;
 
+  fn upload_ui(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
+    ui_elements: &[crate::gpu::UiElementGpu],
+  ) -> GpuResult<Option<crate::gpu::UiBatchCall>>;
+
+  fn upload_text2(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
+    glyphs: &[crate::gpu::TextGlyphGpu],
+  ) -> GpuResult<Option<crate::gpu::Text2BatchCall>>;
+
   /// Draws a particle system using the mega-buffer
   fn draw_particle_indirect(
     &self,
@@ -767,8 +882,11 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   -> GpuResult<PipelineKey>;
   fn get_sun_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
   fn get_sky_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
+  fn get_background_pipeline_key(&self, handle: PresentationEngineHandle)
+  -> GpuResult<PipelineKey>;
   fn get_grid_pipeline_kay(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
   fn get_bvh_pipeline_kay(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
+  fn get_bvhwire2_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
 
   /// Given FontAtlas (moved), try to allocate a rasterized representation of it
   /// for the render device. Returns internal id used by RenderDevice (as descriptor index)
@@ -777,7 +895,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     &self,
     cmd: CommandBufferHandle,
     hash: u64,
-    font_atlas: FontAtlas,
+    font_atlas: alloc::sync::Arc<FontAtlas>,
   ) -> GpuResult<u32>;
 
   fn free_rasterized_font_atlas(&self, hash: u64, font_atlas_id: u32) -> GpuResult<()>;
@@ -804,6 +922,12 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
 
   fn begin_command_buffer(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 
+  /// Returns the mapped memory pointer of the emissive paint image for a given physical mesh instance
+  fn get_emissive_paint_image_mapped_ptr(
+    &self,
+    mesh_id: crate::gpu::RenderableInstanceId,
+  ) -> Option<*mut u8>;
+
   /// responsible to acquire an image and store it in the associated command buffer structure
   fn begin_render_pass(
     &self,
@@ -823,7 +947,13 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   fn check_billboard_texture_id(&self, texture_id: u64) -> GpuResult<()>;
 
   // `init_archetypes` should have already been called
-  fn add_billboard_texture(&self, texture: &Texture) -> GpuResult<()>;
+  fn add_billboard_texture(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    texture_id: u64,
+    texture: &Texture,
+    current_frame: u64,
+  ) -> GpuResult<u32>;
 
   /// alter internal state for current command buffer to use a specific set of buffers, coherent with pipeline
   /// TODO rework to 1) not take pipeline key 2) support multiple archetypes which use buffers
@@ -882,6 +1012,19 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     handle: PresentationEngineHandle,
   ) -> GpuResult<()>;
 
+  fn prepare_bvhwire2_archetype_for_render_and_bind_pipeline(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()>;
+
+  fn upload_bvhwire2_batch(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
+    bvh_data: &[crate::gpu::Bvhwire2DataGpu],
+  ) -> GpuResult<Option<crate::gpu::frame::Bvhwire2BatchCall>>;
+
   fn prepare_gizmo_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -917,11 +1060,23 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     handle: PresentationEngineHandle,
   ) -> GpuResult<()>;
 
+  fn prepare_ui_archetype_for_render_and_bind_pipeline(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()>;
+
   fn prepare_sky_for_render(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 
   /// Screen extent should be the chosen presentation engine extent to correctly display screen size and position
   /// `atlas_id` is composed of the `hash` and internal id for the font atlas
   fn prepare_text_archetype_for_render_and_bind_pipeline(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()>;
+
+  fn prepare_text2_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
     handle: PresentationEngineHandle,
@@ -960,7 +1115,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     cmd_buffer: CommandBufferHandle,
     text: &str,
     start_cursor_position: [f32; 2],
-    screen_extent: [f32; 2],
+    view_proj: [f32; 16],
     atlas_id: (u64, u32),
     desired_points: f32,
     color: [f32; 4],
@@ -996,6 +1151,11 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   fn fail_task(&self, task_id: u64, error: GpuError);
 
   fn success_task(&self, task_id: u64);
+  fn prepare_background_archetype_for_render_and_bind_pipeline(
+    &self,
+    cmd_buffer: gpu::CommandBufferHandle,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()>;
 }
 
 macro_rules! implement_render_device_ext {
@@ -1070,15 +1230,17 @@ implement_render_device_ext! {
   fn push_sky_constants(Sky, SkyPushConstants);
   fn push_grid_constants(Grid, GridPushConstants);
   fn push_gizmo_constants(Gizmo, GizmoPushConstants);
-  // Minimap, TODO
-  // fn push_minimap_constants(Minimap, MinimapPushConstants);
   // Text,
   fn push_text_constants(Text, TextPushConstants);
+  fn push_text2_constants(Text2, Text2PushConstants);
   // Bvh,
   fn push_bvh_constants(Bvh, BvhPushConstants);
+  fn push_bvhwire2_constants(Bvhwire2, Bvhwire2PushConstants);
   fn push_particle_constants(Particle, ParticlePushConstants);
   fn push_particle2_constants(Particle2, Particle2PushConstants);
   fn push_trajectory_constants(Trajectory, TrajectoryPushConstants);
+  fn push_ui_constants(Ui, UiPushConstants);
+  fn push_background_constants(Background, BackgroundPushConstants);
 
   // to add new archetypes, add one line here:
 }
@@ -1553,12 +1715,14 @@ pub trait Kernels: Send + Sync {
     dynamics: &mut Self::Buffer<DynamicBody>,
     bvh: &Self::MotionBvh,
     dt: timeus_t,
+    scene0: &Scene,
   ) -> EngineResult<()>;
 
   // 5. Collision Pipeline
   fn build_motion_bvh(
     &self,
     cmd: &mut Self::Cmd,
+    kinematics: &Self::Buffer<KinematicBody>,
     dynamics: &Self::Buffer<DynamicBody>,
   ) -> EngineResult<Self::MotionBvh>;
   fn self_intersect_scene(

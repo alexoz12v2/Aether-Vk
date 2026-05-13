@@ -1,4 +1,5 @@
 using System;
+using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
 using Avalonia;
 using Avalonia.Controls;
@@ -10,7 +11,7 @@ using Avalonia.Threading;
 
 namespace AetherVk.Views;
 
-public partial class Viewport3DView : UserControl
+public partial class Viewport3DView : UserControl, IViewportRenderer
 {
   private Viewport3DViewModel? _viewModel;
   private WriteableBitmap? _bitmap;
@@ -98,13 +99,14 @@ public partial class Viewport3DView : UserControl
 
     if (_viewModel != null)
     {
-      _viewModel.OnFrameReady -= HandleFrameReady;
+      _viewModel.Renderer = null;
     }
 
     _viewModel = DataContext as Viewport3DViewModel;
 
     if (_viewModel != null)
     {
+      _viewModel.Renderer = this;
       _bitmap = new WriteableBitmap(
         new Avalonia.PixelSize((int)_viewModel.Width, (int)_viewModel.Height),
         new Avalonia.Vector(96, 96),
@@ -121,8 +123,7 @@ public partial class Viewport3DView : UserControl
     base.OnAttachedToVisualTree(e);
     if (_viewModel != null)
     {
-      _viewModel.OnFrameReady -= HandleFrameReady;
-      _viewModel.OnFrameReady += HandleFrameReady;
+      _viewModel.Renderer = this;
     }
   }
 
@@ -131,48 +132,30 @@ public partial class Viewport3DView : UserControl
     base.OnDetachedFromVisualTree(e);
     if (_viewModel != null)
     {
-      _viewModel.OnFrameReady -= HandleFrameReady;
+      _viewModel.Renderer = null;
     }
   }
 
-  private async void HandleFrameReady()
+  public void UpdateFrame(IntPtr buffer, nuint bufferSize)
   {
     if (_bitmap == null || _viewModel == null)
       return;
 
     _lastFrameTime = DateTime.Now;
 
-    nuint bufferSize = (nuint)(_viewModel.Width * _viewModel.Height * 4);
-    IntPtr unmanagedBuffer = System.Runtime.InteropServices.Marshal.AllocHGlobal((int)bufferSize);
-
-    try
+    using (var frame = _bitmap.Lock())
     {
-      await _viewModel.CopyFrameToBuffer(unmanagedBuffer, bufferSize);
-
-      await Dispatcher.UIThread.InvokeAsync(() =>
+      unsafe
       {
-        if (_bitmap != null)
-        {
-          using (var frame = _bitmap.Lock())
-          {
-            unsafe
-            {
-              System.Buffer.MemoryCopy(
-                unmanagedBuffer.ToPointer(),
-                frame.Address.ToPointer(),
-                bufferSize,
-                bufferSize
-              );
-            }
-          }
-          RenderTargetImage.InvalidateVisual();
-        }
-      });
+        System.Buffer.MemoryCopy(
+          buffer.ToPointer(),
+          frame.Address.ToPointer(),
+          bufferSize,
+          bufferSize
+        );
+      }
     }
-    finally
-    {
-      System.Runtime.InteropServices.Marshal.FreeHGlobal(unmanagedBuffer);
-    }
+    RenderTargetImage.InvalidateVisual();
   }
 
   private void OnPointerPressed(object? sender, PointerPressedEventArgs e)

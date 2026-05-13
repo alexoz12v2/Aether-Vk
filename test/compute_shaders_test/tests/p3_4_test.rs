@@ -18,13 +18,14 @@ struct P3_4Data {
 struct PushConstants {
     rigid_bodies_addr: u64,
     emitters_addr: u64,
+    dt: f32,
     total_bodies: u32,
     num_emitters: u32,
-    dt: f32,
 }
 
 #[test]
 fn test_p3_4_imex_rigidbody_imr() {
+    compute_shaders_test::ensure_test_data("test_data/p3_4.json", "gen_p3_4_data.py");
     let json_data = fs::read_to_string("test_data/p3_4.json").expect("Failed to read JSON");
     let test_data: P3_4Data = serde_json::from_str(&json_data).expect("Failed to parse JSON");
 

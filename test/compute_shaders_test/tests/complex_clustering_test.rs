@@ -73,7 +73,7 @@ fn test_complex_compaction_and_clustering() {
       | vk::BufferUsageFlags::TRANSFER_DST,
   );
 
-  let mut packed_out_init = vec![0u32; 4 + total_elements as usize * 2];
+  let mut packed_out_init = vec![0u32; 4 + total_elements as usize * 3];
 
   let (packed_buffer, mut packed_alloc, packed_addr) = ctx.create_buffer(
     &packed_out_init,
@@ -103,7 +103,7 @@ fn test_complex_compaction_and_clustering() {
   let output_data: Vec<u32> = ctx.read_buffer(
     packed_buffer,
     &mut packed_alloc,
-    4 + total_elements as usize * 2,
+    4 + total_elements as usize * 3,
   );
 
   ctx.destroy_buffer(sparse_buffer, sparse_alloc);
@@ -111,6 +111,8 @@ fn test_complex_compaction_and_clustering() {
 
   let gpu_count = output_data[3];
   println!("GPU stream_compact found {} valid collisions", gpu_count);
+
+  let gpu_events = compute_shaders_test::cpu_clustering::parse_gpu_packed_pairs(&output_data, gpu_count as usize);
 
   // Now let's extract CPU sparse events
   let mut cpu_events = Vec::new();

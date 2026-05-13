@@ -1,0 +1,16 @@
+[package]
+name = "physics_playground"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aethervk-core-rlib = { path = "../../aethervk.core/rlib" }
+aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib" }
+approx = "0.5"
+slotmap = "1.0"
+spin = { version = "0.10.0", default-features = false }
+thingbuf = { version = "0.1.6", default-features = false }
+
+[features]
+use_cpu_kernels = []
+use_vulkan_kernels = []

@@ -30,7 +30,7 @@ impl GaussianParams {
 
 #[derive(Clone, Debug)]
 /// TODO: Document this item
-pub struct ParticleEmitterConfig {
+pub struct ParticleEmitterComponent {
   pub uv_distribution: crate::math::distribution::Distribution2D,
   pub delta: timeus_t,
   pub max_particles: usize,
@@ -43,6 +43,8 @@ pub struct ParticleEmitterConfig {
   pub beta: f32,
   pub use_particle2: bool,
 }
+
+impl Component for ParticleEmitterComponent {}
 
 #[repr(C)]
 #[derive(Clone, Debug)]
@@ -92,7 +94,6 @@ impl ParticleData {
 
 /// TODO: Document this item
 pub struct ParticleSystemComponent {
-  pub config: ParticleEmitterConfig,
   pub particles: alloc::sync::Arc<spin::RwLock<alloc::vec::Vec<ParticleData>>>,
   pub bvh: Option<LinearBVH<f32>>,
   pub accumulator: timeus_t,
@@ -102,7 +103,6 @@ pub struct ParticleSystemComponent {
 impl core::fmt::Debug for ParticleSystemComponent {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("ParticleSystemComponent")
-      .field("config", &self.config)
       .field("particles_count", &self.particles.read().len())
       .field("bvh_is_some", &self.bvh.is_some())
       .finish()
@@ -113,12 +113,11 @@ impl Component for ParticleSystemComponent {}
 
 impl ParticleSystemComponent {
   /// TODO: Document this item
-  pub fn new(config: ParticleEmitterConfig) -> Self {
+  pub fn new(max_particles: usize) -> Self {
     Self {
       particles: alloc::sync::Arc::new(spin::RwLock::new(alloc::vec::Vec::with_capacity(
-        config.max_particles,
+        max_particles,
       ))),
-      config,
       bvh: None,
       accumulator: 0,
       next_id: 0,
@@ -128,6 +127,7 @@ impl ParticleSystemComponent {
   /// TODO: Document this item
   pub fn emit_particles(
     &mut self,
+    config: &ParticleEmitterComponent,
     comet: &Comet,
     uv_grid: &UvGrid,
     comet_pos: Vec3f32,
@@ -136,17 +136,17 @@ impl ParticleSystemComponent {
     u_emission: &[f32; 2],
     u_particles: &[[f32; 4]],
   ) {
-    let count = self.config.emission_count.sample(u_emission) as usize;
+    let count = config.emission_count.sample(u_emission) as usize;
 
     let mut particles = self.particles.write(); // TODO this might be slow
     for i in 0..count {
-      if particles.len() >= self.config.max_particles {
+      if particles.len() >= config.max_particles {
         break;
       }
 
       let u = &u_particles[i];
       // TODO: why is pdf unused?
-      let (uv_x, uv_y, _pdf) = self.config.uv_distribution.sample_continuous(&[u[0], u[1]]);
+      let (uv_x, uv_y, _pdf) = config.uv_distribution.sample_continuous(&[u[0], u[1]]);
 
       let (local_pos, local_norm) =
         match uv_grid.query([uv_x, uv_y], &comet.vertices, &comet.indices) {
@@ -173,7 +173,7 @@ impl ParticleSystemComponent {
       let world_norm = comet_rot.rotate_vector(local_norm_vec);
       let world_pos = comet_pos
         + comet_rot.rotate_vector(local_pos_vec)
-        + world_norm * self.config.particle_radius * 1.5; // Push slightly outside
+        + world_norm * config.particle_radius * 1.5; // Push slightly outside
 
       // Intersection check removed for performance
 
@@ -196,7 +196,7 @@ impl ParticleSystemComponent {
           .normalize();
 
       // For the intensity, we reuse the first two random numbers to sample the Gaussian
-      let intensity = self.config.velocity_intensity.sample(&[u[0], u[1]]);
+      let intensity = config.velocity_intensity.sample(&[u[0], u[1]]);
       let velocity = world_dir * intensity;
 
       let mut p = ParticleData {
@@ -205,10 +205,7 @@ impl ParticleSystemComponent {
         age_low: 0,
         age_high: 0,
         position: [world_pos.x(), world_pos.y(), world_pos.z()],
-        mass: self.config.density
-          * (4.0 / 3.0)
-          * core::f32::consts::PI
-          * self.config.particle_radius.powi(3),
+        mass: config.density * (4.0 / 3.0) * core::f32::consts::PI * config.particle_radius.powi(3),
         velocity: [velocity.x(), velocity.y(), velocity.z()],
         active: 1,
       };
@@ -220,7 +217,7 @@ impl ParticleSystemComponent {
   }
 
   /// TODO: Document this item
-  pub fn update_bvh(&mut self) {
+  pub fn update_bvh(&mut self, particle_radius: f32) {
     use crate::math::collision::bvh_builder::BVHBuilderParams;
     use crate::math::collision::linear_bvh::LinearBVH;
     use crate::physics::particle::ParticleBVHBuilder;
@@ -231,7 +228,7 @@ impl ParticleSystemComponent {
       .read()
       .iter()
       .filter(|p| p.active != 0)
-      .map(|p| p.as_particle(self.config.particle_radius))
+      .map(|p| p.as_particle(particle_radius))
       .collect();
 
     if active_particles.is_empty() {

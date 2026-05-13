@@ -131,6 +131,19 @@ pub unsafe extern "C" fn avkSimulationContext_getTaskResultKinematicState(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_destroyScene(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let _ = ctx_ref.destroy_scene(scene_id);
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_createEmptyScene(ctx: *mut SimulationContext) -> u64 {
   if ctx.is_null() {
     return 0;
@@ -140,6 +153,80 @@ pub unsafe extern "C" fn avkSimulationContext_createEmptyScene(ctx: *mut Simulat
     oshal::log!("create_empty_scene failed: {}", e);
     0
   })
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_addPerspectiveCamera(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  presentation_engine: u64,
+  name: *const c_char,
+  fov: f32,
+  near: f32,
+  far: f32,
+) -> u64 {
+  if ctx.is_null() || name.is_null() {
+    return 0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  unsafe { core::ffi::CStr::from_ptr(name) }
+    .to_str()
+    .map_err(|_| EngineError::InvalidNullArgument)
+    .and_then(|name_str| {
+      ctx_ref
+        .add_perspective_camera(
+          scene_id,
+          gpu::PresentationEngineHandle(presentation_engine),
+          name_str,
+          fov,
+          near,
+          far,
+        )
+        .map(|id| id.get())
+    })
+    .unwrap_or_else(|e| {
+      oshal::log!("add_perspective_camera failed: {}", e);
+      0
+    })
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_addOrthographicCamera(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  presentation_engine: u64,
+  name: *const c_char,
+  left: f32,
+  bottom: f32,
+  near: f32,
+  far: f32,
+) -> u64 {
+  if ctx.is_null() || name.is_null() {
+    return 0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  unsafe { core::ffi::CStr::from_ptr(name) }
+    .to_str()
+    .map_err(|_| EngineError::InvalidNullArgument)
+    .and_then(|name_str| {
+      ctx_ref
+        .add_orthographic_camera(
+          scene_id,
+          gpu::PresentationEngineHandle(presentation_engine),
+          name_str,
+          left,
+          bottom,
+          near,
+          far,
+        )
+        .map(|id| id.get())
+    })
+    .unwrap_or_else(|e| {
+      oshal::log!("add_orthographic_camera failed: {}", e);
+      0
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -319,31 +406,23 @@ pub unsafe extern "C" fn avkSimulationContext_setTransformComponent(
   ctx: *mut SimulationContext,
   scene_id: u64,
   entity: u64,
-  pos_x: f32,
-  pos_y: f32,
-  pos_z: f32,
-  rot_w: f32,
-  rot_x: f32,
-  rot_y: f32,
-  rot_z: f32,
-  scale_x: f32,
-  scale_y: f32,
-  scale_z: f32,
+  transform: *const FfiTransform,
 ) -> bool {
-  if ctx.is_null() {
+  if ctx.is_null() || transform.is_null() {
     return false;
   }
   let ctx_ref = unsafe { &*ctx };
-  if !pos_x.is_finite()
-    || !pos_y.is_finite()
-    || !pos_z.is_finite()
-    || !rot_w.is_finite()
-    || !rot_x.is_finite()
-    || !rot_y.is_finite()
-    || !rot_z.is_finite()
-    || !scale_x.is_finite()
-    || !scale_y.is_finite()
-    || !scale_z.is_finite()
+  let t = unsafe { &*transform };
+  if !t.px.is_finite()
+    || !t.py.is_finite()
+    || !t.pz.is_finite()
+    || !t.rw.is_finite()
+    || !t.rx.is_finite()
+    || !t.ry.is_finite()
+    || !t.rz.is_finite()
+    || !t.sx.is_finite()
+    || !t.sy.is_finite()
+    || !t.sz.is_finite()
   {
     return false;
   }
@@ -351,9 +430,9 @@ pub unsafe extern "C" fn avkSimulationContext_setTransformComponent(
     .set_transform_component(
       scene_id,
       entity,
-      Vec3f32::from_components(pos_x, pos_y, pos_z),
-      Quat::from_components(rot_w, rot_x, rot_y, rot_z),
-      Vec3f32::from_components(scale_x, scale_y, scale_z),
+      Vec3f32::from_components(t.px, t.py, t.pz),
+      Quat::from_components(t.rw, t.rx, t.ry, t.rz),
+      Vec3f32::from_components(t.sx, t.sy, t.sz),
     )
     .is_ok()
 }
@@ -364,26 +443,59 @@ pub unsafe extern "C" fn avkSimulationContext_getTransformComponent(
   ctx: *mut SimulationContext,
   scene_id: u64,
   entity: u64,
-  pos_x: *mut f32,
-  pos_y: *mut f32,
-  pos_z: *mut f32,
-  rot_w: *mut f32,
-  rot_x: *mut f32,
-  rot_y: *mut f32,
-  rot_z: *mut f32,
-  scale_x: *mut f32,
-  scale_y: *mut f32,
-  scale_z: *mut f32,
+  out_transform: *mut FfiTransform,
 ) -> bool {
-  if ctx.is_null() {
+  if ctx.is_null() || out_transform.is_null() {
     return false;
   }
   let ctx_ref = unsafe { &*ctx };
-  ctx_ref
+
+  let mut pos_x = 0.0;
+  let mut pos_y = 0.0;
+  let mut pos_z = 0.0;
+  let mut rot_w = 0.0;
+  let mut rot_x = 0.0;
+  let mut rot_y = 0.0;
+  let mut rot_z = 0.0;
+  let mut scale_x = 0.0;
+  let mut scale_y = 0.0;
+  let mut scale_z = 0.0;
+
+  if ctx_ref
     .get_transform_component(
-      scene_id, entity, pos_x, pos_y, pos_z, rot_w, rot_x, rot_y, rot_z, scale_x, scale_y, scale_z,
+      scene_id,
+      entity,
+      &mut pos_x,
+      &mut pos_y,
+      &mut pos_z,
+      &mut rot_w,
+      &mut rot_x,
+      &mut rot_y,
+      &mut rot_z,
+      &mut scale_x,
+      &mut scale_y,
+      &mut scale_z,
     )
     .is_ok()
+  {
+    unsafe {
+      *out_transform = FfiTransform {
+        px: pos_x,
+        py: pos_y,
+        pz: pos_z,
+        rw: rot_w,
+        rx: rot_x,
+        ry: rot_y,
+        rz: rot_z,
+        sx: scale_x,
+        sy: scale_y,
+        sz: scale_z,
+      };
+    }
+    true
+  } else {
+    false
+  }
 }
 
 // --- Queries ---
@@ -576,6 +688,7 @@ pub unsafe extern "C" fn avkSimulationContext_spawnModelInstance(
 pub unsafe extern "C" fn avkSimulationContext_raycastNdc(
   ctx: *mut SimulationContext,
   scene_id: u64,
+  camera_id: u64,
   ndc_x: f32,
   ndc_y: f32,
 ) -> u64 {
@@ -583,7 +696,7 @@ pub unsafe extern "C" fn avkSimulationContext_raycastNdc(
     return 0;
   }
   let ctx_ref = unsafe { &*ctx };
-  ctx_ref.raycast_ndc(scene_id, ndc_x, ndc_y).map(|id| id.get()).unwrap_or(0)
+  ctx_ref.raycast_ndc(scene_id, camera_id, ndc_x, ndc_y).map(|id| id.get()).unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
@@ -1258,38 +1371,31 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraComponent(
   ctx: *mut SimulationContext,
   scene_id: u64,
   entity: u64,
-  is_orthographic: bool,
-  fov: f32,
-  aspect: f32,
-  near: f32,
-  far: f32,
-  ortho_left: f32,
-  ortho_right: f32,
-  ortho_bottom: f32,
-  ortho_top: f32,
-) {
-  if ctx.is_null() {
-    return;
+  camera: *const FfiCamera,
+) -> bool {
+  if ctx.is_null() || camera.is_null() {
+    return false;
   }
   let ctx_ref = unsafe { &*ctx };
-  let params = if is_orthographic {
+  let c = unsafe { &*camera };
+  let params = if c.is_orthographic {
     CameraParams::Orthographic(OrthographicCameraParams {
-      left: ortho_left,
-      right: ortho_right,
-      bottom: ortho_bottom,
-      top: ortho_top,
-      near,
-      far,
+      left: c.ortho_left,
+      right: c.ortho_right,
+      bottom: c.ortho_bottom,
+      top: c.ortho_top,
+      near: c.near,
+      far: c.far,
     })
   } else {
     CameraParams::Perspective(PerspectiveCameraParams {
-      fov: fov.to_radians(),
-      aspect_ratio: aspect,
-      near_plane: near,
-      far_plane: far,
+      fov: c.fov.to_radians(),
+      aspect_ratio: c.aspect,
+      near_plane: c.near,
+      far_plane: c.far,
     })
   };
-  let _ = ctx_ref.set_camera_component(scene_id, entity, params);
+  ctx_ref.set_camera_component(scene_id, entity, params).is_ok()
 }
 
 #[unsafe(no_mangle)]
@@ -1298,15 +1404,58 @@ pub unsafe extern "C" fn avkSimulationContext_getCameraComponent(
   ctx: *mut SimulationContext,
   scene_id: u64,
   entity: u64,
-  proj_out: *mut f32,
+  out_camera: *mut FfiCamera,
 ) -> bool {
-  if ctx.is_null() || proj_out.is_null() {
+  if ctx.is_null() || out_camera.is_null() {
     return false;
   }
   let ctx_ref = unsafe { &*ctx };
-  let mut arr = [0.0; 16];
-  if ctx_ref.get_camera_component(scene_id, entity, &mut arr).is_ok() {
-    unsafe { core::ptr::copy_nonoverlapping(arr.as_ptr(), proj_out, 16) };
+  if let Ok(params) = ctx_ref.get_camera_component(scene_id, entity) {
+    let mut arr = [0.0; 16];
+    // We can also retrieve the projection matrix separately if needed
+    // However, we just need to return the struct for now.
+    // Wait, let's actually just get the projection matrix manually via `get_projection_matrix()` if needed.
+    // I can get the matrix using `with_component` here or just return an empty array if not requested.
+    // Actually, `get_camera_component` returns `CameraParams`. The projection matrix is generated dynamically by the component.
+    // To include the projection matrix we should probably query it. Let's do that.
+
+    let _ = ctx_ref.get_scene(scene_id).map(|s| {
+      if let Some(e) = s.read().get_entity(entity) {
+        let _ =
+          s.read().scene.with_component(e, |c: &aethervk_core_rlib::scene::CameraComponent| {
+            arr = c.get_projection_matrix().into();
+          });
+      }
+    });
+
+    unsafe {
+      *out_camera = match params {
+        CameraParams::Perspective(p) => FfiCamera {
+          is_orthographic: false,
+          fov: p.fov.to_degrees(),
+          aspect: p.aspect_ratio,
+          near: p.near_plane,
+          far: p.far_plane,
+          ortho_left: 0.0,
+          ortho_right: 0.0,
+          ortho_bottom: 0.0,
+          ortho_top: 0.0,
+          proj: arr,
+        },
+        CameraParams::Orthographic(o) => FfiCamera {
+          is_orthographic: true,
+          fov: 45.0,   // Default or ignored
+          aspect: 1.0, // Default or ignored
+          near: o.near,
+          far: o.far,
+          ortho_left: o.left,
+          ortho_right: o.right,
+          ortho_bottom: o.bottom,
+          ortho_top: o.top,
+          proj: arr,
+        },
+      };
+    }
     true
   } else {
     false
@@ -1354,20 +1503,6 @@ pub unsafe extern "C" fn avkSimulationContext_addImageBillboardComponent(
   }
   let ctx_ref = unsafe { &*ctx };
   let _ = ctx_ref.add_image_billboard_component(scene_id, entity, is_screen_space, width, height);
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_setActiveCamera(
-  ctx: *mut SimulationContext,
-  scene_id: u64,
-  camera_entity: u64,
-) {
-  if ctx.is_null() {
-    return;
-  }
-  let ctx_ref = unsafe { &*ctx };
-  let _ = ctx_ref.set_active_camera(scene_id, camera_entity);
 }
 
 #[unsafe(no_mangle)]
@@ -1489,6 +1624,36 @@ pub unsafe extern "C" fn avkSimulationContext_setBvhNodeVisibility(
 }
 
 // --------------------- FFI Types ---------------------------
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct FfiTransform {
+  pub px: f32,
+  pub py: f32,
+  pub pz: f32,
+  pub rw: f32,
+  pub rx: f32,
+  pub ry: f32,
+  pub rz: f32,
+  pub sx: f32,
+  pub sy: f32,
+  pub sz: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct FfiCamera {
+  pub is_orthographic: bool,
+  pub fov: f32,
+  pub aspect: f32,
+  pub near: f32,
+  pub far: f32,
+  pub ortho_left: f32,
+  pub ortho_right: f32,
+  pub ortho_bottom: f32,
+  pub ortho_top: f32,
+  pub proj: [f32; 16],
+}
 
 #[repr(u32)]
 /// TODO: Document this item

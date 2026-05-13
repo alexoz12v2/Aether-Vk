@@ -213,13 +213,11 @@ fn test_simulation_context_text_rendering() {
       let ctx = &mut *ctx_ptr;
       let scene_id = ctx.create_default_scene().unwrap();
 
-      // Register text archetype
-      ctx.scenes.write().get_mut(&scene_id).unwrap().write().entity_map.clear();
-
       let width = 256;
       let height = 256;
 
       let pe_handle = ctx.create_presentation_engine(scene_id, width, height).unwrap();
+      ctx.add_perspective_camera(scene_id, pe_handle, "camera", 45.0, 0.1, 100.0).unwrap();
 
       SimulationContext::set_render_callback(Some(render_callback_impl));
 
@@ -347,9 +345,27 @@ fn test_scene_api() {
       let scene_id = ctx.create_empty_scene().unwrap();
       let parent_name = alloc::ffi::CString::new("Parent").unwrap();
       let parent_id = ctx.spawn_entity(scene_id, parent_name.to_str().unwrap()).unwrap();
+      ctx
+        .add_transform_component(
+          scene_id,
+          parent_id,
+          Vec3f32::from_components(0.0, 0.0, 0.0),
+          Quat::identity(),
+          Vec3f32::from_components(1.0, 1.0, 1.0),
+        )
+        .unwrap();
 
       let child_name = alloc::ffi::CString::new("Child").unwrap();
       let child_id = ctx.spawn_entity(scene_id, child_name.to_str().unwrap()).unwrap();
+      ctx
+        .add_transform_component(
+          scene_id,
+          child_id,
+          Vec3f32::from_components(0.0, 0.0, 0.0),
+          Quat::identity(),
+          Vec3f32::from_components(1.0, 1.0, 1.0),
+        )
+        .unwrap();
 
       assert!(ctx.set_parent(scene_id, child_id, parent_id).is_ok());
 
@@ -385,7 +401,22 @@ fn test_core_api() {
 
       let cam_name = alloc::ffi::CString::new("Cam").unwrap();
       let cam_id = ctx.spawn_entity(scene_id, cam_name.to_str().unwrap()).unwrap();
-      assert!(ctx.set_active_camera(scene_id, cam_id).is_ok());
+      ctx
+        .add_transform_component(
+          scene_id,
+          cam_id,
+          Vec3f32::from_components(0.0, 0.0, 0.0),
+          Quat::identity(),
+          Vec3f32::from_components(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+      ctx
+        .add_camera_component(
+          scene_id,
+          cam_id,
+          CameraParams::new_perspective(45.0_f32.to_radians(), 1.0, 0.1, 100.0),
+        )
+        .unwrap();
 
       let pe_handle = ctx.create_presentation_engine(scene_id, 800, 600).unwrap();
       assert!(ctx.destroy_presentation_engine(scene_id, pe_handle).is_ok());
@@ -454,6 +485,7 @@ fn test_misc_and_models_api_direct() {
       let mut out_hit = Some(structs::RayCastHit {
         entity_ext_id: 0,
         p: Vec3f32::zero(),
+        uv: [0.0, 0.0],
       });
       let _ = ctx.get_task_result_raycast(0, &mut out_hit);
 
@@ -461,6 +493,7 @@ fn test_misc_and_models_api_direct() {
       let _ = ctx.get_task_result_kinematic_state(0, &mut out_state);
 
       let pe_handle = ctx.create_presentation_engine(scene_id, 100, 100).unwrap();
+      ctx.add_perspective_camera(scene_id, pe_handle, "camera", 45.0, 0.1, 100.0).unwrap();
       let _ = ctx.resize(scene_id, pe_handle, 200, 200);
 
       let mut buffer = [0u8; 10];

@@ -147,6 +147,7 @@ pub fn simulation_step<K>(
 where
   K: Kernels + ?Sized,
 {
+  aethervk_oshal_rlib::log!("simulation_step running! dt_us: {}", t1 - t0);
   let mut cmd = kernels.create_command_buffer()?;
 
   let mut current_time = t0;
@@ -161,52 +162,50 @@ where
 
   // 2. Build List of Dynamic Bodies (comets and particle systems)
   let mut dynamics = kernels.build_dynamic_bodies(&mut cmd, physical_scene, scene)?;
+  aethervk_oshal_rlib::log!("After build_dynamic_bodies");
 
   while current_time < end_time {
     let dt = end_time - current_time;
 
     // Snapshot state for Continuous Collision Detection (CCD) rewinding
     let snapshot = kernels.snapshot_dynamics(&mut cmd, &dynamics)?;
+    aethervk_oshal_rlib::log!("After snapshot_dynamics");
 
     // 3. IMEX Phase 1 & 2: Explicit particle kick and drift to midpoint
     kernels.step_ode_p1_p2(&mut cmd, &mut dynamics, dt)?;
+    aethervk_oshal_rlib::log!("After step_ode_p1_p2");
 
-    // 5. Collision detection and response loop
-    // - Build backend specific motionPhysicalScene, containing a BVH whose leaf nodes are AABB bounding the motion of
-    // all bodies in the scene. Then, for each leaf node, we have its own local representation of BVH bounding each motion. Still to decide whether to
-    // compute it on the fly given the linear intra-step motion assumption and object frame BVH stored in the scene component, or if storing is better
-    // given that kernels potentially execute on GPU, probably store it or use a caching mechanism
-    // - self intersect of leaf nodes of scene level. Build a list of potential collisions
-    // - intersect the instance level BVHs from the potential collision list. For each intersection we need to store pair of entities intersecting (what if it is a particle inside a particle system? We need a way to identify that)
-    // This should build a global collision list
-    // - group the global collision list: stream compaction such that, for each pair of objects, we keep only the earliest time collisions (if some collisions are under a time_collision_delta, then keep both)
-    // then, for each an object involved in more than one collision, discard all but the earliest one (if some collisions are under a time_collision_delta, we keep both)
-    // - compute and apply collision responses and contact forces to all objects
-    // - given the earliest collision time $t_c$, rewind the simulation to that time and simulate again till $t_1$
-    // after N collisions, all impacts become inelastic collisions, such that we don't get stuck on a loop
-    let bvh = kernels.build_motion_bvh(&mut cmd, &dynamics)?;
+    let bvh = kernels.build_motion_bvh(&mut cmd, &kinematics, &dynamics)?;
+    aethervk_oshal_rlib::log!("After build_motion_bvh");
 
     // 4. IMEX Phase 5: Final particle drift and force evaluation
-    kernels.step_ode_p5(&mut cmd, &kinematics, &mut dynamics, &bvh, dt)?;
+    kernels.step_ode_p5(&mut cmd, &kinematics, &mut dynamics, &bvh, dt, scene)?;
+    aethervk_oshal_rlib::log!("After step_ode_p5");
 
     let potentials = kernels.self_intersect_scene(&mut cmd, &bvh)?;
+    aethervk_oshal_rlib::log!("After self_intersect_scene");
     let globals = kernels.intersect_instances(&mut cmd, &potentials)?;
+    aethervk_oshal_rlib::log!("After intersect_instances");
     let compacted = kernels.compact_collisions(&mut cmd, &globals, time_collision_delta)?;
+    aethervk_oshal_rlib::log!("After compact_collisions");
 
     // Queue a parallel reduction extracting strictly $t_c$ to avoid
     // downloading the massive collisions array over the PCIe bus
     let tc_buffer = kernels.find_earliest_collision(&mut cmd, &compacted)?;
     let tc_future = tc_buffer.enqueue_read_to_cpu(&mut cmd)?;
+    aethervk_oshal_rlib::log!("After find_earliest_collision");
 
     // --- SYNCHRONIZATION POINT ---
     // Submit command graph to hardware and yield thread until transfer finishes!
     cmd.submit()?;
+    aethervk_oshal_rlib::log!("After cmd.submit()");
     let tc_host = tc_future.wait()?;
+    aethervk_oshal_rlib::log!("After tc_future.wait()");
 
     let t_c = tc_host.first().copied().unwrap_or(timeus_t::MAX);
     let inelastic = collision_iters >= MAX_BOUNCES;
 
-    if t_c < dt {
+    if t_c < dt && !inelastic {
       // Collision occurred mid-step -> Rewind!
       collision_iters += 1;
 
@@ -215,23 +214,34 @@ where
       // Re-simulate precisely up to impact
       kernels.step_ode_p1_p2(&mut cmd, &mut dynamics, t_c)?;
       kernels.step_ode_p3_p4(&mut cmd, &mut kinematics, &mut dynamics, t_c)?;
-      
-      let rewind_bvh = kernels.build_motion_bvh(&mut cmd, &dynamics)?;
-      kernels.step_ode_p5(&mut cmd, &kinematics, &mut dynamics, &rewind_bvh, t_c)?;
+
+      let rewind_bvh = kernels.build_motion_bvh(&mut cmd, &kinematics, &dynamics)?;
+      kernels.step_ode_p5(
+        &mut cmd,
+        &kinematics,
+        &mut dynamics,
+        &rewind_bvh,
+        t_c,
+        scene,
+      )?;
 
       // Apply impacts exactly at t_c
+      kernels.apply_collision_responses(&mut cmd, &mut dynamics, &compacted, false)?;
+
+      // Force a minimum time advance to prevent infinite Zeno's paradox loops
+      let advance = if t_c == 0 { 1 } else { t_c };
+      current_time += advance;
+    } else {
+      // Stepped cleanly without mid-step collisions or max bounces reached
+      aethervk_oshal_rlib::log!("Before apply_collision_responses");
       kernels.apply_collision_responses(&mut cmd, &mut dynamics, &compacted, inelastic)?;
-
-      current_time += t_c;
-      continue;
+      current_time = end_time;
     }
-
-    // Stepped cleanly without mid-step collisions
-    kernels.apply_collision_responses(&mut cmd, &mut dynamics, &compacted, inelastic)?;
-    current_time = end_time;
   }
 
+  aethervk_oshal_rlib::log!("Before write_back_to_scene");
   // 6. Update Scene and PhysicsScene to reflect changes in the simulation from the backend specific representation
   kernels.write_back_to_scene(&mut cmd, &dynamics, physical_scene, scene)?;
+  aethervk_oshal_rlib::log!("simulation_step FINISHED");
   Ok(())
 }

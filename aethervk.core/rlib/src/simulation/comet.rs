@@ -99,7 +99,7 @@ impl TexelFormat {
 #[derive(Clone, Default)]
 /// TODO: Document this item
 pub struct Texture {
-  pub data: Vec<u8>,
+  pub data: bytes::Bytes,
   pub format: TexelFormat,
   pub width: u32,
   pub height: u32,
@@ -413,7 +413,7 @@ fn get_texture_data(
   // TODO: watertight check, triangulated check, normal check, ...
 
   Ok(Some(Texture {
-    data: decoded_data,
+    data: decoded_data.into(),
     format,
     width,
     height,
@@ -678,6 +678,148 @@ pub fn load_comet_from_gltf(path: &str, verbose: bool) -> Result<Comet, CometLoa
   })
 }
 
+pub fn generate_quad(normal: Vec3f32, size: f32) -> Comet {
+  let mut vertices = Vec::new();
+  let mut indices = Vec::new();
+
+  // Determine tangent and bitangent based on the normal to create the quad basis
+  let mut tangent = Vec3f32::from_components(1.0, 0.0, 0.0);
+  if normal.dot(tangent).abs() > 0.99 {
+    tangent = Vec3f32::from_components(0.0, 1.0, 0.0);
+  }
+  let bitangent = normal.cross(tangent).normalize();
+  tangent = bitangent.cross(normal).normalize();
+
+  let half_size = size * 0.5;
+
+  let norm_array = [normal.x(), normal.y(), normal.z()];
+  let tang_array = [tangent.x(), tangent.y(), tangent.z(), 1.0];
+
+  // Quad centered at origin, normal pointing outwards
+  // Bottom-Left
+  let p0 = -tangent * half_size - bitangent * half_size;
+  vertices.push(Vertex {
+    position: [p0.x(), p0.y(), p0.z()],
+    normal: norm_array,
+    uv: [0.0, 0.0],
+    tangent: tang_array,
+  });
+
+  // Bottom-Right
+  let p1 = tangent * half_size - bitangent * half_size;
+  vertices.push(Vertex {
+    position: [p1.x(), p1.y(), p1.z()],
+    normal: norm_array,
+    uv: [1.0, 0.0],
+    tangent: tang_array,
+  });
+
+  // Top-Right
+  let p2 = tangent * half_size + bitangent * half_size;
+  vertices.push(Vertex {
+    position: [p2.x(), p2.y(), p2.z()],
+    normal: norm_array,
+    uv: [1.0, 1.0],
+    tangent: tang_array,
+  });
+
+  // Top-Left
+  let p3 = -tangent * half_size + bitangent * half_size;
+  vertices.push(Vertex {
+    position: [p3.x(), p3.y(), p3.z()],
+    normal: norm_array,
+    uv: [0.0, 1.0],
+    tangent: tang_array,
+  });
+
+  // Two triangles: CCW winding assuming normal points "out" (towards viewer)
+  indices.push(0);
+  indices.push(1);
+  indices.push(2);
+
+  indices.push(0);
+  indices.push(2);
+  indices.push(3);
+
+  // Mass properties for a thin unit plate
+  // We use a dummy tetrahedron to safely construct the MassProperties object, as it requires a non-zero volume manifold to avoid panicking inside polyhedral_mass_properties.
+  let mut mass_properties = {
+    let dummy_vertices = [
+      Vertex {
+        position: [0.0, 0.0, 0.0],
+        normal: [0.0, 0.0, 0.0],
+        uv: [0.0, 0.0],
+        tangent: [0.0, 0.0, 0.0, 0.0],
+      },
+      Vertex {
+        position: [1.0, 0.0, 0.0],
+        normal: [0.0, 0.0, 0.0],
+        uv: [0.0, 0.0],
+        tangent: [0.0, 0.0, 0.0, 0.0],
+      },
+      Vertex {
+        position: [0.0, 1.0, 0.0],
+        normal: [0.0, 0.0, 0.0],
+        uv: [0.0, 0.0],
+        tangent: [0.0, 0.0, 0.0, 0.0],
+      },
+      Vertex {
+        position: [0.0, 0.0, 1.0],
+        normal: [0.0, 0.0, 0.0],
+        uv: [0.0, 0.0],
+        tangent: [0.0, 0.0, 0.0, 0.0],
+      },
+    ];
+    let dummy_indices = [0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3];
+    calculate_mass_properties(&dummy_vertices, &dummy_indices, 1.0)
+  };
+  mass_properties.mass = 1.0;
+  mass_properties.center_of_mass = [0.0, 0.0, 0.0];
+  // Simple AABB inertia approximation
+  mass_properties.inertia.xx = 1.0 / 12.0;
+  mass_properties.inertia.yy = 1.0 / 12.0;
+  mass_properties.inertia.zz = 1.0 / 12.0;
+  mass_properties.inertia.xy = 0.0;
+  mass_properties.inertia.yz = 0.0;
+  mass_properties.inertia.xz = 0.0;
+
+  let principal_axes = Mat3f32 {
+    x: Vec3f32::from_components(1.0, 0.0, 0.0),
+    y: Vec3f32::from_components(0.0, 1.0, 0.0),
+    z: Vec3f32::from_components(0.0, 0.0, 1.0),
+  };
+
+  let mut tris = Vec::with_capacity(indices.len() / 3);
+  for chunk in indices.chunks_exact(3) {
+    let v0 = vertices[chunk[0] as usize].position;
+    let v1 = vertices[chunk[1] as usize].position;
+    let v2 = vertices[chunk[2] as usize].position;
+    tris.push(Triangle {
+      vertices: [
+        Vec3f32::from_components(v0[0], v0[1], v0[2]),
+        Vec3f32::from_components(v1[0], v1[1], v1[2]),
+        Vec3f32::from_components(v2[0], v2[1], v2[2]),
+      ],
+    });
+  }
+
+  let builder = BVHBuilder::<f32, Vec3f32, Mat3f32>::new(BVHBuilderParams::default());
+  let bvh = builder.build(&tris).map(|root| LinearBVH::from_build_node(&root, 0));
+
+  Comet {
+    id: NEXT_COMET_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
+    vertices,
+    indices,
+    albedo_map: None,
+    normal_map: None,
+    roughness_map: None,
+    ao_map: None,
+    mass_properties,
+    bvh,
+    principal_axes: Some(principal_axes),
+  }
+}
+
 /// Produces `6 * lon_segments * (lat_segments - 1)` indices
 pub fn generate_uv_sphere(
   radius: f32,
@@ -858,7 +1000,7 @@ pub fn load_texture_from_file(path: &str) -> Result<Texture, CometLoadError> {
   };
 
   Ok(Texture {
-    data: decoded_data,
+    data: decoded_data.into(),
     format,
     width,
     height,

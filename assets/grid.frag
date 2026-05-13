@@ -23,23 +23,29 @@ void main() {
     discard;
   }
   
-  float t = -nearPos.z / viewDir.z;
+  // In RTE space, camera is at z=0, but we want the intersection with the TRUE world Z=0 plane.
+  // The absolute world Z=0 plane is at RTE z = -push.cameraPos.z
+  float target_z = -push.cameraPos.z;
+  float t = (target_z - nearPos.z) / viewDir.z;
+  
   if (t <= 0.0) {
     discard;
   }
   
-  vec3 worldPos = nearPos + t * viewDir;
-  float linearDepth = length(worldPos - push.cameraPos);
+  vec3 worldPos = nearPos + t * viewDir; // This is the RTE position of the point on the grid
+  float linearDepth = length(worldPos);  // Length from camera (0,0,0) to intersection
   
   if (linearDepth > push.farPlane) {
     discard;
   }
   
   // Adjust the scale of the grid based on push.density.
-  // The density should be multiplied to map world space to grid space.
   float gridDensity = push.density * 5.0; // making it a bit less coarse
   
-  vec2 p = worldPos.xy * gridDensity;
+  // To draw the grid lines anchored to the world (not moving with camera),
+  // we add the absolute camera XY to the RTE worldPos XY.
+  vec2 absolutePosXY = worldPos.xy + push.cameraPos.xy;
+  vec2 p = absolutePosXY * gridDensity;
   vec2 dp = fwidth(p);
   
   float lineWidth = 0.01; // thinner lines

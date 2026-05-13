@@ -1,0 +1,89 @@
+#version 450 core
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "../bvh_utils.glsl"
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+#define TYPE_PARTICLE_SYSTEM 0
+#define TYPE_RIGID_BODY      1
+#define TYPE_KINEMATIC_BODY  2
+
+struct Entity {
+    BVHArray bvh;
+    mat4 transform;
+    mat4 inv_transform;
+    uint root_index;
+    uint type;              
+    uint primitive_offset;
+    uint total_primitives;  
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer EntityArray {
+    Entity entities[];
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer SparseCollisions {
+    uvec4 data[];
+};
+
+layout(push_constant, scalar) uniform PushConstants {
+    EntityArray scene_entities;
+    SparseCollisions output_list;
+    uint entity_A_idx;
+    uint entity_B_idx;
+} pc;
+
+void main() {
+    uint local_idx_A = gl_GlobalInvocationID.x;
+    Entity ent_A = pc.scene_entities.entities[pc.entity_A_idx];
+    Entity ent_B = pc.scene_entities.entities[pc.entity_B_idx];
+
+    if (local_idx_A >= ent_A.total_primitives) return;
+
+    // TODO: Implement full GJK distance tracking for the vertices of ent_A against ent_B primitives
+    // and CTA for updating toi
+    
+    BVHNodeAABB node_A = read_bvh_node(ent_A.bvh, ent_A.total_primitives - 1 + local_idx_A);
+    uint my_prim_id = node_A.left_child_or_primitive_offset;
+
+    uint collisions_found = 0;
+    const uint MAX_COLLISIONS = 16;
+
+    uint stack[32];
+    int stackPtr = 0;
+    stack[stackPtr++] = ent_B.root_index;
+
+    while (stackPtr > 0) {
+        uint node_idx = stack[--stackPtr];
+        BVHNodeAABB node_B = read_bvh_node(ent_B.bvh, node_idx);
+
+        // Simple AABB overlap check for now
+        // In a real implementation we would do transformAABB and GJK
+        if (intersectAABB(node_A.bound, node_B.bound)) {
+            if (node_B.primitive_count > 0) {
+                uint other_prim_id = node_B.left_child_or_primitive_offset;
+                
+                // Prevent self-intersection duplicates
+                if (pc.entity_A_idx == pc.entity_B_idx && my_prim_id >= other_prim_id) continue;
+
+                float toi = 0.5; // Placeholder
+                if (collisions_found < MAX_COLLISIONS) {
+                    uint outIdx = local_idx_A * MAX_COLLISIONS + collisions_found;
+                    pc.output_list.data[outIdx] = uvec4(
+                        1, 
+                        ent_A.primitive_offset + my_prim_id, 
+                        ent_B.primitive_offset + other_prim_id, 
+                        floatBitsToUint(toi)
+                    );
+                    collisions_found++;
+                }
+            } else {
+                stack[stackPtr++] = node_B.left_child_or_primitive_offset;
+                stack[stackPtr++] = node_B.right_child_offset;
+            }
+        }
+    }
+}

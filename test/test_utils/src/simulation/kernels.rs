@@ -189,7 +189,7 @@ impl Kernels for CpuKernels {
     let mut betas = Vec::new();
     let mut mapping = Vec::new();
 
-    scene0.query1::<ParticleSystemComponent, _>(|entity, sys| {
+    scene0.query2::<ParticleSystemComponent, aethervk_core_rlib::scene::particles::ParticleEmitterComponent, _>(|entity, sys, config| {
       for (i, p) in sys.particles.read().iter().enumerate() {
         if p.active != 0 {
           bodies.push(DynamicBody {
@@ -204,7 +204,7 @@ impl Kernels for CpuKernels {
             parent_frame_id: 0,
             force: Default::default(),
           });
-          betas.push(sys.config.beta);
+          betas.push(config.beta);
           mapping.push((entity, i));
         }
       }
@@ -256,6 +256,7 @@ impl Kernels for CpuKernels {
     dynamics: &mut Self::Buffer<DynamicBody>,
     _bvh: &Self::MotionBvh,
     dt: timeus_t,
+    scene0: &aethervk_core_rlib::scene::Scene,
   ) -> EngineResult<()> {
     let dt_sec = dt as f32 / 1_000_000.0;
     let half_dt = dt_sec * 0.5;
@@ -297,6 +298,7 @@ impl Kernels for CpuKernels {
   fn build_motion_bvh(
     &self,
     _cmd: &mut Self::Cmd,
+    _kinematics: &Self::Buffer<KinematicBody>,
     _dynamics: &Self::Buffer<DynamicBody>,
   ) -> EngineResult<Self::MotionBvh> {
     Ok(CpuMotionBvh {})

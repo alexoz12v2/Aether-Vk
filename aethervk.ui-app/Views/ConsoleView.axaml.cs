@@ -52,43 +52,4 @@ public partial class ConsoleView : UserControl
       }
     }
   }
-
-  private async void OnExportLogsClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-  {
-    if (DataContext is ConsoleViewModel vm)
-    {
-      var topLevel = TopLevel.GetTopLevel(this);
-      if (topLevel == null)
-        return;
-
-      var file = await topLevel.StorageProvider.SaveFilePickerAsync(
-        new Avalonia.Platform.Storage.FilePickerSaveOptions
-        {
-          Title = "Export Console Logs",
-          DefaultExtension = "txt",
-          SuggestedFileName = "AetherVk_ConsoleLogs",
-          FileTypeChoices = new[]
-          {
-            new Avalonia.Platform.Storage.FilePickerFileType("Text files")
-            {
-              Patterns = new[] { "*.txt" },
-            },
-          },
-        }
-      );
-
-      if (file != null)
-      {
-        try
-        {
-          var text = string.Join(System.Environment.NewLine, vm.Messages);
-          await System.IO.File.WriteAllTextAsync(file.Path.LocalPath, text);
-        }
-        catch (System.Exception)
-        {
-          // Optionally log the error or show a dialog
-        }
-      }
-    }
-  }
 }

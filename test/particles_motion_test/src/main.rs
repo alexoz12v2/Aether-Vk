@@ -1,3 +1,4 @@
+use aethervk_core_rlib::gpu::PresentationEngineHandle;
 use aethervk_core_rlib::scene::{CameraComponent, TransformComponent};
 use aethervk_core_rlib::simulation_api::components_api::{CameraParams, PerspectiveCameraParams};
 use aethervk_core_rlib::simulation_api::SimulationContext;
@@ -11,6 +12,7 @@ use test_utils::sim_app::{run_simulation_app, SimulationDelegate};
 use winit::window::Window;
 
 struct ParticlesDelegate {
+  camera_ext_entity: u64,
   particle_sys_entity: u64,
   startup_time: std::time::Instant,
 }
@@ -24,6 +26,7 @@ impl SimulationDelegate for ParticlesDelegate {
     &mut self,
     ctx: &mut SimulationContext,
     scene_id: u64,
+    pe_handle: PresentationEngineHandle,
     window: &Window,
   ) -> EngineResult<()> {
     let root_entity = ctx.spawn_entity(scene_id, "root").unwrap();
@@ -37,10 +40,11 @@ impl SimulationDelegate for ParticlesDelegate {
       )
       .unwrap();
 
-    let camera_entity = ctx.spawn_entity(scene_id, "camera").unwrap();
+    let camera_entity =
+      ctx.add_perspective_camera(scene_id, pe_handle, "camera", 45.0, 0.1, 1000.0).unwrap().get();
     ctx.set_parent(scene_id, camera_entity, root_entity).unwrap();
     ctx
-      .add_transform_component(
+      .set_transform_component(
         scene_id,
         camera_entity,
         Vec3f32::from_components(0.0, 0.0, -100.0),
@@ -51,22 +55,7 @@ impl SimulationDelegate for ParticlesDelegate {
         Vec3f32::one(),
       )
       .unwrap();
-
-    let width = window.inner_size().width;
-    let height = window.inner_size().height;
-    ctx
-      .add_camera_component(
-        scene_id,
-        camera_entity,
-        CameraParams::Perspective(PerspectiveCameraParams {
-          fov: 45.0,
-          aspect_ratio: width as f32 / height as f32,
-          near_plane: 0.1,
-          far_plane: 1000.0,
-        }),
-      )
-      .unwrap();
-    ctx.set_active_camera(scene_id, camera_entity).unwrap();
+    self.camera_ext_entity = camera_entity;
 
     self.particle_sys_entity = ctx.spawn_entity(scene_id, "particles").unwrap();
     ctx.set_parent(scene_id, self.particle_sys_entity, root_entity).unwrap();
@@ -80,15 +69,14 @@ impl SimulationDelegate for ParticlesDelegate {
       )
       .unwrap();
 
-    let mut sys = aethervk_core_rlib::scene::particles::ParticleSystemComponent::new(
-      aethervk_core_rlib::scene::particles::ParticleEmitterConfig {
+    let config = aethervk_core_rlib::scene::particles::ParticleEmitterComponent {
         uv_distribution: aethervk_core_rlib::math::distribution::Distribution2D::new(
           &[1.0, 1.0, 1.0, 1.0],
           2,
           2,
         ),
         delta: 1000,
-        max_particles: 1_000_000,
+        max_particles: 50_000,
         velocity_intensity: aethervk_core_rlib::scene::particles::GaussianParams {
           mean: 1.0,
           std_dev: 0.0,
@@ -101,14 +89,15 @@ impl SimulationDelegate for ParticlesDelegate {
           min: 0.0,
           max: 1.0,
         },
-        particle_radius: 0.15,
+        particle_radius: 0.25,
         density: 1.0,
-        lifetime: 100000000,
-        color: [1.0, 0.7, 0.4, 0.08], // Orange/brown dust
+        lifetime: 1000000,
+        color: [1.0, 0.5, 0.25, 1.0],
         beta: 0.0,
-        use_particle2: true, // USE PARTICLE 2!
-      },
-    );
+        use_particle2: false,
+      };
+
+    let mut sys = aethervk_core_rlib::scene::particles::ParticleSystemComponent::new(config.max_particles);
 
     // Initialize 1M particles
     let mut rng = rand::thread_rng();
@@ -136,6 +125,7 @@ impl SimulationDelegate for ParticlesDelegate {
       let mut active_scene = scene_ctx.write();
       let sys_entity_id = active_scene.get_entity(self.particle_sys_entity).unwrap();
       active_scene.scene.add_component(sys_entity_id, sys).unwrap();
+      active_scene.scene.add_component(sys_entity_id, config).unwrap();
     }
 
     let _ = ctx.threads.logic_thread.tx().try_send(
@@ -204,19 +194,17 @@ impl SimulationDelegate for ParticlesDelegate {
     shift_down: bool,
     ctrl_down: bool,
   ) {
-    if let Some(scene) = ctx.get_scene(scene_id) {
-      if let Some(camera_entity) = scene.read().active_camera_entity {
-        if let Some(logic_command) = test_utils::command::process_mouse_motion_camera_commands(
-          delta,
-          middle_mouse_down,
-          shift_down,
-          ctrl_down,
-          camera_entity,
-          scene.clone(),
-        ) {
-          let _ = ctx.threads.logic_thread.tx().try_send(logic_command);
-        }
-      }
+    let scene = ctx.get_scene(scene_id).unwrap();
+    let camera_entity = scene.read().get_entity(self.camera_ext_entity).unwrap();
+    if let Some(logic_command) = test_utils::command::process_mouse_motion_camera_commands(
+      delta,
+      middle_mouse_down,
+      shift_down,
+      ctrl_down,
+      camera_entity,
+      scene.clone(),
+    ) {
+      let _ = ctx.threads.logic_thread.tx().try_send(logic_command);
     }
   }
 }
@@ -224,6 +212,7 @@ impl SimulationDelegate for ParticlesDelegate {
 fn main() {
   let _assets_dir = cycle_get_asset_path_from_exe(true);
   let delegate = ParticlesDelegate {
+    camera_ext_entity: 0,
     particle_sys_entity: 0,
     startup_time: std::time::Instant::now(),
   };

@@ -40,6 +40,12 @@ pub enum ForceEmitter {
     /// Standard gravitational parameter (G * M)
     mu: f32,
   },
+  Planar {
+    origin: Vec3f32,
+    normal: Vec3f32,
+    base_force: f32,
+    trunc_distance: f32,
+  },
 }
 
 // --- Educational IMEX Simulation Loop ---
@@ -58,6 +64,18 @@ pub fn compute_particle_forces(particles: &mut [Particle], emitters: &[ForceEmit
             let dist = dist_sq.sqrt();
             // F = (mu * m / dist^3) * r
             f += r * (*mu * p.mass / (dist_sq * dist));
+          }
+        }
+        ForceEmitter::Planar {
+          origin,
+          normal,
+          base_force,
+          trunc_distance,
+        } => {
+          let r = p.position - *origin;
+          let dist = r.dot(*normal);
+          if dist >= 0.0 && dist < *trunc_distance {
+            f += *normal * (*base_force / (1.0 + dist * dist));
           }
         }
       }
@@ -278,6 +296,30 @@ pub fn imex_step(
             let term2 = rr_t * (3.0 * *mu * rigid_body.mass / dist5);
 
             k_translation = k_translation + term1 + term2;
+          }
+        }
+        ForceEmitter::Planar {
+          origin,
+          normal,
+          base_force,
+          trunc_distance,
+        } => {
+          let r = x_mid - *origin;
+          let dist = r.dot(*normal);
+          if dist >= 0.0 && dist < *trunc_distance {
+            let denom = 1.0 + dist * dist;
+            let force_mag = *base_force / denom;
+            f_world += *normal * force_mag;
+
+            // dF/dx Jacobian
+            let dF_ddist = -2.0 * *base_force * dist / (denom * denom);
+            let j_term = dF_ddist;
+            let nn_t = Mat3f32 {
+              x: *normal * normal.x(),
+              y: *normal * normal.y(),
+              z: *normal * normal.z(),
+            };
+            k_translation = k_translation + nn_t * j_term;
           }
         }
       }

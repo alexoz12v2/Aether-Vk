@@ -338,11 +338,11 @@ impl RenderDevice for D3d12RenderDevice {
     &self,
     _cmd_buffer: CommandBufferHandle,
     _text: &str,
-    _font_path: &str,
-    _points: f32,
+    _start_cursor_position: [f32; 2],
+    _view_proj: [f32; 16],
+    _atlas_id: (u64, u32),
+    _desired_points: f32,
     _color: [f32; 4],
-    _position: [f32; 2],
-    _presentation_engine: PresentationEngineHandle,
   ) -> GpuResult<()> {
     unimplemented!()
   }

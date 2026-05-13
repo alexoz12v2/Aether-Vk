@@ -10,6 +10,7 @@ use core::hash::Hasher;
 use hashbrown::HashMap;
 
 /// TODO: Document this item
+#[derive(Debug)]
 pub struct FontAtlas {
   pub image_data: Vec<u8>,
   pub width: u32,
@@ -24,7 +25,7 @@ pub struct FontAtlas {
   pub scale: PxScale,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 /// TODO: Document this item
 pub struct GlyphInfo {
   pub uv_min: [f32; 2],
@@ -55,36 +56,22 @@ impl GlyphInfo {
   pub fn screen_position(
     &self,
     cursor_position: [f32; 2],
-    screen_extent: [f32; 2],
     desired_points: f32,
     atlas_scale: PxScale,
   ) -> [f32; 2] {
-    let (scale_x, scale_y) = Self::screen_scale(screen_extent, desired_points, atlas_scale);
+    let scale_factor = desired_points / atlas_scale.x;
+    let scale_factor_y = desired_points / atlas_scale.y;
     [
-      cursor_position[0] + self.offset[0] * scale_x,
-      cursor_position[1] + self.offset[1] * scale_y,
+      cursor_position[0] + self.offset[0] * scale_factor,
+      cursor_position[1] + self.offset[1] * scale_factor_y,
     ]
   }
 
   /// duplicated computation with screen position. Shouldn't be such an overhead. Maintained for clarity
-  pub fn screen_size(
-    &self,
-    screen_extent: [f32; 2],
-    desired_points: f32,
-    atlas_scale: PxScale,
-  ) -> [f32; 2] {
-    let (scale_x, scale_y) = Self::screen_scale(screen_extent, desired_points, atlas_scale);
-    [self.size[0] * scale_x, self.size[1] * scale_y]
-  }
-
-  fn screen_scale(
-    screen_extent: [f32; 2],
-    desired_points: f32,
-    atlas_scale: PxScale,
-  ) -> (f32, f32) {
-    let scale_x = (desired_points / atlas_scale.x) * 2.0 / screen_extent[0];
-    let scale_y = (desired_points / atlas_scale.y) * 2.0 / screen_extent[1];
-    (scale_x, scale_y)
+  pub fn screen_size(&self, desired_points: f32, atlas_scale: PxScale) -> [f32; 2] {
+    let scale_factor = desired_points / atlas_scale.x;
+    let scale_factor_y = desired_points / atlas_scale.y;
+    [self.size[0] * scale_factor, self.size[1] * scale_factor_y]
   }
 }
 
@@ -231,5 +218,51 @@ impl FontAtlas {
       line_gap,
       scale,
     })
+  }
+}
+
+pub struct TextStyle {
+  pub size_pt: f32, // Size scales instantly based on FontAtlas logic
+  pub color: [f32; 4],
+  pub style_flags: u32,
+}
+
+pub fn push_text_to_batch(
+  text: &str,
+  start_pos: [f32; 2],
+  style: &TextStyle,
+  font_atlas: &FontAtlas,
+  texture_id: u32, // From UploadedFont.descriptor_index
+  out_batch: &mut Vec<crate::gpu::TextGlyphGpu>,
+) {
+  let mut cursor = start_pos;
+
+  for c in text.chars() {
+    if c == '\n' {
+      cursor[0] = start_pos[0];
+      cursor[1] += font_atlas.scaled_height(style.size_pt);
+      continue;
+    }
+
+    let fallback = font_atlas.glyphs.get(&'█');
+    if let Some(glyph_info) = font_atlas.glyphs.get(&c).or(fallback) {
+      let size = glyph_info.screen_size(style.size_pt, font_atlas.scale);
+
+      // Only push visible characters geometry (skips spaces)
+      if size[0] > 0.0 && size[1] > 0.0 {
+        out_batch.push(crate::gpu::TextGlyphGpu {
+          pos: glyph_info.screen_position(cursor, style.size_pt, font_atlas.scale),
+          size,
+          uv_bounds: glyph_info.uv_bounds(),
+          color: style.color,
+          texture_id,
+          style: style.style_flags,
+          _pad: [0; 2],
+        });
+      }
+
+      // Advance cursor
+      cursor[0] += glyph_info.scaled_advance(style.size_pt, font_atlas.scale);
+    }
   }
 }

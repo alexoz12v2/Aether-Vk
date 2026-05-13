@@ -31,6 +31,7 @@ objc2-foundation = "0.3.2"
 [dev-dependencies]
 image = "0.25.10"
 ntest = "*"
+approx = "*"
 
 [dependencies]
 paste = "1.0"
@@ -38,6 +39,7 @@ ab_glyph = { version = "0.2.32", default-features = false, features = ["libm", "
 aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = ["console_log"] }
 static_assertions = "1.1.0"
 spin = { version = "0.10", features = ["once", "rwlock", "mutex"] }
+rand = { version = "0.8.5", default-features = false, features = ["alloc", "std", "std_rng"] }
 thiserror = { version = "2", default-features = false }
 bitflags = { version = "2.11", default-features = false }
 heapless = { version = "0.9" }
@@ -69,6 +71,9 @@ ash = { version = "0.38", default-features = false, features = ["debug"] }
 vk-mem = { version = "0.5", path = "../../external/vk-mem", default-features = false, features = [
     "force-loaded",
 ] }
+
+[target.'cfg(all(not(target_arch = "wasm32"), any( target_os = "windows", target_os = "linux", target_os = "macos", target_os = "android", target_os = "ios")))'.dev-dependencies]
+vk-mem = { version = "0.5", path = "../../external/vk-mem", default-features = false, features = ["vma-debug"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = ">=0.59, <=0.62.2", default-features = false, features = [

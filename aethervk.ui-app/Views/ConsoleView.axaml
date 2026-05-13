@@ -21,7 +21,7 @@
             <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="5">
                 <Button Content="Zoom In (+)" Command="{Binding ZoomInCommand}" Classes="accent"/>
                 <Button Content="Zoom Out (-)" Command="{Binding ZoomOutCommand}" Classes="accent"/>
-                <Button Content="Export Logs" Click="OnExportLogsClicked" Classes="accent"/>
+                <Button Content="Export Logs" Command="{Binding ExportLogsCommand}" Classes="accent"/>
             </StackPanel>
             <Button Grid.Column="1" Content="Clear Console" Command="{Binding ClearConsoleCommand}" Classes="accent"/>
         </Grid>

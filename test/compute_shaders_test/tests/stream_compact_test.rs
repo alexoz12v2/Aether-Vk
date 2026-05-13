@@ -21,6 +21,7 @@ struct PushConstants {
 
 #[test]
 fn test_stream_compact() {
+    compute_shaders_test::ensure_test_data("test_data/stream_compact.json", "gen_stream_compact_data.py");
     let json_data = fs::read_to_string("test_data/stream_compact.json").expect("Failed to read JSON");
     let test_data: StreamCompactData = serde_json::from_str(&json_data).expect("Failed to parse JSON");
 

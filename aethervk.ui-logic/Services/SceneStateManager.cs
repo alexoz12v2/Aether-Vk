@@ -24,4 +24,9 @@ public partial class SceneStateManager : ObservableObject
   {
     _scenes.Remove(sceneId);
   }
+
+  public void Clear()
+  {
+    _scenes.Clear();
+  }
 }

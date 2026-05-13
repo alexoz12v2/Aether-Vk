@@ -156,7 +156,14 @@ impl SimulationDelegate for EllipseDelegate {
     .unwrap();
     ctx.add_trajectory_component(scene_id, traj_entity, traj_comp).unwrap();
 
-    let cam_entity = ctx.spawn_entity(scene_id, "camera").unwrap();
+    let cam_entity = ctx.add_perspective_camera(
+      scene_id,
+      pe_handle,
+      "camera",
+      45.0f32.to_radians(),
+      0.1,
+      1000.0,
+    ).unwrap().get();
     ctx.set_parent(scene_id, cam_entity, Some(root_entity)).unwrap();
 
     let cam_pos = Vec3f32::from_components(0.0, visual_a * 1.5, visual_a * 1.5);
@@ -169,7 +176,7 @@ impl SimulationDelegate for EllipseDelegate {
     // Rotate camera to look at target
     let rot = Quat::look_at(view_dir, actual_up);
 
-    ctx.add_transform_component(
+    ctx.set_transform_component(
       scene_id,
       cam_entity,
       cam_pos,
@@ -177,21 +184,6 @@ impl SimulationDelegate for EllipseDelegate {
       Vec3f32::one(),
     )
     .unwrap();
-
-    let width = window.inner_size().width;
-    let height = window.inner_size().height;
-    ctx.add_camera_component(
-      scene_id,
-      cam_entity,
-      CameraParams {
-        fov_y: 45.0,
-        aspect_ratio: width as f32 / height as f32,
-        near_plane: 0.1,
-        far_plane: 1000.0,
-      },
-    )
-    .unwrap();
-    ctx.set_active_camera(scene_id, cam_entity).unwrap();
 
     let _ = ctx.threads.logic_thread.tx().try_send(
       aethervk_core_rlib::simulation_api::structs::LogicCommand::PlayScene { scene_id },
@@ -214,6 +206,22 @@ impl SimulationDelegate for EllipseDelegate {
         if let Some(logic_command) = test_utils::command::process_mouse_motion_camera_commands(
           delta,
           middle_mouse_down,
+          shift_down,
+          ctrl_down,
+          camera_entity,
+          scene.clone(),
+        ) {
+          let _ = ctx.threads.logic_thread.tx().try_send(logic_command);
+        }
+      }
+    }
+  }
+}
+
+fn main() {
+  let _assets_dir = cycle_get_asset_path_from_exe(true);
+  run_simulation_app("Ellipse Rendering Playground", EllipseDelegate);
+}
           shift_down,
           ctrl_down,
           camera_entity,

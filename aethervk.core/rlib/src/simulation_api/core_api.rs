@@ -1,5 +1,7 @@
 //! core_api module.
 
+use crate::scene::{CameraComponent, TransformComponent};
+use crate::simulation::texture_cache::TextureCache;
 use crate::{
   expect_scene, expect_scene_and_entity, gpu,
   gpu::PresentationEngineHandle,
@@ -54,6 +56,9 @@ impl SimulationContext {
       let logic_state = Arc::new(RwLock::new(LogicState::default()));
       addr_of_mut!((*ptr).logic_state).write(Arc::clone(&logic_state));
 
+      let texture_cache = Arc::new(RwLock::new(TextureCache::new("AetherVk")));
+      addr_of_mut!((*ptr).texture_cache).write(Arc::clone(&texture_cache));
+
       // TODO test: if this fails, render frontend should drop.
       let render_thread_params = RenderThreadParams::new(backend, None, render_thread_thread_pool)?;
       let logic_thread_params = LogicThreadParams::new(
@@ -89,6 +94,19 @@ impl SimulationContext {
     self.render_proxy.1
   }
 
+  /// Returns the mapped memory pointer of the emissive paint image for a given physical mesh instance
+  pub fn get_emissive_paint_image_mapped_ptr(
+    &self,
+    mesh_id: crate::gpu::RenderableInstanceId,
+  ) -> Option<*mut u8> {
+    let mut mapped_ptr = None;
+    let _ = self.with_device(|device| {
+      mapped_ptr = device.get_emissive_paint_image_mapped_ptr(mesh_id);
+      Ok(())
+    });
+    mapped_ptr
+  }
+
   /// TODO: Document this item
   pub fn create_presentation_engine_windowed(
     &self,
@@ -113,7 +131,7 @@ impl SimulationContext {
       render_device.init_archetypes(h)?;
       let read_scene = scene_ctx.read();
       let mut presentation_engines = read_scene.presentation_engines.write();
-      if presentation_engines.insert(h, false).is_none() {
+      if presentation_engines.insert(h, crate::simulation_api::structs::PresentationEngineData { is_windowless: false, camera_entity: None, }, ).is_none() {
         Ok(h)
       } else {
         if let Err(e) = render_device.destroy_presentation_engine(h) {
@@ -127,6 +145,94 @@ impl SimulationContext {
         ))
       }
     })
+  }
+
+  pub fn add_perspective_camera(
+    &self,
+    scene_id: u64,
+    presentation_engine: PresentationEngineHandle,
+    name: &str,
+    fov: f32,
+    near: f32,
+    far: f32,
+  ) -> EngineResult<core::num::NonZeroU64> {
+    let scene_ctx = expect_scene!(
+      self.get_scene(scene_id),
+      "scene_api:create_presentation_engine"
+    );
+    let mut scene_write = scene_ctx.write();
+    let root_entity =
+      scene_write.scene.get_root().ok_or(EngineError::InvalidOperation("empty scene"))?;
+    let camera_entity = {
+      let mut presentation_engines = scene_write.presentation_engines.write();
+      let presentation_engine_data = presentation_engines.get_mut(&presentation_engine).ok_or(EngineError::InvalidOperation("[SimulationContext] core_api:add_perspective_camera: inexistent presentation engine for given scene"))?;
+      if presentation_engine_data.camera_entity.is_some() {
+        return Err(EngineError::InvalidOperation(
+          "[SimulationContext] core_api:add_perspective_camera: presentation engine for given scene already has a camera",
+        ));
+      }
+      let [width, height] =
+        self.with_device(|device| device.get_presentation_engine_extent(presentation_engine))?;
+      let camera_entity = scene_write.scene.spawn_camera(
+        name,
+        Some(root_entity),
+        TransformComponent::default(),
+        CameraComponent::new_persp(fov, width as f32 / height as f32, near, far),
+      );
+      presentation_engine_data.camera_entity = Some(camera_entity);
+      camera_entity
+    };
+
+    let camera_id = scene_write.register_entity(camera_entity);
+    Ok(core::num::NonZeroU64::new(camera_id).unwrap())
+  }
+
+  pub fn add_orthographic_camera(
+    &self,
+    scene_id: u64,
+    presentation_engine: PresentationEngineHandle,
+    name: &str,
+    left: f32,
+    bottom: f32,
+    near: f32,
+    far: f32,
+  ) -> EngineResult<core::num::NonZeroU64> {
+    let scene_ctx = expect_scene!(
+      self.get_scene(scene_id),
+      "scene_api:create_presentation_engine"
+    );
+    let mut scene_write = scene_ctx.write();
+    let root_entity =
+      scene_write.scene.get_root().ok_or(EngineError::InvalidOperation("empty scene"))?;
+    let camera_entity = {
+      let mut presentation_engines = scene_write.presentation_engines.write();
+      let presentation_engine_data = presentation_engines.get_mut(&presentation_engine).ok_or(EngineError::InvalidOperation("[SimulationContext] core_api:add_perspective_camera: inexistent presentation engine for given scene"))?;
+      if presentation_engine_data.camera_entity.is_some() {
+        return Err(EngineError::InvalidOperation(
+          "[SimulationContext] core_api:add_orthographic_camera: presentation engine for given scene already has a camera",
+        ));
+      }
+      let [width, height] =
+        self.with_device(|device| device.get_presentation_engine_extent(presentation_engine))?;
+      let camera_entity = scene_write.scene.spawn_camera(
+        name,
+        Some(root_entity),
+        TransformComponent::default(),
+        CameraComponent::new_ortho(
+          left,
+          left + width as f32,
+          bottom,
+          bottom + height as f32,
+          near,
+          far,
+        ),
+      );
+      presentation_engine_data.camera_entity = Some(camera_entity);
+      camera_entity
+    };
+
+    let camera_id = scene_write.register_entity(camera_entity);
+    Ok(core::num::NonZeroU64::new(camera_id).unwrap())
   }
 
   /// TODO: Document this item
@@ -146,7 +252,16 @@ impl SimulationContext {
       render_device.init_archetypes(h)?;
       let read_scene = scene_ctx.read();
       let mut presentation_engines = read_scene.presentation_engines.write();
-      if presentation_engines.insert(h, true).is_none() {
+      if presentation_engines
+        .insert(
+          h,
+          crate::simulation_api::structs::PresentationEngineData {
+            is_windowless: true,
+            camera_entity: None,
+          },
+        )
+        .is_none()
+      {
         Ok(h)
       } else {
         if let Err(e) = render_device.destroy_presentation_engine(h) {
@@ -172,29 +287,32 @@ impl SimulationContext {
       self.get_scene(scene_id),
       "scene_api:create_presentation_engine"
     );
-    self.with_device(|render_device| {
+
+    let camera_to_remove = {
       let read_scene = scene_ctx.read();
       let mut presentation_engines = read_scene.presentation_engines.write();
-      if let Some(_) = presentation_engines.remove(&handle) {
-        render_device.destroy_presentation_engine(handle)?;
-        Ok(())
+      if let Some(pe_data) = presentation_engines.remove(&handle) {
+        pe_data.camera_entity
       } else {
-        Err(GpuError::InvalidState(
-          "core_api:destroy_presentation_engine | presentation engine not found",
-        ))
+        return Err(
+          GpuError::InvalidState(
+            "core_api:destroy_presentation_engine | presentation engine not found",
+          )
+          .into(),
+        );
       }
-    })
-  }
+    };
 
-  /// TODO: Document this item
-  pub fn set_active_camera(&self, scene_id: u64, camera: u64) -> EngineResult<()> {
-    let (scene, entity_id) = expect_scene_and_entity!(
-      self.get_scene(scene_id),
-      camera,
-      "core_api:set_active_camera"
-    );
-    scene.write().active_camera_entity = Some(entity_id);
-    Ok(())
+    if let Some(camera_internal_id) = camera_to_remove {
+      let mut write_scene = scene_ctx.write();
+      write_scene.scene.remove_entity(camera_internal_id);
+      write_scene.entity_map.retain(|_, v| *v != camera_internal_id);
+    }
+
+    self.with_device(|render_device| {
+      render_device.destroy_presentation_engine(handle)?;
+      Ok(())
+    })
   }
 
   /// TODO: Document this item

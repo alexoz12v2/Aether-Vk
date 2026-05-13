@@ -32,6 +32,7 @@ impl AlmanacPlanet {
   pub fn step(
     &self,
     transform: &mut TransformComponent,
+    kinematic: Option<&mut crate::scene::KinematicComponent>,
     epoch: anise::time::Epoch,
     step_days: f64,
     almanac: &AlmanacPackedData,
@@ -46,6 +47,15 @@ impl AlmanacPlanet {
     transform.position = kinematic_state.position;
     if let Some(rot) = kinematic_state.rotation {
       transform.rotation = rot.normalize();
+    }
+
+    if let Some(k) = kinematic {
+      k.velocity = kinematic_state.velocity;
+      if let Some(ang_vel) = kinematic_state.angular_velocity {
+        k.angular_velocity = ang_vel;
+      } else {
+        k.angular_velocity = Vec3f32::zero();
+      }
     }
 
     Ok(())

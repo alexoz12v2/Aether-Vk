@@ -12,6 +12,7 @@ use crate::{
   },
   types::{EngineError, EngineResult},
 };
+use aethervk_oshal_rlib::os::pool::tasklet::ThreadPoolExt;
 use aethervk_oshal_rlib::os::time::timeus_t;
 use aethervk_oshal_rlib::{
   self as oshal,
@@ -86,32 +87,46 @@ pub fn start_logic_thread(
 
             let _ = execute_simulation_tick(scene_id, &context);
 
-            let pe_handles: alloc::vec::Vec<(crate::gpu::PresentationEngineHandle, bool)> = {
+            let pe_handles: alloc::vec::Vec<(
+              crate::gpu::PresentationEngineHandle,
+              crate::simulation_api::structs::PresentationEngineData,
+            )> = {
               let scenes = context.scenes.read();
               if let Some(scene_ctx) = scenes.get(&scene_id) {
-                scene_ctx.read().presentation_engines.read().iter().map(|(&k, &v)| (k, v)).collect()
+                scene_ctx
+                  .read()
+                  .presentation_engines
+                  .read()
+                  .iter()
+                  .map(|(&k, v)| (k, v.clone()))
+                  .collect()
               } else {
                 alloc::vec::Vec::new()
               }
             };
 
             let mut last_task = None;
-            for (pe, is_windowless) in pe_handles {
+            for (pe, pe_data) in pe_handles {
+              if pe_data.camera_entity.is_none() {
+                continue;
+              }
+              let camera_entity = unsafe { pe_data.camera_entity.unwrap_unchecked() };
+              let is_windowless = pe_data.is_windowless;
               let task_id = alloc::sync::Arc::new(core::sync::atomic::AtomicU64::new(0));
               let scene = {
                 let scenes = context.scenes.read();
                 scenes.get(&scene_id).unwrap().clone()
               };
 
-              let (active_cam, outlines, sun, sky, cursor, callback) = {
+              let (outlines, sun, sky, cursor, callback, active_physics_task) = {
                 let r = scene.read();
                 (
-                  r.active_camera_entity.unwrap_or_default(),
                   r.outlines_enabled.load(core::sync::atomic::Ordering::Acquire),
                   r.sun_entity,
                   r.sky_entity,
                   r.cursor_entity,
                   r.custom_render_callback,
+                  r.active_physics_task.clone(),
                 )
               };
 
@@ -122,12 +137,13 @@ pub fn start_logic_thread(
                     task_id: alloc::sync::Arc::clone(&task_id),
                     scene,
                     render_physical_meshes_outline: outlines,
-                    camera_entity: active_cam,
+                    camera_entity,
                     clear_color: [0.0, 0.0, 0.0, 1.0],
                     sun_entity: sun,
                     sky_entity: sky,
                     cursor_entity: cursor,
                     custom_render_callback: callback,
+                    active_physics_task,
                   },
                 ),
               );
@@ -402,7 +418,10 @@ fn process_command_internal(
       let is_ortho = scene_read
         .scene
         .with_component(camera_entity, |c: &CameraComponent| {
-          c.projection.w.w().abs() > 0.5
+          matches!(
+            c.projection,
+            crate::scene::CameraProjection::Orthographic { .. }
+          )
         })
         .ok_or(EngineError::InvalidOperation(
           "logic_thread:ZoomCamera | scene doesn't have CameraComponent",
@@ -433,6 +452,11 @@ fn process_command_internal(
         camera_entity,
         Vec3f32::from_components(0.0, -amount * zoom_speed, 0.0),
       )?;
+      if let Some(ext_id) =
+        scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
+      {
+        scene_read.mark_component_changed(ext_id, "Transform");
+      }
       Ok(SimulationTaskResult::None)
     }
     LogicCommand::ResetCamera(crate::simulation_api::structs::ResetCamera {
@@ -489,6 +513,16 @@ fn process_command_internal(
         )?;
       use crate::scene::camera::SceneCameraExt;
       scene_read.scene.pan_camera_and_cursor(camera_entity, cursor_entity, delta_x, delta_y)?;
+      if let Some(ext_id) =
+        scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
+      {
+        scene_read.mark_component_changed(ext_id, "Transform");
+      }
+      if let Some(ext_id) =
+        scene_read.entity_map.iter().find(|&(_, v)| *v == cursor_entity).map(|(k, _)| *k)
+      {
+        scene_read.mark_component_changed(ext_id, "Transform");
+      }
       Ok(SimulationTaskResult::None)
     }
     LogicCommand::PanCursor(_) => Ok(SimulationTaskResult::None),
@@ -502,9 +536,16 @@ fn process_command_internal(
       let scene_read = scene.read();
       scene_read
         .scene
-        .query2_res_first_mut(|_, t: &mut TransformComponent, _c: &mut CursorComponent| {
+        .query2_res_first_mut(|id, t: &mut TransformComponent, _c: &mut CursorComponent| {
           let translation = Vec3f32::from_components(delta_x, delta_y, delta_z) * speed;
           t.position = t.position + translation;
+
+          if let Some(ext_id) =
+            scene_read.entity_map.iter().find(|&(_, v)| *v == id).map(|(k, _)| *k)
+          {
+            scene_read.mark_component_changed(ext_id, "Transform");
+          }
+
           Some(())
         })
         .map(|_| ())
@@ -585,6 +626,7 @@ fn process_command_internal(
         crate::simulation_api::structs::TimeScale::OneDay => 1,
         crate::simulation_api::structs::TimeScale::OneWeek => 2,
         crate::simulation_api::structs::TimeScale::OneMonth => 3,
+        crate::simulation_api::structs::TimeScale::RealTime => 4,
       }))
     }
     LogicCommand::FeedbackGetSceneDateTimeUTC { scene_id } => {
@@ -603,7 +645,12 @@ fn process_command_internal(
     LogicCommand::SetSceneTimeScale { scene_id, scale } => {
       let scenes = ctx.scenes.read();
       if let Some(scene_ctx) = scenes.get(&scene_id) {
-        scene_ctx.read().time_state.write().current_scale = scale;
+        let scene_guard = scene_ctx.read();
+        let mut time_state = scene_guard.time_state.write();
+        time_state.current_scale = scale;
+        if scale == crate::simulation_api::structs::TimeScale::Stopped {
+          time_state.is_playing = false;
+        }
       }
       Ok(SimulationTaskResult::None)
     }
@@ -618,10 +665,24 @@ fn process_command_internal(
       }
       Ok(SimulationTaskResult::None)
     }
+    LogicCommand::SetPhysicsEngineType {
+      scene_id,
+      engine_type,
+    } => {
+      let scenes = ctx.scenes.read();
+      if let Some(scene_ctx) = scenes.get(&scene_id) {
+        *scene_ctx.read().physics_engine_type.write() = engine_type;
+      }
+      Ok(SimulationTaskResult::None)
+    }
     LogicCommand::PlayScene { scene_id } => {
       let scenes = ctx.scenes.read();
       if let Some(scene_ctx) = scenes.get(&scene_id) {
-        scene_ctx.read().time_state.write().is_playing = true;
+        let scene_guard = scene_ctx.read();
+        let mut ts = scene_guard.time_state.write();
+        if ts.current_scale != crate::simulation_api::structs::TimeScale::Stopped {
+          ts.is_playing = true;
+        }
       }
       Ok(SimulationTaskResult::None)
     }
@@ -640,7 +701,7 @@ fn process_command_internal(
       if let Some(scene_ctx) = scenes.get(&scene_id) {
         let read_ctx = scene_ctx.read();
         let mut time_state = read_ctx.time_state.write();
-        time_state.current_epoch = time_state.current_epoch + anise::time::Unit::Day * step_days;
+        time_state.manual_step_requests += step_days;
       }
       Ok(SimulationTaskResult::None)
     }
@@ -707,10 +768,11 @@ fn process_command_internal(
     LogicCommand::RaycastNdc {
       task_id: _,
       scene_id,
+      camera_id,
       ndc_x,
       ndc_y,
     } => {
-      let res = ctx.raycast_ndc_internal(scene_id, ndc_x, ndc_y)?;
+      let res = ctx.raycast_ndc_internal(scene_id, camera_id, ndc_x, ndc_y)?;
       Ok(SimulationTaskResult::Raycast(res))
     }
     LogicCommand::Raycast {
@@ -737,104 +799,86 @@ fn execute_simulation_tick(
   scene_id: u64,
   ctx: &alloc::sync::Arc<LogicThreadContext>,
 ) -> EngineResult<()> {
-  // Get necessary ARCs without holding the scene graph read lock!
-  let (time_state_arc, physics_scene_arc, scene_arc) = {
+  let (time_state_arc, physics_scene_arc, scene_arc, active_physics_task) = {
     let scenes = ctx.scenes.read();
-    let scene_ctx =
-      scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?.read();
+    let scene_ctx = scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
+    let scene_read = scene_ctx.read();
     (
-      scene_ctx.time_state.clone(),
-      scene_ctx.physics_scene.clone(),
-      scene_ctx.scene.clone(),
+      scene_read.time_state.clone(),
+      scene_read.physics_scene.clone(),
+      scene_read.scene.clone(),
+      scene_read.active_physics_task.clone(),
     )
   };
 
+  // Wait for previous physics task to complete before mutating anything!
+  if let Some(task) = active_physics_task.lock().take() {
+    let _ = task.wait();
+  }
+
   // 1. Update time natively using the Arc (no scene read lock held)
-  let fixed_dt_us = {
-    let mut ts_write = time_state_arc.write();
-    let mut time_info = ts_write.time_info.write();
-    if ts_write.is_playing {
+  {
+    let ts_read = time_state_arc.read();
+    let mut time_info = ts_read.time_info.write();
+    if ts_read.is_playing {
       time_info.ut_update();
     }
-    time_info.fixed_delta_time.load(core::sync::atomic::Ordering::Relaxed)
-  };
+  }
 
   let mut any_fixed_step = false;
-  while time_state_arc.read().time_info.read().needs_fixed_update() {
-    any_fixed_step = true;
-    if let Some(ps_lock) = &physics_scene_arc {
-      let mut ps = ps_lock.write();
-      *ps = crate::physics::physics_scene::PhysicsScene::build_from_scene(scene_arc.as_ref());
+  let mut _step_count = 0;
+  loop {
+    if _step_count > 5 {
+        // Spiral of death protection!
+        // We're taking too long to simulate. Slow down simulation instead of freezing.
+        time_state_arc.read().time_info.write().ut_discard_accumulator();
+        break;
     }
+    _step_count += 1;
 
-    let step_days = {
+    let (is_manual, step_days, fixed_dt_us, current_epoch) = {
       let mut ts_write = time_state_arc.write();
-      let scale_days_per_sec = ts_write.current_scale.to_days_per_st_second();
-      let fixed_sim_seconds = fixed_dt_us as f64 / 1_000_000.0;
-      let step = scale_days_per_sec * fixed_sim_seconds;
-      if step > 0.0 {
+      let fixed_dt_us = ts_write.time_info.read().fixed_delta_time.load(core::sync::atomic::Ordering::Relaxed);
+      if ts_write.manual_step_requests > 0.0 {
+        let step = ts_write.manual_step_requests;
+        ts_write.manual_step_requests = 0.0;
         ts_write.current_epoch = ts_write.current_epoch + anise::time::Unit::Day * step;
-      }
-      step
-    };
-
-    let current_epoch = time_state_arc.read().current_epoch;
-
-    if step_days > 0.0 {
-      let logic_state = ctx.logic_state.read();
-      // 1. Update Macro Bodies First (Planets/Comets via SPICE)
-      if scene_arc.should_parallelize() {
-        scene_arc.query2_mut_par::<TransformComponent, crate::scene::AlmanacPlanet, _>(
-          &ctx.thread_pool,
-          |_, transform, planet| {
-            let _ = planet.step(
-              transform,
-              current_epoch,
-              step_days,
-              &logic_state.almanac_data,
-            );
-          },
-        );
+        (true, step, fixed_dt_us, ts_write.current_epoch)
       } else {
-        scene_arc.query2_mut::<TransformComponent, crate::scene::AlmanacPlanet, _>(
-          |_, transform, planet| {
-            let _ = planet.step(
-              transform,
-              current_epoch,
-              step_days,
-              &logic_state.almanac_data,
-            );
-          },
-        );
-      }
-
-      // 2. Update Micro Bodies Second & 4. Resolve Collisions
-      if let Some(ps_lock) = &physics_scene_arc {
-        let mut ps = ps_lock.write();
-        let dt_us = (step_days * 86400.0 * 1_000_000.0) as aethervk_oshal_rlib::os::time::timeus_t;
-
-        if scene_arc.should_parallelize() {
-          let kernels = crate::physics::cpu_kernels::CpuSimdKernels {
-            thread_pool: alloc::sync::Arc::clone(&ctx.thread_pool),
-          };
-          let _ =
-            crate::gpu_backends::simulation_step(&kernels, &mut ps, scene_arc.as_ref(), 0, dt_us);
+        let needs_update = ts_write.time_info.read().needs_fixed_update();
+        static mut DEBUG_PRINT_TICK: u32 = 0;
+        unsafe {
+            if DEBUG_PRINT_TICK % 600 == 0 {
+                aethervk_oshal_rlib::log!("DEBUG: execute_simulation_tick is_playing={} needs_update={} scale={:?}", ts_write.is_playing, needs_update, ts_write.current_scale);
+            }
+            DEBUG_PRINT_TICK += 1;
+        }
+        if ts_write.is_playing && needs_update {
+          let scale_days_per_sec = ts_write.current_scale.to_days_per_st_second();
+          let fixed_sim_seconds = fixed_dt_us as f64 / 1_000_000.0;
+          let step = scale_days_per_sec * fixed_sim_seconds;
+          if step > 0.0 {
+            ts_write.current_epoch = ts_write.current_epoch + anise::time::Unit::Day * step;
+          }
+          (false, step, fixed_dt_us, ts_write.current_epoch)
         } else {
-          let kernels = crate::physics::cpu_kernels::CpuScalarKernels {};
-          let _ =
-            crate::gpu_backends::simulation_step(&kernels, &mut ps, scene_arc.as_ref(), 0, dt_us);
+          break;
         }
       }
+    };
 
-      // 3. Process Handoffs
-      crate::physics::handoff::SpheresOfInfluenceSystem::process_handoffs_par(
-        scene_arc.as_ref(),
-        &ctx.thread_pool,
-      );
+    if step_days <= 0.0 && !is_manual {
+      time_state_arc.read().time_info.write().ut_fixed_update();
+      continue;
     }
 
-    // Advance fixed clock step
-    time_state_arc.read().time_info.read().ut_fixed_update();
+    any_fixed_step = true;
+    let _ = dispatch_physics_step(scene_id, ctx, step_days, current_epoch, fixed_dt_us);
+
+    if !is_manual {
+      // Advance fixed clock step
+      time_state_arc.read().time_info.read().ut_fixed_update();
+    }
   }
 
   // Snap following entities (re-acquires brief scene graph lock since we need try_snap_entity)
@@ -912,6 +956,219 @@ fn execute_simulation_tick(
   Ok(())
 }
 
+fn dispatch_physics_step(
+  scene_id: u64,
+  ctx: &alloc::sync::Arc<LogicThreadContext>,
+  step_days: f64,
+  current_epoch: anise::time::Epoch,
+  fixed_dt_us: aethervk_oshal_rlib::os::time::timeus_t,
+) -> EngineResult<()> {
+  let scenes = ctx.scenes.read();
+  let scene_ctx = scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
+  let scene_read = scene_ctx.read();
+  let physics_scene_arc = scene_read.physics_scene.clone();
+  let scene_arc = scene_read.scene.clone();
+
+  if let Some(ps_lock) = &physics_scene_arc {
+    let mut ps = ps_lock.write();
+    *ps = crate::physics::physics_scene::PhysicsScene::build_from_scene(scene_arc.as_ref());
+  }
+
+  let logic_state = ctx.logic_state.read();
+  if scene_arc.should_parallelize() {
+    scene_arc.query3_mut_par::<TransformComponent, crate::scene::AlmanacPlanet, crate::scene::KinematicComponent, _>(
+      &ctx.thread_pool,
+      |_, transform, planet, kinematic| {
+        let _ = planet.step(
+          transform,
+          Some(kinematic),
+          current_epoch,
+          step_days,
+          &logic_state.almanac_data,
+        );
+      },
+    );
+  } else {
+    scene_arc.query3_mut::<TransformComponent, crate::scene::AlmanacPlanet, crate::scene::KinematicComponent, _>(
+      |_, transform, planet, kinematic| {
+        let _ = planet.step(
+          transform,
+          Some(kinematic),
+          current_epoch,
+          step_days,
+          &logic_state.almanac_data,
+        );
+      },
+    );
+  }
+
+  if let Some(ps_lock) = &physics_scene_arc {
+    let ps_arc = ps_lock.clone();
+    let scene_clone = scene_arc.clone();
+    let pool_clone = ctx.thread_pool.clone();
+    let engine_type = {
+      let scenes = ctx.scenes.read();
+      let scene_ctx = scenes.get(&scene_id).unwrap().read();
+      *scene_ctx.physics_engine_type.read()
+    };
+
+    let task = ctx
+      .thread_pool
+      .spawn_tasklet(None, move || {
+        let mut ps = ps_arc.write();
+        let dt_us =
+          (step_days * 86400.0 * 1_000_000.0) as aethervk_oshal_rlib::os::time::timeus_t;
+
+        let res = match engine_type {
+          crate::simulation_api::structs::PhysicsEngineType::CpuSimd => {
+            let kernels = crate::physics::cpu_kernels::CpuSimdKernels {
+              thread_pool: pool_clone.clone(),
+            };
+            crate::gpu_backends::simulation_step(
+              &kernels,
+              &mut ps,
+              scene_clone.as_ref(),
+              0,
+              dt_us,
+            )
+          }
+          crate::simulation_api::structs::PhysicsEngineType::CpuScalar => {
+            let kernels = crate::physics::cpu_kernels::CpuScalarKernels {};
+            crate::gpu_backends::simulation_step(
+              &kernels,
+              &mut ps,
+              scene_clone.as_ref(),
+              0,
+              dt_us,
+            )
+          }
+          crate::simulation_api::structs::PhysicsEngineType::VulkanCompute => {
+            let kernels = crate::physics::cpu_kernels::CpuSimdKernels {
+              thread_pool: pool_clone.clone(),
+            };
+            crate::gpu_backends::simulation_step(
+              &kernels,
+              &mut ps,
+              scene_clone.as_ref(),
+              0,
+              dt_us,
+            )
+          }
+        };
+
+        crate::physics::handoff::SpheresOfInfluenceSystem::process_handoffs_par(
+          scene_clone.as_ref(),
+          &pool_clone,
+        );
+
+        res
+      })
+      .map_err(|e| <aethervk_oshal_rlib::os::NativeError as Into<EngineError>>::into(e))?;
+
+    *scene_read.active_physics_task.lock() = Some(task);
+  }
+
+  let dt_us_scaled = (step_days * 86400.0 * 1_000_000.0) as i64;
+  let emitter_entities =
+    scene_arc.query1_res(|id, _: &crate::scene::particles::ParticleEmitterComponent| Some(id));
+  for (id, _) in emitter_entities {
+    let t = scene_arc.global_transform(id).unwrap_or_default();
+    let config = scene_arc.with_component(
+      id,
+      |c: &crate::scene::particles::ParticleEmitterComponent| c.clone(),
+    );
+    let mesh =
+      scene_arc.with_component(id, |c: &crate::scene::PhysicalMeshComponent| c.mesh.clone());
+
+    if let (Some(config), Some(mesh)) = (config, mesh) {
+      let _ = scene_arc.with_component_mut(
+        id,
+        |ps: &mut crate::scene::particles::ParticleSystemComponent| {
+          let mut particles = ps.particles.write();
+          for p in particles.iter_mut() {
+            if p.active != 0 {
+              let new_age = p.get_age() as i64 + dt_us_scaled;
+              p.set_age(new_age as aethervk_oshal_rlib::os::time::timeus_t);
+              if new_age > config.lifetime as i64 {
+                p.active = 0;
+              }
+            }
+          }
+          particles.retain(|p| p.active != 0);
+          drop(particles);
+
+          ps.accumulator += dt_us_scaled;
+          if ps.accumulator >= config.delta {
+            let events = (ps.accumulator / config.delta).min(100);
+            ps.accumulator %= config.delta;
+
+            let mut rng = rand::thread_rng();
+            let mut u_emission = [0.0; 2];
+            u_emission[0] = rand::Rng::r#gen(&mut rng);
+            u_emission[1] = rand::Rng::r#gen(&mut rng);
+
+            let burst_size = config.emission_count.mean as usize * events as usize + 1000;
+            let mut u_particles = alloc::vec::Vec::with_capacity(burst_size);
+            for _ in 0..burst_size {
+              u_particles.push([
+                rand::Rng::r#gen(&mut rng),
+                rand::Rng::r#gen(&mut rng),
+                rand::Rng::r#gen(&mut rng),
+                rand::Rng::r#gen(&mut rng),
+              ]);
+            }
+
+            let uv_grid =
+              crate::simulation::comet::uv_grid::UvGrid::new(&mesh.vertices, &mesh.indices, 2);
+            for _ in 0..events {
+              ps.emit_particles(
+                &config,
+                &mesh,
+                &uv_grid,
+                t.position,
+                t.rotation,
+                t.scale,
+                &u_emission,
+                &u_particles,
+              );
+            }
+          }
+        },
+      );
+    }
+  }
+
+  let dt_seconds = fixed_dt_us as f32 / 1_000_000.0;
+  if scene_arc.should_parallelize() {
+    scene_arc.query1_mut_par::<crate::scene::script_components::UpdateComponent, _>(
+      &ctx.thread_pool,
+      |entity_id, update_comp| {
+        (update_comp.callback)(
+          entity_id,
+          scene_arc.as_ref(),
+          &mut update_comp.entities,
+          &mut update_comp.arbitrary_data,
+          dt_seconds,
+        );
+      },
+    );
+  } else {
+    scene_arc.query1_mut::<crate::scene::script_components::UpdateComponent, _>(
+      |entity_id, update_comp| {
+        (update_comp.callback)(
+          entity_id,
+          scene_arc.as_ref(),
+          &mut update_comp.entities,
+          &mut update_comp.arbitrary_data,
+          dt_seconds,
+        );
+      },
+    );
+  }
+  
+  Ok(())
+}
+
 fn try_snap_entity(
   snap_entity: EntityId,
   target_entity: EntityId,
@@ -924,5 +1181,13 @@ fn try_snap_entity(
       ))?;
     (t.position, t.rotation)
   };
-  scene_read.scene.set_global_position_and_rotation(snap_entity, target_pos, target_rot)
+  let res = scene_read.scene.set_global_position_and_rotation(snap_entity, target_pos, target_rot);
+  if res.is_ok() {
+    if let Some(ext_id) =
+      scene_read.entity_map.iter().find(|&(_, v)| *v == snap_entity).map(|(k, _)| *k)
+    {
+      scene_read.mark_component_changed(ext_id, "Transform");
+    }
+  }
+  res
 }

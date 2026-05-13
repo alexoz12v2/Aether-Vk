@@ -333,8 +333,9 @@ impl Kernels for VulkanComputeKernels {
 
     fn build_motion_bvh(
         &self,
-        cmd: &mut Self::Cmd,
-        dynamics: &Self::Buffer<DynamicBody>,
+        _cmd: &mut Self::Cmd,
+        _kinematics: &Self::Buffer<KinematicBody>,
+        _dynamics: &Self::Buffer<DynamicBody>,
     ) -> EngineResult<Self::MotionBvh> {
         let total_particles = dynamics.capacity() as u32;
         let wg_size = 256;
@@ -369,21 +370,22 @@ impl Kernels for VulkanComputeKernels {
         cmd: &mut Self::Cmd,
         _bvh: &Self::MotionBvh,
     ) -> EngineResult<Self::List<CollisionPair>> {
-        // We'll pass total_particles via some state, hardcoded to some value here or assume we have it
-        let total_particles = 1000; // Placeholder
-        let wg_size = 256;
-        let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
+        // We'll pass total_entities via some state, hardcoded to some value here or assume we have it
+        let total_entities = 1000; // Placeholder
+        let wg_size = 32;
+        let dispatch_groups = (total_entities + wg_size - 1) / wg_size;
 
-        let pc = CcdPushConstants {
-            particle_bvh: self.addresses.bvh_nodes,
-            output_list: self.addresses.ccd_candidates,
-            root_index: 0,
-            total_particles,
+        let pc = crate::gpu::compute_push_constants::BroadPhasePushConstants {
+            tlas_bvh_addr: self.addresses.bvh_nodes,
+            scene_entities_addr: self.addresses.particle_data, // Placeholder
+            overlapping_pairs_addr: self.addresses.ccd_candidates,
+            tlas_root_index: 0,
+            total_entities,
         };
-        let bytes = unsafe { core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of::<CcdPushConstants>()) };
+        let bytes = unsafe { core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of::<crate::gpu::compute_push_constants::BroadPhasePushConstants>()) };
 
         unsafe {
-            self.device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.ccd);
+            self.device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.broad_phase);
             self.device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytes);
             self.device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
             

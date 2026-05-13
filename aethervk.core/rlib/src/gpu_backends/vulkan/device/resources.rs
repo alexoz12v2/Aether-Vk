@@ -1080,10 +1080,12 @@ impl ForwardMesh2RenderResource {
       ))
       .map_err(|s| GpuError::BackendSpecific(s.into()))?;
 
-    let material_slice = core::slice::from_raw_parts(
-      material_data as *const _ as *const u32,
-      core::mem::size_of::<crate::gpu::MaterialData>() / 4,
-    );
+    let material_slice = unsafe {
+      core::slice::from_raw_parts(
+        material_data as *const _ as *const u32,
+        core::mem::size_of::<crate::gpu::MaterialData>() / 4,
+      )
+    };
     let material_buffer = create_buffer_with_staging(
       device,
       allocator,
@@ -1103,10 +1105,12 @@ impl ForwardMesh2RenderResource {
       ))
       .map_err(|s| GpuError::BackendSpecific(s.into()))?;
 
-    let object_slice = core::slice::from_raw_parts(
-      object_data as *const _ as *const u32,
-      core::mem::size_of::<crate::gpu::ObjectData>() / 4,
-    );
+    let object_slice = unsafe {
+      core::slice::from_raw_parts(
+        object_data as *const _ as *const u32,
+        core::mem::size_of::<crate::gpu::ObjectData>() / 4,
+      )
+    };
     let object_buffer = create_buffer_with_staging(
       device,
       allocator,
@@ -1567,7 +1571,7 @@ impl DiscardableResource for FrameResource {
 /// TODO: Document this item
 pub struct UploadedFont {
   pub texture: Image,
-  pub atlas: crate::scene::text::FontAtlas,
+  pub atlas: alloc::sync::Arc<crate::scene::text::FontAtlas>,
   pub descriptor_index: u32, // The assigned array element
 }
 
@@ -1761,7 +1765,7 @@ impl TextRenderResourceArchetype {
     staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
     command_buffer: vk::CommandBuffer,
     font_hash: u64,
-    atlas: crate::scene::text::FontAtlas,
+    atlas: alloc::sync::Arc<crate::scene::text::FontAtlas>,
   ) -> GpuResult<u32> {
     // TODO write this function with a rollback (Drop) struct (started cmdbuf, ...)
     if let Some(existing) = self.uploaded_fonts.get(&font_hash) {
@@ -1782,7 +1786,7 @@ impl TextRenderResourceArchetype {
     };
 
     let texture = crate::simulation::comet::Texture {
-      data: atlas.image_data.clone(),
+      data: atlas.image_data.clone().into(),
       format: crate::simulation::comet::TexelFormat::R8_UNORM,
       width: atlas.width,
       height: atlas.height,
@@ -1857,6 +1861,221 @@ impl TextRenderResourceArchetype {
   }
 }
 
+pub(super) struct Text2RenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub descriptor_set_layout: NonZeroHandle<vk::DescriptorSetLayout>,
+  pub descriptor_pool: Option<NonZeroHandle<vk::DescriptorPool>>,
+  pub descriptor_set: Option<vk::DescriptorSet>,
+  pub font_sampler: Option<vk::Sampler>,
+  pub uploaded_fonts: hashbrown::HashMap<u64, UploadedFont>,
+  pub free_descriptor_indices: Vec<u32>,
+  pub next_descriptor_index: u32,
+  pub max_fonts: u32,
+  pub allocator_raw: Option<vk_mem::ffi::VmaAllocator>,
+
+  pub glyphs_buffer: NonZeroHandle<vk::Buffer>,
+  pub glyphs_alloc: vk_mem::Allocation,
+  pub glyphs_ptr: u64,
+
+  pipeline_map: PipelineMap,
+}
+
+unsafe impl Sync for Text2RenderResourceArchetype {}
+unsafe impl Send for Text2RenderResourceArchetype {}
+
+impl DiscardableResource for Text2RenderResourceArchetype {
+  fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
+    discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
+
+    if let Some(pool) = self.descriptor_pool.take() {
+      discard_pool.discard_type_erased(
+        FunctionalDeviceResource::new(pool.get(), |pool, device| unsafe {
+          device.destroy_descriptor_pool(pool, None);
+        }),
+        timeline,
+      );
+    }
+    if let Some(sampler) = self.font_sampler.take() {
+      discard_pool.discard_type_erased(
+        FunctionalDeviceResource::new(sampler, |sampler, device| unsafe {
+          device.destroy_sampler(sampler, None);
+        }),
+        timeline,
+      );
+    }
+
+    if let Some(allocator_raw) = self.allocator_raw {
+      discard_pool.discard_buffer(
+        allocator_raw,
+        self.glyphs_buffer.get(),
+        self.glyphs_alloc,
+        timeline,
+      );
+
+      for (_, uploaded_font) in self.uploaded_fonts.drain() {
+        discard_pool.discard_image_view(uploaded_font.texture.image_view.get(), timeline);
+        discard_pool.discard_image(
+          allocator_raw,
+          uploaded_font.texture.image.get(),
+          uploaded_font.texture.allocation,
+          timeline,
+        );
+      }
+    }
+  }
+}
+
+impl Text2RenderResourceArchetype {
+  pub fn new(
+    pipeline_layout: vk::PipelineLayout,
+    set_layout: vk::DescriptorSetLayout,
+    pool: vk::DescriptorPool,
+    descriptor_set: vk::DescriptorSet,
+    font_sampler: vk::Sampler,
+    max_fonts: u32,
+    allocator: &vk_mem::Allocator,
+    device: &vulkan::device::LogicalDevice,
+  ) -> GpuResult<Self> {
+    let buffer_size = (100_000 * core::mem::size_of::<crate::gpu::TextGlyphGpu>()) as u64;
+    let buffer_info = vk::BufferCreateInfo::default().size(buffer_size).usage(
+      vk::BufferUsageFlags::STORAGE_BUFFER
+        | vk::BufferUsageFlags::TRANSFER_DST
+        | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+    );
+
+    let mut mem_alloc_info = vk_mem::AllocationCreateInfo::default();
+    mem_alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
+    mem_alloc_info.flags = vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+      | vk_mem::AllocationCreateFlags::MAPPED;
+
+    let (glyphs_buffer, glyphs_alloc) =
+      unsafe { allocator.create_buffer(&buffer_info, &mem_alloc_info) }
+        .map_err(|_| GpuError::OutOfMemory)?;
+
+    device.set_debug_name(glyphs_buffer, "MegaBuffer_TextGlyphs");
+
+    let addr_info = ash::vk::BufferDeviceAddressInfo::default().buffer(glyphs_buffer);
+    let glyphs_ptr = unsafe { device.buffer_device_address.get_buffer_device_address(&addr_info) };
+
+    Ok(Self {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      pipeline_map: hashbrown::HashMap::new(),
+      descriptor_set_layout: unsafe { NonZeroHandle::new_unchecked(set_layout) },
+      descriptor_pool: Some(unsafe { NonZeroHandle::new_unchecked(pool) }),
+      descriptor_set: Some(descriptor_set),
+      font_sampler: Some(font_sampler),
+      uploaded_fonts: hashbrown::HashMap::new(),
+      free_descriptor_indices: Vec::new(),
+      next_descriptor_index: 0,
+      max_fonts,
+      allocator_raw: Some(allocator.get_raw()),
+      glyphs_buffer: unsafe { NonZeroHandle::new_unchecked(glyphs_buffer) },
+      glyphs_alloc,
+      glyphs_ptr,
+    })
+  }
+
+  impl_pipeline_map_methods!();
+
+  pub fn upload_font_atlas(
+    &mut self,
+    device: &vulkan::device::LogicalDevice,
+    queue: &vulkan::device::Queue,
+    allocator: &vk_mem::Allocator,
+    staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
+    command_buffer: vk::CommandBuffer,
+    font_hash: u64,
+    atlas: alloc::sync::Arc<crate::scene::text::FontAtlas>,
+  ) -> GpuResult<u32> {
+    if let Some(existing) = self.uploaded_fonts.get(&font_hash) {
+      return Ok(existing.descriptor_index);
+    }
+
+    let descriptor_index = if let Some(idx) = self.free_descriptor_indices.pop() {
+      idx
+    } else if self.next_descriptor_index < self.max_fonts {
+      let idx = self.next_descriptor_index;
+      self.next_descriptor_index += 1;
+      idx
+    } else {
+      return Err(GpuError::InvalidState(
+        "Exceeded descriptor array layout maximum capacity",
+      ));
+    };
+
+    let texture = crate::simulation::comet::Texture {
+      data: atlas.image_data.clone().into(),
+      format: crate::simulation::comet::TexelFormat::R8_UNORM,
+      width: atlas.width,
+      height: atlas.height,
+      has_mipmaps: false,
+    };
+
+    let image = Image::new_2d(
+      device,
+      allocator,
+      command_buffer,
+      staging_arena,
+      &texture,
+      vk::ImageUsageFlags::SAMPLED,
+      "FontAtlas Dynamic Text2",
+    )?;
+
+    if let (Some(sampler), Some(set)) = (self.font_sampler, self.descriptor_set) {
+      let image_info = [vk::DescriptorImageInfo::default()
+        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .image_view(image.image_view.get())
+        .sampler(sampler)];
+
+      let write = vk::WriteDescriptorSet::default()
+        .dst_set(set)
+        .dst_binding(0)
+        .dst_array_element(descriptor_index)
+        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .image_info(&image_info);
+
+      unsafe { device.update_descriptor_sets(&[write], &[]) };
+    }
+
+    self.uploaded_fonts.insert(
+      font_hash,
+      UploadedFont {
+        texture: image,
+        atlas,
+        descriptor_index,
+      },
+    );
+
+    Ok(descriptor_index)
+  }
+
+  pub fn remove_font_atlas(
+    &mut self,
+    font_hash: u64,
+    discard_pool: &DiscardPool,
+    timeline: u64,
+  ) -> GpuResult<()> {
+    if let Some(mut uploaded) = self.uploaded_fonts.remove(&font_hash) {
+      self.free_descriptor_indices.push(uploaded.descriptor_index);
+
+      if let Some(allocator_raw) = self.allocator_raw {
+        discard_pool.discard_image_view(uploaded.texture.image_view.get(), timeline);
+        discard_pool.discard_image(
+          allocator_raw,
+          uploaded.texture.image.get(),
+          uploaded.texture.allocation,
+          timeline,
+        );
+        return Ok(());
+      }
+    }
+    Err(GpuError::InvalidArgument(
+      "[Vulkan RenderDevice] resource:remove_font_atlas: atlas not found",
+    ))
+  }
+}
+
 /// TODO: Document this item
 pub(super) struct BvhRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
@@ -1898,6 +2117,88 @@ impl BvhRenderResourceArchetype {
   impl_pipeline_map_methods!();
 }
 
+pub(super) struct Bvhwire2RenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+
+  pub data_buffer: NonZeroHandle<vk::Buffer>,
+  pub data_alloc: vk_mem::Allocation,
+  pub data_ptr: u64, // Extracted GPU pointer for Push Constants
+
+  allocator_raw: vk_mem::ffi::VmaAllocator,
+  pipeline_map: PipelineMap,
+}
+
+unsafe impl Sync for Bvhwire2RenderResourceArchetype {}
+unsafe impl Send for Bvhwire2RenderResourceArchetype {}
+
+impl DiscardableResource for Bvhwire2RenderResourceArchetype {
+  fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
+    discard_pool.discard_buffer(
+      self.allocator_raw,
+      self.data_buffer.get(),
+      self.data_alloc,
+      timeline,
+    );
+  }
+}
+
+impl Bvhwire2RenderResourceArchetype {
+  pub unsafe fn new(
+    device: &vulkan::device::LogicalDevice,
+    allocator: &vk_mem::Allocator,
+  ) -> GpuResult<Self> {
+    let push_constant_ranges = [vk::PushConstantRange::default()
+      .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+      .offset(0)
+      .size(core::mem::size_of::<crate::gpu::Bvhwire2PushConstants>() as u32)]; // 72 bytes
+
+    // Look! Zero set_layouts needed!
+    let pipeline_layout_info =
+      vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
+
+    unsafe {
+      let pipeline_layout =
+        device.create_pipeline_layout(&pipeline_layout_info, None).map_err(|e| {
+          aethervk_oshal_rlib::log!("create_pipeline_layout failed: {:?}", e);
+          e
+        })?;
+
+      // Create the Mega Buffer using DEVICE_ADDRESS flag
+      let buffer_size = (100_000 * core::mem::size_of::<crate::gpu::Bvhwire2DataGpu>()) as u64;
+      let buffer_info = vk::BufferCreateInfo::default().size(buffer_size).usage(
+        vk::BufferUsageFlags::STORAGE_BUFFER
+          | vk::BufferUsageFlags::TRANSFER_DST
+          | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+      );
+
+      let mut mem_alloc_info = vk_mem::AllocationCreateInfo::default();
+      mem_alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
+
+      let (data_buffer, data_alloc) = allocator
+        .create_buffer(&buffer_info, &mem_alloc_info)
+        .map_err(|_| GpuError::OutOfMemory)?;
+
+      device.set_debug_name(data_buffer, "MegaBuffer_BvhData");
+
+      // Extract raw 64-bit pointer
+      let addr_info = ash::vk::BufferDeviceAddressInfo::default().buffer(data_buffer);
+      let data_ptr = device.buffer_device_address.get_buffer_device_address(&addr_info);
+
+      Ok(Self {
+        pipeline_layout: NonZeroHandle::new_unchecked(pipeline_layout),
+        data_buffer: NonZeroHandle::new_unchecked(data_buffer),
+        data_alloc,
+        data_ptr,
+        allocator_raw: allocator.get_raw(),
+        pipeline_map: PipelineMap::new(),
+      })
+    }
+  }
+
+  impl_pipeline_map_methods!();
+}
+
 #[derive(Clone)]
 /// TODO: Document this item
 pub(super) struct MeasurementRenderResourceArchetype {
@@ -1930,17 +2231,19 @@ impl MeasurementRenderResourceArchetype {
       ..Default::default()
     };
 
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
-      .with_name(
+    unsafe {
+      let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
+        .with_name(
         device,
         "VkPipelineLayout_MeasurementRenderResourceArchetype",
       )?;
 
-    Ok(Self {
-      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
-      push_contant_ranges,
-      pipeline_map: PipelineMap::new(),
-    })
+      Ok(Self {
+        pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+        push_contant_ranges,
+        pipeline_map: PipelineMap::new(),
+      })
+    }
   }
 
   /// TODO: Document this item
@@ -1981,14 +2284,16 @@ impl MarkerRenderResourceArchetype {
       ..Default::default()
     };
 
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
-      .with_name(device, "VkPipelineLayout_MarkerRenderResourceArchetype")?;
+    unsafe {
+      let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
+        .with_name(device, "VkPipelineLayout_MarkerRenderResourceArchetype")?;
 
-    Ok(Self {
-      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
-      push_contant_ranges,
-      pipeline_map: PipelineMap::new(),
-    })
+      Ok(Self {
+        pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+        push_contant_ranges,
+        pipeline_map: PipelineMap::new(),
+      })
+    }
   }
 
   /// TODO: Document this item
@@ -2139,6 +2444,168 @@ pub(super) fn hash_trajectory(
     hash = hash.wrapping_mul(prime);
   }
   hash
+}
+
+/// Archetype has a list of textures, then each instance, when push constants, chooses one
+/// with the textureId.
+/// `NonZeroHandle` constraint satisfied until you call `discard`
+pub(super) struct UiRenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+  pub set_0_layout: NonZeroHandle<vk::DescriptorSetLayout>,
+  pub push_constant_ranges: Vec<vk::PushConstantRange>,
+  pub descriptor_pool: NonZeroHandle<vk::DescriptorPool>,
+  pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
+
+  pub elements_buffer: NonZeroHandle<vk::Buffer>,
+  pub elements_alloc: vk_mem::Allocation,
+  pub elements_ptr: u64,
+
+  pub tick: u64,
+
+  allocator_raw: vk_mem::ffi::VmaAllocator,
+
+  pipeline_map: PipelineMap,
+}
+
+unsafe impl Sync for UiRenderResourceArchetype {}
+unsafe impl Send for UiRenderResourceArchetype {}
+
+impl DiscardableResource for UiRenderResourceArchetype {
+  fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
+    discard_pool.discard_descriptor_set_layout(self.set_0_layout.get(), timeline);
+
+    // Instead of raw vmaDestroyBuffer, let discard_pool handle the buffer correctly based on timeline
+    discard_pool.discard_buffer(
+      self.allocator_raw,
+      self.elements_buffer.get(),
+      self.elements_alloc.clone(),
+      timeline,
+    );
+
+    // Let the pool be destroyed by discard pool too, to respect timeline
+    discard_pool.discard_type_erased(
+      FunctionalDeviceResource::new(self.descriptor_pool.get(), |pool, device| unsafe {
+        device.destroy_descriptor_pool(pool, None);
+      }),
+      timeline,
+    );
+  }
+}
+
+impl UiRenderResourceArchetype {
+  impl_pipeline_map_methods!();
+
+  pub unsafe fn new(
+    device: &vulkan::device::LogicalDevice,
+    allocator: &vk_mem::Allocator,
+  ) -> GpuResult<Self> {
+    const MAX_IMAGE_COUNT: u32 = 256;
+    let push_constant_ranges = alloc::vec![vk::PushConstantRange {
+      stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+      offset: 0,
+      size: core::mem::size_of::<crate::gpu::UiPushConstants>() as u32,
+    }];
+
+    // Create the bindless layout for set = 0
+    let bindings = [vk::DescriptorSetLayoutBinding {
+      binding: 0,
+      descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+      descriptor_count: MAX_IMAGE_COUNT,
+      stage_flags: vk::ShaderStageFlags::FRAGMENT,
+      p_immutable_samplers: ptr::null(),
+      ..Default::default()
+    }];
+
+    let binding_flags =
+      [vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND];
+
+    let binding_flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
+      binding_count: binding_flags.len() as u32,
+      p_binding_flags: binding_flags.as_ptr(),
+      ..Default::default()
+    };
+
+    let bindless_layout_info = vk::DescriptorSetLayoutCreateInfo {
+      flags: vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL,
+      binding_count: bindings.len() as u32,
+      p_bindings: bindings.as_ptr(),
+      p_next: ptr::from_ref(&binding_flags_info) as *const _,
+      ..Default::default()
+    };
+
+    let set_0_layout = unsafe { device.create_descriptor_set_layout(&bindless_layout_info, None) }
+      .with_name(device, "VkDescriptorSetLayout_UiBindlessTextures")?;
+
+    let set_layouts = [set_0_layout];
+
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo {
+      p_set_layouts: set_layouts.as_ptr(),
+      set_layout_count: set_layouts.len() as u32,
+      p_push_constant_ranges: push_constant_ranges.as_ptr(),
+      push_constant_range_count: push_constant_ranges.len() as u32,
+      ..Default::default()
+    };
+
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
+      .with_name(device, "VkPipelineLayout_UiRenderResourceArchetype")?;
+
+    let pool_sizes = [vk::DescriptorPoolSize::default()
+      .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+      .descriptor_count(MAX_IMAGE_COUNT)];
+    let create_info = vk::DescriptorPoolCreateInfo::default()
+      .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
+      .max_sets(1)
+      .pool_sizes(&pool_sizes);
+
+    let descriptor_pool = unsafe { device.create_descriptor_pool(&create_info, None) }
+      .with_name(device, "VkDescriptorPool_UiArchetype")?;
+
+    let alloc_info = vk::DescriptorSetAllocateInfo::default()
+      .descriptor_pool(descriptor_pool)
+      .set_layouts(&set_layouts);
+
+    let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?[0];
+
+    // Create the mega-buffer for UI elements
+    let elements_size = (250_000 * core::mem::size_of::<crate::gpu::UiElementGpu>()) as u64;
+
+    let elements_buffer_info = vk::BufferCreateInfo {
+      size: elements_size,
+      usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+      sharing_mode: vk::SharingMode::EXCLUSIVE,
+      ..Default::default()
+    };
+
+    let mut elements_alloc_info = vk_mem::AllocationCreateInfo::default();
+    elements_alloc_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
+    elements_alloc_info.flags = vk_mem::AllocationCreateFlags::MAPPED
+      | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE;
+
+    let (elements_buffer, elements_alloc) =
+      unsafe { allocator.create_buffer(&elements_buffer_info, &elements_alloc_info) }?;
+
+    let elements_ptr = unsafe {
+      device.buffer_device_address.get_buffer_device_address(&vk::BufferDeviceAddressInfo {
+        buffer: elements_buffer,
+        ..Default::default()
+      })
+    };
+
+    Ok(Self {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      set_0_layout: unsafe { NonZeroHandle::new_unchecked(set_0_layout) },
+      push_constant_ranges,
+      descriptor_pool: unsafe { NonZeroHandle::new_unchecked(descriptor_pool) },
+      descriptor_set: unsafe { NonZeroHandle::new_unchecked(descriptor_set) },
+      elements_buffer: unsafe { NonZeroHandle::new_unchecked(elements_buffer) },
+      elements_alloc,
+      elements_ptr,
+      tick: 0,
+      allocator_raw: allocator.get_raw(),
+      pipeline_map: PipelineMap::new(),
+    })
+  }
 }
 
 /// Archetype has a list of textures, then each instance, when push constants, chooses one
@@ -2334,6 +2801,12 @@ impl TrajectoryRenderResourceArchetype {
   }
 }
 
+pub struct UploadedTexture {
+  pub texture: Image,
+  pub descriptor_index: u32,
+  pub last_used_frame: u64,
+}
+
 /// TODO: Document this item
 pub(super) struct BillboardRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
@@ -2344,6 +2817,12 @@ pub(super) struct BillboardRenderResourceArchetype {
   /// pool should be persistent
   pub descriptor_pool: NonZeroHandle<vk::DescriptorPool>,
   pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
+
+  pub uploaded_textures: hashbrown::HashMap<u64, UploadedTexture>,
+  pub free_descriptor_indices: Vec<u32>,
+  pub next_descriptor_index: u32,
+  pub max_textures: u32,
+  pub allocator_raw: Option<vk_mem::ffi::VmaAllocator>,
 
   pipeline_map: PipelineMap,
 }
@@ -2357,7 +2836,7 @@ impl BillboardRenderResourceArchetype {
   /// Don't bother cleaning up cause it fails. TODO: Cleanup
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
-    _allocator_raw: vk_mem::ffi::VmaAllocator,
+    allocator_raw: vk_mem::ffi::VmaAllocator,
   ) -> GpuResult<Self> {
     const MAX_IMAGE_COUNT: u32 = 256;
     let push_contant_ranges = alloc::vec![vk::PushConstantRange {
@@ -2436,6 +2915,7 @@ impl BillboardRenderResourceArchetype {
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
       .descriptor_pool(descriptor_pool)
       .set_layouts(&layouts);
+
     let descriptor_set =
       unsafe { device.allocate_descriptor_sets(&alloc_info) }?.get(0).copied().unwrap();
     device.set_debug_name(
@@ -2451,6 +2931,11 @@ impl BillboardRenderResourceArchetype {
       set_1_layout: unsafe { NonZeroHandle::new_unchecked(set_1_layout) },
       descriptor_pool: unsafe { NonZeroHandle::new_unchecked(descriptor_pool) },
       descriptor_set: unsafe { NonZeroHandle::new_unchecked(descriptor_set) },
+      uploaded_textures: hashbrown::HashMap::new(),
+      free_descriptor_indices: Vec::new(),
+      next_descriptor_index: 0,
+      max_textures: MAX_IMAGE_COUNT,
+      allocator_raw: Some(allocator_raw),
     })
   }
 
@@ -3176,6 +3661,31 @@ impl SkyRenderResourceArchetype {
 }
 
 /// TODO: Document this item
+pub(super) struct BackgroundRenderResourceArchetype {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+
+  pipeline_map: PipelineMap,
+}
+
+impl BackgroundRenderResourceArchetype {
+  /// TODO: Document this item
+  pub fn new(pipeline_layout: vk::PipelineLayout) -> Self {
+    Self {
+      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
+      pipeline_map: hashbrown::HashMap::new(),
+    }
+  }
+
+  impl_pipeline_map_methods!();
+
+  /// TODO: Document this item
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_pipeline_layout(layout, timeline);
+  }
+}
+
+/// TODO: Document this item
 pub(super) struct GridRenderResourceArchetype {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
 
@@ -3566,11 +4076,7 @@ impl ForwardMeshRenderResourceArchetype {
       };
 
       let dummy_texture = Texture {
-        data: {
-          let mut the_vec = Vec::with_capacity(1);
-          the_vec.push(0);
-          the_vec
-        },
+        data: bytes::Bytes::from_static(&[0]),
         format: crate::simulation::comet::TexelFormat::R8_UNORM,
         width: 1,
         height: 1,
@@ -3859,10 +4365,7 @@ impl ForwardMesh2RenderResourceArchetype {
       };
 
     let mut tex = Texture::default();
-    tex.data.push(0);
-    tex.data.push(0);
-    tex.data.push(0);
-    tex.data.push(1);
+    tex.data = bytes::Bytes::from_static(&[0, 0, 0, 1]);
     tex.width = 1;
     tex.height = 1;
     tex.format = crate::simulation::comet::TexelFormat::R8G8B8A8_UNORM;
