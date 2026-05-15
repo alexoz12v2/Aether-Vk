@@ -67,21 +67,23 @@ impl SimulationContext {
       self.task_manager.read().get_status(task_id)
     } else {
       // Render task
-      let value = {
-        let output = SharedDataWrapper::<RenderTaskStatus>::new();
-        // TODO if full retry for 10 millis
-        self
-          .threads
-          .render_thread
-          .tx()
-          .try_send(RenderCommand::GetTaskStatus {
-            task_id,
-            output: output.clone(),
+      let completed = self
+        .render_proxy
+        .0
+        .as_frontend()
+        .and_then(|f| {
+          f.with_device(self.render_proxy.1, |device| {
+            Ok(device.is_task_completed(task_id).unwrap_or(true))
           })
-          .unwrap();
-        unsafe { output.read_value() }
-      };
-      TaskStatusCode::from_render(&value)
+          .ok()
+        })
+        .unwrap_or(true);
+
+      if completed {
+        TaskStatusCode::Completed
+      } else {
+        TaskStatusCode::Pending
+      }
     }
   }
 

@@ -1,15 +1,21 @@
 //! cpu_kernels module.
 
 use crate::gpu::{
-  CollisionPair, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, DynamicBody, Kernels,
-  KinematicBody, WaitHandle,
+  CollisionPair, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, ForceEmitter, Kernels,
+  KinematicBody, ParticleGpu, RigidBodyGpu, WaitHandle,
 };
 use crate::physics::physics_scene::PhysicsScene;
-use crate::scene::Scene;
+use crate::scene::{KinematicComponent, Scene, TransformComponent};
+use crate::simulation_api::structs::SendPtr;
 use crate::types::{EngineError, EngineResult};
-use aethervk_oshal_rlib::math::floating::FloatOps;
+use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
+use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
+use aethervk_oshal_rlib::math::matrix::{Matrix, Matrix4, MatrixVectorMul};
+use aethervk_oshal_rlib::math::quaternion::Quaternion;
 use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
+use aethervk_oshal_rlib::math::vector::vec4::Quat;
+use aethervk_oshal_rlib::math::vector::vec4::Vec4f32;
+use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
 use aethervk_oshal_rlib::os::time::timeus_t;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -103,7 +109,9 @@ impl<T: Copy + Send + Sync> DeviceList<T> for CpuList<T> {
 /// TODO: Document this item
 pub struct CpuMotionBvh {
   pub kinematics_copy: Vec<KinematicBody>,
-  pub dynamics_copy: Vec<DynamicBody>,
+  pub rigid_bodies_copy: Vec<RigidBodyGpu>,
+  pub particles_copy: Vec<ParticleGpu>,
+  pub bvh_tree: crate::physics::motion_bvh::MotionBvhTree,
 }
 
 impl DeviceBvh for CpuMotionBvh {
@@ -130,6 +138,20 @@ impl Kernels for CpuScalarKernels {
     scene0: &Scene,
   ) -> EngineResult<Self::Buffer<KinematicBody>> {
     let mut bodies = Vec::new();
+
+    let get_shape_info = |entity| {
+      scene0
+        .with_component(entity, |c: &crate::scene::ColliderComponent| {
+          match c.shape {
+            crate::scene::ColliderShape::Sphere { radius } => (0, [radius, 0.0, 0.0]),
+            crate::scene::ColliderShape::OBB { half_extents } => {
+              (1, [half_extents.x(), half_extents.y(), half_extents.z()])
+            }
+          }
+        })
+        .unwrap_or((0, [1.0, 0.0, 0.0]))
+    };
+
     scene0.query2::<crate::scene::TransformComponent, crate::scene::AlmanacPlanet, _>(
       |entity, transform, planet| {
         let t = scene0.global_transform(entity).unwrap_or(transform.clone());
@@ -144,6 +166,7 @@ impl Kernels for CpuScalarKernels {
             (f.frame_type as u32, f.scale)
           })
           .unwrap_or((crate::scene::ReferenceFrameType::Macro as u32, 1.0));
+        let (shape_type, shape_data) = get_shape_info(entity);
         bodies.push(KinematicBody {
           entity_id: entity,
           transform: t.clone(),
@@ -153,11 +176,14 @@ impl Kernels for CpuScalarKernels {
           own_frame_id: own_id,
           frame_type,
           scale: scale * t.scale.x(),
+          shape_type,
+          shape_data,
         });
       },
     );
     scene0.query2::<crate::scene::TransformComponent, crate::scene::SunComponent, _>(
       |entity, transform, _sun| {
+        let t = scene0.global_transform(entity).unwrap_or(transform.clone());
         let vel = scene0
           .with_component(entity, |k: &crate::scene::KinematicComponent| k.velocity)
           .unwrap_or(aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero());
@@ -169,78 +195,521 @@ impl Kernels for CpuScalarKernels {
             (f.frame_type as u32, f.scale)
           })
           .unwrap_or((crate::scene::ReferenceFrameType::Macro as u32, 1.0));
+        let (shape_type, shape_data) = get_shape_info(entity);
         bodies.push(KinematicBody {
           entity_id: entity,
-          transform: transform.clone(),
+          transform: t.clone(),
           velocity: vel,
           parent_frame_id: parent_id,
           mu: 1.3271244e11, // Example Sun mu
           own_frame_id: own_id,
           frame_type,
-          scale: scale * transform.scale.x(),
+          scale: scale * t.scale.x(),
+          shape_type,
+          shape_data,
+        });
+      },
+    );
+
+    scene0.query2_without::<crate::scene::TransformComponent, crate::scene::KinematicComponent, crate::scene::AlmanacPlanet, _>(
+      |entity, transform, kin| {
+        if scene0.has_component::<crate::scene::SunComponent>(entity).into() {
+          return; // Already processed
+        }
+        let t = scene0.global_transform(entity).unwrap_or(transform.clone());
+        let parent_id =
+          scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
+        let own_id = slotmap::Key::data(&entity).as_ffi() as u32;
+        let (frame_type, scale) = scene0
+          .with_component(entity, |f: &crate::scene::ReferenceFrameComponent| {
+            (f.frame_type as u32, f.scale)
+          })
+          .unwrap_or((crate::scene::ReferenceFrameType::Macro as u32, 1.0));
+        let (shape_type, shape_data) = get_shape_info(entity);
+        bodies.push(KinematicBody {
+          entity_id: entity,
+          transform: t.clone(),
+          velocity: kin.velocity,
+          parent_frame_id: parent_id,
+          mu: 0.0,
+          own_frame_id: own_id,
+          frame_type,
+          scale: scale * t.scale.x() * 10.0, // Scale up quad bounds slightly
+          shape_type,
+          shape_data,
         });
       },
     );
     Ok(CpuBuffer { data: bodies })
   }
 
-  fn build_dynamic_bodies(
+  fn build_rigid_bodies(
     &self,
     _cmd: &mut Self::Cmd,
     _scene: &PhysicsScene,
     scene0: &Scene,
-  ) -> EngineResult<Self::Buffer<DynamicBody>> {
+  ) -> EngineResult<Self::Buffer<RigidBodyGpu>> {
+    let mut bodies = Vec::new();
+
+    // Query generic Dynamic Bodies (entities with ColliderComponent but NO ParticleSystemComponent)
+    scene0.query2_without::<crate::scene::TransformComponent, crate::scene::ColliderComponent, crate::scene::particles::ParticleSystemComponent, _>(
+      |entity, transform, collider| {
+        let parent_id = scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
+        let velocity = scene0.with_component(entity, |k: &crate::scene::KinematicComponent| k.velocity)
+          .unwrap_or(Vec3f32::zero());
+        let angular_velocity = scene0.with_component(entity, |k: &crate::scene::KinematicComponent| k.angular_velocity)
+          .unwrap_or(Vec3f32::zero());
+
+        let mass = collider.mass;
+
+        let (shape_type, shape_data, inertia_tensor) = match collider.shape {
+          crate::scene::ColliderShape::Sphere { radius } => {
+            let i = 0.4 * mass * radius * radius;
+            (0, [radius, 0.0, 0.0], [[i, 0.0, 0.0], [0.0, i, 0.0], [0.0, 0.0, i]])
+          }
+          crate::scene::ColliderShape::OBB { half_extents } => {
+            let dx = half_extents.x() * 2.0;
+            let dy = half_extents.y() * 2.0;
+            let dz = half_extents.z() * 2.0;
+            let ix = (1.0 / 12.0) * mass * (dy * dy + dz * dz);
+            let iy = (1.0 / 12.0) * mass * (dx * dx + dz * dz);
+            let iz = (1.0 / 12.0) * mass * (dx * dx + dy * dy);
+            (1, [half_extents.x(), half_extents.y(), half_extents.z()], [[ix, 0.0, 0.0], [0.0, iy, 0.0], [0.0, 0.0, iz]])
+          }
+        };
+
+        let rot_mat = Mat4x4f32::from_quat_custom_frame(transform.rotation);
+        let rot_arr = [
+          [rot_mat.component(0).unwrap(), rot_mat.component(1).unwrap(), rot_mat.component(2).unwrap()],
+          [rot_mat.component(4).unwrap(), rot_mat.component(5).unwrap(), rot_mat.component(6).unwrap()],
+          [rot_mat.component(8).unwrap(), rot_mat.component(9).unwrap(), rot_mat.component(10).unwrap()],
+        ];
+
+        bodies.push(RigidBodyGpu {
+          position: [transform.position.x(), transform.position.y(), transform.position.z()],
+          mass,
+          rotation: rot_arr,
+          linear_velocity: [velocity.x(), velocity.y(), velocity.z()],
+          _pad0: 0.0,
+          angular_velocity: [angular_velocity.x(), angular_velocity.y(), angular_velocity.z()],
+          _pad1: 0.0,
+          inertia_tensor,
+          force: [0.0, 0.0, 0.0],
+          torque: [0.0, 0.0, 0.0],
+          entity_id: entity,
+          parent_frame_id: parent_id,
+          shape_type,
+          shape_data,
+        });
+      }
+    );
+
+    Ok(CpuBuffer { data: bodies })
+  }
+
+  fn build_particles(
+    &self,
+    _cmd: &mut Self::Cmd,
+    scene0: &Scene,
+  ) -> EngineResult<Self::Buffer<ParticleGpu>> {
     let mut bodies = Vec::new();
     scene0.query2::<crate::scene::TransformComponent, crate::scene::particles::ParticleSystemComponent, _>(
-      |entity, transform, sys| {
+      |entity, _transform, sys| {
         let parent_id = scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
         let particles = sys.particles.read();
-        for p in particles.iter().filter(|p| p.active != 0) {
-          let mut t = transform.clone();
-          t.position = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p.position);
-          bodies.push(DynamicBody {
-            entity_id: entity,
-            transform: t,
-            velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p.velocity),
+        for (i, p) in particles.iter().enumerate().filter(|(_, p)| p.active != 0) {
+          bodies.push(ParticleGpu {
+            position: p.position,
+            velocity: p.velocity,
             mass: p.mass,
+            force: [0.0, 0.0, 0.0],
+            entity_id: entity,
             parent_frame_id: parent_id,
-            force: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0]),
+            original_index: i as u32,
           });
         }
       }
     );
-    aethervk_oshal_rlib::log!("build_dynamic_bodies: created {} bodies", bodies.len());
     Ok(CpuBuffer { data: bodies })
+  }
+
+  fn build_emitters(
+    &self,
+    _cmd: &mut Self::Cmd,
+    scene: &Scene,
+  ) -> EngineResult<Self::Buffer<ForceEmitter>> {
+    let mut emitters = Vec::new();
+    scene.query2::<crate::scene::TransformComponent, crate::scene::ForceEmitterComponent, _>(
+      |_, t, emitter| match emitter {
+        crate::scene::ForceEmitterComponent::Gravity { mu } => {
+          emitters.push(ForceEmitter {
+            position: [t.position.x(), t.position.y(), t.position.z()],
+            mu: *mu,
+            normal: [0.0, 0.0, 0.0],
+            type_id: 0,
+            trunc_distance: 0.0,
+            scale_factor: 1.0,
+            _pad: [0, 0],
+          });
+        }
+        crate::scene::ForceEmitterComponent::Planar {
+          normal,
+          base_force,
+          trunc_distance,
+        } => {
+          emitters.push(ForceEmitter {
+            position: [t.position.x(), t.position.y(), t.position.z()],
+            mu: *base_force,
+            normal: [normal.x(), normal.y(), normal.z()],
+            type_id: 1,
+            trunc_distance: *trunc_distance,
+            scale_factor: 1.0,
+            _pad: [0, 0],
+          });
+        }
+      },
+    );
+    Ok(CpuBuffer { data: emitters })
+  }
+
+  fn emit_particles(
+    &self,
+    _cmd: &mut Self::Cmd,
+    particles: &mut Self::Buffer<ParticleGpu>,
+    physical_scene: &PhysicsScene,
+    scene: &Scene,
+    sun_pos: Vec3f32,
+    dt: timeus_t,
+  ) -> EngineResult<()> {
+    let dt_us_scaled = dt as i64;
+    let emitter_entities =
+      scene.query1_res(|id, _: &crate::scene::particles::ParticleEmitterComponent| Some(id));
+
+    for (id, _) in emitter_entities {
+      let t = scene.global_transform(id).unwrap_or_default();
+      let config = scene.with_component(
+        id,
+        |c: &crate::scene::particles::ParticleEmitterComponent| c.clone(),
+      );
+      let mesh = scene.with_component(id, |c: &crate::scene::PhysicalMeshComponent| c.mesh.clone());
+
+      if let (Some(config), Some(mesh)) = (config, mesh) {
+        let _ = scene.with_component_mut(
+          id,
+          |ps: &mut crate::scene::particles::ParticleSystemComponent| {
+            let mut sys_particles = ps.particles.write();
+
+            for p in sys_particles.iter_mut() {
+              if p.active != 0 {
+                let new_age = p.get_age() as i64 + dt_us_scaled;
+                p.set_age(new_age as timeus_t);
+                if new_age > config.lifetime as i64 {
+                  p.active = 0;
+                }
+              }
+            }
+            sys_particles.retain(|p| p.active != 0);
+
+            ps.accumulator += dt_us_scaled;
+            if ps.accumulator >= config.delta {
+              let events = (ps.accumulator / config.delta).min(100);
+              ps.accumulator %= config.delta;
+
+              let mut rng = rand::thread_rng();
+              let mut u_emission = [0.0; 2];
+              u_emission[0] = rand::Rng::r#gen(&mut rng);
+              u_emission[1] = rand::Rng::r#gen(&mut rng);
+
+              let burst_size = config.emission_count.mean as usize * events as usize + 1000;
+              let mut u_particles = alloc::vec::Vec::with_capacity(burst_size);
+              for _ in 0..burst_size {
+                u_particles.push([
+                  rand::Rng::r#gen(&mut rng),
+                  rand::Rng::r#gen(&mut rng),
+                  rand::Rng::r#gen(&mut rng),
+                  rand::Rng::r#gen(&mut rng),
+                ]);
+              }
+
+              let uv_grid =
+                crate::simulation::comet::uv_grid::UvGrid::new(&mesh.vertices, &mesh.indices, 2);
+
+              let mut temp_ps = crate::scene::particles::ParticleSystemComponent::new(10000);
+              for _ in 0..events {
+                temp_ps.emit_particles(
+                  &config,
+                  &mesh,
+                  &uv_grid,
+                  t.position,
+                  t.rotation,
+                  t.scale,
+                  &u_emission,
+                  (&u_particles).as_ref(),
+                );
+              }
+
+              use crate::physics::physics_scene::math::PhysicsSceneMathExt;
+              let parent_id =
+                scene.get_parent(id).map(|k| slotmap::Key::data(&k).as_ffi() as u32).unwrap_or(0);
+              for p in temp_ps.particles.read().iter() {
+                if p.active != 0 {
+                  let p_pos = Vec3f32::from_array(p.position);
+                  let mut dir = sun_pos - p_pos;
+                  let dist_to_sun = dir.length();
+                  if dist_to_sun > 1e-5 {
+                    dir = dir / dist_to_sun;
+                    let ray = crate::math::collision::intersection::Ray {
+                      origin: p_pos + dir * 0.1,
+                      direction: dir,
+                      length: dist_to_sun,
+                    };
+
+                    let hits = physical_scene.intersect_world_bvh_math(&ray);
+                    if hits.is_empty() {
+                      sys_particles.push(p.clone());
+                      let new_idx = (sys_particles.len() - 1) as u32;
+                      particles.data.push(ParticleGpu {
+                        position: p.position,
+                        velocity: p.velocity,
+                        mass: p.mass,
+                        force: [0.0, 0.0, 0.0],
+                        entity_id: id,
+                        parent_frame_id: parent_id,
+                        original_index: new_idx,
+                      });
+                    }
+                  }
+                }
+              }
+            }
+          },
+        );
+      }
+    }
+    Ok(())
   }
 
   fn step_ode_p1_p2(
     &self,
     _cmd: &mut Self::Cmd,
-    dynamics: &mut Self::Buffer<DynamicBody>,
+    particles: &mut Self::Buffer<ParticleGpu>,
     dt: timeus_t,
   ) -> EngineResult<()> {
+    // --- PHASE 1 & 2: Particle Explicit Velocity Half-Kick and Drift ---
+
     let dt_sec = dt as f32 / 1_000_000.0;
     let half_dt = dt_sec * 0.5;
 
-    for dyn_body in dynamics.data.iter_mut() {
-      if dyn_body.mass > 0.0 {
-        let inv_mass = 1.0 / dyn_body.mass;
-        dyn_body.velocity = dyn_body.velocity + dyn_body.force * (inv_mass * half_dt);
-        dyn_body.transform.position = dyn_body.transform.position + dyn_body.velocity * half_dt;
+    for p in particles.data.iter_mut() {
+      if p.mass > 0.0 {
+        let inv_mass = 1.0 / p.mass;
+        let v_half_x = p.velocity[0] + p.force[0] * inv_mass * half_dt;
+        let v_half_y = p.velocity[1] + p.force[1] * inv_mass * half_dt;
+        let v_half_z = p.velocity[2] + p.force[2] * inv_mass * half_dt;
+
+        p.position[0] += v_half_x * half_dt;
+        p.position[1] += v_half_y * half_dt;
+        p.position[2] += v_half_z * half_dt;
+
+        p.velocity[0] = v_half_x;
+        p.velocity[1] = v_half_y;
+        p.velocity[2] = v_half_z;
       }
     }
+
     Ok(())
   }
 
   fn step_ode_p3_p4(
     &self,
     _cmd: &mut Self::Cmd,
-    _kinematics: &mut Self::Buffer<KinematicBody>,
-    _dynamics: &mut Self::Buffer<DynamicBody>,
-    _dt: timeus_t,
+    rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
+    emitters: &Self::Buffer<ForceEmitter>,
+    dt: timeus_t,
   ) -> EngineResult<()> {
-    // IMR solve for kinematic/rigid bodies goes here.
-    // Currently treating kinematic bodies as driven by SPICE, so this is a no-op for now.
+    // --- PHASE 3 & 4: Rigid Body Implicit Midpoint Rule (IMR) solve ---
+
+    let dt_sec = dt as f32 / 1_000_000.0;
+    for rb in rigid_bodies.data.iter_mut() {
+      if rb.mass <= 0.0 {
+        continue;
+      }
+
+      let temp_rb = crate::math::physics::RigidBody {
+        position: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rb.position),
+        rotation: aethervk_oshal_rlib::math::matrix::mat3::Mat3f32 {
+          x: Vec3f32::from_components(rb.rotation[0][0], rb.rotation[0][1], rb.rotation[0][2]),
+          y: Vec3f32::from_components(rb.rotation[1][0], rb.rotation[1][1], rb.rotation[1][2]),
+          z: Vec3f32::from_components(rb.rotation[2][0], rb.rotation[2][1], rb.rotation[2][2]),
+        },
+        linear_velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(
+          rb.linear_velocity,
+        ),
+        angular_velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(
+          rb.angular_velocity,
+        ),
+        mass: rb.mass,
+        inertia_tensor: aethervk_oshal_rlib::math::matrix::mat3::Mat3f32 {
+          x: Vec3f32::from_components(
+            rb.inertia_tensor[0][0],
+            rb.inertia_tensor[0][1],
+            rb.inertia_tensor[0][2],
+          ),
+          y: Vec3f32::from_components(
+            rb.inertia_tensor[1][0],
+            rb.inertia_tensor[1][1],
+            rb.inertia_tensor[1][2],
+          ),
+          z: Vec3f32::from_components(
+            rb.inertia_tensor[2][0],
+            rb.inertia_tensor[2][1],
+            rb.inertia_tensor[2][2],
+          ),
+        },
+      };
+
+      let force_eval = |x_mid: Vec3f32,
+                        _r_mid: aethervk_oshal_rlib::math::matrix::mat3::Mat3f32|
+       -> crate::math::physics::RigidBodyForceEval {
+        let mut f_world = Vec3f32::zero();
+        let mut k_translation = aethervk_oshal_rlib::math::matrix::mat3::Mat3f32 {
+          x: Vec3f32::zero(),
+          y: Vec3f32::zero(),
+          z: Vec3f32::zero(),
+        };
+
+        for em in emitters.data.iter() {
+          if em.type_id == 0 {
+            let em_pos = Vec3f32::from_array(em.position);
+            let r = em_pos - x_mid;
+            let dist_sq = r.length_squared() * em.scale_factor * em.scale_factor;
+            if dist_sq > 1e-6 {
+              let dist = dist_sq.sqrt();
+              let dist3 = dist_sq * dist;
+              let dist5 = dist3 * dist_sq;
+
+              let coeff = em.mu * temp_rb.mass / dist3;
+              f_world += (r / dist) * (em.mu * temp_rb.mass / dist_sq);
+
+              let term1 = aethervk_oshal_rlib::math::matrix::mat3::Mat3f32::identity() * (-coeff);
+              let rr_t = aethervk_oshal_rlib::math::matrix::mat3::Mat3f32 {
+                x: r * r.x(),
+                y: r * r.y(),
+                z: r * r.z(),
+              };
+              let term2 = rr_t * (3.0 * em.mu * temp_rb.mass / dist5);
+              k_translation = k_translation + term1 + term2;
+            }
+          } else if em.type_id == 1 {
+            let em_pos = Vec3f32::from_array(em.position);
+            let em_norm = Vec3f32::from_array(em.normal);
+            let r = x_mid - em_pos;
+            let dist = r.dot(em_norm);
+            if dist >= 0.0 && dist < em.trunc_distance {
+              let denom = 1.0 + dist * dist;
+              let force_mag = em.mu / denom;
+              f_world += em_norm * force_mag;
+
+              let dF_ddist = -2.0 * em.mu * dist / (denom * denom);
+              let nn_t = aethervk_oshal_rlib::math::matrix::mat3::Mat3f32 {
+                x: em_norm * em_norm.x(),
+                y: em_norm * em_norm.y(),
+                z: em_norm * em_norm.z(),
+              };
+              k_translation = k_translation + nn_t * dF_ddist;
+            }
+          }
+        }
+
+        crate::math::physics::RigidBodyForceEval {
+          f_world,
+          tau_body: Vec3f32::zero(),
+          k_translation,
+          p_body: Vec3f32::zero(),
+        }
+      };
+
+      let (v_mid, w_mid) =
+        crate::math::physics::rigid_body_implicit_solve(&temp_rb, dt_sec, force_eval);
+
+      rb.position = [
+        rb.position[0] + v_mid.x() * dt_sec,
+        rb.position[1] + v_mid.y() * dt_sec,
+        rb.position[2] + v_mid.z() * dt_sec,
+      ];
+      let r_next = temp_rb.rotation * crate::math::expm_hat(w_mid * dt_sec);
+      rb.rotation = [
+        [
+          r_next.component(0).unwrap(),
+          r_next.component(1).unwrap(),
+          r_next.component(2).unwrap(),
+        ],
+        [
+          r_next.component(3).unwrap(),
+          r_next.component(4).unwrap(),
+          r_next.component(5).unwrap(),
+        ],
+        [
+          r_next.component(6).unwrap(),
+          r_next.component(7).unwrap(),
+          r_next.component(8).unwrap(),
+        ],
+      ];
+      let new_v = v_mid * 2.0
+        - aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rb.linear_velocity);
+      rb.linear_velocity = [new_v.x(), new_v.y(), new_v.z()];
+      let new_w = w_mid * 2.0
+        - aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rb.angular_velocity);
+      rb.angular_velocity = [new_w.x(), new_w.y(), new_w.z()];
+    }
+
+    Ok(())
+  }
+
+  fn compute_self_gravity(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _bvh: &Self::MotionBvh,
+    particles: &mut Self::Buffer<ParticleGpu>,
+  ) -> EngineResult<()> {
+    if particles.data.is_empty() {
+      return Ok(());
+    }
+
+    let g = 6.67430e-11 as f32;
+    let n = particles.data.len();
+
+    for i in 0..n {
+      let my_mass = particles.data[i].mass;
+      if my_mass <= 0.0 {
+        continue;
+      }
+      let my_pos = Vec3f32::from_array(particles.data[i].position);
+      let mut total_force = Vec3f32::zero();
+
+      for j in 0..n {
+        if i == j {
+          continue;
+        }
+        let other_p = &particles.data[j];
+        if other_p.mass <= 0.0 {
+          continue;
+        }
+
+        let other_pos = Vec3f32::from_array(other_p.position);
+        let r = other_pos - my_pos;
+        let dist_sq = r.length_squared();
+        if dist_sq > 1e-6 {
+          let dist = dist_sq.sqrt();
+          total_force += r * (g * my_mass * other_p.mass / (dist_sq * dist));
+        }
+      }
+
+      particles.data[i].force[0] += total_force.x();
+      particles.data[i].force[1] += total_force.y();
+      particles.data[i].force[2] += total_force.z();
+    }
+
     Ok(())
   }
 
@@ -248,90 +717,98 @@ impl Kernels for CpuScalarKernels {
     &self,
     _cmd: &mut Self::Cmd,
     kinematics: &Self::Buffer<KinematicBody>,
-    dynamics: &mut Self::Buffer<DynamicBody>,
-    _bvh: &Self::MotionBvh,
+    particles: &mut Self::Buffer<ParticleGpu>,
+    emitters: &Self::Buffer<ForceEmitter>,
     dt: timeus_t,
-    scene0: &crate::scene::Scene,
   ) -> EngineResult<()> {
+    // --- PHASE 5: Final particle drift and force evaluation ---
+
     let dt_sec = dt as f32 / 1_000_000.0;
     let half_dt = dt_sec * 0.5;
 
-    let mut custom_forces = alloc::vec::Vec::new();
-    scene0.query2::<crate::scene::TransformComponent, crate::scene::ForceEmitterComponent, _>(
-      |_, t, emitter| {
-        custom_forces.push((t.position, *emitter));
-      },
-    );
+    for p in particles.data.iter_mut() {
+      if p.mass <= 0.0 {
+        continue;
+      }
+      let inv_mass = 1.0 / p.mass;
 
-    for dyn_body in dynamics.data.iter_mut() {
-      if dyn_body.mass > 0.0 {
-        dyn_body.transform.position = dyn_body.transform.position + dyn_body.velocity * half_dt;
+      // Second Drift
+      p.position[0] += p.velocity[0] * half_dt;
+      p.position[1] += p.velocity[1] * half_dt;
+      p.position[2] += p.velocity[2] * half_dt;
 
-        let mut f_grav =
-          aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0]);
-        let mut parent_scale = 1.0;
-        let mut parent_macro_pos =
-          aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0]);
-        for kin_body in kinematics.data.iter() {
-          if kin_body.own_frame_id == dyn_body.parent_frame_id {
-            parent_scale = kin_body.scale;
-            parent_macro_pos = kin_body.transform.position;
+      // Evaluate Next Force
+      let mut f_next = Vec3f32::zero();
+      let p_pos = Vec3f32::from_array(p.position);
+
+      // Emitters force
+      for em in emitters.data.iter() {
+        if em.type_id == 0 {
+          let em_pos = Vec3f32::from_array(em.position);
+          let r = em_pos - p_pos;
+          let scaled_dist_sq = r.length_squared() * em.scale_factor * em.scale_factor;
+          if scaled_dist_sq > 1e-6 {
+            let force_dir = r / r.length();
+            f_next += force_dir * (em.mu * p.mass / scaled_dist_sq);
+          }
+        } else if em.type_id == 1 {
+          let em_pos = Vec3f32::from_array(em.position);
+          let em_norm = Vec3f32::from_array(em.normal);
+          let r = p_pos - em_pos;
+          let dist = r.dot(em_norm);
+          if dist >= 0.0 && dist < em.trunc_distance {
+            let force_mag = em.mu / (1.0 + dist * dist);
+            f_next += em_norm * force_mag;
           }
         }
+      }
 
-        for kin_body in kinematics.data.iter() {
-          if dyn_body.parent_frame_id == kin_body.own_frame_id {
-            let r = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0])
-              - dyn_body.transform.position;
-            let dist_sq = aethervk_oshal_rlib::math::vector::Vector::dot(r, r);
+      // Kinematic bodies gravity
+      let mut parent_scale = 1.0;
+      let mut parent_macro_pos = Vec3f32::zero();
+      for kin in kinematics.data.iter() {
+        if kin.own_frame_id == p.parent_frame_id {
+          parent_scale = kin.scale;
+          parent_macro_pos = kin.transform.position;
+        }
+      }
+      for kin in kinematics.data.iter() {
+        if p.parent_frame_id == kin.own_frame_id {
+          let r = Vec3f32::zero() - p_pos;
+          let dist_sq = r.length_squared();
+          if dist_sq > 1e-6 {
+            let dist = dist_sq.sqrt();
+            let local_mu = if kin.frame_type == 1 {
+              kin.mu / (parent_scale * parent_scale * parent_scale)
+            } else {
+              kin.mu
+            };
+            f_next += r * (local_mu * p.mass / (dist_sq * dist));
+          }
+        } else if kin.frame_type == 0 {
+          if p.parent_frame_id != kin.own_frame_id {
+            let macro_pos_in_micro = (kin.transform.position - parent_macro_pos) / parent_scale;
+            let r = macro_pos_in_micro - p_pos;
+            let dist_sq = r.length_squared();
             if dist_sq > 1e-6 {
               let dist = dist_sq.sqrt();
-              let local_mu = if kin_body.frame_type == 1 {
-                kin_body.mu / (parent_scale * parent_scale * parent_scale)
-              } else {
-                kin_body.mu
-              };
-              f_grav = f_grav + r * (local_mu * dyn_body.mass / (dist_sq * dist));
-            }
-          } else if kin_body.frame_type == 0 {
-            if dyn_body.parent_frame_id != kin_body.own_frame_id {
-              let macro_pos_in_micro =
-                (kin_body.transform.position - parent_macro_pos) / parent_scale;
-              let r = macro_pos_in_micro - dyn_body.transform.position;
-              let dist_sq = aethervk_oshal_rlib::math::vector::Vector::dot(r, r);
-              if dist_sq > 1e-6 {
-                let dist = dist_sq.sqrt();
-                let local_mu = kin_body.mu / (parent_scale * parent_scale * parent_scale);
-                f_grav = f_grav + r * (local_mu * dyn_body.mass / (dist_sq * dist));
-              }
+              let local_mu = kin.mu / (parent_scale * parent_scale * parent_scale);
+              f_next += r * (local_mu * p.mass / (dist_sq * dist));
             }
           }
         }
-
-        for (origin, force) in &custom_forces {
-          match force {
-            crate::scene::ForceEmitterComponent::Gravity { mu } => {
-              // Handled separately or explicitly
-            }
-            crate::scene::ForceEmitterComponent::Planar {
-              normal,
-              base_force,
-              trunc_distance,
-            } => {
-              let r = dyn_body.transform.position - *origin;
-              let dist = aethervk_oshal_rlib::math::vector::Vector::dot(r, *normal);
-              if dist >= 0.0 && dist < *trunc_distance {
-                f_grav = f_grav + *normal * (*base_force / (1.0 + dist * dist));
-              }
-            }
-          }
-        }
-
-        dyn_body.force = f_grav;
-        let inv_mass = 1.0 / dyn_body.mass;
-        dyn_body.velocity = dyn_body.velocity + dyn_body.force * (inv_mass * half_dt);
       }
+
+      p.force[0] = f_next.x();
+      p.force[1] = f_next.y();
+      p.force[2] = f_next.z();
+
+      // Final Kick
+      p.velocity[0] += p.force[0] * inv_mass * half_dt;
+      p.velocity[1] += p.force[1] * inv_mass * half_dt;
+      p.velocity[2] += p.force[2] * inv_mass * half_dt;
     }
+
     Ok(())
   }
 
@@ -339,11 +816,109 @@ impl Kernels for CpuScalarKernels {
     &self,
     _cmd: &mut Self::Cmd,
     kinematics: &Self::Buffer<KinematicBody>,
-    dynamics: &Self::Buffer<DynamicBody>,
+    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
+    particles: &Self::Buffer<ParticleGpu>,
+    _dt: timeus_t,
   ) -> EngineResult<Self::MotionBvh> {
+    use crate::physics::motion_bvh::{Aabb, CpuBvhItem, MotionBvhTree};
+
+    let mut frames_map = hashbrown::HashMap::new();
+    let mut frame_types = hashbrown::HashMap::new();
+    for kin in kinematics.data.iter() {
+      let mat: Mat4x4f32 = kin.transform.to_mat4();
+      frames_map.insert(kin.own_frame_id, (kin.parent_frame_id, mat));
+      frame_types.insert(kin.own_frame_id, kin.frame_type);
+    }
+
+    let get_global_pos = |frame_id: u32, local_pos: Vec3f32| -> Vec3f32 {
+      let mut pos = local_pos;
+      let mut curr = frame_id;
+      while let Some(&(parent, ref transform)) = frames_map.get(&curr) {
+        let pt = transform.mul_vector(pos.to_point());
+        pos = Vec3f32::from_array([pt.x(), pt.y(), pt.z()]);
+        curr = parent;
+        if curr == 0 {
+          break;
+        }
+      }
+      pos
+    };
+
+    let mut items_by_parent: hashbrown::HashMap<u32, alloc::vec::Vec<(Aabb, CpuBvhItem)>> =
+      hashbrown::HashMap::new();
+
+    for (i, kin) in kinematics.data.iter().enumerate() {
+      let global_pos = get_global_pos(kin.parent_frame_id, kin.transform.position);
+      let max_travel = kin.velocity.length();
+      let r = kin.scale + max_travel;
+      let bounds = Aabb::new(
+        global_pos - Vec3f32::from_array([r, r, r]),
+        global_pos + Vec3f32::from_array([r, r, r]),
+      );
+      // data_index: top bit 1 means kinematic, lower 31 bits are index
+      items_by_parent.entry(kin.parent_frame_id).or_default().push((
+        bounds,
+        CpuBvhItem::Primitive((1 << 31) | (i as u32), kin.mu, kin.transform.position),
+      ));
+    }
+
+    for (i, dyn_body) in rigid_bodies.data.iter().enumerate() {
+      let global_pos = get_global_pos(
+        dyn_body.parent_frame_id,
+        aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(dyn_body.position),
+      );
+      let max_travel =
+        aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(dyn_body.linear_velocity)
+          .length();
+      let r = dyn_body.shape_data[0] + max_travel;
+      let bounds = Aabb::new(
+        global_pos - Vec3f32::from_array([r, r, r]),
+        global_pos + Vec3f32::from_array([r, r, r]),
+      );
+      // data_index: top bit 0 means dynamic, lower 31 bits are index
+      items_by_parent.entry(dyn_body.parent_frame_id).or_default().push((
+        bounds,
+        CpuBvhItem::Primitive(
+          i as u32,
+          dyn_body.mass,
+          aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(dyn_body.position),
+        ),
+      ));
+    }
+
+    let macro_frame_id = frames_map
+      .keys()
+      .find(|&&id| frame_types.get(&id) == Some(&(crate::scene::ReferenceFrameType::Macro as u32)))
+      .copied()
+      .unwrap_or(0);
+
+    let mut nodes = alloc::vec::Vec::new();
+    let mut macro_items = items_by_parent.remove(&macro_frame_id).unwrap_or_default();
+    if macro_frame_id != 0 {
+      if let Some(mut root_items) = items_by_parent.remove(&0) {
+        macro_items.append(&mut root_items);
+      }
+    }
+
+    for (_, mut items) in items_by_parent {
+      if let Some(root_idx) = MotionBvhTree::build_into(&mut items, &mut nodes) {
+        let root_bounds = nodes[root_idx as usize].bounds;
+        macro_items.push((root_bounds, CpuBvhItem::SubTree(root_idx)));
+      }
+    }
+
+    let tlas_root = MotionBvhTree::build_into(&mut macro_items, &mut nodes);
+
+    let bvh_tree = MotionBvhTree {
+      nodes,
+      root: tlas_root,
+    };
+
     Ok(CpuMotionBvh {
       kinematics_copy: kinematics.data.clone(),
-      dynamics_copy: dynamics.data.clone(),
+      rigid_bodies_copy: rigid_bodies.data.clone(),
+      particles_copy: particles.data.clone(),
+      bvh_tree,
     })
   }
 
@@ -360,9 +935,70 @@ impl Kernels for CpuScalarKernels {
     &self,
     _cmd: &mut Self::Cmd,
     potentials: &Self::List<CollisionPair>,
+    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
+    particles: &Self::Buffer<ParticleGpu>, // TODO this is not used, why
   ) -> EngineResult<Self::List<CollisionPair>> {
+    use aethervk_oshal_rlib::math::vector::Vector;
+    let mut actual_collisions = alloc::vec::Vec::new();
+
+    for pair in &potentials.data {
+      let idx_a = pair.a.primitive_index as usize;
+      let idx_b = pair.b.primitive_index as usize;
+
+      if idx_a >= rigid_bodies.data.len() || idx_b >= rigid_bodies.data.len() {
+        actual_collisions.push(pair.clone()); // Pass-through if invalid
+        continue;
+      }
+
+      let body_a = &rigid_bodies.data[idx_a];
+      let body_b = &rigid_bodies.data[idx_b];
+
+      // For now, simplify shape support to Spheres (shape_type 0)
+      let r_a = if body_a.shape_type == 0 {
+        body_a.shape_data[0]
+      } else {
+        1.0
+      };
+      let r_b = if body_b.shape_type == 0 {
+        body_b.shape_data[0]
+      } else {
+        1.0
+      };
+
+      let s_a = crate::math::collision::gjk::GjkSphere {
+        center: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(body_a.position),
+        radius: r_a,
+      };
+
+      let s_b = crate::math::collision::gjk::GjkSphere {
+        center: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(body_b.position),
+        radius: r_b,
+      };
+
+      let (dist, pt_a, pt_b) = crate::math::collision::gjk::gjk_distance(&s_a, &s_b);
+
+      if dist <= 0.0 {
+        let mut new_pair = pair.clone();
+        new_pair.penetration_depth = if dist < 0.0 { -dist } else { 0.0 };
+        let mut normal = pt_a - pt_b;
+        let len = normal.length();
+        if len > 1e-6 {
+          normal = normal / len;
+        } else {
+          normal = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([1.0, 0.0, 0.0]);
+        }
+        new_pair.contact_normal = [normal.x(), normal.y(), normal.z()];
+        new_pair.contact_point = [
+          (pt_a.x() + pt_b.x()) * 0.5,
+          (pt_a.y() + pt_b.y()) * 0.5,
+          (pt_a.z() + pt_b.z()) * 0.5,
+        ];
+        actual_collisions.push(new_pair);
+      }
+    }
+
     Ok(CpuList {
-      data: potentials.data.clone(),
+      data: actual_collisions,
     })
   }
 
@@ -396,7 +1032,8 @@ impl Kernels for CpuScalarKernels {
   fn apply_collision_responses(
     &self,
     _cmd: &mut Self::Cmd,
-    dynamics: &mut Self::Buffer<DynamicBody>,
+    rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
+    particles: &mut Self::Buffer<ParticleGpu>,
     collisions: &Self::List<CollisionPair>,
     force_inelastic: bool,
   ) -> EngineResult<()> {
@@ -407,10 +1044,7 @@ impl Kernels for CpuScalarKernels {
     let clusters = group_and_cluster_collisions(collisions.data.clone(), 0.01);
     let restitution = if force_inelastic { 0.0 } else { 0.5 };
 
-    let dyn_array = dynamics.data.as_mut_slice();
-    let dyn_len = dyn_array.len();
-
-    let max_iters = 20;
+    let dyn_array = rigid_bodies.data.as_mut_slice();
 
     for cluster in clusters {
       crate::physics::lcp_integration::resolve_cluster_lcp(&cluster, dyn_array, restitution);
@@ -421,59 +1055,1192 @@ impl Kernels for CpuScalarKernels {
   fn snapshot_dynamics(
     &self,
     _cmd: &mut Self::Cmd,
-    dynamics: &Self::Buffer<DynamicBody>,
-  ) -> EngineResult<Self::Buffer<DynamicBody>> {
-    Ok(CpuBuffer {
-      data: dynamics.data.clone(),
-    })
+    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
+    particles: &Self::Buffer<ParticleGpu>,
+  ) -> EngineResult<(Self::Buffer<RigidBodyGpu>, Self::Buffer<ParticleGpu>)> {
+    Ok((
+      CpuBuffer {
+        data: rigid_bodies.data.clone(),
+      },
+      CpuBuffer {
+        data: particles.data.clone(),
+      },
+    ))
   }
 
   fn restore_dynamics(
     &self,
     _cmd: &mut Self::Cmd,
-    dynamics: &mut Self::Buffer<DynamicBody>,
-    snapshot: &Self::Buffer<DynamicBody>,
+    rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
+    particles: &mut Self::Buffer<ParticleGpu>,
+    snapshot: &(Self::Buffer<RigidBodyGpu>, Self::Buffer<ParticleGpu>),
   ) -> EngineResult<()> {
-    dynamics.data = snapshot.data.clone();
+    rigid_bodies.data = snapshot.0.data.clone();
+    particles.data = snapshot.1.data.clone();
     Ok(())
   }
 
   fn write_back_to_scene(
     &self,
     _cmd: &mut Self::Cmd,
-    dynamics: &Self::Buffer<DynamicBody>,
+    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
+    particles: &Self::Buffer<ParticleGpu>,
     _physical_scene: &mut PhysicsScene,
     scene: &Scene,
   ) -> EngineResult<()> {
-    aethervk_oshal_rlib::log!("write_back_to_scene called! dynamics.len() = {}", dynamics.data.len());
     // Write the updated positions and velocities back to the particle components.
     scene.query2::<crate::scene::TransformComponent, crate::scene::particles::ParticleSystemComponent, _>(
       |entity, _transform, sys| {
-        aethervk_oshal_rlib::log!("write_back_to_scene query2 matching entity: {:?}", entity);
-        let mut particles = sys.particles.write();
-        let mut p_idx = 0;
-        // Optimization: since we map them linearly, we can just consume dynamics sequentially
-        // For robustness, we check the entity ID.
-            let mut first_logged = false;
-            for dyn_body in dynamics.data.iter() {
-              if dyn_body.entity_id == entity {
-                // Find next active particle
-                while p_idx < particles.len() && particles[p_idx].active == 0 {
-                    p_idx += 1;
-                }
-                if p_idx < particles.len() {
-                  if !first_logged {
-                      aethervk_oshal_rlib::log!("First particle updated: idx={} pos={:?} vel={:?}", p_idx, dyn_body.transform.position, dyn_body.velocity);
-                      first_logged = true;
-                  }
-                  particles[p_idx].position = [dyn_body.transform.position.x(), dyn_body.transform.position.y(), dyn_body.transform.position.z()];
-                  particles[p_idx].velocity = [dyn_body.velocity.x(), dyn_body.velocity.y(), dyn_body.velocity.z()];
-                  p_idx += 1;
+        let mut sys_particles = sys.particles.write();
+        for p_gpu in particles.data.iter() {
+          if p_gpu.entity_id == entity {
+            if (p_gpu.original_index as usize) < sys_particles.len() {
+              sys_particles[p_gpu.original_index as usize].position = p_gpu.position;
+              sys_particles[p_gpu.original_index as usize].velocity = p_gpu.velocity;
+            }
+          }
+        }
+      }
+    );
+    // Write back rigid bodies
+    for rb in rigid_bodies.data.iter() {
+      // TODO set error handling
+      let _ = scene.with_component_mut(rb.entity_id, |trans: &mut TransformComponent| {
+        trans.position = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rb.position);
+        let mat = Mat4x4f32::from_columns(
+          Vec4f32::from_components(rb.rotation[0][0], rb.rotation[0][1], rb.rotation[0][2], 0.0),
+          Vec4f32::from_components(rb.rotation[1][0], rb.rotation[1][1], rb.rotation[1][2], 0.0),
+          Vec4f32::from_components(rb.rotation[2][0], rb.rotation[2][1], rb.rotation[2][2], 0.0),
+          Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
+        );
+        trans.rotation = Quat::from_mat4(&mat);
+      });
+
+      let _ = scene.with_component_mut(rb.entity_id, |kin: &mut KinematicComponent| {
+        kin.velocity =
+          aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rb.linear_velocity);
+        kin.angular_velocity =
+          aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rb.angular_velocity);
+      });
+    }
+    Ok(())
+  }
+}
+
+/// TODO: Document this item
+pub struct CpuSimdKernels {
+  pub thread_pool: alloc::sync::Arc<aethervk_oshal_rlib::os::pool::ThreadPool>,
+}
+
+impl Kernels for CpuSimdKernels {
+  type Cmd = CpuCommandBuffer;
+  type Buffer<T: Copy + Send + Sync> = CpuBuffer<T>;
+  type List<T: Copy + Send + Sync> = CpuList<T>;
+  type MotionBvh = CpuMotionBvh;
+
+  fn create_command_buffer(&self) -> EngineResult<Self::Cmd> {
+    Ok(CpuCommandBuffer { tasks: Vec::new() })
+  }
+
+  fn build_kinematic_bodies(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _scene: &PhysicsScene,
+    scene0: &Scene,
+  ) -> EngineResult<Self::Buffer<KinematicBody>> {
+    let mut bodies = Vec::new();
+
+    let get_shape_info = |entity| {
+      scene0
+        .with_component(entity, |c: &crate::scene::ColliderComponent| {
+          match c.shape {
+            crate::scene::ColliderShape::Sphere { radius } => (0, [radius, 0.0, 0.0]),
+            crate::scene::ColliderShape::OBB { half_extents } => {
+              (1, [half_extents.x(), half_extents.y(), half_extents.z()])
+            }
+          }
+        })
+        .unwrap_or((0, [1.0, 0.0, 0.0]))
+    };
+
+    scene0.query2::<crate::scene::TransformComponent, crate::scene::AlmanacPlanet, _>(
+      |entity, transform, planet| {
+        let t = scene0.global_transform(entity).unwrap_or(transform.clone());
+        let vel = scene0
+          .with_component(entity, |k: &crate::scene::KinematicComponent| k.velocity)
+          .unwrap_or(aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero());
+        let parent_id =
+          scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
+        let own_id = slotmap::Key::data(&entity).as_ffi() as u32;
+        let (frame_type, scale) = scene0
+          .with_component(entity, |f: &crate::scene::ReferenceFrameComponent| {
+            (f.frame_type as u32, f.scale)
+          })
+          .unwrap_or((crate::scene::ReferenceFrameType::Macro as u32, 1.0));
+        let (shape_type, shape_data) = get_shape_info(entity);
+        bodies.push(KinematicBody {
+          entity_id: entity,
+          transform: t.clone(),
+          velocity: vel,
+          parent_frame_id: parent_id,
+          mu: planet.mu,
+          own_frame_id: own_id,
+          frame_type,
+          scale: scale * t.scale.x(),
+          shape_type,
+          shape_data,
+        });
+      },
+    );
+    scene0.query2::<crate::scene::TransformComponent, crate::scene::SunComponent, _>(
+      |entity, transform, _sun| {
+        let t = scene0.global_transform(entity).unwrap_or(transform.clone());
+        let vel = scene0
+          .with_component(entity, |k: &crate::scene::KinematicComponent| k.velocity)
+          .unwrap_or(aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero());
+        let parent_id =
+          scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
+        let own_id = slotmap::Key::data(&entity).as_ffi() as u32;
+        let (frame_type, scale) = scene0
+          .with_component(entity, |f: &crate::scene::ReferenceFrameComponent| {
+            (f.frame_type as u32, f.scale)
+          })
+          .unwrap_or((crate::scene::ReferenceFrameType::Macro as u32, 1.0));
+        let (shape_type, shape_data) = get_shape_info(entity);
+        bodies.push(KinematicBody {
+          entity_id: entity,
+          transform: t.clone(),
+          velocity: vel,
+          parent_frame_id: parent_id,
+          mu: 1.3271244e11, // Example Sun mu
+          own_frame_id: own_id,
+          frame_type,
+          scale: scale * t.scale.x(),
+          shape_type,
+          shape_data,
+        });
+      },
+    );
+
+    scene0.query2_without::<crate::scene::TransformComponent, crate::scene::KinematicComponent, crate::scene::AlmanacPlanet, _>(
+        |entity, transform, kin| {
+          if scene0.has_component::<crate::scene::SunComponent>(entity).into() {
+            return; // Already processed
+          }
+          let t = scene0.global_transform(entity).unwrap_or(transform.clone());
+          let parent_id =
+            scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
+          let own_id = slotmap::Key::data(&entity).as_ffi() as u32;
+          let (frame_type, scale) = scene0
+            .with_component(entity, |f: &crate::scene::ReferenceFrameComponent| {
+              (f.frame_type as u32, f.scale)
+            })
+            .unwrap_or((crate::scene::ReferenceFrameType::Macro as u32, 1.0));
+          let (shape_type, shape_data) = get_shape_info(entity);
+          bodies.push(KinematicBody {
+            entity_id: entity,
+            transform: t.clone(),
+            velocity: kin.velocity,
+            parent_frame_id: parent_id,
+            mu: 0.0,
+            own_frame_id: own_id,
+            frame_type,
+            scale: scale * t.scale.x() * 10.0, // Scale up quad bounds slightly
+            shape_type,
+            shape_data,
+          });
+        },
+      );
+    Ok(CpuBuffer { data: bodies })
+  }
+
+  fn build_rigid_bodies(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _scene: &PhysicsScene,
+    scene0: &Scene,
+  ) -> EngineResult<Self::Buffer<RigidBodyGpu>> {
+    let mut bodies = Vec::new();
+
+    // Query generic Dynamic Bodies (entities with ColliderComponent but NO ParticleSystemComponent)
+    scene0.query2_without::<crate::scene::TransformComponent, crate::scene::ColliderComponent, crate::scene::particles::ParticleSystemComponent, _>(
+        |entity, transform, collider| {
+          let parent_id = scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
+          let velocity = scene0.with_component(entity, |k: &crate::scene::KinematicComponent| k.velocity)
+            .unwrap_or(Vec3f32::zero());
+          let angular_velocity = scene0.with_component(entity, |k: &crate::scene::KinematicComponent| k.angular_velocity)
+            .unwrap_or(Vec3f32::zero());
+
+          let mass = collider.mass;
+
+          let (shape_type, shape_data, inertia_tensor) = match collider.shape {
+            crate::scene::ColliderShape::Sphere { radius } => {
+              let i = 0.4 * mass * radius * radius;
+              (0, [radius, 0.0, 0.0], [[i, 0.0, 0.0], [0.0, i, 0.0], [0.0, 0.0, i]])
+            }
+            crate::scene::ColliderShape::OBB { half_extents } => {
+              let dx = half_extents.x() * 2.0;
+              let dy = half_extents.y() * 2.0;
+              let dz = half_extents.z() * 2.0;
+              let ix = (1.0 / 12.0) * mass * (dy * dy + dz * dz);
+              let iy = (1.0 / 12.0) * mass * (dx * dx + dz * dz);
+              let iz = (1.0 / 12.0) * mass * (dx * dx + dy * dy);
+              (1, [half_extents.x(), half_extents.y(), half_extents.z()], [[ix, 0.0, 0.0], [0.0, iy, 0.0], [0.0, 0.0, iz]])
+            }
+          };
+
+          let rot_mat = Mat4x4f32::from_quat_custom_frame(transform.rotation);
+          #[rustfmt::skip]
+          let rot_arr = [
+            [rot_mat.component(0).unwrap(), rot_mat.component(1).unwrap(), rot_mat.component(2).unwrap()],
+            [rot_mat.component(4).unwrap(), rot_mat.component(5).unwrap(), rot_mat.component(6).unwrap()],
+            [rot_mat.component(8).unwrap(), rot_mat.component(9).unwrap(), rot_mat.component(10).unwrap()],
+          ];
+
+          bodies.push(RigidBodyGpu {
+            position: [transform.position.x(), transform.position.y(), transform.position.z()],
+            mass,
+            rotation: rot_arr,
+            linear_velocity: [velocity.x(), velocity.y(), velocity.z()],
+            _pad0: 0.0,
+            angular_velocity: [angular_velocity.x(), angular_velocity.y(), angular_velocity.z()],
+            _pad1: 0.0,
+            inertia_tensor,
+            force: [0.0, 0.0, 0.0],
+            torque: [0.0, 0.0, 0.0],
+            entity_id: entity,
+            parent_frame_id: parent_id,
+            shape_type,
+            shape_data,
+          });
+        }
+      );
+
+    Ok(CpuBuffer { data: bodies })
+  }
+
+  fn build_particles(
+    &self,
+    _cmd: &mut Self::Cmd,
+    scene0: &Scene,
+  ) -> EngineResult<Self::Buffer<ParticleGpu>> {
+    let mut bodies = Vec::new();
+    scene0.query2::<crate::scene::TransformComponent, crate::scene::particles::ParticleSystemComponent, _>(
+        |entity, transform, sys| {
+          let parent_id = scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
+          let particles = sys.particles.read();
+          for (i, p) in particles.iter().enumerate().filter(|(_, p)| p.active != 0) {
+            bodies.push(ParticleGpu {
+              position: p.position,
+              velocity: p.velocity,
+              mass: p.mass,
+              force: [0.0, 0.0, 0.0],
+              entity_id: entity,
+              parent_frame_id: parent_id,
+              original_index: i as u32,
+            });
+          }
+        }
+      );
+    Ok(CpuBuffer { data: bodies })
+  }
+
+  fn build_emitters(
+    &self,
+    _cmd: &mut Self::Cmd,
+    scene: &Scene,
+  ) -> EngineResult<Self::Buffer<ForceEmitter>> {
+    let mut emitters = Vec::new();
+    scene.query2::<crate::scene::TransformComponent, crate::scene::ForceEmitterComponent, _>(
+      |_, t, emitter| match emitter {
+        crate::scene::ForceEmitterComponent::Gravity { mu } => {
+          emitters.push(ForceEmitter {
+            position: [t.position.x(), t.position.y(), t.position.z()],
+            mu: *mu,
+            normal: [0.0, 0.0, 0.0],
+            type_id: 0,
+            trunc_distance: 0.0,
+            scale_factor: 1.0,
+            _pad: [0, 0],
+          });
+        }
+        crate::scene::ForceEmitterComponent::Planar {
+          normal,
+          base_force,
+          trunc_distance,
+        } => {
+          emitters.push(ForceEmitter {
+            position: [t.position.x(), t.position.y(), t.position.z()],
+            mu: *base_force,
+            normal: [normal.x(), normal.y(), normal.z()],
+            type_id: 1,
+            trunc_distance: *trunc_distance,
+            scale_factor: 1.0,
+            _pad: [0, 0],
+          });
+        }
+      },
+    );
+    Ok(CpuBuffer { data: emitters })
+  }
+
+  fn emit_particles(
+    &self,
+    _cmd: &mut Self::Cmd,
+    particles: &mut Self::Buffer<ParticleGpu>,
+    physical_scene: &PhysicsScene,
+    scene: &Scene,
+    sun_pos: Vec3f32,
+    dt: timeus_t,
+  ) -> EngineResult<()> {
+    let dt_us_scaled = dt as i64;
+    let emitter_entities =
+      scene.query1_res(|id, _: &crate::scene::particles::ParticleEmitterComponent| Some(id));
+
+    for (id, _) in emitter_entities {
+      let t = scene.global_transform(id).unwrap_or_default();
+      let config = scene.with_component(
+        id,
+        |c: &crate::scene::particles::ParticleEmitterComponent| c.clone(),
+      );
+      let mesh = scene.with_component(id, |c: &crate::scene::PhysicalMeshComponent| c.mesh.clone());
+
+      if let (Some(config), Some(mesh)) = (config, mesh) {
+        let res = scene.with_component_mut(
+          id,
+          |ps: &mut crate::scene::particles::ParticleSystemComponent| -> EngineResult<()> {
+            let mut sys_particles = ps.particles.write();
+
+            let orig_accumulator = ps.accumulator;
+            let orig_particles = sys_particles.clone();
+
+            for p in sys_particles.iter_mut() {
+              if p.active != 0 {
+                let new_age = p.get_age() as i64 + dt_us_scaled;
+                p.set_age(new_age as timeus_t);
+                if new_age > config.lifetime as i64 {
+                  p.active = 0;
                 }
               }
             }
+            sys_particles.retain(|p| p.active != 0);
+
+            ps.accumulator += dt_us_scaled;
+            if ps.accumulator >= config.delta {
+              let events = (ps.accumulator / config.delta).min(100);
+              ps.accumulator %= config.delta;
+
+              let mut rng = rand::thread_rng();
+              let mut u_emission = [0.0; 2];
+              u_emission[0] = rand::Rng::r#gen(&mut rng);
+              u_emission[1] = rand::Rng::r#gen(&mut rng);
+
+              let burst_size = config.emission_count.mean as usize * events as usize + 1000;
+              let mut u_particles = alloc::vec::Vec::with_capacity(burst_size);
+              for _ in 0..burst_size {
+                u_particles.push([
+                  rand::Rng::r#gen(&mut rng),
+                  rand::Rng::r#gen(&mut rng),
+                  rand::Rng::r#gen(&mut rng),
+                  rand::Rng::r#gen(&mut rng),
+                ]);
+              }
+
+              let uv_grid =
+                crate::simulation::comet::uv_grid::UvGrid::new(&mesh.vertices, &mesh.indices, 2);
+
+              let mut temp_ps = crate::scene::particles::ParticleSystemComponent::new(10000);
+              for _ in 0..events {
+                temp_ps.emit_particles(
+                  &config,
+                  &mesh,
+                  &uv_grid,
+                  t.position,
+                  t.rotation,
+                  t.scale,
+                  &u_emission,
+                  (&u_particles).as_ref(),
+                );
+              }
+
+              use crate::physics::physics_scene::math::PhysicsSceneMathExt;
+              let parent_id =
+                scene.get_parent(id).map(|k| slotmap::Key::data(&k).as_ffi() as u32).unwrap_or(0);
+
+              let temp_particles = temp_ps.particles.read().clone();
+              let num_temp = temp_particles.len();
+
+              if num_temp > 0 {
+                let chunk_size = 64;
+                let num_chunks = (num_temp + chunk_size - 1) / chunk_size;
+
+                use aethervk_oshal_rlib::os::pool::chunked::ThreadPoolChunkedExt;
+                let accepted_particles =
+                  alloc::sync::Arc::new(spin::Mutex::new(alloc::vec::Vec::new()));
+
+                let physical_scene_ref = SendPtr(physical_scene as *const PhysicsScene);
+                let accepted_clone = accepted_particles.clone();
+
+                let spawn_res = self.thread_pool.spawn_chunked(num_chunks, move |chunk_id| {
+                  let start = chunk_id * chunk_size;
+                  let end = (start + chunk_size).min(num_temp);
+                  let mut local_accepted = alloc::vec::Vec::new();
+                  let phys_scene = physical_scene_ref; // force rust >=2021 to move the struct
+                  let phys_scene = unsafe { phys_scene.0.as_ref().unwrap_unchecked() };
+
+                  for i in start..end {
+                    let p = &temp_particles[i];
+                    if p.active != 0 {
+                      let p_pos = Vec3f32::from_array(p.position);
+                      let mut dir = sun_pos - p_pos;
+                      let dist_to_sun = dir.length();
+                      if dist_to_sun > 1e-5 {
+                        dir = dir / dist_to_sun;
+                        let ray = crate::math::collision::intersection::Ray {
+                          origin: p_pos + dir * 0.1,
+                          direction: dir,
+                          length: dist_to_sun,
+                        };
+
+                        // spawned particle shouldn't be already intersecting the scene
+                        if phys_scene.intersect_world_bvh_math(&ray).is_empty() {
+                          local_accepted.push(p.clone());
+                        }
+                      }
+                    }
+                  }
+
+                  if !local_accepted.is_empty() {
+                    accepted_clone.lock().extend(local_accepted);
+                  }
+                });
+
+                let wait_res = match spawn_res {
+                  Ok(task) => Ok(task.wait()),
+                  Err(e) => Err(EngineError::from(e)),
+                };
+
+                if let Err(e) = wait_res {
+                  *sys_particles = orig_particles;
+                  ps.accumulator = orig_accumulator;
+                  return Err(e);
+                }
+
+                let accepted = accepted_particles.lock();
+                for p in accepted.iter() {
+                  sys_particles.push(p.clone());
+                  let new_idx = (sys_particles.len() - 1) as u32;
+                  particles.data.push(ParticleGpu {
+                    position: p.position,
+                    velocity: p.velocity,
+                    mass: p.mass,
+                    force: [0.0, 0.0, 0.0],
+                    entity_id: id,
+                    parent_frame_id: parent_id,
+                    original_index: new_idx,
+                  });
+                }
+              }
+            }
+            Ok(())
+          },
+        );
+
+        if let Some(Err(e)) = res {
+          return Err(e);
+        }
       }
-    );
+    }
+    Ok(())
+  }
+
+  fn step_ode_p1_p2(
+    &self,
+    _cmd: &mut Self::Cmd,
+    particles: &mut Self::Buffer<ParticleGpu>,
+    dt: timeus_t,
+  ) -> EngineResult<()> {
+    // --- PHASE 1 & 2: Particle Explicit Velocity Half-Kick and Drift ---
+
+    if particles.data.is_empty() {
+      return Ok(());
+    }
+    let dt_sec = dt as f32 / 1_000_000.0;
+    let half_dt = dt_sec * 0.5;
+    let num_particles = particles.data.len();
+    let chunk_size = 2048;
+    let num_chunks = (num_particles + chunk_size - 1) / chunk_size;
+
+    use crate::scene::ErasedMutPtr;
+    use aethervk_oshal_rlib::os::pool::chunked::ThreadPoolChunkedExt;
+    let dyn_ptr = ErasedMutPtr::new(particles.data.as_mut_ptr());
+
+    self
+      .thread_pool
+      .spawn_chunked(num_chunks, move |chunk_id| {
+        let start = chunk_id * chunk_size;
+        let end = (start + chunk_size).min(num_particles);
+        let dyn_array =
+          unsafe { core::slice::from_raw_parts_mut(dyn_ptr.get::<ParticleGpu>(), num_particles) };
+        for i in start..end {
+          let p = &mut dyn_array[i];
+          if p.mass > 0.0 {
+            let inv_mass = 1.0 / p.mass;
+            let v_half_x = p.velocity[0] + p.force[0] * inv_mass * half_dt;
+            let v_half_y = p.velocity[1] + p.force[1] * inv_mass * half_dt;
+            let v_half_z = p.velocity[2] + p.force[2] * inv_mass * half_dt;
+
+            p.position[0] += v_half_x * half_dt;
+            p.position[1] += v_half_y * half_dt;
+            p.position[2] += v_half_z * half_dt;
+
+            p.velocity[0] = v_half_x;
+            p.velocity[1] = v_half_y;
+            p.velocity[2] = v_half_z;
+          }
+        }
+      })
+      .map_err(|e| {
+        <aethervk_oshal_rlib::os::NativeError as Into<crate::types::EngineError>>::into(e)
+      })?
+      .wait();
+
+    Ok(())
+  }
+
+  fn step_ode_p3_p4(
+    &self,
+    _cmd: &mut Self::Cmd,
+    rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
+    emitters: &Self::Buffer<ForceEmitter>,
+    dt: timeus_t,
+  ) -> EngineResult<()> {
+    // --- PHASE 3 & 4: Rigid Body Implicit Midpoint Rule (IMR) solve ---
+
+    let dt_sec = dt as f32 / 1_000_000.0;
+    for rb in rigid_bodies.data.iter_mut() {
+      if rb.mass <= 0.0 {
+        continue;
+      }
+
+      let temp_rb = crate::math::physics::RigidBody {
+        position: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rb.position),
+        rotation: aethervk_oshal_rlib::math::matrix::mat3::Mat3f32 {
+          x: Vec3f32::from_components(rb.rotation[0][0], rb.rotation[0][1], rb.rotation[0][2]),
+          y: Vec3f32::from_components(rb.rotation[1][0], rb.rotation[1][1], rb.rotation[1][2]),
+          z: Vec3f32::from_components(rb.rotation[2][0], rb.rotation[2][1], rb.rotation[2][2]),
+        },
+        linear_velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(
+          rb.linear_velocity,
+        ),
+        angular_velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(
+          rb.angular_velocity,
+        ),
+        mass: rb.mass,
+        inertia_tensor: aethervk_oshal_rlib::math::matrix::mat3::Mat3f32 {
+          x: Vec3f32::from_components(
+            rb.inertia_tensor[0][0],
+            rb.inertia_tensor[0][1],
+            rb.inertia_tensor[0][2],
+          ),
+          y: Vec3f32::from_components(
+            rb.inertia_tensor[1][0],
+            rb.inertia_tensor[1][1],
+            rb.inertia_tensor[1][2],
+          ),
+          z: Vec3f32::from_components(
+            rb.inertia_tensor[2][0],
+            rb.inertia_tensor[2][1],
+            rb.inertia_tensor[2][2],
+          ),
+        },
+      };
+
+      let force_eval = |x_mid: Vec3f32,
+                        _r_mid: aethervk_oshal_rlib::math::matrix::mat3::Mat3f32|
+       -> crate::math::physics::RigidBodyForceEval {
+        let mut f_world = Vec3f32::zero();
+        let mut k_translation = aethervk_oshal_rlib::math::matrix::mat3::Mat3f32 {
+          x: Vec3f32::zero(),
+          y: Vec3f32::zero(),
+          z: Vec3f32::zero(),
+        };
+
+        for em in emitters.data.iter() {
+          if em.type_id == 0 {
+            let em_pos = Vec3f32::from_array(em.position);
+            let r = em_pos - x_mid;
+            let dist_sq = r.length_squared() * em.scale_factor * em.scale_factor;
+            if dist_sq > 1e-6 {
+              let dist = dist_sq.sqrt();
+              let dist3 = dist_sq * dist;
+              let dist5 = dist3 * dist_sq;
+
+              let coeff = em.mu * temp_rb.mass / dist3;
+              f_world += (r / dist) * (em.mu * temp_rb.mass / dist_sq);
+
+              let term1 = Mat3f32::identity() * (-coeff);
+              let rr_t = Mat3f32 {
+                x: r * r.x(),
+                y: r * r.y(),
+                z: r * r.z(),
+              };
+              let term2 = rr_t * (3.0 * em.mu * temp_rb.mass / dist5);
+              k_translation = k_translation + term1 + term2;
+            }
+          } else if em.type_id == 1 {
+            let em_pos = Vec3f32::from_array(em.position);
+            let em_norm = Vec3f32::from_array(em.normal);
+            let r = x_mid - em_pos;
+            let dist = r.dot(em_norm);
+            if dist >= 0.0 && dist < em.trunc_distance {
+              let denom = 1.0 + dist * dist;
+              let force_mag = em.mu / denom;
+              f_world += em_norm * force_mag;
+
+              let dF_ddist = -2.0 * em.mu * dist / (denom * denom);
+              let nn_t = aethervk_oshal_rlib::math::matrix::mat3::Mat3f32 {
+                x: em_norm * em_norm.x(),
+                y: em_norm * em_norm.y(),
+                z: em_norm * em_norm.z(),
+              };
+              k_translation = k_translation + nn_t * dF_ddist;
+            }
+          }
+        }
+
+        crate::math::physics::RigidBodyForceEval {
+          f_world,
+          tau_body: Vec3f32::zero(),
+          k_translation,
+          p_body: Vec3f32::zero(),
+        }
+      };
+
+      let (v_mid, w_mid) =
+        crate::math::physics::rigid_body_implicit_solve(&temp_rb, dt_sec, force_eval);
+
+      rb.position = [
+        rb.position[0] + v_mid.x() * dt_sec,
+        rb.position[1] + v_mid.y() * dt_sec,
+        rb.position[2] + v_mid.z() * dt_sec,
+      ];
+      let r_next = temp_rb.rotation * crate::math::expm_hat(w_mid * dt_sec);
+      rb.rotation = [
+        [
+          r_next.component(0).unwrap(),
+          r_next.component(1).unwrap(),
+          r_next.component(2).unwrap(),
+        ],
+        [
+          r_next.component(3).unwrap(),
+          r_next.component(4).unwrap(),
+          r_next.component(5).unwrap(),
+        ],
+        [
+          r_next.component(6).unwrap(),
+          r_next.component(7).unwrap(),
+          r_next.component(8).unwrap(),
+        ],
+      ];
+      let new_v = v_mid * 2.0
+        - aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rb.linear_velocity);
+      rb.linear_velocity = [new_v.x(), new_v.y(), new_v.z()];
+      let new_w = w_mid * 2.0
+        - aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rb.angular_velocity);
+      rb.angular_velocity = [new_w.x(), new_w.y(), new_w.z()];
+    }
+
+    Ok(())
+  }
+
+  fn compute_self_gravity(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _bvh: &Self::MotionBvh,
+    particles: &mut Self::Buffer<ParticleGpu>,
+  ) -> EngineResult<()> {
+    if particles.data.is_empty() {
+      return Ok(());
+    }
+
+    let g = 6.67430e-11 as f32;
+    let n = particles.data.len();
+
+    for i in 0..n {
+      let my_mass = particles.data[i].mass;
+      if my_mass <= 0.0 {
+        continue;
+      }
+      let my_pos = Vec3f32::from_array(particles.data[i].position);
+      let mut total_force = Vec3f32::zero();
+
+      for j in 0..n {
+        if i == j {
+          continue;
+        }
+        let other_p = &particles.data[j];
+        if other_p.mass <= 0.0 {
+          continue;
+        }
+
+        let other_pos = Vec3f32::from_array(other_p.position);
+        let r = other_pos - my_pos;
+        let dist_sq = r.length_squared();
+        if dist_sq > 1e-6 {
+          let dist = dist_sq.sqrt();
+          total_force += r * (g * my_mass * other_p.mass / (dist_sq * dist));
+        }
+      }
+
+      particles.data[i].force[0] += total_force.x();
+      particles.data[i].force[1] += total_force.y();
+      particles.data[i].force[2] += total_force.z();
+    }
+
+    Ok(())
+  }
+
+  fn step_ode_p5(
+    &self,
+    _cmd: &mut Self::Cmd,
+    kinematics: &Self::Buffer<KinematicBody>,
+    particles: &mut Self::Buffer<ParticleGpu>,
+    emitters: &Self::Buffer<ForceEmitter>,
+    dt: timeus_t,
+  ) -> EngineResult<()> {
+    // --- PHASE 5: Final particle drift and force evaluation ---
+
+    if particles.data.is_empty() {
+      return Ok(());
+    }
+    let dt_sec = dt as f32 / 1_000_000.0;
+    let half_dt = dt_sec * 0.5;
+    let num_particles = particles.data.len();
+    let chunk_size = 2048;
+    let num_chunks = (num_particles + chunk_size - 1) / chunk_size;
+
+    use crate::scene::{ErasedMutPtr, ErasedPtr};
+    use aethervk_oshal_rlib::os::pool::chunked::ThreadPoolChunkedExt;
+
+    let dyn_ptr = ErasedMutPtr::new(particles.data.as_mut_ptr());
+    let kin_ptr = ErasedPtr::new(kinematics.data.as_ptr());
+    let em_ptr = ErasedPtr::new(emitters.data.as_ptr());
+    let num_kin = kinematics.data.len();
+    let num_em = emitters.data.len();
+
+    self
+      .thread_pool
+      .spawn_chunked(num_chunks, move |chunk_id| {
+        let start = chunk_id * chunk_size;
+        let end = (start + chunk_size).min(num_particles);
+
+        let dyn_array =
+          unsafe { core::slice::from_raw_parts_mut(dyn_ptr.get::<ParticleGpu>(), num_particles) };
+        let kin_array =
+          unsafe { core::slice::from_raw_parts(kin_ptr.get::<KinematicBody>(), num_kin) };
+        let em_array = unsafe { core::slice::from_raw_parts(em_ptr.get::<ForceEmitter>(), num_em) };
+
+        for i in start..end {
+          let p = &mut dyn_array[i];
+          if p.mass <= 0.0 {
+            continue;
+          }
+          let inv_mass = 1.0 / p.mass;
+
+          p.position[0] += p.velocity[0] * half_dt;
+          p.position[1] += p.velocity[1] * half_dt;
+          p.position[2] += p.velocity[2] * half_dt;
+
+          let mut f_next = Vec3f32::zero();
+          let p_pos = Vec3f32::from_array(p.position);
+
+          for em in em_array.iter() {
+            if em.type_id == 0 {
+              let em_pos = Vec3f32::from_array(em.position);
+              let r = em_pos - p_pos;
+              let scaled_dist_sq = r.length_squared() * em.scale_factor * em.scale_factor;
+              if scaled_dist_sq > 1e-6 {
+                let force_dir = r / r.length();
+                f_next += force_dir * (em.mu * p.mass / scaled_dist_sq);
+              }
+            } else if em.type_id == 1 {
+              let em_pos = Vec3f32::from_array(em.position);
+              let em_norm = Vec3f32::from_array(em.normal);
+              let r = p_pos - em_pos;
+              let dist = r.dot(em_norm);
+              if dist >= 0.0 && dist < em.trunc_distance {
+                let force_mag = em.mu / (1.0 + dist * dist);
+                f_next += em_norm * force_mag;
+              }
+            }
+          }
+
+          let mut parent_scale = 1.0;
+          let mut parent_macro_pos = Vec3f32::zero();
+          for kin in kin_array.iter() {
+            if kin.own_frame_id == p.parent_frame_id {
+              parent_scale = kin.scale;
+              parent_macro_pos = kin.transform.position;
+            }
+          }
+          for kin in kin_array.iter() {
+            if p.parent_frame_id == kin.own_frame_id {
+              let r = Vec3f32::zero() - p_pos;
+              let dist_sq = r.length_squared();
+              if dist_sq > 1e-6 {
+                let dist = dist_sq.sqrt();
+                let local_mu = if kin.frame_type == 1 {
+                  kin.mu / (parent_scale * parent_scale * parent_scale)
+                } else {
+                  kin.mu
+                };
+                f_next += r * (local_mu * p.mass / (dist_sq * dist));
+              }
+            } else if kin.frame_type == 0 {
+              if p.parent_frame_id != kin.own_frame_id {
+                let macro_pos_in_micro = (kin.transform.position - parent_macro_pos) / parent_scale;
+                let r = macro_pos_in_micro - p_pos;
+                let dist_sq = r.length_squared();
+                if dist_sq > 1e-6 {
+                  let dist = dist_sq.sqrt();
+                  let local_mu = kin.mu / (parent_scale * parent_scale * parent_scale);
+                  f_next += r * (local_mu * p.mass / (dist_sq * dist));
+                }
+              }
+            }
+          }
+
+          p.force[0] = f_next.x();
+          p.force[1] = f_next.y();
+          p.force[2] = f_next.z();
+
+          p.velocity[0] += p.force[0] * inv_mass * half_dt;
+          p.velocity[1] += p.force[1] * inv_mass * half_dt;
+          p.velocity[2] += p.force[2] * inv_mass * half_dt;
+        }
+      })
+      .map_err(|e| {
+        <aethervk_oshal_rlib::os::NativeError as Into<crate::types::EngineError>>::into(e)
+      })?
+      .wait();
+
+    Ok(())
+  }
+
+  fn build_motion_bvh(
+    &self,
+    _cmd: &mut Self::Cmd,
+    kinematics: &Self::Buffer<KinematicBody>,
+    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
+    particles: &Self::Buffer<ParticleGpu>,
+    _dt: timeus_t,
+  ) -> EngineResult<Self::MotionBvh> {
+    use crate::physics::motion_bvh::{Aabb, CpuBvhItem, MotionBvhTree};
+    use aethervk_oshal_rlib::math::matrix::MatrixVectorMul;
+    use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
+    use aethervk_oshal_rlib::math::vector::Vector;
+    use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+
+    let mut frames_map = hashbrown::HashMap::new();
+    let mut frame_types = hashbrown::HashMap::new();
+    for kin in kinematics.data.iter() {
+      let mat: Mat4x4f32 = kin.transform.to_mat4();
+      frames_map.insert(kin.own_frame_id, (kin.parent_frame_id, mat));
+      frame_types.insert(kin.own_frame_id, kin.frame_type);
+    }
+
+    let get_global_pos = |frame_id: u32, local_pos: Vec3f32| -> Vec3f32 {
+      let mut pos = local_pos;
+      let mut curr = frame_id;
+      while let Some(&(parent, ref transform)) = frames_map.get(&curr) {
+        let pt = transform.mul_vector(pos.to_point());
+        pos = Vec3f32::from_array([pt.x(), pt.y(), pt.z()]);
+        curr = parent;
+        if curr == 0 {
+          break;
+        }
+      }
+      pos
+    };
+
+    let mut items_by_parent: hashbrown::HashMap<u32, alloc::vec::Vec<(Aabb, CpuBvhItem)>> =
+      hashbrown::HashMap::new();
+
+    for (i, kin) in kinematics.data.iter().enumerate() {
+      let global_pos = get_global_pos(kin.parent_frame_id, kin.transform.position);
+      let max_travel = kin.velocity.length();
+      let r = kin.scale + max_travel;
+      let bounds = Aabb::new(
+        global_pos - Vec3f32::from_array([r, r, r]),
+        global_pos + Vec3f32::from_array([r, r, r]),
+      );
+      // data_index: top bit 1 means kinematic, lower 31 bits are index
+      items_by_parent.entry(kin.parent_frame_id).or_default().push((
+        bounds,
+        CpuBvhItem::Primitive((1 << 31) | (i as u32), kin.mu, kin.transform.position),
+      ));
+    }
+
+    for (i, dyn_body) in rigid_bodies.data.iter().enumerate() {
+      let global_pos = get_global_pos(
+        dyn_body.parent_frame_id,
+        aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(dyn_body.position),
+      );
+      let max_travel =
+        aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(dyn_body.linear_velocity)
+          .length();
+      let r = dyn_body.shape_data[0] + max_travel;
+      let bounds = Aabb::new(
+        global_pos - Vec3f32::from_array([r, r, r]),
+        global_pos + Vec3f32::from_array([r, r, r]),
+      );
+      // data_index: top bit 0 means dynamic, lower 31 bits are index
+      items_by_parent.entry(dyn_body.parent_frame_id).or_default().push((
+        bounds,
+        CpuBvhItem::Primitive(
+          i as u32,
+          dyn_body.mass,
+          aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(dyn_body.position),
+        ),
+      ));
+    }
+
+    let macro_frame_id = frames_map
+      .keys()
+      .find(|&&id| frame_types.get(&id) == Some(&(crate::scene::ReferenceFrameType::Macro as u32)))
+      .copied()
+      .unwrap_or(0);
+
+    let mut nodes = alloc::vec::Vec::new();
+    let mut macro_items = items_by_parent.remove(&macro_frame_id).unwrap_or_default();
+    if macro_frame_id != 0 {
+      if let Some(mut root_items) = items_by_parent.remove(&0) {
+        macro_items.append(&mut root_items);
+      }
+    }
+
+    for (_, mut items) in items_by_parent {
+      if let Some(root_idx) = MotionBvhTree::build_into(&mut items, &mut nodes) {
+        let root_bounds = nodes[root_idx as usize].bounds;
+        macro_items.push((root_bounds, CpuBvhItem::SubTree(root_idx)));
+      }
+    }
+
+    let tlas_root = MotionBvhTree::build_into(&mut macro_items, &mut nodes);
+
+    let bvh_tree = MotionBvhTree {
+      nodes,
+      root: tlas_root,
+    };
+
+    Ok(CpuMotionBvh {
+      kinematics_copy: kinematics.data.clone(),
+      rigid_bodies_copy: rigid_bodies.data.clone(),
+      particles_copy: particles.data.clone(),
+      bvh_tree,
+    })
+  }
+
+  fn self_intersect_scene(
+    &self,
+    _cmd: &mut Self::Cmd,
+    bvh: &Self::MotionBvh,
+  ) -> EngineResult<Self::List<CollisionPair>> {
+    let pairs = crate::physics::collision_pipeline::detect_collisions_cpu(bvh);
+    Ok(CpuList { data: pairs })
+  }
+
+  fn intersect_instances(
+    &self,
+    _cmd: &mut Self::Cmd,
+    potentials: &Self::List<CollisionPair>,
+    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
+    particles: &Self::Buffer<ParticleGpu>,
+  ) -> EngineResult<Self::List<CollisionPair>> {
+    use aethervk_oshal_rlib::math::vector::Vector;
+    let mut actual_collisions = alloc::vec::Vec::new();
+
+    for pair in &potentials.data {
+      let idx_a = pair.a.primitive_index as usize;
+      let idx_b = pair.b.primitive_index as usize;
+
+      if idx_a >= rigid_bodies.data.len() || idx_b >= rigid_bodies.data.len() {
+        actual_collisions.push(pair.clone()); // Pass-through if invalid
+        continue;
+      }
+
+      let body_a = &rigid_bodies.data[idx_a];
+      let body_b = &rigid_bodies.data[idx_b];
+
+      // For now, simplify shape support to Spheres (shape_type 0)
+      let r_a = if body_a.shape_type == 0 {
+        body_a.shape_data[0]
+      } else {
+        1.0
+      };
+      let r_b = if body_b.shape_type == 0 {
+        body_b.shape_data[0]
+      } else {
+        1.0
+      };
+
+      let s_a = crate::math::collision::gjk::GjkSphere {
+        center: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(body_a.position),
+        radius: r_a,
+      };
+
+      let s_b = crate::math::collision::gjk::GjkSphere {
+        center: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(body_b.position),
+        radius: r_b,
+      };
+
+      let (dist, pt_a, pt_b) = crate::math::collision::gjk::gjk_distance(&s_a, &s_b);
+
+      if dist <= 0.0 {
+        let mut new_pair = pair.clone();
+        new_pair.penetration_depth = if dist < 0.0 { -dist } else { 0.0 };
+        let mut normal = pt_a - pt_b;
+        let len = normal.length();
+        if len > 1e-6 {
+          normal = normal / len;
+        } else {
+          normal = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([1.0, 0.0, 0.0]);
+        }
+        new_pair.contact_normal = [normal.x(), normal.y(), normal.z()];
+        new_pair.contact_point = [
+          (pt_a.x() + pt_b.x()) * 0.5,
+          (pt_a.y() + pt_b.y()) * 0.5,
+          (pt_a.z() + pt_b.z()) * 0.5,
+        ];
+        actual_collisions.push(new_pair);
+      }
+    }
+
+    Ok(CpuList {
+      data: actual_collisions,
+    })
+  }
+
+  fn compact_collisions(
+    &self,
+    _cmd: &mut Self::Cmd,
+    globals: &Self::List<CollisionPair>,
+    _time_delta: timeus_t,
+  ) -> EngineResult<Self::List<CollisionPair>> {
+    Ok(CpuList {
+      data: globals.data.clone(),
+    })
+  }
+
+  fn find_earliest_collision(
+    &self,
+    _cmd: &mut Self::Cmd,
+    compacted: &Self::List<CollisionPair>,
+  ) -> EngineResult<Self::Buffer<timeus_t>> {
+    let mut min_tc = timeus_t::MAX;
+    for pair in &compacted.data {
+      if (pair.time_of_impact as timeus_t) < min_tc {
+        min_tc = pair.time_of_impact as timeus_t;
+      }
+    }
+    Ok(CpuBuffer {
+      data: alloc::vec![min_tc],
+    })
+  }
+
+  fn apply_collision_responses(
+    &self,
+    _cmd: &mut Self::Cmd,
+    rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
+    particles: &mut Self::Buffer<ParticleGpu>,
+    collisions: &Self::List<CollisionPair>,
+    force_inelastic: bool,
+  ) -> EngineResult<()> {
+    if collisions.data.is_empty() {
+      return Ok(());
+    }
+
+    let clusters = group_and_cluster_collisions(collisions.data.clone(), 0.01);
+    let restitution = if force_inelastic { 0.0 } else { 0.5 };
+
+    let dyn_array = rigid_bodies.data.as_mut_slice();
+
+    for cluster in clusters {
+      crate::physics::lcp_integration::resolve_cluster_lcp(&cluster, dyn_array, restitution);
+    }
+    Ok(())
+  }
+
+  fn snapshot_dynamics(
+    &self,
+    _cmd: &mut Self::Cmd,
+    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
+    particles: &Self::Buffer<ParticleGpu>,
+  ) -> EngineResult<(Self::Buffer<RigidBodyGpu>, Self::Buffer<ParticleGpu>)> {
+    Ok((
+      CpuBuffer {
+        data: rigid_bodies.data.clone(),
+      },
+      CpuBuffer {
+        data: particles.data.clone(),
+      },
+    ))
+  }
+
+  fn restore_dynamics(
+    &self,
+    _cmd: &mut Self::Cmd,
+    rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
+    particles: &mut Self::Buffer<ParticleGpu>,
+    snapshot: &(Self::Buffer<RigidBodyGpu>, Self::Buffer<ParticleGpu>),
+  ) -> EngineResult<()> {
+    rigid_bodies.data = snapshot.0.data.clone();
+    particles.data = snapshot.1.data.clone();
+    Ok(())
+  }
+
+  fn write_back_to_scene(
+    &self,
+    _cmd: &mut Self::Cmd,
+    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
+    particles: &Self::Buffer<ParticleGpu>,
+    _physical_scene: &mut PhysicsScene,
+    scene: &Scene,
+  ) -> EngineResult<()> {
+    // Write the updated positions and velocities back to the particle components.
+    scene.query2::<crate::scene::TransformComponent, crate::scene::particles::ParticleSystemComponent, _>(
+        |entity, _transform, sys| {
+          let mut sys_particles = sys.particles.write();
+          for p_gpu in particles.data.iter() {
+            if p_gpu.entity_id == entity {
+              if (p_gpu.original_index as usize) < sys_particles.len() {
+                sys_particles[p_gpu.original_index as usize].position = p_gpu.position;
+                sys_particles[p_gpu.original_index as usize].velocity = p_gpu.velocity;
+              }
+            }
+          }
+        }
+      );
+    // Write back rigid bodies
+    for rb in rigid_bodies.data.iter() {
+      let _ = scene.with_component_mut(rb.entity_id, |trans: &mut TransformComponent| {
+        trans.position = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rb.position);
+        let mat = Mat4x4f32::from_columns(
+          Vec4f32::from_components(rb.rotation[0][0], rb.rotation[0][1], rb.rotation[0][2], 0.0),
+          Vec4f32::from_components(rb.rotation[1][0], rb.rotation[1][1], rb.rotation[1][2], 0.0),
+          Vec4f32::from_components(rb.rotation[2][0], rb.rotation[2][1], rb.rotation[2][2], 0.0),
+          Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
+        );
+        trans.rotation = Quat::from_mat4(&mat);
+      });
+      let _ = scene.with_component_mut(rb.entity_id, |kin: &mut KinematicComponent| {
+        kin.velocity =
+          aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rb.linear_velocity);
+        kin.angular_velocity =
+          aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rb.angular_velocity);
+      });
+    }
     Ok(())
   }
 }
@@ -489,7 +2256,7 @@ pub fn group_and_cluster_collisions(
   let mut collided_entities: hashbrown::HashSet<u32> = hashbrown::HashSet::new();
   let mut resolved_clusters = alloc::vec::Vec::new();
 
-  let mut current_group = alloc::vec::Vec::new();
+  let mut current_group = alloc::vec::Vec::<CollisionPair>::new();
   let mut current_time = -1.0;
 
   for col in collisions {
@@ -508,7 +2275,7 @@ pub fn group_and_cluster_collisions(
     if (col.time_of_impact - current_time).abs() <= time_tolerance {
       current_group.push(col);
     } else {
-      let mut clusters = form_clusters(&current_group);
+      let mut clusters = form_clusters(current_group.as_ref());
       resolved_clusters.append(&mut clusters);
 
       for c in &current_group {
@@ -530,7 +2297,7 @@ pub fn group_and_cluster_collisions(
   }
 
   if !current_group.is_empty() {
-    let mut clusters = form_clusters(&current_group);
+    let mut clusters = form_clusters(current_group.as_ref());
     resolved_clusters.append(&mut clusters);
   }
 
@@ -582,452 +2349,6 @@ fn form_clusters(group: &[CollisionPair]) -> alloc::vec::Vec<alloc::vec::Vec<Col
   clusters
 }
 
-/// TODO: Document this item
-pub struct CpuSimdKernels {
-  pub thread_pool: alloc::sync::Arc<aethervk_oshal_rlib::os::pool::ThreadPool>,
-}
-
-impl Kernels for CpuSimdKernels {
-  type Cmd = CpuCommandBuffer;
-  type Buffer<T: Copy + Send + Sync> = CpuBuffer<T>;
-  type List<T: Copy + Send + Sync> = CpuList<T>;
-  type MotionBvh = CpuMotionBvh;
-
-  fn create_command_buffer(&self) -> EngineResult<Self::Cmd> {
-    Ok(CpuCommandBuffer { tasks: Vec::new() })
-  }
-
-  fn build_kinematic_bodies(
-    &self,
-    _cmd: &mut Self::Cmd,
-    _scene: &PhysicsScene,
-    scene0: &Scene,
-  ) -> EngineResult<Self::Buffer<KinematicBody>> {
-    let mut bodies = Vec::new();
-    scene0.query2::<crate::scene::TransformComponent, crate::scene::AlmanacPlanet, _>(
-      |entity, transform, planet| {
-        let t = scene0.global_transform(entity).unwrap_or(transform.clone());
-        let vel = scene0
-          .with_component(entity, |k: &crate::scene::KinematicComponent| k.velocity)
-          .unwrap_or(aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero());
-        let parent_id =
-          scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
-        let own_id = slotmap::Key::data(&entity).as_ffi() as u32;
-        let (frame_type, scale) = scene0
-          .with_component(entity, |f: &crate::scene::ReferenceFrameComponent| {
-            (f.frame_type as u32, f.scale)
-          })
-          .unwrap_or((crate::scene::ReferenceFrameType::Macro as u32, 1.0));
-        bodies.push(KinematicBody {
-          entity_id: entity,
-          transform: t.clone(),
-          velocity: vel,
-          parent_frame_id: parent_id,
-          mu: planet.mu,
-          own_frame_id: own_id,
-          frame_type,
-          scale: scale * t.scale.x(),
-        });
-      },
-    );
-    scene0.query2::<crate::scene::TransformComponent, crate::scene::SunComponent, _>(
-      |entity, transform, _sun| {
-        let t = scene0.global_transform(entity).unwrap_or(transform.clone());
-        let vel = scene0
-          .with_component(entity, |k: &crate::scene::KinematicComponent| k.velocity)
-          .unwrap_or(aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero());
-        let parent_id =
-          scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
-        let own_id = slotmap::Key::data(&entity).as_ffi() as u32;
-        let (frame_type, scale) = scene0
-          .with_component(entity, |f: &crate::scene::ReferenceFrameComponent| {
-            (f.frame_type as u32, f.scale)
-          })
-          .unwrap_or((crate::scene::ReferenceFrameType::Macro as u32, 1.0));
-        bodies.push(KinematicBody {
-          entity_id: entity,
-          transform: t.clone(),
-          velocity: vel,
-          parent_frame_id: parent_id,
-          mu: 1.3271244e11, // Sun mu TODO constant
-          own_frame_id: own_id,
-          frame_type,
-          scale: scale * t.scale.x(),
-        });
-      },
-    );
-    Ok(CpuBuffer { data: bodies })
-  }
-
-  fn build_dynamic_bodies(
-    &self,
-    _cmd: &mut Self::Cmd,
-    _scene: &PhysicsScene,
-    scene0: &Scene,
-  ) -> EngineResult<Self::Buffer<DynamicBody>> {
-    let mut bodies = Vec::new();
-    scene0.query2::<crate::scene::TransformComponent, crate::scene::particles::ParticleSystemComponent, _>(
-      |entity, transform, sys| {
-        let parent_id = scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
-        let particles = sys.particles.read();
-        for p in particles.iter().filter(|p| p.active != 0) {
-          let mut t = transform.clone();
-          t.position = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p.position);
-          bodies.push(DynamicBody {
-            entity_id: entity,
-            transform: t,
-            velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p.velocity),
-            mass: p.mass,
-            parent_frame_id: parent_id,
-            force: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0]),
-          });
-        }
-      }
-    );
-    aethervk_oshal_rlib::log!("build_dynamic_bodies: created {} bodies", bodies.len());
-    Ok(CpuBuffer { data: bodies })
-  }
-
-  fn step_ode_p1_p2(
-    &self,
-    _cmd: &mut Self::Cmd,
-    dynamics: &mut Self::Buffer<DynamicBody>,
-    dt: timeus_t,
-  ) -> EngineResult<()> {
-    if dynamics.data.is_empty() {
-      return Ok(());
-    }
-
-    use crate::scene::ErasedMutPtr;
-    use aethervk_oshal_rlib::os::pool::chunked::ThreadPoolChunkedExt;
-
-    let dt_sec = dt as f32 / 1_000_000.0;
-    let half_dt = dt_sec * 0.5;
-
-    let num_particles = dynamics.data.len();
-    let chunk_size = 2048;
-    let num_chunks = (num_particles + chunk_size - 1) / chunk_size;
-
-    let dyn_ptr = ErasedMutPtr::new(dynamics.data.as_mut_ptr());
-
-    self
-      .thread_pool
-      .spawn_chunked(num_chunks, move |chunk_id| {
-        let start = chunk_id * chunk_size;
-        let end = (start + chunk_size).min(num_particles);
-
-        let dyn_array =
-          unsafe { core::slice::from_raw_parts_mut(dyn_ptr.get::<DynamicBody>(), num_particles) };
-
-        for i in start..end {
-          let dyn_body = &mut dyn_array[i];
-          if dyn_body.mass > 0.0 {
-            let inv_mass = 1.0 / dyn_body.mass;
-            dyn_body.velocity = dyn_body.velocity + dyn_body.force * (inv_mass * half_dt);
-            dyn_body.transform.position = dyn_body.transform.position + dyn_body.velocity * half_dt;
-          }
-        }
-      })
-      .map_err(|e| {
-        <aethervk_oshal_rlib::os::NativeError as Into<crate::types::EngineError>>::into(e)
-      })?
-      .wait();
-
-    Ok(())
-  }
-
-  fn step_ode_p3_p4(
-    &self,
-    _cmd: &mut Self::Cmd,
-    _kinematics: &mut Self::Buffer<KinematicBody>,
-    _dynamics: &mut Self::Buffer<DynamicBody>,
-    _dt: timeus_t,
-  ) -> EngineResult<()> {
-    // IMR solve for kinematic/rigid bodies goes here.
-    // Currently treating kinematic bodies as driven by SPICE, so this is a no-op for now.
-    Ok(())
-  }
-
-  fn step_ode_p5(
-    &self,
-    _cmd: &mut Self::Cmd,
-    kinematics: &Self::Buffer<KinematicBody>,
-    dynamics: &mut Self::Buffer<DynamicBody>,
-    _bvh: &Self::MotionBvh,
-    dt: timeus_t,
-    scene0: &crate::scene::Scene,
-  ) -> EngineResult<()> {
-    if dynamics.data.is_empty() {
-      return Ok(());
-    }
-
-    use crate::scene::{ErasedMutPtr, ErasedPtr};
-    use aethervk_oshal_rlib::os::pool::chunked::ThreadPoolChunkedExt;
-
-    let dt_sec = dt as f32 / 1_000_000.0;
-    let half_dt = dt_sec * 0.5;
-
-    let num_particles = dynamics.data.len();
-    let chunk_size = 2048;
-    let num_chunks = (num_particles + chunk_size - 1) / chunk_size;
-
-    let dyn_ptr = ErasedMutPtr::new(dynamics.data.as_mut_ptr());
-    let kin_ptr = ErasedPtr::new(kinematics.data.as_ptr());
-    let num_kin = kinematics.data.len();
-
-    let mut custom_forces = alloc::vec::Vec::new();
-    scene0.query2::<crate::scene::TransformComponent, crate::scene::ForceEmitterComponent, _>(
-      |_, t, emitter| {
-        custom_forces.push((t.position, *emitter));
-      },
-    );
-
-    // Safety: Vector data won't mutate inside chunk thread.
-    let custom_forces_ptr = ErasedPtr::new(custom_forces.as_ptr());
-    let num_custom_forces = custom_forces.len();
-
-    let _ = self
-      .thread_pool
-      .spawn_chunked(num_chunks, move |chunk_id| {
-        let start = chunk_id * chunk_size;
-        let end = (start + chunk_size).min(num_particles);
-
-        let dyn_array =
-          unsafe { core::slice::from_raw_parts_mut(dyn_ptr.get::<DynamicBody>(), num_particles) };
-        let kin_array =
-          unsafe { core::slice::from_raw_parts(kin_ptr.get::<KinematicBody>(), num_kin) };
-
-        let forces_array = unsafe {
-          core::slice::from_raw_parts(
-            custom_forces_ptr.get::<(Vec3f32, crate::scene::ForceEmitterComponent)>(),
-            num_custom_forces,
-          )
-        };
-
-        for i in start..end {
-          let dyn_body = &mut dyn_array[i];
-          if dyn_body.mass > 0.0 {
-            dyn_body.transform.position = dyn_body.transform.position + dyn_body.velocity * half_dt;
-
-            let mut f_grav =
-              aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0]);
-            let mut parent_scale = 1.0;
-            let mut parent_macro_pos =
-              aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0]);
-            for kin_body in kin_array {
-              if kin_body.own_frame_id == dyn_body.parent_frame_id {
-                parent_scale = kin_body.scale;
-                parent_macro_pos = kin_body.transform.position;
-              }
-            }
-
-            for kin_body in kin_array {
-              if dyn_body.parent_frame_id == kin_body.own_frame_id {
-                let r =
-                  aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0])
-                    - dyn_body.transform.position;
-                let dist_sq = aethervk_oshal_rlib::math::vector::Vector::dot(r, r);
-                if dist_sq > 1e-6 {
-                  let dist = dist_sq.sqrt();
-                  let local_mu = if kin_body.frame_type == 1 {
-                    kin_body.mu / (parent_scale * parent_scale * parent_scale)
-                  } else {
-                    kin_body.mu
-                  };
-                  f_grav = f_grav + r * (local_mu * dyn_body.mass / (dist_sq * dist));
-                }
-              } else if kin_body.frame_type == 0 {
-                if dyn_body.parent_frame_id != kin_body.own_frame_id {
-                  let macro_pos_in_micro =
-                    (kin_body.transform.position - parent_macro_pos) / parent_scale;
-                  let r = macro_pos_in_micro - dyn_body.transform.position;
-                  let dist_sq = aethervk_oshal_rlib::math::vector::Vector::dot(r, r);
-                  if dist_sq > 1e-6 {
-                    let dist = dist_sq.sqrt();
-                    let local_mu = kin_body.mu / (parent_scale * parent_scale * parent_scale);
-                    f_grav = f_grav + r * (local_mu * dyn_body.mass / (dist_sq * dist));
-                  }
-                }
-              }
-            }
-
-            for (origin, force) in forces_array {
-              match force {
-                crate::scene::ForceEmitterComponent::Gravity { mu: _ } => {
-                  // Handled separately or explicitly
-                }
-                crate::scene::ForceEmitterComponent::Planar {
-                  normal,
-                  base_force,
-                  trunc_distance,
-                } => {
-                  let r = dyn_body.transform.position - *origin;
-                  let dist = aethervk_oshal_rlib::math::vector::Vector::dot(r, *normal);
-                  if dist >= 0.0 && dist < *trunc_distance {
-                    f_grav = f_grav + *normal * (*base_force / (1.0 + dist * dist));
-                  }
-                }
-              }
-            }
-
-            dyn_body.transform.position = dyn_body.transform.position + dyn_body.velocity * half_dt;
-
-            dyn_body.force = f_grav;
-            let inv_mass = 1.0 / dyn_body.mass;
-            dyn_body.velocity = dyn_body.velocity + dyn_body.force * (inv_mass * half_dt);
-          }
-        }
-      })
-      .map_err(|e| {
-        <aethervk_oshal_rlib::os::NativeError as Into<crate::types::EngineError>>::into(e)
-      })?
-      .wait();
-
-    Ok(())
-  }
-  fn build_motion_bvh(
-    &self,
-    _cmd: &mut Self::Cmd,
-    kinematics: &Self::Buffer<KinematicBody>,
-    dynamics: &Self::Buffer<DynamicBody>,
-  ) -> EngineResult<Self::MotionBvh> {
-    Ok(CpuMotionBvh {
-      kinematics_copy: kinematics.data.clone(),
-      dynamics_copy: dynamics.data.clone(),
-    })
-  }
-
-  fn self_intersect_scene(
-    &self,
-    _cmd: &mut Self::Cmd,
-    bvh: &Self::MotionBvh,
-  ) -> EngineResult<Self::List<CollisionPair>> {
-    let pairs = crate::physics::collision_pipeline::detect_collisions_cpu(bvh);
-    Ok(CpuList { data: pairs })
-  }
-
-  fn intersect_instances(
-    &self,
-    _cmd: &mut Self::Cmd,
-    potentials: &Self::List<CollisionPair>,
-  ) -> EngineResult<Self::List<CollisionPair>> {
-    Ok(CpuList {
-      data: potentials.data.clone(),
-    })
-  }
-
-  fn compact_collisions(
-    &self,
-    _cmd: &mut Self::Cmd,
-    globals: &Self::List<CollisionPair>,
-    _time_delta: timeus_t,
-  ) -> EngineResult<Self::List<CollisionPair>> {
-    Ok(CpuList {
-      data: globals.data.clone(),
-    })
-  }
-
-  fn find_earliest_collision(
-    &self,
-    _cmd: &mut Self::Cmd,
-    compacted: &Self::List<CollisionPair>,
-  ) -> EngineResult<Self::Buffer<timeus_t>> {
-    let mut min_tc = timeus_t::MAX;
-    for pair in &compacted.data {
-      if (pair.time_of_impact as timeus_t) < min_tc {
-        min_tc = pair.time_of_impact as timeus_t;
-      }
-    }
-    Ok(CpuBuffer {
-      data: alloc::vec![min_tc],
-    })
-  }
-
-  fn apply_collision_responses(
-    &self,
-    _cmd: &mut Self::Cmd,
-    dynamics: &mut Self::Buffer<DynamicBody>,
-    collisions: &Self::List<CollisionPair>,
-    force_inelastic: bool,
-  ) -> EngineResult<()> {
-    if collisions.data.is_empty() {
-      return Ok(());
-    }
-
-    let clusters = group_and_cluster_collisions(collisions.data.clone(), 0.01);
-    let restitution = if force_inelastic { 0.0 } else { 0.5 };
-
-    let dyn_array = dynamics.data.as_mut_slice();
-    let dyn_len = dyn_array.len();
-
-    let max_iters = 20;
-
-    for cluster in clusters {
-      crate::physics::lcp_integration::resolve_cluster_lcp(&cluster, dyn_array, restitution);
-    }
-    Ok(())
-  }
-
-  fn snapshot_dynamics(
-    &self,
-    _cmd: &mut Self::Cmd,
-    dynamics: &Self::Buffer<DynamicBody>,
-  ) -> EngineResult<Self::Buffer<DynamicBody>> {
-    Ok(CpuBuffer {
-      data: dynamics.data.clone(),
-    })
-  }
-
-  fn restore_dynamics(
-    &self,
-    _cmd: &mut Self::Cmd,
-    dynamics: &mut Self::Buffer<DynamicBody>,
-    snapshot: &Self::Buffer<DynamicBody>,
-  ) -> EngineResult<()> {
-    dynamics.data = snapshot.data.clone();
-    Ok(())
-  }
-
-  fn write_back_to_scene(
-    &self,
-    _cmd: &mut Self::Cmd,
-    dynamics: &Self::Buffer<DynamicBody>,
-    _physical_scene: &mut PhysicsScene,
-    scene: &Scene,
-  ) -> EngineResult<()> {
-    aethervk_oshal_rlib::log!("write_back_to_scene called! dynamics.len() = {}", dynamics.data.len());
-    // Write the updated positions and velocities back to the particle components.
-    scene.query2::<crate::scene::TransformComponent, crate::scene::particles::ParticleSystemComponent, _>(
-      |entity, _transform, sys| {
-        aethervk_oshal_rlib::log!("write_back_to_scene query2 matching entity: {:?}", entity);
-        let mut particles = sys.particles.write();
-        let mut p_idx = 0;
-        // Optimization: since we map them linearly, we can just consume dynamics sequentially
-        // For robustness, we check the entity ID.
-            let mut first_logged = false;
-            for dyn_body in dynamics.data.iter() {
-              if dyn_body.entity_id == entity {
-                // Find next active particle
-                while p_idx < particles.len() && particles[p_idx].active == 0 {
-                    p_idx += 1;
-                }
-                if p_idx < particles.len() {
-                  if !first_logged {
-                      aethervk_oshal_rlib::log!("First particle updated: idx={} pos={:?} vel={:?}", p_idx, dyn_body.transform.position, dyn_body.velocity);
-                      first_logged = true;
-                  }
-                  particles[p_idx].position = [dyn_body.transform.position.x(), dyn_body.transform.position.y(), dyn_body.transform.position.z()];
-                  particles[p_idx].velocity = [dyn_body.velocity.x(), dyn_body.velocity.y(), dyn_body.velocity.z()];
-                  p_idx += 1;
-                }
-              }
-            }
-      }
-    );
-    Ok(())
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -1036,31 +2357,67 @@ mod tests {
   #[test]
   fn test_group_and_cluster_collisions() {
     let c1 = CollisionPair {
-        a: crate::gpu::ColliderId { entity_id: 0, primitive_index: 0 },
-        b: crate::gpu::ColliderId { entity_id: 0, primitive_index: 1 },
-        time_of_impact: 0.05,
+      a: crate::gpu::ColliderId {
+        entity_id: 0,
+        primitive_index: 0,
+      },
+      b: crate::gpu::ColliderId {
+        entity_id: 0,
+        primitive_index: 1,
+      },
+      time_of_impact: 0.05,
+      contact_normal: [0.0; 3],
+      contact_point: [0.0; 3],
+      penetration_depth: 0.0,
     };
     let c2 = CollisionPair {
-        a: crate::gpu::ColliderId { entity_id: 0, primitive_index: 1 },
-        b: crate::gpu::ColliderId { entity_id: 0, primitive_index: 2 },
-        time_of_impact: 0.051,
+      a: crate::gpu::ColliderId {
+        entity_id: 0,
+        primitive_index: 1,
+      },
+      b: crate::gpu::ColliderId {
+        entity_id: 0,
+        primitive_index: 2,
+      },
+      time_of_impact: 0.051,
+      contact_normal: [0.0; 3],
+      contact_point: [0.0; 3],
+      penetration_depth: 0.0,
     };
     let c3 = CollisionPair {
-        a: crate::gpu::ColliderId { entity_id: 0, primitive_index: 3 },
-        b: crate::gpu::ColliderId { entity_id: 0, primitive_index: 4 },
-        time_of_impact: 0.052,
+      a: crate::gpu::ColliderId {
+        entity_id: 0,
+        primitive_index: 3,
+      },
+      b: crate::gpu::ColliderId {
+        entity_id: 0,
+        primitive_index: 4,
+      },
+      time_of_impact: 0.052,
+      contact_normal: [0.0; 3],
+      contact_point: [0.0; 3],
+      penetration_depth: 0.0,
     };
     let c4 = CollisionPair {
-        a: crate::gpu::ColliderId { entity_id: 0, primitive_index: 5 },
-        b: crate::gpu::ColliderId { entity_id: 0, primitive_index: 6 },
-        time_of_impact: 0.1, 
+      a: crate::gpu::ColliderId {
+        entity_id: 0,
+        primitive_index: 5,
+      },
+      b: crate::gpu::ColliderId {
+        entity_id: 0,
+        primitive_index: 6,
+      },
+      time_of_impact: 0.1,
+      contact_normal: [0.0; 3],
+      contact_point: [0.0; 3],
+      penetration_depth: 0.0,
     };
 
     let pairs = vec![c1, c2, c3, c4];
     let clusters = group_and_cluster_collisions(pairs, 0.01);
 
     assert_eq!(clusters.len(), 3);
-    
+
     // The first cluster should have c1 and c2
     assert_eq!(clusters[0].len(), 2);
     // The second cluster should have c3

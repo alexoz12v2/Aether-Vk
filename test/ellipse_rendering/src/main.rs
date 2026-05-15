@@ -1,11 +1,11 @@
 use aethervk_core_rlib::scene::trajectory::TrajectoryComponent;
-use aethervk_core_rlib::simulation_api::components_api::CameraParams;
 use aethervk_core_rlib::simulation_api::SimulationContext;
+use aethervk_core_rlib::simulation_api::components_api::CameraParams;
 use aethervk_core_rlib::types::GpuResult;
 use aethervk_oshal_rlib::math::quaternion::Quaternion;
 use aethervk_oshal_rlib::math::vector::{Vector3, vec3::Vec3f32, vec4::Quat};
 use test_utils::cycle_get_asset_path_from_exe;
-use test_utils::sim_app::{run_simulation_app, SimulationDelegate};
+use test_utils::sim_app::{SimulationDelegate, run_simulation_app};
 use winit::window::Window;
 
 fn fetch_earth_orbit() -> (f32, f32, f32, f32, f32) {
@@ -124,14 +124,15 @@ impl SimulationDelegate for EllipseDelegate {
   ) -> GpuResult<()> {
     // Root entity
     let root_entity = ctx.spawn_entity(scene_id, "root").unwrap();
-    ctx.add_transform_component(
-      scene_id,
-      root_entity,
-      Vec3f32::zero(),
-      Quat::identity(),
-      Vec3f32::one(),
-    )
-    .unwrap();
+    ctx
+      .add_transform_component(
+        scene_id,
+        root_entity,
+        Vec3f32::zero(),
+        Quat::identity(),
+        Vec3f32::one(),
+      )
+      .unwrap();
 
     let (a, e, i, omega_node, omega_peri) = fetch_earth_orbit();
     println!(
@@ -146,24 +147,28 @@ impl SimulationDelegate for EllipseDelegate {
 
     let traj_entity = ctx.spawn_entity(scene_id, "earth_orbit").unwrap();
     ctx.set_parent(scene_id, traj_entity, Some(root_entity)).unwrap();
-    ctx.add_transform_component(
-      scene_id,
-      traj_entity,
-      Vec3f32::zero(),
-      Quat::identity(),
-      Vec3f32::one(),
-    )
-    .unwrap();
+    ctx
+      .add_transform_component(
+        scene_id,
+        traj_entity,
+        Vec3f32::zero(),
+        Quat::identity(),
+        Vec3f32::one(),
+      )
+      .unwrap();
     ctx.add_trajectory_component(scene_id, traj_entity, traj_comp).unwrap();
 
-    let cam_entity = ctx.add_perspective_camera(
-      scene_id,
-      pe_handle,
-      "camera",
-      45.0f32.to_radians(),
-      0.1,
-      1000.0,
-    ).unwrap().get();
+    let cam_entity = ctx
+      .add_perspective_camera(
+        scene_id,
+        pe_handle,
+        "camera",
+        45.0f32.to_radians(),
+        0.1,
+        1000.0,
+      )
+      .unwrap()
+      .get();
     ctx.set_parent(scene_id, cam_entity, Some(root_entity)).unwrap();
 
     let cam_pos = Vec3f32::from_components(0.0, visual_a * 1.5, visual_a * 1.5);
@@ -176,18 +181,12 @@ impl SimulationDelegate for EllipseDelegate {
     // Rotate camera to look at target
     let rot = Quat::look_at(view_dir, actual_up);
 
-    ctx.set_transform_component(
-      scene_id,
-      cam_entity,
-      cam_pos,
-      rot,
-      Vec3f32::one(),
-    )
-    .unwrap();
+    ctx.set_transform_component(scene_id, cam_entity, cam_pos, rot, Vec3f32::one()).unwrap();
 
-    let _ = ctx.threads.logic_thread.tx().try_send(
-      aethervk_core_rlib::simulation_api::structs::LogicCommand::PlayScene { scene_id },
-    );
+    let _ =
+      ctx.threads.logic_thread.tx().try_send(
+        aethervk_core_rlib::simulation_api::structs::LogicCommand::PlayScene { scene_id },
+      );
 
     Ok(())
   }
@@ -206,22 +205,6 @@ impl SimulationDelegate for EllipseDelegate {
         if let Some(logic_command) = test_utils::command::process_mouse_motion_camera_commands(
           delta,
           middle_mouse_down,
-          shift_down,
-          ctrl_down,
-          camera_entity,
-          scene.clone(),
-        ) {
-          let _ = ctx.threads.logic_thread.tx().try_send(logic_command);
-        }
-      }
-    }
-  }
-}
-
-fn main() {
-  let _assets_dir = cycle_get_asset_path_from_exe(true);
-  run_simulation_app("Ellipse Rendering Playground", EllipseDelegate);
-}
           shift_down,
           ctrl_down,
           camera_entity,

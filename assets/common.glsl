@@ -19,9 +19,13 @@ layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer Mat
     // 0 = Normal PBR (RGB is used as standard emissive glow)
     // 1 = Color Paint Mode (Unlit RGB Visualization)
     // 2 = Distribution Paint Mode (Unlit Alpha-to-Grayscale Visualization)
+    // 3 = Spherical Grid
     uint paintDisplayMode;
     uint textureFlags;
     float _pad0;
+
+    vec4 sphereCenterRadius;
+    vec4 gridColorDensity;
 };
 
 layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer ObjectData {

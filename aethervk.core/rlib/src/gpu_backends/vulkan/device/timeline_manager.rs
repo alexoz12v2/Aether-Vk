@@ -1,5 +1,6 @@
 //! timeline_manager module.
 
+use function_name::named;
 use crate::gpu_backends::vulkan::device::{
   TASK_STATUS_FAILED, TASK_STATUS_PENDING, TASK_STATUS_SUCCESS, TaskEntry, TimelinePollingWorkload,
 };
@@ -28,6 +29,7 @@ pub(super) struct TimelineManager {
 
 impl TimelineManager {
   /// TODO: Document this item
+  #[named]
   pub fn new(instance: &ash::Instance, device: &ash::Device) -> GpuResult<Self> {
     let mut sem_type_info = vk::SemaphoreTypeCreateInfo::default()
       .initial_value(0)
@@ -36,7 +38,7 @@ impl TimelineManager {
     let sem_create_info = vk::SemaphoreCreateInfo::default().push_next(&mut sem_type_info);
 
     let semaphore = unsafe { device.create_semaphore(&sem_create_info, None) }
-      .map_err(|_| crate::gpu_err!("device error"))?;
+      .map_err(|_| crate::gpu_err_device!())?;
 
     let sem_device = ash::khr::timeline_semaphore::Device::new(instance, device);
 
@@ -63,9 +65,10 @@ impl TimelineManager {
   }
 
   /// Polls the GPU and updates the cache safely
+  #[named]
   pub fn refresh_cached_value(&self) -> GpuResult<u64> {
     let gpu_value = unsafe { self.sem_device.get_semaphore_counter_value(self.semaphore.get()) }
-      .map_err(|_| crate::gpu_err!("device error"))?;
+      .map_err(|_| crate::gpu_err_device!())?;
 
     self.cached_completed_value.fetch_max(gpu_value, Ordering::Relaxed);
     Ok(gpu_value)
@@ -119,6 +122,7 @@ impl TimelineManager {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn is_task_completed(&self, task_id: u64) -> GpuResult<bool> {
     let registry = self.task_registry.read();
     if let Some(entry) = registry.get(&task_id) {
@@ -126,7 +130,7 @@ impl TimelineManager {
       if status == TASK_STATUS_SUCCESS {
         Ok(true)
       } else if status == TASK_STATUS_FAILED {
-        let err = entry.error.read().clone().unwrap_or(crate::gpu_err!("device error"));
+        let err = entry.error.read().clone().unwrap_or(crate::gpu_err_device!());
         Err(err)
       } else {
         Ok(false)

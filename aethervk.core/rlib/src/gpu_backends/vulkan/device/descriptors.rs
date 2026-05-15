@@ -5,7 +5,7 @@ use ash::vk::{
   self, Handle, PFN_vkAllocateDescriptorSets, PFN_vkCreateDescriptorPool, PFN_vkResetDescriptorPool,
 };
 use core::ptr;
-
+use function_name::named;
 use crate::{
   gpu_backends::vulkan::{
     self,
@@ -69,6 +69,7 @@ unsafe impl Send for DescriptorPools {}
 
 impl DescriptorPools {
   /// TODO: Document this item
+  #[named]
   pub(super) fn new(
     device: &ash::Device,
     _fixed_capacity_pow2: usize,
@@ -86,6 +87,7 @@ impl DescriptorPools {
   }
 
   /// TODO: Document this item
+  #[named]
   pub(super) fn allocate(
     self: &sync::Arc<Self>,
     device: &vulkan::device::LogicalDevice,
@@ -98,7 +100,7 @@ impl DescriptorPools {
     loop {
       let pool = inner.active_pool;
       if pool == vk::DescriptorPool::null() {
-        return Err(crate::gpu_err!("device error"));
+        return Err(crate::gpu_err_device!());
       }
 
       let layouts = [layout];
@@ -172,6 +174,7 @@ impl DescriptorPools {
 }
 
 impl DescriptorPoolsInner {
+  #[named]
   fn ensure_active_pool(
     &mut self,
     device: vk::Device,
@@ -206,7 +209,7 @@ impl DescriptorPoolsInner {
       self.active_pool = pool;
       Ok(())
     } else {
-      Err(crate::gpu_err!("device error"))
+      Err(crate::gpu_err_device!())
     }
   }
 }

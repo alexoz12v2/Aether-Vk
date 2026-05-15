@@ -274,7 +274,15 @@ impl LogicThreadContext {
       (ro, delta.normalize())
     };
 
-    aethervk_oshal_rlib::log!("DEBUG: raycast_ndc_internal ro=[{},{},{}] rd=[{},{},{}]", ro.x(), ro.y(), ro.z(), rd.x(), rd.y(), rd.z());
+    aethervk_oshal_rlib::log!(
+      "DEBUG: raycast_ndc_internal ro=[{},{},{}] rd=[{},{},{}]",
+      ro.x(),
+      ro.y(),
+      ro.z(),
+      rd.x(),
+      rd.y(),
+      rd.z()
+    );
 
     self.raycast_internal(scene_id, ro, rd)
   }
@@ -388,6 +396,10 @@ impl SimulationSceneData {
         emissive_color: [0.0, 0.0, 0.0],
         use_new_path: false,
         paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
       },
     )?;
     let root = scene_ctx.root_entity;
@@ -827,14 +839,9 @@ pub enum RenderCommand {
   #[default]
   Shutdown,
 
-  RenderFrame(RenderFrame),
+  RenderFrames(alloc::vec::Vec<RenderFrame>),
 
   Resize(Resize),
-
-  GetTaskStatus {
-    task_id: u64,
-    output: SharedDataWrapper<RenderTaskStatus>,
-  },
 
   /// TODO move to compute
   GenerateSky,
@@ -958,6 +965,7 @@ pub struct SceneContext {
   pub grid_entity: Option<EntityId>,
   pub sky_entity: Option<EntityId>,
   pub outlines_enabled: Arc<AtomicBool>,
+  pub collisions_enabled: Arc<AtomicBool>,
   pub physics_scene: Option<Arc<RwLock<physics::physics_scene::PhysicsScene>>>,
   pub active_physics_task: alloc::sync::Arc<
     spin::Mutex<
@@ -1087,6 +1095,7 @@ impl SceneContext {
       grid_entity: None,
       sky_entity: None,
       outlines_enabled: Arc::new(AtomicBool::new(false)),
+      collisions_enabled: Arc::new(AtomicBool::new(true)),
       physics_scene: None,
       active_physics_task: alloc::sync::Arc::new(spin::Mutex::new(None)),
       physics_engine_type: Arc::new(RwLock::new(PhysicsEngineType::default())),

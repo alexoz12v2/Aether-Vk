@@ -13,6 +13,7 @@ use crate::{
 };
 use ash::vk;
 use core::slice;
+use function_name::named;
 use spin::RwLock;
 
 enum RenderPassAttachment {
@@ -148,6 +149,7 @@ impl RenderPasses {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn get_pipeline_render_pass(
     &self,
     color_format: vk::Format,
@@ -170,6 +172,7 @@ impl RenderPasses {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn get_clear_values_render_pass(
     &self,
     pe_handle: PresentationEngineHandle,
@@ -177,7 +180,7 @@ impl RenderPasses {
   ) -> GpuResult<()> {
     let read_render_passes = self.render_passes.read();
     if !read_render_passes.contains_key(&pe_handle) {
-      return Err(crate::gpu_err!("device error"));
+      return Err(crate::gpu_err_device!());
     }
     if out_values.len() != 2 {
       return Err(crate::gpu_invalid_arg!("invalid argument"));
@@ -189,6 +192,7 @@ impl RenderPasses {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn get_or_create_render_pass(
     &self,
     pe_handle: PresentationEngineHandle,
@@ -486,6 +490,7 @@ impl RenderPasses {
     }
   }
 
+  #[named]
   fn create_color_depth_single_render_pass(
     render_pass_device: &ash::khr::create_renderpass2::Device,
     color_format: vk::Format,

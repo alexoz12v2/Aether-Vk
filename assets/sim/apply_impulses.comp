@@ -5,22 +5,15 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "../debug_utils.glsl"
+#include "../bvh_utils.glsl"
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
-layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
+
 
 // Particles data mapped as uint to perform CAS loop for float atomicAdd
 layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleData {
     uint data[];
-};
-
-layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer PackedCollisions {
-    uint dispatch_x;
-    uint dispatch_y;
-    uint dispatch_z;
-    uint count;
-    uvec2 pairs[];
 };
 
 layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer ImpulseOutput {
@@ -50,36 +43,36 @@ void main() {
     uint global_id = gl_GlobalInvocationID.x;
     if (global_id >= pc.collisions.count) return;
 
-    uvec2 pair = pc.collisions.pairs[global_id];
+    PackedPair pair = pc.collisions.pairs[global_id];
     vec3 impulse = pc.impulses.impulses[global_id];
 
-    uint pA_id = pair.x;
-    uint pB_id = pair.y;
+    uint pA_id = pair.a.primitive_index;
+    uint pB_id = pair.b.primitive_index;
 
-    uint blockA = pA_id / SUBGROUP_SIZE;
-    uint locA = pA_id % SUBGROUP_SIZE;
-    uint baseA = blockA * (10 * SUBGROUP_SIZE) + locA;
+    uint blockA = pA_id / SG_SIZE;
+    uint locA = pA_id % SG_SIZE;
+    uint baseA = blockA * (10 * SG_SIZE) + locA;
 
-    uint blockB = pB_id / SUBGROUP_SIZE;
-    uint locB = pB_id % SUBGROUP_SIZE;
-    uint baseB = blockB * (10 * SUBGROUP_SIZE) + locB;
+    uint blockB = pB_id / SG_SIZE;
+    uint locB = pB_id % SG_SIZE;
+    uint baseB = blockB * (10 * SG_SIZE) + locB;
 
     // Apply positive impulse to particle A
-    float m_A = uintBitsToFloat(pc.particles.data[baseA + 6 * SUBGROUP_SIZE]);
+    float m_A = uintBitsToFloat(pc.particles.data[baseA + 6 * SG_SIZE]);
     if (m_A > 0.0) {
         vec3 dvA = impulse / m_A;
-        atomicAddFloat(baseA + 3 * SUBGROUP_SIZE, dvA.x);
-        atomicAddFloat(baseA + 4 * SUBGROUP_SIZE, dvA.y);
-        atomicAddFloat(baseA + 5 * SUBGROUP_SIZE, dvA.z);
+        atomicAddFloat(baseA + 3 * SG_SIZE, dvA.x);
+        atomicAddFloat(baseA + 4 * SG_SIZE, dvA.y);
+        atomicAddFloat(baseA + 5 * SG_SIZE, dvA.z);
     }
 
     // Apply negative impulse to particle B
-    float m_B = uintBitsToFloat(pc.particles.data[baseB + 6 * SUBGROUP_SIZE]);
+    float m_B = uintBitsToFloat(pc.particles.data[baseB + 6 * SG_SIZE]);
     if (m_B > 0.0) {
         vec3 dvB = -impulse / m_B;
-        atomicAddFloat(baseB + 3 * SUBGROUP_SIZE, dvB.x);
-        atomicAddFloat(baseB + 4 * SUBGROUP_SIZE, dvB.y);
-        atomicAddFloat(baseB + 5 * SUBGROUP_SIZE, dvB.z);
+        atomicAddFloat(baseB + 3 * SG_SIZE, dvB.x);
+        atomicAddFloat(baseB + 4 * SG_SIZE, dvB.y);
+        atomicAddFloat(baseB + 5 * SG_SIZE, dvB.z);
     }
 
     if (SHOULD_DEBUG_PRINT) {

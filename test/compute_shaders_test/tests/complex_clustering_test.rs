@@ -112,7 +112,8 @@ fn test_complex_compaction_and_clustering() {
   let gpu_count = output_data[3];
   println!("GPU stream_compact found {} valid collisions", gpu_count);
 
-  let gpu_events = compute_shaders_test::cpu_clustering::parse_gpu_packed_pairs(&output_data, gpu_count as usize);
+  let gpu_events =
+    compute_shaders_test::cpu_clustering::parse_gpu_packed_pairs(&output_data, gpu_count as usize);
 
   // Now let's extract CPU sparse events
   let mut cpu_events = Vec::new();

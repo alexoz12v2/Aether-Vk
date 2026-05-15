@@ -18,9 +18,11 @@ use crate::simulation::comet::{NORMAL_COMPONENTS, POSITION_COMPONENTS, UV_COMPON
 use crate::types::{GpuError, GpuResult};
 use alloc::vec::Vec;
 use ash::vk;
+use function_name::named;
 
 // TODO rewrite error messages
 
+#[named]
 fn get_validated_shaders(
   shader_manager: &shader_manager::ShaderManager,
   vertex_shader_key: ShaderKey,
@@ -68,6 +70,7 @@ pub(super) struct Archetypes {
 
 impl Archetypes {
   /// TODO: Document this item
+  #[named]
   pub fn has_discardables(&self) -> bool {
     self.sun_render_archetype.read().is_some()
       || self.physical_mesh_render_archetype.read().is_some()
@@ -91,6 +94,7 @@ impl Archetypes {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn discard(&self, device: &ash::Device, discard_pool: &resources::DiscardPool) {
     if let Some(mut archetype) = self.sun_render_archetype.write().take() {
       archetype.discard(device, &discard_pool, u64::MAX);
@@ -162,6 +166,7 @@ macro_rules! impl_update_archetype {
     $(, |$arch:ident, $dev:ident, $wp:ident, $dp:ident, $tl:ident, $gi:ident, $fmt:ident| $extra:block)?
   ) => {
     /// TODO: Document this item
+    #[named]
     pub fn $fn_name(
       &self,
       device: &LogicalDevice,
@@ -178,7 +183,7 @@ macro_rules! impl_update_archetype {
         None => return Ok(()), // if it's not there, there's nothing to update (TODO check if correct)
       };
 
-      let mut graphics_info = archetype.get_any_graphics_info().ok_or(crate::gpu_err!("device error"))?;
+      let mut graphics_info = archetype.get_any_graphics_info().ok_or(crate::gpu_err_device!())?;
 
       let format = color_format;
 
@@ -235,6 +240,7 @@ macro_rules! impl_create_archetype {
     $(, |$gi:ident| $extra:block)?
   ) => {
     /// TODO: Document this item
+    #[named]
     pub fn $fn_name(
       &self,
       device: &LogicalDevice,
@@ -251,7 +257,7 @@ macro_rules! impl_create_archetype {
     ) -> GpuResult<()> {
       let mut archetype_lock = self.$archetype_field.write();
       if archetype_lock.is_some() {
-        return Err(crate::gpu_err!("device error"));
+        return Err(crate::gpu_err_device!());
       }
 
       let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
@@ -260,7 +266,7 @@ macro_rules! impl_create_archetype {
       let res = unsafe { resources::$resource_struct::new(device, allocator) }?;
       *archetype_lock = Some(res);
 
-      let layout = archetype_lock.as_ref().ok_or(crate::gpu_err!("device error"))?.pipeline_layout.get();
+      let layout = archetype_lock.as_ref().ok_or(crate::gpu_err_device!())?.pipeline_layout.get();
       let render_pass = renderpasses
         .get_pipeline_render_pass(color_format, depth_stencil_format)?.get();
 
@@ -286,7 +292,7 @@ macro_rules! impl_create_archetype {
 
       pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
 
-      let arch_mut = archetype_lock.as_mut().ok_or(crate::gpu_err!("device error"))?;
+      let arch_mut = archetype_lock.as_mut().ok_or(crate::gpu_err_device!())?;
       arch_mut.insert_graphics_info(color_format, pipeline_graphics_info.clone(), pipeline_graphics_info.pipeline_key());
 
       Ok(())
@@ -301,6 +307,7 @@ macro_rules! impl_create_archetype {
     $(, |$gi:ident| $extra:block)?
   ) => {
     /// TODO: Document this item
+    #[named]
     pub fn $fn_name(
       &self,
       device: &LogicalDevice,
@@ -317,7 +324,7 @@ macro_rules! impl_create_archetype {
     ) -> GpuResult<()> {
       let mut archetype_lock = self.$archetype_field.write();
       if archetype_lock.is_some() {
-        return Err(crate::gpu_err!("device error"));
+        return Err(crate::gpu_err_device!());
       }
 
       let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
@@ -326,7 +333,7 @@ macro_rules! impl_create_archetype {
       let res = unsafe { resources::$resource_struct::new(device, allocator.get_raw()) }?;
       *archetype_lock = Some(res);
 
-      let layout = archetype_lock.as_ref().ok_or(crate::gpu_err!("device error"))?.pipeline_layout.get();
+      let layout = archetype_lock.as_ref().ok_or(crate::gpu_err_device!())?.pipeline_layout.get();
       let render_pass = renderpasses
         .get_pipeline_render_pass(color_format, depth_stencil_format)?.get();
 
@@ -352,7 +359,7 @@ macro_rules! impl_create_archetype {
 
       pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
 
-      let arch_mut = archetype_lock.as_mut().ok_or(crate::gpu_err!("device error"))?;
+      let arch_mut = archetype_lock.as_mut().ok_or(crate::gpu_err_device!())?;
       arch_mut.insert_graphics_info(color_format, pipeline_graphics_info.clone(), pipeline_graphics_info.pipeline_key());
 
       Ok(())
@@ -569,6 +576,7 @@ impl Archetypes {
     }
   );
 
+  #[named]
   pub fn create_background_archetype(
     &self,
     device: &LogicalDevice,
@@ -585,7 +593,7 @@ impl Archetypes {
   ) -> GpuResult<()> {
     let mut bg_render_archetype = self.background_render_archetype.write();
     if bg_render_archetype.is_some() {
-      return Err(crate::gpu_err!("device error"));
+      return Err(crate::gpu_err_device!());
     }
     let (vertex_shader, fragment_shader) =
       get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
@@ -704,6 +712,7 @@ impl Archetypes {
   );
 
   /// TODO: Document this item
+  #[named]
   pub fn create_physical_mesh_archetype(
     &self,
     device: &LogicalDevice,
@@ -723,7 +732,7 @@ impl Archetypes {
     timeline: u64,
   ) -> GpuResult<()> {
     if self.physical_mesh_render_archetype.read().is_some() {
-      return Err(crate::gpu_err!("device error"));
+      return Err(crate::gpu_err_device!());
     }
 
     let vertex_shader = shader_manager.get(vertex_shader_key).ok_or(GpuError::InvalidShader)?;
@@ -807,7 +816,9 @@ impl Archetypes {
           .with_stencil_attachment_format(depth_stencil_format),
       )
       .with_pipeline_layout(res.pipeline_layout.get())
-      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::INVERT_FRONT_FACE)
+      .with_pipeline_flags(
+        PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::INVERT_FRONT_FACE,
+      )
       .with_stencil_compare_op(StencilCompareOp::Always)
       .with_stencil_logic_op(StencilLogicOp::Replace)
       .with_stencil_reference(255)
@@ -879,6 +890,7 @@ impl Archetypes {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn create_physical_mesh2_archetype(
     &self,
     device: &LogicalDevice,
@@ -898,7 +910,7 @@ impl Archetypes {
     timeline: u64,
   ) -> GpuResult<()> {
     if self.physical_mesh2_render_archetype.read().is_some() {
-      return Err(crate::gpu_err!("device error"));
+      return Err(crate::gpu_err_device!());
     }
 
     let vertex_shader = shader_manager.get(vertex_shader_key).ok_or(GpuError::InvalidShader)?;
@@ -982,7 +994,9 @@ impl Archetypes {
           .with_stencil_attachment_format(depth_stencil_format),
       )
       .with_pipeline_layout(res.pipeline_layout.get())
-      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::INVERT_FRONT_FACE)
+      .with_pipeline_flags(
+        PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::INVERT_FRONT_FACE,
+      )
       .with_stencil_compare_op(StencilCompareOp::Always)
       .with_stencil_logic_op(StencilLogicOp::Replace)
       .with_stencil_reference(255)
@@ -1050,6 +1064,7 @@ impl Archetypes {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn create_sky_archetype(
     &self,
     device: &LogicalDevice,
@@ -1066,7 +1081,7 @@ impl Archetypes {
   ) -> GpuResult<()> {
     let mut sky_render_archetype = self.sky_render_archetype.write();
     if sky_render_archetype.is_some() {
-      return Err(crate::gpu_err!("device error"));
+      return Err(crate::gpu_err_device!());
     }
     let (vertex_shader, fragment_shader) =
       get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
@@ -1125,6 +1140,7 @@ impl Archetypes {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn create_grid_archetype(
     &self,
     device: &LogicalDevice,
@@ -1141,7 +1157,7 @@ impl Archetypes {
   ) -> GpuResult<()> {
     let mut grid_render_archetype = self.grid_render_archetype.write();
     if grid_render_archetype.is_some() {
-      return Err(crate::gpu_err!("device error"));
+      return Err(crate::gpu_err_device!());
     }
     let (vertex_shader, fragment_shader) =
       get_validated_shaders(shader_manager, vertex_shader_key, fragment_shader_key)?;
@@ -1198,6 +1214,7 @@ impl Archetypes {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn create_minimap_archetype(
     &self,
     device: &LogicalDevice,
@@ -1214,11 +1231,11 @@ impl Archetypes {
   ) -> GpuResult<()> {
     let mut minimap_render_archetype = self.minimap_render_archetype.write();
     if minimap_render_archetype.is_some() {
-      return Err(crate::gpu_err!("device error"));
+      return Err(crate::gpu_err_device!());
     }
     *minimap_render_archetype =
       Some(unsafe { resources::MinimapRenderResourceArchetype::new(device, allocator.get_raw())? });
-    let arch_mut = minimap_render_archetype.as_mut().ok_or(crate::gpu_err!("device error"))?;
+    let arch_mut = minimap_render_archetype.as_mut().ok_or(crate::gpu_err_device!())?;
 
     let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vkey, fkey)?;
 
@@ -1262,6 +1279,7 @@ impl Archetypes {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn create_text_archetype(
     &self,
     device: &vulkan::device::LogicalDevice,
@@ -1279,7 +1297,7 @@ impl Archetypes {
   ) -> GpuResult<()> {
     let mut text_render_archetype = self.text_render_archetype.write();
     if text_render_archetype.is_some() {
-      return Err(crate::gpu_err!("device error"));
+      return Err(crate::gpu_err_device!());
     }
 
     let (vertex_shader, fragment_shader) =
@@ -1382,6 +1400,7 @@ impl Archetypes {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn create_text2_archetype(
     &self,
     device: &LogicalDevice,
@@ -1399,7 +1418,7 @@ impl Archetypes {
   ) -> GpuResult<()> {
     let mut text2_render_archetype = self.text2_render_archetype.write();
     if text2_render_archetype.is_some() {
-      return Err(crate::gpu_err!("device error"));
+      return Err(crate::gpu_err_device!());
     }
 
     let (vertex_shader, fragment_shader) =
@@ -1511,6 +1530,7 @@ impl Archetypes {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn create_bvh_archetype(
     &self,
     device: &LogicalDevice,
@@ -1527,11 +1547,11 @@ impl Archetypes {
   ) -> GpuResult<()> {
     let mut bvh_render_archetype = self.bvh_render_archetype.write();
     if bvh_render_archetype.is_some() {
-      return Err(crate::gpu_err!("device error"));
+      return Err(crate::gpu_err_device!());
     }
     *bvh_render_archetype =
       Some(unsafe { resources::BvhRenderResourceArchetype::new(device, allocator.get_raw()) }?);
-    let archetype = bvh_render_archetype.as_mut().ok_or(crate::gpu_err!("device error"))?;
+    let archetype = bvh_render_archetype.as_mut().ok_or(crate::gpu_err_device!())?;
 
     let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vkey, fkey)?;
 
@@ -1581,6 +1601,7 @@ impl Archetypes {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn create_bvhwire2_archetype(
     &self,
     device: &LogicalDevice,
@@ -1597,11 +1618,11 @@ impl Archetypes {
   ) -> GpuResult<()> {
     let mut bvhwire2_render_archetype = self.bvhwire2_render_archetype.write();
     if bvhwire2_render_archetype.is_some() {
-      return Err(crate::gpu_err!("device error"));
+      return Err(crate::gpu_err_device!());
     }
     *bvhwire2_render_archetype =
       Some(unsafe { resources::Bvhwire2RenderResourceArchetype::new(device, allocator) }?);
-    let archetype = bvhwire2_render_archetype.as_mut().ok_or(crate::gpu_err!("device error"))?;
+    let archetype = bvhwire2_render_archetype.as_mut().ok_or(crate::gpu_err_device!())?;
 
     let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vkey, fkey)?;
 
@@ -1651,6 +1672,7 @@ impl Archetypes {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn create_gizmo_archetype(
     &self,
     device: &LogicalDevice,
@@ -1667,11 +1689,11 @@ impl Archetypes {
   ) -> GpuResult<()> {
     let mut gizmo_render_archetype = self.gizmo_render_archetype.write();
     if gizmo_render_archetype.is_some() {
-      return Err(crate::gpu_err!("device error"));
+      return Err(crate::gpu_err_device!());
     }
     *gizmo_render_archetype =
       Some(unsafe { resources::GizmoRenderResourceArchetype::new(device, allocator.get_raw()) }?);
-    let archetype = gizmo_render_archetype.as_mut().ok_or(crate::gpu_err!("device error"))?;
+    let archetype = gizmo_render_archetype.as_mut().ok_or(crate::gpu_err_device!())?;
 
     let (vertex_shader, fragment_shader) = get_validated_shaders(shader_manager, vkey, fkey)?;
 

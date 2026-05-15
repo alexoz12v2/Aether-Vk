@@ -2,8 +2,11 @@
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
+#include "../debug_utils.glsl"
 #include "../bvh_utils.glsl"
+#include "gjk_cta_utils.glsl"
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
@@ -15,39 +18,82 @@ struct Entity {
     BVHArray bvh;
     mat4 transform;
     mat4 inv_transform;
+    vec3 linear_velocity;
     uint root_index;
+    vec3 angular_velocity;
     uint type;              
     uint primitive_offset;
     uint total_primitives;  
+    uint frame_scale_type;
+    float scale_factor;
+    uint shape_type;
+    vec3 shape_data;
 };
 
 layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer EntityArray {
     Entity entities[];
 };
 
+layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer RawMemory {
+    uint64_t raw_data[];
+};
+
+struct SparseCollisionData {
+    uint valid;
+    uint prim_a;
+    uint prim_b;
+    float toi;
+    vec3 contact_normal;
+    vec3 contact_point;
+    float penetration_depth;
+};
+
 layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer SparseCollisions {
-    uvec4 data[];
+    SparseCollisionData data[];
+};
+
+// Particles data
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer ParticleData {
+    float data[];
 };
 
 layout(push_constant, scalar) uniform PushConstants {
     EntityArray scene_entities;
     SparseCollisions output_list;
+    ParticleData particles;
     uint entity_A_idx;
     uint entity_B_idx;
+    float dt;
+    float particle_radius;
 } pc;
+
+AABB transformAABB(AABB aabb, mat4 m) {
+    vec3 center = (aabb.maxBounds + aabb.minBounds) * 0.5;
+    vec3 extents = (aabb.maxBounds - aabb.minBounds) * 0.5;
+    vec3 tCenter = (m * vec4(center, 1.0)).xyz;
+    mat3 absM = mat3(abs(m[0].xyz), abs(m[1].xyz), abs(m[2].xyz));
+    vec3 tExtents = absM * extents;
+    return AABB(tCenter - tExtents, tCenter + tExtents);
+}
 
 void main() {
     uint local_idx_A = gl_GlobalInvocationID.x;
     Entity ent_A = pc.scene_entities.entities[pc.entity_A_idx];
     Entity ent_B = pc.scene_entities.entities[pc.entity_B_idx];
 
+    if (SHOULD_DEBUG_PRINT && local_idx_A == 0) {
+        RawMemory raw = RawMemory(pc.scene_entities);
+        debugPrintfEXT("narrow_ccd_rigidbody started for A=%d B=%d. total_prims=%d. A_trans_x=%f B_trans_x=%f bvh_addr_A=%lx, RAW_MEM_0=%lx, RAW_MEM_25=%lx", pc.entity_A_idx, pc.entity_B_idx, ent_A.total_primitives, ent_A.transform[3][0], ent_B.transform[3][0], uint64_t(ent_A.bvh), raw.raw_data[0], raw.raw_data[25]);
+    }
+
     if (local_idx_A >= ent_A.total_primitives) return;
 
-    // TODO: Implement full GJK distance tracking for the vertices of ent_A against ent_B primitives
-    // and CTA for updating toi
-    
     BVHNodeAABB node_A = read_bvh_node(ent_A.bvh, ent_A.total_primitives - 1 + local_idx_A);
     uint my_prim_id = node_A.left_child_or_primitive_offset;
+
+    // Calculate matrix to transform Entity A into Entity B's Local Space
+    mat4 A_to_B = ent_B.inv_transform * ent_A.transform;
+    AABB search_aabb_B = transformAABB(node_A.bound, A_to_B);
 
     uint collisions_found = 0;
     const uint MAX_COLLISIONS = 16;
@@ -56,33 +102,98 @@ void main() {
     int stackPtr = 0;
     stack[stackPtr++] = ent_B.root_index;
 
+    int debug_iters = 0;
+
+#define EVALUATE_NARROW_PHASE(other_prim_id, node_B_com) \
+    do { \
+        if (pc.entity_A_idx == pc.entity_B_idx && my_prim_id >= other_prim_id) break; \
+        vec3 vA; \
+        if (ent_A.type == TYPE_PARTICLE_SYSTEM) { \
+            uint blockA = my_prim_id / SG_SIZE; \
+            uint locA = my_prim_id % SG_SIZE; \
+            uint baseA = blockA * (10 * SG_SIZE) + locA; \
+            vA = vec3(pc.particles.data[baseA + 3 * SG_SIZE], pc.particles.data[baseA + 4 * SG_SIZE], pc.particles.data[baseA + 5 * SG_SIZE]); \
+        } else { \
+            vA = ent_A.linear_velocity + cross(ent_A.angular_velocity, node_A.center_of_mass); \
+        } \
+        vec3 vB; \
+        if (ent_B.type == TYPE_PARTICLE_SYSTEM) { \
+            uint blockB = other_prim_id / SG_SIZE; \
+            uint locB = other_prim_id % SG_SIZE; \
+            uint baseB = blockB * (10 * SG_SIZE) + locB; \
+            vB = vec3(pc.particles.data[baseB + 3 * SG_SIZE], pc.particles.data[baseB + 4 * SG_SIZE], pc.particles.data[baseB + 5 * SG_SIZE]); \
+        } else { \
+            vB = ent_B.linear_velocity + cross(ent_B.angular_velocity, node_B_com); \
+        } \
+        vec3 vA_localB = (A_to_B * vec4(vA, 0.0)).xyz; \
+        vec3 cA_localB = (A_to_B * vec4(node_A.center_of_mass, 1.0)).xyz; \
+        mat4 trans1 = mat4(1.0); trans1[3].xyz = cA_localB; \
+        mat4 trans2 = mat4(1.0); trans2[3].xyz = node_B_com; \
+        float toi = 1.0; \
+        vec3 contact_normal = vec3(0.0); \
+        vec3 contact_point = vec3(0.0); \
+        float depth = 0.0; \
+        bool is_colliding = compute_toi_generic( \
+            ent_A.shape_type, ent_A.shape_data, trans1, vA_localB, \
+            ent_B.shape_type, ent_B.shape_data, trans2, vB, \
+            1e-3, 10, toi, contact_normal, contact_point, depth \
+        ); \
+        if (is_colliding && collisions_found < MAX_COLLISIONS) { \
+            uint outIdx = local_idx_A * MAX_COLLISIONS + collisions_found; \
+            pc.output_list.data[outIdx].valid = 1; \
+            pc.output_list.data[outIdx].prim_a = ent_A.primitive_offset + my_prim_id; \
+            pc.output_list.data[outIdx].prim_b = ent_B.primitive_offset + other_prim_id; \
+            pc.output_list.data[outIdx].toi = toi; \
+            pc.output_list.data[outIdx].contact_normal = contact_normal; \
+            pc.output_list.data[outIdx].contact_point = contact_point; \
+            pc.output_list.data[outIdx].penetration_depth = depth; \
+            collisions_found++; \
+        } \
+    } while (false)
+
     while (stackPtr > 0) {
         uint node_idx = stack[--stackPtr];
-        BVHNodeAABB node_B = read_bvh_node(ent_B.bvh, node_idx);
+        
+        if (BRANCH_FACTOR == 2) {
+            BVHNodeAABB node_B = read_bvh_node(ent_B.bvh, node_idx);
 
-        // Simple AABB overlap check for now
-        // In a real implementation we would do transformAABB and GJK
-        if (intersectAABB(node_A.bound, node_B.bound)) {
-            if (node_B.primitive_count > 0) {
-                uint other_prim_id = node_B.left_child_or_primitive_offset;
-                
-                // Prevent self-intersection duplicates
-                if (pc.entity_A_idx == pc.entity_B_idx && my_prim_id >= other_prim_id) continue;
+            if (SHOULD_DEBUG_PRINT && local_idx_A == 0) {
+                debugPrintfEXT("Visiting B node %d. prim_count=%d left=%d right=%d searchMinX=%f searchMaxX=%f nodeMinX=%f nodeMaxX=%f", node_idx, node_B.primitive_count, node_B.left_child_or_primitive_offset, node_B.right_child_offset, search_aabb_B.minBounds.x, search_aabb_B.maxBounds.x, node_B.bound.minBounds.x, node_B.bound.maxBounds.x);
+            }
 
-                float toi = 0.5; // Placeholder
-                if (collisions_found < MAX_COLLISIONS) {
-                    uint outIdx = local_idx_A * MAX_COLLISIONS + collisions_found;
-                    pc.output_list.data[outIdx] = uvec4(
-                        1, 
-                        ent_A.primitive_offset + my_prim_id, 
-                        ent_B.primitive_offset + other_prim_id, 
-                        floatBitsToUint(toi)
-                    );
-                    collisions_found++;
+            if (intersectAABB(search_aabb_B, node_B.bound)) {
+                if (node_B.primitive_count > 0) {
+                    uint other_prim_id = node_B.left_child_or_primitive_offset;
+                    vec3 node_B_com = node_B.center_of_mass;
+                    EVALUATE_NARROW_PHASE(other_prim_id, node_B_com);
+                } else {
+                    if (node_B.left_child_or_primitive_offset == 0 && node_B.right_child_offset == 0) {
+                        if (node_idx == 0) break; // Emtpy root
+                        continue; // Skip invalid node
+                    }
+                    if (node_B.left_child_or_primitive_offset != 0xFFFFFFFF && node_B.left_child_or_primitive_offset != 0) stack[stackPtr++] = node_B.left_child_or_primitive_offset;
+                    if (node_B.right_child_offset != 0xFFFFFFFF && node_B.right_child_offset != 0) stack[stackPtr++] = node_B.right_child_offset;
                 }
-            } else {
-                stack[stackPtr++] = node_B.left_child_or_primitive_offset;
-                stack[stackPtr++] = node_B.right_child_offset;
+            }
+        } else {
+            MultiBVHBlockArray multi_bvh = MultiBVHBlockArray(ent_B.bvh);
+            uint node_valid = GET_MULTI_BVH_VALID_COUNT(multi_bvh, node_idx);
+            for (uint i = 0; i < BRANCH_FACTOR; ++i) {
+                if (i >= node_valid) break;
+                AABB bound;
+                GET_MULTI_BVH_BOUND(multi_bvh, node_idx, i, bound);
+                if (intersectAABB(search_aabb_B, bound)) {
+                    bool isLeaf;
+                    uint offset;
+                    GET_MULTI_BVH_LEAF_INFO(multi_bvh, node_idx, i, isLeaf, offset);
+                    if (isLeaf) {
+                        uint other_prim_id = offset;
+                        vec3 node_B_com = (bound.minBounds + bound.maxBounds) * 0.5;
+                        EVALUATE_NARROW_PHASE(other_prim_id, node_B_com);
+                    } else {
+                        if (offset != 0xFFFFFFFF && offset != 0) stack[stackPtr++] = offset;
+                    }
+                }
             }
         }
     }

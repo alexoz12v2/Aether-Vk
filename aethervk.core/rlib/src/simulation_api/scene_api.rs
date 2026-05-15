@@ -265,10 +265,9 @@ impl SimulationContext {
   /// TODO: Document this item
   pub fn create_empty_scene(&self) -> EngineResult<u64> {
     let (scene, root_entity) = empty_scene_object(Arc::clone(&self.texture_cache))?;
-    let scene_ctx = Arc::new(RwLock::new(SceneContext::new_empty(
-      Arc::new(scene),
-      root_entity,
-    ).with_physics_scene()));
+    let scene_ctx = Arc::new(RwLock::new(
+      SceneContext::new_empty(Arc::new(scene), root_entity).with_physics_scene(),
+    ));
     Ok(self.scenes.write().insert_scene(scene_ctx))
   }
 
@@ -337,6 +336,10 @@ impl SimulationContext {
         emissive_color: [1.0, 0.35, 0.02],
         use_new_path: false,
         paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
       },
     )?;
 

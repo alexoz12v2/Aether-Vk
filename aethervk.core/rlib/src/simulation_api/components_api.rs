@@ -299,7 +299,7 @@ impl SimulationContext {
       "component_api:add_physical_mesh_component"
     );
     let path_str = gltf_path.to_str_unified().unwrap().to_string();
-    let mesh = simulation::comet::load_comet_from_gltf(&path_str, false)?;
+    let mesh = simulation::comet::load_comet_from_gltf(&path_str, false, None)?;
     let mesh_arc = Arc::from(mesh);
     scene
       .write()
@@ -314,6 +314,10 @@ impl SimulationContext {
           emissive_color,
           use_new_path: false,
           paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
         },
       )
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))

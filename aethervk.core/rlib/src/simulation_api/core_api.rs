@@ -15,6 +15,7 @@ use crate::{
   types::{EngineError, EngineResult},
 };
 use aethervk_oshal_rlib as oshal;
+use alloc::string::ToString;
 use alloc::{boxed::Box, sync::Arc};
 use core::ptr::addr_of_mut;
 use oshal::{
@@ -126,6 +127,7 @@ impl SimulationContext {
         vsync: true,
         ty: gpu::PresentationEngineType::Window,
         window_info,
+        buffer_count: 3,
       };
       let h = render_device.create_presentation_engine(&params)?;
       render_device.init_archetypes(h)?;
@@ -140,8 +142,7 @@ impl SimulationContext {
             e
           );
         }
-        Err(GpuError::InvalidState(
-          "core_api:create_presentation_engine_windowed | couldn't insert presentation engine inside map",
+        Err(GpuError::InvalidState("core_api:create_presentation_engine_windowed | couldn't insert presentation engine inside map".to_string(),
         ))
       }
     })
@@ -271,7 +272,8 @@ impl SimulationContext {
           );
         }
         Err(GpuError::InvalidState(
-          "core_api:create_presentation_engine | couldn't insert presentation engine inside map",
+          "core_api:create_presentation_engine | couldn't insert presentation engine inside map"
+            .to_string(),
         ))
       }
     })
@@ -296,7 +298,7 @@ impl SimulationContext {
       } else {
         return Err(
           GpuError::InvalidState(
-            "core_api:destroy_presentation_engine | presentation engine not found",
+            "core_api:destroy_presentation_engine | presentation engine not found".to_string(),
           )
           .into(),
         );

@@ -33,6 +33,7 @@ layout(push_constant, scalar) uniform PushConstants {
     ParticleData particles;
     uint num_primitives;
     float particle_radius;
+    float dt;
 } pc;
 
 int common_prefix(uint num_primitives, int i, int j) {
@@ -139,11 +140,17 @@ void main() {
         pc.particles.data[base + 1 * SG_SIZE],
         pc.particles.data[base + 2 * SG_SIZE]
     );
+    vec3 vel = vec3(
+        pc.particles.data[base + 3 * SG_SIZE],
+        pc.particles.data[base + 4 * SG_SIZE],
+        pc.particles.data[base + 5 * SG_SIZE]
+    );
     float mass = pc.particles.data[base + 6 * SG_SIZE];
     float r = pc.particle_radius;
     
-    pc.bvh.nodes[leaf_idx].bound.minBounds = pos - vec3(r);
-    pc.bvh.nodes[leaf_idx].bound.maxBounds = pos + vec3(r);
+    vec3 p1 = pos + vel * pc.dt;
+    pc.bvh.nodes[leaf_idx].bound.minBounds = min(pos - vec3(r), p1 - vec3(r));
+    pc.bvh.nodes[leaf_idx].bound.maxBounds = max(pos + vec3(r), p1 + vec3(r));
     pc.bvh.nodes[leaf_idx].left_child_or_primitive_offset = p_id;
     pc.bvh.nodes[leaf_idx].primitive_count = 1;
     pc.bvh.nodes[leaf_idx].center_of_mass = pos;

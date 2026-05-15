@@ -643,6 +643,7 @@ mod tests {
       width: 800,
       height: 600,
       vsync: false,
+      buffer_count: 3,
     };
 
     let mut engine = PresentationState::new(
@@ -736,6 +737,7 @@ mod tests {
       width: 800,
       height: 600,
       vsync: false,
+      buffer_count: 3,
     };
     let mut vp1 = PresentationState::new(
       &entry,
@@ -756,6 +758,7 @@ mod tests {
       width: 800,
       height: 600,
       vsync: false,
+      buffer_count: 3,
     };
     let mut vp2 = PresentationState::new(
       &entry,
@@ -776,6 +779,7 @@ mod tests {
       width: 400,
       height: 400,
       vsync: false,
+      buffer_count: 3,
     };
     let mut mv = PresentationState::new(
       &entry,
@@ -931,6 +935,7 @@ mod tests {
       width: 800,
       height: 600,
       vsync: false,
+      buffer_count: 3,
     };
 
     let mut engine = PresentationState::new(

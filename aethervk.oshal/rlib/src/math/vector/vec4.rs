@@ -12,6 +12,9 @@ use crate::math::{max_two, min_two};
 use core::ops;
 
 use crate::math::{
+  FloatLike,
+  matrix::Matrix,
+  matrix::mat4::Mat4x4f32,
   quaternion::Quaternion,
   vector::{Vector, Vector3, Vector4, vec3::Vec3f32},
 };
@@ -54,8 +57,79 @@ impl Default for Quat {
 impl Quat {
   /// TODO: Document this item
   pub fn from_components(p0: f32, p1: f32, p2: f32, p3: f32) -> Quat {
-    Self {
-      0: Vec4f32::from_components(p0, p1, p2, p3),
+    Self(Vec4f32::from_components(p0, p1, p2, p3))
+  }
+
+  /// Extracts the rotation component from a 4x4 transformation matrix into a Quaternion.
+  /// This assumes the matrix is standard column-major, and normalizes the axes
+  /// to strip out any scaling factors before conversion.
+  /// Coordinate system context: +X=Right, +Y=Backward (-Y=Forward), +Z=Up.
+  pub fn from_mat4(m: &Mat4x4f32) -> Self {
+    // NOTE: assumes Mat4x4f32 column-major
+
+    // Extract the upper 3x3 block (the basis vectors: Right, Backward, Up)
+    #[rustfmt::skip]
+    let mut right = unsafe { Vec3f32::from_components(m.column_unchecked(0).x(), m.column_unchecked(0).y(), m.column_unchecked(0).z()) };
+    #[rustfmt::skip]
+    let mut backward = unsafe { Vec3f32::from_components(m.column_unchecked(1).x(), m.column_unchecked(1).y(), m.column_unchecked(1).z()) };
+    #[rustfmt::skip]
+    let mut up = unsafe { Vec3f32::from_components(m.column_unchecked(2).x(), m.column_unchecked(2).y(), m.column_unchecked(2).z()) };
+
+    // Strip scale to ensure we generate a valid unit quaternion
+    right = right.normalize();
+    backward = backward.normalize();
+    up = up.normalize();
+
+    let m00 = right.x();
+    let m01 = backward.x();
+    let m02 = up.x();
+    let m10 = right.y();
+    let m11 = backward.y();
+    let m12 = up.y();
+    let m20 = right.z();
+    let m21 = backward.z();
+    let m22 = up.z();
+
+    let trace = m00 + m11 + m22;
+
+    let _0 = 0.0f32;
+    let _1 = 1.0f32;
+    let _2 = 2.0f32;
+    let _0_25 = 0.25f32;
+
+    // Use the standard robust trace method (identical logic to your 3x3 trait method)
+    if trace > _0 {
+      let s = (trace + _1).sqrt() * _2;
+      let inv_s = _1 / s;
+      Self::from_vector_and_scalar(
+        Vec3f32::from_components(
+          (m21 - m12) * inv_s,
+          (m02 - m20) * inv_s,
+          (m10 - m01) * inv_s,
+        ),
+        _0_25 * s,
+      )
+    } else if m00 > m11 && m00 > m22 {
+      let s = (_1 + m00 - m11 - m22).sqrt() * _2;
+      let inv_s = _1 / s;
+      Self::from_vector_and_scalar(
+        Vec3f32::from_components(_0_25 * s, (m01 + m10) * inv_s, (m02 + m20) * inv_s),
+        (m21 - m12) * inv_s,
+      )
+    } else if m11 > m22 {
+      let s = (_1 + m11 - m00 - m22).sqrt() * _2;
+      let inv_s = _1 / s;
+      Self::from_vector_and_scalar(
+        Vec3f32::from_components((m01 + m10) * inv_s, _0_25 * s, (m12 + m21) * inv_s),
+        (m02 - m20) * inv_s,
+      )
+    } else {
+      let s = (_1 + m22 - m00 - m11).sqrt() * _2;
+      let inv_s = _1 / s;
+      Self::from_vector_and_scalar(
+        Vec3f32::from_components((m02 + m20) * inv_s, (m12 + m21) * inv_s, _0_25 * s),
+        (m10 - m01) * inv_s,
+      )
     }
   }
 }

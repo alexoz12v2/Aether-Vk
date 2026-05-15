@@ -357,8 +357,12 @@ pub struct PhysicalMeshComponent {
   pub emissive_intensity: f32,
   pub emissive_color: [f32; 3],
   pub use_new_path: bool,
-  /// 0 = off, 1 = RGB color, 2 = alpha distribution, (see physical_mesh2.frag)
+  /// 0 = off, 1 = RGB color, 2 = alpha distribution, 3 = spherical grid (see physical_mesh2.frag)
   pub paint_display_mode: u32,
+  pub sphere_center: [f32; 3],
+  pub sphere_radius: f32,
+  pub grid_color: [f32; 3],
+  pub grid_density: f32,
 }
 
 impl Clone for PhysicalMeshComponent {
@@ -370,6 +374,10 @@ impl Clone for PhysicalMeshComponent {
       emissive_color: self.emissive_color,
       use_new_path: self.use_new_path,
       paint_display_mode: self.paint_display_mode,
+      sphere_center: self.sphere_center,
+      sphere_radius: self.sphere_radius,
+      grid_color: self.grid_color,
+      grid_density: self.grid_density,
     }
   }
 }
@@ -379,6 +387,11 @@ impl PartialEq for PhysicalMeshComponent {
     self.asset_path == other.asset_path
       && self.emissive_intensity == other.emissive_intensity
       && self.emissive_color == other.emissive_color
+      && self.paint_display_mode == other.paint_display_mode
+      && self.sphere_center == other.sphere_center
+      && self.sphere_radius == other.sphere_radius
+      && self.grid_color == other.grid_color
+      && self.grid_density == other.grid_density
   }
 }
 
@@ -542,6 +555,29 @@ impl ReferenceFrameComponent {
 }
 
 impl Component for ReferenceFrameComponent {}
+
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ColliderShape {
+  Sphere { radius: f32 },
+  OBB { half_extents: Vec3f32 },
+}
+
+impl Default for ColliderShape {
+  fn default() -> Self {
+    Self::Sphere { radius: 1.0 }
+  }
+}
+
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct ColliderComponent {
+  pub shape: ColliderShape,
+  pub mass: f32,
+  pub restitution: f32,
+  pub friction: f32,
+}
+impl Component for ColliderComponent {}
 
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -2098,6 +2134,38 @@ impl Scene {
       }
     }
     None
+  }
+
+  /// Queries entities that possess both `T1` and `T2` components, but do NOT possess a `U` component.
+  pub fn query2_without<T1: Component, T2: Component, U: Component, F>(&self, mut f: F)
+  where
+    F: FnMut(EntityId, &T1, &T2),
+  {
+    let type_t1 = TypeId::of::<T1>();
+    let type_t2 = TypeId::of::<T2>();
+    let type_u = TypeId::of::<U>();
+    let archetypes = self.archetypes.read();
+
+    for archetype in archetypes.iter() {
+      if archetype.components.contains_key(&type_t1)
+        && archetype.components.contains_key(&type_t2)
+        && !archetype.components.contains_key(&type_u)
+      {
+        let comp_storage1_lock = archetype.components.get(&type_t1).unwrap().read();
+        let comp_storage2_lock = archetype.components.get(&type_t2).unwrap().read();
+
+        let components1 = comp_storage1_lock.as_any().downcast_ref::<Vec<Option<T1>>>().unwrap();
+        let components2 = comp_storage2_lock.as_any().downcast_ref::<Vec<Option<T2>>>().unwrap();
+
+        for (i, opt_entity) in archetype.entities.iter().enumerate() {
+          if let (Some(entity_id), Some(c1), Some(c2)) =
+            (opt_entity, &components1[i], &components2[i])
+          {
+            f(*entity_id, c1, c2);
+          }
+        }
+      }
+    }
   }
 
   // === Advanced Scene Traversal Logic ===

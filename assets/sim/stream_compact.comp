@@ -6,6 +6,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "../debug_utils.glsl"
+#include "../bvh_utils.glsl"
 
 // ============================================================================
 // Stream Compaction: Subgroup-based Parallel Prefix Sum
@@ -13,26 +14,21 @@
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
-layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
+
+
+struct SparseCollisionData {
+    uint valid;
+    uint prim_a;
+    uint prim_b;
+    float toi;
+    vec3 contact_normal;
+    vec3 contact_point;
+    float penetration_depth;
+};
 
 // Input sparse array of collision flags/data
 layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer SparseCollisions {
-    uvec4 data[]; // x = valid (1 or 0), y = particleA, z = particleB, w = padding
-};
-
-struct PackedPair {
-    uint entity_a;
-    uint entity_b;
-    uint toi;
-};
-
-// Tightly packed output array
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer PackedCollisions {
-    uint dispatch_x;
-    uint dispatch_y;
-    uint dispatch_z;
-    uint count;
-    PackedPair pairs[];
+    SparseCollisionData data[];
 };
 
 // Workgroup shared memory for prefix sum across subgroups
@@ -56,11 +52,10 @@ void main() {
 
     // 1. Load element
     uint valid = 0;
-    uvec3 pair = uvec3(0);
+    SparseCollisionData elem;
     if (global_id < pc.total_elements) {
-        uvec4 elem = pc.sparse_in.data[global_id];
-        valid = elem.x;
-        pair = elem.yzw;
+        elem = pc.sparse_in.data[global_id];
+        valid = elem.valid;
     }
 
     // 2. Subgroup-level exclusive scan
@@ -109,8 +104,13 @@ void main() {
     // 6. Write valid elements to packed array
     if (valid == 1) {
         uint final_idx = workgroup_offset + shared_sums[subgroup_id] + subgroup_prefix;
-        pc.packed_out.pairs[final_idx].entity_a = pair.x;
-        pc.packed_out.pairs[final_idx].entity_b = pair.y;
-        pc.packed_out.pairs[final_idx].toi = pair.z;
+        pc.packed_out.pairs[final_idx].a.entity_id = 0; // NOTE: entity_id requires passing from narrow_phase, which currently passes 1 for valid.
+        pc.packed_out.pairs[final_idx].a.primitive_index = elem.prim_a;
+        pc.packed_out.pairs[final_idx].b.entity_id = 0;
+        pc.packed_out.pairs[final_idx].b.primitive_index = elem.prim_b;
+        pc.packed_out.pairs[final_idx].toi = elem.toi;
+        pc.packed_out.pairs[final_idx].contact_normal = elem.contact_normal;
+        pc.packed_out.pairs[final_idx].contact_point = elem.contact_point;
+        pc.packed_out.pairs[final_idx].penetration_depth = elem.penetration_depth;
     }
 }

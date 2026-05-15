@@ -107,6 +107,7 @@ dependencies = [
  "bitflags 2.11.0",
  "bytemuck",
  "bytes",
+ "function_name",
  "gltf",
  "hashbrown 0.17.0",
  "heapless 0.9.3",
@@ -262,18 +263,6 @@ dependencies = [
  "ureq",
  "url",
  "zerocopy",
-]
-
-[[package]]
-name = "anise_test"
-version = "0.1.0"
-dependencies = [
- "aethervk-oshal-rlib",
- "anise",
- "bytes",
- "libc",
- "mimalloc",
- "tikv-jemallocator",
 ]
 
 [[package]]
@@ -1240,20 +1229,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
-name = "ellipse_rendering"
-version = "0.1.0"
-dependencies = [
- "aethervk-core-rlib",
- "aethervk-oshal-rlib",
- "reqwest",
- "serde",
- "serde_json",
- "test_utils",
- "urlencoding",
- "winit",
-]
-
-[[package]]
 name = "elsa"
 version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1465,6 +1440,21 @@ checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
 ]
+
+[[package]]
+name = "function_name"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1ab577a896d09940b5fe12ec5ae71f9d8211fff62c919c03a3750a9901e98a7"
+dependencies = [
+ "function_name-proc-macro",
+]
+
+[[package]]
+name = "function_name-proc-macro"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673464e1e314dd67a0fd9544abc99e8eb28d0c7e3b69b033bcff9b2d00b87333"
 
 [[package]]
 name = "futures-channel"
@@ -3248,31 +3238,6 @@ dependencies = [
  "rand 0.8.6",
  "rayon",
  "test_utils",
- "winit",
-]
-
-[[package]]
-name = "particle_test"
-version = "0.1.0"
-dependencies = [
- "aethervk-core-rlib",
- "aethervk-oshal-rlib",
- "anise",
- "bytes",
- "heapless 0.9.3",
- "image",
- "objc2 0.6.4",
- "objc2-app-kit",
- "objc2-core-foundation",
- "objc2-foundation",
- "objc2-metal",
- "objc2-quartz-core",
- "rand 0.10.1",
- "raw-window-handle",
- "test_utils",
- "wchar",
- "windows",
- "windows-strings",
  "winit",
 ]
 

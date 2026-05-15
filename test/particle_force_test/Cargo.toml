@@ -3,6 +3,9 @@ name = "particle_force_test"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+use_vulkan_physics = []
+
 [dependencies]
 aethervk-core-rlib = { path = "../../aethervk.core/rlib" }
 aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib" }

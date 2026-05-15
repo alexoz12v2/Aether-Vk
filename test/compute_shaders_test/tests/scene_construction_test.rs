@@ -21,10 +21,11 @@ fn test_scene_construction() {
   let comet = aethervk_core_rlib::simulation::comet::load_comet_from_gltf(
     model_path.to_str().unwrap(),
     false,
+    None,
   )
   .expect("Failed to load comet");
 
-  let initial_rotation = if let Some(ref axes) = comet.principal_axes {
+  let initial_rotation = if let Some(ref axes) = comet.pa_basis_bf {
     Quat::from_rotation_matrix(axes)
   } else {
     Quat::identity()
@@ -60,6 +61,10 @@ fn test_scene_construction() {
         emissive_color: [0.0, 0.0, 0.0],
         use_new_path: false,
         paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
       },
     )
     .unwrap();

@@ -14,6 +14,19 @@ pub trait CtaBody: Support {
   fn max_radius(&self) -> f32;
 }
 
+struct AdvancingBody<'a, B: CtaBody> {
+  body: &'a B,
+  t: f32,
+}
+
+impl<'a, B: CtaBody> Support for AdvancingBody<'a, B> {
+  #[inline]
+  fn support(&self, dir: Vec3f32) -> Vec3f32 {
+    let v = self.body.linear_velocity();
+    self.body.support(dir) + v * self.t
+  }
+}
+
 /// Computes the time of impact (TOI) between two convex bodies using Conservative Time Advancement.
 /// Returns the TOI in the range [0.0, 1.0]. If the bodies do not collide within the time step, returns None.
 pub fn compute_toi<B1: CtaBody, B2: CtaBody>(
@@ -23,15 +36,6 @@ pub fn compute_toi<B1: CtaBody, B2: CtaBody>(
   max_iterations: usize,
 ) -> Option<f32> {
   let mut t = 0.0;
-
-  // We assume the bodies' `Support` trait implementations evaluate their position at time `t`.
-  // In a full implementation, `body1` and `body2` would be wrapper structs that interpolate their
-  // transforms based on the current `t` being queried.
-  // For the sake of the algorithm loop, we will assume we can query distance at `t`.
-
-  // Since the actual trait signature doesn't take `t`, in a real system we'd need a way to
-  // advance the bodies. For this mathematical foundation, we'll represent the logic abstractly.
-  // Let's implement the pure CTA step calculation.
 
   let v1 = body1.linear_velocity();
   let w1 = body1.angular_velocity();
@@ -55,10 +59,9 @@ pub fn compute_toi<B1: CtaBody, B2: CtaBody>(
   }
 
   for _ in 0..max_iterations {
-    // In a true CTA loop, we'd update the bodies' positions to time `t` here.
-    // For this utility, we'll assume the positions are updated externally or we use
-    // the initial distance if this is just a single step evaluator.
-    let (dist, p_a, p_b) = gjk_distance(body1, body2);
+    let adv1 = AdvancingBody { body: body1, t };
+    let adv2 = AdvancingBody { body: body2, t };
+    let (dist, p_a, p_b) = gjk_distance(&adv1, &adv2);
 
     if dist < time_tolerance {
       return Some(t);
@@ -85,12 +88,6 @@ pub fn compute_toi<B1: CtaBody, B2: CtaBody>(
     if t > 1.0 {
       return None; // No collision within the time step
     }
-
-    // Here, the bodies would need to be advanced to time `t`.
-    // Since we can't mutate the bodies through immutable references, a real implementation
-    // will wrap the support mapping to account for `t`.
-    // This loop demonstrates the core mathematical condition.
-    break; // We break here for the abstract implementation to avoid infinite loops since we aren't advancing.
   }
 
   None

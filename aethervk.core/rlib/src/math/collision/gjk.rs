@@ -2,11 +2,70 @@
 
 use aethervk_oshal_rlib::math::vector::Vector3;
 use aethervk_oshal_rlib::{math::vector::Vector, math::vector::vec3::Vec3f32};
-use alloc::vec::{ Vec };
+use alloc::vec::Vec;
 
 /// A trait for shapes that can be queried for their furthest point in a given direction.
 pub trait Support {
   fn support(&self, dir: Vec3f32) -> Vec3f32;
+}
+
+use crate::math::collision::bounds::{AABB, OBB};
+
+impl Support for AABB<f32> {
+  fn support(&self, dir: Vec3f32) -> Vec3f32 {
+    let min = self.min::<Vec3f32>();
+    let max = self.max::<Vec3f32>();
+    Vec3f32::from_array([
+      if dir.x() > 0.0 { max.x() } else { min.x() },
+      if dir.y() > 0.0 { max.y() } else { min.y() },
+      if dir.z() > 0.0 { max.z() } else { min.z() },
+    ])
+  }
+}
+
+impl Support for OBB<f32> {
+  fn support(&self, dir: Vec3f32) -> Vec3f32 {
+    let origin: Vec3f32 = self.translation();
+    let [x_axis, y_axis, z_axis] = self.axes();
+    let extents: Vec3f32 = self.half_extents();
+
+    let mut result = origin;
+    result += x_axis
+      * if Vector::dot(x_axis, dir) > 0.0 {
+        extents.x()
+      } else {
+        -extents.x()
+      };
+    result += y_axis
+      * if Vector::dot(y_axis, dir) > 0.0 {
+        extents.y()
+      } else {
+        -extents.y()
+      };
+    result += z_axis
+      * if Vector::dot(z_axis, dir) > 0.0 {
+        extents.z()
+      } else {
+        -extents.z()
+      };
+    result
+  }
+}
+
+pub struct GjkSphere {
+  pub center: Vec3f32,
+  pub radius: f32,
+}
+
+impl Support for GjkSphere {
+  fn support(&self, dir: Vec3f32) -> Vec3f32 {
+    let dir_normalized = if dir.length_squared() > 1e-6 {
+      dir.normalize()
+    } else {
+      Vec3f32::from_array([1.0, 0.0, 0.0])
+    };
+    self.center + dir_normalized * self.radius
+  }
 }
 
 /// Represents a point in the Minkowski Difference
@@ -62,7 +121,7 @@ pub fn gjk_distance<S1: Support, S2: Support>(shape1: &S1, shape2: &S2) -> (f32,
     simplex.push(new_pt);
     if do_simplex(&mut simplex, &mut dir) {
       // Intersecting
-      return (0.0, Vec3f32::zero(), Vec3f32::zero()); // TODO: EPA for penetration depth if needed
+      return epa_distance(&simplex, shape1, shape2);
     }
   }
 
@@ -70,6 +129,162 @@ pub fn gjk_distance<S1: Support, S2: Support>(shape1: &S1, shape2: &S2) -> (f32,
   let (closest_a, closest_b) = compute_closest_points(&simplex);
   let distance = (closest_a - closest_b).length();
   (distance, closest_a, closest_b)
+}
+
+#[derive(Clone, Debug)]
+struct Face {
+  a: usize,
+  b: usize,
+  c: usize,
+  normal: Vec3f32,
+  distance: f32,
+}
+
+fn epa_distance<S1: Support, S2: Support>(
+  simplex: &Vec<MinkowskiPoint>,
+  shape1: &S1,
+  shape2: &S2,
+) -> (f32, Vec3f32, Vec3f32) {
+  let mut polytope = simplex.clone();
+  let mut faces = Vec::new();
+
+  let add_face = |polytope: &[MinkowskiPoint], a: usize, b: usize, c: usize| -> Face {
+    let ab = polytope[b].point - polytope[a].point;
+    let ac = polytope[c].point - polytope[a].point;
+    let n = Vector3::cross(ab, ac);
+
+    // Fallback if degenerate
+    let mut normal = if n.length_squared() > 1e-8 {
+      n.normalize()
+    } else {
+      Vec3f32::from_array([1.0, 0.0, 0.0])
+    };
+    let mut distance = Vector::dot(normal, polytope[a].point);
+
+    if distance < 0.0 {
+      normal = -normal;
+      distance = -distance;
+    }
+    Face {
+      a,
+      b,
+      c,
+      normal,
+      distance,
+    }
+  };
+
+  if polytope.len() == 4 {
+    faces.push(add_face(&polytope, 0, 1, 2));
+    faces.push(add_face(&polytope, 0, 3, 1));
+    faces.push(add_face(&polytope, 0, 2, 3));
+    faces.push(add_face(&polytope, 1, 3, 2));
+  } else {
+    // Should not happen theoretically since do_simplex only returns true on 4-simplex
+    return (0.0, Vec3f32::zero(), Vec3f32::zero());
+  }
+
+  const MAX_EPA_ITERATIONS: usize = 32;
+  for _ in 0..MAX_EPA_ITERATIONS {
+    let mut closest_face_idx = 0;
+    let mut min_dist = faces[0].distance;
+    for (i, face) in faces.iter().enumerate().skip(1) {
+      if face.distance < min_dist {
+        min_dist = face.distance;
+        closest_face_idx = i;
+      }
+    }
+
+    let closest_face = faces[closest_face_idx].clone();
+    let search_dir = closest_face.normal;
+    let p_a = shape1.support(search_dir);
+    let p_b = shape2.support(-search_dir);
+    let new_pt = MinkowskiPoint::new(p_a, p_b);
+
+    let dist = Vector::dot(new_pt.point, search_dir);
+    if dist - min_dist < 1e-4 {
+      let a = polytope[closest_face.a];
+      let b = polytope[closest_face.b];
+      let c = polytope[closest_face.c];
+
+      let n = closest_face.normal;
+      let p = n * min_dist;
+
+      let v0 = b.point - a.point;
+      let v1 = c.point - a.point;
+      let v2 = p - a.point;
+
+      let d00 = Vector::dot(v0, v0);
+      let d01 = Vector::dot(v0, v1);
+      let d11 = Vector::dot(v1, v1);
+      let d20 = Vector::dot(v2, v0);
+      let d21 = Vector::dot(v2, v1);
+
+      let denom = d00 * d11 - d01 * d01;
+      let (v, w) = if denom.abs() < 1e-6 {
+        (0.333, 0.333)
+      } else {
+        let inv_denom = 1.0 / denom;
+        (
+          (d11 * d20 - d01 * d21) * inv_denom,
+          (d00 * d21 - d01 * d20) * inv_denom,
+        )
+      };
+      let u = 1.0 - v - w;
+
+      let contact_a = a.point_a * u + b.point_a * v + c.point_a * w;
+      let contact_b = a.point_b * u + b.point_b * v + c.point_b * w;
+
+      return (-min_dist, contact_a, contact_b);
+    }
+
+    let new_idx = polytope.len();
+    polytope.push(new_pt);
+
+    let mut edges = Vec::new();
+    let mut i = 0;
+    while i < faces.len() {
+      if Vector::dot(faces[i].normal, new_pt.point - polytope[faces[i].a].point) > 0.0 {
+        let f = faces.remove(i);
+        let mut add_edge = |a: usize, b: usize| {
+          if let Some(pos) = edges.iter().position(|&(ea, eb)| ea == b && eb == a) {
+            edges.remove(pos);
+          } else {
+            edges.push((a, b));
+          }
+        };
+        add_edge(f.a, f.b);
+        add_edge(f.b, f.c);
+        add_edge(f.c, f.a);
+      } else {
+        i += 1;
+      }
+    }
+
+    if edges.is_empty() {
+      break;
+    }
+
+    for (ea, eb) in edges {
+      faces.push(add_face(&polytope, ea, eb, new_idx));
+    }
+  }
+
+  let closest_face = match faces.first() {
+    Some(face) => face,
+    None => return (0.0, Vec3f32::zero(), Vec3f32::zero()),
+  };
+  let a = polytope[closest_face.a];
+  let b = polytope[closest_face.b];
+  let c = polytope[closest_face.c];
+  let u = 0.3333;
+  let v = 0.3333;
+  let w = 0.3334;
+  (
+    -closest_face.distance,
+    a.point_a * u + b.point_a * v + c.point_a * w,
+    a.point_b * u + b.point_b * v + c.point_b * w,
+  )
 }
 
 /// Updates the simplex and the search direction.

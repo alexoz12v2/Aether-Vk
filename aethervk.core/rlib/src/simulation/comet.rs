@@ -1,4 +1,5 @@
 //! comet module.
+use aethervk_oshal_rlib::math::quaternion::Quaternion;
 
 use aethervk_oshal_rlib::{
   self as oshal,
@@ -108,7 +109,8 @@ pub struct Texture {
 
 use crate::math::collision::bvh_builder::{BVHBuilder, BVHBuilderParams};
 use crate::math::collision::linear_bvh::LinearBVH;
-use aethervk_oshal_rlib::math::matrix::{Matrix3, mat3::Mat3f32};
+use aethervk_oshal_rlib::math::matrix::{Matrix3, mat3::Mat3f32, Matrix};
+use aethervk_oshal_rlib::math::vector::vec4::Quat;
 
 static NEXT_COMET_ID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
 
@@ -127,20 +129,32 @@ pub struct Comet {
   /// to any other scalar numeric format declared in oshal library, to support mixed precision simulation
   pub mass_properties: MassProperties,
   pub bvh: Option<LinearBVH<f32>>,
-  pub principal_axes: Option<Mat3f32>,
+  /// The principal axes basis vectors (eigenvectors of the inertia tensor) expressed in the Body-Fixed (BF) frame.
+  pub pa_basis_bf: Option<Mat3f32>,
+  /// Rotation from Body-Fixed (BF) frame to Principal Axis (PA) frame.
+  pub bf_to_pa: Option<Quat>,
 }
 
 fn compute_comet_extras(
   vertices: &[Vertex],
   indices: &[u32],
   mass_properties: &mut MassProperties,
-) -> (Option<LinearBVH<f32>>, Option<Mat3f32>, Vec<Vertex>) {
+  provided_inertia: Option<Mat3f32>,
+) -> (Option<LinearBVH<f32>>, Option<Mat3f32>, Option<Quat>, Vec<Vertex>) {
   use crate::math::compute_com_and_tensor;
   let raw_verts: Vec<Vec3f32> = vertices
     .iter()
     .map(|v| Vec3f32::from_components(v.position[0], v.position[1], v.position[2]))
     .collect();
-  let (_, mat) = compute_com_and_tensor(&raw_verts, 1.0); // Assume unit mass per vertex for geometry proxy
+
+  // Use provided inertia if available, otherwise compute from mesh
+  let mat = if let Some(ext_mat) = provided_inertia {
+    ext_mat
+  } else {
+    let (_, mat) = compute_com_and_tensor(&raw_verts, 1.0); // Assume unit mass per vertex for geometry proxy
+    mat
+  };
+
   let (principal_moments, principal_axes) = crate::math::jacobi_diagonalization(mat, 1e-6, 100);
 
   // Update mass properties to match the new diagonalized tensor
@@ -171,14 +185,20 @@ fn compute_comet_extras(
     v.normal = [nx, ny, nz];
   }
 
+  // bf_to_pa is the rotation that takes a vector in BF and moves it to PA.
+  // Since local_v = principal_axes^T * world_v, bf_to_pa = Quat(principal_axes^T)
+  let bf_to_pa = Quat::from_rotation_matrix(&principal_axes.transpose());
+
   // Log the axes properly formatted
   use aethervk_oshal_rlib::math::vector::Vector;
 
   let mut tris = Vec::new();
   for chunk in indices.chunks_exact(3) {
     let v0 = local_vertices[chunk[0] as usize].position;
-    let v1 = local_vertices[chunk[1] as usize].position;
-    let v2 = local_vertices[chunk[2] as usize].position;
+    let i1 = chunk[1] as usize;
+    let i2 = chunk[2] as usize;
+    let v1 = local_vertices[i1].position;
+    let v2 = local_vertices[i2].position;
     tris.push(Triangle {
       vertices: [
         Vec3f32::from_components(v0[0], v0[1], v0[2]),
@@ -192,7 +212,12 @@ fn compute_comet_extras(
   let bvh = builder.build(&tris);
   let linear_bvh = bvh.map(|root| LinearBVH::from_build_node(&root, 0));
 
-  (linear_bvh, Some(principal_axes), local_vertices)
+  (
+    linear_bvh,
+    Some(principal_axes),
+    Some(bf_to_pa),
+    local_vertices,
+  )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -460,7 +485,11 @@ use alloc::collections::BTreeMap;
 /// Function to load a GLTF/GLB file
 /// 1. Watertightness Check: A closed, physical (manifold) mesh must have every undirected edge shared by exactly two triangles. If an edge has only one triangle, there's a hole. If it has three or more, there's self-intersecting/non-manifold geometry.
 /// 2. Outward Normals Check: By calculating the signed volume of the mesh using the divergence theorem, we can verify winding order. If the volume is negative, the triangles are wound backwards, meaning your normals are pointing inward.
-pub fn load_comet_from_gltf(path: &str, verbose: bool) -> Result<Comet, CometLoadError> {
+pub fn load_comet_from_gltf(
+  path: &str,
+  verbose: bool,
+  provided_inertia: Option<Mat3f32>,
+) -> Result<Comet, CometLoadError> {
   oshal::log!("--- Starting GLTF load for: {} ---", path);
 
   let mut path_buf = PathBuf::new();
@@ -593,6 +622,34 @@ pub fn load_comet_from_gltf(path: &str, verbose: bool) -> Result<Comet, CometLoa
     }
   }
 
+  let result = finalize_comet(
+    vertices,
+    indices,
+    albedo_map,
+    normal_map,
+    roughness_map,
+    ao_map,
+    verbose,
+    provided_inertia,
+  );
+
+  if result.is_ok() {
+    oshal::log!("--- GLTF load successful! ---");
+  }
+
+  result
+}
+
+fn finalize_comet(
+  vertices: Vec<Vertex>,
+  indices: Vec<u32>,
+  albedo_map: Option<Texture>,
+  normal_map: Option<Texture>,
+  roughness_map: Option<Texture>,
+  ao_map: Option<Texture>,
+  verbose: bool,
+  provided_inertia: Option<Mat3f32>,
+) -> Result<Comet, CometLoadError> {
   // --- TOPOLOGY VALIDATIONS ---
   oshal::log!("Running geometric validations...");
 
@@ -658,11 +715,9 @@ pub fn load_comet_from_gltf(path: &str, verbose: bool) -> Result<Comet, CometLoa
     );
   }
 
-  oshal::log!("--- GLTF load successful! ---");
-
   let mut mass_properties = calculate_mass_properties(&vertices, &indices, 1.0);
-  let (bvh, principal_axes, local_vertices) =
-    compute_comet_extras(&vertices, &indices, &mut mass_properties);
+  let (bvh, pa_basis_bf, bf_to_pa, local_vertices) =
+    compute_comet_extras(&vertices, &indices, &mut mass_properties, provided_inertia);
 
   Ok(Comet {
     id: NEXT_COMET_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
@@ -674,8 +729,351 @@ pub fn load_comet_from_gltf(path: &str, verbose: bool) -> Result<Comet, CometLoa
     ao_map,
     mass_properties,
     bvh,
-    principal_axes,
+    pa_basis_bf,
+    bf_to_pa,
   })
+}
+
+pub fn load_comet_from_obj(
+  path: &str,
+  verbose: bool,
+  provided_inertia: Option<Mat3f32>,
+) -> Result<Comet, CometLoadError> {
+  oshal::log!("--- Starting OBJ load for: {} ---", path);
+
+  let mut path_buf = PathBuf::new();
+  path_buf.push(path);
+
+  if !path_buf.is_file() {
+    oshal::log!("ERROR: File not found at path: {}", path);
+    return Err(CometLoadError::PathNotFound);
+  }
+
+  let data = fs::read(&path_buf)?;
+  let data_str = core::str::from_utf8(&data).map_err(|_| CometLoadError::UnsupportedImageFormat)?;
+
+  let mut temp_positions = Vec::new();
+  let mut temp_normals = Vec::new();
+  let mut temp_uvs = Vec::new();
+
+  let mut vertices = Vec::new();
+  let mut indices = Vec::new();
+
+  // A vertex in OBJ is given by index triplet (v, vt, vn)
+  let mut unique_vertices = alloc::collections::BTreeMap::<(u32, u32, u32), u32>::new();
+
+  for line in data_str.lines() {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+      continue;
+    }
+    
+    let mut parts = line.split_whitespace();
+    let Some(prefix) = parts.next() else { continue; };
+    
+    match prefix {
+      "v" => {
+        let x = parts.next().unwrap_or("0").parse::<f32>().unwrap_or(0.0);
+        let y = parts.next().unwrap_or("0").parse::<f32>().unwrap_or(0.0);
+        let z = parts.next().unwrap_or("0").parse::<f32>().unwrap_or(0.0);
+        temp_positions.push([x, y, z]);
+      }
+      "vt" => {
+        let u = parts.next().unwrap_or("0").parse::<f32>().unwrap_or(0.0);
+        let v = parts.next().unwrap_or("0").parse::<f32>().unwrap_or(0.0);
+        temp_uvs.push([u, v]);
+      }
+      "vn" => {
+        let x = parts.next().unwrap_or("0").parse::<f32>().unwrap_or(0.0);
+        let y = parts.next().unwrap_or("0").parse::<f32>().unwrap_or(0.0);
+        let z = parts.next().unwrap_or("0").parse::<f32>().unwrap_or(0.0);
+        temp_normals.push([x, y, z]);
+      }
+      "f" => {
+        let mut face_vertices = Vec::new();
+        for vertex_str in parts {
+          let mut v_parts = vertex_str.split('/');
+          let v_idx = v_parts.next().unwrap_or("").parse::<u32>().unwrap_or(0);
+          let vt_idx = v_parts.next().unwrap_or("").parse::<u32>().unwrap_or(0);
+          let vn_idx = v_parts.next().unwrap_or("").parse::<u32>().unwrap_or(0);
+          
+          let key = (v_idx, vt_idx, vn_idx);
+          let index = *unique_vertices.entry(key).or_insert_with(|| {
+             let new_index = vertices.len() as u32;
+             
+             let pos = if v_idx > 0 && v_idx as usize <= temp_positions.len() {
+                 temp_positions[v_idx as usize - 1]
+             } else {
+                 [0.0, 0.0, 0.0]
+             };
+             
+             let uv = if vt_idx > 0 && vt_idx as usize <= temp_uvs.len() {
+                 temp_uvs[vt_idx as usize - 1]
+             } else {
+                 [0.0, 0.0]
+             };
+             
+             let norm = if vn_idx > 0 && vn_idx as usize <= temp_normals.len() {
+                 temp_normals[vn_idx as usize - 1]
+             } else {
+                 [0.0, 1.0, 0.0]
+             };
+
+             vertices.push(Vertex {
+                 position: pos,
+                 normal: norm,
+                 uv,
+                 tangent: [1.0, 0.0, 0.0, 1.0], // Default tangent
+             });
+             new_index
+          });
+          face_vertices.push(index);
+        }
+        
+        // Triangulate
+        if face_vertices.len() >= 3 {
+            let v0 = face_vertices[0];
+            for i in 1..face_vertices.len()-1 {
+                indices.push(v0);
+                indices.push(face_vertices[i]);
+                indices.push(face_vertices[i+1]);
+            }
+        }
+      }
+      _ => {}
+    }
+  }
+
+  // Generate tangents if UVs and positions exist
+  generate_tangents(&mut vertices, &indices);
+
+  let result = finalize_comet(
+    vertices,
+    indices,
+    None,
+    None,
+    None,
+    None,
+    verbose,
+    provided_inertia,
+  );
+
+  if result.is_ok() {
+    oshal::log!("--- OBJ load successful! ---");
+  }
+
+  result
+}
+
+pub fn load_comet_from_ply(
+  path: &str,
+  verbose: bool,
+  provided_inertia: Option<Mat3f32>,
+) -> Result<Comet, CometLoadError> {
+  oshal::log!("--- Starting PLY load for: {} ---", path);
+
+  let mut path_buf = PathBuf::new();
+  path_buf.push(path);
+
+  if !path_buf.is_file() {
+    oshal::log!("ERROR: File not found at path: {}", path);
+    return Err(CometLoadError::PathNotFound);
+  }
+
+  let data = fs::read(&path_buf)?;
+  let data_str = core::str::from_utf8(&data).map_err(|_| CometLoadError::UnsupportedImageFormat)?;
+  
+  let mut lines = data_str.lines();
+  
+  // Header
+  if lines.next().unwrap_or("").trim() != "ply" {
+      return Err(CometLoadError::UnsupportedImageFormat);
+  }
+  
+  let mut format = "";
+  let mut vertex_count = 0;
+  let mut face_count = 0;
+  let mut current_element = "";
+  
+  let mut properties = alloc::vec::Vec::new();
+  
+  while let Some(line) = lines.next() {
+      let line = line.trim();
+      if line == "end_header" {
+          break;
+      }
+      
+      let mut parts = line.split_whitespace();
+      let Some(prefix) = parts.next() else { continue; };
+      
+      match prefix {
+          "format" => {
+              format = parts.next().unwrap_or("");
+          }
+          "element" => {
+              current_element = parts.next().unwrap_or("");
+              let count = parts.next().unwrap_or("0").parse::<usize>().unwrap_or(0);
+              if current_element == "vertex" {
+                  vertex_count = count;
+              } else if current_element == "face" {
+                  face_count = count;
+              }
+          }
+          "property" => {
+              if current_element == "vertex" {
+                  let _type = parts.next().unwrap_or("");
+                  let name = parts.next().unwrap_or("");
+                  properties.push(name);
+              }
+          }
+          _ => {}
+      }
+  }
+  
+  if format != "ascii" {
+      oshal::log!("ERROR: Only ASCII PLY format is currently supported.");
+      return Err(CometLoadError::UnsupportedImageFormat);
+  }
+  
+  let mut vertices = Vec::with_capacity(vertex_count);
+  for _ in 0..vertex_count {
+      let Some(line) = lines.next() else { break; };
+      let parts: Vec<&str> = line.split_whitespace().collect();
+      
+      let mut pos = [0.0, 0.0, 0.0];
+      let mut norm = [0.0, 1.0, 0.0];
+      let mut uv = [0.0, 0.0];
+      
+      for (i, &prop) in properties.iter().enumerate() {
+          if i >= parts.len() { break; }
+          let val = parts[i].parse::<f32>().unwrap_or(0.0);
+          match prop {
+              "x" => pos[0] = val,
+              "y" => pos[1] = val,
+              "z" => pos[2] = val,
+              "nx" => norm[0] = val,
+              "ny" => norm[1] = val,
+              "nz" => norm[2] = val,
+              "s" | "u" => uv[0] = val,
+              "t" | "v" => uv[1] = val,
+              _ => {}
+          }
+      }
+      
+      vertices.push(Vertex {
+          position: pos,
+          normal: norm,
+          uv,
+          tangent: [1.0, 0.0, 0.0, 1.0],
+      });
+  }
+  
+  let mut indices = Vec::new();
+  for _ in 0..face_count {
+      let Some(line) = lines.next() else { break; };
+      let parts: Vec<&str> = line.split_whitespace().collect();
+      if parts.is_empty() { continue; }
+      
+      let count = parts[0].parse::<usize>().unwrap_or(0);
+      if count >= 3 && parts.len() >= count + 1 {
+          let mut face_indices = Vec::with_capacity(count);
+          for i in 1..=count {
+              face_indices.push(parts[i].parse::<u32>().unwrap_or(0));
+          }
+          
+          let v0 = face_indices[0];
+          for i in 1..count-1 {
+              indices.push(v0);
+              indices.push(face_indices[i]);
+              indices.push(face_indices[i+1]);
+          }
+      }
+  }
+
+  generate_tangents(&mut vertices, &indices);
+
+  let result = finalize_comet(
+    vertices,
+    indices,
+    None,
+    None,
+    None,
+    None,
+    verbose,
+    provided_inertia,
+  );
+
+  if result.is_ok() {
+    oshal::log!("--- PLY load successful! ---");
+  }
+
+  result
+}
+
+// Simple tangent generation (Lengyel, Eric. "Computing Tangent Space Basis Vectors for an Arbitrary Mesh")
+fn generate_tangents(vertices: &mut [Vertex], indices: &[u32]) {
+    let mut tan1 = alloc::vec![Vec3f32::from_components(0.0, 0.0, 0.0); vertices.len()];
+    let mut tan2 = alloc::vec![Vec3f32::from_components(0.0, 0.0, 0.0); vertices.len()];
+
+    for chunk in indices.chunks_exact(3) {
+        let i1 = chunk[0] as usize;
+        let i2 = chunk[1] as usize;
+        let i3 = chunk[2] as usize;
+
+        let v1 = vertices[i1];
+        let v2 = vertices[i2];
+        let v3 = vertices[i3];
+
+        let x1 = v2.position[0] - v1.position[0];
+        let x2 = v3.position[0] - v1.position[0];
+        let y1 = v2.position[1] - v1.position[1];
+        let y2 = v3.position[1] - v1.position[1];
+        let z1 = v2.position[2] - v1.position[2];
+        let z2 = v3.position[2] - v1.position[2];
+
+        let s1 = v2.uv[0] - v1.uv[0];
+        let s2 = v3.uv[0] - v1.uv[0];
+        let t1 = v2.uv[1] - v1.uv[1];
+        let t2 = v3.uv[1] - v1.uv[1];
+
+        let div = s1 * t2 - s2 * t1;
+        let r = if div == 0.0 { 1.0 } else { 1.0 / div };
+        
+        let sdir = Vec3f32::from_components(
+            (t2 * x1 - t1 * x2) * r,
+            (t2 * y1 - t1 * y2) * r,
+            (t2 * z1 - t1 * z2) * r,
+        );
+        let tdir = Vec3f32::from_components(
+            (s1 * x2 - s2 * x1) * r,
+            (s1 * y2 - s2 * y1) * r,
+            (s1 * z2 - s2 * z1) * r,
+        );
+
+        tan1[i1] = tan1[i1] + sdir;
+        tan1[i2] = tan1[i2] + sdir;
+        tan1[i3] = tan1[i3] + sdir;
+
+        tan2[i1] = tan2[i1] + tdir;
+        tan2[i2] = tan2[i2] + tdir;
+        tan2[i3] = tan2[i3] + tdir;
+    }
+
+    for (i, v) in vertices.iter_mut().enumerate() {
+        let n = Vec3f32::from_components(v.normal[0], v.normal[1], v.normal[2]);
+        let t = tan1[i];
+        
+        // Gram-Schmidt orthogonalize
+        let t_dot_n = t.dot(n);
+        let tangent_unnorm = t - n * t_dot_n;
+        let tangent_len = tangent_unnorm.length();
+        let tangent = if tangent_len > 0.000001 { tangent_unnorm / tangent_len } else { Vec3f32::from_components(1.0, 0.0, 0.0) };
+        
+        // Calculate handedness
+        let w = if n.cross(t).dot(tan2[i]) < 0.0 { -1.0 } else { 1.0 };
+        
+        v.tangent = [tangent.x(), tangent.y(), tangent.z(), w];
+    }
 }
 
 pub fn generate_quad(normal: Vec3f32, size: f32) -> Comet {
@@ -783,7 +1181,7 @@ pub fn generate_quad(normal: Vec3f32, size: f32) -> Comet {
   mass_properties.inertia.yz = 0.0;
   mass_properties.inertia.xz = 0.0;
 
-  let principal_axes = Mat3f32 {
+  let pa_basis_bf = Mat3f32 {
     x: Vec3f32::from_components(1.0, 0.0, 0.0),
     y: Vec3f32::from_components(0.0, 1.0, 0.0),
     z: Vec3f32::from_components(0.0, 0.0, 1.0),
@@ -816,7 +1214,8 @@ pub fn generate_quad(normal: Vec3f32, size: f32) -> Comet {
     ao_map: None,
     mass_properties,
     bvh,
-    principal_axes: Some(principal_axes),
+    pa_basis_bf: Some(pa_basis_bf),
+    bf_to_pa: Some(Quat::identity()),
   }
 }
 
@@ -902,7 +1301,7 @@ pub fn generate_uv_sphere(
   mass_properties.inertia.yz = 0.0;
 
   // Symmetrical Solid Spheres naturally assert the Identity Matrix for local principal axes
-  let principal_axes = Mat3f32 {
+  let pa_basis_bf = Mat3f32 {
     x: Vec3f32::from_components(1.0, 0.0, 0.0),
     y: Vec3f32::from_components(0.0, 1.0, 0.0),
     z: Vec3f32::from_components(0.0, 0.0, 1.0),
@@ -937,7 +1336,8 @@ pub fn generate_uv_sphere(
     ao_map: None,
     mass_properties,
     bvh,
-    principal_axes: Some(principal_axes),
+    pa_basis_bf: Some(pa_basis_bf),
+    bf_to_pa: Some(Quat::identity()),
   }
 }
 
@@ -1154,11 +1554,140 @@ mod tests {
     assert!(model_dir.is_file());
 
     let comet =
-      load_comet_from_gltf(model_dir.to_str().unwrap(), false).expect("Failed to load comet");
+      load_comet_from_gltf(model_dir.to_str().unwrap(), false, None).expect("Failed to load comet");
     let inertia = comet.mass_properties.inertia;
     const THRESHOLD: f64 = 1e-6;
     assert!(inertia.xy.abs() < THRESHOLD);
     assert!(inertia.xz.abs() < THRESHOLD);
     assert!(inertia.yz.abs() < THRESHOLD);
+  }
+
+  #[test]
+  fn test_comet_custom_inertia() {
+    let dummy_vertices = [
+      Vertex {
+        position: [0.0, 0.0, 0.0],
+        normal: [0.0, 0.0, 0.0],
+        uv: [0.0, 0.0],
+        tangent: [0.0, 0.0, 0.0, 0.0],
+      },
+      Vertex {
+        position: [1.0, 0.0, 0.0],
+        normal: [0.0, 0.0, 0.0],
+        uv: [0.0, 0.0],
+        tangent: [0.0, 0.0, 0.0, 0.0],
+      },
+      Vertex {
+        position: [0.0, 1.0, 0.0],
+        normal: [0.0, 0.0, 0.0],
+        uv: [0.0, 0.0],
+        tangent: [0.0, 0.0, 0.0, 0.0],
+      },
+      Vertex {
+        position: [0.0, 0.0, 1.0],
+        normal: [0.0, 0.0, 0.0],
+        uv: [0.0, 0.0],
+        tangent: [0.0, 0.0, 0.0, 0.0],
+      },
+    ];
+    let dummy_indices = [0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3];
+    let mut mass_properties = calculate_mass_properties(&dummy_vertices, &dummy_indices, 1.0);
+    let vertices = [
+      Vertex {
+        position: [1.0, 0.0, 0.0],
+        normal: [1.0, 0.0, 0.0],
+        uv: [0.0, 0.0],
+        tangent: [0.0, 0.0, 0.0, 0.0],
+      },
+      Vertex {
+        position: [0.0, 1.0, 0.0],
+        normal: [0.0, 1.0, 0.0],
+        uv: [0.0, 0.0],
+        tangent: [0.0, 0.0, 0.0, 0.0],
+      },
+      Vertex {
+        position: [0.0, 0.0, 1.0],
+        normal: [0.0, 0.0, 1.0],
+        uv: [0.0, 0.0],
+        tangent: [0.0, 0.0, 0.0, 0.0],
+      },
+    ];
+    let indices = [0, 1, 2];
+
+    // Create a non-diagonal inertia tensor by rotating a diagonal one [1, 2, 3] by 45 deg around Z
+    // I_bf = [1.5, -0.5, 0; -0.5, 1.5, 0; 0, 0, 3]
+    let custom_inertia = Mat3f32::from_columns(
+      Vec3f32::from_components(1.5, -0.5, 0.0),
+      Vec3f32::from_components(-0.5, 1.5, 0.0),
+      Vec3f32::from_components(0.0, 0.0, 3.0),
+    );
+
+    let (_, _, bf_to_pa, _) =
+      compute_comet_extras(&vertices, &indices, &mut mass_properties, Some(custom_inertia));
+
+    // Verify eigenvalues (diagonalized inertia)
+    assert!((mass_properties.inertia.xx - 1.0).abs() < 1e-6);
+    assert!((mass_properties.inertia.yy - 2.0).abs() < 1e-6);
+    assert!((mass_properties.inertia.zz - 3.0).abs() < 1e-6);
+
+    // Verify bf_to_pa rotation
+    // 45 degrees around Z: cos(22.5) = 0.9238, sin(22.5) = 0.3826
+    // Quat = [0, 0, sin(theta/2), cos(theta/2)] = [0, 0, 0.3826, 0.9238]
+    // Wait, the eigenvectors might be flipped or reordered.
+    // Let's check the rotation of a vector.
+    let bf_to_pa = bf_to_pa.unwrap();
+    let v_bf = Vec3f32::from_components(1.0, 1.0, 0.0);
+    let v_pa = bf_to_pa.rotate_vector(v_bf);
+
+    // In PA frame, eigenvectors are [1, 1, 0]/sqrt(2) and [-1, 1, 0]/sqrt(2) (or similar)
+    // [1, 1, 0] rotated by 45 deg should align with one of the axes.
+    assert!((v_pa.x().abs() - 2.0_f32.sqrt()).abs() < 1e-6 || (v_pa.y().abs() - 2.0_f32.sqrt()).abs() < 1e-6);
+    assert!(v_pa.z().abs() < 1e-6);
+  }
+
+  #[test]
+  fn test_comet_obj_loading() {
+    let obj_content = "
+v 0.0 0.0 0.0
+v 1.0 0.0 0.0
+v 0.0 1.0 0.0
+v 0.0 0.0 1.0
+f 1 3 2
+f 1 2 4
+f 1 4 3
+f 2 3 4
+";
+    let tmp_path = std::env::temp_dir().join("test.obj");
+    std::fs::write(&tmp_path, obj_content).unwrap();
+    let comet = load_comet_from_obj(tmp_path.to_str().unwrap(), false, None).unwrap();
+    assert_eq!(comet.vertices.len(), 4);
+    assert_eq!(comet.indices.len(), 12);
+  }
+
+  #[test]
+  fn test_comet_ply_loading() {
+    let ply_content = "ply
+format ascii 1.0
+element vertex 4
+property float x
+property float y
+property float z
+element face 4
+property list uchar uint vertex_indices
+end_header
+0.0 0.0 0.0
+1.0 0.0 0.0
+0.0 1.0 0.0
+0.0 0.0 1.0
+3 0 2 1
+3 0 1 3
+3 0 3 2
+3 1 2 3
+";
+    let tmp_path = std::env::temp_dir().join("test.ply");
+    std::fs::write(&tmp_path, ply_content).unwrap();
+    let comet = load_comet_from_ply(tmp_path.to_str().unwrap(), false, None).unwrap();
+    assert_eq!(comet.vertices.len(), 4);
+    assert_eq!(comet.indices.len(), 12);
   }
 }

@@ -48,6 +48,7 @@ use core::{
   sync::atomic::AtomicU32,
   sync::atomic::{AtomicU64, Ordering},
 };
+use function_name::named;
 use heapless::index_map::FnvIndexMap;
 use oshal::os::{
   fs::PathBuf,
@@ -56,20 +57,143 @@ use oshal::os::{
 };
 use spin::Mutex;
 use vk_mem::Alloc;
-// TODO refactor queue to use a Mutex for VkQueue handle or a struct to ensure submits are sync
 
+// TODO refactor queue to use a Mutex for VkQueue handle or a struct to ensure submits are sync
+// TODO refactor error handling system with centralized thiserror, String, function name, macros
+
+/// can be used only on a #[named] function
 #[macro_export]
 macro_rules! gpu_err {
   ($msg:expr) => {
-    crate::types::GpuError::InvalidState(concat!("[Vulkan RenderDevice] ", $msg))
+    $crate::types::GpuError::InvalidState(alloc::format!(
+      "[Vulkan RenderDevice] {} {}:{} - {}",
+      function_name!(),
+      core::file!(),
+      core::line!(),
+      $msg
+    ))
   };
 }
+/// can be used only on a #[named] function
 #[macro_export]
 macro_rules! gpu_invalid_arg {
+  // 1. No arguments
+  () => {
+    $crate::types::GpuError::InvalidArgument(alloc::format!(
+      "[Vulkan RenderDevice] {} {}:{} - invalid argument",
+      function_name!(),
+      core::file!(),
+      core::line!()
+    ))
+  };
+
+  // 2. Variadic arguments (e.g., gpu_invalid_arg!("expected {}, got {}", a, b))
+  ($fmt:expr, $($arg:tt)+) => {
+    $crate::types::GpuError::InvalidArgument(alloc::format!(
+      "[Vulkan RenderDevice] {} {}:{} - {}",
+      function_name!(),
+      core::file!(),
+      core::line!(),
+      core::format_args!($fmt, $($arg)+)
+    ))
+  };
+
+  // 3. Single expression (e.g., gpu_invalid_arg!("missing buffer"))
   ($msg:expr) => {
-    crate::types::GpuError::InvalidArgument(concat!("[Vulkan RenderDevice] ", $msg))
+    $crate::types::GpuError::InvalidArgument(alloc::format!(
+      "[Vulkan RenderDevice] {} {}:{} - {}",
+      function_name!(),
+      core::file!(),
+      core::line!(),
+      $msg
+    ))
   };
 }
+/// can be used only on a #[named] function
+#[macro_export]
+macro_rules! gpu_err_invalid_pe {
+  () => {
+    $crate::types::GpuError::InvalidState(alloc::format!(
+      "[Vulkan RenderDevice] {} {}:{} - invalid presentation engine handle",
+      function_name!(),
+      core::file!(),
+      core::line!()
+    ))
+  };
+}
+/// can be used only on a #[named] function
+#[macro_export]
+macro_rules! gpu_err_cmd_no_pe {
+  () => {
+    $crate::types::GpuError::InvalidState(alloc::format!(
+      "[Vulkan RenderDevice] {} {}:{} - Cmd doesn't have presentation engine handle",
+      function_name!(),
+      core::file!(),
+      core::line!()
+    ))
+  };
+}
+/// can be used only on a #[named] function
+#[macro_export]
+macro_rules! gpu_err_invalid_cmd {
+  () => {
+    $crate::types::GpuError::InvalidArgument(alloc::format!(
+      "[Vulkan RenderDevice] {} {}:{} - invalid command buffer handle",
+      function_name!(),
+      core::file!(),
+      core::line!()
+    ))
+  };
+}
+/// can be used only on a #[named] function
+#[macro_export]
+macro_rules! gpu_err_device {
+  () => {
+    $crate::types::GpuError::InvalidState(alloc::format!(
+      "[Vulkan RenderDevice] {} {}:{} - device error",
+      function_name!(),
+      core::file!(),
+      core::line!()
+    ))
+  };
+}
+/// can be used only on a #[named] function
+#[macro_export]
+macro_rules! gpu_err_pipeline_key_absent {
+  () => {
+    $crate::types::GpuError::InvalidState(alloc::format!(
+      "[Vulkan RenderDevice] {} {}:{} - pipeline key absent",
+      function_name!(),
+      core::file!(),
+      core::line!()
+    ))
+  };
+}
+/// can be used only on a #[named] function
+#[macro_export]
+macro_rules! gpu_err_pipeline_absent {
+  () => {
+    $crate::types::GpuError::InvalidState(alloc::format!(
+      "[Vulkan RenderDevice] {} {}:{} - vulkan pipeline absent in pipeline pool",
+      function_name!(),
+      core::file!(),
+      core::line!()
+    ))
+  };
+}
+/// can be used only on a #[named] function
+#[macro_export]
+macro_rules! gpu_err_archetype_absent {
+  () => {
+    $crate::types::GpuError::InvalidState(alloc::format!(
+      "[Vulkan RenderDevice] {} {}:{} - archetype absent",
+      function_name!(),
+      core::file!(),
+      core::line!()
+    ))
+  };
+}
+
 mod archetypes_struct;
 mod commands;
 mod descriptors;
@@ -105,6 +229,7 @@ struct TimelinePollingWorkload {
 }
 
 impl oshal::os::pool::Workload for TimelinePollingWorkload {
+  #[named]
   fn execute(&mut self) -> WorkloadStatus {
     if self.stop_signal.load(Ordering::Acquire) {
       return WorkloadStatus::Complete;
@@ -162,6 +287,7 @@ struct FunctionalDeviceResource<H: vk::Handle + Copy, F: FnOnce(H, &ash::Device)
 }
 
 impl<H: vk::Handle + Copy, F: FnOnce(H, &ash::Device)> FunctionalDeviceResource<H, F> {
+  #[named]
   fn new(handle: H, cleanup: F) -> Self {
     Self {
       handle,
@@ -173,6 +299,7 @@ impl<H: vk::Handle + Copy, F: FnOnce(H, &ash::Device)> FunctionalDeviceResource<
 impl<H: vk::Handle + Copy, F: FnOnce(H, &ash::Device)> DeviceResource
   for FunctionalDeviceResource<H, F>
 {
+  #[named]
   fn cleanup(&mut self, device: &ash::Device) {
     let h = self.handle;
     if let Some(cleanup) = self.cleanup.take() {
@@ -190,6 +317,7 @@ struct DeviceResourceJanitor<'a, const N: usize> {
 }
 
 impl<'a, const N: usize> DeviceResourceJanitor<'a, N> {
+  #[named]
   fn new(device: &'a ash::Device) -> Self {
     Self {
       device,
@@ -201,6 +329,7 @@ impl<'a, const N: usize> DeviceResourceJanitor<'a, N> {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn clear(&mut self) {
     // The `drop` implementation will handle cleanup of existing resources.
     // Here we just need to reset the state.
@@ -210,6 +339,7 @@ impl<'a, const N: usize> DeviceResourceJanitor<'a, N> {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn push<T: DeviceResource + 'a>(&mut self, resource: T) -> Result<(), &'static str> {
     // Check if there's space in the inline allocator
     let layout = core::alloc::Layout::new::<T>();
@@ -256,6 +386,7 @@ impl<'a, const N: usize> DeviceResourceJanitor<'a, N> {
 }
 
 impl<'a, const N: usize> Drop for DeviceResourceJanitor<'a, N> {
+  #[named]
   fn drop(&mut self) {
     // Destroy heap-allocated resources first, in reverse order of allocation
     for mut resource_box in self.heap_resources.drain(..).rev() {
@@ -316,12 +447,11 @@ pub struct DeviceResources {
   pending_downloads: spin::RwLock<hashbrown::HashMap<u64, PendingDownload>>,
 
   frame_staging_arena: spin::RwLock<Option<memory::FrameStagingArena>>,
-
-  archetypes: Archetypes,
 }
 
 // TODO: each member should derive it so that this can derive it too
 impl fmt::Debug for DeviceResources {
+  #[named]
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
     f.write_str("DeviceResources")
   }
@@ -329,6 +459,7 @@ impl fmt::Debug for DeviceResources {
 
 impl DeviceResource for DeviceResources {
   /// cleanup in reverse order of declaration in the struct
+  #[named]
   fn cleanup(&mut self, device: &ash::Device) {
     for (_, mut download) in self.pending_downloads.write().drain() {
       unsafe {
@@ -395,22 +526,23 @@ impl DeviceResources {
   /// update [`pipelines::FragmentOut`] and [`vk::RenderPass`] inside [`pipelines::GraphicsInfo`]
   /// disard old and create updated graphics [`vk::Pipeline`]
   /// Note: Update is performed only if archetype initialized once
+  #[named]
   fn update_all_archetypes_for_presentation_engine(
+    // TODO rollback behavour (swap presentation
+    // only if all ok)
     &self,
     device: &LogicalDevice,
-    presentation_engine_handle: PresentationEngineHandle,
+    handle: PresentationEngineHandle,
     timeline: u64,
   ) -> GpuResult<()> {
     let presentation_engines = self.live_presentation_engines.read();
     let presentation_engine_state_lock =
-      presentation_engines.get(&presentation_engine_handle).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] update_all_archetypes_for_presentation_engine",
-      ))?;
-    let presentation_engine_state = presentation_engine_state_lock.read();
+      presentation_engines.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let mut presentation_engine = presentation_engine_state_lock.write();
     let mut write_pipeline = self.pipeline_pool.write();
-    let format = presentation_engine_state.format();
+    let format = presentation_engine.format();
 
-    self.archetypes.update_physical_mesh_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_physical_mesh_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -419,7 +551,7 @@ impl DeviceResources {
       &self.discard_pool,
       timeline,
     )?;
-    self.archetypes.update_cursor_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_cursor_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -428,7 +560,7 @@ impl DeviceResources {
       &self.discard_pool,
       timeline,
     )?;
-    self.archetypes.update_sun_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_sun_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -437,7 +569,7 @@ impl DeviceResources {
       &self.discard_pool,
       timeline,
     )?;
-    self.archetypes.update_particle_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_particle_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -446,7 +578,7 @@ impl DeviceResources {
       &self.discard_pool,
       timeline,
     )?;
-    self.archetypes.update_billboard_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_billboard_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -455,7 +587,7 @@ impl DeviceResources {
       &self.discard_pool,
       timeline,
     )?;
-    self.archetypes.update_sky_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_sky_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -464,7 +596,7 @@ impl DeviceResources {
       &self.discard_pool,
       timeline,
     )?;
-    self.archetypes.update_grid_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_grid_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -473,7 +605,7 @@ impl DeviceResources {
       &self.discard_pool,
       timeline,
     )?;
-    self.archetypes.update_minimap_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_minimap_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -482,7 +614,7 @@ impl DeviceResources {
       &self.discard_pool,
       timeline,
     )?;
-    self.archetypes.update_measurement_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_measurement_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -491,7 +623,7 @@ impl DeviceResources {
       &self.discard_pool,
       timeline,
     )?;
-    self.archetypes.update_marker_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_marker_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -500,7 +632,7 @@ impl DeviceResources {
       &self.discard_pool,
       timeline,
     )?;
-    self.archetypes.update_text_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_text_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -509,7 +641,7 @@ impl DeviceResources {
       &self.discard_pool,
       timeline,
     )?;
-    self.archetypes.update_bvh_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_bvh_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -518,7 +650,7 @@ impl DeviceResources {
       &self.discard_pool,
       timeline,
     )?;
-    self.archetypes.update_gizmo_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_gizmo_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -527,7 +659,7 @@ impl DeviceResources {
       &self.discard_pool,
       timeline,
     )?;
-    self.archetypes.update_physical_mesh2_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_physical_mesh2_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -536,7 +668,7 @@ impl DeviceResources {
       &self.discard_pool,
       timeline,
     )?;
-    self.archetypes.update_particle2_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_particle2_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -545,7 +677,7 @@ impl DeviceResources {
       &self.discard_pool,
       timeline,
     )?;
-    self.archetypes.update_trajectory_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_trajectory_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -554,7 +686,7 @@ impl DeviceResources {
       &self.discard_pool,
       timeline,
     )?;
-    self.archetypes.update_ui_archetype_for_presentation_engine(
+    presentation_engine.archetypes_mut().update_ui_archetype_for_presentation_engine(
       device,
       format,
       &mut write_pipeline,
@@ -567,6 +699,7 @@ impl DeviceResources {
     Ok(())
   }
 
+  #[named]
   fn create_physical_mesh_archetype(
     &self,
     device: &LogicalDevice,
@@ -582,12 +715,11 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock.get(&handle).ok_or(
-      GpuError::InvalidArgument("[Vulkan RenderDevice] create_physical_mesh_archetype"),
-    )?;
-    let presentation_engine_state = presentation_engine_lock.read();
+    let mut presentation_engine =
+      live_presentation_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_physical_mesh_archetype(
+    let format = self.live_presentation_engines.read().get(&handle).unwrap().read().format();
+    presentation_engine.archetypes_mut().create_physical_mesh_archetype(
       device,
       shader_manager,
       vertex_shader_key,
@@ -596,7 +728,7 @@ impl DeviceResources {
       outline_fragment_shader_key,
       depth_stencil_format,
       queue,
-      presentation_engine_state.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       staging_arena,
@@ -606,6 +738,7 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_sun_archetype(
     &self,
     device: &LogicalDevice,
@@ -617,18 +750,17 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock.get(&handle).ok_or(
-      GpuError::InvalidArgument("[Vulkan RenderDevice] create_sun_archetype"),
-    )?;
-    let presentation_engine_state = presentation_engine_lock.read();
+    let mut presentation_engine =
+      live_presentation_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_sun_archetype(
+    let format = presentation_engine.format();
+    presentation_engine.archetypes_mut().create_sun_archetype(
       device,
       shader_manager,
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      presentation_engine_state.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -637,6 +769,7 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_sky_archetype(
     &self,
     device: &LogicalDevice,
@@ -648,15 +781,17 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_state = live_engines_lock.get(&handle).unwrap().read();
+    let mut presentation_engine =
+      live_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_sky_archetype(
+    let format = presentation_engine.format();
+    presentation_engine.archetypes_mut().create_sky_archetype(
       device,
       shader_manager,
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      presentation_engine_state.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -665,6 +800,7 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_background_archetype(
     &self,
     device: &LogicalDevice,
@@ -676,15 +812,17 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_state = live_engines_lock.get(&handle).unwrap().read();
+    let mut presentation_engine =
+      live_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_background_archetype(
+    let format = presentation_engine.format();
+    presentation_engine.archetypes_mut().create_background_archetype(
       device,
       shader_manager,
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      presentation_engine_state.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -693,6 +831,7 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_grid_archetype(
     &self,
     device: &LogicalDevice,
@@ -704,15 +843,17 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_state = live_engines_lock.get(&handle).unwrap().read();
+    let mut presentation_engine =
+      live_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_grid_archetype(
+    let format = presentation_engine.format();
+    presentation_engine.archetypes_mut().create_grid_archetype(
       device,
       shader_manager,
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      presentation_engine_state.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -721,6 +862,7 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_minimap_archetype(
     &self,
     device: &LogicalDevice,
@@ -732,15 +874,17 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let presentation_engine_lock = self.live_presentation_engines.read();
-    let pe = presentation_engine_lock.get(&handle).unwrap().read();
+    let mut presentation_engine =
+      presentation_engine_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_minimap_archetype(
+    let format = presentation_engine.format();
+    presentation_engine.archetypes_mut().create_minimap_archetype(
       device,
       shader_manager,
       vkey,
       fkey,
       depth_stencil_format,
-      pe.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -749,6 +893,7 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_measurement_archetype(
     &self,
     device: &LogicalDevice,
@@ -760,18 +905,17 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock.get(&handle).ok_or(
-      GpuError::InvalidArgument("[Vulkan RenderDevice] create_measurement_archetype"),
-    )?;
-    let presentation_engine_state = presentation_engine_lock.read();
+    let mut presentation_engine =
+      live_presentation_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_measurement_archetype(
+    let format = presentation_engine.format();
+    presentation_engine.archetypes_mut().create_measurement_archetype(
       device,
       shader_manager,
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      presentation_engine_state.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -780,6 +924,7 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_marker_archetype(
     &self,
     device: &LogicalDevice,
@@ -791,18 +936,17 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock.get(&handle).ok_or(
-      GpuError::InvalidArgument("[Vulkan RenderDevice] create_marker_archetype"),
-    )?;
-    let presentation_engine_state = presentation_engine_lock.read();
+    let mut presentation_engine =
+      live_presentation_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_marker_archetype(
+    let format = presentation_engine.format();
+    presentation_engine.archetypes_mut().create_marker_archetype(
       device,
       shader_manager,
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      presentation_engine_state.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -811,6 +955,7 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_billboard_archetype(
     &self,
     device: &LogicalDevice,
@@ -822,18 +967,17 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock.get(&handle).ok_or(
-      GpuError::InvalidArgument("[Vulkan RenderDevice] create_billboard_archetype"),
-    )?;
-    let presentation_engine_state = presentation_engine_lock.read();
+    let mut presentation_engine =
+      live_presentation_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_billboard_archetype(
+    let format = presentation_engine.format();
+    presentation_engine.archetypes_mut().create_billboard_archetype(
       device,
       shader_manager,
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      presentation_engine_state.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -842,8 +986,8 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_particle_archetype(
-    // TODO
     &self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
@@ -854,18 +998,17 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock.get(&handle).ok_or(
-      GpuError::InvalidArgument("[Vulkan RenderDevice] create_particle_archetype"),
-    )?;
-    let presentation_engine_state = presentation_engine_lock.read();
+    let mut presentation_engine =
+      live_presentation_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_particle_archetype(
+    let format = presentation_engine.format();
+    presentation_engine.archetypes_mut().create_particle_archetype(
       device,
       shader_manager,
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      presentation_engine_state.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -874,6 +1017,7 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_particle2_archetype(
     &self,
     device: &LogicalDevice,
@@ -885,18 +1029,17 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock.get(&handle).ok_or(
-      GpuError::InvalidArgument("[Vulkan RenderDevice] create_particle2_archetype"),
-    )?;
-    let presentation_engine_state = presentation_engine_lock.read();
+    let mut presentation_engine =
+      live_presentation_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_particle2_archetype(
+    let format = presentation_engine.format();
+    presentation_engine.archetypes_mut().create_particle2_archetype(
       device,
       shader_manager,
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      presentation_engine_state.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -905,6 +1048,7 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_trajectory_archetype(
     &self,
     device: &LogicalDevice,
@@ -916,18 +1060,17 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock.get(&handle).ok_or(
-      GpuError::InvalidArgument("[Vulkan RenderDevice] create_trajectory_archetype"),
-    )?;
-    let presentation_engine_state = presentation_engine_lock.read();
+    let mut presentation_engine =
+      live_presentation_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_trajectory_archetype(
+    let format = presentation_engine.format();
+    presentation_engine.archetypes_mut().create_trajectory_archetype(
       device,
       shader_manager,
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      presentation_engine_state.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -936,6 +1079,7 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_ui_archetype(
     &self,
     device: &LogicalDevice,
@@ -947,18 +1091,17 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock.get(&handle).ok_or(
-      GpuError::InvalidArgument("[Vulkan RenderDevice] create_ui_archetype"),
-    )?;
-    let presentation_engine_state = presentation_engine_lock.read();
+    let mut presentation_engine =
+      live_presentation_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_ui_archetype(
+    let format = presentation_engine.format();
+    presentation_engine.archetypes_mut().create_ui_archetype(
       device,
       shader_manager,
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      presentation_engine_state.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -967,6 +1110,7 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_cursor_archetype(
     &self,
     device: &LogicalDevice,
@@ -978,18 +1122,17 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_presentation_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_lock = live_presentation_engines_lock.get(&handle).ok_or(
-      GpuError::InvalidArgument("[Vulkan RenderDevice] create_cursor_archetype"),
-    )?;
-    let presentation_engine_state = presentation_engine_lock.read();
+    let mut presentation_engine =
+      live_presentation_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_cursor_archetype(
+    let format = presentation_engine.format();
+    presentation_engine.archetypes_mut().create_cursor_archetype(
       device,
       shader_manager,
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
-      presentation_engine_state.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -998,6 +1141,7 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_text_archetype(
     &self,
     device: &LogicalDevice,
@@ -1010,16 +1154,18 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_state = live_engines_lock.get(&handle).unwrap().read();
+    let mut presentation_engine =
+      live_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
+    let format = presentation_engine.format();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_text_archetype(
+    presentation_engine.archetypes_mut().create_text_archetype(
       device,
       shader_manager,
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
       queue,
-      presentation_engine_state.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -1028,6 +1174,7 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_text2_archetype(
     &self,
     device: &LogicalDevice,
@@ -1040,16 +1187,18 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_engines_lock = self.live_presentation_engines.read();
-    let presentation_engine_state = live_engines_lock.get(&handle).unwrap().read();
+    let mut presentation_engine =
+      live_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
+    let format = presentation_engine.format();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_text2_archetype(
+    presentation_engine.archetypes_mut().create_text2_archetype(
       device,
       shader_manager,
       vertex_shader_key,
       fragment_shader_key,
       depth_stencil_format,
       queue,
-      presentation_engine_state.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -1058,6 +1207,7 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_bvh_archetype(
     &self,
     device: &LogicalDevice,
@@ -1069,15 +1219,17 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_engines_lock = self.live_presentation_engines.read();
-    let pe = live_engines_lock.get(&handle).unwrap().read();
+    let mut presentation_engine =
+      live_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
+    let format = presentation_engine.format();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_bvh_archetype(
+    presentation_engine.archetypes_mut().create_bvh_archetype(
       device,
       shader_manager,
       vkey,
       fkey,
       depth_stencil_format,
-      pe.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -1086,6 +1238,7 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn create_bvhwire2_archetype(
     &self,
     device: &LogicalDevice,
@@ -1097,15 +1250,17 @@ impl DeviceResources {
     timeline: u64,
   ) -> GpuResult<()> {
     let live_engines_lock = self.live_presentation_engines.read();
-    let pe = live_engines_lock.get(&handle).unwrap().read();
+    let mut presentation_engine =
+      live_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
+    let format = presentation_engine.format();
     let mut write_pipeline = self.pipeline_pool.write();
-    self.archetypes.create_bvhwire2_archetype(
+    presentation_engine.archetypes_mut().create_bvhwire2_archetype(
       device,
       shader_manager,
       vkey,
       fkey,
       depth_stencil_format,
-      pe.format(),
+      format,
       &self.allocator.allocator,
       &self.discard_pool,
       &self.renderpasses,
@@ -1114,13 +1269,22 @@ impl DeviceResources {
     )
   }
 
+  #[named]
   fn has_discardables(&self) -> bool {
-    self.archetypes.has_discardables()
+    let mut archetypes_have_discardables = false;
+    for pe in self.live_presentation_engines.read().values() {
+      if pe.read().archetypes().has_discardables() {
+        archetypes_have_discardables = true;
+        break;
+      }
+    }
+    archetypes_have_discardables
       || self.physical_mesh_resources.read().is_some()
       || self.sun_resources.read().is_some()
       || !self.billboard_resources.read().is_empty()
   }
 
+  #[named]
   fn clear_discardables(&mut self, device: &ash::Device) {
     debug_assert!(self.has_discardables());
     if let Some(mut resources) = self.physical_mesh_resources.write().take() {
@@ -1181,11 +1345,10 @@ impl DeviceResources {
       self.discard_pool.discard_image_view(sky_image.image_view.get(), u64::MAX);
     }
 
-    self.archetypes.discard(device, &self.discard_pool);
-
     debug_assert!(!self.has_discardables());
   }
 
+  #[named]
   fn new<'a>(
     instance: &instance::Instance,
     physical_device: vk::PhysicalDevice,
@@ -1289,7 +1452,6 @@ impl DeviceResources {
       physical_mesh2_resources: spin::RwLock::new(None),
       sun_resources: spin::RwLock::new(None),
       billboard_resources: spin::RwLock::new(Vec::with_capacity(16)),
-      archetypes: Archetypes::default(),
       sky_image: spin::RwLock::new(None),
       next_cmd_id: Arc::new(AtomicU64::new(1)),
       pending_downloads: spin::RwLock::new(hashbrown::HashMap::new()),
@@ -1297,6 +1459,7 @@ impl DeviceResources {
     })
   }
 
+  #[named]
   fn get_timeline_semaphore_cached_value(&self) -> u64 {
     self.timeline_manager.get_cached_value()
   }
@@ -1316,20 +1479,24 @@ struct RecordingCmdBufferData {
   command_buffer: NonZeroHandle<vk::CommandBuffer>,
   bound_pipeline: Option<NonZeroHandle<vk::Pipeline>>,
   presentation: Option<RecordingCmdBufferDataPresentation>,
+  presentation_engine: Option<PresentationEngineHandle>,
   has_begun: bool,
 }
 
 impl RecordingCmdBufferData {
+  #[named]
   fn new(command_buffer: NonZeroHandle<vk::CommandBuffer>) -> Self {
     Self {
       command_buffer,
       bound_pipeline: None,
       presentation: None,
+      presentation_engine: None,
       has_begun: false,
     }
   }
 
   /// command buffer is automatically recycled by [`commands::CommandPools`]
+  #[named]
   fn discard(
     &mut self,
     cmd_buf_id: CommandBufferId,
@@ -1376,6 +1543,7 @@ pub struct LogicalDevice {
 impl core::ops::Deref for LogicalDevice {
   type Target = ash::Device;
 
+  #[named]
   fn deref(&self) -> &Self::Target {
     &self.handle
   }
@@ -1384,6 +1552,7 @@ impl core::ops::Deref for LogicalDevice {
 impl LogicalDevice {
   #[cfg(debug_assertions)]
   /// TODO: Document this item
+  #[named]
   pub fn set_debug_name<T: vk::Handle>(&self, object: T, name: &str) {
     use core::str::FromStr;
 
@@ -1405,11 +1574,13 @@ impl LogicalDevice {
   #[cfg(not(debug_assertions))]
   #[inline]
   /// TODO: Document this item
+  #[named]
   pub fn set_debug_name<T: vk::Handle>(&self, _object: T, _name: &str) {
     // This is a no-op in release builds, and should be optimized away.
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn locked_queue_submit(
     &self,
     queue: vk::Queue,
@@ -1421,6 +1592,7 @@ impl LogicalDevice {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn wait_for_semaphore_value(
     &self,
     semaphore: vk::Semaphore,
@@ -1447,6 +1619,7 @@ pub trait VmaDebugNameExt: Sized {
 // 2. Apply to Results containing Vulkan Handles
 impl<T: vk::Handle + Copy> VulkanDebugNameExt for ash::prelude::VkResult<T> {
   #[inline]
+  #[named]
   fn with_name(self, device: &LogicalDevice, name: &str) -> Self {
     if let Ok(handle) = &self {
       device.set_debug_name(*handle, name);
@@ -1461,6 +1634,7 @@ where
   T: vk::Handle + Copy,
 {
   #[inline]
+  #[named]
   fn with_name(self, device: &LogicalDevice, name: &str) -> Self {
     if let Ok((handle, _alloc)) = &self {
       // Apply the debug name to the Vulkan handle (VkBuffer / VkImage)
@@ -1478,6 +1652,7 @@ where
   T: vk::Handle + Copy,
 {
   #[inline]
+  #[named]
   fn with_name(self, device: &LogicalDevice, name: &str) -> Self {
     if let Ok((handle, _alloc, _alloc_info)) = &self {
       // Apply the debug name to the Vulkan handle (VkBuffer / VkImage)
@@ -1537,6 +1712,7 @@ struct Queues {
 }
 
 impl Queues {
+  #[named]
   fn from_device(device: &ash::Device, query_result: &utils::PhysicalDeviceQueryResult) -> Self {
     let unique_queue_families = query_result.unique_family_indices_set();
     let mut queue_buffer: heapless::Vec<Queue, MAX_QUEUE_COUNT> = heapless::Vec::new();
@@ -1591,14 +1767,17 @@ impl Queues {
     .build()
   }
 
+  #[named]
   fn get_graphics_queue(&self) -> Queue {
     self.with_queue_ref_map(|queue_ref_map| **queue_ref_map.get(&QueueId::GRAPHICS).unwrap())
   }
 
+  #[named]
   fn get_compute_queue(&self) -> Queue {
     self.with_queue_ref_map(|queue_ref_map| **queue_ref_map.get(&QueueId::COMPUTE).unwrap())
   }
 
+  #[named]
   fn get_transfer_queue(&self) -> Queue {
     self.with_queue_ref_map(|queue_ref_map| **queue_ref_map.get(&QueueId::TRANSFER).unwrap())
   }
@@ -1607,6 +1786,7 @@ impl Queues {
 impl Device {
   /// Initializes a Device directly into the provided memory location
   /// This avoids returning a Device by value (which would probably cause stack overflow)
+  #[named]
   pub(super) unsafe fn init_at_ptr(
     dst: *mut Self,
     instance: Arc<instance::Instance>,
@@ -1618,6 +1798,7 @@ impl Device {
   }
 
   /// TODO: Document this item
+  #[named]
   pub(super) fn new(
     instance: Arc<instance::Instance>,
     index: usize,
@@ -1663,7 +1844,7 @@ impl Device {
 
     let queues = Queues::from_device(&device, chosen_physical_device_query_result);
     let res = DeviceResources::new(
-      &instance,
+      instance.as_ref(),
       physical_device,
       &device,
       chosen_physical_device_query_result.unique_family_indices_set().iter(),
@@ -1741,12 +1922,14 @@ impl Device {
   }
 
   /// TODO: Document this item
+  #[named]
   pub(super) fn physical_device(&self) -> vk::PhysicalDevice {
     self.query_result.physical_device
   }
 }
 
 impl Drop for Device {
+  #[named]
   fn drop(&mut self) {
     aethervk_oshal_rlib::log!("Device::drop started. Waiting for device idle...");
     // Signal stop to timeline polling task
@@ -1772,10 +1955,12 @@ impl Drop for Device {
 }
 
 impl RenderDevice for Device {
+  #[named]
   fn as_any(&self) -> &dyn Any {
     self
   }
 
+  #[named]
   fn get_native_prop(&self, prop: NativeGpuProperty) -> Option<*mut core::ffi::c_void> {
     #[cfg(target_vendor = "apple")]
     {
@@ -1797,6 +1982,7 @@ impl RenderDevice for Device {
     None
   }
 
+  #[named]
   fn print_info(&self) -> String {
     let props = &self.query_result.physical_device_properties;
     let device_name = props.device_name_as_c_str().unwrap().to_string_lossy().into_owned();
@@ -1823,6 +2009,7 @@ impl RenderDevice for Device {
     )
   }
 
+  #[named]
   fn dump_memory_stats(&self) {
     #[cfg(all(debug_assertions, feature = "debug_gpu"))]
     {
@@ -1832,14 +2019,17 @@ impl RenderDevice for Device {
     }
   }
 
+  #[named]
   fn context_id(&self) -> u64 {
     vulkan::VULKAN_RENDER_BACKEND.0
   }
 
+  #[named]
   fn subgroup_size(&self) -> u32 {
     self.query_result.subgroup_size
   }
 
+  #[named]
   fn start_frame(&self) -> GpuResult<()> {
     let res = self.res.read();
     let timeline_val = res.timeline_manager.refresh_cached_value()?;
@@ -1853,18 +2043,22 @@ impl RenderDevice for Device {
   }
 
   /// Initializes all archetypes in the order they are declared inside `DeviceResources`
+  #[named]
   fn init_archetypes(&self, handle: crate::gpu::PresentationEngineHandle) -> GpuResult<()> {
     // TODO: remove all logs
     let res_guard = self.res.read();
     let timeline = res_guard.timeline_manager.get_cached_value() + 1;
     let mut shader_manager = res_guard.shader_manager.write();
+    let live_engines = res_guard.live_presentation_engines.read();
+    let mut engine_lock = live_engines.get(&handle).unwrap().write();
+    let format = engine_lock.format();
 
-    if res_guard.archetypes.physical_mesh_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().physical_mesh_render_archetype.read().is_none() {
       oshal::log!("create_physical_mesh_archetype before shaders");
       let (vkey, fkey, ovkey, ofkey) =
         ensure_physical_mesh_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("create_physical_mesh_archetype after shaders shaders");
-      self.res.read().archetypes.create_physical_mesh_archetype(
+      engine_lock.archetypes_mut().create_physical_mesh_archetype(
         &self.device,
         &shader_manager,
         vkey,
@@ -1873,10 +2067,7 @@ impl RenderDevice for Device {
         ofkey,
         self.depth_stencil_format,
         &self.queues.get_graphics_queue(),
-        {
-          let pe_lock = res_guard.live_presentation_engines.read();
-          pe_lock.get(&handle).unwrap().read().format()
-        },
+        format,
         &res_guard.allocator.allocator,
         &res_guard.discard_pool,
         res_guard.frame_staging_arena.write().as_mut().unwrap(),
@@ -1887,7 +2078,7 @@ impl RenderDevice for Device {
       oshal::log!("create_physical_mesh_archetype archetype created");
     }
 
-    if res_guard.archetypes.physical_mesh2_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().physical_mesh2_render_archetype.read().is_none() {
       oshal::log!("create_physical_mesh2_archetype before shaders");
 
       let vkey = shader_manager
@@ -1940,7 +2131,7 @@ impl RenderDevice for Device {
       let pe_lock = res_guard.live_presentation_engines.read();
       let pe = pe_lock.get(&handle).unwrap().read();
 
-      self.res.read().archetypes.create_physical_mesh2_archetype(
+      engine_lock.archetypes_mut().create_physical_mesh2_archetype(
         &self.device,
         &shader_manager,
         vkey,
@@ -1960,7 +2151,7 @@ impl RenderDevice for Device {
       oshal::log!("create_physical_mesh2_archetype archetype created");
     }
 
-    if res_guard.archetypes.sun_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().sun_render_archetype.read().is_none() {
       oshal::log!("sun_render_archetype before shaders");
       let (vkey, fkey) = ensure_sun_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("sun_render_archetype after shaders");
@@ -1976,7 +2167,7 @@ impl RenderDevice for Device {
       oshal::log!("sun_render_archetype archetype created");
     }
 
-    if res_guard.archetypes.billboard_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().billboard_render_archetype.read().is_none() {
       oshal::log!("billboard_render_archetype before shaders");
       let (vkey, fkey) = ensure_billboard_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("billboard_render_archetype after shaders");
@@ -1992,7 +2183,7 @@ impl RenderDevice for Device {
       oshal::log!("billboard_render_archetype archetype created");
     }
 
-    if res_guard.archetypes.particle_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().particle_render_archetype.read().is_none() {
       oshal::log!("particle_render_archetype before shaders");
       let (vkey, fkey) = ensure_particle_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("particle_render_archetype after shaders");
@@ -2007,7 +2198,7 @@ impl RenderDevice for Device {
       )?;
     }
 
-    if res_guard.archetypes.particle2_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().particle2_render_archetype.read().is_none() {
       oshal::log!("particle2_render_archetype before shaders");
       let (vkey, fkey) = ensure_particle2_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("particle2_render_archetype after shaders");
@@ -2022,14 +2213,14 @@ impl RenderDevice for Device {
       )?;
     }
 
-    if res_guard.archetypes.particle_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().particle_render_archetype.read().is_none() {
       oshal::log!("particle_render_archetype before shaders");
       let (vkey, fkey) = ensure_particle_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("particle_render_archetype after shaders");
       let pe_lock = res_guard.live_presentation_engines.read();
       let pe = pe_lock.get(&handle).unwrap().read();
       let mut write_pipeline = res_guard.pipeline_pool.write();
-      res_guard.archetypes.create_particle_archetype(
+      engine_lock.archetypes_mut().create_particle_archetype(
         &self.device,
         &shader_manager,
         vkey,
@@ -2045,7 +2236,7 @@ impl RenderDevice for Device {
       oshal::log!("particle_render_archetype archetype created");
     }
 
-    if res_guard.archetypes.cursor_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().cursor_render_archetype.read().is_none() {
       oshal::log!("cursor_render_archetype before shaders");
       let (vkey, fkey) = ensure_cursor_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("cursor_render_archetype after shaders");
@@ -2061,7 +2252,7 @@ impl RenderDevice for Device {
       oshal::log!("cursor_render_archetype archetype created");
     }
 
-    if res_guard.archetypes.marker_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().marker_render_archetype.read().is_none() {
       oshal::log!("marker_render_archetype before shaders");
       let (vkey, fkey) = ensure_marker_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("marker_render_archetype after shaders");
@@ -2077,7 +2268,7 @@ impl RenderDevice for Device {
       oshal::log!("marker_render_archetype archetype created");
     }
 
-    if res_guard.archetypes.measurement_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().measurement_render_archetype.read().is_none() {
       oshal::log!("measurement_render_archetype before shaders");
       let (vkey, fkey) = ensure_measurement_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("measurement_render_archetype after shaders");
@@ -2093,7 +2284,7 @@ impl RenderDevice for Device {
       oshal::log!("measurement_render_archetype archetype created");
     }
 
-    if res_guard.archetypes.sky_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().sky_render_archetype.read().is_none() {
       oshal::log!("sky_render_archetype before shaders");
       let (vkey, fkey) = ensure_sky_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("sky_render_archetype after shaders");
@@ -2109,7 +2300,7 @@ impl RenderDevice for Device {
       oshal::log!("sky_render_archetype archetype created");
     }
 
-    if res_guard.archetypes.background_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().background_render_archetype.read().is_none() {
       oshal::log!("background_render_archetype before shaders");
       let (vkey, fkey) = ensure_background_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("background_render_archetype after shaders");
@@ -2125,7 +2316,7 @@ impl RenderDevice for Device {
       oshal::log!("background_render_archetype archetype created");
     }
 
-    if res_guard.archetypes.grid_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().grid_render_archetype.read().is_none() {
       oshal::log!("grid_render_archetype before shaders");
       let (vkey, fkey) = ensure_grid_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("grid_render_archetype after shaders");
@@ -2141,7 +2332,7 @@ impl RenderDevice for Device {
       oshal::log!("grid_render_archetype archetype created");
     }
 
-    if res_guard.archetypes.minimap_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().minimap_render_archetype.read().is_none() {
       oshal::log!("minimap_render_archetype before shaders");
       let (vkey, fkey) = ensure_minimap_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("minimap_render_archetype after shaders");
@@ -2157,7 +2348,7 @@ impl RenderDevice for Device {
       oshal::log!("minimap_render_archetype archetype created");
     }
 
-    if res_guard.archetypes.text_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().text_render_archetype.read().is_none() {
       oshal::log!("text_render_archetype before shaders");
       let (vkey, fkey) = ensure_text_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("text_render_archetype after shaders");
@@ -2174,7 +2365,7 @@ impl RenderDevice for Device {
       oshal::log!("text_render_archetype archetype created");
     }
 
-    if res_guard.archetypes.text2_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().text2_render_archetype.read().is_none() {
       oshal::log!("text2_render_archetype before shaders");
       let (vkey, fkey) = ensure_text2_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("text2_render_archetype after shaders");
@@ -2191,7 +2382,7 @@ impl RenderDevice for Device {
       oshal::log!("text2_render_archetype archetype created");
     }
 
-    if res_guard.archetypes.bvh_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().bvh_render_archetype.read().is_none() {
       oshal::log!("bvh_render_archetype before shaders");
       let (vkey, fkey) = ensure_bvh_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("bvh_render_archetype after shaders");
@@ -2207,7 +2398,7 @@ impl RenderDevice for Device {
       oshal::log!("bvh_render_archetype archetype created");
     }
 
-    if res_guard.archetypes.bvhwire2_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().bvhwire2_render_archetype.read().is_none() {
       oshal::log!("bvhwire2_render_archetype before shaders");
       let vkey = shader_manager
         .get_or_load(
@@ -2244,14 +2435,14 @@ impl RenderDevice for Device {
       oshal::log!("bvhwire2_render_archetype archetype created");
     }
 
-    if res_guard.archetypes.gizmo_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().gizmo_render_archetype.read().is_none() {
       oshal::log!("gizmo_render_archetype before shaders");
       let (vkey, fkey) = ensure_gizmo_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("gizmo_render_archetype after shaders");
       let pe_lock = res_guard.live_presentation_engines.read();
       let pe = pe_lock.get(&handle).unwrap().read();
       let mut write_pipeline = res_guard.pipeline_pool.write();
-      res_guard.archetypes.create_gizmo_archetype(
+      engine_lock.archetypes_mut().create_gizmo_archetype(
         &self.device,
         &shader_manager,
         vkey,
@@ -2267,7 +2458,7 @@ impl RenderDevice for Device {
       oshal::log!("gizmo_render_archetype archetype created");
     }
 
-    if res_guard.archetypes.trajectory_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().trajectory_render_archetype.read().is_none() {
       oshal::log!("trajectory_render_archetype before shaders");
       let (vkey, fkey) = ensure_trajectory_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("trajectory_render_archetype after shaders");
@@ -2283,7 +2474,7 @@ impl RenderDevice for Device {
       oshal::log!("trajectory_render_archetype archetype created");
     }
 
-    if res_guard.archetypes.ui_render_archetype.read().is_none() {
+    if engine_lock.archetypes_mut().ui_render_archetype.read().is_none() {
       oshal::log!("ui_render_archetype before shaders");
       let (vkey, fkey) = ensure_ui_shader_modules(&self.device, &mut shader_manager)?;
       oshal::log!("ui_render_archetype after shaders");
@@ -2302,12 +2493,11 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn set_line_width(&self, cmd_buffer: gpu::CommandBufferHandle, width: f32) -> GpuResult<()> {
     let cmd = {
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] set_line_width: invalid command buffer handle",
-      ))?;
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
       data.command_buffer.get()
     };
     unsafe {
@@ -2316,6 +2506,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn create_presentation_engine(
     &self,
     params: &crate::gpu::PresentationEngineParams,
@@ -2349,6 +2540,7 @@ impl RenderDevice for Device {
 
   // TODO write unit tests about creating a presentation engine and destroying it. Check that, for both
   // TODO windowless and windowed, there shouldn't be any validation errors
+  #[named]
   fn destroy_presentation_engine(&self, handle: PresentationEngineHandle) -> GpuResult<()> {
     // check existance
     let presentation_engine_lock = {
@@ -2396,6 +2588,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn resize_presentation_engine(
     &self,
     handle: PresentationEngineHandle,
@@ -2409,9 +2602,7 @@ impl RenderDevice for Device {
     // Get a mutable reference to the presentation engine to resize it.
     {
       let engine_lock = res_guard.live_presentation_engines.read();
-      let engine = engine_lock.get(&handle).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] resize_presentation_engine",
-      ))?;
+      let engine = engine_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?;
 
       let mut engine_write = engine.write();
 
@@ -2437,6 +2628,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn get_presentation_engine_extent(
     &self,
     handle: crate::gpu::PresentationEngineHandle,
@@ -2447,22 +2639,22 @@ impl RenderDevice for Device {
       let e = engine.read().extent();
       Ok([e.0, e.1])
     } else {
-      Err(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] get_presentation_engine_extent",
-      ))
+      Err(gpu_err_invalid_pe!())
     }
   }
 
+  #[named]
   fn is_presentation_engine_windowless(&self, handle: PresentationEngineHandle) -> GpuResult<bool> {
     let res_guard = self.res.read();
     let pe_lock = res_guard.live_presentation_engines.read();
-    let pe = pe_lock.get(&handle).ok_or(GpuError::InvalidArgument("[Vulkan RenderDevice] is_presentation_engine_windowless: invalid presentation engine handle]"))?.read();
+    let pe = pe_lock.get(&handle).ok_or(GpuError::InvalidArgument("[Vulkan RenderDevice] is_presentation_engine_windowless: invalid presentation engine handle]".to_string()))?.read();
     match &*pe {
       PresentationState::Windowed(_) => Ok(false),
       PresentationState::Windowless(_) => Ok(true),
     }
   }
 
+  #[named]
   fn acquire_next_image(
     &self,
     handle: crate::gpu::PresentationEngineHandle,
@@ -2472,12 +2664,11 @@ impl RenderDevice for Device {
     if let Some(engine) = live_engines_lock.get(&handle) {
       engine.write().acquire_next_image(&self.device, self.queues.get_graphics_queue().handle)
     } else {
-      Err(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] acquire_next_image",
-      ))
+      Err(gpu_err_invalid_pe!())
     }
   }
 
+  #[named]
   fn cancel_acquired_image(
     &self,
     handle: PresentationEngineHandle,
@@ -2486,9 +2677,7 @@ impl RenderDevice for Device {
   ) -> GpuResult<()> {
     let res_guard = self.res.read();
     let live_engines_lock = res_guard.live_presentation_engines.read();
-    let engine = live_engines_lock.get(&handle).ok_or(GpuError::InvalidArgument(
-      "Vulkan RenderDevice] cancel_aquired_image",
-    ))?;
+    let engine = live_engines_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?;
     engine.write().cancel_image(
       &self.device,
       self.queues.get_graphics_queue().handle,
@@ -2497,27 +2686,20 @@ impl RenderDevice for Device {
     )
   }
 
+  #[named]
   fn get_physical_mesh_resources(
     &self,
     asset_hash: u64,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
     let res_guard = self.res.read();
-    // TODO refactor duplicated code into helper functions and macros
+    // lokcs maintained so that resources are not nuked
+    let pe_lock = res_guard.live_presentation_engines.read();
+    let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+    let mesh_archetypes = pe.archetypes().physical_mesh_render_archetype.read();
     let (pipeline_key, outline_pipeline_key) = {
-      let color_format = {
-        let pe_lock = res_guard.live_presentation_engines.read();
-        let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-        pe.format()
-      };
-
-      let archetype_guard = res_guard.archetypes.physical_mesh_render_archetype.read();
-      if archetype_guard.is_none() {
-        return Err(GpuError::InvalidState(
-          "[Vulkan RenderDevice] get_or_create_physical_mesh_resources",
-        ));
-      }
-      let archetype_ref = archetype_guard.as_ref().unwrap();
+      let color_format = pe.format();
+      let archetype_ref = { mesh_archetypes.as_ref().ok_or(gpu_err_archetype_absent!()) }?;
       let pipeline_key = archetype_ref.pipeline_key(color_format).ok_or(GpuError::NotFound)?;
       let outline_pipeline_key = archetype_ref.pipeline_key_outline_pipeline_map(color_format);
       (pipeline_key, outline_pipeline_key)
@@ -2554,6 +2736,7 @@ impl RenderDevice for Device {
   /// What is not created by the following function
   /// - VkCommandBuffer, which is instead created through the `record_commands` function from render_path
   /// Note: it assumes that you are preparing for the next frame
+  #[named]
   fn create_physical_mesh_resources(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -2563,20 +2746,21 @@ impl RenderDevice for Device {
     debug_name: &str,
   ) -> GpuResult<ResourceUploadResult> {
     let physical_mesh_id = RenderableInstanceId::from_physical_mesh(asset_hash);
-
     let cmd = {
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] set_line_width: invalid command buffer handle",
-      ))?;
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
       data.command_buffer.get()
     };
 
     let (resource, texture_flags) = 'resource_creation: {
       let res_guard = self.res.read();
+      let live_pes = res_guard.live_presentation_engines.read();
+      let presentation_engine = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+      let archetype = presentation_engine.archetypes().physical_mesh_render_archetype.read();
+      let archetype_ref = archetype.as_ref().unwrap();
 
-      let position_data = extract_position_data(&component.mesh);
-      let attribute_data = extract_attribute_data(&component.mesh);
+      let position_data = extract_position_data(component.mesh.as_ref());
+      let attribute_data = extract_attribute_data(component.mesh.as_ref());
       let mut texture_flags: TextureFlags = TextureFlags::empty();
       let albedo_image = component.mesh.albedo_map.as_ref().and_then(|t| {
         texture_flags |= TextureFlags::ALBEDO;
@@ -2631,9 +2815,6 @@ impl RenderDevice for Device {
         .ok()
       });
 
-      let archetype = res_guard.archetypes.physical_mesh_render_archetype.read();
-      let archetype_ref = archetype.as_ref().unwrap();
-
       let resource = unsafe {
         let dp_lock = res_guard.descriptor_pool.read();
         let descriptor_set = archetype_ref.create_descriptor_set_from_layout_at_index(
@@ -2648,8 +2829,8 @@ impl RenderDevice for Device {
           &res_guard.allocator.allocator,
           cmd,
           res_guard.frame_staging_arena.write().as_mut().unwrap(),
-          &position_data,
-          &attribute_data,
+          position_data.as_ref(),
+          attribute_data.as_ref(),
           &component.mesh.indices,
           albedo_image,
           normal_image,
@@ -2683,19 +2864,14 @@ impl RenderDevice for Device {
 
     let res_guard = self.res.read();
     let (pipeline_key, outline_pipeline_key) = {
-      let color_format = {
-        let pe_lock = res_guard.live_presentation_engines.read();
-        let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-        pe.format()
-      };
-
-      let archetype_guard = res_guard.archetypes.physical_mesh_render_archetype.read();
-      if archetype_guard.is_none() {
-        return Err(GpuError::InvalidState(
-          "[Vulkan RenderDevice] get_or_create_physical_mesh_resources",
-        ));
+      let pe_lock = res_guard.live_presentation_engines.read();
+      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+      let color_format = pe.format();
+      let archetypes = pe.archetypes().physical_mesh_render_archetype.read();
+      if archetypes.as_ref().is_none() {
+        return Err(gpu_err_archetype_absent!());
       }
-      let archetype_ref = archetype_guard.as_ref().unwrap();
+      let archetype_ref = archetypes.as_ref().unwrap();
       let pipeline_key = archetype_ref.pipeline_key(color_format).ok_or(GpuError::NotFound)?;
       let outline_pipeline_key = archetype_ref.pipeline_key_outline_pipeline_map(color_format);
       (pipeline_key, outline_pipeline_key)
@@ -2720,6 +2896,7 @@ impl RenderDevice for Device {
     })
   }
 
+  #[named]
   fn get_physical_mesh2_resources(
     &self,
     asset_hash: u64,
@@ -2727,19 +2904,14 @@ impl RenderDevice for Device {
   ) -> GpuResult<ResourceUploadResult> {
     let res_guard = self.res.read();
     let (pipeline_key, outline_pipeline_key) = {
-      let color_format = {
-        let pe_lock = res_guard.live_presentation_engines.read();
-        let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-        pe.format()
-      };
-
-      let archetype_guard = res_guard.archetypes.physical_mesh2_render_archetype.read();
-      if archetype_guard.is_none() {
-        return Err(GpuError::InvalidState(
-          "[Vulkan RenderDevice] get_or_create_physical_mesh2_resources",
-        ));
+      let pe_lock = res_guard.live_presentation_engines.read();
+      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+      let archetypes = pe.archetypes().physical_mesh_render_archetype.read();
+      let color_format = pe.format();
+      if archetypes.as_ref().is_none() {
+        return Err(gpu_err_archetype_absent!());
       }
-      let archetype_ref = archetype_guard.as_ref().unwrap();
+      let archetype_ref = archetypes.as_ref().unwrap();
       let pipeline_key = archetype_ref.pipeline_key(color_format).ok_or(GpuError::NotFound)?;
       let outline_pipeline_key = archetype_ref.pipeline_key_outline_pipeline_map(color_format);
       (pipeline_key, outline_pipeline_key)
@@ -2762,6 +2934,7 @@ impl RenderDevice for Device {
       .ok_or(GpuError::NotFound)
   }
 
+  #[named]
   fn create_physical_mesh2_resources(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -2774,17 +2947,22 @@ impl RenderDevice for Device {
 
     let cmd = {
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] set_line_width: invalid command buffer handle",
-      ))?;
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
       data.command_buffer.get()
     };
 
     let (resource, texture_flags) = 'resource_creation: {
       let res_guard = self.res.read();
+      let live_pes = res_guard.live_presentation_engines.read();
+      let pe = live_pes.get(&handle).ok_or(GpuError::InvalidArgument("[Vulkan RenderDevice] create_physical_mesh2_resources: invalid presentation_engine handle".to_string()))?.read();
+      let archetypes = pe.archetypes().physical_mesh2_render_archetype.read();
+      if archetypes.as_ref().is_none() {
+        return Err(gpu_err_archetype_absent!());
+      }
+      let archetype_ref = archetypes.as_ref().unwrap();
 
-      let position_data = extract_position_data(&component.mesh);
-      let attribute_data = extract_attribute_data(&component.mesh);
+      let position_data = extract_position_data(component.mesh.as_ref());
+      let attribute_data = extract_attribute_data(component.mesh.as_ref());
       let mut texture_flags: TextureFlags = TextureFlags::empty();
       let albedo_image = component.mesh.albedo_map.as_ref().and_then(|t| {
         texture_flags |= TextureFlags::ALBEDO;
@@ -2839,9 +3017,6 @@ impl RenderDevice for Device {
         .ok()
       });
 
-      let archetype = res_guard.archetypes.physical_mesh2_render_archetype.read();
-      let archetype_ref = archetype.as_ref().unwrap();
-
       let material_data = crate::gpu::MaterialData {
         base_albedo: [1.0, 1.0, 1.0, 1.0],
         emissive_color: [
@@ -2854,6 +3029,18 @@ impl RenderDevice for Device {
         paint_display_mode: component.paint_display_mode,
         texture_flags: texture_flags.bits(),
         _pad0: 0.0,
+        sphere_center_radius: [
+          component.sphere_center[0],
+          component.sphere_center[1],
+          component.sphere_center[2],
+          component.sphere_radius,
+        ],
+        grid_color_density: [
+          component.grid_color[0],
+          component.grid_color[1],
+          component.grid_color[2],
+          component.grid_density,
+        ],
       };
 
       let object_data = crate::gpu::ObjectData {
@@ -2877,8 +3064,8 @@ impl RenderDevice for Device {
           &res_guard.allocator.allocator,
           cmd,
           res_guard.frame_staging_arena.write().as_mut().unwrap(),
-          &position_data,
-          &attribute_data,
+          position_data.as_ref(),
+          attribute_data.as_ref(),
           &component.mesh.indices,
           &material_data,
           &object_data,
@@ -2947,19 +3134,15 @@ impl RenderDevice for Device {
 
     let res_guard = self.res.read();
     let (pipeline_key, outline_pipeline_key) = {
-      let color_format = {
-        let pe_lock = res_guard.live_presentation_engines.read();
-        let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-        pe.format()
-      };
-
-      let archetype_guard = res_guard.archetypes.physical_mesh2_render_archetype.read();
-      if archetype_guard.is_none() {
-        return Err(GpuError::InvalidState(
-          "[Vulkan RenderDevice] create_physical_mesh2_resources",
-        ));
+      let pe_lock = res_guard.live_presentation_engines.read();
+      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+      let color_format = pe.format();
+      let archetypes = pe.archetypes().physical_mesh2_render_archetype.read();
+      if archetypes.as_ref().is_none() {
+        return Err(gpu_err_archetype_absent!());
       }
-      let archetype_ref = archetype_guard.as_ref().unwrap();
+
+      let archetype_ref = archetypes.as_ref().unwrap();
       let pipeline_key = archetype_ref.pipeline_key(color_format).ok_or(GpuError::NotFound)?;
       let outline_pipeline_key = archetype_ref.pipeline_key_outline_pipeline_map(color_format);
       (pipeline_key, outline_pipeline_key)
@@ -2987,26 +3170,35 @@ impl RenderDevice for Device {
     })
   }
 
+  #[named]
   fn draw_physical_mesh2(
     &self,
     cmd_buffer: CommandBufferHandle,
-    pipeline: PipelineKey,
+    _pipeline: PipelineKey,
     buffers: GpuResourceHandle,
     camera: &crate::gpu::frame::CameraRenderData,
     sun_pos: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
     sun_color: [f32; 4],
     window_extent: [f32; 2],
+    handle: PresentationEngineHandle,
     draw_call: &crate::gpu::frame::DrawCall,
   ) -> GpuResult<()> {
     let res_guard = self.res.read();
 
     let physical_mesh_id = RenderableInstanceId(buffers.0);
     let read_resources = res_guard.physical_mesh2_resources.read();
-    let resource = read_resources
-      .as_ref()
-      .and_then(|r| r.get(&physical_mesh_id))
-      .ok_or(GpuError::InvalidState("Physical mesh 2 resource missing"))?;
+    let resource = read_resources.as_ref().and_then(|r| r.get(&physical_mesh_id)).ok_or(
+      GpuError::InvalidState("Physical mesh 2 resource missing".to_string()),
+    )?;
 
+    let live_pes = res_guard.live_presentation_engines.read();
+    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let archetypes = pe.archetypes().physical_mesh2_render_archetype.read();
+    if archetypes.as_ref().is_none() {
+      return Err(gpu_err_archetype_absent!());
+    }
+    let archetype_ref = unsafe { archetypes.as_ref().unwrap_unchecked() };
+    let pipeline_layout = archetype_ref.pipeline_layout.get();
     // Wait, the plan was to use FrameStagingArena to dynamically allocate SceneData, MaterialData, ObjectData per frame.
     // However, I created MaterialData and ObjectData inside ForwardMesh2RenderResource instead of FrameStagingArena during draw_call!
     // So I need to use the buffers stored in the resource, but update them, or just use the device addresses directly if they are static.
@@ -3039,6 +3231,18 @@ impl RenderDevice for Device {
       paint_display_mode: draw_call.paint_display_mode,
       texture_flags: draw_call.texture_flags.bits(),
       _pad0: 0.0,
+      sphere_center_radius: [
+        draw_call.sphere_center[0],
+        draw_call.sphere_center[1],
+        draw_call.sphere_center[2],
+        draw_call.sphere_radius,
+      ],
+      grid_color_density: [
+        draw_call.grid_color[0],
+        draw_call.grid_color[1],
+        draw_call.grid_color[2],
+        draw_call.grid_density,
+      ],
     };
 
     let object_data = crate::gpu::ObjectData {
@@ -3103,14 +3307,7 @@ impl RenderDevice for Device {
       self.device.cmd_bind_descriptor_sets(
         cmd,
         vk::PipelineBindPoint::GRAPHICS,
-        res_guard
-          .archetypes
-          .physical_mesh2_render_archetype
-          .read()
-          .as_ref()
-          .unwrap()
-          .pipeline_layout
-          .get(),
+        pipeline_layout,
         0,
         core::slice::from_ref(&resource.descriptor_set.get()),
         &[],
@@ -3136,6 +3333,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn generate_sky(&self) -> GpuResult<()> {
     let graphics_queue = self.queues.get_graphics_queue();
     let compute_queue = self.queues.get_compute_queue();
@@ -3381,27 +3579,22 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn get_billboard_resources(
     &self,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
     // ensure that the archetype for billboards exists
     let res_guard = self.res.read();
-    let archetype = res_guard.archetypes.billboard_render_archetype.read();
-    let archetype_not_exists = archetype.is_none();
-    if archetype_not_exists {
-      return Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] get_billboard_resources",
-      ));
+    let live_pes = res_guard.live_presentation_engines.read();
+    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let color_format = pe.format();
+    let archetype = pe.archetypes().billboard_render_archetype.read();
+    if archetype.as_ref().is_none() {
+      return Err(gpu_err_archetype_absent!());
     }
-
-    let archetype_ref = archetype.as_ref().unwrap();
-
-    let pipeline_key = {
-      let pe_lock = res_guard.live_presentation_engines.read();
-      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-      archetype_ref.pipeline_key(pe.format()).ok_or(GpuError::NotFound)?
-    };
+    let archetype_ref = unsafe { archetype.as_ref().unwrap_unchecked() };
+    let pipeline_key = archetype_ref.pipeline_key(color_format).ok_or(GpuError::NotFound)?;
 
     // the billboard doesn't have descriptor sets or vertex/index buffers
     Ok(ResourceUploadResult {
@@ -3414,6 +3607,7 @@ impl RenderDevice for Device {
     })
   }
 
+  #[named]
   fn create_billboard_resources(
     &self,
     _cmd_buffer: CommandBufferHandle,
@@ -3421,12 +3615,13 @@ impl RenderDevice for Device {
   ) -> GpuResult<ResourceUploadResult> {
     let res_guard = self.res.read();
     let pe_lock = res_guard.live_presentation_engines.read();
-    let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+    let mut pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.write();
+    let format = pe.format();
 
     let next_timeline = res_guard.get_timeline_semaphore_cached_value() + 1;
-    res_guard.archetypes.update_billboard_archetype_for_presentation_engine(
+    pe.archetypes_mut().update_billboard_archetype_for_presentation_engine(
       &self.device,
-      pe.format(),
+      format,
       &mut res_guard.pipeline_pool.write(),
       &res_guard.renderpasses,
       &res_guard.allocator.allocator,
@@ -3437,27 +3632,22 @@ impl RenderDevice for Device {
     self.get_billboard_resources(handle)
   }
 
+  #[named]
   fn get_cursor_resources(
     &self,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
     let res_guard = self.res.read();
-    let archetype = res_guard.archetypes.cursor_render_archetype.read();
-    let archetype_not_exists = archetype.is_none();
-    // ensure that the archetype for cursors exists
-    if archetype_not_exists {
-      return Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] get_or_create_cursor_resources | archetype doesn't exist",
-      ));
-    }
     let pe_lock = res_guard.live_presentation_engines.read();
     let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+    let archetype = pe.archetypes().cursor_render_archetype.read();
+    if archetype.as_ref().is_none() {
+      return Err(gpu_err_archetype_absent!());
+    }
     let archetype_ref = archetype.as_ref().ok_or(GpuError::NotFound)?;
 
-    // Safety: Archetype, once properly constructed, has everything populated
-    let pipeline_key = archetype_ref.pipeline_key(pe.format()).ok_or(GpuError::InvalidState(
-      "[Vulkan RenderDevice] get_or_create_cursor_resources | no pipeline key",
-    ))?;
+    let pipeline_key =
+      archetype_ref.pipeline_key(pe.format()).ok_or(gpu_err_pipeline_key_absent!())?;
 
     // the cursor doesn't have descriptor sets or vertex/index buffers
     Ok(ResourceUploadResult {
@@ -3470,6 +3660,7 @@ impl RenderDevice for Device {
     })
   }
 
+  #[named]
   fn create_cursor_resources(
     &self,
     _cmd_buffer: CommandBufferHandle,
@@ -3477,12 +3668,13 @@ impl RenderDevice for Device {
   ) -> GpuResult<ResourceUploadResult> {
     let res_guard = self.res.read();
     let pe_lock = res_guard.live_presentation_engines.read();
-    let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+    let mut pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.write();
+    let format = pe.format();
 
     let next_timeline = res_guard.get_timeline_semaphore_cached_value() + 1;
-    res_guard.archetypes.update_cursor_archetype_for_presentation_engine(
+    pe.archetypes_mut().update_cursor_archetype_for_presentation_engine(
       &self.device,
-      pe.format(),
+      format,
       &mut res_guard.pipeline_pool.write(),
       &res_guard.renderpasses,
       &res_guard.allocator.allocator,
@@ -3493,25 +3685,21 @@ impl RenderDevice for Device {
     self.get_cursor_resources(handle)
   }
 
+  #[named]
   fn get_measurement_resources(
     &self,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
     let res_guard = self.res.read();
-    let arch = res_guard.archetypes.measurement_render_archetype.read();
-    let archetype_not_exists = arch.is_none();
-    if archetype_not_exists {
-      return Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] get_measurement_resources",
-      ));
+    let pe_lock = res_guard.live_presentation_engines.read();
+    let pe = pe_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let arch = pe.archetypes().measurement_render_archetype.read();
+    if arch.as_ref().is_none() {
+      return Err(gpu_err_archetype_absent!());
     }
 
-    let arch_ref = arch.as_ref().unwrap();
-    let pipeline_key = {
-      let pe_lock = res_guard.live_presentation_engines.read();
-      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-      arch_ref.pipeline_key(pe.format()).ok_or(GpuError::NotFound)?
-    };
+    let arch_ref = unsafe { arch.as_ref().unwrap_unchecked() };
+    let pipeline_key = { arch_ref.pipeline_key(pe.format()).ok_or(GpuError::NotFound)? };
 
     Ok(ResourceUploadResult {
       pipeline: pipeline_key,
@@ -3523,6 +3711,7 @@ impl RenderDevice for Device {
     })
   }
 
+  #[named]
   fn create_measurement_resources(
     &self,
     _cmd_buffer: CommandBufferHandle,
@@ -3530,12 +3719,13 @@ impl RenderDevice for Device {
   ) -> GpuResult<ResourceUploadResult> {
     let res_guard = self.res.read();
     let pe_lock = res_guard.live_presentation_engines.read();
-    let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+    let mut pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.write();
+    let format = pe.format();
 
     let next_timeline = res_guard.get_timeline_semaphore_cached_value() + 1;
-    res_guard.archetypes.update_measurement_archetype_for_presentation_engine(
+    pe.archetypes_mut().update_measurement_archetype_for_presentation_engine(
       &self.device,
-      pe.format(),
+      format,
       &mut res_guard.pipeline_pool.write(),
       &res_guard.renderpasses,
       &res_guard.allocator.allocator,
@@ -3546,26 +3736,22 @@ impl RenderDevice for Device {
     self.get_measurement_resources(handle)
   }
 
+  #[named]
   fn get_marker_resources(
     &self,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
     let res_guard = self.res.read();
-    let arch = res_guard.archetypes.marker_render_archetype.read();
-    let archetype_not_exists = arch.is_none();
-    if archetype_not_exists {
-      return Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] get_marker_resources",
-      ));
+    let pe_lock = res_guard.live_presentation_engines.read();
+    let pe = pe_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let arch = pe.archetypes().marker_render_archetype.read();
+    if arch.as_ref().is_none() {
+      return Err(gpu_err_archetype_absent!());
     }
 
-    let arch_ref = arch.as_ref().unwrap();
+    let arch_ref = unsafe { arch.as_ref().unwrap_unchecked() };
 
-    let pipeline_key = {
-      let pe_lock = res_guard.live_presentation_engines.read();
-      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-      arch_ref.pipeline_key(pe.format()).ok_or(GpuError::NotFound)?
-    };
+    let pipeline_key = { arch_ref.pipeline_key(pe.format()).ok_or(GpuError::NotFound)? };
 
     Ok(ResourceUploadResult {
       pipeline: pipeline_key,
@@ -3577,6 +3763,7 @@ impl RenderDevice for Device {
     })
   }
 
+  #[named]
   fn create_marker_resources(
     &self,
     _cmd_buffer: CommandBufferHandle,
@@ -3584,37 +3771,37 @@ impl RenderDevice for Device {
   ) -> GpuResult<ResourceUploadResult> {
     let res_guard = self.res.read();
     let pe_lock = res_guard.live_presentation_engines.read();
-    let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+    let mut pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.write();
+    let format = pe.format();
 
     let next_timeline = res_guard.get_timeline_semaphore_cached_value() + 1;
-    res_guard.archetypes.update_marker_archetype_for_presentation_engine(
+
+    pe.archetypes_mut().update_marker_archetype_for_presentation_engine(
       &self.device,
-      pe.format(),
+      format,
       &mut res_guard.pipeline_pool.write(),
       &res_guard.renderpasses,
       &res_guard.allocator.allocator,
       &res_guard.discard_pool,
       next_timeline,
     )?;
+    drop(pe);
 
     self.get_marker_resources(handle)
   }
 
+  #[named]
   fn get_gizmo_resources(
     &self,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult> {
     let res_guard = self.res.read();
-    let archetype_guard = res_guard.archetypes.gizmo_render_archetype.read();
-    let archetype = archetype_guard.as_ref().ok_or(GpuError::InvalidState(
-      "[Vulkan RenderDevice] get_gizmo_resources | archetype missing",
-    ))?;
+    let pe_lock = res_guard.live_presentation_engines.read();
+    let pe = pe_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let archetype_guard = pe.archetypes().gizmo_render_archetype.read();
+    let archetype = archetype_guard.as_ref().ok_or(gpu_err_archetype_absent!())?;
 
-    let pipeline_key = {
-      let pe_lock = res_guard.live_presentation_engines.read();
-      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-      archetype.pipeline_key(pe.format()).ok_or(GpuError::NotFound)?
-    };
+    let pipeline_key = { archetype.pipeline_key(pe.format()).ok_or(GpuError::NotFound)? };
 
     Ok(ResourceUploadResult {
       pipeline: pipeline_key,
@@ -3626,6 +3813,7 @@ impl RenderDevice for Device {
     })
   }
 
+  #[named]
   fn create_gizmo_resources(
     &self,
     _cmd_buffer: CommandBufferHandle,
@@ -3633,32 +3821,37 @@ impl RenderDevice for Device {
   ) -> GpuResult<ResourceUploadResult> {
     let res_guard = self.res.read();
     let pe_lock = res_guard.live_presentation_engines.read();
-    let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+    let mut pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.write();
+    let format = pe.format();
 
     let next_timeline = res_guard.get_timeline_semaphore_cached_value() + 1;
-    res_guard.archetypes.update_gizmo_archetype_for_presentation_engine(
+
+    pe.archetypes_mut().update_gizmo_archetype_for_presentation_engine(
       &self.device,
-      pe.format(),
+      format,
       &mut res_guard.pipeline_pool.write(),
       &res_guard.renderpasses,
       &res_guard.allocator.allocator,
       &res_guard.discard_pool,
       next_timeline,
     )?;
+    drop(pe);
 
     self.get_gizmo_resources(handle)
   }
 
+  #[named]
   fn update_gizmo_instance(
     &self,
     entity: EntityId,
     model: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+    handle: PresentationEngineHandle,
   ) -> GpuResult<u32> {
     let res_guard = self.res.read();
-    let mut archetype_guard = res_guard.archetypes.gizmo_render_archetype.write();
-    let archetype = archetype_guard.as_mut().ok_or(GpuError::InvalidState(
-      "[Vulkan RenderDevice] update_gizmo_instance | no archetype",
-    ))?;
+    let live_pes = res_guard.live_presentation_engines.read();
+    let mut pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
+    let mut archetype_guard = pe.archetypes_mut().gizmo_render_archetype.write();
+    let archetype = archetype_guard.as_mut().ok_or(gpu_err_archetype_absent!())?;
 
     // Check if we already have a buffer for this entity (we hash the entity ID)
     let mut hasher = aethervk_oshal_rlib::hash::FnvHasher::new();
@@ -3738,15 +3931,19 @@ impl RenderDevice for Device {
     Ok(buffer_index)
   }
 
+  #[named]
   fn upload_particle_systems(
     &self,
     cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
     particle_calls: &mut [crate::gpu::frame::ParticleDrawCall],
   ) -> GpuResult<()> {
     let res_guard = self.res.read();
-    let archetype_guard = res_guard.archetypes.particle_render_archetype.read();
-    if archetype_guard.is_none() {
-      return Ok(());
+    let live_pes = res_guard.live_presentation_engines.read();
+    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let archetype_guard = pe.archetypes().particle_render_archetype.read();
+    if archetype_guard.as_ref().is_none() {
+      return Err(gpu_err_archetype_absent!());
     }
     let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
 
@@ -3755,9 +3952,7 @@ impl RenderDevice for Device {
 
     let cmd = {
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] upload_particle_systems: invalid command buffer handle",
-      ))?;
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
       data.command_buffer.get()
     };
 
@@ -3774,7 +3969,6 @@ impl RenderDevice for Device {
       }
       let particles_arc = unsafe { particles_arc.unwrap_unchecked() };
       let particles = particles_arc.read();
-      let active_count = particles.iter().filter(|p| p.active != 0).count();
       if particles.is_empty() {
         continue;
       }
@@ -3789,7 +3983,7 @@ impl RenderDevice for Device {
 
       let total_size = particle_data_size + indirect_size;
       let (staging_offset, ptr) =
-        staging_arena.allocate(total_size, 16).ok_or(crate::gpu_err!("device error"))?;
+        staging_arena.allocate(total_size, 16).ok_or(crate::gpu_err_device!())?;
 
       unsafe {
         core::ptr::copy_nonoverlapping(particles.as_ptr() as *const u8, ptr, particle_data_size);
@@ -3866,15 +4060,19 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn upload_particle2_systems(
     &self,
     cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
     particle_calls: &mut [crate::gpu::frame::Particle2DrawCall],
   ) -> GpuResult<()> {
     let res_guard = self.res.read();
-    let archetype_guard = res_guard.archetypes.particle2_render_archetype.read();
-    if archetype_guard.is_none() {
-      return Ok(());
+    let live_pes = res_guard.live_presentation_engines.read();
+    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let archetype_guard = pe.archetypes().particle2_render_archetype.read();
+    if archetype_guard.as_ref().is_none() {
+      return Err(gpu_err_archetype_absent!());
     }
     let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
 
@@ -3883,9 +4081,7 @@ impl RenderDevice for Device {
 
     let cmd = {
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] upload_particle2_systems: invalid command buffer handle",
-      ))?;
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
       data.command_buffer.get()
     };
 
@@ -3902,7 +4098,6 @@ impl RenderDevice for Device {
       }
       let particles_arc = unsafe { particles_arc.unwrap_unchecked() };
       let particles = particles_arc.read();
-      let active_count = particles.iter().filter(|p| p.active != 0).count();
       if particles.is_empty() {
         continue;
       }
@@ -3917,7 +4112,7 @@ impl RenderDevice for Device {
 
       let total_size = particle_data_size + indirect_size;
       let (staging_offset, ptr) =
-        staging_arena.allocate(total_size, 16).ok_or(crate::gpu_err!("device error"))?;
+        staging_arena.allocate(total_size, 16).ok_or(crate::gpu_err_device!())?;
 
       unsafe {
         core::ptr::copy_nonoverlapping(particles.as_ptr() as *const u8, ptr, particle_data_size);
@@ -3994,6 +4189,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn upload_trajectories(
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
@@ -4033,13 +4229,11 @@ impl RenderDevice for Device {
     }
 
     let res_guard = self.res.read();
-
-    // NOTE: Changed to `.write()` because we mutate the allocator cache state!
-    let mut archetype_guard = res_guard.archetypes.trajectory_render_archetype.write();
-    if archetype_guard.is_none() {
-      return Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] upload_trajectories | archetype absent",
-      ));
+    let live_pes = res_guard.live_presentation_engines.read();
+    let mut pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
+    let mut archetype_guard = pe.archetypes_mut().trajectory_render_archetype.write();
+    if archetype_guard.as_ref().is_none() {
+      return Err(gpu_err_archetype_absent!());
     }
     let archetype = unsafe { archetype_guard.as_mut().unwrap_unchecked() };
 
@@ -4079,7 +4273,7 @@ impl RenderDevice for Device {
         model_mat,
       );
       let mut needs_upload = false;
-      let mut offset = 0;
+      let offset;
 
       // 2. RECOGNIZE & ALLOCATE
       if let Some(alloc) = archetype.curves.get_mut(entity_id) {
@@ -4207,7 +4401,9 @@ impl RenderDevice for Device {
 
     let cmd = {
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
+      let data = cmd_buffers
+        .get(&cmd_buffer)
+        .ok_or(crate::gpu_invalid_arg!("invalid argument".to_string()))?;
       data.command_buffer.get()
     };
 
@@ -4219,7 +4415,7 @@ impl RenderDevice for Device {
         .as_mut()
         .unwrap()
         .allocate(total_staging_size as usize, 16)
-        .ok_or(crate::gpu_err!("device error"))?;
+        .ok_or(crate::gpu_err_device!())?;
 
       unsafe {
         if segments_upload_size > 0 {
@@ -4316,10 +4512,11 @@ impl RenderDevice for Device {
     }))
   }
 
+  #[named]
   fn upload_ui(
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
-    _handle: PresentationEngineHandle,
+    handle: PresentationEngineHandle,
     ui_elements: &[crate::gpu::UiElementGpu],
   ) -> GpuResult<Option<crate::gpu::UiBatchCall>> {
     if ui_elements.is_empty() {
@@ -4327,9 +4524,10 @@ impl RenderDevice for Device {
     }
 
     let res_guard = self.res.read();
-    let mut archetype_guard = res_guard.archetypes.ui_render_archetype.write();
-    let archetype =
-      archetype_guard.as_mut().ok_or(GpuError::InvalidState("UI archetype not ready"))?;
+    let live_pes = res_guard.live_presentation_engines.read();
+    let mut pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
+    let mut archetype_guard = pe.archetypes_mut().ui_render_archetype.write();
+    let archetype = archetype_guard.as_mut().ok_or(gpu_err_archetype_absent!())?;
 
     let elements_ptr = unsafe {
       let data_ptr = res_guard.allocator.allocator.map_memory(&mut archetype.elements_alloc)?;
@@ -4380,10 +4578,11 @@ impl RenderDevice for Device {
     }))
   }
 
+  #[named]
   fn upload_text2(
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
-    _handle: PresentationEngineHandle,
+    handle: PresentationEngineHandle,
     glyphs: &[crate::gpu::TextGlyphGpu],
   ) -> GpuResult<Option<crate::gpu::Text2BatchCall>> {
     if glyphs.is_empty() {
@@ -4391,9 +4590,10 @@ impl RenderDevice for Device {
     }
 
     let res_guard = self.res.read();
-    let mut archetype_guard = res_guard.archetypes.text2_render_archetype.write();
-    let archetype =
-      archetype_guard.as_mut().ok_or(GpuError::InvalidState("Text2 archetype not ready"))?;
+    let live_pes = res_guard.live_presentation_engines.read();
+    let mut pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.write();
+    let mut archetype_guard = pe.archetypes_mut().text2_render_archetype.write();
+    let archetype = archetype_guard.as_mut().ok_or(gpu_err_archetype_absent!())?;
 
     let glyphs_ptr = unsafe {
       let data_ptr = res_guard.allocator.allocator.map_memory(&mut archetype.glyphs_alloc)?;
@@ -4444,22 +4644,24 @@ impl RenderDevice for Device {
     }))
   }
 
+  #[named]
   fn draw_particle_indirect(
     &self,
     cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
     indirect_offset: u32,
   ) -> GpuResult<()> {
     let cmd = {
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] draw_particle_indirect: invalid command buffer handle",
-      ))?;
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
       data.command_buffer.get()
     };
 
     let res_guard = self.res.read();
-    let archetype_guard = res_guard.archetypes.particle_render_archetype.read();
-    let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
+    let live_pes = res_guard.live_presentation_engines.read();
+    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let archetype_guard = pe.archetypes().particle_render_archetype.read();
+    let archetype = archetype_guard.as_ref().ok_or(gpu_err_archetype_absent!())?;
 
     let i_offset = (indirect_offset as usize * core::mem::size_of::<vk::DrawIndirectCommand>())
       as vk::DeviceSize;
@@ -4475,22 +4677,24 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn draw_particle2_indirect(
     &self,
     cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
     indirect_offset: u32,
   ) -> GpuResult<()> {
     let cmd = {
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] draw_particle2_indirect: invalid command buffer handle",
-      ))?;
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
       data.command_buffer.get()
     };
 
     let res_guard = self.res.read();
-    let archetype_guard = res_guard.archetypes.particle2_render_archetype.read();
-    let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
+    let live_pes = res_guard.live_presentation_engines.read();
+    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let archetype_guard = pe.archetypes().particle2_render_archetype.read();
+    let archetype = archetype_guard.as_ref().ok_or(gpu_err_archetype_absent!())?;
 
     let i_offset = (indirect_offset as usize * core::mem::size_of::<vk::DrawIndirectCommand>())
       as vk::DeviceSize;
@@ -4506,26 +4710,31 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn get_particle_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey> {
     let res_guard = self.res.read();
     let pe_lock = res_guard.live_presentation_engines.read();
     let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-    let archetype = res_guard.archetypes.particle_render_archetype.read();
-    archetype.as_ref().and_then(|a| a.pipeline_key(pe.format())).ok_or(GpuError::InvalidState(
-      "[Vulkan RenderDevice] get_particle_pipeline_key failed",
-    ))
+    let archetype = pe.archetypes().particle_render_archetype.read();
+    archetype
+      .as_ref()
+      .and_then(|a| a.pipeline_key(pe.format()))
+      .ok_or(gpu_err_pipeline_key_absent!())
   }
 
+  #[named]
   fn get_particle2_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey> {
     let res_guard = self.res.read();
     let pe_lock = res_guard.live_presentation_engines.read();
     let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-    let archetype = res_guard.archetypes.particle2_render_archetype.read();
-    archetype.as_ref().and_then(|a| a.pipeline_key(pe.format())).ok_or(GpuError::InvalidState(
-      "[Vulkan RenderDevice] get_particle2_pipeline_key failed",
-    ))
+    let archetype = pe.archetypes().particle2_render_archetype.read();
+    archetype
+      .as_ref()
+      .and_then(|a| a.pipeline_key(pe.format()))
+      .ok_or(gpu_err_pipeline_key_absent!())
   }
 
+  #[named]
   fn get_trajectory_pipeline_key(
     &self,
     handle: PresentationEngineHandle,
@@ -4533,32 +4742,38 @@ impl RenderDevice for Device {
     let res_guard = self.res.read();
     let pe_lock = res_guard.live_presentation_engines.read();
     let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-    let archetype = res_guard.archetypes.trajectory_render_archetype.read();
-    archetype.as_ref().and_then(|a| a.pipeline_key(pe.format())).ok_or(GpuError::InvalidState(
-      "[Vulkan RenderDevice] get_trajectory_pipeline_key failed",
-    ))
+    let archetype = pe.archetypes().trajectory_render_archetype.read();
+    archetype
+      .as_ref()
+      .and_then(|a| a.pipeline_key(pe.format()))
+      .ok_or(gpu_err_pipeline_key_absent!())
   }
 
+  #[named]
   fn get_sun_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey> {
     let res_guard = self.res.read();
     let pe_lock = res_guard.live_presentation_engines.read();
     let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-    let sun_archetype = res_guard.archetypes.sun_render_archetype.read();
-    sun_archetype.as_ref().and_then(|a| a.pipeline_key(pe.format())).ok_or(GpuError::InvalidState(
-      "[Vulkan RenderDevice] get_sun_pipeline_key failed",
-    ))
+    let sun_archetype = pe.archetypes().sun_render_archetype.read();
+    sun_archetype
+      .as_ref()
+      .and_then(|a| a.pipeline_key(pe.format()))
+      .ok_or(gpu_err_pipeline_key_absent!())
   }
 
+  #[named]
   fn get_sky_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey> {
     let res_guard = self.res.read();
     let pe_lock = res_guard.live_presentation_engines.read();
     let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-    let sky_archetype = res_guard.archetypes.sky_render_archetype.read();
-    sky_archetype.as_ref().and_then(|a| a.pipeline_key(pe.format())).ok_or(GpuError::InvalidState(
-      "[Vulkan RenderDevice] get_sky_pipeline_key failed",
-    ))
+    let sky_archetype = pe.archetypes().sky_render_archetype.read();
+    sky_archetype
+      .as_ref()
+      .and_then(|a| a.pipeline_key(pe.format()))
+      .ok_or(gpu_err_pipeline_key_absent!())
   }
 
+  #[named]
   fn get_background_pipeline_key(
     &self,
     handle: PresentationEngineHandle,
@@ -4566,68 +4781,77 @@ impl RenderDevice for Device {
     let res_guard = self.res.read();
     let pe_lock = res_guard.live_presentation_engines.read();
     let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-    let background_archetype = res_guard.archetypes.background_render_archetype.read();
-    background_archetype.as_ref().and_then(|a| a.pipeline_key(pe.format())).ok_or(
-      GpuError::InvalidState("[Vulkan RenderDevice] get_background_pipeline_key failed"),
-    )
+    let background_archetype = pe.archetypes().background_render_archetype.read();
+    background_archetype
+      .as_ref()
+      .and_then(|a| a.pipeline_key(pe.format()))
+      .ok_or(gpu_err_pipeline_key_absent!())
   }
 
+  #[named]
   fn get_grid_pipeline_kay(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey> {
     let res_guard = self.res.read();
     let pe_lock = res_guard.live_presentation_engines.read();
     let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-    let grid_archetype = res_guard.archetypes.grid_render_archetype.read();
-    grid_archetype.as_ref().and_then(|a| a.pipeline_key(pe.format())).ok_or(GpuError::InvalidState(
-      "[Vulkan RenderDevice] get_grid_pipeline_key failed",
-    ))
+    let grid_archetype = pe.archetypes().grid_render_archetype.read();
+    grid_archetype
+      .as_ref()
+      .and_then(|a| a.pipeline_key(pe.format()))
+      .ok_or(gpu_err_pipeline_key_absent!())
   }
 
+  #[named]
   fn get_bvh_pipeline_kay(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey> {
     let res_guard = self.res.read();
     let pe_lock = res_guard.live_presentation_engines.read();
     let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-    let bvh_archetype = res_guard.archetypes.bvh_render_archetype.read();
-    bvh_archetype.as_ref().and_then(|a| a.pipeline_key(pe.format())).ok_or(GpuError::InvalidState(
-      "[Vulkan RenderDevice] get_bvh_pipeline_key failed]",
-    ))
+    let bvh_archetype = pe.archetypes().bvh_render_archetype.read();
+    bvh_archetype
+      .as_ref()
+      .and_then(|a| a.pipeline_key(pe.format()))
+      .ok_or(gpu_err_pipeline_key_absent!())
   }
 
+  #[named]
   fn get_bvhwire2_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey> {
     let res_guard = self.res.read();
     let pe_lock = res_guard.live_presentation_engines.read();
     let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-    let bvh_archetype = res_guard.archetypes.bvhwire2_render_archetype.read();
-    bvh_archetype.as_ref().and_then(|a| a.pipeline_key(pe.format())).ok_or(GpuError::InvalidState(
-      "[Vulkan RenderDevice] get_bvhwire2_pipeline_key failed]",
-    ))
+    let bvh_archetype = pe.archetypes().bvhwire2_render_archetype.read();
+    bvh_archetype
+      .as_ref()
+      .and_then(|a| a.pipeline_key(pe.format()))
+      .ok_or(gpu_err_pipeline_key_absent!())
   }
 
+  #[named]
   fn allocate_rasterized_font_atlas(
     &self,
     cmd: CommandBufferHandle,
     hash: u64,
     font_atlas: alloc::sync::Arc<FontAtlas>,
   ) -> GpuResult<u32> {
-    let command_buffer = self
-      .recording_command_buffers
-      .read()
-      .get(&cmd)
-      .ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] allocate_rasterized_font_atlas: invalid command buffer handle",
-      ))?
-      .command_buffer
-      .get();
+    let recording_command_buffers = self.recording_command_buffers.read();
+    let data_opt = recording_command_buffers.get(&cmd);
+    let data = data_opt.as_ref().ok_or(gpu_err_invalid_cmd!())?;
+    let command_buffer = data.command_buffer.get();
+    let handle = data.presentation_engine.ok_or(gpu_err_cmd_no_pe!())?;
 
     let res_guard = self.res.read();
+    let live_pes = res_guard.live_presentation_engines.read();
+    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+
     let mut staging_arena = res_guard.frame_staging_arena.write();
     let staging_arena_ref = staging_arena.as_mut().ok_or(GpuError::InvalidState(
-      "[Vulkan RenderDevice] allocate_rasterized_font_atlas: staging arena missing",
+      "[Vulkan RenderDevice] allocate_rasterized_font_atlas: staging arena missing".to_string(),
     ))?;
 
     let mut idx = 0;
 
+    // TODO font atlas is shared among all text archetypes, hence DeviceResources also should hold
+    // an Arc for each of these
     {
-      let mut archetype1 = res_guard.archetypes.text_render_archetype.write();
+      let mut archetype1 = pe.archetypes().text_render_archetype.write();
       if let Some(a) = archetype1.as_mut() {
         idx = a.upload_font_atlas(
           &self.device,
@@ -4642,7 +4866,7 @@ impl RenderDevice for Device {
     }
 
     {
-      let mut archetype2 = res_guard.archetypes.text2_render_archetype.write();
+      let mut archetype2 = pe.archetypes().text2_render_archetype.write();
       if let Some(a) = archetype2.as_mut() {
         idx = a.upload_font_atlas(
           &self.device,
@@ -4659,28 +4883,35 @@ impl RenderDevice for Device {
     Ok(idx)
   }
 
+  #[named]
   fn free_rasterized_font_atlas(&self, hash: u64, _font_atlas_id: u32) -> GpuResult<()> {
     let res_guard = self.res.read();
     // TODO verify that we don't need + 1 is correct to discard on next timeline?
     let timeline = res_guard.get_timeline_semaphore_cached_value();
+    let live_pes = res_guard.live_presentation_engines.read();
 
-    {
-      let mut archetype1 = res_guard.archetypes.text_render_archetype.write();
-      if let Some(a) = archetype1.as_mut() {
-        let _ = a.remove_font_atlas(hash, &res_guard.discard_pool, timeline);
+    for (_, pe_lock) in live_pes.iter() {
+      let pe = pe_lock.read();
+
+      {
+        let mut archetype1 = pe.archetypes().text_render_archetype.write();
+        if let Some(a) = archetype1.as_mut() {
+          let _ = a.remove_font_atlas(hash, &res_guard.discard_pool, timeline);
+        }
       }
-    }
 
-    {
-      let mut archetype2 = res_guard.archetypes.text2_render_archetype.write();
-      if let Some(a) = archetype2.as_mut() {
-        let _ = a.remove_font_atlas(hash, &res_guard.discard_pool, timeline);
+      {
+        let mut archetype2 = pe.archetypes().text2_render_archetype.write();
+        if let Some(a) = archetype2.as_mut() {
+          let _ = a.remove_font_atlas(hash, &res_guard.discard_pool, timeline);
+        }
       }
     }
 
     Ok(())
   }
 
+  #[named]
   fn present(
     &self,
     handle: PresentationEngineHandle,
@@ -4707,12 +4938,11 @@ impl RenderDevice for Device {
         )
       }
     } else {
-      Err(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] present: invalid presentation engine",
-      ))
+      Err(gpu_err_invalid_pe!())
     }
   }
 
+  #[named]
   fn download_windowless_image(
     &self,
     handle: PresentationEngineHandle,
@@ -4723,9 +4953,7 @@ impl RenderDevice for Device {
     let (image, width, height, mut wait_value, timeline_sem, task_entry) = {
       let res_guard = self.res.read();
       let engine_lock = res_guard.live_presentation_engines.read();
-      let state_lock = engine_lock.get(&handle).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] download_windowless_image: invalid presentation engine",
-      ))?;
+      let state_lock = engine_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?;
       let mut state = state_lock.write();
 
       if let swapchain::PresentationState::Windowless(windowless) = &mut *state {
@@ -4741,9 +4969,7 @@ impl RenderDevice for Device {
                 Some(entry.clone()),
               )
             } else {
-              return Err(GpuError::InvalidArgument(
-                "[Vulkan RenderDevice] download_windowless_image: no task id",
-              ));
+              return Err(gpu_invalid_arg!("no task id"));
             }
           }
           None => (windowless.get_last_submitted_timeline_value(), None),
@@ -4758,16 +4984,18 @@ impl RenderDevice for Device {
           entry,
         )
       } else {
-        return Err(GpuError::InvalidArgument(
-          "[Vulkan RenderDevice] download_windowless_image: windowed presentation engine cannot download (TODO)",
+        return Err(gpu_invalid_arg!(
+          "windowed presentation engine cannot download (TODO)"
         ));
       }
     }; // <-- Locks safely dropped here!
 
     let buffer_size = (width * height * 4) as vk::DeviceSize;
     if buffer.len() != buffer_size as usize {
-      return Err(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] download_windowless_image: buffer size does not match",
+      return Err(gpu_invalid_arg!(
+        "buffer size mismatch: {} vs {}",
+        buffer.len(),
+        buffer_size
       ));
     }
 
@@ -4910,6 +5138,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn get_command_buffer(&self) -> GpuResult<gpu::CommandBufferHandle> {
     let res_guard = self.res.read();
     // Command buffers just get a dummy increasing ID for the hash map. Not the timeline.
@@ -4935,12 +5164,23 @@ impl RenderDevice for Device {
     Ok(CommandBufferHandle(cmd_id))
   }
 
+  #[named]
+  fn set_command_buffer_presentation_engine(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()> {
+    let mut cmd_buffers = self.recording_command_buffers.write();
+    let data = cmd_buffers.get_mut(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+    data.presentation_engine = Some(handle);
+    Ok(())
+  }
+
   // TODO group all &'static str error message
+  #[named]
   fn begin_command_buffer(&self, cmd_buffer: gpu::CommandBufferHandle) -> GpuResult<()> {
     let mut cmd_buffers = self.recording_command_buffers.write();
-    let data = cmd_buffers.get_mut(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-      "[Vulkan RenderDevice] begin_command_buffer: invalid command buffer handle",
-    ))?;
+    let data = cmd_buffers.get_mut(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
 
     if data.has_begun {
       return Ok(());
@@ -4956,6 +5196,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn get_emissive_paint_image_mapped_ptr(
     &self,
     mesh_id: crate::gpu::RenderableInstanceId,
@@ -4974,6 +5215,7 @@ impl RenderDevice for Device {
     }
   }
 
+  #[named]
   fn begin_render_pass(
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
@@ -4984,21 +5226,17 @@ impl RenderDevice for Device {
     let presentation_engines_guard = res_guard.live_presentation_engines.read();
     let cmd_buffers = self.recording_command_buffers.read();
     if !cmd_buffers.contains_key(&cmd_buffer) {
-      return Err(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] begin_render_pass invalid command buffer handle",
-      ));
+      return Err(gpu_err_invalid_cmd!());
     }
     if !presentation_engines_guard.contains_key(&presentation_engine) {
-      return Err(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] begin_render_pass invalid presentation_engine handle",
-      ));
+      return Err(gpu_err_invalid_pe!());
     }
 
     let data = unsafe { cmd_buffers.get(&cmd_buffer).unwrap_unchecked() };
 
     if !data.has_begun {
       return Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] begin_render_pass command buffer not begun",
+        "[Vulkan RenderDevice] begin_render_pass command buffer not begun".to_string(),
       ));
     }
 
@@ -5068,6 +5306,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn set_viewport(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
@@ -5075,9 +5314,7 @@ impl RenderDevice for Device {
   ) -> GpuResult<()> {
     let cmd = {
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] set_viewport: invalid command buffer handle",
-      ))?;
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
       data.command_buffer.get()
     };
     let vk_viewport = vk::Viewport {
@@ -5095,6 +5332,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn set_scissor(
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
@@ -5102,9 +5340,7 @@ impl RenderDevice for Device {
   ) -> GpuResult<()> {
     let cmd = {
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] set_scissor: invalid command buffer handle",
-      ))?;
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
       data.command_buffer.get()
     };
     let vk_scissor = vk::Rect2D {
@@ -5124,6 +5360,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn bind_pipeline(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
@@ -5131,9 +5368,7 @@ impl RenderDevice for Device {
   ) -> GpuResult<()> {
     let cmd_buffers = self.recording_command_buffers.read();
     if !cmd_buffers.contains_key(&cmd_buffer) {
-      return Err(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] bind_pipeline: invalid command buffer handle]",
-      ));
+      return Err(gpu_err_invalid_cmd!());
     }
 
     drop(cmd_buffers);
@@ -5141,9 +5376,13 @@ impl RenderDevice for Device {
     let data = unsafe { cmd_buffers.get_mut(&cmd_buffer).unwrap_unchecked() };
     let cmd = data.command_buffer.get();
 
-    let pipeline = self.res.read().pipeline_pool.read().get_graphics_pipeline(pipeline_key).ok_or(
-      GpuError::InvalidState("[Vulkan RenderDevice] bind_pipeline: get_graphics_pipeline"),
-    )?;
+    let pipeline = self
+      .res
+      .read()
+      .pipeline_pool
+      .read()
+      .get_graphics_pipeline(pipeline_key)
+      .ok_or(gpu_err_pipeline_absent!())?;
 
     unsafe {
       self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
@@ -5154,19 +5393,22 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn check_billboard_texture_id(&self, texture_id: u64) -> GpuResult<()> {
     let res = self.res.read();
     let billboard_resources = res.billboard_resources.read();
     if billboard_resources.len() > texture_id as usize {
       Ok(())
     } else {
-      Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] check_billboard_texture_id: billboard resources non existent",
+      Err(gpu_invalid_arg!(
+        "billboard resources {} non existent",
+        texture_id
       ))
     }
   }
 
   // TODO: Don't use a fence, try fully GPU sync approach with [`gpu::ParticleSyncMode`]
+  #[named]
   fn add_billboard_texture(
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
@@ -5176,21 +5418,29 @@ impl RenderDevice for Device {
   ) -> GpuResult<u32> {
     let res = self.res.read();
     let mut billboard_resources = res.billboard_resources.write();
-    let billboard_render_archetype = res.archetypes.billboard_render_archetype.read();
 
-    let cmd = {
+    let (cmd, handle) = {
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] add_billboard_texture: invalid command buffer handle",
-      ))?;
-      data.command_buffer.get()
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+
+      (
+        data.command_buffer.get(),
+        data.presentation_engine.ok_or(gpu_err_invalid_pe!())?,
+      )
     };
+    let live_pes = res.live_presentation_engines.read();
+    let pe = live_pes.get(&handle).ok_or(GpuError::InvalidState("[Vulkan RenderDevice] add_billboard_texture: cmd presentation engine doesn't exist anymore".to_string()))?.read();
+    let billboard_render_archetype = pe.archetypes().billboard_render_archetype.read();
+    if billboard_render_archetype.as_ref().is_none() {
+      return Err(gpu_err_archetype_absent!());
+    }
 
     let staging_arena_lock = res.frame_staging_arena.read();
     let staging_arena = staging_arena_lock.as_ref().unwrap();
 
     let image = {
-      let billboard_render_archetype_ref = billboard_render_archetype.as_ref().unwrap();
+      let billboard_render_archetype_ref =
+        unsafe { billboard_render_archetype.as_ref().unwrap_unchecked() };
       billboard_render_archetype_ref.add_texture(
         &self.device,
         &res.allocator.allocator,
@@ -5208,17 +5458,17 @@ impl RenderDevice for Device {
     Ok(billboard_resources.len() as u32 - 1)
   }
 
+  #[named]
   fn bind_buffers(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
+    handle: PresentationEngineHandle,
     _pipeline: crate::gpu::PipelineKey,
     buffers: GpuResourceHandle,
   ) -> GpuResult<()> {
     let cmd = {
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] bind_buffers: invalid command buffer handle",
-      ))?;
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
       data.command_buffer.get()
     };
 
@@ -5235,14 +5485,17 @@ impl RenderDevice for Device {
       let resource = physical_mesh_resources_guard
         .as_ref()
         .and_then(|map| map.get(&physical_mesh_id))
-        .ok_or(GpuError::InvalidArgument(
-          "[Vulkan RenderDevice] bind_buffers: couldn't get render mesh resource",
+        .ok_or(gpu_invalid_arg!(
+          "[Vulkan RenderDevice] bind_buffers: couldn't get render mesh resource {:?}",
+          physical_mesh_id
         ))?;
+      let live_pes = res_guard.live_presentation_engines.read();
+      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
 
       let physical_mesh_render_archetype_guard =
-        res_guard.archetypes.physical_mesh_render_archetype.read();
+        pe.archetypes().physical_mesh_render_archetype.read();
       let archetype = physical_mesh_render_archetype_guard.as_ref().ok_or(
-        GpuError::InvalidState("[Vulkan RenderDevice] bind_buffers: archetype absent"),
+        GpuError::InvalidState("[Vulkan RenderDevice] bind_buffers: archetype absent".to_string()),
       )?;
 
       (
@@ -5285,6 +5538,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn push_constants_raw(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
@@ -5292,113 +5546,85 @@ impl RenderDevice for Device {
     push_constants_bytes: &[u8],
   ) -> GpuResult<()> {
     let cmd_buffers = self.recording_command_buffers.read();
-    let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-      "[Vulkan RenderDevice] push_constants_raw: invalid command buffer handle",
-    ))?;
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+    let handle = data.presentation.ok_or(gpu_err_cmd_no_pe!())?.presentation_engine;
 
     let res_guard = self.res.read();
+    let live_pes = res_guard.live_presentation_engines.read();
+    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
 
     let layout = match archetype {
       ArchetypeId::Sun => {
-        res_guard.archetypes.sun_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+        pe.archetypes().sun_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
       }
-      ArchetypeId::PhysicalMesh => res_guard
-        .archetypes
+      ArchetypeId::PhysicalMesh => pe
+        .archetypes()
         .physical_mesh_render_archetype
         .read()
         .as_ref()
         .map(|a| a.pipeline_layout.get()),
-      ArchetypeId::Billboard => res_guard
-        .archetypes
-        .billboard_render_archetype
-        .read()
-        .as_ref()
-        .map(|a| a.pipeline_layout.get()),
-      ArchetypeId::Cursor => res_guard
-        .archetypes
-        .cursor_render_archetype
-        .read()
-        .as_ref()
-        .map(|a| a.pipeline_layout.get()),
-      ArchetypeId::Marker => res_guard
-        .archetypes
-        .marker_render_archetype
-        .read()
-        .as_ref()
-        .map(|a| a.pipeline_layout.get()),
-      ArchetypeId::Measurement => res_guard
-        .archetypes
+      ArchetypeId::Billboard => {
+        pe.archetypes().billboard_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+      }
+      ArchetypeId::Cursor => {
+        pe.archetypes().cursor_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+      }
+      ArchetypeId::Marker => {
+        pe.archetypes().marker_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+      }
+      ArchetypeId::Measurement => pe
+        .archetypes()
         .measurement_render_archetype
         .read()
         .as_ref()
         .map(|a| a.pipeline_layout.get()),
       ArchetypeId::Sky => {
-        res_guard.archetypes.sky_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+        pe.archetypes().sky_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
       }
       ArchetypeId::Grid => {
-        res_guard.archetypes.grid_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+        pe.archetypes().grid_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
       }
-      ArchetypeId::Minimap => res_guard
-        .archetypes
-        .minimap_render_archetype
-        .read()
-        .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+      ArchetypeId::Minimap => {
+        pe.archetypes().minimap_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+      }
       ArchetypeId::Text => {
-        res_guard.archetypes.text_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+        pe.archetypes().text_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
       }
       ArchetypeId::Bvh => {
-        res_guard.archetypes.bvh_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+        pe.archetypes().bvh_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
       }
-      ArchetypeId::Particle => res_guard
-        .archetypes
-        .particle_render_archetype
-        .read()
-        .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+      ArchetypeId::Particle => {
+        pe.archetypes().particle_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+      }
       ArchetypeId::Gizmo => {
-        res_guard.archetypes.gizmo_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+        pe.archetypes().gizmo_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
       }
-      ArchetypeId::PhysicalMesh2 => res_guard
-        .archetypes
+      ArchetypeId::PhysicalMesh2 => pe
+        .archetypes()
         .physical_mesh2_render_archetype
         .read()
         .as_ref()
         .map(|a| a.pipeline_layout.get()),
-      ArchetypeId::Particle2 => res_guard
-        .archetypes
-        .particle2_render_archetype
-        .read()
-        .as_ref()
-        .map(|a| a.pipeline_layout.get()),
-      ArchetypeId::Trajectory => res_guard
-        .archetypes
-        .trajectory_render_archetype
-        .read()
-        .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+      ArchetypeId::Particle2 => {
+        pe.archetypes().particle2_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+      }
+      ArchetypeId::Trajectory => {
+        pe.archetypes().trajectory_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+      }
       ArchetypeId::Ui => {
-        res_guard.archetypes.ui_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+        pe.archetypes().ui_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
       }
-      ArchetypeId::Background => res_guard
-        .archetypes
-        .background_render_archetype
-        .read()
-        .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+      ArchetypeId::Background => {
+        pe.archetypes().background_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+      }
       ArchetypeId::Text2 => {
-        res_guard.archetypes.text_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+        pe.archetypes().text_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
       }
-      ArchetypeId::Bvhwire2 => res_guard
-        .archetypes
-        .bvhwire2_render_archetype
-        .read()
-        .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+      ArchetypeId::Bvhwire2 => {
+        pe.archetypes().bvhwire2_render_archetype.read().as_ref().map(|a| a.pipeline_layout.get())
+      }
     }
-    .ok_or(GpuError::InvalidArgument(
-      "[Vulkan RenderDevice] push_constant_raw | archetype not initialized",
-    ))?;
+    .ok_or(gpu_err_archetype_absent!())?;
 
     // The slice is already bytes, just pass it directly to Vulkan
     unsafe {
@@ -5413,15 +5639,14 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn draw_indexed(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
     index_count: u32,
   ) -> GpuResult<()> {
     let cmd_buffers = self.recording_command_buffers.read();
-    let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-      "[Vulkan RenderDevice] draw_indexed: invalid command buffer handle",
-    ))?;
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
 
     let cmd = data.command_buffer.get();
 
@@ -5432,11 +5657,10 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn draw(&self, cmd_buffer: crate::gpu::CommandBufferHandle, vertex_count: u32) -> GpuResult<()> {
     let cmd_buffers = self.recording_command_buffers.read();
-    let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-      "[Vulkan RenderDevice] draw: invalid command buffer handle]",
-    ))?;
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
 
     let cmd = data.command_buffer.get();
 
@@ -5447,6 +5671,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn draw_instanced(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
@@ -5454,9 +5679,7 @@ impl RenderDevice for Device {
     instance_count: u32,
   ) -> GpuResult<()> {
     let cmd_buffers = self.recording_command_buffers.read();
-    let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-      "[Vulkan RenderDevice] draw_instanced: invalid command buffer handle",
-    ))?;
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
 
     let cmd = data.command_buffer.get();
 
@@ -5467,6 +5690,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn draw_indirect(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
@@ -5476,9 +5700,7 @@ impl RenderDevice for Device {
     stride: u32,
   ) -> GpuResult<()> {
     let cmd_buffers = self.recording_command_buffers.read();
-    let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-      "[Vulkan RenderDevice] draw_indirect: invalid command buffer handle",
-    ))?;
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
 
     let cmd = data.command_buffer.get();
 
@@ -5492,22 +5714,25 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn update_sun(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
+    handle: PresentationEngineHandle,
     entity_id: crate::scene::EntityId,
     resolution: (u32, u32, u32),
     radius: f32,
   ) -> GpuResult<()> {
     let res_guard = self.res.read();
-    let timeline = res_guard.get_timeline_semaphore_cached_value();
-
-    let sun_archetype_not_exists = res_guard.archetypes.sun_render_archetype.read().is_none();
-    if sun_archetype_not_exists {
-      return Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] update_sun: archetype doesn't exist",
-      ));
+    let live_pes = res_guard.live_presentation_engines.read();
+    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let archetypes = pe.archetypes().sun_render_archetype.read();
+    if archetypes.as_ref().is_none() {
+      return Err(gpu_err_archetype_absent!());
     }
+    let archetype_ref = unsafe { archetypes.as_ref().unwrap_unchecked() };
+
+    let timeline = res_guard.get_timeline_semaphore_cached_value();
 
     let mut sun_res_lock = res_guard.sun_resources.write();
     if sun_res_lock.is_none() {
@@ -5637,11 +5862,6 @@ impl RenderDevice for Device {
         ];
       }
 
-      let sun_render_archetype = res_guard.archetypes.sun_render_archetype.read();
-      let archetype = sun_render_archetype.as_ref().ok_or(GpuError::InvalidState(
-        "[Vulkan RenderDevice] update_sun: archetype absent",
-      ))?;
-
       let graphics_descriptor_set = res_guard
         .descriptor_pool
         .read()
@@ -5649,7 +5869,7 @@ impl RenderDevice for Device {
         .unwrap()
         .allocate(
           &self.device,
-          archetype.descriptor_set_layout.get(),
+          archetype_ref.descriptor_set_layout.get(),
           &res_guard.discard_pool,
           timeline,
           "Sun",
@@ -5692,9 +5912,7 @@ impl RenderDevice for Device {
     }
 
     let cmd_buffers = self.recording_command_buffers.read();
-    let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidState(
-      "update_sun: invalid command buffer handle",
-    ))?;
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
     let cmd = data.command_buffer.get();
 
     unsafe {
@@ -5810,6 +6028,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn prepare_billboard_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -5818,27 +6037,27 @@ impl RenderDevice for Device {
     let (cmd, pipeline, layout, d) = {
       let res = self.res.read();
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_invalid_arg!())?;
+      let live_pes = res.live_presentation_engines.read();
+      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
       let cmd = data.command_buffer.get();
-      let billboard_render_archetype = res.archetypes.billboard_render_archetype.read();
+      let billboard_render_archetype = pe.archetypes().billboard_render_archetype.read();
       let billboard_render_archetype_ref =
-        billboard_render_archetype.as_ref().ok_or(crate::gpu_err!("device error"))?;
+        billboard_render_archetype.as_ref().ok_or(gpu_err_archetype_absent!())?;
       let d: vk::DescriptorSet = billboard_render_archetype_ref.descriptor_set.get();
       let layout = billboard_render_archetype_ref.pipeline_layout.get();
       let pipeline_key = {
         let pe_lock = res.live_presentation_engines.read();
         let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-        billboard_render_archetype_ref.pipeline_key(pe.format()).ok_or(GpuError::InvalidState(
-          "billboard archetype | pipeline key absent",
-        ))?
+        billboard_render_archetype_ref
+          .pipeline_key(pe.format())
+          .ok_or(gpu_err_pipeline_key_absent!())?
       };
       let pipeline = res
         .pipeline_pool
         .read()
         .get_graphics_pipeline(pipeline_key)
-        .ok_or(GpuError::InvalidState(
-          "billboard archetype | pipeline absent in pool",
-        ))?
+        .ok_or(gpu_err_pipeline_absent!())?
         .get();
       (cmd, pipeline, layout, d)
     }; // <-- locks released here
@@ -5856,6 +6075,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn prepare_bvh_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -5865,27 +6085,21 @@ impl RenderDevice for Device {
       let res = self.res.read();
 
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidState(
-        "[Vulkan RenderDevice] prepare_bvh_archetype_for_render_and_bind_pipeline no cmd buffer",
-      ))?;
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+      let live_pes = res.live_presentation_engines.read();
+      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
       let cmd = data.command_buffer.get();
 
-      let a_lock = res.archetypes.bvh_render_archetype.read();
-      let bvh_render_archetype = a_lock.as_ref().ok_or(GpuError::InvalidState(
-        "[Vulkan RenderDevice] prepare_bvh_archetype no BVH archetype",
-      ))?;
-      let pe_lock = res.live_presentation_engines.read();
-      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-      let pipeline_key = bvh_render_archetype.pipeline_key(pe.format()).ok_or(
-        GpuError::InvalidState("[Vulkan RenderDevice] prepare_bvh_archetype no BVH pipeline key"),
-      )?;
+      let a_lock = pe.archetypes().bvh_render_archetype.read();
+      let bvh_render_archetype = a_lock.as_ref().ok_or(gpu_err_archetype_absent!())?;
+      let pipeline_key = bvh_render_archetype
+        .pipeline_key(pe.format())
+        .ok_or(gpu_err!("prepare_bvh_archetype no BVH pipeline key"))?;
       let pipeline = res
         .pipeline_pool
         .read()
         .get_graphics_pipeline(pipeline_key)
-        .ok_or(GpuError::InvalidState(
-          "[Vulkan RenderDevice] prepare_bvh_archetype no BVH pipeline",
-        ))?
+        .ok_or(gpu_err_pipeline_absent!())?
         .get();
       (cmd, pipeline)
     };
@@ -5897,39 +6111,31 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn prepare_bvhwire2_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
     handle: PresentationEngineHandle,
   ) -> GpuResult<()> {
-    let (cmd, pipeline) = {
-      let res = self.res.read();
-
-      let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidState(
-        "[Vulkan RenderDevice] prepare_bvhwire2_archetype_for_render_and_bind_pipeline no cmd buffer",
-      ))?;
-      let cmd = data.command_buffer.get();
-
-      let a_lock = res.archetypes.bvhwire2_render_archetype.read();
-      let bvhwire2_render_archetype = a_lock.as_ref().ok_or(GpuError::InvalidState(
-        "[Vulkan RenderDevice] prepare_bvhwire2_archetype no BVH archetype",
-      ))?;
-      let pe_lock = res.live_presentation_engines.read();
-      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-      let pipeline_key =
-        bvhwire2_render_archetype.pipeline_key(pe.format()).ok_or(GpuError::InvalidState(
-          "[Vulkan RenderDevice] prepare_bvhwire2_archetype no BVH pipeline key",
-        ))?;
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+    let cmd = data.command_buffer.get();
+    let res = self.res.read();
+    let pe_lock = res.live_presentation_engines.read();
+    let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+    let a_lock = pe.archetypes().bvhwire2_render_archetype.read();
+    let bvhwire2_render_archetype = a_lock.as_ref().ok_or(gpu_err_archetype_absent!())?;
+    let pipeline = {
+      let pipeline_key = bvhwire2_render_archetype
+        .pipeline_key(pe.format())
+        .ok_or(gpu_err_pipeline_key_absent!())?;
       let pipeline = res
         .pipeline_pool
         .read()
         .get_graphics_pipeline(pipeline_key)
-        .ok_or(GpuError::InvalidState(
-          "[Vulkan RenderDevice] prepare_bvhwire2_archetype no BVH pipeline",
-        ))?
+        .ok_or(gpu_err_pipeline_absent!())?
         .get();
-      (cmd, pipeline)
+      pipeline
     };
     unsafe {
       self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
@@ -5938,6 +6144,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn upload_bvhwire2_batch(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -5950,17 +6157,31 @@ impl RenderDevice for Device {
     }
 
     let res = self.res.read();
-    let archetype_lock = res.archetypes.bvhwire2_render_archetype.read();
-    let archetype =
-      archetype_lock.as_ref().ok_or(GpuError::InvalidState("BVHWire2 archetype absent"))?;
+    let recording_command_buffers = self.recording_command_buffers.read();
+    let data = recording_command_buffers.get(&cmd_buffer).ok_or(gpu_invalid_arg!(
+      "upload_bvhwire2_batch: invalid command buffer".to_string()
+    ))?;
+    let cmd = *data.command_buffer;
+    let live_pes = res.live_presentation_engines.read();
+    let pe = live_pes
+      .get(&handle)
+      .ok_or(gpu_invalid_arg!(
+        "upload_bvhwire2_batch: invalid presentation engine handle"
+      ))?
+      .read();
+    let archetype_lock = pe.archetypes().bvhwire2_render_archetype.read();
+    let archetype = archetype_lock.as_ref().ok_or(GpuError::InvalidState(
+      "BVHWire2 archetype absent".to_string(),
+    ))?;
 
     let total_boxes = bvh_data.len() as u32;
 
     let data_size = (bvh_data.len() * core::mem::size_of::<crate::gpu::Bvhwire2DataGpu>()) as u64;
 
     let mut staging_arena = res.frame_staging_arena.write();
-    let staging =
-      staging_arena.as_mut().ok_or(GpuError::InvalidState("BVHWire2 missing staging arena"))?;
+    let staging = staging_arena.as_mut().ok_or(GpuError::InvalidState(
+      "BVHWire2 missing staging arena".to_string(),
+    ))?;
 
     let (staging_offset, staging_ptr) =
       staging.allocate(data_size as usize, 16).ok_or(GpuError::OutOfMemory)?;
@@ -5972,12 +6193,6 @@ impl RenderDevice for Device {
         bvh_data.len(),
       );
     }
-
-    let cmd_buffers = self.recording_command_buffers.read();
-    let data = cmd_buffers
-      .get(&cmd_buffer)
-      .ok_or(GpuError::InvalidArgument("BVHWire2 invalid command buffer"))?;
-    let cmd = data.command_buffer.get();
 
     let copy_region =
       vk::BufferCopy::default().size(data_size).src_offset(staging_offset as u64).dst_offset(0);
@@ -6008,9 +6223,9 @@ impl RenderDevice for Device {
 
     let pe_lock = res.live_presentation_engines.read();
     let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-    let pipeline = archetype
-      .pipeline_key(pe.format())
-      .ok_or(GpuError::InvalidState("BVHWire2 missing pipeline"))?;
+    let pipeline = archetype.pipeline_key(pe.format()).ok_or(GpuError::InvalidState(
+      "BVHWire2 missing pipeline".to_string(),
+    ))?;
 
     Ok(Some(crate::gpu::frame::Bvhwire2BatchCall {
       pipeline,
@@ -6019,30 +6234,25 @@ impl RenderDevice for Device {
     }))
   }
 
+  #[named]
   fn prepare_gizmo_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
     handle: PresentationEngineHandle,
   ) -> GpuResult<()> {
     let res_guard = self.res.read();
-    let archetype_guard = res_guard.archetypes.gizmo_render_archetype.read();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+    let live_pes = res_guard.live_presentation_engines.read();
+    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let archetype_guard = pe.archetypes().gizmo_render_archetype.read();
     if archetype_guard.is_none() {
-      return Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] prepare_gizmo_archetype_for_render_and_bind_pipeline",
-      ));
+      return Err(gpu_err_pipeline_absent!());
     }
-    let archetype = archetype_guard.as_ref().ok_or(GpuError::NotFound)?;
-    let pipeline = {
-      let pe_lock = res_guard.live_presentation_engines.read();
-      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-      archetype.pipeline_key(pe.format()).ok_or(GpuError::NotFound)?
-    };
+    let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
+    let pipeline = archetype.pipeline_key(pe.format()).ok_or(gpu_err_pipeline_key_absent!())?;
 
-    let cmd = {
-      let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
-      data.command_buffer.get()
-    };
+    let cmd = data.command_buffer.get();
 
     let p = res_guard.pipeline_pool.read().get_graphics_pipeline(pipeline).unwrap();
 
@@ -6060,32 +6270,32 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn prepare_sun_for_render(
     &self,
     cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
     entity: EntityId,
   ) -> GpuResult<()> {
     let (layout, ds, cmd) = {
       let res = self.res.read();
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] prepare_sun_for_render: invalid command buffer handle",
-      ))?;
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+      let live_pes = res.live_presentation_engines.read();
+      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
       let cmd = data.command_buffer.get();
       let sun_resource = res.sun_resources.read();
-      let sun_archetype = res.archetypes.sun_render_archetype.read();
-      let layout =
-        sun_archetype.as_ref().map(|a| a.pipeline_layout.get()).ok_or(GpuError::InvalidState(
-          "[Vulkan RenderDevice] render_frame | couldn't get sun pipeline layout",
-        ))?;
+      let sun_archetype = pe.archetypes().sun_render_archetype.read();
+      let layout = sun_archetype
+        .as_ref()
+        .map(|a| a.pipeline_layout.get())
+        .ok_or(gpu_err_archetype_absent!())?;
       let ds = sun_resource
         .as_ref()
         .and_then(|s_map| s_map.get(&entity))
         .and_then(|s| s.descriptor_set)
         .map(|d| d.get())
-        .ok_or(GpuError::InvalidState(
-          "[Vulkan RenderDevice] render_frame:couldn't find sun descriptor set",
-        ))?;
+        .ok_or(gpu_err!("couldn't find sun descriptor set"))?;
       (layout, ds, cmd)
     };
     unsafe {
@@ -6101,30 +6311,25 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn prepare_particle_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
     handle: PresentationEngineHandle,
   ) -> GpuResult<()> {
     let res_guard = self.res.read();
-    let archetype_guard = res_guard.archetypes.particle_render_archetype.read();
+    let live_pes = res_guard.live_presentation_engines.read();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let archetype_guard = pe.archetypes().particle_render_archetype.read();
     if archetype_guard.is_none() {
-      return Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] prepare_particle_archetype_for_render_and_bind_pipeline | archetype absent",
-      ));
+      return Err(gpu_err_archetype_absent!());
     }
     let archetype = archetype_guard.as_ref().unwrap();
-    let pipeline = {
-      let pe_lock = res_guard.live_presentation_engines.read();
-      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-      archetype.pipeline_key(pe.format()).ok_or(GpuError::NotFound)?
-    };
+    let pipeline = { archetype.pipeline_key(pe.format()).ok_or(gpu_err_pipeline_key_absent!())? };
 
-    let cmd = {
-      let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
-      data.command_buffer.get()
-    };
+    let cmd = { data.command_buffer.get() };
 
     let p = res_guard.pipeline_pool.read().get_graphics_pipeline(pipeline).unwrap();
 
@@ -6142,30 +6347,25 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn prepare_particle2_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
     handle: PresentationEngineHandle,
   ) -> GpuResult<()> {
     let res_guard = self.res.read();
-    let archetype_guard = res_guard.archetypes.particle2_render_archetype.read();
+    let live_pes = res_guard.live_presentation_engines.read();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let archetype_guard = pe.archetypes().particle2_render_archetype.read();
     if archetype_guard.is_none() {
-      return Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] prepare_particle2_archetype_for_render_and_bind_pipeline | archetype absent",
-      ));
+      return Err(gpu_err_archetype_absent!());
     }
     let archetype = archetype_guard.as_ref().unwrap();
-    let pipeline = {
-      let pe_lock = res_guard.live_presentation_engines.read();
-      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-      archetype.pipeline_key(pe.format()).ok_or(GpuError::NotFound)?
-    };
+    let pipeline = { archetype.pipeline_key(pe.format()).ok_or(GpuError::NotFound)? };
 
-    let cmd = {
-      let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
-      data.command_buffer.get()
-    };
+    let cmd = { data.command_buffer.get() };
 
     let p = res_guard.pipeline_pool.read().get_graphics_pipeline(pipeline).unwrap();
 
@@ -6183,30 +6383,25 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn prepare_trajectory_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
     handle: PresentationEngineHandle,
   ) -> GpuResult<()> {
     let res_guard = self.res.read();
-    let archetype_guard = res_guard.archetypes.trajectory_render_archetype.read();
+    let pe_lock = res_guard.live_presentation_engines.read();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+    let pe = pe_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let archetype_guard = pe.archetypes().trajectory_render_archetype.read();
     if archetype_guard.is_none() {
-      return Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] prepare_trajectory_archetype_for_render_and_bind_pipeline | archetype absent",
-      ));
+      return Err(gpu_err_archetype_absent!());
     }
     let archetype = archetype_guard.as_ref().unwrap();
-    let pipeline = {
-      let pe_lock = res_guard.live_presentation_engines.read();
-      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-      archetype.pipeline_key(pe.format()).ok_or(GpuError::NotFound)?
-    };
+    let pipeline = { archetype.pipeline_key(pe.format()).ok_or(gpu_err_pipeline_key_absent!())? };
 
-    let cmd = {
-      let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
-      data.command_buffer.get()
-    };
+    let cmd = { data.command_buffer.get() };
 
     let p = res_guard.pipeline_pool.read().get_graphics_pipeline(pipeline).unwrap();
 
@@ -6224,30 +6419,25 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn prepare_ui_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
     handle: PresentationEngineHandle,
   ) -> GpuResult<()> {
     let res_guard = self.res.read();
-    let archetype_guard = res_guard.archetypes.ui_render_archetype.read();
+    let pe_lock = res_guard.live_presentation_engines.read();
+    let pe = pe_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+    let archetype_guard = pe.archetypes().ui_render_archetype.read();
     if archetype_guard.is_none() {
-      return Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] prepare_ui_archetype_for_render_and_bind_pipeline | archetype absent",
-      ));
+      return Err(gpu_err_archetype_absent!());
     }
     let archetype = archetype_guard.as_ref().unwrap();
-    let pipeline = {
-      let pe_lock = res_guard.live_presentation_engines.read();
-      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-      archetype.pipeline_key(pe.format()).ok_or(GpuError::NotFound)?
-    };
+    let pipeline = { archetype.pipeline_key(pe.format()).ok_or(GpuError::NotFound)? };
 
-    let cmd = {
-      let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
-      data.command_buffer.get()
-    };
+    let cmd = { data.command_buffer.get() };
 
     let p = res_guard.pipeline_pool.read().get_graphics_pipeline(pipeline).unwrap();
 
@@ -6265,24 +6455,27 @@ impl RenderDevice for Device {
     Ok(())
   }
 
-  fn prepare_sky_for_render(&self, cmd_buffer: gpu::CommandBufferHandle) -> GpuResult<()> {
+  #[named]
+  fn prepare_sky_for_render(
+    &self,
+    cmd_buffer: gpu::CommandBufferHandle,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()> {
     let res_guard = self.res.read();
     let sky_image_guard = res_guard.sky_image.read();
     let timeline = res_guard.get_timeline_semaphore_cached_value();
     if sky_image_guard.is_none() {
       oshal::log!("[RenderThread] render_sky ERROR: sky_image_guard.is_none");
-      return Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] prepare_sky_for_render: sky image absent",
-      ));
+      return Err(gpu_err!("sky image absent"));
     }
+    let live_pes = res_guard.live_presentation_engines.read();
 
     let do_alloc = {
-      let sky_render_archetype_guard = res_guard.archetypes.sky_render_archetype.read();
+      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+      let sky_render_archetype_guard = pe.archetypes().sky_render_archetype.read();
       if sky_render_archetype_guard.is_none() {
         oshal::log!("[RenderThread] render_sky ERROR: sky_render_archetype_guard.is_none");
-        return Err(GpuError::InvalidState(
-          "[Vulkan RenderDevice] prepare_sky_for_render: absent archetype",
-        ));
+        return Err(gpu_err_archetype_absent!());
       }
 
       use ash::vk::Handle;
@@ -6305,7 +6498,13 @@ impl RenderDevice for Device {
     };
 
     if do_alloc {
-      let mut sky_render_archetype_guard = res_guard.archetypes.sky_render_archetype.write();
+      let mut pe = live_pes
+        .get(&handle)
+        .ok_or(gpu_err!(
+          "prepare_sky_for_render: presentation engine was invalidated"
+        ))?
+        .write();
+      let mut sky_render_archetype_guard = pe.archetypes_mut().sky_render_archetype.write();
       let layout = sky_render_archetype_guard.as_ref().unwrap().descriptor_set_layout.get();
 
       let pool_guard = res_guard.descriptor_pool.read();
@@ -6345,10 +6544,15 @@ impl RenderDevice for Device {
     }
 
     let (layout, descriptor_set) = {
-      let sky_archetype_lock = res_guard.archetypes.sky_render_archetype.read();
-      let sky_archetype = sky_archetype_lock.as_ref().ok_or(crate::gpu_err!("device error"))?;
-      let descriptor_set =
-        sky_archetype.descriptor_set.ok_or(crate::gpu_err!("device error"))?.get();
+      let pe = live_pes
+        .get(&handle)
+        .ok_or(gpu_err!(
+          "prepare_sky_for_render: presentation engine was invalidated"
+        ))?
+        .read();
+      let sky_archetype_lock = pe.archetypes().sky_render_archetype.read();
+      let sky_archetype = sky_archetype_lock.as_ref().ok_or(crate::gpu_err_device!())?;
+      let descriptor_set = sky_archetype.descriptor_set.ok_or(crate::gpu_err_device!())?.get();
       let layout = sky_archetype.pipeline_layout.get();
       (layout, descriptor_set)
     };
@@ -6370,6 +6574,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn prepare_text_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -6377,27 +6582,24 @@ impl RenderDevice for Device {
   ) -> GpuResult<()> {
     let (cmd, pipeline, layout, set) = {
       let res = self.res.read();
-      let archetype_lock = res.archetypes.text_render_archetype.read();
-      let archetype = archetype_lock.as_ref().ok_or(crate::gpu_err!("device error"))?;
+      let cmd_buffers = self.recording_command_buffers.read();
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
+      let pe_lock = res.live_presentation_engines.read();
+      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+      let archetype_lock = pe.archetypes().text_render_archetype.read();
+      let archetype = archetype_lock.as_ref().ok_or(crate::gpu_err_device!())?;
 
-      let cmd = {
-        let cmd_buffers = self.recording_command_buffers.read();
-        let data =
-          cmd_buffers.get(&cmd_buffer).ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
-        data.command_buffer.get()
-      };
+      let cmd = { data.command_buffer.get() };
 
       let pipeline = {
-        let pe_lock = res.live_presentation_engines.read();
-        let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
         archetype
           .pipeline_key(pe.format())
           .and_then(|k| res.pipeline_pool.read().get_graphics_pipeline(k))
           .map(|p| p.get())
-          .ok_or(crate::gpu_err!("device error"))?
+          .ok_or(crate::gpu_err_device!())?
       };
       let layout = archetype.pipeline_layout.get();
-      let set = archetype.descriptor_set.ok_or(crate::gpu_err!("device error"))?;
+      let set = archetype.descriptor_set.ok_or(crate::gpu_err_device!())?;
 
       (cmd, pipeline, layout, set)
     };
@@ -6415,6 +6617,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn prepare_text2_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -6422,27 +6625,24 @@ impl RenderDevice for Device {
   ) -> GpuResult<()> {
     let (cmd, pipeline, layout, set) = {
       let res = self.res.read();
-      let archetype_lock = res.archetypes.text2_render_archetype.read();
-      let archetype = archetype_lock.as_ref().ok_or(crate::gpu_err!("device error"))?;
+      let cmd_buffers = self.recording_command_buffers.read();
+      let pe_lock = res.live_presentation_engines.read();
+      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
+      let archetype_lock = pe.archetypes().text2_render_archetype.read();
+      let archetype = archetype_lock.as_ref().ok_or(crate::gpu_err_device!())?;
 
-      let cmd = {
-        let cmd_buffers = self.recording_command_buffers.read();
-        let data =
-          cmd_buffers.get(&cmd_buffer).ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
-        data.command_buffer.get()
-      };
+      let cmd = { data.command_buffer.get() };
 
       let pipeline = {
-        let pe_lock = res.live_presentation_engines.read();
-        let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
         archetype
           .pipeline_key(pe.format())
           .and_then(|k| res.pipeline_pool.read().get_graphics_pipeline(k))
           .map(|p| p.get())
-          .ok_or(crate::gpu_err!("device error"))?
+          .ok_or(crate::gpu_err_device!())?
       };
       let layout = archetype.pipeline_layout.get();
-      let set = archetype.descriptor_set.ok_or(crate::gpu_err!("device error"))?;
+      let set = archetype.descriptor_set.ok_or(crate::gpu_err_device!())?;
 
       (cmd, pipeline, layout, set)
     };
@@ -6460,6 +6660,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn render_minimap(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
@@ -6470,29 +6671,24 @@ impl RenderDevice for Device {
     screen_extent: [f32; 2],
   ) -> GpuResult<()> {
     let res_guard = self.res.read();
-    let minimap_render_archetype_guard = res_guard.archetypes.minimap_render_archetype.read();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+    let pe_lock = res_guard.live_presentation_engines.read();
+    let pe = pe_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let minimap_render_archetype_guard = pe.archetypes().minimap_render_archetype.read();
     if minimap_render_archetype_guard.is_none() {
-      return Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] render_minimap: archetype absent",
-      ));
+      return Err(gpu_err_archetype_absent!());
     }
     let archetype = minimap_render_archetype_guard.as_ref().unwrap();
 
-    let pipeline_key = {
-      let pe_lock = res_guard.live_presentation_engines.read();
-      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-      archetype.pipeline_key(pe.format()).ok_or(GpuError::NotFound)?
-    };
+    let pipeline_key =
+      { archetype.pipeline_key(pe.format()).ok_or(gpu_err_pipeline_key_absent!())? };
 
     let pipeline = res_guard
       .pipeline_pool
       .read()
       .get_graphics_pipeline(pipeline_key)
-      .ok_or(GpuError::NotFound)?;
-    let cmd_buffers = self.recording_command_buffers.read();
-    let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-      "[Vulkan RenderDevice] render_minimap: invalid command buffer handle",
-    ))?;
+      .ok_or(gpu_err_pipeline_absent!())?;
     let cmd = data.command_buffer.get();
     let layout = archetype.pipeline_layout.get();
 
@@ -6586,6 +6782,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn render_ui_rect(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
@@ -6594,40 +6791,26 @@ impl RenderDevice for Device {
     position: [f32; 2],
     size: [f32; 2],
   ) -> GpuResult<()> {
-    let (pipeline, layout, set) = {
+    let (cmd, pipeline, layout, set) = {
       let res_guard = self.res.read();
-      let text_render_archetype_guard = res_guard.archetypes.text_render_archetype.read();
-      let archetype = text_render_archetype_guard.as_ref().ok_or(GpuError::InvalidState(
-        "[Vulkan RenderDevice] render_ui_rect: archetype absent",
-      ))?;
-      let pipeline_key = {
-        let pe_lock = res_guard.live_presentation_engines.read();
-        let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-        archetype.pipeline_key(pe.format()).ok_or(GpuError::InvalidState(
-          "[Vulkan RenderDevice] render_minimap: pipeline key absent",
-        ))?
-      };
+      let cmd_buffers = self.recording_command_buffers.read();
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+      let pe_lock = res_guard.live_presentation_engines.read();
+      let pe = pe_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+      let text_render_archetype_guard = pe.archetypes().text_render_archetype.read();
+      let archetype = text_render_archetype_guard.as_ref().ok_or(gpu_err_archetype_absent!())?;
+      let pipeline_key =
+        { archetype.pipeline_key(pe.format()).ok_or(gpu_err_pipeline_key_absent!())? };
       let pipeline = res_guard
         .pipeline_pool
         .read()
         .get_graphics_pipeline(pipeline_key)
-        .ok_or(GpuError::InvalidArgument(
-          "[Vulkan RenderDevice] render_minimap: pipeline key invalid (pipeline not found)",
-        ))?
+        .ok_or(gpu_err_pipeline_absent!())?
         .get();
       let layout = archetype.pipeline_layout.get();
-      let set = archetype.descriptor_set.ok_or(GpuError::InvalidState(
-        "[Vulkan RenderDevice] render_minimap: descriptor set not found",
-      ))?;
-      (pipeline, layout, set)
-    };
-
-    let cmd = {
-      let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] render_minimap: cmd_buffer invalid",
-      ))?;
-      data.command_buffer.get()
+      let set = archetype.descriptor_set.ok_or(gpu_err!("descriptor set not found"))?;
+      let cmd = { data.command_buffer.get() };
+      (cmd, pipeline, layout, set)
     };
 
     unsafe {
@@ -6687,9 +6870,11 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn render_text(
     &self,
     cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
     text: &str,
     start_cursor_position: [f32; 2],
     view_proj: [f32; 16],
@@ -6698,24 +6883,25 @@ impl RenderDevice for Device {
     color: [f32; 4],
   ) -> GpuResult<()> {
     let res_guard = self.res.read();
-    let archetype_lock = res_guard.archetypes.text_render_archetype.read();
-    let archetype = archetype_lock.as_ref().ok_or(GpuError::InvalidState(
-      "[Vulkan RenderDevice] render_text: archetype missing",
-    ))?;
-    let font = archetype.uploaded_fonts.get(&atlas_id.0).ok_or(GpuError::InvalidArgument(
-      "[Vulkan RenderDevice] render_text: inexistent font",
-    ))?;
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+    let live_pes = res_guard.live_presentation_engines.read();
+    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let archetype_lock = pe.archetypes().text_render_archetype.read();
+    let archetype = archetype_lock.as_ref().ok_or(gpu_err_archetype_absent!())?;
+    let font = archetype
+      .uploaded_fonts
+      .get(&atlas_id.0)
+      .ok_or(gpu_invalid_arg!("inexistent font, {:?}", atlas_id))?;
     if atlas_id.1 != font.descriptor_index {
-      return Err(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] render_text: inconsistent descriptor index",
+      return Err(gpu_invalid_arg!(
+        "inconsistent descriptor index: {} vs {}",
+        atlas_id.1,
+        font.descriptor_index
       ));
     }
 
     let cmd = {
-      let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] render_text: cmd_buffer invalid",
-      ))?;
       let cmd = data.command_buffer.get();
       cmd
     };
@@ -6723,9 +6909,8 @@ impl RenderDevice for Device {
     let mut cursor_x = start_cursor_position[0];
     let mut cursor_y = start_cursor_position[1];
 
-    let default_glyph = font.atlas.glyphs.get(&'?').ok_or(GpuError::InvalidState(
-      "[Vulkan RenderDevice] render_text: text atlas doesn't have default \"?\" glyph",
-    ))?;
+    let default_glyph =
+      font.atlas.glyphs.get(&'?').ok_or(gpu_err!("text atlas doesn't have default \"?\" glyph"))?;
 
     unsafe {
       for c in text.chars() {
@@ -6755,11 +6940,10 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn end_render_pass(&self, cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {
     let cmd_buffers = self.recording_command_buffers.read();
-    let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-      "[Vulkan RenderDevice] end_render_pass: command buffer handle invalid",
-    ))?;
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
 
     let cmd = data.command_buffer.get();
     let subpass_end_info = vk::SubpassEndInfo::default();
@@ -6771,6 +6955,7 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn record_windowless_download(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
@@ -6779,21 +6964,15 @@ impl RenderDevice for Device {
   ) -> GpuResult<()> {
     let (cmd, acquire_result) = {
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] record_windowless_download: command buffer handle invalid",
-      ))?;
-      let presentation = data.presentation.ok_or(GpuError::InvalidState(
-        "[Vulkan RenderDevice] record_windowless_download: no active render pass",
-      ))?;
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+      let presentation = data.presentation.ok_or(gpu_err_cmd_no_pe!())?;
       (data.command_buffer.get(), presentation.acquire_result)
     };
 
     let res_guard = self.res.read();
 
     let engine_lock = res_guard.live_presentation_engines.read();
-    let state_lock = engine_lock.get(&handle).ok_or(GpuError::InvalidArgument(
-      "[Vulkan RenderDevice] record_windowless_download: invalid presentation engine",
-    ))?;
+    let state_lock = engine_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?;
     let state = state_lock.read();
 
     let (image, width, height) =
@@ -6802,9 +6981,7 @@ impl RenderDevice for Device {
           unsafe { windowless.get_image_resources(acquire_result.image_index as usize) };
         (img, windowless.extent().0, windowless.extent().1)
       } else {
-        return Err(GpuError::InvalidState(
-          "[Vulkan RenderDevice] record_windowless_download: cEngine is not windowless",
-        ));
+        return Err(gpu_err!("presentation engine is not windowless"));
       };
 
     let buffer_size = (width * height * 4) as vk::DeviceSize;
@@ -6909,16 +7086,18 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn read_windowless_download(&self, task_id: u64, buffer: &mut [u8]) -> GpuResult<()> {
     if !self.is_task_completed(task_id)? {
-      return Err(crate::gpu_err!("device error"));
+      return Err(crate::gpu_err_device!());
     }
 
     let res_guard = self.res.read();
     let mut pending_lock = res_guard.pending_downloads.write();
 
-    let mut download = pending_lock.remove(&task_id).ok_or(GpuError::InvalidArgument(
-      "Invalid or previously consumed download ID",
+    let mut download = pending_lock.remove(&task_id).ok_or(gpu_invalid_arg!(
+      "Invalid or previously consumed download ID: {}",
+      task_id
     ))?;
 
     let alloc_info = res_guard.allocator.allocator.get_allocation_info(&download.allocation);
@@ -6941,7 +7120,7 @@ impl RenderDevice for Device {
           .allocator
           .destroy_buffer(download.staging_buffer, &mut download.allocation);
       }
-      return Err(crate::gpu_err!("device error"));
+      return Err(crate::gpu_err_device!());
     }
 
     unsafe {
@@ -6954,28 +7133,25 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  #[named]
   fn submit_command_buffer(
     &self,
     cmd_buffer: CommandBufferHandle,
     task_id: Option<u64>,
   ) -> GpuResult<()> {
     let mut cmd_buffers = self.recording_command_buffers.write();
-    let mut data = cmd_buffers.remove(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-      "[Vulkan RenderDevice] submit_command_buffer: invalid command buffer handle",
-    ))?;
+    let mut data = cmd_buffers.remove(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
 
     unsafe {
       self.device.end_command_buffer(data.command_buffer.get())?;
     }
 
-    let presentation = data.presentation.ok_or(GpuError::InvalidState(
-      "[Vulkan RenderDevice] submit_command_buffer: inconsistent presentation engine state",
-    ))?;
+    let presentation = data.presentation.ok_or(gpu_err_cmd_no_pe!())?;
     let res_guard = self.res.read();
     let presentation_engines_guard = res_guard.live_presentation_engines.read();
     let presentation_engine = presentation_engines_guard
       .get(&presentation.presentation_engine)
-      .ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
+      .ok_or(gpu_err_invalid_pe!())?;
 
     let rpresentation_engine = presentation_engine.read();
 
@@ -7062,9 +7238,7 @@ impl RenderDevice for Device {
       .get(graphics_queue.index as usize)
       .and_then(|opt| opt.as_ref())
       .cloned()
-      .ok_or(GpuError::InvalidState(
-        "[Vulkan RenderDevice] submit_command_buffer: couldn't get command pools",
-      ))?;
+      .ok_or(gpu_err!("couldn't get command pools"))?;
 
     data.discard(
       cmd_buffer.into(),
@@ -7080,58 +7254,62 @@ impl RenderDevice for Device {
     }
   }
 
+  #[named]
   fn wire_callbacks(&self, pool: Arc<aethervk_oshal_rlib::os::pool::ThreadPool>) -> GpuResult<()> {
     let workload = self
       .res
       .read()
       .timeline_manager
       .create_polling_workload(Arc::clone(&self.callback_stop_signal));
-    pool.scatter(vec![Box::new(workload)]).map_err(|_| crate::gpu_err!("device error"))?;
+    pool.scatter(vec![Box::new(workload)]).map_err(|_| crate::gpu_err_device!())?;
     Ok(())
   }
 
+  #[named]
   fn is_task_completed(&self, task_id: u64) -> GpuResult<bool> {
     self.res.read().timeline_manager.is_task_completed(task_id)
   }
 
+  #[named]
   fn create_task(&self) -> u64 {
     self.res.read().timeline_manager.create_task()
   }
 
+  #[named]
   fn fail_task(&self, task_id: u64, error: GpuError) {
     self.res.read().timeline_manager.fail_task(task_id, error)
   }
 
+  #[named]
   fn success_task(&self, task_id: u64) {
     self.res.read().timeline_manager.success_task(task_id)
   }
 
+  #[named]
   fn prepare_background_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
     handle: PresentationEngineHandle,
   ) -> GpuResult<()> {
     let res_guard = self.res.read();
-    let archetype_guard = res_guard.archetypes.background_render_archetype.read();
+    let cmd_buffers = self.recording_command_buffers.read();
+    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+    let pe_lock = res_guard.live_presentation_engines.read();
+    let pe = pe_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?.read();
+    let archetype_guard = pe.archetypes().background_render_archetype.read();
     if archetype_guard.is_none() {
-      return Err(GpuError::InvalidState(
-        "[Vulkan RenderDevice] prepare_background_archetype_for_render_and_bind_pipeline | archetype absent",
-      ));
+      return Err(gpu_err_archetype_absent!());
     }
     let archetype = archetype_guard.as_ref().unwrap();
-    let pipeline = {
-      let pe_lock = res_guard.live_presentation_engines.read();
-      let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?.read();
-      archetype.pipeline_key(pe.format()).ok_or(GpuError::NotFound)?
-    };
+    let pipeline = { archetype.pipeline_key(pe.format()).ok_or(gpu_err_pipeline_key_absent!())? };
 
-    let cmd = {
-      let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(crate::gpu_invalid_arg!("invalid argument"))?;
-      data.command_buffer.get()
-    };
+    let cmd = { data.command_buffer.get() };
 
-    let p = res_guard.pipeline_pool.read().get_graphics_pipeline(pipeline).unwrap();
+    let p = res_guard
+      .pipeline_pool
+      .read()
+      .get_graphics_pipeline(pipeline)
+      .ok_or(gpu_err_pipeline_absent!())?;
 
     unsafe {
       self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, p.get());
@@ -7150,16 +7328,15 @@ impl Device {
     let mut total_budget = 0;
     let mut total_usage = 0;
     // Assuming we can access the underlying slice of memory_budgets
-    unsafe {
-      for budget in res.allocator.memory_budgets.iter() {
-        total_budget += budget.budget;
-        total_usage += budget.usage;
-      }
+    for budget in res.allocator.memory_budgets.iter() {
+      total_budget += budget.budget;
+      total_usage += budget.usage;
     }
     (total_budget, total_usage)
   }
 
   #[cfg(test)]
+  #[named]
   fn record_test_depth_stencil_download(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
@@ -7168,21 +7345,15 @@ impl Device {
   ) -> GpuResult<()> {
     let (cmd, _) = {
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] record_test_depth_stencil_download: command buffer handle invalid",
-      ))?;
-      let presentation = data.presentation.ok_or(GpuError::InvalidState(
-        "[Vulkan RenderDevice] record_test_depth_stencil_download: no active render pass",
-      ))?;
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+      let presentation = data.presentation.ok_or(gpu_err_cmd_no_pe!())?;
       (data.command_buffer.get(), presentation.acquire_result)
     };
 
     let res_guard = self.res.read();
 
     let engine_lock = res_guard.live_presentation_engines.read();
-    let state_lock = engine_lock.get(&handle).ok_or(GpuError::InvalidArgument(
-      "[Vulkan RenderDevice] record_test_depth_stencil_download: invalid presentation engine",
-    ))?;
+    let state_lock = engine_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?;
     let state = state_lock.read();
 
     let (width, height) = state.extent();
@@ -7330,6 +7501,7 @@ impl Device {
   }
 
   #[cfg(test)]
+  #[named]
   fn record_test_sun_download(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
@@ -7338,21 +7510,15 @@ impl Device {
   ) -> GpuResult<()> {
     let cmd = {
       let cmd_buffers = self.recording_command_buffers.read();
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(GpuError::InvalidArgument(
-        "[Vulkan RenderDevice] record_test_sun_download: command buffer handle invalid",
-      ))?;
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
       data.command_buffer.get()
     };
 
     let res_guard = self.res.read();
 
     let sun_lock = res_guard.sun_resources.read();
-    let sun_map = sun_lock.as_ref().ok_or(GpuError::InvalidState(
-      "[Vulkan RenderDevice] record_test_sun_download: no sun resources",
-    ))?;
-    let sun_res = sun_map.get(&entity_id).ok_or(GpuError::InvalidArgument(
-      "[Vulkan RenderDevice] record_test_sun_download: invalid sun entity",
-    ))?;
+    let sun_map = sun_lock.as_ref().ok_or(gpu_err!("no sun resources"))?;
+    let sun_res = sun_map.get(&entity_id).ok_or(gpu_invalid_arg!("invalid sun entity: {:?}", entity_id))?;
 
     let (width, height, depth) = sun_res.resolution;
     // R16G16B16A16_SFLOAT is 8 bytes per texel
@@ -8065,3 +8231,6 @@ mod test_render;
 
 #[cfg(test)]
 mod test_swapchain;
+
+#[cfg(test)]
+mod test_ui_text;

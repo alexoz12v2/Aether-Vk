@@ -130,7 +130,12 @@
                   <Button Content="Fetch Object Data" Command="{Binding DownloadObjectDataCommand}" Classes="accent" HorizontalAlignment="Left" />
                   <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsDownloading}" Height="4" Margin="0,10,0,0" />
                   
-                  <DataGrid ItemsSource="{Binding ObjectData}" AutoGenerateColumns="True" IsReadOnly="True" MaxHeight="400" Margin="0,10,0,0" />
+                  <DataGrid ItemsSource="{Binding ObjectData}" AutoGenerateColumns="False" IsReadOnly="True" MaxHeight="400" Margin="0,10,0,0">
+                    <DataGrid.Columns>
+                      <DataGridTextColumn Header="Property" Binding="{Binding [0]}" />
+                      <DataGridTextColumn Header="Value" Binding="{Binding [1]}" />
+                    </DataGrid.Columns>
+                  </DataGrid>
                 </StackPanel>
               </TabItem>
             </TabControl>

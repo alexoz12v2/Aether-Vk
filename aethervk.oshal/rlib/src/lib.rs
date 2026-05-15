@@ -86,6 +86,12 @@ const FMA_MASK: u32 = 1 << 8;
 const NEON_MASK: u32 = 1 << 0;
 
 // -------------------- Initialization Impl ------------------------
+impl Default for AvkSystemInfo {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 impl AvkSystemInfo {
   /// TODO: Document this item
   pub fn new() -> AvkSystemInfo {
@@ -237,6 +243,12 @@ pub mod hash {
   /// TODO: Document this item
   pub struct FnvHasher {
     hash: u64,
+  }
+
+  impl Default for FnvHasher {
+    fn default() -> Self {
+      Self::new()
+    }
   }
 
   impl FnvHasher {
