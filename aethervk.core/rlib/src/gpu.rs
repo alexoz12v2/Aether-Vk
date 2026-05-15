@@ -14,6 +14,7 @@ use crate::{
 use ab_glyph::PxScale;
 use aethervk_oshal_rlib::log;
 use aethervk_oshal_rlib::os::time::timeus_t;
+use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
 use ahash::AHasher;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -71,8 +72,46 @@ pub struct KinematicBody {
   pub own_frame_id: u32,
   pub frame_type: u32,
   pub scale: f32,
+  pub shape_type: u32,
+  pub shape_data: [f32; 3],
 }
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+/// Represents a massive rigid body for implicit integration.
+pub struct RigidBodyGpu {
+  pub position: [f32; 3],
+  pub mass: f32,
+  pub rotation: [[f32; 3]; 3], // Column-major
+  pub linear_velocity: [f32; 3],
+  pub _pad0: f32,
+  pub angular_velocity: [f32; 3],
+  pub _pad1: f32,
+  pub inertia_tensor: [[f32; 3]; 3],
+  pub force: [f32; 3],
+  pub torque: [f32; 3],
+  pub entity_id: EntityId,
+  pub parent_frame_id: u32,
+  pub shape_type: u32,
+  pub shape_data: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+/// Represents a particle for explicit integration (Velocity Verlet).
+/// Matches the AOSOA layout expected by compute shaders.
+pub struct ParticleGpu {
+  pub position: [f32; 3],
+  pub velocity: [f32; 3],
+  pub mass: f32,
+  pub force: [f32; 3],
+  // Metadata for CPU/Logic
+  pub entity_id: EntityId,
+  pub parent_frame_id: u32,
+  pub original_index: u32,
+}
+
 #[derive(Clone, Copy)]
+#[deprecated(note = "Use RigidBodyGpu or ParticleGpu instead")]
 /// TODO: Document this item
 pub struct DynamicBody {
   pub entity_id: EntityId,
@@ -81,6 +120,8 @@ pub struct DynamicBody {
   pub mass: f32,
   pub parent_frame_id: u32,
   pub force: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
+  pub shape_type: u32,
+  pub shape_data: [f32; 3],
 }
 
 #[repr(C)]
@@ -92,7 +133,8 @@ pub struct ForceEmitter {
   pub normal: [f32; 3],
   pub type_id: u32, // 0 = Gravity, 1 = Planar
   pub trunc_distance: f32,
-  pub _pad: [u32; 3],
+  pub scale_factor: f32,
+  pub _pad: [u32; 2],
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
@@ -216,6 +258,8 @@ pub struct MaterialData {
   pub paint_display_mode: u32,
   pub texture_flags: u32,
   pub _pad0: f32,
+  pub sphere_center_radius: [f32; 4],
+  pub grid_color_density: [f32; 4],
 }
 
 #[repr(C)]
@@ -755,6 +799,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     sun_pos: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
     sun_color: [f32; 4],
     window_extent: [f32; 2],
+    handle: PresentationEngineHandle,
     draw_call: &crate::gpu::frame::DrawCall,
   ) -> GpuResult<()>;
 
@@ -821,6 +866,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     &self,
     entity: EntityId,
     model: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+    handle: PresentationEngineHandle,
   ) -> GpuResult<u32>;
 
   // --- Removed get_or_create_particle_resources ---
@@ -828,13 +874,13 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   /// Uploads particle systems into the mega-buffers. Should be called before rendering.
   fn upload_particle_systems(
     &self,
-    cmd_buffer: CommandBufferHandle,
+    cmd_buffer: CommandBufferHandle, handle: PresentationEngineHandle,
     particle_calls: &mut [crate::gpu::frame::ParticleDrawCall],
   ) -> GpuResult<()>;
 
   fn upload_particle2_systems(
     &self,
-    cmd_buffer: CommandBufferHandle,
+    cmd_buffer: CommandBufferHandle, handle: PresentationEngineHandle,
     particle_calls: &mut [crate::gpu::frame::Particle2DrawCall],
   ) -> GpuResult<()>;
 
@@ -866,13 +912,13 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   /// Draws a particle system using the mega-buffer
   fn draw_particle_indirect(
     &self,
-    cmd_buffer: CommandBufferHandle,
+    cmd_buffer: CommandBufferHandle, handle: PresentationEngineHandle,
     indirect_offset: u32,
   ) -> GpuResult<()>;
 
   fn draw_particle2_indirect(
     &self,
-    cmd_buffer: CommandBufferHandle,
+    cmd_buffer: CommandBufferHandle, handle: PresentationEngineHandle,
     indirect_offset: u32,
   ) -> GpuResult<()>;
 
@@ -920,6 +966,12 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
 
   fn get_command_buffer(&self) -> GpuResult<CommandBufferHandle>;
 
+  fn set_command_buffer_presentation_engine(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()>;
+
   fn begin_command_buffer(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 
   /// Returns the mapped memory pointer of the emissive paint image for a given physical mesh instance
@@ -959,7 +1011,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   /// TODO rework to 1) not take pipeline key 2) support multiple archetypes which use buffers
   fn bind_buffers(
     &self,
-    cmd_buffer: CommandBufferHandle,
+    cmd_buffer: CommandBufferHandle, handle: PresentationEngineHandle,
     pipeline: PipelineKey,
     buffers: GpuResourceHandle,
   ) -> GpuResult<()>;
@@ -994,7 +1046,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   // TODO move to kernels trait
   fn update_sun(
     &self,
-    cmd_buffer: CommandBufferHandle,
+    cmd_buffer: CommandBufferHandle, handle: PresentationEngineHandle,
     entity_id: crate::scene::EntityId,
     resolution: (u32, u32, u32),
     radius: f32,
@@ -1037,6 +1089,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   fn prepare_sun_for_render(
     &self,
     cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
     entity: EntityId,
   ) -> GpuResult<()>;
 
@@ -1066,7 +1119,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     handle: PresentationEngineHandle,
   ) -> GpuResult<()>;
 
-  fn prepare_sky_for_render(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
+  fn prepare_sky_for_render(&self, cmd_buffer: CommandBufferHandle, handle: PresentationEngineHandle,) -> GpuResult<()>;
 
   /// Screen extent should be the chosen presentation engine extent to correctly display screen size and position
   /// `atlas_id` is composed of the `hash` and internal id for the font atlas
@@ -1112,7 +1165,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   /// therefore assumes text pipeline, descriptor sets, are already in place.
   fn render_text(
     &self,
-    cmd_buffer: CommandBufferHandle,
+    cmd_buffer: CommandBufferHandle, handle: PresentationEngineHandle,
     text: &str,
     start_cursor_position: [f32; 2],
     view_proj: [f32; 16],
@@ -1584,6 +1637,7 @@ pub struct PresentationEngineParams {
   pub vsync: bool,
   pub window_info: OpaqueNativeHandleInfo,
   pub ty: PresentationEngineType,
+  pub buffer_count: u32,
 }
 
 impl PresentationEngineParams {
@@ -1598,6 +1652,7 @@ impl PresentationEngineParams {
         ptr0: core::ptr::null_mut(),
         ptr1: core::ptr::null_mut(),
       },
+      buffer_count: 3,
     }
   }
 }
@@ -1663,6 +1718,9 @@ pub struct CollisionPair {
   pub a: ColliderId,
   pub b: ColliderId,
   pub time_of_impact: f32,
+  pub contact_normal: [f32; 3],
+  pub contact_point: [f32; 3],
+  pub penetration_depth: f32,
 }
 
 /// Computes execution for physics, particle systems, and interval arithmetic.
@@ -1683,39 +1741,63 @@ pub trait Kernels: Send + Sync {
     scene: &PhysicsScene,
     scene0: &Scene,
   ) -> EngineResult<Self::Buffer<KinematicBody>>;
-  fn build_dynamic_bodies(
+  fn build_rigid_bodies(
     &self,
     cmd: &mut Self::Cmd,
     scene: &PhysicsScene,
     scene0: &Scene,
-  ) -> EngineResult<Self::Buffer<DynamicBody>>;
+  ) -> EngineResult<Self::Buffer<RigidBodyGpu>>;
+  fn build_particles(
+    &self,
+    cmd: &mut Self::Cmd,
+    scene: &Scene,
+  ) -> EngineResult<Self::Buffer<ParticleGpu>>;
+  fn build_emitters(&self, cmd: &mut Self::Cmd, scene: &Scene)
+  -> EngineResult<Self::Buffer<ForceEmitter>>;
 
-  // 3. IMEX Phase 1 & 2
+  fn emit_particles(
+    &self,
+    cmd: &mut Self::Cmd,
+    particles: &mut Self::Buffer<ParticleGpu>,
+    physical_scene: &PhysicsScene,
+    scene: &Scene,
+    sun_pos: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
+    dt: timeus_t,
+  ) -> EngineResult<()>;
+
+  // 3. IMEX Phase 1 & 2: Explicit particle kick and drift to midpoint
   fn step_ode_p1_p2(
     &self,
     cmd: &mut Self::Cmd,
-    dynamics: &mut Self::Buffer<DynamicBody>,
+    particles: &mut Self::Buffer<ParticleGpu>,
     dt: timeus_t,
   ) -> EngineResult<()>;
 
-  // 4. IMEX Phase 3 & 4
+  // 4. IMEX Phase 3 & 4: Rigid Body Implicit Midpoint Rule (IMR) solve
   fn step_ode_p3_p4(
     &self,
     cmd: &mut Self::Cmd,
-    kinematics: &mut Self::Buffer<KinematicBody>,
-    dynamics: &mut Self::Buffer<DynamicBody>,
+    rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
+    emitters: &Self::Buffer<ForceEmitter>,
     dt: timeus_t,
   ) -> EngineResult<()>;
 
-  // 5. IMEX Phase 5
+  // 4.5 Compute self gravity (Barnes-Hut or fallback)
+  fn compute_self_gravity(
+    &self,
+    cmd: &mut Self::Cmd,
+    bvh: &Self::MotionBvh,
+    particles: &mut Self::Buffer<ParticleGpu>,
+  ) -> EngineResult<()>;
+
+  // 5. IMEX Phase 5: Final particle drift and force evaluation
   fn step_ode_p5(
     &self,
     cmd: &mut Self::Cmd,
     kinematics: &Self::Buffer<KinematicBody>,
-    dynamics: &mut Self::Buffer<DynamicBody>,
-    bvh: &Self::MotionBvh,
+    particles: &mut Self::Buffer<ParticleGpu>,
+    emitters: &Self::Buffer<ForceEmitter>,
     dt: timeus_t,
-    scene0: &Scene,
   ) -> EngineResult<()>;
 
   // 5. Collision Pipeline
@@ -1723,7 +1805,9 @@ pub trait Kernels: Send + Sync {
     &self,
     cmd: &mut Self::Cmd,
     kinematics: &Self::Buffer<KinematicBody>,
-    dynamics: &Self::Buffer<DynamicBody>,
+    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
+    particles: &Self::Buffer<ParticleGpu>,
+    dt: timeus_t,
   ) -> EngineResult<Self::MotionBvh>;
   fn self_intersect_scene(
     &self,
@@ -1734,6 +1818,8 @@ pub trait Kernels: Send + Sync {
     &self,
     cmd: &mut Self::Cmd,
     potentials: &Self::List<CollisionPair>,
+    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
+    particles: &Self::Buffer<ParticleGpu>,
   ) -> EngineResult<Self::List<CollisionPair>>;
 
   /// Stream compaction shrink logic evaluated entirely on the GPU.
@@ -1755,7 +1841,8 @@ pub trait Kernels: Send + Sync {
   fn apply_collision_responses(
     &self,
     cmd: &mut Self::Cmd,
-    dynamics: &mut Self::Buffer<DynamicBody>,
+    rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
+    particles: &mut Self::Buffer<ParticleGpu>,
     collisions: &Self::List<CollisionPair>,
     force_inelastic: bool,
   ) -> EngineResult<()>;
@@ -1764,20 +1851,23 @@ pub trait Kernels: Send + Sync {
   fn snapshot_dynamics(
     &self,
     cmd: &mut Self::Cmd,
-    dynamics: &Self::Buffer<DynamicBody>,
-  ) -> EngineResult<Self::Buffer<DynamicBody>>;
+    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
+    particles: &Self::Buffer<ParticleGpu>,
+  ) -> EngineResult<(Self::Buffer<RigidBodyGpu>, Self::Buffer<ParticleGpu>)>;
   fn restore_dynamics(
     &self,
     cmd: &mut Self::Cmd,
-    dynamics: &mut Self::Buffer<DynamicBody>,
-    snapshot: &Self::Buffer<DynamicBody>,
+    rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
+    particles: &mut Self::Buffer<ParticleGpu>,
+    snapshot: &(Self::Buffer<RigidBodyGpu>, Self::Buffer<ParticleGpu>),
   ) -> EngineResult<()>;
 
   // --- Write back dynamic state ---
   fn write_back_to_scene(
     &self,
     cmd: &mut Self::Cmd,
-    dynamics: &Self::Buffer<DynamicBody>,
+    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
+    particles: &Self::Buffer<ParticleGpu>,
     physical_scene: &mut PhysicsScene,
     scene: &Scene,
   ) -> EngineResult<()>;

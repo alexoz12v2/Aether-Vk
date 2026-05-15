@@ -26,10 +26,10 @@ pub const SEP: os_char = if cfg!(windows) {
 
 /// necessary utility to ensure equality and hash are not dependent on nul termination
 pub(crate) fn strip_nul(slice: &[os_char]) -> &[os_char] {
-  if let Some((&last, rest)) = slice.split_last() {
-    if last == b'\0' as os_char {
-      return rest;
-    }
+  if let Some((&last, rest)) = slice.split_last()
+    && last == b'\0' as os_char
+  {
+    return rest;
   }
   slice
 }
@@ -336,8 +336,8 @@ impl PathBuf {
   /// TODO: Document this item
   pub fn as_slice(&self) -> &[os_char] {
     match &self.storage {
-      PathStorage::Inline(vec_inner) => &vec_inner,
-      PathStorage::Heap(items) => &items,
+      PathStorage::Inline(vec_inner) => vec_inner,
+      PathStorage::Heap(items) => items.as_ref(),
     }
   }
 
@@ -359,7 +359,9 @@ impl PathBuf {
         let s = unsafe {
           core::slice::from_raw_parts(slice.as_ptr().add(pos + 1), slice.len() - pos - 1)
         };
-        Some(alloc::borrow::Cow::Owned(alloc::string::String::from_utf16_lossy(s)))
+        Some(alloc::borrow::Cow::Owned(
+          alloc::string::String::from_utf16_lossy(s),
+        ))
       }
       #[cfg(not(windows))]
       {
@@ -629,7 +631,7 @@ pub fn read<T: AsRef<Path>>(path: T) -> Result<Vec<u8>, FsError> {
   #[cfg(not(windows))]
   {
     use core::mem;
-    use libc::{O_RDONLY, close, fstat, open, read};
+    use libc::{O_RDONLY, close, fstat, open };
 
     let mut path_buf: PathBuf = path.as_ref().to_pathbuf();
     let fd = unsafe { open(path_buf.as_ptr_mut(), O_RDONLY) };
@@ -646,7 +648,7 @@ pub fn read<T: AsRef<Path>>(path: T) -> Result<Vec<u8>, FsError> {
     let size = stat_buf.st_size as usize;
     let mut buffer = Vec::with_capacity(size);
 
-    let bytes_read = unsafe { read(fd, buffer.as_mut_ptr() as _, size) };
+    let bytes_read = unsafe { libc::read(fd, buffer.as_mut_ptr() as _, size) };
 
     unsafe {
       buffer.set_len(bytes_read as usize);
@@ -708,7 +710,7 @@ pub fn write(path: &Path, content: &[u8]) -> Result<(), FsError> {
   }
   #[cfg(not(windows))]
   {
-    use libc::{O_CREAT, O_TRUNC, O_WRONLY, close, open, write};
+    use libc::{O_CREAT, O_TRUNC, O_WRONLY, close, open };
 
     let mut path_buf = path.as_ref().to_pathbuf();
     // 0o666 = read and write for owner, group, and others
@@ -717,7 +719,7 @@ pub fn write(path: &Path, content: &[u8]) -> Result<(), FsError> {
       return Err(FsError::CouldNotCreateFile);
     }
 
-    let bytes_written = unsafe { write(fd, content.as_ptr() as _, content.len()) };
+    let bytes_written = unsafe { libc::write(fd, content.as_ptr().cast(), content.len()) };
 
     unsafe {
       close(fd);

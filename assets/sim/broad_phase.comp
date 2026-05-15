@@ -14,10 +14,16 @@ struct Entity {
     BVHArray bvh;
     mat4 transform;
     mat4 inv_transform;
+    vec3 linear_velocity;
     uint root_index;
+    vec3 angular_velocity;
     uint type;              
     uint primitive_offset;
     uint total_primitives;  
+    uint frame_scale_type;
+    float scale_factor;
+    uint shape_type;
+    vec3 shape_data;
 };
 
 layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer EntityArray {
@@ -46,19 +52,44 @@ void main() {
 
     while (stackPtr > 0) {
         uint node_idx = stack[--stackPtr];
-        BVHNodeAABB node = read_bvh_node(pc.tlas_bvh, node_idx);
+        
+        if (BRANCH_FACTOR == 2) {
+            BVHNodeAABB node = read_bvh_node(pc.tlas_bvh, node_idx);
 
-        if (intersectAABB(my_aabb, node.bound)) {
-            if (node.primitive_count > 0) {
-                uint other_ent_id = node.left_child_or_primitive_offset;
-                // Avoid symmetric duplicates and self-intersection
-                if (my_ent_id < other_ent_id) {
-                    uint outIdx = atomicAdd(pc.overlapping_pairs.count, 1, gl_ScopeQueueFamily, gl_StorageSemanticsBuffer, gl_SemanticsRelaxed);
-                    pc.overlapping_pairs.pairs[outIdx] = uvec2(my_ent_id, other_ent_id);
+            if (intersectAABB(my_aabb, node.bound)) {
+                if (node.primitive_count > 0) {
+                    uint other_ent_id = node.left_child_or_primitive_offset;
+                    // Avoid symmetric duplicates and self-intersection
+                    if (my_ent_id < other_ent_id) {
+                        uint outIdx = atomicAdd(pc.overlapping_pairs.count, 1, gl_ScopeQueueFamily, gl_StorageSemanticsBuffer, gl_SemanticsRelaxed);
+                        pc.overlapping_pairs.pairs[outIdx] = uvec2(my_ent_id, other_ent_id);
+                    }
+                } else {
+                    if (node.left_child_or_primitive_offset != 0xFFFFFFFF && node.left_child_or_primitive_offset != 0) stack[stackPtr++] = node.left_child_or_primitive_offset;
+                    if (node.right_child_offset != 0xFFFFFFFF && node.right_child_offset != 0) stack[stackPtr++] = node.right_child_offset;
                 }
-            } else {
-                stack[stackPtr++] = node.left_child_or_primitive_offset;
-                stack[stackPtr++] = node.right_child_offset;
+            }
+        } else {
+            MultiBVHBlockArray multi_bvh = MultiBVHBlockArray(pc.tlas_bvh);
+            uint node_valid = GET_MULTI_BVH_VALID_COUNT(multi_bvh, node_idx);
+            for (uint i = 0; i < BRANCH_FACTOR; ++i) {
+                if (i >= node_valid) break;
+                AABB bound;
+                GET_MULTI_BVH_BOUND(multi_bvh, node_idx, i, bound);
+                if (intersectAABB(my_aabb, bound)) {
+                    bool isLeaf;
+                    uint offset;
+                    GET_MULTI_BVH_LEAF_INFO(multi_bvh, node_idx, i, isLeaf, offset);
+                    if (isLeaf) {
+                        uint other_ent_id = offset;
+                        if (my_ent_id < other_ent_id) {
+                            uint outIdx = atomicAdd(pc.overlapping_pairs.count, 1, gl_ScopeQueueFamily, gl_StorageSemanticsBuffer, gl_SemanticsRelaxed);
+                            pc.overlapping_pairs.pairs[outIdx] = uvec2(my_ent_id, other_ent_id);
+                        }
+                    } else {
+                        if (offset != 0xFFFFFFFF && offset != 0) stack[stackPtr++] = offset;
+                    }
+                }
             }
         }
     }

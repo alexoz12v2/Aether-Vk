@@ -10,16 +10,10 @@ Write-Host "========================================"
 
 if ($SingleThread) {
     Write-Host "Mode: Single-threaded, No Capture" -ForegroundColor Yellow
-    cargo nextest run --no-capture --test-threads 1
-    Write-Host ""
-    Write-Host "Generating Rust Coverage..." -ForegroundColor Cyan
-    cargo llvm-cov -- --test-threads=1 --nocapture
+    cargo llvm-cov nextest --no-capture --test-threads 1
 } else {
     Write-Host "Mode: Default"
-    cargo nextest run
-    Write-Host ""
-    Write-Host "Generating Rust Coverage..." -ForegroundColor Cyan
-    cargo llvm-cov
+    cargo llvm-cov nextest
 }
 
 Write-Host ""

@@ -39,7 +39,8 @@ struct ForceEmitter {
     vec3 normal; // type_id = 0 -> unused, type_id = 1 -> plane normal
     uint type_id; // 0 = Gravity, 1 = Planar
     float trunc_distance; // type_id = 0 -> unused, type_id = 1 -> max distance point - plane over which force is applied
-    uint _pad[3];
+    float scale_factor;
+    uint _pad[2];
 };
 
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer EmitterArray {
@@ -179,29 +180,32 @@ void main() {
             em.normal = pc.emitters.emitters[e].normal;
             em.type_id = pc.emitters.emitters[e].type_id;
             em.trunc_distance = pc.emitters.emitters[e].trunc_distance;
+            em.scale_factor = pc.emitters.emitters[e].scale_factor;
 
             if (em.type_id == 0) {
                 // Type 0: Point Gravity
                 vec3 r = em.position - x_mid;
-                float dist_sq = dot(r, r);
-                if (dist_sq > 1e-6) {
-                    float dist = sqrt(dist_sq);
-                    float dist3 = dist_sq * dist;
-                    float dist5 = dist3 * dist_sq;
+                float scaled_dist_sq = dot(r, r) * em.scale_factor * em.scale_factor;
+                if (scaled_dist_sq > 1e-6) {
+                    float scaled_dist = sqrt(scaled_dist_sq);
+                    float scaled_dist3 = scaled_dist_sq * scaled_dist;
+                    float scaled_dist5 = scaled_dist3 * scaled_dist_sq;
 
-                    float coeff = em.mu * rb.mass / dist3;
-                    f_world += r * coeff;
+                    float coeff = em.mu * rb.mass / scaled_dist3;
+                    vec3 force_dir = r / length(r);
+                    f_world += force_dir * (em.mu * rb.mass / scaled_dist_sq);
 
+                    // Note: This approximates k_trans for scaled distances
                     mat3 term1 = mat3(1.0) * (-coeff);
 
                     // Outer product r * r^T
                     mat3 rr_t = mat3(
-                        r * r.x,
-                        r * r.y,
-                        r * r.z
+                        force_dir * force_dir.x,
+                        force_dir * force_dir.y,
+                        force_dir * force_dir.z
                     );
 
-                    mat3 term2 = rr_t * (3.0 * em.mu * rb.mass / dist5);
+                    mat3 term2 = rr_t * (3.0 * em.mu * rb.mass / scaled_dist5);
                     k_trans += term1 + term2;
                 }
             }

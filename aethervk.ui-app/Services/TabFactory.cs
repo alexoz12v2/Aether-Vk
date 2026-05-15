@@ -1,45 +1,62 @@
 using System;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace AetherVk.Services
 {
   public class TabFactory : ITabFactory
   {
-    private readonly IServiceProvider _serviceProvider;
+    private readonly Func<UITestPanelViewModel> _createUITestPanel;
+    private readonly Func<ConsoleViewModel> _createConsole;
+    private readonly Func<DebugUiViewModel> _createDebugUi;
+    private readonly Func<HorizonJplViewModel> _createHorizonJpl;
+    private readonly Func<ulong, OutlineViewModel> _createOutline;
+    private readonly Func<ulong, PropertiesViewModel> _createProperties;
+    private readonly Func<ulong, TimelineViewModel> _createTimeline;
+    private readonly Func<AlmanacExplorerViewModel> _createAlmanac;
+    private readonly Func<Viewport3DViewModel> _createViewport;
+    private readonly SceneStateManager _stateManager;
 
-    public TabFactory(IServiceProvider serviceProvider)
+    public TabFactory(
+      Func<UITestPanelViewModel> createUITestPanel,
+      Func<ConsoleViewModel> createConsole,
+      Func<DebugUiViewModel> createDebugUi,
+      Func<HorizonJplViewModel> createHorizonJpl,
+      Func<ulong, OutlineViewModel> createOutline,
+      Func<ulong, PropertiesViewModel> createProperties,
+      Func<ulong, TimelineViewModel> createTimeline,
+      Func<AlmanacExplorerViewModel> createAlmanac,
+      Func<Viewport3DViewModel> createViewport,
+      SceneStateManager stateManager)
     {
-      _serviceProvider = serviceProvider;
+      _createUITestPanel = createUITestPanel;
+      _createConsole = createConsole;
+      _createDebugUi = createDebugUi;
+      _createHorizonJpl = createHorizonJpl;
+      _createOutline = createOutline;
+      _createProperties = createProperties;
+      _createTimeline = createTimeline;
+      _createAlmanac = createAlmanac;
+      _createViewport = createViewport;
+      _stateManager = stateManager;
     }
 
     public object CreateTab(string tabType)
     {
-      var runtimeService = _serviceProvider.GetRequiredService<NativeRuntimeService>();
-      var stateManager = _serviceProvider.GetRequiredService<SceneStateManager>();
-
-      // Targeted spawn: fetch the first active scene or fallback
-      var activeScene = System.Linq.Enumerable.FirstOrDefault(stateManager.AllScenes);
+      var activeScene = System.Linq.Enumerable.FirstOrDefault(_stateManager.AllScenes);
       ulong targetSceneId = activeScene != null ? activeScene.SceneId : 1UL;
 
       return tabType switch
       {
-        "UITestPanel" => ActivatorUtilities.CreateInstance<UITestPanelViewModel>(_serviceProvider),
-        "Console" => ActivatorUtilities.CreateInstance<ConsoleViewModel>(_serviceProvider),
-        "DebugUI" => ActivatorUtilities.CreateInstance<DebugUiViewModel>(_serviceProvider),
-        "HorizonJpl" => ActivatorUtilities.CreateInstance<HorizonJplViewModel>(_serviceProvider),
-        "Outline" => ActivatorUtilities.CreateInstance<OutlineViewModel>(
-          _serviceProvider,
-          targetSceneId
-        ),
-        "Properties" => ActivatorUtilities.CreateInstance<PropertiesViewModel>(
-          _serviceProvider,
-          targetSceneId
-        ),
-        "Timeline" => ActivatorUtilities.CreateInstance<TimelineViewModel>(_serviceProvider),
-        "Almanac" => ActivatorUtilities.CreateInstance<AlmanacExplorerViewModel>(_serviceProvider),
-        "Viewport3D" => ActivatorUtilities.CreateInstance<Viewport3DViewModel>(_serviceProvider),
+        "UITestPanel" => _createUITestPanel(),
+        "Console" => _createConsole(),
+        "DebugUI" => _createDebugUi(),
+        "HorizonJpl" => _createHorizonJpl(),
+        "Outline" => _createOutline(targetSceneId),
+        "Properties" => _createProperties(targetSceneId),
+        "Timeline" => _createTimeline(targetSceneId),
+        "Almanac" => _createAlmanac(),
+        "Viewport3D" => _createViewport(),
         _ => throw new ArgumentException($"Cannot find or construct type {tabType}"),
       };
     }

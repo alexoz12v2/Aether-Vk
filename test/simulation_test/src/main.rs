@@ -285,6 +285,10 @@ impl SimulationDelegate for SimulationPlaygroundDelegate {
             emissive_color: [0.0, 0.0, 0.0],
             use_new_path: false,
             paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
           },
         )
         .unwrap();
@@ -376,6 +380,10 @@ impl SimulationDelegate for SimulationPlaygroundDelegate {
               emissive_color: color,
               use_new_path: true,
               paint_display_mode: paint_mode,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
             },
           )
           .unwrap();
@@ -530,6 +538,10 @@ impl SimulationDelegate for SimulationPlaygroundDelegate {
               emissive_color: [0.0, 0.0, 0.0],
               use_new_path: false,
               paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
             },
           )
           .unwrap();
@@ -976,11 +988,11 @@ fn main() {
 #[cfg(test)]
 mod depth_tests {
   use super::*;
+  use aethervk_core_rlib::gpu;
   use aethervk_core_rlib::simulation::comet::{TexelFormat, Texture};
   use aethervk_core_rlib::simulation_api::components_api::CameraParams;
-  use std::sync::atomic::{AtomicU64, Ordering};
   use bytes::Bytes;
-  use aethervk_core_rlib::gpu;
+  use std::sync::atomic::{AtomicU64, Ordering};
 
   static LAST_RENDER_TASK_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -1347,6 +1359,10 @@ mod depth_tests {
             emissive_color: [0.0, 0.0, 0.0],
             use_new_path: false,
             paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
           },
         )
         .unwrap();

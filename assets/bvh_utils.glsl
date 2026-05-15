@@ -15,6 +15,9 @@
 #extension GL_KHR_shader_subgroup_vote : require
 #extension GL_KHR_memory_scope_semantics : require
 
+#define FRAME_SCALE_MICRO 0 // km, kg
+#define FRAME_SCALE_MACRO 1 // AU, Earth Masses
+
 // ----------------------------------------------------------------------------
 // Data Structures
 // ----------------------------------------------------------------------------
@@ -31,10 +34,11 @@ struct BVHNodeAABB {
     uint left_child_or_primitive_offset;
     uint right_child_offset;
     uint primitive_count;
-    uint node_type; // e.g. 0 for AABB, 1 for OBB. Padding in strictly AABB case.
     uint parent_idx;
+    uint node_type; 
     float mass;
     vec3 center_of_mass;
+    float _pad;
 };
 
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer BVHArray {
@@ -49,16 +53,39 @@ BVHNodeAABB read_bvh_node(BVHArray bvh, uint idx) {
     node.left_child_or_primitive_offset = bvh.nodes[idx].left_child_or_primitive_offset;
     node.right_child_offset = bvh.nodes[idx].right_child_offset;
     node.primitive_count = bvh.nodes[idx].primitive_count;
-    node.node_type = bvh.nodes[idx].node_type;
     node.parent_idx = bvh.nodes[idx].parent_idx;
+    node.node_type = bvh.nodes[idx].node_type;
     node.mass = bvh.nodes[idx].mass;
     node.center_of_mass = bvh.nodes[idx].center_of_mass;
+    node._pad = 0.0;
     return node;
 }
 
+struct ColliderId {
+    uint entity_id;
+    uint primitive_index;
+};
+
+struct PackedPair {
+    ColliderId a;
+    ColliderId b;
+    float toi;
+    vec3 contact_normal;
+    vec3 contact_point;
+    float penetration_depth;
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer PackedCollisions {
+    uint dispatch_x;
+    uint dispatch_y;
+    uint dispatch_z;
+    uint count;
+    PackedPair pairs[];
+};
+
 layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer CollisionPairList {
     uint count;
-    uvec2 pairs[]; // Pair of primitive/entity indices
+    uvec2 pairs[]; // Legacy
 };
 
 // ----------------------------------------------------------------------------
@@ -67,6 +94,10 @@ layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer Co
 // ----------------------------------------------------------------------------
 // Injected by Rust to perfectly match the physical GPU's gl_SubgroupSize
 layout(constant_id = 0) const uint SG_SIZE = 32;
+
+// The branching factor for Multi-Branch BVHs (e.g. 4 for Quad-BVH, 8 for Oct-BVH)
+// Default is 2 (Binary BVH).
+layout(constant_id = 1) const uint BRANCH_FACTOR = 2;
 
 // SOA block representing `SG_SIZE` nodes. 
 // When a warp accesses `block.minX[gl_SubgroupInvocationID]`, memory accesses are perfectly coalesced.
@@ -83,6 +114,53 @@ struct BVHNodeBlockAABB {
     uint primitive_count[SG_SIZE];
     uint node_type[SG_SIZE];
 };
+
+// Flattened 1D array for Multi-Branch BVH storage
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer MultiBVHBlockArray {
+    uint data[];
+};
+
+// Macros to read Multi-Branch BVH node data directly from memory without triggering 
+// GLSL specialization-constant sized array restrictions on local variables.
+#define GET_MULTI_BVH_VALID_COUNT(BVH, IDX) (BVH.data[(IDX) * (13 * BRANCH_FACTOR + 1) + 9 * BRANCH_FACTOR])
+
+#define GET_MULTI_BVH_BOUND(BVH, IDX, I, OUT_BOUND) \
+    do { \
+        uint _base = (IDX) * (13 * BRANCH_FACTOR + 1); \
+        OUT_BOUND.minBounds = vec3( \
+            uintBitsToFloat(BVH.data[_base + 0 * BRANCH_FACTOR + (I)]), \
+            uintBitsToFloat(BVH.data[_base + 1 * BRANCH_FACTOR + (I)]), \
+            uintBitsToFloat(BVH.data[_base + 2 * BRANCH_FACTOR + (I)]) \
+        ); \
+        OUT_BOUND.maxBounds = vec3( \
+            uintBitsToFloat(BVH.data[_base + 3 * BRANCH_FACTOR + (I)]), \
+            uintBitsToFloat(BVH.data[_base + 4 * BRANCH_FACTOR + (I)]), \
+            uintBitsToFloat(BVH.data[_base + 5 * BRANCH_FACTOR + (I)]) \
+        ); \
+    } while(false)
+
+#define GET_MULTI_BVH_LEAF_INFO(BVH, IDX, I, OUT_IS_LEAF, OUT_OFFSET) \
+    do { \
+        uint _base = (IDX) * (13 * BRANCH_FACTOR + 1); \
+        OUT_IS_LEAF = (BVH.data[_base + 8 * BRANCH_FACTOR + (I)] != 0); \
+        OUT_OFFSET = BVH.data[_base + 6 * BRANCH_FACTOR + (I)]; \
+    } while(false)
+
+#define GET_MULTI_BVH_MASS(BVH, IDX, I, OUT_MASS) \
+    do { \
+        uint _base = (IDX) * (13 * BRANCH_FACTOR + 1); \
+        OUT_MASS = uintBitsToFloat(BVH.data[_base + 9 * BRANCH_FACTOR + 1 + 0 * BRANCH_FACTOR + (I)]); \
+    } while(false)
+
+#define GET_MULTI_BVH_CENTER_OF_MASS(BVH, IDX, I, OUT_COM) \
+    do { \
+        uint _base = (IDX) * (13 * BRANCH_FACTOR + 1); \
+        OUT_COM = vec3( \
+            uintBitsToFloat(BVH.data[_base + 9 * BRANCH_FACTOR + 1 + 1 * BRANCH_FACTOR + (I)]), \
+            uintBitsToFloat(BVH.data[_base + 9 * BRANCH_FACTOR + 1 + 2 * BRANCH_FACTOR + (I)]), \
+            uintBitsToFloat(BVH.data[_base + 9 * BRANCH_FACTOR + 1 + 3 * BRANCH_FACTOR + (I)]) \
+        ); \
+    } while(false)
 
 // Flattened 1D array to bypass GLSL limitation on SSBO array sizing with specialization constants.
 // 10 attributes per block: 6 floats, 4 uints. We use uint[] and floatBitsToUint/uintBitsToFloat.
@@ -212,46 +290,93 @@ void computeSelfIntersections(
 
     stack[stackPtr++] = uvec2(rootIndex, rootIndex);
 
+    MultiBVHBlockArray multi_bvh = MultiBVHBlockArray(bvh);
+
     while (stackPtr > 0) {
         uvec2 nodePair = stack[--stackPtr];
         uint idxA = nodePair.x;
         uint idxB = nodePair.y;
 
-        BVHNodeAABB nodeA = read_bvh_node(bvh, idxA);
-        BVHNodeAABB nodeB = read_bvh_node(bvh, idxB);
+        if (BRANCH_FACTOR == 2) {
+            BVHNodeAABB nodeA = read_bvh_node(bvh, idxA);
+            BVHNodeAABB nodeB = read_bvh_node(bvh, idxB);
 
-        if (intersectAABB(nodeA.bound, nodeB.bound)) {
-            bool aIsLeaf = (nodeA.primitive_count > 0);
-            bool bIsLeaf = (nodeB.primitive_count > 0);
+            if (intersectAABB(nodeA.bound, nodeB.bound)) {
+                bool aIsLeaf = (nodeA.primitive_count > 0);
+                bool bIsLeaf = (nodeB.primitive_count > 0);
 
-            if (aIsLeaf && bIsLeaf) {
-                if (idxA != idxB) {
-                    uint outIdx = atomicAdd(outputList.count, 1, gl_ScopeQueueFamily, gl_StorageSemanticsBuffer, gl_SemanticsRelaxed);
-                    outputList.pairs[outIdx] = uvec2(nodeA.left_child_or_primitive_offset, nodeB.left_child_or_primitive_offset);
-                }
-            } else if (aIsLeaf) {
-                if (stackPtr + 2 <= STACK_SIZE) {
-                    stack[stackPtr++] = uvec2(idxA, nodeB.left_child_or_primitive_offset);
-                    stack[stackPtr++] = uvec2(idxA, nodeB.right_child_offset);
-                }
-            } else if (bIsLeaf) {
-                if (stackPtr + 2 <= STACK_SIZE) {
-                    stack[stackPtr++] = uvec2(nodeA.left_child_or_primitive_offset, idxB);
-                    stack[stackPtr++] = uvec2(nodeA.right_child_offset, idxB);
-                }
-            } else {
-                if (idxA == idxB) {
-                    if (stackPtr + 3 <= STACK_SIZE) {
-                        stack[stackPtr++] = uvec2(nodeA.left_child_or_primitive_offset, nodeA.right_child_offset);
-                        stack[stackPtr++] = uvec2(nodeA.left_child_or_primitive_offset, nodeA.left_child_or_primitive_offset);
-                        stack[stackPtr++] = uvec2(nodeA.right_child_offset, nodeA.right_child_offset);
+                if (aIsLeaf && bIsLeaf) {
+                    if (idxA != idxB) {
+                        uint outIdx = atomicAdd(outputList.count, 1, gl_ScopeQueueFamily, gl_StorageSemanticsBuffer, gl_SemanticsRelaxed);
+                        outputList.pairs[outIdx] = uvec2(nodeA.left_child_or_primitive_offset, nodeB.left_child_or_primitive_offset);
+                    }
+                } else if (aIsLeaf) {
+                    if (stackPtr + 2 <= STACK_SIZE) {
+                        stack[stackPtr++] = uvec2(idxA, nodeB.left_child_or_primitive_offset);
+                        stack[stackPtr++] = uvec2(idxA, nodeB.right_child_offset);
+                    }
+                } else if (bIsLeaf) {
+                    if (stackPtr + 2 <= STACK_SIZE) {
+                        stack[stackPtr++] = uvec2(nodeA.left_child_or_primitive_offset, idxB);
+                        stack[stackPtr++] = uvec2(nodeA.right_child_offset, idxB);
                     }
                 } else {
-                    if (stackPtr + 4 <= STACK_SIZE) {
-                        stack[stackPtr++] = uvec2(nodeA.left_child_or_primitive_offset, nodeB.left_child_or_primitive_offset);
-                        stack[stackPtr++] = uvec2(nodeA.left_child_or_primitive_offset, nodeB.right_child_offset);
-                        stack[stackPtr++] = uvec2(nodeA.right_child_offset, nodeB.left_child_or_primitive_offset);
-                        stack[stackPtr++] = uvec2(nodeA.right_child_offset, nodeB.right_child_offset);
+                    if (idxA == idxB) {
+                        if (stackPtr + 3 <= STACK_SIZE) {
+                            stack[stackPtr++] = uvec2(nodeA.left_child_or_primitive_offset, nodeA.right_child_offset);
+                            stack[stackPtr++] = uvec2(nodeA.left_child_or_primitive_offset, nodeA.left_child_or_primitive_offset);
+                            stack[stackPtr++] = uvec2(nodeA.right_child_offset, nodeA.right_child_offset);
+                        }
+                    } else {
+                        if (stackPtr + 4 <= STACK_SIZE) {
+                            stack[stackPtr++] = uvec2(nodeA.left_child_or_primitive_offset, nodeB.left_child_or_primitive_offset);
+                            stack[stackPtr++] = uvec2(nodeA.left_child_or_primitive_offset, nodeB.right_child_offset);
+                            stack[stackPtr++] = uvec2(nodeA.right_child_offset, nodeB.left_child_or_primitive_offset);
+                            stack[stackPtr++] = uvec2(nodeA.right_child_offset, nodeB.right_child_offset);
+                        }
+                    }
+                }
+            }
+        } else {
+            uint nodeA_valid = GET_MULTI_BVH_VALID_COUNT(multi_bvh, idxA);
+            uint nodeB_valid = GET_MULTI_BVH_VALID_COUNT(multi_bvh, idxB);
+
+            // N-ary traversal logic for self-intersections
+            for (uint i = 0; i < BRANCH_FACTOR; ++i) {
+                if (i >= nodeA_valid) break;
+                for (uint j = 0; j < BRANCH_FACTOR; ++j) {
+                    if (j >= nodeB_valid) break;
+
+                    // Avoid duplicate pairs in same node
+                    if (idxA == idxB && i > j) continue;
+
+                    AABB boundA;
+                    GET_MULTI_BVH_BOUND(multi_bvh, idxA, i, boundA);
+
+                    AABB boundB;
+                    GET_MULTI_BVH_BOUND(multi_bvh, idxB, j, boundB);
+
+                    if (intersectAABB(boundA, boundB)) {
+                        bool aIsLeaf;
+                        uint aOffset;
+                        GET_MULTI_BVH_LEAF_INFO(multi_bvh, idxA, i, aIsLeaf, aOffset);
+
+                        bool bIsLeaf;
+                        uint bOffset;
+                        GET_MULTI_BVH_LEAF_INFO(multi_bvh, idxB, j, bIsLeaf, bOffset);
+
+                        if (aIsLeaf && bIsLeaf) {
+                            if (!(idxA == idxB && i == j)) {
+                                uint outIdx = atomicAdd(outputList.count, 1, gl_ScopeQueueFamily, gl_StorageSemanticsBuffer, gl_SemanticsRelaxed);
+                                outputList.pairs[outIdx] = uvec2(aOffset, bOffset);
+                            }
+                        } else if (aIsLeaf) {
+                            if (stackPtr < STACK_SIZE) stack[stackPtr++] = uvec2(idxA, bOffset);
+                        } else if (bIsLeaf) {
+                            if (stackPtr < STACK_SIZE) stack[stackPtr++] = uvec2(aOffset, idxB);
+                        } else {
+                            if (stackPtr < STACK_SIZE) stack[stackPtr++] = uvec2(aOffset, bOffset);
+                        }
                     }
                 }
             }
@@ -270,29 +395,72 @@ void intersectTwoHierarchies(
 
     stack[stackPtr++] = uvec2(rootA, rootB);
 
+    MultiBVHBlockArray multi_bvhA = MultiBVHBlockArray(bvhA);
+    MultiBVHBlockArray multi_bvhB = MultiBVHBlockArray(bvhB);
+
     while (stackPtr > 0) {
         uvec2 pair = stack[--stackPtr];
-        BVHNodeAABB nodeA = read_bvh_node(bvhA, pair.x);
-        BVHNodeAABB nodeB = read_bvh_node(bvhB, pair.y);
 
-        if (intersectAABB(nodeA.bound, nodeB.bound)) {
-            bool aIsLeaf = (nodeA.primitive_count > 0);
-            bool bIsLeaf = (nodeB.primitive_count > 0);
+        if (BRANCH_FACTOR == 2) {
+            BVHNodeAABB nodeA = read_bvh_node(bvhA, pair.x);
+            BVHNodeAABB nodeB = read_bvh_node(bvhB, pair.y);
 
-            if (aIsLeaf && bIsLeaf) {
-                uint outIdx = atomicAdd(outputList.count, 1, gl_ScopeQueueFamily, gl_StorageSemanticsBuffer, gl_SemanticsRelaxed);
-                outputList.pairs[outIdx] = uvec2(nodeA.left_child_or_primitive_offset, nodeB.left_child_or_primitive_offset);
-            } else if (aIsLeaf) {
-                stack[stackPtr++] = uvec2(pair.x, nodeB.left_child_or_primitive_offset);
-                stack[stackPtr++] = uvec2(pair.x, nodeB.right_child_offset);
-            } else if (bIsLeaf) {
-                stack[stackPtr++] = uvec2(nodeA.left_child_or_primitive_offset, pair.y);
-                stack[stackPtr++] = uvec2(nodeA.right_child_offset, pair.y);
-            } else {
-                stack[stackPtr++] = uvec2(nodeA.left_child_or_primitive_offset, nodeB.left_child_or_primitive_offset);
-                stack[stackPtr++] = uvec2(nodeA.left_child_or_primitive_offset, nodeB.right_child_offset);
-                stack[stackPtr++] = uvec2(nodeA.right_child_offset, nodeB.left_child_or_primitive_offset);
-                stack[stackPtr++] = uvec2(nodeA.right_child_offset, nodeB.right_child_offset);
+            if (intersectAABB(nodeA.bound, nodeB.bound)) {
+                bool aIsLeaf = (nodeA.primitive_count > 0);
+                bool bIsLeaf = (nodeB.primitive_count > 0);
+
+                if (aIsLeaf && bIsLeaf) {
+                    uint outIdx = atomicAdd(outputList.count, 1, gl_ScopeQueueFamily, gl_StorageSemanticsBuffer, gl_SemanticsRelaxed);
+                    outputList.pairs[outIdx] = uvec2(nodeA.left_child_or_primitive_offset, nodeB.left_child_or_primitive_offset);
+                } else if (aIsLeaf) {
+                    stack[stackPtr++] = uvec2(pair.x, nodeB.left_child_or_primitive_offset);
+                    stack[stackPtr++] = uvec2(pair.x, nodeB.right_child_offset);
+                } else if (bIsLeaf) {
+                    stack[stackPtr++] = uvec2(nodeA.left_child_or_primitive_offset, pair.y);
+                    stack[stackPtr++] = uvec2(nodeA.right_child_offset, pair.y);
+                } else {
+                    stack[stackPtr++] = uvec2(nodeA.left_child_or_primitive_offset, nodeB.left_child_or_primitive_offset);
+                    stack[stackPtr++] = uvec2(nodeA.left_child_or_primitive_offset, nodeB.right_child_offset);
+                    stack[stackPtr++] = uvec2(nodeA.right_child_offset, nodeB.left_child_or_primitive_offset);
+                    stack[stackPtr++] = uvec2(nodeA.right_child_offset, nodeB.right_child_offset);
+                }
+            }
+        } else {
+            uint nodeA_valid = GET_MULTI_BVH_VALID_COUNT(multi_bvhA, pair.x);
+            uint nodeB_valid = GET_MULTI_BVH_VALID_COUNT(multi_bvhB, pair.y);
+
+            for (uint i = 0; i < BRANCH_FACTOR; ++i) {
+                if (i >= nodeA_valid) break;
+                for (uint j = 0; j < BRANCH_FACTOR; ++j) {
+                    if (j >= nodeB_valid) break;
+
+                    AABB boundA;
+                    GET_MULTI_BVH_BOUND(multi_bvhA, pair.x, i, boundA);
+
+                    AABB boundB;
+                    GET_MULTI_BVH_BOUND(multi_bvhB, pair.y, j, boundB);
+
+                    if (intersectAABB(boundA, boundB)) {
+                        bool aIsLeaf;
+                        uint aOffset;
+                        GET_MULTI_BVH_LEAF_INFO(multi_bvhA, pair.x, i, aIsLeaf, aOffset);
+
+                        bool bIsLeaf;
+                        uint bOffset;
+                        GET_MULTI_BVH_LEAF_INFO(multi_bvhB, pair.y, j, bIsLeaf, bOffset);
+
+                        if (aIsLeaf && bIsLeaf) {
+                            uint outIdx = atomicAdd(outputList.count, 1, gl_ScopeQueueFamily, gl_StorageSemanticsBuffer, gl_SemanticsRelaxed);
+                            outputList.pairs[outIdx] = uvec2(aOffset, bOffset);
+                        } else if (aIsLeaf) {
+                            if (stackPtr < STACK_SIZE) stack[stackPtr++] = uvec2(pair.x, bOffset);
+                        } else if (bIsLeaf) {
+                            if (stackPtr < STACK_SIZE) stack[stackPtr++] = uvec2(aOffset, pair.y);
+                        } else {
+                            if (stackPtr < STACK_SIZE) stack[stackPtr++] = uvec2(aOffset, bOffset);
+                        }
+                    }
+                }
             }
         }
     }

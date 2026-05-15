@@ -42,5 +42,17 @@ public static class ServiceCollectionExtensions
     collection.AddTransient<Viewport3DViewModel>();
     collection.AddTransient<OutlineViewModel>();
     collection.AddTransient<PropertiesViewModel>();
+
+    // Tab Factories
+    collection.AddSingleton<Func<UITestPanelViewModel>>(sp => () => sp.GetRequiredService<UITestPanelViewModel>());
+    collection.AddSingleton<Func<ConsoleViewModel>>(sp => () => sp.GetRequiredService<ConsoleViewModel>());
+    collection.AddSingleton<Func<DebugUiViewModel>>(sp => () => sp.GetRequiredService<DebugUiViewModel>());
+    collection.AddSingleton<Func<HorizonJplViewModel>>(sp => () => sp.GetRequiredService<HorizonJplViewModel>());
+    collection.AddSingleton<Func<AlmanacExplorerViewModel>>(sp => () => sp.GetRequiredService<AlmanacExplorerViewModel>());
+    collection.AddSingleton<Func<Viewport3DViewModel>>(sp => () => sp.GetRequiredService<Viewport3DViewModel>());
+    
+    collection.AddSingleton<Func<ulong, OutlineViewModel>>(sp => id => ActivatorUtilities.CreateInstance<OutlineViewModel>(sp, id));
+    collection.AddSingleton<Func<ulong, PropertiesViewModel>>(sp => id => ActivatorUtilities.CreateInstance<PropertiesViewModel>(sp, id));
+    collection.AddSingleton<Func<ulong, TimelineViewModel>>(sp => id => ActivatorUtilities.CreateInstance<TimelineViewModel>(sp, id));
   }
 }

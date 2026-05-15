@@ -32,6 +32,7 @@ const uint FLAG_EMISSIVE  = 1u << 4; // Gameplay mode flag for emission
 const uint PAINT_MODE_NONE         = 0u;
 const uint PAINT_MODE_COLOR        = 1u;
 const uint PAINT_MODE_DISTRIBUTION = 2u;
+const uint PAINT_MODE_SPHERICAL_GRID = 3u;
 
 vec3 orenNayar(vec3 viewDir, vec3 lightDir, vec3 normal, vec3 albedo, float roughness) {
     float LdotN = max(dot(lightDir, normal), 0.0);
@@ -77,6 +78,53 @@ void main() {
         } else if (mat.paintDisplayMode == PAINT_MODE_DISTRIBUTION) {
             // Visualizes probability density via Alpha channel as pure Unlit grayscale
             outColor = vec4(vec3(paintSample.a), 1.0);
+            return;
+        } else if (mat.paintDisplayMode == PAINT_MODE_SPHERICAL_GRID) {
+            vec3 localPos = inWorldPos - mat.sphereCenterRadius.xyz;
+            vec3 n = normalize(localPos);
+            
+            float phi = atan(n.y, n.x);
+            float theta = asin(n.z);
+            
+            float gridSpacing = 3.14159265 / 18.0; // 10 degrees
+            vec2 p = vec2(phi, theta) / gridSpacing;
+            
+            vec2 dp = fwidth(p);
+            // Fix fwidth wrap artifact on phi
+            if (dp.x > 1.0) dp.x = 0.0;
+            
+            float minorLineWidth = 0.05 * mat.gridColorDensity.w;
+            vec2 minorGrid = smoothstep(minorLineWidth + dp, max(minorLineWidth - dp, 0.0), abs(fract(p + 0.5) - 0.5));
+            float minorAlpha = max(minorGrid.x, minorGrid.y);
+            
+            vec2 pMajor = p / 3.0; // 30 degrees
+            vec2 dpMajor = dp / 3.0;
+            float majorLineWidth = 0.1 * mat.gridColorDensity.w;
+            vec2 majorGrid = smoothstep(majorLineWidth + dpMajor, max(majorLineWidth - dpMajor, 0.0), abs(fract(pMajor + 0.5) - 0.5));
+            float majorAlpha = max(majorGrid.x, majorGrid.y);
+            
+            // Equator (Z=0 plane) -> Blue
+            float zDist = abs(n.z);
+            float zAxisAlpha = 1.0 - smoothstep(0.0, 0.015 * mat.gridColorDensity.w, zDist);
+            
+            // Prime Meridian (Y=0 plane) -> Red (aligns with X-axis)
+            float xDist = abs(n.y);
+            float xAxisAlpha = 1.0 - smoothstep(0.0, 0.015 * mat.gridColorDensity.w, xDist);
+            
+            vec3 color = mat.gridColorDensity.xyz;
+            float alpha = max(minorAlpha * 0.3, majorAlpha * 0.8);
+            
+            if (zAxisAlpha > 0.1) {
+                color = vec3(0.0, 0.0, 1.0);
+                alpha = max(alpha, zAxisAlpha);
+            }
+            if (xAxisAlpha > 0.1) {
+                color = vec3(1.0, 0.0, 0.0);
+                alpha = max(alpha, xAxisAlpha);
+            }
+            
+            if (alpha < 0.01) discard;
+            outColor = vec4(color, alpha);
             return;
         }
     }

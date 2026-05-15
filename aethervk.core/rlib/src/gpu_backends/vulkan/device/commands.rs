@@ -1,7 +1,7 @@
 //! commands module.
 
 use core::{fmt, ptr};
-
+use function_name::named;
 use crate::{
   gpu::CommandBufferHandle,
   gpu_backends::vulkan::device::{DeviceResource, LogicalDevice, VulkanDebugNameExt},
@@ -64,6 +64,7 @@ impl CommandPools {
   }
 
   /// TODO: Document this item
+  #[named]
   pub(super) fn allocate_primary(
     &self,
     device: &LogicalDevice,
@@ -74,6 +75,7 @@ impl CommandPools {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn recycle(
     &self,
     tid: ThreadId,
@@ -83,6 +85,7 @@ impl CommandPools {
     self.recycle_internal(tid, id, cmd_buf)
   }
 
+  #[named]
   fn recycle_internal(
     &self,
     tid: ThreadId,
@@ -109,6 +112,7 @@ impl CommandPools {
     }
   }
 
+  #[named]
   fn allocate_internal(
     &self,
     device: &LogicalDevice,

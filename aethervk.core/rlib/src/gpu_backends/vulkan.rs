@@ -157,7 +157,7 @@ impl RenderContext for VulkanRenderContext {
   ) -> GpuResult<RenderDeviceHandle> {
     let handle = self.device_id_from_index(index);
     let query_input = PhysicalDeviceQueryInput::from_params(additional_params)
-      .ok_or(GpuError::InvalidArgument("vulkan.rs:128"))?;
+      .ok_or(GpuError::InvalidArgument("vulkan.rs:128".to_string()))?;
 
     let mut core = self.core.write();
 

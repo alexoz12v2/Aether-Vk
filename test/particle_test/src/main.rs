@@ -1,6 +1,6 @@
 use aethervk_core_rlib::gpu::PresentationEngineHandle;
 use aethervk_core_rlib::scene::{PhysicalMeshComponent, SunComponent, TransformComponent};
-use aethervk_core_rlib::scene::{GaussianParams, ParticleEmitterConfig, ParticleSystemComponent};
+use aethervk_core_rlib::scene::{GaussianParams, ParticleEmitterComponent, ParticleSystemComponent};
 use aethervk_core_rlib::simulation_api::SimulationContext;
 use aethervk_core_rlib::types::EngineResult;
 use aethervk_oshal_rlib::math::quaternion::Quaternion;
@@ -109,6 +109,10 @@ impl SimulationDelegate for ParticleTestDelegate {
           emissive_color: [0.0, 0.0, 0.0],
           use_new_path: false,
           paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
         },
       ).unwrap();
     }
@@ -129,9 +133,13 @@ impl SimulationDelegate for ParticleTestDelegate {
     if let Some(scene_ctx) = ctx.get_scene(scene_id) {
       let mut active_scene = scene_ctx.write();
       let sys1_internal_id = active_scene.get_entity(particle_sys_1).unwrap();
+
       active_scene.scene.add_component(
         sys1_internal_id,
-        ParticleSystemComponent::new(ParticleEmitterConfig {
+        ParticleSystemComponent::new(100000)).unwrap();
+      active_scene.scene.add_component(
+        sys1_internal_id,
+        ParticleEmitterComponent {
           uv_distribution: uv_dist.clone(),
           delta: 100_000,
           max_particles: 1000,
@@ -153,7 +161,7 @@ impl SimulationDelegate for ParticleTestDelegate {
           color: [1.0, 0.5, 0.0, 1.0],
           beta: 0.1,
           use_particle2: false,
-        }),
+        },
       ).unwrap();
     }
 
@@ -175,7 +183,7 @@ impl SimulationDelegate for ParticleTestDelegate {
       let sys2_internal_id = active_scene.get_entity(particle_sys_2).unwrap();
       active_scene.scene.add_component(
         sys2_internal_id,
-        ParticleSystemComponent::new(ParticleEmitterConfig {
+        ParticleEmitterComponent {
           uv_distribution: uv_dist.clone(),
           delta: 100_000,
           max_particles: 500,
@@ -197,7 +205,7 @@ impl SimulationDelegate for ParticleTestDelegate {
           color: [0.0, 0.5, 1.0, 1.0],
           beta: 0.5,
           use_particle2: false,
-        }),
+        },
       ).unwrap();
     }
 
@@ -253,7 +261,7 @@ impl SimulationDelegate for ParticleTestDelegate {
                     let update_particles = |sys_entity: aethervk_core_rlib::scene::EntityId| {
                         scene.with_component_mut(
                             sys_entity,
-                            |sys: &mut ParticleSystemComponent| {
+                            |sys: &mut ParticleEmitterComponent| {
                                 sys.accumulator += (dt * 1_000_000.0) as i64;
 
                                 // Emission
@@ -356,6 +364,7 @@ impl SimulationDelegate for ParticleTestDelegate {
         &scene_ctx.read().scene,
         t0,
         t1,
+        true,
       )
       .unwrap();
     }

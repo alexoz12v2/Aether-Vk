@@ -1,7 +1,7 @@
 //! swapchain module.
 
 use core::{mem, ptr};
-
+use function_name::named;
 use crate::{
   gpu::{AcquireResult, OpaqueNativeHandleInfo, PresentationEngineParams, SwapchainStatus},
   gpu_backends::vulkan::{device::DeviceResource, device::LogicalDevice, utils::NonZeroHandle},
@@ -90,6 +90,7 @@ pub(super) struct WindowedPresentationState {
   swapchain_generation: u64,
   physical_device: NonZeroHandle<vk::PhysicalDevice>,
   pending_resize: Option<(u32, u32)>,
+  pub archetypes: crate::gpu::vulkan::device::archetypes_struct::Archetypes,
 }
 
 trait SwapchainCleanable {
@@ -199,16 +200,16 @@ impl SwapchainCleanable for FrameDiscard {
     }
     self.discarded_present_fences_to_wait.clear();
 
-    // 3. Await submission pipeline completion natively
-    self.cleanup_windowless(device);
-
-    // Resources are perfectly unlocked, proceed with cleanups
+    // 3. Destroy swapchain BEFORE the semaphores
     for &swapchain in self.discarded_swapchains.iter() {
       #[cfg(test)]
       std::println!("Destroying DISCARDED swapchain: {:?}", swapchain.get());
       unsafe { swapchain_device.destroy_swapchain(swapchain.get(), None) };
     }
     self.discarded_swapchains.clear();
+
+    // 4. Await submission pipeline completion natively
+    self.cleanup_windowless(device);
 
     for &fence in self.discarded_present_fences_to_destroy.iter() {
       unsafe { device.destroy_fence(fence.get(), None) };
@@ -250,12 +251,15 @@ impl DeviceResource for WindowedPresentationState {
     for frame in &mut self.frames {
       frame.cleanup(&self.swapchain_device, device);
     }
-    for image in &mut self.images {
-      image.cleanup(device);
-    }
+
+    // Destroy swapchain before its images/semaphores
     #[cfg(test)]
     std::println!("Destroying MAIN swapchain: {:?}", self.swapchain.get());
     unsafe { self.swapchain_device.destroy_swapchain(self.swapchain.get(), None) };
+
+    for image in &mut self.images {
+      image.cleanup(device);
+    }
     unsafe { self.surface_instance.destroy_surface(self.surface.get(), None) };
   }
 }
@@ -265,6 +269,7 @@ unsafe impl Sync for PresentationState {}
 
 impl PresentationState {
   /// TODO: Document this item
+  #[named]
   pub fn cancel_image(
     &mut self,
     device: &LogicalDevice,
@@ -281,6 +286,7 @@ impl PresentationState {
   }
 
   /// TODO: Document this item
+  #[named]
   pub(super) fn resize(
     &mut self,
     instance: &ash::Instance,
@@ -298,6 +304,20 @@ impl PresentationState {
   /// TODO: Document this item
   pub(super) fn is_windowless(&self) -> bool {
     matches!(self, Self::Windowless(_))
+  }
+
+  pub(super) fn archetypes(&self) -> &crate::gpu::vulkan::device::archetypes_struct::Archetypes {
+    match self {
+      Self::Windowed(state) => &state.archetypes,
+      Self::Windowless(state) => &state.archetypes,
+    }
+  }
+
+  pub(super) fn archetypes_mut(&mut self) -> &mut crate::gpu::vulkan::device::archetypes_struct::Archetypes {
+    match self {
+      Self::Windowed(state) => &mut state.archetypes,
+      Self::Windowless(state) => &mut state.archetypes,
+    }
   }
 
   /// TODO: Document this item
@@ -325,6 +345,7 @@ impl PresentationState {
   }
 
   /// TODO: Document this item
+  #[named]
   pub(super) fn for_each_swapchain_image(
     &self,
     f: impl FnMut(NonZeroHandle<vk::ImageView>) -> GpuResult<()>,
@@ -336,6 +357,7 @@ impl PresentationState {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn acquire_next_image(
     &mut self,
     device: &LogicalDevice,
@@ -377,6 +399,7 @@ impl PresentationState {
   }
 
   /// TODO: Document this item
+  #[named]
   pub unsafe fn submit_image(
     &mut self,
     device: &LogicalDevice,
@@ -395,6 +418,7 @@ impl PresentationState {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn new(
     entry: &ash::Entry,
     instance: &ash::Instance,
@@ -421,6 +445,7 @@ impl PresentationState {
           physical_device,
           params.width,
           params.height,
+          params.buffer_count,
         )?))
       }
     }
@@ -429,6 +454,7 @@ impl PresentationState {
 
 impl WindowedPresentationState {
   /// TODO: Document this item
+  #[named]
   pub fn cancel_image(
     &mut self,
     device: &LogicalDevice,
@@ -443,9 +469,9 @@ impl WindowedPresentationState {
       return Ok(());
     }
 
-    let acquire_sem = frame.acquire_semaphore.ok_or(crate::gpu_err!("device error"))?.get();
+    let acquire_sem = frame.acquire_semaphore.ok_or(crate::gpu_err_device!())?.get();
     let present_sem = image.present_semaphore.get();
-    let fence = frame.submission_fence.ok_or(crate::gpu_err!("device error"))?.get();
+    let fence = frame.submission_fence.ok_or(crate::gpu_err_device!())?.get();
 
     // Reset explicit presentation fence before reuse if we're using modern tracking
     if self.swapchain_maintenance1_device.is_some() {
@@ -515,6 +541,7 @@ impl WindowedPresentationState {
   }
 
   /// TODO: Document this item
+  #[named]
   pub(super) fn resize(
     &mut self,
     _device: &ash::Device,
@@ -539,6 +566,7 @@ impl WindowedPresentationState {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn new(
     entry: &ash::Entry,
     instance: &ash::Instance,
@@ -575,6 +603,7 @@ impl WindowedPresentationState {
       swapchain_generation: 0,
       physical_device,
       pending_resize: None,
+      archetypes: crate::gpu::vulkan::device::archetypes_struct::Archetypes::default(),
     };
 
     this.recreate_swapchain(device, false, physical_device)?;
@@ -583,6 +612,7 @@ impl WindowedPresentationState {
   }
 
   // Purely lock-free resize. Uses the extension if available, otherwise relies on 1-frame delayed heuristic
+  #[named]
   fn recreate_swapchain(
     &mut self,
     device: &ash::Device,
@@ -718,6 +748,7 @@ impl WindowedPresentationState {
     self.swapchain_generation
   }
 
+  #[named]
   fn recreate_swapchain_images(
     &self,
     device: &ash::Device,
@@ -798,6 +829,7 @@ impl WindowedPresentationState {
   }
 
   /// TODO: Document this item
+  #[named]
   pub(super) fn for_each_swapchain_image(
     &self,
     mut f: impl FnMut(NonZeroHandle<vk::ImageView>) -> GpuResult<()>,
@@ -808,6 +840,7 @@ impl WindowedPresentationState {
     Ok(())
   }
 
+  #[named]
   fn can_swapchain_image_be_transfer(surf_caps: &vk::SurfaceCapabilities2KHR) -> GpuResult<()> {
     let flags = surf_caps.surface_capabilities.supported_usage_flags;
     if flags.contains(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC) {
@@ -817,6 +850,7 @@ impl WindowedPresentationState {
     }
   }
 
+  #[named]
   fn recreate_swapchain_frame_resources(
     &self,
     device: &ash::Device,
@@ -850,6 +884,7 @@ impl WindowedPresentationState {
     Ok((semaphores, fences))
   }
 
+  #[named]
   fn create_swapchain_internal(
     &self,
     physical_device: NonZeroHandle<vk::PhysicalDevice>,
@@ -1106,6 +1141,7 @@ impl WindowedPresentationState {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn acquire_next_image(&mut self, device: &LogicalDevice) -> GpuResult<AcquireResult> {
     if let Some((w, h)) = self.pending_resize.take() {
       self.width = w;
@@ -1247,6 +1283,7 @@ impl WindowedPresentationState {
   }
 
   /// TODO: Document this item
+  #[named]
   pub unsafe fn submit_image(
     &mut self,
     device: &LogicalDevice,
@@ -1437,6 +1474,8 @@ pub(super) struct WindowlessPresentationState {
   pub last_timeline_value: core::sync::atomic::AtomicU64,
   memory_properties: vk::PhysicalDeviceMemoryProperties,
   pending_resize: Option<(u32, u32)>,
+  buffer_count: u32,
+  archetypes: crate::gpu::vulkan::device::archetypes_struct::Archetypes,
 }
 
 impl DeviceResource for WindowlessPresentationState {
@@ -1471,6 +1510,7 @@ impl WindowlessPresentationState {
     physical_device: NonZeroHandle<vk::PhysicalDevice>,
     width: u32,
     height: u32,
+    buffer_count: u32,
   ) -> GpuResult<Self> {
     let mut this = Self {
       images: heapless::Vec::new(),
@@ -1489,12 +1529,15 @@ impl WindowlessPresentationState {
         instance.get_physical_device_memory_properties(physical_device.get())
       },
       pending_resize: None,
+      buffer_count,
+      archetypes: crate::gpu::vulkan::device::archetypes_struct::Archetypes::default(),
     };
     this.recreate(device, width, height)?;
     Ok(this)
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn cancel_image(
     &mut self,
     device: &LogicalDevice,
@@ -1509,7 +1552,7 @@ impl WindowlessPresentationState {
       return Ok(());
     }
 
-    let fence = frame.submission_fence.ok_or(crate::gpu_err!("device error"))?.get();
+    let fence = frame.submission_fence.ok_or(crate::gpu_err_device!())?.get();
     let submit_info = vk::SubmitInfo::default();
     unsafe {
       device
@@ -1522,6 +1565,7 @@ impl WindowlessPresentationState {
   }
 
   /// TODO: Document this item
+  #[named]
   pub(super) fn resize(
     &mut self,
     _instance: &ash::Instance,
@@ -1552,6 +1596,7 @@ impl WindowlessPresentationState {
   }
 
   /// TODO: Document this item
+  #[named]
   pub(super) fn for_each_swapchain_image(
     &self,
     mut f: impl FnMut(NonZeroHandle<vk::ImageView>) -> GpuResult<()>,
@@ -1563,6 +1608,7 @@ impl WindowlessPresentationState {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn acquire_next_image(
     &mut self,
     device: &LogicalDevice,
@@ -1653,6 +1699,7 @@ impl WindowlessPresentationState {
   }
 
   /// TODO: Document this item
+  #[named]
   pub unsafe fn submit_image(
     &mut self,
     _graphics_queue: vk::Queue,
@@ -1670,6 +1717,7 @@ impl WindowlessPresentationState {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn get_last_submitted_image(&self) -> GpuResult<NonZeroHandle<vk::Image>> {
     if self.submitted_frames == 0 {
       return Err(crate::gpu_err!("get_last: no submissions"));
@@ -1686,6 +1734,7 @@ impl WindowlessPresentationState {
     self.last_timeline_value.load(core::sync::atomic::Ordering::Acquire)
   }
 
+  #[named]
   fn recreate(&mut self, device: &ash::Device, width: u32, height: u32) -> GpuResult<()> {
     self.width = width;
     self.height = height;
@@ -1723,7 +1772,7 @@ impl WindowlessPresentationState {
 
     self.submitted_frames = 0;
 
-    let image_count = 3;
+    let image_count = self.buffer_count as usize;
     let format = self.format;
     let extent = vk::Extent3D {
       width,

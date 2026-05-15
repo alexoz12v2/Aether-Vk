@@ -1,10 +1,10 @@
 //! shader_manager module.
 
-use ash::vk;
-use slotmap::{SlotMap, new_key_type};
-
 use alloc::ffi::CString;
+use ash::vk;
+use function_name::named;
 use hashbrown::HashMap;
+use slotmap::{SlotMap, new_key_type};
 
 use aethervk_oshal_rlib::os::fs::{self, Path, PathBuf};
 
@@ -85,6 +85,7 @@ impl Shader {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn new(
     device: &ash::Device,
     code: &[u32],
@@ -114,7 +115,7 @@ impl Shader {
 
     Ok(Self {
       module,
-      entry_point: CString::new(entry_point).map_err(|_| crate::gpu_err!("device error"))?,
+      entry_point: CString::new(entry_point).map_err(|_| crate::gpu_err_device!())?,
       shader_stage: execution_model_to_shader_flags(execution_model),
       spv_module,
     })
@@ -141,6 +142,7 @@ impl ShaderManager {
   }
 
   /// Gets a shader key for a given path, loading the shader if it's not already loaded.
+  #[named]
   pub fn get_or_load(
     &mut self,
     device: &ash::Device,
@@ -153,7 +155,7 @@ impl ShaderManager {
     }
 
     // Load the SPIR-V shader code from the file.
-    let spirv_code = fs::read(&path).map_err(|_| crate::gpu_invalid_arg!("invalid argument"))?;
+    let spirv_code = fs::read(&path).map_err(|_| crate::gpu_invalid_arg!())?;
 
     // Ensure the code is aligned to 4 bytes (u32).
     let (prefix, code, suffix) = unsafe { spirv_code.align_to::<u32>() };

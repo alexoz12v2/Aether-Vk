@@ -14,7 +14,9 @@ use aethervk_oshal_rlib::math::{
   quaternion::Quaternion,
   vector::{Vector, Vector3, Vector4, vec3::Vec3f32},
 };
+use alloc::string::ToString;
 use alloc::vec::Vec;
+use function_name::named;
 // TODO move render_frame here
 
 #[derive(Clone, Copy, PartialEq)]
@@ -51,6 +53,10 @@ pub struct DrawCall {
   pub outline_color: [f32; 4],
   pub use_new_path: bool,
   pub paint_display_mode: u32,
+  pub sphere_center: [f32; 3],
+  pub sphere_radius: f32,
+  pub grid_color: [f32; 3],
+  pub grid_density: f32,
 }
 
 impl DrawCall {
@@ -64,6 +70,10 @@ impl DrawCall {
     emissive_color: [f32; 3],
     use_new_path: bool,
     paint_display_mode: u32,
+    sphere_center: [f32; 3],
+    sphere_radius: f32,
+    grid_color: [f32; 3],
+    grid_density: f32,
   ) -> Self {
     Self {
       pipeline: result.pipeline,
@@ -78,6 +88,10 @@ impl DrawCall {
       outline_color: outline.unwrap_or([0.0; 4]),
       use_new_path,
       paint_display_mode,
+      sphere_center,
+      sphere_radius,
+      grid_color,
+      grid_density,
     }
   }
 }
@@ -282,13 +296,14 @@ impl SkyDrawCall {
   const VERTEX_COUNT_VK: u32 = 3;
 
   /// TODO: Document this item
+  #[named]
   pub fn from_camera(camera_data: &CameraRenderData, pipeline_key: PipelineKey) -> GpuResult<Self> {
     let sky_view_proj = {
       let sky_view = camera_data.view.zeroed_translation();
       camera_data.proj * sky_view
     };
-    let inv_view_proj_mat = camera_data.view_proj.inverse().ok_or(GpuError::InvalidState(
-      "SkyDrawCall: couldn't invert view_proj matrix",
+    let inv_view_proj_mat = camera_data.view_proj.inverse().ok_or(crate::gpu_err!(
+      "SkyDrawCall: couldn't invert view_proj matrix"
     ))?;
 
     Ok(Self {
@@ -551,6 +566,7 @@ impl RenderScene {
   }
 
   /// Registers a renderable entity to be drawn in this frame.
+  #[named]
   pub fn add_renderable(
     &mut self,
     cmd_buffer: gpu::CommandBufferHandle,
@@ -617,14 +633,16 @@ impl RenderScene {
           component.emissive_color,
           component.use_new_path,
           component.paint_display_mode,
+          component.sphere_center,
+          component.sphere_radius,
+          component.grid_color,
+          component.grid_density,
         );
         self.draw_calls.push(dc);
       }
       RenderableDataRef::Cursor(_) => {
         if self.cursor_call.is_some() {
-          return Err(GpuError::InvalidState(
-            "[Vulkan] RenderScene:add_renderable cursor call already present",
-          ));
+          return Err(crate::gpu_err!("cursor call already present"));
         }
         let res: ResourceUploadResult =
           match device.get_cursor_resources(presentation_engine_handle) {
@@ -779,6 +797,7 @@ pub fn do_draw_cursor(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle,
   draw_call: &CursorDrawCall,
   window_extent: [u32; 2],
 ) -> GpuResult<()> {
@@ -805,6 +824,7 @@ pub fn do_draw_marker(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle,
   draw_call: &MarkerDrawCall,
 ) -> GpuResult<()> {
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
@@ -841,6 +861,7 @@ pub fn do_draw_measurement(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle,
   draw_call: &MeasurementDrawCall,
 ) -> GpuResult<()> {
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
@@ -869,6 +890,7 @@ pub fn do_draw_gizmo(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle,
   draw_call: &GizmoDrawCall,
 ) -> GpuResult<()> {
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
@@ -890,9 +912,9 @@ pub fn do_draw_trajectory_batch(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle,
   draw_call: &TrajectoryBatchCall,
   window_extent: [f32; 2],
-  handle: PresentationEngineHandle,
 ) -> GpuResult<()> {
   device.prepare_trajectory_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
   let push_constants = crate::gpu::TrajectoryPushConstants {
@@ -916,6 +938,8 @@ pub fn do_draw_billboard(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle, // TODO how is it possible that both screen space and world
+  // space don't need this?
   draw_call: &BillboardDrawCall,
 ) -> GpuResult<()> {
   if device.check_billboard_texture_id(draw_call.texture_id).is_err() {
@@ -961,6 +985,7 @@ pub fn do_draw_call2(
   sun_pos: Vec3f32,
   sun_color: [f32; 4],
   cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle,
   draw_call: &DrawCall,
   window_extent: [f32; 2],
 ) -> GpuResult<()> {
@@ -973,6 +998,7 @@ pub fn do_draw_call2(
     sun_pos,
     sun_color,
     window_extent,
+    handle,
     draw_call,
   )?;
 
@@ -996,6 +1022,7 @@ pub fn do_draw_call2(
         sun_pos,
         sun_color,
         window_extent,
+        handle,
         &outline_call,
       )?;
     }
@@ -1011,10 +1038,11 @@ pub fn do_draw_call(
   sun_pos: Vec3f32,
   sun_color: [f32; 4],
   cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle,
   draw_call: &DrawCall,
 ) -> GpuResult<()> {
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
-  device.bind_buffers(cmd_buffer, draw_call.pipeline, draw_call.buffers)?;
+  device.bind_buffers(cmd_buffer, handle, draw_call.pipeline, draw_call.buffers)?;
 
   let model = draw_call.model_matrix;
   let mvp = camera.view_proj * model;
@@ -1038,7 +1066,7 @@ pub fn do_draw_call(
       // Note: same buffers because geometry is identical, only pipeline changes
       // but wait, bind_buffers also requires pipeline_key to identify layout in some engines
       // Let's assume it works or we use the regular pipeline key for bind_buffers
-      device.bind_buffers(cmd_buffer, outline_pipeline, draw_call.buffers)?;
+      device.bind_buffers(cmd_buffer, handle, outline_pipeline, draw_call.buffers)?;
 
       let outline_push = PushConstants {
         model_view_proj: mvp.into(),
@@ -1070,9 +1098,10 @@ pub fn do_draw_sun(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle,
   draw_call: &SunDrawCall,
 ) -> GpuResult<()> {
-  device.prepare_sun_for_render(cmd_buffer, draw_call.entity)?;
+  device.prepare_sun_for_render(cmd_buffer, handle, draw_call.entity)?;
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
   let mvp = camera.view_proj * draw_call.model_matrix;
   let push_constants = SunPushConstants {
@@ -1088,13 +1117,14 @@ pub fn do_draw_sun(
 pub fn do_draw_sky(
   device: &dyn RenderDevice,
   cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle,
   draw_call: &SkyDrawCall,
 ) -> GpuResult<()> {
   let push_constants = SkyPushConstants {
     inv_view_proj: draw_call.inv_view_proj_mat.into(),
   };
 
-  device.prepare_sky_for_render(cmd_buffer)?;
+  device.prepare_sky_for_render(cmd_buffer, handle)?;
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
   device.push_sky_constants(cmd_buffer, &push_constants)?;
   device.draw(cmd_buffer, draw_call.vertex_count)
@@ -1105,6 +1135,7 @@ pub fn do_draw_particle(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle,
   draw_call: &ParticleDrawCall,
 ) -> GpuResult<()> {
   // Bind pipeline (the descriptor set should have been bound once per frame)
@@ -1133,7 +1164,7 @@ pub fn do_draw_particle(
 
   // Notice we don't pass the indirect_buffer as a GpuResourceHandle anymore,
   // we use a specific method that draws from the global mega buffer
-  device.draw_particle_indirect(cmd_buffer, draw_call.system_indirect_offset)?;
+  device.draw_particle_indirect(cmd_buffer, handle, draw_call.system_indirect_offset)?;
 
   Ok(())
 }
@@ -1143,6 +1174,7 @@ pub fn do_draw_particle2(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle,
   draw_call: &Particle2DrawCall,
   time: f32,
 ) -> GpuResult<()> {
@@ -1172,7 +1204,7 @@ pub fn do_draw_particle2(
 
   // Notice we don't pass the indirect_buffer as a GpuResourceHandle anymore,
   // we use a specific method that draws from the global mega buffer
-  device.draw_particle2_indirect(cmd_buffer, draw_call.system_indirect_offset)?;
+  device.draw_particle2_indirect(cmd_buffer, handle, draw_call.system_indirect_offset)?;
 
   Ok(())
 }
@@ -1181,6 +1213,7 @@ pub fn do_draw_particle2(
 pub fn do_draw_grid(
   device: &dyn RenderDevice,
   cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle,
   camera: &CameraRenderData,
   draw_call: &GridDrawCall,
 ) -> GpuResult<()> {
@@ -1200,15 +1233,15 @@ pub fn do_draw_grid(
 }
 
 /// prepare_bvh_archetype_for_render_and_bind_pipeline should have been already called
+#[named]
 pub fn do_bvh_draw_call(
   device: &dyn RenderDevice,
   cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle,
   camera: &CameraRenderData,
   draw_call: &BvhDrawCall,
 ) -> GpuResult<()> {
-  let push_constants = draw_call.to_push_constants(camera).ok_or(GpuError::InvalidState(
-    "[Render Frame] Couldn't compute BVH push constants",
-  ))?;
+  let push_constants = draw_call.to_push_constants(camera).ok_or(crate::gpu_err!("Couldn't compute BVH push constants"))?;
   device.push_bvh_constants(cmd_buffer, &push_constants)?;
   device.draw(cmd_buffer, draw_call.vertex_count)
 }
@@ -1217,8 +1250,8 @@ pub fn do_draw_bvhwire2_batch(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
-  draw_call: &Bvhwire2BatchCall,
   handle: PresentationEngineHandle,
+  draw_call: &Bvhwire2BatchCall,
 ) -> GpuResult<()> {
   device.prepare_bvhwire2_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
   let push_constants = crate::gpu::Bvhwire2PushConstants {
@@ -1234,15 +1267,16 @@ pub fn do_draw_ui_batch(
   device: &dyn RenderDevice,
   _camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle,
   draw_call: &crate::gpu::UiBatchCall,
   window_extent: [f32; 2],
-  handle: PresentationEngineHandle,
 ) -> GpuResult<()> {
   device.prepare_ui_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
 
   // Standard Vulkan 2D orthographic matrix (Top-Left = 0,0, Bottom-Right = w,h)
   let w = window_extent[0];
   let h = window_extent[1];
+  #[rustfmt::skip]
   let proj = [
     [2.0 / w, 0.0, 0.0, 0.0],
     [0.0, 2.0 / h, 0.0, 0.0],
@@ -1265,9 +1299,9 @@ pub fn do_draw_text2_batch(
   device: &dyn RenderDevice,
   _camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle,
   draw_call: &crate::gpu::Text2BatchCall,
   window_extent: [f32; 2],
-  handle: PresentationEngineHandle,
 ) -> GpuResult<()> {
   device.prepare_text2_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
 
@@ -1292,8 +1326,8 @@ pub fn do_draw_text2_batch(
 pub fn do_draw_background(
   device: &dyn RenderDevice,
   cmd_buffer: super::CommandBufferHandle,
-  draw_call: &BackgroundDrawCall,
   handle: PresentationEngineHandle,
+  draw_call: &BackgroundDrawCall,
 ) -> GpuResult<()> {
   device.prepare_background_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?; // Handle not actually used for descriptor sets in this archetype
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
@@ -1312,18 +1346,24 @@ pub fn do_draw_background(
 pub fn render_frame(
   device: &dyn RenderDevice,
   cmd_buffer: gpu::CommandBufferHandle,
-  render_scene: &gpu::RenderScene,
   handle: PresentationEngineHandle,
+  render_scene: &gpu::RenderScene,
 ) -> GpuResult<()> {
   // First sky and background and grid
   if let Some(draw_call) = &render_scene.background_call {
-    do_draw_background(device, cmd_buffer, draw_call, handle)?;
+    do_draw_background(device, cmd_buffer, handle, draw_call)?;
   }
   if let Some(draw_call) = &render_scene.sky_call {
-    do_draw_sky(device, cmd_buffer, draw_call)?;
+    do_draw_sky(device, cmd_buffer, handle, draw_call)?;
   }
   if let Some(draw_call) = &render_scene.grid_call {
-    do_draw_grid(device, cmd_buffer, &render_scene.camera_data, draw_call)?;
+    do_draw_grid(
+      device,
+      cmd_buffer,
+      handle,
+      &render_scene.camera_data,
+      draw_call,
+    )?;
   }
 
   let sun_pos = if let Some(draw_call) = &render_scene.sun_call {
@@ -1340,6 +1380,7 @@ pub fn render_frame(
         sun_pos,
         [1.0, 1.0, 1.0, 1.0], // TODO
         cmd_buffer,
+        handle,
         draw_call,
         [
           render_scene.window_extent[0] as f32,
@@ -1353,6 +1394,7 @@ pub fn render_frame(
         sun_pos,
         [1.0, 1.0, 1.0, 1.0], // TODO
         cmd_buffer,
+        handle,
         draw_call,
       )?;
     }
@@ -1362,13 +1404,25 @@ pub fn render_frame(
 
   // Draw Sun Volume after opaque meshes so it properly blends over them instead of being overwritten
   if let Some(draw_call) = &render_scene.sun_call {
-    gpu::frame::do_draw_sun(device, &render_scene.camera_data, cmd_buffer, draw_call)?;
+    gpu::frame::do_draw_sun(
+      device,
+      &render_scene.camera_data,
+      cmd_buffer,
+      handle,
+      draw_call,
+    )?;
   }
 
   if !render_scene.particle_calls.is_empty() {
     device.prepare_particle_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
     for particle_call in &render_scene.particle_calls {
-      gpu::frame::do_draw_particle(device, &render_scene.camera_data, cmd_buffer, particle_call)?;
+      gpu::frame::do_draw_particle(
+        device,
+        &render_scene.camera_data,
+        cmd_buffer,
+        handle,
+        particle_call,
+      )?;
     }
   }
 
@@ -1376,10 +1430,11 @@ pub fn render_frame(
     device.prepare_particle2_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
     let time = (render_scene.time_readings.time as f64 / 1_000_000.0) as f32;
     for particle_call in &render_scene.particle2_calls {
-      gpu::frame::do_draw_particle2(
+      do_draw_particle2(
         device,
         &render_scene.camera_data,
         cmd_buffer,
+        handle,
         particle_call,
         time,
       )?;
@@ -1387,16 +1442,16 @@ pub fn render_frame(
   }
 
   if let Some(draw_call) = &render_scene.trajectory_call {
-    gpu::frame::do_draw_trajectory_batch(
+    do_draw_trajectory_batch(
       device,
       &render_scene.camera_data,
       cmd_buffer,
+      handle,
       draw_call,
       [
         render_scene.window_extent[0] as f32,
         render_scene.window_extent[1] as f32,
       ],
-      handle,
     )?;
   }
 
@@ -1405,12 +1460,12 @@ pub fn render_frame(
       device,
       &render_scene.camera_data,
       cmd_buffer,
+      handle,
       draw_call,
       [
         render_scene.window_extent[0] as f32,
         render_scene.window_extent[1] as f32,
       ],
-      handle,
     )?;
   }
 
@@ -1419,12 +1474,12 @@ pub fn render_frame(
       device,
       &render_scene.camera_data,
       cmd_buffer,
+      handle,
       draw_call,
       [
         render_scene.window_extent[0] as f32,
         render_scene.window_extent[1] as f32,
       ],
-      handle,
     )?;
   }
 
@@ -1445,6 +1500,7 @@ pub fn render_frame(
       // NOTE: Here we assume that `font_hash` has been appropriately tracked by the user to represent a valid texture_id (e.g. u32) on the render device.
       device.render_text(
         cmd_buffer,
+        handle,
         &text_call.text,
         text_call.start_cursor_position,
         view_proj,
@@ -1458,24 +1514,32 @@ pub fn render_frame(
   // end of scene, begin rendering UI elements
 
   if let Some(cursor_call) = &render_scene.cursor_call {
-    gpu::frame::do_draw_cursor(
+    do_draw_cursor(
       device,
       &render_scene.camera_data,
       cmd_buffer,
+      handle,
       cursor_call,
       render_scene.window_extent,
     )?;
   }
 
   for marker_call in &render_scene.marker_calls {
-    gpu::frame::do_draw_marker(device, &render_scene.camera_data, cmd_buffer, marker_call)?;
-  }
-
-  for measurement_call in &render_scene.measurement_calls {
-    gpu::frame::do_draw_measurement(
+    do_draw_marker(
       device,
       &render_scene.camera_data,
       cmd_buffer,
+      handle,
+      marker_call,
+    )?;
+  }
+
+  for measurement_call in &render_scene.measurement_calls {
+    do_draw_measurement(
+      device,
+      &render_scene.camera_data,
+      cmd_buffer,
+      handle,
       measurement_call,
     )?;
   }
@@ -1484,7 +1548,13 @@ pub fn render_frame(
     // bind the descriptor set
     device.prepare_gizmo_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
     for gizmo_call in &render_scene.gizmo_calls {
-      gpu::frame::do_draw_gizmo(device, &render_scene.camera_data, cmd_buffer, gizmo_call)?;
+      do_draw_gizmo(
+        device,
+        &render_scene.camera_data,
+        cmd_buffer,
+        handle,
+        gizmo_call,
+      )?;
     }
   }
 
@@ -1492,10 +1562,11 @@ pub fn render_frame(
     device.prepare_billboard_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
   }
   for billboard_call in &render_scene.billboard_calls {
-    gpu::frame::do_draw_billboard(
+    do_draw_billboard(
       device,
       &render_scene.camera_data,
       cmd_buffer,
+      handle,
       billboard_call,
     )?;
     // TODO draw associated text
@@ -1504,17 +1575,23 @@ pub fn render_frame(
   if !render_scene.bvh_draw_calls.is_empty() {
     device.prepare_bvh_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
     for bvh_call in &render_scene.bvh_draw_calls {
-      gpu::frame::do_bvh_draw_call(device, cmd_buffer, &render_scene.camera_data, bvh_call)?
+      do_bvh_draw_call(
+        device,
+        cmd_buffer,
+        handle,
+        &render_scene.camera_data,
+        bvh_call,
+      )?
     }
   }
 
   if let Some(draw_call) = &render_scene.bvhwire2_batch_call {
-    gpu::frame::do_draw_bvhwire2_batch(
+    do_draw_bvhwire2_batch(
       device,
       &render_scene.camera_data,
       cmd_buffer,
-      draw_call,
       handle,
+      draw_call,
     )?;
   }
 

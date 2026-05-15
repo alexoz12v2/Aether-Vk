@@ -3,7 +3,7 @@
 use alloc::boxed::Box;
 use ash::vk;
 use core::{mem, ptr};
-
+use function_name::named;
 use crate::{gpu_backends::vulkan::device::DeviceResource, types::GpuResult};
 use aethervk_oshal_rlib as oshal;
 
@@ -54,6 +54,7 @@ unsafe extern "C" fn on_device_free(
 impl GlobalDeviceAllocator {
   // safety: expects instance and device to have their function pointers already loaded
   /// TODO: Document this item
+  #[named]
   pub unsafe fn new(
     instance: &ash::Instance,
     device: &ash::Device,
@@ -123,6 +124,7 @@ unsafe impl Sync for FrameStagingArena {}
 
 impl FrameStagingArena {
   /// TODO: Document this item
+  #[named]
   pub fn new(allocator: &vk_mem::Allocator, capacity: usize) -> GpuResult<Self> {
     let buffer_info = vk::BufferCreateInfo::default()
       .size(capacity as u64)
@@ -138,7 +140,7 @@ impl FrameStagingArena {
 
     let (buffer, allocation, alloc_info_res) =
       unsafe { allocator.create_buffer_get_info(&buffer_info, &alloc_info) }
-        .map_err(|_| crate::gpu_err!("device error"))?;
+        .map_err(|_| crate::gpu_err_device!())?;
 
     Ok(Self {
       buffer,

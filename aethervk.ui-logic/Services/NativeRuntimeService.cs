@@ -18,6 +18,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
   private IntPtr _simulationContext = IntPtr.Zero;
   private readonly object _nativeLock = new object();
+  private int _activeDownloads = 0;
+  private bool _isDisposing = false;
 
   private readonly SceneStateManager _sceneStateManager;
   private readonly ConsoleService _consoleService;
@@ -26,6 +28,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
   // Keep a weak reference to the instance so we don't artificially keep it alive
   private static WeakReference<NativeRuntimeService>? s_currentInstance;
+  private bool _isDisposing;
+  private int _activeDownloads;
 
   // Keep static references to the delegates so they act as GC roots and are NEVER Garbage Collected
   private static readonly NativeInterop.LoggerCallback s_loggerCallbackDelegate =
@@ -44,6 +48,12 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   {
     lock (_nativeLock)
     {
+      _isDisposing = true;
+      while (_activeDownloads > 0)
+      {
+        System.Threading.Monitor.Wait(_nativeLock);
+      }
+
       // Detach from the weak reference to stop processing incoming logs
       s_currentInstance = null;
 
@@ -346,7 +356,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
   }
 
-  private async Task PollTaskAsync(ulong taskId)
+  public async Task PollTaskAsync(ulong taskId)
   {
     if (taskId == 0)
       return;
@@ -761,23 +771,41 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     nuint bufferSize
   )
   {
-    if (_simulationContext == IntPtr.Zero)
-      return false;
-
-    // Run the blocking FFI call (which waits for the GPU timeline semaphore and copies memory) on a background thread
-    // to prevent blocking the Avalonia UI Thread.
-    return await Task.Run(() =>
+    lock (_nativeLock)
     {
-      if (_simulationContext == IntPtr.Zero)
+      if (_simulationContext == IntPtr.Zero || _isDisposing)
         return false;
+      System.Threading.Interlocked.Increment(ref _activeDownloads);
+    }
 
-      return NativeInterop.avkSimulationContext_downloadImage(
-        _simulationContext,
-        renderGeneration,
-        bufferPtr,
-        bufferSize
-      );
-    });
+    try
+    {
+      // Run the blocking FFI call (which waits for the GPU timeline semaphore and copies memory) on a background thread
+      // to prevent blocking the Avalonia UI Thread.
+      return await Task.Run(() =>
+      {
+        if (_simulationContext == IntPtr.Zero)
+          return false;
+
+        return NativeInterop.avkSimulationContext_downloadImage(
+          _simulationContext,
+          renderGeneration,
+          bufferPtr,
+          bufferSize
+        );
+      });
+    }
+    finally
+    {
+      lock (_nativeLock)
+      {
+        System.Threading.Interlocked.Decrement(ref _activeDownloads);
+        if (_activeDownloads == 0 && _isDisposing)
+        {
+          System.Threading.Monitor.PulseAll(_nativeLock);
+        }
+      }
+    }
   }
 
   public void RotateCamera(ulong sceneId, ulong cameraEntityId, float deltaX, float deltaY)

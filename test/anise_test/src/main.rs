@@ -33,8 +33,8 @@ pub extern "C" fn main(_argc: isize, _argv: *const *const u8) -> isize {
 
   let file_data = match fs::read(&bsp_path) {
     Ok(d) => d,
-    Err(_) => {
-      log!("Failed to read file.");
+    Err(e) => {
+      log!("Failed to read file. {:?}", e);
       return 1;
     }
   };

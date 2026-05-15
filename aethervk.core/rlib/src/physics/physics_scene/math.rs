@@ -52,11 +52,6 @@ impl PhysicsSceneMathExt for PhysicsScene {
         let aabb = crate::math::collision::bounds::AABB::<f32>::new(min_bound, max_bound);
 
         let hits_bound = intersection::intersect_ray_aabb(ray, &aabb);
-        
-        if node_idx == 0 {
-            aethervk_oshal_rlib::log!("DEBUG: root node AABB min=[{},{},{}] max=[{},{},{}] hits_bound={}", min_bound.x(), min_bound.y(), min_bound.z(), max_bound.x(), max_bound.y(), max_bound.z(), hits_bound);
-            aethervk_oshal_rlib::log!("DEBUG: ray origin=[{},{},{}] direction=[{},{},{}]", ray.origin.x(), ray.origin.y(), ray.origin.z(), ray.direction.x(), ray.direction.y(), ray.direction.z());
-        }
 
         if hits_bound {
           if node.prim_count > 0 {
@@ -84,19 +79,17 @@ impl PhysicsSceneMathExt for PhysicsScene {
       }
     }
 
-    aethervk_oshal_rlib::log!("DEBUG: intersect_world_bvh_math hit_instances.len() = {}", hit_instances.len());
-
     hit_instances
-    }
+  }
 
-    fn intersect_mesh_bvh_math(
+  fn intersect_mesh_bvh_math(
     &self,
     ro: Vec3f32,
     rd: Vec3f32,
     model_matrix: Mat4x4f32,
     mesh_comp: &PhysicalMeshComponent,
     max_t: f32,
-    ) -> Option<(f32, Vec3f32, [f32; 2])> {
+  ) -> Option<(f32, Vec3f32, [f32; 2])> {
     let bvh = mesh_comp.mesh.bvh.as_ref()?; // Early exit if there is no BVH
 
     // 1. Transform Ray into Local Space
@@ -225,10 +218,8 @@ impl PhysicsSceneMathExt for PhysicsScene {
       }
     }
 
-    aethervk_oshal_rlib::log!("DEBUG: intersect_mesh_bvh_math tri_tests={} hit={}", tri_tests, hit_point.is_some());
-
     hit_point.map(|point| (closest_t, point, hit_uv))
-    }
+  }
 }
 
 /// TODO: Document this item
@@ -241,4 +232,170 @@ pub fn closest_intersection(
     .filter(|item| item.0.0 > 0.0)
     .min_by(|a, b| a.0.0.partial_cmp(&b.0.0).unwrap_or(core::cmp::Ordering::Equal))
     .map(|&((t, p, uv), e_id)| (t, p, uv, e_id))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::math::collision::bounds::AABB;
+  use crate::math::collision::linear_bvh::{LinearBVH, LinearBound, LinearBVHNode};
+  use crate::physics::physics_scene::{GpuBvhNode, GpuReferenceFrame, PhysicsScene};
+  use crate::scene::PhysicalMeshComponent;
+  use crate::simulation::comet::{Comet, Vertex};
+  use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
+  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+  use aethervk_oshal_rlib::math::matrix::SquareMatrix;
+  use alloc::sync::Arc;
+  use alloc::vec;
+  use polyhedral_mass_properties::MassProperties;
+  use slotmap::Key;
+
+  fn create_dummy_physics_scene() -> PhysicsScene {
+    let mut gpu_frames = vec![GpuReferenceFrame {
+      center_pos: [0.0, 0.0, 0.0],
+      scale: 1.0,
+      center_vel: [0.0, 0.0, 0.0],
+      soi_radius: 100.0,
+      frame_type: 0,
+      parent_frame_idx: u32::MAX,
+      bvh_root_index: 0,
+      entity_id_raw: 1,
+      _pad0: 0,
+      _pad1: 0,
+    }];
+
+    let gpu_bvh_nodes = vec![GpuBvhNode {
+      aabb_min: [-10.0, -10.0, -10.0],
+      left_child_or_prim: 0,
+      aabb_max: [10.0, 10.0, 10.0],
+      right_child_offset: u32::MAX,
+      prim_count: 1,
+      _pad0: 0,
+      _pad1: 0,
+      _pad2: 0,
+    }];
+
+    let gpu_primitives = vec![0];
+    let entity_key = EntityId::null();
+    let gpu_entity_mappings = vec![entity_key];
+
+    PhysicsScene {
+      gpu_frames,
+      gpu_bvh_nodes,
+      gpu_primitives,
+      gpu_entity_mappings,
+    }
+  }
+
+  fn create_dummy_mesh_component() -> PhysicalMeshComponent {
+    let vertices = vec![
+      Vertex {
+        position: [-1.0, -1.0, 0.0],
+        normal: [0.0, 0.0, 1.0],
+        uv: [0.0, 0.0],
+        tangent: [1.0, 0.0, 0.0, 1.0],
+      },
+      Vertex {
+        position: [1.0, -1.0, 0.0],
+        normal: [0.0, 0.0, 1.0],
+        uv: [1.0, 0.0],
+        tangent: [1.0, 0.0, 0.0, 1.0],
+      },
+      Vertex {
+        position: [0.0, 1.0, 0.0],
+        normal: [0.0, 0.0, 1.0],
+        uv: [0.5, 1.0],
+        tangent: [1.0, 0.0, 0.0, 1.0],
+      },
+    ];
+    let indices = vec![0, 1, 2];
+
+    let bvh_nodes = vec![LinearBVHNode {
+        center_of_mass: [0.0, 0.0, 0.0],
+        mass: 0.0,
+      bound: LinearBound::AABB(AABB::new(
+        Vec3f32::from_components(-1.0, -1.0, -0.1),
+        Vec3f32::from_components(1.0, 1.0, 0.1),
+      )),
+      left_child_or_primitive_offset: 0,
+      right_child_offset: u32::MAX,
+      primitive_count: 1,
+    }];
+
+    let bvh = LinearBVH {
+      header: crate::math::collision::linear_bvh::LinearBVHHeader {
+        preciseness: 0,
+        node_count: bvh_nodes.len() as u32,
+        primitive_count: 1,
+      },
+      nodes: bvh_nodes,
+      primitives: vec![0],
+    };
+
+    let comet = Comet {
+      id: 1,
+      vertices,
+      indices,
+      albedo_map: None,
+      normal_map: None,
+      roughness_map: None,
+      ao_map: None,
+      mass_properties: unsafe { core::mem::zeroed() },
+      bvh: Some(bvh),
+      pa_basis_bf: None,
+      bf_to_pa: None,
+    };
+
+    PhysicalMeshComponent {
+      asset_path: "".into(),
+      mesh: Arc::new(comet),
+      emissive_intensity: 0.0,
+      emissive_color: [0.0, 0.0, 0.0],
+      use_new_path: false,
+      paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
+    }
+  }
+
+  #[test]
+  fn perf_test_intersect_world_bvh_math() {
+    let scene = create_dummy_physics_scene();
+    let ray = Ray {
+      origin: Vec3f32::from_components(0.0, 0.0, 5.0),
+      direction: Vec3f32::from_components(0.0, 0.0, -1.0),
+      length: 100.0,
+    };
+
+    let start = std::time::Instant::now();
+    let iters = 100_000;
+    for _ in 0..iters {
+      let _ = scene.intersect_world_bvh_math(&ray);
+    }
+    let elapsed = start.elapsed();
+    println!("intersect_world_bvh_math took {:?} for {} iterations", elapsed, iters);
+  }
+
+  #[test]
+  fn perf_test_intersect_mesh_bvh_math() {
+    let scene = create_dummy_physics_scene();
+    let mesh_comp = create_dummy_mesh_component();
+    let model_matrix = Mat4x4f32::identity();
+
+    let start = std::time::Instant::now();
+    let iters = 100_000;
+    for _ in 0..iters {
+      let _ = scene.intersect_mesh_bvh_math(
+        Vec3f32::from_components(0.0, 0.0, 5.0),
+        Vec3f32::from_components(0.0, 0.0, -1.0),
+        model_matrix,
+        &mesh_comp,
+        100.0,
+      );
+    }
+    let elapsed = start.elapsed();
+    println!("intersect_mesh_bvh_math took {:?} for {} iterations", elapsed, iters);
+  }
 }

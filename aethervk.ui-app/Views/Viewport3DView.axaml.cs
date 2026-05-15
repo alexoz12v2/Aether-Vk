@@ -125,6 +125,7 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
     {
       _viewModel.Renderer = this;
     }
+    _livelinessTimer?.Start();
   }
 
   protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -134,6 +135,8 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
     {
       _viewModel.Renderer = null;
     }
+    _livelinessTimer?.Stop();
+    _resizeTimer?.Stop();
   }
 
   public void UpdateFrame(IntPtr buffer, nuint bufferSize)

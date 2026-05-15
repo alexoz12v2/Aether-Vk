@@ -357,6 +357,10 @@ impl Instance {
           prop.extension_name_as_c_str().unwrap() == ash::ext::swapchain_maintenance1::NAME
         });
 
+        if supports_swapchain_maintenance1 && self.has_surface_maintenance1 {
+            optional_extensions.insert(utils::OptionalExtensionSupportFlags::SWAPCHAIN_MAINTENANCE1);
+        }
+
         Some(utils::PhysicalDeviceQueryResult {
           physical_device,
           physical_device_properties: props.properties,

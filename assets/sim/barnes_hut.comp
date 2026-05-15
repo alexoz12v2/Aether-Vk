@@ -71,38 +71,88 @@ void main() {
 
     while (stackPtr > 0) {
         uint node_idx = stack[--stackPtr];
-        BVHNodeAABB node = read_bvh_node(pc.bvh, node_idx);
         
-        bool isLeaf = (node.primitive_count > 0);
-        
-        if (isLeaf) {
-            uint other_p_id = node.left_child_or_primitive_offset;
-            if (my_p_id != other_p_id) {
-                // Exact particle-particle gravity
+        if (BRANCH_FACTOR == 2) {
+            BVHNodeAABB node = read_bvh_node(pc.bvh, node_idx);
+            
+            bool isLeaf = (node.primitive_count > 0);
+            
+            if (isLeaf) {
+                uint other_p_id = node.left_child_or_primitive_offset;
+                if (my_p_id != other_p_id) {
+                    // Exact particle-particle gravity
+                    vec3 r = node.center_of_mass - my_pos;
+                    float dist_sq = dot(r, r);
+                    if (dist_sq > 1e-6) {
+                        float dist = sqrt(dist_sq);
+                        total_force += r * (pc.G * my_mass * node.mass / (dist_sq * dist));
+                    }
+                }
+            } else {
+                // Check MAC (Multipole Acceptance Criterion)
                 vec3 r = node.center_of_mass - my_pos;
                 float dist_sq = dot(r, r);
-                if (dist_sq > 1e-6) {
-                    float dist = sqrt(dist_sq);
+                float dist = sqrt(max(dist_sq, 1e-6));
+                
+                // Calculate size of the node's bounding box
+                vec3 extents = node.bound.maxBounds - node.bound.minBounds;
+                float size = max(extents.x, max(extents.y, extents.z));
+                
+                if (size / dist < pc.theta) {
+                    // Node is far enough, use center of mass
                     total_force += r * (pc.G * my_mass * node.mass / (dist_sq * dist));
+                } else {
+                    // Node is too close, traverse children
+                    if (node.left_child_or_primitive_offset != 0xFFFFFFFF && node.left_child_or_primitive_offset != 0) stack[stackPtr++] = node.left_child_or_primitive_offset;
+                    if (node.right_child_offset != 0xFFFFFFFF && node.right_child_offset != 0) stack[stackPtr++] = node.right_child_offset;
                 }
             }
         } else {
-            // Check MAC (Multipole Acceptance Criterion)
-            vec3 r = node.center_of_mass - my_pos;
-            float dist_sq = dot(r, r);
-            float dist = sqrt(max(dist_sq, 1e-6));
-            
-            // Calculate size of the node's bounding box
-            vec3 extents = node.bound.maxBounds - node.bound.minBounds;
-            float size = max(extents.x, max(extents.y, extents.z));
-            
-            if (size / dist < pc.theta) {
-                // Node is far enough, use center of mass
-                total_force += r * (pc.G * my_mass * node.mass / (dist_sq * dist));
-            } else {
-                // Node is too close, traverse children
-                stack[stackPtr++] = node.left_child_or_primitive_offset;
-                stack[stackPtr++] = node.right_child_offset;
+            MultiBVHBlockArray multi_bvh = MultiBVHBlockArray(pc.bvh);
+            uint node_valid = GET_MULTI_BVH_VALID_COUNT(multi_bvh, node_idx);
+            for (uint i = 0; i < BRANCH_FACTOR; ++i) {
+                if (i >= node_valid) break;
+                
+                bool isLeaf;
+                uint offset;
+                GET_MULTI_BVH_LEAF_INFO(multi_bvh, node_idx, i, isLeaf, offset);
+                
+                float mass;
+                GET_MULTI_BVH_MASS(multi_bvh, node_idx, i, mass);
+                
+                vec3 com;
+                GET_MULTI_BVH_CENTER_OF_MASS(multi_bvh, node_idx, i, com);
+
+                if (isLeaf) {
+                    uint other_p_id = offset;
+                    if (my_p_id != other_p_id) {
+                        // Exact particle-particle gravity
+                        vec3 r = com - my_pos;
+                        float dist_sq = dot(r, r);
+                        if (dist_sq > 1e-6) {
+                            float dist = sqrt(dist_sq);
+                            total_force += r * (pc.G * my_mass * mass / (dist_sq * dist));
+                        }
+                    }
+                } else {
+                    // Check MAC (Multipole Acceptance Criterion)
+                    vec3 r = com - my_pos;
+                    float dist_sq = dot(r, r);
+                    float dist = sqrt(max(dist_sq, 1e-6));
+                    
+                    AABB bound;
+                    GET_MULTI_BVH_BOUND(multi_bvh, node_idx, i, bound);
+                    vec3 extents = bound.maxBounds - bound.minBounds;
+                    float size = max(extents.x, max(extents.y, extents.z));
+                    
+                    if (size / dist < pc.theta) {
+                        // Node is far enough, use center of mass
+                        total_force += r * (pc.G * my_mass * mass / (dist_sq * dist));
+                    } else {
+                        // Node is too close, traverse children
+                        if (offset != 0xFFFFFFFF && offset != 0) stack[stackPtr++] = offset;
+                    }
+                }
             }
         }
     }

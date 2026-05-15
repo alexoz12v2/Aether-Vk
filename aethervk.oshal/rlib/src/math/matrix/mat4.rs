@@ -453,6 +453,17 @@ impl Matrix4 for Mat4x4f32 {
 }
 
 impl Mat4x4f32 {
+  #[inline]
+  /// get a floating point component from a column-major linear index
+  pub fn component(&self, linear_index: usize) -> Option<f32> {
+    if linear_index < 16 {
+      let ptr = self as *const Self as *const f32;
+      unsafe { ptr.add(linear_index).as_ref().copied() }
+    } else {
+      None
+    }
+  }
+
   /// Rotates a 3D vector using the matrix.
   /// This multiplies the vector by the upper-left 3x3 portion of the matrix,
   /// ignoring the translation component (the `w` column).

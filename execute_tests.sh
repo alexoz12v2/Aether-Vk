@@ -15,17 +15,10 @@ echo "         Running Rust Tests             "
 echo "========================================"
 if [ $SINGLE_THREAD -eq 1 ]; then
     echo "Mode: Single-threaded, No Capture"
-    cargo nextest run --no-capture --test-threads 1
-    echo ""
-    echo "Generating Rust Coverage..."
-    # llvm-cov uses standard cargo test under the hood, so arguments go after --
-    cargo llvm-cov -- --test-threads=1 --nocapture
+    cargo llvm-cov nextest --no-capture --test-threads 1
 else
     echo "Mode: Default"
-    cargo nextest run
-    echo ""
-    echo "Generating Rust Coverage..."
-    cargo llvm-cov
+    cargo llvm-cov nextest
 fi
 
 echo ""

@@ -64,10 +64,10 @@ pub type EngineResult<T> = core::result::Result<T, EngineError>;
 /// TODO: Document this item
 pub enum GpuError {
   #[error("Invalid Input Argument: {0}")]
-  InvalidArgument(&'static str),
+  InvalidArgument(String),
 
   #[error("Invalid Object State: {0}")]
-  InvalidState(&'static str),
+  InvalidState(String),
 
   #[error("Device lost")]
   DeviceLost,

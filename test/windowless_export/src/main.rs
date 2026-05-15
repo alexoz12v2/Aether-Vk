@@ -86,7 +86,9 @@ fn main() {
         .unwrap()
     };
 
-    let mut scene = Scene::new(std::sync::Arc::new(gpu::RwLock::new(aethervk_core_rlib::simulation::texture_cache::TextureCache::new("AetherVk"))));
+    let mut scene = Scene::new(std::sync::Arc::new(gpu::RwLock::new(
+      aethervk_core_rlib::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
     scene.register_all_crate_components();
 
     let camera_entity = scene.spawn_entity("entity");
@@ -104,8 +106,11 @@ fn main() {
       .add_component(
         camera_entity,
         CameraComponent::new_persp(
-            std::f32::consts::FRAC_PI_4, width as f32 / height as f32, 0.1, 100.0,
-          ),
+          std::f32::consts::FRAC_PI_4,
+          width as f32 / height as f32,
+          0.1,
+          100.0,
+        ),
       )
       .unwrap();
 
@@ -148,7 +153,13 @@ fn main() {
           asset_path: "".to_string(),
           mesh: comet,
           emissive_intensity: 0.0,
-          emissive_color: [0.0, 0.0, 0.0], use_new_path: false, paint_display_mode: 0,
+          emissive_color: [0.0, 0.0, 0.0],
+          use_new_path: false,
+          paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
         },
       )
       .unwrap();
@@ -194,6 +205,7 @@ fn main() {
         let present_guard = FrameCancelGuard::new(device, presentation_engine, acquire_result);
 
         let cmd_buffer = try_task!(task, device.get_command_buffer());
+        try_task!(task, device.set_command_buffer_presentation_engine(cmd_buffer, presentation_engine));
         let render_scene = scene_to_render_scene(
           &scene,
           device,

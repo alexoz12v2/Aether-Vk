@@ -221,27 +221,31 @@ public class HorizonJplService
      {
         if (line.StartsWith("*") || string.IsNullOrWhiteSpace(line)) continue;
         
-        // Simple heuristic: if line contains '=', it might have key-values
-        if (line.Contains("="))
+        var parts = line.Split(new[] {"  ", "\t"}, StringSplitOptions.RemoveEmptyEntries);
+        bool hasKeyValue = false;
+        foreach (var part in parts)
         {
-           // Split by spaces, but carefully
-           var parts = line.Split(new[] {"   ", "\t"}, StringSplitOptions.RemoveEmptyEntries);
-           foreach(var part in parts)
-           {
-              var kv = part.Split(new[] {'='}, 2, StringSplitOptions.RemoveEmptyEntries);
-              if (kv.Length == 2)
-              {
-                 ObjectData.Add(new string[] { kv[0].Trim(), kv[1].Trim() });
-              }
-              else
-              {
-                 ObjectData.Add(new string[] { "Info", part.Trim() });
-              }
-           }
-        }
-        else
-        {
-           ObjectData.Add(new string[] { "Info", line.Trim() });
+            var p = part.Trim();
+            if (string.IsNullOrEmpty(p)) continue;
+
+            if (p.Contains("=") || p.Contains(":"))
+            {
+                var sep = p.Contains("=") ? '=' : ':';
+                var kv = p.Split(new[] {sep}, 2, StringSplitOptions.RemoveEmptyEntries);
+                if (kv.Length == 2)
+                {
+                    ObjectData.Add(new string[] { kv[0].Trim(), kv[1].Trim() });
+                    hasKeyValue = true;
+                }
+                else
+                {
+                    ObjectData.Add(new string[] { "Info", p });
+                }
+            }
+            else if (!hasKeyValue)
+            {
+                ObjectData.Add(new string[] { "Info", p });
+            }
         }
      }
   }

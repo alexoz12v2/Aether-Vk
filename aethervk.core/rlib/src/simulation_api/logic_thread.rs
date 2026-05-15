@@ -130,8 +130,9 @@ pub fn start_logic_thread(
                 )
               };
 
-              let _ = context.render_tx.try_send(
-                crate::simulation_api::structs::RenderCommand::RenderFrame(
+              let send_res = context.render_tx.try_send(
+                // TODO why more than one? Better integration
+                crate::simulation_api::structs::RenderCommand::RenderFrames(alloc::vec![
                   crate::simulation_api::structs::RenderFrame {
                     presentation_engine_handle: pe,
                     task_id: alloc::sync::Arc::clone(&task_id),
@@ -145,8 +146,12 @@ pub fn start_logic_thread(
                     custom_render_callback: callback,
                     active_physics_task,
                   },
-                ),
+                ]),
               );
+
+              if send_res.is_err() {
+                continue;
+              }
 
               let task_id_val = loop {
                 let value = task_id.load(core::sync::atomic::Ordering::Relaxed);
@@ -214,7 +219,9 @@ pub fn start_logic_thread(
           LogicCommand::ImportModel { .. }
           | LogicCommand::LoadAlmanac { .. }
           | LogicCommand::LoadCometSpk { .. }
-          | LogicCommand::SpawnModelInstance { .. } => {
+          | LogicCommand::SpawnModelInstance { .. }
+          | LogicCommand::RaycastNdc { .. }
+          | LogicCommand::Raycast { .. } => {
             // Heavy I/O or generation tasks are scattered to the thread pool
             let workload = Box::new(LogicWorkload {
               cmd,
@@ -225,8 +232,6 @@ pub fn start_logic_thread(
           _ => {
             // Synchronous orchestrator commands executed on the logic thread natively!
             let task_id = match &cmd {
-              LogicCommand::RaycastNdc { task_id, .. } => Some(*task_id),
-              LogicCommand::Raycast { task_id, .. } => Some(*task_id),
               LogicCommand::Custom { task_id, .. } => Some(*task_id),
               _ => None,
             };
@@ -707,7 +712,7 @@ fn process_command_internal(
     }
 
     LogicCommand::ImportModel { task_id: _, path } => {
-      let mesh_res = crate::simulation::comet::load_comet_from_gltf(&path, false);
+      let mesh_res = crate::simulation::comet::load_comet_from_gltf(&path, false, None);
       match mesh_res {
         Ok(mesh) => {
           let mut scenes = ctx.scenes.write();
@@ -752,7 +757,7 @@ fn process_command_internal(
         };
 
         if needs_load {
-          if let Ok(mesh) = crate::simulation::comet::load_comet_from_gltf(&path_str, false) {
+          if let Ok(mesh) = crate::simulation::comet::load_comet_from_gltf(&path_str, false, None) {
             let scenes = ctx.scenes.read();
             scenes.mesh_cache.insert(path_str.clone(), mesh);
           }
@@ -801,7 +806,8 @@ fn execute_simulation_tick(
 ) -> EngineResult<()> {
   let (time_state_arc, physics_scene_arc, scene_arc, active_physics_task) = {
     let scenes = ctx.scenes.read();
-    let scene_ctx = scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
+    let scene_ctx =
+      scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
     let scene_read = scene_ctx.read();
     (
       scene_read.time_state.clone(),
@@ -829,16 +835,17 @@ fn execute_simulation_tick(
   let mut _step_count = 0;
   loop {
     if _step_count > 5 {
-        // Spiral of death protection!
-        // We're taking too long to simulate. Slow down simulation instead of freezing.
-        time_state_arc.read().time_info.write().ut_discard_accumulator();
-        break;
+      // Spiral of death protection!
+      // We're taking too long to simulate. Slow down simulation instead of freezing.
+      time_state_arc.read().time_info.write().ut_discard_accumulator();
+      break;
     }
     _step_count += 1;
 
     let (is_manual, step_days, fixed_dt_us, current_epoch) = {
       let mut ts_write = time_state_arc.write();
-      let fixed_dt_us = ts_write.time_info.read().fixed_delta_time.load(core::sync::atomic::Ordering::Relaxed);
+      let fixed_dt_us =
+        ts_write.time_info.read().fixed_delta_time.load(core::sync::atomic::Ordering::Relaxed);
       if ts_write.manual_step_requests > 0.0 {
         let step = ts_write.manual_step_requests;
         ts_write.manual_step_requests = 0.0;
@@ -848,10 +855,15 @@ fn execute_simulation_tick(
         let needs_update = ts_write.time_info.read().needs_fixed_update();
         static mut DEBUG_PRINT_TICK: u32 = 0;
         unsafe {
-            if DEBUG_PRINT_TICK % 600 == 0 {
-                aethervk_oshal_rlib::log!("DEBUG: execute_simulation_tick is_playing={} needs_update={} scale={:?}", ts_write.is_playing, needs_update, ts_write.current_scale);
-            }
-            DEBUG_PRINT_TICK += 1;
+          if DEBUG_PRINT_TICK % 600 == 0 {
+            aethervk_oshal_rlib::log!(
+              "DEBUG: execute_simulation_tick is_playing={} needs_update={} scale={:?}",
+              ts_write.is_playing,
+              needs_update,
+              ts_write.current_scale
+            );
+          }
+          DEBUG_PRINT_TICK += 1;
         }
         if ts_write.is_playing && needs_update {
           let scale_days_per_sec = ts_write.current_scale.to_days_per_st_second();
@@ -1006,18 +1018,20 @@ fn dispatch_physics_step(
     let ps_arc = ps_lock.clone();
     let scene_clone = scene_arc.clone();
     let pool_clone = ctx.thread_pool.clone();
-    let engine_type = {
+    let (engine_type, collisions_enabled) = {
       let scenes = ctx.scenes.read();
       let scene_ctx = scenes.get(&scene_id).unwrap().read();
-      *scene_ctx.physics_engine_type.read()
+      (
+        *scene_ctx.physics_engine_type.read(),
+        scene_ctx.collisions_enabled.load(core::sync::atomic::Ordering::Relaxed),
+      )
     };
 
     let task = ctx
       .thread_pool
       .spawn_tasklet(None, move || {
         let mut ps = ps_arc.write();
-        let dt_us =
-          (step_days * 86400.0 * 1_000_000.0) as aethervk_oshal_rlib::os::time::timeus_t;
+        let dt_us = (step_days * 86400.0 * 1_000_000.0) as aethervk_oshal_rlib::os::time::timeus_t;
 
         let res = match engine_type {
           crate::simulation_api::structs::PhysicsEngineType::CpuSimd => {
@@ -1030,6 +1044,7 @@ fn dispatch_physics_step(
               scene_clone.as_ref(),
               0,
               dt_us,
+              collisions_enabled,
             )
           }
           crate::simulation_api::structs::PhysicsEngineType::CpuScalar => {
@@ -1040,6 +1055,7 @@ fn dispatch_physics_step(
               scene_clone.as_ref(),
               0,
               dt_us,
+              collisions_enabled,
             )
           }
           crate::simulation_api::structs::PhysicsEngineType::VulkanCompute => {
@@ -1052,6 +1068,7 @@ fn dispatch_physics_step(
               scene_clone.as_ref(),
               0,
               dt_us,
+              collisions_enabled,
             )
           }
         };
@@ -1066,76 +1083,6 @@ fn dispatch_physics_step(
       .map_err(|e| <aethervk_oshal_rlib::os::NativeError as Into<EngineError>>::into(e))?;
 
     *scene_read.active_physics_task.lock() = Some(task);
-  }
-
-  let dt_us_scaled = (step_days * 86400.0 * 1_000_000.0) as i64;
-  let emitter_entities =
-    scene_arc.query1_res(|id, _: &crate::scene::particles::ParticleEmitterComponent| Some(id));
-  for (id, _) in emitter_entities {
-    let t = scene_arc.global_transform(id).unwrap_or_default();
-    let config = scene_arc.with_component(
-      id,
-      |c: &crate::scene::particles::ParticleEmitterComponent| c.clone(),
-    );
-    let mesh =
-      scene_arc.with_component(id, |c: &crate::scene::PhysicalMeshComponent| c.mesh.clone());
-
-    if let (Some(config), Some(mesh)) = (config, mesh) {
-      let _ = scene_arc.with_component_mut(
-        id,
-        |ps: &mut crate::scene::particles::ParticleSystemComponent| {
-          let mut particles = ps.particles.write();
-          for p in particles.iter_mut() {
-            if p.active != 0 {
-              let new_age = p.get_age() as i64 + dt_us_scaled;
-              p.set_age(new_age as aethervk_oshal_rlib::os::time::timeus_t);
-              if new_age > config.lifetime as i64 {
-                p.active = 0;
-              }
-            }
-          }
-          particles.retain(|p| p.active != 0);
-          drop(particles);
-
-          ps.accumulator += dt_us_scaled;
-          if ps.accumulator >= config.delta {
-            let events = (ps.accumulator / config.delta).min(100);
-            ps.accumulator %= config.delta;
-
-            let mut rng = rand::thread_rng();
-            let mut u_emission = [0.0; 2];
-            u_emission[0] = rand::Rng::r#gen(&mut rng);
-            u_emission[1] = rand::Rng::r#gen(&mut rng);
-
-            let burst_size = config.emission_count.mean as usize * events as usize + 1000;
-            let mut u_particles = alloc::vec::Vec::with_capacity(burst_size);
-            for _ in 0..burst_size {
-              u_particles.push([
-                rand::Rng::r#gen(&mut rng),
-                rand::Rng::r#gen(&mut rng),
-                rand::Rng::r#gen(&mut rng),
-                rand::Rng::r#gen(&mut rng),
-              ]);
-            }
-
-            let uv_grid =
-              crate::simulation::comet::uv_grid::UvGrid::new(&mesh.vertices, &mesh.indices, 2);
-            for _ in 0..events {
-              ps.emit_particles(
-                &config,
-                &mesh,
-                &uv_grid,
-                t.position,
-                t.rotation,
-                t.scale,
-                &u_emission,
-                &u_particles,
-              );
-            }
-          }
-        },
-      );
-    }
   }
 
   let dt_seconds = fixed_dt_us as f32 / 1_000_000.0;
@@ -1165,7 +1112,7 @@ fn dispatch_physics_step(
       },
     );
   }
-  
+
   Ok(())
 }
 

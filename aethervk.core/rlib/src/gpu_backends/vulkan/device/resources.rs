@@ -4,15 +4,18 @@ use crate::gpu_backends::vulkan;
 use crate::gpu_backends::vulkan::device::{VmaDebugNameExt, VulkanDebugNameExt};
 use crate::simulation::comet::{TexelFormat, Texture};
 use aethervk_oshal_rlib as oshal;
+use alloc::string::ToString;
 use alloc::{boxed::Box, collections::VecDeque, sync, vec::Vec};
 use ash::{Device, vk};
 use core::hash::{Hash, Hasher};
 use core::ptr;
 use core::sync::atomic::AtomicU32;
+use function_name::named;
 use oshal::{hash::FnvHasher, os::native::ThreadId};
 use spirv_reflect::{
   ffi::SpvReflectResult_SPV_REFLECT_RESULT_SUCCESS, types::ReflectShaderStageFlags,
 };
+use static_assertions as sa;
 use vk_mem::Alloc;
 
 use crate::gpu::{PipelineKeyable, PresentationEngineHandle, TextureFlags};
@@ -391,6 +394,7 @@ impl Image {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn new_storage_2d(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -467,6 +471,7 @@ impl Image {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn new_paint_image(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -534,6 +539,7 @@ impl Image {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn new_storage_3d(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -615,6 +621,7 @@ impl Image {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn new_2d(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -631,7 +638,7 @@ impl Image {
 
     // 1. Allocate staging memory
     let (staging_offset, staging_ptr) =
-      staging_arena.allocate(image_size as usize, 16).ok_or(crate::gpu_err!("device error"))?;
+      staging_arena.allocate(image_size as usize, 16).ok_or(crate::gpu_err_device!())?;
 
     unsafe {
       core::ptr::copy_nonoverlapping(texture.data.as_ptr(), staging_ptr, texture.data.len());
@@ -994,8 +1001,9 @@ impl ForwardMesh2RenderResource {
     hasher.finish()
   }
 
-  #[allow(clippy::too_many_arguments)]
   /// TODO: Document this item
+  #[allow(clippy::too_many_arguments)]
+  #[named]
   pub(super) unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -1378,6 +1386,7 @@ impl ForwardMeshRenderResource {
   /// match the given arguments
   /// - `sampler` should outlive this object
   #[allow(clippy::too_many_arguments)]
+  #[named]
   pub(super) unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -1757,6 +1766,7 @@ impl TextRenderResourceArchetype {
   impl_pipeline_map_methods!();
 
   /// TODO: Document this item
+  #[named]
   pub fn upload_font_atlas(
     &mut self,
     device: &vulkan::device::LogicalDevice,
@@ -1780,8 +1790,8 @@ impl TextRenderResourceArchetype {
       self.next_descriptor_index += 1;
       idx
     } else {
-      return Err(GpuError::InvalidState(
-        "Exceeded descriptor array layout maximum capacity",
+      return Err(gpu_err!(
+        "Exceeded descriptor array layout maximum capacity"
       ));
     };
 
@@ -1833,6 +1843,7 @@ impl TextRenderResourceArchetype {
   }
 
   /// TODO: Document this item
+  #[named]
   pub fn remove_font_atlas(
     &mut self,
     font_hash: u64,
@@ -1855,9 +1866,7 @@ impl TextRenderResourceArchetype {
         return Ok(());
       }
     }
-    Err(GpuError::InvalidArgument(
-      "[Vulkan RenderDevice] resource:remove_font_atlas: atlas not found",
-    ))
+    Err(gpu_invalid_arg!("atlas not found: {}", font_hash))
   }
 }
 
@@ -1927,6 +1936,7 @@ impl DiscardableResource for Text2RenderResourceArchetype {
 }
 
 impl Text2RenderResourceArchetype {
+  #[named]
   pub fn new(
     pipeline_layout: vk::PipelineLayout,
     set_layout: vk::DescriptorSetLayout,
@@ -1978,6 +1988,7 @@ impl Text2RenderResourceArchetype {
 
   impl_pipeline_map_methods!();
 
+  #[named]
   pub fn upload_font_atlas(
     &mut self,
     device: &vulkan::device::LogicalDevice,
@@ -1999,8 +2010,8 @@ impl Text2RenderResourceArchetype {
       self.next_descriptor_index += 1;
       idx
     } else {
-      return Err(GpuError::InvalidState(
-        "Exceeded descriptor array layout maximum capacity",
+      return Err(gpu_err!(
+        "Exceeded descriptor array layout maximum capacity"
       ));
     };
 
@@ -2050,6 +2061,7 @@ impl Text2RenderResourceArchetype {
     Ok(descriptor_index)
   }
 
+  #[named]
   pub fn remove_font_atlas(
     &mut self,
     font_hash: u64,
@@ -2070,9 +2082,7 @@ impl Text2RenderResourceArchetype {
         return Ok(());
       }
     }
-    Err(GpuError::InvalidArgument(
-      "[Vulkan RenderDevice] resource:remove_font_atlas: atlas not found",
-    ))
+    Err(gpu_invalid_arg!("atlas not found: {}", font_hash))
   }
 }
 
@@ -2090,6 +2100,7 @@ impl DiscardableResource for BvhRenderResourceArchetype {
 
 impl BvhRenderResourceArchetype {
   /// TODO: Document this item
+  #[named]
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     _allocator_raw: vk_mem::ffi::VmaAllocator,
@@ -2144,6 +2155,7 @@ impl DiscardableResource for Bvhwire2RenderResourceArchetype {
 }
 
 impl Bvhwire2RenderResourceArchetype {
+  #[named]
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -2268,6 +2280,7 @@ impl MarkerRenderResourceArchetype {
   impl_pipeline_map_methods!();
 
   /// TODO: Document this item
+  #[named]
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     _allocator_raw: vk_mem::ffi::VmaAllocator,
@@ -2312,6 +2325,7 @@ pub(super) struct MinimapRenderResourceArchetype {
 
 impl MinimapRenderResourceArchetype {
   /// TODO: Document this item
+  #[named]
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     _allocator_raw: vk_mem::ffi::VmaAllocator,
@@ -2496,6 +2510,7 @@ impl DiscardableResource for UiRenderResourceArchetype {
 impl UiRenderResourceArchetype {
   impl_pipeline_map_methods!();
 
+  #[named]
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -2646,6 +2661,7 @@ impl TrajectoryRenderResourceArchetype {
   impl_pipeline_map_methods!();
 
   /// TODO: Document this item
+  #[named]
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -2834,6 +2850,7 @@ impl BillboardRenderResourceArchetype {
   impl_pipeline_map_methods!();
 
   /// Don't bother cleaning up cause it fails. TODO: Cleanup
+  #[named]
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     allocator_raw: vk_mem::ffi::VmaAllocator,
@@ -2942,6 +2959,7 @@ impl BillboardRenderResourceArchetype {
   /// Uploads a texture to the GPU and assigns it to a specific index in the bindless array.
   /// Returns the `Image` so the caller can hold onto it (to prevent it from dropping)
   /// and eventually discard it when it is no longer needed.
+  #[named]
   pub fn add_texture(
     &self,
     device: &vulkan::device::LogicalDevice,
@@ -3028,6 +3046,7 @@ impl GizmoRenderResourceArchetype {
   pub const MAX_BUFFER_COUNT: u32 = 256;
 
   /// TODO: Document this item
+  #[named]
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     allocator_raw: vk_mem::ffi::VmaAllocator,
@@ -3171,6 +3190,7 @@ impl ParticleRenderResourceArchetype {
   impl_pipeline_map_methods!();
 
   /// Pass the safe `&vk_mem::Allocator` here instead of the raw `vk_mem::ffi::VmaAllocator`
+  #[named]
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -3248,7 +3268,7 @@ impl ParticleRenderResourceArchetype {
 
     let (mega_particle_buffer, mega_particle_alloc) =
       unsafe { allocator.create_buffer(&particle_buffer_info, &alloc_create_info) }
-        .map_err(|_| crate::gpu_err!("device error"))?;
+        .map_err(|_| crate::gpu_err_device!())?;
 
     // 2. Create Mega Indirect Buffer
     let indirect_buffer_size = (Self::MAX_SYSTEMS as usize
@@ -3265,7 +3285,7 @@ impl ParticleRenderResourceArchetype {
 
     let (mega_indirect_buffer, mega_indirect_alloc) =
       unsafe { allocator.create_buffer(&indirect_buffer_info, &alloc_create_info) }
-        .map_err(|_| crate::gpu_err!("device error"))?;
+        .map_err(|_| crate::gpu_err_device!())?;
 
     // --- BIND MEGA BUFFER TO DESCRIPTOR SET ONCE FOREVER ---
     let buffer_info = vk::DescriptorBufferInfo::default()
@@ -3305,20 +3325,17 @@ impl ParticleRenderResourceArchetype {
 
   /// Lock-free allocation of a permanent slice inside the Mega Buffers for a Particle System.
   /// Returns: (system_indirect_index, particle_start_index)
-  pub fn allocate_system_space(&self, particle_count: u32) -> Result<(u32, u32), GpuError> {
+  #[named]
+  pub fn allocate_system_space(&self, particle_count: u32) -> GpuResult<(u32, u32)> {
     let sys_idx = self.allocated_systems.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     if sys_idx >= Self::MAX_SYSTEMS {
-      return Err(GpuError::InvalidState(
-        "Mega Buffer Full: Max Systems Reached",
-      ));
+      return Err(gpu_err!("Mega Buffer Full: Max Systems Reached"));
     }
 
     let particle_offset =
       self.allocated_particles.fetch_add(particle_count, core::sync::atomic::Ordering::Relaxed);
     if particle_offset + particle_count > Self::MAX_PARTICLES {
-      return Err(GpuError::InvalidState(
-        "Mega Buffer Full: Max Particles Reached",
-      ));
+      return Err(gpu_err!("Mega Buffer Full: Max Particles Reached"));
     }
 
     Ok((sys_idx, particle_offset))
@@ -3394,6 +3411,7 @@ impl Particle2RenderResourceArchetype {
   impl_pipeline_map_methods!();
 
   /// Pass the safe `&vk_mem::Allocator` here instead of the raw `vk_mem::ffi::VmaAllocator`
+  #[named]
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     allocator: &vk_mem::Allocator,
@@ -3471,7 +3489,7 @@ impl Particle2RenderResourceArchetype {
 
     let (mega_particle_buffer, mega_particle_alloc) =
       unsafe { allocator.create_buffer(&particle_buffer_info, &alloc_create_info) }
-        .map_err(|_| crate::gpu_err!("device error"))?;
+        .map_err(|_| crate::gpu_err_device!())?;
 
     // 2. Create Mega Indirect Buffer
     let indirect_buffer_size = (Self::MAX_SYSTEMS as usize
@@ -3488,7 +3506,7 @@ impl Particle2RenderResourceArchetype {
 
     let (mega_indirect_buffer, mega_indirect_alloc) =
       unsafe { allocator.create_buffer(&indirect_buffer_info, &alloc_create_info) }
-        .map_err(|_| crate::gpu_err!("device error"))?;
+        .map_err(|_| crate::gpu_err_device!())?;
 
     // --- BIND MEGA BUFFER TO DESCRIPTOR SET ONCE FOREVER ---
     let buffer_info = vk::DescriptorBufferInfo::default()
@@ -3528,20 +3546,17 @@ impl Particle2RenderResourceArchetype {
 
   /// Lock-free allocation of a permanent slice inside the Mega Buffers for a Particle System.
   /// Returns: (system_indirect_index, particle_start_index)
-  pub fn allocate_system_space(&self, particle_count: u32) -> Result<(u32, u32), GpuError> {
+  #[named]
+  pub fn allocate_system_space(&self, particle_count: u32) -> GpuResult<(u32, u32)> {
     let sys_idx = self.allocated_systems.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     if sys_idx >= Self::MAX_SYSTEMS {
-      return Err(GpuError::InvalidState(
-        "Mega Buffer Full: Max Systems Reached",
-      ));
+      return Err(gpu_err!("Mega Buffer Full: Max Systems Reached"));
     }
 
     let particle_offset =
       self.allocated_particles.fetch_add(particle_count, core::sync::atomic::Ordering::Relaxed);
     if particle_offset + particle_count > Self::MAX_PARTICLES {
-      return Err(GpuError::InvalidState(
-        "Mega Buffer Full: Max Particles Reached",
-      ));
+      return Err(gpu_err!("Mega Buffer Full: Max Particles Reached"));
     }
 
     Ok((sys_idx, particle_offset))
@@ -3597,6 +3612,7 @@ impl CursorRenderResourceArchetype {
   impl_pipeline_map_methods!();
 
   /// TODO: Document this item
+  #[named]
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     _allocator_raw: vk_mem::ffi::VmaAllocator,
@@ -3641,6 +3657,7 @@ pub(super) struct SkyRenderResourceArchetype {
 
 impl SkyRenderResourceArchetype {
   /// TODO: Document this item
+  #[named]
   pub fn new(pipeline_layout: vk::PipelineLayout, set_layout: vk::DescriptorSetLayout) -> Self {
     Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
@@ -3669,6 +3686,7 @@ pub(super) struct BackgroundRenderResourceArchetype {
 
 impl BackgroundRenderResourceArchetype {
   /// TODO: Document this item
+  #[named]
   pub fn new(pipeline_layout: vk::PipelineLayout) -> Self {
     Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
@@ -3694,6 +3712,7 @@ pub(super) struct GridRenderResourceArchetype {
 
 impl GridRenderResourceArchetype {
   /// TODO: Document this item
+  #[named]
   pub fn new(pipeline_layout: vk::PipelineLayout) -> Self {
     Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
@@ -3726,6 +3745,7 @@ impl SunRenderResourceArchetype {
   impl_pipeline_map_methods!();
 
   /// TODO: Document this item
+  #[named]
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     _allocator_raw: vk_mem::ffi::VmaAllocator,
@@ -3815,6 +3835,7 @@ impl ForwardMeshRenderResourceArchetype {
   impl_pipeline_map_methods!(outline_pipeline_map);
 
   /// TODO: Document this item
+  #[named]
   pub fn create_descriptor_set_from_layout_at_index(
     &self,
     device: &vulkan::device::LogicalDevice,
@@ -3841,6 +3862,7 @@ impl ForwardMeshRenderResourceArchetype {
 
   /// Safety:
   /// - `pipeline_key` must refer to a pipeline created with `vertex_shader` and `fragment_shader`,
+  #[named]
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     vertex_shader: &Shader,
@@ -3930,7 +3952,7 @@ impl ForwardMeshRenderResourceArchetype {
           .push(FunctionalDeviceResource::new(layout, |h, d| unsafe {
             d.destroy_descriptor_set_layout(h, None)
           }))
-          .map_err(|_| crate::gpu_err!("device error"))?;
+          .map_err(|_| crate::gpu_err_device!())?;
         Ok(layout)
       })
       .collect::<GpuResult<Vec<_>>>()?;
@@ -3978,7 +4000,7 @@ impl ForwardMeshRenderResourceArchetype {
         pipeline_layout,
         |h, d| unsafe { d.destroy_pipeline_layout(h, None) },
       ))
-      .map_err(|_| crate::gpu_err!("device error"))?;
+      .map_err(|_| crate::gpu_err_device!())?;
 
     // --------------------------- 4. Specialization Infos --------------------------------------
     let mut specialization_constants = [Vec::new(), Vec::new()];
@@ -4065,7 +4087,7 @@ impl ForwardMeshRenderResourceArchetype {
         .push(FunctionalDeviceResource::new(command_pool, |h, d| unsafe {
           d.destroy_command_pool(h, None)
         }))
-        .map_err(|_| crate::gpu_err!("device error"))?;
+        .map_err(|_| crate::gpu_err_device!())?;
 
       let command_buffer = {
         let alloc_info = vk::CommandBufferAllocateInfo::default()
@@ -4161,6 +4183,7 @@ impl DiscardableResource for ForwardMeshRenderResourceArchetype {
 }
 
 /// Reusable helper function to perform the explicit staging buffer upload pattern.
+#[named]
 pub(super) fn create_buffer_with_staging<T: Copy>(
   device: &vulkan::device::LogicalDevice,
   allocator: &vk_mem::Allocator,
@@ -4178,7 +4201,7 @@ pub(super) fn create_buffer_with_staging<T: Copy>(
   // 1. Allocate from staging arena
   let (staging_offset, staging_ptr) = staging_arena
     .allocate(buffer_size as usize, core::mem::align_of::<T>())
-    .ok_or(crate::gpu_err!("device error"))?;
+    .ok_or(crate::gpu_err_device!())?;
 
   // 2. Create device buffer (GPU-local).
   let (device_buffer, device_allocation) = {
@@ -4274,6 +4297,7 @@ impl ForwardMesh2RenderResourceArchetype {
   impl_pipeline_map_methods!(outline_pipeline_map);
 
   /// TODO: Document this item
+  #[named]
   pub fn create_descriptor_set_from_layout_at_index(
     &self,
     device: &vulkan::device::LogicalDevice,
@@ -4299,6 +4323,7 @@ impl ForwardMesh2RenderResourceArchetype {
   }
 
   /// TODO: Document this item
+  #[named]
   pub unsafe fn new(
     device: &vulkan::device::LogicalDevice,
     vertex_shader: &Shader,

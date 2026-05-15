@@ -144,6 +144,7 @@ fn test_render_particles_windowless_impl(use_particle2: bool) {
       device.start_frame()?;
       let acquire_result = device.acquire_next_image(presentation_engine)?;
       let cmd_buffer_handle = device.get_command_buffer()?;
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
       let mut render_scene = RenderScene::new(
         (
@@ -215,8 +216,8 @@ fn test_render_particles_windowless_impl(use_particle2: bool) {
       )?;
 
       let scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
-      device.upload_particle_systems(cmd_buffer_handle, &mut render_scene.particle_calls)?;
-      device.upload_particle2_systems(cmd_buffer_handle, &mut render_scene.particle2_calls)?;
+      device.upload_particle_systems(cmd_buffer_handle, presentation_engine, &mut render_scene.particle_calls)?;
+      device.upload_particle2_systems(cmd_buffer_handle, presentation_engine, &mut render_scene.particle2_calls)?;
       device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
       let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
       let extent = device.get_presentation_engine_extent(presentation_engine)?;
@@ -339,6 +340,7 @@ fn test_render_all_archetypes_windowless() {
       device.start_frame()?;
       let acquire_result = device.acquire_next_image(presentation_engine)?;
       let cmd_buffer_handle = device.get_command_buffer()?;
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
       let cursor_res = device.get_cursor_resources(presentation_engine)?;
       let billboard_res = device.get_billboard_resources(presentation_engine)?;
@@ -380,7 +382,7 @@ fn test_render_all_archetypes_windowless() {
       ));
 
       let gizmo_resources = device.get_gizmo_resources(presentation_engine)?;
-      let gizmo_idx = device.update_gizmo_instance(sun_e, Mat4x4f32::identity())?;
+      let gizmo_idx = device.update_gizmo_instance(sun_e, Mat4x4f32::identity(), presentation_engine)?;
       render_scene.gizmo_calls.push(gpu::frame::GizmoDrawCall::from_values(
         gizmo_resources.pipeline,
         2.0,
@@ -408,7 +410,7 @@ fn test_render_all_archetypes_windowless() {
       {
         let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
 
-        device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64), 0.6)?;
+        device.update_sun(cmd_buffer_handle, presentation_engine, sun_e, (64, 64, 64), 0.6)?;
 
         device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
         let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
@@ -491,6 +493,7 @@ fn test_render_empty_scene_graceful() {
       device.start_frame()?;
       let acquire_result = device.acquire_next_image(presentation_engine)?;
       let cmd_buffer_handle = device.get_command_buffer()?;
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
       let render_scene = RenderScene::new(
         (
@@ -596,6 +599,7 @@ fn test_layout_transition_on_failed_update() {
       device.start_frame()?;
       let acquire_result = device.acquire_next_image(presentation_engine)?;
       let cmd_buffer_handle = device.get_command_buffer()?;
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
       let sun_comp = SunComponent {
         resolution: (64, 64, 64),
@@ -607,7 +611,7 @@ fn test_layout_transition_on_failed_update() {
 
         // This will fail because archetypes aren't initialized, but we catch/ignore it
         // just like the real `simulation_api.rs` does now.
-        let _ = device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64), 0.6);
+        let _ = device.update_sun(cmd_buffer_handle, presentation_engine, sun_e, (64, 64, 64), 0.6);
 
         // Even if update_sun failed, begin_render_pass MUST succeed to transition the image!
         // But wait! begin_render_pass relies on rendering archetypes? NO, it relies on RenderPasses cache!
@@ -667,6 +671,7 @@ fn test_render_text_system_font_async() {
         device.start_frame()?;
         let acquire_result = device.acquire_next_image(presentation_engine)?;
         let cmd_buffer_handle = device.get_command_buffer()?;
+        device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
         // System font test
         let atlas =
@@ -741,9 +746,7 @@ fn test_render_text_system_font_async() {
             1.0,
           ];
 
-          device.render_text(
-            cmd_buffer_handle,
-            "AetherVk Async Test",
+          device.render_text(cmd_buffer_handle, presentation_engine, presentation_engine, "AetherVk Async Test",
             [10.0, 50.0], // Pixel space
             view_proj,
             (font_hash, font_id),
@@ -839,6 +842,7 @@ fn test_render_text_asset_font_async() {
         device.start_frame()?;
         let acquire_result = device.acquire_next_image(presentation_engine)?;
         let cmd_buffer_handle = device.get_command_buffer()?;
+        device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
         // Use font under asset folder
         let asset_font_path = format!(
@@ -916,9 +920,7 @@ fn test_render_text_asset_font_async() {
             1.0,
           ];
 
-          device.render_text(
-            cmd_buffer_handle,
-            "AetherVk Async Test",
+          device.render_text(cmd_buffer_handle, presentation_engine, presentation_engine, "AetherVk Async Test",
             [10.0, 10.0], // Pixel space
             view_proj,
             (font_hash, font_id),
@@ -1021,7 +1023,7 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
     "{}/Comet.glb",
     crate::gpu::ASSET_DIR.read().as_ref().unwrap()
   );
-  let loaded_mesh = crate::simulation::comet::load_comet_from_gltf(&asset_path, false)
+  let loaded_mesh = crate::simulation::comet::load_comet_from_gltf(&asset_path, false, None)
     .expect("Failed to load mesh");
   let mesh_arc = std::sync::Arc::from(loaded_mesh);
 
@@ -1066,7 +1068,11 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
         emissive_intensity: 1.0,
         emissive_color: [0.5, 0.5, 0.5],
         use_new_path: false,
-        paint_display_mode: 0, // Emissive gray
+        paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0, // Emissive gray
       },
     )
     .unwrap();
@@ -1117,6 +1123,10 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
         emissive_color: [0.0; 3],
         use_new_path: false,
         paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
       },
     )
     .unwrap();
@@ -1194,6 +1204,7 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
           let acquire_result = device.acquire_next_image(presentation_engine)?;
           println!("Thread: acquired. getting command buffer...");
           let cmd_buffer_handle = device.get_command_buffer()?;
+          device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
           let _scoped_cmd =
             gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
 
@@ -1231,6 +1242,10 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
                 emissive_color: [0.0; 3],
                 use_new_path: false,
                 paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
               },
               presentation_engine,
               "",
@@ -1250,6 +1265,7 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
             [0.5, 0.5, 0.5],
             false,
             0,
+            [0.0, 0.0, 0.0], 1.0, [0.0, 0.0, 0.0], 1.0
           ));
 
           let config = scene_render
@@ -1278,8 +1294,8 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
           );
 
           {
-            device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64), 0.6)?;
-            device.upload_particle_systems(cmd_buffer_handle, &mut render_scene.particle_calls)?;
+            device.update_sun(cmd_buffer_handle, presentation_engine, sun_e, (64, 64, 64), 0.6)?;
+            device.upload_particle_systems(cmd_buffer_handle, presentation_engine, &mut render_scene.particle_calls)?;
             device
               .upload_particle2_systems(cmd_buffer_handle, &mut render_scene.particle2_calls)?;
             device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
@@ -1439,6 +1455,10 @@ fn depth_test_setup_scene() -> DepthTestSetupScene {
     emissive_color: [1.0, 1.0, 1.0],
     use_new_path: false,
     paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
     asset_path: "test".to_string(),
   };
   let transform = TransformComponent {
@@ -1478,6 +1498,7 @@ fn test_depth_stencil_separation() {
       device.start_frame().unwrap();
       let acquire_result = device.acquire_next_image(test_data.presentation_engine).unwrap();
       let cmd_buffer_handle = device.get_command_buffer().unwrap();
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, test_data.presentation_engine)?;
 
       let mut render_scene = RenderScene::new(
         (
@@ -1645,6 +1666,7 @@ fn test_depth_stencil_separation() {
       device.start_frame()?;
       let acquire_result = device.acquire_next_image(test_data.presentation_engine)?;
       let cmd_buffer_handle = device.get_command_buffer()?;
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, test_data.presentation_engine)?;
 
       let mut render_scene = RenderScene::new(
         (
@@ -1781,6 +1803,7 @@ fn test_depth_color_image() {
       device.start_frame().unwrap();
       let acquire_result = device.acquire_next_image(test_data.presentation_engine).unwrap();
       let cmd_buffer_handle = device.get_command_buffer().unwrap();
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, test_data.presentation_engine)?;
 
       let mut render_scene = RenderScene::new(
         (
@@ -1936,7 +1959,7 @@ fn test_sun_rendering() {
     "{}/Comet.glb",
     crate::gpu::ASSET_DIR.read().as_ref().unwrap()
   );
-  let mesh = Arc::new(crate::simulation::comet::load_comet_from_gltf(&asset_path, false).unwrap());
+  let mesh = Arc::new(crate::simulation::comet::load_comet_from_gltf(&asset_path, false, None).unwrap());
 
   // Radius of sun volume is hardcoded to 0.6 in update_sun. So we scale the mesh to 0.5.
   let transform = TransformComponent {
@@ -1950,7 +1973,11 @@ fn test_sun_rendering() {
     emissive_intensity: 5.0,
     emissive_color: [1.0, 0.5, 0.1],
     use_new_path: false,
-    paint_display_mode: 0, // Orange-ish emissive core
+    paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0, // Orange-ish emissive core
     asset_path: asset_path.clone(),
   };
 
@@ -1978,6 +2005,7 @@ fn test_sun_rendering() {
         device.start_frame()?;
         let acquire_result = device.acquire_next_image(presentation_engine)?;
         let cmd_buffer_handle = device.get_command_buffer()?;
+        device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
         let mut render_scene = RenderScene::new(
           (
@@ -2007,7 +2035,7 @@ fn test_sun_rendering() {
           gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(render_task_id))?;
 
         // 1. Update Sun (Generates 3D texture)
-        device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64), 0.6)?;
+        device.update_sun(cmd_buffer_handle, presentation_engine, sun_e, (64, 64, 64), 0.6)?;
 
         // 2. Download the Sun 3D texture
         let actual_device =
@@ -2198,6 +2226,7 @@ fn test_sun_rendering_volume_only() {
       device.start_frame()?;
       let acquire_result = device.acquire_next_image(presentation_engine)?;
       let cmd_buffer_handle = device.get_command_buffer()?;
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
       let mut render_scene = RenderScene::new(
         (
@@ -2227,7 +2256,7 @@ fn test_sun_rendering_volume_only() {
         gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(render_task_id))?;
 
       // 1. Update Sun (Generates 3D texture)
-      device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64), 0.8)?;
+      device.update_sun(cmd_buffer_handle, presentation_engine, sun_e, (64, 64, 64), 0.8)?;
 
       // 2. Download the Sun 3D texture
       let actual_device =
@@ -2365,6 +2394,7 @@ fn test_render_particles_stress_impl(use_particle2: bool) {
       device.start_frame()?;
       let acquire_result = device.acquire_next_image(presentation_engine)?;
       let cmd_buffer_handle = device.get_command_buffer()?;
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
       let mut render_scene = RenderScene::new(
         (
@@ -2456,8 +2486,8 @@ fn test_render_particles_stress_impl(use_particle2: bool) {
       )?;
 
       let scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
-      device.upload_particle_systems(cmd_buffer_handle, &mut render_scene.particle_calls)?;
-      device.upload_particle2_systems(cmd_buffer_handle, &mut render_scene.particle2_calls)?;
+      device.upload_particle_systems(cmd_buffer_handle, presentation_engine, &mut render_scene.particle_calls)?;
+      device.upload_particle2_systems(cmd_buffer_handle, presentation_engine, &mut render_scene.particle2_calls)?;
       device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
       let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
       let extent = device.get_presentation_engine_extent(presentation_engine)?;
@@ -2570,6 +2600,10 @@ fn test_outline_rendering_windowless() {
     emissive_color: [1.0; 3],
     use_new_path: false,
     paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
   };
 
   scene.add_component(mesh_e, transform.clone()).unwrap();
@@ -2583,6 +2617,7 @@ fn test_outline_rendering_windowless() {
       let acquire_result = device.acquire_next_image(presentation_engine)?;
       let task_id = device.create_task();
       let cmd_buffer_handle = device.get_command_buffer()?;
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
       let scoped_cmd =
         gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id)).unwrap();
 
@@ -2740,6 +2775,10 @@ fn test_outline_toggled_after_upload() {
     emissive_color: [1.0; 3],
     use_new_path: false,
     paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
   };
 
   scene.add_component(mesh_e, transform.clone()).unwrap();
@@ -2753,6 +2792,7 @@ fn test_outline_toggled_after_upload() {
         device.start_frame()?;
         let acquire_result = device.acquire_next_image(presentation_engine)?;
         let cmd_buffer_handle = device.get_command_buffer()?;
+        device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
         let scoped_cmd =
           gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id)).unwrap();
 
@@ -2830,6 +2870,7 @@ fn test_outline_toggled_after_upload() {
         device.start_frame()?;
         let acquire_result = device.acquire_next_image(presentation_engine)?;
         let cmd_buffer_handle = device.get_command_buffer()?;
+        device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
         let scoped_cmd =
           gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id)).unwrap();
 
@@ -2947,6 +2988,7 @@ fn test_render_concurrent_resize() {
           ptr1: core::ptr::null_mut(),
         },
         ty: gpu::PresentationEngineType::Window,
+        buffer_count: 3,
       };
       let pe3 = device.create_presentation_engine(&params_win)?;
 
@@ -2976,6 +3018,10 @@ fn test_render_concurrent_resize() {
     emissive_color: [1.0, 1.0, 1.0],
     use_new_path: false,
     paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
     asset_path: "test".to_string(),
   };
   let transform = TransformComponent {
@@ -3008,6 +3054,7 @@ fn test_render_concurrent_resize() {
         };
         println!("Thread: acquired. getting command buffer...");
         let cmd_buffer_handle = device.get_command_buffer()?;
+        device.set_command_buffer_presentation_engine(cmd_buffer_handle, pe)?;
 
         let mut render_scene = RenderScene::new(
           (
@@ -3195,6 +3242,7 @@ fn test_physical_mesh2_variants() {
       device.start_frame()?;
       let acquire_result = device.acquire_next_image(presentation_engine)?;
       let cmd_buffer_handle = device.get_command_buffer()?;
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
       let mut render_scene = RenderScene::new(
         (
@@ -3214,7 +3262,7 @@ fn test_physical_mesh2_variants() {
         crate::gpu::ASSET_DIR.read().as_ref().unwrap()
       );
       let mesh_arc = std::sync::Arc::new(
-        crate::simulation::comet::load_comet_from_gltf(&asset_path, false).unwrap(),
+        crate::simulation::comet::load_comet_from_gltf(&asset_path, false, None).unwrap(),
       );
 
       // Common helper to add mesh to render scene
@@ -3236,6 +3284,10 @@ fn test_physical_mesh2_variants() {
           emissive_color: color,
           use_new_path: false,
           paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
         };
 
         let t = TransformComponent {
@@ -3265,6 +3317,7 @@ fn test_physical_mesh2_variants() {
           color,
           true,
           0,
+          [0.0, 0.0, 0.0], 1.0, [0.0, 0.0, 0.0], 1.0
         );
         render_scene.draw_calls.push(dc);
 
@@ -3434,7 +3487,7 @@ fn test_painting_mode_write_and_verify() {
     crate::gpu::ASSET_DIR.read().as_ref().unwrap()
   );
   let mesh_arc = std::sync::Arc::new(
-    crate::simulation::comet::load_comet_from_gltf(&asset_path, false).unwrap(),
+    crate::simulation::comet::load_comet_from_gltf(&asset_path, false, None).unwrap(),
   );
 
   let mut render_scene = RenderScene::new(
@@ -3456,6 +3509,7 @@ fn test_painting_mode_write_and_verify() {
       device.start_frame()?;
       let acquire_result = device.acquire_next_image(presentation_engine)?;
       let cmd_buffer_handle = device.get_command_buffer()?;
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
       let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
 
@@ -3465,7 +3519,11 @@ fn test_painting_mode_write_and_verify() {
         emissive_intensity: 1.0,
         emissive_color: [1.0, 1.0, 1.0],
         use_new_path: true,
-        paint_display_mode: 1, // Color mode
+        paint_display_mode: 1,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0, // Color mode
       };
 
       let asset_hash = mesh_comp.mesh.id;
@@ -3486,6 +3544,7 @@ fn test_painting_mode_write_and_verify() {
         [1.0, 1.0, 1.0],
         true,
         1,
+        [0.0, 0.0, 0.0], 1.0, [0.0, 0.0, 0.0], 1.0
       );
       render_scene.draw_calls.push(dc);
 
@@ -3563,6 +3622,7 @@ fn test_painting_mode_write_and_verify() {
       let task_id_after = device.create_task();
       let acquire_result_after = device.acquire_next_image(presentation_engine)?;
       let cmd_buffer_handle_after = device.get_command_buffer()?;
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle_after, presentation_engine)?;
 
       {
         let _scoped_cmd =
@@ -3782,6 +3842,10 @@ fn test_render_multiple_soi_windowless() {
         emissive_color: [1.0, 0.0, 0.0], // Red
         use_new_path: false,
         paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
         asset_path: "test".to_string(),
       },
     )
@@ -3809,6 +3873,10 @@ fn test_render_multiple_soi_windowless() {
         emissive_color: [0.0, 0.0, 1.0], // Blue
         use_new_path: false,
         paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
         asset_path: "test".to_string(),
       },
     )
@@ -3836,6 +3904,10 @@ fn test_render_multiple_soi_windowless() {
         emissive_color: [0.0, 1.0, 0.0], // Green
         use_new_path: false,
         paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
         asset_path: "test".to_string(),
       },
     )
@@ -3847,6 +3919,7 @@ fn test_render_multiple_soi_windowless() {
       device.start_frame()?;
       let acquire_result = device.acquire_next_image(presentation_engine)?;
       let cmd_buffer_handle = device.get_command_buffer()?;
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
       // We place the camera such that we can see both SOIs.
       // Macro space: obj_a is at (100, 0, 0), obj_b is at (-100, 0, 0).
@@ -3893,6 +3966,7 @@ fn test_render_multiple_soi_windowless() {
         pm_a.emissive_color,
         true,
         0,
+        [0.0, 0.0, 0.0], 1.0, [0.0, 0.0, 0.0], 1.0
       ));
 
       // Object B: parent is micro_frame_b (pos -2, scale 1.0)
@@ -3916,6 +3990,7 @@ fn test_render_multiple_soi_windowless() {
         pm_b.emissive_color,
         true,
         0,
+        [0.0, 0.0, 0.0], 1.0, [0.0, 0.0, 0.0], 1.0
       ));
 
       // Object C: parent is micro_frame_c (pos 0, -5, scale 0.01)
@@ -3940,6 +4015,7 @@ fn test_render_multiple_soi_windowless() {
         pm_c.emissive_color,
         true,
         0,
+        [0.0, 0.0, 0.0], 1.0, [0.0, 0.0, 0.0], 1.0
       ));
 
       device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
@@ -4254,6 +4330,7 @@ fn test_render_weather_ui() {
       device.start_frame().unwrap();
       let acquire_result = device.acquire_next_image(presentation_engine).unwrap();
       let cmd_buffer_handle = device.get_command_buffer().unwrap();
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
       {
         let _scoped_cmd =
@@ -4369,9 +4446,7 @@ fn test_render_weather_ui() {
         // "San Francisco, CA"
         // Top-left is 120, 130
         device
-          .render_text(
-            cmd_buffer_handle,
-            "San Francisco, CA",
+          .render_text(cmd_buffer_handle, presentation_engine, "San Francisco, CA",
             [120.0, 130.0],
             view_proj,
             (font_hash, font_id),
@@ -4382,9 +4457,7 @@ fn test_render_weather_ui() {
 
         // "21 C"
         device
-          .render_text(
-            cmd_buffer_handle,
-            "21 C",
+          .render_text(cmd_buffer_handle, presentation_engine, "21 C",
             [360.0, 210.0],
             view_proj,
             (font_hash, font_id),
@@ -4395,9 +4468,7 @@ fn test_render_weather_ui() {
 
         // "Partly Cloudy"
         device
-          .render_text(
-            cmd_buffer_handle,
-            "Partly Cloudy",
+          .render_text(cmd_buffer_handle, presentation_engine, "Partly Cloudy",
             [360.0, 255.0],
             view_proj,
             (font_hash, font_id),
@@ -4523,7 +4594,7 @@ fn test_render_bvhwire2_windowless() {
     "{}/Comet.glb",
     crate::gpu::ASSET_DIR.read().as_ref().unwrap()
   );
-  let mut mesh = crate::simulation::comet::load_comet_from_gltf(&asset_path, false).unwrap();
+  let mut mesh = crate::simulation::comet::load_comet_from_gltf(&asset_path, false, None).unwrap();
 
   // Add a dummy BVH to the mesh to ensure something is drawn
   mesh.bvh = Some(LinearBVH::<f32> {
@@ -4567,6 +4638,10 @@ fn test_render_bvhwire2_windowless() {
         emissive_color: [0.0; 3],
         use_new_path: true,
         paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
       },
     )
     .unwrap();
@@ -4605,6 +4680,7 @@ fn test_render_bvhwire2_windowless() {
       device.start_frame()?;
       let acquire_result = device.acquire_next_image(presentation_engine)?;
       let cmd_buffer_handle = device.get_command_buffer()?;
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
       let mut extracted = scene.convert_scene(camera_entity, false, None, [width, height])?;
 
@@ -4741,6 +4817,7 @@ fn test_render_uniform_background() {
         device.start_frame()?;
         let acquire_result = device.acquire_next_image(presentation_engine)?;
         let cmd_buffer_handle = device.get_command_buffer()?;
+        device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
         let mut render_scene = RenderScene::new(
           (
@@ -4885,6 +4962,7 @@ fn test_render_text2_basic() {
         device.start_frame()?;
         let acquire_result = device.acquire_next_image(presentation_engine)?;
         let cmd_buffer_handle = device.get_command_buffer()?;
+        device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
         let atlas = alloc::sync::Arc::new(
           crate::scene::text::FontAtlas::from_path(aethervk_oshal_rlib::os::FONT_PATH, 32.0)
@@ -5026,6 +5104,7 @@ fn test_render_text2_styled() {
         device.start_frame()?;
         let acquire_result = device.acquire_next_image(presentation_engine)?;
         let cmd_buffer_handle = device.get_command_buffer()?;
+        device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
         let atlas = Arc::new(
           FontAtlas::from_path(aethervk_oshal_rlib::os::FONT_PATH, 32.0)
@@ -5177,6 +5256,7 @@ fn test_text2_descriptor_allocation() {
       let task_id = device.create_task();
       device.start_frame()?;
       let cmd_buffer_handle = device.get_command_buffer()?;
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, _presentation_engine.unwrap())?;
 
       let atlas = alloc::sync::Arc::new(
         crate::scene::text::FontAtlas::from_path(aethervk_oshal_rlib::os::FONT_PATH, 32.0).unwrap(),
@@ -5239,6 +5319,7 @@ fn test_render_text2_street_art() {
         device.start_frame()?;
         let acquire_result = device.acquire_next_image(presentation_engine)?;
         let cmd_buffer_handle = device.get_command_buffer()?;
+        device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
         let sys_atlas = Arc::new(
           FontAtlas::from_path(aethervk_oshal_rlib::os::FONT_PATH, 48.0)

@@ -115,7 +115,7 @@ impl AlmanacPackedData {
         let r = Mat3f32::from_nalgebra(dcm.rot_mat);
 
         let angular_velocity_rad_s = if let Some(rot_mat_dt_anise) = dcm.rot_mat_dt {
-          // Note: This derivative is computed by Anise with respect to TDB (Barycentric Dynamical Time) seconds. 
+          // Note: This derivative is computed by Anise with respect to TDB (Barycentric Dynamical Time) seconds.
           // For our macro-scale rigid-body/particle kinematics, 1 TDB second maps 1:1 to 1 standard SI simulation second.
           // Map Anise's time derivative to your Mat3f32
           let r_dt = Mat3f32::from_nalgebra(rot_mat_dt_anise);

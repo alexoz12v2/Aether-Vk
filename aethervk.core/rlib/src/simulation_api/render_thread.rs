@@ -2,7 +2,8 @@
 
 use crate::gpu::{FrameCancelGuard, ScopedRenderPass};
 use crate::simulation_api::structs::{
-  CustomRenderCallback, RenderCommand, RenderFeedback, RenderTaskStatus, RenderThreadContext,
+  CustomRenderCallback, RenderCommand, RenderFeedback, RenderFrame, RenderTaskStatus,
+  RenderThreadContext,
 };
 use crate::{
   gpu,
@@ -92,75 +93,16 @@ fn process_command(
   first_render_map: &mut hashbrown::HashMap<PresentationEngineHandle, bool>,
 ) -> GpuResult<()> {
   let _1ms = core::time::Duration::from_millis(1);
-  let max_attempts = 10;
   match cmd {
     // this is processed in render_thread function
     RenderCommand::Shutdown => Ok(()),
-    RenderCommand::RenderFrame(render_frame) => {
-      // The FFI Caller thread, before launching this command, should have already
-      // updated the camera's projection matrix.
-      let task_id_feedback = alloc::sync::Arc::clone(&render_frame.task_id);
-      let extent_res =
-        render_device.get_presentation_engine_extent(render_frame.presentation_engine_handle);
-      let extent = match extent_res {
-        Ok(e) => e,
-        Err(err) => {
-          task_id_feedback.store(u64::MAX, core::sync::atomic::Ordering::Release);
-          return Err(err);
-        }
-      };
-
-      let extracted_scene_res = render_frame.extract_scene(extent, Some(&ctx.thread_pool));
-      let extracted_scene = match extracted_scene_res {
-        Ok(s) => s,
-        Err(err) => {
-          task_id_feedback.store(u64::MAX, core::sync::atomic::Ordering::Release);
-          return Err(err);
-        }
-      };
-
-      let task_id = render_device.create_task();
-      let is_first_render =
-        if first_render_map.contains_key(&render_frame.presentation_engine_handle) {
-          *unsafe {
-            first_render_map.get(&render_frame.presentation_engine_handle).unwrap_unchecked()
-          }
-        } else {
-          let _ = first_render_map.insert(render_frame.presentation_engine_handle, true);
-          true
-        };
-      // `render_device.success_task` will be called by thread pool when timeline advances
-      let time_readings = render_frame.scene.read().time_state.read().time_info.read().current();
-      let debug_name = render_frame.scene.read().debug_name.clone();
-
-      let res = do_render_scene_async(
-        render_device,
-        extracted_scene,
-        render_frame.presentation_engine_handle,
-        task_id,
-        render_frame.custom_render_callback,
-        is_first_render,
-        time_readings,
-        &debug_name,
-      );
-
-      match res {
-        Ok(did_render) => {
-          if did_render && is_first_render && render_frame.custom_render_callback.is_some() {
-            *unsafe {
-              first_render_map.get_mut(&render_frame.presentation_engine_handle).unwrap_unchecked()
-            } = false;
-          }
-          task_id_feedback.store(task_id, core::sync::atomic::Ordering::Release);
-          Ok(())
-        }
-        Err(err) => {
-          oshal::log!("Render thread error: {:?}", err);
-          render_device.fail_task(task_id, err.clone());
-          task_id_feedback.store(task_id, core::sync::atomic::Ordering::Release);
-          Err(err)
+    RenderCommand::RenderFrames(render_frames) => {
+      for render_frame in render_frames {
+        if let Err(e) = process_render_frame(render_device, ctx, first_render_map, render_frame) {
+          oshal::log!("Render Frame error: {}", e);
         }
       }
+      Ok(())
     }
     RenderCommand::Resize(resize_cmd) => render_device.resize_presentation_engine(
       resize_cmd.presentation_engine_handle,
@@ -169,19 +111,75 @@ fn process_command(
     ),
     // TODO: maybe async? No, add it as a resource upload in scene extraction
     RenderCommand::GenerateSky => render_device.generate_sky(),
-    RenderCommand::GetTaskStatus { task_id, output } => {
-      let res = render_device.is_task_completed(task_id);
-      let status = match res {
-        Ok(true) => RenderTaskStatus::Completed,
-        Ok(false) => RenderTaskStatus::Pending,
-        Err(e) => {
-          oshal::log!("is_task_completed err: {:?}", e);
-          RenderTaskStatus::Error(e)
-        }
-      };
-      unsafe { output.write_value(status) };
+  }
+}
 
+fn process_render_frame(
+  render_device: &dyn RenderDevice,
+  ctx: &RenderThreadContext,
+  first_render_map: &mut hashbrown::HashMap<PresentationEngineHandle, bool>,
+  render_frame: RenderFrame,
+) -> GpuResult<()> {
+  let max_attempts = 10;
+  // The FFI Caller thread, before launching this command, should have already
+  // updated the camera's projection matrix.
+  let task_id_feedback = alloc::sync::Arc::clone(&render_frame.task_id);
+  let extent_res =
+    render_device.get_presentation_engine_extent(render_frame.presentation_engine_handle);
+  let extent = match extent_res {
+    Ok(e) => e,
+    Err(err) => {
+      task_id_feedback.store(u64::MAX, core::sync::atomic::Ordering::Release);
+      return Err(err);
+    }
+  };
+
+  let extracted_scene_res = render_frame.extract_scene(extent, Some(&ctx.thread_pool));
+  let extracted_scene = match extracted_scene_res {
+    Ok(s) => s,
+    Err(err) => {
+      task_id_feedback.store(u64::MAX, core::sync::atomic::Ordering::Release);
+      return Err(err);
+    }
+  };
+
+  let task_id = render_device.create_task();
+  let is_first_render = if first_render_map.contains_key(&render_frame.presentation_engine_handle) {
+    *unsafe { first_render_map.get(&render_frame.presentation_engine_handle).unwrap_unchecked() }
+  } else {
+    let _ = first_render_map.insert(render_frame.presentation_engine_handle, true);
+    true
+  };
+  // `render_device.success_task` will be called by thread pool when timeline advances
+  let time_readings = render_frame.scene.read().time_state.read().time_info.read().current();
+  let debug_name = render_frame.scene.read().debug_name.clone();
+
+  let res = do_render_scene_async(
+    render_device,
+    extracted_scene,
+    render_frame.presentation_engine_handle,
+    task_id,
+    render_frame.custom_render_callback,
+    is_first_render,
+    time_readings,
+    &debug_name,
+  );
+
+  match res {
+    Ok(did_render) => {
+      if did_render && is_first_render && render_frame.custom_render_callback.is_some() {
+        *unsafe {
+          first_render_map.get_mut(&render_frame.presentation_engine_handle).unwrap_unchecked()
+        } = false;
+      }
+      task_id_feedback.store(task_id, core::sync::atomic::Ordering::Release);
       Ok(())
+    }
+    Err(err) => {
+      oshal::log!("Render thread error: {:?}", err);
+      render_device.fail_task(task_id, err.clone());
+      task_id_feedback.store(task_id, core::sync::atomic::Ordering::Release);
+      Err(err)
     }
   }
 }
@@ -213,6 +211,7 @@ fn do_render_scene_async(
     FrameCancelGuard::new(render_device, presentation_engine_handle, acquire_result);
 
   let cmd_buffer = render_device.get_command_buffer()?;
+  render_device.set_command_buffer_presentation_engine(cmd_buffer, presentation_engine_handle)?;
   let cmd_scope = gpu::ScopedCommandBuffer::new(render_device, cmd_buffer, Some(task_id))?;
 
   let mut render_scene = extracted_scene.build_render_scene(
@@ -227,14 +226,23 @@ fn do_render_scene_async(
     // TODO move to kernels
     render_device.update_sun(
       cmd_buffer,
+      presentation_engine_handle,
       sun_call.entity,
       (128, 128, 128),
       sun_call.radius,
     )?;
   }
-  
-  render_device.upload_particle_systems(cmd_buffer, &mut render_scene.particle_calls)?;
-  render_device.upload_particle2_systems(cmd_buffer, &mut render_scene.particle2_calls)?;
+
+  render_device.upload_particle_systems(
+    cmd_buffer,
+    presentation_engine_handle,
+    &mut render_scene.particle_calls,
+  )?;
+  render_device.upload_particle2_systems(
+    cmd_buffer,
+    presentation_engine_handle,
+    &mut render_scene.particle2_calls,
+  )?;
 
   if is_first_render && custom_render_callback.is_some() {
     let c = unsafe { custom_render_callback.as_ref().unwrap_unchecked() };
@@ -257,8 +265,8 @@ fn do_render_scene_async(
   gpu::frame::render_frame(
     render_device,
     cmd_buffer,
-    &render_scene,
     presentation_engine_handle,
+    &render_scene,
   )?;
 
   if custom_render_callback.is_some() {

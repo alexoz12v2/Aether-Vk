@@ -274,6 +274,15 @@ impl Matrix3 for Mat3f32 {
 }
 
 impl Mat3f32 {
+  pub fn component(&self, linear_index: usize) -> Option<f32> {
+    if linear_index < 9 {
+      let ptr = self as *const Self as *const f32;
+      unsafe { ptr.add(linear_index).as_ref().copied() }
+    } else {
+      None
+    }
+  }
+
   /// TODO: Document this item
   pub fn identity() -> Self {
     Mat3f32::from_array(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])

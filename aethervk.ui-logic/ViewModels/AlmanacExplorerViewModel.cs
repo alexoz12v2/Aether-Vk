@@ -20,7 +20,7 @@ public partial class AlmanacExplorerViewModel : TabItemViewModel
   [ObservableProperty]
   private bool _isLoading;
 
-  public AlmanacExplorerViewModel(NativeRuntimeService runtimeService)
+  public AlmanacExplorerViewModel(NativeRuntimeService runtimeService, IUiThreadDispatcher uiThreadDispatcher)
     : base("Almanac Explorer")
   {
     _runtimeService = runtimeService;
@@ -28,8 +28,11 @@ public partial class AlmanacExplorerViewModel : TabItemViewModel
     {
       if (e.PropertyName == nameof(NativeRuntimeService.IsInitialized))
       {
-        IsInitialized = _runtimeService.IsInitialized;
-        RefreshLoadedFiles();
+        uiThreadDispatcher.Dispatch(() =>
+        {
+          IsInitialized = _runtimeService.IsInitialized;
+          RefreshLoadedFiles();
+        });
       }
     };
     IsInitialized = _runtimeService.IsInitialized;

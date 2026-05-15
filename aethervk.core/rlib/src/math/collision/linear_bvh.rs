@@ -46,6 +46,8 @@ where
   pub right_child_offset: u32,
   /// Number of primitives in this leaf. 0 if not a leaf.
   pub primitive_count: u32,
+  pub mass: f32,
+  pub center_of_mass: [f32; 3],
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +85,15 @@ where
     }
   }
 
+  pub fn to_multi_bvh<const N: usize>(
+    &self,
+  ) -> crate::math::collision::multi_bvh::MultiBvh<LinearBound<S>, usize, N>
+  where
+    LinearBound<S>: Clone,
+  {
+    crate::math::collision::multi_bvh::MultiBvh::build(self)
+  }
+
   fn flatten_node(
     node: &BVHNode<S>,
     nodes: &mut Vec<LinearBVHNode<S>>,
@@ -102,6 +113,8 @@ where
       left_child_or_primitive_offset: 0,
       right_child_offset: u32::MAX,
       primitive_count: 0,
+      mass: 0.0,
+      center_of_mass: [0.0; 3],
     });
 
     if node.left.is_none() && node.right.is_none() {
@@ -127,6 +140,58 @@ where
     }
 
     current_idx
+  }
+}
+
+impl<S> crate::math::collision::multi_bvh::BinaryBvh for LinearBVH<S>
+where
+  S: FloatLike + FloatOps + FloatBits + From<f32> + Clone,
+  LinearBound<S>: Clone,
+{
+  type Bound = LinearBound<S>;
+  type Primitive = usize;
+
+  fn root(&self) -> Option<u32> {
+    if self.nodes.is_empty() { None } else { Some(0) }
+  }
+
+  fn bound(&self, node_idx: u32) -> Self::Bound {
+    self.nodes[node_idx as usize].bound.clone()
+  }
+
+  fn is_leaf(&self, node_idx: u32) -> bool {
+    self.nodes[node_idx as usize].primitive_count > 0
+  }
+
+  fn children(&self, node_idx: u32) -> (Option<u32>, Option<u32>) {
+    if self.is_leaf(node_idx) {
+      return (None, None);
+    }
+    let n = &self.nodes[node_idx as usize];
+
+    let l = if n.left_child_or_primitive_offset != u32::MAX {
+      Some(n.left_child_or_primitive_offset)
+    } else {
+      None
+    };
+    let r = if n.right_child_offset != u32::MAX {
+      Some(n.right_child_offset)
+    } else {
+      None
+    };
+    (l, r)
+  }
+
+  fn extract_primitives(&self, node_idx: u32, out: &mut Vec<Self::Primitive>) -> u32 {
+    let n = &self.nodes[node_idx as usize];
+    if n.primitive_count > 0 {
+      let start = n.left_child_or_primitive_offset as usize;
+      let end = start + n.primitive_count as usize;
+      out.extend_from_slice(&self.primitives[start..end]);
+      n.primitive_count
+    } else {
+      0
+    }
   }
 }
 
@@ -456,18 +521,24 @@ mod tests {
       },
       nodes: vec![
         LinearBVHNode {
+        center_of_mass: [0.0, 0.0, 0.0],
+        mass: 0.0,
           bound: LinearBound::AABB(make_aabb(0.0, 0.0, 0.0, 10.0, 10.0, 10.0)),
           left_child_or_primitive_offset: 1,
           right_child_offset: 2,
           primitive_count: 0,
         },
         LinearBVHNode {
+        center_of_mass: [0.0, 0.0, 0.0],
+        mass: 0.0,
           bound: LinearBound::AABB(make_aabb(0.0, 0.0, 0.0, 6.0, 6.0, 6.0)),
           left_child_or_primitive_offset: 0,
           right_child_offset: u32::MAX,
           primitive_count: 1,
         },
         LinearBVHNode {
+        center_of_mass: [0.0, 0.0, 0.0],
+        mass: 0.0,
           bound: LinearBound::AABB(make_aabb(5.0, 5.0, 5.0, 10.0, 10.0, 10.0)),
           left_child_or_primitive_offset: 1,
           right_child_offset: u32::MAX,
@@ -496,6 +567,8 @@ mod tests {
         primitive_count: 1,
       },
       nodes: vec![LinearBVHNode {
+        center_of_mass: [0.0, 0.0, 0.0],
+        mass: 0.0,
         bound: LinearBound::OBB(make_obb(0.0, 0.0, 0.0, 5.0, 5.0, 5.0)),
         left_child_or_primitive_offset: 0,
         right_child_offset: u32::MAX,
@@ -511,6 +584,8 @@ mod tests {
         primitive_count: 1,
       },
       nodes: vec![LinearBVHNode {
+        center_of_mass: [0.0, 0.0, 0.0],
+        mass: 0.0,
         bound: LinearBound::AABB(make_aabb(3.0, 0.0, 0.0, 12.0, 5.0, 5.0)),
         left_child_or_primitive_offset: 0,
         right_child_offset: u32::MAX,
@@ -530,6 +605,8 @@ mod tests {
         primitive_count: 1,
       },
       nodes: vec![LinearBVHNode {
+        center_of_mass: [0.0, 0.0, 0.0],
+        mass: 0.0,
         bound: LinearBound::OBB(make_obb(12.0, 0.0, 0.0, 1.0, 1.0, 1.0)),
         left_child_or_primitive_offset: 0,
         right_child_offset: u32::MAX,

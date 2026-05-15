@@ -70,34 +70,35 @@ impl SimulationDelegate for ParticlesDelegate {
       .unwrap();
 
     let config = aethervk_core_rlib::scene::particles::ParticleEmitterComponent {
-        uv_distribution: aethervk_core_rlib::math::distribution::Distribution2D::new(
-          &[1.0, 1.0, 1.0, 1.0],
-          2,
-          2,
-        ),
-        delta: 1000,
-        max_particles: 50_000,
-        velocity_intensity: aethervk_core_rlib::scene::particles::GaussianParams {
-          mean: 1.0,
-          std_dev: 0.0,
-          min: 0.0,
-          max: 1.0,
-        },
-        emission_count: aethervk_core_rlib::scene::particles::GaussianParams {
-          mean: 1.0,
-          std_dev: 0.0,
-          min: 0.0,
-          max: 1.0,
-        },
-        particle_radius: 0.25,
-        density: 1.0,
-        lifetime: 1000000,
-        color: [1.0, 0.5, 0.25, 1.0],
-        beta: 0.0,
-        use_particle2: false,
-      };
+      uv_distribution: aethervk_core_rlib::math::distribution::Distribution2D::new(
+        &[1.0, 1.0, 1.0, 1.0],
+        2,
+        2,
+      ),
+      delta: 1000,
+      max_particles: 50_000,
+      velocity_intensity: aethervk_core_rlib::scene::particles::GaussianParams {
+        mean: 1.0,
+        std_dev: 0.0,
+        min: 0.0,
+        max: 1.0,
+      },
+      emission_count: aethervk_core_rlib::scene::particles::GaussianParams {
+        mean: 1.0,
+        std_dev: 0.0,
+        min: 0.0,
+        max: 1.0,
+      },
+      particle_radius: 0.25,
+      density: 1.0,
+      lifetime: 1000000,
+      color: [1.0, 0.5, 0.25, 1.0],
+      beta: 0.0,
+      use_particle2: false,
+    };
 
-    let mut sys = aethervk_core_rlib::scene::particles::ParticleSystemComponent::new(config.max_particles);
+    let mut sys =
+      aethervk_core_rlib::scene::particles::ParticleSystemComponent::new(config.max_particles);
 
     // Initialize 1M particles
     let mut rng = rand::thread_rng();

@@ -15,7 +15,9 @@ use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
 use aethervk_oshal_rlib::math::matrix::{Matrix4, MatrixVectorMul};
 use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
 use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
+use alloc::string::ToString;
 use alloc::vec::Vec;
+use function_name::named;
 
 // TODO extensive unit testing. (with valid scenes of course scene.validate)
 // TODO first step shouldn't be done in render thread? (cdylib and simulation_test)
@@ -28,6 +30,10 @@ pub struct PhysicalMeshSceneData {
   outline: Option<[f32; 4]>,
   use_new_path: bool,
   paint_display_mode: u32,
+  sphere_center: [f32; 3],
+  sphere_radius: f32,
+  grid_color: [f32; 3],
+  grid_density: f32,
 }
 
 impl PhysicalMeshSceneData {
@@ -39,6 +45,10 @@ impl PhysicalMeshSceneData {
     use_new_path: bool,
     paint_display_mode: u32,
   ) -> Self {
+    let sphere_center = mesh.sphere_center;
+    let sphere_radius = mesh.sphere_radius;
+    let grid_color = mesh.grid_color;
+    let grid_density = mesh.grid_density;
     Self {
       entity_id,
       mesh,
@@ -46,6 +56,10 @@ impl PhysicalMeshSceneData {
       outline,
       use_new_path,
       paint_display_mode,
+      sphere_center,
+      sphere_radius,
+      grid_color,
+      grid_density,
     }
   }
 }
@@ -178,6 +192,10 @@ impl RenderSceneExtraction {
         mesh_data.mesh.emissive_color,
         mesh_data.use_new_path,
         mesh_data.mesh.paint_display_mode,
+        mesh_data.mesh.sphere_center,
+        mesh_data.mesh.sphere_radius,
+        mesh_data.mesh.grid_color,
+        mesh_data.mesh.grid_density,
       );
       render_scene.draw_calls.push(dc);
     }
@@ -262,7 +280,7 @@ impl RenderSceneExtraction {
         Err(_) => device.create_gizmo_resources(cmd_buffer, presentation_engine_handle)?,
       };
       for (entity_id, mat, scale) in self.extracted_gizmos {
-        let gizmo_idx = device.update_gizmo_instance(entity_id, mat)?;
+        let gizmo_idx = device.update_gizmo_instance(entity_id, mat, presentation_engine_handle)?;
         render_scene.gizmo_calls.push(gpu::frame::GizmoDrawCall::from_values(
           gizmo_resources.pipeline,
           scale,
@@ -433,6 +451,7 @@ pub trait SceneConversionExt {
 }
 
 impl SceneConversionExt for crate::scene::Scene {
+  #[named]
   fn convert_scene(
     &self,
     camera_entity: EntityId,
@@ -486,9 +505,7 @@ impl SceneConversionExt for crate::scene::Scene {
     // Camera
     let cam_transform = self.global_transform(camera_entity).unwrap_or_default();
     let cam_comp = self.with_component(camera_entity, |c: &CameraComponent| *c).ok_or(
-      GpuError::InvalidArgument(
-        "[RenderDevice] convert_scene: Scene has no camera component in the specified entity",
-      ),
+      crate::gpu_invalid_arg!("[ Scene has no camera component in the specified entity"),
     )?;
     camera_data = CameraRenderData::new(&cam_transform, &cam_comp);
 

@@ -6,22 +6,15 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "../debug_utils.glsl"
+#include "../bvh_utils.glsl"
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
-layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
+
 
 // Particles data (AOSOA flattened)
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer ParticleData {
     float data[];
-};
-
-layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer PackedCollisions {
-    uint dispatch_x;
-    uint dispatch_y;
-    uint dispatch_z;
-    uint count;
-    uvec2 pairs[];
 };
 
 layout(buffer_reference, scalar, buffer_reference_align = 4) buffer OutputTOI {
@@ -37,7 +30,7 @@ layout(push_constant, scalar) uniform PushConstants {
 } pc;
 
 // We can use the specialization constant to precisely size the shared array
-shared uint shared_min_toi[128 / SUBGROUP_SIZE];
+shared uint shared_min_toi[128 / SG_SIZE];
 
 void main() {
     if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
@@ -50,38 +43,38 @@ void main() {
     float tc = pc.dt; // Default to max time
     
     if (global_id < pc.collisions.count) {
-        uvec2 pair = pc.collisions.pairs[global_id];
-        uint pA_id = pair.x;
-        uint pB_id = pair.y;
+        PackedPair pair = pc.collisions.pairs[global_id];
+        uint pA_id = pair.a.primitive_index;
+        uint pB_id = pair.b.primitive_index;
         
-        uint blockA = pA_id / SUBGROUP_SIZE;
-        uint locA = pA_id % SUBGROUP_SIZE;
-        uint baseA = blockA * (10 * SUBGROUP_SIZE) + locA;
+        uint blockA = pA_id / SG_SIZE;
+        uint locA = pA_id % SG_SIZE;
+        uint baseA = blockA * (10 * SG_SIZE) + locA;
         
-        uint blockB = pB_id / SUBGROUP_SIZE;
-        uint locB = pB_id % SUBGROUP_SIZE;
-        uint baseB = blockB * (10 * SUBGROUP_SIZE) + locB;
+        uint blockB = pB_id / SG_SIZE;
+        uint locB = pB_id % SG_SIZE;
+        uint baseB = blockB * (10 * SG_SIZE) + locB;
         
         vec3 posA = vec3(
-            pc.particles.data[baseA + 0 * SUBGROUP_SIZE],
-            pc.particles.data[baseA + 1 * SUBGROUP_SIZE],
-            pc.particles.data[baseA + 2 * SUBGROUP_SIZE]
+            pc.particles.data[baseA + 0 * SG_SIZE],
+            pc.particles.data[baseA + 1 * SG_SIZE],
+            pc.particles.data[baseA + 2 * SG_SIZE]
         );
         vec3 posB = vec3(
-            pc.particles.data[baseB + 0 * SUBGROUP_SIZE],
-            pc.particles.data[baseB + 1 * SUBGROUP_SIZE],
-            pc.particles.data[baseB + 2 * SUBGROUP_SIZE]
+            pc.particles.data[baseB + 0 * SG_SIZE],
+            pc.particles.data[baseB + 1 * SG_SIZE],
+            pc.particles.data[baseB + 2 * SG_SIZE]
         );
         
         vec3 vA = vec3(
-            pc.particles.data[baseA + 3 * SUBGROUP_SIZE],
-            pc.particles.data[baseA + 4 * SUBGROUP_SIZE],
-            pc.particles.data[baseA + 5 * SUBGROUP_SIZE]
+            pc.particles.data[baseA + 3 * SG_SIZE],
+            pc.particles.data[baseA + 4 * SG_SIZE],
+            pc.particles.data[baseA + 5 * SG_SIZE]
         );
         vec3 vB = vec3(
-            pc.particles.data[baseB + 3 * SUBGROUP_SIZE],
-            pc.particles.data[baseB + 4 * SUBGROUP_SIZE],
-            pc.particles.data[baseB + 5 * SUBGROUP_SIZE]
+            pc.particles.data[baseB + 3 * SG_SIZE],
+            pc.particles.data[baseB + 4 * SG_SIZE],
+            pc.particles.data[baseB + 5 * SG_SIZE]
         );
         
         // Compute continuous TOI for moving spheres
@@ -118,7 +111,7 @@ void main() {
     
     // Workgroup reduction
     if (local_id == 0) {
-        uint num_subgroups = gl_WorkGroupSize.x / SUBGROUP_SIZE;
+        uint num_subgroups = gl_WorkGroupSize.x / SG_SIZE;
         uint wg_min_uint = shared_min_toi[0];
         for (uint i = 1; i < num_subgroups; i++) {
             wg_min_uint = min(wg_min_uint, shared_min_toi[i]);

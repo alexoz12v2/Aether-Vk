@@ -17,20 +17,26 @@ pub fn resolve_lca_transform(
   let mut a_ancestors = alloc::vec![entity_a_frame];
   let mut curr = entity_a_frame;
   while let Some(&(parent, _)) = frames.get(&curr) {
-    if parent == curr || parent == 0 {
+    if parent == curr {
       break;
     }
     a_ancestors.push(parent);
+    if parent == 0 {
+      break;
+    }
     curr = parent;
   }
 
   let mut b_ancestors = alloc::vec![entity_b_frame];
   curr = entity_b_frame;
   while let Some(&(parent, _)) = frames.get(&curr) {
-    if parent == curr || parent == 0 {
+    if parent == curr {
       break;
     }
     b_ancestors.push(parent);
+    if parent == 0 {
+      break;
+    }
     curr = parent;
   }
 

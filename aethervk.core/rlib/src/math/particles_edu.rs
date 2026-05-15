@@ -201,6 +201,8 @@ pub fn build_particle_lbvh(particles: &[Particle], particle_radius: f32) -> Opti
 
   // Create a dummy node to initialize the array
   let dummy_node = LinearBVHNode {
+        center_of_mass: [0.0, 0.0, 0.0],
+        mass: 0.0,
     bound: LinearBound::AABB(AABB::new(Vec3f32::zero(), Vec3f32::zero())),
     left_child_or_primitive_offset: u32::MAX,
     right_child_offset: u32::MAX,

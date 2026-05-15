@@ -9,6 +9,7 @@ namespace AetherVk.Logic.ViewModels;
 public partial class TimelineViewModel : TabItemViewModel, IDisposable
 {
   private readonly NativeRuntimeService _runtimeService;
+  private readonly IUiThreadDispatcher _uiThreadDispatcher;
   private readonly Timer _timer;
   private bool _isDragging;
 
@@ -27,10 +28,11 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   [ObservableProperty]
   private double _maxTai = 100;
 
-  public TimelineViewModel(ulong sceneId, NativeRuntimeService runtimeService)
+  public TimelineViewModel(ulong sceneId, NativeRuntimeService runtimeService, IUiThreadDispatcher uiThreadDispatcher)
     : base("Timeline")
   {
     _runtimeService = runtimeService;
+    _uiThreadDispatcher = uiThreadDispatcher;
     CurrentSceneId = sceneId;
     _timer = new Timer(UpdateFromRuntime, null, 33, 33);
   }
@@ -40,21 +42,24 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
     if (!_runtimeService.IsInitialized)
       return;
 
-    if (MinTai == 0 && MaxTai == 100)
+    _uiThreadDispatcher.Dispatch(() =>
     {
-      if (_runtimeService.GetEpochLimits(CurrentSceneId, out double min, out double max))
+      if (MinTai == 0 && MaxTai == 100)
       {
-        MinTai = min;
-        MaxTai = max;
+        if (_runtimeService.GetEpochLimits(CurrentSceneId, out double min, out double max))
+        {
+          MinTai = min;
+          MaxTai = max;
+        }
       }
-    }
 
-    if (!_isDragging)
-    {
-      TimeTai = _runtimeService.GetSimulationTime(CurrentSceneId);
-    }
+      if (!_isDragging)
+      {
+        TimeTai = _runtimeService.GetSimulationTime(CurrentSceneId);
+      }
 
-    UtcTime = _runtimeService.GetSimulationTimeUtc(CurrentSceneId);
+      UtcTime = _runtimeService.GetSimulationTimeUtc(CurrentSceneId);
+    });
   }
 
   public void BeginDrag()

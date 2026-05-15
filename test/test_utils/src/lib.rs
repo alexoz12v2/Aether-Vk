@@ -1,5 +1,7 @@
 pub mod app;
 pub mod command;
+pub mod console;
+pub mod input_form;
 pub mod horizon_jpl;
 pub mod sim_app;
 pub mod simulation;
@@ -11,7 +13,11 @@ use aethervk_core_rlib::gpu::{
   OpaqueNativeHandleInfo, PresentationEngineHandle, RenderDevice, RenderDeviceHandle,
   RenderFrontend, RenderScene,
 };
-use aethervk_core_rlib::scene::{AddComponentError, BvhDebugComponent, CameraComponent, CursorComponent, EntityId, FollowingComponent, GridComponent, PhysicalMeshComponent, Scene, SelectedComponent, SkyComponent, SunComponent, TransformComponent};
+use aethervk_core_rlib::scene::{
+  AddComponentError, BvhDebugComponent, CameraComponent, CursorComponent, EntityId,
+  FollowingComponent, GridComponent, PhysicalMeshComponent, Scene, SelectedComponent, SkyComponent,
+  SunComponent, TransformComponent,
+};
 use aethervk_core_rlib::simulation::comet::Comet;
 use aethervk_core_rlib::simulation_api::SimulationContext;
 use aethervk_core_rlib::types::{EngineError, GpuResult};
@@ -64,10 +70,10 @@ pub unsafe fn setup_metal_layer(
   window: &Window,
   device: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>,
 ) -> Retained<objc2_quartz_core::CAMetalLayer> {
-  use objc2_app_kit::NSView;
-  use objc2_quartz_core::CAMetalLayer;
   use objc2::ClassType;
+  use objc2_app_kit::NSView;
   use objc2_foundation::NSObjectProtocol;
+  use objc2_quartz_core::CAMetalLayer;
   let raw_handle = window.window_handle().unwrap().as_raw();
   let view_ptr = match raw_handle {
     RawWindowHandle::AppKit(w) => w.ns_view.as_ptr(),
@@ -475,6 +481,10 @@ impl<'a> SceneMeshEntityBuilder<'a> {
         emissive_color: [0.0, 0.0, 0.0],
         use_new_path: false,
         paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: 1.0,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
       },
     ) {
       let mut error = self.error.borrow_mut();

@@ -299,7 +299,7 @@ impl EntryWrapper {
         let res = Self::new_internal(base_path_override_ref);
         *result_arc_clone.lock() = Some(res);
       })
-      .map_err(|_| GpuError::InvalidState("Couldn't start vulkan_loader thread"))?;
+      .map_err(|_| GpuError::InvalidState("Couldn't start vulkan_loader thread".to_string()))?;
 
     th.join();
     let mut guard = result_arc.lock();
@@ -720,6 +720,7 @@ impl RequiredFeatures<'_> {
   /// TODO: Document this item
   pub fn populate(&mut self) -> &mut Self {
     self.features.fill_mode_non_solid = vk::TRUE;
+    self.features.shader_int64 = vk::TRUE;
     self.buffer_device_address.buffer_device_address = vk::TRUE;
     self.vulkan_memory_model.vulkan_memory_model = vk::TRUE;
     self.vulkan_memory_model.vulkan_memory_model_device_scope = vk::TRUE;

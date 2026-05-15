@@ -354,23 +354,37 @@ public partial class Viewport3DViewModel
     }
   }
 
+  private bool _isProcessingFrame;
+
   private async Task ProcessFrameAsync()
   {
-    nuint bufferSize = (nuint)(Width * Height * 4);
-    IntPtr unmanagedBuffer = System.Runtime.InteropServices.Marshal.AllocHGlobal((int)bufferSize);
+    if (_isProcessingFrame) return;
+    _isProcessingFrame = true;
 
     try
     {
-      await _runtimeService.DownloadImageAsync(_lastRenderTaskId, unmanagedBuffer, bufferSize);
-      await _uiThreadDispatcher.DispatchAsync(() =>
+      await _runtimeService.PollTaskAsync(_lastRenderTaskId);
+
+      nuint bufferSize = (nuint)(Width * Height * 4);
+      IntPtr unmanagedBuffer = System.Runtime.InteropServices.Marshal.AllocHGlobal((int)bufferSize);
+
+      try
       {
-        Renderer?.UpdateFrame(unmanagedBuffer, bufferSize);
-        return Task.CompletedTask;
-      });
+        await _runtimeService.DownloadImageAsync(_lastRenderTaskId, unmanagedBuffer, bufferSize);
+        await _uiThreadDispatcher.DispatchAsync(() =>
+        {
+          Renderer?.UpdateFrame(unmanagedBuffer, bufferSize);
+          return Task.CompletedTask;
+        });
+      }
+      finally
+      {
+        System.Runtime.InteropServices.Marshal.FreeHGlobal(unmanagedBuffer);
+      }
     }
     finally
     {
-      System.Runtime.InteropServices.Marshal.FreeHGlobal(unmanagedBuffer);
+      _isProcessingFrame = false;
     }
   }
 
