@@ -14,7 +14,7 @@ use crate::{
 use ash::vk;
 use core::slice;
 use function_name::named;
-use spin::RwLock;
+use crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock;
 
 enum RenderPassAttachment {
   SwapchainColorImage,
@@ -65,9 +65,9 @@ impl<'a> RenderPassSpecification<'a> {
 
 /// TODO: Document this item
 pub(super) struct RenderPasses {
-  render_passes: RwLock<hashbrown::HashMap<PresentationEngineHandle, RenderPassBundle>>,
+  render_passes: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<hashbrown::HashMap<PresentationEngineHandle, RenderPassBundle>>,
   pipeline_render_passes:
-    RwLock<hashbrown::HashMap<(vk::Format, vk::Format), NonZeroHandle<vk::RenderPass>>>,
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<hashbrown::HashMap<(vk::Format, vk::Format), NonZeroHandle<vk::RenderPass>>>,
   render_pass_device: ash::khr::create_renderpass2::Device,
   // this is bad but I've got no other clue
   allocator: vk_mem::ffi::VmaAllocator,
@@ -119,10 +119,10 @@ impl RenderPassBundle {
 
 impl DeviceResource for RenderPasses {
   fn cleanup(&mut self, device: &ash::Device) {
-    for (_, mut bundle) in self.render_passes.write().drain() {
+    for (_, mut bundle) in crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.render_passes).drain() {
       bundle.clean(&device, self.allocator);
     }
-    for (_, rp) in self.pipeline_render_passes.write().drain() {
+    for (_, rp) in crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.pipeline_render_passes).drain() {
       unsafe { device.destroy_render_pass(rp.get(), None) };
     }
   }
@@ -141,8 +141,8 @@ impl RenderPasses {
     allocator: &vk_mem::Allocator,
   ) -> Self {
     Self {
-      render_passes: RwLock::new(hashbrown::HashMap::with_capacity(8)),
-      pipeline_render_passes: RwLock::new(hashbrown::HashMap::with_capacity(8)),
+      render_passes: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(hashbrown::HashMap::with_capacity(8)),
+      pipeline_render_passes: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(hashbrown::HashMap::with_capacity(8)),
       render_pass_device: ash::khr::create_renderpass2::Device::new(instance, device),
       allocator: allocator.get_raw(),
     }
@@ -156,7 +156,7 @@ impl RenderPasses {
     depth_stencil_format: vk::Format,
   ) -> GpuResult<NonZeroHandle<vk::RenderPass>> {
     let key = (color_format, depth_stencil_format);
-    if let Some(&rp) = self.pipeline_render_passes.read().get(&key) {
+    if let Some(&rp) = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.pipeline_render_passes).get(&key) {
       return Ok(rp);
     }
 
@@ -167,7 +167,7 @@ impl RenderPasses {
       vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
     )?;
 
-    self.pipeline_render_passes.write().insert(key, rp);
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.pipeline_render_passes).insert(key, rp);
     Ok(rp)
   }
 
@@ -178,7 +178,7 @@ impl RenderPasses {
     pe_handle: PresentationEngineHandle,
     out_values: &mut [vk::ClearValue],
   ) -> GpuResult<()> {
-    let read_render_passes = self.render_passes.read();
+    let read_render_passes = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.render_passes);
     if !read_render_passes.contains_key(&pe_handle) {
       return Err(crate::gpu_err_device!());
     }
@@ -213,7 +213,7 @@ impl RenderPasses {
         depth_stencil_format,
         swapchain,
       } => {
-        if let Some(bundle) = self.render_passes.read().get(&pe_handle) {
+        if let Some(bundle) = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.render_passes).get(&pe_handle) {
           let (width, height) = swapchain.extent();
           if bundle.swapchain_generation == swapchain.swapchain_generation()
             && bundle.width == width
@@ -223,7 +223,7 @@ impl RenderPasses {
           }
         }
 
-        let mut write_render_passes = self.render_passes.write();
+        let mut write_render_passes = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.render_passes);
         if let Some(mut bundle) = write_render_passes.remove(&pe_handle) {
           bundle.discard(discard_pool, self.allocator, timeline);
         }
@@ -343,7 +343,7 @@ impl RenderPasses {
             Err(e)
           })?;
         drop(write_render_passes);
-        let read_render_passes = self.render_passes.read();
+        let read_render_passes = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.render_passes);
         let bundle = unsafe { read_render_passes.get(&pe_handle).unwrap_unchecked() };
 
         Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]))
@@ -354,7 +354,7 @@ impl RenderPasses {
         depth_stencil_format,
         swapchain,
       } => {
-        if let Some(bundle) = self.render_passes.read().get(&pe_handle) {
+        if let Some(bundle) = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.render_passes).get(&pe_handle) {
           let (width, height) = swapchain.extent();
           if bundle.swapchain_generation == swapchain.swapchain_generation()
             && bundle.width == width
@@ -364,7 +364,7 @@ impl RenderPasses {
           }
         }
 
-        let mut write_render_passes = self.render_passes.write();
+        let mut write_render_passes = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.render_passes);
         if let Some(mut bundle) = write_render_passes.remove(&pe_handle) {
           bundle.discard(discard_pool, self.allocator, timeline);
         }
@@ -482,7 +482,7 @@ impl RenderPasses {
             Err(e)
           })?;
         drop(write_render_passes);
-        let read_render_passes = self.render_passes.read();
+        let read_render_passes = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.render_passes);
         let bundle = unsafe { read_render_passes.get(&pe_handle).unwrap_unchecked() };
 
         Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]))
@@ -616,7 +616,7 @@ impl RenderPasses {
     &self,
     pe_handle: PresentationEngineHandle,
   ) -> Option<NonZeroHandle<vk::Image>> {
-    let read_render_passes = self.render_passes.read();
+    let read_render_passes = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.render_passes);
     let bundle = read_render_passes.get(&pe_handle)?;
     for attachment in bundle.attachments.iter() {
       if let RenderPassAttachment::DepthStencilAttachment(image, _, _) = attachment {

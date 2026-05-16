@@ -916,7 +916,7 @@ pub fn do_draw_trajectory_batch(
   draw_call: &TrajectoryBatchCall,
   window_extent: [f32; 2],
 ) -> GpuResult<()> {
-  device.prepare_trajectory_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
+  device.prepare_trajectory_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
   let push_constants = crate::gpu::TrajectoryPushConstants {
     map_ptr: draw_call.map_ptr,
     traj_ptr: draw_call.traj_ptr,
@@ -1042,7 +1042,7 @@ pub fn do_draw_call(
   draw_call: &DrawCall,
 ) -> GpuResult<()> {
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
-  device.bind_buffers(cmd_buffer, handle, draw_call.pipeline, draw_call.buffers)?;
+  device.bind_buffers(cmd_buffer, draw_call.pipeline, draw_call.buffers)?;
 
   let model = draw_call.model_matrix;
   let mvp = camera.view_proj * model;
@@ -1066,7 +1066,7 @@ pub fn do_draw_call(
       // Note: same buffers because geometry is identical, only pipeline changes
       // but wait, bind_buffers also requires pipeline_key to identify layout in some engines
       // Let's assume it works or we use the regular pipeline key for bind_buffers
-      device.bind_buffers(cmd_buffer, handle, outline_pipeline, draw_call.buffers)?;
+      device.bind_buffers(cmd_buffer, outline_pipeline, draw_call.buffers)?;
 
       let outline_push = PushConstants {
         model_view_proj: mvp.into(),
@@ -1101,7 +1101,7 @@ pub fn do_draw_sun(
   handle: PresentationEngineHandle,
   draw_call: &SunDrawCall,
 ) -> GpuResult<()> {
-  device.prepare_sun_for_render(cmd_buffer, handle, draw_call.entity)?;
+  device.prepare_sun_for_render(cmd_buffer, draw_call.entity)?;
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
   let mvp = camera.view_proj * draw_call.model_matrix;
   let push_constants = SunPushConstants {
@@ -1124,7 +1124,7 @@ pub fn do_draw_sky(
     inv_view_proj: draw_call.inv_view_proj_mat.into(),
   };
 
-  device.prepare_sky_for_render(cmd_buffer, handle)?;
+  device.prepare_sky_for_render(cmd_buffer)?;
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
   device.push_sky_constants(cmd_buffer, &push_constants)?;
   device.draw(cmd_buffer, draw_call.vertex_count)
@@ -1164,7 +1164,7 @@ pub fn do_draw_particle(
 
   // Notice we don't pass the indirect_buffer as a GpuResourceHandle anymore,
   // we use a specific method that draws from the global mega buffer
-  device.draw_particle_indirect(cmd_buffer, handle, draw_call.system_indirect_offset)?;
+  device.draw_particle_indirect(cmd_buffer, draw_call.system_indirect_offset)?;
 
   Ok(())
 }
@@ -1204,7 +1204,7 @@ pub fn do_draw_particle2(
 
   // Notice we don't pass the indirect_buffer as a GpuResourceHandle anymore,
   // we use a specific method that draws from the global mega buffer
-  device.draw_particle2_indirect(cmd_buffer, handle, draw_call.system_indirect_offset)?;
+  device.draw_particle2_indirect(cmd_buffer, draw_call.system_indirect_offset)?;
 
   Ok(())
 }
@@ -1253,7 +1253,7 @@ pub fn do_draw_bvhwire2_batch(
   handle: PresentationEngineHandle,
   draw_call: &Bvhwire2BatchCall,
 ) -> GpuResult<()> {
-  device.prepare_bvhwire2_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
+  device.prepare_bvhwire2_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
   let push_constants = crate::gpu::Bvhwire2PushConstants {
     bvh_ptr: draw_call.data_ptr,
     view_proj: camera.view_proj.into(),
@@ -1271,7 +1271,7 @@ pub fn do_draw_ui_batch(
   draw_call: &crate::gpu::UiBatchCall,
   window_extent: [f32; 2],
 ) -> GpuResult<()> {
-  device.prepare_ui_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
+  device.prepare_ui_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
 
   // Standard Vulkan 2D orthographic matrix (Top-Left = 0,0, Bottom-Right = w,h)
   let w = window_extent[0];
@@ -1303,7 +1303,7 @@ pub fn do_draw_text2_batch(
   draw_call: &crate::gpu::Text2BatchCall,
   window_extent: [f32; 2],
 ) -> GpuResult<()> {
-  device.prepare_text2_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
+  device.prepare_text2_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
 
   let w = window_extent[0];
   let h = window_extent[1];
@@ -1414,7 +1414,7 @@ pub fn render_frame(
   }
 
   if !render_scene.particle_calls.is_empty() {
-    device.prepare_particle_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
+    device.prepare_particle_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
     for particle_call in &render_scene.particle_calls {
       gpu::frame::do_draw_particle(
         device,
@@ -1427,7 +1427,7 @@ pub fn render_frame(
   }
 
   if !render_scene.particle2_calls.is_empty() {
-    device.prepare_particle2_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
+    device.prepare_particle2_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
     let time = (render_scene.time_readings.time as f64 / 1_000_000.0) as f32;
     for particle_call in &render_scene.particle2_calls {
       do_draw_particle2(
@@ -1484,7 +1484,7 @@ pub fn render_frame(
   }
 
   if !render_scene.text_calls.is_empty() {
-    device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
+    device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
 
     let w = render_scene.window_extent[0] as f32;
     let h = render_scene.window_extent[1] as f32;
@@ -1500,7 +1500,6 @@ pub fn render_frame(
       // NOTE: Here we assume that `font_hash` has been appropriately tracked by the user to represent a valid texture_id (e.g. u32) on the render device.
       device.render_text(
         cmd_buffer,
-        handle,
         &text_call.text,
         text_call.start_cursor_position,
         view_proj,
@@ -1546,7 +1545,7 @@ pub fn render_frame(
 
   if !render_scene.gizmo_calls.is_empty() {
     // bind the descriptor set
-    device.prepare_gizmo_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
+    device.prepare_gizmo_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
     for gizmo_call in &render_scene.gizmo_calls {
       do_draw_gizmo(
         device,
@@ -1559,7 +1558,7 @@ pub fn render_frame(
   }
 
   if render_scene.billboard_calls.len() > 0 {
-    device.prepare_billboard_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
+    device.prepare_billboard_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
   }
   for billboard_call in &render_scene.billboard_calls {
     do_draw_billboard(
@@ -1573,7 +1572,7 @@ pub fn render_frame(
   }
 
   if !render_scene.bvh_draw_calls.is_empty() {
-    device.prepare_bvh_archetype_for_render_and_bind_pipeline(cmd_buffer, handle)?;
+    device.prepare_bvh_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
     for bvh_call in &render_scene.bvh_draw_calls {
       do_bvh_draw_call(
         device,

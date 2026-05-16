@@ -306,11 +306,8 @@ impl RenderSceneExtraction {
       }
 
       if !render_scene.bvhwire2_data.is_empty() {
-        render_scene.bvhwire2_batch_call = device.upload_bvhwire2_batch(
-          cmd_buffer,
-          presentation_engine_handle,
-          &render_scene.bvhwire2_data,
-        )?;
+        render_scene.bvhwire2_batch_call =
+          device.upload_bvhwire2_batch(cmd_buffer, &render_scene.bvhwire2_data)?;
       }
     }
 
@@ -377,15 +374,11 @@ impl RenderSceneExtraction {
     }
 
     // Trajectories
-    render_scene.trajectory_call = device.upload_trajectories(
-      cmd_buffer,
-      presentation_engine_handle,
-      &self.extracted_trajectories,
-    )?;
+    render_scene.trajectory_call =
+      device.upload_trajectories(cmd_buffer, &self.extracted_trajectories)?;
 
     // UI
-    render_scene.ui_call =
-      device.upload_ui(cmd_buffer, presentation_engine_handle, &self.extracted_ui)?;
+    render_scene.ui_call = device.upload_ui(cmd_buffer, &self.extracted_ui)?;
 
     // Texts
     if !self.extracted_texts.is_empty() {
@@ -426,8 +419,7 @@ impl RenderSceneExtraction {
       }
 
       if !text_batch.is_empty() {
-        render_scene.text2_call =
-          device.upload_text2(cmd_buffer, presentation_engine_handle, &text_batch)?;
+        render_scene.text2_call = device.upload_text2(cmd_buffer, &text_batch)?;
       }
     }
 

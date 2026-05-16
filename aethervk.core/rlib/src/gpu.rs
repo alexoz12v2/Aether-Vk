@@ -874,20 +874,19 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   /// Uploads particle systems into the mega-buffers. Should be called before rendering.
   fn upload_particle_systems(
     &self,
-    cmd_buffer: CommandBufferHandle, handle: PresentationEngineHandle,
+    cmd_buffer: CommandBufferHandle,
     particle_calls: &mut [crate::gpu::frame::ParticleDrawCall],
   ) -> GpuResult<()>;
 
   fn upload_particle2_systems(
     &self,
-    cmd_buffer: CommandBufferHandle, handle: PresentationEngineHandle,
+    cmd_buffer: CommandBufferHandle,
     particle_calls: &mut [crate::gpu::frame::Particle2DrawCall],
   ) -> GpuResult<()>;
 
   fn upload_trajectories(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
     trajectories: &[(
       crate::scene::EntityId,
       crate::scene::trajectory::TrajectoryComponent,
@@ -898,27 +897,25 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   fn upload_ui(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
     ui_elements: &[crate::gpu::UiElementGpu],
   ) -> GpuResult<Option<crate::gpu::UiBatchCall>>;
 
   fn upload_text2(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
     glyphs: &[crate::gpu::TextGlyphGpu],
   ) -> GpuResult<Option<crate::gpu::Text2BatchCall>>;
 
   /// Draws a particle system using the mega-buffer
   fn draw_particle_indirect(
     &self,
-    cmd_buffer: CommandBufferHandle, handle: PresentationEngineHandle,
+    cmd_buffer: CommandBufferHandle,
     indirect_offset: u32,
   ) -> GpuResult<()>;
 
   fn draw_particle2_indirect(
     &self,
-    cmd_buffer: CommandBufferHandle, handle: PresentationEngineHandle,
+    cmd_buffer: CommandBufferHandle,
     indirect_offset: u32,
   ) -> GpuResult<()>;
 
@@ -1011,7 +1008,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   /// TODO rework to 1) not take pipeline key 2) support multiple archetypes which use buffers
   fn bind_buffers(
     &self,
-    cmd_buffer: CommandBufferHandle, handle: PresentationEngineHandle,
+    cmd_buffer: CommandBufferHandle,
     pipeline: PipelineKey,
     buffers: GpuResourceHandle,
   ) -> GpuResult<()>;
@@ -1046,7 +1043,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   // TODO move to kernels trait
   fn update_sun(
     &self,
-    cmd_buffer: CommandBufferHandle, handle: PresentationEngineHandle,
+    cmd_buffer: CommandBufferHandle,
     entity_id: crate::scene::EntityId,
     resolution: (u32, u32, u32),
     radius: f32,
@@ -1055,32 +1052,27 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   fn prepare_billboard_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
   ) -> GpuResult<()>;
 
   fn prepare_bvh_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
   ) -> GpuResult<()>;
 
   fn prepare_bvhwire2_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
   ) -> GpuResult<()>;
 
   fn upload_bvhwire2_batch(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
     bvh_data: &[crate::gpu::Bvhwire2DataGpu],
   ) -> GpuResult<Option<crate::gpu::frame::Bvhwire2BatchCall>>;
 
   fn prepare_gizmo_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
   ) -> GpuResult<()>;
 
   /// Allocates Descriptor (not image, that is done in `generate_sky`) and updates if not done yet
@@ -1089,7 +1081,6 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   fn prepare_sun_for_render(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
     entity: EntityId,
   ) -> GpuResult<()>;
 
@@ -1098,41 +1089,35 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   fn prepare_particle_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
   ) -> GpuResult<()>;
 
   fn prepare_particle2_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
   ) -> GpuResult<()>;
 
   fn prepare_trajectory_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
   ) -> GpuResult<()>;
 
   fn prepare_ui_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
   ) -> GpuResult<()>;
 
-  fn prepare_sky_for_render(&self, cmd_buffer: CommandBufferHandle, handle: PresentationEngineHandle,) -> GpuResult<()>;
+  fn prepare_sky_for_render(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 
   /// Screen extent should be the chosen presentation engine extent to correctly display screen size and position
   /// `atlas_id` is composed of the `hash` and internal id for the font atlas
   fn prepare_text_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
   ) -> GpuResult<()>;
 
   fn prepare_text2_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
   ) -> GpuResult<()>;
 
   // TODO move in frame as a ui rendering
@@ -1140,7 +1125,6 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   fn render_minimap(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
     player_pos: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
     max_distance: f32,
     planets: &[(
@@ -1154,7 +1138,6 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   fn render_ui_rect(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
     color: [f32; 4],
     position: [f32; 2],
     size: [f32; 2],
@@ -1165,7 +1148,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   /// therefore assumes text pipeline, descriptor sets, are already in place.
   fn render_text(
     &self,
-    cmd_buffer: CommandBufferHandle, handle: PresentationEngineHandle,
+    cmd_buffer: CommandBufferHandle,
     text: &str,
     start_cursor_position: [f32; 2],
     view_proj: [f32; 16],
@@ -1181,7 +1164,6 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   fn record_windowless_download(
     &self,
     cmd_buffer: CommandBufferHandle,
-    handle: PresentationEngineHandle,
     task_id: u64,
   ) -> GpuResult<()>;
 

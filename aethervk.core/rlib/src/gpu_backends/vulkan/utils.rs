@@ -955,3 +955,93 @@ pub(super) fn create_test_attachment(
     .map(|(i, a)| (unsafe { NonZeroHandle::new_unchecked(i) }, a))
     .map_err(|e| e.into())
 }
+
+// -------------------------------- Vulkan Transaction --------------------------
+
+/// Tracks Vulkan resources allocated during a transaction's execution phase.
+/// Automatically destroys them if the transaction fails and the guard is dropped without committing.
+pub struct RollbackGuard<'a> {
+  device: &'a ash::Device,
+  rollbacks: alloc::vec::Vec<alloc::boxed::Box<dyn FnOnce(&ash::Device) + 'a>>,
+}
+
+impl<'a> RollbackGuard<'a> {
+  pub fn new(device: &'a ash::Device) -> Self {
+    Self {
+      device,
+      rollbacks: alloc::vec::Vec::new(),
+    }
+  }
+
+  /// Defer the destruction of a resource. Runs ONLY if `defuse()` is not called.
+  pub fn defer<F: FnOnce(&ash::Device) + 'a>(&mut self, f: F) {
+    self.rollbacks.push(alloc::boxed::Box::new(f));
+  }
+
+  /// Consumes the guard, preventing rollbacks from executing. Call this on success.
+  pub fn defuse(mut self) {
+    self.rollbacks.clear();
+  }
+}
+
+impl<'a> Drop for RollbackGuard<'a> {
+  fn drop(&mut self) {
+    // LIFO order destruction guarantees correct Vulkan cleanup order
+    while let Some(rollback) = self.rollbacks.pop() {
+      rollback(self.device);
+    }
+  }
+}
+
+pub trait RwLockable<T> {
+  /// the guard cannot outlive the lock itself.
+  type RwWriteGuard<'a>: core::ops::DerefMut<Target = T> + Drop
+  where
+    Self: 'a;
+  /// the guard cannot outlive the lock itself.
+  type RwReadGuard<'a>: core::ops::Deref<Target = T> + Drop
+  where
+    Self: 'a;
+
+  fn write(&self) -> Self::RwWriteGuard<'_>;
+  fn read(&self) -> Self::RwReadGuard<'_>;
+}
+
+/// Executes a 4-Phase Vulkan Transaction safely.
+pub fn run_vulkan_transaction<
+  State,
+  Args,
+  Prepared,
+  Output,
+  Error,
+  PrepareFn,
+  ExecuteFn,
+  CommitFn,
+>(
+  lock: &impl RwLockable<State>,
+  args: Args,
+  mut prepare: PrepareFn,
+  execute: ExecuteFn,
+  mut commit: CommitFn,
+) -> Result<Output, Error>
+where
+  // Phase 1: Runs under a lock to extract data
+  PrepareFn: FnMut(&mut State, Args) -> Result<Prepared, Error>,
+  // Phase 2: Runs completely lock-free
+  ExecuteFn: FnOnce(Prepared) -> Result<Output, Error>,
+  // Phase 3: Runs under a lock to apply changes or handle errors
+  CommitFn: FnMut(&mut State, Result<Output, Error>) -> Result<Output, Error>,
+{
+  // 1. Prepare (Locked)
+  let prepared = {
+    let mut state = lock.write();
+    prepare(&mut state, args)?
+  };
+
+  // 2. Execute (Unlocked) - OS/Vulkan APIs happen here
+  let result = execute(prepared);
+
+  // 3. Commit/Rollback (Locked)
+  let mut state = lock.write();
+  commit(&mut state, result)
+}

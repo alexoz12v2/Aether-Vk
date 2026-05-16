@@ -226,23 +226,14 @@ fn do_render_scene_async(
     // TODO move to kernels
     render_device.update_sun(
       cmd_buffer,
-      presentation_engine_handle,
       sun_call.entity,
       (128, 128, 128),
       sun_call.radius,
     )?;
   }
 
-  render_device.upload_particle_systems(
-    cmd_buffer,
-    presentation_engine_handle,
-    &mut render_scene.particle_calls,
-  )?;
-  render_device.upload_particle2_systems(
-    cmd_buffer,
-    presentation_engine_handle,
-    &mut render_scene.particle2_calls,
-  )?;
+  render_device.upload_particle_systems(cmd_buffer, &mut render_scene.particle_calls)?;
+  render_device.upload_particle2_systems(cmd_buffer, &mut render_scene.particle2_calls)?;
 
   if is_first_render && custom_render_callback.is_some() {
     let c = unsafe { custom_render_callback.as_ref().unwrap_unchecked() };
@@ -289,9 +280,7 @@ fn do_render_scene_async(
     render_device.is_presentation_engine_windowless(presentation_engine_handle).unwrap_unchecked()
   };
   if is_windowless {
-    if let Err(e) =
-      render_device.record_windowless_download(cmd_buffer, presentation_engine_handle, task_id)
-    {
+    if let Err(e) = render_device.record_windowless_download(cmd_buffer, task_id) {
       oshal::log!("record_windowless_download failed: {:?}", e);
       return Err(e);
     }
