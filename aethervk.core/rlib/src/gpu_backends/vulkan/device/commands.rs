@@ -33,7 +33,7 @@ struct ThreadPools {
 /// alternative to avoid boxing: Use SlotMap. Drawback for alternative: you need to store
 /// a BTreeMap mapping ThreadId to the new_key_type
 pub(super) struct CommandPools {
-  registry: spin::RwLock<BTreeMap<ThreadId, Box<ThreadPools>>>,
+  registry: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<BTreeMap<ThreadId, Box<ThreadPools>>>,
   queue_family_index: u32,
   spsc_capacity: usize,
 }
@@ -41,7 +41,7 @@ pub(super) struct CommandPools {
 impl fmt::Debug for CommandPools {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
     f.write_str("CommandPools")?;
-    f.debug_map().entries(self.registry.read().iter()).finish()?;
+    f.debug_map().entries(crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.registry).iter()).finish()?;
     f.write_str(&alloc::format!(
       "queue_family_index: {}",
       self.queue_family_index
@@ -57,7 +57,7 @@ impl CommandPools {
   /// TODO: Document this item
   pub(super) fn new(queue_family_index: u32) -> Self {
     Self {
-      registry: spin::RwLock::new(BTreeMap::new()),
+      registry: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(BTreeMap::new()),
       queue_family_index,
       spsc_capacity: 64,
     }
@@ -92,7 +92,7 @@ impl CommandPools {
     id: CommandBufferId,
     cmd_buf: vk::CommandBuffer,
   ) -> GpuResult<()> {
-    let mut registry = self.registry.write();
+    let mut registry = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.registry);
     // Pseudo-TLS lookup/initialization
     let tp = registry.get_mut(&tid).ok_or(GpuError::BackendSpecific(
       "Command Buffer Registry for Thread not initialized".into(),
@@ -121,7 +121,7 @@ impl CommandPools {
     is_primary: bool,
   ) -> GpuResult<vk::CommandBuffer> {
     if is_primary {
-      let mut registry = self.registry.write();
+      let mut registry = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.registry);
       // Pseudo-TLS lookup/initialization
       let tp = registry.entry(tid).or_insert_with(|| {
         Box::new(ThreadPools {
@@ -197,7 +197,7 @@ impl CommandPools {
 
 impl DeviceResource for CommandPools {
   fn cleanup(&mut self, device: &ash::Device) {
-    let registry = self.registry.get_mut(); // get_mut if access without locking is enough
+    let registry = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::get_mut(&mut self.registry); // get_mut if access without locking is enough
     for (_tid, thread_pools) in registry.iter() {
       // destroy active pool if exists
       if let Some(active_pool) = thread_pools.active {

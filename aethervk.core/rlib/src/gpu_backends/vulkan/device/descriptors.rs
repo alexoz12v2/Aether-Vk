@@ -61,7 +61,7 @@ struct DescriptorPoolsInner {
 #[derive(Debug)]
 /// TODO: Document this item
 pub(super) struct DescriptorPools {
-  inner: spin::Mutex<DescriptorPoolsInner>,
+  inner: crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex<DescriptorPoolsInner>,
 }
 
 unsafe impl Sync for DescriptorPools {}
@@ -82,7 +82,7 @@ impl DescriptorPools {
     inner.ensure_active_pool(device.handle(), device.fp_v1_0().create_descriptor_pool)?;
 
     Ok(sync::Arc::new(Self {
-      inner: spin::Mutex::new(inner),
+      inner: crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::new(inner),
     }))
   }
 
@@ -96,7 +96,7 @@ impl DescriptorPools {
     timeline_value: u64,
     debug_name: &str,
   ) -> GpuResult<NonZeroHandle<vk::DescriptorSet>> {
-    let mut inner = self.inner.lock();
+    let mut inner = crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&self.inner);
     loop {
       let pool = inner.active_pool;
       if pool == vk::DescriptorPool::null() {
@@ -150,7 +150,7 @@ impl DescriptorPools {
     }
     .is_ok()
     {
-      let mut inner = self.inner.lock();
+      let mut inner = crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&self.inner);
       inner.recycled_pools.push(pool);
     }
   }
@@ -216,7 +216,7 @@ impl DescriptorPoolsInner {
 
 impl DeviceResource for DescriptorPools {
   fn cleanup(&mut self, device: &ash::Device) {
-    let mut inner = self.inner.lock();
+    let mut inner = crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&self.inner);
     if !inner.active_pool.is_null() {
       unsafe { device.destroy_descriptor_pool(inner.active_pool, None) };
     }

@@ -403,7 +403,10 @@ mod tests {
         global_pos - Vec3f32::from_array([r, r, r]),
         global_pos + Vec3f32::from_array([r, r, r]),
       );
-      aabbs.push((bounds, (1 << 31) | (i as u32)));
+      // TODO check that shape_data is COM. If not, modify to include it
+      // TODO modify logic to use mu and not mass, unless required, otherwise give both? Nah, mu is
+      // stored by gravitation force emitter
+      aabbs.push((bounds, (1 << 31) | (i as u32), kin.mu, Vec3f32::from_array(kin.shape_data)));
     }
 
     for (i, dyn_body) in dynamics.iter().enumerate() {
@@ -414,7 +417,8 @@ mod tests {
         global_pos - Vec3f32::from_array([r, r, r]),
         global_pos + Vec3f32::from_array([r, r, r]),
       );
-      aabbs.push((bounds, i as u32));
+      // TODO I don't think that shape data is the COM. Correct this
+      aabbs.push((bounds, i as u32, dyn_body.mass, Vec3f32::from_array(dyn_body.shape_data)));
     }
     let bvh_tree = crate::physics::motion_bvh::MotionBvhTree::build(&aabbs);
 

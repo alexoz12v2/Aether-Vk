@@ -61,7 +61,7 @@ impl SimulationContext {
       addr_of_mut!((*ptr).texture_cache).write(Arc::clone(&texture_cache));
 
       // TODO test: if this fails, render frontend should drop.
-      let render_thread_params = RenderThreadParams::new(backend, None, render_thread_thread_pool)?;
+      let render_thread_params = RenderThreadParams::new(backend, error_debug_callback, render_thread_thread_pool)?;
       let logic_thread_params = LogicThreadParams::new(
         logic_thread_thread_pool,
         Arc::clone(&task_manager),

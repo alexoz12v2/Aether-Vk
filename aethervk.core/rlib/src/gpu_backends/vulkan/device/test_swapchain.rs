@@ -96,7 +96,7 @@ mod tests {
       ),
       synchronization2: ash::khr::synchronization2::Device::new(&instance.instance, &device),
       handle: device.clone(),
-      submission_lock: spin::Mutex::new(()),
+      submission_lock: crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::new(()),
       #[cfg(target_vendor = "apple")]
       metal_objects: ash::ext::metal_objects::Device::new(&instance.instance, &device),
       #[cfg(debug_assertions)]

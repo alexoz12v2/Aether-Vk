@@ -146,17 +146,14 @@ fn test_render_ui_and_text() {
 
         device.render_ui_rect(
           cmd_buffer_handle,
-          presentation_engine,
           [0.2, 0.2, 0.8, 1.0],
           [-0.5, -0.5],
           [1.0, 1.0],
         )?;
 
-        device.prepare_text_archetype_for_render_and_bind_pipeline(
-          cmd_buffer_handle,
-          presentation_engine,
-        )?;
+        device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer_handle)?;
 
+        #[rustfmt::skip]
         let view_proj = [
           2.0 / width as f32, 0.0, 0.0, 0.0,
           0.0, 2.0 / height as f32, 0.0, 0.0,
@@ -164,7 +161,9 @@ fn test_render_ui_and_text() {
           -1.0, -1.0, 0.0, 1.0,
         ];
 
-        device.render_text(cmd_buffer_handle, presentation_engine, "Test UI Text",
+        device.render_text(
+          cmd_buffer_handle,
+          "Test UI Text",
           [50.0, 50.0],
           view_proj,
           (font_hash, font_id),
@@ -173,7 +172,7 @@ fn test_render_ui_and_text() {
         )?;
 
         scoped_rp.end()?;
-        device.record_windowless_download(cmd_buffer_handle, presentation_engine, task_id)?;
+        device.record_windowless_download(cmd_buffer_handle, task_id)?;
       }
 
       device.present(
@@ -189,7 +188,7 @@ fn test_render_ui_and_text() {
 
       let mut buffer = vec![0u8; (width * height * 4) as usize];
       device.read_windowless_download(task_id, &mut buffer)?;
-      
+
       // Assert that not all pixels are black (some UI rendering occurred)
       let sum: u64 = buffer.iter().map(|&b| b as u64).sum();
       assert!(sum > 0, "Rendered UI/Text buffer is completely empty!");

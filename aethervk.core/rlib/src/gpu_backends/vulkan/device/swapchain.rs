@@ -516,7 +516,7 @@ impl WindowedPresentationState {
     }
 
     let present_result = unsafe {
-      let _guard = device.submission_lock.lock();
+      let _guard = crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&device.submission_lock);
       self.swapchain_device.queue_present(graphics_queue, &present_info)
     };
 
@@ -1328,7 +1328,7 @@ impl WindowedPresentationState {
     }
 
     let result = {
-      let _guard = device.submission_lock.lock();
+      let _guard = crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&device.submission_lock);
       unsafe { self.swapchain_device.queue_present(graphics_queue, &present_info) }
     };
 
