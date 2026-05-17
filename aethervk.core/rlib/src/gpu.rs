@@ -1,24 +1,24 @@
 //! gpu module.
 
 pub use super::gpu_backends::*;
-use crate::physics::physics_scene::PhysicsScene;
-use crate::scene::Scene;
-use crate::scene::text::{FontAtlas, GlyphInfo};
-use crate::simulation::comet::Texture;
-use crate::types::{EngineResult, GpuError, GpuResult};
 use crate::{
   gpu,
   gpu::frame::ResourceUploadResult,
-  scene::{EntityId, PhysicalMeshComponent, TransformComponent},
+  physics::physics_scene::PhysicsScene,
+  scene::{
+    EntityId, PhysicalMeshComponent, Scene, TransformComponent,
+    text::{FontAtlas, GlyphInfo},
+  },
+  simulation::comet::Texture,
+  types::{EngineResult, GpuError, GpuResult},
 };
 use ab_glyph::PxScale;
-use aethervk_oshal_rlib::log;
-use aethervk_oshal_rlib::os::time::timeus_t;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+use aethervk_oshal_rlib::{log, math::vector::vec3::Vec3f32, os::time::timeus_t};
 use ahash::AHasher;
-use alloc::string::String;
-use alloc::sync::Arc;
-use alloc::sync::Weak;
+use alloc::{
+  string::String,
+  sync::{Arc, Weak},
+};
 use ash::vk;
 use bitflags::bitflags;
 use core::{
@@ -1734,8 +1734,11 @@ pub trait Kernels: Send + Sync {
     cmd: &mut Self::Cmd,
     scene: &Scene,
   ) -> EngineResult<Self::Buffer<ParticleGpu>>;
-  fn build_emitters(&self, cmd: &mut Self::Cmd, scene: &Scene)
-  -> EngineResult<Self::Buffer<ForceEmitter>>;
+  fn build_emitters(
+    &self,
+    cmd: &mut Self::Cmd,
+    scene: &Scene,
+  ) -> EngineResult<Self::Buffer<ForceEmitter>>;
 
   fn emit_particles(
     &self,

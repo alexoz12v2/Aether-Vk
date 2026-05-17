@@ -1,13 +1,17 @@
 //! device module.
 
-use crate::gpu::vulkan::device::locks::{DebugTrackedMutex, DebugTrackedRwLock};
-use crate::gpu::vulkan::device::shader_manager::Shader;
-use crate::gpu::vulkan::device::swapchain::PresentationState;
 use crate::{
   gpu::{
     self, AcquireResult, ArchetypeId, CommandBufferHandle, GpuResourceHandle, NativeGpuProperty,
     PipelineKey, PresentationEngineHandle, RenderDevice, RenderDeviceExt, RenderableInstanceId,
-    TextureFlags, frame::ResourceUploadResult, vulkan::device::archetypes_struct::Archetypes,
+    TextureFlags,
+    frame::ResourceUploadResult,
+    vulkan::device::{
+      archetypes_struct::Archetypes,
+      locks::{DebugTrackedMutex, DebugTrackedRwLock},
+      shader_manager::Shader,
+      swapchain::PresentationState,
+    },
   },
   gpu_backends::vulkan::{
     self,
@@ -15,21 +19,20 @@ use crate::{
       commands::CommandBufferId,
       memory::GlobalDeviceAllocator,
       renderpasses::RenderPassSpecification,
-      resources::{DiscardableResource, ForwardMeshRenderResource, Image},
+      resources::{DerefArchetype, DiscardableResource, ForwardMeshRenderResource, Image},
       shader_manager::ShaderKey,
     },
     instance,
     utils::{self, NonZeroHandle},
   },
-  scene::text::FontAtlas,
-  scene::{EntityId, PhysicalMeshComponent},
-  simulation::comet::Comet,
-  simulation::comet::Texture,
+  scene::{EntityId, PhysicalMeshComponent, text::FontAtlas},
+  simulation::comet::{Comet, Texture},
   types::{GpuError, GpuResult},
 };
 use aethervk_oshal_rlib::{
-  self as oshal, log, math::vector::Vector3, math::vector::vec3::Vec3f32, os::fs::FileSystemObject,
-  os::pool::WorkloadStatus,
+  self as oshal, log,
+  math::vector::{Vector3, vec3::Vec3f32},
+  os::{fs::FileSystemObject, pool::WorkloadStatus},
 };
 use alloc::{
   boxed::Box,
@@ -47,8 +50,7 @@ use core::{
   fmt::Formatter,
   hash::Hash,
   ptr::{self, NonNull},
-  sync::atomic::AtomicU32,
-  sync::atomic::{AtomicU64, Ordering},
+  sync::atomic::{AtomicU32, AtomicU64, Ordering},
 };
 use function_name::named;
 use heapless::index_map::FnvIndexMap;
@@ -473,49 +475,50 @@ pub struct DeviceResources {
   pending_downloads: DebugTrackedRwLock<hashbrown::HashMap<u64, PendingDownload>>,
 
   frame_staging_arena: DebugTrackedRwLock<Option<memory::FrameStagingArena>>,
+
   sun_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::SunRenderResourceArchetypeArena>>>,
-  physical_mesh_render_archetype_arena: DebugTrackedRwLock<
-    Option<alloc::sync::Arc<resources::ForwardMeshRenderResourceArchetypeArena>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::SunRenderResourceArchetypeArena>>>,
+  physical_mesh_render_archetype_arena: Option<
+    alloc::sync::Arc<DebugTrackedRwLock<resources::ForwardMeshRenderResourceArchetypeArena>>,
   >,
-  physical_mesh2_render_archetype_arena: DebugTrackedRwLock<
-    Option<alloc::sync::Arc<resources::ForwardMesh2RenderResourceArchetypeArena>>,
+  physical_mesh2_render_archetype_arena: Option<
+    alloc::sync::Arc<DebugTrackedRwLock<resources::ForwardMesh2RenderResourceArchetypeArena>>,
   >,
   billboard_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::BillboardRenderResourceArchetypeArena>>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::BillboardRenderResourceArchetypeArena>>>,
   particle_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::ParticleRenderResourceArchetypeArena>>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::ParticleRenderResourceArchetypeArena>>>,
   particle2_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::Particle2RenderResourceArchetypeArena>>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::Particle2RenderResourceArchetypeArena>>>,
   cursor_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::CursorRenderResourceArchetypeArena>>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::CursorRenderResourceArchetypeArena>>>,
   marker_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::MarkerRenderResourceArchetypeArena>>>,
-  measurement_render_archetype_arena: DebugTrackedRwLock<
-    Option<alloc::sync::Arc<resources::MeasurementRenderResourceArchetypeArena>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::MarkerRenderResourceArchetypeArena>>>,
+  measurement_render_archetype_arena: Option<
+    alloc::sync::Arc<DebugTrackedRwLock<resources::MeasurementRenderResourceArchetypeArena>>,
   >,
   sky_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::SkyRenderResourceArchetypeArena>>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::SkyRenderResourceArchetypeArena>>>,
   grid_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::GridRenderResourceArchetypeArena>>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::GridRenderResourceArchetypeArena>>>,
   minimap_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::MinimapRenderResourceArchetypeArena>>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::MinimapRenderResourceArchetypeArena>>>,
   text_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::TextRenderResourceArchetypeArena>>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::TextRenderResourceArchetypeArena>>>,
   text2_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::Text2RenderResourceArchetypeArena>>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::Text2RenderResourceArchetypeArena>>>,
   bvh_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::BvhRenderResourceArchetypeArena>>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::BvhRenderResourceArchetypeArena>>>,
   bvhwire2_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::Bvhwire2RenderResourceArchetypeArena>>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::Bvhwire2RenderResourceArchetypeArena>>>,
   gizmo_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::GizmoRenderResourceArchetypeArena>>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::GizmoRenderResourceArchetypeArena>>>,
   trajectory_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::TrajectoryRenderResourceArchetypeArena>>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::TrajectoryRenderResourceArchetypeArena>>>,
   ui_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::UiRenderResourceArchetypeArena>>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::UiRenderResourceArchetypeArena>>>,
   background_render_archetype_arena:
-    DebugTrackedRwLock<Option<alloc::sync::Arc<resources::BackgroundRenderResourceArchetypeArena>>>,
+    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::BackgroundRenderResourceArchetypeArena>>>,
 }
 
 // TODO: each member should derive it so that this can derive it too
@@ -535,9 +538,61 @@ impl DeviceResource for DeviceResources {
         self.allocator.allocator.destroy_buffer(download.staging_buffer, &mut download.allocation);
       }
     }
+
+    for pe in DebugTrackedRwLock::write(&self.live_presentation_engines).values_mut() {
+      let mut pe_state = DebugTrackedRwLock::write(pe);
+      pe_state.archetypes_mut().discard(device, &self.discard_pool);
+    }
+
+    macro_rules! discard_arena {
+      ($field:ident) => {
+        if let Some(arena_arc) = self.$field.take() {
+          match alloc::sync::Arc::try_unwrap(arena_arc) {
+            Ok(arena_lock) => {
+              let mut arena =
+                crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::into_inner(
+                  arena_lock,
+                );
+              aethervk_oshal_rlib::log!("Successfully unwrapped arena {}", stringify!($field));
+              arena.discard(device, &self.discard_pool, u64::MAX);
+            }
+            Err(_) => {
+              panic!("if device.wait_idle was called, then nobody should hold a strong arena");
+            }
+          }
+        } else {
+          panic!(
+            "Cleanup called more than once? | Arena {} was None",
+            stringify!($field)
+          );
+        }
+      };
+    }
+
+    discard_arena!(sun_render_archetype_arena);
+    discard_arena!(physical_mesh_render_archetype_arena);
+    discard_arena!(physical_mesh2_render_archetype_arena);
+    discard_arena!(billboard_render_archetype_arena);
+    discard_arena!(particle_render_archetype_arena);
+    discard_arena!(particle2_render_archetype_arena);
+    discard_arena!(cursor_render_archetype_arena);
+    discard_arena!(marker_render_archetype_arena);
+    discard_arena!(measurement_render_archetype_arena);
+    discard_arena!(sky_render_archetype_arena);
+    discard_arena!(grid_render_archetype_arena);
+    discard_arena!(minimap_render_archetype_arena);
+    discard_arena!(text_render_archetype_arena);
+    discard_arena!(text2_render_archetype_arena);
+    discard_arena!(bvh_render_archetype_arena);
+    discard_arena!(bvhwire2_render_archetype_arena);
+    discard_arena!(gizmo_render_archetype_arena);
+    discard_arena!(trajectory_render_archetype_arena);
+    discard_arena!(ui_render_archetype_arena);
+    discard_arena!(background_render_archetype_arena);
+
     // all discardable resources should have been already discarded
     if self.has_discardables() {
-      self.clear_discardables(&device);
+      self.clear_discardables(device);
     }
     self.discard_pool.cleanup(device);
 
@@ -586,7 +641,12 @@ impl DeviceResource for DeviceResources {
       }
     }
 
-    if let Some(mut arena) = DebugTrackedRwLock::write(&self.frame_staging_arena).take() {
+    let taken_frame = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+      &self.frame_staging_arena,
+    )
+    .take();
+    aethervk_oshal_rlib::log!("taken_frame is some: {}", taken_frame.is_some());
+    if let Some(mut arena) = taken_frame {
       arena.destroy(&self.allocator.allocator);
     }
     self.allocator.cleanup(device);
@@ -658,10 +718,7 @@ macro_rules! init_standard_archetype {
         crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&$self.pipeline_pool);
 
       let arena = {
-        let mut arena_lock = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-          &$self.$arena_field,
-        );
-        if arena_lock.is_none() {
+        if $self.$arena_field.is_none() {
           let ctx = resources::ArenaCreationContext {
             device: $device,
             allocator: &$self.allocator.allocator,
@@ -675,9 +732,11 @@ macro_rules! init_standard_archetype {
           };
           let new_arena =
             <resources::$arena_type as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-          *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+          $self.$arena_field = Some(alloc::sync::Arc::new(
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+          ));
         }
-        alloc::sync::Arc::clone(unsafe { arena_lock.as_ref().unwrap_unchecked() })
+        alloc::sync::Arc::clone(unsafe { $self.$arena_field.as_ref().unwrap_unchecked() })
       };
 
       presentation_engine.archetypes_mut().$create_fn(
@@ -780,10 +839,7 @@ macro_rules! init_standard_archetype {
         crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&$self.pipeline_pool);
 
       let arena = {
-        let mut arena_lock = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-          &$self.$arena_field,
-        );
-        if arena_lock.is_none() {
+        if $self.$arena_field.is_none() {
           let ctx = resources::ArenaCreationContext {
             device: $device,
             allocator: &$self.allocator.allocator,
@@ -797,9 +853,11 @@ macro_rules! init_standard_archetype {
           };
           let new_arena =
             <resources::$arena_type as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-          *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+          $self.$arena_field = Some(alloc::sync::Arc::new(
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+          ));
         }
-        alloc::sync::Arc::clone(unsafe { arena_lock.as_ref().unwrap_unchecked() })
+        alloc::sync::Arc::clone(unsafe { $self.$arena_field.as_ref().unwrap_unchecked() })
       };
 
       presentation_engine.archetypes_mut().$create_fn(
@@ -883,10 +941,7 @@ macro_rules! init_standard_archetype {
         crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&$self.pipeline_pool);
 
       let arena = {
-        let mut arena_lock = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-          &$self.$arena_field,
-        );
-        if arena_lock.is_none() {
+        if $self.$arena_field.is_none() {
           let mut staging_lock =
             crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
               &$self.frame_staging_arena,
@@ -905,9 +960,11 @@ macro_rules! init_standard_archetype {
           };
           let new_arena =
             <resources::$arena_type as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-          *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+          $self.$arena_field = Some(alloc::sync::Arc::new(
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+          ));
         }
-        alloc::sync::Arc::clone(unsafe { arena_lock.as_ref().unwrap_unchecked() })
+        alloc::sync::Arc::clone(unsafe { $self.$arena_field.as_ref().unwrap_unchecked() })
       };
 
       presentation_engine.archetypes_mut().$create_fn(
@@ -933,7 +990,7 @@ macro_rules! init_standard_archetype {
 impl DeviceResources {
   #[named]
   pub fn init_archetypes(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     queues: &Queues,
     depth_stencil_format: ash::vk::Format,
@@ -1392,7 +1449,7 @@ impl DeviceResources {
 
   #[named]
   fn create_physical_mesh_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
@@ -1423,8 +1480,7 @@ impl DeviceResources {
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let format = presentation_engine.format();
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.physical_mesh_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.physical_mesh_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -1437,9 +1493,11 @@ impl DeviceResources {
           outline_fragment_shader: Some(outline_fragment_shader),
         };
         let new_arena = <resources::ForwardMeshRenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+        self.physical_mesh_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      Arc::clone(unsafe { arena_lock.as_ref().unwrap_unchecked() })
+      Arc::clone(unsafe { self.physical_mesh_render_archetype_arena.as_ref().unwrap_unchecked() })
     };
     // TODO: pass shaders directly, not manager and keys
     presentation_engine.archetypes_mut().create_physical_mesh_archetype(
@@ -1462,7 +1520,7 @@ impl DeviceResources {
 
   #[named]
   fn create_sun_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vkey: ShaderKey,
@@ -1483,8 +1541,7 @@ impl DeviceResources {
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let format = presentation_engine.format();
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.sun_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.sun_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -1497,9 +1554,11 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::SunRenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+        self.sun_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.sun_render_archetype_arena.as_ref().unwrap().clone()
     };
 
     presentation_engine.archetypes_mut().create_sun_archetype(
@@ -1519,7 +1578,7 @@ impl DeviceResources {
 
   #[named]
   fn create_sky_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vkey: ShaderKey,
@@ -1540,8 +1599,7 @@ impl DeviceResources {
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let format = presentation_engine.format();
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.sky_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.sky_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -1554,9 +1612,12 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::SkyRenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+
+        self.sky_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.sky_render_archetype_arena.as_ref().unwrap().clone()
     };
 
     presentation_engine.archetypes_mut().create_sky_archetype(
@@ -1576,7 +1637,7 @@ impl DeviceResources {
 
   #[named]
   fn create_background_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
@@ -1597,8 +1658,7 @@ impl DeviceResources {
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let format = presentation_engine.format();
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.background_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.background_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -1611,9 +1671,12 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::BackgroundRenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+
+        self.background_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.background_render_archetype_arena.as_ref().unwrap().clone()
     };
 
     presentation_engine.archetypes_mut().create_background_archetype(
@@ -1633,7 +1696,7 @@ impl DeviceResources {
 
   #[named]
   fn create_grid_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
@@ -1654,8 +1717,7 @@ impl DeviceResources {
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let format = presentation_engine.format();
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.grid_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.grid_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -1668,9 +1730,12 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::GridRenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+
+        self.grid_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.grid_render_archetype_arena.as_ref().unwrap().clone()
     };
 
     presentation_engine.archetypes_mut().create_grid_archetype(
@@ -1690,7 +1755,7 @@ impl DeviceResources {
 
   #[named]
   fn create_minimap_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vkey: ShaderKey,
@@ -1711,8 +1776,7 @@ impl DeviceResources {
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let format = presentation_engine.format();
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.minimap_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.minimap_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -1725,9 +1789,12 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::MinimapRenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+
+        self.minimap_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.minimap_render_archetype_arena.as_ref().unwrap().clone()
     };
 
     presentation_engine.archetypes_mut().create_minimap_archetype(
@@ -1747,7 +1814,7 @@ impl DeviceResources {
 
   #[named]
   fn create_measurement_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
@@ -1768,8 +1835,7 @@ impl DeviceResources {
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let format = presentation_engine.format();
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.measurement_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.measurement_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -1782,9 +1848,12 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::MeasurementRenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+
+        self.measurement_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.measurement_render_archetype_arena.as_ref().unwrap().clone()
     };
 
     presentation_engine.archetypes_mut().create_measurement_archetype(
@@ -1804,7 +1873,7 @@ impl DeviceResources {
 
   #[named]
   fn create_marker_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
@@ -1825,8 +1894,7 @@ impl DeviceResources {
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let format = presentation_engine.format();
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.marker_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.marker_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -1839,9 +1907,12 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::MarkerRenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+
+        self.marker_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.marker_render_archetype_arena.as_ref().unwrap().clone()
     };
 
     presentation_engine.archetypes_mut().create_marker_archetype(
@@ -1861,7 +1932,7 @@ impl DeviceResources {
 
   #[named]
   fn create_billboard_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
@@ -1882,8 +1953,7 @@ impl DeviceResources {
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let format = presentation_engine.format();
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.billboard_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.billboard_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -1896,9 +1966,12 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::BillboardRenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+
+        self.billboard_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.billboard_render_archetype_arena.as_ref().unwrap().clone()
     };
 
     presentation_engine.archetypes_mut().create_billboard_archetype(
@@ -1918,7 +1991,7 @@ impl DeviceResources {
 
   #[named]
   fn create_particle_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
@@ -1939,8 +2012,7 @@ impl DeviceResources {
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let format = presentation_engine.format();
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.particle_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.particle_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -1953,9 +2025,12 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::ParticleRenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+
+        self.particle_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.particle_render_archetype_arena.as_ref().unwrap().clone()
     };
 
     presentation_engine.archetypes_mut().create_particle_archetype(
@@ -1975,7 +2050,7 @@ impl DeviceResources {
 
   #[named]
   fn create_particle2_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
@@ -1996,8 +2071,7 @@ impl DeviceResources {
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let format = presentation_engine.format();
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.particle2_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.particle2_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -2010,9 +2084,12 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::Particle2RenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+
+        self.particle2_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.particle2_render_archetype_arena.as_ref().unwrap().clone()
     };
 
     presentation_engine.archetypes_mut().create_particle2_archetype(
@@ -2032,7 +2109,7 @@ impl DeviceResources {
 
   #[named]
   fn create_trajectory_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
@@ -2053,8 +2130,7 @@ impl DeviceResources {
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let format = presentation_engine.format();
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.trajectory_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.trajectory_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -2067,9 +2143,12 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::TrajectoryRenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+
+        self.trajectory_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.trajectory_render_archetype_arena.as_ref().unwrap().clone()
     };
 
     presentation_engine.archetypes_mut().create_trajectory_archetype(
@@ -2089,7 +2168,7 @@ impl DeviceResources {
 
   #[named]
   fn create_ui_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
@@ -2110,8 +2189,7 @@ impl DeviceResources {
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let format = presentation_engine.format();
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.ui_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.ui_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -2124,9 +2202,12 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::UiRenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+
+        self.ui_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.ui_render_archetype_arena.as_ref().unwrap().clone()
     };
 
     presentation_engine.archetypes_mut().create_ui_archetype(
@@ -2146,7 +2227,7 @@ impl DeviceResources {
 
   #[named]
   fn create_cursor_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vertex_shader_key: ShaderKey,
@@ -2167,8 +2248,7 @@ impl DeviceResources {
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let format = presentation_engine.format();
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.cursor_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.cursor_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -2181,9 +2261,12 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::CursorRenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+
+        self.cursor_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.cursor_render_archetype_arena.as_ref().unwrap().clone()
     };
 
     presentation_engine.archetypes_mut().create_cursor_archetype(
@@ -2203,7 +2286,7 @@ impl DeviceResources {
 
   #[named]
   fn create_text_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     vertex_shader: &Shader,
     fragment_shader: &Shader,
@@ -2218,8 +2301,7 @@ impl DeviceResources {
     let format = presentation_engine.format();
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.text_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.text_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -2232,9 +2314,12 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::TextRenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+
+        self.text_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.text_render_archetype_arena.as_ref().unwrap().clone()
     };
     presentation_engine.archetypes_mut().create_text_archetype(
       device,
@@ -2254,7 +2339,7 @@ impl DeviceResources {
 
   #[named]
   fn create_text2_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vertex_shader: &shader_manager::Shader,
@@ -2270,8 +2355,7 @@ impl DeviceResources {
     let format = presentation_engine.format();
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.text2_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.text2_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -2284,9 +2368,12 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::Text2RenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+
+        self.text2_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.text2_render_archetype_arena.as_ref().unwrap().clone()
     };
     presentation_engine.archetypes_mut().create_text2_archetype(
       device,
@@ -2306,7 +2393,7 @@ impl DeviceResources {
 
   #[named]
   fn create_bvh_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vkey: ShaderKey,
@@ -2327,8 +2414,7 @@ impl DeviceResources {
     let format = presentation_engine.format();
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.bvh_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.bvh_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -2341,9 +2427,12 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::BvhRenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+
+        self.bvh_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.bvh_render_archetype_arena.as_ref().unwrap().clone()
     };
     presentation_engine.archetypes_mut().create_bvh_archetype(
       device,
@@ -2362,7 +2451,7 @@ impl DeviceResources {
 
   #[named]
   fn create_bvhwire2_archetype(
-    &self,
+    &mut self,
     device: &LogicalDevice,
     shader_manager: &shader_manager::ShaderManager,
     vkey: ShaderKey,
@@ -2383,8 +2472,7 @@ impl DeviceResources {
     let format = presentation_engine.format();
     let mut write_pipeline = DebugTrackedRwLock::write(&self.pipeline_pool);
     let arena = {
-      let mut arena_lock = DebugTrackedRwLock::write(&self.bvhwire2_render_archetype_arena);
-      if arena_lock.is_none() {
+      if self.bvhwire2_render_archetype_arena.is_none() {
         let ctx = resources::ArenaCreationContext {
           device,
           allocator: &self.allocator.allocator,
@@ -2397,9 +2485,12 @@ impl DeviceResources {
           outline_fragment_shader: None,
         };
         let new_arena = <resources::Bvhwire2RenderResourceArchetypeArena as resources::ArchetypeArenaCreate>::new_arena(&ctx)?;
-        *arena_lock = Some(alloc::sync::Arc::new(new_arena));
+
+        self.bvhwire2_render_archetype_arena = Some(alloc::sync::Arc::new(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(new_arena),
+        ));
       }
-      arena_lock.as_mut().unwrap().clone()
+      self.bvhwire2_render_archetype_arena.as_ref().unwrap().clone()
     };
     presentation_engine.archetypes_mut().create_bvhwire2_archetype(
       device,
@@ -2427,17 +2518,28 @@ impl DeviceResources {
     }
     archetypes_have_discardables
       || DebugTrackedRwLock::read(&self.physical_mesh_resources).is_some()
+      || DebugTrackedRwLock::read(&self.physical_mesh2_resources).is_some()
       || DebugTrackedRwLock::read(&self.sun_resources).is_some()
       || !DebugTrackedRwLock::read(&self.billboard_resources).is_empty()
   }
 
   #[named]
   fn clear_discardables(&mut self, device: &ash::Device) {
+    aethervk_oshal_rlib::log!("clear_discardables started!");
     debug_assert!(self.has_discardables());
+
+    for pe in DebugTrackedRwLock::write(&self.live_presentation_engines).values_mut() {
+      let mut pe_state = DebugTrackedRwLock::write(pe);
+      pe_state.archetypes_mut().discard(device, &self.discard_pool);
+    }
+
     if let Some(mut resources) = DebugTrackedRwLock::write(&self.physical_mesh_resources).take() {
+      aethervk_oshal_rlib::log!("Discarding {} physical_mesh_resources", resources.len());
       for (_, mut resource) in resources.drain() {
         resource.discard(device, &self.discard_pool, u64::MAX);
       }
+    } else {
+      aethervk_oshal_rlib::log!("physical_mesh_resources was None");
     }
     if let Some(mut resources) = DebugTrackedRwLock::write(&self.physical_mesh2_resources).take() {
       for (_, mut resource) in resources.drain() {
@@ -2499,7 +2601,7 @@ impl DeviceResources {
   fn new<'a>(
     instance: &instance::Instance,
     physical_device: vk::PhysicalDevice,
-    device: &ash::Device,
+    device: &LogicalDevice,
     unique_family_indices_iter: impl Iterator<Item = &'a u32>,
   ) -> GpuResult<Self> {
     // - linear sampler
@@ -2510,13 +2612,14 @@ impl DeviceResources {
       .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
       .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
       .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE);
-    let linear_sampler = unsafe { device.create_sampler(&sampler_info, None) }?;
+    let linear_sampler = unsafe { device.create_sampler(&sampler_info, None) }
+      .with_name(device, "Global Linear Sampler")?;
     // - VMA Device Allocator
     // TODO: this function should cleanup everything on the first error, not leak everything
     let mut allocator = match unsafe {
       GlobalDeviceAllocator::new(
         &instance.instance,
-        &device,
+        device,
         physical_device,
         instance.api_version(),
       )
@@ -2603,26 +2706,26 @@ impl DeviceResources {
       next_cmd_id: Arc::new(AtomicU64::new(1)),
       pending_downloads: DebugTrackedRwLock::new(hashbrown::HashMap::new()),
       frame_staging_arena: DebugTrackedRwLock::new(Some(frame_staging_arena)),
-      sun_render_archetype_arena: DebugTrackedRwLock::new(None),
-      physical_mesh_render_archetype_arena: DebugTrackedRwLock::new(None),
-      physical_mesh2_render_archetype_arena: DebugTrackedRwLock::new(None),
-      billboard_render_archetype_arena: DebugTrackedRwLock::new(None),
-      particle_render_archetype_arena: DebugTrackedRwLock::new(None),
-      particle2_render_archetype_arena: DebugTrackedRwLock::new(None),
-      cursor_render_archetype_arena: DebugTrackedRwLock::new(None),
-      marker_render_archetype_arena: DebugTrackedRwLock::new(None),
-      measurement_render_archetype_arena: DebugTrackedRwLock::new(None),
-      sky_render_archetype_arena: DebugTrackedRwLock::new(None),
-      grid_render_archetype_arena: DebugTrackedRwLock::new(None),
-      minimap_render_archetype_arena: DebugTrackedRwLock::new(None),
-      text_render_archetype_arena: DebugTrackedRwLock::new(None),
-      text2_render_archetype_arena: DebugTrackedRwLock::new(None),
-      bvh_render_archetype_arena: DebugTrackedRwLock::new(None),
-      bvhwire2_render_archetype_arena: DebugTrackedRwLock::new(None),
-      gizmo_render_archetype_arena: DebugTrackedRwLock::new(None),
-      trajectory_render_archetype_arena: DebugTrackedRwLock::new(None),
-      ui_render_archetype_arena: DebugTrackedRwLock::new(None),
-      background_render_archetype_arena: DebugTrackedRwLock::new(None),
+      sun_render_archetype_arena: None,
+      physical_mesh_render_archetype_arena: None,
+      physical_mesh2_render_archetype_arena: None,
+      billboard_render_archetype_arena: None,
+      particle_render_archetype_arena: None,
+      particle2_render_archetype_arena: None,
+      cursor_render_archetype_arena: None,
+      marker_render_archetype_arena: None,
+      measurement_render_archetype_arena: None,
+      sky_render_archetype_arena: None,
+      grid_render_archetype_arena: None,
+      minimap_render_archetype_arena: None,
+      text_render_archetype_arena: None,
+      text2_render_archetype_arena: None,
+      bvh_render_archetype_arena: None,
+      bvhwire2_render_archetype_arena: None,
+      gizmo_render_archetype_arena: None,
+      trajectory_render_archetype_arena: None,
+      ui_render_archetype_arena: None,
+      background_render_archetype_arena: None,
     })
   }
 
@@ -3001,21 +3104,26 @@ impl Device {
     // 3. Device creation
     let enabled_extension_names: Vec<_> =
       chosen_physical_device_query_result.enabled_extension_names();
-    let device_create_info = vk::DeviceCreateInfo::default()
+
+    let mut swapchain_maintenance1_features =
+      vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default().swapchain_maintenance1(true);
+
+    let mut device_create_info = vk::DeviceCreateInfo::default()
       .enabled_extension_names(&enabled_extension_names)
       .push_next(&mut features2)
       .queue_create_infos(&queue_infos);
+
+    if chosen_physical_device_query_result
+      .optional_extensions
+      .contains(utils::OptionalExtensionSupportFlags::SWAPCHAIN_MAINTENANCE1)
+    {
+      device_create_info = device_create_info.push_next(&mut swapchain_maintenance1_features);
+    }
 
     let device =
       unsafe { instance.instance.create_device(physical_device, &device_create_info, None) }?;
 
     let queues = Queues::from_device(&device, chosen_physical_device_query_result);
-    let res = DeviceResources::new(
-      instance.as_ref(),
-      physical_device,
-      &device,
-      chosen_physical_device_query_result.unique_family_indices_set().iter(),
-    )?;
 
     // bookkeeping data instantiation
     let depth_stencil_format: vk::Format = 'block: {
@@ -3062,22 +3170,29 @@ impl Device {
     let debug_utils = ash::ext::debug_utils::Device::new(&instance.instance, &device);
     #[cfg(target_vendor = "apple")]
     let metal_objects = ash::ext::metal_objects::Device::new(&instance.instance, &device);
+    let device = LogicalDevice {
+      timeline_semaphore,
+      handle: device,
+      submission_lock: DebugTrackedMutex::new(()),
+      create_renderpass2,
+      synchronization2,
+      buffer_device_address,
+      swapchain_maintenance1,
+      #[cfg(target_vendor = "apple")]
+      metal_objects,
+      #[cfg(debug_assertions)]
+      debug_utils,
+    };
+    let res = DeviceResources::new(
+      instance.as_ref(),
+      physical_device,
+      &device,
+      chosen_physical_device_query_result.unique_family_indices_set().iter(),
+    )?;
 
     Ok(Self {
       query_result: *chosen_physical_device_query_result,
-      device: LogicalDevice {
-        timeline_semaphore,
-        handle: device,
-        submission_lock: DebugTrackedMutex::new(()),
-        create_renderpass2,
-        synchronization2,
-        buffer_device_address,
-        swapchain_maintenance1,
-        #[cfg(target_vendor = "apple")]
-        metal_objects,
-        #[cfg(debug_assertions)]
-        debug_utils,
-      },
+      device,
       queues,
       res: Arc::new(DebugTrackedRwLock::new(res)),
       callback_stop_signal: Arc::new(core::sync::atomic::AtomicBool::new(false)),
@@ -3214,7 +3329,7 @@ impl RenderDevice for Device {
   /// Initializes all archetypes in the order they are declared inside `DeviceResources`
   #[named]
   fn init_archetypes(&self, handle: crate::gpu::PresentationEngineHandle) -> GpuResult<()> {
-    let res_guard = DebugTrackedRwLock::read(&self.res);
+    let mut res_guard = DebugTrackedRwLock::write(&self.res);
     res_guard.init_archetypes(
       &self.device,
       &self.queues,
@@ -3259,6 +3374,9 @@ impl RenderDevice for Device {
     let res_guard = DebugTrackedRwLock::read(&self.res);
     DebugTrackedRwLock::write(&res_guard.live_presentation_engines)
       .insert(handle, DebugTrackedRwLock::new(presentation_state));
+    drop(res_guard);
+
+    self.init_archetypes(handle)?;
 
     Ok(handle)
   }
@@ -3543,13 +3661,16 @@ impl RenderDevice for Device {
 
       let resource = unsafe {
         let dp_lock = DebugTrackedRwLock::read(&res_guard.descriptor_pool);
-        let descriptor_set = archetype_ref.create_descriptor_set_from_layout_at_index(
-          &self.device,
-          dp_lock.as_ref().unwrap_unchecked(),
-          &res_guard.discard_pool,
-          0,
-          debug_name,
-        )?;
+        let arena = archetype_ref.deref_arena().ok_or(gpu_err!("arena absent"))?;
+        let descriptor_set =
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&*arena)
+            .create_descriptor_set_from_layout_at_index(
+              &self.device,
+              dp_lock.as_ref().unwrap_unchecked(),
+              &res_guard.discard_pool,
+              0,
+              debug_name,
+            )?;
         ForwardMeshRenderResource::new(
           &self.device,
           &res_guard.allocator.allocator,
@@ -3571,14 +3692,27 @@ impl RenderDevice for Device {
             })
             .or_else(|| {
               Some(resources::Image {
-                image: archetype_ref.dummy_texture_handle.image,
-                image_view: archetype_ref.dummy_texture_handle.image_view,
-                allocation: archetype_ref.dummy_texture_handle.allocation,
+                image: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+                  &*arena,
+                )
+                .dummy_texture_handle
+                .image,
+                image_view: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+                  &*arena,
+                )
+                .dummy_texture_handle
+                .image_view,
+                allocation: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+                  &*arena,
+                )
+                .dummy_texture_handle
+                .allocation,
               })
             }),
           res_guard.linear_sampler,
           descriptor_set,
-          &archetype_ref.dummy_texture_handle,
+          &crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*arena)
+            .dummy_texture_handle,
           debug_name,
         )?
       };
@@ -3631,7 +3765,7 @@ impl RenderDevice for Device {
       let live_pes = DebugTrackedRwLock::read(&res_guard.live_presentation_engines);
       let pe_lock = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
       let pe = DebugTrackedRwLock::read(&pe_lock);
-      let archetypes = DebugTrackedRwLock::read(&pe.archetypes().physical_mesh_render_archetype);
+      let archetypes = DebugTrackedRwLock::read(&pe.archetypes().physical_mesh2_render_archetype);
       if archetypes.as_ref().is_none() {
         return Err(gpu_err_archetype_absent!());
       }
@@ -3776,13 +3910,16 @@ impl RenderDevice for Device {
 
       let resource = unsafe {
         let dp_lock = DebugTrackedRwLock::read(&res_guard.descriptor_pool);
-        let descriptor_set = archetype_ref.create_descriptor_set_from_layout_at_index(
-          &self.device,
-          dp_lock.as_ref().unwrap_unchecked(),
-          &res_guard.discard_pool,
-          0,
-          debug_name,
-        )?;
+        let arena = archetype_ref.deref_arena().ok_or(gpu_err!("arena absent"))?;
+        let descriptor_set =
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&*arena)
+            .create_descriptor_set_from_layout_at_index(
+              &self.device,
+              dp_lock.as_ref().unwrap_unchecked(),
+              &res_guard.discard_pool,
+              0,
+              debug_name,
+            )?;
 
         crate::gpu_backends::vulkan::device::resources::ForwardMesh2RenderResource::new(
           &self.device,
@@ -3807,9 +3944,21 @@ impl RenderDevice for Device {
             })
             .or_else(|| {
               Some(resources::Image {
-                image: archetype_ref.dummy_texture_handle.image,
-                image_view: archetype_ref.dummy_texture_handle.image_view,
-                allocation: archetype_ref.dummy_texture_handle.allocation,
+                image: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+                  &*arena,
+                )
+                .dummy_texture_handle
+                .image,
+                image_view: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+                  &*arena,
+                )
+                .dummy_texture_handle
+                .image_view,
+                allocation: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+                  &*arena,
+                )
+                .dummy_texture_handle
+                .allocation,
               })
             }),
           Some({
@@ -3845,7 +3994,8 @@ impl RenderDevice for Device {
           }), // emissive_paint_image
           res_guard.linear_sampler,
           descriptor_set,
-          &archetype_ref.dummy_texture_handle,
+          &crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*arena)
+            .dummy_texture_handle,
           debug_name,
         )?
       };
@@ -3922,7 +4072,11 @@ impl RenderDevice for Device {
       return Err(gpu_err_archetype_absent!());
     }
     let archetype_ref = unsafe { archetypes.as_ref().unwrap_unchecked() };
-    let pipeline_layout = archetype_ref.pipeline_layout.get();
+    let mesh_arena = archetype_ref.deref_arena().ok_or(gpu_err!("arena absent"))?;
+    let pipeline_layout =
+      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*mesh_arena)
+        .pipeline_layout
+        .get();
     // Wait, the plan was to use FrameStagingArena to dynamically allocate SceneData, MaterialData, ObjectData per frame.
     // However, I created MaterialData and ObjectData inside ForwardMesh2RenderResource instead of FrameStagingArena during draw_call!
     // So I need to use the buffers stored in the resource, but update them, or just use the device addresses directly if they are static.
@@ -4592,7 +4746,9 @@ impl RenderDevice for Device {
     let buffer_index =
       (entity_hash % resources::GizmoRenderResourceArchetypeArena::MAX_BUFFER_COUNT as u64) as u32;
 
-    let mut buffers = DebugTrackedRwLock::write(&archetype.host_buffers);
+    let arena_arc = archetype.deref_arena().ok_or(crate::gpu_err!("arena absent"))?;
+    let arena = DebugTrackedRwLock::read(&*arena_arc);
+    let mut buffers = DebugTrackedRwLock::write(&arena.host_buffers);
 
     // We just recreate the buffer every frame for simplicity, or we can update it if it is mapped
     // Let's just create a new one and discard the old one
@@ -4650,7 +4806,13 @@ impl RenderDevice for Device {
       vk::DescriptorBufferInfo::default().buffer(vk_buf).offset(0).range(vk::WHOLE_SIZE);
 
     let write = vk::WriteDescriptorSet::default()
-      .dst_set(archetype.descriptor_set.get())
+      .dst_set(
+        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+          &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+        )
+        .descriptor_set
+        .get(),
+      )
       .dst_binding(0)
       .dst_array_element(buffer_index)
       .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
@@ -4738,27 +4900,33 @@ impl RenderDevice for Device {
         .dst_offset(i_dst_offset)
         .size(indirect_size as u64);
 
+      let (mega_particle_buffer, mega_indirect_buffer) = {
+        let arena_arc = archetype.deref_arena().ok_or(crate::gpu_err_device!())?;
+        let arena = DebugTrackedRwLock::read(&*arena_arc);
+        (arena.mega_particle_buffer, arena.mega_indirect_buffer)
+      };
+
       unsafe {
         self.device.cmd_copy_buffer(
           cmd,
           staging_arena.buffer,
-          archetype.mega_particle_buffer,
+          mega_particle_buffer,
           core::slice::from_ref(&p_copy),
         );
         self.device.cmd_copy_buffer(
           cmd,
           staging_arena.buffer,
-          archetype.mega_indirect_buffer,
+          mega_indirect_buffer,
           core::slice::from_ref(&i_copy),
         );
       }
 
       let mut p_barrier = vk::BufferMemoryBarrier::default()
-        .buffer(archetype.mega_particle_buffer)
+        .buffer(mega_particle_buffer)
         .offset(p_dst_offset)
         .size(particle_data_size as u64);
       let mut i_barrier = vk::BufferMemoryBarrier::default()
-        .buffer(archetype.mega_indirect_buffer)
+        .buffer(mega_indirect_buffer)
         .offset(i_dst_offset)
         .size(indirect_size as u64);
 
@@ -4862,27 +5030,33 @@ impl RenderDevice for Device {
         .dst_offset(i_dst_offset)
         .size(indirect_size as u64);
 
+      let (mega_particle_buffer, mega_indirect_buffer) = {
+        let arena_arc = archetype.deref_arena().ok_or(crate::gpu_err_device!())?;
+        let arena = DebugTrackedRwLock::read(&*arena_arc);
+        (arena.mega_particle_buffer, arena.mega_indirect_buffer)
+      };
+
       unsafe {
         self.device.cmd_copy_buffer(
           cmd,
           staging_arena.buffer,
-          archetype.mega_particle_buffer,
+          mega_particle_buffer,
           core::slice::from_ref(&p_copy),
         );
         self.device.cmd_copy_buffer(
           cmd,
           staging_arena.buffer,
-          archetype.mega_indirect_buffer,
+          mega_indirect_buffer,
           core::slice::from_ref(&i_copy),
         );
       }
 
       let mut p_barrier = vk::BufferMemoryBarrier::default()
-        .buffer(archetype.mega_particle_buffer)
+        .buffer(mega_particle_buffer)
         .offset(p_dst_offset)
         .size(particle_data_size as u64);
       let mut i_barrier = vk::BufferMemoryBarrier::default()
-        .buffer(archetype.mega_indirect_buffer)
+        .buffer(mega_indirect_buffer)
         .offset(i_dst_offset)
         .size(indirect_size as u64);
 
@@ -4962,19 +5136,37 @@ impl RenderDevice for Device {
     }
     let archetype = unsafe { archetype_guard.as_mut().unwrap_unchecked() };
 
-    archetype.tick = archetype.tick.wrapping_add(1);
-    let current_tick = archetype.tick;
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+      &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+    )
+    .tick = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+      &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+    )
+    .tick
+    .wrapping_add(1);
+    let current_tick = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+      &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+    )
+    .tick;
 
     // 1. GARBAGE COLLECTION: Purge curves missing for > 10 frames
     let mut to_remove = alloc::vec::Vec::new();
-    for (id, alloc) in archetype.curves.iter() {
+    for (id, alloc) in crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+      &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+    )
+    .curves
+    .iter()
+    {
       if current_tick.saturating_sub(alloc.last_seen_tick) > 10 {
         to_remove.push(*id);
       }
     }
+
+    let arena_arc = archetype.deref_arena().ok_or(gpu_err!("arena absent"))?;
+    let mut arena_mut = DebugTrackedRwLock::write(&*arena_arc);
     for id in to_remove {
-      if let Some(alloc) = archetype.curves.remove(&id) {
-        archetype.segment_allocator.free(alloc.segments_offset, alloc.segment_capacity as u64);
+      if let Some(alloc) = arena_mut.curves.remove(&id) {
+        arena_mut.segment_allocator.free(alloc.segments_offset, alloc.segment_capacity as u64);
       }
     }
 
@@ -4998,28 +5190,21 @@ impl RenderDevice for Device {
         model_mat,
       );
       let mut needs_upload = false;
-      let offset;
+      let mut offset = 0;
+      let mut do_free: Option<(u64, u64)> = None;
+      let mut do_update = false;
 
       // 2. RECOGNIZE & ALLOCATE
-      let crate::gpu_backends::vulkan::device::resources::TrajectoryRenderResourceArchetypeArena {
-        curves,
-        segment_allocator,
-        ..
-      } = &mut **archetype;
-
-      if let Some(alloc) = curves.get_mut(&entity_id) {
+      if let Some(alloc) = arena_mut.curves.get_mut(&entity_id) {
         alloc.last_seen_tick = current_tick;
 
         if alloc.segment_capacity < local_segments_count {
+          do_free = Some((alloc.segments_offset, alloc.segment_capacity as u64));
+          do_update = true;
           // Curve grew -> Free old and allocate bigger block (+ 50% padding to prevent endless reallocation stutter)
-          segment_allocator.free(alloc.segments_offset, alloc.segment_capacity as u64);
-          let new_cap = local_segments_count + local_segments_count / 2;
+          //
+          // moved reallocation in do_free, do_update block, so we don't mutable borrow more than once
 
-          offset = segment_allocator.allocate(new_cap as u64).unwrap_or(0);
-
-          alloc.segments_offset = offset;
-          alloc.segment_capacity = new_cap;
-          alloc.last_hash = current_hash;
           needs_upload = true;
         } else {
           offset = alloc.segments_offset;
@@ -5031,8 +5216,8 @@ impl RenderDevice for Device {
       } else {
         let new_cap = local_segments_count + local_segments_count / 2;
 
-        offset = segment_allocator.allocate(new_cap as u64).unwrap_or(0);
-        curves.insert(
+        offset = arena_mut.segment_allocator.allocate(new_cap as u64).unwrap_or(0);
+        arena_mut.curves.insert(
           *entity_id,
           crate::gpu_backends::vulkan::device::resources::CurveAllocation {
             segments_offset: offset,
@@ -5044,10 +5229,28 @@ impl RenderDevice for Device {
         needs_upload = true;
       }
 
+      if let Some((segments_offset, segment_capacity)) = do_free {
+        arena_mut.segment_allocator.free(segments_offset, segment_capacity);
+        let new_cap = local_segments_count + local_segments_count / 2;
+        offset = arena_mut.segment_allocator.allocate(new_cap as u64).unwrap_or(0);
+      }
+
+      if do_update {
+        if let Some(alloc) = arena_mut.curves.get_mut(&entity_id) {
+          let new_cap = local_segments_count + local_segments_count / 2;
+
+          alloc.segments_offset = offset;
+          alloc.segment_capacity = new_cap;
+          alloc.last_hash = current_hash;
+        }
+      }
+
       // 3. STAGE GEOMETRY (Only runs when genuinely modified!)
       if needs_upload {
-        use aethervk_oshal_rlib::math::matrix::MatrixVectorMul;
-        use aethervk_oshal_rlib::math::vector::{Vector4, vec4::Vec4f32};
+        use aethervk_oshal_rlib::math::{
+          matrix::MatrixVectorMul,
+          vector::{Vector4, vec4::Vec4f32},
+        };
 
         let start_idx = all_segments_to_upload.len();
         for j in 0..local_segments_count {
@@ -5100,7 +5303,10 @@ impl RenderDevice for Device {
 
       // 4. METADATA (Small arrays densely rebuilt per frame for flawless sequential instanced rendering)
       traj_gpus.push(TrajectoryGpu {
-        segments_ptr: archetype.segments_ptr
+        segments_ptr: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+          &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+        )
+        .segments_ptr
           + (offset * core::mem::size_of::<RationalBezierGpu>() as u64),
         color: traj_comp.color,
         line_width: traj_comp.line_width,
@@ -5190,7 +5396,11 @@ impl RenderDevice for Device {
           self.device.cmd_copy_buffer(
             cmd,
             staging_buffer,
-            archetype.segments_buffer.get(),
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+              &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+            )
+            .segments_buffer
+            .get(),
             &vk_buffer_copies,
           );
         }
@@ -5198,12 +5408,25 @@ impl RenderDevice for Device {
           self.device.cmd_copy_buffer(
             cmd,
             staging_buffer,
-            archetype.trajectories_buffer.get(),
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+              &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+            )
+            .trajectories_buffer
+            .get(),
             &[traj_copy],
           );
         }
         if map_size > 0 {
-          self.device.cmd_copy_buffer(cmd, staging_buffer, archetype.map_buffer.get(), &[map_copy]);
+          self.device.cmd_copy_buffer(
+            cmd,
+            staging_buffer,
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+              &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+            )
+            .map_buffer
+            .get(),
+            &[map_copy],
+          );
         }
 
         let memory_barrier = vk::MemoryBarrier2::default()
@@ -5228,8 +5451,14 @@ impl RenderDevice for Device {
       pipeline,
       total_vertices: (max_subdivs + 1) * 2,
       total_segments,
-      map_ptr: archetype.map_ptr,
-      traj_ptr: archetype.trajectories_ptr,
+      map_ptr: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+        &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+      )
+      .map_ptr,
+      traj_ptr: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+        &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+      )
+      .trajectories_ptr,
     }))
   }
 
@@ -5252,7 +5481,12 @@ impl RenderDevice for Device {
     let archetype = archetype_guard.as_mut().ok_or(gpu_err_archetype_absent!())?;
 
     let elements_ptr = unsafe {
-      let data_ptr = res_guard.allocator.allocator.map_memory(&mut archetype.elements_alloc)?;
+      let data_ptr = res_guard.allocator.allocator.map_memory(
+        &mut crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+          &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+        )
+        .elements_alloc,
+      )?;
 
       core::ptr::copy_nonoverlapping(
         ui_elements.as_ptr() as *const u8,
@@ -5261,12 +5495,20 @@ impl RenderDevice for Device {
       );
 
       let _ = res_guard.allocator.allocator.flush_allocation(
-        &archetype.elements_alloc,
+        &crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+          &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+        )
+        .elements_alloc,
         0,
         vk::WHOLE_SIZE as u64,
       );
 
-      res_guard.allocator.allocator.unmap_memory(&mut archetype.elements_alloc);
+      res_guard.allocator.allocator.unmap_memory(
+        &mut crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+          &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+        )
+        .elements_alloc,
+      );
 
       let barrier = vk::BufferMemoryBarrier2::default()
         .src_stage_mask(vk::PipelineStageFlags2::HOST)
@@ -5277,7 +5519,13 @@ impl RenderDevice for Device {
         .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::VERTEX_ATTRIBUTE_READ)
         .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
         .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .buffer(archetype.elements_buffer.get())
+        .buffer(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+            &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+          )
+          .elements_buffer
+          .get(),
+        )
         .offset(0)
         .size(vk::WHOLE_SIZE);
 
@@ -5285,10 +5533,16 @@ impl RenderDevice for Device {
         vk::DependencyInfo::default().buffer_memory_barriers(core::slice::from_ref(&barrier));
       self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info);
 
-      archetype.elements_ptr
+      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+        &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+      )
+      .elements_ptr
     };
 
-    archetype.tick += 1;
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+      &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+    )
+    .tick += 1;
 
     Ok(Some(crate::gpu::UiBatchCall {
       elements_ptr,
@@ -5316,7 +5570,12 @@ impl RenderDevice for Device {
     let archetype = archetype_guard.as_mut().ok_or(gpu_err_archetype_absent!())?;
 
     let glyphs_ptr = unsafe {
-      let data_ptr = res_guard.allocator.allocator.map_memory(&mut archetype.glyphs_alloc)?;
+      let data_ptr = res_guard.allocator.allocator.map_memory(
+        &mut crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+          &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+        )
+        .glyphs_alloc,
+      )?;
 
       core::ptr::copy_nonoverlapping(
         glyphs.as_ptr() as *const u8,
@@ -5325,12 +5584,20 @@ impl RenderDevice for Device {
       );
 
       let _ = res_guard.allocator.allocator.flush_allocation(
-        &archetype.glyphs_alloc,
+        &crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+          &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+        )
+        .glyphs_alloc,
         0,
         vk::WHOLE_SIZE as u64,
       );
 
-      res_guard.allocator.allocator.unmap_memory(&mut archetype.glyphs_alloc);
+      res_guard.allocator.allocator.unmap_memory(
+        &mut crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+          &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+        )
+        .glyphs_alloc,
+      );
 
       let barrier = vk::BufferMemoryBarrier2::default()
         .src_stage_mask(vk::PipelineStageFlags2::HOST)
@@ -5343,7 +5610,13 @@ impl RenderDevice for Device {
         .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::VERTEX_ATTRIBUTE_READ)
         .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
         .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .buffer(archetype.glyphs_buffer.get())
+        .buffer(
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+            &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+          )
+          .glyphs_buffer
+          .get(),
+        )
         .offset(0)
         .size(vk::WHOLE_SIZE);
 
@@ -5351,7 +5624,10 @@ impl RenderDevice for Device {
         vk::DependencyInfo::default().buffer_memory_barriers(core::slice::from_ref(&barrier));
       self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info);
 
-      archetype.glyphs_ptr
+      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+        &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+      )
+      .glyphs_ptr
     };
 
     Ok(Some(crate::gpu::Text2BatchCall {
@@ -5380,7 +5656,8 @@ impl RenderDevice for Device {
     unsafe {
       self.device.cmd_draw_indirect(
         cmd,
-        archetype.mega_indirect_buffer,
+        DebugTrackedRwLock::read(&*archetype.deref_arena().ok_or(crate::gpu_err_device!())?)
+          .mega_indirect_buffer,
         i_offset,
         1,
         core::mem::size_of::<vk::DrawIndirectCommand>() as u32,
@@ -5410,7 +5687,8 @@ impl RenderDevice for Device {
     unsafe {
       self.device.cmd_draw_indirect(
         cmd,
-        archetype.mega_indirect_buffer,
+        DebugTrackedRwLock::read(&*archetype.deref_arena().ok_or(crate::gpu_err_device!())?)
+          .mega_indirect_buffer,
         i_offset,
         1,
         core::mem::size_of::<vk::DrawIndirectCommand>() as u32,
@@ -5529,33 +5807,33 @@ impl RenderDevice for Device {
     // TODO font atlas is shared among all text archetypes, hence DeviceResources also should hold
     // an Arc for each of these
     {
-      let mut archetype1 = DebugTrackedRwLock::write(&pe.archetypes().text_render_archetype);
-      if let Some(a) = archetype1.as_mut() {
-        idx = a.upload_font_atlas(
-          &self.device,
-          &self.queues.get_graphics_queue(),
-          &res_guard.allocator.allocator,
-          staging_arena_ref,
-          command_buffer,
-          hash,
-          font_atlas.clone(),
-        )?;
-      }
+      let a1_arc =
+        res_guard.text_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent text1"))?;
+      let mut a1 = DebugTrackedRwLock::write(&*a1_arc);
+      idx = a1.upload_font_atlas(
+        &self.device,
+        &self.queues.get_graphics_queue(),
+        &res_guard.allocator.allocator,
+        staging_arena_ref,
+        command_buffer,
+        hash,
+        font_atlas.clone(),
+      )?;
     }
 
     {
-      let mut archetype2 = DebugTrackedRwLock::write(&pe.archetypes().text2_render_archetype);
-      if let Some(a) = archetype2.as_mut() {
-        idx = a.upload_font_atlas(
-          &self.device,
-          &self.queues.get_graphics_queue(),
-          &res_guard.allocator.allocator,
-          staging_arena_ref,
-          command_buffer,
-          hash,
-          font_atlas,
-        )?;
-      }
+      let a2_arc =
+        res_guard.text2_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent text2"))?;
+      let mut a2 = DebugTrackedRwLock::write(&*a2_arc);
+      idx = a2.upload_font_atlas(
+        &self.device,
+        &self.queues.get_graphics_queue(),
+        &res_guard.allocator.allocator,
+        staging_arena_ref,
+        command_buffer,
+        hash,
+        font_atlas,
+      )?;
     }
 
     Ok(idx)
@@ -5566,24 +5844,19 @@ impl RenderDevice for Device {
     let res_guard = DebugTrackedRwLock::read(&self.res);
     // TODO verify that we don't need + 1 is correct to discard on next timeline?
     let timeline = res_guard.get_timeline_semaphore_cached_value();
-    let live_pes = DebugTrackedRwLock::write(&res_guard.live_presentation_engines);
 
-    for (_, pe_lock) in live_pes.iter() {
-      let pe = DebugTrackedRwLock::read(&pe_lock);
+    {
+      let a1_arc =
+        res_guard.text_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent text1"))?;
+      let mut a1 = DebugTrackedRwLock::write(&*a1_arc);
+      let _ = a1.remove_font_atlas(hash, &res_guard.discard_pool, timeline);
+    }
 
-      {
-        let mut archetype1 = DebugTrackedRwLock::write(&pe.archetypes().text_render_archetype);
-        if let Some(a) = archetype1.as_mut() {
-          let _ = a.remove_font_atlas(hash, &res_guard.discard_pool, timeline);
-        }
-      }
-
-      {
-        let mut archetype2 = DebugTrackedRwLock::write(&pe.archetypes().text2_render_archetype);
-        if let Some(a) = archetype2.as_mut() {
-          let _ = a.remove_font_atlas(hash, &res_guard.discard_pool, timeline);
-        }
-      }
+    {
+      let a2_arc =
+        res_guard.text2_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent text2"))?;
+      let mut a2 = DebugTrackedRwLock::write(&*a2_arc);
+      let _ = a2.remove_font_atlas(hash, &res_guard.discard_pool, timeline);
     }
 
     Ok(())
@@ -5613,6 +5886,7 @@ impl RenderDevice for Device {
     }
   }
 
+  // TODO rewrite with transaction behaviour
   #[named]
   fn download_windowless_image(
     &self,
@@ -6085,7 +6359,10 @@ impl RenderDevice for Device {
     let image = {
       let billboard_render_archetype_ref =
         unsafe { billboard_render_archetype.as_ref().unwrap_unchecked() };
-      billboard_render_archetype_ref.add_texture(
+      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+        &*billboard_render_archetype_ref.deref_arena().ok_or(crate::gpu_err_device!())?,
+      )
+      .add_texture(
         &self.device,
         &res.allocator.allocator,
         cmd,
@@ -6138,7 +6415,11 @@ impl RenderDevice for Device {
         resource.position_vertex_buffer.buffer.get(),
         resource.attributes_vertex_buffer.buffer.get(),
         resource.index_buffer.buffer.get(),
-        archetype.pipeline_layout.get(),
+        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+          &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+        )
+        .pipeline_layout
+        .get(),
         resource.descriptor_set.get(),
       )
     };
@@ -6190,78 +6471,178 @@ impl RenderDevice for Device {
     let layout = match archetype {
       ArchetypeId::Sun => DebugTrackedRwLock::read(&pe.archetypes().sun_render_archetype)
         .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+        .and_then(|a| a.deref_arena())
+        .map(|a| {
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+            .pipeline_layout
+            .get()
+        }),
       ArchetypeId::PhysicalMesh => {
         DebugTrackedRwLock::read(&pe.archetypes().physical_mesh_render_archetype)
           .as_ref()
-          .map(|a| a.pipeline_layout.get())
+          .and_then(|a| a.deref_arena())
+          .map(|a| {
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+              .pipeline_layout
+              .get()
+          })
       }
       ArchetypeId::Billboard => {
         DebugTrackedRwLock::read(&pe.archetypes().billboard_render_archetype)
           .as_ref()
-          .map(|a| a.pipeline_layout.get())
+          .and_then(|a| a.deref_arena())
+          .map(|a| {
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+              .pipeline_layout
+              .get()
+          })
       }
       ArchetypeId::Cursor => DebugTrackedRwLock::read(&pe.archetypes().cursor_render_archetype)
         .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+        .and_then(|a| a.deref_arena())
+        .map(|a| {
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+            .pipeline_layout
+            .get()
+        }),
       ArchetypeId::Marker => DebugTrackedRwLock::read(&pe.archetypes().marker_render_archetype)
         .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+        .and_then(|a| a.deref_arena())
+        .map(|a| {
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+            .pipeline_layout
+            .get()
+        }),
       ArchetypeId::Measurement => {
         DebugTrackedRwLock::read(&pe.archetypes().measurement_render_archetype)
           .as_ref()
-          .map(|a| a.pipeline_layout.get())
+          .and_then(|a| a.deref_arena())
+          .map(|a| {
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+              .pipeline_layout
+              .get()
+          })
       }
       ArchetypeId::Sky => DebugTrackedRwLock::read(&pe.archetypes().sky_render_archetype)
         .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+        .and_then(|a| a.deref_arena())
+        .map(|a| {
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+            .pipeline_layout
+            .get()
+        }),
       ArchetypeId::Grid => DebugTrackedRwLock::read(&pe.archetypes().grid_render_archetype)
         .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+        .and_then(|a| a.deref_arena())
+        .map(|a| {
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+            .pipeline_layout
+            .get()
+        }),
       ArchetypeId::Minimap => DebugTrackedRwLock::read(&pe.archetypes().minimap_render_archetype)
         .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+        .and_then(|a| a.deref_arena())
+        .map(|a| {
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+            .pipeline_layout
+            .get()
+        }),
       ArchetypeId::Text => DebugTrackedRwLock::read(&pe.archetypes().text_render_archetype)
         .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+        .and_then(|a| a.deref_arena())
+        .map(|a| {
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+            .pipeline_layout
+            .get()
+        }),
       ArchetypeId::Bvh => DebugTrackedRwLock::read(&pe.archetypes().bvh_render_archetype)
         .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+        .and_then(|a| a.deref_arena())
+        .map(|a| {
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+            .pipeline_layout
+            .get()
+        }),
       ArchetypeId::Particle => DebugTrackedRwLock::read(&pe.archetypes().particle_render_archetype)
         .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+        .and_then(|a| a.deref_arena())
+        .map(|a| {
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+            .pipeline_layout
+            .get()
+        }),
       ArchetypeId::Gizmo => DebugTrackedRwLock::read(&pe.archetypes().gizmo_render_archetype)
         .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+        .and_then(|a| a.deref_arena())
+        .map(|a| {
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+            .pipeline_layout
+            .get()
+        }),
       ArchetypeId::PhysicalMesh2 => {
         DebugTrackedRwLock::read(&pe.archetypes().physical_mesh2_render_archetype)
           .as_ref()
-          .map(|a| a.pipeline_layout.get())
+          .and_then(|a| a.deref_arena())
+          .map(|a| {
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+              .pipeline_layout
+              .get()
+          })
       }
       ArchetypeId::Particle2 => {
         DebugTrackedRwLock::read(&pe.archetypes().particle2_render_archetype)
           .as_ref()
-          .map(|a| a.pipeline_layout.get())
+          .and_then(|a| a.deref_arena())
+          .map(|a| {
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+              .pipeline_layout
+              .get()
+          })
       }
       ArchetypeId::Trajectory => {
         DebugTrackedRwLock::read(&pe.archetypes().trajectory_render_archetype)
           .as_ref()
-          .map(|a| a.pipeline_layout.get())
+          .and_then(|a| a.deref_arena())
+          .map(|a| {
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+              .pipeline_layout
+              .get()
+          })
       }
       ArchetypeId::Ui => DebugTrackedRwLock::read(&pe.archetypes().ui_render_archetype)
         .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+        .and_then(|a| a.deref_arena())
+        .map(|a| {
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+            .pipeline_layout
+            .get()
+        }),
       ArchetypeId::Background => {
         DebugTrackedRwLock::read(&pe.archetypes().background_render_archetype)
           .as_ref()
-          .map(|a| a.pipeline_layout.get())
+          .and_then(|a| a.deref_arena())
+          .map(|a| {
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+              .pipeline_layout
+              .get()
+          })
       }
       ArchetypeId::Text2 => DebugTrackedRwLock::read(&pe.archetypes().text_render_archetype)
         .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+        .and_then(|a| a.deref_arena())
+        .map(|a| {
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+            .pipeline_layout
+            .get()
+        }),
       ArchetypeId::Bvhwire2 => DebugTrackedRwLock::read(&pe.archetypes().bvhwire2_render_archetype)
         .as_ref()
-        .map(|a| a.pipeline_layout.get()),
+        .and_then(|a| a.deref_arena())
+        .map(|a| {
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+            .pipeline_layout
+            .get()
+        }),
     }
     .ok_or(gpu_err_archetype_absent!())?;
 
@@ -6492,7 +6873,11 @@ impl RenderDevice for Device {
         .unwrap()
         .allocate(
           &self.device,
-          archetype_ref.descriptor_set_layout.get(),
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+            &*archetype_ref.deref_arena().ok_or(crate::gpu_err_device!())?,
+          )
+          .descriptor_set_layout
+          .get(),
           &res_guard.discard_pool,
           timeline,
           "Sun",
@@ -6659,8 +7044,13 @@ impl RenderDevice for Device {
         DebugTrackedRwLock::read(&pe.archetypes().billboard_render_archetype);
       let billboard_render_archetype_ref =
         billboard_render_archetype.as_ref().ok_or(gpu_err_archetype_absent!())?;
-      let d: vk::DescriptorSet = billboard_render_archetype_ref.arena.descriptor_set.get();
-      let layout = billboard_render_archetype_ref.arena.pipeline_layout.get();
+      let (d, layout) = {
+        let arena_arc =
+          billboard_render_archetype_ref.deref_arena().ok_or(gpu_err!("arena absent"))?;
+        let arena = DebugTrackedRwLock::read(&*arena_arc);
+        (arena.descriptor_set.get(), arena.pipeline_layout.get())
+      };
+
       let pipeline_key = billboard_render_archetype_ref.pipeline_key;
       let pipeline = DebugTrackedRwLock::read(&res.pipeline_pool)
         .get_graphics_pipeline(pipeline_key)
@@ -6766,13 +7156,19 @@ impl RenderDevice for Device {
       let (staging_offset, staging_ptr) =
         staging.allocate(data_size as usize, 16).ok_or(GpuError::OutOfMemory)?;
 
+      let arena_arc =
+        res.bvhwire2_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+      let arena = DebugTrackedRwLock::read(&*arena_arc);
+      let data_buffer = arena.data_buffer;
+      let data_ptr = arena.data_ptr;
+
       (
         cmd,
         staging_offset,
         staging_ptr,
-        archetype.data_buffer.get(),
+        data_buffer.get(),
         staging.buffer,
-        archetype.data_ptr,
+        data_ptr,
         archetype.pipeline_key,
       )
     }; // <- locks released here
@@ -6833,12 +7229,14 @@ impl RenderDevice for Device {
       let pipeline = DebugTrackedRwLock::read(&res_guard.pipeline_pool)
         .get_graphics_pipeline(archetype.pipeline_key)
         .ok_or(gpu_err_pipeline_absent!())?;
-
+      let arena_arc =
+        res_guard.gizmo_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+      let arena = DebugTrackedRwLock::read(&*arena_arc);
       (
         cmd,
         pipeline.get(),
-        archetype.pipeline_layout.get(),
-        archetype.descriptor_set.get(),
+        arena.pipeline_layout.get(),
+        arena.descriptor_set.get(),
       )
     }; // <- locks released here
 
@@ -6871,7 +7269,12 @@ impl RenderDevice for Device {
       let sun_archetype = DebugTrackedRwLock::read(&pe.archetypes().sun_render_archetype);
       let layout = sun_archetype
         .as_ref()
-        .map(|a| a.pipeline_layout.get())
+        .and_then(|a| a.deref_arena())
+        .map(|a| {
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*a)
+            .pipeline_layout
+            .get()
+        })
         .ok_or(gpu_err_archetype_absent!())?;
       let ds = sun_resource
         .as_ref()
@@ -6914,12 +7317,15 @@ impl RenderDevice for Device {
       let p = DebugTrackedRwLock::read(&res_guard.pipeline_pool)
         .get_graphics_pipeline(pipeline)
         .ok_or(gpu_err_pipeline_absent!())?;
+      let arena_arc =
+        res_guard.particle_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+      let arena = DebugTrackedRwLock::read(&*arena_arc);
 
       (
         cmd,
         p.get(),
-        archetype.pipeline_layout.get(),
-        archetype.descriptor_set.get(),
+        arena.pipeline_layout.get(),
+        arena.descriptor_set.get(),
       )
     }; // <- locks released here
 
@@ -6951,17 +7357,20 @@ impl RenderDevice for Device {
       if archetype_guard.is_none() {
         return Err(gpu_err_archetype_absent!());
       }
-      let archetype = unsafe { archetype_guard.as_ref().unwrap() };
+      let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
 
       let p = DebugTrackedRwLock::read(&res_guard.pipeline_pool)
         .get_graphics_pipeline(archetype.pipeline_key)
         .unwrap();
+      let arena_arc =
+        res_guard.particle2_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+      let arena = DebugTrackedRwLock::read(&*arena_arc);
 
       (
         cmd,
         p.get(),
-        archetype.pipeline_layout.get(),
-        archetype.descriptor_set.get(),
+        arena.pipeline_layout.get(),
+        arena.descriptor_set.get(),
       )
     };
 
@@ -6998,12 +7407,15 @@ impl RenderDevice for Device {
       let p = DebugTrackedRwLock::write(&res_guard.pipeline_pool)
         .get_graphics_pipeline(archetype.pipeline_key)
         .unwrap();
+      let arena_arc =
+        res_guard.trajectory_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+      let arena = DebugTrackedRwLock::read(&*arena_arc);
 
       (
         cmd,
         p.get(),
-        archetype.pipeline_layout.get(),
-        archetype.descriptor_set.get(),
+        arena.pipeline_layout.get(),
+        arena.descriptor_set.get(),
       )
     };
 
@@ -7040,12 +7452,15 @@ impl RenderDevice for Device {
       let p = DebugTrackedRwLock::write(&res_guard.pipeline_pool)
         .get_graphics_pipeline(archetype.pipeline_key)
         .ok_or(gpu_err_pipeline_absent!())?;
+      let arena_arc =
+        res_guard.ui_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+      let arena = DebugTrackedRwLock::read(&*arena_arc);
 
       (
         cmd,
         p.get(),
-        archetype.pipeline_layout.get(),
-        archetype.descriptor_set.get(),
+        arena.pipeline_layout.get(),
+        arena.descriptor_set.get(),
       )
     };
 
@@ -7074,42 +7489,24 @@ impl RenderDevice for Device {
       return Err(gpu_err!("sky image absent"));
     }
     let live_pes = DebugTrackedRwLock::read(&res_guard.live_presentation_engines);
+    let arena_arc =
+      res_guard.sky_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
 
     let do_alloc = {
       let pe = DebugTrackedRwLock::read(live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?);
-      let mut sky_render_archetype_guard =
-        DebugTrackedRwLock::write(&pe.archetypes().sky_render_archetype);
+      let sky_render_archetype_guard =
+        DebugTrackedRwLock::read(&pe.archetypes().sky_render_archetype);
       if sky_render_archetype_guard.is_none() {
         oshal::log!("[RenderThread] render_sky ERROR: sky_render_archetype_guard.is_none");
         return Err(gpu_err_archetype_absent!());
       }
 
-      use ash::vk::Handle;
-      let needs_desc =
-        sky_render_archetype_guard.as_mut().unwrap().descriptor_set.is_none_or(|d| d.is_null());
-
-      let mut do_alloc = false;
-      if needs_desc {
-        {
-          let arch_ref = sky_render_archetype_guard.as_ref();
-          if let Some(arch) = arch_ref {
-            if arch.descriptor_set.is_none() {
-              do_alloc = true;
-            }
-          }
-        }
-      }
-
-      do_alloc
+      DebugTrackedRwLock::read(&*arena_arc).descriptor_set.is_none()
     };
 
     if do_alloc {
-      let mut pe = DebugTrackedRwLock::write(live_pes.get(&handle).ok_or(gpu_err!(
-        "prepare_sky_for_render: presentation engine was invalidated"
-      ))?);
-      let mut sky_render_archetype_guard =
-        DebugTrackedRwLock::write(&pe.archetypes_mut().sky_render_archetype);
-      let layout = sky_render_archetype_guard.as_mut().unwrap().descriptor_set_layout.get();
+      let mut arena = DebugTrackedRwLock::write(&*arena_arc);
+      let layout = arena.descriptor_set_layout.get();
 
       let pool_guard = DebugTrackedRwLock::read(&res_guard.descriptor_pool);
       let new_set = pool_guard
@@ -7143,17 +7540,13 @@ impl RenderDevice for Device {
         .image_info(core::slice::from_ref(&image_info));
       unsafe { self.device.update_descriptor_sets(&[write_descriptor_set], &[]) };
 
-      sky_render_archetype_guard.as_mut().unwrap().descriptor_set =
-        Some(unsafe { NonZeroHandle::new_unchecked(new_set) });
+      arena.descriptor_set = Some(unsafe { NonZeroHandle::new_unchecked(new_set) });
     }
 
     let (layout, descriptor_set) = {
-      let pe = DebugTrackedRwLock::read(live_pes.get(&handle).unwrap());
-      let mut sky_archetype_lock = DebugTrackedRwLock::write(&pe.archetypes().sky_render_archetype);
-      let sky_archetype = sky_archetype_lock.as_mut().ok_or(crate::gpu_err_device!())?;
-      let descriptor_set =
-        sky_archetype.arena.descriptor_set.ok_or(crate::gpu_err_device!())?.get();
-      let layout = sky_archetype.arena.pipeline_layout.get();
+      let arena = DebugTrackedRwLock::read(&*arena_arc);
+      let descriptor_set = arena.descriptor_set.unwrap().get();
+      let layout = arena.pipeline_layout.get();
       (layout, descriptor_set)
     };
 
@@ -7192,8 +7585,16 @@ impl RenderDevice for Device {
         .map(|p| p.expect("missing handle").get())
         .ok_or(crate::gpu_err_device!())?
       };
-      let layout = archetype.pipeline_layout.get();
-      let set = archetype.descriptor_set.ok_or(crate::gpu_err_device!())?;
+      let layout = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+        &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+      )
+      .pipeline_layout
+      .get();
+      let set = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+        &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+      )
+      .descriptor_set
+      .ok_or(crate::gpu_err_device!())?;
 
       (cmd, pipeline, layout, set)
     };
@@ -7232,8 +7633,16 @@ impl RenderDevice for Device {
         .map(|p| p.expect("missing handle").get())
         .ok_or(crate::gpu_err_device!())?
       };
-      let layout = archetype.pipeline_layout.get();
-      let set = archetype.descriptor_set.ok_or(crate::gpu_err_device!())?;
+      let layout = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+        &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+      )
+      .pipeline_layout
+      .get();
+      let set = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+        &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+      )
+      .descriptor_set
+      .ok_or(crate::gpu_err_device!())?;
 
       (cmd, pipeline, layout, set)
     };
@@ -7276,7 +7685,11 @@ impl RenderDevice for Device {
     let pipeline = DebugTrackedRwLock::read(&res_guard.pipeline_pool)
       .get_graphics_pipeline(pipeline_key.expect("missing pipeline key"))
       .ok_or(gpu_err_pipeline_absent!())?;
-    let layout = archetype.pipeline_layout.get();
+    let layout = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+      &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+    )
+    .pipeline_layout
+    .get();
 
     // Fetch aspect ratio from the active presentation engine (we assume there's at least one, or we default to 1.0)
     let aspect_ratio = {
@@ -7388,8 +7801,16 @@ impl RenderDevice for Device {
         .get_graphics_pipeline(archetype.pipeline_key)
         .ok_or(gpu_err_pipeline_absent!())?
         .get();
-      let layout = archetype.pipeline_layout.get();
-      let set = archetype.descriptor_set.ok_or(gpu_err!("descriptor set not found"))?;
+      let layout = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+        &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+      )
+      .pipeline_layout
+      .get();
+      let set = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+        &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+      )
+      .descriptor_set
+      .ok_or(gpu_err!("descriptor set not found"))?;
       (pipeline, layout, set)
     };
 
@@ -7461,13 +7882,12 @@ impl RenderDevice for Device {
     desired_points: f32,
     color: [f32; 4],
   ) -> GpuResult<()> {
-    let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
+    let (cmd, _) = self.get_cmd_and_pe(cmd_buffer)?;
     let res_guard = DebugTrackedRwLock::read(&self.res);
-    let live_pes = DebugTrackedRwLock::read(&res_guard.live_presentation_engines);
-    let pe = DebugTrackedRwLock::read(live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?);
-    let archetype_lock = DebugTrackedRwLock::read(&pe.archetypes().text_render_archetype);
-    let archetype = archetype_lock.as_ref().ok_or(gpu_err_archetype_absent!())?;
-    let font = archetype
+    let arena_arc =
+      res_guard.text_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+    let arena = DebugTrackedRwLock::read(&*arena_arc);
+    let font = arena
       .uploaded_fonts
       .get(&atlas_id.0)
       .ok_or(gpu_invalid_arg!("inexistent font, {:?}", atlas_id))?;
@@ -7736,7 +8156,6 @@ impl RenderDevice for Device {
     let wait_semaphore = presentation.wait_semaphore;
     let submission_fence = presentation.submission_fence;
     let signal_semaphore = presentation.signal_semaphore;
-    let mut res_guard = DebugTrackedRwLock::write(&self.res);
     let graphics_queue = self.queues.get_graphics_queue();
 
     // CRITICAL FIX: Lock submission to ensure ordering

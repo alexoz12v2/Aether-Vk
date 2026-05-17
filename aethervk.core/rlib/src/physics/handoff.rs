@@ -1,14 +1,14 @@
 //! handoff module.
 
-use crate::scene::particles::{ParticleData, ParticleSystemComponent};
 use crate::scene::{
   EntityId, ErasedMutPtr, ErasedPtr, KinematicComponent, ReferenceFrameComponent, Scene,
   TransformComponent,
+  particles::{ParticleData, ParticleSystemComponent},
 };
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
-use aethervk_oshal_rlib::os::pool::ThreadPool;
-use aethervk_oshal_rlib::os::pool::chunked::ThreadPoolChunkedExt;
+use aethervk_oshal_rlib::{
+  math::vector::{Vector, Vector3, vec3::Vec3f32},
+  os::pool::{ThreadPool, chunked::ThreadPoolChunkedExt},
+};
 
 #[derive(Clone, Debug)]
 pub struct FrameData {

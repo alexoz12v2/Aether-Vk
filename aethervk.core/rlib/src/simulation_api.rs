@@ -1,32 +1,27 @@
 //! simulation_api module.
 
-use crate::simulation::texture_cache::TextureCache;
 use crate::{
-  gpu::{self, RenderDevice},
-  gpu::{RenderDeviceHandle, WeakRenderFrontend, WeakRenderFrontendExt},
+  gpu::{self, RenderDevice, RenderDeviceHandle, WeakRenderFrontend, WeakRenderFrontendExt},
   physics,
   scene::{
     CameraComponent, CursorComponent, GridComponent, PhysicalMeshComponent, Scene, SkyComponent,
     SunComponent, TransformComponent,
   },
   simulation,
+  simulation::texture_cache::TextureCache,
   simulation_api::structs::{
     SceneContext, SimulationSceneData, SimulationTaskManager, SimulationTaskResult,
   },
-  types::EngineError,
-  types::EngineResult,
-  types::GpuResult,
+  types::{EngineError, EngineResult, GpuResult},
 };
 use aethervk_oshal_rlib as oshal;
 use alloc::{collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
 use core::ffi::{CStr, c_char};
 use oshal::{
-  math::matrix::Matrix4,
-  math::vector::Vector3,
   math::{
-    matrix::mat4::Mat4x4f32,
+    matrix::{Matrix4, mat4::Mat4x4f32},
     quaternion::Quaternion,
-    vector::{vec3::Vec3f32, vec4::Quat},
+    vector::{Vector3, vec3::Vec3f32, vec4::Quat},
   },
   os,
   os::pool::WorkloadStatus,

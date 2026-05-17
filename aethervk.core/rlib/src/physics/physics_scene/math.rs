@@ -1,15 +1,14 @@
 //! math module.
 
-use crate::math::collision::intersection::Ray;
-use crate::math::collision::{intersection, linear_bvh};
-use crate::physics::physics_scene::PhysicsScene;
-use crate::scene::{EntityId, PhysicalMeshComponent};
-use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
-use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
-use aethervk_oshal_rlib::math::matrix::{MatrixVectorMul, SquareMatrix};
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::vec4::Vec4f32;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
+use crate::{
+  math::collision::{intersection, intersection::Ray, linear_bvh},
+  physics::physics_scene::PhysicsScene,
+  scene::{EntityId, PhysicalMeshComponent},
+};
+use aethervk_oshal_rlib::math::{
+  matrix::{MatrixVectorMul, SquareMatrix, mat3::Mat3f32, mat4::Mat4x4f32},
+  vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec4::Vec4f32},
+};
 use alloc::vec::Vec;
 
 // TODO unit tests
@@ -237,16 +236,20 @@ pub fn closest_intersection(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::math::collision::bounds::AABB;
-  use crate::math::collision::linear_bvh::{LinearBVH, LinearBound, LinearBVHNode};
-  use crate::physics::physics_scene::{GpuBvhNode, GpuReferenceFrame, PhysicsScene};
-  use crate::scene::PhysicalMeshComponent;
-  use crate::simulation::comet::{Comet, Vertex};
-  use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
-  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-  use aethervk_oshal_rlib::math::matrix::SquareMatrix;
-  use alloc::sync::Arc;
-  use alloc::vec;
+  use crate::{
+    math::collision::{
+      bounds::AABB,
+      linear_bvh::{LinearBVH, LinearBVHNode, LinearBound},
+    },
+    physics::physics_scene::{GpuBvhNode, GpuReferenceFrame, PhysicsScene},
+    scene::PhysicalMeshComponent,
+    simulation::comet::{Comet, Vertex},
+  };
+  use aethervk_oshal_rlib::math::{
+    matrix::{SquareMatrix, mat4::Mat4x4f32},
+    vector::vec3::Vec3f32,
+  };
+  use alloc::{sync::Arc, vec};
   use polyhedral_mass_properties::MassProperties;
   use slotmap::Key;
 
@@ -311,8 +314,8 @@ mod tests {
     let indices = vec![0, 1, 2];
 
     let bvh_nodes = vec![LinearBVHNode {
-        center_of_mass: [0.0, 0.0, 0.0],
-        mass: 0.0,
+      center_of_mass: [0.0, 0.0, 0.0],
+      mass: 0.0,
       bound: LinearBound::AABB(AABB::new(
         Vec3f32::from_components(-1.0, -1.0, -0.1),
         Vec3f32::from_components(1.0, 1.0, 0.1),
@@ -353,10 +356,10 @@ mod tests {
       emissive_color: [0.0, 0.0, 0.0],
       use_new_path: false,
       paint_display_mode: 0,
-        sphere_center: [0.0, 0.0, 0.0],
-        sphere_radius: 1.0,
-        grid_color: [0.0, 0.0, 0.0],
-        grid_density: 1.0,
+      sphere_center: [0.0, 0.0, 0.0],
+      sphere_radius: 1.0,
+      grid_color: [0.0, 0.0, 0.0],
+      grid_density: 1.0,
     }
   }
 
@@ -375,7 +378,10 @@ mod tests {
       let _ = scene.intersect_world_bvh_math(&ray);
     }
     let elapsed = start.elapsed();
-    println!("intersect_world_bvh_math took {:?} for {} iterations", elapsed, iters);
+    println!(
+      "intersect_world_bvh_math took {:?} for {} iterations",
+      elapsed, iters
+    );
   }
 
   #[test]
@@ -396,6 +402,9 @@ mod tests {
       );
     }
     let elapsed = start.elapsed();
-    println!("intersect_mesh_bvh_math took {:?} for {} iterations", elapsed, iters);
+    println!(
+      "intersect_mesh_bvh_math took {:?} for {} iterations",
+      elapsed, iters
+    );
   }
 }

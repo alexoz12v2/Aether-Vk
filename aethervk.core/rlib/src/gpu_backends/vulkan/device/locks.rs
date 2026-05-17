@@ -1,8 +1,9 @@
 // no_std, enhance their usage by making their methods take &Self explicitly, like Arc::clone, and make it so that its usage it's like spin::RwLock
-use aethervk_oshal_rlib::hash::FnvHasher;
-use aethervk_oshal_rlib::os::native::this_thread;
-use core::hash::{Hash, Hasher};
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use aethervk_oshal_rlib::{hash::FnvHasher, os::native::this_thread};
+use core::{
+  hash::{Hash, Hasher},
+  sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+};
 
 const MAX_TRACKED_THREADS: usize = 64;
 static THREAD_HASHES: [AtomicU64; MAX_TRACKED_THREADS] =

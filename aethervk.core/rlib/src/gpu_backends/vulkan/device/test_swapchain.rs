@@ -3,10 +3,8 @@
 #[cfg(test)]
 mod tests {
   extern crate std;
-  use crate::gpu_backends::vulkan::device::swapchain::*;
-  use crate::gpu_backends::vulkan::device::*;
-  use alloc::boxed::Box;
-  use alloc::vec::Vec;
+  use crate::gpu_backends::vulkan::device::{swapchain::*, *};
+  use alloc::{boxed::Box, vec::Vec};
   use ash::vk;
 
   // Helper to get real Vulkan device objects for testing swapchain directly
@@ -58,10 +56,22 @@ mod tests {
       .queue_family_index(phys_device.graphics_queue_family_index as u32)
       .queue_priorities(&priorities);
     let extensions = phys_device.enabled_extension_names();
-    let device_create_info = vk::DeviceCreateInfo::default()
+
+    let mut swapchain_maintenance1_features =
+      vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default().swapchain_maintenance1(true);
+
+    let mut device_create_info = vk::DeviceCreateInfo::default()
       .queue_create_infos(core::slice::from_ref(&queue_info))
       .enabled_extension_names(&extensions)
       .push_next(&mut features2);
+
+    if enable_maintenance1
+      && phys_device.optional_extensions.contains(
+        crate::gpu_backends::vulkan::utils::OptionalExtensionSupportFlags::SWAPCHAIN_MAINTENANCE1,
+      )
+    {
+      device_create_info = device_create_info.push_next(&mut swapchain_maintenance1_features);
+    }
 
     let device = unsafe {
       instance

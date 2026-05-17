@@ -1,16 +1,21 @@
 //! resources module.
 
-use crate::gpu::vulkan::device::LogicalDevice;
-use crate::gpu_backends::vulkan;
-use crate::gpu_backends::vulkan::device::{VmaDebugNameExt, VulkanDebugNameExt};
-use crate::simulation::comet::{TexelFormat, Texture};
+use crate::{
+  gpu::vulkan::device::{DebugTrackedRwLock, LogicalDevice},
+  gpu_backends::{
+    vulkan,
+    vulkan::device::{VmaDebugNameExt, VulkanDebugNameExt},
+  },
+  simulation::comet::{TexelFormat, Texture},
+};
 use aethervk_oshal_rlib as oshal;
-use alloc::string::ToString;
-use alloc::{boxed::Box, collections::VecDeque, sync, vec::Vec};
-use ash::{Device, vk};
-use core::hash::{Hash, Hasher};
-use core::ptr;
-use core::sync::atomic::AtomicU32;
+use alloc::{boxed::Box, collections::VecDeque, string::ToString, sync, vec::Vec};
+use ash::{Device, vk, vk::Handle};
+use core::{
+  hash::{Hash, Hasher},
+  ptr,
+  sync::atomic::AtomicU32,
+};
 use function_name::named;
 use oshal::{hash::FnvHasher, os::native::ThreadId};
 use spirv_reflect::{
@@ -19,15 +24,14 @@ use spirv_reflect::{
 use static_assertions as sa;
 use vk_mem::Alloc;
 
-use crate::gpu::{PipelineKeyable, PresentationEngineHandle, TextureFlags};
-use crate::gpu_backends::vulkan::device::commands::{self, CommandBufferId};
-use crate::gpu_backends::vulkan::device::pipelines::GraphicsInfo;
 use crate::{
-  gpu::PipelineKey,
+  gpu::{PipelineKey, PipelineKeyable, PresentationEngineHandle, TextureFlags},
   gpu_backends::vulkan::{
     device::{
       DeviceResource, DeviceResourceJanitor, FunctionalDeviceResource,
+      commands::{self, CommandBufferId},
       descriptors::{self, DescriptorPools},
+      pipelines::GraphicsInfo,
       shader_manager::Shader,
     },
     utils::NonZeroHandle,
@@ -338,6 +342,11 @@ impl DiscardPool {
           alloc,
           allocator,
         }) => unsafe {
+          aethervk_oshal_rlib::log!(
+            "Calling vmaDestroyImage for image {:#X} alloc {:#X}",
+            image.as_raw(),
+            alloc.get_raw() as usize
+          );
           vk_mem::ffi::vmaDestroyImage(allocator, image, alloc.get_raw());
         },
         DiscardItem::Pipeline(pipeline) => {
@@ -882,7 +891,7 @@ pub(super) struct ForwardMeshRenderResource {
   /// layout(binding = 3) uniform sampler2D aoMap;
   pub ao_image: Option<Image>,
   /// layout(binding = 4) uniform sampler2D skyMap;
-  pub sky_image: Option<Image>,
+  pub sky_image: Option<Image>, // Not owned by this. Owned by device!
   /// Note: Purposefully leaked! (TODO: if this creates problems, do better.)
   pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
 }
@@ -906,7 +915,7 @@ pub(super) struct ForwardMesh2RenderResource {
   /// layout(binding = 3) uniform sampler2D aoMap;
   pub ao_image: Option<Image>,
   /// layout(binding = 4) uniform sampler2D skyMap;
-  pub sky_image: Option<Image>,
+  pub sky_image: Option<Image>, // Not owned by this. Owned by device!
   /// layout(binding = 5) uniform sampler2D emissivePaintMap;
   pub emissive_paint_image: Option<Image>,
 
@@ -1594,12 +1603,16 @@ impl ForwardMeshRenderResource {
 /// Each frame end, all [`FrameResource`]s are discarded through the [`DiscardableResource`] trait
 pub(super) enum FrameResource {
   ForwardMeshRenderResource(ForwardMeshRenderResource),
+  ForwardMesh2RenderResource(ForwardMesh2RenderResource),
 }
 
 impl DiscardableResource for FrameResource {
   fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     match self {
       Self::ForwardMeshRenderResource(resource) => {
+        resource.discard(device, discard_pool, timeline);
+      }
+      Self::ForwardMesh2RenderResource(resource) => {
         resource.discard(device, discard_pool, timeline);
       }
     }
@@ -1632,16 +1645,13 @@ pub(super) struct TextRenderResourceArchetypeArena {
 }
 
 pub(super) struct TextRenderResourceArchetype {
-  pub arena: alloc::sync::Arc<TextRenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      TextRenderResourceArchetypeArena,
+    >,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for TextRenderResourceArchetype {
-  type Target = TextRenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 unsafe impl Sync for TextRenderResourceArchetypeArena {}
@@ -1649,38 +1659,78 @@ unsafe impl Sync for TextRenderResourceArchetype {}
 unsafe impl Send for TextRenderResourceArchetypeArena {}
 unsafe impl Send for TextRenderResourceArchetype {}
 
-impl super::DeviceResource for TextRenderResourceArchetypeArena {
-  fn cleanup(&mut self, device: &ash::Device) {
-    unsafe {
-      device.destroy_pipeline_layout(self.pipeline_layout.get(), None);
-      device.destroy_descriptor_set_layout(self.descriptor_set_layout.get(), None);
-      if let Some(pool) = self.descriptor_pool {
-        device.destroy_descriptor_pool(pool.get(), None);
+impl TextRenderResourceArchetypeArena {
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
+    discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
+    if let Some(sampler) = self.font_sampler {
+      struct SamplerDiscard(vk::Sampler);
+      impl DeviceResource for SamplerDiscard {
+        fn cleanup(&mut self, device: &ash::Device) {
+          unsafe {
+            device.destroy_sampler(self.0, None);
+          }
+        }
+      }
+      discard_pool.discard_type_erased(SamplerDiscard(sampler), timeline);
+    }
+    if let Some(pool) = self.descriptor_pool {
+      struct PoolDiscard(vk::DescriptorPool);
+      impl DeviceResource for PoolDiscard {
+        fn cleanup(&mut self, device: &ash::Device) {
+          unsafe {
+            device.destroy_descriptor_pool(self.0, None);
+          }
+        }
+      }
+      discard_pool.discard_type_erased(PoolDiscard(pool.get()), timeline);
+    }
+    if let Some(allocator_raw) = self.allocator_raw {
+      for (_, uploaded) in self.uploaded_fonts.drain() {
+        discard_pool.discard_image_view(uploaded.texture.image_view.get(), timeline);
+        discard_pool.discard_image(
+          allocator_raw,
+          uploaded.texture.image.get(),
+          uploaded.texture.allocation,
+          timeline,
+        );
       }
     }
   }
 }
+
 impl ArchetypeArenaCreate for TextRenderResourceArchetypeArena {
   #[named]
   fn new_arena(ctx: &ArenaCreationContext) -> GpuResult<Self> {
     let device = ctx.device;
     let allocator = ctx.allocator;
 
-    let max_fonts = 64;
+    let max_fonts = 256;
     let pool_sizes = [vk::DescriptorPoolSize::default()
       .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
       .descriptor_count(max_fonts)];
     let pool_info = vk::DescriptorPoolCreateInfo::default()
       .max_sets(1)
       .pool_sizes(&pool_sizes)
-      .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
+      .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
     let pool = unsafe { device.create_descriptor_pool(&pool_info, None) }?;
     let bindings = [vk::DescriptorSetLayoutBinding::default()
       .binding(0)
       .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
       .descriptor_count(max_fonts)
       .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
-    let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+
+    let binding_flags =
+      [vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND];
+
+    let mut binding_flags_info =
+      vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
+
+    let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
+      .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
+      .bindings(&bindings)
+      .push_next(&mut binding_flags_info);
+
     let set_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }?;
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
       .descriptor_pool(pool)
@@ -1693,7 +1743,8 @@ impl ArchetypeArenaCreate for TextRenderResourceArchetypeArena {
       .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
       .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
       .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
-    let font_sampler = unsafe { device.create_sampler(&sampler_info, None) }?;
+    let font_sampler = unsafe { device.create_sampler(&sampler_info, None) }
+      .with_name(device, "Text 1 Linear Sampler")?;
     let push_constant_ranges = [vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
       .offset(0)
@@ -1841,16 +1892,13 @@ pub(super) struct Text2RenderResourceArchetypeArena {
 }
 
 pub(super) struct Text2RenderResourceArchetype {
-  pub arena: alloc::sync::Arc<Text2RenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      Text2RenderResourceArchetypeArena,
+    >,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for Text2RenderResourceArchetype {
-  type Target = Text2RenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 unsafe impl Sync for Text2RenderResourceArchetypeArena {}
@@ -1858,43 +1906,84 @@ unsafe impl Sync for Text2RenderResourceArchetype {}
 unsafe impl Send for Text2RenderResourceArchetypeArena {}
 unsafe impl Send for Text2RenderResourceArchetype {}
 
-impl super::DeviceResource for Text2RenderResourceArchetypeArena {
-  fn cleanup(&mut self, device: &ash::Device) {
-    unsafe {
-      device.destroy_pipeline_layout(self.pipeline_layout.get(), None);
-      device.destroy_descriptor_set_layout(self.descriptor_set_layout.get(), None);
-      if let Some(pool) = self.descriptor_pool {
-        device.destroy_descriptor_pool(pool.get(), None);
+impl Text2RenderResourceArchetypeArena {
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
+    discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
+    if let Some(sampler) = self.font_sampler {
+      struct SamplerDiscard(vk::Sampler);
+      impl DeviceResource for SamplerDiscard {
+        fn cleanup(&mut self, device: &ash::Device) {
+          unsafe {
+            device.destroy_sampler(self.0, None);
+          }
+        }
       }
-      vk_mem::ffi::vmaDestroyBuffer(
-        self.allocator_raw.expect("allocator missing"),
+      discard_pool.discard_type_erased(SamplerDiscard(sampler), timeline);
+    }
+    if let Some(pool) = self.descriptor_pool {
+      struct PoolDiscard(vk::DescriptorPool);
+      impl DeviceResource for PoolDiscard {
+        fn cleanup(&mut self, device: &ash::Device) {
+          unsafe {
+            device.destroy_descriptor_pool(self.0, None);
+          }
+        }
+      }
+      discard_pool.discard_type_erased(PoolDiscard(pool.get()), timeline);
+    }
+    if let Some(allocator_raw) = self.allocator_raw {
+      for (_, uploaded) in self.uploaded_fonts.drain() {
+        discard_pool.discard_image_view(uploaded.texture.image_view.get(), timeline);
+        discard_pool.discard_image(
+          allocator_raw,
+          uploaded.texture.image.get(),
+          uploaded.texture.allocation,
+          timeline,
+        );
+      }
+      discard_pool.discard_buffer(
+        allocator_raw,
         self.glyphs_buffer.get(),
-        self.glyphs_alloc.get_raw(),
+        self.glyphs_alloc,
+        timeline,
       );
     }
   }
 }
+
 impl ArchetypeArenaCreate for Text2RenderResourceArchetypeArena {
   #[named]
   fn new_arena(ctx: &ArenaCreationContext) -> GpuResult<Self> {
     let device = ctx.device;
     let allocator = ctx.allocator;
 
-    let max_fonts = 64;
+    let max_fonts = 256;
     let pool_sizes = [vk::DescriptorPoolSize::default()
       .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
       .descriptor_count(max_fonts)];
     let pool_info = vk::DescriptorPoolCreateInfo::default()
       .max_sets(1)
       .pool_sizes(&pool_sizes)
-      .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
+      .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
     let pool = unsafe { device.create_descriptor_pool(&pool_info, None) }?;
     let bindings = [vk::DescriptorSetLayoutBinding::default()
       .binding(0)
       .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
       .descriptor_count(max_fonts)
       .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
-    let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+
+    let binding_flags =
+      [vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND];
+
+    let mut binding_flags_info =
+      vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
+
+    let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
+      .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
+      .bindings(&bindings)
+      .push_next(&mut binding_flags_info);
+
     let set_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }?;
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
       .descriptor_pool(pool)
@@ -1907,7 +1996,8 @@ impl ArchetypeArenaCreate for Text2RenderResourceArchetypeArena {
       .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
       .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
       .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
-    let font_sampler = unsafe { device.create_sampler(&sampler_info, None) }?;
+    let font_sampler =
+      unsafe { device.create_sampler(&sampler_info, None) }.with_name(device, "Text 2 Sampler")?;
     let push_constant_ranges = [vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
       .offset(0)
@@ -2062,25 +2152,19 @@ pub(super) struct BvhRenderResourceArchetypeArena {
 }
 
 pub(super) struct BvhRenderResourceArchetype {
-  pub arena: alloc::sync::Arc<BvhRenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<BvhRenderResourceArchetypeArena>,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
 }
 
-impl core::ops::Deref for BvhRenderResourceArchetype {
-  type Target = BvhRenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
+impl BvhRenderResourceArchetypeArena {
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
   }
 }
 
-impl super::DeviceResource for BvhRenderResourceArchetypeArena {
-  fn cleanup(&mut self, device: &ash::Device) {
-    unsafe {
-      device.destroy_pipeline_layout(self.pipeline_layout.get(), None);
-    }
-  }
-}
 impl ArchetypeArenaCreate for BvhRenderResourceArchetypeArena {
   /// TODO: Document this item
   #[named]
@@ -2120,16 +2204,13 @@ pub(super) struct Bvhwire2RenderResourceArchetypeArena {
 }
 
 pub(super) struct Bvhwire2RenderResourceArchetype {
-  pub arena: alloc::sync::Arc<Bvhwire2RenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      Bvhwire2RenderResourceArchetypeArena,
+    >,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for Bvhwire2RenderResourceArchetype {
-  type Target = Bvhwire2RenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 unsafe impl Sync for Bvhwire2RenderResourceArchetypeArena {}
@@ -2137,16 +2218,15 @@ unsafe impl Sync for Bvhwire2RenderResourceArchetype {}
 unsafe impl Send for Bvhwire2RenderResourceArchetypeArena {}
 unsafe impl Send for Bvhwire2RenderResourceArchetype {}
 
-impl super::DeviceResource for Bvhwire2RenderResourceArchetypeArena {
-  fn cleanup(&mut self, device: &ash::Device) {
-    unsafe {
-      device.destroy_pipeline_layout(self.pipeline_layout.get(), None);
-      vk_mem::ffi::vmaDestroyBuffer(
-        self.allocator_raw,
-        self.data_buffer.get(),
-        self.data_alloc.get_raw(),
-      );
-    }
+impl Bvhwire2RenderResourceArchetypeArena {
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
+    discard_pool.discard_buffer(
+      self.allocator_raw,
+      self.data_buffer.get(),
+      self.data_alloc,
+      timeline,
+    );
   }
 }
 impl ArchetypeArenaCreate for Bvhwire2RenderResourceArchetypeArena {
@@ -2212,16 +2292,13 @@ pub(super) struct MeasurementRenderResourceArchetypeArena {
 }
 
 pub(super) struct MeasurementRenderResourceArchetype {
-  pub arena: alloc::sync::Arc<MeasurementRenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      MeasurementRenderResourceArchetypeArena,
+    >,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for MeasurementRenderResourceArchetype {
-  type Target = MeasurementRenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 unsafe impl Sync for MeasurementRenderResourceArchetypeArena {}
@@ -2277,16 +2354,13 @@ pub(super) struct MarkerRenderResourceArchetypeArena {
 }
 
 pub(super) struct MarkerRenderResourceArchetype {
-  pub arena: alloc::sync::Arc<MarkerRenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      MarkerRenderResourceArchetypeArena,
+    >,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for MarkerRenderResourceArchetype {
-  type Target = MarkerRenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 unsafe impl Sync for MarkerRenderResourceArchetypeArena {}
@@ -2337,16 +2411,13 @@ pub(super) struct MinimapRenderResourceArchetypeArena {
 }
 
 pub(super) struct MinimapRenderResourceArchetype {
-  pub arena: alloc::sync::Arc<MinimapRenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      MinimapRenderResourceArchetypeArena,
+    >,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for MinimapRenderResourceArchetype {
-  type Target = MinimapRenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 impl ArchetypeArenaCreate for MinimapRenderResourceArchetypeArena {
@@ -2504,16 +2575,11 @@ pub(super) struct UiRenderResourceArchetypeArena {
 }
 
 pub(super) struct UiRenderResourceArchetype {
-  pub arena: alloc::sync::Arc<UiRenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<UiRenderResourceArchetypeArena>,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for UiRenderResourceArchetype {
-  type Target = UiRenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 unsafe impl Sync for UiRenderResourceArchetypeArena {}
@@ -2521,20 +2587,28 @@ unsafe impl Sync for UiRenderResourceArchetype {}
 unsafe impl Send for UiRenderResourceArchetypeArena {}
 unsafe impl Send for UiRenderResourceArchetype {}
 
-impl super::DeviceResource for UiRenderResourceArchetypeArena {
-  fn cleanup(&mut self, device: &ash::Device) {
-    unsafe {
-      device.destroy_pipeline_layout(self.pipeline_layout.get(), None);
-      device.destroy_descriptor_set_layout(self.set_0_layout.get(), None);
-      device.destroy_descriptor_pool(self.descriptor_pool.get(), None);
-      vk_mem::ffi::vmaDestroyBuffer(
-        self.allocator_raw,
-        self.elements_buffer.get(),
-        self.elements_alloc.get_raw(),
-      );
+impl UiRenderResourceArchetypeArena {
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
+    discard_pool.discard_descriptor_set_layout(self.set_0_layout.get(), timeline);
+    struct PoolDiscard(vk::DescriptorPool);
+    impl DeviceResource for PoolDiscard {
+      fn cleanup(&mut self, device: &ash::Device) {
+        unsafe {
+          device.destroy_descriptor_pool(self.0, None);
+        }
+      }
     }
+    discard_pool.discard_type_erased(PoolDiscard(self.descriptor_pool.get()), timeline);
+    discard_pool.discard_buffer(
+      self.allocator_raw,
+      self.elements_buffer.get(),
+      self.elements_alloc,
+      timeline,
+    );
   }
 }
+
 impl ArchetypeArenaCreate for UiRenderResourceArchetypeArena {
   #[named]
   fn new_arena(ctx: &ArenaCreationContext) -> GpuResult<Self> {
@@ -2679,16 +2753,13 @@ pub(super) struct TrajectoryRenderResourceArchetypeArena {
 }
 
 pub(super) struct TrajectoryRenderResourceArchetype {
-  pub arena: alloc::sync::Arc<TrajectoryRenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      TrajectoryRenderResourceArchetypeArena,
+    >,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for TrajectoryRenderResourceArchetype {
-  type Target = TrajectoryRenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 unsafe impl Sync for TrajectoryRenderResourceArchetypeArena {}
@@ -2880,16 +2951,13 @@ pub(super) struct BillboardRenderResourceArchetypeArena {
 }
 
 pub(super) struct BillboardRenderResourceArchetype {
-  pub arena: alloc::sync::Arc<BillboardRenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      BillboardRenderResourceArchetypeArena,
+    >,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for BillboardRenderResourceArchetype {
-  type Target = BillboardRenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 unsafe impl Sync for BillboardRenderResourceArchetypeArena {}
@@ -3080,22 +3148,18 @@ pub(super) struct GizmoRenderResourceArchetypeArena {
   pub descriptor_pool: NonZeroHandle<vk::DescriptorPool>,
   pub descriptor_set: NonZeroHandle<vk::DescriptorSet>,
   pub next_index: AtomicU32,
-  pub host_buffers:
-    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<hashbrown::HashMap<u32, Buffer>>,
+  pub host_buffers: DebugTrackedRwLock<hashbrown::HashMap<u32, Buffer>>,
   pub allocator_raw: vk_mem::ffi::VmaAllocator,
 }
 
 pub(super) struct GizmoRenderResourceArchetype {
-  pub arena: alloc::sync::Arc<GizmoRenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      GizmoRenderResourceArchetypeArena,
+    >,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for GizmoRenderResourceArchetype {
-  type Target = GizmoRenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 unsafe impl Sync for GizmoRenderResourceArchetypeArena {}
@@ -3242,16 +3306,13 @@ pub(super) struct ParticleRenderResourceArchetypeArena {
 }
 
 pub(super) struct ParticleRenderResourceArchetype {
-  pub arena: alloc::sync::Arc<ParticleRenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      ParticleRenderResourceArchetypeArena,
+    >,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for ParticleRenderResourceArchetype {
-  type Target = ParticleRenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 unsafe impl Sync for ParticleRenderResourceArchetypeArena {}
@@ -3473,16 +3534,13 @@ pub(super) struct Particle2RenderResourceArchetypeArena {
 }
 
 pub(super) struct Particle2RenderResourceArchetype {
-  pub arena: alloc::sync::Arc<Particle2RenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      Particle2RenderResourceArchetypeArena,
+    >,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for Particle2RenderResourceArchetype {
-  type Target = Particle2RenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 unsafe impl Sync for Particle2RenderResourceArchetypeArena {}
@@ -3691,16 +3749,13 @@ pub(super) struct CursorRenderResourceArchetypeArena {
 }
 
 pub(super) struct CursorRenderResourceArchetype {
-  pub arena: alloc::sync::Arc<CursorRenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      CursorRenderResourceArchetypeArena,
+    >,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for CursorRenderResourceArchetype {
-  type Target = CursorRenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 unsafe impl Sync for CursorRenderResourceArchetypeArena {}
@@ -3750,18 +3805,15 @@ pub(super) struct SkyRenderResourceArchetypeArena {
   pub descriptor_set_layout: NonZeroHandle<vk::DescriptorSetLayout>,
   pub descriptor_set: Option<NonZeroHandle<vk::DescriptorSet>>,
 }
+unsafe impl Send for SkyRenderResourceArchetypeArena {}
+unsafe impl Sync for SkyRenderResourceArchetypeArena {}
 
 pub(super) struct SkyRenderResourceArchetype {
-  pub arena: alloc::sync::Arc<SkyRenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<SkyRenderResourceArchetypeArena>,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for SkyRenderResourceArchetype {
-  type Target = SkyRenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 impl ArchetypeArenaCreate for SkyRenderResourceArchetypeArena {
@@ -3814,16 +3866,13 @@ pub(super) struct BackgroundRenderResourceArchetypeArena {
 }
 
 pub(super) struct BackgroundRenderResourceArchetype {
-  pub arena: alloc::sync::Arc<BackgroundRenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      BackgroundRenderResourceArchetypeArena,
+    >,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for BackgroundRenderResourceArchetype {
-  type Target = BackgroundRenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 impl ArchetypeArenaCreate for BackgroundRenderResourceArchetypeArena {
@@ -3859,16 +3908,13 @@ pub(super) struct GridRenderResourceArchetypeArena {
 }
 
 pub(super) struct GridRenderResourceArchetype {
-  pub arena: alloc::sync::Arc<GridRenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      GridRenderResourceArchetypeArena,
+    >,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for GridRenderResourceArchetype {
-  type Target = GridRenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 impl GridRenderResourceArchetypeArena {
@@ -3883,8 +3929,14 @@ impl ArchetypeArenaCreate for GridRenderResourceArchetypeArena {
   #[named]
   fn new_arena(ctx: &ArenaCreationContext) -> GpuResult<Self> {
     let device = ctx.device;
-    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default();
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
+    let push_constant_ranges = [vk::PushConstantRange::default()
+      .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+      .offset(0)
+      .size(128)];
+    let pipeline_layout_info =
+      vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
+      .with_name(device, "VkPipelineLayout_GridRenderResourceArchetypeArena")?;
     Ok(Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
     })
@@ -3901,16 +3953,11 @@ pub(super) struct SunRenderResourceArchetypeArena {
 }
 
 pub(super) struct SunRenderResourceArchetype {
-  pub arena: alloc::sync::Arc<SunRenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<SunRenderResourceArchetypeArena>,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for SunRenderResourceArchetype {
-  type Target = SunRenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 unsafe impl Sync for SunRenderResourceArchetypeArena {}
@@ -3981,18 +4028,15 @@ pub(super) struct ForwardMeshRenderResourceArchetypeArena {
 }
 
 pub(super) struct ForwardMeshRenderResourceArchetype {
-  pub arena: alloc::sync::Arc<ForwardMeshRenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      ForwardMeshRenderResourceArchetypeArena,
+    >,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
   pub outline_pipeline_key: PipelineKey,
   pub outline_graphics_info: GraphicsInfo,
-}
-
-impl core::ops::Deref for ForwardMeshRenderResourceArchetype {
-  type Target = ForwardMeshRenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
-  }
 }
 
 /// To be destroyed before descriptor pool
@@ -4011,17 +4055,36 @@ pub(super) struct ForwardMesh2RenderResourceArchetypeArena {
 }
 
 pub(super) struct ForwardMesh2RenderResourceArchetype {
-  pub arena: alloc::sync::Arc<ForwardMesh2RenderResourceArchetypeArena>,
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      ForwardMesh2RenderResourceArchetypeArena,
+    >,
+  >,
   pub pipeline_key: PipelineKey,
   pub graphics_info: GraphicsInfo,
   pub outline_pipeline_key: PipelineKey,
   pub outline_graphics_info: GraphicsInfo,
 }
 
-impl core::ops::Deref for ForwardMesh2RenderResourceArchetype {
-  type Target = ForwardMesh2RenderResourceArchetypeArena;
-  fn deref(&self) -> &Self::Target {
-    &self.arena
+impl ForwardMesh2RenderResourceArchetypeArena {
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_pipeline_layout(layout, timeline);
+    discard_pool.discard_image_view(self.dummy_texture_handle.image_view.get(), timeline);
+    aethervk_oshal_rlib::log!(
+      "[forward mesh discard] Discarding image {:#X} | alloc {:#X}",
+      self.dummy_texture_handle.image.get().as_raw(),
+      self.dummy_texture_handle.allocation.get_raw() as u64,
+    );
+    discard_pool.discard_image(
+      self.allocator_raw,
+      self.dummy_texture_handle.image.get(),
+      self.dummy_texture_handle.allocation,
+      timeline,
+    );
+    for layout in &self.descriptor_set_layouts {
+      discard_pool.discard_descriptor_set_layout(layout.get(), timeline);
+    }
   }
 }
 
@@ -4063,13 +4126,22 @@ impl ArchetypeArenaCreate for ForwardMeshRenderResourceArchetypeArena {
   /// - `pipeline_key` must refer to a pipeline created with `vertex_shader` and `fragment_shader`,
   #[named]
   fn new_arena(ctx: &ArenaCreationContext) -> GpuResult<Self> {
+    #[cfg(test)]
+    static mut WAS_CREATED: bool = false;
+    #[cfg(test)]
+    unsafe {
+      if WAS_CREATED {
+        panic!("archetype more than once!");
+      } else {
+        WAS_CREATED = true;
+      }
+    }
     let device = ctx.device;
     let vertex_shader = ctx.vertex_shader.unwrap();
     let fragment_shader = ctx.fragment_shader.unwrap();
     let outline_vertex_shader = ctx.outline_vertex_shader.unwrap();
     let outline_fragment_shader = ctx.outline_fragment_shader.unwrap();
     let allocator = ctx.allocator;
-    let discard_pool = ctx.discard_pool;
     let staging_arena = ctx.staging_arena.unwrap();
     let queue = &ctx.queue.unwrap();
 
@@ -4363,19 +4435,23 @@ impl ArchetypeArenaCreate for ForwardMeshRenderResourceArchetypeArena {
 
 impl ForwardMeshRenderResourceArchetype {}
 
-impl super::DeviceResource for ForwardMeshRenderResourceArchetypeArena {
-  fn cleanup(&mut self, device: &ash::Device) {
-    unsafe {
-      device.destroy_pipeline_layout(self.pipeline_layout.get(), None);
-      device.destroy_image_view(self.dummy_texture_handle.image_view.get(), None);
-      vk_mem::ffi::vmaDestroyImage(
-        self.allocator_raw,
-        self.dummy_texture_handle.image.get(),
-        self.dummy_texture_handle.allocation.get_raw(),
-      );
-      for layout in &self.descriptor_set_layouts {
-        device.destroy_descriptor_set_layout(layout.get(), None);
-      }
+impl ForwardMeshRenderResourceArchetypeArena {
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    aethervk_oshal_rlib::log!(
+      "ForwardMeshRenderResourceArchetypeArena::discard called for dummy_texture_handle: {:#X}",
+      self.dummy_texture_handle.image.get().as_raw()
+    );
+    let layout = self.pipeline_layout.get();
+    discard_pool.discard_pipeline_layout(layout, timeline);
+    discard_pool.discard_image_view(self.dummy_texture_handle.image_view.get(), timeline);
+    discard_pool.discard_image(
+      self.allocator_raw,
+      self.dummy_texture_handle.image.get(),
+      self.dummy_texture_handle.allocation,
+      timeline,
+    );
+    for layout in &self.descriptor_set_layouts {
+      discard_pool.discard_descriptor_set_layout(layout.get(), timeline);
     }
   }
 }
@@ -4833,6 +4909,8 @@ impl ArchetypeArenaCreate for ForwardMesh2RenderResourceArchetypeArena {
       device.destroy_command_pool(temp_cmd_pool, None);
     }
 
+    janitor.clear();
+
     Ok(Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
       descriptor_set_layouts,
@@ -4842,26 +4920,6 @@ impl ArchetypeArenaCreate for ForwardMesh2RenderResourceArchetypeArena {
       dummy_texture_handle,
       allocator_raw: allocator.get_raw(),
     })
-  }
-}
-
-impl ForwardMesh2RenderResourceArchetype {
-  /// TODO: Document this item
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
-    let layout = self.pipeline_layout.get();
-    discard_pool.discard_pipeline_layout(layout, timeline);
-
-    for set_layout in self.descriptor_set_layouts.iter() {
-      discard_pool.discard_descriptor_set_layout(set_layout.get(), timeline);
-    }
-
-    discard_pool.discard_image_view(self.dummy_texture_handle.image_view.get(), timeline);
-    discard_pool.discard_image(
-      self.allocator_raw,
-      self.dummy_texture_handle.image.get(),
-      self.dummy_texture_handle.allocation,
-      timeline,
-    );
   }
 }
 
@@ -4893,116 +4951,97 @@ fn map_descriptor_type(
   })
 }
 
-impl core::ops::DerefMut for TextRenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
+pub(super) trait DerefArchetype {
+  type Target: ArchetypeArenaCreate;
+  fn deref_arena(
+    &self,
+  ) -> Option<
+    alloc::sync::Arc<crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<Self::Target>>,
+  >;
 }
 
-impl core::ops::DerefMut for Text2RenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
+macro_rules! impl_deref_archetype {
+  ($archetype:ident, $arena:ident) => {
+    impl DerefArchetype for $archetype {
+      type Target = $arena;
+      fn deref_arena(
+        &self,
+      ) -> Option<
+        alloc::sync::Arc<
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<Self::Target>,
+        >,
+      > {
+        self.arena.upgrade()
+      }
+    }
+  };
 }
 
-impl core::ops::DerefMut for UiRenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
-
-impl core::ops::DerefMut for TrajectoryRenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
-
-impl core::ops::DerefMut for GizmoRenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
-
-impl core::ops::DerefMut for MeasurementRenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
-
-impl core::ops::DerefMut for ForwardMeshRenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
-
-impl core::ops::DerefMut for ForwardMesh2RenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
-
-impl core::ops::DerefMut for ParticleRenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
-
-impl core::ops::DerefMut for Particle2RenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
-
-impl core::ops::DerefMut for SkyRenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
-
-impl core::ops::DerefMut for BackgroundRenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
-
-impl core::ops::DerefMut for SunRenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
-
-impl core::ops::DerefMut for BillboardRenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
-
-impl core::ops::DerefMut for GridRenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
-
-impl core::ops::DerefMut for MinimapRenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
-
-impl core::ops::DerefMut for CursorRenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
-
-impl core::ops::DerefMut for MarkerRenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
-
-impl core::ops::DerefMut for BvhRenderResourceArchetype {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    alloc::sync::Arc::get_mut(&mut self.arena).unwrap()
-  }
-}
+impl_deref_archetype!(
+  TextRenderResourceArchetype,
+  TextRenderResourceArchetypeArena
+);
+impl_deref_archetype!(
+  Text2RenderResourceArchetype,
+  Text2RenderResourceArchetypeArena
+);
+impl_deref_archetype!(BvhRenderResourceArchetype, BvhRenderResourceArchetypeArena);
+impl_deref_archetype!(
+  Bvhwire2RenderResourceArchetype,
+  Bvhwire2RenderResourceArchetypeArena
+);
+impl_deref_archetype!(
+  MeasurementRenderResourceArchetype,
+  MeasurementRenderResourceArchetypeArena
+);
+impl_deref_archetype!(
+  MarkerRenderResourceArchetype,
+  MarkerRenderResourceArchetypeArena
+);
+impl_deref_archetype!(
+  MinimapRenderResourceArchetype,
+  MinimapRenderResourceArchetypeArena
+);
+impl_deref_archetype!(UiRenderResourceArchetype, UiRenderResourceArchetypeArena);
+impl_deref_archetype!(
+  TrajectoryRenderResourceArchetype,
+  TrajectoryRenderResourceArchetypeArena
+);
+impl_deref_archetype!(
+  BillboardRenderResourceArchetype,
+  BillboardRenderResourceArchetypeArena
+);
+impl_deref_archetype!(
+  GizmoRenderResourceArchetype,
+  GizmoRenderResourceArchetypeArena
+);
+impl_deref_archetype!(
+  ParticleRenderResourceArchetype,
+  ParticleRenderResourceArchetypeArena
+);
+impl_deref_archetype!(
+  Particle2RenderResourceArchetype,
+  Particle2RenderResourceArchetypeArena
+);
+impl_deref_archetype!(
+  CursorRenderResourceArchetype,
+  CursorRenderResourceArchetypeArena
+);
+impl_deref_archetype!(SkyRenderResourceArchetype, SkyRenderResourceArchetypeArena);
+impl_deref_archetype!(
+  BackgroundRenderResourceArchetype,
+  BackgroundRenderResourceArchetypeArena
+);
+impl_deref_archetype!(
+  GridRenderResourceArchetype,
+  GridRenderResourceArchetypeArena
+);
+impl_deref_archetype!(SunRenderResourceArchetype, SunRenderResourceArchetypeArena);
+impl_deref_archetype!(
+  ForwardMeshRenderResourceArchetype,
+  ForwardMeshRenderResourceArchetypeArena
+);
+impl_deref_archetype!(
+  ForwardMesh2RenderResourceArchetype,
+  ForwardMesh2RenderResourceArchetypeArena
+);

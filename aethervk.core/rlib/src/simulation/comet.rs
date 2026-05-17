@@ -107,10 +107,14 @@ pub struct Texture {
   pub has_mipmaps: bool,
 }
 
-use crate::math::collision::bvh_builder::{BVHBuilder, BVHBuilderParams};
-use crate::math::collision::linear_bvh::LinearBVH;
-use aethervk_oshal_rlib::math::matrix::{Matrix3, mat3::Mat3f32, Matrix};
-use aethervk_oshal_rlib::math::vector::vec4::Quat;
+use crate::math::collision::{
+  bvh_builder::{BVHBuilder, BVHBuilderParams},
+  linear_bvh::LinearBVH,
+};
+use aethervk_oshal_rlib::math::{
+  matrix::{Matrix, Matrix3, mat3::Mat3f32},
+  vector::vec4::Quat,
+};
 
 static NEXT_COMET_ID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
 
@@ -140,7 +144,12 @@ fn compute_comet_extras(
   indices: &[u32],
   mass_properties: &mut MassProperties,
   provided_inertia: Option<Mat3f32>,
-) -> (Option<LinearBVH<f32>>, Option<Mat3f32>, Option<Quat>, Vec<Vertex>) {
+) -> (
+  Option<LinearBVH<f32>>,
+  Option<Mat3f32>,
+  Option<Quat>,
+  Vec<Vertex>,
+) {
   use crate::math::compute_com_and_tensor;
   let raw_verts: Vec<Vec3f32> = vertices
     .iter()
@@ -767,10 +776,12 @@ pub fn load_comet_from_obj(
     if line.is_empty() || line.starts_with('#') {
       continue;
     }
-    
+
     let mut parts = line.split_whitespace();
-    let Some(prefix) = parts.next() else { continue; };
-    
+    let Some(prefix) = parts.next() else {
+      continue;
+    };
+
     match prefix {
       "v" => {
         let x = parts.next().unwrap_or("0").parse::<f32>().unwrap_or(0.0);
@@ -796,48 +807,48 @@ pub fn load_comet_from_obj(
           let v_idx = v_parts.next().unwrap_or("").parse::<u32>().unwrap_or(0);
           let vt_idx = v_parts.next().unwrap_or("").parse::<u32>().unwrap_or(0);
           let vn_idx = v_parts.next().unwrap_or("").parse::<u32>().unwrap_or(0);
-          
+
           let key = (v_idx, vt_idx, vn_idx);
           let index = *unique_vertices.entry(key).or_insert_with(|| {
-             let new_index = vertices.len() as u32;
-             
-             let pos = if v_idx > 0 && v_idx as usize <= temp_positions.len() {
-                 temp_positions[v_idx as usize - 1]
-             } else {
-                 [0.0, 0.0, 0.0]
-             };
-             
-             let uv = if vt_idx > 0 && vt_idx as usize <= temp_uvs.len() {
-                 temp_uvs[vt_idx as usize - 1]
-             } else {
-                 [0.0, 0.0]
-             };
-             
-             let norm = if vn_idx > 0 && vn_idx as usize <= temp_normals.len() {
-                 temp_normals[vn_idx as usize - 1]
-             } else {
-                 [0.0, 1.0, 0.0]
-             };
+            let new_index = vertices.len() as u32;
 
-             vertices.push(Vertex {
-                 position: pos,
-                 normal: norm,
-                 uv,
-                 tangent: [1.0, 0.0, 0.0, 1.0], // Default tangent
-             });
-             new_index
+            let pos = if v_idx > 0 && v_idx as usize <= temp_positions.len() {
+              temp_positions[v_idx as usize - 1]
+            } else {
+              [0.0, 0.0, 0.0]
+            };
+
+            let uv = if vt_idx > 0 && vt_idx as usize <= temp_uvs.len() {
+              temp_uvs[vt_idx as usize - 1]
+            } else {
+              [0.0, 0.0]
+            };
+
+            let norm = if vn_idx > 0 && vn_idx as usize <= temp_normals.len() {
+              temp_normals[vn_idx as usize - 1]
+            } else {
+              [0.0, 1.0, 0.0]
+            };
+
+            vertices.push(Vertex {
+              position: pos,
+              normal: norm,
+              uv,
+              tangent: [1.0, 0.0, 0.0, 1.0], // Default tangent
+            });
+            new_index
           });
           face_vertices.push(index);
         }
-        
+
         // Triangulate
         if face_vertices.len() >= 3 {
-            let v0 = face_vertices[0];
-            for i in 1..face_vertices.len()-1 {
-                indices.push(v0);
-                indices.push(face_vertices[i]);
-                indices.push(face_vertices[i+1]);
-            }
+          let v0 = face_vertices[0];
+          for i in 1..face_vertices.len() - 1 {
+            indices.push(v0);
+            indices.push(face_vertices[i]);
+            indices.push(face_vertices[i + 1]);
+          }
         }
       }
       _ => {}
@@ -882,112 +893,122 @@ pub fn load_comet_from_ply(
 
   let data = fs::read(&path_buf)?;
   let data_str = core::str::from_utf8(&data).map_err(|_| CometLoadError::UnsupportedImageFormat)?;
-  
+
   let mut lines = data_str.lines();
-  
+
   // Header
   if lines.next().unwrap_or("").trim() != "ply" {
-      return Err(CometLoadError::UnsupportedImageFormat);
+    return Err(CometLoadError::UnsupportedImageFormat);
   }
-  
+
   let mut format = "";
   let mut vertex_count = 0;
   let mut face_count = 0;
   let mut current_element = "";
-  
+
   let mut properties = alloc::vec::Vec::new();
-  
+
   while let Some(line) = lines.next() {
-      let line = line.trim();
-      if line == "end_header" {
-          break;
+    let line = line.trim();
+    if line == "end_header" {
+      break;
+    }
+
+    let mut parts = line.split_whitespace();
+    let Some(prefix) = parts.next() else {
+      continue;
+    };
+
+    match prefix {
+      "format" => {
+        format = parts.next().unwrap_or("");
       }
-      
-      let mut parts = line.split_whitespace();
-      let Some(prefix) = parts.next() else { continue; };
-      
-      match prefix {
-          "format" => {
-              format = parts.next().unwrap_or("");
-          }
-          "element" => {
-              current_element = parts.next().unwrap_or("");
-              let count = parts.next().unwrap_or("0").parse::<usize>().unwrap_or(0);
-              if current_element == "vertex" {
-                  vertex_count = count;
-              } else if current_element == "face" {
-                  face_count = count;
-              }
-          }
-          "property" => {
-              if current_element == "vertex" {
-                  let _type = parts.next().unwrap_or("");
-                  let name = parts.next().unwrap_or("");
-                  properties.push(name);
-              }
-          }
-          _ => {}
+      "element" => {
+        current_element = parts.next().unwrap_or("");
+        let count = parts.next().unwrap_or("0").parse::<usize>().unwrap_or(0);
+        if current_element == "vertex" {
+          vertex_count = count;
+        } else if current_element == "face" {
+          face_count = count;
+        }
       }
+      "property" => {
+        if current_element == "vertex" {
+          let _type = parts.next().unwrap_or("");
+          let name = parts.next().unwrap_or("");
+          properties.push(name);
+        }
+      }
+      _ => {}
+    }
   }
-  
+
   if format != "ascii" {
-      oshal::log!("ERROR: Only ASCII PLY format is currently supported.");
-      return Err(CometLoadError::UnsupportedImageFormat);
+    oshal::log!("ERROR: Only ASCII PLY format is currently supported.");
+    return Err(CometLoadError::UnsupportedImageFormat);
   }
-  
+
   let mut vertices = Vec::with_capacity(vertex_count);
   for _ in 0..vertex_count {
-      let Some(line) = lines.next() else { break; };
-      let parts: Vec<&str> = line.split_whitespace().collect();
-      
-      let mut pos = [0.0, 0.0, 0.0];
-      let mut norm = [0.0, 1.0, 0.0];
-      let mut uv = [0.0, 0.0];
-      
-      for (i, &prop) in properties.iter().enumerate() {
-          if i >= parts.len() { break; }
-          let val = parts[i].parse::<f32>().unwrap_or(0.0);
-          match prop {
-              "x" => pos[0] = val,
-              "y" => pos[1] = val,
-              "z" => pos[2] = val,
-              "nx" => norm[0] = val,
-              "ny" => norm[1] = val,
-              "nz" => norm[2] = val,
-              "s" | "u" => uv[0] = val,
-              "t" | "v" => uv[1] = val,
-              _ => {}
-          }
+    let Some(line) = lines.next() else {
+      break;
+    };
+    let parts: Vec<&str> = line.split_whitespace().collect();
+
+    let mut pos = [0.0, 0.0, 0.0];
+    let mut norm = [0.0, 1.0, 0.0];
+    let mut uv = [0.0, 0.0];
+
+    for (i, &prop) in properties.iter().enumerate() {
+      if i >= parts.len() {
+        break;
       }
-      
-      vertices.push(Vertex {
-          position: pos,
-          normal: norm,
-          uv,
-          tangent: [1.0, 0.0, 0.0, 1.0],
-      });
+      let val = parts[i].parse::<f32>().unwrap_or(0.0);
+      match prop {
+        "x" => pos[0] = val,
+        "y" => pos[1] = val,
+        "z" => pos[2] = val,
+        "nx" => norm[0] = val,
+        "ny" => norm[1] = val,
+        "nz" => norm[2] = val,
+        "s" | "u" => uv[0] = val,
+        "t" | "v" => uv[1] = val,
+        _ => {}
+      }
+    }
+
+    vertices.push(Vertex {
+      position: pos,
+      normal: norm,
+      uv,
+      tangent: [1.0, 0.0, 0.0, 1.0],
+    });
   }
-  
+
   let mut indices = Vec::new();
   for _ in 0..face_count {
-      let Some(line) = lines.next() else { break; };
-      let parts: Vec<&str> = line.split_whitespace().collect();
-      if parts.is_empty() { continue; }
-      
-      let count = parts[0].parse::<usize>().unwrap_or(0);
-      if count >= 3 && parts.len() >= count + 1 {
-          let mut face_indices = Vec::with_capacity(count);
-          for i in 1..=count {
-              face_indices.push(parts[i].parse::<u32>().unwrap_or(0));
-          }
-          
-          let v0 = face_indices[0];
-          for i in 1..count-1 {
-              indices.push(v0);
-              indices.push(face_indices[i]);
-              indices.push(face_indices[i+1]);
-          }
+    let Some(line) = lines.next() else {
+      break;
+    };
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.is_empty() {
+      continue;
+    }
+
+    let count = parts[0].parse::<usize>().unwrap_or(0);
+    if count >= 3 && parts.len() >= count + 1 {
+      let mut face_indices = Vec::with_capacity(count);
+      for i in 1..=count {
+        face_indices.push(parts[i].parse::<u32>().unwrap_or(0));
       }
+
+      let v0 = face_indices[0];
+      for i in 1..count - 1 {
+        indices.push(v0);
+        indices.push(face_indices[i]);
+        indices.push(face_indices[i + 1]);
+      }
+    }
   }
 
   generate_tangents(&mut vertices, &indices);
@@ -1012,68 +1033,76 @@ pub fn load_comet_from_ply(
 
 // Simple tangent generation (Lengyel, Eric. "Computing Tangent Space Basis Vectors for an Arbitrary Mesh")
 fn generate_tangents(vertices: &mut [Vertex], indices: &[u32]) {
-    let mut tan1 = alloc::vec![Vec3f32::from_components(0.0, 0.0, 0.0); vertices.len()];
-    let mut tan2 = alloc::vec![Vec3f32::from_components(0.0, 0.0, 0.0); vertices.len()];
+  let mut tan1 = alloc::vec![Vec3f32::from_components(0.0, 0.0, 0.0); vertices.len()];
+  let mut tan2 = alloc::vec![Vec3f32::from_components(0.0, 0.0, 0.0); vertices.len()];
 
-    for chunk in indices.chunks_exact(3) {
-        let i1 = chunk[0] as usize;
-        let i2 = chunk[1] as usize;
-        let i3 = chunk[2] as usize;
+  for chunk in indices.chunks_exact(3) {
+    let i1 = chunk[0] as usize;
+    let i2 = chunk[1] as usize;
+    let i3 = chunk[2] as usize;
 
-        let v1 = vertices[i1];
-        let v2 = vertices[i2];
-        let v3 = vertices[i3];
+    let v1 = vertices[i1];
+    let v2 = vertices[i2];
+    let v3 = vertices[i3];
 
-        let x1 = v2.position[0] - v1.position[0];
-        let x2 = v3.position[0] - v1.position[0];
-        let y1 = v2.position[1] - v1.position[1];
-        let y2 = v3.position[1] - v1.position[1];
-        let z1 = v2.position[2] - v1.position[2];
-        let z2 = v3.position[2] - v1.position[2];
+    let x1 = v2.position[0] - v1.position[0];
+    let x2 = v3.position[0] - v1.position[0];
+    let y1 = v2.position[1] - v1.position[1];
+    let y2 = v3.position[1] - v1.position[1];
+    let z1 = v2.position[2] - v1.position[2];
+    let z2 = v3.position[2] - v1.position[2];
 
-        let s1 = v2.uv[0] - v1.uv[0];
-        let s2 = v3.uv[0] - v1.uv[0];
-        let t1 = v2.uv[1] - v1.uv[1];
-        let t2 = v3.uv[1] - v1.uv[1];
+    let s1 = v2.uv[0] - v1.uv[0];
+    let s2 = v3.uv[0] - v1.uv[0];
+    let t1 = v2.uv[1] - v1.uv[1];
+    let t2 = v3.uv[1] - v1.uv[1];
 
-        let div = s1 * t2 - s2 * t1;
-        let r = if div == 0.0 { 1.0 } else { 1.0 / div };
-        
-        let sdir = Vec3f32::from_components(
-            (t2 * x1 - t1 * x2) * r,
-            (t2 * y1 - t1 * y2) * r,
-            (t2 * z1 - t1 * z2) * r,
-        );
-        let tdir = Vec3f32::from_components(
-            (s1 * x2 - s2 * x1) * r,
-            (s1 * y2 - s2 * y1) * r,
-            (s1 * z2 - s2 * z1) * r,
-        );
+    let div = s1 * t2 - s2 * t1;
+    let r = if div == 0.0 { 1.0 } else { 1.0 / div };
 
-        tan1[i1] = tan1[i1] + sdir;
-        tan1[i2] = tan1[i2] + sdir;
-        tan1[i3] = tan1[i3] + sdir;
+    let sdir = Vec3f32::from_components(
+      (t2 * x1 - t1 * x2) * r,
+      (t2 * y1 - t1 * y2) * r,
+      (t2 * z1 - t1 * z2) * r,
+    );
+    let tdir = Vec3f32::from_components(
+      (s1 * x2 - s2 * x1) * r,
+      (s1 * y2 - s2 * y1) * r,
+      (s1 * z2 - s2 * z1) * r,
+    );
 
-        tan2[i1] = tan2[i1] + tdir;
-        tan2[i2] = tan2[i2] + tdir;
-        tan2[i3] = tan2[i3] + tdir;
-    }
+    tan1[i1] = tan1[i1] + sdir;
+    tan1[i2] = tan1[i2] + sdir;
+    tan1[i3] = tan1[i3] + sdir;
 
-    for (i, v) in vertices.iter_mut().enumerate() {
-        let n = Vec3f32::from_components(v.normal[0], v.normal[1], v.normal[2]);
-        let t = tan1[i];
-        
-        // Gram-Schmidt orthogonalize
-        let t_dot_n = t.dot(n);
-        let tangent_unnorm = t - n * t_dot_n;
-        let tangent_len = tangent_unnorm.length();
-        let tangent = if tangent_len > 0.000001 { tangent_unnorm / tangent_len } else { Vec3f32::from_components(1.0, 0.0, 0.0) };
-        
-        // Calculate handedness
-        let w = if n.cross(t).dot(tan2[i]) < 0.0 { -1.0 } else { 1.0 };
-        
-        v.tangent = [tangent.x(), tangent.y(), tangent.z(), w];
-    }
+    tan2[i1] = tan2[i1] + tdir;
+    tan2[i2] = tan2[i2] + tdir;
+    tan2[i3] = tan2[i3] + tdir;
+  }
+
+  for (i, v) in vertices.iter_mut().enumerate() {
+    let n = Vec3f32::from_components(v.normal[0], v.normal[1], v.normal[2]);
+    let t = tan1[i];
+
+    // Gram-Schmidt orthogonalize
+    let t_dot_n = t.dot(n);
+    let tangent_unnorm = t - n * t_dot_n;
+    let tangent_len = tangent_unnorm.length();
+    let tangent = if tangent_len > 0.000001 {
+      tangent_unnorm / tangent_len
+    } else {
+      Vec3f32::from_components(1.0, 0.0, 0.0)
+    };
+
+    // Calculate handedness
+    let w = if n.cross(t).dot(tan2[i]) < 0.0 {
+      -1.0
+    } else {
+      1.0
+    };
+
+    v.tangent = [tangent.x(), tangent.y(), tangent.z(), w];
+  }
 }
 
 pub fn generate_quad(normal: Vec3f32, size: f32) -> Comet {
@@ -1622,8 +1651,12 @@ mod tests {
       Vec3f32::from_components(0.0, 0.0, 3.0),
     );
 
-    let (_, _, bf_to_pa, _) =
-      compute_comet_extras(&vertices, &indices, &mut mass_properties, Some(custom_inertia));
+    let (_, _, bf_to_pa, _) = compute_comet_extras(
+      &vertices,
+      &indices,
+      &mut mass_properties,
+      Some(custom_inertia),
+    );
 
     // Verify eigenvalues (diagonalized inertia)
     assert!((mass_properties.inertia.xx - 1.0).abs() < 1e-6);
@@ -1641,7 +1674,10 @@ mod tests {
 
     // In PA frame, eigenvectors are [1, 1, 0]/sqrt(2) and [-1, 1, 0]/sqrt(2) (or similar)
     // [1, 1, 0] rotated by 45 deg should align with one of the axes.
-    assert!((v_pa.x().abs() - 2.0_f32.sqrt()).abs() < 1e-6 || (v_pa.y().abs() - 2.0_f32.sqrt()).abs() < 1e-6);
+    assert!(
+      (v_pa.x().abs() - 2.0_f32.sqrt()).abs() < 1e-6
+        || (v_pa.y().abs() - 2.0_f32.sqrt()).abs() < 1e-6
+    );
     assert!(v_pa.z().abs() < 1e-6);
   }
 

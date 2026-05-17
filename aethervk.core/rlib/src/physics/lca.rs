@@ -1,4 +1,4 @@
-use aethervk_oshal_rlib::{math::matrix::SquareMatrix, math::matrix::mat4::Mat4x4f32};
+use aethervk_oshal_rlib::math::matrix::{SquareMatrix, mat4::Mat4x4f32};
 
 /// Resolves the transformation between two entities possibly in different reference frames
 /// by finding their Least Common Ancestor (LCA).

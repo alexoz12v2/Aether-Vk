@@ -1,22 +1,21 @@
 //! core_api module.
 
-use crate::scene::{CameraComponent, TransformComponent};
-use crate::simulation::texture_cache::TextureCache;
 use crate::{
   expect_scene, expect_scene_and_entity, gpu,
-  gpu::PresentationEngineHandle,
-  gpu::WeakRenderFrontendExt,
-  simulation_api::SimulationContext,
-  simulation_api::structs::{
-    LogicState, LogicThreadParams, RenderThreadParams, SimulationSceneData, SimulationTaskManager,
-    SimulationThreads,
+  gpu::{PresentationEngineHandle, WeakRenderFrontendExt},
+  scene::{CameraComponent, TransformComponent},
+  simulation::texture_cache::TextureCache,
+  simulation_api::{
+    SimulationContext,
+    structs::{
+      LogicState, LogicThreadParams, RenderThreadParams, SimulationSceneData,
+      SimulationTaskManager, SimulationThreads,
+    },
   },
-  types::GpuError,
-  types::{EngineError, EngineResult},
+  types::{EngineError, EngineResult, GpuError},
 };
 use aethervk_oshal_rlib as oshal;
-use alloc::string::ToString;
-use alloc::{boxed::Box, sync::Arc};
+use alloc::{boxed::Box, string::ToString, sync::Arc};
 use core::ptr::addr_of_mut;
 use oshal::{
   os,
@@ -61,7 +60,8 @@ impl SimulationContext {
       addr_of_mut!((*ptr).texture_cache).write(Arc::clone(&texture_cache));
 
       // TODO test: if this fails, render frontend should drop.
-      let render_thread_params = RenderThreadParams::new(backend, error_debug_callback, render_thread_thread_pool)?;
+      let render_thread_params =
+        RenderThreadParams::new(backend, error_debug_callback, render_thread_thread_pool)?;
       let logic_thread_params = LogicThreadParams::new(
         logic_thread_thread_pool,
         Arc::clone(&task_manager),

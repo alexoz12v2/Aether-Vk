@@ -2,9 +2,7 @@
 
 use crate::types::{IoError, IoResult};
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
-use aethervk_oshal_rlib::hash::FnvHasher;
-use aethervk_oshal_rlib::os;
-use aethervk_oshal_rlib::os::fs::Path;
+use aethervk_oshal_rlib::{hash::FnvHasher, os, os::fs::Path};
 use alloc::vec::Vec;
 use core::hash::Hasher;
 use hashbrown::HashMap;

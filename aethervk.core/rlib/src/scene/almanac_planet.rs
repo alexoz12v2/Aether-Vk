@@ -1,12 +1,14 @@
 //! almanac_planet module.
 
-use crate::scene::{Component, TransformComponent};
-use crate::simulation::almanac::AlmanacPackedData;
-use crate::types::EngineResult;
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::Vector3;
-use aethervk_oshal_rlib::math::vector::vec4::Quat;
-use aethervk_oshal_rlib::math::vector::{Vector, vec3::Vec3f32};
+use crate::{
+  scene::{Component, TransformComponent},
+  simulation::almanac::AlmanacPackedData,
+  types::EngineResult,
+};
+use aethervk_oshal_rlib::math::{
+  quaternion::Quaternion,
+  vector::{Vector, Vector3, vec3::Vec3f32, vec4::Quat},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 /// TODO: Document this item
@@ -78,7 +80,10 @@ mod tests {
   #[test]
   fn test_almanac_planet_with_offset() {
     let mut transform = TransformComponent::default();
-    let bf_to_pa = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), 45.0_f32.to_radians());
+    let bf_to_pa = Quat::from_axis_angle(
+      Vec3f32::from_components(0.0, 0.0, 1.0),
+      45.0_f32.to_radians(),
+    );
     let planet = AlmanacPlanet {
       naif_id: 399,
       rot_period: 0.0,

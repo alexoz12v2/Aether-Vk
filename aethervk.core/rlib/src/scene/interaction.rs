@@ -1,9 +1,11 @@
 //! interaction module.
 
-use crate::scene::{
-  AddComponentError, EntityId, FollowingComponent, HiddenComponent, Scene, SelectedComponent,
+use crate::{
+  scene::{
+    AddComponentError, EntityId, FollowingComponent, HiddenComponent, Scene, SelectedComponent,
+  },
+  types::{EngineError, EngineResult},
 };
-use crate::types::{EngineError, EngineResult};
 use alloc::vec::Vec;
 
 // TODO parallel with option pool (all trait functions)

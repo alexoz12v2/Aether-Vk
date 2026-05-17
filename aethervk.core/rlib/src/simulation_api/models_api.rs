@@ -1,12 +1,13 @@
 //! models_api module.
 
 use super::*;
-use crate::scene::{PhysicalMeshComponent, TransformComponent};
-use crate::simulation_api::SimulationContext;
+use crate::{
+  scene::{PhysicalMeshComponent, TransformComponent},
+  simulation_api::SimulationContext,
+};
 use alloc::{string::String, sync::Arc, vec::Vec};
 use core::ffi::{CStr, c_char};
-use oshal::math::vector::vec3::Vec3f32;
-use oshal::math::vector::vec4::Quat;
+use oshal::math::vector::{vec3::Vec3f32, vec4::Quat};
 
 impl SimulationContext {
   /// TODO: Document this item

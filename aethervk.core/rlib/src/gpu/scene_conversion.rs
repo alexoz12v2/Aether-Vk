@@ -1,22 +1,22 @@
 //! scene_conversion module.
 
-use crate::gpu;
-use crate::gpu::RenderDevice;
-use crate::gpu::frame::CameraRenderData;
-use crate::math::collision::linear_bvh::LinearBound;
-use crate::scene::{
-  BackgroundComponent, BillboardType, BvhDebugComponent, CameraComponent, CursorComponent,
-  EntityId, FollowingComponent, GridComponent, HiddenComponent, ImageBillboardComponent,
-  MarkersComponent, MeasurementComponent, PhysicalMeshComponent, SelectedComponent, SkyComponent,
-  SunComponent, TransformComponent,
+use crate::{
+  gpu,
+  gpu::{RenderDevice, frame::CameraRenderData},
+  math::collision::linear_bvh::LinearBound,
+  scene::{
+    BackgroundComponent, BillboardType, BvhDebugComponent, CameraComponent, CursorComponent,
+    EntityId, FollowingComponent, GridComponent, HiddenComponent, ImageBillboardComponent,
+    MarkersComponent, MeasurementComponent, PhysicalMeshComponent, SelectedComponent, SkyComponent,
+    SunComponent, TransformComponent,
+  },
+  types::{GpuError, GpuResult},
 };
-use crate::types::{GpuError, GpuResult};
-use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
-use aethervk_oshal_rlib::math::matrix::{Matrix4, MatrixVectorMul};
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
-use alloc::string::ToString;
-use alloc::vec::Vec;
+use aethervk_oshal_rlib::math::{
+  matrix::{Matrix4, MatrixVectorMul, mat4::Mat4x4f32},
+  vector::{Vector, Vector3, Vector4, vec3::Vec3f32},
+};
+use alloc::{string::ToString, vec::Vec};
 use function_name::named;
 
 // TODO extensive unit testing. (with valid scenes of course scene.validate)
@@ -933,9 +933,13 @@ const fn get_mesh_outline(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::scene::ui::{Transform2DComponent, UiComponent};
-  use crate::scene::{CameraComponent, Scene, TransformComponent};
-  use crate::simulation::texture_cache::TextureCache;
+  use crate::{
+    scene::{
+      CameraComponent, Scene, TransformComponent,
+      ui::{Transform2DComponent, UiComponent},
+    },
+    simulation::texture_cache::TextureCache,
+  };
   use alloc::sync::Arc;
   use spin::RwLock;
 

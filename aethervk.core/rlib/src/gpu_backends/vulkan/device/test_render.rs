@@ -1,28 +1,32 @@
 //! test_render module.
 
 use super::*;
-use crate::gpu::scene_conversion::SceneConversionExt;
-use crate::gpu::{RenderDeviceHandle, RenderFrontend, ScopedCommandBuffer, ScopedRenderPass};
-use crate::math::collision::bounds::AABB;
-use crate::math::collision::linear_bvh::{LinearBVH, LinearBVHHeader, LinearBVHNode, LinearBound};
-use crate::scene::PhysicalMeshComponent;
 use crate::{
   gpu::{
-    self, DeviceAdditionalParams, PresentationEngineParams, VULKAN_RENDER_BACKEND,
+    self, DeviceAdditionalParams, PresentationEngineParams, RenderDeviceHandle, RenderFrontend,
+    ScopedCommandBuffer, ScopedRenderPass, VULKAN_RENDER_BACKEND,
     frame::{BillboardDrawCall, CursorDrawCall, RenderScene},
     new_render_frontend,
+    scene_conversion::SceneConversionExt,
+  },
+  math::collision::{
+    bounds::AABB,
+    linear_bvh::{LinearBVH, LinearBVHHeader, LinearBVHNode, LinearBound},
   },
   scene,
-  scene::{BillboardType, CameraComponent, Scene, SunComponent, TransformComponent},
+  scene::{
+    BillboardType, CameraComponent, PhysicalMeshComponent, Scene, SunComponent, TransformComponent,
+  },
   types::RuntimeParams,
 };
-use aethervk_oshal_rlib::math::vector::Vector3;
-use aethervk_oshal_rlib::math::{
-  matrix::{Matrix4, SquareMatrix, mat4::Mat4x4f32},
-  quaternion::Quaternion,
-  vector::{vec3::Vec3f32, vec4::Quat},
+use aethervk_oshal_rlib::{
+  math::{
+    matrix::{Matrix4, SquareMatrix, mat4::Mat4x4f32},
+    quaternion::Quaternion,
+    vector::{Vector3, vec3::Vec3f32, vec4::Quat},
+  },
+  os::pool::ThreadPool,
 };
-use aethervk_oshal_rlib::os::pool::ThreadPool;
 use heapless::index_map::FnvIndexMap;
 use std::sync::Arc;
 // TODO: test about text rendering in different fonts (system font and packaged font)
@@ -540,6 +544,7 @@ fn test_render_empty_scene_graceful() {
 
 #[test]
 fn test_layout_transition_on_failed_update() {
+  setup_assets_dir();
   fn panic_on_validation_error(msg: &str) {
     panic!("Vulkan validation error occurred during testing: {}", msg);
   }
@@ -3577,33 +3582,35 @@ fn test_painting_mode_write_and_verify() {
       // 2. PAINT into the buffer
       // We need to access the mapped memory of the emissive_paint_image.
       // This is inside RenderDevice (Vulkan implementation).
-      let vk_device =
-        device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
-      let res_guard = DebugTrackedRwLock::read(&vk_device.res);
-      let mesh_id = gpu::RenderableInstanceId::from_physical_mesh(mesh_comp.mesh.id);
-      let mesh2_res = DebugTrackedRwLock::read(&res_guard.physical_mesh2_resources);
-      let paint_image_resource = mesh2_res.as_ref().unwrap().get(&mesh_id).unwrap();
-      let paint_image = paint_image_resource.emissive_paint_image.as_ref().unwrap();
+      {
+        let vk_device =
+          device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+        let res_guard = DebugTrackedRwLock::read(&vk_device.res);
+        let mesh_id = gpu::RenderableInstanceId::from_physical_mesh(mesh_comp.mesh.id);
+        let mesh2_res = DebugTrackedRwLock::read(&res_guard.physical_mesh2_resources);
+        let paint_image_resource = mesh2_res.as_ref().unwrap().get(&mesh_id).unwrap();
+        let paint_image = paint_image_resource.emissive_paint_image.as_ref().unwrap();
 
-      let alloc_info = DebugTrackedRwLock::read(&vk_device.res)
-        .allocator
-        .allocator
-        .get_allocation_info(&paint_image.allocation);
-      let mapped_ptr = alloc_info.mapped_data as *mut u8;
-      assert!(!mapped_ptr.is_null(), "Paint image must be mmapped");
+        let alloc_info = DebugTrackedRwLock::read(&vk_device.res)
+          .allocator
+          .allocator
+          .get_allocation_info(&paint_image.allocation);
+        let mapped_ptr = alloc_info.mapped_data as *mut u8;
+        assert!(!mapped_ptr.is_null(), "Paint image must be mmapped");
 
-      // Write a BIG red square in the middle of 1024x1024 texture
-      unsafe {
-        for y in 400..600 {
-          for x in 400..600 {
-            let offset = (y * 1024 + x) * 4;
-            *mapped_ptr.add(offset) = 255; // R
-            *mapped_ptr.add(offset + 1) = 0; // G
-            *mapped_ptr.add(offset + 2) = 0; // B
-            *mapped_ptr.add(offset + 3) = 255; // A (Distribution)
+        // Write a BIG red square in the middle of 1024x1024 texture
+        unsafe {
+          for y in 400..600 {
+            for x in 400..600 {
+              let offset = (y * 1024 + x) * 4;
+              *mapped_ptr.add(offset) = 255; // R
+              *mapped_ptr.add(offset + 1) = 0; // G
+              *mapped_ptr.add(offset + 2) = 0; // B
+              *mapped_ptr.add(offset + 3) = 255; // A (Distribution)
+            }
           }
         }
-      }
+      } // <-- locks released
 
       // 3. Render AFTER painting
       device.start_frame()?;

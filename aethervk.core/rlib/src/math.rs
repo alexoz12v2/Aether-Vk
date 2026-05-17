@@ -1,10 +1,10 @@
 //! math module.
 
-use aethervk_oshal_rlib::math::matrix::{
-  Matrix, Matrix3, MatrixVectorMul, SquareMatrix, mat3::Mat3f32,
+use aethervk_oshal_rlib::math::{
+  FloatLike, MulAddIdentity,
+  matrix::{Matrix, Matrix3, MatrixVectorMul, SquareMatrix, mat3::Mat3f32},
+  vector::{Vector, Vector3, Vector4, vec3::Vec3f32},
 };
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4, vec3::Vec3f32};
-use aethervk_oshal_rlib::math::{FloatLike, MulAddIdentity};
 use alloc::vec::Vec;
 
 pub mod collision;

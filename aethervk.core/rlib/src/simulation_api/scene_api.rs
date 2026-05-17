@@ -1,26 +1,26 @@
 //! scene_api module.
 
-use crate::math::collision::linear_bvh::LinearBVHNode;
 use crate::{
   expect_scene, expect_scene_and_entity,
+  math::collision::linear_bvh::LinearBVHNode,
   scene::{
     AddComponentError, BvhDebugComponent, CameraComponent, CursorComponent, EntityId,
     FollowingComponent, GridComponent, HiddenComponent, MarkersComponent, MeasurementComponent,
     PhysicalMeshComponent, Scene, SelectedComponent, SkyComponent, SunComponent,
     TransformComponent,
   },
-  simulation_api::SimulationContext,
-  simulation_api::structs::{self, SceneContext},
+  simulation_api::{
+    SimulationContext,
+    structs::{self, SceneContext},
+  },
   types::{EngineError, EngineResult},
 };
 use aethervk_oshal_rlib as oshal;
 use alloc::{string::String, sync::Arc, vec::Vec};
 use core::{any::TypeId, ffi::c_char};
-use oshal::{
-  math::quaternion::Quaternion,
-  math::vector::vec3::Vec3f32,
-  math::vector::vec4::Quat,
-  math::vector::{Vector, Vector3},
+use oshal::math::{
+  quaternion::Quaternion,
+  vector::{Vector, Vector3, vec3::Vec3f32, vec4::Quat},
 };
 use spin::{RwLock, RwLockReadGuard};
 

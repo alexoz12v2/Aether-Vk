@@ -1,14 +1,16 @@
 //! timeline_manager module.
 
-use function_name::named;
-use crate::gpu_backends::vulkan::device::{
-  TASK_STATUS_FAILED, TASK_STATUS_PENDING, TASK_STATUS_SUCCESS, TaskEntry, TimelinePollingWorkload,
+use crate::{
+  gpu_backends::vulkan::device::{
+    TASK_STATUS_FAILED, TASK_STATUS_PENDING, TASK_STATUS_SUCCESS, TaskEntry,
+    TimelinePollingWorkload,
+  },
+  types::{GpuError, GpuResult},
 };
-use crate::types::{GpuError, GpuResult};
-use alloc::collections::BTreeMap;
-use alloc::sync::Arc;
+use alloc::{collections::BTreeMap, sync::Arc};
 use ash::vk;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use function_name::named;
 
 /// TODO: Document this item
 pub(super) struct TimelineManager {
@@ -23,7 +25,9 @@ pub(super) struct TimelineManager {
   next_submit_value: AtomicU64,
 
   /// Registry of CPU tasks waiting for a specific timeline value
-  pub task_registry: Arc<crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<BTreeMap<u64, Arc<TaskEntry>>>>,
+  pub task_registry: Arc<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<BTreeMap<u64, Arc<TaskEntry>>>,
+  >,
   next_task_id: AtomicU64,
 }
 
@@ -49,7 +53,9 @@ impl TimelineManager {
       },
       cached_completed_value: Arc::new(AtomicU64::new(0)),
       next_submit_value: AtomicU64::new(1),
-      task_registry: Arc::new(crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(BTreeMap::new())),
+      task_registry: Arc::new(
+        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(BTreeMap::new()),
+      ),
       next_task_id: AtomicU64::new(1),
     })
   }
@@ -94,43 +100,59 @@ impl TimelineManager {
       status: AtomicU32::new(TASK_STATUS_PENDING),
       error: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(None),
     });
-    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.task_registry).insert(id, entry);
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.task_registry)
+      .insert(id, entry);
     id
   }
 
   /// TODO: Document this item
   pub fn assign_task_target(&self, task_id: u64, target_timeline: u64) {
-    if let Some(entry) = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.task_registry).get(&task_id) {
+    if let Some(entry) =
+      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.task_registry)
+        .get(&task_id)
+    {
       entry.target_value.store(target_timeline, Ordering::Release);
     }
   }
 
   /// TODO: Document this item
   pub fn fail_task(&self, task_id: u64, error: GpuError) {
-    if let Some(entry) = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.task_registry).get(&task_id) {
-      *crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&entry.error) = Some(error);
+    if let Some(entry) =
+      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.task_registry)
+        .get(&task_id)
+    {
+      *crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&entry.error) =
+        Some(error);
       entry.status.store(TASK_STATUS_FAILED, Ordering::Release);
     }
   }
 
   /// TODO: Document this item
   pub fn success_task(&self, task_id: u64) {
-    if let Some(entry) = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.task_registry).get(&task_id) {
+    if let Some(entry) =
+      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.task_registry)
+        .get(&task_id)
+    {
       entry.status.store(TASK_STATUS_SUCCESS, Ordering::Release);
     }
-    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.task_registry).remove(&task_id);
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.task_registry)
+      .remove(&task_id);
   }
 
   /// TODO: Document this item
   #[named]
   pub fn is_task_completed(&self, task_id: u64) -> GpuResult<bool> {
-    let registry = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.task_registry);
+    let registry =
+      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.task_registry);
     if let Some(entry) = registry.get(&task_id) {
       let status = entry.status.load(Ordering::Acquire);
       if status == TASK_STATUS_SUCCESS {
         Ok(true)
       } else if status == TASK_STATUS_FAILED {
-        let err = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&entry.error).clone().unwrap_or(crate::gpu_err_device!());
+        let err =
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&entry.error)
+            .clone()
+            .unwrap_or(crate::gpu_err_device!());
         Err(err)
       } else {
         Ok(false)

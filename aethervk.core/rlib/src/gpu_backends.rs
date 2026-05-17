@@ -1,18 +1,19 @@
 //! gpu_backends module.
 
-use crate::gpu::{CommandBuffer, DeviceBuffer, Kernels, WaitHandle};
-use crate::physics::physics_scene::PhysicsScene;
-use crate::scene::Scene;
 use crate::{
   gpu::{
-    D3D12_RENDER_BACKEND, METAL_RENDER_BACKEND, RenderBackendId, RenderFrontend,
-    VULKAN_RENDER_BACKEND,
+    CommandBuffer, D3D12_RENDER_BACKEND, DeviceBuffer, Kernels, METAL_RENDER_BACKEND,
+    RenderBackendId, RenderFrontend, VULKAN_RENDER_BACKEND, WaitHandle,
   },
+  physics::physics_scene::PhysicsScene,
+  scene::Scene,
   traits::InitWithRuntime,
   types::{EngineError, EngineResult, GpuError, RuntimeParams},
 };
-use aethervk_oshal_rlib::math::vector::Vector;
-use aethervk_oshal_rlib::os::time::{timeus_milliseconds, timeus_t};
+use aethervk_oshal_rlib::{
+  math::vector::Vector,
+  os::time::{timeus_milliseconds, timeus_t},
+};
 use alloc::vec::Vec;
 
 #[cfg(all(
@@ -149,7 +150,11 @@ pub fn simulation_step<K>(
 where
   K: Kernels + ?Sized,
 {
-  aethervk_oshal_rlib::log!("simulation_step running! dt_us: {}, collisions_enabled: {}", t1 - t0, collisions_enabled);
+  aethervk_oshal_rlib::log!(
+    "simulation_step running! dt_us: {}, collisions_enabled: {}",
+    t1 - t0,
+    collisions_enabled
+  );
   let mut cmd = kernels.create_command_buffer()?;
 
   let mut current_time = t0;
@@ -163,26 +168,35 @@ where
   let emitters = kernels.build_emitters(&mut cmd, scene)?;
 
   let mut sun_pos = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero();
-  if let Some((sun_id, _)) = scene.query1_first_res::<crate::scene::SunComponent, _, _>(|id, _| Some(id)) {
+  if let Some((sun_id, _)) =
+    scene.query1_first_res::<crate::scene::SunComponent, _, _>(|id, _| Some(id))
+  {
     if let Some(pos) = scene.global_transform(sun_id).map(|t| t.position) {
       sun_pos = pos;
     }
   }
 
   let full_dt = t1 - t0;
-  kernels.emit_particles(&mut cmd, &mut particles, physical_scene, scene, sun_pos, full_dt)?;
+  kernels.emit_particles(
+    &mut cmd,
+    &mut particles,
+    physical_scene,
+    scene,
+    sun_pos,
+    full_dt,
+  )?;
 
   if !collisions_enabled {
     let dt = end_time - current_time;
     let _snapshot = kernels.snapshot_dynamics(&mut cmd, &rigid_bodies, &particles)?;
-    
+
     kernels.step_ode_p1_p2(&mut cmd, &mut particles, dt)?;
     kernels.step_ode_p3_p4(&mut cmd, &mut rigid_bodies, &emitters, dt)?;
-    
+
     let bvh = kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, dt)?;
     kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
     kernels.step_ode_p5(&mut cmd, &kinematics, &mut particles, &emitters, dt)?;
-    
+
     cmd.submit()?;
   } else {
     while current_time < end_time {
@@ -197,7 +211,8 @@ where
       kernels.step_ode_p5(&mut cmd, &kinematics, &mut particles, &emitters, dt)?;
 
       let potentials = kernels.self_intersect_scene(&mut cmd, &bvh)?;
-      let globals = kernels.intersect_instances(&mut cmd, &potentials, &rigid_bodies, &particles)?;
+      let globals =
+        kernels.intersect_instances(&mut cmd, &potentials, &rigid_bodies, &particles)?;
       let compacted = kernels.compact_collisions(&mut cmd, &globals, time_collision_delta)?;
 
       let tc_buffer = kernels.find_earliest_collision(&mut cmd, &compacted)?;
@@ -217,16 +232,29 @@ where
         kernels.step_ode_p1_p2(&mut cmd, &mut particles, t_c)?;
         kernels.step_ode_p3_p4(&mut cmd, &mut rigid_bodies, &emitters, t_c)?;
 
-        let rewind_bvh = kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, t_c)?;
+        let rewind_bvh =
+          kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, t_c)?;
         kernels.compute_self_gravity(&mut cmd, &rewind_bvh, &mut particles)?;
         kernels.step_ode_p5(&mut cmd, &kinematics, &mut particles, &emitters, t_c)?;
 
-        kernels.apply_collision_responses(&mut cmd, &mut rigid_bodies, &mut particles, &compacted, false)?;
+        kernels.apply_collision_responses(
+          &mut cmd,
+          &mut rigid_bodies,
+          &mut particles,
+          &compacted,
+          false,
+        )?;
 
         let advance = if t_c == 0 { 1 } else { t_c };
         current_time += advance;
       } else {
-        kernels.apply_collision_responses(&mut cmd, &mut rigid_bodies, &mut particles, &compacted, inelastic)?;
+        kernels.apply_collision_responses(
+          &mut cmd,
+          &mut rigid_bodies,
+          &mut particles,
+          &compacted,
+          inelastic,
+        )?;
         current_time = end_time;
       }
     }
@@ -235,4 +263,3 @@ where
   kernels.write_back_to_scene(&mut cmd, &rigid_bodies, &particles, physical_scene, scene)?;
   Ok(())
 }
-

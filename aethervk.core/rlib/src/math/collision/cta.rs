@@ -1,8 +1,7 @@
 //! Conservative Time Advancement (CTA) for continuous collision detection of convex objects.
 
 use crate::math::collision::gjk::{Support, gjk_distance};
-use aethervk_oshal_rlib::math::vector::Vector;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+use aethervk_oshal_rlib::math::vector::{Vector, vec3::Vec3f32};
 
 /// Represents the physical properties needed for CTA.
 pub trait CtaBody: Support {

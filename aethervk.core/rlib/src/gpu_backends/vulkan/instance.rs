@@ -358,7 +358,7 @@ impl Instance {
         });
 
         if supports_swapchain_maintenance1 && self.has_surface_maintenance1 {
-            optional_extensions.insert(utils::OptionalExtensionSupportFlags::SWAPCHAIN_MAINTENANCE1);
+          optional_extensions.insert(utils::OptionalExtensionSupportFlags::SWAPCHAIN_MAINTENANCE1);
         }
 
         Some(utils::PhysicalDeviceQueryResult {

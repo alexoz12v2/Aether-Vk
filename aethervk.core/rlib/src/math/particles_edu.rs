@@ -1,10 +1,13 @@
 //! particles_edu module.
 
-use crate::math::collision::bounds::AABB;
-use crate::math::collision::linear_bvh::{LinearBVH, LinearBVHHeader, LinearBVHNode, LinearBound};
-use crate::math::physics::Particle;
-use aethervk_oshal_rlib::math::vector::Vector3;
-use aethervk_oshal_rlib::math::vector::{Vector, vec3::Vec3f32};
+use crate::math::{
+  collision::{
+    bounds::AABB,
+    linear_bvh::{LinearBVH, LinearBVHHeader, LinearBVHNode, LinearBound},
+  },
+  physics::Particle,
+};
+use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
 use alloc::vec::Vec;
 
 // ============================================================================
@@ -201,8 +204,8 @@ pub fn build_particle_lbvh(particles: &[Particle], particle_radius: f32) -> Opti
 
   // Create a dummy node to initialize the array
   let dummy_node = LinearBVHNode {
-        center_of_mass: [0.0, 0.0, 0.0],
-        mass: 0.0,
+    center_of_mass: [0.0, 0.0, 0.0],
+    mass: 0.0,
     bound: LinearBound::AABB(AABB::new(Vec3f32::zero(), Vec3f32::zero())),
     left_child_or_primitive_offset: u32::MAX,
     right_child_offset: u32::MAX,

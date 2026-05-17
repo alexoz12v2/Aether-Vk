@@ -1,11 +1,10 @@
 //! test_ui_text module.
 
 use super::*;
-use crate::gpu::{RenderDeviceHandle, RenderFrontend, ScopedCommandBuffer, ScopedRenderPass};
 use crate::{
   gpu::{
-    self, DeviceAdditionalParams, PresentationEngineParams, VULKAN_RENDER_BACKEND,
-    new_render_frontend,
+    self, DeviceAdditionalParams, PresentationEngineParams, RenderDeviceHandle, RenderFrontend,
+    ScopedCommandBuffer, ScopedRenderPass, VULKAN_RENDER_BACKEND, new_render_frontend,
   },
   types::RuntimeParams,
 };

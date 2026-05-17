@@ -29,6 +29,7 @@ objc2-quartz-core = "0.3.2"
 objc2-foundation = "0.3.2"
 
 [dev-dependencies]
+aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = ["console_log", "debug_gpu"] }
 image = "0.25.10"
 ntest = "*"
 approx = "*"

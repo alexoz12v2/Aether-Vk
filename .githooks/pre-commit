@@ -1,0 +1,30 @@
+#!/bin/bash
+set -e
+
+# 1. Find the root of the git repository and navigate to it.
+# This ensures the script works correctly no matter where it's invoked from.
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT"
+
+# Format Rust code using nightly
+echo "Running cargo +nightly fmt..."
+cargo +nightly fmt --all
+
+# Format C# code
+# Format ONLY the specific C# project directories
+echo "Running dotnet csharpier..."
+dotnet csharpier format aethervk.app.tests aethervk.logic.tests aethervk.ui-app aethervk.ui-logic
+
+# Check if formatting changed any files
+if ! git diff --quiet; then
+    echo ""
+    echo "=========================================================================="
+    echo "Formatting made changes to your files."
+    echo "Please stage these changes ('git add') and try committing again."
+    echo "=========================================================================="
+    exit 1
+fi
+
+echo "All formatting checks passed!"
+exit 0
+

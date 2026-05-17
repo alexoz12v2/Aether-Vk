@@ -1,7 +1,6 @@
 extern crate alloc;
 
-use alloc::vec;
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 use core::array;
 
 // --- MULTI-BRANCH BVH STRUCTURES ---
@@ -46,8 +45,12 @@ pub trait BinaryBvh {
   fn bound(&self, node_idx: u32) -> Self::Bound;
   fn is_leaf(&self, node_idx: u32) -> bool;
   fn children(&self, node_idx: u32) -> (Option<u32>, Option<u32>);
-  fn mass(&self, _node_idx: u32) -> f32 { 0.0 }
-  fn center_of_mass(&self, _node_idx: u32) -> [f32; 3] { [0.0; 3] }
+  fn mass(&self, _node_idx: u32) -> f32 {
+    0.0
+  }
+  fn center_of_mass(&self, _node_idx: u32) -> [f32; 3] {
+    [0.0; 3]
+  }
 
   /// Extracts primitives of the leaf at `node_idx` and appends them to `out`.
   /// Returns the number of primitives appended.
