@@ -203,27 +203,36 @@ public static class NativeInterop
   );
 
   [StructLayout(LayoutKind.Sequential)]
-  public struct FfiTransform 
+  public struct FfiTransform
   {
-      public float Px, Py, Pz;
-      public float Rw, Rx, Ry, Rz;
-      public float Sx, Sy, Sz;
+    public float Px,
+      Py,
+      Pz;
+    public float Rw,
+      Rx,
+      Ry,
+      Rz;
+    public float Sx,
+      Sy,
+      Sz;
   }
 
   [StructLayout(LayoutKind.Sequential)]
   public struct FfiCamera
   {
-      [MarshalAs(UnmanagedType.I1)] public bool IsOrthographic;
-      public float Fov;
-      public float Aspect;
-      public float Near;
-      public float Far;
-      public float OrthoLeft;
-      public float OrthoRight;
-      public float OrthoBottom;
-      public float OrthoTop;
-      [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
-      public float[] Proj;
+    [MarshalAs(UnmanagedType.I1)]
+    public bool IsOrthographic;
+    public float Fov;
+    public float Aspect;
+    public float Near;
+    public float Far;
+    public float OrthoLeft;
+    public float OrthoRight;
+    public float OrthoBottom;
+    public float OrthoTop;
+
+    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+    public float[] Proj;
   }
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

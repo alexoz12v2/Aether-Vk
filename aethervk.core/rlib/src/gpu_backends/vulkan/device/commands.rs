@@ -127,64 +127,87 @@ impl CommandPools {
     is_primary: bool,
   ) -> GpuResult<vk::CommandBuffer> {
     if is_primary {
-      let mut registry =
-        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.registry);
-      // Pseudo-TLS lookup/initialization
-      let tp = registry.entry(tid).or_insert_with(|| {
-        Box::new(ThreadPools {
-          recycled: SpscQueue::new(self.spsc_capacity),
-          active: None,
-          cmd_cache: BTreeMap::new(),
+      crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&self.registry, &device.handle)
+        .prepare_write(tid, |registry, tid| {
+          let tp = registry.entry(tid).or_insert_with(|| {
+            Box::new(ThreadPools {
+              recycled: SpscQueue::new(self.spsc_capacity),
+              active: None,
+              cmd_cache: BTreeMap::new(),
+            })
+          });
+
+          let mut create_pool = false;
+          if tp.active.is_none() {
+            if let Some(cmd_pool) = tp.recycled.try_pop() {
+              tp.active = Some(cmd_pool);
+            } else {
+              create_pool = true;
+            }
+          }
+
+          let active_pool = tp.active;
+
+          let mut found_recycled = None;
+          if let Some(pool) = active_pool {
+            let pool_cache = tp.cmd_cache.entry(pool).or_default();
+            for (&old_id, pair) in pool_cache.iter() {
+              if !pair.1 {
+                found_recycled = Some((old_id, pair.0));
+                break;
+              }
+            }
+            if let Some((old_id, cmd_buf)) = found_recycled {
+              pool_cache.remove(&old_id);
+              pool_cache.insert(id, (cmd_buf, true));
+              return Ok((false, active_pool, Some(cmd_buf))); // early out!
+            }
+          }
+
+          Ok((create_pool, active_pool, None))
+        })?
+        .execute(|(create_pool, mut active_pool, recycled_cmd), rollback| {
+          if let Some(cmd) = recycled_cmd {
+            return Ok((active_pool, cmd));
+          }
+
+          if create_pool {
+            let pool = self.create_pool_internal(&device.handle)?;
+            rollback.defer(move |dev| unsafe { dev.destroy_command_pool(pool, None) });
+            active_pool = Some(pool);
+          }
+
+          let pool = active_pool.unwrap();
+
+          let allocate_info = vk::CommandBufferAllocateInfo::default()
+            .command_buffer_count(1)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_pool(pool);
+
+          let cmd = unsafe {
+            let mut cmd: vk::CommandBuffer = vk::CommandBuffer::default();
+            let vk_res = (device.fp_v1_0().allocate_command_buffers)(
+              (&*device).handle(),
+              &allocate_info,
+              ptr::from_mut(&mut cmd),
+            );
+            vk_res.result_with_success(cmd)
+          }.with_name(device, &alloc::format!("PrimaryCommandBuffer_{}", id.0))?;
+
+          Ok((active_pool, cmd))
         })
-      });
-      // 1. ensure pool is active
-      if tp.active.is_none() {
-        tp.active = if let Some(cmd_pool) = tp.recycled.try_pop() {
-          Some(cmd_pool)
-        } else {
-          Some(self.create_pool_internal(device)?)
-        };
-      }
-      let active_pool = unsafe { tp.active.as_mut().unwrap_unchecked() };
+        .commit(|registry, result| {
+          let (active_pool, cmd) = result?;
+          let tp = registry.get_mut(&tid).unwrap();
+          if tp.active.is_none() {
+            tp.active = active_pool;
+          }
 
-      // 2. Check cache
-      let pool_cache = tp.cmd_cache.entry(*active_pool).or_default();
+          let pool_cache = tp.cmd_cache.entry(active_pool.unwrap()).or_default();
+          pool_cache.insert(id, (cmd, true));
 
-      // Find the first unused command buffer in the cache
-      let mut found_recycled = None;
-      for (&old_id, pair) in pool_cache.iter() {
-        if !pair.1 {
-          found_recycled = Some((old_id, pair.0));
-          break;
-        }
-      }
-
-      if let Some((old_id, cmd_buf)) = found_recycled {
-        // Remove from old ID and insert with the new ID
-        pool_cache.remove(&old_id);
-        pool_cache.insert(id, (cmd_buf, true));
-        return Ok(cmd_buf);
-      }
-
-      // 3. Allocate new buffer
-      let allocate_info = vk::CommandBufferAllocateInfo::default()
-        .command_buffer_count(1)
-        .level(vk::CommandBufferLevel::PRIMARY)
-        .command_pool(*active_pool);
-      let new_cmd = unsafe {
-        let mut cmd: vk::CommandBuffer = vk::CommandBuffer::default();
-        let vk_res = (device.fp_v1_0().allocate_command_buffers)(
-          device.handle(),
-          &allocate_info,
-          ptr::from_mut(&mut cmd),
-        );
-        vk_res.result_with_success(cmd)
-      }
-      .with_name(device, &alloc::format!("PrimaryCommandBuffer_{}", id.0))?;
-      // fails if there's already something, don't care
-      let _ = pool_cache.insert(id, (new_cmd, true));
-
-      Ok(new_cmd)
+          Ok(cmd)
+        })
     } else {
       todo!()
     }

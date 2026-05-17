@@ -229,302 +229,170 @@ impl RenderPasses {
     NonZeroHandle<vk::RenderPass>,
     NonZeroHandle<vk::Framebuffer>,
   )> {
-    match ty {
-      #[cfg(not(test))]
+    let (color_format, depth_stencil_format, swapchain) = match ty {
       RenderPassSpecification::ColorDepthSingleSubpass {
         color_format,
         depth_stencil_format,
         swapchain,
-      } => {
-        if let Some(bundle) =
-          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.render_passes)
-            .get(&pe_handle)
-        {
-          let (width, height) = swapchain.extent();
-          if bundle.swapchain_generation == swapchain.swapchain_generation()
-            && bundle.width == width
-            && bundle.height == height
-          {
-            return Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]));
-          }
-        }
+      } => (color_format, depth_stencil_format, swapchain),
+    };
 
-        let mut write_render_passes =
-          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-            &self.render_passes,
-          );
-        if let Some(mut bundle) = write_render_passes.remove(&pe_handle) {
-          bundle.discard(discard_pool, self.allocator, timeline);
-        }
-
-        let final_layout = match swapchain {
-          PresentationState::Windowed(_) => vk::ImageLayout::PRESENT_SRC_KHR,
-          PresentationState::Windowless(_) => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-        };
-
-        let render_pass = Self::create_color_depth_single_render_pass(
-          &self.render_pass_device,
-          color_format,
-          depth_stencil_format,
-          final_layout,
-        )
-        .or_else(|e| {
-          let _ = (&mut write_render_passes).remove(&pe_handle);
-          Err(e)
-        })?;
-        let (width, height) = swapchain.extent();
-
-        // Safety: We removed everything with that key above.
-        let black_value = vk::ClearValue {
-          color: vk::ClearColorValue {
-            float32: [0.0, 0.0, 0.0, 1.0],
-          },
-        };
-        let white_value = vk::ClearValue {
-          depth_stencil: vk::ClearDepthStencilValue {
-            depth: 1.0,
-            stencil: 0,
-          },
-        };
-        unsafe {
-          write_render_passes.insert_unique_unchecked(
-            pe_handle,
-            RenderPassBundle {
-              render_pass,
-              clear_value: [black_value, white_value],
-              swapchain_generation: swapchain.swapchain_generation(),
-              framebuffer: heapless::Vec::new(),
-              width,
-              height,
-              attachments: heapless::Vec::new(),
-            },
-          )
-        };
-
-        // create attachments
-        // Safety: This is empty and cap is 8
-        unsafe {
-          write_render_passes
-            .get_mut(&pe_handle)
-            .unwrap_unchecked()
-            .attachments
-            .push_unchecked(RenderPassAttachment::SwapchainColorImage)
-        };
-
-        let (image, alloc) = create_transient_attachment(
-          allocator,
-          vk::Extent2D { width, height },
-          depth_stencil_format,
-          vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-          vk::SampleCountFlags::TYPE_1,
-        )
-        .or_else(|e| {
-          let _ = write_render_passes.remove(&pe_handle);
-          Err(e)
-        })?;
-        let view_create_info = vk::ImageViewCreateInfo::default()
-          .image(image.get())
-          .view_type(vk::ImageViewType::TYPE_2D)
-          .format(depth_stencil_format)
-          .subresource_range(
-            vk::ImageSubresourceRange::default()
-              .aspect_mask(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL)
-              .level_count(1)
-              .layer_count(1),
-          );
-        let view = unsafe { device.create_image_view(&view_create_info, None) }.or_else(|e| {
-          let _ = write_render_passes.remove(&pe_handle);
-          Err(e)
-        })?;
-        let view = unsafe { NonZeroHandle::new_unchecked(view) };
-        unsafe {
-          write_render_passes.get_mut(&pe_handle).unwrap_unchecked().attachments.push_unchecked(
-            RenderPassAttachment::DepthStencilAttachment(image, alloc, view),
-          );
-        }
-
-        // create framebuffers
-        swapchain
-          .for_each_swapchain_image(|image_view| {
-            let attachments = [image_view.get(), view.get()];
-            let framebuffer_create_info = vk::FramebufferCreateInfo::default()
-              .render_pass(render_pass.get())
-              .width(width)
-              .height(height)
-              .layers(1)
-              .attachments(&attachments);
-            let framebuffer = unsafe {
-              NonZeroHandle::new_unchecked(
-                device.create_framebuffer(&framebuffer_create_info, None)?,
-              )
-            };
-            unsafe {
-              write_render_passes
-                .get_mut(&pe_handle)
-                .unwrap_unchecked()
-                .framebuffer
-                .push_unchecked(framebuffer);
-            };
-            Ok(())
-          })
-          .or_else(|e| {
-            let _ = write_render_passes.remove(&pe_handle);
-            Err(e)
-          })?;
-        drop(write_render_passes);
-        let read_render_passes =
-          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.render_passes);
-        let bundle = unsafe { read_render_passes.get(&pe_handle).unwrap_unchecked() };
-
-        Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]))
-      }
-      #[cfg(test)]
-      RenderPassSpecification::ColorDepthSingleSubpass {
-        color_format,
-        depth_stencil_format,
-        swapchain,
-      } => {
-        if let Some(bundle) =
-          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.render_passes)
-            .get(&pe_handle)
-        {
-          let (width, height) = swapchain.extent();
-          if bundle.swapchain_generation == swapchain.swapchain_generation()
-            && bundle.width == width
-            && bundle.height == height
-          {
-            return Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]));
-          }
-        }
-
-        let mut write_render_passes =
-          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-            &self.render_passes,
-          );
-        if let Some(mut bundle) = write_render_passes.remove(&pe_handle) {
-          bundle.discard(discard_pool, self.allocator, timeline);
-        }
-
-        let final_layout = match swapchain {
-          PresentationState::Windowed(_) => vk::ImageLayout::PRESENT_SRC_KHR,
-          PresentationState::Windowless(_) => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-        };
-
-        let render_pass = Self::create_color_depth_single_render_pass(
-          &self.render_pass_device,
-          color_format,
-          depth_stencil_format,
-          final_layout,
-        )
-        .or_else(|e| {
-          let _ = (&mut write_render_passes).remove(&pe_handle);
-          Err(e)
-        })?;
-        let (width, height) = swapchain.extent();
-
-        let black_value = vk::ClearValue {
-          color: vk::ClearColorValue {
-            float32: [0.0, 0.0, 0.0, 1.0],
-          },
-        };
-        let white_value = vk::ClearValue {
-          depth_stencil: vk::ClearDepthStencilValue {
-            depth: 1.0,
-            stencil: 0,
-          },
-        };
-        unsafe {
-          write_render_passes.insert_unique_unchecked(
-            pe_handle,
-            RenderPassBundle {
-              render_pass,
-              clear_value: [black_value, white_value],
-              swapchain_generation: swapchain.swapchain_generation(),
-              framebuffer: heapless::Vec::new(),
-              width,
-              height,
-              attachments: heapless::Vec::new(),
-            },
-          )
-        };
-
-        unsafe {
-          write_render_passes
-            .get_mut(&pe_handle)
-            .unwrap_unchecked()
-            .attachments
-            .push_unchecked(RenderPassAttachment::SwapchainColorImage)
-        };
-
-        let (image, alloc) = create_test_attachment(
-          allocator,
-          vk::Extent2D { width, height },
-          depth_stencil_format,
-          vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
-            | vk::ImageUsageFlags::TRANSFER_SRC
-            | vk::ImageUsageFlags::SAMPLED,
-          vk::SampleCountFlags::TYPE_1,
-        )
-        .or_else(|e| {
-          let _ = write_render_passes.remove(&pe_handle);
-          Err(e)
-        })?;
-        let view_create_info = vk::ImageViewCreateInfo::default()
-          .image(image.get())
-          .view_type(vk::ImageViewType::TYPE_2D)
-          .format(depth_stencil_format)
-          .subresource_range(
-            vk::ImageSubresourceRange::default()
-              .aspect_mask(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL)
-              .level_count(1)
-              .layer_count(1),
-          );
-        let view = unsafe { device.create_image_view(&view_create_info, None) }.or_else(|e| {
-          let _ = write_render_passes.remove(&pe_handle);
-          Err(e)
-        })?;
-        let view = unsafe { NonZeroHandle::new_unchecked(view) };
-        unsafe {
-          write_render_passes.get_mut(&pe_handle).unwrap_unchecked().attachments.push_unchecked(
-            RenderPassAttachment::DepthStencilAttachment(image, alloc, view),
-          );
-        }
-
-        swapchain
-          .for_each_swapchain_image(|image_view| {
-            let attachments = [image_view.get(), view.get()];
-            let framebuffer_create_info = vk::FramebufferCreateInfo::default()
-              .render_pass(render_pass.get())
-              .width(width)
-              .height(height)
-              .layers(1)
-              .attachments(&attachments);
-            let framebuffer = unsafe {
-              NonZeroHandle::new_unchecked(
-                device.create_framebuffer(&framebuffer_create_info, None)?,
-              )
-            };
-            unsafe {
-              write_render_passes
-                .get_mut(&pe_handle)
-                .unwrap_unchecked()
-                .framebuffer
-                .push_unchecked(framebuffer);
-            };
-            Ok(())
-          })
-          .or_else(|e| {
-            let _ = write_render_passes.remove(&pe_handle);
-            Err(e)
-          })?;
-        drop(write_render_passes);
-        let read_render_passes =
-          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.render_passes);
-        let bundle = unsafe { read_render_passes.get(&pe_handle).unwrap_unchecked() };
-
-        Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]))
+    if let Some(bundle) =
+      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.render_passes)
+        .get(&pe_handle)
+    {
+      let (width, height) = swapchain.extent();
+      if bundle.swapchain_generation == swapchain.swapchain_generation()
+        && bundle.width == width
+        && bundle.height == height
+      {
+        return Ok((bundle.render_pass, bundle.framebuffer[image_index as usize]));
       }
     }
+
+    crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&self.render_passes, device)
+      .prepare_write((), |state, _| {
+        if let Some(mut bundle) = state.remove(&pe_handle) {
+          bundle.discard(discard_pool, self.allocator, timeline);
+        }
+        Ok::<(), crate::types::GpuError>(())
+      })?
+      .execute(|_, rollback| {
+        let final_layout = match swapchain {
+          PresentationState::Windowed(_) => vk::ImageLayout::PRESENT_SRC_KHR,
+          PresentationState::Windowless(_) => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        };
+
+        let render_pass = Self::create_color_depth_single_render_pass(
+          &self.render_pass_device,
+          color_format,
+          depth_stencil_format,
+          final_layout,
+        )?;
+        let rp_h = render_pass.get();
+        rollback.defer(move |dev| unsafe { dev.destroy_render_pass(rp_h, None) });
+
+        let (width, height) = swapchain.extent();
+
+        let black_value = vk::ClearValue {
+          color: vk::ClearColorValue {
+            float32: [0.0, 0.0, 0.0, 1.0],
+          },
+        };
+        let white_value = vk::ClearValue {
+          depth_stencil: vk::ClearDepthStencilValue {
+            depth: 1.0,
+            stencil: 0,
+          },
+        };
+
+        let mut attachments = heapless::Vec::new();
+        unsafe {
+          attachments.push_unchecked(RenderPassAttachment::SwapchainColorImage);
+        }
+
+        let usage = if cfg!(test) {
+          vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+            | vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::SAMPLED
+        } else {
+          vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+        };
+
+        let (image, alloc) = {
+          #[cfg(test)]
+          {
+            create_test_attachment(
+              allocator,
+              vk::Extent2D { width, height },
+              depth_stencil_format,
+              usage,
+              vk::SampleCountFlags::TYPE_1,
+            )?
+          }
+          #[cfg(not(test))]
+          {
+            create_transient_attachment(
+              allocator,
+              vk::Extent2D { width, height },
+              depth_stencil_format,
+              usage,
+              vk::SampleCountFlags::TYPE_1,
+            )?
+          }
+        };
+
+        let img_h = image.get();
+        let vma = self.allocator;
+        rollback.defer(move |_| unsafe {
+          vk_mem::ffi::vmaDestroyImage(vma, img_h, alloc.get_raw())
+        });
+
+        let view_create_info = vk::ImageViewCreateInfo::default()
+          .image(image.get())
+          .view_type(vk::ImageViewType::TYPE_2D)
+          .format(depth_stencil_format)
+          .subresource_range(
+            vk::ImageSubresourceRange::default()
+              .aspect_mask(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL)
+              .level_count(1)
+              .layer_count(1),
+          );
+        let view = unsafe {
+          NonZeroHandle::new_unchecked(device.create_image_view(&view_create_info, None)?)
+        };
+        let view_h = view.get();
+        rollback.defer(move |dev| unsafe { dev.destroy_image_view(view_h, None) });
+
+        unsafe {
+          attachments.push_unchecked(RenderPassAttachment::DepthStencilAttachment(
+            image, alloc, view,
+          ));
+        }
+
+        let mut framebuffer = heapless::Vec::new();
+        swapchain.for_each_swapchain_image(|image_view| {
+          let fb_attachments = [image_view.get(), view.get()];
+          let framebuffer_create_info = vk::FramebufferCreateInfo::default()
+            .render_pass(render_pass.get())
+            .width(width)
+            .height(height)
+            .layers(1)
+            .attachments(&fb_attachments);
+          let fb = unsafe {
+            NonZeroHandle::new_unchecked(
+              device.create_framebuffer(&framebuffer_create_info, None)?,
+            )
+          };
+          let fb_h = fb.get();
+          rollback.defer(move |dev| unsafe { dev.destroy_framebuffer(fb_h, None) });
+          unsafe {
+            framebuffer.push_unchecked(fb);
+          };
+          Ok(())
+        })?;
+
+        let bundle = RenderPassBundle {
+          render_pass,
+          clear_value: [black_value, white_value],
+          swapchain_generation: swapchain.swapchain_generation(),
+          framebuffer,
+          width,
+          height,
+          attachments,
+        };
+
+        Ok(bundle)
+      })
+      .commit(|state, execute_result| {
+        let bundle = execute_result?;
+        let rp = bundle.render_pass;
+        let fb = bundle.framebuffer[image_index as usize];
+        unsafe {
+          state.insert_unique_unchecked(pe_handle, bundle)
+        };
+        Ok((rp, fb))
+      })
   }
 
   #[named]

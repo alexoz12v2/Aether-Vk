@@ -962,37 +962,42 @@ pub(super) fn create_test_attachment(
 
 // -------------------------------- Vulkan Transaction --------------------------
 
-/// Tracks Vulkan resources allocated during a transaction's execution phase.
-/// Automatically destroys them if the transaction fails and the guard is dropped without committing.
-pub struct RollbackGuard<'a> {
-  device: &'a ash::Device,
+/// Tracks Vulkan resources allocated during lock-free execution.
+/// Destroys them in LIFO order if the transaction is aborted.
+pub struct RollbackContext<'a> {
+  pub device: &'a ash::Device,
   rollbacks: alloc::vec::Vec<alloc::boxed::Box<dyn FnOnce(&ash::Device) + 'a>>,
+  defused: bool,
 }
 
-impl<'a> RollbackGuard<'a> {
+impl<'a> RollbackContext<'a> {
   pub fn new(device: &'a ash::Device) -> Self {
     Self {
       device,
       rollbacks: alloc::vec::Vec::new(),
+      defused: false,
     }
   }
 
-  /// Defer the destruction of a resource. Runs ONLY if `defuse()` is not called.
+  /// Schedule a cleanup closure for a Vulkan resource created during execution.
   pub fn defer<F: FnOnce(&ash::Device) + 'a>(&mut self, f: F) {
     self.rollbacks.push(alloc::boxed::Box::new(f));
   }
 
-  /// Consumes the guard, preventing rollbacks from executing. Call this on success.
-  pub fn defuse(mut self) {
-    self.rollbacks.clear();
+  /// Internal method called on successful commit to prevent rollbacks.
+  pub fn defuse(&mut self) {
+    self.defused = true;
   }
 }
 
-impl<'a> Drop for RollbackGuard<'a> {
+impl<'a> Drop for RollbackContext<'a> {
   fn drop(&mut self) {
-    // LIFO order destruction guarantees correct Vulkan cleanup order
-    while let Some(rollback) = self.rollbacks.pop() {
-      rollback(self.device);
+    if !self.defused {
+      // LIFO order destruction guarantees correct Vulkan cleanup dependencies
+      // (e.g. image views are destroyed before their images)
+      while let Some(rollback) = self.rollbacks.pop() {
+        rollback(self.device);
+      }
     }
   }
 }
@@ -1011,41 +1016,211 @@ pub trait RwLockable<T> {
   fn read(&self) -> Self::RwReadGuard<'_>;
 }
 
-/// Executes a 4-Phase Vulkan Transaction safely.
-pub fn run_vulkan_transaction<
-  State,
-  Args,
-  Prepared,
-  Output,
-  Error,
-  PrepareFn,
-  ExecuteFn,
-  CommitFn,
->(
-  lock: &impl RwLockable<State>,
-  args: Args,
-  mut prepare: PrepareFn,
-  execute: ExecuteFn,
-  mut commit: CommitFn,
-) -> Result<Output, Error>
-where
-  // Phase 1: Runs under a lock to extract data
-  PrepareFn: FnMut(&mut State, Args) -> Result<Prepared, Error>,
-  // Phase 2: Runs completely lock-free
-  ExecuteFn: FnOnce(Prepared) -> Result<Output, Error>,
-  // Phase 3: Runs under a lock to apply changes or handle errors
-  CommitFn: FnMut(&mut State, Result<Output, Error>) -> Result<Output, Error>,
+pub struct VulkanTransaction<'a, State, Lock: RwLockable<State>> {
+  lock: &'a Lock,
+  device: &'a ash::Device,
+  _marker: core::marker::PhantomData<fn() -> State>,
+}
+
+pub struct ChainedPreparedTransaction<'a, State, Lock: RwLockable<State>, Prepared, Error> {
+  lock: &'a Lock,
+  rollback: RollbackContext<'a>,
+  prepared: Result<Prepared, Error>,
+  _marker: core::marker::PhantomData<fn() -> State>,
+}
+
+impl<'a, State, Lock: RwLockable<State>, Prepared, Error>
+  ChainedPreparedTransaction<'a, State, Lock, Prepared, Error>
 {
-  // 1. Prepare (Locked)
-  let prepared = {
-    let mut state = lock.write();
-    prepare(&mut state, args)?
-  };
+  pub fn execute<Output, F>(mut self, f: F) -> ExecutedTransaction<'a, State, Lock, Output, Error>
+  where
+    // F is only invoked if all previous steps (and this preparation) succeeded.
+    F: FnOnce(Prepared, &mut RollbackContext<'a>) -> Result<Output, Error>,
+  {
+    let result = match self.prepared {
+      Ok(prepared) => f(prepared, &mut self.rollback),
+      Err(e) => Err(e), // Short-circuit: skip execution, pass the error forward
+    };
 
-  // 2. Execute (Unlocked) - OS/Vulkan APIs happen here
-  let result = execute(prepared);
+    ExecutedTransaction {
+      lock: self.lock,
+      result,
+      rollback: self.rollback,
+      _marker: core::marker::PhantomData,
+    }
+  }
+}
 
-  // 3. Commit/Rollback (Locked)
-  let mut state = lock.write();
-  commit(&mut state, result)
+impl<'a, State, Lock: RwLockable<State>> VulkanTransaction<'a, State, Lock> {
+  pub fn new(lock: &'a Lock, device: &'a ash::Device) -> Self {
+    Self {
+      lock,
+      device,
+      _marker: core::marker::PhantomData,
+    }
+  }
+
+  pub fn prepare_read<Args, Prepared, Error, F>(
+    self,
+    args: Args,
+    mut f: F,
+  ) -> Result<PreparedTransaction<'a, State, Lock, Prepared, Error>, Error>
+  where
+    F: FnMut(&State, Args) -> Result<Prepared, Error>,
+  {
+    let prepared = {
+      let state = self.lock.read(); // Read lock acquired
+      f(&state, args)?
+    }; // Read lock dropped
+    Ok(PreparedTransaction {
+      lock: self.lock,
+      device: self.device,
+      prepared,
+      _marker: core::marker::PhantomData,
+    })
+  }
+
+  pub fn prepare_write<Args, Prepared, Error, F>(
+    self,
+    args: Args,
+    mut f: F,
+  ) -> Result<PreparedTransaction<'a, State, Lock, Prepared, Error>, Error>
+  where
+    F: FnMut(&mut State, Args) -> Result<Prepared, Error>,
+  {
+    let prepared = {
+      let mut state = self.lock.write(); // Write lock acquired
+      f(&mut state, args)?
+    }; // Write lock dropped
+    Ok(PreparedTransaction {
+      lock: self.lock,
+      device: self.device,
+      prepared,
+      _marker: core::marker::PhantomData,
+    })
+  }
+}
+
+pub struct PreparedTransaction<'a, State, Lock: RwLockable<State>, Prepared, Error> {
+  lock: &'a Lock,
+  device: &'a ash::Device,
+  prepared: Prepared,
+  _marker: core::marker::PhantomData<fn() -> (State, Error)>,
+}
+
+impl<'a, State, Lock: RwLockable<State>, Prepared, Error>
+  PreparedTransaction<'a, State, Lock, Prepared, Error>
+{
+  pub fn execute<Output, F>(self, f: F) -> ExecutedTransaction<'a, State, Lock, Output, Error>
+  where
+    // RollbackContext injected securely into the execute closure
+    F: FnOnce(Prepared, &mut RollbackContext<'a>) -> Result<Output, Error>,
+  {
+    let mut rollback = RollbackContext::new(self.device);
+
+    // Execute heavy OS/Vulkan API calls WITHOUT locks.
+    let result = f(self.prepared, &mut rollback);
+
+    ExecutedTransaction {
+      lock: self.lock,
+      result,
+      rollback,
+      _marker: core::marker::PhantomData,
+    }
+  }
+}
+
+pub struct ExecutedTransaction<'a, State, Lock: RwLockable<State>, Output, Error> {
+  lock: &'a Lock,
+  result: Result<Output, Error>,
+  rollback: RollbackContext<'a>,
+  _marker: core::marker::PhantomData<fn() -> State>,
+}
+
+impl<'a, State, Lock: RwLockable<State>, Output, Error>
+  ExecutedTransaction<'a, State, Lock, Output, Error>
+{
+  pub fn commit<NewOutput, F>(mut self, mut f: F) -> Result<NewOutput, Error>
+  where
+    F: FnMut(&mut State, Result<Output, Error>) -> Result<NewOutput, Error>,
+  {
+    let final_result = {
+      let mut state = self.lock.write(); // Write lock acquired
+      f(&mut state, self.result)
+    }; // Write lock dropped
+
+    // If the final outcome is Ok, defuse the rollbacks so resources are kept!
+    if final_result.is_ok() {
+      self.rollback.defuse();
+    }
+
+    // If final_result is Err, `self.rollback` drops here and runs cleanup automatically!
+    final_result
+  }
+
+  /// Optimized commit for concurrent data structures (like DashMap)
+  pub fn commit_read<NewOutput, F>(mut self, mut f: F) -> Result<NewOutput, Error>
+  where
+    F: FnMut(&State, Result<Output, Error>) -> Result<NewOutput, Error>,
+  {
+    let final_result = {
+      let state = self.lock.read(); // Read lock acquired
+      f(&state, self.result)
+    }; // Read lock dropped
+
+    if final_result.is_ok() {
+      self.rollback.defuse();
+    }
+    final_result
+  }
+
+  /// Chains a new read preparation phase using the output of the previous execution.
+  pub fn and_then_prepare_read<Args, NewPrepared, F>(
+    self,
+    args: Args,
+    mut f: F,
+  ) -> ChainedPreparedTransaction<'a, State, Lock, NewPrepared, Error>
+  where
+    F: FnMut(&State, Output, Args) -> Result<NewPrepared, Error>,
+  {
+    let prepared = match self.result {
+      Ok(output) => {
+        let state = self.lock.read(); // Read lock acquired
+        f(&state, output, args)
+      } // Read lock dropped
+      Err(e) => Err(e),
+    };
+
+    ChainedPreparedTransaction {
+      lock: self.lock,
+      rollback: self.rollback,
+      prepared,
+      _marker: core::marker::PhantomData,
+    }
+  }
+
+  /// Chains a new write preparation phase using the output of the previous execution.
+  pub fn and_then_prepare_write<Args, NewPrepared, F>(
+    self,
+    args: Args,
+    mut f: F,
+  ) -> ChainedPreparedTransaction<'a, State, Lock, NewPrepared, Error>
+  where
+    F: FnMut(&mut State, Output, Args) -> Result<NewPrepared, Error>,
+  {
+    let prepared = match self.result {
+      Ok(output) => {
+        let mut state = self.lock.write(); // Write lock acquired
+        f(&mut state, output, args)
+      } // Write lock dropped
+      Err(e) => Err(e),
+    };
+
+    ChainedPreparedTransaction {
+      lock: self.lock,
+      rollback: self.rollback,
+      prepared,
+      _marker: core::marker::PhantomData,
+    }
+  }
 }

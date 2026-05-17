@@ -28,7 +28,7 @@ public class BreadcrumbService
     {
       Title = title,
       Content = content,
-      IsLoading = true
+      IsLoading = true,
     };
     _dispatcher.Dispatch(() => Messages.Add(msg));
     return msg;

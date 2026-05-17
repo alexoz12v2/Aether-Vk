@@ -7,26 +7,6 @@ macro_rules! log {
   };
 }
 
-#[cfg(all(debug_assertions, feature = "debug_gpu"))]
-#[macro_export]
-macro_rules! track_gpu_alloc {
-  ($size:expr) => {{
-    $crate::os::memory::tracking::GPU_ALLOCATED
-      .fetch_add($size as usize, core::sync::atomic::Ordering::Relaxed);
-    $crate::os::memory::tracking::track_hotspot($size as usize);
-    $crate::os::memory::tracking::check_memory_threshold();
-  }};
-}
-
-#[cfg(all(debug_assertions, feature = "debug_gpu"))]
-#[macro_export]
-macro_rules! track_gpu_free {
-  ($size:expr) => {{
-    $crate::os::memory::tracking::GPU_ALLOCATED
-      .fetch_sub($size as usize, core::sync::atomic::Ordering::Relaxed);
-  }};
-}
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use unix_debug::*;
 #[cfg(target_os = "windows")]
@@ -39,8 +19,7 @@ pub static LOGGER_CALLBACK: core::sync::atomic::AtomicPtr<()> =
 #[cfg(target_os = "windows")]
 mod windows_debug {
   use core::fmt;
-  use windows::Win32::System::Diagnostics::Debug::OutputDebugStringW;
-  use windows::core::HSTRING;
+  use windows::{Win32::System::Diagnostics::Debug::OutputDebugStringW, core::HSTRING};
 
   #[cfg(feature = "console_log")]
   use spin::Once;
@@ -112,7 +91,7 @@ mod windows_debug {
     }
   }
 
-  pub fn capture_aethervk_trace() -> Option<[usize; 3]> {
+  pub fn capture_aethervk_trace(_skip: usize) -> Option<[usize; 4]> {
     None
   }
 
@@ -315,7 +294,7 @@ mod unix_debug {
   }
 
   #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
-  pub fn capture_aethervk_trace() -> Option<[usize; 3]> {
+  pub fn capture_aethervk_trace(skip: usize) -> Option<[usize; 4]> {
     unsafe extern "C" {
       fn backtrace(buffer: *mut *mut core::ffi::c_void, size: core::ffi::c_int)
       -> core::ffi::c_int;
@@ -324,8 +303,9 @@ mod unix_debug {
       let mut buffer: [*mut core::ffi::c_void; 64] = [core::ptr::null_mut(); 64];
       let size = backtrace(buffer.as_mut_ptr(), 64);
 
-      let mut trace = [0usize; 3];
+      let mut trace = [0usize; 4];
       let mut count = 0;
+      let mut skipped = 0;
 
       for i in 0..size {
         let addr = buffer[i as usize];
@@ -335,9 +315,13 @@ mod unix_debug {
             let c_str = core::ffi::CStr::from_ptr(info.dli_fname);
             if let Ok(s) = c_str.to_str() {
               if s.contains("aethervk") {
+                if skipped < skip {
+                  skipped += 1;
+                  continue;
+                }
                 trace[count] = addr as usize;
                 count += 1;
-                if count == 3 {
+                if count == 4 {
                   return Some(trace);
                 }
               }
@@ -398,8 +382,108 @@ mod unix_debug {
     }
   }
 
+  #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
+  /// TODO: Document this item
+  pub fn print_aethervk_stacktrace(skip: usize, max: usize) {
+    unsafe extern "C" {
+      fn backtrace(buffer: *mut *mut core::ffi::c_void, size: core::ffi::c_int)
+      -> core::ffi::c_int;
+      fn backtrace_symbols(
+        buffer: *const *mut core::ffi::c_void,
+        size: core::ffi::c_int,
+      ) -> *mut *mut core::ffi::c_char;
+    }
+
+    unsafe {
+      let mut buffer: [*mut core::ffi::c_void; 64] = [core::ptr::null_mut(); 64];
+      let size = backtrace(buffer.as_mut_ptr(), 64);
+
+      if size > 0 {
+        let symbols = backtrace_symbols(buffer.as_ptr(), size);
+        if !symbols.is_null() {
+          crate::log!("AetherVk Stacktrace:");
+          let mut count = 0;
+          for i in 0..size {
+            let ptr = *symbols.add(i as usize);
+            if !ptr.is_null() {
+              let c_str = core::ffi::CStr::from_ptr(ptr);
+              if let Ok(s) = c_str.to_str() {
+                if s.contains("aethervk") {
+                  if count >= skip {
+                    crate::log!("  [{:2}] {}", i, s);
+                    if count - skip >= max {
+                      break;
+                    }
+                  }
+                  count += 1;
+                }
+              }
+            }
+          }
+          libc::free(symbols as *mut core::ffi::c_void);
+        } else {
+          crate::log!("AetherVk Stacktrace: (symbols temporarily unavailable)");
+        }
+      } else {
+        crate::log!("AetherVk Stacktrace: (empty)");
+      }
+    }
+  }
+
   #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
-  pub fn capture_aethervk_trace() -> Option<[usize; 3]> {
+  /// TODO: Document this item
+  pub fn print_aethervk_stacktrace(skip: usize, max: usize) {
+    crate::log!("AetherVk Stacktrace: Not natively supported by libc in this target environment.");
+  }
+
+  #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
+  pub fn resolve_and_print_trace(trace: &[usize]) {
+    unsafe extern "C" {
+      fn backtrace_symbols(
+        buffer: *const *mut core::ffi::c_void,
+        size: core::ffi::c_int,
+      ) -> *mut *mut core::ffi::c_char;
+    }
+
+    unsafe {
+      let size = trace.len() as core::ffi::c_int;
+      if size > 0 {
+        let symbols = backtrace_symbols(trace.as_ptr() as *const *mut core::ffi::c_void, size);
+        if !symbols.is_null() {
+          for i in 0..size {
+            let ptr = *symbols.add(i as usize);
+            if !ptr.is_null() {
+              let c_str = core::ffi::CStr::from_ptr(ptr);
+              if let Ok(s) = c_str.to_str() {
+                crate::log!("  [{:2}] {}", i, s);
+              } else {
+                crate::log!("  [{:2}] <invalid utf8> {:#X}", i, trace[i as usize]);
+              }
+            } else {
+              crate::log!("  [{:2}] {:#X}", i, trace[i as usize]);
+            }
+          }
+          libc::free(symbols as *mut core::ffi::c_void);
+        } else {
+          crate::log!("  (symbols temporarily unavailable)");
+          for (i, &addr) in trace.iter().enumerate() {
+            crate::log!("  [{:2}] {:#X}", i, addr);
+          }
+        }
+      }
+    }
+  }
+
+  #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
+  pub fn resolve_and_print_trace(trace: &[usize]) {
+    crate::log!("  (Symbol resolution not natively supported)");
+    for (i, &addr) in trace.iter().enumerate() {
+      crate::log!("  [{:2}] {:#X}", i, addr);
+    }
+  }
+
+  #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
+  pub fn capture_aethervk_trace(_skip: usize) -> Option<[usize; 4]> {
     None
   }
 

@@ -150,7 +150,14 @@ namespace AetherVk.Logic.Tests
 
         ulong peId2 = _service.CreatePresentationEngine(width, height, sceneId);
         var firstCamera = _service.AddPerspectiveCamera(sceneId, peId, "camera1", 45f, 0.1f, 1000f);
-        var secondCamera = _service.AddPerspectiveCamera(sceneId, peId2, "camera2", 45f, 0.1f, 1000f);
+        var secondCamera = _service.AddPerspectiveCamera(
+          sceneId,
+          peId2,
+          "camera2",
+          45f,
+          0.1f,
+          1000f
+        );
 
         TaskCompletionSource<ulong> tcs = new();
         int msgCount = 0;

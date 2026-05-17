@@ -22,7 +22,9 @@ public class TransformEditableRule : IComponentRule
     var transform = entity.Components.OfType<TransformComponent>().FirstOrDefault();
     if (transform != null)
     {
-      bool hasCameraOrCursor = entity.Components.Any(c => c is CameraComponent || c is CursorComponent);
+      bool hasCameraOrCursor = entity.Components.Any(c =>
+        c is CameraComponent || c is CursorComponent
+      );
       transform.IsEditable = hasCameraOrCursor;
     }
   }

@@ -27,7 +27,8 @@ namespace AetherVk.Services
       Func<ulong, TimelineViewModel> createTimeline,
       Func<AlmanacExplorerViewModel> createAlmanac,
       Func<Viewport3DViewModel> createViewport,
-      SceneStateManager stateManager)
+      SceneStateManager stateManager
+    )
     {
       _createUITestPanel = createUITestPanel;
       _createConsole = createConsole;

@@ -247,8 +247,7 @@ where
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::math::matrix::mat3::Mat3f32;
-  use crate::math::vector::vec3::vec3;
+  use crate::math::{matrix::mat3::Mat3f32, vector::vec3::vec3};
 
   #[test]
   fn test_lcp_pgs() {

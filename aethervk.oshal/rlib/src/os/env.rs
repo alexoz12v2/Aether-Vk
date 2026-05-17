@@ -9,9 +9,11 @@ pub fn args() -> NativeResult<Vec<String>> {
   #[cfg(windows)]
   {
     use crate::os::NativeError;
-    use windows::Win32::Foundation::{HLOCAL, LocalFree};
-    use windows::Win32::System::Environment::GetCommandLineW;
-    use windows::Win32::UI::Shell::CommandLineToArgvW;
+    use windows::Win32::{
+      Foundation::{HLOCAL, LocalFree},
+      System::Environment::GetCommandLineW,
+      UI::Shell::CommandLineToArgvW,
+    };
 
     unsafe {
       let cmd_line = GetCommandLineW();

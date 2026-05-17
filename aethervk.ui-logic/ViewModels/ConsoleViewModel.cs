@@ -76,7 +76,11 @@ public partial class ConsoleViewModel : TabItemViewModel, IRecipient<ConsoleMess
   [RelayCommand]
   private async System.Threading.Tasks.Task ExportLogsAsync()
   {
-    var savePath = await _fileDialogService.ShowSaveFileDialogAsync("Export Console Logs", "txt", new[] { "*.txt" });
+    var savePath = await _fileDialogService.ShowSaveFileDialogAsync(
+      "Export Console Logs",
+      "txt",
+      new[] { "*.txt" }
+    );
     if (!string.IsNullOrEmpty(savePath))
     {
       try

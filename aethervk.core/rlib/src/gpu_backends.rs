@@ -191,7 +191,7 @@ where
     let _snapshot = kernels.snapshot_dynamics(&mut cmd, &rigid_bodies, &particles)?;
 
     kernels.step_ode_p1_p2(&mut cmd, &mut particles, dt)?;
-    kernels.step_ode_p3_p4(&mut cmd, &mut rigid_bodies, &emitters, dt)?;
+    kernels.step_ode_p3_p4(&mut cmd, &kinematics, &mut rigid_bodies, &emitters, dt)?;
 
     let bvh = kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, dt)?;
     kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
@@ -205,7 +205,7 @@ where
       let snapshot = kernels.snapshot_dynamics(&mut cmd, &rigid_bodies, &particles)?;
 
       kernels.step_ode_p1_p2(&mut cmd, &mut particles, dt)?;
-      kernels.step_ode_p3_p4(&mut cmd, &mut rigid_bodies, &emitters, dt)?;
+      kernels.step_ode_p3_p4(&mut cmd, &kinematics, &mut rigid_bodies, &emitters, dt)?;
       let bvh = kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, dt)?;
       kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
       kernels.step_ode_p5(&mut cmd, &kinematics, &mut particles, &emitters, dt)?;
@@ -230,7 +230,7 @@ where
         kernels.restore_dynamics(&mut cmd, &mut rigid_bodies, &mut particles, &snapshot)?;
 
         kernels.step_ode_p1_p2(&mut cmd, &mut particles, t_c)?;
-        kernels.step_ode_p3_p4(&mut cmd, &mut rigid_bodies, &emitters, t_c)?;
+        kernels.step_ode_p3_p4(&mut cmd, &kinematics, &mut rigid_bodies, &emitters, t_c)?;
 
         let rewind_bvh =
           kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, t_c)?;

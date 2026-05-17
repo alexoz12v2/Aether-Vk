@@ -1,7 +1,9 @@
 //! files module.
 
-use crate::os;
-use crate::os::{FsError, NativeError, NativeResult, fs::Path};
+use crate::{
+  os,
+  os::{FsError, NativeError, NativeResult, fs::Path},
+};
 
 /// TODO: Document this item
 pub struct MappedFile {
@@ -23,12 +25,12 @@ impl MappedFile {
     {
       use core::ffi::c_void;
 
-      use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE};
-      use windows::Win32::Storage::FileSystem::{
-        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, GetFileSizeEx, OPEN_EXISTING,
-      };
-      use windows::Win32::System::Memory::{
-        CreateFileMappingW, FILE_MAP_READ, MapViewOfFile, PAGE_READONLY,
+      use windows::Win32::{
+        Foundation::{CloseHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE},
+        Storage::FileSystem::{
+          CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, GetFileSizeEx, OPEN_EXISTING,
+        },
+        System::Memory::{CreateFileMappingW, FILE_MAP_READ, MapViewOfFile, PAGE_READONLY},
       };
 
       // Polyfill traits to cleanly handle API breaks between `windows` >=0.59 and <=0.62
@@ -299,12 +301,12 @@ impl Drop for Mmap {
 impl Mmap {
   /// TODO: Document this item
   pub fn open<P: AsRef<os::fs::Path>>(path: P) -> NativeResult<Self> {
-    use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, INVALID_HANDLE_VALUE};
-    use windows::Win32::Storage::FileSystem::{
-      CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, GetFileSizeEx, OPEN_EXISTING,
-    };
-    use windows::Win32::System::Memory::{
-      CreateFileMappingW, FILE_MAP_READ, MapViewOfFile, PAGE_READONLY,
+    use windows::Win32::{
+      Foundation::{CloseHandle, GENERIC_READ, INVALID_HANDLE_VALUE},
+      Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, GetFileSizeEx, OPEN_EXISTING,
+      },
+      System::Memory::{CreateFileMappingW, FILE_MAP_READ, MapViewOfFile, PAGE_READONLY},
     };
     let path = {
       let mut p: alloc::vec::Vec<u16> = path

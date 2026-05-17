@@ -1,8 +1,6 @@
 //! chunked module.
 
-use alloc::boxed::Box;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{ThreadPool, Workload, WorkloadStatus};

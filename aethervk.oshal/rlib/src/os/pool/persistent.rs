@@ -1,7 +1,6 @@
 //! persistent module.
 
-use alloc::boxed::Box;
-use alloc::sync::Arc;
+use alloc::{boxed::Box, sync::Arc};
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 

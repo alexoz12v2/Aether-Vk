@@ -173,6 +173,25 @@ impl<'a, T: ?Sized + 'a> Drop for DebugTrackedRwLockWriteGuard<'a, T> {
   }
 }
 
+impl<T> crate::gpu_backends::vulkan::utils::RwLockable<T> for DebugTrackedRwLock<T> {
+  type RwWriteGuard<'a>
+    = DebugTrackedRwLockWriteGuard<'a, T>
+  where
+    Self: 'a;
+  type RwReadGuard<'a>
+    = DebugTrackedRwLockReadGuard<'a, T>
+  where
+    Self: 'a;
+
+  fn write(&self) -> Self::RwWriteGuard<'_> {
+    DebugTrackedRwLock::write(self)
+  }
+
+  fn read(&self) -> Self::RwReadGuard<'_> {
+    DebugTrackedRwLock::read(self)
+  }
+}
+
 #[derive(Debug)]
 pub struct DebugTrackedMutex<T: ?Sized> {
   inner: spin::Mutex<T>,

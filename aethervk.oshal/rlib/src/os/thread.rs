@@ -1,7 +1,6 @@
 //! OS-level thread creation and management.
 
-use alloc::boxed::Box;
-use alloc::string::String;
+use alloc::{boxed::Box, string::String};
 use core::ffi::c_void;
 
 #[cfg(any(unix, target_os = "macos"))]

@@ -9,7 +9,7 @@ use core::{
   hash::{Hash, Hasher},
   ptr,
 };
-use hashbrown::HashMap;
+use dashmap::DashMap;
 
 use crate::{
   gpu::{PipelineKey, PipelineKeyable, vulkan::device::swapchain},
@@ -935,10 +935,10 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
 }
 
 /// Vulkan Resource to create and manage Graphics and Compute Pipelines
-/// Note: To be wrapped in a RwLock, so won't sweat about implementing Sync and Send
+/// DashMap allows lock-free optimistic insertions directly from a shared reference (&self)
 pub(super) struct PipelinePool {
-  graphics_pipelines: HashMap<PipelineKey, NonZeroHandle<vk::Pipeline>>,
-  compute_pipelines: HashMap<PipelineKey, NonZeroHandle<vk::Pipeline>>,
+  graphics_pipelines: DashMap<PipelineKey, NonZeroHandle<vk::Pipeline>>,
+  compute_pipelines: DashMap<PipelineKey, NonZeroHandle<vk::Pipeline>>,
   /// underlying vulkan cache object to speed up driver-level compilations
   vk_pipeline_cache: NonZeroHandle<vk::PipelineCache>,
 }
@@ -954,8 +954,8 @@ impl PipelinePool {
     let vk_pipeline_cache =
       unsafe { NonZeroHandle::new_unchecked(device.create_pipeline_cache(&create_info, None)?) };
     Ok(Self {
-      graphics_pipelines: HashMap::with_capacity(16),
-      compute_pipelines: HashMap::with_capacity(16),
+      graphics_pipelines: DashMap::with_capacity(16),
+      compute_pipelines: DashMap::with_capacity(16),
       vk_pipeline_cache,
     })
   }
@@ -971,7 +971,7 @@ impl PipelinePool {
     &self,
     pipeline_key: PipelineKey,
   ) -> Option<NonZeroHandle<vk::Pipeline>> {
-    self.graphics_pipelines.get(&pipeline_key).copied()
+    self.graphics_pipelines.get(&pipeline_key).map(|p| *p)
   }
 
   /// TODO: Document this item
@@ -979,17 +979,17 @@ impl PipelinePool {
     &self,
     pipeline_key: PipelineKey,
   ) -> Option<NonZeroHandle<vk::Pipeline>> {
-    self.compute_pipelines.get(&pipeline_key).copied()
+    self.compute_pipelines.get(&pipeline_key).map(|p| *p)
   }
 
   /// TODO: Document this item
   pub fn discard_graphics_pipeline_if_present(
-    &mut self,
+    &self,
     pipeline_key: PipelineKey,
     discard_pool: &DiscardPool,
     timeline: u64,
   ) -> bool {
-    if let Some(pipeline) = self.graphics_pipelines.remove(&pipeline_key) {
+    if let Some((_, pipeline)) = self.graphics_pipelines.remove(&pipeline_key) {
       discard_pool.discard_pipeline(pipeline.get(), timeline);
       true
     } else {
@@ -999,12 +999,12 @@ impl PipelinePool {
 
   /// TODO: Document this item
   pub fn discard_compute_pipeline_if_present(
-    &mut self,
+    &self,
     pipeline_key: PipelineKey,
     discard_pool: &DiscardPool,
     timeline: u64,
   ) -> bool {
-    if let Some(pipeline) = self.compute_pipelines.remove(&pipeline_key) {
+    if let Some((_, pipeline)) = self.compute_pipelines.remove(&pipeline_key) {
       discard_pool.discard_pipeline(pipeline.get(), timeline);
       true
     } else {
@@ -1013,79 +1013,143 @@ impl PipelinePool {
   }
 
   /// TODO: Document this item
+  #[function_name::named]
   pub fn get_or_create_compute_pipeline(
-    &mut self,
+    &self,
     device: &crate::gpu_backends::vulkan::device::LogicalDevice,
     info: &ComputeInfo,
+    _rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<NonZeroHandle<vk::Pipeline>> {
     use crate::gpu_backends::vulkan::device::VulkanDebugNameExt;
+
     let key = info.pipeline_key();
-    if let Some(&pipeline) = self.compute_pipelines.get(&key) {
-      return Ok(pipeline);
+
+    // Lock-free fast path check
+    if let Some(pipeline) = self.compute_pipelines.get(&key) {
+      return Ok(*pipeline);
     }
+
+    // Heavy Vulkan creation executed purely lock-free
     let raw_info = RawComputeInfo::from(info);
-    let pipeline = unsafe {
-      let mut pipeline = vk::Pipeline::null();
+    let mut pipeline = vk::Pipeline::null();
+    let res = unsafe {
       let compute_info = raw_info.borrow_compute_pipeline_create_info();
-      let res = (device.fp_v1_0().create_compute_pipelines)(
+      (device.fp_v1_0().create_compute_pipelines)(
         device.handle(),
         self.vk_pipeline_cache.get(),
         1u32,
         ptr::from_ref(&compute_info),
         ptr::null(),
         ptr::from_mut(&mut pipeline),
-      );
+      )
+    };
+
+    if res != vk::Result::SUCCESS {
+      return Err(crate::gpu_err_device!());
+    }
+
+    let pipeline_handle = unsafe {
       NonZeroHandle::new_unchecked(
         res.result_with_success(pipeline).with_name(device, "VkPipeline_Compute")?,
       )
     };
-    unsafe { self.compute_pipelines.insert_unique_unchecked(key, pipeline) };
-    Ok(pipeline)
+
+    // Note: We intentionally do NOT use rollback.defer() for pipelines successfully added to DashMap.
+    // Pipelines are stateless cache items. If a transaction aborts but the pipeline stays globally cached,
+    // there are zero negative consequences (it just stays warm in the cache).
+    // If we registered it with rollback, a transaction abort would destroy the pipeline but leave a
+    // dangling pointer inside DashMap, causing a fatal use-after-free for the next frame.
+    use dashmap::mapref::entry::Entry;
+    match self.compute_pipelines.entry(key) {
+      Entry::Occupied(entry) => {
+        // Edge Case: Another thread compiled and inserted this exact pipeline while we were compiling.
+        // Destroy our local redundant pipeline immediately to avoid leaking it.
+        unsafe { device.destroy_pipeline(pipeline, None); }
+        Ok(*entry.get())
+      }
+      Entry::Vacant(entry) => {
+        entry.insert(pipeline_handle);
+        Ok(pipeline_handle)
+      }
+    }
   }
 
   /// TODO: Document this item
+  #[function_name::named]
   pub fn get_or_create_graphics_pipeline(
-    &mut self,
+    &self,
     device: &crate::gpu_backends::vulkan::device::LogicalDevice,
     info: &GraphicsInfo,
+    _rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<NonZeroHandle<vk::Pipeline>> {
     use crate::gpu_backends::vulkan::device::VulkanDebugNameExt;
+
     let key = info.pipeline_key();
-    if let Some(&pipeline) = self.graphics_pipelines.get(&key) {
-      return Ok(pipeline);
+
+    // Lock-free fast path check
+    if let Some(pipeline) = self.graphics_pipelines.get(&key) {
+      return Ok(*pipeline);
     }
+
+    // Heavy Vulkan creation executed purely lock-free
     let raw_info = RawGraphicsInfo::from(info);
-    let pipeline = unsafe {
-      let mut pipeline = vk::Pipeline::null();
+    let mut pipeline = vk::Pipeline::null();
+    let res = unsafe {
       let graphics_info = raw_info.borrow_graphics_pipeline_create_info();
-      let res = (device.fp_v1_0().create_graphics_pipelines)(
+      (device.fp_v1_0().create_graphics_pipelines)(
         device.handle(),
         self.vk_pipeline_cache.get(),
         1,
         ptr::from_ref(&graphics_info),
         ptr::null(),
         ptr::from_mut(&mut pipeline),
-      );
+      )
+    };
+
+    if res != vk::Result::SUCCESS {
+      return Err(crate::gpu_err_device!());
+    }
+
+    let pipeline_handle = unsafe {
       NonZeroHandle::new_unchecked(
         res.result_with_success(pipeline).with_name(device, "VkPipeline_Graphics")?,
       )
     };
-    unsafe {
-      self.graphics_pipelines.insert_unique_unchecked(key, pipeline);
+
+    // Note: We intentionally do NOT use rollback.defer() for pipelines successfully added to DashMap.
+    // Pipelines are stateless cache items. If a transaction aborts but the pipeline stays globally cached,
+    // there are zero negative consequences (it just stays warm in the cache).
+    // If we registered it with rollback, a transaction abort would destroy the pipeline but leave a
+    // dangling pointer inside DashMap, causing a fatal use-after-free for the next frame.
+    use dashmap::mapref::entry::Entry;
+    match self.graphics_pipelines.entry(key) {
+      Entry::Occupied(entry) => {
+        // Edge Case: Another thread compiled and inserted this exact pipeline while we were compiling.
+        // Destroy our local redundant pipeline immediately to avoid leaking it.
+        unsafe { device.destroy_pipeline(pipeline, None); }
+        Ok(*entry.get())
+      }
+      Entry::Vacant(entry) => {
+        entry.insert(pipeline_handle);
+        Ok(pipeline_handle)
+      }
     }
-    Ok(pipeline)
   }
 }
 
 impl DeviceResource for PipelinePool {
   fn cleanup(&mut self, device: &ash::Device) {
     unsafe {
-      for (_, pipeline) in self.graphics_pipelines.drain() {
-        device.destroy_pipeline(pipeline.get(), None);
+      for entry in self.graphics_pipelines.iter() {
+        device.destroy_pipeline(entry.value().get(), None);
       }
-      for (_, pipeline) in self.compute_pipelines.drain() {
-        device.destroy_pipeline(pipeline.get(), None);
+      self.graphics_pipelines.clear();
+
+      for entry in self.compute_pipelines.iter() {
+        device.destroy_pipeline(entry.value().get(), None);
       }
+      self.compute_pipelines.clear();
+
       device.destroy_pipeline_cache(self.vk_pipeline_cache.get(), None);
     }
   }

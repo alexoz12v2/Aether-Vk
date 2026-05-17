@@ -20,7 +20,10 @@ public partial class AlmanacExplorerViewModel : TabItemViewModel
   [ObservableProperty]
   private bool _isLoading;
 
-  public AlmanacExplorerViewModel(NativeRuntimeService runtimeService, IUiThreadDispatcher uiThreadDispatcher)
+  public AlmanacExplorerViewModel(
+    NativeRuntimeService runtimeService,
+    IUiThreadDispatcher uiThreadDispatcher
+  )
     : base("Almanac Explorer")
   {
     _runtimeService = runtimeService;

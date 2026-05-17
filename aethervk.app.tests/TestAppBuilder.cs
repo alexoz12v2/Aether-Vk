@@ -1,28 +1,29 @@
+using AetherVk.Utils;
 using Avalonia;
 using Avalonia.Headless;
 using Microsoft.Extensions.Hosting;
-using AetherVk.Utils;
 
-[assembly: AvaloniaTestApplication(typeof(AetherVk.App.Tests.TestAppBuilder))]
+[assembly: AvaloniaTestApplication(typeof(AetherVk.AppTests.TestAppBuilder))]
 
-namespace AetherVk.App.Tests;
+namespace AetherVk.AppTests;
 
 public class TestAppBuilder
 {
-    public static AppBuilder BuildAvaloniaApp()
-    {
-        var host = Host.CreateDefaultBuilder()
-          .ConfigureServices((context, services) =>
-          {
-              services.AddCommonServices();
-              services.AddViewModels();
-          })
-          .Build();
-          
-        AetherVk.App.Host = host;
-        host.Start();
+  public static AppBuilder BuildAvaloniaApp()
+  {
+    var host = Host.CreateDefaultBuilder()
+      .ConfigureServices(
+        (context, services) =>
+        {
+          services.AddCommonServices();
+          services.AddViewModels();
+        }
+      )
+      .Build();
 
-        return AppBuilder.Configure<AetherVk.App>()
-            .UseHeadless(new AvaloniaHeadlessPlatformOptions());
-    }
+    AetherVk.App.Host = host;
+    host.Start();
+
+    return AppBuilder.Configure<AetherVk.App>().UseHeadless(new AvaloniaHeadlessPlatformOptions());
+  }
 }

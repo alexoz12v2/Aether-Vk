@@ -527,6 +527,7 @@ impl Kernels for CpuScalarKernels {
   fn step_ode_p3_p4(
     &self,
     _cmd: &mut Self::Cmd,
+    _kinematics: &Self::Buffer<KinematicBody>,
     rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
     emitters: &Self::Buffer<ForceEmitter>,
     dt: timeus_t,
@@ -1615,6 +1616,7 @@ impl Kernels for CpuSimdKernels {
   fn step_ode_p3_p4(
     &self,
     _cmd: &mut Self::Cmd,
+    _kinematics: &Self::Buffer<KinematicBody>,
     rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
     emitters: &Self::Buffer<ForceEmitter>,
     dt: timeus_t,

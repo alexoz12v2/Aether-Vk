@@ -1,23 +1,24 @@
 //! ffi module.
 
-use aethervk_core_rlib::gpu;
-use aethervk_core_rlib::math::collision::linear_bvh;
-use aethervk_core_rlib::math::collision::linear_bvh::LinearBVHNode;
-use aethervk_core_rlib::scene::Marker;
-use aethervk_core_rlib::simulation::almanac::SUN_ECLIPJ2000;
-use aethervk_core_rlib::simulation_api::components_api::{
-  CameraParams, OrthographicCameraParams, PerspectiveCameraParams,
+use aethervk_core_rlib::{
+  gpu,
+  math::collision::{linear_bvh, linear_bvh::LinearBVHNode},
+  scene::Marker,
+  simulation::almanac::SUN_ECLIPJ2000,
+  simulation_api::{
+    components_api::{CameraParams, OrthographicCameraParams, PerspectiveCameraParams},
+    structs::*,
+    *,
+  },
+  types::EngineError,
 };
-use aethervk_core_rlib::simulation_api::structs::*;
-use aethervk_core_rlib::simulation_api::*;
-use aethervk_core_rlib::types::EngineError;
 use aethervk_oshal_rlib as oshal;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::vec4::Quat;
-use aethervk_oshal_rlib::math::vector::{Vector3, Vector4};
+use aethervk_oshal_rlib::math::vector::{Vector3, Vector4, vec3::Vec3f32, vec4::Quat};
 use alloc::{boxed::Box, string::ToString};
-use core::ffi::{CStr, c_char};
-use core::str::FromStr;
+use core::{
+  ffi::{CStr, c_char},
+  str::FromStr,
+};
 // -------------------- C Exposed API (Async & Stateless) ----------------------------
 
 fn backend_id_from_str(backend_std: &str) -> Option<gpu::RenderBackendId> {

@@ -133,14 +133,23 @@ public partial class MeshViewerViewModel
         }
 
         _consoleService?.Log($"[MeshViewer] Creating camera...");
-        CameraId = _runtimeService.AddPerspectiveCamera(SceneId, PresentationEngineId, "camera", 45.0f, 0.1f, 10000.0f);
-        
+        CameraId = _runtimeService.AddPerspectiveCamera(
+          SceneId,
+          PresentationEngineId,
+          "camera",
+          45.0f,
+          0.1f,
+          10000.0f
+        );
+
         // Fetch the new camera entity to configure transform
         var camera = _runtimeService.GetEntityById(SceneId, CameraId);
         if (camera != null)
         {
           var camTransform = System.Linq.Enumerable.FirstOrDefault(
-            System.Linq.Enumerable.OfType<AetherVk.Logic.Models.TransformComponent>(camera.Components)
+            System.Linq.Enumerable.OfType<AetherVk.Logic.Models.TransformComponent>(
+              camera.Components
+            )
           );
           if (camTransform != null)
           {
@@ -207,7 +216,8 @@ public partial class MeshViewerViewModel
 
   private async Task ProcessFrameAsync()
   {
-    if (_isProcessingFrame) return;
+    if (_isProcessingFrame)
+      return;
     _isProcessingFrame = true;
 
     try

@@ -112,10 +112,11 @@ pub struct BarnesHutPushConstants {
 pub struct P5PushConstants {
     pub particles: u64,
     pub emitters: u64,
+    pub kinematics: u64,
     pub dt: f32,
     pub total_particles: u32,
     pub num_emitters: u32,
-    pub _pad: u32,
+    pub num_kinematics: u32,
 }
 
 #[repr(C)]
@@ -123,10 +124,11 @@ pub struct P5PushConstants {
 pub struct P34PushConstants {
     pub rigid_bodies: u64,
     pub emitters: u64,
+    pub kinematics: u64,
     pub dt: f32,
     pub total_rigid_bodies: u32,
     pub num_emitters: u32,
-    pub _pad: u32,
+    pub num_kinematics: u32,
 }
 
 #[repr(C)]
@@ -745,6 +747,7 @@ impl Kernels for VulkanComputeKernels {
     fn step_ode_p3_p4(
         &self,
         cmd: &mut Self::Cmd,
+        kinematics: &Self::Buffer<KinematicBody>,
         rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
         _emitters: &Self::Buffer<ForceEmitter>,
         dt: timeus_t,
@@ -753,14 +756,15 @@ impl Kernels for VulkanComputeKernels {
         let total_rigid_bodies = rigid_bodies.capacity() as u32;
         let dispatch_groups = (total_rigid_bodies + wg_size - 1) / wg_size;
         let dt_sec = dt as f32 / 1_000_000.0;
-        
+
         let pc = P34PushConstants {
             rigid_bodies: self.addresses.rigid_body_data,
             emitters: self.addresses.emitters,
+            kinematics: self.addresses.particle_data, // Using a dummy address here until kinematics is tracked in pipeline properly, or we can use kinematics.address if it was passed.
             dt: dt_sec,
             total_rigid_bodies,
             num_emitters: 1, // TODO dynamic
-            _pad: 0,
+            num_kinematics: 0,
         };
         let bytes = unsafe { core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of::<P34PushConstants>()) };
 
@@ -768,16 +772,15 @@ impl Kernels for VulkanComputeKernels {
             self.device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.p3_4_imex);
             self.device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytes);
             self.device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
-            
+
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
                 .dst_access_mask(vk::AccessFlags::SHADER_READ);
             self.device.cmd_pipeline_barrier(cmd.cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
         }
-        
+
         Ok(())
     }
-
     fn compute_self_gravity(
         &self,
         cmd: &mut Self::Cmd,
@@ -813,23 +816,25 @@ impl Kernels for VulkanComputeKernels {
     fn step_ode_p5(
         &self,
         cmd: &mut Self::Cmd,
-        _kinematics: &Self::Buffer<KinematicBody>,
+        kinematics: &Self::Buffer<KinematicBody>,
         particles: &mut Self::Buffer<ParticleGpu>,
         _emitters: &Self::Buffer<ForceEmitter>,
         dt: timeus_t,
     ) -> EngineResult<()> {
         let wg_size = 256;
         let total_particles = particles.capacity() as u32;
+        let num_kinematics = kinematics.capacity() as u32;
         let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
         let dt_sec = dt as f32 / 1_000_000.0;
-        
+
         let pc = P5PushConstants {
             particles: self.addresses.particle_data,
             emitters: self.addresses.emitters,
+            kinematics: kinematics.address,
             dt: dt_sec,
             total_particles,
             num_emitters: 1, // TODO dynamic
-            _pad: 0,
+            num_kinematics,
         };
         let bytes = unsafe { core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of::<P5PushConstants>()) };
 
@@ -837,7 +842,7 @@ impl Kernels for VulkanComputeKernels {
             self.device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.p5_imex);
             self.device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytes);
             self.device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
-            
+
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
                 .dst_access_mask(vk::AccessFlags::SHADER_READ);
@@ -846,7 +851,6 @@ impl Kernels for VulkanComputeKernels {
 
         Ok(())
     }
-
     fn build_motion_bvh(
         &self,
         cmd: &mut Self::Cmd,

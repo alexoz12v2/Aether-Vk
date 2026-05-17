@@ -182,9 +182,10 @@ public class HorizonJplService
     try
     {
       var command = Uri.EscapeDataString($"'{spkId};'");
-      var url = $"https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND={command}&MAKE_EPHEM='NO'&OBJ_DATA='YES'";
+      var url =
+        $"https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND={command}&MAKE_EPHEM='NO'&OBJ_DATA='YES'";
       _console.Log($"[HorizonJpl] GET Object Data: {url}");
-      
+
       var response = await _httpClient.GetAsync(url);
       if (response.IsSuccessStatusCode)
       {
@@ -192,69 +193,81 @@ public class HorizonJplService
         using var doc = System.Text.Json.JsonDocument.Parse(json);
         if (doc.RootElement.TryGetProperty("result", out var resultElement))
         {
-           var text = resultElement.GetString() ?? "";
-           ParseObjectDataText(text);
-           await _breadcrumb.ShowMessageAsync("Horizon API (Object Data)", "Success: Object data fetched.");
+          var text = resultElement.GetString() ?? "";
+          ParseObjectDataText(text);
+          await _breadcrumb.ShowMessageAsync(
+            "Horizon API (Object Data)",
+            "Success: Object data fetched."
+          );
         }
       }
       else
       {
-         await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status: {(int)response.StatusCode}");
+        await _breadcrumb.ShowMessageAsync(
+          "Horizon API Error",
+          $"Status: {(int)response.StatusCode}"
+        );
       }
     }
     catch (Exception ex)
     {
-       _console.Log($"[HorizonJpl] Object Data Exception: {ex.Message}");
-       await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
+      _console.Log($"[HorizonJpl] Object Data Exception: {ex.Message}");
+      await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
     }
     finally
     {
-       _breadcrumb.RemoveMessage(loadMsg);
+      _breadcrumb.RemoveMessage(loadMsg);
     }
   }
 
   private void ParseObjectDataText(string text)
   {
-     ObjectData.Clear();
-     var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-     foreach(var line in lines)
-     {
-        if (line.StartsWith("*") || string.IsNullOrWhiteSpace(line)) continue;
-        
-        var parts = line.Split(new[] {"  ", "\t"}, StringSplitOptions.RemoveEmptyEntries);
-        bool hasKeyValue = false;
-        foreach (var part in parts)
-        {
-            var p = part.Trim();
-            if (string.IsNullOrEmpty(p)) continue;
+    ObjectData.Clear();
+    var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+    foreach (var line in lines)
+    {
+      if (line.StartsWith("*") || string.IsNullOrWhiteSpace(line))
+        continue;
 
-            if (p.Contains("=") || p.Contains(":"))
-            {
-                var sep = p.Contains("=") ? '=' : ':';
-                var kv = p.Split(new[] {sep}, 2, StringSplitOptions.RemoveEmptyEntries);
-                if (kv.Length == 2)
-                {
-                    ObjectData.Add(new string[] { kv[0].Trim(), kv[1].Trim() });
-                    hasKeyValue = true;
-                }
-                else
-                {
-                    ObjectData.Add(new string[] { "Info", p });
-                }
-            }
-            else if (!hasKeyValue)
-            {
-                ObjectData.Add(new string[] { "Info", p });
-            }
+      var parts = line.Split(new[] { "  ", "\t" }, StringSplitOptions.RemoveEmptyEntries);
+      bool hasKeyValue = false;
+      foreach (var part in parts)
+      {
+        var p = part.Trim();
+        if (string.IsNullOrEmpty(p))
+          continue;
+
+        if (p.Contains("=") || p.Contains(":"))
+        {
+          var sep = p.Contains("=") ? '=' : ':';
+          var kv = p.Split(new[] { sep }, 2, StringSplitOptions.RemoveEmptyEntries);
+          if (kv.Length == 2)
+          {
+            ObjectData.Add(new string[] { kv[0].Trim(), kv[1].Trim() });
+            hasKeyValue = true;
+          }
+          else
+          {
+            ObjectData.Add(new string[] { "Info", p });
+          }
         }
-     }
+        else if (!hasKeyValue)
+        {
+          ObjectData.Add(new string[] { "Info", p });
+        }
+      }
+    }
   }
+
   public ObservableCollection<string[]> SpkRecordsData { get; } = new();
   public ObservableCollection<string> SpkRecordsHeaders { get; } = new();
 
   public async Task FetchSpkRecordsAsync(string pdes, string startTime, string stopTime)
   {
-    var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Downloading list of observation records...");
+    var loadMsg = _breadcrumb.ShowLoadingMessage(
+      "Horizon API",
+      "Downloading list of observation records..."
+    );
     try
     {
       var command = Uri.EscapeDataString($"'DES={pdes};'");
@@ -272,7 +285,7 @@ public class HorizonJplService
       if (response.IsSuccessStatusCode)
       {
         var json = await response.Content.ReadAsStringAsync();
-        ParseSpkRecordsJson(json);
+        ParseSpkRecordsJson(json, startTime, stopTime);
         await _breadcrumb.ShowMessageAsync(
           "Horizon API (SPK Records)",
           $"Success: {SpkRecordsData.Count} records found."
@@ -297,7 +310,7 @@ public class HorizonJplService
     }
   }
 
-  private void ParseSpkRecordsJson(string json)
+  private void ParseSpkRecordsJson(string json, string startTime, string stopTime)
   {
     SpkRecordsData.Clear();
     SpkRecordsHeaders.Clear();
@@ -307,6 +320,14 @@ public class HorizonJplService
     SpkRecordsHeaders.Add("MATCH DESIG");
     SpkRecordsHeaders.Add("Primary Desig");
     SpkRecordsHeaders.Add("Name");
+
+    int startYear = int.MinValue;
+    int stopYear = int.MaxValue;
+
+    if (DateTime.TryParse(startTime, out var dtStart))
+      startYear = dtStart.Year;
+    if (DateTime.TryParse(stopTime, out var dtStop))
+      stopYear = dtStop.Year;
 
     try
     {
@@ -333,11 +354,23 @@ public class HorizonJplService
             if (parts.Length >= 5)
             {
               var id = parts[0];
-              var epoch = parts[1];
+              var epochStr = parts[1];
               var match = parts[2];
               var primary = parts[3];
               var name = string.Join(" ", parts.Skip(4));
-              SpkRecordsData.Add(new[] { id, epoch, match, primary, name });
+
+              if (int.TryParse(epochStr, out int epochYear))
+              {
+                 if (epochYear >= startYear && epochYear <= stopYear)
+                 {
+                   SpkRecordsData.Add(new[] { id, epochStr, match, primary, name });
+                 }
+              }
+              else
+              {
+                 // If we can't parse the epoch, add it anyway to be safe
+                 SpkRecordsData.Add(new[] { id, epochStr, match, primary, name });
+              }
             }
           }
         }

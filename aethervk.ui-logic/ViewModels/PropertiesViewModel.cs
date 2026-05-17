@@ -50,7 +50,7 @@ public partial class PropertiesViewModel
     _breadcrumbService = breadcrumbService;
     CurrentSceneId = sceneId;
     OperatorStack = new OperatorStack(new PropertiesBaseOperator(this));
-    
+
     // Register composable rules
     _componentRules.Add(new TransformEditableRule());
     _componentRules.Add(new CometBvhRefreshRule(_runtimeService));
