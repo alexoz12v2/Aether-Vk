@@ -20,11 +20,11 @@ pub struct ProcessMemory {
 #[cfg(target_os = "windows")]
 mod windows_memory {
   use super::ProcessMemory;
-  use windows::Win32::System::Memory::{
-    MEM_COMMIT, MEM_IMAGE, MEM_MAPPED, MEMORY_BASIC_INFORMATION, VirtualQueryEx,
+  use windows::Win32::System::{
+    Memory::{MEM_COMMIT, MEM_IMAGE, MEM_MAPPED, MEMORY_BASIC_INFORMATION, VirtualQueryEx},
+    ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
+    Threading::GetCurrentProcess,
   };
-  use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
-  use windows::Win32::System::Threading::GetCurrentProcess;
 
   /// TODO: Document this item
   pub struct MemoryStatus {
@@ -89,11 +89,13 @@ mod windows_memory {
 mod macos_memory {
   use super::ProcessMemory;
   use libc::{c_void, sysctl};
-  use mach2::task::task_info;
-  use mach2::task_info::{MACH_TASK_BASIC_INFO, MACH_TASK_BASIC_INFO_COUNT, mach_task_basic_info};
-  use mach2::traps::mach_task_self;
-  use mach2::vm_prot::VM_PROT_READ;
-  use mach2::vm_region::{VM_REGION_BASIC_INFO_64, vm_region_basic_info_64};
+  use mach2::{
+    task::task_info,
+    task_info::{MACH_TASK_BASIC_INFO, MACH_TASK_BASIC_INFO_COUNT, mach_task_basic_info},
+    traps::mach_task_self,
+    vm_prot::VM_PROT_READ,
+    vm_region::{VM_REGION_BASIC_INFO_64, vm_region_basic_info_64},
+  };
 
   /// TODO: Document this item
   pub struct MemoryStatus {
@@ -251,6 +253,12 @@ pub struct StackAllocator {
   pub offset: Cell<usize>,
 }
 
+impl Default for StackAllocator {
+  fn default() -> Self {
+    StackAllocator::new()
+  }
+}
+
 impl StackAllocator {
   /// TODO: Document this item
   pub const fn new() -> Self {
@@ -290,10 +298,12 @@ impl StackAllocator {
   }
 }
 
-#[cfg(all(debug_assertions, feature = "debug_gpu"))]
+#[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
 pub mod tracking {
-  use core::alloc::{GlobalAlloc, Layout};
-  use core::sync::atomic::{AtomicUsize, Ordering};
+  use core::{
+    alloc::{GlobalAlloc, Layout},
+    sync::atomic::{AtomicUsize, Ordering},
+  };
   extern crate alloc;
   use alloc::collections::BTreeMap;
   use spin::Mutex;
@@ -302,23 +312,71 @@ pub mod tracking {
   pub static GPU_ALLOCATED: AtomicUsize = AtomicUsize::new(0);
 
   #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-  pub struct AllocTrace(pub [usize; 3]);
+  pub struct AllocTrace(pub [usize; 4]);
 
   pub static HOTSPOTS: Mutex<Option<BTreeMap<AllocTrace, usize>>> = Mutex::new(None);
 
+  #[derive(Clone)]
+  pub struct GpuAllocInfo {
+    pub size: usize,
+    pub trace: Option<AllocTrace>,
+  }
+
+  pub static GPU_ALLOCATIONS: Mutex<Option<BTreeMap<u64, GpuAllocInfo>>> = Mutex::new(None);
+
   pub struct TrackingAllocator<A: GlobalAlloc>(pub A);
 
+  pub fn track_gpu_allocation(addr: u64, size: usize) {
+    if let Some(mut lock) = GPU_ALLOCATIONS.try_lock() {
+      if lock.is_none() {
+        *lock = Some(BTreeMap::new());
+      }
+      if let Some(map) = lock.as_mut() {
+        let trace = crate::os::debug::capture_aethervk_trace(9).map(AllocTrace);
+        map.insert(addr, GpuAllocInfo { size, trace });
+      }
+    }
+  }
+
+  pub fn untrack_gpu_allocation(addr: u64) {
+    if let Some(mut lock) = GPU_ALLOCATIONS.try_lock()
+      && let Some(map) = lock.as_mut()
+    {
+      map.remove(&addr);
+    }
+  }
+
+  pub fn report_leaked_gpu_allocations() {
+    if let Some(lock) = GPU_ALLOCATIONS.try_lock()
+      && let Some(map) = lock.as_ref()
+      && !map.is_empty()
+    {
+      crate::log!("[GPU MEMORY LEAK REPORT]");
+      for (addr, info) in map.iter() {
+        crate::log!("Leaked Memory at {:#X}, Size: {} bytes", addr, info.size);
+        if let Some(trace) = info.trace {
+          crate::log!("Allocated at:");
+          let valid_ptrs: alloc::vec::Vec<usize> =
+            trace.0.iter().copied().filter(|&p| p != 0).collect();
+          crate::os::debug::resolve_and_print_trace(&valid_ptrs);
+        } else {
+          crate::log!("No trace captured.");
+        }
+      }
+    }
+  }
+
   pub fn track_hotspot(size: usize) {
-    if let Some(mut lock) = HOTSPOTS.try_lock() {
-      if let Some(trace) = crate::os::debug::capture_aethervk_trace() {
-        if lock.is_none() {
-          *lock = Some(BTreeMap::new());
-        }
-        if let Some(map) = lock.as_mut() {
-          let trace_key = AllocTrace(trace);
-          let current = map.get(&trace_key).copied().unwrap_or(0);
-          map.insert(trace_key, current + size);
-        }
+    if let Some(mut lock) = HOTSPOTS.try_lock()
+      && let Some(trace) = crate::os::debug::capture_aethervk_trace(3)
+    {
+      if lock.is_none() {
+        *lock = Some(BTreeMap::new());
+      }
+      if let Some(map) = lock.as_mut() {
+        let trace_key = AllocTrace(trace);
+        let current = map.get(&trace_key).copied().unwrap_or(0);
+        map.insert(trace_key, current + size);
       }
     }
   }

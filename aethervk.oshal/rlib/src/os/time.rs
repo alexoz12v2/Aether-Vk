@@ -2,8 +2,10 @@
 
 #![allow(non_camel_case_types)]
 
-use core::cmp::min;
-use core::sync::atomic::{AtomicI64, AtomicU32, Ordering};
+use core::{
+  cmp::min,
+  sync::atomic::{AtomicI64, AtomicU32, Ordering},
+};
 
 #[cfg(windows)]
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};

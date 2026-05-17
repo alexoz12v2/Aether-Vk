@@ -285,11 +285,23 @@
     <UpToDateCheckInput Include="@(RustFiles)" />
   </ItemGroup>
 
+  <PropertyGroup>
+    <!-- Doesn't support cross compilation (later) -->
+    <CargoTargetProfile Condition="'$(Configuration)' == 'Release'">release</CargoTargetProfile>
+    <CargoTargetProfile Condition="'$(Configuration)' != 'Release'">debug</CargoTargetProfile>
+    <CargoTargetBaseDirectory>$(MSBuildProjectDirectory)/../target/$(CargoTarget)/$(CargoTargetProfile)</CargoTargetBaseDirectory>
+    
+    <NativeLibExists>false</NativeLibExists>
+    <NativeLibExists Condition="'$(IsWindows)' == 'true' And Exists('$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll') And Exists('$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll.lib')">true</NativeLibExists>
+    <NativeLibExists Condition="'$(IsWindows)' != 'true' And (Exists('$(CargoTargetBaseDirectory)/libaethervk_core_cdylib.so') Or Exists('$(CargoTargetBaseDirectory)/libaethervk_core_cdylib.dylib'))">true</NativeLibExists>
+  </PropertyGroup>
+
   <Target
     Name="BuildNativeLibrary"
     BeforeTargets="BeforeBuild"
     Inputs="@(RustFiles)"
     Outputs="..\target\$(CargoOutDir)\.cargo-build-successful"
+    Condition="'$(SkipNativeBuild)' != 'true' And '$(NativeLibExists)' != 'true'"
   >
     <Exec
       Command="cargo build $(CargoArgs)"
@@ -306,12 +318,6 @@
   </Target>
 
   <Target Name="InjectNativeLibraryContent" BeforeTargets="AssignTargetPaths">
-    <PropertyGroup>
-      <!-- Doesn't support cross compilation (later) -->
-      <CargoTargetProfile Condition="'$(Configuration)' == 'Release'">release</CargoTargetProfile>
-      <CargoTargetProfile Condition="'$(Configuration)' != 'Release'">debug</CargoTargetProfile>
-      <CargoTargetBaseDirectory>$(MSBuildProjectDirectory)/../target/$(CargoTarget)/$(CargoTargetProfile)</CargoTargetBaseDirectory>
-    </PropertyGroup>
     <ItemGroup>
       <Content
         Include="$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll"

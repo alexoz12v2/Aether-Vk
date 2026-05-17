@@ -401,6 +401,7 @@ impl super::DeviceResource for DiscardPool {
 }
 
 /// TODO: Document this item
+#[derive(Clone)]
 pub(super) struct Buffer {
   pub buffer: NonZeroHandle<vk::Buffer>,
   pub allocation: vk_mem::Allocation,
@@ -413,6 +414,7 @@ impl Hash for Buffer {
 }
 
 /// TODO: Document this item
+#[derive(Clone)]
 pub(super) struct Image {
   pub image: NonZeroHandle<vk::Image>,
   pub image_view: NonZeroHandle<vk::ImageView>,
@@ -862,6 +864,7 @@ impl Default for ForwardMeshRenderResourcePushData {
 }
 
 /// TODO: Document this item
+#[derive(Clone)]
 pub(super) struct SunRenderResource {
   pub resolution: (u32, u32, u32),
   pub image: Option<Image>,
@@ -877,6 +880,7 @@ pub(super) struct SunRenderResource {
 }
 
 /// TODO: Document this item
+#[derive(Clone)]
 pub(super) struct ForwardMeshRenderResource {
   pub allocator: vk_mem::ffi::VmaAllocator, // necessary evil. TODO: Edit DeviceResource trait and remove this.
   pub position_vertex_buffer: Buffer,
@@ -897,6 +901,7 @@ pub(super) struct ForwardMeshRenderResource {
 }
 
 /// TODO: Document this item
+#[derive(Clone)]
 pub(super) struct ForwardMesh2RenderResource {
   pub allocator: vk_mem::ffi::VmaAllocator, // necessary evil. TODO: Edit DeviceResource trait and remove this.
   pub position_vertex_buffer: Buffer,
@@ -4103,6 +4108,7 @@ impl ForwardMeshRenderResourceArchetypeArena {
     discard_pool: &DiscardPool,
     index: usize,
     debug_name: &str,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<NonZeroHandle<vk::DescriptorSet>> {
     const NEVER_DISCARD_TIMELINE: u64 = u64::MAX;
 
@@ -4117,6 +4123,7 @@ impl ForwardMeshRenderResourceArchetypeArena {
       discard_pool,
       NEVER_DISCARD_TIMELINE,
       debug_name,
+      rollback,
     )
   }
 }
@@ -4577,6 +4584,7 @@ impl ForwardMesh2RenderResourceArchetypeArena {
     discard_pool: &DiscardPool,
     index: usize,
     debug_name: &str,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<NonZeroHandle<vk::DescriptorSet>> {
     const NEVER_DISCARD_TIMELINE: u64 = u64::MAX;
 
@@ -4591,6 +4599,7 @@ impl ForwardMesh2RenderResourceArchetypeArena {
       discard_pool,
       NEVER_DISCARD_TIMELINE,
       debug_name,
+      rollback,
     )
   }
 }

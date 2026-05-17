@@ -22,7 +22,7 @@ use crate::{
       utils::NonZeroHandle,
     },
   },
-  gpu_backends::vulkan::device::{pipelines, swapchain},
+  gpu_backends::vulkan::device::{pipelines, swapchain, utils},
   simulation::comet::{NORMAL_COMPONENTS, POSITION_COMPONENTS, UV_COMPONENTS},
   types::{GpuError, GpuResult},
 };
@@ -170,66 +170,147 @@ impl Archetypes {
   }
 }
 
+pub struct PreparedArchetypeUpdate {
+  pub main_graphics_info: crate::gpu_backends::vulkan::device::pipelines::GraphicsInfo,
+  pub outline_graphics_info: Option<crate::gpu_backends::vulkan::device::pipelines::GraphicsInfo>,
+}
+
+pub struct CompiledArchetypeData {
+  pub pipeline_key: crate::gpu::PipelineKey,
+  pub graphics_info: crate::gpu_backends::vulkan::device::pipelines::GraphicsInfo,
+  pub outline_data: Option<(
+    crate::gpu::PipelineKey,
+    crate::gpu_backends::vulkan::device::pipelines::GraphicsInfo,
+  )>,
+}
+
 macro_rules! impl_update_archetype {
   (
-    $fn_name:ident,
+    $prepare_fn:ident,
+    $commit_fn:ident,
     $archetype_field:ident
-    $(, |$arch:ident, $dev:ident, $wp:ident, $dp:ident, $tl:ident, $gi:ident, $fmt:ident| $extra:block)?
   ) => {
     #[named]
-    pub fn $fn_name(
+    pub fn $prepare_fn(
       &self,
-      device: &LogicalDevice,
-      color_format: vk::Format,
-      write_pipeline: &mut pipelines::PipelinePool,
-      renderpasses: &renderpasses::RenderPasses,
-      allocator: &vk_mem::Allocator,
-      discard_pool: &resources::DiscardPool,
-      timeline: u64,
-    ) -> GpuResult<()> {
-      let mut archetype_lock = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.$archetype_field);
-      let archetype = match archetype_lock.as_mut() {
+      color_format: ash::vk::Format,
+      renderpasses: &crate::gpu_backends::vulkan::device::renderpasses::RenderPasses,
+    ) -> crate::types::GpuResult<Option<PreparedArchetypeUpdate>> {
+      let archetype_lock = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+        &self.$archetype_field,
+      );
+      let archetype = match archetype_lock.as_ref() {
         Some(a) => a,
-        None => return Ok(()),
+        None => return Ok(None),
       };
 
       let mut graphics_info = archetype.graphics_info.clone();
-      let format = color_format;
 
-      if graphics_info.fragment_out.color_attachment_formats.first() != Some(&format) {
-        let depth_stencil_format = graphics_info
-          .fragment_out
-          .depth_attachment_format
-          .unwrap_or(vk::Format::UNDEFINED);
+      if graphics_info.fragment_out.color_attachment_formats.first() != Some(&color_format) {
+        let depth_stencil_format =
+          graphics_info.fragment_out.depth_attachment_format.unwrap_or(ash::vk::Format::UNDEFINED);
 
         graphics_info.fragment_out.color_attachment_formats.clear();
-        graphics_info.fragment_out.color_attachment_formats.push(format);
-        graphics_info.render_pass = renderpasses
-          .get_pipeline_render_pass(color_format, depth_stencil_format)?
-          .get();
+        graphics_info.fragment_out.color_attachment_formats.push(color_format);
+        graphics_info.render_pass =
+          renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get();
 
-        write_pipeline.get_or_create_graphics_pipeline(device, &graphics_info)?;
-        let key = graphics_info.pipeline_key();
-        archetype.pipeline_key = key;
-        archetype.graphics_info = graphics_info.clone();
+        Ok(Some(PreparedArchetypeUpdate {
+          main_graphics_info: graphics_info,
+          outline_graphics_info: None,
+        }))
+      } else {
+        Ok(None)
+      }
+    }
+
+    #[named]
+    pub fn $commit_fn(&self, data: CompiledArchetypeData) {
+      let mut archetype_lock =
+        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+          &self.$archetype_field,
+        );
+      if let Some(archetype) = archetype_lock.as_mut() {
+        archetype.pipeline_key = data.pipeline_key;
+        archetype.graphics_info = data.graphics_info;
+      }
+    }
+  };
+
+  (
+    $prepare_fn:ident,
+    $commit_fn:ident,
+    $archetype_field:ident,
+    with_outline
+  ) => {
+    #[named]
+    pub fn $prepare_fn(
+      &self,
+      color_format: ash::vk::Format,
+      renderpasses: &crate::gpu_backends::vulkan::device::renderpasses::RenderPasses,
+    ) -> crate::types::GpuResult<Option<PreparedArchetypeUpdate>> {
+      let archetype_lock = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+        &self.$archetype_field,
+      );
+      let archetype = match archetype_lock.as_ref() {
+        Some(a) => a,
+        None => return Ok(None),
+      };
+
+      let mut needs_update = false;
+      let mut graphics_info = archetype.graphics_info.clone();
+      let mut outline_graphics_info = archetype.outline_graphics_info.clone();
+
+      if graphics_info.fragment_out.color_attachment_formats.first() != Some(&color_format) {
+        let depth_stencil_format =
+          graphics_info.fragment_out.depth_attachment_format.unwrap_or(ash::vk::Format::UNDEFINED);
+        graphics_info.fragment_out.color_attachment_formats.clear();
+        graphics_info.fragment_out.color_attachment_formats.push(color_format);
+        graphics_info.render_pass =
+          renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get();
+        needs_update = true;
       }
 
-      $(
-        let $arch = &mut *archetype;
-        let $dev = device;
-        let $wp = &mut *write_pipeline;
-        let $dp = discard_pool;
-        let $tl = timeline;
-        let $gi = &graphics_info;
-        let $fmt = format;
-        $extra
-      )?
+      if outline_graphics_info.fragment_out.color_attachment_formats.first() != Some(&color_format)
+      {
+        let depth_stencil_format = outline_graphics_info
+          .fragment_out
+          .depth_attachment_format
+          .unwrap_or(ash::vk::Format::UNDEFINED);
+        outline_graphics_info.fragment_out.color_attachment_formats.clear();
+        outline_graphics_info.fragment_out.color_attachment_formats.push(color_format);
+        outline_graphics_info.render_pass =
+          renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get();
+        needs_update = true;
+      }
 
-      Ok(())
+      if needs_update {
+        Ok(Some(PreparedArchetypeUpdate {
+          main_graphics_info: graphics_info,
+          outline_graphics_info: Some(outline_graphics_info),
+        }))
+      } else {
+        Ok(None)
+      }
+    }
+
+    #[named]
+    pub fn $commit_fn(&self, data: CompiledArchetypeData) {
+      let mut archetype_lock =
+        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+          &self.$archetype_field,
+        );
+      if let Some(archetype) = archetype_lock.as_mut() {
+        archetype.pipeline_key = data.pipeline_key;
+        archetype.graphics_info = data.graphics_info;
+        if let Some((outline_key, outline_info)) = data.outline_data {
+          archetype.outline_pipeline_key = outline_key;
+          archetype.outline_graphics_info = outline_info;
+        }
+      }
     }
   };
 }
-
 macro_rules! impl_create_archetype {
   (
     $fn_name:ident,
@@ -250,15 +331,16 @@ macro_rules! impl_create_archetype {
       allocator: &vk_mem::Allocator,
       discard_pool: &resources::DiscardPool,
       renderpasses: &renderpasses::RenderPasses,
-      pipeline_pool: &mut pipelines::PipelinePool,
+      pipeline_pool_lock: &pipelines::PipelinePool,
       timeline: u64,
-      arena: alloc::sync::Arc<crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<resources::$arena_struct>>,
+      arena: alloc::sync::Arc<DebugTrackedRwLock<resources::$arena_struct>>,
+      rollback: &mut utils::RollbackContext<'_>,
     ) -> GpuResult<()> {
-      let mut archetype_lock = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.$archetype_field);
+      let mut archetype_lock = DebugTrackedRwLock::write(&self.$archetype_field);
       if archetype_lock.is_some() {
         return Err(crate::gpu_err_device!());
       }
-      let layout = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&arena).pipeline_layout.get();
+      let layout = DebugTrackedRwLock::read(&arena).pipeline_layout.get();
       let render_pass = renderpasses
         .get_pipeline_render_pass(color_format, depth_stencil_format)?.get();
 
@@ -282,7 +364,7 @@ macro_rules! impl_create_archetype {
         color_format, depth_stencil_format, layout, render_pass
       );
 
-      pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
+      pipeline_pool_lock.get_or_create_graphics_pipeline(device, &pipeline_graphics_info, rollback)?;
       let pipeline_key = pipeline_graphics_info.pipeline_key();
 
       let res = resources::$resource_struct { arena: alloc::sync::Arc::downgrade(&arena), pipeline_key, graphics_info: pipeline_graphics_info };
@@ -310,15 +392,16 @@ macro_rules! impl_create_archetype {
       allocator: &vk_mem::Allocator,
       discard_pool: &resources::DiscardPool,
       renderpasses: &renderpasses::RenderPasses,
-      pipeline_pool: &mut pipelines::PipelinePool,
+      pipeline_pool_lock: &pipelines::PipelinePool,
       timeline: u64,
-      arena: alloc::sync::Arc<crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<resources::$arena_struct>>,
+      arena: alloc::sync::Arc<DebugTrackedRwLock<resources::$arena_struct>>,
+      rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
     ) -> GpuResult<()> {
-      let mut archetype_lock = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.$archetype_field);
+      let mut archetype_lock = DebugTrackedRwLock::write(&self.$archetype_field);
       if archetype_lock.is_some() {
         return Err(crate::gpu_err_device!());
       }
-      let layout = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&arena).pipeline_layout.get();
+      let layout = DebugTrackedRwLock::read(&arena).pipeline_layout.get();
       let render_pass = renderpasses
         .get_pipeline_render_pass(color_format, depth_stencil_format)?.get();
 
@@ -342,7 +425,7 @@ macro_rules! impl_create_archetype {
         color_format, depth_stencil_format, layout, render_pass
       );
 
-      pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
+      pipeline_pool_lock.get_or_create_graphics_pipeline(device, &pipeline_graphics_info, rollback)?;
       let pipeline_key = pipeline_graphics_info.pipeline_key();
 
       let res = resources::$resource_struct { arena: alloc::sync::Arc::downgrade(&arena), pipeline_key, graphics_info: pipeline_graphics_info };
@@ -354,126 +437,120 @@ macro_rules! impl_create_archetype {
 }
 impl Archetypes {
   impl_update_archetype!(
-    update_physical_mesh_archetype_for_presentation_engine,
+    prepare_update_physical_mesh_archetype,
+    commit_update_physical_mesh_archetype,
     physical_mesh_render_archetype,
-    |archetype, device, write_pipeline, discard_pool, timeline, graphics_info, format| {
-      if archetype.outline_graphics_info.fragment_out.color_attachment_formats.first()
-        != Some(&format)
-      {
-        let mut outline_graphics_info = archetype.outline_graphics_info.clone();
-        outline_graphics_info.fragment_out.color_attachment_formats.clear();
-        outline_graphics_info.fragment_out.color_attachment_formats.push(format);
-        outline_graphics_info.render_pass = graphics_info.render_pass;
-        let outline_pipeline_key = outline_graphics_info.pipeline_key();
-        write_pipeline.get_or_create_graphics_pipeline(device, &outline_graphics_info)?;
-        archetype.outline_pipeline_key = outline_pipeline_key;
-        archetype.outline_graphics_info = outline_graphics_info;
-      }
-    }
+    with_outline
   );
 
   impl_update_archetype!(
-    update_physical_mesh2_archetype_for_presentation_engine,
+    prepare_update_physical_mesh2_archetype,
+    commit_update_physical_mesh2_archetype,
     physical_mesh2_render_archetype,
-    |archetype, device, write_pipeline, discard_pool, timeline, graphics_info, format| {
-      if archetype.outline_graphics_info.fragment_out.color_attachment_formats.first()
-        != Some(&format)
-      {
-        let mut outline_graphics_info = archetype.outline_graphics_info.clone();
-        outline_graphics_info.fragment_out.color_attachment_formats.clear();
-        outline_graphics_info.fragment_out.color_attachment_formats.push(format);
-        outline_graphics_info.render_pass = graphics_info.render_pass;
-        let outline_pipeline_key = outline_graphics_info.pipeline_key();
-        write_pipeline.get_or_create_graphics_pipeline(device, &outline_graphics_info)?;
-        archetype.outline_pipeline_key = outline_pipeline_key;
-        archetype.outline_graphics_info = outline_graphics_info;
-      }
-    }
+    with_outline
   );
 
   impl_update_archetype!(
-    update_cursor_archetype_for_presentation_engine,
+    prepare_update_cursor_archetype,
+    commit_update_cursor_archetype,
     cursor_render_archetype
   );
   impl_update_archetype!(
-    update_particle_archetype_for_presentation_engine,
+    prepare_update_particle_archetype,
+    commit_update_particle_archetype,
     particle_render_archetype
   );
   impl_update_archetype!(
-    update_particle2_archetype_for_presentation_engine,
+    prepare_update_particle2_archetype,
+    commit_update_particle2_archetype,
     particle2_render_archetype
   );
   impl_update_archetype!(
-    update_sun_archetype_for_presentation_engine,
+    prepare_update_sun_archetype,
+    commit_update_sun_archetype,
     sun_render_archetype
   );
   impl_update_archetype!(
-    update_sky_archetype_for_presentation_engine,
+    prepare_update_sky_archetype,
+    commit_update_sky_archetype,
     sky_render_archetype
   );
 
   impl_update_archetype!(
-    update_grid_archetype_for_presentation_engine,
+    prepare_update_grid_archetype,
+    commit_update_grid_archetype,
     grid_render_archetype
   );
 
   impl_update_archetype!(
-    update_minimap_archetype_for_presentation_engine,
+    prepare_update_minimap_archetype,
+    commit_update_minimap_archetype,
     minimap_render_archetype
   );
 
   impl_update_archetype!(
-    update_text_archetype_for_presentation_engine,
+    prepare_update_text_archetype,
+    commit_update_text_archetype,
     text_render_archetype
   );
 
   impl_update_archetype!(
-    update_text2_archetype_for_presentation_engine,
+    prepare_update_text2_archetype,
+    commit_update_text2_archetype,
     text2_render_archetype
   );
 
   impl_update_archetype!(
-    update_bvh_archetype_for_presentation_engine,
+    prepare_update_bvh_archetype,
+    commit_update_bvh_archetype,
     bvh_render_archetype
   );
 
   impl_update_archetype!(
-    update_bvhwire2_archetype_for_presentation_engine,
+    prepare_update_bvhwire2_archetype,
+    commit_update_bvhwire2_archetype,
     bvhwire2_render_archetype
   );
 
   impl_update_archetype!(
-    update_gizmo_archetype_for_presentation_engine,
+    prepare_update_gizmo_archetype,
+    commit_update_gizmo_archetype,
     gizmo_render_archetype
   );
 
   impl_update_archetype!(
-    update_measurement_archetype_for_presentation_engine,
+    prepare_update_measurement_archetype,
+    commit_update_measurement_archetype,
     measurement_render_archetype
   );
 
   impl_update_archetype!(
-    update_marker_archetype_for_presentation_engine,
+    prepare_update_marker_archetype,
+    commit_update_marker_archetype,
     marker_render_archetype
   );
 
   impl_update_archetype!(
-    update_billboard_archetype_for_presentation_engine,
+    prepare_update_billboard_archetype,
+    commit_update_billboard_archetype,
     billboard_render_archetype
   );
 
   impl_update_archetype!(
-    update_trajectory_archetype_for_presentation_engine,
+    prepare_update_trajectory_archetype,
+    commit_update_trajectory_archetype,
     trajectory_render_archetype
   );
 
   impl_update_archetype!(
-    update_ui_archetype_for_presentation_engine,
+    prepare_update_ui_archetype,
+    commit_update_ui_archetype,
     ui_render_archetype
   );
 
   impl_update_archetype!(
-    update_background_archetype_for_presentation_engine,
+    prepare_update_background_archetype,
+    commit_update_background_archetype,
     background_render_archetype
   );
 
@@ -582,18 +659,12 @@ impl Archetypes {
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
-    pipeline_pool: &mut pipelines::PipelinePool,
+    pipeline_pool_lock: &pipelines::PipelinePool,
     timeline: u64,
-    arena: alloc::sync::Arc<
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
-        resources::BackgroundRenderResourceArchetypeArena,
-      >,
-    >,
+    arena: alloc::sync::Arc<DebugTrackedRwLock<resources::BackgroundRenderResourceArchetypeArena>>,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
-    let mut bg_render_archetype =
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-        &self.background_render_archetype,
-      );
+    let mut bg_render_archetype = DebugTrackedRwLock::write(&self.background_render_archetype);
     if bg_render_archetype.is_some() {
       return Err(crate::gpu_err_device!());
     }
@@ -618,11 +689,7 @@ impl Archetypes {
           .with_depth_attachment_format(depth_stencil_format)
           .clone(),
       )
-      .with_pipeline_layout(
-        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&arena)
-          .pipeline_layout
-          .get(),
-      )
+      .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
       .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST)
       .with_render_pass(
         renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
@@ -632,7 +699,11 @@ impl Archetypes {
       .clone();
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
-    pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
+    pipeline_pool_lock.get_or_create_graphics_pipeline(
+      device,
+      &pipeline_graphics_info,
+      rollback,
+    )?;
 
     *bg_render_archetype = Some(resources::BackgroundRenderResourceArchetype {
       arena: alloc::sync::Arc::downgrade(&arena),
@@ -722,19 +793,12 @@ impl Archetypes {
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
-    pipeline_pool: &mut pipelines::PipelinePool,
+    pipeline_pool_lock: &pipelines::PipelinePool,
     timeline: u64,
-    arena: alloc::sync::Arc<
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
-        resources::ForwardMeshRenderResourceArchetypeArena,
-      >,
-    >,
+    arena: alloc::sync::Arc<DebugTrackedRwLock<resources::ForwardMeshRenderResourceArchetypeArena>>,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
-    if crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
-      &self.physical_mesh_render_archetype,
-    )
-    .is_some()
-    {
+    if DebugTrackedRwLock::read(&self.physical_mesh_render_archetype).is_some() {
       return Err(crate::gpu_err_device!());
     }
 
@@ -806,7 +870,11 @@ impl Archetypes {
       .with_stencil_write_mask(u32::MAX)
       .clone();
 
-    pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
+    pipeline_pool_lock.get_or_create_graphics_pipeline(
+      device,
+      &pipeline_graphics_info,
+      rollback,
+    )?;
     let pipeline_key = pipeline_graphics_info.pipeline_key();
 
     let outline_graphics_info = pipeline_graphics_info
@@ -833,18 +901,17 @@ impl Archetypes {
       .with_stencil_write_mask(0)
       .clone();
 
-    pipeline_pool.get_or_create_graphics_pipeline(device, &outline_graphics_info)?;
+    pipeline_pool_lock.get_or_create_graphics_pipeline(device, &outline_graphics_info, rollback)?;
     let outline_pipeline_key = outline_graphics_info.pipeline_key();
 
-    *crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-      &self.physical_mesh_render_archetype,
-    ) = Some(resources::ForwardMeshRenderResourceArchetype {
-      arena: alloc::sync::Arc::downgrade(&arena),
-      pipeline_key,
-      graphics_info: pipeline_graphics_info,
-      outline_pipeline_key,
-      outline_graphics_info,
-    });
+    *DebugTrackedRwLock::write(&self.physical_mesh_render_archetype) =
+      Some(resources::ForwardMeshRenderResourceArchetype {
+        arena: alloc::sync::Arc::downgrade(&arena),
+        pipeline_key,
+        graphics_info: pipeline_graphics_info,
+        outline_pipeline_key,
+        outline_graphics_info,
+      });
 
     Ok(())
   }
@@ -861,18 +928,12 @@ impl Archetypes {
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
-    pipeline_pool: &mut pipelines::PipelinePool,
+    pipeline_pool_lock: &pipelines::PipelinePool,
     timeline: u64,
-    arena: alloc::sync::Arc<
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
-        resources::GridRenderResourceArchetypeArena,
-      >,
-    >,
+    arena: alloc::sync::Arc<DebugTrackedRwLock<resources::GridRenderResourceArchetypeArena>>,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
-    let mut grid_render_archetype =
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-        &self.grid_render_archetype,
-      );
+    let mut grid_render_archetype = DebugTrackedRwLock::write(&self.grid_render_archetype);
     if grid_render_archetype.is_some() {
       return Err(crate::gpu_err_device!());
     }
@@ -897,11 +958,7 @@ impl Archetypes {
           .with_depth_attachment_format(depth_stencil_format)
           .clone(),
       )
-      .with_pipeline_layout(
-        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&arena)
-          .pipeline_layout
-          .get(),
-      )
+      .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
       .with_pipeline_flags(PipelineFlags::empty())
       .with_render_pass(
         renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
@@ -911,7 +968,11 @@ impl Archetypes {
       .clone();
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
-    pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
+    pipeline_pool_lock.get_or_create_graphics_pipeline(
+      device,
+      &pipeline_graphics_info,
+      rollback,
+    )?;
 
     *grid_render_archetype = Some(resources::GridRenderResourceArchetype {
       arena: alloc::sync::Arc::downgrade(&arena),
@@ -934,18 +995,12 @@ impl Archetypes {
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
-    pipeline_pool: &mut pipelines::PipelinePool,
+    pipeline_pool_lock: &pipelines::PipelinePool,
     timeline: u64,
-    arena: alloc::sync::Arc<
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
-        resources::MinimapRenderResourceArchetypeArena,
-      >,
-    >,
+    arena: alloc::sync::Arc<DebugTrackedRwLock<resources::MinimapRenderResourceArchetypeArena>>,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
-    let mut minimap_render_archetype =
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-        &self.minimap_render_archetype,
-      );
+    let mut minimap_render_archetype = DebugTrackedRwLock::write(&self.minimap_render_archetype);
     if minimap_render_archetype.is_some() {
       return Err(crate::gpu_err_device!());
     }
@@ -966,11 +1021,7 @@ impl Archetypes {
       .with_fragment_out(
         pipelines::FragmentOut::default().add_color_attachment_format(color_format).clone(),
       )
-      .with_pipeline_layout(
-        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&arena)
-          .pipeline_layout
-          .get(),
-      )
+      .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
       .with_pipeline_flags(
         pipelines::PipelineFlags::NO_DEPTH_TEST | pipelines::PipelineFlags::NO_DEPTH_WRITE,
       )
@@ -983,7 +1034,11 @@ impl Archetypes {
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
 
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
+    pipeline_pool_lock.get_or_create_graphics_pipeline(
+      &device,
+      &pipeline_graphics_info,
+      rollback,
+    )?;
 
     *minimap_render_archetype = Some(resources::MinimapRenderResourceArchetype {
       arena: alloc::sync::Arc::downgrade(&arena),
@@ -1007,18 +1062,12 @@ impl Archetypes {
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
-    pipeline_pool: &mut pipelines::PipelinePool,
+    pipeline_pool_lock: &pipelines::PipelinePool,
     timeline: u64,
-    arena: alloc::sync::Arc<
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
-        resources::TextRenderResourceArchetypeArena,
-      >,
-    >,
+    arena: alloc::sync::Arc<DebugTrackedRwLock<resources::TextRenderResourceArchetypeArena>>,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
-    let mut text_render_archetype =
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-        &self.text_render_archetype,
-      );
+    let mut text_render_archetype = DebugTrackedRwLock::write(&self.text_render_archetype);
     if text_render_archetype.is_some() {
       return Err(crate::gpu_err_device!());
     }
@@ -1039,11 +1088,7 @@ impl Archetypes {
           .add_color_attachment_format(color_format)
           .with_depth_attachment_format(depth_stencil_format),
       )
-      .with_pipeline_layout(
-        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&arena)
-          .pipeline_layout
-          .get(),
-      )
+      .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
       .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST)
       .with_render_pass(
         renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
@@ -1053,7 +1098,11 @@ impl Archetypes {
       .clone();
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
-    pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
+    pipeline_pool_lock.get_or_create_graphics_pipeline(
+      device,
+      &pipeline_graphics_info,
+      rollback,
+    )?;
 
     *text_render_archetype = Some(resources::TextRenderResourceArchetype {
       arena: alloc::sync::Arc::downgrade(&arena),
@@ -1077,18 +1126,12 @@ impl Archetypes {
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
-    pipeline_pool: &mut pipelines::PipelinePool,
+    pipeline_pool_lock: &pipelines::PipelinePool,
     timeline: u64,
-    arena: alloc::sync::Arc<
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
-        resources::Text2RenderResourceArchetypeArena,
-      >,
-    >,
+    arena: alloc::sync::Arc<DebugTrackedRwLock<resources::Text2RenderResourceArchetypeArena>>,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
-    let mut text2_render_archetype =
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-        &self.text2_render_archetype,
-      );
+    let mut text2_render_archetype = DebugTrackedRwLock::write(&self.text2_render_archetype);
     if text2_render_archetype.is_some() {
       return Err(crate::gpu_err_device!());
     }
@@ -1110,11 +1153,7 @@ impl Archetypes {
           .with_depth_attachment_format(depth_stencil_format)
           .with_stencil_attachment_format(depth_stencil_format),
       )
-      .with_pipeline_layout(
-        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&arena)
-          .pipeline_layout
-          .get(),
-      )
+      .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
       .with_pipeline_flags(
         PipelineFlags::NO_DEPTH_WRITE
           | PipelineFlags::NO_DEPTH_TEST
@@ -1133,7 +1172,11 @@ impl Archetypes {
       .clone();
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
-    pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
+    pipeline_pool_lock.get_or_create_graphics_pipeline(
+      device,
+      &pipeline_graphics_info,
+      rollback,
+    )?;
 
     *text2_render_archetype = Some(resources::Text2RenderResourceArchetype {
       arena: alloc::sync::Arc::downgrade(&arena),
@@ -1156,18 +1199,12 @@ impl Archetypes {
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
-    pipeline_pool: &mut pipelines::PipelinePool,
+    pipeline_pool_lock: &pipelines::PipelinePool,
     timeline: u64,
-    arena: alloc::sync::Arc<
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
-        resources::BvhRenderResourceArchetypeArena,
-      >,
-    >,
+    arena: alloc::sync::Arc<DebugTrackedRwLock<resources::BvhRenderResourceArchetypeArena>>,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
-    let mut bvh_render_archetype =
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-        &self.bvh_render_archetype,
-      );
+    let mut bvh_render_archetype = DebugTrackedRwLock::write(&self.bvh_render_archetype);
     if bvh_render_archetype.is_some() {
       return Err(crate::gpu_err_device!());
     }
@@ -1194,11 +1231,7 @@ impl Archetypes {
           .with_depth_attachment_format(depth_stencil_format)
           .clone(),
       )
-      .with_pipeline_layout(
-        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&arena)
-          .pipeline_layout
-          .get(),
-      )
+      .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
       .with_pipeline_flags(
         pipelines::PipelineFlags::NO_DEPTH_WRITE | pipelines::PipelineFlags::INVERT_FRONT_FACE,
       )
@@ -1211,7 +1244,11 @@ impl Archetypes {
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
 
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
+    pipeline_pool_lock.get_or_create_graphics_pipeline(
+      &device,
+      &pipeline_graphics_info,
+      rollback,
+    )?;
 
     *bvh_render_archetype = Some(resources::BvhRenderResourceArchetype {
       arena: alloc::sync::Arc::downgrade(&arena),
@@ -1234,18 +1271,12 @@ impl Archetypes {
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
-    pipeline_pool: &mut pipelines::PipelinePool,
+    pipeline_pool_lock: &pipelines::PipelinePool,
     timeline: u64,
-    arena: alloc::sync::Arc<
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
-        resources::Bvhwire2RenderResourceArchetypeArena,
-      >,
-    >,
+    arena: alloc::sync::Arc<DebugTrackedRwLock<resources::Bvhwire2RenderResourceArchetypeArena>>,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
-    let mut bvhwire2_render_archetype =
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-        &self.bvhwire2_render_archetype,
-      );
+    let mut bvhwire2_render_archetype = DebugTrackedRwLock::write(&self.bvhwire2_render_archetype);
     if bvhwire2_render_archetype.is_some() {
       return Err(crate::gpu_err_device!());
     }
@@ -1272,11 +1303,7 @@ impl Archetypes {
           .with_depth_attachment_format(depth_stencil_format)
           .clone(),
       )
-      .with_pipeline_layout(
-        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&arena)
-          .pipeline_layout
-          .get(),
-      )
+      .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
       .with_pipeline_flags(
         pipelines::PipelineFlags::NO_DEPTH_WRITE | pipelines::PipelineFlags::INVERT_FRONT_FACE,
       )
@@ -1289,7 +1316,11 @@ impl Archetypes {
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
 
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
+    pipeline_pool_lock.get_or_create_graphics_pipeline(
+      &device,
+      &pipeline_graphics_info,
+      rollback,
+    )?;
 
     *bvhwire2_render_archetype = Some(resources::Bvhwire2RenderResourceArchetype {
       arena: alloc::sync::Arc::downgrade(&arena),
@@ -1312,18 +1343,12 @@ impl Archetypes {
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
-    pipeline_pool: &mut pipelines::PipelinePool,
+    pipeline_pool_lock: &pipelines::PipelinePool,
     timeline: u64,
-    arena: alloc::sync::Arc<
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
-        resources::GizmoRenderResourceArchetypeArena,
-      >,
-    >,
+    arena: alloc::sync::Arc<DebugTrackedRwLock<resources::GizmoRenderResourceArchetypeArena>>,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
-    let mut gizmo_render_archetype =
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-        &self.gizmo_render_archetype,
-      );
+    let mut gizmo_render_archetype = DebugTrackedRwLock::write(&self.gizmo_render_archetype);
     if gizmo_render_archetype.is_some() {
       return Err(crate::gpu_err_device!());
     }
@@ -1350,11 +1375,7 @@ impl Archetypes {
           .with_depth_attachment_format(depth_stencil_format)
           .clone(),
       )
-      .with_pipeline_layout(
-        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&arena)
-          .pipeline_layout
-          .get(),
-      )
+      .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
       .with_pipeline_flags(
         pipelines::PipelineFlags::NO_DEPTH_TEST
           | pipelines::PipelineFlags::NO_DEPTH_WRITE
@@ -1369,7 +1390,11 @@ impl Archetypes {
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();
 
-    pipeline_pool.get_or_create_graphics_pipeline(&device, &pipeline_graphics_info)?;
+    pipeline_pool_lock.get_or_create_graphics_pipeline(
+      &device,
+      &pipeline_graphics_info,
+      rollback,
+    )?;
 
     *gizmo_render_archetype = Some(resources::GizmoRenderResourceArchetype {
       arena: alloc::sync::Arc::downgrade(&arena),
@@ -1394,19 +1419,14 @@ impl Archetypes {
     allocator: &vk_mem::Allocator,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
-    pipeline_pool: &mut pipelines::PipelinePool,
+    pipeline_pool_lock: &pipelines::PipelinePool,
     timeline: u64,
     arena: alloc::sync::Arc<
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
-        resources::ForwardMesh2RenderResourceArchetypeArena,
-      >,
+      DebugTrackedRwLock<resources::ForwardMesh2RenderResourceArchetypeArena>,
     >,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
-    if crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
-      &self.physical_mesh2_render_archetype,
-    )
-    .is_some()
-    {
+    if DebugTrackedRwLock::read(&self.physical_mesh2_render_archetype).is_some() {
       return Err(crate::gpu_err_device!());
     }
 
@@ -1454,11 +1474,7 @@ impl Archetypes {
           .with_depth_attachment_format(depth_stencil_format)
           .with_stencil_attachment_format(depth_stencil_format),
       )
-      .with_pipeline_layout(
-        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&arena)
-          .pipeline_layout
-          .get(),
-      )
+      .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
       .with_pipeline_flags(
         PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::INVERT_FRONT_FACE,
       )
@@ -1478,7 +1494,11 @@ impl Archetypes {
       .with_stencil_write_mask(u32::MAX)
       .clone();
 
-    pipeline_pool.get_or_create_graphics_pipeline(device, &pipeline_graphics_info)?;
+    pipeline_pool_lock.get_or_create_graphics_pipeline(
+      device,
+      &pipeline_graphics_info,
+      rollback,
+    )?;
     let pipeline_key = pipeline_graphics_info.pipeline_key();
 
     let outline_graphics_info = pipeline_graphics_info
@@ -1505,18 +1525,17 @@ impl Archetypes {
       .with_stencil_write_mask(0)
       .clone();
 
-    pipeline_pool.get_or_create_graphics_pipeline(device, &outline_graphics_info)?;
+    pipeline_pool_lock.get_or_create_graphics_pipeline(device, &outline_graphics_info, rollback)?;
     let outline_pipeline_key = outline_graphics_info.pipeline_key();
 
-    *crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-      &self.physical_mesh2_render_archetype,
-    ) = Some(resources::ForwardMesh2RenderResourceArchetype {
-      arena: alloc::sync::Arc::downgrade(&arena),
-      pipeline_key,
-      graphics_info: pipeline_graphics_info,
-      outline_pipeline_key,
-      outline_graphics_info,
-    });
+    *DebugTrackedRwLock::write(&self.physical_mesh2_render_archetype) =
+      Some(resources::ForwardMesh2RenderResourceArchetype {
+        arena: alloc::sync::Arc::downgrade(&arena),
+        pipeline_key,
+        graphics_info: pipeline_graphics_info,
+        outline_pipeline_key,
+        outline_graphics_info,
+      });
 
     Ok(())
   }

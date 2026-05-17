@@ -237,8 +237,10 @@ impl AvkSystemInfo {
 pub mod os;
 
 pub mod hash {
-  use core::hash::{Hash, Hasher};
-  use core::marker;
+  use core::{
+    hash::{Hash, Hasher},
+    marker,
+  };
 
   /// TODO: Document this item
   pub struct FnvHasher {

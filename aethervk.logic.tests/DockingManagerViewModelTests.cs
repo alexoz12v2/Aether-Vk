@@ -20,7 +20,12 @@ public class DockingManagerViewModelTests : IDisposable
     _mockFactory.Setup(f => f.CreateTab("UITestPanel")).Returns(new UITestPanelViewModel());
     _mockFactory
       .Setup(f => f.CreateTab("Console"))
-      .Returns(new ConsoleViewModel(new ConsoleService(new Mock<IUiThreadDispatcher>().Object), new Mock<IFileDialogService>().Object));
+      .Returns(
+        new ConsoleViewModel(
+          new ConsoleService(new Mock<IUiThreadDispatcher>().Object),
+          new Mock<IFileDialogService>().Object
+        )
+      );
     _mockFactory.Setup(f => f.CreateTab("Viewport3D")).Returns(new DebugUiViewModel());
     _mockFactory.Setup(f => f.CreateTab("Outline")).Returns(new DebugUiViewModel());
     _mockFactory.Setup(f => f.CreateTab("Properties")).Returns(new DebugUiViewModel());

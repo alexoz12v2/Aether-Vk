@@ -11,7 +11,8 @@ namespace AetherVk.Logic.ViewModels;
 public partial class HorizonJplViewModel : TabItemViewModel
 {
   private readonly HorizonJplService _horizonService;
-  private readonly IFileDialogService _fileDialogService;
+  private readonly ILocalStorageService _localStorage;
+  private readonly BreadcrumbService _breadcrumb;
 
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(IsStep2Enabled))]
@@ -51,11 +52,12 @@ public partial class HorizonJplViewModel : TabItemViewModel
   [ObservableProperty]
   private bool _isDownloading;
 
-  public HorizonJplViewModel(HorizonJplService horizonService, IFileDialogService fileDialogService)
+  public HorizonJplViewModel(HorizonJplService horizonService, ILocalStorageService localStorage, BreadcrumbService breadcrumb)
     : base("Horizon JPL")
   {
     _horizonService = horizonService;
-    _fileDialogService = fileDialogService;
+    _localStorage = localStorage;
+    _breadcrumb = breadcrumb;
   }
 
   [RelayCommand]
@@ -102,7 +104,8 @@ public partial class HorizonJplViewModel : TabItemViewModel
   [RelayCommand]
   private async Task DownloadObjectDataAsync()
   {
-    if (SelectedSpkRecord == null) return;
+    if (SelectedSpkRecord == null)
+      return;
     var spkId = SelectedSpkRecord[0].Trim();
     IsDownloading = true;
     await _horizonService.FetchObjectDataAsync(spkId);
@@ -115,23 +118,25 @@ public partial class HorizonJplViewModel : TabItemViewModel
     if (SelectedComet == null || SelectedSpkRecord == null)
       return;
 
-    var pdes = SelectedComet[1].Trim();
+    var pdes = SelectedComet[1].Trim().Replace("/", "_").Replace(" ", "_");
     var spkId = SelectedSpkRecord[0].Trim();
-    var defaultName = $"{pdes}_{spkId}.bsp";
+    string startStr = SearchStartTime?.ToString("yyyy-MM-dd") ?? "2024-01-01";
+    string stopStr = SearchStopTime?.ToString("yyyy-MM-dd") ?? "2024-01-31";
 
-    var savePath = await _fileDialogService.ShowSaveFileDialogAsync(
-        "Save SPK File",
-        "bsp",
-        new[] { "*.bsp", "*.*" }
-    );
+    var fileName = $"spk-kernels/{pdes}-{spkId}-{startStr}-{stopStr}.spk";
+    var savePath = _localStorage.GetPersistentPath(fileName);
 
-    if (!string.IsNullOrEmpty(savePath))
+    IsDownloading = true;
+    var result = await _horizonService.DownloadSpkByIdAsync(pdes, spkId, savePath, startStr, stopStr);
+    IsDownloading = false;
+
+    if (result != null)
     {
-      IsDownloading = true;
-      string startStr = SearchStartTime?.ToString("yyyy-MM-dd") ?? "2024-01-01";
-      string stopStr = SearchStopTime?.ToString("yyyy-MM-dd") ?? "2024-01-31";
-      await _horizonService.DownloadSpkByIdAsync(pdes, spkId, savePath!, startStr, stopStr);
-      IsDownloading = false;
+      await _breadcrumb.ShowMessageAsync("SPK Downloaded", $"Saved SPK to {fileName}");
+    }
+    else
+    {
+      await _breadcrumb.ShowMessageAsync("SPK Download Failed", "Could not download the SPK kernel.");
     }
   }
 

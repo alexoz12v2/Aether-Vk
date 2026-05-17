@@ -92,7 +92,14 @@ public partial class Viewport3DViewModel
     if (root != null && CameraId == 0)
     {
       // Note: check if fov should be in radians or degrees. The native ffi historically expected degrees, or handled the conversion.
-      CameraId = _runtimeService.AddPerspectiveCamera(SceneId, PresentationEngineId, "camera", 45f, 0.1f, 10000.0f);
+      CameraId = _runtimeService.AddPerspectiveCamera(
+        SceneId,
+        PresentationEngineId,
+        "camera",
+        45f,
+        0.1f,
+        10000.0f
+      );
     }
     else if (CameraId == 0)
     {
@@ -358,7 +365,8 @@ public partial class Viewport3DViewModel
 
   private async Task ProcessFrameAsync()
   {
-    if (_isProcessingFrame) return;
+    if (_isProcessingFrame)
+      return;
     _isProcessingFrame = true;
 
     try

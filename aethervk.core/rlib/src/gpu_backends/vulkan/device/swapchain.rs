@@ -96,6 +96,13 @@ pub(super) struct WindowedPresentationState {
   pub archetypes: crate::gpu::vulkan::device::archetypes_struct::Archetypes,
 }
 
+/// Stores the CPU state before a resize operation
+pub struct ResizeStateBackup {
+  pub width: u32,
+  pub height: u32,
+  pub pending_resize: Option<(u32, u32)>,
+}
+
 trait SwapchainCleanable {
   fn cleanup_windowless(&mut self, device: &ash::Device);
   fn cleanup(&mut self, swapchain_device: &ash::khr::swapchain::Device, device: &ash::Device);
@@ -115,6 +122,22 @@ where
 {
   fn cleanup(&mut self, device: &ash::Device) {
     self.wrapped.cleanup(self.swapchain_device, device);
+  }
+}
+
+impl WindowedPresentationState {
+  pub fn backup_resize_state(&self) -> ResizeStateBackup {
+    ResizeStateBackup {
+      width: self.width,
+      height: self.height,
+      pending_resize: self.pending_resize,
+    }
+  }
+
+  pub fn restore_resize_state(&mut self, backup: ResizeStateBackup) {
+    self.width = backup.width;
+    self.height = backup.height;
+    self.pending_resize = backup.pending_resize;
   }
 }
 
@@ -271,6 +294,20 @@ unsafe impl Send for PresentationState {}
 unsafe impl Sync for PresentationState {}
 
 impl PresentationState {
+  pub fn backup_resize_state(&self) -> ResizeStateBackup {
+    match self {
+      Self::Windowed(state) => state.backup_resize_state(),
+      Self::Windowless(state) => state.backup_resize_state(),
+    }
+  }
+
+  pub fn restore_resize_state(&mut self, backup: ResizeStateBackup) {
+    match self {
+      Self::Windowed(state) => state.restore_resize_state(backup),
+      Self::Windowless(state) => state.restore_resize_state(backup),
+    }
+  }
+
   /// TODO: Document this item
   #[named]
   pub fn cancel_image(
@@ -297,10 +334,11 @@ impl PresentationState {
     physical_device: NonZeroHandle<vk::PhysicalDevice>,
     width: u32,
     height: u32,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>
   ) -> GpuResult<()> {
     match self {
-      Self::Windowed(state) => state.resize(device, physical_device, width, height),
-      Self::Windowless(state) => state.resize(instance, device, physical_device, width, height),
+      Self::Windowed(state) => state.resize(device, physical_device, width, height, rollback),
+      Self::Windowless(state) => state.resize(instance, device, physical_device, width, height, rollback),
     }
   }
 
@@ -366,11 +404,11 @@ impl PresentationState {
   pub fn acquire_next_image(
     &mut self,
     device: &LogicalDevice,
-    graphics_queue: vk::Queue,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>
   ) -> GpuResult<AcquireResult> {
     match self {
-      Self::Windowed(state) => state.acquire_next_image(device),
-      Self::Windowless(state) => state.acquire_next_image(device, graphics_queue),
+      Self::Windowed(state) => state.acquire_next_image(device, rollback),
+      Self::Windowless(state) => state.acquire_next_image(device, rollback),
     }
   }
 
@@ -431,6 +469,7 @@ impl PresentationState {
     physical_device: NonZeroHandle<vk::PhysicalDevice>,
     swapchain_maintenance1_device: Option<ash::ext::swapchain_maintenance1::Device>,
     params: &PresentationEngineParams,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<Self> {
     match params.ty {
       crate::gpu::PresentationEngineType::Window => {
@@ -441,6 +480,7 @@ impl PresentationState {
           physical_device,
           swapchain_maintenance1_device,
           params,
+          rollback,
         )?))
       }
       crate::gpu::PresentationEngineType::WindowLess => {
@@ -451,6 +491,7 @@ impl PresentationState {
           params.width,
           params.height,
           params.buffer_count,
+          rollback,
         )?))
       }
     }
@@ -555,6 +596,7 @@ impl WindowedPresentationState {
     _physical_device: NonZeroHandle<vk::PhysicalDevice>,
     width: u32,
     height: u32,
+    _rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>
   ) -> GpuResult<()> {
     if self.width != width || self.height != height {
       self.pending_resize = Some((width, height));
@@ -581,6 +623,7 @@ impl WindowedPresentationState {
     physical_device: NonZeroHandle<vk::PhysicalDevice>,
     swapchain_maintenance1_device: Option<ash::ext::swapchain_maintenance1::Device>,
     params: &PresentationEngineParams,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<Self> {
     let surface_instance = ash::khr::surface::Instance::new(entry, instance);
     let native_handle = params.window_info;
@@ -613,7 +656,7 @@ impl WindowedPresentationState {
       archetypes: crate::gpu::vulkan::device::archetypes_struct::Archetypes::default(),
     };
 
-    this.recreate_swapchain(device, false, physical_device)?;
+    this.recreate_swapchain(device, false, physical_device, rollback)?;
 
     Ok(this)
   }
@@ -625,18 +668,28 @@ impl WindowedPresentationState {
     device: &ash::Device,
     use_old_swapchain: bool,
     physical_device: NonZeroHandle<vk::PhysicalDevice>,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
     debug_assert!(
       self.frame_discards.len() == self.frames.len()
         && self.frame_discards.len() >= self.images.len()
     );
 
-    let (mut swapchain, extent, transform, surface_format, _) =
+    let (mut new_swapchain, extent, transform, surface_format, _) =
       self.create_swapchain_internal(physical_device, use_old_swapchain)?;
-    let mut swapchain_images =
-      self.recreate_swapchain_images(device, swapchain, surface_format.format)?;
 
-    mem::swap(&mut swapchain, &mut self.swapchain);
+    // 🛡️ RAII Protection: If anything below fails, destroy the NEW swapchain!
+    let sc_device = self.swapchain_device.clone();
+    let sc_handle = new_swapchain.get();
+    rollback.defer(move |_| unsafe { sc_device.destroy_swapchain(sc_handle, None) });
+
+    let swapchain_images =
+      self.recreate_swapchain_images(device, new_swapchain, surface_format.format, rollback)?;
+
+    let (frame_semaphores, mut frame_fences) =
+      self.recreate_swapchain_frame_resources(device, swapchain_images.len(), rollback)?;
+
+    mem::swap(&mut new_swapchain, &mut self.swapchain);
 
     if self.frames.len() > self.current_frame {
       let prev_frame = (self.current_frame + self.frames.len() - 1) % self.frames.len();
@@ -663,13 +716,10 @@ impl WindowedPresentationState {
         self.images.clear();
       }
 
-      if swapchain.get() != self.swapchain.get() {
-        unsafe { frame_discard.discard_decommissioned_swapchain(swapchain) };
+      if new_swapchain.get() != self.swapchain.get() {
+        unsafe { frame_discard.discard_decommissioned_swapchain(new_swapchain) };
       }
     }
-
-    let (frame_semaphores, mut frame_fences) =
-      self.recreate_swapchain_frame_resources(device, swapchain_images.len())?;
 
     self.next_image = 0;
     self.current_frame = 0;
@@ -761,6 +811,7 @@ impl WindowedPresentationState {
     device: &ash::Device,
     swapchain: NonZeroHandle<vk::SwapchainKHR>,
     format: vk::Format,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<heapless::Vec<SwapchainImage, MAX_FRAMES>> {
     let mut images = heapless::Vec::<vk::Image, MAX_FRAMES>::new();
     let mut count: u32 = unsafe {
@@ -810,13 +861,19 @@ impl WindowedPresentationState {
       let info = img_view_create_info.image(images[i as usize]);
       unsafe {
         let image_view = NonZeroHandle::new_unchecked(device.create_image_view(&info, None)?);
+        let image_view_h = image_view.get();
+        rollback.defer(move |dev| unsafe { dev.destroy_image_view(image_view_h, None) });
+
         let present_semaphore =
           NonZeroHandle::new_unchecked(device.create_semaphore(&sem_create_info, None)?);
+        let present_sem_h = present_semaphore.get();
+        rollback.defer(move |dev| unsafe { dev.destroy_semaphore(present_sem_h, None) });
 
         let present_fence = if self.swapchain_maintenance1_device.is_some() {
-          Some(NonZeroHandle::new_unchecked(
-            device.create_fence(&pf_create_info, None)?,
-          ))
+          let pfence = NonZeroHandle::new_unchecked(device.create_fence(&pf_create_info, None)?);
+          let pfence_h = pfence.get();
+          rollback.defer(move |dev| unsafe { dev.destroy_fence(pfence_h, None) });
+          Some(pfence)
         } else {
           None
         };
@@ -862,6 +919,7 @@ impl WindowedPresentationState {
     &self,
     device: &ash::Device,
     count: usize,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<(
     heapless::Vec<NonZeroHandle<vk::Semaphore>, MAX_FRAMES>,
     heapless::Vec<vk::Fence, MAX_FRAMES>,
@@ -872,19 +930,25 @@ impl WindowedPresentationState {
     let fence_create_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
     for i in 0..count {
       unsafe {
-        fences.push_unchecked(if i < self.frames.len() {
+        let f = if i < self.frames.len() {
           let frame = self.frames.get_unchecked(i);
           if frame.submission_fence.is_none() {
-            device.create_fence(&fence_create_info, None)?
+            let nf = device.create_fence(&fence_create_info, None)?;
+            rollback.defer(move |dev| unsafe { dev.destroy_fence(nf, None) });
+            nf
           } else {
             vk::Fence::null()
           }
         } else {
-          device.create_fence(&fence_create_info, None)?
-        });
-        semaphores.push_unchecked(NonZeroHandle::new_unchecked(
-          device.create_semaphore(&sem_create_info, None)?,
-        ));
+          let nf = device.create_fence(&fence_create_info, None)?;
+          rollback.defer(move |dev| unsafe { dev.destroy_fence(nf, None) });
+          nf
+        };
+        fences.push_unchecked(f);
+
+        let sem = device.create_semaphore(&sem_create_info, None)?;
+        rollback.defer(move |dev| unsafe { dev.destroy_semaphore(sem, None) });
+        semaphores.push_unchecked(NonZeroHandle::new_unchecked(sem));
       }
     }
 
@@ -1149,11 +1213,11 @@ impl WindowedPresentationState {
 
   /// TODO: Document this item
   #[named]
-  pub fn acquire_next_image(&mut self, device: &LogicalDevice) -> GpuResult<AcquireResult> {
+  pub fn acquire_next_image(&mut self, device: &LogicalDevice, rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>) -> GpuResult<AcquireResult> {
     if let Some((w, h)) = self.pending_resize.take() {
       self.width = w;
       self.height = h;
-      self.recreate_swapchain(device, true, self.physical_device)?;
+      self.recreate_swapchain(&device.handle, true, self.physical_device, rollback)?;
     }
 
     const FIRST_ATTEMPT_TIMEOUT_NS: u64 = 167;
@@ -1512,6 +1576,20 @@ impl DeviceResource for WindowlessPresentationState {
 }
 
 impl WindowlessPresentationState {
+  pub fn backup_resize_state(&self) -> ResizeStateBackup {
+    ResizeStateBackup {
+      width: self.width,
+      height: self.height,
+      pending_resize: self.pending_resize,
+    }
+  }
+
+  pub fn restore_resize_state(&mut self, backup: ResizeStateBackup) {
+    self.width = backup.width;
+    self.height = backup.height;
+    self.pending_resize = backup.pending_resize;
+  }
+
   /// TODO: Document this item
   pub fn new(
     instance: &ash::Instance,
@@ -1520,6 +1598,7 @@ impl WindowlessPresentationState {
     width: u32,
     height: u32,
     buffer_count: u32,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>
   ) -> GpuResult<Self> {
     let mut this = Self {
       images: heapless::Vec::new(),
@@ -1541,7 +1620,7 @@ impl WindowlessPresentationState {
       buffer_count,
       archetypes: crate::gpu::vulkan::device::archetypes_struct::Archetypes::default(),
     };
-    this.recreate(device, width, height)?;
+    this.recreate(device, width, height, rollback)?;
     Ok(this)
   }
 
@@ -1582,6 +1661,7 @@ impl WindowlessPresentationState {
     _physical_device: NonZeroHandle<vk::PhysicalDevice>,
     width: u32,
     height: u32,
+    _rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>
   ) -> GpuResult<()> {
     if self.width != width || self.height != height {
       self.pending_resize = Some((width, height));
@@ -1621,12 +1701,12 @@ impl WindowlessPresentationState {
   pub fn acquire_next_image(
     &mut self,
     device: &LogicalDevice,
-    graphics_queue: vk::Queue,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>
   ) -> GpuResult<AcquireResult> {
     if let Some((w, h)) = self.pending_resize.take() {
       self.width = w;
       self.height = h;
-      self.recreate(device, w, h)?;
+      self.recreate(&device.handle, w, h, rollback)?;
     }
 
     let images_count = self.images.len();
@@ -1744,7 +1824,7 @@ impl WindowlessPresentationState {
   }
 
   #[named]
-  fn recreate(&mut self, device: &ash::Device, width: u32, height: u32) -> GpuResult<()> {
+  fn recreate(&mut self, device: &ash::Device, width: u32, height: u32, rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>) -> GpuResult<()> {
     self.width = width;
     self.height = height;
 

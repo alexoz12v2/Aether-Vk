@@ -28,7 +28,11 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   [ObservableProperty]
   private double _maxTai = 100;
 
-  public TimelineViewModel(ulong sceneId, NativeRuntimeService runtimeService, IUiThreadDispatcher uiThreadDispatcher)
+  public TimelineViewModel(
+    ulong sceneId,
+    NativeRuntimeService runtimeService,
+    IUiThreadDispatcher uiThreadDispatcher
+  )
     : base("Timeline")
   {
     _runtimeService = runtimeService;

@@ -73,6 +73,11 @@ mod tests {
       device_create_info = device_create_info.push_next(&mut swapchain_maintenance1_features);
     }
 
+    #[cfg(any(debug_assertions, test))]
+    let device = unsafe {
+      crate::gpu_backends::vulkan::device::hooks::load_device_with_hooks(&instance.instance, phys_device.physical_device, &device_create_info).unwrap()
+    };
+    #[cfg(not(any(debug_assertions, test)))]
     let device = unsafe {
       instance
         .instance

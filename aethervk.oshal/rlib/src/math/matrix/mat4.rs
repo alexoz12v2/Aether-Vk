@@ -8,13 +8,14 @@ use core::arch::aarch64::*;
 
 use core::ops;
 
-use crate::math::vector::vec3::Vec3f32;
-use crate::math::{
-  FloatLike,
-  matrix::{Matrix, Matrix4, MatrixVectorMul, SquareMatrix},
-  vector::{Vector, Vector4, vec4::Vec4f32},
+use crate::{
+  math::{
+    FloatLike,
+    matrix::{Matrix, Matrix4, MatrixVectorMul, SquareMatrix},
+    vector::{Vector, Vector4, vec3::Vec3f32, vec4::Vec4f32},
+  },
+  os::debug,
 };
-use crate::os::debug;
 
 /// Column-Major, f32 storage for 4x4 matrices
 #[derive(Copy, Clone, PartialEq, Debug, Default)]

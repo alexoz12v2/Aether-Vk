@@ -145,12 +145,15 @@ namespace AetherVk.Logic.Tests
         _service.InitializeSimulationContext("Vulkan", _assetPath, false);
         ulong sceneId = _service.CreateScene(true);
         ulong peId = _service.CreatePresentationEngine(256, 256, sceneId);
-        
+
         // The default scene contains a camera, grid, sun, sky, etc.
         // We need to pass a valid camera ID. Let's find the default camera.
         var state = _stateManager.GetOrCreateScene(sceneId);
         var camera = state.EntityMap.Values.FirstOrDefault(e => e.Name == "camera");
-        ulong camId = camera != null ? camera.Id : _service.AddPerspectiveCamera(sceneId, peId, "testcam", 45f, 0.1f, 1000f);
+        ulong camId =
+          camera != null
+            ? camera.Id
+            : _service.AddPerspectiveCamera(sceneId, peId, "testcam", 45f, 0.1f, 1000f);
 
         var result = await _service.RaycastNdcAsync(sceneId, camId, 0.5f, 0.5f);
 
@@ -176,6 +179,7 @@ namespace AetherVk.Logic.Tests
       }
       catch (System.DllNotFoundException) { }
     }
+
     [Fact]
     public void CameraAndCursorManipulations_ShouldExecuteWithoutCrashing()
     {
@@ -228,7 +232,15 @@ namespace AetherVk.Logic.Tests
         ulong sceneId = _service.CreateScene(true);
         ulong peId = _service.CreatePresentationEngine(256, 256, sceneId);
 
-        ulong camId = _service.AddOrthographicCamera(sceneId, peId, "orthoCam", -10f, -10f, 0.1f, 1000f);
+        ulong camId = _service.AddOrthographicCamera(
+          sceneId,
+          peId,
+          "orthoCam",
+          -10f,
+          -10f,
+          0.1f,
+          1000f
+        );
         Assert.NotEqual(0ul, camId);
 
         var entity = _service.GetEntityByName(sceneId, "orthoCam");
@@ -268,6 +280,7 @@ namespace AetherVk.Logic.Tests
       }
       catch (System.DllNotFoundException) { }
     }
+
     [Fact]
     public void TwoWayBinding_NativeComponent_ShouldSyncChanges()
     {
@@ -281,25 +294,42 @@ namespace AetherVk.Logic.Tests
         var cameraEntity = _service.GetEntityById(sceneId, camId);
         Assert.NotNull(cameraEntity);
 
-        var camComp = cameraEntity.Components.OfType<AetherVk.Logic.Models.CameraComponent>().FirstOrDefault();
+        var camComp = cameraEntity
+          .Components.OfType<AetherVk.Logic.Models.CameraComponent>()
+          .FirstOrDefault();
         Assert.NotNull(camComp);
 
         // 1. Mutate C# property (should trigger PushToNativeImpl via PropertyChanged)
         camComp.Fov = 90f;
 
         // Directly mutate native to test Pull
-        var ctx = typeof(AetherVk.Logic.Services.NativeRuntimeService).GetField("_simulationContext", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(_service) as IntPtr? ?? IntPtr.Zero;
-        
+        var ctx =
+          typeof(AetherVk.Logic.Services.NativeRuntimeService)
+            .GetField(
+              "_simulationContext",
+              System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
+            )
+            .GetValue(_service) as IntPtr?
+          ?? IntPtr.Zero;
+
         var camData = new AetherVk.Logic.Services.NativeInterop.FfiCamera
         {
-            IsOrthographic = false,
-            Fov = 120f,
-            Aspect = 1.77f,
-            Near = 0.1f,
-            Far = 1000f,
-            OrthoLeft = -10f, OrthoRight = 10f, OrthoBottom = -10f, OrthoTop = 10f
+          IsOrthographic = false,
+          Fov = 120f,
+          Aspect = 1.77f,
+          Near = 0.1f,
+          Far = 1000f,
+          OrthoLeft = -10f,
+          OrthoRight = 10f,
+          OrthoBottom = -10f,
+          OrthoTop = 10f,
         };
-        AetherVk.Logic.Services.NativeInterop.avkSimulationContext_setCameraComponent(ctx, sceneId, camId, in camData);
+        AetherVk.Logic.Services.NativeInterop.avkSimulationContext_setCameraComponent(
+          ctx,
+          sceneId,
+          camId,
+          in camData
+        );
 
         // 2. Pull from native
         camComp.PullFromNative();
@@ -307,7 +337,9 @@ namespace AetherVk.Logic.Tests
         // 3. Assert value is restored from native
         Assert.Equal(120f, camComp.Fov, 3);
 
-        var transformComp = cameraEntity.Components.OfType<AetherVk.Logic.Models.TransformComponent>().FirstOrDefault();
+        var transformComp = cameraEntity
+          .Components.OfType<AetherVk.Logic.Models.TransformComponent>()
+          .FirstOrDefault();
         Assert.NotNull(transformComp);
 
         // 1. Mutate Transform properties via C#
@@ -316,18 +348,19 @@ namespace AetherVk.Logic.Tests
         transformComp.PosZ = 300f;
 
         // Verify native was updated automatically
-        var nativeHasTransform = AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getTransformComponent(
+        var nativeHasTransform =
+          AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getTransformComponent(
             ctx,
             sceneId,
             camId,
             out var ffiTransform
-        );
+          );
 
         Assert.True(nativeHasTransform);
         Assert.Equal(100f, ffiTransform.Px);
         Assert.Equal(200f, ffiTransform.Py);
         Assert.Equal(300f, ffiTransform.Pz);
-        
+
         // 2. Reset locally and Pull from native to verify it reads back correctly
         transformComp.SuspendNotifications = true;
         transformComp.PosX = 0f;

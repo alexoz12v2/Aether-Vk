@@ -13,8 +13,7 @@ use core::ops;
 
 use crate::math::{
   FloatLike,
-  matrix::Matrix,
-  matrix::mat4::Mat4x4f32,
+  matrix::{Matrix, mat4::Mat4x4f32},
   quaternion::Quaternion,
   vector::{Vector, Vector3, Vector4, vec3::Vec3f32},
 };

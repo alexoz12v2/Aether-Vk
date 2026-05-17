@@ -1,12 +1,11 @@
 //! descriptors module.
 
 use crate::{
-  gpu_backends::vulkan::{
+  gpu::vulkan::device::DebugTrackedRwLock, gpu_backends::vulkan::{
     self,
     device::{DeviceResource, resources},
     utils::NonZeroHandle,
-  },
-  types::{GpuError, GpuResult},
+  }, types::{GpuError, GpuResult}
 };
 use alloc::{sync, vec::Vec};
 use ash::vk::{
@@ -61,7 +60,7 @@ struct DescriptorPoolsInner {
 #[derive(Debug)]
 /// TODO: Document this item
 pub(super) struct DescriptorPools {
-  inner: crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex<DescriptorPoolsInner>,
+  pub inner: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<DescriptorPoolsInner>,
 }
 
 unsafe impl Sync for DescriptorPools {}
@@ -82,8 +81,33 @@ impl DescriptorPools {
     inner.ensure_active_pool(device.handle(), device.fp_v1_0().create_descriptor_pool)?;
 
     Ok(sync::Arc::new(Self {
-      inner: crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::new(inner),
+      inner: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(inner),
     }))
+  }
+
+  pub(super) fn allocate_and_get_active_pool(
+    self: &sync::Arc<Self>,
+    device: &vulkan::device::LogicalDevice,
+    layout: vk::DescriptorSetLayout,
+    discard_pool: &resources::DiscardPool,
+    timeline_value: u64,
+    debug_name: &str,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
+  ) -> GpuResult<(vk::DescriptorPool, vk::DescriptorSet)> {
+    self
+      .allocate(
+        device,
+        layout,
+        discard_pool,
+        timeline_value,
+        debug_name,
+        rollback,
+      )
+      .map(|set| {
+        let inner = DebugTrackedRwLock::read(&self.inner);
+        let pool = inner.active_pool;
+        (pool, set.get())
+      })
   }
 
   /// TODO: Document this item
@@ -95,18 +119,22 @@ impl DescriptorPools {
     discard_pool: &resources::DiscardPool,
     timeline_value: u64,
     debug_name: &str,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<NonZeroHandle<vk::DescriptorSet>> {
-    let mut inner =
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&self.inner);
+    use crate::gpu_backends::vulkan::utils::RwLockable;
     loop {
-      let pool = inner.active_pool;
-      if pool == vk::DescriptorPool::null() {
-        return Err(crate::gpu_err_device!());
-      }
+      let active_pool = {
+        let inner = self.inner.read();
+        let pool = inner.active_pool;
+        if pool == vk::DescriptorPool::null() {
+          return Err(crate::gpu_err_device!());
+        }
+        pool
+      };
 
       let layouts = [layout];
       let alloc_info =
-        vk::DescriptorSetAllocateInfo::default().descriptor_pool(pool).set_layouts(&layouts);
+        vk::DescriptorSetAllocateInfo::default().descriptor_pool(active_pool).set_layouts(&layouts);
 
       let mut descriptor_set = vk::DescriptorSet::null();
       let res = unsafe {
@@ -117,22 +145,58 @@ impl DescriptorPools {
         )
       };
 
-      // TODO debug names to pools too
-      match res {
-        vk::Result::SUCCESS => {
-          device.set_debug_name(
-            descriptor_set,
-            &alloc::format!("VkDescriptorSet_{}", debug_name),
-          );
-          return Ok(unsafe { NonZeroHandle::new_unchecked(descriptor_set) });
-        }
-        vk::Result::ERROR_OUT_OF_POOL_MEMORY | vk::Result::ERROR_FRAGMENTED_POOL => {
+      if res == vk::Result::ERROR_OUT_OF_POOL_MEMORY || res == vk::Result::ERROR_FRAGMENTED_POOL {
+        // Allocate a new pool lock-free!
+        let pool_sizes = POOL_SIZES;
+        let create_info = vk::DescriptorPoolCreateInfo::default()
+          .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND
+            // less performance, but I can't find another way to support rollback
+            | vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
+          .max_sets(MAX_DESCRIPTOR_SETS)
+          .pool_sizes(&pool_sizes);
+
+        let mut new_pool = vk::DescriptorPool::null();
+        let create_res = unsafe {
+          (device.fp_v1_0().create_descriptor_pool)(
+            device.handle(),
+            ptr::from_ref(&create_info),
+            ptr::null(),
+            ptr::from_mut(&mut new_pool),
+          )
+        };
+
+        if create_res == vk::Result::SUCCESS {
+          let mut inner = self.inner.write();
+          // Defer destruction in case commit fails (though here we commit immediately)
+          let old_pool = inner.active_pool;
+          let inner_ptr = (&mut *inner) as *mut DescriptorPoolsInner;
+          rollback.defer(move |dev| unsafe {
+            dev.destroy_descriptor_pool(new_pool, None);
+            inner_ptr.as_mut_unchecked().active_pool = old_pool;
+          });
+
           self.discard_active_pool(&mut inner, discard_pool, timeline_value);
-          inner.ensure_active_pool(device.handle(), device.fp_v1_0().create_descriptor_pool)?;
-          // Loop continues and tries again with new pool
+          inner.active_pool = new_pool;
+          continue; // Need to retry allocation with new pool
+        } else {
+          return Err(crate::gpu_err_device!());
         }
-        e => return Err(e.into()),
       }
+
+      if res == vk::Result::SUCCESS {
+        let pool = self.inner.read().active_pool;
+        device.set_debug_name(
+          descriptor_set,
+          &alloc::format!("VkDescriptorSet_{}", debug_name),
+        );
+        rollback.defer(move |dev| unsafe {
+          let _ = dev.free_descriptor_sets(pool, &[descriptor_set]);
+        });
+
+        return Ok(unsafe { NonZeroHandle::new_unchecked(descriptor_set) });
+      }
+
+      return Err(res.into());
     }
   }
 
@@ -152,7 +216,7 @@ impl DescriptorPools {
     .is_ok()
     {
       let mut inner =
-        crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&self.inner);
+        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.inner);
       inner.recycled_pools.push(pool);
     }
   }
@@ -219,7 +283,7 @@ impl DescriptorPoolsInner {
 impl DeviceResource for DescriptorPools {
   fn cleanup(&mut self, device: &ash::Device) {
     let mut inner =
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&self.inner);
+      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.inner);
     if !inner.active_pool.is_null() {
       unsafe { device.destroy_descriptor_pool(inner.active_pool, None) };
     }

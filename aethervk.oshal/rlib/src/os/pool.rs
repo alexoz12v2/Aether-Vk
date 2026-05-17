@@ -32,18 +32,19 @@ pub trait Workload: Send {
 #[cfg(target_os = "windows")]
 mod windows_pool {
   use crate::os::NativeError;
-  use alloc::boxed::Box;
-  use alloc::collections::VecDeque;
-  use alloc::sync::Arc;
-  use alloc::vec::Vec;
-  use core::ffi::c_void;
-  use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+  use alloc::{boxed::Box, collections::VecDeque, sync::Arc, vec::Vec};
+  use core::{
+    ffi::c_void,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+  };
   use spin::Mutex;
 
   use super::*;
-  use windows::Win32::Foundation::{CloseHandle, HANDLE};
-  use windows::Win32::System::Threading::{
-    CreateThread, INFINITE, SwitchToThread, THREAD_CREATION_FLAGS, WaitForSingleObject,
+  use windows::Win32::{
+    Foundation::{CloseHandle, HANDLE},
+    System::Threading::{
+      CreateThread, INFINITE, SwitchToThread, THREAD_CREATION_FLAGS, WaitForSingleObject,
+    },
   };
 
   struct ThreadPoolState {
@@ -239,13 +240,12 @@ mod windows_pool {
 #[cfg(unix)]
 mod pthread_pool {
   use super::*;
-  use alloc::boxed::Box;
-  use alloc::collections::VecDeque;
-  use alloc::sync::Arc;
-  use alloc::vec::Vec;
-  use core::ffi::c_void;
-  use core::ptr;
-  use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+  use alloc::{boxed::Box, collections::VecDeque, sync::Arc, vec::Vec};
+  use core::{
+    ffi::c_void,
+    ptr,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+  };
   use libc::{pthread_create, pthread_join, pthread_t};
   use spin::Mutex;
 
@@ -429,12 +429,12 @@ pub use windows_pool::ThreadPool;
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::os::pool::chunked::ThreadPoolChunkedExt;
-  use crate::os::pool::persistent::{PersistentStatus, ThreadPoolPersistentExt};
-  use crate::os::pool::tasklet::ThreadPoolExt;
-  use alloc::boxed::Box;
-  use alloc::sync::Arc;
-  use alloc::vec::Vec;
+  use crate::os::pool::{
+    chunked::ThreadPoolChunkedExt,
+    persistent::{PersistentStatus, ThreadPoolPersistentExt},
+    tasklet::ThreadPoolExt,
+  };
+  use alloc::{boxed::Box, sync::Arc, vec::Vec};
   use core::sync::atomic::{AtomicUsize, Ordering};
 
   struct TestWorkload {

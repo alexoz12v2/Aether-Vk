@@ -12,9 +12,11 @@ namespace AetherVk.Logic.Services;
 
 public partial class NativeRuntimeService : ObservableObject, IDisposable
 {
-  [ObservableProperty] private bool _isInitialized;
+  [ObservableProperty]
+  private bool _isInitialized;
 
-  [ObservableProperty] private bool _isRunning;
+  [ObservableProperty]
+  private bool _isRunning;
 
   private IntPtr _simulationContext = IntPtr.Zero;
   private readonly object _nativeLock = new object();
@@ -28,8 +30,6 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
   // Keep a weak reference to the instance so we don't artificially keep it alive
   private static WeakReference<NativeRuntimeService>? s_currentInstance;
-  private bool _isDisposing;
-  private int _activeDownloads;
 
   // Keep static references to the delegates so they act as GC roots and are NEVER Garbage Collected
   private static readonly NativeInterop.LoggerCallback s_loggerCallbackDelegate =
@@ -67,7 +67,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       foreach (var scene in _sceneStateManager.AllScenes.ToList())
       {
         WeakReferenceMessenger.Default.Send(
-          new AetherVk.Logic.Messages.SimulationStateUpdatedMessage(scene.SceneId));
+          new AetherVk.Logic.Messages.SimulationStateUpdatedMessage(scene.SceneId)
+        );
       }
 
       _sceneStateManager.Clear();
@@ -287,8 +288,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         _uiThreadDispatcher.Dispatch(() =>
         {
           // Re-use SyncEntities on the changed entities
-          SyncEntities(
-            sceneId); // Optimally, this should only sync `ids`, but syncing all is fine for now
+          SyncEntities(sceneId); // Optimally, this should only sync `ids`, but syncing all is fine for now
 
           WeakReferenceMessenger.Default.Send(
             new AetherVk.Logic.Messages.SimulationStateUpdatedMessage(sceneId)
@@ -514,11 +514,18 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     );
   }
 
-  public ulong AddPerspectiveCamera(ulong sceneId, ulong presentationEngineId, string name, float fov, float near, float far)
+  public ulong AddPerspectiveCamera(
+    ulong sceneId,
+    ulong presentationEngineId,
+    string name,
+    float fov,
+    float near,
+    float far
+  )
   {
     if (_simulationContext == IntPtr.Zero)
       return 0;
-    
+
     // Create camera natively. FFI handles adding it to presentation engine
     ulong id = NativeInterop.avkSimulationContext_addPerspectiveCamera(
       _simulationContext,
@@ -536,7 +543,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       var state = _sceneStateManager.GetOrCreateScene(sceneId);
       state.EntityMap[id] = entity;
       WireEntityComponents(sceneId, entity);
-      
+
       var root = GetEntityByName(sceneId, "root");
       if (root != null)
       {
@@ -554,11 +561,19 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return id;
   }
 
-  public ulong AddOrthographicCamera(ulong sceneId, ulong presentationEngineId, string name, float left, float bottom, float near, float far)
+  public ulong AddOrthographicCamera(
+    ulong sceneId,
+    ulong presentationEngineId,
+    string name,
+    float left,
+    float bottom,
+    float near,
+    float far
+  )
   {
     if (_simulationContext == IntPtr.Zero)
       return 0;
-    
+
     ulong id = NativeInterop.avkSimulationContext_addOrthographicCamera(
       _simulationContext,
       sceneId,
@@ -602,7 +617,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       {
         NativeInterop.avkSimulationContext_destroyScene(_simulationContext, sceneId);
       }
-      
+
       _sceneStateManager.RemoveScene(sceneId);
     }
   }
@@ -616,7 +631,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         sceneId,
         handle
       );
-      
+
       if (cameraId != 0)
       {
         RemoveEntityLocal(sceneId, cameraId);
@@ -710,41 +725,41 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         }
       }
 
-      // Propagate NativeComponent sync manually here only as a fallback, 
+      // Propagate NativeComponent sync manually here only as a fallback,
       // but ideally NativeSimulationCallback delta-syncs it.
       // E.g., at initial load.
       foreach (var comp in entity.Components.OfType<NativeComponent>())
       {
-          comp.PullFromNative();
+        comp.PullFromNative();
       }
 
       // Sync non-NativeComponent types that depend on Transform locally for now (e.g. Sun, Planet, Comet)
       var transform = entity.Components.OfType<TransformComponent>().FirstOrDefault();
       if (transform != null)
       {
-          var sun = entity.Components.OfType<SunComponent>().FirstOrDefault();
-          if (sun != null)
-          {
-            sun.PositionX = transform.PosX;
-            sun.PositionY = transform.PosY;
-            sun.PositionZ = transform.PosZ;
-          }
+        var sun = entity.Components.OfType<SunComponent>().FirstOrDefault();
+        if (sun != null)
+        {
+          sun.PositionX = transform.PosX;
+          sun.PositionY = transform.PosY;
+          sun.PositionZ = transform.PosZ;
+        }
 
-          var planet = entity.Components.OfType<PlanetComponent>().FirstOrDefault();
-          if (planet != null)
-          {
-            planet.PositionX = transform.PosX;
-            planet.PositionY = transform.PosY;
-            planet.PositionZ = transform.PosZ;
-          }
+        var planet = entity.Components.OfType<PlanetComponent>().FirstOrDefault();
+        if (planet != null)
+        {
+          planet.PositionX = transform.PosX;
+          planet.PositionY = transform.PosY;
+          planet.PositionZ = transform.PosZ;
+        }
 
-          var comet = entity.Components.OfType<CometComponent>().FirstOrDefault();
-          if (comet != null)
-          {
-            comet.PositionX = transform.PosX;
-            comet.PositionY = transform.PosY;
-            comet.PositionZ = transform.PosZ;
-          }
+        var comet = entity.Components.OfType<CometComponent>().FirstOrDefault();
+        if (comet != null)
+        {
+          comet.PositionX = transform.PosX;
+          comet.PositionY = transform.PosY;
+          comet.PositionZ = transform.PosZ;
+        }
       }
     }
 
@@ -1300,37 +1315,43 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
   private void WireEntityComponents(ulong sceneId, Entity entity)
   {
-      entity.Components.CollectionChanged += (sender, args) =>
+    entity.Components.CollectionChanged += (sender, args) =>
+    {
+      if (args.NewItems == null)
+        return;
+      foreach (var item in args.NewItems)
       {
-          if (args.NewItems == null) return;
-          foreach (var item in args.NewItems)
+        // Polymorphic Auto-Wiring!
+        if (item is NativeComponent nativeComp)
+        {
+          nativeComp.BindToNative(_simulationContext, sceneId, entity.Id);
+
+          // Fetch initial state immediately upon UI creation
+          if (_simulationContext != IntPtr.Zero)
+            nativeComp.PullFromNative();
+        }
+
+        // Retain custom nested sub-collection bindings like Jets if needed
+        if (item is CometComponent comet)
+        {
+          comet.Jets.CollectionChanged += (s, e) =>
           {
-              // Polymorphic Auto-Wiring!
-              if (item is NativeComponent nativeComp)
+            if (_simulationContext != IntPtr.Zero)
+              SyncMarkers(sceneId, entity.Id, comet);
+            if (e.NewItems != null)
+            {
+              foreach (JetMarker jet in e.NewItems)
               {
-                  nativeComp.BindToNative(_simulationContext, sceneId, entity.Id);
-                  
-                  // Fetch initial state immediately upon UI creation
-                  if (_simulationContext != IntPtr.Zero)
-                      nativeComp.PullFromNative();
+                jet.PropertyChanged += (js, je) =>
+                {
+                  SyncMarkers(sceneId, entity.Id, comet);
+                };
               }
-              
-              // Retain custom nested sub-collection bindings like Jets if needed
-              if (item is CometComponent comet)
-              {
-                  comet.Jets.CollectionChanged += (s, e) => {
-                      if (_simulationContext != IntPtr.Zero) SyncMarkers(sceneId, entity.Id, comet);
-                      if (e.NewItems != null)
-                      {
-                        foreach (JetMarker jet in e.NewItems)
-                        {
-                          jet.PropertyChanged += (js, je) => { SyncMarkers(sceneId, entity.Id, comet); };
-                        }
-                      }
-                  };
-              }
-          }
-      };
+            }
+          };
+        }
+      }
+    };
   }
 
   public void RefreshBvhNodes(ulong sceneId, ulong entityId, CometComponent comet)

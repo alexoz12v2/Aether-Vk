@@ -1762,6 +1762,7 @@ pub trait Kernels: Send + Sync {
   fn step_ode_p3_p4(
     &self,
     cmd: &mut Self::Cmd,
+    kinematics: &Self::Buffer<KinematicBody>,
     rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
     emitters: &Self::Buffer<ForceEmitter>,
     dt: timeus_t,

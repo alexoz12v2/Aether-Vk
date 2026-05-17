@@ -35,6 +35,7 @@ ntest = "*"
 approx = "*"
 
 [dependencies]
+dashmap = { version = "3.11.10", default-features = false, features = ["no_std"] }
 paste = "1.0"
 ab_glyph = { version = "0.2.32", default-features = false, features = ["libm", "variable-fonts", "gvar-alloc"] }
 aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = ["console_log"] }
