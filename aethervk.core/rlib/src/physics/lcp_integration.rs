@@ -1,8 +1,8 @@
-use aethervk_oshal_rlib::math::vector::Vector3;
-use crate::gpu::{CollisionPair, RigidBodyGpu};
-use crate::math::collision::lcp::solve_lcp_pgs;
-use aethervk_oshal_rlib::math::vector::Vector;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+use crate::{
+  gpu::{CollisionPair, RigidBodyGpu},
+  math::collision::lcp::solve_lcp_pgs,
+};
+use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
 
 pub fn resolve_cluster_lcp(
   cluster: &[CollisionPair],
@@ -65,7 +65,11 @@ pub fn resolve_cluster_lcp(
     }
 
     // Compute b_i
-    let v_rel = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rigid_bodies[idx_a_i].linear_velocity) - aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rigid_bodies[idx_b_i].linear_velocity);
+    let v_rel = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(
+      rigid_bodies[idx_a_i].linear_velocity,
+    ) - aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(
+      rigid_bodies[idx_b_i].linear_velocity,
+    );
     let v_rel_n = v_rel.dot(n_i);
 
     let beta = 0.2;
@@ -104,9 +108,13 @@ pub fn resolve_cluster_lcp(
       0.0
     };
 
-    let new_v_a = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rigid_bodies[idx_a_i].linear_velocity) + impulse_vec * inv_m_a_i;
+    let new_v_a = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(
+      rigid_bodies[idx_a_i].linear_velocity,
+    ) + impulse_vec * inv_m_a_i;
     rigid_bodies[idx_a_i].linear_velocity = [new_v_a.x(), new_v_a.y(), new_v_a.z()];
-    let new_v_b = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rigid_bodies[idx_b_i].linear_velocity) - impulse_vec * inv_m_b_i;
+    let new_v_b = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(
+      rigid_bodies[idx_b_i].linear_velocity,
+    ) - impulse_vec * inv_m_b_i;
     rigid_bodies[idx_b_i].linear_velocity = [new_v_b.x(), new_v_b.y(), new_v_b.z()];
   }
 }

@@ -5,15 +5,16 @@ use crate::{
   types::{EngineError, EngineResult},
 };
 use aethervk_oshal_rlib::{
-  math::matrix::mat3::Mat3f32,
-  math::matrix::{Matrix, Matrix3},
-  math::quaternion::Quaternion,
-  math::vector::Vector3,
-  math::vector::vec3::Vec3f32,
-  math::vector::vec4::Quat,
+  math::{
+    matrix::{Matrix, Matrix3, mat3::Mat3f32},
+    quaternion::Quaternion,
+    vector::{Vector3, vec3::Vec3f32, vec4::Quat},
+  },
   os,
-  os::files::Mmap,
-  os::fs::{ExtensionToStr, FileSystemObject},
+  os::{
+    files::Mmap,
+    fs::{ExtensionToStr, FileSystemObject},
+  },
 };
 use alloc::{string::String, vec::Vec};
 

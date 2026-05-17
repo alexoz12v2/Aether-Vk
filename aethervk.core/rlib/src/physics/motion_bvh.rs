@@ -1,5 +1,4 @@
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
+use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
 use alloc::vec::Vec;
 
 #[derive(Clone, Copy, Debug)]
@@ -80,7 +79,10 @@ impl MotionBvhTree {
     }
   }
 
-  pub fn build_into(items: &mut [(Aabb, CpuBvhItem)], nodes: &mut Vec<MotionBvhNode>) -> Option<u32> {
+  pub fn build_into(
+    items: &mut [(Aabb, CpuBvhItem)],
+    nodes: &mut Vec<MotionBvhNode>,
+  ) -> Option<u32> {
     if items.is_empty() {
       return None;
     }
@@ -175,7 +177,7 @@ impl MotionBvhTree {
     let total_mass = left_mass + right_mass;
     let mut total_com = Vec3f32::zero();
     if total_mass > 0.0 {
-        total_com = (left_com * left_mass + right_com * right_mass) / total_mass;
+      total_com = (left_com * left_mass + right_com * right_mass) / total_mass;
     }
 
     nodes[node_idx as usize].left_child = Some(left_child);

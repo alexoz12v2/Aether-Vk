@@ -980,8 +980,7 @@ impl OBB<f32> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
-  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+  use aethervk_oshal_rlib::math::{matrix::mat3::Mat3f32, vector::vec3::Vec3f32};
 
   #[test]
   fn test_aabb_contains() {

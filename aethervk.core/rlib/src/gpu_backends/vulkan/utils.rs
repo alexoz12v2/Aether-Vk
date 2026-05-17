@@ -312,12 +312,16 @@ impl EntryWrapper {
       let get_instance_proc_addr: PFN_vkGetInstanceProcAddr;
       #[cfg(windows)]
       {
-        use windows::Win32::Foundation::HMODULE;
-        use windows::Win32::System::LibraryLoader::{
-          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleHandleExW, GetProcAddress,
-          LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+        use windows::{
+          Win32::{
+            Foundation::HMODULE,
+            System::LibraryLoader::{
+              GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleHandleExW, GetProcAddress,
+              LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+            },
+          },
+          core::{PCSTR, PCWSTR, s, w},
         };
-        use windows::core::{PCSTR, PCWSTR, s, w};
 
         const VK_GET_INSTANCE_PROC_ADDR_NAME: PCSTR = s!("vkGetInstanceProcAddr");
         const VULKAN_DLL_NAME: PCWSTR = w!("vulkan-1.dll");

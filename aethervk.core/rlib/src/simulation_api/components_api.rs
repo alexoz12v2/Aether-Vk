@@ -1,9 +1,11 @@
 //! components_api module.
 
 use super::*;
-use crate::scene::{AddComponentError, CameraProjection, Marker};
-use crate::simulation_api::SimulationContext;
-use crate::{expect_scene, expect_scene_and_entity};
+use crate::{
+  expect_scene, expect_scene_and_entity,
+  scene::{AddComponentError, CameraProjection, Marker},
+  simulation_api::SimulationContext,
+};
 use alloc::{sync::Arc, vec::Vec};
 use oshal::os::fs;
 
@@ -314,10 +316,10 @@ impl SimulationContext {
           emissive_color,
           use_new_path: false,
           paint_display_mode: 0,
-        sphere_center: [0.0, 0.0, 0.0],
-        sphere_radius: 1.0,
-        grid_color: [0.0, 0.0, 0.0],
-        grid_density: 1.0,
+          sphere_center: [0.0, 0.0, 0.0],
+          sphere_radius: 1.0,
+          grid_color: [0.0, 0.0, 0.0],
+          grid_density: 1.0,
         },
       )
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))

@@ -6,11 +6,12 @@ use aethervk_oshal_rlib::math::{
   matrix::{Matrix3, Matrix4, mat3::Mat3f32, mat4::Mat4x4f32},
   vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec4::Vec4f32},
 };
-use alloc::boxed::Box;
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
-use crate::math::collision::bounds::{AABB, OBB};
-use crate::math::collision::bvh_builder::{BVHBuilderParams, BVHNode, BoundNode};
+use crate::math::collision::{
+  bounds::{AABB, OBB},
+  bvh_builder::{BVHBuilderParams, BVHNode, BoundNode},
+};
 
 #[derive(Debug, Clone, Copy)]
 /// TODO: Document this item

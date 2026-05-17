@@ -1,13 +1,15 @@
 //! particles module.
 
-use crate::math::collision::linear_bvh::LinearBVH;
-use crate::physics::particle::Particle;
-use crate::scene::Component;
-use crate::simulation::comet::Comet;
-use crate::simulation::comet::uv_grid::UvGrid;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
-use aethervk_oshal_rlib::os::time::timeus_t;
+use crate::{
+  math::collision::linear_bvh::LinearBVH,
+  physics::particle::Particle,
+  scene::Component,
+  simulation::comet::{Comet, uv_grid::UvGrid},
+};
+use aethervk_oshal_rlib::{
+  math::vector::{Vector, Vector3, vec3::Vec3f32},
+  os::time::timeus_t,
+};
 
 #[derive(Clone, Debug)]
 /// TODO: Document this item
@@ -218,9 +220,10 @@ impl ParticleSystemComponent {
 
   /// TODO: Document this item
   pub fn update_bvh(&mut self, particle_radius: f32) {
-    use crate::math::collision::bvh_builder::BVHBuilderParams;
-    use crate::math::collision::linear_bvh::LinearBVH;
-    use crate::physics::particle::ParticleBVHBuilder;
+    use crate::{
+      math::collision::{bvh_builder::BVHBuilderParams, linear_bvh::LinearBVH},
+      physics::particle::ParticleBVHBuilder,
+    };
     use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
 
     let active_particles: alloc::vec::Vec<_> = self

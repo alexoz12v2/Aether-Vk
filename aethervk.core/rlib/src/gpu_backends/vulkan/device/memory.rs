@@ -1,11 +1,11 @@
 //! memory module.
 
+use crate::{gpu_backends::vulkan::device::DeviceResource, types::GpuResult};
+use aethervk_oshal_rlib as oshal;
 use alloc::boxed::Box;
 use ash::vk;
 use core::{mem, ptr};
 use function_name::named;
-use crate::{gpu_backends::vulkan::device::DeviceResource, types::GpuResult};
-use aethervk_oshal_rlib as oshal;
 
 /// TODO: Document this item
 pub struct GlobalDeviceAllocator {
@@ -13,7 +13,27 @@ pub struct GlobalDeviceAllocator {
   pub memory_budgets: Box<[vk_mem::ffi::VmaBudget]>,
 }
 
-#[cfg(all(debug_assertions, feature = "debug_gpu"))]
+#[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
+macro_rules! track_gpu_alloc {
+  ($addr:expr, $size:expr) => {{
+    aethervk_oshal_rlib::os::memory::tracking::GPU_ALLOCATED
+      .fetch_add($size as usize, core::sync::atomic::Ordering::Relaxed);
+    aethervk_oshal_rlib::os::memory::tracking::track_hotspot($size as usize);
+    aethervk_oshal_rlib::os::memory::tracking::track_gpu_allocation($addr as u64, $size as usize);
+    aethervk_oshal_rlib::os::memory::tracking::check_memory_threshold();
+  }};
+}
+
+#[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
+macro_rules! track_gpu_free {
+  ($addr:expr, $size:expr) => {{
+    aethervk_oshal_rlib::os::memory::tracking::GPU_ALLOCATED
+      .fetch_sub($size as usize, core::sync::atomic::Ordering::Relaxed);
+    aethervk_oshal_rlib::os::memory::tracking::untrack_gpu_allocation($addr as u64);
+  }};
+}
+
+#[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
 #[allow(unused)]
 unsafe extern "C" fn on_device_alloc(
   allocator: vk_mem::ffi::VmaAllocator,
@@ -24,15 +44,24 @@ unsafe extern "C" fn on_device_alloc(
 ) {
   use ash::vk::Handle;
 
-  oshal::track_gpu_alloc!(size);
+  if !p_user_data.is_null() {
+    let logical_device = unsafe {
+      (p_user_data as *const crate::gpu_backends::vulkan::device::LogicalDevice).as_ref_unchecked()
+    };
+    // TOdo: how to use dev?
+  }
+
+  track_gpu_alloc!(memory.as_raw(), size);
+
   oshal::log!(
     "[VMA] Alloc: size: {} bytes, type: {}, mem: {:#X}",
     size,
     memory_type,
     memory.as_raw()
   );
+  oshal::os::debug::print_aethervk_stacktrace(7, 4);
 }
-#[cfg(all(debug_assertions, feature = "debug_gpu"))]
+#[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
 #[allow(unused)]
 unsafe extern "C" fn on_device_free(
   allocator: vk_mem::ffi::VmaAllocator,
@@ -43,12 +72,22 @@ unsafe extern "C" fn on_device_free(
 ) {
   use ash::vk::Handle;
 
+  track_gpu_free!(memory.as_raw(), size);
+
+  if !p_user_data.is_null() {
+    let logical_device = unsafe {
+      (p_user_data as *const crate::gpu_backends::vulkan::device::LogicalDevice).as_ref_unchecked()
+    };
+    // Note: If you want to use LogicalDevice, it's available here.
+  }
+
   oshal::log!(
     "[VMA] Free:  size: {} bytes, type: {}, mem: {:#X}",
     size,
     memory_type,
     memory.as_raw()
   );
+  oshal::os::debug::print_aethervk_stacktrace(7, 4);
 }
 
 impl GlobalDeviceAllocator {
@@ -67,13 +106,13 @@ impl GlobalDeviceAllocator {
     allocator_create_info.flags = vk_mem::AllocatorCreateFlags::EXT_MEMORY_BUDGET
       | vk_mem::AllocatorCreateFlags::KHR_DEDICATED_ALLOCATION
       | vk_mem::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
-    #[cfg(all(debug_assertions, feature = "debug_gpu"))]
+    #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
     let callbacks = vk_mem::ffi::VmaDeviceMemoryCallbacks {
       pfnAllocate: Some(on_device_alloc),
       pfnFree: Some(on_device_free),
       pUserData: ptr::null_mut(),
     };
-    #[cfg(all(debug_assertions, feature = "debug_gpu"))]
+    #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
     {
       allocator_create_info.device_memory_callbacks = Some(&callbacks);
     }
@@ -185,6 +224,8 @@ impl FrameStagingArena {
 
 impl DeviceResource for GlobalDeviceAllocator {
   fn cleanup(&mut self, _device: &ash::Device) {
+    #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
+    oshal::os::memory::tracking::report_leaked_gpu_allocations();
     unsafe { mem::ManuallyDrop::drop(&mut self.allocator) };
   }
 }

@@ -1,20 +1,15 @@
 //! structs module.
 
-use crate::simulation::almanac::KinematicState;
-use crate::simulation_api::logic_thread::start_logic_thread;
-use crate::simulation_api::render_thread::start_render_thread;
-use crate::types::GpuResult;
 use crate::{
   gpu,
-  gpu::DeviceAdditionalParams,
-  gpu::PresentationEngineHandle,
+  gpu::{DeviceAdditionalParams, PresentationEngineHandle},
   physics,
   physics::physics_scene::math::PhysicsSceneMathExt,
   scene::{CameraComponent, EntityId, Scene, TransformComponent},
   simulation,
-  simulation::almanac::AlmanacPackedData,
-  types::{EngineError, EngineResult},
-  types::{GpuError, RuntimeParams},
+  simulation::almanac::{AlmanacPackedData, KinematicState},
+  simulation_api::{logic_thread::start_logic_thread, render_thread::start_render_thread},
+  types::{EngineError, EngineResult, GpuError, GpuResult, RuntimeParams},
 };
 use aethervk_oshal_rlib as oshal;
 use alloc::{
@@ -23,17 +18,21 @@ use alloc::{
   sync::Arc,
   vec::Vec,
 };
-use core::cell::RefCell;
-use core::mem::MaybeUninit;
-use core::sync::atomic::AtomicU64;
-use core::{cell::UnsafeCell, sync::atomic::AtomicBool};
+use core::{
+  cell::{RefCell, UnsafeCell},
+  mem::MaybeUninit,
+  sync::atomic::{AtomicBool, AtomicU64},
+};
 use oshal::{
-  math::matrix::mat4::Mat4x4f32,
-  math::matrix::{Matrix4, MatrixVectorMul, SquareMatrix},
-  math::quaternion::Quaternion,
-  math::vector::vec3::Vec3f32,
-  math::vector::vec4::{Quat, Vec4f32},
-  math::vector::{Vector, Vector3, Vector4},
+  math::{
+    matrix::{Matrix4, MatrixVectorMul, SquareMatrix, mat4::Mat4x4f32},
+    quaternion::Quaternion,
+    vector::{
+      Vector, Vector3, Vector4,
+      vec3::Vec3f32,
+      vec4::{Quat, Vec4f32},
+    },
+  },
   os,
   os::thread::Thread,
 };

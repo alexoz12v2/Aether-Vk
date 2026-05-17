@@ -2,16 +2,17 @@
 
 extern crate std;
 
-use super::components_api::CameraParams;
-use super::*;
-use crate::gpu;
-use crate::scene::Marker;
+use super::{components_api::CameraParams, *};
+use crate::{gpu, scene::Marker};
 use alloc::format;
-use core::ffi::CStr;
-use core::ffi::c_char;
-use std::println;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use core::ffi::{CStr, c_char};
+use std::{
+  println,
+  sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+  },
+};
 
 fn panic_error_callback(msg: &str) {
   panic!("Vulkan Error: {}", msg);

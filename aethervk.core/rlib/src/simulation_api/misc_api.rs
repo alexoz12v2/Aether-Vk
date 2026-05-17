@@ -1,21 +1,22 @@
 //! misc_api module.
 
-use crate::scene::EntityId;
 use crate::{
   expect_scene,
-  gpu::PresentationEngineHandle,
-  gpu::WeakRenderFrontendExt,
-  scene::CameraComponent,
-  simulation_api::structs::SimulationTaskResult,
-  simulation_api::structs::{
-    RaycastResult, RenderCommand, RenderTaskStatus, Resize, SharedDataWrapper, TaskStatusCode,
+  gpu::{PresentationEngineHandle, WeakRenderFrontendExt},
+  scene::{CameraComponent, EntityId},
+  simulation_api::{
+    BREADCRUMB_CALLBACK, SimulationContext,
+    structs::{
+      RaycastResult, RenderCommand, RenderTaskStatus, Resize, SharedDataWrapper,
+      SimulationTaskResult, TaskStatusCode,
+    },
   },
-  simulation_api::{BREADCRUMB_CALLBACK, SimulationContext},
-  types::EngineError,
-  types::EngineResult,
+  types::{EngineError, EngineResult},
 };
-use aethervk_oshal_rlib::math::matrix::Matrix4;
-use aethervk_oshal_rlib::{self as oshal, math::matrix::mat4::Mat4x4f32};
+use aethervk_oshal_rlib::{
+  self as oshal,
+  math::matrix::{Matrix4, mat4::Mat4x4f32},
+};
 use core::ffi::c_char;
 
 impl SimulationContext {

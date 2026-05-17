@@ -1,7 +1,6 @@
 //! Gilbert-Johnson-Keerthi (GJK) Algorithm for distance between convex objects.
 
-use aethervk_oshal_rlib::math::vector::Vector3;
-use aethervk_oshal_rlib::{math::vector::Vector, math::vector::vec3::Vec3f32};
+use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
 use alloc::vec::Vec;
 
 /// A trait for shapes that can be queried for their furthest point in a given direction.

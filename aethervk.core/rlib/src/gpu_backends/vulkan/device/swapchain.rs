@@ -1,15 +1,18 @@
 //! swapchain module.
 
-use core::{mem, ptr};
-use function_name::named;
 use crate::{
   gpu::{AcquireResult, OpaqueNativeHandleInfo, PresentationEngineParams, SwapchainStatus},
-  gpu_backends::vulkan::{device::DeviceResource, device::LogicalDevice, utils::NonZeroHandle},
+  gpu_backends::vulkan::{
+    device::{DeviceResource, LogicalDevice},
+    utils::NonZeroHandle,
+  },
   types::{GpuError, GpuResult},
 };
 use aethervk_oshal_rlib::log;
 use alloc::{string::ToString, vec::Vec};
 use ash::vk::{self, Handle};
+use core::{mem, ptr};
+use function_name::named;
 
 /// TODO: Document this item
 pub(super) const MAX_FRAMES: usize = 8;
@@ -313,7 +316,9 @@ impl PresentationState {
     }
   }
 
-  pub(super) fn archetypes_mut(&mut self) -> &mut crate::gpu::vulkan::device::archetypes_struct::Archetypes {
+  pub(super) fn archetypes_mut(
+    &mut self,
+  ) -> &mut crate::gpu::vulkan::device::archetypes_struct::Archetypes {
     match self {
       Self::Windowed(state) => &mut state.archetypes,
       Self::Windowless(state) => &mut state.archetypes,
@@ -516,7 +521,9 @@ impl WindowedPresentationState {
     }
 
     let present_result = unsafe {
-      let _guard = crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&device.submission_lock);
+      let _guard = crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(
+        &device.submission_lock,
+      );
       self.swapchain_device.queue_present(graphics_queue, &present_info)
     };
 
@@ -1328,7 +1335,9 @@ impl WindowedPresentationState {
     }
 
     let result = {
-      let _guard = crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&device.submission_lock);
+      let _guard = crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(
+        &device.submission_lock,
+      );
       unsafe { self.swapchain_device.queue_present(graphics_queue, &present_info) }
     };
 

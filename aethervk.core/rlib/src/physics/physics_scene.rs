@@ -1,12 +1,16 @@
 //! physics_scene module.
 
-use crate::math::collision::linear_bvh::LinearBound;
-use crate::scene::particles::{ParticleData, ParticleSystemComponent};
-use crate::scene::{Component, EntityId, Scene, TransformComponent};
-use aethervk_oshal_rlib::math::matrix::Matrix4;
-use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
+use crate::{
+  math::collision::linear_bvh::LinearBound,
+  scene::{
+    Component, EntityId, Scene, TransformComponent,
+    particles::{ParticleData, ParticleSystemComponent},
+  },
+};
+use aethervk_oshal_rlib::math::{
+  matrix::{Matrix4, mat4::Mat4x4f32},
+  vector::{Vector, Vector3, vec3::Vec3f32},
+};
 
 pub mod math;
 
@@ -116,10 +120,8 @@ impl PhysicsScene {
       });
     }
 
-    let mut frame_instances: hashbrown::HashMap<
-      u32,
-      alloc::vec::Vec<BvhInstance>,
-    > = hashbrown::HashMap::new();
+    let mut frame_instances: hashbrown::HashMap<u32, alloc::vec::Vec<BvhInstance>> =
+      hashbrown::HashMap::new();
     let default_parent = gpu_frames
       .iter()
       .position(|f| f.frame_type == crate::scene::ReferenceFrameType::Macro as u32)
@@ -155,10 +157,10 @@ impl PhysicsScene {
               }
             }
 
-            frame_instances
-              .entry(target_frame_idx)
-              .or_default()
-              .push(BvhInstance::Primitive(entity, LinearBound::AABB(transformed_aabb)));
+            frame_instances.entry(target_frame_idx).or_default().push(BvhInstance::Primitive(
+              entity,
+              LinearBound::AABB(transformed_aabb),
+            ));
           } else {
             aethervk_oshal_rlib::log!("DEBUG: bvh.nodes.is_empty for mesh");
           }
@@ -187,12 +189,10 @@ impl PhysicsScene {
           &mut gpu_entity_mappings,
         );
 
-        let root_bound = LinearBound::AABB(
-          crate::math::collision::bounds::AABB::new(
-            Vec3f32::from_array(gpu_bvh_nodes[root_idx as usize].aabb_min),
-            Vec3f32::from_array(gpu_bvh_nodes[root_idx as usize].aabb_max),
-          )
-        );
+        let root_bound = LinearBound::AABB(crate::math::collision::bounds::AABB::new(
+          Vec3f32::from_array(gpu_bvh_nodes[root_idx as usize].aabb_min),
+          Vec3f32::from_array(gpu_bvh_nodes[root_idx as usize].aabb_max),
+        ));
         macro_instances.push(BvhInstance::SubFrame(root_idx, root_bound));
       }
     }

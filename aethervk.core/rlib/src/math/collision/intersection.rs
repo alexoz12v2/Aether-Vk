@@ -5,11 +5,10 @@ use crate::{
   math::collision::bounds::{AABB, BS, OBB},
   simulation::comet::Triangle,
 };
-use aethervk_oshal_rlib::math::matrix::MatrixVectorMul;
 use aethervk_oshal_rlib::math::{
   FloatLike, MulAddIdentity,
   floating::{FloatBits, FloatOps},
-  matrix::{Matrix, Matrix3, Matrix4},
+  matrix::{Matrix, Matrix3, Matrix4, MatrixVectorMul},
   vector::{Vector, Vector2, Vector3, vec3::Vec3f32},
 };
 use itertools::Itertools;
@@ -878,11 +877,14 @@ where
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::math::collision::bounds::{AABB, BS, OBB};
-  use crate::simulation::comet::Triangle;
-  use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
-  use aethervk_oshal_rlib::math::vector::vec2::Vec2f32;
-  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+  use crate::{
+    math::collision::bounds::{AABB, BS, OBB},
+    simulation::comet::Triangle,
+  };
+  use aethervk_oshal_rlib::math::{
+    matrix::mat3::Mat3f32,
+    vector::{vec2::Vec2f32, vec3::Vec3f32},
+  };
 
   fn mk_vec(x: f32, y: f32, z: f32) -> Vec3f32 {
     Vec3f32::from_components(x, y, z)

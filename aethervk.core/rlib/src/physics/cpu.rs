@@ -3,14 +3,15 @@
 use crate::math::{
   compute_com_and_tensor, expm_hat, hat, jacobi_diagonalization, solve_12x12, vee,
 };
-use aethervk_oshal_rlib::math::matrix::{
-  Matrix, Matrix3, MatrixVectorMul, SquareMatrix, mat3::Mat3f32,
+use aethervk_oshal_rlib::{
+  math::{
+    FloatLike, MulAddIdentity,
+    matrix::{Matrix, Matrix3, MatrixVectorMul, SquareMatrix, mat3::Mat3f32},
+    vector::{Vector, Vector3, vec3::Vec3f32},
+  },
+  os::pool::{ThreadPool, Workload, WorkloadStatus},
 };
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
-use aethervk_oshal_rlib::math::{FloatLike, MulAddIdentity};
-use aethervk_oshal_rlib::os::pool::{ThreadPool, Workload, WorkloadStatus};
-use alloc::boxed::Box;
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 /// TODO: Document this item
 pub const G: f32 = 1.0;
@@ -465,8 +466,7 @@ pub fn update_particles_multi_threaded(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
-  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+  use aethervk_oshal_rlib::math::{matrix::mat3::Mat3f32, vector::vec3::Vec3f32};
 
   #[test]
   fn test_gravitational_force() {

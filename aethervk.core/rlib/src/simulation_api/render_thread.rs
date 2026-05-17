@@ -1,27 +1,28 @@
 //! render_thread module.
 
-use crate::gpu::{FrameCancelGuard, ScopedRenderPass};
-use crate::simulation_api::structs::{
-  CustomRenderCallback, RenderCommand, RenderFeedback, RenderFrame, RenderTaskStatus,
-  RenderThreadContext,
-};
 use crate::{
   gpu,
-  gpu::scene_conversion::{RenderSceneExtraction, SceneConversionExt},
-  gpu::{PresentationEngineHandle, RenderDevice, RenderScene, SwapchainStatus},
+  gpu::{
+    FrameCancelGuard, PresentationEngineHandle, RenderDevice, RenderScene, ScopedRenderPass,
+    SwapchainStatus,
+    scene_conversion::{RenderSceneExtraction, SceneConversionExt},
+  },
+  simulation_api::structs::{
+    CustomRenderCallback, RenderCommand, RenderFeedback, RenderFrame, RenderTaskStatus,
+    RenderThreadContext,
+  },
   types::{EngineError, EngineResult, GpuError, GpuResult},
 };
 use aethervk_oshal_rlib as oshal;
 use itertools::Itertools;
 use oshal::{
-  math::matrix::mat4::Mat4x4f32,
-  math::matrix::{MatrixVectorMul, SquareMatrix},
-  math::quaternion::Quaternion,
-  math::vector::Vector4,
-  math::vector::vec3::Vec3f32,
+  math::{
+    matrix::{MatrixVectorMul, SquareMatrix, mat4::Mat4x4f32},
+    quaternion::Quaternion,
+    vector::{Vector4, vec3::Vec3f32},
+  },
   os,
-  os::thread::Thread,
-  os::{NativeError, ThreadingError, thread},
+  os::{NativeError, ThreadingError, thread, thread::Thread},
 };
 use thingbuf::mpsc;
 

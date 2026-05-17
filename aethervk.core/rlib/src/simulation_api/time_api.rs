@@ -1,7 +1,6 @@
 //! time_api module.
 
-use crate::simulation_api::SimulationContext;
-use crate::simulation_api::structs::TimeScale;
+use crate::simulation_api::{SimulationContext, structs::TimeScale};
 use alloc::format;
 use core::ffi::c_char;
 

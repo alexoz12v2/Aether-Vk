@@ -1,24 +1,28 @@
 //! cpu_kernels module.
 
-use crate::gpu::{
-  CollisionPair, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, ForceEmitter, Kernels,
-  KinematicBody, ParticleGpu, RigidBodyGpu, WaitHandle,
+use crate::{
+  gpu::{
+    CollisionPair, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, ForceEmitter, Kernels,
+    KinematicBody, ParticleGpu, RigidBodyGpu, WaitHandle,
+  },
+  physics::physics_scene::PhysicsScene,
+  scene::{KinematicComponent, Scene, TransformComponent},
+  simulation_api::structs::SendPtr,
+  types::{EngineError, EngineResult},
 };
-use crate::physics::physics_scene::PhysicsScene;
-use crate::scene::{KinematicComponent, Scene, TransformComponent};
-use crate::simulation_api::structs::SendPtr;
-use crate::types::{EngineError, EngineResult};
-use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
-use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
-use aethervk_oshal_rlib::math::matrix::{Matrix, Matrix4, MatrixVectorMul};
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::vec4::Quat;
-use aethervk_oshal_rlib::math::vector::vec4::Vec4f32;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
-use aethervk_oshal_rlib::os::time::timeus_t;
-use alloc::boxed::Box;
-use alloc::vec::Vec;
+use aethervk_oshal_rlib::{
+  math::{
+    matrix::{Matrix, Matrix4, MatrixVectorMul, mat3::Mat3f32, mat4::Mat4x4f32},
+    quaternion::Quaternion,
+    vector::{
+      Vector, Vector3, Vector4,
+      vec3::Vec3f32,
+      vec4::{Quat, Vec4f32},
+    },
+  },
+  os::time::timeus_t,
+};
+use alloc::{boxed::Box, vec::Vec};
 
 /// TODO: Document this item
 pub struct CpuCommandBuffer {
@@ -1937,10 +1941,10 @@ impl Kernels for CpuSimdKernels {
     _dt: timeus_t,
   ) -> EngineResult<Self::MotionBvh> {
     use crate::physics::motion_bvh::{Aabb, CpuBvhItem, MotionBvhTree};
-    use aethervk_oshal_rlib::math::matrix::MatrixVectorMul;
-    use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
-    use aethervk_oshal_rlib::math::vector::Vector;
-    use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+    use aethervk_oshal_rlib::math::{
+      matrix::{MatrixVectorMul, mat4::Mat4x4f32},
+      vector::{Vector, vec3::Vec3f32},
+    };
 
     let mut frames_map = hashbrown::HashMap::new();
     let mut frame_types = hashbrown::HashMap::new();

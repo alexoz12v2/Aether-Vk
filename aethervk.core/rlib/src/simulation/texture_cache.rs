@@ -1,16 +1,14 @@
 //! texture_cache module.
 
 use crate::simulation::comet::TexelFormat;
-use aethervk_oshal_rlib::hash::FnvHasher;
-use aethervk_oshal_rlib::os::files::Mmap;
+use aethervk_oshal_rlib::{hash::FnvHasher, os::files::Mmap};
 use alloc::{collections::BTreeMap, format, string::String, vec::Vec};
 use bytes::Bytes;
 use core::hash::Hasher;
 
 #[cfg(target_family = "unix")]
 pub mod sys {
-  use alloc::ffi::CString;
-  use alloc::string::String;
+  use alloc::{ffi::CString, string::String};
   use libc::{O_CREAT, O_RDWR, O_TRUNC, c_void, close, fstat, open, pread, pwrite, rename};
 
   pub struct NativeFile(i32);
@@ -95,13 +93,14 @@ pub mod sys {
 #[cfg(windows)]
 pub mod sys {
   use alloc::{string::String, vec::Vec};
-  use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE};
-  use windows::Win32::Storage::FileSystem::{
-    CREATE_ALWAYS, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    GetFileSizeEx, MOVEFILE_REPLACE_EXISTING, MoveFileExW, OPEN_ALWAYS, ReadFile, WriteFile,
+  use windows::Win32::{
+    Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE},
+    Storage::FileSystem::{
+      CREATE_ALWAYS, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE,
+      GetFileSizeEx, MOVEFILE_REPLACE_EXISTING, MoveFileExW, OPEN_ALWAYS, ReadFile, WriteFile,
+    },
+    System::{Environment::GetEnvironmentVariableW, IO::OVERLAPPED},
   };
-  use windows::Win32::System::Environment::GetEnvironmentVariableW;
-  use windows::Win32::System::IO::OVERLAPPED;
 
   fn to_u16s(s: &str) -> Vec<u16> {
     core::iter::Iterator::chain(s.encode_utf16(), core::iter::once(0)).collect()

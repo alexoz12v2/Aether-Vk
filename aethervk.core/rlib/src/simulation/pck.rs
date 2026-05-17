@@ -1,8 +1,7 @@
 //! pck module.
 
 use aethervk_oshal_rlib::os::fs;
-use alloc::string::String;
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 
 /// TODO: Document this item
 pub fn read_body_radii(pck_path: &str, body_id: i32) -> Option<[f64; 3]> {

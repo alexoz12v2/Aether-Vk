@@ -1,15 +1,15 @@
-use aethervk_oshal_rlib::math::vector::Vector4;
-use aethervk_oshal_rlib::math::matrix::Matrix4;
-use crate::gpu::{ColliderId, CollisionPair};
-use crate::math::collision::cta::{CtaBody, compute_toi};
-use crate::math::collision::gjk::Support;
-use crate::physics::cpu_kernels::CpuMotionBvh;
-use crate::physics::lca::resolve_lca_transform;
-use aethervk_oshal_rlib::math::matrix::MatrixVectorMul;
-use aethervk_oshal_rlib::math::matrix::SquareMatrix;
-use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::Vector;
+use crate::{
+  gpu::{ColliderId, CollisionPair},
+  math::collision::{
+    cta::{CtaBody, compute_toi},
+    gjk::Support,
+  },
+  physics::{cpu_kernels::CpuMotionBvh, lca::resolve_lca_transform},
+};
+use aethervk_oshal_rlib::math::{
+  matrix::{Matrix4, MatrixVectorMul, SquareMatrix, mat4::Mat4x4f32},
+  vector::{Vector, Vector4, vec3::Vec3f32},
+};
 use alloc::vec::Vec;
 
 struct SphereShape {
@@ -72,8 +72,12 @@ pub fn detect_collisions_cpu(bvh: &CpuMotionBvh) -> Vec<CollisionPair> {
   };
 
   for (i, p1) in dynamics.iter().enumerate() {
-    let global_pos = get_global_pos(p1.parent_frame_id, aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p1.position));
-    let max_travel = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p1.linear_velocity).length();
+    let global_pos = get_global_pos(
+      p1.parent_frame_id,
+      aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p1.position),
+    );
+    let max_travel =
+      aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p1.linear_velocity).length();
     let r = 0.1 + max_travel;
     let query_aabb = crate::physics::motion_bvh::Aabb::new(
       global_pos - Vec3f32::from_array([r, r, r]),
@@ -98,8 +102,58 @@ pub fn detect_collisions_cpu(bvh: &CpuMotionBvh) -> Vec<CollisionPair> {
         let mut p2_pos = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p2.position);
 
         if p1.parent_frame_id != p2.parent_frame_id {
-          let p1_mat = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_columns(aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(p1.rotation[0][0], p1.rotation[0][1], p1.rotation[0][2], 0.0), aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(p1.rotation[1][0], p1.rotation[1][1], p1.rotation[1][2], 0.0), aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(p1.rotation[2][0], p1.rotation[2][1], p1.rotation[2][2], 0.0), aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(p1.position[0], p1.position[1], p1.position[2], 1.0));
-          let p2_mat = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_columns(aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(p2.rotation[0][0], p2.rotation[0][1], p2.rotation[0][2], 0.0), aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(p2.rotation[1][0], p2.rotation[1][1], p2.rotation[1][2], 0.0), aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(p2.rotation[2][0], p2.rotation[2][1], p2.rotation[2][2], 0.0), aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(p2.position[0], p2.position[1], p2.position[2], 1.0));
+          let p1_mat = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_columns(
+            aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+              p1.rotation[0][0],
+              p1.rotation[0][1],
+              p1.rotation[0][2],
+              0.0,
+            ),
+            aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+              p1.rotation[1][0],
+              p1.rotation[1][1],
+              p1.rotation[1][2],
+              0.0,
+            ),
+            aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+              p1.rotation[2][0],
+              p1.rotation[2][1],
+              p1.rotation[2][2],
+              0.0,
+            ),
+            aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+              p1.position[0],
+              p1.position[1],
+              p1.position[2],
+              1.0,
+            ),
+          );
+          let p2_mat = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_columns(
+            aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+              p2.rotation[0][0],
+              p2.rotation[0][1],
+              p2.rotation[0][2],
+              0.0,
+            ),
+            aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+              p2.rotation[1][0],
+              p2.rotation[1][1],
+              p2.rotation[1][2],
+              0.0,
+            ),
+            aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+              p2.rotation[2][0],
+              p2.rotation[2][1],
+              p2.rotation[2][2],
+              0.0,
+            ),
+            aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+              p2.position[0],
+              p2.position[1],
+              p2.position[2],
+              1.0,
+            ),
+          );
 
           if let Some(m_b_lca) = resolve_lca_transform(
             p1.parent_frame_id,
@@ -140,7 +194,9 @@ pub fn detect_collisions_cpu(bvh: &CpuMotionBvh) -> Vec<CollisionPair> {
         let mut s1 = SphereShape {
           center: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p1.position),
           radius: 0.1,
-          velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p1.linear_velocity),
+          velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(
+            p1.linear_velocity,
+          ),
         };
         let mut s2 = SphereShape {
           center: k2.transform.position,
@@ -149,7 +205,32 @@ pub fn detect_collisions_cpu(bvh: &CpuMotionBvh) -> Vec<CollisionPair> {
         };
 
         if p1.parent_frame_id != k2.parent_frame_id {
-          let p1_mat = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_columns(aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(p1.rotation[0][0], p1.rotation[0][1], p1.rotation[0][2], 0.0), aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(p1.rotation[1][0], p1.rotation[1][1], p1.rotation[1][2], 0.0), aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(p1.rotation[2][0], p1.rotation[2][1], p1.rotation[2][2], 0.0), aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(p1.position[0], p1.position[1], p1.position[2], 1.0));
+          let p1_mat = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_columns(
+            aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+              p1.rotation[0][0],
+              p1.rotation[0][1],
+              p1.rotation[0][2],
+              0.0,
+            ),
+            aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+              p1.rotation[1][0],
+              p1.rotation[1][1],
+              p1.rotation[1][2],
+              0.0,
+            ),
+            aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+              p1.rotation[2][0],
+              p1.rotation[2][1],
+              p1.rotation[2][2],
+              0.0,
+            ),
+            aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+              p1.position[0],
+              p1.position[1],
+              p1.position[2],
+              1.0,
+            ),
+          );
           let k2_mat: Mat4x4f32 = k2.transform.to_mat4();
 
           if let Some(m_b_lca) = resolve_lca_transform(
@@ -317,13 +398,18 @@ pub fn detect_collisions_cpu(bvh: &CpuMotionBvh) -> Vec<CollisionPair> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::gpu::KinematicBody;
-  use crate::scene::TransformComponent;
-  use aethervk_oshal_rlib::math::quaternion::Quaternion;
-  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-  use aethervk_oshal_rlib::math::vector::vec4::Quat;
+  use crate::{gpu::KinematicBody, scene::TransformComponent};
+  use aethervk_oshal_rlib::math::{
+    quaternion::Quaternion,
+    vector::{vec3::Vec3f32, vec4::Quat},
+  };
 
-  fn create_dummy_dynamic(id: u64, pos: [f32; 3], vel: [f32; 3], parent_frame: u32) -> crate::gpu::RigidBodyGpu {
+  fn create_dummy_dynamic(
+    id: u64,
+    pos: [f32; 3],
+    vel: [f32; 3],
+    parent_frame: u32,
+  ) -> crate::gpu::RigidBodyGpu {
     crate::gpu::RigidBodyGpu {
       position: pos,
       mass: 1.0,
@@ -368,7 +454,10 @@ mod tests {
     }
   }
 
-  fn build_test_bvh(kinematics: Vec<KinematicBody>, dynamics: Vec<crate::gpu::RigidBodyGpu>) -> CpuMotionBvh {
+  fn build_test_bvh(
+    kinematics: Vec<KinematicBody>,
+    dynamics: Vec<crate::gpu::RigidBodyGpu>,
+  ) -> CpuMotionBvh {
     let mut frames_map = hashbrown::HashMap::new();
 
     // FIX: Insert Identity for Root
@@ -406,19 +495,34 @@ mod tests {
       // TODO check that shape_data is COM. If not, modify to include it
       // TODO modify logic to use mu and not mass, unless required, otherwise give both? Nah, mu is
       // stored by gravitation force emitter
-      aabbs.push((bounds, (1 << 31) | (i as u32), kin.mu, Vec3f32::from_array(kin.shape_data)));
+      aabbs.push((
+        bounds,
+        (1 << 31) | (i as u32),
+        kin.mu,
+        Vec3f32::from_array(kin.shape_data),
+      ));
     }
 
     for (i, dyn_body) in dynamics.iter().enumerate() {
-      let global_pos = get_global_pos(dyn_body.parent_frame_id, aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(dyn_body.position));
-      let max_travel = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(dyn_body.linear_velocity).length();
+      let global_pos = get_global_pos(
+        dyn_body.parent_frame_id,
+        aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(dyn_body.position),
+      );
+      let max_travel =
+        aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(dyn_body.linear_velocity)
+          .length();
       let r = 0.1 + max_travel;
       let bounds = crate::physics::motion_bvh::Aabb::new(
         global_pos - Vec3f32::from_array([r, r, r]),
         global_pos + Vec3f32::from_array([r, r, r]),
       );
       // TODO I don't think that shape data is the COM. Correct this
-      aabbs.push((bounds, i as u32, dyn_body.mass, Vec3f32::from_array(dyn_body.shape_data)));
+      aabbs.push((
+        bounds,
+        i as u32,
+        dyn_body.mass,
+        Vec3f32::from_array(dyn_body.shape_data),
+      ));
     }
     let bvh_tree = crate::physics::motion_bvh::MotionBvhTree::build(&aabbs);
 

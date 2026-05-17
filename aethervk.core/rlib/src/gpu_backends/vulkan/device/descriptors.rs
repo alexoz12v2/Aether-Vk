@@ -1,11 +1,5 @@
 //! descriptors module.
 
-use alloc::{sync, vec::Vec};
-use ash::vk::{
-  self, Handle, PFN_vkAllocateDescriptorSets, PFN_vkCreateDescriptorPool, PFN_vkResetDescriptorPool,
-};
-use core::ptr;
-use function_name::named;
 use crate::{
   gpu_backends::vulkan::{
     self,
@@ -14,6 +8,12 @@ use crate::{
   },
   types::{GpuError, GpuResult},
 };
+use alloc::{sync, vec::Vec};
+use ash::vk::{
+  self, Handle, PFN_vkAllocateDescriptorSets, PFN_vkCreateDescriptorPool, PFN_vkResetDescriptorPool,
+};
+use core::ptr;
+use function_name::named;
 
 const MAX_DESCRIPTOR_SETS: u32 = 1024;
 const POOL_SIZES: [vk::DescriptorPoolSize; 8] = [
@@ -96,7 +96,8 @@ impl DescriptorPools {
     timeline_value: u64,
     debug_name: &str,
   ) -> GpuResult<NonZeroHandle<vk::DescriptorSet>> {
-    let mut inner = crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&self.inner);
+    let mut inner =
+      crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&self.inner);
     loop {
       let pool = inner.active_pool;
       if pool == vk::DescriptorPool::null() {
@@ -150,7 +151,8 @@ impl DescriptorPools {
     }
     .is_ok()
     {
-      let mut inner = crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&self.inner);
+      let mut inner =
+        crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&self.inner);
       inner.recycled_pools.push(pool);
     }
   }
@@ -216,7 +218,8 @@ impl DescriptorPoolsInner {
 
 impl DeviceResource for DescriptorPools {
   fn cleanup(&mut self, device: &ash::Device) {
-    let mut inner = crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&self.inner);
+    let mut inner =
+      crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&self.inner);
     if !inner.active_pool.is_null() {
       unsafe { device.destroy_descriptor_pool(inner.active_pool, None) };
     }

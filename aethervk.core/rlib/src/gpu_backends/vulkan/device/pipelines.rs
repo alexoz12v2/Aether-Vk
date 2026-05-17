@@ -11,9 +11,8 @@ use core::{
 };
 use hashbrown::HashMap;
 
-use crate::gpu::vulkan::device::swapchain;
 use crate::{
-  gpu::{PipelineKey, PipelineKeyable},
+  gpu::{PipelineKey, PipelineKeyable, vulkan::device::swapchain},
   gpu_backends::vulkan::{
     device::{DeviceResource, resources::DiscardPool},
     utils::NonZeroHandle,

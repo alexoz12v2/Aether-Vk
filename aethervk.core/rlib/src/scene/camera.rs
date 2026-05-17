@@ -1,13 +1,15 @@
 //! camera module.
 
-use crate::scene::{CameraComponent, EntityId, HasComponentResultEnum, Scene, TransformComponent};
-use crate::types::{EngineError, EngineResult};
-use aethervk_oshal_rlib::math::FloatLike;
-use aethervk_oshal_rlib::math::floating::FloatOps;
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::vec4::Quat;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
+use crate::{
+  scene::{CameraComponent, EntityId, HasComponentResultEnum, Scene, TransformComponent},
+  types::{EngineError, EngineResult},
+};
+use aethervk_oshal_rlib::math::{
+  FloatLike,
+  floating::FloatOps,
+  quaternion::Quaternion,
+  vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec4::Quat},
+};
 
 // TODO add unit tests
 

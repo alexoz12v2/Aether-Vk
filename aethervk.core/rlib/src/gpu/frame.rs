@@ -1,21 +1,25 @@
 //! frame module.
 
-use crate::gpu;
-use crate::gpu::{
-  GpuResourceHandle, GridPushConstants, PipelineKey, PresentationEngineHandle, PushConstants,
-  RenderDevice, RenderDeviceExt, SkyPushConstants, SunPushConstants, TextureFlags, UiBatchCall,
+use crate::{
+  gpu,
+  gpu::{
+    GpuResourceHandle, GridPushConstants, PipelineKey, PresentationEngineHandle, PushConstants,
+    RenderDevice, RenderDeviceExt, SkyPushConstants, SunPushConstants, TextureFlags, UiBatchCall,
+  },
+  math::collision::linear_bvh::LinearBound,
+  scene::{CameraComponent, EntityId, RenderableDataRef, TransformComponent},
+  types::{GpuError, GpuResult},
 };
-use crate::math::collision::linear_bvh::LinearBound;
-use crate::scene::{CameraComponent, EntityId, RenderableDataRef, TransformComponent};
-use crate::types::{GpuError, GpuResult};
-use aethervk_oshal_rlib::math::vector::vec4::{Quat, Vec4f32};
 use aethervk_oshal_rlib::math::{
   matrix::{Matrix, Matrix4, MatrixVectorMul, SquareMatrix, mat4::Mat4x4f32},
   quaternion::Quaternion,
-  vector::{Vector, Vector3, Vector4, vec3::Vec3f32},
+  vector::{
+    Vector, Vector3, Vector4,
+    vec3::Vec3f32,
+    vec4::{Quat, Vec4f32},
+  },
 };
-use alloc::string::ToString;
-use alloc::vec::Vec;
+use alloc::{string::ToString, vec::Vec};
 use function_name::named;
 // TODO move render_frame here
 
@@ -1241,7 +1245,9 @@ pub fn do_bvh_draw_call(
   camera: &CameraRenderData,
   draw_call: &BvhDrawCall,
 ) -> GpuResult<()> {
-  let push_constants = draw_call.to_push_constants(camera).ok_or(crate::gpu_err!("Couldn't compute BVH push constants"))?;
+  let push_constants = draw_call
+    .to_push_constants(camera)
+    .ok_or(crate::gpu_err!("Couldn't compute BVH push constants"))?;
   device.push_bvh_constants(cmd_buffer, &push_constants)?;
   device.draw(cmd_buffer, draw_call.vertex_count)
 }

@@ -2,8 +2,7 @@
 
 extern crate alloc;
 use crate::simulation::comet::Vertex;
-use alloc::vec;
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 
 /// Uniform Spatial Grid backed by a flat CSR (Compressed Sparse Row) array.
 #[derive(Clone)]

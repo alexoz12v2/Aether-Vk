@@ -8,8 +8,10 @@ use aethervk_oshal_rlib::math::{
 };
 use alloc::{vec, vec::Vec};
 
-use crate::math::collision::bounds::{AABB, OBB};
-use crate::math::collision::bvh_builder::{BVHNode, BoundNode};
+use crate::math::collision::{
+  bounds::{AABB, OBB},
+  bvh_builder::{BVHNode, BoundNode},
+};
 
 #[derive(Debug, Clone)]
 /// TODO: Document this item
@@ -521,24 +523,24 @@ mod tests {
       },
       nodes: vec![
         LinearBVHNode {
-        center_of_mass: [0.0, 0.0, 0.0],
-        mass: 0.0,
+          center_of_mass: [0.0, 0.0, 0.0],
+          mass: 0.0,
           bound: LinearBound::AABB(make_aabb(0.0, 0.0, 0.0, 10.0, 10.0, 10.0)),
           left_child_or_primitive_offset: 1,
           right_child_offset: 2,
           primitive_count: 0,
         },
         LinearBVHNode {
-        center_of_mass: [0.0, 0.0, 0.0],
-        mass: 0.0,
+          center_of_mass: [0.0, 0.0, 0.0],
+          mass: 0.0,
           bound: LinearBound::AABB(make_aabb(0.0, 0.0, 0.0, 6.0, 6.0, 6.0)),
           left_child_or_primitive_offset: 0,
           right_child_offset: u32::MAX,
           primitive_count: 1,
         },
         LinearBVHNode {
-        center_of_mass: [0.0, 0.0, 0.0],
-        mass: 0.0,
+          center_of_mass: [0.0, 0.0, 0.0],
+          mass: 0.0,
           bound: LinearBound::AABB(make_aabb(5.0, 5.0, 5.0, 10.0, 10.0, 10.0)),
           left_child_or_primitive_offset: 1,
           right_child_offset: u32::MAX,
