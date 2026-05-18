@@ -1606,12 +1606,12 @@ impl RenderDevice for Device {
         let compiled = if let Some(update) = prep {
           let state = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.res);
           crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-            &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+            &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
           )?;
           let mut outline_data = None;
           if let Some(outline_info) = update.outline_graphics_info {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &outline_info, rollback
+              &state.pipeline_pool, &self.device, &outline_info, rollback,
             )?;
             outline_data = Some((outline_info.pipeline_key(), outline_info));
           }
@@ -1653,12 +1653,12 @@ impl RenderDevice for Device {
         let compiled = if let Some(update) = prep {
           let state = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.res);
           crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-            &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+            &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
           )?;
           let mut outline_data = None;
           if let Some(outline_info) = update.outline_graphics_info {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &outline_info, rollback
+              &state.pipeline_pool, &self.device, &outline_info, rollback,
             )?;
             outline_data = Some((outline_info.pipeline_key(), outline_info));
           }
@@ -1700,12 +1700,12 @@ impl RenderDevice for Device {
         let compiled = if let Some(update) = prep {
           let state = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.res);
           crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-            &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+            &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
           )?;
           let mut outline_data = None;
           if let Some(outline_info) = update.outline_graphics_info {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &outline_info, rollback
+              &state.pipeline_pool, &self.device, &outline_info, rollback,
             )?;
             outline_data = Some((outline_info.pipeline_key(), outline_info));
           }
@@ -1747,12 +1747,12 @@ impl RenderDevice for Device {
         let compiled = if let Some(update) = prep {
           let state = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.res);
           crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-            &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+            &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
           )?;
           let mut outline_data = None;
           if let Some(outline_info) = update.outline_graphics_info {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &outline_info, rollback
+              &state.pipeline_pool, &self.device, &outline_info, rollback,
             )?;
             outline_data = Some((outline_info.pipeline_key(), outline_info));
           }
@@ -1794,12 +1794,12 @@ impl RenderDevice for Device {
         let compiled = if let Some(update) = prep {
           let state = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.res);
           crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-            &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+            &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
           )?;
           let mut outline_data = None;
           if let Some(outline_info) = update.outline_graphics_info {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &outline_info, rollback
+              &state.pipeline_pool, &self.device, &outline_info, rollback,
             )?;
             outline_data = Some((outline_info.pipeline_key(), outline_info));
           }
@@ -2359,7 +2359,7 @@ impl RenderDevice for Device {
       })
       .and_then_prepare_read((), |state, (pe, backup, resize_result), _| {
         if resize_result.is_err() {
-           return Ok((pe, backup, resize_result, None));
+          return Ok((pe, backup, resize_result, None));
         }
 
         let format = pe.format();
@@ -2408,12 +2408,12 @@ impl RenderDevice for Device {
 
           let physical_mesh = if let Some(update) = prep.physical_mesh {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2426,12 +2426,12 @@ impl RenderDevice for Device {
 
           let physical_mesh2 = if let Some(update) = prep.physical_mesh2 {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2444,12 +2444,12 @@ impl RenderDevice for Device {
 
           let cursor = if let Some(update) = prep.cursor {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2462,12 +2462,12 @@ impl RenderDevice for Device {
 
           let particle = if let Some(update) = prep.particle {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2480,12 +2480,12 @@ impl RenderDevice for Device {
 
           let particle2 = if let Some(update) = prep.particle2 {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2498,12 +2498,12 @@ impl RenderDevice for Device {
 
           let sun = if let Some(update) = prep.sun {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2516,12 +2516,12 @@ impl RenderDevice for Device {
 
           let sky = if let Some(update) = prep.sky {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2534,12 +2534,12 @@ impl RenderDevice for Device {
 
           let grid = if let Some(update) = prep.grid {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2552,12 +2552,12 @@ impl RenderDevice for Device {
 
           let minimap = if let Some(update) = prep.minimap {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2570,12 +2570,12 @@ impl RenderDevice for Device {
 
           let measurement = if let Some(update) = prep.measurement {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2588,12 +2588,12 @@ impl RenderDevice for Device {
 
           let marker = if let Some(update) = prep.marker {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2606,12 +2606,12 @@ impl RenderDevice for Device {
 
           let text = if let Some(update) = prep.text {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2624,12 +2624,12 @@ impl RenderDevice for Device {
 
           let text2 = if let Some(update) = prep.text2 {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2642,12 +2642,12 @@ impl RenderDevice for Device {
 
           let bvh = if let Some(update) = prep.bvh {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2660,12 +2660,12 @@ impl RenderDevice for Device {
 
           let bvhwire2 = if let Some(update) = prep.bvhwire2 {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2678,12 +2678,12 @@ impl RenderDevice for Device {
 
           let gizmo = if let Some(update) = prep.gizmo {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2696,12 +2696,12 @@ impl RenderDevice for Device {
 
           let trajectory = if let Some(update) = prep.trajectory {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2714,12 +2714,12 @@ impl RenderDevice for Device {
 
           let ui = if let Some(update) = prep.ui {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2732,12 +2732,12 @@ impl RenderDevice for Device {
 
           let background = if let Some(update) = prep.background {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2750,12 +2750,12 @@ impl RenderDevice for Device {
 
           let billboard = if let Some(update) = prep.billboard {
             crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback
+              &state.pipeline_pool, &self.device, &update.main_graphics_info, rollback,
             )?;
             let mut outline_data = None;
             if let Some(outline_info) = update.outline_graphics_info {
               crate::gpu_backends::vulkan::device::pipelines::PipelinePool::get_or_create_graphics_pipeline(
-                &state.pipeline_pool, &self.device, &outline_info, rollback
+                &state.pipeline_pool, &self.device, &outline_info, rollback,
               )?;
               outline_data = Some((outline_info.pipeline_key(), outline_info));
             }
@@ -2767,7 +2767,26 @@ impl RenderDevice for Device {
           } else { None };
 
           Ok(Some(AllCompiled {
-            physical_mesh, physical_mesh2, cursor, particle, particle2, sun, sky, grid, minimap, measurement, marker, text, text2, bvh, bvhwire2, gizmo, trajectory, ui, background, billboard,
+            physical_mesh,
+            physical_mesh2,
+            cursor,
+            particle,
+            particle2,
+            sun,
+            sky,
+            grid,
+            minimap,
+            measurement,
+            marker,
+            text,
+            text2,
+            bvh,
+            bvhwire2,
+            gizmo,
+            trajectory,
+            ui,
+            background,
+            billboard,
           }))
         })();
 
@@ -3162,8 +3181,6 @@ impl RenderDevice for Device {
             )?
           };
 
-          core::mem::forget(allocator);
-
           Ok((pipeline_key, outline_pipeline_key, resource, texture_flags))
         },
       )
@@ -3530,8 +3547,6 @@ impl RenderDevice for Device {
               debug_name,
             )?
           }; // last op, so no rollback defer
-
-          core::mem::forget(allocator); // do not destroy the vma allocator instance!
 
           Ok((pipeline_key, outline_pipeline_key, resource, texture_flags))
         },
@@ -4039,8 +4054,6 @@ impl RenderDevice for Device {
           self.device.wait_for_fences(&[fence], true, u64::MAX)?;
         }
         oshal::log!("generate_sky: done waiting");
-
-        core::mem::forget(allocator);
 
         // _cleanup gets dropped here, immediately cleaning up transient pools, layouts, and fences
         Ok(Some(sky_image))
@@ -5178,6 +5191,8 @@ impl RenderDevice for Device {
     bvh_archetype.as_ref().map(|a| a.pipeline_key).ok_or(gpu_err_pipeline_key_absent!())
   }
 
+  // In device.rs
+
   #[named]
   fn allocate_rasterized_font_atlas(
     &self,
@@ -5187,74 +5202,167 @@ impl RenderDevice for Device {
   ) -> GpuResult<u32> {
     let (command_buffer, handle) = self.get_cmd_and_pe(cmd)?;
 
-    let res_guard = DebugTrackedRwLock::read(&self.res);
-    let live_pes = &res_guard.live_presentation_engines;
-    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+    crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read(handle, |state, _| {
+        let a1_arc =
+          state.text_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent text1"))?.clone();
+        let a2_arc = state
+          .text2_render_archetype_arena
+          .as_ref()
+          .ok_or(gpu_err!("arena absent text2"))?
+          .clone();
 
-    let mut staging_arena = DebugTrackedRwLock::write(&res_guard.frame_staging_arena);
-    let staging_arena_ref = staging_arena.as_mut().ok_or(gpu_err!("staging arena missing"))?;
+        // 1. Prepare: Check for existing allocations and reserve new indices
+        let (prep1, prep2) = {
+          let mut a1 =
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&*a1_arc);
+          let mut a2 =
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&*a2_arc);
+          (
+            a1.prepare_upload_font_atlas(hash)?,
+            a2.prepare_upload_font_atlas(hash)?,
+          )
+        };
 
-    let mut idx = 0;
+        if prep1.descriptor_index != prep2.descriptor_index {
+          return Err(gpu_err!(
+            "Text and Text2 font atlas descriptor indices drifted out of sync!"
+          ));
+        }
 
-    // TODO font atlas is shared among all text archetypes, hence DeviceResources also should hold
-    // an Arc for each of these
-    let first_id = {
-      let a1_arc =
-        res_guard.text_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent text1"))?;
-      let mut a1 = DebugTrackedRwLock::write(&*a1_arc);
-      a1.upload_font_atlas(
-        &self.device,
-        &self.queues.get_graphics_queue(),
-        res_guard.allocator.allocator.as_allocator_view(),
-        staging_arena_ref,
-        command_buffer,
-        hash,
-        font_atlas.clone(),
-      )?
-    };
+        if prep1.is_already_uploaded && prep2.is_already_uploaded {
+          return Ok((a1_arc, a2_arc, prep1, prep2, None));
+        }
 
-    {
-      let a2_arc =
-        res_guard.text2_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent text2"))?;
-      let mut a2 = DebugTrackedRwLock::write(&*a2_arc);
-      idx = a2.upload_font_atlas(
-        &self.device,
-        &self.queues.get_graphics_queue(),
-        res_guard.allocator.allocator.as_allocator_view(),
-        staging_arena_ref,
-        command_buffer,
-        hash,
-        font_atlas,
-      )?;
-      if idx != first_id {
-        panic!("wait, we need to communicate both IDs!");
-      }
-    }
+        let vma_view = state.allocator.allocator.as_allocator_view();
+        let staging_arena_ptr = state
+          .frame_staging_arena
+          .read()
+          .as_ref()
+          .map(|a| a as *const _)
+          .ok_or(gpu_err!("staging arena missing"))?;
 
-    Ok(idx)
+        Ok((
+          a1_arc,
+          a2_arc,
+          prep1,
+          prep2,
+          Some((vma_view, staging_arena_ptr)),
+        ))
+      })?
+      .execute(|(a1_arc, a2_arc, prep1, prep2, exec_data), rollback| {
+        let Some((vma_view, staging_arena_ptr)) = exec_data else {
+          return Ok((a1_arc, a2_arc, prep1, prep2, None)); // Pass through if already uploaded
+        };
+
+        let staging_arena = unsafe { &*staging_arena_ptr };
+
+        let texture = crate::simulation::comet::Texture {
+          data: font_atlas.image_data.clone().into(),
+          format: crate::simulation::comet::TexelFormat::R8_UNORM,
+          width: font_atlas.width,
+          height: font_atlas.height,
+          has_mipmaps: false,
+        };
+
+        // 2. Execute: Lock-Free Vulkan Resource Upload and Descriptor Binding
+        let image1 = resources::TextRenderResourceArchetypeArena::execute_upload_font_atlas(
+          &self.device,
+          vma_view,
+          command_buffer,
+          staging_arena,
+          &texture,
+          &prep1,
+          "FontAtlas Dynamic 1",
+          rollback,
+        )?;
+
+        let image2 = resources::Text2RenderResourceArchetypeArena::execute_upload_font_atlas(
+          &self.device,
+          vma_view,
+          command_buffer,
+          staging_arena,
+          &texture,
+          &prep2,
+          "FontAtlas Dynamic 2",
+          rollback,
+        )?;
+
+        Ok((a1_arc, a2_arc, prep1, prep2, Some((image1, image2))))
+      })
+      .commit_read(|_state, execute_result| {
+        let (a1_arc, a2_arc, prep1, prep2, images_opt) = execute_result?;
+
+        // 3. Commit: Finalize map insertion with new data
+        if let Some((image1, image2)) = images_opt {
+          let mut a1 =
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&*a1_arc);
+          let mut a2 =
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&*a2_arc);
+
+          a1.commit_upload_font_atlas(hash, font_atlas.clone(), image1, prep1.descriptor_index);
+          a2.commit_upload_font_atlas(hash, font_atlas.clone(), image2, prep2.descriptor_index);
+        }
+
+        Ok(prep1.descriptor_index)
+      })
   }
 
   #[named]
   fn free_rasterized_font_atlas(&self, hash: u64, _font_atlas_id: u32) -> GpuResult<()> {
-    let res_guard = DebugTrackedRwLock::read(&self.res);
-    // TODO verify that we don't need + 1 is correct to discard on next timeline?
-    let timeline = res_guard.get_timeline_semaphore_cached_value();
+    crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |state, _| {
+        let a1_arc =
+          state.text_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent text1"))?.clone();
+        let a2_arc = state
+          .text2_render_archetype_arena
+          .as_ref()
+          .ok_or(gpu_err!("arena absent text2"))?
+          .clone();
 
-    {
-      let a1_arc =
-        res_guard.text_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent text1"))?;
-      let mut a1 = DebugTrackedRwLock::write(&*a1_arc);
-      let _ = a1.remove_font_atlas(hash, &res_guard.discard_pool, timeline);
-    }
+        // 1. Prepare: Mutate maps instantly, returning raw handle data
+        let (prep1, prep2) = {
+          let mut a1 =
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&*a1_arc);
+          let mut a2 =
+            crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&*a2_arc);
+          (
+            a1.prepare_remove_font_atlas(hash)?,
+            a2.prepare_remove_font_atlas(hash)?,
+          )
+        };
 
-    {
-      let a2_arc =
-        res_guard.text2_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent text2"))?;
-      let mut a2 = DebugTrackedRwLock::write(&*a2_arc);
-      let _ = a2.remove_font_atlas(hash, &res_guard.discard_pool, timeline);
-    }
+        let allocator_raw = state.allocator.allocator.get_raw();
+        let timeline = state.timeline_manager.get_cached_value();
+        let discard_pool_ptr = &state.discard_pool as *const _;
 
-    Ok(())
+        Ok((prep1, prep2, allocator_raw, timeline, discard_pool_ptr))
+      })?
+      .execute(
+        |(prep1, prep2, allocator_raw, timeline, discard_pool_ptr), _rollback| {
+          // 2. Execute: Push extracted handles straight into lock-free DiscardPool limits
+          let discard_pool = unsafe { &*discard_pool_ptr };
+
+          resources::TextRenderResourceArchetypeArena::execute_remove_font_atlas(
+            &prep1,
+            discard_pool,
+            allocator_raw,
+            timeline,
+          );
+          resources::Text2RenderResourceArchetypeArena::execute_remove_font_atlas(
+            &prep2,
+            discard_pool,
+            allocator_raw,
+            timeline,
+          );
+
+          Ok(())
+        },
+      )
+      .commit_read(|_state, execute_result| {
+        // 3. Commit: Map cleanups are natively immediate so nothing extra is required
+        execute_result
+      })
   }
 
   #[named]
@@ -5768,46 +5876,112 @@ impl RenderDevice for Device {
   fn add_billboard_texture(
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
-    texture_id: u64,
+    _texture_id: u64,
     texture: &Texture,
-    current_frame: u64,
+    _current_frame: u64,
   ) -> GpuResult<u32> {
-    let res = DebugTrackedRwLock::read(&self.res);
-    let mut billboard_resources = DebugTrackedRwLock::write(&res.billboard_resources);
-
     let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
-    let live_pes = &res.live_presentation_engines;
-    let pe = live_pes.get(&handle).ok_or(gpu_err_cmd_no_pe!())?;
-    let billboard_render_archetype =
-      DebugTrackedRwLock::read(&pe.archetypes().billboard_render_archetype);
-    if billboard_render_archetype.as_ref().is_none() {
-      return Err(gpu_err_archetype_absent!());
-    }
 
-    let mut staging_arena_lock = DebugTrackedRwLock::write(&res.frame_staging_arena);
-    let staging_arena = staging_arena_lock.as_mut().unwrap();
+    crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_write(handle, |state, h| {
+        let live_pes = &state.live_presentation_engines;
+        let pe = live_pes.get(&h).ok_or(gpu_err_cmd_no_pe!())?;
 
-    let image = {
-      let billboard_render_archetype_ref =
-        unsafe { billboard_render_archetype.as_ref().unwrap_unchecked() };
-      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-        &*billboard_render_archetype_ref.deref_arena().ok_or(crate::gpu_err_device!())?,
+        let archetype_guard = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+          &pe.archetypes().billboard_render_archetype,
+        );
+        let archetype = archetype_guard.as_ref().ok_or(gpu_err_archetype_absent!())?;
+
+        let arena_arc = archetype.deref_arena().ok_or(crate::gpu_err_device!())?.clone();
+        let descriptor_set =
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&*arena_arc)
+            .descriptor_set
+            .get();
+
+        // Reserve index in the global billboard array
+        let mut billboard_resources =
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+            &state.billboard_resources,
+          );
+        let array_index = billboard_resources.len() as u32;
+
+        // Insert a dummy image to securely reserve our bindless slot while we allocate lock-free
+        billboard_resources.push(resources::Image {
+          image: unsafe { NonZeroHandle::new_unchecked(vk::Image::null()) },
+          image_view: unsafe { NonZeroHandle::new_unchecked(vk::ImageView::null()) },
+          allocation: unsafe { core::mem::zeroed() },
+        });
+
+        let vma_view = state.allocator.allocator.as_allocator_view();
+        let staging_arena_ptr =
+          state.frame_staging_arena.read().as_ref().map(|a| a as *const _).unwrap();
+        let sampler = state.linear_sampler;
+
+        Ok((
+          descriptor_set,
+          vma_view,
+          staging_arena_ptr,
+          sampler,
+          array_index,
+        ))
+      })?
+      .execute(
+        |(descriptor_set, vma_view, staging_arena_ptr, sampler, array_index), rollback| {
+          let staging_arena = unsafe { &*staging_arena_ptr };
+          let debug_name = alloc::format!("BillBoard_{}", array_index);
+
+          // 1. Heavy Allocation + Upload (Lock-Free)
+          let image = resources::Image::new_2d(
+            &self.device,
+            vma_view,
+            cmd,
+            staging_arena,
+            texture,
+            vk::ImageUsageFlags::SAMPLED,
+            &debug_name,
+          )?;
+
+          // 2. Protect with RollbackContext in case of aborts
+          let img_h = image.image.get();
+          let view_h = image.image_view.get();
+          let mut alloc_h = image.allocation;
+          rollback.defer(move |dev| unsafe {
+            dev.destroy_image_view(view_h, None);
+            vma_view.destroy_image(img_h, &mut alloc_h);
+          });
+
+          // 3. Update the array slot in the bindless descriptor set
+          let image_info = vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(view_h)
+            .sampler(sampler.get());
+
+          let write = vk::WriteDescriptorSet::default()
+            .dst_set(descriptor_set)
+            .dst_binding(0)
+            .dst_array_element(array_index)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(core::slice::from_ref(&image_info));
+
+          unsafe {
+            self.device.update_descriptor_sets(core::slice::from_ref(&write), &[]);
+          }
+
+          Ok((array_index, image))
+        },
       )
-      .add_texture(
-        &self.device,
-        res.allocator.allocator.as_allocator_view(),
-        cmd,
-        staging_arena,
-        texture,
-        res.linear_sampler,
-        billboard_resources.len() as u32,
-        &alloc::format!("BillBoard_{}", billboard_resources.len()),
-      )?
-    };
+      .commit_read(|state, execute_result| {
+        let (array_index, image) = execute_result?;
 
-    billboard_resources.push(image);
+        // Safely replace the reserved dummy slot with the real uploaded image
+        let mut billboard_resources =
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+            &state.billboard_resources,
+          );
+        billboard_resources[array_index as usize] = image;
 
-    Ok(billboard_resources.len() as u32 - 1)
+        Ok(array_index)
+      })
   }
 
   #[named]
@@ -6541,8 +6715,6 @@ impl RenderDevice for Device {
               false,
             );
 
-            core::mem::forget(allocator);
-
             let new_resource = resources::SunRenderResource {
               resolution,
               image: Some(image),
@@ -6596,8 +6768,6 @@ impl RenderDevice for Device {
               compute_descriptor_set,
               is_generated,
             );
-
-            core::mem::forget(allocator);
 
             Ok::<_, GpuError>(ExecuteResult::Updated)
           }
@@ -7535,54 +7705,87 @@ impl RenderDevice for Device {
     color: [f32; 4],
   ) -> GpuResult<()> {
     let (cmd, _) = self.get_cmd_and_pe(cmd_buffer)?;
-    let res_guard = DebugTrackedRwLock::read(&self.res);
-    let arena_arc =
-      res_guard.text_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
-    let arena = DebugTrackedRwLock::read(&*arena_arc);
-    let font = arena
-      .uploaded_fonts
-      .get(&atlas_id.0)
-      .ok_or(gpu_invalid_arg!("inexistent font, {:?}", atlas_id))?;
-    if atlas_id.1 != font.descriptor_index {
-      return Err(gpu_invalid_arg!(
-        "inconsistent descriptor index: {} vs {}",
-        atlas_id.1,
-        font.descriptor_index
-      ));
-    }
 
-    let mut cursor_x = start_cursor_position[0];
-    let mut cursor_y = start_cursor_position[1];
+    crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |state, _| {
+        let arena_arc =
+          state.text_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+        let arena =
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&**arena_arc);
 
-    let default_glyph =
-      font.atlas.glyphs.get(&'?').ok_or(gpu_err!("text atlas doesn't have default \"?\" glyph"))?;
+        let font = arena
+          .uploaded_fonts
+          .get(&atlas_id.0)
+          .ok_or(gpu_invalid_arg!("inexistent font, {:?}", atlas_id))?;
 
-    unsafe {
-      for c in text.chars() {
-        if c == '\n' {
-          cursor_x = start_cursor_position[0];
-          cursor_y += font.atlas.scaled_height(desired_points) * 1.5;
-          continue;
+        if atlas_id.1 != font.descriptor_index {
+          return Err(gpu_invalid_arg!(
+            "inconsistent descriptor index: {} vs {}",
+            atlas_id.1,
+            font.descriptor_index
+          ));
         }
 
-        let glyph = font.atlas.glyphs.get(&c).unwrap_or(default_glyph);
-        let push_constants = gpu::TextPushConstants::from_glyph(
-          glyph,
-          [cursor_x, cursor_y],
-          view_proj,
-          desired_points,
-          font.atlas.scale,
-          atlas_id.1,
-          color,
-        );
-        self.push_text_constants(cmd_buffer, &push_constants)?;
-        self.device.cmd_draw(cmd, 4, 1, 0, 0);
+        let pipeline_layout = arena.pipeline_layout.get();
+        let default_glyph = font
+          .atlas
+          .glyphs
+          .get(&'?')
+          .ok_or(gpu_err!("text atlas doesn't have default \"?\" glyph"))?;
 
-        cursor_x += glyph.scaled_advance(desired_points, font.atlas.scale);
-      }
-    }
+        let mut cursor_x = start_cursor_position[0];
+        let mut cursor_y = start_cursor_position[1];
 
-    Ok(())
+        // Pre-calculate all push constants to avoid locking during Vulkan calls
+        let mut push_constants_list = alloc::vec::Vec::with_capacity(text.len());
+
+        for c in text.chars() {
+          if c == '\n' {
+            cursor_x = start_cursor_position[0];
+            cursor_y += font.atlas.scaled_height(desired_points) * 1.5;
+            continue;
+          }
+
+          let glyph = font.atlas.glyphs.get(&c).unwrap_or(default_glyph);
+          let push_constants = crate::gpu::TextPushConstants::from_glyph(
+            glyph,
+            [cursor_x, cursor_y],
+            view_proj,
+            desired_points,
+            font.atlas.scale,
+            atlas_id.1,
+            color,
+          );
+
+          push_constants_list.push(push_constants);
+          cursor_x += glyph.scaled_advance(desired_points, font.atlas.scale);
+        }
+
+        Ok((pipeline_layout, push_constants_list))
+      })?
+      .execute(|(pipeline_layout, push_constants_list), _rollback| {
+        // Execute all Vulkan commands completely lock-free
+        unsafe {
+          for push_constants in push_constants_list {
+            let push_bytes = core::slice::from_raw_parts(
+              &push_constants as *const _ as *const u8,
+              core::mem::size_of::<crate::gpu::TextPushConstants>(),
+            );
+
+            self.device.cmd_push_constants(
+              cmd,
+              pipeline_layout,
+              ash::vk::ShaderStageFlags::VERTEX | ash::vk::ShaderStageFlags::FRAGMENT,
+              0,
+              push_bytes,
+            );
+
+            self.device.cmd_draw(cmd, 4, 1, 0, 0);
+          }
+        }
+        Ok(())
+      })
+      .commit_read(|_state, execute_result| execute_result)
   }
 
   #[named]
@@ -8001,22 +8204,25 @@ impl RenderDevice for Device {
     handle: PresentationEngineHandle,
   ) -> GpuResult<()> {
     let cmd = self.get_cmd(cmd_buffer)?;
-    let res_guard = DebugTrackedRwLock::read(&self.res);
-    let pe_lock = &res_guard.live_presentation_engines;
-    let pe = pe_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?;
-    let archetype_guard = DebugTrackedRwLock::read(&pe.archetypes().background_render_archetype);
-    if archetype_guard.is_none() {
-      return Err(gpu_err_archetype_absent!());
-    }
-    let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
+    let pipeline = {
+      let res_guard = DebugTrackedRwLock::read(&self.res);
+      let pe_lock = &res_guard.live_presentation_engines;
+      let pe = pe_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let archetype_guard = DebugTrackedRwLock::read(&pe.archetypes().background_render_archetype);
+      if archetype_guard.is_none() {
+        return Err(gpu_err_archetype_absent!());
+      }
+      let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
 
-    let p = res_guard
-      .pipeline_pool
-      .get_graphics_pipeline(archetype.pipeline_key)
-      .ok_or(gpu_err_pipeline_absent!())?;
+      let p = res_guard
+        .pipeline_pool
+        .get_graphics_pipeline(archetype.pipeline_key)
+        .ok_or(gpu_err_pipeline_absent!())?;
+      p.get()
+    };
 
     unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, p.get());
+      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
       // No descriptor sets for background archetype
     }
     Ok(())
@@ -8263,123 +8469,160 @@ impl Device {
     entity_id: crate::scene::EntityId,
     task_id: u64,
   ) -> GpuResult<()> {
-    let cmd = self.get_cmd(cmd_buffer)?;
+    // 1. Extract command buffer
+    let cmd = {
+      let cmd_buffers = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+        &self.recording_command_buffers,
+      );
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+      data.command_buffer.get()
+    };
 
-    let res_guard = DebugTrackedRwLock::read(&self.res);
-
-    let sun_lock = DebugTrackedRwLock::read(&res_guard.sun_resources);
-    let sun_map = sun_lock.as_ref().ok_or(gpu_err!("no sun resources"))?;
-    let sun_res =
-      sun_map.get(&entity_id).ok_or(gpu_invalid_arg!("invalid sun entity: {:?}", entity_id))?;
-    let sun_image = sun_res.image.as_ref().ok_or(gpu_err!("sun resource doesn't have image"))?;
-
-    let (width, height, depth) = sun_res.resolution;
-    // R16G16B16A16_SFLOAT is 8 bytes per texel
-    let buffer_size = (width * height * depth * 8) as vk::DeviceSize;
-
-    let buffer_info =
-      vk::BufferCreateInfo::default().size(buffer_size).usage(vk::BufferUsageFlags::TRANSFER_DST);
-
-    let mut alloc_info = vk_mem::AllocationCreateInfo::default();
-    alloc_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
-    alloc_info.flags =
-      vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM | vk_mem::AllocationCreateFlags::MAPPED;
-    crate::apply_test_dedicated_alloc!(alloc_info);
-
-    let (staging_buffer, alloc) =
-      unsafe { res_guard.allocator.allocator.create_buffer(&buffer_info, &alloc_info) }?;
-
-    unsafe {
-      let image_barrier = vk::ImageMemoryBarrier2::default()
-        .src_stage_mask(
-          vk::PipelineStageFlags2::COMPUTE_SHADER | vk::PipelineStageFlags2::FRAGMENT_SHADER,
-        )
-        .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE | vk::AccessFlags2::SHADER_READ)
-        .dst_stage_mask(vk::PipelineStageFlags2::COPY)
-        .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
-        .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .image(sun_image.image.get())
-        .subresource_range(
-          vk::ImageSubresourceRange::default()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .base_mip_level(0)
-            .level_count(1)
-            .base_array_layer(0)
-            .layer_count(1),
+    crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |state, _| {
+        // 2. Fetch Sun Image and Resolution
+        let sun_lock = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+          &state.sun_resources,
         );
-      let dep_info =
-        vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&image_barrier));
-      self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info);
+        let sun_map = sun_lock.as_ref().ok_or(gpu_err!("no sun resources"))?;
+        let sun_res =
+          sun_map.get(&entity_id).ok_or(gpu_invalid_arg!("invalid sun entity: {:?}", entity_id))?;
+        let sun_image =
+          sun_res.image.as_ref().ok_or(gpu_err!("sun resource doesn't have image"))?.image.get();
 
-      let copy_region = vk::BufferImageCopy::default()
-        .buffer_offset(0)
-        .image_subresource(
-          vk::ImageSubresourceLayers::default()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .mip_level(0)
-            .base_array_layer(0)
-            .layer_count(1),
-        )
-        .image_extent(vk::Extent3D {
-          width,
-          height,
-          depth,
+        let (width, height, depth) = sun_res.resolution;
+
+        // 3. Extract safe VMA view
+        let vma_view = state.allocator.allocator.as_allocator_view();
+
+        Ok((sun_image, width, height, depth, vma_view))
+      })?
+      .execute(|(sun_image, width, height, depth, vma_view), rollback| {
+        // R16G16B16A16_SFLOAT is 8 bytes per texel
+        let buffer_size = (width * height * depth * 8) as vk::DeviceSize;
+
+        let buffer_info = vk::BufferCreateInfo::default()
+          .size(buffer_size)
+          .usage(vk::BufferUsageFlags::TRANSFER_DST);
+
+        let mut alloc_info = vk_mem::AllocationCreateInfo::default();
+        alloc_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
+        alloc_info.flags =
+          vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM | vk_mem::AllocationCreateFlags::MAPPED;
+        crate::apply_test_dedicated_alloc!(alloc_info);
+
+        // 4. Lock-free Memory Allocation
+        let (staging_buffer, alloc) = unsafe { vma_view.create_buffer(&buffer_info, &alloc_info) }?;
+
+        // Register with Rollback in case of aborts
+        let mut alloc_mut = alloc;
+        rollback.defer(move |_dev| unsafe {
+          vma_view.destroy_buffer(staging_buffer, &mut alloc_mut);
         });
 
-      self.device.cmd_copy_image_to_buffer(
-        cmd,
-        sun_res.image.as_ref().unwrap().image.get(),
-        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-        staging_buffer,
-        &[copy_region],
-      );
+        // 5. Record Vulkan Commands Lock-free
+        unsafe {
+          let image_barrier = vk::ImageMemoryBarrier2::default()
+            .src_stage_mask(
+              vk::PipelineStageFlags2::COMPUTE_SHADER | vk::PipelineStageFlags2::FRAGMENT_SHADER,
+            )
+            .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE | vk::AccessFlags2::SHADER_READ)
+            .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+            .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+            .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(sun_image)
+            .subresource_range(
+              vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .level_count(1)
+                .base_array_layer(0)
+                .layer_count(1),
+            );
+          let dep_info = vk::DependencyInfo::default()
+            .image_memory_barriers(core::slice::from_ref(&image_barrier));
+          self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info);
 
-      let image_barrier_back = vk::ImageMemoryBarrier2::default()
-        .src_stage_mask(vk::PipelineStageFlags2::COPY)
-        .src_access_mask(vk::AccessFlags2::TRANSFER_READ)
-        .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-        .dst_access_mask(vk::AccessFlags2::SHADER_READ)
-        .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .image(sun_res.image.as_ref().unwrap().image.get())
-        .subresource_range(
-          vk::ImageSubresourceRange::default()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .base_mip_level(0)
-            .level_count(1)
-            .base_array_layer(0)
-            .layer_count(1),
+          let copy_region = vk::BufferImageCopy::default()
+            .buffer_offset(0)
+            .image_subresource(
+              vk::ImageSubresourceLayers::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .mip_level(0)
+                .base_array_layer(0)
+                .layer_count(1),
+            )
+            .image_extent(vk::Extent3D {
+              width,
+              height,
+              depth,
+            });
+
+          self.device.cmd_copy_image_to_buffer(
+            cmd,
+            sun_image,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            staging_buffer,
+            &[copy_region],
+          );
+
+          let image_barrier_back = vk::ImageMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::COPY)
+            .src_access_mask(vk::AccessFlags2::TRANSFER_READ)
+            .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+            .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+            .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(sun_image)
+            .subresource_range(
+              vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .level_count(1)
+                .base_array_layer(0)
+                .layer_count(1),
+            );
+
+          let buffer_barrier = vk::BufferMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::HOST)
+            .dst_access_mask(vk::AccessFlags2::HOST_READ)
+            .buffer(staging_buffer)
+            .size(buffer_size)
+            .offset(0);
+
+          let buf_dep_info = vk::DependencyInfo::default()
+            .buffer_memory_barriers(core::slice::from_ref(&buffer_barrier))
+            .image_memory_barriers(core::slice::from_ref(&image_barrier_back));
+          self.device.synchronization2.cmd_pipeline_barrier2(cmd, &buf_dep_info);
+        }
+
+        Ok::<_, GpuError>((staging_buffer, alloc, buffer_size as usize))
+      })
+      .commit_read(|state, execute_result| {
+        let (staging_buffer, allocation, size) = execute_result?;
+
+        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+          &state.pending_downloads,
+        )
+        .insert(
+          task_id,
+          PendingDownload {
+            staging_buffer,
+            allocation,
+            size,
+            presentation_engine: None,
+          },
         );
 
-      let buffer_barrier = vk::BufferMemoryBarrier2::default()
-        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags2::HOST)
-        .dst_access_mask(vk::AccessFlags2::HOST_READ)
-        .buffer(staging_buffer)
-        .size(buffer_size)
-        .offset(0);
-
-      let buf_dep_info = vk::DependencyInfo::default()
-        .buffer_memory_barriers(core::slice::from_ref(&buffer_barrier))
-        .image_memory_barriers(core::slice::from_ref(&image_barrier_back));
-      self.device.synchronization2.cmd_pipeline_barrier2(cmd, &buf_dep_info);
-    }
-
-    DebugTrackedRwLock::write(&res_guard.pending_downloads).insert(
-      task_id,
-      PendingDownload {
-        staging_buffer,
-        allocation: alloc,
-        size: buffer_size as usize,
-        presentation_engine: None,
-      },
-    );
+        Ok(())
+      })?;
 
     Ok(())
   }
