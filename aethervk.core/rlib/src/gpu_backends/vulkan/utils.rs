@@ -879,7 +879,7 @@ where
 
 /// TODO: Document this item
 pub(super) fn create_transient_attachment(
-  allocator: &vk_mem::Allocator,
+  allocator: vk_mem::AllocatorView,
   extent: vk::Extent2D,
   format: vk::Format,
   usage: vk::ImageUsageFlags,
@@ -916,6 +916,7 @@ pub(super) fn create_transient_attachment(
       x.preferred_flags = vk::MemoryPropertyFlags::LAZILY_ALLOCATED;
     }
     x.priority = 1.0;
+    crate::apply_test_dedicated_alloc!(x);
     x
   };
 
@@ -927,7 +928,7 @@ pub(super) fn create_transient_attachment(
 #[cfg(test)]
 /// TODO: Document this item
 pub(super) fn create_test_attachment(
-  allocator: &vk_mem::Allocator,
+  allocator: vk_mem::AllocatorView,
   extent: vk::Extent2D,
   format: vk::Format,
   usage: vk::ImageUsageFlags,
@@ -952,6 +953,7 @@ pub(super) fn create_test_attachment(
     x.usage = vk_mem::MemoryUsage::AutoPreferDevice;
     x.required_flags = vk::MemoryPropertyFlags::DEVICE_LOCAL;
     x.priority = 1.0;
+    crate::apply_test_dedicated_alloc!(x);
     x
   };
 
@@ -1144,6 +1146,7 @@ impl<'a, State, Lock: RwLockable<State>, Output, Error>
   where
     F: FnMut(&mut State, Result<Output, Error>) -> Result<NewOutput, Error>,
   {
+
     let final_result = {
       let mut state = self.lock.write(); // Write lock acquired
       f(&mut state, self.result)
@@ -1163,6 +1166,7 @@ impl<'a, State, Lock: RwLockable<State>, Output, Error>
   where
     F: FnMut(&State, Result<Output, Error>) -> Result<NewOutput, Error>,
   {
+
     let final_result = {
       let state = self.lock.read(); // Read lock acquired
       f(&state, self.result)

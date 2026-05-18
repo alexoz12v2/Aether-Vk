@@ -11,6 +11,13 @@ static THREAD_HASHES: [AtomicU64; MAX_TRACKED_THREADS] =
 static THREAD_COUNTS: [AtomicUsize; MAX_TRACKED_THREADS] =
   [const { AtomicUsize::new(0) }; MAX_TRACKED_THREADS];
 
+static DISABLE_LOCK_ASSERTIONS: core::sync::atomic::AtomicBool =
+  core::sync::atomic::AtomicBool::new(false);
+
+pub fn set_disable_lock_assertions(disable: bool) {
+  DISABLE_LOCK_ASSERTIONS.store(disable, Ordering::SeqCst);
+}
+
 fn get_thread_hash() -> u64 {
   let mut hasher = FnvHasher::new();
   this_thread::id().hash(&mut hasher);
@@ -62,6 +69,9 @@ pub fn decrement_lock_count() {
 pub fn assert_no_locks_held() {
   #[cfg(debug_assertions)]
   {
+    if DISABLE_LOCK_ASSERTIONS.load(Ordering::SeqCst) {
+      return;
+    }
     let h = get_thread_hash();
     for i in 0..MAX_TRACKED_THREADS {
       let existing = THREAD_HASHES[i].load(Ordering::Acquire);

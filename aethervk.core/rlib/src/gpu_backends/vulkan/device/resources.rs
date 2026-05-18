@@ -22,7 +22,7 @@ use spirv_reflect::{
   ffi::SpvReflectResult_SPV_REFLECT_RESULT_SUCCESS, types::ReflectShaderStageFlags,
 };
 use static_assertions as sa;
-use vk_mem::Alloc;
+use vk_mem::{Alloc, AsAllocatorView};
 
 use crate::{
   gpu::{PipelineKey, PipelineKeyable, PresentationEngineHandle, TextureFlags},
@@ -41,7 +41,7 @@ use crate::{
 
 pub struct ArenaCreationContext<'a> {
   pub device: &'a crate::gpu_backends::vulkan::device::LogicalDevice,
-  pub allocator: &'a vk_mem::Allocator,
+  pub allocator: vk_mem::AllocatorView,
   pub discard_pool: &'a DiscardPool,
   pub queue: Option<&'a crate::gpu_backends::vulkan::device::Queue>,
   pub staging_arena: Option<&'a crate::gpu_backends::vulkan::device::memory::FrameStagingArena>,
@@ -97,7 +97,7 @@ impl<T> TimelineQueue<T> {
   }
 }
 
-enum DiscardItem {
+pub(super) enum DiscardItem {
   Buffer(BufferDiscard),
   Image(ImageDiscard),
   ImageView(vk::ImageView),
@@ -302,33 +302,31 @@ impl DiscardPool {
     self.push_item(timeline, DiscardItem::PipelineLayout(pipeline_layout));
   }
 
-  /// TODO: Document this item
-  pub fn destroy_discarded_resources_all(&self, device: &ash::Device) {
-    self.destroy_discarded_resources_internal(device, u64::MAX);
-  }
-
-  /// safety: `sem` needs to be a valid timeline semaphore
-  pub unsafe fn destroy_discarded_resources_value(
-    &self,
-    device: &ash::Device,
-    timeline_value: u64,
-  ) -> ash::prelude::VkResult<()> {
-    self.destroy_discarded_resources_internal(device, timeline_value);
-    Ok(())
-  }
-
-  fn destroy_discarded_resources_internal(&self, device: &ash::Device, timeline: u64) {
+  /// Extracts all ready items from the pool (Requires brief lock). First part of vulkan transaction
+  pub fn pop_ready_items(&self, timeline: u64) -> Vec<DiscardItem> {
     let mut items =
       crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&self.items);
     #[cfg(debug_assertions)]
     let mut queued_handles =
       crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&self.queued_handles);
 
+    let mut ready = Vec::new();
     items.drain_ready(timeline, |item| {
       #[cfg(debug_assertions)]
       {
         queued_handles.remove(&item.unique_id());
       }
+      ready.push(item);
+    });
+    ready
+  }
+
+  /// Executes Vulkan API destruction completely lock-free
+  pub fn destroy_items_lock_free(
+    device: &ash::Device,
+    items: impl IntoIterator<Item = DiscardItem>,
+  ) {
+    for item in items {
       match item {
         DiscardItem::Buffer(BufferDiscard {
           buffer,
@@ -369,7 +367,6 @@ impl DiscardPool {
           id,
         }) => {
           let _x = manager.recycle(thread_id, id, command_buffer);
-          // leaking if we didn't manage to find it!
           #[cfg(debug_assertions)]
           {
             if _x.is_err() {
@@ -390,7 +387,13 @@ impl DiscardPool {
           handle.cleanup(device);
         }
       }
-    });
+    }
+  }
+
+  /// Used by device cleanup routines
+  pub fn destroy_discarded_resources_all(&self, device: &ash::Device) {
+    let items = self.pop_ready_items(u64::MAX);
+    Self::destroy_items_lock_free(device, items);
   }
 }
 
@@ -437,7 +440,7 @@ impl Image {
   #[named]
   pub fn new_storage_2d(
     device: &vulkan::device::LogicalDevice,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     width: u32,
     height: u32,
     format: vk::Format,
@@ -472,6 +475,7 @@ impl Image {
       .samples(vk::SampleCountFlags::TYPE_1);
 
     let mut allocation_create_info = vk_mem::AllocationCreateInfo::default();
+    crate::apply_test_dedicated_alloc!(allocation_create_info);
     allocation_create_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
 
     let (image, alloc, _alloc_info) =
@@ -514,7 +518,7 @@ impl Image {
   #[named]
   pub fn new_paint_image(
     device: &vulkan::device::LogicalDevice,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     width: u32,
     height: u32,
     debug_name: &str,
@@ -582,7 +586,7 @@ impl Image {
   #[named]
   pub fn new_storage_3d(
     device: &vulkan::device::LogicalDevice,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     width: u32,
     height: u32,
     depth: u32,
@@ -622,6 +626,7 @@ impl Image {
       .samples(vk::SampleCountFlags::TYPE_1);
 
     let mut allocation_create_info = vk_mem::AllocationCreateInfo::default();
+    crate::apply_test_dedicated_alloc!(allocation_create_info);
     allocation_create_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
 
     let (image, alloc, _alloc_info) =
@@ -664,7 +669,7 @@ impl Image {
   #[named]
   pub fn new_2d(
     device: &vulkan::device::LogicalDevice,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     command_buffer: vk::CommandBuffer,
     staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
     texture: &Texture,
@@ -703,6 +708,7 @@ impl Image {
       .samples(vk::SampleCountFlags::TYPE_1);
 
     let mut allocation_create_info = vk_mem::AllocationCreateInfo::default();
+    crate::apply_test_dedicated_alloc!(allocation_create_info);
     allocation_create_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
 
     let (image, mut alloc, _alloc_info) =
@@ -1049,7 +1055,7 @@ impl ForwardMesh2RenderResource {
   #[named]
   pub(super) unsafe fn new(
     device: &vulkan::device::LogicalDevice,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     command_buffer: vk::CommandBuffer,
     staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
     position_data: &[f32],
@@ -1432,7 +1438,7 @@ impl ForwardMeshRenderResource {
   #[named]
   pub(super) unsafe fn new(
     device: &vulkan::device::LogicalDevice,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     command_buffer: vk::CommandBuffer,
     staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
     position_data: &[f32],
@@ -1780,7 +1786,7 @@ impl TextRenderResourceArchetypeArena {
     &mut self,
     device: &vulkan::device::LogicalDevice,
     queue: &vulkan::device::Queue,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
     command_buffer: vk::CommandBuffer,
     font_hash: u64,
@@ -2020,9 +2026,11 @@ impl ArchetypeArenaCreate for Text2RenderResourceArchetypeArena {
     );
 
     let mut mem_alloc_info = vk_mem::AllocationCreateInfo::default();
+    crate::apply_test_dedicated_alloc!(mem_alloc_info);
     mem_alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
-    mem_alloc_info.flags = vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+    mem_alloc_info.flags |= vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
       | vk_mem::AllocationCreateFlags::MAPPED;
+    crate::apply_test_dedicated_alloc!(mem_alloc_info);
 
     let (glyphs_buffer, glyphs_alloc) =
       unsafe { allocator.create_buffer(&buffer_info, &mem_alloc_info) }
@@ -2056,7 +2064,7 @@ impl Text2RenderResourceArchetypeArena {
     &mut self,
     device: &vulkan::device::LogicalDevice,
     queue: &vulkan::device::Queue,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
     command_buffer: vk::CommandBuffer,
     font_hash: u64,
@@ -2264,6 +2272,7 @@ impl ArchetypeArenaCreate for Bvhwire2RenderResourceArchetypeArena {
       );
 
       let mut mem_alloc_info = vk_mem::AllocationCreateInfo::default();
+      crate::apply_test_dedicated_alloc!(mem_alloc_info);
       mem_alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
 
       let (data_buffer, data_alloc) = allocator
@@ -2697,9 +2706,10 @@ impl ArchetypeArenaCreate for UiRenderResourceArchetypeArena {
     };
 
     let mut elements_alloc_info = vk_mem::AllocationCreateInfo::default();
-    elements_alloc_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
+    elements_alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
     elements_alloc_info.flags = vk_mem::AllocationCreateFlags::MAPPED
       | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE;
+    crate::apply_test_dedicated_alloc!(elements_alloc_info);
 
     let (elements_buffer, elements_alloc) =
       unsafe { allocator.create_buffer(&elements_buffer_info, &elements_alloc_info) }?;
@@ -2858,6 +2868,7 @@ impl ArchetypeArenaCreate for TrajectoryRenderResourceArchetypeArena {
             | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
         );
         let mut alloc_info = vk_mem::AllocationCreateInfo::default();
+        crate::apply_test_dedicated_alloc!(alloc_info);
         alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
 
         let (buffer, alloc) = unsafe { allocator.create_buffer(&buffer_info, &alloc_info) }
@@ -3084,7 +3095,7 @@ impl BillboardRenderResourceArchetypeArena {
   pub fn add_texture(
     &self,
     device: &vulkan::device::LogicalDevice,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     command_buffer: vk::CommandBuffer,
     staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
     texture: &Texture,
@@ -3387,10 +3398,11 @@ impl ArchetypeArenaCreate for ParticleRenderResourceArchetypeArena {
     );
 
     // --- SAFE VMA ALLOCATIONS ---
-    let alloc_create_info = vk_mem::AllocationCreateInfo {
+    let mut alloc_create_info = vk_mem::AllocationCreateInfo {
       usage: vk_mem::MemoryUsage::AutoPreferDevice,
       ..Default::default()
     };
+    crate::apply_test_dedicated_alloc!(alloc_create_info);
 
     // 1. Create Mega Particle Buffer
     let particle_buffer_size = (Self::MAX_PARTICLES as usize
@@ -3620,10 +3632,11 @@ impl ArchetypeArenaCreate for Particle2RenderResourceArchetypeArena {
     );
 
     // --- SAFE VMA ALLOCATIONS ---
-    let alloc_create_info = vk_mem::AllocationCreateInfo {
+    let mut alloc_create_info = vk_mem::AllocationCreateInfo {
       usage: vk_mem::MemoryUsage::AutoPreferDevice,
       ..Default::default()
     };
+    crate::apply_test_dedicated_alloc!(alloc_create_info);
 
     // 1. Create Mega Particle Buffer
     let particle_buffer_size = (Self::MAX_PARTICLES as usize
@@ -4467,7 +4480,7 @@ impl ForwardMeshRenderResourceArchetypeArena {
 #[named]
 pub(super) fn create_buffer_with_staging<T: Copy>(
   device: &vulkan::device::LogicalDevice,
-  allocator: &vk_mem::Allocator,
+  allocator: vk_mem::AllocatorView,
   command_buffer: vk::CommandBuffer,
   staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
   data: &[T],
@@ -4489,12 +4502,13 @@ pub(super) fn create_buffer_with_staging<T: Copy>(
     let device_buffer_info = vk::BufferCreateInfo::default()
       .size(buffer_size)
       .usage(usage | vk::BufferUsageFlags::TRANSFER_DST);
-    let device_alloc_info = vk_mem::AllocationCreateInfo {
+    let mut device_alloc_info = vk_mem::AllocationCreateInfo {
       usage: vk_mem::MemoryUsage::Auto,
       flags: vk_mem::AllocationCreateFlags::DEDICATED_MEMORY,
       preferred_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
       ..Default::default()
     };
+    crate::apply_test_dedicated_alloc!(device_alloc_info);
     unsafe { allocator.create_buffer(&device_buffer_info, &device_alloc_info) }
       .with_name(device, &alloc::format!("VkBuffer_{}", debug_name))?
   };

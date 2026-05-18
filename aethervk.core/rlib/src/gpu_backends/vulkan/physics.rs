@@ -243,7 +243,7 @@ pub struct VulkanBuffer<T> {
 impl<T> Drop for VulkanBuffer<T> {
     fn drop(&mut self) {
         if let (Some(alloc), Some(allocator)) = (self.allocation, self.allocator) {
-            let safe_allocator = unsafe { vk_mem::Allocator::from_raw(allocator) };
+            let safe_allocator = unsafe { vk_mem::AllocatorView::from_raw(allocator) };
             unsafe {
                 // To properly drop, we'd need to convert to vk_mem::Allocation and destroy it.
                 // Assuming the wrapper works like this:
@@ -263,7 +263,7 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for VulkanBuffer<T> {
 
     fn enqueue_read_to_cpu<'a>(&self, _cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'a>> {
         let allocator = self.allocator.ok_or(EngineError::InvalidState("Missing VMA allocator"))?;
-        let safe_allocator = unsafe { vk_mem::Allocator::from_raw(allocator) };
+        let safe_allocator = unsafe { vk_mem::AllocatorView::from_raw(allocator) };
         let alloc = self.allocation.ok_or(EngineError::InvalidState("Missing allocation"))?;
         let allocation = unsafe { vk_mem::Allocation::from_raw(alloc) };
         
@@ -298,7 +298,7 @@ pub struct VulkanList<T> {
 impl<T> Drop for VulkanList<T> {
     fn drop(&mut self) {
         if let (Some(alloc), Some(allocator)) = (self.allocation, self.allocator) {
-            let safe_allocator = unsafe { vk_mem::Allocator::from_raw(allocator) };
+            let safe_allocator = unsafe { vk_mem::AllocatorView::from_raw(allocator) };
             unsafe {
                 let allocation = vk_mem::Allocation::from_raw(alloc);
                 safe_allocator.destroy_buffer(self.buffer, &allocation);
@@ -316,7 +316,7 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for VulkanList<T> {
 
     fn enqueue_read_to_cpu<'a>(&self, _cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'a>> {
         let allocator = self.allocator.ok_or(EngineError::InvalidState("Missing VMA allocator"))?;
-        let safe_allocator = unsafe { vk_mem::Allocator::from_raw(allocator) };
+        let safe_allocator = unsafe { vk_mem::AllocatorView::from_raw(allocator) };
         let alloc = self.allocation.ok_or(EngineError::InvalidState("Missing allocation"))?;
         let allocation = unsafe { vk_mem::Allocation::from_raw(alloc) };
         
@@ -354,7 +354,7 @@ pub struct VulkanMotionBvh {
 impl Drop for VulkanMotionBvh {
     fn drop(&mut self) {
         if let (Some(alloc), Some(allocator)) = (self.allocation, self.allocator) {
-            let safe_allocator = unsafe { vk_mem::Allocator::from_raw(allocator) };
+            let safe_allocator = unsafe { vk_mem::AllocatorView::from_raw(allocator) };
             unsafe {
                 let allocation = vk_mem::Allocation::from_raw(alloc);
                 safe_allocator.destroy_buffer(self.buffer, &allocation);
@@ -380,7 +380,7 @@ pub struct VulkanComputeKernels {
 impl VulkanComputeKernels {
     fn allocate_and_upload<T: Copy + Send + Sync>(&self, data: &[T], usage: vk::BufferUsageFlags) -> EngineResult<VulkanBuffer<T>> {
         let allocator = if let Some(alloc) = self.allocator {
-            unsafe { vk_mem::Allocator::from_raw(alloc) }
+            unsafe { vk_mem::AllocatorView::from_raw(alloc) }
         } else {
             return Err(EngineError::InvalidState("Missing VMA allocator"));
         };
@@ -390,12 +390,13 @@ impl VulkanComputeKernels {
             .size(size)
             .usage(usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
 
-        let alloc_info = vk_mem::AllocationCreateInfo {
+        let mut alloc_info = vk_mem::AllocationCreateInfo {
             usage: vk_mem::MemoryUsage::AutoPreferDevice,
             flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE | vk_mem::AllocationCreateFlags::MAPPED,
             required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             ..Default::default()
         };
+        crate::apply_test_dedicated_alloc!(alloc_info);
 
         let (buffer, alloc, info) = unsafe { allocator.create_buffer_get_info(&buffer_info, &alloc_info) }
             .map_err(|_| EngineError::Gpu(GpuError::OutOfMemory))?;
@@ -426,7 +427,7 @@ impl VulkanComputeKernels {
     }
     fn allocate_device_buffer<T: Copy + Send + Sync>(&self, capacity: usize, usage: vk::BufferUsageFlags) -> EngineResult<VulkanBuffer<T>> {
         let allocator = if let Some(alloc) = self.allocator {
-            unsafe { vk_mem::Allocator::from_raw(alloc) }
+            unsafe { vk_mem::AllocatorView::from_raw(alloc) }
         } else {
             return Err(EngineError::InvalidState("Missing VMA allocator"));
         };
@@ -436,10 +437,11 @@ impl VulkanComputeKernels {
             .size(size)
             .usage(usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
 
-        let alloc_info = vk_mem::AllocationCreateInfo {
+        let mut alloc_info = vk_mem::AllocationCreateInfo {
             usage: vk_mem::MemoryUsage::AutoPreferDevice,
             ..Default::default()
         };
+        crate::apply_test_dedicated_alloc!(alloc_info);
 
         let (buffer, alloc, _) = unsafe { allocator.create_buffer(&buffer_info, &alloc_info) }
             .map_err(|_| EngineError::Gpu(GpuError::OutOfMemory))?;

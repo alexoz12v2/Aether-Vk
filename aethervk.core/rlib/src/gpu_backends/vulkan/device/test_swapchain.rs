@@ -111,7 +111,7 @@ mod tests {
       ),
       synchronization2: ash::khr::synchronization2::Device::new(&instance.instance, &device),
       handle: device.clone(),
-      submission_lock: crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::new(()),
+      submission_lock: spin::Mutex::new(()),
       #[cfg(target_vendor = "apple")]
       metal_objects: ash::ext::metal_objects::Device::new(&instance.instance, &device),
       #[cfg(debug_assertions)]
@@ -363,18 +363,20 @@ mod tests {
   fn test_lifecycle_wraparound_internal(enable_maintenance1: bool) {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, params) =
       setup_test_render(enable_maintenance1);
+    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
     let mut engine = PresentationState::new(
       &entry,
       &instance.instance,
-      &device,
+      &log_device,
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params,
+    &mut rollback,
     )
     .unwrap();
 
     for _ in 0..20 {
-      let acq = engine.acquire_next_image(&log_device, queue).unwrap();
+      let acq = engine.acquire_next_image(&log_device, &mut rollback).unwrap();
       unsafe {
         let (image, _, present_sem) = engine.get_image_resources(acq.image_index as usize);
         let (acquire_sem, submit_fence) = engine.get_frame_resources(acq.frame_index as usize);
@@ -395,6 +397,7 @@ mod tests {
       }
     }
     unsafe { device.device_wait_idle().unwrap() };
+    rollback.defuse();
     engine.cleanup(&device);
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
@@ -415,17 +418,19 @@ mod tests {
   fn test_cancel_image_recovery_internal(enable_maintenance1: bool) {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, params) =
       setup_test_render(enable_maintenance1);
+    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
     let mut engine = PresentationState::new(
       &entry,
       &instance.instance,
-      &device,
+      &log_device,
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params,
+    &mut rollback,
     )
     .unwrap();
 
-    let acq1 = engine.acquire_next_image(&log_device, queue).unwrap();
+    let acq1 = engine.acquire_next_image(&log_device, &mut rollback).unwrap();
 
     engine
       .cancel_image(
@@ -436,7 +441,7 @@ mod tests {
       )
       .unwrap();
 
-    let acq2 = engine.acquire_next_image(&log_device, queue).unwrap();
+    let acq2 = engine.acquire_next_image(&log_device, &mut rollback).unwrap();
     assert_ne!(acq1.frame_index, acq2.frame_index);
 
     unsafe {
@@ -464,6 +469,7 @@ mod tests {
     }
 
     unsafe { device.device_wait_idle().unwrap() };
+    rollback.defuse();
     engine.cleanup(&device);
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
@@ -484,17 +490,19 @@ mod tests {
   fn test_resize_in_flight_discard_bins_internal(enable_maintenance1: bool) {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, mut params) =
       setup_test_render(enable_maintenance1);
+    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
     let mut engine = PresentationState::new(
       &entry,
       &instance.instance,
-      &device,
+      &log_device,
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params,
+    &mut rollback,
     )
     .unwrap();
 
-    let acq = engine.acquire_next_image(&log_device, queue).unwrap();
+    let acq = engine.acquire_next_image(&log_device, &mut rollback).unwrap();
     unsafe {
       let (image, _, present_sem) = engine.get_image_resources(acq.image_index as usize);
       let (acquire_sem, submit_fence) = engine.get_frame_resources(acq.frame_index as usize);
@@ -517,14 +525,15 @@ mod tests {
     engine
       .resize(
         &instance.instance,
-        &device,
+        &log_device,
         phys_device,
         params.width + 100,
         params.height + 100,
+        &mut rollback,
       )
       .unwrap();
 
-    let acq2 = engine.acquire_next_image(&log_device, queue).unwrap();
+    let acq2 = engine.acquire_next_image(&log_device, &mut rollback).unwrap();
     unsafe {
       let (image, _, present_sem) = engine.get_image_resources(acq2.image_index as usize);
       let (acquire_sem, submit_fence) = engine.get_frame_resources(acq2.frame_index as usize);
@@ -550,6 +559,7 @@ mod tests {
     }
 
     unsafe { device.device_wait_idle().unwrap() };
+    rollback.defuse();
     engine.cleanup(&device);
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
@@ -574,17 +584,20 @@ mod tests {
     params.width = 128;
     params.height = 128;
 
+    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
+
     let mut engine = PresentationState::new(
       &entry,
       &instance.instance,
-      &device,
+      &log_device,
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params,
+    &mut rollback,
     )
     .unwrap();
 
-    let acq = engine.acquire_next_image(&log_device, queue).unwrap();
+    let acq = engine.acquire_next_image(&log_device, &mut rollback).unwrap();
     unsafe {
       let (image, _, _) = engine.get_image_resources(acq.image_index as usize);
       let (acquire_sem, submit_fence) = engine.get_frame_resources(acq.frame_index as usize);
@@ -628,6 +641,7 @@ mod tests {
     assert!(path.exists());
 
     unsafe { device.device_wait_idle().unwrap() };
+    rollback.defuse();
     engine.cleanup(&device);
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
@@ -661,18 +675,21 @@ mod tests {
       buffer_count: 3,
     };
 
+    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
+
     let mut engine = PresentationState::new(
       &entry,
       &instance.instance,
-      &device,
+      &log_device,
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params,
+    &mut rollback,
     )
     .unwrap();
 
     for _ in 0..20 {
-      let acq = engine.acquire_next_image(&log_device, queue).unwrap();
+      let acq = engine.acquire_next_image(&log_device, &mut rollback).unwrap();
       unsafe {
         let (image, _, present_sem) = engine.get_image_resources(acq.image_index as usize);
         let (acquire_sem, submit_fence) = engine.get_frame_resources(acq.frame_index as usize);
@@ -693,9 +710,9 @@ mod tests {
       }
     }
 
-    engine.resize(&instance.instance, &device, phys_device, 1024, 768).unwrap();
+    engine.resize(&instance.instance, &log_device, phys_device, 1024, 768, &mut rollback).unwrap();
 
-    let acq2 = engine.acquire_next_image(&log_device, queue).unwrap();
+    let acq2 = engine.acquire_next_image(&log_device, &mut rollback).unwrap();
     unsafe {
       let (image, _, present_sem) = engine.get_image_resources(acq2.image_index as usize);
       let (acquire_sem, submit_fence) = engine.get_frame_resources(acq2.frame_index as usize);
@@ -722,6 +739,7 @@ mod tests {
     }
 
     unsafe { device.device_wait_idle().unwrap() };
+    rollback.defuse();
     engine.cleanup(&device);
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
@@ -754,13 +772,15 @@ mod tests {
       vsync: false,
       buffer_count: 3,
     };
+    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
     let mut vp1 = PresentationState::new(
       &entry,
       &instance.instance,
-      &device,
+      &log_device,
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params1,
+    &mut rollback,
     )
     .unwrap();
 
@@ -775,13 +795,15 @@ mod tests {
       vsync: false,
       buffer_count: 3,
     };
+    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
     let mut vp2 = PresentationState::new(
       &entry,
       &instance.instance,
-      &device,
+      &log_device,
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params2,
+    &mut rollback,
     )
     .unwrap();
 
@@ -796,19 +818,21 @@ mod tests {
       vsync: false,
       buffer_count: 3,
     };
+    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
     let mut mv = PresentationState::new(
       &entry,
       &instance.instance,
-      &device,
+      &log_device,
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params3,
+    &mut rollback,
     )
     .unwrap();
 
     for _ in 0..5 {
       // VP1
-      let acq1 = vp1.acquire_next_image(&log_device, queue).unwrap();
+      let acq1 = vp1.acquire_next_image(&log_device, &mut rollback).unwrap();
       unsafe {
         let (image, _, present_sem) = vp1.get_image_resources(acq1.image_index as usize);
         let (acquire_sem, submit_fence) = vp1.get_frame_resources(acq1.frame_index as usize);
@@ -834,7 +858,7 @@ mod tests {
       }
 
       // VP2
-      let acq2 = vp2.acquire_next_image(&log_device, queue).unwrap();
+      let acq2 = vp2.acquire_next_image(&log_device, &mut rollback).unwrap();
       unsafe {
         let (image, _, present_sem) = vp2.get_image_resources(acq2.image_index as usize);
         let (acquire_sem, submit_fence) = vp2.get_frame_resources(acq2.frame_index as usize);
@@ -860,7 +884,7 @@ mod tests {
       }
 
       // MV
-      let acq3 = mv.acquire_next_image(&log_device, queue).unwrap();
+      let acq3 = mv.acquire_next_image(&log_device, &mut rollback).unwrap();
       unsafe {
         let (image, _, present_sem) = mv.get_image_resources(acq3.image_index as usize);
         let (acquire_sem, submit_fence) = mv.get_frame_resources(acq3.frame_index as usize);
@@ -886,12 +910,12 @@ mod tests {
     }
 
     // Concurrent resize
-    vp1.resize(&instance.instance, &device, phys_device, 1024, 768).unwrap();
-    vp2.resize(&instance.instance, &device, phys_device, 640, 480).unwrap();
-    mv.resize(&instance.instance, &device, phys_device, 800, 600).unwrap();
+    vp1.resize(&instance.instance, &log_device, phys_device, 1024, 768, &mut rollback).unwrap();
+    vp2.resize(&instance.instance, &log_device, phys_device, 640, 480, &mut rollback).unwrap();
+    mv.resize(&instance.instance, &log_device, phys_device, 800, 600, &mut rollback).unwrap();
 
     // Render after resize
-    let acq1 = vp1.acquire_next_image(&log_device, queue).unwrap();
+    let acq1 = vp1.acquire_next_image(&log_device, &mut rollback).unwrap();
     unsafe {
       let (image, _, present_sem) = vp1.get_image_resources(acq1.image_index as usize);
       let (acquire_sem, submit_fence) = vp1.get_frame_resources(acq1.frame_index as usize);
@@ -917,8 +941,11 @@ mod tests {
     }
 
     unsafe { device.device_wait_idle().unwrap() };
+    rollback.defuse();
     vp1.cleanup(&device);
+    rollback.defuse();
     vp2.cleanup(&device);
+    rollback.defuse();
     mv.cleanup(&device);
 
     unsafe {
@@ -953,13 +980,16 @@ mod tests {
       buffer_count: 3,
     };
 
+    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
+
     let mut engine = PresentationState::new(
       &entry,
       &instance.instance,
-      &device,
+      &log_device,
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params,
+    &mut rollback,
     )
     .unwrap();
 
@@ -970,10 +1000,10 @@ mod tests {
       if i % 3 == 0 {
         width += 10;
         height += 10;
-        engine.resize(&instance.instance, &device, phys_device, width, height).unwrap();
+        engine.resize(&instance.instance, &log_device, phys_device, width, height, &mut rollback).unwrap();
       }
 
-      let acq = engine.acquire_next_image(&log_device, queue).unwrap();
+      let acq = engine.acquire_next_image(&log_device, &mut rollback).unwrap();
       unsafe {
         let (image, _, present_sem) = engine.get_image_resources(acq.image_index as usize);
         let (acquire_sem, submit_fence) = engine.get_frame_resources(acq.frame_index as usize);
@@ -995,6 +1025,7 @@ mod tests {
     }
 
     unsafe { device.device_wait_idle().unwrap() };
+    rollback.defuse();
     engine.cleanup(&device);
 
     unsafe {

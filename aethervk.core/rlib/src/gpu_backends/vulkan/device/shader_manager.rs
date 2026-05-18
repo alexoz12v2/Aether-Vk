@@ -125,7 +125,7 @@ impl Shader {
 // Manages loading and storing shaders to avoid duplicates.
 /// TODO: Document this item
 pub struct ShaderManager {
-  shaders: SlotMap<ShaderKey, Shader>,
+  shaders: SlotMap<ShaderKey, alloc::sync::Arc<Shader>>,
   shader_paths: HashMap<PathBuf, ShaderKey>,
 }
 
@@ -163,7 +163,7 @@ impl ShaderManager {
       return Err(GpuError::InvalidShader);
     }
 
-    let shader = Shader::new(device, code, entry_point, execution_model)?;
+    let shader = alloc::sync::Arc::new(Shader::new(device, code, entry_point, execution_model)?);
     let key = self.shaders.insert(shader);
     self.shader_paths.insert(path.to_pathbuf(), key);
 
@@ -171,8 +171,8 @@ impl ShaderManager {
   }
 
   /// Gets a reference to a shader from its key.
-  pub fn get(&self, key: ShaderKey) -> Option<&Shader> {
-    self.shaders.get(key)
+  pub fn get(&self, key: ShaderKey) -> Option<alloc::sync::Arc<Shader>> {
+    self.shaders.get(key).cloned()
   }
 
   /// Destroys all shader modules held by the manager.

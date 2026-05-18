@@ -45,21 +45,38 @@ struct RenderPassBundle {
 }
 
 /// TODO: Document this item
-pub(super) enum RenderPassSpecification<'a> {
+#[derive(Clone)]
+pub(super) enum RenderPassSpecification {
   ColorDepthSingleSubpass {
     color_format: vk::Format,
     depth_stencil_format: vk::Format,
-    swapchain: &'a PresentationState,
+    final_layout: vk::ImageLayout,
+    extent: (u32, u32),
+    swapchain_generation: u64,
+    image_views: heapless::Vec<NonZeroHandle<vk::ImageView>, { swapchain::MAX_FRAMES }>,
   },
 }
 
-impl<'a> RenderPassSpecification<'a> {
+impl RenderPassSpecification {
   /// TODO: Document this item
-  pub fn single_pass(presentation_engine: &'a PresentationState, d: vk::Format) -> Self {
+  pub fn single_pass(presentation_engine: &PresentationState, d: vk::Format) -> Self {
+    let final_layout = match presentation_engine {
+      PresentationState::Windowed(_) => vk::ImageLayout::PRESENT_SRC_KHR,
+      PresentationState::Windowless(_) => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+    };
+    let mut image_views = heapless::Vec::new();
+    presentation_engine.for_each_swapchain_image(|image_view| {
+      unsafe { image_views.push_unchecked(image_view) };
+      Ok(())
+    }).unwrap();
+
     Self::ColorDepthSingleSubpass {
       color_format: presentation_engine.format(),
       depth_stencil_format: d,
-      swapchain: presentation_engine,
+      final_layout,
+      extent: presentation_engine.extent(),
+      swapchain_generation: presentation_engine.swapchain_generation(),
+      image_views,
     }
   }
 }
@@ -149,7 +166,7 @@ impl RenderPasses {
   pub fn new(
     instance: &ash::Instance,
     device: &ash::Device,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
   ) -> Self {
     Self {
       render_passes: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(
@@ -222,27 +239,30 @@ impl RenderPasses {
     ty: RenderPassSpecification,
     image_index: u32,
     device: &ash::Device,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     discard_pool: &DiscardPool,
     timeline: u64,
   ) -> GpuResult<(
     NonZeroHandle<vk::RenderPass>,
     NonZeroHandle<vk::Framebuffer>,
   )> {
-    let (color_format, depth_stencil_format, swapchain) = match ty {
+    let (color_format, depth_stencil_format, final_layout, extent, swapchain_generation, image_views) = match ty {
       RenderPassSpecification::ColorDepthSingleSubpass {
         color_format,
         depth_stencil_format,
-        swapchain,
-      } => (color_format, depth_stencil_format, swapchain),
+        final_layout,
+        extent,
+        swapchain_generation,
+        image_views,
+      } => (color_format, depth_stencil_format, final_layout, extent, swapchain_generation, image_views),
     };
 
     if let Some(bundle) =
       crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.render_passes)
         .get(&pe_handle)
     {
-      let (width, height) = swapchain.extent();
-      if bundle.swapchain_generation == swapchain.swapchain_generation()
+      let (width, height) = extent;
+      if bundle.swapchain_generation == swapchain_generation
         && bundle.width == width
         && bundle.height == height
       {
@@ -258,11 +278,6 @@ impl RenderPasses {
         Ok::<(), crate::types::GpuError>(())
       })?
       .execute(|_, rollback| {
-        let final_layout = match swapchain {
-          PresentationState::Windowed(_) => vk::ImageLayout::PRESENT_SRC_KHR,
-          PresentationState::Windowless(_) => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-        };
-
         let render_pass = Self::create_color_depth_single_render_pass(
           &self.render_pass_device,
           color_format,
@@ -272,7 +287,7 @@ impl RenderPasses {
         let rp_h = render_pass.get();
         rollback.defer(move |dev| unsafe { dev.destroy_render_pass(rp_h, None) });
 
-        let (width, height) = swapchain.extent();
+        let (width, height) = extent;
 
         let black_value = vk::ClearValue {
           color: vk::ClearColorValue {
@@ -351,7 +366,7 @@ impl RenderPasses {
         }
 
         let mut framebuffer = heapless::Vec::new();
-        swapchain.for_each_swapchain_image(|image_view| {
+        for image_view in image_views {
           let fb_attachments = [image_view.get(), view.get()];
           let framebuffer_create_info = vk::FramebufferCreateInfo::default()
             .render_pass(render_pass.get())
@@ -369,13 +384,12 @@ impl RenderPasses {
           unsafe {
             framebuffer.push_unchecked(fb);
           };
-          Ok(())
-        })?;
+        }
 
         let bundle = RenderPassBundle {
           render_pass,
           clear_value: [black_value, white_value],
-          swapchain_generation: swapchain.swapchain_generation(),
+          swapchain_generation,
           framebuffer,
           width,
           height,

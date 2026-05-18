@@ -37,7 +37,10 @@ pub(super) fn get_validated_shaders<'a>(
   shader_manager: &'a shader_manager::ShaderManager,
   vertex_shader_key: ShaderKey,
   fragment_shader_key: ShaderKey,
-) -> GpuResult<(&'a shader_manager::Shader, &'a shader_manager::Shader)> {
+) -> GpuResult<(
+  alloc::sync::Arc<shader_manager::Shader>,
+  alloc::sync::Arc<shader_manager::Shader>,
+)> {
   let vertex_shader = shader_manager.get(vertex_shader_key).ok_or(GpuError::InvalidShader)?;
   if vertex_shader.shader_stage != vk::ShaderStageFlags::VERTEX {
     return Err(GpuError::InvalidShader);
@@ -328,7 +331,7 @@ macro_rules! impl_create_archetype {
       fragment_shader: &shader_manager::Shader,
       depth_stencil_format: vk::Format,
       color_format: vk::Format,
-      allocator: &vk_mem::Allocator,
+      allocator: vk_mem::AllocatorView,
       discard_pool: &resources::DiscardPool,
       renderpasses: &renderpasses::RenderPasses,
       pipeline_pool_lock: &pipelines::PipelinePool,
@@ -370,6 +373,8 @@ macro_rules! impl_create_archetype {
       let res = resources::$resource_struct { arena: alloc::sync::Arc::downgrade(&arena), pipeline_key, graphics_info: pipeline_graphics_info };
       *archetype_lock = Some(res);
 
+      aethervk_oshal_rlib::log!("archetype {} created", stringify!($archetype_field));
+
       Ok(())
     }
   };
@@ -389,7 +394,7 @@ macro_rules! impl_create_archetype {
       fragment_shader: &shader_manager::Shader,
       depth_stencil_format: vk::Format,
       color_format: vk::Format,
-      allocator: &vk_mem::Allocator,
+      allocator: vk_mem::AllocatorView,
       discard_pool: &resources::DiscardPool,
       renderpasses: &renderpasses::RenderPasses,
       pipeline_pool_lock: &pipelines::PipelinePool,
@@ -431,10 +436,13 @@ macro_rules! impl_create_archetype {
       let res = resources::$resource_struct { arena: alloc::sync::Arc::downgrade(&arena), pipeline_key, graphics_info: pipeline_graphics_info };
       *archetype_lock = Some(res);
 
+      aethervk_oshal_rlib::log!("archetype {} created", stringify!($archetype_field));
+
       Ok(())
     }
   };
 }
+
 impl Archetypes {
   impl_update_archetype!(
     prepare_update_physical_mesh_archetype,
@@ -656,7 +664,7 @@ impl Archetypes {
     fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
     color_format: vk::Format,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
@@ -790,7 +798,7 @@ impl Archetypes {
     depth_stencil_format: vk::Format,
     queue: &Queue,
     color_format: vk::Format,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
@@ -925,7 +933,7 @@ impl Archetypes {
     fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
     color_format: vk::Format,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
@@ -992,7 +1000,7 @@ impl Archetypes {
     fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
     color_format: vk::Format,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
@@ -1059,7 +1067,7 @@ impl Archetypes {
     depth_stencil_format: vk::Format,
     queue: &Queue,
     color_format: vk::Format,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
@@ -1123,7 +1131,7 @@ impl Archetypes {
     depth_stencil_format: vk::Format,
     queue: &Queue,
     color_format: vk::Format,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
@@ -1196,7 +1204,7 @@ impl Archetypes {
     fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
     color_format: vk::Format,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
@@ -1268,7 +1276,7 @@ impl Archetypes {
     fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
     color_format: vk::Format,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
@@ -1340,7 +1348,7 @@ impl Archetypes {
     fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
     color_format: vk::Format,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
@@ -1416,7 +1424,7 @@ impl Archetypes {
     depth_stencil_format: vk::Format,
     queue: &Queue,
     color_format: vk::Format,
-    allocator: &vk_mem::Allocator,
+    allocator: vk_mem::AllocatorView,
     discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,

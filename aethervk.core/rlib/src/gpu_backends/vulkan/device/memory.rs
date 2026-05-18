@@ -161,6 +161,16 @@ pub struct FrameStagingArena {
 unsafe impl Send for FrameStagingArena {}
 unsafe impl Sync for FrameStagingArena {}
 
+#[macro_export]
+macro_rules! apply_test_dedicated_alloc {
+  ($alloc_info:expr) => {
+    #[cfg(all(test, feature = "test_dedicated_alloc"))]
+    {
+      $alloc_info.flags |= vk_mem::AllocationCreateFlags::DEDICATED_MEMORY;
+    }
+  };
+}
+
 impl FrameStagingArena {
   /// TODO: Document this item
   #[named]
@@ -168,7 +178,7 @@ impl FrameStagingArena {
     let buffer_info = vk::BufferCreateInfo::default()
       .size(capacity as u64)
       .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
-    let alloc_info = vk_mem::AllocationCreateInfo {
+    let mut alloc_info = vk_mem::AllocationCreateInfo {
       usage: vk_mem::MemoryUsage::Auto,
       flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
         | vk_mem::AllocationCreateFlags::MAPPED,
@@ -176,6 +186,7 @@ impl FrameStagingArena {
         | vk::MemoryPropertyFlags::HOST_COHERENT,
       ..Default::default()
     };
+    apply_test_dedicated_alloc!(alloc_info);
 
     let (buffer, allocation, alloc_info_res) =
       unsafe { allocator.create_buffer_get_info(&buffer_info, &alloc_info) }
