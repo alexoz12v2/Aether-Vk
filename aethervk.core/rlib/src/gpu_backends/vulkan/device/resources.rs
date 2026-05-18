@@ -1671,6 +1671,76 @@ unsafe impl Send for TextRenderResourceArchetypeArena {}
 unsafe impl Send for TextRenderResourceArchetype {}
 
 impl TextRenderResourceArchetypeArena {
+  // TODO deduplicate with 2
+  /// Allocates an index from the arena's free list or increments the linear counter
+  #[named]
+  pub fn allocate_descriptor_index(&mut self) -> GpuResult<u32> {
+    if let Some(idx) = self.free_descriptor_indices.pop() {
+      Ok(idx)
+    } else if self.next_descriptor_index < self.max_fonts {
+      let idx = self.next_descriptor_index;
+      self.next_descriptor_index += 1;
+      Ok(idx)
+    } else {
+      Err(crate::gpu_err!(
+        "Exceeded descriptor array layout maximum capacity"
+      ))
+    }
+  }
+
+  /// Binds the finalized Vulkan Image into the descriptor set and registers it
+  pub fn bind_font_image(
+    &mut self,
+    device: &crate::gpu_backends::vulkan::device::LogicalDevice,
+    font_hash: u64,
+    atlas: alloc::sync::Arc<crate::scene::text::FontAtlas>,
+    image: crate::gpu_backends::vulkan::device::resources::Image,
+    descriptor_index: u32,
+  ) -> GpuResult<()> {
+    if let (Some(sampler), Some(set)) = (self.font_sampler, self.descriptor_set) {
+      let image_info = [ash::vk::DescriptorImageInfo::default()
+        .image_layout(ash::vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .image_view(image.image_view.get())
+        .sampler(sampler)];
+
+      let write = ash::vk::WriteDescriptorSet::default()
+        .dst_set(set)
+        .dst_binding(0)
+        .dst_array_element(descriptor_index)
+        .descriptor_type(ash::vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .image_info(&image_info);
+
+      unsafe { device.update_descriptor_sets(&[write], &[]) };
+    }
+
+    self.uploaded_fonts.insert(
+      font_hash,
+      crate::gpu_backends::vulkan::device::resources::UploadedFont {
+        texture: image,
+        atlas,
+        descriptor_index,
+      },
+    );
+
+    Ok(())
+  }
+
+  /// Extracts the font from the arena and returns it for safe destruction
+  #[named]
+  pub fn remove_font_atlas(
+    &mut self,
+    font_hash: u64,
+  ) -> GpuResult<crate::gpu_backends::vulkan::device::resources::UploadedFont> {
+    if let Some(uploaded) = self.uploaded_fonts.remove(&font_hash) {
+      // Create a "Hole" implicitly pushing the index back as structurally available.
+      self.free_descriptor_indices.push(uploaded.descriptor_index);
+      Ok(uploaded)
+    } else {
+      Err(crate::gpu_invalid_arg!("atlas not found: {}", font_hash))
+    }
+  }
+  // TODO ENd deduplicate blcok
+
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
     discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
@@ -1856,33 +1926,6 @@ impl TextRenderResourceArchetypeArena {
 
     Ok(descriptor_index)
   }
-
-  /// TODO: Document this item
-  #[named]
-  pub fn remove_font_atlas(
-    &mut self,
-    font_hash: u64,
-    discard_pool: &DiscardPool,
-    timeline: u64,
-  ) -> GpuResult<()> {
-    if let Some(uploaded) = self.uploaded_fonts.remove(&font_hash) {
-      // Create a "Hole" implicitly pushing the index back as structurally available.
-      self.free_descriptor_indices.push(uploaded.descriptor_index);
-
-      // Destroy the hardware memory via timeline limits. Partially bound rules will suppress the descriptor warning.
-      if let Some(allocator_raw) = self.allocator_raw {
-        discard_pool.discard_image_view(uploaded.texture.image_view.get(), timeline);
-        discard_pool.discard_image(
-          allocator_raw,
-          uploaded.texture.image.get(),
-          uploaded.texture.allocation,
-          timeline,
-        );
-        return Ok(());
-      }
-    }
-    Err(gpu_invalid_arg!("atlas not found: {}", font_hash))
-  }
 }
 
 pub(super) struct Text2RenderResourceArchetypeArena {
@@ -1918,6 +1961,74 @@ unsafe impl Send for Text2RenderResourceArchetypeArena {}
 unsafe impl Send for Text2RenderResourceArchetype {}
 
 impl Text2RenderResourceArchetypeArena {
+  /// Allocates an index from the arena's free list or increments the linear counter
+  #[named]
+  pub fn allocate_descriptor_index(&mut self) -> GpuResult<u32> {
+    if let Some(idx) = self.free_descriptor_indices.pop() {
+      Ok(idx)
+    } else if self.next_descriptor_index < self.max_fonts {
+      let idx = self.next_descriptor_index;
+      self.next_descriptor_index += 1;
+      Ok(idx)
+    } else {
+      Err(crate::gpu_err!(
+        "Exceeded descriptor array layout maximum capacity"
+      ))
+    }
+  }
+
+  /// Binds the finalized Vulkan Image into the descriptor set and registers it
+  pub fn bind_font_image(
+    &mut self,
+    device: &crate::gpu_backends::vulkan::device::LogicalDevice,
+    font_hash: u64,
+    atlas: alloc::sync::Arc<crate::scene::text::FontAtlas>,
+    image: crate::gpu_backends::vulkan::device::resources::Image,
+    descriptor_index: u32,
+  ) -> GpuResult<()> {
+    if let (Some(sampler), Some(set)) = (self.font_sampler, self.descriptor_set) {
+      let image_info = [ash::vk::DescriptorImageInfo::default()
+        .image_layout(ash::vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .image_view(image.image_view.get())
+        .sampler(sampler)];
+
+      let write = ash::vk::WriteDescriptorSet::default()
+        .dst_set(set)
+        .dst_binding(0)
+        .dst_array_element(descriptor_index)
+        .descriptor_type(ash::vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .image_info(&image_info);
+
+      unsafe { device.update_descriptor_sets(&[write], &[]) };
+    }
+
+    self.uploaded_fonts.insert(
+      font_hash,
+      crate::gpu_backends::vulkan::device::resources::UploadedFont {
+        texture: image,
+        atlas,
+        descriptor_index,
+      },
+    );
+
+    Ok(())
+  }
+
+  /// Extracts the font from the arena and returns it for safe destruction
+  #[named]
+  pub fn remove_font_atlas(
+    &mut self,
+    font_hash: u64,
+  ) -> GpuResult<crate::gpu_backends::vulkan::device::resources::UploadedFont> {
+    if let Some(uploaded) = self.uploaded_fonts.remove(&font_hash) {
+      // Create a "Hole" implicitly pushing the index back as structurally available.
+      self.free_descriptor_indices.push(uploaded.descriptor_index);
+      Ok(uploaded)
+    } else {
+      Err(crate::gpu_invalid_arg!("atlas not found: {}", font_hash))
+    }
+  }
+
   pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
     discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
@@ -2130,30 +2241,6 @@ impl Text2RenderResourceArchetypeArena {
     );
 
     Ok(descriptor_index)
-  }
-
-  #[named]
-  pub fn remove_font_atlas(
-    &mut self,
-    font_hash: u64,
-    discard_pool: &DiscardPool,
-    timeline: u64,
-  ) -> GpuResult<()> {
-    if let Some(mut uploaded) = self.uploaded_fonts.remove(&font_hash) {
-      self.free_descriptor_indices.push(uploaded.descriptor_index);
-
-      if let Some(allocator_raw) = self.allocator_raw {
-        discard_pool.discard_image_view(uploaded.texture.image_view.get(), timeline);
-        discard_pool.discard_image(
-          allocator_raw,
-          uploaded.texture.image.get(),
-          uploaded.texture.allocation,
-          timeline,
-        );
-        return Ok(());
-      }
-    }
-    Err(gpu_invalid_arg!("atlas not found: {}", font_hash))
   }
 }
 
@@ -4151,7 +4238,7 @@ impl ArchetypeArenaCreate for ForwardMeshRenderResourceArchetypeArena {
     #[cfg(test)]
     unsafe {
       if WAS_CREATED {
-        panic!("archetype more than once!");
+        panic!("archetype arena more than once!");
       } else {
         WAS_CREATED = true;
       }
@@ -5068,3 +5155,158 @@ impl_deref_archetype!(
   ForwardMesh2RenderResourceArchetype,
   ForwardMesh2RenderResourceArchetypeArena
 );
+
+pub struct PrepareFontUpload {
+  pub is_already_uploaded: bool,
+  pub descriptor_index: u32,
+  pub descriptor_set: Option<vk::DescriptorSet>,
+  pub font_sampler: Option<vk::Sampler>,
+}
+
+pub struct PrepareFontRemove {
+  pub descriptor_index: u32,
+  pub image_view: vk::ImageView,
+  pub image: vk::Image,
+  pub allocation: vk_mem::Allocation,
+}
+
+macro_rules! impl_font_atlas_arena_transactional {
+  ($arena_type:ident) => {
+    impl $arena_type {
+      /// Step 1: Lock state, resolve descriptor indices, and return parameters for execution
+      #[named]
+      pub fn prepare_upload_font_atlas(&mut self, font_hash: u64) -> GpuResult<PrepareFontUpload> {
+        if let Some(existing) = self.uploaded_fonts.get(&font_hash) {
+          return Ok(PrepareFontUpload {
+            is_already_uploaded: true,
+            descriptor_index: existing.descriptor_index,
+            descriptor_set: None,
+            font_sampler: None,
+          });
+        }
+
+        let descriptor_index = if let Some(idx) = self.free_descriptor_indices.pop() {
+          idx
+        } else if self.next_descriptor_index < self.max_fonts {
+          let idx = self.next_descriptor_index;
+          self.next_descriptor_index += 1;
+          idx
+        } else {
+          return Err(crate::gpu_err!("Exceeded descriptor array layout maximum capacity"));
+        };
+
+        Ok(PrepareFontUpload {
+          is_already_uploaded: false,
+          descriptor_index,
+          descriptor_set: self.descriptor_set,
+          font_sampler: self.font_sampler,
+        })
+      }
+
+      /// Step 2: Lock-free execution of Vulkan creation and descriptor writes
+      #[named]
+      pub fn execute_upload_font_atlas(
+        device: &crate::gpu_backends::vulkan::device::LogicalDevice,
+        allocator: vk_mem::AllocatorView,
+        command_buffer: vk::CommandBuffer,
+        staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
+        texture: &crate::simulation::comet::Texture,
+        prep: &PrepareFontUpload,
+        debug_name: &str,
+        rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
+      ) -> GpuResult<Image> {
+        let image = Image::new_2d(
+          device,
+          allocator,
+          command_buffer,
+          staging_arena,
+          texture,
+          vk::ImageUsageFlags::SAMPLED,
+          debug_name,
+        )?;
+
+        let img_h = image.image.get();
+        let view_h = image.image_view.get();
+        let mut alloc_h = image.allocation;
+
+        rollback.defer(move |dev| unsafe {
+          dev.destroy_image_view(view_h, None);
+          allocator.destroy_image(img_h, &mut alloc_h);
+        });
+
+        if let (Some(sampler), Some(set)) = (prep.font_sampler, prep.descriptor_set) {
+          let image_info = [vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(view_h)
+            .sampler(sampler)];
+
+          let write = vk::WriteDescriptorSet::default()
+            .dst_set(set)
+            .dst_binding(0)
+            .dst_array_element(prep.descriptor_index)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&image_info);
+
+          unsafe { device.update_descriptor_sets(&[write], &[]) };
+        }
+
+        Ok(image)
+      }
+
+      /// Step 3: Write lock arena to map the newly allocated resource handle
+      pub fn commit_upload_font_atlas(
+        &mut self,
+        font_hash: u64,
+        atlas: alloc::sync::Arc<crate::scene::text::FontAtlas>,
+        texture: Image,
+        descriptor_index: u32,
+      ) {
+        self.uploaded_fonts.insert(
+          font_hash,
+          UploadedFont {
+            texture,
+            atlas,
+            descriptor_index,
+          },
+        );
+      }
+
+      /// Step 1 for Remove: Extract handles and free descriptor index
+      #[named]
+      pub fn prepare_remove_font_atlas(&mut self, font_hash: u64) -> GpuResult<PrepareFontRemove> {
+        if let Some(uploaded) = self.uploaded_fonts.remove(&font_hash) {
+          // Push index back as available
+          self.free_descriptor_indices.push(uploaded.descriptor_index);
+
+          Ok(PrepareFontRemove {
+            descriptor_index: uploaded.descriptor_index,
+            image_view: uploaded.texture.image_view.get(),
+            image: uploaded.texture.image.get(),
+            allocation: uploaded.texture.allocation,
+          })
+        } else {
+          Err(crate::gpu_invalid_arg!("atlas not found: {}", font_hash))
+        }
+      }
+
+      /// Step 2 for Remove: Record into the lock-free generic discard pool
+      pub fn execute_remove_font_atlas(
+        prep: &PrepareFontRemove,
+        discard_pool: &DiscardPool,
+        allocator_raw: vk_mem::ffi::VmaAllocator,
+        timeline: u64,
+      ) {
+        discard_pool.discard_image_view(prep.image_view, timeline);
+        discard_pool.discard_image(
+          allocator_raw,
+          prep.image,
+          prep.allocation,
+          timeline,
+        );
+      }
+    }
+  };
+}
+
+impl_font_atlas_arena_transactional!(TextRenderResourceArchetypeArena);
+impl_font_atlas_arena_transactional!(Text2RenderResourceArchetypeArena);
