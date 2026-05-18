@@ -1,4 +1,4 @@
-extern crate alloc;
+//! multi_bvh module
 
 use alloc::{vec, vec::Vec};
 use core::array;
