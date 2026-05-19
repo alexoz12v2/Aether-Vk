@@ -211,8 +211,13 @@ where
       kernels.step_ode_p5(&mut cmd, &kinematics, &mut particles, &emitters, dt)?;
 
       let potentials = kernels.self_intersect_scene(&mut cmd, &bvh)?;
-      let globals =
-        kernels.intersect_instances(&mut cmd, &potentials, &kinematics, &rigid_bodies, &particles)?;
+      let globals = kernels.intersect_instances(
+        &mut cmd,
+        &potentials,
+        &kinematics,
+        &rigid_bodies,
+        &particles,
+      )?;
       let compacted = kernels.compact_collisions(&mut cmd, &globals, time_collision_delta)?;
 
       let tc_buffer = kernels.find_earliest_collision(&mut cmd, &compacted)?;
@@ -222,10 +227,11 @@ where
       let tc_host = tc_future.wait()?;
 
       let t_c = tc_host.first().copied().unwrap_or(timeus_t::MAX);
-      let inelastic = collision_iters >= MAX_BOUNCES;
 
-      if t_c < dt && !inelastic {
+      // FIX: Only trigger response mechanisms if a collision happens inside the current timestep
+      if t_c < dt {
         collision_iters += 1;
+        let inelastic = collision_iters >= MAX_BOUNCES;
 
         kernels.restore_dynamics(&mut cmd, &mut rigid_bodies, &mut particles, &snapshot)?;
 
@@ -237,17 +243,7 @@ where
         kernels.compute_self_gravity(&mut cmd, &rewind_bvh, &mut particles)?;
         kernels.step_ode_p5(&mut cmd, &kinematics, &mut particles, &emitters, t_c)?;
 
-        kernels.apply_collision_responses(
-          &mut cmd,
-          &mut rigid_bodies,
-          &mut particles,
-          &compacted,
-          false,
-        )?;
-
-        let advance = if t_c == 0 { 1 } else { t_c };
-        current_time += advance;
-      } else {
+        // Apply either an elastic or inelastic response, but always at the proper rewritten time t_c
         kernels.apply_collision_responses(
           &mut cmd,
           &mut rigid_bodies,
@@ -255,6 +251,43 @@ where
           &compacted,
           inelastic,
         )?;
+
+        if inelastic {
+          // If we resolved resting contact (inelastic), integrate the remainder of the
+          // timestep directly so we don't fall into an infinite loop trying to bounce.
+          let remaining_dt = dt - t_c;
+          if remaining_dt > 0 {
+            kernels.step_ode_p1_p2(&mut cmd, &mut particles, remaining_dt)?;
+            kernels.step_ode_p3_p4(
+              &mut cmd,
+              &kinematics,
+              &mut rigid_bodies,
+              &emitters,
+              remaining_dt,
+            )?;
+            let final_bvh = kernels.build_motion_bvh(
+              &mut cmd,
+              &kinematics,
+              &rigid_bodies,
+              &particles,
+              remaining_dt,
+            )?;
+            kernels.compute_self_gravity(&mut cmd, &final_bvh, &mut particles)?;
+            kernels.step_ode_p5(
+              &mut cmd,
+              &kinematics,
+              &mut particles,
+              &emitters,
+              remaining_dt,
+            )?;
+          }
+          current_time = end_time; // CCD complete for this frame
+        } else {
+          let advance = if t_c == 0 { 1 } else { t_c };
+          current_time += advance;
+        }
+      } else {
+        // FIX: If there are no collisions before dt, accept the snapshot and advance. Do NOT apply responses.
         current_time = end_time;
       }
     }

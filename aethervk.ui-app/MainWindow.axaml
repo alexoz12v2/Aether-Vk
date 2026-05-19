@@ -34,6 +34,14 @@
                         <NativeMenuItem Header="Copy"/>
                         <NativeMenuItem Header="Paste"/>
                         <NativeMenuItemSeparator/>
+                        <NativeMenuItem Header="Scene">
+                            <NativeMenuItem.Menu>
+                                <NativeMenu>
+                                    <NativeMenuItem Header="Spawn Comet" Command="{Binding OpenSpawnCometDialogCommand}" />
+                                </NativeMenu>
+                            </NativeMenuItem.Menu>
+                        </NativeMenuItem>
+                        <NativeMenuItemSeparator/>
                         <NativeMenuItem Header="Settings..." Gesture="Cmd+OemComma" Command="{Binding OpenSettingsCommand}" />
                     </NativeMenu>
                 </NativeMenuItem.Menu>
@@ -57,6 +65,10 @@
                 <MenuItem Header="Edit">
                     <MenuItem Header="Copy" />
                     <MenuItem Header="Paste" />
+                    <Separator />
+                    <MenuItem Header="Scene">
+                        <MenuItem Header="Spawn Comet" Command="{Binding OpenSpawnCometDialogCommand}" />
+                    </MenuItem>
                     <Separator />
                     <MenuItem Header="Settings..." HotKey="Ctrl+OemComma" Command="{Binding OpenSettingsCommand}" />
                     <MenuItem Header="Imported Models" Command="{Binding OpenImportedModelsDialogCommand}" />

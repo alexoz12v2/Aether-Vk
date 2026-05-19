@@ -214,7 +214,7 @@ where
   let d_b2 = n_a.dot(b[2] - a[0]);
 
   // check if B is entirely on one side of Plane A (quick rejection)
-  if (d_b0 > eps && d_b1 > eps && d_b2 > eps) || (d_b0 < -eps && d_b1 < -eps && d_b1 < -eps) {
+  if (d_b0 > eps && d_b1 > eps && d_b2 > eps) || (d_b0 < -eps && d_b1 < -eps && d_b2 < -eps) {
     return false;
   }
 
@@ -457,46 +457,122 @@ where
 // ----------------------------------------------------------------------------
 // Box vs Triangle
 // ----------------------------------------------------------------------------
-// TODO: obb_triangle by transforming the triangle itself into the OBB frame of reference,
-// so that we can treat it as a AABB
-/// AABB/Triangle SAT
+/// AABB/Triangle Separating Axis Theorem (SAT) Intersection
 pub fn intersect_aabb_triangle<S, Vec3, Vec2>(aabb: &AABB<Vec3::Scalar>, tri: &Triangle) -> bool
 where
   Vec3: Vector3<Scalar = S> + From<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
   Vec2: Vector2<Scalar = S>,
   S: FloatLike + FloatOps + FloatBits,
 {
-  let vs: [Vec3; 3] = [(*tri.v0()).into(), (*tri.v1()).into(), (*tri.v2()).into()];
-  let n: Vec3 = tri.normal_ccw_unnormalized().into();
+  // Extract Triangle Vertices
+  let v0_orig: Vec3 = (*tri.v0()).into();
+  let v1_orig: Vec3 = (*tri.v1()).into();
+  let v2_orig: Vec3 = (*tri.v2()).into();
 
-  // 1. Check if a vertex is in the box. If yes for at least one of then (all coords) then true
-  for v in vs {
-    if between_component_wise(v, aabb.min(), aabb.max()) {
-      return true;
-    }
-  }
-  // 2. Signed distances for each vertex of box to Triangle Plane
-  let aabb_vertices = aabb.vertices();
-  let aabb_segment_indices = AABB::<Vec3::Scalar>::edges();
-  let aabb_signed_distances: [S; 8] = unsafe {
-    aabb_vertices.iter().map(|&vert| n.dot(vert - vs[0])).collect_array().unwrap_unchecked()
-  };
-  //  If all boxes have signed distances of same sign, no intersection
-  if all_same_sign_fold(&aabb_signed_distances) {
+  // 1. Calculate AABB center and half-extents
+  let half = S::from_f32(0.5);
+  let min_bound: Vec3 = aabb.min();
+  let max_bound: Vec3 = aabb.max();
+
+  let c = (max_bound + min_bound) * half;
+  let e = (max_bound - min_bound) * half;
+
+  // Translate triangle to origin-centric AABB space
+  let v0 = v0_orig - c;
+  let v1 = v1_orig - c;
+  let v2 = v2_orig - c;
+
+  // Compute Triangle edges
+  let f0 = v1 - v0;
+  let f1 = v2 - v1;
+  let f2 = v0 - v2;
+
+  // --- TEST 1: 3 AABB Face Normals (Axes X, Y, Z) ---
+  // Trivial reject if all vertices are strictly outside one of the AABB's boundaries
+  if v0.x().max(v1.x().max(v2.x())) < -e.x() || v0.x().min(v1.x().min(v2.x())) > e.x() {
     return false;
   }
-  //  Otherwise call segment-triangle intersection function and stop on first intersection
-  for segment in aabb_segment_indices {
-    if segment_intersects_triangle::<S, Vec3, Vec2>(
-      aabb_vertices[segment[0]],
-      aabb_vertices[segment[1]],
-      &vs,
-      n,
-    ) {
-      return true;
-    }
+  if v0.y().max(v1.y().max(v2.y())) < -e.y() || v0.y().min(v1.y().min(v2.y())) > e.y() {
+    return false;
   }
-  false
+  if v0.z().max(v1.z().max(v2.z())) < -e.z() || v0.z().min(v1.z().min(v2.z())) > e.z() {
+    return false;
+  }
+
+  // --- TEST 2: 9 Edge-Edge Cross Products ---
+  macro_rules! axis_test {
+    ($p_a:expr, $p_b:expr, $r:expr) => {
+      if $p_a.min($p_b) > $r || $p_a.max($p_b) < -$r {
+        return false;
+      }
+    };
+  }
+
+  // Axis X x f0
+  let mut p0 = v0.z() * f0.y() - v0.y() * f0.z();
+  let mut p2 = v2.z() * f0.y() - v2.y() * f0.z();
+  let mut r = e.y() * f0.z().abs() + e.z() * f0.y().abs();
+  axis_test!(p0, p2, r);
+
+  // Axis X x f1
+  p0 = v0.z() * f1.y() - v0.y() * f1.z();
+  let mut p1 = v1.z() * f1.y() - v1.y() * f1.z();
+  r = e.y() * f1.z().abs() + e.z() * f1.y().abs();
+  axis_test!(p0, p1, r);
+
+  // Axis X x f2
+  p0 = v0.z() * f2.y() - v0.y() * f2.z();
+  p1 = v1.z() * f2.y() - v1.y() * f2.z();
+  r = e.y() * f2.z().abs() + e.z() * f2.y().abs();
+  axis_test!(p0, p1, r);
+
+  // Axis Y x f0
+  p0 = v0.x() * f0.z() - v0.z() * f0.x();
+  p2 = v2.x() * f0.z() - v2.z() * f0.x();
+  r = e.x() * f0.z().abs() + e.z() * f0.x().abs();
+  axis_test!(p0, p2, r);
+
+  // Axis Y x f1
+  p0 = v0.x() * f1.z() - v0.z() * f1.x();
+  p1 = v1.x() * f1.z() - v1.z() * f1.x();
+  r = e.x() * f1.z().abs() + e.z() * f1.x().abs();
+  axis_test!(p0, p1, r);
+
+  // Axis Y x f2
+  p0 = v0.x() * f2.z() - v0.z() * f2.x();
+  p1 = v1.x() * f2.z() - v1.z() * f2.x();
+  r = e.x() * f2.z().abs() + e.z() * f2.x().abs();
+  axis_test!(p0, p1, r);
+
+  // Axis Z x f0
+  p0 = v0.y() * f0.x() - v0.x() * f0.y();
+  p2 = v2.y() * f0.x() - v2.x() * f0.y();
+  r = e.x() * f0.y().abs() + e.y() * f0.x().abs();
+  axis_test!(p0, p2, r);
+
+  // Axis Z x f1
+  p0 = v0.y() * f1.x() - v0.x() * f1.y();
+  p1 = v1.y() * f1.x() - v1.x() * f1.y();
+  r = e.x() * f1.y().abs() + e.y() * f1.x().abs();
+  axis_test!(p0, p1, r);
+
+  // Axis Z x f2
+  p0 = v0.y() * f2.x() - v0.x() * f2.y();
+  p1 = v1.y() * f2.x() - v1.x() * f2.y();
+  r = e.x() * f2.y().abs() + e.y() * f2.x().abs();
+  axis_test!(p0, p1, r);
+
+  // --- TEST 3: 1 Triangle Face Normal ---
+  let n = f0.cross(f1);
+  let d = n.dot(v0);
+  let r_n = e.x() * n.x().abs() + e.y() * n.y().abs() + e.z() * n.z().abs();
+
+  if d.abs() > r_n {
+    return false;
+  }
+
+  // If no separating axes were found, the geometry intersects
+  true
 }
 
 #[rustfmt::skip]

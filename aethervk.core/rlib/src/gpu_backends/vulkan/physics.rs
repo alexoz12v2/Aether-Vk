@@ -170,6 +170,7 @@ impl PhysicsPipelines {
       emit_particles: vk::Pipeline::null(),
       p1_2_imex: vk::Pipeline::null(),
       p3_4_imex: vk::Pipeline::null(),
+      lbvh_prepass: vk::Pipeline::null(),
       lbvh_build: vk::Pipeline::null(),
       ccd: vk::Pipeline::null(),
       ccd_rigidbody: vk::Pipeline::null(),
@@ -1152,6 +1153,20 @@ impl Kernels for VulkanComputeKernels {
                     aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(rb.rotation[0][0], rb.rotation[0][1], rb.rotation[0][2], 0.0),
                     aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(rb.rotation[1][0], rb.rotation[1][1], rb.rotation[1][2], 0.0),
                     aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(rb.rotation[2][0], rb.rotation[2][1], rb.rotation[2][2], 0.0),
+                    aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
+                );
+                trans.rotation = aethervk_oshal_rlib::math::vector::vec4::Quat::from_mat4(&mat);
+            });
+            let _ = scene.with_component_mut(rb.entity_id, |kin: &mut crate::scene::KinematicComponent| {
+                kin.velocity = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rb.linear_velocity);
+                kin.angular_velocity = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(rb.angular_velocity);
+            });
+        }
+        
+        Ok(())
+    }
+}
+omponents(rb.rotation[2][0], rb.rotation[2][1], rb.rotation[2][2], 0.0),
                     aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
                 );
                 trans.rotation = aethervk_oshal_rlib::math::vector::vec4::Quat::from_mat4(&mat);

@@ -219,6 +219,7 @@ pub fn start_logic_thread(
         match cmd {
           LogicCommand::ImportModel { .. }
           | LogicCommand::LoadAlmanac { .. }
+          | LogicCommand::UnloadAlmanac { .. }
           | LogicCommand::LoadCometSpk { .. }
           | LogicCommand::SpawnModelInstance { .. }
           | LogicCommand::RaycastNdc { .. }
@@ -299,6 +300,13 @@ impl oshal::os::pool::Workload for LogicWorkload {
           Some(*task_id)
         }
       }
+      LogicCommand::UnloadAlmanac { task_id, .. } => {
+        if *task_id == 0 {
+          None
+        } else {
+          Some(*task_id)
+        }
+      }
       LogicCommand::LoadCometSpk { task_id, .. } => {
         if *task_id == 0 {
           None
@@ -343,6 +351,7 @@ impl oshal::os::pool::Workload for LogicWorkload {
     let cmd_desc = match &self.cmd {
       LogicCommand::ImportModel { path, .. } => alloc::format!("Import model {}", path),
       LogicCommand::LoadAlmanac { path, .. } => alloc::format!("Load almanac {}", path),
+      LogicCommand::UnloadAlmanac { path, .. } => alloc::format!("Unload almanac {}", path),
       LogicCommand::LoadCometSpk { spk_id, epoch, .. } => alloc::format!(
         "Load Ephemeris data for SPK ID: {} at epoch {}",
         spk_id,
@@ -726,6 +735,17 @@ fn process_command_internal(
     // TODO: async tasklet. this should return the task_id, not take it, while a new command QueryLoadAlmanacFinished should poll the task id and return EngineResult<bool> true in case it finished
     LogicCommand::LoadAlmanac { task_id, path } => {
       ctx.load_almanac_file_internal(&path)?;
+      Ok(SimulationTaskResult::None)
+    }
+    LogicCommand::UnloadAlmanac { task_id, path } => {
+      // Pause all scenes to prevent physics errors during unload
+      {
+        let scenes = ctx.scenes.read();
+        for scene_ctx in scenes.values() {
+          scene_ctx.read().time_state.write().is_playing = false;
+        }
+      }
+      ctx.unload_almanac_file_internal(&path)?;
       Ok(SimulationTaskResult::None)
     }
     // TODO: async tasklet. this should return the task_id, not take it, while a new command QueryLoadCometSpkFinished should poll the task id and return EngineResult<bool> true in case it finished

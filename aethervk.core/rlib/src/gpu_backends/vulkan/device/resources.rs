@@ -2293,6 +2293,124 @@ impl ArchetypeArenaCreate for BvhRenderResourceArchetypeArena {
 
 impl BvhRenderResourceArchetype {}
 
+pub(super) struct SphereGizmoRenderResourceArchetypeArena {
+  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
+
+  pub data_buffer: NonZeroHandle<vk::Buffer>,
+  pub data_alloc: vk_mem::Allocation,
+  pub data_ptr: u64,
+
+  pub allocated_gizmos: hashbrown::HashMap<crate::scene::EntityId, u32>,
+  pub free_list: Vec<u32>,
+  pub next_index: u32,
+
+  allocator_raw: vk_mem::ffi::VmaAllocator,
+}
+
+pub(super) struct SphereGizmoRenderResourceArchetype {
+  pub arena: alloc::sync::Weak<
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+      SphereGizmoRenderResourceArchetypeArena,
+    >,
+  >,
+  pub pipeline_key: PipelineKey,
+  pub graphics_info: GraphicsInfo,
+}
+
+unsafe impl Sync for SphereGizmoRenderResourceArchetypeArena {}
+unsafe impl Sync for SphereGizmoRenderResourceArchetype {}
+unsafe impl Send for SphereGizmoRenderResourceArchetypeArena {}
+unsafe impl Send for SphereGizmoRenderResourceArchetype {}
+
+impl SphereGizmoRenderResourceArchetypeArena {
+  pub fn allocate_sphere_gizmo_instance(
+    &mut self,
+    entity: crate::scene::EntityId,
+  ) -> GpuResult<u32> {
+    if let Some(&idx) = self.allocated_gizmos.get(&entity) {
+      return Ok(idx);
+    }
+    let idx = if let Some(idx) = self.free_list.pop() {
+      idx
+    } else {
+      let idx = self.next_index;
+      self.next_index += 1;
+      idx
+    };
+    self.allocated_gizmos.insert(entity, idx);
+    Ok(idx)
+  }
+
+  pub fn free_sphere_gizmo_instance(&mut self, entity: crate::scene::EntityId) {
+    if let Some(idx) = self.allocated_gizmos.remove(&entity) {
+      self.free_list.push(idx);
+    }
+  }
+
+  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+    discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
+    discard_pool.discard_buffer(
+      self.allocator_raw,
+      self.data_buffer.get(),
+      self.data_alloc,
+      timeline,
+    );
+  }
+}
+impl ArchetypeArenaCreate for SphereGizmoRenderResourceArchetypeArena {
+  #[named]
+  fn new_arena(ctx: &ArenaCreationContext) -> GpuResult<Self> {
+    let device = ctx.device;
+    let allocator = ctx.allocator;
+    let push_constant_ranges = [vk::PushConstantRange::default()
+      .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+      .offset(0)
+      .size(core::mem::size_of::<crate::gpu::SphereGizmoPushConstants>() as u32)];
+
+    let pipeline_layout_info =
+      vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
+
+    unsafe {
+      let pipeline_layout =
+        device.create_pipeline_layout(&pipeline_layout_info, None).map_err(|e| {
+          aethervk_oshal_rlib::log!("create_pipeline_layout failed: {:?}", e);
+          e
+        })?;
+
+      let buffer_size = (100_000 * core::mem::size_of::<crate::gpu::SphereGizmoDataGpu>()) as u64;
+      let buffer_info = vk::BufferCreateInfo::default().size(buffer_size).usage(
+        vk::BufferUsageFlags::STORAGE_BUFFER
+          | vk::BufferUsageFlags::TRANSFER_DST
+          | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+      );
+
+      let mut mem_alloc_info = vk_mem::AllocationCreateInfo::default();
+      crate::apply_test_dedicated_alloc!(mem_alloc_info);
+      mem_alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
+
+      let (data_buffer, data_alloc) = allocator
+        .create_buffer(&buffer_info, &mem_alloc_info)
+        .map_err(|_| GpuError::OutOfMemory)?;
+
+      device.set_debug_name(data_buffer, "MegaBuffer_SphereGizmoData");
+
+      let addr_info = ash::vk::BufferDeviceAddressInfo::default().buffer(data_buffer);
+      let data_ptr = device.buffer_device_address.get_buffer_device_address(&addr_info);
+
+      Ok(Self {
+        pipeline_layout: NonZeroHandle::new_unchecked(pipeline_layout),
+        data_buffer: NonZeroHandle::new_unchecked(data_buffer),
+        data_alloc,
+        data_ptr,
+        allocated_gizmos: hashbrown::HashMap::new(),
+        free_list: Vec::new(),
+        next_index: 0,
+        allocator_raw: allocator.get_raw(),
+      })
+    }
+  }
+}
+
 pub(super) struct Bvhwire2RenderResourceArchetypeArena {
   pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
 

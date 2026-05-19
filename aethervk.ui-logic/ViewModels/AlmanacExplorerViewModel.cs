@@ -95,7 +95,10 @@ public partial class AlmanacExplorerViewModel : TabItemViewModel
     UpdateSelectability();
   }
 
-  private void OnFileModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+  private void OnFileModelPropertyChanged(
+    object? sender,
+    System.ComponentModel.PropertyChangedEventArgs e
+  )
   {
     if (e.PropertyName == nameof(SpkFileModel.IsSelected))
     {
@@ -152,7 +155,8 @@ public partial class AlmanacExplorerViewModel : TabItemViewModel
   private async Task LoadSelected()
   {
     var itemsToLoad = LoadedFiles.Where(f => f.IsSelected && !f.IsLoaded).ToList();
-    if (itemsToLoad.Count == 0) return;
+    if (itemsToLoad.Count == 0)
+      return;
 
     IsLoading = true;
 
@@ -162,11 +166,11 @@ public partial class AlmanacExplorerViewModel : TabItemViewModel
       bool success = await _runtimeService.LoadAlmanacFileAsync(item.FilePath);
       if (success)
       {
-         _console.Log($"[AlmanacExplorer] Loaded {item.FileName} successfully.");
+        _console.Log($"[AlmanacExplorer] Loaded {item.FileName} successfully.");
       }
       else
       {
-         _console.Log($"[AlmanacExplorer] Failed to load {item.FileName}.");
+        _console.Log($"[AlmanacExplorer] Failed to load {item.FileName}.");
       }
     }
 
@@ -178,14 +182,26 @@ public partial class AlmanacExplorerViewModel : TabItemViewModel
   private async Task UnloadSelected()
   {
     var itemsToUnload = LoadedFiles.Where(f => f.IsSelected && f.IsLoaded).ToList();
-    if (itemsToUnload.Count == 0) return;
+    if (itemsToUnload.Count == 0)
+      return;
 
-    // Stub for next sprint
+    IsLoading = true;
+
     foreach (var item in itemsToUnload)
     {
-      _console.Log($"[AlmanacExplorer] Requested unload of {item.FileName}. Feature planned for next sprint.");
+      _console.Log($"[AlmanacExplorer] Unloading {item.FileName}...");
+      bool success = await _runtimeService.UnloadAlmanacFileAsync(item.FilePath);
+      if (success)
+      {
+        _console.Log($"[AlmanacExplorer] Unloaded {item.FileName} successfully.");
+      }
+      else
+      {
+        _console.Log($"[AlmanacExplorer] Failed to unload {item.FileName}.");
+      }
     }
 
-    await _breadcrumb.ShowMessageAsync("Almanac Explorer", "Unload functionality is planned for the next sprint.");
+    IsLoading = false;
+    RefreshLoadedFiles();
   }
 }

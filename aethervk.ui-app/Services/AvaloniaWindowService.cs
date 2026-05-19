@@ -181,5 +181,56 @@ namespace AetherVk.Services
 
       return 0;
     }
+
+    public async Task<ulong> ShowSpawnCometDialogAsync(
+      System.Collections.Generic.IEnumerable<AetherVk.Logic.ViewModels.ImportedModelItem> models
+    )
+    {
+      var mainWindow = GetMainWindow();
+      if (mainWindow == null)
+        return 0;
+
+      var dialog = new Views.SpawnCometWindow { DataContext = new SpawnCometViewModel(models) };
+
+      var result = await dialog.ShowDialog<SpawnCometResult?>(mainWindow);
+      if (result != null)
+      {
+        ulong instanceId = await _runtimeService.SpawnModelInstanceAsync(
+          1,
+          result.Model.Id,
+          result.EntityName,
+          result.PosX,
+          result.PosY,
+          result.PosZ
+        );
+
+        if (instanceId > 0)
+        {
+          var entity = _runtimeService.GetEntityById(1, instanceId);
+          if (entity != null)
+          {
+            var transform = System.Linq.Enumerable.FirstOrDefault(
+              System.Linq.Enumerable.OfType<AetherVk.Logic.Models.TransformComponent>(
+                entity.Components
+              )
+            );
+            if (transform != null)
+            {
+              transform.ScaleX = result.ScaleX;
+              transform.ScaleY = result.ScaleY;
+              transform.ScaleZ = result.ScaleZ;
+              transform.RotW = result.RotW;
+              transform.RotX = result.RotX;
+              transform.RotY = result.RotY;
+              transform.RotZ = result.RotZ;
+            }
+          }
+        }
+
+        return instanceId;
+      }
+
+      return 0;
+    }
   }
 }

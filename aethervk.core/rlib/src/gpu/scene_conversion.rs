@@ -83,6 +83,7 @@ pub struct RenderSceneExtraction {
     crate::scene::particles::ParticleEmitterComponent,
   )>,
   pub extracted_gizmos: Vec<(EntityId, Mat4x4f32, f32)>,
+  pub extracted_sphere_gizmos: Vec<(EntityId, Mat4x4f32, f32, f32)>, // entity, model, radius, subdivisions
   pub extracted_trajectories: Vec<(
     EntityId,
     crate::scene::trajectory::TrajectoryComponent,
@@ -139,6 +140,7 @@ impl RenderSceneExtraction {
       ui_call: None,
       text2_call: None,
       background_call: None,
+      sphere_gizmo_batch_call: None,
     };
 
     // Populate Meshes
@@ -287,6 +289,25 @@ impl RenderSceneExtraction {
           gizmo_idx,
         ));
       }
+    }
+
+    // Sphere Gizmos
+    if !self.extracted_sphere_gizmos.is_empty() {
+      let mut sphere_gizmo_data = Vec::with_capacity(self.extracted_sphere_gizmos.len());
+      for (entity_id, model, radius, subdivisions) in self.extracted_sphere_gizmos {
+        let idx = device.allocate_sphere_gizmo_instance(entity_id)?;
+        sphere_gizmo_data.push((
+          idx,
+          crate::gpu::SphereGizmoDataGpu {
+            model: model.into(),
+            radius,
+            subdivisions,
+            _pad: [0.0, 0.0],
+          },
+        ));
+      }
+      render_scene.sphere_gizmo_batch_call =
+        device.upload_sphere_gizmos_batch(cmd_buffer, &sphere_gizmo_data)?;
     }
 
     // BVH
@@ -473,6 +494,8 @@ impl SceneConversionExt for crate::scene::Scene {
       crate::scene::particles::ParticleEmitterComponent,
     )> = Vec::with_capacity(START_VEC_CAPACITY);
     let mut extracted_gizmos: Vec<(EntityId, Mat4x4f32, f32)> =
+      Vec::with_capacity(START_VEC_CAPACITY);
+    let mut extracted_sphere_gizmos: Vec<(EntityId, Mat4x4f32, f32, f32)> =
       Vec::with_capacity(START_VEC_CAPACITY);
     let mut extracted_trajectories: Vec<(
       EntityId,
@@ -776,6 +799,19 @@ impl SceneConversionExt for crate::scene::Scene {
       }
     });
 
+    // SphereGizmos
+    self.query1_without::<_, HiddenComponent, _>(
+      |id, gizmo: &crate::scene::SphereGizmoComponent| {
+        if hidden_set.contains(&id) {
+          return;
+        }
+        if let Some(t) = self.get_relative_transform(id, camera_entity) {
+          let gizmo_model = t.to_mat4::<Mat4x4f32>() * gizmo.local_frame;
+          extracted_sphere_gizmos.push((id, gizmo_model, gizmo.radius, gizmo.subdivisions));
+        }
+      },
+    );
+
     // Trajectories
     self.query1_without::<_, HiddenComponent, _>(
       |id, traj: &crate::scene::trajectory::TrajectoryComponent| {
@@ -893,6 +929,7 @@ impl SceneConversionExt for crate::scene::Scene {
       extracted_bvhs,
       extracted_particles,
       extracted_gizmos,
+      extracted_sphere_gizmos,
       extracted_trajectories,
       extracted_ui,
       extracted_texts,

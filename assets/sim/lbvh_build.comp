@@ -156,18 +156,13 @@ void main() {
     pc.bvh.nodes[leaf_idx].center_of_mass = pos;
     pc.bvh.nodes[leaf_idx].mass = mass;
 
-    // Special case for root node parent (to safely stop traversal)
-    if (idx == 0) {
-        pc.bvh.nodes[0].parent_idx = 0xFFFFFFFF;
-    }
-
     memoryBarrierBuffer();
     
     // ------------------------------------------------------------------------
     // Part 3: Bottom-Up AABB and Mass/CoM Refitting
     // ------------------------------------------------------------------------
     uint current = pc.bvh.nodes[leaf_idx].parent_idx;
-    while (current != 0xFFFFFFFF) {
+    while (true) {
         uint old_val = atomicAdd(pc.counters.flags[current], 1);
         if (old_val == 0) {
             // First thread to arrive. Terminate.
@@ -201,6 +196,7 @@ void main() {
         
         memoryBarrierBuffer();
         
+        if (current == 0) break;
         current = pc.bvh.nodes[current].parent_idx;
     }
 }

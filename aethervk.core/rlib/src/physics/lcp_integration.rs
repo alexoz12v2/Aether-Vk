@@ -19,47 +19,50 @@ pub fn resolve_cluster_lcp(
   let mut b_vector = alloc::vec![0.0; m];
   let mut impulses = alloc::vec![0.0; m];
 
-  let get_mass = |idx: usize, rigid_bodies: &[RigidBodyGpu], particles: &[ParticleGpu]| -> Option<f32> {
+  let get_mass =
+    |idx: usize, rigid_bodies: &[RigidBodyGpu], particles: &[ParticleGpu]| -> Option<f32> {
       if (idx & (1 << 31)) != 0 {
-          None // Kinematic, infinite mass
+        None // Kinematic, infinite mass
       } else if (idx & (1 << 30)) != 0 {
-          let i = idx & !(1 << 30);
-          particles.get(i).map(|p| p.mass)
+        let i = idx & !(1 << 30);
+        particles.get(i).map(|p| p.mass)
       } else {
-          rigid_bodies.get(idx).map(|rb| rb.mass)
+        rigid_bodies.get(idx).map(|rb| rb.mass)
       }
-  };
+    };
 
-  let get_velocity = |idx: usize, rigid_bodies: &[RigidBodyGpu], particles: &[ParticleGpu]| -> Option<Vec3f32> {
+  let get_velocity =
+    |idx: usize, rigid_bodies: &[RigidBodyGpu], particles: &[ParticleGpu]| -> Option<Vec3f32> {
       if (idx & (1 << 31)) != 0 {
-          // Kinematic body velocity not currently extracted for collision response in this simplified solver
-          Some(Vec3f32::zero()) 
+        // Kinematic body velocity not currently extracted for collision response in this simplified solver
+        Some(Vec3f32::zero())
       } else if (idx & (1 << 30)) != 0 {
-          let i = idx & !(1 << 30);
-          particles.get(i).map(|p| Vec3f32::from_array(p.velocity))
+        let i = idx & !(1 << 30);
+        particles.get(i).map(|p| Vec3f32::from_array(p.velocity))
       } else {
-          rigid_bodies.get(idx).map(|rb| Vec3f32::from_array(rb.linear_velocity))
+        rigid_bodies.get(idx).map(|rb| Vec3f32::from_array(rb.linear_velocity))
       }
-  };
+    };
 
-  let add_velocity = |idx: usize, dv: Vec3f32, rigid_bodies: &mut [RigidBodyGpu], particles: &mut [ParticleGpu]| {
+  let add_velocity =
+    |idx: usize, dv: Vec3f32, rigid_bodies: &mut [RigidBodyGpu], particles: &mut [ParticleGpu]| {
       if (idx & (1 << 31)) != 0 {
-          // Kinematic
+        // Kinematic
       } else if (idx & (1 << 30)) != 0 {
-          let i = idx & !(1 << 30);
-          if let Some(p) = particles.get_mut(i) {
-             let mut v = Vec3f32::from_array(p.velocity);
-             v += dv;
-             p.velocity = [v.x(), v.y(), v.z()];
-          }
+        let i = idx & !(1 << 30);
+        if let Some(p) = particles.get_mut(i) {
+          let mut v = Vec3f32::from_array(p.velocity);
+          v += dv;
+          p.velocity = [v.x(), v.y(), v.z()];
+        }
       } else {
-          if let Some(rb) = rigid_bodies.get_mut(idx) {
-             let mut v = Vec3f32::from_array(rb.linear_velocity);
-             v += dv;
-             rb.linear_velocity = [v.x(), v.y(), v.z()];
-          }
+        if let Some(rb) = rigid_bodies.get_mut(idx) {
+          let mut v = Vec3f32::from_array(rb.linear_velocity);
+          v += dv;
+          rb.linear_velocity = [v.x(), v.y(), v.z()];
+        }
       }
-  };
+    };
 
   // Build A matrix and b vector
   for i in 0..m {
@@ -116,6 +119,16 @@ pub fn resolve_cluster_lcp(
     // We want A x + b >= 0, so b_i is the velocity + bias
     // In PGS LCP standard form w = A x + b, where x is impulse, w is outgoing velocity
     b_vector[i] = (1.0 + restitution) * v_rel_n - bias;
+
+    #[cfg(test)]
+    aethervk_oshal_rlib::log!(
+      "LCP Setup: a_ii={}, b_i={}, v_rel_n={}, bias={}, depth={}",
+      a_matrix[i * m + i],
+      b_vector[i],
+      v_rel_n,
+      bias,
+      pair_i.penetration_depth
+    );
   }
 
   // Solve LCP
@@ -123,6 +136,9 @@ pub fn resolve_cluster_lcp(
 
   // Apply impulses
   for i in 0..m {
+    #[cfg(test)]
+    aethervk_oshal_rlib::log!("LCP Result: impulse[{}]={}", i, impulses[i]);
+
     if impulses[i] <= 0.0 {
       continue;
     }
@@ -136,7 +152,7 @@ pub fn resolve_cluster_lcp(
 
     let m_a_i = get_mass(idx_a_i, rigid_bodies, particles).unwrap_or(0.0);
     let m_b_i = get_mass(idx_b_i, rigid_bodies, particles).unwrap_or(0.0);
-    
+
     let inv_m_a_i = if m_a_i > 0.0 { 1.0 / m_a_i } else { 0.0 };
     let inv_m_b_i = if m_b_i > 0.0 { 1.0 / m_b_i } else { 0.0 };
 

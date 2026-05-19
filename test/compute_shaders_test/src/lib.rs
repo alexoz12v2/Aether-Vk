@@ -2,8 +2,7 @@ pub mod cpu_clustering;
 
 use aethervk_core_rlib::{
   gpu::{DeviceAdditionalParams, RenderFrontend, VULKAN_RENDER_BACKEND, new_render_frontend},
-  gpu_backends::vulkan::device::Device,
-  gpu_backends::vulkan::utils::RwLockable,
+  gpu_backends::vulkan::{device::Device, utils::RwLockable},
   types::RuntimeParams,
 };
 use ash::vk;

@@ -364,6 +364,9 @@ public static class NativeInterop
   public static extern ulong avkSimulationContext_loadAlmanacFile(IntPtr ctx, string path);
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
+  public static extern ulong avkSimulationContext_unloadAlmanacFile(IntPtr ctx, string path);
+
+  [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_loadCometSpk(
     IntPtr ctx,
     int spkid,

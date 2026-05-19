@@ -623,6 +623,25 @@ pub unsafe extern "C" fn avkSimulationContext_loadAlmanacFile(
   task_id
 }
 
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_unloadAlmanacFile(
+  ctx: *mut SimulationContext,
+  path: *const c_char,
+) -> u64 {
+  if ctx.is_null() || path.is_null() {
+    return 0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let path_str = unsafe { CStr::from_ptr(path).to_str().unwrap_or("").to_string() };
+  let task_id = ctx_ref.task_manager.write().create_task().get();
+  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::UnloadAlmanac {
+    task_id,
+    path: path_str,
+  });
+  task_id
+}
+
 // TODO C# side: builder/helper functions for strings suppoerted by `anise::time::Epoch::from_str("2024-03-24 12:00:00 TDB")`
 // alternative (nah): Epoch::from_gregorian_utc_at_midnight(2000, 1, 1). But string is more precise
 // TODO C# side: update

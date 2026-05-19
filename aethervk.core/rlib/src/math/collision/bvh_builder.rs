@@ -136,7 +136,7 @@ where
 
 impl<S, V, M> BVHBuilder<S, V, M>
 where
-  M: Matrix3<Scalar = S, Vector = V> + From<Mat3f32> + MatrixVectorMul,
+  M: Matrix3<Scalar = S, Vector = V> + From<Mat3f32> + MatrixVectorMul + core::fmt::Debug,
   V: Vector3<Scalar = S> + From<Vec3f32> + Into<Vec3f32> + From<[S; 3]> + Into<[S; 3]>,
   S: FloatLike
     + FloatOps

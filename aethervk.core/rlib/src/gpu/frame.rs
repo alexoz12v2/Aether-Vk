@@ -498,6 +498,15 @@ pub struct Bvhwire2BatchCall {
   pub data_ptr: u64,
 }
 
+#[derive(Clone)]
+/// TODO: Document this item
+pub struct SphereGizmoBatchCall {
+  pub pipeline: PipelineKey,
+  pub total_gizmos: u32,
+  pub total_vertices: u32,
+  pub data_ptr: u64,
+}
+
 pub struct TextDrawCall {
   pub text: alloc::string::String,
   pub font_atlas: alloc::sync::Arc<crate::scene::text::FontAtlas>,
@@ -530,6 +539,7 @@ pub struct RenderScene {
   pub grid_call: Option<GridDrawCall>,
   pub trajectory_call: Option<TrajectoryBatchCall>,
   pub bvhwire2_batch_call: Option<Bvhwire2BatchCall>,
+  pub sphere_gizmo_batch_call: Option<SphereGizmoBatchCall>,
   pub ui_call: Option<UiBatchCall>,
   pub text2_call: Option<crate::gpu::Text2BatchCall>,
   pub background_call: Option<BackgroundDrawCall>,
@@ -564,6 +574,7 @@ impl RenderScene {
       grid_call: None,
       trajectory_call: None,
       bvhwire2_batch_call: None,
+      sphere_gizmo_batch_call: None,
       ui_call: None,
       text2_call: None,
     }
@@ -1269,6 +1280,23 @@ pub fn do_draw_bvhwire2_batch(
   Ok(())
 }
 
+pub fn do_draw_sphere_gizmo_batch(
+  device: &dyn RenderDevice,
+  camera: &CameraRenderData,
+  cmd_buffer: super::CommandBufferHandle,
+  handle: PresentationEngineHandle,
+  draw_call: &SphereGizmoBatchCall,
+) -> GpuResult<()> {
+  device.prepare_sphere_gizmo_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
+  let push_constants = crate::gpu::SphereGizmoPushConstants {
+    gizmo_ptr: draw_call.data_ptr,
+    view_proj: camera.view_proj.into(),
+  };
+  device.push_sphere_gizmo_constants(cmd_buffer, &push_constants)?;
+  device.draw_instanced(cmd_buffer, draw_call.total_vertices, draw_call.total_gizmos)?;
+  Ok(())
+}
+
 pub fn do_draw_ui_batch(
   device: &dyn RenderDevice,
   _camera: &CameraRenderData,
@@ -1592,6 +1620,16 @@ pub fn render_frame(
 
   if let Some(draw_call) = &render_scene.bvhwire2_batch_call {
     do_draw_bvhwire2_batch(
+      device,
+      &render_scene.camera_data,
+      cmd_buffer,
+      handle,
+      draw_call,
+    )?;
+  }
+
+  if let Some(draw_call) = &render_scene.sphere_gizmo_batch_call {
+    do_draw_sphere_gizmo_batch(
       device,
       &render_scene.camera_data,
       cmd_buffer,

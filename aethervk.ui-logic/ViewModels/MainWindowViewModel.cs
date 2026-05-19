@@ -203,6 +203,12 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   }
 
   [RelayCommand]
+  private async Task OpenSpawnCometDialogAsync()
+  {
+    await _windowService.ShowSpawnCometDialogAsync(ImportedModels);
+  }
+
+  [RelayCommand]
   private async Task OpenSettingsAsync()
   {
     await _windowService.ShowSettingsDialogAsync();

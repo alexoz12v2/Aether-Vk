@@ -1,0 +1,125 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:AetherVk.Logic.ViewModels"
+        xmlns:controls="using:AetherVk.Controls"
+        x:DataType="vm:SpawnCometViewModel"
+        x:Class="AetherVk.Views.SpawnCometWindow"
+        Title="Spawn Comet"
+        Width="600" Height="450"
+        WindowStartupLocation="CenterOwner"
+        SystemDecorations="BorderOnly"
+        ShowInTaskbar="False"
+        Background="{DynamicResource Bg.Canvas}">
+        
+  <Grid RowDefinitions="Auto, *, Auto">
+    
+    <!-- Header -->
+    <Border Grid.Row="0" Background="{DynamicResource Bg.Outline}" Padding="16">
+      <TextBlock Text="Spawn Comet" FontWeight="Bold" FontSize="18" />
+    </Border>
+
+    <!-- Main Content Area -->
+    <Panel Grid.Row="1" Margin="16" Container.Name="WizardContainer">
+      <Panel.Styles>
+        <Style Selector="StackPanel.stepStack">
+          <Setter Property="Spacing" Value="16" />
+        </Style>
+      </Panel.Styles>
+
+      <!-- Step 1: Select Mesh -->
+      <StackPanel Classes="stepStack" IsVisible="{Binding IsStep1}">
+        <TextBlock Text="Step 1: Select 3D Mesh" FontWeight="Bold" FontSize="16" />
+        
+        <TabControl>
+          <TabItem Header="Imported GLTF Assets">
+            <Panel>
+              <!-- Empty State -->
+              <StackPanel IsVisible="{Binding HasNoModels}" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16" Margin="0,40,0,0">
+                <Button Content="+" FontSize="24" Width="60" Height="60" CornerRadius="30" HorizontalAlignment="Center" Classes="accent" x:CompileBindings="False" Command="{Binding $parent[Window].ImportMeshCommand}" />
+                <TextBlock Text="No GLTF/GLB models imported. Import one from disk?" Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="300" />
+              </StackPanel>
+
+              <!-- List State -->
+              <ListBox ItemsSource="{Binding ImportedModels}" SelectedItem="{Binding SelectedModel}" IsVisible="{Binding !HasNoModels}" MaxHeight="250">
+                <ListBox.ItemTemplate>
+                  <DataTemplate DataType="vm:ImportedModelItem">
+                    <TextBlock Text="{Binding Name}" Padding="8" />
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </Panel>
+          </TabItem>
+        </TabControl>
+      </StackPanel>
+
+      <!-- Step 2: Physics Type -->
+      <StackPanel Classes="stepStack" IsVisible="{Binding IsStep2}">
+        <TextBlock Text="Step 2: Physics Interaction" FontWeight="Bold" FontSize="16" />
+        
+        <Grid ColumnDefinitions="*,*,*" Margin="0,16,0,0">
+          <RadioButton Grid.Column="0" Content="Static" GroupName="Physics" IsChecked="{Binding PhysicsType, Converter={x:Static ObjectConverters.Equal}, ConverterParameter='Static'}" Margin="4" Classes="card" />
+          
+          <!-- WIP States -->
+          <RadioButton Grid.Column="1" Content="Kinematic (WIP)" GroupName="Physics" IsEnabled="False" Margin="4" Classes="card" />
+          <RadioButton Grid.Column="2" Content="Dynamic (WIP)" GroupName="Physics" IsEnabled="False" Margin="4" Classes="card" />
+        </Grid>
+      </StackPanel>
+
+      <!-- Step 3: Positioning -->
+      <StackPanel Classes="stepStack" IsVisible="{Binding IsStep3}">
+        <TextBlock Text="Step 3: Position &amp; Orientation" FontWeight="Bold" FontSize="16" />
+        
+        <Grid ColumnDefinitions="*, Auto" Margin="0,16,0,0">
+          <StackPanel Grid.Column="0" Spacing="12" Margin="0,0,16,0">
+            <TextBlock Text="Position" FontWeight="Bold" />
+            <Grid ColumnDefinitions="*,*,*">
+              <NumericUpDown Grid.Column="0" Value="{Binding PosX}" FormatString="0.0" Margin="2" />
+              <NumericUpDown Grid.Column="1" Value="{Binding PosY}" FormatString="0.0" Margin="2" />
+              <NumericUpDown Grid.Column="2" Value="{Binding PosZ}" FormatString="0.0" Margin="2" />
+            </Grid>
+
+            <TextBlock Text="Scale" FontWeight="Bold" Margin="0,8,0,0" />
+            <Grid ColumnDefinitions="*,*,*">
+              <NumericUpDown Grid.Column="0" Value="{Binding ScaleX}" FormatString="0.00" Margin="2" Minimum="0.01" />
+              <NumericUpDown Grid.Column="1" Value="{Binding ScaleY}" FormatString="0.00" Margin="2" Minimum="0.01" />
+              <NumericUpDown Grid.Column="2" Value="{Binding ScaleZ}" FormatString="0.00" Margin="2" Minimum="0.01" />
+            </Grid>
+
+            <TextBlock Text="Rotation (Degrees)" FontWeight="Bold" Margin="0,8,0,0" />
+            <Grid ColumnDefinitions="Auto, *">
+              <TextBlock Grid.Column="0" Text="Pitch (X):" VerticalAlignment="Center" Width="60" />
+              <Slider Grid.Column="1" Minimum="-180" Maximum="180" Value="{Binding Pitch}" Margin="8,0" />
+            </Grid>
+            <Grid ColumnDefinitions="Auto, *">
+              <TextBlock Grid.Column="0" Text="Yaw (Y):" VerticalAlignment="Center" Width="60" />
+              <Slider Grid.Column="1" Minimum="-180" Maximum="180" Value="{Binding Yaw}" Margin="8,0" />
+            </Grid>
+            <Grid ColumnDefinitions="Auto, *">
+              <TextBlock Grid.Column="0" Text="Roll (Z):" VerticalAlignment="Center" Width="60" />
+              <Slider Grid.Column="1" Minimum="-180" Maximum="180" Value="{Binding Roll}" Margin="8,0" />
+            </Grid>
+          </StackPanel>
+
+          <!-- Gizmo -->
+          <Border Grid.Column="1" Width="150" Height="150" Background="{DynamicResource Bg.Outline}" CornerRadius="8" Padding="16" VerticalAlignment="Top">
+            <controls:RotationGizmo Pitch="{Binding Pitch}" Yaw="{Binding Yaw}" Roll="{Binding Roll}" />
+          </Border>
+        </Grid>
+      </StackPanel>
+    </Panel>
+
+    <!-- Footer -->
+    <Border Grid.Row="2" Background="{DynamicResource Bg.Canvas}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="0,1,0,0" Padding="16">
+      <Grid>
+        <Button Content="Cancel" x:CompileBindings="False" Command="{Binding $parent[Window].CancelCommand}" HorizontalAlignment="Left" />
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+          <Button Content="Back" Command="{Binding PreviousStepCommand}" IsEnabled="{Binding CanGoBack}" />
+          
+          <Button Content="Next" Command="{Binding NextStepCommand}" IsEnabled="{Binding CanGoNext}" IsVisible="{Binding !IsStep3}" Classes="accent" />
+          
+          <Button Content="Spawn" x:CompileBindings="False" Command="{Binding $parent[Window].SpawnCommand}" IsVisible="{Binding IsStep3}" Classes="accent" />
+        </StackPanel>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

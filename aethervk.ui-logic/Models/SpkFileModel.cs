@@ -39,21 +39,21 @@ public partial class SpkFileModel : ObservableObject
     {
       var nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
       var parts = nameWithoutExt.Split('-');
-      
+
       // We expect at least pdes, spkId, and dates
       if (parts.Length >= 4)
       {
         var pdes = parts[0].Replace("_", " ");
         var spkId = parts[1];
-        
+
         // The dates might be split further if they contain hyphens, but they are already formatted as yyyy-MM-dd
         // Actually the format is {pdes}-{spkId}-{yyyy}-{MM}-{dd}-{yyyy}-{MM}-{dd}
         // Let's just find the first two parts and join the rest as the date range
         if (parts.Length >= 8) // pdes, spkId, yyyy, mm, dd, yyyy, mm, dd
         {
-           var start = $"{parts[2]}-{parts[3]}-{parts[4]}";
-           var end = $"{parts[5]}-{parts[6]}-{parts[7]}";
-           return $"{pdes} (ID: {spkId}) | {start} to {end}";
+          var start = $"{parts[2]}-{parts[3]}-{parts[4]}";
+          var end = $"{parts[5]}-{parts[6]}-{parts[7]}";
+          return $"{pdes} (ID: {spkId}) | {start} to {end}";
         }
         else
         {

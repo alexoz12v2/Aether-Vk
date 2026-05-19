@@ -391,6 +391,50 @@ impl RenderDevice for MetalRenderDevice {
     Err(GpuError::UnsupportedFeature)
   }
 
+  fn allocate_sphere_gizmo_instance(
+    &self,
+    _entity: EntityId,
+  ) -> GpuResult<u32> {
+    Err(GpuError::UnsupportedFeature)
+  }
+
+  fn free_sphere_gizmo_instance(
+    &self,
+    _entity: EntityId,
+  ) -> GpuResult<()> {
+    Err(GpuError::UnsupportedFeature)
+  }
+
+  fn get_sphere_gizmo_pipeline_key(
+    &self,
+    _handle: PresentationEngineHandle,
+  ) -> GpuResult<PipelineKey> {
+    Err(GpuError::UnsupportedFeature)
+  }
+
+  fn upload_sphere_gizmos_batch(
+    &self,
+    _cmd_buffer: CommandBufferHandle,
+    _gizmos: &[(u32, crate::gpu::SphereGizmoDataGpu)],
+  ) -> GpuResult<Option<crate::gpu::frame::SphereGizmoBatchCall>> {
+    Err(GpuError::UnsupportedFeature)
+  }
+
+  fn push_sphere_gizmo_constants(
+    &self,
+    _cmd_buffer: CommandBufferHandle,
+    _constants: &crate::gpu::SphereGizmoPushConstants,
+  ) -> GpuResult<()> {
+    Err(GpuError::UnsupportedFeature)
+  }
+
+  fn prepare_sphere_gizmo_archetype_for_render_and_bind_pipeline(
+    &self,
+    _cmd_buffer: CommandBufferHandle,
+  ) -> GpuResult<()> {
+    Err(GpuError::UnsupportedFeature)
+  }
+
   fn get_or_create_measurement_resources(
     &self,
     _handle: PresentationEngineHandle,
