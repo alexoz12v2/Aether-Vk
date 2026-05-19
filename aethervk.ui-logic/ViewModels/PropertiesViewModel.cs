@@ -34,6 +34,8 @@ public partial class PropertiesViewModel
   [ObservableProperty]
   private bool _isFlyoutMenuOpen;
 
+  public ObservableCollection<object> PropertiesExpanders { get; } = new();
+
   private readonly System.Collections.Generic.List<IComponentRule> _componentRules = new();
 
   public PropertiesViewModel(
@@ -80,8 +82,71 @@ public partial class PropertiesViewModel
     OnPropertyChanged(nameof(SelectedEntity));
     IsFollowingEntity = false;
 
-    if (SelectedEntity != null)
+    PropertiesExpanders.Clear();
+
+    if (SelectedEntity != null && _runtimeService != null)
     {
+      var componentNames = _runtimeService.GetEntityComponentNames(
+        CurrentSceneId,
+        SelectedEntity.Id
+      );
+      bool hasCamera = componentNames.Any(n => n.EndsWith("CameraComponent"));
+
+      foreach (var name in componentNames)
+      {
+        if (name.EndsWith("TransformComponent"))
+        {
+          var comp = SelectedEntity.Components.OfType<TransformComponent>().FirstOrDefault();
+          if (comp != null)
+          {
+            comp.IsEditable = hasCamera;
+            PropertiesExpanders.Add(comp);
+          }
+        }
+        else if (name.EndsWith("CameraComponent"))
+        {
+          var comp = SelectedEntity.Components.OfType<CameraComponent>().FirstOrDefault();
+          if (comp != null)
+          {
+            PropertiesExpanders.Add(comp);
+          }
+        }
+        else if (
+          name.EndsWith("CometComponent")
+          || name.EndsWith("PlanetComponent")
+          || name.EndsWith("SunComponent")
+          || name.EndsWith("CursorComponent")
+          || name.EndsWith("GridComponent")
+        )
+        {
+          // For existing complex components, try to find them in the old heuristic list
+          var comp = SelectedEntity.Components.FirstOrDefault(c =>
+            c.GetType().Name == name.Split(new[] { "::" }, System.StringSplitOptions.None).Last()
+          );
+          if (comp != null)
+          {
+            PropertiesExpanders.Add(comp);
+          }
+          else
+          {
+            // Provide fallback if not yet supported
+            PropertiesExpanders.Add(
+              new UnknownComponentViewModel(
+                name.Split(new[] { "::" }, System.StringSplitOptions.None).Last()
+              )
+            );
+          }
+        }
+        else
+        {
+          PropertiesExpanders.Add(
+            new UnknownComponentViewModel(
+              name.Split(new[] { "::" }, System.StringSplitOptions.None).Last()
+            )
+          );
+        }
+      }
+
       foreach (var rule in _componentRules)
       {
         rule.Apply(SelectedEntity);

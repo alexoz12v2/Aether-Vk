@@ -15,7 +15,7 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<IWindowService, AvaloniaWindowService>();
     collection.AddSingleton<IFileDialogService, AvaloniaFileDialogService>();
     collection.AddSingleton<ITabFactory, TabFactory>();
-    
+
     collection.AddSingleton<ILocalStorageService, LocalStorageService>();
 
     collection.AddSingleton<ConsoleService>();

@@ -1,16 +1,26 @@
-use aethervk_core_rlib::gpu::PresentationEngineHandle;
-use aethervk_core_rlib::scene::ui::{ScreenSpaceTextComponent, Transform2DComponent, UiComponent};
-use aethervk_core_rlib::scene::{CameraComponent, EntityId, TransformComponent};
-use aethervk_core_rlib::simulation_api::components_api::{CameraParams, PerspectiveCameraParams};
-use aethervk_core_rlib::simulation_api::SimulationContext;
-use aethervk_core_rlib::types::{EngineResult, GpuResult};
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::{vec3::Vec3f32, vec4::Quat, Vector, Vector3};
+use aethervk_core_rlib::{
+  gpu::PresentationEngineHandle,
+  scene::{
+    ui::{ScreenSpaceTextComponent, Transform2DComponent, UiComponent},
+    CameraComponent, EntityId, TransformComponent,
+  },
+  simulation_api::{
+    components_api::{CameraParams, PerspectiveCameraParams},
+    SimulationContext,
+  },
+  types::{EngineResult, GpuResult},
+};
+use aethervk_oshal_rlib::math::{
+  quaternion::Quaternion,
+  vector::{vec3::Vec3f32, vec4::Quat, Vector, Vector3},
+};
 use rand::Rng;
 use rayon::prelude::*;
 use std::sync::Arc;
-use test_utils::cycle_get_asset_path_from_exe;
-use test_utils::sim_app::{run_simulation_app, SimulationDelegate};
+use test_utils::{
+  cycle_get_asset_path_from_exe,
+  sim_app::{run_simulation_app, SimulationDelegate},
+};
 use winit::window::Window;
 
 struct ForceTestDelegate {
@@ -81,10 +91,10 @@ impl SimulationDelegate for ForceTestDelegate {
           emissive_color: [0.5, 0.5, 0.5],
           use_new_path: true,
           paint_display_mode: 0,
-        sphere_center: [0.0, 0.0, 0.0],
-        sphere_radius: 1.0,
-        grid_color: [0.0, 0.0, 0.0],
-        grid_density: 1.0,
+          sphere_center: [0.0, 0.0, 0.0],
+          sphere_radius: 1.0,
+          grid_color: [0.0, 0.0, 0.0],
+          grid_density: 1.0,
         },
       )
       .unwrap();
@@ -281,31 +291,45 @@ fn main() {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use aethervk_core_rlib::gpu::{DeviceBuffer, Kernels, ParticleGpu, CommandBuffer, WaitHandle};
-  use aethervk_core_rlib::physics::cpu_kernels::CpuSimdKernels;
-  use aethervk_core_rlib::gpu_backends::vulkan::physics::VulkanComputeKernels;
-  use aethervk_core_rlib::gpu_backends::vulkan::device::Device;
+  use aethervk_core_rlib::{
+    gpu::{CommandBuffer, DeviceBuffer, Kernels, ParticleGpu, WaitHandle},
+    gpu_backends::vulkan::{device::Device, physics::VulkanComputeKernels},
+    physics::cpu_kernels::CpuSimdKernels,
+  };
 
   #[test]
   fn test_barnes_hut_parity() {
     let asset_dir = test_utils::cycle_get_asset_path_from_exe(true).to_string_lossy().to_string();
     aethervk_core_rlib::gpu::ASSET_DIR.write().replace(asset_dir);
 
-    let mut ctx = SimulationContext::startup(
-      aethervk_core_rlib::gpu::VULKAN_RENDER_BACKEND,
-      None,
-    )
-    .unwrap();
+    let mut ctx =
+      SimulationContext::startup(aethervk_core_rlib::gpu::VULKAN_RENDER_BACKEND, None).unwrap();
 
     let scene_id = ctx.create_empty_scene().unwrap();
     let root_entity = ctx.spawn_entity(scene_id, "root").unwrap();
-    ctx.add_transform_component(scene_id, root_entity, Vec3f32::zero(), Quat::identity(), Vec3f32::one()).unwrap();
+    ctx
+      .add_transform_component(
+        scene_id,
+        root_entity,
+        Vec3f32::zero(),
+        Quat::identity(),
+        Vec3f32::one(),
+      )
+      .unwrap();
 
     // Spawn particle system
     let ps_entity = ctx.spawn_entity(scene_id, "ps").unwrap();
     ctx.set_parent(scene_id, ps_entity, root_entity).unwrap();
-    ctx.add_transform_component(scene_id, ps_entity, Vec3f32::zero(), Quat::identity(), Vec3f32::one()).unwrap();
-    
+    ctx
+      .add_transform_component(
+        scene_id,
+        ps_entity,
+        Vec3f32::zero(),
+        Quat::identity(),
+        Vec3f32::one(),
+      )
+      .unwrap();
+
     let mut ps_comp = aethervk_core_rlib::scene::particles::ParticleSystemComponent::new(10);
     {
       let mut p_write = ps_comp.particles.write();
@@ -331,8 +355,11 @@ mod tests {
 
     ctx.get_scene(scene_id).unwrap().write().scene.add_component(ps_entity, ps_comp).unwrap();
 
-    let thread_pool = std::sync::Arc::new(aethervk_oshal_rlib::os::pool::ThreadPool::new(4).unwrap());
-    let cpu_kernels = CpuSimdKernels { thread_pool: thread_pool.clone() };
+    let thread_pool =
+      std::sync::Arc::new(aethervk_oshal_rlib::os::pool::ThreadPool::new(4).unwrap());
+    let cpu_kernels = CpuSimdKernels {
+      thread_pool: thread_pool.clone(),
+    };
 
     let scene_ctx = ctx.get_scene(scene_id).unwrap();
     let scene_read = scene_ctx.read();
@@ -340,11 +367,31 @@ mod tests {
 
     // CPU PASS
     let mut cpu_cmd = cpu_kernels.create_command_buffer().unwrap();
-    let kinematics = cpu_kernels.build_kinematic_bodies(&mut cpu_cmd, &aethervk_core_rlib::physics::physics_scene::PhysicsScene::default(), scene).unwrap();
-    let rigid_bodies = cpu_kernels.build_rigid_bodies(&mut cpu_cmd, &aethervk_core_rlib::physics::physics_scene::PhysicsScene::default(), scene).unwrap();
+    let kinematics = cpu_kernels
+      .build_kinematic_bodies(
+        &mut cpu_cmd,
+        &aethervk_core_rlib::physics::physics_scene::PhysicsScene::default(),
+        scene,
+      )
+      .unwrap();
+    let rigid_bodies = cpu_kernels
+      .build_rigid_bodies(
+        &mut cpu_cmd,
+        &aethervk_core_rlib::physics::physics_scene::PhysicsScene::default(),
+        scene,
+      )
+      .unwrap();
     let mut cpu_particles = cpu_kernels.build_particles(&mut cpu_cmd, scene).unwrap();
-    let cpu_bvh = cpu_kernels.build_motion_bvh(&mut cpu_cmd, &kinematics, &rigid_bodies, &cpu_particles, 16000).unwrap();
-    
+    let cpu_bvh = cpu_kernels
+      .build_motion_bvh(
+        &mut cpu_cmd,
+        &kinematics,
+        &rigid_bodies,
+        &cpu_particles,
+        16000,
+      )
+      .unwrap();
+
     cpu_kernels.compute_self_gravity(&mut cpu_cmd, &cpu_bvh, &mut cpu_particles).unwrap();
     cpu_cmd.submit().unwrap();
 
@@ -352,47 +399,95 @@ mod tests {
 
     // GPU PASS
     let mut gpu_result = vec![];
-    ctx.with_device(|dev| {
-      let actual_device = dev.as_any().downcast_ref::<Device>().unwrap();
-      let gpu_kernels = VulkanComputeKernels {
-        device: actual_device.device.clone(),
-        pipelines: actual_device.res.read().pipelines.physics.clone(),
-        addresses: actual_device.res.read().physics_addresses.clone(),
-        thread_pool: thread_pool.clone(),
-      };
+    ctx
+      .with_device(|dev| {
+        let actual_device = dev.as_any().downcast_ref::<Device>().unwrap();
+        let gpu_kernels = VulkanComputeKernels {
+          device: actual_device.device.clone(),
+          pipelines: actual_device.res.read().pipelines.physics.clone(),
+          addresses: actual_device.res.read().physics_addresses.clone(),
+          thread_pool: thread_pool.clone(),
+        };
 
-      let mut gpu_cmd = gpu_kernels.create_command_buffer().unwrap();
-      actual_device.begin_command_buffer(gpu_cmd.cmd).unwrap();
+        let mut gpu_cmd = gpu_kernels.create_command_buffer().unwrap();
+        actual_device.begin_command_buffer(gpu_cmd.cmd).unwrap();
 
-      let g_kinematics = gpu_kernels.build_kinematic_bodies(&mut gpu_cmd, &aethervk_core_rlib::physics::physics_scene::PhysicsScene::default(), scene).unwrap();
-      let g_rigid_bodies = gpu_kernels.build_rigid_bodies(&mut gpu_cmd, &aethervk_core_rlib::physics::physics_scene::PhysicsScene::default(), scene).unwrap();
-      let mut g_particles = gpu_kernels.build_particles(&mut gpu_cmd, scene).unwrap();
-      let g_bvh = gpu_kernels.build_motion_bvh(&mut gpu_cmd, &g_kinematics, &g_rigid_bodies, &g_particles, 16000).unwrap();
-      
-      gpu_kernels.compute_self_gravity(&mut gpu_cmd, &g_bvh, &mut g_particles).unwrap();
-      
-      let read_handle = g_particles.enqueue_read_to_cpu(&mut gpu_cmd).unwrap();
-      
-      actual_device.end_command_buffer(gpu_cmd.cmd).unwrap();
-      
-      let submit_info = ash::vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&gpu_cmd.cmd));
-      let fence = actual_device.create_fence().unwrap();
-      unsafe {
-        actual_device.device.queue_submit(actual_device.queues.graphics.queue, std::slice::from_ref(&submit_info), fence).unwrap();
-        actual_device.device.wait_for_fences(std::slice::from_ref(&fence), true, u64::MAX).unwrap();
-      }
+        let g_kinematics = gpu_kernels
+          .build_kinematic_bodies(
+            &mut gpu_cmd,
+            &aethervk_core_rlib::physics::physics_scene::PhysicsScene::default(),
+            scene,
+          )
+          .unwrap();
+        let g_rigid_bodies = gpu_kernels
+          .build_rigid_bodies(
+            &mut gpu_cmd,
+            &aethervk_core_rlib::physics::physics_scene::PhysicsScene::default(),
+            scene,
+          )
+          .unwrap();
+        let mut g_particles = gpu_kernels.build_particles(&mut gpu_cmd, scene).unwrap();
+        let g_bvh = gpu_kernels
+          .build_motion_bvh(
+            &mut gpu_cmd,
+            &g_kinematics,
+            &g_rigid_bodies,
+            &g_particles,
+            16000,
+          )
+          .unwrap();
 
-      gpu_result = read_handle.wait().unwrap();
-      
-      aethervk_core_rlib::types::GpuResult::Ok(())
-    }).unwrap();
+        gpu_kernels.compute_self_gravity(&mut gpu_cmd, &g_bvh, &mut g_particles).unwrap();
+
+        let read_handle = g_particles.enqueue_read_to_cpu(&mut gpu_cmd).unwrap();
+
+        actual_device.end_command_buffer(gpu_cmd.cmd).unwrap();
+
+        let submit_info =
+          ash::vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&gpu_cmd.cmd));
+        let fence = actual_device.create_fence().unwrap();
+        unsafe {
+          actual_device
+            .device
+            .queue_submit(
+              actual_device.queues.graphics.queue,
+              std::slice::from_ref(&submit_info),
+              fence,
+            )
+            .unwrap();
+          actual_device
+            .device
+            .wait_for_fences(std::slice::from_ref(&fence), true, u64::MAX)
+            .unwrap();
+        }
+
+        gpu_result = read_handle.wait().unwrap();
+
+        aethervk_core_rlib::types::GpuResult::Ok(())
+      })
+      .unwrap();
 
     // COMPARE
     assert_eq!(cpu_result.len(), gpu_result.len());
     for (c, g) in cpu_result.iter().zip(gpu_result.iter()) {
-      assert!((c.force[0] - g.force[0]).abs() < 1e-4, "CPU force x {} != GPU force x {}", c.force[0], g.force[0]);
-      assert!((c.force[1] - g.force[1]).abs() < 1e-4, "CPU force y {} != GPU force y {}", c.force[1], g.force[1]);
-      assert!((c.force[2] - g.force[2]).abs() < 1e-4, "CPU force z {} != GPU force z {}", c.force[2], g.force[2]);
+      assert!(
+        (c.force[0] - g.force[0]).abs() < 1e-4,
+        "CPU force x {} != GPU force x {}",
+        c.force[0],
+        g.force[0]
+      );
+      assert!(
+        (c.force[1] - g.force[1]).abs() < 1e-4,
+        "CPU force y {} != GPU force y {}",
+        c.force[1],
+        g.force[1]
+      );
+      assert!(
+        (c.force[2] - g.force[2]).abs() < 1e-4,
+        "CPU force z {} != GPU force z {}",
+        c.force[2],
+        g.force[2]
+      );
     }
   }
 }

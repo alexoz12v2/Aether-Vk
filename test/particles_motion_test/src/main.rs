@@ -1,14 +1,22 @@
-use aethervk_core_rlib::gpu::PresentationEngineHandle;
-use aethervk_core_rlib::scene::{CameraComponent, TransformComponent};
-use aethervk_core_rlib::simulation_api::components_api::{CameraParams, PerspectiveCameraParams};
-use aethervk_core_rlib::simulation_api::SimulationContext;
-use aethervk_core_rlib::types::{EngineResult, GpuResult};
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::{vec3::Vec3f32, vec4::Quat, Vector, Vector3};
+use aethervk_core_rlib::{
+  gpu::PresentationEngineHandle,
+  scene::{CameraComponent, TransformComponent},
+  simulation_api::{
+    components_api::{CameraParams, PerspectiveCameraParams},
+    SimulationContext,
+  },
+  types::{EngineResult, GpuResult},
+};
+use aethervk_oshal_rlib::math::{
+  quaternion::Quaternion,
+  vector::{vec3::Vec3f32, vec4::Quat, Vector, Vector3},
+};
 use rand::Rng;
 use rayon::prelude::*;
-use test_utils::cycle_get_asset_path_from_exe;
-use test_utils::sim_app::{run_simulation_app, SimulationDelegate};
+use test_utils::{
+  cycle_get_asset_path_from_exe,
+  sim_app::{run_simulation_app, SimulationDelegate},
+};
 use winit::window::Window;
 
 struct ParticlesDelegate {

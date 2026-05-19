@@ -289,11 +289,23 @@
     <!-- Doesn't support cross compilation (later) -->
     <CargoTargetProfile Condition="'$(Configuration)' == 'Release'">release</CargoTargetProfile>
     <CargoTargetProfile Condition="'$(Configuration)' != 'Release'">debug</CargoTargetProfile>
-    <CargoTargetBaseDirectory>$(MSBuildProjectDirectory)/../target/$(CargoTarget)/$(CargoTargetProfile)</CargoTargetBaseDirectory>
-    
+    <CargoTargetBaseDirectory
+      Condition="'$(CargoTarget)' != '' And Exists('$(MSBuildProjectDirectory)/../target/$(CargoTarget)/$(CargoTargetProfile)')"
+      >$(MSBuildProjectDirectory)/../target/$(CargoTarget)/$(CargoTargetProfile)</CargoTargetBaseDirectory
+    >
+    <CargoTargetBaseDirectory Condition="'$(CargoTargetBaseDirectory)' == ''"
+      >$(MSBuildProjectDirectory)/../target/$(CargoTargetProfile)</CargoTargetBaseDirectory
+    >
+
     <NativeLibExists>false</NativeLibExists>
-    <NativeLibExists Condition="'$(IsWindows)' == 'true' And Exists('$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll') And Exists('$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll.lib')">true</NativeLibExists>
-    <NativeLibExists Condition="'$(IsWindows)' != 'true' And (Exists('$(CargoTargetBaseDirectory)/libaethervk_core_cdylib.so') Or Exists('$(CargoTargetBaseDirectory)/libaethervk_core_cdylib.dylib'))">true</NativeLibExists>
+    <NativeLibExists
+      Condition="'$(IsWindows)' == 'true' And Exists('$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll') And Exists('$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll.lib')"
+      >true</NativeLibExists
+    >
+    <NativeLibExists
+      Condition="'$(IsWindows)' != 'true' And (Exists('$(CargoTargetBaseDirectory)/libaethervk_core_cdylib.so') Or Exists('$(CargoTargetBaseDirectory)/libaethervk_core_cdylib.dylib'))"
+      >true</NativeLibExists
+    >
   </PropertyGroup>
 
   <Target

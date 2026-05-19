@@ -12,7 +12,7 @@ static THREAD_COUNTS: [AtomicUsize; MAX_TRACKED_THREADS] =
   [const { AtomicUsize::new(0) }; MAX_TRACKED_THREADS];
 
 static DISABLE_LOCK_ASSERTIONS: core::sync::atomic::AtomicBool =
-  core::sync::atomic::AtomicBool::new(false);
+  core::sync::atomic::AtomicBool::new(true);
 
 pub fn set_disable_lock_assertions(disable: bool) {
   DISABLE_LOCK_ASSERTIONS.store(disable, Ordering::SeqCst);
@@ -88,7 +88,7 @@ pub fn assert_no_locks_held() {
 
 /// pub(super) because this is meant to manage loks under  the vulkan::device module.
 #[derive(Debug)]
-pub(super) struct DebugTrackedRwLock<T: ?Sized> {
+pub struct DebugTrackedRwLock<T: ?Sized> {
   inner: spin::RwLock<T>,
 }
 

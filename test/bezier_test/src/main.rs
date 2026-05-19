@@ -3,18 +3,22 @@
 static ALLOC: aethervk_oshal_rlib::os::memory::tracking::TrackingAllocator<std::alloc::System> =
   aethervk_oshal_rlib::os::memory::tracking::TrackingAllocator(std::alloc::System);
 
-use aethervk_core_rlib::gpu::{
-  new_render_frontend, DeviceAdditionalParams, PresentationEngineParams, RwLock,
-  VULKAN_RENDER_BACKEND,
+use aethervk_core_rlib::{
+  gpu::{
+    new_render_frontend, DeviceAdditionalParams, PresentationEngineParams, RwLock,
+    VULKAN_RENDER_BACKEND,
+  },
+  scene::{trajectory::TrajectoryComponent, CameraComponent, EntityId, Scene, TransformComponent},
+  types::RuntimeParams,
 };
-use aethervk_core_rlib::scene::{
-  trajectory::TrajectoryComponent, CameraComponent, EntityId, Scene, TransformComponent,
+use aethervk_oshal_rlib::{
+  math::{
+    matrix::{mat4::Mat4x4f32, Matrix4},
+    quaternion::Quaternion,
+    vector::{vec3::Vec3f32, vec4::Quat},
+  },
+  os::time::timeus_milliseconds,
 };
-use aethervk_core_rlib::types::RuntimeParams;
-use aethervk_oshal_rlib::math::matrix::{mat4::Mat4x4f32, Matrix4};
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::{vec3::Vec3f32, vec4::Quat};
-use aethervk_oshal_rlib::os::time::timeus_milliseconds;
 use test_utils::{cycle_get_asset_path_from_exe, AppEvent};
 use winit::window::Window;
 
@@ -269,7 +273,8 @@ fn main() {
                 return Ok(());
               }
               let cmd_buffer_handle = device.get_command_buffer()?;
-              device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
+              device
+                .set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
               let _scoped_cmd = aethervk_core_rlib::gpu::ScopedCommandBuffer::new(
                 device,
                 cmd_buffer_handle,
@@ -377,7 +382,8 @@ fn main() {
               return Ok(());
             }
             let cmd_buffer_handle = device.get_command_buffer()?;
-            device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
+            device
+              .set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
             let _scoped_cmd = aethervk_core_rlib::gpu::ScopedCommandBuffer::new(
               device,
               cmd_buffer_handle,

@@ -212,7 +212,7 @@ where
 
       let potentials = kernels.self_intersect_scene(&mut cmd, &bvh)?;
       let globals =
-        kernels.intersect_instances(&mut cmd, &potentials, &rigid_bodies, &particles)?;
+        kernels.intersect_instances(&mut cmd, &potentials, &kinematics, &rigid_bodies, &particles)?;
       let compacted = kernels.compact_collisions(&mut cmd, &globals, time_collision_delta)?;
 
       let tc_buffer = kernels.find_earliest_collision(&mut cmd, &compacted)?;

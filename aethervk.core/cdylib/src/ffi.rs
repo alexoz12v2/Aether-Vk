@@ -1136,6 +1136,43 @@ pub unsafe extern "C" fn avkSimulationContext_freeComponentNames(
   }
 }
 
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getEntityComponentNames(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_ext_id: u64,
+  out_names: *mut *const c_char,
+  max_count: u32,
+) -> u32 {
+  if ctx.is_null() || out_names.is_null() {
+    return 0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+
+  if let Some(scene_ctx) = ctx_ref.get_scene(scene_id) {
+    let s = scene_ctx.read();
+    if let Some(internal_entity) = s.get_entity(entity_ext_id) {
+      // Get the archetype signature for the entity
+      let names = s.scene.get_entity_component_names(internal_entity);
+
+      let mut count = 0;
+      for name in names {
+        if count >= max_count {
+          break;
+        }
+        // CString allocates, C# must call your existing avkSimulationContext_freeComponentNames
+        if let Ok(c_str) = alloc::ffi::CString::new(name) {
+          unsafe { *out_names.add(count as usize) = c_str.into_raw() };
+        }
+        count += 1;
+      }
+      return count;
+    }
+  }
+  0
+}
+
 // --- Callbacks & Asset Path ---
 
 #[unsafe(no_mangle)]

@@ -699,6 +699,9 @@ impl WindowedPresentationState {
       let prev_frame = (self.current_frame + self.frames.len() - 1) % self.frames.len();
       let frame_discard = &mut self.frame_discards[prev_frame];
 
+      // Added: prevent memory bload
+      frame_discard.check_capacity_and_flush(&self.swapchain_device, device);
+
       // HYBRID FIX: Either we have deterministic tracking, or we need a legacy Grace cycle.
       if self.swapchain_maintenance1_device.is_some() {
         frame_discard.skip_cycles = 0;
@@ -1214,7 +1217,6 @@ impl WindowedPresentationState {
     }
   }
 
-  /// TODO: Document this item
   #[named]
   pub fn acquire_next_image(
     &mut self,
@@ -1266,7 +1268,7 @@ impl WindowedPresentationState {
 
     self.frame_discards[self.current_frame].cleanup(&self.swapchain_device, device);
 
-    unsafe { device.reset_fences(fences) }?;
+    // DELETED from here: unsafe { device.reset_fences(fences) }?;
 
     let (image_index, vk_result) = unsafe {
       let mut index = 0u32;
@@ -1283,6 +1285,9 @@ impl WindowedPresentationState {
 
     match vk_result {
       vk::Result::SUCCESS | vk::Result::SUBOPTIMAL_KHR => {
+        // ADDED here: Only reset the fence when we successfully acquired the image!
+        unsafe { device.reset_fences(fences).map_err(GpuError::from)? };
+
         if image_index as usize != self.next_image {
           let next_fence = self.images[self.next_image].submission_fence.take();
           let next_sem = self.images[self.next_image].acquire_semaphore.take();
@@ -1314,12 +1319,16 @@ impl WindowedPresentationState {
           swapchain_generation: self.swapchain_generation,
         })
       }
-      vk::Result::ERROR_OUT_OF_DATE_KHR => Ok(AcquireResult {
-        image_index: u32::MAX,
-        status: SwapchainStatus::NeedsRecreation,
-        frame_index: self.current_frame as u64,
-        swapchain_generation: self.swapchain_generation,
-      }),
+      vk::Result::ERROR_OUT_OF_DATE_KHR => {
+        // ADDED here: Ensure we recreate the swapchain upon the next attempt
+        self.pending_resize = Some((self.width, self.height));
+        Ok(AcquireResult {
+          image_index: u32::MAX,
+          status: SwapchainStatus::NeedsRecreation,
+          frame_index: self.current_frame as u64,
+          swapchain_generation: self.swapchain_generation,
+        })
+      }
       _ => {
         return Err(vk_result.into());
       }
@@ -1438,6 +1447,35 @@ impl WindowedPresentationState {
 }
 
 impl FrameDiscard {
+  /// Checks if the discard bin has exceeded the maximum allowed capacity
+  /// during rapid resize events and forces a synchronous cleanup if necessary.
+  pub fn check_capacity_and_flush(
+    &mut self,
+    swapchain_device: &ash::khr::swapchain::Device,
+    device: &ash::Device,
+  ) {
+    // If we have accumulated too many decommissioned swapchains or image views, force a flush.
+    // We multiply MAX_DISCARDS by MAX_FRAMES for image views since one swapchain has multiple images.
+    if self.discarded_swapchains.len() >= MAX_DISCARDS
+      || self.discarded_image_views.len() >= (MAX_DISCARDS * MAX_FRAMES)
+    {
+      aethervk_oshal_rlib::log!("MAX_DISCARDS threshold reached! Forcing synchronous WSI cleanup.");
+      self.skip_cycles = 0; // Override legacy grace period to force immediate destruction
+      self.cleanup(swapchain_device, device);
+    }
+  }
+
+  /// Same as above, but for purely windowless pipelines.
+  pub fn check_capacity_and_flush_windowless(&mut self, device: &ash::Device) {
+    if self.discarded_images.len() >= (MAX_DISCARDS * MAX_FRAMES) {
+      aethervk_oshal_rlib::log!(
+        "MAX_DISCARDS threshold reached! Forcing synchronous windowless cleanup."
+      );
+      self.skip_cycles = 0;
+      self.cleanup_windowless(device);
+    }
+  }
+
   fn discard_swapchain_images(
     &mut self,
     swapchain_images: &mut [SwapchainImage],
@@ -1842,6 +1880,9 @@ impl WindowlessPresentationState {
     if self.frames.len() > self.current_frame {
       let prev_frame = (self.current_frame + self.frames.len() - 1) % self.frames.len();
       let frame_discard = &mut self.frame_discards[prev_frame];
+
+      // Added: Prevent memory bloat
+      frame_discard.check_capacity_and_flush_windowless(device);
 
       // Windowless uses strictly native pipelines, WSI grace delays are not required
       frame_discard.skip_cycles = 0;

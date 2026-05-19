@@ -361,15 +361,15 @@ public class HorizonJplService
 
               if (int.TryParse(epochStr, out int epochYear))
               {
-                 if (epochYear >= startYear && epochYear <= stopYear)
-                 {
-                   SpkRecordsData.Add(new[] { id, epochStr, match, primary, name });
-                 }
+                if (epochYear >= startYear && epochYear <= stopYear)
+                {
+                  SpkRecordsData.Add(new[] { id, epochStr, match, primary, name });
+                }
               }
               else
               {
-                 // If we can't parse the epoch, add it anyway to be safe
-                 SpkRecordsData.Add(new[] { id, epochStr, match, primary, name });
+                // If we can't parse the epoch, add it anyway to be safe
+                SpkRecordsData.Add(new[] { id, epochStr, match, primary, name });
               }
             }
           }

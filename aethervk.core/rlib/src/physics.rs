@@ -9,3 +9,6 @@ pub mod lcp_integration;
 pub mod motion_bvh;
 pub mod particle;
 pub mod physics_scene;
+
+#[cfg(test)]
+mod integration_tests;

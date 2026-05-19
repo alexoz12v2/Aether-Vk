@@ -351,7 +351,9 @@ pub mod tracking {
       && let Some(map) = lock.as_ref()
       && !map.is_empty()
     {
-      crate::log!("[GPU MEMORY LEAK REPORT]");
+      crate::log!(
+        "[GPU MEMORY LEAK REPORT] (Inaccurate cause VMA Block suballocations | switch to dedicated allocations to isolate leak if needed)"
+      );
       for (addr, info) in map.iter() {
         crate::log!("Leaked Memory at {:#X}, Size: {} bytes", addr, info.size);
         if let Some(trace) = info.trace {

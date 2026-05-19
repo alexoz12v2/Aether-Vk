@@ -25,8 +25,14 @@
                     Classes="accent" />
         </Grid>
 
-        <ScrollViewer Grid.Row="1" Margin="4">            <ItemsControl ItemsSource="{Binding SelectedEntity.Components}">
+        <ScrollViewer Grid.Row="1" Margin="4">
+            <ItemsControl ItemsSource="{Binding PropertiesExpanders}">
                 <ItemsControl.DataTemplates>
+                    <DataTemplate DataType="vm:UnknownComponentViewModel">
+                        <Expander Header="{Binding ComponentName}" Margin="0,0,0,8" HorizontalAlignment="Stretch">
+                            <TextBlock Text="no properties available" FontStyle="Italic" Opacity="0.5" Margin="4" />
+                        </Expander>
+                    </DataTemplate>
 
                     <!-- Transform Component -->
                     <DataTemplate DataType="models:TransformComponent">

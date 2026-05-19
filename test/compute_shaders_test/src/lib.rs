@@ -1,10 +1,11 @@
 pub mod cpu_clustering;
 
-use aethervk_core_rlib::gpu::{
-  DeviceAdditionalParams, RenderFrontend, VULKAN_RENDER_BACKEND, new_render_frontend,
+use aethervk_core_rlib::{
+  gpu::{DeviceAdditionalParams, RenderFrontend, VULKAN_RENDER_BACKEND, new_render_frontend},
+  gpu_backends::vulkan::device::Device,
+  gpu_backends::vulkan::utils::RwLockable,
+  types::RuntimeParams,
 };
-use aethervk_core_rlib::gpu_backends::vulkan::device::Device;
-use aethervk_core_rlib::types::RuntimeParams;
 use ash::vk;
 use heapless::index_map::FnvIndexMap;
 use std::fs;
@@ -74,7 +75,7 @@ impl VulkanContext {
           .size(size)
           .usage(usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
 
-        let alloc_info = vk_mem::AllocationCreateInfo {
+        let mut alloc_info = vk_mem::AllocationCreateInfo {
           usage: vk_mem::MemoryUsage::AutoPreferDevice,
           flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
             | vk_mem::AllocationCreateFlags::MAPPED,
@@ -82,6 +83,7 @@ impl VulkanContext {
             | vk::MemoryPropertyFlags::HOST_COHERENT,
           ..Default::default()
         };
+        aethervk_core_rlib::apply_test_dedicated_alloc!(alloc_info);
 
         let allocator = &*actual_device.res.read().allocator.allocator;
 

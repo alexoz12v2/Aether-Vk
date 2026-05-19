@@ -1,6 +1,9 @@
 use ash::vk;
-use compute_shaders_test::cpu_clustering::{CollisionEvent, group_and_cluster_collisions};
-use compute_shaders_test::{VulkanContext, run_compute_shader};
+use compute_shaders_test::{
+  VulkanContext,
+  cpu_clustering::{CollisionEvent, group_and_cluster_collisions},
+  run_compute_shader,
+};
 
 #[repr(C)]
 #[derive(Copy, Clone)]

@@ -1,7 +1,9 @@
 //! Reusable console for testing binaries.
 
-use aethervk_core_rlib::gpu::{PresentationEngineHandle, RenderDevice, CommandBufferHandle};
-use aethervk_core_rlib::types::GpuResult;
+use aethervk_core_rlib::{
+  gpu::{CommandBufferHandle, PresentationEngineHandle, RenderDevice},
+  types::GpuResult,
+};
 use std::collections::VecDeque;
 
 #[derive(Default)]
@@ -58,7 +60,6 @@ impl Console {
 
     let _ = device.render_ui_rect(
       cmd_buffer,
-      presentation_engine_handle,
       [0.05, 0.1, 0.05, 0.7],
       [-1.0, box_y],
       [width, height],
@@ -76,7 +77,7 @@ impl Console {
       console_text.push('\n');
     }
 
-    let _ = device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer, presentation_engine_handle);
+    let _ = device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer);
 
     let _ = device.render_text(
       cmd_buffer,
@@ -135,7 +136,7 @@ impl Console {
           if !self.current_command.is_empty() {
             let cmd = self.current_command.clone();
             self.command_history.push_back(format!("> {}", cmd));
-            
+
             on_command(self, &cmd);
 
             if self.command_history.len() > 1000 {
@@ -160,7 +161,7 @@ impl Console {
               if !self.current_command.is_empty() {
                 let cmd = self.current_command.clone();
                 self.command_history.push_back(format!("> {}", cmd));
-                
+
                 on_command(self, &cmd);
 
                 if self.command_history.len() > 1000 {

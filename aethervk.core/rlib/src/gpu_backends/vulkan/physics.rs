@@ -926,6 +926,7 @@ impl Kernels for VulkanComputeKernels {
       &self,
       cmd: &mut Self::Cmd,
       potentials: &Self::List<CollisionPair>,
+      _kinematics: &Self::Buffer<KinematicBody>,
       _rigid_bodies: &Self::Buffer<RigidBodyGpu>,
       _particles: &Self::Buffer<ParticleGpu>,
     ) -> EngineResult<Self::List<CollisionPair>> {

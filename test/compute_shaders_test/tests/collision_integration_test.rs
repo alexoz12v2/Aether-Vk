@@ -23,11 +23,16 @@ fn test_gpu_collision_pipeline_integration() {
   }];
   let (bvh_buf, mut bvh_alloc, bvh_addr) = ctx.create_buffer(
     &bvh_nodes,
-    vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+    vk::BufferUsageFlags::STORAGE_BUFFER
+      | vk::BufferUsageFlags::TRANSFER_DST
+      | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
   );
 
   let read_back: Vec<BvhNodeAABBGpu> = ctx.read_buffer(bvh_buf, &mut bvh_alloc, 1);
-  println!("DEBUG RUST: read_back min_bounds: {:?}", read_back[0].min_bounds);
+  println!(
+    "DEBUG RUST: read_back min_bounds: {:?}",
+    read_back[0].min_bounds
+  );
   println!("DEBUG RUST: bvh_addr = 0x{:X}", bvh_addr);
 
   // 1. Create two intersecting spheres (rigidbodies)
@@ -75,11 +80,17 @@ fn test_gpu_collision_pipeline_integration() {
 
   let (entities_buf, mut entities_alloc, entities_addr) = ctx.create_buffer(
     &entities,
-    vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+    vk::BufferUsageFlags::STORAGE_BUFFER
+      | vk::BufferUsageFlags::TRANSFER_DST
+      | vk::BufferUsageFlags::TRANSFER_SRC
+      | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
   );
 
   let entities_read_back: Vec<EntityGpu> = ctx.read_buffer(entities_buf, &mut entities_alloc, 2);
-  println!("DEBUG RUST: read_back entities[0].bvh_addr = 0x{:X}", entities_read_back[0].bvh_addr);
+  println!(
+    "DEBUG RUST: read_back entities[0].bvh_addr = 0x{:X}",
+    entities_read_back[0].bvh_addr
+  );
 
   // 2. Output buffer for Broad Phase
   let mut overlapping_pairs = vec![0u32; 1 + 2 * 16]; // Count + pairs
@@ -104,13 +115,13 @@ fn test_gpu_collision_pipeline_integration() {
 
   // Narrow Phase
   let narrow_pc = NarrowPhaseRigidBodyPushConstants {
-      scene_entities_addr: entities_addr,
-      output_list_addr: narrow_out_addr,
-      particles_addr: bvh_addr, // Hack: make bvh_buf resident in MoltenVK
-      entity_a_idx: 0,
-      entity_b_idx: 1,
-      dt: 1.0 / 60.0,
-      particle_radius: 1.0,
+    scene_entities_addr: entities_addr,
+    output_list_addr: narrow_out_addr,
+    particles_addr: bvh_addr, // Hack: make bvh_buf resident in MoltenVK
+    entity_a_idx: 0,
+    entity_b_idx: 1,
+    dt: 1.0 / 60.0,
+    particle_radius: 1.0,
   };
   let narrow_pc_bytes = unsafe {
     std::slice::from_raw_parts(

@@ -71,10 +71,10 @@ impl SimulationDelegate for MeshViewerDelegate {
           emissive_color: [0.0, 0.0, 0.0],
           use_new_path: false,
           paint_display_mode: 0,
-        sphere_center: [0.0, 0.0, 0.0],
-        sphere_radius: 1.0,
-        grid_color: [0.0, 0.0, 0.0],
-        grid_density: 1.0,
+          sphere_center: [0.0, 0.0, 0.0],
+          sphere_radius: 1.0,
+          grid_color: [0.0, 0.0, 0.0],
+          grid_density: 1.0,
         },
       )?;
       scene_write.register_entity(mesh_entity);

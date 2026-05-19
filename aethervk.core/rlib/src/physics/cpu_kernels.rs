@@ -674,7 +674,7 @@ impl Kernels for CpuScalarKernels {
   fn compute_self_gravity(
     &self,
     _cmd: &mut Self::Cmd,
-    _bvh: &Self::MotionBvh,
+    bvh: &Self::MotionBvh,
     particles: &mut Self::Buffer<ParticleGpu>,
   ) -> EngineResult<()> {
     if particles.data.is_empty() {
@@ -683,6 +683,7 @@ impl Kernels for CpuScalarKernels {
 
     let g = 6.67430e-11 as f32;
     let n = particles.data.len();
+    let theta = 0.5;
 
     for i in 0..n {
       let my_mass = particles.data[i].mass;
@@ -691,22 +692,35 @@ impl Kernels for CpuScalarKernels {
       }
       let my_pos = Vec3f32::from_array(particles.data[i].position);
       let mut total_force = Vec3f32::zero();
+      let my_p_id = (1 << 30) | (i as u32);
 
-      for j in 0..n {
-        if i == j {
-          continue;
-        }
-        let other_p = &particles.data[j];
-        if other_p.mass <= 0.0 {
-          continue;
-        }
+      if let Some(root_idx) = bvh.bvh_tree.root {
+        let mut stack = alloc::vec![root_idx];
+        while let Some(node_idx) = stack.pop() {
+          let node = &bvh.bvh_tree.nodes[node_idx as usize];
+          if let Some(data_idx) = node.data_index {
+            if my_p_id != data_idx {
+              let r = node.center_of_mass - my_pos;
+              let dist_sq = r.length_squared();
+              if dist_sq > 1e-6 {
+                let dist = dist_sq.sqrt();
+                total_force += r * (g * my_mass * node.mass / (dist_sq * dist));
+              }
+            }
+          } else {
+            let r = node.center_of_mass - my_pos;
+            let dist_sq = r.length_squared();
+            let dist = dist_sq.max(1e-6).sqrt();
+            let extents = node.bounds.max - node.bounds.min;
+            let size = extents.x().max(extents.y()).max(extents.z());
 
-        let other_pos = Vec3f32::from_array(other_p.position);
-        let r = other_pos - my_pos;
-        let dist_sq = r.length_squared();
-        if dist_sq > 1e-6 {
-          let dist = dist_sq.sqrt();
-          total_force += r * (g * my_mass * other_p.mass / (dist_sq * dist));
+            if size / dist < theta {
+              total_force += r * (g * my_mass * node.mass / (dist_sq * dist));
+            } else {
+              if let Some(left) = node.left_child { stack.push(left); }
+              if let Some(right) = node.right_child { stack.push(right); }
+            }
+          }
         }
       }
 
@@ -891,6 +905,29 @@ impl Kernels for CpuScalarKernels {
       ));
     }
 
+    for (i, p) in particles.data.iter().enumerate() {
+      let global_pos = get_global_pos(
+        p.parent_frame_id,
+        aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p.position),
+      );
+      let max_travel =
+        aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p.velocity).length();
+      let r = 1.0 + max_travel; // Particles default radius 1.0
+      let bounds = Aabb::new(
+        global_pos - Vec3f32::from_array([r, r, r]),
+        global_pos + Vec3f32::from_array([r, r, r]),
+      );
+      // data_index: second top bit 1 means particle, lower 30 bits are index
+      items_by_parent.entry(p.parent_frame_id).or_default().push((
+        bounds,
+        CpuBvhItem::Primitive(
+          (1 << 30) | (i as u32),
+          p.mass,
+          aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p.position),
+        ),
+      ));
+    }
+
     let macro_frame_id = frames_map
       .keys()
       .find(|&&id| frame_types.get(&id) == Some(&(crate::scene::ReferenceFrameType::Macro as u32)))
@@ -940,65 +977,128 @@ impl Kernels for CpuScalarKernels {
     &self,
     _cmd: &mut Self::Cmd,
     potentials: &Self::List<CollisionPair>,
+    kinematics: &Self::Buffer<KinematicBody>,
     rigid_bodies: &Self::Buffer<RigidBodyGpu>,
-    particles: &Self::Buffer<ParticleGpu>, // TODO this is not used, why
+    particles: &Self::Buffer<ParticleGpu>,
   ) -> EngineResult<Self::List<CollisionPair>> {
     use aethervk_oshal_rlib::math::vector::Vector;
+    use aethervk_oshal_rlib::math::matrix::{SquareMatrix, MatrixVectorMul};
     let mut actual_collisions = alloc::vec::Vec::new();
 
-    for pair in &potentials.data {
-      let idx_a = pair.a.primitive_index as usize;
-      let idx_b = pair.b.primitive_index as usize;
+    let mut frames_map = hashbrown::HashMap::new();
+    for kin in kinematics.data.iter() {
+      frames_map.insert(kin.own_frame_id, (kin.parent_frame_id, kin.transform.to_mat4()));
+    }
 
-      if idx_a >= rigid_bodies.data.len() || idx_b >= rigid_bodies.data.len() {
-        actual_collisions.push(pair.clone()); // Pass-through if invalid
-        continue;
-      }
-
-      let body_a = &rigid_bodies.data[idx_a];
-      let body_b = &rigid_bodies.data[idx_b];
-
-      // For now, simplify shape support to Spheres (shape_type 0)
-      let r_a = if body_a.shape_type == 0 {
-        body_a.shape_data[0]
-      } else {
-        1.0
-      };
-      let r_b = if body_b.shape_type == 0 {
-        body_b.shape_data[0]
-      } else {
-        1.0
-      };
-
-      let s_a = crate::math::collision::gjk::GjkSphere {
-        center: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(body_a.position),
-        radius: r_a,
-      };
-
-      let s_b = crate::math::collision::gjk::GjkSphere {
-        center: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(body_b.position),
-        radius: r_b,
-      };
-
-      let (dist, pt_a, pt_b) = crate::math::collision::gjk::gjk_distance(&s_a, &s_b);
-
-      if dist <= 0.0 {
-        let mut new_pair = pair.clone();
-        new_pair.penetration_depth = if dist < 0.0 { -dist } else { 0.0 };
-        let mut normal = pt_a - pt_b;
-        let len = normal.length();
-        if len > 1e-6 {
-          normal = normal / len;
-        } else {
-          normal = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([1.0, 0.0, 0.0]);
+    enum DynamicShape {
+      Sphere(crate::math::collision::gjk::GjkSphere),
+      Obb(crate::math::collision::bounds::OBB<f32>),
+    }
+    impl crate::math::collision::gjk::Support for DynamicShape {
+      fn support(&self, dir: Vec3f32) -> Vec3f32 {
+        match self {
+          Self::Sphere(s) => crate::math::collision::gjk::Support::support(s, dir),
+          Self::Obb(o) => crate::math::collision::gjk::Support::support(o, dir),
         }
-        new_pair.contact_normal = [normal.x(), normal.y(), normal.z()];
-        new_pair.contact_point = [
-          (pt_a.x() + pt_b.x()) * 0.5,
-          (pt_a.y() + pt_b.y()) * 0.5,
-          (pt_a.z() + pt_b.z()) * 0.5,
-        ];
-        actual_collisions.push(new_pair);
+      }
+    }
+
+    let get_properties = |idx: u32| -> Option<(u32, u32, [f32; 3], Mat4x4f32)> {
+        if (idx & (1 << 31)) != 0 {
+            let i = (idx & !(1 << 31)) as usize;
+            if i >= kinematics.data.len() { return None; }
+            let k = &kinematics.data[i];
+            Some((k.parent_frame_id, k.shape_type, k.shape_data, k.transform.to_mat4()))
+        } else if (idx & (1 << 30)) != 0 {
+            let i = (idx & !(1 << 30)) as usize;
+            if i >= particles.data.len() { return None; }
+            let p = &particles.data[i];
+            Some((p.parent_frame_id, 0, [1.0, 0.0, 0.0], Mat4x4f32::translation(Vec3f32::from_array(p.position))))
+        } else {
+            let i = idx as usize;
+            if i >= rigid_bodies.data.len() { return None; }
+            let rb = &rigid_bodies.data[i];
+            let rot = rb.rotation;
+            let mat = Mat4x4f32::from_columns(
+                Vec4f32::from_components(rot[0][0], rot[0][1], rot[0][2], 0.0),
+                Vec4f32::from_components(rot[1][0], rot[1][1], rot[1][2], 0.0),
+                Vec4f32::from_components(rot[2][0], rot[2][1], rot[2][2], 0.0),
+                Vec4f32::from_components(rb.position[0], rb.position[1], rb.position[2], 1.0),
+            );
+            Some((rb.parent_frame_id, rb.shape_type, rb.shape_data, mat))
+        }
+    };
+
+    let get_shape = |shape_type: u32, shape_data: [f32; 3], mat: Mat4x4f32| -> DynamicShape {
+        if shape_type == 1 {
+            let mut x = Vec3f32::from_components(mat.component(0).unwrap(), mat.component(1).unwrap(), mat.component(2).unwrap());
+            let mut y = Vec3f32::from_components(mat.component(4).unwrap(), mat.component(5).unwrap(), mat.component(6).unwrap());
+            let mut z = Vec3f32::from_components(mat.component(8).unwrap(), mat.component(9).unwrap(), mat.component(10).unwrap());
+            
+            let scale_x = x.length();
+            let scale_y = y.length();
+            let scale_z = z.length();
+            
+            if scale_x > 1e-6 { x = x / scale_x; }
+            if scale_y > 1e-6 { y = y / scale_y; }
+            if scale_z > 1e-6 { z = z / scale_z; }
+            
+            let rot3 = Mat3f32 { x, y, z };
+            let pos = Vec3f32::from_components(mat.component(12).unwrap(), mat.component(13).unwrap(), mat.component(14).unwrap());
+            let scaled_extents = [shape_data[0] * scale_x, shape_data[1] * scale_y, shape_data[2] * scale_z];
+            DynamicShape::Obb(crate::math::collision::bounds::OBB::new(pos, rot3, Vec3f32::from_array(scaled_extents)))
+        } else {
+            let x = Vec3f32::from_components(mat.component(0).unwrap(), mat.component(1).unwrap(), mat.component(2).unwrap());
+            let scale_x = x.length(); // assuming uniform scale
+            let pos = Vec3f32::from_components(mat.component(12).unwrap(), mat.component(13).unwrap(), mat.component(14).unwrap());
+            DynamicShape::Sphere(crate::math::collision::gjk::GjkSphere { center: pos, radius: shape_data[0] * scale_x })
+        }
+    };
+
+    for pair in &potentials.data {
+      let idx_a = pair.a.primitive_index;
+      let idx_b = pair.b.primitive_index;
+
+      let props_a = get_properties(idx_a);
+      let props_b = get_properties(idx_b);
+
+      if let (Some((parent_a, type_a, data_a, mat_a)), Some((parent_b, type_b, data_b, mat_b))) = (props_a, props_b) {
+          
+          let a_to_b = crate::physics::lca::resolve_lca_transform(parent_a, mat_a, parent_b, mat_b, &frames_map);
+
+          if let Some(mat_a_in_b) = a_to_b {
+             let mat_a_transformed = if parent_a != parent_b { mat_a_in_b } else { mat_a };
+             let mat_b_transformed = if parent_a != parent_b { Mat4x4f32::identity() } else { mat_b };
+
+             let shape_a = get_shape(type_a, data_a, mat_a_transformed);
+             let shape_b = get_shape(type_b, data_b, mat_b_transformed);
+
+             let (dist, pt_a, pt_b) = crate::math::collision::gjk::gjk_distance(&shape_a, &shape_b);
+             
+             #[cfg(test)]
+             aethervk_oshal_rlib::log!("GJK evaluated -> dist: {}", dist);
+
+             if dist <= 0.0 {
+                let mut new_pair = pair.clone();
+                new_pair.penetration_depth = if dist < 0.0 { -dist } else { 0.0 };
+                let mut normal = pt_a - pt_b;
+                let len = normal.length();
+                if len > 1e-6 {
+                  normal = normal / len;
+                } else {
+                  normal = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([1.0, 0.0, 0.0]);
+                }
+                new_pair.contact_normal = [normal.x(), normal.y(), normal.z()];
+                new_pair.contact_point = [
+                  (pt_a.x() + pt_b.x()) * 0.5,
+                  (pt_a.y() + pt_b.y()) * 0.5,
+                  (pt_a.z() + pt_b.z()) * 0.5,
+                ];
+                #[cfg(test)]
+                aethervk_oshal_rlib::log!("COLLISION DETECTED: dist={}, normal={:?}", dist, new_pair.contact_normal);
+                actual_collisions.push(new_pair);
+             }
+          }
       }
     }
 
@@ -1050,9 +1150,10 @@ impl Kernels for CpuScalarKernels {
     let restitution = if force_inelastic { 0.0 } else { 0.5 };
 
     let dyn_array = rigid_bodies.data.as_mut_slice();
+    let p_array = particles.data.as_mut_slice();
 
     for cluster in clusters {
-      crate::physics::lcp_integration::resolve_cluster_lcp(&cluster, dyn_array, restitution);
+      crate::physics::lcp_integration::resolve_cluster_lcp(&cluster, dyn_array, p_array, restitution);
     }
     Ok(())
   }
@@ -1763,7 +1864,7 @@ impl Kernels for CpuSimdKernels {
   fn compute_self_gravity(
     &self,
     _cmd: &mut Self::Cmd,
-    _bvh: &Self::MotionBvh,
+    bvh: &Self::MotionBvh,
     particles: &mut Self::Buffer<ParticleGpu>,
   ) -> EngineResult<()> {
     if particles.data.is_empty() {
@@ -1771,38 +1872,73 @@ impl Kernels for CpuSimdKernels {
     }
 
     let g = 6.67430e-11 as f32;
-    let n = particles.data.len();
+    let num_particles = particles.data.len();
+    let chunk_size = 2048;
+    let num_chunks = (num_particles + chunk_size - 1) / chunk_size;
 
-    for i in 0..n {
-      let my_mass = particles.data[i].mass;
-      if my_mass <= 0.0 {
-        continue;
-      }
-      let my_pos = Vec3f32::from_array(particles.data[i].position);
-      let mut total_force = Vec3f32::zero();
+    use crate::scene::ErasedMutPtr;
+    use aethervk_oshal_rlib::os::pool::chunked::ThreadPoolChunkedExt;
+    let dyn_ptr = ErasedMutPtr::new(particles.data.as_mut_ptr());
+    let bvh_ptr = crate::scene::ErasedPtr::new(bvh as *const Self::MotionBvh);
 
-      for j in 0..n {
-        if i == j {
-          continue;
+    self
+      .thread_pool
+      .spawn_chunked(num_chunks, move |chunk_id| {
+        let start = chunk_id * chunk_size;
+        let end = (start + chunk_size).min(num_particles);
+        let dyn_array =
+          unsafe { core::slice::from_raw_parts_mut(dyn_ptr.get::<ParticleGpu>(), num_particles) };
+        let bvh_ref = unsafe { &*bvh_ptr.get::<Self::MotionBvh>() };
+        let theta = 0.5;
+
+        for i in start..end {
+          let my_mass = dyn_array[i].mass;
+          if my_mass <= 0.0 {
+            continue;
+          }
+          let my_pos = Vec3f32::from_array(dyn_array[i].position);
+          let mut total_force = Vec3f32::zero();
+          let my_p_id = (1 << 30) | (i as u32);
+
+          if let Some(root_idx) = bvh_ref.bvh_tree.root {
+            let mut stack = alloc::vec![root_idx];
+            while let Some(node_idx) = stack.pop() {
+              let node = &bvh_ref.bvh_tree.nodes[node_idx as usize];
+              if let Some(data_idx) = node.data_index {
+                if my_p_id != data_idx {
+                  let r = node.center_of_mass - my_pos;
+                  let dist_sq = r.length_squared();
+                  if dist_sq > 1e-6 {
+                    let dist = dist_sq.sqrt();
+                    total_force += r * (g * my_mass * node.mass / (dist_sq * dist));
+                  }
+                }
+              } else {
+                let r = node.center_of_mass - my_pos;
+                let dist_sq = r.length_squared();
+                let dist = dist_sq.max(1e-6).sqrt();
+                let extents = node.bounds.max - node.bounds.min;
+                let size = extents.x().max(extents.y()).max(extents.z());
+
+                if size / dist < theta {
+                  total_force += r * (g * my_mass * node.mass / (dist_sq * dist));
+                } else {
+                  if let Some(left) = node.left_child { stack.push(left); }
+                  if let Some(right) = node.right_child { stack.push(right); }
+                }
+              }
+            }
+          }
+
+          dyn_array[i].force[0] += total_force.x();
+          dyn_array[i].force[1] += total_force.y();
+          dyn_array[i].force[2] += total_force.z();
         }
-        let other_p = &particles.data[j];
-        if other_p.mass <= 0.0 {
-          continue;
-        }
-
-        let other_pos = Vec3f32::from_array(other_p.position);
-        let r = other_pos - my_pos;
-        let dist_sq = r.length_squared();
-        if dist_sq > 1e-6 {
-          let dist = dist_sq.sqrt();
-          total_force += r * (g * my_mass * other_p.mass / (dist_sq * dist));
-        }
-      }
-
-      particles.data[i].force[0] += total_force.x();
-      particles.data[i].force[1] += total_force.y();
-      particles.data[i].force[2] += total_force.z();
-    }
+      })
+      .map_err(|e| {
+        <aethervk_oshal_rlib::os::NativeError as Into<crate::types::EngineError>>::into(e)
+      })?
+      .wait();
 
     Ok(())
   }
@@ -2012,6 +2148,29 @@ impl Kernels for CpuSimdKernels {
       ));
     }
 
+    for (i, p) in particles.data.iter().enumerate() {
+      let global_pos = get_global_pos(
+        p.parent_frame_id,
+        aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p.position),
+      );
+      let max_travel =
+        aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p.velocity).length();
+      let r = 1.0 + max_travel; // Particles default radius 1.0
+      let bounds = Aabb::new(
+        global_pos - Vec3f32::from_array([r, r, r]),
+        global_pos + Vec3f32::from_array([r, r, r]),
+      );
+      // data_index: second top bit 1 means particle, lower 30 bits are index
+      items_by_parent.entry(p.parent_frame_id).or_default().push((
+        bounds,
+        CpuBvhItem::Primitive(
+          (1 << 30) | (i as u32),
+          p.mass,
+          aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(p.position),
+        ),
+      ));
+    }
+
     let macro_frame_id = frames_map
       .keys()
       .find(|&&id| frame_types.get(&id) == Some(&(crate::scene::ReferenceFrameType::Macro as u32)))
@@ -2061,65 +2220,128 @@ impl Kernels for CpuSimdKernels {
     &self,
     _cmd: &mut Self::Cmd,
     potentials: &Self::List<CollisionPair>,
+    kinematics: &Self::Buffer<KinematicBody>,
     rigid_bodies: &Self::Buffer<RigidBodyGpu>,
     particles: &Self::Buffer<ParticleGpu>,
   ) -> EngineResult<Self::List<CollisionPair>> {
     use aethervk_oshal_rlib::math::vector::Vector;
+    use aethervk_oshal_rlib::math::matrix::{SquareMatrix, MatrixVectorMul};
     let mut actual_collisions = alloc::vec::Vec::new();
 
-    for pair in &potentials.data {
-      let idx_a = pair.a.primitive_index as usize;
-      let idx_b = pair.b.primitive_index as usize;
+    let mut frames_map = hashbrown::HashMap::new();
+    for kin in kinematics.data.iter() {
+      frames_map.insert(kin.own_frame_id, (kin.parent_frame_id, kin.transform.to_mat4()));
+    }
 
-      if idx_a >= rigid_bodies.data.len() || idx_b >= rigid_bodies.data.len() {
-        actual_collisions.push(pair.clone()); // Pass-through if invalid
-        continue;
-      }
-
-      let body_a = &rigid_bodies.data[idx_a];
-      let body_b = &rigid_bodies.data[idx_b];
-
-      // For now, simplify shape support to Spheres (shape_type 0)
-      let r_a = if body_a.shape_type == 0 {
-        body_a.shape_data[0]
-      } else {
-        1.0
-      };
-      let r_b = if body_b.shape_type == 0 {
-        body_b.shape_data[0]
-      } else {
-        1.0
-      };
-
-      let s_a = crate::math::collision::gjk::GjkSphere {
-        center: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(body_a.position),
-        radius: r_a,
-      };
-
-      let s_b = crate::math::collision::gjk::GjkSphere {
-        center: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(body_b.position),
-        radius: r_b,
-      };
-
-      let (dist, pt_a, pt_b) = crate::math::collision::gjk::gjk_distance(&s_a, &s_b);
-
-      if dist <= 0.0 {
-        let mut new_pair = pair.clone();
-        new_pair.penetration_depth = if dist < 0.0 { -dist } else { 0.0 };
-        let mut normal = pt_a - pt_b;
-        let len = normal.length();
-        if len > 1e-6 {
-          normal = normal / len;
-        } else {
-          normal = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([1.0, 0.0, 0.0]);
+    enum DynamicShape {
+      Sphere(crate::math::collision::gjk::GjkSphere),
+      Obb(crate::math::collision::bounds::OBB<f32>),
+    }
+    impl crate::math::collision::gjk::Support for DynamicShape {
+      fn support(&self, dir: Vec3f32) -> Vec3f32 {
+        match self {
+          Self::Sphere(s) => crate::math::collision::gjk::Support::support(s, dir),
+          Self::Obb(o) => crate::math::collision::gjk::Support::support(o, dir),
         }
-        new_pair.contact_normal = [normal.x(), normal.y(), normal.z()];
-        new_pair.contact_point = [
-          (pt_a.x() + pt_b.x()) * 0.5,
-          (pt_a.y() + pt_b.y()) * 0.5,
-          (pt_a.z() + pt_b.z()) * 0.5,
-        ];
-        actual_collisions.push(new_pair);
+      }
+    }
+
+    let get_properties = |idx: u32| -> Option<(u32, u32, [f32; 3], Mat4x4f32)> {
+        if (idx & (1 << 31)) != 0 {
+            let i = (idx & !(1 << 31)) as usize;
+            if i >= kinematics.data.len() { return None; }
+            let k = &kinematics.data[i];
+            Some((k.parent_frame_id, k.shape_type, k.shape_data, k.transform.to_mat4()))
+        } else if (idx & (1 << 30)) != 0 {
+            let i = (idx & !(1 << 30)) as usize;
+            if i >= particles.data.len() { return None; }
+            let p = &particles.data[i];
+            Some((p.parent_frame_id, 0, [1.0, 0.0, 0.0], Mat4x4f32::translation(Vec3f32::from_array(p.position))))
+        } else {
+            let i = idx as usize;
+            if i >= rigid_bodies.data.len() { return None; }
+            let rb = &rigid_bodies.data[i];
+            let rot = rb.rotation;
+            let mat = Mat4x4f32::from_columns(
+                Vec4f32::from_components(rot[0][0], rot[0][1], rot[0][2], 0.0),
+                Vec4f32::from_components(rot[1][0], rot[1][1], rot[1][2], 0.0),
+                Vec4f32::from_components(rot[2][0], rot[2][1], rot[2][2], 0.0),
+                Vec4f32::from_components(rb.position[0], rb.position[1], rb.position[2], 1.0),
+            );
+            Some((rb.parent_frame_id, rb.shape_type, rb.shape_data, mat))
+        }
+    };
+
+    let get_shape = |shape_type: u32, shape_data: [f32; 3], mat: Mat4x4f32| -> DynamicShape {
+        if shape_type == 1 {
+            let mut x = Vec3f32::from_components(mat.component(0).unwrap(), mat.component(1).unwrap(), mat.component(2).unwrap());
+            let mut y = Vec3f32::from_components(mat.component(4).unwrap(), mat.component(5).unwrap(), mat.component(6).unwrap());
+            let mut z = Vec3f32::from_components(mat.component(8).unwrap(), mat.component(9).unwrap(), mat.component(10).unwrap());
+            
+            let scale_x = x.length();
+            let scale_y = y.length();
+            let scale_z = z.length();
+            
+            if scale_x > 1e-6 { x = x / scale_x; }
+            if scale_y > 1e-6 { y = y / scale_y; }
+            if scale_z > 1e-6 { z = z / scale_z; }
+            
+            let rot3 = Mat3f32 { x, y, z };
+            let pos = Vec3f32::from_components(mat.component(12).unwrap(), mat.component(13).unwrap(), mat.component(14).unwrap());
+            let scaled_extents = [shape_data[0] * scale_x, shape_data[1] * scale_y, shape_data[2] * scale_z];
+            DynamicShape::Obb(crate::math::collision::bounds::OBB::new(pos, rot3, Vec3f32::from_array(scaled_extents)))
+        } else {
+            let x = Vec3f32::from_components(mat.component(0).unwrap(), mat.component(1).unwrap(), mat.component(2).unwrap());
+            let scale_x = x.length(); // assuming uniform scale
+            let pos = Vec3f32::from_components(mat.component(12).unwrap(), mat.component(13).unwrap(), mat.component(14).unwrap());
+            DynamicShape::Sphere(crate::math::collision::gjk::GjkSphere { center: pos, radius: shape_data[0] * scale_x })
+        }
+    };
+
+    for pair in &potentials.data {
+      let idx_a = pair.a.primitive_index;
+      let idx_b = pair.b.primitive_index;
+
+      let props_a = get_properties(idx_a);
+      let props_b = get_properties(idx_b);
+
+      if let (Some((parent_a, type_a, data_a, mat_a)), Some((parent_b, type_b, data_b, mat_b))) = (props_a, props_b) {
+          
+          let a_to_b = crate::physics::lca::resolve_lca_transform(parent_a, mat_a, parent_b, mat_b, &frames_map);
+
+          if let Some(mat_a_in_b) = a_to_b {
+             let mat_a_transformed = if parent_a != parent_b { mat_a_in_b } else { mat_a };
+             let mat_b_transformed = if parent_a != parent_b { Mat4x4f32::identity() } else { mat_b };
+
+             let shape_a = get_shape(type_a, data_a, mat_a_transformed);
+             let shape_b = get_shape(type_b, data_b, mat_b_transformed);
+
+             let (dist, pt_a, pt_b) = crate::math::collision::gjk::gjk_distance(&shape_a, &shape_b);
+             
+             #[cfg(test)]
+             aethervk_oshal_rlib::log!("GJK evaluated -> dist: {}", dist);
+
+             if dist <= 0.0 {
+                let mut new_pair = pair.clone();
+                new_pair.penetration_depth = if dist < 0.0 { -dist } else { 0.0 };
+                let mut normal = pt_a - pt_b;
+                let len = normal.length();
+                if len > 1e-6 {
+                  normal = normal / len;
+                } else {
+                  normal = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([1.0, 0.0, 0.0]);
+                }
+                new_pair.contact_normal = [normal.x(), normal.y(), normal.z()];
+                new_pair.contact_point = [
+                  (pt_a.x() + pt_b.x()) * 0.5,
+                  (pt_a.y() + pt_b.y()) * 0.5,
+                  (pt_a.z() + pt_b.z()) * 0.5,
+                ];
+                #[cfg(test)]
+                aethervk_oshal_rlib::log!("COLLISION DETECTED: dist={}, normal={:?}", dist, new_pair.contact_normal);
+                actual_collisions.push(new_pair);
+             }
+          }
       }
     }
 
@@ -2171,9 +2393,10 @@ impl Kernels for CpuSimdKernels {
     let restitution = if force_inelastic { 0.0 } else { 0.5 };
 
     let dyn_array = rigid_bodies.data.as_mut_slice();
+    let p_array = particles.data.as_mut_slice();
 
     for cluster in clusters {
-      crate::physics::lcp_integration::resolve_cluster_lcp(&cluster, dyn_array, restitution);
+      crate::physics::lcp_integration::resolve_cluster_lcp(&cluster, dyn_array, p_array, restitution);
     }
     Ok(())
   }

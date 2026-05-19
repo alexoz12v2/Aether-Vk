@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use std::sync::mpsc;
+use std::{collections::HashMap, sync::mpsc};
 
 pub type CommandFn<T> = Box<dyn Fn(&mut T, &[&str], &mpsc::Sender<String>) + Send + Sync + 'static>;
 
@@ -34,10 +33,8 @@ impl<T> CommandRegistry<T> {
   }
 }
 
-use aethervk_core_rlib::gpu;
-use aethervk_core_rlib::scene::EntityId;
-use aethervk_oshal_rlib::math::vector::Vector3;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+use aethervk_core_rlib::{gpu, scene::EntityId};
+use aethervk_oshal_rlib::math::vector::{Vector3, vec3::Vec3f32};
 use winit::keyboard::KeyCode;
 
 pub fn get_camera_movement_axis(keycode: KeyCode) -> Option<Vec3f32> {

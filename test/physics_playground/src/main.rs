@@ -1,19 +1,30 @@
-use aethervk_core_rlib::gpu::DynamicBody;
-use aethervk_core_rlib::gpu_backends::simulation_step;
-use aethervk_core_rlib::physics::cpu_kernels::{CpuScalarKernels, CpuSimdKernels};
-use aethervk_core_rlib::physics::physics_scene::PhysicsScene;
-use aethervk_core_rlib::scene::particles::{ParticleData, ParticleSystemComponent};
-use aethervk_core_rlib::scene::{EntityId, ReferenceFrameType, Scene, TransformComponent};
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
-use aethervk_oshal_rlib::os::pool::ThreadPool;
+use aethervk_core_rlib::{
+  gpu::DynamicBody,
+  gpu_backends::simulation_step,
+  physics::{
+    cpu_kernels::{CpuScalarKernels, CpuSimdKernels},
+    physics_scene::PhysicsScene,
+  },
+  scene::{
+    EntityId, ReferenceFrameType, Scene, TransformComponent,
+    particles::{ParticleData, ParticleSystemComponent},
+  },
+};
+use aethervk_oshal_rlib::{
+  math::{
+    quaternion::Quaternion,
+    vector::{Vector, Vector3, vec3::Vec3f32},
+  },
+  os::pool::ThreadPool,
+};
 use std::sync::Arc;
 // For LogicThread test
-use aethervk_core_rlib::simulation_api::logic_thread::start_logic_thread;
-use aethervk_core_rlib::simulation_api::structs::{
-  LogicCommand, LogicState, LogicThreadContext, SimulationSceneData, SimulationTaskManager,
-  TimeScale,
+use aethervk_core_rlib::simulation_api::{
+  logic_thread::start_logic_thread,
+  structs::{
+    LogicCommand, LogicState, LogicThreadContext, SimulationSceneData, SimulationTaskManager,
+    TimeScale,
+  },
 };
 use spin::RwLock;
 

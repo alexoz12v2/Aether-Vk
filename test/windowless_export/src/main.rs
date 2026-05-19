@@ -1,12 +1,10 @@
-use aethervk_core_rlib::gpu::{FrameCancelGuard, ScopedCommandBuffer, ScopedRenderPass};
-use aethervk_core_rlib::types::GpuError;
 use aethervk_core_rlib::{
-  gpu::{self, RenderDevice},
+  gpu::{self, FrameCancelGuard, RenderDevice, ScopedCommandBuffer, ScopedRenderPass},
   scene::{
     CameraComponent, EntityId, PhysicalMeshComponent, Scene, SkyComponent, SunComponent,
     TransformComponent,
   },
-  types::RuntimeParams,
+  types::{GpuError, RuntimeParams},
 };
 use aethervk_oshal_rlib::math::{
   matrix::{Matrix4, mat4::Mat4x4f32},
@@ -156,10 +154,10 @@ fn main() {
           emissive_color: [0.0, 0.0, 0.0],
           use_new_path: false,
           paint_display_mode: 0,
-        sphere_center: [0.0, 0.0, 0.0],
-        sphere_radius: 1.0,
-        grid_color: [0.0, 0.0, 0.0],
-        grid_density: 1.0,
+          sphere_center: [0.0, 0.0, 0.0],
+          sphere_radius: 1.0,
+          grid_color: [0.0, 0.0, 0.0],
+          grid_density: 1.0,
         },
       )
       .unwrap();
@@ -205,7 +203,10 @@ fn main() {
         let present_guard = FrameCancelGuard::new(device, presentation_engine, acquire_result);
 
         let cmd_buffer = try_task!(task, device.get_command_buffer());
-        try_task!(task, device.set_command_buffer_presentation_engine(cmd_buffer, presentation_engine));
+        try_task!(
+          task,
+          device.set_command_buffer_presentation_engine(cmd_buffer, presentation_engine)
+        );
         let render_scene = scene_to_render_scene(
           &scene,
           device,

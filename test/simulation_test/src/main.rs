@@ -5,27 +5,30 @@ static ALLOC: aethervk_oshal_rlib::os::memory::tracking::TrackingAllocator<std::
 
 use aethervk_core_rlib::{
   gpu::PresentationEngineHandle,
-  scene::GizmoComponent,
-  scene::text::FontAtlas,
-  scene::{AlmanacPlanet, PhysicalMeshComponent, TransformComponent},
-  scene::{GridComponent, HiddenComponent},
+  scene::{
+    AlmanacPlanet, GizmoComponent, GridComponent, HiddenComponent, PhysicalMeshComponent,
+    TransformComponent, text::FontAtlas,
+  },
   simulation::constants,
-  simulation_api::structs::{CustomRenderCallback, SendPtrMut},
-  simulation_api::{SimulationContext, structs},
+  simulation_api::{
+    SimulationContext, structs,
+    structs::{CustomRenderCallback, SendPtrMut},
+  },
   types::{EngineResult, GpuResult},
 };
-use aethervk_oshal_rlib::{
-  math::matrix::SquareMatrix,
-  math::vector::Vector,
-  math::{
-    quaternion::Quaternion,
-    vector::{Vector3, vec3::Vec3f32, vec4::Quat},
-  },
+use aethervk_oshal_rlib::math::{
+  matrix::SquareMatrix,
+  quaternion::Quaternion,
+  vector::{Vector, Vector3, vec3::Vec3f32, vec4::Quat},
 };
-use std::sync::atomic::AtomicBool;
-use std::{sync::Arc, time::Instant};
-use test_utils::cycle_get_asset_path_from_exe;
-use test_utils::sim_app::{SimulationDelegate, run_simulation_app};
+use std::{
+  sync::{Arc, atomic::AtomicBool},
+  time::Instant,
+};
+use test_utils::{
+  cycle_get_asset_path_from_exe,
+  sim_app::{SimulationDelegate, run_simulation_app},
+};
 use winit::window::Window;
 
 #[derive(Default)]
@@ -285,10 +288,10 @@ impl SimulationDelegate for SimulationPlaygroundDelegate {
             emissive_color: [0.0, 0.0, 0.0],
             use_new_path: false,
             paint_display_mode: 0,
-        sphere_center: [0.0, 0.0, 0.0],
-        sphere_radius: 1.0,
-        grid_color: [0.0, 0.0, 0.0],
-        grid_density: 1.0,
+            sphere_center: [0.0, 0.0, 0.0],
+            sphere_radius: 1.0,
+            grid_color: [0.0, 0.0, 0.0],
+            grid_density: 1.0,
           },
         )
         .unwrap();
@@ -380,10 +383,10 @@ impl SimulationDelegate for SimulationPlaygroundDelegate {
               emissive_color: color,
               use_new_path: true,
               paint_display_mode: paint_mode,
-        sphere_center: [0.0, 0.0, 0.0],
-        sphere_radius: 1.0,
-        grid_color: [0.0, 0.0, 0.0],
-        grid_density: 1.0,
+              sphere_center: [0.0, 0.0, 0.0],
+              sphere_radius: 1.0,
+              grid_color: [0.0, 0.0, 0.0],
+              grid_density: 1.0,
             },
           )
           .unwrap();
@@ -538,10 +541,10 @@ impl SimulationDelegate for SimulationPlaygroundDelegate {
               emissive_color: [0.0, 0.0, 0.0],
               use_new_path: false,
               paint_display_mode: 0,
-        sphere_center: [0.0, 0.0, 0.0],
-        sphere_radius: 1.0,
-        grid_color: [0.0, 0.0, 0.0],
-        grid_density: 1.0,
+              sphere_center: [0.0, 0.0, 0.0],
+              sphere_radius: 1.0,
+              grid_color: [0.0, 0.0, 0.0],
+              grid_density: 1.0,
             },
           )
           .unwrap();
@@ -988,9 +991,11 @@ fn main() {
 #[cfg(test)]
 mod depth_tests {
   use super::*;
-  use aethervk_core_rlib::gpu;
-  use aethervk_core_rlib::simulation::comet::{TexelFormat, Texture};
-  use aethervk_core_rlib::simulation_api::components_api::CameraParams;
+  use aethervk_core_rlib::{
+    gpu,
+    simulation::comet::{TexelFormat, Texture},
+    simulation_api::components_api::CameraParams,
+  };
   use bytes::Bytes;
   use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1359,10 +1364,10 @@ mod depth_tests {
             emissive_color: [0.0, 0.0, 0.0],
             use_new_path: false,
             paint_display_mode: 0,
-        sphere_center: [0.0, 0.0, 0.0],
-        sphere_radius: 1.0,
-        grid_color: [0.0, 0.0, 0.0],
-        grid_density: 1.0,
+            sphere_center: [0.0, 0.0, 0.0],
+            sphere_radius: 1.0,
+            grid_color: [0.0, 0.0, 0.0],
+            grid_density: 1.0,
           },
         )
         .unwrap();

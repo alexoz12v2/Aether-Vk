@@ -1,11 +1,12 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:AetherVk.Logic.ViewModels"
+             xmlns:models="using:AetherVk.Logic.Models"
              x:DataType="vm:AlmanacExplorerViewModel"
              x:Class="AetherVk.Views.AlmanacExplorerView">
   <Grid>
     <!-- Loaded State -->
-    <Grid RowDefinitions="Auto, *" IsVisible="{Binding IsInitialized}">
+    <Grid RowDefinitions="Auto, *, Auto" IsVisible="{Binding IsInitialized}">
       <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8" Margin="8" IsVisible="{Binding !IsLoading}">
         <Button Content="Load Defaults" Command="{Binding LoadDefaultAlmanacsCommand}" Classes="accent" />
         <Button Content="Refresh" Command="{Binding RefreshLoadedFilesCommand}" Classes="accent" />
@@ -14,17 +15,61 @@
       <ScrollViewer Grid.Row="1" Margin="8" IsVisible="{Binding !IsLoading}">
         <ItemsControl ItemsSource="{Binding LoadedFiles}">
           <ItemsControl.ItemTemplate>
-            <DataTemplate>
-              <Border Background="{DynamicResource Bg.Outline}" CornerRadius="4" Padding="16,12" Margin="0,0,0,4">
-                <TextBlock Text="{Binding}" FontWeight="Bold" FontSize="14" VerticalAlignment="Center" />
+            <DataTemplate DataType="models:SpkFileModel">
+              <Border Background="{DynamicResource Bg.Outline}" CornerRadius="4" Padding="8,8" Margin="0,0,0,4">
+                <Grid ColumnDefinitions="Auto, Auto, *">
+                  <CheckBox Grid.Column="0" 
+                            IsChecked="{Binding IsSelected}" 
+                            IsEnabled="{Binding IsSelectable}" 
+                            Margin="0,0,8,0"
+                            VerticalAlignment="Center" />
+                  
+                  <!-- Status Indicator -->
+                  <Ellipse Grid.Column="1" 
+                           Width="12" 
+                           Height="12" 
+                           Margin="0,0,12,0"
+                           VerticalAlignment="Center">
+                    <Ellipse.Styles>
+                      <Style Selector="Ellipse">
+                        <Setter Property="Fill" Value="{DynamicResource Text.Secondary}" />
+                      </Style>
+                      <Style Selector="Ellipse[IsVisible=True]"> <!-- Dummy selector condition, we use binding below -->
+                      </Style>
+                    </Ellipse.Styles>
+                    <Ellipse.Fill>
+                      <SolidColorBrush Color="{DynamicResource SystemAccentColor}" Opacity="{Binding IsLoaded, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                    </Ellipse.Fill>
+                    <ToolTip.Tip>
+                      <TextBlock Text="{Binding IsLoaded, StringFormat='Loaded: {0}'}" />
+                    </ToolTip.Tip>
+                  </Ellipse>
+
+                  <TextBlock Grid.Column="2" Text="{Binding DisplayName}" FontWeight="Bold" FontSize="14" VerticalAlignment="Center" TextWrapping="Wrap" />
+                </Grid>
               </Border>
             </DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>
       </ScrollViewer>
 
+      <!-- Bottom Action Bar -->
+      <Border Grid.Row="2" Background="{DynamicResource Bg.Canvas}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="0,1,0,0" Padding="16" IsVisible="{Binding HasSelection}">
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+          <Button Content="Load Selected" 
+                  Command="{Binding LoadSelectedCommand}" 
+                  Classes="accent"
+                  IsVisible="{Binding !IsSelectionLoaded}" />
+          
+          <Button Content="Unload Selected" 
+                  Command="{Binding UnloadSelectedCommand}" 
+                  Classes="accent"
+                  IsVisible="{Binding IsSelectionLoaded}" />
+        </StackPanel>
+      </Border>
+
       <!-- Loading State -->
-      <Border Grid.Row="0" Grid.RowSpan="2" Background="{DynamicResource Bg.Canvas}" Opacity="0.9" IsVisible="{Binding IsLoading}">
+      <Border Grid.Row="0" Grid.RowSpan="3" Background="{DynamicResource Bg.Canvas}" Opacity="0.9" IsVisible="{Binding IsLoading}">
           <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16">
               <TextBlock Text="Loading Almanac Files..." FontSize="20" FontWeight="Bold" HorizontalAlignment="Center"/>
               <ProgressBar IsIndeterminate="True" Width="200" Height="4" HorizontalAlignment="Center" />

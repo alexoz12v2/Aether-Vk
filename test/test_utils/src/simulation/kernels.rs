@@ -1,16 +1,19 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use aethervk_core_rlib::gpu::{
-  CollisionPair, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, ParticleGpu, RigidBodyGpu, ForceEmitter, Kernels,
-  KinematicBody, WaitHandle,
+use aethervk_core_rlib::{
+  gpu::{
+    CollisionPair, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, ForceEmitter, Kernels,
+    KinematicBody, ParticleGpu, RigidBodyGpu, WaitHandle,
+  },
+  physics::physics_scene::PhysicsScene,
+  scene::{ParticleSystemComponent, Scene},
+  types::{EngineError, EngineResult},
 };
-use aethervk_core_rlib::physics::physics_scene::PhysicsScene;
-use aethervk_core_rlib::scene::{ParticleSystemComponent, Scene};
-use aethervk_core_rlib::types::{EngineError, EngineResult};
-use aethervk_oshal_rlib::math::vector::Vector3;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::os::time::timeus_t;
+use aethervk_oshal_rlib::{
+  math::vector::{Vector3, vec3::Vec3f32},
+  os::time::timeus_t,
+};
 
 pub struct CpuCommandBuffer {
   pub submitted: bool,
@@ -29,14 +32,19 @@ pub struct CpuDeviceBuffer<T> {
 
 impl<T: Copy + Send + Sync> DeviceBuffer<T> for CpuDeviceBuffer<T> {
   type Cmd = CpuCommandBuffer;
-  type ReadHandle<'a> = CpuWaitHandle<'a, Vec<T>> where Self: 'a, T: 'a;
+  type ReadHandle<'a>
+    = CpuWaitHandle<'a, Vec<T>>
+  where
+    Self: 'a,
+    T: 'a;
 
   fn capacity(&self) -> usize {
     self.data.capacity()
   }
 
   fn enqueue_read_to_cpu<'a>(&self, _cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'a>>
-  where T: 'a,
+  where
+    T: 'a,
   {
     Ok(CpuWaitHandle {
       data: self.data.clone(),
@@ -51,14 +59,19 @@ pub struct CpuDeviceList<T> {
 
 impl<T: Copy + Send + Sync> DeviceBuffer<T> for CpuDeviceList<T> {
   type Cmd = CpuCommandBuffer;
-  type ReadHandle<'a> = CpuWaitHandle<'a, Vec<T>> where Self: 'a, T: 'a;
+  type ReadHandle<'a>
+    = CpuWaitHandle<'a, Vec<T>>
+  where
+    Self: 'a,
+    T: 'a;
 
   fn capacity(&self) -> usize {
     self.buffer.capacity()
   }
 
   fn enqueue_read_to_cpu<'a>(&self, cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'a>>
-  where T: 'a,
+  where
+    T: 'a,
   {
     self.buffer.enqueue_read_to_cpu(cmd)
   }
@@ -93,7 +106,8 @@ pub struct CpuKernels {
   pub kinematic_is_sun: std::sync::RwLock<Vec<bool>>,
   pub dynamic_betas: std::sync::RwLock<Vec<f32>>,
   pub dynamic_mapping: std::sync::RwLock<Vec<(aethervk_core_rlib::scene::EntityId, usize)>>,
-  pub dynamic_accelerations: std::sync::RwLock<Vec<aethervk_oshal_rlib::math::vector::vec3::Vec3f32>>,
+  pub dynamic_accelerations:
+    std::sync::RwLock<Vec<aethervk_oshal_rlib::math::vector::vec3::Vec3f32>>,
 }
 
 impl CpuKernels {
@@ -172,11 +186,20 @@ impl Kernels for CpuKernels {
     Ok(CpuDeviceBuffer { data: bodies })
   }
 
-  fn build_rigid_bodies(&self, _cmd: &mut Self::Cmd, _scene: &PhysicsScene, _scene0: &Scene) -> EngineResult<Self::Buffer<RigidBodyGpu>> {
+  fn build_rigid_bodies(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _scene: &PhysicsScene,
+    _scene0: &Scene,
+  ) -> EngineResult<Self::Buffer<RigidBodyGpu>> {
     Ok(CpuDeviceBuffer { data: Vec::new() })
   }
 
-  fn build_particles(&self, _cmd: &mut Self::Cmd, scene0: &Scene) -> EngineResult<Self::Buffer<ParticleGpu>> {
+  fn build_particles(
+    &self,
+    _cmd: &mut Self::Cmd,
+    scene0: &Scene,
+  ) -> EngineResult<Self::Buffer<ParticleGpu>> {
     let mut bodies = Vec::new();
     let mut betas = Vec::new();
     let mut mapping = Vec::new();
@@ -191,6 +214,7 @@ impl Kernels for CpuKernels {
             force: [0.0, 0.0, 0.0],
             entity_id: entity,
             parent_frame_id: 0,
+            original_index: i as u32,
           });
           betas.push(config.beta);
           mapping.push((entity, i));
@@ -208,7 +232,11 @@ impl Kernels for CpuKernels {
     Ok(CpuDeviceBuffer { data: bodies })
   }
 
-  fn build_emitters(&self, _cmd: &mut Self::Cmd, _scene: &Scene) -> EngineResult<Self::Buffer<ForceEmitter>> {
+  fn build_emitters(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _scene: &Scene,
+  ) -> EngineResult<Self::Buffer<ForceEmitter>> {
     Ok(CpuDeviceBuffer { data: Vec::new() })
   }
 
@@ -232,7 +260,8 @@ impl Kernels for CpuKernels {
   ) -> EngineResult<()> {
     let dt_sec = dt as f32 / 1_000_000.0;
     let half_dt = dt_sec * 0.5;
-    let accels = self.dynamic_accelerations.read().map_err(|_| EngineError::InvalidOperation("fail lock"))?;
+    let accels =
+      self.dynamic_accelerations.read().map_err(|_| EngineError::InvalidOperation("fail lock"))?;
 
     for (i, p) in particles.data.iter_mut().enumerate() {
       p.velocity[0] += accels[i].x() * half_dt;
@@ -249,9 +278,19 @@ impl Kernels for CpuKernels {
   fn step_ode_p3_p4(
     &self,
     _cmd: &mut Self::Cmd,
+    _kinematics: &Self::Buffer<KinematicBody>,
     _rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
     _emitters: &Self::Buffer<ForceEmitter>,
     _dt: timeus_t,
+  ) -> EngineResult<()> {
+    Ok(())
+  }
+
+  fn compute_self_gravity(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _bvh: &Self::MotionBvh,
+    _particles: &mut Self::Buffer<ParticleGpu>,
   ) -> EngineResult<()> {
     Ok(())
   }
@@ -315,18 +354,27 @@ impl Kernels for CpuKernels {
     Ok(CpuMotionBvh {})
   }
 
-  fn self_intersect_scene(&self, _cmd: &mut Self::Cmd, _bvh: &Self::MotionBvh) -> EngineResult<Self::List<CollisionPair>> {
-    Ok(CpuDeviceList { buffer: CpuDeviceBuffer { data: Vec::new() } })
+  fn self_intersect_scene(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _bvh: &Self::MotionBvh,
+  ) -> EngineResult<Self::List<CollisionPair>> {
+    Ok(CpuDeviceList {
+      buffer: CpuDeviceBuffer { data: Vec::new() },
+    })
   }
 
   fn intersect_instances(
     &self,
     _cmd: &mut Self::Cmd,
     _potentials: &Self::List<CollisionPair>,
+    _kinematics: &Self::Buffer<KinematicBody>,
     _rigid_bodies: &Self::Buffer<RigidBodyGpu>,
     _particles: &Self::Buffer<ParticleGpu>,
   ) -> EngineResult<Self::List<CollisionPair>> {
-    Ok(CpuDeviceList { buffer: CpuDeviceBuffer { data: Vec::new() } })
+    Ok(CpuDeviceList {
+      buffer: CpuDeviceBuffer { data: Vec::new() },
+    })
   }
 
   fn compact_collisions(
@@ -335,11 +383,19 @@ impl Kernels for CpuKernels {
     _globals: &Self::List<CollisionPair>,
     _time_delta: timeus_t,
   ) -> EngineResult<Self::List<CollisionPair>> {
-    Ok(CpuDeviceList { buffer: CpuDeviceBuffer { data: Vec::new() } })
+    Ok(CpuDeviceList {
+      buffer: CpuDeviceBuffer { data: Vec::new() },
+    })
   }
 
-  fn find_earliest_collision(&self, _cmd: &mut Self::Cmd, _compacted: &Self::List<CollisionPair>) -> EngineResult<Self::Buffer<timeus_t>> {
-    Ok(CpuDeviceBuffer { data: alloc::vec![aethervk_oshal_rlib::os::time::timeus_t::MAX] })
+  fn find_earliest_collision(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _compacted: &Self::List<CollisionPair>,
+  ) -> EngineResult<Self::Buffer<timeus_t>> {
+    Ok(CpuDeviceBuffer {
+      data: alloc::vec![aethervk_oshal_rlib::os::time::timeus_t::MAX],
+    })
   }
 
   fn apply_collision_responses(
@@ -359,7 +415,12 @@ impl Kernels for CpuKernels {
     _rigid_bodies: &Self::Buffer<RigidBodyGpu>,
     particles: &Self::Buffer<ParticleGpu>,
   ) -> EngineResult<(Self::Buffer<RigidBodyGpu>, Self::Buffer<ParticleGpu>)> {
-    Ok((CpuDeviceBuffer { data: Vec::new() }, CpuDeviceBuffer { data: particles.data.clone() }))
+    Ok((
+      CpuDeviceBuffer { data: Vec::new() },
+      CpuDeviceBuffer {
+        data: particles.data.clone(),
+      },
+    ))
   }
 
   fn restore_dynamics(
