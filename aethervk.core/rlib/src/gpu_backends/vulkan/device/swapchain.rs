@@ -706,14 +706,7 @@ impl WindowedPresentationState {
         frame_discard.skip_cycles = 1;
       }
 
-      for frame in &mut self.frames {
-        if let Some(fence) = frame.submission_fence.take() {
-          let _ = frame_discard.discarded_fences.push(fence);
-        }
-        if let Some(sem) = frame.acquire_semaphore.take() {
-          let _ = frame_discard.discarded_semaphores.push(sem);
-        }
-      }
+      frame_discard.discard_swapchain_frame_keep_fences(&mut self.frames);
 
       if !self.images.is_empty() {
         frame_discard.discard_swapchain_images(&mut self.images, false);
