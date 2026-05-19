@@ -422,6 +422,35 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return result;
   }
 
+  public string[] GetEntityComponentNames(ulong sceneId, ulong entityId)
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return Array.Empty<string>();
+
+    uint maxCount = 64; // arbitrary max components per entity
+    IntPtr namesPtr = Marshal.AllocHGlobal((int)(maxCount * IntPtr.Size));
+
+    uint count = NativeInterop.avkSimulationContext_getEntityComponentNames(
+      _simulationContext,
+      sceneId,
+      entityId,
+      namesPtr,
+      maxCount
+    );
+
+    var names = new string[count];
+    for (int i = 0; i < count; i++)
+    {
+      IntPtr strPtr = Marshal.ReadIntPtr(namesPtr, i * IntPtr.Size);
+      names[i] = Marshal.PtrToStringAnsi(strPtr) ?? "";
+    }
+
+    NativeInterop.avkSimulationContext_freeComponentNames(namesPtr, count);
+    Marshal.FreeHGlobal(namesPtr);
+
+    return names;
+  }
+
   private static readonly object _staticInitLock = new object();
 
   public void InitializeSimulationContext(

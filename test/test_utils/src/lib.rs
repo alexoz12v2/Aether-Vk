@@ -1,30 +1,31 @@
 pub mod app;
 pub mod command;
 pub mod console;
-pub mod input_form;
 pub mod horizon_jpl;
+pub mod input_form;
 pub mod sim_app;
 pub mod simulation;
 pub mod threading;
 
-use aethervk_core_rlib::gpu;
-use aethervk_core_rlib::gpu::scene_conversion::SceneConversionExt;
-use aethervk_core_rlib::gpu::{
-  OpaqueNativeHandleInfo, PresentationEngineHandle, RenderDevice, RenderDeviceHandle,
-  RenderFrontend, RenderScene,
+use aethervk_core_rlib::{
+  gpu,
+  gpu::{
+    OpaqueNativeHandleInfo, PresentationEngineHandle, RenderDevice, RenderDeviceHandle,
+    RenderFrontend, RenderScene, scene_conversion::SceneConversionExt,
+  },
+  scene::{
+    AddComponentError, BvhDebugComponent, CameraComponent, CursorComponent, EntityId,
+    FollowingComponent, GridComponent, PhysicalMeshComponent, Scene, SelectedComponent,
+    SkyComponent, SunComponent, TransformComponent,
+  },
+  simulation::comet::Comet,
+  simulation_api::SimulationContext,
+  types::{EngineError, GpuResult},
 };
-use aethervk_core_rlib::scene::{
-  AddComponentError, BvhDebugComponent, CameraComponent, CursorComponent, EntityId,
-  FollowingComponent, GridComponent, PhysicalMeshComponent, Scene, SelectedComponent, SkyComponent,
-  SunComponent, TransformComponent,
+use aethervk_oshal_rlib::math::{
+  quaternion::Quaternion,
+  vector::{Vector3, vec3::Vec3f32, vec4::Quat},
 };
-use aethervk_core_rlib::simulation::comet::Comet;
-use aethervk_core_rlib::simulation_api::SimulationContext;
-use aethervk_core_rlib::types::{EngineError, GpuResult};
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::Vector3;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::vec4::Quat;
 #[cfg(target_os = "linux")]
 use core::ffi;
 #[cfg(windows)]
@@ -46,18 +47,21 @@ use raw_window_handle::RawWindowHandle;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 #[cfg(target_os = "linux")]
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
-use std::any::TypeId;
 #[cfg(target_os = "macos")]
 use std::cell::Cell;
-use std::cell::RefCell;
-use std::error::Error;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use winit::event_loop::{EventLoop, EventLoopBuilder};
+use std::{
+  any::TypeId,
+  cell::RefCell,
+  error::Error,
+  path::{Path, PathBuf},
+  sync::Arc,
+};
 #[cfg(target_os = "macos")]
 use winit::platform::macos::EventLoopBuilderExtMacOS;
-use winit::window::WindowBuilder;
-use winit::{event_loop::EventLoopProxy, window::Window};
+use winit::{
+  event_loop::{EventLoop, EventLoopBuilder, EventLoopProxy},
+  window::{Window, WindowBuilder},
+};
 
 /// Custom event type to handle resizing start and stop
 pub enum AppEvent {
@@ -213,8 +217,10 @@ pub fn setup_windows_resize_hook(
 ) {
   use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
-    UI::Shell::{DefSubclassProc, SetWindowSubclass},
-    UI::WindowsAndMessaging::{WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE},
+    UI::{
+      Shell::{DefSubclassProc, SetWindowSubclass},
+      WindowsAndMessaging::{WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE},
+    },
   };
 
   unsafe extern "system" fn subclass_proc(

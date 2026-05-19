@@ -1,7 +1,9 @@
 use crate::{AppEvent, command::get_camera_movement_axis};
-use winit::event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent};
-use winit::event_loop::{ControlFlow, EventLoop};
-use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
+use winit::{
+  event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent},
+  event_loop::{ControlFlow, EventLoop},
+  keyboard::{KeyCode, ModifiersState, PhysicalKey},
+};
 
 pub trait App {
   fn window(&self) -> Option<&winit::window::Window>;

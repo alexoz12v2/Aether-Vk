@@ -884,4 +884,5 @@ test_*.png
 
 # working assets
 *.blend
+figma/
 

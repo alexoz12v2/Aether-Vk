@@ -1,5 +1,4 @@
-use aethervk_core_rlib::gpu::compute_push_constants::*;
-use aethervk_core_rlib::simulation::almanac::AlmanacPackedData;
+use aethervk_core_rlib::{gpu::compute_push_constants::*, simulation::almanac::AlmanacPackedData};
 use anise::time::Epoch;
 use ash::vk;
 use compute_shaders_test::{VulkanContext, run_compute_shader};

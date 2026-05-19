@@ -1,22 +1,28 @@
-use aethervk_core_rlib::gpu::PresentationEngineHandle;
-use aethervk_core_rlib::scene::CameraProjection;
-use aethervk_core_rlib::scene::camera::QuatToEulerAngles;
-use aethervk_core_rlib::scene::camera::SceneCameraExt;
-use aethervk_core_rlib::scene::ui::UiBuilder;
-use aethervk_core_rlib::scene::{
-  CursorComponent, EntityId, HiddenComponent, PhysicalMeshComponent, TransformComponent,
+use aethervk_core_rlib::{
+  gpu::PresentationEngineHandle,
+  scene::{
+    CameraProjection, CursorComponent, EntityId, HiddenComponent, PhysicalMeshComponent,
+    TransformComponent,
+    camera::{QuatToEulerAngles, SceneCameraExt},
+    ui::UiBuilder,
+  },
+  simulation_api::{
+    SimulationContext,
+    structs::{SimulationTaskResult, TaskStatusCode},
+  },
+  types::EngineResult,
 };
-use aethervk_core_rlib::simulation_api::SimulationContext;
-use aethervk_core_rlib::simulation_api::structs::{SimulationTaskResult, TaskStatusCode};
-use aethervk_core_rlib::types::EngineResult;
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::vec4::Quat;
+use aethervk_oshal_rlib::math::{
+  quaternion::Quaternion,
+  vector::{vec3::Vec3f32, vec4::Quat},
+};
 use std::sync::Arc;
 use test_utils::sim_app::{SimulationDelegate, run_simulation_app};
-use winit::event::{ElementState, MouseButton};
-use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::Window;
+use winit::{
+  event::{ElementState, MouseButton},
+  keyboard::{KeyCode, PhysicalKey},
+  window::Window,
+};
 
 #[derive(PartialEq, Clone, Copy)]
 enum Mode {
@@ -338,10 +344,10 @@ impl SimulationDelegate for PaintDelegate {
           emissive_color: [1.0, 1.0, 1.0],
           use_new_path: true,
           paint_display_mode: 0,
-        sphere_center: [0.0, 0.0, 0.0],
-        sphere_radius: 1.0,
-        grid_color: [0.0, 0.0, 0.0],
-        grid_density: 1.0,
+          sphere_center: [0.0, 0.0, 0.0],
+          sphere_radius: 1.0,
+          grid_color: [0.0, 0.0, 0.0],
+          grid_density: 1.0,
         },
       )
       .unwrap();

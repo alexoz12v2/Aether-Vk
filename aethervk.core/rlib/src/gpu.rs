@@ -1804,6 +1804,7 @@ pub trait Kernels: Send + Sync {
     &self,
     cmd: &mut Self::Cmd,
     potentials: &Self::List<CollisionPair>,
+    kinematics: &Self::Buffer<KinematicBody>,
     rigid_bodies: &Self::Buffer<RigidBodyGpu>,
     particles: &Self::Buffer<ParticleGpu>,
   ) -> EngineResult<Self::List<CollisionPair>>;

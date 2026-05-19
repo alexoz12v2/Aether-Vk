@@ -2,8 +2,8 @@ using System.Linq;
 using AetherVk.Logic.ViewModels;
 using AetherVk.Views;
 using Avalonia.Controls;
-using Avalonia.LogicalTree;
 using Avalonia.Headless.XUnit;
+using Avalonia.LogicalTree;
 using Xunit;
 
 namespace AetherVk.AppTests;

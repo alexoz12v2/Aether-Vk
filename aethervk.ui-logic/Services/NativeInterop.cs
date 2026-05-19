@@ -721,6 +721,15 @@ public static class NativeInterop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern uint avkSimulationContext_getEntityComponentNames(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId,
+    IntPtr outNames,
+    uint maxCount
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_freeComponentNames(IntPtr names, uint count);
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]

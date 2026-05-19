@@ -1,10 +1,12 @@
-use aethervk_core_rlib::gpu;
-use aethervk_core_rlib::scene::{PhysicalMeshComponent, TransformComponent};
-use aethervk_core_rlib::simulation_api::SimulationContext;
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::Vector3;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::vec4::Quat;
+use aethervk_core_rlib::{
+  gpu,
+  scene::{PhysicalMeshComponent, TransformComponent},
+  simulation_api::SimulationContext,
+};
+use aethervk_oshal_rlib::math::{
+  quaternion::Quaternion,
+  vector::{Vector3, vec3::Vec3f32, vec4::Quat},
+};
 use std::sync::Arc;
 use test_utils::cycle_get_asset_path_from_exe;
 

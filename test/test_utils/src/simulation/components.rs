@@ -1,7 +1,6 @@
 extern crate alloc;
 use aethervk_core_rlib::scene::ParticleSystemComponent;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
+use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
 
 pub trait ParticleSystemExt {
   fn update_particles(

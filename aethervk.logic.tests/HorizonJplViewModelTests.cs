@@ -15,13 +15,13 @@ public class HorizonJplViewModelTests
     dispatcherMock
       .Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
       .Callback<System.Action>(a => a());
-    var fileDialogMock = new Moq.Mock<IFileDialogService>();
+    var localStorageMock = new Moq.Mock<ILocalStorageService>();
     var consoleService = new ConsoleService(dispatcherMock.Object);
     var breadcrumbService = new BreadcrumbService(dispatcherMock.Object);
     var service = new HorizonJplService(consoleService, breadcrumbService);
 
     // Act
-    var vm = new HorizonJplViewModel(service, fileDialogMock.Object);
+    var vm = new HorizonJplViewModel(service, localStorageMock.Object, breadcrumbService);
 
     // Assert
     Assert.Equal("Horizon JPL", vm.Title);

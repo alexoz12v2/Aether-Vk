@@ -1,12 +1,16 @@
-use aethervk_core_rlib::gpu::PresentationEngineHandle;
-use aethervk_core_rlib::scene::ui::{ScreenSpaceTextComponent, Transform2DComponent, UiComponent};
-use aethervk_core_rlib::scene::{EntityId, Scene};
-use aethervk_core_rlib::simulation_api::SimulationContext;
-use aethervk_core_rlib::types::EngineResult;
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::vec4::Quat;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
+use aethervk_core_rlib::{
+  gpu::PresentationEngineHandle,
+  scene::{
+    EntityId, Scene,
+    ui::{ScreenSpaceTextComponent, Transform2DComponent, UiComponent},
+  },
+  simulation_api::SimulationContext,
+  types::EngineResult,
+};
+use aethervk_oshal_rlib::math::{
+  quaternion::Quaternion,
+  vector::{Vector, Vector3, vec3::Vec3f32, vec4::Quat},
+};
 use std::sync::Arc;
 use test_utils::sim_app::{SimulationDelegate, run_simulation_app};
 use winit::window::Window;

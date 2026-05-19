@@ -1,9 +1,11 @@
 use base64::Engine;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::fs::File;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::{
+  fs::File,
+  io::Write,
+  path::{Path, PathBuf},
+};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SbdbQueryResponse {

@@ -1,5 +1,7 @@
-use aethervk_core_rlib::gpu::compute_push_constants::BvhNodeAABBGpu;
-use aethervk_core_rlib::math::collision::multi_bvh::{BinaryBvh, MultiBvh};
+use aethervk_core_rlib::{
+  gpu::compute_push_constants::BvhNodeAABBGpu,
+  math::collision::multi_bvh::{BinaryBvh, MultiBvh},
+};
 use std::vec;
 
 struct MockBinaryBvh {
@@ -46,7 +48,8 @@ impl BinaryBvh for MockBinaryBvh {
         node_type: 0,
         mass: 1.0,
         center_of_mass: [0.5; 3],
-        });    }
+      });
+    }
     count
   }
 }
