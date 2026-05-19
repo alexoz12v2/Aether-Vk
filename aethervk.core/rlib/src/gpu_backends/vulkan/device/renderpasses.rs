@@ -65,10 +65,12 @@ impl RenderPassSpecification {
       PresentationState::Windowless(_) => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
     };
     let mut image_views = heapless::Vec::new();
-    presentation_engine.for_each_swapchain_image(|image_view| {
-      unsafe { image_views.push_unchecked(image_view) };
-      Ok(())
-    }).unwrap();
+    presentation_engine
+      .for_each_swapchain_image(|image_view| {
+        unsafe { image_views.push_unchecked(image_view) };
+        Ok(())
+      })
+      .unwrap();
 
     Self::ColorDepthSingleSubpass {
       color_format: presentation_engine.format(),
@@ -246,7 +248,14 @@ impl RenderPasses {
     NonZeroHandle<vk::RenderPass>,
     NonZeroHandle<vk::Framebuffer>,
   )> {
-    let (color_format, depth_stencil_format, final_layout, extent, swapchain_generation, image_views) = match ty {
+    let (
+      color_format,
+      depth_stencil_format,
+      final_layout,
+      extent,
+      swapchain_generation,
+      image_views,
+    ) = match ty {
       RenderPassSpecification::ColorDepthSingleSubpass {
         color_format,
         depth_stencil_format,
@@ -254,7 +263,14 @@ impl RenderPasses {
         extent,
         swapchain_generation,
         image_views,
-      } => (color_format, depth_stencil_format, final_layout, extent, swapchain_generation, image_views),
+      } => (
+        color_format,
+        depth_stencil_format,
+        final_layout,
+        extent,
+        swapchain_generation,
+        image_views,
+      ),
     };
 
     if let Some(bundle) =
@@ -339,9 +355,8 @@ impl RenderPasses {
 
         let img_h = image.get();
         let vma = self.allocator;
-        rollback.defer(move |_| unsafe {
-          vk_mem::ffi::vmaDestroyImage(vma, img_h, alloc.get_raw())
-        });
+        rollback
+          .defer(move |_| unsafe { vk_mem::ffi::vmaDestroyImage(vma, img_h, alloc.get_raw()) });
 
         let view_create_info = vk::ImageViewCreateInfo::default()
           .image(image.get())
@@ -375,9 +390,7 @@ impl RenderPasses {
             .layers(1)
             .attachments(&fb_attachments);
           let fb = unsafe {
-            NonZeroHandle::new_unchecked(
-              device.create_framebuffer(&framebuffer_create_info, None)?,
-            )
+            NonZeroHandle::new_unchecked(device.create_framebuffer(&framebuffer_create_info, None)?)
           };
           let fb_h = fb.get();
           rollback.defer(move |dev| unsafe { dev.destroy_framebuffer(fb_h, None) });
@@ -402,9 +415,7 @@ impl RenderPasses {
         let bundle = execute_result?;
         let rp = bundle.render_pass;
         let fb = bundle.framebuffer[image_index as usize];
-        unsafe {
-          state.insert_unique_unchecked(pe_handle, bundle)
-        };
+        unsafe { state.insert_unique_unchecked(pe_handle, bundle) };
         Ok((rp, fb))
       })
   }

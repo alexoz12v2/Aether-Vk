@@ -665,11 +665,6 @@ impl DeviceResource for DeviceResources {
               panic!("if device.wait_idle was called, then nobody should hold a strong arena");
             }
           }
-        } else {
-          panic!(
-            "Cleanup called more than once? | Arena {} was None",
-            stringify!($field)
-          );
         }
       };
     }

@@ -1,11 +1,13 @@
 //! descriptors module.
 
 use crate::{
-  gpu::vulkan::device::DebugTrackedRwLock, gpu_backends::vulkan::{
+  gpu::vulkan::device::DebugTrackedRwLock,
+  gpu_backends::vulkan::{
     self,
     device::{DeviceResource, resources},
     utils::NonZeroHandle,
-  }, types::{GpuError, GpuResult}
+  },
+  types::{GpuError, GpuResult},
 };
 use alloc::{sync, vec::Vec};
 use ash::vk::{
@@ -149,9 +151,11 @@ impl DescriptorPools {
         // Allocate a new pool lock-free!
         let pool_sizes = POOL_SIZES;
         let create_info = vk::DescriptorPoolCreateInfo::default()
-          .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND
+          .flags(
+            vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND
             // less performance, but I can't find another way to support rollback
-            | vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
+            | vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET,
+          )
           .max_sets(MAX_DESCRIPTOR_SETS)
           .pool_sizes(&pool_sizes);
 

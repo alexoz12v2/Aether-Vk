@@ -1146,7 +1146,6 @@ impl<'a, State, Lock: RwLockable<State>, Output, Error>
   where
     F: FnMut(&mut State, Result<Output, Error>) -> Result<NewOutput, Error>,
   {
-
     let final_result = {
       let mut state = self.lock.write(); // Write lock acquired
       f(&mut state, self.result)
@@ -1166,7 +1165,6 @@ impl<'a, State, Lock: RwLockable<State>, Output, Error>
   where
     F: FnMut(&State, Result<Output, Error>) -> Result<NewOutput, Error>,
   {
-
     let final_result = {
       let state = self.lock.read(); // Read lock acquired
       f(&state, self.result)

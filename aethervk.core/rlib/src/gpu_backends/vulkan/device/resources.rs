@@ -5182,7 +5182,9 @@ macro_rules! impl_font_atlas_arena_transactional {
           self.next_descriptor_index += 1;
           idx
         } else {
-          return Err(crate::gpu_err!("Exceeded descriptor array layout maximum capacity"));
+          return Err(crate::gpu_err!(
+            "Exceeded descriptor array layout maximum capacity"
+          ));
         };
 
         Ok(PrepareFontUpload {
@@ -5287,12 +5289,7 @@ macro_rules! impl_font_atlas_arena_transactional {
         timeline: u64,
       ) {
         discard_pool.discard_image_view(prep.image_view, timeline);
-        discard_pool.discard_image(
-          allocator_raw,
-          prep.image,
-          prep.allocation,
-          timeline,
-        );
+        discard_pool.discard_image(allocator_raw, prep.image, prep.allocation, timeline);
       }
     }
   };
