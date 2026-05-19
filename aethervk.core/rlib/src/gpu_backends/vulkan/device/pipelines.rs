@@ -1064,7 +1064,9 @@ impl PipelinePool {
       Entry::Occupied(entry) => {
         // Edge Case: Another thread compiled and inserted this exact pipeline while we were compiling.
         // Destroy our local redundant pipeline immediately to avoid leaking it.
-        unsafe { device.destroy_pipeline(pipeline, None); }
+        unsafe {
+          device.destroy_pipeline(pipeline, None);
+        }
         Ok(*entry.get())
       }
       Entry::Vacant(entry) => {
@@ -1126,7 +1128,9 @@ impl PipelinePool {
       Entry::Occupied(entry) => {
         // Edge Case: Another thread compiled and inserted this exact pipeline while we were compiling.
         // Destroy our local redundant pipeline immediately to avoid leaking it.
-        unsafe { device.destroy_pipeline(pipeline, None); }
+        unsafe {
+          device.destroy_pipeline(pipeline, None);
+        }
         Ok(*entry.get())
       }
       Entry::Vacant(entry) => {

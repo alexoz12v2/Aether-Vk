@@ -192,7 +192,8 @@ impl CommandPools {
               ptr::from_mut(&mut cmd),
             );
             vk_res.result_with_success(cmd)
-          }.with_name(device, &alloc::format!("PrimaryCommandBuffer_{}", id.0))?;
+          }
+          .with_name(device, &alloc::format!("PrimaryCommandBuffer_{}", id.0))?;
 
           Ok((active_pool, cmd))
         })
