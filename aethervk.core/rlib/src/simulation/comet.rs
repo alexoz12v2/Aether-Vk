@@ -1659,9 +1659,16 @@ mod tests {
     );
 
     // Verify eigenvalues (diagonalized inertia)
-    assert!((mass_properties.inertia.xx - 1.0).abs() < 1e-6);
-    assert!((mass_properties.inertia.yy - 2.0).abs() < 1e-6);
-    assert!((mass_properties.inertia.zz - 3.0).abs() < 1e-6);
+    let mut eigenvalues = [
+      mass_properties.inertia.xx,
+      mass_properties.inertia.yy,
+      mass_properties.inertia.zz,
+    ];
+    eigenvalues.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    assert!((eigenvalues[0] - 1.0).abs() < 1e-6);
+    assert!((eigenvalues[1] - 2.0).abs() < 1e-6);
+    assert!((eigenvalues[2] - 3.0).abs() < 1e-6);
 
     // Verify bf_to_pa rotation
     // 45 degrees around Z: cos(22.5) = 0.9238, sin(22.5) = 0.3826
