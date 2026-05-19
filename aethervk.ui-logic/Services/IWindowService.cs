@@ -9,5 +9,8 @@ namespace AetherVk.Logic.Services
     Task ShowSettingsDialogAsync();
     Task OpenMeshViewerAsync(string meshId);
     Task<ulong> ShowSpawnMeshDialogAsync(string modelId, string modelName);
+    Task<ulong> ShowSpawnCometDialogAsync(
+      System.Collections.Generic.IEnumerable<ViewModels.ImportedModelItem> models
+    );
   }
 }

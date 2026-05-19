@@ -277,7 +277,7 @@ where
   /// TODO: Document this item
   pub fn transform_to_obb<M, V, M2>(&self, transform: &M2) -> OBB<S>
   where
-    M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
+    M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul + core::fmt::Debug,
     V: Vector3<Scalar = S> + Into<[S; 3]>,
     M2: Matrix4<Scalar = S> + MatrixVectorMul + From<Mat4x4f32>,
     M2::Vector: Vector4<Scalar = S>,
@@ -771,8 +771,12 @@ where
   pub fn new<V, M>(center: V, rot: M, half_extent: V) -> Self
   where
     V: Vector3<Scalar = S> + Into<[S; 3]>,
-    M: Matrix3<Scalar = S, Vector = V>,
+    M: Matrix3<Scalar = S, Vector = V> + core::fmt::Debug,
   {
+    #[cfg(test)]
+    if !rot.is_pure_rotation_permissive() {
+      println!("OBB::new assert failed for rot: {:?}", rot);
+    }
     debug_assert!(rot.is_pure_rotation_permissive());
 
     Self {
@@ -785,7 +789,7 @@ where
   /// TODO: Document this item
   pub fn from_tris<V, M, I>(triangles: I) -> Self
   where
-    M: Matrix3<Scalar = S, Vector = V> + From<Mat3f32>,
+    M: Matrix3<Scalar = S, Vector = V> + From<Mat3f32> + core::fmt::Debug,
     V: Vector3<Scalar = S> + From<Vec3f32> + Into<[S; 3]>,
     I: IntoIterator<Item = Triangle>,
     I::IntoIter: Clone,
@@ -862,7 +866,7 @@ where
   where
     M2: Matrix4<Scalar = S> + MatrixVectorMul,
     M2::Vector: Vector4<Scalar = S>,
-    M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul,
+    M: Matrix3<Scalar = S, Vector = V> + MatrixVectorMul + core::fmt::Debug,
     V: Vector3<Scalar = S> + Into<[S; 3]>,
   {
     let c: V = self.translation();

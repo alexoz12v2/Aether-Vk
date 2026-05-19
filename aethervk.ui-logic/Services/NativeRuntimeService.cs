@@ -918,6 +918,15 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return NativeInterop.avkSimulationContext_getTaskResultBool(_simulationContext, taskId);
   }
 
+  public async Task<bool> UnloadAlmanacFileAsync(string path)
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return false;
+    ulong taskId = NativeInterop.avkSimulationContext_unloadAlmanacFile(_simulationContext, path);
+    await PollTaskAsync(taskId);
+    return NativeInterop.avkSimulationContext_getTaskResultBool(_simulationContext, taskId);
+  }
+
   public async Task<NativeInterop.FfiKinematicState?> LoadCometSpkAsync(int spkid, string epoch_raw)
   {
     if (_simulationContext == IntPtr.Zero)

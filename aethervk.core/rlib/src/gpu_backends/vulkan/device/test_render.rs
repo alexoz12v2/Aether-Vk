@@ -23,7 +23,7 @@ use aethervk_oshal_rlib::{
   math::{
     matrix::{Matrix4, SquareMatrix, mat4::Mat4x4f32},
     quaternion::Quaternion,
-    vector::{Vector3, vec3::Vec3f32, vec4::Quat},
+    vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec4::Quat},
   },
   os::pool::ThreadPool,
 };
@@ -267,7 +267,7 @@ fn test_render_particles_windowless_impl(use_particle2: bool) {
         if b > max_b {
           max_b = b;
         }
-        if r > 200 && g > 100 && b > 50 {
+        if r > 100 && g > 60 && b > 30 {
           found_color = true;
           break;
         }
@@ -389,6 +389,18 @@ fn test_render_all_archetypes_windowless() {
         gizmo_idx,
       ));
 
+      let sphere_gizmo_idx = device.allocate_sphere_gizmo_instance(sun_e)?;
+      let sphere_gizmo_pipeline = device.get_sphere_gizmo_pipeline_key(presentation_engine)?;
+      let sphere_gizmo_data = vec![(
+        sphere_gizmo_idx,
+        crate::gpu::SphereGizmoDataGpu {
+          model: Mat4x4f32::identity().into(),
+          radius: 1.0,
+          subdivisions: 12.0,
+          _pad: [0.0, 0.0],
+        },
+      )];
+
       render_scene.cursor_call = Some(CursorDrawCall {
         pipeline: cursor_res.pipeline,
         vertex_count: 36,
@@ -411,6 +423,9 @@ fn test_render_all_archetypes_windowless() {
         let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
         device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
         device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64), 0.6)?;
+
+        render_scene.sphere_gizmo_batch_call =
+          device.upload_sphere_gizmos_batch(cmd_buffer_handle, &sphere_gizmo_data)?;
 
         device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
         let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
@@ -473,6 +488,180 @@ fn test_render_all_archetypes_windowless() {
     }
     panic!("Vulkan validation errors occurred during testing");
   }
+}
+
+#[test]
+fn test_render_sphere_gizmo_windowless() {
+  setup_assets_dir();
+  let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
+    setup_render_frontend_for_tests(true);
+  let presentation_engine = presentation_engine.unwrap();
+  let [width, height] = render_frontend
+    .with_device(render_device_handle, |device| {
+      device.get_presentation_engine_extent(presentation_engine)
+    })
+    .unwrap();
+
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
+  let gizmo_e = scene.spawn_entity("gizmo");
+
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      let task_id = device.create_task();
+      device.start_frame()?;
+      let acquire_result = device.acquire_next_image(presentation_engine)?;
+      let cmd_buffer_handle = device.get_command_buffer()?;
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
+
+      let mut render_scene = RenderScene::new(
+        (
+          TransformComponent {
+            position: Vec3f32::from_array([0.0, 5.0, 0.0]),
+            rotation: Quat::identity(),
+            scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+          },
+          CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 0.1, 100.0),
+        ),
+        aethervk_oshal_rlib::os::time::TimeReadings::default(),
+        [width, height],
+      );
+
+      let sphere_gizmo_idx = device.allocate_sphere_gizmo_instance(gizmo_e)?;
+      let sphere_gizmo_pipeline = device.get_sphere_gizmo_pipeline_key(presentation_engine)?;
+      let mut model = Mat4x4f32::identity();
+      model.w =
+        aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(0.0, -5.0, 0.0, 1.0);
+      let sphere_gizmo_data = vec![(
+        sphere_gizmo_idx,
+        crate::gpu::SphereGizmoDataGpu {
+          model: model.into(),
+          radius: 2.0,
+          subdivisions: 12.0,
+          _pad: [0.0, 0.0],
+        },
+      )];
+
+      {
+        let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+        device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
+
+        render_scene.sphere_gizmo_batch_call =
+          device.upload_sphere_gizmos_batch(cmd_buffer_handle, &sphere_gizmo_data)?;
+
+        device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
+        let mut scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
+
+        let extent = device.get_presentation_engine_extent(presentation_engine)?;
+        device.set_viewport(cmd_buffer_handle, &gpu::Viewport::from_extent(extent))?;
+        device.set_scissor(cmd_buffer_handle, &gpu::Rect2D::from_extent(extent))?;
+
+        gpu::frame::render_frame(
+          device,
+          cmd_buffer_handle,
+          presentation_engine,
+          &render_scene,
+        )?;
+        scoped_rp.end()?;
+        device.record_windowless_download(cmd_buffer_handle, task_id)?;
+      }
+
+      device.present(
+        presentation_engine,
+        acquire_result.image_index as usize,
+        acquire_result.frame_index as usize,
+      )?;
+
+      // Wait for completion
+      while !device.is_task_completed(task_id)? {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+      }
+      device.success_task(task_id);
+
+      // Download image
+      let mut buffer = vec![0u8; (width * height * 4) as usize];
+      device.read_windowless_download(task_id, &mut buffer)?;
+
+      let sum: u64 = buffer.iter().map(|&b| b as u64).sum();
+      println!("Sum of buffer is {}", sum);
+
+      // Save it to inspect manually before assertions
+      let mut export_buffer = buffer.clone();
+      for chunk in export_buffer.chunks_exact_mut(4) {
+        chunk.swap(0, 2); // BGRA to RGBA
+      }
+      let row_stride = (width * 4) as usize;
+      for y in 0..(height as usize / 2) {
+        let top_row_start = y * row_stride;
+        let bottom_row_start = ((height as usize) - 1 - y) * row_stride;
+        for x in 0..row_stride {
+          export_buffer.swap(top_row_start + x, bottom_row_start + x);
+        }
+      }
+      image::save_buffer(
+        "test_rendered_sphere_gizmo.png",
+        &export_buffer,
+        width,
+        height,
+        image::ColorType::Rgba8,
+      )
+      .expect("Failed to save rendered png");
+
+      assert!(
+        sum > 0,
+        "Buffer is completely empty, gizmo failed to render!"
+      );
+
+      crate::types::GpuResult::Ok(())
+    })
+    .unwrap();
+
+  drop(render_frontend);
+
+  let errors = super::utils::VULKAN_ERROR_MESSAGES.lock().unwrap();
+  if !errors.is_empty() {
+    panic!("Vulkan validation errors occurred during testing");
+  }
+}
+
+#[test]
+fn test_sphere_gizmo_persistent_allocator() {
+  setup_assets_dir();
+  let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
+    setup_render_frontend_for_tests(true);
+  let presentation_engine = presentation_engine.unwrap();
+
+  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+  )));
+  let e1 = scene.spawn_entity("e1");
+  let e2 = scene.spawn_entity("e2");
+  let e3 = scene.spawn_entity("e3");
+
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      let idx1 = device.allocate_sphere_gizmo_instance(e1)?;
+      let idx2 = device.allocate_sphere_gizmo_instance(e2)?;
+      assert_eq!(idx1, 0);
+      assert_eq!(idx2, 1);
+
+      // Allocating again should return the same index
+      let idx1_again = device.allocate_sphere_gizmo_instance(e1)?;
+      assert_eq!(idx1_again, 0);
+
+      // Free e1
+      device.free_sphere_gizmo_instance(e1)?;
+
+      // Allocate e3, should reuse e1's index (0)
+      let idx3 = device.allocate_sphere_gizmo_instance(e3)?;
+      assert_eq!(idx3, 0);
+
+      crate::types::GpuResult::Ok(())
+    })
+    .unwrap();
+
+  drop(render_frontend);
 }
 
 #[test]

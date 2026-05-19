@@ -493,3 +493,151 @@ mod unix_debug {
     crate::log!("Stacktrace: Not natively supported by libc in this target environment.");
   }
 }
+
+pub mod fpe {
+  //! NaN generation panic triggering: There are several aspects to consider:
+  //! To make a NaN generation automatically trigger a Rust panic, you have to bridge two domains: unmasking the exception at the hardware level, and intercepting the resulting OS-level trap (e.g., SIGFPE) to translate it into a Rust panic.
+  //! Because we are working across multiple architectures and OSes, here is the reality of your cross-product and how you can implement this where it is supported.
+  //! - The Apple Silicon Blocker (aarch64 + apple)
+  //!   On ARMv8-A architecture, hardware floating-point exception trapping is optional. Apple did not implement it in their M-series chips.
+  //!   If you attempt to write to the Floating-Point Control Register (FPCR) on an Apple Silicon Mac to unmask Invalid Operation Exceptions (IOE), the instruction is simply ignored (the bits are Read-As-Zero / Write-Ignored). The hardware will silently propagate NaNs, and there is no way to trigger a hardware trap.
+  //!   For aarch64-apple-darwin, your only option is software-level checking (e.g., f64::is_nan()) after operations or intercept SIGILL (See below). Still, it won't work on Rosetta 2
+
+  /// 1. Hardware level: x86_64: floating-point exceptions are controlled by the `MXCSR` register.
+  /// Bit 7 is the Invalid Operation Mask (IM), set to 1 (Masked) by default. We must clear it to 0
+  #[cfg(target_arch = "x86_64")]
+  unsafe fn unmask_fpu_exceptions() {
+    let mut mxcsr: u32;
+    unsafe {
+      core::arch::asm!("stmxcsr [{}]", in(reg) &mut mxcsr);
+      mxcsr &= !(1 << 7); // Clear bit 7 (Invalid Operation Mask)
+      core::arch::asm!("ldmxcsr [{}]", in(reg) &mxcsr);
+    }
+  }
+
+  /// 1. Hardware level: On Non-Apple ARM64(v8A), FPE masking is controlled by `FPCR` (Floating point control
+  /// register). Bit 8 is the Invalid Operation Exception Enable (IOE). We must set it to 1
+  #[cfg(target_arch = "aarch64")]
+  unsafe fn unmask_fpu_exceptions() {
+    let mut fpcr: u64;
+    unsafe {
+      core::arch::asm!("mrs {}, fpcr", out(reg) fpcr);
+      fpcr |= 1 << 8; // Set bit 8 (IOE)
+      core::arch::asm!("msr fpcr, {}", in(reg) fpcr);
+    }
+  }
+
+  /// 2. OS Level: Catching the hardware trap so that we don't crash. On windows we use Vectored
+  ///    exceptions from Structured Exception Handling (SEH) (Source: Windows Via C/C++ 5th ed)
+  /// This function is the exception handling routine
+  #[cfg(windows)]
+  unsafe extern "system-unwind" fn veh_handler(
+    exception_info: *mut windows::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
+  ) -> i32 {
+    let record = (*exception_info).ExceptionRecord;
+    if (*record).ExceptionCode == windows::Win32::Foundation::EXCEPTION_FLT_INVALID_OPERATION {
+      // Note: Panicking inside a VEH is technically UB, but we want to crash the test anyways
+      panic!("floating point exception");
+    }
+    // continue to other handlers
+    0 // EXCEPTION_CONTINUE_SEARCH
+  }
+
+  /// 2. OS Level: Catching the hardware trap so that we don't crash. On windows we use Vectored
+  ///    exceptions from Structured Exception Handling (SEH) (Source: Windows Via C/C++ 5th ed)
+  /// This function registers the VEH
+  #[cfg(windows)]
+  unsafe fn register_os_handler() {
+    windows::Win32::System::Diagnostics::Debug::AddVectoredExceptionHandler(
+      1, // Call First
+      Some(veh_handler),
+    );
+  }
+
+  /// 2. OS Level: Catching the hardware trap so we don't crash. On Unix (not apple) we can use a
+  ///    sigaction to catch the SIGFPE.
+  /// This function is the action function
+  #[cfg(all(unix, not(target_vendor = "apple")))]
+  unsafe extern "C-unwind" fn sigfpe_handler(_sig: i32) {
+    // Technically undefined behaviour cause we are panicking across FFI boundary, we don't care as
+    // we want to crash the test
+    panic!("floating point exception");
+  }
+
+  /// 2. OS Level: Catching the hardware trap so we don't crash. On Unix (not apple) we can use a
+  ///    sigaction to catch the SIGFPE.
+  /// This function is the one which calls sigaction
+  #[cfg(all(unix, not(target_vendor = "apple")))]
+  unsafe fn register_os_handler() {
+    let mut action: libc::sigaction = core::mem::zeroed();
+    libc::sigemptyset(&mut action.sa_mask);
+
+    libc::sigaction(libc::SIGFPE, &action, core::ptr::null_mut());
+  }
+
+  /// if signal handler is marked as extern "C". In modern Rust, attempting to unwind the stack (which panic! does) out of a standard extern "C" function is guaranteed to trigger an immediate abort (SIGABRT). The compiler inserts a safety catch (core::panicking::panic_cannot_unwind) to prevent you from corrupting memory, which is why your test runner crashed instead of catching the panic for #[should_panic].
+  /// The Fix: extern "C-unwind"
+  /// As of Rust 1.71, there is a dedicated ABI for this exact scenario. You can tell the Rust compiler that this FFI function is allowed to unwind by changing extern "C" to extern "C-unwind".
+  #[cfg(all(target_arch = "aarch64", target_vendor = "apple"))]
+  unsafe extern "C-unwind" fn sigill_handler(
+    _sig: i32,
+    info: *mut libc::siginfo_t,
+    _ucontext: *mut libc::c_void,
+  ) {
+    let si_code = unsafe { *info }.si_code;
+
+    // Manually define the Darwin constant since Rust's libc omits it
+    const ILL_ILLTRP: i32 = 2;
+    if si_code == ILL_ILLTRP {
+      panic!("Caught hardware floating-point exception (NaN generated) via SIGILL!");
+    } else {
+      panic!("Caught genuine SIGILL (Illegal Instruction)!");
+    }
+  }
+
+  /// 2. OS level
+  ///    Apple Silicon (M1/M2/M3) does support hardware floating-point traps, but macOS handles them in a highly non-standard way. Instead of sending the POSIX standard SIGFPE (Floating-Point Exception) signal to your process, the XNU kernel treats an unmasked FPU exception as an illegal trap and sends a SIGILL (Illegal Instruction) signal.
+  ///    https://stackoverflow.com/questions/69059981/how-to-trap-floating-point-exceptions-on-m1-macs
+  ///    Note: If you run on Apple silicon a x86_64 macOS version on Rosetta, hardware exceptions
+  ///    won't work
+  #[cfg(all(target_arch = "aarch64", target_vendor = "apple"))]
+  unsafe fn register_os_handler() {
+    let mut action: libc::sigaction = unsafe { core::mem::zeroed() };
+
+    // Use sa_sigaction instead of sa_handler to get the siginfo_t pointer
+    action.sa_sigaction = sigill_handler as usize;
+
+    // SA_SIGINFO tells the OS to use the sa_sigaction signature
+    action.sa_flags = libc::SA_SIGINFO;
+    unsafe { libc::sigemptyset(&mut action.sa_mask) };
+
+    // Register for SIGILL, not SIGFPE!
+    unsafe { libc::sigaction(libc::SIGILL, &action, core::ptr::null_mut()) };
+  }
+
+  pub fn setup_fpu_panic() {
+    unsafe {
+      register_os_handler();
+      unmask_fpu_exceptions();
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::fpe;
+
+  #[test]
+  #[should_panic]
+  fn test_nan_generation_panicsest_nan_generation_panics() {
+    // 1. Hardware and OS trap on
+    fpe::setup_fpu_panic();
+
+    // 2. Operands not optimized away using `core::hint::black_box`
+    let a = core::hint::black_box(0.0_f32);
+    let b = core::hint::black_box(0.0_f32);
+
+    // 3. Trigger NaN exception
+    let _nan = core::hint::black_box(a / b);
+  }
+}

@@ -222,6 +222,12 @@ impl LogicThreadContext {
   }
 
   /// TODO: Document this item
+  pub fn unload_almanac_file_internal(&self, path: &str) -> EngineResult<()> {
+    let mut logic = self.logic_state.write();
+    logic.almanac_data.unload_almanac_spk(path)
+  }
+
+  /// TODO: Document this item
   pub fn raycast_ndc_internal(
     &self,
     scene_id: u64,
@@ -674,6 +680,10 @@ pub enum LogicCommand {
     task_id: u64,
     path: String,
   },
+  UnloadAlmanac {
+    task_id: u64,
+    path: String,
+  },
   LoadCometSpk {
     task_id: u64,
     spk_id: i32,
@@ -975,6 +985,7 @@ pub struct SceneContext {
   pub time_state: Arc<RwLock<SceneTimeState>>,
   pub presentation_engines: Arc<RwLock<BTreeMap<PresentationEngineHandle, PresentationEngineData>>>,
   pub changed_entities: Arc<RwLock<BTreeMap<u64, BTreeSet<String>>>>,
+  pub delta_buffer: Arc<RwLock<alloc::boxed::Box<[u64]>>>,
   pub custom_render_callback: Option<CustomRenderCallback>,
   pub debug_name: alloc::string::String,
 }
@@ -1103,6 +1114,9 @@ impl SceneContext {
       changed_entities: Arc::new(RwLock::new(BTreeMap::new())),
       custom_render_callback: None,
       debug_name: alloc::string::String::new(),
+      delta_buffer: Arc::new(RwLock::new(
+        alloc::vec![0u64; 131072 /* 1 MiB */].into_boxed_slice(),
+      )),
     }
   }
 

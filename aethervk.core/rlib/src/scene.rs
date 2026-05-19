@@ -146,6 +146,21 @@ pub trait Component: 'static + Send + Sync + core::fmt::Debug {
   }
 }
 
+/// A trait for components that can be serialized into a stable FFI representation.
+pub trait ForeignSerializable: Component {
+  /// The associated DTO struct that is #[repr(C)] and Blittable
+  type ForeignData: Copy + Send + Sync + 'static;
+
+  /// Stable ID for foreign environments (C#) to identify this component type
+  const COMPONENT_ID: u64;
+
+  /// Snapshot the current state into the DTO
+  fn to_foreign(&self) -> Self::ForeignData;
+
+  /// Update the component from a foreign DTO
+  fn apply_foreign(&mut self, data: &Self::ForeignData);
+}
+
 // === Component Definitions ===
 
 /// Defines the position, rotation, and scale of an entity.
@@ -155,6 +170,47 @@ pub struct TransformComponent {
   /// Stored as a quaternion.
   pub rotation: Quat,
   pub scale: Vec3f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransformDTO {
+  pub px: f32,
+  pub py: f32,
+  pub pz: f32,
+  pub rw: f32,
+  pub rx: f32,
+  pub ry: f32,
+  pub rz: f32,
+  pub sx: f32,
+  pub sy: f32,
+  pub sz: f32,
+}
+
+impl ForeignSerializable for TransformComponent {
+  type ForeignData = TransformDTO;
+  const COMPONENT_ID: u64 = 1;
+
+  fn to_foreign(&self) -> Self::ForeignData {
+    TransformDTO {
+      px: self.position.x(),
+      py: self.position.y(),
+      pz: self.position.z(),
+      rw: self.rotation.0.w(),
+      rx: self.rotation.0.x(),
+      ry: self.rotation.0.y(),
+      rz: self.rotation.0.z(),
+      sx: self.scale.x(),
+      sy: self.scale.y(),
+      sz: self.scale.z(),
+    }
+  }
+
+  fn apply_foreign(&mut self, data: &Self::ForeignData) {
+    self.position = Vec3f32::from_components(data.px, data.py, data.pz);
+    self.rotation = Quat::from_components(data.rw, data.rx, data.ry, data.rz);
+    self.scale = Vec3f32::from_components(data.sx, data.sy, data.sz);
+  }
 }
 
 impl Default for TransformComponent {
@@ -237,6 +293,85 @@ impl Default for CameraProjection {
 pub struct CameraComponent {
   pub projection: CameraProjection,
 }
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CameraDTO {
+  pub is_orthographic: bool,
+  pub fov: f32,
+  pub aspect: f32,
+  pub near: f32,
+  pub far: f32,
+  pub ortho_left: f32,
+  pub ortho_right: f32,
+  pub ortho_bottom: f32,
+  pub ortho_top: f32,
+}
+
+impl ForeignSerializable for CameraComponent {
+  type ForeignData = CameraDTO;
+  const COMPONENT_ID: u64 = 2;
+
+  fn to_foreign(&self) -> Self::ForeignData {
+    match self.projection {
+      CameraProjection::Perspective {
+        fov,
+        aspect_ratio,
+        near,
+        far,
+      } => CameraDTO {
+        is_orthographic: false,
+        fov: fov.to_degrees(),
+        aspect: aspect_ratio,
+        near,
+        far,
+        ortho_left: 0.0,
+        ortho_right: 0.0,
+        ortho_bottom: 0.0,
+        ortho_top: 0.0,
+      },
+      CameraProjection::Orthographic {
+        left,
+        right,
+        bottom,
+        top,
+        near,
+        far,
+      } => CameraDTO {
+        is_orthographic: true,
+        fov: 0.0,
+        aspect: 0.0,
+        near,
+        far,
+        ortho_left: left,
+        ortho_right: right,
+        ortho_bottom: bottom,
+        ortho_top: top,
+      },
+    }
+  }
+
+  fn apply_foreign(&mut self, data: &Self::ForeignData) {
+    if data.is_orthographic {
+      self.projection = CameraProjection::Orthographic {
+        left: data.ortho_left,
+        right: data.ortho_right,
+        bottom: data.ortho_bottom,
+        top: data.ortho_top,
+        near: data.near,
+        far: data.far,
+      };
+    } else {
+      self.projection = CameraProjection::Perspective {
+        fov: data.fov.to_radians(),
+        aspect_ratio: data.aspect,
+        near: data.near,
+        far: data.far,
+      };
+    }
+  }
+}
+
 impl Component for CameraComponent {}
 
 impl CameraComponent {
@@ -430,6 +565,15 @@ pub struct GizmoComponent {
   pub gizmo_scale: f32,
 }
 impl Component for GizmoComponent {}
+
+/// A component that renders a wireframe sphere and the 3 local axes (R,G,B) for the local frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SphereGizmoComponent {
+  pub radius: f32,
+  pub subdivisions: f32,
+  pub local_frame: Mat4x4f32,
+}
+impl Component for SphereGizmoComponent {}
 
 /// A marker component for entities that should be rendered as an infinite grid.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -1163,6 +1307,7 @@ impl Scene {
     self.register_component::<SkyComponent>(&[]);
     self.register_component::<BackgroundComponent>(&[]);
     self.register_component::<GizmoComponent>(&transform_type_id);
+    self.register_component::<SphereGizmoComponent>(&transform_type_id);
     self.register_component::<GridComponent>(&transform_type_id);
     self.register_component::<SelectedComponent>(&transform_type_id);
     self.register_component::<FollowingComponent>(&transform_type_id);

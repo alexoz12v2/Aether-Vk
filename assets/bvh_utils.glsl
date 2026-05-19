@@ -113,6 +113,10 @@ struct BVHNodeBlockAABB {
     uint right_child_offset[SG_SIZE];
     uint primitive_count[SG_SIZE];
     uint node_type[SG_SIZE];
+    float mass[SG_SIZE];
+    float comX[SG_SIZE];
+    float comY[SG_SIZE];
+    float comZ[SG_SIZE];
 };
 
 // Flattened 1D array for Multi-Branch BVH storage
@@ -258,7 +262,7 @@ bool ccdSphereTriangle(
     float vv = dot(edge2, edge2);
     float wu = dot(w, edge1);
     float wv = dot(w, edge2);
-    float denom = uv * uv - uu * vv;
+    float denom = uu * vv - uv * uv;
     
     float s = (uv * wv - vv * wu) / denom;
     float r = (uv * wu - uu * wv) / denom;

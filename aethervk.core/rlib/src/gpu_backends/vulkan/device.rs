@@ -617,6 +617,9 @@ pub struct DeviceResources {
     Option<alloc::sync::Arc<DebugTrackedRwLock<resources::BvhRenderResourceArchetypeArena>>>,
   bvhwire2_render_archetype_arena:
     Option<alloc::sync::Arc<DebugTrackedRwLock<resources::Bvhwire2RenderResourceArchetypeArena>>>,
+  sphere_gizmo_render_archetype_arena: Option<
+    alloc::sync::Arc<DebugTrackedRwLock<resources::SphereGizmoRenderResourceArchetypeArena>>,
+  >,
   gizmo_render_archetype_arena:
     Option<alloc::sync::Arc<DebugTrackedRwLock<resources::GizmoRenderResourceArchetypeArena>>>,
   trajectory_render_archetype_arena:
@@ -685,6 +688,7 @@ impl DeviceResource for DeviceResources {
     discard_arena!(text2_render_archetype_arena);
     discard_arena!(bvh_render_archetype_arena);
     discard_arena!(bvhwire2_render_archetype_arena);
+    discard_arena!(sphere_gizmo_render_archetype_arena);
     discard_arena!(gizmo_render_archetype_arena);
     discard_arena!(trajectory_render_archetype_arena);
     discard_arena!(ui_render_archetype_arena);
@@ -985,6 +989,7 @@ impl DeviceResources {
       text2_render_archetype_arena: None,
       bvh_render_archetype_arena: None,
       bvhwire2_render_archetype_arena: None,
+      sphere_gizmo_render_archetype_arena: None,
       gizmo_render_archetype_arena: None,
       trajectory_render_archetype_arena: None,
       ui_render_archetype_arena: None,
@@ -2004,6 +2009,9 @@ impl RenderDevice for Device {
       bvhwire2: Option<
         alloc::sync::Arc<DebugTrackedRwLock<resources::Bvhwire2RenderResourceArchetypeArena>>,
       >,
+      sphere_gizmo: Option<
+        alloc::sync::Arc<DebugTrackedRwLock<resources::SphereGizmoRenderResourceArchetypeArena>>,
+      >,
       gizmo:
         Option<alloc::sync::Arc<DebugTrackedRwLock<resources::GizmoRenderResourceArchetypeArena>>>,
     }
@@ -2043,6 +2051,7 @@ impl RenderDevice for Device {
           text2: state.text2_render_archetype_arena.clone(),
           bvh: state.bvh_render_archetype_arena.clone(),
           bvhwire2: state.bvhwire2_render_archetype_arena.clone(),
+          sphere_gizmo: state.sphere_gizmo_render_archetype_arena.clone(),
           gizmo: state.gizmo_render_archetype_arena.clone(),
         };
 
@@ -2176,6 +2185,7 @@ impl RenderDevice for Device {
           init_arch!(text2, ensure_text2_shader_modules, text2_render_archetype, Text2RenderResourceArchetypeArena, create_text2_archetype, text);
           init_arch!(bvh, ensure_bvh_shader_modules, bvh_render_archetype, BvhRenderResourceArchetypeArena, create_bvh_archetype);
           init_arch!(bvhwire2, ensure_bvhwire2_shader_modules, bvhwire2_render_archetype, Bvhwire2RenderResourceArchetypeArena, create_bvhwire2_archetype);
+          init_arch!(sphere_gizmo, ensure_sphere_gizmo_shader_modules, sphere_gizmo_render_archetype, SphereGizmoRenderResourceArchetypeArena, create_sphere_gizmo_archetype);
           init_arch!(gizmo, ensure_gizmo_shader_modules, gizmo_render_archetype, GizmoRenderResourceArchetypeArena, create_gizmo_archetype);
 
           Ok(())
@@ -2211,6 +2221,7 @@ impl RenderDevice for Device {
         state.text2_render_archetype_arena = arenas.text2;
         state.bvh_render_archetype_arena = arenas.bvh;
         state.bvhwire2_render_archetype_arena = arenas.bvhwire2;
+        state.sphere_gizmo_render_archetype_arena = arenas.sphere_gizmo;
         state.gizmo_render_archetype_arena = arenas.gizmo;
 
         result?;
@@ -6901,6 +6912,200 @@ impl RenderDevice for Device {
   }
 
   #[named]
+  fn allocate_sphere_gizmo_instance(&self, entity: crate::scene::EntityId) -> GpuResult<u32> {
+    let res = DebugTrackedRwLock::read(&self.res);
+    let arena_arc =
+      res.sphere_gizmo_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+    let mut arena = DebugTrackedRwLock::write(&*arena_arc);
+    arena.allocate_sphere_gizmo_instance(entity)
+  }
+
+  #[named]
+  fn free_sphere_gizmo_instance(&self, entity: crate::scene::EntityId) -> GpuResult<()> {
+    let res = DebugTrackedRwLock::read(&self.res);
+    let arena_arc =
+      res.sphere_gizmo_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+    let mut arena = DebugTrackedRwLock::write(&*arena_arc);
+    arena.free_sphere_gizmo_instance(entity);
+    Ok(())
+  }
+
+  #[named]
+  fn prepare_sphere_gizmo_archetype_for_render_and_bind_pipeline(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+  ) -> GpuResult<()> {
+    let (cmd, pipeline) = {
+      let res = DebugTrackedRwLock::read(&self.res);
+      let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
+      let live_pes = &res.live_presentation_engines;
+      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let archetype_lock = DebugTrackedRwLock::read(&pe.archetypes().sphere_gizmo_render_archetype);
+      let archetype = archetype_lock.as_ref().ok_or(gpu_err_archetype_absent!())?;
+      let pipeline_key = archetype.pipeline_key;
+      let pipeline = res
+        .pipeline_pool
+        .get_graphics_pipeline(pipeline_key)
+        .ok_or(gpu_err_pipeline_absent!())?
+        .get();
+      (cmd, pipeline)
+    };
+    unsafe {
+      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
+      self.device.cmd_set_line_width(cmd, 1.0);
+    }
+    Ok(())
+  }
+
+  #[named]
+  fn push_sphere_gizmo_constants(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    constants: &crate::gpu::SphereGizmoPushConstants,
+  ) -> GpuResult<()> {
+    let (cmd, layout) = {
+      let res = DebugTrackedRwLock::read(&self.res);
+      let (cmd, _) = self.get_cmd_and_pe(cmd_buffer)?;
+      let arena_arc =
+        res.sphere_gizmo_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+      let arena = DebugTrackedRwLock::read(&*arena_arc);
+      (cmd, arena.pipeline_layout.get())
+    };
+    let bytes = unsafe {
+      core::slice::from_raw_parts(
+        constants as *const _ as *const u8,
+        core::mem::size_of::<crate::gpu::SphereGizmoPushConstants>(),
+      )
+    };
+    unsafe {
+      self.device.cmd_push_constants(
+        cmd,
+        layout,
+        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+        0,
+        bytes,
+      );
+    }
+    Ok(())
+  }
+
+  #[named]
+  fn get_sphere_gizmo_pipeline_key(
+    &self,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<PipelineKey> {
+    let res = DebugTrackedRwLock::read(&self.res);
+    let live_pes = &res.live_presentation_engines;
+    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let archetype_lock = DebugTrackedRwLock::read(&pe.archetypes().sphere_gizmo_render_archetype);
+    let archetype = archetype_lock.as_ref().ok_or(gpu_err_archetype_absent!())?;
+    Ok(archetype.pipeline_key)
+  }
+
+  #[named]
+  fn upload_sphere_gizmos_batch(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    gizmos: &[(u32, crate::gpu::SphereGizmoDataGpu)],
+  ) -> GpuResult<Option<crate::gpu::frame::SphereGizmoBatchCall>> {
+    if gizmos.is_empty() {
+      return Ok(None);
+    }
+
+    let total_gizmos = gizmos.len() as u32;
+
+    let (cmd, staging_offset, staging_ptr, data_buffer, staging_buffer, data_ptr, pipeline) = {
+      let res = DebugTrackedRwLock::read(&self.res);
+      let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
+      let live_pes = &res.live_presentation_engines;
+      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let archetype_lock = DebugTrackedRwLock::read(&pe.archetypes().sphere_gizmo_render_archetype);
+      let archetype = archetype_lock.as_ref().ok_or(gpu_err_archetype_absent!())?;
+
+      let mut staging_arena = DebugTrackedRwLock::write(&res.frame_staging_arena);
+      let staging = staging_arena.as_mut().ok_or(GpuError::InvalidState(
+        "SphereGizmo missing staging arena".to_string(),
+      ))?;
+
+      let arena_arc =
+        res.sphere_gizmo_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+      let arena = DebugTrackedRwLock::read(&*arena_arc);
+      let data_buffer = arena.data_buffer;
+      let data_ptr = arena.data_ptr;
+
+      let max_idx = gizmos.iter().map(|(idx, _)| *idx).max().unwrap_or(0);
+      let total_capacity = (max_idx + 1) as usize;
+      let data_size =
+        (total_capacity * core::mem::size_of::<crate::gpu::SphereGizmoDataGpu>()) as u64;
+
+      let (staging_offset, staging_ptr) =
+        staging.allocate(data_size as usize, 16).ok_or(GpuError::OutOfMemory)?;
+
+      (
+        cmd,
+        staging_offset,
+        staging_ptr,
+        data_buffer.get(),
+        staging.buffer,
+        data_ptr,
+        archetype.pipeline_key,
+      )
+    };
+
+    let total_capacity = (gizmos.iter().map(|(idx, _)| *idx).max().unwrap_or(0) + 1) as usize;
+    let data_size =
+      (total_capacity * core::mem::size_of::<crate::gpu::SphereGizmoDataGpu>()) as u64;
+
+    unsafe {
+      core::ptr::write_bytes(staging_ptr, 0, data_size as usize); // zero init
+      let typed_ptr = staging_ptr as *mut crate::gpu::SphereGizmoDataGpu;
+      for (idx, data) in gizmos {
+        core::ptr::write(typed_ptr.add(*idx as usize), *data);
+      }
+    }
+
+    let copy_region =
+      vk::BufferCopy::default().size(data_size).src_offset(staging_offset as u64).dst_offset(0);
+
+    unsafe {
+      self.device.cmd_copy_buffer(cmd, staging_buffer, data_buffer, &[copy_region]);
+
+      let barrier = vk::BufferMemoryBarrier2::default()
+        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+        .dst_stage_mask(
+          vk::PipelineStageFlags2::VERTEX_SHADER | vk::PipelineStageFlags2::FRAGMENT_SHADER,
+        )
+        .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+        .buffer(data_buffer)
+        .offset(0)
+        .size(data_size);
+
+      let dependency_info =
+        vk::DependencyInfo::default().buffer_memory_barriers(core::slice::from_ref(&barrier));
+      self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dependency_info);
+    }
+
+    let mut total_vertices = 0;
+    for (_, data) in gizmos {
+      let sub_divs = data.subdivisions.max(4.0) as u32;
+      let points_per_ring = sub_divs * 2;
+      let total_ring_vertices = points_per_ring * 3;
+      let total_axes_vertices = 6;
+      let total_arrowhead_vertices = 4 * 2 * 3;
+      total_vertices =
+        total_vertices.max(total_ring_vertices + total_axes_vertices + total_arrowhead_vertices);
+    }
+
+    Ok(Some(crate::gpu::frame::SphereGizmoBatchCall {
+      pipeline,
+      total_gizmos: (gizmos.iter().map(|(idx, _)| *idx).max().unwrap_or(0) + 1) as u32,
+      total_vertices,
+      data_ptr,
+    }))
+  }
+
+  #[named]
   fn upload_bvhwire2_batch(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -9195,6 +9400,33 @@ fn ensure_bvhwire2_shader_modules(
   let assets_dir = shaders_asset_dir()?;
   vert_path = assets_dir.join("bvhwire2.vert.spv");
   frag_path = assets_dir.join("bvhwire2.frag.spv");
+
+  let vkey = shader_manager.get_or_load(
+    device,
+    vert_path.as_ref(),
+    "main",
+    spirv::ExecutionModel::Vertex,
+  )?;
+  let fkey = shader_manager.get_or_load(
+    device,
+    frag_path.as_ref(),
+    "main",
+    spirv::ExecutionModel::Fragment,
+  )?;
+
+  Ok((vkey, fkey))
+}
+
+fn ensure_sphere_gizmo_shader_modules(
+  device: &LogicalDevice,
+  shader_manager: &mut shader_manager::ShaderManager,
+) -> GpuResult<(shader_manager::ShaderKey, shader_manager::ShaderKey)> {
+  let vert_path: aethervk_oshal_rlib::os::fs::PathBuf;
+  let frag_path: aethervk_oshal_rlib::os::fs::PathBuf;
+
+  let assets_dir = shaders_asset_dir()?;
+  vert_path = assets_dir.join("sphere_gizmo.vert.spv");
+  frag_path = assets_dir.join("sphere_gizmo.frag.spv");
 
   let vkey = shader_manager.get_or_load(
     device,

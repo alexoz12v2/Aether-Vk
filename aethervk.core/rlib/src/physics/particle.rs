@@ -55,7 +55,7 @@ impl ParticleBVHBuilder {
   where
     I: IntoIterator<Item = &'a Particle<V>>,
     V: Vector3 + 'a + Into<[V::Scalar; 3]> + From<[V::Scalar; 3]> + core::ops::Mul<f32, Output = V>,
-    M: Matrix3<Vector = V, Scalar = V::Scalar>,
+    M: Matrix3<Vector = V, Scalar = V::Scalar> + core::fmt::Debug,
     V::Scalar: FloatLike + FloatOps + FloatBits + From<f32>,
     I::IntoIter: ExactSizeIterator + Clone,
   {
@@ -76,7 +76,7 @@ impl ParticleBVHBuilder {
   ) -> Box<BVHNode<V::Scalar>>
   where
     V: Vector3 + Into<[V::Scalar; 3]> + From<[V::Scalar; 3]> + core::ops::Mul<f32, Output = V>,
-    M: Matrix3<Vector = V, Scalar = V::Scalar>,
+    M: Matrix3<Vector = V, Scalar = V::Scalar> + core::fmt::Debug,
     V::Scalar: FloatLike + FloatOps + FloatBits + From<f32>,
   {
     let count = indices.len();

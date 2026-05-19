@@ -1,0 +1,47 @@
+using System;
+using AetherVk.Logic.ViewModels;
+using Avalonia.Controls;
+
+namespace AetherVk.Views;
+
+public partial class SpawnCometWindow : Window
+{
+  public SpawnCometWindow()
+  {
+    InitializeComponent();
+  }
+
+  public void CancelCommand()
+  {
+    Close(null);
+  }
+
+  public void ImportMeshCommand()
+  {
+    // Close with a null result so user can manually go to import.
+    // A fuller implementation could resolve IWindowService and open the import dialog.
+    Close(null);
+  }
+
+  public void SpawnCommand()
+  {
+    if (DataContext is SpawnCometViewModel vm && vm.SelectedModel != null)
+    {
+      var result = new SpawnCometResult(
+        vm.SelectedModel,
+        vm.EntityName,
+        vm.PhysicsType,
+        vm.PosX,
+        vm.PosY,
+        vm.PosZ,
+        vm.ScaleX,
+        vm.ScaleY,
+        vm.ScaleZ,
+        vm.Pitch,
+        vm.Yaw,
+        vm.Roll
+      );
+      Close(result);
+    }
+  }
+}

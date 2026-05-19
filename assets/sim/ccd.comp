@@ -71,8 +71,9 @@ void main() {
             uint blockB = other_prim_id / SG_SIZE; \
             uint locB = other_prim_id % SG_SIZE; \
             uint baseB = blockB * (10 * SG_SIZE) + locB; \
-            vec3 my_vel = vec3(pc.particles.data[baseA + 3 * SG_SIZE], pc.particles.data[baseA + 4 * SG_SIZE], pc.particles.data[baseA + 5 * SG_SIZE]); \
-            vec3 other_vel = vec3(pc.particles.data[baseB + 3 * SG_SIZE], pc.particles.data[baseB + 4 * SG_SIZE], pc.particles.data[baseB + 5 * SG_SIZE]); \
+            /* Multiply velocities by dt to get the displacement step */ \
+            vec3 my_vel = vec3(pc.particles.data[baseA + 3 * SG_SIZE], pc.particles.data[baseA + 4 * SG_SIZE], pc.particles.data[baseA + 5 * SG_SIZE]) * pc.dt; \
+            vec3 other_vel = vec3(pc.particles.data[baseB + 3 * SG_SIZE], pc.particles.data[baseB + 4 * SG_SIZE], pc.particles.data[baseB + 5 * SG_SIZE]) * pc.dt; \
             mat4 transA = mat4(1.0); transA[3].xyz = my_node.center_of_mass; \
             mat4 transB = mat4(1.0); transB[3].xyz = node_center; \
             bool is_colliding = compute_toi_generic( \

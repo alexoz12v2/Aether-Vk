@@ -1,7 +1,5 @@
 #[cfg(test)]
 mod tests {
-  use crate::scene::PhysicalMeshComponent;
-  use crate::simulation::comet::Comet;
   use crate::{
     gpu::{DynamicBody, Kernels},
     gpu_backends::simulation_step,
@@ -10,10 +8,11 @@ mod tests {
       physics_scene::PhysicsScene,
     },
     scene::{
-      ColliderComponent, ColliderShape, EntityId, KinematicComponent, ReferenceFrameComponent,
-      ReferenceFrameType, Scene, TransformComponent,
+      ColliderComponent, ColliderShape, EntityId, KinematicComponent, PhysicalMeshComponent,
+      ReferenceFrameComponent, ReferenceFrameType, Scene, TransformComponent,
       particles::{ParticleData, ParticleSystemComponent},
     },
+    simulation::comet::Comet,
   };
   use aethervk_oshal_rlib::{
     math::{
@@ -68,6 +67,7 @@ mod tests {
 
   #[test]
   fn test_single_frame_all_shapes() {
+    aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
     )));
@@ -174,6 +174,7 @@ mod tests {
 
   #[test]
   fn test_cross_frame_lca_collision() {
+    aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
     )));
@@ -290,8 +291,14 @@ mod tests {
     println!("v_micro: {:?}", v_micro);
 
     // They should have collided and bounced due to LCA resolution
-    assert!(v_macro.x() < 0.0, "Macro object should have bounced back (-X)");
-    assert!(v_micro.x() > 0.0, "Micro object should have bounced back (+X)");
+    assert!(
+      v_macro.x() < 0.0,
+      "Macro object should have bounced back (-X)"
+    );
+    assert!(
+      v_micro.x() > 0.0,
+      "Micro object should have bounced back (+X)"
+    );
   }
 
   #[test]
@@ -417,6 +424,8 @@ mod tests {
 
   #[test]
   fn test_backend_determinism() {
+    use aethervk_oshal_rlib::os::debug;
+    debug::fpe::setup_fpu_panic();
     let pool = Arc::new(ThreadPool::new(4).unwrap());
 
     let setup_scene = || -> (Scene, EntityId, EntityId) {

@@ -421,6 +421,22 @@ pub struct Bvhwire2PushConstants {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct SphereGizmoDataGpu {
+  pub model: [f32; 16],
+  pub radius: f32,
+  pub subdivisions: f32,
+  pub _pad: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct SphereGizmoPushConstants {
+  pub gizmo_ptr: u64,
+  pub view_proj: [f32; 16],
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 /// TODO: Document this item
 pub struct ParticlePushConstants {
@@ -869,6 +885,16 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     handle: PresentationEngineHandle,
   ) -> GpuResult<u32>;
 
+  fn allocate_sphere_gizmo_instance(&self, entity: EntityId) -> GpuResult<u32>;
+
+  fn free_sphere_gizmo_instance(&self, entity: EntityId) -> GpuResult<()>;
+
+  fn upload_sphere_gizmos_batch(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    gizmos: &[(u32, crate::gpu::SphereGizmoDataGpu)],
+  ) -> GpuResult<Option<crate::gpu::frame::SphereGizmoBatchCall>>;
+
   // --- Removed get_or_create_particle_resources ---
 
   /// Uploads particle systems into the mega-buffers. Should be called before rendering.
@@ -1063,6 +1089,22 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     &self,
     cmd_buffer: CommandBufferHandle,
   ) -> GpuResult<()>;
+
+  fn push_sphere_gizmo_constants(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    constants: &SphereGizmoPushConstants,
+  ) -> GpuResult<()>;
+
+  fn prepare_sphere_gizmo_archetype_for_render_and_bind_pipeline(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+  ) -> GpuResult<()>;
+
+  fn get_sphere_gizmo_pipeline_key(
+    &self,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<PipelineKey>;
 
   fn upload_bvhwire2_batch(
     &self,

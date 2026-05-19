@@ -11,7 +11,14 @@
                PointerPressed="OnPointerPressed"
                PointerReleased="OnPointerReleased"
                PointerMoved="OnPointerMoved"
-               PointerWheelChanged="OnPointerWheelChanged" />
+               PointerWheelChanged="OnPointerWheelChanged">
+            <Image.ContextMenu>
+                <ContextMenu>
+                    <!-- Fallback if context is not main window -->
+                    <MenuItem Header="Spawn Comet" Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).OpenSpawnCometDialogCommand, FallbackValue={x:Null}}" />
+                </ContextMenu>
+            </Image.ContextMenu>
+        </Image>
 
         <StackPanel HorizontalAlignment="Right" VerticalAlignment="Top" Margin="10" Spacing="5" IsVisible="{Binding IsInitialized}">
             <Border Padding="5" CornerRadius="4" Background="{DynamicResource Bg.Surface}" Opacity="0.8" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1">

@@ -102,6 +102,9 @@ pub(super) struct Archetypes {
   pub bvhwire2_render_archetype: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
     Option<resources::Bvhwire2RenderResourceArchetype>,
   >,
+  pub sphere_gizmo_render_archetype: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+    Option<resources::SphereGizmoRenderResourceArchetype>,
+  >,
   pub gizmo_render_archetype: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
     Option<resources::GizmoRenderResourceArchetype>,
   >,
@@ -139,6 +142,7 @@ impl Archetypes {
       || DebugTrackedRwLock::read(&self.text2_render_archetype).is_some()
       || DebugTrackedRwLock::read(&self.bvh_render_archetype).is_some()
       || DebugTrackedRwLock::read(&self.bvhwire2_render_archetype).is_some()
+      || DebugTrackedRwLock::read(&self.sphere_gizmo_render_archetype).is_some()
       || DebugTrackedRwLock::read(&self.ui_render_archetype).is_some()
       || DebugTrackedRwLock::read(&self.gizmo_render_archetype).is_some()
       || DebugTrackedRwLock::read(&self.trajectory_render_archetype).is_some()
@@ -165,6 +169,7 @@ impl Archetypes {
     let _ = DebugTrackedRwLock::write(&self.text2_render_archetype).take();
     let _ = DebugTrackedRwLock::write(&self.bvh_render_archetype).take();
     let _ = DebugTrackedRwLock::write(&self.bvhwire2_render_archetype).take();
+    let _ = DebugTrackedRwLock::write(&self.sphere_gizmo_render_archetype).take();
     let _ = DebugTrackedRwLock::write(&self.ui_render_archetype).take();
     let _ = DebugTrackedRwLock::write(&self.gizmo_render_archetype).take();
     let _ = DebugTrackedRwLock::write(&self.trajectory_render_archetype).take();
@@ -518,6 +523,12 @@ impl Archetypes {
     prepare_update_bvhwire2_archetype,
     commit_update_bvhwire2_archetype,
     bvhwire2_render_archetype
+  );
+
+  impl_update_archetype!(
+    prepare_update_sphere_gizmo_archetype,
+    commit_update_sphere_gizmo_archetype,
+    sphere_gizmo_render_archetype
   );
 
   impl_update_archetype!(
@@ -1331,6 +1342,78 @@ impl Archetypes {
     )?;
 
     *bvhwire2_render_archetype = Some(resources::Bvhwire2RenderResourceArchetype {
+      arena: alloc::sync::Arc::downgrade(&arena),
+      pipeline_key,
+      graphics_info: pipeline_graphics_info.clone(),
+    });
+
+    Ok(())
+  }
+
+  #[named]
+  pub fn create_sphere_gizmo_archetype(
+    &self,
+    device: &LogicalDevice,
+    vertex_shader: &shader_manager::Shader,
+    fragment_shader: &shader_manager::Shader,
+    depth_stencil_format: vk::Format,
+    color_format: vk::Format,
+    allocator: vk_mem::AllocatorView,
+    discard_pool: &resources::DiscardPool,
+    renderpasses: &renderpasses::RenderPasses,
+    pipeline_pool_lock: &pipelines::PipelinePool,
+    timeline: u64,
+    arena: alloc::sync::Arc<DebugTrackedRwLock<resources::SphereGizmoRenderResourceArchetypeArena>>,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
+  ) -> GpuResult<()> {
+    let mut sphere_gizmo_render_archetype =
+      DebugTrackedRwLock::write(&self.sphere_gizmo_render_archetype);
+    if sphere_gizmo_render_archetype.is_some() {
+      return Err(crate::gpu_err_device!());
+    }
+
+    let pipeline_graphics_info = pipelines::GraphicsInfo::default()
+      .with_vertex_in(
+        pipelines::VertexIn::default().with_topology(vk::PrimitiveTopology::LINE_LIST).clone(),
+      )
+      .with_pre_rasterization(
+        pipelines::PreRasterization::default()
+          .with_vertex_module(vertex_shader.module.get())
+          .clone(),
+      )
+      .with_fragment_shader(
+        pipelines::FragmentShader::default()
+          .with_fragment_module(fragment_shader.module.get())
+          .add_viewport(ignored_viewport())
+          .add_scissors(ignored_scissor())
+          .clone(),
+      )
+      .with_fragment_out(
+        pipelines::FragmentOut::default()
+          .add_color_attachment_format(color_format)
+          .with_depth_attachment_format(depth_stencil_format)
+          .clone(),
+      )
+      .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
+      .with_pipeline_flags(
+        pipelines::PipelineFlags::NO_DEPTH_WRITE | pipelines::PipelineFlags::NO_DEPTH_TEST,
+      )
+      .with_render_pass(
+        renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
+      )
+      .with_subpass(0)
+      .with_rasterization_polygon_mode(vk::PolygonMode::LINE)
+      .clone();
+
+    let pipeline_key = pipeline_graphics_info.pipeline_key();
+
+    pipeline_pool_lock.get_or_create_graphics_pipeline(
+      &device,
+      &pipeline_graphics_info,
+      rollback,
+    )?;
+
+    *sphere_gizmo_render_archetype = Some(resources::SphereGizmoRenderResourceArchetype {
       arena: alloc::sync::Arc::downgrade(&arena),
       pipeline_key,
       graphics_info: pipeline_graphics_info.clone(),

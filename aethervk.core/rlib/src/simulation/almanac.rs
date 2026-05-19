@@ -88,6 +88,25 @@ impl AlmanacPackedData {
     Ok(())
   }
 
+  /// Unloads a previously loaded SPK file by its alias (which is the file path).
+  pub fn unload_almanac_spk(&mut self, path: &str) -> EngineResult<()> {
+    if let Err(e) = self.almanac.spk_unload(path) {
+      aethervk_oshal_rlib::log!("Failed to unload SPK {}: {}", path, e);
+      return Err(EngineError::InvalidOperation(
+        "[Almanac] Error unloading SPK file",
+      ));
+    }
+
+    self.file_names.retain(|f| f != path);
+    aethervk_oshal_rlib::log!(
+      "Unloaded SPK {}, {} remaining",
+      path,
+      self.almanac.num_loaded_spk()
+    );
+
+    Ok(())
+  }
+
   /// TODO: Document this item
   pub fn get_ephem_full(
     &self,

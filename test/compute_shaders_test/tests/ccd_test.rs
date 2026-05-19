@@ -8,6 +8,9 @@ struct CcdData {
   total_particles: u32,
   root_index: u32,
   bvh_nodes: Vec<f32>,
+  particles: Vec<f32>,
+  particle_radius: f32,
+  dt: f32,
   expected_count: u32,
   expected_pairs: Vec<u32>,
 }
@@ -17,8 +20,11 @@ struct CcdData {
 struct PushConstants {
   particle_bvh: u64,
   output_list: u64,
+  particles: u64,
   root_index: u32,
   total_particles: u32,
+  particle_radius: f32,
+  dt: f32,
 }
 
 #[test]
@@ -28,9 +34,15 @@ fn test_ccd() {
   let test_data: CcdData = serde_json::from_str(&json_data).expect("Failed to parse JSON");
 
   let ctx = VulkanContext::new();
-
   let (bvh_buffer, mut bvh_alloc, bvh_addr) = ctx.create_buffer(
     &test_data.bvh_nodes,
+    vk::BufferUsageFlags::STORAGE_BUFFER
+      | vk::BufferUsageFlags::TRANSFER_SRC
+      | vk::BufferUsageFlags::TRANSFER_DST,
+  );
+
+  let (particles_buffer, mut particles_alloc, particles_addr) = ctx.create_buffer(
+    &test_data.particles,
     vk::BufferUsageFlags::STORAGE_BUFFER
       | vk::BufferUsageFlags::TRANSFER_SRC
       | vk::BufferUsageFlags::TRANSFER_DST,
@@ -47,12 +59,14 @@ fn test_ccd() {
       | vk::BufferUsageFlags::TRANSFER_SRC
       | vk::BufferUsageFlags::TRANSFER_DST,
   );
-
   let push_constants = PushConstants {
     particle_bvh: bvh_addr,
     output_list: output_addr,
+    particles: particles_addr,
     root_index: test_data.root_index,
     total_particles: test_data.total_particles,
+    particle_radius: test_data.particle_radius,
+    dt: test_data.dt,
   };
 
   let push_constants_bytes = unsafe {
@@ -69,8 +83,8 @@ fn test_ccd() {
 
   let output_data: Vec<u32> =
     ctx.read_buffer(output_buffer, &mut output_alloc, total_slots as usize * 4);
-
   ctx.destroy_buffer(bvh_buffer, bvh_alloc);
+  ctx.destroy_buffer(particles_buffer, particles_alloc);
   ctx.destroy_buffer(output_buffer, output_alloc);
 
   let mut actual_pairs = Vec::new();
