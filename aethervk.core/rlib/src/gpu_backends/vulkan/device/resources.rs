@@ -4233,16 +4233,6 @@ impl ArchetypeArenaCreate for ForwardMeshRenderResourceArchetypeArena {
   /// - `pipeline_key` must refer to a pipeline created with `vertex_shader` and `fragment_shader`,
   #[named]
   fn new_arena(ctx: &ArenaCreationContext) -> GpuResult<Self> {
-    #[cfg(test)]
-    static mut WAS_CREATED: bool = false;
-    #[cfg(test)]
-    unsafe {
-      if WAS_CREATED {
-        panic!("archetype arena more than once!");
-      } else {
-        WAS_CREATED = true;
-      }
-    }
     let device = ctx.device;
     let vertex_shader = ctx.vertex_shader.unwrap();
     let fragment_shader = ctx.fragment_shader.unwrap();

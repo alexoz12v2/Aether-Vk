@@ -75,7 +75,12 @@ mod tests {
 
     #[cfg(any(debug_assertions, test))]
     let device = unsafe {
-      crate::gpu_backends::vulkan::device::hooks::load_device_with_hooks(&instance.instance, phys_device.physical_device, &device_create_info).unwrap()
+      crate::gpu_backends::vulkan::device::hooks::load_device_with_hooks(
+        &instance.instance,
+        phys_device.physical_device,
+        &device_create_info,
+      )
+      .unwrap()
     };
     #[cfg(not(any(debug_assertions, test)))]
     let device = unsafe {
@@ -371,7 +376,7 @@ mod tests {
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params,
-    &mut rollback,
+      &mut rollback,
     )
     .unwrap();
 
@@ -426,7 +431,7 @@ mod tests {
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params,
-    &mut rollback,
+      &mut rollback,
     )
     .unwrap();
 
@@ -498,7 +503,7 @@ mod tests {
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params,
-    &mut rollback,
+      &mut rollback,
     )
     .unwrap();
 
@@ -593,7 +598,7 @@ mod tests {
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params,
-    &mut rollback,
+      &mut rollback,
     )
     .unwrap();
 
@@ -684,7 +689,7 @@ mod tests {
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params,
-    &mut rollback,
+      &mut rollback,
     )
     .unwrap();
 
@@ -710,7 +715,16 @@ mod tests {
       }
     }
 
-    engine.resize(&instance.instance, &log_device, phys_device, 1024, 768, &mut rollback).unwrap();
+    engine
+      .resize(
+        &instance.instance,
+        &log_device,
+        phys_device,
+        1024,
+        768,
+        &mut rollback,
+      )
+      .unwrap();
 
     let acq2 = engine.acquire_next_image(&log_device, &mut rollback).unwrap();
     unsafe {
@@ -780,7 +794,7 @@ mod tests {
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params1,
-    &mut rollback,
+      &mut rollback,
     )
     .unwrap();
 
@@ -795,7 +809,6 @@ mod tests {
       vsync: false,
       buffer_count: 3,
     };
-    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
     let mut vp2 = PresentationState::new(
       &entry,
       &instance.instance,
@@ -803,7 +816,7 @@ mod tests {
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params2,
-    &mut rollback,
+      &mut rollback,
     )
     .unwrap();
 
@@ -818,7 +831,6 @@ mod tests {
       vsync: false,
       buffer_count: 3,
     };
-    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
     let mut mv = PresentationState::new(
       &entry,
       &instance.instance,
@@ -826,7 +838,7 @@ mod tests {
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params3,
-    &mut rollback,
+      &mut rollback,
     )
     .unwrap();
 
@@ -910,9 +922,35 @@ mod tests {
     }
 
     // Concurrent resize
-    vp1.resize(&instance.instance, &log_device, phys_device, 1024, 768, &mut rollback).unwrap();
-    vp2.resize(&instance.instance, &log_device, phys_device, 640, 480, &mut rollback).unwrap();
-    mv.resize(&instance.instance, &log_device, phys_device, 800, 600, &mut rollback).unwrap();
+    vp1
+      .resize(
+        &instance.instance,
+        &log_device,
+        phys_device,
+        1024,
+        768,
+        &mut rollback,
+      )
+      .unwrap();
+    vp2
+      .resize(
+        &instance.instance,
+        &log_device,
+        phys_device,
+        640,
+        480,
+        &mut rollback,
+      )
+      .unwrap();
+    mv.resize(
+      &instance.instance,
+      &log_device,
+      phys_device,
+      800,
+      600,
+      &mut rollback,
+    )
+    .unwrap();
 
     // Render after resize
     let acq1 = vp1.acquire_next_image(&log_device, &mut rollback).unwrap();
@@ -943,9 +981,7 @@ mod tests {
     unsafe { device.device_wait_idle().unwrap() };
     rollback.defuse();
     vp1.cleanup(&device);
-    rollback.defuse();
     vp2.cleanup(&device);
-    rollback.defuse();
     mv.cleanup(&device);
 
     unsafe {
@@ -989,7 +1025,7 @@ mod tests {
       phys_device,
       log_device.swapchain_maintenance1.clone(),
       &params,
-    &mut rollback,
+      &mut rollback,
     )
     .unwrap();
 
@@ -1000,7 +1036,16 @@ mod tests {
       if i % 3 == 0 {
         width += 10;
         height += 10;
-        engine.resize(&instance.instance, &log_device, phys_device, width, height, &mut rollback).unwrap();
+        engine
+          .resize(
+            &instance.instance,
+            &log_device,
+            phys_device,
+            width,
+            height,
+            &mut rollback,
+          )
+          .unwrap();
       }
 
       let acq = engine.acquire_next_image(&log_device, &mut rollback).unwrap();

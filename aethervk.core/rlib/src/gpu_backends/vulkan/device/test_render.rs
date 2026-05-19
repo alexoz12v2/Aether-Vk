@@ -93,7 +93,6 @@ fn setup_render_frontend_for_tests(
           render_frontend
             .with_device(render_device_handle, |device| {
               let pe = device.create_presentation_engine(&params)?;
-              device.init_archetypes(pe)?;
               device.generate_sky()?;
               crate::types::GpuResult::Ok(pe)
             })
@@ -585,7 +584,6 @@ fn test_layout_transition_on_failed_update() {
     .with_device(render_device_handle, |device| {
       let params = PresentationEngineParams::windowless(16, 16);
       let pe = device.create_presentation_engine(&params)?;
-      // WE DELIBERATELY SKIP init_archetypes(pe) TO CAUSE update_sun TO FAIL!
       crate::types::GpuResult::Ok(pe)
     })
     .unwrap();
@@ -659,7 +657,6 @@ fn test_render_text_system_font_async() {
     render_frontend
       .with_device(render_device_handle, |device| {
         let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
         crate::types::GpuResult::Ok(pe)
       })
       .unwrap()
@@ -819,7 +816,6 @@ fn test_render_text_asset_font_async() {
     render_frontend
       .with_device(render_device_handle, |device| {
         let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
         Ok(pe)
       })
       .unwrap()
@@ -2363,7 +2359,6 @@ fn test_render_particles_stress_impl(use_particle2: bool) {
     render_frontend
       .with_device(render_device_handle, |device| {
         let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
         crate::types::GpuResult::Ok(pe)
       })
       .unwrap()
@@ -2977,10 +2972,6 @@ fn test_render_concurrent_resize() {
       };
       let pe3 = device.create_presentation_engine(&params_win)?;
 
-      device.init_archetypes(pe1)?;
-      device.init_archetypes(pe2)?;
-      device.init_archetypes(pe3)?;
-
       device.generate_sky()?;
 
       crate::types::GpuResult::Ok((pe1, pe2, pe3))
@@ -3205,7 +3196,6 @@ fn test_physical_mesh2_variants() {
     render_frontend
       .with_device(render_device_handle, |device| {
         let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
         crate::types::GpuResult::Ok(pe)
       })
       .unwrap()
@@ -3459,7 +3449,6 @@ fn test_painting_mode_write_and_verify() {
     render_frontend
       .with_device(render_device_handle, |device| {
         let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
         Ok(pe)
       })
       .unwrap()
@@ -3698,7 +3687,6 @@ fn test_render_multiple_soi_windowless() {
     render_frontend
       .with_device(render_device_handle, |device| {
         let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
         crate::types::GpuResult::Ok(pe)
       })
       .unwrap()
@@ -4137,7 +4125,6 @@ fn test_render_weather_ui() {
     render_frontend
       .with_device(render_device_handle, |device| {
         let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
         crate::types::GpuResult::Ok(pe)
       })
       .unwrap()
@@ -4940,7 +4927,6 @@ fn test_render_text2_basic() {
     render_frontend
       .with_device(render_device_handle, |device| {
         let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
         Ok(pe)
       })
       .unwrap()
@@ -5081,7 +5067,6 @@ fn test_render_text2_styled() {
     render_frontend
       .with_device(render_device_handle, |device| {
         let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
         Ok(pe)
       })
       .unwrap()
@@ -5296,7 +5281,6 @@ fn test_render_text2_street_art() {
     render_frontend
       .with_device(render_device_handle, |device| {
         let pe = device.create_presentation_engine(&params)?;
-        device.init_archetypes(pe)?;
         Ok(pe)
       })
       .unwrap()

@@ -1961,6 +1961,7 @@ impl RenderDevice for Device {
   }
 
   /// Initializes all archetypes in the order they are declared inside `DeviceResources`
+  /// Initializes all archetypes in the order they are declared inside `DeviceResources`
   #[named]
   fn init_archetypes(&self, handle: crate::gpu::PresentationEngineHandle) -> GpuResult<()> {
     struct ExtractedArenas {
@@ -2064,7 +2065,7 @@ impl RenderDevice for Device {
         // Extract the format ONCE before the closure to prevent borrow checking overlap
         let pe_format = pe.format();
 
-        let run = || -> GpuResult<ExtractedArenas> {
+        let mut run = || -> GpuResult<()> {
           macro_rules! init_arch {
             // standard
             ($arena_field:ident, $ensure_fn:ident, $archetype_field:ident, $arena_type:ident, $create_fn:ident) => {
@@ -2182,20 +2183,20 @@ impl RenderDevice for Device {
           init_arch!(bvhwire2, ensure_bvhwire2_shader_modules, bvhwire2_render_archetype, Bvhwire2RenderResourceArchetypeArena, create_bvhwire2_archetype);
           init_arch!(gizmo, ensure_gizmo_shader_modules, gizmo_render_archetype, GizmoRenderResourceArchetypeArena, create_gizmo_archetype);
 
-          Ok(arenas)
+          Ok(())
         };
 
         let result = run();
 
-        Ok((pe, result))
+        Ok((pe, result, arenas))
       })
       .commit(|state, execute_result| {
-        let (pe, result) = execute_result?;
+        let (pe, result, arenas) = execute_result?;
 
         state.live_presentation_engines.insert(handle, pe);
 
-        let arenas = result?;
-
+        // Always save arenas first, even if result is an Error, to prevent resource leaks
+        // and safely reuse successfully established arenas upon subsequent retries.
         state.physical_mesh_render_archetype_arena = arenas.mesh;
         state.physical_mesh2_render_archetype_arena = arenas.mesh2;
         state.sun_render_archetype_arena = arenas.sun;
@@ -2216,6 +2217,8 @@ impl RenderDevice for Device {
         state.bvh_render_archetype_arena = arenas.bvh;
         state.bvhwire2_render_archetype_arena = arenas.bvhwire2;
         state.gizmo_render_archetype_arena = arenas.gizmo;
+
+        result?;
 
         Ok(())
       })?;
