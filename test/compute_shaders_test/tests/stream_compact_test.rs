@@ -38,9 +38,9 @@ fn test_stream_compact() {
       | vk::BufferUsageFlags::TRANSFER_DST,
   );
 
-  // output array size: dispatch (3) + count (1) + pairs (2 uints * total_elements)
+  // output array size: dispatch (3) + count (1) + pairs (12 uints * total_elements)
   // we initialize it to 0
-  let mut packed_out_init = vec![0u32; 4 + test_data.total_elements as usize * 3];
+  let mut packed_out_init = vec![0u32; 4 + test_data.total_elements as usize * 12];
 
   let (packed_buffer, mut packed_alloc, packed_addr) = ctx.create_buffer(
     &packed_out_init,
@@ -70,7 +70,7 @@ fn test_stream_compact() {
   let output_data: Vec<u32> = ctx.read_buffer(
     packed_buffer,
     &mut packed_alloc,
-    4 + test_data.total_elements as usize * 3,
+    4 + test_data.total_elements as usize * 12,
   );
 
   ctx.destroy_buffer(sparse_buffer, sparse_alloc);
@@ -86,7 +86,7 @@ fn test_stream_compact() {
 
   let mut actual_pairs = Vec::new();
   for i in 0..count as usize {
-    actual_pairs.push((output_data[4 + i * 3], output_data[4 + i * 3 + 1]));
+    actual_pairs.push((output_data[4 + i * 12 + 1], output_data[4 + i * 12 + 3]));
   }
   actual_pairs.sort_by_key(|p| p.0);
 

@@ -10,11 +10,11 @@ pub struct CollisionEvent {
 pub fn parse_gpu_packed_pairs(gpu_data: &[u32], count: usize) -> Vec<CollisionEvent> {
   let mut events = Vec::with_capacity(count);
   for i in 0..count {
-    let base = 4 + i * 3;
+    let base = 4 + i * 12;
     events.push(CollisionEvent {
-      entity_a: gpu_data[base],
-      entity_b: gpu_data[base + 1],
-      time_of_impact: f32::from_bits(gpu_data[base + 2]),
+      entity_a: gpu_data[base + 1],
+      entity_b: gpu_data[base + 3],
+      time_of_impact: f32::from_bits(gpu_data[base + 4]),
     });
   }
   events

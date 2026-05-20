@@ -92,6 +92,8 @@ pub struct LcpPushConstants {
     pub collisions: u64,
     pub outputs: u64,
     pub total_clusters: u32,
+    pub rigid_bodies: u64,
+    pub dt: f32,
     pub restitution: f32,
 }
 

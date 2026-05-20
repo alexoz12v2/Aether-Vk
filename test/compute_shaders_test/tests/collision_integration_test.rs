@@ -182,6 +182,9 @@ fn test_gpu_collision_pipeline_integration() {
     collisions_addr: packed_col_addr,
     impulses_addr: lcp_out_addr,
     total_clusters: 1,
+    rigid_bodies_addr: 0,
+    dt: 1.0 / 60.0,
+    restitution: 0.5,
   };
 
   let lcp_pc_bytes = unsafe {

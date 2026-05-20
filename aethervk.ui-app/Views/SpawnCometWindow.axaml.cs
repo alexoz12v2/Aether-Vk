@@ -25,21 +25,16 @@ public partial class SpawnCometWindow : Window
 
   public void SpawnCommand()
   {
-    if (DataContext is SpawnCometViewModel vm && vm.SelectedModel != null)
+    if (DataContext is SpawnCometViewModel vm && vm.SelectedModel != null && vm.FetchedOrbitData != null)
     {
       var result = new SpawnCometResult(
         vm.SelectedModel,
         vm.EntityName,
         vm.PhysicsType,
-        vm.PosX,
-        vm.PosY,
-        vm.PosZ,
-        vm.ScaleX,
-        vm.ScaleY,
-        vm.ScaleZ,
-        vm.Pitch,
-        vm.Yaw,
-        vm.Roll
+        vm.FetchedOrbitData,
+        vm.PosX, vm.PosY, vm.PosZ,
+        vm.ScaleX, vm.ScaleY, vm.ScaleZ,
+        vm.Pitch, vm.Yaw, vm.Roll
       );
       Close(result);
     }
