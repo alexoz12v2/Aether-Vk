@@ -40,16 +40,18 @@ layout(push_constant, scalar) uniform PushConstants {
 } pc;
 
 void main() {
-    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
-        debugPrintfEXT("Hello from ccd.comp!\n");
-    }
-
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= pc.total_particles) return;
 
     BVHNodeAABB my_node = read_bvh_node(pc.particle_bvh, pc.total_particles - 1 + idx); // Leaf node
     uint my_prim_id = my_node.left_child_or_primitive_offset;
     AABB my_aabb = my_node.bound;
+
+    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("Hello from ccd.comp! my_prim_id=%d, aabb_min=(%f,%f,%f) aabb_max=(%f,%f,%f)\n", 
+            my_prim_id, my_aabb.minBounds.x, my_aabb.minBounds.y, my_aabb.minBounds.z, 
+            my_aabb.maxBounds.x, my_aabb.maxBounds.y, my_aabb.maxBounds.z);
+    }
 
     uint stack[64];
     int stackPtr = 0;
@@ -81,6 +83,10 @@ void main() {
                 0, vec3(pc.particle_radius, 0.0, 0.0), transB, other_vel, \
                 1e-3, 10, toi, contact_normal, contact_point, depth \
             ); \
+            if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) { \
+                debugPrintfEXT("EVALUATE_CCD: a=%d b=%d velA=(%f,%f,%f) velB=(%f,%f,%f) colliding=%d\n", \
+                    my_prim_id, other_prim_id, my_vel.x, my_vel.y, my_vel.z, other_vel.x, other_vel.y, other_vel.z, is_colliding ? 1 : 0); \
+            } \
             if (is_colliding && collisions_found < MAX_COLLISIONS_PER_THREAD) { \
                 uint outIdx = idx * MAX_COLLISIONS_PER_THREAD + collisions_found; \
                 pc.output_list.data[outIdx].valid = 1; \

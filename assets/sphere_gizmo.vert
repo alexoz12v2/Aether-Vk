@@ -25,54 +25,67 @@ const float PI = 3.14159265359;
 
 void main() {
     SphereGizmoData data = push.gizmoPtr.gizmos[gl_InstanceIndex];
-    int subDivs = max(4, int(data.subdivisions));
-    int pointsPerRing = subDivs * 2; // Line list needs 2 vertices per segment
-    int totalRingVertices = pointsPerRing * 3; // 3 Rings: XY, YZ, ZX
+    int latSegments = max(4, int(data.subdivisions));
+    int lonSegments = max(4, int(data.subdivisions));
+    
+    // A UV sphere wireframe rendered as a LINE_LIST.
+    // For each latitude segment (except the poles), we draw a horizontal ring segment.
+    // For each longitude segment, we draw a vertical meridian segment.
+    // Number of horizontal lines = (latSegments - 1) * lonSegments
+    // Number of vertical lines = latSegments * lonSegments
+    // Total lines = lonSegments * (2 * latSegments - 1)
+    // Vertices per line = 2
+    int totalSphereVertices = lonSegments * (2 * latSegments - 1) * 2;
     
     // Axes line segments (3 axes * 2 vertices)
-    int axesOffset = totalRingVertices;
+    int axesOffset = totalSphereVertices;
     int totalAxesVertices = 6;
     
-    // Arrowheads: Cone bases (subDivs * 2 lines per axis) + Cone slopes (subDivs * 2 lines per axis)
-    // Actually, simpler arrowhead: just draw a few lines for the cone. Let's do 4 lines per arrowhead.
-    // 4 lines = 8 vertices per arrowhead. 3 arrowheads = 24 vertices.
+    // Arrowheads: 4 lines = 8 vertices per arrowhead. 3 arrowheads = 24 vertices.
     int arrowheadLines = 4;
     int arrowheadVerticesPerAxis = arrowheadLines * 2;
     int totalArrowheadVertices = arrowheadVerticesPerAxis * 3;
     
-    int totalExpectedVertices = totalRingVertices + totalAxesVertices + totalArrowheadVertices;
+    int totalExpectedVertices = totalSphereVertices + totalAxesVertices + totalArrowheadVertices;
     
     vec3 localPos = vec3(0.0);
-    vec3 color = vec3(0.5); // Default grey for rings
+    vec3 color = vec3(1.0); // Default white for the sphere
     bool valid = true;
     
-    if (gl_VertexIndex < totalRingVertices) {
-        // Render rings
-        int ringIdx = gl_VertexIndex / pointsPerRing;
-        int vertexInRing = gl_VertexIndex % pointsPerRing;
+    if (gl_VertexIndex < totalSphereVertices) {
+        // Render UV Sphere wireframe
+        int lineIdx = gl_VertexIndex / 2;
+        int isEndVertex = gl_VertexIndex % 2;
         
-        // In a LINE_LIST, every 2 vertices make a segment.
-        // Vertex 0 -> segment 0, start
-        // Vertex 1 -> segment 0, end
-        // Vertex 2 -> segment 1, start (which is the same point as segment 0, end)
-        // Vertex 3 -> segment 1, end
+        int numHorizontalLines = (latSegments - 1) * lonSegments;
         
-        int segment = vertexInRing / 2;
-        int pointInSegment = vertexInRing % 2;
-        
-        // The angle depends on whether it's the start or end of the segment
-        float angle = float(segment + pointInSegment) * (2.0 * PI / float(subDivs));
         float r = data.radius;
         
-        if (ringIdx == 0) { // XY plane (Blue ring, normal = Z)
-            localPos = vec3(cos(angle)*r, sin(angle)*r, 0.0);
-            color = vec3(0.2, 0.2, 0.8);
-        } else if (ringIdx == 1) { // YZ plane (Red ring, normal = X)
-            localPos = vec3(0.0, cos(angle)*r, sin(angle)*r);
-            color = vec3(0.8, 0.2, 0.2);
-        } else { // ZX plane (Green ring, normal = Y)
-            localPos = vec3(sin(angle)*r, 0.0, cos(angle)*r);
-            color = vec3(0.2, 0.8, 0.2);
+        if (lineIdx < numHorizontalLines) {
+            // Horizontal ring segments
+            int latIdx = (lineIdx / lonSegments) + 1; // +1 to skip the pole
+            int lonIdx = lineIdx % lonSegments;
+            
+            float theta = float(latIdx) * PI / float(latSegments);
+            float phiStart = float(lonIdx) * 2.0 * PI / float(lonSegments);
+            float phiEnd = float(lonIdx + 1) * 2.0 * PI / float(lonSegments);
+            
+            float phi = (isEndVertex == 0) ? phiStart : phiEnd;
+            
+            localPos = vec3(cos(phi) * sin(theta) * r, sin(phi) * sin(theta) * r, cos(theta) * r);
+        } else {
+            // Vertical meridian segments
+            int vertLineIdx = lineIdx - numHorizontalLines;
+            int latIdx = vertLineIdx / lonSegments;
+            int lonIdx = vertLineIdx % lonSegments;
+            
+            float thetaStart = float(latIdx) * PI / float(latSegments);
+            float thetaEnd = float(latIdx + 1) * PI / float(latSegments);
+            float phi = float(lonIdx) * 2.0 * PI / float(lonSegments);
+            
+            float theta = (isEndVertex == 0) ? thetaStart : thetaEnd;
+            
+            localPos = vec3(cos(phi) * sin(theta) * r, sin(phi) * sin(theta) * r, cos(theta) * r);
         }
     } else if (gl_VertexIndex < axesOffset + totalAxesVertices) {
         // Render axes lines

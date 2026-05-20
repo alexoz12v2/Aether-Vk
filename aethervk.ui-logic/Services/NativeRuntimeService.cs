@@ -261,35 +261,85 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
   }
 
-  private void NativeSimulationCallback(ulong sceneId, IntPtr ctx)
+  // A small queue to batch updates before dispatching to UI
+  private readonly System.Collections.Concurrent.ConcurrentQueue<(
+    ulong SceneId,
+    ulong EntityId,
+    ulong ComponentId,
+    IntPtr DataPtr
+  )> _simulationUpdateQueue = new();
+  private bool _isSimulationUpdatePending = false;
+
+  private void NativeSimulationCallback(
+    ulong sceneId,
+    ulong entityId,
+    ulong componentId,
+    IntPtr dataPtr
+  )
   {
-    if (ctx == IntPtr.Zero)
+    if (dataPtr == IntPtr.Zero)
       return;
 
-    uint count = NativeInterop.avkSimulationContext_getChangedEntityCount(ctx, sceneId);
-    if (count > 0)
+    // In a real scenario with a proper byte buffer, we'd copy the data out immediately.
+    // Since our Rust implementation currently passes a pointer to a Boxed trait object,
+    // we must process it synchronously or copy it immediately before the pointer becomes invalid.
+
+    // For this implementation, we will process it directly here to update the underlying models,
+    // and then queue a generic "scene updated" message for the UI.
+
+    var state = _sceneStateManager.GetOrCreateScene(sceneId);
+    if (state.EntityMap.TryGetValue(entityId, out var entity))
     {
-      IntPtr idsPtr = Marshal.AllocHGlobal((int)count * sizeof(ulong));
-      NativeInterop.avkSimulationContext_getChangedEntityIds(ctx, sceneId, idsPtr, count);
+      if (componentId == 1) // Transform
+      {
+        var dto = Marshal.PtrToStructure<NativeInterop.FfiTransform>(dataPtr);
+        var transform = entity.Components.OfType<TransformComponent>().FirstOrDefault();
+        if (transform != null)
+        {
+          transform.SuspendNotifications = true;
+          transform.PosX = dto.Px;
+          transform.PosY = dto.Py;
+          transform.PosZ = dto.Pz;
+          transform.RotW = dto.Rw;
+          transform.RotX = dto.Rx;
+          transform.RotY = dto.Ry;
+          transform.RotZ = dto.Rz;
+          transform.ScaleX = dto.Sx;
+          transform.ScaleY = dto.Sy;
+          transform.ScaleZ = dto.Sz;
+          transform.SuspendNotifications = false;
+        }
+      }
+      else if (componentId == 2) // Camera
+      {
+        var dto = Marshal.PtrToStructure<NativeInterop.FfiCamera>(dataPtr);
+        var camera = entity.Components.OfType<CameraComponent>().FirstOrDefault();
+        if (camera != null)
+        {
+          camera.SuspendNotifications = true;
+          camera.IsOrthographic = dto.IsOrthographic;
+          camera.Fov = dto.Fov;
+          camera.AspectRatio = dto.Aspect;
+          camera.NearPlane = dto.Near;
+          camera.FarPlane = dto.Far;
+          camera.OrthoLeft = dto.OrthoLeft;
+          camera.OrthoRight = dto.OrthoRight;
+          camera.OrthoBottom = dto.OrthoBottom;
+          camera.OrthoTop = dto.OrthoTop;
+          camera.SuspendNotifications = false;
+        }
+      }
+    }
 
-      ulong[] ids = new ulong[count];
-
-      // Use Int64 array for Marshal.Copy since ulong is not supported directly in all standard frameworks
-      long[] signedIds = new long[count];
-      Marshal.Copy(idsPtr, signedIds, 0, (int)count);
-      for (int i = 0; i < count; i++)
-        ids[i] = (ulong)signedIds[i];
-
-      // Fetch component names (omitted for brevity, assume UI will poll via SyncEntities anyway)
-      Marshal.FreeHGlobal(idsPtr);
-
+    // Schedule a single UI update
+    if (!_isSimulationUpdatePending)
+    {
+      _isSimulationUpdatePending = true;
       if (_uiThreadDispatcher != null)
       {
         _uiThreadDispatcher.Dispatch(() =>
         {
-          // Re-use SyncEntities on the changed entities
-          SyncEntities(sceneId); // Optimally, this should only sync `ids`, but syncing all is fine for now
-
+          _isSimulationUpdatePending = false;
           WeakReferenceMessenger.Default.Send(
             new AetherVk.Logic.Messages.SimulationStateUpdatedMessage(sceneId)
           );
@@ -297,7 +347,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       }
       else
       {
-        SyncEntities(sceneId);
+        _isSimulationUpdatePending = false;
         WeakReferenceMessenger.Default.Send(
           new AetherVk.Logic.Messages.SimulationStateUpdatedMessage(sceneId)
         );
@@ -305,11 +355,16 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
   }
 
-  private static void NativeSimulationCallbackStatic(ulong sceneId, IntPtr ctx)
+  private static void NativeSimulationCallbackStatic(
+    ulong sceneId,
+    ulong entityId,
+    ulong componentId,
+    IntPtr dataPtr
+  )
   {
     if (s_currentInstance != null && s_currentInstance.TryGetTarget(out var service))
     {
-      service.NativeSimulationCallback(sceneId, ctx);
+      service.NativeSimulationCallback(sceneId, entityId, componentId, dataPtr);
     }
   }
 

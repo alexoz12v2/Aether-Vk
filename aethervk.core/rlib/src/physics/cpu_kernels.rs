@@ -153,7 +153,7 @@ impl Kernels for CpuScalarKernels {
             }
           }
         })
-        .unwrap_or((0, [1.0, 0.0, 0.0]))
+        .unwrap_or((0, [0.0, 0.0, 0.0]))
     };
 
     scene0.query2::<crate::scene::TransformComponent, crate::scene::AlmanacPlanet, _>(
@@ -220,6 +220,9 @@ impl Kernels for CpuScalarKernels {
         if scene0.has_component::<crate::scene::SunComponent>(entity).into() {
           return; // Already processed
         }
+        if scene0.has_component::<crate::scene::ColliderComponent>(entity).into() {
+          return; // Handled by build_rigid_bodies
+        }
         let t = scene0.global_transform(entity).unwrap_or(transform.clone());
         let parent_id =
           scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
@@ -250,6 +253,7 @@ impl Kernels for CpuScalarKernels {
         if scene0.has_component::<crate::scene::AlmanacPlanet>(entity).into()
           || scene0.has_component::<crate::scene::SunComponent>(entity).into()
           || scene0.has_component::<crate::scene::KinematicComponent>(entity).into()
+          || scene0.has_component::<crate::scene::ColliderComponent>(entity).into()
         {
           return;
         }
@@ -931,10 +935,12 @@ impl Kernels for CpuScalarKernels {
       pos
     };
 
-    let mut items_by_parent: hashbrown::HashMap<u32, alloc::vec::Vec<(Aabb, CpuBvhItem)>> =
-      hashbrown::HashMap::new();
+    let mut flat_items: alloc::vec::Vec<(Aabb, CpuBvhItem)> = alloc::vec::Vec::new();
 
     for (i, kin) in kinematics.data.iter().enumerate() {
+      if kin.shape_data[0] == 0.0 && kin.shape_data[1] == 0.0 && kin.shape_data[2] == 0.0 {
+        continue; // Don't add mathematical frames to the collision tree!
+      }
       let global_pos = get_global_pos(kin.parent_frame_id, kin.transform.position);
       let max_travel = kin.velocity.length();
       let r = kin.scale + max_travel;
@@ -943,7 +949,7 @@ impl Kernels for CpuScalarKernels {
         global_pos + Vec3f32::from_array([r, r, r]),
       );
       // data_index: top bit 1 means kinematic, lower 31 bits are index
-      items_by_parent.entry(kin.parent_frame_id).or_default().push((
+      flat_items.push((
         bounds,
         CpuBvhItem::Primitive((1 << 31) | (i as u32), kin.mu, global_pos),
       ));
@@ -963,7 +969,7 @@ impl Kernels for CpuScalarKernels {
         global_pos + Vec3f32::from_array([r, r, r]),
       );
       // data_index: top bit 0 means dynamic, lower 31 bits are index
-      items_by_parent.entry(dyn_body.parent_frame_id).or_default().push((
+      flat_items.push((
         bounds,
         CpuBvhItem::Primitive(i as u32, dyn_body.mass, global_pos),
       ));
@@ -982,34 +988,14 @@ impl Kernels for CpuScalarKernels {
         global_pos + Vec3f32::from_array([r, r, r]),
       );
       // data_index: second top bit 1 means particle, lower 30 bits are index
-      items_by_parent.entry(p.parent_frame_id).or_default().push((
+      flat_items.push((
         bounds,
         CpuBvhItem::Primitive((1 << 30) | (i as u32), p.mass, global_pos),
       ));
     }
 
-    let macro_frame_id = frames_map
-      .keys()
-      .find(|&&id| frame_types.get(&id) == Some(&(crate::scene::ReferenceFrameType::Macro as u32)))
-      .copied()
-      .unwrap_or(0);
-
     let mut nodes = alloc::vec::Vec::new();
-    let mut macro_items = items_by_parent.remove(&macro_frame_id).unwrap_or_default();
-    if macro_frame_id != 0 {
-      if let Some(mut root_items) = items_by_parent.remove(&0) {
-        macro_items.append(&mut root_items);
-      }
-    }
-
-    for (_, mut items) in items_by_parent {
-      if let Some(root_idx) = MotionBvhTree::build_into(&mut items, &mut nodes) {
-        let root_bounds = nodes[root_idx as usize].bounds;
-        macro_items.push((root_bounds, CpuBvhItem::SubTree(root_idx)));
-      }
-    }
-
-    let tlas_root = MotionBvhTree::build_into(&mut macro_items, &mut nodes);
+    let tlas_root = MotionBvhTree::build_into(&mut flat_items, &mut nodes);
 
     let bvh_tree = MotionBvhTree {
       nodes,
@@ -1221,6 +1207,24 @@ impl Kernels for CpuScalarKernels {
         let shape_a = get_shape(type_a, data_a, mat_a_transformed);
         let shape_b = get_shape(type_b, data_b, mat_b_transformed);
 
+        let center_a = match &shape_a {
+          DynamicShape::Sphere(s) => s.center,
+          DynamicShape::Obb(o) => o.translation(),
+        };
+        let center_b = match &shape_b {
+          DynamicShape::Sphere(s) => s.center,
+          DynamicShape::Obb(o) => o.translation(),
+        };
+
+        #[cfg(test)]
+        aethervk_oshal_rlib::log!(
+          "GJK evaluating: idx_a={}, idx_b={}, A={:?}, B={:?}",
+          idx_a,
+          idx_b,
+          center_a,
+          center_b
+        );
+
         let (dist, pt_a, pt_b) = crate::math::collision::gjk::gjk_distance(&shape_a, &shape_b);
 
         #[cfg(test)]
@@ -1230,11 +1234,21 @@ impl Kernels for CpuScalarKernels {
           let mut new_pair = pair.clone();
           new_pair.penetration_depth = if dist < 0.0 { -dist } else { 0.0 };
           let mut normal = pt_a - pt_b;
+          if dist < 0.0 {
+            normal = -normal;
+          }
           let len = normal.length();
           if len > 1e-6 {
             normal = normal / len;
           } else {
-            normal = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([1.0, 0.0, 0.0]);
+            let diff = center_a - center_b;
+            let diff_len = diff.length();
+            if diff_len > 1e-6 {
+              normal = diff / diff_len;
+            } else {
+              normal =
+                aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([1.0, 0.0, 0.0]);
+            }
           }
           new_pair.contact_normal = [normal.x(), normal.y(), normal.z()];
           new_pair.contact_point = [
@@ -1244,7 +1258,9 @@ impl Kernels for CpuScalarKernels {
           ];
           #[cfg(test)]
           aethervk_oshal_rlib::log!(
-            "COLLISION DETECTED: dist={}, normal={:?}",
+            "COLLISION DETECTED: idx_a={}, idx_b={}, dist={}, normal={:?}",
+            idx_a,
+            idx_b,
             dist,
             new_pair.contact_normal
           );
@@ -1288,6 +1304,7 @@ impl Kernels for CpuScalarKernels {
   fn apply_collision_responses(
     &self,
     _cmd: &mut Self::Cmd,
+    kinematics: &Self::Buffer<KinematicBody>,
     rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
     particles: &mut Self::Buffer<ParticleGpu>,
     collisions: &Self::List<CollisionPair>,
@@ -1297,7 +1314,20 @@ impl Kernels for CpuScalarKernels {
       return Ok(());
     }
 
-    let clusters = group_and_cluster_collisions(collisions.data.clone(), 0.01);
+    #[cfg(test)]
+    aethervk_oshal_rlib::log!(
+      "apply_collision_responses: rigid_bodies.len={}, particles.len={}",
+      rigid_bodies.data.len(),
+      particles.data.len()
+    );
+
+    if rigid_bodies.data.len() > 0 {
+      #[cfg(test)]
+      aethervk_oshal_rlib::log!("rb 0 mass={}", rigid_bodies.data[0].mass);
+    }
+
+    let clusters =
+      crate::physics::cpu_kernels::group_and_cluster_collisions(collisions.data.clone(), 0.01);
     let restitution = if force_inelastic { 0.0 } else { 0.5 };
 
     let dyn_array = rigid_bodies.data.as_mut_slice();
@@ -1306,6 +1336,7 @@ impl Kernels for CpuScalarKernels {
     for cluster in clusters {
       crate::physics::lcp_integration::resolve_cluster_lcp(
         &cluster,
+        &kinematics.data,
         dyn_array,
         p_array,
         restitution,
@@ -1422,7 +1453,7 @@ impl Kernels for CpuSimdKernels {
             }
           }
         })
-        .unwrap_or((0, [1.0, 0.0, 0.0]))
+        .unwrap_or((0, [0.0, 0.0, 0.0]))
     };
 
     scene0.query2::<crate::scene::TransformComponent, crate::scene::AlmanacPlanet, _>(
@@ -1489,6 +1520,9 @@ impl Kernels for CpuSimdKernels {
         if scene0.has_component::<crate::scene::SunComponent>(entity).into() {
           return; // Already processed
         }
+        if scene0.has_component::<crate::scene::ColliderComponent>(entity).into() {
+          return; // Handled by build_rigid_bodies
+        }
         let t = scene0.global_transform(entity).unwrap_or(transform.clone());
         let parent_id =
           scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
@@ -1519,6 +1553,7 @@ impl Kernels for CpuSimdKernels {
         if scene0.has_component::<crate::scene::AlmanacPlanet>(entity).into()
           || scene0.has_component::<crate::scene::SunComponent>(entity).into()
           || scene0.has_component::<crate::scene::KinematicComponent>(entity).into()
+          || scene0.has_component::<crate::scene::ColliderComponent>(entity).into()
         {
           return;
         }
@@ -2337,10 +2372,12 @@ impl Kernels for CpuSimdKernels {
       pos
     };
 
-    let mut items_by_parent: hashbrown::HashMap<u32, alloc::vec::Vec<(Aabb, CpuBvhItem)>> =
-      hashbrown::HashMap::new();
+    let mut flat_items: alloc::vec::Vec<(Aabb, CpuBvhItem)> = alloc::vec::Vec::new();
 
     for (i, kin) in kinematics.data.iter().enumerate() {
+      if kin.shape_data[0] == 0.0 && kin.shape_data[1] == 0.0 && kin.shape_data[2] == 0.0 {
+        continue; // Don't add mathematical frames to the collision tree!
+      }
       let global_pos = get_global_pos(kin.parent_frame_id, kin.transform.position);
       let max_travel = kin.velocity.length();
       let r = kin.scale + max_travel;
@@ -2349,7 +2386,7 @@ impl Kernels for CpuSimdKernels {
         global_pos + Vec3f32::from_array([r, r, r]),
       );
       // data_index: top bit 1 means kinematic, lower 31 bits are index
-      items_by_parent.entry(kin.parent_frame_id).or_default().push((
+      flat_items.push((
         bounds,
         CpuBvhItem::Primitive((1 << 31) | (i as u32), kin.mu, global_pos),
       ));
@@ -2369,7 +2406,7 @@ impl Kernels for CpuSimdKernels {
         global_pos + Vec3f32::from_array([r, r, r]),
       );
       // data_index: top bit 0 means dynamic, lower 31 bits are index
-      items_by_parent.entry(dyn_body.parent_frame_id).or_default().push((
+      flat_items.push((
         bounds,
         CpuBvhItem::Primitive(i as u32, dyn_body.mass, global_pos),
       ));
@@ -2388,34 +2425,14 @@ impl Kernels for CpuSimdKernels {
         global_pos + Vec3f32::from_array([r, r, r]),
       );
       // data_index: second top bit 1 means particle, lower 30 bits are index
-      items_by_parent.entry(p.parent_frame_id).or_default().push((
+      flat_items.push((
         bounds,
         CpuBvhItem::Primitive((1 << 30) | (i as u32), p.mass, global_pos),
       ));
     }
 
-    let macro_frame_id = frames_map
-      .keys()
-      .find(|&&id| frame_types.get(&id) == Some(&(crate::scene::ReferenceFrameType::Macro as u32)))
-      .copied()
-      .unwrap_or(0);
-
     let mut nodes = alloc::vec::Vec::new();
-    let mut macro_items = items_by_parent.remove(&macro_frame_id).unwrap_or_default();
-    if macro_frame_id != 0 {
-      if let Some(mut root_items) = items_by_parent.remove(&0) {
-        macro_items.append(&mut root_items);
-      }
-    }
-
-    for (_, mut items) in items_by_parent {
-      if let Some(root_idx) = MotionBvhTree::build_into(&mut items, &mut nodes) {
-        let root_bounds = nodes[root_idx as usize].bounds;
-        macro_items.push((root_bounds, CpuBvhItem::SubTree(root_idx)));
-      }
-    }
-
-    let tlas_root = MotionBvhTree::build_into(&mut macro_items, &mut nodes);
+    let tlas_root = MotionBvhTree::build_into(&mut flat_items, &mut nodes);
 
     let bvh_tree = MotionBvhTree {
       nodes,
@@ -2627,6 +2644,24 @@ impl Kernels for CpuSimdKernels {
         let shape_a = get_shape(type_a, data_a, mat_a_transformed);
         let shape_b = get_shape(type_b, data_b, mat_b_transformed);
 
+        let center_a = match &shape_a {
+          DynamicShape::Sphere(s) => s.center,
+          DynamicShape::Obb(o) => o.translation(),
+        };
+        let center_b = match &shape_b {
+          DynamicShape::Sphere(s) => s.center,
+          DynamicShape::Obb(o) => o.translation(),
+        };
+
+        #[cfg(test)]
+        aethervk_oshal_rlib::log!(
+          "GJK evaluating: idx_a={}, idx_b={}, A={:?}, B={:?}",
+          idx_a,
+          idx_b,
+          center_a,
+          center_b
+        );
+
         let (dist, pt_a, pt_b) = crate::math::collision::gjk::gjk_distance(&shape_a, &shape_b);
 
         #[cfg(test)]
@@ -2636,11 +2671,21 @@ impl Kernels for CpuSimdKernels {
           let mut new_pair = pair.clone();
           new_pair.penetration_depth = if dist < 0.0 { -dist } else { 0.0 };
           let mut normal = pt_a - pt_b;
+          if dist < 0.0 {
+            normal = -normal;
+          }
           let len = normal.length();
           if len > 1e-6 {
             normal = normal / len;
           } else {
-            normal = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([1.0, 0.0, 0.0]);
+            let diff = center_a - center_b;
+            let diff_len = diff.length();
+            if diff_len > 1e-6 {
+              normal = diff / diff_len;
+            } else {
+              normal =
+                aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([1.0, 0.0, 0.0]);
+            }
           }
           new_pair.contact_normal = [normal.x(), normal.y(), normal.z()];
           new_pair.contact_point = [
@@ -2650,7 +2695,9 @@ impl Kernels for CpuSimdKernels {
           ];
           #[cfg(test)]
           aethervk_oshal_rlib::log!(
-            "COLLISION DETECTED: dist={}, normal={:?}",
+            "COLLISION DETECTED: idx_a={}, idx_b={}, dist={}, normal={:?}",
+            idx_a,
+            idx_b,
             dist,
             new_pair.contact_normal
           );
@@ -2694,6 +2741,7 @@ impl Kernels for CpuSimdKernels {
   fn apply_collision_responses(
     &self,
     _cmd: &mut Self::Cmd,
+    kinematics: &Self::Buffer<KinematicBody>,
     rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
     particles: &mut Self::Buffer<ParticleGpu>,
     collisions: &Self::List<CollisionPair>,
@@ -2703,7 +2751,20 @@ impl Kernels for CpuSimdKernels {
       return Ok(());
     }
 
-    let clusters = group_and_cluster_collisions(collisions.data.clone(), 0.01);
+    #[cfg(test)]
+    aethervk_oshal_rlib::log!(
+      "apply_collision_responses: rigid_bodies.len={}, particles.len={}",
+      rigid_bodies.data.len(),
+      particles.data.len()
+    );
+
+    if rigid_bodies.data.len() > 0 {
+      #[cfg(test)]
+      aethervk_oshal_rlib::log!("rb 0 mass={}", rigid_bodies.data[0].mass);
+    }
+
+    let clusters =
+      crate::physics::cpu_kernels::group_and_cluster_collisions(collisions.data.clone(), 0.01);
     let restitution = if force_inelastic { 0.0 } else { 0.5 };
 
     let dyn_array = rigid_bodies.data.as_mut_slice();
@@ -2712,6 +2773,7 @@ impl Kernels for CpuSimdKernels {
     for cluster in clusters {
       crate::physics::lcp_integration::resolve_cluster_lcp(
         &cluster,
+        &kinematics.data,
         dyn_array,
         p_array,
         restitution,

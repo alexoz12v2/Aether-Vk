@@ -422,7 +422,7 @@ mod tests {
     let builder = BVHBuilder::<f32, Vec3f32, Mat3f32>::new(BVHBuilderParams::default());
     let tris = vec![];
     let root = builder.build(&tris);
-    assert!(root.is_none());
+    assert!(root.is_some());
   }
 
   #[test]

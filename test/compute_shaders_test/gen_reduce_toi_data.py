@@ -26,7 +26,7 @@ def generate_test_data(num_pairs, out_path):
         pA_id = i * 2
         pB_id = i * 2 + 1
         
-        pairs.extend([pA_id, pB_id])
+        pairs.extend([0, pA_id, 0, pB_id, 0, 0, 0, 0, 0, 0, 0, 0])
         
         # Set pos
         def set_particle(p_id, pos, vel):

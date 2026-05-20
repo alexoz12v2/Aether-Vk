@@ -246,6 +246,7 @@ where
         // Apply either an elastic or inelastic response, but always at the proper rewritten time t_c
         kernels.apply_collision_responses(
           &mut cmd,
+          &kinematics,
           &mut rigid_bodies,
           &mut particles,
           &compacted,

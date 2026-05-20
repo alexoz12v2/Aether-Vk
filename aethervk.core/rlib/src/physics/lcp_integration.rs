@@ -6,6 +6,7 @@ use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
 
 pub fn resolve_cluster_lcp(
   cluster: &[CollisionPair],
+  kinematics: &[crate::gpu::KinematicBody],
   rigid_bodies: &mut [RigidBodyGpu],
   particles: &mut [ParticleGpu],
   restitution: f32,
@@ -34,8 +35,8 @@ pub fn resolve_cluster_lcp(
   let get_velocity =
     |idx: usize, rigid_bodies: &[RigidBodyGpu], particles: &[ParticleGpu]| -> Option<Vec3f32> {
       if (idx & (1 << 31)) != 0 {
-        // Kinematic body velocity not currently extracted for collision response in this simplified solver
-        Some(Vec3f32::zero())
+        let i = idx & !(1 << 31);
+        kinematics.get(i).map(|k| k.velocity)
       } else if (idx & (1 << 30)) != 0 {
         let i = idx & !(1 << 30);
         particles.get(i).map(|p| Vec3f32::from_array(p.velocity))
@@ -122,7 +123,9 @@ pub fn resolve_cluster_lcp(
 
     #[cfg(test)]
     aethervk_oshal_rlib::log!(
-      "LCP Setup: a_ii={}, b_i={}, v_rel_n={}, bias={}, depth={}",
+      "LCP Setup: idx_a={}, idx_b={}, a_ii={}, b_i={}, v_rel_n={}, bias={}, depth={}",
+      idx_a_i,
+      idx_b_i,
       a_matrix[i * m + i],
       b_vector[i],
       v_rel_n,
@@ -156,7 +159,43 @@ pub fn resolve_cluster_lcp(
     let inv_m_a_i = if m_a_i > 0.0 { 1.0 / m_a_i } else { 0.0 };
     let inv_m_b_i = if m_b_i > 0.0 { 1.0 / m_b_i } else { 0.0 };
 
-    add_velocity(idx_a_i, impulse_vec * inv_m_a_i, rigid_bodies, particles);
-    add_velocity(idx_b_i, -impulse_vec * inv_m_b_i, rigid_bodies, particles);
+    let impulse_a = impulse_vec * inv_m_a_i;
+    let impulse_b = -impulse_vec * inv_m_b_i;
+
+    // The impulse is currently in Global Space, but object velocities are strictly Local Space!
+    // We must rotate the impulse vector backwards (Global -> Local) using the object's transform
+    let mut apply_local_impulse = |idx: usize, global_dv: Vec3f32| {
+      if (idx & (1 << 31)) != 0 || (idx & (1 << 30)) != 0 {
+        // Particles and kinematics (currently) aren't receiving dynamic impulse responses
+        // but if they were, we would need their frame inverse here as well.
+        add_velocity(idx, global_dv, rigid_bodies, particles);
+      } else {
+        if let Some(rb) = rigid_bodies.get_mut(idx) {
+          // rb.rotation is a 3x3 matrix storing the local-to-global rotation
+          // Its transpose acts as the global-to-local rotation
+          use aethervk_oshal_rlib::math::matrix::{
+            Matrix, Matrix3, MatrixVectorMul, mat3::Mat3f32,
+          };
+          let rot_mat = Mat3f32::from_array(&[
+            rb.rotation[0][0],
+            rb.rotation[0][1],
+            rb.rotation[0][2],
+            rb.rotation[1][0],
+            rb.rotation[1][1],
+            rb.rotation[1][2],
+            rb.rotation[2][0],
+            rb.rotation[2][1],
+            rb.rotation[2][2],
+          ]);
+          let local_dv = rot_mat.transpose().mul_vector(global_dv);
+          let mut v = Vec3f32::from_array(rb.linear_velocity);
+          v += local_dv;
+          rb.linear_velocity = [v.x(), v.y(), v.z()];
+        }
+      }
+    };
+
+    apply_local_impulse(idx_a_i, impulse_a);
+    apply_local_impulse(idx_b_i, impulse_b);
   }
 }

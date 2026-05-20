@@ -40,10 +40,11 @@ def generate_test_data(out_path):
             uint_to_float(left if prim_count == 0 else prim_offset),
             uint_to_float(right),
             uint_to_float(prim_count),
-            uint_to_float(0), # node_type
             uint_to_float(0), # parent_idx
+            uint_to_float(0), # node_type
             mass,
-            com[0], com[1], com[2]
+            com[0], com[1], com[2],
+            0.0 # _pad
         ]
         
     nodes = [None] * 7

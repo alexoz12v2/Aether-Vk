@@ -1127,7 +1127,7 @@ pub unsafe extern "C" fn avkSimulationContext_getChangedComponentNames(
         // But since these are strings we insert, let's create a CString and leak it, or just copy it.
         // Better: use a pre-allocated buffer per FFI call or leak CString for now.
         // To be safe, we will assume C# copies the string immediately.
-        if let Ok(c_str) = alloc::ffi::CString::new(name.clone()) {
+        if let Ok(c_str) = alloc::ffi::CString::new(alloc::format!("{}", name)) {
           unsafe { *out_names.add(count as usize) = c_str.into_raw() };
         }
         count += 1;
@@ -1237,7 +1237,7 @@ pub unsafe extern "C" fn avkSimulationContext_setBreadcrumbCallback(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_setSimulationCallback(
-  cb: Option<extern "C" fn(u64, *mut core::ffi::c_void)>,
+  cb: Option<extern "C" fn(u64, u64, u64, *const core::ffi::c_void)>,
 ) {
   SimulationContext::set_simulation_callback(cb)
 }

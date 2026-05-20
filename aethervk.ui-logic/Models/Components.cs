@@ -103,6 +103,8 @@ public partial class CameraComponent : NativeComponent
 {
   public override string Name => "Camera";
 
+  public bool SuspendNotifications { get; set; } = false;
+
   [ObservableProperty]
   private float _fov = 45.0f;
 

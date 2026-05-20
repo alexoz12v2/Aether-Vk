@@ -595,6 +595,7 @@ impl Component for FollowingComponent {}
 pub struct HiddenComponent {}
 impl Component for HiddenComponent {}
 
+/// TODO: Deduplicate (in math::physics there's this exact thing)
 /// A custom force emitter applying physics on rigid bodies and particles
 #[derive(Clone, Copy, Debug)]
 pub enum ForceEmitterComponent {

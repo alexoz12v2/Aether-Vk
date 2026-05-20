@@ -160,6 +160,22 @@ fn test_imex_integration_all_shaders() {
     )
   };
   println!("Running lbvh_build");
+  let prepass_spv_path = "../../assets/sim/lbvh_prepass.comp.spv";
+  let prepass_push_constants_bytes = unsafe {
+    std::slice::from_raw_parts(
+      &pc_lbvh as *const LbvhPushConstants as *const u8,
+      8, // Only needs the bvh_addr which is the first 8 bytes
+    )
+  };
+  run_compute_shader(
+    &ctx,
+    prepass_spv_path,
+    prepass_push_constants_bytes,
+    1,
+    1,
+    1,
+  );
+
   run_compute_shader(
     &ctx,
     "../../assets/sim/lbvh_build.comp.spv",

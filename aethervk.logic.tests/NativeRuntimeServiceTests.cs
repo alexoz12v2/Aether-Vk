@@ -36,6 +36,65 @@ namespace AetherVk.Logic.Tests
     }
 
     [Fact]
+    public void NativeSimulationCallback_ShouldUpdateTransformComponent()
+    {
+      // Arrange
+      ulong sceneId = 100;
+      ulong entityId = 200;
+
+      var entity = new AetherVk.Logic.Models.Entity(sceneId, entityId, "Test");
+      var transform = new AetherVk.Logic.Models.TransformComponent();
+      entity.Components.Add(transform);
+
+      _stateManager.GetOrCreateScene(sceneId).EntityMap[entityId] = entity;
+
+      // Create dummy unmanaged memory to simulate FfiTransform payload
+      var dto = new AetherVk.Logic.Services.NativeInterop.FfiTransform
+      {
+        Px = 1.0f,
+        Py = 2.0f,
+        Pz = 3.0f,
+        Rw = 0.0f,
+        Rx = 0.0f,
+        Ry = 1.0f,
+        Rz = 0.0f,
+        Sx = 2.0f,
+        Sy = 2.0f,
+        Sz = 2.0f,
+      };
+
+      int size =
+        System.Runtime.InteropServices.Marshal.SizeOf<AetherVk.Logic.Services.NativeInterop.FfiTransform>();
+      IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
+      System.Runtime.InteropServices.Marshal.StructureToPtr(dto, ptr, false);
+
+      try
+      {
+        // Act
+        // Access the private NativeSimulationCallback method via reflection to test parsing
+        var method = typeof(NativeRuntimeService).GetMethod(
+          "NativeSimulationCallback",
+          System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
+        );
+
+        // componentId 1 = Transform
+        method?.Invoke(_service, new object[] { sceneId, entityId, 1ul, ptr });
+
+        // Assert
+        Assert.Equal(1.0f, transform.PosX);
+        Assert.Equal(2.0f, transform.PosY);
+        Assert.Equal(3.0f, transform.PosZ);
+        Assert.Equal(0.0f, transform.RotW);
+        Assert.Equal(1.0f, transform.RotY);
+        Assert.Equal(2.0f, transform.ScaleX);
+      }
+      finally
+      {
+        System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
+      }
+    }
+
+    [Fact]
     public void Initialization_ShouldSucceedWithVulkanBackend()
     {
       try

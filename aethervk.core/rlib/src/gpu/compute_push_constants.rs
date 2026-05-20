@@ -153,6 +153,7 @@ pub struct LcpPushConstants {
   pub collisions_addr: u64,
   pub impulses_addr: u64,
   pub total_clusters: u32,
+  pub restitution: f32,
 }
 
 #[repr(C)]

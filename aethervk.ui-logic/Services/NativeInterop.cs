@@ -675,7 +675,12 @@ public static class NativeInterop
     CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) }
   )]
 #endif
-  public delegate void SimulationCallback(ulong sceneId, IntPtr ctx);
+  public delegate void SimulationCallback(
+    ulong sceneId,
+    ulong entityId,
+    ulong componentId,
+    IntPtr dataPtr
+  );
 
 #if NETSTANDARD2_0
   [UnmanagedFunctionPointer(CallingConvention.Cdecl)]

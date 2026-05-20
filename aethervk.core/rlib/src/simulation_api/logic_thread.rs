@@ -470,7 +470,10 @@ fn process_command_internal(
       if let Some(ext_id) =
         scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
       {
-        scene_read.mark_component_changed(ext_id, "Transform");
+        scene_read.mark_component_changed(
+          ext_id,
+          <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+        );
       }
       Ok(SimulationTaskResult::None)
     }
@@ -531,12 +534,18 @@ fn process_command_internal(
       if let Some(ext_id) =
         scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
       {
-        scene_read.mark_component_changed(ext_id, "Transform");
+        scene_read.mark_component_changed(
+          ext_id,
+          <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+        );
       }
       if let Some(ext_id) =
         scene_read.entity_map.iter().find(|&(_, v)| *v == cursor_entity).map(|(k, _)| *k)
       {
-        scene_read.mark_component_changed(ext_id, "Transform");
+        scene_read.mark_component_changed(
+          ext_id,
+          <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+        );
       }
       Ok(SimulationTaskResult::None)
     }
@@ -558,7 +567,10 @@ fn process_command_internal(
           if let Some(ext_id) =
             scene_read.entity_map.iter().find(|&(_, v)| *v == id).map(|(k, _)| *k)
           {
-            scene_read.mark_component_changed(ext_id, "Transform");
+            scene_read.mark_component_changed(
+              ext_id,
+              <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+            );
           }
 
           Some(())
@@ -626,7 +638,10 @@ fn process_command_internal(
             .find(|&(_, &v)| v == entity_id)
             .map(|(&k, _)| k)
             .unwrap_or(0);
-          read_ctx.mark_component_changed(ext_id, "Transform");
+          read_ctx.mark_component_changed(
+            ext_id,
+            <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+          );
         }
       }
       Ok(SimulationTaskResult::None)
@@ -928,11 +943,13 @@ fn execute_simulation_tick(
             changed = true;
           });
           if changed {
-            scene_ctx.mark_component_changed(*ext_id, "Transform");
-            // Also mark Comet and Planet and Sun
-            scene_ctx.mark_component_changed(*ext_id, "Comet");
-            scene_ctx.mark_component_changed(*ext_id, "Planet");
-            scene_ctx.mark_component_changed(*ext_id, "Sun");
+            use crate::scene::ForeignSerializable;
+            scene_ctx
+              .mark_component_changed(*ext_id, crate::scene::TransformComponent::COMPONENT_ID);
+            // Also mark Comet and Planet and Sun (using dummy IDs until they implement ForeignSerializable)
+            scene_ctx.mark_component_changed(*ext_id, 100); // Comet
+            scene_ctx.mark_component_changed(*ext_id, 101); // Planet
+            scene_ctx.mark_component_changed(*ext_id, 102); // Sun
           }
         }
       }
@@ -959,7 +976,53 @@ fn execute_simulation_tick(
   let fptr = crate::simulation_api::SIMULATION_CALLBACK.load(core::sync::atomic::Ordering::Relaxed);
   if !fptr.is_null() {
     let tm = alloc::sync::Arc::clone(&ctx.task_manager);
-    let ctx_ptr = ctx.ctx_ptr; // SendPtrMut is Send
+
+    // Extract changed DTOs before entering the async tasklet
+    let mut changes_to_stream = alloc::vec::Vec::new();
+    let scenes = ctx.scenes.read();
+    if let Some(scene_ctx_guard) = scenes.get(&scene_id) {
+      let scene_ctx = scene_ctx_guard.read();
+      let changed = scene_ctx.changed_entities.read();
+
+      for (ext_id, components) in changed.iter() {
+        if let Some(internal_entity) = scene_ctx.entity_map.get(ext_id) {
+          // Check for Transform
+          if components.contains(
+            &<crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+          ) {
+            if let Some(dto) = scene_ctx.scene.with_component(
+              *internal_entity,
+              |c: &crate::scene::TransformComponent| {
+                use crate::scene::ForeignSerializable;
+                c.to_foreign()
+              },
+            ) {
+              changes_to_stream.push((*ext_id, <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID, alloc::boxed::Box::new(dto) as alloc::boxed::Box<dyn core::any::Any + Send>));
+            }
+          }
+          // Check for Camera
+          if components.contains(
+            &<crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+          ) {
+            if let Some(dto) = scene_ctx.scene.with_component(
+              *internal_entity,
+              |c: &crate::scene::CameraComponent| {
+                use crate::scene::ForeignSerializable;
+                c.to_foreign()
+              },
+            ) {
+              changes_to_stream.push((
+                *ext_id,
+                <crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+                alloc::boxed::Box::new(dto) as alloc::boxed::Box<dyn core::any::Any + Send>,
+              ));
+            }
+          }
+          // We can add more components here as they implement ForeignSerializable
+        }
+      }
+    }
+
     use aethervk_oshal_rlib::os::pool::tasklet::ThreadPoolExt;
     let _ = ctx.thread_pool.spawn_tasklet(None, move || {
       let fptr =
@@ -973,9 +1036,15 @@ fn execute_simulation_tick(
         }
         oshal::os::native::this_thread::yield_now();
       }
-      let cb: extern "C" fn(u64, *mut core::ffi::c_void) = unsafe { core::mem::transmute(fptr) };
-      let _dummy = ctx_ptr;
-      cb(scene_id, ctx_ptr.get());
+
+      if !fptr.is_null() {
+        let cb: extern "C" fn(u64, u64, u64, *const core::ffi::c_void) =
+          unsafe { core::mem::transmute(fptr) };
+        for (ext_id, comp_id, boxed_dto) in changes_to_stream {
+          let data_ptr = &*boxed_dto as *const _ as *const core::ffi::c_void;
+          cb(scene_id, ext_id, comp_id, data_ptr);
+        }
+      }
     });
   }
 
@@ -1154,7 +1223,10 @@ fn try_snap_entity(
     if let Some(ext_id) =
       scene_read.entity_map.iter().find(|&(_, v)| *v == snap_entity).map(|(k, _)| *k)
     {
-      scene_read.mark_component_changed(ext_id, "Transform");
+      scene_read.mark_component_changed(
+        ext_id,
+        <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+      );
     }
   }
   res

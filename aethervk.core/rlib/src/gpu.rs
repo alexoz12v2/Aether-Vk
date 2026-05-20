@@ -1870,6 +1870,7 @@ pub trait Kernels: Send + Sync {
   fn apply_collision_responses(
     &self,
     cmd: &mut Self::Cmd,
+    kinematics: &Self::Buffer<KinematicBody>,
     rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
     particles: &mut Self::Buffer<ParticleGpu>,
     collisions: &Self::List<CollisionPair>,
