@@ -14,8 +14,8 @@ def generate_test_data(num_elements, out_path):
         particle_a = i
         particle_b = (i + 1) * 2
         
-        # sparse array has uvec4 data
-        sparse_data.extend([valid, particle_a, particle_b, 0])
+        # sparse array has SparseCollisionData (11 words)
+        sparse_data.extend([valid, particle_a, particle_b, 0, 0, 0, 0, 0, 0, 0, 0])
         
         if valid == 1:
             expected_pairs.extend([particle_a, particle_b])

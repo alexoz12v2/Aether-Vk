@@ -12,11 +12,20 @@ def generate_test_data(out_path):
 
     particles = [0.0] * (10 * subgroup_size * ((num_particles + subgroup_size - 1) // subgroup_size))
     
-    emitters = [0.0] * 4
-    emitters[0] = 0.0
-    emitters[1] = 0.0
-    emitters[2] = 0.0
-    emitters[3] = 100000.0
+    emitters = [0.0] * 12
+    emitters[0] = 0.0 # pos.x
+    emitters[1] = 0.0 # pos.y
+    emitters[2] = 0.0 # pos.z
+    emitters[3] = 100000.0 # mu
+    emitters[4] = 0.0 # normal.x
+    emitters[5] = 0.0 # normal.y
+    emitters[6] = 0.0 # normal.z
+    import struct
+    emitters[7] = struct.unpack('<f', struct.pack('<I', 0))[0] # type_id (0 = Gravity)
+    emitters[8] = 0.0 # trunc_distance
+    emitters[9] = 1.0 # scale_factor
+    emitters[10] = 0.0 # pad0
+    emitters[11] = 0.0 # pad1
 
     for i in range(num_particles):
         block_idx = i // subgroup_size

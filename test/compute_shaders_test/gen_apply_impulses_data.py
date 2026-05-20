@@ -7,8 +7,12 @@ def generate_test_data(out_path):
     num_particles = 64
     particles = [0.0] * (10 * subgroup_size * ((num_particles + subgroup_size - 1) // subgroup_size))
     
-    # 3 dummy zeros for dispatch_x, y, z, then 2 collisions
-    collisions = [0, 0, 0, 2, 0, 1, 2, 3] # dispatch(3), count = 2, pair 0 (0,1), pair 1 (2,3)
+    # 3 dummy zeros for dispatch_x, y, z, then 1 for count = 2, then 2 collisions (each 12 uints/floats)
+    collisions = [0, 0, 0, 2]
+    # pair 0
+    collisions.extend([0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0])
+    # pair 1
+    collisions.extend([0, 2, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0])
     impulses = [10.0, 20.0, 30.0, -5.0, -10.0, -15.0]
 
     for i in range(num_particles):

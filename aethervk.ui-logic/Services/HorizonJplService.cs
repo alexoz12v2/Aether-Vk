@@ -3,7 +3,6 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
-using System.Net.Http.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -134,19 +133,12 @@ public class HorizonJplService
 
   private static double ParseValue(string text, string pattern)
   {
-    var match = Regex.Match(text, pattern, RegexOptions.IgnoreCase);
-    if (
-      match.Success
-      && double.TryParse(
-        match.Groups[1].Value,
-        System.Globalization.CultureInfo.InvariantCulture,
-        out double value
-      )
-    )
-    {
-      return value;
-    }
-    return 0.0;
+      var match = Regex.Match(text, pattern, RegexOptions.IgnoreCase);
+      if (match.Success && double.TryParse(match.Groups[1].Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double value))
+      {
+          return value;
+      }
+      return 0.0;
   }
 
   public async Task FetchCometsAsync()

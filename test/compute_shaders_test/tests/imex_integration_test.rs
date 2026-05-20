@@ -279,6 +279,9 @@ fn test_imex_integration_all_shaders() {
     collisions_addr: pk_addr,
     impulses_addr: imp_addr,
     total_clusters: std::cmp::max(1, total_clusters),
+    rigid_bodies_addr: 0,
+    dt: 0.016,
+    restitution: 0.5,
   };
   let bytes_lcp = unsafe {
     std::slice::from_raw_parts(

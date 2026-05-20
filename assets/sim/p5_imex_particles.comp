@@ -94,6 +94,11 @@ void main() {
         em.trunc_distance = pc.emitters.emitters[e].trunc_distance;
         em.scale_factor = pc.emitters.emitters[e].scale_factor;
         
+        if (SHOULD_DEBUG_PRINT && global_id == 0) {
+            debugPrintfEXT("Emitter %d: pos=(%f, %f, %f) mu=%f type=%d scale=%f", 
+                e, em.position.x, em.position.y, em.position.z, em.mu, em.type_id, em.scale_factor);
+        }
+        
         if (em.type_id == 0) {
             vec3 r = em.position - q_next;
             // Apply scale_factor to convert distance to LCA units, then force back

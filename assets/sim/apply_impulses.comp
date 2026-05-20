@@ -39,6 +39,8 @@ void atomicAddFloat(uint index, float val) {
 void main() {
     if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
         debugPrintfEXT("Hello from apply_impulses.comp!\n");
+        // Print offsets of fields in PackedPair
+        // Since we can't do offsetof directly, we can't easily print them, but we can print the raw data!
     }
     uint global_id = gl_GlobalInvocationID.x;
     if (global_id >= pc.collisions.count) return;

@@ -50,12 +50,22 @@ def generate_test_data(out_path):
     rigid_bodies[24] = 0.0; rigid_bodies[25] = 1.0; rigid_bodies[26] = 0.0
     rigid_bodies[27] = 0.0; rigid_bodies[28] = 0.0; rigid_bodies[29] = 1.0
 
-    # Emitter layout
     # vec3 position (3)
     # float mu (1)
-    emitters = [0.0] * 4
-    emitters[0] = 0.0; emitters[1] = 0.0; emitters[2] = 0.0
+    # vec3 normal (3)
+    # uint type_id (1)
+    # float trunc_distance (1)
+    # float scale_factor (1)
+    # uint _pad (2)
+    import struct
+    emitters = [0.0] * 12
+    emitters[0] = 0.0; emitters[1] = 0.0; emitters[2] = 0.0 # pos
     emitters[3] = 1000.0 * 100.0 * 100.0 # to produce some force at distance 100
+    emitters[4] = 0.0; emitters[5] = 0.0; emitters[6] = 0.0 # normal
+    emitters[7] = struct.unpack('<f', struct.pack('<I', 0))[0] # type_id (0 = Gravity)
+    emitters[8] = 0.0 # trunc_distance
+    emitters[9] = 1.0 # scale_factor
+    emitters[10] = 0.0; emitters[11] = 0.0 # pad
 
     # Python simulation of what the shader should do
     # Force at mid point:

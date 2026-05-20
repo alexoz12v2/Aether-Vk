@@ -19,53 +19,53 @@ fn test_complex_compaction_and_clustering() {
 
   // Create a massive sparse collision buffer
   let total_elements = 10_000;
-  let mut sparse_in = vec![0u32; total_elements as usize * 4];
+  let mut sparse_in = vec![0u32; total_elements as usize * 11];
 
   // Generate complex 3-way and multi-point intersections
   // Cluster 1: A=1, B=2, C=3 (triangle)
-  sparse_in[10 * 4] = 1;
-  sparse_in[10 * 4 + 1] = 1;
-  sparse_in[10 * 4 + 2] = 2;
-  sparse_in[10 * 4 + 3] = f32::to_bits(0.5);
-  sparse_in[25 * 4] = 1;
-  sparse_in[25 * 4 + 1] = 2;
-  sparse_in[25 * 4 + 2] = 3;
-  sparse_in[25 * 4 + 3] = f32::to_bits(0.5);
-  sparse_in[50 * 4] = 1;
-  sparse_in[50 * 4 + 1] = 1;
-  sparse_in[50 * 4 + 2] = 3;
-  sparse_in[50 * 4 + 3] = f32::to_bits(0.5);
+  sparse_in[10 * 11] = 1;
+  sparse_in[10 * 11 + 1] = 1;
+  sparse_in[10 * 11 + 2] = 2;
+  sparse_in[10 * 11 + 3] = f32::to_bits(0.5);
+  sparse_in[25 * 11] = 1;
+  sparse_in[25 * 11 + 1] = 2;
+  sparse_in[25 * 11 + 2] = 3;
+  sparse_in[25 * 11 + 3] = f32::to_bits(0.5);
+  sparse_in[50 * 11] = 1;
+  sparse_in[50 * 11 + 1] = 1;
+  sparse_in[50 * 11 + 2] = 3;
+  sparse_in[50 * 11 + 3] = f32::to_bits(0.5);
 
   // Cluster 2: Star topology around 10
   for i in 11..20 {
     let idx = 100 + i;
-    sparse_in[idx * 4] = 1;
-    sparse_in[idx * 4 + 1] = 10;
-    sparse_in[idx * 4 + 2] = i as u32;
-    sparse_in[idx * 4 + 3] = f32::to_bits(0.1);
+    sparse_in[idx * 11] = 1;
+    sparse_in[idx * 11 + 1] = 10;
+    sparse_in[idx * 11 + 2] = i as u32;
+    sparse_in[idx * 11 + 3] = f32::to_bits(0.1);
   }
 
   // Cluster 3: Linear chain 30-31-32-33
-  sparse_in[200 * 4] = 1;
-  sparse_in[200 * 4 + 1] = 30;
-  sparse_in[200 * 4 + 2] = 31;
-  sparse_in[200 * 4 + 3] = f32::to_bits(0.8);
-  sparse_in[201 * 4] = 1;
-  sparse_in[201 * 4 + 1] = 31;
-  sparse_in[201 * 4 + 2] = 32;
-  sparse_in[201 * 4 + 3] = f32::to_bits(0.8);
-  sparse_in[202 * 4] = 1;
-  sparse_in[202 * 4 + 1] = 32;
-  sparse_in[202 * 4 + 2] = 33;
-  sparse_in[202 * 4 + 3] = f32::to_bits(0.8);
+  sparse_in[200 * 11] = 1;
+  sparse_in[200 * 11 + 1] = 30;
+  sparse_in[200 * 11 + 2] = 31;
+  sparse_in[200 * 11 + 3] = f32::to_bits(0.8);
+  sparse_in[201 * 11] = 1;
+  sparse_in[201 * 11 + 1] = 31;
+  sparse_in[201 * 11 + 2] = 32;
+  sparse_in[201 * 11 + 3] = f32::to_bits(0.8);
+  sparse_in[202 * 11] = 1;
+  sparse_in[202 * 11 + 1] = 32;
+  sparse_in[202 * 11 + 2] = 33;
+  sparse_in[202 * 11 + 3] = f32::to_bits(0.8);
 
   // Some random noise
   for i in 1000..5000 {
     if i % 7 == 0 {
-      sparse_in[i * 4] = 1;
-      sparse_in[i * 4 + 1] = (i * 13 % 1000) as u32 + 50;
-      sparse_in[i * 4 + 2] = (i * 17 % 1000) as u32 + 50;
-      sparse_in[i * 4 + 3] = f32::to_bits(0.3);
+      sparse_in[i * 11] = 1;
+      sparse_in[i * 11 + 1] = (i * 13 % 1000) as u32 + 50;
+      sparse_in[i * 11 + 2] = (i * 17 % 1000) as u32 + 50;
+      sparse_in[i * 11 + 3] = f32::to_bits(0.3);
     }
   }
 
@@ -121,11 +121,11 @@ fn test_complex_compaction_and_clustering() {
   // Now let's extract CPU sparse events
   let mut cpu_events = Vec::new();
   for i in 0..total_elements as usize {
-    if sparse_in[i * 4] == 1 {
+    if sparse_in[i * 11] == 1 {
       cpu_events.push(CollisionEvent {
-        entity_a: sparse_in[i * 4 + 1],
-        entity_b: sparse_in[i * 4 + 2],
-        time_of_impact: f32::from_bits(sparse_in[i * 4 + 3]),
+        entity_a: sparse_in[i * 11 + 1],
+        entity_b: sparse_in[i * 11 + 2],
+        time_of_impact: f32::from_bits(sparse_in[i * 11 + 3]),
       });
     }
   }
