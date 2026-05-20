@@ -7,12 +7,12 @@ use crate::{
     PipelineKey, PipelineKeyable, PresentationEngineHandle, RenderDevice, RenderDeviceExt,
     RenderableInstanceId, TextureFlags,
     frame::ResourceUploadResult,
-    vulkan::device::{
+    vulkan::{device::{
       archetypes_struct::Archetypes,
       locks::{DebugTrackedMutex, DebugTrackedRwLock},
       shader_manager::Shader,
       swapchain::PresentationState,
-    },
+    }, physics::VulkanComputeKernels},
   },
   gpu_backends::vulkan::{
     self,
@@ -1210,6 +1210,7 @@ pub struct Device {
   pub instance: Arc<instance::Instance>,
 
   pub device: LogicalDevice,
+  pub kernels: VulkanComputeKernels,
 
   pub res: Arc<DebugTrackedRwLock<DeviceResources>>,
   callback_stop_signal: Arc<core::sync::atomic::AtomicBool>,
@@ -1234,10 +1235,10 @@ enum QueueId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Queue {
-  handle: vk::Queue,
-  index: u32,
-  family_index: u32,
+pub(super) struct Queue {
+  pub handle: vk::Queue,
+  pub index: u32,
+  pub family_index: u32,
 }
 
 // ~28 bytes per queue. total for `MAX_QUEUE_COUNT` = 4 at 96 bytes
@@ -1322,6 +1323,10 @@ impl Queues {
 }
 
 impl Device {
+  pub fn get_compute_queue(&self) -> Queue {
+    self.queues.get_compute_queue()
+  }
+
   /// Initializes a Device directly into the provided memory location
   /// This avoids returning a Device by value (which would probably cause stack overflow)
   #[named]

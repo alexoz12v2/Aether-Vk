@@ -15,13 +15,15 @@ namespace AetherVk.Services
     private readonly FileWatcherService _fileWatcherService;
     private readonly ConsoleService _consoleService;
     private readonly IUiThreadDispatcher _uiThreadDispatcher;
+    private readonly HorizonJplService _horizonService;
 
     public AvaloniaWindowService(
       NativeRuntimeService runtimeService,
       BreadcrumbService breadcrumbService,
       FileWatcherService fileWatcherService,
       ConsoleService consoleService,
-      IUiThreadDispatcher uiThreadDispatcher
+      IUiThreadDispatcher uiThreadDispatcher,
+      HorizonJplService horizonService
     )
     {
       _runtimeService = runtimeService;
@@ -29,6 +31,7 @@ namespace AetherVk.Services
       _fileWatcherService = fileWatcherService;
       _consoleService = consoleService;
       _uiThreadDispatcher = uiThreadDispatcher;
+      _horizonService = horizonService;
     }
 
     private Window? GetMainWindow()
@@ -39,6 +42,7 @@ namespace AetherVk.Services
       {
         return desktop.MainWindow;
       }
+
       return null;
     }
 
@@ -105,9 +109,10 @@ namespace AetherVk.Services
         return;
 
       var inputRegistry =
-        Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<AetherVk.Logic.Input.InputRegistry>(
-          App.Host!.Services
-        );
+        Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
+          .GetRequiredService<AetherVk.Logic.Input.InputRegistry>(
+            App.Host!.Services
+          );
 
       var settingsWindow = new Views.SettingsWindow
       {
@@ -146,12 +151,14 @@ namespace AetherVk.Services
           ),
         };
         var inputRegistry =
-          Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<AetherVk.Logic.Input.InputRegistry>(
-            App.Host!.Services
-          );
+          Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
+            .GetRequiredService<AetherVk.Logic.Input.InputRegistry>(
+              App.Host!.Services
+            );
         _ = new AetherVk.Input.GlobalInputRouter(meshViewer, inputRegistry);
         meshViewer.Show(mainWindow);
       }
+
       return Task.CompletedTask;
     }
 
@@ -183,15 +190,16 @@ namespace AetherVk.Services
     }
 
     public async Task<ulong> ShowSpawnCometDialogAsync(
-      System.Collections.Generic.IEnumerable<AetherVk.Logic.ViewModels.ImportedModelItem> models
-    )
+      System.Collections.Generic.IEnumerable<AetherVk.Logic.ViewModels.ImportedModelItem> models)
     {
       var mainWindow = GetMainWindow();
       if (mainWindow == null)
         return 0;
 
-      var dialog = new Views.SpawnCometWindow { DataContext = new SpawnCometViewModel(models) };
-
+      var dialog = new Views.SpawnCometWindow
+      {
+        DataContext = new SpawnCometViewModel(models, _horizonService),
+      };
       var result = await dialog.ShowDialog<SpawnCometResult?>(mainWindow);
       if (result != null)
       {

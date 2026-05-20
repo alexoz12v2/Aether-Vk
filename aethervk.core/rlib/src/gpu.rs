@@ -1685,8 +1685,10 @@ impl PresentationEngineParams {
 /// Abstract handle for a compute queue (Vulkan/Metal Command Buffer, CUDA Stream, ...)
 /// Represents a thread of execution
 pub trait CommandBuffer: Send + Sync {
+  type Context<'a>;
+
   /// Dispatches the recorded command graph to the backend hardware queue
-  fn submit(&mut self) -> EngineResult<()>;
+  fn submit(&mut self, ctx: &Context<'_>) -> EngineResult<()>;
 }
 
 /// Continuous array residing entirely in backend memory
@@ -1704,7 +1706,7 @@ pub trait DeviceBuffer<T>: Send + Sync {
   /// Enqueues a DMA copy-back command to the CPU. the returned Future does NOT
   /// borrow `cmd`, allowing you to submit the command buffer while the tasklet
   /// awaits the GPU synchronization primitive (fence)
-  fn enqueue_read_to_cpu<'a>(&self, cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'a>>;
+  fn enqueue_read_to_cpu(&self, cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'_>>;
 }
 
 /// A handle representing a pending GPU-to-CPU DMA transfer.

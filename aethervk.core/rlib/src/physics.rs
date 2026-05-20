@@ -12,3 +12,6 @@ pub mod physics_scene;
 
 #[cfg(test)]
 mod integration_tests;
+
+#[cfg(test)]
+mod vulkan_integration_tests;

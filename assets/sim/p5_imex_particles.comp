@@ -33,16 +33,38 @@ struct ForceEmitter {
     uint _pad[2];
 };
 
+struct KinematicBody {
+    uint entity_id_low;
+    uint entity_id_high;
+    vec3 position;
+    vec4 rotation;
+    vec3 scale_vec;
+    vec3 velocity;
+    uint parent_frame_id;
+    float mu;
+    uint own_frame_id;
+    uint frame_type;
+    float scale;
+    uint shape_type;
+    float shape_data[3];
+};
+
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer EmitterArray {
     ForceEmitter emitters[];
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer KinematicArray {
+    KinematicBody bodies[];
 };
 
 layout(push_constant, scalar) uniform PushConstants {
     ParticleData particles;
     EmitterArray emitters;
+    KinematicArray kinematics;
     float dt;
     uint total_particles;
     uint num_emitters;
+    uint num_kinematics;
 } pc;
 
 void main() {
@@ -85,6 +107,54 @@ void main() {
 
     // Evaluate Forces at q_{n+1}
     vec3 f_next = vec3(0.0);
+
+    // Extract particle's parent frame ID (stored in metadata, offset 11 in original, but wait - 
+    // particles buffer in AOSOA has: 
+    // 0: px, 1: py, 2: pz, 3: vx, 4: vy, 5: vz, 6: mass, 7: fx, 8: fy, 9: fz.
+    // Wait, where is parent_frame_id? It's not in the 10-float particle data!
+    // The Rust ParticleGpu struct is:
+    // position (3), velocity (3), mass (1), force (3), entity_id (2), parent_frame_id (1), original_index (1)
+    // Wait! In GPU shaders, ParticleData is defined as a float array and we only use the first 10.
+    // If the struct is larger (14 floats = 56 bytes), we should just read it.
+    // Let's read parent_frame_id from offset 12 (since entity_id is 10,11).
+    uint parent_frame_id = floatBitsToUint(pc.particles.data[base + 12 * SUBGROUP_SIZE]);
+
+    // LCA: Find parent's scale and position
+    float parent_scale = 1.0;
+    vec3 parent_macro_pos = vec3(0.0);
+    for (uint i = 0; i < pc.num_kinematics; ++i) {
+        if (pc.kinematics.bodies[i].own_frame_id == parent_frame_id) {
+            parent_scale = pc.kinematics.bodies[i].scale;
+            parent_macro_pos = pc.kinematics.bodies[i].position;
+        }
+    }
+
+    // LCA: Gravity from Kinematic Bodies
+    for (uint i = 0; i < pc.num_kinematics; ++i) {
+        KinematicBody kb = pc.kinematics.bodies[i];
+        if (parent_frame_id == kb.own_frame_id) {
+            // Local interaction (origin)
+            vec3 r = vec3(0.0) - q_next;
+            float dist_sq = dot(r, r);
+            if (dist_sq > 1e-6) {
+                float dist = sqrt(dist_sq);
+                float local_mu = (kb.frame_type == 1) ? kb.mu / (parent_scale * parent_scale * parent_scale) : kb.mu;
+                f_next += r * (local_mu * mass / (dist_sq * dist));
+            }
+        } else if (kb.frame_type == 0 && parent_frame_id != kb.own_frame_id) {
+            // Interaction with macro body
+            vec3 macro_pos_in_micro = (kb.position - parent_macro_pos) / parent_scale;
+            vec3 r = macro_pos_in_micro - q_next;
+            float dist_sq = dot(r, r);
+            if (dist_sq > 1e-6) {
+                float dist = sqrt(dist_sq);
+                float local_mu = kb.mu / (parent_scale * parent_scale * parent_scale);
+                f_next += r * (local_mu * mass / (dist_sq * dist));
+            }
+        }
+    }
+
+    // Forces from explicitly defined Emitters
     for (uint e = 0; e < pc.num_emitters; ++e) {
         ForceEmitter em;
         em.position = pc.emitters.emitters[e].position;
