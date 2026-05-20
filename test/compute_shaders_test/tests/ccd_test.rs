@@ -51,7 +51,7 @@ fn test_ccd() {
   // We now output to a SparseCollisions array, max 16 collisions per particle.
   let max_collisions_per_thread = 16;
   let total_slots = test_data.total_particles * max_collisions_per_thread;
-  let mut packed_out_init = vec![0u32; total_slots as usize * 4];
+  let mut packed_out_init = vec![0u32; total_slots as usize * 11];
 
   let (output_buffer, mut output_alloc, output_addr) = ctx.create_buffer(
     &packed_out_init,
@@ -59,6 +59,7 @@ fn test_ccd() {
       | vk::BufferUsageFlags::TRANSFER_SRC
       | vk::BufferUsageFlags::TRANSFER_DST,
   );
+
   let push_constants = PushConstants {
     particle_bvh: bvh_addr,
     output_list: output_addr,
@@ -82,16 +83,17 @@ fn test_ccd() {
   run_compute_shader(&ctx, spv_path, push_constants_bytes, dispatch_x, 1, 1);
 
   let output_data: Vec<u32> =
-    ctx.read_buffer(output_buffer, &mut output_alloc, total_slots as usize * 4);
+    ctx.read_buffer(output_buffer, &mut output_alloc, total_slots as usize * 11);
+
   ctx.destroy_buffer(bvh_buffer, bvh_alloc);
   ctx.destroy_buffer(particles_buffer, particles_alloc);
   ctx.destroy_buffer(output_buffer, output_alloc);
 
   let mut actual_pairs = Vec::new();
   for i in 0..total_slots as usize {
-    let valid = output_data[i * 4];
+    let valid = output_data[i * 11];
     if valid == 1 {
-      actual_pairs.push((output_data[i * 4 + 1], output_data[i * 4 + 2]));
+      actual_pairs.push((output_data[i * 11 + 1], output_data[i * 11 + 2]));
     }
   }
   actual_pairs.sort_by_key(|p| p.0);

@@ -39,7 +39,9 @@ impl SimulationContext {
   }
 
   /// TODO: Document this item
-  pub fn set_simulation_callback(cb: Option<extern "C" fn(u64, *mut core::ffi::c_void)>) {
+  pub fn set_simulation_callback(
+    cb: Option<extern "C" fn(u64, u64, u64, *const core::ffi::c_void)>,
+  ) {
     let ptr = match cb {
       Some(f) => f as *mut (),
       None => core::ptr::null_mut(),

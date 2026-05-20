@@ -984,7 +984,7 @@ pub struct SceneContext {
   pub physics_engine_type: Arc<RwLock<PhysicsEngineType>>,
   pub time_state: Arc<RwLock<SceneTimeState>>,
   pub presentation_engines: Arc<RwLock<BTreeMap<PresentationEngineHandle, PresentationEngineData>>>,
-  pub changed_entities: Arc<RwLock<BTreeMap<u64, BTreeSet<String>>>>,
+  pub changed_entities: Arc<RwLock<BTreeMap<u64, BTreeSet<u64>>>>,
   pub delta_buffer: Arc<RwLock<alloc::boxed::Box<[u64]>>>,
   pub custom_render_callback: Option<CustomRenderCallback>,
   pub debug_name: alloc::string::String,
@@ -1134,9 +1134,9 @@ impl SceneContext {
   }
 
   /// TODO: Document this item
-  pub fn mark_component_changed(&self, entity_id: u64, component_name: &str) {
+  pub fn mark_component_changed(&self, entity_id: u64, component_id: u64) {
     let mut changed = self.changed_entities.write();
-    changed.entry(entity_id).or_insert_with(BTreeSet::new).insert(component_name.to_string());
+    changed.entry(entity_id).or_insert_with(BTreeSet::new).insert(component_id);
   }
 }
 

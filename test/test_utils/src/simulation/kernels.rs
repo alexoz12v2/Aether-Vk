@@ -401,6 +401,7 @@ impl Kernels for CpuKernels {
   fn apply_collision_responses(
     &self,
     _cmd: &mut Self::Cmd,
+    _kinematics: &Self::Buffer<KinematicBody>,
     _rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
     _particles: &mut Self::Buffer<ParticleGpu>,
     _collisions: &Self::List<CollisionPair>,

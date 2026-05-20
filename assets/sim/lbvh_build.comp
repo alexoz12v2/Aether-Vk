@@ -162,7 +162,7 @@ void main() {
     // Part 3: Bottom-Up AABB and Mass/CoM Refitting
     // ------------------------------------------------------------------------
     uint current = pc.bvh.nodes[leaf_idx].parent_idx;
-    while (true) {
+    while (current != 0xFFFFFFFF) {
         uint old_val = atomicAdd(pc.counters.flags[current], 1);
         if (old_val == 0) {
             // First thread to arrive. Terminate.
@@ -196,7 +196,6 @@ void main() {
         
         memoryBarrierBuffer();
         
-        if (current == 0) break;
         current = pc.bvh.nodes[current].parent_idx;
     }
 }

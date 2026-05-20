@@ -92,6 +92,7 @@ pub struct LcpPushConstants {
     pub collisions: u64,
     pub outputs: u64,
     pub total_clusters: u32,
+    pub restitution: f32,
 }
 
 #[repr(C)]
@@ -163,25 +164,100 @@ pub struct PhysicsPipelines {
 
 impl PhysicsPipelines {
   /// TODO: Document this item
-  pub fn new(_config: &PhysicsPipelineConfig) -> Self {
-    // Placeholder, in reality this would compile shaders and create pipelines
+  pub fn new(device: &ash::Device, _config: &PhysicsPipelineConfig) -> Self {
+    let push_constant_range = vk::PushConstantRange::default()
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .offset(0)
+        .size(128); // Max typical push constant size
+
+    let layout_info = vk::PipelineLayoutCreateInfo::default()
+        .push_constant_ranges(core::slice::from_ref(&push_constant_range));
+
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }.unwrap();
+
+    let create_pipeline = |spv_path: &str| -> vk::Pipeline {
+        let spv_code = std::fs::read(spv_path).unwrap_or_else(|_| panic!("Failed to read {}", spv_path));
+        let (prefix, code, suffix) = unsafe { spv_code.align_to::<u32>() };
+        assert!(prefix.is_empty() && suffix.is_empty());
+
+        let shader_info = vk::ShaderModuleCreateInfo::default().code(code);
+        let shader_module = unsafe { device.create_shader_module(&shader_info, None) }.unwrap();
+
+        let main_name = std::ffi::CString::new("main").unwrap();
+
+        let mut spec_map_entries = alloc::vec::Vec::new();
+        let mut spec_data = alloc::vec::Vec::new();
+        let sg_size = 32u32;
+        spec_map_entries.push(vk::SpecializationMapEntry {
+            constant_id: 0,
+            offset: 0,
+            size: 4,
+        });
+        spec_data.extend_from_slice(&sg_size.to_le_bytes());
+
+        let debug_shaders = 1u32;
+        spec_map_entries.push(vk::SpecializationMapEntry {
+            constant_id: 10,
+            offset: 4,
+            size: 4,
+        });
+        spec_data.extend_from_slice(&debug_shaders.to_le_bytes());
+
+        let spec_info = vk::SpecializationInfo::default()
+            .map_entries(&spec_map_entries)
+            .data(&spec_data);
+
+        let stage_info = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::COMPUTE)
+            .module(shader_module)
+            .name(&main_name)
+            .specialization_info(&spec_info);
+
+        let compute_info = vk::ComputePipelineCreateInfo::default()
+            .stage(stage_info)
+            .layout(pipeline_layout);
+
+        let pipeline = unsafe {
+            device.create_compute_pipelines(
+                vk::PipelineCache::null(),
+                core::slice::from_ref(&compute_info),
+                None,
+            )
+        }.unwrap()[0];
+
+        unsafe { device.destroy_shader_module(shader_module, None); }
+        pipeline
+    };
+
+    // Need to adjust path depending on where the test runs from. 
+    // Assuming root of workspace or test dir. We'll use absolute-ish or relative to workspace.
+    // For safety, let's use a known path relative to the crate root or check multiple.
+    let base_dir = if std::path::Path::new("assets/sim/p1-2_imex_particles.comp.spv").exists() {
+        "assets/sim"
+    } else if std::path::Path::new("../../assets/sim/p1-2_imex_particles.comp.spv").exists() {
+        "../../assets/sim"
+    } else {
+        panic!("Could not find shaders directory!");
+    };
+
     Self {
-      pipeline_layout: vk::PipelineLayout::null(),
-      emit_particles: vk::Pipeline::null(),
-      p1_2_imex: vk::Pipeline::null(),
-      p3_4_imex: vk::Pipeline::null(),
-      lbvh_prepass: vk::Pipeline::null(),
-      lbvh_build: vk::Pipeline::null(),
-      ccd: vk::Pipeline::null(),
-      ccd_rigidbody: vk::Pipeline::null(),
-      stream_compact: vk::Pipeline::null(),
-      reduce_toi: vk::Pipeline::null(),
-      lcp_solver: vk::Pipeline::null(),
-      apply_impulses: vk::Pipeline::null(),
-      barnes_hut: vk::Pipeline::null(),
-      p5_imex: vk::Pipeline::null(),
-      broad_phase: vk::Pipeline::null(),
+        pipeline_layout,
+        emit_particles: create_pipeline(&format!("{}/emit_particles.comp.spv", base_dir)),
+        p1_2_imex: create_pipeline(&format!("{}/p1-2_imex_particles.comp.spv", base_dir)),
+        p3_4_imex: create_pipeline(&format!("{}/p3-4_imex_rigidbody_imr.comp.spv", base_dir)),
+        lbvh_prepass: create_pipeline(&format!("{}/lbvh_prepass.comp.spv", base_dir)),
+        lbvh_build: create_pipeline(&format!("{}/lbvh_build.comp.spv", base_dir)),
+        ccd: create_pipeline(&format!("{}/ccd.comp.spv", base_dir)),
+        ccd_rigidbody: create_pipeline(&format!("{}/narrow_ccd_rigidbody.comp.spv", base_dir)),
+        stream_compact: create_pipeline(&format!("{}/stream_compact.comp.spv", base_dir)),
+        reduce_toi: create_pipeline(&format!("{}/reduce_toi.comp.spv", base_dir)),
+        lcp_solver: create_pipeline(&format!("{}/lcp_solver.comp.spv", base_dir)),
+        apply_impulses: create_pipeline(&format!("{}/apply_impulses.comp.spv", base_dir)),
+        barnes_hut: create_pipeline(&format!("{}/barnes_hut.comp.spv", base_dir)),
+        p5_imex: create_pipeline(&format!("{}/p5_imex_particles.comp.spv", base_dir)),
+        broad_phase: create_pipeline(&format!("{}/broad_phase.comp.spv", base_dir)),
     }
+  }
   }
 }
 
@@ -866,11 +942,14 @@ impl Kernels for VulkanComputeKernels {
         let wg_size = 256;
         let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
 
+        let num_nodes = (total_particles * 2).max(1) as usize;
+        let mut bvh_buffer = self.allocate_device_buffer::<crate::gpu::BvhNodeAABBGpu>(num_nodes, vk::BufferUsageFlags::STORAGE_BUFFER)?;
+
         let pc = LbvhPushConstants {
-            bvh_addr: self.addresses.bvh_nodes,
+            bvh_addr: bvh_buffer.address, // self.addresses.bvh_nodes,
             sorted_morton_addr: self.addresses.sorted_morton,
             counters_addr: self.addresses.atomic_counters,
-            particles_addr: self.addresses.particle_data,
+            particles_addr: particles.address, // self.addresses.particle_data,
             num_primitives: total_particles,
             particle_radius: 1.0, 
             dt: dt.as_seconds_f32(),
@@ -888,7 +967,8 @@ impl Kernels for VulkanComputeKernels {
             self.device.cmd_pipeline_barrier(cmd.cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
         }
 
-        Ok(VulkanMotionBvh { buffer: vk::Buffer::null(), allocation: None, allocator: self.allocator })
+        let alloc = bvh_buffer.allocation.take();
+        Ok(VulkanMotionBvh { buffer: bvh_buffer.buffer, allocation: alloc, allocator: self.allocator })
     }
 
     fn self_intersect_scene(
@@ -901,10 +981,13 @@ impl Kernels for VulkanComputeKernels {
         let wg_size = 32;
         let dispatch_groups = (total_entities + wg_size - 1) / wg_size;
 
+        let max_candidates = 10000; // Placeholder
+        let mut candidates_buffer = self.allocate_device_buffer::<CollisionPair>(max_candidates, vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER)?;
+
         let pc = crate::gpu::compute_push_constants::BroadPhasePushConstants {
             tlas_bvh_addr: self.addresses.bvh_nodes,
             scene_entities_addr: self.addresses.particle_data, // Placeholder
-            overlapping_pairs_addr: self.addresses.ccd_candidates,
+            overlapping_pairs_addr: candidates_buffer.address, // self.addresses.ccd_candidates,
             tlas_root_index: 0,
             total_entities,
         };
@@ -920,7 +1003,9 @@ impl Kernels for VulkanComputeKernels {
                 .dst_access_mask(vk::AccessFlags::SHADER_READ);
             self.device.cmd_pipeline_barrier(cmd.cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
         }
-        Ok(VulkanList { buffer: vk::Buffer::null(), address: 0, capacity: 0, allocation: None, allocator: self.allocator, _marker: core::marker::PhantomData })
+        
+        let alloc = candidates_buffer.allocation.take();
+        Ok(VulkanList { buffer: candidates_buffer.buffer, address: candidates_buffer.address, capacity: candidates_buffer.capacity, allocation: alloc, allocator: self.allocator, _marker: core::marker::PhantomData })
     }
 
     fn intersect_instances(
@@ -931,9 +1016,12 @@ impl Kernels for VulkanComputeKernels {
       _rigid_bodies: &Self::Buffer<RigidBodyGpu>,
       _particles: &Self::Buffer<ParticleGpu>,
     ) -> EngineResult<Self::List<CollisionPair>> {
+        let max_contacts = 10000; // Placeholder
+        let mut output_list = self.allocate_device_buffer::<CollisionPair>(max_contacts, vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER)?;
+
         let pc = CcdPushConstants {
             particle_bvh: self.addresses.bvh_nodes,
-            output_list: self.addresses.ccd_candidates, // Actually this should read potentials and write exact contacts
+            output_list: output_list.address, // self.addresses.ccd_candidates,
             root_index: 0,
             total_particles: 10000, // Should be passed dynamically
         };
@@ -942,7 +1030,8 @@ impl Kernels for VulkanComputeKernels {
         unsafe {
             self.device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.ccd);
             self.device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytes);
-            // In a real scenario, dispatch indirect based on potentials count
+            
+            // Dispatch indirect using the potentials buffer
             self.device.cmd_dispatch_indirect(cmd.cmd, potentials.buffer, 0);
             
             let barrier = vk::MemoryBarrier::default()
@@ -951,22 +1040,26 @@ impl Kernels for VulkanComputeKernels {
             self.device.cmd_pipeline_barrier(cmd.cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
         }
         
-        Ok(VulkanList { buffer: vk::Buffer::null(), address: 0, capacity: 0, allocation: None, allocator: self.allocator, _marker: core::marker::PhantomData })
+        let alloc = output_list.allocation.take();
+        Ok(VulkanList { buffer: output_list.buffer, address: output_list.address, capacity: output_list.capacity, allocation: alloc, allocator: self.allocator, _marker: core::marker::PhantomData })
     }
 
     fn compact_collisions(
         &self,
         cmd: &mut Self::Cmd,
-        _globals: &Self::List<CollisionPair>,
+        globals: &Self::List<CollisionPair>,
         _time_delta: timeus_t,
     ) -> EngineResult<Self::List<CollisionPair>> {
-        let total_elements = 10000; // Max Candidates placeholder
+        let total_elements = globals.capacity() as u32;
         let wg_size = 256;
         let dispatch_groups = (total_elements + wg_size - 1) / wg_size;
 
+        let max_packed = total_elements as usize; // Max possible is all valid
+        let mut packed_out = self.allocate_device_buffer::<CollisionPair>(max_packed, vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER)?;
+
         let pc = StreamCompactPushConstants {
-            sparse_in: self.addresses.ccd_candidates,
-            packed_out: self.addresses.packed_collisions,
+            sparse_in: globals.address, // self.addresses.ccd_candidates,
+            packed_out: packed_out.address, // self.addresses.packed_collisions,
             total_elements,
             _pad: 0,
         };
@@ -982,18 +1075,22 @@ impl Kernels for VulkanComputeKernels {
                 .dst_access_mask(vk::AccessFlags::SHADER_READ);
             self.device.cmd_pipeline_barrier(cmd.cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
         }
-        Ok(VulkanList { buffer: vk::Buffer::null(), address: 0, capacity: 0, allocation: None, allocator: self.allocator, _marker: core::marker::PhantomData })
+        
+        let alloc = packed_out.allocation.take();
+        Ok(VulkanList { buffer: packed_out.buffer, address: packed_out.address, capacity: packed_out.capacity, allocation: alloc, allocator: self.allocator, _marker: core::marker::PhantomData })
     }
 
     fn find_earliest_collision(
         &self,
         cmd: &mut Self::Cmd,
-        _compacted: &Self::List<CollisionPair>,
+        compacted: &Self::List<CollisionPair>,
     ) -> EngineResult<Self::Buffer<timeus_t>> {
+        let mut out_toi = self.allocate_device_buffer::<timeus_t>(1, vk::BufferUsageFlags::STORAGE_BUFFER)?;
+
         let pc = ReduceToiPushConstants {
             particles: self.addresses.particle_data,
-            collisions: self.addresses.packed_collisions,
-            out_toi: self.addresses.reduce_toi,
+            collisions: compacted.address, // self.addresses.packed_collisions,
+            out_toi: out_toi.address, // self.addresses.reduce_toi,
             particle_radius: 1.0,
             dt: 0.016,
         };
@@ -1002,38 +1099,50 @@ impl Kernels for VulkanComputeKernels {
         unsafe {
             self.device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.reduce_toi);
             self.device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytes);
-            // Packed collisions buffer is passed in via the struct or globals buffer somehow.
-            // Since `packed_collisions` is just an address, we can't `cmd_dispatch_indirect` off of `u64` directly.
-            // We need the actual `vk::Buffer`. 
-            // Wait, we can't directly get the buffer from the address here without it being passed.
-            // But we can just use the `compacted.buffer`.
-            self.device.cmd_dispatch_indirect(cmd.cmd, _compacted.buffer, 0);
+            
+            self.device.cmd_dispatch_indirect(cmd.cmd, compacted.buffer, 0);
             
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
                 .dst_access_mask(vk::AccessFlags::SHADER_READ);
             self.device.cmd_pipeline_barrier(cmd.cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
         }
-        Ok(VulkanBuffer { buffer: vk::Buffer::null(), address: 0, capacity: 0, allocation: None, allocator: self.allocator, _marker: core::marker::PhantomData })
+        
+        let alloc = out_toi.allocation.take();
+        Ok(VulkanBuffer { buffer: out_toi.buffer, address: out_toi.address, capacity: out_toi.capacity, allocation: alloc, allocator: self.allocator, _marker: core::marker::PhantomData })
     }
 
     fn apply_collision_responses(
-        &self,
-        cmd: &mut Self::Cmd,
-        _rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
-        _particles: &mut Self::Buffer<ParticleGpu>,
-        collisions: &Self::List<CollisionPair>,
-        _force_inelastic: bool,
+      &self,
+      cmd: &mut Self::Cmd,
+      _kinematics: &Self::Buffer<KinematicBody>,
+      _rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
+      particles: &mut Self::Buffer<ParticleGpu>,
+      collisions: &Self::List<CollisionPair>,
+      force_inelastic: bool,
     ) -> EngineResult<()> {
+        let max_contacts = collisions.capacity() as usize;
+        let impulses_buffer = self.allocate_device_buffer::<[f32; 3]>(max_contacts, vk::BufferUsageFlags::STORAGE_BUFFER)?;
+
+        let restitution_val = if force_inelastic { 0.0 } else { 0.5 };
+
         // LCP Solver
         let total_clusters = 100; // Unused when using indirect
         let pc_lcp = LcpPushConstants {
-            particles: self.addresses.particle_data,
-            collisions: self.addresses.packed_collisions,
-            outputs: self.addresses.impulses,
+            particles: particles.address, // self.addresses.particle_data,
+            collisions: collisions.address, // self.addresses.packed_collisions,
+            outputs: impulses_buffer.address, // self.addresses.impulses,
             total_clusters,
+            restitution: restitution_val,
         };
         let bytes_lcp = unsafe { core::slice::from_raw_parts(&pc_lcp as *const _ as *const u8, core::mem::size_of::<LcpPushConstants>()) };
+
+        let pc_apply = ApplyImpulsesPushConstants {
+            particles_addr: particles.address,
+            collisions_addr: collisions.address,
+            impulses_addr: impulses_buffer.address,
+        };
+        let bytes_apply = unsafe { core::slice::from_raw_parts(&pc_apply as *const _ as *const u8, core::mem::size_of::<ApplyImpulsesPushConstants>()) };
 
         unsafe {
             self.device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.lcp_solver);
@@ -1049,6 +1158,7 @@ impl Kernels for VulkanComputeKernels {
         // Apply Impulses
         unsafe {
             self.device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.apply_impulses);
+            self.device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytes_apply);
             self.device.cmd_dispatch_indirect(cmd.cmd, collisions.buffer, 0);
             
             let barrier = vk::MemoryBarrier::default()

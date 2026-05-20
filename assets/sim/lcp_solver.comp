@@ -47,6 +47,7 @@ layout(push_constant, scalar) uniform PushConstants {
     uint total_clusters;
     RigidBodyArray rigid_bodies;
     float dt;
+    float restitution;
 } pc;
 
 #define MAX_BODIES_PER_ISLAND 64
@@ -219,7 +220,7 @@ void main() {
             // SOLVE NORMAL (Non-Penetration)
             // ----------------------------------------------------
             float jv_n = dot(v_rel, normal);
-            float lambda_n = eff_M_n * (-jv_n + bias);
+            float lambda_n = eff_M_n * (-(1.0 + pc.restitution) * jv_n + bias);
 
             // Clamp total accumulated normal impulse (Must be pushing, not pulling)
             float old_acc_n = accumulated_normal[local_id];

@@ -622,7 +622,7 @@ impl Archetypes {
     ref_alloc,
     |gi| {
       gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
-        .with_pipeline_flags(PipelineFlags::empty())
+        .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE)
         .with_stencil_compare_op(StencilCompareOp::None)
         .with_stencil_logic_op(StencilLogicOp::Replace)
         .with_stencil_reference(255)

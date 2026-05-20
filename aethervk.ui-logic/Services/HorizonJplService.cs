@@ -3,9 +3,32 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Net.Http.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace AetherVk.Logic.Services;
+
+public class PlanetOrbitData
+{
+  public double SemiMajorAxis { get; set; }
+  public double Eccentricity { get; set; }
+  public double Inclination { get; set; }
+  public double MeanAnomaly { get; set; }
+  public string RawConstants { get; set; } = string.Empty;
+}
+
+public class HorizonsJsonResponse
+{
+  [System.Text.Json.Serialization.JsonPropertyName("signature")]
+  public object? Signature { get; set; }
+
+  [System.Text.Json.Serialization.JsonPropertyName("result")]
+  public string? Result { get; set; }
+
+  [System.Text.Json.Serialization.JsonPropertyName("version")]
+  public string? Version { get; set; }
+}
 
 public class HorizonJplService
 {
@@ -25,6 +48,105 @@ public class HorizonJplService
     _httpClient.DefaultRequestHeaders.Add("User-Agent", "AetherVk/1.0");
     _console = console;
     _breadcrumb = breadcrumb;
+  }
+
+  public async Task<PlanetOrbitData?> GetPlanetDataAsync(string targetId, DateTime targetDate)
+  {
+    var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Fetching orbital data...");
+    try
+    {
+      string dateStr = targetDate.ToString("yyyy-MM-dd");
+      string nextDateStr = targetDate.AddDays(1).ToString("yyyy-MM-dd");
+
+      var url =
+        $"https://ssd.jpl.nasa.gov/api/horizons.api?format=json"
+        + $"&COMMAND='{Uri.EscapeDataString(targetId)}'"
+        + $"&OBJ_DATA='YES'"
+        + $"&MAKE_EPHEM='YES'"
+        + $"&EPHEM_TYPE='ELEMENTS'"
+        + $"&CENTER='@10'"
+        + $"&START_TIME='{Uri.EscapeDataString(dateStr)}'"
+        + $"&STOP_TIME='{Uri.EscapeDataString(nextDateStr)}'"
+        + $"&STEP_SIZE='1 d'";
+
+      _console.Log($"[HorizonJpl] GET Planet Data: {url}");
+
+      // We can't use GetFromJsonAsync cleanly in some older netstandard setups without Microsoft.Net.Http.Json
+      // Let's use standard GetAsync + deserialization to be safe in .NET Standard 2.0.
+      var response = await _httpClient.GetAsync(url);
+      if (!response.IsSuccessStatusCode)
+      {
+        await _breadcrumb.ShowMessageAsync(
+          "Horizon API Error",
+          $"Status: {(int)response.StatusCode}"
+        );
+        return null;
+      }
+
+      var json = await response.Content.ReadAsStringAsync();
+      using var doc = System.Text.Json.JsonDocument.Parse(json);
+
+      if (doc.RootElement.TryGetProperty("result", out var resultElement))
+      {
+        string rawText = resultElement.GetString() ?? "";
+
+        string constantsBlock = ExtractConstantsBlock(rawText);
+
+        double a = ParseValue(rawText, @"A\s*=\s*([^\s]+)");
+        double ec = ParseValue(rawText, @"EC\s*=\s*([^\s]+)");
+        double in_ = ParseValue(rawText, @"IN\s*=\s*([^\s]+)");
+        double ma = ParseValue(rawText, @"MA\s*=\s*([^\s]+)");
+
+        return new PlanetOrbitData
+        {
+          SemiMajorAxis = a,
+          Eccentricity = ec,
+          Inclination = in_,
+          MeanAnomaly = ma,
+          RawConstants = constantsBlock,
+        };
+      }
+      return null;
+    }
+    catch (Exception ex)
+    {
+      _console.Log($"[HorizonJpl] GetPlanetDataAsync Exception: {ex.Message}");
+      await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
+      return null;
+    }
+    finally
+    {
+      _breadcrumb.RemoveMessage(loadMsg);
+    }
+  }
+
+  private static string ExtractConstantsBlock(string text)
+  {
+    int startIdx = text.IndexOf("PHYSICAL PROPERTIES");
+    int endIdx = text.IndexOf("$$SOE");
+
+    if (startIdx != -1 && endIdx != -1 && endIdx > startIdx)
+    {
+      return text.Substring(startIdx, endIdx - startIdx).Trim();
+    }
+    return "Constants block not found.";
+  }
+
+  private static double ParseValue(string text, string pattern)
+  {
+    var match = Regex.Match(text, pattern, RegexOptions.IgnoreCase);
+    if (
+      match.Success
+      && double.TryParse(
+        match.Groups[1].Value,
+        System.Globalization.CultureInfo.InvariantCulture,
+        out double value
+      )
+    )
+    {
+      return value;
+    }
+    return 0.0;
   }
 
   public async Task FetchCometsAsync()

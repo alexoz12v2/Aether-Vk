@@ -15,10 +15,11 @@ struct BVHNodeAABB {
   left_child_or_primitive_offset: u32,
   right_child_offset: u32,
   primitive_count: u32,
-  node_type: u32,
   parent_idx: u32,
+  node_type: u32,
   mass: f32,
   center_of_mass: [f32; 3],
+  _pad: f32,
 }
 
 #[repr(C)]
@@ -82,10 +83,11 @@ fn test_lbvh_build() {
       left_child_or_primitive_offset: 0,
       right_child_offset: 0,
       primitive_count: 0,
-      node_type: 0,
       parent_idx: 0,
+      node_type: 0,
       mass: 0.0,
       center_of_mass: [0.0; 3],
+      _pad: 0.0,
     };
     total_nodes as usize
   ];
@@ -136,6 +138,22 @@ fn test_lbvh_build() {
       std::mem::size_of::<PushConstants>(),
     )
   };
+
+  let prepass_spv_path = "../../assets/sim/lbvh_prepass.comp.spv";
+  let prepass_push_constants_bytes = unsafe {
+    std::slice::from_raw_parts(
+      &push_constants as *const PushConstants as *const u8,
+      8, // Only needs the bvh_addr which is the first 8 bytes
+    )
+  };
+  run_compute_shader(
+    &ctx,
+    prepass_spv_path,
+    prepass_push_constants_bytes,
+    1,
+    1,
+    1,
+  );
 
   let spv_path = "../../assets/sim/lbvh_build.comp.spv";
   let dispatch_x = (num_primitives + 127) / 128;

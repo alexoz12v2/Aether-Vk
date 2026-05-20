@@ -160,6 +160,10 @@ pub fn rigid_body_implicit_solve(
   h: f32,
   force_eval: impl Fn(Vec3f32, Mat3f32) -> RigidBodyForceEval,
 ) -> (Vec3f32, Vec3f32) {
+  if h <= 1e-8 {
+    return (rb.linear_velocity, rb.angular_velocity);
+  }
+
   let mut v_mid = rb.linear_velocity;
   let mut w_mid = rb.angular_velocity;
 
@@ -360,6 +364,9 @@ pub fn imex_step(
 // ============================================================================
 
 /// Computes the Time of Impact (TOI) and collision normal between a moving sphere and a static triangle.
+/// TODO move to intersection module
+/// TODO Actually, remove, nobody uses it
+#[deprecated]
 pub fn ccd_sphere_triangle(
   p0: Vec3f32,
   p1: Vec3f32,
@@ -381,7 +388,7 @@ pub fn ccd_sphere_triangle(
   }
 
   let t = (radius * dist_to_plane.signum() - dist_to_plane) / dir_dot_n;
-  if t < 0.0 || t > 1.0 {
+  if !(0.0_f32..=1.0).contains(&t) {
     return None;
   }
 

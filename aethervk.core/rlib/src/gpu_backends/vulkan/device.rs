@@ -7089,12 +7089,13 @@ impl RenderDevice for Device {
     let mut total_vertices = 0;
     for (_, data) in gizmos {
       let sub_divs = data.subdivisions.max(4.0) as u32;
-      let points_per_ring = sub_divs * 2;
-      let total_ring_vertices = points_per_ring * 3;
+      let lat_segments = sub_divs;
+      let lon_segments = sub_divs;
+      let total_sphere_vertices = lon_segments * (2 * lat_segments - 1) * 2;
       let total_axes_vertices = 6;
       let total_arrowhead_vertices = 4 * 2 * 3;
       total_vertices =
-        total_vertices.max(total_ring_vertices + total_axes_vertices + total_arrowhead_vertices);
+        total_vertices.max(total_sphere_vertices + total_axes_vertices + total_arrowhead_vertices);
     }
 
     Ok(Some(crate::gpu::frame::SphereGizmoBatchCall {
