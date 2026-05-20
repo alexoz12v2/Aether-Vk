@@ -21,6 +21,7 @@ use heapless::index_map::FnvIndexMap;
 pub mod device;
 pub mod instance;
 pub mod utils;
+pub mod physics;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyncMode {

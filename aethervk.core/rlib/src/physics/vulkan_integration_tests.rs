@@ -1,0 +1,474 @@
+#[cfg(test)]
+mod tests {
+  use crate::gpu::{
+    DeviceAdditionalParams, RenderFrontend, VULKAN_RENDER_BACKEND, new_render_frontend,
+    simulation_step,
+  };
+  use crate::physics::physics_scene::PhysicsScene;
+  use crate::scene::{
+    ColliderComponent, ColliderShape, KinematicComponent, PhysicalMeshComponent,
+    ReferenceFrameType, Scene, TransformComponent,
+  };
+  use crate::simulation::comet::Comet;
+  use crate::types::RuntimeParams;
+  use aethervk_oshal_rlib::math::quaternion::Quaternion;
+use aethervk_oshal_rlib::math::vector::Vector3;
+use aethervk_oshal_rlib::math::vector::{Vector, vec3::Vec3f32};
+  use aethervk_oshal_rlib::os::time::timeus_t;
+  use heapless::index_map::FnvIndexMap;
+  use polyhedral_mass_properties::{MassProperties, TriangleContrib};
+  use std::sync::Arc;
+
+  fn dummy_mesh() -> PhysicalMeshComponent {
+    let tri_contrib = TriangleContrib::new([-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [0.5, 1.0, 0.0]);
+    PhysicalMeshComponent {
+      asset_path: "".into(),
+      mesh: Arc::new(Comet {
+        id: 0,
+        vertices: alloc::vec![],
+        indices: alloc::vec![],
+        albedo_map: None,
+        normal_map: None,
+        roughness_map: None,
+        ao_map: None,
+        mass_properties: MassProperties::from_contrib_sum(tri_contrib).unwrap(),
+        bvh: None,
+        pa_basis_bf: None,
+        bf_to_pa: None,
+      }),
+      emissive_intensity: 0.0,
+      emissive_color: [0.0; 3],
+      use_new_path: false,
+      paint_display_mode: 0,
+      sphere_center: [0.0; 3],
+      sphere_radius: 1.0,
+      grid_color: [0.0; 3],
+      grid_density: 0.0,
+    }
+  }
+
+  fn panic_on_validation_error(msg: &str) {
+    panic!("Vulkan validation error: {}", msg);
+  }
+
+  struct VulkanTestContext {
+    pub frontend: RenderFrontend,
+    pub device_handle: crate::gpu::RenderDeviceHandle,
+    pub pool: Arc<aethervk_oshal_rlib::os::pool::ThreadPool>,
+  }
+
+  impl VulkanTestContext {
+    fn new() -> Self {
+      let runtime_params = Box::new(RuntimeParams {
+        render_backend_params: FnvIndexMap::new(),
+        validation_error_callback: Some(panic_on_validation_error as fn(&str)),
+      });
+
+      let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
+      let pool_arc = Arc::new(pool);
+
+      let frontend = new_render_frontend(VULKAN_RENDER_BACKEND, &runtime_params).unwrap();
+      let mut additional_params = DeviceAdditionalParams::new();
+      additional_params
+        .insert(
+          crate::gpu_backends::vulkan::DEVICE_ADDIDITIONAL_PARAM_DEBUG_SHADERS,
+          1,
+        )
+        .unwrap();
+      let device_handle = frontend.write().init_device(0, &additional_params).unwrap();
+
+      frontend
+        .with_device(device_handle, |device| {
+          device.wire_callbacks(pool_arc.clone())
+        })
+        .unwrap();
+
+      Self {
+        frontend,
+        device_handle,
+        pool: pool_arc,
+      }
+    }
+  }
+
+  fn run_simulation<K: crate::gpu::Kernels + ?Sized>(
+    kernels: &K,
+    scene: &mut Scene,
+    duration_seconds: f32,
+  ) {
+    let mut physical_scene = PhysicsScene::build_from_scene(scene);
+
+    let dt: timeus_t = 16_667; // 60 FPS
+    let mut current_time: timeus_t = 0;
+    let end_time: timeus_t = (duration_seconds * 1_000_000.0) as timeus_t;
+
+    while current_time < end_time {
+      simulation_step(
+        kernels,
+        &mut physical_scene,
+        scene,
+        current_time,
+        current_time + dt,
+        true,
+      )
+      .unwrap();
+      current_time += dt;
+    }
+  }
+
+  #[test]
+  fn test_vulkan_single_frame_all_shapes() {
+    aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
+    let ctx = VulkanTestContext::new();
+
+    let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
+      crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
+    scene.register_all_crate_components();
+
+    let root = scene.spawn_reference_frame(
+      "MicroFrame",
+      None,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+      ReferenceFrameType::Micro,
+      1.0,
+      10000.0,
+    );
+
+    // Spawn a Sphere RigidBody
+    let sphere = scene.spawn_entity("Sphere");
+    scene.set_parent(sphere, Some(root));
+    scene
+      .add_component(
+        sphere,
+        TransformComponent {
+          position: Vec3f32::from_components(-5.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene.add_component(sphere, dummy_mesh()).unwrap();
+    scene
+      .add_component(
+        sphere,
+        ColliderComponent {
+          shape: ColliderShape::Sphere { radius: 1.0 },
+          mass: 10.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        sphere,
+        KinematicComponent {
+          velocity: Vec3f32::from_components(2.0, 0.0, 0.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
+
+    // Spawn an OBB RigidBody
+    let obb = scene.spawn_entity("OBB");
+    scene.set_parent(obb, Some(root));
+    scene
+      .add_component(
+        obb,
+        TransformComponent {
+          position: Vec3f32::from_components(5.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene.add_component(obb, dummy_mesh()).unwrap();
+    scene
+      .add_component(
+        obb,
+        ColliderComponent {
+          shape: ColliderShape::OBB {
+            half_extents: Vec3f32::from_components(1.0, 1.0, 1.0),
+          },
+          mass: 10.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        obb,
+        KinematicComponent {
+          velocity: Vec3f32::from_components(-2.0, 0.0, 0.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
+
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_kernels = crate::gpu_backends::vulkan::physics::VulkanComputeKernels {
+          device: dev
+            .as_any()
+            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+            .unwrap()
+            .device
+            .clone(),
+          pipelines: crate::gpu_backends::vulkan::physics::PhysicsPipelines::new(
+            &dev
+              .as_any()
+              .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+              .unwrap()
+              .device,
+            &crate::gpu_backends::vulkan::physics::PhysicsPipelineConfig {
+              max_particles: 10000,
+              hardware_subgroup_size: 32,
+            },
+          ),
+          addresses: crate::gpu_backends::vulkan::physics::PhysicsDeviceAddresses {
+            particle_data: 0,
+            rigid_body_data: 0,
+            sorted_morton: 0,
+            bvh_nodes: 0,
+            atomic_counters: 0,
+            ccd_candidates: 0,
+            packed_collisions: 0,
+            reduce_toi: 0,
+            impulses: 0,
+            emitters: 0,
+          },
+          allocator: dev
+            .as_any()
+            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+            .unwrap()
+            .res
+            .read()
+            .allocator
+            .allocator
+            .as_ref()
+            .map(|a| a.as_raw()),
+          thread_pool: ctx.pool.clone(),
+          queue: dev
+            .as_any()
+            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+            .unwrap()
+            .queue_compute,
+          command_pool: dev
+            .as_any()
+            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+            .unwrap()
+            .command_pools
+            .read()
+            .compute,
+        };
+
+        run_simulation(&vulkan_kernels, &mut scene, 5.0);
+
+        let t_sphere = scene.global_transform(sphere).unwrap();
+        let t_obb = scene.global_transform(obb).unwrap();
+
+        // They should have bounced
+        let v_sphere = scene.with_component(sphere, |k: &KinematicComponent| k.velocity).unwrap();
+        let v_obb = scene.with_component(obb, |k: &KinematicComponent| k.velocity).unwrap();
+
+        assert!(v_sphere.x() < 0.0, "Sphere should have bounced back");
+        assert!(v_obb.x() > 0.0, "OBB should have bounced back");
+        assert!(t_sphere.position.x() < 0.0);
+        assert!(t_obb.position.x() > 0.0);
+
+        crate::types::GpuResult::Ok(())
+      })
+      .unwrap();
+  }
+
+  #[test]
+  fn test_vulkan_cross_frame_lca_collision() {
+    aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
+    let ctx = VulkanTestContext::new();
+
+    let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
+      crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
+    scene.register_all_crate_components();
+
+    // Macro Frame
+    let macro_frame = scene.spawn_reference_frame(
+      "MacroFrame",
+      None,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+      ReferenceFrameType::Macro,
+      1.0,
+      10000.0,
+    );
+
+    // Micro Frame offset by (10, 0, 0)
+    let micro_frame = scene.spawn_reference_frame(
+      "MicroFrame",
+      Some(macro_frame),
+      TransformComponent {
+        position: Vec3f32::from_components(10.0, 0.0, 0.0),
+        rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+      ReferenceFrameType::Micro,
+      0.1,
+      100.0,
+    );
+
+    // Spawn an Object in Macro Frame at (5, 0, 0) moving towards +X
+    let obj_macro = scene.spawn_entity("ObjMacro");
+    scene.set_parent(obj_macro, Some(macro_frame));
+    scene
+      .add_component(
+        obj_macro,
+        TransformComponent {
+          position: Vec3f32::from_components(5.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene.add_component(obj_macro, dummy_mesh()).unwrap();
+    scene
+      .add_component(
+        obj_macro,
+        ColliderComponent {
+          shape: ColliderShape::Sphere { radius: 1.0 },
+          mass: 10.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        obj_macro,
+        KinematicComponent {
+          velocity: Vec3f32::from_components(2.0, 0.0, 0.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
+
+    // Spawn an Object in Micro Frame at (-20, 0, 0) local => (8, 0, 0) macro space, moving towards -X
+    let obj_micro = scene.spawn_entity("ObjMicro");
+    scene.set_parent(obj_micro, Some(micro_frame));
+    scene
+      .add_component(
+        obj_micro,
+        TransformComponent {
+          position: Vec3f32::from_components(-20.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene.add_component(obj_micro, dummy_mesh()).unwrap();
+    scene
+      .add_component(
+        obj_micro,
+        ColliderComponent {
+          shape: ColliderShape::OBB {
+            half_extents: Vec3f32::from_components(1.0, 1.0, 1.0),
+          },
+          mass: 10.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        obj_micro,
+        KinematicComponent {
+          velocity: Vec3f32::from_components(-20.0, 0.0, 0.0), // -2.0 in macro space
+          ..Default::default()
+        },
+      )
+      .unwrap();
+
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_kernels = crate::gpu_backends::vulkan::physics::VulkanComputeKernels {
+          device: dev
+            .as_any()
+            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+            .unwrap()
+            .device
+            .clone(),
+          pipelines: crate::gpu_backends::vulkan::physics::PhysicsPipelines::new(
+            &dev
+              .as_any()
+              .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+              .unwrap()
+              .device,
+            &crate::gpu_backends::vulkan::physics::PhysicsPipelineConfig {
+              max_particles: 10000,
+              hardware_subgroup_size: 32,
+            },
+          ),
+          addresses: crate::gpu_backends::vulkan::physics::PhysicsDeviceAddresses {
+            particle_data: 0,
+            rigid_body_data: 0,
+            sorted_morton: 0,
+            bvh_nodes: 0,
+            atomic_counters: 0,
+            ccd_candidates: 0,
+            packed_collisions: 0,
+            reduce_toi: 0,
+            impulses: 0,
+            emitters: 0,
+          },
+          allocator: dev
+            .as_any()
+            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+            .unwrap()
+            .res
+            .read()
+            .allocator
+            .allocator
+            .as_ref()
+            .map(|a| a.as_raw()),
+          thread_pool: ctx.pool.clone(),
+          queue: dev
+            .as_any()
+            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+            .unwrap()
+            .queue_compute,
+          command_pool: dev
+            .as_any()
+            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+            .unwrap()
+            .command_pools
+            .read()
+            .compute,
+        };
+
+        run_simulation(&vulkan_kernels, &mut scene, 5.0);
+
+        // Verify
+        let v_macro = scene.with_component(obj_macro, |k: &KinematicComponent| k.velocity).unwrap();
+        let v_micro = scene.with_component(obj_micro, |k: &KinematicComponent| k.velocity).unwrap();
+
+        assert!(
+          v_macro.x() < 0.0,
+          "Macro object should have bounced back (-X)"
+        );
+        assert!(
+          v_micro.x() > 0.0,
+          "Micro object should have bounced back (+X)"
+        );
+
+        crate::types::GpuResult::Ok(())
+      })
+      .unwrap();
+  }
+}

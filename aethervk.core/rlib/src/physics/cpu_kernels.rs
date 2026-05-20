@@ -1309,6 +1309,7 @@ impl Kernels for CpuScalarKernels {
     particles: &mut Self::Buffer<ParticleGpu>,
     collisions: &Self::List<CollisionPair>,
     force_inelastic: bool,
+    dt: timeus_t,
   ) -> EngineResult<()> {
     if collisions.data.is_empty() {
       return Ok(());
@@ -2746,6 +2747,7 @@ impl Kernels for CpuSimdKernels {
     particles: &mut Self::Buffer<ParticleGpu>,
     collisions: &Self::List<CollisionPair>,
     force_inelastic: bool,
+    dt: timeus_t,
   ) -> EngineResult<()> {
     if collisions.data.is_empty() {
       return Ok(());

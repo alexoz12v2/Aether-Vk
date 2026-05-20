@@ -18,7 +18,7 @@ use ash::{
 use bitflags::bitflags;
 
 use crate::{
-  gpu::{DeviceAdditionalParams, OpaqueNativeHandleInfo},
+  gpu::{DeviceAdditionalParams, OpaqueNativeHandleInfo, vulkan::device::LogicalDevice},
   types::{EngineError, EngineResult, GpuError, GpuResult},
 };
 use aethervk_oshal_rlib::os::debug;
@@ -967,13 +967,13 @@ pub(super) fn create_test_attachment(
 /// Tracks Vulkan resources allocated during lock-free execution.
 /// Destroys them in LIFO order if the transaction is aborted.
 pub struct RollbackContext<'a> {
-  pub device: &'a ash::Device,
-  rollbacks: alloc::vec::Vec<alloc::boxed::Box<dyn FnOnce(&ash::Device) + 'a>>,
+  pub device: &'a LogicalDevice,
+  rollbacks: alloc::vec::Vec<alloc::boxed::Box<dyn FnOnce(&LogicalDevice) + 'a>>,
   defused: bool,
 }
 
 impl<'a> RollbackContext<'a> {
-  pub fn new(device: &'a ash::Device) -> Self {
+  pub fn new(device: &'a LogicalDevice) -> Self {
     Self {
       device,
       rollbacks: alloc::vec::Vec::new(),
@@ -982,7 +982,7 @@ impl<'a> RollbackContext<'a> {
   }
 
   /// Schedule a cleanup closure for a Vulkan resource created during execution.
-  pub fn defer<F: FnOnce(&ash::Device) + 'a>(&mut self, f: F) {
+  pub fn defer<F: FnOnce(&LogicalDevice) + 'a>(&mut self, f: F) {
     self.rollbacks.push(alloc::boxed::Box::new(f));
   }
 
@@ -1020,7 +1020,7 @@ pub trait RwLockable<T> {
 
 pub struct VulkanTransaction<'a, State, Lock: RwLockable<State>> {
   lock: &'a Lock,
-  device: &'a ash::Device,
+  device: &'a LogicalDevice,
   _marker: core::marker::PhantomData<fn() -> State>,
 }
 
@@ -1054,7 +1054,7 @@ impl<'a, State, Lock: RwLockable<State>, Prepared, Error>
 }
 
 impl<'a, State, Lock: RwLockable<State>> VulkanTransaction<'a, State, Lock> {
-  pub fn new(lock: &'a Lock, device: &'a ash::Device) -> Self {
+  pub fn new(lock: &'a Lock, device: &'a LogicalDevice) -> Self {
     Self {
       lock,
       device,
@@ -1105,7 +1105,7 @@ impl<'a, State, Lock: RwLockable<State>> VulkanTransaction<'a, State, Lock> {
 
 pub struct PreparedTransaction<'a, State, Lock: RwLockable<State>, Prepared, Error> {
   lock: &'a Lock,
-  device: &'a ash::Device,
+  device: &'a LogicalDevice,
   prepared: Prepared,
   _marker: core::marker::PhantomData<fn() -> (State, Error)>,
 }

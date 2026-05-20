@@ -52,11 +52,7 @@ public partial class HorizonJplViewModel : TabItemViewModel
   [ObservableProperty]
   private bool _isDownloading;
 
-  public HorizonJplViewModel(
-    HorizonJplService horizonService,
-    ILocalStorageService localStorage,
-    BreadcrumbService breadcrumb
-  )
+  public HorizonJplViewModel(HorizonJplService horizonService, ILocalStorageService localStorage, BreadcrumbService breadcrumb)
     : base("Horizon JPL")
   {
     _horizonService = horizonService;
@@ -89,7 +85,7 @@ public partial class HorizonJplViewModel : TabItemViewModel
     string startStr = SearchStartTime?.ToString("yyyy-MM-dd") ?? "2024-01-01";
     string stopStr = SearchStopTime?.ToString("yyyy-MM-dd") ?? "2024-01-31";
 
-    await _horizonService.FetchSpkRecordsAsync(pdes, startStr, stopStr);
+    await _horizonService.FetchSpkRecor:wa:qadsAsync(pdes, startStr, stopStr);
   }
 
   [RelayCommand]
@@ -131,13 +127,7 @@ public partial class HorizonJplViewModel : TabItemViewModel
     var savePath = _localStorage.GetPersistentPath(fileName);
 
     IsDownloading = true;
-    var result = await _horizonService.DownloadSpkByIdAsync(
-      pdes,
-      spkId,
-      savePath,
-      startStr,
-      stopStr
-    );
+    var result = await _horizonService.DownloadSpkByIdAsync(pdes, spkId, savePath, startStr, stopStr);
     IsDownloading = false;
 
     if (result != null)
@@ -146,10 +136,7 @@ public partial class HorizonJplViewModel : TabItemViewModel
     }
     else
     {
-      await _breadcrumb.ShowMessageAsync(
-        "SPK Download Failed",
-        "Could not download the SPK kernel."
-      );
+      await _breadcrumb.ShowMessageAsync("SPK Download Failed", "Could not download the SPK kernel.");
     }
   }
 
