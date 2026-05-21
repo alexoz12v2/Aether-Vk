@@ -58,9 +58,9 @@ pub struct P5PushConstants {
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct EntityGpu {
-  pub bvh_addr: u64,
-  pub transform: [f32; 16],
-  pub inv_transform: [f32; 16],
+  pub bvh: u64,
+  pub transform: [[f32; 4]; 4],
+  pub inv_transform: [[f32; 4]; 4],
   pub linear_velocity: [f32; 3],
   pub root_index: u32,
   pub angular_velocity: [f32; 3],

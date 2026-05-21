@@ -85,7 +85,7 @@ public partial class HorizonJplViewModel : TabItemViewModel
     string startStr = SearchStartTime?.ToString("yyyy-MM-dd") ?? "2024-01-01";
     string stopStr = SearchStopTime?.ToString("yyyy-MM-dd") ?? "2024-01-31";
 
-    await _horizonService.FetchSpkRecor:wa:qadsAsync(pdes, startStr, stopStr);
+    await _horizonService.FetchSpkRecordsAsync(pdes, startStr, stopStr);
   }
 
   [RelayCommand]

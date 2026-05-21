@@ -4,7 +4,7 @@
 //! It assumes Vulkan 1.1 with `VK_KHR_buffer_device_address` and `VK_KHR_shader_subgroup_basic`.
 
 use crate::gpu::compute_push_constants::ApplyImpulsesPushConstants;
-use crate::gpu::vulkan::device::{self, Device, LogicalDevice};
+use crate::gpu::vulkan::device::{self, Device, LogicalDevice, resources};
 use crate::gpu::vulkan::utils;
 use crate::gpu::{
   self, CollisionPair, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, DynamicBody, Kernels,
@@ -21,11 +21,69 @@ use aethervk_oshal_rlib::math::vector::vec4::{Quat, Vec4f32};
 use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
 use aethervk_oshal_rlib::os;
 use aethervk_oshal_rlib::os::time::timeus_t;
+use alloc::format;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use ash::vk;
 use vk_mem::{Alloc, AllocatorView, AsAllocatorView};
-use alloc::format;
+
+/// Centralized Buffer length management
+/// *Its methods must be thread safe*
+/// Strategy: Each [`VulkanBuffer`] buffer stores, in its 16 bytes
+/// - 8 bytes (low) -> buffer device address of the length
+/// - 8 bytes (high) -> duplicated value of length (so that GPU can also read it fast)
+pub struct LengthManager {
+  pub buffer: vk::Buffer,
+  pub allocation: vk_mem::Allocation,
+  pub allocator: vk_mem::AllocatorView,
+  pub address: u64,
+  pub mapped_ptr: *mut u64,
+  pub free_list: alloc::sync::Arc<spin::RwLock<alloc::vec::Vec<usize>>>,
+  pub capacity: usize,
+}
+
+impl LengthManager {
+  pub fn new(
+    device: &LogicalDevice,
+    allocator: vk_mem::AllocatorView,
+    capacity: usize,
+  ) -> GpuResult<Self> {
+    let size = (capacity * core::mem::size_of::<u64>()) as u64;
+
+    let mut lengths_alloc_info = vk_mem::AllocationCreateInfo {
+      usage: vk_mem::MemoryUsage::Auto,
+      // SEQUENTIAL (or omitting access flags) prioritizes HOST_COHERENT over HOST_CACHED
+      flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+        | vk_mem::AllocationCreateFlags::MAPPED,
+      ..Default::default()
+    };
+    crate::apply_test_dedicated_alloc!(lengths_alloc_info);
+
+    let create_info = vk::BufferCreateInfo::default()
+      .sharing_mode(vk::SharingMode::EXCLUSIVE)
+      .size(capacity as _)
+      .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::STORAGE_BUFFER);
+    let (buffer, allocation, alloc_info) =
+      unsafe { allocator.create_buffer_get_info(&create_info, &lengths_alloc_info) }?;
+    let buffer_device_address_info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
+    let address = unsafe {
+      device.buffer_device_address.get_buffer_device_address(&buffer_device_address_info)
+    };
+    Ok(Self {
+      buffer,
+      allocation,
+      allocator,
+      address,
+      mapped_ptr: alloc_info.mapped_data as _,
+      free_list: alloc::sync::Arc::new(spin::RwLock::new(alloc::vec::Vec::with_capacity(capacity))),
+      capacity,
+    })
+  }
+
+  pub fn cleanup(&mut self, _device: &LogicalDevice) {
+    unsafe { self.allocator.destroy_buffer(self.buffer, &mut self.allocation) };
+  }
+}
 
 /// Configuration parameters for the physics pipeline
 pub struct PhysicsPipelineConfig {
@@ -33,7 +91,9 @@ pub struct PhysicsPipelineConfig {
   pub hardware_subgroup_size: u32,
 }
 
-/// TODO: Document this item
+/// TODO: remove this in favour of a flexible buffer class
+#[deprecated]
+#[derive(Default)]
 pub struct PhysicsDeviceAddresses {
   pub particle_data: u64,
   pub rigid_body_data: u64,
@@ -182,11 +242,11 @@ pub struct PhysicsPipelines {
 
 impl PhysicsPipelines {
   /// TODO: Document this item
-  pub fn new(device: &ash::Device, _config: &PhysicsPipelineConfig) -> Self {
+  pub fn new(device: &LogicalDevice) -> Self {
     let push_constant_range = vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::COMPUTE)
       .offset(0)
-      .size(128); // Max typical push constant size
+      .size(128); // Max push constant size
 
     let layout_info = vk::PipelineLayoutCreateInfo::default()
       .push_constant_ranges(core::slice::from_ref(&push_constant_range));
@@ -271,6 +331,24 @@ impl PhysicsPipelines {
       p5_imex: create_pipeline(&format!("{}/p5_imex_particles.comp.spv", base_dir)),
       broad_phase: create_pipeline(&format!("{}/broad_phase.comp.spv", base_dir)),
     }
+  }
+
+  pub fn discard(&mut self, discard_pool: &resources::DiscardPool, timeline: u64) {
+    discard_pool.discard_pipeline_layout(self.pipeline_layout, timeline);
+    discard_pool.discard_pipeline(self.emit_particles, timeline);
+    discard_pool.discard_pipeline(self.p1_2_imex, timeline);
+    discard_pool.discard_pipeline(self.p3_4_imex, timeline);
+    discard_pool.discard_pipeline(self.lbvh_prepass, timeline);
+    discard_pool.discard_pipeline(self.lbvh_build, timeline);
+    discard_pool.discard_pipeline(self.ccd, timeline);
+    discard_pool.discard_pipeline(self.ccd_rigidbody, timeline);
+    discard_pool.discard_pipeline(self.stream_compact, timeline);
+    discard_pool.discard_pipeline(self.reduce_toi, timeline);
+    discard_pool.discard_pipeline(self.lcp_solver, timeline);
+    discard_pool.discard_pipeline(self.apply_impulses, timeline);
+    discard_pool.discard_pipeline(self.barnes_hut, timeline);
+    discard_pool.discard_pipeline(self.p5_imex, timeline);
+    discard_pool.discard_pipeline(self.broad_phase, timeline);
   }
 }
 
@@ -392,6 +470,43 @@ impl DeviceBvh for VulkanBuffer<()> {
 pub struct VulkanComputeKernels {
   pub pipelines: PhysicsPipelines,
   pub addresses: PhysicsDeviceAddresses,
+  pub timeline: vk::Semaphore,
+  pub length_manager: LengthManager,
+  /// DiscardPool operating with the compute timeline
+  pub discard_pool: resources::DiscardPool,
+}
+
+impl VulkanComputeKernels {
+  pub fn new(device: &LogicalDevice, allocator: vk_mem::AllocatorView) -> GpuResult<Self> {
+    let pipelines = PhysicsPipelines::new(device);
+    let addresses = PhysicsDeviceAddresses::default();
+
+    let mut timeline_info = vk::SemaphoreTypeCreateInfo::default()
+      .initial_value(0)
+      .semaphore_type(vk::SemaphoreType::TIMELINE);
+    let sem_info = vk::SemaphoreCreateInfo::default().push_next(&mut timeline_info);
+    let timeline = unsafe { device.create_semaphore(&sem_info, None) }?;
+
+    let length_manager = LengthManager::new(device, allocator, 1024)?;
+    let discard_pool = unsafe { resources::DiscardPool::new(1024) };
+
+    Ok(Self {
+      pipelines,
+      addresses,
+      timeline,
+      length_manager,
+      discard_pool,
+    })
+  }
+
+  // TODO: How do I know if there's a command in flight? Should It be externally synchronized?
+  pub fn cleanup(&mut self, device: &LogicalDevice, allocator: vk_mem::AllocatorView) {
+    self.pipelines.discard(&self.discard_pool, u64::MAX);
+    self.discard_pool.destroy_discarded_resources_all(device);
+    self.length_manager.cleanup(device);
+
+    unsafe { device.destroy_semaphore(self.timeline, None) };
+  }
 }
 
 impl VulkanComputeKernels {

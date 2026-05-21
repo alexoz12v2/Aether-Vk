@@ -160,7 +160,7 @@ pub trait DiscardableResource {
 
 /// Structure associated to the main Timeline Semaphore provided by Device
 /// Note: this must not outlive device, hence don't expose it outside
-pub(super) struct DiscardPool {
+pub struct DiscardPool {
   items: crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex<TimelineQueue<DiscardItem>>,
   #[cfg(debug_assertions)]
   queued_handles:
