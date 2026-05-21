@@ -23,6 +23,9 @@ pub mod instance;
 pub mod utils;
 pub mod physics;
 
+#[cfg(test)]
+pub mod shader_tests;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyncMode {
   /// CPU uploads data. Needs Transfer Write -> Vertex Read barrier.
@@ -77,6 +80,16 @@ impl VulkanCore {
       instance,
       live_devices,
     })
+  }
+}
+
+impl Drop for VulkanCore {
+  fn drop(&mut self) {
+    while let Some(k) = self.live_devices.keys().next().copied() {
+      if let Some(dev) = self.live_devices.remove(&k) {
+        drop(dev);
+      }
+    }
   }
 }
 
@@ -163,6 +176,8 @@ impl RenderContext for VulkanRenderContext {
     let mut core = self.core.write();
 
     if !core.live_devices.contains_key(&handle) {
+      let instance = alloc::sync::Arc::clone(&core.instance);
+      
       // 1. We need to reserve space in the heapless map.
       // Since heapless doesn't have an 'entry' API for uninitialized memory,
       // we insert a "dummy" (zeroed) value first.
@@ -173,18 +188,42 @@ impl RenderContext for VulkanRenderContext {
         core.live_devices.insert(handle, uninit_val).unwrap_unchecked();
       }
 
+      struct UninitGuard<'a> {
+        map: &'a mut FnvIndexMap<RenderDeviceHandle, device::Device, MAX_DEVICES>,
+        handle: RenderDeviceHandle,
+        defused: bool,
+      }
+      impl<'a> Drop for UninitGuard<'a> {
+        fn drop(&mut self) {
+          if !self.defused {
+            core::mem::forget(self.map.remove(&self.handle));
+          }
+        }
+      }
+      
+      let mut guard = UninitGuard {
+        map: &mut core.live_devices,
+        handle,
+        defused: false,
+      };
+
       // 2. Get a mutable pointer to the slot we just created in the heap-resident map.
-      let dst_ptr = core.live_devices.get_mut(&handle).unwrap() as *mut device::Device;
+      let dst_ptr = guard.map.get_mut(&handle).unwrap() as *mut device::Device;
 
       // 3. Construct the device directly into that heap location.
       unsafe {
-        device::Device::init_at_ptr(
+        let init_result = device::Device::init_at_ptr(
           dst_ptr,
-          alloc::sync::Arc::clone(&core.instance),
+          instance,
           index,
           &query_input,
-        )?;
+        );
+        if let Err(e) = init_result {
+          return Err(e);
+        }
       }
+      
+      guard.defused = true;
     }
 
     Ok(handle)

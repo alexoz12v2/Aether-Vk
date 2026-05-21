@@ -1409,7 +1409,7 @@ impl Device {
     let queues = Queues::from_device(&device, chosen_physical_device_query_result);
 
     // bookkeeping data instantiation
-    let depth_stencil_format: vk::Format = 'block: {
+    let depth_stencil_format = 'block: {
       // specification says that at least one of D24/S8 or D32/S8 must be supported
       let mut props = vk::FormatProperties2::default();
       for f in [
@@ -1429,7 +1429,15 @@ impl Device {
       }
       // never reached
       Err(GpuError::UnsupportedFeature)
-    }?;
+    };
+    let depth_stencil_format = match depth_stencil_format {
+      Ok(f) => f,
+      Err(e) => {
+        aethervk_oshal_rlib::log!("Device::new error in depth_stencil_format, destroying device!");
+        unsafe { device.destroy_device(None) };
+        return Err(e);
+      }
+    };
 
     let create_renderpass2 = ash::khr::create_renderpass2::Device::new(&instance.instance, &device);
     let synchronization2 = ash::khr::synchronization2::Device::new(&instance.instance, &device);
@@ -1466,14 +1474,31 @@ impl Device {
       #[cfg(debug_assertions)]
       debug_utils,
     };
-    let res = DeviceResources::new(
+    let mut res = match DeviceResources::new(
       instance.as_ref(),
       physical_device,
       &device,
       chosen_physical_device_query_result.unique_family_indices_set().iter(),
-    )?;
+    ) {
+      Ok(r) => r,
+      Err(e) => {
+        aethervk_oshal_rlib::log!("Device::new error in DeviceResources::new, destroying device!");
+        unsafe { device.handle.destroy_device(None) };
+        return Err(e);
+      }
+    };
 
-    let kernels = VulkanComputeKernels::new(&device, res.allocator.allocator.as_allocator_view())?;
+    let kernels = match VulkanComputeKernels::new(&device, res.allocator.allocator.as_allocator_view()) {
+      Ok(k) => k,
+      Err(e) => {
+        aethervk_oshal_rlib::log!("Device::new error in VulkanComputeKernels::new, destroying device!");
+        // We must clean up res manually before destroying the device!
+        res.cleanup(&device.handle);
+        drop(res);
+        unsafe { device.handle.destroy_device(None) };
+        return Err(e);
+      }
+    };
 
     Ok(Self {
       query_result: *chosen_physical_device_query_result,

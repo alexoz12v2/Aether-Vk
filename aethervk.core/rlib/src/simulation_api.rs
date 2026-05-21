@@ -41,6 +41,8 @@ pub mod time_api;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod integration_test_large;
 /// Holds State for the whole simulation. For now, default drop order (from first to last)
 /// is fine. Threads are first shut down, then data is deallocated.
 /// if this grows more complicated, implement `Drop`

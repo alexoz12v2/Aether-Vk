@@ -384,7 +384,7 @@ pub struct PhysicsPipelines {
 
 impl PhysicsPipelines {
   /// TODO: Document this item
-  pub fn new(device: &LogicalDevice) -> Self {
+  pub fn new(device: &LogicalDevice) -> GpuResult<Self> {
     let push_constant_range = vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::COMPUTE)
       .offset(0)
@@ -393,16 +393,17 @@ impl PhysicsPipelines {
     let layout_info = vk::PipelineLayoutCreateInfo::default()
       .push_constant_ranges(core::slice::from_ref(&push_constant_range));
 
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }.unwrap();
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }.map_err(|e| GpuError::BackendSpecific(alloc::format!("Failed to create pipeline layout: {:?}", e)))?;
 
-    let create_pipeline = |spv_path: &str| -> vk::Pipeline {
+    let mut created_pipelines = alloc::vec::Vec::new();
+    let mut create_pipeline = |spv_path: &str| -> GpuResult<vk::Pipeline> {
       let spv_code = aethervk_oshal_rlib::os::fs::read(spv_path)
-        .unwrap_or_else(|_| panic!("Failed to read {}", spv_path));
+        .map_err(|_| GpuError::BackendSpecific(alloc::format!("Failed to read {}", spv_path)))?;
       let (prefix, code, suffix) = unsafe { spv_code.align_to::<u32>() };
       assert!(prefix.is_empty() && suffix.is_empty());
 
       let shader_info = vk::ShaderModuleCreateInfo::default().code(code);
-      let shader_module = unsafe { device.create_shader_module(&shader_info, None) }.unwrap();
+      let shader_module = unsafe { device.create_shader_module(&shader_info, None) }.map_err(|e| GpuError::BackendSpecific(alloc::format!("Failed to create shader module: {:?}", e)))?;
 
       let main_name = alloc::ffi::CString::new("main").unwrap();
 
@@ -443,12 +444,13 @@ impl PhysicsPipelines {
           None,
         )
       }
-      .unwrap()[0];
+      .map_err(|(pipelines, e)| GpuError::BackendSpecific(alloc::format!("Failed to create compute pipeline: {:?}", e)))?[0];
 
       unsafe {
         device.destroy_shader_module(shader_module, None);
       }
-      pipeline
+      created_pipelines.push(pipeline);
+      Ok(pipeline)
     };
 
     // Need to adjust path depending on where the test runs from.
@@ -456,44 +458,56 @@ impl PhysicsPipelines {
     // For safety, let's use a known path relative to the crate root or check multiple.
     let dir_lock = crate::gpu::ASSET_DIR.read();
     let base_dir = dir_lock.as_ref().unwrap();
-    Self {
+    let res = (|| -> GpuResult<Self> { Ok(Self {
       pipeline_layout,
       // ── Legacy pipelines ────────────────────────────────────────────────
-      emit_particles: create_pipeline(&format!("{}/emit_particles.comp.spv", base_dir)),
-      p1_2_imex: create_pipeline(&format!("{}/p1-2_imex_particles.comp.spv", base_dir)),
-      p3_4_imex: create_pipeline(&format!("{}/p3-4_imex_rigidbody_imr.comp.spv", base_dir)),
-      lbvh_prepass: create_pipeline(&format!("{}/lbvh_prepass.comp.spv", base_dir)),
-      lbvh_build: create_pipeline(&format!("{}/lbvh_build.comp.spv", base_dir)),
-      ccd: create_pipeline(&format!("{}/ccd.comp.spv", base_dir)),
-      ccd_rigidbody: create_pipeline(&format!("{}/narrow_ccd_rigidbody.comp.spv", base_dir)),
-      stream_compact: create_pipeline(&format!("{}/stream_compact.comp.spv", base_dir)),
-      reduce_toi: create_pipeline(&format!("{}/reduce_toi.comp.spv", base_dir)),
-      lcp_solver: create_pipeline(&format!("{}/lcp_solver.comp.spv", base_dir)),
-      apply_impulses: create_pipeline(&format!("{}/apply_impulses.comp.spv", base_dir)),
-      barnes_hut: create_pipeline(&format!("{}/barnes_hut.comp.spv", base_dir)),
-      p5_imex: create_pipeline(&format!("{}/p5_imex_particles.comp.spv", base_dir)),
-      broad_phase: create_pipeline(&format!("{}/broad_phase.comp.spv", base_dir)),
+      emit_particles: create_pipeline(&format!("{}/emit_particles.comp.spv", base_dir))?,
+      p1_2_imex: create_pipeline(&format!("{}/p1-2_imex_particles.comp.spv", base_dir))?,
+      p3_4_imex: create_pipeline(&format!("{}/p3-4_imex_rigidbody_imr.comp.spv", base_dir))?,
+      lbvh_prepass: create_pipeline(&format!("{}/lbvh_prepass.comp.spv", base_dir))?,
+      lbvh_build: create_pipeline(&format!("{}/lbvh_build.comp.spv", base_dir))?,
+      ccd: create_pipeline(&format!("{}/ccd.comp.spv", base_dir))?,
+      ccd_rigidbody: create_pipeline(&format!("{}/narrow_ccd_rigidbody.comp.spv", base_dir))?,
+      stream_compact: create_pipeline(&format!("{}/stream_compact.comp.spv", base_dir))?,
+      reduce_toi: create_pipeline(&format!("{}/reduce_toi.comp.spv", base_dir))?,
+      lcp_solver: create_pipeline(&format!("{}/lcp_solver.comp.spv", base_dir))?,
+      apply_impulses: create_pipeline(&format!("{}/apply_impulses.comp.spv", base_dir))?,
+      barnes_hut: create_pipeline(&format!("{}/barnes_hut.comp.spv", base_dir))?,
+      p5_imex: create_pipeline(&format!("{}/p5_imex_particles.comp.spv", base_dir))?,
+      broad_phase: create_pipeline(&format!("{}/broad_phase.comp.spv", base_dir))?,
       // ── New IMEX integrators ────────────────────────────────────────────
       integrate_particles_p1_p2: create_pipeline(
         &format!("{}/integrate_particles_p1_p2.comp.spv", base_dir)
-      ),
+      )?,
       integrate_bodies_p3: create_pipeline(
         &format!("{}/integrate_bodies_p3.comp.spv", base_dir)
-      ),
+      )?,
       integrate_particles_p4_5: create_pipeline(
         &format!("{}/integrate_particles_p4_5.comp.spv", base_dir)
-      ),
+      )?,
       // ── Force aggregation ───────────────────────────────────────────────
       rb_force_assign: create_pipeline(
         &format!("{}/rb_force_assign.comp.spv", base_dir)
-      ),
+      )?,
       // ── Broad-phase suite ───────────────────────────────────────────────
-      bp_clear: create_pipeline(&format!("{}/bp_clear.comp.spv",         base_dir)),
-      bp_bounds_gen: create_pipeline(&format!("{}/bp_bounds_gen.comp.spv",    base_dir)),
-      bp_scene: create_pipeline(&format!("{}/bp_scene.comp.spv",         base_dir)),
-      bp_classify: create_pipeline(&format!("{}/bp_classify.comp.spv",      base_dir)),
-      bp_cross_lca: create_pipeline(&format!("{}/bp_cross_lca.comp.spv",     base_dir)),
-      bp_particle_self: create_pipeline(&format!("{}/bp_particle_self.comp.spv", base_dir)),
+      bp_clear: create_pipeline(&format!("{}/bp_clear.comp.spv",         base_dir))?,
+      bp_bounds_gen: create_pipeline(&format!("{}/bp_bounds_gen.comp.spv",    base_dir))?,
+      bp_scene: create_pipeline(&format!("{}/bp_scene.comp.spv",         base_dir))?,
+      bp_classify: create_pipeline(&format!("{}/bp_classify.comp.spv",      base_dir))?,
+      bp_cross_lca: create_pipeline(&format!("{}/bp_cross_lca.comp.spv",     base_dir))?,
+      bp_particle_self: create_pipeline(&format!("{}/bp_particle_self.comp.spv", base_dir))?,
+    })})();
+    match res {
+      Ok(s) => Ok(s),
+      Err(e) => {
+        unsafe {
+          for p in created_pipelines {
+            device.destroy_pipeline(p, None);
+          }
+          device.destroy_pipeline_layout(pipeline_layout, None);
+        }
+        Err(e)
+      }
     }
   }
 
@@ -670,7 +684,7 @@ pub struct VulkanComputeKernels {
 
 impl VulkanComputeKernels {
   pub fn new(device: &LogicalDevice, _allocator: vk_mem::AllocatorView) -> GpuResult<Self> {
-    let pipelines = PhysicsPipelines::new(device);
+    let pipelines = PhysicsPipelines::new(device)?;
     let addresses = PhysicsDeviceAddresses::default();
 
     let mut timeline_info = vk::SemaphoreTypeCreateInfo::default()
@@ -2431,7 +2445,7 @@ impl VulkanComputeKernels {
       false,
       rollback,
     )?;
-    let p_snap = self.allocate_device_buffer::<gpu::ParticleGpu>(
+    let p_snap = self.allocate_device_buffer::<f32>(
       device,
       allocator,
       particles.capacity(),
@@ -2443,7 +2457,7 @@ impl VulkanComputeKernels {
     let rb_copy = vk::BufferCopy::default()
       .size((rigid_bodies.capacity().max(1) * core::mem::size_of::<RigidBodyImex>()) as u64);
     let p_copy = vk::BufferCopy::default()
-      .size((particles.capacity().max(1) * core::mem::size_of::<gpu::ParticleGpu>()) as u64);
+      .size((particles.capacity().max(1) * core::mem::size_of::<f32>()) as u64);
 
     unsafe {
       if rigid_bodies.capacity() > 0 {
@@ -2497,7 +2511,7 @@ impl VulkanComputeKernels {
     let rb_copy = vk::BufferCopy::default()
       .size((rigid_bodies.capacity().max(1) * core::mem::size_of::<RigidBodyImex>()) as u64);
     let p_copy = vk::BufferCopy::default()
-      .size((particles.capacity().max(1) * core::mem::size_of::<gpu::ParticleGpu>()) as u64);
+      .size((particles.capacity().max(1) * core::mem::size_of::<f32>()) as u64);
 
     unsafe {
       if rigid_bodies.capacity() > 0 {
@@ -3340,3 +3354,4 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 }
+
