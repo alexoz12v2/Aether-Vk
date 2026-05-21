@@ -1,6 +1,6 @@
 //! physics module.
 
-use crate::math::{expm_hat, hat, vee};
+use crate::math::{expm_hat, hat};
 use aethervk_oshal_rlib::math::{
   FloatLike, MulAddIdentity,
   matrix::{Matrix, Matrix3, MatrixVectorMul, SquareMatrix, mat3::Mat3f32},

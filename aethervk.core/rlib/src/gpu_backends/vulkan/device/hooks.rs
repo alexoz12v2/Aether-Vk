@@ -246,7 +246,7 @@ pub unsafe fn load_device_with_hooks(
   instance: &ash::Instance,
   physical_device: vk::PhysicalDevice,
   create_info: &vk::DeviceCreateInfo,
-) -> crate::types::GpuResult<ash::Device> {
+) -> crate::types::GpuResult<ash::Device> { unsafe {
   let device_handle = {
     let mut handle = vk::Device::null();
     let res = (instance.fp_v1_0().create_device)(
@@ -380,7 +380,7 @@ pub unsafe fn load_device_with_hooks(
   );
 
   Ok(device)
-}
+}}
 
 #[cfg(test)]
 mod tests {

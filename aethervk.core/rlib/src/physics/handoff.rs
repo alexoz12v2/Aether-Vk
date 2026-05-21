@@ -55,7 +55,7 @@ impl SpheresOfInfluenceSystem {
       core::iter::repeat_with(alloc::vec::Vec::new).take(all_frames.len()).collect();
 
     // 2. Process Escapes and Captures per frame
-    for (i, frame) in all_frames.iter().enumerate() {
+    for (_i, frame) in all_frames.iter().enumerate() {
       let parent_idx =
         frame.parent_id.and_then(|pid| all_frames.iter().position(|f| f.entity_id == pid));
       let children_indices = children_map.get(&frame.entity_id).cloned().unwrap_or_default();

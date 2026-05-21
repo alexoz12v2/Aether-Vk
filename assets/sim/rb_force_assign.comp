@@ -1,0 +1,120 @@
+// SPDX-License-Identifier: MIT
+// @assets/sim/rb_force_assign.comp
+//
+// Rigid Body Force Aggregation — Leaf Wrenches → CoM Wrench
+// ──────────────────────────────────────────────────────────
+// Each workgroup processes exactly ONE rigid body.  Threads stride across
+// all leaf/primitive wrench entries [leaf_start_idx .. leaf_start_idx + leaf_count)
+// and accumulate them into the body's Centre-of-Mass Wrench at wrenches[wrench_idx].
+//
+// Reduction strategy (subgroup-size agnostic):
+//   1. Each thread accumulates its stripe of leaf wrenches into local vec3 registers.
+//   2. subgroupAdd collapses each subgroup to a single value.
+//   3. Subgroup lane 0 stores its result into shared memory sh_f / sh_t.
+//   4. Thread 0 does a final linear summation over all subgroups and fires a
+//      single atomicAdd to the CoM wrench.
+//
+// This avoids atomic floats on shared memory (which need a separate HW feature
+// bit) and keeps shared memory usage minimal — friendly to low-end hardware.
+//
+// Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
+
+#version 450 core
+#extension GL_EXT_buffer_reference          : require
+#extension GL_EXT_scalar_block_layout       : require
+#extension GL_EXT_shader_atomic_float       : require   // atomicAdd on Wrench buffer fields
+#extension GL_KHR_shader_subgroup_basic     : require
+#extension GL_KHR_shader_subgroup_arithmetic: require
+#extension GL_GOOGLE_include_directive      : require
+
+#include "../debug_utils.glsl"
+#include "../bvh_utils.glsl"   // SUBGROUP_SIZE, SUBGROUPS_PER_WG derived below
+#include "imex_math.glsl"      // RigidBody, Wrench, ADD_LINEAR_FORCE, ADD_TORQUE
+
+// ─── Buffer references ──────────────────────────────────────────────────────
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer RigidBodyArray {
+    RigidBody bodies[];
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer WrenchArray {
+    Wrench wrenches[];
+};
+
+// ─── Push constants (24 bytes) ──────────────────────────────────────────────
+layout(push_constant, scalar) uniform PushConstants {
+    RigidBodyArray rigid_bodies;   // BDA — 8 B
+    WrenchArray    wrenches;       // BDA — 8 B
+    uint           n_bodies;       // 4 B
+    uint           _pad;           // 4 B
+} pc;
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+// ─── Shared reduction buffers (sized by specialization constant) ─────────────
+// SUBGROUP_SIZE is defined as layout(constant_id=0) in bvh_utils.glsl — valid
+// for SPIR-V array sizing.
+const uint SUBGROUPS_PER_WG_RFA = 128u / SUBGROUP_SIZE;
+
+shared vec3 sh_f[SUBGROUPS_PER_WG_RFA];
+shared vec3 sh_t[SUBGROUPS_PER_WG_RFA];
+
+void main() {
+    uint body_id = gl_WorkGroupID.x;
+    if (body_id >= pc.n_bodies) return;
+
+    uint local_id   = gl_LocalInvocationID.x;
+    uint sg_id      = gl_SubgroupID;
+    uint sg_lane    = gl_SubgroupInvocationID;
+
+    // ── Load body metadata ────────────────────────────────────────────────
+    RigidBody body         = pc.rigid_bodies.bodies[body_id];
+    uint      leaf_start   = body.leaf_start_idx;
+    uint      leaf_count   = body.leaf_count;
+    uint      com_wrench   = body.wrench_idx;
+
+    // ── Each thread accumulates its stripe of leaf wrenches ───────────────
+    vec3 acc_f = vec3(0.0);
+    vec3 acc_t = vec3(0.0);
+
+    for (uint i = local_id; i < leaf_count; i += 128u) {
+        Wrench lw  = pc.wrenches.wrenches[leaf_start + i];
+        acc_f     += vec3(lw.force_x,  lw.force_y,  lw.force_z);
+        acc_t     += vec3(lw.torque_x, lw.torque_y, lw.torque_z);
+    }
+
+    // ── Subgroup reduce ───────────────────────────────────────────────────
+    acc_f.x = subgroupAdd(acc_f.x);
+    acc_f.y = subgroupAdd(acc_f.y);
+    acc_f.z = subgroupAdd(acc_f.z);
+    acc_t.x = subgroupAdd(acc_t.x);
+    acc_t.y = subgroupAdd(acc_t.y);
+    acc_t.z = subgroupAdd(acc_t.z);
+
+    // Subgroup lane 0 deposits result into shared memory
+    if (sg_lane == 0u) {
+        sh_f[sg_id] = acc_f;
+        sh_t[sg_id] = acc_t;
+    }
+
+    barrier();
+
+    // ── Thread 0: final cross-subgroup summation + buffer write ──────────
+    if (local_id == 0u) {
+        vec3 total_f = vec3(0.0);
+        vec3 total_t = vec3(0.0);
+        for (uint s = 0u; s < SUBGROUPS_PER_WG_RFA; ++s) {
+            total_f += sh_f[s];
+            total_t += sh_t[s];
+        }
+        // A single atomicAdd per component into the CoM wrench slot.
+        ADD_LINEAR_FORCE(pc.wrenches.wrenches[com_wrench], total_f);
+        ADD_TORQUE      (pc.wrenches.wrenches[com_wrench], total_t);
+
+        if (SHOULD_DEBUG_PRINT) {
+            debugPrintfEXT("[rb_force_assign] body=%d  f=(%.4f,%.4f,%.4f)  t=(%.4f,%.4f,%.4f)\n",
+                body_id,
+                total_f.x, total_f.y, total_f.z,
+                total_t.x, total_t.y, total_t.z);
+        }
+    }
+}

@@ -1,10 +1,14 @@
 //! compute_push_constants module.
 
+// ── Legacy format (rotation-matrix based) — used by old shaders only ──────────
+/// Legacy rigid-body GPU layout. Kept for old `p3-4_imex_rigidbody_imr.comp` interop.
+/// New code should use [`RigidBodyImex`].
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
-pub struct RigidBodyGpu {
+pub struct RigidBodyLegacyGpu {
   pub position: [f32; 3],
   pub mass: f32,
+  /// Row-major 3×3 rotation matrix (9 floats).
   pub rotation: [f32; 9],
   pub linear_velocity: [f32; 3],
   pub _pad0: f32,
@@ -12,6 +16,57 @@ pub struct RigidBodyGpu {
   pub _pad1: f32,
   pub inertia_tensor: [f32; 9],
 }
+
+/// Backward-compat alias so existing code compiles while migrating.
+#[allow(deprecated)]
+#[deprecated(since = "0.0.0", note = "Use `RigidBodyImex` for the new IMEX pipeline")]
+pub type RigidBodyGpu = RigidBodyLegacyGpu;
+
+// ── IMEX format (quaternion based) — matches `imex_math.glsl RigidBody` ───────
+/// New rigid-body GPU layout consumed by `integrate_bodies_p3.comp` and the
+/// full IMEX broad-phase suite.  Layout **must** exactly mirror the GLSL
+/// `RigidBody` struct in `imex_math.glsl` (scalar block layout).
+///
+/// ```text
+/// layout(scalar) struct RigidBody {
+///   vec4  position_mass;          // xyz = CoM, w = mass
+///   vec4  orientation;            // unit quaternion (x,y,z,w)
+///   vec4  linear_vel_drag;        // xyz = v_lin, w = drag coeff
+///   vec4  angular_vel_drag;       // xyz = ω, w = rotational drag
+///   vec3  inertia_inv_diag;       // diagonal of I^{-1} in body frame
+///   uint  wrench_idx;             // index into WrenchArray
+/// };
+/// ```
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct RigidBodyImex {
+  /// CoM position (xyz) + mass (w).
+  pub position_mass: [f32; 4],
+  /// Unit quaternion (x, y, z, w).
+  pub orientation: [f32; 4],
+  /// Linear velocity (xyz) + drag coefficient (w).
+  pub linear_vel_drag: [f32; 4],
+  /// Angular velocity (xyz) + rotational drag (w).
+  pub angular_vel_drag: [f32; 4],
+  /// Diagonal of I^{-1} in body frame (xyz) + unused (w for alignment).
+  pub inertia_inv_diag: [f32; 4],
+  /// Index into the per-frame `WrenchArray` buffer.
+  pub wrench_idx: u32,
+  pub _pad: [u32; 3],
+}
+
+// ── Wrench (force + torque) ────────────────────────────────────────────────────
+/// 6-DOF wrench accumulated per rigid body. Matches `imex_math.glsl Wrench`.
+/// Layout: `struct Wrench { vec3 force; vec3 torque; }` — 6 floats, 24 bytes.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct Wrench {
+  pub force: [f32; 3],
+  pub _pad0: f32,
+  pub torque: [f32; 3],
+  pub _pad1: f32,
+}
+
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -175,4 +230,23 @@ pub struct BarnesHutPushConstants {
   pub total_particles: u32,
   pub theta: f32,
   pub g: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct AabbGpu {
+  pub min_bounds: [f32; 3],
+  pub max_bounds: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct MultiBvhNodeGpu {
+  pub bounds: [AabbGpu; 4],
+  pub child_or_primitive_offsets: [u32; 4],
+  pub primitive_counts: [u32; 4],
+  pub is_leaf: [u32; 4], // 1 if leaf, 0 if internal
+  pub valid_count: u32,
+  pub masses: [f32; 4],
+  pub centers_of_mass: [[f32; 3]; 4],
 }

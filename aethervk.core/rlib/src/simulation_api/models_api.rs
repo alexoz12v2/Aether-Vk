@@ -5,7 +5,7 @@ use crate::{
   scene::{PhysicalMeshComponent, TransformComponent},
   simulation_api::SimulationContext,
 };
-use alloc::{string::String, sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec::Vec};
 use core::ffi::{CStr, c_char};
 use oshal::math::vector::{vec3::Vec3f32, vec4::Quat};
 
@@ -53,7 +53,7 @@ impl SimulationContext {
     };
 
     let sphere = crate::simulation::comet::generate_uv_sphere(radius, 32, 32, mass);
-    let mut scenes = self.scenes.write();
+    let scenes = self.scenes.write();
     let scene_ctx_lock =
       scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
     let mut active_scene = scene_ctx_lock.write();

@@ -1,7 +1,7 @@
 //! simulation_api module.
 
 use crate::{
-  gpu::{self, RenderDevice, RenderDeviceHandle, WeakRenderFrontend, WeakRenderFrontendExt},
+  gpu::{RenderDevice, RenderDeviceHandle, WeakRenderFrontend, WeakRenderFrontendExt},
   physics,
   scene::{
     CameraComponent, CursorComponent, GridComponent, PhysicalMeshComponent, Scene, SkyComponent,
@@ -10,16 +10,16 @@ use crate::{
   simulation,
   simulation::texture_cache::TextureCache,
   simulation_api::structs::{
-    SceneContext, SimulationSceneData, SimulationTaskManager, SimulationTaskResult,
+    SceneContext, SimulationSceneData, SimulationTaskManager,
   },
   types::{EngineError, EngineResult, GpuResult},
 };
 use aethervk_oshal_rlib as oshal;
-use alloc::{collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
-use core::ffi::{CStr, c_char};
+use alloc::{string::ToString, sync::Arc};
+use core::ffi::c_char;
 use oshal::{
   math::{
-    matrix::{Matrix4, mat4::Mat4x4f32},
+    matrix::Matrix4,
     quaternion::Quaternion,
     vector::{Vector3, vec3::Vec3f32, vec4::Quat},
   },

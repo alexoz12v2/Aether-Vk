@@ -1,0 +1,109 @@
+// @assets/sim/bp_scene.comp
+#version 450 core
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_ballot : require
+
+#include "../bvh_utils.glsl"
+
+layout(local_size_x = 256) in;
+const uint SUBGROUPS_PER_WG = 256 / SUBGROUP_SIZE;
+
+struct TLASLeaf { vec3 min_bound; uint entity_idx; vec3 max_bound; uint metadata; };
+
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer LeafBuffer { TLASLeaf leaves[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer PairBuffer { uint count; uvec2 pairs[]; };
+
+layout(push_constant, scalar) uniform PushConstants {
+    MultiBvhBuffer tlas_bvh;
+    LeafBuffer query_leaves;
+    PairBuffer overlapping_pairs;
+    uint     tlas_root_index;
+    uint     total_queries;
+} pc;
+
+shared uint shared_stacks[SUBGROUPS_PER_WG][32]; 
+shared uint shared_stack_ptrs[SUBGROUPS_PER_WG];
+
+bool intersectAABB(vec3 amin, vec3 amax, vec3 bmin, vec3 bmax) {
+    return (amin.x <= bmax.x && amax.x >= bmin.x) &&
+           (amin.y <= bmax.y && amax.y >= bmin.y) &&
+           (amin.z <= bmax.z && amax.z >= bmin.z);
+}
+
+void main() {
+    uint subgroup_id = gl_SubgroupID;
+    uint lane_id     = gl_SubgroupInvocationID;
+    
+    uint query_idx = gl_WorkGroupID.x * SUBGROUPS_PER_WG + subgroup_id;
+    if (query_idx >= pc.total_queries) return;
+
+    MultiBvhBuffer tlas  = pc.tlas_bvh;
+    LeafBuffer queries   = pc.query_leaves;
+    PairBuffer pairs_buf = pc.overlapping_pairs;
+
+    vec3 my_min, my_max; uint my_ent_id;
+
+    if (lane_id == 0) {
+        my_min = queries.leaves[query_idx].min_bound;
+        my_max = queries.leaves[query_idx].max_bound;
+        my_ent_id = queries.leaves[query_idx].entity_idx;
+
+        shared_stacks[subgroup_id][0] = pc.tlas_root_index;
+        shared_stack_ptrs[subgroup_id] = 1;
+    }
+
+    my_min = vec3(subgroupBroadcast(my_min.x, 0), subgroupBroadcast(my_min.y, 0), subgroupBroadcast(my_min.z, 0));
+    my_max = vec3(subgroupBroadcast(my_max.x, 0), subgroupBroadcast(my_max.y, 0), subgroupBroadcast(my_max.z, 0));
+    my_ent_id = subgroupBroadcast(my_ent_id, 0);
+
+    while (true) {
+        subgroupMemoryBarrierShared();
+        uint stack_ptr = shared_stack_ptrs[subgroup_id];
+        if (stack_ptr == 0) break;
+        
+        stack_ptr--;
+        uint node_idx = shared_stacks[subgroup_id][stack_ptr];
+        if (lane_id == 0) shared_stack_ptrs[subgroup_id] = stack_ptr;
+
+        uint meta = tlas.nodes[node_idx].metadata[lane_id];
+        
+        bool valid = false;
+        if (lane_id < 32) {
+            valid = (tlas.nodes[node_idx].valid_mask.x & (1u << lane_id)) != 0u;
+        } else {
+            valid = (tlas.nodes[node_idx].valid_mask.y & (1u << (lane_id - 32))) != 0u;
+        }
+        
+        vec3 c_min = vec3(tlas.nodes[node_idx].min_x[lane_id], tlas.nodes[node_idx].min_y[lane_id], tlas.nodes[node_idx].min_z[lane_id]);
+        vec3 c_max = vec3(tlas.nodes[node_idx].max_x[lane_id], tlas.nodes[node_idx].max_y[lane_id], tlas.nodes[node_idx].max_z[lane_id]);
+        uint child_payload = tlas.nodes[node_idx].child_indices[lane_id];
+
+        bool hit = valid && intersectAABB(my_min, my_max, c_min, c_max);
+        bool is_leaf = bvh_is_leaf(meta);
+        
+        // Prevents (A,A) and duplicate (B,A) pairs!
+        bool hit_leaf = hit && is_leaf && (my_ent_id < child_payload);
+        bool hit_node = hit && !is_leaf;
+
+        uvec4 leaf_ballot = subgroupBallot(hit_leaf);
+        uint  leaf_count  = subgroupBallotBitCount(leaf_ballot);
+        uint  leaf_offset = subgroupBallotExclusiveBitCount(leaf_ballot);
+
+        if (leaf_count > 0) {
+            uint base_idx = 0;
+            if (lane_id == 0) base_idx = atomicAdd(pairs_buf.count, leaf_count);
+            base_idx = subgroupBroadcast(base_idx, 0);
+
+            if (hit_leaf) pairs_buf.pairs[base_idx + leaf_offset] = uvec2(my_ent_id, child_payload);
+        }
+
+        uvec4 node_ballot = subgroupBallot(hit_node);
+        uint  node_count  = subgroupBallotBitCount(node_ballot);
+        uint  push_offset = subgroupBallotExclusiveBitCount(node_ballot);
+
+        if (hit_node) shared_stacks[subgroup_id][stack_ptr + push_offset] = child_payload;
+        if (lane_id == 0) shared_stack_ptrs[subgroup_id] = stack_ptr + node_count;
+    }
+}

@@ -7,7 +7,7 @@ use crate::{
   simulation_api::{
     BREADCRUMB_CALLBACK, SimulationContext,
     structs::{
-      RaycastResult, RenderCommand, RenderTaskStatus, Resize, SharedDataWrapper,
+      RaycastResult, RenderCommand, Resize,
       SimulationTaskResult, TaskStatusCode,
     },
   },
@@ -15,7 +15,6 @@ use crate::{
 };
 use aethervk_oshal_rlib::{
   self as oshal,
-  math::matrix::{Matrix4, mat4::Mat4x4f32},
 };
 use core::ffi::c_char;
 
@@ -60,7 +59,7 @@ impl SimulationContext {
 
   /// TODO: Document this item
   pub fn get_task_status(&self, task_id: u64) -> TaskStatusCode {
-    if (task_id == 0 || task_id == u64::MAX) {
+    if task_id == 0 || task_id == u64::MAX {
       return TaskStatusCode::Invalid;
     }
 
@@ -159,7 +158,7 @@ impl SimulationContext {
     let scene = expect_scene!(scene_data.get_scene(scene_id), "scene_api:resize");
     {
       let scene_write = scene.write();
-      scene_write.scene.query1_mut(|e: EntityId, c: &mut CameraComponent| {
+      scene_write.scene.query1_mut(|_e: EntityId, c: &mut CameraComponent| {
         c.update_for_extent(width, height);
       });
     }

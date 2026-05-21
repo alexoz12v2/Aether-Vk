@@ -2,7 +2,7 @@
 
 use crate::simulation::comet::TexelFormat;
 use aethervk_oshal_rlib::{hash::FnvHasher, os::files::Mmap};
-use alloc::{collections::BTreeMap, format, string::String, vec::Vec};
+use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use bytes::Bytes;
 use core::hash::Hasher;
 

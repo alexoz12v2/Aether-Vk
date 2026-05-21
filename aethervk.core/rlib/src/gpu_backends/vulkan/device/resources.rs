@@ -1,16 +1,16 @@
 //! resources module.
 
 use crate::{
-  gpu::vulkan::device::{DebugTrackedRwLock, LogicalDevice},
+  gpu::vulkan::device::DebugTrackedRwLock,
   gpu_backends::{
     vulkan,
     vulkan::device::{VmaDebugNameExt, VulkanDebugNameExt},
   },
-  simulation::comet::{TexelFormat, Texture},
+  simulation::comet::Texture,
 };
 use aethervk_oshal_rlib as oshal;
-use alloc::{boxed::Box, collections::VecDeque, string::ToString, sync, vec::Vec};
-use ash::{Device, vk, vk::Handle};
+use alloc::{boxed::Box, collections::VecDeque, sync, vec::Vec};
+use ash::{vk, vk::Handle};
 use core::{
   hash::{Hash, Hasher},
   ptr,
@@ -22,17 +22,16 @@ use spirv_reflect::{
   ffi::SpvReflectResult_SPV_REFLECT_RESULT_SUCCESS, types::ReflectShaderStageFlags,
 };
 use static_assertions as sa;
-use vk_mem::{Alloc, AsAllocatorView};
+use vk_mem::Alloc;
 
 use crate::{
-  gpu::{PipelineKey, PipelineKeyable, PresentationEngineHandle, TextureFlags},
+  gpu::{PipelineKey, TextureFlags},
   gpu_backends::vulkan::{
     device::{
       DeviceResource, DeviceResourceJanitor, FunctionalDeviceResource,
       commands::{self, CommandBufferId},
       descriptors::{self, DescriptorPools},
       pipelines::GraphicsInfo,
-      shader_manager::Shader,
     },
     utils::NonZeroHandle,
   },
@@ -449,7 +448,7 @@ impl Image {
     debug_name: &str,
   ) -> GpuResult<Self> {
     let mut sharing_mode = vk::SharingMode::EXCLUSIVE;
-    let mut queue_family_indices = [graphics_queue_family, compute_queue_family];
+    let queue_family_indices = [graphics_queue_family, compute_queue_family];
     let queue_count = if graphics_queue_family != compute_queue_family {
       sharing_mode = vk::SharingMode::CONCURRENT;
       2
@@ -596,7 +595,7 @@ impl Image {
     debug_name: &str,
   ) -> GpuResult<Self> {
     let mut sharing_mode = vk::SharingMode::EXCLUSIVE;
-    let mut queue_family_indices = [graphics_queue_family, compute_queue_family];
+    let queue_family_indices = [graphics_queue_family, compute_queue_family];
     let queue_count = if graphics_queue_family != compute_queue_family {
       sharing_mode = vk::SharingMode::CONCURRENT;
       2
@@ -1741,7 +1740,7 @@ impl TextRenderResourceArchetypeArena {
   }
   // TODO ENd deduplicate blcok
 
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
     discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
     if let Some(sampler) = self.font_sampler {
@@ -1855,7 +1854,7 @@ impl TextRenderResourceArchetypeArena {
   pub fn upload_font_atlas(
     &mut self,
     device: &vulkan::device::LogicalDevice,
-    queue: &vulkan::device::Queue,
+    _queue: &vulkan::device::Queue,
     allocator: vk_mem::AllocatorView,
     staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
     command_buffer: vk::CommandBuffer,
@@ -2029,7 +2028,7 @@ impl Text2RenderResourceArchetypeArena {
     }
   }
 
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
     discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
     if let Some(sampler) = self.font_sampler {
@@ -2174,7 +2173,7 @@ impl Text2RenderResourceArchetypeArena {
   pub fn upload_font_atlas(
     &mut self,
     device: &vulkan::device::LogicalDevice,
-    queue: &vulkan::device::Queue,
+    _queue: &vulkan::device::Queue,
     allocator: vk_mem::AllocatorView,
     staging_arena: &crate::gpu_backends::vulkan::device::memory::FrameStagingArena,
     command_buffer: vk::CommandBuffer,
@@ -2260,7 +2259,7 @@ pub(super) struct BvhRenderResourceArchetype {
 }
 
 impl BvhRenderResourceArchetypeArena {
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
   }
 }
@@ -2347,7 +2346,7 @@ impl SphereGizmoRenderResourceArchetypeArena {
     }
   }
 
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
     discard_pool.discard_buffer(
       self.allocator_raw,
@@ -2437,7 +2436,7 @@ unsafe impl Send for Bvhwire2RenderResourceArchetypeArena {}
 unsafe impl Send for Bvhwire2RenderResourceArchetype {}
 
 impl Bvhwire2RenderResourceArchetypeArena {
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
     discard_pool.discard_buffer(
       self.allocator_raw,
@@ -2558,7 +2557,7 @@ impl ArchetypeArenaCreate for MeasurementRenderResourceArchetypeArena {
 }
 impl MeasurementRenderResourceArchetypeArena {
   /// TODO: Document this item
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, _timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, u64::MAX);
   }
@@ -2616,7 +2615,7 @@ impl ArchetypeArenaCreate for MarkerRenderResourceArchetypeArena {
 
 impl MarkerRenderResourceArchetypeArena {
   /// TODO: Document this item
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
   }
@@ -2663,7 +2662,7 @@ impl ArchetypeArenaCreate for MinimapRenderResourceArchetypeArena {
 }
 impl MinimapRenderResourceArchetypeArena {
   /// TODO: Document this item
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
   }
@@ -2807,7 +2806,7 @@ unsafe impl Send for UiRenderResourceArchetypeArena {}
 unsafe impl Send for UiRenderResourceArchetype {}
 
 impl UiRenderResourceArchetypeArena {
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
     discard_pool.discard_descriptor_set_layout(self.set_0_layout.get(), timeline);
     struct PoolDiscard(vk::DescriptorPool);
@@ -3343,7 +3342,7 @@ impl BillboardRenderResourceArchetypeArena {
   }
 
   /// TODO: Document this item
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     // we don't care about descriptor set. discard the pool
     discard_pool.discard_type_erased(
@@ -3480,7 +3479,7 @@ impl ArchetypeArenaCreate for GizmoRenderResourceArchetypeArena {
 
 impl GizmoRenderResourceArchetypeArena {
   /// TODO: Document this item
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_type_erased(
       FunctionalDeviceResource::new(self.descriptor_pool.get(), |pool, device| unsafe {
@@ -3603,7 +3602,7 @@ impl ArchetypeArenaCreate for ParticleRenderResourceArchetypeArena {
     );
 
     // --- SAFE VMA ALLOCATIONS ---
-    let mut alloc_create_info = vk_mem::AllocationCreateInfo {
+    let alloc_create_info = vk_mem::AllocationCreateInfo {
       usage: vk_mem::MemoryUsage::AutoPreferDevice,
       ..Default::default()
     };
@@ -3705,7 +3704,7 @@ impl ParticleRenderResourceArchetypeArena {
   }
 
   /// TODO: Document this item
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_type_erased(
       FunctionalDeviceResource::new(self.descriptor_pool.get(), |pool, device| unsafe {
@@ -3837,7 +3836,7 @@ impl ArchetypeArenaCreate for Particle2RenderResourceArchetypeArena {
     );
 
     // --- SAFE VMA ALLOCATIONS ---
-    let mut alloc_create_info = vk_mem::AllocationCreateInfo {
+    let alloc_create_info = vk_mem::AllocationCreateInfo {
       usage: vk_mem::MemoryUsage::AutoPreferDevice,
       ..Default::default()
     };
@@ -3936,7 +3935,7 @@ impl Particle2RenderResourceArchetypeArena {
   }
 
   /// TODO: Document this item
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_type_erased(
       FunctionalDeviceResource::new(self.descriptor_pool.get(), |pool, device| unsafe {
@@ -3988,7 +3987,7 @@ unsafe impl Send for CursorRenderResourceArchetype {}
 
 impl CursorRenderResourceArchetypeArena {
   /// TODO: Document this item
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
   }
@@ -4074,7 +4073,7 @@ impl ArchetypeArenaCreate for SkyRenderResourceArchetypeArena {
 
 impl SkyRenderResourceArchetypeArena {
   /// TODO: Document this item
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
     discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
@@ -4117,7 +4116,7 @@ impl ArchetypeArenaCreate for BackgroundRenderResourceArchetypeArena {
 
 impl BackgroundRenderResourceArchetypeArena {
   /// TODO: Document this item
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
   }
@@ -4142,7 +4141,7 @@ pub(super) struct GridRenderResourceArchetype {
 
 impl GridRenderResourceArchetypeArena {
   /// TODO: Document this item
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
   }
@@ -4228,7 +4227,7 @@ impl ArchetypeArenaCreate for SunRenderResourceArchetypeArena {
 
 impl SunRenderResourceArchetypeArena {
   /// TODO: Document this item
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
     discard_pool.discard_descriptor_set_layout(self.descriptor_set_layout.get(), timeline);
@@ -4290,7 +4289,7 @@ pub(super) struct ForwardMesh2RenderResourceArchetype {
 }
 
 impl ForwardMesh2RenderResourceArchetypeArena {
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     let layout = self.pipeline_layout.get();
     discard_pool.discard_pipeline_layout(layout, timeline);
     discard_pool.discard_image_view(self.dummy_texture_handle.image_view.get(), timeline);
@@ -4651,7 +4650,7 @@ impl ArchetypeArenaCreate for ForwardMeshRenderResourceArchetypeArena {
 impl ForwardMeshRenderResourceArchetype {}
 
 impl ForwardMeshRenderResourceArchetypeArena {
-  pub fn discard(&mut self, device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(&mut self, _device: &ash::Device, discard_pool: &DiscardPool, timeline: u64) {
     aethervk_oshal_rlib::log!(
       "ForwardMeshRenderResourceArchetypeArena::discard called for dummy_texture_handle: {:#X}",
       self.dummy_texture_handle.image.get().as_raw()
@@ -4697,7 +4696,7 @@ pub(super) fn create_buffer_with_staging<T: Copy>(
     let device_buffer_info = vk::BufferCreateInfo::default()
       .size(buffer_size)
       .usage(usage | vk::BufferUsageFlags::TRANSFER_DST);
-    let mut device_alloc_info = vk_mem::AllocationCreateInfo {
+    let device_alloc_info = vk_mem::AllocationCreateInfo {
       usage: vk_mem::MemoryUsage::Auto,
       flags: vk_mem::AllocationCreateFlags::DEDICATED_MEMORY,
       preferred_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,

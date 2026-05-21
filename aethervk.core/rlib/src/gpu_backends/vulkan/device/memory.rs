@@ -1,10 +1,9 @@
 //! memory module.
 
 use crate::{gpu_backends::vulkan::device::DeviceResource, types::GpuResult};
-use aethervk_oshal_rlib as oshal;
 use alloc::boxed::Box;
 use ash::vk;
-use core::{mem, ptr};
+use core::mem;
 use function_name::named;
 
 /// TODO: Document this item
@@ -53,13 +52,13 @@ unsafe extern "C" fn on_device_alloc(
 
   track_gpu_alloc!(memory.as_raw(), size);
 
-  oshal::log!(
+  aethervk_oshal_rlib::log!(
     "[VMA] Alloc: size: {} bytes, type: {}, mem: {:#X}",
     size,
     memory_type,
     memory.as_raw()
   );
-  oshal::os::debug::print_aethervk_stacktrace(7, 4);
+  aethervk_oshal_rlib::os::debug::print_aethervk_stacktrace(7, 4);
 }
 #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
 #[allow(unused)]
@@ -81,13 +80,13 @@ unsafe extern "C" fn on_device_free(
     // Note: If you want to use LogicalDevice, it's available here.
   }
 
-  oshal::log!(
+  aethervk_oshal_rlib::log!(
     "[VMA] Free:  size: {} bytes, type: {}, mem: {:#X}",
     size,
     memory_type,
     memory.as_raw()
   );
-  oshal::os::debug::print_aethervk_stacktrace(7, 4);
+  aethervk_oshal_rlib::os::debug::print_aethervk_stacktrace(7, 4);
 }
 
 impl GlobalDeviceAllocator {
@@ -110,7 +109,7 @@ impl GlobalDeviceAllocator {
     let callbacks = vk_mem::ffi::VmaDeviceMemoryCallbacks {
       pfnAllocate: Some(on_device_alloc),
       pfnFree: Some(on_device_free),
-      pUserData: ptr::null_mut(),
+      pUserData: core::ptr::null_mut(),
     };
     #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
     {
@@ -178,7 +177,7 @@ impl FrameStagingArena {
     let buffer_info = vk::BufferCreateInfo::default()
       .size(capacity as u64)
       .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
-    let mut alloc_info = vk_mem::AllocationCreateInfo {
+    let alloc_info = vk_mem::AllocationCreateInfo {
       usage: vk_mem::MemoryUsage::Auto,
       flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
         | vk_mem::AllocationCreateFlags::MAPPED,
@@ -236,7 +235,7 @@ impl FrameStagingArena {
 impl DeviceResource for GlobalDeviceAllocator {
   fn cleanup(&mut self, _device: &ash::Device) {
     #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
-    oshal::os::memory::tracking::report_leaked_gpu_allocations();
+    aethervk_oshal_rlib::os::memory::tracking::report_leaked_gpu_allocations();
     unsafe { mem::ManuallyDrop::drop(&mut self.allocator) };
   }
 }

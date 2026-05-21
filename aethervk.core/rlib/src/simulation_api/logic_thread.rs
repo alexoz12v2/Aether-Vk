@@ -1,9 +1,6 @@
 //! logic_thread module.
 
-use super::{
-  SimulationContext,
-  structs::{LogicCommand, LogicThreadContext, LogicWorkload, SceneContext, SimulationTaskResult},
-};
+use super::structs::{LogicCommand, LogicThreadContext, LogicWorkload, SceneContext, SimulationTaskResult};
 use crate::{
   gpu::WeakRenderFrontendExt,
   scene::{
@@ -15,7 +12,6 @@ use crate::{
 use aethervk_oshal_rlib::{
   self as oshal,
   math::{
-    floating::FloatOps,
     quaternion::Quaternion,
     vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec4::Quat},
   },
@@ -28,7 +24,7 @@ use aethervk_oshal_rlib::{
   },
 };
 use alloc::{boxed::Box, string::ToString};
-use spin::{RwLockReadGuard, RwLockUpgradableGuard};
+use spin::RwLockReadGuard;
 use thingbuf::mpsc;
 
 struct PlayControl {
@@ -748,11 +744,11 @@ fn process_command_internal(
       }
     }
     // TODO: async tasklet. this should return the task_id, not take it, while a new command QueryLoadAlmanacFinished should poll the task id and return EngineResult<bool> true in case it finished
-    LogicCommand::LoadAlmanac { task_id, path } => {
+    LogicCommand::LoadAlmanac { task_id: _, path } => {
       ctx.load_almanac_file_internal(&path)?;
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::UnloadAlmanac { task_id, path } => {
+    LogicCommand::UnloadAlmanac { task_id: _, path } => {
       // Pause all scenes to prevent physics errors during unload
       {
         let scenes = ctx.scenes.read();
@@ -765,7 +761,7 @@ fn process_command_internal(
     }
     // TODO: async tasklet. this should return the task_id, not take it, while a new command QueryLoadCometSpkFinished should poll the task id and return EngineResult<bool> true in case it finished
     LogicCommand::LoadCometSpk {
-      task_id,
+      task_id: _,
       spk_id,
       frame,
       epoch,
@@ -840,7 +836,7 @@ fn execute_simulation_tick(
   scene_id: u64,
   ctx: &alloc::sync::Arc<LogicThreadContext>,
 ) -> EngineResult<()> {
-  let (time_state_arc, physics_scene_arc, scene_arc, active_physics_task) = {
+  let (time_state_arc, _physics_scene_arc, _scene_arc, active_physics_task) = {
     let scenes = ctx.scenes.read();
     let scene_ctx =
       scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;

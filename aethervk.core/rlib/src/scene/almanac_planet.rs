@@ -7,7 +7,7 @@ use crate::{
 };
 use aethervk_oshal_rlib::math::{
   quaternion::Quaternion,
-  vector::{Vector, Vector3, vec3::Vec3f32, vec4::Quat},
+  vector::{Vector, vec3::Vec3f32, vec4::Quat},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -39,7 +39,7 @@ impl AlmanacPlanet {
     transform: &mut TransformComponent,
     kinematic: Option<&mut crate::scene::KinematicComponent>,
     epoch: anise::time::Epoch,
-    step_days: f64,
+    _step_days: f64,
     almanac: &AlmanacPackedData,
   ) -> EngineResult<()> {
     let kinematic_state = almanac.get_ephem_full(

@@ -1,0 +1,66 @@
+#version 450 core
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "../bvh_utils.glsl"
+
+layout(local_size_x_id = 0) in; // Binds to SUBGROUP_SIZE via Spec Constant
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer MortonArray {
+    uvec2 entries[]; // x = morton_code, y = primitive_index
+};
+
+// Particles data (AOSOA flattened)
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer ParticleData {
+    float data[];
+};
+
+layout(push_constant, scalar) uniform PushConstants {
+    MortonArray morton_out;
+    ParticleData particles;
+    uint num_particles;
+    vec3 scene_min; // The global minimum bounds of the simulation space
+    vec3 scene_max; // The global maximum bounds of the simulation space
+} pc;
+
+// Expands a 10-bit integer into 30 bits by inserting 2 zeros after each bit.
+uint expandBits(uint v) {
+    v = (v * 0x00010001u) & 0xFF0000FFu;
+    v = (v * 0x00000101u) & 0x0F00F00Fu;
+    v = (v * 0x00000011u) & 0xC30C30C3u;
+    v = (v * 0x00000005u) & 0x49249249u;
+    return v;
+}
+
+uint morton3D(vec3 norm_pos) {
+    norm_pos = clamp(norm_pos, 0.0, 1.0);
+    uint x = uint(norm_pos.x * 1023.0);
+    uint y = uint(norm_pos.y * 1023.0);
+    uint z = uint(norm_pos.z * 1023.0);
+    return (expandBits(x) << 2) | (expandBits(y) << 1) | expandBits(z);
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.num_particles) return;
+
+    // AOSOA unpacking matching your particle structure
+    uint block_idx = idx / SUBGROUP_SIZE;
+    uint local_idx = idx % SUBGROUP_SIZE;
+    uint base = block_idx * (10 * SUBGROUP_SIZE) + local_idx;
+
+    vec3 pos = vec3(
+        pc.particles.data[base + 0 * SUBGROUP_SIZE],
+        pc.particles.data[base + 1 * SUBGROUP_SIZE],
+        pc.particles.data[base + 2 * SUBGROUP_SIZE]
+    );
+
+    // Normalize relative to scene bounds
+    vec3 extents = pc.scene_max - pc.scene_min;
+    vec3 norm_pos = (pos - pc.scene_min) / max(extents, vec3(1e-5));
+
+    uint m_code = morton3D(norm_pos);
+    
+    pc.morton_out.entries[idx] = uvec2(m_code, idx);
+}

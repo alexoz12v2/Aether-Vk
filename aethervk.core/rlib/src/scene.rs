@@ -50,7 +50,6 @@ pub mod text;
 pub mod trajectory;
 pub mod ui;
 
-use crate::simulation_api::structs::SendPtrMut;
 pub use almanac_planet::AlmanacPlanet;
 pub use particles::{
   GaussianParams, ParticleData, ParticleEmitterComponent, ParticleSystemComponent,
@@ -1071,7 +1070,7 @@ impl Scene {
   /// TODO: Document this item
   pub fn should_parallelize(&self) -> bool {
     let size = self.entity_count();
-    let depth = self.hierarchy_depth();
+    let _depth = self.hierarchy_depth();
     let breadth = self.hierarchy_breadth();
 
     // Simple heuristic for parallelization threshold
@@ -2629,7 +2628,7 @@ impl Scene {
     TransformComponent {
       scale: parent.scale * child.scale,
       rotation: parent.rotation * child.rotation,
-      position: parent.position + (parent.rotation.rotate_vector((parent.scale * child.position))),
+      position: parent.position + (parent.rotation.rotate_vector(parent.scale * child.position)),
     }
   }
 

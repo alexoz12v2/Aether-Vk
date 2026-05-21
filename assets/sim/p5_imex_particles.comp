@@ -5,6 +5,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "../debug_utils.glsl"
+#include "../bvh_utils.glsl"
 
 // ============================================================================
 // Phase 5: Particle Explicit Final Kick & Next Force Evaluation
@@ -12,8 +13,8 @@
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
-// Use specialization constant for subgroup size
-layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
+
+
 
 // AOSOA Block Layout flattened into a 1D array
 // 10 attributes per particle block:

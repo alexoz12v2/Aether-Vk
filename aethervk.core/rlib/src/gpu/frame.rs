@@ -14,12 +14,12 @@ use aethervk_oshal_rlib::math::{
   matrix::{Matrix, Matrix4, MatrixVectorMul, SquareMatrix, mat4::Mat4x4f32},
   quaternion::Quaternion,
   vector::{
-    Vector, Vector3, Vector4,
+    Vector3, Vector4,
     vec3::Vec3f32,
     vec4::{Quat, Vec4f32},
   },
 };
-use alloc::{string::ToString, vec::Vec};
+use alloc::vec::Vec;
 use function_name::named;
 // TODO move render_frame here
 
@@ -586,7 +586,7 @@ impl RenderScene {
     &mut self,
     cmd_buffer: gpu::CommandBufferHandle,
     device: &dyn RenderDevice,
-    entity_id: EntityId,
+    _entity_id: EntityId,
     model_matrix: Mat4x4f32,
     renderable: RenderableDataRef,
     presentation_engine_handle: PresentationEngineHandle,
@@ -812,7 +812,7 @@ pub fn do_draw_cursor(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle,
+  _handle: PresentationEngineHandle,
   draw_call: &CursorDrawCall,
   window_extent: [u32; 2],
 ) -> GpuResult<()> {
@@ -839,7 +839,7 @@ pub fn do_draw_marker(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle,
+  _handle: PresentationEngineHandle,
   draw_call: &MarkerDrawCall,
 ) -> GpuResult<()> {
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
@@ -876,7 +876,7 @@ pub fn do_draw_measurement(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle,
+  _handle: PresentationEngineHandle,
   draw_call: &MeasurementDrawCall,
 ) -> GpuResult<()> {
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
@@ -905,7 +905,7 @@ pub fn do_draw_gizmo(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle,
+  _handle: PresentationEngineHandle,
   draw_call: &GizmoDrawCall,
 ) -> GpuResult<()> {
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
@@ -927,7 +927,7 @@ pub fn do_draw_trajectory_batch(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle,
+  _handle: PresentationEngineHandle,
   draw_call: &TrajectoryBatchCall,
   window_extent: [f32; 2],
 ) -> GpuResult<()> {
@@ -953,7 +953,7 @@ pub fn do_draw_billboard(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle, // TODO how is it possible that both screen space and world
+  _handle: PresentationEngineHandle, // TODO how is it possible that both screen space and world
   // space don't need this?
   draw_call: &BillboardDrawCall,
 ) -> GpuResult<()> {
@@ -1053,7 +1053,7 @@ pub fn do_draw_call(
   sun_pos: Vec3f32,
   sun_color: [f32; 4],
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle,
+  _handle: PresentationEngineHandle,
   draw_call: &DrawCall,
 ) -> GpuResult<()> {
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
@@ -1113,7 +1113,7 @@ pub fn do_draw_sun(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle,
+  _handle: PresentationEngineHandle,
   draw_call: &SunDrawCall,
 ) -> GpuResult<()> {
   device.prepare_sun_for_render(cmd_buffer, draw_call.entity)?;
@@ -1132,7 +1132,7 @@ pub fn do_draw_sun(
 pub fn do_draw_sky(
   device: &dyn RenderDevice,
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle,
+  _handle: PresentationEngineHandle,
   draw_call: &SkyDrawCall,
 ) -> GpuResult<()> {
   let push_constants = SkyPushConstants {
@@ -1150,7 +1150,7 @@ pub fn do_draw_particle(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle,
+  _handle: PresentationEngineHandle,
   draw_call: &ParticleDrawCall,
 ) -> GpuResult<()> {
   // Bind pipeline (the descriptor set should have been bound once per frame)
@@ -1189,7 +1189,7 @@ pub fn do_draw_particle2(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle,
+  _handle: PresentationEngineHandle,
   draw_call: &Particle2DrawCall,
   time: f32,
 ) -> GpuResult<()> {
@@ -1228,7 +1228,7 @@ pub fn do_draw_particle2(
 pub fn do_draw_grid(
   device: &dyn RenderDevice,
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle,
+  _handle: PresentationEngineHandle,
   camera: &CameraRenderData,
   draw_call: &GridDrawCall,
 ) -> GpuResult<()> {
@@ -1252,7 +1252,7 @@ pub fn do_draw_grid(
 pub fn do_bvh_draw_call(
   device: &dyn RenderDevice,
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle,
+  _handle: PresentationEngineHandle,
   camera: &CameraRenderData,
   draw_call: &BvhDrawCall,
 ) -> GpuResult<()> {
@@ -1267,7 +1267,7 @@ pub fn do_draw_bvhwire2_batch(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle,
+  _handle: PresentationEngineHandle,
   draw_call: &Bvhwire2BatchCall,
 ) -> GpuResult<()> {
   device.prepare_bvhwire2_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
@@ -1284,7 +1284,7 @@ pub fn do_draw_sphere_gizmo_batch(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle,
+  _handle: PresentationEngineHandle,
   draw_call: &SphereGizmoBatchCall,
 ) -> GpuResult<()> {
   device.prepare_sphere_gizmo_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
@@ -1301,7 +1301,7 @@ pub fn do_draw_ui_batch(
   device: &dyn RenderDevice,
   _camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle,
+  _handle: PresentationEngineHandle,
   draw_call: &crate::gpu::UiBatchCall,
   window_extent: [f32; 2],
 ) -> GpuResult<()> {
@@ -1333,7 +1333,7 @@ pub fn do_draw_text2_batch(
   device: &dyn RenderDevice,
   _camera: &CameraRenderData,
   cmd_buffer: super::CommandBufferHandle,
-  handle: PresentationEngineHandle,
+  _handle: PresentationEngineHandle,
   draw_call: &crate::gpu::Text2BatchCall,
   window_extent: [f32; 2],
 ) -> GpuResult<()> {

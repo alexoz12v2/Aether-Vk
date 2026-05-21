@@ -6,7 +6,7 @@ use crate::{
   gpu::{PresentationEngineHandle, vulkan::device::swapchain},
   gpu_backends::vulkan::{
     device::{
-      DeviceResource, locks::DebugTrackedRwLock, resources::DiscardPool,
+      DeviceResource, resources::DiscardPool,
       swapchain::PresentationState,
     },
     utils::{NonZeroHandle, create_transient_attachment},
@@ -240,7 +240,7 @@ impl RenderPasses {
     pe_handle: PresentationEngineHandle,
     ty: RenderPassSpecification,
     image_index: u32,
-    device: &ash::Device,
+    device: &crate::gpu_backends::vulkan::device::LogicalDevice,
     allocator: vk_mem::AllocatorView,
     discard_pool: &DiscardPool,
     timeline: u64,

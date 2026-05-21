@@ -14,7 +14,7 @@ use function_name::named;
 // TODO: implement trait/function to hash some compile time string
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// TODO: Document this item
-pub(super) struct CommandBufferId(pub u64);
+pub(crate) struct CommandBufferId(pub u64);
 
 impl From<CommandBufferHandle> for CommandBufferId {
   fn from(value: CommandBufferHandle) -> Self {
@@ -31,11 +31,11 @@ struct ThreadPools {
 
 /// alternative to avoid boxing: Use SlotMap. Drawback for alternative: you need to store
 /// a BTreeMap mapping ThreadId to the new_key_type
-pub(super) struct CommandPools {
+pub(crate) struct CommandPools {
   registry: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
     BTreeMap<ThreadId, Box<ThreadPools>>,
   >,
-  queue_family_index: u32,
+  pub queue_family_index: u32,
   spsc_capacity: usize,
 }
 
@@ -60,7 +60,7 @@ unsafe impl Send for CommandPools {}
 
 impl CommandPools {
   /// TODO: Document this item
-  pub(super) fn new(queue_family_index: u32) -> Self {
+  pub(crate) fn new(queue_family_index: u32) -> Self {
     Self {
       registry: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(BTreeMap::new()),
       queue_family_index,
@@ -70,7 +70,7 @@ impl CommandPools {
 
   /// TODO: Document this item
   #[named]
-  pub(super) fn allocate_primary(
+  pub(crate) fn allocate_primary(
     &self,
     device: &LogicalDevice,
     tid: ThreadId,
@@ -127,7 +127,7 @@ impl CommandPools {
     is_primary: bool,
   ) -> GpuResult<vk::CommandBuffer> {
     if is_primary {
-      crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&self.registry, &device.handle)
+      crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&self.registry, device)
         .prepare_write(tid, |registry, tid| {
           let tp = registry.entry(tid).or_insert_with(|| {
             Box::new(ThreadPools {

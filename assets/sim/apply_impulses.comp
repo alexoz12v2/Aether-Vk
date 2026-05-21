@@ -51,30 +51,30 @@ void main() {
     uint pA_id = pair.a.primitive_index;
     uint pB_id = pair.b.primitive_index;
 
-    uint blockA = pA_id / SG_SIZE;
-    uint locA = pA_id % SG_SIZE;
-    uint baseA = blockA * (10 * SG_SIZE) + locA;
+    uint blockA = pA_id / SUBGROUP_SIZE;
+    uint locA = pA_id % SUBGROUP_SIZE;
+    uint baseA = blockA * (10 * SUBGROUP_SIZE) + locA;
 
-    uint blockB = pB_id / SG_SIZE;
-    uint locB = pB_id % SG_SIZE;
-    uint baseB = blockB * (10 * SG_SIZE) + locB;
+    uint blockB = pB_id / SUBGROUP_SIZE;
+    uint locB = pB_id % SUBGROUP_SIZE;
+    uint baseB = blockB * (10 * SUBGROUP_SIZE) + locB;
 
     // Apply positive impulse to particle A
-    float m_A = uintBitsToFloat(pc.particles.data[baseA + 6 * SG_SIZE]);
+    float m_A = uintBitsToFloat(pc.particles.data[baseA + 6 * SUBGROUP_SIZE]);
     if (m_A > 0.0) {
         vec3 dvA = impulse / m_A;
-        atomicAddFloat(baseA + 3 * SG_SIZE, dvA.x);
-        atomicAddFloat(baseA + 4 * SG_SIZE, dvA.y);
-        atomicAddFloat(baseA + 5 * SG_SIZE, dvA.z);
+        atomicAddFloat(baseA + 3 * SUBGROUP_SIZE, dvA.x);
+        atomicAddFloat(baseA + 4 * SUBGROUP_SIZE, dvA.y);
+        atomicAddFloat(baseA + 5 * SUBGROUP_SIZE, dvA.z);
     }
 
     // Apply negative impulse to particle B
-    float m_B = uintBitsToFloat(pc.particles.data[baseB + 6 * SG_SIZE]);
+    float m_B = uintBitsToFloat(pc.particles.data[baseB + 6 * SUBGROUP_SIZE]);
     if (m_B > 0.0) {
         vec3 dvB = -impulse / m_B;
-        atomicAddFloat(baseB + 3 * SG_SIZE, dvB.x);
-        atomicAddFloat(baseB + 4 * SG_SIZE, dvB.y);
-        atomicAddFloat(baseB + 5 * SG_SIZE, dvB.z);
+        atomicAddFloat(baseB + 3 * SUBGROUP_SIZE, dvB.x);
+        atomicAddFloat(baseB + 4 * SUBGROUP_SIZE, dvB.y);
+        atomicAddFloat(baseB + 5 * SUBGROUP_SIZE, dvB.z);
     }
 
     if (SHOULD_DEBUG_PRINT) {

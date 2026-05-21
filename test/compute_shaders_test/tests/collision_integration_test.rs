@@ -38,12 +38,18 @@ fn test_gpu_collision_pipeline_integration() {
   // 1. Create two intersecting spheres (rigidbodies)
   let entities = vec![
     EntityGpu {
-      bvh_addr,
+            bvh: bvh_addr,
       transform: [
-        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
       ],
       inv_transform: [
-        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
       ],
       linear_velocity: [1.0, 0.0, 0.0],
       angular_velocity: [0.0, 0.0, 0.0],
@@ -57,13 +63,18 @@ fn test_gpu_collision_pipeline_integration() {
       shape_data: [0.0; 3],
     },
     EntityGpu {
-      bvh_addr,
+            bvh: bvh_addr,
       transform: [
-        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.5, 0.0, 0.0,
-        1.0, // Intersects first sphere
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
       ],
       inv_transform: [
-        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.5, 0.0, 0.0, 1.0,
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
       ],
       linear_velocity: [-1.0, 0.0, 0.0],
       angular_velocity: [0.0, 0.0, 0.0],
@@ -89,7 +100,7 @@ fn test_gpu_collision_pipeline_integration() {
   let entities_read_back: Vec<EntityGpu> = ctx.read_buffer(entities_buf, &mut entities_alloc, 2);
   println!(
     "DEBUG RUST: read_back entities[0].bvh_addr = 0x{:X}",
-    entities_read_back[0].bvh_addr
+    entities_read_back[0].bvh
   );
 
   // 2. Output buffer for Broad Phase

@@ -1,0 +1,50 @@
+// @assets/sim/bp_bounds_gen.comp
+#version 450 core
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "imex_math.glsl" // Grants dt_to_seconds()
+
+layout(local_size_x = 256) in;
+
+struct TLASLeaf {
+    vec3 min_bound; uint entity_idx;
+    vec3 max_bound; uint metadata;
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer EntityArray { RigidBody entities[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) writeonly buffer LeafBuffer { TLASLeaf leaves[]; };
+
+layout(push_constant, scalar) uniform PushConstants {
+    EntityArray scene_entities;
+    LeafBuffer tlas_leaves;
+    uvec2    dt_us;
+    uint     total_entities;
+} pc;
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= pc.total_entities) return;
+
+    EntityArray ents = pc.scene_entities;
+    LeafBuffer leaves_out = pc.tlas_leaves;
+
+    RigidBody me = ents.entities[id];
+    float dt = dt_to_seconds(pc.dt_us);
+
+    // Assuming shape_data is stored in a lookup or padded in RigidBody
+    // For brevity, we assume shape_extents is accessible
+    vec3 center = me.position_mass.xyz;
+    vec3 extents = vec3(1.0); // Replace with actual extents lookup
+    
+    vec3 static_min = center - extents;
+    vec3 static_max = center + extents;
+
+    // Swept Volume based on velocity
+    vec3 sweep = me.linear_vel_drag.xyz * dt;
+    
+    leaves_out.leaves[id].min_bound = min(static_min, static_min + sweep);
+    leaves_out.leaves[id].max_bound = max(static_max, static_max + sweep);
+    leaves_out.leaves[id].entity_idx = id;
+}

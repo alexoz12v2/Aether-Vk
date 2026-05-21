@@ -3,8 +3,8 @@
 use aethervk_oshal_rlib::math::{
   FloatLike,
   floating::{FloatBits, FloatOps},
-  matrix::{Matrix3, MatrixVectorMul, mat3::Mat3f32},
-  vector::{Vector, Vector3, vec3::Vec3f32},
+  matrix::mat3::Mat3f32,
+  vector::vec3::Vec3f32,
 };
 use alloc::{vec, vec::Vec};
 

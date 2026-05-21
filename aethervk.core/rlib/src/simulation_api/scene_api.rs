@@ -4,9 +4,8 @@ use crate::{
   expect_scene, expect_scene_and_entity,
   math::collision::linear_bvh::LinearBVHNode,
   scene::{
-    AddComponentError, BvhDebugComponent, CameraComponent, CursorComponent, EntityId,
-    FollowingComponent, GridComponent, HiddenComponent, MarkersComponent, MeasurementComponent,
-    PhysicalMeshComponent, Scene, SelectedComponent, SkyComponent, SunComponent,
+    AddComponentError, CursorComponent, EntityId, GridComponent,
+    PhysicalMeshComponent, Scene, SkyComponent, SunComponent,
     TransformComponent,
   },
   simulation_api::{
@@ -17,12 +16,12 @@ use crate::{
 };
 use aethervk_oshal_rlib as oshal;
 use alloc::{string::String, sync::Arc, vec::Vec};
-use core::{any::TypeId, ffi::c_char};
+use core::ffi::c_char;
 use oshal::math::{
   quaternion::Quaternion,
-  vector::{Vector, Vector3, vec3::Vec3f32, vec4::Quat},
+  vector::{Vector3, vec3::Vec3f32, vec4::Quat},
 };
-use spin::{RwLock, RwLockReadGuard};
+use spin::RwLock;
 
 impl SimulationContext {
   /// TODO: Document this item
@@ -355,7 +354,7 @@ impl SimulationContext {
     scene.add_component(grid_entity, GridComponent {})?;
     scene.set_parent(grid_entity, Some(root_entity));
 
-    let mut scene_ctx_obj = SceneContext::new_empty(Arc::new(scene), root_entity)
+    let scene_ctx_obj = SceneContext::new_empty(Arc::new(scene), root_entity)
       .with_cursor_entity(cursor_entity)?
       .with_sun_entity(sun_entity)?
       .with_grid_entity(grid_entity)?

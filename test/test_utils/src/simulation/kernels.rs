@@ -42,10 +42,7 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for CpuDeviceBuffer<T> {
     self.data.capacity()
   }
 
-  fn enqueue_read_to_cpu<'a>(&self, _cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'a>>
-  where
-    T: 'a,
-  {
+  fn enqueue_read_to_cpu(&self, _cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'_>> {
     Ok(CpuWaitHandle {
       data: self.data.clone(),
       _phantom: core::marker::PhantomData,
@@ -69,10 +66,7 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for CpuDeviceList<T> {
     self.buffer.capacity()
   }
 
-  fn enqueue_read_to_cpu<'a>(&self, cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'a>>
-  where
-    T: 'a,
-  {
+  fn enqueue_read_to_cpu(&self, cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'_>> {
     self.buffer.enqueue_read_to_cpu(cmd)
   }
 }
@@ -127,6 +121,10 @@ impl Kernels for CpuKernels {
   type Buffer<T: Copy + Send + Sync> = CpuDeviceBuffer<T>;
   type List<T: Copy + Send + Sync> = CpuDeviceList<T>;
   type MotionBvh = CpuMotionBvh;
+
+  fn discard_buffer<T: Copy + Send + Sync>(&self, _buffer: Self::Buffer<T>) {}
+  fn discard_list<T: Copy + Send + Sync>(&self, _list: Self::List<T>) {}
+  fn discard_bvh(&self, _bvh: Self::MotionBvh) {}
 
   fn create_command_buffer(&self) -> EngineResult<Self::Cmd> {
     Ok(CpuCommandBuffer { submitted: false })

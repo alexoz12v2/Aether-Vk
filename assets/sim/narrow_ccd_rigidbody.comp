@@ -109,19 +109,19 @@ void main() {
         if (pc.entity_A_idx == pc.entity_B_idx && my_prim_id >= other_prim_id) break; \
         vec3 vA; \
         if (ent_A.type == TYPE_PARTICLE_SYSTEM) { \
-            uint blockA = my_prim_id / SG_SIZE; \
-            uint locA = my_prim_id % SG_SIZE; \
-            uint baseA = blockA * (10 * SG_SIZE) + locA; \
-            vA = vec3(pc.particles.data[baseA + 3 * SG_SIZE], pc.particles.data[baseA + 4 * SG_SIZE], pc.particles.data[baseA + 5 * SG_SIZE]); \
+            uint blockA = my_prim_id / SUBGROUP_SIZE; \
+            uint locA = my_prim_id % SUBGROUP_SIZE; \
+            uint baseA = blockA * (10 * SUBGROUP_SIZE) + locA; \
+            vA = vec3(pc.particles.data[baseA + 3 * SUBGROUP_SIZE], pc.particles.data[baseA + 4 * SUBGROUP_SIZE], pc.particles.data[baseA + 5 * SUBGROUP_SIZE]); \
         } else { \
             vA = ent_A.linear_velocity + cross(ent_A.angular_velocity, node_A.center_of_mass); \
         } \
         vec3 vB; \
         if (ent_B.type == TYPE_PARTICLE_SYSTEM) { \
-            uint blockB = other_prim_id / SG_SIZE; \
-            uint locB = other_prim_id % SG_SIZE; \
-            uint baseB = blockB * (10 * SG_SIZE) + locB; \
-            vB = vec3(pc.particles.data[baseB + 3 * SG_SIZE], pc.particles.data[baseB + 4 * SG_SIZE], pc.particles.data[baseB + 5 * SG_SIZE]); \
+            uint blockB = other_prim_id / SUBGROUP_SIZE; \
+            uint locB = other_prim_id % SUBGROUP_SIZE; \
+            uint baseB = blockB * (10 * SUBGROUP_SIZE) + locB; \
+            vB = vec3(pc.particles.data[baseB + 3 * SUBGROUP_SIZE], pc.particles.data[baseB + 4 * SUBGROUP_SIZE], pc.particles.data[baseB + 5 * SUBGROUP_SIZE]); \
         } else { \
             vB = ent_B.linear_velocity + cross(ent_B.angular_velocity, node_B_com); \
         } \
@@ -154,7 +154,7 @@ void main() {
     while (stackPtr > 0) {
         uint node_idx = stack[--stackPtr];
         
-        if (BRANCH_FACTOR == 2) {
+        if (SUBGROUP_SIZE == 2) {
             BVHNodeAABB node_B = read_bvh_node(ent_B.bvh, node_idx);
 
             if (SHOULD_DEBUG_PRINT && local_idx_A == 0) {
@@ -176,22 +176,38 @@ void main() {
                 }
             }
         } else {
-            MultiBVHBlockArray multi_bvh = MultiBVHBlockArray(ent_B.bvh);
-            uint node_valid = GET_MULTI_BVH_VALID_COUNT(multi_bvh, node_idx);
-            for (uint i = 0; i < BRANCH_FACTOR; ++i) {
-                if (i >= node_valid) break;
+            MultiBvhBuffer multi_bvh = MultiBvhBuffer(ent_B.bvh);
+            for (uint i = 0; i < SUBGROUP_SIZE; ++i) {
+                bool valid = false;
+                if (i < 32) {
+                    valid = (multi_bvh.nodes[node_idx].valid_mask.x & (1u << i)) != 0u;
+                } else {
+                    valid = (multi_bvh.nodes[node_idx].valid_mask.y & (1u << (i - 32))) != 0u;
+                }
+                if (!valid) continue;
+
                 AABB bound;
-                GET_MULTI_BVH_BOUND(multi_bvh, node_idx, i, bound);
+                bound.minBounds = vec3(
+                    multi_bvh.nodes[node_idx].min_x[i], 
+                    multi_bvh.nodes[node_idx].min_y[i], 
+                    multi_bvh.nodes[node_idx].min_z[i]
+                );
+                bound.maxBounds = vec3(
+                    multi_bvh.nodes[node_idx].max_x[i], 
+                    multi_bvh.nodes[node_idx].max_y[i], 
+                    multi_bvh.nodes[node_idx].max_z[i]
+                );
+
                 if (intersectAABB(search_aabb_B, bound)) {
-                    bool isLeaf;
-                    uint offset;
-                    GET_MULTI_BVH_LEAF_INFO(multi_bvh, node_idx, i, isLeaf, offset);
+                    bool isLeaf = bvh_is_leaf(multi_bvh.nodes[node_idx].metadata[i]);
+                    uint offset = bvh_get_index(multi_bvh.nodes[node_idx].metadata[i]);
+                    
                     if (isLeaf) {
                         uint other_prim_id = offset;
                         vec3 node_B_com = (bound.minBounds + bound.maxBounds) * 0.5;
                         EVALUATE_NARROW_PHASE(other_prim_id, node_B_com);
                     } else {
-                        if (offset != 0xFFFFFFFF && offset != 0) stack[stackPtr++] = offset;
+                        if (offset != 0xFFFFFFFFu && offset != 0u) stack[stackPtr++] = offset;
                     }
                 }
             }

@@ -4,7 +4,7 @@ pub use super::gpu_backends::*;
 use crate::{
   gpu,
   gpu::frame::ResourceUploadResult,
-  physics::physics_scene::PhysicsScene,
+  physics::physics_scene::{PhysicsScene, GpuReferenceFrame},
   scene::{
     EntityId, PhysicalMeshComponent, Scene, TransformComponent,
     text::{FontAtlas, GlyphInfo},
@@ -13,13 +13,9 @@ use crate::{
   types::{EngineResult, GpuError, GpuResult},
 };
 use ab_glyph::PxScale;
-use aethervk_oshal_rlib::{log, math::vector::vec3::Vec3f32, os::time::timeus_t};
-use ahash::AHasher;
-use alloc::{
-  string::String,
-  sync::{Arc, Weak},
-};
-use ash::vk;
+use aethervk_oshal_rlib::os::time::timeus_t;
+pub use compute_push_constants::{RigidBodyImex, Wrench};
+use alloc::sync::{Arc, Weak};
 use bitflags::bitflags;
 use core::{
   ffi,
@@ -77,7 +73,9 @@ pub struct KinematicBody {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-/// Represents a massive rigid body for implicit integration.
+#[deprecated(since = "0.0.0", note = "Use `RigidBodyImex` for the new IMEX pipeline")]
+/// Legacy rigid-body GPU layout (rotation-matrix based).
+/// New code should use [`RigidBodyImex`] (quaternion-based).
 pub struct RigidBodyGpu {
   pub position: [f32; 3],
   pub mass: f32,
@@ -107,7 +105,66 @@ pub struct ParticleGpu {
   // Metadata for CPU/Logic
   pub entity_id: EntityId,
   pub parent_frame_id: u32,
+}
+
+#[derive(Clone, Copy, Default, Debug)]
+pub struct ParticleMetadata {
+  pub entity_id: EntityId,
+  pub parent_frame_id: u32,
   pub original_index: u32,
+}
+
+pub fn pack_particles_aosoa(
+  particles: &[[f32; 10]],
+  subgroup_size: usize,
+) -> alloc::vec::Vec<f32> {
+  let num_particles = particles.len();
+  let num_blocks = (num_particles + subgroup_size - 1) / subgroup_size;
+  let mut buffer = alloc::vec::Vec::with_capacity(num_blocks * 10 * subgroup_size);
+  buffer.resize(num_blocks * 10 * subgroup_size, 0.0);
+
+  for (i, p) in particles.iter().enumerate() {
+    let block = i / subgroup_size;
+    let lane = i % subgroup_size;
+    let base = block * (10 * subgroup_size) + lane;
+    buffer[base + 0 * subgroup_size] = p[0];
+    buffer[base + 1 * subgroup_size] = p[1];
+    buffer[base + 2 * subgroup_size] = p[2];
+    buffer[base + 3 * subgroup_size] = p[3];
+    buffer[base + 4 * subgroup_size] = p[4];
+    buffer[base + 5 * subgroup_size] = p[5];
+    buffer[base + 6 * subgroup_size] = p[6];
+    buffer[base + 7 * subgroup_size] = p[7];
+    buffer[base + 8 * subgroup_size] = p[8];
+    buffer[base + 9 * subgroup_size] = p[9];
+  }
+  buffer
+}
+
+pub fn unpack_particles_aosoa(
+  buffer: &[f32],
+  subgroup_size: usize,
+  count: usize,
+) -> alloc::vec::Vec<[f32; 10]> {
+  let mut particles = alloc::vec::Vec::with_capacity(count);
+  for i in 0..count {
+    let block = i / subgroup_size;
+    let lane = i % subgroup_size;
+    let base = block * (10 * subgroup_size) + lane;
+    particles.push([
+      buffer[base + 0 * subgroup_size],
+      buffer[base + 1 * subgroup_size],
+      buffer[base + 2 * subgroup_size],
+      buffer[base + 3 * subgroup_size],
+      buffer[base + 4 * subgroup_size],
+      buffer[base + 5 * subgroup_size],
+      buffer[base + 6 * subgroup_size],
+      buffer[base + 7 * subgroup_size],
+      buffer[base + 8 * subgroup_size],
+      buffer[base + 9 * subgroup_size],
+    ]);
+  }
+  particles
 }
 
 #[derive(Clone, Copy)]
@@ -1685,10 +1742,8 @@ impl PresentationEngineParams {
 /// Abstract handle for a compute queue (Vulkan/Metal Command Buffer, CUDA Stream, ...)
 /// Represents a thread of execution
 pub trait CommandBuffer: Send + Sync {
-  type Context<'a>;
-
   /// Dispatches the recorded command graph to the backend hardware queue
-  fn submit(&mut self, ctx: &Context<'_>) -> EngineResult<()>;
+  fn submit(&mut self) -> EngineResult<()>;
 }
 
 /// Continuous array residing entirely in backend memory
@@ -1702,6 +1757,10 @@ pub trait DeviceBuffer<T>: Send + Sync {
     T: 'a;
 
   fn capacity(&self) -> usize;
+
+  /// Returns the buffer device address (BDA) as a `u64`, suitable for use as
+  /// a `layout(buffer_reference)` pointer in compute push constants.
+  fn address(&self) -> u64;
 
   /// Enqueues a DMA copy-back command to the CPU. the returned Future does NOT
   /// borrow `cmd`, allowing you to submit the command buffer while the tasklet
@@ -1726,6 +1785,8 @@ pub trait DeviceList<T>: DeviceBuffer<T> {
 /// Opaque trait for backend-specific Bounding Volume Hierarchy
 pub trait DeviceBvh: Send + Sync {
   type Cmd: CommandBuffer;
+  /// Returns the BDA of the root BVH buffer (used as TLAS addr in push constants).
+  fn address(&self) -> u64;
 }
 
 #[repr(C)]
@@ -1758,7 +1819,18 @@ pub trait Kernels: Send + Sync {
   type List<T: Copy + Send + Sync>: DeviceList<T, Cmd = Self::Cmd>;
   type MotionBvh: DeviceBvh<Cmd = Self::Cmd>;
 
+  fn discard_buffer<T: Copy + Send + Sync>(&self, buffer: Self::Buffer<T>);
+  fn discard_list<T: Copy + Send + Sync>(&self, list: Self::List<T>);
+  fn discard_bvh(&self, bvh: Self::MotionBvh);
+
   fn create_command_buffer(&self) -> EngineResult<Self::Cmd>;
+
+  /// Allocates a fresh, zero-initialised device list of `capacity` elements.
+  fn build_list<T: Copy + Send + Sync>(
+    &self,
+    cmd: &mut Self::Cmd,
+    capacity: usize,
+  ) -> EngineResult<Self::List<T>>;
 
   // 1. & 2. Build Collections
   fn build_kinematic_bodies(
@@ -1767,17 +1839,28 @@ pub trait Kernels: Send + Sync {
     scene: &PhysicsScene,
     scene0: &Scene,
   ) -> EngineResult<Self::Buffer<KinematicBody>>;
+
+  /// Build IMEX rigid-body buffer + zero-initialised wrench buffer from ECS.
+  /// Returns `(Buffer<RigidBodyImex>, Buffer<Wrench>)` — both per-frame,
+  /// discarded at end of `simulation_step` via the timeline-safe discard pool.
   fn build_rigid_bodies(
     &self,
     cmd: &mut Self::Cmd,
     scene: &PhysicsScene,
     scene0: &Scene,
-  ) -> EngineResult<Self::Buffer<RigidBodyGpu>>;
+  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>)>;
+
+  /// Upload `physical_scene.gpu_frames` as a GPU buffer for LCA broad-phase.
+  fn build_frames(
+    &self,
+    cmd: &mut Self::Cmd,
+    scene: &PhysicsScene,
+  ) -> EngineResult<Self::Buffer<GpuReferenceFrame>>;
   fn build_particles(
     &self,
     cmd: &mut Self::Cmd,
     scene: &Scene,
-  ) -> EngineResult<Self::Buffer<ParticleGpu>>;
+  ) -> EngineResult<(Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)>;
   fn build_emitters(
     &self,
     cmd: &mut Self::Cmd,
@@ -1787,22 +1870,26 @@ pub trait Kernels: Send + Sync {
   fn emit_particles(
     &self,
     cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<ParticleGpu>,
+    particles: &mut Self::Buffer<f32>,
     physical_scene: &PhysicsScene,
     scene: &Scene,
     sun_pos: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
     dt: timeus_t,
   ) -> EngineResult<()>;
 
-  // 3. IMEX Phase 1 & 2: Explicit particle kick and drift to midpoint
+  // ── Legacy ODE phases (deprecated — new code uses imex_integrate_* below) ──
+
+  /// VV predictor for particles. **Deprecated**: use [`imex_integrate_particles_p1_p2`].
+  #[deprecated(since = "0.0.0", note = "use imex_integrate_particles_p1_p2")]
   fn step_ode_p1_p2(
     &self,
     cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<ParticleGpu>,
+    particles: &mut Self::Buffer<f32>,
     dt: timeus_t,
   ) -> EngineResult<()>;
 
-  // 4. IMEX Phase 3 & 4: Rigid Body Implicit Midpoint Rule (IMR) solve
+  /// RB IMR solve. **Deprecated**: use [`imex_integrate_bodies_p3`].
+  #[deprecated(since = "0.0.0", note = "use imex_integrate_bodies_p3")]
   fn step_ode_p3_p4(
     &self,
     cmd: &mut Self::Cmd,
@@ -1817,40 +1904,160 @@ pub trait Kernels: Send + Sync {
     &self,
     cmd: &mut Self::Cmd,
     bvh: &Self::MotionBvh,
-    particles: &mut Self::Buffer<ParticleGpu>,
+    particles: &mut Self::Buffer<f32>,
   ) -> EngineResult<()>;
 
-  // 5. IMEX Phase 5: Final particle drift and force evaluation
+  /// VV corrector for particles. **Deprecated**: use [`imex_integrate_particles_p4_5`].
+  #[deprecated(since = "0.0.0", note = "use imex_integrate_particles_p4_5")]
   fn step_ode_p5(
     &self,
     cmd: &mut Self::Cmd,
     kinematics: &Self::Buffer<KinematicBody>,
-    particles: &mut Self::Buffer<ParticleGpu>,
+    particles: &mut Self::Buffer<f32>,
     emitters: &Self::Buffer<ForceEmitter>,
     dt: timeus_t,
   ) -> EngineResult<()>;
 
-  // 5. Collision Pipeline
+  // ── New Symmetric Strang-Split IMEX Integrators ────────────────────────────
+
+  /// VV predictor — half-kick + full position drift to x_{n+1}.
+  /// Clears particle force accumulator slots so force generators start from zero.
+  fn imex_integrate_particles_p1_p2(
+    &self,
+    cmd: &mut Self::Cmd,
+    particles: &mut Self::Buffer<f32>,
+    dt: timeus_t,
+  ) -> EngineResult<()>;
+
+  /// RB Implicit Midpoint Rule with Picard gyroscopic stabilisation.
+  /// Integrates RBs from (x_n, v_n) to (x_{n+1}, v_{n+1}).
+  /// Clears the wrench buffer on entry.
+  fn imex_integrate_bodies_p3(
+    &self,
+    cmd: &mut Self::Cmd,
+    bodies: &mut Self::Buffer<RigidBodyImex>,
+    wrenches: &mut Self::Buffer<Wrench>,
+    dt: timeus_t,
+  ) -> EngineResult<()>;
+
+  /// Reduces per-leaf wrenches into each rigid body's CoM wrench slot.
+  /// Must be called after all force generators have written to the wrench buffer
+  /// and before `imex_integrate_bodies_p3`.
+  fn imex_rb_force_assign(
+    &self,
+    cmd: &mut Self::Cmd,
+    bodies: &Self::Buffer<RigidBodyImex>,
+    wrenches: &mut Self::Buffer<Wrench>,
+  ) -> EngineResult<()>;
+
+  /// VV corrector — advances v_{n+½} → v_{n+1} using F(x_{n+1}).
+  /// Thread 0 simultaneously advances the 64-bit engine clock.
+  fn imex_integrate_particles_p4_5(
+    &self,
+    cmd: &mut Self::Cmd,
+    particles: &mut Self::Buffer<f32>,
+    dt: timeus_t,
+    current_time_us: timeus_t,
+  ) -> EngineResult<()>;
+
+  // ── New Broad-Phase Suite ──────────────────────────────────────────────────
+
+  /// Zeroes all four pair-list count fields (rb_rb, rb_ps, lca, raw).
+  /// Must be the first broad-phase shader each frame.
+  fn bp_clear(
+    &self,
+    cmd: &mut Self::Cmd,
+    raw_pairs_addr: u64,
+    out_rb_rb_addr: u64,
+    out_rb_ps_addr: u64,
+    out_rb_lca_addr: u64,
+  ) -> EngineResult<()>;
+
+  /// Generates one swept AABB (TLASLeaf) per entity.
+  fn bp_bounds_gen(
+    &self,
+    cmd: &mut Self::Cmd,
+    bodies: &Self::Buffer<RigidBodyImex>,
+    leaves_addr: u64,
+    total_entities: u32,
+    dt: timeus_t,
+  ) -> EngineResult<()>;
+
+  /// Subgroup-cooperative TLAS traversal — writes raw overlapping entity pairs.
+  fn bp_scene(
+    &self,
+    cmd: &mut Self::Cmd,
+    tlas_bvh_addr: u64,
+    query_leaves_addr: u64,
+    overlapping_pairs_addr: u64,
+    tlas_root_index: u32,
+    total_queries: u32,
+  ) -> EngineResult<()>;
+
+  /// Classifies raw pairs into RB-RB, RB-PS, and cross-LCA typed queues.
+  fn bp_classify(
+    &self,
+    cmd: &mut Self::Cmd,
+    bodies: &Self::Buffer<RigidBodyImex>,
+    raw_pairs_addr: u64,
+    out_rb_rb_addr: u64,
+    out_rb_ps_addr: u64,
+    out_rb_lca_addr: u64,
+    total_raw_pairs: u32,
+  ) -> EngineResult<()>;
+
+  /// Transforms macro-frame RB AABBs into micro-frame space and traverses
+  /// the micro-frame BVH to produce refined narrow-phase candidate pairs.
+  fn bp_cross_lca(
+    &self,
+    cmd: &mut Self::Cmd,
+    frames: &Self::Buffer<GpuReferenceFrame>,
+    lca_query_pairs_addr: u64,
+    output_internal_pairs_addr: u64,
+    total_queries: u32,
+  ) -> EngineResult<()>;
+
+  /// Subgroup-cooperative LBVH traversal for particle–particle self-collision.
+  /// Computes Hookean repulsion and atomicAdds forces directly into AOSOA slots.
+  fn bp_particle_self(
+    &self,
+    cmd: &mut Self::Cmd,
+    bvh_addr: u64,
+    particles: &mut Self::Buffer<f32>,
+    wrench_buffer_addr: u64,
+    total_particles: u32,
+    root_index: u32,
+    particle_radius: f32,
+    stiffness: f32,
+  ) -> EngineResult<()>;
+
+  // ── Collision Pipeline ────────────────────────────────────────────────────
   fn build_motion_bvh(
     &self,
     cmd: &mut Self::Cmd,
     kinematics: &Self::Buffer<KinematicBody>,
-    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
-    particles: &Self::Buffer<ParticleGpu>,
+    rigid_bodies: &Self::Buffer<RigidBodyImex>,
+    particles: &Self::Buffer<f32>,
     dt: timeus_t,
   ) -> EngineResult<Self::MotionBvh>;
+
+  /// **Deprecated**: broad-phase now handled by `bp_clear` → `bp_bounds_gen` → `bp_scene`.
+  #[deprecated(since = "0.0.0", note = "use the bp_* broad-phase suite")]
   fn self_intersect_scene(
     &self,
     cmd: &mut Self::Cmd,
     bvh: &Self::MotionBvh,
   ) -> EngineResult<Self::List<CollisionPair>>;
+
+  /// **Deprecated**: use `bp_cross_lca` for LCA pairs and narrow CCD for rb-rb/rb-ps.
+  #[deprecated(since = "0.0.0", note = "use bp_cross_lca + narrow CCD")]
   fn intersect_instances(
     &self,
     cmd: &mut Self::Cmd,
     potentials: &Self::List<CollisionPair>,
     kinematics: &Self::Buffer<KinematicBody>,
     rigid_bodies: &Self::Buffer<RigidBodyGpu>,
-    particles: &Self::Buffer<ParticleGpu>,
+    particles: &Self::Buffer<f32>,
   ) -> EngineResult<Self::List<CollisionPair>>;
 
   /// Stream compaction shrink logic evaluated entirely on the GPU.
@@ -1873,33 +2080,34 @@ pub trait Kernels: Send + Sync {
     &self,
     cmd: &mut Self::Cmd,
     kinematics: &Self::Buffer<KinematicBody>,
-    rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
-    particles: &mut Self::Buffer<ParticleGpu>,
+    rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
+    particles: &mut Self::Buffer<f32>,
     collisions: &Self::List<CollisionPair>,
     force_inelastic: bool,
   ) -> EngineResult<()>;
 
-  // --- CCD Rewind Subsystem ---
+  // ── CCD Rewind Subsystem ───────────────────────────────────────────────────
   fn snapshot_dynamics(
     &self,
     cmd: &mut Self::Cmd,
-    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
-    particles: &Self::Buffer<ParticleGpu>,
-  ) -> EngineResult<(Self::Buffer<RigidBodyGpu>, Self::Buffer<ParticleGpu>)>;
+    rigid_bodies: &Self::Buffer<RigidBodyImex>,
+    particles: &Self::Buffer<f32>,
+  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>)>;
   fn restore_dynamics(
     &self,
     cmd: &mut Self::Cmd,
-    rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
-    particles: &mut Self::Buffer<ParticleGpu>,
-    snapshot: &(Self::Buffer<RigidBodyGpu>, Self::Buffer<ParticleGpu>),
+    rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
+    particles: &mut Self::Buffer<f32>,
+    snapshot: &(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>),
   ) -> EngineResult<()>;
 
-  // --- Write back dynamic state ---
+  // ── Write back dynamic state ───────────────────────────────────────────────
   fn write_back_to_scene(
     &self,
     cmd: &mut Self::Cmd,
-    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
-    particles: &Self::Buffer<ParticleGpu>,
+    rigid_bodies: &Self::Buffer<RigidBodyImex>,
+    particles: &Self::Buffer<f32>,
+    particle_metadata: &[ParticleMetadata],
     physical_scene: &mut PhysicsScene,
     scene: &Scene,
   ) -> EngineResult<()>;

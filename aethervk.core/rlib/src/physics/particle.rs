@@ -3,8 +3,8 @@
 use aethervk_oshal_rlib::math::{
   FloatLike,
   floating::{FloatBits, FloatOps},
-  matrix::{Matrix3, Matrix4, mat3::Mat3f32, mat4::Mat4x4f32},
-  vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec4::Vec4f32},
+  matrix::{Matrix3, Matrix4},
+  vector::{Vector, Vector3, Vector4},
 };
 use alloc::{boxed::Box, vec::Vec};
 
@@ -134,7 +134,7 @@ impl ParticleBVHBuilder {
         .unwrap_or(core::cmp::Ordering::Equal)
     });
 
-    let mut split_index = count / 2;
+    let split_index = count / 2;
     let axis = axes[0];
     indices.sort_by(|&a, &b| {
       particles[a]

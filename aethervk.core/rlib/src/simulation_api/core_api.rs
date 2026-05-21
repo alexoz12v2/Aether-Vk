@@ -1,7 +1,7 @@
 //! core_api module.
 
 use crate::{
-  expect_scene, expect_scene_and_entity, gpu,
+  expect_scene, gpu,
   gpu::{PresentationEngineHandle, WeakRenderFrontendExt},
   scene::{CameraComponent, TransformComponent},
   simulation::texture_cache::TextureCache,

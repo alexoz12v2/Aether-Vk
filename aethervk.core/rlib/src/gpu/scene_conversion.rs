@@ -10,7 +10,7 @@ use crate::{
     MarkersComponent, MeasurementComponent, PhysicalMeshComponent, SelectedComponent, SkyComponent,
     SunComponent, TransformComponent,
   },
-  types::{GpuError, GpuResult},
+  types::GpuResult,
 };
 use aethervk_oshal_rlib::math::{
   matrix::{Matrix4, MatrixVectorMul, mat4::Mat4x4f32},
@@ -551,7 +551,7 @@ impl SceneConversionExt for crate::scene::Scene {
         }
         self.global_transform(id)
       })
-      .map(|(t, id)| t);
+      .map(|(t, _id)| t);
 
     // Meshes
     let should_par = self.should_parallelize() && pool.is_some();
