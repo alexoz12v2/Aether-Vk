@@ -11,7 +11,6 @@ use crate::{
   },
   types::{GpuError, GpuResult},
 };
-use aethervk_oshal_rlib::log;
 use alloc::{string::ToString, vec::Vec};
 use ash::vk::{self, Handle};
 use core::{mem, ptr};
@@ -258,7 +257,7 @@ impl SwapchainCleanable for SwapchainFrame {
     }
   }
 
-  fn cleanup(&mut self, swapchain_device: &ash::khr::swapchain::Device, device: &ash::Device) {
+  fn cleanup(&mut self, _swapchain_device: &ash::khr::swapchain::Device, device: &ash::Device) {
     self.cleanup_windowless(device);
   }
 }
@@ -690,7 +689,7 @@ impl WindowedPresentationState {
     let swapchain_images =
       self.recreate_swapchain_images(device, new_swapchain, surface_format.format, rollback)?;
 
-    let (frame_semaphores, mut frame_fences) =
+    let (frame_semaphores, frame_fences) =
       self.recreate_swapchain_frame_resources(device, swapchain_images.len(), rollback)?;
 
     mem::swap(&mut new_swapchain, &mut self.swapchain);
@@ -1872,7 +1871,7 @@ impl WindowlessPresentationState {
     device: &LogicalDevice,
     width: u32,
     height: u32,
-    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
+    _rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
     self.width = width;
     self.height = height;

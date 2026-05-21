@@ -6,7 +6,7 @@ use crate::math::{
 use aethervk_oshal_rlib::{
   math::{
     FloatLike, MulAddIdentity,
-    matrix::{Matrix, Matrix3, MatrixVectorMul, SquareMatrix, mat3::Mat3f32},
+    matrix::{Matrix, Matrix3, MatrixVectorMul, mat3::Mat3f32},
     vector::{Vector, Vector3, vec3::Vec3f32},
   },
   os::pool::{ThreadPool, Workload, WorkloadStatus},
@@ -237,7 +237,7 @@ pub fn implicit_midpoint_step(body: &mut RigidBody, h: f32, sun_pos: Vec3f32, su
     let pi_mid = (pi_n + pi_guess) * 0.5;
 
     let omega_mid = i_inv.mul_vector(pi_mid);
-    let r_mid = r_n * expm_hat(omega_mid * (0.5 * h));
+    let _r_mid = r_n * expm_hat(omega_mid * (0.5 * h));
     let (f_mid, tau_mid) = get_force_and_torque(x_mid, body.mass, sun_pos, sun_mass);
 
     let x_res = x_guess - (x_n + p_mid * (h * m_inv));
@@ -308,7 +308,7 @@ pub fn implicit_midpoint_step(body: &mut RigidBody, h: f32, sun_pos: Vec3f32, su
 
 /// TODO: Document this item
 pub fn sphere_triangle_intersection(
-  p: Vec3f32,
+  _p: Vec3f32,
   p_next: Vec3f32,
   r: f32,
   tri: &(Vec3f32, Vec3f32, Vec3f32),

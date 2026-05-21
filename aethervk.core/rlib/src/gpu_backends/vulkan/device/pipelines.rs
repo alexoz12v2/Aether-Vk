@@ -12,7 +12,7 @@ use core::{
 use dashmap::DashMap;
 
 use crate::{
-  gpu::{PipelineKey, PipelineKeyable, vulkan::device::swapchain},
+  gpu::{PipelineKey, PipelineKeyable},
   gpu_backends::vulkan::{
     device::{DeviceResource, resources::DiscardPool},
     utils::NonZeroHandle,

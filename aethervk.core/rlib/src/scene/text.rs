@@ -1,7 +1,7 @@
 //! text module.
 
 use crate::types::{IoError, IoResult};
-use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use aethervk_oshal_rlib::{hash::FnvHasher, os, os::fs::Path};
 use alloc::vec::Vec;
 use core::hash::Hasher;

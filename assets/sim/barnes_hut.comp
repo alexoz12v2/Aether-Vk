@@ -1,170 +1,204 @@
 #version 450 core
-
+#extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_shuffle : require
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
-#extension GL_GOOGLE_include_directive : require
 
 #include "../debug_utils.glsl"
 #include "../bvh_utils.glsl"
+#include "imex_math.glsl"
 
-// ============================================================================
-// Barnes-Hut Self-Gravity
-// ============================================================================
-// Computes self-gravity in O(N log N) using the LBVH built previously.
+layout(local_size_x = 256) in;
+// Accommodates both NVIDIA/Intel (32) and AMD (64) lane sizes
+const uint SUBGROUPS_PER_WG = 256 / SUBGROUP_SIZE;
 
-layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
-
-// Particles data mapped as uint to perform CAS loop for float atomicAdd
 layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleData {
-    uint data[];
+    float data[];
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer WrenchArray {
+    Wrench wrenches[];
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer ClusterListBuffer {
+    uint cluster_indices[]; // Array pointing to MultiBvhNodes that act as leaf clusters
 };
 
 layout(push_constant, scalar) uniform PushConstants {
     ParticleData particles;
-    BVHArray bvh;
-    uint root_index;
-    uint total_particles;
-    float theta; // Barnes-Hut MAC (Multipole Acceptance Criterion) threshold, e.g. 0.5
-    float G;     // Gravitational constant
+    MultiBvhBuffer bvh;
+    ClusterListBuffer cluster_list;
+    WrenchArray wrenches;
+    uint num_clusters;      // Number of leaf MultiBvhNodes in cluster_indices
+    float dt;
+    float theta;             // Multipole Acceptance Criterion
+    float G;
+    float softening_sq;
+    uint root_node_idx;
+    uint cluster_threshold; // Force-accumulate subtrees with fewer than this many particles
 } pc;
 
-void atomicAddFloat(uint index, float val) {
-    uint old_val = pc.particles.data[index];
-    uint assumed_val;
-    do {
-        assumed_val = old_val;
-        uint new_val = floatBitsToUint(uintBitsToFloat(assumed_val) + val);
-        old_val = atomicCompSwap(pc.particles.data[index], assumed_val, new_val);
-    } while (assumed_val != old_val);
-}
+// Subgroup-shared stack prevents VRAM spilling
+shared uint shared_stacks[SUBGROUPS_PER_WG][64];
+shared uint shared_stack_ptrs[SUBGROUPS_PER_WG];
 
 void main() {
-    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
-        debugPrintfEXT("Hello from barnes_hut.comp!\n");
+    uint subgroup_id = gl_SubgroupID;
+    uint lane_id     = gl_SubgroupInvocationID;
+
+    // 1 Subgroup = 1 Target Cluster (Leaf Node)
+    uint cluster_job_idx = gl_WorkGroupID.x * SUBGROUPS_PER_WG + subgroup_id;
+    if (cluster_job_idx >= pc.num_clusters) return;
+
+    uint target_node_idx = pc.cluster_list.cluster_indices[cluster_job_idx];
+
+    // --- 1. Load Target Cluster Data ---
+    // Each lane represents exactly ONE particle inside the target cluster
+    uint my_meta    = pc.bvh.nodes[target_node_idx].metadata[lane_id];
+
+    // Use the explicit mask bits, as `bvh_is_valid` doesn't exist
+    bool i_am_valid = false;
+    if (lane_id < 32) {
+        i_am_valid = (pc.bvh.nodes[target_node_idx].valid_mask.x & (1u << lane_id)) != 0u;
+    } else {
+        i_am_valid = (pc.bvh.nodes[target_node_idx].valid_mask.y & (1u << (lane_id - 32))) != 0u;
     }
-    uint idx = gl_GlobalInvocationID.x;
-    if (idx >= pc.total_particles) return;
 
-    // Use the leaf node to find our particle
-    uint leaf_idx = pc.total_particles - 1 + idx; // In our LBVH, leaves are in the second half
-    uint my_p_id = pc.bvh.nodes[leaf_idx].left_child_or_primitive_offset;
-    
-    uint blockA = my_p_id / SG_SIZE;
-    uint locA = my_p_id % SG_SIZE;
-    uint baseA = blockA * (10 * SG_SIZE) + locA;
+    uint my_p_idx   = pc.bvh.nodes[target_node_idx].child_indices[lane_id];
 
-    vec3 my_pos = vec3(
-        uintBitsToFloat(pc.particles.data[baseA + 0 * SG_SIZE]),
-        uintBitsToFloat(pc.particles.data[baseA + 1 * SG_SIZE]),
-        uintBitsToFloat(pc.particles.data[baseA + 2 * SG_SIZE])
-    );
-    float my_mass = uintBitsToFloat(pc.particles.data[baseA + 6 * SG_SIZE]);
-    
-    if (my_mass <= 0.0) return;
+    vec3 my_pos = vec3(0.0); vec3 my_vel = vec3(0.0); float my_mass = 0.0;
+    if (i_am_valid) {
+        uint block_idx = my_p_idx / SUBGROUP_SIZE;
+        uint local_idx = my_p_idx % SUBGROUP_SIZE;
+        uint base = block_idx * (10 * SUBGROUP_SIZE) + local_idx;
 
-    vec3 total_force = vec3(0.0);
+        my_pos = vec3(
+            pc.particles.data[base + 0 * SUBGROUP_SIZE],
+            pc.particles.data[base + 1 * SUBGROUP_SIZE],
+            pc.particles.data[base + 2 * SUBGROUP_SIZE]
+        );
+        my_vel = vec3(
+            pc.particles.data[base + 3 * SUBGROUP_SIZE],
+            pc.particles.data[base + 4 * SUBGROUP_SIZE],
+            pc.particles.data[base + 5 * SUBGROUP_SIZE]
+        );
+        my_mass = pc.particles.data[base + 6 * SUBGROUP_SIZE];
+    }
 
-    // Stack-based traversal of the BVH
-    uint stack[64];
-    int stackPtr = 0;
-    stack[stackPtr++] = pc.root_index;
+    // Compute the Macroscopic size and CoM of the Target Cluster for MAC evaluation
+    vec3 safe_pos        = i_am_valid ? my_pos : vec3(0.0);
+    vec3 min_pos         = subgroupMin(i_am_valid ? my_pos : vec3(1e20));
+    vec3 max_pos         = subgroupMax(i_am_valid ? my_pos : vec3(-1e20));
+    vec3 cluster_extents = max_pos - min_pos;
+    float target_size    = max(cluster_extents.x, max(cluster_extents.y, cluster_extents.z));
+    float sum_mass       = subgroupAdd(i_am_valid ? my_mass : 0.0);
+    vec3 target_com      = subgroupAdd(safe_pos * my_mass) / max(sum_mass, 1e-6);
 
-    while (stackPtr > 0) {
-        uint node_idx = stack[--stackPtr];
-        
-        if (BRANCH_FACTOR == 2) {
-            BVHNodeAABB node = read_bvh_node(pc.bvh, node_idx);
-            
-            bool isLeaf = (node.primitive_count > 0);
-            
-            if (isLeaf) {
-                uint other_p_id = node.left_child_or_primitive_offset;
-                if (my_p_id != other_p_id) {
-                    // Exact particle-particle gravity
-                    vec3 r = node.center_of_mass - my_pos;
-                    float dist_sq = dot(r, r);
-                    if (dist_sq > 1e-6) {
-                        float dist = sqrt(dist_sq);
-                        total_force += r * (pc.G * my_mass * node.mass / (dist_sq * dist));
-                    }
-                }
-            } else {
-                // Check MAC (Multipole Acceptance Criterion)
-                vec3 r = node.center_of_mass - my_pos;
-                float dist_sq = dot(r, r);
-                float dist = sqrt(max(dist_sq, 1e-6));
-                
-                // Calculate size of the node's bounding box
-                vec3 extents = node.bound.maxBounds - node.bound.minBounds;
-                float size = max(extents.x, max(extents.y, extents.z));
-                
-                if (size / dist < pc.theta) {
-                    // Node is far enough, use center of mass
-                    total_force += r * (pc.G * my_mass * node.mass / (dist_sq * dist));
-                } else {
-                    // Node is too close, traverse children
-                    if (node.left_child_or_primitive_offset != 0xFFFFFFFF && node.left_child_or_primitive_offset != 0) stack[stackPtr++] = node.left_child_or_primitive_offset;
-                    if (node.right_child_offset != 0xFFFFFFFF && node.right_child_offset != 0) stack[stackPtr++] = node.right_child_offset;
-                }
-            }
+    vec3 my_acc = vec3(0.0);
+
+    if (lane_id == 0) {
+        shared_stacks[subgroup_id][0] = pc.root_node_idx;
+        shared_stack_ptrs[subgroup_id] = 1;
+    }
+
+    // --- 2. Subgroup-Cooperative Traversal ---
+    while (true) {
+        subgroupMemoryBarrierShared();
+        uint stack_ptr = shared_stack_ptrs[subgroup_id];
+        if (stack_ptr == 0) break;
+
+        stack_ptr--;
+        uint source_node_idx = shared_stacks[subgroup_id][stack_ptr];
+        if (lane_id == 0) shared_stack_ptrs[subgroup_id] = stack_ptr;
+
+        // Lane `i` fetches slot `i` of the source node (100% Coalesced Memory Fetch)
+        uint s_meta    = pc.bvh.nodes[source_node_idx].metadata[lane_id];
+
+        // Emulated 64-bit valid mask check
+        bool s_valid = false;
+        if (lane_id < 32) {
+            s_valid = (pc.bvh.nodes[source_node_idx].valid_mask.x & (1u << lane_id)) != 0u;
         } else {
-            MultiBVHBlockArray multi_bvh = MultiBVHBlockArray(pc.bvh);
-            uint node_valid = GET_MULTI_BVH_VALID_COUNT(multi_bvh, node_idx);
-            for (uint i = 0; i < BRANCH_FACTOR; ++i) {
-                if (i >= node_valid) break;
-                
-                bool isLeaf;
-                uint offset;
-                GET_MULTI_BVH_LEAF_INFO(multi_bvh, node_idx, i, isLeaf, offset);
-                
-                float mass;
-                GET_MULTI_BVH_MASS(multi_bvh, node_idx, i, mass);
-                
-                vec3 com;
-                GET_MULTI_BVH_CENTER_OF_MASS(multi_bvh, node_idx, i, com);
+            s_valid = (pc.bvh.nodes[source_node_idx].valid_mask.y & (1u << (lane_id - 32))) != 0u;
+        }
 
-                if (isLeaf) {
-                    uint other_p_id = offset;
-                    if (my_p_id != other_p_id) {
-                        // Exact particle-particle gravity
-                        vec3 r = com - my_pos;
-                        float dist_sq = dot(r, r);
-                        if (dist_sq > 1e-6) {
-                            float dist = sqrt(dist_sq);
-                            total_force += r * (pc.G * my_mass * mass / (dist_sq * dist));
-                        }
-                    }
-                } else {
-                    // Check MAC (Multipole Acceptance Criterion)
-                    vec3 r = com - my_pos;
-                    float dist_sq = dot(r, r);
-                    float dist = sqrt(max(dist_sq, 1e-6));
-                    
-                    AABB bound;
-                    GET_MULTI_BVH_BOUND(multi_bvh, node_idx, i, bound);
-                    vec3 extents = bound.maxBounds - bound.minBounds;
-                    float size = max(extents.x, max(extents.y, extents.z));
-                    
-                    if (size / dist < pc.theta) {
-                        // Node is far enough, use center of mass
-                        total_force += r * (pc.G * my_mass * mass / (dist_sq * dist));
-                    } else {
-                        // Node is too close, traverse children
-                        if (offset != 0xFFFFFFFF && offset != 0) stack[stackPtr++] = offset;
+        bool s_is_leaf = bvh_is_leaf(s_meta);
+
+        vec3 s_com = vec3(pc.bvh.nodes[source_node_idx].com_x[lane_id], pc.bvh.nodes[source_node_idx].com_y[lane_id], pc.bvh.nodes[source_node_idx].com_z[lane_id]);
+        float s_mass = pc.bvh.nodes[source_node_idx].masses[lane_id];
+        uint s_idx = pc.bvh.nodes[source_node_idx].child_indices[lane_id];
+        uint s_start = pc.bvh.nodes[source_node_idx].particle_start[lane_id];
+        uint s_count = pc.bvh.nodes[source_node_idx].particle_count[lane_id];
+
+        vec3 s_bmin = vec3(pc.bvh.nodes[source_node_idx].min_x[lane_id], pc.bvh.nodes[source_node_idx].min_y[lane_id], pc.bvh.nodes[source_node_idx].min_z[lane_id]);
+        vec3 s_bmax = vec3(pc.bvh.nodes[source_node_idx].max_x[lane_id], pc.bvh.nodes[source_node_idx].max_y[lane_id], pc.bvh.nodes[source_node_idx].max_z[lane_id]);
+        vec3 s_extents = s_bmax - s_bmin;
+        float s_size = max(s_extents.x, max(s_extents.y, s_extents.z));
+
+        // --- 3. Multipole & LOD Cluster Evaluation ---
+        vec3 dir = s_com - target_com;
+        float dist = length(dir);
+
+        // SYMMETRIC MAC: Distance vs combined size of target cluster and source node
+        bool pass_mac = ((s_size + target_size) / max(dist, 1e-6)) < pc.theta;
+
+        // LOD Threshold: Prevent self-attraction by ensuring current particle is not inside the source subtree
+        bool in_this_cluster = (my_p_idx >= s_start) && (my_p_idx < s_start + s_count);
+        bool pass_lod_thresh = (s_count <= pc.cluster_threshold) && !in_this_cluster;
+
+        bool action_accumulate = s_valid && (pass_mac || pass_lod_thresh || s_is_leaf);
+        bool action_traverse   = s_valid && !action_accumulate;
+
+        // --- 4. Process Accumulations ---
+        uvec4 acc_ballot = subgroupBallot(action_accumulate);
+
+        // Loop over 4 ints to natively support both 32-lane and 64-lane hardware
+        for (uint i = 0; i < 4; i++) {
+            uint mask = acc_ballot[i];
+            while (mask != 0) {
+                uint bit = findLSB(mask);
+                mask &= ~(1u << bit);
+                uint src_lane = i * 32 + bit;
+
+                if (i_am_valid) {
+                    // Use subgroupShuffle instead of subgroupBroadcast to avoid literal constant requirements
+                    vec3  k_com  = vec3(subgroupShuffle(s_com.x, src_lane), subgroupShuffle(s_com.y, src_lane), subgroupShuffle(s_com.z, src_lane));
+                    float k_mass = subgroupShuffle(s_mass, src_lane);
+                    uint  k_idx  = subgroupShuffle(s_idx, src_lane);
+                    bool  k_leaf = subgroupShuffle(s_is_leaf, src_lane);
+
+                    // Avoid exact self-interaction
+                    if (!(k_leaf && my_p_idx == k_idx)) {
+                        vec3 p_dir = k_com - my_pos; // EXACT vector from source to this specific lane's particle
+                        float p_dist_sq = dot(p_dir, p_dir);
+                        float f_mag = (pc.G * k_mass) / (p_dist_sq + pc.softening_sq);
+                        my_acc += (p_dir / max(sqrt(p_dist_sq), 1e-6)) * f_mag;
                     }
                 }
             }
         }
+
+        // --- 5. Queue Subtrees ---
+        uvec4 trav_ballot = subgroupBallot(action_traverse);
+        uint trav_count   = subgroupBallotBitCount(trav_ballot);
+        uint push_offset  = subgroupBallotExclusiveBitCount(trav_ballot);
+
+        if (action_traverse) {
+            shared_stacks[subgroup_id][stack_ptr + push_offset] = s_idx;
+        }
+        if (lane_id == 0) shared_stack_ptrs[subgroup_id] = stack_ptr + trav_count;
     }
 
-    // Accumulate the computed force back into the particles buffer F_n
-    // Using atomicAdd since other shaders might also add forces
-    atomicAddFloat(baseA + 7 * SG_SIZE, total_force.x);
-    atomicAddFloat(baseA + 8 * SG_SIZE, total_force.y);
-    atomicAddFloat(baseA + 9 * SG_SIZE, total_force.z);
+    // --- 6. Detached Force Assignment ---
+    if (i_am_valid) {
+        // Convert acceleration to a pure Explicit Force
+        vec3 gravity_force = my_acc * my_mass;
 
-    if (SHOULD_DEBUG_PRINT) {
-        debugPrintfEXT("BarnesHut Particle %d: total_force=(%f, %f, %f)", 
-            my_p_id, total_force.x, total_force.y, total_force.z);
+        // Gravity acts purely on the Center of Mass of the node, so it generates 0 local torque.
+        // We write to the WrenchBuffer using the newly defined macro.
+        ADD_LINEAR_FORCE(pc.wrenches.wrenches[my_p_idx], gravity_force);
     }
 }

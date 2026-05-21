@@ -183,7 +183,8 @@ impl<'a, T: ?Sized + 'a> Drop for DebugTrackedRwLockWriteGuard<'a, T> {
   }
 }
 
-impl<T> crate::gpu_backends::vulkan::utils::RwLockable<T> for DebugTrackedRwLock<T> {
+impl<T> crate::gpu_backends::vulkan::utils::RwLockable for DebugTrackedRwLock<T> {
+  type State = T;
   type RwWriteGuard<'a>
     = DebugTrackedRwLockWriteGuard<'a, T>
   where

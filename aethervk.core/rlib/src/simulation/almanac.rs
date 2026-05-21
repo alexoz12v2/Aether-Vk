@@ -276,7 +276,7 @@ impl VecTypeConversion<anise::math::Matrix3> for Mat3f32 {
 }
 
 impl VecTypeConversionScaled<anise::math::Vector3> for Vec3f32 {
-  fn from_nalgebra_scaled(value: anise::math::Vector3, factor: f64) -> Self {
+  fn from_nalgebra_scaled(value: anise::math::Vector3, _factor: f64) -> Self {
     Vec3f32::from_components(
       (value[0] / DISTANCE_SCALE_FACTOR) as f32,
       (value[1] / DISTANCE_SCALE_FACTOR) as f32,

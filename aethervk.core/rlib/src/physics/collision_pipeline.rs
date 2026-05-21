@@ -4,7 +4,7 @@ use crate::{
 };
 use aethervk_oshal_rlib::math::{
   matrix::{Matrix4, MatrixVectorMul, SquareMatrix, mat4::Mat4x4f32},
-  vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec4::Vec4f32},
+  vector::{Vector, Vector3, Vector4, vec3::Vec3f32},
 };
 use alloc::vec::Vec;
 
@@ -39,7 +39,7 @@ pub fn detect_collisions_cpu(bvh: &CpuMotionBvh) -> Vec<CollisionPair> {
   };
 
   let mut query_and_push = |idx: u32,
-                            entity_id: crate::scene::EntityId,
+                            entity_id_as_u32: u32,
                             parent_id: u32,
                             pos: [f32; 3],
                             vel: [f32; 3],
@@ -61,21 +61,21 @@ pub fn detect_collisions_cpu(bvh: &CpuMotionBvh) -> Vec<CollisionPair> {
         let is_par = (data_idx & (1 << 30)) != 0;
         let j = data_idx & 0x3FFF_FFFF;
 
-        let ent_b = if is_kin {
-          kinematics[j as usize].entity_id
+        let ent_b_as_u32 = if is_kin {
+          slotmap::Key::data(&kinematics[j as usize].entity_id).as_ffi() as u32
         } else if is_par {
-          particles[j as usize].entity_id
+          slotmap::Key::data(&particles[j as usize].entity_id).as_ffi() as u32
         } else {
-          dynamics[j as usize].entity_id
+          dynamics[j as usize].wrench_idx
         };
 
         pairs.push(CollisionPair {
           a: ColliderId {
-            entity_id: slotmap::Key::data(&entity_id).as_ffi() as u32,
+            entity_id: entity_id_as_u32,
             primitive_index: idx,
           },
           b: ColliderId {
-            entity_id: slotmap::Key::data(&ent_b).as_ffi() as u32,
+            entity_id: ent_b_as_u32,
             primitive_index: data_idx,
           },
           time_of_impact: 0.0,
@@ -90,17 +90,17 @@ pub fn detect_collisions_cpu(bvh: &CpuMotionBvh) -> Vec<CollisionPair> {
   for (i, p) in dynamics.iter().enumerate() {
     query_and_push(
       i as u32,
-      p.entity_id,
-      p.parent_frame_id,
-      p.position,
-      p.linear_velocity,
-      p.shape_data[0],
+      p.wrench_idx,
+      0,
+      [p.position_mass[0], p.position_mass[1], p.position_mass[2]],
+      [p.linear_vel_drag[0], p.linear_vel_drag[1], p.linear_vel_drag[2]],
+      0.5,
     );
   }
   for (i, p) in particles.iter().enumerate() {
     query_and_push(
       (1 << 30) | (i as u32),
-      p.entity_id,
+      slotmap::Key::data(&p.entity_id).as_ffi() as u32,
       p.parent_frame_id,
       p.position,
       p.velocity,
@@ -110,7 +110,7 @@ pub fn detect_collisions_cpu(bvh: &CpuMotionBvh) -> Vec<CollisionPair> {
   for (i, k) in kinematics.iter().enumerate() {
     query_and_push(
       (1 << 31) | (i as u32),
-      k.entity_id,
+      slotmap::Key::data(&k.entity_id).as_ffi() as u32,
       k.parent_frame_id,
       k.transform.position.into(),
       k.velocity.into(),

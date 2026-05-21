@@ -45,16 +45,16 @@ void main() {
     if (global_id >= pc.num_candidates) return;
 
     // Subgroup size
-    const uint SG_SIZE = 32;
-    uint block_idx = global_id / SG_SIZE;
-    uint local_idx = global_id % SG_SIZE;
-    uint stride = 10 * SG_SIZE;
+    const uint SUBGROUP_SIZE = 32;
+    uint block_idx = global_id / SUBGROUP_SIZE;
+    uint local_idx = global_id % SUBGROUP_SIZE;
+    uint stride = 10 * SUBGROUP_SIZE;
     uint base = block_idx * stride + local_idx;
 
     vec3 pos = vec3(
-        pc.candidates.data[base + 0 * SG_SIZE],
-        pc.candidates.data[base + 1 * SG_SIZE],
-        pc.candidates.data[base + 2 * SG_SIZE]
+        pc.candidates.data[base + 0 * SUBGROUP_SIZE],
+        pc.candidates.data[base + 1 * SUBGROUP_SIZE],
+        pc.candidates.data[base + 2 * SUBGROUP_SIZE]
     );
     
     vec3 dir = pc.sun_pos - pos;
@@ -94,12 +94,12 @@ void main() {
     if (!occluded) {
         uint out_idx = atomicAdd(pc.counter.count, 1);
         
-        uint out_block = out_idx / SG_SIZE;
-        uint out_local = out_idx % SG_SIZE;
+        uint out_block = out_idx / SUBGROUP_SIZE;
+        uint out_local = out_idx % SUBGROUP_SIZE;
         uint out_base = out_block * stride + out_local;
         
         for (int i = 0; i < 10; ++i) {
-            pc.particles.data[out_base + i * SG_SIZE] = pc.candidates.data[base + i * SG_SIZE];
+            pc.particles.data[out_base + i * SUBGROUP_SIZE] = pc.candidates.data[base + i * SUBGROUP_SIZE];
         }
     }
 }

@@ -6,7 +6,6 @@ use alloc::{
   vec::Vec,
 };
 use core::{
-  char::MAX,
   ffi::{CStr, c_char, c_void},
   mem, ops, ptr,
 };
@@ -18,8 +17,8 @@ use ash::{
 use bitflags::bitflags;
 
 use crate::{
-  gpu::{DeviceAdditionalParams, OpaqueNativeHandleInfo, vulkan::device::LogicalDevice},
-  types::{EngineError, EngineResult, GpuError, GpuResult},
+  gpu::{DeviceAdditionalParams, vulkan::device::LogicalDevice},
+  types::{GpuError, GpuResult},
 };
 use aethervk_oshal_rlib::os::debug;
 use itertools::Itertools;
@@ -647,6 +646,9 @@ pub(super) fn required_device_extensions() -> &'static Vec<&'static CStr> {
     // flexibility in update after bind and non-uniform indexing
     the_vec.push(ash::ext::descriptor_indexing::NAME);
 
+    // float16 and int8 support (with features)
+    the_vec.push(ash::khr::shader_float16_int8::NAME);
+
     // TODO: pipeline extensions after sampling for desktop device support
 
     the_vec
@@ -685,6 +687,7 @@ pub(super) struct RequiredFeatures<'a> {
   /// promoted to 1.2
   pub descriptor_indexing: vk::PhysicalDeviceDescriptorIndexingFeatures<'a>,
   pub scalar_block_layout: vk::PhysicalDeviceScalarBlockLayoutFeatures<'a>,
+  pub shader_float16_int8: vk::PhysicalDeviceShaderFloat16Int8Features<'a>,
 }
 
 impl RequiredFeatures<'_> {
@@ -697,6 +700,7 @@ impl RequiredFeatures<'_> {
     let synchronization2 = vk::PhysicalDeviceSynchronization2Features::default();
     let descriptor_indexing = vk::PhysicalDeviceDescriptorIndexingFeatures::default();
     let scalar_block_layout = vk::PhysicalDeviceScalarBlockLayoutFeatures::default();
+    let shader_float16_int8 = vk::PhysicalDeviceShaderFloat16Int8Features::default();
 
     Self {
       features,
@@ -706,6 +710,7 @@ impl RequiredFeatures<'_> {
       synchronization2,
       descriptor_indexing,
       scalar_block_layout,
+      shader_float16_int8,
     }
   }
 
@@ -719,6 +724,7 @@ impl RequiredFeatures<'_> {
       .push_next(&mut self.synchronization2)
       .push_next(&mut self.descriptor_indexing)
       .push_next(&mut self.scalar_block_layout)
+      .push_next(&mut self.shader_float16_int8)
   }
 
   /// TODO: Document this item
@@ -741,6 +747,7 @@ impl RequiredFeatures<'_> {
     // TODO: check that these are baseline for low end devices
     self.descriptor_indexing.descriptor_binding_sampled_image_update_after_bind = vk::TRUE;
     self.descriptor_indexing.descriptor_binding_storage_buffer_update_after_bind = vk::TRUE;
+    self.shader_float16_int8.shader_int8 = vk::TRUE;
 
     self
   }
@@ -783,7 +790,10 @@ impl RequiredFeatures<'_> {
       the_vec.push("descriptor_binding_partially_bound".to_string());
     }
     if self.descriptor_indexing.descriptor_binding_sampled_image_update_after_bind != vk::TRUE {
-      the_vec.push("descriptor_binding_sampled_image_update_after_bind_1".to_string());
+      the_vec.push("descriptor_binding_sampled_image_update_after_bind".to_string());
+    }
+    if self.shader_float16_int8.shader_int8 != vk::TRUE {
+      the_vec.push("shader_float16_int8".to_string());
     }
 
     if the_vec.is_empty() {
@@ -1004,13 +1014,14 @@ impl<'a> Drop for RollbackContext<'a> {
   }
 }
 
-pub trait RwLockable<T> {
-  /// the guard cannot outlive the lock itself.
-  type RwWriteGuard<'a>: core::ops::DerefMut<Target = T> + Drop
+pub trait RwLockable {
+  // Define the target state as an associated type
+  type State;
+
+  type RwWriteGuard<'a>: core::ops::DerefMut<Target = Self::State> + Drop
   where
     Self: 'a;
-  /// the guard cannot outlive the lock itself.
-  type RwReadGuard<'a>: core::ops::Deref<Target = T> + Drop
+  type RwReadGuard<'a>: core::ops::Deref<Target = Self::State> + Drop
   where
     Self: 'a;
 
@@ -1018,20 +1029,56 @@ pub trait RwLockable<T> {
   fn read(&self) -> Self::RwReadGuard<'_>;
 }
 
-pub struct VulkanTransaction<'a, State, Lock: RwLockable<State>> {
+pub trait RwLockableTuple {
+  type TupleReadGuards<'a>
+  where
+    Self: 'a;
+  type TupleWriteGuards<'a>
+  where
+    Self: 'a;
+
+  fn read_both(&self) -> Self::TupleReadGuards<'_>;
+  fn write_both(&self) -> Self::TupleWriteGuards<'_>;
+}
+
+// No T1 or T2 needed at all!
+impl<L1, L2> RwLockableTuple for (&L1, &L2)
+where
+  L1: RwLockable,
+  L2: RwLockable,
+{
+  type TupleReadGuards<'a>
+    = (L1::RwReadGuard<'a>, L2::RwReadGuard<'a>)
+  where
+    Self: 'a;
+  type TupleWriteGuards<'a>
+    = (L1::RwWriteGuard<'a>, L2::RwWriteGuard<'a>)
+  where
+    Self: 'a;
+
+  fn read_both(&self) -> Self::TupleReadGuards<'_> {
+    (self.0.read(), self.1.read())
+  }
+
+  fn write_both(&self) -> Self::TupleWriteGuards<'_> {
+    (self.0.write(), self.1.write())
+  }
+}
+
+pub struct VulkanTransaction<'a, State, Lock: RwLockable<State = State>> {
   lock: &'a Lock,
   device: &'a LogicalDevice,
   _marker: core::marker::PhantomData<fn() -> State>,
 }
 
-pub struct ChainedPreparedTransaction<'a, State, Lock: RwLockable<State>, Prepared, Error> {
+pub struct ChainedPreparedTransaction<'a, State, Lock: RwLockable<State = State>, Prepared, Error> {
   lock: &'a Lock,
   rollback: RollbackContext<'a>,
   prepared: Result<Prepared, Error>,
   _marker: core::marker::PhantomData<fn() -> State>,
 }
 
-impl<'a, State, Lock: RwLockable<State>, Prepared, Error>
+impl<'a, State, Lock: RwLockable<State = State>, Prepared, Error>
   ChainedPreparedTransaction<'a, State, Lock, Prepared, Error>
 {
   pub fn execute<Output, F>(mut self, f: F) -> ExecutedTransaction<'a, State, Lock, Output, Error>
@@ -1053,7 +1100,7 @@ impl<'a, State, Lock: RwLockable<State>, Prepared, Error>
   }
 }
 
-impl<'a, State, Lock: RwLockable<State>> VulkanTransaction<'a, State, Lock> {
+impl<'a, State, Lock: RwLockable<State = State>> VulkanTransaction<'a, State, Lock> {
   pub fn new(lock: &'a Lock, device: &'a LogicalDevice) -> Self {
     Self {
       lock,
@@ -1103,14 +1150,14 @@ impl<'a, State, Lock: RwLockable<State>> VulkanTransaction<'a, State, Lock> {
   }
 }
 
-pub struct PreparedTransaction<'a, State, Lock: RwLockable<State>, Prepared, Error> {
+pub struct PreparedTransaction<'a, State, Lock: RwLockable<State = State>, Prepared, Error> {
   lock: &'a Lock,
   device: &'a LogicalDevice,
   prepared: Prepared,
   _marker: core::marker::PhantomData<fn() -> (State, Error)>,
 }
 
-impl<'a, State, Lock: RwLockable<State>, Prepared, Error>
+impl<'a, State, Lock: RwLockable<State = State>, Prepared, Error>
   PreparedTransaction<'a, State, Lock, Prepared, Error>
 {
   pub fn execute<Output, F>(self, f: F) -> ExecutedTransaction<'a, State, Lock, Output, Error>
@@ -1132,14 +1179,14 @@ impl<'a, State, Lock: RwLockable<State>, Prepared, Error>
   }
 }
 
-pub struct ExecutedTransaction<'a, State, Lock: RwLockable<State>, Output, Error> {
+pub struct ExecutedTransaction<'a, State, Lock: RwLockable<State = State>, Output, Error> {
   lock: &'a Lock,
   result: Result<Output, Error>,
   rollback: RollbackContext<'a>,
   _marker: core::marker::PhantomData<fn() -> State>,
 }
 
-impl<'a, State, Lock: RwLockable<State>, Output, Error>
+impl<'a, State, Lock: RwLockable<State = State>, Output, Error>
   ExecutedTransaction<'a, State, Lock, Output, Error>
 {
   pub fn commit<NewOutput, F>(mut self, mut f: F) -> Result<NewOutput, Error>
@@ -1225,4 +1272,293 @@ impl<'a, State, Lock: RwLockable<State>, Output, Error>
       _marker: core::marker::PhantomData,
     }
   }
+}
+
+pub struct VulkanTupleTransaction<'a, Lock: RwLockableTuple> {
+  lock: &'a Lock,
+  device: &'a LogicalDevice,
+}
+
+impl<'a, Lock: RwLockableTuple> VulkanTupleTransaction<'a, Lock> {
+  pub fn new(lock: &'a Lock, device: &'a LogicalDevice) -> Self {
+    Self { lock, device }
+  }
+
+  pub fn prepare_read<Args, Prepared, Error, F>(
+    self,
+    args: Args,
+    mut f: F,
+  ) -> Result<PreparedTupleTransaction<'a, Lock, Prepared>, Error>
+  where
+    // The closure now takes a reference to the TupleReadGuards
+    F: FnMut(&Lock::TupleReadGuards<'_>, Args) -> Result<Prepared, Error>,
+  {
+    let prepared = {
+      let guards = self.lock.read_both(); // Tuple of read locks acquired
+      f(&guards, args)?
+    }; // Read locks dropped
+
+    Ok(PreparedTupleTransaction {
+      lock: self.lock,
+      device: self.device,
+      prepared,
+    })
+  }
+
+  pub fn prepare_write<Args, Prepared, Error, F>(
+    self,
+    args: Args,
+    mut f: F,
+  ) -> Result<PreparedTupleTransaction<'a, Lock, Prepared>, Error>
+  where
+    // The closure takes a mutable reference to the TupleWriteGuards
+    F: FnMut(&mut Lock::TupleWriteGuards<'_>, Args) -> Result<Prepared, Error>,
+  {
+    let prepared = {
+      let mut guards = self.lock.write_both(); // Tuple of write locks acquired
+      f(&mut guards, args)?
+    }; // Write locks dropped
+
+    Ok(PreparedTupleTransaction {
+      lock: self.lock,
+      device: self.device,
+      prepared,
+    })
+  }
+}
+
+pub struct PreparedTupleTransaction<'a, Lock: RwLockableTuple, Prepared> {
+  lock: &'a Lock,
+  device: &'a LogicalDevice,
+  prepared: Prepared,
+}
+
+impl<'a, Lock: RwLockableTuple, Prepared> PreparedTupleTransaction<'a, Lock, Prepared> {
+  pub fn execute<Output, Error, F>(self, f: F) -> ExecutedTupleTransaction<'a, Lock, Output, Error>
+  where
+    F: FnOnce(Prepared, &mut RollbackContext<'a>) -> Result<Output, Error>,
+  {
+    let mut rollback = RollbackContext::new(self.device);
+
+    // Execute heavy OS/Vulkan API calls WITHOUT locks.
+    let result = f(self.prepared, &mut rollback);
+
+    ExecutedTupleTransaction {
+      lock: self.lock,
+      result,
+      rollback,
+    }
+  }
+}
+
+pub struct ExecutedTupleTransaction<'a, Lock: RwLockableTuple, Output, Error> {
+  lock: &'a Lock,
+  result: Result<Output, Error>,
+  rollback: RollbackContext<'a>,
+}
+
+impl<'a, Lock: RwLockableTuple, Output, Error> ExecutedTupleTransaction<'a, Lock, Output, Error> {
+  pub fn commit<NewOutput, F>(mut self, mut f: F) -> Result<NewOutput, Error>
+  where
+    F: FnMut(&mut Lock::TupleWriteGuards<'_>, Result<Output, Error>) -> Result<NewOutput, Error>,
+  {
+    let final_result = {
+      let mut guards = self.lock.write_both();
+      f(&mut guards, self.result)
+    };
+
+    if final_result.is_ok() {
+      self.rollback.defuse();
+    }
+
+    final_result
+  }
+
+  // TODO
+  // commit_read, and_then_prepare_read, etc., follow the exact same pattern
+  // substituting `&State` for `&Lock::TupleReadGuards<'_>`
+}
+
+// --- Nested Transaction ---
+
+pub struct NestedVulkanTransaction<'a, OuterLock: RwLockable, InnerLock: RwLockable, P> {
+  outer_lock: &'a OuterLock,
+  device: &'a LogicalDevice,
+  project: P,
+  _marker: core::marker::PhantomData<fn() -> InnerLock>,
+}
+
+impl<'a, OuterLock, InnerLock, P> NestedVulkanTransaction<'a, OuterLock, InnerLock, P>
+where
+  OuterLock: RwLockable,
+  InnerLock: RwLockable,
+  // The closure maps from the outer state reference to the inner lock reference
+  P: Fn(&OuterLock::State) -> &InnerLock,
+{
+  pub fn new(outer_lock: &'a OuterLock, device: &'a LogicalDevice, project: P) -> Self {
+    Self {
+      outer_lock,
+      device,
+      project,
+      _marker: core::marker::PhantomData,
+    }
+  }
+
+  pub fn prepare_read<Args, Prepared, Error, F>(
+    self,
+    args: Args,
+    mut f: F,
+  ) -> Result<PreparedNestedTransaction<'a, OuterLock, InnerLock, P, Prepared>, Error>
+  where
+    F: FnMut(&OuterLock::State, &InnerLock::State, Args) -> Result<Prepared, Error>,
+  {
+    let prepared = {
+      let outer_guard = self.outer_lock.read();
+      let inner_lock = (self.project)(&*outer_guard);
+      let inner_guard = inner_lock.read();
+      f(&*outer_guard, &*inner_guard, args)?
+    };
+
+    Ok(PreparedNestedTransaction {
+      outer_lock: self.outer_lock,
+      device: self.device,
+      project: self.project,
+      prepared,
+      _marker: core::marker::PhantomData,
+    })
+  }
+
+  pub fn prepare_write<Args, Prepared, Error, F>(
+    self,
+    args: Args,
+    mut f: F,
+  ) -> Result<PreparedNestedTransaction<'a, OuterLock, InnerLock, P, Prepared>, Error>
+  where
+    F: FnMut(&OuterLock::State, &mut InnerLock::State, Args) -> Result<Prepared, Error>,
+  {
+    let prepared = {
+      let outer_guard = self.outer_lock.read();
+      let inner_lock = (self.project)(&*outer_guard);
+      let mut inner_guard = inner_lock.write();
+      f(&*outer_guard, &mut *inner_guard, args)?
+    };
+
+    Ok(PreparedNestedTransaction {
+      outer_lock: self.outer_lock,
+      device: self.device,
+      project: self.project,
+      prepared,
+      _marker: core::marker::PhantomData,
+    })
+  }
+}
+
+// --- Prepared Nested Transaction ---
+
+pub struct PreparedNestedTransaction<'a, OuterLock: RwLockable, InnerLock: RwLockable, P, Prepared>
+{
+  outer_lock: &'a OuterLock,
+  device: &'a LogicalDevice,
+  project: P,
+  prepared: Prepared,
+  _marker: core::marker::PhantomData<fn() -> InnerLock>,
+}
+
+impl<'a, OuterLock, InnerLock, P, Prepared>
+  PreparedNestedTransaction<'a, OuterLock, InnerLock, P, Prepared>
+where
+  OuterLock: RwLockable,
+  InnerLock: RwLockable,
+  P: Fn(&OuterLock::State) -> &InnerLock,
+{
+  pub fn execute<Output, Error, F>(
+    self,
+    f: F,
+  ) -> ExecutedNestedTransaction<'a, OuterLock, InnerLock, P, Output, Error>
+  where
+    F: FnOnce(Prepared, &mut RollbackContext<'a>) -> Result<Output, Error>,
+  {
+    let mut rollback = RollbackContext::new(self.device);
+    let result = f(self.prepared, &mut rollback);
+
+    ExecutedNestedTransaction {
+      outer_lock: self.outer_lock,
+      project: self.project,
+      result,
+      rollback,
+      _marker: core::marker::PhantomData,
+    }
+  }
+}
+
+// --- Executed Nested Transaction ---
+
+pub struct ExecutedNestedTransaction<
+  'a,
+  OuterLock: RwLockable,
+  InnerLock: RwLockable,
+  P,
+  Output,
+  Error,
+> {
+  outer_lock: &'a OuterLock,
+  project: P,
+  result: Result<Output, Error>,
+  rollback: RollbackContext<'a>,
+  _marker: core::marker::PhantomData<fn() -> InnerLock>,
+}
+
+impl<'a, OuterLock, InnerLock, P, Output, Error>
+  ExecutedNestedTransaction<'a, OuterLock, InnerLock, P, Output, Error>
+where
+  OuterLock: RwLockable,
+  InnerLock: RwLockable,
+  P: Fn(&OuterLock::State) -> &InnerLock,
+{
+  pub fn commit<NewOutput, F>(mut self, mut f: F) -> Result<NewOutput, Error>
+  where
+    F: FnMut(
+      &OuterLock::State,
+      &mut InnerLock::State,
+      Result<Output, Error>,
+    ) -> Result<NewOutput, Error>,
+  {
+    let final_result = {
+      let outer_guard = self.outer_lock.read();
+      let inner_lock = (self.project)(&*outer_guard);
+      let mut inner_guard = inner_lock.write();
+      f(&*outer_guard, &mut *inner_guard, self.result)
+    };
+
+    if final_result.is_ok() {
+      self.rollback.defuse();
+    }
+
+    final_result
+  }
+
+  pub fn commit_read<NewOutput, F>(mut self, mut f: F) -> Result<NewOutput, Error>
+  where
+    F: FnMut(
+      &OuterLock::State,
+      &InnerLock::State,
+      Result<Output, Error>,
+    ) -> Result<NewOutput, Error>,
+  {
+    let final_result = {
+      let outer_guard = self.outer_lock.read();
+      let inner_lock = (self.project)(&*outer_guard);
+      let inner_guard = inner_lock.read();
+      f(&*outer_guard, &*inner_guard, self.result)
+    };
+
+    if final_result.is_ok() {
+      self.rollback.defuse();
+    }
+
+    final_result
+  }
+
+  // TODO
+  // extend `and_then_prepare_read/write` here following the exact same projection pattern.
 }

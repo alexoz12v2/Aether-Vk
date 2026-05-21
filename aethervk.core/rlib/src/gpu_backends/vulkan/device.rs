@@ -4,13 +4,11 @@
 use crate::{
   gpu::{
     self, AcquireResult, ArchetypeId, CommandBufferHandle, GpuResourceHandle, NativeGpuProperty,
-    PipelineKey, PipelineKeyable, PresentationEngineHandle, RenderDevice, RenderDeviceExt,
+    PipelineKey, PipelineKeyable, PresentationEngineHandle, RenderDevice,
     RenderableInstanceId, TextureFlags,
     frame::ResourceUploadResult,
     vulkan::{device::{
-      archetypes_struct::Archetypes,
-      locks::{DebugTrackedMutex, DebugTrackedRwLock},
-      shader_manager::Shader,
+      locks::DebugTrackedRwLock,
       swapchain::PresentationState,
     }, physics::VulkanComputeKernels},
   },
@@ -31,7 +29,7 @@ use crate::{
   types::{GpuError, GpuResult},
 };
 use aethervk_oshal_rlib::{
-  self as oshal, log,
+  self as oshal,
   math::vector::{Vector3, vec3::Vec3f32},
   os::{fs::FileSystemObject, pool::WorkloadStatus},
 };
@@ -377,7 +375,7 @@ impl oshal::os::pool::Workload for TimelinePollingWorkload {
 
       // Resolve tasks
       let completed_ids: Vec<u64> = {
-        let mut registry = DebugTrackedRwLock::write(&self.task_registry);
+        let registry = DebugTrackedRwLock::write(&self.task_registry);
         registry
           .iter()
           .filter(|(_, entry)| {
@@ -553,15 +551,17 @@ pub(super) struct PendingDownload {
 /// - Native Vulkan Handle, externally synchronized
 pub struct DeviceResources {
   pub allocator: GlobalDeviceAllocator,
+  /// Discardpool driven by render timeline (which is inside timeline manager)
+  /// Not pub on purpose cause Kernels has its own discard pool driven by compute timeline
   discard_pool: resources::DiscardPool,
   live_presentation_engines: dashmap::DashMap<PresentationEngineHandle, PresentationState>,
-  command_pools: DebugTrackedRwLock<
+  pub command_pools: DebugTrackedRwLock<
     heapless::Vec<Option<Arc<commands::CommandPools>>, { utils::MAX_QUEUE_FAMILY_COUNT }>,
   >,
-  descriptor_pool: DebugTrackedRwLock<Option<Arc<descriptors::DescriptorPools>>>,
-  pipeline_pool: pipelines::PipelinePool,
+  pub descriptor_pool: DebugTrackedRwLock<Option<Arc<descriptors::DescriptorPools>>>,
+  pub pipeline_pool: pipelines::PipelinePool,
   renderpasses: renderpasses::RenderPasses,
-  shader_manager: DebugTrackedRwLock<shader_manager::ShaderManager>,
+  pub shader_manager: DebugTrackedRwLock<shader_manager::ShaderManager>,
 
   timeline_manager: timeline_manager::TimelineManager,
   next_cmd_id: Arc<AtomicU64>,
@@ -938,6 +938,7 @@ impl DeviceResources {
     let discard_pool = unsafe { resources::DiscardPool::new(64) };
     // - Command Pools
     let mut command_pools = heapless::Vec::new();
+    // TODO add a test only log to check that this is full and sorted (eg 0 1 2)
     for &queue_family_index in unique_family_indices_iter {
       unsafe {
         command_pools.push_unchecked(Some(Arc::new(commands::CommandPools::new(
@@ -998,7 +999,7 @@ impl DeviceResources {
   }
 
   #[named]
-  fn get_timeline_semaphore_cached_value(&self) -> u64 {
+  pub fn get_timeline_semaphore_cached_value(&self) -> u64 {
     self.timeline_manager.get_cached_value()
   }
 }
@@ -1956,7 +1957,7 @@ impl RenderDevice for Device {
         execute_result?;
 
         // 3. Reset the staging arena safely while we have the state context
-        if let Some(mut arena) =
+        if let Some(arena) =
           crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
             &state.frame_staging_arena,
           )
@@ -2991,7 +2992,7 @@ impl RenderDevice for Device {
   ) -> GpuResult<ResourceUploadResult> {
     let physical_mesh_id = RenderableInstanceId::from_physical_mesh(asset_hash);
     let cmd = self.get_cmd(cmd_buffer)?;
-    let timeline = DebugTrackedRwLock::read(&*self.res).get_timeline_semaphore_cached_value() + 1;
+    let _timeline = DebugTrackedRwLock::read(&*self.res).get_timeline_semaphore_cached_value() + 1;
 
     crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read(handle, |state, h| {
@@ -4085,7 +4086,7 @@ impl RenderDevice for Device {
         let mut wsky_image =
           crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&state.sky_image);
 
-        if let Some(mut old) = wsky_image.take() {
+        if let Some(old) = wsky_image.take() {
           unsafe {
             vk_mem::ffi::vmaDestroyImage(
               state.allocator.allocator.get_raw(),
@@ -4140,7 +4141,7 @@ impl RenderDevice for Device {
     handle: PresentationEngineHandle,
   ) -> GpuResult<u32> {
     crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
-      .prepare_read(handle, |state, h| {
+      .prepare_read(handle, |state, _h| {
         let pe = wait_for_pe!(state, handle)?;
 
         let archetype_guard = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
@@ -4176,7 +4177,7 @@ impl RenderDevice for Device {
             .size(buffer_size)
             .usage(vk::BufferUsageFlags::STORAGE_BUFFER);
 
-          let mut alloc_info = vk_mem::AllocationCreateInfo {
+          let alloc_info = vk_mem::AllocationCreateInfo {
             usage: vk_mem::MemoryUsage::Auto,
             flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
               | vk_mem::AllocationCreateFlags::MAPPED,
@@ -4553,7 +4554,7 @@ impl RenderDevice for Device {
     let res_guard = DebugTrackedRwLock::read(&self.res);
     let live_pes = &res_guard.live_presentation_engines;
     let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
-    let mut pe_lock = live_pes.get_mut(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let pe_lock = live_pes.get_mut(&handle).ok_or(gpu_err_invalid_pe!())?;
     let mut pe = pe_lock;
     let mut archetype_guard =
       DebugTrackedRwLock::write(&pe.archetypes_mut().trajectory_render_archetype);
@@ -4901,7 +4902,7 @@ impl RenderDevice for Device {
     let res_guard = DebugTrackedRwLock::read(&self.res);
     let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
     let live_pes = &res_guard.live_presentation_engines;
-    let mut pe_lock = live_pes.get_mut(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let pe_lock = live_pes.get_mut(&handle).ok_or(gpu_err_invalid_pe!())?;
     let mut pe = pe_lock;
     let mut archetype_guard = DebugTrackedRwLock::write(&pe.archetypes_mut().ui_render_archetype);
     let archetype = archetype_guard.as_mut().ok_or(gpu_err_archetype_absent!())?;
@@ -4989,7 +4990,7 @@ impl RenderDevice for Device {
     let res_guard = DebugTrackedRwLock::read(&self.res);
     let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
     let live_pes = &res_guard.live_presentation_engines;
-    let mut pe_lock = live_pes.get_mut(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let pe_lock = live_pes.get_mut(&handle).ok_or(gpu_err_invalid_pe!())?;
     let mut pe = pe_lock;
     let mut archetype_guard =
       DebugTrackedRwLock::write(&pe.archetypes_mut().text2_render_archetype);
@@ -5699,7 +5700,7 @@ impl RenderDevice for Device {
   ) -> GpuResult<()> {
     let (timeline, cmd, vma, discard_pool_ptr, renderpasses_ptr, render_pass_spec) = {
       let res_guard = DebugTrackedRwLock::read(&self.res);
-      let presentation_engines_guard = &res_guard.live_presentation_engines;
+      let _presentation_engines_guard = &res_guard.live_presentation_engines;
       let cmd_buffers = DebugTrackedRwLock::read(&self.recording_command_buffers);
       if !cmd_buffers.contains_key(&cmd_buffer) {
         return Err(gpu_err_invalid_cmd!());
@@ -6386,7 +6387,7 @@ impl RenderDevice for Device {
     }
 
     crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
-      .prepare_read(handle, |state, h| {
+      .prepare_read(handle, |state, _h| {
         let pe = wait_for_pe!(state, handle)?;
         let timeline = state.timeline_manager.get_cached_value();
         let vma = state.allocator.allocator.get_raw();
@@ -7021,7 +7022,7 @@ impl RenderDevice for Device {
       return Ok(None);
     }
 
-    let total_gizmos = gizmos.len() as u32;
+    let _total_gizmos = gizmos.len() as u32;
 
     let (cmd, staging_offset, staging_ptr, data_buffer, staging_buffer, data_ptr, pipeline) = {
       let res = DebugTrackedRwLock::read(&self.res);
@@ -8279,7 +8280,7 @@ impl RenderDevice for Device {
 
         // Inform the task registry of the timeline value to wait for
         if let Some(tid) = task_id {
-          let mut registry = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+          let registry = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
             &state.timeline_manager.task_registry,
           );
           if let Some(entry) = registry.get(&tid) {

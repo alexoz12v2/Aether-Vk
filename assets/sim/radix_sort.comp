@@ -1,0 +1,168 @@
+#version 450 core
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+
+// Fixed to 256 for optimal chunk processing and L1 cache utilization
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer MortonArray {
+    uvec2 entries[]; 
+};
+
+// Size must be: 16 bins * pc.num_blocks (uints)
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer HistogramBuffer {
+    uint counts[]; 
+};
+
+layout(push_constant, scalar) uniform PushConstants {
+    MortonArray input_keys;
+    MortonArray output_keys;   // Ping-Pong scatter buffer
+    HistogramBuffer histograms;
+    uint num_particles;
+    uint shift;                // Increases by 4 each host pass (0, 4, 8, 12... 28)
+    uint stage;                // 0 = COUNT, 1 = SCAN, 2 = SCATTER
+    uint num_blocks;           // ceil(num_particles / 4096.0)
+} pc;
+
+#define STAGE_COUNT   0
+#define STAGE_SCAN    1
+#define STAGE_SCATTER 2
+
+#define RADIX 16
+#define ELEMENTS_PER_BLOCK 4096
+
+shared uint s_counts[RADIX];
+shared uint s_offsets[RADIX];
+shared uint s_sg_counts[64]; // Supports up to 64 subgroups (down to a subgroup size of 4)
+shared uint s_bin_sums[RADIX];
+
+void main() {
+    uint lid = gl_LocalInvocationID.x;
+    uint wid = gl_WorkGroupID.x;
+    uint sg_id = gl_SubgroupInvocationID;
+    uint sg_group_id = gl_SubgroupID;
+
+    if (pc.stage == STAGE_COUNT) {
+        // ---------------------------------------------------------
+        // STAGE 0: LOCAL HISTOGRAM COUNT
+        // ---------------------------------------------------------
+        if (lid < RADIX) s_counts[lid] = 0;
+        barrier();
+
+        uint block_start = wid * ELEMENTS_PER_BLOCK;
+        uint block_end = min(block_start + ELEMENTS_PER_BLOCK, pc.num_particles);
+
+        for (uint i = block_start + lid; i < block_end; i += 256) {
+            uint key = (pc.input_keys.entries[i].x >> pc.shift) & 0xFu;
+            atomicAdd(s_counts[key], 1);
+        }
+        barrier();
+
+        // Write to global transposed histogram: index = bin * num_blocks + wid
+        if (lid < RADIX) {
+            pc.histograms.counts[lid * pc.num_blocks + wid] = s_counts[lid];
+        }
+    } 
+    else if (pc.stage == STAGE_SCAN) {
+        // ---------------------------------------------------------
+        // STAGE 1: GLOBAL SCAN (Dispatch EXACTLY 1 Block of 256 threads)
+        // ---------------------------------------------------------
+        if (lid < RADIX) {
+            // 1. First 16 threads sum up the total count for their designated bin
+            uint bin_sum = 0;
+            for (uint w = 0; w < pc.num_blocks; ++w) {
+                bin_sum += pc.histograms.counts[lid * pc.num_blocks + w];
+            }
+            s_bin_sums[lid] = bin_sum;
+        }
+        barrier();
+        
+        if (lid == 0) {
+            // 2. Thread 0 calculates the exclusive prefix sum across the 16 bins
+            uint global_offset = 0;
+            for (uint i = 0; i < RADIX; ++i) {
+                uint val = s_bin_sums[i];
+                s_bin_sums[i] = global_offset;
+                global_offset += val;
+            }
+        }
+        barrier();
+        
+        if (lid < RADIX) {
+            // 3. First 16 threads write the prefix-sums sequentially back into global memory
+            uint running_offset = s_bin_sums[lid];
+            for (uint w = 0; w < pc.num_blocks; ++w) {
+                uint val = pc.histograms.counts[lid * pc.num_blocks + w];
+                pc.histograms.counts[lid * pc.num_blocks + w] = running_offset;
+                running_offset += val;
+            }
+        }
+    }
+    else if (pc.stage == STAGE_SCATTER) {
+        // ---------------------------------------------------------
+        // STAGE 2: STABLE SCATTER TO PING-PONG BUFFER
+        // ---------------------------------------------------------
+        if (lid < RADIX) {
+            s_offsets[lid] = pc.histograms.counts[lid * pc.num_blocks + wid];
+        }
+        barrier();
+
+        uint block_start = wid * ELEMENTS_PER_BLOCK;
+        uint block_end = min(block_start + ELEMENTS_PER_BLOCK, pc.num_particles);
+
+        // Process data in 256 element chunks to maintain perfect stability
+        for (uint chunk_start = block_start; chunk_start < block_end; chunk_start += 256) {
+            uint i = chunk_start + lid;
+            bool valid = (i < block_end);
+            uint my_key = valid ? ((pc.input_keys.entries[i].x >> pc.shift) & 0xFu) : 0xFFFFFFFFu;
+
+            uint local_offset = 0;
+            uint my_global_base = 0;
+            
+            for (uint b = 0; b < RADIX; ++b) {
+                bool match = (my_key == b);
+                
+                // Subgroup ballot ensures perfect STABILITY inside the chunk!
+                uvec4 ballot = subgroupBallot(match);
+                uint sg_match_count = subgroupBallotBitCount(ballot);
+                uint my_sg_offset = subgroupBallotExclusiveBitCount(ballot);
+                
+                if (sg_id == 0) {
+                    s_sg_counts[gl_SubgroupID] = sg_match_count;
+                }
+                barrier();
+                
+                // Thread 0 prefixes the subgroup chunks
+                if (lid == 0) {
+                    uint sum = 0;
+                    for (uint sg = 0; sg < gl_NumSubgroups; ++sg) {
+                        uint c = s_sg_counts[sg];
+                        s_sg_counts[sg] = sum;
+                        sum += c;
+                    }
+                    s_counts[b] = sum; 
+                }
+                barrier();
+                
+                if (match) {
+                    local_offset = s_sg_counts[gl_SubgroupID] + my_sg_offset;
+                    my_global_base = s_offsets[b];
+                }
+                
+                // Thread 0 advances global offsets for the next chunk
+                if (lid == 0) {
+                    s_offsets[b] += s_counts[b];
+                }
+                barrier();
+            }
+            
+            // Scatter the element to its globally stable destination
+            if (valid) {
+                uint dest = my_global_base + local_offset;
+                pc.output_keys.entries[dest] = pc.input_keys.entries[i];
+            }
+        }
+    }
+}

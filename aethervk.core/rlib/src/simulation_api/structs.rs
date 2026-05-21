@@ -14,7 +14,7 @@ use crate::{
 use aethervk_oshal_rlib as oshal;
 use alloc::{
   collections::{BTreeMap, BTreeSet},
-  string::{String, ToString},
+  string::String,
   sync::Arc,
   vec::Vec,
 };
@@ -36,7 +36,7 @@ use oshal::{
   os,
   os::thread::Thread,
 };
-use spin::{RwLockReadGuard, RwLockWriteGuard, rwlock::RwLock};
+use spin::rwlock::RwLock;
 use thingbuf::mpsc;
 // --------------------- Drop Wrapper Types ---------------------------
 

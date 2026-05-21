@@ -1,0 +1,51 @@
+// SPDX-License-Identifier: MIT
+// @assets/sim/bp_clear.comp
+//
+// Broad Phase Clear — Reset atomic pair counters
+// ───────────────────────────────────────────────
+// Zeroes the `count` field of four distinct pair-list buffers:
+//   raw_scene_pairs — the unclassified output of bp_scene
+//   out_rb_rb       — rigid body vs rigid body queue
+//   out_rb_ps       — rigid body vs particle system queue
+//   out_rb_lca      — cross-LCA / macro vs micro queue
+//
+// Dispatched as a single thread before the broad-phase suite runs.
+// No synchronisation needed within this shader — one writer, no readers.
+//
+// Target: SPIR-V 1.4 · Vulkan 1.1
+
+#version 450 core
+#extension GL_EXT_buffer_reference      : require
+#extension GL_EXT_scalar_block_layout   : require
+#extension GL_GOOGLE_include_directive  : require
+
+#include "../debug_utils.glsl"
+
+// ─── Each queue has a leading uint count followed by the pair data ───────────
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer PairBuffer {
+    uint  count;
+    uvec2 pairs[];   // pair data follows — we never touch it in this shader
+};
+
+// ─── Push constants (40 bytes) ──────────────────────────────────────────────
+layout(push_constant, scalar) uniform PushConstants {
+    PairBuffer raw_scene_pairs;  // BDA — 8 B
+    PairBuffer out_rb_rb;        // BDA — 8 B
+    PairBuffer out_rb_ps;        // BDA — 8 B
+    PairBuffer out_rb_lca;       // BDA — 8 B
+    // 32 bytes total — well within the 128-byte limit
+} pc;
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    // Clear the raw generator buffer and all classified narrow-phase queues
+    pc.raw_scene_pairs.count = 0u;
+    pc.out_rb_rb.count       = 0u;
+    pc.out_rb_ps.count       = 0u;
+    pc.out_rb_lca.count      = 0u;
+
+    if (SHOULD_DEBUG_PRINT) {
+        debugPrintfEXT("[bp_clear] all four pair queues reset to 0\n");
+    }
+}

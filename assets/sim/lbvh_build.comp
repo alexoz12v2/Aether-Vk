@@ -131,21 +131,21 @@ void main() {
     uint leaf_idx = num_internal_nodes + idx;
     uint p_id = pc.sorted_morton.entries[idx].y;
     
-    uint block_idx = p_id / SG_SIZE;
-    uint local_idx = p_id % SG_SIZE;
-    uint base = block_idx * (10 * SG_SIZE) + local_idx;
+    uint block_idx = p_id / SUBGROUP_SIZE;
+    uint local_idx = p_id % SUBGROUP_SIZE;
+    uint base = block_idx * (10 * SUBGROUP_SIZE) + local_idx;
 
     vec3 pos = vec3(
-        pc.particles.data[base + 0 * SG_SIZE],
-        pc.particles.data[base + 1 * SG_SIZE],
-        pc.particles.data[base + 2 * SG_SIZE]
+        pc.particles.data[base + 0 * SUBGROUP_SIZE],
+        pc.particles.data[base + 1 * SUBGROUP_SIZE],
+        pc.particles.data[base + 2 * SUBGROUP_SIZE]
     );
     vec3 vel = vec3(
-        pc.particles.data[base + 3 * SG_SIZE],
-        pc.particles.data[base + 4 * SG_SIZE],
-        pc.particles.data[base + 5 * SG_SIZE]
+        pc.particles.data[base + 3 * SUBGROUP_SIZE],
+        pc.particles.data[base + 4 * SUBGROUP_SIZE],
+        pc.particles.data[base + 5 * SUBGROUP_SIZE]
     );
-    float mass = pc.particles.data[base + 6 * SG_SIZE];
+    float mass = pc.particles.data[base + 6 * SUBGROUP_SIZE];
     float r = pc.particle_radius;
     
     vec3 p1 = pos + vel * pc.dt;

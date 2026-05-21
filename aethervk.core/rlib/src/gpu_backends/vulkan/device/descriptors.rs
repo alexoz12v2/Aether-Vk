@@ -7,11 +7,11 @@ use crate::{
     device::{DeviceResource, resources},
     utils::NonZeroHandle,
   },
-  types::{GpuError, GpuResult},
+  types::GpuResult,
 };
 use alloc::{sync, vec::Vec};
 use ash::vk::{
-  self, Handle, PFN_vkAllocateDescriptorSets, PFN_vkCreateDescriptorPool, PFN_vkResetDescriptorPool,
+  self, Handle, PFN_vkCreateDescriptorPool,
 };
 use core::ptr;
 use function_name::named;

@@ -1,11 +1,9 @@
 //! archetypes_struct module.
 
 use crate::{
-  gpu,
   gpu::{
-    PipelineKeyable, PresentationEngineHandle, vulkan,
-    vulkan::{
-      device::{
+    PipelineKeyable,
+    vulkan::device::{
         LogicalDevice, Queue,
         locks::DebugTrackedRwLock,
         pipelines::{
@@ -13,20 +11,16 @@ use crate::{
           StencilCompareOp, StencilLogicOp, VertexIn,
         },
         renderpasses,
-        renderpasses::RenderPassSpecification,
         resources,
-        resources::{DiscardableResource, ForwardMeshRenderResourceArchetype, Image},
+        resources::ForwardMeshRenderResourceArchetype,
         shader_manager,
         shader_manager::ShaderKey,
       },
-      utils::NonZeroHandle,
-    },
   },
-  gpu_backends::vulkan::device::{pipelines, swapchain, utils},
+  gpu_backends::vulkan::device::{pipelines, utils},
   simulation::comet::{NORMAL_COMPONENTS, POSITION_COMPONENTS, UV_COMPONENTS},
   types::{GpuError, GpuResult},
 };
-use alloc::vec::Vec;
 use ash::vk;
 use function_name::named;
 
@@ -151,7 +145,7 @@ impl Archetypes {
 
   /// TODO: Document this item
   #[named]
-  pub fn discard(&self, device: &ash::Device, discard_pool: &resources::DiscardPool) {
+  pub fn discard(&self, _device: &ash::Device, _discard_pool: &resources::DiscardPool) {
     use crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock;
     let _ = DebugTrackedRwLock::write(&self.sun_render_archetype).take();
     let _ = DebugTrackedRwLock::write(&self.physical_mesh_render_archetype).take();
@@ -675,11 +669,11 @@ impl Archetypes {
     fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
     color_format: vk::Format,
-    allocator: vk_mem::AllocatorView,
-    discard_pool: &resources::DiscardPool,
+    _allocator: vk_mem::AllocatorView,
+    _discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
-    timeline: u64,
+    _timeline: u64,
     arena: alloc::sync::Arc<DebugTrackedRwLock<resources::BackgroundRenderResourceArchetypeArena>>,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
@@ -807,13 +801,13 @@ impl Archetypes {
     outline_vertex_shader: &shader_manager::Shader,
     outline_fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
-    queue: &Queue,
+    _queue: &Queue,
     color_format: vk::Format,
-    allocator: vk_mem::AllocatorView,
-    discard_pool: &resources::DiscardPool,
+    _allocator: vk_mem::AllocatorView,
+    _discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
-    timeline: u64,
+    _timeline: u64,
     arena: alloc::sync::Arc<DebugTrackedRwLock<resources::ForwardMeshRenderResourceArchetypeArena>>,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
@@ -944,11 +938,11 @@ impl Archetypes {
     fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
     color_format: vk::Format,
-    allocator: vk_mem::AllocatorView,
-    discard_pool: &resources::DiscardPool,
+    _allocator: vk_mem::AllocatorView,
+    _discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
-    timeline: u64,
+    _timeline: u64,
     arena: alloc::sync::Arc<DebugTrackedRwLock<resources::GridRenderResourceArchetypeArena>>,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
@@ -1011,11 +1005,11 @@ impl Archetypes {
     fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
     color_format: vk::Format,
-    allocator: vk_mem::AllocatorView,
-    discard_pool: &resources::DiscardPool,
+    _allocator: vk_mem::AllocatorView,
+    _discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
-    timeline: u64,
+    _timeline: u64,
     arena: alloc::sync::Arc<DebugTrackedRwLock<resources::MinimapRenderResourceArchetypeArena>>,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
@@ -1076,13 +1070,13 @@ impl Archetypes {
     vertex_shader: &shader_manager::Shader,
     fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
-    queue: &Queue,
+    _queue: &Queue,
     color_format: vk::Format,
-    allocator: vk_mem::AllocatorView,
-    discard_pool: &resources::DiscardPool,
+    _allocator: vk_mem::AllocatorView,
+    _discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
-    timeline: u64,
+    _timeline: u64,
     arena: alloc::sync::Arc<DebugTrackedRwLock<resources::TextRenderResourceArchetypeArena>>,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
@@ -1140,13 +1134,13 @@ impl Archetypes {
     vertex_shader: &shader_manager::Shader,
     fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
-    queue: &Queue,
+    _queue: &Queue,
     color_format: vk::Format,
-    allocator: vk_mem::AllocatorView,
-    discard_pool: &resources::DiscardPool,
+    _allocator: vk_mem::AllocatorView,
+    _discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
-    timeline: u64,
+    _timeline: u64,
     arena: alloc::sync::Arc<DebugTrackedRwLock<resources::Text2RenderResourceArchetypeArena>>,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
@@ -1215,11 +1209,11 @@ impl Archetypes {
     fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
     color_format: vk::Format,
-    allocator: vk_mem::AllocatorView,
-    discard_pool: &resources::DiscardPool,
+    _allocator: vk_mem::AllocatorView,
+    _discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
-    timeline: u64,
+    _timeline: u64,
     arena: alloc::sync::Arc<DebugTrackedRwLock<resources::BvhRenderResourceArchetypeArena>>,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
@@ -1287,11 +1281,11 @@ impl Archetypes {
     fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
     color_format: vk::Format,
-    allocator: vk_mem::AllocatorView,
-    discard_pool: &resources::DiscardPool,
+    _allocator: vk_mem::AllocatorView,
+    _discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
-    timeline: u64,
+    _timeline: u64,
     arena: alloc::sync::Arc<DebugTrackedRwLock<resources::Bvhwire2RenderResourceArchetypeArena>>,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
@@ -1358,11 +1352,11 @@ impl Archetypes {
     fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
     color_format: vk::Format,
-    allocator: vk_mem::AllocatorView,
-    discard_pool: &resources::DiscardPool,
+    _allocator: vk_mem::AllocatorView,
+    _discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
-    timeline: u64,
+    _timeline: u64,
     arena: alloc::sync::Arc<DebugTrackedRwLock<resources::SphereGizmoRenderResourceArchetypeArena>>,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
@@ -1431,11 +1425,11 @@ impl Archetypes {
     fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
     color_format: vk::Format,
-    allocator: vk_mem::AllocatorView,
-    discard_pool: &resources::DiscardPool,
+    _allocator: vk_mem::AllocatorView,
+    _discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
-    timeline: u64,
+    _timeline: u64,
     arena: alloc::sync::Arc<DebugTrackedRwLock<resources::GizmoRenderResourceArchetypeArena>>,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
@@ -1505,13 +1499,13 @@ impl Archetypes {
     outline_vertex_shader: &shader_manager::Shader,
     outline_fragment_shader: &shader_manager::Shader,
     depth_stencil_format: vk::Format,
-    queue: &Queue,
+    _queue: &Queue,
     color_format: vk::Format,
-    allocator: vk_mem::AllocatorView,
-    discard_pool: &resources::DiscardPool,
+    _allocator: vk_mem::AllocatorView,
+    _discard_pool: &resources::DiscardPool,
     renderpasses: &renderpasses::RenderPasses,
     pipeline_pool_lock: &pipelines::PipelinePool,
-    timeline: u64,
+    _timeline: u64,
     arena: alloc::sync::Arc<
       DebugTrackedRwLock<resources::ForwardMesh2RenderResourceArchetypeArena>,
     >,

@@ -1516,6 +1516,39 @@ fn closest_point_barycentric_3d(p: Vec3f32, a: Vec3f32, b: Vec3f32, c: Vec3f32) 
   )
 }
 
+use crate::math::collision::multi_bvh::TlasMultiNode;
+
+/// Expands static object-space Multi-BVH bounds based on linear velocity.
+pub fn compute_motion_bounds<const N: usize>(
+    static_bvh: &[TlasMultiNode<N>],
+    local_linear_vel: Vec3f32,
+    dt: f32,
+) -> Vec<TlasMultiNode<N>> {
+    let mut motion_bvh = static_bvh.to_vec();
+    
+    // Total sweep displacement in object space
+    let sweep = local_linear_vel * dt;
+    let sweep_min = sweep.min(Vec3f32::zero());
+    let sweep_max = sweep.max(Vec3f32::zero());
+
+    for node in motion_bvh.iter_mut() {
+        for i in 0..N {
+            // Only expand valid slots
+            if (node.valid_mask[i / 32] & (1u32 << (i % 32))) != 0 {
+                node.min_x[i] += sweep_min.x();
+                node.min_y[i] += sweep_min.y();
+                node.min_z[i] += sweep_min.z();
+
+                node.max_x[i] += sweep_max.x();
+                node.max_y[i] += sweep_max.y();
+                node.max_z[i] += sweep_max.z();
+            }
+        }
+    }
+    
+    motion_bvh
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;

@@ -46,7 +46,7 @@ impl SceneInteractionExt for Scene {
   fn select_entity(
     &self,
     entity: EntityId,
-    pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>,
+    _pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>,
   ) -> EngineResult<()> {
     let mut to_remove = Vec::new();
     self.query1::<SelectedComponent, _>(|id, _| {

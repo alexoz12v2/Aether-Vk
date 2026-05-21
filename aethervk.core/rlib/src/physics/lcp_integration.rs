@@ -1,5 +1,5 @@
 use crate::{
-  gpu::{CollisionPair, ParticleGpu, RigidBodyGpu},
+  gpu::{CollisionPair, ParticleGpu},
   math::collision::lcp::solve_lcp_pgs,
 };
 use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
@@ -7,7 +7,7 @@ use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
 pub fn resolve_cluster_lcp(
   cluster: &[CollisionPair],
   kinematics: &[crate::gpu::KinematicBody],
-  rigid_bodies: &mut [RigidBodyGpu],
+  rigid_bodies: &mut [crate::gpu::compute_push_constants::RigidBodyImex],
   particles: &mut [ParticleGpu],
   restitution: f32,
 ) {
@@ -21,19 +21,19 @@ pub fn resolve_cluster_lcp(
   let mut impulses = alloc::vec![0.0; m];
 
   let get_mass =
-    |idx: usize, rigid_bodies: &[RigidBodyGpu], particles: &[ParticleGpu]| -> Option<f32> {
+    |idx: usize, rigid_bodies: &[crate::gpu::compute_push_constants::RigidBodyImex], particles: &[ParticleGpu]| -> Option<f32> {
       if (idx & (1 << 31)) != 0 {
         None // Kinematic, infinite mass
       } else if (idx & (1 << 30)) != 0 {
         let i = idx & !(1 << 30);
         particles.get(i).map(|p| p.mass)
       } else {
-        rigid_bodies.get(idx).map(|rb| rb.mass)
+        rigid_bodies.get(idx).map(|rb| rb.position_mass[3])
       }
     };
 
   let get_velocity =
-    |idx: usize, rigid_bodies: &[RigidBodyGpu], particles: &[ParticleGpu]| -> Option<Vec3f32> {
+    |idx: usize, rigid_bodies: &[crate::gpu::compute_push_constants::RigidBodyImex], particles: &[ParticleGpu]| -> Option<Vec3f32> {
       if (idx & (1 << 31)) != 0 {
         let i = idx & !(1 << 31);
         kinematics.get(i).map(|k| k.velocity)
@@ -41,12 +41,12 @@ pub fn resolve_cluster_lcp(
         let i = idx & !(1 << 30);
         particles.get(i).map(|p| Vec3f32::from_array(p.velocity))
       } else {
-        rigid_bodies.get(idx).map(|rb| Vec3f32::from_array(rb.linear_velocity))
+        rigid_bodies.get(idx).map(|rb| Vec3f32::from_array([rb.linear_vel_drag[0], rb.linear_vel_drag[1], rb.linear_vel_drag[2]]))
       }
     };
 
   let add_velocity =
-    |idx: usize, dv: Vec3f32, rigid_bodies: &mut [RigidBodyGpu], particles: &mut [ParticleGpu]| {
+    |idx: usize, dv: Vec3f32, rigid_bodies: &mut [crate::gpu::compute_push_constants::RigidBodyImex], particles: &mut [ParticleGpu]| {
       if (idx & (1 << 31)) != 0 {
         // Kinematic
       } else if (idx & (1 << 30)) != 0 {
@@ -58,9 +58,11 @@ pub fn resolve_cluster_lcp(
         }
       } else {
         if let Some(rb) = rigid_bodies.get_mut(idx) {
-          let mut v = Vec3f32::from_array(rb.linear_velocity);
+          let mut v = Vec3f32::from_array([rb.linear_vel_drag[0], rb.linear_vel_drag[1], rb.linear_vel_drag[2]]);
           v += dv;
-          rb.linear_velocity = [v.x(), v.y(), v.z()];
+          rb.linear_vel_drag[0] = v.x();
+          rb.linear_vel_drag[1] = v.y();
+          rb.linear_vel_drag[2] = v.z();
         }
       }
     };
@@ -171,26 +173,27 @@ pub fn resolve_cluster_lcp(
         add_velocity(idx, global_dv, rigid_bodies, particles);
       } else {
         if let Some(rb) = rigid_bodies.get_mut(idx) {
-          // rb.rotation is a 3x3 matrix storing the local-to-global rotation
-          // Its transpose acts as the global-to-local rotation
-          use aethervk_oshal_rlib::math::matrix::{
-            Matrix, Matrix3, MatrixVectorMul, mat3::Mat3f32,
-          };
+          use aethervk_oshal_rlib::math::matrix::{Matrix, Matrix3, MatrixVectorMul, mat3::Mat3f32};
+          let x = rb.orientation[0];
+          let y = rb.orientation[1];
+          let z = rb.orientation[2];
+          let w = rb.orientation[3];
+          let x2 = x + x; let y2 = y + y; let z2 = z + z;
+          let xx = x * x2; let xy = x * y2; let xz = x * z2;
+          let yy = y * y2; let yz = y * z2; let zz = z * z2;
+          let wx = w * x2; let wy = w * y2; let wz = w * z2;
+          
           let rot_mat = Mat3f32::from_array(&[
-            rb.rotation[0][0],
-            rb.rotation[0][1],
-            rb.rotation[0][2],
-            rb.rotation[1][0],
-            rb.rotation[1][1],
-            rb.rotation[1][2],
-            rb.rotation[2][0],
-            rb.rotation[2][1],
-            rb.rotation[2][2],
+            1.0 - (yy + zz), xy + wz, xz - wy,
+            xy - wz, 1.0 - (xx + zz), yz + wx,
+            xz + wy, yz - wx, 1.0 - (xx + yy)
           ]);
           let local_dv = rot_mat.transpose().mul_vector(global_dv);
-          let mut v = Vec3f32::from_array(rb.linear_velocity);
+          let mut v = Vec3f32::from_array([rb.linear_vel_drag[0], rb.linear_vel_drag[1], rb.linear_vel_drag[2]]);
           v += local_dv;
-          rb.linear_velocity = [v.x(), v.y(), v.z()];
+          rb.linear_vel_drag[0] = v.x();
+          rb.linear_vel_drag[1] = v.y();
+          rb.linear_vel_drag[2] = v.z();
         }
       }
     };

@@ -21,7 +21,7 @@ struct SparseCollisionData {
 
 // Sparse array of collision flags/data
 layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer SparseCollisions {
-    SparseCollisionData data[]; 
+    SparseCollisionData data[];
 };
 
 // Particles data
@@ -43,19 +43,23 @@ void main() {
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= pc.total_particles) return;
 
-    BVHNodeAABB my_node = read_bvh_node(pc.particle_bvh, pc.total_particles - 1 + idx); // Leaf node
+    // Read the leaf node
+    BVHNodeAABB my_node = read_bvh_node(pc.particle_bvh, pc.total_particles - 1 + idx);
+
+    // Correctly extract properties directly from my_node
     uint my_prim_id = my_node.left_child_or_primitive_offset;
     AABB my_aabb = my_node.bound;
+    vec3 my_center = my_node.center_of_mass;
 
     if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
-        debugPrintfEXT("Hello from ccd.comp! my_prim_id=%d, aabb_min=(%f,%f,%f) aabb_max=(%f,%f,%f)\n", 
-            my_prim_id, my_aabb.minBounds.x, my_aabb.minBounds.y, my_aabb.minBounds.z, 
+        debugPrintfEXT("Hello from ccd.comp! my_prim_id=%d, aabb_min=(%f,%f,%f) aabb_max=(%f,%f,%f)\n",
+            my_prim_id, my_aabb.minBounds.x, my_aabb.minBounds.y, my_aabb.minBounds.z,
             my_aabb.maxBounds.x, my_aabb.maxBounds.y, my_aabb.maxBounds.z);
     }
 
     uint stack[64];
     int stackPtr = 0;
-    stack[stackPtr++] = pc.root_index; 
+    stack[stackPtr++] = pc.root_index;
 
     uint collisions_found = 0;
     const uint MAX_COLLISIONS_PER_THREAD = 16;
@@ -67,16 +71,16 @@ void main() {
             vec3 contact_normal = vec3(0.0); \
             vec3 contact_point = vec3(0.0); \
             float depth = 0.0; \
-            uint blockA = my_prim_id / SG_SIZE; \
-            uint locA = my_prim_id % SG_SIZE; \
-            uint baseA = blockA * (10 * SG_SIZE) + locA; \
-            uint blockB = other_prim_id / SG_SIZE; \
-            uint locB = other_prim_id % SG_SIZE; \
-            uint baseB = blockB * (10 * SG_SIZE) + locB; \
+            uint blockA = my_prim_id / SUBGROUP_SIZE; \
+            uint locA = my_prim_id % SUBGROUP_SIZE; \
+            uint baseA = blockA * (10 * SUBGROUP_SIZE) + locA; \
+            uint blockB = other_prim_id / SUBGROUP_SIZE; \
+            uint locB = other_prim_id % SUBGROUP_SIZE; \
+            uint baseB = blockB * (10 * SUBGROUP_SIZE) + locB; \
             /* Multiply velocities by dt to get the displacement step */ \
-            vec3 my_vel = vec3(pc.particles.data[baseA + 3 * SG_SIZE], pc.particles.data[baseA + 4 * SG_SIZE], pc.particles.data[baseA + 5 * SG_SIZE]) * pc.dt; \
-            vec3 other_vel = vec3(pc.particles.data[baseB + 3 * SG_SIZE], pc.particles.data[baseB + 4 * SG_SIZE], pc.particles.data[baseB + 5 * SG_SIZE]) * pc.dt; \
-            mat4 transA = mat4(1.0); transA[3].xyz = my_node.center_of_mass; \
+            vec3 my_vel = vec3(pc.particles.data[baseA + 3 * SUBGROUP_SIZE], pc.particles.data[baseA + 4 * SUBGROUP_SIZE], pc.particles.data[baseA + 5 * SUBGROUP_SIZE]) * pc.dt; \
+            vec3 other_vel = vec3(pc.particles.data[baseB + 3 * SUBGROUP_SIZE], pc.particles.data[baseB + 4 * SUBGROUP_SIZE], pc.particles.data[baseB + 5 * SUBGROUP_SIZE]) * pc.dt; \
+            mat4 transA = mat4(1.0); transA[3].xyz = my_center; /* Fixed: use my_center from outside the loop */ \
             mat4 transB = mat4(1.0); transB[3].xyz = node_center; \
             bool is_colliding = compute_toi_generic( \
                 0, vec3(pc.particle_radius, 0.0, 0.0), transA, my_vel, \
@@ -103,8 +107,8 @@ void main() {
 
     while (stackPtr > 0) {
         uint node_idx = stack[--stackPtr];
-        
-        if (BRANCH_FACTOR == 2) {
+
+        if (SUBGROUP_SIZE == 2) {
             BVHNodeAABB node = read_bvh_node(pc.particle_bvh, node_idx);
 
             if (intersectAABB(my_aabb, node.bound)) {
@@ -117,22 +121,40 @@ void main() {
                 }
             }
         } else {
-            MultiBVHBlockArray multi_bvh = MultiBVHBlockArray(pc.particle_bvh);
-            uint node_valid = GET_MULTI_BVH_VALID_COUNT(multi_bvh, node_idx);
-            for (uint i = 0; i < BRANCH_FACTOR; ++i) {
-                if (i >= node_valid) break;
+            // Safe buffer cast pointer
+            MultiBvhBuffer multi_bvh = MultiBvhBuffer(pc.particle_bvh);
+
+            for (uint i = 0; i < SUBGROUP_SIZE; ++i) {
+                bool valid = false;
+                if (i < 32) {
+                    valid = (multi_bvh.nodes[node_idx].valid_mask.x & (1u << i)) != 0u;
+                } else {
+                    valid = (multi_bvh.nodes[node_idx].valid_mask.y & (1u << (i - 32))) != 0u;
+                }
+                if (!valid) continue;
+
                 AABB bound;
-                GET_MULTI_BVH_BOUND(multi_bvh, node_idx, i, bound);
+                bound.minBounds = vec3(
+                    multi_bvh.nodes[node_idx].min_x[i],
+                    multi_bvh.nodes[node_idx].min_y[i],
+                    multi_bvh.nodes[node_idx].min_z[i]
+                );
+                bound.maxBounds = vec3(
+                    multi_bvh.nodes[node_idx].max_x[i],
+                    multi_bvh.nodes[node_idx].max_y[i],
+                    multi_bvh.nodes[node_idx].max_z[i]
+                );
+
                 if (intersectAABB(my_aabb, bound)) {
-                    bool isLeaf;
-                    uint offset;
-                    GET_MULTI_BVH_LEAF_INFO(multi_bvh, node_idx, i, isLeaf, offset);
+                    bool isLeaf = bvh_is_leaf(multi_bvh.nodes[node_idx].metadata[i]);
+                    uint offset = bvh_get_index(multi_bvh.nodes[node_idx].metadata[i]);
+
                     if (isLeaf) {
                         uint other_prim_id = offset;
                         vec3 node_center = (bound.minBounds + bound.maxBounds) * 0.5; // Approximation for particle center
                         EVALUATE_CCD(other_prim_id, node_center);
                     } else {
-                        if (offset != 0xFFFFFFFF) stack[stackPtr++] = offset;
+                        if (offset != 0xFFFFFFFFu) stack[stackPtr++] = offset;
                     }
                 }
             }

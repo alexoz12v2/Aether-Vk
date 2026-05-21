@@ -368,7 +368,7 @@ mod tests {
   fn test_lifecycle_wraparound_internal(enable_maintenance1: bool) {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, params) =
       setup_test_render(enable_maintenance1);
-    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
+    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
     let mut engine = PresentationState::new(
       &entry,
       &instance.instance,
@@ -423,7 +423,7 @@ mod tests {
   fn test_cancel_image_recovery_internal(enable_maintenance1: bool) {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, params) =
       setup_test_render(enable_maintenance1);
-    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
+    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
     let mut engine = PresentationState::new(
       &entry,
       &instance.instance,
@@ -495,7 +495,7 @@ mod tests {
   fn test_resize_in_flight_discard_bins_internal(enable_maintenance1: bool) {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, mut params) =
       setup_test_render(enable_maintenance1);
-    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
+    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
     let mut engine = PresentationState::new(
       &entry,
       &instance.instance,
@@ -589,7 +589,7 @@ mod tests {
     params.width = 128;
     params.height = 128;
 
-    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
+    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
 
     let mut engine = PresentationState::new(
       &entry,
@@ -680,7 +680,7 @@ mod tests {
       buffer_count: 3,
     };
 
-    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
+    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
 
     let mut engine = PresentationState::new(
       &entry,
@@ -786,7 +786,7 @@ mod tests {
       vsync: false,
       buffer_count: 3,
     };
-    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
+    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
     let mut vp1 = PresentationState::new(
       &entry,
       &instance.instance,
@@ -1016,7 +1016,7 @@ mod tests {
       buffer_count: 3,
     };
 
-    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&device);
+    let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
 
     let mut engine = PresentationState::new(
       &entry,

@@ -4,10 +4,12 @@
 //! It assumes Vulkan 1.1 with `VK_KHR_buffer_device_address` and `VK_KHR_shader_subgroup_basic`.
 
 use crate::gpu::compute_push_constants::ApplyImpulsesPushConstants;
-use crate::gpu::vulkan::device::{self, Device, LogicalDevice, resources};
+use crate::gpu::compute_push_constants::{RigidBodyImex, Wrench};
+use crate::physics::physics_scene::GpuReferenceFrame;
+use crate::gpu::vulkan::device::{self, Device, LogicalDevice, commands, resources};
 use crate::gpu::vulkan::utils;
 use crate::gpu::{
-  self, CollisionPair, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, DynamicBody, Kernels,
+  self, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, Kernels,
   KinematicBody, WaitHandle,
 };
 use crate::gpu_err;
@@ -15,75 +17,14 @@ use crate::physics::physics_scene::PhysicsScene;
 use crate::scene::Scene;
 use crate::types::{EngineError, EngineResult, GpuError, GpuResult};
 use aethervk_oshal_rlib::math::matrix::Matrix4;
-use aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32;
 use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::vec4::{Quat, Vec4f32};
+use aethervk_oshal_rlib::math::vector::vec4::Quat;
 use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
-use aethervk_oshal_rlib::os;
 use aethervk_oshal_rlib::os::time::timeus_t;
 use alloc::format;
-use alloc::string::ToString;
 use alloc::vec::Vec;
 use ash::vk;
 use vk_mem::{Alloc, AllocatorView, AsAllocatorView};
-
-/// Centralized Buffer length management
-/// *Its methods must be thread safe*
-/// Strategy: Each [`VulkanBuffer`] buffer stores, in its 16 bytes
-/// - 8 bytes (low) -> buffer device address of the length
-/// - 8 bytes (high) -> duplicated value of length (so that GPU can also read it fast)
-pub struct LengthManager {
-  pub buffer: vk::Buffer,
-  pub allocation: vk_mem::Allocation,
-  pub allocator: vk_mem::AllocatorView,
-  pub address: u64,
-  pub mapped_ptr: *mut u64,
-  pub free_list: alloc::sync::Arc<spin::RwLock<alloc::vec::Vec<usize>>>,
-  pub capacity: usize,
-}
-
-impl LengthManager {
-  pub fn new(
-    device: &LogicalDevice,
-    allocator: vk_mem::AllocatorView,
-    capacity: usize,
-  ) -> GpuResult<Self> {
-    let size = (capacity * core::mem::size_of::<u64>()) as u64;
-
-    let mut lengths_alloc_info = vk_mem::AllocationCreateInfo {
-      usage: vk_mem::MemoryUsage::Auto,
-      // SEQUENTIAL (or omitting access flags) prioritizes HOST_COHERENT over HOST_CACHED
-      flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-        | vk_mem::AllocationCreateFlags::MAPPED,
-      ..Default::default()
-    };
-    crate::apply_test_dedicated_alloc!(lengths_alloc_info);
-
-    let create_info = vk::BufferCreateInfo::default()
-      .sharing_mode(vk::SharingMode::EXCLUSIVE)
-      .size(capacity as _)
-      .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::STORAGE_BUFFER);
-    let (buffer, allocation, alloc_info) =
-      unsafe { allocator.create_buffer_get_info(&create_info, &lengths_alloc_info) }?;
-    let buffer_device_address_info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
-    let address = unsafe {
-      device.buffer_device_address.get_buffer_device_address(&buffer_device_address_info)
-    };
-    Ok(Self {
-      buffer,
-      allocation,
-      allocator,
-      address,
-      mapped_ptr: alloc_info.mapped_data as _,
-      free_list: alloc::sync::Arc::new(spin::RwLock::new(alloc::vec::Vec::with_capacity(capacity))),
-      capacity,
-    })
-  }
-
-  pub fn cleanup(&mut self, _device: &LogicalDevice) {
-    unsafe { self.allocator.destroy_buffer(self.buffer, &mut self.allocation) };
-  }
-}
 
 /// Configuration parameters for the physics pipeline
 pub struct PhysicsPipelineConfig {
@@ -209,6 +150,183 @@ pub struct P34PushConstants {
   pub num_kinematics: u32,
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// IMEX Pipeline Push-Constant Structs
+// All sizes verified against shader `layout(push_constant, scalar)` blocks.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `integrate_particles_p1_p2.comp` — 16 bytes
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ImexParticlesP12PushConstants {
+  /// BDA to AOSOA particle data (float[])
+  pub particles: u64,
+  /// Physical dt in seconds
+  pub dt: f32,
+  pub total_particles: u32,
+}
+
+/// `integrate_bodies_p3.comp` — 32 bytes
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ImexBodiesP3PushConstants {
+  /// BDA to RigidBodyArray (imex_math.glsl layout: quaternion + wrench_idx)
+  pub rigid_bodies: u64,
+  /// BDA to WrenchArray (6-float Wrench per entry)
+  pub wrenches: u64,
+  /// Physical dt in seconds
+  pub dt: f32,
+  pub n_bodies: u32,
+  /// Picard iteration count (4 is sufficient for most scenes; 8–10 for high-spin)
+  pub n_iterations: u32,
+  pub _pad: u32,
+}
+
+/// `integrate_particles_p4_5.comp` — 40 bytes
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ImexParticlesP45PushConstants {
+  /// BDA to AOSOA particle data
+  pub particles: u64,
+  /// BDA to ClockBuffer (uvec2 global_time_us)
+  pub clock: u64,
+  /// Physical dt in seconds
+  pub dt: f32,
+  pub total_particles: u32,
+  /// dt in microseconds — low 32 bits
+  pub dt_us_lo: u32,
+  /// dt in microseconds — high 32 bits
+  pub dt_us_hi: u32,
+  /// t_n (current frame start) in microseconds — low 32 bits
+  pub current_time_lo: u32,
+  /// t_n (current frame start) in microseconds — high 32 bits
+  pub current_time_hi: u32,
+}
+
+/// `rb_force_assign.comp` — 24 bytes
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RbForceAssignPushConstants {
+  /// BDA to RigidBodyArray (read-only; only leaf_start_idx / leaf_count / wrench_idx used)
+  pub rigid_bodies: u64,
+  /// BDA to WrenchArray (leaf wrenches AND CoM wrench; both in same buffer)
+  pub wrenches: u64,
+  pub n_bodies: u32,
+  pub _pad: u32,
+}
+
+/// `bp_clear.comp` — 32 bytes  (4 × 8-byte BDAs)
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpClearPushConstants {
+  pub raw_scene_pairs: u64,
+  pub out_rb_rb: u64,
+  pub out_rb_ps: u64,
+  pub out_rb_lca: u64,
+}
+
+/// `bp_bounds_gen.comp` — 28 bytes
+///
+/// Matches the existing `bp_bounds_gen.comp` push-constant block:
+/// ```glsl
+/// EntityArray scene_entities;  // BDA
+/// LeafBuffer  tlas_leaves;     // BDA
+/// uvec2       dt_us;
+/// uint        total_entities;
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpBoundsGenPushConstants {
+  pub scene_entities: u64,
+  pub tlas_leaves: u64,
+  pub dt_us_lo: u32,
+  pub dt_us_hi: u32,
+  pub total_entities: u32,
+  pub _pad: u32,
+}
+
+/// `bp_scene.comp` — 40 bytes
+///
+/// Matches:
+/// ```glsl
+/// MultiBvhBuffer tlas_bvh;          // BDA (8 bytes — treated as u64 opaque)
+/// LeafBuffer     query_leaves;       // BDA
+/// PairBuffer     overlapping_pairs;  // BDA
+/// uint           tlas_root_index;
+/// uint           total_queries;
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpScenePushConstants {
+  pub tlas_bvh: u64,
+  pub query_leaves: u64,
+  pub overlapping_pairs: u64,
+  pub tlas_root_index: u32,
+  pub total_queries: u32,
+}
+
+/// `bp_classify.comp` — 40 bytes
+///
+/// ```glsl
+/// EntityArray scene_entities;  // BDA
+/// RawPairs    raw_pairs;       // BDA
+/// QueueBuf    out_rb_rb;       // BDA
+/// QueueBuf    out_rb_ps;       // BDA
+/// QueueBuf    out_rb_lca;      // BDA
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpClassifyPushConstants {
+  pub scene_entities: u64,
+  pub raw_pairs: u64,
+  pub out_rb_rb: u64,
+  pub out_rb_ps: u64,
+  pub out_rb_lca: u64,
+}
+
+/// `bp_cross_lca.comp` — 28 bytes
+///
+/// ```glsl
+/// EntityArray   scene_entities;          // BDA
+/// PairBufferIn  lca_query_pairs;         // BDA
+/// PairBufferOut output_internal_pairs;   // BDA
+/// uint          total_queries;
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpCrossLcaPushConstants {
+  pub scene_entities: u64,
+  pub lca_query_pairs: u64,
+  pub output_internal_pairs: u64,
+  pub total_queries: u32,
+  pub _pad: u32,
+}
+
+/// `bp_particle_self.comp` — 40 bytes
+///
+/// ```glsl
+/// MultiBvhBuffer bvh;            // BDA
+/// ParticleData   particles;      // BDA
+/// WrenchArray    wrench_buffer;  // BDA (writes into AOSOA force slots via atomicAdd)
+/// uint           root_index;
+/// uint           total_particles;
+/// float          particle_radius;
+/// float          stiffness;
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpParticleSelfPushConstants {
+  pub bvh: u64,
+  pub particles: u64,
+  pub wrench_buffer: u64,
+  pub root_index: u32,
+  pub total_particles: u32,
+  pub particle_radius: f32,
+  pub stiffness: f32,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct EmitParticlesPushConstants {
@@ -224,6 +342,7 @@ pub struct EmitParticlesPushConstants {
 /// TODO: Document this item
 pub struct PhysicsPipelines {
   pub pipeline_layout: vk::PipelineLayout,
+  // ── Legacy IMEX pipelines (kept for backward compatibility) ───────────────
   pub emit_particles: vk::Pipeline,
   pub p1_2_imex: vk::Pipeline,
   pub p3_4_imex: vk::Pipeline,
@@ -238,6 +357,29 @@ pub struct PhysicsPipelines {
   pub barnes_hut: vk::Pipeline,
   pub p5_imex: vk::Pipeline,
   pub broad_phase: vk::Pipeline,
+  // ── New Symmetric Strang-Split IMEX integrators ───────────────────────────
+  /// VV predictor: x_n → x_{n+1}, v_{n+½}; clears force buffer
+  pub integrate_particles_p1_p2: vk::Pipeline,
+  /// RB Implicit Midpoint Rule + Picard gyro-stabilisation; clears wrench
+  pub integrate_bodies_p3: vk::Pipeline,
+  /// VV corrector: v_{n+½} → v_{n+1}; advances 64-bit engine clock
+  pub integrate_particles_p4_5: vk::Pipeline,
+  // ── Force aggregation ─────────────────────────────────────────────────────
+  /// Leaf-wrench → CoM-wrench reduction (one WG per RB)
+  pub rb_force_assign: vk::Pipeline,
+  // ── Broad-phase suite ─────────────────────────────────────────────────────
+  /// Zeroes all four pair-list counts before the broad phase begins
+  pub bp_clear: vk::Pipeline,
+  /// Generates swept AABBs per entity (particles + rigid bodies)
+  pub bp_bounds_gen: vk::Pipeline,
+  /// Subgroup-cooperative TLAS traversal → raw overlapping pair list
+  pub bp_scene: vk::Pipeline,
+  /// Bins raw pairs into RB-RB / RB-PS / cross-LCA typed queues
+  pub bp_classify: vk::Pipeline,
+  /// Transforms macro-frame AABBs into micro-frame, re-emits narrow-phase pairs
+  pub bp_cross_lca: vk::Pipeline,
+  /// LBVH traversal + linear-spring repulsion → AOSOA force buffer (particle-particle)
+  pub bp_particle_self: vk::Pipeline,
 }
 
 impl PhysicsPipelines {
@@ -254,15 +396,15 @@ impl PhysicsPipelines {
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }.unwrap();
 
     let create_pipeline = |spv_path: &str| -> vk::Pipeline {
-      let spv_code =
-        std::fs::read(spv_path).unwrap_or_else(|_| panic!("Failed to read {}", spv_path));
+      let spv_code = aethervk_oshal_rlib::os::fs::read(spv_path)
+        .unwrap_or_else(|_| panic!("Failed to read {}", spv_path));
       let (prefix, code, suffix) = unsafe { spv_code.align_to::<u32>() };
       assert!(prefix.is_empty() && suffix.is_empty());
 
       let shader_info = vk::ShaderModuleCreateInfo::default().code(code);
       let shader_module = unsafe { device.create_shader_module(&shader_info, None) }.unwrap();
 
-      let main_name = std::ffi::CString::new("main").unwrap();
+      let main_name = alloc::ffi::CString::new("main").unwrap();
 
       let mut spec_map_entries = alloc::vec::Vec::new();
       let mut spec_data = alloc::vec::Vec::new();
@@ -316,6 +458,7 @@ impl PhysicsPipelines {
     let base_dir = dir_lock.as_ref().unwrap();
     Self {
       pipeline_layout,
+      // ── Legacy pipelines ────────────────────────────────────────────────
       emit_particles: create_pipeline(&format!("{}/emit_particles.comp.spv", base_dir)),
       p1_2_imex: create_pipeline(&format!("{}/p1-2_imex_particles.comp.spv", base_dir)),
       p3_4_imex: create_pipeline(&format!("{}/p3-4_imex_rigidbody_imr.comp.spv", base_dir)),
@@ -330,11 +473,32 @@ impl PhysicsPipelines {
       barnes_hut: create_pipeline(&format!("{}/barnes_hut.comp.spv", base_dir)),
       p5_imex: create_pipeline(&format!("{}/p5_imex_particles.comp.spv", base_dir)),
       broad_phase: create_pipeline(&format!("{}/broad_phase.comp.spv", base_dir)),
+      // ── New IMEX integrators ────────────────────────────────────────────
+      integrate_particles_p1_p2: create_pipeline(
+        &format!("{}/integrate_particles_p1_p2.comp.spv", base_dir)
+      ),
+      integrate_bodies_p3: create_pipeline(
+        &format!("{}/integrate_bodies_p3.comp.spv", base_dir)
+      ),
+      integrate_particles_p4_5: create_pipeline(
+        &format!("{}/integrate_particles_p4_5.comp.spv", base_dir)
+      ),
+      // ── Force aggregation ───────────────────────────────────────────────
+      rb_force_assign: create_pipeline(
+        &format!("{}/rb_force_assign.comp.spv", base_dir)
+      ),
+      // ── Broad-phase suite ───────────────────────────────────────────────
+      bp_clear: create_pipeline(&format!("{}/bp_clear.comp.spv",         base_dir)),
+      bp_bounds_gen: create_pipeline(&format!("{}/bp_bounds_gen.comp.spv",    base_dir)),
+      bp_scene: create_pipeline(&format!("{}/bp_scene.comp.spv",         base_dir)),
+      bp_classify: create_pipeline(&format!("{}/bp_classify.comp.spv",      base_dir)),
+      bp_cross_lca: create_pipeline(&format!("{}/bp_cross_lca.comp.spv",     base_dir)),
+      bp_particle_self: create_pipeline(&format!("{}/bp_particle_self.comp.spv", base_dir)),
     }
   }
 
   pub fn discard(&mut self, discard_pool: &resources::DiscardPool, timeline: u64) {
-    discard_pool.discard_pipeline_layout(self.pipeline_layout, timeline);
+    // Layout must be last — it backs all pipelines
     discard_pool.discard_pipeline(self.emit_particles, timeline);
     discard_pool.discard_pipeline(self.p1_2_imex, timeline);
     discard_pool.discard_pipeline(self.p3_4_imex, timeline);
@@ -349,6 +513,20 @@ impl PhysicsPipelines {
     discard_pool.discard_pipeline(self.barnes_hut, timeline);
     discard_pool.discard_pipeline(self.p5_imex, timeline);
     discard_pool.discard_pipeline(self.broad_phase, timeline);
+    // New IMEX integrators
+    discard_pool.discard_pipeline(self.integrate_particles_p1_p2, timeline);
+    discard_pool.discard_pipeline(self.integrate_bodies_p3, timeline);
+    discard_pool.discard_pipeline(self.integrate_particles_p4_5, timeline);
+    // Force aggregation
+    discard_pool.discard_pipeline(self.rb_force_assign, timeline);
+    // Broad-phase suite
+    discard_pool.discard_pipeline(self.bp_clear, timeline);
+    discard_pool.discard_pipeline(self.bp_bounds_gen, timeline);
+    discard_pool.discard_pipeline(self.bp_scene, timeline);
+    discard_pool.discard_pipeline(self.bp_classify, timeline);
+    discard_pool.discard_pipeline(self.bp_cross_lca, timeline);
+    discard_pool.discard_pipeline(self.bp_particle_self, timeline);
+    discard_pool.discard_pipeline_layout(self.pipeline_layout, timeline);
   }
 }
 
@@ -356,33 +534,43 @@ impl PhysicsPipelines {
 pub struct VulkanCommandBuffer {
   pub cmd: vk::CommandBuffer,
   pub queue: device::Queue,
+  pub command_pools: alloc::sync::Arc<crate::gpu_backends::vulkan::device::commands::CommandPools>,
+  pub id: crate::gpu_backends::vulkan::device::commands::CommandBufferId,
+  pub tid: aethervk_oshal_rlib::os::native::ThreadId,
+  pub device_ptr: core::ptr::NonNull<LogicalDevice>,
+  pub discard_pool_ptr:
+    core::ptr::NonNull<crate::gpu_backends::vulkan::device::resources::DiscardPool>,
+  pub timeline_value: u64,
 }
 
-pub struct VulkanCommandBufferContext<'a> {
-  pub device: &'a LogicalDevice,
-  pub rollback: &'a mut utils::RollbackContext<'a>,
-}
+unsafe impl Send for VulkanCommandBuffer {}
+unsafe impl Sync for VulkanCommandBuffer {}
 
 impl VulkanCommandBuffer {
   // TODO cleanup function
 }
-
 impl CommandBuffer for VulkanCommandBuffer {
-  type Context<'a> = VulkanCommandBufferContext<'a>;
-
-  fn submit(&mut self, ctx: &VulkanCommandBufferContext<'_>) -> EngineResult<()> {
+  fn submit(&mut self) -> EngineResult<()> {
     unsafe {
-      ctx.device.end_command_buffer(self.cmd).map_err(|e| GpuError::from(e))?;
-      // TODO insert fences for synchronization between multiple iterations of commands (eg. double
-      // buffering with 2 semaphore. Fence synchronization only when interacting with CPU, if a CPU
-      // download operation has been issued)
+      let device = self.device_ptr.as_ref();
+      let discard_pool = self.discard_pool_ptr.as_ref();
+
+      device.end_command_buffer(self.cmd).map_err(|e| GpuError::from(e))?;
+
+      discard_pool.discard_command_buffer(
+        self.tid,
+        self.id,
+        self.cmd,
+        self.command_pools.clone(),
+        self.timeline_value,
+      );
+
       let submit_info = vk::SubmitInfo::default().command_buffers(core::slice::from_ref(&self.cmd));
-      ctx
-        .device
-        .queue_submit(
+      device
+        .locked_queue_submit(
           self.queue.handle,
           core::slice::from_ref(&submit_info),
-          vk::Fence::null(), // TODO
+          vk::Fence::null(), // TODO fence?
         )
         .map_err(|e| GpuError::from(e))?;
     }
@@ -406,18 +594,24 @@ pub struct VulkanBuffer<T> {
   pub buffer: vk::Buffer,
   pub address: u64,
   pub capacity: usize,
-  pub allocation: Option<vk_mem::Allocation>,
-  pub allocator: Option<vk_mem::AllocatorView>,
-  _marker: core::marker::PhantomData<T>,
+  pub allocation: vk_mem::Allocation,
+  pub allocator: vk_mem::AllocatorView,
+  pub is_list: bool,
+  pub _marker: core::marker::PhantomData<T>,
 }
 
-impl<T> Drop for VulkanBuffer<T> {
-  fn drop(&mut self) {
-    if let (Some(mut alloc), Some(allocator)) = (self.allocation, self.allocator) {
-      unsafe {
-        allocator.destroy_buffer(self.buffer, &mut alloc);
-      }
-    }
+impl<T> VulkanBuffer<T> {
+  pub fn discard(
+    &mut self,
+    discard_pool: &crate::gpu_backends::vulkan::device::resources::DiscardPool,
+    timeline: u64,
+  ) {
+    discard_pool.discard_buffer(
+      self.allocator.get_raw(),
+      self.buffer,
+      self.allocation,
+      timeline,
+    );
   }
 }
 
@@ -428,30 +622,25 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for VulkanBuffer<T> {
   where
     Self: 'a,
     T: 'a;
-
   fn capacity(&self) -> usize {
     self.capacity
   }
-
-  #[function_name::named]
+  fn address(&self) -> u64 {
+    self.address
+  }
   fn enqueue_read_to_cpu(&self, _cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'_>> {
-    let allocator = self.allocator.ok_or(gpu_err!("Missing VMA allocator"))?;
-    let alloc = self.allocation.ok_or(gpu_err!("Missing allocation"))?;
-
+    let allocator = self.allocator;
+    let alloc = self.allocation;
     let info = allocator.get_allocation_info(&alloc);
     let mut data = Vec::with_capacity(self.capacity);
     unsafe {
       if !info.mapped_data.is_null() {
-        core::ptr::copy_nonoverlapping(
-          info.mapped_data as *const T,
-          data.as_mut_ptr(),
-          self.capacity,
-        );
+        let offset = if self.is_list { 16 } else { 0 };
+        let mapped_ptr = (info.mapped_data as *const u8).add(offset);
+        core::ptr::copy_nonoverlapping(mapped_ptr as *const T, data.as_mut_ptr(), self.capacity);
         data.set_len(self.capacity);
       }
     }
-
-    // TODO: enqueue read should create a fence onto the Cmd
     Ok(VulkanWaitHandle { data })
   }
 }
@@ -464,6 +653,9 @@ impl<T: Copy + Send + Sync> DeviceList<T> for VulkanBuffer<T> {
 
 impl DeviceBvh for VulkanBuffer<()> {
   type Cmd = VulkanCommandBuffer;
+  fn address(&self) -> u64 {
+    self.address
+  }
 }
 
 /// TODO: Document this item
@@ -471,13 +663,13 @@ pub struct VulkanComputeKernels {
   pub pipelines: PhysicsPipelines,
   pub addresses: PhysicsDeviceAddresses,
   pub timeline: vk::Semaphore,
-  pub length_manager: LengthManager,
-  /// DiscardPool operating with the compute timeline
-  pub discard_pool: resources::DiscardPool,
+  /// Need to keep track of current compute timeline value for discard pool
+  pub next_submit_value: core::sync::atomic::AtomicU64,
+  pub discard_pool: crate::gpu_backends::vulkan::device::resources::DiscardPool,
 }
 
 impl VulkanComputeKernels {
-  pub fn new(device: &LogicalDevice, allocator: vk_mem::AllocatorView) -> GpuResult<Self> {
+  pub fn new(device: &LogicalDevice, _allocator: vk_mem::AllocatorView) -> GpuResult<Self> {
     let pipelines = PhysicsPipelines::new(device);
     let addresses = PhysicsDeviceAddresses::default();
 
@@ -487,23 +679,22 @@ impl VulkanComputeKernels {
     let sem_info = vk::SemaphoreCreateInfo::default().push_next(&mut timeline_info);
     let timeline = unsafe { device.create_semaphore(&sem_info, None) }?;
 
-    let length_manager = LengthManager::new(device, allocator, 1024)?;
-    let discard_pool = unsafe { resources::DiscardPool::new(1024) };
+    let discard_pool =
+      unsafe { crate::gpu_backends::vulkan::device::resources::DiscardPool::new(1024) };
 
     Ok(Self {
       pipelines,
       addresses,
       timeline,
-      length_manager,
+      next_submit_value: core::sync::atomic::AtomicU64::new(1),
       discard_pool,
     })
   }
 
   // TODO: How do I know if there's a command in flight? Should It be externally synchronized?
-  pub fn cleanup(&mut self, device: &LogicalDevice, allocator: vk_mem::AllocatorView) {
+  pub fn cleanup(&mut self, device: &LogicalDevice, _allocator: vk_mem::AllocatorView) {
     self.pipelines.discard(&self.discard_pool, u64::MAX);
     self.discard_pool.destroy_discarded_resources_all(device);
-    self.length_manager.cleanup(device);
 
     unsafe { device.destroy_semaphore(self.timeline, None) };
   }
@@ -519,12 +710,13 @@ impl VulkanComputeKernels {
     usage: vk::BufferUsageFlags,
     rollback: &mut utils::RollbackContext<'_>,
   ) -> GpuResult<VulkanBuffer<T>> {
+    let is_list = false;
     let size = (core::mem::size_of::<T>() * data.len().max(1)) as u64;
     let buffer_info = vk::BufferCreateInfo::default()
       .size(size)
       .usage(usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
 
-    let mut alloc_info = vk_mem::AllocationCreateInfo {
+    let alloc_info = vk_mem::AllocationCreateInfo {
       usage: vk_mem::MemoryUsage::AutoPreferDevice,
       flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
         | vk_mem::AllocationCreateFlags::MAPPED,
@@ -536,7 +728,7 @@ impl VulkanComputeKernels {
 
     let (buffer, mut alloc, info) =
       unsafe { allocator.create_buffer_get_info(&buffer_info, &alloc_info) }?;
-    rollback.defer(move |device| unsafe {
+    rollback.defer(move |_device| unsafe {
       allocator.destroy_buffer(buffer, &mut alloc);
     });
 
@@ -558,12 +750,12 @@ impl VulkanComputeKernels {
       buffer,
       address,
       capacity: data.len().max(1),
-      allocation: Some(alloc),
-      allocator: Some(allocator),
+      allocation: alloc,
+      allocator,
+      is_list,
       _marker: core::marker::PhantomData,
     })
   }
-
   #[function_name::named]
   fn allocate_device_buffer<T: Copy + Send + Sync>(
     &self,
@@ -571,23 +763,37 @@ impl VulkanComputeKernels {
     allocator: vk_mem::AllocatorView,
     capacity: usize,
     usage: vk::BufferUsageFlags,
+    is_list: bool,
     rollback: &mut utils::RollbackContext<'_>,
   ) -> GpuResult<VulkanBuffer<T>> {
-    let size = (core::mem::size_of::<T>() * capacity.max(1)) as u64;
+    let payload_size = (core::mem::size_of::<T>() * capacity.max(1)) as u64;
+    let size = payload_size + if is_list { 16 } else { 0 };
+
     let buffer_info = vk::BufferCreateInfo::default()
       .size(size)
       .usage(usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
 
-    let mut alloc_info = vk_mem::AllocationCreateInfo {
+    let alloc_info = vk_mem::AllocationCreateInfo {
       usage: vk_mem::MemoryUsage::AutoPreferDevice,
+      flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+        | vk_mem::AllocationCreateFlags::MAPPED,
+      required_flags: ash::vk::MemoryPropertyFlags::HOST_VISIBLE
+        | ash::vk::MemoryPropertyFlags::HOST_COHERENT,
       ..Default::default()
     };
     crate::apply_test_dedicated_alloc!(alloc_info);
 
-    let (buffer, mut alloc) = unsafe { allocator.create_buffer(&buffer_info, &alloc_info) }?;
-    rollback.defer(move |device| unsafe {
+    let (buffer, mut alloc, info) =
+      unsafe { allocator.create_buffer_get_info(&buffer_info, &alloc_info) }?;
+    rollback.defer(move |_device| unsafe {
       allocator.destroy_buffer(buffer, &mut alloc);
     });
+
+    unsafe {
+      if !info.mapped_data.is_null() && is_list {
+        core::ptr::write_bytes(info.mapped_data as *mut u8, 0, 16);
+      }
+    }
 
     let device_address_info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
     let address =
@@ -597,33 +803,37 @@ impl VulkanComputeKernels {
       buffer,
       address,
       capacity: capacity.max(1),
-      allocation: Some(alloc),
-      allocator: Some(allocator),
+      allocation: alloc,
+      allocator,
+      is_list,
       _marker: core::marker::PhantomData,
     })
   }
 
   // -- Methods From Kernel Trait implementation --
-
   #[function_name::named]
   fn create_command_buffer(
     &self,
     device: &LogicalDevice,
-    allocator: vk_mem::AllocatorView,
+    _allocator: vk_mem::AllocatorView,
+    command_pools: alloc::sync::Arc<crate::gpu_backends::vulkan::device::commands::CommandPools>,
     rollback: &mut utils::RollbackContext<'_>,
     compute_queue: device::Queue,
   ) -> GpuResult<<Device as gpu::Kernels>::Cmd> {
-    // TODO transition to commands
-    let alloc_info = vk::CommandBufferAllocateInfo::default()
-      // .command_pool(self.command_pool)
-      .level(vk::CommandBufferLevel::PRIMARY)
-      .command_buffer_count(1);
+    let tid = aethervk_oshal_rlib::os::native::this_thread::id();
+    // In physics compute, we just allocate a new "id" for each command buffer since it's a one-off submission per step
+    let id = crate::gpu_backends::vulkan::device::commands::CommandBufferId(
+      self.next_submit_value.fetch_add(1, core::sync::atomic::Ordering::SeqCst),
+    );
+    let timeline_value = id.0;
 
-    use super::device::VulkanDebugNameExt;
-    let cmd = unsafe { device.allocate_command_buffers(&alloc_info) }
-      .map(|vec| vec[0])
-      .with_name(&device, &alloc::format!("compute buffer"))?;
-    // TODO: rollback defer with commands
+    let cmd = command_pools.allocate_primary(device, tid, id)?;
+
+    // We defer recycling the command buffer to the compute timeline
+    let cp_clone = command_pools.clone();
+    rollback.defer(move |_dev| {
+      let _ = cp_clone.recycle(tid, id, cmd);
+    });
 
     let begin_info =
       vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -632,6 +842,12 @@ impl VulkanComputeKernels {
     Ok(VulkanCommandBuffer {
       cmd,
       queue: compute_queue,
+      command_pools,
+      id,
+      tid,
+      device_ptr: core::ptr::NonNull::from(device),
+      discard_pool_ptr: core::ptr::NonNull::from(&self.discard_pool),
+      timeline_value,
     })
   }
 
@@ -770,6 +986,117 @@ impl VulkanComputeKernels {
     )
   }
 
+  fn build_rigid_bodies_imex(
+    &self,
+    device: &LogicalDevice,
+    allocator: vk_mem::AllocatorView,
+    rollback: &mut utils::RollbackContext<'_>,
+    _cmd: &mut VulkanCommandBuffer,
+    _scene: &PhysicsScene,
+    scene0: &Scene,
+  ) -> GpuResult<(VulkanBuffer<RigidBodyImex>, VulkanBuffer<Wrench>)> {
+    let mut bodies: alloc::vec::Vec<RigidBodyImex> = alloc::vec::Vec::new();
+    let mut wrench_idx: u32 = 0;
+
+    scene0.query2::<crate::scene::TransformComponent, crate::scene::KinematicComponent, _>(
+      |entity, transform, kinematic| {
+        let mass = scene0
+          .with_component(entity, |c: &crate::scene::ColliderComponent| match c.shape {
+            crate::scene::ColliderShape::Sphere { radius } => (c.mass, radius),
+            crate::scene::ColliderShape::OBB { .. } => (c.mass, 0.5),
+          })
+          .unwrap_or((1.0_f32, 0.5_f32));
+        let (m, r) = mass;
+        let i_inv = if r > 0.0 { 1.0_f32 / (0.4_f32 * m * r * r) } else { 1.0_f32 };
+
+        let q = transform.rotation;
+        bodies.push(RigidBodyImex {
+          position_mass: [
+            transform.position.x(),
+            transform.position.y(),
+            transform.position.z(),
+            m,
+          ],
+          orientation: [q.0.x(), q.0.y(), q.0.z(), q.0.w()],
+          linear_vel_drag: [
+            kinematic.velocity.x(),
+            kinematic.velocity.y(),
+            kinematic.velocity.z(),
+            0.01_f32,
+          ],
+          angular_vel_drag: [
+            kinematic.angular_velocity.x(),
+            kinematic.angular_velocity.y(),
+            kinematic.angular_velocity.z(),
+            0.01_f32,
+          ],
+          inertia_inv_diag: [i_inv, i_inv, i_inv, 0.0],
+          wrench_idx,
+          _pad: [0, 0, 0],
+        });
+        wrench_idx += 1;
+      },
+    );
+
+    let n = bodies.len().max(1);
+    let rb_buf = self.allocate_and_upload::<RigidBodyImex>(
+      device,
+      allocator,
+      &bodies,
+      vk::BufferUsageFlags::STORAGE_BUFFER,
+      rollback,
+    )?;
+
+    let zeroed_wrenches: alloc::vec::Vec<Wrench> = alloc::vec![Wrench::default(); n];
+    let w_buf = self.allocate_and_upload::<Wrench>(
+      device,
+      allocator,
+      &zeroed_wrenches,
+      vk::BufferUsageFlags::STORAGE_BUFFER,
+      rollback,
+    )?;
+
+    Ok((rb_buf, w_buf))
+  }
+
+  fn build_frames(
+    &self,
+    device: &LogicalDevice,
+    allocator: vk_mem::AllocatorView,
+    rollback: &mut utils::RollbackContext<'_>,
+    scene: &PhysicsScene,
+  ) -> GpuResult<VulkanBuffer<GpuReferenceFrame>> {
+    let frames = if scene.gpu_frames.is_empty() {
+      alloc::vec![GpuReferenceFrame::default()]
+    } else {
+      scene.gpu_frames.clone()
+    };
+    self.allocate_and_upload::<GpuReferenceFrame>(
+      device,
+      allocator,
+      &frames,
+      vk::BufferUsageFlags::STORAGE_BUFFER,
+      rollback,
+    )
+  }
+
+  fn build_list_inner<T: Copy + Send + Sync>(
+    &self,
+    device: &LogicalDevice,
+    allocator: vk_mem::AllocatorView,
+    rollback: &mut utils::RollbackContext<'_>,
+    capacity: usize,
+  ) -> GpuResult<VulkanBuffer<T>> {
+    self.allocate_device_buffer::<T>(
+      device,
+      allocator,
+      capacity,
+      vk::BufferUsageFlags::STORAGE_BUFFER,
+      true,
+      rollback,
+    )
+  }
+
   fn build_particles(
     &self,
     device: &LogicalDevice,
@@ -777,18 +1104,21 @@ impl VulkanComputeKernels {
     rollback: &mut utils::RollbackContext<'_>,
     _cmd: &mut VulkanCommandBuffer,
     scene0: &Scene,
-  ) -> GpuResult<VulkanBuffer<gpu::ParticleGpu>> {
-    let mut bodies = Vec::new();
+  ) -> GpuResult<(VulkanBuffer<f32>, alloc::vec::Vec<gpu::ParticleMetadata>)> {
+    let mut flat_particles = Vec::new();
+    let mut metadata = Vec::new();
     scene0.query2::<crate::scene::TransformComponent, crate::scene::particles::ParticleSystemComponent, _>(
             |entity, _transform, sys| {
                 let parent_id = scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
                 let particles = sys.particles.read();
                 for (i, p) in particles.iter().enumerate().filter(|(_, p)| p.active != 0) {
-                    bodies.push(gpu::ParticleGpu {
-                        position: p.position,
-                        velocity: p.velocity,
-                        mass: p.mass,
-                        force: [0.0, 0.0, 0.0],
+                    flat_particles.push([
+                        p.position[0], p.position[1], p.position[2],
+                        p.velocity[0], p.velocity[1], p.velocity[2],
+                        p.mass,
+                        0.0, 0.0, 0.0
+                    ]);
+                    metadata.push(gpu::ParticleMetadata {
                         entity_id: entity,
                         parent_frame_id: parent_id,
                         original_index: i as u32,
@@ -797,13 +1127,16 @@ impl VulkanComputeKernels {
             }
         );
 
-    self.allocate_and_upload(
+    let packed = gpu::pack_particles_aosoa(&flat_particles, 32);
+
+    let buffer = self.allocate_and_upload(
       device,
       allocator,
-      &bodies,
+      &packed,
       vk::BufferUsageFlags::STORAGE_BUFFER,
       rollback,
-    )
+    )?;
+    Ok((buffer, metadata))
   }
 
   fn build_emitters(
@@ -858,10 +1191,10 @@ impl VulkanComputeKernels {
   fn emit_particles(
     &self,
     device: &LogicalDevice,
-    allocator: vk_mem::AllocatorView,
-    rollback: &mut utils::RollbackContext<'_>,
+    _allocator: vk_mem::AllocatorView,
+    _rollback: &mut utils::RollbackContext<'_>,
     cmd: &mut VulkanCommandBuffer,
-    particles: &mut VulkanBuffer<gpu::ParticleGpu>,
+    particles: &mut VulkanBuffer<f32>,
     _physical_scene: &PhysicsScene,
     _scene: &Scene,
     sun_pos: Vec3f32,
@@ -874,7 +1207,7 @@ impl VulkanComputeKernels {
     let dt_sec = dt as f32 / 1_000_000.0;
 
     let pc = EmitParticlesPushConstants {
-      particles: self.addresses.particle_data,
+      particles: particles.address,
       emitters: self.addresses.emitters,
       bvh_nodes: self.addresses.bvh_nodes,
       sun_pos: [sun_pos.x(), sun_pos.y(), sun_pos.z()],
@@ -922,13 +1255,460 @@ impl VulkanComputeKernels {
     Ok(())
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // New Symmetric Strang-Split IMEX Dispatch Methods
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /// Dispatches `integrate_particles_p1_p2.comp`.
+  ///
+  /// VV predictor — half-kick + full position leap to x_{n+1}.
+  /// Clears the particle force buffer so force generators start from zero.
+  ///
+  /// `particles_addr` — BDA to AOSOA particle buffer (float[]).
+  pub fn imex_integrate_particles_p1_p2(
+    &self,
+    device: &LogicalDevice,
+    cmd: &mut VulkanCommandBuffer,
+    particles_addr: u64,
+    total_particles: u32,
+    dt: timeus_t,
+  ) {
+    let dt_sec = dt as f32 / 1_000_000.0_f32;
+    let wg_size = 128u32;
+    let groups = (total_particles + wg_size - 1) / wg_size;
+
+    let pc = ImexParticlesP12PushConstants { particles: particles_addr, dt: dt_sec, total_particles };
+    let bytes = unsafe {
+      core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
+    };
+    unsafe {
+      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.integrate_particles_p1_p2);
+      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_dispatch(cmd.cmd, groups, 1, 1);
+      let barrier = vk::MemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+      device.cmd_pipeline_barrier(cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+    }
+  }
+
+  /// Dispatches `integrate_bodies_p3.comp`.
+  ///
+  /// Rigid Body Implicit Midpoint Rule + Picard gyroscopic stabilisation.
+  /// Integrates all RBs from x_n to x_{n+1} and v_n to v_{n+1}.
+  /// Clears the wrench buffer so force generators start from zero.
+  ///
+  /// `rigid_bodies_addr` — BDA to `RigidBodyArray` (imex_math.glsl layout: quaternion + wrench_idx).
+  /// `wrenches_addr`     — BDA to `WrenchArray` (6-float `Wrench` per entry).
+  /// `n_iterations`      — Picard iteration count; 4 suffices for most scenes.
+  pub fn imex_integrate_bodies_p3(
+    &self,
+    device: &LogicalDevice,
+    cmd: &mut VulkanCommandBuffer,
+    rigid_bodies_addr: u64,
+    wrenches_addr: u64,
+    n_bodies: u32,
+    dt: timeus_t,
+    n_iterations: u32,
+  ) {
+    let dt_sec = dt as f32 / 1_000_000.0_f32;
+    let wg_size = 32u32;
+    let groups = (n_bodies + wg_size - 1) / wg_size;
+
+    let pc = ImexBodiesP3PushConstants {
+      rigid_bodies: rigid_bodies_addr,
+      wrenches: wrenches_addr,
+      dt: dt_sec,
+      n_bodies,
+      n_iterations,
+      _pad: 0,
+    };
+    let bytes = unsafe {
+      core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
+    };
+    unsafe {
+      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.integrate_bodies_p3);
+      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_dispatch(cmd.cmd, groups, 1, 1);
+      let barrier = vk::MemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+      device.cmd_pipeline_barrier(cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+    }
+  }
+
+  /// Dispatches `integrate_particles_p4_5.comp`.
+  ///
+  /// VV corrector — completes v_{n+½} → v_{n+1} using the freshly computed
+  /// F(x_{n+1}).  Thread 0 simultaneously advances the 64-bit engine clock.
+  /// Force buffer is intentionally **not** cleared (persists for next frame).
+  ///
+  /// `particles_addr`   — BDA to AOSOA particle buffer.
+  /// `clock_addr`       — BDA to `ClockBuffer` (`uvec2 global_time_us`).
+  /// `current_time_us`  — t_n as a 64-bit microsecond value.
+  pub fn imex_integrate_particles_p4_5(
+    &self,
+    device: &LogicalDevice,
+    cmd: &mut VulkanCommandBuffer,
+    particles_addr: u64,
+    clock_addr: u64,
+    total_particles: u32,
+    dt: timeus_t,
+    current_time_us: timeus_t,
+  ) {
+    let dt_sec = dt as f32 / 1_000_000.0_f32;
+    let wg_size = 128u32;
+    let groups = (total_particles.max(1) + wg_size - 1) / wg_size;
+
+    let pc = ImexParticlesP45PushConstants {
+      particles: particles_addr,
+      clock: clock_addr,
+      dt: dt_sec,
+      total_particles,
+      dt_us_lo: dt as u32,
+      dt_us_hi: (dt >> 32) as u32,
+      current_time_lo: current_time_us as u32,
+      current_time_hi: (current_time_us >> 32) as u32,
+    };
+    let bytes = unsafe {
+      core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
+    };
+    unsafe {
+      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.integrate_particles_p4_5);
+      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_dispatch(cmd.cmd, groups, 1, 1);
+      let barrier = vk::MemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+      device.cmd_pipeline_barrier(cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+    }
+  }
+
+  /// Dispatches `rb_force_assign.comp`.
+  ///
+  /// Reduces per-leaf wrenches into each rigid body's CoM wrench.
+  /// Dispatched as one workgroup per rigid body.
+  ///
+  /// Both leaf wrenches and CoM wrenches live in the same `WrenchArray` buffer;
+  /// `body.wrench_idx` points to the CoM slot, `body.leaf_start_idx` to the
+  /// first leaf slot.
+  pub fn imex_rb_force_assign(
+    &self,
+    device: &LogicalDevice,
+    cmd: &mut VulkanCommandBuffer,
+    rigid_bodies_addr: u64,
+    wrenches_addr: u64,
+    n_bodies: u32,
+  ) {
+    let pc = RbForceAssignPushConstants {
+      rigid_bodies: rigid_bodies_addr,
+      wrenches: wrenches_addr,
+      n_bodies,
+      _pad: 0,
+    };
+    let bytes = unsafe {
+      core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
+    };
+    unsafe {
+      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.rb_force_assign);
+      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      // One WG per body
+      device.cmd_dispatch(cmd.cmd, n_bodies, 1, 1);
+      let barrier = vk::MemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+      device.cmd_pipeline_barrier(cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+    }
+  }
+
+  /// Dispatches `bp_clear.comp` (single thread, clears all four pair queues).
+  pub fn bp_clear(
+    &self,
+    device: &LogicalDevice,
+    cmd: &mut VulkanCommandBuffer,
+    raw_scene_pairs: u64,
+    out_rb_rb: u64,
+    out_rb_ps: u64,
+    out_rb_lca: u64,
+  ) {
+    let pc = BpClearPushConstants { raw_scene_pairs, out_rb_rb, out_rb_ps, out_rb_lca };
+    let bytes = unsafe {
+      core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
+    };
+    unsafe {
+      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.bp_clear);
+      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_dispatch(cmd.cmd, 1, 1, 1);
+      let barrier = vk::MemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+      device.cmd_pipeline_barrier(cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+    }
+  }
+
+  /// Dispatches `bp_bounds_gen.comp`.
+  ///
+  /// Generates one swept `TLASLeaf` per entity (n_particles + n_bodies threads).
+  ///
+  /// `scene_entities_addr` — BDA to `EntityArray` (rigid bodies; one `RigidBody` per entry).
+  /// `tlas_leaves_addr`    — BDA to output `LeafBuffer`.
+  pub fn bp_bounds_gen(
+    &self,
+    device: &LogicalDevice,
+    cmd: &mut VulkanCommandBuffer,
+    scene_entities_addr: u64,
+    tlas_leaves_addr: u64,
+    total_entities: u32,
+    dt: timeus_t,
+  ) {
+    let wg_size = 256u32;
+    let groups = (total_entities + wg_size - 1) / wg_size;
+
+    let pc = BpBoundsGenPushConstants {
+      scene_entities: scene_entities_addr,
+      tlas_leaves: tlas_leaves_addr,
+      dt_us_lo: dt as u32,
+      dt_us_hi: (dt >> 32) as u32,
+      total_entities,
+      _pad: 0,
+    };
+    let bytes = unsafe {
+      core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
+    };
+    unsafe {
+      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.bp_bounds_gen);
+      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_dispatch(cmd.cmd, groups, 1, 1);
+      let barrier = vk::MemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+      device.cmd_pipeline_barrier(cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+    }
+  }
+
+  /// Dispatches `bp_scene.comp`.
+  ///
+  /// Subgroup-cooperative TLAS traversal — each subgroup queries one leaf against
+  /// the macro TLAS and outputs raw overlapping pairs.
+  ///
+  /// `tlas_bvh_addr`        — BDA to `MultiBvhBuffer`.
+  /// `query_leaves_addr`    — BDA to swept `LeafBuffer` produced by `bp_bounds_gen`.
+  /// `overlapping_pairs_addr` — BDA to output `PairBuffer` (`uint count; uvec2 pairs[]`).
+  pub fn bp_scene(
+    &self,
+    device: &LogicalDevice,
+    cmd: &mut VulkanCommandBuffer,
+    tlas_bvh_addr: u64,
+    query_leaves_addr: u64,
+    overlapping_pairs_addr: u64,
+    tlas_root_index: u32,
+    total_queries: u32,
+  ) {
+    // One subgroup per query — dispatch groups = ceil(queries / SUBGROUPS_PER_WG)
+    // WG size = 256, assume SUBGROUP_SIZE = 32 → 8 subgroups/WG.  Conservatively 1 WG = 1 query.
+    let wg_size = 256u32;
+    let subgroups_per_wg = 256u32 / 32u32; // conservative for dispatch sizing
+    let groups = (total_queries + subgroups_per_wg - 1) / subgroups_per_wg;
+
+    let pc = BpScenePushConstants {
+      tlas_bvh: tlas_bvh_addr,
+      query_leaves: query_leaves_addr,
+      overlapping_pairs: overlapping_pairs_addr,
+      tlas_root_index,
+      total_queries,
+    };
+    let bytes = unsafe {
+      core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
+    };
+    unsafe {
+      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.bp_scene);
+      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_dispatch(cmd.cmd, groups.max(1), 1, 1);
+      let barrier = vk::MemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+      device.cmd_pipeline_barrier(cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+    }
+    let _ = wg_size; // suppress unused warning
+  }
+
+  /// Dispatches `bp_classify.comp`.
+  ///
+  /// Bins raw `overlapping_pairs` into RB-RB, RB-PS, and cross-LCA typed queues.
+  pub fn bp_classify(
+    &self,
+    device: &LogicalDevice,
+    cmd: &mut VulkanCommandBuffer,
+    scene_entities_addr: u64,
+    raw_pairs_addr: u64,
+    out_rb_rb_addr: u64,
+    out_rb_ps_addr: u64,
+    out_rb_lca_addr: u64,
+    total_raw_pairs: u32,
+  ) {
+    let wg_size = 256u32;
+    let groups = (total_raw_pairs + wg_size - 1) / wg_size;
+
+    let pc = BpClassifyPushConstants {
+      scene_entities: scene_entities_addr,
+      raw_pairs: raw_pairs_addr,
+      out_rb_rb: out_rb_rb_addr,
+      out_rb_ps: out_rb_ps_addr,
+      out_rb_lca: out_rb_lca_addr,
+    };
+    let bytes = unsafe {
+      core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
+    };
+    unsafe {
+      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.bp_classify);
+      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_dispatch(cmd.cmd, groups.max(1), 1, 1);
+      let barrier = vk::MemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+      device.cmd_pipeline_barrier(cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+    }
+  }
+
+  /// Dispatches `bp_cross_lca.comp`.
+  ///
+  /// Takes the cross-LCA pairs from `bp_classify` and refines them:
+  /// transforms the macro-frame rigid body's AABB into the micro-frame using
+  /// `InstanceDescriptor.inv_transform`, then traverses the micro-frame BVH
+  /// to produce refined narrow-phase candidate pairs.
+  pub fn bp_cross_lca(
+    &self,
+    device: &LogicalDevice,
+    cmd: &mut VulkanCommandBuffer,
+    scene_entities_addr: u64,
+    lca_query_pairs_addr: u64,
+    output_internal_pairs_addr: u64,
+    total_queries: u32,
+  ) {
+    let _wg_size = 256u32;
+    let subgroups_per_wg = 256u32 / 32u32;
+    let groups = (total_queries + subgroups_per_wg - 1) / subgroups_per_wg;
+
+    let pc = BpCrossLcaPushConstants {
+      scene_entities: scene_entities_addr,
+      lca_query_pairs: lca_query_pairs_addr,
+      output_internal_pairs: output_internal_pairs_addr,
+      total_queries,
+      _pad: 0,
+    };
+    let bytes = unsafe {
+      core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
+    };
+    unsafe {
+      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.bp_cross_lca);
+      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_dispatch(cmd.cmd, groups.max(1), 1, 1);
+      let barrier = vk::MemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+      device.cmd_pipeline_barrier(cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+    }
+  }
+
+  /// Dispatches `bp_particle_self.comp`.
+  ///
+  /// Subgroup-cooperative LBVH traversal for particle–particle self-collision.
+  /// For each overlapping pair, computes a Hookean spring repulsive force and
+  /// atomicAdds it directly into the particle AOSOA force slots (indices 7/8/9).
+  /// Bypasses the pair-list pipeline entirely.
+  ///
+  /// `bvh_addr`      — BDA to particle LBVH (`MultiBvhBuffer`).
+  /// `particles_addr` — BDA to AOSOA particle buffer.
+  /// `wrench_buffer` — BDA to the same particle buffer (used as float[] for atomicAdd).
+  /// `stiffness`     — Spring constant k for the linear penalty force.
+  pub fn bp_particle_self(
+    &self,
+    device: &LogicalDevice,
+    cmd: &mut VulkanCommandBuffer,
+    bvh_addr: u64,
+    particles_addr: u64,
+    wrench_buffer_addr: u64,
+    total_particles: u32,
+    root_index: u32,
+    particle_radius: f32,
+    stiffness: f32,
+  ) {
+    let _wg_size = 256u32;
+    let subgroups_per_wg = 256u32 / 32u32; // conservative; shader uses specialization const
+    let groups = (total_particles + subgroups_per_wg - 1) / subgroups_per_wg;
+
+    let pc = BpParticleSelfPushConstants {
+      bvh: bvh_addr,
+      particles: particles_addr,
+      wrench_buffer: wrench_buffer_addr,
+      root_index,
+      total_particles,
+      particle_radius,
+      stiffness,
+    };
+    let bytes = unsafe {
+      core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
+    };
+    unsafe {
+      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.bp_particle_self);
+      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_dispatch(cmd.cmd, groups.max(1), 1, 1);
+      let barrier = vk::MemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+      device.cmd_pipeline_barrier(cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Legacy dispatch methods (unchanged)
+  // ═══════════════════════════════════════════════════════════════════════════
+
   fn step_ode_p1_p2(
     &self,
     device: &LogicalDevice,
-    allocator: vk_mem::AllocatorView,
-    rollback: &mut utils::RollbackContext<'_>,
+    _allocator: vk_mem::AllocatorView,
+    _rollback: &mut utils::RollbackContext<'_>,
     cmd: &mut VulkanCommandBuffer,
-    particles: &mut VulkanBuffer<gpu::ParticleGpu>,
+    particles: &mut VulkanBuffer<f32>,
     dt: timeus_t,
   ) -> GpuResult<()> {
     let wg_size = 128;
@@ -984,8 +1764,8 @@ impl VulkanComputeKernels {
   fn step_ode_p3_p4(
     &self,
     device: &LogicalDevice,
-    allocator: vk_mem::AllocatorView,
-    rollback: &mut utils::RollbackContext<'_>,
+    _allocator: vk_mem::AllocatorView,
+    _rollback: &mut utils::RollbackContext<'_>,
     cmd: &mut VulkanCommandBuffer,
     kinematics: &VulkanBuffer<gpu::KinematicBody>,
     rigid_bodies: &VulkanBuffer<gpu::RigidBodyGpu>,
@@ -1000,7 +1780,7 @@ impl VulkanComputeKernels {
     let pc = P34PushConstants {
       rigid_bodies: self.addresses.rigid_body_data,
       emitters: self.addresses.emitters,
-      kinematics: self.addresses.particle_data, // Using a dummy address here until kinematics is tracked in pipeline properly, or we can use kinematics.address if it was passed.
+      kinematics: kinematics.address, // Using kinematics device address
       dt: dt_sec,
       total_rigid_bodies,
       num_emitters: 1,   // TODO dynamic
@@ -1047,11 +1827,11 @@ impl VulkanComputeKernels {
   fn compute_self_gravity(
     &self,
     device: &LogicalDevice,
-    allocator: vk_mem::AllocatorView,
-    rollback: &mut utils::RollbackContext<'_>,
+    _allocator: vk_mem::AllocatorView,
+    _rollback: &mut utils::RollbackContext<'_>,
     cmd: &mut VulkanCommandBuffer,
     _bvh: &VulkanBuffer<()>,
-    particles: &mut VulkanBuffer<gpu::ParticleGpu>,
+    particles: &mut VulkanBuffer<f32>,
   ) -> GpuResult<()> {
     let total_particles = particles.capacity() as u32;
     let dispatch_groups = (total_particles + 127) / 128;
@@ -1107,11 +1887,11 @@ impl VulkanComputeKernels {
   fn step_ode_p5(
     &self,
     device: &LogicalDevice,
-    allocator: vk_mem::AllocatorView,
-    rollback: &mut utils::RollbackContext<'_>,
+    _allocator: vk_mem::AllocatorView,
+    _rollback: &mut utils::RollbackContext<'_>,
     cmd: &mut VulkanCommandBuffer,
     kinematics: &VulkanBuffer<KinematicBody>,
-    particles: &mut VulkanBuffer<gpu::ParticleGpu>,
+    particles: &mut VulkanBuffer<f32>,
     _emitters: &VulkanBuffer<gpu::ForceEmitter>,
     dt: timeus_t,
   ) -> GpuResult<()> {
@@ -1176,9 +1956,9 @@ impl VulkanComputeKernels {
     rollback: &mut utils::RollbackContext<'_>,
     cmd: &mut VulkanCommandBuffer,
     _kinematics: &VulkanBuffer<gpu::KinematicBody>,
-    _rigid_bodies: &VulkanBuffer<gpu::RigidBodyGpu>,
-    particles: &VulkanBuffer<gpu::ParticleGpu>,
-    dt: timeus_t,
+    _rigid_bodies: &VulkanBuffer<RigidBodyImex>,
+    particles: &VulkanBuffer<f32>,
+    _dt: timeus_t,
   ) -> GpuResult<VulkanBuffer<()>> {
     let total_particles = particles.capacity() as u32;
     let wg_size = 128;
@@ -1190,6 +1970,7 @@ impl VulkanComputeKernels {
       allocator,
       num_nodes,
       vk::BufferUsageFlags::STORAGE_BUFFER,
+      false,
       rollback,
     )?;
 
@@ -1240,7 +2021,7 @@ impl VulkanComputeKernels {
 
     Ok(bvh_buffer)
   }
-
+  #[function_name::named]
   fn self_intersect_scene(
     &self,
     device: &LogicalDevice,
@@ -1255,11 +2036,12 @@ impl VulkanComputeKernels {
     let dispatch_groups = (total_entities + wg_size - 1) / wg_size;
 
     let max_candidates = 10000; // Placeholder TODO parameter of kernels?
-    let mut candidates_buffer = self.allocate_device_buffer::<gpu::CollisionPair>(
+    let candidates_buffer = self.allocate_device_buffer::<gpu::CollisionPair>(
       device,
       allocator,
       max_candidates,
       vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+      true,
       rollback,
     )?;
 
@@ -1319,14 +2101,15 @@ impl VulkanComputeKernels {
     potentials: &VulkanBuffer<gpu::CollisionPair>,
     _kinematics: &VulkanBuffer<gpu::KinematicBody>,
     _rigid_bodies: &VulkanBuffer<gpu::RigidBodyGpu>,
-    _particles: &VulkanBuffer<gpu::ParticleGpu>,
+    _particles: &VulkanBuffer<f32>,
   ) -> GpuResult<VulkanBuffer<gpu::CollisionPair>> {
     let max_contacts = 10000; // Placeholder
-    let mut output_list = self.allocate_device_buffer::<gpu::CollisionPair>(
+    let output_list = self.allocate_device_buffer::<gpu::CollisionPair>(
       device,
       allocator,
       max_contacts,
       vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+      true,
       rollback,
     )?;
 
@@ -1394,6 +2177,7 @@ impl VulkanComputeKernels {
       allocator,
       max_packed,
       vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+      true,
       rollback,
     )?;
 
@@ -1451,11 +2235,12 @@ impl VulkanComputeKernels {
     cmd: &mut VulkanCommandBuffer,
     compacted: &VulkanBuffer<gpu::CollisionPair>,
   ) -> GpuResult<VulkanBuffer<timeus_t>> {
-    let mut out_toi = self.allocate_device_buffer::<timeus_t>(
+    let out_toi = self.allocate_device_buffer::<timeus_t>(
       device,
       allocator,
       1,
       vk::BufferUsageFlags::STORAGE_BUFFER,
+      false,
       rollback,
     )?;
 
@@ -1464,7 +2249,7 @@ impl VulkanComputeKernels {
       collisions: compacted.address, // self.addresses.packed_collisions,
       out_toi: out_toi.address,      // self.addresses.reduce_toi,
       particle_radius: 1.0,
-      dt: 0.016,
+      dt: 0.0,
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(
@@ -1514,8 +2299,8 @@ impl VulkanComputeKernels {
     rollback: &mut utils::RollbackContext<'_>,
     cmd: &mut VulkanCommandBuffer,
     _kinematics: &VulkanBuffer<gpu::KinematicBody>,
-    rigid_bodies: &VulkanBuffer<gpu::RigidBodyGpu>,
-    particles: &mut VulkanBuffer<gpu::ParticleGpu>,
+    rigid_bodies: &VulkanBuffer<RigidBodyImex>,
+    particles: &mut VulkanBuffer<f32>,
     collisions: &VulkanBuffer<gpu::CollisionPair>,
     force_inelastic: bool,
   ) -> GpuResult<()> {
@@ -1528,13 +2313,14 @@ impl VulkanComputeKernels {
       allocator,
       max_contacts,
       vk::BufferUsageFlags::STORAGE_BUFFER,
+      false,
       rollback,
     )?;
 
     let restitution_val = if force_inelastic { 0.0 } else { 0.5 };
 
     // LCP Solver
-    let total_clusters = 100; // Unused when using indirect
+    let total_clusters = collisions.capacity() as u32;
     let pc_lcp = LcpPushConstants {
       particles: particles.address,     // self.addresses.particle_data,
       collisions: collisions.address,   // self.addresses.packed_collisions,
@@ -1631,17 +2417,18 @@ impl VulkanComputeKernels {
     allocator: vk_mem::AllocatorView,
     rollback: &mut utils::RollbackContext<'_>,
     cmd: &mut VulkanCommandBuffer,
-    rigid_bodies: &VulkanBuffer<gpu::RigidBodyGpu>,
-    particles: &VulkanBuffer<gpu::ParticleGpu>,
+    rigid_bodies: &VulkanBuffer<RigidBodyImex>,
+    particles: &VulkanBuffer<f32>,
   ) -> GpuResult<(
-    VulkanBuffer<gpu::RigidBodyGpu>,
-    VulkanBuffer<gpu::ParticleGpu>,
+    VulkanBuffer<RigidBodyImex>,
+    VulkanBuffer<f32>,
   )> {
-    let rb_snap = self.allocate_device_buffer::<gpu::RigidBodyGpu>(
+    let rb_snap = self.allocate_device_buffer::<RigidBodyImex>(
       device,
       allocator,
       rigid_bodies.capacity(),
       vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+      false,
       rollback,
     )?;
     let p_snap = self.allocate_device_buffer::<gpu::ParticleGpu>(
@@ -1649,11 +2436,12 @@ impl VulkanComputeKernels {
       allocator,
       particles.capacity(),
       vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+      false,
       rollback,
     )?;
 
     let rb_copy = vk::BufferCopy::default()
-      .size((rigid_bodies.capacity().max(1) * core::mem::size_of::<gpu::RigidBodyGpu>()) as u64);
+      .size((rigid_bodies.capacity().max(1) * core::mem::size_of::<RigidBodyImex>()) as u64);
     let p_copy = vk::BufferCopy::default()
       .size((particles.capacity().max(1) * core::mem::size_of::<gpu::ParticleGpu>()) as u64);
 
@@ -1696,18 +2484,18 @@ impl VulkanComputeKernels {
   fn restore_dynamics(
     &self,
     device: &LogicalDevice,
-    allocator: vk_mem::AllocatorView,
-    rollback: &mut utils::RollbackContext<'_>,
+    _allocator: vk_mem::AllocatorView,
+    _rollback: &mut utils::RollbackContext<'_>,
     cmd: &mut VulkanCommandBuffer,
-    rigid_bodies: &mut VulkanBuffer<gpu::RigidBodyGpu>,
-    particles: &mut VulkanBuffer<gpu::ParticleGpu>,
+    rigid_bodies: &mut VulkanBuffer<RigidBodyImex>,
+    particles: &mut VulkanBuffer<f32>,
     snapshot: &(
-      VulkanBuffer<gpu::RigidBodyGpu>,
-      VulkanBuffer<gpu::ParticleGpu>,
+      VulkanBuffer<RigidBodyImex>,
+      VulkanBuffer<f32>,
     ),
   ) -> GpuResult<()> {
     let rb_copy = vk::BufferCopy::default()
-      .size((rigid_bodies.capacity().max(1) * core::mem::size_of::<gpu::RigidBodyGpu>()) as u64);
+      .size((rigid_bodies.capacity().max(1) * core::mem::size_of::<RigidBodyImex>()) as u64);
     let p_copy = vk::BufferCopy::default()
       .size((particles.capacity().max(1) * core::mem::size_of::<gpu::ParticleGpu>()) as u64);
 
@@ -1750,57 +2538,70 @@ impl VulkanComputeKernels {
   #[function_name::named]
   fn write_back_to_scene(
     &self,
-    device: &LogicalDevice,
-    allocator: vk_mem::AllocatorView,
-    rollback: &mut utils::RollbackContext<'_>,
+    _device: &LogicalDevice,
+    _discard_pool: &crate::gpu_backends::vulkan::device::resources::DiscardPool,
+    _timeline_value: u64,
+    _allocator: vk_mem::AllocatorView,
+    _rollback: &mut utils::RollbackContext<'_>,
     cmd: &mut VulkanCommandBuffer,
-    rigid_bodies: &VulkanBuffer<gpu::RigidBodyGpu>,
-    particles: &VulkanBuffer<gpu::ParticleGpu>,
+    rigid_bodies: &VulkanBuffer<RigidBodyImex>,
+    particles: &VulkanBuffer<f32>,
+    particle_metadata: &[gpu::ParticleMetadata],
     _physical_scene: &mut PhysicsScene,
     scene: &Scene,
   ) -> GpuResult<()> {
     let rb_handle = rigid_bodies.enqueue_read_to_cpu(cmd).map_err(|e| gpu_err!("{}", e))?;
     let p_handle = particles.enqueue_read_to_cpu(cmd).map_err(|e| gpu_err!("{}", e))?;
 
-    cmd.submit(&VulkanCommandBufferContext { device, rollback }).map_err(|e| gpu_err!("{}", e))?;
+    cmd.submit().map_err(|e| gpu_err!("{}", e))?;
 
     let rb_data = rb_handle.wait().map_err(|e| gpu_err!("{}", e))?;
     let p_data = p_handle.wait().map_err(|e| gpu_err!("{}", e))?;
 
+    let unpacked_particles = gpu::unpack_particles_aosoa(&p_data, 32, particle_metadata.len());
+
     scene.query2::<crate::scene::TransformComponent, crate::scene::particles::ParticleSystemComponent, _>( |entity, _transform, sys| {
       let mut sys_particles = sys.particles.write();
-      for p_gpu in p_data.iter() {
-        if p_gpu.entity_id == entity {
-          if (p_gpu.original_index as usize) < sys_particles.len() {
-            sys_particles[p_gpu.original_index as usize].position = p_gpu.position;
-            sys_particles[p_gpu.original_index as usize].velocity = p_gpu.velocity;
+      for (i, p_gpu) in unpacked_particles.iter().enumerate() {
+        let meta = &particle_metadata[i];
+        if meta.entity_id == entity {
+          if (meta.original_index as usize) < sys_particles.len() {
+            sys_particles[meta.original_index as usize].position = [p_gpu[0], p_gpu[1], p_gpu[2]];
+            sys_particles[meta.original_index as usize].velocity = [p_gpu[3], p_gpu[4], p_gpu[5]];
           }
         }
       }
     });
 
-    for rb in rb_data.iter() {
-      let _ = scene.with_component_mut(
-        rb.entity_id,
-        |trans: &mut crate::scene::TransformComponent| {
-          trans.position = Vec3f32::from_array(rb.position);
-          let mat = Mat4x4f32::from_columns(
-            Vec4f32::from_components(rb.rotation[0][0], rb.rotation[0][1], rb.rotation[0][2], 0.0),
-            Vec4f32::from_components(rb.rotation[1][0], rb.rotation[1][1], rb.rotation[1][2], 0.0),
-            Vec4f32::from_components(rb.rotation[2][0], rb.rotation[2][1], rb.rotation[2][2], 0.0),
-            Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
+    let mut rb_idx = 0usize;
+    scene.query2_mut::<crate::scene::TransformComponent, crate::scene::KinematicComponent, _>(
+      |_entity, trans: &mut crate::scene::TransformComponent, kin: &mut crate::scene::KinematicComponent| {
+        if let Some(rb) = rb_data.get(rb_idx) {
+          trans.position = Vec3f32::from_components(
+            rb.position_mass[0],
+            rb.position_mass[1],
+            rb.position_mass[2],
           );
-          trans.rotation = Quat::from_mat4(&mat);
-        },
-      );
-      let _ = scene.with_component_mut(
-        rb.entity_id,
-        |kin: &mut crate::scene::KinematicComponent| {
-          kin.velocity = Vec3f32::from_array(rb.linear_velocity);
-          kin.angular_velocity = Vec3f32::from_array(rb.angular_velocity);
-        },
-      );
-    }
+          trans.rotation = Quat::from_components(
+            rb.orientation[0],
+            rb.orientation[1],
+            rb.orientation[2],
+            rb.orientation[3],
+          );
+          kin.velocity = Vec3f32::from_components(
+            rb.linear_vel_drag[0],
+            rb.linear_vel_drag[1],
+            rb.linear_vel_drag[2],
+          );
+          kin.angular_velocity = Vec3f32::from_components(
+            rb.angular_vel_drag[0],
+            rb.angular_vel_drag[1],
+            rb.angular_vel_drag[2],
+          );
+          rb_idx += 1;
+        }
+      },
+    );
 
     Ok(())
   }
@@ -1812,21 +2613,56 @@ impl Kernels for Device {
   type List<T: Copy + Send + Sync> = VulkanBuffer<T>;
   type MotionBvh = VulkanBuffer<()>;
 
+  fn discard_buffer<T: Copy + Send + Sync>(&self, mut buffer: Self::Buffer<T>) {
+    buffer.discard(
+      &self.kernels.discard_pool,
+      self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed),
+    );
+  }
+
+  fn discard_list<T: Copy + Send + Sync>(&self, mut list: Self::List<T>) {
+    list.discard(
+      &self.kernels.discard_pool,
+      self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed),
+    );
+  }
+
+  fn discard_bvh(&self, mut bvh: Self::MotionBvh) {
+    bvh.discard(
+      &self.kernels.discard_pool,
+      self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed),
+    );
+  }
+
   fn create_command_buffer(&self) -> EngineResult<Self::Cmd> {
-    utils::VulkanTransaction::new(&*self.res, &self.device)
-      .prepare_read((), |res_guard, _| {
-        Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
-      })?
-      .execute(|allocator, rollback| {
-        self.kernels.create_command_buffer(
-          &self.device,
-          allocator,
-          rollback,
-          self.get_compute_queue(),
-        )
-      })
-      .commit_read(|res_guard, result| result)
-      .map_err(|e| EngineError::from(e))
+    utils::NestedVulkanTransaction::new(
+      &*self.res,
+      &self.device,
+      |res: &device::DeviceResources| &res.command_pools,
+    )
+    .prepare_read(
+      self.get_compute_queue(),
+      |res_guard, command_pools, compute_queue| {
+        let opt_opt = command_pools.get(compute_queue.family_index as usize);
+        let opt_pos: Option<&alloc::sync::Arc<commands::CommandPools>> = opt_opt.unwrap().as_ref();
+        let command_pool_arc = alloc::sync::Arc::clone(opt_pos.ok_or(GpuError::NotFound)?);
+        Ok::<_, GpuError>((
+          command_pool_arc,
+          res_guard.allocator.allocator.as_allocator_view(),
+        ))
+      },
+    )?
+    .execute(|(command_pool_arc, allocator), rollback| {
+      self.kernels.create_command_buffer(
+        &self.device,
+        allocator,
+        command_pool_arc,
+        rollback,
+        self.get_compute_queue(),
+      )
+    })
+    .commit_read(|_res_guard, _command_pools, result| result)
+    .map_err(EngineError::from)
   }
 
   fn build_kinematic_bodies(
@@ -1842,7 +2678,7 @@ impl Kernels for Device {
       .execute(|allocator, rollback| {
         self.kernels.build_kinematic_bodies(&self.device, allocator, rollback, cmd, scene, scene0)
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
@@ -1851,15 +2687,15 @@ impl Kernels for Device {
     cmd: &mut Self::Cmd,
     scene: &PhysicsScene,
     scene0: &Scene,
-  ) -> EngineResult<Self::Buffer<gpu::RigidBodyGpu>> {
+  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>)> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |res_guard, _| {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
       })?
       .execute(|allocator, rollback| {
-        self.kernels.build_rigid_bodies(&self.device, allocator, rollback, cmd, scene, scene0)
+        self.kernels.build_rigid_bodies_imex(&self.device, allocator, rollback, cmd, scene, scene0)
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
@@ -1867,7 +2703,7 @@ impl Kernels for Device {
     &self,
     cmd: &mut Self::Cmd,
     scene: &Scene,
-  ) -> EngineResult<Self::Buffer<gpu::ParticleGpu>> {
+  ) -> EngineResult<(Self::Buffer<f32>, alloc::vec::Vec<gpu::ParticleMetadata>)> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |res_guard, _| {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
@@ -1875,7 +2711,7 @@ impl Kernels for Device {
       .execute(|allocator, rollback| {
         self.kernels.build_particles(&self.device, allocator, rollback, cmd, scene)
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
@@ -1891,14 +2727,14 @@ impl Kernels for Device {
       .execute(|allocator, rollback| {
         self.kernels.build_emitters(&self.device, allocator, rollback, cmd, scene)
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
   fn emit_particles(
     &self,
     cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<gpu::ParticleGpu>,
+    particles: &mut Self::Buffer<f32>,
     physical_scene: &PhysicsScene,
     scene: &Scene,
     sun_pos: Vec3f32,
@@ -1921,14 +2757,14 @@ impl Kernels for Device {
           dt,
         )
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
   fn step_ode_p1_p2(
     &self,
     cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<gpu::ParticleGpu>,
+    particles: &mut Self::Buffer<f32>,
     dt: timeus_t,
   ) -> EngineResult<()> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
@@ -1938,7 +2774,7 @@ impl Kernels for Device {
       .execute(|allocator, rollback| {
         self.kernels.step_ode_p1_p2(&self.device, allocator, rollback, cmd, particles, dt)
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
@@ -1966,7 +2802,7 @@ impl Kernels for Device {
           dt,
         )
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
@@ -1974,7 +2810,7 @@ impl Kernels for Device {
     &self,
     cmd: &mut Self::Cmd,
     bvh: &Self::MotionBvh,
-    particles: &mut Self::Buffer<gpu::ParticleGpu>,
+    particles: &mut Self::Buffer<f32>,
   ) -> EngineResult<()> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |res_guard, _| {
@@ -1983,7 +2819,7 @@ impl Kernels for Device {
       .execute(|allocator, rollback| {
         self.kernels.compute_self_gravity(&self.device, allocator, rollback, cmd, bvh, particles)
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
@@ -1991,7 +2827,7 @@ impl Kernels for Device {
     &self,
     cmd: &mut Self::Cmd,
     kinematics: &Self::Buffer<gpu::KinematicBody>,
-    particles: &mut Self::Buffer<gpu::ParticleGpu>,
+    particles: &mut Self::Buffer<f32>,
     emitters: &Self::Buffer<gpu::ForceEmitter>,
     dt: timeus_t,
   ) -> EngineResult<()> {
@@ -2011,7 +2847,7 @@ impl Kernels for Device {
           dt,
         )
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
@@ -2019,8 +2855,8 @@ impl Kernels for Device {
     &self,
     cmd: &mut Self::Cmd,
     kinematics: &Self::Buffer<gpu::KinematicBody>,
-    rigid_bodies: &Self::Buffer<gpu::RigidBodyGpu>,
-    particles: &Self::Buffer<gpu::ParticleGpu>,
+    rigid_bodies: &Self::Buffer<RigidBodyImex>,
+    particles: &Self::Buffer<f32>,
     dt: timeus_t,
   ) -> EngineResult<Self::MotionBvh> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
@@ -2039,7 +2875,7 @@ impl Kernels for Device {
           dt,
         )
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
@@ -2055,7 +2891,7 @@ impl Kernels for Device {
       .execute(|allocator, rollback| {
         self.kernels.self_intersect_scene(&self.device, allocator, rollback, cmd, bvh)
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
@@ -2065,7 +2901,7 @@ impl Kernels for Device {
     potentials: &Self::List<gpu::CollisionPair>,
     kinematics: &Self::Buffer<gpu::KinematicBody>,
     rigid_bodies: &Self::Buffer<gpu::RigidBodyGpu>,
-    particles: &Self::Buffer<gpu::ParticleGpu>,
+    particles: &Self::Buffer<f32>,
   ) -> EngineResult<Self::List<gpu::CollisionPair>> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |res_guard, _| {
@@ -2083,7 +2919,7 @@ impl Kernels for Device {
           particles,
         )
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
@@ -2100,7 +2936,7 @@ impl Kernels for Device {
       .execute(|allocator, rollback| {
         self.kernels.compact_collisions(&self.device, allocator, rollback, cmd, globals, time_delta)
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
@@ -2116,7 +2952,7 @@ impl Kernels for Device {
       .execute(|allocator, rollback| {
         self.kernels.find_earliest_collision(&self.device, allocator, rollback, cmd, compacted)
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
@@ -2124,8 +2960,8 @@ impl Kernels for Device {
     &self,
     cmd: &mut Self::Cmd,
     kinematics: &Self::Buffer<gpu::KinematicBody>,
-    rigid_bodies: &mut Self::Buffer<gpu::RigidBodyGpu>,
-    particles: &mut Self::Buffer<gpu::ParticleGpu>,
+    rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
+    particles: &mut Self::Buffer<f32>,
     collisions: &Self::List<gpu::CollisionPair>,
     force_inelastic: bool,
   ) -> EngineResult<()> {
@@ -2146,18 +2982,18 @@ impl Kernels for Device {
           force_inelastic,
         )
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
   fn snapshot_dynamics(
     &self,
     cmd: &mut Self::Cmd,
-    rigid_bodies: &Self::Buffer<gpu::RigidBodyGpu>,
-    particles: &Self::Buffer<gpu::ParticleGpu>,
+    rigid_bodies: &Self::Buffer<RigidBodyImex>,
+    particles: &Self::Buffer<f32>,
   ) -> EngineResult<(
-    Self::Buffer<gpu::RigidBodyGpu>,
-    Self::Buffer<gpu::ParticleGpu>,
+    Self::Buffer<RigidBodyImex>,
+    Self::Buffer<f32>,
   )> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |res_guard, _| {
@@ -2173,18 +3009,18 @@ impl Kernels for Device {
           particles,
         )
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
   fn restore_dynamics(
     &self,
     cmd: &mut Self::Cmd,
-    rigid_bodies: &mut Self::Buffer<gpu::RigidBodyGpu>,
-    particles: &mut Self::Buffer<gpu::ParticleGpu>,
+    rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
+    particles: &mut Self::Buffer<f32>,
     snapshot: &(
-      Self::Buffer<gpu::RigidBodyGpu>,
-      Self::Buffer<gpu::ParticleGpu>,
+      Self::Buffer<RigidBodyImex>,
+      Self::Buffer<f32>,
     ),
   ) -> EngineResult<()> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
@@ -2202,15 +3038,16 @@ impl Kernels for Device {
           snapshot,
         )
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
 
   fn write_back_to_scene(
     &self,
     cmd: &mut Self::Cmd,
-    rigid_bodies: &Self::Buffer<gpu::RigidBodyGpu>,
-    particles: &Self::Buffer<gpu::ParticleGpu>,
+    rigid_bodies: &Self::Buffer<RigidBodyImex>,
+    particles: &Self::Buffer<f32>,
+    particle_metadata: &[gpu::ParticleMetadata],
     physical_scene: &mut PhysicsScene,
     scene: &Scene,
   ) -> EngineResult<()> {
@@ -2219,18 +3056,287 @@ impl Kernels for Device {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
       })?
       .execute(|allocator, rollback| {
+        let timeline_value =
+          self.kernels.next_submit_value.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
         self.kernels.write_back_to_scene(
           &self.device,
+          &self.kernels.discard_pool,
+          timeline_value,
           allocator,
           rollback,
           cmd,
           rigid_bodies,
           particles,
+          particle_metadata,
           physical_scene,
           scene,
         )
       })
-      .commit_read(|res_guard, result| result)
+      .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
+  }
+
+  fn build_frames(
+    &self,
+    _cmd: &mut Self::Cmd,
+    scene: &PhysicsScene,
+  ) -> EngineResult<Self::Buffer<GpuReferenceFrame>> {
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |res_guard, _| {
+        Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
+      })?
+      .execute(|allocator, rollback| {
+        self.kernels.build_frames(&self.device, allocator, rollback, scene)
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(EngineError::from)
+  }
+
+  fn build_list<T: Copy + Send + Sync>(
+    &self,
+    _cmd: &mut Self::Cmd,
+    capacity: usize,
+  ) -> EngineResult<Self::List<T>> {
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |res_guard, _| {
+        Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
+      })?
+      .execute(|allocator, rollback| {
+        self.kernels.build_list_inner::<T>(&self.device, allocator, rollback, capacity)
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(EngineError::from)
+  }
+
+  fn imex_integrate_particles_p1_p2(
+    &self,
+    cmd: &mut Self::Cmd,
+    particles: &mut Self::Buffer<f32>,
+    dt: timeus_t,
+  ) -> EngineResult<()> {
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
+      .execute(|(), _rollback| {
+        self.kernels.imex_integrate_particles_p1_p2(
+          &self.device,
+          cmd,
+          particles.address,
+          particles.capacity() as u32,
+          dt,
+        );
+        Ok(())
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(EngineError::from)
+  }
+
+  fn imex_integrate_bodies_p3(
+    &self,
+    cmd: &mut Self::Cmd,
+    bodies: &mut Self::Buffer<RigidBodyImex>,
+    wrenches: &mut Self::Buffer<Wrench>,
+    dt: timeus_t,
+  ) -> EngineResult<()> {
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
+      .execute(|(), _rollback| {
+        self.kernels.imex_integrate_bodies_p3(
+          &self.device,
+          cmd,
+          bodies.address,
+          wrenches.address,
+          bodies.capacity() as u32,
+          dt,
+          4,
+        );
+        Ok(())
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(EngineError::from)
+  }
+
+  fn imex_rb_force_assign(
+    &self,
+    cmd: &mut Self::Cmd,
+    bodies: &Self::Buffer<RigidBodyImex>,
+    wrenches: &mut Self::Buffer<Wrench>,
+  ) -> EngineResult<()> {
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
+      .execute(|(), _rollback| {
+        self.kernels.imex_rb_force_assign(
+          &self.device,
+          cmd,
+          bodies.address,
+          wrenches.address,
+          bodies.capacity() as u32,
+        );
+        Ok(())
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(EngineError::from)
+  }
+
+  fn imex_integrate_particles_p4_5(
+    &self,
+    cmd: &mut Self::Cmd,
+    particles: &mut Self::Buffer<f32>,
+    dt: timeus_t,
+    current_time_us: timeus_t,
+  ) -> EngineResult<()> {
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
+      .execute(|(), _rollback| {
+        // clock_addr = 0 — no clock buffer in this integration pass
+        self.kernels.imex_integrate_particles_p4_5(
+          &self.device,
+          cmd,
+          particles.address,
+          0u64,
+          particles.capacity() as u32,
+          dt,
+          current_time_us,
+        );
+        Ok(())
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(EngineError::from)
+  }
+
+  fn bp_clear(
+    &self,
+    cmd: &mut Self::Cmd,
+    raw_pairs_addr: u64,
+    out_rb_rb_addr: u64,
+    out_rb_ps_addr: u64,
+    out_rb_lca_addr: u64,
+  ) -> EngineResult<()> {
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
+      .execute(|(), _rollback| {
+        self.kernels.bp_clear(
+          &self.device, cmd,
+          raw_pairs_addr, out_rb_rb_addr, out_rb_ps_addr, out_rb_lca_addr,
+        );
+        Ok(())
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(EngineError::from)
+  }
+
+  fn bp_bounds_gen(
+    &self,
+    cmd: &mut Self::Cmd,
+    bodies: &Self::Buffer<RigidBodyImex>,
+    leaves_addr: u64,
+    total_entities: u32,
+    dt: timeus_t,
+  ) -> EngineResult<()> {
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
+      .execute(|(), _rollback| {
+        self.kernels.bp_bounds_gen(
+          &self.device, cmd,
+          bodies.address, leaves_addr, total_entities, dt,
+        );
+        Ok(())
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(EngineError::from)
+  }
+
+  fn bp_scene(
+    &self,
+    cmd: &mut Self::Cmd,
+    tlas_bvh_addr: u64,
+    query_leaves_addr: u64,
+    overlapping_pairs_addr: u64,
+    tlas_root_index: u32,
+    total_queries: u32,
+  ) -> EngineResult<()> {
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
+      .execute(|(), _rollback| {
+        self.kernels.bp_scene(
+          &self.device, cmd,
+          tlas_bvh_addr, query_leaves_addr, overlapping_pairs_addr,
+          tlas_root_index, total_queries,
+        );
+        Ok(())
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(EngineError::from)
+  }
+
+  fn bp_classify(
+    &self,
+    cmd: &mut Self::Cmd,
+    bodies: &Self::Buffer<RigidBodyImex>,
+    raw_pairs_addr: u64,
+    out_rb_rb_addr: u64,
+    out_rb_ps_addr: u64,
+    out_rb_lca_addr: u64,
+    total_raw_pairs: u32,
+  ) -> EngineResult<()> {
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
+      .execute(|(), _rollback| {
+        self.kernels.bp_classify(
+          &self.device, cmd,
+          bodies.address,
+          raw_pairs_addr, out_rb_rb_addr, out_rb_ps_addr, out_rb_lca_addr,
+          total_raw_pairs,
+        );
+        Ok(())
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(EngineError::from)
+  }
+
+  fn bp_cross_lca(
+    &self,
+    cmd: &mut Self::Cmd,
+    frames: &Self::Buffer<GpuReferenceFrame>,
+    lca_query_pairs_addr: u64,
+    output_internal_pairs_addr: u64,
+    total_queries: u32,
+  ) -> EngineResult<()> {
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
+      .execute(|(), _rollback| {
+        self.kernels.bp_cross_lca(
+          &self.device, cmd,
+          frames.address,
+          lca_query_pairs_addr, output_internal_pairs_addr, total_queries,
+        );
+        Ok(())
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(EngineError::from)
+  }
+
+  fn bp_particle_self(
+    &self,
+    cmd: &mut Self::Cmd,
+    bvh_addr: u64,
+    particles: &mut Self::Buffer<f32>,
+    wrench_buffer_addr: u64,
+    total_particles: u32,
+    root_index: u32,
+    particle_radius: f32,
+    stiffness: f32,
+  ) -> EngineResult<()> {
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
+      .execute(|(), _rollback| {
+        self.kernels.bp_particle_self(
+          &self.device, cmd,
+          bvh_addr, particles.address, wrench_buffer_addr,
+          total_particles, root_index, particle_radius, stiffness,
+        );
+        Ok(())
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(EngineError::from)
   }
 }

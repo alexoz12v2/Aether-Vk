@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+  use crate::gpu::vulkan::device;
   use crate::gpu::{
     DeviceAdditionalParams, RenderFrontend, VULKAN_RENDER_BACKEND, new_render_frontend,
     simulation_step,
@@ -12,8 +13,8 @@ mod tests {
   use crate::simulation::comet::Comet;
   use crate::types::RuntimeParams;
   use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::Vector3;
-use aethervk_oshal_rlib::math::vector::{Vector, vec3::Vec3f32};
+  use aethervk_oshal_rlib::math::vector::Vector3;
+  use aethervk_oshal_rlib::math::vector::{Vector, vec3::Vec3f32};
   use aethervk_oshal_rlib::os::time::timeus_t;
   use heapless::index_map::FnvIndexMap;
   use polyhedral_mass_properties::{MassProperties, TriangleContrib};
@@ -212,62 +213,9 @@ use aethervk_oshal_rlib::math::vector::{Vector, vec3::Vec3f32};
     ctx
       .frontend
       .with_device(ctx.device_handle, |dev| {
-        let vulkan_kernels = crate::gpu_backends::vulkan::physics::VulkanComputeKernels {
-          device: dev
-            .as_any()
-            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
-            .unwrap()
-            .device
-            .clone(),
-          pipelines: crate::gpu_backends::vulkan::physics::PhysicsPipelines::new(
-            &dev
-              .as_any()
-              .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
-              .unwrap()
-              .device,
-            &crate::gpu_backends::vulkan::physics::PhysicsPipelineConfig {
-              max_particles: 10000,
-              hardware_subgroup_size: 32,
-            },
-          ),
-          addresses: crate::gpu_backends::vulkan::physics::PhysicsDeviceAddresses {
-            particle_data: 0,
-            rigid_body_data: 0,
-            sorted_morton: 0,
-            bvh_nodes: 0,
-            atomic_counters: 0,
-            ccd_candidates: 0,
-            packed_collisions: 0,
-            reduce_toi: 0,
-            impulses: 0,
-            emitters: 0,
-          },
-          allocator: dev
-            .as_any()
-            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
-            .unwrap()
-            .res
-            .read()
-            .allocator
-            .allocator
-            .as_ref()
-            .map(|a| a.as_raw()),
-          thread_pool: ctx.pool.clone(),
-          queue: dev
-            .as_any()
-            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
-            .unwrap()
-            .queue_compute,
-          command_pool: dev
-            .as_any()
-            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
-            .unwrap()
-            .command_pools
-            .read()
-            .compute,
-        };
+        let vulkan_device = dev.as_any().downcast_ref::<device::Device>().unwrap();
 
-        run_simulation(&vulkan_kernels, &mut scene, 5.0);
+        run_simulation(vulkan_device, &mut scene, 5.0);
 
         let t_sphere = scene.global_transform(sphere).unwrap();
         let t_obb = scene.global_transform(obb).unwrap();
@@ -397,62 +345,9 @@ use aethervk_oshal_rlib::math::vector::{Vector, vec3::Vec3f32};
     ctx
       .frontend
       .with_device(ctx.device_handle, |dev| {
-        let vulkan_kernels = crate::gpu_backends::vulkan::physics::VulkanComputeKernels {
-          device: dev
-            .as_any()
-            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
-            .unwrap()
-            .device
-            .clone(),
-          pipelines: crate::gpu_backends::vulkan::physics::PhysicsPipelines::new(
-            &dev
-              .as_any()
-              .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
-              .unwrap()
-              .device,
-            &crate::gpu_backends::vulkan::physics::PhysicsPipelineConfig {
-              max_particles: 10000,
-              hardware_subgroup_size: 32,
-            },
-          ),
-          addresses: crate::gpu_backends::vulkan::physics::PhysicsDeviceAddresses {
-            particle_data: 0,
-            rigid_body_data: 0,
-            sorted_morton: 0,
-            bvh_nodes: 0,
-            atomic_counters: 0,
-            ccd_candidates: 0,
-            packed_collisions: 0,
-            reduce_toi: 0,
-            impulses: 0,
-            emitters: 0,
-          },
-          allocator: dev
-            .as_any()
-            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
-            .unwrap()
-            .res
-            .read()
-            .allocator
-            .allocator
-            .as_ref()
-            .map(|a| a.as_raw()),
-          thread_pool: ctx.pool.clone(),
-          queue: dev
-            .as_any()
-            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
-            .unwrap()
-            .queue_compute,
-          command_pool: dev
-            .as_any()
-            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
-            .unwrap()
-            .command_pools
-            .read()
-            .compute,
-        };
+        let vulkan_device = dev.as_any().downcast_ref::<device::Device>().unwrap();
 
-        run_simulation(&vulkan_kernels, &mut scene, 5.0);
+        run_simulation(vulkan_device, &mut scene, 5.0);
 
         // Verify
         let v_macro = scene.with_component(obj_macro, |k: &KinematicComponent| k.velocity).unwrap();

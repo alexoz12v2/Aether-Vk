@@ -3,25 +3,20 @@
 use crate::{
   gpu,
   gpu::{
-    FrameCancelGuard, PresentationEngineHandle, RenderDevice, RenderScene, ScopedRenderPass,
+    FrameCancelGuard, PresentationEngineHandle, RenderDevice,
     SwapchainStatus,
     scene_conversion::{RenderSceneExtraction, SceneConversionExt},
   },
   simulation_api::structs::{
-    CustomRenderCallback, RenderCommand, RenderFeedback, RenderFrame, RenderTaskStatus,
+    CustomRenderCallback, RenderCommand,
     RenderThreadContext,
   },
-  types::{EngineError, EngineResult, GpuError, GpuResult},
+  types::{EngineError, EngineResult, GpuResult},
 };
 use aethervk_oshal_rlib as oshal;
 use aethervk_oshal_rlib::os::pool::tasklet::ThreadPoolExt;
 use itertools::Itertools;
 use oshal::{
-  math::{
-    matrix::{MatrixVectorMul, SquareMatrix, mat4::Mat4x4f32},
-    quaternion::Quaternion,
-    vector::{Vector4, vec3::Vec3f32},
-  },
   os,
   os::{NativeError, ThreadingError, thread, thread::Thread},
 };

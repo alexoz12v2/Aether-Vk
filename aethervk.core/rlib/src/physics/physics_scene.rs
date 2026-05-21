@@ -3,8 +3,7 @@
 use crate::{
   math::collision::linear_bvh::LinearBound,
   scene::{
-    Component, EntityId, Scene, TransformComponent,
-    particles::{ParticleData, ParticleSystemComponent},
+    EntityId, Scene, TransformComponent,
   },
 };
 use aethervk_oshal_rlib::math::{
@@ -70,7 +69,7 @@ pub struct PhysicsScene {
 impl PhysicsScene {
   /// TODO: Document this item
   pub fn build_from_scene(scene: &Scene) -> Self {
-    use crate::scene::{KinematicComponent, ReferenceFrameComponent, ReferenceFrameType};
+    use crate::scene::{KinematicComponent, ReferenceFrameComponent};
     let mut frame_map: hashbrown::HashMap<EntityId, u32> = hashbrown::HashMap::new();
     let mut gpu_frames = alloc::vec::Vec::new();
 

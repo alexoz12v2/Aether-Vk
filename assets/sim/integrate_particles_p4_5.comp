@@ -1,0 +1,106 @@
+// SPDX-License-Identifier: MIT
+// @assets/sim/integrate_particles_p4_5.comp
+//
+// Particle Velocity-Verlet Corrector — Phase 4 & 5
+// ─────────────────────────────────────────────────
+// Invariant entering this pass:
+//   • AOSOA slots 3/4/5 hold v_{n+½}  (stored by integrate_particles_p1_p2)
+//   • AOSOA slots 7/8/9 hold F(x_{n+1}) (written by force generators after p3)
+//
+//   v_{n+1} = v_{n+½} + (dt/2) · M⁻¹ · F(x_{n+1})    [VV corrector]
+//
+// The force buffer is intentionally NOT cleared — F(x_{n+1}) persists as
+// F(x_n) for the NEXT frame's integrate_particles_p1_p2 pass.
+//
+// Thread 0 additionally advances the emulated 64-bit engine clock:
+//   global_time_us += dt_us    (uvec2 carry-propagating addition from imex_math.glsl)
+//
+// Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
+
+#version 450 core
+#extension GL_EXT_buffer_reference       : require
+#extension GL_EXT_scalar_block_layout    : require
+#extension GL_KHR_shader_subgroup_basic  : require
+#extension GL_GOOGLE_include_directive   : require
+
+#include "../debug_utils.glsl"
+#include "../bvh_utils.glsl"   // SUBGROUP_SIZE specialization constant
+#include "imex_math.glsl"      // add64
+
+// ─── AOSOA particle data ────────────────────────────────────────────────────
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleData {
+    float data[];
+};
+
+// ─── 64-bit engine clock (lo, hi) ───────────────────────────────────────────
+layout(buffer_reference, scalar, buffer_reference_align = 8) buffer ClockBuffer {
+    uvec2 global_time_us;  // lo = [0], hi = [1] — stored as uvec2 (x=lo, y=hi)
+};
+
+// ─── Push constants (40 bytes) ──────────────────────────────────────────────
+layout(push_constant, scalar) uniform PushConstants {
+    ParticleData particles;       // BDA — 8 B
+    ClockBuffer  clock;           // BDA — 8 B
+    float        dt;              // physical dt in seconds — 4 B
+    uint         total_particles; // 4 B
+    uint         dt_us_lo;        // dt in microseconds, low  32 bits — 4 B
+    uint         dt_us_hi;        // dt in microseconds, high 32 bits — 4 B
+    uint         current_time_lo; // t_n in microseconds, low  32 bits — 4 B
+    uint         current_time_hi; // t_n in microseconds, high 32 bits — 4 B
+} pc;
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+
+    // ── Thread 0: advance the 64-bit engine clock exactly once per frame ─────
+    // This must happen regardless of particle count so the clock always ticks.
+    if (gid == 0u) {
+        uvec2 t_n  = uvec2(pc.current_time_lo, pc.current_time_hi);
+        uvec2 dt_u = uvec2(pc.dt_us_lo,        pc.dt_us_hi);
+        pc.clock.global_time_us = add64(t_n, dt_u);
+    }
+
+    if (gid >= pc.total_particles) return;
+
+    uint block = gid / SUBGROUP_SIZE;
+    uint lane  = gid % SUBGROUP_SIZE;
+    uint base  = block * (10u * SUBGROUP_SIZE) + lane;
+
+    // ── Skip inactive / massless particles ────────────────────────────────
+    float mass = pc.particles.data[base + 6u * SUBGROUP_SIZE];
+    if (mass <= 0.0) return;
+
+    float inv_m   = 1.0 / mass;
+    float half_dt = 0.5 * pc.dt;
+
+    // ── Load v_{n+½} (written by p1_p2) ──────────────────────────────────
+    vec3 v_half = vec3(
+        pc.particles.data[base + 3u * SUBGROUP_SIZE],
+        pc.particles.data[base + 4u * SUBGROUP_SIZE],
+        pc.particles.data[base + 5u * SUBGROUP_SIZE]
+    );
+
+    // ── Load F(x_{n+1}) (written by force generators after p3) ───────────
+    vec3 f_next = vec3(
+        pc.particles.data[base + 7u * SUBGROUP_SIZE],
+        pc.particles.data[base + 8u * SUBGROUP_SIZE],
+        pc.particles.data[base + 9u * SUBGROUP_SIZE]
+    );
+
+    // ── VV Corrector ─────────────────────────────────────────────────────
+    vec3 v_next = v_half + f_next * inv_m * half_dt;
+
+    // Write v_{n+1} back — force buffer stays intact for next frame
+    pc.particles.data[base + 3u * SUBGROUP_SIZE] = v_next.x;
+    pc.particles.data[base + 4u * SUBGROUP_SIZE] = v_next.y;
+    pc.particles.data[base + 5u * SUBGROUP_SIZE] = v_next.z;
+
+    if (SHOULD_DEBUG_PRINT) {
+        debugPrintfEXT("[p4_5] id=%d  v_next=(%.4f,%.4f,%.4f)  f_next=(%.4f,%.4f,%.4f)\n",
+            gid,
+            v_next.x, v_next.y, v_next.z,
+            f_next.x, f_next.y, f_next.z);
+    }
+}
