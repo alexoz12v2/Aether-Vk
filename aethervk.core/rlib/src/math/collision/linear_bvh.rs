@@ -5,6 +5,8 @@ use aethervk_oshal_rlib::math::{
   floating::{FloatBits, FloatOps},
   matrix::mat3::Mat3f32,
   vector::vec3::Vec3f32,
+  vector::Vector,
+  vector::Vector3,
 };
 use alloc::{vec, vec::Vec};
 

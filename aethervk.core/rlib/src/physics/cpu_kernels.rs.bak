@@ -113,7 +113,6 @@ pub struct CpuMotionBvh {
   pub kinematics_copy: Vec<KinematicBody>,
   pub rigid_bodies_copy: Vec<RigidBodyImex>,
   pub particles_copy: Vec<f32>,
-  pub particle_metadata_copy: Vec<crate::gpu::ParticleMetadata>,
   pub bvh_tree: crate::physics::motion_bvh::MotionBvhTree,
 }
 
@@ -367,7 +366,7 @@ impl Kernels for CpuScalarKernels {
     particles: &Self::Buffer<f32>,
     dt: timeus_t,
   ) -> EngineResult<Self::MotionBvh> {
-    Ok(CpuMotionBvh { kinematics_copy: alloc::vec::Vec::new(), rigid_bodies_copy: alloc::vec::Vec::new(), particles_copy: alloc::vec::Vec::new(), particle_metadata_copy: alloc::vec::Vec::new(), bvh_tree: crate::physics::motion_bvh::MotionBvhTree { nodes: alloc::vec::Vec::new(), root: None } })
+    Ok(CpuMotionBvh { kinematics_copy: alloc::vec::Vec::new(), rigid_bodies_copy: alloc::vec::Vec::new(), particles_copy: alloc::vec::Vec::new(), bvh_tree: crate::physics::motion_bvh::MotionBvhTree { nodes: alloc::vec::Vec::new(), root: 0 } })
   }
 
   fn self_intersect_scene(
@@ -697,7 +696,7 @@ impl Kernels for CpuSimdKernels {
     particles: &Self::Buffer<f32>,
     dt: timeus_t,
   ) -> EngineResult<Self::MotionBvh> {
-    Ok(CpuMotionBvh { kinematics_copy: alloc::vec::Vec::new(), rigid_bodies_copy: alloc::vec::Vec::new(), particles_copy: alloc::vec::Vec::new(), particle_metadata_copy: alloc::vec::Vec::new(), bvh_tree: crate::physics::motion_bvh::MotionBvhTree { nodes: alloc::vec::Vec::new(), root: None } })
+    Ok(CpuMotionBvh { kinematics_copy: alloc::vec::Vec::new(), rigid_bodies_copy: alloc::vec::Vec::new(), particles_copy: alloc::vec::Vec::new(), bvh_tree: crate::physics::motion_bvh::MotionBvhTree { nodes: alloc::vec::Vec::new(), root: 0 } })
   }
 
   fn self_intersect_scene(

@@ -13,6 +13,7 @@ pub fn detect_collisions_cpu(bvh: &CpuMotionBvh) -> Vec<CollisionPair> {
   let dynamics = &bvh.rigid_bodies_copy;
   let kinematics = &bvh.kinematics_copy;
   let particles = &bvh.particles_copy;
+  let particle_metadata = &bvh.particle_metadata_copy;
 
   // Build LCA frames map
   let mut frames_map = hashbrown::HashMap::new();
@@ -64,9 +65,9 @@ pub fn detect_collisions_cpu(bvh: &CpuMotionBvh) -> Vec<CollisionPair> {
         let ent_b_as_u32 = if is_kin {
           slotmap::Key::data(&kinematics[j as usize].entity_id).as_ffi() as u32
         } else if is_par {
-          slotmap::Key::data(&particles[j as usize].entity_id).as_ffi() as u32
+          slotmap::Key::data(&particle_metadata[j as usize].entity_id).as_ffi() as u32
         } else {
-          dynamics[j as usize].wrench_idx
+          0 // RigidBodyImex does not store entity_id here
         };
 
         pairs.push(CollisionPair {
@@ -90,20 +91,29 @@ pub fn detect_collisions_cpu(bvh: &CpuMotionBvh) -> Vec<CollisionPair> {
   for (i, p) in dynamics.iter().enumerate() {
     query_and_push(
       i as u32,
-      p.wrench_idx,
+      0, // p.wrench_idx removed in Imex
       0,
       [p.position_mass[0], p.position_mass[1], p.position_mass[2]],
       [p.linear_vel_drag[0], p.linear_vel_drag[1], p.linear_vel_drag[2]],
       0.5,
     );
   }
-  for (i, p) in particles.iter().enumerate() {
+  for (i, meta) in particle_metadata.iter().enumerate() {
+    let block = i / 32;
+    let lane = i % 32;
+    let base = block * (10 * 32) + lane;
+    let x = particles[base + 0 * 32];
+    let y = particles[base + 1 * 32];
+    let z = particles[base + 2 * 32];
+    let vx = particles[base + 3 * 32];
+    let vy = particles[base + 4 * 32];
+    let vz = particles[base + 5 * 32];
     query_and_push(
       (1 << 30) | (i as u32),
-      slotmap::Key::data(&p.entity_id).as_ffi() as u32,
-      p.parent_frame_id,
-      p.position,
-      p.velocity,
+      slotmap::Key::data(&meta.entity_id).as_ffi() as u32,
+      meta.parent_frame_id,
+      [x, y, z],
+      [vx, vy, vz],
       1.0,
     );
   }

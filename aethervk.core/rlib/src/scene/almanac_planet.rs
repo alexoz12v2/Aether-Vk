@@ -7,7 +7,10 @@ use crate::{
 };
 use aethervk_oshal_rlib::math::{
   quaternion::Quaternion,
-  vector::{Vector, vec3::Vec3f32, vec4::Quat},
+  vector::vec3::Vec3f32,
+  vector::Vector,
+  vector::Vector3,
+  vector::vec4::Quat,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
