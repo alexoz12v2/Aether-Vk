@@ -325,19 +325,19 @@ macro_rules! gpu_err_archetype_absent {
   };
 }
 
-mod archetypes_struct;
-mod commands;
-mod descriptors;
+pub(super) mod archetypes_struct;
+pub(super) mod commands;
+pub(super) mod descriptors;
 #[cfg(any(debug_assertions, test))]
 pub mod hooks;
-mod locks;
-mod memory;
-mod pipelines;
-mod renderpasses;
-mod resources;
-mod shader_manager;
-mod swapchain;
-mod timeline_manager;
+pub(super) mod locks;
+pub(super) mod memory;
+pub(super) mod pipelines;
+pub(super) mod renderpasses;
+pub(super) mod resources;
+pub(super) mod shader_manager;
+pub(super) mod swapchain;
+pub(super) mod timeline_manager;
 
 // TODO No vulkan calls while holding locks
 // TODO remove all unwrap and unwrap_unchecked (unless absolutely necessary or sure)
@@ -1472,13 +1472,15 @@ impl Device {
       chosen_physical_device_query_result.unique_family_indices_set().iter(),
     )?;
 
+    let kernels = VulkanComputeKernels::new(&device, res.allocator.allocator.as_allocator_view())?;
+
     Ok(Self {
       query_result: *chosen_physical_device_query_result,
       device,
       queues,
       res: Arc::new(DebugTrackedRwLock::new(res)),
       callback_stop_signal: Arc::new(core::sync::atomic::AtomicBool::new(false)),
-
+      kernels,
       instance,
       depth_stencil_format,
       recording_command_buffers: DebugTrackedRwLock::new(hashbrown::HashMap::new()),
@@ -1510,6 +1512,8 @@ impl Drop for Device {
       aethervk_oshal_rlib::log!("Device::drop device_wait_idle failed: {:?}", e);
     }
     aethervk_oshal_rlib::log!("Device::drop device_wait_idle complete. Starting cleanup...");
+    let allocator = DebugTrackedRwLock::read(&self.res).allocator.allocator.as_allocator_view();
+    self.kernels.cleanup(&self.device, allocator);
 
     DebugTrackedRwLock::write(&self.res).cleanup(&self.device);
 
