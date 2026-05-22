@@ -1318,8 +1318,8 @@ impl Scene {
     self.register_component::<ParticleEmitterComponent>(&transform_and_mesh);
     self.register_component::<particles::ParticleSystemComponent>(&transform_type_id);
     self.register_component::<ReferenceFrameComponent>(&[]);
-    self.register_component::<KinematicComponent>(&transform_and_mesh);
-    self.register_component::<ColliderComponent>(&transform_and_mesh);
+    self.register_component::<KinematicComponent>(&transform_type_id);
+    self.register_component::<ColliderComponent>(&transform_type_id);
 
     // ui module
     self.register_component::<ui::Transform2DComponent>(&[]);

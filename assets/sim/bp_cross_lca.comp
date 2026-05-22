@@ -1,6 +1,7 @@
 // @assets/sim/bp_cross_lca.comp
 #version 450 core
 #extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_ballot : require
@@ -39,7 +40,9 @@ layout(push_constant, scalar) uniform PushConstants {
 
 shared uint shared_stacks[SUBGROUPS_PER_WG][32]; 
 shared uint shared_stack_ptrs[SUBGROUPS_PER_WG];
-shared MultiBvhBuffer shared_lca_bvh[SUBGROUPS_PER_WG];
+// Store as raw 64-bit address (uvec2) to avoid Metal address-space conflicts
+// that arise when storing buffer_reference types in threadgroup shared memory.
+shared uvec2 shared_lca_bvh_addr[SUBGROUPS_PER_WG];
 
 void transform_aabb(mat4 inv_transform, vec3 bmin, vec3 bmax, out vec3 out_min, out vec3 out_max) {
     vec3 corners[8] = vec3[8](
@@ -80,7 +83,9 @@ void main() {
         Entity foreign_ent = entities.entities[foreign_ent_id];
         Entity lca_ent = entities.entities[lca_ent_id];
         
-        shared_lca_bvh[subgroup_id] = lca_ent.bvh;
+        // Store the raw address bits rather than the buffer_reference itself,
+        // to avoid Metal threadgroup/device address-space conflicts in MoltenVK.
+        shared_lca_bvh_addr[subgroup_id] = uvec2(lca_ent.bvh);
 
         vec3 center = foreign_ent.transform[3].xyz;
         mat3 rot = mat3(foreign_ent.transform);
@@ -100,7 +105,9 @@ void main() {
     query_max = vec3(subgroupBroadcast(query_max.x, 0), subgroupBroadcast(query_max.y, 0), subgroupBroadcast(query_max.z, 0));
     foreign_ent_id = subgroupBroadcast(foreign_ent_id, 0);
     
-    MultiBvhBuffer tlas = shared_lca_bvh[subgroup_id];
+    // Reconstruct the buffer reference from the raw address stored in shared memory.
+    MultiBvhBuffer tlas = MultiBvhBuffer(shared_lca_bvh_addr[subgroup_id]);
+
 
     while (true) {
         subgroupMemoryBarrierShared();

@@ -38,7 +38,7 @@ mod tests {
   }
 
   fn get_test_context() -> Option<*mut SimulationContext> {
-    let asset_dir = format!("{}/../../assets", env!("CARGO_MANIFEST_DIR"));
+    let asset_dir = format!("{}/../../assets/sim", env!("CARGO_MANIFEST_DIR"));
     SimulationContext::set_asset_path(&asset_dir);
 
     let ctx_ptr = SimulationContext::startup(crate::gpu::VULKAN_RENDER_BACKEND, Some(panic_error_callback));

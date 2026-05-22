@@ -58,6 +58,7 @@ impl RenderContext for MetalRenderContext {
   }
 }
 
+
 /// TODO: Document this item
 pub struct MetalRenderDevice {}
 
