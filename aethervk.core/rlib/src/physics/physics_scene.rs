@@ -401,3 +401,13 @@ impl core::fmt::Debug for PhysicsScene {
      .finish()
   }
 }
+
+#[test]
+fn test_root_bounds_bvh_2_leaves() {
+    let leaves = alloc::vec![
+        (0, aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0]), aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([1.0, 1.0, 1.0]), 0, 0),
+        (1, aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([2.0, 2.0, 2.0]), aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([3.0, 3.0, 3.0]), 1, 0),
+    ];
+    let bvh = RootBoundsBvh::build(&leaves);
+    assert_eq!(bvh.nodes.len(), 3);
+}

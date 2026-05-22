@@ -1839,6 +1839,15 @@ pub struct CollisionPair {
   pub penetration_depth: f32,
 }
 
+/// GPU hardware subgroup (warp) size, clamped to the valid range for dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubgroupSize {
+  Size16 = 16,
+  Size32 = 32,
+  Size64 = 64,
+  Size128 = 128,
+}
+
 /// Computes execution for physics, particle systems, and interval arithmetic.
 pub trait Kernels: Send + Sync {
   type Cmd: CommandBuffer;
@@ -1855,9 +1864,19 @@ pub trait Kernels: Send + Sync {
   fn discard_bvh(&self, bvh: Self::MotionBvh);
   fn discard_tlas(&self, tlas: Self::MotionTlas);
 
-  /// Returns the hardware subgroup size = TLAS/BLAS branching factor N.
-  /// Must be a power of two in {16, 32, 64}.
-  fn optimal_branching_factor(&self) -> u32;
+
+  /// Returns the hardware subgroup size.
+  fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize>;
+
+  fn wait_sync(&self, sync: &crate::gpu::CommandBufferSyncInfo) -> EngineResult<()>;
+
+  fn refit_motion_blas(
+    &self,
+    cmd: &mut Self::Cmd,
+    bvh: &Self::MotionBvh,
+    depth_indices: &Self::Buffer<u32>,
+    total_nodes: u32,
+  ) -> EngineResult<()>;
 
   /// Upload a CPU-built flat `TlasMultiNode<N>` node array (as raw bytes)
   /// to a device-visible STORAGE_BUFFER | SHADER_DEVICE_ADDRESS buffer.
@@ -1879,6 +1898,12 @@ pub trait Kernels: Send + Sync {
     cmd: &mut Self::Cmd,
     capacity: usize,
   ) -> EngineResult<Self::List<T>>;
+
+  fn build_leaves(
+    &self,
+    cmd: &mut Self::Cmd,
+    capacity: usize,
+  ) -> EngineResult<Self::Buffer<[u32; 8]>>;
 
   // 1. & 2. Build Collections
   fn build_kinematic_bodies(
@@ -1985,6 +2010,7 @@ pub trait Kernels: Send + Sync {
     cmd: &mut Self::Cmd,
     bodies: &mut Self::Buffer<RigidBodyImex>,
     wrenches: &mut Self::Buffer<Wrench>,
+    emitters: &Self::Buffer<ForceEmitter>,
     dt: timeus_t,
   ) -> EngineResult<()>;
 
@@ -2104,7 +2130,7 @@ pub trait Kernels: Send + Sync {
     cmd: &mut Self::Cmd,
     potentials: &Self::List<CollisionPair>,
     kinematics: &Self::Buffer<KinematicBody>,
-    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
+    rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
   ) -> EngineResult<Self::List<CollisionPair>>;
 
@@ -2122,7 +2148,7 @@ pub trait Kernels: Send + Sync {
     &self,
     cmd: &mut Self::Cmd,
     compacted: &Self::List<CollisionPair>,
-  ) -> EngineResult<Self::Buffer<timeus_t>>;
+  ) -> EngineResult<Self::Buffer<u32>>;
 
   fn apply_collision_responses(
     &self,

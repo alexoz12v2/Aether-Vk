@@ -141,11 +141,9 @@ impl SimulationContext {
     let mut ffi_nodes = Vec::new();
 
     active.read().scene.with_component(entity_id, |mesh: &PhysicalMeshComponent| {
-      if let Some(bvh) = &mesh.mesh.bvh {
-        for node in &bvh.nodes {
-          let ffi_node = node.clone().into();
-          ffi_nodes.push(ffi_node);
-        }
+      if let Some(_bvh) = &mesh.mesh.bvh {
+        // Linear BVH is gone; returning empty for now
+        // TODO: support FFI export of MultiBVH nodes
       }
     });
 
@@ -626,6 +624,133 @@ impl SimulationContext {
     let comet_ext_id = scene_ctx.register_entity(comet_id);
 
     Ok((lca_ext_id, comet_ext_id))
+  }
+
+  /// Atomically spawns the LCA micro-frame entity and the static mesh entity
+  /// as its child, attaching all required components including ParticleEmitterCirclesComponent.
+  ///
+  /// # Arguments
+  /// * `scene_id`     – target scene.
+  /// * `model_id`     – id returned by `import_model_from_mesh`.
+  /// * `entity_name`  – base name; the micro-frame will be named `<name>_microframe`.
+  /// * `pos`          – spawn position **in macro-frame units (AU)**.
+  /// * `rotation`     – orientation quaternion for the mesh (relative to micro-frame).
+  /// * `scale`        – scale vector for the mesh.
+  ///
+  /// Returns `(lca_frame_ext_id, mesh_ext_id)` on success.
+  pub fn spawn_static_mesh_internal(
+    &self,
+    scene_id: u64,
+    model_id: u64,
+    entity_name: &str,
+    pos: Vec3f32,
+    rotation: Quat,
+    scale: Vec3f32,
+  ) -> EngineResult<(u64, u64)> {
+    use crate::scene::ReferenceFrameComponent;
+
+    // ── Resolve mesh from model registry ────────────────────────────────────
+    let (path_str, mesh_arc) = {
+      let scenes = self.scenes.read();
+      let path_str = scenes
+        .model_registry
+        .get(&model_id)
+        .ok_or(EngineError::InvalidOperation("spawn_static_mesh: model not found"))?
+        .clone();
+      let mesh_arc = scenes
+        .mesh_cache
+        .get(&path_str)
+        .ok_or(EngineError::InvalidOperation("spawn_static_mesh: mesh not in cache"))?;
+      (path_str, mesh_arc)
+    };
+
+    let scene_ctx_lock = {
+      let scenes = self.scenes.read();
+      scenes
+        .get_scene(scene_id)
+        .ok_or(EngineError::InvalidOperation("spawn_static_mesh: scene not found"))?
+    };
+    let mut scene_ctx = scene_ctx_lock.write();
+
+    // ── LCA micro-frame entity ───────────────────────────────────────────────
+    let lca_name = alloc::format!("{}_microframe", entity_name);
+    let lca_id = scene_ctx.scene.spawn_entity(&lca_name);
+
+    // Transform: position is in macro-frame coordinates (AU).
+    scene_ctx.scene.add_component(
+      lca_id,
+      TransformComponent {
+        position: pos,
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    )?;
+
+    // SOI radius: static meshes might not have a massive SOI, we use a generic scale or compute it
+    let dist_au =
+      (pos.x() * pos.x() + pos.y() * pos.y() + pos.z() * pos.z()).sqrt();
+    let soi_radius_au = dist_au.min(1.0_f32).max(0.01_f32);
+
+    scene_ctx.scene.add_component(
+      lca_id,
+      ReferenceFrameComponent {
+        frame_type: crate::scene::ReferenceFrameType::Micro,
+        scale: soi_radius_au,
+        soi_radius: soi_radius_au,
+        _padding: 0,
+      },
+    )?;
+
+    let root = scene_ctx.root_entity;
+    scene_ctx.scene.set_parent(lca_id, Some(root));
+    let lca_ext_id = scene_ctx.register_entity(lca_id);
+
+    // ── Mesh entity (child of LCA frame) ───────────────────────────────
+    let mesh_id = scene_ctx.scene.spawn_entity(entity_name);
+
+    let bounding_sphere = compute_bounding_sphere_radius(&mesh_arc.vertices);
+
+    scene_ctx.scene.add_component(
+      mesh_id,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation,
+        scale,
+      },
+    )?;
+
+    scene_ctx.scene.add_component(
+      mesh_id,
+      PhysicalMeshComponent {
+        asset_path: path_str,
+        mesh: mesh_arc,
+        emissive_intensity: 0.0,
+        emissive_color: [0.0, 0.0, 0.0],
+        use_new_path: false,
+        paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        sphere_radius: bounding_sphere * scale.x().max(scale.y()).max(scale.z()),
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
+      },
+    )?;
+
+    scene_ctx.scene.add_component(
+      mesh_id,
+      crate::scene::SphericalGizmoComponent {
+        is_visible: true,
+      },
+    )?;
+
+    scene_ctx.scene.add_component(
+      mesh_id,
+      crate::scene::particles::ParticleEmitterCirclesComponent { circles: alloc::vec::Vec::new() },
+    )?;
+
+    scene_ctx.scene.set_parent(mesh_id, Some(lca_id));
+    let mesh_ext_id = scene_ctx.register_entity(mesh_id);
+
+    Ok((lca_ext_id, mesh_ext_id))
   }
 }
 

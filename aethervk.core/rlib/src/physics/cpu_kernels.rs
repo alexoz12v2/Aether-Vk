@@ -147,7 +147,9 @@ impl Kernels for CpuScalarKernels {
   fn discard_bvh(&self, _bvh: Self::MotionBvh) {}
   fn discard_tlas(&self, _tlas: Self::MotionTlas) {}
 
-  fn optimal_branching_factor(&self) -> u32 { 32 }
+  fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize> { Some(crate::gpu::SubgroupSize::Size32) }
+  fn wait_sync(&self, _sync: &crate::gpu::CommandBufferSyncInfo) -> EngineResult<()> { Ok(()) }
+  fn refit_motion_blas(&self, _cmd: &mut Self::Cmd, _bvh: &Self::MotionBvh, _depth_indices: &Self::Buffer<u32>, _total_nodes: u32) -> EngineResult<()> { Ok(()) }
 
   fn upload_motion_tlas(
     &self,
@@ -168,6 +170,14 @@ impl Kernels for CpuScalarKernels {
     capacity: usize,
   ) -> EngineResult<Self::List<T>> {
     Ok(CpuList { data: alloc::vec::Vec::new() })
+  }
+
+  fn build_leaves(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _capacity: usize,
+  ) -> EngineResult<Self::Buffer<[u32; 8]>> {
+    Ok(CpuBuffer { data: alloc::vec::Vec::new() })
   }
 
   fn build_kinematic_bodies(
@@ -278,6 +288,7 @@ impl Kernels for CpuScalarKernels {
     cmd: &mut Self::Cmd,
     bodies: &mut Self::Buffer<RigidBodyImex>,
     wrenches: &mut Self::Buffer<Wrench>,
+    emitters: &Self::Buffer<ForceEmitter>,
     dt: timeus_t,
   ) -> EngineResult<()> {
     Ok(())
@@ -398,7 +409,7 @@ impl Kernels for CpuScalarKernels {
     cmd: &mut Self::Cmd,
     potentials: &Self::List<CollisionPair>,
     kinematics: &Self::Buffer<KinematicBody>,
-    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
+    rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
   ) -> EngineResult<Self::List<CollisionPair>> {
     Ok(CpuList { data: alloc::vec::Vec::new() })
@@ -417,7 +428,7 @@ impl Kernels for CpuScalarKernels {
     &self,
     cmd: &mut Self::Cmd,
     compacted: &Self::List<CollisionPair>,
-  ) -> EngineResult<Self::Buffer<timeus_t>> {
+  ) -> EngineResult<Self::Buffer<u32>> {
     Ok(CpuBuffer { data: alloc::vec::Vec::new() })
   }
 
@@ -483,7 +494,9 @@ impl Kernels for CpuSimdKernels {
   fn discard_bvh(&self, _bvh: Self::MotionBvh) {}
   fn discard_tlas(&self, _tlas: Self::MotionTlas) {}
 
-  fn optimal_branching_factor(&self) -> u32 { 32 }
+  fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize> { Some(crate::gpu::SubgroupSize::Size32) }
+  fn wait_sync(&self, _sync: &crate::gpu::CommandBufferSyncInfo) -> EngineResult<()> { Ok(()) }
+  fn refit_motion_blas(&self, _cmd: &mut Self::Cmd, _bvh: &Self::MotionBvh, _depth_indices: &Self::Buffer<u32>, _total_nodes: u32) -> EngineResult<()> { Ok(()) }
 
   fn upload_motion_tlas(
     &self,
@@ -504,6 +517,14 @@ impl Kernels for CpuSimdKernels {
     capacity: usize,
   ) -> EngineResult<Self::List<T>> {
     Ok(CpuList { data: alloc::vec::Vec::new() })
+  }
+
+  fn build_leaves(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _capacity: usize,
+  ) -> EngineResult<Self::Buffer<[u32; 8]>> {
+    Ok(CpuBuffer { data: alloc::vec::Vec::new() })
   }
 
   fn build_kinematic_bodies(
@@ -614,6 +635,7 @@ impl Kernels for CpuSimdKernels {
     cmd: &mut Self::Cmd,
     bodies: &mut Self::Buffer<RigidBodyImex>,
     wrenches: &mut Self::Buffer<Wrench>,
+    emitters: &Self::Buffer<ForceEmitter>,
     dt: timeus_t,
   ) -> EngineResult<()> {
     Ok(())
@@ -734,7 +756,7 @@ impl Kernels for CpuSimdKernels {
     cmd: &mut Self::Cmd,
     potentials: &Self::List<CollisionPair>,
     kinematics: &Self::Buffer<KinematicBody>,
-    rigid_bodies: &Self::Buffer<RigidBodyGpu>,
+    rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
   ) -> EngineResult<Self::List<CollisionPair>> {
     Ok(CpuList { data: alloc::vec::Vec::new() })
@@ -753,7 +775,7 @@ impl Kernels for CpuSimdKernels {
     &self,
     cmd: &mut Self::Cmd,
     compacted: &Self::List<CollisionPair>,
-  ) -> EngineResult<Self::Buffer<timeus_t>> {
+  ) -> EngineResult<Self::Buffer<u32>> {
     Ok(CpuBuffer { data: alloc::vec::Vec::new() })
   }
 

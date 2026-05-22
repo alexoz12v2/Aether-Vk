@@ -24,39 +24,8 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleDat
 };
 
 // AOS Emitter data
-struct ForceEmitter {
-    vec3 position;
-    float mu; // G * M
-    vec3 normal;
-    uint type_id; // 0 = Gravity, 1 = Planar
-    float trunc_distance;
-    float scale_factor;
-    uint _pad[2];
-};
-
-struct KinematicBody {
-    uint entity_id_low;
-    uint entity_id_high;
-    vec3 position;
-    vec4 rotation;
-    vec3 scale_vec;
-    vec3 velocity;
-    uint parent_frame_id;
-    float mu;
-    uint own_frame_id;
-    uint frame_type;
-    float scale;
-    uint shape_type;
-    float shape_data[3];
-};
-
-layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer EmitterArray {
-    ForceEmitter emitters[];
-};
-
-layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer KinematicArray {
-    KinematicBody bodies[];
-};
+ // G * M
+#include "physics_types.glsl"
 
 layout(push_constant, scalar) uniform PushConstants {
     ParticleData particles;

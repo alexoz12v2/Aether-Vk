@@ -192,9 +192,10 @@ pub fn build_selection_tlas(scene: &crate::scene::Scene) -> alloc::vec::Vec<crat
 
   scene.query2::<crate::scene::PhysicalMeshComponent, crate::scene::TransformComponent, _>(|entity, mesh, transform| {
     if let Some(ref bvh) = mesh.mesh.bvh {
-      let model_matrix = <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::translation(transform.position)
-          * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::from_quat_custom_frame(transform.rotation)
-          * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::from_scale(transform.scale);
+      let global_transform = scene.global_transform(entity).unwrap_or(*transform);
+      let model_matrix = <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::translation(global_transform.position)
+          * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::from_quat_custom_frame(global_transform.rotation)
+          * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::from_scale(global_transform.scale);
 
       let mut bmin = <aethervk_oshal_rlib::math::vector::vec3::Vec3f32 as Vector3>::from_components(f32::MAX, f32::MAX, f32::MAX);
       let mut bmax = <aethervk_oshal_rlib::math::vector::vec3::Vec3f32 as Vector3>::from_components(f32::MIN, f32::MIN, f32::MIN);
@@ -238,7 +239,8 @@ pub fn build_selection_tlas(scene: &crate::scene::Scene) -> alloc::vec::Vec<crat
     for i in 0..32 {
       let meta = node.metadata[i];
       if meta != 0 && (meta & 0x8000_0000) != 0 {
-        let index = (meta & 0x7FFF_FFFF) as usize;
+        let binary_node_id = (meta & 0x7FFF_FFFF) as usize;
+        let index = bvh.nodes[binary_node_id].leaf_child_idx as usize;
         let entity_id = leaves[index].3;
 
         node.child_indices[i] = (entity_id & 0xFFFF_FFFF) as u32;

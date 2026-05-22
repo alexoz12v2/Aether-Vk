@@ -7,7 +7,7 @@ public class SpawnCometResult
   public ImportedModelItem Model { get; }
   public string EntityName { get; }
   public string PhysicsType { get; }
-  public PlanetOrbitData OrbitData { get; }
+  public PlanetOrbitData? OrbitData { get; }
 
   public float PosX { get; }
   public float PosY { get; }
@@ -29,7 +29,7 @@ public class SpawnCometResult
     ImportedModelItem model,
     string name,
     string physicsType,
-    PlanetOrbitData orbitData,
+    PlanetOrbitData? orbitData,
     float px,
     float py,
     float pz,

@@ -1,116 +1,44 @@
 #version 450 core
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
-#extension GL_KHR_shader_subgroup_basic : require
-#extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_GOOGLE_include_directive : require
 
-#include "../debug_utils.glsl"
 #include "../bvh_utils.glsl"
-
-// ============================================================================
-// Stream Compaction: Subgroup-based Parallel Prefix Sum
-// ============================================================================
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
-
-
-struct SparseCollisionData {
-    uint valid;
-    uint prim_a;
-    uint prim_b;
-    float toi;
-    vec3 contact_normal;
-    vec3 contact_point;
-    float penetration_depth;
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer QueueBuf {
+    uint count;
+    uvec2 pairs[];
 };
-
-// Input sparse array of collision flags/data
-layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer SparseCollisions {
-    SparseCollisionData data[];
-};
-
-// Workgroup shared memory for prefix sum across subgroups
-shared uint shared_sums[256 / 32];
-shared uint workgroup_offset;
 
 layout(push_constant, scalar) uniform PushConstants {
-    SparseCollisions sparse_in;
+    QueueBuf sparse_in;
     PackedCollisions packed_out;
     uint total_elements;
 } pc;
 
 void main() {
-    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
-        debugPrintfEXT("Hello from stream_compact.comp!\n");
-    }
-    uint global_id = gl_GlobalInvocationID.x;
-    uint local_id = gl_LocalInvocationID.x;
-    uint subgroup_id = gl_SubgroupID;
-    uint subgroup_local_id = gl_SubgroupInvocationID;
+    uint id = gl_GlobalInvocationID.x;
+    uint in_count = pc.sparse_in.count;
 
-    // 1. Load element
-    uint valid = 0;
-    SparseCollisionData elem;
-    if (global_id < pc.total_elements) {
-        elem = pc.sparse_in.data[global_id];
-        valid = elem.valid;
+    if (id == 0) {
+        pc.packed_out.count = in_count;
+        uint blocks = (in_count + 127) / 128;
+        pc.packed_out.dispatch_x = blocks;
+        pc.packed_out.dispatch_y = 1;
+        pc.packed_out.dispatch_z = 1;
     }
 
-    // 2. Subgroup-level exclusive scan
-    uint subgroup_prefix = subgroupExclusiveAdd(valid);
-    uint subgroup_total = subgroupAdd(valid);
-
-    // 3. Write subgroup total to shared memory
-    if (subgroup_local_id == 0) {
-        shared_sums[subgroup_id] = subgroup_total;
-    }
-
-    barrier();
-
-    // 4. Workgroup-level scan of subgroup totals (done by first subgroup)
-    uint sg_tot = 0;
-    if (subgroup_id == 0 && subgroup_local_id < gl_NumSubgroups) {
-        sg_tot = shared_sums[subgroup_local_id];
-    }
-    sg_tot = subgroupExclusiveAdd(sg_tot);
-    if (subgroup_id == 0 && subgroup_local_id < gl_NumSubgroups) {
-        shared_sums[subgroup_local_id] = sg_tot;
-    }
-
-    barrier();
-
-    // 5. Global offset for this workgroup
-    // The last thread of the workgroup adds the total workgroup sum to the global counter
-    if (local_id == gl_WorkGroupSize.x - 1) {
-        uint total_wg_sum = shared_sums[subgroup_id] + subgroup_total;
-        if (total_wg_sum > 0) {
-            workgroup_offset = atomicAdd(pc.packed_out.count, total_wg_sum);
-            
-            // Set the indirect dispatch limits (atomic max to ensure highest block count is captured)
-            uint current_total = workgroup_offset + total_wg_sum;
-            uint blocks = (current_total + 127) / 128;
-            atomicMax(pc.packed_out.dispatch_x, blocks);
-            pc.packed_out.dispatch_y = 1;
-            pc.packed_out.dispatch_z = 1;
-        } else {
-            workgroup_offset = 0;
-        }
-    }
-
-    barrier();
-
-    // 6. Write valid elements to packed array
-    if (valid == 1) {
-        uint final_idx = workgroup_offset + shared_sums[subgroup_id] + subgroup_prefix;
-        pc.packed_out.pairs[final_idx].a.entity_id = 0; // NOTE: entity_id requires passing from narrow_phase, which currently passes 1 for valid.
-        pc.packed_out.pairs[final_idx].a.primitive_index = elem.prim_a;
-        pc.packed_out.pairs[final_idx].b.entity_id = 0;
-        pc.packed_out.pairs[final_idx].b.primitive_index = elem.prim_b;
-        pc.packed_out.pairs[final_idx].toi = elem.toi;
-        pc.packed_out.pairs[final_idx].contact_normal = elem.contact_normal;
-        pc.packed_out.pairs[final_idx].contact_point = elem.contact_point;
-        pc.packed_out.pairs[final_idx].penetration_depth = elem.penetration_depth;
+    if (id < in_count) {
+        uvec2 pair = pc.sparse_in.pairs[id];
+        pc.packed_out.pairs[id].a.entity_id = 0;
+        pc.packed_out.pairs[id].a.primitive_index = pair.x;
+        pc.packed_out.pairs[id].b.entity_id = 0;
+        pc.packed_out.pairs[id].b.primitive_index = pair.y;
+        pc.packed_out.pairs[id].toi = 0.0;
+        pc.packed_out.pairs[id].contact_normal = vec3(0, 1, 0);
+        pc.packed_out.pairs[id].contact_point = vec3(0, 0, 0);
+        pc.packed_out.pairs[id].penetration_depth = 0.0;
     }
 }

@@ -578,6 +578,13 @@ pub struct SphereGizmoComponent {
 }
 impl Component for SphereGizmoComponent {}
 
+/// A spherical gizmo with a simpler toggle, distinct from SphereGizmoComponent
+#[derive(Clone, Debug, PartialEq)]
+pub struct SphericalGizmoComponent {
+  pub is_visible: bool,
+}
+impl Component for SphericalGizmoComponent {}
+
 /// A marker component for entities that should be rendered as an infinite grid.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct GridComponent {}

@@ -1,7 +1,7 @@
 #extension GL_EXT_debug_printf : enable
 #extension GL_KHR_shader_subgroup_ballot : enable
 
-layout(constant_id = 10) const uint DEBUG_SHADERS = 0;
+layout(constant_id = 10) const uint DEBUG_SHADERS = 1;
 
 // Usage in shaders:
 //    if (SHOULD_DEBUG_PRINT) {

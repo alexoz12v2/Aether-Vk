@@ -68,6 +68,15 @@ public partial class Viewport3DViewModel
   [ObservableProperty]
   private ulong _sceneId;
 
+  [ObservableProperty]
+  private string _measurementIndicatorText = "";
+
+  [ObservableProperty]
+  private double _measurementIndicatorWidth = 0.0;
+
+  [ObservableProperty]
+  private bool _showMeasurementIndicator = false;
+
   public ulong CameraId { get; private set; }
 
   private static int _measurementCounter = 1;
@@ -100,6 +109,16 @@ public partial class Viewport3DViewModel
         0.1f,
         10000.0f
       );
+
+      // Attempt to snap to Earth's position
+      double currentTai = _runtimeService.GetSimulationTime(SceneId);
+      var earthState = _runtimeService.GetEphemerisPosition(399, currentTai);
+      if (earthState.HasValue)
+      {
+        _runtimeService.SetTransformComponent(SceneId, CameraId,
+          earthState.Value.PosX, earthState.Value.PosY, earthState.Value.PosZ,
+          1, 0, 0, 0, 1, 1, 1);
+      }
     }
     else if (CameraId == 0)
     {
@@ -369,6 +388,8 @@ public partial class Viewport3DViewModel
       return;
     _isProcessingFrame = true;
 
+    UpdateMeasurementIndicator();
+
     try
     {
       await _runtimeService.PollTaskAsync(_lastRenderTaskId);
@@ -394,6 +415,84 @@ public partial class Viewport3DViewModel
     {
       _isProcessingFrame = false;
     }
+  }
+
+  private void UpdateMeasurementIndicator()
+  {
+    if (Width <= 0 || Height <= 0) return;
+
+    var state = _sceneStateManager.GetOrCreateScene(SceneId);
+    if (state.EntityMap.TryGetValue(CameraId, out var entity))
+    {
+      var camera = entity.Components.OfType<AetherVk.Logic.Models.CameraComponent>().FirstOrDefault();
+      if (camera != null)
+      {
+        double target_px_width = Math.Max(24.0, Width * 0.07);
+
+        if (camera.IsOrthographic)
+        {
+          double W_au = camera.OrthoRight - camera.OrthoLeft;
+          if (W_au > 0)
+          {
+            double min_au = target_px_width * (W_au / Width);
+            double nice_au = GetNiceNumber(min_au);
+            MeasurementIndicatorWidth = nice_au * (Width / W_au);
+            MeasurementIndicatorText = $"{FormatNiceNumber(nice_au)} AU";
+            ShowMeasurementIndicator = true;
+          }
+          else
+          {
+            ShowMeasurementIndicator = false;
+          }
+        }
+        else
+        {
+          // Perspective
+          double W_arcsec = camera.Fov * camera.AspectRatio * 3600.0;
+          if (W_arcsec > 0)
+          {
+            double min_arcsec = target_px_width * (W_arcsec / Width);
+            double nice_arcsec = GetNiceNumber(min_arcsec);
+            MeasurementIndicatorWidth = nice_arcsec * (Width / W_arcsec);
+            MeasurementIndicatorText = $"{FormatNiceNumber(nice_arcsec)} arcsec";
+            ShowMeasurementIndicator = true;
+          }
+          else
+          {
+            ShowMeasurementIndicator = false;
+          }
+        }
+      }
+      else
+      {
+        ShowMeasurementIndicator = false;
+      }
+    }
+    else
+    {
+      ShowMeasurementIndicator = false;
+    }
+  }
+
+  private double GetNiceNumber(double value)
+  {
+    if (value <= 0) return 1.0;
+    double exponent = Math.Floor(Math.Log10(value));
+    double fraction = value / Math.Pow(10, exponent);
+    
+    double niceFraction;
+    if (fraction <= 1.0) niceFraction = 1.0;
+    else if (fraction <= 2.0) niceFraction = 2.0;
+    else if (fraction <= 5.0) niceFraction = 5.0;
+    else niceFraction = 10.0;
+    
+    return niceFraction * Math.Pow(10, exponent);
+  }
+
+  private string FormatNiceNumber(double value)
+  {
+    if (value >= 1.0) return value.ToString("0");
+    return value.ToString("0.#####");
   }
 
   public void Stop() { }

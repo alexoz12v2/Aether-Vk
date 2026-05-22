@@ -678,6 +678,63 @@ pub unsafe extern "C" fn avkSimulationContext_loadCometSpk(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getEphemerisPosition(
+  ctx: *mut SimulationContext,
+  spk_id: i32,
+  epoch_tai_sec: f64,
+  out_pos: *mut FfiKinematicState,
+) -> bool {
+  if ctx.is_null() || out_pos.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let frame = anise::frames::Frame::new(
+    anise::constants::celestial_objects::SUN,
+    anise::constants::orientations::ECLIPJ2000,
+  );
+  let epoch = anise::time::Epoch::from_tai_seconds(epoch_tai_sec);
+
+  if let Ok(state) = ctx_ref.logic_state.read().almanac_data.get_ephem_full(spk_id, frame, epoch, true, false) {
+    unsafe {
+      *out_pos = FfiKinematicState::from(state);
+    }
+    true
+  } else {
+    false
+  }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_updateTrajectoryForSpk(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+  spk_id: i32,
+  start_epoch_tai_sec: f64,
+  end_epoch_tai_sec: f64,
+  sample_step_days: f64,
+) -> u64 {
+  if ctx.is_null() {
+    return 0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+
+  let task_id = ctx_ref.task_manager.write().create_task().get();
+  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::UpdateTrajectoryForSpk {
+    task_id,
+    scene_id,
+    entity_id,
+    spk_id,
+    start_epoch_tai_sec,
+    end_epoch_tai_sec,
+    sample_step_days,
+  });
+  task_id
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_spawnModelInstance(
   ctx: *mut SimulationContext,
   scene_id: u64,
@@ -763,6 +820,58 @@ pub unsafe extern "C" fn avkSimulationContext_spawnComet(
     }
     Err(e) => {
       oshal::log!("avkSimulationContext_spawnComet failed: {:?}", e);
+      false
+    }
+  }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+/// Synchronously spawns a static mesh entity hierarchy (LCA micro-frame + static mesh).
+///
+/// Returns `true` on success; `false` on any error. On success `*out_result` is
+/// populated with both entity ids.
+pub unsafe extern "C" fn avkSimulationContext_spawnStaticMesh(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  model_id: u64,
+  entity_name: *const c_char,
+  pos_x: f32,
+  pos_y: f32,
+  pos_z: f32,
+  rot_w: f32,
+  rot_x: f32,
+  rot_y: f32,
+  rot_z: f32,
+  scale_x: f32,
+  scale_y: f32,
+  scale_z: f32,
+  out_result: *mut FfiSpawnCometResult,
+) -> bool {
+  use aethervk_oshal_rlib::math::{
+    quaternion::Quaternion,
+    vector::{Vector3, vec3::Vec3f32, vec4::Quat},
+  };
+
+  if ctx.is_null() || entity_name.is_null() || out_result.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let name = unsafe { CStr::from_ptr(entity_name).to_str().unwrap_or("StaticMesh") };
+  let pos = Vec3f32::from_components(pos_x, pos_y, pos_z);
+  let rot = Quat::from_components(rot_w, rot_x, rot_y, rot_z);
+  let scale = Vec3f32::from_components(scale_x, scale_y, scale_z);
+
+  match ctx_ref.spawn_static_mesh_internal(scene_id, model_id, name, pos, rot, scale) {
+    Ok((lca_id, mesh_id)) => {
+      unsafe {
+        (*out_result).lca_frame_id = lca_id;
+        (*out_result).comet_entity_id = mesh_id;
+      }
+      true
+    }
+    Err(e) => {
+      oshal::log!("avkSimulationContext_spawnStaticMesh failed: {:?}", e);
       false
     }
   }
@@ -2157,4 +2266,22 @@ pub unsafe extern "C" fn avkSimulationContext_getEpochLimits(
 ) -> bool {
   let ctx = unsafe { &*ctx };
   ctx.get_epoch_limits(scene_id, start_tai, end_tai)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_ephemeris_position_ffi_signature() {
+    // We just test if the symbol exists and compiles.
+    let f: unsafe extern "C" fn(*mut SimulationContext, i32, f64, *mut FfiKinematicState) -> bool = avkSimulationContext_getEphemerisPosition;
+    assert!(f as usize > 0);
+  }
+
+  #[test]
+  fn test_update_trajectory_ffi_signature() {
+    let f: unsafe extern "C" fn(*mut SimulationContext, u64, u64, i32, f64, f64, f64) -> u64 = avkSimulationContext_updateTrajectoryForSpk;
+    assert!(f as usize > 0);
+  }
 }

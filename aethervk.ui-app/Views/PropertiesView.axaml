@@ -218,6 +218,17 @@
                     </DataTemplate>
 
                     <!-- ══════════════════════════════════════════════════════ -->
+                    <!-- Spherical Gizmo Component                              -->
+                    <!-- ══════════════════════════════════════════════════════ -->
+                    <DataTemplate DataType="models:SphericalGizmoComponent">
+                        <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">
+                            <StackPanel Spacing="4">
+                                <CheckBox Content="Is Visible" IsChecked="{Binding IsVisible}" />
+                            </StackPanel>
+                        </Expander>
+                    </DataTemplate>
+
+                    <!-- ══════════════════════════════════════════════════════ -->
                     <!-- Particle Emitter Circles Component                     -->
                     <!-- ══════════════════════════════════════════════════════ -->
                     <DataTemplate DataType="models:ParticleEmitterCirclesComponent">

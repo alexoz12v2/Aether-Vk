@@ -23,8 +23,10 @@ pub mod instance;
 pub mod utils;
 pub mod physics;
 
-#[cfg(test)]
 pub mod shader_tests;
+
+#[cfg(test)]
+pub mod mock_scene_data;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyncMode {

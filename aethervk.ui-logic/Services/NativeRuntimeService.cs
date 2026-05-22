@@ -645,6 +645,24 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return id;
   }
 
+  public void SetTransformComponent(ulong sceneId, ulong entityId, float px, float py, float pz, float rw, float rx, float ry, float rz, float sx, float sy, float sz)
+  {
+    if (_simulationContext == IntPtr.Zero) return;
+    var transform = new NativeInterop.FfiTransform
+    {
+      Px = px, Py = py, Pz = pz,
+      Rw = rw, Rx = rx, Ry = ry, Rz = rz,
+      Sx = sx, Sy = sy, Sz = sz
+    };
+    NativeInterop.avkSimulationContext_setTransformComponent(_simulationContext, sceneId, entityId, in transform);
+  }
+
+  public void AddTransformComponent(ulong sceneId, ulong entityId, float px, float py, float pz, float rw, float rx, float ry, float rz, float sx, float sy, float sz)
+  {
+    if (_simulationContext == IntPtr.Zero) return;
+    NativeInterop.avkSimulationContext_addTransformComponent(_simulationContext, sceneId, entityId, px, py, pz, rw, rx, ry, rz, sx, sy, sz);
+  }
+
   public ulong AddOrthographicCamera(
     ulong sceneId,
     ulong presentationEngineId,
@@ -758,6 +776,51 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         height
       );
     }
+  }
+
+  public NativeInterop.FfiKinematicState? GetEphemerisPosition(int spkId, double epochTaiSec)
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return null;
+
+    if (NativeInterop.avkSimulationContext_getEphemerisPosition(
+          _simulationContext,
+          spkId,
+          epochTaiSec,
+          out var state))
+    {
+      return state;
+    }
+    return null;
+  }
+
+  public async Task<ulong> UpdateTrajectoryForSpkAsync(
+    ulong sceneId,
+    ulong entityId,
+    int spkId,
+    double startEpochTaiSec,
+    double endEpochTaiSec,
+    double sampleStepDays)
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return 0;
+
+    ulong taskId = NativeInterop.avkSimulationContext_updateTrajectoryForSpk(
+      _simulationContext,
+      sceneId,
+      entityId,
+      spkId,
+      startEpochTaiSec,
+      endEpochTaiSec,
+      sampleStepDays
+    );
+
+    if (taskId != 0)
+    {
+      await PollTaskAsync(taskId);
+      return taskId;
+    }
+    return 0;
   }
 
   public void LoadDefaultAlmanacs()
@@ -1072,6 +1135,41 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return instanceId;
   }
 
+  public Entity? SpawnEntity(ulong sceneId, string name)
+  {
+    if (_simulationContext == IntPtr.Zero) return null;
+    ulong id = NativeInterop.avkSimulationContext_spawnEntity(_simulationContext, sceneId, name);
+    if (id > 0)
+    {
+      var entity = new Entity(sceneId, id, name);
+      var state = _sceneStateManager.GetOrCreateScene(sceneId);
+      state.EntityMap[id] = entity;
+      state.RootEntities.Add(entity);
+      WireEntityComponents(sceneId, entity);
+      return entity;
+    }
+    return null;
+  }
+
+  public bool SetParent(ulong sceneId, ulong entityId, ulong parentId)
+  {
+    if (_simulationContext == IntPtr.Zero) return false;
+    bool success = NativeInterop.avkSimulationContext_setParent(_simulationContext, sceneId, entityId, parentId);
+    if (success)
+    {
+      var state = _sceneStateManager.GetOrCreateScene(sceneId);
+      if (state.EntityMap.TryGetValue(entityId, out var entity) && state.EntityMap.TryGetValue(parentId, out var parent))
+      {
+         if (state.RootEntities.Contains(entity))
+         {
+           state.RootEntities.Remove(entity);
+         }
+         parent.Children.Add(entity);
+      }
+    }
+    return success;
+  }
+
   /// <summary>
   /// Synchronously spawns a comet entity hierarchy: an LCA micro-frame parent entity and
   /// the comet mesh child entity. Both are mirrored into the C# scene tree.
@@ -1127,6 +1225,63 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     lcaEntity.Children.Add(cometEntity);
 
     return (ffiResult.LcaFrameId, ffiResult.CometEntityId);
+  }
+
+  /// <summary>
+  /// Synchronously spawns a static mesh entity hierarchy: an LCA micro-frame parent entity and
+  /// the static mesh child entity. Both are mirrored into the C# scene tree.
+  /// </summary>
+  /// <returns>
+  /// A tuple of (lcaFrameId, meshEntityId). Both are 0 on failure.
+  /// </returns>
+  public (ulong lcaFrameId, ulong meshEntityId) SpawnStaticMesh(
+    ulong sceneId,
+    ulong modelId,
+    string entityName,
+    float posX, float posY, float posZ,
+    float rotW, float rotX, float rotY, float rotZ,
+    float radiusKm)
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return (0, 0);
+
+    bool ok = NativeInterop.avkSimulationContext_spawnStaticMesh(
+      _simulationContext, sceneId, modelId, entityName,
+      posX, posY, posZ, rotW, rotX, rotY, rotZ,
+      radiusKm,
+      out var ffiResult);
+
+    if (!ok)
+      return (0, 0);
+
+    var state = _sceneStateManager.GetOrCreateScene(sceneId);
+
+    // ── Mirror LCA micro-frame entity ────────────────────────────────────────
+    var lcaFrameName = $"{entityName}_microframe";
+    var lcaEntity = new Entity(sceneId, ffiResult.LcaFrameId, lcaFrameName);
+    state.EntityMap[ffiResult.LcaFrameId] = lcaEntity;
+    WireEntityComponents(sceneId, lcaEntity);
+    lcaEntity.Components.Add(new TransformComponent { PosX = posX, PosY = posY, PosZ = posZ });
+
+    // Nest under root
+    var root = GetEntityByName(sceneId, "root");
+    if (root != null)
+      root.Children.Add(lcaEntity);
+    else
+      state.RootEntities.Add(lcaEntity);
+
+    // ── Mirror static mesh entity ─────────────────────────────────────────────
+    var meshEntity = new Entity(sceneId, ffiResult.MeshEntityId, entityName);
+    state.EntityMap[ffiResult.MeshEntityId] = meshEntity;
+    WireEntityComponents(sceneId, meshEntity);
+    meshEntity.Components.Add(new TransformComponent());  // pos=0 in micro-frame
+    meshEntity.Components.Add(new SphericalGizmoComponent());
+    meshEntity.Components.Add(new ParticleEmitterCirclesComponent());
+
+    // Nest under LCA frame
+    lcaEntity.Children.Add(meshEntity);
+
+    return (ffiResult.LcaFrameId, ffiResult.MeshEntityId);
   }
 
   public string[] GetLoadedAlmanacFiles()

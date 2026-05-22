@@ -23,6 +23,7 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<HorizonJplService>();
     collection.AddSingleton<SceneStateManager>();
     collection.AddSingleton<NativeRuntimeService>();
+    collection.AddSingleton<TrajectoryManagerService>();
     collection.AddSingleton<FileWatcherService>();
     collection.AddSingleton<InputRegistry>();
   }

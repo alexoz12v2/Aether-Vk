@@ -78,11 +78,9 @@ struct Wrench {
     atomicAdd((w_ref).torque_y, (t).y); \
     atomicAdd((w_ref).torque_z, (t).z)
 
-// called at the end of the integrators
-void clear_wrench(inout Wrench w) {
-    w.force_x = 0.0; w.force_y = 0.0; w.force_z = 0.0;
-    w.torque_x = 0.0; w.torque_y = 0.0; w.torque_z = 0.0;
-}
+#define CLEAR_WRENCH(w) \
+    (w).force_x = 0.0; (w).force_y = 0.0; (w).force_z = 0.0; \
+    (w).torque_x = 0.0; (w).torque_y = 0.0; (w).torque_z = 0.0
 
 struct RigidBody {
     vec4 position_mass;       // xyz: world pos, w: mass

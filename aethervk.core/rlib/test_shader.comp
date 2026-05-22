@@ -1,0 +1,20 @@
+#version 450 core
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_scalar_block_layout : require
+
+layout(local_size_x = 1) in;
+
+layout(buffer_reference, scalar) buffer MultiBvhBuffer {
+    uint data[];
+};
+
+layout(push_constant, scalar) uniform PushConstants {
+    uint addr_lo;
+    uint addr_hi;
+} pc;
+
+void main() {
+    MultiBvhBuffer bvh = MultiBvhBuffer(uvec2(pc.addr_lo, pc.addr_hi));
+    bvh.data[0] = 1;
+}
