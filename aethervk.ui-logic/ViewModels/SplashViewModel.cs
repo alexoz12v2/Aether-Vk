@@ -30,6 +30,16 @@ public partial class SplashViewModel : ViewModelBase
         _runtimeService.InitializeSimulationContext("Vulkan", null, true);
       });
 
+      // Load ephemeris at startup
+      await _runtimeService.LoadAlmanacFileAsync("assets/planets/de442.bsp");
+
+      // Set time to Earth's 2020-01-01 position
+      if (_runtimeService.ParseEpochToTaiSec("2020-01-01 00:00:00 UTC", out var taiSec))
+      {
+        ulong defaultSceneId = 1; // Since InitializeSimulationContext creates scene ID 1
+        _runtimeService.SetSimulationTime(defaultSceneId, taiSec);
+      }
+
       success = true;
     }
     catch (Exception ex)

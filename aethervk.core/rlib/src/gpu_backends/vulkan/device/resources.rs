@@ -333,18 +333,15 @@ impl DiscardPool {
           allocator,
         }) => unsafe {
           vk_mem::ffi::vmaDestroyBuffer(allocator, buffer, alloc.get_raw());
+          core::mem::forget(alloc);
         },
         DiscardItem::Image(ImageDiscard {
           image,
           alloc,
           allocator,
         }) => unsafe {
-          aethervk_oshal_rlib::log!(
-            "Calling vmaDestroyImage for image {:#X} alloc {:#X}",
-            image.as_raw(),
-            alloc.get_raw() as usize
-          );
           vk_mem::ffi::vmaDestroyImage(allocator, image, alloc.get_raw());
+          core::mem::forget(alloc);
         },
         DiscardItem::Pipeline(pipeline) => {
           unsafe { device.destroy_pipeline(pipeline, None) };

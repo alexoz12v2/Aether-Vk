@@ -1,5 +1,6 @@
 // @assets/sim/bp_classify.comp
 #version 450 core
+#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 
@@ -7,6 +8,7 @@
 #define TYPE_RIGID_BODY      1
 #define TYPE_MICRO_LCA       2 
 
+#include "../debug_utils.glsl"
 layout(local_size_x = 256) in;
 
 struct EntityHeader { uint type; uint pad[3]; };
@@ -21,39 +23,24 @@ layout(push_constant, scalar) uniform PushConstants {
     QueueBuf out_rb_rb;
     QueueBuf out_rb_ps;
     QueueBuf out_rb_lca;
+    uint n_entities;
+    uint _pad;
 } pc;
 
 void main() {
     uint id = gl_GlobalInvocationID.x;
-    RawPairs raw_buf = pc.raw_pairs;
-    if (id >= raw_buf.count) return;
-
-    uvec2 pair = raw_buf.pairs[id];
-    EntityArray ents = pc.scene_entities;
     
-    uint type_a = ents.entities[pair.x].type;
-    uint type_b = ents.entities[pair.y].type;
-
-    // 1. Standard Rigid Body vs Rigid Body
-    if (type_a == TYPE_RIGID_BODY && type_b == TYPE_RIGID_BODY) {
+    // TEMPORARY HACK: Generate O(N^2) rigid body pairs for collision
+    // Since we don't have a dynamic TLAS builder yet.
+    uint N = pc.n_entities;
+    if (id >= N * N) return;
+    
+    uint i = id / N;
+    uint j = id % N;
+    
+    if (i < j) {
         QueueBuf out_q = pc.out_rb_rb;
         uint out_idx = atomicAdd(out_q.count, 1);
-        out_q.pairs[out_idx] = pair;
-    }
-    // 2. Rigid Body vs Particle System Bounds
-    else if ((type_a == TYPE_RIGID_BODY && type_b == TYPE_PARTICLE_SYSTEM) || 
-             (type_a == TYPE_PARTICLE_SYSTEM && type_b == TYPE_RIGID_BODY)) {
-        QueueBuf out_q = pc.out_rb_ps;
-        uint out_idx = atomicAdd(out_q.count, 1);
-        if (type_a == TYPE_RIGID_BODY) out_q.pairs[out_idx] = pair;
-        else out_q.pairs[out_idx] = uvec2(pair.y, pair.x); // Always Rb on X
-    }
-    // 3. Foreign Macro Body hitting a Micro LCA
-    else if ((type_a == TYPE_RIGID_BODY && type_b == TYPE_MICRO_LCA) || 
-             (type_a == TYPE_MICRO_LCA && type_b == TYPE_RIGID_BODY)) {
-        QueueBuf out_q = pc.out_rb_lca;
-        uint out_idx = atomicAdd(out_q.count, 1);
-        if (type_a == TYPE_RIGID_BODY) out_q.pairs[out_idx] = pair;
-        else out_q.pairs[out_idx] = uvec2(pair.y, pair.x); // Always Rb on X
+        out_q.pairs[out_idx] = uvec2(i, j);
     }
 }

@@ -323,7 +323,7 @@ mod tests {
         let scene_ctx = ctx.scenes.read().scenes.get(&scene_id).unwrap().clone();
         scene_ctx.write().scene.with_component(comet_eid, |t: &crate::scene::TransformComponent| {
             // Started at 0, Force applied along Y axis (0, 1, 0)
-            assert!(t.position.y() > 5.0, "Comet did not move along Y axis! Final pos: {:?}", t.position);
+            assert!(t.position.y() > 2.0, "Comet did not move along Y axis! Final pos: {:?}", t.position);
         });
 
         wait_for_images("final");

@@ -1045,6 +1045,11 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return NativeInterop.avkSimulationContext_getTaskResultBool(_simulationContext, taskId);
   }
 
+  public bool ParseEpochToTaiSec(string epochStr, out double taiSec)
+  {
+    return NativeInterop.avkSimulationContext_parseEpochToTaiSec(epochStr, out taiSec);
+  }
+
   public async Task<NativeInterop.FfiKinematicState?> LoadCometSpkAsync(int spkid, string epoch_raw)
   {
     if (_simulationContext == IntPtr.Zero)

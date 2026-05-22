@@ -906,6 +906,20 @@ fn process_command_internal(
           }
         }
 
+        // Update TransformComponent to match the Sun's position
+        let mut sun_pos = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero();
+        if let Some((sun_id, _)) =
+          scene_guard.scene.query1_first_res::<crate::scene::SunComponent, _, _>(|id, _| Some(id))
+        {
+          if let Some(pos) = scene_guard.scene.global_transform(sun_id).map(|t| t.position) {
+            sun_pos = pos;
+          }
+        }
+        
+        let _ = scene_guard.scene.with_component_mut(entity, |transform: &mut crate::scene::TransformComponent| {
+          transform.position = sun_pos;
+        });
+
         Ok(SimulationTaskResult::None)
       }
     LogicCommand::RaycastNdc {
@@ -1284,6 +1298,37 @@ fn dispatch_physics_step(
             }
             executed
           }
+          #[cfg(test)]
+          crate::simulation_api::structs::PhysicsEngineType::Mock(target) => {
+            let mut executed = Ok(None);
+            let kernels_enum = kernels_arc.read();
+            if let crate::simulation_api::structs::KernelsEnum::VulkanCompute(weak_front, dev_handle) = &*kernels_enum {
+              if let Some(front) = weak_front.as_frontend() {
+                let _ = front.with_device(*dev_handle, |device_dyn| {
+                  if let Some(vulkan_dev) = device_dyn.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>() {
+                    let mock_kernels = crate::gpu_backends::vulkan::mock_kernels::MockVulkanKernels {
+                        base: vulkan_dev,
+                        target,
+                        scene_id,
+                    };
+                    executed = crate::gpu_backends::simulation_step(
+                      &mock_kernels,
+                      &mut ps,
+                      scene_clone.as_ref(),
+                      0,
+                      dt_us,
+                      collisions_enabled,
+                    );
+                  }
+                  Ok(())
+                });
+              }
+            }
+            executed
+          }
+          #[cfg(not(test))]
+          #[cfg(test)]
+          crate::simulation_api::structs::PhysicsEngineType::Mock(_) => Ok(None),
         };
 
         crate::physics::handoff::SpheresOfInfluenceSystem::process_handoffs_par(

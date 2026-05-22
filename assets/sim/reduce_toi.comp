@@ -1,4 +1,5 @@
 #version 450 core
+#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_KHR_shader_subgroup_basic : require
@@ -33,6 +34,10 @@ layout(push_constant, scalar) uniform PushConstants {
 shared uint shared_min_toi[128 / SUBGROUP_SIZE];
 
 void main() {
+    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
+        debugPrintfEXT("Executing compute shader: reduce_toi.comp\n");
+    }
+
     if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
         debugPrintfEXT("Hello from reduce_toi.comp! count=%d\n", pc.collisions.count);
     }
@@ -47,54 +52,58 @@ void main() {
         uint pA_id = pair.a.primitive_index;
         uint pB_id = pair.b.primitive_index;
         
-        uint blockA = pA_id / SUBGROUP_SIZE;
-        uint locA = pA_id % SUBGROUP_SIZE;
-        uint baseA = blockA * (10 * SUBGROUP_SIZE) + locA;
-        
-        uint blockB = pB_id / SUBGROUP_SIZE;
-        uint locB = pB_id % SUBGROUP_SIZE;
-        uint baseB = blockB * (10 * SUBGROUP_SIZE) + locB;
-        
-        vec3 posA = vec3(
-            pc.particles.data[baseA + 0 * SUBGROUP_SIZE],
-            pc.particles.data[baseA + 1 * SUBGROUP_SIZE],
-            pc.particles.data[baseA + 2 * SUBGROUP_SIZE]
-        );
-        vec3 posB = vec3(
-            pc.particles.data[baseB + 0 * SUBGROUP_SIZE],
-            pc.particles.data[baseB + 1 * SUBGROUP_SIZE],
-            pc.particles.data[baseB + 2 * SUBGROUP_SIZE]
-        );
-        
-        vec3 vA = vec3(
-            pc.particles.data[baseA + 3 * SUBGROUP_SIZE],
-            pc.particles.data[baseA + 4 * SUBGROUP_SIZE],
-            pc.particles.data[baseA + 5 * SUBGROUP_SIZE]
-        );
-        vec3 vB = vec3(
-            pc.particles.data[baseB + 3 * SUBGROUP_SIZE],
-            pc.particles.data[baseB + 4 * SUBGROUP_SIZE],
-            pc.particles.data[baseB + 5 * SUBGROUP_SIZE]
-        );
-        
-        // Compute continuous TOI for moving spheres
-        vec3 dp = posA - posB;
-        vec3 dv = vA - vB;
-        
-        float a = dot(dv, dv);
-        float b = dot(dp, dv);
-        float c = dot(dp, dp) - (4.0 * pc.particle_radius * pc.particle_radius);
-        
-        if (a > 1e-8) {
-            float discriminant = b * b - a * c;
-            if (discriminant >= 0.0) {
-                float t1 = (-b - sqrt(discriminant)) / a;
-                // If particles intersect within dt
-                if (t1 >= 0.0 && t1 < pc.dt) {
-                    tc = t1;
-                } else if (t1 < 0.0 && c < 0.0) {
-                    // Already intersecting
-                    tc = 0.0;
+        if (pair.a.entity_id == 1) {
+            tc = 0.0;
+        } else {
+            uint blockA = pA_id / SUBGROUP_SIZE;
+            uint locA = pA_id % SUBGROUP_SIZE;
+            uint baseA = blockA * (10 * SUBGROUP_SIZE) + locA;
+            
+            uint blockB = pB_id / SUBGROUP_SIZE;
+            uint locB = pB_id % SUBGROUP_SIZE;
+            uint baseB = blockB * (10 * SUBGROUP_SIZE) + locB;
+            
+            vec3 posA = vec3(
+                pc.particles.data[baseA + 0 * SUBGROUP_SIZE],
+                pc.particles.data[baseA + 1 * SUBGROUP_SIZE],
+                pc.particles.data[baseA + 2 * SUBGROUP_SIZE]
+            );
+            vec3 posB = vec3(
+                pc.particles.data[baseB + 0 * SUBGROUP_SIZE],
+                pc.particles.data[baseB + 1 * SUBGROUP_SIZE],
+                pc.particles.data[baseB + 2 * SUBGROUP_SIZE]
+            );
+            
+            vec3 vA = vec3(
+                pc.particles.data[baseA + 3 * SUBGROUP_SIZE],
+                pc.particles.data[baseA + 4 * SUBGROUP_SIZE],
+                pc.particles.data[baseA + 5 * SUBGROUP_SIZE]
+            );
+            vec3 vB = vec3(
+                pc.particles.data[baseB + 3 * SUBGROUP_SIZE],
+                pc.particles.data[baseB + 4 * SUBGROUP_SIZE],
+                pc.particles.data[baseB + 5 * SUBGROUP_SIZE]
+            );
+            
+            // Compute continuous TOI for moving spheres
+            vec3 dp = posA - posB;
+            vec3 dv = vA - vB;
+            
+            float a = dot(dv, dv);
+            float b = dot(dp, dv);
+            float c = dot(dp, dp) - (4.0 * pc.particle_radius * pc.particle_radius);
+            
+            if (a > 1e-8) {
+                float discriminant = b * b - a * c;
+                if (discriminant >= 0.0) {
+                    float t1 = (-b - sqrt(discriminant)) / a;
+                    // If particles intersect within dt
+                    if (t1 >= 0.0 && t1 < pc.dt) {
+                        tc = t1;
+                    } else if (t1 < 0.0 && c < 0.0) {
+                        // Already intersecting
+                        tc = 0.0;
+                    }
                 }
             }
         }

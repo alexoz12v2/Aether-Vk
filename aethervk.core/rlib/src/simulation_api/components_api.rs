@@ -488,6 +488,57 @@ impl SimulationContext {
     }
     Ok(())
   }
+
+  /// TODO: Document this item
+  pub fn set_particle_emitter_circles_component(
+    &self,
+    scene_id: u64,
+    entity: u64,
+    circles: alloc::vec::Vec<crate::scene::EmissionCircle>,
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:set_particle_emitter_circles_component"
+    );
+    let mut found = false;
+    let _ = scene.write().scene.with_component_mut(
+      entity_id,
+      |c: &mut crate::scene::ParticleEmitterCirclesComponent| {
+        c.circles = circles.clone();
+        found = true;
+      },
+    );
+
+    if !found {
+      scene
+        .write()
+        .scene
+        .add_component(entity_id, crate::scene::ParticleEmitterCirclesComponent { circles })
+        .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?
+    }
+    Ok(())
+  }
+
+  /// TODO: Document this item
+  pub fn get_particle_emitter_circles_component(
+    &self,
+    scene_id: u64,
+    entity: u64,
+  ) -> EngineResult<alloc::vec::Vec<crate::scene::EmissionCircle>> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:get_particle_emitter_circles_component"
+    );
+    scene
+      .read()
+      .scene
+      .with_component(entity_id, |c: &crate::scene::ParticleEmitterCirclesComponent| c.circles.clone())
+      .ok_or(EngineError::InvalidOperation(
+        "component_api:get_particle_emitter_circles_component couldn't find component",
+      ))
+  }
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -17,15 +17,15 @@ pub fn generate_sparse_collisions(count: usize, valid_ratio: f32) -> Vec<SparseC
     let mut rng = rand::thread_rng();
     let mut data = Vec::with_capacity(count);
     for _ in 0..count {
-        let valid = if rng.gen::<f32>() < valid_ratio { 1 } else { 0 };
+        let valid = if rng.r#gen::<f32>() < valid_ratio { 1 } else { 0 };
         data.push(SparseCollisionData {
             valid,
-            prim_a: rng.gen::<u32>() % 1000,
-            prim_b: rng.gen::<u32>() % 1000,
-            toi: rng.gen::<f32>(),
+            prim_a: rng.r#gen::<u32>() % 1000,
+            prim_b: rng.r#gen::<u32>() % 1000,
+            toi: rng.r#gen::<f32>(),
             contact_normal: [0.0, 1.0, 0.0],
             contact_point: [0.0, 0.0, 0.0],
-            penetration_depth: rng.gen::<f32>(),
+            penetration_depth: rng.r#gen::<f32>(),
         });
     }
     data

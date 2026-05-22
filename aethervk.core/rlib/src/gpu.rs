@@ -2134,6 +2134,15 @@ pub trait Kernels: Send + Sync {
     particles: &Self::Buffer<f32>,
   ) -> EngineResult<Self::List<CollisionPair>>;
 
+  /// Evaluates narrow phase CCD for a list of broad-phase entity pairs.
+  fn narrow_ccd(
+    &self,
+    cmd: &mut Self::Cmd,
+    broadphase_pairs: &Self::List<CollisionPair>,
+    rigid_bodies: &Self::Buffer<RigidBodyImex>,
+    particles: &Self::Buffer<f32>,
+  ) -> EngineResult<Self::List<CollisionPair>>;
+
   /// Stream compaction shrink logic evaluated entirely on the GPU.
   fn compact_collisions(
     &self,

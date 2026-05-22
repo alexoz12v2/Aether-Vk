@@ -1,5 +1,6 @@
 // @assets/sim/bp_cross_lca.comp
 #version 450 core
+#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_EXT_scalar_block_layout : require
@@ -8,6 +9,7 @@
 
 #include "../bvh_utils.glsl"
 
+#include "../debug_utils.glsl"
 layout(local_size_x = 256) in;
 const uint SUBGROUPS_PER_WG = 256 / SUBGROUP_SIZE;
 
@@ -63,6 +65,13 @@ bool intersectAABB(vec3 amin, vec3 amax, vec3 bmin, vec3 bmax) {
 }
 
 void main() {
+    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
+        debugPrintfEXT("Executing compute shader: bp_cross_lca.comp\n");
+    }
+
+    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("Hello from bp_cross_lca.comp!\\n");
+    }
     uint subgroup_id = gl_SubgroupID;
     uint lane_id     = gl_SubgroupInvocationID;
     

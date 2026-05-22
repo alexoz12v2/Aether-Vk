@@ -35,6 +35,7 @@
 // Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
 
 #version 450 core
+#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference      : require
 #extension GL_EXT_scalar_block_layout   : require
 #extension GL_GOOGLE_include_directive  : require
@@ -42,27 +43,8 @@
 #include "../debug_utils.glsl"
 #include "imex_math.glsl"    // RigidBody, Wrench, quat_*, clear_wrench
 
-// ─── Buffer references ──────────────────────────────────────────────────────
-layout(buffer_reference, scalar, buffer_reference_align = 16) buffer RigidBodyArray {
-    RigidBody bodies[];
-};
-
 layout(buffer_reference, scalar, buffer_reference_align = 4) buffer WrenchArray {
     Wrench wrenches[];
-};
-
-struct ForceEmitter {
-    vec3 position;
-    float mu;
-    vec3 normal;
-    uint type_id;
-    float trunc_distance;
-    float scale_factor;
-    uint _pad[2];
-};
-
-layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer EmitterArray {
-    ForceEmitter emitters[];
 };
 
 // ─── Push constants (40 bytes) ──────────────────────────────────────────────
@@ -79,6 +61,10 @@ layout(push_constant, scalar) uniform PushConstants {
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
 void main() {
+    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
+        debugPrintfEXT("Executing compute shader: integrate_bodies_p3.comp\n");
+    }
+
     uint id = gl_GlobalInvocationID.x;
     if (id >= pc.n_bodies) return;
 

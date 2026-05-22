@@ -2,19 +2,17 @@
 #define PHYSICS_TYPES_GLSL
 
 struct RigidBody {
-    vec3 position;
-    float mass;
-    
-    // Stored column-major by std430/scalar
-    mat3 rotation;
-    
-    vec3 linear_velocity;
-    float _pad0;
-    
-    vec3 angular_velocity;
-    float _pad1;
-    
-    mat3 inertia_tensor;
+    vec4 position_mass;       // xyz: world pos, w: mass
+    vec4 orientation;         // quaternion (x,y,z,w)
+    vec4 linear_vel_drag;     // xyz: linear velocity, w: linear damping coeff
+    vec4 angular_vel_drag;    // xyz: angular velocity, w: angular damping coeff
+    vec4 inertia_tensor_inv;  // xyz: diagonal local inverse inertia
+    uint wrench_idx;          // Pointer to the associated accumulated Wrench
+    uint leaf_start_idx;      // Mapping to the first leaf Wrench (for rb_force_assign)
+    uint leaf_count;          // Number of leaves
+    uint shape_type;          // BVH_SHAPE_*
+    vec3 shape_extents;       // Dimensions
+    uint pad2;
 };
 
 layout(buffer_reference, scalar, buffer_reference_align = 16) buffer RigidBodyArray {

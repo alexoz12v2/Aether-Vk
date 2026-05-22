@@ -1,24 +1,45 @@
 #version 450 core
+#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
 
+#include "../debug_utils.glsl"
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
-layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer QueueBuf {
+struct SparseCollisionData {
+    
+    uint entity_a;
+    uint prim_a;
+    uint entity_b;
+    uint prim_b;
+    float toi;
+    vec3 contact_normal;
+    vec3 contact_point;
+    float penetration_depth;
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer SparseCollisions {
     uint count;
-    uvec2 pairs[];
+    SparseCollisionData data[];
 };
 
 layout(push_constant, scalar) uniform PushConstants {
-    QueueBuf sparse_in;
+    SparseCollisions sparse_in;
     PackedCollisions packed_out;
     uint total_elements;
 } pc;
 
 void main() {
+    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
+        debugPrintfEXT("Executing compute shader: stream_compact.comp\n");
+    }
+
+    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("Hello from stream_compact.comp!\n");
+    }
     uint id = gl_GlobalInvocationID.x;
     uint in_count = pc.sparse_in.count;
 
@@ -31,14 +52,14 @@ void main() {
     }
 
     if (id < in_count) {
-        uvec2 pair = pc.sparse_in.pairs[id];
-        pc.packed_out.pairs[id].a.entity_id = 0;
-        pc.packed_out.pairs[id].a.primitive_index = pair.x;
-        pc.packed_out.pairs[id].b.entity_id = 0;
-        pc.packed_out.pairs[id].b.primitive_index = pair.y;
-        pc.packed_out.pairs[id].toi = 0.0;
-        pc.packed_out.pairs[id].contact_normal = vec3(0, 1, 0);
-        pc.packed_out.pairs[id].contact_point = vec3(0, 0, 0);
-        pc.packed_out.pairs[id].penetration_depth = 0.0;
+        SparseCollisionData in_data = pc.sparse_in.data[id];
+        pc.packed_out.pairs[id].a.entity_id = in_data.entity_a;
+        pc.packed_out.pairs[id].a.primitive_index = in_data.prim_a;
+        pc.packed_out.pairs[id].b.entity_id = in_data.entity_b;
+        pc.packed_out.pairs[id].b.primitive_index = in_data.prim_b;
+        pc.packed_out.pairs[id].toi = in_data.toi;
+        pc.packed_out.pairs[id].contact_normal = in_data.contact_normal;
+        pc.packed_out.pairs[id].contact_point = in_data.contact_point;
+        pc.packed_out.pairs[id].penetration_depth = in_data.penetration_depth;
     }
 }

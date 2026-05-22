@@ -1,10 +1,12 @@
 #version 450 core
+#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_ballot : require
 
+#include "../debug_utils.glsl"
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
 layout(buffer_reference, scalar, buffer_reference_align = 16) buffer FloatArray {
@@ -53,6 +55,13 @@ layout(push_constant, scalar) uniform PushConstants {
 const uint SUBGROUP_SIZE = 32;
 
 void main() {
+    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
+        debugPrintfEXT("Executing compute shader: convert_particles.comp\n");
+    }
+
+    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("Hello from convert_particles.comp!\\n");
+    }
     uint total_particles = pc.atomic_counters.counts[0];
 
     // Only thread 0 writes the indirect command

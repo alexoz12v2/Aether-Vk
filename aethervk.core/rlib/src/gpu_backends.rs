@@ -135,6 +135,34 @@ pub fn get_available_kernels() -> Vec<&'static str> {
   kernels
 }
 
+struct AutoDiscard<T, F: FnMut(T)> {
+    value: Option<T>,
+    discard_fn: Option<F>,
+}
+impl<T, F: FnMut(T)> AutoDiscard<T, F> {
+    fn new(value: T, discard_fn: F) -> Self {
+        Self { value: Some(value), discard_fn: Some(discard_fn) }
+    }
+}
+impl<T, F: FnMut(T)> Drop for AutoDiscard<T, F> {
+    fn drop(&mut self) {
+        if let (Some(val), Some(mut f)) = (self.value.take(), self.discard_fn.take()) {
+            f(val);
+        }
+    }
+}
+impl<T, F: FnMut(T)> core::ops::Deref for AutoDiscard<T, F> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        self.value.as_ref().unwrap()
+    }
+}
+impl<T, F: FnMut(T)> core::ops::DerefMut for AutoDiscard<T, F> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.value.as_mut().unwrap()
+    }
+}
+
 /// Fixed Update Function in interval $t_0, t_1$
 /// Note that this function should be asynchronous with respect to the logic_thread,
 /// meaning this function should be dispatched inside the pool as a singleton tasklet.
@@ -176,17 +204,19 @@ where
     16 => build_scene_motion_tlas::<16>(physical_scene),
     _  => build_scene_motion_tlas::<32>(physical_scene),
   };
-  let motion_tlas = kernels.upload_motion_tlas(&mut cmd, &tlas_bytes)?;
+  let motion_tlas = AutoDiscard::new(kernels.upload_motion_tlas(&mut cmd, &tlas_bytes)?, |b| kernels.discard_tlas(b));
   let tlas_addr = motion_tlas.address();
 
   // ── 1. Build per-frame GPU buffers from ECS ───────────────────────────────
-  let kinematics = kernels.build_kinematic_bodies(&mut cmd, physical_scene, scene)?;
-  let (mut rigid_bodies, mut wrenches) =
-    kernels.build_rigid_bodies(&mut cmd, physical_scene, scene)?;
-  let (mut particles, particle_metadata) = kernels.build_particles(&mut cmd, scene)?;
-  let emitters = kernels.build_emitters(&mut cmd, scene)?;
+  let kinematics = AutoDiscard::new(kernels.build_kinematic_bodies(&mut cmd, physical_scene, scene)?, |b| kernels.discard_buffer(b));
+  let (rb_buf, wr_buf) = kernels.build_rigid_bodies(&mut cmd, physical_scene, scene)?;
+  let mut rigid_bodies = AutoDiscard::new(rb_buf, |b| kernels.discard_buffer(b));
+  let mut wrenches = AutoDiscard::new(wr_buf, |b| kernels.discard_buffer(b));
+  let (p_buf, particle_metadata) = kernels.build_particles(&mut cmd, scene)?;
+  let mut particles = AutoDiscard::new(p_buf, |b| kernels.discard_buffer(b));
+  let emitters = AutoDiscard::new(kernels.build_emitters(&mut cmd, scene)?, |b| kernels.discard_buffer(b));
   // Reference frames for LCA broad-phase (macro frame is always index 0)
-  let frames = kernels.build_frames(&mut cmd, physical_scene)?;
+  let frames = AutoDiscard::new(kernels.build_frames(&mut cmd, physical_scene)?, |b| kernels.discard_buffer(b));
 
   // ── 2. Sun position (for particle emission) ───────────────────────────────
   let mut sun_pos = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero();
@@ -214,9 +244,8 @@ where
     kernels.imex_integrate_bodies_p3(&mut cmd, &mut rigid_bodies, &mut wrenches, &emitters, dt)?;
 
     // Build motion BVH for self-gravity
-    let bvh = kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, dt)?;
+    let bvh = AutoDiscard::new(kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, dt)?, |b| kernels.discard_bvh(b));
     kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
-    kernels.discard_bvh(bvh);
 
     // VV corrector: v_{n+1/2} → v_{n+1} using F(x_{n+1})
     kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, dt, current_time)?;
@@ -226,7 +255,10 @@ where
       let dt = end_time - current_time;
 
       aethervk_oshal_rlib::log!("gpu_backends.rs: entering while loop");
-      let snapshot = kernels.snapshot_dynamics(&mut cmd, &rigid_bodies, &particles)?;
+      let snapshot = AutoDiscard::new(kernels.snapshot_dynamics(&mut cmd, &rigid_bodies, &particles)?, |s| {
+        kernels.discard_buffer(s.0);
+        kernels.discard_buffer(s.1);
+      });
 
       aethervk_oshal_rlib::log!("gpu_backends.rs: calling imex_integrate_particles_p1_p2");
       // ── IMEX integration to t_{n+1} ──
@@ -236,23 +268,23 @@ where
       aethervk_oshal_rlib::log!("gpu_backends.rs: calling imex_integrate_bodies_p3");
       kernels.imex_integrate_bodies_p3(&mut cmd, &mut rigid_bodies, &mut wrenches, &emitters, dt)?;
 
-      let bvh = kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, dt)?;
+      let bvh = AutoDiscard::new(kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, dt)?, |b| kernels.discard_bvh(b));
       kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
       kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, dt, current_time)?;
 
       // ── New broad-phase suite ─────────────────────────────────────────────
       // Allocate pair-list buffers (is_list=true → 16-byte header: [x,y,z,count])
-      let n_entities = (rigid_bodies.capacity() + particles.capacity()) as u32;
+      let n_entities = rigid_bodies.capacity() as u32 + (particles.capacity() as u32 / 32);
 
       // bp_clear: zero all four pair-list counters via raw BDAs
       // (The caller manages the pair-list buffers; for now we reuse bvh.address
       //  as a placeholder TLAS address until a proper TLAS builder is wired in.)
       let tlas_bvh_addr = tlas_addr;
-      let raw_pairs = kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 10_000)?;
-      let rb_rb_pairs = kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 4_000)?;
-      let rb_ps_pairs = kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 4_000)?;
-      let rb_lca_pairs = kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 2_000)?;
-      let query_leaves = kernels.build_leaves(&mut cmd, n_entities as usize)?;
+      let raw_pairs = AutoDiscard::new(kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 10_000)?, |b| kernels.discard_list(b));
+      let rb_rb_pairs = AutoDiscard::new(kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 4_000)?, |b| kernels.discard_list(b));
+      let rb_ps_pairs = AutoDiscard::new(kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 4_000)?, |b| kernels.discard_list(b));
+      let rb_lca_pairs = AutoDiscard::new(kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 2_000)?, |b| kernels.discard_list(b));
+      let query_leaves = AutoDiscard::new(kernels.build_leaves(&mut cmd, n_entities as usize)?, |b| kernels.discard_buffer(b));
 
       kernels.bp_clear(
         &mut cmd,
@@ -280,7 +312,7 @@ where
         n_entities * n_entities, // conservative upper bound on raw pairs
       )?;
       // Cross-LCA: only if micro-frames exist (frames.capacity() > 1)
-      let internal_pairs = kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 2_000)?;
+      let internal_pairs = AutoDiscard::new(kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 2_000)?, |b| kernels.discard_list(b));
       if frames.capacity() > 1 {
         kernels.bp_cross_lca(
           &mut cmd,
@@ -305,19 +337,16 @@ where
       )?;
 
       // ── Merge classified pairs → global collision list ────────────────────
-      // For now, merge rb_rb + rb_ps via compact_collisions
-      let globals = &rb_rb_pairs; // TODO: merge rb_rb + rb_ps + internal_pairs
-      let compacted = kernels.compact_collisions(&mut cmd, globals, time_collision_delta)?;
+      let globals = if frames.capacity() > 1 {
+        &*internal_pairs
+      } else {
+        &*rb_rb_pairs
+      };
+      let sparse_collisions = AutoDiscard::new(kernels.narrow_ccd(&mut cmd, globals, &rigid_bodies, &particles)?, |b| kernels.discard_list(b));
+      let compacted = AutoDiscard::new(kernels.compact_collisions(&mut cmd, &sparse_collisions, time_collision_delta)?, |b| kernels.discard_list(b));
 
-      let tc_buffer = kernels.find_earliest_collision(&mut cmd, &compacted)?;
+      let tc_buffer = AutoDiscard::new(kernels.find_earliest_collision(&mut cmd, &compacted)?, |b| kernels.discard_buffer(b));
       let tc_future = tc_buffer.enqueue_read_to_cpu(&mut cmd)?;
-
-      kernels.discard_bvh(bvh);
-      kernels.discard_list(raw_pairs);
-      kernels.discard_list(rb_lca_pairs);
-      kernels.discard_list(rb_ps_pairs);
-      kernels.discard_list(internal_pairs);
-      kernels.discard_buffer(query_leaves);
 
       let sync_info = cmd.submit()?;
       if let Some(sync) = sync_info {
@@ -352,10 +381,9 @@ where
         kernels.imex_integrate_bodies_p3(&mut cmd, &mut rigid_bodies, &mut wrenches, &emitters, t_c)?;
 
         let rewind_bvh =
-          kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, t_c)?;
+          AutoDiscard::new(kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, t_c)?, |b| kernels.discard_bvh(b));
         kernels.compute_self_gravity(&mut cmd, &rewind_bvh, &mut particles)?;
         kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, t_c, current_time)?;
-        kernels.discard_bvh(rewind_bvh);
 
         // Apply either an elastic or inelastic response at the proper time t_c
         kernels.apply_collision_responses(
@@ -366,12 +394,6 @@ where
           &compacted,
           inelastic,
         )?;
-
-        kernels.discard_list(compacted);
-        kernels.discard_list(rb_rb_pairs);
-        kernels.discard_buffer(tc_buffer);
-        kernels.discard_buffer(snapshot.0);
-        kernels.discard_buffer(snapshot.1);
 
         if inelastic {
           // If we resolved resting contact, integrate the remainder directly.
@@ -409,11 +431,6 @@ where
         }
       } else {
         // No collision before dt — accept the step.
-        kernels.discard_list(compacted);
-        kernels.discard_list(rb_rb_pairs);
-        kernels.discard_buffer(tc_buffer);
-        kernels.discard_buffer(snapshot.0);
-        kernels.discard_buffer(snapshot.1);
         aethervk_oshal_rlib::log!("gpu_backends.rs: calling kernels.write_back_to_scene!");
         current_time = end_time;
       }
@@ -422,16 +439,9 @@ where
 
 
   aethervk_oshal_rlib::log!("gpu_backends.rs: calling kernels.write_back_to_scene OUTSIDE LOOP!");
-  kernels.write_back_to_scene(&mut cmd, &rigid_bodies, &particles, &particle_metadata, physical_scene, scene)?;
+  let sync_info = kernels.write_back_to_scene(&mut cmd, &rigid_bodies, &particles, &particle_metadata, physical_scene, scene)?;
 
-  // Discard per-frame buffers via the timeline-safe discard pool.
-  kernels.discard_buffer(kinematics);
-  kernels.discard_buffer(rigid_bodies);
-  kernels.discard_buffer(wrenches);
-  kernels.discard_buffer(particles);
-  kernels.discard_buffer(emitters);
-  kernels.discard_buffer(frames);
-  kernels.discard_tlas(motion_tlas);
 
-  Ok(None)
+
+  Ok(sync_info)
 }

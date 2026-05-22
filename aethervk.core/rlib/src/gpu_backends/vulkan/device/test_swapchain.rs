@@ -435,8 +435,10 @@ mod tests {
     )
     .unwrap();
 
+    println!("Acquiring acq1...");
     let acq1 = engine.acquire_next_image(&log_device, &mut rollback).unwrap();
 
+    println!("Canceling image...");
     engine
       .cancel_image(
         &log_device,
@@ -446,9 +448,11 @@ mod tests {
       )
       .unwrap();
 
+    println!("Acquiring acq2...");
     let acq2 = engine.acquire_next_image(&log_device, &mut rollback).unwrap();
     assert_ne!(acq1.frame_index, acq2.frame_index);
 
+    println!("Simulating frame...");
     unsafe {
       let (image, _, present_sem) = engine.get_image_resources(acq2.image_index as usize);
       let (acquire_sem, submit_fence) = engine.get_frame_resources(acq2.frame_index as usize);
@@ -463,6 +467,7 @@ mod tests {
         submit_fence,
         [1.0, 0.0, 0.0, 1.0],
       );
+      println!("Submitting image...");
       let _ = engine
         .submit_image(
           &log_device,
@@ -473,7 +478,9 @@ mod tests {
         .unwrap();
     }
 
+    println!("Queue wait idle...");
     unsafe { device.queue_wait_idle(queue).unwrap() };
+    println!("Cleaning up...");
     rollback.defuse();
     engine.cleanup(&device);
     unsafe {

@@ -226,6 +226,57 @@ macro_rules! extract_pe {
 }
 
 #[macro_export]
+
+#[macro_export]
+macro_rules! wait_for_pe_direct {
+  ($map:expr, $h:expr) => {{
+    let mut retry_count = 0;
+    loop {
+      if let Some(entry) = $map.get(&$h) {
+        break Ok(entry);
+      }
+      if retry_count > 1_000_000 {
+        break Err(gpu_err_invalid_pe!());
+      }
+      retry_count += 1;
+      if retry_count < 1000 {
+        core::hint::spin_loop();
+      } else if retry_count < 2000 {
+        aethervk_oshal_rlib::os::native::this_thread::yield_now();
+      } else {
+        aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(
+          1,
+        ));
+      }
+    }
+  }};
+}
+
+#[macro_export]
+macro_rules! wait_for_pe_mut_direct {
+  ($map:expr, $h:expr) => {{
+    let mut retry_count = 0;
+    loop {
+      if let Some(entry) = $map.get_mut(&$h) {
+        break Ok(entry);
+      }
+      if retry_count > 1_000_000 {
+        break Err(gpu_err_invalid_pe!());
+      }
+      retry_count += 1;
+      if retry_count < 1000 {
+        core::hint::spin_loop();
+      } else if retry_count < 2000 {
+        aethervk_oshal_rlib::os::native::this_thread::yield_now();
+      } else {
+        aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(
+          1,
+        ));
+      }
+    }
+  }};
+}
+
 macro_rules! wait_for_pe {
   ($state:expr, $h:expr) => {{
     let mut retry_count = 0;
@@ -1545,6 +1596,11 @@ impl Drop for Device {
     aethervk_oshal_rlib::log!("Device::drop device_wait_idle complete. Starting cleanup...");
     let allocator = DebugTrackedRwLock::read(&self.res).allocator.allocator.as_allocator_view();
     self.kernels.cleanup(&self.device, allocator);
+
+    let arena_opt = self.res.read().frame_staging_arena.write().take();
+    if let Some(mut arena) = arena_opt {
+      arena.destroy(&self.res.read().allocator.allocator);
+    }
 
     DebugTrackedRwLock::write(&self.res).cleanup(&self.device);
 
@@ -2971,7 +3027,7 @@ impl RenderDevice for Device {
     let res_guard = DebugTrackedRwLock::read(&self.res);
     // lokcs maintained so that resources are not nuked
     let pe_lock = &res_guard.live_presentation_engines;
-    let pe = pe_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let pe = wait_for_pe_direct!(pe_lock, handle)?;
     let mesh_archetypes = DebugTrackedRwLock::read(&pe.archetypes().physical_mesh_render_archetype);
     let (pipeline_key, outline_pipeline_key) = {
       let archetype_ref = { mesh_archetypes.as_ref().ok_or(gpu_err_archetype_absent!()) }?;
@@ -3027,7 +3083,7 @@ impl RenderDevice for Device {
     crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read(handle, |state, h| {
         let live_pes = &state.live_presentation_engines;
-        let presentation_engine = live_pes.get(&h).ok_or(gpu_err_invalid_pe!())?;
+        let presentation_engine = wait_for_pe_direct!(live_pes, h)?;
         let archetype = DebugTrackedRwLock::read(
           &presentation_engine.archetypes().physical_mesh_render_archetype,
         );
@@ -3269,7 +3325,7 @@ impl RenderDevice for Device {
     let res_guard = DebugTrackedRwLock::read(&self.res);
     let (pipeline_key, outline_pipeline_key) = {
       let live_pes = &res_guard.live_presentation_engines;
-      let pe_lock = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let pe_lock = wait_for_pe_direct!(live_pes, handle)?;
       let pe = pe_lock;
       let archetypes = DebugTrackedRwLock::read(&pe.archetypes().physical_mesh2_render_archetype);
       if archetypes.as_ref().is_none() {
@@ -3313,7 +3369,7 @@ impl RenderDevice for Device {
     crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read(handle, |state, h| {
         let live_pes = &state.live_presentation_engines;
-        let pe_lock = live_pes.get(&h).ok_or(gpu_err_invalid_pe!())?;
+        let pe_lock = wait_for_pe_direct!(live_pes, h)?;
         let pe = pe_lock;
         let archetypes = DebugTrackedRwLock::read(&pe.archetypes().physical_mesh2_render_archetype);
         if archetypes.as_ref().is_none() {
@@ -4143,7 +4199,7 @@ impl RenderDevice for Device {
     // ensure that the archetype for billboards exists
     let res_guard = DebugTrackedRwLock::read(&self.res);
     let live_pes = &res_guard.live_presentation_engines;
-    let pe_lock = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let pe_lock = wait_for_pe_direct!(live_pes, handle)?;
     let pe = pe_lock;
     let archetype = DebugTrackedRwLock::read(&pe.archetypes().billboard_render_archetype);
     if archetype.as_ref().is_none() {
@@ -4292,7 +4348,7 @@ impl RenderDevice for Device {
 
     let res_guard = DebugTrackedRwLock::read(&self.res);
     let live_pes = &res_guard.live_presentation_engines;
-    let pe_lock = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let pe_lock = wait_for_pe_direct!(live_pes, handle)?;
     let pe = pe_lock;
     let archetype_guard = DebugTrackedRwLock::read(&pe.archetypes().particle_render_archetype);
     if archetype_guard.as_ref().is_none() {
@@ -4422,7 +4478,7 @@ impl RenderDevice for Device {
     let res_guard = DebugTrackedRwLock::read(&self.res);
     let live_pes = &res_guard.live_presentation_engines;
     let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
-    let pe_lock = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let pe_lock = wait_for_pe_direct!(live_pes, handle)?;
     let pe = pe_lock;
     let archetype_guard = DebugTrackedRwLock::read(&pe.archetypes().particle2_render_archetype);
     if archetype_guard.as_ref().is_none() {
@@ -4584,7 +4640,7 @@ impl RenderDevice for Device {
     let res_guard = DebugTrackedRwLock::read(&self.res);
     let live_pes = &res_guard.live_presentation_engines;
     let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
-    let pe_lock = live_pes.get_mut(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let pe_lock = wait_for_pe_mut_direct!(live_pes, handle)?;
     let mut pe = pe_lock;
     let mut archetype_guard =
       DebugTrackedRwLock::write(&pe.archetypes_mut().trajectory_render_archetype);
@@ -4932,7 +4988,7 @@ impl RenderDevice for Device {
     let res_guard = DebugTrackedRwLock::read(&self.res);
     let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
     let live_pes = &res_guard.live_presentation_engines;
-    let pe_lock = live_pes.get_mut(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let pe_lock = wait_for_pe_mut_direct!(live_pes, handle)?;
     let mut pe = pe_lock;
     let mut archetype_guard = DebugTrackedRwLock::write(&pe.archetypes_mut().ui_render_archetype);
     let archetype = archetype_guard.as_mut().ok_or(gpu_err_archetype_absent!())?;
@@ -5020,7 +5076,7 @@ impl RenderDevice for Device {
     let res_guard = DebugTrackedRwLock::read(&self.res);
     let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
     let live_pes = &res_guard.live_presentation_engines;
-    let pe_lock = live_pes.get_mut(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let pe_lock = wait_for_pe_mut_direct!(live_pes, handle)?;
     let mut pe = pe_lock;
     let mut archetype_guard =
       DebugTrackedRwLock::write(&pe.archetypes_mut().text2_render_archetype);
@@ -5103,7 +5159,7 @@ impl RenderDevice for Device {
 
     let res_guard = DebugTrackedRwLock::read(&self.res);
     let live_pes = &res_guard.live_presentation_engines;
-    let pe_lock = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let pe_lock = wait_for_pe_direct!(live_pes, handle)?;
     let pe = pe_lock;
     let mut archetype_guard = DebugTrackedRwLock::write(&pe.archetypes().particle_render_archetype);
     let archetype = archetype_guard.as_mut().ok_or(gpu_err_archetype_absent!())?;
@@ -5133,7 +5189,7 @@ impl RenderDevice for Device {
 
     let res_guard = DebugTrackedRwLock::read(&self.res);
     let live_pes = &res_guard.live_presentation_engines;
-    let pe_lock = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let pe_lock = wait_for_pe_direct!(live_pes, handle)?;
     let pe = pe_lock;
     let mut archetype_guard =
       DebugTrackedRwLock::write(&pe.archetypes().particle2_render_archetype);
@@ -6058,7 +6114,7 @@ impl RenderDevice for Device {
           gpu_invalid_arg!("couldn't get render mesh resource {:?}", physical_mesh_id),
         )?;
       let live_pes = &res_guard.live_presentation_engines;
-      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let pe = wait_for_pe_direct!(live_pes, handle)?;
 
       let physical_mesh_render_archetype_guard =
         DebugTrackedRwLock::read(&pe.archetypes().physical_mesh_render_archetype);
@@ -6120,7 +6176,7 @@ impl RenderDevice for Device {
 
     let res_guard = DebugTrackedRwLock::read(&self.res);
     let live_pes = &res_guard.live_presentation_engines;
-    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let pe = wait_for_pe_direct!(live_pes, handle)?;
 
     let layout = match archetype {
       ArchetypeId::Sun => DebugTrackedRwLock::read(&pe.archetypes().sun_render_archetype)
@@ -6861,7 +6917,7 @@ impl RenderDevice for Device {
     let (pipeline, layout, d) = {
       let res = DebugTrackedRwLock::read(&self.res);
       let live_pes = &res.live_presentation_engines;
-      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let pe = wait_for_pe_direct!(live_pes, handle)?;
       let billboard_render_archetype =
         DebugTrackedRwLock::read(&pe.archetypes().billboard_render_archetype);
       let billboard_render_archetype_ref =
@@ -6904,7 +6960,7 @@ impl RenderDevice for Device {
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let res = DebugTrackedRwLock::read(&self.res);
       let live_pes = &res.live_presentation_engines;
-      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let pe = wait_for_pe_direct!(live_pes, handle)?;
 
       let mut a_lock = DebugTrackedRwLock::write(&pe.archetypes().bvh_render_archetype);
       let bvh_render_archetype = a_lock.as_mut().ok_or(gpu_err_archetype_absent!())?;
@@ -6979,7 +7035,7 @@ impl RenderDevice for Device {
       let res = DebugTrackedRwLock::read(&self.res);
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let live_pes = &res.live_presentation_engines;
-      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let pe = wait_for_pe_direct!(live_pes, handle)?;
       let archetype_lock = DebugTrackedRwLock::read(&pe.archetypes().sphere_gizmo_render_archetype);
       let archetype = archetype_lock.as_ref().ok_or(gpu_err_archetype_absent!())?;
       let pipeline_key = archetype.pipeline_key;
@@ -7036,7 +7092,7 @@ impl RenderDevice for Device {
   ) -> GpuResult<PipelineKey> {
     let res = DebugTrackedRwLock::read(&self.res);
     let live_pes = &res.live_presentation_engines;
-    let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let pe = wait_for_pe_direct!(live_pes, handle)?;
     let archetype_lock = DebugTrackedRwLock::read(&pe.archetypes().sphere_gizmo_render_archetype);
     let archetype = archetype_lock.as_ref().ok_or(gpu_err_archetype_absent!())?;
     Ok(archetype.pipeline_key)
@@ -7058,7 +7114,7 @@ impl RenderDevice for Device {
       let res = DebugTrackedRwLock::read(&self.res);
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let live_pes = &res.live_presentation_engines;
-      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let pe = wait_for_pe_direct!(live_pes, handle)?;
       let archetype_lock = DebugTrackedRwLock::read(&pe.archetypes().sphere_gizmo_render_archetype);
       let archetype = archetype_lock.as_ref().ok_or(gpu_err_archetype_absent!())?;
 
@@ -7163,7 +7219,7 @@ impl RenderDevice for Device {
       let res = DebugTrackedRwLock::read(&self.res);
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let live_pes = &res.live_presentation_engines;
-      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let pe = wait_for_pe_direct!(live_pes, handle)?;
       let archetype_lock = DebugTrackedRwLock::read(&pe.archetypes().bvhwire2_render_archetype);
       let archetype = archetype_lock.as_ref().ok_or(gpu_err_archetype_absent!())?;
 
@@ -7239,7 +7295,7 @@ impl RenderDevice for Device {
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let live_pes = &res_guard.live_presentation_engines;
-      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let pe = wait_for_pe_direct!(live_pes, handle)?;
       let archetype_guard = DebugTrackedRwLock::read(&pe.archetypes().gizmo_render_archetype);
       if archetype_guard.is_none() {
         return Err(gpu_err_pipeline_absent!());
@@ -7285,7 +7341,7 @@ impl RenderDevice for Device {
     let (layout, ds) = {
       let res = DebugTrackedRwLock::read(&self.res);
       let live_pes = &res.live_presentation_engines;
-      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let pe = wait_for_pe_direct!(live_pes, handle)?;
       let sun_resource = DebugTrackedRwLock::read(&res.sun_resources);
       let sun_archetype = DebugTrackedRwLock::read(&pe.archetypes().sun_render_archetype);
       let layout = sun_archetype
@@ -7327,7 +7383,7 @@ impl RenderDevice for Device {
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let live_pes = &res_guard.live_presentation_engines;
-      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let pe = wait_for_pe_direct!(live_pes, handle)?;
       let archetype_guard = DebugTrackedRwLock::read(&pe.archetypes().particle_render_archetype);
       if archetype_guard.is_none() {
         return Err(gpu_err_archetype_absent!());
@@ -7374,7 +7430,7 @@ impl RenderDevice for Device {
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let live_pes = &res_guard.live_presentation_engines;
-      let pe = live_pes.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let pe = wait_for_pe_direct!(live_pes, handle)?;
       let archetype_guard = DebugTrackedRwLock::read(&pe.archetypes().particle2_render_archetype);
       if archetype_guard.is_none() {
         return Err(gpu_err_archetype_absent!());
@@ -7417,7 +7473,7 @@ impl RenderDevice for Device {
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let pe_lock = &res_guard.live_presentation_engines;
-      let pe = pe_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let pe = wait_for_pe_direct!(pe_lock, handle)?;
       let archetype_guard = DebugTrackedRwLock::read(&pe.archetypes().trajectory_render_archetype);
       if archetype_guard.is_none() {
         return Err(gpu_err_archetype_absent!());
@@ -7460,7 +7516,7 @@ impl RenderDevice for Device {
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let pe_lock = &res_guard.live_presentation_engines;
-      let pe = pe_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let pe = wait_for_pe_direct!(pe_lock, handle)?;
       let archetype_guard = DebugTrackedRwLock::read(&pe.archetypes().ui_render_archetype);
       if archetype_guard.is_none() {
         return Err(gpu_err_archetype_absent!());
@@ -7512,7 +7568,7 @@ impl RenderDevice for Device {
 
         // 2. Fetch Presentation Engine
         let live_pes = &state.live_presentation_engines;
-        let pe = live_pes.get(&h).ok_or(gpu_err_invalid_pe!())?;
+        let pe = wait_for_pe_direct!(live_pes, h)?;
 
         // 3. Fetch Archetype Arena
         let sky_render_archetype_guard =
@@ -7736,7 +7792,7 @@ impl RenderDevice for Device {
     let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
     let res_guard = DebugTrackedRwLock::read(&self.res);
     let pe_lock = &res_guard.live_presentation_engines;
-    let pe = pe_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+    let pe = wait_for_pe_direct!(pe_lock, handle)?;
     let minimap_render_archetype_guard =
       DebugTrackedRwLock::read(&pe.archetypes().minimap_render_archetype);
     if minimap_render_archetype_guard.is_none() {
@@ -7858,7 +7914,7 @@ impl RenderDevice for Device {
     let (pipeline, layout, set) = {
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let pe_lock = &res_guard.live_presentation_engines;
-      let pe = pe_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let pe = wait_for_pe_direct!(pe_lock, handle)?;
       let text_render_archetype_guard =
         DebugTrackedRwLock::read(&pe.archetypes().text_render_archetype);
       let archetype = text_render_archetype_guard.as_ref().ok_or(gpu_err_archetype_absent!())?;
@@ -8063,7 +8119,7 @@ impl RenderDevice for Device {
     crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |state, _| {
         let engine_lock = &state.live_presentation_engines;
-        let pe = engine_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+        let pe = wait_for_pe_direct!(engine_lock, handle)?;
 
         let (image, width, height) =
           if let swapchain::PresentationState::Windowless(windowless) = &*pe {
@@ -8492,7 +8548,7 @@ impl RenderDevice for Device {
     let pipeline = {
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let pe_lock = &res_guard.live_presentation_engines;
-      let pe = pe_lock.get(&handle).ok_or(gpu_err_invalid_pe!())?;
+      let pe = wait_for_pe_direct!(pe_lock, handle)?;
       let archetype_guard = DebugTrackedRwLock::read(&pe.archetypes().background_render_archetype);
       if archetype_guard.is_none() {
         return Err(gpu_err_archetype_absent!());
@@ -8577,7 +8633,7 @@ impl Device {
       .prepare_read(handle, |state, h| {
         // 2. Fetch Presentation Engine Extent
         let engine_lock = &state.live_presentation_engines;
-        let pe = engine_lock.get(&h).ok_or(gpu_err_invalid_pe!())?;
+        let pe = wait_for_pe_direct!(engine_lock, h)?;
         let (width, height) = pe.extent();
 
         // 3. Fetch Image

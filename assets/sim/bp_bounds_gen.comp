@@ -1,11 +1,13 @@
 // @assets/sim/bp_bounds_gen.comp
 #version 450 core
+#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "imex_math.glsl" // Grants dt_to_seconds()
 
+#include "../debug_utils.glsl"
 layout(local_size_x = 256) in;
 
 struct TLASLeaf {
@@ -24,6 +26,13 @@ layout(push_constant, scalar) uniform PushConstants {
 } pc;
 
 void main() {
+    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
+        debugPrintfEXT("Executing compute shader: bp_bounds_gen.comp\n");
+    }
+
+    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("Hello from bp_bounds_gen.comp!\\n");
+    }
     uint id = gl_GlobalInvocationID.x;
     if (id >= pc.total_entities) return;
 
@@ -33,10 +42,8 @@ void main() {
     RigidBody me = ents.entities[id];
     float dt = dt_to_seconds(pc.dt_us);
 
-    // Assuming shape_data is stored in a lookup or padded in RigidBody
-    // For brevity, we assume shape_extents is accessible
     vec3 center = me.position_mass.xyz;
-    vec3 extents = vec3(1.0); // Replace with actual extents lookup
+    vec3 extents = me.shape_extents;
     
     vec3 static_min = center - extents;
     vec3 static_max = center + extents;

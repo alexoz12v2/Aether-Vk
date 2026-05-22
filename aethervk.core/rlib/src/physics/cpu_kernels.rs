@@ -76,6 +76,7 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for CpuBuffer<T> {
 }
 
 /// TODO: Document this item
+#[derive(Clone)]
 pub struct CpuList<T> {
   pub data: Vec<T>,
 }
@@ -411,6 +412,16 @@ impl Kernels for CpuScalarKernels {
     kinematics: &Self::Buffer<KinematicBody>,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
+  ) -> EngineResult<Self::List<CollisionPair>> {
+    Ok(CpuList { data: alloc::vec::Vec::new() })
+  }
+
+  fn narrow_ccd(
+    &self,
+    _cmd: &mut Self::Cmd,
+    broadphase_pairs: &Self::List<CollisionPair>,
+    _rigid_bodies: &Self::Buffer<RigidBodyImex>,
+    _particles: &Self::Buffer<f32>,
   ) -> EngineResult<Self::List<CollisionPair>> {
     Ok(CpuList { data: alloc::vec::Vec::new() })
   }
@@ -758,6 +769,16 @@ impl Kernels for CpuSimdKernels {
     kinematics: &Self::Buffer<KinematicBody>,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
+  ) -> EngineResult<Self::List<CollisionPair>> {
+    Ok(CpuList { data: alloc::vec::Vec::new() })
+  }
+
+  fn narrow_ccd(
+    &self,
+    _cmd: &mut Self::Cmd,
+    broadphase_pairs: &Self::List<CollisionPair>,
+    _rigid_bodies: &Self::Buffer<RigidBodyImex>,
+    _particles: &Self::Buffer<f32>,
   ) -> EngineResult<Self::List<CollisionPair>> {
     Ok(CpuList { data: alloc::vec::Vec::new() })
   }
