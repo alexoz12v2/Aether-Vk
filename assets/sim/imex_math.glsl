@@ -2,6 +2,7 @@
 #define IMEX_MATH_GLSL
 
 #extension GL_EXT_shader_atomic_float : require
+#include "physics_types.glsl"
 
 // --- 1. 64-Bit Emulation Toolkit (uvec2) ---
 uvec2 add64(uvec2 a, uvec2 b) {
@@ -82,18 +83,6 @@ struct Wrench {
     (w).force_x = 0.0; (w).force_y = 0.0; (w).force_z = 0.0; \
     (w).torque_x = 0.0; (w).torque_y = 0.0; (w).torque_z = 0.0
 
-struct RigidBody {
-    vec4 position_mass;       // xyz: world pos, w: mass
-    vec4 orientation;         // quaternion (x,y,z,w)
-    vec4 linear_vel_drag;     // xyz: linear velocity, w: linear damping coeff
-    vec4 angular_vel_drag;    // xyz: angular velocity, w: angular damping coeff
-    vec4 inertia_tensor_inv;  // xyz: diagonal local inverse inertia
-    uint wrench_idx;          // Pointer to the associated accumulated Wrench
-    uint leaf_start_idx;      // Mapping to the first leaf Wrench (for rb_force_assign)
-    uint leaf_count;          // Number of leaves
-    uint pad2;
-};
-
 // --- 3. Quaternion & Rotation Utilities ---
 vec4 quat_conj(vec4 q) { return vec4(-q.xyz, q.w); }
 
@@ -115,6 +104,24 @@ vec3 quat_rotate(vec4 q, vec3 v) {
 // Inversely rotates a vector from world to local space
 vec3 quat_rotate_inv(vec4 q, vec3 v) {
     return quat_rotate(quat_conj(q), v);
+}
+
+mat3 quat_to_mat3(vec4 q) {
+    float xx = q.x * q.x;
+    float yy = q.y * q.y;
+    float zz = q.z * q.z;
+    float xy = q.x * q.y;
+    float xz = q.x * q.z;
+    float yz = q.y * q.z;
+    float wx = q.w * q.x;
+    float wy = q.w * q.y;
+    float wz = q.w * q.z;
+
+    return mat3(
+        1.0 - 2.0 * (yy + zz), 2.0 * (xy + wz),       2.0 * (xz - wy),
+        2.0 * (xy - wz),       1.0 - 2.0 * (xx + zz), 2.0 * (yz + wx),
+        2.0 * (xz + wy),       2.0 * (yz - wx),       1.0 - 2.0 * (xx + yy)
+    );
 }
 
 #endif // IMEX_MATH_GLSL

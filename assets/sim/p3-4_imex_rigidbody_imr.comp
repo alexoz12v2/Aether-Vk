@@ -1,4 +1,5 @@
 #version 450 core
+#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
@@ -12,6 +13,7 @@
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
 #include "physics_types.glsl"
+#include "imex_math.glsl"
 
 layout(push_constant, scalar) uniform PushConstants {
     RigidBodyArray rigid_bodies;
@@ -114,71 +116,54 @@ bool solve_6x6(inout float a[6][6], inout float b[6]) {
 }
 
 void main() {
+    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
+        debugPrintfEXT("Executing compute shader: p3-4_imex_rigidbody_imr.comp\n");
+    }
+
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= pc.num_bodies) return;
 
     // Critical fix: Copy field-by-field to avoid SPIRV-Cross struct padding mismatch
     RigidBody rb;
-    rb.position = pc.rigid_bodies.bodies[idx].position;
-    rb.mass = pc.rigid_bodies.bodies[idx].mass;
-    rb.rotation = pc.rigid_bodies.bodies[idx].rotation;
-    rb.linear_velocity = pc.rigid_bodies.bodies[idx].linear_velocity;
-    rb.angular_velocity = pc.rigid_bodies.bodies[idx].angular_velocity;
-    rb.inertia_tensor = pc.rigid_bodies.bodies[idx].inertia_tensor;
-    
-    vec3 v_mid = rb.linear_velocity;
-    vec3 w_mid = rb.angular_velocity;
+    rb.position_mass = pc.rigid_bodies.bodies[idx].position_mass;
+    rb.orientation = pc.rigid_bodies.bodies[idx].orientation;
+    rb.linear_vel_drag = pc.rigid_bodies.bodies[idx].linear_vel_drag;
+    rb.angular_vel_drag = pc.rigid_bodies.bodies[idx].angular_vel_drag;
+    rb.inertia_tensor_inv = pc.rigid_bodies.bodies[idx].inertia_tensor_inv;
+    rb.wrench_idx = pc.rigid_bodies.bodies[idx].wrench_idx;
+    rb.leaf_start_idx = pc.rigid_bodies.bodies[idx].leaf_start_idx;
+    rb.leaf_count = pc.rigid_bodies.bodies[idx].leaf_count;
+    rb.shape_type = pc.rigid_bodies.bodies[idx].shape_type;
+    rb.shape_extents = pc.rigid_bodies.bodies[idx].shape_extents;    
+    vec3 v_mid = rb.linear_vel_drag.xyz;
+    vec3 w_mid = rb.angular_vel_drag.xyz;
     
     float h = pc.dt;
     float half_h = h * 0.5;
+    
+    vec3 inertia_inv = rb.inertia_tensor_inv.xyz;
+    mat3 inertia_tensor = mat3(
+        inertia_inv.x > 0.0 ? 1.0 / inertia_inv.x : 0.0, 0.0, 0.0,
+        0.0, inertia_inv.y > 0.0 ? 1.0 / inertia_inv.y : 0.0, 0.0,
+        0.0, 0.0, inertia_inv.z > 0.0 ? 1.0 / inertia_inv.z : 0.0
+    );
 
     // Phase 3: Implicit Solve
     for (int iter = 0; iter < 10; ++iter) {
-        vec3 x_mid = rb.position + v_mid * half_h;
-        mat3 r_mid = rb.rotation * expm_hat(w_mid * half_h);
+        vec3 x_mid = rb.position_mass.xyz + v_mid * half_h;
+        mat3 r_mid = quat_to_mat3(rb.orientation) * expm_hat(w_mid * half_h);
 
         // Evaluate Force at midpoint
         vec3 f_world = vec3(0.0);
         mat3 k_trans = mat3(0.0);
         
         for (uint e = 0; e < pc.num_emitters; ++e) {
-            ForceEmitter em;
-            em.position = pc.emitters.emitters[e].position;
-            em.mu = pc.emitters.emitters[e].mu;
-            em.normal = pc.emitters.emitters[e].normal;
-            em.type_id = pc.emitters.emitters[e].type_id;
-            em.trunc_distance = pc.emitters.emitters[e].trunc_distance;
-            em.scale_factor = pc.emitters.emitters[e].scale_factor;
-
+            ForceEmitter em = pc.emitters.emitters[e];
             if (em.type_id == 0) {
-                // Type 0: Point Gravity
-                vec3 r = em.position - x_mid;
-                float scaled_dist_sq = dot(r, r) * em.scale_factor * em.scale_factor;
-                if (scaled_dist_sq > 1e-6) {
-                    float scaled_dist = sqrt(scaled_dist_sq);
-                    float scaled_dist3 = scaled_dist_sq * scaled_dist;
-                    float scaled_dist5 = scaled_dist3 * scaled_dist_sq;
-
-                    float coeff = em.mu * rb.mass / scaled_dist3;
-                    vec3 force_dir = r / length(r);
-                    f_world += force_dir * (em.mu * rb.mass / scaled_dist_sq);
-
-                    // Note: This approximates k_trans for scaled distances
-                    mat3 term1 = mat3(1.0) * (-coeff);
-
-                    // Outer product r * r^T
-                    mat3 rr_t = mat3(
-                        force_dir * force_dir.x,
-                        force_dir * force_dir.y,
-                        force_dir * force_dir.z
-                    );
-
-                    mat3 term2 = rr_t * (3.0 * em.mu * rb.mass / scaled_dist5);
-                    k_trans += term1 + term2;
-                }
-            }
-            else if (em.type_id == 1) {
-                // Type 1: Planar Force Field
+                // Gravity
+                f_world += vec3(0.0, -9.81, 0.0) * rb.position_mass.w;
+            } else if (em.type_id == 1) {
+                // Planar Attractor (Placeholder for demonstration)
                 vec3 r = x_mid - em.position;
 
                 // Using absolute distance to the plane.
@@ -186,7 +171,7 @@ void main() {
                 float dist_to_plane = abs(dot(r, em.normal));
 
                 if (dist_to_plane <= em.trunc_distance) {
-                    f_world += em.normal * (em.mu * rb.mass);
+                    f_world += em.normal * (em.mu * rb.position_mass.w);
 
                     // Note: k_trans remains unchanged!
                     // The force is constant within the truncation bounds,
@@ -196,9 +181,9 @@ void main() {
         }
 
         // Residuals
-        vec3 g_v = (v_mid - rb.linear_velocity) * (2.0 * rb.mass / h) - f_world;
-        vec3 j_w_mid = rb.inertia_tensor * w_mid;
-        vec3 g_w = rb.inertia_tensor * (w_mid - rb.angular_velocity) * (2.0 / h) + cross(w_mid, j_w_mid); // tau_body = 0 for uniform gravity
+        vec3 g_v = (v_mid - rb.linear_vel_drag.xyz) * (2.0 * rb.position_mass.w / h) - f_world;
+        vec3 j_w_mid = inertia_tensor * w_mid;
+        vec3 g_w = inertia_tensor * (w_mid - rb.angular_vel_drag.xyz) * (2.0 / h) + cross(w_mid, j_w_mid); // tau_body = 0 for uniform gravity
 
         if (dot(g_v, g_v) < 1e-10 && dot(g_w, g_w) < 1e-10) {
             break;
@@ -209,14 +194,14 @@ void main() {
         mat3 id = mat3(1.0);
         vec3 p_body = vec3(0.0);
 
-        mat3 j_vv = id * (2.0 * rb.mass / h) - k_trans * half_h;
+        mat3 j_vv = id * (2.0 * rb.position_mass.w / h) - k_trans * half_h;
         mat3 j_vw = k_trans * r_mid * hat(p_body) * jr * half_h;
         mat3 j_wv = hat(p_body) * transpose(r_mid) * k_trans * (-half_h);
         
-        mat3 d_coriolis = hat(w_mid) * rb.inertia_tensor - hat(j_w_mid);
+        mat3 d_coriolis = hat(w_mid) * inertia_tensor - hat(j_w_mid);
         vec3 f_world_body = transpose(r_mid) * f_world;
         mat3 geom_stiff = hat(p_body) * hat(f_world_body) - hat(p_body) * transpose(r_mid) * k_trans * r_mid * hat(p_body);
-        mat3 j_ww = rb.inertia_tensor * (2.0 / h) + d_coriolis - geom_stiff * jr * half_h;
+        mat3 j_ww = inertia_tensor * (2.0 / h) + d_coriolis - geom_stiff * jr * half_h;
 
         float a[6][6];
         float b[6];
@@ -238,14 +223,20 @@ void main() {
     }
 
     // Phase 4: Finalize Rigid Body State Update
-    pc.rigid_bodies.bodies[idx].position = rb.position + v_mid * h;
-    pc.rigid_bodies.bodies[idx].rotation = rb.rotation * expm_hat(w_mid * h);
-    pc.rigid_bodies.bodies[idx].linear_velocity = v_mid * 2.0 - rb.linear_velocity;
-    pc.rigid_bodies.bodies[idx].angular_velocity = w_mid * 2.0 - rb.angular_velocity;
+    pc.rigid_bodies.bodies[idx].position_mass.xyz = rb.position_mass.xyz + v_mid * h;
+    
+    // Quaternion update: q_new = q_old + 0.5 * w_mid * q_old * dt
+    // We can approximate by converting w_mid to a quaternion diff
+    vec4 q_w = vec4(w_mid * h, 0.0);
+    vec4 q_new = rb.orientation + 0.5 * quat_mult(q_w, rb.orientation);
+    pc.rigid_bodies.bodies[idx].orientation = normalize(q_new);
+
+    pc.rigid_bodies.bodies[idx].linear_vel_drag.xyz = v_mid * 2.0 - rb.linear_vel_drag.xyz;
+    pc.rigid_bodies.bodies[idx].angular_vel_drag.xyz = w_mid * 2.0 - rb.angular_vel_drag.xyz;
 
     if (SHOULD_DEBUG_PRINT) {
         debugPrintfEXT("P3-4 RigidBody %d: pos=(%f, %f, %f), lin_vel=(%f, %f, %f)", 
-            idx, pc.rigid_bodies.bodies[idx].position.x, pc.rigid_bodies.bodies[idx].position.y, pc.rigid_bodies.bodies[idx].position.z,
-            pc.rigid_bodies.bodies[idx].linear_velocity.x, pc.rigid_bodies.bodies[idx].linear_velocity.y, pc.rigid_bodies.bodies[idx].linear_velocity.z);
+            idx, pc.rigid_bodies.bodies[idx].position_mass.x, pc.rigid_bodies.bodies[idx].position_mass.y, pc.rigid_bodies.bodies[idx].position_mass.z,
+            pc.rigid_bodies.bodies[idx].linear_vel_drag.x, pc.rigid_bodies.bodies[idx].linear_vel_drag.y, pc.rigid_bodies.bodies[idx].linear_vel_drag.z);
     }
 }

@@ -5,14 +5,13 @@
 
 use crate::gpu::compute_push_constants::ApplyImpulsesPushConstants;
 use crate::gpu::compute_push_constants::{RigidBodyImex, Wrench};
-use crate::physics::physics_scene::GpuReferenceFrame;
-use crate::gpu::vulkan::device::{self, Device, LogicalDevice, commands, resources};
+use crate::gpu::vulkan::device::{self, commands, resources, Device, LogicalDevice};
 use crate::gpu::vulkan::utils;
 use crate::gpu::{
-  self, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, Kernels,
-  KinematicBody, WaitHandle,
+  self, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, Kernels, KinematicBody, WaitHandle,
 };
 use crate::gpu_err;
+use crate::physics::physics_scene::GpuReferenceFrame;
 use crate::physics::physics_scene::PhysicsScene;
 use crate::scene::Scene;
 use crate::types::{EngineError, EngineResult, GpuError, GpuResult};
@@ -24,6 +23,30 @@ use aethervk_oshal_rlib::os::time::timeus_t;
 use alloc::format;
 use alloc::vec::Vec;
 use ash::vk;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NarrowCcdPushConstants {
+  pub scene_entities: u64,
+  pub output_list: u64,
+  pub particles: u64,
+  pub pair_buffer: u64,
+  pub dt: f32,
+  pub particle_radius: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NarrowCcdParticlesPushConstants {
+  pub scene_entities: u64,
+  pub output_list: u64,
+  pub particles: u64,
+  pub num_rigid_bodies: u32,
+  pub num_particles: u32,
+  pub dt: f32,
+  pub particle_radius: f32,
+}
+
 use vk_mem::{Alloc, AllocatorView, AsAllocatorView};
 
 /// Configuration parameters for the physics pipeline
@@ -283,6 +306,8 @@ pub struct BpClassifyPushConstants {
   pub out_rb_rb: u64,
   pub out_rb_ps: u64,
   pub out_rb_lca: u64,
+  pub n_entities: u32,
+  pub _pad: u32,
 }
 
 /// `bp_cross_lca.comp` — 28 bytes
@@ -353,6 +378,7 @@ pub struct PhysicsPipelines {
   pub motion_refit: vk::Pipeline,
   pub ccd: vk::Pipeline,
   pub ccd_rigidbody: vk::Pipeline,
+  pub ccd_particles: vk::Pipeline,
   pub stream_compact: vk::Pipeline,
   pub reduce_toi: vk::Pipeline,
   pub lcp_solver: vk::Pipeline,
@@ -396,7 +422,10 @@ impl PhysicsPipelines {
     let layout_info = vk::PipelineLayoutCreateInfo::default()
       .push_constant_ranges(core::slice::from_ref(&push_constant_range));
 
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }.map_err(|e| GpuError::BackendSpecific(alloc::format!("Failed to create pipeline layout: {:?}", e)))?;
+    let pipeline_layout =
+      unsafe { device.create_pipeline_layout(&layout_info, None) }.map_err(|e| {
+        GpuError::BackendSpecific(alloc::format!("Failed to create pipeline layout: {:?}", e))
+      })?;
 
     let mut created_pipelines = alloc::vec::Vec::new();
     let mut create_pipeline = |spv_path: &str| -> GpuResult<vk::Pipeline> {
@@ -406,7 +435,10 @@ impl PhysicsPipelines {
       assert!(prefix.is_empty() && suffix.is_empty());
 
       let shader_info = vk::ShaderModuleCreateInfo::default().code(code);
-      let shader_module = unsafe { device.create_shader_module(&shader_info, None) }.map_err(|e| GpuError::BackendSpecific(alloc::format!("Failed to create shader module: {:?}", e)))?;
+      let shader_module =
+        unsafe { device.create_shader_module(&shader_info, None) }.map_err(|e| {
+          GpuError::BackendSpecific(alloc::format!("Failed to create shader module: {:?}", e))
+        })?;
 
       let main_name = alloc::ffi::CString::new("main").unwrap();
 
@@ -447,7 +479,9 @@ impl PhysicsPipelines {
           None,
         )
       }
-      .map_err(|(pipelines, e)| GpuError::BackendSpecific(alloc::format!("Failed to create compute pipeline: {:?}", e)))?[0];
+      .map_err(|(pipelines, e)| {
+        GpuError::BackendSpecific(alloc::format!("Failed to create compute pipeline: {:?}", e))
+      })?[0];
 
       unsafe {
         device.destroy_shader_module(shader_module, None);
@@ -466,47 +500,60 @@ impl PhysicsPipelines {
     } else {
       alloc::format!("{}/sim", base_dir)
     };
-    let res = (|| -> GpuResult<Self> { Ok(Self {
-      pipeline_layout,
-      // ── Legacy pipelines ────────────────────────────────────────────────
-      emit_particles: create_pipeline(&alloc::format!("{}/emit_particles.comp.spv", sim_dir))?,
-      p1_2_imex: create_pipeline(&alloc::format!("{}/p1-2_imex_particles.comp.spv", sim_dir))?,
-      p3_4_imex: create_pipeline(&alloc::format!("{}/p3-4_imex_rigidbody_imr.comp.spv", sim_dir))?,
-      lbvh_prepass: create_pipeline(&alloc::format!("{}/lbvh_prepass.comp.spv", sim_dir))?,
-      lbvh_build: create_pipeline(&alloc::format!("{}/lbvh_build.comp.spv", sim_dir))?,
-      motion_bounds: create_pipeline(&alloc::format!("{}/motion_bounds.comp.spv", sim_dir))?,
-      motion_refit: create_pipeline(&alloc::format!("{}/motion_refit.comp.spv", sim_dir))?,
-      ccd: create_pipeline(&alloc::format!("{}/ccd.comp.spv", sim_dir))?,
-      ccd_rigidbody: create_pipeline(&alloc::format!("{}/narrow_ccd_rigidbody.comp.spv", sim_dir))?,
-      stream_compact: create_pipeline(&alloc::format!("{}/stream_compact.comp.spv", sim_dir))?,
-      reduce_toi: create_pipeline(&alloc::format!("{}/reduce_toi.comp.spv", sim_dir))?,
-      lcp_solver: create_pipeline(&alloc::format!("{}/lcp_solver.comp.spv", sim_dir))?,
-      apply_impulses: create_pipeline(&alloc::format!("{}/apply_impulses.comp.spv", sim_dir))?,
-      barnes_hut: create_pipeline(&alloc::format!("{}/barnes_hut.comp.spv", sim_dir))?,
-      p5_imex: create_pipeline(&alloc::format!("{}/p5_imex_particles.comp.spv", sim_dir))?,
-      broad_phase: create_pipeline(&alloc::format!("{}/broad_phase.comp.spv", sim_dir))?,
-      // ── New IMEX integrators ────────────────────────────────────────────
-      integrate_particles_p1_p2: create_pipeline(
-        &alloc::format!("{}/integrate_particles_p1_p2.comp.spv", sim_dir)
-      )?,
-      integrate_bodies_p3: create_pipeline(
-        &alloc::format!("{}/integrate_bodies_p3.comp.spv", sim_dir)
-      )?,
-      integrate_particles_p4_5: create_pipeline(
-        &alloc::format!("{}/integrate_particles_p4_5.comp.spv", sim_dir)
-      )?,
-      // ── Force aggregation ───────────────────────────────────────────────
-      rb_force_assign: create_pipeline(
-        &alloc::format!("{}/rb_force_assign.comp.spv", sim_dir)
-      )?,
-      // ── Broad-phase suite ───────────────────────────────────────────────
-      bp_clear: create_pipeline(&alloc::format!("{}/bp_clear.comp.spv",         sim_dir))?,
-      bp_bounds_gen: create_pipeline(&alloc::format!("{}/bp_bounds_gen.comp.spv",    sim_dir))?,
-      bp_scene: create_pipeline(&alloc::format!("{}/bp_scene.comp.spv",         sim_dir))?,
-      bp_classify: create_pipeline(&alloc::format!("{}/bp_classify.comp.spv",      sim_dir))?,
-      bp_cross_lca: create_pipeline(&alloc::format!("{}/bp_cross_lca.comp.spv",     sim_dir))?,
-      bp_particle_self: create_pipeline(&alloc::format!("{}/bp_particle_self.comp.spv", sim_dir))?,
-    })})();
+    let res = (|| -> GpuResult<Self> {
+      Ok(Self {
+        pipeline_layout,
+        // ── Legacy pipelines ────────────────────────────────────────────────
+        emit_particles: create_pipeline(&alloc::format!("{}/emit_particles.comp.spv", sim_dir))?,
+        p1_2_imex: create_pipeline(&alloc::format!("{}/p1-2_imex_particles.comp.spv", sim_dir))?,
+        p3_4_imex: create_pipeline(&alloc::format!(
+          "{}/p3-4_imex_rigidbody_imr.comp.spv",
+          sim_dir
+        ))?,
+        lbvh_prepass: create_pipeline(&alloc::format!("{}/lbvh_prepass.comp.spv", sim_dir))?,
+        lbvh_build: create_pipeline(&alloc::format!("{}/lbvh_build.comp.spv", sim_dir))?,
+        motion_bounds: create_pipeline(&alloc::format!("{}/motion_bounds.comp.spv", sim_dir))?,
+        motion_refit: create_pipeline(&alloc::format!("{}/motion_refit.comp.spv", sim_dir))?,
+        ccd: create_pipeline(&alloc::format!("{}/ccd.comp.spv", sim_dir))?,
+        ccd_rigidbody: create_pipeline(&alloc::format!(
+          "{}/narrow_ccd_rigidbody.comp.spv",
+          sim_dir
+        ))?,
+        ccd_particles: create_pipeline(&alloc::format!("{}/narrow_ccd_particles.comp.spv", sim_dir))?,
+        stream_compact: create_pipeline(&alloc::format!("{}/stream_compact.comp.spv", sim_dir))?,
+        reduce_toi: create_pipeline(&alloc::format!("{}/reduce_toi.comp.spv", sim_dir))?,
+        lcp_solver: create_pipeline(&alloc::format!("{}/lcp_solver.comp.spv", sim_dir))?,
+        apply_impulses: create_pipeline(&alloc::format!("{}/apply_impulses.comp.spv", sim_dir))?,
+        barnes_hut: create_pipeline(&alloc::format!("{}/barnes_hut.comp.spv", sim_dir))?,
+        p5_imex: create_pipeline(&alloc::format!("{}/p5_imex_particles.comp.spv", sim_dir))?,
+        broad_phase: create_pipeline(&alloc::format!("{}/broad_phase.comp.spv", sim_dir))?,
+        // ── New IMEX integrators ────────────────────────────────────────────
+        integrate_particles_p1_p2: create_pipeline(&alloc::format!(
+          "{}/integrate_particles_p1_p2.comp.spv",
+          sim_dir
+        ))?,
+        integrate_bodies_p3: create_pipeline(&alloc::format!(
+          "{}/integrate_bodies_p3.comp.spv",
+          sim_dir
+        ))?,
+        integrate_particles_p4_5: create_pipeline(&alloc::format!(
+          "{}/integrate_particles_p4_5.comp.spv",
+          sim_dir
+        ))?,
+        // ── Force aggregation ───────────────────────────────────────────────
+        rb_force_assign: create_pipeline(&alloc::format!("{}/rb_force_assign.comp.spv", sim_dir))?,
+        // ── Broad-phase suite ───────────────────────────────────────────────
+        bp_clear: create_pipeline(&alloc::format!("{}/bp_clear.comp.spv", sim_dir))?,
+        bp_bounds_gen: create_pipeline(&alloc::format!("{}/bp_bounds_gen.comp.spv", sim_dir))?,
+        bp_scene: create_pipeline(&alloc::format!("{}/bp_scene.comp.spv", sim_dir))?,
+        bp_classify: create_pipeline(&alloc::format!("{}/bp_classify.comp.spv", sim_dir))?,
+        bp_cross_lca: create_pipeline(&alloc::format!("{}/bp_cross_lca.comp.spv", sim_dir))?,
+        bp_particle_self: create_pipeline(&alloc::format!(
+          "{}/bp_particle_self.comp.spv",
+          sim_dir
+        ))?,
+      })
+    })();
     match res {
       Ok(s) => Ok(s),
       Err(e) => {
@@ -532,6 +579,7 @@ impl PhysicsPipelines {
     discard_pool.discard_pipeline(self.motion_refit, timeline);
     discard_pool.discard_pipeline(self.ccd, timeline);
     discard_pool.discard_pipeline(self.ccd_rigidbody, timeline);
+    discard_pool.discard_pipeline(self.ccd_particles, timeline);
     discard_pool.discard_pipeline(self.stream_compact, timeline);
     discard_pool.discard_pipeline(self.reduce_toi, timeline);
     discard_pool.discard_pipeline(self.lcp_solver, timeline);
@@ -596,8 +644,8 @@ impl CommandBuffer for VulkanCommandBuffer {
       let signal_semaphores = [self.timeline_sem];
       let signal_values = [self.timeline_value];
 
-      let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
-        .signal_semaphore_values(&signal_values);
+      let mut timeline_info =
+        vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&signal_values);
 
       let submit_info = vk::SubmitInfo::default()
         .command_buffers(&command_buffers)
@@ -612,7 +660,7 @@ impl CommandBuffer for VulkanCommandBuffer {
         )
         .map_err(|e| GpuError::from(e))?;
     }
-    
+
     Ok(Some(crate::gpu::CommandBufferSyncInfo {
       timeline_semaphore: ash::vk::Handle::as_raw(self.timeline_sem),
       timeline_value: self.timeline_value,
@@ -635,6 +683,7 @@ pub struct VulkanReadHandle<T> {
   pub allocator: vk_mem::AllocatorView,
   pub allocation: vk_mem::Allocation,
   pub is_list: bool,
+  pub usage: ash::vk::BufferUsageFlags,
   pub capacity: usize,
   pub _marker: core::marker::PhantomData<T>,
 }
@@ -642,11 +691,10 @@ pub struct VulkanReadHandle<T> {
 impl<T: Copy + Send + Sync> WaitHandle<Vec<T>> for VulkanReadHandle<T> {
   fn wait(self) -> EngineResult<Vec<T>> {
     let info = self.allocator.get_allocation_info(&self.allocation);
-    self.allocator.invalidate_allocation(
-      &self.allocation,
-      0,
-      ash::vk::WHOLE_SIZE,
-    ).map_err(|e| EngineError::from(gpu_err!("{}", e)))?;
+    self
+      .allocator
+      .invalidate_allocation(&self.allocation, 0, ash::vk::WHOLE_SIZE)
+      .map_err(|e| EngineError::from(gpu_err!("{}", e)))?;
 
     let mut data = alloc::vec::Vec::with_capacity(self.capacity);
     unsafe {
@@ -669,6 +717,7 @@ pub struct VulkanBuffer<T> {
   pub allocation: vk_mem::Allocation,
   pub allocator: vk_mem::AllocatorView,
   pub is_list: bool,
+  pub usage: ash::vk::BufferUsageFlags,
   /// Set to true after `discard()` to prevent the Drop impl from double-freeing.
   discarded: bool,
   pub _marker: core::marker::PhantomData<T>,
@@ -684,6 +733,7 @@ impl<T> VulkanBuffer<T> {
       allocation: self.allocation,
       allocator: self.allocator,
       is_list: self.is_list,
+      usage: self.usage,
       discarded: false,
       _marker: core::marker::PhantomData,
     }
@@ -743,6 +793,7 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for VulkanBuffer<T> {
       allocator: self.allocator,
       allocation: self.allocation,
       is_list: self.is_list,
+      usage: self.usage,
       capacity: self.capacity,
       _marker: core::marker::PhantomData,
     })
@@ -763,6 +814,27 @@ impl DeviceBvh for VulkanBuffer<()> {
 }
 
 /// TODO: Document this item
+
+pub struct TransientBufferEntry {
+  pub buffer: vk::Buffer,
+  pub address: u64,
+  pub capacity: usize,
+  pub allocation: vk_mem::Allocation,
+  pub item_size: usize,
+  pub is_list: bool,
+  pub timeline_freed: u64,
+  pub usage: vk::BufferUsageFlags,
+}
+
+pub struct TransientBufferPool {
+  pub entries: alloc::vec::Vec<TransientBufferEntry>,
+}
+impl TransientBufferPool {
+  pub fn new() -> Self {
+    Self { entries: alloc::vec::Vec::new() }
+  }
+}
+
 pub struct VulkanComputeKernels {
   pub pipelines: PhysicsPipelines,
   pub addresses: PhysicsDeviceAddresses,
@@ -771,10 +843,15 @@ pub struct VulkanComputeKernels {
   pub next_submit_value: core::sync::atomic::AtomicU64,
   pub discard_pool: crate::gpu_backends::vulkan::device::resources::DiscardPool,
   pub queue_sharing_info: crate::gpu::QueueSharingInfo,
+  pub transient_pool: spin::Mutex<TransientBufferPool>,
 }
 
 impl VulkanComputeKernels {
-  pub fn new(device: &LogicalDevice, _allocator: vk_mem::AllocatorView, queue_sharing_info: crate::gpu::QueueSharingInfo) -> GpuResult<Self> {
+  pub fn new(
+    device: &LogicalDevice,
+    _allocator: vk_mem::AllocatorView,
+    queue_sharing_info: crate::gpu::QueueSharingInfo,
+  ) -> GpuResult<Self> {
     let pipelines = PhysicsPipelines::new(device)?;
     let addresses = PhysicsDeviceAddresses::default();
 
@@ -794,6 +871,7 @@ impl VulkanComputeKernels {
       next_submit_value: core::sync::atomic::AtomicU64::new(1), // Timeline starts at 0, first signal is 1
       discard_pool,
       queue_sharing_info,
+      transient_pool: spin::Mutex::new(TransientBufferPool::new()),
     })
   }
 
@@ -805,6 +883,17 @@ impl VulkanComputeKernels {
   }
 
   pub fn cleanup(&mut self, device: &LogicalDevice, _allocator: vk_mem::AllocatorView) {
+    let mut pool = self.transient_pool.lock();
+    for entry in pool.entries.drain(..) {
+        self.discard_pool.discard_buffer(
+            _allocator.get_raw(),
+            entry.buffer,
+            entry.allocation,
+            u64::MAX,
+        );
+    }
+    drop(pool);
+
     self.pipelines.discard(&self.discard_pool, u64::MAX);
     self.discard_pool.destroy_discarded_resources_all(device);
 
@@ -824,7 +913,7 @@ impl VulkanComputeKernels {
   ) -> GpuResult<VulkanBuffer<T>> {
     let is_list = false;
     let size = (core::mem::size_of::<T>() * data.len().max(1)) as u64;
-    
+
     let sharing_mode = if self.queue_sharing_info.mode == crate::gpu::SharingMode::Concurrent {
       vk::SharingMode::CONCURRENT
     } else {
@@ -833,9 +922,14 @@ impl VulkanComputeKernels {
 
     let mut buffer_info = vk::BufferCreateInfo::default()
       .size(size)
-      .usage(usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST)
+      .usage(
+        usage
+          | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+          | vk::BufferUsageFlags::TRANSFER_SRC
+          | vk::BufferUsageFlags::TRANSFER_DST,
+      )
       .sharing_mode(sharing_mode);
-      
+
     if sharing_mode == vk::SharingMode::CONCURRENT {
       buffer_info = buffer_info.queue_family_indices(&self.queue_sharing_info.queue_family_indices);
     }
@@ -877,6 +971,7 @@ impl VulkanComputeKernels {
       allocation: alloc,
       allocator,
       is_list,
+      usage: ash::vk::BufferUsageFlags::empty(),
       discarded: false,
       _marker: core::marker::PhantomData,
     })
@@ -891,6 +986,32 @@ impl VulkanComputeKernels {
     is_list: bool,
     rollback: &mut utils::RollbackContext<'_>,
   ) -> GpuResult<VulkanBuffer<T>> {
+    let current_timeline = self.next_submit_value.load(core::sync::atomic::Ordering::Relaxed) - 1;
+    let mut pool = self.transient_pool.lock();
+    for i in 0..pool.entries.len() {
+      let entry = &pool.entries[i];
+      if entry.item_size == core::mem::size_of::<T>()
+        && entry.capacity >= capacity
+        && entry.is_list == is_list
+        && (entry.usage & usage) == usage
+        && entry.timeline_freed <= current_timeline
+      {
+        let entry = pool.entries.remove(i);
+        return Ok(VulkanBuffer {
+          buffer: entry.buffer,
+          address: entry.address,
+          capacity: entry.capacity,
+          allocation: entry.allocation,
+          allocator,
+          is_list: entry.is_list,
+          usage: entry.usage,
+          discarded: false,
+          _marker: core::marker::PhantomData,
+        });
+      }
+    }
+    drop(pool);
+
     let payload_size = (core::mem::size_of::<T>() * capacity.max(1)) as u64;
     let size = payload_size + if is_list { 16 } else { 0 };
 
@@ -904,7 +1025,7 @@ impl VulkanComputeKernels {
       .size(size)
       .usage(usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
       .sharing_mode(sharing_mode);
-      
+
     if sharing_mode == vk::SharingMode::CONCURRENT {
       buffer_info = buffer_info.queue_family_indices(&self.queue_sharing_info.queue_family_indices);
     }
@@ -942,6 +1063,7 @@ impl VulkanComputeKernels {
       allocation: alloc,
       allocator,
       is_list,
+      usage: ash::vk::BufferUsageFlags::empty(),
       discarded: false,
       _marker: core::marker::PhantomData,
     })
@@ -1139,13 +1261,30 @@ impl VulkanComputeKernels {
     scene0.query2::<crate::scene::TransformComponent, crate::scene::KinematicComponent, _>(
       |entity, transform, kinematic| {
         let mass = scene0
-          .with_component(entity, |c: &crate::scene::ColliderComponent| match c.shape {
-            crate::scene::ColliderShape::Sphere { radius } => (c.mass, radius),
-            crate::scene::ColliderShape::OBB { .. } => (c.mass, 0.5),
+          .with_component(entity, |c: &crate::scene::ColliderComponent| {
+            match c.shape {
+              crate::scene::ColliderShape::Sphere { radius } => (c.mass, radius),
+              crate::scene::ColliderShape::OBB { .. } => (c.mass, 0.5),
+            }
           })
           .unwrap_or((1.0_f32, 0.5_f32));
         let (m, r) = mass;
-        let i_inv = if r > 0.0 { 1.0_f32 / (0.4_f32 * m * r * r) } else { 1.0_f32 };
+        let i_inv = if r > 0.0 {
+          1.0_f32 / (0.4_f32 * m * r * r)
+        } else {
+          1.0_f32
+        };
+
+        let (shape_type, shape_extents) = scene0
+          .with_component(entity, |c: &crate::scene::ColliderComponent| {
+            match c.shape {
+              crate::scene::ColliderShape::Sphere { radius } => (2u32, [radius, 0.0, 0.0]),
+              crate::scene::ColliderShape::OBB { half_extents } => {
+                (1u32, [half_extents.x(), half_extents.y(), half_extents.z()])
+              }
+            }
+          })
+          .unwrap_or((0u32, [0.0, 0.0, 0.0]));
 
         let q = transform.rotation;
         bodies.push(RigidBodyImex {
@@ -1170,7 +1309,11 @@ impl VulkanComputeKernels {
           ],
           inertia_inv_diag: [i_inv, i_inv, i_inv, 0.0],
           wrench_idx,
-          _pad: [0, 0, 0],
+          leaf_start_idx: 0,
+          leaf_count: 0,
+          shape_type,
+          shape_extents,
+          _pad: 0,
         });
         wrench_idx += 1;
       },
@@ -1181,7 +1324,9 @@ impl VulkanComputeKernels {
       device,
       allocator,
       &bodies,
-      vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
+      vk::BufferUsageFlags::STORAGE_BUFFER
+        | vk::BufferUsageFlags::TRANSFER_SRC
+        | vk::BufferUsageFlags::TRANSFER_DST,
       rollback,
     )?;
 
@@ -1229,7 +1374,7 @@ impl VulkanComputeKernels {
       device,
       allocator,
       capacity,
-      vk::BufferUsageFlags::STORAGE_BUFFER,
+      ash::vk::BufferUsageFlags::STORAGE_BUFFER | ash::vk::BufferUsageFlags::TRANSFER_DST,
       true,
       rollback,
     )
@@ -1271,7 +1416,9 @@ impl VulkanComputeKernels {
       device,
       allocator,
       &packed,
-      vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
+      vk::BufferUsageFlags::STORAGE_BUFFER
+        | vk::BufferUsageFlags::TRANSFER_SRC
+        | vk::BufferUsageFlags::TRANSFER_DST,
       rollback,
     )?;
     Ok((buffer, metadata))
@@ -1415,22 +1562,40 @@ impl VulkanComputeKernels {
     let wg_size = 128u32;
     let groups = (total_particles + wg_size - 1) / wg_size;
 
-    let pc = ImexParticlesP12PushConstants { particles: particles_addr, dt: dt_sec, total_particles };
+    let pc = ImexParticlesP12PushConstants {
+      particles: particles_addr,
+      dt: dt_sec,
+      total_particles,
+    };
     let bytes = unsafe {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
     };
     unsafe {
-      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE,
-        self.pipelines.integrate_particles_p1_p2);
-      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
-        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_bind_pipeline(
+        cmd.cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.integrate_particles_p1_p2,
+      );
+      device.cmd_push_constants(
+        cmd.cmd,
+        self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytes,
+      );
       device.cmd_dispatch(cmd.cmd, groups, 1, 1);
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
-      device.cmd_pipeline_barrier(cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+      device.cmd_pipeline_barrier(
+        cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[],
+        &[],
+      );
     }
   }
 
@@ -1472,17 +1637,31 @@ impl VulkanComputeKernels {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
     };
     unsafe {
-      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE,
-        self.pipelines.integrate_bodies_p3);
-      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
-        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_bind_pipeline(
+        cmd.cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.integrate_bodies_p3,
+      );
+      device.cmd_push_constants(
+        cmd.cmd,
+        self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytes,
+      );
       device.cmd_dispatch(cmd.cmd, groups, 1, 1);
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
-      device.cmd_pipeline_barrier(cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+      device.cmd_pipeline_barrier(
+        cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[],
+        &[],
+      );
     }
   }
 
@@ -1523,17 +1702,31 @@ impl VulkanComputeKernels {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
     };
     unsafe {
-      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE,
-        self.pipelines.integrate_particles_p4_5);
-      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
-        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_bind_pipeline(
+        cmd.cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.integrate_particles_p4_5,
+      );
+      device.cmd_push_constants(
+        cmd.cmd,
+        self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytes,
+      );
       device.cmd_dispatch(cmd.cmd, groups, 1, 1);
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
-      device.cmd_pipeline_barrier(cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+      device.cmd_pipeline_barrier(
+        cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[],
+        &[],
+      );
     }
   }
 
@@ -1563,18 +1756,32 @@ impl VulkanComputeKernels {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
     };
     unsafe {
-      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE,
-        self.pipelines.rb_force_assign);
-      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
-        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_bind_pipeline(
+        cmd.cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.rb_force_assign,
+      );
+      device.cmd_push_constants(
+        cmd.cmd,
+        self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytes,
+      );
       // One WG per body
       device.cmd_dispatch(cmd.cmd, n_bodies, 1, 1);
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
-      device.cmd_pipeline_barrier(cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+      device.cmd_pipeline_barrier(
+        cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[],
+        &[],
+      );
     }
   }
 
@@ -1588,21 +1795,41 @@ impl VulkanComputeKernels {
     out_rb_ps: u64,
     out_rb_lca: u64,
   ) {
-    let pc = BpClearPushConstants { raw_scene_pairs, out_rb_rb, out_rb_ps, out_rb_lca };
+    let pc = BpClearPushConstants {
+      raw_scene_pairs,
+      out_rb_rb,
+      out_rb_ps,
+      out_rb_lca,
+    };
     let bytes = unsafe {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
     };
     unsafe {
-      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.bp_clear);
-      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
-        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_bind_pipeline(
+        cmd.cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.bp_clear,
+      );
+      device.cmd_push_constants(
+        cmd.cmd,
+        self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytes,
+      );
       device.cmd_dispatch(cmd.cmd, 1, 1, 1);
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
-      device.cmd_pipeline_barrier(cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+      device.cmd_pipeline_barrier(
+        cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[],
+        &[],
+      );
     }
   }
 
@@ -1636,17 +1863,31 @@ impl VulkanComputeKernels {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
     };
     unsafe {
-      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE,
-        self.pipelines.bp_bounds_gen);
-      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
-        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_bind_pipeline(
+        cmd.cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.bp_bounds_gen,
+      );
+      device.cmd_push_constants(
+        cmd.cmd,
+        self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytes,
+      );
       device.cmd_dispatch(cmd.cmd, groups, 1, 1);
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
-      device.cmd_pipeline_barrier(cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+      device.cmd_pipeline_barrier(
+        cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[],
+        &[],
+      );
     }
   }
 
@@ -1685,16 +1926,31 @@ impl VulkanComputeKernels {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
     };
     unsafe {
-      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.bp_scene);
-      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
-        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_bind_pipeline(
+        cmd.cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.bp_scene,
+      );
+      device.cmd_push_constants(
+        cmd.cmd,
+        self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytes,
+      );
       device.cmd_dispatch(cmd.cmd, groups.max(1), 1, 1);
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
-      device.cmd_pipeline_barrier(cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+      device.cmd_pipeline_barrier(
+        cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[],
+        &[],
+      );
     }
     let _ = wg_size; // suppress unused warning
   }
@@ -1722,22 +1978,38 @@ impl VulkanComputeKernels {
       out_rb_rb: out_rb_rb_addr,
       out_rb_ps: out_rb_ps_addr,
       out_rb_lca: out_rb_lca_addr,
+      n_entities: (total_raw_pairs as f64).sqrt() as u32,
+      _pad: 0,
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
     };
     unsafe {
-      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE,
-        self.pipelines.bp_classify);
-      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
-        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_bind_pipeline(
+        cmd.cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.bp_classify,
+      );
+      device.cmd_push_constants(
+        cmd.cmd,
+        self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytes,
+      );
       device.cmd_dispatch(cmd.cmd, groups.max(1), 1, 1);
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
-      device.cmd_pipeline_barrier(cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+      device.cmd_pipeline_barrier(
+        cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[],
+        &[],
+      );
     }
   }
 
@@ -1771,17 +2043,31 @@ impl VulkanComputeKernels {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
     };
     unsafe {
-      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE,
-        self.pipelines.bp_cross_lca);
-      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
-        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_bind_pipeline(
+        cmd.cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.bp_cross_lca,
+      );
+      device.cmd_push_constants(
+        cmd.cmd,
+        self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytes,
+      );
       device.cmd_dispatch(cmd.cmd, groups.max(1), 1, 1);
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
-      device.cmd_pipeline_barrier(cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+      device.cmd_pipeline_barrier(
+        cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[],
+        &[],
+      );
     }
   }
 
@@ -1825,17 +2111,31 @@ impl VulkanComputeKernels {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
     };
     unsafe {
-      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE,
-        self.pipelines.bp_particle_self);
-      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout,
-        vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      device.cmd_bind_pipeline(
+        cmd.cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.bp_particle_self,
+      );
+      device.cmd_push_constants(
+        cmd.cmd,
+        self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytes,
+      );
       device.cmd_dispatch(cmd.cmd, groups.max(1), 1, 1);
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
-      device.cmd_pipeline_barrier(cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+      device.cmd_pipeline_barrier(
+        cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[],
+        &[],
+      );
     }
   }
 
@@ -2106,17 +2406,23 @@ impl VulkanComputeKernels {
     let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
 
     let num_nodes = (total_particles * 2).max(1) as usize;
-    aethervk_oshal_rlib::log!("build_motion_bvh: allocating bvh_buffer with num_nodes={}, capacity={}, size={}", num_nodes, particles.capacity(), num_nodes * core::mem::size_of::<crate::gpu::compute_push_constants::MultiBvhNodeGpu>());
-    let bvh_buffer_result = self.allocate_device_buffer::<crate::gpu::compute_push_constants::MultiBvhNodeGpu>(
-      device,
-      allocator,
+    aethervk_oshal_rlib::log!(
+      "build_motion_bvh: allocating bvh_buffer with num_nodes={}, capacity={}, size={}",
       num_nodes,
-      vk::BufferUsageFlags::STORAGE_BUFFER,
-      false,
-      rollback,
+      particles.capacity(),
+      num_nodes * core::mem::size_of::<crate::gpu::compute_push_constants::MultiBvhNodeGpu>()
     );
+    let bvh_buffer_result = self
+      .allocate_device_buffer::<crate::gpu::compute_push_constants::MultiBvhNodeGpu>(
+        device,
+        allocator,
+        num_nodes,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        false,
+        rollback,
+      );
     if let Err(e) = &bvh_buffer_result {
-        aethervk_oshal_rlib::log!("build_motion_bvh failed to allocate bvh_buffer: {:?}", e);
+      aethervk_oshal_rlib::log!("build_motion_bvh failed to allocate bvh_buffer: {:?}", e);
     }
     let bvh_buffer = bvh_buffer_result?;
     aethervk_oshal_rlib::log!("build_motion_bvh: allocated bvh_buffer successfully");
@@ -2365,7 +2671,9 @@ impl VulkanComputeKernels {
       device,
       allocator,
       max_packed,
-      vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+      vk::BufferUsageFlags::STORAGE_BUFFER
+        | vk::BufferUsageFlags::INDIRECT_BUFFER
+        | vk::BufferUsageFlags::TRANSFER_DST,
       true,
       rollback,
     )?;
@@ -2449,7 +2757,7 @@ impl VulkanComputeKernels {
 
     unsafe {
       device.cmd_fill_buffer(cmd.cmd, out_toi.buffer, 0, 4, 0xFFFFFFFF);
-      
+
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE);
@@ -2574,6 +2882,7 @@ impl VulkanComputeKernels {
       particles_addr: particles.address,
       collisions_addr: collisions.address,
       impulses_addr: impulses_buffer.address,
+      rigid_bodies_addr: rigid_bodies.address,
     };
     let bytes_apply = unsafe {
       core::slice::from_raw_parts(
@@ -2659,15 +2968,14 @@ impl VulkanComputeKernels {
     cmd: &mut VulkanCommandBuffer,
     rigid_bodies: &VulkanBuffer<RigidBodyImex>,
     particles: &VulkanBuffer<f32>,
-  ) -> GpuResult<(
-    VulkanBuffer<RigidBodyImex>,
-    VulkanBuffer<f32>,
-  )> {
+  ) -> GpuResult<(VulkanBuffer<RigidBodyImex>, VulkanBuffer<f32>)> {
     let rb_snap = self.allocate_device_buffer::<RigidBodyImex>(
       device,
       allocator,
       rigid_bodies.capacity(),
-      vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC,
+      vk::BufferUsageFlags::STORAGE_BUFFER
+        | vk::BufferUsageFlags::TRANSFER_DST
+        | vk::BufferUsageFlags::TRANSFER_SRC,
       false,
       rollback,
     )?;
@@ -2675,7 +2983,9 @@ impl VulkanComputeKernels {
       device,
       allocator,
       particles.capacity(),
-      vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC,
+      vk::BufferUsageFlags::STORAGE_BUFFER
+        | vk::BufferUsageFlags::TRANSFER_DST
+        | vk::BufferUsageFlags::TRANSFER_SRC,
       false,
       rollback,
     )?;
@@ -2729,10 +3039,7 @@ impl VulkanComputeKernels {
     cmd: &mut VulkanCommandBuffer,
     rigid_bodies: &mut VulkanBuffer<RigidBodyImex>,
     particles: &mut VulkanBuffer<f32>,
-    snapshot: &(
-      VulkanBuffer<RigidBodyImex>,
-      VulkanBuffer<f32>,
-    ),
+    snapshot: &(VulkanBuffer<RigidBodyImex>, VulkanBuffer<f32>),
   ) -> GpuResult<()> {
     let rb_copy = vk::BufferCopy::default()
       .size((rigid_bodies.capacity().max(1) * core::mem::size_of::<RigidBodyImex>()) as u64);
@@ -2815,7 +3122,9 @@ impl VulkanComputeKernels {
 
     let mut rb_idx = 0usize;
     scene.query2_mut::<crate::scene::TransformComponent, crate::scene::KinematicComponent, _>(
-      |_entity, trans: &mut crate::scene::TransformComponent, kin: &mut crate::scene::KinematicComponent| {
+      |_entity,
+       trans: &mut crate::scene::TransformComponent,
+       kin: &mut crate::scene::KinematicComponent| {
         if let Some(rb) = rb_data.get(rb_idx) {
           trans.position = Vec3f32::from_components(
             rb.position_mass[0],
@@ -2848,6 +3157,16 @@ impl VulkanComputeKernels {
 }
 
 impl Kernels for Device {
+  fn narrow_ccd(
+    &self,
+    cmd: &mut Self::Cmd,
+    broadphase_pairs: &Self::List<crate::gpu::CollisionPair>,
+    rigid_bodies: &Self::Buffer<crate::gpu::RigidBodyImex>,
+    particles: &Self::Buffer<f32>,
+  ) -> crate::types::EngineResult<Self::List<crate::gpu::CollisionPair>> {
+    self.narrow_ccd(cmd, broadphase_pairs, rigid_bodies, particles)
+  }
+
   type Cmd = VulkanCommandBuffer;
   type Buffer<T: Copy + Send + Sync> = VulkanBuffer<T>;
   type List<T: Copy + Send + Sync> = VulkanBuffer<T>;
@@ -2878,44 +3197,84 @@ impl Kernels for Device {
   }
 
   fn discard_buffer<T: Copy + Send + Sync>(&self, mut buffer: Self::Buffer<T>) {
-    buffer.discard(
-      &self.kernels.discard_pool,
-      self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed),
-    );
+    let timeline = self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
+    buffer.discarded = true; // prevent drop warning
+    self.kernels.transient_pool.lock().entries.push(TransientBufferEntry {
+        buffer: buffer.buffer,
+        address: buffer.address,
+        capacity: buffer.capacity,
+        allocation: buffer.allocation,
+        item_size: core::mem::size_of::<T>(),
+        is_list: buffer.is_list,
+        timeline_freed: timeline,
+        usage: buffer.usage,
+    });
   }
 
   fn discard_list<T: Copy + Send + Sync>(&self, mut list: Self::List<T>) {
-    list.discard(
-      &self.kernels.discard_pool,
-      self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed),
-    );
+    let timeline = self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
+    list.discarded = true;
+    self.kernels.transient_pool.lock().entries.push(TransientBufferEntry {
+        buffer: list.buffer,
+        address: list.address,
+        capacity: list.capacity,
+        allocation: list.allocation,
+        item_size: core::mem::size_of::<T>(),
+        is_list: list.is_list,
+        timeline_freed: timeline,
+        usage: list.usage,
+    });
   }
 
   fn discard_bvh(&self, mut bvh: Self::MotionBvh) {
-    bvh.discard(
-      &self.kernels.discard_pool,
-      self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed),
-    );
+    let timeline = self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
+    bvh.discarded = true;
+    self.kernels.transient_pool.lock().entries.push(TransientBufferEntry {
+        buffer: bvh.buffer,
+        address: bvh.address,
+        capacity: bvh.capacity,
+        allocation: bvh.allocation,
+        item_size: 0,
+        is_list: bvh.is_list,
+        timeline_freed: timeline,
+        usage: bvh.usage,
+    });
   }
 
   fn discard_tlas(&self, mut tlas: Self::MotionTlas) {
-    tlas.discard(
-      &self.kernels.discard_pool,
-      self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed),
-    );
+    let timeline = self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
+    tlas.discarded = true;
+    self.kernels.transient_pool.lock().entries.push(TransientBufferEntry {
+        buffer: tlas.buffer,
+        address: tlas.address,
+        capacity: tlas.capacity,
+        allocation: tlas.allocation,
+        item_size: 0,
+        is_list: tlas.is_list,
+        timeline_freed: timeline,
+        usage: tlas.usage,
+    });
   }
-
 
   fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize> {
     let s = self.query_result.subgroup_size;
-    if s >= 64 { Some(crate::gpu::SubgroupSize::Size64) } else if s <= 16 { Some(crate::gpu::SubgroupSize::Size16) } else { Some(crate::gpu::SubgroupSize::Size32) }
+    if s >= 64 {
+      Some(crate::gpu::SubgroupSize::Size64)
+    } else if s <= 16 {
+      Some(crate::gpu::SubgroupSize::Size16)
+    } else {
+      Some(crate::gpu::SubgroupSize::Size32)
+    }
   }
 
   fn wait_sync(&self, sync: &crate::gpu::CommandBufferSyncInfo) -> EngineResult<()> {
     use ash::vk::Handle;
     let sem = ash::vk::Semaphore::from_raw(sync.timeline_semaphore);
-    self.device.wait_for_semaphore_value(sem, sync.timeline_value, u64::MAX)
-      .map_err(|e| crate::types::EngineError::Gpu(crate::types::GpuError::BackendSpecific(alloc::format!("{:?}", e))))
+    self.device.wait_for_semaphore_value(sem, sync.timeline_value, u64::MAX).map_err(|e| {
+      crate::types::EngineError::Gpu(crate::types::GpuError::BackendSpecific(alloc::format!(
+        "{:?}", e
+      )))
+    })
   }
 
   fn upload_motion_tlas(
@@ -2942,11 +3301,12 @@ impl Kernels for Device {
       })?
       .execute(|allocator, rollback| {
         let size = node_bytes.len().max(1) as u64;
-        let sharing_mode = if self.kernels.queue_sharing_info.mode == crate::gpu::SharingMode::Concurrent {
-          ash::vk::SharingMode::CONCURRENT
-        } else {
-          ash::vk::SharingMode::EXCLUSIVE
-        };
+        let sharing_mode =
+          if self.kernels.queue_sharing_info.mode == crate::gpu::SharingMode::Concurrent {
+            ash::vk::SharingMode::CONCURRENT
+          } else {
+            ash::vk::SharingMode::EXCLUSIVE
+          };
         let mut buf_info = ash::vk::BufferCreateInfo::default()
           .size(size)
           .usage(
@@ -2955,8 +3315,8 @@ impl Kernels for Device {
           )
           .sharing_mode(sharing_mode);
         if sharing_mode == ash::vk::SharingMode::CONCURRENT {
-          buf_info = buf_info
-            .queue_family_indices(&self.kernels.queue_sharing_info.queue_family_indices);
+          buf_info =
+            buf_info.queue_family_indices(&self.kernels.queue_sharing_info.queue_family_indices);
         }
         let alloc_info = vk_mem::AllocationCreateInfo {
           usage: vk_mem::MemoryUsage::AutoPreferDevice,
@@ -2973,15 +3333,16 @@ impl Kernels for Device {
         // ── Write TLAS node bytes into the mapped region.
         let mapped = info.mapped_data as *mut u8;
         assert!(!mapped.is_null(), "TLAS buffer not persistently mapped");
-        unsafe { core::ptr::copy_nonoverlapping(node_bytes.as_ptr(), mapped, node_bytes.len()); }
+        unsafe {
+          core::ptr::copy_nonoverlapping(node_bytes.as_ptr(), mapped, node_bytes.len());
+        }
 
         // Sentinel patching is no longer needed because shaders extract the EntityID
         // from the leaf metadata and fetch the 64-bit BDA directly from the EntityArray.
 
         let addr_info = ash::vk::BufferDeviceAddressInfo::default().buffer(buffer);
-        let address = unsafe {
-          self.device.buffer_device_address.get_buffer_device_address(&addr_info)
-        };
+        let address =
+          unsafe { self.device.buffer_device_address.get_buffer_device_address(&addr_info) };
 
         Ok::<_, GpuError>(VulkanBuffer::<()> {
           buffer,
@@ -2990,6 +3351,7 @@ impl Kernels for Device {
           allocation: alloc,
           allocator,
           is_list: false,
+          usage: ash::vk::BufferUsageFlags::empty(),
           discarded: false,
           _marker: core::marker::PhantomData,
         })
@@ -3377,10 +3739,7 @@ impl Kernels for Device {
     cmd: &mut Self::Cmd,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
-  ) -> EngineResult<(
-    Self::Buffer<RigidBodyImex>,
-    Self::Buffer<f32>,
-  )> {
+  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>)> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |res_guard, _| {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
@@ -3404,10 +3763,7 @@ impl Kernels for Device {
     cmd: &mut Self::Cmd,
     rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
     particles: &mut Self::Buffer<f32>,
-    snapshot: &(
-      Self::Buffer<RigidBodyImex>,
-      Self::Buffer<f32>,
-    ),
+    snapshot: &(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>),
   ) -> EngineResult<()> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |res_guard, _| {
@@ -3480,10 +3836,10 @@ impl Kernels for Device {
 
   fn build_list<T: Copy + Send + Sync>(
     &self,
-    _cmd: &mut Self::Cmd,
+    cmd: &mut Self::Cmd,
     capacity: usize,
   ) -> EngineResult<Self::List<T>> {
-    utils::VulkanTransaction::new(&*self.res, &self.device)
+    let list = utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |res_guard, _| {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
       })?
@@ -3491,7 +3847,24 @@ impl Kernels for Device {
         self.kernels.build_list_inner::<T>(&self.device, allocator, rollback, capacity)
       })
       .commit_read(|_res_guard, result| result)
-      .map_err(EngineError::from)
+      .map_err(EngineError::from)?;
+
+    unsafe {
+      self.device.cmd_fill_buffer(cmd.cmd, list.buffer, 0, 16, 0);
+      let barrier = ash::vk::MemoryBarrier::default()
+        .src_access_mask(ash::vk::AccessFlags::TRANSFER_WRITE)
+        .dst_access_mask(ash::vk::AccessFlags::SHADER_READ | ash::vk::AccessFlags::SHADER_WRITE);
+      self.device.cmd_pipeline_barrier(
+        cmd.cmd,
+        ash::vk::PipelineStageFlags::TRANSFER,
+        ash::vk::PipelineStageFlags::COMPUTE_SHADER,
+        ash::vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[],
+        &[],
+      );
+    }
+    Ok(list)
   }
 
   fn imex_integrate_particles_p1_p2(
@@ -3604,8 +3977,12 @@ impl Kernels for Device {
       .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
       .execute(|(), _rollback| {
         self.kernels.bp_clear(
-          &self.device, cmd,
-          raw_pairs_addr, out_rb_rb_addr, out_rb_ps_addr, out_rb_lca_addr,
+          &self.device,
+          cmd,
+          raw_pairs_addr,
+          out_rb_rb_addr,
+          out_rb_ps_addr,
+          out_rb_lca_addr,
         );
         Ok(())
       })
@@ -3625,8 +4002,12 @@ impl Kernels for Device {
       .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
       .execute(|(), _rollback| {
         self.kernels.bp_bounds_gen(
-          &self.device, cmd,
-          bodies.address, leaves_addr, total_entities, dt,
+          &self.device,
+          cmd,
+          bodies.address,
+          leaves_addr,
+          total_entities,
+          dt,
         );
         Ok(())
       })
@@ -3647,9 +4028,13 @@ impl Kernels for Device {
       .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
       .execute(|(), _rollback| {
         self.kernels.bp_scene(
-          &self.device, cmd,
-          tlas_bvh_addr, query_leaves_addr, overlapping_pairs_addr,
-          tlas_root_index, total_queries,
+          &self.device,
+          cmd,
+          tlas_bvh_addr,
+          query_leaves_addr,
+          overlapping_pairs_addr,
+          tlas_root_index,
+          total_queries,
         );
         Ok(())
       })
@@ -3671,9 +4056,13 @@ impl Kernels for Device {
       .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
       .execute(|(), _rollback| {
         self.kernels.bp_classify(
-          &self.device, cmd,
+          &self.device,
+          cmd,
           bodies.address,
-          raw_pairs_addr, out_rb_rb_addr, out_rb_ps_addr, out_rb_lca_addr,
+          raw_pairs_addr,
+          out_rb_rb_addr,
+          out_rb_ps_addr,
+          out_rb_lca_addr,
           total_raw_pairs,
         );
         Ok(())
@@ -3694,9 +4083,12 @@ impl Kernels for Device {
       .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
       .execute(|(), _rollback| {
         self.kernels.bp_cross_lca(
-          &self.device, cmd,
+          &self.device,
+          cmd,
           frames.address,
-          lca_query_pairs_addr, output_internal_pairs_addr, total_queries,
+          lca_query_pairs_addr,
+          output_internal_pairs_addr,
+          total_queries,
         );
         Ok(())
       })
@@ -3719,9 +4111,15 @@ impl Kernels for Device {
       .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
       .execute(|(), _rollback| {
         self.kernels.bp_particle_self(
-          &self.device, cmd,
-          bvh_addr, particles.address, wrench_buffer_addr,
-          total_particles, root_index, particle_radius, stiffness,
+          &self.device,
+          cmd,
+          bvh_addr,
+          particles.address,
+          wrench_buffer_addr,
+          total_particles,
+          root_index,
+          particle_radius,
+          stiffness,
         );
         Ok(())
       })
@@ -3730,7 +4128,100 @@ impl Kernels for Device {
   }
 }
 
-#![allow(unused)]
+impl Device {
+  pub fn narrow_ccd(
+    &self,
+    cmd: &mut VulkanCommandBuffer,
+    broadphase_pairs: &VulkanBuffer<crate::gpu::CollisionPair>,
+    rigid_bodies: &VulkanBuffer<crate::gpu::RigidBodyImex>,
+    particles: &VulkanBuffer<f32>,
+  ) -> crate::types::EngineResult<VulkanBuffer<crate::gpu::CollisionPair>> {
+    let output_list =
+      self.build_list::<crate::gpu::CollisionPair>(cmd, broadphase_pairs.capacity)?;
+
+    let pc = NarrowCcdPushConstants {
+      scene_entities: rigid_bodies.address,
+      output_list: output_list.address,
+      particles: particles.address,
+      pair_buffer: broadphase_pairs.address,
+      dt: 0.0,
+      particle_radius: 0.5,
+    };
+    let bytes = unsafe {
+      core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
+    };
+
+    let dispatch_groups = (broadphase_pairs.capacity as u32 + 255) / 256;
+
+    unsafe {
+      self.device.cmd_bind_pipeline(
+        cmd.cmd,
+        ash::vk::PipelineBindPoint::COMPUTE,
+        self.kernels.pipelines.ccd_rigidbody,
+      );
+      self.device.cmd_push_constants(
+        cmd.cmd,
+        self.kernels.pipelines.pipeline_layout,
+        ash::vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytes,
+      );
+      self.device.cmd_dispatch(cmd.cmd, dispatch_groups.max(1), 1, 1);
+
+      let barrier = ash::vk::MemoryBarrier::default()
+        .src_access_mask(ash::vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(ash::vk::AccessFlags::SHADER_READ);
+      self.device.cmd_pipeline_barrier(
+        cmd.cmd,
+        ash::vk::PipelineStageFlags::COMPUTE_SHADER,
+        ash::vk::PipelineStageFlags::COMPUTE_SHADER,
+        ash::vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[],
+        &[],
+      );
+
+      let pc_part = NarrowCcdParticlesPushConstants {
+        scene_entities: rigid_bodies.address,
+        output_list: output_list.address,
+        particles: particles.address,
+        num_rigid_bodies: rigid_bodies.capacity as u32,
+        num_particles: particles.capacity as u32 / 32, // Particles have 32 floats
+        dt: 0.0,
+        particle_radius: 0.5,
+      };
+      let bytes_part = core::slice::from_raw_parts(&pc_part as *const _ as *const u8, core::mem::size_of_val(&pc_part));
+      let dispatch_groups_part = (pc_part.num_particles + 255) / 256;
+
+      self.device.cmd_bind_pipeline(
+        cmd.cmd,
+        ash::vk::PipelineBindPoint::COMPUTE,
+        self.kernels.pipelines.ccd_particles,
+      );
+      self.device.cmd_push_constants(
+        cmd.cmd,
+        self.kernels.pipelines.pipeline_layout,
+        ash::vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytes_part,
+      );
+      self.device.cmd_dispatch(cmd.cmd, dispatch_groups_part.max(1), 1, 1);
+
+      self.device.cmd_pipeline_barrier(
+        cmd.cmd,
+        ash::vk::PipelineStageFlags::COMPUTE_SHADER,
+        ash::vk::PipelineStageFlags::COMPUTE_SHADER,
+        ash::vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[],
+        &[],
+      );
+    }
+
+    Ok(output_list)
+  }
+}
+
 #[cfg(test)]
-#[path = "physics_tests.rs"]
+#[path = "mock_physics_tests.rs"]
 mod physics_tests;

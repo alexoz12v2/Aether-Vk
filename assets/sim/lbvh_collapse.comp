@@ -1,4 +1,5 @@
 #version 450 core
+#extension GL_EXT_debug_printf : enable
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
@@ -7,6 +8,7 @@
 #include "../bvh_utils.glsl"
 
 // Bind the local size to specialization constant ID 0 (SUBGROUP_SIZE)
+#include "../debug_utils.glsl"
 layout(local_size_x_id = 0) in;
 
 // Define a Write-Only version to avoid colliding with the readonly MultiBvhBuffer in bvh_utils.glsl
@@ -26,6 +28,13 @@ layout(push_constant, scalar) uniform PushConstants {
 } pc;
 
 void main() {
+    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
+        debugPrintfEXT("Executing compute shader: lbvh_collapse.comp\n");
+    }
+
+    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("Hello from lbvh_collapse.comp!\\n");
+    }
     uint multi_node_idx = gl_WorkGroupID.x;
     if (multi_node_idx >= pc.num_multi_nodes) return;
 

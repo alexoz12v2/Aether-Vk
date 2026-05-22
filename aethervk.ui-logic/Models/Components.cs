@@ -1,4 +1,7 @@
+using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Messaging;
@@ -435,15 +438,101 @@ public partial class EmissionCircleItem : ObservableObject
 /// <summary>
 /// Attaches a set of discrete circular particle-emission zones to a comet mesh entity.
 /// </summary>
-public partial class ParticleEmitterCirclesComponent : ObservableObject, IComponent
+public partial class ParticleEmitterCirclesComponent : NativeComponent
 {
-  public string Name => "Particle Emitter Circles";
+  public override string Name => "Particle Emitter Circles";
 
   public ObservableCollection<EmissionCircleItem> Circles { get; } = new();
+
+  private bool _isSyncing = false;
+
+  public ParticleEmitterCirclesComponent()
+  {
+    Circles.CollectionChanged += (s, e) =>
+    {
+      if (_isSyncing) return;
+      if (e.NewItems != null)
+      {
+        foreach (EmissionCircleItem item in e.NewItems)
+          item.PropertyChanged += Item_PropertyChanged;
+      }
+      if (e.OldItems != null)
+      {
+        foreach (EmissionCircleItem item in e.OldItems)
+          item.PropertyChanged -= Item_PropertyChanged;
+      }
+      PushToNativeImpl();
+    };
+  }
+
+  private void Item_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+  {
+    if (_isSyncing) return;
+    PushToNativeImpl();
+  }
 
   [CommunityToolkit.Mvvm.Input.RelayCommand]
   private void AddCircle() => Circles.Add(new EmissionCircleItem());
 
   [CommunityToolkit.Mvvm.Input.RelayCommand]
   private void RemoveCircle(EmissionCircleItem item) => Circles.Remove(item);
+
+  protected override bool ShouldPushToNative(string? propertyName) => true;
+
+  protected override void PushToNativeImpl()
+  {
+    if (SimulationContext == IntPtr.Zero) return;
+
+    var arr = new AetherVk.Logic.Services.NativeInterop.FfiEmissionCircle[Circles.Count];
+    for (int i = 0; i < Circles.Count; i++)
+    {
+      arr[i] = new AetherVk.Logic.Services.NativeInterop.FfiEmissionCircle
+      {
+        LatitudeRad = Circles[i].LatitudeDeg * (float)Math.PI / 180f,
+        LongitudeRad = Circles[i].LongitudeDeg * (float)Math.PI / 180f,
+        CircleRadiusFrac = Circles[i].CircleRadius,
+        Mass = Circles[i].Mass,
+        ColorR = Circles[i].ColorR,
+        ColorG = Circles[i].ColorG,
+        ColorB = Circles[i].ColorB,
+        ColorA = Circles[i].ColorA,
+      };
+    }
+    AetherVk.Logic.Services.NativeInterop.avkSimulationContext_setParticleEmitterCirclesComponent(
+      SimulationContext, SceneId, EntityId, arr, (uint)arr.Length);
+  }
+
+  protected override void PullFromNativeImpl()
+  {
+    if (SimulationContext == IntPtr.Zero) return;
+
+    uint maxCount = 64;
+    var arr = new AetherVk.Logic.Services.NativeInterop.FfiEmissionCircle[maxCount];
+    if (AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getParticleEmitterCirclesComponent(
+      SimulationContext, SceneId, EntityId, arr, maxCount, out uint actualCount))
+    {
+      _isSyncing = true;
+      foreach (var c in Circles)
+        c.PropertyChanged -= Item_PropertyChanged;
+      Circles.Clear();
+
+      for (int i = 0; i < actualCount; i++)
+      {
+        var item = new EmissionCircleItem
+        {
+          LatitudeDeg = arr[i].LatitudeRad * 180f / (float)Math.PI,
+          LongitudeDeg = arr[i].LongitudeRad * 180f / (float)Math.PI,
+          CircleRadius = arr[i].CircleRadiusFrac,
+          Mass = arr[i].Mass,
+          ColorR = arr[i].ColorR,
+          ColorG = arr[i].ColorG,
+          ColorB = arr[i].ColorB,
+          ColorA = arr[i].ColorA,
+        };
+        item.PropertyChanged += Item_PropertyChanged;
+        Circles.Add(item);
+      }
+      _isSyncing = false;
+    }
+  }
 }

@@ -499,6 +499,96 @@ pub unsafe extern "C" fn avkSimulationContext_getTransformComponent(
   }
 }
 
+#[repr(C)]
+pub struct FfiEmissionCircle {
+  pub latitude_rad: f32,
+  pub longitude_rad: f32,
+  pub circle_radius_frac: f32,
+  pub mass: f32,
+  pub color_r: f32,
+  pub color_g: f32,
+  pub color_b: f32,
+  pub color_a: f32,
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setParticleEmitterCirclesComponent(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  circles: *const FfiEmissionCircle,
+  count: u32,
+) -> bool {
+  if ctx.is_null() || (count > 0 && circles.is_null()) {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+
+  let slice = if count > 0 {
+    unsafe { core::slice::from_raw_parts(circles, count as usize) }
+  } else {
+    &[]
+  };
+
+  let mut rust_circles = alloc::vec::Vec::with_capacity(slice.len());
+  for c in slice {
+    rust_circles.push(aethervk_core_rlib::scene::EmissionCircle {
+      latitude_rad: c.latitude_rad,
+      longitude_rad: c.longitude_rad,
+      circle_radius_frac: c.circle_radius_frac,
+      mass: c.mass,
+      color: [c.color_r, c.color_g, c.color_b, c.color_a],
+    });
+  }
+
+  ctx_ref.set_particle_emitter_circles_component(scene_id, entity, rust_circles).is_ok()
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getParticleEmitterCirclesComponent(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  out_circles: *mut FfiEmissionCircle,
+  max_count: u32,
+  out_actual_count: *mut u32,
+) -> bool {
+  if ctx.is_null() || out_actual_count.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+
+  if let Ok(circles) = ctx_ref.get_particle_emitter_circles_component(scene_id, entity) {
+    let actual_count = circles.len() as u32;
+    unsafe {
+      *out_actual_count = actual_count;
+    }
+
+    if !out_circles.is_null() && max_count > 0 {
+      let copy_count = core::cmp::min(max_count, actual_count) as usize;
+      let out_slice = unsafe { core::slice::from_raw_parts_mut(out_circles, copy_count) };
+      for i in 0..copy_count {
+        let c = &circles[i];
+        out_slice[i] = FfiEmissionCircle {
+          latitude_rad: c.latitude_rad,
+          longitude_rad: c.longitude_rad,
+          circle_radius_frac: c.circle_radius_frac,
+          mass: c.mass,
+          color_r: c.color[0],
+          color_g: c.color[1],
+          color_b: c.color[2],
+          color_a: c.color[3],
+        };
+      }
+    }
+    true
+  } else {
+    false
+  }
+}
+
 // --- Queries ---
 
 #[unsafe(no_mangle)]
@@ -645,6 +735,28 @@ pub unsafe extern "C" fn avkSimulationContext_unloadAlmanacFile(
 // TODO C# side: builder/helper functions for strings suppoerted by `anise::time::Epoch::from_str("2024-03-24 12:00:00 TDB")`
 // alternative (nah): Epoch::from_gregorian_utc_at_midnight(2000, 1, 1). But string is more precise
 // TODO C# side: update
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_parseEpochToTaiSec(
+  epoch_raw: *const core::ffi::c_char,
+  out_tai_sec: *mut f64,
+) -> bool {
+  if epoch_raw.is_null() || out_tai_sec.is_null() {
+    return false;
+  }
+  let epoch_opt = unsafe { core::ffi::CStr::from_ptr(epoch_raw) }
+    .to_str()
+    .ok()
+    .and_then(|epoch_str| anise::time::Epoch::from_str(epoch_str).ok());
+
+  if let Some(epoch) = epoch_opt {
+    unsafe { *out_tai_sec = epoch.to_tai_seconds() };
+    true
+  } else {
+    false
+  }
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_loadCometSpk(

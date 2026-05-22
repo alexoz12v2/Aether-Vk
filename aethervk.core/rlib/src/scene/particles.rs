@@ -282,3 +282,28 @@ pub struct ParticleEmitterCirclesComponent {
 }
 
 impl Component for ParticleEmitterCirclesComponent {}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_particle_emitter_circles_component_default() {
+    let comp = ParticleEmitterCirclesComponent::default();
+    assert!(comp.circles.is_empty());
+  }
+
+  #[test]
+  fn test_particle_emitter_circles_component_add() {
+    let mut comp = ParticleEmitterCirclesComponent::default();
+    comp.circles.push(EmissionCircle {
+      latitude_rad: 0.5,
+      longitude_rad: 1.0,
+      circle_radius_frac: 0.1,
+      mass: 1.0,
+      color: [1.0, 1.0, 1.0, 1.0],
+    });
+    assert_eq!(comp.circles.len(), 1);
+    assert_eq!(comp.circles[0].latitude_rad, 0.5);
+  }
+}

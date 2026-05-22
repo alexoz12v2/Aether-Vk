@@ -367,6 +367,10 @@ public static class NativeInterop
   public static extern ulong avkSimulationContext_unloadAlmanacFile(IntPtr ctx, string path);
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_parseEpochToTaiSec(string epoch_raw, out double taiSec);
+
+  [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_loadCometSpk(
     IntPtr ctx,
     int spkid,
@@ -834,5 +838,39 @@ public static class NativeInterop
     ulong taskId,
     IntPtr bufferPtr,
     nuint bufferSize
+  );
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct FfiEmissionCircle
+  {
+    public float LatitudeRad;
+    public float LongitudeRad;
+    public float CircleRadiusFrac;
+    public float Mass;
+    public float ColorR;
+    public float ColorG;
+    public float ColorB;
+    public float ColorA;
+  }
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_setParticleEmitterCirclesComponent(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entity,
+    [In, MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 4)] FfiEmissionCircle[] circles,
+    uint count
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_getParticleEmitterCirclesComponent(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entity,
+    [Out, MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 4)] FfiEmissionCircle[] circles,
+    uint maxCount,
+    out uint actualCount
   );
 }

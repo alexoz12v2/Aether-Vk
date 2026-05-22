@@ -52,7 +52,11 @@ pub struct RigidBodyImex {
   pub inertia_inv_diag: [f32; 4],
   /// Index into the per-frame `WrenchArray` buffer.
   pub wrench_idx: u32,
-  pub _pad: [u32; 3],
+  pub leaf_start_idx: u32,
+  pub leaf_count: u32,
+  pub shape_type: u32,
+  pub shape_extents: [f32; 3],
+  pub _pad: u32,
 }
 
 // ── Wrench (force + torque) ────────────────────────────────────────────────────
@@ -231,6 +235,7 @@ pub struct ApplyImpulsesPushConstants {
   pub particles_addr: u64,
   pub collisions_addr: u64,
   pub impulses_addr: u64,
+  pub rigid_bodies_addr: u64,
 }
 
 #[repr(C)]

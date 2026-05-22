@@ -20,6 +20,7 @@
 // Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
 
 #version 450 core
+#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference          : require
 #extension GL_EXT_scalar_block_layout       : require
 #extension GL_EXT_shader_atomic_float       : require   // atomicAdd on Wrench buffer fields
@@ -32,10 +33,6 @@
 #include "imex_math.glsl"      // RigidBody, Wrench, ADD_LINEAR_FORCE, ADD_TORQUE
 
 // ─── Buffer references ──────────────────────────────────────────────────────
-layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer RigidBodyArray {
-    RigidBody bodies[];
-};
-
 layout(buffer_reference, scalar, buffer_reference_align = 4) buffer WrenchArray {
     Wrench wrenches[];
 };
@@ -59,6 +56,10 @@ shared vec3 sh_f[SUBGROUPS_PER_WG_RFA];
 shared vec3 sh_t[SUBGROUPS_PER_WG_RFA];
 
 void main() {
+    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
+        debugPrintfEXT("Executing compute shader: rb_force_assign.comp\n");
+    }
+
     uint body_id = gl_WorkGroupID.x;
     if (body_id >= pc.n_bodies) return;
 

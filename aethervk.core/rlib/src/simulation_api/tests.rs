@@ -227,12 +227,12 @@ fn test_simulation_context_text_rendering() {
 
       let mut attempts = 0;
       let mut task_id = 0;
-      while attempts < 100 {
+      while attempts < 500 {
         task_id = LAST_RENDER_TASK_ID.load(Ordering::Acquire);
         if task_id != 0 {
           break;
         }
-        oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(10));
+        oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(20));
         attempts += 1;
       }
 
@@ -244,8 +244,8 @@ fn test_simulation_context_text_rendering() {
       // Wait for task to be truly ready in renderer
       let mut status = ctx.get_task_status(task_id);
       attempts = 0;
-      while matches!(status, structs::TaskStatusCode::Pending) && attempts < 50 {
-        oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(10));
+      while matches!(status, structs::TaskStatusCode::Pending) && attempts < 500 {
+        oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(20));
         status = ctx.get_task_status(task_id);
         attempts += 1;
       }

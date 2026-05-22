@@ -9,4 +9,6 @@ layout(constant_id = 10) const uint DEBUG_SHADERS = 1;
 //    }
 
 // Macro that evaluates to true only for the first active invocation in the subgroup
-#define SHOULD_DEBUG_PRINT (DEBUG_SHADERS != 0 && gl_SubgroupInvocationID == subgroupBallotFindLSB(subgroupBallot(true)))
+#ifndef SHOULD_DEBUG_PRINT
+#define SHOULD_DEBUG_PRINT false
+#endif

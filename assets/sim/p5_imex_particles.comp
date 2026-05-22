@@ -1,4 +1,5 @@
 #version 450 core
+#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_KHR_shader_subgroup_basic : require
@@ -38,6 +39,10 @@ layout(push_constant, scalar) uniform PushConstants {
 } pc;
 
 void main() {
+    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
+        debugPrintfEXT("Executing compute shader: p5_imex_particles.comp\n");
+    }
+
     if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
         debugPrintfEXT("Hello from p5_imex_particles.comp!\n");
     }

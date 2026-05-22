@@ -1685,8 +1685,6 @@ impl WindowlessPresentationState {
     let fence = frame.submission_fence.ok_or(crate::gpu_err_device!())?.get();
     let submit_info = vk::SubmitInfo::default();
     unsafe {
-      let _ = device.wait_for_fences(core::slice::from_ref(&fence), true, u64::MAX);
-      let _ = device.reset_fences(core::slice::from_ref(&fence));
       device
         .locked_queue_submit(graphics_queue, core::slice::from_ref(&submit_info), fence)
         .map_err(GpuError::from)?;

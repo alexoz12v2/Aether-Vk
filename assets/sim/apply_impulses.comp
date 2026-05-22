@@ -1,19 +1,21 @@
 #version 450 core
-
+#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "../debug_utils.glsl"
 #include "../bvh_utils.glsl"
+#include "imex_math.glsl"
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
-
-
-// Particles data mapped as uint to perform CAS loop for float atomicAdd
 layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleData {
     uint data[];
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer RigidBodyUintArray {
+    uint data[]; // Use uint for atomics
 };
 
 layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer ImpulseOutput {
@@ -24,9 +26,10 @@ layout(push_constant, scalar) uniform PushConstants {
     ParticleData particles;
     PackedCollisions collisions;
     ImpulseOutput impulses;
+    RigidBodyUintArray rigid_bodies;
 } pc;
 
-void atomicAddFloat(uint index, float val) {
+void atomicAddParticle(uint index, float val) {
     uint old_val = pc.particles.data[index];
     uint assumed_val;
     do {
@@ -36,49 +39,138 @@ void atomicAddFloat(uint index, float val) {
     } while (assumed_val != old_val);
 }
 
+void atomicAddRigidBody(uint index, float val) {
+    uint old_val = pc.rigid_bodies.data[index];
+    uint assumed_val;
+    do {
+        assumed_val = old_val;
+        uint new_val = floatBitsToUint(uintBitsToFloat(assumed_val) + val);
+        old_val = atomicCompSwap(pc.rigid_bodies.data[index], assumed_val, new_val);
+    } while (assumed_val != old_val);
+}
+
 void main() {
-    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
-        debugPrintfEXT("Hello from apply_impulses.comp!\n");
-        // Print offsets of fields in PackedPair
-        // Since we can't do offsetof directly, we can't easily print them, but we can print the raw data!
+    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
+        debugPrintfEXT("Executing compute shader: apply_impulses.comp\n");
     }
+
     uint global_id = gl_GlobalInvocationID.x;
     if (global_id >= pc.collisions.count) return;
 
     PackedPair pair = pc.collisions.pairs[global_id];
     vec3 impulse = pc.impulses.impulses[global_id];
 
+    if (length(impulse) < 1e-6) return;
+
     uint pA_id = pair.a.primitive_index;
     uint pB_id = pair.b.primitive_index;
+    
+    bool is_rb_a = (pair.a.entity_id != 0xFFFFFFFFu);
+    bool is_rb_b = (pair.b.entity_id != 0xFFFFFFFFu);
 
-    uint blockA = pA_id / SUBGROUP_SIZE;
-    uint locA = pA_id % SUBGROUP_SIZE;
-    uint baseA = blockA * (10 * SUBGROUP_SIZE) + locA;
+    if (is_rb_a) {
+        // RigidBody struct is 20 floats:
+        // 0-3 pos_mass
+        // 4-7 orient
+        // 8-11 lin_vel
+        // 12-15 ang_vel
+        // 16-19 inv_inertia
+        uint base = pA_id * 28; // 104 bytes / 4 = 26 uints
+        
+        float mass = uintBitsToFloat(pc.rigid_bodies.data[base + 3]);
+        float invMA = mass > 0.0 ? 1.0 / mass : 0.0;
+        
+        vec3 invIA = vec3(
+            uintBitsToFloat(pc.rigid_bodies.data[base + 16]),
+            uintBitsToFloat(pc.rigid_bodies.data[base + 17]),
+            uintBitsToFloat(pc.rigid_bodies.data[base + 18])
+        );
 
-    uint blockB = pB_id / SUBGROUP_SIZE;
-    uint locB = pB_id % SUBGROUP_SIZE;
-    uint baseB = blockB * (10 * SUBGROUP_SIZE) + locB;
+        vec4 qA = vec4(
+            uintBitsToFloat(pc.rigid_bodies.data[base + 4]),
+            uintBitsToFloat(pc.rigid_bodies.data[base + 5]),
+            uintBitsToFloat(pc.rigid_bodies.data[base + 6]),
+            uintBitsToFloat(pc.rigid_bodies.data[base + 7])
+        );
 
-    // Apply positive impulse to particle A
-    float m_A = uintBitsToFloat(pc.particles.data[baseA + 6 * SUBGROUP_SIZE]);
-    if (m_A > 0.0) {
-        vec3 dvA = impulse / m_A;
-        atomicAddFloat(baseA + 3 * SUBGROUP_SIZE, dvA.x);
-        atomicAddFloat(baseA + 4 * SUBGROUP_SIZE, dvA.y);
-        atomicAddFloat(baseA + 5 * SUBGROUP_SIZE, dvA.z);
+        vec3 posA = vec3(
+            uintBitsToFloat(pc.rigid_bodies.data[base + 0]),
+            uintBitsToFloat(pc.rigid_bodies.data[base + 1]),
+            uintBitsToFloat(pc.rigid_bodies.data[base + 2])
+        );
+
+        vec3 rA = pair.contact_point - posA;
+        
+        if (invMA > 0.0) {
+            vec3 dvA = impulse * invMA;
+            atomicAddRigidBody(base + 8, dvA.x);
+            atomicAddRigidBody(base + 9, dvA.y);
+            atomicAddRigidBody(base + 10, dvA.z);
+            
+            vec3 dwA = quat_rotate(qA, invIA * quat_rotate_inv(qA, cross(rA, impulse)));
+            atomicAddRigidBody(base + 12, dwA.x);
+            atomicAddRigidBody(base + 13, dwA.y);
+            atomicAddRigidBody(base + 14, dwA.z);
+        }
+    } else {
+        uint base = pA_id * 10;
+        float mass = uintBitsToFloat(pc.particles.data[base + 8]);
+        float invMA = mass > 0.0 ? 1.0 / mass : 0.0;
+        if (invMA > 0.0) {
+            vec3 dvA = impulse * invMA;
+            atomicAddParticle(base + 3, dvA.x);
+            atomicAddParticle(base + 4, dvA.y);
+            atomicAddParticle(base + 5, dvA.z);
+        }
     }
 
-    // Apply negative impulse to particle B
-    float m_B = uintBitsToFloat(pc.particles.data[baseB + 6 * SUBGROUP_SIZE]);
-    if (m_B > 0.0) {
-        vec3 dvB = -impulse / m_B;
-        atomicAddFloat(baseB + 3 * SUBGROUP_SIZE, dvB.x);
-        atomicAddFloat(baseB + 4 * SUBGROUP_SIZE, dvB.y);
-        atomicAddFloat(baseB + 5 * SUBGROUP_SIZE, dvB.z);
-    }
+    if (is_rb_b) {
+        uint base = pB_id * 28; 
+        
+        float mass = uintBitsToFloat(pc.rigid_bodies.data[base + 3]);
+        float invMB = mass > 0.0 ? 1.0 / mass : 0.0;
+        
+        vec3 invIB = vec3(
+            uintBitsToFloat(pc.rigid_bodies.data[base + 16]),
+            uintBitsToFloat(pc.rigid_bodies.data[base + 17]),
+            uintBitsToFloat(pc.rigid_bodies.data[base + 18])
+        );
 
-    if (SHOULD_DEBUG_PRINT) {
-        debugPrintfEXT("ApplyImpulses Contact %d (Pairs: %d, %d): impulse=(%f, %f, %f)", 
-            global_id, pA_id, pB_id, impulse.x, impulse.y, impulse.z);
+        vec4 qB = vec4(
+            uintBitsToFloat(pc.rigid_bodies.data[base + 4]),
+            uintBitsToFloat(pc.rigid_bodies.data[base + 5]),
+            uintBitsToFloat(pc.rigid_bodies.data[base + 6]),
+            uintBitsToFloat(pc.rigid_bodies.data[base + 7])
+        );
+
+        vec3 posB = vec3(
+            uintBitsToFloat(pc.rigid_bodies.data[base + 0]),
+            uintBitsToFloat(pc.rigid_bodies.data[base + 1]),
+            uintBitsToFloat(pc.rigid_bodies.data[base + 2])
+        );
+
+        vec3 rB = pair.contact_point - posB;
+        
+        if (invMB > 0.0) {
+            vec3 dvB = -impulse * invMB;
+            atomicAddRigidBody(base + 8, dvB.x);
+            atomicAddRigidBody(base + 9, dvB.y);
+            atomicAddRigidBody(base + 10, dvB.z);
+            
+            vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, -impulse)));
+            atomicAddRigidBody(base + 12, dwB.x);
+            atomicAddRigidBody(base + 13, dwB.y);
+            atomicAddRigidBody(base + 14, dwB.z);
+        }
+    } else {
+        uint base = pB_id * 10;
+        float mass = uintBitsToFloat(pc.particles.data[base + 8]);
+        float invMB = mass > 0.0 ? 1.0 / mass : 0.0;
+        if (invMB > 0.0) {
+            vec3 dvB = -impulse * invMB;
+            atomicAddParticle(base + 3, dvB.x);
+            atomicAddParticle(base + 4, dvB.y);
+            atomicAddParticle(base + 5, dvB.z);
+        }
     }
 }

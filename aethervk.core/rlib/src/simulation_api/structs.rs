@@ -994,11 +994,49 @@ impl Default for SceneTimeState {
   }
 }
 
+#[cfg(test)]
+lazy_static::lazy_static! {
+  pub static ref SHADER_MOCK_RESULTS: std::sync::Mutex<std::collections::HashMap<u64, alloc::vec::Vec<u8>>> = std::sync::Mutex::new(std::collections::HashMap::new());
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MockTargetShader {
+  EmitParticles,
+  P1_2Imex,
+  P3_4Imex,
+  LbvhPrepass,
+  LbvhBuild,
+  MotionBounds,
+  MotionRefit,
+  Ccd,
+  CcdRigidbody,
+  StreamCompact,
+  ReduceToi,
+  LcpSolver,
+  ApplyImpulses,
+  BarnesHut,
+  P5Imex,
+  BroadPhase,
+  IntegrateParticlesP1P2,
+  IntegrateBodiesP3,
+  IntegrateParticlesP4P5,
+  RbForceAssign,
+  BpClear,
+  BpBoundsGen,
+  BpScene,
+  BpClassify,
+  BpCrossLca,
+  BpParticleSelf,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PhysicsEngineType {
   CpuScalar,
   CpuSimd,
   VulkanCompute,
+  #[cfg(test)]
+  Mock(MockTargetShader),
 }
 
 impl Default for PhysicsEngineType {

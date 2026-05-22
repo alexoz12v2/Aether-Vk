@@ -59,10 +59,10 @@ impl TextureRGBA {
 /// Essential for interleaving X, Y, Z bits to create the Z-Order curve.
 #[inline(always)]
 fn expand_bits(mut v: u32) -> u32 {
-  v = (v * 0x00010001) & 0xFF0000FF;
-  v = (v * 0x00000101) & 0x0F00F00F;
-  v = (v * 0x00000011) & 0xC30C30C3;
-  v = (v * 0x00000005) & 0x49249249;
+  v = (v.wrapping_mul(0x00010001)) & 0xFF0000FF;
+  v = (v.wrapping_mul(0x00000101)) & 0x0F00F00F;
+  v = (v.wrapping_mul(0x00000011)) & 0xC30C30C3;
+  v = (v.wrapping_mul(0x00000005)) & 0x49249249;
   v
 }
 

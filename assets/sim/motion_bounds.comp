@@ -1,4 +1,5 @@
 #version 450 core
+#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
@@ -6,6 +7,7 @@
 #include "../bvh_utils.glsl"
 #include "physics_types.glsl"
 
+#include "../debug_utils.glsl"
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 // 0 = Particle, 1 = RigidBody Triangle
@@ -24,6 +26,13 @@ layout(push_constant, scalar) uniform PushConstants {
 } pc;
 
 void main() {
+    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
+        debugPrintfEXT("Executing compute shader: motion_bounds.comp\n");
+    }
+
+    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("Hello from motion_bounds.comp!\\n");
+    }
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= pc.num_primitives) return;
 

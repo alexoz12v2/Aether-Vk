@@ -4,38 +4,20 @@
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_memory_scope_semantics : require
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_debug_printf : enable
+
+#define SHOULD_DEBUG_PRINT false
 
 #include "../debug_utils.glsl"
 #include "../bvh_utils.glsl"
-
-// ============================================================================
-// LCP Solver: Matrix-Free 6-DoF Projected Gauss-Seidel (PGS) with Friction
-// ============================================================================
+#include "imex_math.glsl"
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
-// We need World-Space Inverse Inertia Tensors for this to work.
-struct RigidBody {
-    vec3 position;
-    float inv_mass;
-    mat3 rotation;
-    vec3 linear_velocity;
-    float _pad0;
-    vec3 angular_velocity;
-    float _pad1;
-    mat3 inv_inertia_tensor; // R * I_local^-1 * R^T
-};
-
-layout(buffer_reference, scalar, buffer_reference_align = 16) buffer RigidBodyArray {
-    RigidBody bodies[];
-};
-
-// Particles data (AOSOA flattened)
 layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleData {
     float data[];
 };
 
-// Output Impulses
 layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer ImpulseOutput {
     vec3 impulses[];
 };
@@ -52,7 +34,6 @@ layout(push_constant, scalar) uniform PushConstants {
 
 #define MAX_BODIES_PER_ISLAND 64
 
-// Shared memory for the Matrix-Free state
 shared uint shared_v_x[MAX_BODIES_PER_ISLAND];
 shared uint shared_v_y[MAX_BODIES_PER_ISLAND];
 shared uint shared_v_z[MAX_BODIES_PER_ISLAND];
@@ -61,12 +42,10 @@ shared uint shared_w_x[MAX_BODIES_PER_ISLAND];
 shared uint shared_w_y[MAX_BODIES_PER_ISLAND];
 shared uint shared_w_z[MAX_BODIES_PER_ISLAND];
 
-// Accumulated Impulses
 shared float accumulated_normal[128];
 shared float accumulated_t1[128];
 shared float accumulated_t2[128];
 
-// CAS loop for shared memory float atomics
 #define atomicAddSharedFloat(ADDR, val) \
     do { \
         uint old_val = ADDR; \
@@ -78,7 +57,6 @@ shared float accumulated_t2[128];
         } while (assumed_val != old_val); \
     } while(false)
 
-// Generates an orthogonal basis for friction
 void generate_tangents(vec3 normal, out vec3 t1, out vec3 t2) {
     if (abs(normal.x) >= 0.57735) {
         t1 = normalize(vec3(normal.y, -normal.x, 0.0));
@@ -88,14 +66,20 @@ void generate_tangents(vec3 normal, out vec3 t1, out vec3 t2) {
     t2 = cross(normal, t1);
 }
 
-// Calculates the 6-DoF Effective Mass for a specific direction
-float compute_effective_mass(vec3 dir, vec3 rA, vec3 rB, float invMA, float invMB, mat3 invIA, mat3 invIB) {
+float compute_effective_mass(vec3 dir, vec3 rA, vec3 rB, float invMA, float invMB, vec3 invIA, vec3 invIB, vec4 qA, vec4 qB) {
     vec3 crossA = cross(rA, dir);
     vec3 crossB = cross(rB, dir);
-    float invMassSum = invMA + invMB;
-    float angularA = dot(invIA * crossA, crossA);
-    float angularB = dot(invIB * crossB, crossB);
-    return 1.0 / max(invMassSum + angularA + angularB, 1e-6);
+    
+    vec3 local_crossA = quat_rotate_inv(qA, crossA);
+    vec3 I_crossA = quat_rotate(qA, invIA * local_crossA);
+    
+    vec3 local_crossB = quat_rotate_inv(qB, crossB);
+    vec3 I_crossB = quat_rotate(qB, invIB * local_crossB);
+
+    float angularA = dot(I_crossA, crossA);
+    float angularB = dot(I_crossB, crossB);
+    
+    return 1.0 / max(invMA + invMB + angularA + angularB, 1e-6);
 }
 
 void main() {
@@ -103,182 +87,187 @@ void main() {
     uint contact_idx = gl_WorkGroupID.x * gl_WorkGroupSize.x + local_id;
     bool valid = (contact_idx < pc.collisions.count);
 
-    // --- 1. SETUP PHASE ---
-    vec3 normal, t1, t2, rA, rB;
-    float eff_M_n, eff_M_t1, eff_M_t2;
-    float bias = 0.0;
+    accumulated_normal[local_id] = 0.0;
+    accumulated_t1[local_id] = 0.0;
+    accumulated_t2[local_id] = 0.0;
 
-    // Extracted body indices (assuming mapped pairs to 0..MAX_BODIES_PER_ISLAND)
-    // For educational code with 1 collision per island:
-    uint local_idx_A = 0;
-    uint local_idx_B = 1;
-
-    // We initialize dummy rigid bodies for particles for now, as the backend builds ParticleData.
-    // Real implementation would diverge if reading RigidBody vs Particles.
-    float m_A = 0.0, m_B = 0.0;
-    mat3 inv_inertia_A = mat3(0.0);
-    mat3 inv_inertia_B = mat3(0.0);
-
-    if (valid) {
-        PackedPair pair = pc.collisions.pairs[contact_idx];
-        uint pA_id = pair.a.primitive_index;
-        uint pB_id = pair.b.primitive_index;
-
-        uint blockA = pA_id / SUBGROUP_SIZE;
-        uint locA = pA_id % SUBGROUP_SIZE;
-        uint baseA = blockA * (10 * SUBGROUP_SIZE) + locA;
-
-        uint blockB = pB_id / SUBGROUP_SIZE;
-        uint locB = pB_id % SUBGROUP_SIZE;
-        uint baseB = blockB * (10 * SUBGROUP_SIZE) + locB;
-
-        m_A = pc.particles.data[baseA + 6 * SUBGROUP_SIZE];
-        m_B = pc.particles.data[baseB + 6 * SUBGROUP_SIZE];
-
-        vec3 v_A = vec3(
-            pc.particles.data[baseA + 3 * SUBGROUP_SIZE],
-            pc.particles.data[baseA + 4 * SUBGROUP_SIZE],
-            pc.particles.data[baseA + 5 * SUBGROUP_SIZE]
-        );
-        vec3 pos_A = vec3(
-            pc.particles.data[baseA + 0 * SUBGROUP_SIZE],
-            pc.particles.data[baseA + 1 * SUBGROUP_SIZE],
-            pc.particles.data[baseA + 2 * SUBGROUP_SIZE]
-        );
-
-        vec3 v_B = vec3(
-            pc.particles.data[baseB + 3 * SUBGROUP_SIZE],
-            pc.particles.data[baseB + 4 * SUBGROUP_SIZE],
-            pc.particles.data[baseB + 5 * SUBGROUP_SIZE]
-        );
-        vec3 pos_B = vec3(
-            pc.particles.data[baseB + 0 * SUBGROUP_SIZE],
-            pc.particles.data[baseB + 1 * SUBGROUP_SIZE],
-            pc.particles.data[baseB + 2 * SUBGROUP_SIZE]
-        );
-
-        if (local_id == 0) {
-            shared_v_x[local_idx_A] = floatBitsToUint(v_A.x);
-            shared_v_y[local_idx_A] = floatBitsToUint(v_A.y);
-            shared_v_z[local_idx_A] = floatBitsToUint(v_A.z);
-            shared_w_x[local_idx_A] = floatBitsToUint(0.0);
-            shared_w_y[local_idx_A] = floatBitsToUint(0.0);
-            shared_w_z[local_idx_A] = floatBitsToUint(0.0);
-
-            shared_v_x[local_idx_B] = floatBitsToUint(v_B.x);
-            shared_v_y[local_idx_B] = floatBitsToUint(v_B.y);
-            shared_v_z[local_idx_B] = floatBitsToUint(v_B.z);
-            shared_w_x[local_idx_B] = floatBitsToUint(0.0);
-            shared_w_y[local_idx_B] = floatBitsToUint(0.0);
-            shared_w_z[local_idx_B] = floatBitsToUint(0.0);
-        }
-
-        normal = pair.contact_normal;
-        generate_tangents(normal, t1, t2);
-
-        rA = pair.contact_point - pos_A;
-        rB = pair.contact_point - pos_B;
-
-        float invMA = (m_A > 0.0) ? 1.0 / m_A : 0.0;
-        float invMB = (m_B > 0.0) ? 1.0 / m_B : 0.0;
-
-        eff_M_n  = compute_effective_mass(normal, rA, rB, invMA, invMB, inv_inertia_A, inv_inertia_B);
-        eff_M_t1 = compute_effective_mass(t1, rA, rB, invMA, invMB, inv_inertia_A, inv_inertia_B);
-        eff_M_t2 = compute_effective_mass(t2, rA, rB, invMA, invMB, inv_inertia_A, inv_inertia_B);
-
-        // Baumgarte Stabilization
-        float beta = 0.2;
-        bias = (beta / max(pc.dt, 0.001)) * max(pair.penetration_depth - 0.01, 0.0);
-
-        accumulated_normal[local_id] = 0.0;
-        accumulated_t1[local_id] = 0.0;
-        accumulated_t2[local_id] = 0.0;
+    if (local_id < MAX_BODIES_PER_ISLAND) {
+        RigidBody rb = pc.rigid_bodies.bodies[local_id];
+        shared_v_x[local_id] = floatBitsToUint(rb.linear_vel_drag.x);
+        shared_v_y[local_id] = floatBitsToUint(rb.linear_vel_drag.y);
+        shared_v_z[local_id] = floatBitsToUint(rb.linear_vel_drag.z);
+        shared_w_x[local_id] = floatBitsToUint(rb.angular_vel_drag.x);
+        shared_w_y[local_id] = floatBitsToUint(rb.angular_vel_drag.y);
+        shared_w_z[local_id] = floatBitsToUint(rb.angular_vel_drag.z);
     }
+
     barrier();
 
-    // --- 2. MATRIX-FREE PGS ITERATION ---
-    for (uint iter = 0; iter < 20; iter++) {
-        if (valid) {
-            float invMA = (m_A > 0.0) ? 1.0 / m_A : 0.0;
-            float invMB = (m_B > 0.0) ? 1.0 / m_B : 0.0;
+    if (!valid) return;
 
-            // 1. Read CURRENT velocities from shared memory
-            vec3 vA = vec3(uintBitsToFloat(shared_v_x[local_idx_A]), uintBitsToFloat(shared_v_y[local_idx_A]), uintBitsToFloat(shared_v_z[local_idx_A]));
-            vec3 wA = vec3(uintBitsToFloat(shared_w_x[local_idx_A]), uintBitsToFloat(shared_w_y[local_idx_A]), uintBitsToFloat(shared_w_z[local_idx_A]));
+    PackedPair pair = pc.collisions.pairs[contact_idx];
+    
+    bool is_partA = (pair.a.entity_id == 0xFFFFFFFFu);
+    bool is_partB = (pair.b.entity_id == 0xFFFFFFFFu);
+    uint idA = pair.a.primitive_index;
+    uint idB = pair.b.primitive_index;
 
-            vec3 vB = vec3(uintBitsToFloat(shared_v_x[local_idx_B]), uintBitsToFloat(shared_v_y[local_idx_B]), uintBitsToFloat(shared_v_z[local_idx_B]));
-            vec3 wB = vec3(uintBitsToFloat(shared_w_x[local_idx_B]), uintBitsToFloat(shared_w_y[local_idx_B]), uintBitsToFloat(shared_w_z[local_idx_B]));
+    float invMA = 0.0, invMB = 0.0;
+    vec3 invIA = vec3(0.0), invIB = vec3(0.0);
+    vec4 qA = vec4(0,0,0,1), qB = vec4(0,0,0,1);
+    vec3 posA = vec3(0.0), posB = vec3(0.0);
+    vec3 vA_init = vec3(0.0), wA_init = vec3(0.0);
+    vec3 vB_init = vec3(0.0), wB_init = vec3(0.0);
 
-            // 2. Calculate relative velocity at contact point
-            vec3 v_pt_A = vA + cross(wA, rA);
-            vec3 v_pt_B = vB + cross(wB, rB);
-            vec3 v_rel = v_pt_A - v_pt_B;
+    if (is_partA) {
+        uint base = idA * 10;
+        posA = vec3(pc.particles.data[base+0], pc.particles.data[base+1], pc.particles.data[base+2]);
+        vA_init = vec3(pc.particles.data[base+3], pc.particles.data[base+4], pc.particles.data[base+5]);
+        float mass = pc.particles.data[base+8];
+        invMA = (mass > 0.0) ? 1.0 / mass : 0.0;
+    } else {
+        RigidBody rbA = pc.rigid_bodies.bodies[idA];
+        invMA = rbA.position_mass.w > 0.0 ? 1.0 / rbA.position_mass.w : 0.0;
+        invIA = rbA.inertia_tensor_inv.xyz;
+        qA = rbA.orientation;
+        posA = rbA.position_mass.xyz;
+        vA_init = rbA.linear_vel_drag.xyz;
+        wA_init = rbA.angular_vel_drag.xyz;
+    }
 
-            // ----------------------------------------------------
-            // SOLVE NORMAL (Non-Penetration)
-            // ----------------------------------------------------
-            float jv_n = dot(v_rel, normal);
-            float lambda_n = eff_M_n * (-(1.0 + pc.restitution) * jv_n + bias);
+    if (is_partB) {
+        uint base = idB * 10;
+        posB = vec3(pc.particles.data[base+0], pc.particles.data[base+1], pc.particles.data[base+2]);
+        vB_init = vec3(pc.particles.data[base+3], pc.particles.data[base+4], pc.particles.data[base+5]);
+        float mass = pc.particles.data[base+8];
+        invMB = (mass > 0.0) ? 1.0 / mass : 0.0;
+    } else {
+        RigidBody rbB = pc.rigid_bodies.bodies[idB];
+        invMB = rbB.position_mass.w > 0.0 ? 1.0 / rbB.position_mass.w : 0.0;
+        invIB = rbB.inertia_tensor_inv.xyz;
+        qB = rbB.orientation;
+        posB = rbB.position_mass.xyz;
+        vB_init = rbB.linear_vel_drag.xyz;
+        wB_init = rbB.angular_vel_drag.xyz;
+    }
 
-            // Clamp total accumulated normal impulse (Must be pushing, not pulling)
-            float old_acc_n = accumulated_normal[local_id];
-            accumulated_normal[local_id] = max(old_acc_n + lambda_n, 0.0);
-            float delta_lambda_n = accumulated_normal[local_id] - old_acc_n;
+    vec3 n = pair.contact_normal;
+    vec3 t1, t2;
+    generate_tangents(n, t1, t2);
 
-            // ----------------------------------------------------
-            // SOLVE FRICTION (Tangents)
-            // ----------------------------------------------------
-            float jv_t1 = dot(v_rel, t1);
-            float lambda_t1 = eff_M_t1 * (-jv_t1);
+    vec3 rA = pair.contact_point - posA;
+    vec3 rB = pair.contact_point - posB;
 
-            float jv_t2 = dot(v_rel, t2);
-            float lambda_t2 = eff_M_t2 * (-jv_t2);
+    float eff_m_n = compute_effective_mass(n, rA, rB, invMA, invMB, invIA, invIB, qA, qB);
+    float eff_m_t1 = compute_effective_mass(t1, rA, rB, invMA, invMB, invIA, invIB, qA, qB);
+    float eff_m_t2 = compute_effective_mass(t2, rA, rB, invMA, invMB, invIA, invIB, qA, qB);
 
-            // Box Friction Cone: Friction is capped by the current normal force
-            float max_fric = pc.restitution * accumulated_normal[local_id];
+    float penetration = pair.penetration_depth;
+    float bias = (0.2 / max(pc.dt, 1e-6)) * max(penetration - 0.01, 0.0);
 
-            float old_acc_t1 = accumulated_t1[local_id];
-            accumulated_t1[local_id] = clamp(old_acc_t1 + lambda_t1, -max_fric, max_fric);
-            float delta_lambda_t1 = accumulated_t1[local_id] - old_acc_t1;
+    vec3 v_rel_init = (vA_init + cross(wA_init, rA)) - (vB_init + cross(wB_init, rB));
+    float bounce = dot(v_rel_init, n) < -0.1 ? -pc.restitution * dot(v_rel_init, n) : 0.0;
+    
+    float target_v_n = bounce + bias;
 
-            float old_acc_t2 = accumulated_t2[local_id];
-            accumulated_t2[local_id] = clamp(old_acc_t2 + lambda_t2, -max_fric, max_fric);
-            float delta_lambda_t2 = accumulated_t2[local_id] - old_acc_t2;
+    // We will bypass shared memory for particles, since their indices could exceed MAX_BODIES_PER_ISLAND.
+    // For our simple solver, particles are treated statically during the iteration (or we just use global atomics).
+    // Actually, particles don't typically collide with multiple bodies simultaneously in a tight island,
+    // so using their initial velocity during iterations is an acceptable approximation for now.
+    
+    for (int iter = 0; iter < 20; ++iter) {
+        barrier();
 
-            // ----------------------------------------------------
-            // APPLY IMPULSE BACK TO SHARED VELOCITIES
-            // ----------------------------------------------------
-            vec3 total_impulse = (normal * delta_lambda_n) + (t1 * delta_lambda_t1) + (t2 * delta_lambda_t2);
+        vec3 vA = vA_init; vec3 wA = wA_init;
+        if (!is_partA && idA < MAX_BODIES_PER_ISLAND) {
+            vA = vec3(uintBitsToFloat(shared_v_x[idA]), uintBitsToFloat(shared_v_y[idA]), uintBitsToFloat(shared_v_z[idA]));
+            wA = vec3(uintBitsToFloat(shared_w_x[idA]), uintBitsToFloat(shared_w_y[idA]), uintBitsToFloat(shared_w_z[idA]));
+        }
 
-            vec3 dLinA = total_impulse * invMA;
-            vec3 dAngA = inv_inertia_A * cross(rA, total_impulse);
+        vec3 vB = vB_init; vec3 wB = wB_init;
+        if (!is_partB && idB < MAX_BODIES_PER_ISLAND) {
+            vB = vec3(uintBitsToFloat(shared_v_x[idB]), uintBitsToFloat(shared_v_y[idB]), uintBitsToFloat(shared_v_z[idB]));
+            wB = vec3(uintBitsToFloat(shared_w_x[idB]), uintBitsToFloat(shared_w_y[idB]), uintBitsToFloat(shared_w_z[idB]));
+        }
 
-            vec3 dLinB = -total_impulse * invMB;
-            vec3 dAngB = inv_inertia_B * cross(rB, -total_impulse);
-
-            atomicAddSharedFloat(shared_v_x[local_idx_A], dLinA.x);
-            atomicAddSharedFloat(shared_v_y[local_idx_A], dLinA.y);
-            atomicAddSharedFloat(shared_v_z[local_idx_A], dLinA.z);
-            atomicAddSharedFloat(shared_w_x[local_idx_A], dAngA.x);
-            atomicAddSharedFloat(shared_w_y[local_idx_A], dAngA.y);
-            atomicAddSharedFloat(shared_w_z[local_idx_A], dAngA.z);
-
-            atomicAddSharedFloat(shared_v_x[local_idx_B], dLinB.x);
-            atomicAddSharedFloat(shared_v_y[local_idx_B], dLinB.y);
-            atomicAddSharedFloat(shared_v_z[local_idx_B], dLinB.z);
-            atomicAddSharedFloat(shared_w_x[local_idx_B], dAngB.x);
-            atomicAddSharedFloat(shared_w_y[local_idx_B], dAngB.y);
-            atomicAddSharedFloat(shared_w_z[local_idx_B], dAngB.z);
+        vec3 v_rel = (vA + cross(wA, rA)) - (vB + cross(wB, rB));
+        
+        float jn_delta = eff_m_n * (-dot(v_rel, n) + target_v_n);
+        float old_jn = accumulated_normal[local_id];
+        float new_jn = max(old_jn + jn_delta, 0.0);
+        jn_delta = new_jn - old_jn;
+        accumulated_normal[local_id] = new_jn;
+        
+        vec3 P_n = jn_delta * n;
+        
+        if (!is_partA && invMA > 0.0 && idA < MAX_BODIES_PER_ISLAND) {
+            atomicAddSharedFloat(shared_v_x[idA], P_n.x * invMA);
+            atomicAddSharedFloat(shared_v_y[idA], P_n.y * invMA);
+            atomicAddSharedFloat(shared_v_z[idA], P_n.z * invMA);
+            vec3 dwA = quat_rotate(qA, invIA * quat_rotate_inv(qA, cross(rA, P_n)));
+            atomicAddSharedFloat(shared_w_x[idA], dwA.x);
+            atomicAddSharedFloat(shared_w_y[idA], dwA.y);
+            atomicAddSharedFloat(shared_w_z[idA], dwA.z);
+        }
+        if (!is_partB && invMB > 0.0 && idB < MAX_BODIES_PER_ISLAND) {
+            atomicAddSharedFloat(shared_v_x[idB], -P_n.x * invMB);
+            atomicAddSharedFloat(shared_v_y[idB], -P_n.y * invMB);
+            atomicAddSharedFloat(shared_v_z[idB], -P_n.z * invMB);
+            vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, -P_n)));
+            atomicAddSharedFloat(shared_w_x[idB], dwB.x);
+            atomicAddSharedFloat(shared_w_y[idB], dwB.y);
+            atomicAddSharedFloat(shared_w_z[idB], dwB.z);
         }
 
         barrier();
-    }
 
-    // --- 3. WRITE OUT FINAL IMPULSES ---
-    if (valid) {
-        vec3 final_impulse = (normal * accumulated_normal[local_id]) +
-                             (t1 * accumulated_t1[local_id]) +
-                             (t2 * accumulated_t2[local_id]);
-        pc.outputs.impulses[contact_idx] = final_impulse;
+        if (!is_partA && idA < MAX_BODIES_PER_ISLAND) {
+            vA = vec3(uintBitsToFloat(shared_v_x[idA]), uintBitsToFloat(shared_v_y[idA]), uintBitsToFloat(shared_v_z[idA]));
+            wA = vec3(uintBitsToFloat(shared_w_x[idA]), uintBitsToFloat(shared_w_y[idA]), uintBitsToFloat(shared_w_z[idA]));
+        }
+        if (!is_partB && idB < MAX_BODIES_PER_ISLAND) {
+            vB = vec3(uintBitsToFloat(shared_v_x[idB]), uintBitsToFloat(shared_v_y[idB]), uintBitsToFloat(shared_v_z[idB]));
+            wB = vec3(uintBitsToFloat(shared_w_x[idB]), uintBitsToFloat(shared_w_y[idB]), uintBitsToFloat(shared_w_z[idB]));
+        }
+        v_rel = (vA + cross(wA, rA)) - (vB + cross(wB, rB));
+        
+        float jt1_delta = eff_m_t1 * (-dot(v_rel, t1));
+        float old_jt1 = accumulated_t1[local_id];
+        float max_fric = 0.5 * accumulated_normal[local_id];
+        float new_jt1 = clamp(old_jt1 + jt1_delta, -max_fric, max_fric);
+        jt1_delta = new_jt1 - old_jt1;
+        accumulated_t1[local_id] = new_jt1;
+
+        float jt2_delta = eff_m_t2 * (-dot(v_rel, t2));
+        float old_jt2 = accumulated_t2[local_id];
+        float new_jt2 = clamp(old_jt2 + jt2_delta, -max_fric, max_fric);
+        jt2_delta = new_jt2 - old_jt2;
+        accumulated_t2[local_id] = new_jt2;
+
+        vec3 P_t = jt1_delta * t1 + jt2_delta * t2;
+        
+        if (!is_partA && invMA > 0.0 && idA < MAX_BODIES_PER_ISLAND) {
+            atomicAddSharedFloat(shared_v_x[idA], P_t.x * invMA);
+            atomicAddSharedFloat(shared_v_y[idA], P_t.y * invMA);
+            atomicAddSharedFloat(shared_v_z[idA], P_t.z * invMA);
+            vec3 dwA = quat_rotate(qA, invIA * quat_rotate_inv(qA, cross(rA, P_t)));
+            atomicAddSharedFloat(shared_w_x[idA], dwA.x);
+            atomicAddSharedFloat(shared_w_y[idA], dwA.y);
+            atomicAddSharedFloat(shared_w_z[idA], dwA.z);
+        }
+        if (!is_partB && invMB > 0.0 && idB < MAX_BODIES_PER_ISLAND) {
+            atomicAddSharedFloat(shared_v_x[idB], -P_t.x * invMB);
+            atomicAddSharedFloat(shared_v_y[idB], -P_t.y * invMB);
+            atomicAddSharedFloat(shared_v_z[idB], -P_t.z * invMB);
+            vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, -P_t)));
+            atomicAddSharedFloat(shared_w_x[idB], dwB.x);
+            atomicAddSharedFloat(shared_w_y[idB], dwB.y);
+            atomicAddSharedFloat(shared_w_z[idB], dwB.z);
+        }
     }
+    
+    barrier();
+
+    vec3 total_P = accumulated_normal[local_id] * n + accumulated_t1[local_id] * t1 + accumulated_t2[local_id] * t2;
+    pc.outputs.impulses[contact_idx] = total_P;
 }

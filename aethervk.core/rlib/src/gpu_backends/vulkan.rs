@@ -26,6 +26,11 @@ pub mod physics;
 pub mod shader_tests;
 
 #[cfg(test)]
+pub mod mock_kernels;
+
+
+
+#[cfg(test)]
 pub mod mock_scene_data;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

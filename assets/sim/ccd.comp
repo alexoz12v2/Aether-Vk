@@ -1,4 +1,5 @@
 #version 450 core
+#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
@@ -11,7 +12,9 @@ layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
 struct SparseCollisionData {
     uint valid;
+    uint entity_a;
     uint prim_a;
+    uint entity_b;
     uint prim_b;
     float toi;
     vec3 contact_normal;
@@ -20,7 +23,8 @@ struct SparseCollisionData {
 };
 
 // Sparse array of collision flags/data
-layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer SparseCollisions {
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer SparseCollisions {
+    uint count;
     SparseCollisionData data[];
 };
 
@@ -40,6 +44,10 @@ layout(push_constant, scalar) uniform PushConstants {
 } pc;
 
 void main() {
+    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
+        debugPrintfEXT("Executing compute shader: ccd.comp\n");
+    }
+
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= pc.total_particles) return;
 
