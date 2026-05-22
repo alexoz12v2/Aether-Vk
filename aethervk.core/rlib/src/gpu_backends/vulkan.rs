@@ -97,7 +97,24 @@ impl VulkanRenderContext {
   fn device_id_from_index(&self, dev_idx: usize) -> RenderDeviceHandle {
     RenderDeviceHandle((dev_idx as u64) + 1)
   }
+
+  /// Test-only: call `f` with the concrete Vulkan `Device`, which implements
+  /// the `Kernels` trait, allowing shader unit tests to call compute kernels
+  /// directly without going through the `dyn RenderDevice` abstraction.
+  #[cfg(test)]
+  pub(super) fn with_device_as_kernels<F, R>(
+    &self,
+    dev_handle: RenderDeviceHandle,
+    f: F,
+  ) -> Option<R>
+  where
+    F: FnOnce(&device::Device) -> R,
+  {
+    let core = self.core.read();
+    core.live_devices.get(&dev_handle).map(|device| f(device))
+  }
 }
+
 
 // TODO inject runtime callbacks (eg logging)
 impl InitWithRuntime<VulkanRenderContext> for VulkanRenderContext {

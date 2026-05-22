@@ -391,7 +391,3 @@ impl RenderContext for D3d12RenderContext {
     unimplemented!()
   }
 }
- {
-    unimplemented!()
-  }
-}

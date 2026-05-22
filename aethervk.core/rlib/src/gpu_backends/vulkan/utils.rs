@@ -649,6 +649,12 @@ pub(super) fn required_device_extensions() -> &'static Vec<&'static CStr> {
     // float16 and int8 support (with features)
     the_vec.push(ash::khr::shader_float16_int8::NAME);
 
+    // 8-bit storage buffer access (required by physics compute shaders)
+    the_vec.push(ash::khr::_8bit_storage::NAME);
+
+    // Atomic float add (required by barnes_hut.comp: OpAtomicFAddEXT)
+    the_vec.push(ash::ext::shader_atomic_float::NAME);
+
     // TODO: pipeline extensions after sampling for desktop device support
 
     the_vec
@@ -688,6 +694,10 @@ pub(super) struct RequiredFeatures<'a> {
   pub descriptor_indexing: vk::PhysicalDeviceDescriptorIndexingFeatures<'a>,
   pub scalar_block_layout: vk::PhysicalDeviceScalarBlockLayoutFeatures<'a>,
   pub shader_float16_int8: vk::PhysicalDeviceShaderFloat16Int8Features<'a>,
+  /// Required for physics compute shaders that use StorageBuffer8BitAccess
+  pub storage_8bit: vk::PhysicalDevice8BitStorageFeatures<'a>,
+  /// Required for barnes_hut.comp which uses OpAtomicFAddEXT
+  pub shader_atomic_float: vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT<'a>,
 }
 
 impl RequiredFeatures<'_> {
@@ -711,6 +721,8 @@ impl RequiredFeatures<'_> {
       descriptor_indexing,
       scalar_block_layout,
       shader_float16_int8,
+      storage_8bit: vk::PhysicalDevice8BitStorageFeatures::default(),
+      shader_atomic_float: vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default(),
     }
   }
 
@@ -725,6 +737,8 @@ impl RequiredFeatures<'_> {
       .push_next(&mut self.descriptor_indexing)
       .push_next(&mut self.scalar_block_layout)
       .push_next(&mut self.shader_float16_int8)
+      .push_next(&mut self.storage_8bit)
+      .push_next(&mut self.shader_atomic_float)
   }
 
   /// TODO: Document this item
@@ -748,6 +762,11 @@ impl RequiredFeatures<'_> {
     self.descriptor_indexing.descriptor_binding_sampled_image_update_after_bind = vk::TRUE;
     self.descriptor_indexing.descriptor_binding_storage_buffer_update_after_bind = vk::TRUE;
     self.shader_float16_int8.shader_int8 = vk::TRUE;
+    // Required for SPIR-V shaders that use StorageBuffer8BitAccess capability
+    self.storage_8bit.storage_buffer8_bit_access = vk::TRUE;
+    // Required for barnes_hut.comp (OpAtomicFAddEXT on storage buffer floats)
+    self.shader_atomic_float.shader_buffer_float32_atomic_add = vk::TRUE;
+    self.shader_atomic_float.shader_buffer_float32_atomics = vk::TRUE;
 
     self
   }
@@ -794,6 +813,12 @@ impl RequiredFeatures<'_> {
     }
     if self.shader_float16_int8.shader_int8 != vk::TRUE {
       the_vec.push("shader_float16_int8".to_string());
+    }
+    if self.storage_8bit.storage_buffer8_bit_access != vk::TRUE {
+      the_vec.push("storage_buffer_8_bit_access".to_string());
+    }
+    if self.shader_atomic_float.shader_buffer_float32_atomic_add != vk::TRUE {
+      the_vec.push("shader_buffer_float32_atomic_add".to_string());
     }
 
     if the_vec.is_empty() {
