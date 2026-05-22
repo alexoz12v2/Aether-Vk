@@ -132,7 +132,7 @@ struct PhysicsRebuildWorkload {
 
 impl os::pool::Workload for PhysicsRebuildWorkload {
   fn execute(&mut self) -> WorkloadStatus {
-    let new_physics = physics::physics_scene::PhysicsScene::build_from_scene(&self.scene);
+    let new_physics = physics::physics_scene::PhysicsScene::build_from_scene(&self.scene, 0.016);
     let mut guard = self.physics_scene.write();
     *guard = new_physics;
     WorkloadStatus::Complete

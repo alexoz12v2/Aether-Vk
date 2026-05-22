@@ -52,7 +52,8 @@ pub mod ui;
 
 pub use almanac_planet::AlmanacPlanet;
 pub use particles::{
-  GaussianParams, ParticleData, ParticleEmitterComponent, ParticleSystemComponent,
+  EmissionCircle, GaussianParams, ParticleData, ParticleEmitterCirclesComponent,
+  ParticleEmitterComponent, ParticleSystemComponent,
 };
 pub use ui::{Transform2DComponent, UiComponent};
 
@@ -571,6 +572,9 @@ pub struct SphereGizmoComponent {
   pub radius: f32,
   pub subdivisions: f32,
   pub local_frame: Mat4x4f32,
+  /// When false, this gizmo is not extracted for rendering.
+  /// Independent of `HiddenComponent` (which hides the entire entity subtree).
+  pub is_visible: bool,
 }
 impl Component for SphereGizmoComponent {}
 
@@ -1320,6 +1324,7 @@ impl Scene {
     self.register_component::<ReferenceFrameComponent>(&[]);
     self.register_component::<KinematicComponent>(&transform_type_id);
     self.register_component::<ColliderComponent>(&transform_type_id);
+    self.register_component::<ParticleEmitterCirclesComponent>(&transform_and_mesh);
 
     // ui module
     self.register_component::<ui::Transform2DComponent>(&[]);

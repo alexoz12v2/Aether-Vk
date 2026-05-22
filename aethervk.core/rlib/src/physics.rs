@@ -9,6 +9,7 @@ pub mod lcp_integration;
 pub mod motion_bvh;
 pub mod particle;
 pub mod physics_scene;
+pub mod tlas_builder;
 
 #[cfg(test)]
 mod integration_tests;

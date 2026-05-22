@@ -384,3 +384,54 @@ public partial class CometComponent : ObservableObject, IComponent
 
   public CometComponent() { }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Particle Emitter Circles
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// <summary>
+/// C# UI model for a single circular emission zone on a comet surface.
+/// Angles are stored in degrees; the FFI layer converts to radians.
+/// </summary>
+public partial class EmissionCircleItem : ObservableObject
+{
+  /// <summary>Latitude of the emission circle centre, in degrees (−90 south … +90 north).</summary>
+  [ObservableProperty]
+  private float _latitudeDeg;
+
+  /// <summary>Longitude of the emission circle centre, in degrees (0 … 360).</summary>
+  [ObservableProperty]
+  private float _longitudeDeg;
+
+  /// <summary>
+  /// Radius of the emission disc as a fraction of the mesh bounding-sphere radius (0.001 … 1.0).
+  /// </summary>
+  [ObservableProperty]
+  private float _circleRadius = 0.1f;
+
+  /// <summary>Mass of particles emitted from this circle.</summary>
+  [ObservableProperty]
+  private float _mass = 1.0f;
+
+  // ── Colour ──────────────────────────────────────────────────────────────────
+  [ObservableProperty] private float _colorR = 1.0f;
+  [ObservableProperty] private float _colorG = 0.6f;
+  [ObservableProperty] private float _colorB = 0.2f;
+  [ObservableProperty] private float _colorA = 1.0f;
+}
+
+/// <summary>
+/// Attaches a set of discrete circular particle-emission zones to a comet mesh entity.
+/// </summary>
+public partial class ParticleEmitterCirclesComponent : ObservableObject, IComponent
+{
+  public string Name => "Particle Emitter Circles";
+
+  public ObservableCollection<EmissionCircleItem> Circles { get; } = new();
+
+  [CommunityToolkit.Mvvm.Input.RelayCommand]
+  private void AddCircle() => Circles.Add(new EmissionCircleItem());
+
+  [CommunityToolkit.Mvvm.Input.RelayCommand]
+  private void RemoveCircle(EmissionCircleItem item) => Circles.Remove(item);
+}

@@ -80,7 +80,7 @@ fn setup_test_scene() -> Scene {
 #[test]
 fn test_imex_no_collision() {
   let scene = setup_test_scene();
-  let physics_scene = PhysicsScene::build_from_scene(&scene);
+  let physics_scene = PhysicsScene::build_from_scene(&scene, 0.016);
   
   assert_eq!(physics_scene.gpu_frames.len(), 1); // 1 default macro frame
   // The rest requires a VulkanDevice. We skip execution if no device is available.
@@ -89,7 +89,7 @@ fn test_imex_no_collision() {
 #[test]
 fn test_imex_collision_no_lca() {
   let scene = setup_test_scene();
-  let physics_scene = PhysicsScene::build_from_scene(&scene);
+  let physics_scene = PhysicsScene::build_from_scene(&scene, 0.016);
   
   assert_eq!(physics_scene.gpu_frames.len(), 1);
 }
@@ -110,7 +110,7 @@ fn test_imex_collision_with_lca() {
     _padding: 0,
   });
 
-  let physics_scene = PhysicsScene::build_from_scene(&scene);
+  let physics_scene = PhysicsScene::build_from_scene(&scene, 0.016);
 
   
   // 1 macro + 1 micro

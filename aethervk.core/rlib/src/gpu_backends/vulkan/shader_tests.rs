@@ -40,9 +40,7 @@ mod tests {
   // ─────────────────────────────────────────────────────────────────────────────
 
   fn setup_assets_dir() {
-    // Physics shader SPVs live in assets/sim/. Set ASSET_DIR there so
-    // VulkanComputeKernels::new() can find them.
-    let asset_dir = std::format!("{}/../../assets/sim", env!("CARGO_MANIFEST_DIR"));
+    let asset_dir = std::format!("{}/../../assets", env!("CARGO_MANIFEST_DIR"));
     *crate::gpu::ASSET_DIR.write() = Some(asset_dir);
   }
 
@@ -171,10 +169,9 @@ mod tests {
           device.device.handle.device_wait_idle().expect("device_wait_idle");
         }
 
-        let rh = pbuf.enqueue_read_to_cpu(&mut {
-          let mut c = device.create_command_buffer().expect("dummy_cmd");
-          c
-        }).expect("enqueue_read");
+        let mut dummy_cmd = device.create_command_buffer().expect("dummy_cmd");
+        let rh = pbuf.enqueue_read_to_cpu(&mut dummy_cmd).expect("enqueue_read");
+        dummy_cmd.submit().expect("submit dummy_cmd");
         let floats = rh.wait().expect("wait");
 
         let ps = gpu::unpack_particles_aosoa(&floats, 32, pmeta.len());
@@ -215,7 +212,7 @@ mod tests {
     ctx
       .with_device_as_kernels(handle, |device| {
         let mut cmd = device.create_command_buffer().expect("create_command_buffer");
-        let physics_scene = PhysicsScene::build_from_scene(&scene);
+        let physics_scene = PhysicsScene::build_from_scene(&scene, 0.016);
 
         let (mut rb, mut w) = device
           .build_rigid_bodies(&mut cmd, &physics_scene, &scene)
@@ -232,6 +229,7 @@ mod tests {
         let mut dummy_cmd = device.create_command_buffer().expect("dummy_cmd");
         let rh = rb.enqueue_read_to_cpu(&mut dummy_cmd).expect("enqueue_rb");
         let wh = w.enqueue_read_to_cpu(&mut dummy_cmd).expect("enqueue_wrench");
+        dummy_cmd.submit().expect("submit dummy");
 
         let rb_data = rh.wait().expect("wait_rb");
         let w_data = wh.wait().expect("wait_wrench");
@@ -274,7 +272,7 @@ mod tests {
     ctx
       .with_device_as_kernels(handle, |device| {
         let mut cmd = device.create_command_buffer().expect("create_command_buffer");
-        let physics_scene = PhysicsScene::build_from_scene(&scene);
+        let physics_scene = PhysicsScene::build_from_scene(&scene, 0.016);
 
         let (mut rb, mut w) = device
           .build_rigid_bodies(&mut cmd, &physics_scene, &scene)
@@ -291,6 +289,7 @@ mod tests {
 
         let mut dummy_cmd = device.create_command_buffer().expect("dummy_cmd");
         let rh = rb.enqueue_read_to_cpu(&mut dummy_cmd).expect("enqueue_read");
+        dummy_cmd.submit().expect("submit dummy");
         let rb_data = rh.wait().expect("wait");
 
         assert!(!rb_data.is_empty(), "No RBs read back");
@@ -347,6 +346,7 @@ mod tests {
 
         let mut dummy_cmd = device.create_command_buffer().expect("dummy_cmd");
         let rh = pbuf.enqueue_read_to_cpu(&mut dummy_cmd).expect("enqueue_read");
+        dummy_cmd.submit().expect("submit dummy_cmd");
         let floats = rh.wait().expect("wait");
 
         let ps = gpu::unpack_particles_aosoa(&floats, 32, pmeta.len());

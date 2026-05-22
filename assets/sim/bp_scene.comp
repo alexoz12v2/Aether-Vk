@@ -80,11 +80,13 @@ void main() {
         vec3 c_max = vec3(tlas.nodes[node_idx].max_x[lane_id], tlas.nodes[node_idx].max_y[lane_id], tlas.nodes[node_idx].max_z[lane_id]);
         uint child_payload = tlas.nodes[node_idx].child_indices[lane_id];
 
+        uint entity_id = meta & 0x07FFFFFF;
+
         bool hit = valid && intersectAABB(my_min, my_max, c_min, c_max);
         bool is_leaf = bvh_is_leaf(meta);
         
         // Prevents (A,A) and duplicate (B,A) pairs!
-        bool hit_leaf = hit && is_leaf && (my_ent_id < child_payload);
+        bool hit_leaf = hit && is_leaf && (my_ent_id < entity_id);
         bool hit_node = hit && !is_leaf;
 
         uvec4 leaf_ballot = subgroupBallot(hit_leaf);
@@ -96,7 +98,7 @@ void main() {
             if (lane_id == 0) base_idx = atomicAdd(pairs_buf.count, leaf_count);
             base_idx = subgroupBroadcast(base_idx, 0);
 
-            if (hit_leaf) pairs_buf.pairs[base_idx + leaf_offset] = uvec2(my_ent_id, child_payload);
+            if (hit_leaf) pairs_buf.pairs[base_idx + leaf_offset] = uvec2(my_ent_id, entity_id);
         }
 
         uvec4 node_ballot = subgroupBallot(hit_node);

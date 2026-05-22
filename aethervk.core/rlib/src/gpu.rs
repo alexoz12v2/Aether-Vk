@@ -57,6 +57,20 @@ impl GpuResourceHandle {
   }
 }
 
+/// Abstract representation of Vulkan sharing mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SharingMode {
+    Exclusive = 0,
+    Concurrent = 1,
+}
+
+/// Represents queue sharing configuration for GPU resources.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueueSharingInfo {
+    pub mode: SharingMode,
+    pub queue_family_indices: alloc::vec::Vec<u32>,
+}
+
 /// TODO: Document this item
 #[derive(Clone, Copy)]
 pub struct KinematicBody {
@@ -602,6 +616,20 @@ impl From<RenderableInstanceId> for GpuResourceHandle {
 // Allow the host application to configure the core assets path uniformly
 /// TODO: Document this item
 pub static ASSET_DIR: spin::RwLock<Option<alloc::string::String>> = spin::RwLock::new(None);
+
+
+/// Information about the synchronization payload after submitting a command buffer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommandBufferSyncInfo {
+    pub timeline_semaphore: u64, // Opaque handle for the backend
+    pub timeline_value: u64,
+}
+
+/// TODO: Document this item
+pub trait CommandBuffer: Send + Sync {
+  /// TODO: Document this item
+  fn submit(&mut self) -> EngineResult<Option<CommandBufferSyncInfo>>;
+}
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 /// TODO: Document this item
@@ -1274,6 +1302,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     &self,
     cmd_buffer: CommandBufferHandle,
     task_id: Option<u64>,
+    sync_info: Option<CommandBufferSyncInfo>,
   ) -> GpuResult<()>;
 
   fn wire_callbacks(&self, pool: Arc<aethervk_oshal_rlib::os::pool::ThreadPool>) -> GpuResult<()>;
@@ -1384,6 +1413,7 @@ pub struct ScopedCommandBuffer<'a> {
   device: &'a dyn RenderDevice,
   cmd_buffer: CommandBufferHandle,
   task_id: Option<u64>,
+  sync_info: Option<CommandBufferSyncInfo>,
   submitted: bool,
 }
 
@@ -1399,8 +1429,14 @@ impl<'a> ScopedCommandBuffer<'a> {
       device,
       cmd_buffer,
       task_id,
+      sync_info: None,
       submitted: false,
     })
+  }
+
+  /// Attaches synchronization info to this command buffer scope.
+  pub fn set_sync_info(&mut self, sync_info: CommandBufferSyncInfo) {
+    self.sync_info = Some(sync_info);
   }
 
   /// TODO: Document this item
@@ -1411,7 +1447,7 @@ impl<'a> ScopedCommandBuffer<'a> {
   /// Explicitly submits the command buffer.
   pub fn submit(mut self) -> GpuResult<()> {
     self.submitted = true;
-    let res = self.device.submit_command_buffer(self.cmd_buffer, self.task_id);
+    let res = self.device.submit_command_buffer(self.cmd_buffer, self.task_id, self.sync_info);
     if let Err(e) = &res {
       if let Some(task_id) = self.task_id {
         self.device.fail_task(task_id, e.clone());
@@ -1425,7 +1461,7 @@ impl<'a> Drop for ScopedCommandBuffer<'a> {
   fn drop(&mut self) {
     if !self.submitted {
       // Force submission on early exit/panic. Result is ignored to prevent double panics.
-      let res = self.device.submit_command_buffer(self.cmd_buffer, self.task_id);
+      let res = self.device.submit_command_buffer(self.cmd_buffer, self.task_id, self.sync_info);
       if let Err(e) = res {
         if let Some(task_id) = self.task_id {
           self.device.fail_task(task_id, e);
@@ -1739,13 +1775,6 @@ impl PresentationEngineParams {
 }
 
 // -- Compute Engine traits --
-/// Abstract handle for a compute queue (Vulkan/Metal Command Buffer, CUDA Stream, ...)
-/// Represents a thread of execution
-pub trait CommandBuffer: Send + Sync {
-  /// Dispatches the recorded command graph to the backend hardware queue
-  fn submit(&mut self) -> EngineResult<()>;
-}
-
 /// Continuous array residing entirely in backend memory
 pub trait DeviceBuffer<T>: Send + Sync {
   type Cmd: CommandBuffer;
@@ -1818,10 +1847,29 @@ pub trait Kernels: Send + Sync {
   type Buffer<T: Copy + Send + Sync>: DeviceBuffer<T, Cmd = Self::Cmd>;
   type List<T: Copy + Send + Sync>: DeviceList<T, Cmd = Self::Cmd>;
   type MotionBvh: DeviceBvh<Cmd = Self::Cmd>;
+  /// Opaque GPU buffer holding the per-tick flat `TlasMultiNode<N>[]` array.
+  type MotionTlas: DeviceBvh<Cmd = Self::Cmd>;
 
   fn discard_buffer<T: Copy + Send + Sync>(&self, buffer: Self::Buffer<T>);
   fn discard_list<T: Copy + Send + Sync>(&self, list: Self::List<T>);
   fn discard_bvh(&self, bvh: Self::MotionBvh);
+  fn discard_tlas(&self, tlas: Self::MotionTlas);
+
+  /// Returns the hardware subgroup size = TLAS/BLAS branching factor N.
+  /// Must be a power of two in {16, 32, 64}.
+  fn optimal_branching_factor(&self) -> u32;
+
+  /// Upload a CPU-built flat `TlasMultiNode<N>` node array (as raw bytes)
+  /// to a device-visible STORAGE_BUFFER | SHADER_DEVICE_ADDRESS buffer.
+  /// `node_bytes` = `bytemuck::cast_slice(&nodes_vec)`.
+  /// Particle-BLAS leaf slots that were written with the sentinel `u32::MAX`
+  /// in `child_indices[i]` are patched by the implementation to point to the
+  /// GPU-built particle LBVH address before returning (Vulkan path only).
+  fn upload_motion_tlas(
+    &self,
+    cmd: &mut Self::Cmd,
+    node_bytes: &[u8],
+  ) -> EngineResult<Self::MotionTlas>;
 
   fn create_command_buffer(&self) -> EngineResult<Self::Cmd>;
 
@@ -2110,7 +2158,7 @@ pub trait Kernels: Send + Sync {
     particle_metadata: &[ParticleMetadata],
     physical_scene: &mut PhysicsScene,
     scene: &Scene,
-  ) -> EngineResult<()>;
+  ) -> EngineResult<Option<CommandBufferSyncInfo>>;
 }
 
 /// Bridges synchronization between Compute (Kernels) and Graphics (RenderDevice).

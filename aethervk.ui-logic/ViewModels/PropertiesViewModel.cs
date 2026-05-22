@@ -137,6 +137,20 @@ public partial class PropertiesViewModel
             );
           }
         }
+        else if (name.Contains("ParticleEmitterCircles"))
+        {
+          // Build a fresh observable model for the circle-emitter component.
+          // In a future sprint this could be populated from native data.
+          var existing = SelectedEntity.Components
+            .OfType<ParticleEmitterCirclesComponent>()
+            .FirstOrDefault();
+          if (existing == null)
+          {
+            existing = new ParticleEmitterCirclesComponent();
+            SelectedEntity.Components.Add(existing);
+          }
+          PropertiesExpanders.Add(existing);
+        }
         else
         {
           PropertiesExpanders.Add(

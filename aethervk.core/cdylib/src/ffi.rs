@@ -703,6 +703,71 @@ pub unsafe extern "C" fn avkSimulationContext_spawnModelInstance(
   task_id
 }
 
+/// Result type written to the `out_result` pointer by `avkSimulationContext_spawnComet`.
+#[repr(C)]
+pub struct FfiSpawnCometResult {
+  /// External entity id of the LCA micro-frame parent entity.
+  pub lca_frame_id: u64,
+  /// External entity id of the comet mesh child entity.
+  pub comet_entity_id: u64,
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+/// Synchronously spawns a comet entity hierarchy (LCA micro-frame + comet mesh).
+///
+/// Unlike `spawnModelInstance` this does **not** enqueue a `LogicCommand` — the
+/// entities are created directly in the calling thread while holding the scene
+/// write lock. The caller must therefore not hold any `scenes` lock when calling
+/// this function.
+///
+/// Returns `true` on success; `false` on any error (null arguments, model/scene
+/// not found, component registration failures). On success `*out_result` is
+/// populated with both entity ids.
+pub unsafe extern "C" fn avkSimulationContext_spawnComet(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  model_id: u64,
+  entity_name: *const c_char,
+  pos_x: f32,
+  pos_y: f32,
+  pos_z: f32,
+  rot_w: f32,
+  rot_x: f32,
+  rot_y: f32,
+  rot_z: f32,
+  radius_km: f32,
+  physics_type: u32,
+  out_result: *mut FfiSpawnCometResult,
+) -> bool {
+  use aethervk_oshal_rlib::math::{
+    quaternion::Quaternion,
+    vector::{Vector3, vec3::Vec3f32, vec4::Quat},
+  };
+
+  if ctx.is_null() || entity_name.is_null() || out_result.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let name = unsafe { CStr::from_ptr(entity_name).to_str().unwrap_or("Comet") };
+  let pos = Vec3f32::from_components(pos_x, pos_y, pos_z);
+  let rot = Quat::from_components(rot_w, rot_x, rot_y, rot_z);
+
+  match ctx_ref.spawn_comet_internal(scene_id, model_id, name, pos, rot, radius_km, physics_type) {
+    Ok((lca_id, comet_id)) => {
+      unsafe {
+        (*out_result).lca_frame_id = lca_id;
+        (*out_result).comet_entity_id = comet_id;
+      }
+      true
+    }
+    Err(e) => {
+      oshal::log!("avkSimulationContext_spawnComet failed: {:?}", e);
+      false
+    }
+  }
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_raycastNdc(

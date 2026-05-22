@@ -201,44 +201,27 @@ namespace AetherVk.Services
         DataContext = new SpawnCometViewModel(models, _horizonService),
       };
       var result = await dialog.ShowDialog<SpawnCometResult?>(mainWindow);
-      if (result != null)
+      if (result == null)
+        return 0;
+
+      uint physicsTypeIdx = result.PhysicsType switch
       {
-        ulong instanceId = await _runtimeService.SpawnModelInstanceAsync(
-          1,
-          result.Model.Id,
-          result.EntityName,
-          result.PosX,
-          result.PosY,
-          result.PosZ
-        );
+        "Kinematic" => 1,
+        "Dynamic"   => 2,
+        _           => 0,  // Static
+      };
 
-        if (instanceId > 0)
-        {
-          var entity = _runtimeService.GetEntityById(1, instanceId);
-          if (entity != null)
-          {
-            var transform = System.Linq.Enumerable.FirstOrDefault(
-              System.Linq.Enumerable.OfType<AetherVk.Logic.Models.TransformComponent>(
-                entity.Components
-              )
-            );
-            if (transform != null)
-            {
-              transform.ScaleX = result.ScaleX;
-              transform.ScaleY = result.ScaleY;
-              transform.ScaleZ = result.ScaleZ;
-              transform.RotW = result.RotW;
-              transform.RotX = result.RotX;
-              transform.RotY = result.RotY;
-              transform.RotZ = result.RotZ;
-            }
-          }
-        }
+      var (_, cometId) = _runtimeService.SpawnComet(
+        sceneId:     1,
+        modelId:     result.Model.Id,
+        entityName:  result.EntityName,
+        posX: result.PosX, posY: result.PosY, posZ: result.PosZ,
+        rotW: result.RotW, rotX: result.RotX, rotY: result.RotY, rotZ: result.RotZ,
+        radiusKm:    result.CometRadiusKm,
+        physicsType: physicsTypeIdx
+      );
 
-        return instanceId;
-      }
-
-      return 0;
+      return cometId;
     }
   }
 }

@@ -1,21 +1,22 @@
 //! physics_scene module.
 
 use crate::{
-  math::collision::linear_bvh::LinearBound,
-  scene::{
-    EntityId, Scene, TransformComponent,
+  math::collision::{
+    bounds::AABB,
+    linear_bvh::{LinearBVH, LinearBVHHeader, LinearBVHNode, LinearBound},
   },
+  scene::{EntityId, Scene, TransformComponent},
 };
 use aethervk_oshal_rlib::math::{
   matrix::{Matrix4, mat4::Mat4x4f32},
   vector::{Vector, Vector3, vec3::Vec3f32},
 };
+use alloc::vec::Vec;
 
 pub mod math;
 
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Debug, Default)]
-/// TODO: Document this item
 pub struct GpuBvhNode {
   pub aabb_min: [f32; 3],
   pub left_child_or_prim: u32,
@@ -29,7 +30,6 @@ pub struct GpuBvhNode {
 
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Debug, Default)]
-/// TODO: Document this item
 pub struct GpuReferenceFrame {
   pub center_pos: [f32; 3],
   pub scale: f32,
@@ -43,40 +43,110 @@ pub struct GpuReferenceFrame {
   pub _pad1: u32,
 }
 
-pub enum BvhInstance {
-  Primitive(EntityId, LinearBound<f32>),
-  SubFrame(u32, LinearBound<f32>),
+// Metadata helpers for TLAS
+pub const BVH_FRAME_MACRO:  u32 = 0;
+pub const BVH_FRAME_MICRO:  u32 = 1;
+pub const BVH_SHAPE_AABB:   u32 = 0;
+pub const BVH_SHAPE_OBB:    u32 = 1;
+pub const BVH_SHAPE_SPHERE: u32 = 2;
+
+pub fn pack_meta(is_leaf: bool, frame: u32, shape: u32, index: u32) -> u32 {
+  let mut m = index & 0x07FF_FFFF;
+  m |= (shape & 0x3) << 27;
+  m |= (frame & 0x3) << 29;
+  if is_leaf { m |= 0x8000_0000; }
+  m
 }
 
-impl BvhInstance {
-  pub fn bound(&self) -> &LinearBound<f32> {
-    match self {
-      BvhInstance::Primitive(_, b) => b,
-      BvhInstance::SubFrame(_, b) => b,
+pub struct RbNode {
+  pub min: Vec3f32,
+  pub max: Vec3f32,
+  pub left: Option<u32>,
+  pub right: Option<u32>,
+  pub leaf_meta: Option<u32>,
+  pub leaf_child_idx: u32,
+}
+
+pub struct RootBoundsBvh {
+  pub nodes: Vec<RbNode>,
+}
+
+impl RootBoundsBvh {
+  pub fn build(leaves: &[(u32, Vec3f32, Vec3f32, u32, u32)]) -> Self {
+    let mut nodes = Vec::new();
+    if !leaves.is_empty() {
+      let mut items: Vec<usize> = (0..leaves.len()).collect();
+      Self::build_recursive(&mut items, leaves, &mut nodes);
     }
+    Self { nodes }
+  }
+
+  pub fn build_recursive(
+    items: &mut [usize],
+    leaves: &[(u32, Vec3f32, Vec3f32, u32, u32)],
+    nodes: &mut Vec<RbNode>,
+  ) -> u32 {
+    let node_idx = nodes.len() as u32;
+    nodes.push(RbNode {
+      min: Vec3f32::zero(), max: Vec3f32::zero(),
+      left: None, right: None, leaf_meta: None, leaf_child_idx: 0,
+    });
+
+    let mut mn = Vec3f32::from_array([f32::INFINITY; 3]);
+    let mut mx = Vec3f32::from_array([f32::NEG_INFINITY; 3]);
+    for &i in items.iter() {
+      mn = mn.min(leaves[i].1);
+      mx = mx.max(leaves[i].2);
+    }
+
+    if items.len() == 1 {
+      let &(root_idx, _, _, shape, frame) = &leaves[items[0]];
+      let meta = pack_meta(true, frame, shape, root_idx);
+      nodes[node_idx as usize] = RbNode {
+        min: mn, max: mx, left: None, right: None,
+        leaf_meta: Some(meta), leaf_child_idx: root_idx,
+      };
+      return node_idx;
+    }
+
+    let ext = mx - mn;
+    let axis = if ext.x() > ext.y() && ext.x() > ext.z() { 0 }
+               else if ext.y() > ext.z() { 1 } else { 2 };
+    items.sort_by(|&a, &b| {
+      let ca = (leaves[a].1 + leaves[a].2) * 0.5;
+      let cb = (leaves[b].1 + leaves[b].2) * 0.5;
+      ca[axis].partial_cmp(&cb[axis]).unwrap_or(core::cmp::Ordering::Equal)
+    });
+    let mid = items.len() / 2;
+    let (left_items, right_items) = items.split_at_mut(mid);
+    let left  = Self::build_recursive(left_items,  leaves, nodes);
+    let right = Self::build_recursive(right_items, leaves, nodes);
+
+    nodes[node_idx as usize] = RbNode {
+      min: mn, max: mx, left: Some(left), right: Some(right),
+      leaf_meta: None, leaf_child_idx: 0,
+    };
+    node_idx
   }
 }
 
-#[derive(Clone, Debug)]
-/// TODO: Document this item
 pub struct PhysicsScene {
-  pub gpu_frames: alloc::vec::Vec<GpuReferenceFrame>,
-  pub gpu_bvh_nodes: alloc::vec::Vec<GpuBvhNode>,
-  pub gpu_primitives: alloc::vec::Vec<u32>,
-  pub gpu_entity_mappings: alloc::vec::Vec<EntityId>,
+  pub gpu_frames: Vec<GpuReferenceFrame>,
+  pub macro_tlas: RootBoundsBvh,
+  pub micro_tlases: hashbrown::HashMap<u32, RootBoundsBvh>,
+  pub mesh_blases: Vec<Option<LinearBVH<f32>>>,
+  pub particle_blases: Vec<Option<LinearBVH<f32>>>,
+  pub dt_s: f32,
 }
 
 impl PhysicsScene {
-  /// TODO: Document this item
-  pub fn build_from_scene(scene: &Scene) -> Self {
-    use crate::scene::{KinematicComponent, ReferenceFrameComponent};
+  pub fn build_from_scene(scene: &Scene, dt_s: f32) -> Self {
+    use crate::scene::{KinematicComponent, ReferenceFrameComponent, PhysicalMeshComponent, particles::ParticleSystemComponent};
     let mut frame_map: hashbrown::HashMap<EntityId, u32> = hashbrown::HashMap::new();
-    let mut gpu_frames = alloc::vec::Vec::new();
+    let mut gpu_frames = Vec::new();
 
     scene.query2::<TransformComponent, ReferenceFrameComponent, _>(|e, t, f| {
-      let vel =
-        scene.with_component(e, |k: &KinematicComponent| k.velocity).unwrap_or(Vec3f32::zero());
-
+      let vel = scene.with_component(e, |k: &KinematicComponent| k.velocity).unwrap_or(Vec3f32::zero());
       let gpu_frame = GpuReferenceFrame {
         center_pos: [t.position.x(), t.position.y(), t.position.z()],
         scale: f.scale,
@@ -88,7 +158,6 @@ impl PhysicsScene {
         entity_id_raw: slotmap::Key::data(&e).as_ffi(),
         ..Default::default()
       };
-
       frame_map.insert(e, gpu_frames.len() as u32);
       gpu_frames.push(gpu_frame);
     });
@@ -108,10 +177,9 @@ impl PhysicsScene {
       gpu_frames.push(GpuReferenceFrame {
         center_pos: [0.0, 0.0, 0.0],
         scale: 1.0,
-        // center_rot: [0.0, 0.0, 0.0, 1.0],
         center_vel: [0.0, 0.0, 0.0],
         soi_radius: f32::MAX,
-        frame_type: crate::scene::ReferenceFrameType::Macro as u32,
+        frame_type: 0,
         parent_frame_idx: u32::MAX,
         bvh_root_index: u32::MAX,
         entity_id_raw: 0,
@@ -119,249 +187,217 @@ impl PhysicsScene {
       });
     }
 
-    let mut frame_instances: hashbrown::HashMap<u32, alloc::vec::Vec<BvhInstance>> =
-      hashbrown::HashMap::new();
-    let default_parent = gpu_frames
-      .iter()
-      .position(|f| f.frame_type == crate::scene::ReferenceFrameType::Macro as u32)
-      .unwrap_or(0) as u32;
+    let macro_frame_idx = gpu_frames.iter().position(|f| f.frame_type == 0).unwrap_or(0) as u32;
 
-    let mut num_meshes = 0;
-    scene.query2::<TransformComponent, crate::scene::PhysicalMeshComponent, _>(
-      |entity, transform, mesh| {
-        num_meshes += 1;
-        if let Some(bvh) = &mesh.mesh.bvh {
-          if !bvh.nodes.is_empty() {
-            let root_bound = &bvh.nodes[0].bound;
-            let mat = Mat4x4f32::translation(transform.position)
-              * <Mat4x4f32 as Matrix4>::from_quat_custom_frame(transform.rotation)
-              * Mat4x4f32::from_scale(transform.scale);
+    let mut mesh_blases = Vec::new();
+    let mut frame_leaves: hashbrown::HashMap<u32, Vec<(u32, Vec3f32, Vec3f32, u32, u32)>> = hashbrown::HashMap::new();
 
-            let transformed_aabb = match root_bound {
-              LinearBound::AABB(aabb) => aabb.transform_f32(&mat),
-              LinearBound::OBB(obb) => obb.transform_f32(&mat).to_aabb::<Vec3f32>(),
-            };
+    let mut dense_mesh_idx = 0;
+    scene.query2::<TransformComponent, KinematicComponent, _>(|entity, transform, kinematic| {
+      let mesh_bvh = scene.with_component(entity, |mesh: &PhysicalMeshComponent| {
+        mesh.mesh.bvh.clone()
+      }).flatten();
 
-            let mut target_frame_idx = default_parent;
-            let mut curr = entity;
-            loop {
-              if let Some(&idx) = frame_map.get(&curr) {
-                target_frame_idx = idx;
-                break;
-              }
-              if let Some(parent) = scene.get_parent(curr) {
-                curr = parent;
-              } else {
-                break;
-              }
+      let motion_blas = if let Some(bvh) = mesh_bvh {
+        let b = build_motion_blas(&bvh, transform, kinematic.velocity, dt_s);
+        let lca_idx = find_lca_frame_idx(entity, scene, &gpu_frames).unwrap_or(macro_frame_idx);
+        let frame_bits = if lca_idx == macro_frame_idx { BVH_FRAME_MACRO } else { BVH_FRAME_MICRO };
+
+        let mut min_bound = Vec3f32::from_array([f32::INFINITY; 3]);
+        let mut max_bound = Vec3f32::from_array([f32::NEG_INFINITY; 3]);
+        for node in &b.nodes {
+          match &node.bound {
+            LinearBound::AABB(aabb) => {
+              min_bound = min_bound.min(aabb.min());
+              max_bound = max_bound.max(aabb.max());
             }
-
-            frame_instances.entry(target_frame_idx).or_default().push(BvhInstance::Primitive(
-              entity,
-              LinearBound::AABB(transformed_aabb),
-            ));
-          } else {
-            aethervk_oshal_rlib::log!("DEBUG: bvh.nodes.is_empty for mesh");
+            LinearBound::OBB(_) => {}
           }
-        } else {
-          aethervk_oshal_rlib::log!("DEBUG: mesh.mesh.bvh is None");
         }
-      },
-    );
-    aethervk_oshal_rlib::log!("DEBUG: build_from_scene found {} meshes total", num_meshes);
+        frame_leaves.entry(lca_idx).or_default().push((dense_mesh_idx, min_bound, max_bound, BVH_SHAPE_AABB, frame_bits));
+        Some(b)
+      } else {
+        None
+      };
+      mesh_blases.push(motion_blas);
+      dense_mesh_idx += 1;
+    });
 
-    let mut gpu_bvh_nodes = alloc::vec::Vec::new();
-    let mut gpu_primitives = alloc::vec::Vec::new();
-    let mut gpu_entity_mappings = alloc::vec::Vec::new();
+    let mut particle_blases = Vec::new();
+    let mut dense_particle_idx = 0;
+    scene.query1::<ParticleSystemComponent, _>(|entity, sys| {
+      let ps = sys.particles.read();
+      let motion_blas = if !ps.is_empty() {
+        let transform = scene.global_transform(entity).unwrap_or_default();
+        use crate::math::{particles_edu::build_motion_particle_lbvh, physics::Particle};
+        let pars: Vec<Particle> = ps.iter().map(|p| Particle {
+          position: Vec3f32::from_array(p.position),
+          velocity: Vec3f32::from_array(p.velocity),
+          mass: p.mass,
+          accumulated_force: Vec3f32::zero(),
+        }).collect();
+        let vels: Vec<Vec3f32> = ps.iter().map(|p| Vec3f32::from_array(p.velocity)).collect();
 
-    let mut macro_instances = frame_instances.remove(&default_parent).unwrap_or_default();
+        if let Some(lbvh) = build_motion_particle_lbvh(&pars, &vels, 1.0, dt_s) {
+          let lca_idx = find_lca_frame_idx(entity, scene, &gpu_frames).unwrap_or(macro_frame_idx);
+          let frame_bits = if lca_idx == macro_frame_idx { BVH_FRAME_MACRO } else { BVH_FRAME_MICRO };
+          let mut min_bound = Vec3f32::from_array([f32::INFINITY; 3]);
+          let mut max_bound = Vec3f32::from_array([f32::NEG_INFINITY; 3]);
+          for node in &lbvh.nodes {
+            match &node.bound {
+              LinearBound::AABB(aabb) => {
+                min_bound = min_bound.min(aabb.min());
+                max_bound = max_bound.max(aabb.max());
+              }
+              LinearBound::OBB(_) => {}
+            }
+          }
+          frame_leaves.entry(lca_idx).or_default().push((dense_particle_idx, min_bound, max_bound, BVH_SHAPE_SPHERE, frame_bits));
+          Some(lbvh)
+        } else {
+          None
+        }
+      } else {
+        None
+      };
+      particle_blases.push(motion_blas);
+      dense_particle_idx += 1;
+    });
 
-    for (frame_idx, mut instances) in frame_instances {
-      if !instances.is_empty() {
-        let root_idx = gpu_bvh_nodes.len() as u32;
-        gpu_frames[frame_idx as usize].bvh_root_index = root_idx;
+    let mut micro_tlases = hashbrown::HashMap::new();
+    let mut macro_leaves = Vec::new();
 
-        Self::build_recursive_flat(
-          &mut instances,
-          &mut gpu_bvh_nodes,
-          &mut gpu_primitives,
-          &mut gpu_entity_mappings,
-        );
+    if let Some(orphans) = frame_leaves.remove(&macro_frame_idx) {
+      macro_leaves.extend(orphans);
+    }
 
-        let root_bound = LinearBound::AABB(crate::math::collision::bounds::AABB::new(
-          Vec3f32::from_array(gpu_bvh_nodes[root_idx as usize].aabb_min),
-          Vec3f32::from_array(gpu_bvh_nodes[root_idx as usize].aabb_max),
-        ));
-        macro_instances.push(BvhInstance::SubFrame(root_idx, root_bound));
+    for (frame_idx, leaves) in frame_leaves {
+      if leaves.is_empty() { continue; }
+      let rbvh = RootBoundsBvh::build(&leaves);
+
+      let mut mn = Vec3f32::from_array([f32::INFINITY; 3]);
+      let mut mx = Vec3f32::from_array([f32::NEG_INFINITY; 3]);
+      if !rbvh.nodes.is_empty() {
+        mn = rbvh.nodes[0].min;
+        mx = rbvh.nodes[0].max;
       }
+      macro_leaves.push((frame_idx, mn, mx, BVH_SHAPE_OBB, BVH_FRAME_MACRO));
+      micro_tlases.insert(frame_idx, rbvh);
     }
 
-    if !macro_instances.is_empty() {
-      let root_idx = gpu_bvh_nodes.len() as u32;
-      gpu_frames[default_parent as usize].bvh_root_index = root_idx;
-
-      Self::build_recursive_flat(
-        &mut macro_instances,
-        &mut gpu_bvh_nodes,
-        &mut gpu_primitives,
-        &mut gpu_entity_mappings,
-      );
-    }
+    let macro_tlas = RootBoundsBvh::build(&macro_leaves);
 
     Self {
       gpu_frames,
-      gpu_bvh_nodes,
-      gpu_primitives,
-      gpu_entity_mappings,
+      macro_tlas,
+      micro_tlases,
+      mesh_blases,
+      particle_blases,
+      dt_s,
     }
   }
+}
 
-  fn build_recursive_flat(
-    instances: &mut [BvhInstance],
-    nodes: &mut alloc::vec::Vec<GpuBvhNode>,
-    primitives: &mut alloc::vec::Vec<u32>,
-    entity_mappings: &mut alloc::vec::Vec<EntityId>,
-  ) -> u32 {
-    let node_idx = nodes.len() as u32;
-    nodes.push(GpuBvhNode::default());
+pub fn build_motion_blas(
+  mesh_bvh: &LinearBVH<f32>,
+  transform: &TransformComponent,
+  velocity_lca: Vec3f32,
+  dt_s: f32,
+) -> LinearBVH<f32> {
+  let trs = Mat4x4f32::translation(transform.position)
+    * <Mat4x4f32 as Matrix4>::from_quat_custom_frame(transform.rotation)
+    * Mat4x4f32::from_scale(transform.scale);
+  let disp = velocity_lca * dt_s;
 
-    let mut aggregate_aabb = match instances[0].bound() {
-      LinearBound::AABB(aabb) => aabb.clone(),
-      LinearBound::OBB(obb) => obb.to_aabb::<Vec3f32>(),
+  let nodes: Vec<LinearBVHNode<f32>> = mesh_bvh.nodes.iter().map(|n| {
+    let swept_bound = match &n.bound {
+      LinearBound::AABB(aabb) => {
+        let world = aabb.transform_f32(&trs);
+        let swept_min = world.min::<Vec3f32>().min(world.min::<Vec3f32>() + disp);
+        let swept_max = world.max::<Vec3f32>().max(world.max::<Vec3f32>() + disp);
+        LinearBound::AABB(AABB::new(swept_min, swept_max))
+      }
+      LinearBound::OBB(obb) => {
+        let world = obb.transform_f32(&trs).to_aabb::<Vec3f32>();
+        let swept_min = world.min::<Vec3f32>().min(world.min::<Vec3f32>() + disp);
+        let swept_max = world.max::<Vec3f32>().max(world.max::<Vec3f32>() + disp);
+        LinearBound::AABB(AABB::new(swept_min, swept_max))
+      }
     };
-    for instance in &instances[1..] {
-      let b_aabb = match instance.bound() {
-        LinearBound::AABB(aabb) => aabb.clone(),
-        LinearBound::OBB(obb) => obb.to_aabb::<Vec3f32>(),
-      };
-      aggregate_aabb.encapsulate_aabb::<Vec3f32>(&b_aabb);
+    LinearBVHNode {
+      bound: swept_bound,
+      left_child_or_primitive_offset: n.left_child_or_primitive_offset,
+      right_child_offset: n.right_child_offset,
+      primitive_count: n.primitive_count,
+      mass: n.mass,
+      center_of_mass: n.center_of_mass,
     }
+  }).collect();
 
-    let min: Vec3f32 = aggregate_aabb.min();
-    let max: Vec3f32 = aggregate_aabb.max();
-
-    if instances.len() == 1 {
-      match instances[0] {
-        BvhInstance::Primitive(entity_id, _) => {
-          let prim_idx = entity_mappings.len() as u32;
-          entity_mappings.push(entity_id);
-          primitives.push(prim_idx);
-
-          nodes[node_idx as usize] = GpuBvhNode {
-            aabb_min: [min.x(), min.y(), min.z()],
-            left_child_or_prim: prim_idx,
-            aabb_max: [max.x(), max.y(), max.z()],
-            right_child_offset: u32::MAX,
-            prim_count: 1,
-            ..Default::default()
-          };
-        }
-        BvhInstance::SubFrame(root_idx, _) => {
-          nodes[node_idx as usize] = GpuBvhNode {
-            aabb_min: [min.x(), min.y(), min.z()],
-            left_child_or_prim: root_idx,
-            aabb_max: [max.x(), max.y(), max.z()],
-            right_child_offset: u32::MAX,
-            prim_count: 0,
-            ..Default::default()
-          };
-        }
-      }
-    } else {
-      let mut min_c = Vec3f32::from_components(f32::INFINITY, f32::INFINITY, f32::INFINITY);
-      let mut max_c =
-        Vec3f32::from_components(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
-      for instance in instances.iter() {
-        let c = match instance.bound() {
-          LinearBound::AABB(aabb) => aabb.center(),
-          LinearBound::OBB(obb) => obb.to_aabb::<Vec3f32>().center(),
-        };
-        min_c = min_c.min(c);
-        max_c = max_c.max(c);
-      }
-
-      let extents = max_c - min_c;
-      let axis = if extents.x() > extents.y() && extents.x() > extents.z() {
-        0
-      } else if extents.y() > extents.z() {
-        1
-      } else {
-        2
-      };
-
-      instances.sort_by(|a, b| {
-        let ca: Vec3f32 = match a.bound() {
-          LinearBound::AABB(aabb) => aabb.center(),
-          LinearBound::OBB(obb) => obb.to_aabb::<Vec3f32>().center(),
-        };
-        let cb: Vec3f32 = match b.bound() {
-          LinearBound::AABB(aabb) => aabb.center(),
-          LinearBound::OBB(obb) => obb.to_aabb::<Vec3f32>().center(),
-        };
-        ca[axis].partial_cmp(&cb[axis]).unwrap_or(core::cmp::Ordering::Equal)
-      });
-
-      let mid = instances.len() / 2;
-      let left =
-        Self::build_recursive_flat(&mut instances[..mid], nodes, primitives, entity_mappings);
-      let right =
-        Self::build_recursive_flat(&mut instances[mid..], nodes, primitives, entity_mappings);
-
-      nodes[node_idx as usize] = GpuBvhNode {
-        aabb_min: [min.x(), min.y(), min.z()],
-        left_child_or_prim: left,
-        aabb_max: [max.x(), max.y(), max.z()],
-        right_child_offset: right,
-        prim_count: 0,
-        ..Default::default()
-      };
-    }
-
-    node_idx
+  LinearBVH {
+    header: LinearBVHHeader {
+      preciseness: 0,
+      node_count: nodes.len() as u32,
+      primitive_count: mesh_bvh.header.primitive_count,
+    },
+    nodes,
+    primitives: mesh_bvh.primitives.clone(),
   }
 }
 
-pub struct GpuBvhView<'a> {
-  pub nodes: &'a [GpuBvhNode],
-  pub root: u32,
+fn find_lca_frame_idx(
+  entity: EntityId,
+  scene: &Scene,
+  gpu_frames: &[GpuReferenceFrame],
+) -> Option<u32> {
+  let mut curr = entity;
+  loop {
+    let entity_raw = slotmap::Key::data(&curr).as_ffi();
+    if let Some(idx) = gpu_frames.iter().position(|f| f.entity_id_raw == entity_raw) {
+      return Some(idx as u32);
+    }
+    curr = scene.get_parent(curr)?;
+  }
 }
 
-impl<'a> crate::math::collision::multi_bvh::BinaryBvh for GpuBvhView<'a> {
-  type Bound = crate::math::collision::bounds::AABB<f32>;
+impl crate::math::collision::multi_bvh::BinaryBvh for RootBoundsBvh {
+  type Bound = AABB<f32>;
   type Primitive = u32;
 
   fn root(&self) -> Option<u32> {
-    Some(self.root)
+    if self.nodes.is_empty() { None } else { Some(0) }
   }
 
-  fn bound(&self, node_idx: u32) -> Self::Bound {
-    let n = &self.nodes[node_idx as usize];
-    crate::math::collision::bounds::AABB::new(
-      Vec3f32::from_array(n.aabb_min),
-      Vec3f32::from_array(n.aabb_max),
-    )
+  fn bound(&self, idx: u32) -> AABB<f32> {
+    let n = &self.nodes[idx as usize];
+    AABB::new(n.min, n.max)
   }
 
-  fn is_leaf(&self, node_idx: u32) -> bool {
-    self.nodes[node_idx as usize].prim_count > 0
+  fn is_leaf(&self, idx: u32) -> bool {
+    self.nodes[idx as usize].leaf_meta.is_some()
   }
 
-  fn children(&self, node_idx: u32) -> (Option<u32>, Option<u32>) {
-    let n = &self.nodes[node_idx as usize];
-    if n.prim_count > 0 {
-      (None, None)
-    } else {
-      (Some(n.left_child_or_prim), Some(n.right_child_offset))
-    }
+  fn children(&self, idx: u32) -> (Option<u32>, Option<u32>) {
+    let n = &self.nodes[idx as usize];
+    (n.left, n.right)
   }
 
-  fn extract_primitives(&self, node_idx: u32, out: &mut alloc::vec::Vec<Self::Primitive>) -> u32 {
-    let n = &self.nodes[node_idx as usize];
-    if n.prim_count > 0 {
-      out.push(n.left_child_or_prim);
+  fn extract_primitives(&self, idx: u32, out: &mut Vec<u32>) -> u32 {
+    let n = &self.nodes[idx as usize];
+    if let Some(meta) = n.leaf_meta {
+      out.push(meta);
       1
     } else {
       0
     }
+  }
+}
+
+impl core::fmt::Debug for PhysicsScene {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    f.debug_struct("PhysicsScene")
+     .field("gpu_frames", &self.gpu_frames)
+     .field("dt_s", &self.dt_s)
+     .finish()
   }
 }

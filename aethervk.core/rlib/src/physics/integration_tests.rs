@@ -56,7 +56,7 @@ mod tests {
   where
     K: Kernels,
   {
-    let mut ps = PhysicsScene::build_from_scene(scene);
+    let mut ps = PhysicsScene::build_from_scene(scene, 0.016);
     let dt_us = 16_667; // 60 FPS
     let iterations = (duration_secs * 60.0) as usize;
 

@@ -386,6 +386,37 @@ public static class NativeInterop
     string name
   );
 
+  /// <summary>
+  /// Result written by <see cref="avkSimulationContext_spawnComet"/>.
+  /// Both fields are external entity ids (&gt; 0 on success).
+  /// </summary>
+  [StructLayout(LayoutKind.Sequential)]
+  public struct FfiSpawnCometResult
+  {
+    /// <summary>External entity id of the LCA micro-frame parent entity.</summary>
+    public ulong LcaFrameId;
+    /// <summary>External entity id of the comet mesh child entity.</summary>
+    public ulong CometEntityId;
+  }
+
+  /// <summary>
+  /// Synchronously spawns a comet entity hierarchy (LCA micro-frame + comet mesh entity).
+  /// Returns true on success; populates <paramref name="result"/> with both entity ids.
+  /// </summary>
+  [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_spawnComet(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong modelId,
+    string entityName,
+    float posX, float posY, float posZ,
+    float rotW, float rotX, float rotY, float rotZ,
+    float radiusKm,
+    uint physicsType,
+    out FfiSpawnCometResult result
+  );
+
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern IntPtr avkSimulationContext_getAlmanacLoadedFiles(
     IntPtr ctx,

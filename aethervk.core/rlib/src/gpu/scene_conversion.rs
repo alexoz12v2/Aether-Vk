@@ -805,9 +805,11 @@ impl SceneConversionExt for crate::scene::Scene {
         if hidden_set.contains(&id) {
           return;
         }
-        if let Some(t) = self.get_relative_transform(id, camera_entity) {
-          let gizmo_model = t.to_mat4::<Mat4x4f32>() * gizmo.local_frame;
-          extracted_sphere_gizmos.push((id, gizmo_model, gizmo.radius, gizmo.subdivisions));
+        if gizmo.is_visible {
+          if let Some(t) = self.get_relative_transform(id, camera_entity) {
+            let gizmo_model = t.to_mat4::<Mat4x4f32>() * gizmo.local_frame;
+            extracted_sphere_gizmos.push((id, gizmo_model, gizmo.radius, gizmo.subdivisions));
+          }
         }
       },
     );

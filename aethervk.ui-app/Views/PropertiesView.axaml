@@ -217,6 +217,100 @@
                         </Expander>
                     </DataTemplate>
 
+                    <!-- ══════════════════════════════════════════════════════ -->
+                    <!-- Particle Emitter Circles Component                     -->
+                    <!-- ══════════════════════════════════════════════════════ -->
+                    <DataTemplate DataType="models:ParticleEmitterCirclesComponent">
+                        <Expander Header="{Binding Name}" IsExpanded="True"
+                                  HorizontalAlignment="Stretch" Margin="0,0,0,8">
+                            <StackPanel Spacing="4" Margin="4,4,4,4">
+
+                                <!-- List of emission circles -->
+                                <ItemsControl ItemsSource="{Binding Circles}" x:Name="circlesList">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="models:EmissionCircleItem">
+                                            <Border Background="{DynamicResource Bg.Surface}"
+                                                    CornerRadius="6" Margin="0,0,0,4" Padding="10,8">
+                                                <Grid RowDefinitions="Auto,Auto,Auto">
+
+                                                    <!-- Row 0: colour swatch + label + remove button -->
+                                                    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto">
+                                                        <Border Grid.Column="0" Width="10" Height="14"
+                                                                CornerRadius="2" Margin="0,0,8,0"
+                                                                VerticalAlignment="Center">
+                                                            <Border.Background>
+                                                                <SolidColorBrush Color="#FFFF9944"/>
+                                                            </Border.Background>
+                                                        </Border>
+                                                        <TextBlock Grid.Column="1" Text="Emission Circle"
+                                                                   FontWeight="SemiBold"
+                                                                   VerticalAlignment="Center"/>
+                                                        <Button Grid.Column="2" Content="✕"
+                                                                Padding="6,2" FontSize="11"
+                                                                VerticalAlignment="Center"
+                                                                Command="{Binding $parent[ItemsControl].((models:ParticleEmitterCirclesComponent)DataContext).RemoveCircleCommand}"
+                                                                CommandParameter="{Binding}"
+                                                                ToolTip.Tip="Remove this emission circle"/>
+                                                    </Grid>
+
+                                                    <!-- Row 1: latitude / longitude -->
+                                                    <Grid Grid.Row="1"
+                                                          ColumnDefinitions="Auto,*,Auto,*"
+                                                          Margin="0,6,0,0">
+                                                        <TextBlock Grid.Column="0" Text="φ lat (°):"
+                                                                   VerticalAlignment="Center"
+                                                                   Margin="0,0,6,0"/>
+                                                        <NumericUpDown Grid.Column="1"
+                                                                       Value="{Binding LatitudeDeg}"
+                                                                       Minimum="-90" Maximum="90"
+                                                                       FormatString="0.0"
+                                                                       Margin="0,0,10,0"/>
+                                                        <TextBlock Grid.Column="2" Text="λ lon (°):"
+                                                                   VerticalAlignment="Center"
+                                                                   Margin="0,0,6,0"/>
+                                                        <NumericUpDown Grid.Column="3"
+                                                                       Value="{Binding LongitudeDeg}"
+                                                                       Minimum="0" Maximum="360"
+                                                                       FormatString="0.0"/>
+                                                    </Grid>
+
+                                                    <!-- Row 2: mass / circle radius -->
+                                                    <Grid Grid.Row="2"
+                                                          ColumnDefinitions="Auto,*,Auto,*"
+                                                          Margin="0,4,0,0">
+                                                        <TextBlock Grid.Column="0" Text="Mass:"
+                                                                   VerticalAlignment="Center"
+                                                                   Margin="0,0,6,0"/>
+                                                        <NumericUpDown Grid.Column="1"
+                                                                       Value="{Binding Mass}"
+                                                                       Minimum="0"
+                                                                       FormatString="0.000"
+                                                                       Margin="0,0,10,0"/>
+                                                        <TextBlock Grid.Column="2" Text="R (frac):"
+                                                                   VerticalAlignment="Center"
+                                                                   Margin="0,0,6,0"/>
+                                                        <NumericUpDown Grid.Column="3"
+                                                                       Value="{Binding CircleRadius}"
+                                                                       Minimum="0.001" Maximum="1.0"
+                                                                       FormatString="0.000"/>
+                                                    </Grid>
+
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <!-- Add circle button -->
+                                <Button Content="＋ Add Emission Circle"
+                                        HorizontalAlignment="Stretch"
+                                        HorizontalContentAlignment="Center"
+                                        Classes="accent" Margin="0,4,0,0"
+                                        Command="{Binding AddCircleCommand}"/>
+                            </StackPanel>
+                        </Expander>
+                    </DataTemplate>
+
                 </ItemsControl.DataTemplates>
             </ItemsControl>
         </ScrollViewer>

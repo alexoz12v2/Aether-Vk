@@ -1072,6 +1072,63 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return instanceId;
   }
 
+  /// <summary>
+  /// Synchronously spawns a comet entity hierarchy: an LCA micro-frame parent entity and
+  /// the comet mesh child entity. Both are mirrored into the C# scene tree.
+  /// </summary>
+  /// <returns>
+  /// A tuple of (lcaFrameId, cometEntityId). Both are 0 on failure.
+  /// </returns>
+  public (ulong lcaFrameId, ulong cometEntityId) SpawnComet(
+    ulong sceneId,
+    ulong modelId,
+    string entityName,
+    float posX, float posY, float posZ,
+    float rotW, float rotX, float rotY, float rotZ,
+    float radiusKm,
+    uint physicsType)
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return (0, 0);
+
+    bool ok = NativeInterop.avkSimulationContext_spawnComet(
+      _simulationContext, sceneId, modelId, entityName,
+      posX, posY, posZ, rotW, rotX, rotY, rotZ,
+      radiusKm, physicsType,
+      out var ffiResult);
+
+    if (!ok)
+      return (0, 0);
+
+    var state = _sceneStateManager.GetOrCreateScene(sceneId);
+
+    // ── Mirror LCA micro-frame entity ────────────────────────────────────────
+    var lcaFrameName = $"{entityName}_microframe";
+    var lcaEntity = new Entity(sceneId, ffiResult.LcaFrameId, lcaFrameName);
+    state.EntityMap[ffiResult.LcaFrameId] = lcaEntity;
+    WireEntityComponents(sceneId, lcaEntity);
+    lcaEntity.Components.Add(new TransformComponent { PosX = posX, PosY = posY, PosZ = posZ });
+
+    // Nest under root
+    var root = GetEntityByName(sceneId, "root");
+    if (root != null)
+      root.Children.Add(lcaEntity);
+    else
+      state.RootEntities.Add(lcaEntity);
+
+    // ── Mirror comet mesh entity ──────────────────────────────────────────────
+    var cometEntity = new Entity(sceneId, ffiResult.CometEntityId, entityName);
+    state.EntityMap[ffiResult.CometEntityId] = cometEntity;
+    WireEntityComponents(sceneId, cometEntity);
+    cometEntity.Components.Add(new TransformComponent());  // pos=0 in micro-frame
+    cometEntity.Components.Add(new CometComponent());
+
+    // Nest under LCA frame
+    lcaEntity.Children.Add(cometEntity);
+
+    return (ffiResult.LcaFrameId, ffiResult.CometEntityId);
+  }
+
   public string[] GetLoadedAlmanacFiles()
   {
     if (_simulationContext != IntPtr.Zero)

@@ -30,11 +30,11 @@ pub struct CpuCommandBuffer {
 }
 
 impl CommandBuffer for CpuCommandBuffer {
-  fn submit(&mut self) -> EngineResult<()> {
+  fn submit(&mut self) -> EngineResult<Option<crate::gpu::CommandBufferSyncInfo>> {
     for task in self.tasks.drain(..) {
       task();
     }
-    Ok(())
+    Ok(None)
   }
 }
 
@@ -122,6 +122,15 @@ impl DeviceBvh for CpuMotionBvh {
   fn address(&self) -> u64 { 0 }
 }
 
+/// Zero-cost CPU stand-in for the per-tick TLAS GPU buffer.
+/// `address()` returns 0 — broadphase shaders are no-ops in the CPU kernel path.
+pub struct CpuTlasHandle;
+
+impl DeviceBvh for CpuTlasHandle {
+  type Cmd = CpuCommandBuffer;
+  fn address(&self) -> u64 { 0 }
+}
+
 /// TODO: Document this item
 pub struct CpuScalarKernels {}
 
@@ -130,16 +139,22 @@ impl Kernels for CpuScalarKernels {
   type Buffer<T: Copy + Send + Sync> = CpuBuffer<T>;
   type List<T: Copy + Send + Sync> = CpuList<T>;
   type MotionBvh = CpuMotionBvh;
+  /// CPU path: TLAS is a no-op; broadphase shaders are not dispatched.
+  type MotionTlas = CpuTlasHandle;
 
-  fn discard_buffer<T: Copy + Send + Sync>(&self, buffer: Self::Buffer<T>) {
-  }
+  fn discard_buffer<T: Copy + Send + Sync>(&self, _buffer: Self::Buffer<T>) {}
+  fn discard_list<T: Copy + Send + Sync>(&self, _list: Self::List<T>) {}
+  fn discard_bvh(&self, _bvh: Self::MotionBvh) {}
+  fn discard_tlas(&self, _tlas: Self::MotionTlas) {}
 
+  fn optimal_branching_factor(&self) -> u32 { 32 }
 
-  fn discard_list<T: Copy + Send + Sync>(&self, list: Self::List<T>) {
-  }
-
-
-  fn discard_bvh(&self, bvh: Self::MotionBvh) {
+  fn upload_motion_tlas(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _node_bytes: &[u8],
+  ) -> EngineResult<Self::MotionTlas> {
+    Ok(CpuTlasHandle)
   }
 
 
@@ -445,8 +460,8 @@ impl Kernels for CpuScalarKernels {
     particle_metadata: &[ParticleMetadata],
     physical_scene: &mut PhysicsScene,
     scene: &Scene,
-  ) -> EngineResult<()> {
-    Ok(())
+  ) -> EngineResult<Option<crate::gpu::CommandBufferSyncInfo>> {
+    Ok(None)
   }
 }
 
@@ -460,16 +475,22 @@ impl Kernels for CpuSimdKernels {
   type Buffer<T: Copy + Send + Sync> = CpuBuffer<T>;
   type List<T: Copy + Send + Sync> = CpuList<T>;
   type MotionBvh = CpuMotionBvh;
+  /// CPU path: TLAS is a no-op; broadphase shaders are not dispatched.
+  type MotionTlas = CpuTlasHandle;
 
-  fn discard_buffer<T: Copy + Send + Sync>(&self, buffer: Self::Buffer<T>) {
-  }
+  fn discard_buffer<T: Copy + Send + Sync>(&self, _buffer: Self::Buffer<T>) {}
+  fn discard_list<T: Copy + Send + Sync>(&self, _list: Self::List<T>) {}
+  fn discard_bvh(&self, _bvh: Self::MotionBvh) {}
+  fn discard_tlas(&self, _tlas: Self::MotionTlas) {}
 
+  fn optimal_branching_factor(&self) -> u32 { 32 }
 
-  fn discard_list<T: Copy + Send + Sync>(&self, list: Self::List<T>) {
-  }
-
-
-  fn discard_bvh(&self, bvh: Self::MotionBvh) {
+  fn upload_motion_tlas(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _node_bytes: &[u8],
+  ) -> EngineResult<Self::MotionTlas> {
+    Ok(CpuTlasHandle)
   }
 
 
@@ -775,8 +796,8 @@ impl Kernels for CpuSimdKernels {
     particle_metadata: &[ParticleMetadata],
     physical_scene: &mut PhysicsScene,
     scene: &Scene,
-  ) -> EngineResult<()> {
-    Ok(())
+  ) -> EngineResult<Option<crate::gpu::CommandBufferSyncInfo>> {
+    Ok(None)
   }
 }
 

@@ -147,7 +147,7 @@ pub fn simulation_step<K>(
   t0: timeus_t,
   t1: timeus_t,
   collisions_enabled: bool,
-) -> EngineResult<()>
+) -> EngineResult<Option<crate::gpu::CommandBufferSyncInfo>>
 where
   K: Kernels + ?Sized,
 {
@@ -163,6 +163,21 @@ where
   let time_collision_delta = timeus_milliseconds(30);
   let mut collision_iters = 0;
   const MAX_BOUNCES: usize = 5;
+
+  // ── 0. Build + upload per-tick motion TLAS (CPU-built, GPU-uploaded) ────────
+  // The scene-root TLAS is a motion, multi-branch BVH (N = subgroup_size)
+  // with leaves: body BLAS, particle BLAS (sentinel-patched for GPU LBVH), or
+  // micro-frame sub-TLAS roots.  Its BDA replaces the recycled particle-LBVH
+  // address previously used as tlas_bvh_addr in bp_scene / bp_particle_self.
+  let dt_s = (t1 - t0) as f32 / 1_000_000.0;
+  use crate::physics::tlas_builder::build_scene_motion_tlas;
+  let tlas_bytes = match kernels.optimal_branching_factor() {
+    64 => build_scene_motion_tlas::<64>(physical_scene),
+    16 => build_scene_motion_tlas::<16>(physical_scene),
+    _  => build_scene_motion_tlas::<32>(physical_scene),
+  };
+  let motion_tlas = kernels.upload_motion_tlas(&mut cmd, &tlas_bytes)?;
+  let tlas_addr = motion_tlas.address();
 
   // ── 1. Build per-frame GPU buffers from ECS ───────────────────────────────
   let kinematics = kernels.build_kinematic_bodies(&mut cmd, physical_scene, scene)?;
@@ -230,7 +245,7 @@ where
       // bp_clear: zero all four pair-list counters via raw BDAs
       // (The caller manages the pair-list buffers; for now we reuse bvh.address
       //  as a placeholder TLAS address until a proper TLAS builder is wired in.)
-      let tlas_bvh_addr = bvh.address();
+      let tlas_bvh_addr = tlas_addr;
       let raw_pairs = kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 10_000)?;
       let rb_rb_pairs = kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 4_000)?;
       let rb_ps_pairs = kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 4_000)?;
@@ -387,6 +402,7 @@ where
   kernels.discard_buffer(particles);
   kernels.discard_buffer(emitters);
   kernels.discard_buffer(frames);
+  kernels.discard_tlas(motion_tlas);
 
-  Ok(())
+  Ok(None)
 }

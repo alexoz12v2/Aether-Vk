@@ -1069,7 +1069,8 @@ fn dispatch_physics_step(
 
   if let Some(ps_lock) = &physics_scene_arc {
     let mut ps = ps_lock.write();
-    *ps = crate::physics::physics_scene::PhysicsScene::build_from_scene(scene_arc.as_ref());
+    let dt_s = (step_days * 86400.0) as f32;
+    *ps = crate::physics::physics_scene::PhysicsScene::build_from_scene(scene_arc.as_ref(), dt_s);
   }
 
   let logic_state = ctx.logic_state.read();
@@ -1098,6 +1099,11 @@ fn dispatch_physics_step(
         );
       },
     );
+  }
+
+  if let Some(st_lock) = &scene_read.selection_tlas {
+    let mut st = st_lock.write();
+    *st = crate::physics::tlas_builder::build_selection_tlas(scene_arc.as_ref());
   }
 
   if let Some(ps_lock) = &physics_scene_arc {
