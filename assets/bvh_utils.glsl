@@ -140,6 +140,21 @@ BVHNodeAABB read_bvh_node(BVHArray bvh, uint idx) {
     return node;
 }
 
+// ----------------------------------------------------------------------------
+// Motion BLAS Node (Binary BVH, Exactly 64 bytes)
+// ----------------------------------------------------------------------------
+struct MotionBvhNode {
+    AABB aabbs[2];
+    uint child_ptrs[2];
+    uint parent_idx;
+    uint is_leaf;
+    uint pad[2];
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer MotionBvhBuffer {
+    MotionBvhNode nodes[];
+};
+
 struct ColliderId {
     uint entity_id;
     uint primitive_index;

@@ -1,0 +1,74 @@
+#version 450 core
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "../bvh_utils.glsl"
+#include "physics_types.glsl"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// 0 = Particle, 1 = RigidBody Triangle
+layout(constant_id = 1) const uint PRIMITIVE_TYPE = 0;
+
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer ParticleData {
+    float data[];
+};
+
+layout(push_constant, scalar) uniform PushConstants {
+    MotionBvhBuffer bvh;
+    ParticleData primitive_data;
+    uint  num_primitives;
+    float dt;
+    float particle_radius;
+} pc;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.num_primitives) return;
+
+    if (PRIMITIVE_TYPE == 0) {
+        // Particle Motion Bounds
+        ParticleData particles = pc.primitive_data;
+        
+        // Assuming AOS layout for particle position/velocity for simplicity
+        // Note: The architecture doc shows AOSOA, so we adjust to standard AOSOA layout if needed.
+        // For motion BLAS, let's assume it reads from the standard Particle buffer.
+        // Actually, if it's AOSOA:
+        uint SUBGROUP_SIZE = 32;
+        uint block_idx = idx / SUBGROUP_SIZE;
+        uint local_idx = idx % SUBGROUP_SIZE;
+        uint base = block_idx * (10 * SUBGROUP_SIZE) + local_idx;
+
+        vec3 pos = vec3(
+            particles.data[base + 0 * SUBGROUP_SIZE],
+            particles.data[base + 1 * SUBGROUP_SIZE],
+            particles.data[base + 2 * SUBGROUP_SIZE]
+        );
+        vec3 vel = vec3(
+            particles.data[base + 3 * SUBGROUP_SIZE],
+            particles.data[base + 4 * SUBGROUP_SIZE],
+            particles.data[base + 5 * SUBGROUP_SIZE]
+        );
+        
+        float radius = pc.particle_radius;
+        vec3 displacement = vel * pc.dt;
+        vec3 p1 = pos + displacement;
+        
+        vec3 min_p = min(pos, p1) - vec3(radius);
+        vec3 max_p = max(pos, p1) + vec3(radius);
+        
+        pc.bvh.nodes[idx].aabbs[0].minBounds = min_p;
+        pc.bvh.nodes[idx].aabbs[0].maxBounds = max_p;
+        // In binary BVH, leaf nodes store bounds in aabbs[0] or we store it directly in the parent.
+        // For a static BLAS, the leaves are ALREADY set up as child pointers in the internal nodes.
+        // Wait, where do we write the leaf bounds?
+        // Let's assume the leaf nodes are literally the first `num_primitives` elements, 
+        // OR they are written directly to their corresponding `aabbs` slot in the parent.
+        // The task says "Write AABB_parent to its own location". 
+        // We will store the leaf bound in aabbs[0] of the leaf node to be read by the parent later.
+    } else {
+        // RigidBody Triangle Motion Bounds
+        // TODO: Read triangle vertices and apply velocity and angular rotation
+    }
+}

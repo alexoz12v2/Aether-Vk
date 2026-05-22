@@ -357,9 +357,10 @@ impl LogicThreadContext {
         if !hit_instances.contains(&entity) || mesh.mesh.bvh.is_none() {
           return None;
         }
-        let model_matrix = Mat4x4f32::translation(transform.position)
-          * <Mat4x4f32 as oshal::math::matrix::Matrix4>::from_quat_custom_frame(transform.rotation)
-          * Mat4x4f32::from_scale(transform.scale);
+        let global_transform = scene_ctx.scene.global_transform(entity).unwrap_or(*transform);
+        let model_matrix = Mat4x4f32::translation(global_transform.position)
+          * <Mat4x4f32 as oshal::math::matrix::Matrix4>::from_quat_custom_frame(global_transform.rotation)
+          * Mat4x4f32::from_scale(global_transform.scale);
         ps.intersect_mesh_bvh_math(ro, rd, model_matrix, mesh, ray.length)
       },
     );
@@ -743,6 +744,15 @@ pub enum LogicCommand {
     ro: Vec3f32,
     rd: Vec3f32,
   },
+  UpdateTrajectoryForSpk {
+    task_id: u64,
+    scene_id: u64,
+    entity_id: u64,
+    spk_id: i32,
+    start_epoch_tai_sec: f64,
+    end_epoch_tai_sec: f64,
+    sample_step_days: f64,
+  },
   Custom {
     task_id: u64,
     custom_fn:
@@ -826,6 +836,12 @@ pub enum RenderFeedback {
 
   TaskCreated(Option<u64>),
   TaskQueryStatus(RenderTaskStatus),
+}
+
+pub enum KernelsEnum {
+  VulkanCompute(crate::gpu::WeakRenderFrontend, crate::gpu::RenderDeviceHandle),
+  CpuSingleThreaded(crate::physics::cpu_kernels::CpuScalarKernels),
+  CpuMultiThreaded(crate::physics::cpu_kernels::CpuSimdKernels),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1267,6 +1283,7 @@ pub struct LogicThreadParams {
   pub logic_state: Arc<RwLock<LogicState>>,
   pub scenes: Arc<RwLock<SimulationSceneData>>,
   pub ctx_ptr: SendPtrMut<core::ffi::c_void>,
+  pub kernels: Arc<RwLock<KernelsEnum>>,
 }
 
 impl LogicThreadParams {
@@ -1279,6 +1296,7 @@ impl LogicThreadParams {
     logic_state: Arc<RwLock<LogicState>>,
     scenes: Arc<RwLock<SimulationSceneData>>,
     ctx_ptr: SendPtrMut<core::ffi::c_void>,
+    kernels: Arc<RwLock<KernelsEnum>>,
   ) -> Self {
     Self {
       channel_capacity: Self::DEFAULT_CHANNEL_CAPACITY,
@@ -1287,6 +1305,7 @@ impl LogicThreadParams {
       logic_state,
       scenes,
       ctx_ptr,
+      kernels,
     }
   }
 
@@ -1304,6 +1323,7 @@ impl LogicThreadParams {
       scenes: self.scenes,
       ctx_ptr: self.ctx_ptr,
       render_tx,
+      kernels: self.kernels,
     }
   }
 }
@@ -1320,6 +1340,7 @@ pub struct LogicThreadContext {
   pub scenes: Arc<RwLock<SimulationSceneData>>,
   pub ctx_ptr: SendPtrMut<core::ffi::c_void>,
   pub render_tx: mpsc::Sender<RenderCommand>,
+  pub kernels: Arc<RwLock<KernelsEnum>>,
 }
 
 #[derive(Clone, Copy, Debug)]

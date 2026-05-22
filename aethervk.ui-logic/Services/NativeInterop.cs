@@ -373,6 +373,26 @@ public static class NativeInterop
     string epoch_raw
   );
 
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_getEphemerisPosition(
+    IntPtr ctx,
+    int spkId,
+    double epochTaiSec,
+    out FfiKinematicState outPos
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern ulong avkSimulationContext_updateTrajectoryForSpk(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId,
+    int spkId,
+    double startEpochTaiSec,
+    double endEpochTaiSec,
+    double sampleStepDays
+  );
+
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_importModel(IntPtr ctx, string path);
 
@@ -415,6 +435,36 @@ public static class NativeInterop
     float radiusKm,
     uint physicsType,
     out FfiSpawnCometResult result
+  );
+
+  /// <summary>
+  /// Result written by <see cref="avkSimulationContext_spawnStaticMesh"/>.
+  /// Both fields are external entity ids (&gt; 0 on success).
+  /// </summary>
+  [StructLayout(LayoutKind.Sequential)]
+  public struct FfiSpawnStaticMeshResult
+  {
+    /// <summary>External entity id of the LCA micro-frame parent entity.</summary>
+    public ulong LcaFrameId;
+    /// <summary>External entity id of the static mesh child entity.</summary>
+    public ulong MeshEntityId;
+  }
+
+  /// <summary>
+  /// Synchronously spawns a static mesh entity hierarchy (LCA micro-frame + mesh entity).
+  /// Returns true on success; populates <paramref name="result"/> with both entity ids.
+  /// </summary>
+  [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_spawnStaticMesh(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong modelId,
+    string entityName,
+    float posX, float posY, float posZ,
+    float rotW, float rotX, float rotY, float rotZ,
+    float radiusKm,
+    out FfiSpawnStaticMeshResult result
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

@@ -79,6 +79,15 @@ pub struct MultiBvh<B, P, const N: usize> {
   pub root: Option<u32>,
 }
 
+/// Dynamic Subgroup-Size Multi-BVH representation.
+#[derive(Debug, Clone)]
+pub enum MeshMultiBvh {
+  Bvh16(MultiBvh<crate::math::collision::linear_bvh::LinearBound<f32>, usize, 16>),
+  Bvh32(MultiBvh<crate::math::collision::linear_bvh::LinearBound<f32>, usize, 32>),
+  Bvh64(MultiBvh<crate::math::collision::linear_bvh::LinearBound<f32>, usize, 64>),
+  Bvh128(MultiBvh<crate::math::collision::linear_bvh::LinearBound<f32>, usize, 128>),
+}
+
 // --- BINARY BVH ABSTRACTION TRAIT ---
 
 /// A unified trait to inspect any binary BVH natively.

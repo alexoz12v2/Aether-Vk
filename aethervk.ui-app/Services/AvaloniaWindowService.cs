@@ -211,17 +211,34 @@ namespace AetherVk.Services
         _           => 0,  // Static
       };
 
-      var (_, cometId) = _runtimeService.SpawnComet(
-        sceneId:     1,
-        modelId:     result.Model.Id,
-        entityName:  result.EntityName,
-        posX: result.PosX, posY: result.PosY, posZ: result.PosZ,
-        rotW: result.RotW, rotX: result.RotX, rotY: result.RotY, rotZ: result.RotZ,
-        radiusKm:    result.CometRadiusKm,
-        physicsType: physicsTypeIdx
-      );
+      ulong meshId = 0;
+      if (physicsTypeIdx == 0)
+      {
+        var (_, id) = _runtimeService.SpawnStaticMesh(
+          sceneId:     1,
+          modelId:     result.Model.Id,
+          entityName:  result.EntityName,
+          posX: result.PosX, posY: result.PosY, posZ: result.PosZ,
+          rotW: result.RotW, rotX: result.RotX, rotY: result.RotY, rotZ: result.RotZ,
+          radiusKm:    result.CometRadiusKm
+        );
+        meshId = id;
+      }
+      else
+      {
+        var (_, id) = _runtimeService.SpawnComet(
+          sceneId:     1,
+          modelId:     result.Model.Id,
+          entityName:  result.EntityName,
+          posX: result.PosX, posY: result.PosY, posZ: result.PosZ,
+          rotW: result.RotW, rotX: result.RotX, rotY: result.RotY, rotZ: result.RotZ,
+          radiusKm:    result.CometRadiusKm,
+          physicsType: physicsTypeIdx
+        );
+        meshId = id;
+      }
 
-      return cometId;
+      return meshId;
     }
   }
 }

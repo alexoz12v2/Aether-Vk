@@ -130,12 +130,24 @@ pub struct EntityGpu {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
-pub struct BroadPhasePushConstants {
-  pub tlas_bvh_addr: u64,
-  pub scene_entities_addr: u64,
-  pub overlapping_pairs_addr: u64,
+pub struct BpScenePushConstants {
+  pub tlas_bvh: u64,
+  pub query_leaves: u64,
+  pub overlapping_pairs: u64,
   pub tlas_root_index: u32,
-  pub total_entities: u32,
+  pub total_queries: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct BpParticleSelfPushConstants {
+  pub bvh: u64,
+  pub particles: u64,
+  pub wrench_buffer: u64,
+  pub root_index: u32,
+  pub total_particles: u32,
+  pub particle_radius: f32,
+  pub stiffness: f32,
 }
 
 #[repr(C)]
@@ -242,11 +254,35 @@ pub struct AabbGpu {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct MultiBvhNodeGpu {
-  pub bounds: [AabbGpu; 4],
-  pub child_or_primitive_offsets: [u32; 4],
-  pub primitive_counts: [u32; 4],
-  pub is_leaf: [u32; 4], // 1 if leaf, 0 if internal
-  pub valid_count: u32,
-  pub masses: [f32; 4],
-  pub centers_of_mass: [[f32; 3]; 4],
+  pub aabbs: [AabbGpu; 2],
+  pub child_ptrs: [u32; 2],
+  pub parent_idx: u32,
+  pub is_leaf: u32,
+  pub pad: [u32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct LbvhPrepassPushConstants {
+  pub bvh: u64,
+  pub counters_addr: u64,
+  pub num_internal_nodes: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct MotionBoundsPushConstants {
+  pub bvh: u64,
+  pub primitive_data_addr: u64,
+  pub num_primitives: u32,
+  pub dt: f32,
+  pub particle_radius: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct MotionRefitPushConstants {
+  pub bvh: u64,
+  pub depth_indices_addr: u64,
+  pub total_nodes_at_depth: u32,
 }

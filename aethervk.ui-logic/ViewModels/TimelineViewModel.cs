@@ -10,6 +10,7 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
 {
   private readonly NativeRuntimeService _runtimeService;
   private readonly IUiThreadDispatcher _uiThreadDispatcher;
+  private readonly TrajectoryManagerService _trajectoryManager;
   private readonly Timer _timer;
   private bool _isDragging;
 
@@ -31,12 +32,14 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   public TimelineViewModel(
     ulong sceneId,
     NativeRuntimeService runtimeService,
-    IUiThreadDispatcher uiThreadDispatcher
+    IUiThreadDispatcher uiThreadDispatcher,
+    TrajectoryManagerService trajectoryManager
   )
     : base("Timeline")
   {
     _runtimeService = runtimeService;
     _uiThreadDispatcher = uiThreadDispatcher;
+    _trajectoryManager = trajectoryManager;
     CurrentSceneId = sceneId;
     _timer = new Timer(UpdateFromRuntime, null, 33, 33);
   }
@@ -98,6 +101,16 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
         _runtimeService.PauseScene(CurrentSceneId);
       else
         _runtimeService.PlayScene(CurrentSceneId);
+    }
+  }
+
+  [RelayCommand]
+  private async System.Threading.Tasks.Task UpdateTrajectoriesAsync()
+  {
+    if (_runtimeService.IsInitialized)
+    {
+      double stepDays = 1.0;
+      await _trajectoryManager.UpdateAllTrajectoriesAsync(CurrentSceneId, MinTai, MaxTai, stepDays);
     }
   }
 

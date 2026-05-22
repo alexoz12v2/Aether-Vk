@@ -33,7 +33,8 @@ layout(push_constant, scalar) uniform PushConstants {
     PairBuffer out_rb_rb;        // BDA — 8 B
     PairBuffer out_rb_ps;        // BDA — 8 B
     PairBuffer out_rb_lca;       // BDA — 8 B
-    // 32 bytes total — well within the 128-byte limit
+    PairBuffer out_internal;     // BDA — 8 B
+    // 40 bytes total — well within the 128-byte limit
 } pc;
 
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
@@ -44,6 +45,7 @@ void main() {
     pc.out_rb_rb.count       = 0u;
     pc.out_rb_ps.count       = 0u;
     pc.out_rb_lca.count      = 0u;
+    pc.out_internal.count    = 0u;
 
     if (SHOULD_DEBUG_PRINT) {
         debugPrintfEXT("[bp_clear] all four pair queues reset to 0\n");

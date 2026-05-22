@@ -210,6 +210,7 @@ namespace AetherVk.Logic.Tests
         );
         Assert.NotNull(meas);
 
+        _service.AddTransform(sceneId, "Bill", 0, 0, 0, 0, 0, 0, 1, 1, 1);
         var billboard = _service.SpawnImageBillboard(sceneId, "Bill", false, 1.0f, 1.0f);
         Assert.NotNull(billboard);
 

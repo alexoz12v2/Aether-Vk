@@ -358,7 +358,9 @@ public class HorizonJplService
       if (line.StartsWith("*") || string.IsNullOrWhiteSpace(line))
         continue;
 
-      var parts = line.Split(new[] { "  ", "\t" }, StringSplitOptions.RemoveEmptyEntries);
+      // JPL often has spaces after = or : which breaks the double-space split. Normalize them first.
+      var normalizedLine = System.Text.RegularExpressions.Regex.Replace(line, @"([=:])\s+", "$1");
+      var parts = normalizedLine.Split(new[] { "  ", "\t" }, StringSplitOptions.RemoveEmptyEntries);
       bool hasKeyValue = false;
       foreach (var part in parts)
       {
@@ -472,6 +474,7 @@ public class HorizonJplService
         {
           if (line.Trim().StartsWith("--------"))
           {
+            if (inData) break; // Reached the bottom of the table
             inData = true;
             continue;
           }

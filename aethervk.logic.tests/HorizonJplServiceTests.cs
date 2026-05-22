@@ -110,15 +110,9 @@ public class HorizonJplServiceTests
     var service = new HorizonJplService(console, breadcrumb);
 
     const string mockResponse = """
-      {"result": "
-          Record #  Epoch-yr  >MATCH DESIG<  Primary Desig  Name
-          --------  --------  -------------  -------------  -------------------------
-          90000389    1908    29P            29P             Schwassmann-Wachmann 1
-          90000390    1925    29P            29P             Schwassmann-Wachmann 1
-          --------  --------  -------------  -------------  -------------------------
-       (2 matches. To SELECT, enter record # (integer), followed by semi-colon.)
-      * Some garbage data here
-          }
+      {
+        "result": "\n          Record #  Epoch-yr  >MATCH DESIG<  Primary Desig  Name\n          --------  --------  -------------  -------------  -------------------------\n          90000389    1908    29P            29P             Schwassmann-Wachmann 1\n          90000390    1925    29P            29P             Schwassmann-Wachmann 1\n          --------  --------  -------------  -------------  -------------------------\n       (2 matches. To SELECT, enter record # (integer), followed by semi-colon.)\n      * Some garbage data here\n          "
+      }
       """;
 
     var methodInfo = typeof(HorizonJplService).GetMethod(
@@ -126,7 +120,7 @@ public class HorizonJplServiceTests
       System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
     );
     Debug.Assert(methodInfo != null);
-    methodInfo.Invoke(service, [mockResponse]);
+    methodInfo.Invoke(service, [mockResponse, "1900-01-01", "2000-01-01"]);
 
     Assert.Equal(2, service.SpkRecordsData.Count);
     Assert.Equal("90000389", service.SpkRecordsData[0][0]);

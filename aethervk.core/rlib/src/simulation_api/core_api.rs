@@ -62,12 +62,19 @@ impl SimulationContext {
       // TODO test: if this fails, render frontend should drop.
       let render_thread_params =
         RenderThreadParams::new(backend, error_debug_callback, render_thread_thread_pool)?;
+      let kernels = Arc::new(RwLock::new(
+        crate::simulation_api::structs::KernelsEnum::VulkanCompute(
+          render_thread_params.render_frontend.weak_self(),
+          render_thread_params.render_device_handle,
+        )
+      ));
       let logic_thread_params = LogicThreadParams::new(
         logic_thread_thread_pool,
         Arc::clone(&task_manager),
         logic_state,
         Arc::clone(&scenes),
         crate::simulation_api::structs::SendPtrMut(ptr as *mut core::ffi::c_void),
+        Arc::clone(&kernels),
       );
       let render_proxy = (
         render_thread_params.render_frontend.weak_self(),
@@ -80,6 +87,8 @@ impl SimulationContext {
 
       // 4. Render Proxy
       addr_of_mut!((*ptr).render_proxy).write(render_proxy);
+
+      addr_of_mut!((*ptr).kernels).write(Arc::clone(&kernels));
 
       Ok(boxed_uninit.assume_init())
     }

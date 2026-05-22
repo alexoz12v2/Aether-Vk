@@ -123,7 +123,7 @@ macro_rules! gpu_err {
   () => {
     $crate::types::GpuError::InvalidState(alloc::format!(
       "[Vulkan RenderDevice] {} {}:{} - device error",
-      function_name!(),
+      "function",
       core::file!(),
       core::line!()
     ))
@@ -133,7 +133,7 @@ macro_rules! gpu_err {
   ($fmt:expr, $($arg:tt)+) => {
     $crate::types::GpuError::InvalidState(alloc::format!(
       "[Vulkan RenderDevice] {} {}:{} - {}",
-      function_name!(),
+      "function",
       core::file!(),
       core::line!(),
       core::format_args!($fmt, $($arg)+)
@@ -144,7 +144,7 @@ macro_rules! gpu_err {
   ($msg:expr) => {
     $crate::types::GpuError::InvalidState(alloc::format!(
       "[Vulkan RenderDevice] {} {}:{} - {}",
-      function_name!(),
+      "function",
       core::file!(),
       core::line!(),
       $msg
@@ -158,7 +158,7 @@ macro_rules! gpu_invalid_arg {
   () => {
     $crate::types::GpuError::InvalidArgument(alloc::format!(
       "[Vulkan RenderDevice] {} {}:{} - invalid argument",
-      function_name!(),
+      "function",
       core::file!(),
       core::line!()
     ))
@@ -168,7 +168,7 @@ macro_rules! gpu_invalid_arg {
   ($fmt:expr, $($arg:tt)+) => {
     $crate::types::GpuError::InvalidArgument(alloc::format!(
       "[Vulkan RenderDevice] {} {}:{} - {}",
-      function_name!(),
+      "function",
       core::file!(),
       core::line!(),
       core::format_args!($fmt, $($arg)+)
@@ -179,7 +179,7 @@ macro_rules! gpu_invalid_arg {
   ($msg:expr) => {
     $crate::types::GpuError::InvalidArgument(alloc::format!(
       "[Vulkan RenderDevice] {} {}:{} - {}",
-      function_name!(),
+      "function",
       core::file!(),
       core::line!(),
       $msg
@@ -192,7 +192,7 @@ macro_rules! gpu_err_invalid_pe {
   () => {
     $crate::types::GpuError::InvalidState(alloc::format!(
       "[Vulkan RenderDevice] {} {}:{} - invalid presentation engine handle",
-      function_name!(),
+      "function",
       core::file!(),
       core::line!()
     ))
@@ -256,7 +256,7 @@ macro_rules! gpu_err_cmd_no_pe {
   () => {
     $crate::types::GpuError::InvalidState(alloc::format!(
       "[Vulkan RenderDevice] {} {}:{} - Cmd doesn't have presentation engine handle",
-      function_name!(),
+      "function",
       core::file!(),
       core::line!()
     ))
@@ -268,7 +268,7 @@ macro_rules! gpu_err_invalid_cmd {
   () => {
     $crate::types::GpuError::InvalidArgument(alloc::format!(
       "[Vulkan RenderDevice] {} {}:{} - invalid command buffer handle",
-      function_name!(),
+      "function",
       core::file!(),
       core::line!()
     ))
@@ -280,7 +280,7 @@ macro_rules! gpu_err_device {
   () => {
     $crate::types::GpuError::InvalidState(alloc::format!(
       "[Vulkan RenderDevice] {} {}:{} - device error",
-      function_name!(),
+      "function",
       core::file!(),
       core::line!()
     ))
@@ -292,7 +292,7 @@ macro_rules! gpu_err_pipeline_key_absent {
   () => {
     $crate::types::GpuError::InvalidState(alloc::format!(
       "[Vulkan RenderDevice] {} {}:{} - pipeline key absent",
-      function_name!(),
+      "function",
       core::file!(),
       core::line!()
     ))
@@ -304,7 +304,7 @@ macro_rules! gpu_err_pipeline_absent {
   () => {
     $crate::types::GpuError::InvalidState(alloc::format!(
       "[Vulkan RenderDevice] {} {}:{} - vulkan pipeline absent in pipeline pool",
-      function_name!(),
+      "function",
       core::file!(),
       core::line!()
     ))
@@ -316,7 +316,7 @@ macro_rules! gpu_err_archetype_absent {
   () => {
     $crate::types::GpuError::InvalidState(alloc::format!(
       "[Vulkan RenderDevice] {} {}:{} - archetype absent",
-      function_name!(),
+      "function",
       core::file!(),
       core::line!()
     ))
@@ -8203,6 +8203,12 @@ impl RenderDevice for Device {
     Ok(())
   }
 
+  /// Reads the downloaded image for the given `task_id` into `buffer`.
+  ///
+  /// **Note:** To prevent memory leaks when frames are skipped and not downloaded,
+  /// this function automatically cleans up and deallocates any pending downloads for the same
+  /// presentation engine that have a `task_id` strictly less than the provided `task_id`.
+  /// Therefore, `task_id`s must be strictly increasing across sequential downloads for a given engine.
   #[named]
   fn read_windowless_download(&self, task_id: u64, buffer: &mut [u8]) -> GpuResult<()> {
     // 1. Verify task completion completely lock-free
@@ -8222,6 +8228,29 @@ impl RenderDevice for Device {
           "Invalid or previously consumed download ID: {}",
           task_id
         ))?;
+
+        // Automatically cleanup older downloads for the same presentation engine
+        if let Some(engine_handle) = download.presentation_engine {
+          let to_remove: Vec<u64> = pending_lock
+            .iter()
+            .filter_map(|(&tid, dl)| {
+              if tid < task_id && dl.presentation_engine == Some(engine_handle) {
+                Some(tid)
+              } else {
+                None
+              }
+            })
+            .collect();
+            
+          for tid in to_remove {
+            if let Some(mut old_dl) = pending_lock.remove(&tid) {
+              aethervk_oshal_rlib::log!("Automatically cleaning up un-consumed download: {} (engine {:?})", tid, engine_handle);
+              unsafe {
+                state.allocator.allocator.as_allocator_view().destroy_buffer(old_dl.staging_buffer, &mut old_dl.allocation);
+              }
+            }
+          }
+        }
 
         // Create a Copy-able view of the VMA allocator to bypass Drop limitations
         let vma_view = state.allocator.allocator.as_allocator_view();

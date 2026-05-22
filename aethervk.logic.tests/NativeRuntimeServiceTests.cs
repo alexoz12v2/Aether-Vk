@@ -196,6 +196,25 @@ namespace AetherVk.Logic.Tests
       catch (System.DllNotFoundException) { }
     }
 
+
+    [Fact]
+    public void GetEphemerisPosition_WithoutAlmanac_ShouldReturnNull()
+    {
+      try
+      {
+        _service.InitializeSimulationContext("Vulkan", _assetPath, false);
+        ulong sceneId = _service.CreateScene(true);
+
+        var pos = _service.GetEphemerisPosition(399, 0.0);
+        
+        // Almanac is not loaded synchronously, so it should be null or fail gracefully
+        Assert.Null(pos);
+      }
+      catch (System.DllNotFoundException) { }
+    }
+
+
+
     [Fact]
     public async Task RaycastNdc_ShouldCompleteSuccessfully()
     {

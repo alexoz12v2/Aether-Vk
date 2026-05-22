@@ -5723,8 +5723,8 @@ fn test_cross_queue_sync_timeline_semaphore() {
     let create_info = ash::vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
     
     // We get the downcasted device to access ash::Device
-    let vulkan_device = device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::LogicalDevice>().unwrap();
-    let logical_device = &vulkan_device.handle;
+    let vulkan_device = device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+    let logical_device = &vulkan_device.device.handle;
     let timeline_sem = unsafe { logical_device.create_semaphore(&create_info, None).unwrap() };
 
     let timeline_value = 1;

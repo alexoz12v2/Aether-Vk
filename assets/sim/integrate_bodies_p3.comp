@@ -51,14 +51,29 @@ layout(buffer_reference, scalar, buffer_reference_align = 4) buffer WrenchArray 
     Wrench wrenches[];
 };
 
-// ─── Push constants (32 bytes) ──────────────────────────────────────────────
+struct ForceEmitter {
+    vec3 position;
+    float mu;
+    vec3 normal;
+    uint type_id;
+    float trunc_distance;
+    float scale_factor;
+    uint _pad[2];
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer EmitterArray {
+    ForceEmitter emitters[];
+};
+
+// ─── Push constants (40 bytes) ──────────────────────────────────────────────
 layout(push_constant, scalar) uniform PushConstants {
     RigidBodyArray rigid_bodies;   // BDA — 8 B
     WrenchArray    wrenches;       // BDA — 8 B
+    EmitterArray   emitters;       // BDA — 8 B
     float          dt;             // 4 B
     uint           n_bodies;       // 4 B
     uint           n_iterations;   // Picard iteration count (4–10)  4 B
-    uint           _pad;           // 4 B
+    uint           num_emitters;   // 4 B
 } pc;
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
@@ -91,6 +106,37 @@ void main() {
     Wrench wrench = pc.wrenches.wrenches[w_idx];
     vec3 f_n      = vec3(wrench.force_x,  wrench.force_y,  wrench.force_z);
     vec3 t_n      = vec3(wrench.torque_x, wrench.torque_y, wrench.torque_z);
+
+    // ── Evaluate Emitters ──────────────────────────────────────────────────
+    for (uint e = 0; e < pc.num_emitters; ++e) {
+        vec3  em_position       = pc.emitters.emitters[e].position;
+        float em_mu             = pc.emitters.emitters[e].mu;
+        vec3  em_normal         = pc.emitters.emitters[e].normal;
+        uint  em_type_id        = pc.emitters.emitters[e].type_id;
+        float em_trunc_distance = pc.emitters.emitters[e].trunc_distance;
+        float em_scale_factor   = pc.emitters.emitters[e].scale_factor;
+
+        if (em_type_id == 0) {
+            // Type 0: Point Gravity
+            vec3 r = em_position - pos_n;
+            float scaled_dist_sq = dot(r, r) * em_scale_factor * em_scale_factor;
+            if (scaled_dist_sq > 1e-6) {
+                float scaled_dist = sqrt(scaled_dist_sq);
+                float scaled_dist3 = scaled_dist_sq * scaled_dist;
+                float scaled_dist5 = scaled_dist3 * scaled_dist_sq;
+                // Maclaurin series approximation to avoid singularity
+                float softening = 1.0 - exp(-scaled_dist5);
+                float force_mag = (em_mu * mass * softening) / scaled_dist_sq;
+                f_n += normalize(r) * force_mag;
+            }
+        } else if (em_type_id == 1) {
+            // Type 1: Planar Force
+            float dist = dot(pos_n - em_position, em_normal);
+            if (dist >= 0.0 && dist <= em_trunc_distance) {
+                f_n += em_normal * em_mu;
+            }
+        }
+    }
 
     float half_dt = 0.5 * pc.dt;
 
@@ -127,13 +173,13 @@ void main() {
     vec4 q_next      = normalize(q_n + half_dt * quat_mult(omega_pure, q_n));
 
     // ── Write back updated state ─────────────────────────────────────────────
-    pc.rigid_bodies.bodies[id].position_mass.xyz     = pos_next;
-    pc.rigid_bodies.bodies[id].orientation           = q_next;
-    pc.rigid_bodies.bodies[id].linear_vel_drag.xyz   = v_next;
-    pc.rigid_bodies.bodies[id].angular_vel_drag.xyz  = w_next;
+    pc.rigid_bodies.bodies[id].position_mass     = vec4(pos_next, mass);
+    pc.rigid_bodies.bodies[id].orientation       = q_next;
+    pc.rigid_bodies.bodies[id].linear_vel_drag   = vec4(v_next, body.linear_vel_drag.w);
+    pc.rigid_bodies.bodies[id].angular_vel_drag  = vec4(w_next, body.angular_vel_drag.w);
 
     // ── CRITICAL: Clear Wrench so force generators write F(x_{n+1}) cleanly ─
-    clear_wrench(pc.wrenches.wrenches[w_idx]);
+    CLEAR_WRENCH(pc.wrenches.wrenches[w_idx]);
 
     if (SHOULD_DEBUG_PRINT) {
         debugPrintfEXT("[p3_imr] id=%d  pos=(%.4f,%.4f,%.4f)  v=(%.4f,%.4f,%.4f)\n",

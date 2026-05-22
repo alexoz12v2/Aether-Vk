@@ -172,7 +172,23 @@ mod tests {
 
   #[test]
   fn test_visual_physics_render_sync() {
+    // Reset static state from any previous test run in this process.
+    LAST_PE_TASK_IDS[0].store(0, core::sync::atomic::Ordering::Release);
+    LAST_PE_TASK_IDS[1].store(0, core::sync::atomic::Ordering::Release);
+    LAST_PE_TASK_IDS[2].store(0, core::sync::atomic::Ordering::Release);
+    LAST_PE_TASK_IDS[3].store(0, core::sync::atomic::Ordering::Release);
+
     if let Some(ctx_ptr) = get_test_context() {
+      // RAII guard: ensures ctx_ptr is always freed even if an assertion panics,
+      // so background threads are joined and nextest does not time out.
+      struct CtxGuard(*mut SimulationContext);
+      impl Drop for CtxGuard {
+        fn drop(&mut self) {
+          unsafe { let _ = alloc::boxed::Box::from_raw(self.0); }
+        }
+      }
+      let _guard = CtxGuard(ctx_ptr);
+
       unsafe {
         let ctx = &mut *ctx_ptr;
         let scene_id = ctx.create_default_scene().unwrap();
@@ -291,6 +307,10 @@ mod tests {
         };
 
         // Output Initial State
+        let _ = ctx.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::SetSceneTimeScale { 
+          scene_id, 
+          scale: crate::simulation_api::structs::TimeScale::RealTime
+        });
         let _ = ctx.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::PlayScene { scene_id });
         wait_for_images("initial");
         
@@ -308,7 +328,7 @@ mod tests {
 
         wait_for_images("final");
         
-        let _ = alloc::boxed::Box::from_raw(ctx_ptr);
+        // _guard's Drop calls Box::from_raw(ctx_ptr) automatically.
       }
     }
   }

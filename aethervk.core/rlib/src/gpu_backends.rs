@@ -171,7 +171,7 @@ where
   // address previously used as tlas_bvh_addr in bp_scene / bp_particle_self.
   let dt_s = (t1 - t0) as f32 / 1_000_000.0;
   use crate::physics::tlas_builder::build_scene_motion_tlas;
-  let tlas_bytes = match kernels.optimal_branching_factor() {
+  let tlas_bytes = match kernels.subgroup_size().map(|s| s as u32).unwrap_or(32) {
     64 => build_scene_motion_tlas::<64>(physical_scene),
     16 => build_scene_motion_tlas::<16>(physical_scene),
     _  => build_scene_motion_tlas::<32>(physical_scene),
@@ -211,7 +211,7 @@ where
 
     // RB: accumulate forces then IMR solve
     kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches)?;
-    kernels.imex_integrate_bodies_p3(&mut cmd, &mut rigid_bodies, &mut wrenches, dt)?;
+    kernels.imex_integrate_bodies_p3(&mut cmd, &mut rigid_bodies, &mut wrenches, &emitters, dt)?;
 
     // Build motion BVH for self-gravity
     let bvh = kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, dt)?;
@@ -221,18 +221,20 @@ where
     // VV corrector: v_{n+1/2} → v_{n+1} using F(x_{n+1})
     kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, dt, current_time)?;
 
-    cmd.submit()?;
   } else {
     while current_time < end_time {
       let dt = end_time - current_time;
 
-      // ── Snapshot state for possible CCD rewind ──
+      aethervk_oshal_rlib::log!("gpu_backends.rs: entering while loop");
       let snapshot = kernels.snapshot_dynamics(&mut cmd, &rigid_bodies, &particles)?;
 
+      aethervk_oshal_rlib::log!("gpu_backends.rs: calling imex_integrate_particles_p1_p2");
       // ── IMEX integration to t_{n+1} ──
       kernels.imex_integrate_particles_p1_p2(&mut cmd, &mut particles, dt)?;
+      aethervk_oshal_rlib::log!("gpu_backends.rs: calling imex_rb_force_assign");
       kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches)?;
-      kernels.imex_integrate_bodies_p3(&mut cmd, &mut rigid_bodies, &mut wrenches, dt)?;
+      aethervk_oshal_rlib::log!("gpu_backends.rs: calling imex_integrate_bodies_p3");
+      kernels.imex_integrate_bodies_p3(&mut cmd, &mut rigid_bodies, &mut wrenches, &emitters, dt)?;
 
       let bvh = kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, dt)?;
       kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
@@ -250,6 +252,7 @@ where
       let rb_rb_pairs = kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 4_000)?;
       let rb_ps_pairs = kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 4_000)?;
       let rb_lca_pairs = kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 2_000)?;
+      let query_leaves = kernels.build_leaves(&mut cmd, n_entities as usize)?;
 
       kernels.bp_clear(
         &mut cmd,
@@ -258,11 +261,11 @@ where
         rb_ps_pairs.address(),
         rb_lca_pairs.address(),
       )?;
-      kernels.bp_bounds_gen(&mut cmd, &rigid_bodies, raw_pairs.address(), n_entities, dt)?;
+      kernels.bp_bounds_gen(&mut cmd, &rigid_bodies, query_leaves.address(), n_entities, dt)?;
       kernels.bp_scene(
         &mut cmd,
         tlas_bvh_addr,
-        raw_pairs.address(),
+        query_leaves.address(),
         raw_pairs.address(),
         0, // TLAS root index
         n_entities,
@@ -314,13 +317,29 @@ where
       kernels.discard_list(rb_lca_pairs);
       kernels.discard_list(rb_ps_pairs);
       kernels.discard_list(internal_pairs);
+      kernels.discard_buffer(query_leaves);
 
-      cmd.submit()?;
+      let sync_info = cmd.submit()?;
+      if let Some(sync) = sync_info {
+        kernels.wait_sync(&sync)?;
+      }
+      cmd = kernels.create_command_buffer()?;
       let tc_host = tc_future.wait()?;
-
-      let t_c = tc_host.first().copied().unwrap_or(timeus_t::MAX);
-
-      // FIX: Only trigger response mechanisms if a collision happens inside the current timestep
+      let t_c = tc_host.get(0).copied().unwrap_or(0);
+      aethervk_oshal_rlib::log!("gpu_backends.rs: t_c is {}", t_c);
+      
+      let t_c = if t_c == 0xFFFFFFFF {
+        timeus_t::MAX
+      } else {
+        let t_c_f32 = f32::from_bits(t_c as u32);
+        if t_c_f32 < 0.0 {
+          aethervk_oshal_rlib::log!("gpu_backends.rs: warning: negative t_c float {}, assuming 0", t_c_f32);
+          0
+        } else {
+          (t_c_f32 * 1_000_000.0_f32) as timeus_t
+        }
+      };
+      
       if t_c < dt {
         collision_iters += 1;
         let inelastic = collision_iters >= MAX_BOUNCES;
@@ -330,7 +349,7 @@ where
         // Re-integrate to t_c
         kernels.imex_integrate_particles_p1_p2(&mut cmd, &mut particles, t_c)?;
         kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches)?;
-        kernels.imex_integrate_bodies_p3(&mut cmd, &mut rigid_bodies, &mut wrenches, t_c)?;
+        kernels.imex_integrate_bodies_p3(&mut cmd, &mut rigid_bodies, &mut wrenches, &emitters, t_c)?;
 
         let rewind_bvh =
           kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, t_c)?;
@@ -350,6 +369,9 @@ where
 
         kernels.discard_list(compacted);
         kernels.discard_list(rb_rb_pairs);
+        kernels.discard_buffer(tc_buffer);
+        kernels.discard_buffer(snapshot.0);
+        kernels.discard_buffer(snapshot.1);
 
         if inelastic {
           // If we resolved resting contact, integrate the remainder directly.
@@ -361,6 +383,7 @@ where
               &mut cmd,
               &mut rigid_bodies,
               &mut wrenches,
+              &emitters,
               remaining_dt,
             )?;
             let final_bvh = kernels.build_motion_bvh(
@@ -388,11 +411,17 @@ where
         // No collision before dt — accept the step.
         kernels.discard_list(compacted);
         kernels.discard_list(rb_rb_pairs);
+        kernels.discard_buffer(tc_buffer);
+        kernels.discard_buffer(snapshot.0);
+        kernels.discard_buffer(snapshot.1);
+        aethervk_oshal_rlib::log!("gpu_backends.rs: calling kernels.write_back_to_scene!");
         current_time = end_time;
       }
     }
   }
 
+
+  aethervk_oshal_rlib::log!("gpu_backends.rs: calling kernels.write_back_to_scene OUTSIDE LOOP!");
   kernels.write_back_to_scene(&mut cmd, &rigid_bodies, &particles, &particle_metadata, physical_scene, scene)?;
 
   // Discard per-frame buffers via the timeline-safe discard pool.

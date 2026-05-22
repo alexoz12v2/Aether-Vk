@@ -55,6 +55,7 @@ pub struct SimulationContext {
   pub scenes: Arc<RwLock<SimulationSceneData>>,
   pub task_manager: Arc<RwLock<SimulationTaskManager>>,
   pub logic_state: Arc<RwLock<structs::LogicState>>,
+  pub kernels: Arc<RwLock<structs::KernelsEnum>>,
   texture_cache: Arc<RwLock<TextureCache>>,
 }
 

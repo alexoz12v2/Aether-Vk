@@ -9,6 +9,7 @@
       <Button Content="Play (1D)" Command="{Binding SetSpeedCommand}" CommandParameter="1" Classes="accent" />
       <Button Content="Play (1W)" Command="{Binding SetSpeedCommand}" CommandParameter="2" Classes="accent" />
       <Button Content="Play (1M)" Command="{Binding SetSpeedCommand}" CommandParameter="3" Classes="accent" />
+      <Button Content="Update Trajectories" Command="{Binding UpdateTrajectoriesCommand}" Classes="accent" />
       
       <TextBlock Text="{Binding UtcTime}" VerticalAlignment="Center" Margin="16,0,0,0" FontWeight="Bold" FontSize="16" />
     </StackPanel>

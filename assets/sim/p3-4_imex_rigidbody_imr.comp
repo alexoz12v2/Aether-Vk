@@ -11,48 +11,16 @@
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
-// Standard AOS layout since we only have a few rigid bodies.
-struct RigidBody {
-    vec3 position;
-    float mass;
-    
-    // Stored column-major by std430/scalar
-    mat3 rotation;
-    
-    vec3 linear_velocity;
-    float _pad0;
-    
-    vec3 angular_velocity;
-    float _pad1;
-    
-    mat3 inertia_tensor;
-};
-
-layout(buffer_reference, scalar, buffer_reference_align = 16) buffer RigidBodyArray {
-    RigidBody bodies[];
-};
-
-// AOS Emitter data (TODO)
-struct ForceEmitter {
-    vec3 position;
-    float mu; // type_id = 0 -> G * M, type_id = 1 -> base force
-    vec3 normal; // type_id = 0 -> unused, type_id = 1 -> plane normal
-    uint type_id; // 0 = Gravity, 1 = Planar
-    float trunc_distance; // type_id = 0 -> unused, type_id = 1 -> max distance point - plane over which force is applied
-    float scale_factor;
-    uint _pad[2];
-};
-
-layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer EmitterArray {
-    ForceEmitter emitters[];
-};
+#include "physics_types.glsl"
 
 layout(push_constant, scalar) uniform PushConstants {
     RigidBodyArray rigid_bodies;
     EmitterArray emitters;
+    KinematicArray kinematics;
     float dt;
     uint num_bodies;
     uint num_emitters;
+    uint num_kinematics;
 } pc;
 
 // --- Math Utilities ---

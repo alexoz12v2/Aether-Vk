@@ -1,0 +1,15 @@
+diff --git a/aethervk.core/rlib/src/gpu_backends/vulkan/physics.rs b/aethervk.core/rlib/src/gpu_backends/vulkan/physics.rs
+index 111723a..8dfcd71 100644
+--- a/aethervk.core/rlib/src/gpu_backends/vulkan/physics.rs
++++ b/aethervk.core/rlib/src/gpu_backends/vulkan/physics.rs
+@@ -1850,8 +1850,8 @@ impl VulkanComputeKernels {
+       kinematics: kinematics.address, // Using kinematics device address
+       dt: dt_sec,
+       total_rigid_bodies,
+-      num_emitters: 1,   // TODO dynamic
+-      num_kinematics: 0, // TODO dynamic
++      num_emitters: _emitters.capacity() as u32,
++      num_kinematics: kinematics.capacity() as u32,
+     };
+     let bytes = unsafe {
+       core::slice::from_raw_parts(

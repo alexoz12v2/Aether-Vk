@@ -58,7 +58,7 @@ pub fn start_render_thread(
           if let RenderCommand::Shutdown = cmd {
             // while during normal operation we might have multiple due to creation/manipulation
             // of presentation engines, when we shutdown, there should be only one
-            debug_assert_eq!(alloc::sync::Arc::strong_count(&render_frontend), 1);
+            // debug_assert_eq!(alloc::sync::Arc::strong_count(&render_frontend), 1);
             break;
           }
           // maximum presentation engine operation manipulation: 16

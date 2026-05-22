@@ -386,6 +386,18 @@ public partial class CometComponent : ObservableObject, IComponent
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Spherical Gizmo Component
+// ─────────────────────────────────────────────────────────────────────────────
+
+public partial class SphericalGizmoComponent : ObservableObject, IComponent
+{
+  public string Name => "Spherical Gizmo";
+
+  [ObservableProperty]
+  private bool _isVisible = true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Particle Emitter Circles
 // ─────────────────────────────────────────────────────────────────────────────
 
