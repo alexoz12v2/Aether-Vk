@@ -109,7 +109,7 @@ pub trait BinaryBvh {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct TlasMultiNode<const N: usize> {
     pub min_x: [f32; N], pub max_x: [f32; N],
     pub min_y: [f32; N], pub max_y: [f32; N],
@@ -121,9 +121,10 @@ pub struct TlasMultiNode<const N: usize> {
     pub particle_start: [u32; N],
     pub particle_count: [u32; N],
     pub valid_mask: [u32; 2],
-    /// Precomputed permutation orders for the 8 ray direction sign combinations.
-    /// Each u8 holds the local child index (0 to N-1).
-    pub permutations: [[u8; N]; 8],
+    /// Precomputed traversal orderings for the 8 ray-sign combinations.
+    /// `permutations[sign_mask][i]` = local child index to visit i-th.
+    /// Stored as `u32` (upper 24 bits unused) so the struct is `bytemuck::Pod`.
+    pub permutations: [[u32; N]; 8],
 }
 
 impl<const N: usize> Default for TlasMultiNode<N> {
@@ -139,12 +140,53 @@ impl<const N: usize> Default for TlasMultiNode<N> {
             particle_start: [0; N],
             particle_count: [0; N],
             valid_mask: [0; 2],
-            permutations: [[0; N]; 8],
+            permutations: [[0u32; N]; 8],
         }
     }
 }
 
-/// Collapses a Morton-ordered Binary BVH into a Multi-BVH with precomputed permutation orders.
+// ── `Into<[f32; 6]>` for concrete bound types ────────────────────────────────
+// Required by `convert_binary_to_multi_bvh`'s `T::Bound: Into<[f32; 6]>` bound.
+
+use crate::math::collision::{bounds::AABB, linear_bvh::LinearBound};
+use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32 as Vec3f32Alias};
+
+impl From<AABB<f32>> for [f32; 6] {
+    fn from(val: AABB<f32>) -> Self {
+        let mn: Vec3f32Alias = val.min();
+        let mx: Vec3f32Alias = val.max();
+        [mn.x(), mn.y(), mn.z(), mx.x(), mx.y(), mx.z()]
+    }
+}
+
+impl From<LinearBound<f32>> for [f32; 6] {
+    fn from(val: LinearBound<f32>) -> Self {
+        match val {
+            LinearBound::AABB(a) => a.into(),
+            LinearBound::OBB(o) => {
+                let a = o.to_aabb::<Vec3f32Alias>();
+                let mn: Vec3f32Alias = a.min();
+                let mx: Vec3f32Alias = a.max();
+                [mn.x(), mn.y(), mn.z(), mx.x(), mx.y(), mx.z()]
+            }
+        }
+    }
+}
+
+
+// ── bytemuck::Pod + Zeroable for TlasMultiNode at the three used sizes ───────
+// Safety: TlasMultiNode<N> is #[repr(C)], all fields are f32/u32 (Pod), and the
+// permutations field was changed from [[u8;N];8] to [[u32;N];8] to ensure no
+// unexpected padding or alignment issues.
+
+// SAFETY: TlasMultiNode<N> is #[repr(C)] with only Pod fields, for N ∈ {16,32,64}.
+unsafe impl bytemuck::Zeroable for TlasMultiNode<16> {}
+unsafe impl bytemuck::Zeroable for TlasMultiNode<32> {}
+unsafe impl bytemuck::Zeroable for TlasMultiNode<64> {}
+unsafe impl bytemuck::Pod for TlasMultiNode<16> {}
+unsafe impl bytemuck::Pod for TlasMultiNode<32> {}
+unsafe impl bytemuck::Pod for TlasMultiNode<64> {}
+
 ///
 /// # Sign Heuristic & Permutation Ordering
 /// When collapsing a binary treelet into a wide node (e.g., N=32), traversing the children 
@@ -306,7 +348,7 @@ where
         }
         traverse_perm(0, &treelet_nodes, sign_mask, &frontier, &mut perm);
         for i in 0..perm.len() {
-            node.permutations[sign_mask as usize][i] = perm[i];
+            node.permutations[sign_mask as usize][i] = perm[i] as u32;
         }
     }
 

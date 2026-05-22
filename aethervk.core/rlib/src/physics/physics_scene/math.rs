@@ -15,9 +15,9 @@ use alloc::vec::Vec;
 
 /// TODO: Document this item
 pub trait PhysicsSceneMathExt {
-  /// Broadphase: Traverses the top-level World BVH using a stack to find all
+/// Broadphase: Traverses the top-level World BVH using a stack to find all
   /// entities whose bounding volumes intersect the ray.
-  fn intersect_world_bvh_math(&self, ray: &Ray<Vec3f32>) -> Vec<EntityId>;
+  // fn intersect_world_bvh_math(&self, ray: &Ray<Vec3f32>) -> Vec<EntityId>; // Removed as requested
 
   /// Narrowphase: Purely mathematical extraction of Ray/Mesh local BVH and Möller–Trumbore intersection.
   /// Traverses the local BVH and returns `Some((t, global_hit_point))` if a hit is found closer than `max_t`.
@@ -32,55 +32,6 @@ pub trait PhysicsSceneMathExt {
 }
 
 impl PhysicsSceneMathExt for PhysicsScene {
-  fn intersect_world_bvh_math(&self, ray: &Ray<Vec3f32>) -> Vec<EntityId> {
-    let mut hit_instances = Vec::new();
-
-    for frame in &self.gpu_frames {
-      let root_idx = frame.bvh_root_index;
-      if root_idx == u32::MAX {
-        continue;
-      }
-
-      let mut stack = Vec::new();
-      stack.push(root_idx as usize);
-
-      while let Some(node_idx) = stack.pop() {
-        let node = &self.gpu_bvh_nodes[node_idx];
-        let min_bound = Vec3f32::from_array(node.aabb_min);
-        let max_bound = Vec3f32::from_array(node.aabb_max);
-        let aabb = crate::math::collision::bounds::AABB::<f32>::new(min_bound, max_bound);
-
-        let hits_bound = intersection::intersect_ray_aabb(ray, &aabb);
-
-        if hits_bound {
-          if node.prim_count > 0 {
-            // Leaf node. Extract instances from the primitive array mapping.
-            let prim_start = node.left_child_or_prim as usize;
-            let prim_end = prim_start + node.prim_count as usize;
-
-            for i in prim_start..prim_end {
-              let prim_idx = self.gpu_primitives[i];
-              let entity = self.gpu_entity_mappings[prim_idx as usize];
-              if !hit_instances.contains(&entity) {
-                hit_instances.push(entity);
-              }
-            }
-          } else {
-            // Internal node. Push valid children to the stack.
-            if node.right_child_offset != u32::MAX {
-              stack.push(node.right_child_offset as usize);
-            }
-            if node.left_child_or_prim != u32::MAX {
-              stack.push(node.left_child_or_prim as usize);
-            }
-          }
-        }
-      }
-    }
-
-    hit_instances
-  }
-
   fn intersect_mesh_bvh_math(
     &self,
     ro: Vec3f32,
@@ -278,15 +229,13 @@ mod tests {
       _pad2: 0,
     }];
 
-    let gpu_primitives = vec![0];
-    let entity_key = EntityId::null();
-    let gpu_entity_mappings = vec![entity_key];
-
     PhysicsScene {
       gpu_frames,
-      gpu_bvh_nodes,
-      gpu_primitives,
-      gpu_entity_mappings,
+      macro_tlas: crate::physics::physics_scene::RootBoundsBvh { nodes: vec![] },
+      micro_tlases: hashbrown::HashMap::new(),
+      mesh_blases: vec![],
+      particle_blases: vec![],
+      dt_s: 0.016,
     }
   }
 
@@ -363,26 +312,6 @@ mod tests {
     }
   }
 
-  #[test]
-  fn perf_test_intersect_world_bvh_math() {
-    let scene = create_dummy_physics_scene();
-    let ray = Ray {
-      origin: Vec3f32::from_components(0.0, 0.0, 5.0),
-      direction: Vec3f32::from_components(0.0, 0.0, -1.0),
-      length: 100.0,
-    };
-
-    let start = std::time::Instant::now();
-    let iters = 100_000;
-    for _ in 0..iters {
-      let _ = scene.intersect_world_bvh_math(&ray);
-    }
-    let elapsed = start.elapsed();
-    println!(
-      "intersect_world_bvh_math took {:?} for {} iterations",
-      elapsed, iters
-    );
-  }
 
   #[test]
   fn perf_test_intersect_mesh_bvh_math() {

@@ -131,6 +131,8 @@ void main() {
         vec3 c_max = vec3(tlas.nodes[node_idx].max_x[lane_id], tlas.nodes[node_idx].max_y[lane_id], tlas.nodes[node_idx].max_z[lane_id]);
         uint child_payload = tlas.nodes[node_idx].child_indices[lane_id];
 
+        uint entity_id = meta & 0x07FFFFFF;
+
         bool hit = valid && intersectAABB(query_min, query_max, c_min, c_max);
         bool is_leaf = bvh_is_leaf(meta);
         
@@ -146,7 +148,7 @@ void main() {
             if (lane_id == 0) base_idx = atomicAdd(out_pairs.count, leaf_count);
             base_idx = subgroupBroadcast(base_idx, 0);
 
-            if (hit_leaf) out_pairs.pairs[base_idx + leaf_offset] = uvec2(foreign_ent_id, child_payload);
+            if (hit_leaf) out_pairs.pairs[base_idx + leaf_offset] = uvec2(foreign_ent_id, entity_id);
         }
 
         uvec4 node_ballot = subgroupBallot(hit_node);

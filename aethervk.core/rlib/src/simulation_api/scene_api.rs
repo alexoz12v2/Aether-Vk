@@ -4,9 +4,9 @@ use crate::{
   expect_scene, expect_scene_and_entity,
   math::collision::linear_bvh::LinearBVHNode,
   scene::{
-    AddComponentError, CursorComponent, EntityId, GridComponent,
-    PhysicalMeshComponent, Scene, SkyComponent, SunComponent,
-    TransformComponent,
+    AddComponentError, ColliderComponent, CursorComponent, EntityId, GridComponent,
+    KinematicComponent, ParticleEmitterCirclesComponent, PhysicalMeshComponent, Scene,
+    SkyComponent, SphereGizmoComponent, SunComponent, TransformComponent,
   },
   simulation_api::{
     SimulationContext,
@@ -18,8 +18,9 @@ use aethervk_oshal_rlib as oshal;
 use alloc::{string::String, sync::Arc, vec::Vec};
 use core::ffi::c_char;
 use oshal::math::{
+  matrix::mat4::Mat4x4f32,
   quaternion::Quaternion,
-  vector::{Vector3, vec3::Vec3f32, vec4::Quat},
+  vector::{Vector, Vector3, vec3::Vec3f32, vec4::Quat},
 };
 use spin::RwLock;
 
@@ -448,6 +449,203 @@ impl SimulationContext {
     }
     Ok(())
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Comet spawn helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl SimulationContext {
+  /// Atomically spawns the LCA micro-frame entity and the comet mesh entity
+  /// as its child, attaching all required components.
+  ///
+  /// # Arguments
+  /// * `scene_id`     – target scene.
+  /// * `model_id`     – id returned by `import_model_from_mesh`.
+  /// * `entity_name`  – base name; the micro-frame will be named `<name>_microframe`.
+  /// * `pos`          – spawn position **in macro-frame units (AU)**.
+  /// * `rotation`     – orientation quaternion for the comet mesh (relative to micro-frame).
+  /// * `radius_km`    – nucleus radius in km; used to derive the mesh scale.
+  /// * `physics_type` – `0` = Static, `1` = Kinematic, `2` = Dynamic.
+  ///
+  /// Returns `(lca_frame_ext_id, comet_ext_id)` on success.
+  pub fn spawn_comet_internal(
+    &self,
+    scene_id: u64,
+    model_id: u64,
+    entity_name: &str,
+    pos: Vec3f32,
+    rotation: Quat,
+    radius_km: f32,
+    physics_type: u32,
+  ) -> EngineResult<(u64, u64)> {
+    use crate::scene::ReferenceFrameComponent;
+    use aethervk_oshal_rlib::math::matrix::SquareMatrix;
+
+    // ── Resolve mesh from model registry ────────────────────────────────────
+    let (path_str, mesh_arc) = {
+      let scenes = self.scenes.read();
+      let path_str = scenes
+        .model_registry
+        .get(&model_id)
+        .ok_or(EngineError::InvalidOperation("spawn_comet: model not found"))?
+        .clone();
+      let mesh_arc = scenes
+        .mesh_cache
+        .get(&path_str)
+        .ok_or(EngineError::InvalidOperation("spawn_comet: mesh not in cache"))?;
+      (path_str, mesh_arc)
+    };
+
+    let scene_ctx_lock = {
+      let scenes = self.scenes.read();
+      scenes
+        .get_scene(scene_id)
+        .ok_or(EngineError::InvalidOperation("spawn_comet: scene not found"))?
+    };
+    let mut scene_ctx = scene_ctx_lock.write();
+
+    // ── LCA micro-frame entity ───────────────────────────────────────────────
+    let lca_name = alloc::format!("{}_microframe", entity_name);
+    let lca_id = scene_ctx.scene.spawn_entity(&lca_name);
+
+    // Transform: position is in macro-frame coordinates (AU).
+    scene_ctx.scene.add_component(
+      lca_id,
+      TransformComponent {
+        position: pos,
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    )?;
+
+    // SOI radius: capped at 1 AU; also capped from below at 0.01 AU so the
+    // micro-frame is never degenerate even for a sun-grazing comet.
+    let dist_au =
+      (pos.x() * pos.x() + pos.y() * pos.y() + pos.z() * pos.z()).sqrt();
+    let soi_radius_au = dist_au.min(1.0_f32).max(0.01_f32);
+
+    scene_ctx.scene.add_component(
+      lca_id,
+      ReferenceFrameComponent {
+        frame_type: crate::scene::ReferenceFrameType::Micro,
+        scale: soi_radius_au,
+        soi_radius: soi_radius_au,
+        _padding: 0,
+      },
+    )?;
+
+    let root = scene_ctx.root_entity;
+    scene_ctx.scene.set_parent(lca_id, Some(root));
+    let lca_ext_id = scene_ctx.register_entity(lca_id);
+
+    // ── Comet mesh entity (child of LCA frame) ───────────────────────────────
+    let comet_id = scene_ctx.scene.spawn_entity(entity_name);
+
+    // Derive uniform scale so that the mesh bounding sphere == radius_km.
+    let bounding_sphere = compute_bounding_sphere_radius(&mesh_arc.vertices);
+    let mesh_scale = if bounding_sphere > 0.0 { radius_km / bounding_sphere } else { 1.0 };
+
+    scene_ctx.scene.add_component(
+      comet_id,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation,
+        scale: Vec3f32::from_components(mesh_scale, mesh_scale, mesh_scale),
+      },
+    )?;
+
+    scene_ctx.scene.add_component(
+      comet_id,
+      PhysicalMeshComponent {
+        asset_path: path_str,
+        mesh: mesh_arc,
+        emissive_intensity: 0.0,
+        emissive_color: [0.0, 0.0, 0.0],
+        use_new_path: false,
+        paint_display_mode: 0,
+        sphere_center: [0.0, 0.0, 0.0],
+        // sphere_radius is in micro-frame km — matches radius_km directly.
+        sphere_radius: radius_km,
+        grid_color: [0.0, 0.0, 0.0],
+        grid_density: 1.0,
+      },
+    )?;
+
+    scene_ctx.scene.add_component(
+      comet_id,
+      SphereGizmoComponent {
+        radius: radius_km,
+        subdivisions: 4.0,
+        local_frame: Mat4x4f32::identity(),
+        is_visible: true,
+      },
+    )?;
+
+    scene_ctx.scene.add_component(
+      comet_id,
+      ParticleEmitterCirclesComponent { circles: alloc::vec::Vec::new() },
+    )?;
+
+    // Physics-type specific components
+    match physics_type {
+      0 => {
+        // Static: participates as collider, never moves.
+        scene_ctx.scene.add_component(
+          comet_id,
+          ColliderComponent {
+            shape: crate::scene::ColliderShape::Sphere { radius: radius_km },
+            mass: 0.0,
+            restitution: 0.3,
+            friction: 0.6,
+          },
+        )?;
+      }
+      1 => {
+        // Kinematic: collider + velocity-driven by almanac each tick.
+        scene_ctx.scene.add_component(
+          comet_id,
+          ColliderComponent {
+            shape: crate::scene::ColliderShape::Sphere { radius: radius_km },
+            mass: 0.0,
+            restitution: 0.3,
+            friction: 0.6,
+          },
+        )?;
+        scene_ctx.scene.add_component(comet_id, KinematicComponent::default())?;
+      }
+      2 => {
+        // Dynamic: full rigid-body physics.
+        // KinematicComponent carries velocity/angular-velocity state.
+        scene_ctx.scene.add_component(comet_id, KinematicComponent::default())?;
+      }
+      _ => {}
+    }
+
+    scene_ctx.scene.set_parent(comet_id, Some(lca_id));
+    let comet_ext_id = scene_ctx.register_entity(comet_id);
+
+    Ok((lca_ext_id, comet_ext_id))
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pure helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns the radius of the smallest sphere centred at the mesh origin that
+/// encloses all vertices. Result is in the same unit as vertex positions
+/// (object-space km for comet meshes).
+fn compute_bounding_sphere_radius(vertices: &[crate::simulation::comet::Vertex]) -> f32 {
+  vertices
+    .iter()
+    .map(|v| {
+      v.position[0] * v.position[0]
+        + v.position[1] * v.position[1]
+        + v.position[2] * v.position[2]
+    })
+    .fold(0.0_f32, f32::max)
+    .sqrt()
 }
 
 // ------------------------- INTERNAL --------------------------------------

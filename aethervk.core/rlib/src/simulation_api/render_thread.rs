@@ -173,7 +173,7 @@ fn process_command(
                 cmd_buffer,
                 render_frame.presentation_engine_handle,
               )?;
-              let cmd_scope =
+              let mut cmd_scope =
                 gpu::ScopedCommandBuffer::new(render_device, cmd_buffer, Some(task_id))?;
 
               let time_readings =
@@ -252,6 +252,14 @@ fn process_command(
               if is_windowless {
                 if let Err(e) = render_device.record_windowless_download(cmd_buffer, task_id) {
                   return Err(e);
+                }
+              }
+
+              if let Some(task) = render_frame.active_physics_task.lock().take() {
+                if let Some(sync) = task.wait()
+                  .map_err(|e| crate::types::GpuError::InvalidState(alloc::format!("Physics engine error: {:?}", e)))? 
+                {
+                  cmd_scope.set_sync_info(sync);
                 }
               }
 
@@ -405,7 +413,7 @@ fn do_render_scene_async(
   }
 
   if let Err(e) = cmd_scope.submit() {
-    oshal::log!("cmd_scope.submit failed: {:?}", e);
+    oshal::log!("[Render Thread] Windowless render pass failed {e:?}");
     return Err(e);
   }
   present_guard.defuse();

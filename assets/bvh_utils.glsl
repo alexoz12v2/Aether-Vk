@@ -47,7 +47,8 @@ struct MultiBvhNode {
     uint  particle_count[SUBGROUP_SIZE];
 
     uvec2 valid_mask; // 64-bit emulation using uvec2
-    uint8_t permutations[8][SUBGROUP_SIZE];};
+    uint  permutations[8][SUBGROUP_SIZE]; // u32 per slot (low byte = ordering index); matches Rust [[u32;N];8]
+};
 
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer MultiBvhBuffer {
     MultiBvhNode nodes[];

@@ -288,6 +288,139 @@ pub fn build_particle_lbvh(particles: &[Particle], particle_radius: f32) -> Opti
   })
 }
 
+/// Motion-aware variant of [`build_particle_lbvh`] for the CPU kernel path.
+///
+/// Each leaf AABB is `union(pos ± r, (pos + vel·dt_s) ± r)`, matching the
+/// motion bounds computed by `lbvh_build.comp` on the GPU side.
+/// Morton codes are computed on the midpoint `pos + vel·(dt_s/2)` so the
+/// spatial ordering reflects the swept centroid.
+///
+/// `velocities` must be parallel to `particles` (same length).
+pub fn build_motion_particle_lbvh(
+  particles: &[crate::math::physics::Particle],
+  velocities: &[Vec3f32],
+  particle_radius: f32,
+  dt_s: f32,
+) -> Option<LinearBVH<f32>> {
+  if particles.is_empty() {
+    return None;
+  }
+  let n = particles.len();
+  let r_vec = Vec3f32::splat(particle_radius);
+
+  // 1. Global bounding box over swept positions
+  let mut min_b = particles[0].position - r_vec;
+  let mut max_b = particles[0].position + r_vec;
+  for (i, p) in particles.iter().enumerate() {
+    let p1 = p.position + velocities[i] * dt_s;
+    min_b = min_b.min(p.position - r_vec).min(p1 - r_vec);
+    max_b = max_b.max(p.position + r_vec).max(p1 + r_vec);
+  }
+  let extent = max_b - min_b;
+
+  // 2. Morton codes on swept centroid
+  let mut morton_entries = Vec::with_capacity(n);
+  for (i, p) in particles.iter().enumerate() {
+    let centroid = p.position + velocities[i] * (dt_s * 0.5);
+    let normalized = if extent.length_squared() > 1e-8 {
+      Vec3f32::from_components(
+        (centroid.x() - min_b.x()) / extent.x(),
+        (centroid.y() - min_b.y()) / extent.y(),
+        (centroid.z() - min_b.z()) / extent.z(),
+      )
+    } else {
+      Vec3f32::zero()
+    };
+    morton_entries.push((morton_3d(normalized), i));
+  }
+  morton_entries.sort_unstable_by_key(|&(code, _)| code);
+
+  // 3–5. Topology construction (same as build_particle_lbvh)
+  let num_internal_nodes = n - 1;
+  let num_total_nodes = 2 * n - 1;
+  let dummy_node = LinearBVHNode {
+    center_of_mass: [0.0, 0.0, 0.0],
+    mass: 0.0,
+    bound: LinearBound::AABB(AABB::new(Vec3f32::zero(), Vec3f32::zero())),
+    left_child_or_primitive_offset: u32::MAX,
+    right_child_offset: u32::MAX,
+    primitive_count: 0,
+  };
+  let mut nodes = alloc::vec![dummy_node; num_total_nodes];
+
+  for i in 0..num_internal_nodes {
+    let (first, last) = determine_range(&morton_entries, i);
+    let split = find_split(&morton_entries, first, last);
+    let left_child = if split == first { num_internal_nodes + split } else { split };
+    let right_child = if split + 1 == last { num_internal_nodes + split + 1 } else { split + 1 };
+    nodes[i].left_child_or_primitive_offset = left_child as u32;
+    nodes[i].right_child_offset = right_child as u32;
+  }
+
+  // 6. Leaf nodes with motion bounds
+  let mut primitives = Vec::with_capacity(n);
+  for i in 0..n {
+    let leaf_idx = num_internal_nodes + i;
+    let orig = morton_entries[i].1;
+    let p = particles[orig];
+    let v = velocities[orig];
+    let p0 = p.position;
+    let p1 = p0 + v * dt_s;
+    let mn = (p0 - r_vec).min(p1 - r_vec);
+    let mx = (p0 + r_vec).max(p1 + r_vec);
+    let mid = (p0 + p1) * 0.5;
+
+    nodes[leaf_idx].bound = LinearBound::AABB(AABB::new(mn, mx));
+    nodes[leaf_idx].left_child_or_primitive_offset = i as u32;
+    nodes[leaf_idx].primitive_count = 1;
+    nodes[leaf_idx].mass = p.mass;
+    nodes[leaf_idx].center_of_mass = [mid.x(), mid.y(), mid.z()];
+    primitives.push(orig);
+  }
+
+  // 7. Bottom-up AABB + mass/CoM refitting
+  for i in (0..num_internal_nodes).rev() {
+    let l = nodes[i].left_child_or_primitive_offset as usize;
+    let r = nodes[i].right_child_offset as usize;
+
+    let (lmin, lmax) = match &nodes[l].bound {
+      LinearBound::AABB(a) => (a.min::<Vec3f32>(), a.max::<Vec3f32>()),
+      _ => unreachable!(),
+    };
+    let (rmin, rmax) = match &nodes[r].bound {
+      LinearBound::AABB(a) => (a.min::<Vec3f32>(), a.max::<Vec3f32>()),
+      _ => unreachable!(),
+    };
+
+    nodes[i].bound = LinearBound::AABB(AABB::new(lmin.min(rmin), lmax.max(rmax)));
+
+    let lm = nodes[l].mass;
+    let rm = nodes[r].mass;
+    let total_mass = lm + rm;
+    let lc = Vec3f32::from_array(nodes[l].center_of_mass);
+    let rc = Vec3f32::from_array(nodes[r].center_of_mass);
+    nodes[i].mass = total_mass;
+    nodes[i].center_of_mass = if total_mass > 0.0 {
+      let com = (lc * lm + rc * rm) / total_mass;
+      [com.x(), com.y(), com.z()]
+    } else {
+      let com = (lc + rc) * 0.5;
+      [com.x(), com.y(), com.z()]
+    };
+  }
+
+  Some(LinearBVH {
+    header: LinearBVHHeader {
+      preciseness: 0,
+      node_count: num_total_nodes as u32,
+      primitive_count: n as u32,
+    },
+    nodes,
+    primitives,
+  })
+}
+
+
 /// Educational: Fast BVH Refitting.
 /// Updates the bounding boxes of an existing Linear BVH without changing its topology.
 /// This is extremely fast, but the BVH quality will degrade over time as particles move chaotically.

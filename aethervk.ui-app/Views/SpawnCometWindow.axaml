@@ -102,6 +102,16 @@
       <!-- Step 4: Positioning -->
       <StackPanel Classes="stepStack" IsVisible="{Binding IsStep4}">
         <TextBlock Text="Step 4: Position &amp; Orientation" FontWeight="Bold" FontSize="16" />
+
+        <!-- Nucleus radius (from Horizon JPL, user-editable) -->
+        <Grid ColumnDefinitions="Auto, *" Margin="0,12,0,0">
+          <TextBlock Grid.Column="0" Text="Nucleus Radius (km):" VerticalAlignment="Center"
+                     FontWeight="SemiBold" Margin="0,0,12,0" />
+          <NumericUpDown Grid.Column="1" Value="{Binding CometRadiusKm}"
+                         FormatString="0.000" Minimum="0.001" Width="140"
+                         HorizontalAlignment="Left"
+                         ToolTip.Tip="Radius from Horizon JPL physical properties. You may override it." />
+        </Grid>
         
         <Grid ColumnDefinitions="*, Auto" Margin="0,16,0,0">
           <StackPanel Grid.Column="0" Spacing="12" Margin="0,0,16,0">

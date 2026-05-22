@@ -22,6 +22,9 @@ public class SpawnCometResult
   public float RotY { get; }
   public float RotZ { get; }
 
+  /// <summary>Nucleus radius in km, from the Horizon JPL physical properties block.</summary>
+  public float CometRadiusKm { get; }
+
   public SpawnCometResult(
     ImportedModelItem model,
     string name,
@@ -35,7 +38,8 @@ public class SpawnCometResult
     float sz,
     float pitchDeg,
     float yawDeg,
-    float rollDeg
+    float rollDeg,
+    float cometRadiusKm = 1.0f
   )
   {
     Model = model;
@@ -48,6 +52,7 @@ public class SpawnCometResult
     ScaleX = sx;
     ScaleY = sy;
     ScaleZ = sz;
+    CometRadiusKm = cometRadiusKm;
 
     // Convert Euler (degrees) to Quaternion
     var pitch = pitchDeg * (float)(System.Math.PI / 180.0);

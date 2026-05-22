@@ -401,7 +401,7 @@ mod tests {
           engine.submit_image(&log_device, queue, acq.image_index, acq.frame_index as u32).unwrap();
       }
     }
-    unsafe { device.device_wait_idle().unwrap() };
+    unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
     engine.cleanup(&device);
     unsafe {
@@ -473,7 +473,7 @@ mod tests {
         .unwrap();
     }
 
-    unsafe { device.device_wait_idle().unwrap() };
+    unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
     engine.cleanup(&device);
     unsafe {
@@ -563,7 +563,7 @@ mod tests {
         .unwrap();
     }
 
-    unsafe { device.device_wait_idle().unwrap() };
+    unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
     engine.cleanup(&device);
     unsafe {
@@ -645,7 +645,7 @@ mod tests {
     let path = std::path::Path::new("test_output_windowless.png");
     assert!(path.exists());
 
-    unsafe { device.device_wait_idle().unwrap() };
+    unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
     engine.cleanup(&device);
     unsafe {
@@ -752,7 +752,7 @@ mod tests {
         .unwrap();
     }
 
-    unsafe { device.device_wait_idle().unwrap() };
+    unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
     engine.cleanup(&device);
     unsafe {
@@ -978,7 +978,7 @@ mod tests {
         .unwrap();
     }
 
-    unsafe { device.device_wait_idle().unwrap() };
+    unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
     vp1.cleanup(&device);
     vp2.cleanup(&device);
@@ -1069,7 +1069,7 @@ mod tests {
       }
     }
 
-    unsafe { device.device_wait_idle().unwrap() };
+    unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
     engine.cleanup(&device);
 

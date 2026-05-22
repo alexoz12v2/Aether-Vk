@@ -97,7 +97,7 @@ mod tests {
     scene: &mut Scene,
     duration_seconds: f32,
   ) {
-    let mut physical_scene = PhysicsScene::build_from_scene(scene);
+    let mut physical_scene = PhysicsScene::build_from_scene(scene, 0.016);
 
     let dt: timeus_t = 16_667; // 60 FPS
     let mut current_time: timeus_t = 0;

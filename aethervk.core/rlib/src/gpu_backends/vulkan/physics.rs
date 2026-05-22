@@ -458,44 +458,49 @@ impl PhysicsPipelines {
     // For safety, let's use a known path relative to the crate root or check multiple.
     let dir_lock = crate::gpu::ASSET_DIR.read();
     let base_dir = dir_lock.as_ref().unwrap();
+    let sim_dir = if base_dir.ends_with("sim") {
+      base_dir.clone()
+    } else {
+      alloc::format!("{}/sim", base_dir)
+    };
     let res = (|| -> GpuResult<Self> { Ok(Self {
       pipeline_layout,
       // ── Legacy pipelines ────────────────────────────────────────────────
-      emit_particles: create_pipeline(&format!("{}/emit_particles.comp.spv", base_dir))?,
-      p1_2_imex: create_pipeline(&format!("{}/p1-2_imex_particles.comp.spv", base_dir))?,
-      p3_4_imex: create_pipeline(&format!("{}/p3-4_imex_rigidbody_imr.comp.spv", base_dir))?,
-      lbvh_prepass: create_pipeline(&format!("{}/lbvh_prepass.comp.spv", base_dir))?,
-      lbvh_build: create_pipeline(&format!("{}/lbvh_build.comp.spv", base_dir))?,
-      ccd: create_pipeline(&format!("{}/ccd.comp.spv", base_dir))?,
-      ccd_rigidbody: create_pipeline(&format!("{}/narrow_ccd_rigidbody.comp.spv", base_dir))?,
-      stream_compact: create_pipeline(&format!("{}/stream_compact.comp.spv", base_dir))?,
-      reduce_toi: create_pipeline(&format!("{}/reduce_toi.comp.spv", base_dir))?,
-      lcp_solver: create_pipeline(&format!("{}/lcp_solver.comp.spv", base_dir))?,
-      apply_impulses: create_pipeline(&format!("{}/apply_impulses.comp.spv", base_dir))?,
-      barnes_hut: create_pipeline(&format!("{}/barnes_hut.comp.spv", base_dir))?,
-      p5_imex: create_pipeline(&format!("{}/p5_imex_particles.comp.spv", base_dir))?,
-      broad_phase: create_pipeline(&format!("{}/broad_phase.comp.spv", base_dir))?,
+      emit_particles: create_pipeline(&alloc::format!("{}/emit_particles.comp.spv", sim_dir))?,
+      p1_2_imex: create_pipeline(&alloc::format!("{}/p1-2_imex_particles.comp.spv", sim_dir))?,
+      p3_4_imex: create_pipeline(&alloc::format!("{}/p3-4_imex_rigidbody_imr.comp.spv", sim_dir))?,
+      lbvh_prepass: create_pipeline(&alloc::format!("{}/lbvh_prepass.comp.spv", sim_dir))?,
+      lbvh_build: create_pipeline(&alloc::format!("{}/lbvh_build.comp.spv", sim_dir))?,
+      ccd: create_pipeline(&alloc::format!("{}/ccd.comp.spv", sim_dir))?,
+      ccd_rigidbody: create_pipeline(&alloc::format!("{}/narrow_ccd_rigidbody.comp.spv", sim_dir))?,
+      stream_compact: create_pipeline(&alloc::format!("{}/stream_compact.comp.spv", sim_dir))?,
+      reduce_toi: create_pipeline(&alloc::format!("{}/reduce_toi.comp.spv", sim_dir))?,
+      lcp_solver: create_pipeline(&alloc::format!("{}/lcp_solver.comp.spv", sim_dir))?,
+      apply_impulses: create_pipeline(&alloc::format!("{}/apply_impulses.comp.spv", sim_dir))?,
+      barnes_hut: create_pipeline(&alloc::format!("{}/barnes_hut.comp.spv", sim_dir))?,
+      p5_imex: create_pipeline(&alloc::format!("{}/p5_imex_particles.comp.spv", sim_dir))?,
+      broad_phase: create_pipeline(&alloc::format!("{}/broad_phase.comp.spv", sim_dir))?,
       // ── New IMEX integrators ────────────────────────────────────────────
       integrate_particles_p1_p2: create_pipeline(
-        &format!("{}/integrate_particles_p1_p2.comp.spv", base_dir)
+        &alloc::format!("{}/integrate_particles_p1_p2.comp.spv", sim_dir)
       )?,
       integrate_bodies_p3: create_pipeline(
-        &format!("{}/integrate_bodies_p3.comp.spv", base_dir)
+        &alloc::format!("{}/integrate_bodies_p3.comp.spv", sim_dir)
       )?,
       integrate_particles_p4_5: create_pipeline(
-        &format!("{}/integrate_particles_p4_5.comp.spv", base_dir)
+        &alloc::format!("{}/integrate_particles_p4_5.comp.spv", sim_dir)
       )?,
       // ── Force aggregation ───────────────────────────────────────────────
       rb_force_assign: create_pipeline(
-        &format!("{}/rb_force_assign.comp.spv", base_dir)
+        &alloc::format!("{}/rb_force_assign.comp.spv", sim_dir)
       )?,
       // ── Broad-phase suite ───────────────────────────────────────────────
-      bp_clear: create_pipeline(&format!("{}/bp_clear.comp.spv",         base_dir))?,
-      bp_bounds_gen: create_pipeline(&format!("{}/bp_bounds_gen.comp.spv",    base_dir))?,
-      bp_scene: create_pipeline(&format!("{}/bp_scene.comp.spv",         base_dir))?,
-      bp_classify: create_pipeline(&format!("{}/bp_classify.comp.spv",      base_dir))?,
-      bp_cross_lca: create_pipeline(&format!("{}/bp_cross_lca.comp.spv",     base_dir))?,
-      bp_particle_self: create_pipeline(&format!("{}/bp_particle_self.comp.spv", base_dir))?,
+      bp_clear: create_pipeline(&alloc::format!("{}/bp_clear.comp.spv",         sim_dir))?,
+      bp_bounds_gen: create_pipeline(&alloc::format!("{}/bp_bounds_gen.comp.spv",    sim_dir))?,
+      bp_scene: create_pipeline(&alloc::format!("{}/bp_scene.comp.spv",         sim_dir))?,
+      bp_classify: create_pipeline(&alloc::format!("{}/bp_classify.comp.spv",      sim_dir))?,
+      bp_cross_lca: create_pipeline(&alloc::format!("{}/bp_cross_lca.comp.spv",     sim_dir))?,
+      bp_particle_self: create_pipeline(&alloc::format!("{}/bp_particle_self.comp.spv", sim_dir))?,
     })})();
     match res {
       Ok(s) => Ok(s),
@@ -555,6 +560,7 @@ pub struct VulkanCommandBuffer {
   pub discard_pool_ptr:
     core::ptr::NonNull<crate::gpu_backends::vulkan::device::resources::DiscardPool>,
   pub timeline_value: u64,
+  pub timeline_sem: vk::Semaphore,
 }
 
 unsafe impl Send for VulkanCommandBuffer {}
@@ -564,7 +570,7 @@ impl VulkanCommandBuffer {
   // TODO cleanup function
 }
 impl CommandBuffer for VulkanCommandBuffer {
-  fn submit(&mut self) -> EngineResult<()> {
+  fn submit(&mut self) -> EngineResult<Option<crate::gpu::CommandBufferSyncInfo>> {
     unsafe {
       let device = self.device_ptr.as_ref();
       let discard_pool = self.discard_pool_ptr.as_ref();
@@ -579,7 +585,18 @@ impl CommandBuffer for VulkanCommandBuffer {
         self.timeline_value,
       );
 
-      let submit_info = vk::SubmitInfo::default().command_buffers(core::slice::from_ref(&self.cmd));
+      let command_buffers = [self.cmd];
+      let signal_semaphores = [self.timeline_sem];
+      let signal_values = [self.timeline_value];
+
+      let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
+        .signal_semaphore_values(&signal_values);
+
+      let submit_info = vk::SubmitInfo::default()
+        .command_buffers(&command_buffers)
+        .signal_semaphores(&signal_semaphores)
+        .push_next(&mut timeline_info);
+
       device
         .locked_queue_submit(
           self.queue.handle,
@@ -588,7 +605,11 @@ impl CommandBuffer for VulkanCommandBuffer {
         )
         .map_err(|e| GpuError::from(e))?;
     }
-    Ok(())
+    
+    Ok(Some(crate::gpu::CommandBufferSyncInfo {
+      timeline_semaphore: ash::vk::Handle::as_raw(self.timeline_sem),
+      timeline_value: self.timeline_value,
+    }))
   }
 }
 
@@ -680,10 +701,11 @@ pub struct VulkanComputeKernels {
   /// Need to keep track of current compute timeline value for discard pool
   pub next_submit_value: core::sync::atomic::AtomicU64,
   pub discard_pool: crate::gpu_backends::vulkan::device::resources::DiscardPool,
+  pub queue_sharing_info: crate::gpu::QueueSharingInfo,
 }
 
 impl VulkanComputeKernels {
-  pub fn new(device: &LogicalDevice, _allocator: vk_mem::AllocatorView) -> GpuResult<Self> {
+  pub fn new(device: &LogicalDevice, _allocator: vk_mem::AllocatorView, queue_sharing_info: crate::gpu::QueueSharingInfo) -> GpuResult<Self> {
     let pipelines = PhysicsPipelines::new(device)?;
     let addresses = PhysicsDeviceAddresses::default();
 
@@ -700,12 +722,19 @@ impl VulkanComputeKernels {
       pipelines,
       addresses,
       timeline,
-      next_submit_value: core::sync::atomic::AtomicU64::new(1),
+      next_submit_value: core::sync::atomic::AtomicU64::new(1), // Timeline starts at 0, first signal is 1
       discard_pool,
+      queue_sharing_info,
     })
   }
 
   // TODO: How do I know if there's a command in flight? Should It be externally synchronized?
+  /// Returns the BDA of the GPU-built particle LBVH, updated each tick by `build_motion_bvh`.
+  /// Returns 0 if no particles have been built yet (early frames or CPU path).
+  pub fn get_particle_lbvh_address(&self) -> u64 {
+    self.addresses.bvh_nodes
+  }
+
   pub fn cleanup(&mut self, device: &LogicalDevice, _allocator: vk_mem::AllocatorView) {
     self.pipelines.discard(&self.discard_pool, u64::MAX);
     self.discard_pool.destroy_discarded_resources_all(device);
@@ -726,9 +755,21 @@ impl VulkanComputeKernels {
   ) -> GpuResult<VulkanBuffer<T>> {
     let is_list = false;
     let size = (core::mem::size_of::<T>() * data.len().max(1)) as u64;
-    let buffer_info = vk::BufferCreateInfo::default()
+    
+    let sharing_mode = if self.queue_sharing_info.mode == crate::gpu::SharingMode::Concurrent {
+      vk::SharingMode::CONCURRENT
+    } else {
+      vk::SharingMode::EXCLUSIVE
+    };
+
+    let mut buffer_info = vk::BufferCreateInfo::default()
       .size(size)
-      .usage(usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
+      .usage(usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
+      .sharing_mode(sharing_mode);
+      
+    if sharing_mode == vk::SharingMode::CONCURRENT {
+      buffer_info = buffer_info.queue_family_indices(&self.queue_sharing_info.queue_family_indices);
+    }
 
     let alloc_info = vk_mem::AllocationCreateInfo {
       usage: vk_mem::MemoryUsage::AutoPreferDevice,
@@ -783,9 +824,20 @@ impl VulkanComputeKernels {
     let payload_size = (core::mem::size_of::<T>() * capacity.max(1)) as u64;
     let size = payload_size + if is_list { 16 } else { 0 };
 
-    let buffer_info = vk::BufferCreateInfo::default()
+    let sharing_mode = if self.queue_sharing_info.mode == crate::gpu::SharingMode::Concurrent {
+      vk::SharingMode::CONCURRENT
+    } else {
+      vk::SharingMode::EXCLUSIVE
+    };
+
+    let mut buffer_info = vk::BufferCreateInfo::default()
       .size(size)
-      .usage(usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
+      .usage(usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
+      .sharing_mode(sharing_mode);
+      
+    if sharing_mode == vk::SharingMode::CONCURRENT {
+      buffer_info = buffer_info.queue_family_indices(&self.queue_sharing_info.queue_family_indices);
+    }
 
     let alloc_info = vk_mem::AllocationCreateInfo {
       usage: vk_mem::MemoryUsage::AutoPreferDevice,
@@ -862,6 +914,7 @@ impl VulkanComputeKernels {
       device_ptr: core::ptr::NonNull::from(device),
       discard_pool_ptr: core::ptr::NonNull::from(&self.discard_pool),
       timeline_value,
+      timeline_sem: self.timeline,
     })
   }
 
@@ -2563,11 +2616,11 @@ impl VulkanComputeKernels {
     particle_metadata: &[gpu::ParticleMetadata],
     _physical_scene: &mut PhysicsScene,
     scene: &Scene,
-  ) -> GpuResult<()> {
+  ) -> GpuResult<Option<crate::gpu::CommandBufferSyncInfo>> {
     let rb_handle = rigid_bodies.enqueue_read_to_cpu(cmd).map_err(|e| gpu_err!("{}", e))?;
     let p_handle = particles.enqueue_read_to_cpu(cmd).map_err(|e| gpu_err!("{}", e))?;
 
-    cmd.submit().map_err(|e| gpu_err!("{}", e))?;
+    let sync_info = cmd.submit().map_err(|e| gpu_err!("{}", e))?;
 
     let rb_data = rb_handle.wait().map_err(|e| gpu_err!("{}", e))?;
     let p_data = p_handle.wait().map_err(|e| gpu_err!("{}", e))?;
@@ -2617,7 +2670,7 @@ impl VulkanComputeKernels {
       },
     );
 
-    Ok(())
+    Ok(sync_info)
   }
 }
 
@@ -2626,6 +2679,7 @@ impl Kernels for Device {
   type Buffer<T: Copy + Send + Sync> = VulkanBuffer<T>;
   type List<T: Copy + Send + Sync> = VulkanBuffer<T>;
   type MotionBvh = VulkanBuffer<()>;
+  type MotionTlas = VulkanBuffer<()>;
 
   fn discard_buffer<T: Copy + Send + Sync>(&self, mut buffer: Self::Buffer<T>) {
     buffer.discard(
@@ -2646,6 +2700,99 @@ impl Kernels for Device {
       &self.kernels.discard_pool,
       self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed),
     );
+  }
+
+  fn discard_tlas(&self, mut tlas: Self::MotionTlas) {
+    tlas.discard(
+      &self.kernels.discard_pool,
+      self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed),
+    );
+  }
+
+  fn optimal_branching_factor(&self) -> u32 {
+    // Query the hardware subgroup size from VkPhysicalDeviceVulkan11Properties.
+    // Clamped to the valid range {16, 32, 64} and rounded to the nearest power of two.
+    let raw = self.query_result.subgroup_size;
+    raw.clamp(16, 64).next_power_of_two()
+  }
+
+  fn upload_motion_tlas(
+    &self,
+    _cmd: &mut Self::Cmd,
+    node_bytes: &[u8],
+  ) -> EngineResult<Self::MotionTlas> {
+    use crate::physics::tlas_builder::PARTICLE_BLAS_SENTINEL;
+    use core::sync::atomic::Ordering;
+
+    if node_bytes.is_empty() {
+      // No entities: upload a single zeroed node so BDA is valid but TLAS is empty.
+      let zero = alloc::vec![0u8; core::mem::size_of::<crate::math::collision::multi_bvh::TlasMultiNode<32>>()];
+      return self.upload_motion_tlas(_cmd, &zero);
+    }
+
+    // ── Allocate a device-visible (HOST_VISIBLE | HOST_COHERENT) mapped buffer.
+    // Using AutoPreferDevice + HOST_ACCESS_SEQUENTIAL_WRITE so vma gives us
+    // a persistently-mapped ReBAR or host-coherent buffer — same as every other
+    // build_* helper in this file.
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |res_guard, _| {
+        Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
+      })?
+      .execute(|allocator, rollback| {
+        let size = node_bytes.len().max(1) as u64;
+        let sharing_mode = if self.kernels.queue_sharing_info.mode == crate::gpu::SharingMode::Concurrent {
+          ash::vk::SharingMode::CONCURRENT
+        } else {
+          ash::vk::SharingMode::EXCLUSIVE
+        };
+        let mut buf_info = ash::vk::BufferCreateInfo::default()
+          .size(size)
+          .usage(
+            ash::vk::BufferUsageFlags::STORAGE_BUFFER
+              | ash::vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+          )
+          .sharing_mode(sharing_mode);
+        if sharing_mode == ash::vk::SharingMode::CONCURRENT {
+          buf_info = buf_info
+            .queue_family_indices(&self.kernels.queue_sharing_info.queue_family_indices);
+        }
+        let alloc_info = vk_mem::AllocationCreateInfo {
+          usage: vk_mem::MemoryUsage::AutoPreferDevice,
+          flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+            | vk_mem::AllocationCreateFlags::MAPPED,
+          required_flags: ash::vk::MemoryPropertyFlags::HOST_VISIBLE
+            | ash::vk::MemoryPropertyFlags::HOST_COHERENT,
+          ..Default::default()
+        };
+        let (buffer, mut alloc, info) =
+          unsafe { allocator.create_buffer_get_info(&buf_info, &alloc_info) }?;
+        rollback.defer(move |_| unsafe { allocator.destroy_buffer(buffer, &mut alloc) });
+
+        // ── Write TLAS node bytes into the mapped region.
+        let mapped = info.mapped_data as *mut u8;
+        assert!(!mapped.is_null(), "TLAS buffer not persistently mapped");
+        unsafe { core::ptr::copy_nonoverlapping(node_bytes.as_ptr(), mapped, node_bytes.len()); }
+
+        // Sentinel patching is no longer needed because shaders extract the EntityID
+        // from the leaf metadata and fetch the 64-bit BDA directly from the EntityArray.
+
+        let addr_info = ash::vk::BufferDeviceAddressInfo::default().buffer(buffer);
+        let address = unsafe {
+          self.device.buffer_device_address.get_buffer_device_address(&addr_info)
+        };
+
+        Ok::<_, GpuError>(VulkanBuffer::<()> {
+          buffer,
+          address,
+          capacity: (size / 4).max(1) as usize,
+          allocation: alloc,
+          allocator,
+          is_list: false,
+          _marker: core::marker::PhantomData,
+        })
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(EngineError::from)
   }
 
   fn create_command_buffer(&self) -> EngineResult<Self::Cmd> {
@@ -3064,7 +3211,7 @@ impl Kernels for Device {
     particle_metadata: &[gpu::ParticleMetadata],
     physical_scene: &mut PhysicsScene,
     scene: &Scene,
-  ) -> EngineResult<()> {
+  ) -> EngineResult<Option<crate::gpu::CommandBufferSyncInfo>> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |res_guard, _| {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())

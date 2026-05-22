@@ -247,3 +247,38 @@ impl ParticleSystemComponent {
     }
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Comet circle-based particle emitter
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Defines a single circular emission zone on the surface of a comet mesh.
+///
+/// Angles are stored in **radians** (the UI sends degrees and converts before FFI).
+/// The emission circle is centred at the point obtained by rotating `+Z` of the
+/// comet's local frame by the spherical angles (latitude / longitude).
+#[derive(Clone, Debug)]
+pub struct EmissionCircle {
+  /// Latitude in radians: −π/2 (south pole) … +π/2 (north pole).
+  pub latitude_rad: f32,
+  /// Longitude in radians: 0 … 2π, measured in the LCA micro-frame.
+  pub longitude_rad: f32,
+  /// Radius of the emission disc as a **fraction** of the mesh bounding-sphere radius.
+  /// E.g. `0.1` means the disc covers 10 % of the bounding sphere's radius.
+  pub circle_radius_frac: f32,
+  /// Mass of particles emitted from this circle (simulation units).
+  pub mass: f32,
+  /// RGBA colour of particles emitted from this circle (linear, 0–1).
+  pub color: [f32; 4],
+}
+
+/// Attaches a set of discrete circular emission zones to a comet mesh entity.
+///
+/// At simulation time, each `EmissionCircle` drives a localised particle jet
+/// whose direction is the outward surface normal at the circle's centre.
+#[derive(Clone, Debug, Default)]
+pub struct ParticleEmitterCirclesComponent {
+  pub circles: alloc::vec::Vec<EmissionCircle>,
+}
+
+impl Component for ParticleEmitterCirclesComponent {}

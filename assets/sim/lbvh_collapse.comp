@@ -95,7 +95,7 @@ void main() {
         // Initialize permutations to identity
         for (uint i = 0; i < 8; ++i) {
             for (uint j = 0; j < SUBGROUP_SIZE; ++j) {
-                pc.multi_bvh.nodes[multi_node_idx].permutations[i][j] = uint8_t(j);
+                pc.multi_bvh.nodes[multi_node_idx].permutations[i][j] = j;
             }
         }
     }

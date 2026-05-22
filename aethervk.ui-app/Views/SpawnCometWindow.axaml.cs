@@ -34,7 +34,8 @@ public partial class SpawnCometWindow : Window
         vm.FetchedOrbitData,
         vm.PosX, vm.PosY, vm.PosZ,
         vm.ScaleX, vm.ScaleY, vm.ScaleZ,
-        vm.Pitch, vm.Yaw, vm.Roll
+        vm.Pitch, vm.Yaw, vm.Roll,
+        vm.CometRadiusKm
       );
       Close(result);
     }

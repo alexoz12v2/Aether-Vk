@@ -1236,7 +1236,7 @@ enum QueueId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Queue {
+pub struct Queue {
   pub handle: vk::Queue,
   pub index: u32,
   pub family_index: u32,
@@ -1487,8 +1487,13 @@ impl Device {
         return Err(e);
       }
     };
+    let unique_indices: alloc::vec::Vec<u32> = chosen_physical_device_query_result.unique_family_indices_set().into_iter().copied().collect();
+    let queue_sharing_info = crate::gpu::QueueSharingInfo {
+      mode: if unique_indices.len() > 1 { crate::gpu::SharingMode::Concurrent } else { crate::gpu::SharingMode::Exclusive },
+      queue_family_indices: unique_indices,
+    };
 
-    let kernels = match VulkanComputeKernels::new(&device, res.allocator.allocator.as_allocator_view()) {
+    let kernels = match VulkanComputeKernels::new(&device, res.allocator.allocator.as_allocator_view(), queue_sharing_info) {
       Ok(k) => k,
       Err(e) => {
         aethervk_oshal_rlib::log!("Device::new error in VulkanComputeKernels::new, destroying device!");
@@ -8271,6 +8276,7 @@ impl RenderDevice for Device {
     &self,
     cmd_buffer: CommandBufferHandle,
     task_id: Option<u64>,
+    sync_info: Option<crate::gpu::CommandBufferSyncInfo>,
   ) -> GpuResult<()> {
     // 1. Extract command buffer data and drop the lock immediately
     let data = {
@@ -8356,6 +8362,17 @@ impl RenderDevice for Device {
               wait_semaphores.push_unchecked(wait_semaphore.get());
               wait_semaphore_values.push_unchecked(0);
               wait_dst_stage_mask.push_unchecked(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT);
+            }
+          }
+
+          if let Some(sync) = sync_info {
+            use ash::vk::Handle;
+            let vk_semaphore = unsafe { vk::Semaphore::from_raw(sync.timeline_semaphore) };
+            unsafe {
+              wait_semaphores.push_unchecked(vk_semaphore);
+              wait_semaphore_values.push_unchecked(sync.timeline_value);
+              // Graphics reads compute buffers at Vertex Input / Compute shader stages
+              wait_dst_stage_mask.push_unchecked(vk::PipelineStageFlags::VERTEX_INPUT | vk::PipelineStageFlags::COMPUTE_SHADER);
             }
           }
 

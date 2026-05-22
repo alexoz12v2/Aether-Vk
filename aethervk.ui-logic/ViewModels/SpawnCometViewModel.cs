@@ -33,9 +33,9 @@ public partial class SpawnCometViewModel : ObservableObject
     CurrentStep switch
     {
       1 => SelectedModel != null,
-      2 => PhysicsType == "Static",
+      2 => PhysicsType == "Static" || PhysicsType == "Kinematic" || PhysicsType == "Dynamic",
       3 => FetchedOrbitData != null,
-      4 => false,
+      4 => true,  // Spawn button is always enabled once the user reaches step 4
       _ => false,
     };
 
@@ -100,6 +100,40 @@ public partial class SpawnCometViewModel : ObservableObject
 
   [ObservableProperty]
   private string _entityName = "New Comet";
+
+  /// <summary>
+  /// Comet nucleus radius in km, auto-populated from the Horizon JPL response.
+  /// The user may edit this value manually before spawning.
+  /// </summary>
+  [ObservableProperty]
+  private float _cometRadiusKm = 1.0f;
+
+  /// <summary>Called automatically by the MVVM toolkit when FetchedOrbitData changes.</summary>
+  partial void OnFetchedOrbitDataChanged(PlanetOrbitData? value)
+  {
+    if (value != null)
+      CometRadiusKm = (float)value.CometRadiusKm;
+    OnPropertyChanged(nameof(CanGoNext));
+  }
+
+  /// <summary>
+  /// Converts the current Pitch/Yaw/Roll (degrees) Euler angles into a
+  /// unit quaternion using the ZYX extrinsic convention (Roll→Yaw→Pitch).
+  /// </summary>
+  public (float w, float x, float y, float z) GetRotationQuaternion()
+  {
+    double pitchRad = Pitch * Math.PI / 180.0;
+    double yawRad   = Yaw   * Math.PI / 180.0;
+    double rollRad  = Roll  * Math.PI / 180.0;
+    double cy = Math.Cos(yawRad   * 0.5), sy = Math.Sin(yawRad   * 0.5);
+    double cp = Math.Cos(pitchRad * 0.5), sp = Math.Sin(pitchRad * 0.5);
+    double cr = Math.Cos(rollRad  * 0.5), sr = Math.Sin(rollRad  * 0.5);
+    double w = cr * cp * cy + sr * sp * sy;
+    double x = sr * cp * cy - cr * sp * sy;
+    double y = cr * sp * cy + sr * cp * sy;
+    double z = cr * cp * sy - sr * sp * cy;
+    return ((float)w, (float)x, (float)y, (float)z);
+  }
 
   public SpawnCometViewModel(
     IEnumerable<ImportedModelItem> models,

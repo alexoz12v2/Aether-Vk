@@ -15,6 +15,12 @@ public class PlanetOrbitData
   public double Inclination { get; set; }
   public double MeanAnomaly { get; set; }
   public string RawConstants { get; set; } = string.Empty;
+  /// <summary>
+  /// Nucleus volumetric-equivalent radius in km, parsed from the Horizon
+  /// PHYSICAL PROPERTIES block (R_vol or RAD field).
+  /// Defaults to 1.0 km when the API does not return a value.
+  /// </summary>
+  public double CometRadiusKm { get; set; } = 1.0;
 }
 
 public class HorizonsJsonResponse
@@ -96,6 +102,14 @@ public class HorizonJplService
         double in_ = ParseValue(rawText, @"IN\s*=\s*([^\s]+)");
         double ma = ParseValue(rawText, @"MA\s*=\s*([^\s]+)");
 
+        // Nucleus radius: try volumetric-equivalent radius first (R_vol, km),
+        // then the generic RAD field. Default to 1 km if absent.
+        double radiusKm = ParseValue(rawText, @"R_vol\s*=\s*([^\s,+]+)");
+        if (radiusKm <= 0.0)
+          radiusKm = ParseValue(rawText, @"RAD\s*=\s*([^\s,+]+)");
+        if (radiusKm <= 0.0)
+          radiusKm = 1.0;
+
         return new PlanetOrbitData
         {
           SemiMajorAxis = a,
@@ -103,6 +117,7 @@ public class HorizonJplService
           Inclination = in_,
           MeanAnomaly = ma,
           RawConstants = constantsBlock,
+          CometRadiusKm = radiusKm,
         };
       }
       return null;

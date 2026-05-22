@@ -309,13 +309,47 @@ impl LogicThreadContext {
       .ok_or(EngineError::InvalidOperation("physics scene missing"))?;
     let ps = ps_lock.read();
 
+    let st_lock = scene_ctx
+      .selection_tlas
+      .as_ref()
+      .ok_or(EngineError::InvalidOperation("selection tlas missing"))?;
+    let st = st_lock.read();
+
     let ray = crate::math::collision::intersection::Ray {
       origin: ro,
       direction: rd,
       length: f32::MAX,
     };
 
-    let hit_instances = ps.intersect_world_bvh_math(&ray);
+    let mut hit_instances = alloc::vec::Vec::new();
+    if !st.is_empty() {
+      use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
+      use slotmap::Key;
+      let mut stack = alloc::vec![0];
+      while let Some(node_idx) = stack.pop() {
+        if node_idx as usize >= st.len() { continue; }
+        let node = &st[node_idx as usize];
+
+        for i in 0..32 {
+          let meta = node.metadata[i];
+          if meta == 0 { continue; }
+
+          let bmin = Vec3f32::from_components(node.min_x[i], node.min_y[i], node.min_z[i]);
+          let bmax = Vec3f32::from_components(node.max_x[i], node.max_y[i], node.max_z[i]);
+          let aabb = crate::math::collision::bounds::AABB::new(bmin, bmax);
+
+          if crate::math::collision::intersection::intersect_ray_aabb(&ray, &aabb) {
+            if (meta & 0x8000_0000) != 0 {
+              let entity_ffi = (((meta & 0x7FFF_FFFF) as u64) << 32) | (node.child_indices[i] as u64);
+              let entity = crate::scene::EntityId::from(slotmap::KeyData::from_ffi(entity_ffi));
+              hit_instances.push(entity);
+            } else {
+              stack.push(node.child_indices[i]);
+            }
+          }
+        }
+      }
+    }
     let intersections: Vec<((f32, Vec3f32, [f32; 2]), EntityId)> = scene_ctx
       .scene
       .query2_res::<crate::scene::PhysicalMeshComponent, TransformComponent, _, (f32, Vec3f32, [f32; 2])>(
@@ -829,7 +863,7 @@ pub struct RenderFrame {
   pub custom_render_callback: Option<CustomRenderCallback>,
   pub active_physics_task: alloc::sync::Arc<
     spin::Mutex<
-      Option<aethervk_oshal_rlib::os::pool::tasklet::TaskletHandle<crate::types::EngineResult<()>>>,
+      Option<aethervk_oshal_rlib::os::pool::tasklet::TaskletHandle<crate::types::EngineResult<Option<crate::gpu::CommandBufferSyncInfo>>>>,
     >,
   >,
 }
@@ -976,9 +1010,10 @@ pub struct SceneContext {
   pub outlines_enabled: Arc<AtomicBool>,
   pub collisions_enabled: Arc<AtomicBool>,
   pub physics_scene: Option<Arc<RwLock<physics::physics_scene::PhysicsScene>>>,
+  pub selection_tlas: Option<Arc<RwLock<alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<32>>>>>,
   pub active_physics_task: alloc::sync::Arc<
     spin::Mutex<
-      Option<aethervk_oshal_rlib::os::pool::tasklet::TaskletHandle<crate::types::EngineResult<()>>>,
+      Option<aethervk_oshal_rlib::os::pool::tasklet::TaskletHandle<crate::types::EngineResult<Option<crate::gpu::CommandBufferSyncInfo>>>>,
     >,
   >,
   pub physics_engine_type: Arc<RwLock<PhysicsEngineType>>,
@@ -1086,8 +1121,9 @@ impl SceneContext {
   /// TODO: Document this item
   pub fn with_physics_scene(mut self) -> Self {
     self.physics_scene = Some(Arc::new(RwLock::new(
-      physics::physics_scene::PhysicsScene::build_from_scene(self.scene.as_ref()),
+      physics::physics_scene::PhysicsScene::build_from_scene(self.scene.as_ref(), 0.016),
     )));
+    self.selection_tlas = Some(Arc::new(RwLock::new(alloc::vec::Vec::new())));
     self
   }
 
@@ -1107,6 +1143,7 @@ impl SceneContext {
       outlines_enabled: Arc::new(AtomicBool::new(false)),
       collisions_enabled: Arc::new(AtomicBool::new(true)),
       physics_scene: None,
+      selection_tlas: None,
       active_physics_task: alloc::sync::Arc::new(spin::Mutex::new(None)),
       physics_engine_type: Arc::new(RwLock::new(PhysicsEngineType::default())),
       time_state: Arc::new(RwLock::new(SceneTimeState::default())),
