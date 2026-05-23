@@ -12,5 +12,6 @@ namespace AetherVk.Logic.Services
     Task<ulong> ShowSpawnCometDialogAsync(
       System.Collections.Generic.IEnumerable<ViewModels.ImportedModelItem> models
     );
+    Task ShowSpawnBillboardDialogAsync();
   }
 }

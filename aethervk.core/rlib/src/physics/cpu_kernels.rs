@@ -321,6 +321,7 @@ impl Kernels for CpuScalarKernels {
     out_rb_rb_addr: u64,
     out_rb_ps_addr: u64,
     out_rb_lca_addr: u64,
+    out_internal: u64,
   ) -> EngineResult<()> {
     Ok(())
   }
@@ -364,7 +365,7 @@ impl Kernels for CpuScalarKernels {
   fn bp_cross_lca(
     &self,
     cmd: &mut Self::Cmd,
-    frames: &Self::Buffer<GpuReferenceFrame>,
+    scene_entities: &Self::Buffer<RigidBodyImex>,
     lca_query_pairs_addr: u64,
     output_internal_pairs_addr: u64,
     total_queries: u32,
@@ -678,6 +679,7 @@ impl Kernels for CpuSimdKernels {
     out_rb_rb_addr: u64,
     out_rb_ps_addr: u64,
     out_rb_lca_addr: u64,
+    out_internal: u64,
   ) -> EngineResult<()> {
     Ok(())
   }
@@ -721,7 +723,7 @@ impl Kernels for CpuSimdKernels {
   fn bp_cross_lca(
     &self,
     cmd: &mut Self::Cmd,
-    frames: &Self::Buffer<GpuReferenceFrame>,
+    scene_entities: &Self::Buffer<RigidBodyImex>,
     lca_query_pairs_addr: u64,
     output_internal_pairs_addr: u64,
     total_queries: u32,

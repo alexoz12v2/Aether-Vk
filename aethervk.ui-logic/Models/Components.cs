@@ -392,13 +392,7 @@ public partial class CometComponent : ObservableObject, IComponent
 // Spherical Gizmo Component
 // ─────────────────────────────────────────────────────────────────────────────
 
-public partial class SphericalGizmoComponent : ObservableObject, IComponent
-{
-  public string Name => "Spherical Gizmo";
 
-  [ObservableProperty]
-  private bool _isVisible = true;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Particle Emitter Circles
@@ -424,15 +418,47 @@ public partial class EmissionCircleItem : ObservableObject
   [ObservableProperty]
   private float _circleRadius = 0.1f;
 
-  /// <summary>Mass of particles emitted from this circle.</summary>
+  /// <summary>Mass of particles emitted from this circle (in kg).</summary>
   [ObservableProperty]
   private float _mass = 1.0f;
+
+  public float MassGrams
+  {
+      get => Mass * 1000f;
+      set => Mass = value / 1000f;
+  }
+
+  partial void OnMassChanged(float value)
+  {
+      OnPropertyChanged(nameof(MassGrams));
+  }
 
   // ── Colour ──────────────────────────────────────────────────────────────────
   [ObservableProperty] private float _colorR = 1.0f;
   [ObservableProperty] private float _colorG = 0.6f;
   [ObservableProperty] private float _colorB = 0.2f;
   [ObservableProperty] private float _colorA = 1.0f;
+
+  // ── Emission Params ─────────────────────────────────────────────────────────
+  [ObservableProperty]
+  private uint _particlesPerTick = 100;
+
+  [ObservableProperty]
+  private ulong _tTL = 1000;
+
+  [ObservableProperty]
+  private float _meanVelocity = 10.0f;
+
+  public float MeanVelocityKms
+  {
+      get => MeanVelocity / 1000f;
+      set => MeanVelocity = value * 1000f;
+  }
+
+  partial void OnMeanVelocityChanged(float value)
+  {
+      OnPropertyChanged(nameof(MeanVelocityKms));
+  }
 }
 
 /// <summary>
@@ -496,6 +522,9 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
         ColorG = Circles[i].ColorG,
         ColorB = Circles[i].ColorB,
         ColorA = Circles[i].ColorA,
+        ParticlesPerTick = Circles[i].ParticlesPerTick,
+        TTL = Circles[i].TTL,
+        MeanVelocity = Circles[i].MeanVelocity,
       };
     }
     AetherVk.Logic.Services.NativeInterop.avkSimulationContext_setParticleEmitterCirclesComponent(
@@ -528,11 +557,45 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
           ColorG = arr[i].ColorG,
           ColorB = arr[i].ColorB,
           ColorA = arr[i].ColorA,
+          ParticlesPerTick = arr[i].ParticlesPerTick,
+          TTL = arr[i].TTL,
+          MeanVelocity = arr[i].MeanVelocity,
         };
         item.PropertyChanged += Item_PropertyChanged;
         Circles.Add(item);
       }
       _isSyncing = false;
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sphere Gizmo Component
+// ─────────────────────────────────────────────────────────────────────────────
+
+public partial class SphericalGizmoComponent : NativeComponent
+{
+  public override string Name => "Sphere Gizmo";
+
+  [ObservableProperty]
+  private bool _isVisible = true;
+
+  protected override bool ShouldPushToNative(string? propertyName) => true;
+
+  protected override void PushToNativeImpl()
+  {
+    if (SimulationContext == IntPtr.Zero) return;
+    AetherVk.Logic.Services.NativeInterop.avkSimulationContext_setSphereGizmoVisibility(
+      SimulationContext, SceneId, EntityId, IsVisible);
+  }
+
+  protected override void PullFromNativeImpl()
+  {
+    if (SimulationContext == IntPtr.Zero) return;
+    if (AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getSphereGizmoVisibility(
+      SimulationContext, SceneId, EntityId, out bool isVisible))
+    {
+      IsVisible = isVisible;
     }
   }
 }

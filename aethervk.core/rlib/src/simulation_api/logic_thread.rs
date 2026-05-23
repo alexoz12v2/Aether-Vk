@@ -102,7 +102,9 @@ pub fn start_logic_thread(
               }
             };
 
-            let mut last_task = None;
+            let mut render_frames = alloc::vec::Vec::new();
+            let mut last_tasks = alloc::vec::Vec::new();
+
             for (pe, pe_data) in pe_handles {
               if pe_data.camera_entity.is_none() {
                 continue;
@@ -127,77 +129,78 @@ pub fn start_logic_thread(
                 )
               };
 
+              render_frames.push(crate::simulation_api::structs::RenderFrame {
+                presentation_engine_handle: pe,
+                task_id: alloc::sync::Arc::clone(&task_id),
+                scene,
+                render_physical_meshes_outline: outlines,
+                camera_entity,
+                clear_color: [0.0, 0.0, 0.0, 1.0],
+                sun_entity: sun,
+                sky_entity: sky,
+                cursor_entity: cursor,
+                custom_render_callback: callback,
+                active_physics_task,
+              });
+
+              last_tasks.push((task_id, is_windowless, pe.0));
+            }
+
+            let mut last_task = None;
+            if !render_frames.is_empty() {
               let send_res = context.render_tx.try_send(
-                // TODO why more than one? Better integration
-                crate::simulation_api::structs::RenderCommand::RenderFrames(alloc::vec![
-                  crate::simulation_api::structs::RenderFrame {
-                    presentation_engine_handle: pe,
-                    task_id: alloc::sync::Arc::clone(&task_id),
-                    scene,
-                    render_physical_meshes_outline: outlines,
-                    camera_entity,
-                    clear_color: [0.0, 0.0, 0.0, 1.0],
-                    sun_entity: sun,
-                    sky_entity: sky,
-                    cursor_entity: cursor,
-                    custom_render_callback: callback,
-                    active_physics_task,
-                  },
-                ]),
+                crate::simulation_api::structs::RenderCommand::RenderFrames(render_frames),
               );
 
-              if send_res.is_err() {
-                continue;
-              }
+              if send_res.is_ok() {
+                for (task_id, is_windowless, pe_handle) in last_tasks {
+                  let task_id_val = loop {
+                    let value = task_id.load(core::sync::atomic::Ordering::Relaxed);
+                    if value != 0 {
+                      let _ = task_id.load(core::sync::atomic::Ordering::Acquire);
+                      break value;
+                    }
+                    oshal::os::native::this_thread::yield_now();
+                  };
+                  if task_id_val == u64::MAX {
+                    continue;
+                  }
+                  last_task = core::num::NonZero::new(task_id_val);
 
-              let task_id_val = loop {
-                let value = task_id.load(core::sync::atomic::Ordering::Relaxed);
-                if value != 0 {
-                  let _ = task_id.load(core::sync::atomic::Ordering::Acquire);
-                  break value;
-                }
-                oshal::os::native::this_thread::yield_now();
-              };
-              if task_id_val == u64::MAX {
-                // Render failed, continue to next
-                continue;
-              }
-              last_task = core::num::NonZero::new(task_id_val);
-
-              if is_windowless {
-                let fptr = crate::simulation_api::RENDER_CALLBACK
-                  .load(core::sync::atomic::Ordering::Relaxed);
-                if !fptr.is_null() {
-                  let ctx_ptr = context.ctx_ptr;
-                  use aethervk_oshal_rlib::os::pool::tasklet::ThreadPoolExt;
-                  let _ = context.thread_pool.spawn_tasklet(None, move || {
+                  if is_windowless {
                     let fptr = crate::simulation_api::RENDER_CALLBACK
                       .load(core::sync::atomic::Ordering::Relaxed);
-                    let ctx =
-                      unsafe { &*(ctx_ptr.get() as *mut crate::simulation_api::SimulationContext) };
-                    loop {
-                      let completed = ctx
-                        .render_proxy
-                        .0
-                        .as_frontend()
-                        .and_then(|f| {
-                          f.with_device(ctx.render_proxy.1, |device| {
-                            Ok(device.is_task_completed(task_id_val).unwrap_or(true))
-                          })
-                          .ok()
-                        })
-                        .unwrap_or(true);
+                    if !fptr.is_null() {
+                      let ctx_ptr = context.ctx_ptr;
+                      use aethervk_oshal_rlib::os::pool::tasklet::ThreadPoolExt;
+                      let _ = context.thread_pool.spawn_tasklet(None, move || {
+                        let fptr = crate::simulation_api::RENDER_CALLBACK
+                          .load(core::sync::atomic::Ordering::Relaxed);
+                        let ctx =
+                          unsafe { &*(ctx_ptr.get() as *mut crate::simulation_api::SimulationContext) };
+                        loop {
+                          let completed = ctx
+                            .render_proxy
+                            .0
+                            .as_frontend()
+                            .and_then(|f| {
+                              f.with_device(ctx.render_proxy.1, |device| {
+                                Ok(device.is_task_completed(task_id_val).unwrap_or(true))
+                              })
+                              .ok()
+                            })
+                            .unwrap_or(true);
 
-                      if completed {
-                        break;
-                      }
-                      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(
-                        1,
-                      ));
+                          if completed {
+                            break;
+                          }
+                          oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
+                        }
+                        let cb: extern "C" fn(u64, u64, u64) = unsafe { core::mem::transmute(fptr) };
+                        cb(scene_id, pe_handle, task_id_val);
+                      });
                     }
-                    let cb: extern "C" fn(u64, u64, u64) = unsafe { core::mem::transmute(fptr) };
-                    cb(scene_id, pe.0, task_id_val);
-                  });
+                  }
                 }
               }
             }
@@ -407,6 +410,8 @@ fn process_command_internal(
   ctx: &LogicThreadContext,
 ) -> EngineResult<SimulationTaskResult> {
   match command {
+    LogicCommand::SnapshotScene { .. } => Ok(SimulationTaskResult::None),
+    LogicCommand::RestoreSnapshot { .. } => Ok(SimulationTaskResult::None),
     LogicCommand::Shutdown => Ok(SimulationTaskResult::None),
     // TODO camera movement commands should use methods from [`crate::scene::camera`]
     LogicCommand::RotateCamera(crate::simulation_api::structs::RotateCamera {
@@ -834,17 +839,17 @@ fn process_command_internal(
 
         let mut samples = alloc::vec::Vec::new();
         let mut t = start_epoch_tai_sec;
-        
+
         let logic_state = ctx.logic_state.read();
-        
+
         let step_sec = sample_step_days * 86400.0;
-        
+
         // Ensure we at least sample the end point precisely
         while t <= end_epoch_tai_sec {
           let epoch = anise::time::Epoch::from_tai_seconds(t);
           let state = logic_state.almanac_data.get_ephem_full(spk_id, frame, epoch, true, false)?;
           samples.push(state);
-          
+
           if t == end_epoch_tai_sec { break; }
           t += step_sec;
           if t > end_epoch_tai_sec {
@@ -878,7 +883,7 @@ fn process_command_internal(
           control_points.push([cp2.x(), cp2.y(), cp2.z(), 1.0]);
           control_points.push([cp3.x(), cp3.y(), cp3.z(), 1.0]);
         }
-        
+
         // Apply the component to the entity
         let scenes = ctx.scenes.read();
         let scene_ctx = scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
@@ -915,7 +920,7 @@ fn process_command_internal(
             sun_pos = pos;
           }
         }
-        
+
         let _ = scene_guard.scene.with_component_mut(entity, |transform: &mut crate::scene::TransformComponent| {
           transform.position = sun_pos;
         });

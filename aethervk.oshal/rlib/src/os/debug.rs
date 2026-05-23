@@ -623,6 +623,53 @@ pub mod fpe {
   }
 }
 
+/// Sets the name of the current thread for debuggers.
+/// Accepts a standard string literal and compiles away completely in release mode.
+#[macro_export]
+macro_rules! set_thread_name {
+  ($name:literal) => {
+    #[cfg(debug_assertions)]
+    {
+      // --- UNIX (Linux & macOS) ---
+      #[cfg(unix)]
+      {
+        const C_NAME: &::core::ffi::CStr =
+          match ::core::ffi::CStr::from_bytes_with_nul(concat!($name, "\0").as_bytes()) {
+            Ok(c) => c,
+            Err(_) => panic!("Thread name contains null bytes"),
+          };
+
+        #[cfg(target_os = "linux")]
+        unsafe {
+          ::libc::prctl(15, C_NAME.as_ptr(), 0, 0, 0);
+        }
+
+        #[cfg(target_os = "macos")]
+        unsafe {
+          ::libc::pthread_setname_np(C_NAME.as_ptr());
+        }
+      }
+
+      // --- WINDOWS ---
+      #[cfg(windows)]
+      {
+        unsafe {
+          // GetCurrentThread returns a HANDLE in the windows crate
+          let handle = ::windows::Win32::System::Threading::GetCurrentThread();
+
+          // w! converts the literal to a UTF-16 PCWSTR at compile time.
+          // SetThreadDescription returns an HRESULT which we discard
+          // since this is a best-effort debug utility.
+          let _ = ::windows::Win32::System::Threading::SetThreadDescription(
+            handle,
+            ::windows::core::w!($name),
+          );
+        }
+      }
+    }
+  };
+}
+
 #[cfg(test)]
 mod tests {
   use super::fpe;

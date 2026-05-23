@@ -2045,6 +2045,7 @@ pub trait Kernels: Send + Sync {
     out_rb_rb_addr: u64,
     out_rb_ps_addr: u64,
     out_rb_lca_addr: u64,
+    internal_pairs_addr: u64,
   ) -> EngineResult<()>;
 
   /// Generates one swept AABB (TLASLeaf) per entity.
@@ -2085,7 +2086,7 @@ pub trait Kernels: Send + Sync {
   fn bp_cross_lca(
     &self,
     cmd: &mut Self::Cmd,
-    frames: &Self::Buffer<GpuReferenceFrame>,
+    scene_entities: &Self::Buffer<RigidBodyImex>,
     lca_query_pairs_addr: u64,
     output_internal_pairs_addr: u64,
     total_queries: u32,

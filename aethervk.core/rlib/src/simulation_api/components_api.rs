@@ -501,11 +501,128 @@ impl SimulationContext {
       entity,
       "component_api:set_particle_emitter_circles_component"
     );
+    // First, grab the Comet mesh if it exists
+    let mut mesh_opt = None;
+    let _ = scene.read().scene.with_component(entity_id, |c: &crate::scene::PhysicalMeshComponent| {
+      mesh_opt = Some(c.mesh.clone());
+    });
+
+    let mut final_circles = circles.clone();
+    if let Some(mesh) = mesh_opt {
+      use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
+      for c in final_circles.iter_mut() {
+        let r = 1.0;
+        let dir_z = c.latitude_rad.sin();
+        let dir_x = c.latitude_rad.cos() * c.longitude_rad.cos();
+        let dir_y = c.latitude_rad.cos() * c.longitude_rad.sin();
+        let ray_dir = Vec3f32::from_components(dir_x, dir_y, dir_z).normalize();
+        let ray_orig = Vec3f32::from_components(0.0, 0.0, 0.0);
+
+        let mut closest_t = f32::MAX;
+        let mut hit_point = None;
+        let mut hit_normal = None;
+
+        let num_triangles = mesh.indices.len() / 3;
+        for i in 0..num_triangles {
+          let i0 = mesh.indices[i * 3] as usize;
+          let i1 = mesh.indices[i * 3 + 1] as usize;
+          let i2 = mesh.indices[i * 3 + 2] as usize;
+          let v0 = Vec3f32::from_array(mesh.vertices[i0].position);
+          let v1 = Vec3f32::from_array(mesh.vertices[i1].position);
+          let v2 = Vec3f32::from_array(mesh.vertices[i2].position);
+
+          let edge1 = v1 - v0;
+          let edge2 = v2 - v0;
+          let h = ray_dir.cross(edge2);
+          let a = edge1.dot(h);
+          if a.abs() < 1e-6 { continue; }
+          let f = 1.0 / a;
+          let s = ray_orig - v0;
+          let u = f * s.dot(h);
+          if u < 0.0 || u > 1.0 { continue; }
+          let q = s.cross(edge1);
+          let v = f * ray_dir.dot(q);
+          if v < 0.0 || u + v > 1.0 { continue; }
+          let t = f * edge2.dot(q);
+
+          if t > 1e-6 && t < closest_t {
+            closest_t = t;
+            hit_point = Some(ray_orig + ray_dir * t);
+            let n = edge1.cross(edge2).normalize();
+            let n = if n.dot(ray_dir) > 0.0 { n * -1.0 } else { n };
+            hit_normal = Some(n);
+          }
+        }
+
+        if let (Some(p), Some(n)) = (hit_point, hit_normal) {
+          c.cached_point = Some([p.x(), p.y(), p.z()]);
+          c.cached_normal = Some([n.x(), n.y(), n.z()]);
+        } else {
+          // Fallback if raycast fails (e.g. from origin didn't hit anything, ray originated outside or mesh has holes)
+          c.cached_point = Some([ray_dir.x(), ray_dir.y(), ray_dir.z()]);
+          c.cached_normal = Some([ray_dir.x(), ray_dir.y(), ray_dir.z()]);
+        }
+      }
+    }
+
+    let mut old_children = alloc::vec::Vec::new();
+    let _ = scene.read().scene.with_component(entity_id, |c: &crate::scene::ParticleEmitterCirclesComponent| {
+      old_children = c.child_entities.clone();
+    });
+    for child in old_children {
+      let _ = self.remove_entity(scene_id, child);
+    }
+
+    use aethervk_oshal_rlib::math::quaternion::Quaternion;
+    use crate::scene::{TransformComponent, particles::{ParticleSystemComponent, ParticleEmitterComponent, GaussianParams}};
+    
+    let mut new_children = alloc::vec::Vec::new();
+    for (i, c) in final_circles.iter().enumerate() {
+      let child_ext_id = self.spawn_entity(scene_id, &alloc::format!("jet_{}", i)).unwrap();
+      
+      // We need the internal entity_id for ECS operations
+      let scene_data = self.scenes.read();
+      let (active, child_internal) = expect_scene_and_entity!(
+        scene_data.get_scene(scene_id),
+        child_ext_id,
+        "set_particle_emitter_circles_component"
+      );
+
+      active.write().scene.set_parent(child_internal, Some(entity_id));
+
+      let pos = c.cached_point.unwrap_or([0.0, 0.0, 0.0]);
+      // let norm = c.cached_normal.unwrap_or([1.0, 0.0, 0.0]);
+      let _ = active.write().scene.add_component(child_internal, TransformComponent {
+        position: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(pos),
+        rotation: Quat::identity(),
+        scale: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(1.0, 1.0, 1.0),
+      });
+
+      let _ = active.write().scene.add_component(child_internal, ParticleSystemComponent::new(1000));
+      
+      let _ = active.write().scene.add_component(child_internal, ParticleEmitterComponent {
+        uv_distribution: crate::math::distribution::Distribution2D::new(&[1.0], 1, 1),
+        delta: 0,
+        max_particles: 1000,
+        velocity_intensity: GaussianParams { mean: c.mean_velocity, std_dev: c.mean_velocity * 0.2, min: c.mean_velocity * 0.1, max: c.mean_velocity * 2.0 },
+        emission_count: GaussianParams { mean: c.particles_per_tick as f32, std_dev: (c.particles_per_tick as f32) * 0.2, min: 1.0, max: (c.particles_per_tick as f32) * 5.0 },
+        particle_radius: c.circle_radius_frac,
+        density: c.mass,
+        lifetime: c.ttl as i64,
+        color: c.color,
+        beta: 1.0,
+        use_particle2: true,
+      });
+
+      new_children.push(child_ext_id);
+    }
+
     let mut found = false;
     let _ = scene.write().scene.with_component_mut(
       entity_id,
       |c: &mut crate::scene::ParticleEmitterCirclesComponent| {
-        c.circles = circles.clone();
+        c.circles = final_circles.clone();
+        c.child_entities = new_children.clone();
         found = true;
       },
     );
@@ -514,7 +631,7 @@ impl SimulationContext {
       scene
         .write()
         .scene
-        .add_component(entity_id, crate::scene::ParticleEmitterCirclesComponent { circles })
+        .add_component(entity_id, crate::scene::ParticleEmitterCirclesComponent { circles: final_circles, child_entities: new_children })
         .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?
     }
     Ok(())

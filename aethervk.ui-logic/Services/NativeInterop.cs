@@ -93,6 +93,12 @@ public static class NativeInterop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_snapshotScene(IntPtr ctx, ulong sceneId);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_restoreSnapshot(IntPtr ctx, ulong sceneId);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern IntPtr avkGetAvailableKernels(out uint count);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -132,6 +138,15 @@ public static class NativeInterop
     ulong sceneId,
     ulong entity,
     [MarshalAs(UnmanagedType.LPStr)] string name
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_spawnBillboard(
+    IntPtr ctx,
+    ulong sceneId,
+    [MarshalAs(UnmanagedType.LPStr)] string imagePath,
+    out ulong entityId
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -469,6 +484,23 @@ public static class NativeInterop
     float rotW, float rotX, float rotY, float rotZ,
     float radiusKm,
     out FfiSpawnStaticMeshResult result
+  );
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct FfiMat3
+  {
+      public float M00, M10, M20;
+      public float M01, M11, M21;
+      public float M02, M12, M22;
+  }
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_getModelLocalFrames(
+    IntPtr ctx,
+    ulong modelId,
+    out FfiMat3 outUserFrame,
+    out FfiMat3 outSimFrame
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -851,6 +883,9 @@ public static class NativeInterop
     public float ColorG;
     public float ColorB;
     public float ColorA;
+    public uint ParticlesPerTick;
+    public ulong TTL;
+    public float MeanVelocity;
   }
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -872,5 +907,23 @@ public static class NativeInterop
     [Out, MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 4)] FfiEmissionCircle[] circles,
     uint maxCount,
     out uint actualCount
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_setSphereGizmoVisibility(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entity,
+    [MarshalAs(UnmanagedType.I1)] bool isVisible
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_getSphereGizmoVisibility(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entity,
+    [MarshalAs(UnmanagedType.I1)] out bool isVisible
   );
 }

@@ -762,6 +762,12 @@ pub enum LogicCommand {
   PlayScene {
     scene_id: u64,
   },
+  SnapshotScene {
+    scene_id: u64,
+  },
+  RestoreSnapshot {
+    scene_id: u64,
+  },
 }
 
 impl Default for LogicCommand {

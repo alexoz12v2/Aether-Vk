@@ -270,6 +270,16 @@ pub struct EmissionCircle {
   pub mass: f32,
   /// RGBA colour of particles emitted from this circle (linear, 0–1).
   pub color: [f32; 4],
+  /// Cached object-space emission point
+  pub cached_point: Option<[f32; 3]>,
+  /// Cached object-space normal
+  pub cached_normal: Option<[f32; 3]>,
+  /// Number of particles to emit per physics tick.
+  pub particles_per_tick: u32,
+  /// Time to live for emitted particles (in simulation ticks or microseconds depending on context).
+  pub ttl: u64,
+  /// Mean initial velocity of the emitted particles (simulation units).
+  pub mean_velocity: f32,
 }
 
 /// Attaches a set of discrete circular emission zones to a comet mesh entity.
@@ -279,6 +289,7 @@ pub struct EmissionCircle {
 #[derive(Clone, Debug, Default)]
 pub struct ParticleEmitterCirclesComponent {
   pub circles: alloc::vec::Vec<EmissionCircle>,
+  pub child_entities: alloc::vec::Vec<u64>,
 }
 
 impl Component for ParticleEmitterCirclesComponent {}
@@ -302,6 +313,11 @@ mod tests {
       circle_radius_frac: 0.1,
       mass: 1.0,
       color: [1.0, 1.0, 1.0, 1.0],
+      cached_normal: Some([0.0, 1.0, 0.0]),
+      cached_point: Some([0.0, 0.0, 0.0]),
+      particles_per_tick: 10,
+      ttl: 1000,
+      mean_velocity: 0.1,
     });
     assert_eq!(comp.circles.len(), 1);
     assert_eq!(comp.circles[0].latitude_rad, 0.5);

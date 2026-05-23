@@ -28,7 +28,7 @@ public partial class ImportedModelItem : ObservableObject
   private string _name = "";
 
   public string FullPath { get; }
-  private readonly NativeRuntimeService _runtimeService;
+  public NativeRuntimeService RuntimeService { get; }
   private readonly IWindowService _windowService;
   public System.Collections.Generic.List<ulong> SpawnedInstanceIds { get; } = new();
 
@@ -43,7 +43,7 @@ public partial class ImportedModelItem : ObservableObject
     Id = id;
     Name = name;
     FullPath = fullPath;
-    _runtimeService = runtimeService;
+    RuntimeService = runtimeService;
     _windowService = windowService;
   }
 
@@ -70,11 +70,11 @@ public partial class ImportedModelItem : ObservableObject
     // For now, we only spawn into Scene 1 via ShowSpawnMeshDialogAsync, but let's assume we remove them generally.
     foreach (var instanceId in SpawnedInstanceIds)
     {
-      _runtimeService.RemoveEntity(1, instanceId); // Assuming Scene 1 since it's hardcoded in AvaloniaWindowService
+      RuntimeService.RemoveEntity(1, instanceId); // Assuming Scene 1 since it's hardcoded in AvaloniaWindowService
     }
     SpawnedInstanceIds.Clear();
 
-    _runtimeService.UnloadModel(Id);
+    RuntimeService.UnloadModel(Id);
     WeakReferenceMessenger.Default.Send(new ModelUnloadedMessage(this));
   }
 }
@@ -150,7 +150,7 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   [RelayCommand]
   private async Task ImportModelAsync()
   {
-    var filters = new[] { "gltf", "glb" };
+    var filters = new[] { "gltf", "glb", "ply", "obj" };
     var result = await _fileDialogService.ShowOpenFileDialogAsync("Import 3D Model", filters);
 
     if (!string.IsNullOrEmpty(result))
@@ -206,6 +206,12 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   private async Task OpenSpawnCometDialogAsync()
   {
     await _windowService.ShowSpawnCometDialogAsync(ImportedModels);
+  }
+
+  [RelayCommand]
+  private async Task OpenSpawnBillboardDialogAsync()
+  {
+    await _windowService.ShowSpawnBillboardDialogAsync();
   }
 
   [RelayCommand]

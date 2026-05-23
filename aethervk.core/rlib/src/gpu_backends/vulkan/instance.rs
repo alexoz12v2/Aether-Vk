@@ -138,7 +138,10 @@ impl Instance {
     // 3. Setup Validation Features & Debug Messenger
     // =========================================================================
     #[cfg(debug_assertions)]
-    let printf_features = [vk::ValidationFeatureEnableEXT::DEBUG_PRINTF];
+    let printf_features = [
+      vk::ValidationFeatureEnableEXT::DEBUG_PRINTF,
+      vk::ValidationFeatureEnableEXT::GPU_ASSISTED,
+    ];
 
     #[cfg(debug_assertions)]
     let mut validation_features =

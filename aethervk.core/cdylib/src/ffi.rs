@@ -4,7 +4,6 @@ use aethervk_core_rlib::{
   gpu,
   math::collision::{linear_bvh, linear_bvh::LinearBVHNode},
   scene::Marker,
-  simulation::almanac::SUN_ECLIPJ2000,
   simulation_api::{
     components_api::{CameraParams, OrthographicCameraParams, PerspectiveCameraParams},
     structs::*,
@@ -13,6 +12,7 @@ use aethervk_core_rlib::{
   types::EngineError,
 };
 use aethervk_oshal_rlib as oshal;
+use aethervk_oshal_rlib::math::quaternion::Quaternion;
 use aethervk_oshal_rlib::math::vector::{Vector3, Vector4, vec3::Vec3f32, vec4::Quat};
 use alloc::{boxed::Box, string::ToString};
 use core::{
@@ -367,6 +367,92 @@ pub unsafe extern "C" fn avkSimulationContext_setParent(
   ctx_ref.set_parent(scene_id, entity, parent).is_ok()
 }
 
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_spawnBillboard(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  image_path: *const c_char,
+  out_entity_id: *mut u64,
+) -> bool {
+  if ctx.is_null() || image_path.is_null() || out_entity_id.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let image_path_str = unsafe { CStr::from_ptr(image_path).to_str().unwrap_or("") };
+
+  // Create a basic billboard entity with a BillboardComponent
+  if let Ok(entity_id) = ctx_ref.spawn_entity(scene_id, "Billboard") {
+    // We add a component to mark it as a billboard. The renderer should handle it.
+    // For now we just add a TransformComponent so it exists in space.
+    let _ = ctx_ref.add_transform_component(
+      scene_id,
+      entity_id,
+      Vec3f32::from_components(0.0, 0.0, 0.0),
+      Quat::from_components(1.0, 0.0, 0.0, 0.0),
+      Vec3f32::from_components(1.0, 1.0, 1.0),
+    );
+    let _ = ctx_ref.add_image_billboard_component(
+      scene_id, entity_id, true, // is_screen_space
+      1.0,  // width
+      1.0,  // height
+    );
+    unsafe {
+      *out_entity_id = entity_id;
+    }
+    return true;
+  }
+  false
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_spawnComet(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  model_id: u64,
+  name: *const c_char,
+  pos_x: f32,
+  pos_y: f32,
+  pos_z: f32,
+  rot_w: f32,
+  rot_x: f32,
+  rot_y: f32,
+  rot_z: f32,
+  radius_km: f32,
+  physics_type: u32,
+  out_micro_id: *mut u64,
+  out_comet_id: *mut u64,
+) -> bool {
+  if ctx.is_null() || name.is_null() || out_micro_id.is_null() || out_comet_id.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let name_str = unsafe { CStr::from_ptr(name).to_str().unwrap_or("Comet") };
+
+  match ctx_ref.spawn_comet_internal(
+    scene_id,
+    model_id,
+    name_str,
+    Vec3f32::from_components(pos_x, pos_y, pos_z),
+    Quat::from_components(rot_w, rot_x, rot_y, rot_z),
+    radius_km,
+    physics_type,
+  ) {
+    Ok((micro_id, comet_id)) => {
+      unsafe {
+        *out_micro_id = micro_id;
+        *out_comet_id = comet_id;
+      }
+      true
+    }
+    Err(e) => {
+      oshal::log!("spawn_comet_hierarchy failed: {}", e);
+      false
+    }
+  }
+}
+
 // --- Components ---
 
 #[unsafe(no_mangle)]
@@ -509,6 +595,9 @@ pub struct FfiEmissionCircle {
   pub color_g: f32,
   pub color_b: f32,
   pub color_a: f32,
+  pub particles_per_tick: u32,
+  pub ttl: u64,
+  pub mean_velocity: f32,
 }
 
 #[unsafe(no_mangle)]
@@ -539,10 +628,131 @@ pub unsafe extern "C" fn avkSimulationContext_setParticleEmitterCirclesComponent
       circle_radius_frac: c.circle_radius_frac,
       mass: c.mass,
       color: [c.color_r, c.color_g, c.color_b, c.color_a],
+
+      cached_point: None,
+      cached_normal: None,
+      particles_per_tick: c.particles_per_tick,
+      ttl: c.ttl,
+      mean_velocity: c.mean_velocity,
     });
   }
 
   ctx_ref.set_particle_emitter_circles_component(scene_id, entity, rust_circles).is_ok()
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+) -> bool {
+  use aethervk_core_rlib::math::collision::intersection::intersect_ray_triangle;
+  use aethervk_oshal_rlib::math::vector::Vector;
+  use aethervk_oshal_rlib::math::vector::{Vector3, vec3::Vec3f32};
+
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  let scene_ctx_lock = match scenes.get_scene(scene_id) {
+    Some(s) => s,
+    None => return false,
+  };
+  let scene_ctx = scene_ctx_lock.read();
+  let internal_id = match scene_ctx.entity_map.get(&entity_id).copied() {
+    Some(id) => id,
+    None => return false,
+  };
+
+  // We need to fetch both components, but Rust's borrow checker prevents mutably borrowing one while immutably borrowing another from the same struct directly if not split.
+  // Actually, we can get them sequentially or use a BVH/Mesh clone if needed, but `mesh` is Arc<Comet> so we can just clone the Arc.
+  let mut mesh_arc_opt = None;
+  let _ = scene_ctx.scene.with_component(
+    internal_id,
+    |c: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+      mesh_arc_opt = Some(c.mesh.clone());
+    },
+  );
+  let mesh_arc = match mesh_arc_opt {
+    Some(m) => m,
+    None => return false,
+  };
+
+  let r = 10.0;
+
+  let _ = scene_ctx.scene.with_component_mut(
+    internal_id,
+    |circles_comp: &mut aethervk_core_rlib::scene::ParticleEmitterCirclesComponent| {
+      for circle in &mut circles_comp.circles {
+        let lat = circle.latitude_rad;
+        let lon = circle.longitude_rad;
+
+        // Direction vector from center (spherical coordinates relative to +Z)
+        // In our convention: Z is up. Latitude is from XY plane to Z. Longitude is around Z from X.
+        let dir_z = lat.sin();
+        let dir_x = lat.cos() * lon.cos();
+        let dir_y = lat.cos() * lon.sin();
+        let dir = Vec3f32::from_components(dir_x, dir_y, dir_z);
+
+        // Cast a ray from far away towards the origin.
+        let start_dist = r * 2.0;
+        let origin = dir * start_dist;
+        let ray_dir = dir * -1.0;
+        let ray = aethervk_core_rlib::math::collision::intersection::Ray {
+          origin,
+          direction: ray_dir,
+          length: start_dist * 2.0,
+        };
+
+        let mut closest_t = f32::MAX;
+        let mut hit_normal = dir;
+
+        // Brute force raycast against all triangles
+        for tri in mesh_arc.iter_triangles() {
+          if intersect_ray_triangle(&ray, &tri) {
+            // Compute precise intersection point to get distance
+            // Simplified: intersect_ray_triangle doesn't return t, so we just use the triangle center for approx, or we do a quick Möller–Trumbore here.
+            // For simplicity and since intersect_ray_triangle is already returning bool, we can compute MT:
+            let e1 = tri.vertices[1] - tri.vertices[0];
+            let e2 = tri.vertices[2] - tri.vertices[0];
+            let h = ray_dir.cross(e2);
+            let a = e1.dot(h);
+            if a.abs() > 1e-6 {
+              let f = 1.0 / a;
+              let s = origin - tri.vertices[0];
+              let u = f * s.dot(h);
+              if u >= 0.0 && u <= 1.0 {
+                let q = s.cross(e1);
+                let v = f * ray_dir.dot(q);
+                if v >= 0.0 && u + v <= 1.0 {
+                  let t = f * e2.dot(q);
+                  if t > 0.0 && t < closest_t {
+                    closest_t = t;
+                    hit_normal = e1.cross(e2).normalize();
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        if closest_t < f32::MAX {
+          let hit_pt = origin + ray_dir * closest_t;
+          circle.cached_point = Some([hit_pt.x(), hit_pt.y(), hit_pt.z()]);
+          circle.cached_normal = Some([hit_normal.x(), hit_normal.y(), hit_normal.z()]);
+        } else {
+          // Fallback to bounding sphere
+          let hit_pt = dir * r;
+          circle.cached_point = Some([hit_pt.x(), hit_pt.y(), hit_pt.z()]);
+          circle.cached_normal = Some([dir.x(), dir.y(), dir.z()]);
+        }
+      }
+    },
+  );
+
+  true
 }
 
 #[unsafe(no_mangle)]
@@ -580,6 +790,9 @@ pub unsafe extern "C" fn avkSimulationContext_getParticleEmitterCirclesComponent
           color_g: c.color[1],
           color_b: c.color[2],
           color_a: c.color[3],
+          particles_per_tick: c.particles_per_tick,
+          ttl: c.ttl,
+          mean_velocity: c.mean_velocity,
         };
       }
     }
@@ -587,6 +800,74 @@ pub unsafe extern "C" fn avkSimulationContext_getParticleEmitterCirclesComponent
   } else {
     false
   }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setSphereGizmoVisibility(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  is_visible: bool,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  if let Some(mut scenes) = ctx_ref.scenes.try_write() {
+    if let Some(scene_ctx_lock) = scenes.scenes.get(&scene_id) {
+      let mut scene_ctx = scene_ctx_lock.write();
+      if let Some(entity) = scene_ctx.entity_map.get(&entity).copied() {
+        let mut found = false;
+        let _ = scene_ctx.scene.with_component_mut(
+          entity,
+          |gizmo: &mut aethervk_core_rlib::scene::SphereGizmoComponent| {
+            gizmo.is_visible = is_visible;
+            found = true;
+          },
+        );
+        if found {
+          return true;
+        }
+      }
+    }
+  }
+  false
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getSphereGizmoVisibility(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  out_is_visible: *mut bool,
+) -> bool {
+  if ctx.is_null() || out_is_visible.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  if let Some(scenes) = ctx_ref.scenes.try_read() {
+    if let Some(scene_ctx_lock) = scenes.scenes.get(&scene_id) {
+      let scene_ctx = scene_ctx_lock.read();
+      if let Some(entity) = scene_ctx.entity_map.get(&entity).copied() {
+        let mut found = false;
+        let _ = scene_ctx.scene.with_component(
+          entity,
+          |gizmo: &aethervk_core_rlib::scene::SphereGizmoComponent| {
+            unsafe {
+              *out_is_visible = gizmo.is_visible;
+            }
+            found = true;
+          },
+        );
+        if found {
+          return true;
+        }
+      }
+    }
+  }
+  false
 }
 
 // --- Queries ---
@@ -782,7 +1063,7 @@ pub unsafe extern "C" fn avkSimulationContext_loadCometSpk(
   let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::LoadCometSpk {
     task_id,
     spk_id,
-    frame: SUN_ECLIPJ2000,
+    frame: anise::constants::frames::SUN_J2000,
     epoch,
   });
   task_id
@@ -800,13 +1081,12 @@ pub unsafe extern "C" fn avkSimulationContext_getEphemerisPosition(
     return false;
   }
   let ctx_ref = unsafe { &*ctx };
-  let frame = anise::frames::Frame::new(
-    anise::constants::celestial_objects::SUN,
-    anise::constants::orientations::ECLIPJ2000,
-  );
+  let frame = anise::constants::frames::SUN_J2000;
   let epoch = anise::time::Epoch::from_tai_seconds(epoch_tai_sec);
 
-  if let Ok(state) = ctx_ref.logic_state.read().almanac_data.get_ephem_full(spk_id, frame, epoch, true, false) {
+  if let Ok(state) =
+    ctx_ref.logic_state.read().almanac_data.get_ephem_full(spk_id, frame, epoch, true, false)
+  {
     unsafe {
       *out_pos = FfiKinematicState::from(state);
     }
@@ -833,15 +1113,16 @@ pub unsafe extern "C" fn avkSimulationContext_updateTrajectoryForSpk(
   let ctx_ref = unsafe { &*ctx };
 
   let task_id = ctx_ref.task_manager.write().create_task().get();
-  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::UpdateTrajectoryForSpk {
-    task_id,
-    scene_id,
-    entity_id,
-    spk_id,
-    start_epoch_tai_sec,
-    end_epoch_tai_sec,
-    sample_step_days,
-  });
+  let _ =
+    ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::UpdateTrajectoryForSpk {
+      task_id,
+      scene_id,
+      entity_id,
+      spk_id,
+      start_epoch_tai_sec,
+      end_epoch_tai_sec,
+      sample_step_days,
+    });
   task_id
 }
 
@@ -879,62 +1160,6 @@ pub struct FfiSpawnCometResult {
   pub lca_frame_id: u64,
   /// External entity id of the comet mesh child entity.
   pub comet_entity_id: u64,
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-/// Synchronously spawns a comet entity hierarchy (LCA micro-frame + comet mesh).
-///
-/// Unlike `spawnModelInstance` this does **not** enqueue a `LogicCommand` — the
-/// entities are created directly in the calling thread while holding the scene
-/// write lock. The caller must therefore not hold any `scenes` lock when calling
-/// this function.
-///
-/// Returns `true` on success; `false` on any error (null arguments, model/scene
-/// not found, component registration failures). On success `*out_result` is
-/// populated with both entity ids.
-pub unsafe extern "C" fn avkSimulationContext_spawnComet(
-  ctx: *mut SimulationContext,
-  scene_id: u64,
-  model_id: u64,
-  entity_name: *const c_char,
-  pos_x: f32,
-  pos_y: f32,
-  pos_z: f32,
-  rot_w: f32,
-  rot_x: f32,
-  rot_y: f32,
-  rot_z: f32,
-  radius_km: f32,
-  physics_type: u32,
-  out_result: *mut FfiSpawnCometResult,
-) -> bool {
-  use aethervk_oshal_rlib::math::{
-    quaternion::Quaternion,
-    vector::{Vector3, vec3::Vec3f32, vec4::Quat},
-  };
-
-  if ctx.is_null() || entity_name.is_null() || out_result.is_null() {
-    return false;
-  }
-  let ctx_ref = unsafe { &*ctx };
-  let name = unsafe { CStr::from_ptr(entity_name).to_str().unwrap_or("Comet") };
-  let pos = Vec3f32::from_components(pos_x, pos_y, pos_z);
-  let rot = Quat::from_components(rot_w, rot_x, rot_y, rot_z);
-
-  match ctx_ref.spawn_comet_internal(scene_id, model_id, name, pos, rot, radius_km, physics_type) {
-    Ok((lca_id, comet_id)) => {
-      unsafe {
-        (*out_result).lca_frame_id = lca_id;
-        (*out_result).comet_entity_id = comet_id;
-      }
-      true
-    }
-    Err(e) => {
-      oshal::log!("avkSimulationContext_spawnComet failed: {:?}", e);
-      false
-    }
-  }
 }
 
 #[unsafe(no_mangle)]
@@ -1549,6 +1774,36 @@ pub unsafe extern "C" fn avkSimulationContext_playScene(
   }
   let ctx_ref = unsafe { &*ctx };
   let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::PlayScene { scene_id });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_snapshotScene(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let _ =
+    ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::SnapshotScene { scene_id });
+  true
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_restoreSnapshot(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let _ =
+    ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::RestoreSnapshot { scene_id });
+  true
 }
 
 #[unsafe(no_mangle)]
@@ -2387,13 +2642,15 @@ mod tests {
   #[test]
   fn test_ephemeris_position_ffi_signature() {
     // We just test if the symbol exists and compiles.
-    let f: unsafe extern "C" fn(*mut SimulationContext, i32, f64, *mut FfiKinematicState) -> bool = avkSimulationContext_getEphemerisPosition;
+    let f: unsafe extern "C" fn(*mut SimulationContext, i32, f64, *mut FfiKinematicState) -> bool =
+      avkSimulationContext_getEphemerisPosition;
     assert!(f as usize > 0);
   }
 
   #[test]
   fn test_update_trajectory_ffi_signature() {
-    let f: unsafe extern "C" fn(*mut SimulationContext, u64, u64, i32, f64, f64, f64) -> u64 = avkSimulationContext_updateTrajectoryForSpk;
+    let f: unsafe extern "C" fn(*mut SimulationContext, u64, u64, i32, f64, f64, f64) -> u64 =
+      avkSimulationContext_updateTrajectoryForSpk;
     assert!(f as usize > 0);
   }
 }

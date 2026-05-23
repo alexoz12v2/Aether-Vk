@@ -99,6 +99,12 @@ public partial class SpawnCometViewModel : ObservableObject
   private float _roll = 0f;
 
   [ObservableProperty]
+  private string _userLocalFrameString = "";
+
+  [ObservableProperty]
+  private string _simulationLocalFrameString = "";
+
+  [ObservableProperty]
   private string _entityName = "New Comet";
 
   /// <summary>
@@ -114,6 +120,23 @@ public partial class SpawnCometViewModel : ObservableObject
     if (value != null)
       CometRadiusKm = (float)value.CometRadiusKm;
     OnPropertyChanged(nameof(CanGoNext));
+  }
+
+  partial void OnSelectedModelChanged(ImportedModelItem? value)
+  {
+    OnPropertyChanged(nameof(CanGoNext));
+    if (value != null)
+    {
+      if (value.RuntimeService.GetModelLocalFrames(value.Id, out var userFrame, out var simFrame))
+      {
+        UserLocalFrameString = $"[{userFrame.M00:F2}, {userFrame.M01:F2}, {userFrame.M02:F2}]\n" +
+                               $"[{userFrame.M10:F2}, {userFrame.M11:F2}, {userFrame.M12:F2}]\n" +
+                               $"[{userFrame.M20:F2}, {userFrame.M21:F2}, {userFrame.M22:F2}]";
+        SimulationLocalFrameString = $"[{simFrame.M00:F2}, {simFrame.M01:F2}, {simFrame.M02:F2}]\n" +
+                                     $"[{simFrame.M10:F2}, {simFrame.M11:F2}, {simFrame.M12:F2}]\n" +
+                                     $"[{simFrame.M20:F2}, {simFrame.M21:F2}, {simFrame.M22:F2}]";
+      }
+    }
   }
 
   /// <summary>

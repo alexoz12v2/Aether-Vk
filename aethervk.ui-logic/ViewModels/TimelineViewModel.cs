@@ -1,10 +1,18 @@
 using System;
+using System.Collections.ObjectModel;
+using System.Linq;
 using System.Threading;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 namespace AetherVk.Logic.ViewModels;
+
+public class TimeScaleOption
+{
+    public string DisplayName { get; init; } = "";
+    public uint Value { get; init; }
+}
 
 public partial class TimelineViewModel : TabItemViewModel, IDisposable
 {
@@ -29,6 +37,19 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   [ObservableProperty]
   private double _maxTai = 100;
 
+  [ObservableProperty]
+  private bool _isPlaying;
+
+  public ObservableCollection<TimeScaleOption> TimeScaleOptions { get; } = new()
+  {
+      new TimeScaleOption { DisplayName = "1 Day/sec", Value = 1 },
+      new TimeScaleOption { DisplayName = "1 Week/sec", Value = 2 },
+      new TimeScaleOption { DisplayName = "1 Month/sec", Value = 3 },
+  };
+
+  [ObservableProperty]
+  private TimeScaleOption _selectedTimeScale;
+
   public TimelineViewModel(
     ulong sceneId,
     NativeRuntimeService runtimeService,
@@ -41,6 +62,7 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
     _uiThreadDispatcher = uiThreadDispatcher;
     _trajectoryManager = trajectoryManager;
     CurrentSceneId = sceneId;
+    SelectedTimeScale = TimeScaleOptions.First();
     _timer = new Timer(UpdateFromRuntime, null, 33, 33);
   }
 
@@ -91,18 +113,73 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
     }
   }
 
-  [RelayCommand]
-  private void SetSpeed(string speedStr)
+  partial void OnSelectedTimeScaleChanged(TimeScaleOption value)
   {
-    if (uint.TryParse(speedStr, out uint speed) && _runtimeService.IsInitialized)
+    if (IsPlaying && _runtimeService.IsInitialized && value != null)
     {
-      _runtimeService.SetTimeScale(CurrentSceneId, speed);
-      if (speed == 0)
-        _runtimeService.PauseScene(CurrentSceneId);
-      else
-        _runtimeService.PlayScene(CurrentSceneId);
+      _runtimeService.SetTimeScale(CurrentSceneId, value.Value);
     }
   }
+
+  private bool _hasSnapshotted;
+
+  /// <summary>
+  /// Initiates scene playback. 
+  /// Automatically captures a snapshot of the simulation state if it's the first time playing, 
+  /// sets the simulation timescale to 1, and pushes the PlayScene command down to the native logic thread.
+  /// </summary>
+  [RelayCommand]
+  private void Play()
+  {
+    if (_runtimeService.IsInitialized)
+    {
+      if (!_hasSnapshotted)
+      {
+        _runtimeService.SnapshotScene(CurrentSceneId);
+        _hasSnapshotted = true;
+      }
+      IsPlaying = true;
+      _runtimeService.SetTimeScale(CurrentSceneId, SelectedTimeScale?.Value ?? 1);
+      _runtimeService.PlayScene(CurrentSceneId);
+    }
+  }
+
+  /// <summary>
+  /// Pauses scene playback.
+  /// Zeroes out the timescale and dispatches a PauseScene command to the native logic thread.
+  /// </summary>
+  [RelayCommand]
+  private void Pause()
+  {
+    if (_runtimeService.IsInitialized)
+    {
+      IsPlaying = false;
+      _runtimeService.SetTimeScale(CurrentSceneId, 0);
+      _runtimeService.PauseScene(CurrentSceneId);
+    }
+  }
+
+  /// <summary>
+  /// Stops playback entirely and rewinds the simulation.
+  /// Resets the time scale, pauses the logic engine, and gracefully restores 
+  /// the simulation state from the initial snapshot if one exists.
+  /// </summary>
+  [RelayCommand]
+  private void Stop()
+  {
+    if (_runtimeService.IsInitialized)
+    {
+      IsPlaying = false;
+      _runtimeService.SetTimeScale(CurrentSceneId, 0);
+      _runtimeService.PauseScene(CurrentSceneId);
+      if (_hasSnapshotted)
+      {
+        _runtimeService.RestoreSnapshot(CurrentSceneId);
+      }
+    }
+  }
+
+
 
   [RelayCommand]
   private async System.Threading.Tasks.Task UpdateTrajectoriesAsync()

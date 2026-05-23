@@ -29,7 +29,7 @@ public class Viewport3DViewModelTests
     {
       var sm = new SceneStateManager();
       var b = new BreadcrumbService(dispatcherMock.Object);
-      var vm = new Viewport3DViewModel(runtimeService, b, sm, dispatcherMock.Object);
+      var vm = new Viewport3DViewModel(runtimeService, b, sm, dispatcherMock.Object, new Moq.Mock<IFileDialogService>().Object);
       Assert.Equal(800u, vm.Width);
       Assert.Equal(600u, vm.Height);
       vm.Stop();
@@ -54,7 +54,7 @@ public class Viewport3DViewModelTests
 
     var sm = new SceneStateManager();
     var b = new BreadcrumbService(dispatcherMock.Object);
-    var vm = new Viewport3DViewModel(runtimeService, b, sm, dispatcherMock.Object);
+    var vm = new Viewport3DViewModel(runtimeService, b, sm, dispatcherMock.Object, new Moq.Mock<IFileDialogService>().Object);
     // Press middle button to start orbit
     bool handled = vm.ProcessAction(new AppAction("viewport.start_orbit", "Orbit"), true);
     Assert.True(handled);

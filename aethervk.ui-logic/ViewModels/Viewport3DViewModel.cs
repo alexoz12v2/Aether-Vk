@@ -7,7 +7,7 @@ using AetherVk.Logic.Input;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Messaging;
-
+using CommunityToolkit.Mvvm.Input;
 namespace AetherVk.Logic.ViewModels;
 
 public partial class Viewport3DViewModel
@@ -18,10 +18,14 @@ public partial class Viewport3DViewModel
     IDisposable
 {
   private readonly NativeRuntimeService _runtimeService;
+  private readonly IFileDialogService _fileDialogService;
+
   public ulong PresentationEngineId { get; private set; }
   private ulong _lastRenderTaskId;
 
   public OperatorStack OperatorStack { get; }
+
+  public System.Collections.ObjectModel.ObservableCollection<BillboardViewModel> Billboards { get; } = new();
 
   [ObservableProperty]
   private uint _width = 800;
@@ -87,6 +91,38 @@ public partial class Viewport3DViewModel
   private readonly BreadcrumbService _breadcrumbService;
   private readonly SceneStateManager _sceneStateManager;
 
+  /// <summary>
+  /// Opens a native file dialog to permit selecting an image off the disk.
+  /// Constructs a new <see cref="BillboardViewModel"/> dynamically and pushes it to the UI Layer.
+  /// </summary>
+  [RelayCommand]
+  private async Task InsertBillboard()
+  {
+      var filters = new[] { "Images|*.png;*.jpg;*.jpeg;*.bmp" };
+
+      var path = await _fileDialogService.ShowOpenFileDialogAsync("Select Billboard Image", filters);
+      if (!string.IsNullOrEmpty(path))
+      {
+          try
+          {
+              Billboards.Add(new BillboardViewModel
+              {
+                  ImageSource = path,
+                  X = 10,
+                  Y = 10,
+                  Width = 100,
+                  Height = 100,
+                  ZIndex = 1
+              });
+              _breadcrumbService.ShowMessageAsync("Billboard Added", $"Loaded image {System.IO.Path.GetFileName(path)}");
+          }
+          catch (Exception ex)
+          {
+              _breadcrumbService.ShowMessageAsync("Error", $"Failed to load image: {ex.Message}");
+          }
+      }
+  }
+
   private void SetupViewport()
   {
     var existingScene = _sceneStateManager.AllScenes.FirstOrDefault();
@@ -130,7 +166,8 @@ public partial class Viewport3DViewModel
     NativeRuntimeService runtimeService,
     BreadcrumbService breadcrumbService,
     SceneStateManager sceneStateManager,
-    IUiThreadDispatcher uiThreadDispatcher
+    IUiThreadDispatcher uiThreadDispatcher,
+    IFileDialogService fileDialogService
   )
     : base("Viewport 3D")
   {
@@ -138,6 +175,7 @@ public partial class Viewport3DViewModel
     _breadcrumbService = breadcrumbService;
     _sceneStateManager = sceneStateManager;
     _uiThreadDispatcher = uiThreadDispatcher;
+    _fileDialogService = fileDialogService;
 
     OperatorStack = new OperatorStack(new ViewportBaseOperator(this));
 

@@ -289,11 +289,11 @@
                                                     <Grid Grid.Row="2"
                                                           ColumnDefinitions="Auto,*,Auto,*"
                                                           Margin="0,4,0,0">
-                                                        <TextBlock Grid.Column="0" Text="Mass:"
+                                                        <TextBlock Grid.Column="0" Text="Mass (g):"
                                                                    VerticalAlignment="Center"
                                                                    Margin="0,0,6,0"/>
                                                         <NumericUpDown Grid.Column="1"
-                                                                       Value="{Binding Mass}"
+                                                                       Value="{Binding MassGrams}"
                                                                        Minimum="0"
                                                                        FormatString="0.000"
                                                                        Margin="0,0,10,0"/>
@@ -304,6 +304,35 @@
                                                                        Value="{Binding CircleRadius}"
                                                                        Minimum="0.001" Maximum="1.0"
                                                                        FormatString="0.000"/>
+                                                    </Grid>
+
+                                                    <!-- Row 3: Emission Params -->
+                                                    <Grid Grid.Row="3"
+                                                          ColumnDefinitions="Auto,*,Auto,*,Auto,*"
+                                                          Margin="0,4,0,0">
+                                                        <TextBlock Grid.Column="0" Text="Rate:"
+                                                                   VerticalAlignment="Center"
+                                                                   Margin="0,0,6,0"/>
+                                                        <NumericUpDown Grid.Column="1"
+                                                                       Value="{Binding ParticlesPerTick}"
+                                                                       Minimum="0"
+                                                                       FormatString="0"
+                                                                       Margin="0,0,10,0"/>
+                                                        <TextBlock Grid.Column="2" Text="TTL:"
+                                                                   VerticalAlignment="Center"
+                                                                   Margin="0,0,6,0"/>
+                                                        <NumericUpDown Grid.Column="3"
+                                                                       Value="{Binding TTL}"
+                                                                       Minimum="1"
+                                                                       FormatString="0"
+                                                                       Margin="0,0,10,0"/>
+                                                        <TextBlock Grid.Column="4" Text="Vel (km/s):"
+                                                                   VerticalAlignment="Center"
+                                                                   Margin="0,0,6,0"/>
+                                                        <NumericUpDown Grid.Column="5"
+                                                                       Value="{Binding MeanVelocityKms}"
+                                                                       Minimum="0.0"
+                                                                       FormatString="0.00"/>
                                                     </Grid>
 
                                                 </Grid>

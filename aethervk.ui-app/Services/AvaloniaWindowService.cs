@@ -229,7 +229,7 @@ namespace AetherVk.Services
         var (_, id) = _runtimeService.SpawnComet(
           sceneId:     1,
           modelId:     result.Model.Id,
-          entityName:  result.EntityName,
+          name:  result.EntityName,
           posX: result.PosX, posY: result.PosY, posZ: result.PosZ,
           rotW: result.RotW, rotX: result.RotX, rotY: result.RotY, rotZ: result.RotZ,
           radiusKm:    result.CometRadiusKm,
@@ -239,6 +239,26 @@ namespace AetherVk.Services
       }
 
       return meshId;
+    }
+
+    public async Task ShowSpawnBillboardDialogAsync()
+    {
+      var mainWindow = GetMainWindow();
+      if (mainWindow == null)
+        return;
+
+      var dialog = new Avalonia.Controls.OpenFileDialog
+      {
+        Title = "Select Billboard Image",
+        AllowMultiple = false
+      };
+
+      var result = await dialog.ShowAsync(mainWindow);
+      if (result != null && result.Length > 0)
+      {
+        string imagePath = result[0];
+        _runtimeService.SpawnBillboard(1, imagePath); // Hardcoded SceneId 1 for now
+      }
     }
   }
 }

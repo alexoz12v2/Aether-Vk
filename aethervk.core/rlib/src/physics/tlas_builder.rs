@@ -13,7 +13,7 @@ use crate::{
     linear_bvh::LinearBVH,
     multi_bvh::{TlasMultiNode, convert_binary_to_multi_bvh},
   },
-  physics::physics_scene::{BVH_SHAPE_OBB, BVH_SHAPE_SPHERE, PhysicsScene, RootBoundsBvh},
+  physics::physics_scene::{BVH_SHAPE_SUB_TLAS, BVH_SHAPE_OBB, BVH_SHAPE_SPHERE, PhysicsScene, RootBoundsBvh},
 };
 use aethervk_oshal_rlib::{
   math::matrix::{
@@ -141,7 +141,7 @@ fn patch_tlas_leaves<const N: usize>(
       if is_leaf {
         let dense_idx = meta & 0x07FF_FFFF;
         let shape = (meta >> 27) & 0x3;
-        if shape == BVH_SHAPE_OBB {
+        if shape == BVH_SHAPE_SUB_TLAS {
           if let Some(&sub_root) = sub_tlas_root_indices.get(&dense_idx) {
             node.child_indices[i] = sub_root;
           }
