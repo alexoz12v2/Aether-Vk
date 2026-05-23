@@ -886,4 +886,6 @@ test_*.png
 *.blend
 figma/
 Horizon\ JPL.postman_collection.json
+assets/sim/metal-cross/
+assets/sim/cross/
 

@@ -138,10 +138,16 @@ impl Instance {
     // 3. Setup Validation Features & Debug Messenger
     // =========================================================================
     #[cfg(debug_assertions)]
-    let printf_features = [
+    let mut printf_features = alloc::vec![
       vk::ValidationFeatureEnableEXT::DEBUG_PRINTF,
-      vk::ValidationFeatureEnableEXT::GPU_ASSISTED,
     ];
+
+    #[cfg(debug_assertions)]
+    if cfg!(target_vendor = "apple") {
+      aethervk_oshal_rlib::log!("Disabling GPU-Assisted Validation on Apple platforms due to MoltenVK/SPIRV-Cross bug with Physical Storage Buffers.");
+    } else {
+      printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED);
+    }
 
     #[cfg(debug_assertions)]
     let mut validation_features =

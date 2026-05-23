@@ -1,6 +1,6 @@
 #version 450 core
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_EXT_nonuniform_qualifier : require
 
 struct UiElement {
@@ -12,11 +12,11 @@ struct UiElement {
     uint flags; float opacity; float rotation; uint _pad;
 };
 
-layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer ElementArray {
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer ElementArray {
     UiElement elements[];
 };
 
-layout(push_constant, scalar) uniform PushConstants {
+layout(push_constant, std430) uniform PushConstants {
     ElementArray elementsPtr;
     mat4 viewProj;
     vec2 viewportSize;

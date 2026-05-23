@@ -1,7 +1,7 @@
 // @assets/sim/bp_particle_self.comp
 #version 450 core
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
@@ -14,11 +14,11 @@ layout(local_size_x = 256) in;
 const uint SUBGROUPS_PER_WG = 256 / SUBGROUP_SIZE;
 
 // Alias memory block mapping the float-based Wrench to uints for CAS compatibility
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer WrenchArrayUint {
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer WrenchArrayUint {
     uint data[];
 };
 
-layout(push_constant, scalar) uniform PushConstants {
+layout(push_constant, std430) uniform PushConstants {
     MultiBvhBuffer bvh;
     ParticleData particles;
     WrenchArray wrench_buffer;

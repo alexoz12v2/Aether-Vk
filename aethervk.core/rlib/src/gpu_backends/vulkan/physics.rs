@@ -360,6 +360,7 @@ pub struct EmitParticlesPushConstants {
   pub particles: u64,
   pub emitters: u64,
   pub bvh_nodes: u64,
+  pub _pad0: u64,
   pub sun_pos: [f32; 3],
   pub dt: f32,
   pub max_particles: u32,
@@ -371,22 +372,21 @@ pub struct PhysicsPipelines {
   pub pipeline_layout: vk::PipelineLayout,
   // ── Legacy IMEX pipelines (kept for backward compatibility) ───────────────
   pub emit_particles: vk::Pipeline,
-  pub p1_2_imex: vk::Pipeline,
-  pub p3_4_imex: vk::Pipeline,
   pub lbvh_prepass: vk::Pipeline,
   pub lbvh_build: vk::Pipeline,
   pub motion_bounds: vk::Pipeline,
   pub motion_refit: vk::Pipeline,
   pub ccd: vk::Pipeline,
-  pub ccd_rigidbody: vk::Pipeline,
-  pub ccd_particles: vk::Pipeline,
   pub stream_compact: vk::Pipeline,
   pub reduce_toi: vk::Pipeline,
   pub lcp_solver: vk::Pipeline,
   pub apply_impulses: vk::Pipeline,
   pub barnes_hut: vk::Pipeline,
-  pub p5_imex: vk::Pipeline,
-  pub broad_phase: vk::Pipeline,
+  pub radix_sort: vk::Pipeline,
+  pub morton_encode: vk::Pipeline,
+  pub convert_particles: vk::Pipeline,
+  pub graph_coloring: vk::Pipeline,
+  pub lbvh_collapse: vk::Pipeline,
   // ── New Symmetric Strang-Split IMEX integrators ───────────────────────────
   /// VV predictor: x_n → x_{n+1}, v_{n+½}; clears force buffer
   pub integrate_particles_p1_p2: vk::Pipeline,
@@ -394,6 +394,8 @@ pub struct PhysicsPipelines {
   pub integrate_bodies_p3: vk::Pipeline,
   /// VV corrector: v_{n+½} → v_{n+1}; advances 64-bit engine clock
   pub integrate_particles_p4_5: vk::Pipeline,
+  // ── Narrow Phase ──────────────────────────────────────────────────────────
+  pub narrow_ccd: vk::Pipeline,
   // ── Force aggregation ─────────────────────────────────────────────────────
   /// Leaf-wrench → CoM-wrench reduction (one WG per RB)
   pub rb_force_assign: vk::Pipeline,
@@ -414,7 +416,7 @@ pub struct PhysicsPipelines {
 
 impl PhysicsPipelines {
   /// TODO: Document this item
-  pub fn new(device: &LogicalDevice) -> GpuResult<Self> {
+  pub fn new(device: &LogicalDevice, debug_shaders: bool) -> GpuResult<Self> {
     let push_constant_range = vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::COMPUTE)
       .offset(0)
@@ -453,13 +455,13 @@ impl PhysicsPipelines {
       });
       spec_data.extend_from_slice(&sg_size.to_le_bytes());
 
-      let debug_shaders = 1u32;
+      let debug_shaders_val = if debug_shaders { 1u32 } else { 0u32 };
       spec_map_entries.push(vk::SpecializationMapEntry {
         constant_id: 10,
         offset: 4,
         size: 4,
       });
-      spec_data.extend_from_slice(&debug_shaders.to_le_bytes());
+      spec_data.extend_from_slice(&debug_shaders_val.to_le_bytes());
 
       let spec_info =
         vk::SpecializationInfo::default().map_entries(&spec_map_entries).data(&spec_data);
@@ -480,8 +482,8 @@ impl PhysicsPipelines {
           None,
         )
       }
-      .map_err(|(pipelines, e)| {
-        GpuError::BackendSpecific(alloc::format!("Failed to create compute pipeline: {:?}", e))
+      .map_err(|(_pipelines, e)| {
+        GpuError::BackendSpecific(alloc::format!("Failed to create compute pipeline ({}): {:?}", spv_path, e))
       })?[0];
 
       unsafe {
@@ -506,28 +508,21 @@ impl PhysicsPipelines {
         pipeline_layout,
         // ── Legacy pipelines ────────────────────────────────────────────────
         emit_particles: create_pipeline(&alloc::format!("{}/emit_particles.comp.spv", sim_dir))?,
-        p1_2_imex: create_pipeline(&alloc::format!("{}/p1-2_imex_particles.comp.spv", sim_dir))?,
-        p3_4_imex: create_pipeline(&alloc::format!(
-          "{}/p3-4_imex_rigidbody_imr.comp.spv",
-          sim_dir
-        ))?,
         lbvh_prepass: create_pipeline(&alloc::format!("{}/lbvh_prepass.comp.spv", sim_dir))?,
         lbvh_build: create_pipeline(&alloc::format!("{}/lbvh_build.comp.spv", sim_dir))?,
         motion_bounds: create_pipeline(&alloc::format!("{}/motion_bounds.comp.spv", sim_dir))?,
         motion_refit: create_pipeline(&alloc::format!("{}/motion_refit.comp.spv", sim_dir))?,
         ccd: create_pipeline(&alloc::format!("{}/ccd.comp.spv", sim_dir))?,
-        ccd_rigidbody: create_pipeline(&alloc::format!(
-          "{}/narrow_ccd_rigidbody.comp.spv",
-          sim_dir
-        ))?,
-        ccd_particles: create_pipeline(&alloc::format!("{}/narrow_ccd_particles.comp.spv", sim_dir))?,
         stream_compact: create_pipeline(&alloc::format!("{}/stream_compact.comp.spv", sim_dir))?,
         reduce_toi: create_pipeline(&alloc::format!("{}/reduce_toi.comp.spv", sim_dir))?,
         lcp_solver: create_pipeline(&alloc::format!("{}/lcp_solver.comp.spv", sim_dir))?,
         apply_impulses: create_pipeline(&alloc::format!("{}/apply_impulses.comp.spv", sim_dir))?,
         barnes_hut: create_pipeline(&alloc::format!("{}/barnes_hut.comp.spv", sim_dir))?,
-        p5_imex: create_pipeline(&alloc::format!("{}/p5_imex_particles.comp.spv", sim_dir))?,
-        broad_phase: create_pipeline(&alloc::format!("{}/broad_phase.comp.spv", sim_dir))?,
+        radix_sort: create_pipeline(&alloc::format!("{}/radix_sort.comp.spv", sim_dir))?,
+        morton_encode: create_pipeline(&alloc::format!("{}/morton_encode.comp.spv", sim_dir))?,
+        convert_particles: create_pipeline(&alloc::format!("{}/convert_particles.comp.spv", sim_dir))?,
+        graph_coloring: create_pipeline(&alloc::format!("{}/graph_coloring.comp.spv", sim_dir))?,
+        lbvh_collapse: create_pipeline(&alloc::format!("{}/lbvh_collapse.comp.spv", sim_dir))?,
         // ── New IMEX integrators ────────────────────────────────────────────
         integrate_particles_p1_p2: create_pipeline(&alloc::format!(
           "{}/integrate_particles_p1_p2.comp.spv",
@@ -541,6 +536,7 @@ impl PhysicsPipelines {
           "{}/integrate_particles_p4_5.comp.spv",
           sim_dir
         ))?,
+        narrow_ccd: create_pipeline(&alloc::format!("{}/narrow_ccd.comp.spv", sim_dir))?,
         // ── Force aggregation ───────────────────────────────────────────────
         rb_force_assign: create_pipeline(&alloc::format!("{}/rb_force_assign.comp.spv", sim_dir))?,
         // ── Broad-phase suite ───────────────────────────────────────────────
@@ -572,26 +568,26 @@ impl PhysicsPipelines {
   pub fn discard(&mut self, discard_pool: &resources::DiscardPool, timeline: u64) {
     // Layout must be last — it backs all pipelines
     discard_pool.discard_pipeline(self.emit_particles, timeline);
-    discard_pool.discard_pipeline(self.p1_2_imex, timeline);
-    discard_pool.discard_pipeline(self.p3_4_imex, timeline);
     discard_pool.discard_pipeline(self.lbvh_prepass, timeline);
     discard_pool.discard_pipeline(self.lbvh_build, timeline);
     discard_pool.discard_pipeline(self.motion_bounds, timeline);
     discard_pool.discard_pipeline(self.motion_refit, timeline);
     discard_pool.discard_pipeline(self.ccd, timeline);
-    discard_pool.discard_pipeline(self.ccd_rigidbody, timeline);
-    discard_pool.discard_pipeline(self.ccd_particles, timeline);
     discard_pool.discard_pipeline(self.stream_compact, timeline);
     discard_pool.discard_pipeline(self.reduce_toi, timeline);
     discard_pool.discard_pipeline(self.lcp_solver, timeline);
     discard_pool.discard_pipeline(self.apply_impulses, timeline);
     discard_pool.discard_pipeline(self.barnes_hut, timeline);
-    discard_pool.discard_pipeline(self.p5_imex, timeline);
-    discard_pool.discard_pipeline(self.broad_phase, timeline);
+    discard_pool.discard_pipeline(self.radix_sort, timeline);
+    discard_pool.discard_pipeline(self.morton_encode, timeline);
+    discard_pool.discard_pipeline(self.convert_particles, timeline);
+    discard_pool.discard_pipeline(self.graph_coloring, timeline);
+    discard_pool.discard_pipeline(self.lbvh_collapse, timeline);
     // New IMEX integrators
     discard_pool.discard_pipeline(self.integrate_particles_p1_p2, timeline);
     discard_pool.discard_pipeline(self.integrate_bodies_p3, timeline);
     discard_pool.discard_pipeline(self.integrate_particles_p4_5, timeline);
+    discard_pool.discard_pipeline(self.narrow_ccd, timeline);
     // Force aggregation
     discard_pool.discard_pipeline(self.rb_force_assign, timeline);
     // Broad-phase suite
@@ -852,8 +848,9 @@ impl VulkanComputeKernels {
     device: &LogicalDevice,
     _allocator: vk_mem::AllocatorView,
     queue_sharing_info: crate::gpu::QueueSharingInfo,
+    debug_shaders: bool,
   ) -> GpuResult<Self> {
-    let pipelines = PhysicsPipelines::new(device)?;
+    let pipelines = PhysicsPipelines::new(device, debug_shaders)?;
     let addresses = PhysicsDeviceAddresses::default();
 
     let mut timeline_info = vk::SemaphoreTypeCreateInfo::default()
@@ -1497,6 +1494,7 @@ impl VulkanComputeKernels {
       particles: particles.address,
       emitters: self.addresses.emitters,
       bvh_nodes: self.addresses.bvh_nodes,
+      _pad0: 0,
       sun_pos: [sun_pos.x(), sun_pos.y(), sun_pos.z()],
       dt: dt_sec,
       max_particles,
@@ -2177,7 +2175,7 @@ impl VulkanComputeKernels {
       device.cmd_bind_pipeline(
         cmd.cmd,
         vk::PipelineBindPoint::COMPUTE,
-        self.pipelines.p1_2_imex,
+        self.pipelines.integrate_particles_p1_p2,
       );
       device.cmd_push_constants(
         cmd.cmd,
@@ -2242,7 +2240,7 @@ impl VulkanComputeKernels {
       device.cmd_bind_pipeline(
         cmd.cmd,
         vk::PipelineBindPoint::COMPUTE,
-        self.pipelines.p3_4_imex,
+        self.pipelines.integrate_bodies_p3,
       );
       device.cmd_push_constants(
         cmd.cmd,
@@ -2366,7 +2364,7 @@ impl VulkanComputeKernels {
       device.cmd_bind_pipeline(
         cmd.cmd,
         vk::PipelineBindPoint::COMPUTE,
-        self.pipelines.p5_imex,
+        self.pipelines.integrate_particles_p4_5,
       );
       device.cmd_push_constants(
         cmd.cmd,
@@ -2531,7 +2529,7 @@ impl VulkanComputeKernels {
   ) -> GpuResult<VulkanBuffer<gpu::CollisionPair>> {
     // We'll pass total_entities via some state, hardcoded to some value here or assume we have it
     let total_entities = 1000; // Placeholder
-    let wg_size = 32; // TODO we are approximating a warp. rework the broad_phase shader for 128
+    let wg_size = 32; // TODO we are approximating a warp. rework the bp_scene shader for 128
     let dispatch_groups = (total_entities + wg_size - 1) / wg_size;
 
     let max_candidates = 10000; // Placeholder TODO parameter of kernels?
@@ -2562,7 +2560,7 @@ impl VulkanComputeKernels {
       device.cmd_bind_pipeline(
         cmd.cmd,
         vk::PipelineBindPoint::COMPUTE,
-        self.pipelines.broad_phase,
+        self.pipelines.bp_scene,
       );
       device.cmd_push_constants(
         cmd.cmd,
@@ -4163,7 +4161,7 @@ impl Device {
       self.device.cmd_bind_pipeline(
         cmd.cmd,
         ash::vk::PipelineBindPoint::COMPUTE,
-        self.kernels.pipelines.ccd_rigidbody,
+        self.kernels.pipelines.narrow_ccd,
       );
       self.device.cmd_push_constants(
         cmd.cmd,
@@ -4202,7 +4200,7 @@ impl Device {
       self.device.cmd_bind_pipeline(
         cmd.cmd,
         ash::vk::PipelineBindPoint::COMPUTE,
-        self.kernels.pipelines.ccd_particles,
+        self.kernels.pipelines.narrow_ccd,
       );
       self.device.cmd_push_constants(
         cmd.cmd,

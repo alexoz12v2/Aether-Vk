@@ -5,7 +5,7 @@ layout(location = 0) out vec4 outColor;
 layout(binding = 0) uniform sampler2D skyMap;
 
 layout(push_constant) uniform Push {
-  layout(offset = 0) mat4 invViewProj;
+  mat4 invViewProj;
 } push;
 
 vec2 octEncode(vec3 v) {

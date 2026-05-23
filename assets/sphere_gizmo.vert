@@ -1,6 +1,6 @@
 #version 450 core
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 
 struct SphereGizmoData {
     mat4 model;
@@ -10,11 +10,11 @@ struct SphereGizmoData {
 };
 
 // Bindless BDA block
-layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer SphereGizmoArray {
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer SphereGizmoArray {
     SphereGizmoData gizmos[];
 };
 
-layout(push_constant, scalar) uniform PushConstants {
+layout(push_constant, std430) uniform PushConstants {
     SphereGizmoArray gizmoPtr; // 8 bytes
     mat4 viewProj;             // 64 bytes
 } push;

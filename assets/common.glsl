@@ -1,8 +1,8 @@
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 
 // Layout 'scalar' makes GLSL padding perfectly match standard Rust C-structs.
-layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer SceneData {
+layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer SceneData {
     mat4 viewProj; // Passing ViewProj instead of ModelViewProj saves CPU cycles
     vec4 cameraPos;
     vec4 sunPos;
@@ -11,7 +11,7 @@ layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer Sce
     vec2 _pad;
 };
 
-layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer MaterialData {
+layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer MaterialData {
     vec4 baseAlbedo; // w is roughness
     vec4 emissiveColor; // w is intensity
     float baseAO;
@@ -28,12 +28,12 @@ layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer Mat
     vec4 gridColorDensity;
 };
 
-layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer ObjectData {
+layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer ObjectData {
     mat4 model;
 };
 
 // Total Size: Exactly 24 bytes! (Three 64-bit pointers)
-layout(push_constant, scalar) uniform Push {
+layout(push_constant, std430) uniform Push {
     SceneData scene;
     MaterialData material;
     ObjectData object;

@@ -560,6 +560,7 @@ pub struct TextGlyphGpu {
 #[derive(Clone, Copy, Default)]
 pub struct Text2PushConstants {
   pub glyphs_ptr: u64,
+  pub _pad0: u64,
   pub view_proj: [[f32; 4]; 4],
 }
 
@@ -708,6 +709,7 @@ pub struct UiElementGpu {
 #[derive(Clone, Copy, Debug)]
 pub struct UiPushConstants {
   pub elements_ptr: u64,
+  pub _pad0: u64,
   pub view_proj: [[f32; 4]; 4],
   pub viewport_size: [f32; 2],
   pub _pad: [f32; 2],

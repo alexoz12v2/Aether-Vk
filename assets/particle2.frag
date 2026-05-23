@@ -1,8 +1,8 @@
 #version 450 core
 
 // --- Required Extensions ---
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_memory_scope_semantics : require
@@ -14,7 +14,7 @@ layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
 // Bindings and Push Constants remain exactly as provided
-layout(push_constant, scalar) uniform PushConstants {
+layout(push_constant, std430) uniform PushConstants {
     mat4 viewProj;
     vec3 cameraUp;
     float time;

@@ -1,6 +1,6 @@
 #version 450 core
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
@@ -8,9 +8,9 @@
 layout(local_size_x = 256) in;
 
 struct EntityHeader { uint type; uint pad[3]; };
-layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer EntityHeaderArray { EntityHeader entities[]; };
+layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer EntityHeaderArray { EntityHeader entities[]; };
 
-layout(push_constant, scalar) uniform PushConstants {
+layout(push_constant, std430) uniform PushConstants {
     EntityHeaderArray scene_entities;
     PairBuffer raw_pairs;
     PairBuffer out_rb_rb;

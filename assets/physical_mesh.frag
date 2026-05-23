@@ -19,14 +19,14 @@ layout(binding = 3) uniform sampler2D aoMap;
 layout(binding = 4) uniform sampler2D skyMap;
 
 layout(push_constant) uniform Push { 
-  layout(offset = 0) mat4 modelViewProj;
-  layout(offset = 64) mat4 model;
-  layout(offset = 128) vec3 sunPos;
-  layout(offset = 140) uint textureFlags;
-  layout(offset = 144) vec4 sunColor;
-  layout(offset = 160) vec3 cameraPos;
-  layout(offset = 172) float emissiveIntensity;
-  layout(offset = 176) vec3 emissiveColor;
+  mat4 modelViewProj;
+  mat4 model;
+  vec3 sunPos;
+  uint textureFlags;
+  vec4 sunColor;
+  vec3 cameraPos;
+  float emissiveIntensity;
+  vec3 emissiveColor;
 } push;
 
 // --- Specialization Constants ---

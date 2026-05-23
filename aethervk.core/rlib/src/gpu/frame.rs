@@ -1320,6 +1320,7 @@ pub fn do_draw_ui_batch(
 
   let push_constants = crate::gpu::UiPushConstants {
     elements_ptr: draw_call.elements_ptr,
+    _pad0: 0,
     view_proj: proj,
     viewport_size: window_extent,
     _pad: [0.0, 0.0],
@@ -1350,6 +1351,7 @@ pub fn do_draw_text2_batch(
 
   let push_constants = crate::gpu::Text2PushConstants {
     glyphs_ptr: draw_call.glyphs_ptr,
+    _pad0: 0,
     view_proj: proj,
   };
   device.push_text2_constants(cmd_buffer, &push_constants)?;

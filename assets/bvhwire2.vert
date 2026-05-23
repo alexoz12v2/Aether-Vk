@@ -1,6 +1,6 @@
 #version 450 core
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 
 struct BvhData {
     vec4 center_type;   // xyz = center, w = type (0=Sphere, 1=AABB/OOBB)
@@ -11,12 +11,12 @@ struct BvhData {
 };
 
 // Bindless BDA block
-layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer BvhArray {
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer BvhArray {
     BvhData bvh[];
 };
 
 // 72 bytes total! (Safely under 128 bytes limit)
-layout(push_constant, scalar) uniform PushConstants {
+layout(push_constant, std430) uniform PushConstants {
     BvhArray bvhPtr;    // 8 bytes
     mat4 viewProj;      // 64 bytes
 } push;

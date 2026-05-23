@@ -1,7 +1,7 @@
 // @assets/sim/bp_bounds_gen.comp
 #version 450 core
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "../debug_utils.glsl"
@@ -10,7 +10,7 @@
 
 layout(local_size_x = 256) in;
 
-layout(push_constant, scalar) uniform PushConstants {
+layout(push_constant, std430) uniform PushConstants {
     RigidBodyArray scene_entities;
     LeafBuffer tlas_leaves;
     uvec2    dt_us;

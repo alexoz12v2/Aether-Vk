@@ -9,6 +9,7 @@ pub struct SparseCollisionData {
     pub prim_b: u32,
     pub toi: f32,
     pub contact_normal: [f32; 3],
+    pub _pad0: f32,
     pub contact_point: [f32; 3],
     pub penetration_depth: f32,
 }
@@ -24,6 +25,7 @@ pub fn generate_sparse_collisions(count: usize, valid_ratio: f32) -> Vec<SparseC
             prim_b: rng.r#gen::<u32>() % 1000,
             toi: rng.r#gen::<f32>(),
             contact_normal: [0.0, 1.0, 0.0],
+            _pad0: 0.0,
             contact_point: [0.0, 0.0, 0.0],
             penetration_depth: rng.r#gen::<f32>(),
         });

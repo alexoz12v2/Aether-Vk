@@ -34,8 +34,8 @@
 // Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
 
 #version 450 core
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
@@ -43,9 +43,14 @@
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
-layout(push_constant, scalar) uniform PushConstants {
-    RigidBodyArray rigid_bodies; WrenchArray wrenches; EmitterArray emitters;
-    float dt; uint n_bodies; uint n_iterations; uint num_emitters;
+layout(push_constant, std430) uniform PushConstants {
+    RigidBodyArray rigid_bodies;
+    WrenchArray wrenches;
+    EmitterArray emitters;
+    float dt;
+    uint n_bodies;
+    uint n_iterations;
+    uint num_emitters;
 } pc;
 
 void main() {
