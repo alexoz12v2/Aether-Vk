@@ -29,7 +29,8 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="vm:BillboardViewModel">
-                    <Image Source="{Binding ImageSource}" Width="{Binding Width}" Height="{Binding Height}" />
+                    <Image Source="{Binding ImageSource}" Width="{Binding Width}" Height="{Binding Height}" Opacity="{Binding Opacity}"
+                           PointerPressed="OnBillboardPointerPressed" />
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
             <ItemsControl.Styles>

@@ -7,18 +7,17 @@
 
 layout(local_size_x = 256) in;
 
-struct EntityHeader { uint type; uint pad[3]; };
-layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer EntityHeaderArray { EntityHeader entities[]; };
-
 layout(push_constant, std430) uniform PushConstants {
-    EntityHeaderArray scene_entities;
     PairBuffer raw_pairs;
-    PairBuffer out_rb_rb;
-    PairBuffer out_rb_ps;
-    PairBuffer out_ps_ps;
-    PairBuffer out_macro_lca;
-    PairBuffer out_lca_lca;
+
+    // Change these to uvec2. The C++ side still passes the 64-bit pointer!
+    // The size and alignment (8 bytes) are mathematically identical.
+    uvec2 out_rb_rb;
+    uvec2 out_rb_ps;
+    uvec2 out_ps_ps;
+
     uint max_pairs;
+    uint num_rigid_bodies;
 } pc;
 
 void main() {
@@ -27,8 +26,9 @@ void main() {
 
     uvec2 pair = pc.raw_pairs.pairs[id];
     uint ent_A = pair.x, ent_B = pair.y;
-    uint type_A = pc.scene_entities.entities[ent_A].type;
-    uint type_B = pc.scene_entities.entities[ent_B].type;
+
+    uint type_A = (ent_A < pc.num_rigid_bodies) ? TYPE_RIGID_BODY : TYPE_PARTICLE_SYSTEM;
+    uint type_B = (ent_B < pc.num_rigid_bodies) ? TYPE_RIGID_BODY : TYPE_PARTICLE_SYSTEM;
 
     if (type_A > type_B) {
         uint temp = ent_A; ent_A = ent_B; ent_B = temp;
@@ -36,20 +36,24 @@ void main() {
     }
 
     if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_PARTICLE_SYSTEM) {
-        uint out_idx = atomicAdd(pc.out_ps_ps.count, 1);
-        if (out_idx < pc.max_pairs) pc.out_ps_ps.pairs[out_idx] = uvec2(ent_A, ent_B);
-    } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_RIGID_BODY) {
-        uint out_idx = atomicAdd(pc.out_rb_ps.count, 1);
-        if (out_idx < pc.max_pairs) pc.out_rb_ps.pairs[out_idx] = uvec2(ent_B, ent_A);
+        // Safe null-check without reference comparisons
+        if (pc.out_ps_ps.x != 0 || pc.out_ps_ps.y != 0) {
+            // Cast the uvec2 back up into a usable buffer reference
+            PairBuffer buf = PairBuffer(pc.out_ps_ps);
+            uint out_idx = atomicAdd(buf.count, 1);
+            if (out_idx < pc.max_pairs) buf.pairs[out_idx] = uvec2(ent_A, ent_B);
+        }
+    } else if (type_A == TYPE_RIGID_BODY && type_B == TYPE_PARTICLE_SYSTEM) {
+        if (pc.out_rb_ps.x != 0 || pc.out_rb_ps.y != 0) {
+            PairBuffer buf = PairBuffer(pc.out_rb_ps);
+            uint out_idx = atomicAdd(buf.count, 1);
+            if (out_idx < pc.max_pairs) buf.pairs[out_idx] = uvec2(ent_A, ent_B);
+        }
     } else if (type_A == TYPE_RIGID_BODY && type_B == TYPE_RIGID_BODY) {
-        uint out_idx = atomicAdd(pc.out_rb_rb.count, 1);
-        if (out_idx < pc.max_pairs) pc.out_rb_rb.pairs[out_idx] = uvec2(ent_A, ent_B);
-    } else if (type_A == TYPE_MICRO_LCA && type_B == TYPE_MICRO_LCA) {
-        // Solves TO-DO: Routes LCA overlaps to frame-handoff logic
-        uint out_idx = atomicAdd(pc.out_lca_lca.count, 1);
-        if (out_idx < pc.max_pairs) pc.out_lca_lca.pairs[out_idx] = uvec2(ent_A, ent_B);
-    } else if (type_B == TYPE_MICRO_LCA) {
-        uint out_idx = atomicAdd(pc.out_macro_lca.count, 1);
-        if (out_idx < pc.max_pairs) pc.out_macro_lca.pairs[out_idx] = uvec2(ent_A, ent_B);
+        if (pc.out_rb_rb.x != 0 || pc.out_rb_rb.y != 0) {
+            PairBuffer buf = PairBuffer(pc.out_rb_rb);
+            uint out_idx = atomicAdd(buf.count, 1);
+            if (out_idx < pc.max_pairs) buf.pairs[out_idx] = uvec2(ent_A, ent_B);
+        }
     }
 }

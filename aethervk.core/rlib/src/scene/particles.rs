@@ -323,3 +323,18 @@ mod tests {
     assert_eq!(comp.circles[0].latitude_rad, 0.5);
   }
 }
+
+#[derive(Clone, Debug, Default)]
+pub struct JetComponent {
+  pub radius: f32,
+  pub lat: f32,
+  pub lon: f32,
+  pub color: [f32; 4],
+  pub mass: f32,
+  pub particles_per_tick: u32,
+  pub ttl: f32,
+  pub mean_velocity: f32,
+  pub cached_emission_points: alloc::vec::Vec<aethervk_oshal_rlib::math::vector::vec3::Vec3f32>,
+}
+
+impl Component for JetComponent {}

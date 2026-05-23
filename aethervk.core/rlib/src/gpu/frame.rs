@@ -1273,6 +1273,7 @@ pub fn do_draw_bvhwire2_batch(
   device.prepare_bvhwire2_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
   let push_constants = crate::gpu::Bvhwire2PushConstants {
     bvh_ptr: draw_call.data_ptr,
+    _pad: 0,
     view_proj: camera.view_proj.into(),
   };
   device.push_bvhwire2_constants(cmd_buffer, &push_constants)?;
@@ -1289,8 +1290,9 @@ pub fn do_draw_sphere_gizmo_batch(
 ) -> GpuResult<()> {
   device.prepare_sphere_gizmo_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
   let push_constants = crate::gpu::SphereGizmoPushConstants {
-    gizmo_ptr: draw_call.data_ptr,
     view_proj: camera.view_proj.into(),
+    gizmo_ptr: draw_call.data_ptr,
+    _pad: 0,
   };
   device.push_sphere_gizmo_constants(cmd_buffer, &push_constants)?;
   device.draw_instanced(cmd_buffer, draw_call.total_vertices, draw_call.total_gizmos)?;

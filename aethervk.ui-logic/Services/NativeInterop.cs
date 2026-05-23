@@ -7,6 +7,12 @@ public static class NativeInterop
 {
   private const string DllName = "aethervk_core_cdylib";
 
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+  public delegate void PanicCallbackDelegate(IntPtr messagePtr, nuint length);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_registerPanicCallback(PanicCallbackDelegate cb);
+
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   public static extern IntPtr avkSimulationContext_startup(string backend);
 
@@ -607,6 +613,23 @@ public static class NativeInterop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_addJet(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId,
+    float radius,
+    float latitude,
+    float longitude,
+    float colorR,
+    float colorG,
+    float colorB,
+    float mass,
+    int particlesPerTick,
+    float ttl,
+    float meanVelocity
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_addImageBillboardComponent(
     IntPtr ctx,
     ulong sceneId,
@@ -907,6 +930,14 @@ public static class NativeInterop
     [Out, MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 4)] FfiEmissionCircle[] circles,
     uint maxCount,
     out uint actualCount
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_recalculateJetPoints(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entity
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

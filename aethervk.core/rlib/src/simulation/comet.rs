@@ -201,25 +201,7 @@ fn compute_comet_extras(
   // Log the axes properly formatted
   use aethervk_oshal_rlib::math::vector::Vector;
 
-  let mut tris = Vec::new();
-  for chunk in indices.chunks_exact(3) {
-    let v0 = local_vertices[chunk[0] as usize].position;
-    let i1 = chunk[1] as usize;
-    let i2 = chunk[2] as usize;
-    let v1 = local_vertices[i1].position;
-    let v2 = local_vertices[i2].position;
-    tris.push(Triangle {
-      vertices: [
-        Vec3f32::from_components(v0[0], v0[1], v0[2]),
-        Vec3f32::from_components(v1[0], v1[1], v1[2]),
-        Vec3f32::from_components(v2[0], v2[1], v2[2]),
-      ],
-    });
-  }
-
-  let builder = BVHBuilder::<f32, Vec3f32, Mat3f32>::new(BVHBuilderParams::default());
-  let bvh = builder.build(&tris);
-  let linear_bvh = bvh.map(|root| LinearBVH::from_build_node(&root, 0));
+  let linear_bvh = crate::math::collision::linear_bvh::LinearBVH::build_mesh_lbvh(&local_vertices, indices);
 
   (
     linear_bvh,

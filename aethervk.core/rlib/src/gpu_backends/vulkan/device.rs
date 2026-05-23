@@ -7070,7 +7070,7 @@ impl RenderDevice for Device {
     let bytes = unsafe {
       core::slice::from_raw_parts(
         constants as *const _ as *const u8,
-        core::mem::size_of::<crate::gpu::SphereGizmoPushConstants>(),
+        80,
       )
     };
     unsafe {

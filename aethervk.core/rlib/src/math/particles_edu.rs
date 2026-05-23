@@ -104,7 +104,7 @@ fn common_prefix(morton_codes: &[(u32, usize)], i: isize, j: isize) -> i32 {
 }
 
 /// Helper: Determines the range of nodes covered by an internal node `i`.
-fn determine_range(morton_codes: &[(u32, usize)], i: usize) -> (usize, usize) {
+pub fn determine_range(morton_codes: &[(u32, usize)], i: usize) -> (usize, usize) {
   let i_isize = i as isize;
   let d = (common_prefix(morton_codes, i_isize, i_isize + 1)
     - common_prefix(morton_codes, i_isize, i_isize - 1))
@@ -133,7 +133,7 @@ fn determine_range(morton_codes: &[(u32, usize)], i: usize) -> (usize, usize) {
 }
 
 /// Helper: Finds the split position within the range `[first, last]`
-fn find_split(morton_codes: &[(u32, usize)], first: usize, last: usize) -> usize {
+pub fn find_split(morton_codes: &[(u32, usize)], first: usize, last: usize) -> usize {
   let first_isize = first as isize;
   let last_isize = last as isize;
   let common_prefix_node = common_prefix(morton_codes, first_isize, last_isize);

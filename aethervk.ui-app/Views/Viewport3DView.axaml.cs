@@ -1,3 +1,4 @@
+using AetherVk.Logic.Models;
 using System;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
@@ -8,6 +9,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Views;
 
@@ -197,7 +199,31 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
 
   private void OnPointerWheelChanged(object? sender, PointerWheelEventArgs e)
   {
-    var scroll_amount = (float)e.Delta.Y;
-    _viewModel?.OperatorStack.ProcessPointerWheel(scroll_amount);
+    if (_viewModel != null)
+    {
+      _viewModel.ProcessPointerWheel((float)e.Delta.Y);
+      e.Handled = true;
+    }
+  }
+
+  private void OnBillboardPointerPressed(object? sender, PointerPressedEventArgs e)
+  {
+      if (sender is Image image && image.DataContext is BillboardViewModel bvm)
+      {
+          // Select this billboard
+          var entity = new Entity(_viewModel?.SceneId ?? 0, (ulong)bvm.GetHashCode(), "UI Billboard");
+          entity.Components.Add(new BillboardComponent(bvm));
+          
+          if (_viewModel != null)
+          {
+              // _viewModel.SceneStateManager.GetOrCreateScene(_viewModel.SceneId).SelectedEntity = entity;
+          }
+          
+          CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+              new AetherVk.Logic.ViewModels.EntitySelectedMessage(entity)
+          );
+
+          e.Handled = true;
+      }
   }
 }

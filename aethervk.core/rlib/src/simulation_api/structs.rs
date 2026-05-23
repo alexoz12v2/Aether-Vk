@@ -1083,6 +1083,9 @@ pub struct SceneContext {
   pub delta_buffer: Arc<RwLock<alloc::boxed::Box<[u64]>>>,
   pub custom_render_callback: Option<CustomRenderCallback>,
   pub debug_name: alloc::string::String,
+  pub scene_snapshot: Option<alloc::boxed::Box<crate::scene::Scene>>,
+  pub static_tlas: Arc<RwLock<alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<32>>>>,
+  pub is_static_tlas_dirty: Arc<AtomicBool>,
 }
 
 impl Drop for SceneContext {
@@ -1201,13 +1204,16 @@ impl SceneContext {
       grid_entity: None,
       sky_entity: None,
       outlines_enabled: Arc::new(AtomicBool::new(false)),
-      collisions_enabled: Arc::new(AtomicBool::new(true)),
+      collisions_enabled: Arc::new(AtomicBool::new(false)),
       physics_scene: None,
       selection_tlas: None,
       active_physics_task: alloc::sync::Arc::new(spin::Mutex::new(None)),
-      physics_engine_type: Arc::new(RwLock::new(PhysicsEngineType::default())),
+      physics_engine_type: Arc::new(RwLock::new(PhysicsEngineType::VulkanCompute)),
       time_state: Arc::new(RwLock::new(SceneTimeState::default())),
       presentation_engines: Arc::new(RwLock::new(BTreeMap::new())),
+      scene_snapshot: None,
+      static_tlas: Arc::new(RwLock::new(alloc::vec::Vec::new())),
+      is_static_tlas_dirty: Arc::new(AtomicBool::new(true)),
       changed_entities: Arc::new(RwLock::new(BTreeMap::new())),
       custom_render_callback: None,
       debug_name: alloc::string::String::new(),

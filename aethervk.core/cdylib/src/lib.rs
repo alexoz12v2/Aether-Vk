@@ -33,11 +33,18 @@ static GLOBAL: Jemalloc = Jemalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-// ----------------- Panic Handler ----------------------------------
 #[panic_handler]
 #[cfg(not(any(test, feature = "std")))]
 #[cfg(target_arch = "wasm32")] // Hack to disable it on non-wasm, because we know macOS is linking std due to ab_glyph
 fn the_panic(_info: &PanicInfo) -> ! {
+  unsafe {
+    if let Some(cb) = crate::PANIC_CALLBACK {
+      // In no_std, we avoid allocation if we can. 
+      // We pass a simple static message to avoid complex formatting which might allocate or fail further.
+      let msg = b"Fatal Rust Engine Panic: Check console logs or use a debugger.\0";
+      cb(msg.as_ptr(), msg.len());
+    }
+  }
   aethervk_oshal_rlib::panic_handler_impl();
 }
 

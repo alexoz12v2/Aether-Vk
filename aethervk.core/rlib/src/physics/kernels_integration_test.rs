@@ -208,7 +208,7 @@ mod tests {
     assert_eq!(physics_scene.particle_blases.len(), 1);
     let particle_blas = physics_scene.particle_blases[0].as_ref().unwrap();
     // 2 particles were added
-    let leaf_count = particle_blas.nodes.iter().filter(|n| n.left_child_or_primitive_offset == u32::MAX).count();
+    let leaf_count = particle_blas.nodes.iter().filter(|n| n.primitive_count > 0).count();
     assert_eq!(leaf_count, 2);
   }
 }

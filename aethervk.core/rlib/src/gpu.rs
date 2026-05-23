@@ -488,6 +488,7 @@ pub struct Bvhwire2DataGpu {
 #[derive(Clone, Copy, Default)]
 pub struct Bvhwire2PushConstants {
   pub bvh_ptr: u64,
+  pub _pad: u64,
   pub view_proj: [f32; 16],
 }
 
@@ -504,6 +505,7 @@ pub struct SphereGizmoDataGpu {
 #[derive(Clone, Copy, Default)]
 pub struct SphereGizmoPushConstants {
   pub gizmo_ptr: u64,
+  pub _pad: u64,
   pub view_proj: [f32; 16],
 }
 
@@ -2079,7 +2081,9 @@ pub trait Kernels: Send + Sync {
     raw_pairs_addr: u64,
     out_rb_rb_addr: u64,
     out_rb_ps_addr: u64,
-    out_rb_lca_addr: u64,
+    out_ps_ps_addr: u64,
+    out_macro_lca_addr: u64,
+    out_lca_lca_addr: u64,
     total_raw_pairs: u32,
   ) -> EngineResult<()>;
 
@@ -2088,10 +2092,16 @@ pub trait Kernels: Send + Sync {
   fn bp_cross_lca(
     &self,
     cmd: &mut Self::Cmd,
-    scene_entities: &Self::Buffer<RigidBodyImex>,
+    lca_entities_addr: u64,
+    macro_leaves_addr: u64,
+    entity_headers_addr: u64,
     lca_query_pairs_addr: u64,
-    output_internal_pairs_addr: u64,
+    out_rb_rb_addr: u64,
+    out_rb_ps_addr: u64,
+    out_ps_ps_addr: u64,
+    out_cross_pairs_addr: u64,
     total_queries: u32,
+    max_pairs: u32,
   ) -> EngineResult<()>;
 
   /// Subgroup-cooperative LBVH traversal for particle–particle self-collision.
@@ -2144,6 +2154,8 @@ pub trait Kernels: Send + Sync {
     broadphase_pairs: &Self::List<CollisionPair>,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
+    lca_entities: u64,
+    space_type: u32,
   ) -> EngineResult<Self::List<CollisionPair>>;
 
   /// Stream compaction shrink logic evaluated entirely on the GPU.

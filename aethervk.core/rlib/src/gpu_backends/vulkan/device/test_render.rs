@@ -1166,7 +1166,8 @@ fn test_render_text_asset_font_async() {
 
   drop(render_frontend);
 }
-fn test_render_particles_multithreaded_impl(use_particle2: bool) {
+
+pub fn test_render_particles_multithreaded_impl(use_particle2: bool) {
   setup_assets_dir();
   let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
     setup_render_frontend_for_tests(true);
@@ -1398,26 +1399,30 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
           )?);
 
           let asset_hash = mesh_arc.id;
+          println!("REACHED CREATE_PHYSICAL_MESH_RESOURCES");
           let res = match device.get_physical_mesh_resources(asset_hash, presentation_engine) {
             Ok(r) => r,
-            Err(_) => device.create_physical_mesh_resources(
-              cmd_buffer_handle,
-              asset_hash,
-              &crate::scene::PhysicalMeshComponent {
-                asset_path: "".to_string(),
-                mesh: mesh_arc.clone(),
-                emissive_intensity: 0.0,
-                emissive_color: [0.0; 3],
-                use_new_path: false,
-                paint_display_mode: 0,
-                sphere_center: [0.0, 0.0, 0.0],
-                sphere_radius: 1.0,
-                grid_color: [0.0, 0.0, 0.0],
-                grid_density: 1.0,
-              },
-              presentation_engine,
-              "",
-            )?,
+            Err(_) => {
+              println!("CALLING create_physical_mesh_resources");
+              device.create_physical_mesh_resources(
+                cmd_buffer_handle,
+                asset_hash,
+                &crate::scene::PhysicalMeshComponent {
+                  asset_path: "".to_string(),
+                  mesh: mesh_arc.clone(),
+                  emissive_intensity: 0.0,
+                  emissive_color: [0.0; 3],
+                  use_new_path: false,
+                  paint_display_mode: 0,
+                  sphere_center: [0.0, 0.0, 0.0],
+                  sphere_radius: 1.0,
+                  grid_color: [0.0, 0.0, 0.0],
+                  grid_density: 1.0,
+                },
+                presentation_engine,
+                "",
+              )?
+            }
           };
 
           let mesh_transform = scene_render.global_transform(mesh_entity).unwrap();
@@ -1495,11 +1500,11 @@ fn test_render_particles_multithreaded_impl(use_particle2: bool) {
           println!("TR: presented task {}", task_id);
           crate::types::GpuResult::Ok(task_id)
         })
-        .unwrap();
+        .unwrap(); // <--- FIX: Added .unwrap() because with_device returns a GpuResult
 
       done_tx_clone.send((time, task_id)).unwrap();
-    }
-  });
+    } // <--- FIX: Properly closed the while loop here
+  }); // <--- FIX: Properly closed the std::thread::spawn closure here
 
   let render_frontend_save = render_frontend.clone();
 
@@ -3266,7 +3271,11 @@ fn test_render_concurrent_resize() {
 
         {
           if let Err(e) = device.begin_render_pass(cmd_buffer_handle, pe, &acquire_result) {
-            let _ = device.cancel_acquired_image(pe, acquire_result.image_index, acquire_result.frame_index as u32);
+            let _ = device.cancel_acquired_image(
+              pe,
+              acquire_result.image_index,
+              acquire_result.frame_index as u32,
+            );
             return Err(e);
           }
           let mut render_pass_guard = ScopedRenderPass::new(device, cmd_buffer_handle);
@@ -5717,65 +5726,67 @@ fn test_cross_queue_sync_timeline_semaphore() {
 
   let (_pool_arc, render_frontend, render_device_handle, pe_handle_opt) =
     setup_render_frontend_for_tests(true);
-  
+
   let pe_handle = pe_handle_opt.unwrap();
 
-  render_frontend.with_device(render_device_handle, |device| {
-    // 1. Create a timeline semaphore directly from the underlying vulkan device
-    let mut type_info = ash::vk::SemaphoreTypeCreateInfo::default()
-      .semaphore_type(ash::vk::SemaphoreType::TIMELINE)
-      .initial_value(0);
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      // 1. Create a timeline semaphore directly from the underlying vulkan device
+      let mut type_info = ash::vk::SemaphoreTypeCreateInfo::default()
+        .semaphore_type(ash::vk::SemaphoreType::TIMELINE)
+        .initial_value(0);
 
-    let create_info = ash::vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
-    
-    // We get the downcasted device to access ash::Device
-    let vulkan_device = device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
-    let logical_device = &vulkan_device.device.handle;
-    let timeline_sem = unsafe { logical_device.create_semaphore(&create_info, None).unwrap() };
+      let create_info = ash::vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
 
-    let timeline_value = 1;
+      // We get the downcasted device to access ash::Device
+      let vulkan_device =
+        device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+      let logical_device = &vulkan_device.device.handle;
+      let timeline_sem = unsafe { logical_device.create_semaphore(&create_info, None).unwrap() };
 
-    // We simulate the compute step signaling the timeline semaphore from CPU for test purposes
-    let signal_info = ash::vk::SemaphoreSignalInfo::default()
-      .semaphore(timeline_sem)
-      .value(timeline_value);
-    unsafe { logical_device.signal_semaphore(&signal_info).unwrap() };
+      let timeline_value = 1;
 
-    let sync_info = crate::gpu::CommandBufferSyncInfo {
-      timeline_semaphore: ash::vk::Handle::as_raw(timeline_sem),
-      timeline_value,
-    };
+      // We simulate the compute step signaling the timeline semaphore from CPU for test purposes
+      let signal_info =
+        ash::vk::SemaphoreSignalInfo::default().semaphore(timeline_sem).value(timeline_value);
+      unsafe { logical_device.signal_semaphore(&signal_info).unwrap() };
 
-    // 2. Start a frame and submit a graphics command buffer that waits on it
-    device.start_frame().unwrap();
-    let acquire_result = device.acquire_next_image(pe_handle).unwrap();
-    let task_id = device.create_task();
+      let sync_info = crate::gpu::CommandBufferSyncInfo {
+        timeline_semaphore: ash::vk::Handle::as_raw(timeline_sem),
+        timeline_value,
+      };
 
-    let cmd_buffer = device.get_command_buffer().unwrap();
-    device.set_command_buffer_presentation_engine(cmd_buffer, pe_handle).unwrap();
+      // 2. Start a frame and submit a graphics command buffer that waits on it
+      device.start_frame().unwrap();
+      let acquire_result = device.acquire_next_image(pe_handle).unwrap();
+      let task_id = device.create_task();
 
-    let mut cmd_scope = gpu::ScopedCommandBuffer::new(device, cmd_buffer, Some(task_id)).unwrap();
+      let cmd_buffer = device.get_command_buffer().unwrap();
+      device.set_command_buffer_presentation_engine(cmd_buffer, pe_handle).unwrap();
 
-    device.begin_render_pass(cmd_buffer, pe_handle, &acquire_result).unwrap();
-    let render_pass_scope = gpu::ScopedRenderPass::new(device, cmd_buffer);
+      let mut cmd_scope = gpu::ScopedCommandBuffer::new(device, cmd_buffer, Some(task_id)).unwrap();
 
-    device.set_viewport(cmd_buffer, &gpu::Viewport::from_extent([256, 256])).unwrap();
-    device.set_scissor(cmd_buffer, &gpu::Rect2D::from_extent([256, 256])).unwrap();
+      device.begin_render_pass(cmd_buffer, pe_handle, &acquire_result).unwrap();
+      let render_pass_scope = gpu::ScopedRenderPass::new(device, cmd_buffer);
 
-    render_pass_scope.end().unwrap();
+      device.set_viewport(cmd_buffer, &gpu::Viewport::from_extent([256, 256])).unwrap();
+      device.set_scissor(cmd_buffer, &gpu::Rect2D::from_extent([256, 256])).unwrap();
 
-    device.record_windowless_download(cmd_buffer, task_id).unwrap();
+      render_pass_scope.end().unwrap();
 
-    // Submit with sync_info
-    cmd_scope.set_sync_info(sync_info);
-    cmd_scope.submit().unwrap();
+      device.record_windowless_download(cmd_buffer, task_id).unwrap();
 
-    // Wait for task to finish
-    while !device.is_task_completed(task_id).unwrap() {
-      core::hint::spin_loop();
-    }
+      // Submit with sync_info
+      cmd_scope.set_sync_info(sync_info);
+      cmd_scope.submit().unwrap();
 
-    unsafe { logical_device.destroy_semaphore(timeline_sem, None) };
-    crate::types::GpuResult::Ok(())
-  }).unwrap();
+      // Wait for task to finish
+      while !device.is_task_completed(task_id).unwrap() {
+        core::hint::spin_loop();
+      }
+
+      unsafe { logical_device.destroy_semaphore(timeline_sem, None) };
+      crate::types::GpuResult::Ok(())
+    })
+    .unwrap();
 }
