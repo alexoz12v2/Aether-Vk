@@ -109,7 +109,7 @@ mod tests {
 
     let dt: timeus_t = 16_667; // 60 FPS
     let mut current_time: timeus_t = 0;
-    let end_time: timeus_t = (duration_seconds * 1_000_000.0) as timeus_t;
+    let end_time: timeus_t = dt;
 
     while current_time < end_time {
       simulation_step(

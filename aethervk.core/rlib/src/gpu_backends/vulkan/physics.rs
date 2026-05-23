@@ -247,6 +247,7 @@ pub struct BpClearPushConstants {
   pub out_rb_rb: u64,
   pub out_rb_ps: u64,
   pub out_rb_lca: u64,
+  pub out_internal: u64,
 }
 
 /// `bp_bounds_gen.comp` — 28 bytes
@@ -1014,6 +1015,7 @@ impl VulkanComputeKernels {
 
     let payload_size = (core::mem::size_of::<T>() * capacity.max(1)) as u64;
     let size = payload_size + if is_list { 16 } else { 0 };
+    aethervk_oshal_rlib::log!("VMA CREATE BUFFER T: {}, capacity: {}, is_list: {}, size: {}", core::any::type_name::<T>(), capacity, is_list, size);
 
     let sharing_mode = if self.queue_sharing_info.mode == crate::gpu::SharingMode::Concurrent {
       vk::SharingMode::CONCURRENT
@@ -1794,12 +1796,14 @@ impl VulkanComputeKernels {
     out_rb_rb: u64,
     out_rb_ps: u64,
     out_rb_lca: u64,
+    internal_pairs: u64,
   ) {
     let pc = BpClearPushConstants {
       raw_scene_pairs,
       out_rb_rb,
       out_rb_ps,
       out_rb_lca,
+      out_internal: internal_pairs,
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
@@ -3972,6 +3976,7 @@ impl Kernels for Device {
     out_rb_rb_addr: u64,
     out_rb_ps_addr: u64,
     out_rb_lca_addr: u64,
+    internal_pairs_addr: u64,
   ) -> EngineResult<()> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
@@ -3983,6 +3988,7 @@ impl Kernels for Device {
           out_rb_rb_addr,
           out_rb_ps_addr,
           out_rb_lca_addr,
+          internal_pairs_addr,
         );
         Ok(())
       })
@@ -4074,7 +4080,7 @@ impl Kernels for Device {
   fn bp_cross_lca(
     &self,
     cmd: &mut Self::Cmd,
-    frames: &Self::Buffer<GpuReferenceFrame>,
+    scene_entities: &Self::Buffer<RigidBodyImex>,
     lca_query_pairs_addr: u64,
     output_internal_pairs_addr: u64,
     total_queries: u32,
@@ -4085,7 +4091,7 @@ impl Kernels for Device {
         self.kernels.bp_cross_lca(
           &self.device,
           cmd,
-          frames.address,
+          scene_entities.address,
           lca_query_pairs_addr,
           output_internal_pairs_addr,
           total_queries,

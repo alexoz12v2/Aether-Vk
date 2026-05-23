@@ -217,6 +217,8 @@ where
   let emitters = AutoDiscard::new(kernels.build_emitters(&mut cmd, scene)?, |b| kernels.discard_buffer(b));
   // Reference frames for LCA broad-phase (macro frame is always index 0)
   let frames = AutoDiscard::new(kernels.build_frames(&mut cmd, physical_scene)?, |b| kernels.discard_buffer(b));
+  aethervk_oshal_rlib::log!("PRINT_ADDR rigid_bodies: 0x{:x}", rigid_bodies.address());
+  aethervk_oshal_rlib::log!("PRINT_ADDR frames: 0x{:x}", frames.address());
 
   // ── 2. Sun position (for particle emission) ───────────────────────────────
   let mut sun_pos = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero();
@@ -281,10 +283,13 @@ where
       //  as a placeholder TLAS address until a proper TLAS builder is wired in.)
       let tlas_bvh_addr = tlas_addr;
       let raw_pairs = AutoDiscard::new(kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 10_000)?, |b| kernels.discard_list(b));
+      aethervk_oshal_rlib::log!("PRINT_ADDR raw_pairs: 0x{:x}", raw_pairs.address());
       let rb_rb_pairs = AutoDiscard::new(kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 4_000)?, |b| kernels.discard_list(b));
       let rb_ps_pairs = AutoDiscard::new(kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 4_000)?, |b| kernels.discard_list(b));
       let rb_lca_pairs = AutoDiscard::new(kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 2_000)?, |b| kernels.discard_list(b));
       let query_leaves = AutoDiscard::new(kernels.build_leaves(&mut cmd, n_entities as usize)?, |b| kernels.discard_buffer(b));
+
+      let internal_pairs = AutoDiscard::new(kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 1000)?, |b| kernels.discard_list(b));
 
       kernels.bp_clear(
         &mut cmd,
@@ -292,6 +297,7 @@ where
         rb_rb_pairs.address(),
         rb_ps_pairs.address(),
         rb_lca_pairs.address(),
+        internal_pairs.address(),
       )?;
       kernels.bp_bounds_gen(&mut cmd, &rigid_bodies, query_leaves.address(), n_entities, dt)?;
       kernels.bp_scene(
@@ -316,7 +322,7 @@ where
       if frames.capacity() > 1 {
         kernels.bp_cross_lca(
           &mut cmd,
-          &frames,
+          &rigid_bodies,
           rb_lca_pairs.address(),
           internal_pairs.address(),
           frames.capacity() as u32,

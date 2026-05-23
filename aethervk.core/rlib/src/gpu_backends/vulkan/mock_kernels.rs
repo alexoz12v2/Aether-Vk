@@ -104,9 +104,9 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         Ok(())
     }
 
-    fn bp_clear(&self, cmd: &mut Self::Cmd, raw_pairs_addr: u64, out_rb_rb_addr: u64, out_rb_ps_addr: u64, out_rb_lca_addr: u64) -> EngineResult<()> { 
+    fn bp_clear(&self, cmd: &mut Self::Cmd, raw_pairs_addr: u64, out_rb_rb_addr: u64, out_rb_ps_addr: u64, out_rb_lca_addr: u64, out_internal: u64) -> EngineResult<()> { 
         if self.target == MockTargetShader::BpClear {
-            self.base.bp_clear(cmd, raw_pairs_addr, out_rb_rb_addr, out_rb_ps_addr, out_rb_lca_addr)?;
+            self.base.bp_clear(cmd, raw_pairs_addr, out_rb_rb_addr, out_rb_ps_addr, out_rb_lca_addr, out_internal)?;
         }
         Ok(())
     }
@@ -132,9 +132,9 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         Ok(())
     }
 
-    fn bp_cross_lca(&self, cmd: &mut Self::Cmd, frames: &Self::Buffer<GpuReferenceFrame>, lca_query_pairs_addr: u64, output_internal_pairs_addr: u64, total_queries: u32) -> EngineResult<()> { 
+    fn bp_cross_lca(&self, cmd: &mut Self::Cmd, scene_entities: &Self::Buffer<RigidBodyImex>, lca_query_pairs_addr: u64, output_internal_pairs_addr: u64, total_queries: u32) -> EngineResult<()> { 
         if self.target == MockTargetShader::BpCrossLca {
-            self.base.bp_cross_lca(cmd, frames, lca_query_pairs_addr, output_internal_pairs_addr, total_queries)?;
+            self.base.bp_cross_lca(cmd, scene_entities, lca_query_pairs_addr, output_internal_pairs_addr, total_queries)?;
         }
         Ok(())
     }

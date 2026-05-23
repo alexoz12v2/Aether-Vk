@@ -49,6 +49,7 @@ pub const BVH_FRAME_MICRO:  u32 = 1;
 pub const BVH_SHAPE_AABB:   u32 = 0;
 pub const BVH_SHAPE_OBB:    u32 = 1;
 pub const BVH_SHAPE_SPHERE: u32 = 2;
+pub const BVH_SHAPE_SUB_TLAS: u32 = 3;
 
 pub fn pack_meta(is_leaf: bool, frame: u32, shape: u32, index: u32) -> u32 {
   let mut m = index & 0x07FF_FFFF;
@@ -281,7 +282,7 @@ impl PhysicsScene {
         mn = rbvh.nodes[0].min;
         mx = rbvh.nodes[0].max;
       }
-      macro_leaves.push((frame_idx, mn, mx, BVH_SHAPE_OBB, BVH_FRAME_MACRO));
+      macro_leaves.push((frame_idx, mn, mx, BVH_SHAPE_SUB_TLAS, BVH_FRAME_MACRO));
       micro_tlases.insert(frame_idx, rbvh);
     }
 

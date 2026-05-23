@@ -113,7 +113,7 @@
                          ToolTip.Tip="Radius from Horizon JPL physical properties. You may override it." />
         </Grid>
         
-        <Grid ColumnDefinitions="*, Auto" Margin="0,16,0,0">
+        <Grid ColumnDefinitions="*, Auto, Auto" Margin="0,16,0,0">
           <StackPanel Grid.Column="0" Spacing="12" Margin="0,0,16,0">
             <TextBlock Text="Position" FontWeight="Bold" />
             <Grid ColumnDefinitions="*,*,*">
@@ -144,8 +144,17 @@
             </Grid>
           </StackPanel>
 
+          <!-- Frames -->
+          <StackPanel Grid.Column="1" Spacing="8" Margin="16,0,0,0">
+            <TextBlock Text="User Local Frame" FontWeight="Bold" />
+            <TextBlock Text="{Binding UserLocalFrameString}" FontFamily="Consolas, Courier New, monospace" FontSize="12" />
+            
+            <TextBlock Text="Simulation Local Frame" FontWeight="Bold" Margin="0,8,0,0" />
+            <TextBlock Text="{Binding SimulationLocalFrameString}" FontFamily="Consolas, Courier New, monospace" FontSize="12" />
+          </StackPanel>
+
           <!-- Gizmo -->
-          <Border Grid.Column="1" Width="150" Height="150" Background="{DynamicResource Bg.Outline}" CornerRadius="8" Padding="16" VerticalAlignment="Top">
+          <Border Grid.Column="2" Width="150" Height="150" Background="{DynamicResource Bg.Outline}" CornerRadius="8" Padding="16" VerticalAlignment="Top">
             <controls:RotationGizmo Pitch="{Binding Pitch}" Yaw="{Binding Yaw}" Roll="{Binding Roll}" />
           </Border>
         </Grid>

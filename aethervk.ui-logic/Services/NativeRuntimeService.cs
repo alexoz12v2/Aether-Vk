@@ -22,6 +22,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   private readonly object _nativeLock = new object();
   private int _activeDownloads = 0;
   private bool _isDisposing = false;
+  private readonly HashSet<ulong> _activePresentationEngines = new();
 
   private readonly SceneStateManager _sceneStateManager;
   private readonly ConsoleService _consoleService;
@@ -590,12 +591,18 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   {
     if (_simulationContext == IntPtr.Zero)
       return 0;
-    return NativeInterop.avkSimulationContext_createPresentationEngine(
+    
+    ulong id = NativeInterop.avkSimulationContext_createPresentationEngine(
       _simulationContext,
       width,
       height,
       sceneId
     );
+    if (id != 0)
+    {
+      _activePresentationEngines.Add(id);
+    }
+    return id;
   }
 
   public ulong AddPerspectiveCamera(
@@ -728,6 +735,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   {
     if (_simulationContext != IntPtr.Zero && handle != 0)
     {
+      _activePresentationEngines.Remove(handle);
       NativeInterop.avkSimulationContext_destroyPresentationEngine(
         _simulationContext,
         sceneId,
@@ -1140,6 +1148,74 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return instanceId;
   }
 
+  public async Task<ulong> SpawnCometAsync(
+    ulong sceneId,
+    ulong modelId,
+    string name,
+    float posX, float posY, float posZ,
+    float rotW, float rotX, float rotY, float rotZ,
+    float radiusKm
+  )
+  {
+    var result = SpawnComet(sceneId, modelId, name, posX, posY, posZ, rotW, rotX, rotY, rotZ, radiusKm, 1); // 1 = PhysicsType.Kinematic / whatever default is
+    return result.CometEntityId;
+  }
+
+  public (ulong LcaFrameId, ulong CometEntityId) SpawnComet(
+    ulong sceneId,
+    ulong modelId,
+    string name,
+    float posX, float posY, float posZ,
+    float rotW, float rotX, float rotY, float rotZ,
+    float radiusKm,
+    uint physicsType
+  )
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return (0, 0);
+
+    if (NativeInterop.avkSimulationContext_spawnComet(
+      _simulationContext,
+      sceneId,
+      modelId,
+      name,
+      posX, posY, posZ,
+      rotW, rotX, rotY, rotZ,
+      radiusKm,
+      physicsType,
+      out var result
+    ))
+    {
+      var lcaEntity = new Entity(sceneId, result.LcaFrameId, name + "_LCA");
+      var cometEntity = new Entity(sceneId, result.CometEntityId, name);
+      
+      var state = _sceneStateManager.GetOrCreateScene(sceneId);
+      
+      state.EntityMap[result.LcaFrameId] = lcaEntity;
+      state.EntityMap[result.CometEntityId] = cometEntity;
+      
+      WireEntityComponents(sceneId, lcaEntity);
+      WireEntityComponents(sceneId, cometEntity);
+
+      cometEntity.Components.Add(new ParticleEmitterCirclesComponent());
+      cometEntity.Components.Add(new SphericalGizmoComponent());
+      
+      // Nest under root
+      var root = GetEntityByName(sceneId, "root");
+      if (root != null)
+        root.Children.Add(lcaEntity);
+      else
+        state.RootEntities.Add(lcaEntity);
+
+      // Nest under LCA frame
+      lcaEntity.Children.Add(cometEntity);
+
+      return (result.LcaFrameId, result.CometEntityId);
+    }
+
+    return (0, 0);
+  }
+
   public Entity? SpawnEntity(ulong sceneId, string name)
   {
     if (_simulationContext == IntPtr.Zero) return null;
@@ -1175,61 +1251,19 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return success;
   }
 
+
+
   /// <summary>
-  /// Synchronously spawns a comet entity hierarchy: an LCA micro-frame parent entity and
-  /// the comet mesh child entity. Both are mirrored into the C# scene tree.
+  /// Retrieves the model local frames (user-defined and simulation frames).
   /// </summary>
-  /// <returns>
-  /// A tuple of (lcaFrameId, cometEntityId). Both are 0 on failure.
-  /// </returns>
-  public (ulong lcaFrameId, ulong cometEntityId) SpawnComet(
-    ulong sceneId,
-    ulong modelId,
-    string entityName,
-    float posX, float posY, float posZ,
-    float rotW, float rotX, float rotY, float rotZ,
-    float radiusKm,
-    uint physicsType)
+  public bool GetModelLocalFrames(ulong modelId, out NativeInterop.FfiMat3 userFrame, out NativeInterop.FfiMat3 simFrame)
   {
+    userFrame = default;
+    simFrame = default;
     if (_simulationContext == IntPtr.Zero)
-      return (0, 0);
+      return false;
 
-    bool ok = NativeInterop.avkSimulationContext_spawnComet(
-      _simulationContext, sceneId, modelId, entityName,
-      posX, posY, posZ, rotW, rotX, rotY, rotZ,
-      radiusKm, physicsType,
-      out var ffiResult);
-
-    if (!ok)
-      return (0, 0);
-
-    var state = _sceneStateManager.GetOrCreateScene(sceneId);
-
-    // ── Mirror LCA micro-frame entity ────────────────────────────────────────
-    var lcaFrameName = $"{entityName}_microframe";
-    var lcaEntity = new Entity(sceneId, ffiResult.LcaFrameId, lcaFrameName);
-    state.EntityMap[ffiResult.LcaFrameId] = lcaEntity;
-    WireEntityComponents(sceneId, lcaEntity);
-    lcaEntity.Components.Add(new TransformComponent { PosX = posX, PosY = posY, PosZ = posZ });
-
-    // Nest under root
-    var root = GetEntityByName(sceneId, "root");
-    if (root != null)
-      root.Children.Add(lcaEntity);
-    else
-      state.RootEntities.Add(lcaEntity);
-
-    // ── Mirror comet mesh entity ──────────────────────────────────────────────
-    var cometEntity = new Entity(sceneId, ffiResult.CometEntityId, entityName);
-    state.EntityMap[ffiResult.CometEntityId] = cometEntity;
-    WireEntityComponents(sceneId, cometEntity);
-    cometEntity.Components.Add(new TransformComponent());  // pos=0 in micro-frame
-    cometEntity.Components.Add(new CometComponent());
-
-    // Nest under LCA frame
-    lcaEntity.Children.Add(cometEntity);
-
-    return (ffiResult.LcaFrameId, ffiResult.CometEntityId);
+    return NativeInterop.avkSimulationContext_getModelLocalFrames(_simulationContext, modelId, out userFrame, out simFrame);
   }
 
   /// <summary>
@@ -1335,6 +1369,25 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     if (_simulationContext != IntPtr.Zero)
     {
       NativeInterop.avkSimulationContext_pauseScene(_simulationContext, sceneId);
+    }
+  }
+
+  public ulong SpawnBillboard(ulong sceneId, string imagePath)
+  {
+    lock (_nativeLock)
+    {
+      if (_simulationContext != IntPtr.Zero)
+      {
+        if (NativeInterop.avkSimulationContext_spawnBillboard(_simulationContext, sceneId, imagePath, out ulong entityId))
+        {
+          var entity = new Entity(sceneId, entityId, "Billboard");
+          var state = _sceneStateManager.GetOrCreateScene(sceneId);
+          state.EntityMap[entityId] = entity;
+          state.RootEntities.Add(entity);
+          return entityId;
+        }
+      }
+      return 0;
     }
   }
 
@@ -1621,6 +1674,45 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
 
     return 0;
+  }
+
+  public bool SnapshotScene(ulong sceneId)
+  {
+    lock (_nativeLock)
+    {
+      if (_simulationContext != IntPtr.Zero)
+      {
+        return NativeInterop.avkSimulationContext_snapshotScene(_simulationContext, sceneId);
+      }
+      return false;
+    }
+  }
+
+  public bool RestoreSnapshot(ulong sceneId)
+  {
+    lock (_nativeLock)
+    {
+      if (_simulationContext != IntPtr.Zero)
+      {
+        bool result = NativeInterop.avkSimulationContext_restoreSnapshot(_simulationContext, sceneId);
+        if (result)
+        {
+          // Sync entities so UI updates immediately
+          SyncEntities(sceneId);
+          if (_uiThreadDispatcher != null)
+          {
+            _uiThreadDispatcher.Dispatch(() =>
+            {
+              WeakReferenceMessenger.Default.Send(
+                new AetherVk.Logic.Messages.SimulationStateUpdatedMessage(sceneId)
+              );
+            });
+          }
+          return true;
+        }
+      }
+      return false;
+    }
   }
 
   private void WireEntityComponents(ulong sceneId, Entity entity)

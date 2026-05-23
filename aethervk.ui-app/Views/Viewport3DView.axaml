@@ -16,9 +16,30 @@
                 <ContextMenu>
                     <!-- Fallback if context is not main window -->
                     <MenuItem Header="Spawn Comet" Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).OpenSpawnCometDialogCommand, FallbackValue={x:Null}}" />
+                    <MenuItem Header="Insert Image Billboard" Command="{Binding $parent[UserControl].((vm:Viewport3DViewModel)DataContext).InsertBillboardCommand, FallbackValue={x:Null}}" />
                 </ContextMenu>
             </Image.ContextMenu>
         </Image>
+
+        <ItemsControl ItemsSource="{Binding Billboards}" IsHitTestVisible="False">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <Canvas />
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="vm:BillboardViewModel">
+                    <Image Source="{Binding ImageSource}" Width="{Binding Width}" Height="{Binding Height}" />
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+            <ItemsControl.Styles>
+                <Style Selector="ContentPresenter" x:DataType="vm:BillboardViewModel">
+                    <Setter Property="Canvas.Left" Value="{Binding X}" />
+                    <Setter Property="Canvas.Top" Value="{Binding Y}" />
+                    <Setter Property="ZIndex" Value="{Binding ZIndex}" />
+                </Style>
+            </ItemsControl.Styles>
+        </ItemsControl>
 
         <StackPanel HorizontalAlignment="Right" VerticalAlignment="Top" Margin="10" Spacing="5" IsVisible="{Binding IsInitialized}">
             <Border Padding="5" CornerRadius="4" Background="{DynamicResource Bg.Surface}" Opacity="0.8" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1">

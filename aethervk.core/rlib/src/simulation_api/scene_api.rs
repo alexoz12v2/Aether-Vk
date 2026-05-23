@@ -357,8 +357,7 @@ impl SimulationContext {
       .with_cursor_entity(cursor_entity)?
       .with_sun_entity(sun_entity)?
       .with_grid_entity(grid_entity)?
-      .with_sky_entity(sky_entity)?
-      .with_physics_scene();
+      .with_sky_entity(sky_entity)?;
     let scene_ctx = Arc::new(RwLock::new(scene_ctx_obj));
 
     if let Some(tx) = self.threads.render_thread.tx_opt() {
@@ -517,6 +516,17 @@ impl SimulationContext {
       },
     )?;
 
+    // Add bounding box collider to LCA micro frame to enclose the particles
+    scene_ctx.scene.add_component(
+      lca_id,
+      crate::scene::ColliderComponent {
+        shape: crate::scene::ColliderShape::OBB { half_extents: Vec3f32::from_components(0.01, 0.01, 0.01) },
+        mass: 0.0,
+        restitution: 0.0,
+        friction: 0.0,
+      }
+    )?;
+
     // SOI radius: capped at 1 AU; also capped from below at 0.01 AU so the
     // micro-frame is never degenerate even for a sun-grazing comet.
     let dist_au =
@@ -544,11 +554,13 @@ impl SimulationContext {
     let bounding_sphere = compute_bounding_sphere_radius(&mesh_arc.vertices);
     let mesh_scale = if bounding_sphere > 0.0 { radius_km / bounding_sphere } else { 1.0 };
 
+    let sim_local_rotation = mesh_arc.bf_to_pa.unwrap_or(Quat::identity());
+
     scene_ctx.scene.add_component(
       comet_id,
       TransformComponent {
         position: Vec3f32::from_components(0.0, 0.0, 0.0),
-        rotation,
+        rotation: rotation * sim_local_rotation,
         scale: Vec3f32::from_components(mesh_scale, mesh_scale, mesh_scale),
       },
     )?;
@@ -582,7 +594,7 @@ impl SimulationContext {
 
     scene_ctx.scene.add_component(
       comet_id,
-      ParticleEmitterCirclesComponent { circles: alloc::vec::Vec::new() },
+      ParticleEmitterCirclesComponent { circles: alloc::vec::Vec::new(), child_entities: alloc::vec::Vec::new() },
     )?;
 
     // Physics-type specific components
@@ -744,7 +756,7 @@ impl SimulationContext {
 
     scene_ctx.scene.add_component(
       mesh_id,
-      crate::scene::particles::ParticleEmitterCirclesComponent { circles: alloc::vec::Vec::new() },
+      crate::scene::particles::ParticleEmitterCirclesComponent { circles: alloc::vec::Vec::new(), child_entities: alloc::vec::Vec::new() },
     )?;
 
     scene_ctx.scene.set_parent(mesh_id, Some(lca_id));
