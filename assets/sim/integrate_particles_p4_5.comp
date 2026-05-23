@@ -18,7 +18,6 @@
 // Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
 
 #version 450 core
-#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference       : require
 #extension GL_EXT_scalar_block_layout    : require
 #extension GL_KHR_shader_subgroup_basic  : require
@@ -27,16 +26,6 @@
 #include "../debug_utils.glsl"
 #include "../bvh_utils.glsl"   // SUBGROUP_SIZE specialization constant
 #include "imex_math.glsl"      // add64
-
-// ─── AOSOA particle data ────────────────────────────────────────────────────
-layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleData {
-    float data[];
-};
-
-// ─── 64-bit engine clock (lo, hi) ───────────────────────────────────────────
-layout(buffer_reference, scalar, buffer_reference_align = 8) buffer ClockBuffer {
-    uvec2 global_time_us;  // lo = [0], hi = [1] — stored as uvec2 (x=lo, y=hi)
-};
 
 // ─── Push constants (40 bytes) ──────────────────────────────────────────────
 layout(push_constant, scalar) uniform PushConstants {
@@ -53,10 +42,6 @@ layout(push_constant, scalar) uniform PushConstants {
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
 void main() {
-    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
-        debugPrintfEXT("Executing compute shader: integrate_particles_p4_5.comp\n");
-    }
-
     uint gid = gl_GlobalInvocationID.x;
 
     // ── Thread 0: advance the 64-bit engine clock exactly once per frame ─────
@@ -98,14 +83,7 @@ void main() {
     vec3 v_next = v_half + f_next * inv_m * half_dt;
 
     // Write v_{n+1} back — force buffer stays intact for next frame
-    pc.particles.data[base + 3u * SUBGROUP_SIZE] = v_next.x;
-    pc.particles.data[base + 4u * SUBGROUP_SIZE] = v_next.y;
-    pc.particles.data[base + 5u * SUBGROUP_SIZE] = v_next.z;
-
-    if (SHOULD_DEBUG_PRINT) {
-        debugPrintfEXT("[p4_5] id=%d  v_next=(%.4f,%.4f,%.4f)  f_next=(%.4f,%.4f,%.4f)\n",
-            gid,
-            v_next.x, v_next.y, v_next.z,
-            f_next.x, f_next.y, f_next.z);
-    }
+    pc.particles.data[base + 3u * SUBGROUP_SIZE] = floatBitsToUint(v_next.x);
+    pc.particles.data[base + 4u * SUBGROUP_SIZE] = floatBitsToUint(v_next.y);
+    pc.particles.data[base + 5u * SUBGROUP_SIZE] = floatBitsToUint(v_next.z);
 }

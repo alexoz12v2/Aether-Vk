@@ -1,0 +1,170 @@
+// ---------------------------------
+// @assets/sim/lcp_solver_cross.comp
+//
+// Calculates effective mass natively in kg, returning an impulse formatted purely in micro units
+// (kg * km / s)
+// ---------------------------------
+
+#version 450 core
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "../bvh_utils.glsl"
+#include "imex_math.glsl"
+
+layout(local_size_x = 128) in;
+
+layout(push_constant, scalar) uniform PushConstants {
+    RigidBodyArray rigid_bodies;
+    CrossSparseCollisions collisions;
+    ImpulseOutput outputs;
+    LcaEntityArray lca_entities;
+    float dt;
+    float restitution;
+} pc;
+
+void generate_tangents(vec3 normal, out vec3 t1, out vec3 t2) {
+    if (abs(normal.x) >= 0.57735) {
+        t1 = normalize(vec3(normal.y, -normal.x, 0.0));
+    } else {
+        t1 = normalize(vec3(0.0, normal.z, -normal.y));
+    }
+    t2 = cross(normal, t1);
+}
+
+// Computes Effective Mass for the Micro Entity (native space)
+float compute_eff_mass_micro(vec3 dir, vec3 r, float invM, vec3 invI, vec4 q) {
+    vec3 I_cross = quat_rotate(q, invI * quat_rotate_inv(q, cross(r, dir)));
+    return dot(I_cross, cross(r, dir)) + invM;
+}
+
+// Computes Effective Mass for the Macro Entity (translated space)
+float compute_eff_mass_macro(vec3 dir_lca, vec3 r_lca, float invM_kg, vec3 invI_kgkm, vec4 q_world, mat3 rot_lca_to_world) {
+    // Bring the moment arm and collision direction into the Macro entity's native World Space orientation
+    vec3 r_world = rot_lca_to_world * r_lca;
+    vec3 dir_world = rot_lca_to_world * dir_lca;
+
+    // Evaluate the inertia mathematically natively in World Space
+    vec3 I_cross_world = quat_rotate(q_world, invI_kgkm * quat_rotate_inv(q_world, cross(r_world, dir_world)));
+
+    // Bring the resulting torque-response back into the Micro LCA Space to calculate the scalar effective mass
+    vec3 I_cross_lca = transpose(rot_lca_to_world) * I_cross_world;
+    return dot(I_cross_lca, cross(r_lca, dir_lca)) + invM_kg;
+}
+
+void main() {
+    uint contact_idx = gl_GlobalInvocationID.x;
+    if (contact_idx >= pc.collisions.count) return;
+
+    CrossCollisionData pair = pc.collisions.pairs[contact_idx];
+    if (pair.valid == 0u) return;
+
+    // Load from scalar float references
+    uint baseA = pair.macro_id;
+    uint baseB = pair.micro_id;
+
+    RigidBody macro_ent = pc.rigid_bodies.bodies[baseA];
+    RigidBody micro_ent = pc.rigid_bodies.bodies[baseB];
+    LcaEntity lca = pc.lca_entities.entities[pair.lca_id];
+
+    mat3 rot_lca_to_world = mat3(lca.transform);
+    mat3 rot_world_to_lca = mat3(lca.inv_transform);
+
+    // ==========================================
+    // 1. Promote Macro Body to Micro Local Space
+    // ==========================================
+    float massA_earth = macro_ent.position_mass.w;
+    float invMA = (massA_earth > 0.0) ? 1.0 / (massA_earth * M_EARTH_TO_KG) : 0.0;
+
+    // Inertia I scales as M * R^2. So I_micro = I_macro * (M_EARTH_TO_KG * AU_TO_KM^2).
+    vec3 invIA = macro_ent.inertia_tensor_inv.xyz / (M_EARTH_TO_KG * AU_TO_KM * AU_TO_KM);
+    vec4 qA = macro_ent.orientation;
+
+    vec3 pos_A = (lca.inv_transform * vec4(macro_ent.position_mass.xyz, 1.0)).xyz * AU_TO_KM;
+    vec3 vA_init = rot_world_to_lca * (macro_ent.linear_vel_drag.xyz - lca.linear_velocity) * AU_TO_KM;
+    vec3 wA_init = rot_world_to_lca * macro_ent.angular_vel_drag.xyz;
+
+    // ==========================================
+    // 2. Load Native Micro Body Data
+    // ==========================================
+    float massB = micro_ent.position_mass.w;
+    float invMB = (massB > 0.0) ? 1.0 / massB : 0.0;
+    vec3 invIB = micro_ent.inertia_tensor_inv.xyz;
+    vec4 qB = micro_ent.orientation;
+
+    vec3 pos_B = micro_ent.position_mass.xyz;
+    vec3 vB_init = micro_ent.linear_vel_drag.xyz;
+    vec3 wB_init = micro_ent.angular_vel_drag.xyz;
+
+    // ==========================================
+    // 3. Collision Frame & Effective Mass
+    // ==========================================
+    vec3 n = pair.contact_normal;
+    vec3 t1, t2; generate_tangents(n, t1, t2);
+
+    vec3 rA = pair.contact_point - pos_A;
+    vec3 rA_world = rot_lca_to_world * rA;
+    vec3 rB = pair.contact_point - pos_B;
+
+    float eff_m_n = 1.0 / max(compute_eff_mass_macro(n, rA, invMA, invIA, qA, rot_lca_to_world) + compute_eff_mass_micro(n, rB, invMB, invIB, qB), 1e-6);
+    float eff_m_t1 = 1.0 / max(compute_eff_mass_macro(t1, rA, invMA, invIA, qA, rot_lca_to_world) + compute_eff_mass_micro(t1, rB, invMB, invIB, qB), 1e-6);
+    float eff_m_t2 = 1.0 / max(compute_eff_mass_macro(t2, rA, invMA, invIA, qA, rot_lca_to_world) + compute_eff_mass_micro(t2, rB, invMB, invIB, qB), 1e-6);
+
+    vec3 v_rel_init = (vB_init + cross(wB_init, rB)) - (vA_init + cross(wA_init, rA));
+    float bounce = dot(v_rel_init, n) < -0.1 ? -pc.restitution * dot(v_rel_init, n) : 0.0;
+    float target_v_n = bounce + ((0.2 / max(pc.dt, 1e-6)) * max(pair.penetration_depth - 0.01, 0.0));
+
+    // ==========================================
+    // 4. Sequential Impulse Solver Loop
+    // ==========================================
+    float jn_acc = 0.0, jt1_acc = 0.0, jt2_acc = 0.0;
+    vec3 vA = vA_init, wA = wA_init;
+    vec3 vB = vB_init, wB = wB_init;
+
+    for (int iter = 0; iter < 20; ++iter) {
+        vec3 v_rel = (vB + cross(wB, rB)) - (vA + cross(wA, rA));
+
+        // --- Normal Impulse ---
+        float jn_delta = eff_m_n * (-dot(v_rel, n) + target_v_n);
+        float new_jn = max(jn_acc + jn_delta, 0.0);
+        jn_delta = new_jn - jn_acc; jn_acc = new_jn;
+        vec3 P_n = jn_delta * n;
+
+        if (invMA > 0.0) {
+            vA -= P_n * invMA;
+            vec3 torqueA_world = cross(rA_world, rot_lca_to_world * -P_n);
+            wA += rot_world_to_lca * quat_rotate(qA, invIA * quat_rotate_inv(qA, torqueA_world));
+        }
+        if (invMB > 0.0) {
+            vB += P_n * invMB;
+            wB += quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, P_n)));
+        }
+
+        // --- Friction Impulses ---
+        v_rel = (vB + cross(wB, rB)) - (vA + cross(wA, rA));
+        float max_fric = 0.5 * jn_acc;
+
+        float jt1_delta = eff_m_t1 * (-dot(v_rel, t1));
+        float new_jt1 = clamp(jt1_acc + jt1_delta, -max_fric, max_fric);
+        jt1_delta = new_jt1 - jt1_acc; jt1_acc = new_jt1;
+
+        float jt2_delta = eff_m_t2 * (-dot(v_rel, t2));
+        float new_jt2 = clamp(jt2_acc + jt2_delta, -max_fric, max_fric);
+        jt2_delta = new_jt2 - jt2_acc; jt2_acc = new_jt2;
+
+        vec3 P_t = jt1_delta * t1 + jt2_delta * t2;
+
+        if (invMA > 0.0) {
+            vA -= P_t * invMA;
+            vec3 torqueA_world = cross(rA_world, rot_lca_to_world * -P_t);
+            wA += rot_world_to_lca * quat_rotate(qA, invIA * quat_rotate_inv(qA, torqueA_world));
+        }
+        if (invMB > 0.0) {
+            vB += P_t * invMB;
+            wB += quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, P_t)));
+        }
+    }
+
+    pc.outputs.impulses[contact_idx] = jn_acc * n + jt1_acc * t1 + jt2_acc * t2; // Natively stored in kg * km / s
+}

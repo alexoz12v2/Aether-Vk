@@ -1,111 +1,60 @@
 #version 450 core
-#extension GL_EXT_debug_printf : enable
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_KHR_shader_subgroup_ballot : require
 
 #include "../bvh_utils.glsl"
-
-// Bind the local size to specialization constant ID 0 (SUBGROUP_SIZE)
-#include "../debug_utils.glsl"
 layout(local_size_x_id = 0) in;
 
-// Define a Write-Only version to avoid colliding with the readonly MultiBvhBuffer in bvh_utils.glsl
-layout(buffer_reference, scalar, buffer_reference_align = 16) writeonly buffer MultiBvhBufferWO {
-    MultiBvhNode nodes[];
-};
-
-layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer CollapseMapBuffer {
-    uint binary_roots[];
-};
-
 layout(push_constant, scalar) uniform PushConstants {
-    BVHArray binary_bvh; // Reused from bvh_utils.glsl
-    MultiBvhBufferWO multi_bvh;
+    MultiBvhBuffer binary_bvh;
+    MultiBvhBuffer multi_bvh;
     CollapseMapBuffer collapse_map;
     uint num_multi_nodes;
 } pc;
 
 void main() {
-    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
-        debugPrintfEXT("Executing compute shader: lbvh_collapse.comp\n");
-    }
-
-    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
-        debugPrintfEXT("Hello from lbvh_collapse.comp!\\n");
-    }
     uint multi_node_idx = gl_WorkGroupID.x;
     if (multi_node_idx >= pc.num_multi_nodes) return;
 
-    uint lane_id = gl_SubgroupInvocationID;
+    uint lane = gl_SubgroupInvocationID, binary_idx = pc.collapse_map.binary_roots[multi_node_idx];
+    bool is_leaf = false; uint payload = 0, f_parent = 0, f_dir = 0;
 
-    uint current_binary_idx = pc.collapse_map.binary_roots[multi_node_idx];
-    bool is_leaf = false;
-    uint payload = 0;
+    int depth = findMSB(SUBGROUP_SIZE) - 1;
+    for (int d = depth; d >= 0; d--) {
+        uint dir = (lane >> d) & 1u;
+        uint meta = pc.binary_bvh.nodes[binary_idx].metadata[dir];
+        is_leaf = bvh_is_leaf(meta); uint next_idx = bvh_get_index(meta);
 
-    // Descend log2(SUBGROUP_SIZE) levels dynamically.
-    // findMSB(32) = 5 (starts at 4), findMSB(64) = 6 (starts at 5).
-    int max_depth = findMSB(SUBGROUP_SIZE) - 1;
-    for (int d = max_depth; d >= 0; d--) {
-        BVHNodeAABB n = read_bvh_node(pc.binary_bvh, current_binary_idx);
-
-        if (n.primitive_count > 0) {
-            is_leaf = true;
-            payload = n.left_child_or_primitive_offset;
-            break;
-        }
-
-        bool go_right = ((lane_id >> d) & 1u) != 0u;
-        current_binary_idx = go_right ? n.right_child_offset : n.left_child_or_primitive_offset;
+        f_parent = binary_idx; f_dir = dir;
+        if (is_leaf) { payload = next_idx; break; }
+        binary_idx = next_idx;
     }
 
-    // Check if loop ended exactly on a leaf payload
     if (!is_leaf) {
-        BVHNodeAABB n = read_bvh_node(pc.binary_bvh, current_binary_idx);
-        if (n.primitive_count > 0) {
-            is_leaf = true;
-            payload = n.left_child_or_primitive_offset;
-        } else {
-            payload = current_binary_idx; // Points to next MultiBvhNode
-        }
+        payload = binary_idx; f_parent = pc.binary_bvh.nodes[binary_idx].parent_idx;
+        f_dir = (pc.binary_bvh.nodes[f_parent].child_indices[1] == binary_idx) ? 1 : 0;
     }
 
-    BVHNodeAABB n = read_bvh_node(pc.binary_bvh, current_binary_idx);
+    pc.multi_bvh.nodes[multi_node_idx].min_x[lane] = pc.binary_bvh.nodes[f_parent].min_x[f_dir];
+    pc.multi_bvh.nodes[multi_node_idx].max_x[lane] = pc.binary_bvh.nodes[f_parent].max_x[f_dir];
+    pc.multi_bvh.nodes[multi_node_idx].min_y[lane] = pc.binary_bvh.nodes[f_parent].min_y[f_dir];
+    pc.multi_bvh.nodes[multi_node_idx].max_y[lane] = pc.binary_bvh.nodes[f_parent].max_y[f_dir];
+    pc.multi_bvh.nodes[multi_node_idx].min_z[lane] = pc.binary_bvh.nodes[f_parent].min_z[f_dir];
+    pc.multi_bvh.nodes[multi_node_idx].max_z[lane] = pc.binary_bvh.nodes[f_parent].max_z[f_dir];
+    pc.multi_bvh.nodes[multi_node_idx].child_indices[lane] = payload;
+    pc.multi_bvh.nodes[multi_node_idx].metadata[lane] = bvh_pack_metadata(is_leaf, BVH_FRAME_MICRO, BVH_SHAPE_AABB, payload);
+    pc.multi_bvh.nodes[multi_node_idx].masses[lane] = pc.binary_bvh.nodes[f_parent].masses[f_dir];
+    pc.multi_bvh.nodes[multi_node_idx].com_x[lane] = pc.binary_bvh.nodes[f_parent].com_x[f_dir];
+    pc.multi_bvh.nodes[multi_node_idx].com_y[lane] = pc.binary_bvh.nodes[f_parent].com_y[f_dir];
+    pc.multi_bvh.nodes[multi_node_idx].com_z[lane] = pc.binary_bvh.nodes[f_parent].com_z[f_dir];
 
-    // Parallel Subgroup-Coalesced writes straight into the SoA Multi-BVH layout
-    pc.multi_bvh.nodes[multi_node_idx].min_x[lane_id] = n.bound.minBounds.x;
-    pc.multi_bvh.nodes[multi_node_idx].max_x[lane_id] = n.bound.maxBounds.x;
-    pc.multi_bvh.nodes[multi_node_idx].min_y[lane_id] = n.bound.minBounds.y;
-    pc.multi_bvh.nodes[multi_node_idx].max_y[lane_id] = n.bound.maxBounds.y;
-    pc.multi_bvh.nodes[multi_node_idx].min_z[lane_id] = n.bound.minBounds.z;
-    pc.multi_bvh.nodes[multi_node_idx].max_z[lane_id] = n.bound.maxBounds.z;
-
-    pc.multi_bvh.nodes[multi_node_idx].child_indices[lane_id] = payload;
-
-    // Pack Metadata: Particles belong to the Micro Frame with an AABB shape
-    pc.multi_bvh.nodes[multi_node_idx].metadata[lane_id] = bvh_pack_metadata(
-        is_leaf,
-        BVH_FRAME_MICRO,
-        BVH_SHAPE_AABB,
-        payload
-    );
-
-    pc.multi_bvh.nodes[multi_node_idx].masses[lane_id] = n.mass;
-    pc.multi_bvh.nodes[multi_node_idx].com_x[lane_id] = n.center_of_mass.x;
-    pc.multi_bvh.nodes[multi_node_idx].com_y[lane_id] = n.center_of_mass.y;
-    pc.multi_bvh.nodes[multi_node_idx].com_z[lane_id] = n.center_of_mass.z;
-
-    // Write valid mask and permutations only from the first lane
-    if (lane_id == 0) {
-        // Let's just set valid_mask = uvec2(0xFFFFFFFFu, 0xFFFFFFFFu) for now if all are valid
-        pc.multi_bvh.nodes[multi_node_idx].valid_mask = uvec2(0xFFFFFFFFu, 0xFFFFFFFFu);
-
-        // Initialize permutations to identity
-        for (uint i = 0; i < 8; ++i) {
-            for (uint j = 0; j < SUBGROUP_SIZE; ++j) {
-                pc.multi_bvh.nodes[multi_node_idx].permutations[i][j] = j;
-            }
-        }
+    if (lane == 0) {
+        uint mask_x = (SUBGROUP_SIZE >= 32) ? 0xFFFFFFFFu : ((1u << SUBGROUP_SIZE) - 1u);
+        uint mask_y = 0u; if (SUBGROUP_SIZE > 32) mask_y = (SUBGROUP_SIZE >= 64) ? 0xFFFFFFFFu : ((1u << (SUBGROUP_SIZE - 32)) - 1u);
+        pc.multi_bvh.nodes[multi_node_idx].valid_mask = uvec2(mask_x, mask_y);
+        for (uint i = 0; i < 8; ++i)
+            for (uint j = 0; j < SUBGROUP_SIZE; ++j) pc.multi_bvh.nodes[multi_node_idx].permutations[i][j] = j;
     }
 }

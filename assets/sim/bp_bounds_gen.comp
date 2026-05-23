@@ -1,57 +1,38 @@
 // @assets/sim/bp_bounds_gen.comp
 #version 450 core
-#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
 
-#include "imex_math.glsl" // Grants dt_to_seconds()
-
 #include "../debug_utils.glsl"
+#include "../bvh_utils.glsl"
+#include "imex_math.glsl"
+
 layout(local_size_x = 256) in;
 
-struct TLASLeaf {
-    vec3 min_bound; uint entity_idx;
-    vec3 max_bound; uint metadata;
-};
-
-layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer EntityArray { RigidBody entities[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 16) writeonly buffer LeafBuffer { TLASLeaf leaves[]; };
-
 layout(push_constant, scalar) uniform PushConstants {
-    EntityArray scene_entities;
+    RigidBodyArray scene_entities;
     LeafBuffer tlas_leaves;
     uvec2    dt_us;
     uint     total_entities;
 } pc;
 
 void main() {
-    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
-        debugPrintfEXT("Executing compute shader: bp_bounds_gen.comp\n");
-    }
-
-    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
-        debugPrintfEXT("Hello from bp_bounds_gen.comp!\\n");
-    }
     uint id = gl_GlobalInvocationID.x;
     if (id >= pc.total_entities) return;
 
-    EntityArray ents = pc.scene_entities;
-    LeafBuffer leaves_out = pc.tlas_leaves;
-
-    RigidBody me = ents.entities[id];
-    float dt = dt_to_seconds(pc.dt_us);
-
-    vec3 center = me.position_mass.xyz;
-    vec3 extents = me.shape_extents;
-    
+    vec3 center = pc.scene_entities.bodies[id].position_mass.xyz;
+    vec3 extents = pc.scene_entities.bodies[id].shape_extents;
     vec3 static_min = center - extents;
     vec3 static_max = center + extents;
 
     // Swept Volume based on velocity
-    vec3 sweep = me.linear_vel_drag.xyz * dt;
-    
-    leaves_out.leaves[id].min_bound = min(static_min, static_min + sweep);
-    leaves_out.leaves[id].max_bound = max(static_max, static_max + sweep);
-    leaves_out.leaves[id].entity_idx = id;
+    float dt = dt_to_seconds(pc.dt_us);
+    vec3 vel = pc.scene_entities.bodies[id].linear_vel_drag.xyz;
+    vec3 sweep = vel * dt;
+
+    pc.tlas_leaves.leaves[id].min_bound = min(static_min, static_min + sweep);
+    pc.tlas_leaves.leaves[id].max_bound = max(static_max, static_max + sweep);
+    pc.tlas_leaves.leaves[id].entity_idx = id;
+    pc.tlas_leaves.leaves[id].metadata = bvh_pack_metadata(true, BVH_FRAME_MACRO, pc.scene_entities.bodies[id].shape_type, id);
 }

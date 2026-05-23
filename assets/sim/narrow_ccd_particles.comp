@@ -8,10 +8,6 @@
 
 layout(local_size_x = 256) in;
 
-layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer ParticleData {
-    float data[];
-};
-
 layout(push_constant, scalar) uniform PushConstants {
     RigidBodyArray scene_entities;
     PackedCollisions output_list;
@@ -27,10 +23,12 @@ void main() {
     if (p_idx >= pc.num_particles) return;
 
     // Load Particle state
-    uint base = p_idx * 10;
-    vec3 p_pos = vec3(pc.particles.data[base + 0], pc.particles.data[base + 1], pc.particles.data[base + 2]);
-    vec3 p_vel = vec3(pc.particles.data[base + 3], pc.particles.data[base + 4], pc.particles.data[base + 5]);
-    float p_mass = pc.particles.data[base + 8];
+    uint block = p_idx / SUBGROUP_SIZE;
+    uint lane  = p_idx % SUBGROUP_SIZE;
+    uint base  = block * (10u * SUBGROUP_SIZE) + lane;
+    vec3 p_pos = vec3(pc.particles.data[base + 0u * SUBGROUP_SIZE], pc.particles.data[base + 1u * SUBGROUP_SIZE], pc.particles.data[base + 2u * SUBGROUP_SIZE]);
+    vec3 p_vel = vec3(pc.particles.data[base + 3u * SUBGROUP_SIZE], pc.particles.data[base + 4u * SUBGROUP_SIZE], pc.particles.data[base + 5u * SUBGROUP_SIZE]);
+    float p_mass = pc.particles.data[base + 6u * SUBGROUP_SIZE];
     if (p_mass <= 0.0) return;
     float rA = pc.particle_radius;
 
@@ -48,7 +46,7 @@ void main() {
             vec3 v_rel = p_vel - rb_vel;
             float radiusSum = rA + rB;
             float c = dot(p_rel, p_rel) - radiusSum * radiusSum;
-            
+
             float toi = 0.0;
             bool collision_found = false;
 
@@ -109,16 +107,18 @@ void main() {
                 vec3 global_closest = centerB + matB * closest;
 
                 uint count = atomicAdd(pc.output_list.count, 1);
-                PackedPair collision;
-                collision.a.entity_id = 0xFFFFFFFFu; // Particle Sentinel
-                collision.a.primitive_index = p_idx;
-                collision.b.entity_id = rb_idx;
-                collision.b.primitive_index = rb_idx;
-                collision.toi = 0.0;
-                collision.contact_normal = global_normal;
-                collision.contact_point = global_closest;
-                collision.penetration_depth = rA - dist;
-                pc.output_list.pairs[count] = collision;
+                if (count < 4000u) {
+                    PackedPair collision;
+                    collision.a.entity_id = 0xFFFFFFFFu; // Particle Sentinel
+                    collision.a.primitive_index = p_idx;
+                    collision.b.entity_id = rb_idx;
+                    collision.b.primitive_index = rb_idx;
+                    collision.toi = 0.0;
+                    collision.contact_normal = global_normal;
+                    collision.contact_point = global_closest;
+                    collision.penetration_depth = rA - dist;
+                    pc.output_list.pairs[count] = collision;
+                }
             }
         }
     }

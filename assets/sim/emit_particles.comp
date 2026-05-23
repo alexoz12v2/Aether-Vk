@@ -1,113 +1,53 @@
 #version 450 core
-#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_GOOGLE_include_directive : require
 
-#include "../debug_utils.glsl"
 #include "../bvh_utils.glsl"
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
-layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleData {
-    float data[];
-};
-
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer AtomicCounter {
-    uint count;
-};
-
 layout(push_constant, scalar) uniform PushConstants {
-    ParticleData particles;
-    ParticleData candidates;
-    BVHArray bvh;
-    AtomicCounter counter;
-    uint root_index;
-    uint num_candidates;
-    vec3 sun_pos;
+    ParticleData particles; ParticleData candidates; MultiBvhBuffer bvh; AtomicCounters counter;
+    uint root_index; uint num_candidates; vec3 sun_pos;
 } pc;
 
-bool intersectRayAABB(vec3 rayOrigin, vec3 rayDir, vec3 invDir, AABB box, float max_t) {
-    vec3 t0 = (box.minBounds - rayOrigin) * invDir;
-    vec3 t1 = (box.maxBounds - rayOrigin) * invDir;
-    
-    vec3 tmin = min(t0, t1);
-    vec3 tmax = max(t0, t1);
-    
-    float tnear = max(max(tmin.x, tmin.y), tmin.z);
-    float tfar = min(min(tmax.x, tmax.y), tmax.z);
-    
+bool intersectRayAABB(vec3 rO, vec3 rD, vec3 invD, vec3 mi, vec3 mx, float max_t) {
+    vec3 t0 = (mi - rO) * invD, t1 = (mx - rO) * invD, tmin = min(t0, t1), tmax = max(t0, t1);
+    float tnear = max(max(tmin.x, tmin.y), tmin.z), tfar = min(min(tmax.x, tmax.y), tmax.z);
     return tnear <= tfar && tfar > 0.0 && tnear < max_t;
 }
 
 void main() {
-    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
-        debugPrintfEXT("Executing compute shader: emit_particles.comp\n");
-    }
+    uint gid = gl_GlobalInvocationID.x; if (gid >= pc.num_candidates) return;
+    uint stride = 10 * SUBGROUP_SIZE, base = (gid / SUBGROUP_SIZE) * stride + (gid % SUBGROUP_SIZE);
 
-    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
-        debugPrintfEXT("Hello from emit_particles.comp!\\n");
-    }
-    uint global_id = gl_GlobalInvocationID.x;
-    if (global_id >= pc.num_candidates) return;
-
-    // Subgroup size
-    const uint SUBGROUP_SIZE = 32;
-    uint block_idx = global_id / SUBGROUP_SIZE;
-    uint local_idx = global_id % SUBGROUP_SIZE;
-    uint stride = 10 * SUBGROUP_SIZE;
-    uint base = block_idx * stride + local_idx;
-
-    vec3 pos = vec3(
-        pc.candidates.data[base + 0 * SUBGROUP_SIZE],
-        pc.candidates.data[base + 1 * SUBGROUP_SIZE],
-        pc.candidates.data[base + 2 * SUBGROUP_SIZE]
-    );
-    
-    vec3 dir = pc.sun_pos - pos;
-    float dist = length(dir);
+    vec3 pos = vec3(pc.candidates.data[base], pc.candidates.data[base+SUBGROUP_SIZE], pc.candidates.data[base+2*SUBGROUP_SIZE]);
+    vec3 dir = pc.sun_pos - pos; float dist = length(dir);
     if (dist < 1e-5) return;
-    
-    dir /= dist;
-    vec3 invDir = 1.0 / dir;
-    
-    bool occluded = false;
-    uint stack[64];
-    int stackPtr = 0;
-    
-    if (pc.root_index != 0xFFFFFFFF) {
-        stack[stackPtr++] = pc.root_index;
-    }
+    dir /= dist; vec3 invDir = 1.0 / dir;
+
+    bool occluded = false; uint stack[64]; int stackPtr = 0;
+    if (pc.root_index != 0xFFFFFFFFu) stack[stackPtr++] = pc.root_index;
 
     while(stackPtr > 0 && !occluded) {
-        uint node_idx = stack[--stackPtr];
-        BVHNodeAABB node = read_bvh_node(pc.bvh, node_idx);
-        
-        if (intersectRayAABB(pos + dir * 0.1, dir, invDir, node.bound, dist)) {
-            if (node.primitive_count > 0) {
-                // Simplified: Any hit against a leaf node bound counts as occlusion
-                occluded = true;
-            } else {
-                if (node.left_child_or_primitive_offset != 0xFFFFFFFF) {
-                    stack[stackPtr++] = node.left_child_or_primitive_offset;
-                }
-                if (node.right_child_offset != 0xFFFFFFFF) {
-                    stack[stackPtr++] = node.right_child_offset;
-                }
+        uint node = stack[--stackPtr];
+        for (uint i = 0; i < SUBGROUP_SIZE; ++i) {
+            if (!bvh_node_is_valid(pc.bvh.nodes[node].valid_mask, i)) continue;
+            vec3 mn = vec3(pc.bvh.nodes[node].min_x[i], pc.bvh.nodes[node].min_y[i], pc.bvh.nodes[node].min_z[i]);
+            vec3 mx = vec3(pc.bvh.nodes[node].max_x[i], pc.bvh.nodes[node].max_y[i], pc.bvh.nodes[node].max_z[i]);
+
+            if (intersectRayAABB(pos + dir * 0.1, dir, invDir, mn, mx, dist)) {
+                if (bvh_is_leaf(pc.bvh.nodes[node].metadata[i])) { occluded = true; break; }
+                else if (bvh_get_index(pc.bvh.nodes[node].metadata[i]) != 0xFFFFFFFFu) stack[stackPtr++] = bvh_get_index(pc.bvh.nodes[node].metadata[i]);
             }
         }
     }
 
     if (!occluded) {
-        uint out_idx = atomicAdd(pc.counter.count, 1);
-        
-        uint out_block = out_idx / SUBGROUP_SIZE;
-        uint out_local = out_idx % SUBGROUP_SIZE;
-        uint out_base = out_block * stride + out_local;
-        
-        for (int i = 0; i < 10; ++i) {
-            pc.particles.data[out_base + i * SUBGROUP_SIZE] = pc.candidates.data[base + i * SUBGROUP_SIZE];
-        }
+        uint out_idx = atomicAdd(pc.counter.counts[0], 1), out_base = (out_idx / SUBGROUP_SIZE) * stride + (out_idx % SUBGROUP_SIZE);
+        for (int i = 0; i < 10; ++i) pc.particles.data[out_base + i * SUBGROUP_SIZE] = pc.candidates.data[base + i * SUBGROUP_SIZE];
     }
 }

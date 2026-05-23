@@ -1,150 +1,114 @@
-// @assets/sim/bp_cross_lca.comp
 #version 450 core
-#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_ballot : require
-
-#include "../bvh_utils.glsl"
+#extension GL_KHR_shader_subgroup_shuffle : require
 
 #include "../debug_utils.glsl"
+#include "../bvh_utils.glsl"
+
 layout(local_size_x = 256) in;
 const uint SUBGROUPS_PER_WG = 256 / SUBGROUP_SIZE;
 
-struct Entity {
-    MultiBvhBuffer bvh;
-    mat4 transform;
-    mat4 inv_transform;
-    vec3 linear_velocity;
-    uint root_index;
-    vec3 angular_velocity;
-    uint type;              
-    uint primitive_offset;
-    uint total_primitives;  
-    uint frame_scale_type;
-    float scale_factor;
-    uint shape_type;
-    vec3 shape_data;
-};
-
-layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer EntityArray { Entity entities[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer PairBufferIn { uint count; uvec2 pairs[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer PairBufferOut { uint count; uvec2 pairs[]; };
+struct EntityHeader { uint type; uint pad[3]; };
+layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer EntityHeaderArray { EntityHeader entities[]; };
 
 layout(push_constant, scalar) uniform PushConstants {
-    EntityArray scene_entities;
-    PairBufferIn lca_query_pairs;
-    PairBufferOut output_internal_pairs;
-    uint     total_queries;
+    LcaEntityArray lca_entities;
+    LeafBuffer macro_leaves;
+    EntityHeaderArray entity_headers;
+    PairBuffer lca_query_pairs;
+    PairBuffer out_rb_rb;
+    PairBuffer out_rb_ps;
+    PairBuffer out_ps_ps;
+    CrossPairBuffer out_cross_pairs; // <-- Fixed: Added missing buffer mapping
+    uint total_queries;
+    uint max_pairs;
 } pc;
 
-shared uint shared_stacks[SUBGROUPS_PER_WG][32]; 
+shared uint shared_stacks[SUBGROUPS_PER_WG][32];
 shared uint shared_stack_ptrs[SUBGROUPS_PER_WG];
-// Store as raw 64-bit address (uvec2) to avoid Metal address-space conflicts
-// that arise when storing buffer_reference types in threadgroup shared memory.
 shared uvec2 shared_lca_bvh_addr[SUBGROUPS_PER_WG];
 
-void transform_aabb(mat4 inv_transform, vec3 bmin, vec3 bmax, out vec3 out_min, out vec3 out_max) {
+void transform_aabb_macro_to_micro(mat4 lca_inv_transform, vec3 macro_center_au, vec3 macro_extents_au, out vec3 out_min, out vec3 out_max) {
+    vec3 center_km = macro_center_au * AU_TO_KM;
+    vec3 extents_km = macro_extents_au * AU_TO_KM;
+
     vec3 corners[8] = vec3[8](
-        vec3(bmin.x, bmin.y, bmin.z), vec3(bmax.x, bmin.y, bmin.z), vec3(bmin.x, bmax.y, bmin.z), vec3(bmax.x, bmax.y, bmin.z),
-        vec3(bmin.x, bmin.y, bmax.z), vec3(bmax.x, bmin.y, bmax.z), vec3(bmin.x, bmax.y, bmax.z), vec3(bmax.x, bmax.y, bmax.z)
+        vec3(center_km.x - extents_km.x, center_km.y - extents_km.y, center_km.z - extents_km.z),
+        vec3(center_km.x + extents_km.x, center_km.y - extents_km.y, center_km.z - extents_km.z),
+        vec3(center_km.x - extents_km.x, center_km.y + extents_km.y, center_km.z - extents_km.z),
+        vec3(center_km.x + extents_km.x, center_km.y + extents_km.y, center_km.z - extents_km.z),
+        vec3(center_km.x - extents_km.x, center_km.y - extents_km.y, center_km.z + extents_km.z),
+        vec3(center_km.x + extents_km.x, center_km.y - extents_km.y, center_km.z + extents_km.z),
+        vec3(center_km.x - extents_km.x, center_km.y + extents_km.y, center_km.z + extents_km.z),
+        vec3(center_km.x + extents_km.x, center_km.y + extents_km.y, center_km.z + extents_km.z)
     );
     out_min = vec3(1e20); out_max = vec3(-1e20);
     for (int i = 0; i < 8; i++) {
-        vec3 local_p = (inv_transform * vec4(corners[i], 1.0)).xyz;
-        out_min = min(out_min, local_p); out_max = max(out_max, local_p);
+        vec3 local_p = (lca_inv_transform * vec4(corners[i], 1.0)).xyz;
+        out_min = min(out_min, local_p);
+        out_max = max(out_max, local_p);
     }
-}
-
-bool intersectAABB(vec3 amin, vec3 amax, vec3 bmin, vec3 bmax) {
-    return (amin.x <= bmax.x && amax.x >= bmin.x) &&
-           (amin.y <= bmax.y && amax.y >= bmin.y) &&
-           (amin.z <= bmax.z && amax.z >= bmin.z);
 }
 
 void main() {
-    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
-        debugPrintfEXT("Executing compute shader: bp_cross_lca.comp\n");
-    }
-
-    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
-        debugPrintfEXT("Hello from bp_cross_lca.comp!\\n");
-    }
     uint subgroup_id = gl_SubgroupID;
     uint lane_id     = gl_SubgroupInvocationID;
-    
-    uint query_idx = gl_WorkGroupID.x * SUBGROUPS_PER_WG + subgroup_id;
-    if (query_idx >= pc.total_queries) return;
+    uint query_idx   = gl_WorkGroupID.x * SUBGROUPS_PER_WG + subgroup_id;
 
-    EntityArray entities = pc.scene_entities;
-    PairBufferIn in_pairs = pc.lca_query_pairs;
-    PairBufferOut out_pairs = pc.output_internal_pairs;
+    if (query_idx >= pc.total_queries || query_idx >= pc.lca_query_pairs.count) return;
 
-    uvec2 query = in_pairs.pairs[query_idx];
-    uint foreign_ent_id = query.x; // Macro Comet
-    uint lca_ent_id = query.y;     // Micro Space Station
-
+    uvec2 query = pc.lca_query_pairs.pairs[query_idx];
+    uint macro_ent_id = query.x;
+    uint lca_ent_id = query.y;
     vec3 query_min, query_max;
-    
-    if (lane_id == 0) {
-        Entity foreign_ent = entities.entities[foreign_ent_id];
-        Entity lca_ent = entities.entities[lca_ent_id];
-        
-        // Store the raw address bits rather than the buffer_reference itself,
-        // to avoid Metal threadgroup/device address-space conflicts in MoltenVK.
-        shared_lca_bvh_addr[subgroup_id] = uvec2(lca_ent.bvh);
 
-        vec3 center = foreign_ent.transform[3].xyz;
-        mat3 rot = mat3(foreign_ent.transform);
-        vec3 extents = abs(rot[0]) * foreign_ent.shape_data.x + 
-                       abs(rot[1]) * foreign_ent.shape_data.y + 
-                       abs(rot[2]) * foreign_ent.shape_data.z;
-        
-        transform_aabb(lca_ent.inv_transform, center - extents, center + extents, query_min, query_max);
-        
-        shared_stacks[subgroup_id][0] = lca_ent.root_index; // Push LCA's internal TLAS root
+    if (lane_id == 0) {
+        LcaEntity l_ent = pc.lca_entities.entities[lca_ent_id];
+        shared_lca_bvh_addr[subgroup_id] = uvec2(l_ent.bvh);
+
+        vec3 macro_min = pc.macro_leaves.leaves[macro_ent_id].min_bound;
+        vec3 macro_max = pc.macro_leaves.leaves[macro_ent_id].max_bound;
+
+        vec3 center_au = (macro_min + macro_max) * 0.5;
+        vec3 extents_au = (macro_max - macro_min) * 0.5;
+
+        transform_aabb_macro_to_micro(l_ent.inv_transform, center_au, extents_au, query_min, query_max);
+
+        shared_stacks[subgroup_id][0] = l_ent.root_index;
         shared_stack_ptrs[subgroup_id] = 1;
     }
-    
+
     subgroupMemoryBarrierShared();
 
     query_min = vec3(subgroupBroadcast(query_min.x, 0), subgroupBroadcast(query_min.y, 0), subgroupBroadcast(query_min.z, 0));
     query_max = vec3(subgroupBroadcast(query_max.x, 0), subgroupBroadcast(query_max.y, 0), subgroupBroadcast(query_max.z, 0));
-    foreign_ent_id = subgroupBroadcast(foreign_ent_id, 0);
-    
-    // Reconstruct the buffer reference from the raw address stored in shared memory.
-    MultiBvhBuffer tlas = MultiBvhBuffer(shared_lca_bvh_addr[subgroup_id]);
+    macro_ent_id = subgroupBroadcast(macro_ent_id, 0);
 
+    MultiBvhBuffer tlas = MultiBvhBuffer(shared_lca_bvh_addr[subgroup_id]);
 
     while (true) {
         subgroupMemoryBarrierShared();
         uint stack_ptr = shared_stack_ptrs[subgroup_id];
         if (stack_ptr == 0) break;
-        
+
         stack_ptr--;
         uint node_idx = shared_stacks[subgroup_id][stack_ptr];
         if (lane_id == 0) shared_stack_ptrs[subgroup_id] = stack_ptr;
 
         uint meta = tlas.nodes[node_idx].metadata[lane_id];
-        
-        bool valid = false;
-        if (lane_id < 32) {
-            valid = (tlas.nodes[node_idx].valid_mask.x & (1u << lane_id)) != 0u;
-        } else {
-            valid = (tlas.nodes[node_idx].valid_mask.y & (1u << (lane_id - 32))) != 0u;
-        }
-        
+        bool valid = bvh_node_is_valid(tlas.nodes[node_idx].valid_mask, lane_id);
+
         vec3 c_min = vec3(tlas.nodes[node_idx].min_x[lane_id], tlas.nodes[node_idx].min_y[lane_id], tlas.nodes[node_idx].min_z[lane_id]);
         vec3 c_max = vec3(tlas.nodes[node_idx].max_x[lane_id], tlas.nodes[node_idx].max_y[lane_id], tlas.nodes[node_idx].max_z[lane_id]);
         uint child_payload = tlas.nodes[node_idx].child_indices[lane_id];
 
-        uint entity_id = meta & 0x07FFFFFF;
-
         bool hit = valid && intersectAABB(query_min, query_max, c_min, c_max);
         bool is_leaf = bvh_is_leaf(meta);
-        
+
         bool hit_leaf = hit && is_leaf;
         bool hit_node = hit && !is_leaf;
 
@@ -154,10 +118,49 @@ void main() {
 
         if (leaf_count > 0) {
             uint base_idx = 0;
-            if (lane_id == 0) base_idx = atomicAdd(out_pairs.count, leaf_count);
+            if (lane_id == 0) base_idx = atomicAdd(pc.out_cross_pairs.count, leaf_count);
             base_idx = subgroupBroadcast(base_idx, 0);
 
-            if (hit_leaf) out_pairs.pairs[base_idx + leaf_offset] = uvec2(foreign_ent_id, entity_id);
+            if (hit_leaf && (base_idx + leaf_offset) < pc.max_pairs) {
+                pc.out_cross_pairs.pairs[base_idx + leaf_offset].macro_id = macro_ent_id; // <-- Fixed: was undefined `foreign_ent_id`
+                pc.out_cross_pairs.pairs[base_idx + leaf_offset].micro_id = bvh_get_index(meta);
+                pc.out_cross_pairs.pairs[base_idx + leaf_offset].lca_id = lca_ent_id;
+            }
+        }
+
+        // Loop over subgroup bits to extract overlaps, then sort exactly into the designated Narrow Phase Queues
+        for (uint i = 0; i < 4; i++) {
+            uint m = leaf_ballot[i];
+            while (m != 0) {
+                uint bit = findLSB(m);
+                m &= ~(1u << bit);
+
+                uint src_lane = i * 32 + bit;
+                uint micro_ent_id = bvh_get_index(subgroupShuffle(meta, src_lane));
+
+                if (lane_id == 0) {
+                    uint type_A = pc.entity_headers.entities[macro_ent_id].type;
+                    uint type_B = pc.entity_headers.entities[micro_ent_id].type;
+                    uint ent_A = macro_ent_id;
+                    uint ent_B = micro_ent_id;
+
+                    if (type_A > type_B) {
+                        uint temp = ent_A; ent_A = ent_B; ent_B = temp;
+                        temp = type_A; type_A = type_B; type_B = temp;
+                    }
+
+                    if (type_A == TYPE_RIGID_BODY && type_B == TYPE_RIGID_BODY) {
+                        uint out_idx = atomicAdd(pc.out_rb_rb.count, 1);
+                        if (out_idx < pc.max_pairs) pc.out_rb_rb.pairs[out_idx] = uvec2(ent_A, ent_B);
+                    } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_RIGID_BODY) {
+                        uint out_idx = atomicAdd(pc.out_rb_ps.count, 1);
+                        if (out_idx < pc.max_pairs) pc.out_rb_ps.pairs[out_idx] = uvec2(ent_B, ent_A);
+                    } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_PARTICLE_SYSTEM) {
+                        uint out_idx = atomicAdd(pc.out_ps_ps.count, 1);
+                        if (out_idx < pc.max_pairs) pc.out_ps_ps.pairs[out_idx] = uvec2(ent_A, ent_B);
+                    }
+                }
+            }
         }
 
         uvec4 node_ballot = subgroupBallot(hit_node);

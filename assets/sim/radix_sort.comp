@@ -1,5 +1,4 @@
 #version 450 core
-#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_KHR_shader_subgroup_basic : require
@@ -10,12 +9,12 @@
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(buffer_reference, scalar, buffer_reference_align = 4) buffer MortonArray {
-    uvec2 entries[]; 
+    uvec2 entries[];
 };
 
 // Size must be: 16 bins * pc.num_blocks (uints)
 layout(buffer_reference, scalar, buffer_reference_align = 4) buffer HistogramBuffer {
-    uint counts[]; 
+    uint counts[];
 };
 
 layout(push_constant, scalar) uniform PushConstants {
@@ -41,13 +40,6 @@ shared uint s_sg_counts[64]; // Supports up to 64 subgroups (down to a subgroup 
 shared uint s_bin_sums[RADIX];
 
 void main() {
-    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
-        debugPrintfEXT("Executing compute shader: radix_sort.comp\n");
-    }
-
-    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
-        debugPrintfEXT("Hello from radix_sort.comp!\\n");
-    }
     uint lid = gl_LocalInvocationID.x;
     uint wid = gl_WorkGroupID.x;
     uint sg_id = gl_SubgroupInvocationID;
@@ -73,7 +65,7 @@ void main() {
         if (lid < RADIX) {
             pc.histograms.counts[lid * pc.num_blocks + wid] = s_counts[lid];
         }
-    } 
+    }
     else if (pc.stage == STAGE_SCAN) {
         // ---------------------------------------------------------
         // STAGE 1: GLOBAL SCAN (Dispatch EXACTLY 1 Block of 256 threads)
@@ -87,7 +79,7 @@ void main() {
             s_bin_sums[lid] = bin_sum;
         }
         barrier();
-        
+
         if (lid == 0) {
             // 2. Thread 0 calculates the exclusive prefix sum across the 16 bins
             uint global_offset = 0;
@@ -98,7 +90,7 @@ void main() {
             }
         }
         barrier();
-        
+
         if (lid < RADIX) {
             // 3. First 16 threads write the prefix-sums sequentially back into global memory
             uint running_offset = s_bin_sums[lid];
@@ -129,20 +121,20 @@ void main() {
 
             uint local_offset = 0;
             uint my_global_base = 0;
-            
+
             for (uint b = 0; b < RADIX; ++b) {
                 bool match = (my_key == b);
-                
+
                 // Subgroup ballot ensures perfect STABILITY inside the chunk!
                 uvec4 ballot = subgroupBallot(match);
                 uint sg_match_count = subgroupBallotBitCount(ballot);
                 uint my_sg_offset = subgroupBallotExclusiveBitCount(ballot);
-                
+
                 if (sg_id == 0) {
                     s_sg_counts[gl_SubgroupID] = sg_match_count;
                 }
                 barrier();
-                
+
                 // Thread 0 prefixes the subgroup chunks
                 if (lid == 0) {
                     uint sum = 0;
@@ -151,22 +143,22 @@ void main() {
                         s_sg_counts[sg] = sum;
                         sum += c;
                     }
-                    s_counts[b] = sum; 
+                    s_counts[b] = sum;
                 }
                 barrier();
-                
+
                 if (match) {
                     local_offset = s_sg_counts[gl_SubgroupID] + my_sg_offset;
                     my_global_base = s_offsets[b];
                 }
-                
+
                 // Thread 0 advances global offsets for the next chunk
                 if (lid == 0) {
                     s_offsets[b] += s_counts[b];
                 }
                 barrier();
             }
-            
+
             // Scatter the element to its globally stable destination
             if (valid) {
                 uint dest = my_global_base + local_offset;
