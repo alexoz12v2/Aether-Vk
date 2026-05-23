@@ -1,46 +1,55 @@
-// @assets/sim/bp_classify.comp
 #version 450 core
-#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
 
-#define TYPE_PARTICLE_SYSTEM 0
-#define TYPE_RIGID_BODY      1
-#define TYPE_MICRO_LCA       2 
+#include "../bvh_utils.glsl"
 
-#include "../debug_utils.glsl"
 layout(local_size_x = 256) in;
 
 struct EntityHeader { uint type; uint pad[3]; };
-
-layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer EntityArray { EntityHeader entities[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer RawPairs { uint count; uvec2 pairs[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer QueueBuf { uint count; uvec2 pairs[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer EntityHeaderArray { EntityHeader entities[]; };
 
 layout(push_constant, scalar) uniform PushConstants {
-    EntityArray scene_entities;
-    RawPairs raw_pairs;
-    QueueBuf out_rb_rb;
-    QueueBuf out_rb_ps;
-    QueueBuf out_rb_lca;
-    uint n_entities;
-    uint _pad;
+    EntityHeaderArray scene_entities;
+    PairBuffer raw_pairs;
+    PairBuffer out_rb_rb;
+    PairBuffer out_rb_ps;
+    PairBuffer out_ps_ps;
+    PairBuffer out_macro_lca;
+    PairBuffer out_lca_lca;
+    uint max_pairs;
 } pc;
 
 void main() {
     uint id = gl_GlobalInvocationID.x;
-    
-    // TEMPORARY HACK: Generate O(N^2) rigid body pairs for collision
-    // Since we don't have a dynamic TLAS builder yet.
-    uint N = pc.n_entities;
-    if (id >= N * N) return;
-    
-    uint i = id / N;
-    uint j = id % N;
-    
-    if (i < j) {
-        QueueBuf out_q = pc.out_rb_rb;
-        uint out_idx = atomicAdd(out_q.count, 1);
-        out_q.pairs[out_idx] = uvec2(i, j);
+    if (id >= pc.raw_pairs.count) return;
+
+    uvec2 pair = pc.raw_pairs.pairs[id];
+    uint ent_A = pair.x, ent_B = pair.y;
+    uint type_A = pc.scene_entities.entities[ent_A].type;
+    uint type_B = pc.scene_entities.entities[ent_B].type;
+
+    if (type_A > type_B) {
+        uint temp = ent_A; ent_A = ent_B; ent_B = temp;
+        temp = type_A; type_A = type_B; type_B = temp;
+    }
+
+    if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_PARTICLE_SYSTEM) {
+        uint out_idx = atomicAdd(pc.out_ps_ps.count, 1);
+        if (out_idx < pc.max_pairs) pc.out_ps_ps.pairs[out_idx] = uvec2(ent_A, ent_B);
+    } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_RIGID_BODY) {
+        uint out_idx = atomicAdd(pc.out_rb_ps.count, 1);
+        if (out_idx < pc.max_pairs) pc.out_rb_ps.pairs[out_idx] = uvec2(ent_B, ent_A);
+    } else if (type_A == TYPE_RIGID_BODY && type_B == TYPE_RIGID_BODY) {
+        uint out_idx = atomicAdd(pc.out_rb_rb.count, 1);
+        if (out_idx < pc.max_pairs) pc.out_rb_rb.pairs[out_idx] = uvec2(ent_A, ent_B);
+    } else if (type_A == TYPE_MICRO_LCA && type_B == TYPE_MICRO_LCA) {
+        // Solves TO-DO: Routes LCA overlaps to frame-handoff logic
+        uint out_idx = atomicAdd(pc.out_lca_lca.count, 1);
+        if (out_idx < pc.max_pairs) pc.out_lca_lca.pairs[out_idx] = uvec2(ent_A, ent_B);
+    } else if (type_B == TYPE_MICRO_LCA) {
+        uint out_idx = atomicAdd(pc.out_macro_lca.count, 1);
+        if (out_idx < pc.max_pairs) pc.out_macro_lca.pairs[out_idx] = uvec2(ent_A, ent_B);
     }
 }

@@ -17,8 +17,6 @@
 #extension GL_KHR_memory_scope_semantics : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 
-// Define branching factor to match the hardware subgroup size.
-// Can be injected via Vulkan Specialization Constants (layout(constant_id = X)).
 #ifndef SUBGROUP_SIZE
 layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
 #endif
@@ -26,60 +24,30 @@ layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
 // ------------------------------------------------------------------
 // 1. Unified Multi-BVH Node (Shared by TLAS, Body BLAS, Particle BLAS)
 // ------------------------------------------------------------------
-// Using std430/scalar, arrays of floats have a strict 4-byte stride.
 struct MultiBvhNode {
-    float min_x[SUBGROUP_SIZE];
-    float max_x[SUBGROUP_SIZE];
-    float min_y[SUBGROUP_SIZE];
-    float max_y[SUBGROUP_SIZE];
-    float min_z[SUBGROUP_SIZE];
-    float max_z[SUBGROUP_SIZE];
-
-    uint  child_indices[SUBGROUP_SIZE];
-    uint  metadata[SUBGROUP_SIZE];
+    float min_x[SUBGROUP_SIZE]; float max_x[SUBGROUP_SIZE];
+    float min_y[SUBGROUP_SIZE]; float max_y[SUBGROUP_SIZE];
+    float min_z[SUBGROUP_SIZE]; float max_z[SUBGROUP_SIZE];
+    uint  child_indices[SUBGROUP_SIZE]; uint metadata[SUBGROUP_SIZE];
     float masses[SUBGROUP_SIZE];
-    float com_x[SUBGROUP_SIZE];
-    float com_y[SUBGROUP_SIZE];
-    float com_z[SUBGROUP_SIZE];
+    float com_x[SUBGROUP_SIZE]; float com_y[SUBGROUP_SIZE]; float com_z[SUBGROUP_SIZE];
+    uint  particle_start[SUBGROUP_SIZE]; uint particle_count[SUBGROUP_SIZE];
 
-    // Cluster Threshold Tracking
-    uint  particle_start[SUBGROUP_SIZE];
-    uint  particle_count[SUBGROUP_SIZE];
-
-    uvec2 valid_mask; // 64-bit emulation using uvec2
-    uint  permutations[8][SUBGROUP_SIZE]; // u32 per slot (low byte = ordering index); matches Rust [[u32;N];8]
+    uvec2 valid_mask;
+    uint  parent_idx; // Unifies Binary & N-Ary Trees without legacy types
+    uint  pad;        // 16-byte alignment
+    uint  permutations[8][SUBGROUP_SIZE];
 };
 
-layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer MultiBvhBuffer {
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer MultiBvhBuffer {
     MultiBvhNode nodes[];
 };
 
 // ------------------------------------------------------------------
-// 2. Instance Descriptor (Targeted by TLAS Leaves)
+// 2. Metadata Bitfield Definitions & Helpers
 // ------------------------------------------------------------------
-struct InstanceDescriptor {
-    mat4 transform;       // Local/Micro Space -> Macro Space (+x=right, -y=forward, +z=up)
-    mat4 inv_transform;   // Macro Space -> Local/Micro Space (Used to scale rays/velocities)
-    vec4 shape_data;      // xyz: Half-Extents (OBB/AABB), x: Radius (Sphere)
-    uint blas_root_idx;   // Pointer to the BLAS root MultiBvhNode in the BLAS buffer
-    uint pad0, pad1, pad2;// 16-byte std430 alignment padding
-};
-
-layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer InstanceBuffer {
-    InstanceDescriptor descriptors[];
-};
-
-// ------------------------------------------------------------------
-// 3. Metadata Bitfield Definitions & Helpers
-// ------------------------------------------------------------------
-// Bit 31:    IsLeaf (1 bit) -> 0 = Internal, 1 = Leaf
-// Bit 29-30: Frame  (2 bits) -> 00 = Macro (AU/M_earth), 01 = Micro (km/kg)
-// Bit 27-28: Shape  (2 bits) -> 00 = AABB, 01 = OBB, 10 = Sphere
-// Bit 0-26:  Index  (27 bits) -> Points to child node OR InstanceDescriptor
-
 #define BVH_FRAME_MACRO  0u
 #define BVH_FRAME_MICRO  1u
-
 #define BVH_SHAPE_AABB   0u
 #define BVH_SHAPE_OBB    1u
 #define BVH_SHAPE_SPHERE 2u
@@ -91,184 +59,133 @@ uint bvh_get_index(uint meta) { return meta & 0x07FFFFFFu; }
 
 uint bvh_pack_metadata(bool is_leaf, uint frame, uint shape, uint index) {
     uint meta = index & 0x07FFFFFFu;
-    meta |= (shape & 0x3u) << 27;
-    meta |= (frame & 0x3u) << 29;
+    meta |= (shape & 0x3u) << 27; meta |= (frame & 0x3u) << 29;
     if (is_leaf) meta |= 0x80000000u;
     return meta;
 }
 
-// ----------------------------------------------------------------------------
-// Legacy Support structs (To be removed/replaced as pipeline updates)
-// ----------------------------------------------------------------------------
-
-struct AABB {
-    vec3 minBounds;
-    vec3 maxBounds;
-};
-
-// Variation 1: Standard Array of Structures (AOS)
-// Represents `LinearBVHNode<f32>` specialized for AABBs.
-struct BVHNodeAABB {
-    AABB bound;
-    uint left_child_or_primitive_offset;
-    uint right_child_offset;
-    uint primitive_count;
-    uint parent_idx;
-    uint node_type;
-    float mass;
-    vec3 center_of_mass;
-    float _pad;
-};
-
-layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer BVHArray {
-    BVHNodeAABB nodes[];
-};
-
-// Helper to safely read from scalar storage without triggering cross-compiler padding mismatch bugs
-BVHNodeAABB read_bvh_node(BVHArray bvh, uint idx) {
-    BVHNodeAABB node;
-    node.bound.minBounds = bvh.nodes[idx].bound.minBounds;
-    node.bound.maxBounds = bvh.nodes[idx].bound.maxBounds;
-    node.left_child_or_primitive_offset = bvh.nodes[idx].left_child_or_primitive_offset;
-    node.right_child_offset = bvh.nodes[idx].right_child_offset;
-    node.primitive_count = bvh.nodes[idx].primitive_count;
-    node.parent_idx = bvh.nodes[idx].parent_idx;
-    node.node_type = bvh.nodes[idx].node_type;
-    node.mass = bvh.nodes[idx].mass;
-    node.center_of_mass = bvh.nodes[idx].center_of_mass;
-    node._pad = 0.0;
-    return node;
+bool bvh_node_is_valid(uvec2 valid_mask, uint lane_id) {
+    if (lane_id < 32) return (valid_mask.x & (1u << lane_id)) != 0u;
+    else return (valid_mask.y & (1u << (lane_id - 32))) != 0u;
 }
 
 // ----------------------------------------------------------------------------
-// Motion BLAS Node (Binary BVH, Exactly 64 bytes)
+// Physics & Struct Definitions
 // ----------------------------------------------------------------------------
-struct MotionBvhNode {
-    AABB aabbs[2];
-    uint child_ptrs[2];
-    uint parent_idx;
-    uint is_leaf;
-    uint pad[2];
+#define TYPE_PARTICLE_SYSTEM 0
+#define TYPE_RIGID_BODY      1
+#define TYPE_MICRO_LCA       2
+
+#define AU_TO_KM 149597870.7
+#define KM_TO_AU (1.0 / 149597870.7)
+#define M_EARTH_TO_KG 5.9722e24
+#define KG_TO_M_EARTH (1.0 / 5.9722e24)
+
+struct ColliderId { uint entity_id; uint primitive_index; };
+struct PackedPair { ColliderId a; ColliderId b; float toi; vec3 contact_normal; vec3 contact_point; float penetration_depth; };
+struct SparseCollisionData { uint valid; uint entity_a; uint prim_a; uint entity_b; uint prim_b; float toi; vec3 contact_normal; vec3 contact_point; float penetration_depth; };
+
+struct RigidBody {
+    vec4 position_mass;       // xyz: world pos, w: mass
+    vec4 orientation;         // quaternion (x,y,z,w)
+    vec4 linear_vel_drag;     // xyz: linear velocity, w: linear damping coeff
+    vec4 angular_vel_drag;    // xyz: angular velocity, w: angular damping coeff
+    vec4 inertia_tensor_inv;  // xyz: diagonal local inverse inertia
+    uint wrench_idx;          // Pointer to the associated accumulated Wrench
+    uint leaf_start_idx;      // Mapping to the first leaf Wrench (for rb_force_assign)
+    uint leaf_count;          // Number of leaves
+    uint shape_type;          // BVH_SHAPE_*
+    vec3 shape_extents;       // Dimensions
+    uint pad2;
+};
+struct Wrench { uint force_x; uint force_y; uint force_z; uint torque_x; uint torque_y; uint torque_z; };
+struct ForceEmitter {
+    vec3 position;
+    float mu; // type_id = 0 -> G * M, type_id = 1 -> base force
+    vec3 normal; // type_id = 0 -> unused, type_id = 1 -> plane normal
+    uint type_id; // 0 = Gravity, 1 = Planar
+    float trunc_distance; // type_id = 0 -> unused, type_id = 1 -> max distance point - plane over which force is applied
+    float scale_factor;
+    uint _pad[2];
+};
+struct KinematicBody { uint own_frame_id; float scale; vec3 position; uint frame_type; float mu; };
+struct LcaEntity { MultiBvhBuffer bvh; mat4 transform; mat4 inv_transform; vec3 linear_velocity; uint root_index; vec3 angular_velocity; uint type; uint primitive_offset; uint total_primitives; uint frame_scale_type; float scale_factor; uint shape_type; vec3 shape_data; };
+struct TLASLeaf { vec3 min_bound; uint entity_idx; vec3 max_bound; uint metadata; };
+struct RenderParticleData { uint id_low; uint id_high; uint age_low; uint age_high; vec3 position; float mass; vec3 velocity; uint is_active; };
+struct DrawIndirectCommand { uint vertexCount; uint instanceCount; uint firstVertex; uint firstInstance; };
+
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleData {
+  // Note: semantically a float. Declared as a uint to allow for atomic operations
+  // 4 floats per particle as the following in aosoa format:
+  // After p1 p2
+  // 0-2 position at midpoint
+  // 3-5 velocity at midpoint (TODO check how it evolves)
+  // 6 mass (TODO now it's set to zero. correct that)
+  // 7-8 padding? (TODO Check better)
+  uint data[];
+  // equivalent:
+  //   float mass[SUBGROUP_SIZE];
+  //   float dvA[3 * SUBGROUP_SIZE];
 };
 
-layout(buffer_reference, scalar, buffer_reference_align = 16) buffer MotionBvhBuffer {
-    MotionBvhNode nodes[];
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer AtomicCounters { uint counts[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer MortonArray { uvec2 entries[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer PairBuffer { uint count; uvec2 pairs[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer PackedCollisions { uint dispatch_x; uint dispatch_y; uint dispatch_z; uint count; PackedPair pairs[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer SparseCollisions { uint count; SparseCollisionData pairs[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer RigidBodyArray { RigidBody bodies[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer RigidBodyUintArray {
+  // TODO: convenient getters.
+  // Declared as uint to allow for atomic operations (we don't support them for floats)
+  // RigidBody struct is 20 floats in aosoa format
+  // 0-3 pos_mass
+  // 4-7 orient
+  // 8-11 lin_vel
+  // 12-15 ang_vel
+  // 16-19 inv_inertia
+  uint data[];
+  // equivalent:
+  //   float pos_mass[3 * SUBGROUP_SIZE]; // example: 32 xs, 32 ys, 32 zs
+  //   float orient[3 * SUBGROUP_SIZE];
+  //   float lin_vel[3 * SUBGROUP_SIZE];
+  //   float ang_vel[3 * SUBGROUP_SIZE];
+  //   float inv_inertia[3 * SUBGROUP_SIZE];
 };
-
-struct ColliderId {
-    uint entity_id;
-    uint primitive_index;
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer WrenchArray { Wrench wrenches[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer EmitterArray { ForceEmitter emitters[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer KinematicArray { KinematicBody bodies[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 8) buffer LcaEntityArray { LcaEntity entities[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer LeafBuffer { TLASLeaf leaves[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer DepthIndices { uint count; uint indices[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer CollapseMapBuffer { uint binary_roots[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer ImpulseOutput { vec3 impulses[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer OutputTOI { uint min_tc_uint; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer ClusterListBuffer { uint cluster_indices[]; };
+// ─── 64-bit engine clock (lo, hi) ───────────────────────────────────────────
+layout(buffer_reference, scalar, buffer_reference_align = 8) buffer ClockBuffer {
+  // lo = [0], hi = [1] — stored as uvec2 (x=lo, y=hi)
+  uvec2 global_time_us;
 };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer HistogramBuffer { uint counts[]; };
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer RenderParticleDataArray { RenderParticleData data[]; };
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer IndirectArray { DrawIndirectCommand commands[]; };
 
-struct PackedPair {
-    ColliderId a;
-    ColliderId b;
-    float toi;
-    vec3 contact_normal;
-    vec3 contact_point;
-    float penetration_depth;
-};
+// Helper macros for easy read/write of uint-backed floats
+#define P_READ(buf, idx) uintBitsToFloat((buf).data[idx])
+#define P_WRITE(buf, idx, val) (buf).data[idx] = floatBitsToUint(val)
 
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer PackedCollisions {
-    uint dispatch_x;
-    uint dispatch_y;
-    uint dispatch_z;
-    uint count;
-    PackedPair pairs[];
-};
+struct AABB { vec3 minBounds; vec3 maxBounds; };
+bool intersectAABB(AABB a, AABB b) { return a.maxBounds.x >= b.minBounds.x && a.minBounds.x <= b.maxBounds.x && a.maxBounds.y >= b.minBounds.y && a.minBounds.y <= b.maxBounds.y && a.maxBounds.z >= b.minBounds.z && a.minBounds.z <= b.maxBounds.z; }
+bool intersectAABB(vec3 amin, vec3 amax, vec3 bmin, vec3 bmax) { return (amin.x <= bmax.x && amax.x >= bmin.x) && (amin.y <= bmax.y && amax.y >= bmin.y) && (amin.z <= bmax.z && amax.z >= bmin.z); }
 
-layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer CollisionPairList {
-    uint count;
-    uvec2 pairs[]; // Legacy
-};
+// ------------------------------------------------------------
+// Cross LCA support structs
+//------------------------------------------------------------
 
-// ----------------------------------------------------------------------------
-// Shared Memory Caching (Workgroup Local Memory)
-// ----------------------------------------------------------------------------
-// Defines a shared memory cache that subgroups can collaboratively populate.
-// This is exceptionally useful when many threads (e.g. many rays or many particles)
-// are traversing the same top-level BVH nodes repeatedly.
+struct CrossPair { uint macro_id; uint micro_id; uint lca_id; uint pad; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer CrossPairBuffer { uint count; CrossPair pairs[]; };
 
-#define DECLARE_SHARED_BVH_CACHE(name) shared MultiBvhNode name
-
-#define CACHE_BLOCK_COLLABORATIVE(GLOBAL_BVH, BLOCK_IDX, SHARED_CACHE) \
-    do { \
-        uint _tid = gl_SubgroupInvocationID; \
-        if (_tid < SUBGROUP_SIZE) { \
-            SHARED_CACHE.min_x[_tid] = GLOBAL_BVH.nodes[BLOCK_IDX].min_x[_tid]; \
-            SHARED_CACHE.max_x[_tid] = GLOBAL_BVH.nodes[BLOCK_IDX].max_x[_tid]; \
-            SHARED_CACHE.min_y[_tid] = GLOBAL_BVH.nodes[BLOCK_IDX].min_y[_tid]; \
-            SHARED_CACHE.max_y[_tid] = GLOBAL_BVH.nodes[BLOCK_IDX].max_y[_tid]; \
-            SHARED_CACHE.min_z[_tid] = GLOBAL_BVH.nodes[BLOCK_IDX].min_z[_tid]; \
-            SHARED_CACHE.max_z[_tid] = GLOBAL_BVH.nodes[BLOCK_IDX].max_z[_tid]; \
-            SHARED_CACHE.child_indices[_tid] = GLOBAL_BVH.nodes[BLOCK_IDX].child_indices[_tid]; \
-            SHARED_CACHE.metadata[_tid] = GLOBAL_BVH.nodes[BLOCK_IDX].metadata[_tid]; \
-        } \
-    } while(false)
-
-// ----------------------------------------------------------------------------
-// Intersection Math
-// ----------------------------------------------------------------------------
-
-// AABB vs AABB Intersection
-bool intersectAABB(AABB a, AABB b) {
-    bool overlapX = a.maxBounds.x >= b.minBounds.x && a.minBounds.x <= b.maxBounds.x;
-    bool overlapY = a.maxBounds.y >= b.minBounds.y && a.minBounds.y <= b.maxBounds.y;
-    bool overlapZ = a.maxBounds.z >= b.minBounds.z && a.minBounds.z <= b.maxBounds.z;
-    return overlapX && overlapY && overlapZ;
-}
-
-// Continuous Collision Detection (CCD): Swept Sphere vs Triangle
-// Solves for Time of Impact (TOI) and the collision normal.
-// Assumes sphere moves from p0 to p1, triangle is stationary.
-bool ccdSphereTriangle(
-    vec3 p0, vec3 p1, float radius,
-    vec3 v0, vec3 v1, vec3 v2,
-    out float toi, out vec3 normal
-) {
-    vec3 dir = p1 - p0;
-    vec3 edge1 = v1 - v0;
-    vec3 edge2 = v2 - v0;
-    vec3 triNormal = normalize(cross(edge1, edge2));
-
-    // Distance from start pos to triangle plane
-    float distToPlane = dot(p0 - v0, triNormal);
-
-    // Check if moving towards the plane
-    float dirDotN = dot(dir, triNormal);
-    if (abs(dirDotN) < 1e-6) {
-        return false; // Parallel, ignore sweeping across the plane
-    }
-
-    // t at which sphere surface touches the plane
-    float t = (radius * sign(distToPlane) - distToPlane) / dirDotN;
-    if (t < 0.0 || t > 1.0) return false;
-
-    // Check if the intersection point is inside the triangle
-    vec3 hitPoint = p0 + dir * t - triNormal * radius * sign(distToPlane);
-
-    // Barycentric test
-    vec3 w = hitPoint - v0;
-    float uu = dot(edge1, edge1);
-    float uv = dot(edge1, edge2);
-    float vv = dot(edge2, edge2);
-    float wu = dot(w, edge1);
-    float wv = dot(w, edge2);
-    float denom = uu * vv - uv * uv;
-
-    float s = (uv * wv - vv * wu) / denom;
-    float r = (uv * wu - uu * wv) / denom;
-
-    if (s >= 0.0 && r >= 0.0 && (s + r) <= 1.0) {
-        toi = t;
-        normal = triNormal * sign(distToPlane);
-        return true;
-    }
-
-    // Edge and vertex CCD tests omitted here for brevity
-    return false;
-}
-
-#define STACK_SIZE 64
+struct CrossCollisionData { uint valid; uint macro_id; uint micro_id; uint lca_id; float toi; vec3 contact_normal; vec3 contact_point; float penetration_depth; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer CrossSparseCollisions { uint count; CrossCollisionData pairs[]; };
 
 #endif // BVH_UTILS_GLSL

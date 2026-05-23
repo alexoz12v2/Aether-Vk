@@ -1,86 +1,32 @@
 #version 450 core
-#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
-
-#include "../debug_utils.glsl"
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
-layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer DepthIndices {
-    uint count; // The header contains counts for this depth level
-    uint indices[];
-};
-
 layout(push_constant, scalar) uniform PushConstants {
-    MotionBvhBuffer bvh;
-    DepthIndices depth_indices;
-    uint total_nodes_at_depth;
+    MultiBvhBuffer bvh; DepthIndices depth_indices; uint total_nodes_at_depth;
 } pc;
 
 void main() {
-    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
-        debugPrintfEXT("Executing compute shader: motion_refit.comp\n");
+    uint global_id = gl_GlobalInvocationID.x; if (global_id >= pc.total_nodes_at_depth) return;
+
+    uint node_idx = pc.depth_indices.indices[global_id + 4];
+    for (uint i = 0; i < 2; ++i) {
+        uint child = pc.bvh.nodes[node_idx].child_indices[i];
+        if (bvh_is_leaf(pc.bvh.nodes[node_idx].metadata[i])) {
+            pc.bvh.nodes[node_idx].min_x[i] = pc.bvh.nodes[child].min_x[0]; pc.bvh.nodes[node_idx].max_x[i] = pc.bvh.nodes[child].max_x[0];
+            pc.bvh.nodes[node_idx].min_y[i] = pc.bvh.nodes[child].min_y[0]; pc.bvh.nodes[node_idx].max_y[i] = pc.bvh.nodes[child].max_y[0];
+            pc.bvh.nodes[node_idx].min_z[i] = pc.bvh.nodes[child].min_z[0]; pc.bvh.nodes[node_idx].max_z[i] = pc.bvh.nodes[child].max_z[0];
+        } else {
+            pc.bvh.nodes[node_idx].min_x[i] = min(pc.bvh.nodes[child].min_x[0], pc.bvh.nodes[child].min_x[1]);
+            pc.bvh.nodes[node_idx].max_x[i] = max(pc.bvh.nodes[child].max_x[0], pc.bvh.nodes[child].max_x[1]);
+            pc.bvh.nodes[node_idx].min_y[i] = min(pc.bvh.nodes[child].min_y[0], pc.bvh.nodes[child].min_y[1]);
+            pc.bvh.nodes[node_idx].max_y[i] = max(pc.bvh.nodes[child].max_y[0], pc.bvh.nodes[child].max_y[1]);
+            pc.bvh.nodes[node_idx].min_z[i] = min(pc.bvh.nodes[child].min_z[0], pc.bvh.nodes[child].min_z[1]);
+            pc.bvh.nodes[node_idx].max_z[i] = max(pc.bvh.nodes[child].max_z[0], pc.bvh.nodes[child].max_z[1]);
+        }
     }
-
-    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
-        debugPrintfEXT("Hello from motion_refit.comp!\\n");
-    }
-    uint global_id = gl_GlobalInvocationID.x;
-    if (global_id >= pc.total_nodes_at_depth) return;
-
-    DepthIndices depth_group = pc.depth_indices;
-    
-    // We skip the 4 uints of the List header (dispatch_x, y, z, count)
-    // Actually the standard header is 16 bytes.
-    // Let's assume indices[0] is the first element after the 16 byte header.
-    // Wait, in Rust, DeviceList has a 16 byte header.
-    // If DepthIndices maps to the start of the data payload, we don't need to skip.
-    // If it maps to the start of the buffer, we skip 4 uints.
-    // Let's assume `depth_indices_addr` points directly to the data array, or we skip the header.
-    // We'll skip 4 uints assuming it points to the buffer start.
-    uint node_idx = depth_group.indices[global_id + 4];
-
-    uint left_child = pc.bvh.nodes[node_idx].child_ptrs[0];
-    uint right_child = pc.bvh.nodes[node_idx].child_ptrs[1];
-
-    AABB left_aabb;
-    AABB right_aabb;
-
-    // Check if left child is a leaf. 
-    // If it is, its bound is stored in its own aabbs[0].
-    // Wait, is a leaf a full MotionBvhNode?
-    // In our static tree, leaves are just indices into primitive arrays.
-    // But we need somewhere to store the leaf AABB.
-    // If the leaf is just an index, where is its AABB?
-    // In `MotionBvhNode`, the `is_leaf` bitmask indicates if children are leaves.
-    bool left_is_leaf = (pc.bvh.nodes[node_idx].is_leaf & 1u) != 0;
-    bool right_is_leaf = (pc.bvh.nodes[node_idx].is_leaf & 2u) != 0;
-
-    if (left_is_leaf) {
-        // Left child is a leaf primitive. Its AABB was computed by motion_bounds.comp
-        // and stored in aabbs[0] of the LEAF node.
-        left_aabb = pc.bvh.nodes[left_child].aabbs[0];
-    } else {
-        // Left child is an internal node. Its bound is the union of its two children's bounds.
-        AABB c_left = pc.bvh.nodes[left_child].aabbs[0];
-        AABB c_right = pc.bvh.nodes[left_child].aabbs[1];
-        left_aabb.minBounds = min(c_left.minBounds, c_right.minBounds);
-        left_aabb.maxBounds = max(c_left.maxBounds, c_right.maxBounds);
-    }
-
-    if (right_is_leaf) {
-        right_aabb = pc.bvh.nodes[right_child].aabbs[0];
-    } else {
-        AABB c_left = pc.bvh.nodes[right_child].aabbs[0];
-        AABB c_right = pc.bvh.nodes[right_child].aabbs[1];
-        right_aabb.minBounds = min(c_left.minBounds, c_right.minBounds);
-        right_aabb.maxBounds = max(c_left.maxBounds, c_right.maxBounds);
-    }
-
-    // Write the computed AABBs to our node, so our parent can read them
-    pc.bvh.nodes[node_idx].aabbs[0] = left_aabb;
-    pc.bvh.nodes[node_idx].aabbs[1] = right_aabb;
 }

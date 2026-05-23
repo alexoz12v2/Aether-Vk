@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: MIT
 // @assets/sim/integrate_particles_p1_p2.comp
 //
 // Particle Velocity-Verlet Predictor — Phase 1 & 2
@@ -16,91 +15,47 @@
 // Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
 
 #version 450 core
-#extension GL_EXT_debug_printf : enable
-#extension GL_EXT_buffer_reference       : require
-#extension GL_EXT_scalar_block_layout    : require
-#extension GL_KHR_shader_subgroup_basic  : require
-#extension GL_GOOGLE_include_directive   : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_GOOGLE_include_directive : require
 
-#include "../debug_utils.glsl"
-#include "../bvh_utils.glsl"   // provides SUBGROUP_SIZE specialization constant
-
-// ─── AOSOA particle data (10 floats × SUBGROUP_SIZE per block) ─────────────
-// Slot layout (stride = SUBGROUP_SIZE):
-//   0=px  1=py  2=pz   3=vx  4=vy  5=vz   6=mass   7=fx  8=fy  9=fz
-layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleData {
-    float data[];
-};
-
-layout(push_constant, scalar) uniform PushConstants {
-    ParticleData particles;
-    float        dt;
-    uint         total_particles;
-} pc;
+#include "../bvh_utils.glsl"
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
-void main() {
-    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
-        debugPrintfEXT("Executing compute shader: integrate_particles_p1_p2.comp\n");
-    }
+layout(push_constant, scalar) uniform PushConstants {
+    ParticleData particles; float dt; uint total_particles;
+} pc;
 
+void main() {
     uint gid = gl_GlobalInvocationID.x;
     if (gid >= pc.total_particles) return;
 
-    uint block = gid / SUBGROUP_SIZE;
-    uint lane  = gid % SUBGROUP_SIZE;
-    uint base  = block * (10u * SUBGROUP_SIZE) + lane;
+    uint base = (gid / SUBGROUP_SIZE) * (10u * SUBGROUP_SIZE) + (gid % SUBGROUP_SIZE);
 
-    // ── Load mass; skip zero-mass (inactive) particles ─────────────────────
-    float mass = pc.particles.data[base + 6u * SUBGROUP_SIZE];
+    float mass = P_READ(pc.particles, base + 6u * SUBGROUP_SIZE);
     if (mass <= 0.0) return;
 
-    float inv_m   = 1.0 / mass;
+    float inv_m = 1.0 / mass;
     float half_dt = 0.5 * pc.dt;
 
-    // ── Phase 1: Half-kick — compute v_{n+½} ──────────────────────────────
-    vec3 v_n = vec3(
-        pc.particles.data[base + 3u * SUBGROUP_SIZE],
-        pc.particles.data[base + 4u * SUBGROUP_SIZE],
-        pc.particles.data[base + 5u * SUBGROUP_SIZE]
-    );
-    vec3 f_n = vec3(
-        pc.particles.data[base + 7u * SUBGROUP_SIZE],
-        pc.particles.data[base + 8u * SUBGROUP_SIZE],
-        pc.particles.data[base + 9u * SUBGROUP_SIZE]
-    );
+    vec3 v_n = vec3(P_READ(pc.particles, base + 3u * SUBGROUP_SIZE), P_READ(pc.particles, base + 4u * SUBGROUP_SIZE), P_READ(pc.particles, base + 5u * SUBGROUP_SIZE));
+    vec3 f_n = vec3(P_READ(pc.particles, base + 7u * SUBGROUP_SIZE), P_READ(pc.particles, base + 8u * SUBGROUP_SIZE), P_READ(pc.particles, base + 9u * SUBGROUP_SIZE));
 
     vec3 v_half = v_n + f_n * inv_m * half_dt;
-
-    // ── Phase 2: Full position leap — compute x_{n+1} ─────────────────────
-    vec3 pos_n = vec3(
-        pc.particles.data[base + 0u * SUBGROUP_SIZE],
-        pc.particles.data[base + 1u * SUBGROUP_SIZE],
-        pc.particles.data[base + 2u * SUBGROUP_SIZE]
-    );
-
+    vec3 pos_n = vec3(P_READ(pc.particles, base + 0u * SUBGROUP_SIZE), P_READ(pc.particles, base + 1u * SUBGROUP_SIZE), P_READ(pc.particles, base + 2u * SUBGROUP_SIZE));
     vec3 pos_next = pos_n + v_half * pc.dt;
 
-    // ── Write x_{n+1} and v_{n+½} ─────────────────────────────────────────
-    pc.particles.data[base + 0u * SUBGROUP_SIZE] = pos_next.x;
-    pc.particles.data[base + 1u * SUBGROUP_SIZE] = pos_next.y;
-    pc.particles.data[base + 2u * SUBGROUP_SIZE] = pos_next.z;
+    P_WRITE(pc.particles, base + 0u * SUBGROUP_SIZE, pos_next.x);
+    P_WRITE(pc.particles, base + 1u * SUBGROUP_SIZE, pos_next.y);
+    P_WRITE(pc.particles, base + 2u * SUBGROUP_SIZE, pos_next.z);
 
-    pc.particles.data[base + 3u * SUBGROUP_SIZE] = v_half.x;
-    pc.particles.data[base + 4u * SUBGROUP_SIZE] = v_half.y;
-    pc.particles.data[base + 5u * SUBGROUP_SIZE] = v_half.z;
+    P_WRITE(pc.particles, base + 3u * SUBGROUP_SIZE, v_half.x);
+    P_WRITE(pc.particles, base + 4u * SUBGROUP_SIZE, v_half.y);
+    P_WRITE(pc.particles, base + 5u * SUBGROUP_SIZE, v_half.z);
 
-    // ── CRITICAL: Clear force buffer for the upcoming force-generation pass ─
-    // Force generators accumulate via atomicAdd; this guarantees a clean slate.
-    pc.particles.data[base + 7u * SUBGROUP_SIZE] = 0.0;
-    pc.particles.data[base + 8u * SUBGROUP_SIZE] = 0.0;
-    pc.particles.data[base + 9u * SUBGROUP_SIZE] = 0.0;
-
-    if (SHOULD_DEBUG_PRINT) {
-        debugPrintfEXT("[p1_p2] id=%d  pos_next=(%.4f,%.4f,%.4f)  v_half=(%.4f,%.4f,%.4f)\n",
-            gid,
-            pos_next.x, pos_next.y, pos_next.z,
-            v_half.x,   v_half.y,   v_half.z);
-    }
+    P_WRITE(pc.particles, base + 7u * SUBGROUP_SIZE, 0.0);
+    P_WRITE(pc.particles, base + 8u * SUBGROUP_SIZE, 0.0);
+    P_WRITE(pc.particles, base + 9u * SUBGROUP_SIZE, 0.0);
 }

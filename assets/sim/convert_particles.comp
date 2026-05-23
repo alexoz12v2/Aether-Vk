@@ -1,5 +1,4 @@
 #version 450 core
-#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_scalar_block_layout : require
@@ -55,13 +54,6 @@ layout(push_constant, scalar) uniform PushConstants {
 const uint SUBGROUP_SIZE = 32;
 
 void main() {
-    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
-        debugPrintfEXT("Executing compute shader: convert_particles.comp\n");
-    }
-
-    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
-        debugPrintfEXT("Hello from convert_particles.comp!\\n");
-    }
     uint total_particles = pc.atomic_counters.counts[0];
 
     // Only thread 0 writes the indirect command
@@ -94,7 +86,7 @@ void main() {
     float mass = pc.aosoa_particles.data[in_base + 6 * SUBGROUP_SIZE];
 
     uint out_idx = pc.mega_particle_offset + idx;
-    
+
     // We do not have IDs or Age from the physics simulation right now.
     // They could be added in emit_particles.comp in the future.
     pc.mega_particles.data[out_idx].id_low = 0;

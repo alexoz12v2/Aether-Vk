@@ -14,43 +14,30 @@
 //
 // Target: SPIR-V 1.4 · Vulkan 1.1
 
+// @assets/sim/bp_clear.comp
 #version 450 core
-#extension GL_EXT_debug_printf : enable
-#extension GL_EXT_buffer_reference      : require
-#extension GL_EXT_scalar_block_layout   : require
-#extension GL_GOOGLE_include_directive  : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
 
 #include "../debug_utils.glsl"
-
-// ─── Each queue has a leading uint count followed by the pair data ───────────
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer PairBuffer {
-    uint  count;
-    uvec2 pairs[];   // pair data follows — we never touch it in this shader
-};
-
-// ─── Push constants (40 bytes) ──────────────────────────────────────────────
-layout(push_constant, scalar) uniform PushConstants {
-    PairBuffer raw_scene_pairs;  // BDA — 8 B
-    PairBuffer out_rb_rb;        // BDA — 8 B
-    PairBuffer out_rb_ps;        // BDA — 8 B
-    PairBuffer out_rb_lca;       // BDA — 8 B
-    // 40 bytes total — well within the 128-byte limit
-} pc;
+#include "../bvh_utils.glsl"
 
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
-void main() {
-    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
-        debugPrintfEXT("Executing compute shader: bp_clear.comp\n");
-    }
+layout(push_constant, scalar) uniform PushConstants {
+    PairBuffer raw_scene_pairs;
+    PairBuffer out_rb_rb;
+    PairBuffer out_rb_ps;
+    PairBuffer out_rb_lca;
+    PairBuffer internal_pairs;
+} pc;
 
-    // Clear the raw generator buffer and all classified narrow-phase queues
+void main() {
     pc.raw_scene_pairs.count = 0u;
     pc.out_rb_rb.count       = 0u;
     pc.out_rb_ps.count       = 0u;
     pc.out_rb_lca.count      = 0u;
-
-    if (SHOULD_DEBUG_PRINT) {
-        debugPrintfEXT("[bp_clear] all four pair queues reset to 0\n");
-    }
+    pc.internal_pairs.count  = 0u;
 }

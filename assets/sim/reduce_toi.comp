@@ -1,5 +1,4 @@
 #version 450 core
-#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_KHR_shader_subgroup_basic : require
@@ -10,17 +9,6 @@
 #include "../bvh_utils.glsl"
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
-
-
-
-// Particles data (AOSOA flattened)
-layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer ParticleData {
-    float data[];
-};
-
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer OutputTOI {
-    uint min_tc_uint; // We use uint to allow atomicMin
-};
 
 layout(push_constant, scalar) uniform PushConstants {
     ParticleData particles;
@@ -34,90 +22,25 @@ layout(push_constant, scalar) uniform PushConstants {
 shared uint shared_min_toi[128 / SUBGROUP_SIZE];
 
 void main() {
-    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
-        debugPrintfEXT("Executing compute shader: reduce_toi.comp\n");
-    }
-
-    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
-        debugPrintfEXT("Hello from reduce_toi.comp! count=%d\n", pc.collisions.count);
-    }
     uint global_id = gl_GlobalInvocationID.x;
     uint local_id = gl_LocalInvocationID.x;
     uint subgroup_id = gl_SubgroupID;
-    
+
     float tc = pc.dt; // Default to max time
-    
+
     if (global_id < pc.collisions.count) {
-        PackedPair pair = pc.collisions.pairs[global_id];
-        uint pA_id = pair.a.primitive_index;
-        uint pB_id = pair.b.primitive_index;
-        
-        if (pair.a.entity_id == 1) {
-            tc = 0.0;
-        } else {
-            uint blockA = pA_id / SUBGROUP_SIZE;
-            uint locA = pA_id % SUBGROUP_SIZE;
-            uint baseA = blockA * (10 * SUBGROUP_SIZE) + locA;
-            
-            uint blockB = pB_id / SUBGROUP_SIZE;
-            uint locB = pB_id % SUBGROUP_SIZE;
-            uint baseB = blockB * (10 * SUBGROUP_SIZE) + locB;
-            
-            vec3 posA = vec3(
-                pc.particles.data[baseA + 0 * SUBGROUP_SIZE],
-                pc.particles.data[baseA + 1 * SUBGROUP_SIZE],
-                pc.particles.data[baseA + 2 * SUBGROUP_SIZE]
-            );
-            vec3 posB = vec3(
-                pc.particles.data[baseB + 0 * SUBGROUP_SIZE],
-                pc.particles.data[baseB + 1 * SUBGROUP_SIZE],
-                pc.particles.data[baseB + 2 * SUBGROUP_SIZE]
-            );
-            
-            vec3 vA = vec3(
-                pc.particles.data[baseA + 3 * SUBGROUP_SIZE],
-                pc.particles.data[baseA + 4 * SUBGROUP_SIZE],
-                pc.particles.data[baseA + 5 * SUBGROUP_SIZE]
-            );
-            vec3 vB = vec3(
-                pc.particles.data[baseB + 3 * SUBGROUP_SIZE],
-                pc.particles.data[baseB + 4 * SUBGROUP_SIZE],
-                pc.particles.data[baseB + 5 * SUBGROUP_SIZE]
-            );
-            
-            // Compute continuous TOI for moving spheres
-            vec3 dp = posA - posB;
-            vec3 dv = vA - vB;
-            
-            float a = dot(dv, dv);
-            float b = dot(dp, dv);
-            float c = dot(dp, dp) - (4.0 * pc.particle_radius * pc.particle_radius);
-            
-            if (a > 1e-8) {
-                float discriminant = b * b - a * c;
-                if (discriminant >= 0.0) {
-                    float t1 = (-b - sqrt(discriminant)) / a;
-                    // If particles intersect within dt
-                    if (t1 >= 0.0 && t1 < pc.dt) {
-                        tc = t1;
-                    } else if (t1 < 0.0 && c < 0.0) {
-                        // Already intersecting
-                        tc = 0.0;
-                    }
-                }
-            }
-        }
+        tc = pc.collisions.pairs[global_id].toi;
     }
-    
+
     // Subgroup reduction
     float subgroup_min_tc = subgroupMin(tc);
-    
+
     if (gl_SubgroupInvocationID == 0) {
         shared_min_toi[subgroup_id] = floatBitsToUint(subgroup_min_tc);
     }
-    
+
     barrier();
-    
+
     // Workgroup reduction
     if (local_id == 0) {
         uint num_subgroups = gl_WorkGroupSize.x / SUBGROUP_SIZE;
@@ -125,7 +48,7 @@ void main() {
         for (uint i = 1; i < num_subgroups; i++) {
             wg_min_uint = min(wg_min_uint, shared_min_toi[i]);
         }
-        
+
         // Global reduction
         atomicMin(pc.out_toi.min_tc_uint, wg_min_uint);
     }

@@ -1,42 +1,17 @@
 #version 450 core
-#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
-
-#include "../debug_utils.glsl"
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer AtomicCounters {
-    uint flags[];
-};
-
 layout(push_constant, scalar) uniform PushConstants {
-    BVHArray bvh;
-    AtomicCounters counters;
-    uint num_internal_nodes;
+    MultiBvhBuffer bvh; AtomicCounters counters; uint num_internal_nodes;
 } pc;
 
 void main() {
-    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
-        debugPrintfEXT("Executing compute shader: lbvh_prepass.comp\n");
-    }
-
-    if (SHOULD_DEBUG_PRINT && gl_GlobalInvocationID.x == 0) {
-        debugPrintfEXT("Hello from lbvh_prepass.comp!\\n");
-    }
-    uint idx = gl_GlobalInvocationID.x;
-    if (idx >= pc.num_internal_nodes) return;
-    
-    AtomicCounters counters = pc.counters;
-    
-    // Clear atomic flag
-    counters.flags[idx] = 0;
-    
-    // The radix tree root is ALWAYS at index 0.
-    if (idx == 0) {
-        pc.bvh.nodes[0].parent_idx = 0xFFFFFFFFu;
-    }
+    uint idx = gl_GlobalInvocationID.x; if (idx >= pc.num_internal_nodes) return;
+    pc.counters.counts[idx] = 0;
+    if (idx == 0) pc.bvh.nodes[0].parent_idx = 0xFFFFFFFFu;
 }
