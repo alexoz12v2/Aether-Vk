@@ -1,6 +1,6 @@
 #version 450 core
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
@@ -8,7 +8,7 @@
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
-layout(push_constant, scalar) uniform PushConstants {
+layout(push_constant, std430) uniform PushConstants {
     SparseCollisions sparse_in;
     PackedCollisions packed_out;
     uint total_elements;
@@ -17,7 +17,7 @@ layout(push_constant, scalar) uniform PushConstants {
 void main() {
 #ifdef DEBUG_SHADERS
     if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
-        debugPrintfEXT("Executing compute shader: stream_compact.comp\n");
+        debugPrintfEXT("Executing compute shader: stream_compact.comp");
     }
 #endif
 

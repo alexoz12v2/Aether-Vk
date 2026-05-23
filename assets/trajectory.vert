@@ -1,13 +1,13 @@
 #version 450 core
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_EXT_nonuniform_qualifier : require
 
 struct RationalBezier {
     vec4 cp0, cp1, cp2, cp3; 
 };
 
-layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer SegmentArray {
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer SegmentArray {
     RationalBezier segments[];
 };
 
@@ -18,7 +18,7 @@ struct Trajectory {
     uint textureId;           
 };
 
-layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer TrajectoryArray {
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer TrajectoryArray {
     Trajectory trajectories[];
 };
 
@@ -28,11 +28,11 @@ struct SegmentMap {
     uint subdivisions; 
 };
 
-layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer MapArray {
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer MapArray {
     SegmentMap maps[];
 };
 
-layout(push_constant, scalar) uniform PushConstants {
+layout(push_constant, std430) uniform PushConstants {
     MapArray mapPtr;         
     TrajectoryArray trajPtr; 
     mat4 viewProj;

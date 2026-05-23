@@ -10,11 +10,13 @@ pub struct RigidBodyLegacyGpu {
   pub mass: f32,
   /// Row-major 3×3 rotation matrix (9 floats).
   pub rotation: [f32; 9],
+  pub _pad_rot: [f32; 3],
   pub linear_velocity: [f32; 3],
   pub _pad0: f32,
   pub angular_velocity: [f32; 3],
   pub _pad1: f32,
   pub inertia_tensor: [f32; 9],
+  pub _pad_inertia: [f32; 3],
 }
 
 /// Backward-compat alias so existing code compiles while migrating.
@@ -76,14 +78,18 @@ pub struct Wrench {
 #[derive(Copy, Clone, Debug)]
 pub struct BvhNodeAABBGpu {
   pub min_bounds: [f32; 3],
+  pub _pad_min: f32,
   pub max_bounds: [f32; 3],
+  pub _pad_max: f32,
   pub left_child_or_primitive_offset: u32,
   pub right_child_offset: u32,
   pub primitive_count: u32,
   pub node_type: u32,
   pub parent_idx: u32,
   pub mass: f32,
+  pub _pad2: [u32; 2],
   pub center_of_mass: [f32; 3],
+  pub _pad3: f32,
 }
 
 #[repr(C)]
@@ -118,6 +124,7 @@ pub struct P5PushConstants {
 #[derive(Copy, Clone, Debug)]
 pub struct EntityGpu {
   pub bvh: u64,
+  pub _pad0: u64,
   pub transform: [[f32; 4]; 4],
   pub inv_transform: [[f32; 4]; 4],
   pub linear_velocity: [f32; 3],
@@ -129,7 +136,9 @@ pub struct EntityGpu {
   pub frame_scale_type: u32,
   pub scale_factor: f32,
   pub shape_type: u32,
+  pub _pad1: [u32; 3],
   pub shape_data: [f32; 3],
+  pub _pad2: f32,
 }
 
 #[repr(C)]
@@ -253,7 +262,9 @@ pub struct BarnesHutPushConstants {
 #[derive(Clone, Copy, Default, Debug)]
 pub struct AabbGpu {
   pub min_bounds: [f32; 3],
+  pub _pad_min: f32,
   pub max_bounds: [f32; 3],
+  pub _pad_max: f32,
 }
 
 #[repr(C)]

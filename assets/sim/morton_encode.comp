@@ -1,6 +1,6 @@
 #version 450 core
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
@@ -8,12 +8,12 @@
 
 layout(local_size_x_id = 0) in; // Binds to SUBGROUP_SIZE via Spec Constant
 
-layout(push_constant, scalar) uniform PushConstants {
+layout(push_constant, std430) uniform PushConstants {
     MortonArray morton_out;
     ParticleData particles;
     uint num_particles;
-    vec3 scene_min; // The global minimum bounds of the simulation space
-    vec3 scene_max; // The global maximum bounds of the simulation space
+    vec3 scene_min;
+    vec3 scene_max;
 } pc;
 
 // Expands a 10-bit integer into 30 bits by inserting 2 zeros after each bit.

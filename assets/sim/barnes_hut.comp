@@ -4,8 +4,8 @@
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_KHR_shader_subgroup_shuffle : require
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 
 #include "../bvh_utils.glsl"
 #include "imex_math.glsl"
@@ -13,9 +13,18 @@
 layout(local_size_x = 256) in;
 const uint SUBGROUPS_PER_WG = 256 / SUBGROUP_SIZE;
 
-layout(push_constant, scalar) uniform PushConstants {
-    ParticleData particles; MultiBvhBuffer bvh; ClusterListBuffer cluster_list; WrenchArray wrenches;
-    uint num_clusters; float dt; float theta; float G; float softening_sq; uint root_node_idx; uint cluster_threshold;
+layout(push_constant, std430) uniform PushConstants {
+    ParticleData particles;
+    MultiBvhBuffer bvh;
+    ClusterListBuffer cluster_list;
+    WrenchArray wrenches;
+    uint num_clusters;
+    float dt;
+    float theta;
+    float G;
+    float softening_sq;
+    uint root_node_idx;
+    uint cluster_threshold;
 } pc;
 
 shared uint shared_stacks[SUBGROUPS_PER_WG][64]; shared uint shared_stack_ptrs[SUBGROUPS_PER_WG];

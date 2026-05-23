@@ -1,6 +1,6 @@
 #version 450 core
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 
 struct TextGlyph {
     vec2 pos;
@@ -13,12 +13,12 @@ struct TextGlyph {
 };
 
 // Bindless BDA block for glyphs
-layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer GlyphArray {
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer GlyphArray {
     TextGlyph glyphs[];
 };
 
 // 72 bytes Push Constant
-layout(push_constant, scalar) uniform Push {
+layout(push_constant, std430) uniform Push {
     GlyphArray glyphsPtr;
     mat4 viewProj;
 } push;

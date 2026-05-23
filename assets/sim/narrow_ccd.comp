@@ -1,0 +1,126 @@
+#version 450 core
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_debug_printf : enable
+
+#include "../bvh_utils.glsl"
+#include "imex_math.glsl"
+#include "physics_core.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    RigidBodyArray scene_entities;
+    SparseCollisions output_list;
+    CrossSparseCollisions cross_output_list;
+    ParticleData particles;
+    PairBuffer pair_buffer;
+    CrossPairBuffer cross_pair_buffer;
+    LcaEntityArray lca_entities;
+    float dt;
+    float particle_radius;
+    uint space_type;
+} pc;
+
+void main() {
+    uint pair_idx = gl_GlobalInvocationID.x;
+    
+    uint idA, idB, lca_id;
+    bool is_partA = false, is_partB = false;
+
+    if (pc.space_type == 1) { // Cross
+        CrossPairBuffer cross_pairs = pc.cross_pair_buffer;
+        if (pair_idx >= cross_pairs.count) return;
+        CrossPair pair = cross_pairs.pairs[pair_idx];
+        idA = pair.macro_id;
+        idB = pair.micro_id;
+        lca_id = pair.lca_id;
+    } else { // Standard
+        if (pair_idx >= pc.pair_buffer.count) return;
+        uvec2 pair = pc.pair_buffer.pairs[pair_idx];
+        idA = pair.x;
+        idB = pair.y;
+    }
+
+    vec3 pos_A, vel_A, extents_A;
+    uint shape_A;
+    vec4 orient_A = vec4(0,0,0,1);
+
+    if (idA == 0xFFFFFFFFu) { // Sentinel for Particle (though bp_classify puts particles as ent_B usually, let's check both)
+        is_partA = true;
+    }
+    // Actually, bp_classify outputs pairs of entity IDs. Particles are not in EntityArray?
+    // Wait, in bp_classify.comp, it checks type_A = pc.scene_entities.entities[ent_A].type.
+    // So particles ARE in scene_entities! They have type = TYPE_PARTICLE_SYSTEM.
+    // Let's assume standard RigidBody loading for macro and micro, and check shape_type.
+    
+    RigidBody ent_A = pc.scene_entities.bodies[idA];
+    RigidBody ent_B = pc.scene_entities.bodies[idB];
+    
+    shape_A = ent_A.shape_type;
+    extents_A = ent_A.shape_extents;
+    orient_A = ent_A.orientation;
+    pos_A = ent_A.position_mass.xyz;
+    vel_A = ent_A.linear_vel_drag.xyz;
+    
+    uint shape_B = ent_B.shape_type;
+    vec3 extents_B = ent_B.shape_extents;
+    vec4 orient_B = ent_B.orientation;
+    vec3 pos_B = ent_B.position_mass.xyz;
+    vec3 vel_B = ent_B.linear_vel_drag.xyz;
+
+    mat4 trans_A = mat4(1.0);
+    mat4 trans_B = mat4(1.0);
+    
+    if (pc.space_type == 1) {
+        LcaEntity lca = pc.lca_entities.entities[lca_id];
+        vec3 macro_rel_vel_au = vel_A - lca.linear_velocity;
+        pos_A = (lca.inv_transform * vec4(pos_A, 1.0)).xyz * AU_TO_KM;
+        vel_A = (mat3(lca.inv_transform) * macro_rel_vel_au) * AU_TO_KM;
+        extents_A *= AU_TO_KM;
+        trans_A = lca.inv_transform; // roughly, though GJK needs standard translation
+    }
+    
+    mat3 rotA = quat_to_mat3(orient_A);
+    trans_A = mat4(vec4(rotA[0],0), vec4(rotA[1],0), vec4(rotA[2],0), vec4(pos_A,1.0));
+    
+    mat3 rotB = quat_to_mat3(orient_B);
+    trans_B = mat4(vec4(rotB[0],0), vec4(rotB[1],0), vec4(rotB[2],0), vec4(pos_B,1.0));
+
+    float toi, depth;
+    vec3 normal, contact;
+    
+#ifdef DEBUG_SHADERS
+    debugPrintfEXT("Narrow Phase CCD [pair %d]: idA=%d, idB=%d\n", pair_idx, idA, idB);
+#endif
+
+    if (compute_toi_generic(shape_A, extents_A, trans_A, vel_A, shape_B, extents_B, trans_B, vel_B, 1e-3, 10, toi, normal, contact, depth)) {
+        if (pc.space_type == 1) {
+            CrossSparseCollisions cross_out = pc.cross_output_list;
+            uint count = atomicAdd(cross_out.count, 1);
+            if (count < 4000u) {
+                cross_out.pairs[count].valid = 1u;
+                cross_out.pairs[count].macro_id = idA;
+                cross_out.pairs[count].micro_id = idB;
+                cross_out.pairs[count].lca_id = lca_id;
+                cross_out.pairs[count].toi = toi;
+                cross_out.pairs[count].contact_normal = normal;
+                cross_out.pairs[count].contact_point = contact;
+                cross_out.pairs[count].penetration_depth = depth;
+            }
+        } else {
+            uint count = atomicAdd(pc.output_list.count, 1);
+            if (count < 4000u) {
+                pc.output_list.pairs[count].entity_a = idA;
+                pc.output_list.pairs[count].prim_a = idA;
+                pc.output_list.pairs[count].entity_b = idB;
+                pc.output_list.pairs[count].prim_b = idB;
+                pc.output_list.pairs[count].toi = toi;
+                pc.output_list.pairs[count].contact_normal = normal;
+                pc.output_list.pairs[count].contact_point = contact;
+                pc.output_list.pairs[count].penetration_depth = depth;
+            }
+        }
+    }
+}

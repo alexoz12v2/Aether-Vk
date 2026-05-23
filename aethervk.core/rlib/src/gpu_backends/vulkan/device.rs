@@ -1544,7 +1544,7 @@ impl Device {
       queue_family_indices: unique_indices,
     };
 
-    let kernels = match VulkanComputeKernels::new(&device, res.allocator.allocator.as_allocator_view(), queue_sharing_info) {
+    let kernels = match VulkanComputeKernels::new(&device, res.allocator.allocator.as_allocator_view(), queue_sharing_info, chosen_physical_device_query_result.debug_shaders) {
       Ok(k) => k,
       Err(e) => {
         aethervk_oshal_rlib::log!("Device::new error in VulkanComputeKernels::new, destroying device!");

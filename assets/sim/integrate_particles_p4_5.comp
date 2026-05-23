@@ -18,8 +18,9 @@
 // Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
 
 #version 450 core
-#extension GL_EXT_buffer_reference       : require
-#extension GL_EXT_scalar_block_layout    : require
+#extension GL_EXT_buffer_reference2       : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_KHR_shader_subgroup_basic  : require
 #extension GL_GOOGLE_include_directive   : require
 
@@ -28,15 +29,15 @@
 #include "imex_math.glsl"      // add64
 
 // ─── Push constants (40 bytes) ──────────────────────────────────────────────
-layout(push_constant, scalar) uniform PushConstants {
-    ParticleData particles;       // BDA — 8 B
-    ClockBuffer  clock;           // BDA — 8 B
-    float        dt;              // physical dt in seconds — 4 B
-    uint         total_particles; // 4 B
-    uint         dt_us_lo;        // dt in microseconds, low  32 bits — 4 B
-    uint         dt_us_hi;        // dt in microseconds, high 32 bits — 4 B
-    uint         current_time_lo; // t_n in microseconds, low  32 bits — 4 B
-    uint         current_time_hi; // t_n in microseconds, high 32 bits — 4 B
+layout(push_constant, std430) uniform PushConstants {
+    ParticleData particles;
+    ClockBuffer  clock;
+    float        dt;
+    uint         total_particles;
+    uint         dt_us_lo;
+    uint         dt_us_hi;
+    uint         current_time_lo;
+    uint         current_time_hi;
 } pc;
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;

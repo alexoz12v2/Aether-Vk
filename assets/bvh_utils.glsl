@@ -9,17 +9,15 @@
 #ifndef BVH_UTILS_GLSL
 #define BVH_UTILS_GLSL
 
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_KHR_shader_subgroup_vote : require
 #extension GL_KHR_memory_scope_semantics : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 
-#ifndef SUBGROUP_SIZE
 layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
-#endif
 
 // ------------------------------------------------------------------
 // 1. Unified Multi-BVH Node (Shared by TLAS, Body BLAS, Particle BLAS)
@@ -39,7 +37,8 @@ struct MultiBvhNode {
     uint  permutations[8][SUBGROUP_SIZE];
 };
 
-layout(buffer_reference, scalar, buffer_reference_align = 16) buffer MultiBvhBuffer {
+// use std430 not scalar to play nice with molten vk MSL cross compilation
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer MultiBvhBuffer {
     MultiBvhNode nodes[];
 };
 
@@ -114,7 +113,7 @@ struct TLASLeaf { vec3 min_bound; uint entity_idx; vec3 max_bound; uint metadata
 struct RenderParticleData { uint id_low; uint id_high; uint age_low; uint age_high; vec3 position; float mass; vec3 velocity; uint is_active; };
 struct DrawIndirectCommand { uint vertexCount; uint instanceCount; uint firstVertex; uint firstInstance; };
 
-layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleData {
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer ParticleData {
   // Note: semantically a float. Declared as a uint to allow for atomic operations
   // 4 floats per particle as the following in aosoa format:
   // After p1 p2
@@ -128,13 +127,13 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) buffer ParticleDat
   //   float dvA[3 * SUBGROUP_SIZE];
 };
 
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer AtomicCounters { uint counts[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer MortonArray { uvec2 entries[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer PairBuffer { uint count; uvec2 pairs[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer PackedCollisions { uint dispatch_x; uint dispatch_y; uint dispatch_z; uint count; PackedPair pairs[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer SparseCollisions { uint count; SparseCollisionData pairs[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 16) buffer RigidBodyArray { RigidBody bodies[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 16) buffer RigidBodyUintArray {
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer AtomicCounters { uint counts[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer MortonArray { uvec2 entries[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer PairBuffer { uint count; uvec2 pairs[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer PackedCollisions { uint dispatch_x; uint dispatch_y; uint dispatch_z; uint count; PackedPair pairs[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer SparseCollisions { uint count; SparseCollisionData pairs[]; };
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer RigidBodyArray { RigidBody bodies[]; };
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer RigidBodyUintArray {
   // TODO: convenient getters.
   // Declared as uint to allow for atomic operations (we don't support them for floats)
   // RigidBody struct is 20 floats in aosoa format
@@ -151,22 +150,22 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) buffer RigidBodyUi
   //   float ang_vel[3 * SUBGROUP_SIZE];
   //   float inv_inertia[3 * SUBGROUP_SIZE];
 };
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer WrenchArray { Wrench wrenches[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 16) buffer EmitterArray { ForceEmitter emitters[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer KinematicArray { KinematicBody bodies[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 8) buffer LcaEntityArray { LcaEntity entities[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 16) buffer LeafBuffer { TLASLeaf leaves[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer DepthIndices { uint count; uint indices[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer CollapseMapBuffer { uint binary_roots[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer ImpulseOutput { vec3 impulses[]; };
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer OutputTOI { uint min_tc_uint; };
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer ClusterListBuffer { uint cluster_indices[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer WrenchArray { Wrench wrenches[]; };
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer EmitterArray { ForceEmitter emitters[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer KinematicArray { KinematicBody bodies[]; };
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer LcaEntityArray { LcaEntity entities[]; };
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer LeafBuffer { TLASLeaf leaves[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer DepthIndices { uint count; uint indices[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer CollapseMapBuffer { uint binary_roots[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer ImpulseOutput { vec3 impulses[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer OutputTOI { uint min_tc_uint; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer ClusterListBuffer { uint cluster_indices[]; };
 // ─── 64-bit engine clock (lo, hi) ───────────────────────────────────────────
-layout(buffer_reference, scalar, buffer_reference_align = 8) buffer ClockBuffer {
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer ClockBuffer {
   // lo = [0], hi = [1] — stored as uvec2 (x=lo, y=hi)
   uvec2 global_time_us;
 };
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer HistogramBuffer { uint counts[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer HistogramBuffer { uint counts[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer RenderParticleDataArray { RenderParticleData data[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer IndirectArray { DrawIndirectCommand commands[]; };
 
@@ -183,9 +182,9 @@ bool intersectAABB(vec3 amin, vec3 amax, vec3 bmin, vec3 bmax) { return (amin.x 
 //------------------------------------------------------------
 
 struct CrossPair { uint macro_id; uint micro_id; uint lca_id; uint pad; };
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer CrossPairBuffer { uint count; CrossPair pairs[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer CrossPairBuffer { uint count; CrossPair pairs[]; };
 
 struct CrossCollisionData { uint valid; uint macro_id; uint micro_id; uint lca_id; float toi; vec3 contact_normal; vec3 contact_point; float penetration_depth; };
-layout(buffer_reference, scalar, buffer_reference_align = 4) buffer CrossSparseCollisions { uint count; CrossCollisionData pairs[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer CrossSparseCollisions { uint count; CrossCollisionData pairs[]; };
 
 #endif // BVH_UTILS_GLSL

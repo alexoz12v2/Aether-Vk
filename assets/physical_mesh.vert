@@ -11,14 +11,14 @@ layout(location = 3) in vec4 inTangent; // Added for Normal Mapping (w is handed
 // Shared Push Constant block (Exactly 176 bytes TODO: move to inline unif?)
 // Note: cameraPos used for IBL view vector computation in fragment shader
 layout(push_constant) uniform Push {
-  layout(offset = 0) mat4 modelViewProj;
-  layout(offset = 64) mat4 model;
-  layout(offset = 128) vec3 sunPos;
-  layout(offset = 140) uint textureFlags;
-  layout(offset = 144) vec4 sunColor;
-  layout(offset = 160) vec3 cameraPos;
-  layout(offset = 172) float emissiveIntensity;
-  layout(offset = 176) vec3 emissiveColor;
+  mat4 modelViewProj;
+  mat4 model;
+  vec3 sunPos;
+  uint textureFlags;
+  vec4 sunColor;
+  vec3 cameraPos;
+  float emissiveIntensity;
+  vec3 emissiveColor;
 } push;
 
 layout(location = 0) out vec3 outWorldPos;

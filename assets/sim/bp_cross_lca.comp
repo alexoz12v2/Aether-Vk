@@ -1,7 +1,6 @@
 #version 450 core
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
-#extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_shuffle : require
@@ -13,9 +12,9 @@ layout(local_size_x = 256) in;
 const uint SUBGROUPS_PER_WG = 256 / SUBGROUP_SIZE;
 
 struct EntityHeader { uint type; uint pad[3]; };
-layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer EntityHeaderArray { EntityHeader entities[]; };
+layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer EntityHeaderArray { EntityHeader entities[]; };
 
-layout(push_constant, scalar) uniform PushConstants {
+layout(push_constant, std430) uniform PushConstants {
     LcaEntityArray lca_entities;
     LeafBuffer macro_leaves;
     EntityHeaderArray entity_headers;
@@ -23,7 +22,7 @@ layout(push_constant, scalar) uniform PushConstants {
     PairBuffer out_rb_rb;
     PairBuffer out_rb_ps;
     PairBuffer out_ps_ps;
-    CrossPairBuffer out_cross_pairs; // <-- Fixed: Added missing buffer mapping
+    CrossPairBuffer out_cross_pairs;
     uint total_queries;
     uint max_pairs;
 } pc;
