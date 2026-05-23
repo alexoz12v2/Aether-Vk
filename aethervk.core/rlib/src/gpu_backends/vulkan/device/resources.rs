@@ -332,6 +332,7 @@ impl DiscardPool {
           alloc,
           allocator,
         }) => unsafe {
+          aethervk_oshal_rlib::log!("DiscardItem::Buffer destroying buffer! buffer: {:?}", buffer);
           vk_mem::ffi::vmaDestroyBuffer(allocator, buffer, alloc.get_raw());
           core::mem::forget(alloc);
         },
@@ -4700,8 +4701,11 @@ pub(super) fn create_buffer_with_staging<T: Copy>(
       ..Default::default()
     };
     crate::apply_test_dedicated_alloc!(device_alloc_info);
-    unsafe { allocator.create_buffer(&device_buffer_info, &device_alloc_info) }
-      .with_name(device, &alloc::format!("VkBuffer_{}", debug_name))?
+    let (device_buffer, device_alloc) =
+      unsafe { allocator.create_buffer(&device_buffer_info, &device_alloc_info) }
+        .map_err(|_| crate::gpu_err!())?;
+    aethervk_oshal_rlib::log!("VMA CREATED BUFFER IN RESOURCES: {:?}", device_buffer);
+    Ok((device_buffer, device_alloc)).with_name(device, &alloc::format!("VkBuffer_{}", debug_name))?
   };
 
   // 3. Copy data to staging buffer

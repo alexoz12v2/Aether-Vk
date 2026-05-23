@@ -528,3 +528,59 @@ fn test_misc_and_models_api_direct() {
     }
   }
 }
+
+#[test]
+fn test_snapshot_and_restore() {
+  let mut ctx =
+    SimulationContext::startup(gpu::VULKAN_RENDER_BACKEND, Some(panic_error_callback)).unwrap();
+  let scene_id = ctx.create_empty_scene().unwrap();
+
+  // Spawn an entity and set position
+  let entity = ctx.spawn_entity(scene_id, "TestSnapshot").unwrap();
+  let initial_pos = <Vec3f32 as Vector3>::from_components(1.0, 2.0, 3.0);
+  ctx
+    .add_component_to_entity(
+      scene_id,
+      entity,
+      crate::scene::TransformComponent {
+        position: initial_pos,
+        rotation: <Quat as Quaternion>::identity(),
+        scale: <Vec3f32 as Vector3>::from_components(1.0, 1.0, 1.0),
+      },
+    )
+    .unwrap();
+
+  // Take snapshot
+  let _ = ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::SnapshotScene { scene_id });
+
+  // Wait for logic thread to process snapshot
+  oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
+
+  // Move the entity
+  ctx
+    .set_transform_component(
+      scene_id,
+      entity,
+      Vec3f32::from_components(5.0, 5.0, 5.0),
+      Quat::identity(),
+      Vec3f32::one(),
+    )
+    .unwrap();
+
+  // Verify it moved
+  let new_pos = ctx.get_transform_component2(scene_id, entity).unwrap().position;
+  assert_eq!(new_pos.x(), 5.0);
+
+  // Restore snapshot
+  let _ =
+    ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::RestoreSnapshot { scene_id });
+
+  // Wait for logic thread to process restore
+  oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
+
+  // Verify it was restored
+  let restored_pos = ctx.get_transform_component2(scene_id, entity).unwrap().position;
+  assert_eq!(restored_pos.x(), initial_pos.x());
+  assert_eq!(restored_pos.y(), initial_pos.y());
+  assert_eq!(restored_pos.z(), initial_pos.z());
+}

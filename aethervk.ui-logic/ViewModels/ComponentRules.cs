@@ -51,3 +51,41 @@ public class CometBvhRefreshRule : IComponentRule
     }
   }
 }
+
+/// <summary>
+/// A rule that triggers EPA recomputation for Particle Emitters when selected or when properties change.
+/// </summary>
+public class EpaRefreshRule : IComponentRule
+{
+  private readonly Services.NativeRuntimeService? _runtimeService;
+
+  public EpaRefreshRule(Services.NativeRuntimeService? runtimeService)
+  {
+    _runtimeService = runtimeService;
+  }
+
+  public void Apply(Entity entity)
+  {
+    var emitter = entity.Components.OfType<ParticleEmitterCirclesComponent>().FirstOrDefault();
+    if (emitter != null && _runtimeService != null)
+    {
+      // Clean up previous event subscription to avoid duplicates if called multiple times
+      emitter.PropertyChanged -= Emitter_PropertyChanged;
+      emitter.PropertyChanged += Emitter_PropertyChanged;
+
+      // Unsubscribe from inner circles as well
+      foreach (var circle in emitter.Circles)
+      {
+        circle.PropertyChanged -= Emitter_PropertyChanged;
+        circle.PropertyChanged += Emitter_PropertyChanged;
+      }
+      
+      void Emitter_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+      {
+        // Actually we only want to do this when paused.
+        // But NativeRuntimeService doesn't know if it's paused here easily, so we just trigger it.
+        _runtimeService.RecalculateJetPoints(entity.SceneId, entity.Id);
+      }
+    }
+  }
+}

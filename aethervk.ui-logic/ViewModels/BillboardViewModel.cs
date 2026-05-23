@@ -25,4 +25,7 @@ public partial class BillboardViewModel : ObservableObject
 
     [ObservableProperty]
     private int _zIndex = 1;
+
+    [ObservableProperty]
+    private double _opacity = 1.0;
 }

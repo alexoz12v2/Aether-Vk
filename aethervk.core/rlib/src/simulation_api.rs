@@ -37,6 +37,7 @@ pub mod render_thread;
 pub mod scene_api;
 pub mod structs;
 pub mod time_api;
+pub mod comet_api;
 
 #[cfg(test)]
 mod tests;
@@ -114,7 +115,7 @@ macro_rules! expect_entity {
 macro_rules! expect_scene_and_entity {
   ($scene_expr:expr, $entity_expr:expr, $context:expr) => {{
     // Re-use your existing scene macro
-    let scene = expect_scene!($scene_expr, $context);
+    let scene = $crate::expect_scene!($scene_expr, $context);
 
     // Extract the entity
     let entity = scene.read().get_entity($entity_expr).ok_or(EngineError::InvalidOperation(

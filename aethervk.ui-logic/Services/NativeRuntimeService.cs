@@ -1744,6 +1744,24 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
             {
               foreach (JetMarker jet in e.NewItems)
               {
+                if (_simulationContext != IntPtr.Zero)
+                {
+                  NativeInterop.avkSimulationContext_addJet(
+                    _simulationContext,
+                    sceneId,
+                    entity.Id,
+                    jet.RadiusKm,
+                    jet.Latitude,
+                    jet.Longitude,
+                    jet.ColorR,
+                    jet.ColorG,
+                    jet.ColorB,
+                    jet.Mass,
+                    jet.ParticlesPerTick,
+                    jet.TTL,
+                    jet.MeanVelocity
+                  );
+                }
                 jet.PropertyChanged += (js, je) =>
                 {
                   SyncMarkers(sceneId, entity.Id, comet);
@@ -1837,6 +1855,14 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         comet.BvhTree.Add(root);
       }
     }
+  }
+
+  public void RecalculateJetPoints(ulong sceneId, ulong entityId)
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return;
+
+    NativeInterop.avkSimulationContext_recalculateJetPoints(_simulationContext, sceneId, entityId);
   }
 
   public ulong SpawnProceduralSphere(ulong sceneId, string name, float radius, float mass)

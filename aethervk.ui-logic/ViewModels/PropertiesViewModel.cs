@@ -56,6 +56,7 @@ public partial class PropertiesViewModel
     // Register composable rules
     _componentRules.Add(new TransformEditableRule());
     _componentRules.Add(new CometBvhRefreshRule(_runtimeService));
+    _componentRules.Add(new EpaRefreshRule(_runtimeService));
 
     WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
   }
@@ -90,6 +91,17 @@ public partial class PropertiesViewModel
         CurrentSceneId,
         SelectedEntity.Id
       );
+      
+      // If it's a UI Billboard, it won't have native components
+      if (SelectedEntity.Name == "UI Billboard")
+      {
+          var billboardComp = SelectedEntity.Components.OfType<BillboardComponent>().FirstOrDefault();
+          if (billboardComp != null)
+          {
+              PropertiesExpanders.Add(billboardComp);
+          }
+      }
+
       bool hasCamera = componentNames.Any(n => n.EndsWith("CameraComponent"));
 
       foreach (var name in componentNames)
@@ -147,6 +159,18 @@ public partial class PropertiesViewModel
           if (existing == null)
           {
             existing = new ParticleEmitterCirclesComponent();
+            SelectedEntity.Components.Add(existing);
+          }
+          PropertiesExpanders.Add(existing);
+        }
+        else if (name.Contains("SphericalGizmo"))
+        {
+          var existing = SelectedEntity.Components
+            .OfType<SphericalGizmoComponent>()
+            .FirstOrDefault();
+          if (existing == null)
+          {
+            existing = new SphericalGizmoComponent();
             SelectedEntity.Components.Add(existing);
           }
           PropertiesExpanders.Add(existing);

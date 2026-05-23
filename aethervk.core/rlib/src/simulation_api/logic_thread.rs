@@ -31,7 +31,7 @@ struct PlayControl {
   scene_id: u64,
   target_frame_time: timeus_t,
   last_frame_start: timeus_t,
-  last_render_tick: Option<core::num::NonZero<u64>>,
+  last_render_ticks: alloc::vec::Vec<core::num::NonZero<u64>>,
 }
 
 impl PlayControl {
@@ -40,7 +40,7 @@ impl PlayControl {
       scene_id,
       target_frame_time,
       last_frame_start: oshal::os::time::get_monotonic_time(),
-      last_render_tick: None,
+      last_render_ticks: alloc::vec::Vec::new(),
     }
   }
 }
@@ -72,10 +72,11 @@ pub fn start_logic_thread(
 
         if elapsed >= pc.target_frame_time {
           let mut can_tick = true;
-          if let Some(task) = pc.last_render_tick {
+          for &task in &pc.last_render_ticks {
             let status = context.task_manager.read().get_status(task.get());
             if status == crate::simulation_api::structs::TaskStatusCode::Pending {
               can_tick = false;
+              break;
             }
           }
 
@@ -146,7 +147,7 @@ pub fn start_logic_thread(
               last_tasks.push((task_id, is_windowless, pe.0));
             }
 
-            let mut last_task = None;
+            let mut new_tasks = alloc::vec::Vec::new();
             if !render_frames.is_empty() {
               let send_res = context.render_tx.try_send(
                 crate::simulation_api::structs::RenderCommand::RenderFrames(render_frames),
@@ -165,7 +166,9 @@ pub fn start_logic_thread(
                   if task_id_val == u64::MAX {
                     continue;
                   }
-                  last_task = core::num::NonZero::new(task_id_val);
+                  if let Some(nz) = core::num::NonZero::new(task_id_val) {
+                    new_tasks.push(nz);
+                  }
 
                   if is_windowless {
                     let fptr = crate::simulation_api::RENDER_CALLBACK
@@ -204,7 +207,7 @@ pub fn start_logic_thread(
                 }
               }
             }
-            pc.last_render_tick = last_task;
+            pc.last_render_ticks = new_tasks;
             processed_any = true;
           }
         }
@@ -411,7 +414,26 @@ fn process_command_internal(
 ) -> EngineResult<SimulationTaskResult> {
   match command {
     LogicCommand::SnapshotScene { .. } => Ok(SimulationTaskResult::None),
-    LogicCommand::RestoreSnapshot { .. } => Ok(SimulationTaskResult::None),
+    LogicCommand::RestoreSnapshot { scene_id } => {
+      let scenes = ctx.scenes.read();
+      if let Some(scene_ctx_guard) = scenes.get(&scene_id) {
+        let scene_ctx = scene_ctx_guard.read();
+        
+        // 1. Zero out velocities and angular velocities
+        let _ = scene_ctx.scene.query1_res_mut(|id, k: &mut crate::scene::KinematicComponent| {
+          k.velocity = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero();
+          k.angular_velocity = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero();
+          Some(())
+        });
+
+        // 2. Clear accumulated integration errors and reset time
+        let mut time_state = scene_ctx.time_state.write();
+        time_state.current_epoch = time_state.epoch_start;
+        time_state.st_seconds_elapsed = 0.0;
+        time_state.time_info.write().ut_discard_accumulator();
+      }
+      Ok(SimulationTaskResult::None)
+    }
     LogicCommand::Shutdown => Ok(SimulationTaskResult::None),
     // TODO camera movement commands should use methods from [`crate::scene::camera`]
     LogicCommand::RotateCamera(crate::simulation_api::structs::RotateCamera {
@@ -747,7 +769,13 @@ fn process_command_internal(
     }
 
     LogicCommand::ImportModel { task_id: _, path } => {
-      let mesh_res = crate::simulation::comet::load_comet_from_gltf(&path, false, None);
+      let mesh_res = if path.ends_with(".obj") || path.ends_with(".OBJ") {
+        crate::simulation::comet::load_comet_from_obj(&path, false, None)
+      } else if path.ends_with(".ply") || path.ends_with(".PLY") {
+        crate::simulation::comet::load_comet_from_ply(&path, false, None)
+      } else {
+        crate::simulation::comet::load_comet_from_gltf(&path, false, None)
+      };
       match mesh_res {
         Ok(mesh) => {
           let mut scenes = ctx.scenes.write();
@@ -803,7 +831,14 @@ fn process_command_internal(
         };
 
         if needs_load {
-          if let Ok(mesh) = crate::simulation::comet::load_comet_from_gltf(&path_str, false, None) {
+          let mesh_res = if path_str.ends_with(".obj") || path_str.ends_with(".OBJ") {
+            crate::simulation::comet::load_comet_from_obj(&path_str, false, None)
+          } else if path_str.ends_with(".ply") || path_str.ends_with(".PLY") {
+            crate::simulation::comet::load_comet_from_ply(&path_str, false, None)
+          } else {
+            crate::simulation::comet::load_comet_from_gltf(&path_str, false, None)
+          };
+          if let Ok(mesh) = mesh_res {
             let scenes = ctx.scenes.read();
             scenes.mesh_cache.insert(path_str.clone(), mesh);
           }
@@ -961,7 +996,7 @@ fn execute_simulation_tick(
   scene_id: u64,
   ctx: &alloc::sync::Arc<LogicThreadContext>,
 ) -> EngineResult<()> {
-  let (time_state_arc, _physics_scene_arc, _scene_arc, active_physics_task) = {
+  let (time_state_arc, _physics_scene_arc, _scene_arc, active_physics_task, is_tlas_dirty, static_tlas) = {
     let scenes = ctx.scenes.read();
     let scene_ctx =
       scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
@@ -971,8 +1006,15 @@ fn execute_simulation_tick(
       scene_read.physics_scene.clone(),
       scene_read.scene.clone(),
       scene_read.active_physics_task.clone(),
+      scene_read.is_static_tlas_dirty.clone(),
+      scene_read.static_tlas.clone(),
     )
   };
+
+  if is_tlas_dirty.swap(false, core::sync::atomic::Ordering::Relaxed) {
+    let new_tlas = crate::physics::tlas_builder::build_selection_tlas(&_scene_arc);
+    *static_tlas.write() = new_tlas;
+  }
 
   // Wait for previous physics task to complete before mutating anything!
   if let Some(task) = active_physics_task.lock().take() {

@@ -125,19 +125,46 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         Ok(())
     }
 
-    fn bp_classify(&self, cmd: &mut Self::Cmd, bodies: &Self::Buffer<RigidBodyImex>, raw_pairs_addr: u64, out_rb_rb_addr: u64, out_rb_ps_addr: u64, out_rb_lca_addr: u64, total_raw_pairs: u32) -> EngineResult<()> { 
-        if self.target == MockTargetShader::BpClassify {
-            self.base.bp_classify(cmd, bodies, raw_pairs_addr, out_rb_rb_addr, out_rb_ps_addr, out_rb_lca_addr, total_raw_pairs)?;
-        }
+    fn bp_classify(
+      &self,
+      cmd: &mut Self::Cmd,
+      bodies: &Self::Buffer<RigidBodyImex>,
+      raw_pairs_addr: u64,
+      out_rb_rb_addr: u64,
+      out_rb_ps_addr: u64,
+      out_ps_ps_addr: u64,
+      out_macro_lca_addr: u64,
+      out_lca_lca_addr: u64,
+      total_raw_pairs: u32,
+    ) -> EngineResult<()> { 
+        self.base.bp_classify(
+            cmd, bodies, raw_pairs_addr, out_rb_rb_addr, out_rb_ps_addr,
+            out_ps_ps_addr, out_macro_lca_addr, out_lca_lca_addr, total_raw_pairs
+        )?;
         Ok(())
     }
 
-    fn bp_cross_lca(&self, cmd: &mut Self::Cmd, scene_entities: &Self::Buffer<RigidBodyImex>, lca_query_pairs_addr: u64, output_internal_pairs_addr: u64, total_queries: u32) -> EngineResult<()> { 
-        if self.target == MockTargetShader::BpCrossLca {
-            self.base.bp_cross_lca(cmd, scene_entities, lca_query_pairs_addr, output_internal_pairs_addr, total_queries)?;
-        }
-        Ok(())
-    }
+      fn bp_cross_lca(
+        &self,
+        cmd: &mut Self::Cmd,
+        lca_entities_addr: u64,
+        macro_leaves_addr: u64,
+        entity_headers_addr: u64,
+        lca_query_pairs_addr: u64,
+        out_rb_rb_addr: u64,
+        out_rb_ps_addr: u64,
+        out_ps_ps_addr: u64,
+        out_cross_pairs_addr: u64,
+        total_queries: u32,
+        max_pairs: u32,
+      ) -> EngineResult<()> {
+          self.base.bp_cross_lca(
+              cmd, lca_entities_addr, macro_leaves_addr, entity_headers_addr,
+              lca_query_pairs_addr, out_rb_rb_addr, out_rb_ps_addr, out_ps_ps_addr,
+              out_cross_pairs_addr, total_queries, max_pairs
+          )?;
+          Ok(())
+      }
 
     fn bp_particle_self(&self, cmd: &mut Self::Cmd, bvh_addr: u64, particles: &mut Self::Buffer<f32>, wrench_buffer_addr: u64, total_particles: u32, root_index: u32, particle_radius: f32, stiffness: f32) -> EngineResult<()> { 
         if self.target == MockTargetShader::BpParticleSelf {
@@ -158,9 +185,9 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         self.base.intersect_instances(cmd, potentials, kinematics, rigid_bodies, particles)
     }
 
-    fn narrow_ccd(&self, cmd: &mut Self::Cmd, broadphase_pairs: &Self::List<CollisionPair>, rigid_bodies: &Self::Buffer<RigidBodyImex>, particles: &Self::Buffer<f32>) -> EngineResult<Self::List<CollisionPair>> {
+    fn narrow_ccd(&self, cmd: &mut Self::Cmd, broadphase_pairs: &Self::List<CollisionPair>, rigid_bodies: &Self::Buffer<RigidBodyImex>, particles: &Self::Buffer<f32>, lca_entities: u64, space_type: u32) -> EngineResult<Self::List<CollisionPair>> {
         if self.target == MockTargetShader::Ccd {
-            self.base.narrow_ccd(cmd, broadphase_pairs, rigid_bodies, particles)
+            self.base.narrow_ccd(cmd, broadphase_pairs, rigid_bodies, particles, lca_entities, space_type)
         } else {
             self.base.build_list(cmd, broadphase_pairs.capacity())
         }

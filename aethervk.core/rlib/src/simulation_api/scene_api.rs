@@ -263,6 +263,56 @@ impl SimulationContext {
   /// TODO: Document this item
   pub fn create_empty_scene(&self) -> EngineResult<u64> {
     let (scene, root_entity) = empty_scene_object(Arc::clone(&self.texture_cache))?;
+    
+    // 2. Sun Entity
+    let sun_entity = scene.spawn_entity("sun");
+    scene.set_parent(sun_entity, Some(root_entity));
+    scene.add_component(
+      sun_entity,
+      crate::scene::TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(0.0046524726, 0.0046524726, 0.0046524726),
+      },
+    )?;
+    scene.add_component(
+      sun_entity,
+      crate::scene::SunComponent {
+        resolution: (2048, 2048, 1),
+        radius: 0.0046524726,
+      },
+    )?;
+
+    // 3. Camera Entity
+    let home_position = Vec3f32::from_components(0.0115, 0.0115, 0.0115);
+    let camera_entity = scene.spawn_entity("camera");
+    scene.set_parent(camera_entity, Some(root_entity));
+    
+    scene.add_component(
+      camera_entity,
+      crate::scene::TransformComponent {
+        position: home_position,
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    )?;
+    scene.add_component(
+      camera_entity,
+      crate::scene::CameraComponent {
+        projection: crate::scene::CameraProjection::Perspective {
+          fov: 60.0_f32.to_radians(),
+          aspect_ratio: 16.0 / 9.0,
+          near: 0.0001,
+          far: 1000.0,
+        },
+      },
+    )?;
+
+    // 4. Sky Entity
+    let sky_entity = scene.spawn_entity("sky");
+    scene.set_parent(sky_entity, Some(camera_entity));
+    scene.add_component(sky_entity, crate::scene::SkyComponent {})?;
+
     let scene_ctx = Arc::new(RwLock::new(
       SceneContext::new_empty(Arc::new(scene), root_entity).with_physics_scene(),
     ));
@@ -581,6 +631,8 @@ impl SimulationContext {
         grid_density: 1.0,
       },
     )?;
+    
+    scene_ctx.is_static_tlas_dirty.store(true, core::sync::atomic::Ordering::Relaxed);
 
     scene_ctx.scene.add_component(
       comet_id,

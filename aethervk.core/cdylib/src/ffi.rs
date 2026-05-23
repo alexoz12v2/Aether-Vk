@@ -11,6 +11,7 @@ use aethervk_core_rlib::{
   },
   types::EngineError,
 };
+use aethervk_core_rlib::simulation_api::comet_api::CometApi;
 use aethervk_oshal_rlib as oshal;
 use aethervk_oshal_rlib::math::quaternion::Quaternion;
 use aethervk_oshal_rlib::math::vector::{Vector3, Vector4, vec3::Vec3f32, vec4::Quat};
@@ -19,6 +20,16 @@ use core::{
   ffi::{CStr, c_char},
   str::FromStr,
 };
+
+pub type PanicCallback = extern "C" fn(*const u8, usize);
+pub static mut PANIC_CALLBACK: Option<PanicCallback> = None;
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_registerPanicCallback(cb: PanicCallback) {
+  PANIC_CALLBACK = Some(cb);
+}
+
 // -------------------- C Exposed API (Async & Stateless) ----------------------------
 
 fn backend_id_from_str(backend_std: &str) -> Option<gpu::RenderBackendId> {
@@ -2652,5 +2663,47 @@ mod tests {
     let f: unsafe extern "C" fn(*mut SimulationContext, u64, u64, i32, f64, f64, f64) -> u64 =
       avkSimulationContext_updateTrajectoryForSpk;
     assert!(f as usize > 0);
+  }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn avkSimulationContext_addJet(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  comet_id: u64,
+  radius_km: f32,
+  lat: f32,
+  lon: f32,
+  color_r: f32,
+  color_g: f32,
+  color_b: f32,
+  mass: f32,
+  particles_per_tick: u32,
+  ttl: f32,
+  mean_velocity: f32,
+) -> u64 {
+  if ctx.is_null() {
+    return 0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  match ctx_ref.add_jet(
+    scene_id,
+    comet_id,
+    radius_km,
+    lat,
+    lon,
+    color_r,
+    color_g,
+    color_b,
+    mass,
+    particles_per_tick,
+    ttl,
+    mean_velocity,
+  ) {
+    Ok(id) => id,
+    Err(e) => {
+      aethervk_oshal_rlib::log!("Error adding jet: {:?}", e);
+      0
+    }
   }
 }

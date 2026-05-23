@@ -174,6 +174,7 @@ impl FrameStagingArena {
   /// TODO: Document this item
   #[named]
   pub fn new(allocator: &vk_mem::Allocator, capacity: usize) -> GpuResult<Self> {
+    aethervk_oshal_rlib::log!("FrameStagingArena::new called! capacity={}", capacity);
     let buffer_info = vk::BufferCreateInfo::default()
       .size(capacity as u64)
       .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
@@ -226,6 +227,7 @@ impl FrameStagingArena {
 
   /// TODO: Document this item
   pub fn destroy(&mut self, allocator: &vk_mem::Allocator) {
+    aethervk_oshal_rlib::log!("FrameStagingArena::destroy called!");
     unsafe {
       allocator.destroy_buffer(self.buffer, &mut self.allocation);
     }

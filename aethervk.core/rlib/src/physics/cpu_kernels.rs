@@ -356,7 +356,9 @@ impl Kernels for CpuScalarKernels {
     raw_pairs_addr: u64,
     out_rb_rb_addr: u64,
     out_rb_ps_addr: u64,
-    out_rb_lca_addr: u64,
+    out_ps_ps_addr: u64,
+    out_macro_lca_addr: u64,
+    out_lca_lca_addr: u64,
     total_raw_pairs: u32,
   ) -> EngineResult<()> {
     Ok(())
@@ -365,10 +367,16 @@ impl Kernels for CpuScalarKernels {
   fn bp_cross_lca(
     &self,
     cmd: &mut Self::Cmd,
-    scene_entities: &Self::Buffer<RigidBodyImex>,
+    lca_entities_addr: u64,
+    macro_leaves_addr: u64,
+    entity_headers_addr: u64,
     lca_query_pairs_addr: u64,
-    output_internal_pairs_addr: u64,
+    out_rb_rb_addr: u64,
+    out_rb_ps_addr: u64,
+    out_ps_ps_addr: u64,
+    out_cross_pairs_addr: u64,
     total_queries: u32,
+    max_pairs: u32,
   ) -> EngineResult<()> {
     Ok(())
   }
@@ -423,6 +431,8 @@ impl Kernels for CpuScalarKernels {
     broadphase_pairs: &Self::List<CollisionPair>,
     _rigid_bodies: &Self::Buffer<RigidBodyImex>,
     _particles: &Self::Buffer<f32>,
+    _lca_entities: u64,
+    _space_type: u32,
   ) -> EngineResult<Self::List<CollisionPair>> {
     Ok(CpuList { data: alloc::vec::Vec::new() })
   }
@@ -714,7 +724,9 @@ impl Kernels for CpuSimdKernels {
     raw_pairs_addr: u64,
     out_rb_rb_addr: u64,
     out_rb_ps_addr: u64,
-    out_rb_lca_addr: u64,
+    out_ps_ps_addr: u64,
+    out_macro_lca_addr: u64,
+    out_lca_lca_addr: u64,
     total_raw_pairs: u32,
   ) -> EngineResult<()> {
     Ok(())
@@ -723,10 +735,16 @@ impl Kernels for CpuSimdKernels {
   fn bp_cross_lca(
     &self,
     cmd: &mut Self::Cmd,
-    scene_entities: &Self::Buffer<RigidBodyImex>,
+    lca_entities_addr: u64,
+    macro_leaves_addr: u64,
+    entity_headers_addr: u64,
     lca_query_pairs_addr: u64,
-    output_internal_pairs_addr: u64,
+    out_rb_rb_addr: u64,
+    out_rb_ps_addr: u64,
+    out_ps_ps_addr: u64,
+    out_cross_pairs_addr: u64,
     total_queries: u32,
+    max_pairs: u32,
   ) -> EngineResult<()> {
     Ok(())
   }
@@ -781,6 +799,8 @@ impl Kernels for CpuSimdKernels {
     broadphase_pairs: &Self::List<CollisionPair>,
     _rigid_bodies: &Self::Buffer<RigidBodyImex>,
     _particles: &Self::Buffer<f32>,
+    _lca_entities: u64,
+    _space_type: u32,
   ) -> EngineResult<Self::List<CollisionPair>> {
     Ok(CpuList { data: alloc::vec::Vec::new() })
   }

@@ -28,11 +28,14 @@ use ash::vk;
 #[derive(Clone, Copy)]
 pub struct NarrowCcdPushConstants {
   pub scene_entities: u64,
-  pub output_list: u64,
   pub particles: u64,
+  pub output_list: u64,
   pub pair_buffer: u64,
   pub dt: f32,
   pub particle_radius: f32,
+  pub lca_entities: u64,
+  pub space_type: u32,
+  pub _pad: u32,
 }
 
 #[repr(C)]
@@ -1968,7 +1971,9 @@ impl VulkanComputeKernels {
     raw_pairs_addr: u64,
     out_rb_rb_addr: u64,
     out_rb_ps_addr: u64,
-    out_rb_lca_addr: u64,
+    out_ps_ps_addr: u64,
+    out_macro_lca_addr: u64,
+    out_lca_lca_addr: u64,
     total_raw_pairs: u32,
   ) {
     let wg_size = 256u32;
@@ -1979,7 +1984,7 @@ impl VulkanComputeKernels {
       raw_pairs: raw_pairs_addr,
       out_rb_rb: out_rb_rb_addr,
       out_rb_ps: out_rb_ps_addr,
-      out_rb_lca: out_rb_lca_addr,
+      out_rb_lca: out_macro_lca_addr,
       n_entities: (total_raw_pairs as f64).sqrt() as u32,
       _pad: 0,
     };
@@ -2026,9 +2031,15 @@ impl VulkanComputeKernels {
     device: &LogicalDevice,
     cmd: &mut VulkanCommandBuffer,
     scene_entities_addr: u64,
+    macro_leaves_addr: u64,
+    entity_headers_addr: u64,
     lca_query_pairs_addr: u64,
+    out_rb_rb_addr: u64,
+    out_rb_ps_addr: u64,
+    out_ps_ps_addr: u64,
     output_internal_pairs_addr: u64,
     total_queries: u32,
+    max_pairs: u32,
   ) {
     let _wg_size = 256u32;
     let subgroups_per_wg = 256u32 / 32u32;
@@ -3165,8 +3176,10 @@ impl Kernels for Device {
     broadphase_pairs: &Self::List<crate::gpu::CollisionPair>,
     rigid_bodies: &Self::Buffer<crate::gpu::RigidBodyImex>,
     particles: &Self::Buffer<f32>,
-  ) -> crate::types::EngineResult<Self::List<crate::gpu::CollisionPair>> {
-    self.narrow_ccd(cmd, broadphase_pairs, rigid_bodies, particles)
+    lca_entities: u64,
+    space_type: u32,
+  ) -> EngineResult<Self::List<crate::gpu::CollisionPair>> {
+    self.narrow_ccd(cmd, broadphase_pairs, rigid_bodies, particles, lca_entities, space_type)
   }
 
   type Cmd = VulkanCommandBuffer;
@@ -4053,7 +4066,9 @@ impl Kernels for Device {
     raw_pairs_addr: u64,
     out_rb_rb_addr: u64,
     out_rb_ps_addr: u64,
-    out_rb_lca_addr: u64,
+    out_ps_ps_addr: u64,
+    out_macro_lca_addr: u64,
+    out_lca_lca_addr: u64,
     total_raw_pairs: u32,
   ) -> EngineResult<()> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
@@ -4066,7 +4081,9 @@ impl Kernels for Device {
           raw_pairs_addr,
           out_rb_rb_addr,
           out_rb_ps_addr,
-          out_rb_lca_addr,
+          out_ps_ps_addr,
+          out_macro_lca_addr,
+          out_lca_lca_addr,
           total_raw_pairs,
         );
         Ok(())
@@ -4078,10 +4095,16 @@ impl Kernels for Device {
   fn bp_cross_lca(
     &self,
     cmd: &mut Self::Cmd,
-    scene_entities: &Self::Buffer<RigidBodyImex>,
+    lca_entities_addr: u64,
+    macro_leaves_addr: u64,
+    entity_headers_addr: u64,
     lca_query_pairs_addr: u64,
-    output_internal_pairs_addr: u64,
+    out_rb_rb_addr: u64,
+    out_rb_ps_addr: u64,
+    out_ps_ps_addr: u64,
+    out_cross_pairs_addr: u64,
     total_queries: u32,
+    max_pairs: u32,
   ) -> EngineResult<()> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
@@ -4089,10 +4112,16 @@ impl Kernels for Device {
         self.kernels.bp_cross_lca(
           &self.device,
           cmd,
-          scene_entities.address,
+          lca_entities_addr,
+          macro_leaves_addr,
+          entity_headers_addr,
           lca_query_pairs_addr,
-          output_internal_pairs_addr,
+          out_rb_rb_addr,
+          out_rb_ps_addr,
+          out_ps_ps_addr,
+          out_cross_pairs_addr,
           total_queries,
+          max_pairs,
         );
         Ok(())
       })
@@ -4139,6 +4168,8 @@ impl Device {
     broadphase_pairs: &VulkanBuffer<crate::gpu::CollisionPair>,
     rigid_bodies: &VulkanBuffer<crate::gpu::RigidBodyImex>,
     particles: &VulkanBuffer<f32>,
+    lca_entities: u64,
+    space_type: u32,
   ) -> crate::types::EngineResult<VulkanBuffer<crate::gpu::CollisionPair>> {
     let output_list =
       self.build_list::<crate::gpu::CollisionPair>(cmd, broadphase_pairs.capacity)?;
@@ -4150,6 +4181,9 @@ impl Device {
       pair_buffer: broadphase_pairs.address,
       dt: 0.0,
       particle_radius: 0.5,
+      lca_entities,
+      space_type,
+      _pad: 0,
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))

@@ -345,6 +345,49 @@ public partial class JetMarker : ObservableObject
 
   [ObservableProperty]
   private float _size = 5.0f;
+
+  [ObservableProperty]
+  private float _radius = 0.1f;
+
+  public float RadiusKm
+  {
+      get => Radius / 1000f;
+      set => Radius = value * 1000f;
+  }
+
+  partial void OnRadiusChanged(float value)
+  {
+      OnPropertyChanged(nameof(RadiusKm));
+  }
+
+  [ObservableProperty]
+  private float _latitude;
+
+  [ObservableProperty]
+  private float _longitude;
+
+  [ObservableProperty]
+  private float _mass = 1.0f;
+
+  public float MassGrams
+  {
+      get => Mass * 1000f;
+      set => Mass = value / 1000f;
+  }
+
+  partial void OnMassChanged(float value)
+  {
+      OnPropertyChanged(nameof(MassGrams));
+  }
+
+  [ObservableProperty]
+  private int _particlesPerTick = 100;
+
+  [ObservableProperty]
+  private float _tTL = 1000.0f;
+
+  [ObservableProperty]
+  private float _meanVelocity = 10.0f;
 }
 
 public partial class CometComponent : ObservableObject, IComponent
@@ -516,8 +559,8 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
       {
         LatitudeRad = Circles[i].LatitudeDeg * (float)Math.PI / 180f,
         LongitudeRad = Circles[i].LongitudeDeg * (float)Math.PI / 180f,
-        CircleRadiusFrac = Circles[i].CircleRadius,
-        Mass = Circles[i].Mass,
+        CircleRadiusFrac = Circles[i].CircleRadius * 1000f,
+        Mass = Circles[i].Mass / 1000f,
         ColorR = Circles[i].ColorR,
         ColorG = Circles[i].ColorG,
         ColorB = Circles[i].ColorB,
@@ -551,8 +594,8 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
         {
           LatitudeDeg = arr[i].LatitudeRad * 180f / (float)Math.PI,
           LongitudeDeg = arr[i].LongitudeRad * 180f / (float)Math.PI,
-          CircleRadius = arr[i].CircleRadiusFrac,
-          Mass = arr[i].Mass,
+          CircleRadius = arr[i].CircleRadiusFrac / 1000f,
+          Mass = arr[i].Mass * 1000f,
           ColorR = arr[i].ColorR,
           ColorG = arr[i].ColorG,
           ColorB = arr[i].ColorB,
@@ -598,4 +641,28 @@ public partial class SphericalGizmoComponent : NativeComponent
       IsVisible = isVisible;
     }
   }
+}
+
+public partial class BillboardComponent : ObservableObject, IComponent
+{
+    public string Name => "UI Billboard";
+
+    public ViewModels.BillboardViewModel ViewModel { get; }
+
+    public BillboardComponent(ViewModels.BillboardViewModel viewModel)
+    {
+        ViewModel = viewModel;
+        ViewModel.PropertyChanged += (s, e) => {
+            if (e.PropertyName == nameof(ViewModels.BillboardViewModel.Opacity))
+            {
+                OnPropertyChanged(nameof(Opacity));
+            }
+        };
+    }
+
+    public double Opacity
+    {
+        get => ViewModel.Opacity;
+        set => ViewModel.Opacity = value;
+    }
 }
