@@ -52,17 +52,31 @@ impl SimulationContext {
       entity,
       "component_api:set_transform_component"
     );
-    scene
-      .write()
-      .scene
-      .with_component_mut(entity_id, |c: &mut TransformComponent| {
-        c.position = position;
-        c.rotation = rotation;
-        c.scale = scale;
-      })
-      .ok_or(EngineError::InvalidOperation(
-        "components_api:set_transform_component couldn't find transform component",
-      ))
+    let opt = scene.write().scene.with_component_mut(entity_id, |c: &mut TransformComponent| {
+      #[cfg(test)]
+      println!(
+        "Inside set_transform_component | with_component_mut {:?} | position: {:?}",
+        c, position
+      );
+      c.position = position;
+      c.rotation = rotation;
+      c.scale = scale;
+    });
+
+    #[cfg(test)]
+    {
+      scene
+        .read()
+        .scene
+        .with_component(entity_id, |c: &TransformComponent| {
+          assert_eq!(c.position, position);
+        })
+        .unwrap();
+    }
+
+    opt.ok_or(EngineError::InvalidOperation(
+      "components_api:set_transform_component couldn't find transform component",
+    ))
   }
 
   // TODO: Relative to its frame!
@@ -548,14 +562,16 @@ impl SimulationContext {
           let dir_x = c.latitude_rad.cos() * c.longitude_rad.cos();
           let dir_y = c.latitude_rad.cos() * c.longitude_rad.sin();
           let ray_dir = Vec3f32::from_components(dir_x, dir_y, dir_z).normalize();
-          
+
           let ray_orig = if let Some(t) = lock.scene.global_transform(entity_id) {
             Vec3f32::from_components(t.position[0], t.position[1], t.position[2])
           } else {
             Vec3f32::zero()
           };
 
-          if let Some((hit_entity, _, hit_point, hit_normal)) = crate::math::collision::linear_bvh::raycast_scene(&lock, &tlas_guard, ray_orig, ray_dir) {
+          if let Some((hit_entity, _, hit_point, hit_normal)) =
+            crate::math::collision::linear_bvh::raycast_scene(&lock, &tlas_guard, ray_orig, ray_dir)
+          {
             if hit_entity == entity_id {
               c.cached_point = Some([hit_point.x(), hit_point.y(), hit_point.z()]);
               c.cached_normal = Some([hit_normal.x(), hit_normal.y(), hit_normal.z()]);
@@ -564,7 +580,11 @@ impl SimulationContext {
               c.cached_normal = Some([hit_normal.x(), hit_normal.y(), hit_normal.z()]);
             }
           } else {
-            c.cached_point = Some([ray_orig.x() + ray_dir.x(), ray_orig.y() + ray_dir.y(), ray_orig.z() + ray_dir.z()]);
+            c.cached_point = Some([
+              ray_orig.x() + ray_dir.x(),
+              ray_orig.y() + ray_dir.y(),
+              ray_orig.z() + ray_dir.z(),
+            ]);
             c.cached_normal = Some([ray_dir.x(), ray_dir.y(), ray_dir.z()]);
           }
         }
@@ -576,13 +596,17 @@ impl SimulationContext {
           let dir_x = c.latitude_rad.cos() * c.longitude_rad.cos();
           let dir_y = c.latitude_rad.cos() * c.longitude_rad.sin();
           let ray_dir = Vec3f32::from_components(dir_x, dir_y, dir_z).normalize();
-          
+
           let ray_orig = if let Some(t) = lock.scene.global_transform(entity_id) {
             Vec3f32::from_components(t.position[0], t.position[1], t.position[2])
           } else {
             Vec3f32::zero()
           };
-          c.cached_point = Some([ray_orig.x() + ray_dir.x(), ray_orig.y() + ray_dir.y(), ray_orig.z() + ray_dir.z()]);
+          c.cached_point = Some([
+            ray_orig.x() + ray_dir.x(),
+            ray_orig.y() + ray_dir.y(),
+            ray_orig.z() + ray_dir.z(),
+          ]);
           c.cached_normal = Some([ray_dir.x(), ray_dir.y(), ray_dir.z()]);
         }
       }

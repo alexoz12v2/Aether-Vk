@@ -3,21 +3,21 @@
 use crate::{
   gpu::{
     CollisionPair, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, ForceEmitter, Kernels,
-    KinematicBody, ParticleGpu, RigidBodyGpu, RigidBodyImex, Wrench, ParticleMetadata, WaitHandle,
+    KinematicBody, ParticleGpu, ParticleMetadata, RigidBodyGpu, RigidBodyImex, WaitHandle, Wrench,
   },
-  physics::physics_scene::{PhysicsScene, GpuReferenceFrame},
+  physics::physics_scene::{GpuReferenceFrame, PhysicsScene},
   scene::{KinematicComponent, Scene, TransformComponent},
   simulation_api::structs::SendPtr,
   types::{EngineError, EngineResult},
 };
 use aethervk_oshal_rlib::{
   math::{
-    matrix::{Matrix, Matrix4, MatrixVectorMul, SquareMatrix, mat3::Mat3f32, mat4::Mat4x4f32},
+    matrix::{mat3::Mat3f32, mat4::Mat4x4f32, Matrix, Matrix4, MatrixVectorMul, SquareMatrix},
     quaternion::Quaternion,
     vector::{
-      Vector, Vector3, Vector4,
       vec3::Vec3f32,
       vec4::{Quat, Vec4f32},
+      Vector, Vector3, Vector4,
     },
   },
   os::time::timeus_t,
@@ -66,9 +66,10 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for CpuBuffer<T> {
     self.data.capacity()
   }
 
-  fn address(&self) -> u64 { 0 }
-  fn enqueue_read_to_cpu(&self, _cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'_>>
-  {
+  fn address(&self) -> u64 {
+    0
+  }
+  fn enqueue_read_to_cpu(&self, _cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'_>> {
     Ok(CpuWaitHandle {
       data: Some(self.data.clone()),
     })
@@ -93,9 +94,10 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for CpuList<T> {
     self.data.capacity()
   }
 
-  fn address(&self) -> u64 { 0 }
-  fn enqueue_read_to_cpu(&self, _cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'_>>
-  {
+  fn address(&self) -> u64 {
+    0
+  }
+  fn enqueue_read_to_cpu(&self, _cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'_>> {
     Ok(CpuWaitHandle {
       data: Some(self.data.clone()),
     })
@@ -120,7 +122,9 @@ pub struct CpuMotionBvh {
 
 impl DeviceBvh for CpuMotionBvh {
   type Cmd = CpuCommandBuffer;
-  fn address(&self) -> u64 { 0 }
+  fn address(&self) -> u64 {
+    0
+  }
 }
 
 /// Zero-cost CPU stand-in for the per-tick TLAS GPU buffer.
@@ -129,7 +133,9 @@ pub struct CpuTlasHandle;
 
 impl DeviceBvh for CpuTlasHandle {
   type Cmd = CpuCommandBuffer;
-  fn address(&self) -> u64 { 0 }
+  fn address(&self) -> u64 {
+    0
+  }
 }
 
 /// TODO: Document this item
@@ -148,9 +154,21 @@ impl Kernels for CpuScalarKernels {
   fn discard_bvh(&self, _bvh: Self::MotionBvh) {}
   fn discard_tlas(&self, _tlas: Self::MotionTlas) {}
 
-  fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize> { Some(crate::gpu::SubgroupSize::Size32) }
-  fn wait_sync(&self, _sync: &crate::gpu::CommandBufferSyncInfo) -> EngineResult<()> { Ok(()) }
-  fn refit_motion_blas(&self, _cmd: &mut Self::Cmd, _bvh: &Self::MotionBvh, _depth_indices: &Self::Buffer<u32>, _total_nodes: u32) -> EngineResult<()> { Ok(()) }
+  fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize> {
+    Some(crate::gpu::SubgroupSize::Size32)
+  }
+  fn wait_sync(&self, _sync: &crate::gpu::CommandBufferSyncInfo) -> EngineResult<()> {
+    Ok(())
+  }
+  fn refit_motion_blas(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _bvh: &Self::MotionBvh,
+    _depth_indices: &Self::Buffer<u32>,
+    _total_nodes: u32,
+  ) -> EngineResult<()> {
+    Ok(())
+  }
 
   fn upload_motion_tlas(
     &self,
@@ -160,9 +178,10 @@ impl Kernels for CpuScalarKernels {
     Ok(CpuTlasHandle)
   }
 
-
   fn create_command_buffer(&self) -> EngineResult<Self::Cmd> {
-    Ok(CpuCommandBuffer { tasks: alloc::vec::Vec::new() })
+    Ok(CpuCommandBuffer {
+      tasks: alloc::vec::Vec::new(),
+    })
   }
 
   fn build_list<T: Copy + Send + Sync>(
@@ -170,7 +189,9 @@ impl Kernels for CpuScalarKernels {
     cmd: &mut Self::Cmd,
     capacity: usize,
   ) -> EngineResult<Self::List<T>> {
-    Ok(CpuList { data: alloc::vec::Vec::new() })
+    Ok(CpuList {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn build_leaves(
@@ -178,7 +199,9 @@ impl Kernels for CpuScalarKernels {
     _cmd: &mut Self::Cmd,
     _capacity: usize,
   ) -> EngineResult<Self::Buffer<[u32; 8]>> {
-    Ok(CpuBuffer { data: alloc::vec::Vec::new() })
+    Ok(CpuBuffer {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn build_kinematic_bodies(
@@ -187,7 +210,9 @@ impl Kernels for CpuScalarKernels {
     scene: &PhysicsScene,
     scene0: &Scene,
   ) -> EngineResult<Self::Buffer<KinematicBody>> {
-    Ok(CpuBuffer { data: alloc::vec::Vec::new() })
+    Ok(CpuBuffer {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn build_rigid_bodies(
@@ -196,7 +221,14 @@ impl Kernels for CpuScalarKernels {
     scene: &PhysicsScene,
     scene0: &Scene,
   ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>)> {
-    Ok((CpuBuffer { data: alloc::vec::Vec::new() }, CpuBuffer { data: alloc::vec::Vec::new() }))
+    Ok((
+      CpuBuffer {
+        data: alloc::vec::Vec::new(),
+      },
+      CpuBuffer {
+        data: alloc::vec::Vec::new(),
+      },
+    ))
   }
 
   fn build_frames(
@@ -204,7 +236,9 @@ impl Kernels for CpuScalarKernels {
     cmd: &mut Self::Cmd,
     scene: &PhysicsScene,
   ) -> EngineResult<Self::Buffer<GpuReferenceFrame>> {
-    Ok(CpuBuffer { data: alloc::vec::Vec::new() })
+    Ok(CpuBuffer {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn build_particles(
@@ -212,7 +246,12 @@ impl Kernels for CpuScalarKernels {
     cmd: &mut Self::Cmd,
     scene: &Scene,
   ) -> EngineResult<(Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)> {
-    Ok((CpuBuffer { data: alloc::vec::Vec::new() }, alloc::vec::Vec::new()))
+    Ok((
+      CpuBuffer {
+        data: alloc::vec::Vec::new(),
+      },
+      alloc::vec::Vec::new(),
+    ))
   }
 
   fn build_emitters(
@@ -220,7 +259,9 @@ impl Kernels for CpuScalarKernels {
     cmd: &mut Self::Cmd,
     scene: &Scene,
   ) -> EngineResult<Self::Buffer<ForceEmitter>> {
-    Ok(CpuBuffer { data: alloc::vec::Vec::new() })
+    Ok(CpuBuffer {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn emit_particles(
@@ -403,7 +444,16 @@ impl Kernels for CpuScalarKernels {
     particles: &Self::Buffer<f32>,
     dt: timeus_t,
   ) -> EngineResult<Self::MotionBvh> {
-    Ok(CpuMotionBvh { kinematics_copy: alloc::vec::Vec::new(), rigid_bodies_copy: alloc::vec::Vec::new(), particles_copy: alloc::vec::Vec::new(), particle_metadata_copy: alloc::vec::Vec::new(), bvh_tree: crate::physics::motion_bvh::MotionBvhTree { nodes: alloc::vec::Vec::new(), root: None } })
+    Ok(CpuMotionBvh {
+      kinematics_copy: alloc::vec::Vec::new(),
+      rigid_bodies_copy: alloc::vec::Vec::new(),
+      particles_copy: alloc::vec::Vec::new(),
+      particle_metadata_copy: alloc::vec::Vec::new(),
+      bvh_tree: crate::physics::motion_bvh::MotionBvhTree {
+        nodes: alloc::vec::Vec::new(),
+        root: None,
+      },
+    })
   }
 
   fn self_intersect_scene(
@@ -411,7 +461,9 @@ impl Kernels for CpuScalarKernels {
     cmd: &mut Self::Cmd,
     bvh: &Self::MotionBvh,
   ) -> EngineResult<Self::List<CollisionPair>> {
-    Ok(CpuList { data: alloc::vec::Vec::new() })
+    Ok(CpuList {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn intersect_instances(
@@ -422,7 +474,9 @@ impl Kernels for CpuScalarKernels {
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
   ) -> EngineResult<Self::List<CollisionPair>> {
-    Ok(CpuList { data: alloc::vec::Vec::new() })
+    Ok(CpuList {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn narrow_ccd(
@@ -434,7 +488,9 @@ impl Kernels for CpuScalarKernels {
     _lca_entities: u64,
     _space_type: u32,
   ) -> EngineResult<Self::List<CollisionPair>> {
-    Ok(CpuList { data: alloc::vec::Vec::new() })
+    Ok(CpuList {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn compact_collisions(
@@ -443,7 +499,9 @@ impl Kernels for CpuScalarKernels {
     globals: &Self::List<CollisionPair>,
     time_delta: timeus_t,
   ) -> EngineResult<Self::List<CollisionPair>> {
-    Ok(CpuList { data: alloc::vec::Vec::new() })
+    Ok(CpuList {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn find_earliest_collision(
@@ -451,7 +509,9 @@ impl Kernels for CpuScalarKernels {
     cmd: &mut Self::Cmd,
     compacted: &Self::List<CollisionPair>,
   ) -> EngineResult<Self::Buffer<u32>> {
-    Ok(CpuBuffer { data: alloc::vec::Vec::new() })
+    Ok(CpuBuffer {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn apply_collision_responses(
@@ -472,7 +532,14 @@ impl Kernels for CpuScalarKernels {
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
   ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>)> {
-    Ok((CpuBuffer { data: alloc::vec::Vec::new() }, CpuBuffer { data: alloc::vec::Vec::new() }))
+    Ok((
+      CpuBuffer {
+        data: alloc::vec::Vec::new(),
+      },
+      CpuBuffer {
+        data: alloc::vec::Vec::new(),
+      },
+    ))
   }
 
   fn restore_dynamics(
@@ -516,9 +583,21 @@ impl Kernels for CpuSimdKernels {
   fn discard_bvh(&self, _bvh: Self::MotionBvh) {}
   fn discard_tlas(&self, _tlas: Self::MotionTlas) {}
 
-  fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize> { Some(crate::gpu::SubgroupSize::Size32) }
-  fn wait_sync(&self, _sync: &crate::gpu::CommandBufferSyncInfo) -> EngineResult<()> { Ok(()) }
-  fn refit_motion_blas(&self, _cmd: &mut Self::Cmd, _bvh: &Self::MotionBvh, _depth_indices: &Self::Buffer<u32>, _total_nodes: u32) -> EngineResult<()> { Ok(()) }
+  fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize> {
+    Some(crate::gpu::SubgroupSize::Size32)
+  }
+  fn wait_sync(&self, _sync: &crate::gpu::CommandBufferSyncInfo) -> EngineResult<()> {
+    Ok(())
+  }
+  fn refit_motion_blas(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _bvh: &Self::MotionBvh,
+    _depth_indices: &Self::Buffer<u32>,
+    _total_nodes: u32,
+  ) -> EngineResult<()> {
+    Ok(())
+  }
 
   fn upload_motion_tlas(
     &self,
@@ -528,9 +607,10 @@ impl Kernels for CpuSimdKernels {
     Ok(CpuTlasHandle)
   }
 
-
   fn create_command_buffer(&self) -> EngineResult<Self::Cmd> {
-    Ok(CpuCommandBuffer { tasks: alloc::vec::Vec::new() })
+    Ok(CpuCommandBuffer {
+      tasks: alloc::vec::Vec::new(),
+    })
   }
 
   fn build_list<T: Copy + Send + Sync>(
@@ -538,7 +618,9 @@ impl Kernels for CpuSimdKernels {
     cmd: &mut Self::Cmd,
     capacity: usize,
   ) -> EngineResult<Self::List<T>> {
-    Ok(CpuList { data: alloc::vec::Vec::new() })
+    Ok(CpuList {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn build_leaves(
@@ -546,7 +628,9 @@ impl Kernels for CpuSimdKernels {
     _cmd: &mut Self::Cmd,
     _capacity: usize,
   ) -> EngineResult<Self::Buffer<[u32; 8]>> {
-    Ok(CpuBuffer { data: alloc::vec::Vec::new() })
+    Ok(CpuBuffer {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn build_kinematic_bodies(
@@ -555,7 +639,9 @@ impl Kernels for CpuSimdKernels {
     scene: &PhysicsScene,
     scene0: &Scene,
   ) -> EngineResult<Self::Buffer<KinematicBody>> {
-    Ok(CpuBuffer { data: alloc::vec::Vec::new() })
+    Ok(CpuBuffer {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn build_rigid_bodies(
@@ -564,7 +650,14 @@ impl Kernels for CpuSimdKernels {
     scene: &PhysicsScene,
     scene0: &Scene,
   ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>)> {
-    Ok((CpuBuffer { data: alloc::vec::Vec::new() }, CpuBuffer { data: alloc::vec::Vec::new() }))
+    Ok((
+      CpuBuffer {
+        data: alloc::vec::Vec::new(),
+      },
+      CpuBuffer {
+        data: alloc::vec::Vec::new(),
+      },
+    ))
   }
 
   fn build_frames(
@@ -572,7 +665,9 @@ impl Kernels for CpuSimdKernels {
     cmd: &mut Self::Cmd,
     scene: &PhysicsScene,
   ) -> EngineResult<Self::Buffer<GpuReferenceFrame>> {
-    Ok(CpuBuffer { data: alloc::vec::Vec::new() })
+    Ok(CpuBuffer {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn build_particles(
@@ -580,7 +675,12 @@ impl Kernels for CpuSimdKernels {
     cmd: &mut Self::Cmd,
     scene: &Scene,
   ) -> EngineResult<(Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)> {
-    Ok((CpuBuffer { data: alloc::vec::Vec::new() }, alloc::vec::Vec::new()))
+    Ok((
+      CpuBuffer {
+        data: alloc::vec::Vec::new(),
+      },
+      alloc::vec::Vec::new(),
+    ))
   }
 
   fn build_emitters(
@@ -588,7 +688,9 @@ impl Kernels for CpuSimdKernels {
     cmd: &mut Self::Cmd,
     scene: &Scene,
   ) -> EngineResult<Self::Buffer<ForceEmitter>> {
-    Ok(CpuBuffer { data: alloc::vec::Vec::new() })
+    Ok(CpuBuffer {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn emit_particles(
@@ -771,7 +873,16 @@ impl Kernels for CpuSimdKernels {
     particles: &Self::Buffer<f32>,
     dt: timeus_t,
   ) -> EngineResult<Self::MotionBvh> {
-    Ok(CpuMotionBvh { kinematics_copy: alloc::vec::Vec::new(), rigid_bodies_copy: alloc::vec::Vec::new(), particles_copy: alloc::vec::Vec::new(), particle_metadata_copy: alloc::vec::Vec::new(), bvh_tree: crate::physics::motion_bvh::MotionBvhTree { nodes: alloc::vec::Vec::new(), root: None } })
+    Ok(CpuMotionBvh {
+      kinematics_copy: alloc::vec::Vec::new(),
+      rigid_bodies_copy: alloc::vec::Vec::new(),
+      particles_copy: alloc::vec::Vec::new(),
+      particle_metadata_copy: alloc::vec::Vec::new(),
+      bvh_tree: crate::physics::motion_bvh::MotionBvhTree {
+        nodes: alloc::vec::Vec::new(),
+        root: None,
+      },
+    })
   }
 
   fn self_intersect_scene(
@@ -779,7 +890,9 @@ impl Kernels for CpuSimdKernels {
     cmd: &mut Self::Cmd,
     bvh: &Self::MotionBvh,
   ) -> EngineResult<Self::List<CollisionPair>> {
-    Ok(CpuList { data: alloc::vec::Vec::new() })
+    Ok(CpuList {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn intersect_instances(
@@ -790,7 +903,9 @@ impl Kernels for CpuSimdKernels {
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
   ) -> EngineResult<Self::List<CollisionPair>> {
-    Ok(CpuList { data: alloc::vec::Vec::new() })
+    Ok(CpuList {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn narrow_ccd(
@@ -802,7 +917,9 @@ impl Kernels for CpuSimdKernels {
     _lca_entities: u64,
     _space_type: u32,
   ) -> EngineResult<Self::List<CollisionPair>> {
-    Ok(CpuList { data: alloc::vec::Vec::new() })
+    Ok(CpuList {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn compact_collisions(
@@ -811,7 +928,9 @@ impl Kernels for CpuSimdKernels {
     globals: &Self::List<CollisionPair>,
     time_delta: timeus_t,
   ) -> EngineResult<Self::List<CollisionPair>> {
-    Ok(CpuList { data: alloc::vec::Vec::new() })
+    Ok(CpuList {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn find_earliest_collision(
@@ -819,7 +938,9 @@ impl Kernels for CpuSimdKernels {
     cmd: &mut Self::Cmd,
     compacted: &Self::List<CollisionPair>,
   ) -> EngineResult<Self::Buffer<u32>> {
-    Ok(CpuBuffer { data: alloc::vec::Vec::new() })
+    Ok(CpuBuffer {
+      data: alloc::vec::Vec::new(),
+    })
   }
 
   fn apply_collision_responses(
@@ -840,7 +961,14 @@ impl Kernels for CpuSimdKernels {
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
   ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>)> {
-    Ok((CpuBuffer { data: alloc::vec::Vec::new() }, CpuBuffer { data: alloc::vec::Vec::new() }))
+    Ok((
+      CpuBuffer {
+        data: alloc::vec::Vec::new(),
+      },
+      CpuBuffer {
+        data: alloc::vec::Vec::new(),
+      },
+    ))
   }
 
   fn restore_dynamics(
@@ -977,6 +1105,10 @@ mod tests {
 
   #[test]
   fn test_group_and_cluster_collisions() {
+    let norm = Vec3f32::from_array([1.0, 0.0, 0.0]);
+    let t = 0.5_f32;
+    let pt = Vec3f32::from_array([1.0, 1.0, 1.0]);
+    let depth = 1_f32;
     let c1 = CollisionPair {
       a: crate::gpu::ColliderId {
         entity_id: 0,
@@ -986,10 +1118,12 @@ mod tests {
         entity_id: 0,
         primitive_index: 1,
       },
-      time_of_impact: 0.05,
-      contact_normal: [0.0; 3],
-      contact_point: [0.0; 3],
-      penetration_depth: 0.0,
+      time_of_impact: t,
+      _pad0: [0.0; 3],
+      contact_normal: norm.into(),
+      _pad1: 0.0,
+      contact_point: pt.into(),
+      penetration_depth: depth,
     };
     let c2 = CollisionPair {
       a: crate::gpu::ColliderId {
@@ -1002,6 +1136,8 @@ mod tests {
       },
       time_of_impact: 0.051,
       contact_normal: [0.0; 3],
+      _pad0: [0.0; 3],
+      _pad1: 0.0,
       contact_point: [0.0; 3],
       penetration_depth: 0.0,
     };
@@ -1016,6 +1152,8 @@ mod tests {
       },
       time_of_impact: 0.052,
       contact_normal: [0.0; 3],
+      _pad0: [0.0; 3],
+      _pad1: 0.0,
       contact_point: [0.0; 3],
       penetration_depth: 0.0,
     };
@@ -1030,6 +1168,8 @@ mod tests {
       },
       time_of_impact: 0.1,
       contact_normal: [0.0; 3],
+      _pad0: [0.0; 3],
+      _pad1: 0.0,
       contact_point: [0.0; 3],
       penetration_depth: 0.0,
     };

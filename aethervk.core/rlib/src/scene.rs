@@ -140,7 +140,7 @@ new_key_type! {
 
 /// A marker trait for all components.
 /// Components must be `'static + Send + Sync`' to be used in the ECS.
-pub trait Component: 'static + Send + Sync + core::fmt::Debug {
+pub trait Component: 'static + Send + Sync + core::fmt::Debug + Clone {
   fn stringify(&self) -> alloc::string::String {
     alloc::string::String::from("Component")
   }
@@ -463,7 +463,7 @@ impl CameraComponent {
 }
 
 /// A marker component for entities that should be rendered as a cursor.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct CursorComponent {}
 impl Component for CursorComponent {}
 
@@ -537,8 +537,7 @@ pub enum BillboardType {
   ScreenSpace { pct_width: f32, pct_height: f32 },
 }
 
-#[derive(Debug)]
-/// TODO: Document this item
+#[derive(Debug, Clone)]
 pub struct ImageBillboardComponent {
   pub texture_id: u64,
   pub billboard_type: BillboardType,
@@ -809,6 +808,8 @@ trait ComponentStorage: Send + Sync + core::fmt::Debug {
   fn truncate(&mut self, len: usize);
 
   fn component_type_id(&self) -> TypeId;
+
+  fn clone_box(&self) -> Box<dyn ComponentStorage>;
 }
 
 impl<T: Component> ComponentStorage for Vec<Option<T>> {
@@ -859,9 +860,13 @@ impl<T: Component> ComponentStorage for Vec<Option<T>> {
   fn component_type_id(&self) -> TypeId {
     TypeId::of::<T>()
   }
+
+  fn clone_box(&self) -> Box<dyn ComponentStorage> {
+    Box::new(self.clone())
+  }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ComponentMeta {
   dependencies: Vec<TypeId>,
   new_storage: fn() -> RwLock<Box<dyn ComponentStorage>>,
@@ -874,6 +879,22 @@ struct Archetype {
   component_types: HashSet<TypeId>,
   entities: Vec<Option<EntityId>>, // Option natively models O(1) allocation holes
   free_slots: Vec<usize>,          // Stack of reusable memory rows
+}
+
+impl Clone for Archetype {
+  fn clone(&self) -> Self {
+    let mut components = HashMap::with_capacity(64);
+    for (k, v) in &self.components {
+      components.insert(*k, RwLock::new(v.read().clone_box()));
+    }
+
+    Self {
+      components,
+      component_types: self.component_types.clone(),
+      entities: self.entities.clone(),
+      free_slots: self.free_slots.clone(),
+    }
+  }
 }
 
 impl Archetype {
@@ -969,8 +990,20 @@ pub struct Scene {
   pub texture_cache: alloc::sync::Arc<spin::RwLock<crate::simulation::texture_cache::TextureCache>>,
 }
 
-#[derive(Default, Debug)]
-/// TODO: Document this item
+impl Clone for Scene {
+  fn clone(&self) -> Self {
+    Self {
+      entities: RwLock::new(self.entities.read().clone()),
+      archetypes: RwLock::new(self.archetypes.read().clone()),
+      component_meta: RwLock::new(self.component_meta.read().clone()),
+      hierarchy: RwLock::new(self.hierarchy.read().clone()),
+      names: RwLock::new(self.names.read().clone()),
+      texture_cache: alloc::sync::Arc::clone(&self.texture_cache),
+    }
+  }
+}
+
+#[derive(Default, Debug, Clone)]
 pub struct SceneHierarchy {
   parents: HashMap<EntityId, EntityId>,
   children: HashMap<EntityId, Vec<EntityId>>,
@@ -2448,6 +2481,7 @@ impl Scene {
   }
 
   /// TODO: Document this item
+  #[deprecated = "should use a method to get the transform relative to the containing LCA Frame Component, which returns a Option<(Transform, Option<EntityId>)>"]
   pub fn global_transform(&self, entity_id: EntityId) -> Option<TransformComponent> {
     let mut accumulated_transform = self.with_component(entity_id, |c: &TransformComponent| *c)?;
     let mut current_entity = entity_id;

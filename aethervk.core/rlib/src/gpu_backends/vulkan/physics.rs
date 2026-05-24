@@ -311,7 +311,7 @@ pub struct BpClassifyPushConstants {
   pub out_rb_ps: u64,
   pub out_rb_lca: u64,
   pub n_entities: u32,
-  pub _pad: u32,
+  pub total_raw_pairs: u32,
 }
 
 /// `bp_cross_lca.comp` — 28 bytes
@@ -947,6 +947,7 @@ impl VulkanComputeKernels {
 
     let (buffer, mut alloc, info) =
       unsafe { allocator.create_buffer_get_info(&buffer_info, &alloc_info) }?;
+    aethervk_oshal_rlib::log!("physics alloc: {:?}", alloc.get_raw());
     rollback.defer(move |_device| unsafe {
       allocator.destroy_buffer(buffer, &mut alloc);
     });
@@ -1044,6 +1045,7 @@ impl VulkanComputeKernels {
 
     let (buffer, mut alloc, info) =
       unsafe { allocator.create_buffer_get_info(&buffer_info, &alloc_info) }?;
+    aethervk_oshal_rlib::log!("physics alloc: {:?}", alloc.get_raw());
     rollback.defer(move |_device| unsafe {
       allocator.destroy_buffer(buffer, &mut alloc);
     });
@@ -1986,7 +1988,7 @@ impl VulkanComputeKernels {
       out_rb_ps: out_rb_ps_addr,
       out_rb_lca: out_macro_lca_addr,
       n_entities: (total_raw_pairs as f64).sqrt() as u32,
-      _pad: 0,
+      total_raw_pairs,
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
@@ -3343,6 +3345,8 @@ impl Kernels for Device {
         };
         let (buffer, mut alloc, info) =
           unsafe { allocator.create_buffer_get_info(&buf_info, &alloc_info) }?;
+    aethervk_oshal_rlib::log!("physics alloc: {:?}", alloc.get_raw());
+        aethervk_oshal_rlib::log!("upload_motion_tlas alloc: {:?}", alloc.get_raw());
         rollback.defer(move |_| unsafe { allocator.destroy_buffer(buffer, &mut alloc) });
 
         // ── Write TLAS node bytes into the mapped region.

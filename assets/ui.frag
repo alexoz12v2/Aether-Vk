@@ -59,7 +59,7 @@ void main() {
     }
     
     // Hardware anti-aliasing delta (Pixel Width)
-    float fw = max(fwidth(vLocalPos.x), 0.001); 
+    float fw = max(length(vec2(dFdx(vLocalPos.x), dFdy(vLocalPos.y))), 0.001); 
 
     // 2. SOFT DROP SHADOWS
     vec4 finalColor = vec4(0.0);
@@ -83,14 +83,17 @@ void main() {
     float boxAlpha = 1.0 - smoothstep(-fw, fw, dBox);
     
     vec4 bgColor = el.colorStart;
+    vec2 size = vHalfSize * 2.0;
+    vec2 actualUV = (size.x > 0.0 && size.y > 0.0) ? (vLocalPos / size) + 0.5 : vec2(0.5);
+    
     if (dot(el.gradientDir, el.gradientDir) > 0.001) {
-        float t = clamp(dot(vUV - 0.5, el.gradientDir) + 0.5, 0.0, 1.0);
+        float t = clamp(dot(actualUV - 0.5, el.gradientDir) + 0.5, 0.0, 1.0);
         bgColor = mix(el.colorStart, el.colorEnd, t);
     }
     
     vec4 texColor = vec4(1.0);
     if (el.textureId != 0xFFFFFFFFu) {
-        texColor = texture(bindlessTextures[nonuniformEXT(el.textureId)], clamp(vUV, 0.0, 1.0));
+        texColor = texture(bindlessTextures[nonuniformEXT(el.textureId)], clamp(actualUV, 0.0, 1.0));
     }
     
     vec4 contentColor = bgColor * texColor;

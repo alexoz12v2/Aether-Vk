@@ -3,4 +3,5 @@
 
 initial_state.txt
 final_state.txt
-
+test_output*.txt
+test_out*.txt

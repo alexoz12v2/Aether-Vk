@@ -257,7 +257,7 @@ fn process_command(
 
               if let Some(task) = render_frame.active_physics_task.lock().take() {
                 if let Some(sync) = task.wait()
-                  .map_err(|e| crate::types::GpuError::InvalidState(alloc::format!("Physics engine error: {:?}", e)))? 
+                  .map_err(|e| crate::types::GpuError::InvalidState(alloc::format!("Physics engine error: {:?}", e)))?
                 {
                   cmd_scope.set_sync_info(sync);
                 }
@@ -309,128 +309,6 @@ fn process_command(
     ),
     RenderCommand::GenerateSky => render_device.generate_sky(),
   }
-}
-fn do_render_scene_async(
-  render_device: &dyn RenderDevice,
-  extracted_scene: RenderSceneExtraction,
-  presentation_engine_handle: gpu::PresentationEngineHandle,
-  task_id: u64,
-  custom_render_callback: Option<CustomRenderCallback>,
-  is_first_render: bool,
-  time_readings: oshal::os::time::TimeReadings,
-  debug_name: &str,
-) -> GpuResult<bool> {
-  render_device.start_frame()?;
-  let extent = render_device.get_presentation_engine_extent(presentation_engine_handle)?;
-  if extent[0] == 0 || extent[1] == 0 {
-    render_device.success_task(task_id);
-    return Ok(false);
-  }
-
-  let acquire_result = render_device.acquire_next_image(presentation_engine_handle)?;
-  if acquire_result.status.needs_resize() {
-    // handled via resize command or next frame
-    render_device.success_task(task_id);
-    return Ok(false);
-  }
-  let present_guard =
-    FrameCancelGuard::new(render_device, presentation_engine_handle, acquire_result);
-
-  let cmd_buffer = render_device.get_command_buffer()?;
-  render_device.set_command_buffer_presentation_engine(cmd_buffer, presentation_engine_handle)?;
-  let cmd_scope = gpu::ScopedCommandBuffer::new(render_device, cmd_buffer, Some(task_id))?;
-
-  let mut render_scene = extracted_scene.build_render_scene(
-    render_device,
-    presentation_engine_handle,
-    cmd_buffer,
-    time_readings,
-    extent.into(),
-    debug_name,
-  )?;
-  if let Some(sun_call) = &render_scene.sun_call {
-    // TODO move to kernels
-    render_device.update_sun(
-      cmd_buffer,
-      sun_call.entity,
-      (128, 128, 128),
-      sun_call.radius,
-    )?;
-  }
-
-  render_device.upload_particle_systems(cmd_buffer, &mut render_scene.particle_calls)?;
-  render_device.upload_particle2_systems(cmd_buffer, &mut render_scene.particle2_calls)?;
-
-  if is_first_render && custom_render_callback.is_some() {
-    let c = unsafe { custom_render_callback.as_ref().unwrap_unchecked() };
-    (c.on_first_render_fn)(
-      render_device,
-      cmd_buffer,
-      presentation_engine_handle,
-      &render_scene,
-      c.user_data.0,
-    )?
-  }
-
-  render_device.begin_render_pass(cmd_buffer, presentation_engine_handle, &acquire_result)?;
-  let render_pass_scope = gpu::ScopedRenderPass::new(render_device, cmd_buffer);
-
-  render_device.set_viewport(cmd_buffer, &gpu::Viewport::from_extent(extent))?;
-  render_device.set_scissor(cmd_buffer, &gpu::Rect2D::from_extent(extent))?;
-
-  // TODO: 2) Text not included in measurement now (inside render_frame)
-  gpu::frame::render_frame(
-    render_device,
-    cmd_buffer,
-    presentation_engine_handle,
-    &render_scene,
-  )?;
-
-  if custom_render_callback.is_some() {
-    let c = unsafe { custom_render_callback.as_ref().unwrap_unchecked() };
-    (c.after_render_frame_fn)(
-      render_device,
-      cmd_buffer,
-      presentation_engine_handle,
-      &render_scene,
-      c.user_data.0,
-    )?;
-  }
-
-  // present and submit
-  render_pass_scope.end()?;
-
-  // on `DownloadImage` Command, Query task status and copy data if completed with `render_device.read_windowless_download`
-  // if you are here, then presentation engine is valid
-  let is_windowless = unsafe {
-    render_device.is_presentation_engine_windowless(presentation_engine_handle).unwrap_unchecked()
-  };
-  if is_windowless {
-    if let Err(e) = render_device.record_windowless_download(cmd_buffer, task_id) {
-      oshal::log!("record_windowless_download failed: {:?}", e);
-      return Err(e);
-    }
-  }
-
-  if let Err(e) = cmd_scope.submit() {
-    oshal::log!("[Render Thread] Windowless render pass failed {e:?}");
-    return Err(e);
-  }
-  present_guard.defuse();
-
-  if SwapchainStatus::Optimal
-    != render_device.present(
-      presentation_engine_handle,
-      acquire_result.image_index as usize,
-      acquire_result.frame_index as usize,
-    )?
-  {
-    oshal::log!(
-      "[Render Thread] Warning: render_device.present isn't optimal. Might not be an error"
-    );
-  }
-
-  Ok(true)
 }
 
 // TODO possibly, group by pipeline if necessary

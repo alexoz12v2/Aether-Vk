@@ -95,6 +95,7 @@ impl ParticleData {
 }
 
 /// TODO: Document this item
+#[derive(Clone)]
 pub struct ParticleSystemComponent {
   pub particles: alloc::sync::Arc<spin::RwLock<alloc::vec::Vec<ParticleData>>>,
   pub bvh: Option<LinearBVH<f32>>,

@@ -1,12 +1,15 @@
 //! logic_thread module.
 
-use super::structs::{LogicCommand, LogicThreadContext, LogicWorkload, SceneContext, SimulationTaskResult};
+use super::structs::{
+  LogicCommand, LogicThreadContext, LogicWorkload, SceneContext, SimulationTaskResult,
+};
 use crate::{
   gpu::WeakRenderFrontendExt,
   scene::{
     CameraComponent, CursorComponent, EntityId, FollowingComponent, TransformComponent,
     camera::{QuatToEulerAngles, SceneCameraExt},
   },
+  simulation_api::emit_breadcrumb,
   types::{EngineError, EngineResult},
 };
 use aethervk_oshal_rlib::{
@@ -179,8 +182,9 @@ pub fn start_logic_thread(
                       let _ = context.thread_pool.spawn_tasklet(None, move || {
                         let fptr = crate::simulation_api::RENDER_CALLBACK
                           .load(core::sync::atomic::Ordering::Relaxed);
-                        let ctx =
-                          unsafe { &*(ctx_ptr.get() as *mut crate::simulation_api::SimulationContext) };
+                        let ctx = unsafe {
+                          &*(ctx_ptr.get() as *mut crate::simulation_api::SimulationContext)
+                        };
                         loop {
                           let completed = ctx
                             .render_proxy
@@ -197,9 +201,12 @@ pub fn start_logic_thread(
                           if completed {
                             break;
                           }
-                          oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
+                          oshal::os::native::this_thread::sleep_for(
+                            core::time::Duration::from_millis(1),
+                          );
                         }
-                        let cb: extern "C" fn(u64, u64, u64) = unsafe { core::mem::transmute(fptr) };
+                        let cb: extern "C" fn(u64, u64, u64) =
+                          unsafe { core::mem::transmute(fptr) };
                         cb(scene_id, pe_handle, task_id_val);
                       });
                     }
@@ -370,7 +377,9 @@ impl oshal::os::pool::Workload for LogicWorkload {
       LogicCommand::SpawnModelInstance { name, .. } => alloc::format!("Spawn instance {}", name),
       LogicCommand::RaycastNdc { .. } => "Raycast NDC".to_string(),
       LogicCommand::Raycast { .. } => "Raycast".to_string(),
-      LogicCommand::UpdateTrajectoryForSpk { spk_id, .. } => alloc::format!("Update trajectory for SPK {}", spk_id),
+      LogicCommand::UpdateTrajectoryForSpk { spk_id, .. } => {
+        alloc::format!("Update trajectory for SPK {}", spk_id)
+      }
       _ => "Logic Task".to_string(),
     };
 
@@ -413,24 +422,84 @@ fn process_command_internal(
   ctx: &LogicThreadContext,
 ) -> EngineResult<SimulationTaskResult> {
   match command {
-    LogicCommand::SnapshotScene { .. } => Ok(SimulationTaskResult::None),
+    LogicCommand::SnapshotScene { scene_id } => {
+      let scenes = ctx.scenes.read();
+      if let Some(scene_ctx_guard) = scenes.get(&scene_id) {
+        // 1. Write lock to ensure exclusive access while saving
+        let mut scene_ctx = scene_ctx_guard.write();
+        // 2. Device Synchronization: wait for active physics task to complete before taking the
+        //    snapshot
+        if let Some(task) = scene_ctx.active_physics_task.lock().take() {
+          if let Err(e) = task.wait() {
+            aethervk_oshal_rlib::log!("Physics tasklet failed: {:?}", e);
+          }
+        }
+
+        let cloned_scene = (*scene_ctx.scene).clone();
+        scene_ctx.scene_snapshot = Some(alloc::boxed::Box::new(cloned_scene));
+      } else {
+        emit_breadcrumb(2, "Failed to create scene snapshot");
+      }
+      Ok(SimulationTaskResult::None)
+    }
     LogicCommand::RestoreSnapshot { scene_id } => {
       let scenes = ctx.scenes.read();
       if let Some(scene_ctx_guard) = scenes.get(&scene_id) {
-        let scene_ctx = scene_ctx_guard.read();
-        
+        // Upgrade to write lock to ensure thread-safety while modifying the Scene
+        let mut scene_ctx = scene_ctx_guard.write();
+
+        // Device synchronization: Wait for active physics task to complete safely
+        if let Some(task) = scene_ctx.active_physics_task.lock().take() {
+          if let Err(e) = task.wait() {
+            aethervk_oshal_rlib::log!("Physics tasklet failed: {:?}", e);
+          }
+        }
+
+        // Restore the snapshot
+        if let Some(snapshot) = &scene_ctx.scene_snapshot {
+          scene_ctx.scene = alloc::sync::Arc::new((**snapshot).clone());
+        }
+
         // 1. Zero out velocities and angular velocities
-        let _ = scene_ctx.scene.query1_res_mut(|id, k: &mut crate::scene::KinematicComponent| {
+        let _ = scene_ctx.scene.query1_res_mut(|_id, k: &mut crate::scene::KinematicComponent| {
           k.velocity = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero();
           k.angular_velocity = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero();
           Some(())
         });
+
+        // Clear stale cached boundaries
+        if let Some(ps_lock) = &scene_ctx.physics_scene {
+          let mut ps = ps_lock.write();
+          *ps = crate::physics::physics_scene::PhysicsScene::build_from_scene(
+            scene_ctx.scene.as_ref(),
+            0.016,
+          );
+        }
 
         // 2. Clear accumulated integration errors and reset time
         let mut time_state = scene_ctx.time_state.write();
         time_state.current_epoch = time_state.epoch_start;
         time_state.st_seconds_elapsed = 0.0;
         time_state.time_info.write().ut_discard_accumulator();
+
+        // 3. Mark the Top-Level Acceleration Structure as dirty so it reconstructs bounding volumes
+        scene_ctx.is_static_tlas_dirty.store(true, core::sync::atomic::Ordering::Relaxed);
+
+        // 4. Force rendering pipeline updates for the restored entity transforms
+        let ext_ids: alloc::vec::Vec<u64> = scene_ctx.entity_map.keys().copied().collect();
+        for ext_id in ext_ids {
+          scene_ctx.mark_component_changed(
+            ext_id,
+            <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+          );
+          scene_ctx.mark_component_changed(
+            ext_id,
+            <crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+          );
+          scene_ctx.mark_component_changed(ext_id, 100);
+          scene_ctx.mark_component_changed(ext_id, 101);
+          scene_ctx.mark_component_changed(ext_id, 102);
+        }
       }
       Ok(SimulationTaskResult::None)
     }
@@ -852,116 +921,133 @@ fn process_command_internal(
       }
     }
     LogicCommand::UpdateTrajectoryForSpk {
-        task_id: _,
-        scene_id,
-        entity_id,
-        spk_id,
-        start_epoch_tai_sec,
-        end_epoch_tai_sec,
-        sample_step_days,
-      } => {
-        if sample_step_days <= 0.0 {
-          return Err(EngineError::InvalidOperation("UpdateTrajectoryForSpk: sample_step_days must be > 0"));
+      task_id: _,
+      scene_id,
+      entity_id,
+      spk_id,
+      start_epoch_tai_sec,
+      end_epoch_tai_sec,
+      sample_step_days,
+    } => {
+      if sample_step_days <= 0.0 {
+        return Err(EngineError::InvalidOperation(
+          "UpdateTrajectoryForSpk: sample_step_days must be > 0",
+        ));
+      }
+      if start_epoch_tai_sec >= end_epoch_tai_sec {
+        return Err(EngineError::InvalidOperation(
+          "UpdateTrajectoryForSpk: start_epoch >= end_epoch",
+        ));
+      }
+
+      let frame = anise::frames::Frame::new(
+        anise::constants::celestial_objects::SUN,
+        anise::constants::orientations::ECLIPJ2000,
+      );
+
+      let mut samples = alloc::vec::Vec::new();
+      let mut t = start_epoch_tai_sec;
+
+      let logic_state = ctx.logic_state.read();
+
+      let step_sec = sample_step_days * 86400.0;
+
+      // Ensure we at least sample the end point precisely
+      while t <= end_epoch_tai_sec {
+        let epoch = anise::time::Epoch::from_tai_seconds(t);
+        let state = logic_state.almanac_data.get_ephem_full(spk_id, frame, epoch, true, false)?;
+        samples.push(state);
+
+        if t == end_epoch_tai_sec {
+          break;
         }
-        if start_epoch_tai_sec >= end_epoch_tai_sec {
-          return Err(EngineError::InvalidOperation("UpdateTrajectoryForSpk: start_epoch >= end_epoch"));
+        t += step_sec;
+        if t > end_epoch_tai_sec {
+          t = end_epoch_tai_sec;
         }
+      }
 
-        let frame = anise::frames::Frame::new(
-          anise::constants::celestial_objects::SUN,
-          anise::constants::orientations::ECLIPJ2000,
-        );
+      if samples.len() < 2 {
+        return Err(EngineError::InvalidOperation(
+          "UpdateTrajectoryForSpk: not enough samples",
+        ));
+      }
 
-        let mut samples = alloc::vec::Vec::new();
-        let mut t = start_epoch_tai_sec;
+      let dt_sec = step_sec as f32;
+      let mut control_points = alloc::vec::Vec::new();
 
-        let logic_state = ctx.logic_state.read();
+      for i in 0..(samples.len() - 1) {
+        let s0 = &samples[i];
+        let s1 = &samples[i + 1];
 
-        let step_sec = sample_step_days * 86400.0;
+        let p0 = s0.position;
+        let v0 = s0.velocity;
+        let p1 = s1.position;
+        let v1 = s1.velocity;
 
-        // Ensure we at least sample the end point precisely
-        while t <= end_epoch_tai_sec {
-          let epoch = anise::time::Epoch::from_tai_seconds(t);
-          let state = logic_state.almanac_data.get_ephem_full(spk_id, frame, epoch, true, false)?;
-          samples.push(state);
+        let cp0 = p0;
+        let cp1 = p0 + v0 * (dt_sec / 3.0);
+        let cp2 = p1 - v1 * (dt_sec / 3.0);
+        let cp3 = p1;
 
-          if t == end_epoch_tai_sec { break; }
-          t += step_sec;
-          if t > end_epoch_tai_sec {
-            t = end_epoch_tai_sec;
-          }
-        }
+        control_points.push([cp0.x(), cp0.y(), cp0.z(), 1.0]);
+        control_points.push([cp1.x(), cp1.y(), cp1.z(), 1.0]);
+        control_points.push([cp2.x(), cp2.y(), cp2.z(), 1.0]);
+        control_points.push([cp3.x(), cp3.y(), cp3.z(), 1.0]);
+      }
 
-        if samples.len() < 2 {
-          return Err(EngineError::InvalidOperation("UpdateTrajectoryForSpk: not enough samples"));
-        }
+      // Apply the component to the entity
+      let scenes = ctx.scenes.read();
+      let scene_ctx =
+        scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
+      let scene_guard = scene_ctx.read();
+      let entity = EntityId::from(slotmap::KeyData::from_ffi(entity_id));
 
-        let dt_sec = step_sec as f32;
-        let mut control_points = alloc::vec::Vec::new();
+      let new_comp = crate::scene::trajectory::TrajectoryComponent::new(
+        control_points,
+        [0.3, 0.6, 1.0, 1.0], // Default color, maybe should be parameter
+        2.0,
+        0,
+        32,
+      );
 
-        for i in 0..(samples.len() - 1) {
-          let s0 = &samples[i];
-          let s1 = &samples[i + 1];
-
-          let p0 = s0.position;
-          let v0 = s0.velocity;
-          let p1 = s1.position;
-          let v1 = s1.velocity;
-
-          let cp0 = p0;
-          let cp1 = p0 + v0 * (dt_sec / 3.0);
-          let cp2 = p1 - v1 * (dt_sec / 3.0);
-          let cp3 = p1;
-
-          control_points.push([cp0.x(), cp0.y(), cp0.z(), 1.0]);
-          control_points.push([cp1.x(), cp1.y(), cp1.z(), 1.0]);
-          control_points.push([cp2.x(), cp2.y(), cp2.z(), 1.0]);
-          control_points.push([cp3.x(), cp3.y(), cp3.z(), 1.0]);
-        }
-
-        // Apply the component to the entity
-        let scenes = ctx.scenes.read();
-        let scene_ctx = scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
-        let scene_guard = scene_ctx.read();
-        let entity = EntityId::from(slotmap::KeyData::from_ffi(entity_id));
-
-        let new_comp = crate::scene::trajectory::TrajectoryComponent::new(
-          control_points,
-          [0.3, 0.6, 1.0, 1.0], // Default color, maybe should be parameter
-          2.0,
-          0,
-          32,
-        );
-
-        let mut replaced = false;
-        let _ = scene_guard.scene.with_component_mut(entity, |comp: &mut crate::scene::trajectory::TrajectoryComponent| {
+      let mut replaced = false;
+      let _ = scene_guard.scene.with_component_mut(
+        entity,
+        |comp: &mut crate::scene::trajectory::TrajectoryComponent| {
           *comp = new_comp.clone();
           replaced = true;
-        });
+        },
+      );
 
-        if !replaced {
-          let res = scene_guard.scene.add_component(entity, new_comp);
-          if res.is_err() {
-            return Err(EngineError::InvalidOperation("UpdateTrajectoryForSpk: entity does not exist or invalid component add"));
-          }
+      if !replaced {
+        let res = scene_guard.scene.add_component(entity, new_comp);
+        if res.is_err() {
+          return Err(EngineError::InvalidOperation(
+            "UpdateTrajectoryForSpk: entity does not exist or invalid component add",
+          ));
         }
-
-        // Update TransformComponent to match the Sun's position
-        let mut sun_pos = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero();
-        if let Some((sun_id, _)) =
-          scene_guard.scene.query1_first_res::<crate::scene::SunComponent, _, _>(|id, _| Some(id))
-        {
-          if let Some(pos) = scene_guard.scene.global_transform(sun_id).map(|t| t.position) {
-            sun_pos = pos;
-          }
-        }
-
-        let _ = scene_guard.scene.with_component_mut(entity, |transform: &mut crate::scene::TransformComponent| {
-          transform.position = sun_pos;
-        });
-
-        Ok(SimulationTaskResult::None)
       }
+
+      // Update TransformComponent to match the Sun's position
+      let mut sun_pos = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero();
+      if let Some((sun_id, _)) =
+        scene_guard.scene.query1_first_res::<crate::scene::SunComponent, _, _>(|id, _| Some(id))
+      {
+        if let Some(pos) = scene_guard.scene.global_transform(sun_id).map(|t| t.position) {
+          sun_pos = pos;
+        }
+      }
+
+      let _ = scene_guard.scene.with_component_mut(
+        entity,
+        |transform: &mut crate::scene::TransformComponent| {
+          transform.position = sun_pos;
+        },
+      );
+
+      Ok(SimulationTaskResult::None)
+    }
     LogicCommand::RaycastNdc {
       task_id: _,
       scene_id,
@@ -996,7 +1082,14 @@ fn execute_simulation_tick(
   scene_id: u64,
   ctx: &alloc::sync::Arc<LogicThreadContext>,
 ) -> EngineResult<()> {
-  let (time_state_arc, _physics_scene_arc, _scene_arc, active_physics_task, is_tlas_dirty, static_tlas) = {
+  let (
+    time_state_arc,
+    _physics_scene_arc,
+    _scene_arc,
+    active_physics_task,
+    is_tlas_dirty,
+    static_tlas,
+  ) = {
     let scenes = ctx.scenes.read();
     let scene_ctx =
       scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
@@ -1276,8 +1369,6 @@ fn dispatch_physics_step(
     );
   }
 
-
-
   if let Some(ps_lock) = &physics_scene_arc {
     let ps_arc = ps_lock.clone();
     let scene_clone = scene_arc.clone();
@@ -1326,10 +1417,17 @@ fn dispatch_physics_step(
           crate::simulation_api::structs::PhysicsEngineType::VulkanCompute => {
             let mut executed = Ok(None);
             let kernels_enum = kernels_arc.read();
-            if let crate::simulation_api::structs::KernelsEnum::VulkanCompute(weak_front, dev_handle) = &*kernels_enum {
+            if let crate::simulation_api::structs::KernelsEnum::VulkanCompute(
+              weak_front,
+              dev_handle,
+            ) = &*kernels_enum
+            {
               if let Some(front) = weak_front.as_frontend() {
                 let _ = front.with_device(*dev_handle, |device_dyn| {
-                  if let Some(vulkan_dev) = device_dyn.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>() {
+                  if let Some(vulkan_dev) = device_dyn
+                    .as_any()
+                    .downcast_ref::<crate::gpu_backends::vulkan::device::Device>(
+                  ) {
                     executed = crate::gpu_backends::simulation_step(
                       vulkan_dev,
                       &mut ps,
@@ -1349,15 +1447,23 @@ fn dispatch_physics_step(
           crate::simulation_api::structs::PhysicsEngineType::Mock(target) => {
             let mut executed = Ok(None);
             let kernels_enum = kernels_arc.read();
-            if let crate::simulation_api::structs::KernelsEnum::VulkanCompute(weak_front, dev_handle) = &*kernels_enum {
+            if let crate::simulation_api::structs::KernelsEnum::VulkanCompute(
+              weak_front,
+              dev_handle,
+            ) = &*kernels_enum
+            {
               if let Some(front) = weak_front.as_frontend() {
                 let _ = front.with_device(*dev_handle, |device_dyn| {
-                  if let Some(vulkan_dev) = device_dyn.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>() {
-                    let mock_kernels = crate::gpu_backends::vulkan::mock_kernels::MockVulkanKernels {
+                  if let Some(vulkan_dev) = device_dyn
+                    .as_any()
+                    .downcast_ref::<crate::gpu_backends::vulkan::device::Device>(
+                  ) {
+                    let mock_kernels =
+                      crate::gpu_backends::vulkan::mock_kernels::MockVulkanKernels {
                         base: vulkan_dev,
                         target,
                         scene_id,
-                    };
+                      };
                     executed = crate::gpu_backends::simulation_step(
                       &mock_kernels,
                       &mut ps,
