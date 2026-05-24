@@ -5,7 +5,7 @@
 
 use crate::gpu::compute_push_constants::ApplyImpulsesPushConstants;
 use crate::gpu::compute_push_constants::{RigidBodyImex, Wrench};
-use crate::gpu::vulkan::device::{self, commands, resources, Device, LogicalDevice};
+use crate::gpu::vulkan::device::{self, Device, LogicalDevice, commands, resources};
 use crate::gpu::vulkan::utils;
 use crate::gpu::{
   self, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, Kernels, KinematicBody, WaitHandle,
@@ -305,31 +305,41 @@ pub struct BpScenePushConstants {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BpClassifyPushConstants {
-  pub scene_entities: u64,
   pub raw_pairs: u64,
   pub out_rb_rb: u64,
   pub out_rb_ps: u64,
-  pub out_rb_lca: u64,
-  pub n_entities: u32,
-  pub total_raw_pairs: u32,
+  pub out_ps_ps: u64,
+  pub max_pairs: u32,
+  pub num_rigid_bodies: u32,
 }
 
-/// `bp_cross_lca.comp` — 28 bytes
+/// `bp_cross_lca.comp` — 72 bytes
 ///
 /// ```glsl
-/// EntityArray   scene_entities;          // BDA
-/// PairBufferIn  lca_query_pairs;         // BDA
-/// PairBufferOut output_internal_pairs;   // BDA
-/// uint          total_queries;
+/// LcaEntityArray lca_entities;
+/// LeafBuffer macro_leaves;
+/// EntityHeaderArray entity_headers;
+/// PairBuffer lca_query_pairs;
+/// PairBuffer out_rb_rb;
+/// PairBuffer out_rb_ps;
+/// PairBuffer out_ps_ps;
+/// CrossPairBuffer out_cross_pairs;
+/// uint total_queries;
+/// uint max_pairs;
 /// ```
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BpCrossLcaPushConstants {
-  pub scene_entities: u64,
+  pub lca_entities: u64,
+  pub macro_leaves: u64,
+  pub entity_headers: u64,
   pub lca_query_pairs: u64,
-  pub output_internal_pairs: u64,
+  pub out_rb_rb: u64,
+  pub out_rb_ps: u64,
+  pub out_ps_ps: u64,
+  pub out_cross_pairs: u64,
   pub total_queries: u32,
-  pub _pad: u32,
+  pub max_pairs: u32,
 }
 
 /// `bp_particle_self.comp` — 40 bytes
@@ -486,7 +496,11 @@ impl PhysicsPipelines {
         )
       }
       .map_err(|(_pipelines, e)| {
-        GpuError::BackendSpecific(alloc::format!("Failed to create compute pipeline ({}): {:?}", spv_path, e))
+        GpuError::BackendSpecific(alloc::format!(
+          "Failed to create compute pipeline ({}): {:?}",
+          spv_path,
+          e
+        ))
       })?[0];
 
       unsafe {
@@ -523,7 +537,10 @@ impl PhysicsPipelines {
         barnes_hut: create_pipeline(&alloc::format!("{}/barnes_hut.comp.spv", sim_dir))?,
         radix_sort: create_pipeline(&alloc::format!("{}/radix_sort.comp.spv", sim_dir))?,
         morton_encode: create_pipeline(&alloc::format!("{}/morton_encode.comp.spv", sim_dir))?,
-        convert_particles: create_pipeline(&alloc::format!("{}/convert_particles.comp.spv", sim_dir))?,
+        convert_particles: create_pipeline(&alloc::format!(
+          "{}/convert_particles.comp.spv",
+          sim_dir
+        ))?,
         graph_coloring: create_pipeline(&alloc::format!("{}/graph_coloring.comp.spv", sim_dir))?,
         lbvh_collapse: create_pipeline(&alloc::format!("{}/lbvh_collapse.comp.spv", sim_dir))?,
         // ── New IMEX integrators ────────────────────────────────────────────
@@ -616,6 +633,8 @@ pub struct VulkanCommandBuffer {
     core::ptr::NonNull<crate::gpu_backends::vulkan::device::resources::DiscardPool>,
   pub timeline_value: u64,
   pub timeline_sem: vk::Semaphore,
+  pub next_submit_value_ptr: core::ptr::NonNull<core::sync::atomic::AtomicU64>,
+  pub assigned_timeline_value: alloc::sync::Arc<core::sync::atomic::AtomicU64>,
 }
 
 unsafe impl Send for VulkanCommandBuffer {}
@@ -629,19 +648,17 @@ impl CommandBuffer for VulkanCommandBuffer {
     unsafe {
       let device = self.device_ptr.as_ref();
       let discard_pool = self.discard_pool_ptr.as_ref();
+      let next_submit_value = self.next_submit_value_ptr.as_ref();
 
       device.end_command_buffer(self.cmd).map_err(|e| GpuError::from(e))?;
 
-      discard_pool.discard_command_buffer(
-        self.tid,
-        self.id,
-        self.cmd,
-        self.command_pools.clone(),
-        self.timeline_value,
-      );
-
       let command_buffers = [self.cmd];
       let signal_semaphores = [self.timeline_sem];
+
+      // TAKE SUBMISSION LOCK BEFORE ALLOCATING TIMELINE!
+      // This ensures that the order we get timeline values exactly matches the order we submit to the queue.
+      let _guard = device.submission_lock.lock();
+      self.timeline_value = next_submit_value.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
       let signal_values = [self.timeline_value];
 
       let mut timeline_info =
@@ -653,12 +670,26 @@ impl CommandBuffer for VulkanCommandBuffer {
         .push_next(&mut timeline_info);
 
       device
-        .locked_queue_submit(
+        .handle
+        .queue_submit(
           self.queue.handle,
-          core::slice::from_ref(&submit_info),
+          &[submit_info],
           vk::Fence::null(), // TODO fence?
         )
         .map_err(|e| GpuError::from(e))?;
+      drop(_guard);
+
+      self
+        .assigned_timeline_value
+        .store(self.timeline_value, core::sync::atomic::Ordering::Release);
+
+      discard_pool.discard_command_buffer(
+        self.tid,
+        self.id,
+        self.cmd,
+        self.command_pools.clone(),
+        self.timeline_value,
+      );
     }
 
     Ok(Some(crate::gpu::CommandBufferSyncInfo {
@@ -680,21 +711,59 @@ impl<T: Send + Sync> WaitHandle<T> for VulkanWaitHandle<T> {
 }
 
 pub struct VulkanReadHandle<T> {
+  pub device: core::ptr::NonNull<LogicalDevice>,
   pub allocator: vk_mem::AllocatorView,
-  pub allocation: vk_mem::Allocation,
+  pub staging_buffer: ash::vk::Buffer,
+  pub staging_allocation: Option<vk_mem::Allocation>,
   pub is_list: bool,
-  pub usage: ash::vk::BufferUsageFlags,
   pub capacity: usize,
+  pub timeline_sem: ash::vk::Semaphore,
+  pub assigned_timeline_value: alloc::sync::Arc<core::sync::atomic::AtomicU64>,
   pub _marker: core::marker::PhantomData<T>,
 }
 
+unsafe impl<T> Send for VulkanReadHandle<T> {}
+unsafe impl<T> Sync for VulkanReadHandle<T> {}
+
+impl<T> Drop for VulkanReadHandle<T> {
+  fn drop(&mut self) {
+    if let Some(mut alloc) = self.staging_allocation.take() {
+      aethervk_oshal_rlib::log!(
+        "WARN: VulkanReadHandle<{}> dropped without being awaited! Staging buffer freed immediately.",
+        core::any::type_name::<T>()
+      );
+      unsafe {
+        self.allocator.destroy_buffer(self.staging_buffer, &mut alloc);
+      }
+    }
+  }
+}
+
 impl<T: Copy + Send + Sync> WaitHandle<Vec<T>> for VulkanReadHandle<T> {
-  fn wait(self) -> EngineResult<Vec<T>> {
-    let info = self.allocator.get_allocation_info(&self.allocation);
+  #[function_name::named]
+  fn wait(mut self) -> EngineResult<Vec<T>> {
+    let mut target_value = self.assigned_timeline_value.load(core::sync::atomic::Ordering::Acquire);
+
+    // Safety spin: Ensure the submit() actually ran and allocated a timeline value
+    while target_value == 0 {
+      core::hint::spin_loop();
+      target_value = self.assigned_timeline_value.load(core::sync::atomic::Ordering::Acquire);
+    }
+
+    let device = unsafe { self.device.as_ref() };
+
+    // Explicit CPU block for the buffer transfer to complete!
+    device
+      .wait_for_semaphore_value(self.timeline_sem, target_value, u64::MAX)
+      .map_err(|e| crate::types::EngineError::Gpu(crate::gpu_err!("Wait failed: {:?}", e)))?;
+
+    let mut alloc_mut = self.staging_allocation.take().unwrap();
+    let info = self.allocator.get_allocation_info(&alloc_mut);
+
     self
       .allocator
-      .invalidate_allocation(&self.allocation, 0, ash::vk::WHOLE_SIZE)
-      .map_err(|e| EngineError::from(gpu_err!("{}", e)))?;
+      .invalidate_allocation(&alloc_mut, 0, ash::vk::WHOLE_SIZE)
+      .map_err(|e| crate::types::EngineError::Gpu(crate::gpu_err!("{}", e)))?;
 
     let mut data = alloc::vec::Vec::with_capacity(self.capacity);
     unsafe {
@@ -704,6 +773,10 @@ impl<T: Copy + Send + Sync> WaitHandle<Vec<T>> for VulkanReadHandle<T> {
         core::ptr::copy_nonoverlapping(mapped_ptr as *const T, data.as_mut_ptr(), self.capacity);
         data.set_len(self.capacity);
       }
+
+      // Cleanup staging buffer safely and immediately. Because `wait()` is invoked
+      // strictly after `kernels.wait_sync(sync)`, we are 100% sure the GPU is finished!
+      self.allocator.destroy_buffer(self.staging_buffer, &mut alloc_mut);
     }
     Ok(data)
   }
@@ -788,13 +861,83 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for VulkanBuffer<T> {
   fn address(&self) -> u64 {
     self.address
   }
-  fn enqueue_read_to_cpu(&self, _cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'_>> {
+  fn enqueue_read_to_cpu(&self, cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'_>> {
+    let payload_size = (self.capacity.max(1) * core::mem::size_of::<T>()) as u64;
+    let total_size = payload_size + if self.is_list { 16 } else { 0 };
+
+    let buffer_info = ash::vk::BufferCreateInfo::default()
+      .size(total_size)
+      .usage(ash::vk::BufferUsageFlags::TRANSFER_DST);
+
+    let mut alloc_info = vk_mem::AllocationCreateInfo::default();
+    alloc_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
+    // Prefer HOST_CACHED for lightning-fast sequential reads from the CPU
+    alloc_info.flags =
+      vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM | vk_mem::AllocationCreateFlags::MAPPED;
+    crate::apply_test_dedicated_alloc!(alloc_info);
+
+    let (staging_buffer, staging_allocation) =
+      unsafe { self.allocator.create_buffer(&buffer_info, &alloc_info) }.map_err(|e| {
+        crate::types::EngineError::Gpu(crate::types::GpuError::BackendSpecific(alloc::format!(
+          "Failed to create staging buffer: {:?}",
+          e
+        )))
+      })?;
+
+    unsafe {
+      let device = cmd.device_ptr.as_ref();
+
+      // Ensure compute writes to the original buffer are complete before the transfer
+      let pre_barrier = ash::vk::BufferMemoryBarrier2::default()
+        .src_stage_mask(
+          ash::vk::PipelineStageFlags2::COMPUTE_SHADER | ash::vk::PipelineStageFlags2::TRANSFER,
+        )
+        .src_access_mask(
+          ash::vk::AccessFlags2::SHADER_WRITE | ash::vk::AccessFlags2::TRANSFER_WRITE,
+        )
+        .dst_stage_mask(ash::vk::PipelineStageFlags2::COPY)
+        .dst_access_mask(ash::vk::AccessFlags2::TRANSFER_READ)
+        .buffer(self.buffer)
+        .offset(0)
+        .size(ash::vk::WHOLE_SIZE);
+
+      let pre_dep = ash::vk::DependencyInfo::default()
+        .buffer_memory_barriers(core::slice::from_ref(&pre_barrier));
+      device.synchronization2.cmd_pipeline_barrier2(cmd.cmd, &pre_dep);
+
+      // Copy to the host-visible staging buffer natively using DMA speeds
+      let copy_region = ash::vk::BufferCopy::default().src_offset(0).dst_offset(0).size(total_size);
+      device.cmd_copy_buffer(
+        cmd.cmd,
+        self.buffer,
+        staging_buffer,
+        core::slice::from_ref(&copy_region),
+      );
+
+      // Ensure transfer writes are complete before the CPU reads memory on Wait()
+      let post_barrier = ash::vk::BufferMemoryBarrier2::default()
+        .src_stage_mask(ash::vk::PipelineStageFlags2::COPY)
+        .src_access_mask(ash::vk::AccessFlags2::TRANSFER_WRITE)
+        .dst_stage_mask(ash::vk::PipelineStageFlags2::HOST)
+        .dst_access_mask(ash::vk::AccessFlags2::HOST_READ)
+        .buffer(staging_buffer)
+        .offset(0)
+        .size(ash::vk::WHOLE_SIZE);
+
+      let post_dep = ash::vk::DependencyInfo::default()
+        .buffer_memory_barriers(core::slice::from_ref(&post_barrier));
+      device.synchronization2.cmd_pipeline_barrier2(cmd.cmd, &post_dep);
+    }
+
     Ok(VulkanReadHandle {
+      device: cmd.device_ptr,
       allocator: self.allocator,
-      allocation: self.allocation,
+      staging_buffer,
+      staging_allocation: Some(staging_allocation),
       is_list: self.is_list,
-      usage: self.usage,
       capacity: self.capacity,
+      timeline_sem: cmd.timeline_sem,
+      assigned_timeline_value: cmd.assigned_timeline_value.clone(),
       _marker: core::marker::PhantomData,
     })
   }
@@ -831,7 +974,9 @@ pub struct TransientBufferPool {
 }
 impl TransientBufferPool {
   pub fn new() -> Self {
-    Self { entries: alloc::vec::Vec::new() }
+    Self {
+      entries: alloc::vec::Vec::new(),
+    }
   }
 }
 
@@ -841,6 +986,7 @@ pub struct VulkanComputeKernels {
   pub timeline: vk::Semaphore,
   /// Need to keep track of current compute timeline value for discard pool
   pub next_submit_value: core::sync::atomic::AtomicU64,
+  pub next_cmd_id: core::sync::atomic::AtomicU64,
   pub discard_pool: crate::gpu_backends::vulkan::device::resources::DiscardPool,
   pub queue_sharing_info: crate::gpu::QueueSharingInfo,
   pub transient_pool: spin::Mutex<TransientBufferPool>,
@@ -870,6 +1016,7 @@ impl VulkanComputeKernels {
       addresses,
       timeline,
       next_submit_value: core::sync::atomic::AtomicU64::new(1), // Timeline starts at 0, first signal is 1
+      next_cmd_id: core::sync::atomic::AtomicU64::new(1),
       discard_pool,
       queue_sharing_info,
       transient_pool: spin::Mutex::new(TransientBufferPool::new()),
@@ -886,12 +1033,12 @@ impl VulkanComputeKernels {
   pub fn cleanup(&mut self, device: &LogicalDevice, _allocator: vk_mem::AllocatorView) {
     let mut pool = self.transient_pool.lock();
     for entry in pool.entries.drain(..) {
-        self.discard_pool.discard_buffer(
-            _allocator.get_raw(),
-            entry.buffer,
-            entry.allocation,
-            u64::MAX,
-        );
+      self.discard_pool.discard_buffer(
+        _allocator.get_raw(),
+        entry.buffer,
+        entry.allocation,
+        u64::MAX,
+      );
     }
     drop(pool);
 
@@ -1016,7 +1163,13 @@ impl VulkanComputeKernels {
 
     let payload_size = (core::mem::size_of::<T>() * capacity.max(1)) as u64;
     let size = payload_size + if is_list { 16 } else { 0 };
-    aethervk_oshal_rlib::log!("VMA CREATE BUFFER T: {}, capacity: {}, is_list: {}, size: {}", core::any::type_name::<T>(), capacity, is_list, size);
+    aethervk_oshal_rlib::log!(
+      "VMA CREATE BUFFER T: {}, capacity: {}, is_list: {}, size: {}",
+      core::any::type_name::<T>(),
+      capacity,
+      is_list,
+      size
+    );
 
     let sharing_mode = if self.queue_sharing_info.mode == crate::gpu::SharingMode::Concurrent {
       vk::SharingMode::CONCURRENT
@@ -1084,11 +1237,10 @@ impl VulkanComputeKernels {
     compute_queue: device::Queue,
   ) -> GpuResult<<Device as gpu::Kernels>::Cmd> {
     let tid = aethervk_oshal_rlib::os::native::this_thread::id();
-    // In physics compute, we just allocate a new "id" for each command buffer since it's a one-off submission per step
+    // Use `next_cmd_id` to generate ID without advancing the timeline value
     let id = crate::gpu_backends::vulkan::device::commands::CommandBufferId(
-      self.next_submit_value.fetch_add(1, core::sync::atomic::Ordering::SeqCst),
+      self.next_cmd_id.fetch_add(1, core::sync::atomic::Ordering::SeqCst),
     );
-    let timeline_value = id.0;
 
     let cmd = command_pools.allocate_primary(device, tid, id)?;
 
@@ -1110,8 +1262,10 @@ impl VulkanComputeKernels {
       tid,
       device_ptr: core::ptr::NonNull::from(device),
       discard_pool_ptr: core::ptr::NonNull::from(&self.discard_pool),
-      timeline_value,
+      timeline_value: 0, // Assigned correctly at submission time
       timeline_sem: self.timeline,
+      next_submit_value_ptr: core::ptr::NonNull::from(&self.next_submit_value),
+      assigned_timeline_value: alloc::sync::Arc::new(core::sync::atomic::AtomicU64::new(0)),
     })
   }
 
@@ -1969,26 +2123,26 @@ impl VulkanComputeKernels {
     &self,
     device: &LogicalDevice,
     cmd: &mut VulkanCommandBuffer,
-    scene_entities_addr: u64,
+    _scene_entities_addr: u64, // Ignored, no longer used by shader
     raw_pairs_addr: u64,
     out_rb_rb_addr: u64,
     out_rb_ps_addr: u64,
     out_ps_ps_addr: u64,
-    out_macro_lca_addr: u64,
-    out_lca_lca_addr: u64,
+    _out_macro_lca_addr: u64, // Ignored (probably TODO?)
+    _out_lca_lca_addr: u64,   // Ignored (probably TODO?)
     total_raw_pairs: u32,
+    num_rigid_bodies: u32,
   ) {
     let wg_size = 256u32;
     let groups = (total_raw_pairs + wg_size - 1) / wg_size;
 
     let pc = BpClassifyPushConstants {
-      scene_entities: scene_entities_addr,
       raw_pairs: raw_pairs_addr,
       out_rb_rb: out_rb_rb_addr,
       out_rb_ps: out_rb_ps_addr,
-      out_rb_lca: out_macro_lca_addr,
-      n_entities: (total_raw_pairs as f64).sqrt() as u32,
-      total_raw_pairs,
+      out_ps_ps: out_ps_ps_addr,
+      max_pairs: 4000, // Matches the allocation capacity in gpu_backends.rs
+      num_rigid_bodies,
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
@@ -2032,14 +2186,14 @@ impl VulkanComputeKernels {
     &self,
     device: &LogicalDevice,
     cmd: &mut VulkanCommandBuffer,
-    scene_entities_addr: u64,
+    lca_entities_addr: u64,
     macro_leaves_addr: u64,
     entity_headers_addr: u64,
     lca_query_pairs_addr: u64,
     out_rb_rb_addr: u64,
     out_rb_ps_addr: u64,
     out_ps_ps_addr: u64,
-    output_internal_pairs_addr: u64,
+    out_cross_pairs_addr: u64,
     total_queries: u32,
     max_pairs: u32,
   ) {
@@ -2048,11 +2202,16 @@ impl VulkanComputeKernels {
     let groups = (total_queries + subgroups_per_wg - 1) / subgroups_per_wg;
 
     let pc = BpCrossLcaPushConstants {
-      scene_entities: scene_entities_addr,
+      lca_entities: lca_entities_addr,
+      macro_leaves: macro_leaves_addr,
+      entity_headers: entity_headers_addr,
       lca_query_pairs: lca_query_pairs_addr,
-      output_internal_pairs: output_internal_pairs_addr,
+      out_rb_rb: out_rb_rb_addr,
+      out_rb_ps: out_rb_ps_addr,
+      out_ps_ps: out_ps_ps_addr,
+      out_cross_pairs: out_cross_pairs_addr,
       total_queries,
-      _pad: 0,
+      max_pairs,
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
@@ -2765,7 +2924,10 @@ impl VulkanComputeKernels {
       device,
       allocator,
       1,
-      vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+      // fix: Added TRANSFER_SRC for CPU download
+      vk::BufferUsageFlags::STORAGE_BUFFER
+        | vk::BufferUsageFlags::TRANSFER_DST
+        | vk::BufferUsageFlags::TRANSFER_SRC,
       false,
       rollback,
     )?;
@@ -3181,7 +3343,14 @@ impl Kernels for Device {
     lca_entities: u64,
     space_type: u32,
   ) -> EngineResult<Self::List<crate::gpu::CollisionPair>> {
-    self.narrow_ccd(cmd, broadphase_pairs, rigid_bodies, particles, lca_entities, space_type)
+    self.narrow_ccd(
+      cmd,
+      broadphase_pairs,
+      rigid_bodies,
+      particles,
+      lca_entities,
+      space_type,
+    )
   }
 
   type Cmd = VulkanCommandBuffer;
@@ -3217,14 +3386,14 @@ impl Kernels for Device {
     let timeline = self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
     buffer.discarded = true; // prevent drop warning
     self.kernels.transient_pool.lock().entries.push(TransientBufferEntry {
-        buffer: buffer.buffer,
-        address: buffer.address,
-        capacity: buffer.capacity,
-        allocation: buffer.allocation,
-        item_size: core::mem::size_of::<T>(),
-        is_list: buffer.is_list,
-        timeline_freed: timeline,
-        usage: buffer.usage,
+      buffer: buffer.buffer,
+      address: buffer.address,
+      capacity: buffer.capacity,
+      allocation: buffer.allocation,
+      item_size: core::mem::size_of::<T>(),
+      is_list: buffer.is_list,
+      timeline_freed: timeline,
+      usage: buffer.usage,
     });
   }
 
@@ -3232,14 +3401,14 @@ impl Kernels for Device {
     let timeline = self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
     list.discarded = true;
     self.kernels.transient_pool.lock().entries.push(TransientBufferEntry {
-        buffer: list.buffer,
-        address: list.address,
-        capacity: list.capacity,
-        allocation: list.allocation,
-        item_size: core::mem::size_of::<T>(),
-        is_list: list.is_list,
-        timeline_freed: timeline,
-        usage: list.usage,
+      buffer: list.buffer,
+      address: list.address,
+      capacity: list.capacity,
+      allocation: list.allocation,
+      item_size: core::mem::size_of::<T>(),
+      is_list: list.is_list,
+      timeline_freed: timeline,
+      usage: list.usage,
     });
   }
 
@@ -3247,14 +3416,14 @@ impl Kernels for Device {
     let timeline = self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
     bvh.discarded = true;
     self.kernels.transient_pool.lock().entries.push(TransientBufferEntry {
-        buffer: bvh.buffer,
-        address: bvh.address,
-        capacity: bvh.capacity,
-        allocation: bvh.allocation,
-        item_size: 0,
-        is_list: bvh.is_list,
-        timeline_freed: timeline,
-        usage: bvh.usage,
+      buffer: bvh.buffer,
+      address: bvh.address,
+      capacity: bvh.capacity,
+      allocation: bvh.allocation,
+      item_size: 0,
+      is_list: bvh.is_list,
+      timeline_freed: timeline,
+      usage: bvh.usage,
     });
   }
 
@@ -3262,14 +3431,14 @@ impl Kernels for Device {
     let timeline = self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
     tlas.discarded = true;
     self.kernels.transient_pool.lock().entries.push(TransientBufferEntry {
-        buffer: tlas.buffer,
-        address: tlas.address,
-        capacity: tlas.capacity,
-        allocation: tlas.allocation,
-        item_size: 0,
-        is_list: tlas.is_list,
-        timeline_freed: timeline,
-        usage: tlas.usage,
+      buffer: tlas.buffer,
+      address: tlas.address,
+      capacity: tlas.capacity,
+      allocation: tlas.allocation,
+      item_size: 0,
+      is_list: tlas.is_list,
+      timeline_freed: timeline,
+      usage: tlas.usage,
     });
   }
 
@@ -3345,7 +3514,7 @@ impl Kernels for Device {
         };
         let (buffer, mut alloc, info) =
           unsafe { allocator.create_buffer_get_info(&buf_info, &alloc_info) }?;
-    aethervk_oshal_rlib::log!("physics alloc: {:?}", alloc.get_raw());
+        aethervk_oshal_rlib::log!("physics alloc: {:?}", alloc.get_raw());
         aethervk_oshal_rlib::log!("upload_motion_tlas alloc: {:?}", alloc.get_raw());
         rollback.defer(move |_| unsafe { allocator.destroy_buffer(buffer, &mut alloc) });
 
@@ -4089,6 +4258,7 @@ impl Kernels for Device {
           out_macro_lca_addr,
           out_lca_lca_addr,
           total_raw_pairs,
+          bodies.capacity() as u32, // Extract rigid body count
         );
         Ok(())
       })
@@ -4232,7 +4402,10 @@ impl Device {
         dt: 0.0,
         particle_radius: 0.5,
       };
-      let bytes_part = core::slice::from_raw_parts(&pc_part as *const _ as *const u8, core::mem::size_of_val(&pc_part));
+      let bytes_part = core::slice::from_raw_parts(
+        &pc_part as *const _ as *const u8,
+        core::mem::size_of_val(&pc_part),
+      );
       let dispatch_groups_part = (pc_part.num_particles + 255) / 256;
 
       self.device.cmd_bind_pipeline(

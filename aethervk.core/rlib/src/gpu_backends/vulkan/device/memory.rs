@@ -242,16 +242,13 @@ impl FrameStagingArena {
   }
 
   /// TODO: Document this item
-  pub fn destroy(&mut self, allocator: &vk_mem::Allocator) {
+  pub fn destroy(&mut self, allocator: vk_mem::AllocatorView) {
     aethervk_oshal_rlib::log!(
       "FrameStagingArena::destroy called! buf: {:?} alloc: {:?}",
       self.buffer,
       self.allocation.get_raw()
     );
-    unsafe {
-      vk_mem::ffi::vmaDestroyBuffer(allocator.get_raw(), self.buffer, self.allocation.get_raw());
-      core::mem::forget(self.allocation.clone());
-    }
+    unsafe { allocator.destroy_buffer(self.buffer, &mut self.allocation) };
   }
 }
 
