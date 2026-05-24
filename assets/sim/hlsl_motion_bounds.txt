@@ -1,0 +1,74 @@
+#include "../bvh_utils.hlsl"
+
+#ifndef BDA_LOAD
+#define BDA_LOAD(T, addr) vk::RawBufferLoad<T>(addr)
+#endif
+#ifndef BDA_STORE
+#define BDA_STORE(T, addr, val) vk::RawBufferStore<T>(addr, val)
+#endif
+
+#ifndef SUBGROUP_SIZE
+#define SUBGROUP_SIZE 32
+#endif
+
+#ifndef PRIMITIVE_TYPE
+#define PRIMITIVE_TYPE 0
+#endif
+
+#define MULTI_BVH_NODE_SIZE (22 * SUBGROUP_SIZE * 4 + 16)
+#define OFFSET_PARENT_IDX (14 * SUBGROUP_SIZE * 4 + 8)
+#define OFFSET_CHILD_INDICES (6 * SUBGROUP_SIZE * 4)
+
+struct PushConstants_motion_bounds {
+    uint64_t bvh;
+    uint64_t primitive_data;
+    uint num_primitives;
+    float dt;
+    float particle_radius;
+};
+
+#ifdef KERNEL_motion_bounds
+[[vk::push_constant]]
+PushConstants_motion_bounds pc;
+#endif
+
+[numthreads(256, 1, 1)]
+void motion_bounds(uint3 DispatchThreadID : SV_DispatchThreadID) {
+    uint idx = DispatchThreadID.x;
+    if (idx >= pc.num_primitives) return;
+
+    if (PRIMITIVE_TYPE == 0) {
+        uint base = (idx / SUBGROUP_SIZE) * (10 * SUBGROUP_SIZE) + (idx % SUBGROUP_SIZE);
+        
+        float pos_x = asfloat(BDA_LOAD(uint, pc.primitive_data + (base + 0) * 4));
+        float pos_y = asfloat(BDA_LOAD(uint, pc.primitive_data + (base + 1 * SUBGROUP_SIZE) * 4));
+        float pos_z = asfloat(BDA_LOAD(uint, pc.primitive_data + (base + 2 * SUBGROUP_SIZE) * 4));
+        float3 pos = float3(pos_x, pos_y, pos_z);
+        
+        float vel_x = asfloat(BDA_LOAD(uint, pc.primitive_data + (base + 3 * SUBGROUP_SIZE) * 4));
+        float vel_y = asfloat(BDA_LOAD(uint, pc.primitive_data + (base + 4 * SUBGROUP_SIZE) * 4));
+        float vel_z = asfloat(BDA_LOAD(uint, pc.primitive_data + (base + 5 * SUBGROUP_SIZE) * 4));
+        float3 vel = float3(vel_x, vel_y, vel_z);
+
+        float3 p1 = pos + vel * pc.dt;
+        float3 min_p = min(pos, p1) - pc.particle_radius;
+        float3 max_p = max(pos, p1) + pc.particle_radius;
+
+        uint leaf_idx = (pc.num_primitives - 1) + idx;
+        
+        uint64_t leaf_addr = pc.bvh + leaf_idx * MULTI_BVH_NODE_SIZE;
+        uint parent = BDA_LOAD(uint, leaf_addr + OFFSET_PARENT_IDX);
+        
+        uint64_t parent_addr = pc.bvh + parent * MULTI_BVH_NODE_SIZE;
+        uint child_1 = BDA_LOAD(uint, parent_addr + OFFSET_CHILD_INDICES + 4);
+        
+        uint is_right = (child_1 == leaf_idx) ? 1 : 0;
+
+        BDA_STORE(float, parent_addr + 0 * SUBGROUP_SIZE * 4 + is_right * 4, min_p.x);
+        BDA_STORE(float, parent_addr + 1 * SUBGROUP_SIZE * 4 + is_right * 4, max_p.x);
+        BDA_STORE(float, parent_addr + 2 * SUBGROUP_SIZE * 4 + is_right * 4, min_p.y);
+        BDA_STORE(float, parent_addr + 3 * SUBGROUP_SIZE * 4 + is_right * 4, max_p.y);
+        BDA_STORE(float, parent_addr + 4 * SUBGROUP_SIZE * 4 + is_right * 4, min_p.z);
+        BDA_STORE(float, parent_addr + 5 * SUBGROUP_SIZE * 4 + is_right * 4, max_p.z);
+    }
+}

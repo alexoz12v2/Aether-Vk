@@ -1,0 +1,37 @@
+#include "../bvh_utils.hlsl"
+
+// BDA Memory Access Macros
+#ifndef BDA_LOAD
+#define BDA_LOAD(T, addr) vk::RawBufferLoad<T>(addr)
+#define BDA_STORE(T, addr, val) vk::RawBufferStore<T>(addr, val)
+#endif
+
+#ifdef KERNEL_LBVH_PREPASS
+
+struct PushConstants_lbvh_prepass {
+    uint64_t bvh;
+    uint64_t counters;
+    uint num_internal_nodes;
+};
+
+[[vk::push_constant]]
+PushConstants_lbvh_prepass pc_lbvh_prepass;
+
+[numthreads(256, 1, 1)]
+void lbvh_prepass(uint3 DispatchThreadID : SV_DispatchThreadID) {
+    uint idx = DispatchThreadID.x;
+    if (idx >= pc_lbvh_prepass.num_internal_nodes) return;
+    
+    // pc.counters.counts[idx] = 0;
+    uint64_t count_addr = pc_lbvh_prepass.counters + (idx * 4);
+    BDA_STORE(uint, count_addr, 0u);
+    
+    if (idx == 0u) {
+        // pc.bvh.nodes[0].parent_idx = 0xFFFFFFFFu;
+        // MultiBvhNode's parent_idx offset is 1800 bytes
+        uint64_t node_addr = pc_lbvh_prepass.bvh;
+        BDA_STORE(uint, node_addr + 1800, 0xFFFFFFFFu);
+    }
+}
+
+#endif // KERNEL_LBVH_PREPASS

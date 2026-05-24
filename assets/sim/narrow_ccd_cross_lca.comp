@@ -1,0 +1,96 @@
+#version 450 core
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_debug_printf : enable
+
+#include "../bvh_utils.glsl"
+#include "imex_math.glsl"
+#include "physics_core.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    RigidBodyArray scene_entities;
+    SparseCollisions output_list;
+    CrossSparseCollisions cross_output_list;
+    ParticleData particles;
+    PairBuffer pair_buffer;
+    CrossPairBuffer cross_pair_buffer;
+    LcaEntityArray lca_entities;
+    float dt;
+    float particle_radius;
+    uint space_type;
+} pc;
+
+void main() {
+    uint pair_idx = gl_GlobalInvocationID.x;
+    
+    CrossPairBuffer cross_pairs = pc.cross_pair_buffer;
+    if (pair_idx >= cross_pairs.count) return;
+    
+    CrossPair pair = cross_pairs.pairs[pair_idx];
+    uint idA = pair.macro_id;
+    uint idB = pair.micro_id;
+    uint lca_id = pair.lca_id;
+
+    RigidBody ent_A = pc.scene_entities.bodies[idA];
+    RigidBody ent_B = pc.scene_entities.bodies[idB];
+    
+    uint shape_A = ent_A.shape_type;
+    vec3 extents_A = ent_A.shape_extents;
+    vec4 orient_A = ent_A.orientation;
+    vec3 pos_A = ent_A.position_mass.xyz;
+    vec3 vel_A = ent_A.linear_vel_drag.xyz;
+    
+    uint shape_B = ent_B.shape_type;
+    vec3 extents_B = ent_B.shape_extents;
+    vec4 orient_B = ent_B.orientation;
+    vec3 pos_B = ent_B.position_mass.xyz;
+    vec3 vel_B = ent_B.linear_vel_drag.xyz;
+
+    LcaEntity lca = pc.lca_entities.entities[lca_id];
+    
+    vec3 macro_rel_vel_au = vel_A - lca.center_vel;
+    vec3 macro_rel_pos_au = pos_A - lca.center_pos;
+
+    pos_A = (macro_rel_pos_au / lca.scale) * AU_TO_KM;
+    vel_A = (macro_rel_vel_au / lca.scale) * AU_TO_KM;
+    extents_A = (extents_A / lca.scale) * AU_TO_KM;
+
+    mat3 rotA = quat_to_mat3(orient_A);
+    vec3 start_pos_A = pos_A - vel_A * pc.dt;
+    mat4 trans_A = mat4(vec4(rotA[0],0), vec4(rotA[1],0), vec4(rotA[2],0), vec4(start_pos_A,1.0));
+    
+    mat3 rotB = quat_to_mat3(orient_B);
+    vec3 start_pos_B = pos_B - vel_B * pc.dt;
+    mat4 trans_B = mat4(vec4(rotB[0],0), vec4(rotB[1],0), vec4(rotB[2],0), vec4(start_pos_B,1.0));
+
+    float toi, depth;
+    vec3 normal, contact;
+    
+#ifdef DEBUG_SHADERS
+    debugPrintfEXT("Cross Narrow Phase CCD [pair %d]: idA=%d, idB=%d | start_pos_A=(%f, %f, %f) start_pos_B=(%f, %f, %f) | velA=(%f, %f, %f) velB=(%f, %f, %f)\n", pair_idx, idA, idB, start_pos_A.x, start_pos_A.y, start_pos_A.z, start_pos_B.x, start_pos_B.y, start_pos_B.z, vel_A.x, vel_A.y, vel_A.z, vel_B.x, vel_B.y, vel_B.z);
+#endif
+
+    bool hit = compute_toi_generic(shape_A, extents_A, trans_A, vel_A * pc.dt, shape_B, extents_B, trans_B, vel_B * pc.dt, 1e-3, 10, toi, normal, contact, depth);
+
+#ifdef DEBUG_SHADERS
+    debugPrintfEXT("Cross Pair %d Hit: %d | toi=%f\n", pair_idx, hit ? 1 : 0, toi);
+#endif
+
+    if (hit) {
+        CrossSparseCollisions cross_out = pc.cross_output_list;
+        uint count = atomicAdd(cross_out.count, 1);
+        if (count < 4000u) {
+            cross_out.pairs[count].valid = 1u;
+            cross_out.pairs[count].macro_id = idA;
+            cross_out.pairs[count].micro_id = idB;
+            cross_out.pairs[count].lca_id = lca_id;
+            cross_out.pairs[count].toi = toi;
+            cross_out.pairs[count].contact_normal = vec4(normal, 0.0);
+            cross_out.pairs[count].contact_point = vec4(contact, 1.0);
+            cross_out.pairs[count].penetration_depth = depth;
+        }
+    }
+}
