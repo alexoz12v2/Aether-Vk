@@ -1,11 +1,8 @@
 //! resources module.
 
 use crate::{
-  gpu::vulkan::device::DebugTrackedRwLock,
-  gpu_backends::{
-    vulkan,
-    vulkan::device::{VmaDebugNameExt, VulkanDebugNameExt},
-  },
+  gpu::vulkan::device::{DebugTrackedRwLock, LogicalDevice},
+  gpu_backends::vulkan::{self, device::{VmaDebugNameExt, VulkanDebugNameExt}},
   simulation::comet::Texture,
 };
 use aethervk_oshal_rlib as oshal;
@@ -38,7 +35,13 @@ use crate::{
   types::{GpuError, GpuResult},
 };
 
-pub struct ArenaCreationContext<'a> {
+#[derive(Clone, Debug)]
+pub enum ResourceState<T> {
+  Pending,
+  Ready(T),
+}
+
+pub(crate) struct ArenaCreationContext<'a> {
   pub device: &'a crate::gpu_backends::vulkan::device::LogicalDevice,
   pub allocator: vk_mem::AllocatorView,
   pub discard_pool: &'a DiscardPool,
@@ -96,7 +99,7 @@ impl<T> TimelineQueue<T> {
   }
 }
 
-pub(super) enum DiscardItem {
+pub(crate) enum DiscardItem {
   Buffer(BufferDiscard),
   Image(ImageDiscard),
   ImageView(vk::ImageView),
@@ -135,17 +138,17 @@ impl DiscardItem {
   }
 }
 
-struct BufferDiscard {
+pub(crate) struct BufferDiscard {
   buffer: vk::Buffer,
   alloc: vk_mem::Allocation,
   allocator: vk_mem::ffi::VmaAllocator, // non owning copy
 }
-struct ImageDiscard {
+pub(crate) struct ImageDiscard {
   image: vk::Image,
   alloc: vk_mem::Allocation,
   allocator: vk_mem::ffi::VmaAllocator, // non owning copy
 }
-struct CmdBufDiscard {
+pub(crate) struct CmdBufDiscard {
   thread_id: ThreadId,
   command_buffer: vk::CommandBuffer,
   manager: sync::Arc<commands::CommandPools>,
@@ -880,6 +883,31 @@ pub(super) struct SunRenderResource {
   pub compute_pipeline_layout: Option<vk::PipelineLayout>,
   pub params_buffer: Option<vk::Buffer>,
   pub params_alloc: Option<vk_mem::Allocation>,
+}
+
+impl SunRenderResource {
+  /// Note: Compute pipeline is not a responsability of resource. Is it correct? Verify TODO
+  pub fn discard(&mut self, device: &LogicalDevice, allocator: vk_mem::AllocatorView, discard_pool: &DiscardPool, timeline: u64) {
+    if let Some(mut img) = self.image.take() {
+      unsafe {
+        device.destroy_image_view(img.image_view.get(), None);
+        allocator.destroy_image(img.image.get(), &mut img.allocation);
+      }
+    }
+    if let Some(buffer) = self.params_buffer.take() {
+      let mut alloc = self.params_alloc.take().unwrap();
+      unsafe { allocator.destroy_buffer(buffer, &mut alloc) };
+    }
+    if let Some(layout) = self.compute_pipeline_layout.take() {
+      unsafe { device.destroy_pipeline_layout(layout, None) };
+    }
+    if let Some(pool) = self.compute_descriptor_pool.take() {
+      unsafe { device.destroy_descriptor_pool(pool, None) };
+    }
+    if let Some(set_layout) = self.compute_descriptor_set_layout.take() {
+      unsafe {device.destroy_descriptor_set_layout(set_layout, None); }
+    }
+  }
 }
 
 /// TODO: Document this item

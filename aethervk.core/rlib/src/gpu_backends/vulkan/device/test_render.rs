@@ -8,14 +8,15 @@ use crate::{
     frame::{BillboardDrawCall, CursorDrawCall, RenderScene},
     new_render_frontend,
     scene_conversion::SceneConversionExt,
+    vulkan::device::resources::ResourceState,
   },
   math::collision::{
     bounds::AABB,
     linear_bvh::{LinearBVH, LinearBVHHeader, LinearBVHNode, LinearBound},
   },
-  scene,
   scene::{
-    BillboardType, CameraComponent, PhysicalMeshComponent, Scene, SunComponent, TransformComponent,
+    self, BillboardType, CameraComponent, PhysicalMeshComponent, Scene, SunComponent,
+    TransformComponent,
   },
   types::RuntimeParams,
 };
@@ -3780,9 +3781,13 @@ fn test_painting_mode_write_and_verify() {
 
         {
           let res_guard = DebugTrackedRwLock::read(&vk_device.res);
-          let mesh2_res = DebugTrackedRwLock::read(&res_guard.physical_mesh2_resources);
-          let paint_image_resource = mesh2_res.as_ref().unwrap().get(&mesh_id).unwrap();
-          let paint_image = paint_image_resource.emissive_paint_image.as_ref().unwrap();
+          let mesh2_res = &res_guard.physical_mesh2_resources;
+          let paint_image_resource = mesh2_res.get(&mesh_id).unwrap();
+          let paint_image = if let ResourceState::Ready(r) = &*paint_image_resource {
+            r.emissive_paint_image.as_ref().unwrap()
+          } else {
+            panic!("image resources not present")
+          };
 
           let alloc_info = DebugTrackedRwLock::read(&vk_device.res)
             .allocator
@@ -3804,10 +3809,11 @@ fn test_painting_mode_write_and_verify() {
             }
           }
 
-          let _ = DebugTrackedRwLock::read(&vk_device.res)
-            .allocator
-            .allocator
-            .flush_allocation(&paint_image.allocation, 0, ash::vk::WHOLE_SIZE as u64);
+          let _ = DebugTrackedRwLock::read(&vk_device.res).allocator.allocator.flush_allocation(
+            &paint_image.allocation,
+            0,
+            ash::vk::WHOLE_SIZE as u64,
+          );
         }
       }
 
@@ -3825,9 +3831,17 @@ fn test_painting_mode_write_and_verify() {
 
         // Memory barrier to make CPU writes visible to the fragment shader. No layout change.
         {
-          let vk_device = device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+          let vk_device =
+            device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
           let mesh_id = gpu::RenderableInstanceId::from_physical_mesh(mesh_comp.mesh.id);
-          vk_device.submit_paint_image_transition(cmd_buffer_handle_after, mesh_id, ash::vk::ImageLayout::GENERAL, ash::vk::ImageLayout::GENERAL).unwrap();
+          vk_device
+            .submit_paint_image_transition(
+              cmd_buffer_handle_after,
+              mesh_id,
+              ash::vk::ImageLayout::GENERAL,
+              ash::vk::ImageLayout::GENERAL,
+            )
+            .unwrap();
         }
 
         device.begin_render_pass(
