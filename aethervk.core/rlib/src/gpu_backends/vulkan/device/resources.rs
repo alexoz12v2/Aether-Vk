@@ -332,7 +332,7 @@ impl DiscardPool {
           alloc,
           allocator,
         }) => unsafe {
-          aethervk_oshal_rlib::log!("DiscardItem::Buffer destroying buffer! buffer: {:?}", buffer);
+          aethervk_oshal_rlib::log!("DiscardItem::Buffer destroying buffer! alloc: {:?}", alloc.get_raw());
           vk_mem::ffi::vmaDestroyBuffer(allocator, buffer, alloc.get_raw());
           core::mem::forget(alloc);
         },
@@ -1296,7 +1296,7 @@ impl ForwardMesh2RenderResource {
     image_infos.push((
       5,
       if let Some(image) = &emissive_paint_image {
-        image.to_descriptor_image_info(sampler)
+        image.to_descriptor_image_info(sampler).image_layout(vk::ImageLayout::GENERAL)
       } else {
         dummy_info
       },

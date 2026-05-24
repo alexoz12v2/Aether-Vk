@@ -124,15 +124,12 @@ impl DescriptorPools {
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<NonZeroHandle<vk::DescriptorSet>> {
     use crate::gpu_backends::vulkan::utils::RwLockable;
+    let mut inner = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.inner);
     loop {
-      let active_pool = {
-        let inner = self.inner.read();
-        let pool = inner.active_pool;
-        if pool == vk::DescriptorPool::null() {
-          return Err(crate::gpu_err_device!());
-        }
-        pool
-      };
+      let active_pool = inner.active_pool;
+      if active_pool == vk::DescriptorPool::null() {
+        return Err(crate::gpu_err_device!());
+      }
 
       let layouts = [layout];
       let alloc_info =
@@ -170,8 +167,6 @@ impl DescriptorPools {
         };
 
         if create_res == vk::Result::SUCCESS {
-          let mut inner = self.inner.write();
-          // Defer destruction in case commit fails (though here we commit immediately)
           let old_pool = inner.active_pool;
           let inner_ptr = (&mut *inner) as *mut DescriptorPoolsInner;
           rollback.defer(move |dev| unsafe {
@@ -188,7 +183,7 @@ impl DescriptorPools {
       }
 
       if res == vk::Result::SUCCESS {
-        let pool = self.inner.read().active_pool;
+        let pool = inner.active_pool;
         device.set_debug_name(
           descriptor_set,
           &alloc::format!("VkDescriptorSet_{}", debug_name),

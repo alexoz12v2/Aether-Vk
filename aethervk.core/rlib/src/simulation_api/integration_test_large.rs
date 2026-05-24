@@ -14,13 +14,13 @@ mod tests {
     let scene_ctx = ctx.scenes.read().scenes.get(&scene_id).unwrap().clone();
     let mut scene_ctx_w = scene_ctx.write();
     let scene = &mut scene_ctx_w.scene;
-    
+
     let mut out = alloc::string::String::new();
     let comet_eid = slotmap::KeyData::from_ffi(comet_id).into();
     scene.with_component(comet_eid, |t: &crate::scene::TransformComponent| {
       let _ = writeln!(out, "Comet Pos: {:?}", t.position);
     });
-    
+
     scene.with_component(comet_eid, |sys: &crate::scene::particles::ParticleSystemComponent| {
       let particles = sys.particles.read();
       let _ = writeln!(out, "Particles: {}", particles.len());
@@ -28,7 +28,7 @@ mod tests {
         let _ = writeln!(out, "  [{}] pos: {:?}", i, p.position);
       }
     });
-    
+
     if let Ok(mut f) = File::create(filename) {
       let _ = std::io::Write::write_all(&mut f, out.as_bytes());
     }
@@ -56,9 +56,9 @@ mod tests {
         let scene_id = ctx.create_empty_scene().unwrap();
 
         // Ensure we use Vulkan physics engine
-        let _ = ctx.threads.logic_thread.tx().try_send(LogicCommand::SetPhysicsEngineType { 
-          scene_id, 
-          engine_type: PhysicsEngineType::VulkanCompute 
+        let _ = ctx.threads.logic_thread.tx().try_send(LogicCommand::SetPhysicsEngineType {
+          scene_id,
+          engine_type: PhysicsEngineType::VulkanCompute
         });
 
         // Create Sun (Macroframe) - 1 AU away
@@ -89,16 +89,16 @@ mod tests {
           Quat::identity(),
           Vec3f32::from_components(1.0, 1.0, 1.0),
         ).unwrap();
-        
+
         let path = alloc::format!("{}/../../assets/Comet.glb", env!("CARGO_MANIFEST_DIR"));
         let path_buf = aethervk_oshal_rlib::os::fs::PathBuf::from(&path);
-        
+
         // Sphere diameter ~2km -> radius ~1km = 1000m
         ctx.add_physical_mesh_component(scene_id, comet_id, &path_buf, 1000.0, [1.0, 1.0, 1.0]).unwrap();
 
         let mut particle_sys = ParticleSystemComponent::new(100_000);
         let comet_radius = 1000.0;
-        
+
         // Add beta compensation (force pushing comet outwards from sun)
         // Sun is at Z = 1.496e11. We add a custom force evaluator for beta compensation
         // We will just add a Planar ForceEmitterComponent to simulate constant force
@@ -140,7 +140,7 @@ mod tests {
 
         // Save Initial State
         save_state(ctx, scene_id, comet_id, "initial_state.txt");
-        
+
         let _ = ctx.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::PlayScene { scene_id });
 
         // Simulate for 10 seconds
@@ -155,7 +155,7 @@ mod tests {
       }
     }
   }
-  
+
   // Storage for our 4 PEs task_ids
   static LAST_PE_TASK_IDS: [core::sync::atomic::AtomicU64; 4] = [
     core::sync::atomic::AtomicU64::new(0),
@@ -194,25 +194,25 @@ mod tests {
         let scene_id = ctx.create_default_scene().unwrap();
 
         // 1. Setup Vulkan Compute Physics
-        let _ = ctx.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::SetPhysicsEngineType { 
-          scene_id, 
-          engine_type: PhysicsEngineType::VulkanCompute 
+        let _ = ctx.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::SetPhysicsEngineType {
+          scene_id,
+          engine_type: PhysicsEngineType::VulkanCompute
         });
 
         // 2. Setup 4 Windowless Presentation Engines and Cameras
         let width = 512;
         let height = 512;
-        
+
         let pe_1 = ctx.create_presentation_engine(scene_id, width, height).unwrap();
         let pe_2 = ctx.create_presentation_engine(scene_id, width, height).unwrap();
         let pe_3 = ctx.create_presentation_engine(scene_id, width, height).unwrap();
         let pe_4 = ctx.create_presentation_engine(scene_id, width, height).unwrap();
-        
+
         let cam_1 = ctx.add_perspective_camera(scene_id, pe_1, "cam1", 45.0, 0.1, 1000.0).unwrap();
         let cam_2 = ctx.add_perspective_camera(scene_id, pe_2, "cam2", 45.0, 0.1, 1000.0).unwrap();
         let cam_3 = ctx.add_perspective_camera(scene_id, pe_3, "cam3", 45.0, 0.1, 1000.0).unwrap();
         let cam_4 = ctx.add_perspective_camera(scene_id, pe_4, "cam4", 45.0, 0.1, 1000.0).unwrap();
-        
+
         // Position cameras around the origin (100 units away)
         {
           let scene_ctx = ctx.scenes.read().scenes.get(&scene_id).unwrap().clone();
@@ -241,7 +241,7 @@ mod tests {
         let path = alloc::format!("{}/../../assets/Comet.glb", env!("CARGO_MANIFEST_DIR"));
         let path_buf = aethervk_oshal_rlib::os::fs::PathBuf::from(&path);
         ctx.add_physical_mesh_component(scene_id, comet_id, &path_buf, 10.0, [1.0, 1.0, 1.0]).unwrap();
-        
+
         // Force and Collider
         let comet_eid = slotmap::KeyData::from_ffi(comet_id).into();
         let _ = ctx.scenes.read().scenes.get(&scene_id).unwrap().write().scene.add_component(comet_eid, ForceEmitterComponent::Planar {
@@ -259,7 +259,7 @@ mod tests {
 
         // 4. Hook Callback
         SimulationContext::set_render_callback(Some(visual_render_callback_impl));
-        
+
         let wait_for_images = |tag: &str| {
             let mut attempts = 0;
             let mut ready = false;
@@ -276,7 +276,7 @@ mod tests {
                 attempts += 1;
             }
             if !ready { return; }
-            
+
             // Wait for completion and download
             let tids = [LAST_PE_TASK_IDS[0].load(core::sync::atomic::Ordering::Acquire), LAST_PE_TASK_IDS[1].load(core::sync::atomic::Ordering::Acquire), LAST_PE_TASK_IDS[2].load(core::sync::atomic::Ordering::Acquire), LAST_PE_TASK_IDS[3].load(core::sync::atomic::Ordering::Acquire)];
             for (i, &tid) in tids.iter().enumerate() {
@@ -287,7 +287,7 @@ mod tests {
                     status = ctx.get_task_status(tid);
                     attempt += 1;
                 }
-                
+
                 let mut buffer = vec![0u8; (width * height * 4) as usize];
                 if ctx.download_image(tid, buffer.as_mut_ptr(), buffer.len()) {
                     let _ = image::save_buffer(
@@ -307,18 +307,18 @@ mod tests {
         };
 
         // Output Initial State
-        let _ = ctx.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::SetSceneTimeScale { 
-          scene_id, 
+        let _ = ctx.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::SetSceneTimeScale {
+          scene_id,
           scale: crate::simulation_api::structs::TimeScale::RealTime
         });
         let _ = ctx.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::PlayScene { scene_id });
         wait_for_images("initial");
-        
+
         // Wait and Output Final State
         aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_secs(2));
         let _ = ctx.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::PauseScene { scene_id });
         aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(100));
-        
+
         // Final position assertions
         let scene_ctx = ctx.scenes.read().scenes.get(&scene_id).unwrap().clone();
         scene_ctx.write().scene.with_component(comet_eid, |t: &crate::scene::TransformComponent| {
@@ -327,7 +327,7 @@ mod tests {
         });
 
         wait_for_images("final");
-        
+
         // _guard's Drop calls Box::from_raw(ctx_ptr) automatically.
       }
     }

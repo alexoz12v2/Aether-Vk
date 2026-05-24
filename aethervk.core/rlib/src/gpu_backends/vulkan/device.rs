@@ -4,13 +4,13 @@
 use crate::{
   gpu::{
     self, AcquireResult, ArchetypeId, CommandBufferHandle, GpuResourceHandle, NativeGpuProperty,
-    PipelineKey, PipelineKeyable, PresentationEngineHandle, RenderDevice,
-    RenderableInstanceId, TextureFlags,
+    PipelineKey, PipelineKeyable, PresentationEngineHandle, RenderDevice, RenderableInstanceId,
+    TextureFlags,
     frame::ResourceUploadResult,
-    vulkan::{device::{
-      locks::DebugTrackedRwLock,
-      swapchain::PresentationState,
-    }, physics::VulkanComputeKernels},
+    vulkan::{
+      device::{locks::DebugTrackedRwLock, swapchain::PresentationState},
+      physics::VulkanComputeKernels,
+    },
   },
   gpu_backends::vulkan::{
     self,
@@ -226,7 +226,6 @@ macro_rules! extract_pe {
 }
 
 #[macro_export]
-
 #[macro_export]
 macro_rules! wait_for_pe_direct {
   ($map:expr, $h:expr) => {{
@@ -1379,6 +1378,48 @@ impl Device {
     self.queues.get_compute_queue()
   }
 
+  pub fn submit_paint_image_transition(
+    &self,
+    cmd_handle: gpu::CommandBufferHandle,
+    mesh_id: crate::gpu::RenderableInstanceId,
+    old_layout: ash::vk::ImageLayout,
+    new_layout: ash::vk::ImageLayout,
+  ) -> GpuResult<()> {
+    let cmd_buffers = DebugTrackedRwLock::read(&self.recording_command_buffers);
+    let data = cmd_buffers.get(&cmd_handle).ok_or(gpu_err_invalid_cmd!())?;
+    let cmd = data.command_buffer.get();
+
+    let res_guard = DebugTrackedRwLock::read(&self.res);
+    let mesh2_res = DebugTrackedRwLock::read(&res_guard.physical_mesh2_resources);
+    let paint_image_resource = mesh2_res.as_ref().unwrap().get(&mesh_id).unwrap();
+    let paint_image = paint_image_resource.emissive_paint_image.as_ref().unwrap();
+
+    let image_barrier = ash::vk::ImageMemoryBarrier2::default()
+      .src_stage_mask(ash::vk::PipelineStageFlags2::HOST)
+      .src_access_mask(ash::vk::AccessFlags2::HOST_WRITE)
+      .dst_stage_mask(ash::vk::PipelineStageFlags2::FRAGMENT_SHADER)
+      .dst_access_mask(ash::vk::AccessFlags2::SHADER_READ)
+      .old_layout(old_layout)
+      .new_layout(new_layout)
+      .image(paint_image.image.get())
+      .subresource_range(
+        ash::vk::ImageSubresourceRange::default()
+          .aspect_mask(ash::vk::ImageAspectFlags::COLOR)
+          .base_mip_level(0)
+          .level_count(1)
+          .base_array_layer(0)
+          .layer_count(1),
+      );
+
+    let dep_info = ash::vk::DependencyInfo::default()
+      .image_memory_barriers(core::slice::from_ref(&image_barrier));
+
+    unsafe {
+      self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info);
+    }
+    Ok(())
+  }
+
   /// Initializes a Device directly into the provided memory location
   /// This avoids returning a Device by value (which would probably cause stack overflow)
   #[named]
@@ -1538,16 +1579,31 @@ impl Device {
         return Err(e);
       }
     };
-    let unique_indices: alloc::vec::Vec<u32> = chosen_physical_device_query_result.unique_family_indices_set().into_iter().copied().collect();
+    let unique_indices: alloc::vec::Vec<u32> = chosen_physical_device_query_result
+      .unique_family_indices_set()
+      .into_iter()
+      .copied()
+      .collect();
     let queue_sharing_info = crate::gpu::QueueSharingInfo {
-      mode: if unique_indices.len() > 1 { crate::gpu::SharingMode::Concurrent } else { crate::gpu::SharingMode::Exclusive },
+      mode: if unique_indices.len() > 1 {
+        crate::gpu::SharingMode::Concurrent
+      } else {
+        crate::gpu::SharingMode::Exclusive
+      },
       queue_family_indices: unique_indices,
     };
 
-    let kernels = match VulkanComputeKernels::new(&device, res.allocator.allocator.as_allocator_view(), queue_sharing_info, chosen_physical_device_query_result.debug_shaders) {
+    let kernels = match VulkanComputeKernels::new(
+      &device,
+      res.allocator.allocator.as_allocator_view(),
+      queue_sharing_info,
+      chosen_physical_device_query_result.debug_shaders,
+    ) {
       Ok(k) => k,
       Err(e) => {
-        aethervk_oshal_rlib::log!("Device::new error in VulkanComputeKernels::new, destroying device!");
+        aethervk_oshal_rlib::log!(
+          "Device::new error in VulkanComputeKernels::new, destroying device!"
+        );
         // We must clean up res manually before destroying the device!
         res.cleanup(&device.handle);
         drop(res);
@@ -2029,6 +2085,7 @@ impl RenderDevice for Device {
         // 1. Refresh timeline and extract items ready for destruction
         let timeline_val = state.timeline_manager.refresh_cached_value()?;
         let items_to_destroy = state.discard_pool.pop_ready_items(timeline_val);
+        state.allocator.set_current_frame_index(timeline_val);
 
         Ok(items_to_destroy)
       })?
@@ -2043,11 +2100,10 @@ impl RenderDevice for Device {
         execute_result?;
 
         // 3. Reset the staging arena safely while we have the state context
-        if let Some(arena) =
-          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-            &state.frame_staging_arena,
-          )
-          .as_mut()
+        if let Some(arena) = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+          &state.frame_staging_arena,
+        )
+        .as_mut()
         {
           arena.reset();
         }
@@ -3586,7 +3642,7 @@ impl RenderDevice for Device {
               .dst_stage_mask(ash::vk::PipelineStageFlags2::FRAGMENT_SHADER)
               .dst_access_mask(ash::vk::AccessFlags2::SHADER_READ)
               .old_layout(ash::vk::ImageLayout::UNDEFINED)
-              .new_layout(ash::vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+              .new_layout(ash::vk::ImageLayout::GENERAL)
               .image(img.image.get())
               .subresource_range(
                 ash::vk::ImageSubresourceRange::default()
@@ -6440,6 +6496,9 @@ impl RenderDevice for Device {
     resolution: (u32, u32, u32),
     radius: f32,
   ) -> GpuResult<()> {
+    #[cfg(test)]
+    println!("update_sun called");
+
     let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
     let graphics_queue = self.queues.get_graphics_queue();
     let compute_queue = self.queues.get_compute_queue();
@@ -6576,9 +6635,9 @@ impl RenderDevice for Device {
                 vk::ImageSubresourceRange::default()
                   .aspect_mask(vk::ImageAspectFlags::COLOR)
                   .base_mip_level(0)
-                  .level_count(1)
+                  .level_count(vk::REMAINING_MIP_LEVELS)
                   .base_array_layer(0)
-                  .layer_count(1),
+                  .layer_count(vk::REMAINING_ARRAY_LAYERS),
               );
 
             let dep_info =
@@ -6624,9 +6683,9 @@ impl RenderDevice for Device {
                 vk::ImageSubresourceRange::default()
                   .aspect_mask(vk::ImageAspectFlags::COLOR)
                   .base_mip_level(0)
-                  .level_count(1)
+                  .level_count(vk::REMAINING_MIP_LEVELS)
                   .base_array_layer(0)
-                  .layer_count(1),
+                  .layer_count(vk::REMAINING_ARRAY_LAYERS),
               );
 
             let dep_info2 =
@@ -7067,12 +7126,7 @@ impl RenderDevice for Device {
       let arena = DebugTrackedRwLock::read(&*arena_arc);
       (cmd, arena.pipeline_layout.get())
     };
-    let bytes = unsafe {
-      core::slice::from_raw_parts(
-        constants as *const _ as *const u8,
-        80,
-      )
-    };
+    let bytes = unsafe { core::slice::from_raw_parts(constants as *const _ as *const u8, 80) };
     unsafe {
       self.device.cmd_push_constants(
         cmd,
@@ -8297,12 +8351,20 @@ impl RenderDevice for Device {
               }
             })
             .collect();
-            
+
           for tid in to_remove {
             if let Some(mut old_dl) = pending_lock.remove(&tid) {
-              aethervk_oshal_rlib::log!("Automatically cleaning up un-consumed download: {} (engine {:?})", tid, engine_handle);
+              aethervk_oshal_rlib::log!(
+                "Automatically cleaning up un-consumed download: {} (engine {:?})",
+                tid,
+                engine_handle
+              );
               unsafe {
-                state.allocator.allocator.as_allocator_view().destroy_buffer(old_dl.staging_buffer, &mut old_dl.allocation);
+                state
+                  .allocator
+                  .allocator
+                  .as_allocator_view()
+                  .destroy_buffer(old_dl.staging_buffer, &mut old_dl.allocation);
               }
             }
           }
@@ -8457,7 +8519,9 @@ impl RenderDevice for Device {
               wait_semaphores.push_unchecked(vk_semaphore);
               wait_semaphore_values.push_unchecked(sync.timeline_value);
               // Graphics reads compute buffers at Vertex Input / Compute shader stages
-              wait_dst_stage_mask.push_unchecked(vk::PipelineStageFlags::VERTEX_INPUT | vk::PipelineStageFlags::COMPUTE_SHADER);
+              wait_dst_stage_mask.push_unchecked(
+                vk::PipelineStageFlags::VERTEX_INPUT | vk::PipelineStageFlags::COMPUTE_SHADER,
+              );
             }
           }
 

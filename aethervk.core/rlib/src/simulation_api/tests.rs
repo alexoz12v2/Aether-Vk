@@ -529,14 +529,32 @@ fn test_misc_and_models_api_direct() {
   }
 }
 
+fn set_asset_directory_for_tests() {
+  let mut home_dir = std::env::current_exe().unwrap();
+  let mut iter = 0;
+  while !home_dir.join("assets").is_dir() && iter < 32 {
+    home_dir.pop();
+    iter += 1;
+  }
+  *crate::gpu::ASSET_DIR.write() = Some(home_dir.join("assets").to_str().unwrap().to_string());
+}
+
 #[test]
 fn test_snapshot_and_restore() {
-  let mut ctx =
+  set_asset_directory_for_tests();
+  println!("test_snapshot_and_restore: 1. start");
+  let ctx =
     SimulationContext::startup(gpu::VULKAN_RENDER_BACKEND, Some(panic_error_callback)).unwrap();
+  println!("test_snapshot_and_restore: 2. created SimulationContext");
   let scene_id = ctx.create_empty_scene().unwrap();
+  println!("test_snapshot_and_restore: 3. created empty scene");
 
   // Spawn an entity and set position
   let entity = ctx.spawn_entity(scene_id, "TestSnapshot").unwrap();
+  let entity_internal =
+    ctx.get_scene(scene_id).as_ref().unwrap().read().get_entity(entity).unwrap();
+  // TODO add a way to get the external id of root
+  let root_entity = ctx.get_scene(scene_id).as_ref().unwrap().read().root_entity;
   let initial_pos = <Vec3f32 as Vector3>::from_components(1.0, 2.0, 3.0);
   ctx
     .add_component_to_entity(
@@ -549,6 +567,13 @@ fn test_snapshot_and_restore() {
       },
     )
     .unwrap();
+  ctx
+    .get_scene(scene_id)
+    .as_ref()
+    .unwrap()
+    .read()
+    .scene
+    .set_parent(entity_internal, Some(root_entity));
 
   // Take snapshot
   let _ = ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::SnapshotScene { scene_id });

@@ -3749,7 +3749,6 @@ fn test_painting_mode_write_and_verify() {
         device.record_windowless_download(cmd_buffer_handle, task_id)?;
         _scoped_cmd.submit().unwrap();
       }
-
       device.present(
         presentation_engine,
         acquire_result.image_index as usize,
@@ -3777,32 +3776,40 @@ fn test_painting_mode_write_and_verify() {
       {
         let vk_device =
           device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
-        let res_guard = DebugTrackedRwLock::read(&vk_device.res);
         let mesh_id = gpu::RenderableInstanceId::from_physical_mesh(mesh_comp.mesh.id);
-        let mesh2_res = DebugTrackedRwLock::read(&res_guard.physical_mesh2_resources);
-        let paint_image_resource = mesh2_res.as_ref().unwrap().get(&mesh_id).unwrap();
-        let paint_image = paint_image_resource.emissive_paint_image.as_ref().unwrap();
 
-        let alloc_info = DebugTrackedRwLock::read(&vk_device.res)
-          .allocator
-          .allocator
-          .get_allocation_info(&paint_image.allocation);
-        let mapped_ptr = alloc_info.mapped_data as *mut u8;
-        assert!(!mapped_ptr.is_null(), "Paint image must be mmapped");
+        {
+          let res_guard = DebugTrackedRwLock::read(&vk_device.res);
+          let mesh2_res = DebugTrackedRwLock::read(&res_guard.physical_mesh2_resources);
+          let paint_image_resource = mesh2_res.as_ref().unwrap().get(&mesh_id).unwrap();
+          let paint_image = paint_image_resource.emissive_paint_image.as_ref().unwrap();
 
-        // Write a BIG red square in the middle of 1024x1024 texture
-        unsafe {
-          for y in 400..600 {
-            for x in 400..600 {
-              let offset = (y * 1024 + x) * 4;
-              *mapped_ptr.add(offset) = 255; // R
-              *mapped_ptr.add(offset + 1) = 0; // G
-              *mapped_ptr.add(offset + 2) = 0; // B
-              *mapped_ptr.add(offset + 3) = 255; // A (Distribution)
+          let alloc_info = DebugTrackedRwLock::read(&vk_device.res)
+            .allocator
+            .allocator
+            .get_allocation_info(&paint_image.allocation);
+          let mapped_ptr = alloc_info.mapped_data as *mut u8;
+          assert!(!mapped_ptr.is_null(), "Paint image must be mmapped");
+
+          // Write a BIG red square in the middle of 1024x1024 texture
+          unsafe {
+            for y in 0..1024 {
+              for x in 0..1024 {
+                let offset = (y * 1024 + x) * 4;
+                *mapped_ptr.add(offset) = 255; // R
+                *mapped_ptr.add(offset + 1) = 0; // G
+                *mapped_ptr.add(offset + 2) = 0; // B
+                *mapped_ptr.add(offset + 3) = 255; // A (Distribution)
+              }
             }
           }
+
+          let _ = DebugTrackedRwLock::read(&vk_device.res)
+            .allocator
+            .allocator
+            .flush_allocation(&paint_image.allocation, 0, ash::vk::WHOLE_SIZE as u64);
         }
-      } // <-- locks released
+      }
 
       // 3. Render AFTER painting
       device.start_frame()?;
@@ -3815,6 +3822,14 @@ fn test_painting_mode_write_and_verify() {
       {
         let _scoped_cmd =
           gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle_after, Some(task_id_after))?;
+
+        // Memory barrier to make CPU writes visible to the fragment shader. No layout change.
+        {
+          let vk_device = device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+          let mesh_id = gpu::RenderableInstanceId::from_physical_mesh(mesh_comp.mesh.id);
+          vk_device.submit_paint_image_transition(cmd_buffer_handle_after, mesh_id, ash::vk::ImageLayout::GENERAL, ash::vk::ImageLayout::GENERAL).unwrap();
+        }
+
         device.begin_render_pass(
           cmd_buffer_handle_after,
           presentation_engine,

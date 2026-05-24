@@ -10,6 +10,8 @@ use function_name::named;
 pub struct GlobalDeviceAllocator {
   pub allocator: mem::ManuallyDrop<vk_mem::Allocator>,
   pub memory_budgets: Box<[vk_mem::ffi::VmaBudget]>,
+  #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
+  frame_index: alloc::boxed::Box<core::sync::atomic::AtomicU64>,
 }
 
 #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
@@ -43,17 +45,18 @@ unsafe extern "C" fn on_device_alloc(
 ) {
   use ash::vk::Handle;
 
-  if !p_user_data.is_null() {
-    let logical_device = unsafe {
-      (p_user_data as *const crate::gpu_backends::vulkan::device::LogicalDevice).as_ref_unchecked()
-    };
-    // TOdo: how to use dev?
-  }
+  let frame_index: u64 = if !p_user_data.is_null() {
+    unsafe { &*p_user_data.cast::<core::sync::atomic::AtomicU64>() }
+      .load(core::sync::atomic::Ordering::Relaxed)
+  } else {
+    0
+  };
 
   track_gpu_alloc!(memory.as_raw(), size);
 
   aethervk_oshal_rlib::log!(
-    "[VMA] Alloc: size: {} bytes, type: {}, mem: {:#X}",
+    "{} - [VMA] Alloc: size: {} bytes, type: {}, mem: {:#X}",
+    frame_index,
     size,
     memory_type,
     memory.as_raw()
@@ -73,15 +76,16 @@ unsafe extern "C" fn on_device_free(
 
   track_gpu_free!(memory.as_raw(), size);
 
-  if !p_user_data.is_null() {
-    let logical_device = unsafe {
-      (p_user_data as *const crate::gpu_backends::vulkan::device::LogicalDevice).as_ref_unchecked()
-    };
-    // Note: If you want to use LogicalDevice, it's available here.
-  }
+  let frame_index: u64 = if !p_user_data.is_null() {
+    unsafe { &*p_user_data.cast::<core::sync::atomic::AtomicU64>() }
+      .load(core::sync::atomic::Ordering::Relaxed)
+  } else {
+    0
+  };
 
   aethervk_oshal_rlib::log!(
-    "[VMA] Free:  size: {} bytes, type: {}, mem: {:#X}",
+    "{} - [VMA] Free:  size: {} bytes, type: {}, mem: {:#X}",
+    frame_index,
     size,
     memory_type,
     memory.as_raw()
@@ -106,10 +110,12 @@ impl GlobalDeviceAllocator {
       | vk_mem::AllocatorCreateFlags::KHR_DEDICATED_ALLOCATION
       | vk_mem::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
     #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
+    let frame_index = alloc::boxed::Box::new(core::sync::atomic::AtomicU64::new(0));
+    #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
     let callbacks = vk_mem::ffi::VmaDeviceMemoryCallbacks {
       pfnAllocate: Some(on_device_alloc),
       pfnFree: Some(on_device_free),
-      pUserData: core::ptr::null_mut(),
+      pUserData: frame_index.as_ptr() as *mut _,
     };
     #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
     {
@@ -127,19 +133,24 @@ impl GlobalDeviceAllocator {
     Ok(Self {
       allocator: mem::ManuallyDrop::new(allocator),
       memory_budgets: unsafe { Box::new_zeroed_slice(heap_count).assume_init() },
+      #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
+      frame_index,
     })
   }
 
-  /// TODO: Document this item
+  // TODO: Pretty print them in avalonia debug view
   pub fn refresh_vma_budgets(&mut self) {
     unsafe { self.allocator.get_heap_budgets_cached(&mut self.memory_budgets) };
   }
 
   /// TODO: Document this item
-  pub fn set_current_frame_index(&self, frame_index: u32) {
+  pub fn set_current_frame_index(&self, frame_index: u64) {
     unsafe {
-      self.allocator.set_current_frame_index(frame_index);
+      // wrapping works fine in terms of vma budget
+      self.allocator.set_current_frame_index(frame_index as _);
     };
+    #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
+    let _ = self.frame_index.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
   }
 
   // TODO: allocate buffer, image, ...
@@ -192,6 +203,11 @@ impl FrameStagingArena {
       unsafe { allocator.create_buffer_get_info(&buffer_info, &alloc_info) }
         .map_err(|_| crate::gpu_err_device!())?;
 
+    aethervk_oshal_rlib::log!(
+      "FrameStagingArena created alloc: {:?}",
+      allocation.get_raw()
+    );
+
     Ok(Self {
       buffer,
       mapped_ptr: alloc_info_res.mapped_data as *mut u8,
@@ -227,9 +243,14 @@ impl FrameStagingArena {
 
   /// TODO: Document this item
   pub fn destroy(&mut self, allocator: &vk_mem::Allocator) {
-    aethervk_oshal_rlib::log!("FrameStagingArena::destroy called!");
+    aethervk_oshal_rlib::log!(
+      "FrameStagingArena::destroy called! buf: {:?} alloc: {:?}",
+      self.buffer,
+      self.allocation.get_raw()
+    );
     unsafe {
-      allocator.destroy_buffer(self.buffer, &mut self.allocation);
+      vk_mem::ffi::vmaDestroyBuffer(allocator.get_raw(), self.buffer, self.allocation.get_raw());
+      core::mem::forget(self.allocation.clone());
     }
   }
 }

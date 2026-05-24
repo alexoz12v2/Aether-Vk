@@ -1838,7 +1838,9 @@ pub struct CollisionPair {
   pub a: ColliderId,
   pub b: ColliderId,
   pub time_of_impact: f32,
+  pub _pad0: [f32; 3],
   pub contact_normal: [f32; 3],
+  pub _pad1: f32,
   pub contact_point: [f32; 3],
   pub penetration_depth: f32,
 }
