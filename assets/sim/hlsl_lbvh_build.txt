@@ -1,0 +1,154 @@
+[numthreads(128, 1, 1)]
+
+struct PushConstants_lbvh_build {
+    uint64_t bvh;
+    uint64_t sorted_morton;
+    uint64_t counters;
+    uint64_t particles;
+    uint num_primitives;
+    float particle_radius;
+    float dt;
+};
+
+#ifdef KERNEL_lbvh_build
+[[vk::push_constant]]
+PushConstants_lbvh_build pc;
+#endif
+
+int common_prefix(uint n, int i, int j) {
+    if (j < 0 || j >= (int)n) return -1;
+    uint key1 = BDA_LOAD(uint, pc.sorted_morton + i * 8);
+    uint key2 = BDA_LOAD(uint, pc.sorted_morton + j * 8);
+    if (key1 == key2) {
+        uint idx1 = BDA_LOAD(uint, pc.sorted_morton + i * 8 + 4);
+        uint idx2 = BDA_LOAD(uint, pc.sorted_morton + j * 8 + 4);
+        return 32 + (31 - firstbithigh(idx1 ^ idx2));
+    }
+    return 31 - firstbithigh(key1 ^ key2);
+}
+
+float2 determine_range(uint n, int i) {
+    int d = sign((float)(common_prefix(n, i, i + 1) - common_prefix(n, i, i - 1)));
+    int min_p = common_prefix(n, i, i - d), l_max = 2;
+    while (common_prefix(n, i, i + l_max * d) > min_p) l_max *= 2;
+    int l = 0, t = l_max / 2;
+    while (t >= 1) { if (common_prefix(n, i, i + (l + t) * d) > min_p) l += t; t /= 2; }
+    return float2(min(i, i + l * d), max(i, i + l * d));
+}
+
+int find_split(uint n, int first, int last) {
+    int common_node = common_prefix(n, first, last), split = first, step = last - first;
+    do {
+        step = (step + 1) >> 1; int new_split = split + step;
+        if (new_split < last && common_prefix(n, first, new_split) > common_node) split = new_split;
+    } while (step > 1);
+    return split;
+}
+
+#define NODE_SIZE 2832
+#define NODE_MIN_X 0
+#define NODE_MAX_X 128
+#define NODE_MIN_Y 256
+#define NODE_MAX_Y 384
+#define NODE_MIN_Z 512
+#define NODE_MAX_Z 640
+#define NODE_CHILD 768
+#define NODE_METADATA 896
+#define NODE_MASSES 1024
+#define NODE_COM_X 1152
+#define NODE_COM_Y 1280
+#define NODE_COM_Z 1408
+#define NODE_VALID_MASK 1792
+#define NODE_PARENT_IDX 1800
+
+#define BVH_LOAD_UINT(bvh, node, offset, is_r) BDA_LOAD(uint, (bvh) + (node) * NODE_SIZE + (offset) + (is_r) * 4)
+#define BVH_STORE_UINT(bvh, node, offset, is_r, val) BDA_STORE(uint, (bvh) + (node) * NODE_SIZE + (offset) + (is_r) * 4, val)
+#define BVH_LOAD_FLOAT(bvh, node, offset, is_r) BDA_LOAD(float, (bvh) + (node) * NODE_SIZE + (offset) + (is_r) * 4)
+#define BVH_STORE_FLOAT(bvh, node, offset, is_r, val) BDA_STORE(float, (bvh) + (node) * NODE_SIZE + (offset) + (is_r) * 4, val)
+
+#ifdef KERNEL_lbvh_build
+void lbvh_build(uint3 DispatchThreadID : SV_DispatchThreadID) {
+    uint idx = DispatchThreadID.x, n = pc.num_primitives;
+    if (idx >= n) return;
+    uint num_internal_nodes = n - 1;
+
+    if (idx < num_internal_nodes) {
+        float2 range = determine_range(n, int(idx));
+        int split = find_split(n, int(range.x), int(range.y));
+        uint left_child = (split == int(range.x)) ? (num_internal_nodes + split) : uint(split);
+        uint right_child = (split + 1 == int(range.y)) ? (num_internal_nodes + split + 1) : uint(split + 1);
+
+        BVH_STORE_UINT(pc.bvh, idx, NODE_CHILD, 0, left_child);
+        BVH_STORE_UINT(pc.bvh, idx, NODE_CHILD, 1, right_child);
+        BDA_STORE(uint2, pc.bvh + idx * NODE_SIZE + NODE_VALID_MASK, uint2(3u, 0u));
+        BDA_STORE(uint, pc.bvh + left_child * NODE_SIZE + NODE_PARENT_IDX, idx);
+        BDA_STORE(uint, pc.bvh + right_child * NODE_SIZE + NODE_PARENT_IDX, idx);
+    }
+
+    uint leaf_idx = num_internal_nodes + idx;
+    uint p_id = BDA_LOAD(uint, pc.sorted_morton + idx * 8 + 4);
+    uint base = (p_id / SUBGROUP_SIZE) * (10 * SUBGROUP_SIZE) + (p_id % SUBGROUP_SIZE);
+
+    float3 pos = float3(
+        BDA_LOAD(float, pc.particles + (base+0)*4),
+        BDA_LOAD(float, pc.particles + (base+1*SUBGROUP_SIZE)*4),
+        BDA_LOAD(float, pc.particles + (base+2*SUBGROUP_SIZE)*4)
+    );
+    float3 vel = float3(
+        BDA_LOAD(float, pc.particles + (base+3*SUBGROUP_SIZE)*4),
+        BDA_LOAD(float, pc.particles + (base+4*SUBGROUP_SIZE)*4),
+        BDA_LOAD(float, pc.particles + (base+5*SUBGROUP_SIZE)*4)
+    );
+    float mass = BDA_LOAD(float, pc.particles + (base+6*SUBGROUP_SIZE)*4);
+    float r = pc.particle_radius;
+
+    float3 p1 = pos + vel * pc.dt;
+    float3 l_min = min(pos - float3(r, r, r), p1 - float3(r, r, r));
+    float3 l_max = max(pos + float3(r, r, r), p1 + float3(r, r, r));
+
+    uint current = BDA_LOAD(uint, pc.bvh + leaf_idx * NODE_SIZE + NODE_PARENT_IDX);
+    uint is_right = (BVH_LOAD_UINT(pc.bvh, current, NODE_CHILD, 1) == leaf_idx) ? 1 : 0;
+
+    BVH_STORE_FLOAT(pc.bvh, current, NODE_MIN_X, is_right, l_min.x); BVH_STORE_FLOAT(pc.bvh, current, NODE_MAX_X, is_right, l_max.x);
+    BVH_STORE_FLOAT(pc.bvh, current, NODE_MIN_Y, is_right, l_min.y); BVH_STORE_FLOAT(pc.bvh, current, NODE_MAX_Y, is_right, l_max.y);
+    BVH_STORE_FLOAT(pc.bvh, current, NODE_MIN_Z, is_right, l_min.z); BVH_STORE_FLOAT(pc.bvh, current, NODE_MAX_Z, is_right, l_max.z);
+    BVH_STORE_FLOAT(pc.bvh, current, NODE_MASSES, is_right, mass);
+    BVH_STORE_FLOAT(pc.bvh, current, NODE_COM_X, is_right, pos.x); BVH_STORE_FLOAT(pc.bvh, current, NODE_COM_Y, is_right, pos.y); BVH_STORE_FLOAT(pc.bvh, current, NODE_COM_Z, is_right, pos.z);
+    BVH_STORE_UINT(pc.bvh, current, NODE_METADATA, is_right, bvh_pack_metadata(true, BVH_FRAME_MICRO, BVH_SHAPE_AABB, p_id));
+
+    DeviceMemoryBarrierWithGroupSync();
+
+    while (current != 0xFFFFFFFFu) {
+        uint counter_addr = pc.counters + current * 4;
+        uint old_val = spvAtomicIAdd(counter_addr, SPV_SCOPE_DEVICE, SPV_SEMANTICS_RELAXED, 1);
+        if (old_val == 0) break;
+
+        float3 c_l_min = float3(BVH_LOAD_FLOAT(pc.bvh, current, NODE_MIN_X, 0), BVH_LOAD_FLOAT(pc.bvh, current, NODE_MIN_Y, 0), BVH_LOAD_FLOAT(pc.bvh, current, NODE_MIN_Z, 0));
+        float3 c_l_max = float3(BVH_LOAD_FLOAT(pc.bvh, current, NODE_MAX_X, 0), BVH_LOAD_FLOAT(pc.bvh, current, NODE_MAX_Y, 0), BVH_LOAD_FLOAT(pc.bvh, current, NODE_MAX_Z, 0));
+        float l_m = BVH_LOAD_FLOAT(pc.bvh, current, NODE_MASSES, 0);
+        float3 l_com = float3(BVH_LOAD_FLOAT(pc.bvh, current, NODE_COM_X, 0), BVH_LOAD_FLOAT(pc.bvh, current, NODE_COM_Y, 0), BVH_LOAD_FLOAT(pc.bvh, current, NODE_COM_Z, 0));
+
+        float3 c_r_min = float3(BVH_LOAD_FLOAT(pc.bvh, current, NODE_MIN_X, 1), BVH_LOAD_FLOAT(pc.bvh, current, NODE_MIN_Y, 1), BVH_LOAD_FLOAT(pc.bvh, current, NODE_MIN_Z, 1));
+        float3 c_r_max = float3(BVH_LOAD_FLOAT(pc.bvh, current, NODE_MAX_X, 1), BVH_LOAD_FLOAT(pc.bvh, current, NODE_MAX_Y, 1), BVH_LOAD_FLOAT(pc.bvh, current, NODE_MAX_Z, 1));
+        float r_m = BVH_LOAD_FLOAT(pc.bvh, current, NODE_MASSES, 1);
+        float3 r_com = float3(BVH_LOAD_FLOAT(pc.bvh, current, NODE_COM_X, 1), BVH_LOAD_FLOAT(pc.bvh, current, NODE_COM_Y, 1), BVH_LOAD_FLOAT(pc.bvh, current, NODE_COM_Z, 1));
+
+        float3 c_min = min(c_l_min, c_r_min), c_max = max(c_l_max, c_r_max);
+        float c_mass = l_m + r_m;
+        float3 c_com = c_mass > 0.0 ? (l_com * l_m + r_com * r_m) / c_mass : (l_com + r_com) * 0.5;
+
+        uint parent = BDA_LOAD(uint, pc.bvh + current * NODE_SIZE + NODE_PARENT_IDX);
+        if (parent != 0xFFFFFFFFu) {
+            uint is_r = (BVH_LOAD_UINT(pc.bvh, parent, NODE_CHILD, 1) == current) ? 1 : 0;
+            BVH_STORE_FLOAT(pc.bvh, parent, NODE_MIN_X, is_r, c_min.x); BVH_STORE_FLOAT(pc.bvh, parent, NODE_MAX_X, is_r, c_max.x);
+            BVH_STORE_FLOAT(pc.bvh, parent, NODE_MIN_Y, is_r, c_min.y); BVH_STORE_FLOAT(pc.bvh, parent, NODE_MAX_Y, is_r, c_max.y);
+            BVH_STORE_FLOAT(pc.bvh, parent, NODE_MIN_Z, is_r, c_min.z); BVH_STORE_FLOAT(pc.bvh, parent, NODE_MAX_Z, is_r, c_max.z);
+            BVH_STORE_FLOAT(pc.bvh, parent, NODE_MASSES, is_r, c_mass);
+            BVH_STORE_FLOAT(pc.bvh, parent, NODE_COM_X, is_r, c_com.x); BVH_STORE_FLOAT(pc.bvh, parent, NODE_COM_Y, is_r, c_com.y); BVH_STORE_FLOAT(pc.bvh, parent, NODE_COM_Z, is_r, c_com.z);
+            BVH_STORE_UINT(pc.bvh, parent, NODE_METADATA, is_r, bvh_pack_metadata(false, BVH_FRAME_MICRO, BVH_SHAPE_AABB, current));
+        }
+        DeviceMemoryBarrierWithGroupSync();
+        current = parent;
+    }
+}
+#endif

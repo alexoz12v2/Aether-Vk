@@ -1,0 +1,66 @@
+#include "../bvh_utils.hlsli"
+
+// BDA Memory Access Macros
+// ------------------------------------------------------------------
+#define BDA_LOAD(T, addr) vk::RawBufferLoad<T>(addr)
+#define BDA_STORE(T, addr, val) vk::RawBufferStore<T>(addr, val)
+
+// ------------------------------------------------------------------
+// SPIR-V Atomic Intrinsics for 64-bit BDA Pointers
+// ------------------------------------------------------------------
+#define SPV_SCOPE_DEVICE 1
+#define SPV_SEMANTICS_RELAXED 0
+
+[[vk::ext_instruction(234)]] uint spvAtomicIAdd([[vk::ext_reference]] uint64_t ptr, uint scope, uint semantics, uint value);
+[[vk::ext_instruction(237)]] uint spvAtomicUMin([[vk::ext_reference]] uint64_t ptr, uint scope, uint semantics, uint value);
+[[vk::ext_instruction(230)]] uint spvAtomicCompareExchange([[vk::ext_reference]] uint64_t ptr, uint scope, uint semanticsEqual, uint semanticsUnequal, uint value, uint comparator);
+
+struct PushConstants {
+    uint64_t bvh;
+    uint64_t depth_indices;
+    uint total_nodes_at_depth;
+};
+
+[[vk::push_constant]]
+PushConstants pc;
+
+#define MULTI_BVH_NODE_SIZE 2832
+#define OFFSET_MIN_X 0
+#define OFFSET_MAX_X 128
+#define OFFSET_MIN_Y 256
+#define OFFSET_MAX_Y 384
+#define OFFSET_MIN_Z 512
+#define OFFSET_MAX_Z 640
+#define OFFSET_CHILD_INDICES 768
+#define OFFSET_METADATA 896
+
+[numthreads(256, 1, 1)]
+void motion_refit(uint3 DispatchThreadID : SV_DispatchThreadID) {
+    uint global_id = DispatchThreadID.x;
+    if (global_id >= pc.total_nodes_at_depth) return;
+
+    uint node_idx = BDA_LOAD(uint, pc.depth_indices + 4 + (global_id + 4) * 4);
+    uint64_t node_addr = pc.bvh + node_idx * MULTI_BVH_NODE_SIZE;
+
+    for (uint i = 0; i < 2; ++i) {
+        uint child = BDA_LOAD(uint, node_addr + OFFSET_CHILD_INDICES + i * 4);
+        uint metadata = BDA_LOAD(uint, node_addr + OFFSET_METADATA + i * 4);
+        uint64_t child_addr = pc.bvh + child * MULTI_BVH_NODE_SIZE;
+
+        if (bvh_is_leaf(metadata)) {
+            BDA_STORE(float, node_addr + OFFSET_MIN_X + i * 4, BDA_LOAD(float, child_addr + OFFSET_MIN_X + 0 * 4));
+            BDA_STORE(float, node_addr + OFFSET_MAX_X + i * 4, BDA_LOAD(float, child_addr + OFFSET_MAX_X + 0 * 4));
+            BDA_STORE(float, node_addr + OFFSET_MIN_Y + i * 4, BDA_LOAD(float, child_addr + OFFSET_MIN_Y + 0 * 4));
+            BDA_STORE(float, node_addr + OFFSET_MAX_Y + i * 4, BDA_LOAD(float, child_addr + OFFSET_MAX_Y + 0 * 4));
+            BDA_STORE(float, node_addr + OFFSET_MIN_Z + i * 4, BDA_LOAD(float, child_addr + OFFSET_MIN_Z + 0 * 4));
+            BDA_STORE(float, node_addr + OFFSET_MAX_Z + i * 4, BDA_LOAD(float, child_addr + OFFSET_MAX_Z + 0 * 4));
+        } else {
+            BDA_STORE(float, node_addr + OFFSET_MIN_X + i * 4, min(BDA_LOAD(float, child_addr + OFFSET_MIN_X + 0 * 4), BDA_LOAD(float, child_addr + OFFSET_MIN_X + 1 * 4)));
+            BDA_STORE(float, node_addr + OFFSET_MAX_X + i * 4, max(BDA_LOAD(float, child_addr + OFFSET_MAX_X + 0 * 4), BDA_LOAD(float, child_addr + OFFSET_MAX_X + 1 * 4)));
+            BDA_STORE(float, node_addr + OFFSET_MIN_Y + i * 4, min(BDA_LOAD(float, child_addr + OFFSET_MIN_Y + 0 * 4), BDA_LOAD(float, child_addr + OFFSET_MIN_Y + 1 * 4)));
+            BDA_STORE(float, node_addr + OFFSET_MAX_Y + i * 4, max(BDA_LOAD(float, child_addr + OFFSET_MAX_Y + 0 * 4), BDA_LOAD(float, child_addr + OFFSET_MAX_Y + 1 * 4)));
+            BDA_STORE(float, node_addr + OFFSET_MIN_Z + i * 4, min(BDA_LOAD(float, child_addr + OFFSET_MIN_Z + 0 * 4), BDA_LOAD(float, child_addr + OFFSET_MIN_Z + 1 * 4)));
+            BDA_STORE(float, node_addr + OFFSET_MAX_Z + i * 4, max(BDA_LOAD(float, child_addr + OFFSET_MAX_Z + 0 * 4), BDA_LOAD(float, child_addr + OFFSET_MAX_Z + 1 * 4)));
+        }
+    }
+}

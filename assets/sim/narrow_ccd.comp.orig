@@ -95,7 +95,7 @@ void main() {
     debugPrintfEXT("Narrow Phase CCD [pair %d]: idA=%d, idB=%d\n", pair_idx, idA, idB);
 #endif
 
-    if (compute_toi_generic(shape_A, extents_A, trans_A, vel_A * pc.dt, shape_B, extents_B, trans_B, vel_B * pc.dt, 1e-3, 10, toi, normal, contact, depth)) {
+    if (compute_toi_generic(shape_A, extents_A, trans_A, vel_A, shape_B, extents_B, trans_B, vel_B, 1e-3, 10, toi, normal, contact, depth)) {
         if (pc.space_type == 1) {
             CrossSparseCollisions cross_out = pc.cross_output_list;
             uint count = atomicAdd(cross_out.count, 1);

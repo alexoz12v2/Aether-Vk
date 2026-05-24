@@ -1,0 +1,76 @@
+// @assets/sim/bp_bounds_gen.comp
+
+#ifdef KERNEL_bp_bounds_gen
+struct PushConstants {
+    uint64_t scene_entities;
+    uint64_t particles;
+    uint64_t tlas_leaves;
+    uint2    dt_us;
+    uint     total_entities;
+    uint     num_rigid_bodies;
+    float    particle_radius;
+};
+
+[[vk::push_constant]]
+PushConstants pc;
+#endif
+
+[numthreads(256, 1, 1)]
+void bp_bounds_gen(uint3 tid : SV_DispatchThreadID) {
+    uint id = tid.x;
+    if (id >= pc.total_entities) return;
+
+    float dt = dt_to_seconds(pc.dt_us);
+    float3 center, extents, vel;
+    uint shape_type;
+    uint64_t bda;
+
+    if (id < pc.num_rigid_bodies) {
+        uint64_t body_addr = pc.scene_entities + id * sizeof(RigidBody);
+        RigidBody body = BDA_LOAD(RigidBody, body_addr);
+        
+        center = body.position_mass.xyz;
+        extents = body.shape_extents;
+        vel = body.linear_vel_drag.xyz;
+        shape_type = body.shape_type;
+        bda = body_addr;
+    } else {
+        uint particle_system_idx = id - pc.num_rigid_bodies;
+        // The bounds of a particle system should ideally be computed over all its particles.
+        // For now, since particles are grouped into entities (32 particles per entity),
+        // we approximate the bounds using the center of the first particle in the group.
+        uint base = particle_system_idx * (10 * SUBGROUP_SIZE);
+        
+        center = float3(
+            asfloat(BDA_LOAD(uint, pc.particles + (base + 0) * 4)),
+            asfloat(BDA_LOAD(uint, pc.particles + (base + 1 * SUBGROUP_SIZE) * 4)),
+            asfloat(BDA_LOAD(uint, pc.particles + (base + 2 * SUBGROUP_SIZE) * 4))
+        );
+        
+        extents = float3(pc.particle_radius * 16.0, pc.particle_radius * 16.0, pc.particle_radius * 16.0); // Rough approximation for 32 particles
+        
+        vel = float3(
+            asfloat(BDA_LOAD(uint, pc.particles + (base + 3 * SUBGROUP_SIZE) * 4)),
+            asfloat(BDA_LOAD(uint, pc.particles + (base + 4 * SUBGROUP_SIZE) * 4)),
+            asfloat(BDA_LOAD(uint, pc.particles + (base + 5 * SUBGROUP_SIZE) * 4))
+        );
+        
+        shape_type = BVH_SHAPE_SPHERE;
+        bda = pc.particles + particle_system_idx * (10 * SUBGROUP_SIZE * 4); // Address of this chunk of 32 particles
+    }
+
+    float3 static_min = center - extents;
+    float3 static_max = center + extents;
+    float3 sweep = vel * dt;
+
+    uint64_t leaf_addr = pc.tlas_leaves + id * sizeof(TLASLeaf);
+    TLASLeaf leaf = BDA_LOAD(TLASLeaf, leaf_addr);
+    
+    leaf.min_bound = min(static_min, static_min + sweep);
+    leaf.max_bound = max(static_max, static_max + sweep);
+    leaf.entity_idx = id;
+    leaf.metadata = bvh_pack_metadata(true, BVH_FRAME_MACRO, shape_type, id);
+    leaf.bda = bda;
+
+    BDA_STORE(TLASLeaf, leaf_addr, leaf);
+}

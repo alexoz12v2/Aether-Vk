@@ -1,0 +1,88 @@
+#include "../bvh_utils.hlsl"
+
+// BDA Memory Access Macros
+#ifndef BDA_LOAD
+#define BDA_LOAD(T, addr) vk::RawBufferLoad<T>(addr)
+#endif
+#ifndef BDA_STORE
+#define BDA_STORE(T, addr, val) vk::RawBufferStore<T>(addr, val)
+#endif
+
+// SPIR-V Atomic Intrinsics for 64-bit BDA Pointers
+#ifndef SPV_SCOPE_DEVICE
+#define SPV_SCOPE_DEVICE 1
+#define SPV_SEMANTICS_RELAXED 0
+
+[[vk::ext_instruction(234)]] uint spvAtomicIAdd([[vk::ext_reference]] uint64_t ptr, uint scope, uint semantics, uint value);
+#endif
+
+#ifndef TYPE_PARTICLE_SYSTEM
+#define TYPE_PARTICLE_SYSTEM 0
+#define TYPE_RIGID_BODY      1
+#define TYPE_MICRO_LCA       2
+#endif
+
+struct PushConstants {
+    uint64_t raw_pairs;
+    uint2 out_rb_rb;
+    uint2 out_rb_ps;
+    uint2 out_ps_ps;
+    uint64_t tlas_leaves;
+    uint max_pairs;
+    uint num_rigid_bodies;
+};
+
+[[vk::push_constant]]
+PushConstants pc;
+
+[numthreads(256, 1, 1)]
+void bp_classify(uint3 tid : SV_DispatchThreadID) {
+    uint id = tid.x;
+    
+    uint count = BDA_LOAD(uint, pc.raw_pairs);
+    if (id >= count) return;
+
+    // pairs starts at offset 8 (uint count is 4 bytes, padded to 8 for uint2 alignment)
+    uint2 pair = BDA_LOAD(uint2, pc.raw_pairs + 8 + id * 8);
+    uint ent_A = pair.x;
+    uint ent_B = pair.y;
+
+    // TLASLeaf is 48 bytes. bda is at offset 32.
+    uint64_t bda_A = BDA_LOAD(uint64_t, pc.tlas_leaves + ent_A * 48 + 32);
+    uint64_t bda_B = BDA_LOAD(uint64_t, pc.tlas_leaves + ent_B * 48 + 32);
+
+    // EntityHeader starts with uint ty
+    uint type_A = BDA_LOAD(uint, bda_A);
+    uint type_B = BDA_LOAD(uint, bda_B);
+
+    if (type_A > type_B) {
+        uint temp = ent_A; ent_A = ent_B; ent_B = temp;
+        temp = type_A; type_A = type_B; type_B = temp;
+    }
+
+    if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_PARTICLE_SYSTEM) {
+        if (pc.out_ps_ps.x != 0 || pc.out_ps_ps.y != 0) {
+            uint64_t buf_ptr = ((uint64_t)pc.out_ps_ps.y << 32) | pc.out_ps_ps.x;
+            uint out_idx = spvAtomicIAdd(buf_ptr, SPV_SCOPE_DEVICE, SPV_SEMANTICS_RELAXED, 1);
+            if (out_idx < pc.max_pairs) {
+                BDA_STORE(uint2, buf_ptr + 8 + out_idx * 8, uint2(ent_A, ent_B));
+            }
+        }
+    } else if (type_A == TYPE_RIGID_BODY && type_B == TYPE_PARTICLE_SYSTEM) {
+        if (pc.out_rb_ps.x != 0 || pc.out_rb_ps.y != 0) {
+            uint64_t buf_ptr = ((uint64_t)pc.out_rb_ps.y << 32) | pc.out_rb_ps.x;
+            uint out_idx = spvAtomicIAdd(buf_ptr, SPV_SCOPE_DEVICE, SPV_SEMANTICS_RELAXED, 1);
+            if (out_idx < pc.max_pairs) {
+                BDA_STORE(uint2, buf_ptr + 8 + out_idx * 8, uint2(ent_A, ent_B));
+            }
+        }
+    } else if (type_A == TYPE_RIGID_BODY && type_B == TYPE_RIGID_BODY) {
+        if (pc.out_rb_rb.x != 0 || pc.out_rb_rb.y != 0) {
+            uint64_t buf_ptr = ((uint64_t)pc.out_rb_rb.y << 32) | pc.out_rb_rb.x;
+            uint out_idx = spvAtomicIAdd(buf_ptr, SPV_SCOPE_DEVICE, SPV_SEMANTICS_RELAXED, 1);
+            if (out_idx < pc.max_pairs) {
+                BDA_STORE(uint2, buf_ptr + 8 + out_idx * 8, uint2(ent_A, ent_B));
+            }
+        }
+    }
+}

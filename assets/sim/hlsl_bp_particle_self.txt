@@ -1,0 +1,191 @@
+// @assets/sim/bp_particle_self.comp
+#include "../debug_utils.hlsli"
+#include "../bvh_utils.hlsli"
+
+#define BDA_LOAD(T, addr) vk::RawBufferLoad<T>(addr)
+#define BDA_STORE(T, addr, val) vk::RawBufferStore<T>(addr, val)
+
+#define SPV_SCOPE_DEVICE 1
+#define SPV_SEMANTICS_RELAXED 0
+
+[[vk::ext_instruction(234)]] uint spvAtomicIAdd([[vk::ext_reference]] uint64_t ptr, uint scope, uint semantics, uint value);
+[[vk::ext_instruction(237)]] uint spvAtomicUMin([[vk::ext_reference]] uint64_t ptr, uint scope, uint semantics, uint value);
+[[vk::ext_instruction(230)]] uint spvAtomicCompareExchange([[vk::ext_reference]] uint64_t ptr, uint scope, uint semanticsEqual, uint semanticsUnequal, uint value, uint comparator);
+
+#define SUBGROUP_SIZE 32
+#define SUBGROUPS_PER_WG (256 / SUBGROUP_SIZE)
+
+struct PushConstants_bp_particle_self {
+    uint64_t bvh;
+    uint64_t particles;
+    uint64_t wrench_buffer;
+    uint root_index;
+    uint total_particles;
+    float particle_radius;
+    float stiffness;
+};
+
+[[vk::push_constant]]
+PushConstants_bp_particle_self pc;
+
+groupshared uint shared_stacks[SUBGROUPS_PER_WG][32];
+groupshared uint shared_stack_ptrs[SUBGROUPS_PER_WG];
+
+// Performs a secure float accumulation via purely standard CAS looping
+void atomicAddWrench(uint64_t buf, uint index, float val) {
+    uint64_t addr = buf + index * 4;
+    uint old_val = BDA_LOAD(uint, addr);
+    uint assumed_val;
+    do {
+        assumed_val = old_val;
+        float new_val = asfloat(assumed_val) + val;
+        old_val = spvAtomicCompareExchange(addr, SPV_SCOPE_DEVICE, SPV_SEMANTICS_RELAXED, SPV_SEMANTICS_RELAXED, asuint(new_val), assumed_val);
+    } while (assumed_val != old_val);
+}
+
+#define MULTI_BVH_NODE_STRIDE 2832
+#define MULTI_BVH_MIN_X 0
+#define MULTI_BVH_MAX_X 128
+#define MULTI_BVH_MIN_Y 256
+#define MULTI_BVH_MAX_Y 384
+#define MULTI_BVH_MIN_Z 512
+#define MULTI_BVH_MAX_Z 640
+#define MULTI_BVH_CHILD 768
+#define MULTI_BVH_META 896
+#define MULTI_BVH_VALID 1792
+
+#ifdef KERNEL_bp_particle_self
+[numthreads(256, 1, 1)]
+void bp_particle_self(uint3 DispatchThreadID : SV_DispatchThreadID, uint3 GroupID : SV_GroupID, uint3 GroupThreadID : SV_GroupThreadID) {
+    uint subgroup_id = GroupThreadID.x / SUBGROUP_SIZE;
+    uint lane_id     = WaveGetLaneIndex();
+
+    uint my_p_idx = GroupID.x * SUBGROUPS_PER_WG + subgroup_id;
+    if (my_p_idx >= pc.total_particles) return;
+
+    float3 my_pos, my_min, my_max;
+    float my_radius = pc.particle_radius;
+
+    if (lane_id == 0) {
+        uint block_idx = my_p_idx / SUBGROUP_SIZE;
+        uint local_idx = my_p_idx % SUBGROUP_SIZE;
+        uint base = block_idx * (10u * SUBGROUP_SIZE) + local_idx;
+
+        my_pos = float3(
+            asfloat(BDA_LOAD(uint, pc.particles + (base + 0u * SUBGROUP_SIZE) * 4)),
+            asfloat(BDA_LOAD(uint, pc.particles + (base + 1u * SUBGROUP_SIZE) * 4)),
+            asfloat(BDA_LOAD(uint, pc.particles + (base + 2u * SUBGROUP_SIZE) * 4))
+        );
+
+        my_min = my_pos - float3(my_radius, my_radius, my_radius);
+        my_max = my_pos + float3(my_radius, my_radius, my_radius);
+
+        shared_stacks[subgroup_id][0] = pc.root_index;
+        shared_stack_ptrs[subgroup_id] = 1;
+    }
+
+    my_pos = float3(WaveReadLaneAt(my_pos.x, 0), WaveReadLaneAt(my_pos.y, 0), WaveReadLaneAt(my_pos.z, 0));
+    my_min = float3(WaveReadLaneAt(my_min.x, 0), WaveReadLaneAt(my_min.y, 0), WaveReadLaneAt(my_min.z, 0));
+    my_max = float3(WaveReadLaneAt(my_max.x, 0), WaveReadLaneAt(my_max.y, 0), WaveReadLaneAt(my_max.z, 0));
+    my_p_idx = WaveReadLaneAt(my_p_idx, 0);
+
+    float3 local_repulsive_force = float3(0.0, 0.0, 0.0);
+
+    while (true) {
+        GroupMemoryBarrierWithGroupSync();
+        uint stack_ptr = shared_stack_ptrs[subgroup_id];
+        if (stack_ptr == 0) break;
+
+        stack_ptr--;
+        uint node_idx = shared_stacks[subgroup_id][stack_ptr];
+        if (lane_id == 0) shared_stack_ptrs[subgroup_id] = stack_ptr;
+
+        uint64_t node_addr = pc.bvh + node_idx * MULTI_BVH_NODE_STRIDE;
+
+        uint meta = BDA_LOAD(uint, node_addr + MULTI_BVH_META + lane_id * 4);
+        uint2 valid_mask = BDA_LOAD(uint2, node_addr + MULTI_BVH_VALID);
+        bool valid = bvh_node_is_valid(valid_mask, lane_id);
+
+        float3 c_min = float3(
+            BDA_LOAD(float, node_addr + MULTI_BVH_MIN_X + lane_id * 4),
+            BDA_LOAD(float, node_addr + MULTI_BVH_MIN_Y + lane_id * 4),
+            BDA_LOAD(float, node_addr + MULTI_BVH_MIN_Z + lane_id * 4)
+        );
+        float3 c_max = float3(
+            BDA_LOAD(float, node_addr + MULTI_BVH_MAX_X + lane_id * 4),
+            BDA_LOAD(float, node_addr + MULTI_BVH_MAX_Y + lane_id * 4),
+            BDA_LOAD(float, node_addr + MULTI_BVH_MAX_Z + lane_id * 4)
+        );
+        uint child_payload = BDA_LOAD(uint, node_addr + MULTI_BVH_CHILD + lane_id * 4);
+
+        bool hit_aabb = valid && intersectAABB(my_min, my_max, c_min, c_max);
+        bool is_leaf = bvh_is_leaf(meta);
+
+        bool hit_node = hit_aabb && !is_leaf;
+        bool hit_leaf = hit_aabb && is_leaf && (my_p_idx != child_payload);
+
+        uint4 leaf_ballot = WaveActiveBallot(hit_leaf);
+
+        for (uint i = 0; i < 4; i++) {
+            uint mask = leaf_ballot[i];
+            while (mask != 0) {
+                uint bit = firstbitlow(mask);
+                mask &= ~(1u << bit);
+
+                uint laneIndex = i * 32 + bit;
+                uint other_idx = WaveReadLaneAt(child_payload, laneIndex);
+
+                uint block_idx = other_idx / SUBGROUP_SIZE;
+                uint local_idx = other_idx % SUBGROUP_SIZE;
+                uint base_idx = block_idx * (10u * SUBGROUP_SIZE) + local_idx;
+
+                float3 other_pos = float3(
+                    asfloat(BDA_LOAD(uint, pc.particles + (base_idx + 0u * SUBGROUP_SIZE) * 4)),
+                    asfloat(BDA_LOAD(uint, pc.particles + (base_idx + 1u * SUBGROUP_SIZE) * 4)),
+                    asfloat(BDA_LOAD(uint, pc.particles + (base_idx + 2u * SUBGROUP_SIZE) * 4))
+                );
+
+                float3 diff = my_pos - other_pos;
+                float dist_sq = dot(diff, diff);
+                float min_dist = my_radius * 2.0;
+
+                if (dist_sq > 1e-12 && dist_sq < min_dist * min_dist) {
+                    float dist = sqrt(dist_sq);
+                    float penetration = min_dist - dist;
+                    float3 normal = diff / dist;
+
+                    float force_mag = pc.stiffness * penetration;
+                    local_repulsive_force += normal * force_mag;
+                }
+            }
+        }
+
+        uint4 node_ballot = WaveActiveBallot(hit_node);
+        uint node_count = countbits(node_ballot.x) + countbits(node_ballot.y) + countbits(node_ballot.z) + countbits(node_ballot.w);
+        
+        uint push_offset = 0;
+        if (lane_id >= 32) push_offset += countbits(node_ballot.x);
+        if (lane_id >= 64) push_offset += countbits(node_ballot.y);
+        if (lane_id >= 96) push_offset += countbits(node_ballot.z);
+        uint shift = lane_id % 32;
+        uint current_word = (lane_id < 32) ? node_ballot.x : (lane_id < 64) ? node_ballot.y : (lane_id < 96) ? node_ballot.z : node_ballot.w;
+        uint mask = (1u << shift) - 1u;
+        push_offset += countbits(current_word & mask);
+
+        if (hit_node) {
+            shared_stacks[subgroup_id][stack_ptr + push_offset] = child_payload;
+        }
+        if (lane_id == 0) shared_stack_ptrs[subgroup_id] = stack_ptr + node_count;
+    }
+
+    local_repulsive_force.x = WaveActiveSum(local_repulsive_force.x);
+    local_repulsive_force.y = WaveActiveSum(local_repulsive_force.y);
+    local_repulsive_force.z = WaveActiveSum(local_repulsive_force.z);
+
+    if (lane_id == 0 && dot(local_repulsive_force, local_repulsive_force) > 0.0) {
+        atomicAddWrench(pc.wrench_buffer, my_p_idx * 6 + 0, local_repulsive_force.x);
+        atomicAddWrench(pc.wrench_buffer, my_p_idx * 6 + 1, local_repulsive_force.y);
+        atomicAddWrench(pc.wrench_buffer, my_p_idx * 6 + 2, local_repulsive_force.z);
+    }
+}
+#endif

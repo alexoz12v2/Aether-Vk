@@ -1,0 +1,199 @@
+#include "../bvh_utils.h"
+#include "imex_math.h"
+
+#ifndef SUBGROUP_SIZE
+#define SUBGROUP_SIZE 32
+#endif
+
+#define SUBGROUPS_PER_WG (256 / SUBGROUP_SIZE)
+
+// ------------------------------------------------------------------
+// BDA Memory Access Macros
+// ------------------------------------------------------------------
+#define BDA_LOAD(T, addr) vk::RawBufferLoad<T>(addr)
+#define BDA_STORE(T, addr, val) vk::RawBufferStore<T>(addr, val)
+
+#define SPV_SCOPE_DEVICE 1
+#define SPV_SEMANTICS_RELAXED 0
+
+[[vk::ext_instruction(230)]] 
+uint spvAtomicCompareExchange([[vk::ext_reference]] uint64_t ptr, uint scope, uint semanticsEqual, uint semanticsUnequal, uint value, uint comparator);
+
+void AtomicAddFloatBDA(uint64_t addr, float val) {
+    uint old_val = BDA_LOAD(uint, addr);
+    uint assumed_val;
+    do {
+        assumed_val = old_val;
+        uint new_val = asuint(asfloat(assumed_val) + val);
+        old_val = spvAtomicCompareExchange(addr, SPV_SCOPE_DEVICE, SPV_SEMANTICS_RELAXED, SPV_SEMANTICS_RELAXED, new_val, assumed_val);
+    } while (assumed_val != old_val);
+}
+
+struct PushConstants {
+    uint64_t particles;
+    uint64_t bvh;
+    uint64_t cluster_list;
+    uint64_t wrenches;
+    uint num_clusters;
+    float dt;
+    float theta;
+    float G;
+    float softening_sq;
+    uint root_node_idx;
+    uint cluster_threshold;
+};
+
+[[vk::push_constant]] PushConstants pc;
+
+#define P_READ(addr, idx) asfloat(BDA_LOAD(uint, (addr) + (idx) * 4))
+
+#define OFFSET_MIN_X          (0 * SUBGROUP_SIZE * 4)
+#define OFFSET_MAX_X          (1 * SUBGROUP_SIZE * 4)
+#define OFFSET_MIN_Y          (2 * SUBGROUP_SIZE * 4)
+#define OFFSET_MAX_Y          (3 * SUBGROUP_SIZE * 4)
+#define OFFSET_MIN_Z          (4 * SUBGROUP_SIZE * 4)
+#define OFFSET_MAX_Z          (5 * SUBGROUP_SIZE * 4)
+#define OFFSET_CHILD_INDICES  (6 * SUBGROUP_SIZE * 4)
+#define OFFSET_METADATA       (7 * SUBGROUP_SIZE * 4)
+#define OFFSET_MASSES         (8 * SUBGROUP_SIZE * 4)
+#define OFFSET_COM_X          (9 * SUBGROUP_SIZE * 4)
+#define OFFSET_COM_Y          (10 * SUBGROUP_SIZE * 4)
+#define OFFSET_COM_Z          (11 * SUBGROUP_SIZE * 4)
+#define OFFSET_PARTICLE_START (12 * SUBGROUP_SIZE * 4)
+#define OFFSET_PARTICLE_COUNT (13 * SUBGROUP_SIZE * 4)
+#define OFFSET_VALID_MASK     (14 * SUBGROUP_SIZE * 4)
+#define NODE_STRIDE           (22 * SUBGROUP_SIZE * 4 + 16)
+
+bool bvh_node_is_valid(uint2 valid_mask, uint lane_id) {
+    if (lane_id < 32) return (valid_mask.x & (1u << lane_id)) != 0u;
+    else return (valid_mask.y & (1u << (lane_id - 32))) != 0u;
+}
+
+bool bvh_is_leaf(uint meta) { return (meta & 0x80000000u) != 0u; }
+
+groupshared uint shared_stacks[SUBGROUPS_PER_WG][64];
+groupshared uint shared_stack_ptrs[SUBGROUPS_PER_WG];
+
+[numthreads(256, 1, 1)]
+void barnes_hut(uint3 gl_WorkGroupID : SV_GroupID,
+                uint gl_LocalInvocationIndex : SV_GroupIndex)
+{
+    uint lane_id = WaveGetLaneIndex();
+    uint subgroup_id = gl_LocalInvocationIndex / WaveGetLaneCount();
+    uint cluster_job_idx = gl_WorkGroupID.x * SUBGROUPS_PER_WG + subgroup_id;
+    
+    if (cluster_job_idx >= pc.num_clusters) return;
+
+    uint target_node_idx = BDA_LOAD(uint, pc.cluster_list + cluster_job_idx * 4);
+    uint64_t target_node_addr = pc.bvh + target_node_idx * NODE_STRIDE;
+    
+    uint2 target_valid_mask = BDA_LOAD(uint2, target_node_addr + OFFSET_VALID_MASK);
+    bool i_am_valid = bvh_node_is_valid(target_valid_mask, lane_id);
+    uint my_p_idx = BDA_LOAD(uint, target_node_addr + OFFSET_CHILD_INDICES + lane_id * 4);
+
+    float3 my_pos = float3(0.0, 0.0, 0.0);
+    float my_mass = 0.0;
+    
+    if (i_am_valid) {
+        uint base = (my_p_idx / SUBGROUP_SIZE) * 10 * SUBGROUP_SIZE + (my_p_idx % SUBGROUP_SIZE);
+        my_pos = float3(P_READ(pc.particles, base), 
+                        P_READ(pc.particles, base + 1 * SUBGROUP_SIZE), 
+                        P_READ(pc.particles, base + 2 * SUBGROUP_SIZE));
+        my_mass = P_READ(pc.particles, base + 6 * SUBGROUP_SIZE);
+    }
+
+    float3 safe_pos = i_am_valid ? my_pos : float3(0.0, 0.0, 0.0);
+    float3 min_pos = WaveActiveMin(i_am_valid ? my_pos : float3(1e20, 1e20, 1e20));
+    float3 max_pos = WaveActiveMax(i_am_valid ? my_pos : float3(-1e20, -1e20, -1e20));
+    float3 cluster_extents = max_pos - min_pos;
+    float target_size = max(cluster_extents.x, max(cluster_extents.y, cluster_extents.z));
+    float sum_mass = WaveActiveSum(i_am_valid ? my_mass : 0.0);
+    float3 target_com = WaveActiveSum(safe_pos * my_mass) / max(sum_mass, 1e-6);
+
+    float3 my_acc = float3(0.0, 0.0, 0.0);
+    if (lane_id == 0) { 
+        shared_stacks[subgroup_id][0] = pc.root_node_idx; 
+        shared_stack_ptrs[subgroup_id] = 1; 
+    }
+
+    while (true) {
+        GroupMemoryBarrierWithGroupSync();
+        uint stack_ptr = shared_stack_ptrs[subgroup_id]; 
+        if (stack_ptr == 0) break;
+        
+        stack_ptr--;
+        uint source_node_idx = shared_stacks[subgroup_id][stack_ptr]; 
+        if (lane_id == 0) shared_stack_ptrs[subgroup_id] = stack_ptr;
+
+        uint64_t source_node_addr = pc.bvh + source_node_idx * NODE_STRIDE;
+        
+        uint2 s_valid_mask = BDA_LOAD(uint2, source_node_addr + OFFSET_VALID_MASK);
+        bool s_valid = bvh_node_is_valid(s_valid_mask, lane_id);
+        
+        uint s_meta = BDA_LOAD(uint, source_node_addr + OFFSET_METADATA + lane_id * 4);
+        bool s_is_leaf = bvh_is_leaf(s_meta);
+
+        float3 s_com = float3(
+            asfloat(BDA_LOAD(uint, source_node_addr + OFFSET_COM_X + lane_id * 4)),
+            asfloat(BDA_LOAD(uint, source_node_addr + OFFSET_COM_Y + lane_id * 4)),
+            asfloat(BDA_LOAD(uint, source_node_addr + OFFSET_COM_Z + lane_id * 4))
+        );
+        float s_mass = asfloat(BDA_LOAD(uint, source_node_addr + OFFSET_MASSES + lane_id * 4));
+        uint s_idx = BDA_LOAD(uint, source_node_addr + OFFSET_CHILD_INDICES + lane_id * 4);
+        uint s_start = BDA_LOAD(uint, source_node_addr + OFFSET_PARTICLE_START + lane_id * 4);
+        uint s_count = BDA_LOAD(uint, source_node_addr + OFFSET_PARTICLE_COUNT + lane_id * 4);
+
+        float3 s_extents = float3(
+            asfloat(BDA_LOAD(uint, source_node_addr + OFFSET_MAX_X + lane_id * 4)) - asfloat(BDA_LOAD(uint, source_node_addr + OFFSET_MIN_X + lane_id * 4)),
+            asfloat(BDA_LOAD(uint, source_node_addr + OFFSET_MAX_Y + lane_id * 4)) - asfloat(BDA_LOAD(uint, source_node_addr + OFFSET_MIN_Y + lane_id * 4)),
+            asfloat(BDA_LOAD(uint, source_node_addr + OFFSET_MAX_Z + lane_id * 4)) - asfloat(BDA_LOAD(uint, source_node_addr + OFFSET_MIN_Z + lane_id * 4))
+        );
+        float s_size = max(s_extents.x, max(s_extents.y, s_extents.z));
+
+        bool pass_mac = ((s_size + target_size) / max(length(s_com - target_com), 1e-6)) < pc.theta;
+        bool pass_lod_thresh = (s_count <= pc.cluster_threshold) && !((my_p_idx >= s_start) && (my_p_idx < s_start + s_count));
+        bool action_accumulate = s_valid && (pass_mac || pass_lod_thresh || s_is_leaf);
+        bool action_traverse = s_valid && !action_accumulate;
+
+        uint4 acc_ballot = WaveActiveBallot(action_accumulate);
+        for (uint i = 0; i < 4; i++) {
+            uint mask = acc_ballot[i];
+            while (mask != 0) {
+                uint bit = firstbitlow(mask); 
+                mask &= ~(1u << bit); 
+                uint src_lane = i * 32 + bit;
+                
+                if (i_am_valid) {
+                    float3 k_com = float3(WaveReadLaneAt(s_com.x, src_lane), WaveReadLaneAt(s_com.y, src_lane), WaveReadLaneAt(s_com.z, src_lane));
+                    float k_mass = WaveReadLaneAt(s_mass, src_lane); 
+                    uint k_idx = WaveReadLaneAt(s_idx, src_lane); 
+                    bool k_leaf = WaveReadLaneAt(s_is_leaf, src_lane);
+
+                    if (!(k_leaf && my_p_idx == k_idx)) {
+                        float3 p_dir = k_com - my_pos; 
+                        float p_dist_sq = dot(p_dir, p_dir);
+                        my_acc += (p_dir / max(sqrt(p_dist_sq), 1e-6)) * ((pc.G * k_mass) / (p_dist_sq + pc.softening_sq));
+                    }
+                }
+            }
+        }
+
+        uint prefix_count = WavePrefixCountBits(action_traverse);
+        if (action_traverse) {
+            shared_stacks[subgroup_id][stack_ptr + prefix_count] = s_idx;
+        }
+        
+        uint total_trav = WaveActiveCountBits(action_traverse);
+        if (lane_id == 0) {
+            shared_stack_ptrs[subgroup_id] = stack_ptr + total_trav;
+        }
+    }
+
+    if (i_am_valid) {
+        float3 g_f = my_acc * my_mass;
+        uint64_t w_addr = pc.wrenches + my_p_idx * 24;
+        AtomicAddFloatBDA(w_addr + 0, g_f.x);
+        AtomicAddFloatBDA(w_addr + 4, g_f.y);
+        AtomicAddFloatBDA(w_addr + 8, g_f.z);
+    }
+}

@@ -1,0 +1,115 @@
+#include "../bvh_utils.hlsl"
+#include "imex_math.hlsl"
+
+#ifndef BDA_LOAD
+#define BDA_LOAD(T, addr) vk::RawBufferLoad<T>(addr)
+#define BDA_STORE(T, addr, val) vk::RawBufferStore<T>(addr, val)
+#endif
+
+#ifndef SPV_SCOPE_DEVICE
+#define SPV_SCOPE_DEVICE 1
+#define SPV_SEMANTICS_RELAXED 0
+
+[[vk::ext_instruction(234)]] uint spvAtomicIAdd([[vk::ext_reference]] uint64_t ptr, uint scope, uint semantics, uint value);
+[[vk::ext_instruction(237)]] uint spvAtomicUMin([[vk::ext_reference]] uint64_t ptr, uint scope, uint semantics, uint value);
+[[vk::ext_instruction(230)]] uint spvAtomicCompareExchange([[vk::ext_reference]] uint64_t ptr, uint scope, uint semanticsEqual, uint semanticsUnequal, uint value, uint comparator);
+#endif
+
+void AtomicAddFloatBDA(uint64_t addr, float val) {
+    uint old_val = BDA_LOAD(uint, addr);
+    uint assumed_val;
+    do {
+        assumed_val = old_val;
+        uint new_val = asuint(asfloat(assumed_val) + val);
+        old_val = spvAtomicCompareExchange(addr, SPV_SCOPE_DEVICE, SPV_SEMANTICS_RELAXED, SPV_SEMANTICS_RELAXED, new_val, assumed_val);
+    } while (assumed_val != old_val);
+}
+
+#ifdef KERNEL_rb_force_assign
+struct PushConstants {
+    uint64_t rigid_bodies;
+    uint64_t wrenches;
+    uint n_bodies;
+    uint _pad;
+};
+
+[[vk::push_constant]]
+PushConstants pc;
+#endif
+
+groupshared float3 sh_f[32];
+groupshared float3 sh_t[32];
+
+[numthreads(128, 1, 1)]
+void rb_force_assign(
+    uint3 GroupID : SV_GroupID,
+    uint GroupIndex : SV_GroupIndex)
+{
+    uint body_id = GroupID.x;
+    if (body_id >= pc.n_bodies) return;
+
+    uint local_id = GroupIndex;
+    
+    uint wave_size = WaveGetLaneCount();
+    uint sg_id = local_id / wave_size;
+    uint sg_lane = WaveGetLaneIndex();
+    uint subgroups_per_wg = 128u / wave_size;
+
+    // RigidBody size is 128 bytes
+    uint64_t body_addr = pc.rigid_bodies + body_id * 128;
+    
+    // Offsets: wrench_idx=96, leaf_start_idx=100, leaf_count=104
+    uint com_wrench = BDA_LOAD(uint, body_addr + 96);
+    uint leaf_start = BDA_LOAD(uint, body_addr + 100);
+    uint leaf_count = BDA_LOAD(uint, body_addr + 104);
+
+    float3 acc_f = float3(0.0, 0.0, 0.0);
+    float3 acc_t = float3(0.0, 0.0, 0.0);
+
+    for (uint i = local_id; i < leaf_count; i += 128u) {
+        // Wrench size is 24 bytes
+        uint64_t w_addr = pc.wrenches + (leaf_start + i) * 24;
+        
+        uint fx = BDA_LOAD(uint, w_addr + 0);
+        uint fy = BDA_LOAD(uint, w_addr + 4);
+        uint fz = BDA_LOAD(uint, w_addr + 8);
+        uint tx = BDA_LOAD(uint, w_addr + 12);
+        uint ty = BDA_LOAD(uint, w_addr + 16);
+        uint tz = BDA_LOAD(uint, w_addr + 20);
+        
+        acc_f += float3(asfloat(fx), asfloat(fy), asfloat(fz));
+        acc_t += float3(asfloat(tx), asfloat(ty), asfloat(tz));
+    }
+
+    acc_f.x = WaveActiveSum(acc_f.x);
+    acc_f.y = WaveActiveSum(acc_f.y);
+    acc_f.z = WaveActiveSum(acc_f.z);
+    
+    acc_t.x = WaveActiveSum(acc_t.x);
+    acc_t.y = WaveActiveSum(acc_t.y);
+    acc_t.z = WaveActiveSum(acc_t.z);
+
+    if (sg_lane == 0u) {
+        sh_f[sg_id] = acc_f;
+        sh_t[sg_id] = acc_t;
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+
+    if (local_id == 0u) {
+        float3 total_f = float3(0.0, 0.0, 0.0);
+        float3 total_t = float3(0.0, 0.0, 0.0);
+        for (uint s = 0u; s < subgroups_per_wg; ++s) {
+            total_f += sh_f[s];
+            total_t += sh_t[s];
+        }
+        
+        uint64_t com_wrench_addr = pc.wrenches + com_wrench * 24;
+        AtomicAddFloatBDA(com_wrench_addr + 0, total_f.x);
+        AtomicAddFloatBDA(com_wrench_addr + 4, total_f.y);
+        AtomicAddFloatBDA(com_wrench_addr + 8, total_f.z);
+        AtomicAddFloatBDA(com_wrench_addr + 12, total_t.x);
+        AtomicAddFloatBDA(com_wrench_addr + 16, total_t.y);
+        AtomicAddFloatBDA(com_wrench_addr + 20, total_t.z);
+    }
+}

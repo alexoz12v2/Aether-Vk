@@ -1,0 +1,60 @@
+// @assets/sim/integrate_particles_p1_p2.comp
+//
+// Particle Velocity-Verlet Predictor — Phase 1 & 2
+// ─────────────────────────────────────────────────
+// Frame-start invariant: AOSOA slots 7/8/9 hold F(x_n) from the previous frame.
+//
+//   v_{n+½} = v_n + (dt/2) · M⁻¹ · F(x_n)     [half-kick]
+//   x_{n+1} = x_n + dt · v_{n+½}               [full position leap]
+//
+// After writing, CLEARS slots 7/8/9 to 0 so the unified force-generation pass
+// (barnes_hut, bp_particle_self, narrow-phase) can safely atomicAdd into them.
+// The half-kick velocity v_{n+½} is stored temporarily in slots 3/4/5 for
+// integrate_particles_p4_5 to complete the VV corrector step.
+//
+// Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
+
+
+
+[numthreads(128, 1, 1)]
+
+struct PushConstants_integrate_particles_p1_p2 {
+    ParticleData particles;
+    float dt;
+    uint total_particles;
+};
+
+[[vk::push_constant]]
+PushConstants_integrate_particles_p1_p2 pc;
+
+void integrate_particles_p1_p2(uint3 DispatchThreadID : SV_DispatchThreadID) {
+    uint gid = DispatchThreadID.x;
+    if (gid >= pc.total_particles) return;
+
+    uint base = (gid / SUBGROUP_SIZE) * (10u * SUBGROUP_SIZE) + (gid % SUBGROUP_SIZE);
+
+    float mass = P_READ(pc.particles, base + 6u * SUBGROUP_SIZE);
+    if (mass <= 0.0) return;
+
+    float inv_m = 1.0 / mass;
+    float half_dt = 0.5 * pc.dt;
+
+    float3 v_n = float3(P_READ(pc.particles, base + 3u * SUBGROUP_SIZE), P_READ(pc.particles, base + 4u * SUBGROUP_SIZE), P_READ(pc.particles, base + 5u * SUBGROUP_SIZE));
+    float3 f_n = float3(P_READ(pc.particles, base + 7u * SUBGROUP_SIZE), P_READ(pc.particles, base + 8u * SUBGROUP_SIZE), P_READ(pc.particles, base + 9u * SUBGROUP_SIZE));
+
+    float3 v_half = v_n + f_n * inv_m * half_dt;
+    float3 pos_n = float3(P_READ(pc.particles, base + 0u * SUBGROUP_SIZE), P_READ(pc.particles, base + 1u * SUBGROUP_SIZE), P_READ(pc.particles, base + 2u * SUBGROUP_SIZE));
+    float3 pos_next = pos_n + v_half * pc.dt;
+
+    P_WRITE(pc.particles, base + 0u * SUBGROUP_SIZE, pos_next.x);
+    P_WRITE(pc.particles, base + 1u * SUBGROUP_SIZE, pos_next.y);
+    P_WRITE(pc.particles, base + 2u * SUBGROUP_SIZE, pos_next.z);
+
+    P_WRITE(pc.particles, base + 3u * SUBGROUP_SIZE, v_half.x);
+    P_WRITE(pc.particles, base + 4u * SUBGROUP_SIZE, v_half.y);
+    P_WRITE(pc.particles, base + 5u * SUBGROUP_SIZE, v_half.z);
+
+    P_WRITE(pc.particles, base + 7u * SUBGROUP_SIZE, 0.0);
+    P_WRITE(pc.particles, base + 8u * SUBGROUP_SIZE, 0.0);
+    P_WRITE(pc.particles, base + 9u * SUBGROUP_SIZE, 0.0);
+}
