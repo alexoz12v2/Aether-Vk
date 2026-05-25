@@ -188,7 +188,7 @@ impl Kernels for CpuScalarKernels {
     &self,
     cmd: &mut Self::Cmd,
     capacity: usize,
-  ) -> EngineResult<Self::List<T>> { Ok(CpuList { data: alloc::vec![unsafe { core::mem::zeroed() }; capacity] }) 
+  ) -> EngineResult<Self::List<T>> { Ok(CpuList { data: alloc::vec![unsafe { core::mem::zeroed() }; capacity] })
   }
 
   fn build_leaves(
@@ -454,7 +454,7 @@ impl Kernels for CpuScalarKernels {
     Ok(())
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_clear(
     &self,
@@ -474,7 +474,7 @@ impl Kernels for CpuScalarKernels {
     Ok(())
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_bounds_gen(
     &self,
@@ -487,7 +487,7 @@ impl Kernels for CpuScalarKernels {
     Ok(())
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_scene(
     &self,
@@ -501,7 +501,7 @@ impl Kernels for CpuScalarKernels {
     Ok(())
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_classify(
     &self,
@@ -518,7 +518,7 @@ impl Kernels for CpuScalarKernels {
     Ok(())
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_cross_lca(
     &self,
@@ -538,7 +538,7 @@ impl Kernels for CpuScalarKernels {
     Ok(())
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_particle_self(
     &self,
@@ -574,7 +574,7 @@ impl Kernels for CpuScalarKernels {
     })
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn self_intersect_scene(
     &self,
@@ -582,7 +582,7 @@ impl Kernels for CpuScalarKernels {
     bvh: &Self::MotionBvh,
   ) -> EngineResult<Self::List<CollisionPair>> { Ok(CpuList { data: alloc::vec::Vec::new() }) }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn intersect_instances(
     &self,
@@ -593,7 +593,7 @@ impl Kernels for CpuScalarKernels {
     particles: &Self::Buffer<f32>,
   ) -> EngineResult<Self::List<CollisionPair>> { Ok(CpuList { data: alloc::vec::Vec::new() }) }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn narrow_ccd_cross_lca(
     &self,
@@ -607,6 +607,7 @@ impl Kernels for CpuScalarKernels {
     _output_list: &Self::List<CollisionPair>,
   ) -> EngineResult<()> { unimplemented!() }
 
+  #[cfg(any(test, feature = "collisions"))]
   fn narrow_ccd(
     &self,
     _cmd: &mut Self::Cmd,
@@ -618,7 +619,7 @@ impl Kernels for CpuScalarKernels {
     _output_list: &Self::List<CollisionPair>,
   ) -> EngineResult<()> { Ok(()) }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn compact_collisions(
     &self,
@@ -627,7 +628,7 @@ impl Kernels for CpuScalarKernels {
     time_delta: timeus_t,
   ) -> EngineResult<Self::List<CollisionPair>> { Ok(CpuList { data: alloc::vec![unsafe { core::mem::zeroed() }; globals.capacity().max(1)] }) }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn find_earliest_collision(
     &self,
@@ -639,7 +640,7 @@ impl Kernels for CpuScalarKernels {
     })
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn apply_collision_responses(
     &self,
@@ -653,7 +654,7 @@ impl Kernels for CpuScalarKernels {
     Ok(())
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn snapshot_dynamics(
     &self,
@@ -671,7 +672,7 @@ impl Kernels for CpuScalarKernels {
     ))
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn restore_dynamics(
     &self,
@@ -748,7 +749,7 @@ impl Kernels for CpuSimdKernels {
     &self,
     cmd: &mut Self::Cmd,
     capacity: usize,
-  ) -> EngineResult<Self::List<T>> { Ok(CpuList { data: alloc::vec![unsafe { core::mem::zeroed() }; capacity] }) 
+  ) -> EngineResult<Self::List<T>> { Ok(CpuList { data: alloc::vec![unsafe { core::mem::zeroed() }; capacity] })
   }
 
   fn build_leaves(
@@ -912,7 +913,7 @@ impl Kernels for CpuSimdKernels {
     Ok(())
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_clear(
     &self,
@@ -926,7 +927,7 @@ impl Kernels for CpuSimdKernels {
     Ok(())
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_bounds_gen(
     &self,
@@ -939,7 +940,7 @@ impl Kernels for CpuSimdKernels {
     Ok(())
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_scene(
     &self,
@@ -953,7 +954,7 @@ impl Kernels for CpuSimdKernels {
     Ok(())
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_classify(
     &self,
@@ -970,7 +971,7 @@ impl Kernels for CpuSimdKernels {
     Ok(())
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_cross_lca(
     &self,
@@ -990,7 +991,7 @@ impl Kernels for CpuSimdKernels {
     Ok(())
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_particle_self(
     &self,
@@ -1026,7 +1027,7 @@ impl Kernels for CpuSimdKernels {
     })
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn self_intersect_scene(
     &self,
@@ -1034,7 +1035,7 @@ impl Kernels for CpuSimdKernels {
     bvh: &Self::MotionBvh,
   ) -> EngineResult<Self::List<CollisionPair>> { Ok(CpuList { data: alloc::vec::Vec::new() }) }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn intersect_instances(
     &self,
@@ -1045,7 +1046,7 @@ impl Kernels for CpuSimdKernels {
     particles: &Self::Buffer<f32>,
   ) -> EngineResult<Self::List<CollisionPair>> { Ok(CpuList { data: alloc::vec::Vec::new() }) }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn narrow_ccd_cross_lca(
     &self,
@@ -1059,6 +1060,7 @@ impl Kernels for CpuSimdKernels {
     _output_list: &Self::List<CollisionPair>,
   ) -> EngineResult<()> { unimplemented!() }
 
+  #[cfg(any(test, feature = "collisions"))]
   fn narrow_ccd(
     &self,
     _cmd: &mut Self::Cmd,
@@ -1070,7 +1072,7 @@ impl Kernels for CpuSimdKernels {
     _output_list: &Self::List<CollisionPair>,
   ) -> EngineResult<()> { Ok(()) }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn compact_collisions(
     &self,
@@ -1079,7 +1081,7 @@ impl Kernels for CpuSimdKernels {
     time_delta: timeus_t,
   ) -> EngineResult<Self::List<CollisionPair>> { Ok(CpuList { data: alloc::vec![unsafe { core::mem::zeroed() }; globals.capacity().max(1)] }) }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn find_earliest_collision(
     &self,
@@ -1091,7 +1093,7 @@ impl Kernels for CpuSimdKernels {
     })
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn apply_collision_responses(
     &self,
@@ -1105,7 +1107,7 @@ impl Kernels for CpuSimdKernels {
     Ok(())
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn snapshot_dynamics(
     &self,
@@ -1123,7 +1125,7 @@ impl Kernels for CpuSimdKernels {
     ))
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn restore_dynamics(
     &self,
@@ -1275,9 +1277,7 @@ mod tests {
         primitive_index: 1,
       },
       time_of_impact: t,
-      _pad0: [0.0; 3],
       contact_normal: norm.into(),
-      _pad1: 0.0,
       contact_point: pt.into(),
       penetration_depth: depth,
     };
@@ -1292,8 +1292,6 @@ mod tests {
       },
       time_of_impact: 0.051,
       contact_normal: [0.0; 3],
-      _pad0: [0.0; 3],
-      _pad1: 0.0,
       contact_point: [0.0; 3],
       penetration_depth: 0.0,
     };
@@ -1308,8 +1306,6 @@ mod tests {
       },
       time_of_impact: 0.052,
       contact_normal: [0.0; 3],
-      _pad0: [0.0; 3],
-      _pad1: 0.0,
       contact_point: [0.0; 3],
       penetration_depth: 0.0,
     };
@@ -1324,8 +1320,6 @@ mod tests {
       },
       time_of_impact: 0.1,
       contact_normal: [0.0; 3],
-      _pad0: [0.0; 3],
-      _pad1: 0.0,
       contact_point: [0.0; 3],
       penetration_depth: 0.0,
     };
