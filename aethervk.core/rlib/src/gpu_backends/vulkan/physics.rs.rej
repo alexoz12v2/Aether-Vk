@@ -1,8 +1,0 @@
-@@ -4258,6 +4259,7 @@
-           out_rb_ps_addr,
-           out_rb_lca_addr,
-           internal_pairs_addr,
-+          out_sparse_addr,
-         )
-       })
-       .map_err(|e| e.to_engine())
