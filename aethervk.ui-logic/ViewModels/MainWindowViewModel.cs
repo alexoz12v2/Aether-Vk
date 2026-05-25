@@ -14,7 +14,7 @@ public enum AppTheme
   Dark,
 }
 
-public class ImportModelRequestMessage { }
+public class ImportModelRequestMessage : CommunityToolkit.Mvvm.Messaging.Messages.AsyncRequestMessage<ImportedModelItem?> { }
 
 public class ImportImageRequestMessage { }
 
@@ -106,12 +106,15 @@ public struct CameraActionParams
   public ulong CameraEntityId { get; set; }
 }
 
-public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnloadedMessage>, IRecipient<ImportModelRequestMessage>
+public class SimulationInitializedMessage { }
+
+public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnloadedMessage>, IRecipient<ImportModelRequestMessage>, IRecipient<SimulationInitializedMessage>
 {
   private readonly NativeRuntimeService _runtimeService;
   private readonly BreadcrumbService _breadcrumbService;
   private readonly IFileDialogService _fileDialogService;
   private readonly IWindowService _windowService;
+  private readonly IUiThreadDispatcher _dispatcher;
 
   [ObservableProperty]
   private DockingManagerViewModel _dockingManager;
@@ -128,7 +131,8 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
     BreadcrumbService breadcrumbService,
     IFileDialogService fileDialogService,
     IWindowService windowService,
-    DockingManagerViewModel dockingManager
+    DockingManagerViewModel dockingManager,
+    IUiThreadDispatcher dispatcher
   )
   {
     _runtimeService = runtimeService;
@@ -136,11 +140,28 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
     _fileDialogService = fileDialogService;
     _windowService = windowService;
     _dockingManager = dockingManager;
+    _dispatcher = dispatcher;
 
     // Set initial theme to system default
     CurrentTheme = AppTheme.System;
     WeakReferenceMessenger.Default.Register<ModelUnloadedMessage>(this);
     WeakReferenceMessenger.Default.Register<ImportModelRequestMessage>(this);
+    WeakReferenceMessenger.Default.Register<SimulationInitializedMessage>(this);
+
+    SyncModels();
+  }
+
+  public void SyncModels()
+  {
+    var models = _runtimeService.GetImportedModels();
+    foreach (var m in models)
+    {
+      if (!System.Linq.Enumerable.Any(ImportedModels, im => im.Id == m.Id))
+      {
+        var fileName = System.IO.Path.GetFileName(m.Path);
+        ImportedModels.Add(new ImportedModelItem(m.Id, fileName, m.Path, _runtimeService, _windowService));
+      }
+    }
   }
 
   public void Receive(ModelUnloadedMessage message)
@@ -148,31 +169,47 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
     ImportedModels.Remove(message.Model);
   }
 
-  public async void Receive(ImportModelRequestMessage message)
+  public void Receive(ImportModelRequestMessage message)
   {
-    await ImportModelAsync();
+    message.Reply(ImportModelAsync());
+  }
+
+  public void Receive(SimulationInitializedMessage message)
+  {
+    _dispatcher.Dispatch(SyncModels);
   }
 
   [RelayCommand]
-  private async Task ImportModelAsync()
+  private async Task<ImportedModelItem?> ImportModelAsync()
   {
     var filters = new[] { "gltf", "glb", "ply", "obj" };
     var result = await _fileDialogService.ShowOpenFileDialogAsync("Import 3D Model", filters);
 
     if (!string.IsNullOrEmpty(result))
     {
-      var modelId = await _runtimeService.ImportModelAsync(result);
-      if (modelId > 0)
+      var fileName = System.IO.Path.GetFileName(result);
+      var loadingMsg = _breadcrumbService.ShowLoadingMessage("Importing Mesh", $"Loading {fileName} into engine...");
+      try
       {
-        if (!System.Linq.Enumerable.Any(ImportedModels, m => m.Id == modelId))
+        var modelId = await _runtimeService.ImportModelAsync(result);
+        if (modelId > 0)
         {
-          var fileName = System.IO.Path.GetFileName(result);
-          ImportedModels.Add(
-            new ImportedModelItem(modelId, fileName, result, _runtimeService, _windowService)
-          );
+          var existing = System.Linq.Enumerable.FirstOrDefault(ImportedModels, m => m.Id == modelId);
+          if (existing == null)
+          {
+            var newItem = new ImportedModelItem(modelId, fileName, result, _runtimeService, _windowService);
+            ImportedModels.Add(newItem);
+            return newItem;
+          }
+          return existing;
         }
       }
+      finally
+      {
+        _breadcrumbService.RemoveMessage(loadingMsg);
+      }
     }
+    return null;
   }
 
   [RelayCommand]
@@ -205,12 +242,14 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   [RelayCommand]
   private async Task OpenImportedModelsDialogAsync()
   {
+    SyncModels();
     await _windowService.ShowManageImportsDialogAsync();
   }
 
   [RelayCommand]
   private async Task OpenSpawnCometDialogAsync()
   {
+    SyncModels();
     await _windowService.ShowSpawnCometDialogAsync(ImportedModels);
   }
 

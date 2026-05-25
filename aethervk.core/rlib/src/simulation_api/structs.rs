@@ -111,6 +111,12 @@ pub struct SimulationSceneData {
   next_model_id: u64,
 }
 
+impl Default for SimulationSceneData {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 impl SimulationSceneData {
   /// TODO: Document this item
   pub fn new_inplace(ptr: *mut Self) {

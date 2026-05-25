@@ -136,11 +136,14 @@ pub struct PhysicsScene {
   pub micro_tlases: hashbrown::HashMap<u32, RootBoundsBvh>,
   pub mesh_blases: Vec<Option<LinearBVH<f32>>>,
   pub particle_blases: Vec<Option<LinearBVH<f32>>>,
+  pub mesh_entity_map: Vec<u32>,
+  pub particle_entity_map: Vec<u32>,
   pub dt_s: f32,
 }
 
 impl PhysicsScene {
   pub fn build_from_scene(scene: &Scene, dt_s: f32) -> Self {
+    use slotmap::Key;
     use crate::scene::{KinematicComponent, ReferenceFrameComponent, PhysicalMeshComponent, particles::ParticleSystemComponent};
     let mut frame_map: hashbrown::HashMap<EntityId, u32> = hashbrown::HashMap::new();
     let mut gpu_frames = Vec::new();
@@ -190,6 +193,7 @@ impl PhysicsScene {
     let macro_frame_idx = gpu_frames.iter().position(|f| f.frame_type == 0).unwrap_or(0) as u32;
 
     let mut mesh_blases = Vec::new();
+    let mut mesh_entity_map = Vec::new();
     let mut frame_leaves: hashbrown::HashMap<u32, Vec<(u32, Vec3f32, Vec3f32, u32, u32)>> =
       hashbrown::HashMap::new();
 
@@ -215,7 +219,8 @@ impl PhysicsScene {
             LinearBound::OBB(_) => {}
           }
         }
-        frame_leaves.entry(lca_idx).or_default().push((dense_mesh_idx, min_bound, max_bound, BVH_SHAPE_AABB, frame_bits));
+        mesh_entity_map.push(entity.data().as_ffi() as u32);
+        frame_leaves.entry(lca_idx).or_default().push((entity.data().as_ffi() as u32, min_bound, max_bound, BVH_SHAPE_AABB, frame_bits));
         Some(b)
       } else {
         // Fallback to primitive shape if it's a rigid body
@@ -242,6 +247,7 @@ impl PhysicsScene {
     });
 
     let mut particle_blases = Vec::new();
+    let mut particle_entity_map = Vec::new();
     let mut dense_particle_idx = 0;
     scene.query1::<ParticleSystemComponent, _>(|entity, sys| {
       let ps = sys.particles.read();
@@ -270,7 +276,8 @@ impl PhysicsScene {
               LinearBound::OBB(_) => {}
             }
           }
-          frame_leaves.entry(lca_idx).or_default().push((dense_particle_idx, min_bound, max_bound, BVH_SHAPE_SPHERE, frame_bits));
+          particle_entity_map.push(entity.data().as_ffi() as u32);
+          frame_leaves.entry(lca_idx).or_default().push((entity.data().as_ffi() as u32, min_bound, max_bound, BVH_SHAPE_SPHERE, frame_bits));
           Some(lbvh)
         } else {
           None
@@ -314,6 +321,8 @@ impl PhysicsScene {
       micro_tlases,
       mesh_blases,
       particle_blases,
+      mesh_entity_map,
+      particle_entity_map,
       dt_s,
     }
   }

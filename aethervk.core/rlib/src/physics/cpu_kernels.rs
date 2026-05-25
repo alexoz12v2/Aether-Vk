@@ -481,6 +481,7 @@ impl Kernels for CpuScalarKernels {
     cmd: &mut Self::Cmd,
     bodies: &Self::Buffer<RigidBodyImex>,
     leaves_addr: u64,
+    lca_entities_addr: u64,
     total_entities: u32,
     dt: timeus_t,
   ) -> EngineResult<()> {
@@ -532,6 +533,7 @@ impl Kernels for CpuScalarKernels {
     out_rb_ps_addr: u64,
     out_ps_ps_addr: u64,
     out_cross_pairs_addr: u64,
+    internal_pairs_addr: u64,
     total_queries: u32,
     max_pairs: u32,
   ) -> EngineResult<()> {
@@ -934,6 +936,7 @@ impl Kernels for CpuSimdKernels {
     cmd: &mut Self::Cmd,
     bodies: &Self::Buffer<RigidBodyImex>,
     leaves_addr: u64,
+    lca_entities_addr: u64,
     total_entities: u32,
     dt: timeus_t,
   ) -> EngineResult<()> {
@@ -985,6 +988,7 @@ impl Kernels for CpuSimdKernels {
     out_rb_ps_addr: u64,
     out_ps_ps_addr: u64,
     out_cross_pairs_addr: u64,
+    internal_pairs_addr: u64,
     total_queries: u32,
     max_pairs: u32,
   ) -> EngineResult<()> {

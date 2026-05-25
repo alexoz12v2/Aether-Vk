@@ -16,15 +16,6 @@ public partial class SpawnCometWindow : Window
     Close(null);
   }
 
-  public void ImportMeshCommand()
-  {
-    CommunityToolkit.Mvvm.Messaging.IMessengerExtensions.Send(
-        CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default,
-        new AetherVk.Logic.ViewModels.ImportModelRequestMessage()
-    );
-    Close(null);
-  }
-
   public void SpawnCommand()
   {
     if (DataContext is SpawnCometViewModel vm && vm.SelectedModel != null)

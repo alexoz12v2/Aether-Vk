@@ -46,23 +46,5 @@ public class SpawnCometWindowTests
     Assert.True(closed);
   }
 
-  [AvaloniaFact]
-  public void ImportMeshCommand_Should_Close_Window()
-  {
-    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
-    var console = new ConsoleService(dispatcherMock.Object);
-    var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
-    var horizonService = new HorizonJplService(console, breadcrumb);
-    
-    var vm = new SpawnCometViewModel(new List<ImportedModelItem>(), horizonService);
-    var window = new SpawnCometWindow { DataContext = vm };
-    
-    window.Show();
-    bool closed = false;
-    window.Closed += (sender, args) => closed = true;
 
-    window.ImportMeshCommand();
-
-    Assert.True(closed);
-  }
 }

@@ -374,6 +374,7 @@ where
         &mut cmd,
         &rigid_bodies,
         query_leaves.address(),
+        frames.address(),
         n_entities,
         dt,
       )?;
@@ -408,6 +409,7 @@ where
           rb_rb_pairs.address(),
           rb_ps_pairs.address(),
           0, // out_ps_ps
+          sparse_collisions.address(),
           internal_pairs.address(),
           rb_lca_pairs.capacity() as u32,
           2_000,
@@ -417,7 +419,7 @@ where
       let p_copy = ash::vk::BufferCopy::default()
       .size((particles.capacity().max(1) * 10 * core::mem::size_of::<f32>()) as u64);
       let p_addr = particles.address();
-      let p_cap = particles.capacity() as u32;
+      let p_cap = (particles.capacity() as u32 / 320) * 32;
       kernels.bp_particle_self(
         &mut cmd,
         tlas_bvh_addr,
@@ -465,7 +467,7 @@ where
            kernels.wait_sync(&read_sync)?;
            if let (Ok(cmp_host), Ok(rb_host), Ok(frames_host), Ok(cross_host)) = (cmp_fut.wait(), rb_fut.wait(), frames_fut.wait(), cross_fut.wait()) {
                let compacted_count = cmp_host[0].b.primitive_index as usize;
-               let cross_count = cross_host[0].macro_id as usize;
+               let cross_count = cross_host.len();
                aethervk_oshal_rlib::log!("READBACK: compacted_count={}, cross_count={}", compacted_count, cross_count);
                if compacted_count > 0 {
                  let mut out = alloc::string::String::new();

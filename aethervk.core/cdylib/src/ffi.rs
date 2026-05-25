@@ -1021,6 +1021,48 @@ pub unsafe extern "C" fn avkSimulationContext_importModel(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getImportedModelsCount(
+  ctx: *mut SimulationContext,
+) -> u32 {
+  if ctx.is_null() {
+    return 0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  scenes.model_registry.len() as u32
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getImportedModels(
+  ctx: *mut SimulationContext,
+  out_ids: *mut u64,
+  out_paths: *mut *const c_char,
+  capacity: u32,
+) -> u32 {
+  if ctx.is_null() || out_ids.is_null() || out_paths.is_null() {
+    return 0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  
+  let mut count = 0;
+  for (id, path) in &scenes.model_registry {
+    if count >= capacity {
+      break;
+    }
+    unsafe {
+      *out_ids.add(count as usize) = *id;
+      let c_str = alloc::ffi::CString::new(path.clone()).unwrap();
+      *out_paths.add(count as usize) = c_str.into_raw();
+    }
+    count += 1;
+  }
+  count
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_unloadModel(
   ctx: *mut SimulationContext,
   model_id: u64,

@@ -62,29 +62,23 @@ where
   let mut flat = FlatNodes::<N>::new();
 
   // 1. Build and append all mesh BLASes
-  // We need to map dense_mesh_idx to the root_idx in the flat buffer
-  let mut mesh_root_indices = Vec::new();
-  for blas_opt in &physical_scene.mesh_blases {
+  let mut mesh_root_indices = hashbrown::HashMap::new();
+  for (idx, blas_opt) in physical_scene.mesh_blases.iter().enumerate() {
     if let Some(blas) = blas_opt {
       let multi_nodes = convert_binary_to_multi_bvh::<N, LinearBVH<f32>>(blas);
       let root_idx = flat.append(&multi_nodes);
-      mesh_root_indices.push(Some(root_idx));
-    } else {
-      mesh_root_indices.push(None);
+      mesh_root_indices.insert(physical_scene.mesh_entity_map[idx], root_idx);
     }
   }
 
   // 2. Build and append all particle BLASes (CPU path)
-  // For particles, we set child_indices to SENTINEL.
-  let mut particle_root_indices = Vec::new();
-  for blas_opt in &physical_scene.particle_blases {
+  let mut particle_root_indices = hashbrown::HashMap::new();
+  for (idx, blas_opt) in physical_scene.particle_blases.iter().enumerate() {
     if let Some(blas) = blas_opt {
       let multi_nodes = convert_binary_to_multi_bvh::<N, LinearBVH<f32>>(blas);
       let root_idx = flat.append(&multi_nodes);
       mark_particle_sentinels(&mut flat.nodes, root_idx, N);
-      particle_root_indices.push(Some(root_idx));
-    } else {
-      particle_root_indices.push(None);
+      particle_root_indices.insert(physical_scene.particle_entity_map[idx], root_idx);
     }
   }
 
@@ -127,8 +121,8 @@ where
 fn patch_tlas_leaves<const N: usize>(
   nodes: &mut [TlasMultiNode<N>],
   n: usize,
-  mesh_root_indices: &[Option<u32>],
-  particle_root_indices: &[Option<u32>],
+  mesh_root_indices: &hashbrown::HashMap<u32, u32>,
+  particle_root_indices: &hashbrown::HashMap<u32, u32>,
   sub_tlas_root_indices: &hashbrown::HashMap<u32, u32>,
 ) {
   for node in nodes.iter_mut() {
@@ -146,14 +140,14 @@ fn patch_tlas_leaves<const N: usize>(
             node.child_indices[i] = sub_root;
           }
         } else if shape == BVH_SHAPE_SPHERE {
-          if let Some(Some(sub_root)) = particle_root_indices.get(dense_idx as usize) {
-            node.child_indices[i] = *sub_root;
+          if let Some(&sub_root) = particle_root_indices.get(&dense_idx) {
+            node.child_indices[i] = sub_root;
           } else {
             node.child_indices[i] = PARTICLE_BLAS_SENTINEL; // Vulcan GPU LBVH path
           }
         } else {
-          if let Some(Some(sub_root)) = mesh_root_indices.get(dense_idx as usize) {
-            node.child_indices[i] = *sub_root;
+          if let Some(&sub_root) = mesh_root_indices.get(&dense_idx) {
+            node.child_indices[i] = sub_root;
           }
         }
       }

@@ -581,6 +581,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       {
         _ = CreateScene(populateDefault);
       }
+      CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(new ViewModels.SimulationInitializedMessage());
     }
   }
 
@@ -1094,6 +1095,41 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     ulong taskId = NativeInterop.avkSimulationContext_importModel(_simulationContext, path);
     await PollTaskAsync(taskId);
     return NativeInterop.avkSimulationContext_getTaskResultU64(_simulationContext, taskId);
+  }
+
+  public System.Collections.Generic.List<(ulong Id, string Path)> GetImportedModels()
+  {
+    var list = new System.Collections.Generic.List<(ulong Id, string Path)>();
+    if (_simulationContext == IntPtr.Zero)
+      return list;
+
+    uint count = NativeInterop.avkSimulationContext_getImportedModelsCount(_simulationContext);
+    if (count == 0)
+      return list;
+
+    IntPtr idsPtr = Marshal.AllocHGlobal((int)(count * sizeof(ulong)));
+    IntPtr pathsPtr = Marshal.AllocHGlobal((int)(count * IntPtr.Size));
+
+    uint actualCount = NativeInterop.avkSimulationContext_getImportedModels(
+      _simulationContext,
+      idsPtr,
+      pathsPtr,
+      count
+    );
+
+    for (int i = 0; i < actualCount; i++)
+    {
+      ulong id = (ulong)Marshal.ReadInt64(idsPtr, i * sizeof(ulong));
+      IntPtr strPtr = Marshal.ReadIntPtr(pathsPtr, i * IntPtr.Size);
+      string path = Marshal.PtrToStringAnsi(strPtr) ?? "";
+      list.Add((id, path));
+    }
+
+    NativeInterop.avkSimulationContext_freeComponentNames(pathsPtr, actualCount);
+    Marshal.FreeHGlobal(idsPtr);
+    Marshal.FreeHGlobal(pathsPtr);
+
+    return list;
   }
 
   public void UnloadModel(ulong modelId)

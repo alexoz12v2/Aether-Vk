@@ -385,6 +385,7 @@ mod unix_debug {
   #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
   /// TODO: Document this item
   pub fn print_aethervk_stacktrace(skip: usize, max: usize) {
+    return;
     unsafe extern "C" {
       fn backtrace(buffer: *mut *mut core::ffi::c_void, size: core::ffi::c_int)
       -> core::ffi::c_int;
