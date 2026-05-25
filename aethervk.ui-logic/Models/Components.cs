@@ -56,6 +56,12 @@ public partial class TransformComponent : NativeComponent
   {
     if (SuspendNotifications)
       return;
+
+    if (SimulationContext == IntPtr.Zero)
+      return;
+
+    System.Console.WriteLine($"[TransformComponent] PushToNativeImpl called! X={PosX}, Y={PosY}, Z={PosZ}. StackTrace:\n{new System.Diagnostics.StackTrace()}");
+
     var data = new NativeInterop.FfiTransform
     {
       Px = PosX,

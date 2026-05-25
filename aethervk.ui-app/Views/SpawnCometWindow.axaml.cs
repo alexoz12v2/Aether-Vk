@@ -18,8 +18,10 @@ public partial class SpawnCometWindow : Window
 
   public void ImportMeshCommand()
   {
-    // Close with a null result so user can manually go to import.
-    // A fuller implementation could resolve IWindowService and open the import dialog.
+    CommunityToolkit.Mvvm.Messaging.IMessengerExtensions.Send(
+        CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default,
+        new AetherVk.Logic.ViewModels.ImportModelRequestMessage()
+    );
     Close(null);
   }
 

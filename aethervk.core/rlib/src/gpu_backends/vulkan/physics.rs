@@ -265,6 +265,7 @@ pub struct BpClearPushConstants {
   pub out_rb_ps: u64,
   pub out_rb_lca: u64,
   pub out_internal: u64,
+  pub out_sparse: u64,
 }
 
 /// `bp_bounds_gen.comp` — 28 bytes
@@ -804,6 +805,9 @@ impl<T: Copy + Send + Sync> WaitHandle<Vec<T>> for VulkanReadHandle<T> {
     let mut data = alloc::vec::Vec::with_capacity(self.capacity);
     unsafe {
       if !info.mapped_data.is_null() {
+        let raw_u32 = core::slice::from_raw_parts(info.mapped_data as *const u32, 16);
+        aethervk_oshal_rlib::log!("RAW STAGING BUFFER: {:?}", raw_u32);
+
         let offset = if self.is_list { 16 } else { 0 };
         let mapped_ptr = (info.mapped_data as *const u8).add(offset);
         core::ptr::copy_nonoverlapping(mapped_ptr as *const T, data.as_mut_ptr(), self.capacity);
@@ -2005,6 +2009,7 @@ impl VulkanComputeKernels {
     out_rb_ps: u64,
     out_rb_lca: u64,
     internal_pairs: u64,
+    out_sparse: u64,
   ) {
     let pc = BpClearPushConstants {
       raw_scene_pairs,
@@ -2012,6 +2017,7 @@ impl VulkanComputeKernels {
       out_rb_ps,
       out_rb_lca,
       out_internal: internal_pairs,
+      out_sparse,
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
@@ -2750,6 +2756,7 @@ impl VulkanComputeKernels {
 
   #[function_name::named]
   
+  #[cfg(any(test, feature = "collisions"))]
   fn self_intersect_scene(
     &self,
     device: &LogicalDevice,
@@ -2821,6 +2828,7 @@ impl VulkanComputeKernels {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn intersect_instances(
     &self,
     device: &LogicalDevice,
@@ -2888,6 +2896,7 @@ impl VulkanComputeKernels {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn compact_collisions(
     &self,
     device: &LogicalDevice,
@@ -2908,7 +2917,8 @@ impl VulkanComputeKernels {
       max_packed,
       vk::BufferUsageFlags::STORAGE_BUFFER
         | vk::BufferUsageFlags::INDIRECT_BUFFER
-        | vk::BufferUsageFlags::TRANSFER_DST,
+        | vk::BufferUsageFlags::TRANSFER_DST
+        | vk::BufferUsageFlags::TRANSFER_SRC,
       true,
       rollback,
     )?;
@@ -2974,6 +2984,7 @@ impl VulkanComputeKernels {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn find_earliest_collision(
     &self,
     device: &LogicalDevice,
@@ -3073,6 +3084,7 @@ impl VulkanComputeKernels {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn apply_collision_responses(
     &self,
     device: &LogicalDevice,
@@ -3201,6 +3213,7 @@ impl VulkanComputeKernels {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn snapshot_dynamics(
     &self,
     device: &LogicalDevice,
@@ -3273,6 +3286,7 @@ impl VulkanComputeKernels {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn restore_dynamics(
     &self,
     device: &LogicalDevice,
@@ -3389,6 +3403,7 @@ impl VulkanComputeKernels {
             rb.angular_vel_drag[1],
             rb.angular_vel_drag[2],
           );
+          aethervk_oshal_rlib::log!("COMET POS_Y: {}", rb.position_mass[1]);
           rb_idx += 1;
         }
       },
@@ -3400,6 +3415,7 @@ impl VulkanComputeKernels {
 
 impl Kernels for Device {
   
+  #[cfg(any(test, feature = "collisions"))]
   fn narrow_ccd(
     &self,
     cmd: &mut Self::Cmd,
@@ -3408,6 +3424,7 @@ impl Kernels for Device {
     particles: &Self::Buffer<f32>,
     lca_entities: u64,
     space_type: u32,
+    dt: f32,
     output_list: &Self::List<crate::gpu::CollisionPair>,
   ) -> EngineResult<()> {
     self.narrow_ccd(
@@ -3417,6 +3434,7 @@ impl Kernels for Device {
       particles,
       lca_entities,
       space_type,
+      dt,
       output_list,
     )
   }
@@ -3890,6 +3908,7 @@ impl Kernels for Device {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn self_intersect_scene(
     &self,
     cmd: &mut Self::Cmd,
@@ -3907,6 +3926,7 @@ impl Kernels for Device {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn intersect_instances(
     &self,
     cmd: &mut Self::Cmd,
@@ -3936,6 +3956,7 @@ impl Kernels for Device {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn compact_collisions(
     &self,
     cmd: &mut Self::Cmd,
@@ -3954,6 +3975,7 @@ impl Kernels for Device {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn find_earliest_collision(
     &self,
     cmd: &mut Self::Cmd,
@@ -3971,6 +3993,7 @@ impl Kernels for Device {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn apply_collision_responses(
     &self,
     cmd: &mut Self::Cmd,
@@ -4002,6 +4025,7 @@ impl Kernels for Device {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn snapshot_dynamics(
     &self,
     cmd: &mut Self::Cmd,
@@ -4027,6 +4051,7 @@ impl Kernels for Device {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn restore_dynamics(
     &self,
     cmd: &mut Self::Cmd,
@@ -4235,6 +4260,7 @@ impl Kernels for Device {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn bp_clear(
     &self,
     cmd: &mut Self::Cmd,
@@ -4243,6 +4269,7 @@ impl Kernels for Device {
     out_rb_ps_addr: u64,
     out_rb_lca_addr: u64,
     internal_pairs_addr: u64,
+    out_sparse_addr: u64,
   ) -> EngineResult<()> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
@@ -4255,6 +4282,7 @@ impl Kernels for Device {
           out_rb_ps_addr,
           out_rb_lca_addr,
           internal_pairs_addr,
+          out_sparse_addr,
         );
         Ok(())
       })
@@ -4263,6 +4291,7 @@ impl Kernels for Device {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn bp_bounds_gen(
     &self,
     cmd: &mut Self::Cmd,
@@ -4289,6 +4318,7 @@ impl Kernels for Device {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn bp_scene(
     &self,
     cmd: &mut Self::Cmd,
@@ -4317,6 +4347,7 @@ impl Kernels for Device {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn bp_classify(
     &self,
     cmd: &mut Self::Cmd,
@@ -4352,6 +4383,7 @@ impl Kernels for Device {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn bp_cross_lca(
     &self,
     cmd: &mut Self::Cmd,
@@ -4392,6 +4424,7 @@ impl Kernels for Device {
   }
 
   
+  #[cfg(any(test, feature = "collisions"))]
   fn bp_particle_self(
     &self,
     cmd: &mut Self::Cmd,
@@ -4434,6 +4467,7 @@ impl Device {
     particles: &VulkanBuffer<f32>,
     lca_entities: u64,
     space_type: u32,
+    dt: f32,
     output_list: &VulkanBuffer<crate::gpu::CollisionPair>,
   ) -> crate::types::EngineResult<()> {
 
@@ -4442,7 +4476,7 @@ impl Device {
       output_list: output_list.address,
       particles: particles.address,
       pair_buffer: broadphase_pairs.address,
-      dt: 0.0,
+      dt,
       particle_radius: 0.5,
       lca_entities,
       space_type,

@@ -264,6 +264,19 @@ impl SimulationContext {
   pub fn create_empty_scene(&self) -> EngineResult<u64> {
     let (scene, root_entity) = empty_scene_object(Arc::clone(&self.texture_cache))?;
     
+    // 1. Cursor Entity
+    let cursor_entity = scene.spawn_entity("cursor");
+    scene.add_component(
+      cursor_entity,
+      crate::scene::TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(0.02, 0.02, 0.02),
+      },
+    )?;
+    scene.add_component(cursor_entity, crate::scene::CursorComponent {})?;
+    scene.set_parent(cursor_entity, Some(root_entity));
+
     // 2. Sun Entity
     let sun_entity = scene.spawn_entity("sun");
     scene.set_parent(sun_entity, Some(root_entity));
@@ -313,9 +326,16 @@ impl SimulationContext {
     scene.set_parent(sky_entity, Some(camera_entity));
     scene.add_component(sky_entity, crate::scene::SkyComponent {})?;
 
-    let scene_ctx = Arc::new(RwLock::new(
-      SceneContext::new_empty(Arc::new(scene), root_entity).with_physics_scene(),
-    ));
+    let mut scene_ctx_obj = SceneContext::new_empty(Arc::new(scene), root_entity).with_physics_scene();
+    scene_ctx_obj.cursor_entity = Some(cursor_entity);
+    scene_ctx_obj.sun_entity = Some(sun_entity);
+    scene_ctx_obj.sky_entity = Some(sky_entity);
+    scene_ctx_obj.register_entity(cursor_entity);
+    scene_ctx_obj.register_entity(sun_entity);
+    scene_ctx_obj.register_entity(camera_entity);
+    scene_ctx_obj.register_entity(sky_entity);
+
+    let scene_ctx = Arc::new(RwLock::new(scene_ctx_obj));
     Ok(self.scenes.write().insert_scene(scene_ctx))
   }
 
@@ -404,6 +424,7 @@ impl SimulationContext {
     scene.set_parent(grid_entity, Some(root_entity));
 
     let scene_ctx_obj = SceneContext::new_empty(Arc::new(scene), root_entity)
+      .with_physics_scene()
       .with_cursor_entity(cursor_entity)?
       .with_sun_entity(sun_entity)?
       .with_grid_entity(grid_entity)?

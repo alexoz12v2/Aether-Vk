@@ -80,8 +80,9 @@ void main() {
         invIB = rbB.inertia_tensor_inv.xyz; qB = rbB.orientation; posB = rbB.position_mass.xyz; vB_init = rbB.linear_vel_drag.xyz; wB_init = rbB.angular_vel_drag.xyz;
     }
 
-    vec3 n = pair.contact_normal, t1, t2; generate_tangents(n, t1, t2);
-    vec3 rA = pair.contact_point - posA, rB = pair.contact_point - posB;
+    vec3 n = vec3(pair.norm_x, pair.norm_y, pair.norm_z), t1, t2; generate_tangents(n, t1, t2);
+    vec3 pt = vec3(pair.pt_x, pair.pt_y, pair.pt_z);
+    vec3 rA = pt - posA, rB = pt - posB;
     float eff_m_n = compute_effective_mass(n, rA, rB, invMA, invMB, invIA, invIB, qA, qB);
     float eff_m_t1 = compute_effective_mass(t1, rA, rB, invMA, invMB, invIA, invIB, qA, qB);
     float eff_m_t2 = compute_effective_mass(t2, rA, rB, invMA, invMB, invIA, invIB, qA, qB);

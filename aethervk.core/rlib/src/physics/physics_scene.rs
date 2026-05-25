@@ -191,19 +191,20 @@ impl PhysicsScene {
     let macro_frame_idx = gpu_frames.iter().position(|f| f.frame_type == 0).unwrap_or(0) as u32;
 
     let mut mesh_blases = Vec::new();
-    let mut frame_leaves: hashbrown::HashMap<u32, Vec<(u32, Vec3f32, Vec3f32, u32, u32)>> = hashbrown::HashMap::new();
+    let mut frame_leaves: hashbrown::HashMap<u32, Vec<(u32, Vec3f32, Vec3f32, u32, u32)>> =
+      hashbrown::HashMap::new();
 
     let mut dense_mesh_idx = 0;
-    scene.query2::<TransformComponent, KinematicComponent, _>(|entity, transform, kinematic| {
+    scene.query2_without::<TransformComponent, KinematicComponent, crate::scene::particles::ParticleSystemComponent, _>(|entity, transform, kinematic| {
       let mesh_bvh = scene.with_component(entity, |mesh: &PhysicalMeshComponent| {
         mesh.mesh.bvh.clone()
       }).flatten();
 
+      let lca_idx = find_lca_frame_idx(entity, scene, &gpu_frames).unwrap_or(macro_frame_idx);
+      let frame_bits = if lca_idx == macro_frame_idx { BVH_FRAME_MACRO } else { BVH_FRAME_MICRO };
+
       let motion_blas = if let Some(bvh) = mesh_bvh {
         let b = build_motion_blas(&bvh, transform, kinematic.velocity, dt_s);
-        let lca_idx = find_lca_frame_idx(entity, scene, &gpu_frames).unwrap_or(macro_frame_idx);
-        let frame_bits = if lca_idx == macro_frame_idx { BVH_FRAME_MACRO } else { BVH_FRAME_MICRO };
-
         let mut min_bound = Vec3f32::from_array([f32::INFINITY; 3]);
         let mut max_bound = Vec3f32::from_array([f32::NEG_INFINITY; 3]);
         for node in &b.nodes {
@@ -218,6 +219,23 @@ impl PhysicsScene {
         frame_leaves.entry(lca_idx).or_default().push((dense_mesh_idx, min_bound, max_bound, BVH_SHAPE_AABB, frame_bits));
         Some(b)
       } else {
+        // Fallback to primitive shape if it's a rigid body
+        let collider = scene.with_component(entity, |c: &crate::scene::ColliderComponent| c.clone());
+        if let Some(c) = collider {
+          let p = transform.position;
+          let (shape_type, extents) = match c.shape {
+            crate::scene::ColliderShape::Sphere { radius } => (BVH_SHAPE_SPHERE, Vec3f32::from_components(radius, radius, radius)),
+            crate::scene::ColliderShape::OBB { half_extents } => (BVH_SHAPE_OBB, half_extents),
+          };
+          let mut mn = Vec3f32::from_components(p.x() - extents.x(), p.y() - extents.y(), p.z() - extents.z());
+          let mut mx = Vec3f32::from_components(p.x() + extents.x(), p.y() + extents.y(), p.z() + extents.z());
+          
+          let sweep = kinematic.velocity * dt_s;
+          mn = mn.min(mn + sweep);
+          mx = mx.max(mx + sweep);
+          
+          frame_leaves.entry(lca_idx).or_default().push((dense_mesh_idx, mn, mx, shape_type, frame_bits));
+        }
         None
       };
       mesh_blases.push(motion_blas);
@@ -279,8 +297,11 @@ impl PhysicsScene {
       let mut mn = Vec3f32::from_array([f32::INFINITY; 3]);
       let mut mx = Vec3f32::from_array([f32::NEG_INFINITY; 3]);
       if !rbvh.nodes.is_empty() {
-        mn = rbvh.nodes[0].min;
-        mx = rbvh.nodes[0].max;
+        let frame = &gpu_frames[frame_idx as usize];
+        let scale = frame.scale;
+        let pos = Vec3f32::from_array(frame.center_pos);
+        mn = pos + (rbvh.nodes[0].min * scale);
+        mx = pos + (rbvh.nodes[0].max * scale);
       }
       macro_leaves.push((frame_idx, mn, mx, BVH_SHAPE_SUB_TLAS, BVH_FRAME_MACRO));
       micro_tlases.insert(frame_idx, rbvh);

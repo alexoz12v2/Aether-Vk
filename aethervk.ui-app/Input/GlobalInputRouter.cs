@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using AetherVk.Logic.Input;
 using Avalonia;
@@ -11,6 +12,8 @@ namespace AetherVk.Input;
 public class GlobalInputRouter
 {
   private readonly InputRegistry _registry;
+  private readonly Dictionary<IPointer, (Visual Target, IActionHandler Handler, AppAction Action)> _pressedVisuals = new();
+
 
   public GlobalInputRouter(TopLevel window, InputRegistry registry)
   {
@@ -66,7 +69,8 @@ public class GlobalInputRouter
       Alt: e.KeyModifiers.HasFlag(KeyModifiers.Alt)
     );
 
-    if (RouteAction(focused, chord, isPressed))
+    var (handler, action) = RouteAction(focused, chord, isPressed);
+    if (handler != null)
     {
       e.Handled = true;
     }
@@ -87,10 +91,16 @@ public class GlobalInputRouter
     if (visual == null)
       return;
 
-    // For pointer events, the target should be the element under the pointer
-    // This ensures MiddleClick directly over the viewport resolves to the viewport's ActionContext,
-    // even if a TextBox somewhere else currently has keyboard focus.
     var target = visual;
+
+    if (!isPressed && _pressedVisuals.TryGetValue(e.Pointer, out var info))
+    {
+      info.Handler.ProcessAction(info.Action, false);
+      _pressedVisuals.Remove(e.Pointer);
+      e.Pointer.Capture(null);
+      e.Handled = true;
+      return;
+    }
 
     var point = e.GetCurrentPoint(visual);
     if (point.Properties.PointerUpdateKind != PointerUpdateKind.Other)
@@ -109,19 +119,25 @@ public class GlobalInputRouter
         Pointer: pointerStr
       );
 
-      if (RouteAction(target, chord, isPressed))
+      var (handler, action) = RouteAction(target, chord, isPressed);
+      if (handler != null && action != null)
       {
         e.Handled = true;
-        // Auto-focus the visual if it successfully handled a pointer action
-        if (isPressed && target is InputElement ie && ie.Focusable)
+        if (isPressed)
         {
-          ie.Focus();
+          _pressedVisuals[e.Pointer] = (target, handler, action);
+          e.Pointer.Capture(target as IInputElement);
+          
+          if (target is InputElement ie && ie.Focusable)
+          {
+            ie.Focus();
+          }
         }
       }
     }
   }
 
-  private bool RouteAction(Visual focused, InputChord chord, bool isPressed)
+  private (IActionHandler? Handler, AppAction? Action) RouteAction(Visual focused, InputChord chord, bool isPressed)
   {
     var current = focused;
     while (current != null)
@@ -137,13 +153,13 @@ public class GlobalInputRouter
           {
             if (handler.ProcessAction(action, isPressed))
             {
-              return true;
+              return (handler, action);
             }
           }
         }
       }
       current = current.GetVisualParent() ?? (current as ILogical)?.LogicalParent as Visual;
     }
-    return false;
+    return (null, null);
   }
 }

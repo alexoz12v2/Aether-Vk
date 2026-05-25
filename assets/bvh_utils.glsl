@@ -50,6 +50,7 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer MultiBvhBuf
 #define BVH_SHAPE_AABB   0u
 #define BVH_SHAPE_OBB    1u
 #define BVH_SHAPE_SPHERE 2u
+#define BVH_SHAPE_SUB_TLAS 3u
 
 bool bvh_is_leaf(uint meta)   { return (meta & 0x80000000u) != 0u; }
 uint bvh_get_frame(uint meta) { return (meta >> 29) & 0x3u; }
@@ -81,7 +82,20 @@ bool bvh_node_is_valid(uvec2 valid_mask, uint lane_id) {
 #define KG_TO_M_EARTH (1.0 / 5.9722e24)
 
 struct ColliderId { uint entity_id; uint primitive_index; };
-struct PackedPair { ColliderId a; ColliderId b; float toi; vec3 contact_normal; vec3 contact_point; float penetration_depth; };
+struct PackedPair {
+    ColliderId a;
+    ColliderId b;
+    float toi;
+    uint _pad0[3];
+    float norm_x;
+    float norm_y;
+    float norm_z;
+    uint _pad1;
+    float pt_x;
+    float pt_y;
+    float pt_z;
+    float penetration_depth;
+};
 struct SparseCollisionData { uint valid; uint entity_a; uint prim_a; uint entity_b; uint prim_b; float toi; vec3 contact_normal; vec3 contact_point; float penetration_depth; };
 
 struct RigidBody {
@@ -108,7 +122,21 @@ struct ForceEmitter {
     uint _pad[2];
 };
 struct KinematicBody { uint own_frame_id; float scale; vec3 position; uint frame_type; float mu; };
-struct LcaEntity { MultiBvhBuffer bvh; mat4 transform; mat4 inv_transform; vec3 linear_velocity; uint root_index; vec3 angular_velocity; uint type; uint primitive_offset; uint total_primitives; uint frame_scale_type; float scale_factor; uint shape_type; vec3 shape_data; };
+struct GpuReferenceFrame {
+    vec3 center_pos;
+    float scale;
+    vec3 center_vel;
+    float soi_radius;
+    uint frame_type;
+    uint parent_frame_idx;
+    uint bvh_root_index;
+    uint entity_id_raw_low;
+    uint entity_id_raw_high;
+    uint _pad0;
+    uint _pad1;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer GpuReferenceFrameArray { GpuReferenceFrame frames[]; };
 struct TLASLeaf { vec3 min_bound; uint entity_idx; vec3 max_bound; uint metadata; };
 struct RenderParticleData { uint id_low; uint id_high; uint age_low; uint age_high; vec3 position; float mass; vec3 velocity; uint is_active; };
 struct DrawIndirectCommand { uint vertexCount; uint instanceCount; uint firstVertex; uint firstInstance; };
@@ -130,7 +158,7 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer ParticleDat
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer AtomicCounters { uint counts[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer MortonArray { uvec2 entries[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer PairBuffer { uint count; uint capacity; uvec2 pairs[]; };
-layout(buffer_reference, std430, buffer_reference_align = 4) buffer PackedCollisions { uint dispatch_x; uint dispatch_y; uint dispatch_z; uint count; uint capacity; PackedPair pairs[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer PackedCollisions { uint dispatch_x; uint dispatch_y; uint dispatch_z; uint count; PackedPair pairs[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer SparseCollisions { uint count; uint capacity; SparseCollisionData pairs[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer RigidBodyArray { RigidBody bodies[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer RigidBodyUintArray {
@@ -153,7 +181,6 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer RigidBodyUi
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer WrenchArray { Wrench wrenches[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer EmitterArray { ForceEmitter emitters[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer KinematicArray { KinematicBody bodies[]; };
-layout(buffer_reference, std430, buffer_reference_align = 8) buffer LcaEntityArray { LcaEntity entities[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer LeafBuffer { TLASLeaf leaves[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer DepthIndices { uint count; uint indices[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer CollapseMapBuffer { uint binary_roots[]; };

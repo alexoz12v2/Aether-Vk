@@ -9,7 +9,7 @@
            PointerReleased="OnPointerReleased"
            Tapped="OnTapped">
         <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="4" x:Name="RootBorder">
-            <TextBox x:Name="InputBox" Text="{Binding Value, RelativeSource={RelativeSource AncestorType=controls:UnboundedSlider}, StringFormat='0.###', Mode=TwoWay}" 
+            <TextBox x:Name="InputBox" Text="{Binding Value, RelativeSource={RelativeSource AncestorType=controls:UnboundedSlider}, StringFormat='0.###', Mode=OneWay}" 
                      Background="Transparent" BorderThickness="0"
                      HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                      IsHitTestVisible="False"

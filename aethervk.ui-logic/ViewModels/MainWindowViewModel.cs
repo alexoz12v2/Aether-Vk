@@ -106,7 +106,7 @@ public struct CameraActionParams
   public ulong CameraEntityId { get; set; }
 }
 
-public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnloadedMessage>
+public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnloadedMessage>, IRecipient<ImportModelRequestMessage>
 {
   private readonly NativeRuntimeService _runtimeService;
   private readonly BreadcrumbService _breadcrumbService;
@@ -140,11 +140,17 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
     // Set initial theme to system default
     CurrentTheme = AppTheme.System;
     WeakReferenceMessenger.Default.Register<ModelUnloadedMessage>(this);
+    WeakReferenceMessenger.Default.Register<ImportModelRequestMessage>(this);
   }
 
   public void Receive(ModelUnloadedMessage message)
   {
     ImportedModels.Remove(message.Model);
+  }
+
+  public async void Receive(ImportModelRequestMessage message)
+  {
+    await ImportModelAsync();
   }
 
   [RelayCommand]

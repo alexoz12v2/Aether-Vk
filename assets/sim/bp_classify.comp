@@ -1,6 +1,8 @@
 #version 450 core
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_debug_printf : enable
+
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
@@ -10,22 +12,27 @@ layout(local_size_x = 256) in;
 layout(push_constant, std430) uniform PushConstants {
     PairBuffer raw_pairs;
 
-    // Change these to uvec2. The C++ side still passes the 64-bit pointer!
-    // The size and alignment (8 bytes) are mathematically identical.
     uvec2 out_rb_rb;
     uvec2 out_rb_ps;
     uvec2 out_ps_ps;
+    uvec2 out_macro_lca;
+    uvec2 out_lca_lca;
 
     uint max_pairs;
     uint num_rigid_bodies;
+    RigidBodyArray rigid_bodies;
 } pc;
+
+#define BVH_SHAPE_SUB_TLAS 3u
 
 void main() {
     uint id = gl_GlobalInvocationID.x;
     if (id >= pc.raw_pairs.count) return;
 
     uvec2 pair = pc.raw_pairs.pairs[id];
-    uint ent_A = pair.x, ent_B = pair.y;
+    uint ent_A = pair.x, meta_B = pair.y;
+    uint ent_B = bvh_get_index(meta_B);
+    uint shape_B = bvh_get_shape(meta_B);
 
     uint type_A = (ent_A < pc.num_rigid_bodies) ? TYPE_RIGID_BODY : TYPE_PARTICLE_SYSTEM;
     uint type_B = (ent_B < pc.num_rigid_bodies) ? TYPE_RIGID_BODY : TYPE_PARTICLE_SYSTEM;
@@ -33,27 +40,40 @@ void main() {
     if (type_A > type_B) {
         uint temp = ent_A; ent_A = ent_B; ent_B = temp;
         temp = type_A; type_A = type_B; type_B = temp;
+        // NOTE: We don't swap meta_B, but since A is the query (always rigid body) and B is the leaf (which can be LCA), 
+        // type_A > type_B would only happen if A was a particle system and B was a rigid body. 
+        // Currently, bp_scene only queries RigidBodies, so A is always TYPE_RIGID_BODY.
     }
 
     if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_PARTICLE_SYSTEM) {
-        // Safe null-check without reference comparisons
         if (pc.out_ps_ps.x != 0 || pc.out_ps_ps.y != 0) {
-            // Cast the uvec2 back up into a usable buffer reference
             PairBuffer buf = PairBuffer(pc.out_ps_ps);
             uint out_idx = atomicAdd(buf.count, 1);
-            if (out_idx < pc.max_pairs) buf.pairs[out_idx] = uvec2(ent_A, ent_B);
+            if (out_idx < pc.max_pairs) buf.pairs[out_idx] = uvec2(bvh_get_index(ent_A), bvh_get_index(ent_B));
         }
     } else if (type_A == TYPE_RIGID_BODY && type_B == TYPE_PARTICLE_SYSTEM) {
         if (pc.out_rb_ps.x != 0 || pc.out_rb_ps.y != 0) {
             PairBuffer buf = PairBuffer(pc.out_rb_ps);
             uint out_idx = atomicAdd(buf.count, 1);
-            if (out_idx < pc.max_pairs) buf.pairs[out_idx] = uvec2(ent_A, ent_B);
+            if (out_idx < pc.max_pairs) buf.pairs[out_idx] = uvec2(bvh_get_index(ent_A), bvh_get_index(ent_B));
         }
     } else if (type_A == TYPE_RIGID_BODY && type_B == TYPE_RIGID_BODY) {
-        if (pc.out_rb_rb.x != 0 || pc.out_rb_rb.y != 0) {
-            PairBuffer buf = PairBuffer(pc.out_rb_rb);
-            uint out_idx = atomicAdd(buf.count, 1);
-            if (out_idx < pc.max_pairs) buf.pairs[out_idx] = uvec2(ent_A, ent_B);
+        // Since bp_scene only tests RigidBodies, A is guaranteed to be a RigidBody, not an LCA frame.
+        bool a_is_lca = false; 
+        bool b_is_lca = (shape_B == BVH_SHAPE_SUB_TLAS);
+
+        if (b_is_lca) {
+            if (pc.out_macro_lca.x != 0 || pc.out_macro_lca.y != 0) {
+                PairBuffer buf = PairBuffer(pc.out_macro_lca);
+                uint out_idx = atomicAdd(buf.count, 1);
+                if (out_idx < pc.max_pairs) buf.pairs[out_idx] = uvec2(bvh_get_index(ent_A), bvh_get_index(ent_B));
+            }
+        } else {
+            if (pc.out_rb_rb.x != 0 || pc.out_rb_rb.y != 0) {
+                PairBuffer buf = PairBuffer(pc.out_rb_rb);
+                uint out_idx = atomicAdd(buf.count, 1);
+                if (out_idx < pc.max_pairs) buf.pairs[out_idx] = uvec2(bvh_get_index(ent_A), bvh_get_index(ent_B));
+            }
         }
     }
 }

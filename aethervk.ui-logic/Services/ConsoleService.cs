@@ -61,7 +61,6 @@ public class ConsoleService : ObservableObject, IDisposable
 #if DEBUG
       foreach (var m in batch)
       {
-        Console.WriteLine(m);
         System.Diagnostics.Debug.WriteLine(m);
       }
 #endif

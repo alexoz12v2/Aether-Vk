@@ -31,6 +31,7 @@ layout(push_constant, std430) uniform PushConstants {
     PairBuffer out_rb_ps;
     PairBuffer out_rb_lca;
     PairBuffer internal_pairs;
+    PairBuffer out_sparse;
 } pc;
 
 void main() {
@@ -39,4 +40,5 @@ void main() {
     pc.out_rb_ps.count       = 0u;
     pc.out_rb_lca.count      = 0u;
     pc.internal_pairs.count  = 0u;
+    pc.out_sparse.count      = 0u;
 }
