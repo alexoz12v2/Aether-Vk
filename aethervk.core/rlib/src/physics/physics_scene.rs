@@ -39,8 +39,7 @@ pub struct GpuReferenceFrame {
   pub parent_frame_idx: u32,
   pub bvh_root_index: u32,
   pub entity_id_raw: u64,
-  pub _pad0: u32,
-  pub _pad1: u32,
+  pub frame_bda: u64,
 }
 
 // Metadata helpers for TLAS
@@ -155,9 +154,9 @@ impl PhysicsScene {
         soi_radius: f.soi_radius,
         frame_type: f.frame_type as u32,
         parent_frame_idx: u32::MAX,
-        bvh_root_index: u32::MAX,
+        bvh_root_index: 0,
         entity_id_raw: slotmap::Key::data(&e).as_ffi(),
-        ..Default::default()
+        frame_bda: 0,
       };
       frame_map.insert(e, gpu_frames.len() as u32);
       gpu_frames.push(gpu_frame);
@@ -184,7 +183,7 @@ impl PhysicsScene {
         parent_frame_idx: u32::MAX,
         bvh_root_index: u32::MAX,
         entity_id_raw: 0,
-        ..Default::default()
+        frame_bda: 0,
       });
     }
 

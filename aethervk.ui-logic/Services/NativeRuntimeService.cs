@@ -239,7 +239,6 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       string? message = System.Runtime.InteropServices.Marshal.PtrToStringAnsi(messagePtr);
       if (message != null)
       {
-        System.Console.Error.WriteLine($"[Native] {message}");
         _consoleService?.Log(message);
       }
     }

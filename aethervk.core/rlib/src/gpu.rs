@@ -1822,6 +1822,15 @@ pub trait DeviceBvh: Send + Sync {
   fn address(&self) -> u64;
 }
 
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CrossPair {
+  pub macro_id: u32,
+  pub micro_id: u32,
+  pub lca_id: u32,
+  pub _pad: u32,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 /// TODO: Document this item
@@ -2172,6 +2181,19 @@ pub trait Kernels: Send + Sync {
     output_list: &Self::List<CollisionPair>,
   ) -> EngineResult<()>;
 
+  #[cfg(any(test, feature = "collisions"))]
+  fn narrow_ccd_cross_lca(
+    &self,
+    cmd: &mut Self::Cmd,
+    broadphase_pairs: &Self::List<CrossPair>,
+    rigid_bodies: &Self::Buffer<RigidBodyImex>,
+    particles: &Self::Buffer<f32>,
+    lca_entities_addr: u64,
+    space_type: u32,
+    dt: f32,
+    output_list: &Self::List<CollisionPair>,
+  ) -> EngineResult<()>;
+
   /// Stream compaction shrink logic evaluated entirely on the GPU.
   #[cfg(any(test, feature = "collisions"))]
   fn compact_collisions(
@@ -2209,7 +2231,7 @@ pub trait Kernels: Send + Sync {
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
   ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>)>;
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn restore_dynamics(
     &self,

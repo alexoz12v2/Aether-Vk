@@ -217,6 +217,10 @@ where
   });
   let tlas_addr = motion_tlas.address();
 
+  for frame in &mut physical_scene.gpu_frames {
+    frame.frame_bda = tlas_addr;
+  }
+
   // ── 1. Build per-frame GPU buffers from ECS ───────────────────────────────
   let kinematics = AutoDiscard::new(
     kernels.build_kinematic_bodies(&mut cmd, physical_scene, scene)?,
@@ -348,7 +352,7 @@ where
         });
 
       let internal_pairs = AutoDiscard::new(
-        kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 2_000)?,
+        kernels.build_list::<crate::gpu::CrossPair>(&mut cmd, 2_000)?,
         |b| kernels.discard_list(b),
       );
 
@@ -431,7 +435,7 @@ where
 
       // 2) Cross-LCA CCD for internal_pairs
       if frames.capacity() > 1 {
-        kernels.narrow_ccd(&mut cmd, &*internal_pairs, &rigid_bodies, &particles, frames.address(), 1, (dt as f32) / 1_000_000.0, &sparse_collisions)?;
+        kernels.narrow_ccd_cross_lca(&mut cmd, &*internal_pairs, &rigid_bodies, &particles, frames.address(), 1, (dt as f32) / 1_000_000.0, &sparse_collisions)?;
       }
 
       let compacted = AutoDiscard::new(
@@ -461,7 +465,7 @@ where
            kernels.wait_sync(&read_sync)?;
            if let (Ok(cmp_host), Ok(rb_host), Ok(frames_host), Ok(cross_host)) = (cmp_fut.wait(), rb_fut.wait(), frames_fut.wait(), cross_fut.wait()) {
                let compacted_count = cmp_host[0].b.primitive_index as usize;
-               let cross_count = cross_host[0].a.entity_id as usize;
+               let cross_count = cross_host[0].macro_id as usize;
                aethervk_oshal_rlib::log!("READBACK: compacted_count={}, cross_count={}", compacted_count, cross_count);
                if compacted_count > 0 {
                  let mut out = alloc::string::String::new();

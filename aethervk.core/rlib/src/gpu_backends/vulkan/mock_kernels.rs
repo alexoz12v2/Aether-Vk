@@ -194,7 +194,6 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         self.base.intersect_instances(cmd, potentials, kinematics, rigid_bodies, particles)
     }
 
-    
     fn narrow_ccd(
       &self,
       cmd: &mut Self::Cmd,
@@ -214,6 +213,20 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     }
 
     
+    fn narrow_ccd_cross_lca(
+      &self,
+      cmd: &mut Self::Cmd,
+      broadphase_pairs: &Self::List<crate::gpu::CrossPair>,
+      rigid_bodies: &Self::Buffer<RigidBodyImex>,
+      particles: &Self::Buffer<f32>,
+      lca_entities: u64,
+      space_type: u32,
+      dt: f32,
+      output_list: &Self::List<CollisionPair>,
+    ) -> EngineResult<()> {
+        self.base.narrow_ccd_cross_lca(cmd, broadphase_pairs, rigid_bodies, particles, lca_entities, space_type, dt, output_list)
+    }
+
     fn compact_collisions(&self, cmd: &mut Self::Cmd, globals: &Self::List<CollisionPair>, time_delta: timeus_t) -> EngineResult<Self::List<CollisionPair>> {
         if self.target == MockTargetShader::StreamCompact {
             self.base.compact_collisions(cmd, globals, time_delta)

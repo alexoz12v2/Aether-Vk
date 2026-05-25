@@ -8529,11 +8529,14 @@ impl RenderDevice for Device {
 
           for tid in to_remove {
             if let Some(mut old_dl) = pending_lock.remove(&tid) {
-              aethervk_oshal_rlib::log!(
-                "Automatically cleaning up un-consumed download: {} (engine {:?})",
-                tid,
-                engine_handle
-              );
+              #[cfg(test)]
+              {
+                aethervk_oshal_rlib::log!(
+                  "Automatically cleaning up un-consumed download: {} (engine {:?})",
+                  tid,
+                  engine_handle
+                );
+              }
               unsafe {
                 state
                   .allocator
@@ -8633,7 +8636,8 @@ impl RenderDevice for Device {
         .ok_or(gpu_err!("couldn't get command pools"))?;
 
         let task_registry = state.timeline_manager.task_registry.clone();
-        let timeline_manager_ptr = &state.timeline_manager as *const timeline_manager::TimelineManager;
+        let timeline_manager_ptr =
+          &state.timeline_manager as *const timeline_manager::TimelineManager;
 
         Ok((
           pe_handle,

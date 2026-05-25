@@ -405,16 +405,23 @@ pub struct PhysicsPipelines {
   pub lbvh_build: vk::Pipeline,
   pub motion_bounds: vk::Pipeline,
   pub motion_refit: vk::Pipeline,
-  pub ccd: vk::Pipeline,
+
+  #[cfg(any(test, feature = "collisions"))]
   pub stream_compact: vk::Pipeline,
+  #[cfg(any(test, feature = "collisions"))]
   pub reduce_toi: vk::Pipeline,
+  #[cfg(any(test, feature = "collisions"))]
   pub lcp_solver: vk::Pipeline,
+  #[cfg(any(test, feature = "collisions"))]
   pub apply_impulses: vk::Pipeline,
   pub barnes_hut: vk::Pipeline,
+  #[cfg(any(test, feature = "collisions"))]
   pub radix_sort: vk::Pipeline,
   pub morton_encode: vk::Pipeline,
   pub convert_particles: vk::Pipeline,
+  #[cfg(any(test, feature = "collisions"))]
   pub graph_coloring: vk::Pipeline,
+  #[cfg(any(test, feature = "collisions"))]
   pub lbvh_collapse: vk::Pipeline,
   // ── New Symmetric Strang-Split IMEX integrators ───────────────────────────
   /// VV predictor: x_n → x_{n+1}, v_{n+½}; clears force buffer
@@ -424,25 +431,33 @@ pub struct PhysicsPipelines {
   /// VV corrector: v_{n+½} → v_{n+1}; advances 64-bit engine clock
   pub integrate_particles_p4_5: vk::Pipeline,
   // ── Narrow Phase ──────────────────────────────────────────────────────────
-  
+
+  #[cfg(any(test, feature = "collisions"))]
   pub narrow_ccd: vk::Pipeline,
-  
+
+  #[cfg(any(test, feature = "collisions"))]
   pub narrow_ccd_cross_lca: vk::Pipeline,
   // ── Force aggregation ─────────────────────────────────────────────────────
   /// Leaf-wrench → CoM-wrench reduction (one WG per RB)
   pub rb_force_assign: vk::Pipeline,
   // ── Broad-phase suite ─────────────────────────────────────────────────────
-  
+
+  #[cfg(any(test, feature = "collisions"))]
   pub bp_clear: vk::Pipeline,
-  
+
+  #[cfg(any(test, feature = "collisions"))]
   pub bp_bounds_gen: vk::Pipeline,
-  
+
+  #[cfg(any(test, feature = "collisions"))]
   pub bp_scene: vk::Pipeline,
-  
+
+  #[cfg(any(test, feature = "collisions"))]
   pub bp_classify: vk::Pipeline,
-  
+
+  #[cfg(any(test, feature = "collisions"))]
   pub bp_cross_lca: vk::Pipeline,
-  
+
+  #[cfg(any(test, feature = "collisions"))]
   pub bp_particle_self: vk::Pipeline,
 }
 
@@ -548,19 +563,25 @@ impl PhysicsPipelines {
         lbvh_build: create_pipeline(&alloc::format!("{}/lbvh_build.comp.spv", sim_dir))?,
         motion_bounds: create_pipeline(&alloc::format!("{}/motion_bounds.comp.spv", sim_dir))?,
         motion_refit: create_pipeline(&alloc::format!("{}/motion_refit.comp.spv", sim_dir))?,
-        ccd: create_pipeline(&alloc::format!("{}/ccd.comp.spv", sim_dir))?,
+        #[cfg(any(test, feature = "collisions"))]
         stream_compact: create_pipeline(&alloc::format!("{}/stream_compact.comp.spv", sim_dir))?,
+        #[cfg(any(test, feature = "collisions"))]
         reduce_toi: create_pipeline(&alloc::format!("{}/reduce_toi.comp.spv", sim_dir))?,
+        #[cfg(any(test, feature = "collisions"))]
         lcp_solver: create_pipeline(&alloc::format!("{}/lcp_solver.comp.spv", sim_dir))?,
+        #[cfg(any(test, feature = "collisions"))]
         apply_impulses: create_pipeline(&alloc::format!("{}/apply_impulses.comp.spv", sim_dir))?,
         barnes_hut: create_pipeline(&alloc::format!("{}/barnes_hut.comp.spv", sim_dir))?,
+        #[cfg(any(test, feature = "collisions"))]
         radix_sort: create_pipeline(&alloc::format!("{}/radix_sort.comp.spv", sim_dir))?,
         morton_encode: create_pipeline(&alloc::format!("{}/morton_encode.comp.spv", sim_dir))?,
         convert_particles: create_pipeline(&alloc::format!(
           "{}/convert_particles.comp.spv",
           sim_dir
         ))?,
+        #[cfg(any(test, feature = "collisions"))]
         graph_coloring: create_pipeline(&alloc::format!("{}/graph_coloring.comp.spv", sim_dir))?,
+        #[cfg(any(test, feature = "collisions"))]
         lbvh_collapse: create_pipeline(&alloc::format!("{}/lbvh_collapse.comp.spv", sim_dir))?,
         // ── New IMEX integrators ────────────────────────────────────────────
         integrate_particles_p1_p2: create_pipeline(&alloc::format!(
@@ -575,24 +596,32 @@ impl PhysicsPipelines {
           "{}/integrate_particles_p4_5.comp.spv",
           sim_dir
         ))?,
-        
+
+        #[cfg(any(test, feature = "collisions"))]
         narrow_ccd: create_pipeline(&alloc::format!("{}/narrow_ccd.comp.spv", sim_dir))?,
-        
+
+        #[cfg(any(test, feature = "collisions"))]
         narrow_ccd_cross_lca: create_pipeline(&alloc::format!("{}/narrow_ccd_cross_lca.comp.spv", sim_dir))?,
         // ── Force aggregation ───────────────────────────────────────────────
         rb_force_assign: create_pipeline(&alloc::format!("{}/rb_force_assign.comp.spv", sim_dir))?,
         // ── Broad-phase suite ───────────────────────────────────────────────
-        
+
+        #[cfg(any(test, feature = "collisions"))]
         bp_clear: create_pipeline(&alloc::format!("{}/bp_clear.comp.spv", sim_dir))?,
-        
+
+        #[cfg(any(test, feature = "collisions"))]
         bp_bounds_gen: create_pipeline(&alloc::format!("{}/bp_bounds_gen.comp.spv", sim_dir))?,
-        
+
+        #[cfg(any(test, feature = "collisions"))]
         bp_scene: create_pipeline(&alloc::format!("{}/bp_scene.comp.spv", sim_dir))?,
-        
+
+        #[cfg(any(test, feature = "collisions"))]
         bp_classify: create_pipeline(&alloc::format!("{}/bp_classify.comp.spv", sim_dir))?,
-        
+
+        #[cfg(any(test, feature = "collisions"))]
         bp_cross_lca: create_pipeline(&alloc::format!("{}/bp_cross_lca.comp.spv", sim_dir))?,
-        
+
+        #[cfg(any(test, feature = "collisions"))]
         bp_particle_self: create_pipeline(&alloc::format!(
           "{}/bp_particle_self.comp.spv",
           sim_dir
@@ -620,39 +649,53 @@ impl PhysicsPipelines {
     discard_pool.discard_pipeline(self.lbvh_build, timeline);
     discard_pool.discard_pipeline(self.motion_bounds, timeline);
     discard_pool.discard_pipeline(self.motion_refit, timeline);
-    discard_pool.discard_pipeline(self.ccd, timeline);
+    #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.stream_compact, timeline);
+    #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.reduce_toi, timeline);
+    #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.lcp_solver, timeline);
+    #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.apply_impulses, timeline);
     discard_pool.discard_pipeline(self.barnes_hut, timeline);
+    #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.radix_sort, timeline);
     discard_pool.discard_pipeline(self.morton_encode, timeline);
     discard_pool.discard_pipeline(self.convert_particles, timeline);
+    #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.graph_coloring, timeline);
+    #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.lbvh_collapse, timeline);
     // New IMEX integrators
     discard_pool.discard_pipeline(self.integrate_particles_p1_p2, timeline);
     discard_pool.discard_pipeline(self.integrate_bodies_p3, timeline);
     discard_pool.discard_pipeline(self.integrate_particles_p4_5, timeline);
-    
+
+    #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.narrow_ccd, timeline);
-    
+
+    #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.narrow_ccd_cross_lca, timeline);
     // Force aggregation
     discard_pool.discard_pipeline(self.rb_force_assign, timeline);
     // Broad-phase suite
-    
+
+    #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.bp_clear, timeline);
-    
+
+    #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.bp_bounds_gen, timeline);
-    
+
+    #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.bp_scene, timeline);
-    
+
+    #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.bp_classify, timeline);
-    
+
+    #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.bp_cross_lca, timeline);
-    
+
+    #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.bp_particle_self, timeline);
     discard_pool.discard_pipeline_layout(self.pipeline_layout, timeline);
   }
@@ -1586,7 +1629,7 @@ impl VulkanComputeKernels {
       device,
       allocator,
       capacity,
-      ash::vk::BufferUsageFlags::STORAGE_BUFFER | ash::vk::BufferUsageFlags::TRANSFER_DST,
+      ash::vk::BufferUsageFlags::STORAGE_BUFFER | ash::vk::BufferUsageFlags::TRANSFER_DST | ash::vk::BufferUsageFlags::TRANSFER_SRC,
       true,
       rollback,
     )
@@ -1999,7 +2042,7 @@ impl VulkanComputeKernels {
   }
 
   /// Dispatches `bp_clear.comp` (single thread, clears all four pair queues).
-  
+  #[cfg(any(test, feature = "collisions"))]
   pub fn bp_clear(
     &self,
     device: &LogicalDevice,
@@ -2057,7 +2100,7 @@ impl VulkanComputeKernels {
   ///
   /// `scene_entities_addr` — BDA to `EntityArray` (rigid bodies; one `RigidBody` per entry).
   /// `tlas_leaves_addr`    — BDA to output `LeafBuffer`.
-  
+  #[cfg(any(test, feature = "collisions"))]
   pub fn bp_bounds_gen(
     &self,
     device: &LogicalDevice,
@@ -2118,7 +2161,7 @@ impl VulkanComputeKernels {
   /// `tlas_bvh_addr`        — BDA to `MultiBvhBuffer`.
   /// `query_leaves_addr`    — BDA to swept `LeafBuffer` produced by `bp_bounds_gen`.
   /// `overlapping_pairs_addr` — BDA to output `PairBuffer` (`uint count; uvec2 pairs[]`).
-  
+  #[cfg(any(test, feature = "collisions"))]
   pub fn bp_scene(
     &self,
     device: &LogicalDevice,
@@ -2178,7 +2221,7 @@ impl VulkanComputeKernels {
   /// Dispatches `bp_classify.comp`.
   ///
   /// Bins raw `overlapping_pairs` into RB-RB, RB-PS, and cross-LCA typed queues.
-  
+  #[cfg(any(test, feature = "collisions"))]
   pub fn bp_classify(
     &self,
     device: &LogicalDevice,
@@ -2242,7 +2285,7 @@ impl VulkanComputeKernels {
   /// transforms the macro-frame rigid body's AABB into the micro-frame using
   /// `InstanceDescriptor.inv_transform`, then traverses the micro-frame BVH
   /// to produce refined narrow-phase candidate pairs.
-  
+  #[cfg(any(test, feature = "collisions"))]
   pub fn bp_cross_lca(
     &self,
     device: &LogicalDevice,
@@ -2319,7 +2362,7 @@ impl VulkanComputeKernels {
   /// `particles_addr` — BDA to AOSOA particle buffer.
   /// `wrench_buffer` — BDA to the same particle buffer (used as float[] for atomicAdd).
   /// `stiffness`     — Spring constant k for the linear penalty force.
-  
+  #[cfg(any(test, feature = "collisions"))]
   pub fn bp_particle_self(
     &self,
     device: &LogicalDevice,
@@ -2755,7 +2798,7 @@ impl VulkanComputeKernels {
   }
 
   #[function_name::named]
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn self_intersect_scene(
     &self,
@@ -2827,8 +2870,9 @@ impl VulkanComputeKernels {
     Ok(candidates_buffer)
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
+  #[deprecated]
   fn intersect_instances(
     &self,
     device: &LogicalDevice,
@@ -2864,7 +2908,8 @@ impl VulkanComputeKernels {
     };
 
     unsafe {
-      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.ccd);
+      // Note: Pipeline is not there anymore. This method is marked for deletion
+      // device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.ccd);
       device.cmd_push_constants(
         cmd.cmd,
         self.pipelines.pipeline_layout,
@@ -2895,7 +2940,7 @@ impl VulkanComputeKernels {
     Ok(output_list)
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn compact_collisions(
     &self,
@@ -2983,7 +3028,7 @@ impl VulkanComputeKernels {
     Ok(packed_out)
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn find_earliest_collision(
     &self,
@@ -3083,7 +3128,7 @@ impl VulkanComputeKernels {
     Ok(out_toi)
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn apply_collision_responses(
     &self,
@@ -3212,7 +3257,7 @@ impl VulkanComputeKernels {
     Ok(())
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn snapshot_dynamics(
     &self,
@@ -3285,7 +3330,7 @@ impl VulkanComputeKernels {
     Ok((rb_snap, p_snap))
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn restore_dynamics(
     &self,
@@ -3414,7 +3459,7 @@ impl VulkanComputeKernels {
 }
 
 impl Kernels for Device {
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn narrow_ccd(
     &self,
@@ -3428,6 +3473,30 @@ impl Kernels for Device {
     output_list: &Self::List<crate::gpu::CollisionPair>,
   ) -> EngineResult<()> {
     self.narrow_ccd(
+      cmd,
+      broadphase_pairs,
+      rigid_bodies,
+      particles,
+      lca_entities,
+      space_type,
+      dt,
+      output_list,
+    )
+  }
+
+  #[cfg(any(test, feature = "collisions"))]
+  fn narrow_ccd_cross_lca(
+    &self,
+    cmd: &mut Self::Cmd,
+    broadphase_pairs: &Self::List<crate::gpu::CrossPair>,
+    rigid_bodies: &Self::Buffer<crate::gpu::RigidBodyImex>,
+    particles: &Self::Buffer<f32>,
+    lca_entities: u64,
+    space_type: u32,
+    dt: f32,
+    output_list: &Self::List<crate::gpu::CollisionPair>,
+  ) -> EngineResult<()> {
+    self.narrow_ccd_cross_lca(
       cmd,
       broadphase_pairs,
       rigid_bodies,
@@ -3907,7 +3976,7 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn self_intersect_scene(
     &self,
@@ -3925,7 +3994,7 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn intersect_instances(
     &self,
@@ -3955,7 +4024,7 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn compact_collisions(
     &self,
@@ -3974,7 +4043,7 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn find_earliest_collision(
     &self,
@@ -3992,7 +4061,7 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn apply_collision_responses(
     &self,
@@ -4024,7 +4093,7 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn snapshot_dynamics(
     &self,
@@ -4050,7 +4119,7 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn restore_dynamics(
     &self,
@@ -4259,7 +4328,7 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_clear(
     &self,
@@ -4290,7 +4359,7 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_bounds_gen(
     &self,
@@ -4317,7 +4386,7 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_scene(
     &self,
@@ -4346,7 +4415,7 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_classify(
     &self,
@@ -4382,7 +4451,7 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_cross_lca(
     &self,
@@ -4423,7 +4492,7 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 
-  
+
   #[cfg(any(test, feature = "collisions"))]
   fn bp_particle_self(
     &self,
@@ -4458,7 +4527,57 @@ impl Kernels for Device {
 }
 
 impl Device {
-  
+
+  #[cfg(any(test, feature = "collisions"))]
+  pub fn narrow_ccd_cross_lca(
+    &self,
+    cmd: &mut VulkanCommandBuffer,
+    broadphase_pairs: &VulkanBuffer<crate::gpu::CrossPair>,
+    rigid_bodies: &VulkanBuffer<crate::gpu::RigidBodyImex>,
+    particles: &VulkanBuffer<f32>,
+    lca_entities: u64,
+    space_type: u32,
+    dt: f32,
+    output_list: &VulkanBuffer<crate::gpu::CollisionPair>,
+  ) -> crate::types::EngineResult<()> {
+
+    let pc = NarrowCcdPushConstants {
+      scene_entities: rigid_bodies.address,
+      output_list: output_list.address,
+      particles: particles.address,
+      pair_buffer: broadphase_pairs.address,
+      dt,
+      particle_radius: 0.5,
+      lca_entities,
+      space_type,
+      _pad: 0,
+    };
+    let bytes = unsafe {
+      core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
+    };
+
+    let dispatch_groups = (broadphase_pairs.capacity as u32 + 255) / 256;
+
+    unsafe {
+      self.device.cmd_bind_pipeline(
+        cmd.cmd,
+        ash::vk::PipelineBindPoint::COMPUTE,
+        self.kernels.pipelines.narrow_ccd_cross_lca,
+      );
+
+      self.device.cmd_push_constants(
+        cmd.cmd,
+        self.kernels.pipelines.pipeline_layout,
+        ash::vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytes,
+      );
+
+      self.device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+    }
+    Ok(())
+  }
+  #[cfg(any(test, feature = "collisions"))]
   pub fn narrow_ccd(
     &self,
     cmd: &mut VulkanCommandBuffer,

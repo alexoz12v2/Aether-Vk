@@ -595,6 +595,18 @@ impl Kernels for CpuScalarKernels {
 
   
   #[cfg(any(test, feature = "collisions"))]
+  fn narrow_ccd_cross_lca(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _broadphase_pairs: &Self::List<crate::gpu::CrossPair>,
+    _rigid_bodies: &Self::Buffer<RigidBodyImex>,
+    _particles: &Self::Buffer<f32>,
+    _lca_entities: u64,
+    _space_type: u32,
+    _dt: f32,
+    _output_list: &Self::List<CollisionPair>,
+  ) -> EngineResult<()> { unimplemented!() }
+
   fn narrow_ccd(
     &self,
     _cmd: &mut Self::Cmd,
@@ -1035,6 +1047,18 @@ impl Kernels for CpuSimdKernels {
 
   
   #[cfg(any(test, feature = "collisions"))]
+  fn narrow_ccd_cross_lca(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _broadphase_pairs: &Self::List<crate::gpu::CrossPair>,
+    _rigid_bodies: &Self::Buffer<RigidBodyImex>,
+    _particles: &Self::Buffer<f32>,
+    _lca_entities: u64,
+    _space_type: u32,
+    _dt: f32,
+    _output_list: &Self::List<CollisionPair>,
+  ) -> EngineResult<()> { unimplemented!() }
+
   fn narrow_ccd(
     &self,
     _cmd: &mut Self::Cmd,
