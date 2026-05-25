@@ -113,7 +113,7 @@ mod tests {
     let end_time: timeus_t = (duration_seconds * 1_000_000.0) as timeus_t;
 
     while current_time < end_time {
-      let _sync = simulation_step(
+      let sync = simulation_step(
         kernels,
         &mut physical_scene,
         scene,
@@ -122,6 +122,10 @@ mod tests {
         collisions_enabled,
       )
       .unwrap();
+      if let Some(s) = sync {
+        kernels.wait_sync(&s).unwrap();
+      }
+      physical_scene = PhysicsScene::build_from_scene(scene, 0.016);
       current_time += dt;
     }
   }
@@ -509,7 +513,7 @@ mod tests {
       .with_device(ctx.device_handle, |dev| {
         let vulkan_device = dev.as_any().downcast_ref::<device::Device>().unwrap();
 
-        run_simulation(vulkan_device, &mut scene, 1.0, true);
+        run_simulation(vulkan_device, &mut scene, 2.0, true);
 
         // Verify
         let v_macro = scene.with_component(obj_macro, |k: &KinematicComponent| k.velocity).unwrap();
@@ -641,7 +645,7 @@ mod tests {
       .with_device(ctx.device_handle, |dev| {
         let vulkan_device = dev.as_any().downcast_ref::<device::Device>().unwrap();
 
-        run_simulation(vulkan_device, &mut scene, 1.0, false);
+        run_simulation(vulkan_device, &mut scene, 2.0, false);
 
         // Verify
         let v_macro = scene.with_component(obj_macro, |k: &KinematicComponent| k.velocity).unwrap();

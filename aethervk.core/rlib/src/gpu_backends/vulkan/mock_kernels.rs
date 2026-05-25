@@ -113,9 +113,9 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     }
 
     
-    fn bp_bounds_gen(&self, cmd: &mut Self::Cmd, bodies: &Self::Buffer<RigidBodyImex>, leaves_addr: u64, total_entities: u32, dt: timeus_t) -> EngineResult<()> { 
+    fn bp_bounds_gen(&self, cmd: &mut Self::Cmd, bodies: &Self::Buffer<RigidBodyImex>, leaves_addr: u64, lca_entities_addr: u64, total_entities: u32, dt: timeus_t) -> EngineResult<()> { 
         if self.target == MockTargetShader::BpBoundsGen {
-            self.base.bp_bounds_gen(cmd, bodies, leaves_addr, total_entities, dt)?;
+            self.base.bp_bounds_gen(cmd, bodies, leaves_addr, lca_entities_addr, total_entities, dt)?;
         }
         Ok(())
     }
@@ -161,13 +161,14 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         out_rb_ps_addr: u64,
         out_ps_ps_addr: u64,
         out_cross_pairs_addr: u64,
+        internal_pairs_addr: u64,
         total_queries: u32,
         max_pairs: u32,
       ) -> EngineResult<()> {
           self.base.bp_cross_lca(
               cmd, tlas_bvh_addr, lca_entities_addr, macro_leaves_addr, entity_headers_addr,
               lca_query_pairs_addr, out_rb_rb_addr, out_rb_ps_addr, out_ps_ps_addr,
-              out_cross_pairs_addr, total_queries, max_pairs
+              out_cross_pairs_addr, internal_pairs_addr, total_queries, max_pairs
           )?;
           Ok(())
       }

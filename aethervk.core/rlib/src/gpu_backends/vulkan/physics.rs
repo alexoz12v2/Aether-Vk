@@ -282,10 +282,10 @@ pub struct BpClearPushConstants {
 pub struct BpBoundsGenPushConstants {
   pub scene_entities: u64,
   pub tlas_leaves: u64,
+  pub lca_entities: u64,
   pub dt_us_lo: u32,
   pub dt_us_hi: u32,
   pub total_entities: u32,
-  pub _pad: u32,
 }
 
 /// `bp_scene.comp` — 40 bytes
@@ -324,8 +324,11 @@ pub struct BpClassifyPushConstants {
   pub out_rb_rb: u64,
   pub out_rb_ps: u64,
   pub out_ps_ps: u64,
+  pub out_macro_lca: u64,
+  pub out_lca_lca: u64,
   pub max_pairs: u32,
   pub num_rigid_bodies: u32,
+  pub rigid_bodies: u64,
 }
 
 /// `bp_cross_lca.comp` — 72 bytes
@@ -354,6 +357,7 @@ pub struct BpCrossLcaPushConstants {
   pub out_rb_ps: u64,
   pub out_ps_ps: u64,
   pub out_cross_pairs: u64,
+  pub internal_pairs: u64,
   pub total_queries: u32,
   pub max_pairs: u32,
 }
@@ -848,13 +852,17 @@ impl<T: Copy + Send + Sync> WaitHandle<Vec<T>> for VulkanReadHandle<T> {
     let mut data = alloc::vec::Vec::with_capacity(self.capacity);
     unsafe {
       if !info.mapped_data.is_null() {
-        let raw_u32 = core::slice::from_raw_parts(info.mapped_data as *const u32, 16);
-        aethervk_oshal_rlib::log!("RAW STAGING BUFFER: {:?}", raw_u32);
+        let count = if self.is_list {
+          let c = unsafe { *(info.mapped_data as *const u32) } as usize;
+          c.min(self.capacity)
+        } else {
+          self.capacity
+        };
 
         let offset = if self.is_list { 16 } else { 0 };
         let mapped_ptr = (info.mapped_data as *const u8).add(offset);
-        core::ptr::copy_nonoverlapping(mapped_ptr as *const T, data.as_mut_ptr(), self.capacity);
-        data.set_len(self.capacity);
+        core::ptr::copy_nonoverlapping(mapped_ptr as *const T, data.as_mut_ptr(), count);
+        data.set_len(count);
       }
 
       // Cleanup staging buffer safely and immediately. Because `wait()` is invoked
@@ -1515,6 +1523,8 @@ impl VulkanComputeKernels {
 
     scene0.query2::<crate::scene::TransformComponent, crate::scene::KinematicComponent, _>(
       |entity, transform, kinematic| {
+        let parent_id = scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi()).unwrap_or(0);
+        let frame_idx = _scene.gpu_frames.iter().position(|f| f.entity_id_raw == parent_id).unwrap_or(0xFFFFFFFF) as u32;
         let mass = scene0
           .with_component(entity, |c: &crate::scene::ColliderComponent| {
             match c.shape {
@@ -1568,7 +1578,7 @@ impl VulkanComputeKernels {
           leaf_count: 0,
           shape_type,
           shape_extents,
-          _pad: 0,
+          frame_idx,
         });
         wrench_idx += 1;
       },
@@ -1740,7 +1750,7 @@ impl VulkanComputeKernels {
     sun_pos: Vec3f32,
     dt: timeus_t,
   ) -> GpuResult<()> {
-    let max_particles = particles.capacity() as u32;
+    let max_particles = (particles.capacity() as u32 / 320) * 32;
     let wg_size = 128;
     let num_emitters = 1; // TODO Passed dynamically in reality
     let dispatch_groups = (max_particles + wg_size - 1) / wg_size;
@@ -1776,7 +1786,7 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
 
       // TODO switch to synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -1784,8 +1794,8 @@ impl VulkanComputeKernels {
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -1839,14 +1849,14 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      device.cmd_dispatch(cmd.cmd, groups, 1, 1);
+      if groups > 0 { device.cmd_dispatch(cmd.cmd, groups, 1, 1); }
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -1905,14 +1915,14 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      device.cmd_dispatch(cmd.cmd, groups, 1, 1);
+      if groups > 0 { device.cmd_dispatch(cmd.cmd, groups, 1, 1); }
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -1970,14 +1980,14 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      device.cmd_dispatch(cmd.cmd, groups, 1, 1);
+      if groups > 0 { device.cmd_dispatch(cmd.cmd, groups, 1, 1); }
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -2025,14 +2035,14 @@ impl VulkanComputeKernels {
         bytes,
       );
       // One WG per body
-      device.cmd_dispatch(cmd.cmd, n_bodies, 1, 1);
+      if n_bodies > 0 { device.cmd_dispatch(cmd.cmd, n_bodies, 1, 1); }
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -2084,8 +2094,8 @@ impl VulkanComputeKernels {
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -2107,6 +2117,7 @@ impl VulkanComputeKernels {
     cmd: &mut VulkanCommandBuffer,
     scene_entities_addr: u64,
     tlas_leaves_addr: u64,
+    lca_entities_addr: u64,
     total_entities: u32,
     dt: timeus_t,
   ) {
@@ -2116,10 +2127,10 @@ impl VulkanComputeKernels {
     let pc = BpBoundsGenPushConstants {
       scene_entities: scene_entities_addr,
       tlas_leaves: tlas_leaves_addr,
+      lca_entities: lca_entities_addr,
       dt_us_lo: dt as u32,
       dt_us_hi: (dt >> 32) as u32,
       total_entities,
-      _pad: 0,
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
@@ -2137,14 +2148,14 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      device.cmd_dispatch(cmd.cmd, groups, 1, 1);
+      if groups > 0 { device.cmd_dispatch(cmd.cmd, groups, 1, 1); }
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -2207,8 +2218,8 @@ impl VulkanComputeKernels {
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -2226,13 +2237,13 @@ impl VulkanComputeKernels {
     &self,
     device: &LogicalDevice,
     cmd: &mut VulkanCommandBuffer,
-    _scene_entities_addr: u64, // Ignored, no longer used by shader
+    rigid_bodies_addr: u64,
     raw_pairs_addr: u64,
     out_rb_rb_addr: u64,
     out_rb_ps_addr: u64,
     out_ps_ps_addr: u64,
-    _out_macro_lca_addr: u64, // Ignored (probably TODO?)
-    _out_lca_lca_addr: u64,   // Ignored (probably TODO?)
+    out_macro_lca_addr: u64,
+    out_lca_lca_addr: u64,
     total_raw_pairs: u32,
     num_rigid_bodies: u32,
   ) {
@@ -2244,8 +2255,11 @@ impl VulkanComputeKernels {
       out_rb_rb: out_rb_rb_addr,
       out_rb_ps: out_rb_ps_addr,
       out_ps_ps: out_ps_ps_addr,
+      out_macro_lca: out_macro_lca_addr,
+      out_lca_lca: out_lca_lca_addr,
       max_pairs: 4000, // Matches the allocation capacity in gpu_backends.rs
       num_rigid_bodies,
+      rigid_bodies: rigid_bodies_addr,
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
@@ -2269,8 +2283,8 @@ impl VulkanComputeKernels {
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -2299,6 +2313,7 @@ impl VulkanComputeKernels {
     out_rb_ps_addr: u64,
     out_ps_ps_addr: u64,
     out_cross_pairs_addr: u64,
+    internal_pairs_addr: u64,
     total_queries: u32,
     max_pairs: u32,
   ) {
@@ -2316,6 +2331,7 @@ impl VulkanComputeKernels {
       out_rb_ps: out_rb_ps_addr,
       out_ps_ps: out_ps_ps_addr,
       out_cross_pairs: out_cross_pairs_addr,
+      internal_pairs: internal_pairs_addr,
       total_queries,
       max_pairs,
     };
@@ -2341,8 +2357,8 @@ impl VulkanComputeKernels {
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -2410,8 +2426,8 @@ impl VulkanComputeKernels {
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -2434,7 +2450,7 @@ impl VulkanComputeKernels {
     dt: timeus_t,
   ) -> GpuResult<()> {
     let wg_size = 128;
-    let total_particles = particles.capacity() as u32;
+    let total_particles = (particles.capacity() as u32 / 320) * 32;
     let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
     let dt_sec = dt as f32 / 1_000_000.0;
 
@@ -2463,7 +2479,7 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
 
       // TODO switch to synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -2471,8 +2487,8 @@ impl VulkanComputeKernels {
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -2528,15 +2544,15 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
 
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -2555,7 +2571,7 @@ impl VulkanComputeKernels {
     _bvh: &VulkanBuffer<()>,
     particles: &mut VulkanBuffer<f32>,
   ) -> GpuResult<()> {
-    let total_particles = particles.capacity() as u32;
+    let total_particles = (particles.capacity() as u32 / 320) * 32;
     let dispatch_groups = (total_particles + 127) / 128;
 
     let pc_bh = BarnesHutPushConstants {
@@ -2587,7 +2603,7 @@ impl VulkanComputeKernels {
         0,
         bytes_bh,
       );
-      device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
 
       // TODO swittch to synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -2595,8 +2611,8 @@ impl VulkanComputeKernels {
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -2618,7 +2634,7 @@ impl VulkanComputeKernels {
     dt: timeus_t,
   ) -> GpuResult<()> {
     let wg_size = 128;
-    let total_particles = particles.capacity() as u32;
+    let total_particles = (particles.capacity() as u32 / 320) * 32;
     let num_kinematics = kinematics.capacity() as u32;
     let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
     let dt_sec = dt as f32 / 1_000_000.0;
@@ -2652,7 +2668,7 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
 
       // TODO switch to synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -2660,8 +2676,8 @@ impl VulkanComputeKernels {
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -2682,7 +2698,7 @@ impl VulkanComputeKernels {
     particles: &VulkanBuffer<f32>,
     _dt: timeus_t,
   ) -> GpuResult<VulkanBuffer<()>> {
-    let total_particles = particles.capacity() as u32;
+    let total_particles = (particles.capacity() as u32 / 320) * 32;
     let wg_size = 128;
     let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
 
@@ -2736,7 +2752,7 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
 
       // TODO switch to synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -2744,8 +2760,8 @@ impl VulkanComputeKernels {
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -2769,6 +2785,7 @@ impl VulkanComputeKernels {
       bvh: bvh_addr,
       depth_indices_addr,
       total_nodes_at_depth: total_nodes,
+      _pad: 0,
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(
@@ -2792,7 +2809,7 @@ impl VulkanComputeKernels {
       );
       let wg_size = 256;
       let dispatch_groups = (total_nodes + wg_size - 1) / wg_size;
-      device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
     }
     Ok(())
   }
@@ -2850,7 +2867,7 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
 
       // TODO switch to synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -2858,8 +2875,8 @@ impl VulkanComputeKernels {
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -2927,8 +2944,8 @@ impl VulkanComputeKernels {
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -2989,7 +3006,7 @@ impl VulkanComputeKernels {
       device.cmd_pipeline_barrier(
         cmd.cmd,
         vk::PipelineStageFlags::TRANSFER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -3008,7 +3025,7 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
 
       // TODO switch to synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -3016,8 +3033,8 @@ impl VulkanComputeKernels {
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -3059,7 +3076,7 @@ impl VulkanComputeKernels {
       device.cmd_pipeline_barrier(
         cmd.cmd,
         vk::PipelineStageFlags::TRANSFER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -3089,7 +3106,7 @@ impl VulkanComputeKernels {
       device.cmd_pipeline_barrier(
         cmd.cmd,
         vk::PipelineStageFlags::TRANSFER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -3208,8 +3225,8 @@ impl VulkanComputeKernels {
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -3238,8 +3255,8 @@ impl VulkanComputeKernels {
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -3319,7 +3336,7 @@ impl VulkanComputeKernels {
       device.cmd_pipeline_barrier(
         cmd.cmd,
         vk::PipelineStageFlags::TRANSFER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -3372,7 +3389,7 @@ impl VulkanComputeKernels {
       device.cmd_pipeline_barrier(
         cmd.cmd,
         vk::PipelineStageFlags::TRANSFER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -4220,7 +4237,7 @@ impl Kernels for Device {
       self.device.cmd_pipeline_barrier(
         cmd.cmd,
         ash::vk::PipelineStageFlags::TRANSFER,
-        ash::vk::PipelineStageFlags::COMPUTE_SHADER,
+        ash::vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         ash::vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -4243,7 +4260,7 @@ impl Kernels for Device {
           &self.device,
           cmd,
           particles.address,
-          particles.capacity() as u32,
+          ((particles.capacity() as u32 / 320) * 32 / 320) * 32,
           dt,
         );
         Ok(())
@@ -4318,7 +4335,7 @@ impl Kernels for Device {
           cmd,
           particles.address,
           0u64,
-          particles.capacity() as u32,
+          (particles.capacity() as u32 / 320) * 32,
           dt,
           current_time_us,
         );
@@ -4366,6 +4383,7 @@ impl Kernels for Device {
     cmd: &mut Self::Cmd,
     bodies: &Self::Buffer<RigidBodyImex>,
     leaves_addr: u64,
+    lca_entities_addr: u64,
     total_entities: u32,
     dt: timeus_t,
   ) -> EngineResult<()> {
@@ -4377,6 +4395,7 @@ impl Kernels for Device {
           cmd,
           bodies.address,
           leaves_addr,
+          lca_entities_addr,
           total_entities,
           dt,
         );
@@ -4465,6 +4484,7 @@ impl Kernels for Device {
     out_rb_ps_addr: u64,
     out_ps_ps_addr: u64,
     out_cross_pairs_addr: u64,
+    internal_pairs_addr: u64,
     total_queries: u32,
     max_pairs: u32,
   ) -> EngineResult<()> {
@@ -4483,6 +4503,7 @@ impl Kernels for Device {
           out_rb_ps_addr,
           out_ps_ps_addr,
           out_cross_pairs_addr,
+          internal_pairs_addr,
           total_queries,
           max_pairs,
         );
@@ -4573,7 +4594,7 @@ impl Device {
         bytes,
       );
 
-      self.device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      if dispatch_groups > 0 { self.device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
     }
     Ok(())
   }
@@ -4633,8 +4654,8 @@ impl Device {
         .dst_access_mask(ash::vk::AccessFlags::SHADER_READ);
       self.device.cmd_pipeline_barrier(
         cmd.cmd,
-        ash::vk::PipelineStageFlags::COMPUTE_SHADER,
-        ash::vk::PipelineStageFlags::COMPUTE_SHADER,
+        ash::vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        ash::vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         ash::vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],
@@ -4672,8 +4693,8 @@ impl Device {
 
       self.device.cmd_pipeline_barrier(
         cmd.cmd,
-        ash::vk::PipelineStageFlags::COMPUTE_SHADER,
-        ash::vk::PipelineStageFlags::COMPUTE_SHADER,
+        ash::vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        ash::vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         ash::vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
         &[],

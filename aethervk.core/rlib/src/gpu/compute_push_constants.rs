@@ -4,7 +4,7 @@
 /// Legacy rigid-body GPU layout. Kept for old `p3-4_imex_rigidbody_imr.comp` interop.
 /// New code should use [`RigidBodyImex`].
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct RigidBodyLegacyGpu {
   pub position: [f32; 3],
   pub mass: f32,
@@ -40,7 +40,7 @@ pub type RigidBodyGpu = RigidBodyLegacyGpu;
 /// };
 /// ```
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct RigidBodyImex {
   /// CoM position (xyz) + mass (w).
   pub position_mass: [f32; 4],
@@ -58,14 +58,14 @@ pub struct RigidBodyImex {
   pub leaf_count: u32,
   pub shape_type: u32,
   pub shape_extents: [f32; 3],
-  pub _pad: u32,
+  pub frame_idx: u32,
 }
 
 // ── Wrench (force + torque) ────────────────────────────────────────────────────
 /// 6-DOF wrench accumulated per rigid body. Matches `imex_math.glsl Wrench`.
 /// Layout: `struct Wrench { vec3 force; vec3 torque; }` — 6 floats, 24 bytes.
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Wrench {
   pub force: [f32; 3],
   pub _pad0: f32,
@@ -75,7 +75,7 @@ pub struct Wrench {
 
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct BvhNodeAABBGpu {
   pub min_bounds: [f32; 3],
   pub _pad_min: f32,
@@ -93,7 +93,7 @@ pub struct BvhNodeAABBGpu {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct P1_2PushConstants {
   pub particles_addr: u64,
   pub dt: f32,
@@ -101,27 +101,29 @@ pub struct P1_2PushConstants {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct P3_4PushConstants {
   pub rigid_bodies_addr: u64,
   pub emitters_addr: u64,
   pub dt: f32,
   pub total_bodies: u32,
   pub num_emitters: u32,
+  pub _pad: u32,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct P5PushConstants {
   pub particles_addr: u64,
   pub emitters_addr: u64,
   pub dt: f32,
   pub total_particles: u32,
   pub num_emitters: u32,
+  pub _pad: u32,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct EntityGpu {
   pub bvh: u64,
   pub _pad0: u64,
@@ -140,9 +142,23 @@ pub struct EntityGpu {
   pub shape_data: [f32; 3],
   pub _pad2: f32,
 }
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct TlasLeaf {
+  pub min_bound: [f32; 3],
+  pub entity_idx: u32,
+  pub max_bound: [f32; 3],
+  pub metadata: u32,
+}
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct BoundingBox {
+  pub min_bound: [f32; 3],
+  pub max_bound: [f32; 3],
+}
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct BpScenePushConstants {
   pub tlas_bvh: u64,
   pub query_leaves: u64,
@@ -152,7 +168,18 @@ pub struct BpScenePushConstants {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct BpBoundsGenPushConstants {
+  pub scene_entities: u64,
+  pub tlas_leaves: u64,
+  pub lca_entities: u64,
+  pub dt_us: [u32; 2],
+  pub total_entities: u32,
+  pub _pad: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct BpParticleSelfPushConstants {
   pub bvh: u64,
   pub particles: u64,
@@ -164,7 +191,7 @@ pub struct BpParticleSelfPushConstants {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CcdPushConstants {
   pub particle_bvh: u64,
   pub output_list: u64,
@@ -173,7 +200,7 @@ pub struct CcdPushConstants {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct NarrowPhaseParticlesPushConstants {
   pub scene_entities_addr: u64,
   pub output_list_addr: u64,
@@ -185,7 +212,7 @@ pub struct NarrowPhaseParticlesPushConstants {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct NarrowPhaseRigidBodyPushConstants {
   pub scene_entities_addr: u64,
   pub output_list_addr: u64,
@@ -197,7 +224,7 @@ pub struct NarrowPhaseRigidBodyPushConstants {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LbvhPushConstants {
   pub bvh_addr: u64,
   pub sorted_morton_addr: u64,
@@ -206,18 +233,20 @@ pub struct LbvhPushConstants {
   pub num_primitives: u32,
   pub particle_radius: f32,
   pub dt: f32,
+  pub _pad: u32,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct StreamCompactPushConstants {
   pub sparse_in_addr: u64,
   pub packed_out_addr: u64,
   pub total_elements: u32,
+  pub _pad: u32,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ReduceToiPushConstants {
   pub particles_addr: u64,
   pub collisions_addr: u64,
@@ -227,19 +256,20 @@ pub struct ReduceToiPushConstants {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LcpPushConstants {
   pub particles_addr: u64,
   pub collisions_addr: u64,
   pub impulses_addr: u64,
   pub total_clusters: u32,
+  pub _pad: u32,
   pub rigid_bodies_addr: u64,
   pub dt: f32,
   pub restitution: f32,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ApplyImpulsesPushConstants {
   pub particles_addr: u64,
   pub collisions_addr: u64,
@@ -248,7 +278,7 @@ pub struct ApplyImpulsesPushConstants {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct BarnesHutPushConstants {
   pub particles_addr: u64,
   pub bvh_addr: u64,
@@ -259,7 +289,7 @@ pub struct BarnesHutPushConstants {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct AabbGpu {
   pub min_bounds: [f32; 3],
   pub _pad_min: f32,
@@ -268,7 +298,7 @@ pub struct AabbGpu {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MultiBvhNodeGpu {
   pub aabbs: [AabbGpu; 2],
   pub child_ptrs: [u32; 2],
@@ -278,27 +308,30 @@ pub struct MultiBvhNodeGpu {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LbvhPrepassPushConstants {
   pub bvh: u64,
   pub counters_addr: u64,
   pub num_internal_nodes: u32,
+  pub _pad: u32,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MotionBoundsPushConstants {
   pub bvh: u64,
   pub primitive_data_addr: u64,
   pub num_primitives: u32,
   pub dt: f32,
   pub particle_radius: f32,
+  pub _pad: u32,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MotionRefitPushConstants {
   pub bvh: u64,
   pub depth_indices_addr: u64,
   pub total_nodes_at_depth: u32,
+  pub _pad: u32,
 }

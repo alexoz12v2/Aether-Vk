@@ -422,6 +422,17 @@ public static class NativeInterop
   public static extern ulong avkSimulationContext_importModel(IntPtr ctx, string path);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern uint avkSimulationContext_getImportedModelsCount(IntPtr ctx);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern uint avkSimulationContext_getImportedModels(
+    IntPtr ctx,
+    IntPtr outIds,
+    IntPtr outPaths,
+    uint capacity
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_unloadModel(IntPtr ctx, ulong modelId);
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]

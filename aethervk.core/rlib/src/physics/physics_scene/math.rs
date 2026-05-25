@@ -234,6 +234,8 @@ mod tests {
       micro_tlases: hashbrown::HashMap::new(),
       mesh_blases: vec![],
       particle_blases: vec![],
+      mesh_entity_map: vec![],
+      particle_entity_map: vec![],
       dt_s: 0.016,
     }
   }

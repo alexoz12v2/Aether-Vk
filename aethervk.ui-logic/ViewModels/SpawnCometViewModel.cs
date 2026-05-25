@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.ViewModels;
 
@@ -47,6 +48,7 @@ public partial class SpawnCometViewModel : ObservableObject
   private ImportedModelItem? _selectedModel;
 
   public bool HasNoModels => ImportedModels.Count == 0;
+  public bool HasModels => !HasNoModels;
 
   // --- Step 2 ---
   [ObservableProperty]
@@ -169,6 +171,21 @@ public partial class SpawnCometViewModel : ObservableObject
       ImportedModels.Add(model);
     }
     SelectedModel = ImportedModels.FirstOrDefault();
+  }
+
+  [RelayCommand]
+  private async Task ImportMeshAsync()
+  {
+    var msg = new ImportModelRequestMessage();
+    WeakReferenceMessenger.Default.Send(msg);
+    var result = await msg.Response;
+    if (result != null)
+    {
+      ImportedModels.Add(result);
+      SelectedModel = result;
+      OnPropertyChanged(nameof(HasNoModels));
+      OnPropertyChanged(nameof(HasModels));
+    }
   }
 
   [RelayCommand]
