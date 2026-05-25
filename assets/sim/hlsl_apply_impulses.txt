@@ -17,34 +17,7 @@ void AtomicAddFloat(uint64_t ptr, float val) {
     } while (assumed_val != old_val);
 }
 
-float4 quat_conj(float4 q) { return float4(-q.xyz, q.w); }
-float3 quat_rotate(float4 q, float3 v) {
-    float3 t = 2.0 * cross(q.xyz, v);
-    return v + q.w * t + cross(q.xyz, t);
-}
-float3 quat_rotate_inv(float4 q, float3 v) { return quat_rotate(quat_conj(q), v); }
 
-struct ColliderId {
-    uint entity_id;
-    uint primitive_index;
-};
-
-struct PackedPair {
-    ColliderId a;
-    ColliderId b;
-    float toi;
-    uint pad0;
-    uint pad1;
-    uint pad2;
-    float3 contact_normal;
-    float pad_normal;
-    float3 contact_point;
-    float pad_point;
-    float penetration_depth;
-    uint pad3;
-    uint pad4;
-    uint pad5;
-};
 
 struct PushConstants {
     uint64_t particles;
@@ -56,7 +29,7 @@ struct PushConstants {
 [[vk::push_constant]]
 PushConstants pc;
 
-static const uint SUBGROUP_SIZE = 32;
+
 
 [numthreads(128, 1, 1)]
 void apply_impulses(uint3 tid : SV_DispatchThreadID) {

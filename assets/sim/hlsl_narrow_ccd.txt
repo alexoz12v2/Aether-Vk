@@ -81,12 +81,10 @@ void narrow_ccd(uint3 DispatchThreadID : SV_DispatchThreadID) {
     
     if (pc.space_type == 1) {
         LcaEntity lca = BDA_LOAD(LcaEntity, pc.lca_entities + lca_id * sizeof(LcaEntity));
-        float3 macro_rel_vel_au = vel_A - lca.linear_velocity;
-        pos_A = mul(lca.inv_transform, float4(pos_A, 1.0)).xyz * AU_TO_KM;
-        float3x3 lca_inv_trans_3x3 = (float3x3)lca.inv_transform;
-        vel_A = mul(lca_inv_trans_3x3, macro_rel_vel_au) * AU_TO_KM;
-        extents_A *= AU_TO_KM;
-        trans_A = lca.inv_transform; 
+        float3 macro_rel_vel_au = vel_A - lca.center_vel;
+        
+        float4x4 trans_A = float4x4(1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1);
+        // trans_A = lca.inv_transform; 
     }
     
     float3x3 rotA = quat_to_mat3(orient_A);
@@ -110,36 +108,38 @@ void narrow_ccd(uint3 DispatchThreadID : SV_DispatchThreadID) {
     
     if (compute_toi_generic(shape_A, extents_A, trans_A, vel_A, shape_B, extents_B, trans_B, vel_B, 1e-3, 10, toi, normal, contact, depth)) {
         if (pc.space_type == 1) {
-            uint count = spvAtomicIAdd(pc.cross_output_list, SPV_SCOPE_DEVICE, SPV_SEMANTICS_RELAXED, 1);
-            if (count < 4000u) {
-                CrossPair out_pair;
-                out_pair.valid = 1u;
-                out_pair.macro_id = idA;
-                out_pair.micro_id = idB;
-                out_pair.lca_id = lca_id;
-                out_pair.toi = toi;
-                out_pair.contact_normal = float4(normal, 0.0);
-                out_pair.contact_point = float4(contact, 1.0);
-                out_pair.penetration_depth = depth;
-                BDA_STORE(CrossPair, pc.cross_output_list + 16 + count * sizeof(CrossPair), out_pair);
+            CrossCollisionData out_pair;
+            out_pair.valid = 1u;
+            out_pair.macro_id = idA;
+            out_pair.micro_id = idB;
+            out_pair.lca_id = lca_id;
+            out_pair.toi = toi;
+            out_pair.norm_x = normal.x; out_pair.norm_y = normal.y; out_pair.norm_z = normal.z;
+            out_pair.pt_x = contact.x; out_pair.pt_y = contact.y; out_pair.pt_z = contact.z;
+            out_pair.penetration_depth = depth;
+            
+            uint count = spvAtomicIAdd(pc.cross_output_list + 4, SPV_SCOPE_DEVICE, SPV_SEMANTICS_RELAXED, 1);
+            if (count < BDA_LOAD(uint, pc.cross_output_list + 8)) {
+                BDA_STORE(CrossCollisionData, pc.cross_output_list + 16 + count * sizeof(CrossCollisionData), out_pair);
             }
         } else {
-            uint count = spvAtomicIAdd(pc.output_list, SPV_SCOPE_DEVICE, SPV_SEMANTICS_RELAXED, 1);
-            if (count < 4000u) {
-                SparseCollisionPair out_pair;
-                out_pair.entity_a = idA;
-                out_pair.prim_a = idA;
-                out_pair.entity_b = idB;
-                out_pair.prim_b = idB;
-                out_pair.toi = toi;
-                out_pair.contact_normal = float4(normal, 0.0);
-                out_pair.contact_point = float4(contact, 1.0);
-                out_pair.penetration_depth = depth;
-                out_pair.bda_a = pc.scene_entities + idA * 128u;
-                out_pair.bda_b = pc.scene_entities + idB * 128u;
-                out_pair.frame_bda = 0; 
-                out_pair.valid = 1u;
-                BDA_STORE(SparseCollisionPair, pc.output_list + 16 + count * sizeof(SparseCollisionPair), out_pair);
+            SparseCollisionData out_pair;
+            out_pair.entity_a = idA;
+            out_pair.prim_a = idA;
+            out_pair.entity_b = idB;
+            out_pair.prim_b = idB;
+            out_pair.toi = toi;
+            out_pair.norm_x = normal.x; out_pair.norm_y = normal.y; out_pair.norm_z = normal.z;
+            out_pair.pt_x = contact.x; out_pair.pt_y = contact.y; out_pair.pt_z = contact.z;
+            out_pair.penetration_depth = depth;
+            out_pair.bda_a = uint2((uint)(pc.scene_entities + idA * 128u), (uint)((pc.scene_entities + idA * 128u) >> 32));
+            out_pair.bda_b = uint2((uint)(pc.scene_entities + idB * 128u), (uint)((pc.scene_entities + idB * 128u) >> 32));
+            out_pair.frame_bda = uint2(0, 0);
+            out_pair.valid = 1u;
+            
+            uint count = spvAtomicIAdd(pc.output_list + 4, SPV_SCOPE_DEVICE, SPV_SEMANTICS_RELAXED, 1);
+            if (count < BDA_LOAD(uint, pc.output_list + 8)) {
+                BDA_STORE(SparseCollisionData, pc.output_list + 16 + count * sizeof(SparseCollisionData), out_pair);
             }
         }
     }

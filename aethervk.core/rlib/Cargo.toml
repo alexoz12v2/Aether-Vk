@@ -11,6 +11,7 @@ crate-type = ["rlib"]
 [features]
 # Avalonia is X11 backed with XLib. There is some work for Avalonia 12 to have wayland though.
 default = ["linux_xlib"]
+collisions = []
 std = []
 linux_xlib = []
 linux_xcb = []

@@ -47,7 +47,7 @@ void main() {
 
     // ── Thread 0: advance the 64-bit engine clock exactly once per frame ─────
     // This must happen regardless of particle count so the clock always ticks.
-    if (gid == 0u) {
+    if (gid == 0u && uint64_t(pc.clock) != 0ul) {
         uvec2 t_n  = uvec2(pc.current_time_lo, pc.current_time_hi);
         uvec2 dt_u = uvec2(pc.dt_us_lo,        pc.dt_us_hi);
         pc.clock.global_time_us = add64(t_n, dt_u);

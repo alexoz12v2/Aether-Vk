@@ -49,12 +49,14 @@ struct DepthIndicesType; struct CrossPairBufferType; struct ClockBufferType;
 // ------------------------------------------------------------------
 // BDA Native Float Atomics
 // ------------------------------------------------------------------
+[[vk::ext_instruction(227)]] uint spvAtomicCompareExchange(uint64_t Pointer, uint Scope, uint SemanticsEqual, uint SemanticsUnequal, uint Value, uint Comparator);
 void bda_atomic_add_float(vk::BufferPointer<uint> buf, uint idx, float val) {
-    uint old_val = buf[idx]; uint assumed_val;
+    uint old_val = vk::RawBufferLoad<uint>((uint64_t)buf + idx * 4);
+    uint assumed_val;
     do {
         assumed_val = old_val;
         uint new_val = asuint(asfloat(assumed_val) + val);
-        InterlockedCompareExchange(buf[idx], assumed_val, new_val, old_val);
+        old_val = spvAtomicCompareExchange((uint64_t)buf + idx * 4, 1, 0, 0, new_val, assumed_val);
     } while (assumed_val != old_val);
 }
 
@@ -110,21 +112,24 @@ struct SparseCollisionData {
     float pt_x; float pt_y; float pt_z; uint pad5;
 };
 
-struct RigidBody { EntityHeader header; float pos_x; float pos_y; float pos_z; float mass; float orient_x; float orient_y; float orient_z; float orient_w; float lin_vel_x; float lin_vel_y; float lin_vel_z; float lin_drag; float ang_vel_x; float ang_vel_y; float ang_vel_z; float ang_drag; float inv_inertia_x; float inv_inertia_y; float inv_inertia_z; float pad_inv; uint wrench_idx; uint leaf_start_idx; uint leaf_count; uint shape_type; float shape_x; float shape_y; float shape_z; uint pad2; };
+struct EntityHeader { uint type; uint pad[3]; };
+struct RigidBody { EntityHeader header; float4 position_mass; float4 orientation; float4 linear_vel_drag; float4 angular_vel_drag; float4 inertia_tensor_inv; uint wrench_idx; uint leaf_start_idx; uint leaf_count; uint shape_type; float3 shape_extents; uint pad2; };
 struct Wrench { uint force_x; uint force_y; uint force_z; uint torque_x; uint torque_y; uint torque_z; };
-struct ForceEmitter { float pos_x; float pos_y; float pos_z; float mu; float norm_x; float norm_y; float norm_z; uint type_id; float trunc_distance; float scale_factor; uint _pad[2]; };
+struct ForceEmitter { float3 position; float mu; float3 normal; uint type_id; float trunc_distance; float scale_factor; uint _pad[2]; };
 struct LcaEntity {
     EntityHeader header;
-    float center_pos_x; float center_pos_y; float center_pos_z; float scale;
-    float center_vel_x; float center_vel_y; float center_vel_z; float soi_radius;
+    float3 center_pos; float scale;
+    float3 center_vel; float soi_radius;
     uint frame_type; uint parent_frame_idx; uint bvh_root_index; uint pad0;
     uint64_t entity_id_raw; uint _pad1; uint _pad2;
 };
-struct TLASLeaf { float min_x; float min_y; float min_z; uint entity_idx; float max_x; float max_y; float max_z; uint metadata; };
+struct TLASLeaf { float3 min_bound; uint entity_idx; float3 max_bound; uint metadata; uint64_t bda; };
+struct AABB { float3 minBounds; float3 maxBounds; };
+bool intersectAABB(AABB a, AABB b) { return a.maxBounds.x >= b.minBounds.x && a.minBounds.x <= b.maxBounds.x && a.maxBounds.y >= b.minBounds.y && a.minBounds.y <= b.maxBounds.y && a.maxBounds.z >= b.minBounds.z && a.minBounds.z <= b.maxBounds.z; }
 struct DrawIndirectCommand { uint vertexCount; uint instanceCount; uint firstVertex; uint firstInstance; };
 struct CrossPair { uint macro_id; uint micro_id; uint lca_id; uint pad; };
 struct CrossCollisionData { uint valid; uint macro_id; uint micro_id; uint lca_id; float toi; uint pad1[3]; float norm_x; float norm_y; float norm_z; uint pad2; float pt_x; float pt_y; float pt_z; float penetration_depth; };
-struct EntityHeader { uint type; uint pad[3]; };
+// EntityHeader moved to line 113
 struct MegaParticleData { uint id_low; uint id_high; uint age_low; uint age_high; float pos_x; float pos_y; float pos_z; float mass; float vel_x; float vel_y; float vel_z; uint is_active; };
 
 struct MultiBvhNode {

@@ -30,7 +30,7 @@ void main() {
 
     if (len > 0.0001) {
         vec2 screenNormalDir = clipNormal.xy / len;
-        float outlineThickness = 0.15;
+        float outlineThickness = 0.03;
 
         // Multiply back by clipPos.w to keep the outline thickness constant
         // in screen-space, regardless of distance from the camera.

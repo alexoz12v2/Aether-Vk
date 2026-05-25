@@ -274,6 +274,8 @@ where
     // VV corrector: v_{n+1/2} → v_{n+1} using F(x_{n+1})
     kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, dt, current_time)?;
   } else {
+    
+    {
     while current_time < end_time {
       let dt = end_time - current_time;
 
@@ -315,7 +317,7 @@ where
       // (The caller manages the pair-list buffers; for now we reuse bvh.address
       //  as a placeholder TLAS address until a proper TLAS builder is wired in.)
       let tlas_bvh_addr = tlas_addr;
-      let raw_pairs = AutoDiscard::new(
+      let mut raw_pairs = AutoDiscard::new(
         kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 10_000)?,
         |b| kernels.discard_list(b),
       );
@@ -380,6 +382,7 @@ where
       if frames.capacity() > 1 {
         kernels.bp_cross_lca(
           &mut cmd,
+          tlas_bvh_addr,
           frames.address(),
           query_leaves.address(),
           rigid_bodies.address(),
@@ -393,6 +396,8 @@ where
         )?;
       }
       // Particle self-collision via Hookean spring forces
+      let p_copy = ash::vk::BufferCopy::default()
+      .size((particles.capacity().max(1) * 10 * core::mem::size_of::<f32>()) as u64);
       let p_addr = particles.address();
       let p_cap = particles.capacity() as u32;
       kernels.bp_particle_self(
@@ -407,15 +412,19 @@ where
       )?;
 
       // ── Merge classified pairs → global collision list ────────────────────
-      let (globals, space_type) = if frames.capacity() > 1 {
-        (&*internal_pairs, 1)
-      } else {
-        (&*rb_rb_pairs, 0)
-      };
       let sparse_collisions = AutoDiscard::new(
-        kernels.narrow_ccd(&mut cmd, globals, &rigid_bodies, &particles, frames.address(), space_type)?,
+        kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 10000)?,
         |b| kernels.discard_list(b),
       );
+
+      // 1) Standard CCD for rb_rb_pairs
+      kernels.narrow_ccd(&mut cmd, &*rb_rb_pairs, &rigid_bodies, &particles, frames.address(), 0, &sparse_collisions)?;
+
+      // 2) Cross-LCA CCD for internal_pairs
+      if frames.capacity() > 1 {
+        kernels.narrow_ccd(&mut cmd, &*internal_pairs, &rigid_bodies, &particles, frames.address(), 1, &sparse_collisions)?;
+      }
+
       let compacted = AutoDiscard::new(
         kernels.compact_collisions(&mut cmd, &sparse_collisions, time_collision_delta)?,
         |b| kernels.discard_list(b),
@@ -524,6 +533,7 @@ where
         aethervk_oshal_rlib::log!("gpu_backends.rs: calling kernels.write_back_to_scene!");
         current_time = end_time;
       }
+    }
     }
   }
 

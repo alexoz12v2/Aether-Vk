@@ -26,7 +26,7 @@ struct PushConstants {
 
 [[vk::push_constant]] PushConstants pc;
 
-static const uint SUBGROUP_SIZE = 32;
+
 
 [numthreads(128, 1, 1)]
 void convert_particles(uint3 DispatchThreadID : SV_DispatchThreadID) {

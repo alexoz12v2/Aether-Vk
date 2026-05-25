@@ -104,6 +104,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         Ok(())
     }
 
+    
     fn bp_clear(&self, cmd: &mut Self::Cmd, raw_pairs_addr: u64, out_rb_rb_addr: u64, out_rb_ps_addr: u64, out_rb_lca_addr: u64, out_internal: u64) -> EngineResult<()> { 
         if self.target == MockTargetShader::BpClear {
             self.base.bp_clear(cmd, raw_pairs_addr, out_rb_rb_addr, out_rb_ps_addr, out_rb_lca_addr, out_internal)?;
@@ -111,6 +112,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         Ok(())
     }
 
+    
     fn bp_bounds_gen(&self, cmd: &mut Self::Cmd, bodies: &Self::Buffer<RigidBodyImex>, leaves_addr: u64, total_entities: u32, dt: timeus_t) -> EngineResult<()> { 
         if self.target == MockTargetShader::BpBoundsGen {
             self.base.bp_bounds_gen(cmd, bodies, leaves_addr, total_entities, dt)?;
@@ -118,6 +120,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         Ok(())
     }
 
+    
     fn bp_scene(&self, cmd: &mut Self::Cmd, tlas_bvh_addr: u64, query_leaves_addr: u64, overlapping_pairs_addr: u64, tlas_root_index: u32, total_queries: u32) -> EngineResult<()> { 
         if self.target == MockTargetShader::BpScene {
             self.base.bp_scene(cmd, tlas_bvh_addr, query_leaves_addr, overlapping_pairs_addr, tlas_root_index, total_queries)?;
@@ -125,6 +128,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         Ok(())
     }
 
+    
     fn bp_classify(
       &self,
       cmd: &mut Self::Cmd,
@@ -144,9 +148,11 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         Ok(())
     }
 
+      
       fn bp_cross_lca(
         &self,
         cmd: &mut Self::Cmd,
+        tlas_bvh_addr: u64,
         lca_entities_addr: u64,
         macro_leaves_addr: u64,
         entity_headers_addr: u64,
@@ -159,13 +165,14 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         max_pairs: u32,
       ) -> EngineResult<()> {
           self.base.bp_cross_lca(
-              cmd, lca_entities_addr, macro_leaves_addr, entity_headers_addr,
+              cmd, tlas_bvh_addr, lca_entities_addr, macro_leaves_addr, entity_headers_addr,
               lca_query_pairs_addr, out_rb_rb_addr, out_rb_ps_addr, out_ps_ps_addr,
               out_cross_pairs_addr, total_queries, max_pairs
           )?;
           Ok(())
       }
 
+    
     fn bp_particle_self(&self, cmd: &mut Self::Cmd, bvh_addr: u64, particles: &mut Self::Buffer<f32>, wrench_buffer_addr: u64, total_particles: u32, root_index: u32, particle_radius: f32, stiffness: f32) -> EngineResult<()> { 
         if self.target == MockTargetShader::BpParticleSelf {
             self.base.bp_particle_self(cmd, bvh_addr, particles, wrench_buffer_addr, total_particles, root_index, particle_radius, stiffness)?;
@@ -177,22 +184,26 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         self.base.build_motion_bvh(cmd, kinematics, rigid_bodies, particles, dt)
     }
 
+    
     fn self_intersect_scene(&self, cmd: &mut Self::Cmd, bvh: &Self::MotionBvh) -> EngineResult<Self::List<CollisionPair>> {
         self.base.self_intersect_scene(cmd, bvh)
     }
 
+    
     fn intersect_instances(&self, cmd: &mut Self::Cmd, potentials: &Self::List<CollisionPair>, kinematics: &Self::Buffer<KinematicBody>, rigid_bodies: &Self::Buffer<RigidBodyImex>, particles: &Self::Buffer<f32>) -> EngineResult<Self::List<CollisionPair>> {
         self.base.intersect_instances(cmd, potentials, kinematics, rigid_bodies, particles)
     }
 
-    fn narrow_ccd(&self, cmd: &mut Self::Cmd, broadphase_pairs: &Self::List<CollisionPair>, rigid_bodies: &Self::Buffer<RigidBodyImex>, particles: &Self::Buffer<f32>, lca_entities: u64, space_type: u32) -> EngineResult<Self::List<CollisionPair>> {
+    
+    fn narrow_ccd(&self, cmd: &mut Self::Cmd, broadphase_pairs: &Self::List<CollisionPair>, rigid_bodies: &Self::Buffer<RigidBodyImex>, particles: &Self::Buffer<f32>, lca_entities: u64, space_type: u32, output_list: &Self::List<CollisionPair>) -> EngineResult<()> {
         if self.target == MockTargetShader::Ccd {
-            self.base.narrow_ccd(cmd, broadphase_pairs, rigid_bodies, particles, lca_entities, space_type)
+            self.base.narrow_ccd(cmd, broadphase_pairs, rigid_bodies, particles, lca_entities, space_type, output_list)
         } else {
-            self.base.build_list(cmd, broadphase_pairs.capacity())
+            Ok(())
         }
     }
 
+    
     fn compact_collisions(&self, cmd: &mut Self::Cmd, globals: &Self::List<CollisionPair>, time_delta: timeus_t) -> EngineResult<Self::List<CollisionPair>> {
         if self.target == MockTargetShader::StreamCompact {
             self.base.compact_collisions(cmd, globals, time_delta)
@@ -201,6 +212,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         }
     }
 
+    
     fn find_earliest_collision(&self, cmd: &mut Self::Cmd, compacted: &Self::List<CollisionPair>) -> EngineResult<Self::Buffer<u32>> {
         if self.target == MockTargetShader::ReduceToi {
             self.base.find_earliest_collision(cmd, compacted)
@@ -210,6 +222,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         }
     }
 
+    
     fn apply_collision_responses(&self, cmd: &mut Self::Cmd, kinematics: &Self::Buffer<KinematicBody>, rigid_bodies: &mut Self::Buffer<RigidBodyImex>, particles: &mut Self::Buffer<f32>, collisions: &Self::List<CollisionPair>, force_inelastic: bool) -> EngineResult<()> {
         if self.target == MockTargetShader::ApplyImpulses {
             self.base.apply_collision_responses(cmd, kinematics, rigid_bodies, particles, collisions, force_inelastic)?;
@@ -217,10 +230,12 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         Ok(())
     }
 
+    
     fn snapshot_dynamics(&self, cmd: &mut Self::Cmd, rigid_bodies: &Self::Buffer<RigidBodyImex>, particles: &Self::Buffer<f32>) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>)> {
         self.base.snapshot_dynamics(cmd, rigid_bodies, particles)
     }
 
+    
     fn restore_dynamics(&self, cmd: &mut Self::Cmd, rigid_bodies: &mut Self::Buffer<RigidBodyImex>, particles: &mut Self::Buffer<f32>, snapshot: &(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>)) -> EngineResult<()> {
         self.base.restore_dynamics(cmd, rigid_bodies, particles, snapshot)
     }

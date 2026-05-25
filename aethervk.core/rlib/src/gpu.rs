@@ -2044,6 +2044,7 @@ pub trait Kernels: Send + Sync {
 
   /// Zeroes all four pair-list count fields (rb_rb, rb_ps, lca, raw).
   /// Must be the first broad-phase shader each frame.
+  
   fn bp_clear(
     &self,
     cmd: &mut Self::Cmd,
@@ -2055,6 +2056,7 @@ pub trait Kernels: Send + Sync {
   ) -> EngineResult<()>;
 
   /// Generates one swept AABB (TLASLeaf) per entity.
+  
   fn bp_bounds_gen(
     &self,
     cmd: &mut Self::Cmd,
@@ -2065,6 +2067,7 @@ pub trait Kernels: Send + Sync {
   ) -> EngineResult<()>;
 
   /// Subgroup-cooperative TLAS traversal — writes raw overlapping entity pairs.
+  
   fn bp_scene(
     &self,
     cmd: &mut Self::Cmd,
@@ -2076,6 +2079,7 @@ pub trait Kernels: Send + Sync {
   ) -> EngineResult<()>;
 
   /// Classifies raw pairs into RB-RB, RB-PS, and cross-LCA typed queues.
+  
   fn bp_classify(
     &self,
     cmd: &mut Self::Cmd,
@@ -2091,9 +2095,11 @@ pub trait Kernels: Send + Sync {
 
   /// Transforms macro-frame RB AABBs into micro-frame space and traverses
   /// the micro-frame BVH to produce refined narrow-phase candidate pairs.
+  
   fn bp_cross_lca(
     &self,
     cmd: &mut Self::Cmd,
+    tlas_bvh_addr: u64,
     lca_entities_addr: u64,
     macro_leaves_addr: u64,
     entity_headers_addr: u64,
@@ -2108,6 +2114,7 @@ pub trait Kernels: Send + Sync {
 
   /// Subgroup-cooperative LBVH traversal for particle–particle self-collision.
   /// Computes Hookean repulsion and atomicAdds forces directly into AOSOA slots.
+  
   fn bp_particle_self(
     &self,
     cmd: &mut Self::Cmd,
@@ -2132,6 +2139,7 @@ pub trait Kernels: Send + Sync {
 
   /// **Deprecated**: broad-phase now handled by `bp_clear` → `bp_bounds_gen` → `bp_scene`.
   #[deprecated(since = "0.0.0", note = "use the bp_* broad-phase suite")]
+  
   fn self_intersect_scene(
     &self,
     cmd: &mut Self::Cmd,
@@ -2140,6 +2148,7 @@ pub trait Kernels: Send + Sync {
 
   /// **Deprecated**: use `bp_cross_lca` for LCA pairs and narrow CCD for rb-rb/rb-ps.
   #[deprecated(since = "0.0.0", note = "use bp_cross_lca + narrow CCD")]
+  
   fn intersect_instances(
     &self,
     cmd: &mut Self::Cmd,
@@ -2150,6 +2159,7 @@ pub trait Kernels: Send + Sync {
   ) -> EngineResult<Self::List<CollisionPair>>;
 
   /// Evaluates narrow phase CCD for a list of broad-phase entity pairs.
+  
   fn narrow_ccd(
     &self,
     cmd: &mut Self::Cmd,
@@ -2158,9 +2168,11 @@ pub trait Kernels: Send + Sync {
     particles: &Self::Buffer<f32>,
     lca_entities: u64,
     space_type: u32,
-  ) -> EngineResult<Self::List<CollisionPair>>;
+    output_list: &Self::List<CollisionPair>,
+  ) -> EngineResult<()>;
 
   /// Stream compaction shrink logic evaluated entirely on the GPU.
+  
   fn compact_collisions(
     &self,
     cmd: &mut Self::Cmd,
@@ -2170,12 +2182,14 @@ pub trait Kernels: Send + Sync {
 
   /// Parallel reduction to find the lowest `time_of_impact`.
   /// Returns a tiny buffer of length 1 containing $t_c$.
+  
   fn find_earliest_collision(
     &self,
     cmd: &mut Self::Cmd,
     compacted: &Self::List<CollisionPair>,
   ) -> EngineResult<Self::Buffer<u32>>;
 
+  
   fn apply_collision_responses(
     &self,
     cmd: &mut Self::Cmd,
@@ -2187,12 +2201,14 @@ pub trait Kernels: Send + Sync {
   ) -> EngineResult<()>;
 
   // ── CCD Rewind Subsystem ───────────────────────────────────────────────────
+  
   fn snapshot_dynamics(
     &self,
     cmd: &mut Self::Cmd,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
   ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>)>;
+  
   fn restore_dynamics(
     &self,
     cmd: &mut Self::Cmd,

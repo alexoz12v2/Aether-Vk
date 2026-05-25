@@ -10,10 +10,8 @@ struct PushConstants_radix_sort {
     uint num_blocks;
 };
 
-#ifndef KERNEL_radix_sort
 [[vk::push_constant]]
 PushConstants_radix_sort pc;
-#endif
 
 #define STAGE_COUNT   0
 #define STAGE_SCAN    1

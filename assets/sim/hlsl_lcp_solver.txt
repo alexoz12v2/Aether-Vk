@@ -42,17 +42,14 @@ float compute_effective_mass(float3 dir, float3 rA, float3 rB, float invMA, floa
     return 1.0 / max(invMA + invMB + dot(I_crossA, cross(rA, dir)) + dot(I_crossB, cross(rB, dir)), 1e-6);
 }
 
-void AtomicAddFloatShared(inout uint dest, float val) {
-    uint old_val = dest;
-    uint assumed_val;
-    uint new_val;
-    [allow_uav_condition]
-    while (true) {
-        assumed_val = old_val;
-        new_val = asuint(asfloat(assumed_val) + val);
-        InterlockedCompareExchange(dest, assumed_val, new_val, old_val);
-        if (assumed_val == old_val) break;
-    }
+#define AtomicAddFloatShared(dest, val) { \
+    uint old_val = dest; uint assumed_val; uint new_val; \
+    while (true) { \
+        assumed_val = old_val; \
+        new_val = asuint(asfloat(assumed_val) + (val)); \
+        InterlockedCompareExchange(dest, assumed_val, new_val, old_val); \
+        if (assumed_val == old_val) break; \
+    } \
 }
 
 [numthreads(128, 1, 1)]

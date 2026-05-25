@@ -1,8 +1,10 @@
 #version 450 core
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_debug_printf : enable
+#define DEBUG_SHADERS 1
 
 #include "../bvh_utils.glsl"
 #include "imex_math.glsl"
@@ -11,58 +13,45 @@
 layout(local_size_x = 256) in;
 
 layout(push_constant, std430) uniform PushConstants {
-    RigidBodyArray scene_entities;
-    SparseCollisions output_list;
-    CrossSparseCollisions cross_output_list;
-    ParticleData particles;
-    PairBuffer pair_buffer;
-    CrossPairBuffer cross_pair_buffer;
-    LcaEntityArray lca_entities;
-    float dt;
-    float particle_radius;
-    uint space_type;
+    RigidBodyArray scene_entities;    // 0-7
+    uint64_t particles;               // 8-15
+    uint64_t output_list;             // 16-23
+    uint64_t pair_buffer;             // 24-31
+    float dt;                         // 32-35
+    float particle_radius;            // 36-39
+    LcaEntityArray lca_entities;      // 40-47
+    uint space_type;                  // 48-51
+    uint _pad;                        // 52-55
 } pc;
 
 void main() {
     uint pair_idx = gl_GlobalInvocationID.x;
     
     uint idA, idB, lca_id;
-    bool is_partA = false, is_partB = false;
 
-    if (pc.space_type == 1) { // Cross
-        CrossPairBuffer cross_pairs = pc.cross_pair_buffer;
+    if (pc.space_type == 1) {
+        CrossPairBuffer cross_pairs = CrossPairBuffer(pc.pair_buffer);
         if (pair_idx >= cross_pairs.count) return;
         CrossPair pair = cross_pairs.pairs[pair_idx];
         idA = pair.macro_id;
         idB = pair.micro_id;
         lca_id = pair.lca_id;
-    } else { // Standard
-        if (pair_idx >= pc.pair_buffer.count) return;
-        uvec2 pair = pc.pair_buffer.pairs[pair_idx];
+    } else {
+        PairBuffer pairs = PairBuffer(pc.pair_buffer);
+        if (pair_idx >= pairs.count) return;
+        uvec2 pair = pairs.pairs[pair_idx];
         idA = pair.x;
         idB = pair.y;
     }
 
-    vec3 pos_A, vel_A, extents_A;
-    uint shape_A;
-    vec4 orient_A = vec4(0,0,0,1);
-
-    if (idA == 0xFFFFFFFFu) { // Sentinel for Particle (though bp_classify puts particles as ent_B usually, let's check both)
-        is_partA = true;
-    }
-    // Actually, bp_classify outputs pairs of entity IDs. Particles are not in EntityArray?
-    // Wait, in bp_classify.comp, it checks type_A = pc.scene_entities.entities[ent_A].type.
-    // So particles ARE in scene_entities! They have type = TYPE_PARTICLE_SYSTEM.
-    // Let's assume standard RigidBody loading for macro and micro, and check shape_type.
-    
     RigidBody ent_A = pc.scene_entities.bodies[idA];
     RigidBody ent_B = pc.scene_entities.bodies[idB];
     
-    shape_A = ent_A.shape_type;
-    extents_A = ent_A.shape_extents;
-    orient_A = ent_A.orientation;
-    pos_A = ent_A.position_mass.xyz;
-    vel_A = ent_A.linear_vel_drag.xyz;
+    uint shape_A = ent_A.shape_type;
+    vec3 extents_A = ent_A.shape_extents;
+    vec4 orient_A = ent_A.orientation;
+    vec3 pos_A = ent_A.position_mass.xyz;
+    vec3 vel_A = ent_A.linear_vel_drag.xyz;
     
     uint shape_B = ent_B.shape_type;
     vec3 extents_B = ent_B.shape_extents;
@@ -97,7 +86,7 @@ void main() {
 
     if (compute_toi_generic(shape_A, extents_A, trans_A, vel_A * pc.dt, shape_B, extents_B, trans_B, vel_B * pc.dt, 1e-3, 10, toi, normal, contact, depth)) {
         if (pc.space_type == 1) {
-            CrossSparseCollisions cross_out = pc.cross_output_list;
+            CrossSparseCollisions cross_out = CrossSparseCollisions(pc.output_list);
             uint count = atomicAdd(cross_out.count, 1);
             if (count < 4000u) {
                 cross_out.pairs[count].valid = 1u;
@@ -110,16 +99,18 @@ void main() {
                 cross_out.pairs[count].penetration_depth = depth;
             }
         } else {
-            uint count = atomicAdd(pc.output_list.count, 1);
+            SparseCollisions out_list = SparseCollisions(pc.output_list);
+            uint count = atomicAdd(out_list.count, 1);
             if (count < 4000u) {
-                pc.output_list.pairs[count].entity_a = idA;
-                pc.output_list.pairs[count].prim_a = idA;
-                pc.output_list.pairs[count].entity_b = idB;
-                pc.output_list.pairs[count].prim_b = idB;
-                pc.output_list.pairs[count].toi = toi;
-                pc.output_list.pairs[count].contact_normal = normal;
-                pc.output_list.pairs[count].contact_point = contact;
-                pc.output_list.pairs[count].penetration_depth = depth;
+                out_list.pairs[count].valid = 1u;
+                out_list.pairs[count].entity_a = idA;
+                out_list.pairs[count].prim_a = idA;
+                out_list.pairs[count].entity_b = idB;
+                out_list.pairs[count].prim_b = idB;
+                out_list.pairs[count].toi = toi;
+                out_list.pairs[count].contact_normal = normal;
+                out_list.pairs[count].contact_point = contact;
+                out_list.pairs[count].penetration_depth = depth;
             }
         }
     }

@@ -17,7 +17,7 @@
 // ------------------------------------------------------------------
 struct MultiBvhNode; struct RigidBody; struct Wrench; struct ForceEmitter;
 struct LcaEntity; struct TLASLeaf; struct DrawIndirectCommand; struct CrossPair;
-struct CrossCollisionData; struct EntityHeader; struct MegaMegaParticleData;
+struct CrossCollisionData; struct EntityHeader; struct MegaParticleData;
 struct PairBufferType; struct PackedCollisionsType; struct SparseCollisionsType;
 struct DepthIndicesType; struct CrossPairBufferType; struct ClockBufferType;
 
@@ -44,17 +44,18 @@ struct DepthIndicesType; struct CrossPairBufferType; struct ClockBufferType;
 [[vk::ext_instruction(124)]] vk::BufferPointer<DepthIndicesType> cast_u2_depth(uint2 val);
 [[vk::ext_instruction(124)]] vk::BufferPointer<ClockBufferType> cast_u2_clock(uint2 val);
 [[vk::ext_instruction(124)]] vk::BufferPointer<DrawIndirectCommand> cast_u2_indirect(uint2 val);
-[[vk::ext_instruction(124)]] vk::BufferPointer<MegaMegaParticleData> cast_u2_mega(uint2 val);
+[[vk::ext_instruction(124)]] vk::BufferPointer<MegaParticleData> cast_u2_mega(uint2 val);
 
 // ------------------------------------------------------------------
 // BDA Native Float Atomics
 // ------------------------------------------------------------------
 void bda_atomic_add_float(vk::BufferPointer<uint> buf, uint idx, float val) {
-    uint old_val = vk::RawBufferLoad<uint>(buf + idx * 4); uint assumed_val;
+    uint old_val = vk::RawBufferLoad<uint>((uint64_t)buf + idx * 4);
+    uint assumed_val;
     do {
         assumed_val = old_val;
         uint new_val = asuint(asfloat(assumed_val) + val);
-        InterlockedCompareExchange(vk::RawBufferLoad<uint>(buf + idx * 4), assumed_val, new_val, old_val);
+        old_val = spvAtomicCompareExchange((uint64_t)buf + idx * 4, 1, 0, 0, new_val, assumed_val);
     } while (assumed_val != old_val);
 }
 
@@ -110,6 +111,7 @@ struct SparseCollisionData {
     float pt_x; float pt_y; float pt_z; uint pad5;
 };
 
+struct EntityHeader { uint type; uint pad[3]; };
 struct RigidBody { EntityHeader header; float pos_x; float pos_y; float pos_z; float mass; float orient_x; float orient_y; float orient_z; float orient_w; float lin_vel_x; float lin_vel_y; float lin_vel_z; float lin_drag; float ang_vel_x; float ang_vel_y; float ang_vel_z; float ang_drag; float inv_inertia_x; float inv_inertia_y; float inv_inertia_z; float pad_inv; uint wrench_idx; uint leaf_start_idx; uint leaf_count; uint shape_type; float shape_x; float shape_y; float shape_z; uint pad2; };
 struct Wrench { uint force_x; uint force_y; uint force_z; uint torque_x; uint torque_y; uint torque_z; };
 struct ForceEmitter { float pos_x; float pos_y; float pos_z; float mu; float norm_x; float norm_y; float norm_z; uint type_id; float trunc_distance; float scale_factor; uint _pad[2]; };
@@ -124,8 +126,8 @@ struct TLASLeaf { float min_x; float min_y; float min_z; uint entity_idx; float 
 struct DrawIndirectCommand { uint vertexCount; uint instanceCount; uint firstVertex; uint firstInstance; };
 struct CrossPair { uint macro_id; uint micro_id; uint lca_id; uint pad; };
 struct CrossCollisionData { uint valid; uint macro_id; uint micro_id; uint lca_id; float toi; uint pad1[3]; float norm_x; float norm_y; float norm_z; uint pad2; float pt_x; float pt_y; float pt_z; float penetration_depth; };
-struct EntityHeader { uint type; uint pad[3]; };
-struct MegaMegaParticleData { uint id_low; uint id_high; uint age_low; uint age_high; float pos_x; float pos_y; float pos_z; float mass; float vel_x; float vel_y; float vel_z; uint is_active; };
+// EntityHeader moved to line 113
+struct MegaParticleData { uint id_low; uint id_high; uint age_low; uint age_high; float pos_x; float pos_y; float pos_z; float mass; float vel_x; float vel_y; float vel_z; uint is_active; };
 
 struct MultiBvhNode {
     float min_x[64]; float max_x[64]; float min_y[64]; float max_y[64]; float min_z[64]; float max_z[64];
@@ -379,12 +381,10 @@ bool compute_toi_generic(
 // (barnes_hut, bp_particle_self, narrow-phase) can safely atomicAdd into them.
 // The half-kick velocity v_{n+½} is stored temporarily in slots 3/4/5 for
 // integrate_particles_p4_5 to complete the VV corrector step.
-//
-// Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
-
-
-
-[numthreads(128, 1, 1)]
+#ifndef P_READ
+#define P_READ(ptr, offset) vk::RawBufferLoad<float>((uint64_t)ptr + (offset) * 4)
+#define P_WRITE(ptr, offset, val) vk::RawBufferStore<float>((uint64_t)ptr + (offset) * 4, val)
+#endif
 
 struct PushConstants_integrate_particles_p1_p2 {
     MegaParticleData particles;
@@ -395,6 +395,7 @@ struct PushConstants_integrate_particles_p1_p2 {
 [[vk::push_constant]]
 PushConstants_integrate_particles_p1_p2 pc;
 
+[numthreads(128, 1, 1)]
 void integrate_particles_p1_p2(uint3 DispatchThreadID : SV_DispatchThreadID) {
     uint gid = DispatchThreadID.x;
     if (gid >= pc.total_particles) return;
@@ -430,7 +431,7 @@ void integrate_particles_p1_p2(uint3 DispatchThreadID : SV_DispatchThreadID) {
 
 // --- hlsl_integrate_bodies_p3.txt ---
 
-#include "imex_math.hlsl"
+
 
 #ifdef KERNEL_integrate_bodies_p3
 struct PushConstants {
@@ -548,7 +549,7 @@ void integrate_bodies_p3(uint3 tid : SV_DispatchThreadID) {
 
 // --- hlsl_rb_force_assign.txt ---
 
-#include "imex_math.hlsl"
+
 
 #ifndef BDA_LOAD
 #define BDA_LOAD(T, addr) vk::RawBufferLoad<T>(addr)
@@ -683,8 +684,6 @@ void rb_force_assign(
 //
 // Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
 
-[numthreads(128, 1, 1)]
-
 struct PushConstants_integrate_particles_p4_5 {
     uint64_t particles;
     uint64_t clock;
@@ -698,7 +697,7 @@ struct PushConstants_integrate_particles_p4_5 {
 
 [[vk::push_constant]]
 PushConstants_integrate_particles_p4_5 pc;
-
+[numthreads(128, 1, 1)]
 void integrate_particles_p4_5(uint3 DispatchThreadID : SV_DispatchThreadID) {
     uint gid = DispatchThreadID.x;
 
@@ -769,7 +768,7 @@ void integrate_particles_p4_5(uint3 DispatchThreadID : SV_DispatchThreadID) {
 [[vk::ext_instruction(230)]] uint spvAtomicCompareExchange([[vk::ext_reference]] uint64_t ptr, uint scope, uint semanticsEqual, uint semanticsUnequal, uint value, uint comparator);
 
 #include "../debug_utils.h"
-#include "../bvh_utils.h"
+
 
 struct PushConstants {
     uint64_t raw_scene_pairs;
@@ -1497,7 +1496,7 @@ void bp_particle_self(uint3 DispatchThreadID : SV_DispatchThreadID, uint3 GroupI
 // --- hlsl_ccd.txt ---
 [numthreads(128, 1, 1)]
 
-#include "../bvh_utils.glsl"
+
 #include "gjk_cta_utils.glsl"
 
 struct PushConstants_ccd {
@@ -1631,9 +1630,9 @@ void ccd(uint3 DispatchThreadID : SV_DispatchThreadID) {
 
 [[vk::ext_instruction(234)]] uint spvAtomicIAdd([[vk::ext_reference]] uint64_t ptr, uint scope, uint semantics, uint value);
 
-#include "../bvh_utils.glsl"
+
 #include "imex_math.glsl"
-#include "physics_core.glsl"
+
 
 struct PushConstants {
     uint64_t scene_entities;
@@ -1768,7 +1767,7 @@ void narrow_ccd(uint3 DispatchThreadID : SV_DispatchThreadID) {
 
 // --- hlsl_lcp_solver.txt ---
 
-#include "imex_math.hlsl"
+
 
 #define MAX_BODIES_PER_ISLAND 32
 #define SUBGROUP_SIZE 32
@@ -2647,7 +2646,7 @@ void lbvh_prepass(uint3 DispatchThreadID : SV_DispatchThreadID) {
 
 
 // --- hlsl_morton_encode.txt ---
-#include "../bvh_utils.glsl"
+
 #include "../debug_utils.glsl"
 
 // BDA Memory Access Macros
@@ -3286,8 +3285,8 @@ void convert_particles(uint3 DispatchThreadID : SV_DispatchThreadID) {
 }
 
 // --- hlsl_barnes_hut.txt ---
-#include "../bvh_utils.h"
-#include "imex_math.h"
+
+
 
 #ifndef SUBGROUP_SIZE
 #define SUBGROUP_SIZE 32

@@ -523,6 +523,14 @@ fn process_command_internal(
         -delta_x * rotation_speed, // negate for natural mouse drag
         -delta_y * rotation_speed,
       )?;
+      if let Some(ext_id) =
+        scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
+      {
+        scene_read.mark_component_changed(
+          ext_id,
+          <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+        );
+      }
       Ok(SimulationTaskResult::None)
     }
     LogicCommand::ZoomCamera(crate::simulation_api::structs::ZoomCamera {
@@ -617,6 +625,14 @@ fn process_command_internal(
         .ok_or(EngineError::InvalidOperation(
           "logic_thread:ResetCamera | camera entity doesn't have TransformComponent",
         ))?;
+      if let Some(ext_id) =
+        scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
+      {
+        scene_read.mark_component_changed(
+          ext_id,
+          <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+        );
+      }
       Ok(SimulationTaskResult::None)
     }
     LogicCommand::PanCamera(crate::simulation_api::structs::PanCamera {
