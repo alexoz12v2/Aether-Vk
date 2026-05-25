@@ -214,8 +214,7 @@ mod tests {
       parent_frame_idx: u32::MAX,
       bvh_root_index: 0,
       entity_id_raw: 1,
-      _pad0: 0,
-      _pad1: 0,
+      frame_bda: 0,
     }];
 
     let gpu_bvh_nodes = vec![GpuBvhNode {

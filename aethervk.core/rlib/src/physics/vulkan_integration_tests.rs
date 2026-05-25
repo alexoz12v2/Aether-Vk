@@ -127,7 +127,7 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "HACK: RigidBody collisions are completely unsupported in the new IMEX architecture. This test crashes with SIGABRT. Un-ignore when fixed."]
+  #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
   fn test_vulkan_single_frame_all_shapes_collision_full() {
     
     let ctx = VulkanTestContext::new();
@@ -396,7 +396,7 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "HACK: RigidBody collisions are completely unsupported in the new IMEX architecture. This test crashes with SIGABRT. Un-ignore when fixed."]
+  #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
   fn test_vulkan_cross_frame_lca_collision_full() {
     
     let ctx = VulkanTestContext::new();

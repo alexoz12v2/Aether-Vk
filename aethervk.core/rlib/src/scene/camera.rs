@@ -81,22 +81,36 @@ impl SceneCameraExt for Scene {
 
     self
       .with_component_mut(camera_entity, |t: &mut TransformComponent| {
-        let distance = {
-          let v = t.position - center_pos;
-          if v.length_squared() > 0.001 {
-            v.length()
-          } else {
-            0.1_f32
-          }
-        };
-        let (pitch, yaw) = updated_pitch_yaw(&t, delta_pitch, delta_yaw);
-        let q = Quat::from_pitch_and_yaw_radians(pitch, yaw);
+        let offset_vec = t.position - center_pos;
+        let distance;
+        let mut current_pitch;
+        let mut current_yaw;
+
+        if offset_vec.length_squared() > 0.001 {
+          distance = offset_vec.length();
+          let fwd = -(offset_vec / distance);
+          let pitch_clamped = fwd.z().clamp(-1.0, 1.0);
+          current_pitch = <f32 as aethervk_oshal_rlib::math::FloatLike>::asin(pitch_clamped);
+          current_yaw = <f32 as aethervk_oshal_rlib::math::FloatLike>::atan2(fwd.x(), -fwd.y());
+        } else {
+          distance = 0.1_f32;
+          let (p, y) = t.rotation.to_pitch_yaw();
+          current_pitch = p;
+          current_yaw = y;
+        }
+
+        let mut p = current_pitch + delta_pitch;
+        let mut y = current_yaw + delta_yaw;
+        p = p.clamp(-<f32 as FloatOps>::PI_OVER_2, <f32 as FloatOps>::PI_OVER_2);
+        y = y.fmod(<f32 as FloatOps>::PI * 2.0);
+
+        let q = Quat::from_pitch_and_yaw_radians(p, y);
 
         // Offset starts at world North (+Y)
         // Camera Forward is -Y, so placing it at +Y distance means it looks at origin
-        let offset = q.rotate_vector(Vec3f32::from_components(0.0, distance, 0.0));
+        let new_offset = q.rotate_vector(Vec3f32::from_components(0.0, distance, 0.0));
 
-        t.position = center_pos + offset;
+        t.position = center_pos + new_offset;
         t.rotation = q;
       })
       .ok_or(EngineError::InvalidOperation(

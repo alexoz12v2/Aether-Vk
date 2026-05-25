@@ -696,6 +696,14 @@ fn process_command_internal(
           <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
         );
       }
+      if let Some(ext_id) =
+        scene_read.entity_map.iter().find(|&(_, v)| *v == cursor_entity).map(|(k, _)| *k)
+      {
+        scene_read.mark_component_changed(
+          ext_id,
+          <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+        );
+      }
       Ok(SimulationTaskResult::None)
     }
     LogicCommand::PanCursor(_) => Ok(SimulationTaskResult::None),

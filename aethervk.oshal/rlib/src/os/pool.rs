@@ -347,6 +347,14 @@ mod pthread_pool {
   impl Drop for ThreadPool {
     fn drop(&mut self) {
       self.state.shutdown.store(true, Ordering::SeqCst);
+      
+      // Clear the queues so that any dropped workloads that hold references
+      // preventing threads from exiting are released!
+      self.state.shared_queue.lock().clear();
+      for q in &self.state.local_queues {
+        q.lock().clear();
+      }
+
       for &thread in &self.threads {
         unsafe {
           pthread_join(thread, ptr::null_mut());
@@ -391,6 +399,10 @@ mod pthread_pool {
             state.pending_tasks.fetch_sub(1, Ordering::Release);
           }
           WorkloadStatus::Yield => {
+            if state.shutdown.load(Ordering::Acquire) {
+              continue;
+            }
+
             let mut target_q = None;
             if let Some(tid) = workload.tasklet_id() {
               let num_threads = state.local_queues.len();
