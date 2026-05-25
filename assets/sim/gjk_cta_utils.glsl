@@ -369,7 +369,7 @@ vec3 support_shape(uint shape_type, vec3 shape_data, mat4 transform, vec3 dir) {
     vec3 local_dir = (inverse(transform) * vec4(dir, 0.0)).xyz;
     vec3 result = vec3(0.0);
     
-    if (shape_type == 0) { // Sphere
+    if (shape_type == 2) { // Sphere
         float radius = shape_data.x;
         float l = length(local_dir);
         vec3 dir_norm = l > 1e-6 ? local_dir / l : vec3(1.0, 0.0, 0.0);
@@ -554,7 +554,7 @@ bool compute_toi_generic(
         if (dist <= 0.0) {
             out_toi = 0.0;
             out_depth = dist < 0.0 ? -dist : 0.0;
-            vec3 n = p_a - p_b;
+            vec3 n = p_b - p_a;
             float n_len = length(n);
             out_normal = n_len > 1e-6 ? n / n_len : vec3(1.0, 0.0, 0.0);
             out_contact_point = (p_a + p_b) * 0.5;
@@ -576,7 +576,7 @@ bool compute_toi_generic(
         if (dist <= time_tolerance) {
             out_toi = t;
             out_depth = dist < 0.0 ? -dist : 0.0;
-            vec3 n = p_a - p_b;
+            vec3 n = p_b - p_a;
             float n_len = length(n);
             out_normal = n_len > 1e-6 ? n / n_len : vec3(1.0, 0.0, 0.0);
             out_contact_point = (p_a + p_b) * 0.5;

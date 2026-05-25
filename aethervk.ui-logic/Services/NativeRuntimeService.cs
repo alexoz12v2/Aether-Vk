@@ -294,41 +294,47 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       if (componentId == 1) // Transform
       {
         var dto = Marshal.PtrToStructure<NativeInterop.FfiTransform>(dataPtr);
-        var transform = entity.Components.OfType<TransformComponent>().FirstOrDefault();
-        if (transform != null)
+        _uiThreadDispatcher?.Dispatch(() =>
         {
-          transform.SuspendNotifications = true;
-          transform.PosX = dto.Px;
-          transform.PosY = dto.Py;
-          transform.PosZ = dto.Pz;
-          transform.RotW = dto.Rw;
-          transform.RotX = dto.Rx;
-          transform.RotY = dto.Ry;
-          transform.RotZ = dto.Rz;
-          transform.ScaleX = dto.Sx;
-          transform.ScaleY = dto.Sy;
-          transform.ScaleZ = dto.Sz;
-          transform.SuspendNotifications = false;
-        }
+          var transform = entity.Components.OfType<TransformComponent>().FirstOrDefault();
+          if (transform != null)
+          {
+            transform.SuspendNotifications = true;
+            transform.PosX = dto.Px;
+            transform.PosY = dto.Py;
+            transform.PosZ = dto.Pz;
+            transform.RotW = dto.Rw;
+            transform.RotX = dto.Rx;
+            transform.RotY = dto.Ry;
+            transform.RotZ = dto.Rz;
+            transform.ScaleX = dto.Sx;
+            transform.ScaleY = dto.Sy;
+            transform.ScaleZ = dto.Sz;
+            transform.SuspendNotifications = false;
+          }
+        });
       }
       else if (componentId == 2) // Camera
       {
         var dto = Marshal.PtrToStructure<NativeInterop.FfiCamera>(dataPtr);
-        var camera = entity.Components.OfType<CameraComponent>().FirstOrDefault();
-        if (camera != null)
+        _uiThreadDispatcher?.Dispatch(() =>
         {
-          camera.SuspendNotifications = true;
-          camera.IsOrthographic = dto.IsOrthographic;
-          camera.Fov = dto.Fov;
-          camera.AspectRatio = dto.Aspect;
-          camera.NearPlane = dto.Near;
-          camera.FarPlane = dto.Far;
-          camera.OrthoLeft = dto.OrthoLeft;
-          camera.OrthoRight = dto.OrthoRight;
-          camera.OrthoBottom = dto.OrthoBottom;
-          camera.OrthoTop = dto.OrthoTop;
-          camera.SuspendNotifications = false;
-        }
+          var camera = entity.Components.OfType<CameraComponent>().FirstOrDefault();
+          if (camera != null)
+          {
+            camera.SuspendNotifications = true;
+            camera.IsOrthographic = dto.IsOrthographic;
+            camera.Fov = dto.Fov;
+            camera.AspectRatio = dto.Aspect;
+            camera.NearPlane = dto.Near;
+            camera.FarPlane = dto.Far;
+            camera.OrthoLeft = dto.OrthoLeft;
+            camera.OrthoRight = dto.OrthoRight;
+            camera.OrthoBottom = dto.OrthoBottom;
+            camera.OrthoTop = dto.OrthoTop;
+            camera.SuspendNotifications = false;
+          }
+        });
       }
     }
 

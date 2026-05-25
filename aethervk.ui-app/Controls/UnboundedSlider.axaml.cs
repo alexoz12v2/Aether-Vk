@@ -91,12 +91,25 @@ public partial class UnboundedSlider : UserControl
   private void OnInputLostFocus(object? sender, RoutedEventArgs e)
   {
     InputBox.IsHitTestVisible = false;
+    if (float.TryParse(InputBox.Text, out float parsed))
+    {
+      Value = parsed;
+    }
   }
 
   private void OnInputKeyDown(object? sender, KeyEventArgs e)
   {
-    if (e.Key == Key.Enter || e.Key == Key.Escape)
+    if (e.Key == Key.Enter)
     {
+      if (float.TryParse(InputBox.Text, out float parsed))
+      {
+        Value = parsed;
+      }
+      TopLevel.GetTopLevel(this)?.FocusManager?.ClearFocus();
+    }
+    else if (e.Key == Key.Escape)
+    {
+      InputBox.Text = Value.ToString("0.###");
       TopLevel.GetTopLevel(this)?.FocusManager?.ClearFocus();
     }
   }

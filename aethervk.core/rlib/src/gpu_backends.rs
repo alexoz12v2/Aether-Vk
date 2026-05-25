@@ -191,8 +191,13 @@ where
 
   let mut current_time = t0;
   let end_time = t1;
+  #[cfg(any(test, feature = "collisions"))]
+  let mut old_cmds = alloc::vec::Vec::<K::Cmd>::new();
+  #[cfg(any(test, feature = "collisions"))]
   let time_collision_delta = timeus_milliseconds(30);
+  #[cfg(any(test, feature = "collisions"))]
   let mut collision_iters = 0;
+  #[cfg(any(test, feature = "collisions"))]
   const MAX_BOUNCES: usize = 5;
 
   // ── 0. Build + upload per-tick motion TLAS (CPU-built, GPU-uploaded) ────────
@@ -254,6 +259,9 @@ where
   )?;
 
   // ── 4. IMEX integration + collision loop ─────────────────────────────────
+  #[cfg(not(any(test, feature = "collisions")))]
+  let collisions_enabled = false;
+
   if !collisions_enabled {
     let dt = end_time - current_time;
 
@@ -274,7 +282,7 @@ where
     // VV corrector: v_{n+1/2} → v_{n+1} using F(x_{n+1})
     kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, dt, current_time)?;
   } else {
-    
+    #[cfg(any(test, feature = "collisions"))]
     {
     while current_time < end_time {
       let dt = end_time - current_time;
@@ -344,6 +352,11 @@ where
         |b| kernels.discard_list(b),
       );
 
+      let sparse_collisions = AutoDiscard::new(
+        kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 10000)?,
+        |b| kernels.discard_list(b),
+      );
+
       kernels.bp_clear(
         &mut cmd,
         raw_pairs.address(),
@@ -351,6 +364,7 @@ where
         rb_ps_pairs.address(),
         rb_lca_pairs.address(),
         internal_pairs.address(),
+        sparse_collisions.address(),
       )?;
       kernels.bp_bounds_gen(
         &mut cmd,
@@ -412,17 +426,12 @@ where
       )?;
 
       // ── Merge classified pairs → global collision list ────────────────────
-      let sparse_collisions = AutoDiscard::new(
-        kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 10000)?,
-        |b| kernels.discard_list(b),
-      );
-
       // 1) Standard CCD for rb_rb_pairs
-      kernels.narrow_ccd(&mut cmd, &*rb_rb_pairs, &rigid_bodies, &particles, frames.address(), 0, &sparse_collisions)?;
+      kernels.narrow_ccd(&mut cmd, &*rb_rb_pairs, &rigid_bodies, &particles, frames.address(), 0, (dt as f32) / 1_000_000.0, &sparse_collisions)?;
 
       // 2) Cross-LCA CCD for internal_pairs
       if frames.capacity() > 1 {
-        kernels.narrow_ccd(&mut cmd, &*internal_pairs, &rigid_bodies, &particles, frames.address(), 1, &sparse_collisions)?;
+        kernels.narrow_ccd(&mut cmd, &*internal_pairs, &rigid_bodies, &particles, frames.address(), 1, (dt as f32) / 1_000_000.0, &sparse_collisions)?;
       }
 
       let compacted = AutoDiscard::new(
@@ -440,7 +449,69 @@ where
       if let Some(sync) = sync_info {
         kernels.wait_sync(&sync)?;
       }
-      cmd = kernels.create_command_buffer()?;
+
+      #[cfg(test)]
+      {
+         let mut read_cmd = kernels.create_command_buffer()?;
+         let cmp_fut = (*compacted).enqueue_read_to_cpu(&mut read_cmd)?;
+         let rb_fut = rigid_bodies.enqueue_read_to_cpu(&mut read_cmd)?;
+         let frames_fut = frames.enqueue_read_to_cpu(&mut read_cmd)?;
+         let cross_fut = (*internal_pairs).enqueue_read_to_cpu(&mut read_cmd)?;
+         if let Some(read_sync) = read_cmd.submit()? {
+           kernels.wait_sync(&read_sync)?;
+           if let (Ok(cmp_host), Ok(rb_host), Ok(frames_host), Ok(cross_host)) = (cmp_fut.wait(), rb_fut.wait(), frames_fut.wait(), cross_fut.wait()) {
+               let compacted_count = cmp_host[0].b.primitive_index as usize;
+               let cross_count = cross_host[0].a.entity_id as usize;
+               aethervk_oshal_rlib::log!("READBACK: compacted_count={}, cross_count={}", compacted_count, cross_count);
+               if compacted_count > 0 {
+                 let mut out = alloc::string::String::new();
+                 out.push_str(&alloc::format!("--- NEW COLLISION STEP (Iter: {}, Count: {}) ---\n", collision_iters, compacted_count));
+                 let pairs_ptr = unsafe { (cmp_host.as_ptr() as *const u8).add(16) as *const crate::gpu::CollisionPair };
+                 for i in 0..compacted_count {
+                   let pair = unsafe { &*pairs_ptr.add(i) };
+                   let id_a = pair.a.entity_id;
+                   let prim_a = pair.a.primitive_index;
+                   let id_b = pair.b.entity_id;
+                   let prim_b = pair.b.primitive_index;
+
+                   let is_lca = prim_a == prim_b && id_a != id_b;
+                   let lca_id = if is_lca { Some(prim_a) } else { None };
+
+                   out.push_str(&alloc::format!("Pair {}:\n", i + 1));
+                   
+                   let mut type_a = 0;
+                   let mut type_b = 0;
+                   if let (Some(b_a), Some(b_b)) = (rb_host.get(id_a as usize), rb_host.get(id_b as usize)) {
+                     type_a = b_a.shape_type;
+                     type_b = b_b.shape_type;
+                   }
+                   
+                   out.push_str(&alloc::format!("  Entity A: {} (Prim: {}, Type: {})\n", id_a, prim_a, type_a));
+                   out.push_str(&alloc::format!("  Entity B: {} (Prim: {}, Type: {})\n", id_b, prim_b, type_b));
+                   out.push_str(&alloc::format!("  TOI: {:.4}\n", pair.time_of_impact));
+                   out.push_str(&alloc::format!("  Contact Normal: {:?}\n", pair.contact_normal));
+                   out.push_str(&alloc::format!("  Contact Point: {:?}\n", pair.contact_point));
+                   out.push_str(&alloc::format!("  Penetration Depth: {:.6}\n", pair.penetration_depth));
+
+                   if let Some(lca) = lca_id {
+                       out.push_str(&alloc::format!("  Cross LCA detected! LCA Frame ID: {}\n", lca));
+                       if let Some(f) = frames_host.get(lca as usize) {
+                           out.push_str(&alloc::format!("    Transform (Center Pos): {:?}\n", f.center_pos));
+                           out.push_str(&alloc::format!("    Scale: {}\n", f.scale));
+                           out.push_str(&alloc::format!("    Extent in macro: {:?}\n", f.scale)); // Just logging scale as extent
+                       }
+                   }
+                   out.push_str("\n");
+                 }
+                 std::fs::write("/tmp/collisions_log.txt", out).unwrap();
+               }
+           }
+         }
+      }
+
+      let mut next_cmd = kernels.create_command_buffer()?;
+      core::mem::swap(&mut cmd, &mut next_cmd);
+      old_cmds.push(next_cmd);
       let tc_host = tc_future.wait()?;
       let t_c = tc_host.get(0).copied().unwrap_or(0);
       aethervk_oshal_rlib::log!("gpu_backends.rs: t_c is {}", t_c);

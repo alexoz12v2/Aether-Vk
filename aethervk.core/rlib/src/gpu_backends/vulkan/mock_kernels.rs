@@ -105,9 +105,9 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     }
 
     
-    fn bp_clear(&self, cmd: &mut Self::Cmd, raw_pairs_addr: u64, out_rb_rb_addr: u64, out_rb_ps_addr: u64, out_rb_lca_addr: u64, out_internal: u64) -> EngineResult<()> { 
+    fn bp_clear(&self, cmd: &mut Self::Cmd, raw_pairs_addr: u64, out_rb_rb_addr: u64, out_rb_ps_addr: u64, out_rb_lca_addr: u64, out_internal: u64, out_sparse: u64) -> EngineResult<()> { 
         if self.target == MockTargetShader::BpClear {
-            self.base.bp_clear(cmd, raw_pairs_addr, out_rb_rb_addr, out_rb_ps_addr, out_rb_lca_addr, out_internal)?;
+            self.base.bp_clear(cmd, raw_pairs_addr, out_rb_rb_addr, out_rb_ps_addr, out_rb_lca_addr, out_internal, out_sparse)?;
         }
         Ok(())
     }
@@ -195,9 +195,19 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     }
 
     
-    fn narrow_ccd(&self, cmd: &mut Self::Cmd, broadphase_pairs: &Self::List<CollisionPair>, rigid_bodies: &Self::Buffer<RigidBodyImex>, particles: &Self::Buffer<f32>, lca_entities: u64, space_type: u32, output_list: &Self::List<CollisionPair>) -> EngineResult<()> {
+    fn narrow_ccd(
+      &self,
+      cmd: &mut Self::Cmd,
+      broadphase_pairs: &Self::List<CollisionPair>,
+      rigid_bodies: &Self::Buffer<RigidBodyImex>,
+      particles: &Self::Buffer<f32>,
+      lca_entities: u64,
+      space_type: u32,
+      dt: f32,
+      output_list: &Self::List<CollisionPair>,
+    ) -> EngineResult<()> {
         if self.target == MockTargetShader::Ccd {
-            self.base.narrow_ccd(cmd, broadphase_pairs, rigid_bodies, particles, lca_entities, space_type, output_list)
+            self.base.narrow_ccd(cmd, broadphase_pairs, rigid_bodies, particles, lca_entities, space_type, dt, output_list)
         } else {
             Ok(())
         }

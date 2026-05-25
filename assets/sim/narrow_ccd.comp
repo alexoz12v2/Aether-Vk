@@ -19,7 +19,7 @@ layout(push_constant, std430) uniform PushConstants {
     uint64_t pair_buffer;             // 24-31
     float dt;                         // 32-35
     float particle_radius;            // 36-39
-    LcaEntityArray lca_entities;      // 40-47
+    GpuReferenceFrameArray lca_entities; // 40-47
     uint space_type;                  // 48-51
     uint _pad;                        // 52-55
 } pc;
@@ -63,12 +63,11 @@ void main() {
     mat4 trans_B = mat4(1.0);
     
     if (pc.space_type == 1) {
-        LcaEntity lca = pc.lca_entities.entities[lca_id];
-        vec3 macro_rel_vel_au = vel_A - lca.linear_velocity;
-        pos_A = (lca.inv_transform * vec4(pos_A, 1.0)).xyz * AU_TO_KM;
-        vel_A = (mat3(lca.inv_transform) * macro_rel_vel_au) * AU_TO_KM;
-        extents_A *= AU_TO_KM;
-        trans_A = lca.inv_transform; // roughly, though GJK needs standard translation
+        GpuReferenceFrame lca = pc.lca_entities.frames[lca_id];
+        vec3 macro_rel_vel = vel_A - lca.center_vel;
+        pos_A = (pos_A - lca.center_pos) / lca.scale;
+        vel_A = macro_rel_vel / lca.scale;
+        extents_A /= lca.scale;
     }
     
     mat3 rotA = quat_to_mat3(orient_A);
@@ -85,33 +84,23 @@ void main() {
 #endif
 
     if (compute_toi_generic(shape_A, extents_A, trans_A, vel_A * pc.dt, shape_B, extents_B, trans_B, vel_B * pc.dt, 1e-3, 10, toi, normal, contact, depth)) {
-        if (pc.space_type == 1) {
-            CrossSparseCollisions cross_out = CrossSparseCollisions(pc.output_list);
-            uint count = atomicAdd(cross_out.count, 1);
-            if (count < 4000u) {
-                cross_out.pairs[count].valid = 1u;
-                cross_out.pairs[count].macro_id = idA;
-                cross_out.pairs[count].micro_id = idB;
-                cross_out.pairs[count].lca_id = lca_id;
-                cross_out.pairs[count].toi = toi;
-                cross_out.pairs[count].contact_normal = normal;
-                cross_out.pairs[count].contact_point = contact;
-                cross_out.pairs[count].penetration_depth = depth;
-            }
-        } else {
-            SparseCollisions out_list = SparseCollisions(pc.output_list);
-            uint count = atomicAdd(out_list.count, 1);
-            if (count < 4000u) {
-                out_list.pairs[count].valid = 1u;
-                out_list.pairs[count].entity_a = idA;
+        SparseCollisions out_list = SparseCollisions(pc.output_list);
+        uint count = atomicAdd(out_list.count, 1);
+        if (count < 4000u) {
+            out_list.pairs[count].valid = 1u;
+            out_list.pairs[count].entity_a = idA;
+            out_list.pairs[count].entity_b = idB;
+            if (pc.space_type == 1) {
+                out_list.pairs[count].prim_a = lca_id;
+                out_list.pairs[count].prim_b = lca_id;
+            } else {
                 out_list.pairs[count].prim_a = idA;
-                out_list.pairs[count].entity_b = idB;
                 out_list.pairs[count].prim_b = idB;
-                out_list.pairs[count].toi = toi;
-                out_list.pairs[count].contact_normal = normal;
-                out_list.pairs[count].contact_point = contact;
-                out_list.pairs[count].penetration_depth = depth;
             }
+            out_list.pairs[count].toi = toi;
+            out_list.pairs[count].contact_normal = normal;
+            out_list.pairs[count].contact_point = contact;
+            out_list.pairs[count].penetration_depth = depth;
         }
     }
 }

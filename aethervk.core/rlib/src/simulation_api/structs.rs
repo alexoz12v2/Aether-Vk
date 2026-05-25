@@ -1068,7 +1068,7 @@ pub struct SceneContext {
   pub grid_entity: Option<EntityId>,
   pub sky_entity: Option<EntityId>,
   pub outlines_enabled: Arc<AtomicBool>,
-  pub collisions_enabled: Arc<AtomicBool>,
+  pub collisions_enabled: Arc<AtomicBool>, // Changed to false for debugging
   pub physics_scene: Option<Arc<RwLock<physics::physics_scene::PhysicsScene>>>,
   pub selection_tlas: Option<Arc<RwLock<alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<32>>>>>,
   pub active_physics_task: alloc::sync::Arc<

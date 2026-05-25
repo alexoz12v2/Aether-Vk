@@ -164,6 +164,9 @@ pub fn start_logic_thread(
                       let _ = task_id.load(core::sync::atomic::Ordering::Acquire);
                       break value;
                     }
+                    if alloc::sync::Arc::strong_count(&task_id) == 1 {
+                      break u64::MAX;
+                    }
                     oshal::os::native::this_thread::yield_now();
                   };
                   if task_id_val == u64::MAX {
@@ -177,38 +180,54 @@ pub fn start_logic_thread(
                     let fptr = crate::simulation_api::RENDER_CALLBACK
                       .load(core::sync::atomic::Ordering::Relaxed);
                     if !fptr.is_null() {
-                      let ctx_ptr = context.ctx_ptr;
-                      use aethervk_oshal_rlib::os::pool::tasklet::ThreadPoolExt;
-                      let _ = context.thread_pool.spawn_tasklet(None, move || {
-                        let fptr = crate::simulation_api::RENDER_CALLBACK
-                          .load(core::sync::atomic::Ordering::Relaxed);
-                        let ctx = unsafe {
-                          &*(ctx_ptr.get() as *mut crate::simulation_api::SimulationContext)
-                        };
-                        loop {
+                      struct WindowlessCallbackWorkload {
+                        ctx_ptr: crate::simulation_api::structs::SendPtrMut<core::ffi::c_void>,
+                        task_id_val: u64,
+                        scene_id: u64,
+                        pe_handle: u64,
+                      }
+
+                      impl aethervk_oshal_rlib::os::pool::Workload for WindowlessCallbackWorkload {
+                        fn execute(&mut self) -> aethervk_oshal_rlib::os::pool::WorkloadStatus {
+                          let fptr = crate::simulation_api::RENDER_CALLBACK
+                            .load(core::sync::atomic::Ordering::Relaxed);
+                          if fptr.is_null() {
+                            return aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete;
+                          }
+
+                          let ctx = unsafe {
+                            &*(self.ctx_ptr.get() as *mut crate::simulation_api::SimulationContext)
+                          };
                           let completed = ctx
                             .render_proxy
                             .0
                             .as_frontend()
                             .and_then(|f| {
                               f.with_device(ctx.render_proxy.1, |device| {
-                                Ok(device.is_task_completed(task_id_val).unwrap_or(true))
+                                Ok(device.is_task_completed(self.task_id_val).unwrap_or(true))
                               })
                               .ok()
                             })
                             .unwrap_or(true);
 
                           if completed {
-                            break;
+                            let cb: extern "C" fn(u64, u64, u64) = unsafe { core::mem::transmute(fptr) };
+                            cb(self.scene_id, self.pe_handle, self.task_id_val);
+                            aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete
+                          } else {
+                            aethervk_oshal_rlib::os::pool::WorkloadStatus::Yield
                           }
-                          oshal::os::native::this_thread::sleep_for(
-                            core::time::Duration::from_millis(1),
-                          );
                         }
-                        let cb: extern "C" fn(u64, u64, u64) =
-                          unsafe { core::mem::transmute(fptr) };
-                        cb(scene_id, pe_handle, task_id_val);
-                      });
+
+                        fn tasklet_id(&self) -> Option<usize> { None }
+                      }
+
+                      let _ = context.thread_pool.scatter(alloc::vec![alloc::boxed::Box::new(WindowlessCallbackWorkload {
+                        ctx_ptr: context.ctx_ptr,
+                        task_id_val,
+                        scene_id,
+                        pe_handle,
+                      })]);
                     }
                   }
                 }
@@ -220,68 +239,81 @@ pub fn start_logic_thread(
         }
       }
 
-      while let Ok(cmd) = logic_rx.try_recv() {
-        if let LogicCommand::Shutdown = cmd {
-          return;
-        }
+      loop {
+        match logic_rx.try_recv() {
+          Ok(cmd) => {
+            if let LogicCommand::Shutdown = cmd {
+              return;
+            }
 
-        match cmd {
-          LogicCommand::ImportModel { .. }
-          | LogicCommand::LoadAlmanac { .. }
-          | LogicCommand::UnloadAlmanac { .. }
-          | LogicCommand::LoadCometSpk { .. }
-          | LogicCommand::SpawnModelInstance { .. }
-          | LogicCommand::RaycastNdc { .. }
-          | LogicCommand::UpdateTrajectoryForSpk { .. }
-          | LogicCommand::Raycast { .. } => {
-            // Heavy I/O or generation tasks are scattered to the thread pool
-            let workload = Box::new(LogicWorkload {
-              cmd,
-              ctx: context.clone(),
-            });
-            let _ = context.thread_pool.scatter(alloc::vec![workload]);
-          }
-          _ => {
-            // Synchronous orchestrator commands executed on the logic thread natively!
-            let task_id = match &cmd {
-              LogicCommand::Custom { task_id, .. } => Some(*task_id),
-              _ => None,
-            };
+            match cmd {
+              LogicCommand::ImportModel { .. }
+              | LogicCommand::LoadAlmanac { .. }
+              | LogicCommand::UnloadAlmanac { .. }
+              | LogicCommand::LoadCometSpk { .. }
+              | LogicCommand::SpawnModelInstance { .. }
+              | LogicCommand::RaycastNdc { .. }
+              | LogicCommand::UpdateTrajectoryForSpk { .. }
+              | LogicCommand::Raycast { .. } => {
+                // Heavy I/O or generation tasks are scattered to the thread pool
+                let workload = Box::new(LogicWorkload {
+                  cmd,
+                  ctx: context.clone(),
+                });
+                let _ = context.thread_pool.scatter(alloc::vec![workload]);
+              }
+              _ => {
+                // Synchronous orchestrator commands executed on the logic thread natively!
+                let task_id = match &cmd {
+                  LogicCommand::Custom { task_id, .. } => Some(*task_id),
+                  _ => None,
+                };
 
-            let cmd_desc = match &cmd {
-              LogicCommand::RaycastNdc { .. } => "Raycast NDC".to_string(),
-              LogicCommand::Raycast { .. } => "Raycast".to_string(),
-              LogicCommand::RotateCamera { .. } => "Rotate Camera".to_string(),
-              LogicCommand::ZoomCamera { .. } => "Zoom Camera".to_string(),
-              LogicCommand::PlayScene { .. } => "Play Scene".to_string(),
-              LogicCommand::PauseScene { .. } => "Pause Scene".to_string(),
-              LogicCommand::StepScene { .. } => "Step Scene".to_string(),
-              LogicCommand::SetSceneTimeScale { .. } => "Set Time Scale".to_string(),
-              _ => "Logic Task".to_string(),
-            };
+                let cmd_desc = match &cmd {
+                  LogicCommand::RaycastNdc { .. } => "Raycast NDC".to_string(),
+                  LogicCommand::Raycast { .. } => "Raycast".to_string(),
+                  LogicCommand::RotateCamera { .. } => "Rotate Camera".to_string(),
+                  LogicCommand::ZoomCamera { .. } => "Zoom Camera".to_string(),
+                  LogicCommand::PlayScene { .. } => "Play Scene".to_string(),
+                  LogicCommand::PauseScene { .. } => "Pause Scene".to_string(),
+                  LogicCommand::StepScene { .. } => "Step Scene".to_string(),
+                  LogicCommand::SetSceneTimeScale { .. } => "Set Time Scale".to_string(),
+                  _ => "Logic Task".to_string(),
+                };
 
-            let res = process_command_internal(cmd, &context);
+                let res = process_command_internal(cmd, &context);
 
-            if let Some(tid) = task_id {
-              if tid != 0 {
-                let mut manager = context.task_manager.write();
-                match res {
-                  Ok(result) => {
-                    manager.success_task(tid, result);
-                  }
-                  Err(e) => {
-                    manager.fail_task(tid, e.to_string());
-                    crate::simulation_api::emit_breadcrumb(
-                      3,
-                      &alloc::format!("Failed: {} - {}", cmd_desc, e),
-                    );
+                if let Some(tid) = task_id {
+                  if tid != 0 {
+                    let mut manager = context.task_manager.write();
+                    match res {
+                      Ok(result) => {
+                        manager.success_task(tid, result);
+                      }
+                      Err(e) => {
+                        manager.fail_task(tid, e.to_string());
+                        crate::simulation_api::emit_breadcrumb(
+                          3,
+                          &alloc::format!("Failed: {} - {}", cmd_desc, e),
+                        );
+                      }
+                    }
                   }
                 }
               }
             }
+            processed_any = true;
+          }
+          Err(thingbuf::mpsc::errors::TryRecvError::Empty) => {
+            break;
+          }
+          Err(thingbuf::mpsc::errors::TryRecvError::Closed) => {
+            return;
+          }
+          Err(_) => {
+            break;
           }
         }
-        processed_any = true;
       }
 
       if !processed_any {

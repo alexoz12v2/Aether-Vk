@@ -1,6 +1,7 @@
 #version 450 core
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
+
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_shuffle : require
@@ -15,7 +16,8 @@ struct EntityHeader { uint type; uint pad[3]; };
 layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer EntityHeaderArray { EntityHeader entities[]; };
 
 layout(push_constant, std430) uniform PushConstants {
-    LcaEntityArray lca_entities;
+    MultiBvhBuffer tlas_bvh;
+    GpuReferenceFrameArray lca_entities;
     LeafBuffer macro_leaves;
     EntityHeaderArray entity_headers;
     PairBuffer lca_query_pairs;
@@ -27,13 +29,13 @@ layout(push_constant, std430) uniform PushConstants {
     uint max_pairs;
 } pc;
 
-shared uint shared_stacks[SUBGROUPS_PER_WG][32];
+shared uint shared_stacks[SUBGROUPS_PER_WG][128];
 shared uint shared_stack_ptrs[SUBGROUPS_PER_WG];
 shared uvec2 shared_lca_bvh_addr[SUBGROUPS_PER_WG];
 
-void transform_aabb_macro_to_micro(mat4 lca_inv_transform, vec3 macro_center_au, vec3 macro_extents_au, out vec3 out_min, out vec3 out_max) {
-    vec3 center_km = macro_center_au * AU_TO_KM;
-    vec3 extents_km = macro_extents_au * AU_TO_KM;
+void transform_aabb_macro_to_micro(vec3 lca_center_pos, float lca_scale, vec3 macro_center, vec3 macro_extents, out vec3 out_min, out vec3 out_max) {
+    vec3 center_km = macro_center;
+    vec3 extents_km = macro_extents;
 
     vec3 corners[8] = vec3[8](
         vec3(center_km.x - extents_km.x, center_km.y - extents_km.y, center_km.z - extents_km.z),
@@ -47,7 +49,7 @@ void transform_aabb_macro_to_micro(mat4 lca_inv_transform, vec3 macro_center_au,
     );
     out_min = vec3(1e20); out_max = vec3(-1e20);
     for (int i = 0; i < 8; i++) {
-        vec3 local_p = (lca_inv_transform * vec4(corners[i], 1.0)).xyz;
+        vec3 local_p = (corners[i] - lca_center_pos) / lca_scale;
         out_min = min(out_min, local_p);
         out_max = max(out_max, local_p);
     }
@@ -66,8 +68,8 @@ void main() {
     vec3 query_min, query_max;
 
     if (lane_id == 0) {
-        LcaEntity l_ent = pc.lca_entities.entities[lca_ent_id];
-        shared_lca_bvh_addr[subgroup_id] = uvec2(l_ent.bvh);
+        GpuReferenceFrame l_ent = pc.lca_entities.frames[lca_ent_id];
+        shared_lca_bvh_addr[subgroup_id] = uvec2(pc.tlas_bvh);
 
         vec3 macro_min = pc.macro_leaves.leaves[macro_ent_id].min_bound;
         vec3 macro_max = pc.macro_leaves.leaves[macro_ent_id].max_bound;
@@ -75,9 +77,9 @@ void main() {
         vec3 center_au = (macro_min + macro_max) * 0.5;
         vec3 extents_au = (macro_max - macro_min) * 0.5;
 
-        transform_aabb_macro_to_micro(l_ent.inv_transform, center_au, extents_au, query_min, query_max);
+        transform_aabb_macro_to_micro(l_ent.center_pos, l_ent.scale, center_au, extents_au, query_min, query_max);
 
-        shared_stacks[subgroup_id][0] = l_ent.root_index;
+        shared_stacks[subgroup_id][0] = l_ent.bvh_root_index;
         shared_stack_ptrs[subgroup_id] = 1;
     }
 
@@ -149,8 +151,12 @@ void main() {
                     }
 
                     if (type_A == TYPE_RIGID_BODY && type_B == TYPE_RIGID_BODY) {
-                        uint out_idx = atomicAdd(pc.out_rb_rb.count, 1);
-                        if (out_idx < pc.max_pairs) pc.out_rb_rb.pairs[out_idx] = uvec2(ent_A, ent_B);
+                        uint out_idx = atomicAdd(pc.out_cross_pairs.count, 1);
+                        if (out_idx < pc.max_pairs) {
+                            pc.out_cross_pairs.pairs[out_idx].macro_id = ent_A;
+                            pc.out_cross_pairs.pairs[out_idx].micro_id = ent_B;
+                            pc.out_cross_pairs.pairs[out_idx].lca_id = lca_ent_id;
+                        }
                     } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_RIGID_BODY) {
                         uint out_idx = atomicAdd(pc.out_rb_ps.count, 1);
                         if (out_idx < pc.max_pairs) pc.out_rb_ps.pairs[out_idx] = uvec2(ent_B, ent_A);

@@ -155,6 +155,9 @@ public partial class Viewport3DViewModel
           earthState.Value.PosX, earthState.Value.PosY, earthState.Value.PosZ,
           1, 0, 0, 0, 1, 1, 1);
       }
+
+      // Spawn the cursor at the origin
+      _runtimeService.CreateCursor(SceneId, root);
     }
     else if (CameraId == 0)
     {

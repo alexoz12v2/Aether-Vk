@@ -38,7 +38,7 @@ void main() {
         vec4 qA = vec4(uintBitsToFloat(pc.rigid_bodies.data[base+4]), uintBitsToFloat(pc.rigid_bodies.data[base+5]), uintBitsToFloat(pc.rigid_bodies.data[base+6]), uintBitsToFloat(pc.rigid_bodies.data[base+7]));
         vec3 posA = vec3(uintBitsToFloat(pc.rigid_bodies.data[base+0]), uintBitsToFloat(pc.rigid_bodies.data[base+1]), uintBitsToFloat(pc.rigid_bodies.data[base+2]));
 
-        vec3 rA = pair.contact_point - posA;
+        vec3 rA = vec3(pair.pt_x, pair.pt_y, pair.pt_z) - posA;
 
         if (invMA > 0.0) {
             vec3 dvA = -impulse * invMA;
@@ -72,7 +72,7 @@ void main() {
         vec4 qB = vec4(uintBitsToFloat(pc.rigid_bodies.data[base+4]), uintBitsToFloat(pc.rigid_bodies.data[base+5]), uintBitsToFloat(pc.rigid_bodies.data[base+6]), uintBitsToFloat(pc.rigid_bodies.data[base+7]));
         vec3 posB = vec3(uintBitsToFloat(pc.rigid_bodies.data[base+0]), uintBitsToFloat(pc.rigid_bodies.data[base+1]), uintBitsToFloat(pc.rigid_bodies.data[base+2]));
 
-        vec3 rB = pair.contact_point - posB;
+        vec3 rB = vec3(pair.pt_x, pair.pt_y, pair.pt_z) - posB;
 
         if (invMB > 0.0) {
             vec3 dvB = impulse * invMB;

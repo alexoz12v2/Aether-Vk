@@ -68,7 +68,8 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_shutdown(ctx: *mut SimulationContext) {
   if !ctx.is_null() {
-    let _ = unsafe { Box::from_raw(ctx) };
+    let ctx_box = unsafe { Box::from_raw(ctx) };
+    let _ = ctx_box.threads.logic_thread.tx().try_send(aethervk_core_rlib::simulation_api::structs::LogicCommand::Shutdown);
   }
 }
 
@@ -492,7 +493,7 @@ pub unsafe extern "C" fn avkSimulationContext_addTransformComponent(
       scene_id,
       entity,
       Vec3f32::from_components(pos_x, pos_y, pos_z),
-      Quat::from_components(rot_w, rot_x, rot_y, rot_z),
+      Quat::from_components(rot_x, rot_y, rot_z, rot_w),
       Vec3f32::from_components(scale_x, scale_y, scale_z),
     )
     .is_ok()
@@ -529,7 +530,7 @@ pub unsafe extern "C" fn avkSimulationContext_setTransformComponent(
       scene_id,
       entity,
       Vec3f32::from_components(t.px, t.py, t.pz),
-      Quat::from_components(t.rw, t.rx, t.ry, t.rz),
+      Quat::from_components(t.rx, t.ry, t.rz, t.rw),
       Vec3f32::from_components(t.sx, t.sy, t.sz),
     )
     .is_ok()

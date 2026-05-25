@@ -1,6 +1,8 @@
 // @assets/sim/bp_scene.comp
 #version 450 core
 #extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_debug_printf : enable
+
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_ballot : require
@@ -19,7 +21,7 @@ layout(push_constant, std430) uniform PushConstants {
     uint     total_queries;
 } pc;
 
-shared uint shared_stacks[SUBGROUPS_PER_WG][32];
+shared uint shared_stacks[SUBGROUPS_PER_WG][128];
 shared uint shared_stack_ptrs[SUBGROUPS_PER_WG];
 
 void main() {
@@ -35,9 +37,14 @@ void main() {
         my_min = pc.query_leaves.leaves[query_idx].min_bound;
         my_max = pc.query_leaves.leaves[query_idx].max_bound;
         my_ent_id = pc.query_leaves.leaves[query_idx].entity_idx;
+        uint my_meta = pc.query_leaves.leaves[query_idx].metadata;
 
-        shared_stacks[subgroup_id][0] = pc.tlas_root_index;
-        shared_stack_ptrs[subgroup_id] = 1;
+        if (bvh_get_shape(my_meta) == BVH_SHAPE_AABB) {
+            shared_stack_ptrs[subgroup_id] = 0;
+        } else {
+            shared_stacks[subgroup_id][0] = pc.tlas_root_index;
+            shared_stack_ptrs[subgroup_id] = 1;
+        }
     }
 
     my_min = vec3(subgroupBroadcast(my_min.x, 0), subgroupBroadcast(my_min.y, 0), subgroupBroadcast(my_min.z, 0));
@@ -64,10 +71,18 @@ void main() {
 
         bool hit = valid && intersectAABB(my_min, my_max, c_min, c_max);
         bool is_leaf = bvh_is_leaf(meta);
+        uint entity_shape = bvh_get_shape(meta);
+        bool is_sub_tlas = (entity_shape == BVH_SHAPE_SUB_TLAS);
 
         // Prevents (A,A) and duplicate (B,A) pairs!
-        bool hit_leaf = hit && is_leaf && (my_ent_id < entity_id);
+        // But if B is a SUB_TLAS, we MUST test it because SUB_TLAS never queries!
+        // We still must avoid self-collision (A,A) even if A is a SUB_TLAS.
+        bool hit_leaf = hit && is_leaf && ((my_ent_id < entity_id) || (is_sub_tlas && my_ent_id != entity_id)) && (entity_shape != BVH_SHAPE_AABB);
         bool hit_node = hit && !is_leaf;
+
+        if (hit && is_leaf && lane_id == 0) {
+            debugPrintfEXT("bp_scene: hit leaf! my_ent=%d entity_id=%d is_sub=%d hit_leaf=%d", my_ent_id, entity_id, is_sub_tlas, hit_leaf);
+        }
 
         uvec4 leaf_ballot = subgroupBallot(hit_leaf);
         uint  leaf_count  = subgroupBallotBitCount(leaf_ballot);
@@ -79,7 +94,8 @@ void main() {
             base_idx = subgroupBroadcast(base_idx, 0);
 
             if (hit_leaf && base_idx + leaf_offset < 10000u) {
-                pc.overlapping_pairs.pairs[base_idx + leaf_offset] = uvec2(my_ent_id, entity_id);
+                pc.overlapping_pairs.pairs[base_idx + leaf_offset] = uvec2(my_ent_id, meta);
+                debugPrintfEXT("bp_scene: Wrote overlapping pair: my_ent=%d, meta=%d", my_ent_id, meta);
             }
         }
 

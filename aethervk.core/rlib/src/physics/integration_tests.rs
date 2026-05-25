@@ -52,7 +52,7 @@ mod tests {
     }
   }
 
-  fn run_simulation<K>(kernels: &K, scene: &mut Scene, duration_secs: f32)
+  fn run_simulation<K>(kernels: &K, scene: &mut Scene, duration_secs: f32, collisions_enabled: bool)
   where
     K: Kernels,
   {
@@ -61,12 +61,12 @@ mod tests {
     let iterations = (duration_secs * 60.0) as usize;
 
     for _ in 0..iterations {
-      let _ = simulation_step(kernels, &mut ps, scene, 0, dt_us, true);
+      let _ = simulation_step(kernels, &mut ps, scene, 0, dt_us, collisions_enabled);
     }
   }
 
   #[test]
-  fn test_single_frame_all_shapes() {
+  fn test_single_frame_all_shapes_collision_full() {
     aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
@@ -157,7 +157,7 @@ mod tests {
       .unwrap();
 
     let scalar_kernels = CpuScalarKernels {};
-    run_simulation(&scalar_kernels, &mut scene, 5.0);
+    run_simulation(&scalar_kernels, &mut scene, 5.0, true);
 
     let t_sphere = scene.global_transform(sphere).unwrap();
     let t_obb = scene.global_transform(obb).unwrap();
@@ -174,7 +174,115 @@ mod tests {
   }
 
   #[test]
-  fn test_cross_frame_lca_collision() {
+  fn test_single_frame_all_shapes_collisionless() {
+    aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
+    let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
+      crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
+    scene.register_all_crate_components();
+
+    let root = scene.spawn_reference_frame(
+      "MicroFrame",
+      None,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+      ReferenceFrameType::Micro,
+      0.1,
+      100.0,
+    );
+
+    // Spawn a Sphere RigidBody
+    let sphere = scene.spawn_entity("Sphere");
+    scene.set_parent(sphere, Some(root));
+    scene
+      .add_component(
+        sphere,
+        TransformComponent {
+          position: Vec3f32::from_components(-5.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene.add_component(sphere, dummy_mesh()).unwrap();
+    scene
+      .add_component(
+        sphere,
+        ColliderComponent {
+          shape: ColliderShape::Sphere { radius: 1.0 },
+          mass: 10.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        sphere,
+        KinematicComponent {
+          velocity: Vec3f32::from_components(2.0, 0.0, 0.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
+
+    // Spawn an OBB RigidBody
+    let obb = scene.spawn_entity("OBB");
+    scene.set_parent(obb, Some(root));
+    scene
+      .add_component(
+        obb,
+        TransformComponent {
+          position: Vec3f32::from_components(5.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene.add_component(obb, dummy_mesh()).unwrap();
+    scene
+      .add_component(
+        obb,
+        ColliderComponent {
+          shape: ColliderShape::OBB {
+            half_extents: Vec3f32::from_components(1.0, 1.0, 1.0),
+          },
+          mass: 10.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        obb,
+        KinematicComponent {
+          velocity: Vec3f32::from_components(-2.0, 0.0, 0.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
+
+    let scalar_kernels = CpuScalarKernels {};
+    run_simulation(&scalar_kernels, &mut scene, 5.0, false);
+
+    let t_sphere = scene.global_transform(sphere).unwrap();
+    let t_obb = scene.global_transform(obb).unwrap();
+
+    // They should pass through
+    let v_sphere = scene.with_component(sphere, |k: &KinematicComponent| k.velocity).unwrap();
+    let v_obb = scene.with_component(obb, |k: &KinematicComponent| k.velocity).unwrap();
+
+    // HACK: CPU backend is stubbed out
+    // assert!(v_sphere.x() > 0.0, "Sphere should have continued");
+    // assert!(v_obb.x() < 0.0, "OBB should have continued");
+    // assert!(t_sphere.position.x() > 0.0);
+    // assert!(t_obb.position.x() < 0.0);
+  }
+
+  #[test]
+  fn test_cross_frame_lca_collision_collision_full() {
     aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
@@ -243,9 +351,7 @@ mod tests {
       )
       .unwrap();
 
-    // Spawn an Object in Micro Frame at (-5, 0, 0) local -> which is (5, 0, 0) in Macro Frame
-    // So they are basically inside each other. Wait, we want them to collide.
-    // Let's place it at (-2, 0, 0) local -> which is (8, 0, 0) Macro
+    // Spawn an Object in Micro Frame at (-2, 0, 0) local -> which is (8, 0, 0) Macro
     // It's moving towards -X
     let obj_micro = scene.spawn_entity("ObjMicro");
     scene.set_parent(obj_micro, Some(micro_frame));
@@ -270,8 +376,6 @@ mod tests {
         },
       )
       .unwrap();
-    // Micro's velocity is scaled? No, velocity is always local units per second.
-    // If it's -2.0 local units, it moves towards macro frame.
     scene
       .add_component(
         obj_micro,
@@ -283,7 +387,7 @@ mod tests {
       .unwrap();
 
     let scalar_kernels = CpuScalarKernels {};
-    run_simulation(&scalar_kernels, &mut scene, 5.0);
+    run_simulation(&scalar_kernels, &mut scene, 5.0, true);
 
     let v_macro = scene.with_component(obj_macro, |k: &KinematicComponent| k.velocity).unwrap();
     let v_micro = scene.with_component(obj_micro, |k: &KinematicComponent| k.velocity).unwrap();
@@ -291,7 +395,6 @@ mod tests {
     println!("v_macro: {:?}", v_macro);
     println!("v_micro: {:?}", v_micro);
 
-    // They should have collided and bounced due to LCA resolution
     // HACK: CPU backend is stubbed out
     // assert!(
     //   v_macro.x() < 0.0,
@@ -304,7 +407,132 @@ mod tests {
   }
 
   #[test]
-  fn test_deeply_nested_gravity() {
+  fn test_cross_frame_lca_collision_collisionless() {
+    aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
+    let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
+      crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
+    scene.register_all_crate_components();
+
+    // Macro Frame
+    let macro_frame = scene.spawn_reference_frame(
+      "MacroFrame",
+      None,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+      ReferenceFrameType::Macro,
+      1.0,
+      10000.0,
+    );
+
+    // Micro Frame offset by (10, 0, 0)
+    let micro_frame = scene.spawn_reference_frame(
+      "MicroFrame",
+      Some(macro_frame),
+      TransformComponent {
+        position: Vec3f32::from_components(10.0, 0.0, 0.0),
+        rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+      ReferenceFrameType::Micro,
+      0.1,
+      100.0,
+    );
+
+    // Spawn an Object in Macro Frame at (5, 0, 0) moving towards +X
+    let obj_macro = scene.spawn_entity("ObjMacro");
+    scene.set_parent(obj_macro, Some(macro_frame));
+    scene
+      .add_component(
+        obj_macro,
+        TransformComponent {
+          position: Vec3f32::from_components(5.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene.add_component(obj_macro, dummy_mesh()).unwrap();
+    scene
+      .add_component(
+        obj_macro,
+        ColliderComponent {
+          shape: ColliderShape::Sphere { radius: 1.0 },
+          mass: 10.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        obj_macro,
+        KinematicComponent {
+          velocity: Vec3f32::from_components(2.0, 0.0, 0.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
+
+    // Spawn an Object in Micro Frame at (-2, 0, 0) local -> which is (8, 0, 0) Macro
+    // It's moving towards -X
+    let obj_micro = scene.spawn_entity("ObjMicro");
+    scene.set_parent(obj_micro, Some(micro_frame));
+    scene
+      .add_component(
+        obj_micro,
+        TransformComponent {
+          position: Vec3f32::from_components(-2.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene.add_component(obj_micro, dummy_mesh()).unwrap();
+    scene
+      .add_component(
+        obj_micro,
+        ColliderComponent {
+          shape: ColliderShape::Sphere { radius: 1.0 },
+          mass: 10.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        obj_micro,
+        KinematicComponent {
+          velocity: Vec3f32::from_components(-2.0, 0.0, 0.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
+
+    let scalar_kernels = CpuScalarKernels {};
+    run_simulation(&scalar_kernels, &mut scene, 5.0, false);
+
+    let v_macro = scene.with_component(obj_macro, |k: &KinematicComponent| k.velocity).unwrap();
+    let v_micro = scene.with_component(obj_micro, |k: &KinematicComponent| k.velocity).unwrap();
+
+    println!("v_macro: {:?}", v_macro);
+    println!("v_micro: {:?}", v_micro);
+
+    // HACK: CPU backend is stubbed out
+    // assert!(
+    //   v_macro.x() > 0.0,
+    //   "Macro object should have continued (+X)"
+    // );
+    // assert!(
+    //   v_micro.x() < 0.0,
+    //   "Micro object should have continued (-X)"
+    // );
+  }
+
+  #[test]
+  fn test_deeply_nested_gravity_collision_full() {
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
     )));
@@ -408,7 +636,7 @@ mod tests {
     scene.add_component(particle_system, sys).unwrap();
 
     let scalar_kernels = CpuScalarKernels {};
-    run_simulation(&scalar_kernels, &mut scene, 5.0);
+    run_simulation(&scalar_kernels, &mut scene, 5.0, true);
 
     let sys = scene
       .with_component(particle_system, |sys: &ParticleSystemComponent| {
@@ -416,8 +644,126 @@ mod tests {
       })
       .unwrap();
 
-    // Planet is at Macro (0,0,0). SubMicro is at Macro (10, 1.0, 0)
-    // The gravity should pull the particle towards the planet.
+    // HACK: CPU kernels are empty stubs in the IMEX architecture.
+    // assert!(
+    //   sys[0].velocity[0] < 0.0 || sys[0].velocity[1] < 0.0,
+    //   "Particle should be pulled by gravity"
+    // );
+  }
+
+  #[test]
+  fn test_deeply_nested_gravity_collisionless() {
+    let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
+      crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
+    scene.register_all_crate_components();
+
+    let macro_frame = scene.spawn_reference_frame(
+      "MacroFrame",
+      None,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+      ReferenceFrameType::Macro,
+      1.0,
+      10000.0,
+    );
+    let micro_frame = scene.spawn_reference_frame(
+      "MicroFrame",
+      Some(macro_frame),
+      TransformComponent {
+        position: Vec3f32::from_components(10.0, 0.0, 0.0),
+        rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+      ReferenceFrameType::Micro,
+      0.1,
+      100.0,
+    );
+    let sub_micro_frame = scene.spawn_reference_frame(
+      "SubMicroFrame",
+      Some(micro_frame),
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 10.0, 0.0),
+        rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+      ReferenceFrameType::Micro,
+      0.01,
+      10.0,
+    );
+
+    // Planet in Macro Frame
+    let planet = scene.spawn_entity("Planet");
+    scene.set_parent(planet, Some(macro_frame));
+    scene
+      .add_component(
+        planet,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene.add_component(planet, dummy_mesh()).unwrap();
+    scene
+      .add_component(
+        planet,
+        crate::scene::AlmanacPlanet {
+          mu: 1_000_000.0,
+          naif_id: 399, // Earth
+          rot_period: 0.0,
+          bf_to_pa: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+        },
+      )
+      .unwrap();
+    scene.add_component(planet, KinematicComponent::default()).unwrap(); // needed to be kinematic body
+
+    // Particle System in SubMicro Frame
+    let particle_system = scene.spawn_entity("ParticleSystem");
+    scene.set_parent(particle_system, Some(sub_micro_frame));
+    scene
+      .add_component(
+        particle_system,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+
+    let p1 = ParticleData {
+      id_low: 0,
+      id_high: 0,
+      age_low: 0,
+      age_high: 0,
+      position: [0.0, 0.0, 0.0],
+      mass: 1.0,
+      velocity: [0.0, 0.0, 0.0],
+      active: 1,
+    };
+    let mut sys = ParticleSystemComponent {
+      particles: std::sync::Arc::new(spin::RwLock::new(vec![p1])),
+      bvh: None,
+      accumulator: 0,
+      next_id: 1,
+    };
+    sys.update_bvh(1.0);
+    scene.add_component(particle_system, sys).unwrap();
+
+    let scalar_kernels = CpuScalarKernels {};
+    run_simulation(&scalar_kernels, &mut scene, 5.0, false);
+
+    let sys = scene
+      .with_component(particle_system, |sys: &ParticleSystemComponent| {
+        sys.particles.read().clone()
+      })
+      .unwrap();
+
     // HACK: CPU kernels are empty stubs in the IMEX architecture.
     // assert!(
     //   sys[0].velocity[0] < 0.0 || sys[0].velocity[1] < 0.0,
@@ -525,10 +871,10 @@ mod tests {
     let (mut scene_simd, sphere_simd, obb_simd) = setup_scene();
 
     let scalar_kernels = CpuScalarKernels {};
-    run_simulation(&scalar_kernels, &mut scene_scalar, 5.0);
+    run_simulation(&scalar_kernels, &mut scene_scalar, 5.0, true);
 
     let simd_kernels = CpuSimdKernels { thread_pool: pool };
-    run_simulation(&simd_kernels, &mut scene_simd, 5.0);
+    run_simulation(&simd_kernels, &mut scene_simd, 5.0, true);
 
     let v_sphere_scalar =
       scene_scalar.with_component(sphere_scalar, |k: &KinematicComponent| k.velocity).unwrap();

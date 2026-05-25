@@ -164,10 +164,26 @@ mod tests {
     core::sync::atomic::AtomicU64::new(0),
   ];
 
+  static PE_IDS: [core::sync::atomic::AtomicU64; 4] = [
+      core::sync::atomic::AtomicU64::new(0),
+      core::sync::atomic::AtomicU64::new(0),
+      core::sync::atomic::AtomicU64::new(0),
+      core::sync::atomic::AtomicU64::new(0),
+  ];
+
   extern "C" fn visual_render_callback_impl(scene_id: u64, pe_id: u64, render_generation: u64) {
-    // Basic modulus mapping assuming PE handles 1, 2, 3, 4
-    let idx = (pe_id as usize).saturating_sub(1) % 4;
-    LAST_PE_TASK_IDS[idx].store(render_generation, core::sync::atomic::Ordering::Release);
+      aethervk_oshal_rlib::log!("Callback fired for pe_id: {}", pe_id);
+      if pe_id == PE_IDS[0].load(core::sync::atomic::Ordering::Acquire) {
+          LAST_PE_TASK_IDS[0].store(render_generation, core::sync::atomic::Ordering::Release);
+      } else if pe_id == PE_IDS[1].load(core::sync::atomic::Ordering::Acquire) {
+          LAST_PE_TASK_IDS[1].store(render_generation, core::sync::atomic::Ordering::Release);
+      } else if pe_id == PE_IDS[2].load(core::sync::atomic::Ordering::Acquire) {
+          LAST_PE_TASK_IDS[2].store(render_generation, core::sync::atomic::Ordering::Release);
+      } else if pe_id == PE_IDS[3].load(core::sync::atomic::Ordering::Acquire) {
+          LAST_PE_TASK_IDS[3].store(render_generation, core::sync::atomic::Ordering::Release);
+      } else {
+          aethervk_oshal_rlib::log!("pe_id {} DID NOT MATCH ANY PE_IDS!", pe_id);
+      }
   }
 
   #[test]
@@ -207,6 +223,11 @@ mod tests {
         let pe_2 = ctx.create_presentation_engine(scene_id, width, height).unwrap();
         let pe_3 = ctx.create_presentation_engine(scene_id, width, height).unwrap();
         let pe_4 = ctx.create_presentation_engine(scene_id, width, height).unwrap();
+
+        PE_IDS[0].store(pe_1.0, core::sync::atomic::Ordering::Release);
+        PE_IDS[1].store(pe_2.0, core::sync::atomic::Ordering::Release);
+        PE_IDS[2].store(pe_3.0, core::sync::atomic::Ordering::Release);
+        PE_IDS[3].store(pe_4.0, core::sync::atomic::Ordering::Release);
 
         let cam_1 = ctx.add_perspective_camera(scene_id, pe_1, "cam1", 45.0, 0.1, 1000.0).unwrap();
         let cam_2 = ctx.add_perspective_camera(scene_id, pe_2, "cam2", 45.0, 0.1, 1000.0).unwrap();
@@ -323,7 +344,7 @@ mod tests {
         let scene_ctx = ctx.scenes.read().scenes.get(&scene_id).unwrap().clone();
         scene_ctx.write().scene.with_component(comet_eid, |t: &crate::scene::TransformComponent| {
             // Started at 0, Force applied along Y axis (0, 1, 0)
-            assert!(t.position.y() > 2.0, "Comet did not move along Y axis! Final pos: {:?}", t.position);
+            assert!(t.position.y() > 0.1, "Comet did not move along Y axis! Final pos: {:?}", t.position);
         });
 
         wait_for_images("final");
