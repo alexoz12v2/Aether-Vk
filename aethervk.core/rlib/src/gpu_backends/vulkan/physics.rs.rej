@@ -1,0 +1,9 @@
+@@ -2226,7 +2227,7 @@
+       out_ps_ps: out_ps_ps_addr,
+       out_cross_pairs: out_cross_pairs_addr,
+       total_queries,
+       max_pairs,
+-      _pad: [0; 2],
++      tlas_bvh: tlas_bvh_addr,
+     };
+     let bytes = unsafe {

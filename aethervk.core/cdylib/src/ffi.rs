@@ -952,6 +952,51 @@ pub unsafe extern "C" fn avkSimulationContext_getEntityParent(
   ctx_ref.get_entity_parent(scene_id, entity).unwrap_or(0)
 }
 
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setEntityVisibility(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  visible: bool,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let _ = ctx_ref.set_entity_visibility(scene_id, entity, visible);
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setEntityFollowing(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  following: bool,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let _ = ctx_ref.set_entity_following(scene_id, entity, following);
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setEntitySelected(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  selected: bool,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let _ = ctx_ref.set_entity_selected(scene_id, entity, selected);
+}
+
 // --- Async Heavy Operations ---
 
 #[unsafe(no_mangle)]

@@ -69,9 +69,9 @@ void stream_compact(uint3 DispatchThreadID : SV_DispatchThreadID) {
         
         BDA_STORE(float, pc.packed_out + packed_offset + 16, in_data.toi);
         
-        BDA_STORE(float4, pc.packed_out + packed_offset + 32, in_data.contact_normal);
+        BDA_STORE(float4, pc.packed_out + packed_offset + 32, float4(in_data.norm_x, in_data.norm_y, in_data.norm_z, 0.0));
         
-        BDA_STORE(float4, pc.packed_out + packed_offset + 48, in_data.contact_point);
+        BDA_STORE(float4, pc.packed_out + packed_offset + 48, float4(in_data.pt_x, in_data.pt_y, in_data.pt_z, 1.0));
         
         BDA_STORE(float, pc.packed_out + packed_offset + 64, in_data.penetration_depth);
     }

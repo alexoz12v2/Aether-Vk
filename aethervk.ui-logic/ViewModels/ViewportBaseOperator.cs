@@ -156,7 +156,7 @@ public class ZoomDragOperator : IActionOperator
 
   public bool ProcessPointerDelta(float dx, float dy)
   {
-    _vm.RuntimeService.ZoomCamera(_vm.SceneId, _vm.CameraId, dy * 2.0f);
+    _vm.RuntimeService.ZoomCamera(_vm.SceneId, _vm.CameraId, dy * 0.1f);
     return true;
   }
 

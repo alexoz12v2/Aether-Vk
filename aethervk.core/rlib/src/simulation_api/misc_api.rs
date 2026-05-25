@@ -200,7 +200,10 @@ impl SimulationContext {
     match result {
       Ok(_) => true,
       Err(e) => {
-        oshal::log!("download_image err: {:?}", e);
+        let err_str = alloc::format!("{:?}", e);
+        if !err_str.contains("Invalid or previously consumed download ID") {
+          oshal::log!("download_image err: {}", err_str);
+        }
         false
       }
     }

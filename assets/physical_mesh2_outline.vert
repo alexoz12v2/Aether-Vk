@@ -32,7 +32,7 @@ void main() {
     float len = length(screenNormal);
     if (len > 0.0001) {
         vec2 screenNormalDir = screenNormal / len;
-        float outlineThickness = 0.15;
+        float outlineThickness = 0.03;
         // Adjust outline to handle aspect ratio automatically using windowExtent.
         vec2 offset = screenNormalDir * outlineThickness * clipPos.w;
         offset.x /= aspect;

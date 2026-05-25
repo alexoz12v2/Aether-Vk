@@ -1,7 +1,7 @@
 [numthreads(128, 1, 1)]
 
 #include "../bvh_utils.glsl"
-#include "gjk_cta_utils.glsl"
+
 
 struct PushConstants_ccd {
     uint64_t particle_bvh;
@@ -78,7 +78,7 @@ void ccd(uint3 DispatchThreadID : SV_DispatchThreadID) {
                     if (my_prim_id < offset) {
                         float toi = 0.0, depth = 0.0; 
                         float3 normal = float3(0.0, 0.0, 0.0);
-                        float3 point = float3(0.0, 0.0, 0.0);
+                        float3 c_point = float3(0.0, 0.0, 0.0);
                         
                         uint baseB = (offset / SUBGROUP_SIZE) * (10 * SUBGROUP_SIZE) + (offset % SUBGROUP_SIZE);
                         float3 other_vel = float3(
@@ -97,7 +97,7 @@ void ccd(uint3 DispatchThreadID : SV_DispatchThreadID) {
                             BDA_LOAD(float, node_addr + 1408 + i * 4)
                         );
 
-                        if (compute_toi_generic(0, float3(pc.particle_radius, 0.0, 0.0), transA, my_vel * pc.dt, 0, float3(pc.particle_radius, 0.0, 0.0), transB, other_vel, 1e-3, 10, toi, normal, point, depth)) {
+                        if (compute_toi_generic(0, float3(pc.particle_radius, 0.0, 0.0), transA, my_vel * pc.dt, 0, float3(pc.particle_radius, 0.0, 0.0), transB, other_vel, 1e-3, 10, toi, normal, c_point, depth)) {
                             if (collisions_found < 16) {
                                 uint outIdx = idx * 16 + collisions_found++;
                                 uint64_t out_addr = pc.output_list + 16 + outIdx * 96;
@@ -108,7 +108,7 @@ void ccd(uint3 DispatchThreadID : SV_DispatchThreadID) {
                                 BDA_STORE(float, out_addr + 48, toi);
                                 BDA_STORE(float, out_addr + 52, depth);
                                 BDA_STORE(float4, out_addr + 64, float4(normal, 0.0));
-                                BDA_STORE(float4, out_addr + 80, float4(point, 1.0));
+                                BDA_STORE(float4, out_addr + 80, float4(c_point, 1.0));
                             }
                         }
                     }

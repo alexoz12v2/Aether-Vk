@@ -173,7 +173,9 @@ unsafe impl Sync for FrameStagingArena {}
 
 #[macro_export]
 macro_rules! apply_test_dedicated_alloc {
-  ($alloc_info:expr) => {
+  ($alloc_info:ident) => {
+    #[cfg(all(test, feature = "test_dedicated_alloc"))]
+    let mut $alloc_info = $alloc_info;
     #[cfg(all(test, feature = "test_dedicated_alloc"))]
     {
       $alloc_info.flags |= vk_mem::AllocationCreateFlags::DEDICATED_MEMORY;
@@ -192,7 +194,8 @@ impl FrameStagingArena {
     let alloc_info = vk_mem::AllocationCreateInfo {
       usage: vk_mem::MemoryUsage::Auto,
       flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-        | vk_mem::AllocationCreateFlags::MAPPED,
+        | vk_mem::AllocationCreateFlags::MAPPED
+        | vk_mem::AllocationCreateFlags::DEDICATED_MEMORY,
       required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
         | vk::MemoryPropertyFlags::HOST_COHERENT,
       ..Default::default()
@@ -248,14 +251,22 @@ impl FrameStagingArena {
       self.buffer,
       self.allocation.get_raw()
     );
-    unsafe { allocator.destroy_buffer(self.buffer, &mut self.allocation) };
+    unsafe {
+      vk_mem::ffi::vmaDestroyBuffer(allocator.get_raw(), self.buffer, self.allocation.get_raw());
+      core::ptr::drop_in_place(&mut self.allocation);
+    }
   }
 }
 
 impl DeviceResource for GlobalDeviceAllocator {
   fn cleanup(&mut self, _device: &ash::Device) {
     #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
-    aethervk_oshal_rlib::os::memory::tracking::report_leaked_gpu_allocations();
+    {
+      if let Ok(stats) = self.allocator.build_stats_string(true) {
+        aethervk_oshal_rlib::log!("VMA STATS BEFORE DROP:\n{}", stats);
+      }
+      aethervk_oshal_rlib::os::memory::tracking::report_leaked_gpu_allocations();
+    }
     unsafe { mem::ManuallyDrop::drop(&mut self.allocator) };
   }
 }

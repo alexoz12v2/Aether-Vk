@@ -129,9 +129,9 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer ParticleDat
 
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer AtomicCounters { uint counts[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer MortonArray { uvec2 entries[]; };
-layout(buffer_reference, std430, buffer_reference_align = 4) buffer PairBuffer { uint count; uvec2 pairs[]; };
-layout(buffer_reference, std430, buffer_reference_align = 4) buffer PackedCollisions { uint dispatch_x; uint dispatch_y; uint dispatch_z; uint count; PackedPair pairs[]; };
-layout(buffer_reference, std430, buffer_reference_align = 4) buffer SparseCollisions { uint count; SparseCollisionData pairs[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer PairBuffer { uint count; uint capacity; uvec2 pairs[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer PackedCollisions { uint dispatch_x; uint dispatch_y; uint dispatch_z; uint count; uint capacity; PackedPair pairs[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer SparseCollisions { uint count; uint capacity; SparseCollisionData pairs[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer RigidBodyArray { RigidBody bodies[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer RigidBodyUintArray {
   // TODO: convenient getters.
@@ -182,9 +182,9 @@ bool intersectAABB(vec3 amin, vec3 amax, vec3 bmin, vec3 bmax) { return (amin.x 
 //------------------------------------------------------------
 
 struct CrossPair { uint macro_id; uint micro_id; uint lca_id; uint pad; };
-layout(buffer_reference, std430, buffer_reference_align = 4) buffer CrossPairBuffer { uint count; CrossPair pairs[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer CrossPairBuffer { uint count; uint capacity; CrossPair pairs[]; };
 
 struct CrossCollisionData { uint valid; uint macro_id; uint micro_id; uint lca_id; float toi; vec3 contact_normal; vec3 contact_point; float penetration_depth; };
-layout(buffer_reference, std430, buffer_reference_align = 4) buffer CrossSparseCollisions { uint count; CrossCollisionData pairs[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer CrossSparseCollisions { uint count; uint capacity; CrossCollisionData pairs[]; };
 
 #endif // BVH_UTILS_GLSL

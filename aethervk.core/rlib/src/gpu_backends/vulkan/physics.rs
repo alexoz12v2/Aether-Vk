@@ -40,6 +40,20 @@ pub struct NarrowCcdPushConstants {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct NarrowCcdCrossLcaPushConstants {
+  pub scene_entities: u64,
+  pub particles: u64,
+  pub cross_output_list: u64,
+  pub cross_pair_buffer: u64,
+  pub dt: f32,
+  pub particle_radius: f32,
+  pub lca_entities: u64,
+  pub space_type: u32,
+  pub _pad: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct NarrowCcdParticlesPushConstants {
   pub scene_entities: u64,
   pub output_list: u64,
@@ -330,6 +344,7 @@ pub struct BpClassifyPushConstants {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BpCrossLcaPushConstants {
+  pub tlas_bvh_addr: u64,
   pub lca_entities: u64,
   pub macro_leaves: u64,
   pub entity_headers: u64,
@@ -408,22 +423,25 @@ pub struct PhysicsPipelines {
   /// VV corrector: v_{n+½} → v_{n+1}; advances 64-bit engine clock
   pub integrate_particles_p4_5: vk::Pipeline,
   // ── Narrow Phase ──────────────────────────────────────────────────────────
+  
   pub narrow_ccd: vk::Pipeline,
+  
+  pub narrow_ccd_cross_lca: vk::Pipeline,
   // ── Force aggregation ─────────────────────────────────────────────────────
   /// Leaf-wrench → CoM-wrench reduction (one WG per RB)
   pub rb_force_assign: vk::Pipeline,
   // ── Broad-phase suite ─────────────────────────────────────────────────────
-  /// Zeroes all four pair-list counts before the broad phase begins
+  
   pub bp_clear: vk::Pipeline,
-  /// Generates swept AABBs per entity (particles + rigid bodies)
+  
   pub bp_bounds_gen: vk::Pipeline,
-  /// Subgroup-cooperative TLAS traversal → raw overlapping pair list
+  
   pub bp_scene: vk::Pipeline,
-  /// Bins raw pairs into RB-RB / RB-PS / cross-LCA typed queues
+  
   pub bp_classify: vk::Pipeline,
-  /// Transforms macro-frame AABBs into micro-frame, re-emits narrow-phase pairs
+  
   pub bp_cross_lca: vk::Pipeline,
-  /// LBVH traversal + linear-spring repulsion → AOSOA force buffer (particle-particle)
+  
   pub bp_particle_self: vk::Pipeline,
 }
 
@@ -556,15 +574,24 @@ impl PhysicsPipelines {
           "{}/integrate_particles_p4_5.comp.spv",
           sim_dir
         ))?,
+        
         narrow_ccd: create_pipeline(&alloc::format!("{}/narrow_ccd.comp.spv", sim_dir))?,
+        
+        narrow_ccd_cross_lca: create_pipeline(&alloc::format!("{}/narrow_ccd_cross_lca.comp.spv", sim_dir))?,
         // ── Force aggregation ───────────────────────────────────────────────
         rb_force_assign: create_pipeline(&alloc::format!("{}/rb_force_assign.comp.spv", sim_dir))?,
         // ── Broad-phase suite ───────────────────────────────────────────────
+        
         bp_clear: create_pipeline(&alloc::format!("{}/bp_clear.comp.spv", sim_dir))?,
+        
         bp_bounds_gen: create_pipeline(&alloc::format!("{}/bp_bounds_gen.comp.spv", sim_dir))?,
+        
         bp_scene: create_pipeline(&alloc::format!("{}/bp_scene.comp.spv", sim_dir))?,
+        
         bp_classify: create_pipeline(&alloc::format!("{}/bp_classify.comp.spv", sim_dir))?,
+        
         bp_cross_lca: create_pipeline(&alloc::format!("{}/bp_cross_lca.comp.spv", sim_dir))?,
+        
         bp_particle_self: create_pipeline(&alloc::format!(
           "{}/bp_particle_self.comp.spv",
           sim_dir
@@ -607,15 +634,24 @@ impl PhysicsPipelines {
     discard_pool.discard_pipeline(self.integrate_particles_p1_p2, timeline);
     discard_pool.discard_pipeline(self.integrate_bodies_p3, timeline);
     discard_pool.discard_pipeline(self.integrate_particles_p4_5, timeline);
+    
     discard_pool.discard_pipeline(self.narrow_ccd, timeline);
+    
+    discard_pool.discard_pipeline(self.narrow_ccd_cross_lca, timeline);
     // Force aggregation
     discard_pool.discard_pipeline(self.rb_force_assign, timeline);
     // Broad-phase suite
+    
     discard_pool.discard_pipeline(self.bp_clear, timeline);
+    
     discard_pool.discard_pipeline(self.bp_bounds_gen, timeline);
+    
     discard_pool.discard_pipeline(self.bp_scene, timeline);
+    
     discard_pool.discard_pipeline(self.bp_classify, timeline);
+    
     discard_pool.discard_pipeline(self.bp_cross_lca, timeline);
+    
     discard_pool.discard_pipeline(self.bp_particle_self, timeline);
     discard_pool.discard_pipeline_layout(self.pipeline_layout, timeline);
   }
@@ -990,6 +1026,8 @@ pub struct VulkanComputeKernels {
   pub discard_pool: crate::gpu_backends::vulkan::device::resources::DiscardPool,
   pub queue_sharing_info: crate::gpu::QueueSharingInfo,
   pub transient_pool: spin::Mutex<TransientBufferPool>,
+  #[cfg(test)]
+  pub tracked_physical_allocations: spin::Mutex<alloc::vec::Vec<u64>>,
 }
 
 impl VulkanComputeKernels {
@@ -1020,6 +1058,8 @@ impl VulkanComputeKernels {
       discard_pool,
       queue_sharing_info,
       transient_pool: spin::Mutex::new(TransientBufferPool::new()),
+      #[cfg(test)]
+      tracked_physical_allocations: spin::Mutex::new(alloc::vec::Vec::new()),
     })
   }
 
@@ -1095,6 +1135,11 @@ impl VulkanComputeKernels {
     let (buffer, mut alloc, info) =
       unsafe { allocator.create_buffer_get_info(&buffer_info, &alloc_info) }?;
     aethervk_oshal_rlib::log!("physics alloc: {:?}", alloc.get_raw());
+    #[cfg(test)]
+    {
+      use ash::vk::Handle;
+      self.tracked_physical_allocations.lock().push(info.device_memory.as_raw());
+    }
     rollback.defer(move |_device| unsafe {
       allocator.destroy_buffer(buffer, &mut alloc);
     });
@@ -1199,6 +1244,11 @@ impl VulkanComputeKernels {
     let (buffer, mut alloc, info) =
       unsafe { allocator.create_buffer_get_info(&buffer_info, &alloc_info) }?;
     aethervk_oshal_rlib::log!("physics alloc: {:?}", alloc.get_raw());
+    #[cfg(test)]
+    {
+      use ash::vk::Handle;
+      self.tracked_physical_allocations.lock().push(info.device_memory.as_raw());
+    }
     rollback.defer(move |_device| unsafe {
       allocator.destroy_buffer(buffer, &mut alloc);
     });
@@ -1945,6 +1995,7 @@ impl VulkanComputeKernels {
   }
 
   /// Dispatches `bp_clear.comp` (single thread, clears all four pair queues).
+  
   pub fn bp_clear(
     &self,
     device: &LogicalDevice,
@@ -2000,6 +2051,7 @@ impl VulkanComputeKernels {
   ///
   /// `scene_entities_addr` — BDA to `EntityArray` (rigid bodies; one `RigidBody` per entry).
   /// `tlas_leaves_addr`    — BDA to output `LeafBuffer`.
+  
   pub fn bp_bounds_gen(
     &self,
     device: &LogicalDevice,
@@ -2060,6 +2112,7 @@ impl VulkanComputeKernels {
   /// `tlas_bvh_addr`        — BDA to `MultiBvhBuffer`.
   /// `query_leaves_addr`    — BDA to swept `LeafBuffer` produced by `bp_bounds_gen`.
   /// `overlapping_pairs_addr` — BDA to output `PairBuffer` (`uint count; uvec2 pairs[]`).
+  
   pub fn bp_scene(
     &self,
     device: &LogicalDevice,
@@ -2119,6 +2172,7 @@ impl VulkanComputeKernels {
   /// Dispatches `bp_classify.comp`.
   ///
   /// Bins raw `overlapping_pairs` into RB-RB, RB-PS, and cross-LCA typed queues.
+  
   pub fn bp_classify(
     &self,
     device: &LogicalDevice,
@@ -2182,10 +2236,12 @@ impl VulkanComputeKernels {
   /// transforms the macro-frame rigid body's AABB into the micro-frame using
   /// `InstanceDescriptor.inv_transform`, then traverses the micro-frame BVH
   /// to produce refined narrow-phase candidate pairs.
+  
   pub fn bp_cross_lca(
     &self,
     device: &LogicalDevice,
     cmd: &mut VulkanCommandBuffer,
+    tlas_bvh_addr: u64,
     lca_entities_addr: u64,
     macro_leaves_addr: u64,
     entity_headers_addr: u64,
@@ -2202,6 +2258,7 @@ impl VulkanComputeKernels {
     let groups = (total_queries + subgroups_per_wg - 1) / subgroups_per_wg;
 
     let pc = BpCrossLcaPushConstants {
+      tlas_bvh_addr,
       lca_entities: lca_entities_addr,
       macro_leaves: macro_leaves_addr,
       entity_headers: entity_headers_addr,
@@ -2256,6 +2313,7 @@ impl VulkanComputeKernels {
   /// `particles_addr` — BDA to AOSOA particle buffer.
   /// `wrench_buffer` — BDA to the same particle buffer (used as float[] for atomicAdd).
   /// `stiffness`     — Spring constant k for the linear penalty force.
+  
   pub fn bp_particle_self(
     &self,
     device: &LogicalDevice,
@@ -2691,6 +2749,7 @@ impl VulkanComputeKernels {
   }
 
   #[function_name::named]
+  
   fn self_intersect_scene(
     &self,
     device: &LogicalDevice,
@@ -2761,6 +2820,7 @@ impl VulkanComputeKernels {
     Ok(candidates_buffer)
   }
 
+  
   fn intersect_instances(
     &self,
     device: &LogicalDevice,
@@ -2827,6 +2887,7 @@ impl VulkanComputeKernels {
     Ok(output_list)
   }
 
+  
   fn compact_collisions(
     &self,
     device: &LogicalDevice,
@@ -2912,6 +2973,7 @@ impl VulkanComputeKernels {
     Ok(packed_out)
   }
 
+  
   fn find_earliest_collision(
     &self,
     device: &LogicalDevice,
@@ -3010,6 +3072,7 @@ impl VulkanComputeKernels {
     Ok(out_toi)
   }
 
+  
   fn apply_collision_responses(
     &self,
     device: &LogicalDevice,
@@ -3137,6 +3200,7 @@ impl VulkanComputeKernels {
     Ok(())
   }
 
+  
   fn snapshot_dynamics(
     &self,
     device: &LogicalDevice,
@@ -3208,6 +3272,7 @@ impl VulkanComputeKernels {
     Ok((rb_snap, p_snap))
   }
 
+  
   fn restore_dynamics(
     &self,
     device: &LogicalDevice,
@@ -3334,6 +3399,7 @@ impl VulkanComputeKernels {
 }
 
 impl Kernels for Device {
+  
   fn narrow_ccd(
     &self,
     cmd: &mut Self::Cmd,
@@ -3342,7 +3408,8 @@ impl Kernels for Device {
     particles: &Self::Buffer<f32>,
     lca_entities: u64,
     space_type: u32,
-  ) -> EngineResult<Self::List<crate::gpu::CollisionPair>> {
+    output_list: &Self::List<crate::gpu::CollisionPair>,
+  ) -> EngineResult<()> {
     self.narrow_ccd(
       cmd,
       broadphase_pairs,
@@ -3350,6 +3417,7 @@ impl Kernels for Device {
       particles,
       lca_entities,
       space_type,
+      output_list,
     )
   }
 
@@ -3512,9 +3580,15 @@ impl Kernels for Device {
             | ash::vk::MemoryPropertyFlags::HOST_COHERENT,
           ..Default::default()
         };
+        crate::apply_test_dedicated_alloc!(alloc_info);
         let (buffer, mut alloc, info) =
           unsafe { allocator.create_buffer_get_info(&buf_info, &alloc_info) }?;
         aethervk_oshal_rlib::log!("physics alloc: {:?}", alloc.get_raw());
+        #[cfg(test)]
+        {
+          use ash::vk::Handle;
+          self.kernels.tracked_physical_allocations.lock().push(info.device_memory.as_raw());
+        }
         aethervk_oshal_rlib::log!("upload_motion_tlas alloc: {:?}", alloc.get_raw());
         rollback.defer(move |_| unsafe { allocator.destroy_buffer(buffer, &mut alloc) });
 
@@ -3815,6 +3889,7 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
+  
   fn self_intersect_scene(
     &self,
     cmd: &mut Self::Cmd,
@@ -3831,6 +3906,7 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
+  
   fn intersect_instances(
     &self,
     cmd: &mut Self::Cmd,
@@ -3859,6 +3935,7 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
+  
   fn compact_collisions(
     &self,
     cmd: &mut Self::Cmd,
@@ -3876,6 +3953,7 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
+  
   fn find_earliest_collision(
     &self,
     cmd: &mut Self::Cmd,
@@ -3892,6 +3970,7 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
+  
   fn apply_collision_responses(
     &self,
     cmd: &mut Self::Cmd,
@@ -3922,6 +4001,7 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
+  
   fn snapshot_dynamics(
     &self,
     cmd: &mut Self::Cmd,
@@ -3946,6 +4026,7 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
+  
   fn restore_dynamics(
     &self,
     cmd: &mut Self::Cmd,
@@ -4153,6 +4234,7 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 
+  
   fn bp_clear(
     &self,
     cmd: &mut Self::Cmd,
@@ -4180,6 +4262,7 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 
+  
   fn bp_bounds_gen(
     &self,
     cmd: &mut Self::Cmd,
@@ -4205,6 +4288,7 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 
+  
   fn bp_scene(
     &self,
     cmd: &mut Self::Cmd,
@@ -4232,6 +4316,7 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 
+  
   fn bp_classify(
     &self,
     cmd: &mut Self::Cmd,
@@ -4266,9 +4351,11 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 
+  
   fn bp_cross_lca(
     &self,
     cmd: &mut Self::Cmd,
+    tlas_bvh_addr: u64,
     lca_entities_addr: u64,
     macro_leaves_addr: u64,
     entity_headers_addr: u64,
@@ -4286,6 +4373,7 @@ impl Kernels for Device {
         self.kernels.bp_cross_lca(
           &self.device,
           cmd,
+          tlas_bvh_addr,
           lca_entities_addr,
           macro_leaves_addr,
           entity_headers_addr,
@@ -4303,6 +4391,7 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 
+  
   fn bp_particle_self(
     &self,
     cmd: &mut Self::Cmd,
@@ -4336,6 +4425,7 @@ impl Kernels for Device {
 }
 
 impl Device {
+  
   pub fn narrow_ccd(
     &self,
     cmd: &mut VulkanCommandBuffer,
@@ -4344,9 +4434,8 @@ impl Device {
     particles: &VulkanBuffer<f32>,
     lca_entities: u64,
     space_type: u32,
-  ) -> crate::types::EngineResult<VulkanBuffer<crate::gpu::CollisionPair>> {
-    let output_list =
-      self.build_list::<crate::gpu::CollisionPair>(cmd, broadphase_pairs.capacity)?;
+    output_list: &VulkanBuffer<crate::gpu::CollisionPair>,
+  ) -> crate::types::EngineResult<()> {
 
     let pc = NarrowCcdPushConstants {
       scene_entities: rigid_bodies.address,
@@ -4366,10 +4455,16 @@ impl Device {
     let dispatch_groups = (broadphase_pairs.capacity as u32 + 255) / 256;
 
     unsafe {
+      let pipeline = if space_type == 1 {
+        self.kernels.pipelines.narrow_ccd_cross_lca
+      } else {
+        self.kernels.pipelines.narrow_ccd
+      };
+
       self.device.cmd_bind_pipeline(
         cmd.cmd,
         ash::vk::PipelineBindPoint::COMPUTE,
-        self.kernels.pipelines.narrow_ccd,
+        pipeline,
       );
       self.device.cmd_push_constants(
         cmd.cmd,
@@ -4433,7 +4528,7 @@ impl Device {
       );
     }
 
-    Ok(output_list)
+    Ok(())
   }
 }
 
