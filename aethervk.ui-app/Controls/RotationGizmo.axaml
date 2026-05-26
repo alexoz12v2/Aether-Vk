@@ -2,45 +2,13 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="using:AetherVk.Controls"
              x:Class="AetherVk.Controls.RotationGizmo">
-  <Viewbox Stretch="Uniform" 
+  <Viewbox Stretch="Uniform"
            PointerPressed="OnPointerPressed"
            PointerMoved="OnPointerMoved"
            PointerReleased="OnPointerReleased">
-    <Canvas Width="100" Height="100" HorizontalAlignment="Center" VerticalAlignment="Center" Background="Transparent">
-      
-      <!-- Center Anchor -->
-      <Ellipse Canvas.Left="48" Canvas.Top="48" Width="4" Height="4" Fill="{DynamicResource Text.Primary}" />
-
-      <!-- Z-Axis (Roll / Blue) - usually forward/backward but depicted as the circle on screen plane -->
-      <Ellipse Canvas.Left="10" Canvas.Top="10" Width="80" Height="80" 
-               Stroke="{DynamicResource Text.Secondary}" StrokeThickness="1" Opacity="0.5" />
-      
-      <!-- The dynamic transformed group -->
-      <Canvas Canvas.Left="50" Canvas.Top="50">
-        <Canvas.RenderTransform>
-          <TransformGroup>
-            <!-- X Axis (Pitch) -->
-            <RotateTransform Angle="{Binding Pitch, RelativeSource={RelativeSource AncestorType=local:RotationGizmo}}" />
-            <!-- Y Axis (Yaw) applied as a scale/skew hack or just combined in 3D-like 2D space -->
-            <ScaleTransform ScaleY="{Binding YawScaleValue, RelativeSource={RelativeSource AncestorType=local:RotationGizmo}}" />
-            <!-- Z Axis (Roll) -->
-            <RotateTransform Angle="{Binding Roll, RelativeSource={RelativeSource AncestorType=local:RotationGizmo}}" />
-          </TransformGroup>
-        </Canvas.RenderTransform>
-        
-        <!-- Y-Axis (Yaw / Green) - Up/Down Ring -->
-        <Ellipse Canvas.Left="-40" Canvas.Top="-40" Width="80" Height="80" 
-                 Stroke="LimeGreen" StrokeThickness="2" />
-                 
-        <!-- X-Axis (Pitch / Red) - Left/Right Line -->
-        <Line StartPoint="-40,0" EndPoint="40,0" Stroke="Red" StrokeThickness="2" />
-        
-        <!-- Y-Axis Marker (Top) -->
-        <Line StartPoint="0,0" EndPoint="0,-40" Stroke="LimeGreen" StrokeThickness="2" />
-        
-        <!-- Z-Axis Marker (Forward) -->
-        <Ellipse Canvas.Left="-3" Canvas.Top="-3" Width="6" Height="6" Fill="DodgerBlue" />
-      </Canvas>
-    </Canvas>
+    <!-- The canvas is drawn entirely from code-behind OnRender -->
+    <Canvas x:Name="GizmoCanvas" Width="100" Height="100"
+            HorizontalAlignment="Center" VerticalAlignment="Center"
+            Background="Transparent" />
   </Viewbox>
 </UserControl>

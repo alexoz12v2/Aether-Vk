@@ -8373,7 +8373,7 @@ impl RenderDevice for Device {
 
         let mut alloc_info = vk_mem::AllocationCreateInfo::default();
         alloc_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
-        alloc_info.flags = vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+        alloc_info.flags = vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM
           | vk_mem::AllocationCreateFlags::MAPPED;
         crate::apply_test_dedicated_alloc!(alloc_info);
 

@@ -86,6 +86,15 @@ public static class NativeInterop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_setCameraForPresentationEngine(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong presentationEngineId,
+    ulong cameraEntityId
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_createDefaultScene(IntPtr ctx);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -252,8 +261,10 @@ public static class NativeInterop
     public float OrthoBottom;
     public float OrthoTop;
 
-    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
-    public float[] Proj;
+    public float Proj00, Proj01, Proj02, Proj03;
+    public float Proj10, Proj11, Proj12, Proj13;
+    public float Proj20, Proj21, Proj22, Proj23;
+    public float Proj30, Proj31, Proj32, Proj33;
   }
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

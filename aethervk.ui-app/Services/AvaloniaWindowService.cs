@@ -215,7 +215,7 @@ namespace AetherVk.Services
 
       var dialog = new Views.SpawnCometWindow
       {
-        DataContext = new SpawnCometViewModel(models, _horizonService, _timelineService),
+        DataContext = new SpawnCometViewModel(models, _horizonService, _timelineService, _breadcrumbService),
       };
       var result = await dialog.ShowDialog<SpawnCometResult?>(mainWindow);
       if (result == null)

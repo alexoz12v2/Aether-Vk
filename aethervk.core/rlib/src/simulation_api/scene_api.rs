@@ -231,7 +231,10 @@ impl SimulationContext {
     )?;
     // we don't maintain an inverse mapping, so we need to find it manually
     // precondition for unwrap: if entity exists, then the simulation api has its external id.
-    Ok(scene.read().entity_map.iter().find(|&(_, v)| *v == parent_id).map(|(ext, _)| *ext).unwrap())
+    // However, some internal nodes might not have an external ID, so return an error instead of panicking.
+    scene.read().entity_map.iter().find(|&(_, v)| *v == parent_id).map(|(ext, _)| *ext).ok_or(
+      EngineError::InvalidOperation("scene_api:get_entity_parent parent has no external mapping")
+    )
   }
   pub fn destroy_scene(&self, scene_id: u64) -> EngineResult<()> {
     let mut pes_to_destroy = Vec::new();
@@ -378,7 +381,7 @@ impl SimulationContext {
         mesh: Arc::from(sun_sphere),
         emissive_intensity: 0.9,
         emissive_color: [1.0, 0.35, 0.02],
-        use_new_path: false,
+        use_new_path: true,
         paint_display_mode: 0,
         sphere_center: [0.0, 0.0, 0.0],
         sphere_radius: 1.0,
@@ -387,23 +390,33 @@ impl SimulationContext {
       },
     )?;
 
-    // Camera at 0.02 AU in first octant
     let camera_entity = scene.spawn_entity("camera");
     let pos = 0.02 / f32::sqrt(3.0);
-
+    // Look at origin from first octant
+    let look_dir = Vec3f32::from_components(-pos, -pos, -pos).normalize();
+    let up = Vec3f32::from_components(0.0, 0.0, 1.0);
+    let right = look_dir.cross(up).normalize();
+    let true_up = right.cross(look_dir).normalize();
+    
+    // In our coordinate system: +x=right, -y=forward, +z=up.
+    // The look_at_axes expects these vectors. Wait, standard look rotation uses -Z forward?
+    // The transform rotation simply aligns local axes to world axes.
+    let mat = <oshal::math::matrix::mat4::Mat4x4f32 as oshal::math::matrix::Matrix4>::look_at_axes(right, look_dir, true_up, Vec3f32::from_components(pos, pos, pos));
+    let rot = <oshal::math::matrix::mat4::Mat4x4f32 as oshal::math::matrix::Matrix4>::to_quat_custom_frame(&mat);
     scene.add_component(
       camera_entity,
       TransformComponent {
         position: Vec3f32::from_components(pos, pos, pos),
-        rotation: Quat::identity(),
+        rotation: rot,
         scale: Vec3f32::from_components(1.0, 1.0, 1.0),
       },
     )?;
-    scene.add_component(
-      camera_entity,
-      crate::scene::CameraComponent::default(),
-    )?;
+    scene.add_component(camera_entity, crate::scene::CameraComponent::new_persp(45.0, 1.0, 0.0001, 1000.0))?;
     scene.set_parent(camera_entity, Some(root_entity));
+
+    let grid_entity = scene.spawn_entity("grid");
+    scene.add_component(grid_entity, GridComponent {})?;
+    scene.set_parent(grid_entity, Some(root_entity));
 
     let sky_entity = scene.spawn_entity("sky");
     scene.add_component(sky_entity, SkyComponent {})?;
@@ -429,11 +442,13 @@ impl SimulationContext {
     scene.add_component(cursor_entity, CursorComponent {})?;
     scene.set_parent(cursor_entity, Some(root_entity));
 
-    let scene_ctx_obj = SceneContext::new_empty(Arc::new(scene), root_entity)
+    let mut scene_ctx_obj = SceneContext::new_empty(Arc::new(scene), root_entity)
       .with_physics_scene()
       .with_cursor_entity(cursor_entity)?
       .with_sun_entity(sun_entity)?
+      .with_grid_entity(grid_entity)?
       .with_sky_entity(sky_entity)?;
+    scene_ctx_obj.register_entity(camera_entity);
     let scene_ctx = Arc::new(RwLock::new(scene_ctx_obj));
 
     if let Some(tx) = self.threads.render_thread.tx_opt() {
@@ -592,22 +607,22 @@ impl SimulationContext {
       },
     )?;
 
-    // Add bounding box collider to LCA micro frame to enclose the particles
-    scene_ctx.scene.add_component(
-      lca_id,
-      crate::scene::ColliderComponent {
-        shape: crate::scene::ColliderShape::OBB { half_extents: Vec3f32::from_components(0.01, 0.01, 0.01) },
-        mass: 0.0,
-        restitution: 0.0,
-        friction: 0.0,
-      }
-    )?;
-
     // SOI radius: capped at 1 AU; also capped from below at 0.01 AU so the
     // micro-frame is never degenerate even for a sun-grazing comet.
     let dist_au =
       (pos.x() * pos.x() + pos.y() * pos.y() + pos.z() * pos.z()).sqrt();
     let soi_radius_au = dist_au.min(1.0_f32).max(0.01_f32);
+
+    // Add bounding box collider to LCA micro frame to enclose the particles
+    scene_ctx.scene.add_component(
+      lca_id,
+      crate::scene::ColliderComponent {
+        shape: crate::scene::ColliderShape::OBB { half_extents: Vec3f32::from_components(soi_radius_au, soi_radius_au, soi_radius_au) },
+        mass: 0.0,
+        restitution: 0.0,
+        friction: 0.0,
+      }
+    )?;
 
     scene_ctx.scene.add_component(
       lca_id,
@@ -648,7 +663,7 @@ impl SimulationContext {
         mesh: mesh_arc,
         emissive_intensity: 0.0,
         emissive_color: [0.0, 0.0, 0.0],
-        use_new_path: false,
+        use_new_path: true,
         paint_display_mode: 0,
         sphere_center: [0.0, 0.0, 0.0],
         // sphere_radius is in micro-frame km — matches radius_km directly.
@@ -816,7 +831,7 @@ impl SimulationContext {
         mesh: mesh_arc,
         emissive_intensity: 0.0,
         emissive_color: [0.0, 0.0, 0.0],
-        use_new_path: false,
+        use_new_path: true,
         paint_display_mode: 0,
         sphere_center: [0.0, 0.0, 0.0],
         sphere_radius: bounding_sphere * scale.x().max(scale.y()).max(scale.z()),

@@ -118,7 +118,7 @@ impl SimulationContext {
         mesh: Arc::from(sphere),
         emissive_intensity: 0.0,
         emissive_color: [0.0, 0.0, 0.0],
-        use_new_path: false,
+        use_new_path: true,
         paint_display_mode: 0,
         sphere_center: [0.0, 0.0, 0.0],
         sphere_radius: 1.0,

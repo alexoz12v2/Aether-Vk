@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:AetherVk.Logic.ViewModels"
+        xmlns:models="using:AetherVk.Logic.Models"
         xmlns:controls="using:AetherVk.Controls"
         x:DataType="vm:SpawnCometViewModel"
         x:Class="AetherVk.Views.SpawnCometWindow"
@@ -72,7 +73,18 @@
 
         <Grid ColumnDefinitions="*, Auto, Auto" Margin="0,16,0,0" IsVisible="{Binding PhysicsType, Converter={x:Static ObjectConverters.Equal}, ConverterParameter='Static'}">
           <StackPanel Grid.Column="0" Spacing="12" Margin="0,0,16,0">
-            <TextBlock Text="Position" FontWeight="Bold" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="Position" FontWeight="Bold" />
+              <Button Background="Transparent" Padding="0" BorderThickness="0" Cursor="Hand" ToolTip.Tip="Click for info">
+                <Button.Flyout>
+                  <Flyout>
+                    <TextBlock Text="Position and scale are measured with respect to the Sun, on the J2000 plane, and in Astronomical Units (AU)." MaxWidth="250" TextWrapping="Wrap"/>
+                  </Flyout>
+                </Button.Flyout>
+                <PathIcon Data="M 12 2 C 6.48 2 2 6.48 2 12 C 2 17.52 6.48 22 12 22 C 17.52 22 22 17.52 22 12 C 22 6.48 17.52 2 12 2 Z M 13 17 L 11 17 L 11 11 L 13 11 L 13 17 Z M 13 9 L 11 9 L 11 7 L 13 7 L 13 9 Z" 
+                          Width="14" Height="14" Foreground="{DynamicResource Text.Secondary}" />
+              </Button>
+            </StackPanel>
             <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
                 <TextBlock Grid.Column="0" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
                 <controls:UnboundedSlider Grid.Column="1" Value="{Binding PosX}" Margin="0,0,8,0"/>
@@ -128,53 +140,66 @@
         <TextBlock Text="Step 3: Horizon JPL Orbit Data" FontWeight="Bold" FontSize="16" />
 
         <StackPanel Spacing="12">
-          <Button Content="Load JPL Comets Database" Command="{Binding FetchCometsCommand}" Classes="accent" HorizontalAlignment="Left" />
+          <Button Content="Load JPL Comets Database" Command="{Binding FetchCometsCommand}" Classes="accent" HorizontalAlignment="Left" IsVisible="{Binding HasNoComets}" />
           
-          <ComboBox ItemsSource="{Binding CometsData}" 
-                    SelectedItem="{Binding SelectedComet}" 
-                    PlaceholderText="Select a comet..."
-                    MaxDropDownHeight="300"
-                    Width="300"
-                    HorizontalAlignment="Left">
-            <ComboBox.ItemTemplate>
-              <DataTemplate>
-                <TextBlock Text="{Binding Name}" />
-              </DataTemplate>
-            </ComboBox.ItemTemplate>
-          </ComboBox>
+        <StackPanel Spacing="12" IsVisible="{Binding HasComets}">
+          <AutoCompleteBox ItemsSource="{Binding CometsData}" 
+                           SelectedItem="{Binding SelectedComet}" 
+                           ValueMemberBinding="{Binding Name, DataType=models:CometSearchResult}"
+                           FilterMode="Contains"
+                           Watermark="Type to search comets..."
+                           MaxDropDownHeight="300"
+                           HorizontalAlignment="Stretch" />
+        </StackPanel>
         </StackPanel>
 
         <!-- Nucleus & Orbit Data (Visible only when a comet is selected) -->
         <StackPanel Spacing="16" Margin="0,16,0,0" IsVisible="{Binding SelectedComet, Converter={x:Static ObjectConverters.IsNotNull}}">
           <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="8" Padding="16">
-            <StackPanel Spacing="16">
+            <StackPanel Spacing="12">
               <TextBlock Text="Object Parameters" FontWeight="Bold" FontSize="14" />
               
-              <Grid ColumnDefinitions="Auto, *" Margin="0,4,0,0">
-                <TextBlock Grid.Column="0" Text="Nucleus Radius (km):" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,12,0" />
-                <NumericUpDown Grid.Column="1" Value="{Binding CometRadiusKm}" FormatString="0.000" Minimum="0.001" Width="140" HorizontalAlignment="Left" ToolTip.Tip="Radius from Horizon JPL physical properties." />
-              </Grid>
-
-              <TextBlock Text="Orbital Elements (EPA)" FontWeight="Bold" FontSize="14" Margin="0,8,0,0" />
-              <StackPanel Orientation="Horizontal" Spacing="10">
-                <TextBlock Text="Target Date:" VerticalAlignment="Center" />
-                <DatePicker SelectedDate="{Binding TargetDate}" />
-                <Button Content="Fetch Orbit Data" Command="{Binding FetchOrbitDataCommand}" Classes="accent" />
+              <!-- Nucleus Radius with override detection -->
+              <StackPanel Spacing="4">
+                <Grid ColumnDefinitions="Auto, Auto, Auto">
+                  <TextBlock Grid.Column="0" Text="Nucleus Radius (km):" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,12,0" />
+                  <NumericUpDown Grid.Column="1" Value="{Binding CometRadiusKm}" FormatString="0.000" Minimum="0.001" Width="140"
+                                 ToolTip.Tip="Auto-populated from Horizon JPL. Edit to override." />
+                  <Button Grid.Column="2" Content="↺ Reset" Command="{Binding ResetRadiusCommand}"
+                          IsVisible="{Binding IsRadiusOverridden}"
+                          Margin="8,0,0,0" Padding="8,4" FontSize="11"
+                          ToolTip.Tip="Restore the Horizon JPL default value." />
+                </Grid>
+                <TextBlock Text="⚠ Value differs from Horizon JPL data. Click ↺ Reset to restore."
+                           IsVisible="{Binding IsRadiusOverridden}"
+                           Foreground="Orange" FontSize="11" Margin="0,2,0,0" />
               </StackPanel>
 
-              <!-- EPA Results Grid -->
-              <Grid ColumnDefinitions="Auto, *, Auto, *" RowDefinitions="Auto, Auto" Margin="0,12,0,0" IsVisible="{Binding FetchedOrbitData, Converter={x:Static ObjectConverters.IsNotNull}}">
+              <TextBlock Text="Orbital Elements (EPA)" FontWeight="Bold" FontSize="14" Margin="0,4,0,0" />
+
+              <!-- EPA params: two rows so nothing overflows -->
+              <Grid ColumnDefinitions="Auto, *, Auto, *" RowDefinitions="Auto, Auto" >
+                <!-- Center is hardcoded as @10 (Sun) internally -->
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Step:" VerticalAlignment="Center" Margin="0,0,8,6" />
+                <TextBox   Grid.Row="0" Grid.Column="1" Text="{Binding EpaStepSize}" Watermark="1 d" ToolTip.Tip="e.g. 1 d or 12 h" Margin="0,0,0,6"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="Orbit Year:" VerticalAlignment="Center" Margin="0,0,8,0" />
+                <NumericUpDown Grid.Row="1" Grid.Column="1" Value="{Binding OrbitYear}" FormatString="0" Minimum="1900" Maximum="2100" HorizontalAlignment="Stretch" Margin="0,0,12,0"/>
+              </Grid>
+
+              <Button Content="Fetch Orbit Data" Command="{Binding FetchOrbitDataCommand}" Classes="accent" HorizontalAlignment="Left" />
+
+              <!-- EPA Results -->
+              <Grid ColumnDefinitions="Auto, *, Auto, *" RowDefinitions="Auto, Auto" Margin="0,8,0,0"
+                    IsVisible="{Binding FetchedOrbitData, Converter={x:Static ObjectConverters.IsNotNull}}">
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Semi-Major Axis:" FontWeight="SemiBold" Margin="0,0,8,4"/>
                 <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding FetchedOrbitData.SemiMajorAxis, StringFormat='{}{0:F4} AU'}" Margin="0,0,16,4"/>
-                
                 <TextBlock Grid.Row="0" Grid.Column="2" Text="Eccentricity:" FontWeight="SemiBold" Margin="0,0,8,4"/>
                 <TextBlock Grid.Row="0" Grid.Column="3" Text="{Binding FetchedOrbitData.Eccentricity, StringFormat='{}{0:F6}'}" Margin="0,0,0,4"/>
-                
                 <TextBlock Grid.Row="1" Grid.Column="0" Text="Inclination:" FontWeight="SemiBold" Margin="0,0,8,0"/>
                 <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding FetchedOrbitData.Inclination, StringFormat='{}{0:F4}°'}" Margin="0,0,16,0"/>
-                
                 <TextBlock Grid.Row="1" Grid.Column="2" Text="Mean Anomaly:" FontWeight="SemiBold" Margin="0,0,8,0"/>
-                <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding FetchedOrbitData.MeanAnomaly, StringFormat='{}{0:F4}°'}" Margin="0,0,0,0"/>
+                <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding FetchedOrbitData.MeanAnomaly, StringFormat='{}{0:F4}°'}"/>
               </Grid>
             </StackPanel>
           </Border>
@@ -194,7 +219,7 @@
           
           <Button Content="Next" Command="{Binding NextStepCommand}" IsEnabled="{Binding CanGoNext}" IsVisible="{Binding !IsStep3}" Classes="accent" />
           
-          <Button Content="Spawn" x:CompileBindings="False" Command="{Binding $parent[Window].SpawnCommand}" IsVisible="{Binding IsStep3}" Classes="accent" />
+          <Button Content="Spawn" x:CompileBindings="False" Command="{Binding $parent[Window].SpawnCommand}" IsEnabled="{Binding CanGoNext}" IsVisible="{Binding IsStep3}" Classes="accent" />
         </StackPanel>
       </Grid>
     </Border>

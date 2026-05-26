@@ -149,15 +149,50 @@ public partial class CameraComponent : NativeComponent
     return propertyName != nameof(ProjectionMatrixPreview);
   }
 
+  // Clamp FOV to a valid perspective range [0.1°, 179.0°].
+  partial void OnFovChanged(float value)
+  {
+    if (value < 0.1f || value > 179.0f)
+      Fov = System.Math.Min(System.Math.Max(value, 0.1f), 179.0f);
+  }
+
+  // Near must be positive and strictly less than Far.
+  partial void OnNearPlaneChanged(float value)
+  {
+    const float minNear = 1e-6f;
+    float clamped = System.Math.Max(value, minNear);
+    if (clamped >= FarPlane)
+      clamped = System.Math.Max(FarPlane - 1e-6f, minNear);
+    if (clamped != value)
+      NearPlane = clamped;
+  }
+
+  // Far must be strictly greater than Near and at most 10 000 AU.
+  partial void OnFarPlaneChanged(float value)
+  {
+    float clamped = System.Math.Min(System.Math.Max(value, NearPlane + 1e-6f), 10_000.0f);
+    if (clamped != value)
+      FarPlane = clamped;
+  }
+
   protected override void PushToNativeImpl()
   {
+    if (SuspendNotifications)
+      return;
+
+    // Additional safety clamp: never send invalid values to native even if
+    // the OnXxxChanged correction hasn't fired yet.
+    float safeFov = System.Math.Min(System.Math.Max(Fov, 0.1f), 179.0f);
+    float safeNear = System.Math.Max(NearPlane, 1e-6f);
+    float safeFar = System.Math.Max(FarPlane, safeNear + 1e-6f);
+
     var data = new NativeInterop.FfiCamera
     {
       IsOrthographic = IsOrthographic,
-      Fov = Fov,
+      Fov = safeFov,
       Aspect = AspectRatio,
-      Near = NearPlane,
-      Far = FarPlane,
+      Near = safeNear,
+      Far = safeFar,
       OrthoLeft = OrthoLeft,
       OrthoRight = OrthoRight,
       OrthoBottom = OrthoBottom,
@@ -193,12 +228,11 @@ public partial class CameraComponent : NativeComponent
       OrthoBottom = data.OrthoBottom;
       OrthoTop = data.OrthoTop;
 
-      // Safe unpacking of the projection matrix
       ProjectionMatrixPreview =
-        $"[{data.Proj[0]:F2}, {data.Proj[4]:F2}, {data.Proj[8]:F2}, {data.Proj[12]:F2}]\n"
-        + $"[{data.Proj[1]:F2}, {data.Proj[5]:F2}, {data.Proj[9]:F2}, {data.Proj[13]:F2}]\n"
-        + $"[{data.Proj[2]:F2}, {data.Proj[6]:F2}, {data.Proj[10]:F2}, {data.Proj[14]:F2}]\n"
-        + $"[{data.Proj[3]:F2}, {data.Proj[7]:F2}, {data.Proj[11]:F2}, {data.Proj[15]:F2}]";
+        $"[{data.Proj00:F2}, {data.Proj10:F2}, {data.Proj20:F2}, {data.Proj30:F2}]\n"
+        + $"[{data.Proj01:F2}, {data.Proj11:F2}, {data.Proj21:F2}, {data.Proj31:F2}]\n"
+        + $"[{data.Proj02:F2}, {data.Proj12:F2}, {data.Proj22:F2}, {data.Proj32:F2}]\n"
+        + $"[{data.Proj03:F2}, {data.Proj13:F2}, {data.Proj23:F2}, {data.Proj33:F2}]";
     }
   }
 }
@@ -565,7 +599,8 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
       {
         LatitudeRad = Circles[i].LatitudeDeg * (float)Math.PI / 180f,
         LongitudeRad = Circles[i].LongitudeDeg * (float)Math.PI / 180f,
-        CircleRadiusFrac = Circles[i].CircleRadius * 1000f,
+        // Assuming CircleRadius is in meters, converting to km:
+        CircleRadiusFrac = Circles[i].CircleRadius / 1000f,
         Mass = Circles[i].Mass / 1000f,
         ColorR = Circles[i].ColorR,
         ColorG = Circles[i].ColorG,
@@ -600,7 +635,7 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
         {
           LatitudeDeg = arr[i].LatitudeRad * 180f / (float)Math.PI,
           LongitudeDeg = arr[i].LongitudeRad * 180f / (float)Math.PI,
-          CircleRadius = arr[i].CircleRadiusFrac / 1000f,
+          CircleRadius = arr[i].CircleRadiusFrac * 1000f,
           Mass = arr[i].Mass * 1000f,
           ColorR = arr[i].ColorR,
           ColorG = arr[i].ColorG,

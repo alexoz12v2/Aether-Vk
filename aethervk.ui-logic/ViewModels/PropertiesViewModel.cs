@@ -38,9 +38,12 @@ public partial class PropertiesViewModel
 
   private readonly System.Collections.Generic.List<IComponentRule> _componentRules = new();
 
+  public TimelineService Timeline { get; }
+
   public PropertiesViewModel(
     ulong sceneId,
     SceneStateManager stateManager,
+    TimelineService timelineService,
     NativeRuntimeService? runtimeService = null,
     BreadcrumbService? breadcrumbService = null
   )
@@ -48,6 +51,7 @@ public partial class PropertiesViewModel
   {
     System.Console.WriteLine($"[PropertiesViewModel] Constructor called for Scene {sceneId}");
     _stateManager = stateManager;
+    Timeline = timelineService;
     _runtimeService = runtimeService;
     _breadcrumbService = breadcrumbService;
     CurrentSceneId = sceneId;

@@ -97,6 +97,7 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
     if (_runtimeService.IsInitialized)
     {
       _runtimeService.SetSimulationTime(CurrentSceneId, Timeline.TimeTai);
+      _ = UpdateTrajectoriesAsync();
     }
   }
 
@@ -184,6 +185,7 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
       {
         _runtimeService.RestoreSnapshot(CurrentSceneId);
       }
+      _ = UpdateTrajectoriesAsync();
     }
   }
 
