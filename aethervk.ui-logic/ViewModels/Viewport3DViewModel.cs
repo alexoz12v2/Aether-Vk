@@ -45,7 +45,7 @@ public partial class Viewport3DViewModel
 
   private void UpdateCameraAspectRatio()
   {
-      if (Width <= 0 || Height <= 0 || _sceneStateManager == null) return;
+      if (Width <= 0 || Height <= 0 || _sceneStateManager == null || SceneId == 0) return;
       var state = _sceneStateManager.GetOrCreateScene(SceneId);
       if (state.EntityMap.TryGetValue(CameraId, out var entity))
       {
@@ -157,32 +157,51 @@ public partial class Viewport3DViewModel
   // look_dir = normalize(-1,-1,-1), right = normalize(look_dir × up), true_up = right × look_dir.
   // Computed offline to match the Rust create_default_scene look_at_axes output.
   private const float HomeRotW =  0.7010574f;
-  private const float HomeRotX =  0.4304593f;
-  private const float HomeRotY = -0.0922958f;
-  private const float HomeRotZ = -0.5609855f;
+  private const float HomeRotX = -0.4304593f;
+  private const float HomeRotY =  0.0922958f;
+  private const float HomeRotZ =  0.5609855f;
 
   private void SetupViewport()
   {
-    // Never create a scene here — that is InitializeSimulationContext's job.
-    // If no scene exists yet, we'll be retried via SimulationStateUpdatedMessage
-    // once CreateScene finishes on the UI thread.
-    var existingScene = _sceneStateManager.AllScenes.FirstOrDefault();
-    if (existingScene == null)
+    System.Console.WriteLine($"[SetupViewport] Called. IsInitialized={_runtimeService.IsInitialized}  AllScenes={_sceneStateManager.AllScenes.Count(s => s.SceneId != 0)}  SceneId={SceneId}  PE={PresentationEngineId}  Cam={CameraId}");
+
+    if (!_runtimeService.IsInitialized)
       return;
+
+    // Never create a scene here — that is InitializeSimulationContext's job.
+    // Skip any phantom SceneState(0) entries created before the real scene arrives.
+    var existingScene = _sceneStateManager.AllScenes.FirstOrDefault(s => s.SceneId != 0);
+    if (existingScene == null)
+    {
+      System.Console.WriteLine("[SetupViewport] No valid scene yet — will retry on SimulationStateUpdatedMessage.");
+      return;
+    }
 
     if (SceneId == 0)
       SceneId = existingScene.SceneId;
 
+    System.Console.WriteLine($"[SetupViewport] Using SceneId={SceneId}  EntityMap.Count={existingScene.EntityMap.Count}");
+
     if (PresentationEngineId == 0)
+    {
       PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height, SceneId);
+      System.Console.WriteLine($"[SetupViewport] Created PE={PresentationEngineId}");
+    }
 
     if (CameraId != 0)
-      return; // Already fully set up.
+    {
+      System.Console.WriteLine($"[SetupViewport] Camera already wired (CameraId={CameraId}), done.");
+      return;
+    }
 
     // Check the entity tree is populated before trying to add a camera.
-    var root = _runtimeService.GetEntityByName(SceneId, "root");
-    if (root == null)
-      return; // SyncEntities hasn't run yet — retry will arrive via SimulationStateUpdatedMessage.
+    var rootEntity = _runtimeService.GetEntityByName(SceneId, "root");
+    System.Console.WriteLine($"[SetupViewport] root entity = {rootEntity?.Id.ToString() ?? "NULL"}");
+    if (rootEntity == null)
+    {
+      System.Console.WriteLine("[SetupViewport] root not found — waiting for SimulationStateUpdatedMessage.");
+      return;
+    }
 
     CameraId = _runtimeService.AddPerspectiveCamera(
       SceneId,
@@ -193,10 +212,15 @@ public partial class Viewport3DViewModel
       1000.0f    // far   (1 000 AU covers solar system)
     );
 
-    System.Console.WriteLine($"[Viewport3DViewModel] PE={PresentationEngineId}, Camera={CameraId}");
+    System.Console.WriteLine($"[SetupViewport] AddPerspectiveCamera => CameraId={CameraId}");
 
-    // Seed the new camera at the default scene camera's home position + look-at rotation,
-    // so the user sees the scene correctly oriented from first render.
+    if (CameraId == 0)
+    {
+      System.Console.WriteLine("[SetupViewport] ERROR: AddPerspectiveCamera returned 0!");
+      return;
+    }
+
+    // Seed the new camera at the default scene camera's home position + look-at rotation.
     var sceneCamera = _runtimeService.GetEntityByName(SceneId, "camera");
     if (sceneCamera != null && sceneCamera.Id != CameraId)
     {
@@ -206,6 +230,7 @@ public partial class Viewport3DViewModel
       if (sceneTransform != null
           && (sceneTransform.PosX != 0f || sceneTransform.PosY != 0f || sceneTransform.PosZ != 0f))
       {
+        System.Console.WriteLine($"[SetupViewport] Seeding from scene 'camera': pos=({sceneTransform.PosX},{sceneTransform.PosY},{sceneTransform.PosZ})");
         _runtimeService.SetTransformComponent(SceneId, CameraId,
           sceneTransform.PosX, sceneTransform.PosY, sceneTransform.PosZ,
           sceneTransform.RotW, sceneTransform.RotX, sceneTransform.RotY, sceneTransform.RotZ,
@@ -214,7 +239,8 @@ public partial class Viewport3DViewModel
       }
     }
 
-    // Fallback: canonical home position (0.011547, 0.011547, 0.011547) looking at origin.
+    // Fallback: canonical home position looking at origin.
+    System.Console.WriteLine($"[SetupViewport] Using fallback home pos={HomePosComponent}");
     _runtimeService.SetTransformComponent(SceneId, CameraId,
       HomePosComponent, HomePosComponent, HomePosComponent,
       HomeRotW, HomeRotX, HomeRotY, HomeRotZ,
@@ -250,6 +276,10 @@ public partial class Viewport3DViewModel
       }
     };
     IsInitialized = _runtimeService.IsInitialized;
+    if (IsInitialized)
+    {
+      SetupViewport();
+    }
     WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(
       this,
       (r, m) => ((Viewport3DViewModel)r).Receive(m)
@@ -266,7 +296,11 @@ public partial class Viewport3DViewModel
       {
         var self = (Viewport3DViewModel)r;
         if (self.CameraId == 0)
+        {
+          if (self.SceneId == 0)
+            self.SceneId = m.SceneId;
           self.SetupViewport();
+        }
       }
     );
 
@@ -553,8 +587,6 @@ public partial class Viewport3DViewModel
 
     try
     {
-      await _runtimeService.PollTaskAsync(_lastRenderTaskId);
-
       nuint bufferSize = (nuint)(Width * Height * 4);
       IntPtr unmanagedBuffer = System.Runtime.InteropServices.Marshal.AllocHGlobal((int)bufferSize);
 
