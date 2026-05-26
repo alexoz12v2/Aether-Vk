@@ -249,6 +249,16 @@ public partial class App : Application
             );
             inputRegistry.Register(
               "Viewport",
+              new AetherVk.Logic.Input.InputChord(Key: "Delete"),
+              new AetherVk.Logic.Input.AppAction("viewport.delete", "Delete Selected Object")
+            );
+            inputRegistry.Register(
+              "Viewport",
+              new AetherVk.Logic.Input.InputChord(Key: "Back"),
+              new AetherVk.Logic.Input.AppAction("viewport.delete", "Delete Selected Object")
+            );
+            inputRegistry.Register(
+              "Viewport",
               new AetherVk.Logic.Input.InputChord(Key: "Up"),
               new AetherVk.Logic.Input.AppAction("viewport.move_cursor_up", "Move Cursor Y-Forward")
             );

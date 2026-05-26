@@ -12,6 +12,12 @@ public partial class BillboardViewModel : ObservableObject
     private object? _imageSource;
 
     [ObservableProperty]
+    private string? _text;
+
+    [ObservableProperty]
+    private bool _isSelected;
+
+    [ObservableProperty]
     private double _x;
 
     [ObservableProperty]

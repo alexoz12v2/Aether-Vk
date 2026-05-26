@@ -16,6 +16,8 @@ namespace AetherVk.Services
     private readonly ConsoleService _consoleService;
     private readonly IUiThreadDispatcher _uiThreadDispatcher;
     private readonly HorizonJplService _horizonService;
+    private readonly SceneStateManager _sceneStateManager;
+    private readonly TimelineService _timelineService;
 
     public AvaloniaWindowService(
       NativeRuntimeService runtimeService,
@@ -23,7 +25,9 @@ namespace AetherVk.Services
       FileWatcherService fileWatcherService,
       ConsoleService consoleService,
       IUiThreadDispatcher uiThreadDispatcher,
-      HorizonJplService horizonService
+      HorizonJplService horizonService,
+      SceneStateManager sceneStateManager,
+      TimelineService timelineService
     )
     {
       _runtimeService = runtimeService;
@@ -32,6 +36,8 @@ namespace AetherVk.Services
       _consoleService = consoleService;
       _uiThreadDispatcher = uiThreadDispatcher;
       _horizonService = horizonService;
+      _sceneStateManager = sceneStateManager;
+      _timelineService = timelineService;
     }
 
     private Window? GetMainWindow()
@@ -196,9 +202,20 @@ namespace AetherVk.Services
       if (mainWindow == null)
         return 0;
 
+      if (_sceneStateManager.HasComet(1))
+      {
+        _breadcrumbService.ShowMessageAsync(
+          "Cannot Spawn Comet",
+          "The scene already contains a comet. Only 1 comet is allowed.",
+          default,
+          5
+        );
+        return 0;
+      }
+
       var dialog = new Views.SpawnCometWindow
       {
-        DataContext = new SpawnCometViewModel(models, _horizonService),
+        DataContext = new SpawnCometViewModel(models, _horizonService, _timelineService),
       };
       var result = await dialog.ShowDialog<SpawnCometResult?>(mainWindow);
       if (result == null)
@@ -236,6 +253,11 @@ namespace AetherVk.Services
           physicsType: physicsTypeIdx
         );
         meshId = id;
+      }
+
+      if (meshId > 0)
+      {
+        _sceneStateManager.SetComet(1, meshId);
       }
 
       return meshId;

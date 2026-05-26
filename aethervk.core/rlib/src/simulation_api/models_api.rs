@@ -20,6 +20,39 @@ impl SimulationContext {
     Some((user_frame, sim_frame))
   }
 
+  pub fn override_model_spherical(
+    &self,
+    model_id: u64,
+    radius_km: f32,
+    mass_kg: f32,
+    user_frame: oshal::math::matrix::mat3::Mat3f32,
+  ) -> bool {
+    let scenes = self.scenes.read();
+    let path = match scenes.model_registry.get(&model_id) {
+      Some(p) => p.clone(),
+      None => return false,
+    };
+
+    if let Some(mesh_arc) = scenes.mesh_cache.get(&path) {
+      let mut new_mesh = (*mesh_arc).clone();
+      
+      let volume = new_mesh.mass_properties.volume();
+      let new_density = if volume > 0.0 {
+        mass_kg as f64 / volume
+      } else {
+        1.0
+      };
+      
+      new_mesh.mass_properties = new_mesh.mass_properties.with_density(new_density);
+      new_mesh.pa_basis_bf = Some(user_frame);
+      
+      scenes.mesh_cache.insert(path, new_mesh);
+      true
+    } else {
+      false
+    }
+  }
+
   /// TODO: Document this item
   pub fn unload_model(&self, model_id: u64) {
     if self.scenes.write().model_registry.remove(&model_id).is_some() {

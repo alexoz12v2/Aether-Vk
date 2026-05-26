@@ -25,6 +25,16 @@ public partial class SceneStateManager : ObservableObject
     _scenes.Remove(sceneId);
   }
 
+  public bool HasComet(ulong sceneId)
+  {
+    return GetOrCreateScene(sceneId).CometEntityId.HasValue;
+  }
+
+  public void SetComet(ulong sceneId, ulong cometId)
+  {
+    GetOrCreateScene(sceneId).CometEntityId = cometId;
+  }
+
   public void Clear()
   {
     _scenes.Clear();

@@ -1308,6 +1308,18 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   }
 
   /// <summary>
+  /// Overrides the physical properties (mass, radius, inertia) of a model,
+  /// assuming a spherical shape, and aligns its simulation frame with the given user frame.
+  /// </summary>
+  public bool OverrideModelSpherical(ulong modelId, float radiusKm, float massKg, ref NativeInterop.FfiMat3 userFrame)
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return false;
+
+    return NativeInterop.avkSimulationContext_overrideModelSpherical(_simulationContext, modelId, radiusKm, massKg, ref userFrame);
+  }
+
+  /// <summary>
   /// Synchronously spawns a static mesh entity hierarchy: an LCA micro-frame parent entity and
   /// the static mesh child entity. Both are mirrored into the C# scene tree.
   /// </summary>

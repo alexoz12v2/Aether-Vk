@@ -390,34 +390,18 @@ impl SimulationContext {
     // Camera at 0.02 AU in first octant
     let camera_entity = scene.spawn_entity("camera");
     let pos = 0.02 / f32::sqrt(3.0);
-    // Look at origin from first octant
-    let look_dir = Vec3f32::from_components(-pos, -pos, -pos).normalize();
-    let up = Vec3f32::from_components(0.0, 0.0, 1.0);
-    let right = look_dir.cross(up).normalize();
-    let true_up = right.cross(look_dir).normalize();
-    
-    // In our coordinate system: +x=right, -y=forward, +z=up.
-    // The look_at_axes expects these vectors. Wait, standard look rotation uses -Z forward?
-    // The transform rotation simply aligns local axes to world axes.
-    let mat = oshal::math::matrix::mat4::Mat4x4f32::look_at_axes(right, look_dir, true_up, Vec3f32::from_components(pos, pos, pos));
-    let rot = <oshal::math::matrix::mat4::Mat4x4f32 as oshal::math::matrix::Matrix4>::to_quat_custom_frame(&mat);
 
     scene.add_component(
       camera_entity,
       TransformComponent {
         position: Vec3f32::from_components(pos, pos, pos),
-        rotation: rot,
+        rotation: Quat::identity(),
         scale: Vec3f32::from_components(1.0, 1.0, 1.0),
       },
     )?;
     scene.add_component(
       camera_entity,
-      crate::scene::CameraComponent {
-        fov: 45.0,
-        near: 0.0001,
-        far: 1000.0,
-        ..Default::default()
-      },
+      crate::scene::CameraComponent::default(),
     )?;
     scene.set_parent(camera_entity, Some(root_entity));
 
@@ -432,6 +416,18 @@ impl SimulationContext {
       },
     )?;
     scene.set_parent(sky_entity, Some(camera_entity));
+
+    let cursor_entity = scene.spawn_entity("cursor");
+    scene.add_component(
+      cursor_entity,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(0.02, 0.02, 0.02),
+      },
+    )?;
+    scene.add_component(cursor_entity, CursorComponent {})?;
+    scene.set_parent(cursor_entity, Some(root_entity));
 
     let scene_ctx_obj = SceneContext::new_empty(Arc::new(scene), root_entity)
       .with_physics_scene()
