@@ -34,6 +34,8 @@ public partial class HorizonJplViewModel : TabItemViewModel
   public bool IsStep3Enabled => CurrentStep >= 3;
 
   public ObservableCollection<CometSearchResult> CometsData => _horizonService.CometsData;
+  public bool HasComets => CometsData.Count > 0;
+  public bool HasNoComets => CometsData.Count == 0;
 
   [ObservableProperty]
   private CometSearchResult? _selectedComet;
@@ -65,6 +67,8 @@ public partial class HorizonJplViewModel : TabItemViewModel
   private async Task SearchCometsAsync()
   {
     await _horizonService.FetchCometsAsync();
+    OnPropertyChanged(nameof(HasComets));
+    OnPropertyChanged(nameof(HasNoComets));
   }
 
   [RelayCommand]

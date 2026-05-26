@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Linq;
 using AetherVk.Logic.Models;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -63,6 +64,32 @@ public partial class OutlineViewModel : TabItemViewModel, IRecipient<EntitySelec
     _consoleService = consoleService;
 
     WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
+
+    // When the runtime initialises after tab creation, update the scene ID to the real
+    // scene and notify bindings so the outline tree refreshes.
+    runtimeService.PropertyChanged += (s, e) =>
+    {
+      if (e.PropertyName == nameof(NativeRuntimeService.IsInitialized) && runtimeService.IsInitialized)
+        RefreshSceneId(stateManager);
+    };
+
+    // CreateScene sends SimulationStateUpdatedMessage after it finishes building the
+    // entity tree — refresh here too in case we missed the IsInitialized event.
+    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.SimulationStateUpdatedMessage>(
+      this,
+      (r, m) => ((OutlineViewModel)r).RefreshSceneId(stateManager)
+    );
+  }
+
+  private void RefreshSceneId(SceneStateManager stateManager)
+  {
+    var first = stateManager.AllScenes.FirstOrDefault();
+    if (first != null && CurrentSceneId != first.SceneId)
+    {
+      CurrentSceneId = first.SceneId;
+    }
+    // Always re-raise RootEntities so the AXAML binding re-reads the live collection.
+    OnPropertyChanged(nameof(RootEntities));
   }
 
   public void Receive(EntitySelectedMessage message)

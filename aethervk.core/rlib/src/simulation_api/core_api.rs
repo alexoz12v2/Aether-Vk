@@ -288,6 +288,35 @@ impl SimulationContext {
     })
   }
 
+  /// Assigns an existing scene entity as the camera for the given presentation engine.
+  /// This overwrites any previous binding. Use this to wire the default scene's `camera`
+  /// entity to the PE instead of spawning a second camera at the origin.
+  pub fn set_camera_for_presentation_engine(
+    &self,
+    scene_id: u64,
+    presentation_engine: PresentationEngineHandle,
+    camera_entity_external_id: u64,
+  ) -> EngineResult<()> {
+    let scene_ctx = expect_scene!(
+      self.get_scene(scene_id),
+      "core_api:set_camera_for_presentation_engine"
+    );
+    let scene_read = scene_ctx.read();
+    let internal_id = scene_read
+      .get_entity(camera_entity_external_id)
+      .ok_or_else(|| EngineError::InvalidOperation(
+        "[SimulationContext] core_api:set_camera_for_presentation_engine: entity not found",
+      ))?;
+    let mut presentation_engines = scene_read.presentation_engines.write();
+    let pe_data = presentation_engines
+      .get_mut(&presentation_engine)
+      .ok_or_else(|| EngineError::InvalidOperation(
+        "[SimulationContext] core_api:set_camera_for_presentation_engine: presentation engine not found",
+      ))?;
+    pe_data.camera_entity = Some(internal_id);
+    Ok(())
+  }
+
   /// TODO: Document this item
   pub fn destroy_presentation_engine(
     &self,

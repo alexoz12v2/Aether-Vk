@@ -33,6 +33,30 @@ public partial class Viewport3DViewModel
   [ObservableProperty]
   private uint _height = 600;
 
+  partial void OnWidthChanged(uint value)
+  {
+      UpdateCameraAspectRatio();
+  }
+
+  partial void OnHeightChanged(uint value)
+  {
+      UpdateCameraAspectRatio();
+  }
+
+  private void UpdateCameraAspectRatio()
+  {
+      if (Width <= 0 || Height <= 0 || _sceneStateManager == null) return;
+      var state = _sceneStateManager.GetOrCreateScene(SceneId);
+      if (state.EntityMap.TryGetValue(CameraId, out var entity))
+      {
+          var camera = entity.Components.OfType<AetherVk.Logic.Models.CameraComponent>().FirstOrDefault();
+          if (camera != null)
+          {
+              camera.AspectRatio = (float)Width / Height;
+          }
+      }
+  }
+
   [ObservableProperty]
   private bool _isInitialized;
 
@@ -123,44 +147,78 @@ public partial class Viewport3DViewModel
       }
   }
 
+  // HOME_POSITION: camera starts 0.02 AU from the Sun, equally distributed across x/y/z (first octant).
+  // Coordinate system: +x=right, -y=forward, +z=up. Distance = 0.02 AU → each component = 0.02/√3 ≈ 0.011547.
+  private const float HomeDistanceAu = 0.02f;
+  // 0.02 / Math.Sqrt(3) precomputed
+  private const float HomePosComponent = 0.011547005f;
+
+  // Look-at quaternion: camera at (p,p,p) facing origin with +z=up.
+  // look_dir = normalize(-1,-1,-1), right = normalize(look_dir × up), true_up = right × look_dir.
+  // Computed offline to match the Rust create_default_scene look_at_axes output.
+  private const float HomeRotW =  0.7010574f;
+  private const float HomeRotX =  0.4304593f;
+  private const float HomeRotY = -0.0922958f;
+  private const float HomeRotZ = -0.5609855f;
+
   private void SetupViewport()
   {
+    // Never create a scene here — that is InitializeSimulationContext's job.
+    // If no scene exists yet, we'll be retried via SimulationStateUpdatedMessage
+    // once CreateScene finishes on the UI thread.
     var existingScene = _sceneStateManager.AllScenes.FirstOrDefault();
-    SceneId = existingScene != null ? existingScene.SceneId : _runtimeService.CreateScene(true);
+    if (existingScene == null)
+      return;
+
+    if (SceneId == 0)
+      SceneId = existingScene.SceneId;
 
     if (PresentationEngineId == 0)
-    {
       PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height, SceneId);
-    }
 
+    if (CameraId != 0)
+      return; // Already fully set up.
+
+    // Check the entity tree is populated before trying to add a camera.
     var root = _runtimeService.GetEntityByName(SceneId, "root");
-    if (root != null && CameraId == 0)
-    {
-      // Note: check if fov should be in radians or degrees. The native ffi historically expected degrees, or handled the conversion.
-      CameraId = _runtimeService.AddPerspectiveCamera(
-        SceneId,
-        PresentationEngineId,
-        "camera",
-        45f,
-        0.1f,
-        10000.0f
-      );
+    if (root == null)
+      return; // SyncEntities hasn't run yet — retry will arrive via SimulationStateUpdatedMessage.
 
-      float camX = 8.8f, camY = 9.6f, camZ = 7.9f;
-      float rx = 0.217f;
-      float ry = -0.092f;
-      float rz = -0.379f;
-      float rw = 0.895f;
+    CameraId = _runtimeService.AddPerspectiveCamera(
+      SceneId,
+      PresentationEngineId,
+      $"viewport_camera_{PresentationEngineId}",
+      45f,
+      0.0001f,   // near  (~15 000 km at AU scale)
+      1000.0f    // far   (1 000 AU covers solar system)
+    );
 
-      _runtimeService.SetTransformComponent(SceneId, CameraId,
-        camX, camY, camZ,
-        rw, rx, ry, rz,
-        1, 1, 1);
-    }
-    else if (CameraId == 0)
+    System.Console.WriteLine($"[Viewport3DViewModel] PE={PresentationEngineId}, Camera={CameraId}");
+
+    // Seed the new camera at the default scene camera's home position + look-at rotation,
+    // so the user sees the scene correctly oriented from first render.
+    var sceneCamera = _runtimeService.GetEntityByName(SceneId, "camera");
+    if (sceneCamera != null && sceneCamera.Id != CameraId)
     {
-      CameraId = 1;
+      var sceneTransform = sceneCamera.Components
+        .OfType<AetherVk.Logic.Models.TransformComponent>()
+        .FirstOrDefault();
+      if (sceneTransform != null
+          && (sceneTransform.PosX != 0f || sceneTransform.PosY != 0f || sceneTransform.PosZ != 0f))
+      {
+        _runtimeService.SetTransformComponent(SceneId, CameraId,
+          sceneTransform.PosX, sceneTransform.PosY, sceneTransform.PosZ,
+          sceneTransform.RotW, sceneTransform.RotX, sceneTransform.RotY, sceneTransform.RotZ,
+          1f, 1f, 1f);
+        return;
+      }
     }
+
+    // Fallback: canonical home position (0.011547, 0.011547, 0.011547) looking at origin.
+    _runtimeService.SetTransformComponent(SceneId, CameraId,
+      HomePosComponent, HomePosComponent, HomePosComponent,
+      HomeRotW, HomeRotX, HomeRotY, HomeRotZ,
+      1f, 1f, 1f);
   }
 
   public Viewport3DViewModel(
@@ -200,6 +258,23 @@ public partial class Viewport3DViewModel
       this,
       (r, m) => ((Viewport3DViewModel)r).Receive(m)
     );
+    // Retry SetupViewport after CreateScene completes (fires SimulationStateUpdatedMessage),
+    // which resolves the timing race where IsInitialized=true fires before scene entities exist.
+    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.SimulationStateUpdatedMessage>(
+      this,
+      (r, m) =>
+      {
+        var self = (Viewport3DViewModel)r;
+        if (self.CameraId == 0)
+          self.SetupViewport();
+      }
+    );
+
+    _sceneStateManager.PropertyChanged += (s, e) =>
+    {
+       // If entities changed or camera changed, we should re-eval measurement
+       _uiThreadDispatcher.DispatchAsync(() => { UpdateMeasurementIndicator(); return Task.CompletedTask; });
+    };
 
     if (IsInitialized)
     {

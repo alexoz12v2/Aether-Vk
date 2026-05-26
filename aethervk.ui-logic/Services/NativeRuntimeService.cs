@@ -658,6 +658,22 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return id;
   }
 
+  /// <summary>
+  /// Wires an existing scene entity as the camera for the given presentation engine.
+  /// Prefer this over AddPerspectiveCamera when the default scene already has a "camera" entity.
+  /// </summary>
+  public bool SetCameraForPresentationEngine(ulong sceneId, ulong presentationEngineId, ulong cameraEntityId)
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return false;
+    return NativeInterop.avkSimulationContext_setCameraForPresentationEngine(
+      _simulationContext,
+      sceneId,
+      presentationEngineId,
+      cameraEntityId
+    );
+  }
+
   public void SetTransformComponent(ulong sceneId, ulong entityId, float px, float py, float pz, float rw, float rx, float ry, float rz, float sx, float sy, float sz)
   {
     if (_simulationContext == IntPtr.Zero) return;
@@ -1251,6 +1267,10 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       // Nest under LCA frame
       lcaEntity.Children.Add(cometEntity);
 
+      WeakReferenceMessenger.Default.Send(
+        new AetherVk.Logic.Messages.SimulationStateUpdatedMessage(sceneId)
+      );
+
       return (result.LcaFrameId, result.CometEntityId);
     }
 
@@ -1372,6 +1392,10 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
     // Nest under LCA frame
     lcaEntity.Children.Add(meshEntity);
+
+    WeakReferenceMessenger.Default.Send(
+      new AetherVk.Logic.Messages.SimulationStateUpdatedMessage(sceneId)
+    );
 
     return (ffiResult.LcaFrameId, ffiResult.MeshEntityId);
   }
@@ -1656,6 +1680,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         Marshal.Copy(idsPtr, ids, 0, (int)count);
         Marshal.FreeHGlobal(idsPtr);
 
+        System.Console.WriteLine($"[CreateScene] Found {count} native entities for Scene {sceneId}.");
+
         IntPtr namePtr = Marshal.AllocHGlobal(256);
         foreach (long signedId in ids)
         {
@@ -1694,10 +1720,12 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
           if (parentId != 0 && state.EntityMap.TryGetValue(parentId, out var parent))
           {
             parent.Children.Add(entity);
+            System.Console.WriteLine($"[CreateScene] Parented {entity.Name} ({entity.Id}) to {parent.Name} ({parent.Id})");
           }
           else
           {
             state.RootEntities.Add(entity);
+            System.Console.WriteLine($"[CreateScene] Added {entity.Name} ({entity.Id}) to RootEntities.");
           }
 
           // Fetch basic transform logic
@@ -1721,6 +1749,13 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         }
 
         SyncEntities(sceneId); // Immediately populate real positions
+
+        // Signal all subscribers (e.g. Viewport3DViewModel, OutlineViewModel) that the
+        // entity tree is now populated. This resolves the timing race where IsInitialized
+        // fires before CreateScene has actually run on the UI thread.
+        WeakReferenceMessenger.Default.Send(
+          new AetherVk.Logic.Messages.SimulationStateUpdatedMessage(sceneId)
+        );
       }
 
       return sceneId;

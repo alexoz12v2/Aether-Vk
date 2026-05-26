@@ -26,7 +26,7 @@
         </Grid>
 
         <ScrollViewer Grid.Row="1" Margin="4">
-            <ItemsControl ItemsSource="{Binding PropertiesExpanders}">
+            <ItemsControl ItemsSource="{Binding PropertiesExpanders}" IsEnabled="{Binding !Timeline.IsPlaying}">
                 <ItemsControl.DataTemplates>
                     <DataTemplate DataType="vm:UnknownComponentViewModel">
                         <Expander Header="{Binding ComponentName}" Margin="0,0,0,8" HorizontalAlignment="Stretch">
@@ -84,8 +84,12 @@
 
                                 <Expander Header="Projection" HorizontalAlignment="Stretch">
                                     <Grid ColumnDefinitions="Auto, *" RowDefinitions="Auto, Auto, Auto, Auto, Auto, Auto, Auto">
-                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="FOV:" VerticalAlignment="Center" Margin="0,0,8,0" IsVisible="{Binding !IsOrthographic}"/>
-                                        <controls:UnboundedSlider Grid.Row="0" Grid.Column="1" Value="{Binding Fov}" IsVisible="{Binding !IsOrthographic}"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="FOV (°):" VerticalAlignment="Center" Margin="0,0,8,0" IsVisible="{Binding !IsOrthographic}"/>
+                                        <NumericUpDown Grid.Row="0" Grid.Column="1"
+                                                       Value="{Binding Fov}"
+                                                       Minimum="0.1" Maximum="179.0"
+                                                       Increment="0.5" FormatString="0.0°"
+                                                       IsVisible="{Binding !IsOrthographic}"/>
 
                                         <TextBlock Grid.Row="1" Grid.Column="0" Text="Left:" VerticalAlignment="Center" Margin="0,0,8,0" IsVisible="{Binding IsOrthographic}"/>
                                         <controls:UnboundedSlider Grid.Row="1" Grid.Column="1" Value="{Binding OrthoLeft}" IsVisible="{Binding IsOrthographic}"/>
@@ -99,11 +103,17 @@
                                         <TextBlock Grid.Row="4" Grid.Column="0" Text="Top:" VerticalAlignment="Center" Margin="0,0,8,0" IsVisible="{Binding IsOrthographic}"/>
                                         <controls:UnboundedSlider Grid.Row="4" Grid.Column="1" Value="{Binding OrthoTop}" IsVisible="{Binding IsOrthographic}"/>
 
-                                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Near:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                        <controls:UnboundedSlider Grid.Row="5" Grid.Column="1" Value="{Binding NearPlane}"/>
+                                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Near (AU):" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <NumericUpDown Grid.Row="5" Grid.Column="1"
+                                                       Value="{Binding NearPlane}"
+                                                       Minimum="0.000001" Maximum="9999.999"
+                                                       Increment="0.001" FormatString="0.######"/>
 
-                                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Far:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                        <controls:UnboundedSlider Grid.Row="6" Grid.Column="1" Value="{Binding FarPlane}"/>
+                                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Far (AU):" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <NumericUpDown Grid.Row="6" Grid.Column="1"
+                                                       Value="{Binding FarPlane}"
+                                                       Minimum="0.000001" Maximum="10000.0"
+                                                       Increment="1.0" FormatString="0.###"/>
                                     </Grid>
                                 </Expander>
 

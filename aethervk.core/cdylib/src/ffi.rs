@@ -192,7 +192,7 @@ pub unsafe extern "C" fn avkSimulationContext_addPerspectiveCamera(
           scene_id,
           gpu::PresentationEngineHandle(presentation_engine),
           name_str,
-          fov,
+          fov.to_radians(),
           near,
           far,
         )
@@ -201,6 +201,31 @@ pub unsafe extern "C" fn avkSimulationContext_addPerspectiveCamera(
     .unwrap_or_else(|e| {
       oshal::log!("add_perspective_camera failed: {}", e);
       0
+    })
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setCameraForPresentationEngine(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  presentation_engine: u64,
+  camera_entity_id: u64,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref
+    .set_camera_for_presentation_engine(
+      scene_id,
+      gpu::PresentationEngineHandle(presentation_engine),
+      camera_entity_id,
+    )
+    .map(|_| true)
+    .unwrap_or_else(|e| {
+      oshal::log!("set_camera_for_presentation_engine failed: {}", e);
+      false
     })
 }
 

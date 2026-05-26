@@ -61,7 +61,16 @@ public partial class SpawnCometViewModel : ObservableObject
   private CometSearchResult? _selectedComet;
 
   [ObservableProperty]
-  private DateTimeOffset? _targetDate = DateTimeOffset.Now;
+  private int _orbitYear = DateTime.Now.Year;
+
+  [ObservableProperty]
+  private string _epaCenter = "@10";
+
+  [ObservableProperty]
+  private string _epaStepSize = "1 d";
+
+  public bool HasComets => CometsData.Count > 0;
+  public bool HasNoComets => CometsData.Count == 0;
 
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(CanGoNext))]
@@ -112,14 +121,31 @@ public partial class SpawnCometViewModel : ObservableObject
   /// The user may edit this value manually before spawning.
   /// </summary>
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(IsRadiusOverridden))]
   private float _cometRadiusKm = 1.0f;
+
+  /// <summary>The radius value as last received from Horizon JPL, used to detect user overrides.</summary>
+  private float _jplRadiusKm = 1.0f;
+
+  /// <summary>True when the user has changed the radius away from the JPL-provided value.</summary>
+  public bool IsRadiusOverridden => Math.Abs(CometRadiusKm - _jplRadiusKm) > 0.0005f;
+
+  [RelayCommand]
+  private void ResetRadius()
+  {
+    CometRadiusKm = _jplRadiusKm;
+  }
 
   /// <summary>Called automatically by the MVVM toolkit when FetchedOrbitData changes.</summary>
   partial void OnFetchedOrbitDataChanged(PlanetOrbitData? value)
   {
     if (value != null)
-      CometRadiusKm = (float)value.CometRadiusKm;
+    {
+      _jplRadiusKm  = (float)value.CometRadiusKm;
+      CometRadiusKm = _jplRadiusKm;
+    }
     OnPropertyChanged(nameof(CanGoNext));
+    OnPropertyChanged(nameof(IsRadiusOverridden));
   }
 
   partial void OnSelectedModelChanged(ImportedModelItem? value)
@@ -158,14 +184,20 @@ public partial class SpawnCometViewModel : ObservableObject
     return ((float)w, (float)x, (float)y, (float)z);
   }
 
+  private readonly BreadcrumbService _breadcrumbService;
+
   public SpawnCometViewModel(
     IEnumerable<ImportedModelItem> models,
     HorizonJplService horizonService,
-    TimelineService timelineService
+    TimelineService timelineService,
+    BreadcrumbService breadcrumbService
   )
   {
     _horizonService = horizonService;
-    _targetDate = DateTimeOffset.TryParse(timelineService.UtcTime, out var dt) ? dt : null;
+    _breadcrumbService = breadcrumbService;
+    if (DateTimeOffset.TryParse(timelineService.UtcTime, out var dt)) {
+      _orbitYear = dt.Year;
+    }
     foreach (var model in models)
     {
       ImportedModels.Add(model);
@@ -194,23 +226,50 @@ public partial class SpawnCometViewModel : ObservableObject
     IsFetchingHorizonData = true;
     await _horizonService.FetchCometsAsync();
     IsFetchingHorizonData = false;
+    OnPropertyChanged(nameof(HasComets));
+    OnPropertyChanged(nameof(HasNoComets));
   }
 
   [RelayCommand]
   private async Task FetchOrbitDataAsync()
   {
-    if (SelectedComet == null || TargetDate == null)
-      return;
+      if (SelectedComet == null)
+      {
+        return;
+      }
+      if (string.IsNullOrWhiteSpace(EpaStepSize))
+      {
+        return;
+      }
 
-    IsFetchingHorizonData = true;
-    var pdes = SelectedComet.PrimaryDesignation.Trim();
+      IsFetchingHorizonData = true;
+      // Construct date interval for the requested year +/- 1 year
+      var startDate = new DateTimeOffset(OrbitYear - 1, 1, 1, 0, 0, 0, TimeSpan.Zero);
+      var stopDate = new DateTimeOffset(OrbitYear + 1, 12, 31, 23, 59, 59, TimeSpan.Zero);
 
-    FetchedOrbitData = await _horizonService.GetPlanetDataAsync(pdes, TargetDate.Value.DateTime);
-    if (FetchedOrbitData != null)
-    {
-      CometRadiusKm = (float)FetchedOrbitData.CometRadiusKm;
+      FetchedOrbitData = await _horizonService.GetPlanetDataAsync(
+        SelectedComet.PrimaryDesignation,
+        "@10",
+        startDate.DateTime,
+        stopDate.DateTime,
+        EpaStepSize);
+
+      IsFetchingHorizonData = false;
+
+      if (FetchedOrbitData != null)
+      {
+        _jplRadiusKm = (float)FetchedOrbitData.CometRadiusKm;
+        CometRadiusKm = (float)FetchedOrbitData.CometRadiusKm;
+      }
+      else
+      {
+         _breadcrumbService.ShowMessageAsync("No Data Found", $"No ephemeris data was found for {OrbitYear}. Try a different year.", default, 5);
+         return;
+      }
+
+      OnPropertyChanged(nameof(CanGoNext));
       
-      if (SelectedModel != null)
+      if (SelectedModel != null && FetchedOrbitData != null)
       {
         var q = GetRotationQuaternion();
         // Convert quaternion to 3x3 rotation matrix
@@ -230,8 +289,7 @@ public partial class SpawnCometViewModel : ObservableObject
         OnPropertyChanged(nameof(SimulationLocalFrameString));
         OnPropertyChanged(nameof(UserLocalFrameString));
       }
-    }
-    IsFetchingHorizonData = false;
+      IsFetchingHorizonData = false;
   }
 
   [RelayCommand]

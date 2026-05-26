@@ -58,7 +58,7 @@ fn setup_test_scene() -> Arc<Scene> {
       mesh: comet.clone(),
       emissive_intensity: 0.0,
       emissive_color: [0.0; 3],
-      use_new_path: false,
+      use_new_path: true,
       paint_display_mode: 0,
       sphere_center: [0.0; 3],
       sphere_radius: 1.0,
