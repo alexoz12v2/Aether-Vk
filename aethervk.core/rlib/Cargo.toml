@@ -100,3 +100,6 @@ libc = { version = "0.2", default-features = false, features = [
 # configuration for `cargo nextest run`
 # Fail the test if it takes longer than 10 seconds
 slow-timeout = { period = "10s", terminate-after = 1 }
+[[bin]]
+name = "test_bin"
+path = "src/bin.rs"

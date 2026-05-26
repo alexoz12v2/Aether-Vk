@@ -249,7 +249,7 @@ public partial class SpawnCometViewModel : ObservableObject
 
       FetchedOrbitData = await _horizonService.GetPlanetDataAsync(
         SelectedComet.PrimaryDesignation,
-        "@10",
+        EpaCenter,
         startDate.DateTime,
         stopDate.DateTime,
         EpaStepSize);

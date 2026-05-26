@@ -1655,6 +1655,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
   public ulong CreateScene(bool populateDefault = true)
   {
+    System.Console.WriteLine($"[CreateScene] Called. populateDefault={populateDefault}  ctx={((_simulationContext != IntPtr.Zero) ? "valid" : "NULL")}");
+
     if (_simulationContext != IntPtr.Zero)
     {
       ulong sceneId;
@@ -1667,10 +1669,20 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         sceneId = NativeInterop.avkSimulationContext_createEmptyScene(_simulationContext);
       }
 
+      System.Console.WriteLine($"[CreateScene] createDefaultScene returned sceneId={sceneId}");
+
+      if (sceneId == 0)
+      {
+        System.Console.WriteLine("[CreateScene] ERROR: native scene creation returned 0. Check Rust logs for details.");
+        return 0; // Don't create a phantom SceneState(0) in the manager.
+      }
+
       var state = _sceneStateManager.GetOrCreateScene(sceneId);
       state.Clear();
 
       uint count = NativeInterop.avkSimulationContext_getEntityCount(_simulationContext, sceneId);
+      System.Console.WriteLine($"[CreateScene] getEntityCount({sceneId}) = {count}");
+
       if (count > 0)
       {
         IntPtr idsPtr = Marshal.AllocHGlobal((int)count * sizeof(long));
@@ -1749,20 +1761,24 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         }
 
         SyncEntities(sceneId); // Immediately populate real positions
-
-        // Signal all subscribers (e.g. Viewport3DViewModel, OutlineViewModel) that the
-        // entity tree is now populated. This resolves the timing race where IsInitialized
-        // fires before CreateScene has actually run on the UI thread.
-        WeakReferenceMessenger.Default.Send(
-          new AetherVk.Logic.Messages.SimulationStateUpdatedMessage(sceneId)
-        );
       }
+
+      // Signal all subscribers (e.g. Viewport3DViewModel, OutlineViewModel) that the
+      // scene is ready (even if entity count was 0 — they will find no entities and
+      // log appropriately rather than leaving CameraId = 0 permanently).
+      // This resolves the timing race where IsInitialized fires before CreateScene runs.
+      System.Console.WriteLine($"[CreateScene] Sending SimulationStateUpdatedMessage(sceneId={sceneId})");
+      WeakReferenceMessenger.Default.Send(
+        new AetherVk.Logic.Messages.SimulationStateUpdatedMessage(sceneId)
+      );
 
       return sceneId;
     }
 
+    System.Console.WriteLine("[CreateScene] ERROR: _simulationContext is null/zero!");
     return 0;
   }
+
 
   public bool SnapshotScene(ulong sceneId)
   {

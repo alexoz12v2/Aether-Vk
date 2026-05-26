@@ -350,12 +350,15 @@ impl SimulationContext {
   // TODO remove
   /// TODO: Document this item
   pub fn create_default_scene(&self) -> EngineResult<u64> {
+    oshal::log!("create_default_scene: START");
     let (scene, root_entity) = empty_scene_object(Arc::clone(&self.texture_cache))?;
+    oshal::log!("create_default_scene: empty_scene_object OK, root={:?}", root_entity);
 
     let sun_radius = 0.004652472; // Solar radius in AU
     let sun_scale = sun_radius / 0.6; // UV sphere is radius 0.6, so scale matches extent
 
     let sun_entity = scene.spawn_entity("sun");
+    oshal::log!("create_default_scene: sun spawned={:?}", sun_entity);
     scene.add_component(
       sun_entity,
       TransformComponent {
@@ -364,6 +367,7 @@ impl SimulationContext {
         scale: Vec3f32::from_components(sun_scale, sun_scale, sun_scale),
       },
     )?;
+    oshal::log!("create_default_scene: sun TransformComponent OK");
     scene.add_component(
       sun_entity,
       SunComponent {
@@ -371,9 +375,11 @@ impl SimulationContext {
         radius: 0.6,
       },
     )?;
+    oshal::log!("create_default_scene: sun SunComponent OK");
     scene.set_parent(sun_entity, Some(root_entity));
 
     let sun_sphere = crate::simulation::comet::generate_uv_sphere(0.6, 64, 64, 1.989e30_f32);
+    oshal::log!("create_default_scene: sun_sphere generated, adding PhysicalMeshComponent");
     scene.add_component(
       sun_entity,
       PhysicalMeshComponent {
@@ -381,7 +387,7 @@ impl SimulationContext {
         mesh: Arc::from(sun_sphere),
         emissive_intensity: 0.9,
         emissive_color: [1.0, 0.35, 0.02],
-        use_new_path: true,
+        use_new_path: false,
         paint_display_mode: 0,
         sphere_center: [0.0, 0.0, 0.0],
         sphere_radius: 1.0,
@@ -389,6 +395,7 @@ impl SimulationContext {
         grid_density: 1.0,
       },
     )?;
+    oshal::log!("create_default_scene: sun PhysicalMeshComponent OK");
 
     let camera_entity = scene.spawn_entity("camera");
     let pos = 0.02 / f32::sqrt(3.0);
@@ -399,8 +406,6 @@ impl SimulationContext {
     let true_up = right.cross(look_dir).normalize();
     
     // In our coordinate system: +x=right, -y=forward, +z=up.
-    // The look_at_axes expects these vectors. Wait, standard look rotation uses -Z forward?
-    // The transform rotation simply aligns local axes to world axes.
     let mat = <oshal::math::matrix::mat4::Mat4x4f32 as oshal::math::matrix::Matrix4>::look_at_axes(right, look_dir, true_up, Vec3f32::from_components(pos, pos, pos));
     let rot = <oshal::math::matrix::mat4::Mat4x4f32 as oshal::math::matrix::Matrix4>::to_quat_custom_frame(&mat);
     scene.add_component(
@@ -413,10 +418,20 @@ impl SimulationContext {
     )?;
     scene.add_component(camera_entity, crate::scene::CameraComponent::new_persp(45.0, 1.0, 0.0001, 1000.0))?;
     scene.set_parent(camera_entity, Some(root_entity));
+    oshal::log!("create_default_scene: camera OK");
 
     let grid_entity = scene.spawn_entity("grid");
+    scene.add_component(
+      grid_entity,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    )?;
     scene.add_component(grid_entity, GridComponent {})?;
     scene.set_parent(grid_entity, Some(root_entity));
+    oshal::log!("create_default_scene: grid OK");
 
     let sky_entity = scene.spawn_entity("sky");
     scene.add_component(sky_entity, SkyComponent {})?;
@@ -428,7 +443,8 @@ impl SimulationContext {
         scale: Vec3f32::from_components(1.0, 1.0, 1.0),
       },
     )?;
-    scene.set_parent(sky_entity, Some(camera_entity));
+    scene.set_parent(sky_entity, Some(root_entity));
+    oshal::log!("create_default_scene: sky OK");
 
     let cursor_entity = scene.spawn_entity("cursor");
     scene.add_component(
@@ -441,14 +457,25 @@ impl SimulationContext {
     )?;
     scene.add_component(cursor_entity, CursorComponent {})?;
     scene.set_parent(cursor_entity, Some(root_entity));
+    oshal::log!("create_default_scene: cursor OK");
 
     let mut scene_ctx_obj = SceneContext::new_empty(Arc::new(scene), root_entity)
-      .with_physics_scene()
-      .with_cursor_entity(cursor_entity)?
-      .with_sun_entity(sun_entity)?
-      .with_grid_entity(grid_entity)?
+      .with_physics_scene();
+    oshal::log!("create_default_scene: with_physics_scene OK, calling with_cursor_entity");
+    let mut scene_ctx_obj = scene_ctx_obj
+      .with_cursor_entity(cursor_entity)?;
+    oshal::log!("create_default_scene: with_cursor_entity OK");
+    let mut scene_ctx_obj = scene_ctx_obj
+      .with_sun_entity(sun_entity)?;
+    oshal::log!("create_default_scene: with_sun_entity OK");
+    let mut scene_ctx_obj = scene_ctx_obj
+      .with_grid_entity(grid_entity)?;
+    oshal::log!("create_default_scene: with_grid_entity OK");
+    let mut scene_ctx_obj = scene_ctx_obj
       .with_sky_entity(sky_entity)?;
+    oshal::log!("create_default_scene: with_sky_entity OK");
     scene_ctx_obj.register_entity(camera_entity);
+    
     let scene_ctx = Arc::new(RwLock::new(scene_ctx_obj));
 
     if let Some(tx) = self.threads.render_thread.tx_opt() {
@@ -641,8 +668,16 @@ impl SimulationContext {
     // ── Comet mesh entity (child of LCA frame) ───────────────────────────────
     let comet_id = scene_ctx.scene.spawn_entity(entity_name);
 
-    // Derive uniform scale so that the mesh bounding sphere == radius_km.
-    let bounding_sphere = compute_bounding_sphere_radius(&mesh_arc.vertices);
+    // Derive uniform scale so that the mesh root bound has radius == radius_km.
+    let bounding_sphere = if let Some(bvh) = &mesh_arc.bvh {
+      use aethervk_oshal_rlib::math::vector::Vector;
+      match &bvh.nodes[0].bound {
+        crate::math::collision::linear_bvh::LinearBound::AABB(aabb) => aabb.half_extents_f32().length(),
+        crate::math::collision::linear_bvh::LinearBound::OBB(obb) => obb.half_extents_f32().length(),
+      }
+    } else {
+      compute_bounding_sphere_radius(&mesh_arc.vertices)
+    };
     let mesh_scale = if bounding_sphere > 0.0 { radius_km / bounding_sphere } else { 1.0 };
 
     let sim_local_rotation = mesh_arc.bf_to_pa.unwrap_or(Quat::identity());

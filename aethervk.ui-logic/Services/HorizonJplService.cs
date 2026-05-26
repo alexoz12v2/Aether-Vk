@@ -371,28 +371,120 @@ public class HorizonJplService
   //     Used by SpawnCometViewModel Step 3 "Fetch Orbit Data" button.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  public async Task<PlanetOrbitData?> GetPlanetDataAsync(
-    string   targetId,
-    string   center,
-    DateTime startDate,
-    DateTime stopDate,
-    string   stepSize)
+  public async Task<PlanetOrbitData?> GetPlanetDataAsync(string targetId, string center, DateTime startDate, DateTime stopDate, string stepSize)
   {
-    // 1. Object constants (radius, mass)
-    var (radiusKm, massKg) = await FetchObjectConstantsAsync(targetId);
+    var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Fetching orbital data...");
+    try
+    {
+      string startDateStr = startDate.ToString("yyyy-MM-dd");
+      string stopDateStr = stopDate.ToString("yyyy-MM-dd");
+      
+      var cacheKey = $"planet_data_{targetId.Replace("/", "_")}_{startDateStr}_{stopDateStr}.txt";
+      var cacheFile = _storage.GetSessionPath(cacheKey);
+      
+      string epaText = "";
+      string objDataText = "";
 
-    // 2. EPA
-    var epa = await FetchEpaAsync(targetId, center, startDate, stopDate, stepSize);
-    if (epa == null) return null;
+      if (System.IO.File.Exists(cacheFile) && System.IO.File.Exists(cacheFile + ".obj"))
+      {
+          _console.Log($"[HorizonJpl] Loading orbital data from cache: {cacheKey}");
+          epaText = System.IO.File.ReadAllText(cacheFile);
+          objDataText = System.IO.File.ReadAllText(cacheFile + ".obj");
+      }
+      else
+      {
+          var targetIdEncoded = Uri.EscapeDataString(targetId.EndsWith(";") ? targetId : targetId + ";");
+          
+          // 1. Fetch Object Constants
+          var objUrl = $"https://ssd.jpl.nasa.gov/api/horizons.api?format=text"
+            + $"&COMMAND='{targetIdEncoded}'"
+            + $"&OBJ_DATA='YES'"
+            + $"&MAKE_EPHEM='NO'";
 
-    epa.CometRadiusKm = radiusKm;
-    epa.MassKg        = massKg;
-    epa.RawConstants  = ExtractConstantsBlock(
-      File.Exists(_storage.GetPersistentPath($"obj_{Sanitize(targetId)}.txt"))
-        ? File.ReadAllText(_storage.GetPersistentPath($"obj_{Sanitize(targetId)}.txt"))
-        : "");
+          _console.Log($"[HorizonJpl] GET Object Data: {objUrl}");
+          var objResponse = await _httpClient.GetAsync(objUrl);
+          if (!objResponse.IsSuccessStatusCode)
+          {
+            await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status: {(int)objResponse.StatusCode}");
+            return null;
+          }
+          objDataText = await objResponse.Content.ReadAsStringAsync();
 
-    return epa;
+          // 2. Fetch EPA
+          var epaUrl = $"https://ssd.jpl.nasa.gov/api/horizons.api?format=text"
+            + $"&COMMAND='{targetIdEncoded}'"
+            + $"&MAKE_EPHEM='YES'"
+            + $"&EPHEM_TYPE='ELEMENTS'"
+            + $"&CENTER='{Uri.EscapeDataString(center)}'"
+            + $"&START_TIME='{Uri.EscapeDataString(startDateStr)}'"
+            + $"&STOP_TIME='{Uri.EscapeDataString(stopDateStr)}'"
+            + $"&STEP_SIZE='{Uri.EscapeDataString(stepSize)}'"
+            + $"&OBJ_DATA='NO'";
+
+          _console.Log($"[HorizonJpl] GET EPA Data: {epaUrl}");
+          var epaResponse = await _httpClient.GetAsync(epaUrl);
+          if (!epaResponse.IsSuccessStatusCode)
+          {
+            await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status: {(int)epaResponse.StatusCode}");
+            return null;
+          }
+          epaText = await epaResponse.Content.ReadAsStringAsync();
+
+          await _storage.SaveSessionAsync(cacheKey, System.Text.Encoding.UTF8.GetBytes(epaText));
+          await _storage.SaveSessionAsync(cacheKey + ".obj", System.Text.Encoding.UTF8.GetBytes(objDataText));
+      }
+
+      string constantsBlock = ExtractConstantsBlock(objDataText);
+
+      double a = ParseValue(epaText, @"A\s*=\s*([^\s]+)");
+      double ec = ParseValue(epaText, @"EC\s*=\s*([^\s]+)");
+      double in_ = ParseValue(epaText, @"IN\s*=\s*([^\s]+)");
+      double ma = ParseValue(epaText, @"MA\s*=\s*([^\s]+)");
+
+      // Nucleus radius: try volumetric-equivalent radius first (R_vol, km),
+      // then the generic RAD field. Default to 1 km if absent.
+      double radiusKm = ParseValue(objDataText, @"R_vol\s*=\s*([^\s,+]+)");
+      if (radiusKm <= 0.0)
+        radiusKm = ParseValue(objDataText, @"RAD\s*=\s*([^\s,+]+)");
+      if (radiusKm <= 0.0)
+        radiusKm = 1.0;
+
+      double gm = ParseValue(objDataText, @"GM\s*=\s*([^\s]+)"); // in km^3/s^2 usually
+      double massKg = 1e13; // default
+      if (gm > 0.0)
+      {
+        // G in km^3 / (kg s^2) = 6.6743e-20
+        massKg = gm / 6.6743e-20;
+      }
+      else
+      {
+        // Volume = 4/3 * pi * r^3 (in meters^3)
+        // Average comet density = 600 kg/m^3
+        double r_m = radiusKm * 1000.0;
+        massKg = (4.0 / 3.0) * Math.PI * r_m * r_m * r_m * 600.0;
+      }
+
+      return new PlanetOrbitData
+      {
+        SemiMajorAxis = a,
+        Eccentricity = ec,
+        Inclination = in_,
+        MeanAnomaly = ma,
+        RawConstants = constantsBlock,
+        CometRadiusKm = radiusKm,
+        MassKg = massKg,
+      };
+    }
+    catch (Exception ex)
+    {
+      _console.Log($"[HorizonJpl] GetPlanetDataAsync Exception: {ex.Message}");
+      await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
+      return null;
+    }
+    finally
+    {
+      _breadcrumb.RemoveMessage(loadMsg);
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -459,24 +551,18 @@ public class HorizonJplService
 
   private static string ExtractConstantsBlock(string text)
   {
-    int s = text.IndexOf("PHYSICAL PROPERTIES");
-    if (s != -1)
+    int startIdx = text.IndexOf("PHYSICAL PROPERTIES");
+
+    if (startIdx != -1)
     {
-      // End of the physical properties box is marked by a line of asterisks
-      int e = text.IndexOf("******", s);
-      if (e == -1) e = text.IndexOf("$$SOE", s);
-      if (e > s) return text.Substring(s, e - s).Trim();
+      int endIdx = text.IndexOf("*****************", startIdx);
+      if (endIdx != -1 && endIdx > startIdx)
+      {
+        return text.Substring(startIdx, endIdx - startIdx).Trim();
+      }
+      return text.Substring(startIdx).Trim();
     }
-    
-    // Fall back: return everything up to the first dashes separator after the header
-    int d = text.IndexOf("---");
-    if (s != -1 && d > s) return text.Substring(s, d - s).Trim();
-    
-    // If no PHYSICAL PROPERTIES, try to return everything before $$SOE to avoid ephemeris garbage
-    int soe = text.IndexOf("$$SOE");
-    if (soe != -1) return text.Substring(0, soe).Trim();
-    
-    return text.Length > 0 ? text.Substring(0, Math.Min(2000, text.Length)) : "Constants not found.";
+    return "Constants block not found.";
   }
 
   private static double ParseValue(string text, string pattern)
