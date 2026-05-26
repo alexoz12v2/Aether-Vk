@@ -151,24 +151,24 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
       
       fn bp_cross_lca(
         &self,
-        cmd: &mut Self::Cmd,
-        tlas_bvh_addr: u64,
-        lca_entities_addr: u64,
-        macro_leaves_addr: u64,
-        entity_headers_addr: u64,
-        lca_query_pairs_addr: u64,
-        out_rb_rb_addr: u64,
-        out_rb_ps_addr: u64,
-        out_ps_ps_addr: u64,
-        out_cross_pairs_addr: u64,
-        internal_pairs_addr: u64,
-        total_queries: u32,
-        max_pairs: u32,
+        _cmd: &mut Self::Cmd,
+        _tlas_bvh_addr: u64,
+        _lca_entities_addr: u64,
+        _macro_leaves_addr: u64,
+        _entity_headers_addr: u64,
+        _lca_query_pairs_addr: u64,
+        _out_rb_rb_addr: u64,
+        _out_rb_ps_addr: u64,
+        _out_ps_ps_addr: u64,
+        _out_cross_pairs_addr: u64,
+        _total_queries: u32,
+        _max_pairs: u32,
+        _num_rigid_bodies: u32,
       ) -> EngineResult<()> {
           self.base.bp_cross_lca(
-              cmd, tlas_bvh_addr, lca_entities_addr, macro_leaves_addr, entity_headers_addr,
-              lca_query_pairs_addr, out_rb_rb_addr, out_rb_ps_addr, out_ps_ps_addr,
-              out_cross_pairs_addr, internal_pairs_addr, total_queries, max_pairs
+              _cmd, _tlas_bvh_addr, _lca_entities_addr, _macro_leaves_addr, _entity_headers_addr,
+              _lca_query_pairs_addr, _out_rb_rb_addr, _out_rb_ps_addr, _out_ps_ps_addr,
+              _out_cross_pairs_addr, _total_queries, _max_pairs, _num_rigid_bodies
           )?;
           Ok(())
       }
@@ -237,9 +237,9 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     }
 
     
-    fn find_earliest_collision(&self, cmd: &mut Self::Cmd, compacted: &Self::List<CollisionPair>) -> EngineResult<Self::Buffer<u32>> {
+    fn find_earliest_collision(&self, cmd: &mut Self::Cmd, compacted: &Self::List<CollisionPair>, dt: f32) -> EngineResult<Self::Buffer<u32>> {
         if self.target == MockTargetShader::ReduceToi {
-            self.base.find_earliest_collision(cmd, compacted)
+            self.base.find_earliest_collision(cmd, compacted, dt)
         } else {
             // Need a valid 1-element buffer to return
             self.base.build_list(cmd, 1)
@@ -247,9 +247,9 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     }
 
     
-    fn apply_collision_responses(&self, cmd: &mut Self::Cmd, kinematics: &Self::Buffer<KinematicBody>, rigid_bodies: &mut Self::Buffer<RigidBodyImex>, particles: &mut Self::Buffer<f32>, collisions: &Self::List<CollisionPair>, force_inelastic: bool) -> EngineResult<()> {
+    fn apply_collision_responses(&self, cmd: &mut Self::Cmd, kinematics: &Self::Buffer<KinematicBody>, rigid_bodies: &mut Self::Buffer<RigidBodyImex>, particles: &mut Self::Buffer<f32>, collisions: &Self::List<CollisionPair>, lca_entities_addr: u64, force_inelastic: bool) -> EngineResult<()> {
         if self.target == MockTargetShader::ApplyImpulses {
-            self.base.apply_collision_responses(cmd, kinematics, rigid_bodies, particles, collisions, force_inelastic)?;
+            self.base.apply_collision_responses(cmd, kinematics, rigid_bodies, particles, collisions, lca_entities_addr, force_inelastic)?;
         }
         Ok(())
     }

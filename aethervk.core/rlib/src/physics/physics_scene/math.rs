@@ -212,7 +212,7 @@ mod tests {
       soi_radius: 100.0,
       frame_type: 0,
       parent_frame_idx: u32::MAX,
-      bvh_root_index: 0,
+      bvh_root_index: 0, _pad0: 0,
       entity_id_raw: 1,
       frame_bda: 0,
     }];
@@ -237,6 +237,7 @@ mod tests {
       mesh_entity_map: vec![],
       particle_entity_map: vec![],
       dt_s: 0.016,
+      recent_collisions: vec![],
     }
   }
 

@@ -131,22 +131,6 @@ impl RootBoundsBvh {
   }
 }
 
-
-#[derive(Debug, Clone)]
-pub struct CollisionEvent {
-  pub entity_a_id: u32,
-  pub entity_a_name: alloc::string::String,
-  pub entity_b_id: u32,
-  pub entity_b_name: alloc::string::String,
-  pub contact_point: [f32; 3],
-  pub contact_normal: [f32; 3],
-  pub penetration_depth: f32,
-  pub frame_id: u32,
-  pub is_lca: bool,
-  pub particle_path_a: Option<alloc::vec::Vec<u32>>,
-  pub particle_path_b: Option<alloc::vec::Vec<u32>>,
-}
-
 pub struct PhysicsScene {
   pub gpu_frames: Vec<GpuReferenceFrame>,
   pub macro_tlas: RootBoundsBvh,
@@ -156,7 +140,6 @@ pub struct PhysicsScene {
   pub mesh_entity_map: Vec<u32>,
   pub particle_entity_map: Vec<u32>,
   pub dt_s: f32,
-  pub recent_collisions: Vec<CollisionEvent>,
 }
 
 impl PhysicsScene {
@@ -344,7 +327,6 @@ impl PhysicsScene {
       mesh_entity_map,
       particle_entity_map,
       dt_s,
-      recent_collisions: alloc::vec::Vec::new(),
     }
   }
 }

@@ -10,7 +10,7 @@
             CornerRadius="15" Background="Transparent" Foreground="{DynamicResource Text.Secondary}" ZIndex="100">
       <ToolTip.Tip>
         <TextBlock
-          Text="3-Step SPK Retrieval Process:&#x0a;1. Search for comets by observation period.&#x0a;2. Select a comet to view available SPK records.&#x0a;3. Select an SPK record and download it to your local machine." />
+          Text="3-Step SPK Retrieval Process:&#x0a;1. Search for comets by designation.&#x0a;2. Select a comet to view available SPK records (filtered by simulation timeline).&#x0a;3. Download the full observation (SPK, EPA, Object constants)." />
       </ToolTip.Tip>
     </Button>
 
@@ -26,8 +26,11 @@
 
             <DataGrid x:Name="CometsResultDataGrid" ItemsSource="{Binding CometsData}"
                       SelectedItem="{Binding SelectedComet}" AutoGenerateColumns="False" IsReadOnly="True"
-                      MaxHeight="400" Margin="0,10,0,0">
-               <!-- Columns are auto-generated dynamically in code-behind typically, or via AutoGenerateColumns=False we assume columns are defined. Wait, it was AutoGenerateColumns="False" but no columns were defined in XAML in the original file. Let's keep it as it was. -->
+                      MaxHeight="300" Margin="0,10,0,0">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="2*" />
+                <DataGridTextColumn Header="Primary Designation" Binding="{Binding PrimaryDesignation}" Width="*" />
+              </DataGrid.Columns>
             </DataGrid>
 
             <Button Content="Next: Select Comet" Command="{Binding GoToStep2Command}" HorizontalAlignment="Right"
@@ -40,64 +43,27 @@
         <Expander Header="Step 2: SPK Records" HorizontalAlignment="Stretch"
                   IsExpanded="{Binding IsStep2Expanded, Mode=TwoWay}" IsEnabled="{Binding IsStep2Enabled}">
           <StackPanel Spacing="10">
-            <TextBlock Text="Select a comet from Step 1 and provide a date range to view its SPK records."
+            <TextBlock Text="Select a comet from Step 1 to view its SPK records matching the simulation timeline."
                        Foreground="{DynamicResource Text.Secondary}" Margin="10" />
 
             <StackPanel IsVisible="{Binding SelectedComet, Converter={x:Static ObjectConverters.IsNotNull}}"
                         Spacing="10">
-              <Panel Container.Name="DatesContainer" Container.Sizing="Width">
-                <Panel.Styles>
-                  <Style Selector="Grid.datesGrid">
-                    <Setter Property="utils:GridExtensions.ColumnDefinitions" Value="Auto, *, Auto, *" />
-                    <Setter Property="utils:GridExtensions.RowDefinitions" Value="Auto" />
-                  </Style>
-                  <Style Selector="Grid.datesGrid > TextBlock.beforeLbl">
-                    <Setter Property="Grid.Column" Value="2" />
-                    <Setter Property="Grid.Row" Value="0" />
-                    <Setter Property="Margin" Value="8,0,8,0" />
-                  </Style>
-                  <Style Selector="Grid.datesGrid > DatePicker.beforePicker">
-                    <Setter Property="Grid.Column" Value="3" />
-                    <Setter Property="Grid.Row" Value="0" />
-                    <Setter Property="Margin" Value="0" />
-                  </Style>
-
-                  <ContainerQuery Name="DatesContainer" Query="max-width: 550">
-                    <Style Selector="Grid.datesGrid">
-                      <Setter Property="utils:GridExtensions.ColumnDefinitions" Value="Auto, *" />
-                      <Setter Property="utils:GridExtensions.RowDefinitions" Value="Auto, Auto" />
-                    </Style>
-                    <Style Selector="Grid.datesGrid > TextBlock.beforeLbl">
-                      <Setter Property="Grid.Column" Value="0" />
-                      <Setter Property="Grid.Row" Value="1" />
-                      <Setter Property="Margin" Value="0,8,8,0" />
-                    </Style>
-                    <Style Selector="Grid.datesGrid > DatePicker.beforePicker">
-                      <Setter Property="Grid.Column" Value="1" />
-                      <Setter Property="Grid.Row" Value="1" />
-                      <Setter Property="Margin" Value="0,8,0,0" />
-                    </Style>
-                  </ContainerQuery>
-                </Panel.Styles>
-
-                <Grid Classes="datesGrid" Margin="4">
-                  <TextBlock Grid.Row="0" Grid.Column="0" Text="First Obs After:" VerticalAlignment="Center"
-                             Margin="0,0,8,0" />
-                  <DatePicker Grid.Row="0" Grid.Column="1" SelectedDate="{Binding SearchStartTime}" Margin="0,0,8,0"
-                              HorizontalAlignment="Stretch" />
-
-                  <TextBlock Classes="beforeLbl" Text="First Obs Before:" VerticalAlignment="Center" />
-                  <DatePicker Classes="beforePicker" SelectedDate="{Binding SearchStopTime}"
-                              HorizontalAlignment="Stretch" />
-                </Grid>
-              </Panel>
               
               <Button Content="Search Records" Command="{Binding SearchRecordsCommand}" HorizontalAlignment="Right"
                       Classes="accent" />
 
               <DataGrid x:Name="SpkRecordsDataGrid" ItemsSource="{Binding SpkRecordsData}"
                         SelectedItem="{Binding SelectedSpkRecord}" AutoGenerateColumns="False" IsReadOnly="True"
-                        MaxHeight="400" />
+                        MaxHeight="300">
+                <DataGrid.Columns>
+                  <DataGridTextColumn Header="Record ID" Binding="{Binding RecordId}" />
+                  <DataGridTextColumn Header="Epoch" Binding="{Binding EpochYear}" />
+                  <DataGridTextColumn Header="Match Desig" Binding="{Binding MatchDesig}" />
+                  <DataGridTextColumn Header="Primary Desig" Binding="{Binding PrimaryDesig}" />
+                  <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*" />
+                </DataGrid.Columns>
+              </DataGrid>
+              
               <Button Content="Next: Select Record" Command="{Binding GoToStep3Command}" HorizontalAlignment="Right"
                       Classes="accent"
                       IsEnabled="{Binding SelectedSpkRecord, Converter={x:Static ObjectConverters.IsNotNull}}" />
@@ -106,25 +72,24 @@
         </Expander>
 
         <!-- Step 3: Download SPK -->
-        <Expander Header="Step 3: Download SPK" HorizontalAlignment="Stretch"
+        <Expander Header="Step 3: Download Observation" HorizontalAlignment="Stretch"
                   IsExpanded="{Binding IsStep3Expanded, Mode=TwoWay}" IsEnabled="{Binding IsStep3Enabled}">
           <StackPanel Spacing="10">
-            <TextBlock Text="Select an SPK record from Step 2 to download."
+            <TextBlock Text="Select an SPK record from Step 2 to download the full observation (SPK, EPA, Constants)."
                        IsVisible="{Binding SelectedSpkRecord, Converter={x:Static ObjectConverters.IsNull}}"
                        Foreground="{DynamicResource Text.Secondary}" Margin="10" />
 
             <StackPanel IsVisible="{Binding SelectedSpkRecord, Converter={x:Static ObjectConverters.IsNotNull}}" Margin="10" Spacing="10">
               <StackPanel Orientation="Horizontal" Spacing="10">
-                <Button Content="Auto-Download SPK Kernel" Command="{Binding DownloadAndSaveSpkCommand}" Classes="accent" />
-                <Button Content="Fetch Object Data" Command="{Binding DownloadObjectDataCommand}" Classes="accent" />
+                <Button Content="Download Selected Observation" Command="{Binding DownloadObservationCommand}" Classes="accent" />
                 <Button Content="Start Over" Command="{Binding ResetWizardCommand}" />
               </StackPanel>
               <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsDownloading}" Height="4" Margin="0,10,0,0" />
               
               <DataGrid ItemsSource="{Binding ObjectData}" AutoGenerateColumns="False" IsReadOnly="True" MaxHeight="400" Margin="0,10,0,0">
                 <DataGrid.Columns>
-                  <DataGridTextColumn Header="Property" Binding="{Binding [0]}" />
-                  <DataGridTextColumn Header="Value" Binding="{Binding [1]}" />
+                  <DataGridTextColumn Header="Property" Binding="{Binding Property}" Width="*" />
+                  <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="2*" />
                 </DataGrid.Columns>
               </DataGrid>
             </StackPanel>

@@ -26,13 +26,10 @@ void main() {
 
     if (id == 0) {
         pc.packed_out.count = in_count;
-        uint blocks = (in_count + 127) / 128;
+        uint blocks = max(1u, (in_count + 127) / 128);
         pc.packed_out.dispatch_x = blocks;
         pc.packed_out.dispatch_y = 1;
         pc.packed_out.dispatch_z = 1;
-        
-        // Write count to pairs[0].b.primitive_index so the CPU can read it despite the 16-byte offset
-        pc.packed_out.pairs[0].b.primitive_index = in_count;
     }
 
     if (id < in_count) {
@@ -44,9 +41,13 @@ void main() {
         pc.packed_out.pairs[id].b.entity_id = in_data.entity_b;
         pc.packed_out.pairs[id].b.primitive_index = in_data.prim_b;
         pc.packed_out.pairs[id].toi = in_data.toi;
+        pc.packed_out.pairs[id].is_lca = in_data.is_lca;
+        pc.packed_out.pairs[id].lca_id = in_data.lca_id;
+        pc.packed_out.pairs[id].frame_bda_low = 0u;
         pc.packed_out.pairs[id].norm_x = in_data.contact_normal.x;
         pc.packed_out.pairs[id].norm_y = in_data.contact_normal.y;
         pc.packed_out.pairs[id].norm_z = in_data.contact_normal.z;
+        pc.packed_out.pairs[id].frame_bda_high = 0u;
         pc.packed_out.pairs[id].pt_x = in_data.contact_point.x;
         pc.packed_out.pairs[id].pt_y = in_data.contact_point.y;
         pc.packed_out.pairs[id].pt_z = in_data.contact_point.z;

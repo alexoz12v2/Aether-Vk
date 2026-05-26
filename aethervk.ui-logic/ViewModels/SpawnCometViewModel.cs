@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
+using AetherVk.Logic.Models;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -20,13 +21,11 @@ public partial class SpawnCometViewModel : ObservableObject
   [NotifyPropertyChangedFor(nameof(IsStep1))]
   [NotifyPropertyChangedFor(nameof(IsStep2))]
   [NotifyPropertyChangedFor(nameof(IsStep3))]
-  [NotifyPropertyChangedFor(nameof(IsStep4))]
   private int _currentStep = 1;
 
   public bool IsStep1 => CurrentStep == 1;
   public bool IsStep2 => CurrentStep == 2;
   public bool IsStep3 => CurrentStep == 3;
-  public bool IsStep4 => CurrentStep == 4;
 
   public bool CanGoBack => CurrentStep > 1;
 
@@ -56,11 +55,10 @@ public partial class SpawnCometViewModel : ObservableObject
   private string _physicsType = "Static"; // Static, Kinematic, Dynamic
 
   // --- Step 3 (Horizon Data) ---
-  public ObservableCollection<string[]> CometsData => _horizonService.CometsData;
-  public ObservableCollection<string> CometsHeaders => _horizonService.CometsHeaders;
+  public ObservableCollection<CometSearchResult> CometsData => _horizonService.CometsData;
 
   [ObservableProperty]
-  private string[]? _selectedComet;
+  private CometSearchResult? _selectedComet;
 
   [ObservableProperty]
   private DateTimeOffset? _targetDate = DateTimeOffset.Now;
@@ -199,11 +197,11 @@ public partial class SpawnCometViewModel : ObservableObject
   [RelayCommand]
   private async Task FetchOrbitDataAsync()
   {
-    if (SelectedComet == null || SelectedComet.Length < 2 || TargetDate == null)
+    if (SelectedComet == null || TargetDate == null)
       return;
 
     IsFetchingHorizonData = true;
-    var pdes = SelectedComet[1].Trim();
+    var pdes = SelectedComet.PrimaryDesignation.Trim();
 
     FetchedOrbitData = await _horizonService.GetPlanetDataAsync(pdes, TargetDate.Value.DateTime);
     IsFetchingHorizonData = false;

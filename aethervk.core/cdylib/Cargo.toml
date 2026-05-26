@@ -30,7 +30,7 @@ heapless = { version = "0.9" }
 spin = { version = "0.10", features = ["once", "rwlock", "mutex"] }
 thingbuf = { version = "0.1", default-features = false, features = ["alloc"] }
 libc = { version = "0.2", default-features = false }
-bytemuck = "1.25.0"
+bytemuck = { version = "1.15", default-features = false, features = ["derive"] }
 
 # crates necessary to avoid std
 # core, alloc → `rustc` already has them

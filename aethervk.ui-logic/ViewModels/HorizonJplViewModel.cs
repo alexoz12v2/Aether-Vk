@@ -1,6 +1,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Threading.Tasks;
+using AetherVk.Logic.Models;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -13,6 +14,7 @@ public partial class HorizonJplViewModel : TabItemViewModel
   private readonly HorizonJplService _horizonService;
   private readonly ILocalStorageService _localStorage;
   private readonly BreadcrumbService _breadcrumb;
+  private readonly TimelineService _timelineService;
 
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(IsStep2Enabled))]
@@ -31,33 +33,32 @@ public partial class HorizonJplViewModel : TabItemViewModel
   public bool IsStep2Enabled => CurrentStep >= 2;
   public bool IsStep3Enabled => CurrentStep >= 3;
 
-  [ObservableProperty]
-  private DateTimeOffset? _searchStartTime = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+  public ObservableCollection<CometSearchResult> CometsData => _horizonService.CometsData;
 
   [ObservableProperty]
-  private DateTimeOffset? _searchStopTime = new DateTimeOffset(2024, 1, 31, 0, 0, 0, TimeSpan.Zero);
+  private CometSearchResult? _selectedComet;
 
-  public ObservableCollection<string[]> CometsData => _horizonService.CometsData;
-  public ObservableCollection<string> CometsHeaders => _horizonService.CometsHeaders;
-
-  [ObservableProperty]
-  private string[]? _selectedComet;
-
-  public ObservableCollection<string[]> SpkRecordsData => _horizonService.SpkRecordsData;
-  public ObservableCollection<string> SpkRecordsHeaders => _horizonService.SpkRecordsHeaders;
+  public ObservableCollection<SpkRecordItem> SpkRecordsData => _horizonService.SpkRecordsData;
 
   [ObservableProperty]
-  private string[]? _selectedSpkRecord;
+  private SpkRecordItem? _selectedSpkRecord;
+
+  public ObservableCollection<ObjectDataProperty> ObjectData => _horizonService.ObjectData;
 
   [ObservableProperty]
   private bool _isDownloading;
 
-  public HorizonJplViewModel(HorizonJplService horizonService, ILocalStorageService localStorage, BreadcrumbService breadcrumb)
+  public HorizonJplViewModel(
+      HorizonJplService horizonService, 
+      ILocalStorageService localStorage, 
+      BreadcrumbService breadcrumb,
+      TimelineService timelineService)
     : base("Horizon JPL")
   {
     _horizonService = horizonService;
     _localStorage = localStorage;
     _breadcrumb = breadcrumb;
+    _timelineService = timelineService;
   }
 
   [RelayCommand]
@@ -69,7 +70,7 @@ public partial class HorizonJplViewModel : TabItemViewModel
   [RelayCommand]
   private void GoToStep2()
   {
-    if (SelectedComet == null || SelectedComet.Length < 2)
+    if (SelectedComet == null)
       return;
     CurrentStep = 2;
     IsStep1Expanded = false;
@@ -79,11 +80,12 @@ public partial class HorizonJplViewModel : TabItemViewModel
   [RelayCommand]
   private async Task SearchRecordsAsync()
   {
-    if (SelectedComet == null || SelectedComet.Length < 2)
+    if (SelectedComet == null)
       return;
-    var pdes = SelectedComet[1].Trim();
-    string startStr = SearchStartTime?.ToString("yyyy-MM-dd") ?? "2024-01-01";
-    string stopStr = SearchStopTime?.ToString("yyyy-MM-dd") ?? "2024-01-31";
+      
+    var pdes = SelectedComet.PrimaryDesignation.Trim();
+    string startStr = _timelineService.StartDate.ToString("yyyy-MM-dd");
+    string stopStr = _timelineService.StopDate.ToString("yyyy-MM-dd");
 
     await _horizonService.FetchSpkRecordsAsync(pdes, startStr, stopStr);
   }
@@ -99,45 +101,23 @@ public partial class HorizonJplViewModel : TabItemViewModel
     }
   }
 
-  public ObservableCollection<string[]> ObjectData => _horizonService.ObjectData;
-
   [RelayCommand]
-  private async Task DownloadObjectDataAsync()
-  {
-    if (SelectedSpkRecord == null)
-      return;
-    var spkId = SelectedSpkRecord[0].Trim();
-    IsDownloading = true;
-    await _horizonService.FetchObjectDataAsync(spkId);
-    IsDownloading = false;
-  }
-
-  [RelayCommand]
-  private async Task DownloadAndSaveSpkAsync()
+  private async Task DownloadObservationAsync()
   {
     if (SelectedComet == null || SelectedSpkRecord == null)
       return;
 
-    var pdes = SelectedComet[1].Trim().Replace("/", "_").Replace(" ", "_");
-    var spkId = SelectedSpkRecord[0].Trim();
-    string startStr = SearchStartTime?.ToString("yyyy-MM-dd") ?? "2024-01-01";
-    string stopStr = SearchStopTime?.ToString("yyyy-MM-dd") ?? "2024-01-31";
+    var pdes = SelectedComet.PrimaryDesignation.Trim().Replace("/", "_").Replace(" ", "_");
+    var spkId = SelectedSpkRecord.RecordId.Trim();
+    var start = _timelineService.StartDate;
+    var stop = _timelineService.StopDate;
 
-    var fileName = $"spk-kernels/{pdes}-{spkId}-{startStr}-{stopStr}.spk";
+    var fileName = $"spk-kernels/{pdes}-{spkId}-{start.ToString("yyyy-MM-dd")}-{stop.ToString("yyyy-MM-dd")}.spk";
     var savePath = _localStorage.GetPersistentPath(fileName);
 
     IsDownloading = true;
-    var result = await _horizonService.DownloadSpkByIdAsync(pdes, spkId, savePath, startStr, stopStr);
+    var success = await _horizonService.DownloadObservationAsync(pdes, spkId, start, stop, savePath);
     IsDownloading = false;
-
-    if (result != null)
-    {
-      await _breadcrumb.ShowMessageAsync("SPK Downloaded", $"Saved SPK to {fileName}");
-    }
-    else
-    {
-      await _breadcrumb.ShowMessageAsync("SPK Download Failed", "Could not download the SPK kernel.");
-    }
   }
 
   [RelayCommand]

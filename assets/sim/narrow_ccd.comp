@@ -38,6 +38,9 @@ void main() {
         lca_id = pair.lca_id;
     } else {
         PairBuffer pairs = PairBuffer(pc.pair_buffer);
+#ifdef DEBUG_SHADERS
+        if (pair_idx == 0) debugPrintfEXT("narrow_ccd addr=%lx count=%d pair_idx=%d", pc.pair_buffer, pairs.count, pair_idx);
+#endif
         if (pair_idx >= pairs.count) return;
         uvec2 pair = pairs.pairs[pair_idx];
         idA = pair.x;
@@ -90,17 +93,14 @@ void main() {
             out_list.pairs[count].valid = 1u;
             out_list.pairs[count].entity_a = idA;
             out_list.pairs[count].entity_b = idB;
-            if (pc.space_type == 1) {
-                out_list.pairs[count].prim_a = lca_id;
-                out_list.pairs[count].prim_b = lca_id;
-            } else {
-                out_list.pairs[count].prim_a = idA;
-                out_list.pairs[count].prim_b = idB;
-            }
+            out_list.pairs[count].prim_a = idA;
+            out_list.pairs[count].prim_b = idB;
             out_list.pairs[count].toi = toi;
+            out_list.pairs[count].is_lca = 0u;
+            out_list.pairs[count].lca_id = 0u;
             out_list.pairs[count].contact_normal = normal;
             out_list.pairs[count].contact_point = contact;
-            out_list.pairs[count].penetration_depth = depth;
+            out_list.pairs[count].penetration_depth = max(depth, 1e-4);
         }
     }
 }

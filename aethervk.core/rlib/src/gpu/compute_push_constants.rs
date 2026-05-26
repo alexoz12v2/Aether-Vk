@@ -266,6 +266,7 @@ pub struct LcpPushConstants {
   pub rigid_bodies_addr: u64,
   pub dt: f32,
   pub restitution: f32,
+  pub lca_entities: u64,
 }
 
 #[repr(C)]
@@ -275,6 +276,7 @@ pub struct ApplyImpulsesPushConstants {
   pub collisions_addr: u64,
   pub impulses_addr: u64,
   pub rigid_bodies_addr: u64,
+  pub lca_entities: u64,
 }
 
 #[repr(C)]

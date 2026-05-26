@@ -9,17 +9,17 @@
       <Button Content="Pause" Command="{Binding PauseCommand}" Classes="accent" />
       <Button Content="Play" Command="{Binding PlayCommand}" Classes="accent" />
       <ComboBox ItemsSource="{Binding TimeScaleOptions}"
-                SelectedItem="{Binding SelectedTimeScale}"
+                SelectedItem="{Binding Timeline.SelectedTimeScale}"
                 DisplayMemberBinding="{Binding DisplayName}"
                 VerticalAlignment="Center" Width="150" />
       <Button Content="Update Trajectories" Command="{Binding UpdateTrajectoriesCommand}" Classes="accent" />
       
-      <TextBlock Text="{Binding UtcTime}" VerticalAlignment="Center" Margin="16,0,0,0" FontWeight="Bold" FontSize="16" />
+      <TextBlock Text="{Binding Timeline.UtcTime}" VerticalAlignment="Center" Margin="16,0,0,0" FontWeight="Bold" FontSize="16" />
     </StackPanel>
     
-    <Slider Grid.Row="1" Minimum="{Binding MinTai}" Maximum="{Binding MaxTai}" Value="{Binding TimeTai}" 
+    <Slider Grid.Row="1" Minimum="{Binding Timeline.MinTai}" Maximum="{Binding Timeline.MaxTai}" Value="{Binding Timeline.TimeTai}" 
             Margin="16,0" VerticalAlignment="Top"
-            IsEnabled="{Binding !IsPlaying}"
+            IsEnabled="{Binding !Timeline.IsPlaying}"
             PointerPressed="OnSliderPointerPressed"
             PointerReleased="OnSliderPointerReleased" />
   </Grid>

@@ -1032,6 +1032,57 @@ pub unsafe extern "C" fn avkSimulationContext_getImportedModelsCount(
   scenes.model_registry.len() as u32
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct FfiMat3 {
+  pub m00: f32, pub m10: f32, pub m20: f32,
+  pub m01: f32, pub m11: f32, pub m21: f32,
+  pub m02: f32, pub m12: f32, pub m22: f32,
+}
+
+impl Default for FfiMat3 {
+  fn default() -> Self {
+    Self {
+      m00: 1.0, m10: 0.0, m20: 0.0,
+      m01: 0.0, m11: 1.0, m21: 0.0,
+      m02: 0.0, m12: 0.0, m22: 1.0,
+    }
+  }
+}
+
+impl FfiMat3 {
+  pub fn from_mat3(mat: oshal::math::matrix::mat3::Mat3f32) -> Self {
+    Self {
+      m00: mat.x.x(), m10: mat.x.y(), m20: mat.x.z(),
+      m01: mat.y.x(), m11: mat.y.y(), m21: mat.y.z(),
+      m02: mat.z.x(), m12: mat.z.y(), m22: mat.z.z(),
+    }
+  }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getModelLocalFrames(
+  ctx: *mut SimulationContext,
+  model_id: u64,
+  out_user_frame: *mut FfiMat3,
+  out_sim_frame: *mut FfiMat3,
+) -> bool {
+  if ctx.is_null() || out_user_frame.is_null() || out_sim_frame.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  
+  if let Some((user_frame, sim_frame)) = ctx_ref.get_model_local_frames(model_id) {
+    unsafe {
+      *out_user_frame = FfiMat3::from_mat3(user_frame);
+      *out_sim_frame = FfiMat3::from_mat3(sim_frame);
+    }
+    return true;
+  }
+  false
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_getImportedModels(

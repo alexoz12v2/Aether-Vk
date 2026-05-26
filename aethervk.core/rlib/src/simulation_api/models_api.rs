@@ -10,6 +10,16 @@ use core::ffi::{CStr, c_char};
 use oshal::math::vector::{vec3::Vec3f32, vec4::Quat};
 
 impl SimulationContext {
+  pub fn get_model_local_frames(&self, model_id: u64) -> Option<(oshal::math::matrix::mat3::Mat3f32, oshal::math::matrix::mat3::Mat3f32)> {
+    let scenes = self.scenes.read();
+    let path = scenes.model_registry.get(&model_id)?;
+    let mesh = scenes.mesh_cache.get(path)?;
+    use oshal::math::matrix::Matrix;
+    let user_frame = oshal::math::matrix::mat3::Mat3f32::identity();
+    let sim_frame = mesh.pa_basis_bf.unwrap_or(oshal::math::matrix::mat3::Mat3f32::identity());
+    Some((user_frame, sim_frame))
+  }
+
   /// TODO: Document this item
   pub fn unload_model(&self, model_id: u64) {
     if self.scenes.write().model_registry.remove(&model_id).is_some() {

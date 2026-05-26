@@ -26,6 +26,7 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<TrajectoryManagerService>();
     collection.AddSingleton<FileWatcherService>();
     collection.AddSingleton<InputRegistry>();
+    collection.AddSingleton<TimelineService>();
   }
 
   public static void AddViewModels(this IServiceCollection collection)

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using AetherVk.Logic.Models;
 
 namespace AetherVk.Logic.Services;
 
@@ -15,24 +16,7 @@ public class PlanetOrbitData
   public double Inclination { get; set; }
   public double MeanAnomaly { get; set; }
   public string RawConstants { get; set; } = string.Empty;
-  /// <summary>
-  /// Nucleus volumetric-equivalent radius in km, parsed from the Horizon
-  /// PHYSICAL PROPERTIES block (R_vol or RAD field).
-  /// Defaults to 1.0 km when the API does not return a value.
-  /// </summary>
   public double CometRadiusKm { get; set; } = 1.0;
-}
-
-public class HorizonsJsonResponse
-{
-  [System.Text.Json.Serialization.JsonPropertyName("signature")]
-  public object? Signature { get; set; }
-
-  [System.Text.Json.Serialization.JsonPropertyName("result")]
-  public string? Result { get; set; }
-
-  [System.Text.Json.Serialization.JsonPropertyName("version")]
-  public string? Version { get; set; }
 }
 
 public class HorizonJplService
@@ -41,18 +25,361 @@ public class HorizonJplService
   private readonly ConsoleService _console;
   private readonly BreadcrumbService _breadcrumb;
 
-  public ObservableCollection<string[]> SessionData { get; } = new();
-  public ObservableCollection<string> Headers { get; } = new();
-
-  public ObservableCollection<string[]> CometsData { get; } = new();
-  public ObservableCollection<string> CometsHeaders { get; } = new();
+  public ObservableCollection<CometSearchResult> CometsData { get; } = new();
+  public ObservableCollection<SpkRecordItem> SpkRecordsData { get; } = new();
+  public ObservableCollection<ObjectDataProperty> ObjectData { get; } = new();
+  public ObservableCollection<string[]> SessionData { get; } = new(); // Used for CSV EPA, if needed
 
   public HorizonJplService(ConsoleService console, BreadcrumbService breadcrumb)
   {
-    _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+    _httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(2) }; // Downloading SPK might take time
     _httpClient.DefaultRequestHeaders.Add("User-Agent", "AetherVk/1.0");
     _console = console;
     _breadcrumb = breadcrumb;
+  }
+
+  // Comets Search (Using JSON SBDB API since it works best for comet lookup)
+  public async Task FetchCometsAsync()
+  {
+    var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Downloading list of comets...");
+    try
+    {
+      var url = "https://ssd-api.jpl.nasa.gov/sbdb_query.api?sb-kind=c&fields=full_name,pdes";
+      _console.Log($"[HorizonJpl] GET {url}");
+
+      var response = await _httpClient.GetAsync(url);
+      if (response.IsSuccessStatusCode)
+      {
+        var text = await response.Content.ReadAsStringAsync();
+        ParseCometsJson(text);
+        await _breadcrumb.ShowMessageAsync(
+          "Horizon API (Comets)",
+          $"Success: {CometsData.Count} comets fetched."
+        );
+      }
+      else
+      {
+        await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status: {(int)response.StatusCode}");
+      }
+    }
+    catch (Exception ex)
+    {
+      _console.Log($"[HorizonJpl] Exception: {ex.Message}");
+      await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
+    }
+    finally
+    {
+      _breadcrumb.RemoveMessage(loadMsg);
+    }
+  }
+
+  private void ParseCometsJson(string json)
+  {
+    CometsData.Clear();
+    try
+    {
+      using var doc = System.Text.Json.JsonDocument.Parse(json);
+      var root = doc.RootElement;
+
+      if (root.TryGetProperty("data", out var data))
+      {
+        foreach (var row in data.EnumerateArray())
+        {
+          var rowData = row.EnumerateArray().ToArray();
+          if (rowData.Length >= 2)
+          {
+            CometsData.Add(new CometSearchResult
+            {
+              Name = rowData[0].ValueKind == System.Text.Json.JsonValueKind.Null ? "" : rowData[0].ToString(),
+              PrimaryDesignation = rowData[1].ValueKind == System.Text.Json.JsonValueKind.Null ? "" : rowData[1].ToString()
+            });
+          }
+        }
+      }
+    }
+    catch (Exception ex)
+    {
+      _console.Log($"[HorizonJpl] JSON Parse Exception: {ex.Message}");
+    }
+  }
+
+  // Fetch SPK Records in text format
+  public async Task FetchSpkRecordsAsync(string pdes, string startTime, string stopTime)
+  {
+    var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Downloading list of observation records...");
+    try
+    {
+      // Semicolon url-encoded as %3B for Horizons API when looking up small bodies
+      var pdesEncoded = Uri.EscapeDataString($"{pdes};");
+      var start = Uri.EscapeDataString(startTime);
+      var stop = Uri.EscapeDataString(stopTime);
+
+      var url = $"https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND='DES%3D{pdesEncoded}'&EPHEM_TYPE=SPK&START_TIME='{start}'&STOP_TIME='{stop}'&MAKE_EPHEM=YES";
+
+      _console.Log($"[HorizonJpl] GET SPK Records: {url}");
+      var response = await _httpClient.GetAsync(url);
+
+      if (response.IsSuccessStatusCode)
+      {
+        var text = await response.Content.ReadAsStringAsync();
+        ParseSpkRecordsText(text, startTime, stopTime);
+        await _breadcrumb.ShowMessageAsync(
+          "Horizon API (SPK Records)",
+          $"Success: {SpkRecordsData.Count} records found."
+        );
+      }
+      else
+      {
+        await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status: {(int)response.StatusCode}");
+      }
+    }
+    catch (Exception ex)
+    {
+      _console.Log($"[HorizonJpl] SPK Records Exception: {ex.Message}");
+      await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
+    }
+    finally
+    {
+      _breadcrumb.RemoveMessage(loadMsg);
+    }
+  }
+
+  private void ParseSpkRecordsText(string text, string startTime, string stopTime)
+  {
+    SpkRecordsData.Clear();
+    
+    int startYear = int.MinValue;
+    int stopYear = int.MaxValue;
+    if (DateTime.TryParse(startTime, out var dtStart)) startYear = dtStart.Year;
+    if (DateTime.TryParse(stopTime, out var dtStop)) stopYear = dtStop.Year;
+
+    var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+    bool inData = false;
+
+    foreach (var line in lines)
+    {
+      if (line.Trim().StartsWith("--------"))
+      {
+        if (inData) break; // Reached the bottom of the table
+        inData = true;
+        continue;
+      }
+      
+      if (inData)
+      {
+        if (line.Trim().StartsWith("*") || string.IsNullOrWhiteSpace(line)) break;
+        
+        var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length >= 5)
+        {
+          var id = parts[0];
+          var epochStr = parts[1];
+          var match = parts[2];
+          var primary = parts[3];
+          var name = string.Join(" ", parts.Skip(4));
+
+          if (int.TryParse(epochStr, out int epochYear))
+          {
+            if (epochYear >= startYear && epochYear <= stopYear)
+            {
+              SpkRecordsData.Add(new SpkRecordItem { RecordId = id, EpochYear = epochStr, MatchDesig = match, PrimaryDesig = primary, Name = name });
+            }
+          }
+          else
+          {
+            SpkRecordsData.Add(new SpkRecordItem { RecordId = id, EpochYear = epochStr, MatchDesig = match, PrimaryDesig = primary, Name = name });
+          }
+        }
+      }
+    }
+  }
+
+  // Fetch Object Constants in text format
+  public async Task FetchObjectDataAsync(string spkId)
+  {
+    var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Downloading object data...");
+    try
+    {
+      var spkIdEncoded = Uri.EscapeDataString($"{spkId};");
+      var url = $"https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND='{spkIdEncoded}'&OBJ_DATA=YES&MAKE_EPHEM=NO";
+      
+      _console.Log($"[HorizonJpl] GET Object Data: {url}");
+      var response = await _httpClient.GetAsync(url);
+      
+      if (response.IsSuccessStatusCode)
+      {
+        var text = await response.Content.ReadAsStringAsync();
+        ParseObjectDataText(text);
+      }
+      else
+      {
+        await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status: {(int)response.StatusCode}");
+      }
+    }
+    catch (Exception ex)
+    {
+      _console.Log($"[HorizonJpl] Object Data Exception: {ex.Message}");
+      await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
+    }
+    finally
+    {
+      _breadcrumb.RemoveMessage(loadMsg);
+    }
+  }
+
+  private void ParseObjectDataText(string text)
+  {
+    ObjectData.Clear();
+    var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+    foreach (var line in lines)
+    {
+      if (line.StartsWith("*") || string.IsNullOrWhiteSpace(line)) continue;
+      
+      var normalizedLine = Regex.Replace(line, @"([=:])\s+", "$1");
+      var parts = normalizedLine.Split(new[] { "  ", "\t" }, StringSplitOptions.RemoveEmptyEntries);
+      bool hasKeyValue = false;
+      
+      foreach (var part in parts)
+      {
+        var p = part.Trim();
+        if (string.IsNullOrEmpty(p)) continue;
+
+        if (p.Contains("=") || p.Contains(":"))
+        {
+          var sep = p.Contains("=") ? '=' : ':';
+          var kv = p.Split(new[] { sep }, 2, StringSplitOptions.RemoveEmptyEntries);
+          if (kv.Length == 2)
+          {
+            ObjectData.Add(new ObjectDataProperty { Property = kv[0].Trim(), Value = kv[1].Trim() });
+            hasKeyValue = true;
+          }
+          else
+          {
+            ObjectData.Add(new ObjectDataProperty { Property = "Info", Value = p });
+          }
+        }
+        else if (!hasKeyValue)
+        {
+          ObjectData.Add(new ObjectDataProperty { Property = "Info", Value = p });
+        }
+      }
+    }
+  }
+
+  // Download SPK file directly from text format by extracting base64 string
+  public async Task<string?> DownloadSpkByIdAsync(string pdes, string spkId, string savePath, string startTime, string stopTime)
+  {
+    try
+    {
+      var spkIdEncoded = Uri.EscapeDataString($"{spkId};");
+      var start = Uri.EscapeDataString(startTime);
+      var stop = Uri.EscapeDataString(stopTime);
+
+      var url = $"https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND='{spkIdEncoded}'&OBJ_DATA=NO&MAKE_EPHEM=YES&EPHEM_TYPE=SPK&START_TIME='{start}'&STOP_TIME='{stop}'";
+
+      _console.Log($"[HorizonJpl] Requesting SPK: {url}");
+      var response = await _httpClient.GetAsync(url);
+
+      if (!response.IsSuccessStatusCode)
+        return null;
+
+      var text = await response.Content.ReadAsStringAsync();
+      
+      // Look for the REFGL1NQ sequence
+      int startIdx = text.IndexOf("REFGL1NQ");
+      if (startIdx == -1)
+      {
+        _console.Log("[HorizonJpl] SPK binary data not found in response.");
+        return null;
+      }
+
+      // The base64 text is from startIdx to the end of the text (or an empty line)
+      var lines = text.Substring(startIdx).Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+      
+      var base64Spk = string.Join("", lines.TakeWhile(l => !string.IsNullOrWhiteSpace(l)));
+      
+      var binarySpk = Convert.FromBase64String(base64Spk);
+      using (var fs = new FileStream(savePath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true))
+      {
+        await fs.WriteAsync(binarySpk, 0, binarySpk.Length);
+      }
+      return savePath;
+    }
+    catch (Exception ex)
+    {
+      _console.Log($"[HorizonJpl] SPK Download Exception: {ex.Message}");
+      return null;
+    }
+  }
+
+  // Added: Single Observation Download Method
+  public async Task<bool> DownloadObservationAsync(string pdes, string spkId, DateTimeOffset start, DateTimeOffset stop, string savePath)
+  {
+    var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Downloading complete observation package...");
+    try
+    {
+      string startStr = start.ToString("yyyy-MM-dd");
+      string stopStr = stop.ToString("yyyy-MM-dd");
+
+      // 1. Download SPK
+      _console.Log("[HorizonJpl] Downloading SPK...");
+      var spkResult = await DownloadSpkByIdAsync(pdes, spkId, savePath, startStr, stopStr);
+      if (spkResult == null) throw new Exception("Failed to download SPK.");
+
+      // 2. Download Object Data
+      _console.Log("[HorizonJpl] Fetching Object Data...");
+      await FetchObjectDataAsync(spkId);
+
+      // 3. Fetch EPA (Orbital Elements)
+      _console.Log("[HorizonJpl] Fetching Orbital Elements (EPA)...");
+      await FetchEpaAsync(spkId, startStr, stopStr);
+
+      await _breadcrumb.ShowMessageAsync("Horizon API", $"Successfully downloaded observation to {savePath}");
+      return true;
+    }
+    catch (Exception ex)
+    {
+      _console.Log($"[HorizonJpl] Observation Download Error: {ex.Message}");
+      await _breadcrumb.ShowMessageAsync("Horizon API Error", ex.Message);
+      return false;
+    }
+    finally
+    {
+      _breadcrumb.RemoveMessage(loadMsg);
+    }
+  }
+
+  // Fetch EPA using ELEMENTS text format
+  public async Task FetchEpaAsync(string spkId, string startTime, string stopTime)
+  {
+    try
+    {
+      var spkIdEncoded = Uri.EscapeDataString($"{spkId};");
+      var start = Uri.EscapeDataString(startTime);
+      var stop = Uri.EscapeDataString(stopTime);
+
+      var url = $"https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND='{spkIdEncoded}'&MAKE_EPHEM=YES&EPHEM_TYPE=ELEMENTS&CENTER='500@0'&START_TIME='{start}'&STOP_TIME='{stop}'&STEP_SIZE='1%20d'&OBJ_DATA=NO";
+
+      var response = await _httpClient.GetAsync(url);
+      if (response.IsSuccessStatusCode)
+      {
+        var text = await response.Content.ReadAsStringAsync();
+        
+        int soeIdx = text.IndexOf("$$SOE");
+        int eoeIdx = text.IndexOf("$$EOE");
+        if (soeIdx != -1 && eoeIdx != -1 && eoeIdx > soeIdx)
+        {
+          var epaBlock = text.Substring(soeIdx + 5, eoeIdx - (soeIdx + 5)).Trim();
+          _console.Log($"[HorizonJpl] EPA Block fetched successfully ({epaBlock.Length} chars)");
+          // The EPA block can now be used for initialization of the object, e.g. saving it somewhere.
+          // Since the objective is just to verify it works, we just log it for now.
+        }
+      }
+    }
+    catch (Exception ex)
+    {
+      _console.Log($"[HorizonJpl] EPA Fetch Error: {ex.Message}");
+    }
   }
 
   public async Task<PlanetOrbitData?> GetPlanetDataAsync(string targetId, DateTime targetDate)
@@ -154,564 +481,5 @@ public class HorizonJplService
           return value;
       }
       return 0.0;
-  }
-
-  public async Task FetchCometsAsync()
-  {
-    var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Downloading list of comets...");
-    try
-    {
-      var url = "https://ssd-api.jpl.nasa.gov/sbdb_query.api?sb-kind=c&fields=full_name,pdes";
-
-      _console.Log($"[HorizonJpl] GET {url}");
-
-      var response = await _httpClient.GetAsync(url);
-
-      _console.Log(
-        $"[HorizonJpl] Response Status: {(int)response.StatusCode} {response.ReasonPhrase}"
-      );
-
-      if (response.IsSuccessStatusCode)
-      {
-        var text = await response.Content.ReadAsStringAsync();
-        ParseCometsJson(text);
-        await _breadcrumb.ShowMessageAsync(
-          "Horizon API (Comets)",
-          $"Success: {CometsData.Count} comets fetched."
-        );
-      }
-      else
-      {
-        await _breadcrumb.ShowMessageAsync(
-          "Horizon API Error",
-          $"Status: {(int)response.StatusCode}"
-        );
-      }
-    }
-    catch (Exception ex)
-    {
-      _console.Log($"[HorizonJpl] Exception: {ex.Message}");
-      await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
-    }
-    finally
-    {
-      _breadcrumb.RemoveMessage(loadMsg);
-    }
-  }
-
-  public void ParseCometsJson(string json)
-  {
-    CometsData.Clear();
-    CometsHeaders.Clear();
-
-    try
-    {
-      using var doc = System.Text.Json.JsonDocument.Parse(json);
-      var root = doc.RootElement;
-
-      if (root.TryGetProperty("fields", out var fields))
-      {
-        foreach (var field in fields.EnumerateArray())
-        {
-          CometsHeaders.Add(field.GetString() ?? "");
-        }
-      }
-
-      if (root.TryGetProperty("data", out var data))
-      {
-        foreach (var row in data.EnumerateArray())
-        {
-          var rowData = new string[CometsHeaders.Count];
-          int i = 0;
-          foreach (var item in row.EnumerateArray())
-          {
-            if (i < rowData.Length)
-            {
-              rowData[i] =
-                item.ValueKind == System.Text.Json.JsonValueKind.Null ? "" : item.ToString();
-              i++;
-            }
-          }
-          CometsData.Add(rowData);
-        }
-      }
-    }
-    catch (Exception ex)
-    {
-      _console.Log($"[HorizonJpl] JSON Parse Exception: {ex.Message}");
-    }
-  }
-
-  public async Task FetchDataAsync(
-    string command,
-    string startTime,
-    string stopTime,
-    string stepSize,
-    string center,
-    System.Threading.CancellationToken cancellationToken = default
-  )
-  {
-    try
-    {
-      using var request = new HttpRequestMessage(
-        HttpMethod.Get,
-        $"https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND='{Uri.EscapeDataString(command)}'&OBJ_DATA='YES'&MAKE_EPHEM='YES'&EPHEM_TYPE='OBSERVER'&CENTER='{Uri.EscapeDataString(center)}'&START_TIME='{Uri.EscapeDataString(startTime)}'&STOP_TIME='{Uri.EscapeDataString(stopTime)}'&STEP_SIZE='{Uri.EscapeDataString(stepSize)}'&CSV_FORMAT='YES'"
-      );
-
-      _console.Log($"[HorizonJpl] GET {request.RequestUri}");
-
-      // Send the request. Using ResponseContentRead to avoid hanging on stream parsing of chunked encoding
-      using var cts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(
-        cancellationToken
-      );
-      cts.CancelAfter(TimeSpan.FromSeconds(5)); // Force 5s timeout on stream
-      var response = await _httpClient.SendAsync(
-        request,
-        HttpCompletionOption.ResponseContentRead,
-        cts.Token
-      );
-
-      _console.Log(
-        $"[HorizonJpl] Response Status: {(int)response.StatusCode} {response.ReasonPhrase}"
-      );
-      foreach (var header in response.Headers)
-      {
-        _console.Log($"[HorizonJpl] Header: {header.Key} = {string.Join(", ", header.Value)}");
-      }
-
-      if (response.IsSuccessStatusCode)
-      {
-        var text = await response.Content.ReadAsStringAsync();
-        ParseText(text);
-        await _breadcrumb.ShowMessageAsync(
-          "Horizon API",
-          $"Success: {SessionData.Count} rows fetched."
-        );
-      }
-      else
-      {
-        await _breadcrumb.ShowMessageAsync(
-          "Horizon API Error",
-          $"Status: {(int)response.StatusCode}"
-        );
-      }
-    }
-    catch (Exception ex)
-    {
-      _console.Log($"[HorizonJpl] Exception: {ex.Message}");
-      await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
-    }
-  }
-
-  public ObservableCollection<string[]> ObjectData { get; } = new();
-
-  public async Task FetchObjectDataAsync(string spkId)
-  {
-    var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Downloading object data...");
-    try
-    {
-      var command = Uri.EscapeDataString($"'{spkId};'");
-      var url =
-        $"https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND={command}&MAKE_EPHEM='NO'&OBJ_DATA='YES'";
-      _console.Log($"[HorizonJpl] GET Object Data: {url}");
-
-      var response = await _httpClient.GetAsync(url);
-      if (response.IsSuccessStatusCode)
-      {
-        var json = await response.Content.ReadAsStringAsync();
-        using var doc = System.Text.Json.JsonDocument.Parse(json);
-        if (doc.RootElement.TryGetProperty("result", out var resultElement))
-        {
-          var text = resultElement.GetString() ?? "";
-          ParseObjectDataText(text);
-          await _breadcrumb.ShowMessageAsync(
-            "Horizon API (Object Data)",
-            "Success: Object data fetched."
-          );
-        }
-      }
-      else
-      {
-        await _breadcrumb.ShowMessageAsync(
-          "Horizon API Error",
-          $"Status: {(int)response.StatusCode}"
-        );
-      }
-    }
-    catch (Exception ex)
-    {
-      _console.Log($"[HorizonJpl] Object Data Exception: {ex.Message}");
-      await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
-    }
-    finally
-    {
-      _breadcrumb.RemoveMessage(loadMsg);
-    }
-  }
-
-  private void ParseObjectDataText(string text)
-  {
-    ObjectData.Clear();
-    var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-    foreach (var line in lines)
-    {
-      if (line.StartsWith("*") || string.IsNullOrWhiteSpace(line))
-        continue;
-
-      // JPL often has spaces after = or : which breaks the double-space split. Normalize them first.
-      var normalizedLine = System.Text.RegularExpressions.Regex.Replace(line, @"([=:])\s+", "$1");
-      var parts = normalizedLine.Split(new[] { "  ", "\t" }, StringSplitOptions.RemoveEmptyEntries);
-      bool hasKeyValue = false;
-      foreach (var part in parts)
-      {
-        var p = part.Trim();
-        if (string.IsNullOrEmpty(p))
-          continue;
-
-        if (p.Contains("=") || p.Contains(":"))
-        {
-          var sep = p.Contains("=") ? '=' : ':';
-          var kv = p.Split(new[] { sep }, 2, StringSplitOptions.RemoveEmptyEntries);
-          if (kv.Length == 2)
-          {
-            ObjectData.Add(new string[] { kv[0].Trim(), kv[1].Trim() });
-            hasKeyValue = true;
-          }
-          else
-          {
-            ObjectData.Add(new string[] { "Info", p });
-          }
-        }
-        else if (!hasKeyValue)
-        {
-          ObjectData.Add(new string[] { "Info", p });
-        }
-      }
-    }
-  }
-
-  public ObservableCollection<string[]> SpkRecordsData { get; } = new();
-  public ObservableCollection<string> SpkRecordsHeaders { get; } = new();
-
-  public async Task FetchSpkRecordsAsync(string pdes, string startTime, string stopTime)
-  {
-    var loadMsg = _breadcrumb.ShowLoadingMessage(
-      "Horizon API",
-      "Downloading list of observation records..."
-    );
-    try
-    {
-      var command = Uri.EscapeDataString($"'DES={pdes};'");
-      var ephemType = Uri.EscapeDataString("'SPK'");
-      var start = Uri.EscapeDataString($"'{startTime}'");
-      var stop = Uri.EscapeDataString($"'{stopTime}'");
-      var makeEphem = Uri.EscapeDataString("'YES'");
-
-      var url =
-        $"https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND={command}&EPHEM_TYPE={ephemType}&START_TIME={start}&STOP_TIME={stop}&MAKE_EPHEM={makeEphem}";
-
-      _console.Log($"[HorizonJpl] GET SPK Records: {url}");
-      var response = await _httpClient.GetAsync(url);
-
-      if (response.IsSuccessStatusCode)
-      {
-        var json = await response.Content.ReadAsStringAsync();
-        ParseSpkRecordsJson(json, startTime, stopTime);
-        await _breadcrumb.ShowMessageAsync(
-          "Horizon API (SPK Records)",
-          $"Success: {SpkRecordsData.Count} records found."
-        );
-      }
-      else
-      {
-        await _breadcrumb.ShowMessageAsync(
-          "Horizon API Error",
-          $"Status: {(int)response.StatusCode}"
-        );
-      }
-    }
-    catch (Exception ex)
-    {
-      _console.Log($"[HorizonJpl] SPK Records Exception: {ex.Message}");
-      await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
-    }
-    finally
-    {
-      _breadcrumb.RemoveMessage(loadMsg);
-    }
-  }
-
-  private void ParseSpkRecordsJson(string json, string startTime, string stopTime)
-  {
-    SpkRecordsData.Clear();
-    SpkRecordsHeaders.Clear();
-
-    SpkRecordsHeaders.Add("Record #");
-    SpkRecordsHeaders.Add("Epoch-yr");
-    SpkRecordsHeaders.Add("MATCH DESIG");
-    SpkRecordsHeaders.Add("Primary Desig");
-    SpkRecordsHeaders.Add("Name");
-
-    int startYear = int.MinValue;
-    int stopYear = int.MaxValue;
-
-    if (DateTime.TryParse(startTime, out var dtStart))
-      startYear = dtStart.Year;
-    if (DateTime.TryParse(stopTime, out var dtStop))
-      stopYear = dtStop.Year;
-
-    try
-    {
-      using var doc = System.Text.Json.JsonDocument.Parse(json);
-      var root = doc.RootElement;
-
-      if (root.TryGetProperty("result", out var resultElement))
-      {
-        var resultStr = resultElement.GetString() ?? "";
-        var lines = resultStr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-        bool inData = false;
-        foreach (var line in lines)
-        {
-          if (line.Trim().StartsWith("--------"))
-          {
-            if (inData) break; // Reached the bottom of the table
-            inData = true;
-            continue;
-          }
-          if (inData)
-          {
-            if (line.Trim().StartsWith("*") || string.IsNullOrWhiteSpace(line))
-              break;
-            var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length >= 5)
-            {
-              var id = parts[0];
-              var epochStr = parts[1];
-              var match = parts[2];
-              var primary = parts[3];
-              var name = string.Join(" ", parts.Skip(4));
-
-              if (int.TryParse(epochStr, out int epochYear))
-              {
-                if (epochYear >= startYear && epochYear <= stopYear)
-                {
-                  SpkRecordsData.Add(new[] { id, epochStr, match, primary, name });
-                }
-              }
-              else
-              {
-                // If we can't parse the epoch, add it anyway to be safe
-                SpkRecordsData.Add(new[] { id, epochStr, match, primary, name });
-              }
-            }
-          }
-        }
-      }
-    }
-    catch (Exception ex)
-    {
-      _console.Log($"[HorizonJpl] SPK JSON Parse Exception: {ex.Message}");
-    }
-  }
-
-  public async Task<string?> DownloadSpkByIdAsync(
-    string pdes,
-    string spkId,
-    string savePath,
-    string startTime,
-    string stopTime
-  )
-  {
-    try
-    {
-      var url = "https://ssd.jpl.nasa.gov/api/horizons.api";
-
-      var command = Uri.EscapeDataString($"'{spkId};'");
-      var objData = Uri.EscapeDataString("'NO'");
-      var makeEphem = Uri.EscapeDataString("'YES'");
-      var ephemType = Uri.EscapeDataString("'SPK'");
-      var start = Uri.EscapeDataString($"'{startTime}'");
-      var stop = Uri.EscapeDataString($"'{stopTime}'");
-
-      var query =
-        $"?format=json&COMMAND={command}&OBJ_DATA={objData}&MAKE_EPHEM={makeEphem}&EPHEM_TYPE={ephemType}&START_TIME={start}&STOP_TIME={stop}";
-
-      _console.Log($"[HorizonJpl] Requesting SPK: {url}{query}");
-      var response = await _httpClient.GetAsync(url + query);
-
-      if (!response.IsSuccessStatusCode)
-        return null;
-
-      var json = await response.Content.ReadAsStringAsync();
-      using var doc = System.Text.Json.JsonDocument.Parse(json);
-      var root = doc.RootElement;
-
-      if (root.TryGetProperty("spk", out var spkElement))
-      {
-        var base64Spk = spkElement.GetString();
-        if (string.IsNullOrEmpty(base64Spk))
-          return null;
-
-        var binarySpk = Convert.FromBase64String(base64Spk);
-        using (
-          var fs = new FileStream(
-            savePath,
-            FileMode.Create,
-            FileAccess.Write,
-            FileShare.None,
-            4096,
-            true
-          )
-        )
-        {
-          await fs.WriteAsync(binarySpk, 0, binarySpk.Length);
-        }
-        return savePath;
-      }
-      return null;
-    }
-    catch (Exception ex)
-    {
-      _console.Log($"[HorizonJpl] SPK Download Exception: {ex.Message}");
-      return null;
-    }
-  }
-
-  public void ParseText(string text)
-  {
-    SessionData.Clear();
-    Headers.Clear();
-    var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-    bool inEphem = false;
-
-    for (int i = 0; i < lines.Length; i++)
-    {
-      var line = lines[i];
-      if (line.StartsWith("$$SOE"))
-      {
-        // The header line is typically 2 lines above $$SOE
-        if (i >= 2)
-        {
-          var headerLine = lines[i - 2];
-          var headers = headerLine.Split(',').Select(h => h.Trim()).ToList();
-
-          // The last column is usually empty in JPL CSV, remove it if so
-          if (headers.Count > 0 && string.IsNullOrWhiteSpace(headers.Last()))
-          {
-            headers.RemoveAt(headers.Count - 1);
-          }
-
-          foreach (var h in headers)
-          {
-            Headers.Add(string.IsNullOrWhiteSpace(h) ? "Col" : h);
-          }
-        }
-
-        inEphem = true;
-        continue;
-      }
-      if (line.StartsWith("$$EOE"))
-      {
-        inEphem = false;
-        break;
-      }
-
-      if (inEphem)
-      {
-        var parts = line.Split(',').Select(p => p.Trim()).ToArray();
-        if (parts.Length > 0)
-        {
-          // Filter parts to match header count just in case
-          var rowData = parts.Take(Headers.Count).ToArray();
-          if (rowData.Length < Headers.Count)
-          {
-            var padded = new string[Headers.Count];
-            Array.Copy(rowData, padded, rowData.Length);
-            for (int p = rowData.Length; p < padded.Length; p++)
-              padded[p] = "";
-            rowData = padded;
-          }
-          SessionData.Add(rowData);
-        }
-      }
-    }
-  }
-
-  public async Task<string?> DownloadSpkAsync(string spkid, string startTime, string stopTime)
-  {
-    try
-    {
-      var cacheDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache", "spk");
-      if (!Directory.Exists(cacheDir))
-      {
-        Directory.CreateDirectory(cacheDir);
-      }
-
-      var fileName = $"{spkid}_{startTime}_{stopTime}.bsp".Replace(" ", "_").Replace(":", "-");
-      var filePath = Path.Combine(cacheDir, fileName);
-
-      if (File.Exists(filePath))
-      {
-        _console.Log($"[HorizonJpl] SPK for {spkid} already cached at {filePath}");
-        return filePath;
-      }
-
-      var url = "https://ssd.jpl.nasa.gov/api/horizons.api";
-      var query =
-        $"?format=json&COMMAND='{Uri.EscapeDataString(spkid)}'&OBJ_DATA=NO&MAKE_EPHEM=YES&EPHEM_TYPE=SPK&START_TIME='{Uri.EscapeDataString(startTime)}'&STOP_TIME='{Uri.EscapeDataString(stopTime)}'";
-
-      _console.Log($"[HorizonJpl] Requesting SPK: {url}{query}");
-
-      var response = await _httpClient.GetAsync(url + query);
-      if (!response.IsSuccessStatusCode)
-      {
-        _console.Log($"[HorizonJpl] SPK Download failed: {response.StatusCode}");
-        return null;
-      }
-
-      var json = await response.Content.ReadAsStringAsync();
-      using var doc = System.Text.Json.JsonDocument.Parse(json);
-      var root = doc.RootElement;
-
-      if (root.TryGetProperty("spk", out var spkElement))
-      {
-        var base64Spk = spkElement.GetString();
-        if (string.IsNullOrEmpty(base64Spk))
-        {
-          _console.Log("[HorizonJpl] SPK field is empty in response.");
-          return null;
-        }
-
-        var binarySpk = Convert.FromBase64String(base64Spk);
-        using (
-          var fs = new FileStream(
-            filePath,
-            FileMode.Create,
-            FileAccess.Write,
-            FileShare.None,
-            4096,
-            true
-          )
-        )
-        {
-          await fs.WriteAsync(binarySpk, 0, binarySpk.Length);
-        }
-        _console.Log(
-          $"[HorizonJpl] Successfully saved SPK to {filePath} ({binarySpk.Length / 1024.0:F2} KB)"
-        );
-        return filePath;
-      }
-      else
-      {
-        var error = root.TryGetProperty("error", out var err) ? err.GetString() : "Unknown error";
-        _console.Log($"[HorizonJpl] Failed to generate SPK. API Error: {error}");
-        return null;
-      }
-    }
-    catch (Exception ex)
-    {
-      _console.Log($"[HorizonJpl] SPK Download Exception: {ex.Message}");
-      return null;
-    }
   }
 }

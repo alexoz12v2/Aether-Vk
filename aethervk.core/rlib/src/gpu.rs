@@ -1847,7 +1847,11 @@ pub struct CollisionPair {
   pub a: ColliderId,
   pub b: ColliderId,
   pub time_of_impact: f32,
+  pub is_lca: u32,
+  pub lca_id: u32,
+  pub frame_bda_low: u32,
   pub contact_normal: [f32; 3],
+  pub frame_bda_high: u32,
   pub contact_point: [f32; 3],
   pub penetration_depth: f32,
 }
@@ -2116,9 +2120,9 @@ pub trait Kernels: Send + Sync {
     out_rb_ps_addr: u64,
     out_ps_ps_addr: u64,
     out_cross_pairs_addr: u64,
-    internal_pairs_addr: u64,
     total_queries: u32,
     max_pairs: u32,
+    num_rigid_bodies: u32,
   ) -> EngineResult<()>;
 
   /// Subgroup-cooperative LBVH traversal for particle–particle self-collision.
@@ -2210,6 +2214,7 @@ pub trait Kernels: Send + Sync {
     &self,
     cmd: &mut Self::Cmd,
     compacted: &Self::List<CollisionPair>,
+    dt: f32,
   ) -> EngineResult<Self::Buffer<u32>>;
 
   #[cfg(any(test, feature = "collisions"))]
@@ -2220,6 +2225,7 @@ pub trait Kernels: Send + Sync {
     rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
     particles: &mut Self::Buffer<f32>,
     collisions: &Self::List<CollisionPair>,
+    lca_entities_addr: u64,
     force_inelastic: bool,
   ) -> EngineResult<()>;
 
