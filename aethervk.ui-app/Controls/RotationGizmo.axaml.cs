@@ -64,4 +64,47 @@ public partial class RotationGizmo : UserControl
     get => GetValue(YawScaleValueProperty);
     set => SetValue(YawScaleValueProperty, value);
   }
+
+  private bool _isDragging = false;
+  private Point _lastPos;
+
+  private void OnPointerPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e)
+  {
+      if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+      {
+          _isDragging = true;
+          _lastPos = e.GetPosition(this);
+          e.Handled = true;
+      }
+  }
+
+  private void OnPointerMoved(object? sender, Avalonia.Input.PointerEventArgs e)
+  {
+      if (_isDragging)
+      {
+          var pos = e.GetPosition(this);
+          var dx = pos.X - _lastPos.X;
+          var dy = pos.Y - _lastPos.Y;
+          _lastPos = pos;
+
+          Yaw += (float)(dx * 1.5);
+          Pitch += (float)(dy * 1.5); 
+
+          if (Yaw > 180) Yaw -= 360;
+          if (Yaw < -180) Yaw += 360;
+          if (Pitch > 180) Pitch -= 360;
+          if (Pitch < -180) Pitch += 360;
+
+          e.Handled = true;
+      }
+  }
+
+  private void OnPointerReleased(object? sender, Avalonia.Input.PointerReleasedEventArgs e)
+  {
+      if (_isDragging)
+      {
+          _isDragging = false;
+          e.Handled = true;
+      }
+  }
 }

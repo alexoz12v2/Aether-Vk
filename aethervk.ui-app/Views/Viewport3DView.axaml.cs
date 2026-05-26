@@ -210,6 +210,15 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
   {
       if (sender is Image image && image.DataContext is BillboardViewModel bvm)
       {
+          if (_viewModel != null)
+          {
+              foreach (var b in _viewModel.Billboards)
+              {
+                  b.IsSelected = false;
+              }
+          }
+          bvm.IsSelected = true;
+
           // Select this billboard
           var entity = new Entity(_viewModel?.SceneId ?? 0, (ulong)bvm.GetHashCode(), "UI Billboard");
           entity.Components.Add(new BillboardComponent(bvm));

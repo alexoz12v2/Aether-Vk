@@ -1,8 +1,0 @@
-@@ -127,6 +127,7 @@
-       current_time += dt;
-     }
-     kernels.device().wait_idle().unwrap();
-+    physical_scene
-   }
- 
-   #[test]

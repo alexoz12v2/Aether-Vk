@@ -17,6 +17,7 @@ public class PlanetOrbitData
   public double MeanAnomaly { get; set; }
   public string RawConstants { get; set; } = string.Empty;
   public double CometRadiusKm { get; set; } = 1.0;
+  public double MassKg { get; set; } = 1e13; // default fallback
 }
 
 public class HorizonJplService
@@ -24,18 +25,20 @@ public class HorizonJplService
   private readonly HttpClient _httpClient;
   private readonly ConsoleService _console;
   private readonly BreadcrumbService _breadcrumb;
+  private readonly ILocalStorageService _storage;
 
   public ObservableCollection<CometSearchResult> CometsData { get; } = new();
   public ObservableCollection<SpkRecordItem> SpkRecordsData { get; } = new();
   public ObservableCollection<ObjectDataProperty> ObjectData { get; } = new();
   public ObservableCollection<string[]> SessionData { get; } = new(); // Used for CSV EPA, if needed
 
-  public HorizonJplService(ConsoleService console, BreadcrumbService breadcrumb)
+  public HorizonJplService(ConsoleService console, BreadcrumbService breadcrumb, ILocalStorageService storage)
   {
     _httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(2) }; // Downloading SPK might take time
     _httpClient.DefaultRequestHeaders.Add("User-Agent", "AetherVk/1.0");
     _console = console;
     _breadcrumb = breadcrumb;
+    _storage = storage;
   }
 
   // Comets Search (Using JSON SBDB API since it works best for comet lookup)
@@ -44,6 +47,15 @@ public class HorizonJplService
     var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Downloading list of comets...");
     try
     {
+      var cacheFile = _storage.GetSessionPath("comets_cache.json");
+      if (System.IO.File.Exists(cacheFile))
+      {
+          _console.Log("[HorizonJpl] Loading comets from session cache.");
+          var text = System.IO.File.ReadAllText(cacheFile);
+          ParseCometsJson(text);
+          return;
+      }
+
       var url = "https://ssd-api.jpl.nasa.gov/sbdb_query.api?sb-kind=c&fields=full_name,pdes";
       _console.Log($"[HorizonJpl] GET {url}");
 
@@ -51,6 +63,10 @@ public class HorizonJplService
       if (response.IsSuccessStatusCode)
       {
         var text = await response.Content.ReadAsStringAsync();
+        
+        // Cache it
+        await _storage.SaveSessionAsync("comets_cache.json", System.Text.Encoding.UTF8.GetBytes(text));
+        
         ParseCometsJson(text);
         await _breadcrumb.ShowMessageAsync(
           "Horizon API (Comets)",
@@ -382,40 +398,52 @@ public class HorizonJplService
     }
   }
 
-  public async Task<PlanetOrbitData?> GetPlanetDataAsync(string targetId, DateTime targetDate)
+    public async Task<PlanetOrbitData?> GetPlanetDataAsync(string targetId, DateTime targetDate)
   {
     var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Fetching orbital data...");
     try
     {
       string dateStr = targetDate.ToString("yyyy-MM-dd");
       string nextDateStr = targetDate.AddDays(1).ToString("yyyy-MM-dd");
-
-      var url =
-        $"https://ssd.jpl.nasa.gov/api/horizons.api?format=json"
-        + $"&COMMAND='{Uri.EscapeDataString(targetId)}'"
-        + $"&OBJ_DATA='YES'"
-        + $"&MAKE_EPHEM='YES'"
-        + $"&EPHEM_TYPE='ELEMENTS'"
-        + $"&CENTER='@10'"
-        + $"&START_TIME='{Uri.EscapeDataString(dateStr)}'"
-        + $"&STOP_TIME='{Uri.EscapeDataString(nextDateStr)}'"
-        + $"&STEP_SIZE='1 d'";
-
-      _console.Log($"[HorizonJpl] GET Planet Data: {url}");
-
-      // We can't use GetFromJsonAsync cleanly in some older netstandard setups without Microsoft.Net.Http.Json
-      // Let's use standard GetAsync + deserialization to be safe in .NET Standard 2.0.
-      var response = await _httpClient.GetAsync(url);
-      if (!response.IsSuccessStatusCode)
+      
+      var cacheKey = $"planet_data_{targetId.Replace("/", "_")}_{dateStr}.json";
+      var cacheFile = _storage.GetSessionPath(cacheKey);
+      
+      string json;
+      if (System.IO.File.Exists(cacheFile))
       {
-        await _breadcrumb.ShowMessageAsync(
-          "Horizon API Error",
-          $"Status: {(int)response.StatusCode}"
-        );
-        return null;
+          _console.Log($"[HorizonJpl] Loading orbital data from cache: {cacheKey}");
+          json = System.IO.File.ReadAllText(cacheFile);
+      }
+      else
+      {
+          var url =
+            $"https://ssd.jpl.nasa.gov/api/horizons.api?format=json"
+            + $"&COMMAND='{Uri.EscapeDataString(targetId)}'"
+            + $"&OBJ_DATA='YES'"
+            + $"&MAKE_EPHEM='YES'"
+            + $"&EPHEM_TYPE='ELEMENTS'"
+            + $"&CENTER='@10'"
+            + $"&START_TIME='{Uri.EscapeDataString(dateStr)}'"
+            + $"&STOP_TIME='{Uri.EscapeDataString(nextDateStr)}'"
+            + $"&STEP_SIZE='1 d'";
+
+          _console.Log($"[HorizonJpl] GET Planet Data: {url}");
+
+          var response = await _httpClient.GetAsync(url);
+          if (!response.IsSuccessStatusCode)
+          {
+            await _breadcrumb.ShowMessageAsync(
+              "Horizon API Error",
+              $"Status: {(int)response.StatusCode}"
+            );
+            return null;
+          }
+
+          json = await response.Content.ReadAsStringAsync();
+          await _storage.SaveSessionAsync(cacheKey, System.Text.Encoding.UTF8.GetBytes(json));
       }
 
-      var json = await response.Content.ReadAsStringAsync();
       using var doc = System.Text.Json.JsonDocument.Parse(json);
 
       if (doc.RootElement.TryGetProperty("result", out var resultElement))
@@ -437,6 +465,21 @@ public class HorizonJplService
         if (radiusKm <= 0.0)
           radiusKm = 1.0;
 
+        double gm = ParseValue(rawText, @"GM\s*=\s*([^\s]+)"); // in km^3/s^2 usually
+        double massKg = 1e13; // default
+        if (gm > 0.0)
+        {
+          // G in km^3 / (kg s^2) = 6.6743e-20
+          massKg = gm / 6.6743e-20;
+        }
+        else
+        {
+          // Volume = 4/3 * pi * r^3 (in meters^3)
+          // Average comet density = 600 kg/m^3
+          double r_m = radiusKm * 1000.0;
+          massKg = (4.0 / 3.0) * Math.PI * r_m * r_m * r_m * 600.0;
+        }
+
         return new PlanetOrbitData
         {
           SemiMajorAxis = a,
@@ -445,6 +488,7 @@ public class HorizonJplService
           MeanAnomaly = ma,
           RawConstants = constantsBlock,
           CometRadiusKm = radiusKm,
+          MassKg = massKg,
         };
       }
       return null;

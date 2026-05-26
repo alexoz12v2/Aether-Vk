@@ -19,6 +19,8 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   private readonly NativeRuntimeService _runtimeService;
   private readonly IUiThreadDispatcher _uiThreadDispatcher;
   private readonly TrajectoryManagerService _trajectoryManager;
+  private readonly SceneStateManager _sceneStateManager;
+  private readonly BreadcrumbService _breadcrumbService;
   private readonly Timer _timer;
   private bool _isDragging;
 
@@ -42,7 +44,9 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
     NativeRuntimeService runtimeService,
     IUiThreadDispatcher uiThreadDispatcher,
     TrajectoryManagerService trajectoryManager,
-    TimelineService timelineService
+    TimelineService timelineService,
+    SceneStateManager sceneStateManager,
+    BreadcrumbService breadcrumbService
   )
     : base("Timeline")
   {
@@ -50,6 +54,8 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
     _uiThreadDispatcher = uiThreadDispatcher;
     _trajectoryManager = trajectoryManager;
     Timeline = timelineService;
+    _sceneStateManager = sceneStateManager;
+    _breadcrumbService = breadcrumbService;
     CurrentSceneId = sceneId;
     Timeline.SelectedTimeScale = TimeScaleOptions.First();
     _timer = new Timer(UpdateFromRuntime, null, 33, 33);
@@ -114,6 +120,27 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   {
     if (_runtimeService.IsInitialized)
     {
+      var state = _sceneStateManager.GetOrCreateScene(CurrentSceneId);
+      bool hasJets = false;
+      if (state.CometEntityId.HasValue)
+      {
+          var comet = _runtimeService.GetEntityById(CurrentSceneId, state.CometEntityId.Value);
+          if (comet != null)
+          {
+              var emitter = comet.Components.OfType<AetherVk.Logic.Models.ParticleEmitterCirclesComponent>().FirstOrDefault();
+              if (emitter != null && emitter.Circles.Count > 0)
+              {
+                  hasJets = true;
+              }
+          }
+      }
+
+      if (!hasJets)
+      {
+          _breadcrumbService.ShowMessageAsync("Cannot Play", "Please add at least 1 jet to the comet before playing the simulation.", default, 5);
+          return;
+      }
+
       if (!_hasSnapshotted)
       {
         _runtimeService.SnapshotScene(CurrentSceneId);

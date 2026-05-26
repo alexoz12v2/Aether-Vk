@@ -10,6 +10,8 @@ public partial class SceneState : ObservableObject
   public ObservableCollection<Entity> RootEntities { get; } = new();
   public Dictionary<ulong, Entity> EntityMap { get; } = new();
 
+  public ulong? CometEntityId { get; set; }
+
   [ObservableProperty]
   private Entity? _selectedEntity;
 

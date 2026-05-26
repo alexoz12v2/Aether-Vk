@@ -160,10 +160,12 @@ public partial class SpawnCometViewModel : ObservableObject
 
   public SpawnCometViewModel(
     IEnumerable<ImportedModelItem> models,
-    HorizonJplService horizonService
+    HorizonJplService horizonService,
+    TimelineService timelineService
   )
   {
     _horizonService = horizonService;
+    _targetDate = DateTimeOffset.TryParse(timelineService.UtcTime, out var dt) ? dt : null;
     foreach (var model in models)
     {
       ImportedModels.Add(model);
@@ -204,6 +206,31 @@ public partial class SpawnCometViewModel : ObservableObject
     var pdes = SelectedComet.PrimaryDesignation.Trim();
 
     FetchedOrbitData = await _horizonService.GetPlanetDataAsync(pdes, TargetDate.Value.DateTime);
+    if (FetchedOrbitData != null)
+    {
+      CometRadiusKm = (float)FetchedOrbitData.CometRadiusKm;
+      
+      if (SelectedModel != null)
+      {
+        var q = GetRotationQuaternion();
+        // Convert quaternion to 3x3 rotation matrix
+        float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
+        float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
+        float wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
+        
+        var userFrame = new NativeInterop.FfiMat3
+        {
+            M00 = 1.0f - 2.0f * (yy + zz), M10 = 2.0f * (xy - wz),        M20 = 2.0f * (xz + wy),
+            M01 = 2.0f * (xy + wz),        M11 = 1.0f - 2.0f * (xx + zz), M21 = 2.0f * (yz - wx),
+            M02 = 2.0f * (xz - wy),        M12 = 2.0f * (yz + wx),        M22 = 1.0f - 2.0f * (xx + yy)
+        };
+        SelectedModel.RuntimeService.OverrideModelSpherical(SelectedModel.Id, (float)CometRadiusKm, (float)FetchedOrbitData.MassKg, ref userFrame);
+        
+        // Refresh properties display
+        OnPropertyChanged(nameof(SimulationLocalFrameString));
+        OnPropertyChanged(nameof(UserLocalFrameString));
+      }
+    }
     IsFetchingHorizonData = false;
   }
 

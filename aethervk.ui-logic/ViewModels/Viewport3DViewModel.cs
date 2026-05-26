@@ -224,6 +224,15 @@ public partial class Viewport3DViewModel
 
   public bool ProcessAction(AppAction action, bool isPressed)
   {
+    if (isPressed && action.Id == "viewport.delete")
+    {
+        var selected = Billboards.FirstOrDefault(b => b.IsSelected);
+        if (selected != null)
+        {
+            Billboards.Remove(selected);
+            return true;
+        }
+    }
     return OperatorStack.ProcessAction(action, isPressed);
   }
 
@@ -262,28 +271,49 @@ public partial class Viewport3DViewModel
       {
         if (state.SelectedEntity?.Id == entity.Id)
         {
-          var comet = entity
-            .Components.OfType<AetherVk.Logic.Models.CometComponent>()
+          var emitter = entity
+            .Components.OfType<AetherVk.Logic.Models.ParticleEmitterCirclesComponent>()
             .FirstOrDefault();
-          if (comet != null)
+          var tx = entity
+            .Components.OfType<AetherVk.Logic.Models.TransformComponent>()
+            .FirstOrDefault();
+
+          if (emitter != null && tx != null && IsAddingJet)
           {
-            comet.Jets.Add(
-              new AetherVk.Logic.Models.JetMarker
-              {
-                Name = "New Jet",
-                PosX = res.px,
-                PosY = res.py,
-                PosZ = res.pz,
-                ColorR = 1.0f,
-                ColorG = 0.5f,
-                ColorB = 0.0f,
-                Size = 25000.0f, // Some visible scale
-              }
+            // Convert world hit point to local space
+            var worldPt = new System.Numerics.Vector3(res.px, res.py, res.pz);
+            var worldPos = new System.Numerics.Vector3(tx.PosX, tx.PosY, tx.PosZ);
+            var worldRot = new System.Numerics.Quaternion(tx.RotX, tx.RotY, tx.RotZ, tx.RotW);
+            
+            var localPt = System.Numerics.Vector3.Transform(
+              worldPt - worldPos,
+              System.Numerics.Quaternion.Inverse(worldRot)
             );
+            
+            // Normalize to get spherical coordinates
+            var normalizedPt = System.Numerics.Vector3.Normalize(localPt);
+            float latitude = (float)(Math.Asin(normalizedPt.Z) * 180.0 / Math.PI);
+            float longitude = (float)(Math.Atan2(normalizedPt.Y, normalizedPt.X) * 180.0 / Math.PI);
+
+            var newCircle = new AetherVk.Logic.Models.EmissionCircleItem
+            {
+              LatitudeDeg = latitude,
+              LongitudeDeg = longitude,
+              CircleRadius = 0.5f,
+              ParticlesPerTick = 10,
+              ColorR = 1.0f,
+              ColorG = 0.5f,
+              ColorB = 0.0f,
+              ColorA = 1.0f
+            };
+
+            emitter.Circles.Add(newCircle);
+
             breadcrumb?.ShowMessageAsync(
               "Raycast Hit",
-              $"Placed new Jet on Comet at [{res.px:F1}, {res.py:F1}, {res.pz:F1}]"
+              $"Added jet at Lat: {latitude:F1}°, Lon: {longitude:F1}°"
             );
+            IsAddingJet = false; // Turn off mode after adding one
           }
           else
           {
@@ -335,6 +365,23 @@ public partial class Viewport3DViewModel
         new[] { FirstMeasurementPointX, FirstMeasurementPointY, FirstMeasurementPointZ },
         new[] { x, y, z }
       );
+
+      // Calculate distance between the two points
+      float dx = x - FirstMeasurementPointX;
+      float dy = y - FirstMeasurementPointY;
+      float dz = z - FirstMeasurementPointZ;
+      float distance = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
+      
+      // Calculate midpoint to place the label approximately (in 2D space this requires projection, but we can just put it at 10,10 for now, or 3D project it later. We will just add the billboard with the text)
+      Billboards.Add(new BillboardViewModel
+      {
+          Text = $"{distance:F2} km",
+          X = Width / 2.0 - 50,
+          Y = Height / 2.0 - 50,
+          Width = 100,
+          Height = 40,
+          ZIndex = 10
+      });
 
       HasFirstMeasurementPoint = false;
       IsMeasuringMode = false;

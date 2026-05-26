@@ -14,10 +14,12 @@ public class SpawnCometViewModelTests
     var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
     var console = new ConsoleService(dispatcherMock.Object);
     var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
-    var horizonService = new HorizonJplService(console, breadcrumb);
+    var storage = new Moq.Mock<ILocalStorageService>();
+    var horizonService = new HorizonJplService(console, breadcrumb, storage.Object);
     var models = new List<ImportedModelItem>();
+    var timelineService = new TimelineService();
 
-    var vm = new SpawnCometViewModel(models, horizonService);
+    var vm = new SpawnCometViewModel(models, horizonService, timelineService);
 
     Assert.Equal(1, vm.CurrentStep);
     Assert.True(vm.IsStep1);
@@ -31,7 +33,8 @@ public class SpawnCometViewModelTests
     var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
     var console = new ConsoleService(dispatcherMock.Object);
     var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
-    var horizonService = new HorizonJplService(console, breadcrumb);
+    var storage = new Moq.Mock<ILocalStorageService>();
+    var horizonService = new HorizonJplService(console, breadcrumb, storage.Object);
     
     var stateManager = new SceneStateManager();
     var runtimeService = new NativeRuntimeService(stateManager, console, breadcrumb, dispatcherMock.Object);
@@ -39,8 +42,9 @@ public class SpawnCometViewModelTests
     {
       new ImportedModelItem(1, "TestModel", "path", runtimeService, new Moq.Mock<IWindowService>().Object)
     };
+    var timelineService = new TimelineService();
 
-    var vm = new SpawnCometViewModel(models, horizonService);
+    var vm = new SpawnCometViewModel(models, horizonService, timelineService);
 
     Assert.True(vm.CanGoNext); // Model is selected in constructor if list has items
     
@@ -73,9 +77,10 @@ public class SpawnCometViewModelTests
     var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
     var console = new ConsoleService(dispatcherMock.Object);
     var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
-    var horizonService = new HorizonJplService(console, breadcrumb);
-    
-    var vm = new SpawnCometViewModel(new List<ImportedModelItem>(), horizonService)
+    var storage = new Moq.Mock<ILocalStorageService>();
+    var horizonService = new HorizonJplService(console, breadcrumb, storage.Object);
+    var timelineService = new TimelineService();
+    var vm = new SpawnCometViewModel(new List<ImportedModelItem>(), horizonService, timelineService)
     {
       Pitch = 90,
       Yaw = 0,

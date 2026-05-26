@@ -521,6 +521,16 @@ public static class NativeInterop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_overrideModelSpherical(
+    IntPtr ctx,
+    ulong modelId,
+    float radiusKm,
+    float massKg,
+    ref FfiMat3 userFrame
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern IntPtr avkSimulationContext_getAlmanacLoadedFiles(
     IntPtr ctx,
     out uint count

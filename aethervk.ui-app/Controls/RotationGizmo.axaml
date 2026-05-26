@@ -2,8 +2,11 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="using:AetherVk.Controls"
              x:Class="AetherVk.Controls.RotationGizmo">
-  <Viewbox Stretch="Uniform">
-    <Canvas Width="100" Height="100" HorizontalAlignment="Center" VerticalAlignment="Center">
+  <Viewbox Stretch="Uniform" 
+           PointerPressed="OnPointerPressed"
+           PointerMoved="OnPointerMoved"
+           PointerReleased="OnPointerReleased">
+    <Canvas Width="100" Height="100" HorizontalAlignment="Center" VerticalAlignment="Center" Background="Transparent">
       
       <!-- Center Anchor -->
       <Ellipse Canvas.Left="48" Canvas.Top="48" Width="4" Height="4" Fill="{DynamicResource Text.Primary}" />

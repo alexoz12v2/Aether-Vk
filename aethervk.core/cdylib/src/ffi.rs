@@ -1085,6 +1085,32 @@ pub unsafe extern "C" fn avkSimulationContext_getModelLocalFrames(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_overrideModelSpherical(
+  ctx: *mut SimulationContext,
+  model_id: u64,
+  radius_km: f32,
+  mass_kg: f32,
+  user_frame: *const FfiMat3,
+) -> bool {
+  if ctx.is_null() || user_frame.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  
+  // For a spherical or externally defined object, the principal axes are isotropic.
+  // Therefore, the simulation frame aligns perfectly with the user's defined local frame.
+  let uf = unsafe { &*user_frame };
+  let mat = oshal::math::matrix::mat3::Mat3f32 {
+    x: oshal::math::vector::vec3::Vec3f32::from_components(uf.m00, uf.m10, uf.m20),
+    y: oshal::math::vector::vec3::Vec3f32::from_components(uf.m01, uf.m11, uf.m21),
+    z: oshal::math::vector::vec3::Vec3f32::from_components(uf.m02, uf.m12, uf.m22),
+  };
+  
+  ctx_ref.override_model_spherical(model_id, radius_km, mass_kg, mat)
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_getImportedModels(
   ctx: *mut SimulationContext,
   out_ids: *mut u64,

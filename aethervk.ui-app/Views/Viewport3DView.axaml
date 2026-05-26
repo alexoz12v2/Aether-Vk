@@ -29,8 +29,14 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="vm:BillboardViewModel">
-                    <Image Source="{Binding ImageSource}" Width="{Binding Width}" Height="{Binding Height}" Opacity="{Binding Opacity}"
-                           PointerPressed="OnBillboardPointerPressed" />
+                    <StackPanel Orientation="Vertical">
+                        <Image Source="{Binding ImageSource}" Width="{Binding Width}" Height="{Binding Height}" Opacity="{Binding Opacity}"
+                               IsVisible="{Binding ImageSource, Converter={x:Static ObjectConverters.IsNotNull}}"
+                               PointerPressed="OnBillboardPointerPressed" />
+                        <Border Background="{DynamicResource Bg.Surface}" CornerRadius="4" Padding="4" IsVisible="{Binding Text, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <TextBlock Text="{Binding Text}" Foreground="{DynamicResource Text.Primary}" FontWeight="Bold" FontSize="14" HorizontalAlignment="Center"/>
+                        </Border>
+                    </StackPanel>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
             <ItemsControl.Styles>
