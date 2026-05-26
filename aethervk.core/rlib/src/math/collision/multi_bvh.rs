@@ -112,6 +112,11 @@ pub trait BinaryBvh {
     0
   }
 
+  /// Optional metadata for leaves
+  fn leaf_meta(&self, _node_idx: u32) -> Option<u32> {
+    None
+  }
+
   /// Extracts primitives of the leaf at `node_idx` and appends them to `out`.
   /// Returns the number of primitives appended.
   fn extract_primitives(&self, node_idx: u32, out: &mut Vec<Self::Primitive>) -> u32;
@@ -130,6 +135,8 @@ pub struct TlasMultiNode<const N: usize> {
     pub particle_start: [u32; N],
     pub particle_count: [u32; N],
     pub valid_mask: [u32; 2],
+    pub parent_idx: u32,
+    pub _pad: u32,
     /// Precomputed traversal orderings for the 8 ray-sign combinations.
     /// `permutations[sign_mask][i]` = local child index to visit i-th.
     /// Stored as `u32` (upper 24 bits unused) so the struct is `bytemuck::Pod`.
@@ -149,7 +156,9 @@ impl<const N: usize> Default for TlasMultiNode<N> {
             particle_start: [0; N],
             particle_count: [0; N],
             valid_mask: [0; 2],
-            permutations: [[0u32; N]; 8],
+            parent_idx: u32::MAX,
+            _pad: 0,
+            permutations: [[0; N]; 8],
         }
     }
 }
@@ -316,7 +325,11 @@ where
         node.particle_count[i] = 0;
 
         if binary_bvh.is_leaf(child_idx) {
-            node.metadata[i] = (1 << 31) | child_idx;
+            if let Some(meta) = binary_bvh.leaf_meta(child_idx) {
+                node.metadata[i] = meta;
+            } else {
+                node.metadata[i] = (1 << 31) | child_idx;
+            }
         } else {
             let child_multi_idx = collapse_binary_to_multi_recursive::<N, T>(child_idx, binary_bvh, multi_nodes);
             node.child_indices[i] = child_multi_idx;

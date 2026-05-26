@@ -523,19 +523,19 @@ impl Kernels for CpuScalarKernels {
   #[cfg(any(test, feature = "collisions"))]
   fn bp_cross_lca(
     &self,
-    cmd: &mut Self::Cmd,
-    tlas_bvh_addr: u64,
-    lca_entities_addr: u64,
-    macro_leaves_addr: u64,
-    entity_headers_addr: u64,
-    lca_query_pairs_addr: u64,
-    out_rb_rb_addr: u64,
-    out_rb_ps_addr: u64,
-    out_ps_ps_addr: u64,
-    out_cross_pairs_addr: u64,
-    internal_pairs_addr: u64,
-    total_queries: u32,
-    max_pairs: u32,
+    _cmd: &mut Self::Cmd,
+    _tlas_bvh_addr: u64,
+    _lca_entities_addr: u64,
+    _macro_leaves_addr: u64,
+    _entity_headers_addr: u64,
+    _lca_query_pairs_addr: u64,
+    _out_rb_rb_addr: u64,
+    _out_rb_ps_addr: u64,
+    _out_ps_ps_addr: u64,
+    _out_cross_pairs_addr: u64,
+    _total_queries: u32,
+    _max_pairs: u32,
+    _num_rigid_bodies: u32,
   ) -> EngineResult<()> {
     Ok(())
   }
@@ -636,6 +636,7 @@ impl Kernels for CpuScalarKernels {
     &self,
     cmd: &mut Self::Cmd,
     compacted: &Self::List<CollisionPair>,
+    dt: f32,
   ) -> EngineResult<Self::Buffer<u32>> {
     Ok(CpuBuffer {
       data: alloc::vec::Vec::new(),
@@ -651,6 +652,7 @@ impl Kernels for CpuScalarKernels {
     rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
     particles: &mut Self::Buffer<f32>,
     collisions: &Self::List<CollisionPair>,
+    lca_entities_addr: u64,
     force_inelastic: bool,
   ) -> EngineResult<()> {
     Ok(())
@@ -978,19 +980,19 @@ impl Kernels for CpuSimdKernels {
   #[cfg(any(test, feature = "collisions"))]
   fn bp_cross_lca(
     &self,
-    cmd: &mut Self::Cmd,
-    tlas_bvh_addr: u64,
-    lca_entities_addr: u64,
-    macro_leaves_addr: u64,
-    entity_headers_addr: u64,
-    lca_query_pairs_addr: u64,
-    out_rb_rb_addr: u64,
-    out_rb_ps_addr: u64,
-    out_ps_ps_addr: u64,
-    out_cross_pairs_addr: u64,
-    internal_pairs_addr: u64,
-    total_queries: u32,
-    max_pairs: u32,
+    _cmd: &mut Self::Cmd,
+    _tlas_bvh_addr: u64,
+    _lca_entities_addr: u64,
+    _macro_leaves_addr: u64,
+    _entity_headers_addr: u64,
+    _lca_query_pairs_addr: u64,
+    _out_rb_rb_addr: u64,
+    _out_rb_ps_addr: u64,
+    _out_ps_ps_addr: u64,
+    _out_cross_pairs_addr: u64,
+    _total_queries: u32,
+    _max_pairs: u32,
+    _num_rigid_bodies: u32,
   ) -> EngineResult<()> {
     Ok(())
   }
@@ -1091,6 +1093,7 @@ impl Kernels for CpuSimdKernels {
     &self,
     cmd: &mut Self::Cmd,
     compacted: &Self::List<CollisionPair>,
+    dt: f32,
   ) -> EngineResult<Self::Buffer<u32>> {
     Ok(CpuBuffer {
       data: alloc::vec::Vec::new(),
@@ -1106,6 +1109,7 @@ impl Kernels for CpuSimdKernels {
     rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
     particles: &mut Self::Buffer<f32>,
     collisions: &Self::List<CollisionPair>,
+    _lca_entities_addr: u64,
     force_inelastic: bool,
   ) -> EngineResult<()> {
     Ok(())
@@ -1280,7 +1284,7 @@ mod tests {
         entity_id: 0,
         primitive_index: 1,
       },
-      time_of_impact: t,
+      time_of_impact: t, is_lca: 0, lca_id: 0, frame_bda_low: 0, frame_bda_high: 0,
       contact_normal: norm.into(),
       contact_point: pt.into(),
       penetration_depth: depth,
@@ -1294,7 +1298,7 @@ mod tests {
         entity_id: 0,
         primitive_index: 2,
       },
-      time_of_impact: 0.051,
+      time_of_impact: 0.051, is_lca: 0, lca_id: 0, frame_bda_low: 0, frame_bda_high: 0,
       contact_normal: [0.0; 3],
       contact_point: [0.0; 3],
       penetration_depth: 0.0,
@@ -1308,7 +1312,7 @@ mod tests {
         entity_id: 0,
         primitive_index: 4,
       },
-      time_of_impact: 0.052,
+      time_of_impact: 0.052, is_lca: 0, lca_id: 0, frame_bda_low: 0, frame_bda_high: 0,
       contact_normal: [0.0; 3],
       contact_point: [0.0; 3],
       penetration_depth: 0.0,
@@ -1322,7 +1326,7 @@ mod tests {
         entity_id: 0,
         primitive_index: 6,
       },
-      time_of_impact: 0.1,
+      time_of_impact: 0.1, is_lca: 0, lca_id: 0, frame_bda_low: 0, frame_bda_high: 0,
       contact_normal: [0.0; 3],
       contact_point: [0.0; 3],
       penetration_depth: 0.0,

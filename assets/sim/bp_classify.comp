@@ -1,7 +1,7 @@
-#version 450 core
+#version 450
+#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
-#extension GL_EXT_debug_printf : enable
 
 #extension GL_GOOGLE_include_directive : require
 
@@ -26,6 +26,9 @@ layout(push_constant, std430) uniform PushConstants {
 #define BVH_SHAPE_SUB_TLAS 3u
 
 void main() {
+    if (gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("bp_classify count=%d", pc.raw_pairs.count);
+    }
     uint id = gl_GlobalInvocationID.x;
     if (id >= pc.raw_pairs.count) return;
 
@@ -63,6 +66,7 @@ void main() {
         bool b_is_lca = (shape_B == BVH_SHAPE_SUB_TLAS);
 
         if (b_is_lca) {
+            debugPrintfEXT("bp_classify lca! ent_A=%d ent_B=%d shape_B=%d", ent_A, ent_B, shape_B);
             if (pc.out_macro_lca.x != 0 || pc.out_macro_lca.y != 0) {
                 PairBuffer buf = PairBuffer(pc.out_macro_lca);
                 uint out_idx = atomicAdd(buf.count, 1);

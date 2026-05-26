@@ -8,16 +8,16 @@ mod tests {
       physics_scene::PhysicsScene,
     },
     scene::{
+      particles::{ParticleData, ParticleSystemComponent},
       ColliderComponent, ColliderShape, EntityId, KinematicComponent, PhysicalMeshComponent,
       ReferenceFrameComponent, ReferenceFrameType, Scene, TransformComponent,
-      particles::{ParticleData, ParticleSystemComponent},
     },
     simulation::comet::Comet,
   };
   use aethervk_oshal_rlib::{
     math::{
       quaternion::Quaternion,
-      vector::{Vector, Vector3, vec3::Vec3f32},
+      vector::{vec3::Vec3f32, Vector, Vector3},
     },
     os::pool::ThreadPool,
   };
@@ -52,7 +52,12 @@ mod tests {
     }
   }
 
-  fn run_simulation<K>(kernels: &K, scene: &mut Scene, duration_secs: f32, collisions_enabled: bool)
+  fn run_simulation<K>(
+    kernels: &K,
+    scene: &mut Scene,
+    duration_secs: f32,
+    collisions_enabled: bool,
+  ) -> PhysicsScene
   where
     K: Kernels,
   {
@@ -63,6 +68,7 @@ mod tests {
     for _ in 0..iterations {
       let _ = simulation_step(kernels, &mut ps, scene, 0, dt_us, collisions_enabled);
     }
+    return ps;
   }
 
   #[test]

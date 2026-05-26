@@ -13,6 +13,7 @@ layout(push_constant, std430) uniform PushConstants {
     PackedCollisions collisions;
     ImpulseOutput impulses;
     RigidBodyUintArray rigid_bodies;
+    GpuReferenceFrameArray lca_entities;
 } pc;
 
 void main() {
@@ -63,6 +64,12 @@ void main() {
         }
     }
 
+    vec3 impulseB = impulse; // Scale impulse for B
+    if (pair.is_lca == 1u) {
+        GpuReferenceFrame lca = pc.lca_entities.frames[pair.lca_id];
+        impulseB = impulse / lca.scale;
+    }
+
     if (is_rb_b) {
         uint base = pB_id * 28;
         float mass = uintBitsToFloat(pc.rigid_bodies.data[base + 3]);
@@ -73,14 +80,19 @@ void main() {
         vec3 posB = vec3(uintBitsToFloat(pc.rigid_bodies.data[base+0]), uintBitsToFloat(pc.rigid_bodies.data[base+1]), uintBitsToFloat(pc.rigid_bodies.data[base+2]));
 
         vec3 rB = vec3(pair.pt_x, pair.pt_y, pair.pt_z) - posB;
+        if (pair.is_lca == 1u) {
+            GpuReferenceFrame lca = pc.lca_entities.frames[pair.lca_id];
+            vec3 pt_micro = (vec3(pair.pt_x, pair.pt_y, pair.pt_z) - lca.center_pos) / lca.scale;
+            rB = pt_micro - posB;
+        }
 
         if (invMB > 0.0) {
-            vec3 dvB = impulse * invMB;
+            vec3 dvB = impulseB * invMB;
             ATOMIC_ADD_FLOAT(pc.rigid_bodies.data[base + 8], dvB.x);
             ATOMIC_ADD_FLOAT(pc.rigid_bodies.data[base + 9], dvB.y);
             ATOMIC_ADD_FLOAT(pc.rigid_bodies.data[base + 10], dvB.z);
 
-            vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, impulse)));
+            vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, impulseB)));
             ATOMIC_ADD_FLOAT(pc.rigid_bodies.data[base + 12], dwB.x);
             ATOMIC_ADD_FLOAT(pc.rigid_bodies.data[base + 13], dwB.y);
             ATOMIC_ADD_FLOAT(pc.rigid_bodies.data[base + 14], dwB.z);
@@ -90,7 +102,7 @@ void main() {
         float mass = P_READ(pc.particles, base + 6u * SUBGROUP_SIZE);
         float invMB = mass > 0.0 ? 1.0 / mass : 0.0;
         if (invMB > 0.0) {
-            vec3 dvB = impulse * invMB;
+            vec3 dvB = impulseB * invMB;
             ATOMIC_ADD_FLOAT(pc.particles.data[base + 3u * SUBGROUP_SIZE], dvB.x);
             ATOMIC_ADD_FLOAT(pc.particles.data[base + 4u * SUBGROUP_SIZE], dvB.y);
             ATOMIC_ADD_FLOAT(pc.particles.data[base + 5u * SUBGROUP_SIZE], dvB.z);

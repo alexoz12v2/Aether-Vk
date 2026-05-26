@@ -151,6 +151,7 @@ pub struct LcpPushConstants {
   pub rigid_bodies: u64,
   pub dt: f32,
   pub restitution: f32,
+  pub lca_entities: u64,
 }
 
 #[repr(C)]
@@ -357,9 +358,10 @@ pub struct BpCrossLcaPushConstants {
   pub out_rb_ps: u64,
   pub out_ps_ps: u64,
   pub out_cross_pairs: u64,
-  pub internal_pairs: u64,
   pub total_queries: u32,
   pub max_pairs: u32,
+  pub num_rigid_bodies: u32,
+  pub _pad: u32,
 }
 
 /// `bp_particle_self.comp` — 40 bytes
@@ -853,7 +855,7 @@ impl<T: Copy + Send + Sync> WaitHandle<Vec<T>> for VulkanReadHandle<T> {
     unsafe {
       if !info.mapped_data.is_null() {
         let count = if self.is_list {
-          let c = unsafe { *(info.mapped_data as *const u32) } as usize;
+          let c = unsafe { *((info.mapped_data as *const u32).add(3)) } as usize;
           c.min(self.capacity)
         } else {
           self.capacity
@@ -1389,7 +1391,7 @@ impl VulkanComputeKernels {
       scene0
         .with_component(entity, |c: &crate::scene::ColliderComponent| {
           match c.shape {
-            crate::scene::ColliderShape::Sphere { radius } => (0, [radius, 0.0, 0.0]),
+            crate::scene::ColliderShape::Sphere { radius } => (2, [radius, 0.0, 0.0]),
             crate::scene::ColliderShape::OBB { half_extents } => {
               (1, [half_extents.x(), half_extents.y(), half_extents.z()])
             }
@@ -1461,7 +1463,7 @@ impl VulkanComputeKernels {
                 let (shape_type, shape_data, inertia_tensor) = match collider.shape {
                     crate::scene::ColliderShape::Sphere { radius } => {
                     let i = 0.4 * mass * radius * radius;
-                    (0, [radius, 0.0, 0.0], [[i, 0.0, 0.0], [0.0, i, 0.0], [0.0, 0.0, i]])
+                    (2, [radius, 0.0, 0.0], [[i, 0.0, 0.0], [0.0, i, 0.0], [0.0, 0.0, i]])
                     }
                     crate::scene::ColliderShape::OBB { half_extents } => {
                     let dx = half_extents.x() * 2.0;
@@ -2313,9 +2315,9 @@ impl VulkanComputeKernels {
     out_rb_ps_addr: u64,
     out_ps_ps_addr: u64,
     out_cross_pairs_addr: u64,
-    internal_pairs_addr: u64,
     total_queries: u32,
     max_pairs: u32,
+    num_rigid_bodies: u32,
   ) {
     let _wg_size = 256u32;
     let subgroups_per_wg = 256u32 / 32u32;
@@ -2331,9 +2333,10 @@ impl VulkanComputeKernels {
       out_rb_ps: out_rb_ps_addr,
       out_ps_ps: out_ps_ps_addr,
       out_cross_pairs: out_cross_pairs_addr,
-      internal_pairs: internal_pairs_addr,
       total_queries,
       max_pairs,
+      num_rigid_bodies,
+      _pad: 0,
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
@@ -3054,6 +3057,7 @@ impl VulkanComputeKernels {
     rollback: &mut utils::RollbackContext<'_>,
     cmd: &mut VulkanCommandBuffer,
     compacted: &VulkanBuffer<gpu::CollisionPair>,
+    dt: f32,
   ) -> GpuResult<VulkanBuffer<u32>> {
     let out_toi = self.allocate_device_buffer::<u32>(
       device,
@@ -3089,7 +3093,7 @@ impl VulkanComputeKernels {
       collisions: compacted.address, // self.addresses.packed_collisions,
       out_toi: out_toi.address,      // self.addresses.reduce_toi,
       particle_radius: 1.0,
-      dt: 0.0,
+      dt,
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(
@@ -3157,6 +3161,7 @@ impl VulkanComputeKernels {
     rigid_bodies: &VulkanBuffer<RigidBodyImex>,
     particles: &mut VulkanBuffer<f32>,
     collisions: &VulkanBuffer<gpu::CollisionPair>,
+    _lca_entities_addr: u64,
     force_inelastic: bool,
   ) -> GpuResult<()> {
     let max_contacts = collisions.capacity() as usize;
@@ -3184,6 +3189,7 @@ impl VulkanComputeKernels {
       restitution: restitution_val,
       rigid_bodies: rigid_bodies.address,
       dt: 0.001_f32, // used only in Baumgarte stabilization, so don't care
+      lca_entities: _lca_entities_addr,
     };
     let bytes_lcp = unsafe {
       core::slice::from_raw_parts(
@@ -3197,6 +3203,7 @@ impl VulkanComputeKernels {
       collisions_addr: collisions.address,
       impulses_addr: impulses_buffer.address,
       rigid_bodies_addr: rigid_bodies.address,
+      lca_entities: _lca_entities_addr,
     };
     let bytes_apply = unsafe {
       core::slice::from_raw_parts(
@@ -3439,9 +3446,10 @@ impl VulkanComputeKernels {
     });
 
     let mut rb_idx = 0usize;
-    scene.query2_mut::<crate::scene::TransformComponent, crate::scene::KinematicComponent, _>(
+    scene.query3_mut::<crate::scene::TransformComponent, crate::scene::ColliderComponent, crate::scene::KinematicComponent, _>(
       |_entity,
        trans: &mut crate::scene::TransformComponent,
+       _coll: &mut crate::scene::ColliderComponent,
        kin: &mut crate::scene::KinematicComponent| {
         if let Some(rb) = rb_data.get(rb_idx) {
           trans.position = Vec3f32::from_components(
@@ -4066,13 +4074,14 @@ impl Kernels for Device {
     &self,
     cmd: &mut Self::Cmd,
     compacted: &Self::List<gpu::CollisionPair>,
+    dt: f32,
   ) -> EngineResult<Self::Buffer<u32>> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |res_guard, _| {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
       })?
       .execute(|allocator, rollback| {
-        self.kernels.find_earliest_collision(&self.device, allocator, rollback, cmd, compacted)
+        self.kernels.find_earliest_collision(&self.device, allocator, rollback, cmd, compacted, dt)
       })
       .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
@@ -4087,6 +4096,7 @@ impl Kernels for Device {
     rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
     particles: &mut Self::Buffer<f32>,
     collisions: &Self::List<gpu::CollisionPair>,
+    lca_entities_addr: u64,
     force_inelastic: bool,
   ) -> EngineResult<()> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
@@ -4103,6 +4113,7 @@ impl Kernels for Device {
           rigid_bodies,
           particles,
           collisions,
+          lca_entities_addr,
           force_inelastic,
         )
       })
@@ -4484,9 +4495,9 @@ impl Kernels for Device {
     out_rb_ps_addr: u64,
     out_ps_ps_addr: u64,
     out_cross_pairs_addr: u64,
-    internal_pairs_addr: u64,
     total_queries: u32,
     max_pairs: u32,
+    num_rigid_bodies: u32,
   ) -> EngineResult<()> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
@@ -4503,9 +4514,9 @@ impl Kernels for Device {
           out_rb_ps_addr,
           out_ps_ps_addr,
           out_cross_pairs_addr,
-          internal_pairs_addr,
           total_queries,
           max_pairs,
+          num_rigid_bodies,
         );
         Ok(())
       })

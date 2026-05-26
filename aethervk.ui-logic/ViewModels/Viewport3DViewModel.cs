@@ -147,23 +147,10 @@ public partial class Viewport3DViewModel
       );
 
       float camX = 8.8f, camY = 9.6f, camZ = 7.9f;
-      float dist = (float)Math.Sqrt(camX * camX + camY * camY + camZ * camZ);
-      float fwdX = -camX / dist;
-      float fwdY = -camY / dist;
-      float fwdZ = -camZ / dist;
-
-      float pitch = (float)Math.Asin(fwdZ);
-      float yaw = (float)Math.Atan2(fwdX, -fwdY);
-
-      float cyaw = (float)Math.Cos(yaw * 0.5);
-      float syaw = (float)Math.Sin(yaw * 0.5);
-      float cpitch = (float)Math.Cos(pitch * 0.5);
-      float spitch = (float)Math.Sin(pitch * 0.5);
-
-      float rw = cyaw * cpitch;
-      float rx = cyaw * spitch;
-      float ry = syaw * spitch;
-      float rz = syaw * cpitch;
+      float rx = 0.217f;
+      float ry = -0.092f;
+      float rz = -0.379f;
+      float rw = 0.895f;
 
       _runtimeService.SetTransformComponent(SceneId, CameraId,
         camX, camY, camZ,

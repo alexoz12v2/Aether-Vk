@@ -13,6 +13,7 @@ layout(local_size_x = 256) in;
 layout(push_constant, std430) uniform PushConstants {
     RigidBodyArray scene_entities;
     LeafBuffer tlas_leaves;
+    GpuReferenceFrameArray lca_entities;
     uvec2    dt_us;
     uint     total_entities;
 } pc;
@@ -31,8 +32,19 @@ void main() {
     vec3 vel = pc.scene_entities.bodies[id].linear_vel_drag.xyz;
     vec3 sweep = vel * dt;
 
-    pc.tlas_leaves.leaves[id].min_bound = min(static_min, static_min + sweep);
-    pc.tlas_leaves.leaves[id].max_bound = max(static_max, static_max + sweep);
+    vec3 sweep_min = min(static_min, static_min + sweep);
+    vec3 sweep_max = max(static_max, static_max + sweep);
+
+    uint frame_idx = pc.scene_entities.bodies[id].frame_idx;
+    if (frame_idx != 0xFFFFFFFF) {
+        GpuReferenceFrame frame = pc.lca_entities.frames[frame_idx];
+        pc.tlas_leaves.leaves[id].min_bound = frame.center_pos + sweep_min * frame.scale;
+        pc.tlas_leaves.leaves[id].max_bound = frame.center_pos + sweep_max * frame.scale;
+    } else {
+        pc.tlas_leaves.leaves[id].min_bound = sweep_min;
+        pc.tlas_leaves.leaves[id].max_bound = sweep_max;
+    }
+
     pc.tlas_leaves.leaves[id].entity_idx = id;
     pc.tlas_leaves.leaves[id].metadata = bvh_pack_metadata(true, BVH_FRAME_MACRO, pc.scene_entities.bodies[id].shape_type, id);
 }

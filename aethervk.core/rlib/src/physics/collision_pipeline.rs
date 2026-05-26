@@ -80,7 +80,11 @@ pub fn detect_collisions_cpu(bvh: &CpuMotionBvh) -> Vec<CollisionPair> {
             primitive_index: data_idx,
           },
           time_of_impact: 0.0,
+          is_lca: 0,
+          lca_id: 0,
+          frame_bda_low: 0,
           contact_normal: [0.0; 3],
+          frame_bda_high: 0,
           contact_point: [0.0; 3],
           penetration_depth: 0.0,
         });

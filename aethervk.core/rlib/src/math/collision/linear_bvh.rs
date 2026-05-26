@@ -102,6 +102,46 @@ where
     crate::math::collision::multi_bvh::MultiBvh::build(self)
   }
 
+  pub fn find_path_to_primitive(&self, target_prim_idx: usize) -> Option<alloc::vec::Vec<u32>> {
+    let mut path = alloc::vec::Vec::new();
+    if self.nodes.is_empty() {
+      return None;
+    }
+    if self.find_path_recursive(0, target_prim_idx, &mut path) {
+      Some(path)
+    } else {
+      None
+    }
+  }
+
+  fn find_path_recursive(&self, node_idx: u32, target_prim_idx: usize, path: &mut alloc::vec::Vec<u32>) -> bool {
+    path.push(node_idx);
+    let node = &self.nodes[node_idx as usize];
+
+    if node.primitive_count > 0 {
+      let start = node.left_child_or_primitive_offset as usize;
+      let end = start + node.primitive_count as usize;
+      for i in start..end {
+        if self.primitives[i] == target_prim_idx {
+          return true;
+        }
+      }
+    } else {
+      let left = node.left_child_or_primitive_offset;
+      if left != u32::MAX && self.find_path_recursive(left, target_prim_idx, path) {
+        return true;
+      }
+      let right = node.right_child_offset;
+      if right != u32::MAX && self.find_path_recursive(right, target_prim_idx, path) {
+        return true;
+      }
+    }
+
+    path.pop();
+    false
+  }
+
+
   fn flatten_node(
     node: &BVHNode<S>,
     nodes: &mut Vec<LinearBVHNode<S>>,

@@ -59,7 +59,7 @@
 
       <!-- Step 2: Physics Type -->
       <StackPanel Classes="stepStack" IsVisible="{Binding IsStep2}">
-        <TextBlock Text="Step 2: Physics Interaction" FontWeight="Bold" FontSize="16" />
+        <TextBlock Text="Step 2: Physics Interaction &amp; Placement" FontWeight="Bold" FontSize="16" />
         
         <Grid ColumnDefinitions="*,*,*" Margin="0,16,0,0">
           <RadioButton Grid.Column="0" Content="Static" GroupName="Physics" IsChecked="{Binding PhysicsType, Converter={x:Static ObjectConverters.Equal}, ConverterParameter='Static'}" Margin="4" Classes="card" />
@@ -68,57 +68,8 @@
           <RadioButton Grid.Column="1" Content="Kinematic (WIP)" GroupName="Physics" IsEnabled="False" Margin="4" Classes="card" />
           <RadioButton Grid.Column="2" Content="Dynamic (WIP)" GroupName="Physics" IsEnabled="False" Margin="4" Classes="card" />
         </Grid>
-      </StackPanel>
 
-      <!-- Step 3: Horizon Data -->
-      <StackPanel Classes="stepStack" IsVisible="{Binding IsStep3}">
-        <TextBlock Text="Step 3: Horizon JPL Orbit Data" FontWeight="Bold" FontSize="16" />
-        
-        <Grid RowDefinitions="Auto, *, Auto, Auto" Margin="0,16,0,0">
-          <Button Grid.Row="0" Content="Fetch Comets" Command="{Binding FetchCometsCommand}" Classes="accent" HorizontalAlignment="Left" />
-          
-          <ListBox Grid.Row="1" ItemsSource="{Binding CometsData}" SelectedItem="{Binding SelectedComet}" MaxHeight="120" Margin="0,10">
-            <ListBox.ItemTemplate>
-              <DataTemplate>
-                <TextBlock Text="{Binding [0]}" />
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
-
-          <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="10" Margin="0,10" IsVisible="{Binding SelectedComet, Converter={x:Static ObjectConverters.IsNotNull}}">
-            <TextBlock Text="Target Date:" VerticalAlignment="Center" />
-            <DatePicker SelectedDate="{Binding TargetDate}" />
-            <Button Content="Fetch Orbit Data" Command="{Binding FetchOrbitDataCommand}" Classes="accent" />
-          </StackPanel>
-
-          <!-- Status Indicator -->
-          <Border Grid.Row="3" Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="4" Padding="10" IsVisible="{Binding FetchedOrbitData, Converter={x:Static ObjectConverters.IsNotNull}}">
-            <StackPanel>
-              <TextBlock Text="Data Fetched Successfully" FontWeight="Bold" Foreground="LimeGreen" />
-              <TextBlock Text="{Binding FetchedOrbitData.SemiMajorAxis, StringFormat='Semi-Major Axis: {0:F4} AU'}" />
-              <TextBlock Text="{Binding FetchedOrbitData.Eccentricity, StringFormat='Eccentricity: {0:F4}'}" />
-            </StackPanel>
-          </Border>
-          
-          <ProgressBar Grid.Row="3" IsIndeterminate="True" IsVisible="{Binding IsFetchingHorizonData}" Height="4" Margin="0,10,0,0" />
-        </Grid>
-      </StackPanel>
-
-      <!-- Step 4: Positioning -->
-      <StackPanel Classes="stepStack" IsVisible="{Binding IsStep4}">
-        <TextBlock Text="Step 4: Position &amp; Orientation" FontWeight="Bold" FontSize="16" />
-
-        <!-- Nucleus radius (from Horizon JPL, user-editable) -->
-        <Grid ColumnDefinitions="Auto, *" Margin="0,12,0,0">
-          <TextBlock Grid.Column="0" Text="Nucleus Radius (km):" VerticalAlignment="Center"
-                     FontWeight="SemiBold" Margin="0,0,12,0" />
-          <NumericUpDown Grid.Column="1" Value="{Binding CometRadiusKm}"
-                         FormatString="0.000" Minimum="0.001" Width="140"
-                         HorizontalAlignment="Left"
-                         ToolTip.Tip="Radius from Horizon JPL physical properties. You may override it." />
-        </Grid>
-        
-        <Grid ColumnDefinitions="*, Auto, Auto" Margin="0,16,0,0">
+        <Grid ColumnDefinitions="*, Auto, Auto" Margin="0,16,0,0" IsVisible="{Binding PhysicsType, Converter={x:Static ObjectConverters.Equal}, ConverterParameter='Static'}">
           <StackPanel Grid.Column="0" Spacing="12" Margin="0,0,16,0">
             <TextBlock Text="Position" FontWeight="Bold" />
             <Grid ColumnDefinitions="*,*,*">
@@ -164,6 +115,50 @@
           </Border>
         </Grid>
       </StackPanel>
+
+      <!-- Step 3: Horizon Data -->
+      <StackPanel Classes="stepStack" IsVisible="{Binding IsStep3}">
+        <TextBlock Text="Step 3: Horizon JPL Orbit Data" FontWeight="Bold" FontSize="16" />
+
+        <!-- Nucleus radius (from Horizon JPL, user-editable) -->
+        <Grid ColumnDefinitions="Auto, *" Margin="0,12,0,0">
+          <TextBlock Grid.Column="0" Text="Nucleus Radius (km):" VerticalAlignment="Center"
+                     FontWeight="SemiBold" Margin="0,0,12,0" />
+          <NumericUpDown Grid.Column="1" Value="{Binding CometRadiusKm}"
+                         FormatString="0.000" Minimum="0.001" Width="140"
+                         HorizontalAlignment="Left"
+                         ToolTip.Tip="Radius from Horizon JPL physical properties. You may override it." />
+        </Grid>
+        
+        <Grid RowDefinitions="Auto, *, Auto, Auto" Margin="0,16,0,0">
+          <Button Grid.Row="0" Content="Fetch Comets" Command="{Binding FetchCometsCommand}" Classes="accent" HorizontalAlignment="Left" />
+          
+          <ListBox Grid.Row="1" ItemsSource="{Binding CometsData}" SelectedItem="{Binding SelectedComet}" MaxHeight="120" Margin="0,10">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <TextBlock Text="{Binding Name}" />
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+
+          <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="10" Margin="0,10" IsVisible="{Binding SelectedComet, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <TextBlock Text="Target Date:" VerticalAlignment="Center" />
+            <DatePicker SelectedDate="{Binding TargetDate}" />
+            <Button Content="Fetch Orbit Data" Command="{Binding FetchOrbitDataCommand}" Classes="accent" />
+          </StackPanel>
+
+          <!-- Status Indicator -->
+          <Border Grid.Row="3" Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="4" Padding="10" IsVisible="{Binding FetchedOrbitData, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <StackPanel>
+              <TextBlock Text="Data Fetched Successfully" FontWeight="Bold" Foreground="LimeGreen" />
+              <TextBlock Text="{Binding FetchedOrbitData.SemiMajorAxis, StringFormat='Semi-Major Axis: {0:F4} AU'}" />
+              <TextBlock Text="{Binding FetchedOrbitData.Eccentricity, StringFormat='Eccentricity: {0:F4}'}" />
+            </StackPanel>
+          </Border>
+          
+          <ProgressBar Grid.Row="3" IsIndeterminate="True" IsVisible="{Binding IsFetchingHorizonData}" Height="4" Margin="0,10,0,0" />
+        </Grid>
+      </StackPanel>
     </Panel>
 
     <!-- Footer -->
@@ -173,9 +168,9 @@
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
           <Button Content="Back" Command="{Binding PreviousStepCommand}" IsEnabled="{Binding CanGoBack}" />
           
-          <Button Content="Next" Command="{Binding NextStepCommand}" IsEnabled="{Binding CanGoNext}" IsVisible="{Binding !IsStep4}" Classes="accent" />
+          <Button Content="Next" Command="{Binding NextStepCommand}" IsEnabled="{Binding CanGoNext}" IsVisible="{Binding !IsStep3}" Classes="accent" />
           
-          <Button Content="Spawn" x:CompileBindings="False" Command="{Binding $parent[Window].SpawnCommand}" IsVisible="{Binding IsStep4}" Classes="accent" />
+          <Button Content="Spawn" x:CompileBindings="False" Command="{Binding $parent[Window].SpawnCommand}" IsVisible="{Binding IsStep3}" Classes="accent" />
         </StackPanel>
       </Grid>
     </Border>

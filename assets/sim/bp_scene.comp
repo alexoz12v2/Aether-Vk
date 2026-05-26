@@ -1,11 +1,11 @@
 // @assets/sim/bp_scene.comp
 #version 450 core
 #extension GL_EXT_buffer_reference2 : require
-#extension GL_EXT_debug_printf : enable
 
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_ballot : require
+#extension GL_EXT_debug_printf : enable
 
 #include "../debug_utils.glsl"
 #include "../bvh_utils.glsl"
@@ -69,6 +69,8 @@ void main() {
 
         uint entity_id = bvh_get_index(meta);
 
+
+
         bool hit = valid && intersectAABB(my_min, my_max, c_min, c_max);
         bool is_leaf = bvh_is_leaf(meta);
         uint entity_shape = bvh_get_shape(meta);
@@ -78,11 +80,12 @@ void main() {
         // But if B is a SUB_TLAS, we MUST test it because SUB_TLAS never queries!
         // We still must avoid self-collision (A,A) even if A is a SUB_TLAS.
         bool hit_leaf = hit && is_leaf && ((my_ent_id < entity_id) || (is_sub_tlas && my_ent_id != entity_id)) && (entity_shape != BVH_SHAPE_AABB);
+        if (hit && is_leaf) {
+            debugPrintfEXT("hit && is_leaf! my_ent=%d ent=%d shape=%d hit_leaf=%d", my_ent_id, entity_id, entity_shape, hit_leaf ? 1 : 0);
+        }
         bool hit_node = hit && !is_leaf;
 
-        if (hit && is_leaf && lane_id == 0) {
-            debugPrintfEXT("bp_scene: hit leaf! my_ent=%d entity_id=%d is_sub=%d hit_leaf=%d", my_ent_id, entity_id, is_sub_tlas, hit_leaf);
-        }
+
 
         uvec4 leaf_ballot = subgroupBallot(hit_leaf);
         uint  leaf_count  = subgroupBallotBitCount(leaf_ballot);
@@ -95,7 +98,6 @@ void main() {
 
             if (hit_leaf && base_idx + leaf_offset < 10000u) {
                 pc.overlapping_pairs.pairs[base_idx + leaf_offset] = uvec2(my_ent_id, meta);
-                debugPrintfEXT("bp_scene: Wrote overlapping pair: my_ent=%d, meta=%d", my_ent_id, meta);
             }
         }
 

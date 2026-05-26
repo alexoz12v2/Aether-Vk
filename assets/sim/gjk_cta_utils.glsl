@@ -522,9 +522,9 @@ bool compute_toi_spheres(vec3 c1, float r1, vec3 v1, vec3 c2, float r2, vec3 v2,
             out_toi = t;
             return true;
         }
-        
-        vec3 n = dist > 1e-6 ? normalize(p_a - p_b) : vec3(1.0, 0.0, 0.0);
-        float v_closing = -dot(v_rel, n);
+
+        vec3 n_dir = dist > 1e-6 ? normalize(p_a - p_b) : vec3(1.0, 0.0, 0.0);
+        float v_closing = -dot(v_rel, n_dir);
         
         if (v_closing <= 0.0) return false;
         
@@ -582,11 +582,12 @@ bool compute_toi_generic(
             out_contact_point = (p_a + p_b) * 0.5;
             return true;
         }
-        
-        vec3 n = dist > 1e-6 ? normalize(p_a - p_b) : vec3(1.0, 0.0, 0.0);
-        float v_closing = -dot(v_rel, n);
+
+        vec3 n_dir = dist > 1e-6 ? normalize(p_a - p_b) : vec3(1.0, 0.0, 0.0);
+        float v_closing = -dot(v_rel, n_dir);
         
         if (v_closing <= 0.0) return false;
+        
         
         float delta_t = dist / v_closing;
         t += delta_t;

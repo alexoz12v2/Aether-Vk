@@ -18,6 +18,7 @@ layout(push_constant, std430) uniform PushConstants {
     RigidBodyArray rigid_bodies;
     float dt;
     float restitution;
+    GpuReferenceFrameArray lca_entities;
 } pc;
 
 #define MAX_BODIES_PER_ISLAND 32
@@ -83,11 +84,30 @@ void main() {
     vec3 n = vec3(pair.norm_x, pair.norm_y, pair.norm_z), t1, t2; generate_tangents(n, t1, t2);
     vec3 pt = vec3(pair.pt_x, pair.pt_y, pair.pt_z);
     vec3 rA = pt - posA, rB = pt - posB;
+    // lca_scale: 1.0 for same-frame pairs; the micro-frame scale for cross-LCA pairs.
+    // Used throughout the PGS loop to convert macro-frame impulses to micro-frame units
+    // before writing to body-B shared-memory velocity slots (which are micro-frame).
+    float lca_scale = 1.0;
+    if (pair.is_lca == 1u) {
+        GpuReferenceFrame lca = pc.lca_entities.frames[pair.lca_id];
+        // pt is in MACRO space. posB is in MICRO space.
+        // Convert pt to MICRO space for rB.
+        vec3 pt_micro = (pt - lca.center_pos) / lca.scale;
+        rB = pt_micro - posB;
+        lca_scale = lca.scale;
+    }
+
     float eff_m_n = compute_effective_mass(n, rA, rB, invMA, invMB, invIA, invIB, qA, qB);
     float eff_m_t1 = compute_effective_mass(t1, rA, rB, invMA, invMB, invIA, invIB, qA, qB);
     float eff_m_t2 = compute_effective_mass(t2, rA, rB, invMA, invMB, invIA, invIB, qA, qB);
 
-    vec3 v_rel_init = (vB_init + cross(wB_init, rB)) - (vA_init + cross(wA_init, rA));
+    vec3 vA_pt = vA_init + cross(wA_init, rA);
+    vec3 vB_pt = vB_init + cross(wB_init, rB);
+    if (pair.is_lca == 1u) {
+        GpuReferenceFrame lca = pc.lca_entities.frames[pair.lca_id];
+        vB_pt = vB_pt * lca.scale + lca.center_vel;
+    }
+    vec3 v_rel_init = vB_pt - vA_pt;
     float bounce = dot(v_rel_init, n) < -0.1 ? -pc.restitution * dot(v_rel_init, n) : 0.0;
     float target_v_n = bounce + ((0.2 / max(pc.dt, 1e-6)) * max(pair.penetration_depth - 0.01, 0.0));
 
@@ -106,7 +126,13 @@ void main() {
             wB = vec3(uintBitsToFloat(shared_w_x[idB]), uintBitsToFloat(shared_w_y[idB]), uintBitsToFloat(shared_w_z[idB]));
         }
 
-        vec3 v_rel = (vB + cross(wB, rB)) - (vA + cross(wA, rA));
+        vec3 vA_pt = vA + cross(wA, rA);
+        vec3 vB_pt = vB + cross(wB, rB);
+        if (pair.is_lca == 1u) {
+            GpuReferenceFrame lca = pc.lca_entities.frames[pair.lca_id];
+            vB_pt = vB_pt * lca.scale + lca.center_vel;
+        }
+        vec3 v_rel = vB_pt - vA_pt;
         float jn_delta = eff_m_n * (-dot(v_rel, n) + target_v_n);
         float old_jn = accumulated_normal[local_id]; float new_jn = max(old_jn + jn_delta, 0.0);
         jn_delta = new_jn - old_jn; accumulated_normal[local_id] = new_jn;
@@ -118,8 +144,12 @@ void main() {
             ATOMIC_ADD_FLOAT(shared_w_x[idA], dwA.x); ATOMIC_ADD_FLOAT(shared_w_y[idA], dwA.y); ATOMIC_ADD_FLOAT(shared_w_z[idA], dwA.z);
         }
         if (!is_partB && invMB > 0.0 && idB < MAX_BODIES_PER_ISLAND) {
-            ATOMIC_ADD_FLOAT(shared_v_x[idB], P_n.x * invMB); ATOMIC_ADD_FLOAT(shared_v_y[idB], P_n.y * invMB); ATOMIC_ADD_FLOAT(shared_v_z[idB], P_n.z * invMB);
-            vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, P_n)));
+            // Bug 1 fix: P_n is in macro-frame; shared_v[idB] holds micro-frame velocity.
+            // Divide by lca_scale to convert the impulse to micro-frame units.
+            // For same-frame pairs lca_scale == 1.0, so this is a no-op.
+            vec3 P_n_micro = P_n / lca_scale;
+            ATOMIC_ADD_FLOAT(shared_v_x[idB], P_n_micro.x * invMB); ATOMIC_ADD_FLOAT(shared_v_y[idB], P_n_micro.y * invMB); ATOMIC_ADD_FLOAT(shared_v_z[idB], P_n_micro.z * invMB);
+            vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, P_n_micro)));
             ATOMIC_ADD_FLOAT(shared_w_x[idB], dwB.x); ATOMIC_ADD_FLOAT(shared_w_y[idB], dwB.y); ATOMIC_ADD_FLOAT(shared_w_z[idB], dwB.z);
         }
 
@@ -133,7 +163,15 @@ void main() {
             vB = vec3(uintBitsToFloat(shared_v_x[idB]), uintBitsToFloat(shared_v_y[idB]), uintBitsToFloat(shared_v_z[idB]));
             wB = vec3(uintBitsToFloat(shared_w_x[idB]), uintBitsToFloat(shared_w_y[idB]), uintBitsToFloat(shared_w_z[idB]));
         }
-        v_rel = (vB + cross(wB, rB)) - (vA + cross(wA, rA));
+        // Bug 2 fix: recompute friction v_rel in the same frame as the normal v_rel above.
+        // For cross-LCA pairs, vB and wB are in micro-frame; apply the same LCA transform
+        // used at line 128 so that v_rel is consistently expressed in macro-frame space.
+        vec3 vB_pt_fric = vB + cross(wB, rB);
+        if (pair.is_lca == 1u) {
+            GpuReferenceFrame lca_fric = pc.lca_entities.frames[pair.lca_id];
+            vB_pt_fric = vB_pt_fric * lca_fric.scale + lca_fric.center_vel;
+        }
+        v_rel = vB_pt_fric - (vA + cross(wA, rA));
 
         float max_fric = 0.5 * accumulated_normal[local_id];
         float jt1_delta = eff_m_t1 * (-dot(v_rel, t1));
@@ -152,8 +190,11 @@ void main() {
             ATOMIC_ADD_FLOAT(shared_w_x[idA], dwA.x); ATOMIC_ADD_FLOAT(shared_w_y[idA], dwA.y); ATOMIC_ADD_FLOAT(shared_w_z[idA], dwA.z);
         }
         if (!is_partB && invMB > 0.0 && idB < MAX_BODIES_PER_ISLAND) {
-            ATOMIC_ADD_FLOAT(shared_v_x[idB], P_t.x * invMB); ATOMIC_ADD_FLOAT(shared_v_y[idB], P_t.y * invMB); ATOMIC_ADD_FLOAT(shared_v_z[idB], P_t.z * invMB);
-            vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, P_t)));
+            // Bug 3 fix: same as Bug 1 — friction impulse P_t is in macro-frame;
+            // divide by lca_scale before writing to micro-frame shared-memory slot.
+            vec3 P_t_micro = P_t / lca_scale;
+            ATOMIC_ADD_FLOAT(shared_v_x[idB], P_t_micro.x * invMB); ATOMIC_ADD_FLOAT(shared_v_y[idB], P_t_micro.y * invMB); ATOMIC_ADD_FLOAT(shared_v_z[idB], P_t_micro.z * invMB);
+            vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, P_t_micro)));
             ATOMIC_ADD_FLOAT(shared_w_x[idB], dwB.x); ATOMIC_ADD_FLOAT(shared_w_y[idB], dwB.y); ATOMIC_ADD_FLOAT(shared_w_z[idB], dwB.z);
         }
     }

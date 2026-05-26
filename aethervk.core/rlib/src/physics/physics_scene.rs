@@ -38,6 +38,7 @@ pub struct GpuReferenceFrame {
   pub frame_type: u32,
   pub parent_frame_idx: u32,
   pub bvh_root_index: u32,
+  pub _pad0: u32,
   pub entity_id_raw: u64,
   pub frame_bda: u64,
 }
@@ -130,6 +131,22 @@ impl RootBoundsBvh {
   }
 }
 
+
+#[derive(Debug, Clone)]
+pub struct CollisionEvent {
+  pub entity_a_id: u32,
+  pub entity_a_name: alloc::string::String,
+  pub entity_b_id: u32,
+  pub entity_b_name: alloc::string::String,
+  pub contact_point: [f32; 3],
+  pub contact_normal: [f32; 3],
+  pub penetration_depth: f32,
+  pub frame_id: u32,
+  pub is_lca: bool,
+  pub particle_path_a: Option<alloc::vec::Vec<u32>>,
+  pub particle_path_b: Option<alloc::vec::Vec<u32>>,
+}
+
 pub struct PhysicsScene {
   pub gpu_frames: Vec<GpuReferenceFrame>,
   pub macro_tlas: RootBoundsBvh,
@@ -139,6 +156,7 @@ pub struct PhysicsScene {
   pub mesh_entity_map: Vec<u32>,
   pub particle_entity_map: Vec<u32>,
   pub dt_s: f32,
+  pub recent_collisions: Vec<CollisionEvent>,
 }
 
 impl PhysicsScene {
@@ -158,6 +176,7 @@ impl PhysicsScene {
         frame_type: f.frame_type as u32,
         parent_frame_idx: u32::MAX,
         bvh_root_index: 0,
+        _pad0: 0,
         entity_id_raw: slotmap::Key::data(&e).as_ffi(),
         frame_bda: 0,
       };
@@ -185,6 +204,7 @@ impl PhysicsScene {
         frame_type: 0,
         parent_frame_idx: u32::MAX,
         bvh_root_index: u32::MAX,
+        _pad0: 0,
         entity_id_raw: 0,
         frame_bda: 0,
       });
@@ -324,6 +344,7 @@ impl PhysicsScene {
       mesh_entity_map,
       particle_entity_map,
       dt_s,
+      recent_collisions: alloc::vec::Vec::new(),
     }
   }
 }
@@ -405,6 +426,10 @@ impl crate::math::collision::multi_bvh::BinaryBvh for RootBoundsBvh {
 
   fn is_leaf(&self, idx: u32) -> bool {
     self.nodes[idx as usize].leaf_meta.is_some()
+  }
+
+  fn leaf_meta(&self, idx: u32) -> Option<u32> {
+    self.nodes[idx as usize].leaf_meta
   }
 
   fn children(&self, idx: u32) -> (Option<u32>, Option<u32>) {

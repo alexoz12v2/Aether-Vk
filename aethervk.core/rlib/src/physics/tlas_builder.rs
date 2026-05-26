@@ -55,7 +55,8 @@ impl<const N: usize> FlatNodes<N> {
   }
 }
 
-pub fn build_scene_motion_tlas<const N: usize>(physical_scene: &mut PhysicsScene) -> Vec<u8>
+
+pub fn build_scene_motion_tlas<const N: usize>(physical_scene: &mut PhysicsScene) -> (Vec<u8>, u32)
 where
   TlasMultiNode<N>: bytemuck::Pod,
 {
@@ -115,7 +116,7 @@ where
     physical_scene.gpu_frames[macro_frame_idx].bvh_root_index = macro_root;
   }
 
-  bytemuck::cast_slice(&flat.nodes).to_vec()
+  (bytemuck::cast_slice(&flat.nodes).to_vec(), macro_root)
 }
 
 fn patch_tlas_leaves<const N: usize>(
@@ -176,6 +177,41 @@ fn mark_particle_sentinels<const N: usize>(
       }
     }
   }
+}
+
+pub fn trace_particle_bvh_path(
+    multi_nodes: &[crate::math::collision::multi_bvh::TlasMultiNode<32>],
+    root_idx: u32,
+    target_primitive_idx: u32,
+) -> Option<alloc::vec::Vec<u32>> {
+    let mut stack = alloc::vec![(root_idx, alloc::vec![root_idx])];
+    
+    let target_meta = 0x8000_0000 | target_primitive_idx;
+
+    while let Some((node_idx, current_path)) = stack.pop() {
+        if (node_idx as usize) >= multi_nodes.len() { continue; }
+        let node = &multi_nodes[node_idx as usize];
+        
+        for i in 0..32 {
+            let meta = node.metadata[i];
+            if meta == 0 { continue; }
+            
+            let is_leaf = (meta & 0x8000_0000) != 0;
+            if is_leaf {
+                if meta == target_meta {
+                    return Some(current_path);
+                }
+            } else {
+                let child_idx = node.child_indices[i];
+                if child_idx != PARTICLE_BLAS_SENTINEL {
+                    let mut next_path = current_path.clone();
+                    next_path.push(child_idx);
+                    stack.push((child_idx, next_path));
+                }
+            }
+        }
+    }
+    None
 }
 
 pub fn build_selection_tlas(scene: &crate::scene::Scene) -> alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<32>> {

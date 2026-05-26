@@ -86,17 +86,19 @@ struct PackedPair {
     ColliderId a;
     ColliderId b;
     float toi;
-    uint _pad0[3];
+    uint is_lca;
+    uint lca_id;
+    uint frame_bda_low;
     float norm_x;
     float norm_y;
     float norm_z;
-    uint _pad1;
+    uint frame_bda_high;
     float pt_x;
     float pt_y;
     float pt_z;
     float penetration_depth;
 };
-struct SparseCollisionData { uint valid; uint entity_a; uint prim_a; uint entity_b; uint prim_b; float toi; vec3 contact_normal; vec3 contact_point; float penetration_depth; };
+struct SparseCollisionData { uint valid; uint entity_a; uint prim_a; uint entity_b; uint prim_b; float toi; uint is_lca; uint lca_id; vec3 contact_normal; vec3 contact_point; float penetration_depth; };
 
 struct RigidBody {
     vec4 position_mass;       // xyz: world pos, w: mass
@@ -109,7 +111,7 @@ struct RigidBody {
     uint leaf_count;          // Number of leaves
     uint shape_type;          // BVH_SHAPE_*
     vec3 shape_extents;       // Dimensions
-    uint pad2;
+    uint frame_idx;
 };
 struct Wrench { uint force_x; uint force_y; uint force_z; uint torque_x; uint torque_y; uint torque_z; };
 struct ForceEmitter {
@@ -130,10 +132,11 @@ struct GpuReferenceFrame {
     uint frame_type;
     uint parent_frame_idx;
     uint bvh_root_index;
+    uint pad0;
     uint entity_id_raw_low;
     uint entity_id_raw_high;
-    uint _pad0;
-    uint _pad1;
+    uint frame_bda_low;
+    uint frame_bda_high;
 };
 
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer GpuReferenceFrameArray { GpuReferenceFrame frames[]; };

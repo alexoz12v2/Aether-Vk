@@ -5,6 +5,7 @@
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_EXT_debug_printf : enable
 
 #include "../debug_utils.glsl"
 #include "../bvh_utils.glsl"
@@ -112,6 +113,9 @@ void main() {
 
         bool hit_leaf = hit && is_leaf;
         bool hit_node = hit && !is_leaf;
+        if (lane_id == 0) {
+            debugPrintfEXT("Checking c_min=%f,%f c_max=%f,%f hit=%d valid=%d leaf=%d", c_min.x, c_min.y, c_max.x, c_max.y, hit?1:0, valid?1:0, is_leaf?1:0);
+        }
 
         uvec4 leaf_ballot = subgroupBallot(hit_leaf);
         uint  leaf_count  = subgroupBallotBitCount(leaf_ballot);

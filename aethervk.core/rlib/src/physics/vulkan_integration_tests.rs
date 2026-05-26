@@ -105,7 +105,7 @@ mod tests {
     scene: &mut Scene,
     duration_seconds: f32,
     collisions_enabled: bool,
-  ) {
+  ) -> PhysicsScene {
     let mut physical_scene = PhysicsScene::build_from_scene(scene, 0.016);
 
     let dt: timeus_t = 16_667; // 60 FPS
@@ -125,9 +125,12 @@ mod tests {
       if let Some(s) = sync {
         kernels.wait_sync(&s).unwrap();
       }
+      let old_collisions = core::mem::take(&mut physical_scene.recent_collisions);
       physical_scene = PhysicsScene::build_from_scene(scene, 0.016);
+      physical_scene.recent_collisions = old_collisions;
       current_time += dt;
     }
+    physical_scene
   }
 
   #[test]
@@ -229,7 +232,7 @@ mod tests {
       .with_device(ctx.device_handle, |dev| {
         let vulkan_device = dev.as_any().downcast_ref::<device::Device>().unwrap();
 
-        run_simulation(vulkan_device, &mut scene, 0.1, true);
+        let ps = run_simulation(vulkan_device, &mut scene, 0.1, true);
 
         let t_sphere = scene.global_transform(sphere).unwrap();
         let t_obb = scene.global_transform(obb).unwrap();
@@ -238,10 +241,22 @@ mod tests {
         let v_sphere = scene.with_component(sphere, |k: &KinematicComponent| k.velocity).unwrap();
         let v_obb = scene.with_component(obb, |k: &KinematicComponent| k.velocity).unwrap();
 
-        aethervk_oshal_rlib::log!("v_sphere: {:?}", v_sphere);
-        aethervk_oshal_rlib::log!("v_obb: {:?}", v_obb);
-        aethervk_oshal_rlib::log!("assert1: {}", v_sphere.x() < 0.0);
-        aethervk_oshal_rlib::log!("assert2: {}", v_obb.x() > 0.0);
+        assert!(v_sphere.x() < 0.0, "Sphere should have bounced back");
+        assert!(v_obb.x() > 0.0, "OBB should have bounced back");
+
+        // Verify collision events
+        println!("RECENT COLLISIONS LEN: {}", ps.recent_collisions.len()); 
+        for c in &ps.recent_collisions {
+            println!("Collision: {} vs {}", c.entity_a_name, c.entity_b_name);
+        }
+        assert!(!ps.recent_collisions.is_empty(), "Expected at least one collision event");
+        let coll = ps.recent_collisions.iter().find(|c| 
+            (c.entity_a_name == "Sphere" && c.entity_b_name == "OBB") ||
+            (c.entity_a_name == "OBB" && c.entity_b_name == "Sphere")
+        ).expect(&alloc::format!("Expected collision between Sphere and OBB, got: {:?}", ps.recent_collisions));
+        
+        assert!(coll.penetration_depth > 0.0, "Penetration depth should be positive");
+        assert_eq!(coll.frame_id, 0, "Collision should happen in root macro frame if not LCA");
 
         let tracked_allocs = vulkan_device.kernels.tracked_physical_allocations.lock().clone();
 
@@ -363,7 +378,7 @@ mod tests {
       .with_device(ctx.device_handle, |dev| {
         let vulkan_device = dev.as_any().downcast_ref::<device::Device>().unwrap();
 
-        run_simulation(vulkan_device, &mut scene, 0.1, false);
+        let ps = run_simulation(vulkan_device, &mut scene, 0.1, false);
 
         let t_sphere = scene.global_transform(sphere).unwrap();
         let t_obb = scene.global_transform(obb).unwrap();
@@ -372,10 +387,9 @@ mod tests {
         let v_sphere = scene.with_component(sphere, |k: &KinematicComponent| k.velocity).unwrap();
         let v_obb = scene.with_component(obb, |k: &KinematicComponent| k.velocity).unwrap();
 
-        aethervk_oshal_rlib::log!("v_sphere: {:?}", v_sphere);
-        aethervk_oshal_rlib::log!("v_obb: {:?}", v_obb);
         assert!(v_sphere.x() > 0.0, "Sphere should have passed through (+X)");
         assert!(v_obb.x() < 0.0, "OBB should have passed through (-X)");
+        assert!(ps.recent_collisions.is_empty(), "Expected no collisions");
 
         let tracked_allocs = vulkan_device.kernels.tracked_physical_allocations.lock().clone();
 
@@ -479,7 +493,7 @@ mod tests {
       .add_component(
         obj_micro,
         TransformComponent {
-          position: Vec3f32::from_components(-20.0, 0.0, 0.0),
+          position: Vec3f32::from_components(-30.0, 0.0, 0.0),
           rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
           scale: Vec3f32::from_components(1.0, 1.0, 1.0),
         },
@@ -513,7 +527,7 @@ mod tests {
       .with_device(ctx.device_handle, |dev| {
         let vulkan_device = dev.as_any().downcast_ref::<device::Device>().unwrap();
 
-        run_simulation(vulkan_device, &mut scene, 2.0, true);
+        let ps = run_simulation(vulkan_device, &mut scene, 0.6, true);
 
         // Verify
         let v_macro = scene.with_component(obj_macro, |k: &KinematicComponent| k.velocity).unwrap();
@@ -527,6 +541,20 @@ mod tests {
           v_micro.x() > 0.0,
           "Micro object should have bounced back (+X)"
         );
+
+        // Verify collision events
+        println!("RECENT COLLISIONS LEN: {}", ps.recent_collisions.len()); 
+        for c in &ps.recent_collisions {
+            println!("Collision: {} vs {}", c.entity_a_name, c.entity_b_name);
+        }
+        assert!(!ps.recent_collisions.is_empty(), "Expected at least one collision event");
+        let coll = ps.recent_collisions.iter().find(|c| 
+            (c.entity_a_name == "ObjMacro" && c.entity_b_name == "ObjMicro") ||
+            (c.entity_a_name == "ObjMicro" && c.entity_b_name == "ObjMacro")
+        ).expect(&alloc::format!("Expected LCA collision between ObjMacro and ObjMicro, got: {:?}", ps.recent_collisions));
+        
+        assert!(coll.penetration_depth > 0.0, "Penetration depth should be positive");
+        assert_ne!(coll.frame_id, 0, "LCA Collision should happen in the microframe");
 
         crate::types::GpuResult::Ok(())
       })
@@ -645,7 +673,7 @@ mod tests {
       .with_device(ctx.device_handle, |dev| {
         let vulkan_device = dev.as_any().downcast_ref::<device::Device>().unwrap();
 
-        run_simulation(vulkan_device, &mut scene, 2.0, false);
+        let ps = run_simulation(vulkan_device, &mut scene, 2.0, false);
 
         // Verify
         let v_macro = scene.with_component(obj_macro, |k: &KinematicComponent| k.velocity).unwrap();
@@ -659,6 +687,7 @@ mod tests {
           v_micro.x() < 0.0,
           "Micro object should have kept moving (-X)"
         );
+        assert!(ps.recent_collisions.is_empty(), "Expected no collisions");
 
         crate::types::GpuResult::Ok(())
       })

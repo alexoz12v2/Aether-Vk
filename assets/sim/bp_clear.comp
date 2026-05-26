@@ -19,6 +19,8 @@
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_debug_printf : enable
+#define DEBUG_SHADERS 1
 
 #include "../debug_utils.glsl"
 #include "../bvh_utils.glsl"
@@ -41,4 +43,8 @@ void main() {
     pc.out_rb_lca.count      = 0u;
     pc.internal_pairs.count  = 0u;
     pc.out_sparse.count      = 0u;
+
+#ifdef DEBUG_SHADERS
+    debugPrintfEXT("bp_clear ran! zeroes applied!");
+#endif
 }

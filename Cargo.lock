@@ -115,6 +115,7 @@ dependencies = [
  "image",
  "itertools 0.14.0",
  "ktx2",
+ "lazy_static",
  "libc",
  "ntest",
  "objc",
@@ -4626,6 +4627,10 @@ dependencies = [
  "test_utils",
  "winit",
 ]
+
+[[package]]
+name = "test_slotmap"
+version = "0.1.0"
 
 [[package]]
 name = "test_ui"

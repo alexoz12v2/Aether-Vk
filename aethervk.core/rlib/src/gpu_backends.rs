@@ -207,11 +207,12 @@ where
   // address previously used as tlas_bvh_addr in bp_scene / bp_particle_self.
   let dt_s = (t1 - t0) as f32 / 1_000_000.0;
   use crate::physics::tlas_builder::build_scene_motion_tlas;
-  let tlas_bytes = match kernels.subgroup_size().map(|s| s as u32).unwrap_or(32) {
+  let (tlas_bytes, tlas_root_idx) = match kernels.subgroup_size().map(|s| s as u32).unwrap_or(32) {
     64 => build_scene_motion_tlas::<64>(physical_scene),
     16 => build_scene_motion_tlas::<16>(physical_scene),
     _ => build_scene_motion_tlas::<32>(physical_scene),
   };
+  aethervk_oshal_rlib::log!("tlas_bytes len: {}, tlas_root_idx: {}", tlas_bytes.len(), tlas_root_idx);
   let motion_tlas = AutoDiscard::new(kernels.upload_motion_tlas(&mut cmd, &tlas_bytes)?, |b| {
     kernels.discard_tlas(b)
   });
@@ -383,7 +384,7 @@ where
         tlas_bvh_addr,
         query_leaves.address(),
         raw_pairs.address(),
-        0, // TLAS root index
+        tlas_root_idx,
         n_entities,
       )?;
       kernels.bp_classify(
@@ -409,10 +410,10 @@ where
           rb_rb_pairs.address(),
           rb_ps_pairs.address(),
           0, // out_ps_ps
-          sparse_collisions.address(),
           internal_pairs.address(),
           rb_lca_pairs.capacity() as u32,
           2_000,
+          rigid_bodies.capacity() as u32,
         )?;
       }
       // Particle self-collision via Hookean spring forces
@@ -446,7 +447,7 @@ where
       );
 
       let tc_buffer = AutoDiscard::new(
-        kernels.find_earliest_collision(&mut cmd, &compacted)?,
+        kernels.find_earliest_collision(&mut cmd, &compacted, time_collision_delta as f32 / 1_000_000.0)?,
         |b| kernels.discard_buffer(b),
       );
       let tc_future = (*tc_buffer).enqueue_read_to_cpu(&mut cmd)?;
@@ -466,50 +467,66 @@ where
          if let Some(read_sync) = read_cmd.submit()? {
            kernels.wait_sync(&read_sync)?;
            if let (Ok(cmp_host), Ok(rb_host), Ok(frames_host), Ok(cross_host)) = (cmp_fut.wait(), rb_fut.wait(), frames_fut.wait(), cross_fut.wait()) {
-               let compacted_count = cmp_host[0].b.primitive_index as usize;
+               let compacted_count = cmp_host.len();
                let cross_count = cross_host.len();
                aethervk_oshal_rlib::log!("READBACK: compacted_count={}, cross_count={}", compacted_count, cross_count);
                if compacted_count > 0 {
-                 let mut out = alloc::string::String::new();
-                 out.push_str(&alloc::format!("--- NEW COLLISION STEP (Iter: {}, Count: {}) ---\n", collision_iters, compacted_count));
-                 let pairs_ptr = unsafe { (cmp_host.as_ptr() as *const u8).add(16) as *const crate::gpu::CollisionPair };
                  for i in 0..compacted_count {
-                   let pair = unsafe { &*pairs_ptr.add(i) };
+                   let pair = &cmp_host[i];
                    let id_a = pair.a.entity_id;
                    let prim_a = pair.a.primitive_index;
                    let id_b = pair.b.entity_id;
                    let prim_b = pair.b.primitive_index;
 
-                   let is_lca = prim_a == prim_b && id_a != id_b;
-                   let lca_id = if is_lca { Some(prim_a) } else { None };
+                   aethervk_oshal_rlib::log!("RAW PAIR: id_a={}, id_b={}, prim_a={}, prim_b={}, toi={}", id_a, id_b, prim_a, prim_b, pair.time_of_impact);
 
-                   out.push_str(&alloc::format!("Pair {}:\n", i + 1));
-                   
-                   let mut type_a = 0;
-                   let mut type_b = 0;
-                   if let (Some(b_a), Some(b_b)) = (rb_host.get(id_a as usize), rb_host.get(id_b as usize)) {
-                     type_a = b_a.shape_type;
-                     type_b = b_b.shape_type;
-                   }
-                   
-                   out.push_str(&alloc::format!("  Entity A: {} (Prim: {}, Type: {})\n", id_a, prim_a, type_a));
-                   out.push_str(&alloc::format!("  Entity B: {} (Prim: {}, Type: {})\n", id_b, prim_b, type_b));
-                   out.push_str(&alloc::format!("  TOI: {:.4}\n", pair.time_of_impact));
-                   out.push_str(&alloc::format!("  Contact Normal: {:?}\n", pair.contact_normal));
-                   out.push_str(&alloc::format!("  Contact Point: {:?}\n", pair.contact_point));
-                   out.push_str(&alloc::format!("  Penetration Depth: {:.6}\n", pair.penetration_depth));
+                   let is_lca = pair.is_lca != 0;
+                   let lca_id = if is_lca { Some(pair.lca_id) } else { None };
 
-                   if let Some(lca) = lca_id {
-                       out.push_str(&alloc::format!("  Cross LCA detected! LCA Frame ID: {}\n", lca));
-                       if let Some(f) = frames_host.get(lca as usize) {
-                           out.push_str(&alloc::format!("    Transform (Center Pos): {:?}\n", f.center_pos));
-                           out.push_str(&alloc::format!("    Scale: {}\n", f.scale));
-                           out.push_str(&alloc::format!("    Extent in macro: {:?}\n", f.scale)); // Just logging scale as extent
-                       }
-                   }
-                   out.push_str("\n");
+                    let mut body_entity_map = alloc::vec::Vec::new();
+                    scene.query2_without::<crate::scene::TransformComponent, crate::scene::ColliderComponent, crate::scene::particles::ParticleSystemComponent, _>(|entity, _, _| {
+                        body_entity_map.push(entity);
+                    });
+
+                    let mut name_a = alloc::string::String::new();
+                    // pair.a.entity_id is a dense GPU body index; map to slotmap FFI key
+                    if let Some(&entity_a) = body_entity_map.get(id_a as usize) {
+                        use slotmap::Key;
+                        let ffi_a = entity_a.data().as_ffi() as u64;
+                        if let Some(n) = scene.get_name(crate::scene::EntityId::from(slotmap::KeyData::from_ffi(ffi_a))) {
+                            name_a = n;
+                        }
+                    }
+                    if name_a.is_empty() {
+                        name_a = alloc::format!("Entity_{}", id_a);
+                    }
+
+                    let mut name_b = alloc::string::String::new();
+                    if let Some(&entity_b) = body_entity_map.get(id_b as usize) {
+                        use slotmap::Key;
+                        let ffi_b = entity_b.data().as_ffi() as u64;
+                        if let Some(n) = scene.get_name(crate::scene::EntityId::from(slotmap::KeyData::from_ffi(ffi_b))) {
+                            name_b = n;
+                        }
+                    }
+                    if name_b.is_empty() {
+                        name_b = alloc::format!("Entity_{}", id_b);
+                    }
+
+                   physical_scene.recent_collisions.push(crate::physics::physics_scene::CollisionEvent {
+                     entity_a_id: id_a,
+                     entity_a_name: name_a,
+                     entity_b_id: id_b,
+                     entity_b_name: name_b,
+                     contact_point: pair.contact_point,
+                     contact_normal: pair.contact_normal,
+                     penetration_depth: pair.penetration_depth,
+                     frame_id: lca_id.unwrap_or(0),
+                     is_lca,
+                     particle_path_a: None,
+                     particle_path_b: None,
+                   });
                  }
-                 std::fs::write("/tmp/collisions_log.txt", out).unwrap();
                }
            }
          }
@@ -568,6 +585,7 @@ where
           &mut rigid_bodies,
           &mut particles,
           &compacted,
+          frames.address(),
           inelastic,
         )?;
 
