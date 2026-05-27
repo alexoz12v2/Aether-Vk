@@ -245,6 +245,7 @@ impl SimulationContext {
         entity_id,
         CameraComponent {
           projection: params.into(),
+          focus_distance: 1.0,
         },
       )
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
@@ -268,6 +269,7 @@ impl SimulationContext {
       .with_component_mut(entity_id, |c: &mut CameraComponent| {
         *c = CameraComponent {
           projection: params.into(),
+          focus_distance: 1.0,
         };
       })
       .ok_or(EngineError::InvalidOperation(
@@ -576,7 +578,7 @@ impl SimulationContext {
           let dir_y = c.latitude_rad.cos() * c.longitude_rad.sin();
           let ray_dir = Vec3f32::from_components(dir_x, dir_y, dir_z).normalize();
 
-          let ray_orig = if let Some(t) = lock.scene.global_transform(entity_id) {
+          let ray_orig = if let Some(t) = { #[allow(deprecated)] lock.scene.global_transform(entity_id) } {
             Vec3f32::from_components(t.position[0], t.position[1], t.position[2])
           } else {
             Vec3f32::zero()
@@ -610,7 +612,7 @@ impl SimulationContext {
           let dir_y = c.latitude_rad.cos() * c.longitude_rad.sin();
           let ray_dir = Vec3f32::from_components(dir_x, dir_y, dir_z).normalize();
 
-          let ray_orig = if let Some(t) = lock.scene.global_transform(entity_id) {
+          let ray_orig = if let Some(t) = { #[allow(deprecated)] lock.scene.global_transform(entity_id) } {
             Vec3f32::from_components(t.position[0], t.position[1], t.position[2])
           } else {
             Vec3f32::zero()

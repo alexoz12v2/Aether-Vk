@@ -24,10 +24,9 @@ pub trait SceneCameraExt {
   ) -> EngineResult<()>;
 
   /// yaw fmod to 2pi, while pitch clamped from -pi/2 to +pi/2
-  fn orbit_camera(
+  fn orbit_camera_focus(
     &self,
     camera_entity: EntityId,
-    center_entity: EntityId,
     delta_yaw: f32,
     delta_pitch: f32,
   ) -> EngineResult<()>;
@@ -35,11 +34,10 @@ pub trait SceneCameraExt {
   /// Translates the camera in its local space (x = right, y = backward, z = up)
   fn translate_camera_local(&self, camera_entity: EntityId, delta: Vec3f32) -> EngineResult<()>;
 
-  /// Pans both the camera and the cursor (pivot) along the camera's local X and Y axes
-  fn pan_camera_and_cursor(
+  /// Pans the camera implicitly moving its invisible focus pivot
+  fn pan_camera_focus(
     &self,
     camera_entity: EntityId,
-    cursor_entity: EntityId,
     delta_x: f32,
     delta_y: f32,
   ) -> EngineResult<()>;
@@ -64,57 +62,39 @@ impl SceneCameraExt for Scene {
       ))
   }
 
-  fn orbit_camera(
+  fn orbit_camera_focus(
     &self,
     camera_entity: EntityId,
-    center_entity: EntityId,
     delta_yaw: f32,
     delta_pitch: f32,
   ) -> EngineResult<()> {
     check_for_camera(&self, camera_entity)?;
 
-    let center_pos = self
-      .with_component(center_entity, |t: &TransformComponent| t.position)
-      .ok_or(EngineError::InvalidOperation(
-        "[SceneCameraExt] orbit_camera: center entity transform not found",
-      ))?;
+    let focus_dist = self
+      .with_component(camera_entity, |c: &CameraComponent| c.focus_distance)
+      .unwrap_or(10.0);
 
     self
       .with_component_mut(camera_entity, |t: &mut TransformComponent| {
-        let offset_vec = t.position - center_pos;
-        let distance;
-        let mut current_pitch;
-        let mut current_yaw;
+        // Find the invisible pivot
+        let forward = t.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
+        let center_pos = t.position + forward * focus_dist;
 
-        if offset_vec.length_squared() > 0.001 {
-          distance = offset_vec.length();
-          let fwd = -(offset_vec / distance);
-          let pitch_clamped = fwd.z().clamp(-1.0, 1.0);
-          current_pitch = <f32 as aethervk_oshal_rlib::math::FloatLike>::asin(pitch_clamped);
-          current_yaw = <f32 as aethervk_oshal_rlib::math::FloatLike>::atan2(fwd.x(), -fwd.y());
-        } else {
-          distance = 0.1_f32;
-          let (p, y) = t.rotation.to_pitch_yaw();
-          current_pitch = p;
-          current_yaw = y;
-        }
-
-        let mut p = current_pitch + delta_pitch;
-        let mut y = current_yaw + delta_yaw;
-        p = p.clamp(-<f32 as FloatOps>::PI_OVER_2, <f32 as FloatOps>::PI_OVER_2);
-        y = y.fmod(<f32 as FloatOps>::PI * 2.0);
+        let (mut p, mut y) = t.rotation.to_pitch_yaw();
+        p = (p + delta_pitch).clamp(-<f32 as FloatOps>::PI_OVER_2, <f32 as FloatOps>::PI_OVER_2);
+        y = (y + delta_yaw).fmod(<f32 as FloatOps>::PI * 2.0);
 
         let q = Quat::from_pitch_and_yaw_radians(p, y);
 
         // Offset starts at world North (+Y)
         // Camera Forward is -Y, so placing it at +Y distance means it looks at origin
-        let new_offset = q.rotate_vector(Vec3f32::from_components(0.0, distance, 0.0));
+        let new_offset = q.rotate_vector(Vec3f32::from_components(0.0, focus_dist, 0.0));
 
         t.position = center_pos + new_offset;
         t.rotation = q;
       })
       .ok_or(EngineError::InvalidOperation(
-        "[SceneCameraExt] orbit_camera: camera entity not found",
+        "[SceneCameraExt] orbit_camera_focus: camera entity not found",
       ))
   }
 
@@ -139,40 +119,31 @@ impl SceneCameraExt for Scene {
       ))
   }
 
-  fn pan_camera_and_cursor(
+  fn pan_camera_focus(
     &self,
     camera_entity: EntityId,
-    cursor_entity: EntityId,
     delta_x: f32,
     delta_y: f32,
   ) -> EngineResult<()> {
     check_for_camera(&self, camera_entity)?;
 
-    let cursor_pos = self
-      .with_component(cursor_entity, |t: &TransformComponent| t.position)
-      .ok_or(EngineError::InvalidOperation(
-        "[SceneCameraExt] pan_camera_and_cursor: cursor entity not found",
-      ))?;
+    let focus_dist = self
+      .with_component(camera_entity, |c: &CameraComponent| c.focus_distance)
+      .unwrap_or(10.0);
 
     let translation = self
-      .with_component(camera_entity, |c: &TransformComponent| {
-        let offset = c.position - cursor_pos;
-        let dist = offset.length().max(0.1);
-        let pan_speed = dist * 0.002;
-        let right = c.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
-        let up = c.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
+      .with_component(camera_entity, |t: &TransformComponent| {
+        let pan_speed = focus_dist.max(0.1) * 0.002;
+        let right = t.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
+        let up = t.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
         right * (-delta_x * pan_speed) + up * (delta_y * pan_speed)
       })
       .ok_or(EngineError::InvalidOperation(
-        "[SceneCameraExt] pan_camera_and_cursor: camera entity not found",
+        "[SceneCameraExt] pan_camera_focus: camera entity not found",
       ))?;
 
-    let _ = self.with_component_mut(camera_entity, |c: &mut TransformComponent| {
-      c.position = c.position + translation;
-    });
-
-    let _ = self.with_component_mut(cursor_entity, |c: &mut TransformComponent| {
-      c.position = c.position + translation;
+    let _ = self.with_component_mut(camera_entity, |t: &mut TransformComponent| {
+      t.position = t.position + translation;
     });
 
     Ok(())

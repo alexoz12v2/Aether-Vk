@@ -530,6 +530,122 @@ pub unsafe extern "C" fn avkSimulationContext_spawnTrajectory(
   }
 }
 
+/// Spawns a Keplerian ellipse trajectory entity from raw osculating orbital elements,
+/// building the 4-segment rational cubic Bézier approximation internally.
+///
+/// Parameters:
+///   a_au        – semi-major axis in AU
+///   e           – eccentricity (must be < 1 for an ellipse)
+///   i_deg       – inclination in degrees
+///   omega_deg   – longitude of ascending node Ω in degrees
+///   argperi_deg – argument of periapsis ω in degrees
+///   r, g, b, a  – trajectory line colour (0–1)
+///   line_width  – line width in pixels
+///
+/// Returns the external entity id, or 0 on failure.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_spawnTrajectoryFromElements(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  parent_entity: u64,
+  name: *const c_char,
+  a_au: f64,
+  e: f64,
+  i_deg: f64,
+  omega_deg: f64,
+  argperi_deg: f64,
+  col_r: f32,
+  col_g: f32,
+  col_b: f32,
+  col_a: f32,
+  line_width: f32,
+) -> u64 {
+  if ctx.is_null() || name.is_null() || e >= 1.0 || a_au <= 0.0 {
+    return 0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let name_str = unsafe { CStr::from_ptr(name).to_str().unwrap_or("orbit") };
+
+  // ── Keplerian ellipse → 4-segment rational cubic Bézier ──────────────────
+  // Standard NURBS-circle approximation adapted for an ellipse.
+  const PI: f64 = core::f64::consts::PI;
+
+  let a  = a_au;
+  let b  = a * (1.0_f64 - e * e).max(0.0).sqrt();
+  let c  = a * e;  // focus offset (shift ellipse so focus is at origin)
+
+  // Bézier weight for the middle control points of a 90° conic arc
+  let w_inner: f64 = (1.0 + 2.0_f64.sqrt()) / 3.0;
+  let k:       f64 = 2.0 - 2.0_f64.sqrt();
+
+  // 4 quadrant arcs (perifocal frame, focus at origin via -c shift)
+  //   Each arc: [CP0, CP1, CP2, CP3] where CP = [x, y, weight]
+  let quads: [[[f64; 3]; 4]; 4] = [
+    [[ a, 0.0, 1.0], [ a, b*k, w_inner], [ a*k, b, w_inner], [0.0, b, 1.0]],
+    [[0.0, b, 1.0], [-a*k, b, w_inner], [-a, b*k, w_inner], [-a, 0.0, 1.0]],
+    [[-a, 0.0, 1.0], [-a, -b*k, w_inner], [-a*k, -b, w_inner], [0.0, -b, 1.0]],
+    [[0.0, -b, 1.0], [ a*k, -b, w_inner], [ a, -b*k, w_inner], [ a, 0.0, 1.0]],
+  ];
+
+  let i   = i_deg   * PI / 180.0;
+  let Om  = omega_deg   * PI / 180.0;
+  let w   = argperi_deg * PI / 180.0;
+
+  let cos_Om = Om.cos(); let sin_Om = Om.sin();
+  let cos_i  = i.cos();  let sin_i  = i.sin();
+  let cos_w  = w.cos();  let sin_w  = w.sin();
+
+  // Rotation matrix rows (perifocal → ecliptic J2000)
+  let rxx =  cos_Om * cos_w - sin_Om * sin_w * cos_i;
+  let rxy = -cos_Om * sin_w - sin_Om * cos_w * cos_i;
+  let ryx =  sin_Om * cos_w + cos_Om * sin_w * cos_i;
+  let ryy = -sin_Om * sin_w + cos_Om * cos_w * cos_i;
+  let rzx =  sin_w * sin_i;
+  let rzy =  cos_w * sin_i;
+
+  let mut segs: [aethervk_core_rlib::gpu::RationalBezierGpu; 4] = [
+    aethervk_core_rlib::gpu::RationalBezierGpu { cp0: [0.0; 4], cp1: [0.0; 4], cp2: [0.0; 4], cp3: [0.0; 4] };
+    4
+  ];
+
+  for (qi, quad) in quads.iter().enumerate() {
+    let cps = [
+      &mut segs[qi].cp0,
+      &mut segs[qi].cp1,
+      &mut segs[qi].cp2,
+      &mut segs[qi].cp3,
+    ];
+    for (pi, cp) in cps.into_iter().enumerate() {
+      let xp = quad[pi][0] - c;  // shift: focus at origin
+      let yp = quad[pi][1];
+      let wt = quad[pi][2] as f32;
+
+      // Rotate to ecliptic, then pre-multiply by weight (homogeneous form)
+      let xe = (rxx * xp + rxy * yp) as f32 * wt;
+      let ye = (ryx * xp + ryy * yp) as f32 * wt;
+      let ze = (rzx * xp + rzy * yp) as f32 * wt;
+
+      *cp = [xe, ye, ze, wt];
+    }
+  }
+
+  let traj = aethervk_core_rlib::gpu::TrajectoryGpu {
+    segments_ptr: 0,
+    color: [col_r, col_g, col_b, col_a],
+    line_width,
+    texture_id: 0xFFFF_FFFF,
+  };
+
+  match ctx_ref.spawn_trajectory_internal(scene_id, parent_entity, name_str, traj, &segs) {
+    Ok(entity_id) => entity_id,
+    Err(e) => {
+      oshal::log!("avkSimulationContext_spawnTrajectoryFromElements failed: {:?}", e);
+      0
+    }
+  }
+}
+
 // --- Components ---
 
 #[unsafe(no_mangle)]
@@ -910,6 +1026,82 @@ pub unsafe extern "C" fn avkSimulationContext_setSphereGizmoVisibility(
   }
   false
 }
+
+/// Patches the `naif_id` field of an `AlmanacPlanet` component on a Kinematic comet entity
+/// after spawn. At spawn time `naif_id` is set to 0 (placeholder); this function injects
+/// the real SPK/NAIF id so the logic thread can query the almanac correctly each tick.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setAlmanacPlanetNaifId(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+  naif_id: i32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  if let Some(scenes) = ctx_ref.scenes.try_write() {
+    if let Some(scene_ctx_lock) = scenes.scenes.get(&scene_id) {
+      let mut scene_ctx = scene_ctx_lock.write();
+      if let Some(internal_id) = scene_ctx.entity_map.get(&entity_id).copied() {
+        let mut found = false;
+        let _ = scene_ctx.scene.with_component_mut(
+          internal_id,
+          |planet: &mut aethervk_core_rlib::scene::AlmanacPlanet| {
+            planet.naif_id = naif_id;
+            found = true;
+          },
+        );
+        return found;
+      }
+    }
+  }
+  false
+}
+
+/// Sets the initial velocity (km/s in ecliptic J2000) on a Dynamic comet entity's
+/// `KinematicComponent`. Must be called after `avkSimulationContext_spawnComet` when
+/// `physics_type = 2` (Dynamic) to inject the vis-viva derived velocity.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setKinematicVelocity(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+  vx_km_s: f32,
+  vy_km_s: f32,
+  vz_km_s: f32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  // Convert km/s to simulation units (AU/s): 1 km/s = 1 / 149597870.7 AU/s
+  const KM_PER_AU: f32 = 149_597_870.7_f32;
+  let vx = vx_km_s / KM_PER_AU;
+  let vy = vy_km_s / KM_PER_AU;
+  let vz = vz_km_s / KM_PER_AU;
+  if let Some(scenes) = ctx_ref.scenes.try_write() {
+    if let Some(scene_ctx_lock) = scenes.scenes.get(&scene_id) {
+      let mut scene_ctx = scene_ctx_lock.write();
+      if let Some(internal_id) = scene_ctx.entity_map.get(&entity_id).copied() {
+        let mut found = false;
+        let _ = scene_ctx.scene.with_component_mut(
+          internal_id,
+          |kin: &mut aethervk_core_rlib::scene::KinematicComponent| {
+            kin.velocity = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(vx, vy, vz);
+            found = true;
+          },
+        );
+        return found;
+      }
+    }
+  }
+  false
+}
+
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -2254,7 +2446,18 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraComponent(
       far_plane: c.far,
     })
   };
-  ctx_ref.set_camera_component(scene_id, entity, params).is_ok()
+  let _ = ctx_ref.set_camera_component(scene_id, entity, params);
+  
+  if let Some(s) = ctx_ref.get_scene(scene_id) {
+    if let Some(e) = s.read().get_entity(entity) {
+      let mut scene_write = s.write();
+      let _ = scene_write.scene.with_component_mut(e, |comp: &mut aethervk_core_rlib::scene::CameraComponent| {
+        comp.focus_distance = c.focus_distance;
+      });
+    }
+  }
+  
+  true
 }
 
 #[unsafe(no_mangle)]
@@ -2271,12 +2474,6 @@ pub unsafe extern "C" fn avkSimulationContext_getCameraComponent(
   let ctx_ref = unsafe { &*ctx };
   if let Ok(params) = ctx_ref.get_camera_component(scene_id, entity) {
     let mut arr = [0.0; 16];
-    // We can also retrieve the projection matrix separately if needed
-    // However, we just need to return the struct for now.
-    // Wait, let's actually just get the projection matrix manually via `get_projection_matrix()` if needed.
-    // I can get the matrix using `with_component` here or just return an empty array if not requested.
-    // Actually, `get_camera_component` returns `CameraParams`. The projection matrix is generated dynamically by the component.
-    // To include the projection matrix we should probably query it. Let's do that.
 
     let _ = ctx_ref.get_scene(scene_id).map(|s| {
       if let Some(e) = s.read().get_entity(entity) {
@@ -2299,23 +2496,35 @@ pub unsafe extern "C" fn avkSimulationContext_getCameraComponent(
           ortho_right: 0.0,
           ortho_bottom: 0.0,
           ortho_top: 0.0,
+          focus_distance: 10.0,
           proj: arr,
         },
         CameraParams::Orthographic(o) => FfiCamera {
           is_orthographic: true,
-          fov: 45.0,   // Default or ignored
-          aspect: 1.0, // Default or ignored
+          fov: 45.0,   
+          aspect: 1.0, 
           near: o.near,
           far: o.far,
           ortho_left: o.left,
           ortho_right: o.right,
           ortho_bottom: o.bottom,
           ortho_top: o.top,
+          focus_distance: 10.0,
           proj: arr,
         },
       };
+
+      // Update focus distance dynamically
+      let _ = ctx_ref.get_scene(scene_id).map(|s| {
+        if let Some(e) = s.read().get_entity(entity) {
+          let _ = s.read().scene.with_component(e, |c: &aethervk_core_rlib::scene::CameraComponent| {
+            (*out_camera).focus_distance = c.focus_distance;
+          });
+        }
+      });
+      
+      true
     }
-    true
   } else {
     false
   }
@@ -2511,6 +2720,7 @@ pub struct FfiCamera {
   pub ortho_right: f32,
   pub ortho_bottom: f32,
   pub ortho_top: f32,
+  pub focus_distance: f32,
   pub proj: [f32; 16],
 }
 

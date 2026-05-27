@@ -96,7 +96,7 @@ public class SpawnCometFlowE2ETests
     var renderTaskId = await Task.WhenAny(tcsFrame.Task, Task.Delay(5000));
     
     Assert.True(tcsFrame.Task.IsCompleted, "Render frame should be produced");
-    ulong generation = tcsFrame.Task.Result;
+    ulong generation = await tcsFrame.Task;
     
     // Download image
     nuint bufferSize = (nuint)(512 * 512 * 4);

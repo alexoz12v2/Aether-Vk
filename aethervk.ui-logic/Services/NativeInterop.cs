@@ -260,6 +260,7 @@ public static class NativeInterop
     public float OrthoRight;
     public float OrthoBottom;
     public float OrthoTop;
+    public float FocusDistance;
 
     public float Proj00, Proj01, Proj02, Proj03;
     public float Proj10, Proj11, Proj12, Proj13;
@@ -429,6 +430,37 @@ public static class NativeInterop
     double sampleStepDays
   );
 
+  /// <summary>
+  /// Patches the naif_id field of the AlmanacPlanet component on a Kinematic comet entity.
+  /// Call after SpawnComet (physics_type=1) to wire in the real SPK/NAIF id.
+  /// Returns true when the component was found and updated.
+  /// </summary>
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_setAlmanacPlanetNaifId(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId,
+    int naifId
+  );
+
+  /// <summary>
+  /// Sets the initial velocity (km/s in ecliptic J2000) on a Dynamic comet entity.
+  /// Call after SpawnComet (physics_type=2) before starting the simulation.
+  /// Rust converts km/s → AU/s internally.
+  /// Returns true when KinematicComponent was found and updated.
+  /// </summary>
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_setKinematicVelocity(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId,
+    float vxKmS,
+    float vyKmS,
+    float vzKmS
+  );
+
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_importModel(IntPtr ctx, string path);
 
@@ -494,6 +526,28 @@ public static class NativeInterop
     ref AetherVk.Logic.Models.TrajectoryGpu trajectory,
     [In] AetherVk.Logic.Models.RationalBezierGpu[] segments,
     uint segmentCount
+  );
+
+  /// <summary>
+  /// Spawns a Keplerian ellipse trajectory from raw orbital elements.
+  /// All Bézier math (4-segment rational cubic approximation) is performed in Rust.
+  /// <para>a_au: semi-major axis in AU; e: eccentricity (&lt;1 for ellipse);
+  /// i/omega/argPeri in degrees; colour (0–1); lineWidth in pixels.</para>
+  /// Returns the external entity id, or 0 on failure.
+  /// </summary>
+  [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
+  public static extern ulong avkSimulationContext_spawnTrajectoryFromElements(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong parentEntity,
+    string name,
+    double aAu,
+    double e,
+    double iDeg,
+    double omegaDeg,
+    double argPeriDeg,
+    float colR, float colG, float colB, float colA,
+    float lineWidth
   );
 
   /// <summary>

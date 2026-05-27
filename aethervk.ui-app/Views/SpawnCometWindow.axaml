@@ -70,6 +70,73 @@
           <RadioButton Grid.Column="1" Content="Kinematic (WIP)" GroupName="Physics" IsEnabled="False" Margin="4" Classes="card" />
           <RadioButton Grid.Column="2" Content="Dynamic (WIP)" GroupName="Physics" IsEnabled="False" Margin="4" Classes="card" />
         </Grid>
+
+        <!-- Initial Transform: only for Static mode -->
+        <StackPanel Spacing="12" Margin="0,20,0,0" IsVisible="{Binding IsStaticMode}">
+          <TextBlock Text="Initial Transform (AU — Macro Frame)" FontWeight="Bold" FontSize="14" />
+
+          <Grid ColumnDefinitions="*, Auto, Auto" Margin="0,4,0,0">
+            <StackPanel Grid.Column="0" Spacing="12" Margin="0,0,16,0">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="Position" FontWeight="Bold" />
+                <Button Background="Transparent" Padding="0" BorderThickness="0" Cursor="Hand">
+                  <Button.Flyout>
+                    <Flyout>
+                      <TextBlock Text="Position is relative to the Sun, on the J2000 plane, in Astronomical Units (AU)." MaxWidth="250" TextWrapping="Wrap"/>
+                    </Flyout>
+                  </Button.Flyout>
+                  <PathIcon Data="M 12 2 C 6.48 2 2 6.48 2 12 C 2 17.52 6.48 22 12 22 C 17.52 22 22 17.52 22 12 C 22 6.48 17.52 2 12 2 Z M 13 17 L 11 17 L 11 11 L 13 11 L 13 17 Z M 13 9 L 11 9 L 11 7 L 13 7 L 13 9 Z" 
+                            Width="14" Height="14" Foreground="{DynamicResource Text.Secondary}" />
+                </Button>
+              </StackPanel>
+              <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
+                <TextBlock Grid.Column="0" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                <controls:UnboundedSlider Grid.Column="1" Value="{Binding PosX}" Margin="0,0,8,0"/>
+                <TextBlock Grid.Column="2" Text="Y:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                <controls:UnboundedSlider Grid.Column="3" Value="{Binding PosY}" Margin="0,0,8,0"/>
+                <TextBlock Grid.Column="4" Text="Z:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                <controls:UnboundedSlider Grid.Column="5" Value="{Binding PosZ}"/>
+              </Grid>
+
+              <TextBlock Text="Scale" FontWeight="Bold" Margin="0,4,0,0" />
+              <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
+                <TextBlock Grid.Column="0" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                <controls:UnboundedSlider Grid.Column="1" Value="{Binding ScaleX}" Margin="0,0,8,0"/>
+                <TextBlock Grid.Column="2" Text="Y:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                <controls:UnboundedSlider Grid.Column="3" Value="{Binding ScaleY}" Margin="0,0,8,0"/>
+                <TextBlock Grid.Column="4" Text="Z:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                <controls:UnboundedSlider Grid.Column="5" Value="{Binding ScaleZ}"/>
+              </Grid>
+
+              <TextBlock Text="Rotation (Degrees)" FontWeight="Bold" Margin="0,4,0,0" />
+              <Grid ColumnDefinitions="Auto, *">
+                <TextBlock Grid.Column="0" Text="Pitch (X):" VerticalAlignment="Center" Width="60" />
+                <Slider Grid.Column="1" Minimum="-180" Maximum="180" Value="{Binding Pitch}" Margin="8,0" />
+              </Grid>
+              <Grid ColumnDefinitions="Auto, *">
+                <TextBlock Grid.Column="0" Text="Yaw (Y):" VerticalAlignment="Center" Width="60" />
+                <Slider Grid.Column="1" Minimum="-180" Maximum="180" Value="{Binding Yaw}" Margin="8,0" />
+              </Grid>
+              <Grid ColumnDefinitions="Auto, *">
+                <TextBlock Grid.Column="0" Text="Roll (Z):" VerticalAlignment="Center" Width="60" />
+                <Slider Grid.Column="1" Minimum="-180" Maximum="180" Value="{Binding Roll}" Margin="8,0" />
+              </Grid>
+            </StackPanel>
+
+            <!-- Local Frames -->
+            <StackPanel Grid.Column="1" Spacing="8" Margin="12,0">
+              <TextBlock Text="User Local Frame" FontWeight="Bold" />
+              <TextBlock Text="{Binding UserLocalFrameString}" FontFamily="Consolas, Courier New, monospace" FontSize="12" />
+              <TextBlock Text="Sim Local Frame" FontWeight="Bold" Margin="0,8,0,0" />
+              <TextBlock Text="{Binding SimulationLocalFrameString}" FontFamily="Consolas, Courier New, monospace" FontSize="12" />
+            </StackPanel>
+
+            <!-- Gizmo -->
+            <Border Grid.Column="2" Width="150" Height="150" Background="{DynamicResource Bg.Outline}" CornerRadius="8" Padding="16" VerticalAlignment="Top">
+              <controls:RotationGizmo Pitch="{Binding Pitch, Mode=TwoWay}" Yaw="{Binding Yaw, Mode=TwoWay}" Roll="{Binding Roll, Mode=TwoWay}" />
+            </Border>
+          </Grid>
+        </StackPanel>
       </StackPanel>
 
       <!-- Step 3: Horizon Data -->
@@ -90,20 +157,20 @@
         </StackPanel>
         </StackPanel>
 
-        <!-- SPK Record Selection (visible once a comet is chosen) -->
+          <!-- SPK Record Selection visible once a comet is chosen -->
         <StackPanel Spacing="8" Margin="0,16,0,0"
                     IsVisible="{Binding SelectedComet, Converter={x:Static ObjectConverters.IsNotNull}}">
 
-          <Grid ColumnDefinitions="Auto, Auto, *" RowDefinitions="Auto, Auto">
-            <!-- Orbit Year for record window -->
-            <TextBlock Grid.Row="0" Grid.Column="0" Text="Reference Year:" VerticalAlignment="Center" Margin="0,0,8,0" />
-            <NumericUpDown Grid.Row="0" Grid.Column="1" Value="{Binding OrbitYear}" FormatString="0" Minimum="1900" Maximum="2100" Width="100" />
-            <!-- Fetch button -->
-            <Button Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
-                    Content="Fetch Historical Records"
+          <!-- Reference Year + Fetch: vertical stack to avoid overflow at 600 px -->
+          <StackPanel Spacing="8">
+            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+              <TextBlock Text="Reference Year:" VerticalAlignment="Center" />
+              <NumericUpDown Value="{Binding OrbitYear}" FormatString="0" Minimum="1900" Maximum="2100" Width="120" />
+            </StackPanel>
+            <Button Content="Fetch Historical Records"
                     Command="{Binding FetchSpkRecordsCommand}"
-                    Classes="accent" HorizontalAlignment="Left" Margin="0,8,0,0" />
-          </Grid>
+                    Classes="accent" HorizontalAlignment="Left" />
+          </StackPanel>
 
           <!-- Record List -->
           <ListBox ItemsSource="{Binding SpkRecordsData}"
@@ -123,9 +190,9 @@
           </ListBox>
         </StackPanel>
 
-        <!-- Nucleus &amp; Orbit Data (visible once a record is selected or body is Static) -->
+        <!-- Nucleus & Orbit Data (visible once a SPK record is selected) -->
         <StackPanel Spacing="16" Margin="0,16,0,0"
-                    IsVisible="{Binding SelectedComet, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    IsVisible="{Binding SelectedSpkRecord, Converter={x:Static ObjectConverters.IsNotNull}}">
           <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="8" Padding="16">
             <StackPanel Spacing="12">
               <TextBlock Text="Object Parameters" FontWeight="Bold" FontSize="14" />
@@ -160,7 +227,7 @@
               <Grid ColumnDefinitions="Auto, *, Auto, *" RowDefinitions="Auto, Auto" Margin="0,8,0,0"
                     IsVisible="{Binding FetchedOrbitData, Converter={x:Static ObjectConverters.IsNotNull}}">
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Semi-Major Axis:" FontWeight="SemiBold" Margin="0,0,8,4"/>
-                <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding FetchedOrbitData.SemiMajorAxis, StringFormat='{}{0:F4} km'}" Margin="0,0,16,4"/>
+                <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding FetchedOrbitData.SemiMajorAxisAu, StringFormat='{}{0:F4} AU'}" Margin="0,0,16,4"/>
                 <TextBlock Grid.Row="0" Grid.Column="2" Text="Eccentricity:" FontWeight="SemiBold" Margin="0,0,8,4"/>
                 <TextBlock Grid.Row="0" Grid.Column="3" Text="{Binding FetchedOrbitData.Eccentricity, StringFormat='{}{0:F6}'}" Margin="0,0,0,4"/>
                 <TextBlock Grid.Row="1" Grid.Column="0" Text="Inclination:" FontWeight="SemiBold" Margin="0,0,8,0"/>
@@ -175,77 +242,36 @@
         <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsFetchingHorizonData}" Height="4" Margin="0,10,0,0" />
       </StackPanel>
 
-      <!-- Step 4: Placement & Name -->
+      <!-- Step 4: Entity Name -->
       <StackPanel Classes="stepStack" IsVisible="{Binding IsStep4}">
-        <TextBlock Text="Step 4: Placement &amp; Entity Name" FontWeight="Bold" FontSize="16" />
+        <TextBlock Text="Step 4: Entity Name" FontWeight="Bold" FontSize="16" />
 
-        <StackPanel Spacing="8">
+        <StackPanel Spacing="8" Margin="0,12,0,0">
           <TextBlock Text="Entity Name" FontWeight="SemiBold" />
           <TextBox Text="{Binding EntityName}" Watermark="New Comet" />
         </StackPanel>
 
-        <Grid ColumnDefinitions="*, Auto, Auto" Margin="0,16,0,0">
-          <StackPanel Grid.Column="0" Spacing="12" Margin="0,0,16,0">
-            <StackPanel Orientation="Horizontal" Spacing="8">
-              <TextBlock Text="Position" FontWeight="Bold" />
-              <Button Background="Transparent" Padding="0" BorderThickness="0" Cursor="Hand" ToolTip.Tip="Click for info">
-                <Button.Flyout>
-                  <Flyout>
-                    <TextBlock Text="Position and scale are measured with respect to the Sun, on the J2000 plane, and in Astronomical Units (AU)." MaxWidth="250" TextWrapping="Wrap"/>
-                  </Flyout>
-                </Button.Flyout>
-                <PathIcon Data="M 12 2 C 6.48 2 2 6.48 2 12 C 2 17.52 6.48 22 12 22 C 17.52 22 22 17.52 22 12 C 22 6.48 17.52 2 12 2 Z M 13 17 L 11 17 L 11 11 L 13 11 L 13 17 Z M 13 9 L 11 9 L 11 7 L 13 7 L 13 9 Z" 
-                          Width="14" Height="14" Foreground="{DynamicResource Text.Secondary}" />
-              </Button>
-            </StackPanel>
-            <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
-                <TextBlock Grid.Column="0" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                <controls:UnboundedSlider Grid.Column="1" Value="{Binding PosX}" Margin="0,0,8,0"/>
-                <TextBlock Grid.Column="2" Text="Y:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                <controls:UnboundedSlider Grid.Column="3" Value="{Binding PosY}" Margin="0,0,8,0"/>
-                <TextBlock Grid.Column="4" Text="Z:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                <controls:UnboundedSlider Grid.Column="5" Value="{Binding PosZ}"/>
-            </Grid>
-
-            <TextBlock Text="Scale" FontWeight="Bold" Margin="0,8,0,0" />
-            <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
-                <TextBlock Grid.Column="0" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                <controls:UnboundedSlider Grid.Column="1" Value="{Binding ScaleX}" Margin="0,0,8,0"/>
-                <TextBlock Grid.Column="2" Text="Y:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                <controls:UnboundedSlider Grid.Column="3" Value="{Binding ScaleY}" Margin="0,0,8,0"/>
-                <TextBlock Grid.Column="4" Text="Z:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                <controls:UnboundedSlider Grid.Column="5" Value="{Binding ScaleZ}"/>
-            </Grid>
-
-            <TextBlock Text="Rotation (Degrees)" FontWeight="Bold" Margin="0,8,0,0" />
-            <Grid ColumnDefinitions="Auto, *">
-              <TextBlock Grid.Column="0" Text="Pitch (X):" VerticalAlignment="Center" Width="60" />
-              <Slider Grid.Column="1" Minimum="-180" Maximum="180" Value="{Binding Pitch}" Margin="8,0" />
-            </Grid>
-            <Grid ColumnDefinitions="Auto, *">
-              <TextBlock Grid.Column="0" Text="Yaw (Y):" VerticalAlignment="Center" Width="60" />
-              <Slider Grid.Column="1" Minimum="-180" Maximum="180" Value="{Binding Yaw}" Margin="8,0" />
-            </Grid>
-            <Grid ColumnDefinitions="Auto, *">
-              <TextBlock Grid.Column="0" Text="Roll (Z):" VerticalAlignment="Center" Width="60" />
-              <Slider Grid.Column="1" Minimum="-180" Maximum="180" Value="{Binding Roll}" Margin="8,0" />
-            </Grid>
+        <!-- Mass input — only shown for Dynamic when JPL doesn't supply GM -->
+        <StackPanel Spacing="8" Margin="0,20,0,0" IsVisible="{Binding ShowMassSlider}">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="Body Mass (kg)" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <Border Background="{DynamicResource Bg.Outline}" CornerRadius="4" Padding="6,2">
+              <TextBlock Text="Required for Dynamic simulation" FontSize="11" Foreground="{DynamicResource Text.Secondary}" />
+            </Border>
           </StackPanel>
-
-          <!-- Frames -->
-          <StackPanel Grid.Column="1" Spacing="8" Margin="16,0,0,0">
-            <TextBlock Text="User Local Frame" FontWeight="Bold" />
-            <TextBlock Text="{Binding UserLocalFrameString}" FontFamily="Consolas, Courier New, monospace" FontSize="12" />
-            
-            <TextBlock Text="Simulation Local Frame" FontWeight="Bold" Margin="0,8,0,0" />
-            <TextBlock Text="{Binding SimulationLocalFrameString}" FontFamily="Consolas, Courier New, monospace" FontSize="12" />
-          </StackPanel>
-
-          <!-- Gizmo -->
-          <Border Grid.Column="2" Width="150" Height="150" Background="{DynamicResource Bg.Outline}" CornerRadius="8" Padding="16" VerticalAlignment="Top">
-            <controls:RotationGizmo Pitch="{Binding Pitch, Mode=TwoWay}" Yaw="{Binding Yaw, Mode=TwoWay}" Roll="{Binding Roll, Mode=TwoWay}" />
-          </Border>
-        </Grid>
+          <TextBlock Text="JPL did not supply GM for this comet. The value below is estimated from nucleus radius + 600 kg/m³ density. Adjust if you have a better estimate."
+                     TextWrapping="Wrap" Foreground="{DynamicResource Text.Secondary}" FontSize="12" />
+          <Grid ColumnDefinitions="*, Auto">
+            <NumericUpDown Grid.Column="0"
+                           Value="{Binding DynamicMassKg}"
+                           Minimum="10000000000"
+                           Maximum="10000000000000000000000"
+                           Increment="1000000000000"
+                           FormatString="0.##E+0"
+                           ToolTip.Tip="Mass in kg. Range: 1×10¹⁰ kg (small fragments) to 1×10²² kg (large planetesimals)." />
+            <TextBlock Grid.Column="1" Text="kg" VerticalAlignment="Center" Margin="8,0,0,0" />
+          </Grid>
+        </StackPanel>
       </StackPanel>
       </Panel>
     </ScrollViewer>

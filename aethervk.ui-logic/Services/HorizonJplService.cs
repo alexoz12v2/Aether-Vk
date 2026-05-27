@@ -13,15 +13,34 @@ namespace AetherVk.Logic.Services;
 
 public class PlanetOrbitData
 {
-  public double SemiMajorAxis  { get; set; }
-  public double Eccentricity   { get; set; }
-  public double Inclination    { get; set; }
-  public double MeanAnomaly    { get; set; }
+  /// <summary>Semi-major axis in AU (converted from km at parse time).</summary>
+  public double SemiMajorAxisAu { get; set; }
+  public double Eccentricity    { get; set; }
+  public double Inclination     { get; set; }
+  public double MeanAnomaly     { get; set; }
   public double AscendingNodeLongitude { get; set; }
-  public double ArgumentOfPerifocus { get; set; }
-  public string RawConstants   { get; set; } = string.Empty;
-  public double CometRadiusKm  { get; set; } = 1.0;
-  public double MassKg         { get; set; } = 1e13;
+  public double ArgumentOfPerifocus    { get; set; }
+  public string RawConstants    { get; set; } = string.Empty;
+  public double CometRadiusKm   { get; set; } = 1.0;
+
+  /// <summary>
+  /// GM in km³/s² as returned by JPL (null / 0 when reported as 'n.a.').
+  /// </summary>
+  public double GmKm3s2 { get; set; }
+
+  /// <summary>
+  /// Mass in kg derived from GM, or null when GM is 'n.a.' and no fallback is used.
+  /// For Static / Kinematic this value is irrelevant (no gravitational emitter created).
+  /// For Dynamic mode the user must supply it via the mass slider when null.
+  /// </summary>
+  public double? MassKg { get; set; }
+
+  /// <summary>
+  /// Density-based mass estimate (kg) using a 600 kg/m³ average comet density.
+  /// Always populated when CometRadiusKm is known; used as the slider default for Dynamic.
+  /// </summary>
+  public double EstimatedMassKg =>
+    (4.0 / 3.0) * Math.PI * Math.Pow(CometRadiusKm * 1000.0, 3) * 600.0;
 }
 
 // ─────────────────────────────────────────────────────────────── Service
@@ -52,6 +71,9 @@ public class HorizonJplService
     _breadcrumb = breadcrumb;
     _storage   = storage;
   }
+
+  /// <summary>Returns the session-scoped file path where a downloaded SPK .bsp should be saved.</summary>
+  public string GetSpkSavePath(int naifId) => _storage.GetSessionPath($"spk_{naifId}.bsp");
 
   // ═══════════════════════════════════════════════════════════════════════════
   //  1. COMET LIST  (SBDB JSON — only place we use JSON, because it's clean)
@@ -133,17 +155,24 @@ public class HorizonJplService
     try
     {
       // DES= prefix causes Horizons to list all SPK records for the designation.
-      // The semicolon must be literal inside the single-quoted value; do NOT percent-encode it.
-      var start = Uri.EscapeDataString(startTime);
-      var stop  = Uri.EscapeDataString(stopTime);
+      // All parameter values must be URL-encoded (including the enclosing single-quotes),
+      // matching the same pattern used by FetchPlanetOrbitDataAsync and GetPlanetDataAsync.
+      var start = Uri.EscapeDataString($"'{startTime}'");
+      var stop  = Uri.EscapeDataString($"'{stopTime}'");
+      var cmd   = Uri.EscapeDataString($"'DES={pdes};'");
+      var cen   = Uri.EscapeDataString("'@10'");
+      var yes   = Uri.EscapeDataString("'YES'");
+      var no    = Uri.EscapeDataString("'NO'");
+      var spk   = Uri.EscapeDataString("'SPK'");
+      var step  = Uri.EscapeDataString("'1 d'");
 
       var url = $"{HorizonsBase}?format=text"
-              + $"&COMMAND='DES={pdes};'"
-              + $"&MAKE_EPHEM=YES&EPHEM_TYPE=SPK&OBJ_DATA=NO"
-              + $"&CENTER='@10'"
-              + $"&START_TIME='{start}'&STOP_TIME='{stop}'&STEP_SIZE='1d'";
+              + $"&COMMAND={cmd}"
+              + $"&MAKE_EPHEM={yes}&EPHEM_TYPE={spk}&OBJ_DATA={no}"
+              + $"&CENTER={cen}"
+              + $"&START_TIME={start}&STOP_TIME={stop}&STEP_SIZE={step}";
 
-      _console.Log($"[HorizonJpl] SPK Records: {url}");
+      _console.Log($"[HorizonJpl] SPK Records GET: {url}");
       using var resp = await _httpClient.GetAsync(url);
       if (!resp.IsSuccessStatusCode)
       {
@@ -369,9 +398,10 @@ public class HorizonJplService
 
       var epaBlock = text.Substring(soeIdx + 5, eoeIdx - (soeIdx + 5)).Trim();
 
+      const double KmPerAu2 = 149_597_870.7;
       return new PlanetOrbitData
       {
-        SemiMajorAxis = ParseValue(epaBlock, @"A\s*=\s*([^\s,]+)"),
+        SemiMajorAxisAu = ParseValue(epaBlock, @"(?<![A-Za-z])A\s*=\s*([^\s,]+)") / KmPerAu2,
         Eccentricity  = ParseValue(epaBlock, @"EC\s*=\s*([^\s,]+)"),
         Inclination   = ParseValue(epaBlock, @"IN\s*=\s*([^\s,]+)"),
         MeanAnomaly   = ParseValue(epaBlock, @"MA\s*=\s*([^\s,]+)"),
@@ -469,51 +499,51 @@ public class HorizonJplService
       int eoeIdx = epaText.IndexOf("$$EOE");
       if (soeIdx == -1 || eoeIdx <= soeIdx)
       {
-        throw new Exception($"Horizon API Error: $$SOE not found. EPA Text length: {epaText.Length}. Content: {epaText.Substring(0, Math.Min(200, epaText.Length))}");
+        _console.Log($"[HorizonJpl] GetPlanetData: $$SOE not found. EPA Text length: {epaText.Length}. Snippet:\n{epaText.Substring(0, Math.Min(400, epaText.Length))}");
+        await _breadcrumb.ShowMessageAsync("Horizon API", "No ephemeris data returned for this record. Try a different SPK record or date range.", status: 2);
+        return null;
       }
       var epaBlock = epaText.Substring(soeIdx + 5, eoeIdx - (soeIdx + 5)).Trim();
 
-      double a = ParseValue(epaBlock, @"A\s*=\s*([^\s,]+)");
-      double ec = ParseValue(epaBlock, @"EC\s*=\s*([^\s,]+)");
-      double in_ = ParseValue(epaBlock, @"IN\s*=\s*([^\s,]+)");
-      double ma = ParseValue(epaBlock, @"MA\s*=\s*([^\s,]+)");
-      double om = ParseValue(epaBlock, @"OM\s*=\s*([^\s,]+)");
-      double w = ParseValue(epaBlock, @"W\s*=\s*([^\s,]+)");
+      // ── EPA element parsing
+      // NOTE: The 'A' field shares the letter with MA/TA/AD — use a negative lookbehind
+      // so we never accidentally capture the A-suffix of another two-letter field name.
+      const double KmPerAu = 149_597_870.7;
+      double a_km = ParseValue(epaBlock, @"(?<![A-Za-z])A\s*=\s*([^\s,]+)");
+      double ec    = ParseValue(epaBlock, @"EC\s*=\s*([^\s,]+)");
+      double in_   = ParseValue(epaBlock, @"IN\s*=\s*([^\s,]+)");
+      double ma    = ParseValue(epaBlock, @"MA\s*=\s*([^\s,]+)");
+      double om    = ParseValue(epaBlock, @"OM\s*=\s*([^\s,]+)");
+      double w     = ParseValue(epaBlock, @"W\s*=\s*([^\s,]+)");
 
-      // Nucleus radius: try volumetric-equivalent radius first (R_vol, km),
-      // then the generic RAD field. Default to 1 km if absent.
+      // ── Physical constants
       double radiusKm = ParseValue(objDataText, @"R_vol\s*=\s*([^\s,+]+)");
       if (radiusKm <= 0.0)
         radiusKm = ParseValue(objDataText, @"RAD\s*=\s*([^\s,+]+)");
       if (radiusKm <= 0.0)
         radiusKm = 1.0;
 
-      double gm = ParseValue(objDataText, @"GM\s*=\s*([^\s,+]+)"); // in km^3/s^2 usually
-      double massKg = 1e13; // default
+      double gm = ParseValue(objDataText, @"GM\s*=\s*([^\s,+]+)"); // km³/s²
+      double? massKg = null;
       if (gm > 0.0)
       {
-        // G in km^3 / (kg s^2) = 6.6743e-20
-        massKg = gm / 6.6743e-20;
+        const double G_km3_per_kg_s2 = 6.6743e-20;
+        massKg = gm / G_km3_per_kg_s2;
       }
-      else
-      {
-        // Volume = 4/3 * pi * r^3 (in meters^3)
-        // Average comet density = 600 kg/m^3
-        double r_m = radiusKm * 1000.0;
-        massKg = (4.0 / 3.0) * Math.PI * r_m * r_m * r_m * 600.0;
-      }
+      // When GM is 'n.a.' MassKg stays null → Dynamic mode slider will request it.
 
       return new PlanetOrbitData
       {
-        SemiMajorAxis = a,
-        Eccentricity = ec,
-        Inclination = in_,
-        MeanAnomaly = ma,
+        SemiMajorAxisAu       = a_km / KmPerAu,   // convert km → AU for trajectory renderer
+        Eccentricity          = ec,
+        Inclination           = in_,
+        MeanAnomaly           = ma,
         AscendingNodeLongitude = om,
-        ArgumentOfPerifocus = w,
-        RawConstants = constantsBlock,
+        ArgumentOfPerifocus   = w,
+        RawConstants  = constantsBlock,
         CometRadiusKm = radiusKm,
-        MassKg = massKg,
+        GmKm3s2       = gm,
+        MassKg        = massKg,
       };
     }
     catch (Exception ex)

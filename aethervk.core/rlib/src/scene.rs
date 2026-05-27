@@ -292,6 +292,7 @@ impl Default for CameraProjection {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct CameraComponent {
   pub projection: CameraProjection,
+  pub focus_distance: f32,
 }
 
 #[repr(C)]
@@ -306,6 +307,7 @@ pub struct CameraDTO {
   pub ortho_right: f32,
   pub ortho_bottom: f32,
   pub ortho_top: f32,
+  pub focus_distance: f32,
 }
 
 impl ForeignSerializable for CameraComponent {
@@ -329,6 +331,7 @@ impl ForeignSerializable for CameraComponent {
         ortho_right: 0.0,
         ortho_bottom: 0.0,
         ortho_top: 0.0,
+        focus_distance: self.focus_distance,
       },
       CameraProjection::Orthographic {
         left,
@@ -347,11 +350,13 @@ impl ForeignSerializable for CameraComponent {
         ortho_right: right,
         ortho_bottom: bottom,
         ortho_top: top,
+        focus_distance: self.focus_distance,
       },
     }
   }
 
   fn apply_foreign(&mut self, data: &Self::ForeignData) {
+    self.focus_distance = data.focus_distance;
     if data.is_orthographic {
       self.projection = CameraProjection::Orthographic {
         left: data.ortho_left,
@@ -383,6 +388,7 @@ impl CameraComponent {
         near,
         far,
       },
+      focus_distance: 10.0,
     }
   }
 
@@ -396,6 +402,7 @@ impl CameraComponent {
         near,
         far,
       },
+      focus_distance: 10.0,
     }
   }
 

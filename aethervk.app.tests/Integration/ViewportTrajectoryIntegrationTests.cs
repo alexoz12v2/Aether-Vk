@@ -14,7 +14,7 @@ public class ViewportTrajectoryIntegrationTests : IRecipient<AetherVk.Logic.Mess
 {
     private ulong _latestRenderGeneration = 0;
 
-    public void Receive(AetherVk.Logic.Messages.RenderFrameReadyMessage message)
+    void IRecipient<AetherVk.Logic.Messages.RenderFrameReadyMessage>.Receive(AetherVk.Logic.Messages.RenderFrameReadyMessage message)
     {
         _latestRenderGeneration = message.RenderGeneration;
     }
@@ -97,7 +97,7 @@ public class ViewportTrajectoryIntegrationTests : IRecipient<AetherVk.Logic.Mess
         var trajEntityId = runtimeService.SpawnTrajectoryFromElements(
             sceneId,
             "Encke_Trajectory",
-            enckeData.SemiMajorAxis,
+            enckeData.SemiMajorAxisAu,
             enckeData.Eccentricity,
             enckeData.Inclination,
             enckeData.AscendingNodeLongitude,

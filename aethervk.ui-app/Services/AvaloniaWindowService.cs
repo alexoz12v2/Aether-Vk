@@ -228,40 +228,134 @@ namespace AetherVk.Services
         _           => 0,  // Static
       };
 
-      float massKg = (float)(result.OrbitData?.MassKg ?? 1e13);
+      // ── Determine spawn position ─────────────────────────────────────────────
+      float spawnPx = result.PosX, spawnPy = result.PosY, spawnPz = result.PosZ;
+      float spawnVx = 0f, spawnVy = 0f, spawnVz = 0f;
 
+      if (result.PhysicsType == "Dynamic" && result.OrbitData != null)
+      {
+        // Derive initial Cartesian state from EPA osculating elements.
+        bool ok = NativeRuntimeService.KeplerToCartesian(
+          result.OrbitData.SemiMajorAxisAu,
+          result.OrbitData.Eccentricity,
+          result.OrbitData.Inclination,
+          result.OrbitData.AscendingNodeLongitude,
+          result.OrbitData.ArgumentOfPerifocus,
+          result.OrbitData.MeanAnomaly,
+          out double kPx, out double kPy, out double kPz,
+          out double kVx, out double kVy, out double kVz
+        );
+        if (ok)
+        {
+          spawnPx = (float)kPx; spawnPy = (float)kPy; spawnPz = (float)kPz;
+          spawnVx = (float)kVx; spawnVy = (float)kVy; spawnVz = (float)kVz;
+          _consoleService.Log($"[Spawn] Dynamic initial pos=({spawnPx:F4},{spawnPy:F4},{spawnPz:F4}) AU, " +
+                              $"vel=({spawnVx:F4},{spawnVy:F4},{spawnVz:F4}) km/s");
+        }
+        else
+        {
+          _consoleService.Log("[Spawn] KeplerToCartesian failed (e>=1). Using zero position.");
+        }
+      }
+
+      // ── SpawnComet ───────────────────────────────────────────────────────────
       var (_, id) = _runtimeService.SpawnComet(
         sceneId:     1,
         modelId:     result.Model.Id,
-        name:  result.EntityName,
-        posX: result.PosX, posY: result.PosY, posZ: result.PosZ,
+        name:        result.EntityName,
+        posX: spawnPx, posY: spawnPy, posZ: spawnPz,
         rotW: result.RotW, rotX: result.RotX, rotY: result.RotY, rotZ: result.RotZ,
         radiusKm:    result.CometRadiusKm,
-        massKg:      massKg,
+        massKg:      result.MassKg,
         physicsType: physicsTypeIdx
       );
-      ulong meshId = id;
+      ulong cometId = id;
 
-      if (meshId > 0)
+      if (cometId > 0)
       {
-        _sceneStateManager.SetComet(1, meshId);
+        _sceneStateManager.SetComet(1, cometId);
+      }
+      else
+      {
+        await _breadcrumbService.ShowMessageAsync("Spawn Error", "SpawnComet returned entity id 0.", default, 3);
+        return 0;
       }
 
+      // ── Physics-mode post-spawn wiring ───────────────────────────────────────
+      if (result.PhysicsType == "Kinematic" && result.SpkNaifId != 0)
+      {
+        // 1. Download and load the .bsp ephemeris file from JPL Horizons.
+        _consoleService.Log($"[Spawn] Kinematic: downloading SPK {result.SpkNaifId}…");
+        var spkLoadMsg = _breadcrumbService.ShowLoadingMessage("Kinematic Setup", "Downloading SPK ephemeris…");
+        try
+        {
+          var savePath = _horizonService.GetSpkSavePath(result.SpkNaifId);
+          var startStr = DateTime.UtcNow.AddYears(-5).ToString("yyyy-MM-dd");
+          var stopStr  = DateTime.UtcNow.AddYears(+5).ToString("yyyy-MM-dd");
+
+          var spkPath = await _horizonService.DownloadSpkByIdAsync(
+            result.CometDesignation ?? result.SpkNaifId.ToString(),
+            result.SpkRecordId ?? result.SpkNaifId.ToString(),
+            savePath,
+            startStr, stopStr
+          );
+
+          if (spkPath != null)
+          {
+            // 2. Load .bsp into Rust AlmanacPackedData.
+            NativeInterop.avkSimulationContext_loadAlmanacFile(_runtimeService.SimulationContext, spkPath);
+            _consoleService.Log($"[Spawn] Kinematic: loaded almanac from {spkPath}.");
+
+            // Allow the async almanac-load task a moment to register before patching the id.
+            await Task.Delay(200);
+
+            // 3. Patch the comet entity's AlmanacPlanet.naif_id with the real NAIF id.
+            bool patched = _runtimeService.SetAlmanacPlanetNaifId(1, cometId, result.SpkNaifId);
+            _consoleService.Log($"[Spawn] Kinematic: SetAlmanacPlanetNaifId({result.SpkNaifId}) → {patched}");
+          }
+          else
+          {
+            await _breadcrumbService.ShowMessageAsync(
+              "SPK Download Failed",
+              $"Could not download SPK for record {result.SpkRecordId}. Kinematic comet will not move.",
+              default, 4);
+          }
+        }
+        catch (Exception ex)
+        {
+          _consoleService.Log($"[Spawn] Kinematic SPK setup error: {ex.Message}");
+        }
+        finally { _breadcrumbService.RemoveMessage(spkLoadMsg); }
+      }
+      else if (result.PhysicsType == "Dynamic")
+      {
+        // Inject initial orbital velocity.
+        bool velSet = _runtimeService.SetKinematicVelocity(1, cometId, spawnVx, spawnVy, spawnVz);
+        _consoleService.Log($"[Spawn] Dynamic: SetKinematicVelocity({spawnVx:F4},{spawnVy:F4},{spawnVz:F4} km/s) → {velSet}");
+      }
+
+      // ── Orbit trajectory (hidden by default, named orbit_{name}, child of root) ──
       if (result.OrbitData != null)
       {
-        var trajName = $"{result.EntityName}_trajectory";
-        _runtimeService.SpawnTrajectoryFromElements(
+        var orbitName = $"orbit_{result.EntityName}";
+        ulong orbitId = _runtimeService.SpawnTrajectoryFromElements(
           1,
-          trajName,
-          result.OrbitData.SemiMajorAxis,
+          orbitName,
+          result.OrbitData.SemiMajorAxisAu,
           result.OrbitData.Eccentricity,
           result.OrbitData.Inclination,
           result.OrbitData.AscendingNodeLongitude,
           result.OrbitData.ArgumentOfPerifocus
         );
+        if (orbitId > 0)
+        {
+          // Hide immediately; user can toggle from the scene outline.
+          _runtimeService.SetEntityVisibility(1, orbitId, visible: false);
+          _consoleService.Log($"[Spawn] Orbit trajectory '{orbitName}' spawned (hidden, id={orbitId}).");
+        }
       }
 
-      return meshId;
+      return cometId;
     }
 
     public async Task ShowSpawnBillboardDialogAsync()
