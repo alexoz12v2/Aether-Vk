@@ -217,9 +217,9 @@
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
           <Button Content="Back" Command="{Binding PreviousStepCommand}" IsEnabled="{Binding CanGoBack}" />
           
-          <Button Content="Next" Command="{Binding NextStepCommand}" IsEnabled="{Binding CanGoNext}" IsVisible="{Binding !IsStep3}" Classes="accent" />
+          <Button Content="Next" Command="{Binding NextStepCommand}" IsEnabled="{Binding CanGoNext}" IsVisible="{Binding !IsFinalStep}" Classes="accent" />
           
-          <Button Content="Spawn" x:CompileBindings="False" Command="{Binding $parent[Window].SpawnCommand}" IsEnabled="{Binding CanGoNext}" IsVisible="{Binding IsStep3}" Classes="accent" />
+          <Button Content="Spawn" x:CompileBindings="False" Command="{Binding $parent[Window].SpawnCommand}" IsEnabled="{Binding CanGoNext}" IsVisible="{Binding IsFinalStep}" Classes="accent" />
         </StackPanel>
       </Grid>
     </Border>

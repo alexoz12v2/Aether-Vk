@@ -81,6 +81,7 @@ public class HorizonJplService
           return;
         }
         json = await resp.Content.ReadAsStringAsync();
+        _console.Log($"[HorizonJpl] Comet list fetched ({json.Length} bytes).");
         await _storage.SavePersistentAsync(cacheKey, System.Text.Encoding.UTF8.GetBytes(json));
       }
 
@@ -145,6 +146,7 @@ public class HorizonJplService
         return;
       }
       var text = await resp.Content.ReadAsStringAsync();
+      _console.Log($"[HorizonJpl] SPK Records Response:\n{text}");
       ParseSpkRecordsText(text, startTime, stopTime);
       await _breadcrumb.ShowMessageAsync("Horizon API", $"{SpkRecordsData.Count} records found.", status: 1);
     }
@@ -235,6 +237,7 @@ public class HorizonJplService
           return (1.0, 1e13);
         }
         text = await resp.Content.ReadAsStringAsync();
+        _console.Log($"[HorizonJpl] Object Constants Response:\n{text}");
         await _storage.SavePersistentAsync(cacheKey, System.Text.Encoding.UTF8.GetBytes(text));
       }
 
@@ -336,6 +339,7 @@ public class HorizonJplService
       }
 
       var text   = await resp.Content.ReadAsStringAsync();
+      _console.Log($"[HorizonJpl] EPA Response:\n{text}");
       int soeIdx = text.IndexOf("$$SOE");
       int eoeIdx = text.IndexOf("$$EOE");
 
@@ -409,6 +413,7 @@ public class HorizonJplService
             return null;
           }
           objDataText = await objResponse.Content.ReadAsStringAsync();
+          _console.Log($"[HorizonJpl] Object Data Response:\n{objDataText}");
 
           // 2. Fetch EPA
           var epaUrl = $"https://ssd.jpl.nasa.gov/api/horizons.api?format=text"
@@ -429,6 +434,7 @@ public class HorizonJplService
             return null;
           }
           epaText = await epaResponse.Content.ReadAsStringAsync();
+          _console.Log($"[HorizonJpl] EPA Response:\n{epaText}");
 
           await _storage.SaveSessionAsync(cacheKey, System.Text.Encoding.UTF8.GetBytes(epaText));
           await _storage.SaveSessionAsync(cacheKey + ".obj", System.Text.Encoding.UTF8.GetBytes(objDataText));
@@ -436,10 +442,10 @@ public class HorizonJplService
 
       string constantsBlock = ExtractConstantsBlock(objDataText);
 
-      double a = ParseValue(epaText, @"A\s*=\s*([^\s]+)");
-      double ec = ParseValue(epaText, @"EC\s*=\s*([^\s]+)");
-      double in_ = ParseValue(epaText, @"IN\s*=\s*([^\s]+)");
-      double ma = ParseValue(epaText, @"MA\s*=\s*([^\s]+)");
+      double a = ParseValue(epaText, @"A\s*=\s*([^\s,]+)");
+      double ec = ParseValue(epaText, @"EC\s*=\s*([^\s,]+)");
+      double in_ = ParseValue(epaText, @"IN\s*=\s*([^\s,]+)");
+      double ma = ParseValue(epaText, @"MA\s*=\s*([^\s,]+)");
 
       // Nucleus radius: try volumetric-equivalent radius first (R_vol, km),
       // then the generic RAD field. Default to 1 km if absent.
@@ -449,7 +455,7 @@ public class HorizonJplService
       if (radiusKm <= 0.0)
         radiusKm = 1.0;
 
-      double gm = ParseValue(objDataText, @"GM\s*=\s*([^\s]+)"); // in km^3/s^2 usually
+      double gm = ParseValue(objDataText, @"GM\s*=\s*([^\s,+]+)"); // in km^3/s^2 usually
       double massKg = 1e13; // default
       if (gm > 0.0)
       {
@@ -505,6 +511,7 @@ public class HorizonJplService
       if (!resp.IsSuccessStatusCode) return null;
 
       var text     = await resp.Content.ReadAsStringAsync();
+      _console.Log($"[HorizonJpl] SPK fetched ({text.Length} bytes).");
       int startIdx = text.IndexOf("REFGL1NQ");
       if (startIdx == -1) { _console.Log("[HorizonJpl] SPK binary marker not found."); return null; }
 

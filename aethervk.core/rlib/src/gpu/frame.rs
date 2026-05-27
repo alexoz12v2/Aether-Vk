@@ -267,10 +267,24 @@ impl SunDrawCall {
     entity: EntityId,
     radius: f32,
   ) -> GpuResult<Self> {
-    let model_inv = model.inverse().ok_or(GpuError::BackendSpecific(alloc::format!(
-      "SunDrawCall: Couldn't invert model matrix {:?}",
-      model
-    )))?;
+    let model_inv = model.inverse().unwrap_or_else(|| {
+      use aethervk_oshal_rlib::math::vector::vec4::Vec4f32;
+      let scale_sq = model.x.x() * model.x.x() + model.x.y() * model.x.y() + model.x.z() * model.x.z();
+      let inv_scale_sq = if scale_sq > 1e-30 { 1.0 / scale_sq } else { 0.0 };
+      let mut m = model.clone();
+      m.x = Vec4f32::from_components(model.x.x() * inv_scale_sq, model.y.x() * inv_scale_sq, model.z.x() * inv_scale_sq, 0.0);
+      m.y = Vec4f32::from_components(model.x.y() * inv_scale_sq, model.y.y() * inv_scale_sq, model.z.y() * inv_scale_sq, 0.0);
+      m.z = Vec4f32::from_components(model.x.z() * inv_scale_sq, model.y.z() * inv_scale_sq, model.z.z() * inv_scale_sq, 0.0);
+      let tx = model.w.x();
+      let ty = model.w.y();
+      let tz = model.w.z();
+      let wx = -(m.x.x() * tx + m.y.x() * ty + m.z.x() * tz);
+      let wy = -(m.x.y() * tx + m.y.y() * ty + m.z.y() * tz);
+      let wz = -(m.x.z() * tx + m.y.z() * ty + m.z.z() * tz);
+      m.w = Vec4f32::from_components(wx, wy, wz, 1.0);
+      m
+    });
+    
     let local_camera_pos = Vec3f32(model_inv.mul_vector(c.pos.to_point()));
     Ok(Self {
       entity,

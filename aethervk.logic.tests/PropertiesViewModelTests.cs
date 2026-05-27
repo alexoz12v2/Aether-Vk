@@ -14,7 +14,10 @@ public class PropertiesViewModelTests
   {
     // Arrange
     var stateManager = new SceneStateManager();
-    var propertiesVm = new PropertiesViewModel(1, stateManager);
+    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
+    var timelineService = new TimelineService();
+    var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
+    var propertiesVm = new PropertiesViewModel(1, stateManager, timelineService, null, breadcrumb);
     var entity = new Entity(1, 100, "TestEntity");
 
     // Act
@@ -36,14 +39,17 @@ public class PropertiesViewModelTests
       .Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
       .Callback<System.Action>(a => a());
 
+    var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
+    var timelineService = new TimelineService();
+
     var runtimeService = new NativeRuntimeService(
       stateManager,
       new ConsoleService(dispatcherMock.Object),
-      new BreadcrumbService(dispatcherMock.Object),
+      breadcrumb,
       dispatcherMock.Object
     );
 
-    var propertiesVm = new PropertiesViewModel(1, stateManager, runtimeService, null);
+    var propertiesVm = new PropertiesViewModel(1, stateManager, timelineService, runtimeService, breadcrumb);
 
     var entity = new Entity(1, 100, "TestEntity");
     entity.Components.Add(new TransformComponent());
@@ -71,7 +77,10 @@ public class PropertiesViewModelTests
   {
     // Arrange
     var stateManager = new SceneStateManager();
-    var propertiesVm = new PropertiesViewModel(1, stateManager);
+    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
+    var timelineService = new TimelineService();
+    var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
+    var propertiesVm = new PropertiesViewModel(1, stateManager, timelineService, null, breadcrumb);
     propertiesVm.IsFollowingEntity = true;
     var entity = new Entity(1, 100, "TestEntity");
 
@@ -87,7 +96,10 @@ public class PropertiesViewModelTests
   public void ProcessAction_ExpandAll_TogglesState()
   {
     var stateManager = new SceneStateManager();
-    var vm = new PropertiesViewModel(1, stateManager);
+    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
+    var timelineService = new TimelineService();
+    var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
+    var vm = new PropertiesViewModel(1, stateManager, timelineService, null, breadcrumb);
 
     Assert.False(vm.AreAllExpanded);
 
@@ -101,7 +113,10 @@ public class PropertiesViewModelTests
   public void ProcessAction_ShowFlyout_PushesOperator()
   {
     var stateManager = new SceneStateManager();
-    var vm = new PropertiesViewModel(1, stateManager);
+    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
+    var timelineService = new TimelineService();
+    var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
+    var vm = new PropertiesViewModel(1, stateManager, timelineService, null, breadcrumb);
 
     Assert.False(vm.IsFlyoutMenuOpen);
 

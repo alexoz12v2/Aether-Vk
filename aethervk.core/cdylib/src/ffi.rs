@@ -5,16 +5,18 @@ use aethervk_core_rlib::{
   math::collision::{linear_bvh, linear_bvh::LinearBVHNode},
   scene::Marker,
   simulation_api::{
+    comet_api::CometApi,
     components_api::{CameraParams, OrthographicCameraParams, PerspectiveCameraParams},
     structs::*,
     *,
   },
   types::EngineError,
 };
-use aethervk_core_rlib::simulation_api::comet_api::CometApi;
 use aethervk_oshal_rlib as oshal;
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-use aethervk_oshal_rlib::math::vector::{Vector3, Vector4, vec3::Vec3f32, vec4::Quat};
+use aethervk_oshal_rlib::math::{
+  quaternion::Quaternion,
+  vector::{Vector3, Vector4, vec3::Vec3f32, vec4::Quat},
+};
 use alloc::{boxed::Box, string::ToString};
 use core::{
   ffi::{CStr, c_char},
@@ -69,7 +71,11 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
 pub unsafe extern "C" fn avkSimulationContext_shutdown(ctx: *mut SimulationContext) {
   if !ctx.is_null() {
     let ctx_box = unsafe { Box::from_raw(ctx) };
-    let _ = ctx_box.threads.logic_thread.tx().try_send(aethervk_core_rlib::simulation_api::structs::LogicCommand::Shutdown);
+    let _ = ctx_box
+      .threads
+      .logic_thread
+      .tx()
+      .try_send(aethervk_core_rlib::simulation_api::structs::LogicCommand::Shutdown);
   }
 }
 
@@ -685,8 +691,7 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
   entity_id: u64,
 ) -> bool {
   use aethervk_core_rlib::math::collision::intersection::intersect_ray_triangle;
-  use aethervk_oshal_rlib::math::vector::Vector;
-  use aethervk_oshal_rlib::math::vector::{Vector3, vec3::Vec3f32};
+  use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
 
   if ctx.is_null() {
     return false;
@@ -1060,17 +1065,29 @@ pub unsafe extern "C" fn avkSimulationContext_getImportedModelsCount(
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct FfiMat3 {
-  pub m00: f32, pub m10: f32, pub m20: f32,
-  pub m01: f32, pub m11: f32, pub m21: f32,
-  pub m02: f32, pub m12: f32, pub m22: f32,
+  pub m00: f32,
+  pub m10: f32,
+  pub m20: f32,
+  pub m01: f32,
+  pub m11: f32,
+  pub m21: f32,
+  pub m02: f32,
+  pub m12: f32,
+  pub m22: f32,
 }
 
 impl Default for FfiMat3 {
   fn default() -> Self {
     Self {
-      m00: 1.0, m10: 0.0, m20: 0.0,
-      m01: 0.0, m11: 1.0, m21: 0.0,
-      m02: 0.0, m12: 0.0, m22: 1.0,
+      m00: 1.0,
+      m10: 0.0,
+      m20: 0.0,
+      m01: 0.0,
+      m11: 1.0,
+      m21: 0.0,
+      m02: 0.0,
+      m12: 0.0,
+      m22: 1.0,
     }
   }
 }
@@ -1078,9 +1095,15 @@ impl Default for FfiMat3 {
 impl FfiMat3 {
   pub fn from_mat3(mat: oshal::math::matrix::mat3::Mat3f32) -> Self {
     Self {
-      m00: mat.x.x(), m10: mat.x.y(), m20: mat.x.z(),
-      m01: mat.y.x(), m11: mat.y.y(), m21: mat.y.z(),
-      m02: mat.z.x(), m12: mat.z.y(), m22: mat.z.z(),
+      m00: mat.x.x(),
+      m10: mat.x.y(),
+      m20: mat.x.z(),
+      m01: mat.y.x(),
+      m11: mat.y.y(),
+      m21: mat.y.z(),
+      m02: mat.z.x(),
+      m12: mat.z.y(),
+      m22: mat.z.z(),
     }
   }
 }
@@ -1097,7 +1120,7 @@ pub unsafe extern "C" fn avkSimulationContext_getModelLocalFrames(
     return false;
   }
   let ctx_ref = unsafe { &*ctx };
-  
+
   if let Some((user_frame, sim_frame)) = ctx_ref.get_model_local_frames(model_id) {
     unsafe {
       *out_user_frame = FfiMat3::from_mat3(user_frame);
@@ -1121,7 +1144,7 @@ pub unsafe extern "C" fn avkSimulationContext_overrideModelSpherical(
     return false;
   }
   let ctx_ref = unsafe { &*ctx };
-  
+
   // For a spherical or externally defined object, the principal axes are isotropic.
   // Therefore, the simulation frame aligns perfectly with the user's defined local frame.
   let uf = unsafe { &*user_frame };
@@ -1130,7 +1153,7 @@ pub unsafe extern "C" fn avkSimulationContext_overrideModelSpherical(
     y: oshal::math::vector::vec3::Vec3f32::from_components(uf.m01, uf.m11, uf.m21),
     z: oshal::math::vector::vec3::Vec3f32::from_components(uf.m02, uf.m12, uf.m22),
   };
-  
+
   ctx_ref.override_model_spherical(model_id, radius_km, mass_kg, mat)
 }
 
@@ -1147,7 +1170,7 @@ pub unsafe extern "C" fn avkSimulationContext_getImportedModels(
   }
   let ctx_ref = unsafe { &*ctx };
   let scenes = ctx_ref.scenes.read();
-  
+
   let mut count = 0;
   for (id, path) in &scenes.model_registry {
     if count >= capacity {
@@ -1381,9 +1404,7 @@ pub unsafe extern "C" fn avkSimulationContext_spawnStaticMesh(
   rot_x: f32,
   rot_y: f32,
   rot_z: f32,
-  scale_x: f32,
-  scale_y: f32,
-  scale_z: f32,
+  radius_km: f32,
   out_result: *mut FfiSpawnCometResult,
 ) -> bool {
   use aethervk_oshal_rlib::math::{
@@ -1398,7 +1419,7 @@ pub unsafe extern "C" fn avkSimulationContext_spawnStaticMesh(
   let name = unsafe { CStr::from_ptr(entity_name).to_str().unwrap_or("StaticMesh") };
   let pos = Vec3f32::from_components(pos_x, pos_y, pos_z);
   let rot = Quat::from_components(rot_w, rot_x, rot_y, rot_z);
-  let scale = Vec3f32::from_components(scale_x, scale_y, scale_z);
+  let scale = Vec3f32::from_components(radius_km, radius_km, radius_km);
 
   match ctx_ref.spawn_static_mesh_internal(scene_id, model_id, name, pos, rot, scale) {
     Ok((lca_id, mesh_id)) => {

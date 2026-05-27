@@ -19,7 +19,7 @@ public class SpawnCometViewModelTests
     var models = new List<ImportedModelItem>();
     var timelineService = new TimelineService();
 
-    var vm = new SpawnCometViewModel(models, horizonService, timelineService);
+    var vm = new SpawnCometViewModel(models, horizonService, timelineService, breadcrumb);
 
     Assert.Equal(1, vm.CurrentStep);
     Assert.True(vm.IsStep1);
@@ -44,7 +44,7 @@ public class SpawnCometViewModelTests
     };
     var timelineService = new TimelineService();
 
-    var vm = new SpawnCometViewModel(models, horizonService, timelineService);
+    var vm = new SpawnCometViewModel(models, horizonService, timelineService, breadcrumb);
 
     Assert.True(vm.CanGoNext); // Model is selected in constructor if list has items
     
@@ -52,7 +52,7 @@ public class SpawnCometViewModelTests
     Assert.Equal(2, vm.CurrentStep);
     Assert.True(vm.CanGoBack);
     
-    vm.PhysicsType = "Static";
+    vm.PhysicsType = "Dynamic";
     Assert.True(vm.CanGoNext);
     
     vm.NextStepCommand.Execute(null);
@@ -63,12 +63,10 @@ public class SpawnCometViewModelTests
     vm.FetchedOrbitData = new PlanetOrbitData();
     Assert.True(vm.CanGoNext);
     
-    vm.NextStepCommand.Execute(null);
-    Assert.Equal(4, vm.CurrentStep);
-    Assert.True(vm.CanGoNext); // Always true on step 4
+    Assert.True(vm.IsFinalStep);
     
     vm.PreviousStepCommand.Execute(null);
-    Assert.Equal(3, vm.CurrentStep);
+    Assert.Equal(2, vm.CurrentStep);
   }
 
   [Fact]
@@ -80,7 +78,7 @@ public class SpawnCometViewModelTests
     var storage = new Moq.Mock<ILocalStorageService>();
     var horizonService = new HorizonJplService(console, breadcrumb, storage.Object);
     var timelineService = new TimelineService();
-    var vm = new SpawnCometViewModel(new List<ImportedModelItem>(), horizonService, timelineService)
+    var vm = new SpawnCometViewModel(new List<ImportedModelItem>(), horizonService, timelineService, breadcrumb)
     {
       Pitch = 90,
       Yaw = 0,

@@ -592,12 +592,22 @@ public partial class Viewport3DViewModel
 
       try
       {
-        await _runtimeService.DownloadImageAsync(_lastRenderTaskId, unmanagedBuffer, bufferSize);
-        await _uiThreadDispatcher.DispatchAsync(() =>
+        bool downloaded = await _runtimeService.DownloadImageAsync(_lastRenderTaskId, unmanagedBuffer, bufferSize);
+        if (downloaded)
         {
-          Renderer?.UpdateFrame(unmanagedBuffer, bufferSize);
-          return Task.CompletedTask;
-        });
+          await _uiThreadDispatcher.DispatchAsync(() =>
+          {
+            Renderer?.UpdateFrame(unmanagedBuffer, bufferSize);
+            return Task.CompletedTask;
+          });
+        }
+        else
+        {
+          System.Console.WriteLine(
+            $"[ProcessFrameAsync] DownloadImageAsync returned false for taskId={_lastRenderTaskId}. " +
+            "Frame skipped."
+          );
+        }
       }
       finally
       {

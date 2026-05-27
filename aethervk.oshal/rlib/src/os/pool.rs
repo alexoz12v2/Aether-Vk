@@ -347,7 +347,7 @@ mod pthread_pool {
   impl Drop for ThreadPool {
     fn drop(&mut self) {
       self.state.shutdown.store(true, Ordering::SeqCst);
-      
+
       // Clear the queues so that any dropped workloads that hold references
       // preventing threads from exiting are released!
       self.state.shared_queue.lock().clear();

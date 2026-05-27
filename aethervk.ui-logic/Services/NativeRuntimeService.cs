@@ -42,8 +42,13 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   private static readonly NativeInterop.SimulationCallback s_simulationCallbackDelegate =
     NativeSimulationCallbackStatic;
 
+  // Rate-limit render error logging: track count and last log timestamp.
+  private int _renderErrorCount = 0;
+  private long _lastRenderErrorLogTicks = 0;
+
   private static readonly NativeInterop.RenderCallback s_renderCallbackDelegate =
     NativeRenderCallbackStatic;
+
 
   public void Dispose()
   {
@@ -380,6 +385,27 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     ulong renderGeneration
   )
   {
+    // ulong.MaxValue is the Rust sentinel for a failed render tasklet.
+    // Rate-limit to log at most once per 5 seconds rather than once per frame.
+    if (renderGeneration == ulong.MaxValue)
+    {
+      System.Threading.Interlocked.Increment(ref _renderErrorCount);
+      long now = System.Diagnostics.Stopwatch.GetTimestamp();
+      long freq = System.Diagnostics.Stopwatch.Frequency;
+      long last = System.Threading.Volatile.Read(ref _lastRenderErrorLogTicks);
+      if (now - last >= freq * 5)
+      {
+        System.Threading.Volatile.Write(ref _lastRenderErrorLogTicks, now);
+        int count = System.Threading.Interlocked.Exchange(ref _renderErrorCount, 0);
+        System.Console.WriteLine(
+          $"[NativeRenderCallback] Render frame error x{count} in last 5s " +
+          $"(scene={sceneId}, pe={presentationEngineId}). " +
+          "Check Rust log for '[render tasklet]' entries."
+        );
+      }
+      return;
+    }
+
     if (_uiThreadDispatcher != null)
     {
       _uiThreadDispatcher.Dispatch(() =>
