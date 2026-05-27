@@ -169,17 +169,24 @@ pub fn start_logic_thread(
                     }
                     oshal::os::native::this_thread::yield_now();
                   };
-                  if task_id_val == u64::MAX {
-                    continue;
-                  }
-                  if let Some(nz) = core::num::NonZero::new(task_id_val) {
-                    new_tasks.push(nz);
+
+                  // For a successful frame, track the task so can_tick can check its status.
+                  // For an error frame (u64::MAX), skip tracking \u2014 it would always show Invalid
+                  // and would not block future ticks anyway.
+                  if task_id_val != u64::MAX {
+                    if let Some(nz) = core::num::NonZero::new(task_id_val) {
+                      new_tasks.push(nz);
+                    }
                   }
 
+                  // Always fire the callback for windowless PEs, even for error frames
+                  // (task_id_val == u64::MAX). C# uses the sentinel to log errors (rate-limited).
                   if is_windowless {
                     let fptr = crate::simulation_api::RENDER_CALLBACK
                       .load(core::sync::atomic::Ordering::Relaxed);
                     if !fptr.is_null() {
+                      let captured_task_id_val = task_id_val;
+
                       struct WindowlessCallbackWorkload {
                         ctx_ptr: crate::simulation_api::structs::SendPtrMut<core::ffi::c_void>,
                         task_id_val: u64,
@@ -192,6 +199,13 @@ pub fn start_logic_thread(
                           let fptr = crate::simulation_api::RENDER_CALLBACK
                             .load(core::sync::atomic::Ordering::Relaxed);
                           if fptr.is_null() {
+                            return aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete;
+                          }
+
+                          // For error frames, fire immediately with the sentinel value.
+                          if self.task_id_val == u64::MAX {
+                            let cb: extern "C" fn(u64, u64, u64) = unsafe { core::mem::transmute(fptr) };
+                            cb(self.scene_id, self.pe_handle, u64::MAX);
                             return aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete;
                           }
 
@@ -224,7 +238,7 @@ pub fn start_logic_thread(
 
                       let _ = context.thread_pool.scatter(alloc::vec![alloc::boxed::Box::new(WindowlessCallbackWorkload {
                         ctx_ptr: context.ctx_ptr,
-                        task_id_val,
+                        task_id_val: captured_task_id_val,
                         scene_id,
                         pe_handle,
                       })]);

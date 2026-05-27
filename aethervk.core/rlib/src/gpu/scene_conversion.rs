@@ -758,8 +758,8 @@ impl SceneConversionExt for crate::scene::Scene {
         if hidden_set.contains(&id) {
           return None;
         }
-        // TODO grid component should have data (adjust these values for now)
-        let density: f32 = 0.1;
+        // Scale down the grid by 5000x (increase density to 500.0, cell size = 0.0004 AU)
+        let density: f32 = 500.0;
         let grid_size: f32 = 1.0;
         let grid_color: [f32; 3] = [0.5, 0.5, 0.5];
         Some((density, grid_size, grid_color))

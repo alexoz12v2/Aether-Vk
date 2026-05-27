@@ -28,7 +28,7 @@ public partial class SpawnCometWindow : Window
         vm.EntityName,
         vm.PhysicsType,
         vm.FetchedOrbitData,
-        vm.PosX, vm.PosY, vm.PosZ,
+        vm.PosX, -vm.PosY, vm.PosZ,
         vm.ScaleX, vm.ScaleY, vm.ScaleZ,
         vm.Pitch, vm.Yaw, vm.Roll,
         vm.CometRadiusKm

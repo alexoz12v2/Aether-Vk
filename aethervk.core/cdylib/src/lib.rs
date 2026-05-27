@@ -39,7 +39,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 fn the_panic(_info: &PanicInfo) -> ! {
   unsafe {
     if let Some(cb) = crate::PANIC_CALLBACK {
-      // In no_std, we avoid allocation if we can. 
+      // In no_std, we avoid allocation if we can.
       // We pass a simple static message to avoid complex formatting which might allocate or fail further.
       let msg = b"Fatal Rust Engine Panic: Check console logs or use a debugger.\0";
       cb(msg.as_ptr(), msg.len());

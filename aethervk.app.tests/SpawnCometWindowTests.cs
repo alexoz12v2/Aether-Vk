@@ -18,7 +18,7 @@ public class SpawnCometWindowTests
     var storage = new Moq.Mock<ILocalStorageService>();
     var horizonService = new HorizonJplService(console, breadcrumb, storage.Object);
     var timelineService = new TimelineService();
-    var vm = new SpawnCometViewModel(new List<ImportedModelItem>(), horizonService, timelineService);
+    var vm = new SpawnCometViewModel(new List<ImportedModelItem>(), horizonService, timelineService, breadcrumb);
     var window = new SpawnCometWindow { DataContext = vm };
 
     window.Show();
@@ -36,7 +36,7 @@ public class SpawnCometWindowTests
     var storage = new Moq.Mock<ILocalStorageService>();
     var horizonService = new HorizonJplService(console, breadcrumb, storage.Object);
     var timelineService = new TimelineService();
-    var vm = new SpawnCometViewModel(new List<ImportedModelItem>(), horizonService, timelineService);
+    var vm = new SpawnCometViewModel(new List<ImportedModelItem>(), horizonService, timelineService, breadcrumb);
     var window = new SpawnCometWindow { DataContext = vm };
     
     window.Show();

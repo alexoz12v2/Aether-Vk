@@ -21,11 +21,14 @@ public partial class SpawnCometViewModel : ObservableObject
   [NotifyPropertyChangedFor(nameof(IsStep1))]
   [NotifyPropertyChangedFor(nameof(IsStep2))]
   [NotifyPropertyChangedFor(nameof(IsStep3))]
+  [NotifyPropertyChangedFor(nameof(IsFinalStep))]
   private int _currentStep = 1;
 
   public bool IsStep1 => CurrentStep == 1;
   public bool IsStep2 => CurrentStep == 2;
   public bool IsStep3 => CurrentStep == 3;
+
+  public bool IsFinalStep => PhysicsType == "Static" ? IsStep2 : IsStep3;
 
   public bool CanGoBack => CurrentStep > 1;
 
@@ -34,8 +37,7 @@ public partial class SpawnCometViewModel : ObservableObject
     {
       1 => SelectedModel != null,
       2 => PhysicsType == "Static" || PhysicsType == "Kinematic" || PhysicsType == "Dynamic",
-      3 => FetchedOrbitData != null,
-      4 => true,  // Spawn button is always enabled once the user reaches step 4
+      3 => PhysicsType == "Static" || FetchedOrbitData != null,
       _ => false,
     };
 
@@ -52,6 +54,7 @@ public partial class SpawnCometViewModel : ObservableObject
   // --- Step 2 ---
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(CanGoNext))]
+  [NotifyPropertyChangedFor(nameof(IsFinalStep))]
   private string _physicsType = "Static"; // Static, Kinematic, Dynamic
 
   // --- Step 3 (Horizon Data) ---

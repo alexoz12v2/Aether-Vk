@@ -39,7 +39,7 @@ namespace AetherVk.Logic.Tests
       }
 
       var root = scene.RootEntities.FirstOrDefault();
-      object rootData = root != null ? MapEntity(root) : null;
+      object? rootData = root != null ? MapEntity(root) : null;
 
       var json = JsonSerializer.Serialize(rootData, options);
       File.WriteAllText($"render/{testName}_scene.json", json);

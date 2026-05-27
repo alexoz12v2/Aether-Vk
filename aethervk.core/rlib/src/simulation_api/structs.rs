@@ -476,6 +476,7 @@ impl SimulationThreads {
     render_thread_params: RenderThreadParams,
     logic_thread_params: LogicThreadParams,
   ) -> EngineResult<Self> {
+    oshal::os::debug::fpe::setup_fpu_panic();
     let mut this = Self::new_idle()?;
     this.start_render_thread(render_thread_params)?;
     this.start_logic_thread(logic_thread_params)?;
